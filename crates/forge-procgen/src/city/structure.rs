@@ -529,7 +529,12 @@ fn openings(m: &Mass, era: Era, storeys: &[Storey], walls: &[Wall]) -> Vec<Openi
                         if shops && wall.role == WallRole::Street {
                             // Widths by the 10 cm, so the kit shares their meshes.
                             let width = ((bay - 0.6) * 10.0).floor() / 10.0;
-                            (OpeningKind::Shopfront, width, 0.3, s.clear() - 0.5)
+                            (
+                                OpeningKind::Shopfront,
+                                width,
+                                outside(m, wall.role),
+                                s.clear() - 0.5,
+                            )
                         } else {
                             (OpeningKind::Window, t.window, 1.0, s.clear() - 0.4)
                         }
@@ -578,17 +583,29 @@ fn openings(m: &Mass, era: Era, storeys: &[Storey], walls: &[Wall]) -> Vec<Openi
             })
             .map(|(k, _)| k);
         if let Some(k) = door {
-            let clear = storeys[0].clear();
+            let (clear, level) = (storeys[0].clear(), outside(m, walls[w].role));
             out[k] = Opening {
                 kind: OpeningKind::Door,
                 width: DOOR,
-                sill: 0.0,
-                head: (clear - 0.4).min(2.6),
+                sill: level,
+                head: (clear - 0.4).min(level + 2.6),
                 ..out[k]
             };
         }
     }
     out
+}
+
+/// The ground's level before a wall of mass `m`, metres: an avenue's raised pavement (0.30), a
+/// shared street's or a lane's surface (0.16), a court's garden (0.08). A door's sill and a
+/// shopfront's stand on it: at 0 they sank under the pavement (the owner: buildings need
+/// foundations at the pavement's or the ground's height).
+pub fn outside(m: &Mass, role: WallRole) -> f64 {
+    match role {
+        WallRole::Street if m.street_width >= 18.0 => 0.30,
+        WallRole::Street => 0.16,
+        _ => 0.08,
+    }
 }
 
 /// A mass's gross and net floor area: gross to the outer faces on every storey; net inside the

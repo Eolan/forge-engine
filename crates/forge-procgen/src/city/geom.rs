@@ -187,6 +187,37 @@ pub fn simplify_closed(polygon: &[DVec2], tolerance: f64) -> Vec<DVec2> {
     out
 }
 
+/// A closed polygon without its repeated points (within `eps` metres of the one before, the
+/// last against the first) and without the points on a straight line between their
+/// neighbours: an outline ear clipping can always finish (a repeated point stalled it, and a
+/// roof lost half its triangles).
+pub fn clean(polygon: &[DVec2], eps: f64) -> Vec<DVec2> {
+    let mut out: Vec<DVec2> = Vec::with_capacity(polygon.len());
+    for &p in polygon {
+        if out.last().is_none_or(|q| q.distance(p) > eps) {
+            out.push(p);
+        }
+    }
+    while out.len() > 1 && out[0].distance(out[out.len() - 1]) <= eps {
+        out.pop();
+    }
+    // Straight runs: drop a point whose neighbours it lies between, until none does.
+    let mut changed = true;
+    while changed && out.len() > 3 {
+        changed = false;
+        let n = out.len();
+        for i in 0..n {
+            let (a, p, b) = (out[(i + n - 1) % n], out[i], out[(i + 1) % n]);
+            if distance_to_segment(p, a, b) <= eps {
+                out.remove(i);
+                changed = true;
+                break;
+            }
+        }
+    }
+    out
+}
+
 /// A closed polygon's signed area (positive when its vertices turn counter-clockwise in a
 /// right-handed frame; on the plan, whose `y` points south, that is clockwise on the map).
 pub fn signed_area(polygon: &[DVec2]) -> f64 {

@@ -27,7 +27,7 @@ use forge_procgen::city::mass::{Mass, Roof};
 use forge_procgen::city::shore::Shore;
 use forge_procgen::city::structure::{self, OpeningKind, Structure, WallRole};
 use forge_procgen::city::trees::Tree;
-use forge_procgen::city::{BlockUse, CityPlan, LAGOON, SEA, Site, geom};
+use forge_procgen::city::{BlockUse, CityPlan, Site, geom};
 use forge_procgen::grammar::Grammar;
 use forge_render::MeshletSceneBuilder;
 use forge_render::textures;
@@ -413,11 +413,36 @@ impl PlanScenario {
                     offset_line(&line, side * (half + PROMENADE)),
                     offset_line(&line, side * half),
                 );
-                for i in 0..outer.len().min(inner.len()).saturating_sub(1) {
-                    let quad = [outer[i], outer[i + 1], inner[i + 1], inner[i]];
-                    if quad.iter().any(|&p| is_open_water(site.water_at(p))) {
+                let n = outer.len().min(inner.len()).saturating_sub(1);
+                // Nor over the smooth shore's open water (a slab of promenade floated over the
+                // harbour, the owner); its land side and middle only, by the smooth shore the ground follows: the
+                // river's edge lies on the shore, half wet, and the sea's cells reach past the
+                // drawn shore; both dropped the promenade by a bridge (the owner).
+                let mut on_land: Vec<bool> = (0..n)
+                    .map(|i| {
+                        let middle = (outer[i] + outer[i + 1] + inner[i] + inner[i + 1]) * 0.25;
+                        ![outer[i], outer[i + 1], middle]
+                            .iter()
+                            .any(|&p| shore.parts(p).0 >= 0.5)
+                    })
+                    .collect();
+                // And in runs of four quads (60 m) or more: a short one stood alone by a lawn's
+                // bank, a slab over the water (the owner).
+                let mut i = 0;
+                while i < n {
+                    let from = i;
+                    while i < n && on_land[i] == on_land[from] {
+                        i += 1;
+                    }
+                    if on_land[from] && i - from < 4 {
+                        on_land[from..i].fill(false);
+                    }
+                }
+                for i in 0..n {
+                    if !on_land[i] {
                         continue;
                     }
+                    let quad = [outer[i], outer[i + 1], inner[i + 1], inner[i]];
                     tiles.flat(&quad, 0.05, PAVING, false);
                     // The bank: from the promenade down past the water, facing the river.
                     let (a, b) = (inner[i], inner[i + 1]);
@@ -454,8 +479,11 @@ impl PlanScenario {
             };
             ribbon(&mut tiles, &e.points, e.profile.width(), height, section);
         }
-        pavements(&mut tiles, plan);
-        bridges(&mut tiles, plan);
+        {
+            pavements(&mut tiles, plan);
+            bends(&mut tiles, plan);
+        }
+        bridges(&mut tiles, plan, site, &shore);
         // Two tracks a line, one each way, on the right of the way they run.
         for line in &plan.tram_lines {
             for track in [-TRACK_OFFSET, TRACK_OFFSET] {
@@ -484,6 +512,7 @@ impl PlanScenario {
         }
         // The buildings' structure (D-060): the kit dresses it, the walker walks against it.
         let structures = structure::structures(plan, masses);
+        aprons(&mut tiles, masses, &structures);
         let kit = detail.map(|d| kit(&mut tiles, masses, &structures, &edges, &near, d));
         // The passages into the courts (D-060), and where to look into one: 10 m out on the
         // street before the kit's first, for the log once the app logs.
@@ -911,7 +940,7 @@ impl PlanScenario {
             clock: 3600.0,
             walls: wall_pieces(size, masses, &structures)
                 .into_iter()
-                .chain(parapet_pieces(size, plan))
+                .chain(parapet_pieces(size, plan, site, &shore))
                 .collect(),
             passage_note,
             nets: structures.iter().map(|s| s.net).collect(),
@@ -1211,21 +1240,39 @@ impl TramRun {
             })
             .collect();
         junctions.sort_by(|a, b| a.0.total_cmp(&b.0));
-        // Each stop at the distance of its nearest point on the route, then moved to the middle
-        // of the stretch between the junctions round it: its two platforms and their ramps
-        // reach 37.4 m either way, and stood across the junctions and their crossings (the
-        // owner saw bikes ride through them). 60 m apart at least.
+        // Each stop at the nearest place along the route where its two platforms and their ramps
+        // (37.4 m either way) stand clear of every junction's reach and on straight track, the
+        // whole tram level with its platform: they stood across the junctions and on the
+        // curves (the owner: bikes rode through them, a stop jutted into the crossroad). A stop
+        // with no such place within 400 m stays where it was. 60 m apart at least.
+        let total = along[along.len() - 1];
+        let span = f64::from(PLATFORM) + 1.4;
+        let straight = |s: f64| {
+            let (t0, t1) = (
+                geom::tangent_at(&points, (s - span).max(0.0)),
+                geom::tangent_at(&points, (s + span).min(total)),
+            );
+            let tm = geom::tangent_at(&points, s);
+            t0.dot(t1) > 2f64.to_radians().cos() && t0.dot(tm) > 2f64.to_radians().cos()
+        };
+        let fits = |s: f64| {
+            s - span >= 0.0
+                && s + span <= total
+                && junctions.iter().all(|&(j, r)| (s - j).abs() >= r + span)
+                && straight(s)
+        };
         let mut stops: Vec<f64> = line
             .stops
             .iter()
             .map(|&stop| {
                 let s = project(stop).1;
-                let before = junctions.iter().rev().find(|j| j.0 <= s);
-                let after = junctions.iter().find(|j| j.0 > s);
-                match (before, after) {
-                    (Some(&(a, ra)), Some(&(b, rb))) if b - rb > a + ra => (a + ra + b - rb) * 0.5,
-                    _ => s,
-                }
+                (0..=160)
+                    .flat_map(|k| {
+                        let d = f64::from(k) * 2.5;
+                        [s - d, s + d]
+                    })
+                    .find(|&c| fits(c))
+                    .unwrap_or(s)
             })
             .collect();
         stops.sort_by(f64::total_cmp);
@@ -1482,15 +1529,45 @@ fn kit(
     }
 }
 
+/// How far a building's apron runs out from its street walls, metres.
+const APRON: f64 = 1.0;
+
+/// A paved apron along every street wall, [`APRON`] wide at the level before it (just under an
+/// avenue's pavement or a street's surface), so the facade meets the ground with no gap: the
+/// blocks' garden showed in a strip between the pavement and the buildings (the owner:
+/// buildings need foundations at the pavement's height, no gap).
+fn aprons(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure]) {
+    for (m, s) in masses.iter().zip(structures) {
+        for wall in s.walls.iter().filter(|w| w.role == WallRole::Street) {
+            let t = (wall.b - wall.a).normalize_or_zero();
+            let out = DVec2::new(t.y, -t.x) * APRON;
+            let level = structure::outside(m, WallRole::Street) - 0.005;
+            tiles.flat(
+                &[wall.a, wall.b, wall.b + out, wall.a + out],
+                level,
+                PAVING,
+                false,
+            );
+        }
+    }
+}
+
 /// A bridge's parapet: how high over its pavement and how thick, metres.
 const PARAPET: (f64, f64) = (1.0, 0.35);
 
-/// Each bridge's two parapet lines: the outer edge and the inner face's, along the edge's points
-/// every 4 m, and the pavement's level they stand on.
-fn parapet_lines(plan: &CityPlan) -> Vec<(Vec<DVec2>, Vec<DVec2>, f64)> {
+/// Each bridge's parapet runs, both sides: the outer edge and the inner face's lines, every
+/// metre along its own side where that side crosses the water as drawn (a river's strip or the
+/// smooth shore's open water) and a metre on to meet the bank's wall, and the pavement's level
+/// they stand on. Cut by the site's cells they ran on over the land at each end and cut the
+/// promenades, then stopped short of the drawn banks (the owner).
+fn parapet_lines(
+    plan: &CityPlan,
+    site: &Site,
+    shore: &Shore,
+) -> Vec<(Vec<DVec2>, Vec<DVec2>, f64)> {
     let mut out = Vec::new();
     for e in plan.roads.edges.iter().filter(|e| e.bridge) {
-        let line = geom::resample(&e.points, 4.0);
+        let line = geom::resample(&e.points, 1.0);
         if line.len() < 2 {
             continue;
         }
@@ -1500,12 +1577,45 @@ fn parapet_lines(plan: &CityPlan) -> Vec<(Vec<DVec2>, Vec<DVec2>, f64)> {
         } else {
             0.16
         };
+        // The rivers' segments near the bridge, with their half widths.
+        let reach = e.length() + 50.0;
+        let near: Vec<(DVec2, DVec2, f64)> = site
+            .rivers
+            .iter()
+            .flat_map(|r| {
+                r.centreline
+                    .windows(2)
+                    .map(move |w| (w[0], w[1], r.width * 0.5))
+            })
+            .filter(|&(a, b, _)| geom::distance_to_segment(line[0], a, b) < reach)
+            .collect();
+        let wet = |p: DVec2| {
+            shore.parts(p).0 >= 0.5
+                || near
+                    .iter()
+                    .any(|&(a, b, h)| geom::distance_to_segment(p, a, b) < h)
+        };
         for side in [1.0, -1.0] {
-            out.push((
-                offset_line(&line, side * half),
-                offset_line(&line, side * (half - PARAPET.1)),
-                base,
-            ));
+            let mid = offset_line(&line, side * (half - PARAPET.1 * 0.5));
+            let over: Vec<bool> = mid.windows(2).map(|w| wet((w[0] + w[1]) * 0.5)).collect();
+            let n = over.len();
+            let mut k = 0;
+            while k < n {
+                if !over[k] {
+                    k += 1;
+                    continue;
+                }
+                let from = k;
+                while k < n && over[k] {
+                    k += 1;
+                }
+                let run = &line[from.saturating_sub(1)..=(k + 1).min(n)];
+                out.push((
+                    offset_line(run, side * half),
+                    offset_line(run, side * (half - PARAPET.1)),
+                    base,
+                ));
+            }
         }
     }
     out
@@ -1514,9 +1624,9 @@ fn parapet_lines(plan: &CityPlan) -> Vec<(Vec<DVec2>, Vec<DVec2>, f64)> {
 /// The bridges' stone parapets along both edges, a metre over the pavement, and the deck's side
 /// below them down to the water: the pavements stopped at a bare edge over the river (the
 /// owner: the bridges' pavements looked broken).
-fn bridges(tiles: &mut Tiles, plan: &CityPlan) {
+fn bridges(tiles: &mut Tiles, plan: &CityPlan, site: &Site, shore: &Shore) {
     let size = tiles.size;
-    for (outer, inner, base) in parapet_lines(plan) {
+    for (outer, inner, base) in parapet_lines(plan, site, shore) {
         let top = base + PARAPET.0;
         strip(tiles, &outer, &inner, top, QUAY);
         for (line, other, bottom) in [(&outer, &inner, WATER_LEVEL), (&inner, &outer, base)] {
@@ -1546,9 +1656,9 @@ fn bridges(tiles: &mut Tiles, plan: &CityPlan) {
 }
 
 /// The bridges' parapets as the walker's convex pieces, a segment each.
-fn parapet_pieces(size: f64, plan: &CityPlan) -> Vec<Vec<Vec3>> {
+fn parapet_pieces(size: f64, plan: &CityPlan, site: &Site, shore: &Shore) -> Vec<Vec<Vec3>> {
     let mut out = Vec::new();
-    for (outer, inner, base) in parapet_lines(plan) {
+    for (outer, inner, base) in parapet_lines(plan, site, shore) {
         for k in 0..outer.len().min(inner.len()).saturating_sub(1) {
             out.push(
                 [outer[k], outer[k + 1], inner[k + 1], inner[k]]
@@ -1693,7 +1803,15 @@ fn passages(tiles: &mut Tiles, s: &Structure) {
         ];
         for (quad, normal) in faces {
             for tri in [[0, 1, 2], [0, 2, 3]] {
-                triangle(&mut tile.masses, tri.map(|k| quad[k]), normal, KIT_STONE);
+                // With texture coordinates, as everything in the masses' mesh: without, the
+                // vertices after them took the wrong ones.
+                triangle_uv(
+                    &mut tile.masses,
+                    tri.map(|k| quad[k]),
+                    [[0.0; 2]; 3],
+                    normal,
+                    KIT_STONE,
+                );
             }
         }
     }
@@ -2582,7 +2700,13 @@ impl Scenario for PlanScenario {
                 if mesh.indices.is_empty() {
                     continue;
                 }
-                let id = builder.add_mesh(&MeshletMesh::build(mesh));
+                // Normals weighed in the LOD: a pavement's kerb and back faces folded into its
+                // top at the coarser levels, long tilted triangles where the paving streaked (the
+                // owner saw two patterns blend on the pavements).
+                let id = builder.add_mesh(&MeshletMesh::build_with(
+                    mesh,
+                    forge_geom::meshlet::CookOptions { normal_weight: 2.0 },
+                ));
                 builder.add_instance_with_material(id, at, row);
                 meshes += 1;
             }
@@ -3038,12 +3162,6 @@ impl Running for PlanRunning {
     }
 }
 
-/// Whether a water code is the sea or a lagoon, drawn from the site's cells (rivers are drawn as
-/// strips).
-fn is_open_water(code: u8) -> bool {
-    code == SEA || code == LAGOON
-}
-
 /// The land of a polygon as lawn, 3 cm over the ground: runs of the grid's dry squares whose
 /// middles lie inside it along each row, and the dry pieces of the squares the shore crosses.
 fn lawn(tiles: &mut Tiles, shore: &Shore, polygon: &[DVec2]) {
@@ -3264,21 +3382,24 @@ pub fn street_camera(plan: &CityPlan, near: DVec2) -> Option<FlyCamera> {
 fn pavements(tiles: &mut Tiles, plan: &CityPlan) {
     let size = tiles.size;
     let widest = widest_at(plan);
-    for e in &plan.roads.edges {
+    let cuts = cut_ends(plan);
+    for (k, e) in plan.roads.edges.iter().enumerate() {
         let pavement = e.profile.pavement();
         if pavement <= 0.0 {
             continue;
         }
-        let length = e.length();
-        let (start, end) = (
-            widest[e.a as usize] + 1.0,
-            length - widest[e.b as usize] - 1.0,
-        );
-        if end - start < 4.0 + 2.0 * RAMP {
+        // Cut back for a crossing only where streets cross; a footpath between the buildings
+        // does not stop the pavement (the owner: false crossroads).
+        let (ca, cb) = cuts[k];
+        let Some((start, end)) = raised(
+            e.length(),
+            ca,
+            cb,
+            widest[e.a as usize],
+            widest[e.b as usize],
+        ) else {
             continue;
-        }
-        // Raised between its ramps.
-        let (start, end) = (start + RAMP, end - RAMP);
+        };
         let steps = ((end - start) / 4.0).ceil() as usize;
         let line: Vec<DVec2> = (0..=steps)
             .map(|i| geom::point_at(&e.points, start + (end - start) * i as f64 / steps as f64))
@@ -3288,7 +3409,8 @@ fn pavements(tiles: &mut Tiles, plan: &CityPlan) {
             // A dropped kerb at each end: the pavement slopes down to the carriageway over
             // `RAMP` metres, the whole width, where people cross at the junction (step-free,
             // #263). An open end showed under the pavement.
-            for (high, low) in [(start, start - RAMP), (end, end + RAMP)] {
+            let ends = [(ca, start, start - RAMP), (cb, end, end + RAMP)];
+            for (high, low) in ends.into_iter().filter(|e| e.0).map(|e| (e.1, e.2)) {
                 let (h, l) = (
                     geom::point_at(&e.points, high),
                     geom::point_at(&e.points, low),
@@ -3418,6 +3540,7 @@ const SQUARE_BORDER: f64 = 1.7;
 struct PavementLevels<'a> {
     plan: &'a CityPlan,
     widest: Vec<f64>,
+    cuts: Vec<(bool, bool)>,
     grid: geom::PointGrid,
 }
 
@@ -3434,6 +3557,7 @@ impl<'a> PavementLevels<'a> {
         Self {
             plan,
             widest: widest_at(plan),
+            cuts: cut_ends(plan),
             grid,
         }
     }
@@ -3459,18 +3583,27 @@ impl<'a> PavementLevels<'a> {
             if d < half - pave - 0.05 || d > half + 0.05 {
                 return;
             }
-            let (start, end) = (
-                self.widest[e.a as usize] + 1.0,
-                walked - self.widest[e.b as usize] - 1.0,
-            );
-            if end - start < 4.0 + 2.0 * RAMP {
+            let (ca, cb) = self.cuts[k as usize];
+            let Some((start, end)) = raised(
+                walked,
+                ca,
+                cb,
+                self.widest[e.a as usize],
+                self.widest[e.b as usize],
+            ) else {
                 return;
-            }
-            let level = if s <= start || s >= end {
-                CORNER_LEVEL
+            };
+            // Raised between the ramps; down them to the corners' level at a crossing.
+            let level = if s >= start && s <= end {
+                0.30
             } else {
-                let up = ((s - start).min(end - s) / RAMP).min(1.0);
-                CORNER_LEVEL + (0.30 - CORNER_LEVEL) * up
+                let (from, edge) = if s < start { (start, ca) } else { (end, cb) };
+                if !edge {
+                    0.30
+                } else {
+                    let up = (1.0 - (s - from).abs() / RAMP).max(0.0);
+                    CORNER_LEVEL + (0.30 - CORNER_LEVEL) * up
+                }
             };
             best = Some(best.map_or(level, |b: f64| b.max(level)));
         });
@@ -3567,6 +3700,128 @@ fn skirt(tiles: &mut Tiles, ring: &[DVec2], top: &[f64], size: f64) {
     }
 }
 
+/// Whether a street a vehicle drives (an avenue or a shared street) runs on through a node.
+fn driven(p: forge_procgen::city::Profile) -> bool {
+    use forge_procgen::city::Profile;
+    matches!(p, Profile::TramAvenue | Profile::Avenue | Profile::Shared)
+}
+
+/// Which nodes are crossings, where a pavement stops at a dropped kerb: three or more driven
+/// streets meeting, or a driven street's end; two meeting are a bend (`bends`). A footpath between
+/// the buildings joining a street is not one: its pavement runs on (the owner: false
+/// crossroads, pavements cut where the other side is grass).
+fn crossings(plan: &CityPlan) -> Vec<bool> {
+    driven_ways(plan).iter().map(|w| w.len() != 2).collect()
+}
+
+/// Whether each edge's pavement stops at a dropped kerb at its start and at its end: at a
+/// crossing, or where it is not one of the two ways running on through the node (a stub, a
+/// footpath's own end).
+fn cut_ends(plan: &CityPlan) -> Vec<(bool, bool)> {
+    let ways = driven_ways(plan);
+    let cut = |k: usize, node: u32| {
+        let w = &ways[node as usize];
+        w.len() != 2 || !w.iter().any(|&(e, _, _)| e == k)
+    };
+    plan.roads
+        .edges
+        .iter()
+        .enumerate()
+        .map(|(k, e)| (cut(k, e.a), cut(k, e.b)))
+        .collect()
+}
+
+/// Each node's driven ways out: the edge, its unit direction out of the node, and whether the
+/// node is its start. A short dead end (a stub under 40 m) is no street to cross.
+fn driven_ways(plan: &CityPlan) -> Vec<Vec<(usize, DVec2, bool)>> {
+    let mut degree = vec![0usize; plan.roads.nodes.len()];
+    for e in &plan.roads.edges {
+        degree[e.a as usize] += 1;
+        degree[e.b as usize] += 1;
+    }
+    let mut ways: Vec<Vec<(usize, DVec2, bool)>> = vec![Vec::new(); plan.roads.nodes.len()];
+    for (k, e) in plan.roads.edges.iter().enumerate() {
+        let n = e.points.len();
+        let stub = (degree[e.a as usize] == 1 || degree[e.b as usize] == 1) && e.length() < 40.0;
+        if n < 2 || !driven(e.profile) || stub {
+            continue;
+        }
+        ways[e.a as usize].push((k, (e.points[1] - e.points[0]).normalize_or_zero(), true));
+        ways[e.b as usize].push((
+            k,
+            (e.points[n - 2] - e.points[n - 1]).normalize_or_zero(),
+            false,
+        ));
+    }
+    ways
+}
+
+/// Where two avenues meet at a bend that is no crossing, the wedge on the bend's outside
+/// paved from one pavement's end to the other's, with its kerb: the pavement stopped there and
+/// the outside of the bend was bare (the owner: a missing pavement by a bridge).
+fn bends(tiles: &mut Tiles, plan: &CityPlan) {
+    let size = tiles.size;
+    for (node, ways) in driven_ways(plan).iter().enumerate() {
+        if ways.len() != 2 {
+            continue;
+        }
+        let o = plan.roads.nodes[node].pos;
+        let profile = |k: usize| plan.roads.edges[k].profile;
+        let ((ka, da, _), (kb, db, _)) = (ways[0], ways[1]);
+        let (pa, pb) = (profile(ka), profile(kb));
+        if pa.pavement() <= 0.0 || pb.pavement() <= 0.0 {
+            continue;
+        }
+        // The outside of the bend: the side away from where the two ways turn.
+        let turn = da + db;
+        if turn.length() < 0.05 {
+            continue;
+        }
+        let out = -turn.normalize();
+        let side = |d: DVec2| {
+            let n = DVec2::new(-d.y, d.x);
+            if n.dot(out) >= 0.0 { n } else { -n }
+        };
+        let (na, nb) = (side(da), side(db));
+        let (ha, hb) = (pa.width() * 0.5, pb.width() * 0.5);
+        let ring = [
+            o + na * (ha - pa.pavement()),
+            o + na * ha,
+            o + nb * hb,
+            o + nb * (hb - pb.pavement()),
+        ];
+        tiles.flat(&ring, 0.30, PAVING, false);
+        // Its kerb along the inner edge, facing the road.
+        let (a, b) = (ring[0], ring[3]);
+        let tile = tiles.at(a);
+        let centre = tile.centre;
+        let p = |q: DVec2, h: f64| world(size, q, h) - centre;
+        let towards = -out;
+        let normal = Vec3::new(towards.x as f32, 0.0, towards.y as f32);
+        triangle(
+            &mut tile.ground,
+            [p(a, AVENUE_LEVEL), p(b, AVENUE_LEVEL), p(b, 0.30)],
+            normal,
+            PAVING,
+        );
+        triangle(
+            &mut tile.ground,
+            [p(a, AVENUE_LEVEL), p(b, 0.30), p(a, 0.30)],
+            normal,
+            PAVING,
+        );
+    }
+}
+
+/// Where a pavement of an edge `length` long is raised: from past the dropped kerb at each
+/// end that is a crossing (the widest street there, a metre, the ramp) to the same at the other,
+/// or from end to end where neither is; `None` where too short.
+fn raised(length: f64, ca: bool, cb: bool, wa: f64, wb: f64) -> Option<(f64, f64)> {
+    let start = if ca { wa + 1.0 + RAMP } else { 0.0 };
+    let end = if cb { length - wb - 1.0 - RAMP } else { length };
+    (end - start >= 4.0).then_some((start, end))
+}
+
 /// Each avenue's half width at each junction: the widest street meeting there.
 fn widest_at(plan: &CityPlan) -> Vec<f64> {
     let mut widest = vec![0.0_f64; plan.roads.nodes.len()];
@@ -3590,12 +3845,14 @@ fn corners(plan: &CityPlan, widest: &[f64]) -> Vec<Vec<DVec2>> {
         .iter()
         .flat_map(|l| l.points.windows(2).map(|w| [w[0], w[1]]))
         .collect();
-    // Each node's ways out with pavements: the unit direction, the half width, the pavement.
+    // Each node's ways out with pavements, and the driven streets without (a shared street,
+    // paved to its edges): the unit direction, the half width, the pavement. A corner between
+    // an avenue and a shared street stayed asphalt by a bridge (the owner).
     let mut ways: Vec<Vec<(DVec2, f64, f64)>> = vec![Vec::new(); plan.roads.nodes.len()];
     for e in &plan.roads.edges {
         let n = e.points.len();
         let pave = e.profile.pavement();
-        if n < 2 || pave <= 0.0 {
+        if n < 2 || (pave <= 0.0 && !driven(e.profile)) {
             continue;
         }
         let half = e.profile.width() * 0.5;
@@ -3612,7 +3869,12 @@ fn corners(plan: &CityPlan, widest: &[f64]) -> Vec<Vec<DVec2>> {
         let d = cross(a, b);
         (d.abs() > 1e-6).then(|| p + a * (cross(q - p, b) / d))
     };
+    let crossing = crossings(plan);
     for (i, node) in plan.roads.nodes.iter().enumerate() {
+        // Only where streets cross: a bend's pavements run on round it (`bends`).
+        if !crossing[i] {
+            continue;
+        }
         let out = &mut ways[i];
         if out.len() < 2 {
             continue;
@@ -3620,11 +3882,59 @@ fn corners(plan: &CityPlan, widest: &[f64]) -> Vec<Vec<DVec2>> {
         out.sort_by(|a, b| a.0.y.atan2(a.0.x).total_cmp(&b.0.y.atan2(b.0.x)));
         let s = widest[i] + 1.0;
         for k in 0..out.len() {
-            let (a, b) = (out[k], out[(k + 1) % out.len()]);
+            let (mut a, mut b) = (out[k], out[(k + 1) % out.len()]);
             if out.len() == 2 && k == 1 {
                 break;
             }
+            // Two paved ways (a third street without pavements): the corner between them on
+            // the side under a half turn, the inside of the bend. Only the other side was
+            // tried, and the inside stayed asphalt by a bridge (the owner).
+            if out.len() == 2 && a.0.angle_to(b.0) < 0.0 {
+                (a, b) = (b, a);
+            }
             let angle = a.0.angle_to(b.0);
+            if a.2 <= 0.0 && b.2 <= 0.0 {
+                continue;
+            }
+            // Two ways running on nearly straight through a junction, nothing between them on
+            // this side: the strip between their edges, the kerb running from one's to the
+            // other's. A bridge's pavement stopped short of the street it ran on into, asphalt
+            // between (the owner).
+            if angle >= 2.8 && out.len() >= 3 {
+                let o = node.pos;
+                let (na, nb) = (DVec2::new(-a.0.y, a.0.x), DVec2::new(b.0.y, -b.0.x));
+                // One without a pavement (a shared street, paved to its edges, which may bend
+                // away at once): the other's pavement band carried on through the node, over its
+                // own asphalt end, to past the shared street's edge.
+                let band = |p: (DVec2, f64, f64), n: DVec2, beyond: f64| {
+                    [
+                        o + p.0 * s + n * (p.1 - p.2),
+                        o + p.0 * s + n * p.1,
+                        o - p.0 * beyond + n * p.1,
+                        o - p.0 * beyond + n * (p.1 - p.2),
+                    ]
+                };
+                let quad = if b.2 <= 0.0 {
+                    band(a, na, b.1 + 1.0)
+                } else if a.2 <= 0.0 {
+                    band(b, nb, a.1 + 1.0)
+                } else {
+                    [
+                        o + a.0 * s + na * (a.1 - a.2),
+                        o + a.0 * s + na * a.1,
+                        o + b.0 * s + nb * b.1,
+                        o + b.0 * s + nb * (b.1 - b.2),
+                    ]
+                };
+                let mut ring = geom::clean(&quad, 0.01);
+                if ring.len() >= 3 {
+                    if geom::signed_area(&ring) < 0.0 {
+                        ring.reverse();
+                    }
+                    rings.push(ring);
+                }
+                continue;
+            }
             if !(0.6..2.8).contains(&angle) {
                 continue;
             }
@@ -3689,6 +3999,11 @@ fn corners(plan: &CityPlan, widest: &[f64]) -> Vec<Vec<DVec2>> {
                 ring.extend([b_in, kerb, a_in]);
             } else {
                 ring.extend(geom::fillet(&[b_in, kerb, a_in], KERB_RADIUS, 0.75));
+            }
+            // A side without a pavement repeats its point: the ring without it.
+            let mut ring = geom::clean(&ring, 0.01);
+            if ring.len() < 3 {
+                continue;
             }
             if geom::signed_area(&ring) < 0.0 {
                 ring.reverse();

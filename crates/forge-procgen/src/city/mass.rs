@@ -210,13 +210,19 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
             .collect();
         // No wedge to a point: acute corners cut square (the owner saw an impossible building at a
         // block's sharp corner).
-        let pieces = absorb_thin(
+        let pieces: Vec<Vec<DVec2>> = absorb_thin(
             pieces
                 .iter()
                 .map(|p| blunt(p))
                 .filter(|p| p.len() >= 3 && geom::signed_area(p) >= 20.0)
                 .collect(),
-        );
+        )
+        .into_iter()
+        // No repeated points or straight runs: ear clipping stalled on them (a roof lost half
+        // its triangles).
+        .map(|p| geom::clean(&p, 0.01))
+        .filter(|p| p.len() >= 3)
+        .collect();
         if pieces.is_empty() {
             continue;
         }
@@ -370,8 +376,11 @@ const BLUNT: f64 = 6.0;
 /// A footprint (positive area) with each corner sharper than [`SHARPEST`] cut square to its
 /// bisector where the wedge is [`BLUNT`] wide: a chamfered corner, not a wedge to a point.
 fn blunt(polygon: &[DVec2]) -> Vec<DVec2> {
+    // Each sharp corner replaced by two points equally far along its two edges, the cut square
+    // to its bisector; only the corner moves, so a concave outline stays sound (a clip across
+    // the whole outline could leave a bridge).
     let mut out = polygon.to_vec();
-    for _ in 0..4 {
+    for _ in 0..8 {
         let n = out.len();
         if n < 3 {
             break;
@@ -384,15 +393,14 @@ fn blunt(polygon: &[DVec2]) -> Vec<DVec2> {
             );
             let convex = geom::cross(v - prev, next - v) > 0.0;
             let angle = a.angle_to(b).abs();
-            (convex && angle > 1e-3 && angle < SHARPEST).then_some((v, a, b, angle))
+            let room = 0.45 * v.distance(prev).min(v.distance(next));
+            (convex && angle > 1e-3 && angle < SHARPEST).then_some((i, v, a, b, angle, room))
         });
-        let Some((v, a, b, angle)) = acute else {
+        let Some((i, v, a, b, angle, room)) = acute else {
             break;
         };
-        let inward = (a + b).normalize_or_zero();
-        let cut = v + inward * (BLUNT * 0.5 / (angle * 0.5).tan());
-        // Keep what lies beyond the cut, away from the corner.
-        out = geom::clip_half_plane(&out, cut, DVec2::new(inward.y, -inward.x));
+        let s = (BLUNT * 0.5 / (angle * 0.5).sin()).min(room);
+        out.splice(i..=i, [v + a * s, v + b * s]);
     }
     out
 }
@@ -573,5 +581,29 @@ mod tests {
             }
         }
         assert_eq!(sharp, 0, "{sharp} corners sharper than 55°");
+    }
+
+    #[test]
+    fn every_footprint_triangulates_whole() {
+        let size = 4000.0;
+        let city = plan(&example::site(size, 10.0), &example::params(size));
+        let masses = masses(&city, &StyleBible::default(), 9);
+        let mut bad = Vec::new();
+        for (i, m) in masses.iter().enumerate() {
+            let area = geom::signed_area(&m.footprint).abs();
+            let covered: f64 = geom::triangulate(&m.footprint)
+                .iter()
+                .map(|t| geom::signed_area(&t.map(|k| m.footprint[k])).abs())
+                .sum();
+            if (covered - area).abs() > 0.01 * area {
+                bad.push((i, area, covered));
+            }
+        }
+        assert!(
+            bad.is_empty(),
+            "{} footprints not covered, e.g. {:?}",
+            bad.len(),
+            &bad[..bad.len().min(5)]
+        );
     }
 }

@@ -120,6 +120,13 @@ buildings too close, on their second walk (2026-10-11). A plan can now set two o
   from each gap to the court's middle. The sandbox opens its modern districts (runs of 35–55 m,
   gaps 10–25 %) and keeps its centre and old town closed: about 1.05 M people.
 
+**Footprints.** A footprint's corner sharper than 55° is chamfered where its wedge is 6 m
+wide, or at 0.45 of its shorter side: a building came to a point at a block's sharp corner by
+a bridge (the owner: an impossible building). Each footprint is then cleaned of repeated and
+collinear points within a centimetre (`geom::clean`): ear clipping stalled on them, and 1 372
+roofs lost big triangles (the owner saw them). Tests: `no_building_comes_to_a_point`,
+`every_footprint_triangulates_whole`.
+
 ## In 3D
 
 ```
@@ -298,8 +305,12 @@ the ground and met the harbour 0.6 m higher, a dark step between the two waters 
 second walk). For the ground the rivers' beds are widened by three quarters of a cell each side,
 so no land juts into them. Along each bank a stone wall drops to 1.2 m under the ground, and a
 stone promenade 13 m wide follows the river over the widened bed; where a street runs by the
-river, the street lies over it. The promenade is laid on land only: where the river runs into
-the harbour it floated over the open water. Stone quay walls drop the same way along the shore.
+river, the street lies over it. The promenade is laid on land only, by the smooth shore the
+ground follows (its land edge and middle out of the open water): where the river runs into the
+harbour it floated over the open water. Testing its river edge too, half wet on the shore, or
+the sea's cells, which reach past the drawn shore, dropped it by a bridge (the owner: a missing
+pavement next to the bridge). It runs in stretches of 60 m or more: a shorter one stood alone
+by a lawn's bank. Stone quay walls drop the same way along the shore.
 A quay's land is lawn under its trees, the dry squares and pieces inside it. The harbour's
 water itself is still a flat mirror: the island's FFT sea is the next step.
 
@@ -425,9 +436,12 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
   step, then stood 0.75 m off the kerb with the road between (the owner: not accessible). The
   bikes' strip by the kerb runs over it behind the shelter, at its height, as a cycle track
   crosses a stop's boarding area in Dutch and German streets; it was a 0.75 m channel. Each stop
-  stands in the middle of the stretch between the junctions round it. Snapped to a junction,
-  its platforms and ramps, 37 m either way, stood across the crossings, and bikes rode through
-  them.
+  stands at the nearest place along its route where its platforms and ramps, 37.4 m either way,
+  are clear of every junction and on straight track, so the whole tram stands level with the
+  platform (searched 400 m either way in 2.5 m steps, 60 m apart at least). Snapped to a
+  junction, they stood across the crossings and bikes rode through them; set in the middle of
+  the stretch between junctions, some still jutted into the crossroad or lay on a curve (the
+  owner).
 - **tram lines** turn on arcs: each line is simplified to 0.5 m, then every corner is rounded to
   18 m, about a low-floor tram's tightest in the street (`geom::fillet`, `transit::TRAM_RADIUS`).
   The tracks turned at right angles in the junctions.
@@ -451,14 +465,35 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
   a car and 0.5 m, 3.45 m from the line), or the corner is left out: the inner track crossed a
   corner's tip (the owner: the tracks should use the junction, not the pavement). Otherwise the
   kerb turns the corner on a 6 m arc, shorter where its sides are short (`geom::fillet`): it came
-  to a point (the owner: some things need rounding).
+  to a point (the owner: some things need rounding). A shared street, paved to its edges, counts
+  as a way: the corner between it and an avenue is paved to its edge. Where only two ways have
+  pavements, the corner on their side under a half turn is paved; the other side was tried and
+  the inside stayed asphalt. Two ways running on nearly straight through a junction get the
+  strip between their edges, or, where one has no pavement, the other's pavement carried on
+  through the node: a bridge's pavement stopped short of the street it ran on into, asphalt
+  between (the owner's two rectangles).
 - **dropped kerbs:** each raised pavement slopes down to the paved corner over 1.6 m at both
   ends, its whole width, where people cross at the junction (1 in 12, step-free: #263). The
-  open ends showed under the pavement.
+  open ends showed under the pavement. Only real crossings cut a pavement: three or more
+  driven streets meeting, two turning by more than 30°, or a driven street's end. A footpath
+  between the buildings, or a dead end under 40 m, joins a street without stopping its
+  pavement (the owner: false crossroads, pavements cut where the other side is grass). Where
+  two avenues meet at a bend, the wedge on its outside is paved from one pavement to the other
+  with its kerb; it was bare.
+- **the buildings' feet:** a paved apron 1 m wide runs along every street wall at the level
+  before it, and the doors' and shopfronts' sills sit at that level (0.30 on an avenue, 0.16 on
+  a street, 0.08 in a court: `structure::outside`). A strip of the blocks' ground showed between
+  the pavement and the facades (the owner: buildings need foundations at the pavement's height).
+- **the tiles' LOD** weighs normals (`CookOptions { normal_weight: 2.0 }`): at the coarser levels
+  a pavement's kerb and back faces folded into its top, long tilted triangles where two paving
+  patterns seemed to blend on the pavements and the bridges (the owner guessed an LOD issue).
 - **bridges:** a stone parapet a metre over the pavement along both edges, 0.35 m thick, and
   the deck's side below it down to the water; the walker walks against the parapets. The
   pavements stopped at a bare edge over the river (the owner: the bridges' pavements looked
-  broken).
+  broken). Each side's parapet stands where that side crosses the water as drawn (a river's
+  strip or the smooth shore's open water, tested every metre) and a metre on to meet the bank's
+  wall. Cut by the site's cells, they first ran on over the land and cut the promenades, then
+  stopped short of the drawn banks (the owner: both too short).
 - **squares on one level:** a square lies flush with the raised pavements round it (0.30), its
   fountain, benches, chess tables, lawn and landmark with it. Round it runs a 1.7 m stone
   border, level beside a raised pavement and sloping 1 in 12 down to a shared street or a
