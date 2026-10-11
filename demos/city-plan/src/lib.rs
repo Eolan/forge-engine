@@ -426,6 +426,33 @@ impl PlanScenario {
             kit_instances.push((id, at, group));
             hall_squares.push(i);
         }
+        // Benches round each square of 0.15 ha or more, every 15 m inside its outer tree row,
+        // facing the middle; on a landmark's square they face it.
+        let benches: Vec<Mat4> = plan
+            .blocks
+            .iter()
+            .filter(|b| b.use_ == BlockUse::Square && b.area >= 1500.0)
+            .filter_map(|b| geom::inset(&b.buildable, 6.0).map(|ring| (b, ring)))
+            .flat_map(|(b, ring)| {
+                let middle = geom::centroid(&b.buildable);
+                let mut closed = ring.clone();
+                closed.push(ring[0]);
+                geom::resample(&closed, 15.0).into_iter().map(move |p| {
+                    let face = (middle - p).normalize_or_zero();
+                    // The bench faces +z: turned so +z points at the middle.
+                    let turn = (face.x as f32).atan2(face.y as f32);
+                    Mat4::from_rotation_translation(
+                        glam::Quat::from_rotation_y(turn),
+                        world(size, p, 0.16),
+                    )
+                })
+            })
+            .collect();
+        if !benches.is_empty() {
+            kit_meshes.push(forge_geom::furniture::bench());
+            let id = (kit_meshes.len() - 1) as u32;
+            kit_instances.extend(benches.into_iter().map(|at| (id, at, 0)));
+        }
         // A fountain in the middle of each other square of 0.15 ha or more.
         let fountains: Vec<Mat4> = plan
             .blocks

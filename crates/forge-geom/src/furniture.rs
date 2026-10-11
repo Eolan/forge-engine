@@ -137,6 +137,59 @@ fn prism(m: &mut TriMesh, c: Vec3, r: f32, t: f32, sides: u32, section: u8) {
     }
 }
 
+/// A park bench 1.8 m long along `x`, facing `+z`: wooden slats on two cast-iron end frames, a
+/// slatted back.
+pub fn bench() -> TriMesh {
+    let mut m = TriMesh::default();
+    for x in [-0.8_f32, 0.8] {
+        // The end frame: a leg front and back, an arm.
+        for z in [-0.2_f32, 0.2] {
+            cuboid(
+                &mut m,
+                Vec3::new(x - 0.03, 0.0, z - 0.03),
+                Vec3::new(x + 0.03, 0.45, z + 0.03),
+                METAL,
+                ALL & !NEG_Y & !POS_Y,
+            );
+        }
+        cuboid(
+            &mut m,
+            Vec3::new(x - 0.03, 0.42, -0.26),
+            Vec3::new(x + 0.03, 0.85, -0.2),
+            METAL,
+            ALL & !NEG_Y,
+        );
+        cuboid(
+            &mut m,
+            Vec3::new(x - 0.03, 0.62, -0.22),
+            Vec3::new(x + 0.03, 0.66, 0.22),
+            METAL,
+            ALL,
+        );
+    }
+    for k in 0..4 {
+        let z = -0.18 + k as f32 * 0.12;
+        cuboid(
+            &mut m,
+            Vec3::new(-0.9, 0.42, z),
+            Vec3::new(0.9, 0.46, z + 0.09),
+            WOOD,
+            ALL,
+        );
+    }
+    for k in 0..3 {
+        let y = 0.55 + k as f32 * 0.11;
+        cuboid(
+            &mut m,
+            Vec3::new(-0.9, y, -0.25),
+            Vec3::new(0.9, y + 0.08, -0.22),
+            WOOD,
+            ALL,
+        );
+    }
+    m
+}
+
 /// A square's fountain round the origin: an octagonal stone basin 6.4 m across, brimming with
 /// water ([`GLASS`]'s section), a column in its middle carrying a bowl.
 pub fn fountain() -> TriMesh {
