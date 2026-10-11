@@ -354,7 +354,10 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
   landmarks or built districts' centres (200 m to 4 km, at least 35° apart). Each carries its
   name in white, read from its left end on both faces, from one 1024² atlas of names drawn
   with the engine's JetBrains Mono (16 rows). 23 in the sandbox's kilometre round the harbour.
-- **dropped kerbs:** each raised pavement slopes down to the carriageway over 1.6 m at both
+- **paved corners:** at a junction, the corner between two avenues' pavements is paved flush
+  (1 cm over the carriageway) from one pavement's end round the building corner to the other's,
+  and in along the kerbs; it was asphalt to the buildings.
+- **dropped kerbs:** each raised pavement slopes down to the paved corner over 1.6 m at both
   ends, its whole width, where people cross at the junction (1 in 12, step-free: #263). The
   open ends showed under the pavement.
 - **street-workout parks:** one in each park of a hectare or more, 14 by 10 m on a rubber

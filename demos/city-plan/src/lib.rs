@@ -811,6 +811,9 @@ const TRACK_OFFSET: f64 = 1.6;
 pub(crate) const AVENUE_LEVEL: f64 = 0.17;
 /// A dropped kerb's length, metres: 13 cm down over it, a slope of 1 in 12 (#263).
 pub(crate) const RAMP: f64 = 1.6;
+/// The paved corners' level at a junction and the dropped kerbs' foot: a centimetre over the
+/// avenues' carriageway, which runs under them.
+const CORNER_LEVEL: f64 = AVENUE_LEVEL + 0.01;
 /// A tram stop's platform, metres: a tram's length and a little.
 const PLATFORM: f32 = 36.0;
 /// The trams' sections: a cab, three passenger sections, a cab.
@@ -2569,7 +2572,7 @@ fn pavements(tiles: &mut Tiles, plan: &CityPlan) {
                 let p = |q: DVec2, y: f64| world(size, q, y) - centre;
                 let (hi_out, hi_in) = (h + n * half, h + n * (half - pavement));
                 let (lo_out, lo_in) = (l + n * half, l + n * (half - pavement));
-                let base = AVENUE_LEVEL + 0.005;
+                let base = CORNER_LEVEL;
                 let quad = [
                     p(lo_in, base),
                     p(lo_out, base),
@@ -2629,6 +2632,88 @@ fn pavements(tiles: &mut Tiles, plan: &CityPlan) {
                     PAVING,
                 );
             }
+        }
+    }
+    corners(tiles, plan, &widest);
+}
+
+/// The corners between two avenues' pavements at a junction, paved flush at the dropped kerbs'
+/// foot ([`CORNER_LEVEL`]): from the end of one pavement round the building corner to the end
+/// of the other, and in along the kerbs to where they meet. They were asphalt, the carriageway
+/// running on to the buildings, and the pavements' ends stood out (the owner's second walk).
+fn corners(tiles: &mut Tiles, plan: &CityPlan, widest: &[f64]) {
+    // Each node's ways out with pavements: the unit direction, the half width, the pavement.
+    let mut ways: Vec<Vec<(DVec2, f64, f64)>> = vec![Vec::new(); plan.roads.nodes.len()];
+    for e in &plan.roads.edges {
+        let n = e.points.len();
+        let pave = e.profile.pavement();
+        if n < 2 || pave <= 0.0 {
+            continue;
+        }
+        let half = e.profile.width() * 0.5;
+        ways[e.a as usize].push(((e.points[1] - e.points[0]).normalize_or_zero(), half, pave));
+        ways[e.b as usize].push((
+            (e.points[n - 2] - e.points[n - 1]).normalize_or_zero(),
+            half,
+            pave,
+        ));
+    }
+    let cross = |a: DVec2, b: DVec2| a.x * b.y - a.y * b.x;
+    // Where the lines `p + a t` and `q + b u` meet.
+    let meet = |p: DVec2, a: DVec2, q: DVec2, b: DVec2| {
+        let d = cross(a, b);
+        (d.abs() > 1e-6).then(|| p + a * (cross(q - p, b) / d))
+    };
+    for (i, node) in plan.roads.nodes.iter().enumerate() {
+        let out = &mut ways[i];
+        if out.len() < 2 {
+            continue;
+        }
+        out.sort_by(|a, b| a.0.y.atan2(a.0.x).total_cmp(&b.0.y.atan2(b.0.x)));
+        let s = widest[i] + 1.0;
+        for k in 0..out.len() {
+            let (a, b) = (out[k], out[(k + 1) % out.len()]);
+            if out.len() == 2 && k == 1 {
+                break;
+            }
+            let angle = a.0.angle_to(b.0);
+            if !(0.6..2.8).contains(&angle) {
+                continue;
+            }
+            // Across each way, towards the other.
+            let side = |d: DVec2, other: DVec2| {
+                let n = DVec2::new(-d.y, d.x);
+                if n.dot(other) < 0.0 { -n } else { n }
+            };
+            let (na, nb) = (side(a.0, b.0), side(b.0, a.0));
+            let o = node.pos;
+            let (Some(kerb), Some(wall)) = (
+                meet(o + na * (a.1 - a.2), a.0, o + nb * (b.1 - b.2), b.0),
+                meet(o + na * a.1, a.0, o + nb * b.1, b.0),
+            ) else {
+                continue;
+            };
+            let corner = [
+                o + a.0 * s + na * (a.1 - a.2),
+                o + a.0 * s + na * a.1,
+                wall,
+                o + b.0 * s + nb * b.1,
+                o + b.0 * s + nb * (b.1 - b.2),
+                kerb,
+            ];
+            // A sound corner only: its points within the junction's reach.
+            if corner
+                .iter()
+                .any(|p| p.distance(o) > s + a.1.max(b.1) + 2.0)
+            {
+                continue;
+            }
+            let ring = if geom::signed_area(&corner) < 0.0 {
+                corner.iter().rev().copied().collect::<Vec<_>>()
+            } else {
+                corner.to_vec()
+            };
+            tiles.flat(&ring, CORNER_LEVEL, PAVING, false);
         }
     }
 }
