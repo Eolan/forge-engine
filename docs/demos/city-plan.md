@@ -333,7 +333,8 @@ river avenue's lanes and walkers on its pavements. Bottom: at 20:00, a lane's ca
 evening's walkers.* `--people HOUR` builds the plan's population from the masses
 (`forge_sim::population`, 295 789 people, 2 s) and runs its day to that hour. Each frame:
 - **who is drawn:** people within 220 m of the camera, as placeholder figures
-  (`forge_geom::figures`: blocky, in eight palettes, walking, standing, riding a bike or
+  (`forge_geom::figures`: blocky, in eight palettes, walking (a left stride, passing, a right
+  stride, a pose every 0.7 m along the way), standing, riding a bike or
   seated);
 - **those out at a café:** seated at the kit's terraces. Each seat is taken in the share that
   the people out at the cafés within 300 m make of the seats there, up to nine in ten. The

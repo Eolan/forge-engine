@@ -22,7 +22,9 @@ use glam::{DVec2, Vec2, Vec3};
 
 /// The figures' palettes.
 pub const GROUPS: usize = 8;
-/// Figures a mesh (a palette walking, standing, riding or seated) shows at most.
+/// The meshes of each palette: left stride, standing, riding, seated, right stride.
+pub const POSES: usize = 5;
+/// Figures a mesh (a palette in one pose) shows at most.
 pub const PER_MESH: usize = 60;
 /// How far round the camera people are drawn, metres.
 const REACH: f64 = 220.0;
@@ -274,7 +276,7 @@ impl Crowd {
             if (pick as f64) / 1024.0 >= share {
                 continue;
             }
-            let mesh = (k * 7 + 3) % GROUPS * 4 + 3;
+            let mesh = (k * 7 + 3) % GROUPS * POSES + 3;
             if out[mesh].len() < PER_MESH {
                 out[mesh].push((p, turn));
             }
@@ -288,12 +290,12 @@ impl Crowd {
     }
 
     /// The figures to draw round `camera` (the world's x and z): for each of the
-    /// `4 × GROUPS` meshes in order (each palette walking, standing, riding, seated), up to [`PER_MESH`]
-    /// places and turns.
+    /// `POSES × GROUPS` meshes in order (each palette's left stride, standing, riding, seated,
+    /// right stride), up to [`PER_MESH`] places and turns.
     pub fn figures(&mut self, camera: Vec2) -> Vec<Vec<(Vec3, f32)>> {
         let half = self.size * 0.5;
         let c = DVec2::new(f64::from(camera.x) + half, f64::from(camera.y) + half);
-        let mut out = vec![Vec::new(); 4 * GROUPS];
+        let mut out = vec![Vec::new(); POSES * GROUPS];
         let mut budget = NEW_ROUTES;
         let places = &self.sim.world.places;
         let now = self.clock;
@@ -310,7 +312,7 @@ impl Crowd {
                         f64::from(q[0]) + jitter(s),
                         f64::from(q[1]) + jitter(s >> 8),
                     );
-                    let mesh = (s as usize % GROUPS) * 4 + 1;
+                    let mesh = (s as usize % GROUPS) * POSES + 1;
                     let inside = self.parks.iter().any(|p| geom::contains(p, q));
                     if inside && q.distance(c) <= REACH && out[mesh].len() < PER_MESH {
                         let at = Vec3::new((q.x - half) as f32, 0.08, (q.y - half) as f32);
@@ -339,7 +341,7 @@ impl Crowd {
                         + away * (0.8 + ((s >> 8) % 14) as f32 / 10.0)
                         + Vec3::Y * 0.28;
                     let at = DVec2::new(f64::from(spot.x) + half, f64::from(spot.z) + half);
-                    let mesh = (s as usize % GROUPS) * 4 + 1;
+                    let mesh = (s as usize % GROUPS) * POSES + 1;
                     if at.distance(c) <= REACH && out[mesh].len() < PER_MESH {
                         out[mesh].push((spot, away.z.atan2(-away.x)));
                     }
@@ -371,7 +373,14 @@ impl Crowd {
                 continue;
             }
             let seed = self.sim.pop.seed[p];
-            let mesh = (seed as usize % GROUPS) * 4 + if riding { 2 } else { 0 };
+            // Riding, or walking: the left stride, passing, the right stride, passing, a pose
+            // every 0.7 m along the way.
+            let pose = if riding {
+                2
+            } else {
+                [0, 1, 4, 1][((gone * route.length() / 0.7) as usize) % 4]
+            };
+            let mesh = (seed as usize % GROUPS) * POSES + pose;
             if out[mesh].len() >= PER_MESH {
                 continue;
             }

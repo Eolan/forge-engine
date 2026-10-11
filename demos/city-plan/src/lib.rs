@@ -1554,9 +1554,9 @@ impl Scenario for PlanScenario {
             let n = run.timetable.vehicles() as u32;
             tram_movers.extend([(cab, 2 * n), (middle, (TRAM_SECTIONS as u32 - 2) * n)]);
         }
-        // The crowd's figures: each palette walking, standing (the parks' people), riding and
-        // seated (the cafés'),
-        // a mesh each.
+        // The crowd's figures, each palette in its poses (`crowd::POSES`): the left stride,
+        // standing (the parks' and the platforms' people), riding, seated (the cafés'), the
+        // right stride; a mesh each.
         if self.crowd.is_some() {
             for (g, &row) in people_rows.iter().enumerate().take(crowd::GROUPS) {
                 let height = 1.62 + 0.04 * (g % 5) as f32;
@@ -1565,6 +1565,7 @@ impl Scenario for PlanScenario {
                     forge_geom::figures::walker(height, 0.0),
                     forge_geom::figures::cyclist(height),
                     forge_geom::figures::sitter(height),
+                    forge_geom::figures::walker(height, -0.3),
                 ] {
                     let mesh = builder.add_mesh(&MeshletMesh::build(&figure));
                     builder.set_mesh_material(mesh, row);
