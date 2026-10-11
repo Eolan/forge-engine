@@ -496,7 +496,7 @@ impl PlanScenario {
             kit_meshes.push(forge_geom::furniture::tram_stop(PLATFORM));
             let stop = (kit_meshes.len() - 1) as u32;
             for run in &trams {
-                for at in run.platforms(size) {
+                for (at, _, _) in run.platforms(size) {
                     // The kit's first colour, its glass lit: the shelter and the totem glow.
                     kit_instances.push((stop, at, 1));
                 }
@@ -551,12 +551,27 @@ impl PlanScenario {
     /// camera drawn as figures (`crowd`).
     pub fn with_people(mut self, plan: &CityPlan, masses: &[Mass], hour: f64) -> Self {
         let seats = std::mem::take(&mut self.seats);
-        let platforms: Vec<Mat4> = self
+        // Each platform with its line, stop and way, and the lines' timetables: who waits there
+        // boards the trams that stand at it.
+        let platforms: Vec<crowd::Platform> = self
             .trams
             .iter()
-            .flat_map(|r| r.platforms(self.size))
+            .enumerate()
+            .flat_map(|(line, r)| {
+                r.platforms(self.size)
+                    .into_iter()
+                    .map(move |(at, stop, outbound)| crowd::Platform {
+                        at,
+                        line,
+                        stop,
+                        outbound,
+                    })
+            })
             .collect();
-        self.crowd = Some(crowd::Crowd::new(plan, masses, hour, seats, &platforms));
+        let timetables = self.trams.iter().map(|r| r.timetable.clone()).collect();
+        self.crowd = Some(crowd::Crowd::new(
+            plan, masses, hour, seats, platforms, timetables,
+        ));
         self
     }
 
@@ -731,24 +746,27 @@ impl TramRun {
     }
 
     /// Each stop's two platforms, one beyond each track (a tram's half width and a hand from
-    /// it), each running the way its trams do, in a plan of side `size`.
-    fn platforms(&self, size: f64) -> Vec<Mat4> {
+    /// it), each running the way its trams do, in a plan of side `size`: its transform, its stop
+    /// and whether it serves the outbound trams.
+    fn platforms(&self, size: f64) -> Vec<(Mat4, usize, bool)> {
         let mut out = Vec::new();
         let length = f64::from(PLATFORM);
-        for &s in self.timetable.stops() {
+        for (stop, &s) in self.timetable.stops().iter().enumerate() {
             let (p, t) = self.track(s);
             let n = DVec2::new(-t.y, t.x);
-            for side in [1.0, -1.0] {
+            // The outbound track lies to the left of the line (+n), the inbound to the right.
+            for (side, outbound) in [(1.0, true), (-1.0, false)] {
                 let (along, away) = (t * side, n * side);
                 // A tram stands with its front at the stop and its body behind.
                 let corner = p - along * (length - 2.0) + away * (TRACK_OFFSET + 1.35);
                 let axis = |d: DVec2| Vec3::new(d.x as f32, 0.0, d.y as f32);
-                out.push(Mat4::from_cols(
+                let at = Mat4::from_cols(
                     axis(along).extend(0.0),
                     Vec3::Y.extend(0.0),
                     axis(away).extend(0.0),
                     world(size, corner, 0.16).extend(1.0),
-                ));
+                );
+                out.push((at, stop, outbound));
             }
         }
         out
@@ -1842,7 +1860,7 @@ impl Running for PlanRunning {
         if let Some(crowd) = &mut self.crowd {
             // Unused figures wait far under the ground.
             let parked = (Vec3::new(0.0, -1000.0, 0.0) + self.origin, 0.0);
-            for figures in crowd.figures(self.camera) {
+            for figures in crowd.figures(self.camera, self.clock) {
                 for k in 0..crowd::PER_MESH {
                     transforms.push(place(figures.get(k).copied().unwrap_or(parked)));
                 }

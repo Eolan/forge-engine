@@ -11,13 +11,14 @@
 //!   the seats.
 
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use forge_core::Seed;
 use forge_procgen::city::geom::{self, PointGrid};
 use forge_procgen::city::mass::Mass;
 use forge_procgen::city::{BlockUse, CityPlan, Profile};
 use forge_sim::population::{self, Building, Mix, Mode, PlaceKind, Sim, TRAM_WAIT, Uses, World};
+use forge_sim::transit::Timetable;
 use glam::{DVec2, Vec2, Vec3};
 
 /// The figures' palettes.
@@ -107,13 +108,29 @@ pub struct Crowd {
     /// neighbourhood: the cafés within [`NEIGHBOURHOOD`] and how many seats.
     seats: Vec<(Vec3, f32)>,
     neighbourhoods: Vec<(Vec<u32>, u32)>,
-    /// The tram stops' platforms (a corner, the unit way along it, the unit way away from its
-    /// track) and their middles on the plan, found by a grid.
-    platforms: Vec<(Vec3, Vec3, Vec3)>,
+    /// The tram stops' platforms, their middles on the plan found by a grid, the lines'
+    /// timetables, and who has boarded from a platform (until their trip ends).
+    platforms: Vec<Platform>,
     stop_grid: PointGrid,
+    timetables: Vec<Timetable>,
+    boarded: HashSet<u32>,
     /// People at each place, counted every [`RECOUNT`] calls.
     counts: Vec<u32>,
     calls: u32,
+}
+
+/// A tram stop's platform: where it stands (its corner, `x` along it, `z` away from its track),
+/// its line, its stop on the line, and whether it serves the outbound trams.
+#[derive(Clone, Copy, Debug)]
+pub struct Platform {
+    /// Its transform.
+    pub at: glam::Mat4,
+    /// Its line, an index into the timetables.
+    pub line: usize,
+    /// Its stop on the line.
+    pub stop: usize,
+    /// Whether the outbound trams stop at it.
+    pub outbound: bool,
 }
 
 impl Crowd {
@@ -123,21 +140,13 @@ impl Crowd {
         masses: &[Mass],
         hour: f64,
         seats: Vec<(Vec3, f32)>,
-        platforms: &[glam::Mat4],
+        platforms: Vec<Platform>,
+        timetables: Vec<Timetable>,
     ) -> Self {
-        let platforms: Vec<(Vec3, Vec3, Vec3)> = platforms
-            .iter()
-            .map(|m| {
-                (
-                    m.w_axis.truncate(),
-                    m.x_axis.truncate(),
-                    m.z_axis.truncate(),
-                )
-            })
-            .collect();
         let mut stop_grid = PointGrid::new(plan.size, 100.0);
-        for (k, (corner, along, _)) in platforms.iter().enumerate() {
-            let mid = *corner + *along * 18.0;
+        for (k, p) in platforms.iter().enumerate() {
+            let (corner, along) = (p.at.w_axis.truncate(), p.at.x_axis.truncate());
+            let mid = corner + along * 18.0;
             let half = plan.size * 0.5;
             stop_grid.insert(
                 DVec2::new(f64::from(mid.x) + half, f64::from(mid.z) + half),
@@ -240,6 +249,8 @@ impl Crowd {
             seats,
             neighbourhoods,
             stop_grid,
+            timetables,
+            boarded: HashSet::new(),
             platforms,
             counts: Vec::new(),
             calls: 0,
@@ -291,12 +302,23 @@ impl Crowd {
 
     /// The figures to draw round `camera` (the world's x and z): for each of the
     /// `POSES × GROUPS` meshes in order (each palette's left stride, standing, riding, seated,
-    /// right stride), up to [`PER_MESH`] places and turns.
-    pub fn figures(&mut self, camera: Vec2) -> Vec<Vec<(Vec3, f32)>> {
+    /// right stride), up to [`PER_MESH`] places and turns; `tram_clock` is the trams' service
+    /// clock, whose standing trams the waiting people board.
+    pub fn figures(&mut self, camera: Vec2, tram_clock: f64) -> Vec<Vec<(Vec3, f32)>> {
         let half = self.size * 0.5;
         let c = DVec2::new(f64::from(camera.x) + half, f64::from(camera.y) + half);
         let mut out = vec![Vec::new(); POSES * GROUPS];
         let mut budget = NEW_ROUTES;
+        // The trams standing at their stops now: (line, stop, outbound).
+        let mut standing = HashSet::new();
+        for (line, t) in self.timetables.iter().enumerate() {
+            for k in 0..t.vehicles() {
+                let run = t.at(k, tram_clock);
+                if let Some(stop) = run.at_stop {
+                    standing.insert((line, stop, run.outbound));
+                }
+            }
+        }
         let places = &self.sim.world.places;
         let now = self.clock;
         for p in 0..self.sim.pop.len() {
@@ -328,13 +350,21 @@ impl Crowd {
             );
             let gone =
                 ((now - f64::from(trip.since)) / f64::from(trip.time.max(1))).clamp(0.0, 1.0);
-            // By tram: waiting at the platform nearest where they set out, then aboard (not
-            // drawn yet).
+            // By tram: waiting at the platform nearest where they set out until a tram of its
+            // line stands there going its way, then aboard (not drawn yet).
             if trip.mode == Mode::Tram {
                 if now - f64::from(trip.since) < f64::from(TRAM_WAIT)
+                    && !self.boarded.contains(&(p as u32))
                     && let Some((_, k)) = self.stop_grid.nearest(a, 500.0)
                 {
-                    let (corner, along, away) = self.platforms[k as usize];
+                    let platform = self.platforms[k as usize];
+                    if standing.contains(&(platform.line, platform.stop, platform.outbound)) {
+                        self.boarded.insert(p as u32);
+                        continue;
+                    }
+                    let corner = platform.at.w_axis.truncate();
+                    let (along, away) =
+                        (platform.at.x_axis.truncate(), platform.at.z_axis.truncate());
                     let s = self.sim.pop.seed[p];
                     let spot = corner
                         + along * (4.0 + (s % 28) as f32)
@@ -388,7 +418,11 @@ impl Crowd {
             out[mesh].push((at, (-dir.y).atan2(dir.x) as f32));
         }
         self.seat_people(c, &mut out);
-        // Forget the routes of trips that have ended.
+        // Forget who boarded once their trip has ended, and the routes of trips that have ended.
+        if self.boarded.len() > 5000 {
+            let sim = &self.sim;
+            self.boarded.retain(|&p| sim.trip(p as usize).is_some());
+        }
         if self.routes.len() > 20_000 {
             let sim = &self.sim;
             self.routes.retain(|&p, _| sim.trip(p as usize).is_some());
