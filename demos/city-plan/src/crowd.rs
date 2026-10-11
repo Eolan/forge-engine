@@ -57,31 +57,70 @@ impl Route {
         self.along[self.along.len() - 1]
     }
 
+    /// How far right of segment `i`'s centreline its walkers or riders go: the pavement on
+    /// foot, the carriageway's lane riding.
+    fn side(&self, i: usize, riding: bool) -> f64 {
+        let half = self.half[i];
+        if riding {
+            (half - 4.5).max(1.2)
+        } else {
+            (half - 2.0).max(1.0)
+        }
+    }
+
+    /// Where the offset lines of segments `i - 1` and `i` meet at point `i` (the corner of the
+    /// pavements or lanes), or the offset point itself at the route's ends.
+    fn corner(&self, i: usize, riding: bool) -> DVec2 {
+        let n = self.points.len();
+        // In the plan's frame (y south) the right of the way is (-dy, dx).
+        let right = |d: DVec2| DVec2::new(-d.y, d.x);
+        let dir = |k: usize| (self.points[k + 1] - self.points[k]).normalize_or_zero();
+        let v = self.points[i];
+        if i == 0 {
+            return v + right(dir(0)) * self.side(0, riding);
+        }
+        if i == n - 1 {
+            return v + right(dir(n - 2)) * self.side(n - 2, riding);
+        }
+        let (d0, d1) = (dir(i - 1), dir(i));
+        let (s0, s1) = (self.side(i - 1, riding), self.side(i, riding));
+        let (p, q) = (v + right(d0) * s0, v + right(d1) * s1);
+        let denom = geom::cross(d0, d1);
+        let mean = (p + q) * 0.5;
+        if denom.abs() < 1e-6 {
+            return mean;
+        }
+        let mitre = p + d0 * (geom::cross(q - p, d1) / denom);
+        // A sharp turn's mitre runs far out: the two offsets' mean instead.
+        if mitre.distance(v) > 3.0 * s0.max(s1) {
+            mean
+        } else {
+            mitre
+        }
+    }
+
     /// The point `s` metres along, on the right: the pavement on foot, the carriageway's lane
-    /// riding; the way it faces and the ground's level there.
+    /// riding; the way it faces and the ground's level there. Between corners it runs along
+    /// the offset line, so at a junction a walker goes on to the corner of the pavements and
+    /// crosses straight over, as at a crossing, rather than jumping from one side to the other.
     fn at(&self, s: f64, riding: bool) -> (DVec2, DVec2, f32) {
         let s = s.clamp(0.0, self.length());
         let i = self
             .along
             .partition_point(|&a| a <= s)
             .clamp(1, self.points.len() - 1);
-        let (a, b) = (self.points[i - 1], self.points[i]);
         let seg = self.along[i] - self.along[i - 1];
         let t = if seg > 1e-9 {
             (s - self.along[i - 1]) / seg
         } else {
             0.0
         };
-        let dir = (b - a).normalize_or_zero();
-        // In the plan's frame (y south) the right of the way is (-dy, dx).
-        let right = DVec2::new(-dir.y, dir.x);
-        let half = self.half[i - 1];
-        let (side, level) = if riding {
-            ((half - 4.5).max(1.2), 0.16)
-        } else {
-            ((half - 2.0).max(1.0), self.level[i - 1])
-        };
-        (a + (b - a) * t + right * side, dir, level)
+        let (a, b) = (self.corner(i - 1, riding), self.corner(i, riding));
+        let dir = (b - a)
+            .try_normalize()
+            .unwrap_or_else(|| (self.points[i] - self.points[i - 1]).normalize_or_zero());
+        let level = if riding { 0.16 } else { self.level[i - 1] };
+        (a + (b - a) * t, dir, level)
     }
 }
 
@@ -510,5 +549,47 @@ impl Crowd {
             half,
             level,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn walkers_turn_corners_without_jumping() {
+        // East 100 m, then a turn either way onto a narrower street, then on.
+        for turn in [1.0, -1.0] {
+            let points = vec![
+                DVec2::new(0.0, 0.0),
+                DVec2::new(100.0, 0.0),
+                DVec2::new(100.0, 100.0 * turn),
+                DVec2::new(160.0, 100.0 * turn),
+            ];
+            let mut along = vec![0.0];
+            for w in points.windows(2) {
+                along.push(along[along.len() - 1] + w[0].distance(w[1]));
+            }
+            let route = Route {
+                points,
+                along,
+                half: vec![14.0, 8.0, 8.0],
+                level: vec![0.3, 0.16, 0.16],
+            };
+            for riding in [false, true] {
+                let mut last = route.at(0.0, riding).0;
+                let mut s = 0.5;
+                while s <= route.length() {
+                    let p = route.at(s, riding).0;
+                    assert!(
+                        p.distance(last) < 1.5,
+                        "a jump of {} m at {s}",
+                        p.distance(last)
+                    );
+                    last = p;
+                    s += 0.5;
+                }
+            }
+        }
     }
 }

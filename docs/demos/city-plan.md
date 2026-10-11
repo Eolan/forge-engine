@@ -414,7 +414,9 @@ evening's walkers.* `--people HOUR` builds the plan's population from the masses
 - **those on their way,** as the simulation's trip goes (`population::Trip::mode`):
   - on foot or by bike: the shortest way along the streets (A* on the road graph) from the
     street nearest their start to the street nearest their goal, at the pace their trip's time
-    gives, walking on the pavement or riding in the carriageway's right lane;
+    gives, walking on the pavement or riding in the carriageway's right lane. At a junction a
+    walker goes on to the corner where the pavements' lines meet and crosses straight over,
+    as at a crossing; they jumped up to 17 m from one side to the other before;
   - by tram: waiting on the platform nearest their start for the trip's first five minutes,
     until a tram of that platform's line stands there going its way: then they board.
     Aboard, they are not drawn yet (the trams' windows show no one).
