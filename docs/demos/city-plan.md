@@ -276,12 +276,15 @@ pavement, and shared streets and lanes have theirs down the middle, off the walk
 Each crown stops half a metre short of the building line.
 
 **The riverbanks.** A quay's land is lawn under its trees, laid cell by cell over the site's
-land (a quay's face holds water). Along each bank a stone promenade 8 m wide follows the river;
-where a street runs by the river, the street lies over it. The promenade is laid on land only:
-where the river runs into the harbour it floated over the open water. Stone quay walls drop
-from the ground to 1.2 m below it wherever a land cell meets open water (the sea and lagoons lie
-0.6 m down); the drop showed nothing, the water's edge a dark band (the owner's second walk).
-The harbour's water itself is still a flat mirror: the island's FFT sea is the next step.
+land (a quay's face holds water). The sea, the lagoons and the rivers share one level, 0.6 m
+under the ground; the river lay over the ground and met the harbour 0.6 m higher, a dark step
+between the two waters (the owner's second walk). The cells within a river's half width and
+three quarters of a cell of its centreline are drawn as water too, so no land cell juts into
+it. Along each bank a stone wall drops to 1.2 m under the ground, and a stone promenade 13 m
+wide follows the river over those cells; where a street runs by the river, the street lies over
+it. The promenade is laid on land only: where the river runs into the harbour it floated over
+the open water. Stone quay walls drop the same way wherever a land cell meets open water. The
+harbour's water itself is still a flat mirror: the island's FFT sea is the next step.
 
 ## Trams on their timetables (#253)
 

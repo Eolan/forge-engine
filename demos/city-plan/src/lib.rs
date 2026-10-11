@@ -321,7 +321,8 @@ impl PlanScenario {
     ) -> Self {
         let size = plan.size;
         let mut tiles = Tiles::new(size);
-        ground_and_water(site, &mut tiles);
+        let near_rivers = by_rivers(site);
+        ground_and_water(site, &mut tiles, &near_rivers);
         for block in &plan.blocks {
             let section = match block.use_ {
                 BlockUse::Built => GARDEN,
@@ -342,11 +343,12 @@ impl PlanScenario {
         }
         // The quays' land as lawns, cell by cell (their faces hold water), under the trees.
         for block in plan.blocks.iter().filter(|b| b.use_ == BlockUse::Quay) {
-            lawn(site, &mut tiles, &block.polygon);
+            lawn(site, &mut tiles, &block.polygon, &near_rivers);
         }
-        // The rivers as smooth strips over the ground, their beds drawn as land: the cells'
-        // staircase would show along the quays. Along each bank a stone promenade 8 m wide
-        // (where a street runs by the river the street lies over it).
+        // The rivers as smooth strips at the water's level, the sea's: the cells' staircase
+        // would show along the quays. Along each bank a stone wall down to the water and a stone
+        // promenade `PROMENADE` wide over the cells by the river (where a street runs by the
+        // river the street lies over it).
         for river in &site.rivers {
             let line = geom::resample(&river.centreline, 15.0);
             let half = river.width * 0.5;
@@ -354,21 +356,42 @@ impl PlanScenario {
                 &mut tiles,
                 &offset_line(&line, half),
                 &offset_line(&line, -half),
-                0.04,
+                WATER_LEVEL,
                 WATER,
             );
             // On land only: where the river runs into the harbour's water, the promenade
             // floated over it, the water dark under it (the owner's second walk).
             for side in [1.0, -1.0] {
                 let (outer, inner) = (
-                    offset_line(&line, side * (half + 8.0)),
+                    offset_line(&line, side * (half + PROMENADE)),
                     offset_line(&line, side * half),
                 );
                 for i in 0..outer.len().min(inner.len()).saturating_sub(1) {
                     let quad = [outer[i], outer[i + 1], inner[i + 1], inner[i]];
-                    if quad.iter().all(|&p| !is_open_water(site.water_at(p))) {
-                        tiles.flat(&quad, 0.05, PAVING, false);
+                    if quad.iter().any(|&p| is_open_water(site.water_at(p))) {
+                        continue;
                     }
+                    tiles.flat(&quad, 0.05, PAVING, false);
+                    // The bank: from the promenade down past the water, facing the river.
+                    let (a, b) = (inner[i], inner[i + 1]);
+                    let t = (b - a).normalize_or_zero();
+                    let towards = DVec2::new(-t.y, t.x) * -side;
+                    let tile = tiles.at(a);
+                    let centre = tile.centre;
+                    let p = |q: DVec2, h: f64| world(size, q, h) - centre;
+                    let normal = Vec3::new(towards.x as f32, 0.0, towards.y as f32);
+                    triangle(
+                        &mut tile.ground,
+                        [p(a, 0.05), p(b, 0.05), p(b, WATER_LEVEL - 0.6)],
+                        normal,
+                        QUAY,
+                    );
+                    triangle(
+                        &mut tile.ground,
+                        [p(a, 0.05), p(b, WATER_LEVEL - 0.6), p(a, WATER_LEVEL - 0.6)],
+                        normal,
+                        QUAY,
+                    );
                 }
             }
         }
@@ -487,7 +510,7 @@ impl PlanScenario {
                     let id = (kit_meshes.len() - 1) as u32;
                     let across = DVec2::new(-along.y, along.x);
                     let turn = glam::Quat::from_rotation_y((-across.y).atan2(across.x) as f32);
-                    let at = Mat4::from_rotation_translation(turn, world(size, at, 0.04));
+                    let at = Mat4::from_rotation_translation(turn, world(size, at, WATER_LEVEL));
                     kit_instances.push((id, at, HALL_GROUP));
                 }
                 continue;
@@ -881,7 +904,7 @@ impl BoatRun {
         let run = self.timetable.at(0, time);
         let dir = (self.b - self.a).normalize_or_zero();
         let p = self.a + dir * run.s;
-        (world(size, p, 0.04), (-dir.y).atan2(dir.x) as f32)
+        (world(size, p, WATER_LEVEL), (-dir.y).atan2(dir.x) as f32)
     }
 }
 
@@ -1168,20 +1191,55 @@ fn kit(
     }
 }
 
+/// The water's level, metres: the sea's, the lagoons' and the rivers', one level where they
+/// meet (the river lay over the ground and the harbour 0.6 m under it, a step between the two
+/// waters: the owner's second walk).
+const WATER_LEVEL: f64 = -0.6;
+/// The rivers' promenades' width along each bank, metres: wide enough to cover the cells by the
+/// river that are drawn as water ([`by_rivers`]).
+const PROMENADE: f64 = 13.0;
+
+/// The site's cells within a river's half width and three quarters of a cell of its centreline:
+/// drawn as water, under the river's smooth strip and its promenades, so no land cell juts into
+/// the river.
+fn by_rivers(site: &Site) -> Vec<bool> {
+    let water = &site.water;
+    let (s, n) = (water.spacing, water.size as i64);
+    let mut near = vec![false; (n * n) as usize];
+    for river in &site.rivers {
+        let reach = river.width * 0.5 + 0.75 * s;
+        let line = geom::resample(&river.centreline, 15.0);
+        for w in line.windows(2) {
+            let (lo, hi) = (w[0].min(w[1]) - reach, w[0].max(w[1]) + reach);
+            let cell = |v: f64| ((v / s).floor() as i64).clamp(0, n - 1);
+            for y in cell(lo.y)..=cell(hi.y) {
+                for x in cell(lo.x)..=cell(hi.x) {
+                    let c = DVec2::new((x as f64 + 0.5) * s, (y as f64 + 0.5) * s);
+                    if geom::distance_to_segment(c, w[0], w[1]) < reach {
+                        near[(y * n + x) as usize] = true;
+                    }
+                }
+            }
+        }
+    }
+    near
+}
+
 /// The site's land and water as runs of cells along each row, in the tiles the runs start in
-/// (a run is cut at tile edges).
-fn ground_and_water(site: &Site, tiles: &mut Tiles) {
+/// (a run is cut at tile edges); the cells by the rivers ([`by_rivers`]) as water.
+fn ground_and_water(site: &Site, tiles: &mut Tiles, near: &[bool]) {
     let water = &site.water;
     let s = water.spacing;
     let n = water.size;
     let per_tile = (TILE / s).round().max(1.0) as u32;
+    let wet_at = |x: u32, y: u32| is_open_water(water.get(x, y)) || near[(y * n + x) as usize];
     for y in 0..n {
         let mut x = 0;
         while x < n {
-            let wet = is_open_water(water.get(x, y));
+            let wet = wet_at(x, y);
             let start = x;
             let tile_end = ((x / per_tile) + 1) * per_tile;
-            while x < n && x < tile_end && is_open_water(water.get(x, y)) == wet {
+            while x < n && x < tile_end && wet_at(x, y) == wet {
                 x += 1;
             }
             let (x0, x1) = (start as f64 * s, x as f64 * s);
@@ -1193,19 +1251,18 @@ fn ground_and_water(site: &Site, tiles: &mut Tiles) {
                 DVec2::new(x0, y1),
             ];
             if wet {
-                tiles.flat(&quad, -0.6, WATER, false);
+                tiles.flat(&quad, WATER_LEVEL, WATER, false);
             } else {
                 tiles.flat(&quad, 0.0, GROUND, false);
             }
         }
     }
     // Stone quay walls from the ground down to the water and below it, wherever a dry cell meets
-    // open water: the drop showed nothing, the water's edge a dark band.
+    // water (the river's cells under its promenade too): the drop showed nothing, the water's
+    // edge a dark band.
     let size = tiles.size;
     let dry = |x: i64, y: i64| {
-        (0..n as i64).contains(&x)
-            && (0..n as i64).contains(&y)
-            && !is_open_water(water.get(x as u32, y as u32))
+        (0..n as i64).contains(&x) && (0..n as i64).contains(&y) && !wet_at(x as u32, y as u32)
     };
     for y in 0..n as i64 {
         for x in 0..n as i64 {
@@ -2374,8 +2431,8 @@ fn is_open_water(code: u8) -> bool {
 }
 
 /// The land of a polygon as lawn: runs of the site's land cells inside it along each row, 3 cm
-/// over the ground (the rivers' strips lie over it).
-fn lawn(site: &Site, tiles: &mut Tiles, polygon: &[DVec2]) {
+/// over the ground, but for the cells by the rivers (`near`, drawn as water under the promenades).
+fn lawn(site: &Site, tiles: &mut Tiles, polygon: &[DVec2], near: &[bool]) {
     let water = &site.water;
     let s = water.spacing;
     let (lo, hi) = polygon.iter().fold(
@@ -2389,7 +2446,9 @@ fn lawn(site: &Site, tiles: &mut Tiles, polygon: &[DVec2]) {
         while x <= x1 {
             let inside = |x: u32| {
                 let c = DVec2::new((f64::from(x) + 0.5) * s, (f64::from(y) + 0.5) * s);
-                water.get(x, y) == forge_procgen::city::LAND && geom::contains(polygon, c)
+                water.get(x, y) == forge_procgen::city::LAND
+                    && !near[(y * water.size + x) as usize]
+                    && geom::contains(polygon, c)
             };
             if !inside(x) {
                 x += 1;
