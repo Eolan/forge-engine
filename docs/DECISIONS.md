@@ -3802,7 +3802,7 @@ on the way are listed for that review in the sandbox (`docs/choices-2026-10-11.m
 - `procedural-content.md`;
 - `city-generation.md` §7–§19;
 - `people.md`;
-- `transit-and-vehicles.md` (still running when this entry was written).
+- `transit-and-vehicles.md`.
 
 Each note's city-specific appendix stays in the sandbox.
 
@@ -3842,7 +3842,18 @@ Each note's city-specific appendix stays in the sandbox.
    - **Emergency access:** a 4 m strip along every facade.
    - **No private cars.**
 
-   The transit simulation will follow `transit-and-vehicles.md`.
+   The transit simulation follows `transit-and-vehicles.md`:
+   - **Trams and boats** are timetabled runs whose position is a pure function of their schedule,
+     delay and speed profile. People board and alight as events. Lines run by holding to their
+     headway, with a dwell cap.
+   - **Taxis** are a dispatcher from fixed stands, with insertion, rebalancing and a quoted wait.
+     They enter tram track only in a booked gap.
+   - **Near players:** trams kinematic on bogie points, taxis with the Intelligent Driver Model,
+     boats as Jolt bodies.
+   - **The pad** routes with RAPTOR.
+
+   With the clock below, the taxi fleet is capped at 4 000–5 000 for about 2 % of trips
+   (accessibility, night, luggage), and the boat crossings run every 2–3 real minutes.
 5. **Asset policy** (`assets-and-licences.md`):
    - **Four licence classes.** The public repository holds only class 1, through D-048's fetch
      (never committed).
@@ -3881,7 +3892,17 @@ Each note's city-specific appendix stays in the sandbox.
    - **Dialogue:** carried as line ids.
    - **No memories that spread between people** without the owner's go (Warner Bros.' Nemesis
      patents).
-9. **Time:** one game hour is 15 real minutes for now (a day lasts 6 hours).
+9. **Time:** one game hour is 15 real minutes for now (a day lasts 6 hours). The transit
+   research's finding:
+   - **Capacity shrinks.** With vehicles at real speeds, a peak game hour lasts 15 real minutes,
+     so any line or fleet carries about a quarter of what it would per game hour in life. Capacity
+     is planned in real time against demand in game time.
+   - **The expected shares:** walking about 38 %, cycling 34 %, trams 22 %, taxis 2 %, boats
+     1.5 %.
+   - **Commutes:** a median commute of 45–60 game minutes door to door.
+
+   For the owner's review: keep the clock and these shares, or slow the clock, or add a light
+   metro trunk.
 10. **Testing, for a while** (the owner, 2026-10-10):
     - **The regression check:** the sandbox's checks and its "day in the city" flight replace
       the Tier 0/1/2 GPU batch. Running the simulation and every tier for each change would
