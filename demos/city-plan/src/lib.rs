@@ -588,6 +588,18 @@ impl PlanScenario {
             let id = (kit_meshes.len() - 1) as u32;
             kit_instances.extend(fountains.into_iter().map(|at| (id, at, 0)));
         }
+        // A playground in each park of a hectare or more, along the park's longest edge, its
+        // floor in the kit's first colour; the trees keep clear of it.
+        let playgrounds = forge_procgen::city::trees::playground_sites(plan);
+        if !playgrounds.is_empty() {
+            kit_meshes.push(forge_geom::furniture::playground());
+            let id = (kit_meshes.len() - 1) as u32;
+            for (p, axis) in playgrounds {
+                let turn = glam::Quat::from_rotation_y((-axis.y).atan2(axis.x) as f32);
+                let at = Mat4::from_rotation_translation(turn, world(size, p, 0.09));
+                kit_instances.push((id, at, 0));
+            }
+        }
         // The tram stops, a platform by each track.
         if !trams.is_empty() {
             kit_meshes.push(forge_geom::furniture::tram_stop(PLATFORM));
