@@ -295,6 +295,7 @@ impl Crowd {
                     pos: [c.x as f32, c.y as f32],
                     floor_area: (geom::signed_area(&m.footprint) * f64::from(m.floors)) as f32,
                     active_ground: m.lively(),
+                    appeal: if m.open { 1.0 } else { 0.0 },
                 }
             })
             .collect();

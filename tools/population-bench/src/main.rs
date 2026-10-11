@@ -46,6 +46,7 @@ fn main() -> Result<()> {
                 floor_area: (geom::signed_area(&m.footprint) * f64::from(m.floors) * args.scale)
                     as f32,
                 active_ground: m.lively(),
+                appeal: if m.open { 1.0 } else { 0.0 },
             }
         })
         .collect();
@@ -109,6 +110,30 @@ fn run(
     let pop: Population = population::generate(&world, &Mix::default(), Seed::new(2026));
     let generated = t.elapsed().as_secs_f64();
     let n = pop.len();
+    // Home to work, straight, for the workers (docs/research/trip-distances.md: a median of
+    // 3–4 km in a dense city, about 20 % under 2 km).
+    let mut commutes: Vec<f32> = (0..n)
+        .filter(|&p| pop.anchor[p] != population::NONE && pop.role[p] == population::Role::Worker)
+        .map(|p| {
+            let (a, b) = (
+                world.places[pop.home[p] as usize].pos,
+                world.places[pop.anchor[p] as usize].pos,
+            );
+            ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
+        })
+        .collect();
+    commutes.sort_by(f32::total_cmp);
+    if !commutes.is_empty() {
+        let under = |km: f32| {
+            100.0 * commutes.partition_point(|&d| d < km * 1000.0) as f32 / commutes.len() as f32
+        };
+        out += &format!(
+            "home to work, straight: median {:.1} km, {:.0} % under 2 km, {:.0} % under 5 km\n",
+            commutes[commutes.len() / 2] / 1000.0,
+            under(2.0),
+            under(5.0)
+        );
+    }
     out += &format!(
         "{} places, {n} people, {} bytes a person ({:.1} MB); places {:.0} ms, people {:.0} ms\n",
         world.places.len(),

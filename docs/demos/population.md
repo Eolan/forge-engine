@@ -13,7 +13,7 @@ cargo run --release -p population-bench -- --days 2
 | Part | How |
 |---|---|
 | Places | from a city plan's masses: homes and jobs by floor area (two thirds homes at 40 m² a person, jobs at 30 m²), a school in every 120 buildings, active ground floors (on the avenues and the lanes, and facing a square, a park or a quay: `Mass::lively`) as shops, cafés and bars in turn, the parks (`places_from_buildings`) |
-| People | everyone the homes hold; roles by a mix (45 % day workers, 3 % night workers, 9 % students, 15 % children, 28 % retired or at home); five personality traits of four bits; work at a distance drawn from an exponential of mean 2.5 km in a random direction (drawn again when it falls outside the city), school the nearest (`generate`) |
+| People | everyone the homes hold; roles by a mix (45 % day workers, 3 % night workers, 9 % students, 15 % children, 28 % retired or at home); five personality traits of four bits; work at a distance drawn from a log-normal (median 6 km, σ 0.8) in a random direction, drawn again when it falls outside the city, so that an 8 km city by the sea commutes a median 3.3 km straight, 23 % under 2 km, near French dense centres' (`docs/research/trip-distances.md`); school the nearest (`generate`) |
 | Records | a structure of arrays, 36 bytes a person: home, anchor, role, personality, seed, where (a place or a trip, its origin and destination), since when, day, step |
 | Days | never stored: each person's plan for a day is made again from their seed, role, personality and the day's number whenever an event needs it; weekdays and weekends differ; the conscientious rise earlier, the extraverted go out more and later; an afternoon out goes mostly to the cafés and tea rooms, the shops and the pubs, a park now and then (the parks took everyone out before; the owner, 2026-10-11) |
 | Events | a calendar ordered by (game second, person): an activity ends, a trip arrives; nobody is updated in between |
@@ -25,11 +25,11 @@ cargo run --release -p population-bench -- --days 2
 |---|---|
 | Places | 28 520 |
 | People | 307 283, 36 bytes each (11.1 MB) |
-| Generation | 2.0 s |
-| Events | 6.6 a person a day; 0.68 µs each |
-| Two game days | 2.7 s |
-| A game hour of 20 real minutes asks | 70 events a real second: 0.004 % of one core |
-| Six workers (`population::Shards`) | the two days in 0.51 s, 5.2 times one, the same digest to the bit |
+| Generation | 0.3 s |
+| Events | 6.7 a person a day; 1.7 µs each (an outing weighs 32 places and more: see "Outings") |
+| Two game days | 7.0 s |
+| A game hour of 20 real minutes asks | 71 events a real second: 0.012 % of one core |
+| Six workers (`population::Shards`) | the two days in 1.35 s, 5.1 times one, the same digest to the bit |
 | A snapshot (`Sim::snapshot`, `Sim::restore`) | 7.1 MB, 23 bytes a person, saved in 2 ms, restored in 9 ms, the same digest |
 
 Where everyone is, by game hour (weekday, %):
@@ -37,34 +37,46 @@ Where everyone is, by game hour (weekday, %):
 | Hour | Home | Work or school | Shops | Cafés | Bars | Parks | Travelling |
 |---|---|---|---|---|---|---|---|
 | 03 | 100.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 |
-| 08 | 42.3 | 43.8 | 0.0 | 0.0 | 0.0 | 0.0 | 13.9 |
-| 11 | 26.1 | 68.9 | 4.6 | 0.0 | 0.0 | 0.0 | 0.4 |
+| 08 | 42.3 | 40.8 | 0.0 | 0.0 | 0.0 | 0.0 | 16.9 |
+| 11 | 25.8 | 68.9 | 4.4 | 0.0 | 0.0 | 0.0 | 0.9 |
 | 13 | 31.1 | 55.5 | 0.0 | 13.4 | 0.0 | 0.0 | 0.0 |
-| 16 | 16.8 | 68.9 | 4.7 | 5.6 | 1.8 | 1.7 | 0.6 |
-| 17 | 29.3 | 44.8 | 6.0 | 8.0 | 3.7 | 3.9 | 4.3 |
-| 18 | 58.5 | 15.0 | 7.0 | 8.1 | 4.1 | 2.7 | 4.7 |
+| 16 | 16.8 | 68.9 | 4.5 | 5.3 | 1.7 | 1.6 | 1.2 |
+| 17 | 29.3 | 44.8 | 5.9 | 7.9 | 3.6 | 3.8 | 4.7 |
+| 18 | 55.3 | 15.0 | 8.2 | 7.7 | 3.8 | 2.7 | 7.4 |
 | 20 | 87.5 | 0.0 | 0.0 | 7.0 | 5.5 | 0.0 | 0.0 |
-| 22 | 88.1 | 3.0 | 0.0 | 3.3 | 5.3 | 0.0 | 0.3 |
+| 22 | 87.7 | 3.0 | 0.0 | 3.3 | 5.3 | 0.0 | 0.6 |
 
 Night workers (3 %) are at work at night. The same seed gives the same day to the bit (a test
 compares the digests).
+
+**Outings** (`World::choose`, the owner's notes of 2026-10-11, `docs/research/trip-distances.md`):
+- **Choosing the place.** A shop, a café, a bar or a park is chosen among the 32 nearest and
+  the 8 nearest with some appeal. Each is weighed by `exp(−β (km − appeal × bonus))`:
+  - β is 1.2 a km for shopping, 1.5 for a café or tea room, 0.7 for an evening out, 1.0 for a
+    park. With places spread evenly, the median trip is about 1.7/β.
+  - Shops, cafés and bars facing a square, a park or a quay have appeal 1, and parks 0.5. The
+    bonus is 1.5 km on weekdays and 3 km at weekends.
+  - So people go mostly near home, and now and then further, to the places that draw them.
+  - Before, it was one of the four nearest: trips of 100–300 m, and nobody left their block.
+- **On the way home.** About one worker in seven stops at the shops near work.
+- **Lunch** stays near work, chosen among the four nearest.
 
 **On worker threads** (`population::Shards`): the people are split into contiguous runs, each
 with its own calendar on its own thread. Nobody acts on anyone else yet, so the shards' events
 depend on their own people alone. A test checks that the digest, the events, the census and the
 positions are equal at one, three and six workers, to the bit. The bench (six workers) and a
-1 055 437-person city (the private sandbox's). The sandbox is all adults (`Mix::adults()`): the
+1 048 538-person city (the private sandbox's). The sandbox is all adults (`Mix::adults()`): the
 default mix without its 15 % of children, the other roles scaled to fill their place.
 
 | | One worker | Six workers |
 |---|---|---|
-| The example, 307 283 people, two days | 2.68 s | 0.51 s (5.2 times) |
-| A million-person city, two days | 9.4 s | 1.8 s (5.2 times) |
-| 4 226 650 people (`population-bench --scale 13.5`: the example's floors 13.5 times over), two days | 48.1 s | 8.8 s (5.5 times) |
+| The example, 307 283 people, two days | 7.0 s | 1.35 s (5.1 times) |
+| A million-person city (the private sandbox's, 1 048 538 people), two days | 29.3 s | not measured since the outings changed |
+| 4 226 650 people (`population-bench --scale 13.5`: the example's floors 13.5 times over), two days | 108.6 s | 22.6 s (4.8 times) |
 
-The million needs 38.0 MB, 242 events a real second at one game hour per 20 minutes, and 0.015 %
+The million needs 37.7 MB, 250 events a real second at one game hour per 20 minutes, and 0.05 %
 of one core. That is #250's first test, with the digests equal at one and six workers. At 4 M:
-152.2 MB, generated in 27 s (on one thread), 947 events a real second, 0.08 % of one core; the
+152.2 MB, generated in 4 s (on one thread), 982 events a real second, 0.19 % of one core; the
 same digest at six workers.
 
 ![The example city's people at 08:00, 13:00 and 21:00](images/population-day.png)
@@ -83,5 +95,5 @@ lunch hour's cafés, the evening out.*
   from the seed; a test restores it mid-day and runs on to the same digest). Next: the input log
   of what players change, compression (LZ4, a dependency to agree first), and snapshots of the
   shards.
-- The cost per event: plans are made again on every event, 0.65 µs; caching a person's day would
-  cut it, if a fast-forward needs it.
+- The cost per event: plans are made again on every event, 1.7 µs with the outings' weighed
+  choice; caching a person's day would cut it, if a fast-forward needs it.

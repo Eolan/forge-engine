@@ -26,6 +26,20 @@ pub const DAY: GameSeconds = 86_400;
 /// Game seconds a real second: a game hour in 20 real minutes, a day in 8 real hours (D-059,
 /// the owner's second walk, 2026-10-11; 15 minutes before).
 pub const GAME_SPEED: GameSeconds = 3;
+/// The places an outing is chosen among ([`World::choose`]): the nearest this many...
+pub const CHOICE: usize = 32;
+/// ...and this many of the nearest with some appeal.
+pub const CHOICE_APPEALING: usize = 8;
+/// How much further a place of appeal 1 is worth going on a weekday, km; twice at weekends.
+pub const APPEAL_KM: f32 = 1.5;
+/// A workplace's distance from home, straight: drawn from a log-normal of this median, metres,
+/// and spread. Draws that land outside the city are drawn again, so the commutes come out
+/// shorter: in an 8 km city by the sea, a median of 3.3 km, 23 % under 2 km and 78 % under 5 km,
+/// near French dense centres' (4.8–5.4 km by road, about 3.5 km straight;
+/// docs/research/trip-distances.md).
+pub const WORK_MEDIAN: f64 = 6000.0;
+/// The spread of [`WORK_MEDIAN`]'s log-normal.
+pub const WORK_SIGMA: f64 = 0.8;
 /// No place.
 pub const NONE: u32 = u32::MAX;
 /// The `at` column's flag for a person on a trip.
@@ -62,6 +76,9 @@ pub struct Place {
     pub pos: [f32; 2],
     /// How many it holds: residents, jobs, pupils or visitors.
     pub capacity: u32,
+    /// How far it draws people from: 0 an ordinary place, 1 a shop, café or bar on a square, a
+    /// park or the water (worth [`APPEAL_KM`] more of the way), a park 0.5.
+    pub appeal: f32,
 }
 
 /// A building of a city, as the population sees it.
@@ -73,6 +90,9 @@ pub struct Building {
     pub floor_area: f32,
     /// Whether its ground floor is a shop, a café or a bar.
     pub active_ground: bool,
+    /// How far its shop, café or bar draws people from ([`Place::appeal`]): 1 on a square, a
+    /// park or the water, else 0.
+    pub appeal: f32,
 }
 
 /// How a city's floor area is used.
@@ -114,6 +134,7 @@ pub fn places_from_buildings(
                 kind: PlaceKind::Home,
                 pos: b.pos,
                 capacity: residents,
+                appeal: 0.0,
             });
         }
         let jobs = (b.floor_area * (1.0 - uses.homes) / uses.job_area) as u32;
@@ -123,12 +144,14 @@ pub fn places_from_buildings(
                 kind: PlaceKind::School,
                 pos: b.pos,
                 capacity: 600,
+                appeal: 0.0,
             });
         } else if jobs > 0 {
             places.push(Place {
                 kind: PlaceKind::Work,
                 pos: b.pos,
                 capacity: jobs,
+                appeal: 0.0,
             });
         }
         if b.active_ground {
@@ -141,6 +164,7 @@ pub fn places_from_buildings(
                 kind,
                 pos: b.pos,
                 capacity: 40,
+                appeal: b.appeal,
             });
         }
     }
@@ -148,6 +172,7 @@ pub fn places_from_buildings(
         kind: PlaceKind::Park,
         pos,
         capacity: 500,
+        appeal: 0.5,
     }));
     places
 }
@@ -250,6 +275,8 @@ pub struct World {
     cell: f32,
     side: usize,
     grids: Vec<Vec<Vec<u32>>>,
+    /// The same, for the places with some appeal only.
+    appealing: Vec<Vec<Vec<u32>>>,
 }
 
 impl World {
@@ -257,10 +284,14 @@ impl World {
     pub fn new(places: Vec<Place>, size: f32, cell: f32) -> Self {
         let side = (size / cell).ceil().max(1.0) as usize + 1;
         let mut grids = vec![vec![Vec::new(); side * side]; KINDS];
+        let mut appealing = grids.clone();
         for (i, p) in places.iter().enumerate() {
             let x = ((p.pos[0] / cell).floor().max(0.0) as usize).min(side - 1);
             let y = ((p.pos[1] / cell).floor().max(0.0) as usize).min(side - 1);
             grids[p.kind as usize][y * side + x].push(i as u32);
+            if p.appeal > 0.0 {
+                appealing[p.kind as usize][y * side + x].push(i as u32);
+            }
         }
         let bounds = places
             .iter()
@@ -276,13 +307,63 @@ impl World {
             cell,
             side,
             grids,
+            appealing,
         }
     }
 
     /// One of the few places of `kind` nearest `pos`, chosen by `pick`, or `None` if the city has
     /// none.
     pub fn near(&self, kind: PlaceKind, pos: [f32; 2], pick: u64) -> Option<u32> {
-        let grid = &self.grids[kind as usize];
+        let found = self.nearest(&self.grids[kind as usize], pos, 4);
+        let k = found.len().min(4);
+        (k > 0).then(|| found[(pick % k as u64) as usize].1)
+    }
+
+    /// A place of `kind` for an outing from `pos`, chosen by `pick` among the [`CHOICE`] nearest
+    /// and the [`CHOICE_APPEALING`] nearest with some appeal, each weighed by
+    /// `exp(−per_km · (km − appeal · bonus_km))`: near places mostly, now and then one further off
+    /// that draws people (docs/research/trip-distances.md: a logit of distance and appeal). `None`
+    /// if the city has none.
+    pub fn choose(
+        &self,
+        kind: PlaceKind,
+        pos: [f32; 2],
+        pick: u64,
+        per_km: f32,
+        bonus_km: f32,
+    ) -> Option<u32> {
+        let mut found = self.nearest(&self.grids[kind as usize], pos, CHOICE);
+        found.truncate(CHOICE);
+        let mut far = self.nearest(&self.appealing[kind as usize], pos, CHOICE_APPEALING);
+        far.truncate(CHOICE_APPEALING);
+        for f in far {
+            if !found.iter().any(|g| g.1 == f.1) {
+                found.push(f);
+            }
+        }
+        if found.is_empty() {
+            return None;
+        }
+        let weight = |&(d2, i): &(f32, u32)| {
+            let km = d2.sqrt() / 1000.0;
+            let appeal = self.places[i as usize].appeal;
+            dmath::exp(-per_km * (km - appeal * bonus_km))
+        };
+        let total: f32 = found.iter().map(weight).sum();
+        let h = pick.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (pick >> 29);
+        let mut r = (h >> 40) as f32 / (1u64 << 24) as f32 * total;
+        for f in &found {
+            r -= weight(f);
+            if r <= 0.0 {
+                return Some(f.1);
+            }
+        }
+        found.last().map(|f| f.1)
+    }
+
+    /// At least `k` places of `grid` nearest `pos` when it has them (whole rings of cells, so
+    /// more), nearest first: squared distance and index.
+    fn nearest(&self, grid: &[Vec<u32>], pos: [f32; 2], k: usize) -> Vec<(f32, u32)> {
         let cx = ((pos[0] / self.cell).floor().max(0.0) as usize).min(self.side - 1) as i64;
         let cy = ((pos[1] / self.cell).floor().max(0.0) as usize).min(self.side - 1) as i64;
         let mut found: Vec<(f32, u32)> = Vec::new();
@@ -299,17 +380,21 @@ impl World {
                     }
                 }
             }
-            // A ring past the first that found any is enough for "a few nearest".
-            if found.len() >= 4 && ring >= 1 {
+            // A ring past the first that found enough.
+            if found.len() >= k && ring >= 1 {
                 break;
             }
         }
-        if found.is_empty() {
-            return None;
+        // The `k` nearest only, then in order: plans are made again on every event.
+        let order = |a: &(f32, u32), b: &(f32, u32)| {
+            a.0.partial_cmp(&b.0).expect("finite").then(a.1.cmp(&b.1))
+        };
+        if found.len() > k && k > 0 {
+            found.select_nth_unstable_by(k - 1, order);
+            found.truncate(k);
         }
-        found.sort_by(|a, b| a.0.partial_cmp(&b.0).expect("finite").then(a.1.cmp(&b.1)));
-        let k = found.len().min(4);
-        Some(found[(pick % k as u64) as usize].1)
+        found.sort_by(order);
+        found
     }
 
     /// The straight-line distance between two places, metres.
@@ -390,8 +475,8 @@ impl Population {
 }
 
 /// Makes the population of a world: everyone who fits in its homes, their roles by `mix`, their
-/// work at a distance drawn from an exponential of mean 2.5 km in a random direction, their school
-/// the nearest.
+/// work at a distance drawn from a log-normal of median [`WORK_MEDIAN`] in a random direction,
+/// their school the nearest.
 pub fn generate(world: &World, mix: &Mix, seed: Seed) -> Population {
     let mut pop = Population::default();
     let weights = [
@@ -434,7 +519,11 @@ pub fn generate(world: &World, mix: &Mix, seed: Seed) -> Population {
                     let [lo, hi] = world.bounds;
                     let mut target = home.pos;
                     for _ in 0..8 {
-                        let distance = -2500.0 * dmath::ln(1.0 - rng.next_f64() * 0.98);
+                        // A log-normal (Box–Muller): most near home, a long tail.
+                        let u = 1.0 - rng.next_f64() * 0.999;
+                        let z = (-2.0 * dmath::ln(u)).sqrt()
+                            * dmath::cos(rng.next_f64() * std::f64::consts::TAU);
+                        let distance = WORK_MEDIAN * dmath::exp(WORK_SIGMA * z);
                         let (s, c) = dmath::sin_cos(rng.next_f64() * std::f64::consts::TAU);
                         target = [
                             home.pos[0] + (c * distance) as f32,
@@ -503,6 +592,19 @@ const fn hm(h: u32, m: u32) -> u32 {
     h * 3600 + m * 60
 }
 
+/// An outing's distance decay by its kind, per km. With evenly spread places the median trip is
+/// about 1.7 over it (docs/research/trip-distances.md): shopping 1.2 (1.4 km), a café or tea
+/// room 1.5 (1.1 km), an evening out 0.7 (2.4 km), a park 1.0.
+fn per_km(kind: PlaceKind) -> f32 {
+    match kind {
+        PlaceKind::Shop => 1.2,
+        PlaceKind::Food => 1.5,
+        PlaceKind::Leisure => 0.7,
+        PlaceKind::Park => 1.0,
+        _ => 2.0,
+    }
+}
+
 /// Person `p`'s plan for day `day`, made from their seed, role and personality.
 pub fn plan(world: &World, pop: &Population, p: usize, day: u16) -> Plan {
     let mut rng = SplitMix64::new((u64::from(pop.seed[p]) << 16) ^ u64::from(day));
@@ -519,7 +621,14 @@ pub fn plan(world: &World, pop: &Population, p: usize, day: u16) -> Plan {
         len: 0,
     };
     let weekend = day % 7 >= 5;
-    let near = |kind: PlaceKind, pick: u64| world.near(kind, pos, pick).unwrap_or(home);
+    // Outings by distance and appeal: near home mostly, now and then a place that draws people
+    // from further off, the more so at weekends (the owner, 2026-10-11).
+    let bonus = if weekend { 2.0 * APPEAL_KM } else { APPEAL_KM };
+    let near = |kind: PlaceKind, pick: u64| {
+        world
+            .choose(kind, pos, pick, per_km(kind), bonus)
+            .unwrap_or(home)
+    };
     // The conscientious rise earlier, the extraverted go out more and later.
     let early = (15 - me.conscientiousness()) * 120;
     let out = me.extraversion();
@@ -534,7 +643,22 @@ pub fn plan(world: &World, pop: &Population, p: usize, day: u16) -> Plan {
                     .unwrap_or(anchor);
                 plan.push(lunch, hm(13, 0) + j(0, 900));
             }
-            plan.push(anchor, hm(17, 0) + j(0, 5400));
+            let leave = hm(17, 0) + j(0, 5400);
+            plan.push(anchor, leave);
+            // On the way home, about one in seven: the shops near work (France: 15 % of
+            // home-work journeys stop on the way; docs/research/trip-distances.md).
+            if j(0, 99) < 15 {
+                let shop = world
+                    .choose(
+                        PlaceKind::Shop,
+                        world.places[anchor as usize].pos,
+                        pick ^ 3,
+                        2.0,
+                        0.0,
+                    )
+                    .unwrap_or(home);
+                plan.push(shop, leave + 900 + j(0, 1800));
+            }
             // About one in seven out on a weekday evening, the extraverted more often.
             let evening = j(0, 47);
             if evening < out / 2 {
@@ -1097,6 +1221,8 @@ mod tests {
                     pos: [x as f32 * 100.0 + 50.0, y as f32 * 100.0 + 50.0],
                     floor_area: 2400.0,
                     active_ground: (x + y) % 3 == 0,
+                    // The town's middle row looks onto its square.
+                    appeal: if y == 10 { 1.0 } else { 0.0 },
                 });
             }
         }
@@ -1106,6 +1232,41 @@ mod tests {
             &Uses::default(),
         );
         World::new(places, 2000.0, 250.0)
+    }
+
+    #[test]
+    fn outings_weigh_distance_and_appeal() {
+        let world = town();
+        let from = [150.0_f32, 150.0];
+        let dist = |i: u32| {
+            let p = world.places[i as usize].pos;
+            ((p[0] - from[0]).powi(2) + (p[1] - from[1]).powi(2)).sqrt()
+        };
+        let picks: Vec<u32> = (0..2000_u64)
+            .filter_map(|k| world.choose(PlaceKind::Food, from, k * 7919, 1.5, APPEAL_KM))
+            .collect();
+        let mut d: Vec<f32> = picks.iter().map(|&i| dist(i)).collect();
+        d.sort_by(f32::total_cmp);
+        let median = d[d.len() / 2];
+        // Further than "one of the four nearest", still mostly near.
+        let fourth = world.nearest(&world.grids[PlaceKind::Food as usize], from, 4)[3]
+            .0
+            .sqrt();
+        assert!(
+            median > fourth && median < 1500.0,
+            "median {median} m, fourth {fourth} m"
+        );
+        // The square's row, 900 m off, draws some.
+        let drawn = picks
+            .iter()
+            .filter(|&&i| world.places[i as usize].appeal > 0.0)
+            .count();
+        assert!(drawn > 20, "{drawn} of {}", picks.len());
+        // The same pick, the same place.
+        assert_eq!(
+            world.choose(PlaceKind::Food, from, 42, 1.5, APPEAL_KM),
+            world.choose(PlaceKind::Food, from, 42, 1.5, APPEAL_KM)
+        );
     }
 
     #[test]
