@@ -171,5 +171,26 @@ fn run(
         100.0 * (ran / f64::from(days)) / f64::from(DAY / 4),
     );
     out += &format!("digest {:016x}", sim.digest());
+    // The same days in shards on worker threads (#250): the same digest, faster.
+    for workers in [6] {
+        let pop = population::generate(&world, &Mix::default(), Seed::new(2026));
+        let mut shards = population::Shards::new(&world, pop, workers);
+        let t = Instant::now();
+        for hour in 1..=days * 24 {
+            shards.run_until(hour * 3600);
+        }
+        let ran_w = t.elapsed().as_secs_f64();
+        out += &format!(
+            "\n{workers} workers: {:.2} s ({:.1} times one), digest {:016x} ({})",
+            ran_w,
+            ran / ran_w,
+            shards.digest(),
+            if shards.digest() == sim.digest() {
+                "the same"
+            } else {
+                "DIFFERENT"
+            }
+        );
+    }
     out
 }

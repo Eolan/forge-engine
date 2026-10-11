@@ -342,6 +342,32 @@ impl Population {
     pub fn bytes_per_person() -> usize {
         4 + 4 + 1 + 4 + 4 + 4 + 4 + 4 + 4 + 2 + 1
     }
+
+    /// The people in `parts` contiguous runs of nearly equal length, in order.
+    pub fn split(mut self, parts: usize) -> Vec<Population> {
+        let parts = parts.max(1);
+        let n = self.len();
+        let mut out = Vec::with_capacity(parts);
+        // From the back, so each run is cut off the end of the columns.
+        for k in (0..parts).rev() {
+            let from = n * k / parts;
+            out.push(Population {
+                home: self.home.split_off(from),
+                anchor: self.anchor.split_off(from),
+                role: self.role.split_off(from),
+                personality: self.personality.split_off(from),
+                seed: self.seed.split_off(from),
+                at: self.at.split_off(from),
+                dest: self.dest.split_off(from),
+                origin: self.origin.split_off(from),
+                since: self.since.split_off(from),
+                day: self.day.split_off(from),
+                step: self.step.split_off(from),
+            });
+        }
+        out.reverse();
+        out
+    }
 }
 
 /// Makes the population of a world: everyone who fits in its homes, their roles by `mix`, their
@@ -739,7 +765,12 @@ impl<'w> Sim<'w> {
 
     /// A 64-bit FNV-1a digest of where everyone is and since when (D-016).
     pub fn digest(&self) -> u64 {
-        let mut h = 0xcbf2_9ce4_8422_2325_u64;
+        self.fold_digest(FNV_BASIS)
+    }
+
+    /// The digest carried on from `h` over these people: shards fold in order to the digest of
+    /// the whole population.
+    fn fold_digest(&self, mut h: u64) -> u64 {
         for p in 0..self.pop.len() {
             for v in [self.pop.at[p], self.pop.dest[p], self.pop.since[p]] {
                 for b in v.to_le_bytes() {
@@ -748,6 +779,71 @@ impl<'w> Sim<'w> {
             }
         }
         h
+    }
+}
+
+/// FNV-1a's offset basis.
+const FNV_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+
+/// The population in shards advanced on worker threads (#250): contiguous runs of people, each
+/// with its own calendar. People do not act on each other yet, so a shard's events depend on
+/// its people alone, and any number of workers reaches the same state as one: the digests are
+/// equal to the bit.
+pub struct Shards<'w> {
+    /// The shards, in the people's order.
+    pub shards: Vec<Sim<'w>>,
+}
+
+impl<'w> Shards<'w> {
+    /// `pop` in `workers` shards, each with its calendar.
+    pub fn new(world: &'w World, pop: Population, workers: usize) -> Self {
+        Self {
+            shards: pop
+                .split(workers)
+                .into_iter()
+                .map(|p| Sim::new(world, p))
+                .collect(),
+        }
+    }
+
+    /// Handles every event up to game second `t`, each shard on its own thread.
+    pub fn run_until(&mut self, t: GameSeconds) {
+        std::thread::scope(|scope| {
+            for shard in &mut self.shards {
+                scope.spawn(move || shard.run_until(t));
+            }
+        });
+    }
+
+    /// Events handled.
+    pub fn events(&self) -> u64 {
+        self.shards.iter().map(|s| s.events).sum()
+    }
+
+    /// The digest of the whole population, as one [`Sim`] would give it.
+    pub fn digest(&self) -> u64 {
+        self.shards.iter().fold(FNV_BASIS, |h, s| s.fold_digest(h))
+    }
+
+    /// Where everyone is now.
+    pub fn census(&self) -> Census {
+        let mut c = Census::default();
+        for s in &self.shards {
+            let d = s.census();
+            c.home += d.home;
+            c.anchor += d.anchor;
+            c.shop += d.shop;
+            c.food += d.food;
+            c.leisure += d.leisure;
+            c.park += d.park;
+            c.travelling += d.travelling;
+        }
+        c
+    }
+
+    /// Everyone's position and what they are doing, in the people's order.
+    pub fn positions(&self) -> Vec<([f32; 2], Doing)> {
+        self.shards.iter().flat_map(Sim::positions).collect()
     }
 }
 
@@ -814,5 +910,26 @@ mod tests {
             (sim.digest(), sim.events)
         };
         assert_eq!(run(), run());
+    }
+
+    #[test]
+    fn any_number_of_workers_gives_the_same_day() {
+        let world = town();
+        let pop = || generate(&world, &Mix::default(), Seed::new(9));
+        let mut one = Sim::new(&world, pop());
+        let n = one.pop.len();
+        for t in [hm(8, 0), hm(13, 0), DAY + hm(2, 0)] {
+            one.run_until(t);
+            for workers in [1, 3, 6] {
+                let mut shards = Shards::new(&world, pop(), workers);
+                shards.run_until(t);
+                assert_eq!(shards.shards.len(), workers);
+                assert_eq!(shards.shards.iter().map(|s| s.pop.len()).sum::<usize>(), n);
+                assert_eq!(shards.digest(), one.digest(), "{workers} workers at {t}");
+                assert_eq!(shards.events(), one.events);
+                assert_eq!(shards.census(), one.census());
+                assert_eq!(shards.positions(), one.positions());
+            }
+        }
     }
 }

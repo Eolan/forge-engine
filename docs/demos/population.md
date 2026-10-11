@@ -29,6 +29,7 @@ cargo run --release -p population-bench -- --days 2
 | Events | 6.4 a person a day; 0.65 µs each |
 | Two game days | 2.5 s |
 | A game hour of 15 real minutes asks | 88 events a real second: 0.006 % of one core |
+| Six workers (`population::Shards`) | the two days in 0.49 s, 5.0 times one, the same digest to the bit |
 
 Where everyone is, by game hour (weekday, %):
 
@@ -46,6 +47,20 @@ Where everyone is, by game hour (weekday, %):
 Night workers (3 %) are at work at night. The same seed gives the same day to the bit (a test
 compares the digests).
 
+**On worker threads** (`population::Shards`): the people are split into contiguous runs, each
+with its own calendar on its own thread. Nobody acts on anyone else yet, so the shards' events
+depend on their own people alone. A test checks that the digest, the events, the census and the
+positions are equal at one, three and six workers, to the bit. The bench (six workers) and a
+1 015 359-person city (the private sandbox's):
+
+| | One worker | Six workers |
+|---|---|---|
+| The example, 295 789 people, two days | 2.45 s | 0.49 s (5.0 times) |
+| A million-person city, two days | 8.5 s | 1.7 s (5.2 times) |
+
+The million needs 36.6 MB, 303 events a real second at one game hour per 15 minutes, and 0.02 %
+of one core. That is #250's first test, with the digests equal at one and six workers.
+
 ![The example city's people at 08:00, 13:00 and 21:00](images/population-day.png)
 
 *Everyone as a dot (`Sim::positions`, `city::map::write_points`): blue at home, orange at work or
@@ -59,5 +74,5 @@ lunch hour's cafés, the evening out.*
 - Routes on the streets and transit with link queues (#253).
 - The spatial index of who is where by cell, and the near tiers round a player.
 - Persistence: snapshots of the changed columns and the input log.
-- The cost per event: plans are made again on every event, 1.3 µs; caching a person's day would
+- The cost per event: plans are made again on every event, 0.65 µs; caching a person's day would
   cut it, if a fast-forward needs it.
