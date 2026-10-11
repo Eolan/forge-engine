@@ -1350,11 +1350,11 @@ level by the harbour with the people at 17:00, and the oblique overview of the s
 | `cpu/declare passes` (the crowd's figures and movers included) | 1.29 ms | 0.76 ms |
 | p50 / p99 frame | 2.45 / 3.29 ms | 3.95 / 4.72 ms |
 
-
 Remeasured late afternoon, after the smooth shore, the boarding areas, the squares' borders, the
 kerb arcs and the smaller street trees: the GPU frames within run-to-run spread (one run each).
 The overview's `cpu/declare passes` rose from 0.44 to 0.76 ms: the stops' screens and the
 crowd's nearest-first slots, both set every frame; small, to watch.
+
 The largest passes:
 - **Street:**
   - `gi/probe rays` 0.58 and `gi/probe blend` 0.51 ms: 46 % of the frame;
