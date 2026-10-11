@@ -10,8 +10,9 @@ use glam::{DVec2, DVec3};
 use super::blocks::{edge_half_width, street_grid};
 use super::geom;
 use super::mass::Mass;
+use super::structure::{OpeningKind, Structure, Wall, WallRole};
 use super::{CityPlan, mass};
-use crate::grammar::{Attrs, DeriveStats, Grammar, Scope, Terminal};
+use crate::grammar::{DeriveStats, Gap, Grammar, Scope, Terminal};
 
 /// What a face looks onto.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -215,53 +216,146 @@ pub fn faces_of(masses: &[Mass], kinds: &[Vec<Option<FaceKind>>]) -> Vec<Face> {
     out
 }
 
-/// A face's attributes for a grammar: `street`, `court` and `party` (1 for its kind),
-/// `corner_left`, `corner_right`, `entrance`, `tiled` (a pitched roof over it), `floors`,
-/// `street_width`, and the storey heights `ground` and `floor` (its uppers' mean).
-pub fn attrs(grammar: &Grammar, face: &Face, m: &Mass) -> Attrs {
-    let flag = |b: bool| f64::from(u8::from(b));
-    grammar.attrs(&[
-        ("street", flag(face.kind == FaceKind::Street)),
-        ("court", flag(face.kind == FaceKind::Court)),
-        ("party", flag(face.kind == FaceKind::Party)),
-        ("corner_left", flag(face.corners[0])),
-        ("corner_right", flag(face.corners[1])),
-        ("entrance", flag(face.entrance)),
-        ("tiled", flag(m.roof == mass::Roof::Tiled)),
-        ("floors", f64::from(m.floors)),
-        ("street_width", m.street_width),
-        ("open", flag(m.open)),
-        ("ground", m.ground()),
-        ("floor", m.upper()),
-    ])
+/// The kinds of opening a style reads in `opening.kind`.
+pub mod opening {
+    /// A window.
+    pub const WINDOW: f64 = 1.0;
+    /// A shopfront.
+    pub const SHOPFRONT: f64 = 2.0;
+    /// The building's door.
+    pub const DOOR: f64 = 3.0;
+    /// A passage into the court.
+    pub const PASSAGE: f64 = 4.0;
 }
 
-/// The terminals of each face derived from `start`, the faces of one lot sharing their seed so
-/// a building keeps one design; `top` metres stand over the roof line. Each terminal comes with
-/// its face's index.
-pub fn derive(
+/// A terminal of a building's dressing: its mass, its wall (an index into its structure's
+/// walls), its storey (`None` over the roof line or on a party wall).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Dressed {
+    /// Its mass.
+    pub mass: u32,
+    /// Its wall.
+    pub wall: u32,
+    /// Its storey.
+    pub storey: Option<u8>,
+    /// What goes where.
+    pub terminal: Terminal,
+}
+
+/// The scope of wall `w` of a mass seen from outside, from `bottom` up `height` metres: its
+/// width from the wall's end `b` to its start `a` (as [`Face::scope`]).
+fn wall_scope(w: &Wall, bottom: f64, height: f64) -> Scope {
+    let along = (w.a - w.b).normalize_or_zero();
+    Scope {
+        origin: DVec3::new(w.b.x, bottom, w.b.y),
+        x: DVec3::new(along.x, 0.0, along.y),
+        y: DVec3::Y,
+        size: glam::DVec2::new(w.length(), height),
+    }
+}
+
+/// The masses `wanted` dressed by `grammar` from their structures (D-060): each storey of each
+/// street and courtyard wall derived from `Storey` with its openings as gaps, the roofline from
+/// `Roofline` (`top` metres over the roof), each party wall from `PartyWall`. One seed for a
+/// lot's walls, so a building keeps one design.
+pub fn dress(
     grammar: &Grammar,
-    start: &str,
-    faces: &[Face],
+    structures: &[Structure],
     masses: &[Mass],
+    wanted: &[usize],
     top: f64,
     seed: u64,
-) -> (Vec<(u32, Terminal)>, DeriveStats) {
+) -> (Vec<Dressed>, DeriveStats) {
     let mut out = Vec::new();
     let mut stats = DeriveStats::default();
     let mut terminals = Vec::new();
-    for (i, face) in faces.iter().enumerate() {
-        let m = &masses[face.mass as usize];
+    for &i in wanted {
+        let s = &structures[i];
+        let m = &masses[i];
         let building = seed ^ u64::from(m.lot).wrapping_mul(0x9E37_79B9_7F4A_7C15);
-        terminals.clear();
-        stats += grammar.derive(
-            start,
-            face.scope(top),
-            &attrs(grammar, face, m),
-            building,
-            &mut terminals,
-        );
-        out.extend(terminals.iter().map(|&t| (i as u32, t)));
+        let flag = |b: bool| f64::from(u8::from(b));
+        let n = s.storeys.len();
+        for (w, wall) in s.walls.iter().enumerate() {
+            if wall.length() < 0.5 || wall.role == WallRole::Inner {
+                continue;
+            }
+            let base = [
+                ("street", flag(wall.role == WallRole::Street)),
+                ("court", flag(wall.role == WallRole::Court)),
+                ("party", flag(wall.role == WallRole::Party)),
+                ("tiled", flag(m.roof == mass::Roof::Tiled)),
+                ("floors", f64::from(m.floors)),
+                ("street_width", m.street_width),
+                ("open", flag(m.open)),
+            ];
+            let mut push = |storey: Option<u8>, terminals: &[Terminal]| {
+                out.extend(terminals.iter().map(|&terminal| Dressed {
+                    mass: i as u32,
+                    wall: w as u32,
+                    storey,
+                    terminal,
+                }));
+            };
+            if wall.role == WallRole::Party {
+                terminals.clear();
+                stats += grammar.derive(
+                    "PartyWall",
+                    wall_scope(wall, 0.0, m.height + top),
+                    &grammar.attrs(&base),
+                    building,
+                    &mut terminals,
+                );
+                push(None, &terminals);
+                continue;
+            }
+            let length = wall.length();
+            for (k, storey) in s.storeys.iter().enumerate() {
+                // The openings of this storey, along the scope's width from the wall's end `b`.
+                let gaps: Vec<Gap> = s
+                    .openings
+                    .iter()
+                    .filter(|o| o.wall == w && o.storey == k)
+                    .map(|o| Gap {
+                        from: length - o.span().1,
+                        to: length - o.span().0,
+                        kind: match o.kind {
+                            OpeningKind::Window => opening::WINDOW,
+                            OpeningKind::Shopfront => opening::SHOPFRONT,
+                            OpeningKind::Door => opening::DOOR,
+                            OpeningKind::Passage => opening::PASSAGE,
+                        },
+                        sill: o.sill,
+                        head: o.head,
+                    })
+                    .collect();
+                let mut attrs = base.to_vec();
+                attrs.extend([
+                    ("level.index", k as f64),
+                    ("level.count", n as f64),
+                    ("level.first", flag(k == 0)),
+                    ("level.last", flag(k + 1 == n)),
+                ]);
+                terminals.clear();
+                stats += grammar.derive_with_gaps(
+                    "Storey",
+                    wall_scope(wall, storey.level, storey.height),
+                    &grammar.attrs(&attrs),
+                    building,
+                    &gaps,
+                    &mut terminals,
+                );
+                push(Some(k as u8), &terminals);
+            }
+            terminals.clear();
+            stats += grammar.derive(
+                "Roofline",
+                wall_scope(wall, m.height, top),
+                &grammar.attrs(&base),
+                building,
+                &mut terminals,
+            );
+            push(None, &terminals);
+        }
     }
     (out, stats)
 }
@@ -349,30 +443,59 @@ mod tests {
     }
 
     #[test]
-    fn the_example_style_derives_every_face() {
+    fn the_example_style_dresses_every_wall_round_its_openings() {
         let size = 4000.0;
         let site = example::site(size, 10.0);
         let city = plan(&site, &example::params(size));
         let masses = mass::masses(&city, &StyleBible::default(), 9);
-        let faces = faces(&city, &masses);
+        let structures = super::super::structure::structures(&city, &masses);
         let grammar = Grammar::parse(MEDITERRANEAN).unwrap();
-        let some: Vec<Face> = faces.iter().take(400).copied().collect();
-        let (terminals, stats) = derive(&grammar, "Facade", &some, &masses, 0.9, 1);
+        let some: Vec<usize> = (0..masses.len()).step_by(40).collect();
+        let (dressed, stats) = dress(&grammar, &structures, &masses, &some, 0.9, 1);
         assert_eq!(stats.unmatched, 0, "{stats:?}");
         assert_eq!(stats.too_deep, 0);
-        // The terminals cover each face exactly.
-        let mut area = vec![0.0; some.len()];
-        for (f, t) in &terminals {
-            area[*f as usize] += t.scope.size.x * t.scope.size.y;
+        // The terminals cover each wall exactly, but for its passages; a tiled roof's wall
+        // stops at its cornice (the eaves are nil).
+        let mut area: std::collections::HashMap<(u32, u32), f64> = Default::default();
+        for d in &dressed {
+            *area.entry((d.mass, d.wall)).or_default() +=
+                d.terminal.scope.size.x * d.terminal.scope.size.y;
         }
-        for (face, a) in some.iter().zip(area) {
-            // A tiled roof's face stops at its cornice (the eaves are nil); party walls are whole.
-            let tiled = masses[face.mass as usize].roof == mass::Roof::Tiled
-                && face.kind != FaceKind::Party;
-            let full = face.width() * (face.height + if tiled { 0.4 } else { 0.9 });
-            assert!((a - full).abs() < 1e-6 * full.max(1.0), "{a} of {full}");
+        for &i in &some {
+            let (s, m) = (&structures[i], &masses[i]);
+            for (w, wall) in s.walls.iter().enumerate() {
+                if wall.length() < 0.5 || wall.role == WallRole::Inner {
+                    continue;
+                }
+                let tiled = m.roof == mass::Roof::Tiled && wall.role != WallRole::Party;
+                let holes: f64 = s
+                    .openings
+                    .iter()
+                    .filter(|o| o.wall == w && o.kind == OpeningKind::Passage)
+                    .map(|o| o.width * o.head)
+                    .sum();
+                let full = wall.length() * (m.height + if tiled { 0.4 } else { 0.9 }) - holes;
+                let a = area.get(&(i as u32, w as u32)).copied().unwrap_or(0.0);
+                assert!((a - full).abs() < 1e-6 * full.max(1.0), "{a} of {full}");
+            }
         }
+        // Every opening the structure holds is dressed: a window, a shopfront, a door or a hole.
         let windows = grammar.symbol("window").unwrap();
-        assert!(terminals.iter().any(|(_, t)| t.module == windows));
+        assert!(dressed.iter().any(|d| d.terminal.module == windows));
+        let doors = grammar.symbol("door").unwrap();
+        let built = some
+            .iter()
+            .filter(|&&i| {
+                structures[i]
+                    .openings
+                    .iter()
+                    .any(|o| o.kind == OpeningKind::Door)
+            })
+            .count();
+        let dressed_doors = dressed
+            .iter()
+            .filter(|d| d.terminal.module == doors)
+            .count();
+        assert_eq!(dressed_doors, built, "one door a building");
     }
 }

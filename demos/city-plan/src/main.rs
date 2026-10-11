@@ -94,7 +94,6 @@ fn main() -> anyhow::Result<()> {
     let half = cli.size * 0.5;
     let detail = city_plan::Detail {
         grammar: &grammar,
-        start: "Facade",
         top: 0.9,
         centre: if cli.street {
             DVec2::new(

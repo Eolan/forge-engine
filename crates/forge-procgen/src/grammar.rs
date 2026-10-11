@@ -38,6 +38,10 @@
 //!   from the derivation's seed, the same for every shape of that rule unless attributes are
 //!   listed (`choose(level.index)` picks per floor); **`nil`** drops the shape; a bare name
 //!   renames it.
+//! - **`openings { Wall | Opening }`** cuts the shape at the gaps the derivation was given
+//!   ([`Grammar::derive_with_gaps`]: a building's openings, D-060): `Wall` between them,
+//!   `Opening` on each, with `opening.kind`, `sill`, `glass` and `lintel` read in the shape's
+//!   own terms.
 //! - **`let bay = 2.8 | 3.0 | 3.4`** gives each derivation one of the values, picked from its
 //!   seed, unless the start shape's attributes set it: the faces of one building, derived with
 //!   one seed, share their bays.
@@ -116,6 +120,32 @@ pub struct Terminal {
     pub scope: Scope,
 }
 
+/// An opening the derivation's wall holds (D-060: the building's structure puts them, the
+/// grammar dresses them): its stretch along the start scope's width, metres from its origin,
+/// and its sill and head over the start scope's bottom. `openings { Wall | Opening }` cuts a
+/// shape at the gaps it meets.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Gap {
+    /// Where it starts along the start scope's width.
+    pub from: f64,
+    /// Where it ends.
+    pub to: f64,
+    /// What it is, as the shapes read it in `opening.kind` (the caller's numbering).
+    pub kind: f64,
+    /// Its sill over the start scope's bottom.
+    pub sill: f64,
+    /// Its head over the start scope's bottom.
+    pub head: f64,
+}
+
+/// What a derivation's shapes share: its gaps, and its start scope's frame to place them.
+struct Context<'a> {
+    gaps: &'a [Gap],
+    origin: DVec3,
+    x: DVec3,
+    y: DVec3,
+}
+
 /// What a derivation did.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DeriveStats {
@@ -187,6 +217,11 @@ enum Op {
     },
     Rename(Symbol),
     Nil,
+    /// The shape cut at the derivation's gaps: `wall` between them, `opening` on each.
+    Openings {
+        wall: Symbol,
+        opening: Symbol,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -358,6 +393,29 @@ impl Grammar {
         seed: u64,
         out: &mut Vec<Terminal>,
     ) -> DeriveStats {
+        self.derive_with_gaps(start, scope, attrs, seed, &[], out)
+    }
+
+    /// As [`Grammar::derive`], the wall holding `gaps` for `openings { Wall | Opening }` to cut
+    /// at. Each opening's shape gets `opening.kind`, `sill` and `glass` (its sill and its height
+    /// over the shape's bottom), `lintel` (what is left over its head) and the split fields.
+    pub fn derive_with_gaps(
+        &self,
+        start: &str,
+        scope: Scope,
+        attrs: &Attrs,
+        seed: u64,
+        gaps: &[Gap],
+        out: &mut Vec<Terminal>,
+    ) -> DeriveStats {
+        let mut sorted = gaps.to_vec();
+        sorted.sort_by(|a, b| a.from.total_cmp(&b.from));
+        let context = Context {
+            gaps: &sorted,
+            origin: scope.origin,
+            x: scope.x,
+            y: scope.y,
+        };
         let mut stats = DeriveStats::default();
         let seed = Seed::new(seed);
         let mut attrs = attrs.clone();
@@ -368,7 +426,7 @@ impl Grammar {
             }
         }
         match self.symbol(start) {
-            Some(s) => self.shape(s, scope, &attrs, seed, 0, out, &mut stats),
+            Some(s) => self.shape(s, scope, &attrs, seed, 0, &context, out, &mut stats),
             None => stats.unmatched += 1,
         }
         stats
@@ -382,6 +440,7 @@ impl Grammar {
         attrs: &Attrs,
         seed: Seed,
         depth: u32,
+        context: &Context<'_>,
         out: &mut Vec<Terminal>,
         stats: &mut DeriveStats,
     ) {
@@ -423,6 +482,93 @@ impl Grammar {
         stats.shapes += 1;
         match &rule.op {
             Op::Nil => {}
+            Op::Openings { wall, opening } => {
+                // The shape's place in the start scope, to read the gaps in its own terms.
+                let u0 = (scope.origin - context.origin).dot(context.x);
+                let v0 = (scope.origin - context.origin).dot(context.y);
+                let (width, height) = (scope.size.x, scope.size.y);
+                let gaps: Vec<&Gap> = context
+                    .gaps
+                    .iter()
+                    .filter(|g| g.to > u0 + 1e-6 && g.from < u0 + width - 1e-6)
+                    .collect();
+                let fields = |i: usize, n: usize| {
+                    [
+                        i as f64,
+                        n as f64,
+                        f64::from(u8::from(i == 0)),
+                        f64::from(u8::from(i + 1 == n)),
+                        f64::from(u8::from(n > 0 && i == (n - 1) / 2)),
+                    ]
+                };
+                let part = |from: f64, to: f64| Scope {
+                    origin: scope.origin + scope.x * from,
+                    size: DVec2::new(to - from, height),
+                    ..scope
+                };
+                // The walls between, then the openings.
+                let mut walls = Vec::new();
+                let mut holes = Vec::new();
+                let mut at = 0.0;
+                for g in &gaps {
+                    let (a, b) = ((g.from - u0).max(at), (g.to - u0).min(width));
+                    if a > at + 1e-6 {
+                        walls.push((at, a));
+                    }
+                    if b > a + 1e-6 {
+                        holes.push((a, b, *g));
+                    }
+                    at = at.max(b);
+                }
+                if width > at + 1e-6 {
+                    walls.push((at, width));
+                }
+                let set = |child: &mut Attrs, name: &str, v: f64| {
+                    if let Some(s) = self.symbol(name) {
+                        child.set(s, v);
+                    }
+                };
+                let n = walls.len();
+                for (i, &(a, b)) in walls.iter().enumerate() {
+                    let mut child = attrs.clone();
+                    for (s, v) in PLAIN.iter().zip(fields(i, n)) {
+                        child.set(*s, v);
+                    }
+                    self.shape(
+                        *wall,
+                        part(a, b),
+                        &child,
+                        seed,
+                        depth + 1,
+                        context,
+                        out,
+                        stats,
+                    );
+                }
+                let n = holes.len();
+                for (i, &(a, b, g)) in holes.iter().enumerate() {
+                    let mut child = attrs.clone();
+                    for (s, v) in PLAIN.iter().zip(fields(i, n)) {
+                        child.set(*s, v);
+                    }
+                    let sill = (g.sill - v0).clamp(0.0, height);
+                    let head = (g.head - v0).clamp(sill, height);
+                    set(&mut child, "opening.kind", g.kind);
+                    set(&mut child, "sill", sill);
+                    set(&mut child, "glass", head - sill);
+                    set(&mut child, "lintel", height - head);
+                    self.shape(
+                        *opening,
+                        part(a, b),
+                        &child,
+                        seed,
+                        depth + 1,
+                        context,
+                        out,
+                        stats,
+                    );
+                }
+            }
             Op::Insert(module) => {
                 stats.terminals += 1;
                 out.push(Terminal {
@@ -430,7 +576,9 @@ impl Grammar {
                     scope,
                 });
             }
-            Op::Rename(next) => self.shape(*next, scope, attrs, seed, depth + 1, out, stats),
+            Op::Rename(next) => {
+                self.shape(*next, scope, attrs, seed, depth + 1, context, out, stats)
+            }
             Op::Choose { keys, options } => {
                 let mut pick = seed.derive(u64::from(rule.ordinal));
                 for &k in keys {
@@ -446,7 +594,7 @@ impl Grammar {
                     }
                     r -= w;
                 }
-                self.shape(chosen, scope, attrs, seed, depth + 1, out, stats);
+                self.shape(chosen, scope, attrs, seed, depth + 1, context, out, stats);
             }
             Op::Split {
                 axis,
@@ -490,7 +638,16 @@ impl Grammar {
                             child_attrs.set(*s, v);
                         }
                     }
-                    self.shape(piece.name, child, &child_attrs, seed, depth + 1, out, stats);
+                    self.shape(
+                        piece.name,
+                        child,
+                        &child_attrs,
+                        seed,
+                        depth + 1,
+                        context,
+                        out,
+                        stats,
+                    );
                 }
             }
         }
@@ -813,6 +970,14 @@ impl Parser<'_> {
         let word = self.ident()?;
         match word.as_str() {
             "nil" => Ok(Op::Nil),
+            "openings" => {
+                self.expect("{")?;
+                let wall = self.rule_name()?;
+                self.expect("|")?;
+                let opening = self.rule_name()?;
+                self.expect("}")?;
+                Ok(Op::Openings { wall, opening })
+            }
             "insert" => {
                 self.expect("(")?;
                 let module = self.ident()?;
@@ -1060,5 +1225,61 @@ mod tests {
         assert_eq!(e.line, 2);
         let e = Grammar::parse("A [x -> nil").unwrap_err();
         assert!(e.message.contains("expected"), "{e}");
+    }
+
+    #[test]
+    fn openings_cut_a_storey_at_its_gaps() {
+        let g = Grammar::parse(
+            "
+            Storey -> split(y) { ~1: Row | 0.3: Band }
+            Row -> openings { Wall | Opening }
+            Opening [opening.kind == 2] -> split(y) { glass: Hole | ~1: Wall }
+            Opening -> split(y) { sill: Wall | glass: Window | lintel: Wall }
+            Hole -> nil
+            Band -> insert(band)
+            Window -> insert(window)
+            Wall -> insert(wall)
+            ",
+        )
+        .unwrap();
+        // A 10 m storey of 3.2 m: a window at 2-3.2 m (sill 0.9, head 2.4) and a passage at
+        // 6-9 m (to 2.5 m), given out of order.
+        let gaps = [
+            Gap {
+                from: 6.0,
+                to: 9.0,
+                kind: 2.0,
+                sill: 0.0,
+                head: 2.5,
+            },
+            Gap {
+                from: 2.0,
+                to: 3.2,
+                kind: 1.0,
+                sill: 0.9,
+                head: 2.4,
+            },
+        ];
+        let mut out = Vec::new();
+        let stats = g.derive_with_gaps(
+            "Storey",
+            wall(10.0, 3.2),
+            &Attrs::default(),
+            3,
+            &gaps,
+            &mut out,
+        );
+        assert_eq!(stats.unmatched, 0);
+        let window: Vec<&Terminal> = out
+            .iter()
+            .filter(|t| t.module == g.symbol("window").unwrap())
+            .collect();
+        assert_eq!(window.len(), 1);
+        let w = window[0].scope;
+        assert!((w.origin.x - 2.0).abs() < 1e-9 && (w.size.x - 1.2).abs() < 1e-9);
+        assert!((w.origin.y - 0.9).abs() < 1e-9 && (w.size.y - 1.5).abs() < 1e-9);
+        // Everything but the passage is covered: 10 × 3.2 less 3 × 2.5.
+        let area: f64 = out.iter().map(|t| t.scope.size.x * t.scope.size.y).sum();
+        assert!((area - (32.0 - 7.5)).abs() < 1e-9, "{area}");
     }
 }

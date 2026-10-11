@@ -59,8 +59,16 @@ pub fn shared(name: &str) -> bool {
     !matches!(name, "wall" | "blank" | "band" | "cornice" | "parapet")
 }
 
-/// A module `w` by `h` metres, or `None` for a name the kit does not have.
+/// A module `w` by `h` metres, or `None` for a name the kit does not have; its openings' reveals
+/// 0.22 m deep (0.18 for a courtyard window).
 pub fn module(name: &str, w: f32, h: f32) -> Option<TriMesh> {
+    let reveal = if name == "window_court" { 0.18 } else { 0.22 };
+    module_deep(name, w, h, reveal)
+}
+
+/// A module `w` by `h` metres, its opening's reveal `reveal` metres deep: the window set back
+/// into a wall of its thickness (D-060: old stone's deep, modern walls' shallow).
+pub fn module_deep(name: &str, w: f32, h: f32, reveal: f32) -> Option<TriMesh> {
     let mut m = TriMesh::default();
     match name {
         "wall" => quad(&mut m, wall_quad(w, h, 0.0), PLASTER),
@@ -98,9 +106,9 @@ pub fn module(name: &str, w: f32, h: f32) -> Option<TriMesh> {
             );
         }
         "window" | "window_plain" => {
-            window(&mut m, w, h, 0.22, true);
+            window(&mut m, w, h, reveal, true);
             surround(&mut m, w, h, 0.15, 0.22);
-            sill(&mut m, w, 0.22, 0.07);
+            sill(&mut m, w, reveal, 0.07);
             railing(
                 &mut m,
                 Vec3::new(0.0, 0.0, 0.0),
@@ -112,9 +120,9 @@ pub fn module(name: &str, w: f32, h: f32) -> Option<TriMesh> {
             }
         }
         "window_closed" => {
-            window(&mut m, w, h, 0.22, true);
+            window(&mut m, w, h, reveal, true);
             surround(&mut m, w, h, 0.15, 0.22);
-            sill(&mut m, w, 0.22, 0.07);
+            sill(&mut m, w, reveal, 0.07);
             closed_shutters(&mut m, w, h);
             railing(
                 &mut m,
@@ -124,16 +132,16 @@ pub fn module(name: &str, w: f32, h: f32) -> Option<TriMesh> {
             );
         }
         "window_low" => {
-            window(&mut m, w, h, 0.22, true);
+            window(&mut m, w, h, reveal, true);
             surround(&mut m, w, h, 0.15, 0.22);
-            sill(&mut m, w, 0.22, 0.08);
+            sill(&mut m, w, reveal, 0.08);
         }
         "window_court" => {
-            window(&mut m, w, h, 0.18, false);
-            sill(&mut m, w, 0.18, 0.05);
+            window(&mut m, w, h, reveal, false);
+            sill(&mut m, w, reveal, 0.05);
         }
         "balcony" => {
-            window(&mut m, w, h, 0.22, true);
+            window(&mut m, w, h, reveal, true);
             surround(&mut m, w, h, 0.15, 0.22);
             shutters(&mut m, w, h, 0.15);
             balcony(&mut m, w);

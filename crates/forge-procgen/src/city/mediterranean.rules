@@ -2,71 +2,69 @@
 # style set). Rendered walls in warm tints; tall French windows with shutters; balconies on
 # the first floor of the street fronts; shops on the avenues, the lanes, the squares and the
 # quays; a string course over the ground floor, a cornice and a parapet. Each building picks
-# its bays, balconies and shutters from its seed, so neighbours differ and one building's
-# faces agree.
+# its balconies, shutters and attic from its seed, so neighbours differ and one building's
+# walls agree.
 #
-# The start shape is `Facade`, with the attributes `city::facades::attrs` gives it (street,
-# court, party, corner_left, corner_right, entrance, floors, street_width, open, ground, floor)
-# and a scope 0.9 m above the roof line for the parapet.
+# Where the openings go is the building's structure's (D-060, `city::structure`): the style
+# dresses them. Three start shapes, with the attributes `city::facades::dress` gives them
+# (street, court, party, tiled, floors, street_width, open, and level.index, level.count,
+# level.last for a storey):
+# - `Storey`: one storey of a street or courtyard wall, its openings as gaps that
+#   `openings { Wall | Opening }` cuts at; an opening's shape has `opening.kind` (1 a window,
+#   2 a shopfront, 3 the door, 4 a passage into the court), `sill`, `glass` and `lintel`;
+# - `PartyWall`: a wall against a neighbour, from the ground to 0.9 m over the roof line;
+# - `Roofline`: the 0.9 m over a street or courtyard wall's roof line.
 
-let bay = 2.8 | 3.0 | 3.2 | 3.4
 let balconies = 0 | 1 | 1 | 2
 let shutters = 0 | 1 | 1 | 1
 let attic = 0 | 0 | 1
 
-Facade [party] -> insert(blank)
-Facade -> split(y, level) { ground: Ground | {~floor: Floor}* | 0.9: Top }
+PartyWall -> insert(blank)
 
 # Above the roof line: a cornice on the street, then the parapet round the roof.
-Top [tiled] -> split(y) { 0.4: Cornice | ~0.5: Eaves }
+Roofline [tiled] -> split(y) { 0.4: Cornice | ~0.5: Eaves }
+Roofline [court] -> Parapet
+Roofline -> split(y) { 0.4: Cornice | ~0.5: Parapet }
 Eaves -> nil
-Top [court] -> Parapet
-Top -> split(y) { 0.4: Cornice | ~0.5: Parapet }
 Cornice -> insert(cornice)
 Parapet -> insert(parapet)
 
-# The ground floor: shops, the entrance and windows, then a string course on the street.
-Ground [court] -> GroundStorey
-Ground -> split(y) { ~3.9: GroundStorey | 0.3: Band }
+# A storey: a string course over the ground floor on the street, the openings in the rest.
+Storey [level.index == 0 && street] -> split(y) { ~1: Openings | 0.3: Band }
+Storey -> Openings
 Band -> insert(band)
-GroundStorey -> split(x) { ~0.5: Wall | {bay: GroundBay}* | ~0.5: Wall }
-GroundBay [entrance && middle] -> split(x) { ~1: Wall | 1.6: Door | ~1: Wall }
-GroundBay [street && street_width >= 18] -> Shops
-GroundBay [street && street_width <= 8] -> Shops
-GroundBay [street && open] -> Shops
-GroundBay [court] -> split(x) { ~1: Wall | 1.0: CourtColumn | ~1: Wall }
-GroundBay -> split(x) { ~1: Wall | 1.2: LowColumn | ~1: Wall }
-Shops -> split(x) { 0.3: Wall | ~1: Shop | 0.3: Wall }
-Door -> split(y) { 3.0: Entrance | ~1: Wall }
+Openings -> openings { Wall | Opening }
+
+# The passage into the court: open to its head, the wall over it.
+Opening [opening.kind == 4] -> split(y) { glass: Passage | ~1: Wall }
+Passage -> nil
+# The door, step-free from the pavement.
+Opening [opening.kind == 3] -> split(y) { glass: Entrance | ~1: Wall }
 Entrance -> insert(door)
-Shop -> split(y) { 2.6: Shopfront | ~1: Wall }
+# Shops, cafés and bars: an open front or one under an awning.
+Opening [opening.kind == 2] -> split(y) { sill: Wall | glass: Shopfront | ~1: Wall }
 Shopfront -> choose(index) { 1: ShopOpen | 1: ShopAwning }
 ShopOpen -> insert(shop)
 ShopAwning -> insert(shop_awning)
-LowColumn -> split(y) { 1.0: Wall | 2.2: LowWindow | ~1: Wall }
+# The courtyards: plain windows.
+Opening [court] -> split(y) { sill: Wall | glass: CourtWindow | ~1: Wall }
+CourtWindow -> insert(window_court)
+# The ground floor's windows on the street.
+Opening [level.index == 0] -> split(y) { sill: Wall | glass: LowWindow | ~1: Wall }
 LowWindow -> insert(window_low)
-
-# The upper floors: bays of French windows; balconies on the first floor of the street front,
-# and on the top floor too for some buildings, or an attic storey of small windows.
-# and on the top floor too for some buildings.
-Floor -> split(x, column) { ~0.5: Wall | {bay: Bay}* | ~0.5: Wall }
-Bay [court] -> split(x) { ~1: Wall | 1.0: CourtColumn | ~1: Wall }
-Bay [level.index == 0 && balconies >= 1] -> BalconyBay
-Bay [level.last && balconies >= 2] -> BalconyBay
-Bay [level.last && attic && level.count >= 3] -> split(x) { ~1: Wall | 1.0: AtticColumn | ~1: Wall }
-Bay -> split(x) { ~1: Wall | 1.2: WindowColumn | ~1: Wall }
-BalconyBay -> split(x) { ~1: Wall | 1.2: BalconyColumn | ~1: Wall }
-WindowColumn -> split(y) { 0.1: Wall | 2.5: Window | ~1: Wall }
-Window [shutters] -> choose(column.index, level.index) { 3: OpenWindow | 1: ClosedWindow }
+# Balconies on the first floor of the street front, and on the top floor too for some
+# buildings: French windows to the floor.
+Opening [level.index == 1 && balconies >= 1] -> split(y) { 0.1: Wall | ~1: Balcony | lintel: Wall }
+Opening [level.last && balconies >= 2 && level.index >= 2] -> split(y) { 0.1: Wall | ~1: Balcony | lintel: Wall }
+Balcony -> insert(balcony)
+# Or an attic storey: small square windows high in the top floor, under the cornice.
+Opening [level.last && attic && level.count >= 4] -> split(y) { ~1: Wall | 1.3: AtticWindow | lintel: Wall }
+AtticWindow -> insert(window_court)
+# The other upper windows, with shutters for most buildings.
+Opening -> split(y) { sill: Wall | glass: Window | ~1: Wall }
+Window [shutters] -> choose(index, level.index) { 3: OpenWindow | 1: ClosedWindow }
 OpenWindow -> insert(window)
 ClosedWindow -> insert(window_closed)
 Window -> insert(window_plain)
-BalconyColumn -> split(y) { 0.1: Wall | 2.5: Balcony | ~1: Wall }
-Balcony -> insert(balcony)
-CourtColumn -> split(y) { 0.9: Wall | 1.6: CourtWindow | ~1: Wall }
-CourtWindow -> insert(window_court)
-# An attic storey: small square windows high in the top floor, under the cornice.
-AtticColumn -> split(y) { ~1: Wall | 1.3: AtticWindow | 0.5: Wall }
-AtticWindow -> insert(window_court)
 
 Wall -> insert(wall)

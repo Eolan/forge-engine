@@ -510,7 +510,9 @@ fn openings(m: &Mass, era: Era, storeys: &[Storey], walls: &[Wall]) -> Vec<Openi
                     let along = first + bay * (j as f64 + 0.5);
                     let (kind, width, sill, head) = if k == 0 {
                         if shops && wall.role == WallRole::Street {
-                            (OpeningKind::Shopfront, bay - 0.6, 0.3, s.clear() - 0.5)
+                            // Widths by the 10 cm, so the kit shares their meshes.
+                            let width = ((bay - 0.6) * 10.0).floor() / 10.0;
+                            (OpeningKind::Shopfront, width, 0.3, s.clear() - 0.5)
                         } else {
                             (OpeningKind::Window, t.window, 1.0, s.clear() - 0.4)
                         }
@@ -650,7 +652,8 @@ fn passages(plan: &CityPlan, masses: &[Mass], structures: &mut [Structure]) {
             continue;
         };
         let s = &mut structures[i];
-        let head = PASSAGE.1.min(s.storeys[0].clear());
+        // Under its storey's ceiling with a lintel, as the other openings: no higher than 3.6 m.
+        let head = PASSAGE.1.min(s.storeys[0].clear() - 0.3);
         for (w, along) in [(sw, at_street), (cw, at_court)] {
             let (lo, hi) = (along - PASSAGE.0 * 0.5 - 0.3, along + PASSAGE.0 * 0.5 + 0.3);
             s.openings

@@ -25,6 +25,7 @@ use forge_procgen::city::facades::{self, FaceKind};
 use forge_procgen::city::lamps::Lamp;
 use forge_procgen::city::mass::{Mass, Roof};
 use forge_procgen::city::shore::Shore;
+use forge_procgen::city::structure::{self, OpeningKind, Structure, WallRole};
 use forge_procgen::city::trees::Tree;
 use forge_procgen::city::{BlockUse, CityPlan, LAGOON, SEA, Site, geom};
 use forge_procgen::grammar::Grammar;
@@ -258,8 +259,10 @@ pub struct PlanScenario {
     /// The river shuttles, one a crossing.
     boats: Vec<BoatRun>,
     clock: f64,
-    /// Each mass's footprint (the world's x and z) and its top, for the walker's walls.
-    walls: Vec<(Vec<glam::Vec2>, f32)>,
+    /// The buildings' walls as convex pieces (the world's metres), for the walker.
+    walls: Vec<Vec<Vec3>>,
+    /// How many passages into courts, and where to look into one, for the log.
+    passage_note: String,
     walk_on_start: bool,
     /// The names the fingerposts' blades carry, a row of their atlas each.
     sign_names: Vec<String>,
@@ -283,8 +286,6 @@ pub struct PlanScenario {
 pub struct Detail<'a> {
     /// The style set's rules.
     pub grammar: &'a Grammar,
-    /// Their start shape's rule.
-    pub start: &'a str,
     /// What the style puts over the roof line, metres.
     pub top: f64,
     /// Where, on the plan.
@@ -442,7 +443,42 @@ impl PlanScenario {
                 _ => mass(&mut tiles, m, &edges[i]),
             }
         }
-        let kit = detail.map(|d| kit(&mut tiles, masses, &edges, &near, d));
+        // The buildings' structure (D-060): the kit dresses it, the walker walks against it.
+        let structures = structure::structures(plan, masses);
+        let kit = detail.map(|d| kit(&mut tiles, masses, &structures, &edges, &near, d));
+        // The passages into the courts (D-060), and where to look into one: 10 m out on the
+        // street before the kit's first, for the log once the app logs.
+        let passages_in = |list: &mut dyn Iterator<Item = usize>| {
+            list.map(|i| {
+                structures[i]
+                    .openings
+                    .iter()
+                    .filter(|o| o.kind == OpeningKind::Passage)
+                    .count()
+                    / 2
+            })
+            .sum::<usize>()
+        };
+        let mut passage_note = format!(
+            "passages into courts (D-060): {} in the city, {} in the kit",
+            passages_in(&mut (0..masses.len())),
+            passages_in(&mut near.iter().copied())
+        );
+        if let Some((wall, o)) = near.iter().find_map(|&i| {
+            let s = &structures[i];
+            s.openings
+                .iter()
+                .find(|o| o.kind == OpeningKind::Passage)
+                .map(|o| (&s.walls[o.wall], o))
+        }) {
+            let t = (wall.b - wall.a).normalize_or_zero();
+            let mouth = wall.a + t * o.along;
+            let out = DVec2::new(t.y, -t.x);
+            let eye = world(size, mouth + out * 10.0, 1.7);
+            let to = (world(size, mouth, 1.7) - eye).normalize_or_zero();
+            let yaw = (-to.x).atan2(-to.z).to_degrees();
+            passage_note += &format!("; one at --view={:.1},1.7,{:.1},{yaw:.1},0", eye.x, eye.z);
+        }
         let triangles = tiles
             .tiles
             .iter()
@@ -807,20 +843,8 @@ impl PlanScenario {
                 .map(|c| BoatRun::new(c, site))
                 .collect(),
             clock: 3600.0,
-            walls: masses
-                .iter()
-                .map(|m| {
-                    let footprint = m
-                        .footprint
-                        .iter()
-                        .map(|&p| {
-                            let w = world(size, p, 0.0);
-                            glam::Vec2::new(w.x, w.z)
-                        })
-                        .collect();
-                    (footprint, m.height as f32 + 0.9)
-                })
-                .collect(),
+            walls: wall_pieces(size, masses, &structures),
+            passage_note,
             walk_on_start: false,
             ride_after: None,
             games,
@@ -1238,32 +1262,32 @@ fn tint_of(lot: u32) -> u8 {
     (lot.wrapping_mul(2_654_435_761) >> 30) as u8 % TINTS
 }
 
-/// The masses `near` built from `d`'s grammar and kit: each face derived, the walls, bands and
-/// cornices merged into the tiles, the openings instanced; and their roofs.
+/// The masses `near` built from `d`'s grammar and kit over their structures (D-060): each
+/// storey of each wall dressed round its openings, the walls, bands and cornices merged into
+/// the tiles, the openings instanced, their reveals as deep as their walls allow; the passages
+/// into the courts open through the buildings; and their roofs.
 fn kit(
     tiles: &mut Tiles,
     masses: &[Mass],
+    structures: &[Structure],
     edges: &[Vec<Option<FaceKind>>],
     near: &[usize],
     d: &Detail,
 ) -> Kit {
     let start = std::time::Instant::now();
     let size = tiles.size;
-    let wanted: std::collections::HashSet<u32> = near.iter().map(|&i| i as u32).collect();
-    let faces: Vec<facades::Face> = facades::faces_of(masses, edges)
-        .into_iter()
-        .filter(|f| wanted.contains(&f.mass))
-        .collect();
-    let (terminals, _stats) = facades::derive(d.grammar, d.start, &faces, masses, d.top, d.seed);
-    let mut keys: std::collections::HashMap<(u16, i32, i32), u32> =
+    let (dressed, _stats) = facades::dress(d.grammar, structures, masses, near, d.top, d.seed);
+    let mut keys: std::collections::HashMap<(u16, i32, i32, i32), u32> =
         std::collections::HashMap::new();
     let mut meshes = Vec::new();
     let mut instances = Vec::new();
     let mut seats = Vec::new();
     let (mut run, mut longest_run, mut last) = (0, 0, None);
-    for &(f, t) in &terminals {
-        let face = &faces[f as usize];
-        let m = &masses[face.mass as usize];
+    for piece in &dressed {
+        let t = piece.terminal;
+        let m = &masses[piece.mass as usize];
+        let wall = &structures[piece.mass as usize].walls[piece.wall as usize];
+        let street = wall.role == WallRole::Street;
         let name = d.grammar.name(t.module);
         let (w, h) = (t.scope.size.x as f32, t.scope.size.y as f32);
         let o = t.scope.origin;
@@ -1278,15 +1302,19 @@ fn kit(
             t.scope.normal().as_vec3(),
         );
         if modules::shared(name) {
+            // The window set two thirds into its wall: old stone's deep reveals, modern walls'
+            // shallow ones.
+            let reveal = (wall.thickness * 0.65).clamp(0.12, 0.40) as f32;
             let key = (
                 t.module,
                 (w * 100.0).round() as i32,
                 (h * 100.0).round() as i32,
+                (reveal * 100.0).round() as i32,
             );
             let id = match keys.get(&key) {
                 Some(&id) => id,
                 None => {
-                    let Some(mesh) = modules::module(name, w, h) else {
+                    let Some(mesh) = modules::module_deep(name, w, h, reveal) else {
                         continue;
                     };
                     meshes.push(mesh);
@@ -1307,13 +1335,13 @@ fn kit(
             // (restaurants and cafés by the water), on the pavement's level.
             let lively = m.lively();
             if name.starts_with("shop")
-                && face.kind == FaceKind::Street
+                && street
                 && lively
                 && (spot.is_multiple_of(3) || (m.open && spot % 3 == 1))
             {
                 // One of four layouts by the shopfront, so neighbouring terraces differ.
                 let variant = ((spot >> 8) % 4) as u32;
-                let key = (TERRACE, (w * 100.0).round() as i32, variant as i32);
+                let key = (TERRACE, (w * 100.0).round() as i32, variant as i32, 0);
                 let id = *keys.entry(key).or_insert_with(|| {
                     meshes.push(forge_geom::furniture::terrace(w, variant));
                     (meshes.len() - 1) as u32
@@ -1323,7 +1351,7 @@ fn kit(
                     x.extend(0.0),
                     y.extend(0.0),
                     z.extend(0.0),
-                    (pos + Vec3::Y * level).extend(1.0),
+                    Vec3::new(pos.x, level, pos.z).extend(1.0),
                 );
                 instances.push((id, at, colour * 2));
                 for (p, d) in forge_geom::furniture::terrace_seats(w, variant) {
@@ -1331,9 +1359,9 @@ fn kit(
                     seats.push((p, (-d.z).atan2(d.x)));
                 }
             }
-            // Runs of one opening along a floor of a street front.
-            if face.kind == FaceKind::Street {
-                let row = (f, (o.y * 10.0).round() as i64);
+            // Runs of one opening along a storey of a street front.
+            if street {
+                let row = (piece.mass, piece.wall, piece.storey);
                 if last == Some((row, id)) {
                     run += 1;
                 } else {
@@ -1368,16 +1396,155 @@ fn kit(
         }
     }
     for &i in near {
+        passages(tiles, &structures[i]);
         roof(tiles, &masses[i], &edges[i], KIT_PARTY);
     }
     Kit {
         meshes,
         instances,
-        faces: faces.len(),
-        terminals: terminals.len(),
+        faces: dressed.len(),
+        terminals: dressed.len(),
         longest_run,
         seats,
         ms: start.elapsed().as_secs_f64() * 1e3,
+    }
+}
+
+/// The buildings' walls as the walker's convex pieces, the world's metres (D-060): each street,
+/// courtyard and party wall a slab of its thickness (0.2 m at least) inwards from its outer face,
+/// from the ground to 0.9 m over its roof; where a passage runs through, the wall either side of
+/// it and over its head, and the passage's two side walls.
+fn wall_pieces(size: f64, masses: &[Mass], structures: &[Structure]) -> Vec<Vec<Vec3>> {
+    let mut out = Vec::new();
+    // A slab along `a b`, `deep` metres to its left (inwards), from `y0` to `y1`.
+    let slab = |a: DVec2, b: DVec2, deep: f64, y0: f64, y1: f64| {
+        let t = (b - a).normalize_or_zero();
+        let inward = DVec2::new(-t.y, t.x) * deep;
+        [a, b, b + inward, a + inward]
+            .into_iter()
+            .flat_map(|p| [world(size, p, y0), world(size, p, y1)])
+            .collect::<Vec<Vec3>>()
+    };
+    for (s, m) in structures.iter().zip(masses) {
+        let top = m.height + 0.9;
+        for (w, wall) in s.walls.iter().enumerate() {
+            if wall.role == WallRole::Inner || wall.length() < 0.05 {
+                continue;
+            }
+            let deep = wall.thickness.max(0.2);
+            let t = (wall.b - wall.a).normalize_or_zero();
+            let at = |along: f64| wall.a + t * along;
+            let mut cuts: Vec<(f64, f64, f64)> = s
+                .openings
+                .iter()
+                .filter(|o| o.wall == w && o.kind == OpeningKind::Passage)
+                .map(|o| (o.span().0, o.span().1, o.head))
+                .collect();
+            cuts.sort_by(|x, y| x.0.total_cmp(&y.0));
+            let mut from = 0.0;
+            for &(lo, hi, head) in &cuts {
+                if lo > from + 0.01 {
+                    out.push(slab(at(from), at(lo), deep, 0.0, top));
+                }
+                out.push(slab(at(lo), at(hi), deep, head, top));
+                from = hi;
+            }
+            if wall.length() > from + 0.01 {
+                out.push(slab(at(from), at(wall.length()), deep, 0.0, top));
+            }
+        }
+        // Each passage's sides, from its street end to its court end, 0.2 m thick outwards.
+        let ends: Vec<(DVec2, DVec2, f64)> = s
+            .openings
+            .iter()
+            .filter(|o| o.kind == OpeningKind::Passage)
+            .map(|o| {
+                let w = &s.walls[o.wall];
+                let t = (w.b - w.a).normalize_or_zero();
+                (w.a + t * o.span().0, w.a + t * o.span().1, o.head)
+            })
+            .collect();
+        for pair in ends.as_chunks::<2>().0 {
+            let ((p0, q0, head), (p1, q1, _)) = (pair[0], pair[1]);
+            let (p1, q1) = if p0.distance(p1) + q0.distance(q1) <= p0.distance(q1) + q0.distance(p1)
+            {
+                (p1, q1)
+            } else {
+                (q1, p1)
+            };
+            // Each side's slab goes away from the passage's middle.
+            let middle = (p0 + q0 + p1 + q1) * 0.25;
+            for (a, b) in [(p0, p1), (q0, q1)] {
+                let t = (b - a).normalize_or_zero();
+                let left = DVec2::new(-t.y, t.x);
+                let (a, b) = if left.dot(middle - a) > 0.0 {
+                    (b, a)
+                } else {
+                    (a, b)
+                };
+                out.push(slab(a, b, 0.2, 0.0, head));
+            }
+        }
+    }
+    out
+}
+
+/// The passages into the courts through a mass (D-060): each a tunnel from its street opening
+/// to its court opening, two side walls and a ceiling in stone, the paving under it.
+fn passages(tiles: &mut Tiles, s: &Structure) {
+    let size = tiles.size;
+    let ends: Vec<(DVec2, DVec2, f64)> = s
+        .openings
+        .iter()
+        .filter(|o| o.kind == OpeningKind::Passage)
+        .map(|o| {
+            let w = &s.walls[o.wall];
+            let t = (w.b - w.a).normalize_or_zero();
+            (w.a + t * o.span().0, w.a + t * o.span().1, o.head)
+        })
+        .collect();
+    // Street and court ends in pairs, as `structure::passages` adds them.
+    for pair in ends.as_chunks::<2>().0 {
+        let ((p0, q0, head), (p1, q1, _)) = (pair[0], pair[1]);
+        // Match the sides: the court end's points nearest the street end's.
+        let (p1, q1) = if p0.distance(p1) + q0.distance(q1) <= p0.distance(q1) + q0.distance(p1) {
+            (p1, q1)
+        } else {
+            (q1, p1)
+        };
+        let tile = tiles.at(p0);
+        let centre = tile.centre;
+        let at = |q: DVec2, h: f64| world(size, q, h) - centre;
+        let middle = (p0 + q0 + p1 + q1) * 0.25;
+        let inward = |a: DVec2, b: DVec2| {
+            let v = (middle - (a + b) * 0.5).normalize_or_zero();
+            Vec3::new(v.x as f32, 0.0, v.y as f32)
+        };
+        let faces = [
+            // The side walls, facing into the passage.
+            (
+                [at(p0, 0.0), at(p1, 0.0), at(p1, head), at(p0, head)],
+                inward(p0, p1),
+            ),
+            (
+                [at(q0, 0.0), at(q1, 0.0), at(q1, head), at(q0, head)],
+                inward(q0, q1),
+            ),
+            // The ceiling, facing down; the paving, facing up.
+            (
+                [at(p0, head), at(p1, head), at(q1, head), at(q0, head)],
+                -Vec3::Y,
+            ),
+            (
+                [at(p0, 0.09), at(p1, 0.09), at(q1, 0.09), at(q0, 0.09)],
+                Vec3::Y,
+            ),
+        ];
+        for (quad, normal) in faces {
+            for tri in [[0, 1, 2], [0, 2, 3]] {
+                triangle(&mut tile.masses, tri.map(|k| quad[k]), normal, KIT_STONE);
+            }
+        }
     }
 }
 
@@ -2383,6 +2550,7 @@ impl Scenario for PlanScenario {
                 "trams of two lines within 30 m on one track, over a game hour in 5 s steps"
             );
         }
+        tracing::info!("{}", self.passage_note);
         // Where to look at a stop's screen: on its platform, 1.2 m in front of the first.
         if let Some((at, _, _)) = self
             .trams

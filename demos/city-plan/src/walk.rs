@@ -1,8 +1,9 @@
 //! The player walking the plan's streets in first person (D-059's step 4). Enter puts a Jolt
 //! character on the ground under the camera and the camera at its eyes; WASD walks along the
 //! view and Shift runs (`city_blocks::wished_walk`, as on the island); Enter again frees the
-//! camera. The masses round it are its walls, each its footprint's convex hull raised to its
-//! roof, kept within [`REACH`] as it goes; the ground is one flat slab at the streets' level.
+//! camera. The buildings' walls round it are its walls (D-060: each wall a slab of its
+//! thickness to its roof, open where a passage runs into a court), kept within [`REACH`] as it
+//! goes; the ground is one flat slab at the streets' level.
 
 use std::collections::HashMap;
 
@@ -23,39 +24,46 @@ const CELL: f32 = 50.0;
 /// Ticks run at most in a frame; a longer frame's rest is dropped.
 const CATCH_UP: u32 = 4;
 
-/// The masses as walls to walk against: each footprint (the world's x and z) and its roof's
-/// height, found by cells.
+/// The walls to walk against: each a convex piece (its corners, the world's metres), found by
+/// cells.
 pub struct Walls {
-    walls: Vec<(Vec<Vec2>, f32)>,
+    walls: Vec<Vec<Vec3>>,
     cells: HashMap<(i32, i32), Vec<u32>>,
 }
 
+/// A piece's centre on the ground (the world's x and z).
+fn centre(piece: &[Vec3]) -> Vec2 {
+    let sum = piece
+        .iter()
+        .fold(Vec2::ZERO, |s, p| s + Vec2::new(p.x, p.z));
+    sum / piece.len().max(1) as f32
+}
+
 impl Walls {
-    /// The walls of `masses`: footprints in the world's (x, z) and roof heights.
-    pub fn new(masses: Vec<(Vec<Vec2>, f32)>) -> Self {
+    /// The walls: convex pieces, their corners in the world's metres.
+    pub fn new(pieces: Vec<Vec<Vec3>>) -> Self {
         let mut cells: HashMap<(i32, i32), Vec<u32>> = HashMap::new();
-        for (i, (footprint, _)) in masses.iter().enumerate() {
-            let c = footprint.iter().copied().sum::<Vec2>() / footprint.len().max(1) as f32;
-            cells.entry(cell(c)).or_default().push(i as u32);
+        for (i, piece) in pieces.iter().enumerate() {
+            cells.entry(cell(centre(piece))).or_default().push(i as u32);
         }
         Self {
-            walls: masses,
+            walls: pieces,
             cells,
         }
     }
 
-    /// The walls whose footprints' centres lie within `r` of `p`.
+    /// The walls whose centres lie within `r` of `p`.
     fn near(&self, p: Vec2, r: f32) -> Vec<u32> {
         let (lo, hi) = (cell(p - Vec2::splat(r)), cell(p + Vec2::splat(r)));
         let mut out = Vec::new();
         for x in lo.0..=hi.0 {
             for z in lo.1..=hi.1 {
                 if let Some(list) = self.cells.get(&(x, z)) {
-                    out.extend(list.iter().copied().filter(|&i| {
-                        let f = &self.walls[i as usize].0;
-                        let c = f.iter().copied().sum::<Vec2>() / f.len().max(1) as f32;
-                        c.distance(p) <= r
-                    }));
+                    out.extend(
+                        list.iter()
+                            .copied()
+                            .filter(|&i| centre(&self.walls[i as usize]).distance(p) <= r),
+                    );
                 }
             }
         }
@@ -141,12 +149,8 @@ impl Walker {
             if self.kept.contains_key(&i) {
                 continue;
             }
-            let (footprint, height) = &walls.walls[i as usize];
-            let points: Vec<Vec3> = footprint
-                .iter()
-                .flat_map(|q| [Vec3::new(q.x, 0.0, q.y), Vec3::new(q.x, *height, q.y)])
-                .collect();
-            let Ok(shape) = Shape::convex_hull(&points, 0.05, 1000.0) else {
+            let points = &walls.walls[i as usize];
+            let Ok(shape) = Shape::convex_hull(points, 0.05, 1000.0) else {
                 continue;
             };
             let body = self.world.add_body(&BodyDesc::fixed(&shape, DVec3::ZERO))?;
@@ -157,11 +161,7 @@ impl Walker {
             .kept
             .keys()
             .copied()
-            .filter(|i| {
-                let f = &walls.walls[*i as usize].0;
-                let c = f.iter().copied().sum::<Vec2>() / f.len().max(1) as f32;
-                c.distance(p) > REACH * 1.3
-            })
+            .filter(|i| centre(&walls.walls[*i as usize]).distance(p) > REACH * 1.3)
             .collect();
         for i in far {
             if let Some(body) = self.kept.remove(&i) {
