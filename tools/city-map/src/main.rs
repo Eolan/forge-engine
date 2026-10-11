@@ -28,6 +28,15 @@ struct Args {
     /// Where to write `plan.png`.
     #[arg(long, default_value = "captures/city")]
     out: PathBuf,
+    /// The faces map's middle, `x,y` metres on the plan (the plan's centre otherwise).
+    #[arg(long, value_parser = parse_point)]
+    faces_at: Option<DVec2>,
+}
+
+fn parse_point(s: &str) -> Result<DVec2, String> {
+    let (x, y) = s.split_once(',').ok_or("expected x,y")?;
+    let f = |v: &str| v.trim().parse::<f64>().map_err(|e| e.to_string());
+    Ok(DVec2::new(f(x)?, f(y)?))
 }
 
 fn main() -> Result<()> {
@@ -97,7 +106,10 @@ fn main() -> Result<()> {
         &plan,
         &faces,
         &args.out.join("faces-centre.png"),
-        (params.centre - DVec2::splat(200.0), 400.0),
+        (
+            args.faces_at.unwrap_or(params.centre) - DVec2::splat(200.0),
+            400.0,
+        ),
         0.2,
     )
     .context("writing the faces")?;

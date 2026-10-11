@@ -64,6 +64,13 @@ impl Face {
 
 /// The faces of every mass, in mass order.
 pub fn faces(plan: &CityPlan, masses: &[Mass]) -> Vec<Face> {
+    faces_of(masses, &edge_kinds(plan, masses))
+}
+
+/// What each edge of each mass's footprint looks onto (edge `i` from vertex `i` to `i + 1`):
+/// `None` for a wall inside its building (onto another mass of its lot) or a sliver under half
+/// a metre.
+pub fn edge_kinds(plan: &CityPlan, masses: &[Mass]) -> Vec<Vec<Option<FaceKind>>> {
     let streets = street_grid(&plan.roads, plan.size);
     // Each lot's masses, to tell walls inside a building from walls between lots.
     let mut by_lot: std::collections::HashMap<u32, Vec<u32>> = std::collections::HashMap::new();
@@ -74,12 +81,11 @@ pub fn faces(plan: &CityPlan, masses: &[Mass]) -> Vec<Face> {
     for (i, lot) in plan.lots.iter().enumerate() {
         lots_of[lot.block as usize].push(i as u32);
     }
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(masses.len());
     for (index, m) in masses.iter().enumerate() {
         let lot = &plan.lots[m.lot as usize];
         let block = &plan.blocks[lot.block as usize];
         let n = m.footprint.len();
-        let first = out.len();
         let mut kinds = Vec::with_capacity(n);
         for i in 0..n {
             let (a, b) = (m.footprint[i], m.footprint[(i + 1) % n]);
@@ -129,6 +135,17 @@ pub fn faces(plan: &CityPlan, masses: &[Mass]) -> Vec<Face> {
             };
             kinds.push(kind);
         }
+        out.push(kinds);
+    }
+    out
+}
+
+/// The faces of every mass from its edges' kinds ([`edge_kinds`]), in mass order.
+pub fn faces_of(masses: &[Mass], kinds: &[Vec<Option<FaceKind>>]) -> Vec<Face> {
+    let mut out = Vec::new();
+    for (index, (m, kinds)) in masses.iter().zip(kinds).enumerate() {
+        let n = m.footprint.len();
+        let first = out.len();
         for i in 0..n {
             let Some(kind) = kinds[i] else { continue };
             let (a, b) = (m.footprint[i], m.footprint[(i + 1) % n]);

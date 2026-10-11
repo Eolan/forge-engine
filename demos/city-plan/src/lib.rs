@@ -315,16 +315,18 @@ impl PlanScenario {
             }
         }
         let trams: Vec<TramRun> = plan.tram_lines.iter().filter_map(TramRun::new).collect();
+        // What each wall looks onto: the kit's faces and where the roofs end in gables.
+        let edges = facades::edge_kinds(plan, masses);
         let mut near = Vec::new();
         for (i, m) in masses.iter().enumerate() {
             match detail {
                 Some(d) if geom::centroid(&m.footprint).distance(d.centre) < d.radius => {
                     near.push(i);
                 }
-                _ => mass(&mut tiles, m),
+                _ => mass(&mut tiles, m, &edges[i]),
             }
         }
-        let kit = detail.map(|d| kit(&mut tiles, plan, masses, &near, d));
+        let kit = detail.map(|d| kit(&mut tiles, masses, &edges, &near, d));
         let triangles = tiles
             .tiles
             .iter()
@@ -846,11 +848,17 @@ fn tint_of(lot: u32) -> u8 {
 
 /// The masses `near` built from `d`'s grammar and kit: each face derived, the walls, bands and
 /// cornices merged into the tiles, the openings instanced; and their roofs.
-fn kit(tiles: &mut Tiles, plan: &CityPlan, masses: &[Mass], near: &[usize], d: &Detail) -> Kit {
+fn kit(
+    tiles: &mut Tiles,
+    masses: &[Mass],
+    edges: &[Vec<Option<FaceKind>>],
+    near: &[usize],
+    d: &Detail,
+) -> Kit {
     let start = std::time::Instant::now();
     let size = tiles.size;
     let wanted: std::collections::HashSet<u32> = near.iter().map(|&i| i as u32).collect();
-    let faces: Vec<facades::Face> = facades::faces(plan, masses)
+    let faces: Vec<facades::Face> = facades::faces_of(masses, edges)
         .into_iter()
         .filter(|f| wanted.contains(&f.mass))
         .collect();
@@ -965,7 +973,7 @@ fn kit(tiles: &mut Tiles, plan: &CityPlan, masses: &[Mass], near: &[usize], d: &
         }
     }
     for &i in near {
-        roof(tiles, &masses[i]);
+        roof(tiles, &masses[i], &edges[i], KIT_PARTY);
     }
     Kit {
         meshes,
@@ -1108,8 +1116,8 @@ fn wall_band(
 }
 
 /// A mass: its walls (a shop band on the ground floor where the street is lively, window bays
-/// above, one of four tints by its lot) and its roof.
-fn mass(tiles: &mut Tiles, m: &Mass) {
+/// above, one of four tints by its lot) and its roof, `edges` saying what each wall looks onto.
+fn mass(tiles: &mut Tiles, m: &Mass, edges: &[Option<FaceKind>]) {
     let size = tiles.size;
     let tile = tiles.at(m.footprint[0]);
     let centre = tile.centre;
@@ -1152,11 +1160,11 @@ fn mass(tiles: &mut Tiles, m: &Mass) {
             );
         }
     }
-    roof(tiles, m);
+    roof(tiles, m, edges, KIT_PLASTER + tint);
 }
 
-/// A mass's roof: green, solar, a terrace, or pitched and tiled.
-fn roof(tiles: &mut Tiles, m: &Mass) {
+/// A mass's roof: green, solar, a terrace, or pitched and tiled, its gables in `gable`.
+fn roof(tiles: &mut Tiles, m: &Mass, edges: &[Option<FaceKind>], gable: u8) {
     let size = tiles.size;
     let tile = tiles.at(m.footprint[0]);
     let centre = tile.centre;
@@ -1165,7 +1173,7 @@ fn roof(tiles: &mut Tiles, m: &Mass) {
         Roof::Solar => ROOF_SOLAR,
         Roof::Terrace => ROOF_TERRACE,
         Roof::Tiled => {
-            if hipped(&mut tile.masses, m, size, centre) {
+            if pitched(&mut tile.masses, m, edges, gable, size, centre) {
                 return;
             }
             ROOF_TERRACE
@@ -1177,47 +1185,136 @@ fn roof(tiles: &mut Tiles, m: &Mass) {
     }
 }
 
-/// A hipped roof over a mass: every edge slopes up at about 29° to the ridge, the footprint moved
-/// in as far as it goes (the straight skeleton's roof for a convex footprint, nearly). False
-/// where the footprint will not take one; it then gets a flat roof.
-fn hipped(mesh: &mut TriMesh, m: &Mass, size: f64, centre: Vec3) -> bool {
+/// The longest wall a gable stands on, metres: about a building's depth. Longer walls slope.
+const GABLE_MAX: f64 = 18.0;
+/// The longest run of a pitched roof from its eaves, metres (a rise of 4.4 m); a roof that
+/// would rise further stops in a terrace.
+const RUN_MAX: f64 = 8.0;
+
+/// Which edges of a footprint slope (1) and which end in a gable (0): a wall onto a neighbour
+/// or within the building, across the main front (its longest street wall, else its longest
+/// court wall) and at most [`GABLE_MAX`] long, carries a gable, so the houses of a row share
+/// one ridge along the street. The rest slope; with no gable the roof is hipped. `None` with
+/// no front.
+fn pitches(fp: &[DVec2], edges: &[Option<FaceKind>]) -> Option<Vec<f64>> {
+    let n = fp.len();
+    let edge = |i: usize| fp[(i + 1) % n] - fp[i];
+    let open = |i: usize| matches!(edges[i], Some(FaceKind::Street | FaceKind::Court));
+    let longest = |kind: FaceKind| {
+        (0..n)
+            .filter(|&i| edges[i] == Some(kind))
+            .max_by(|&a, &b| edge(a).length().total_cmp(&edge(b).length()))
+    };
+    let front = longest(FaceKind::Street).or_else(|| longest(FaceKind::Court))?;
+    let along = edge(front).normalize_or_zero();
+    Some(
+        (0..n)
+            .map(|i| {
+                let across = edge(i).normalize_or_zero().dot(along).abs() < 0.5;
+                let length = edge(i).length();
+                if !open(i) && (0.5..=GABLE_MAX).contains(&length) && across {
+                    0.0
+                } else {
+                    1.0
+                }
+            })
+            .collect(),
+    )
+}
+
+/// The outline `fp` with each edge `i` moved in by `w[i] * d`: a pitched roof's top at the run
+/// `d`. `None` once an edge turns over or two cross (past the ridge).
+fn ridge(fp: &[DVec2], w: &[f64], d: f64) -> Option<Vec<DVec2>> {
+    let n = fp.len();
+    let line = |i: usize| {
+        let t = (fp[(i + 1) % n] - fp[i]).normalize_or_zero();
+        (fp[i] + DVec2::new(-t.y, t.x) * (w[i] * d), t)
+    };
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let prev = (i + n - 1) % n;
+        let ((p, t), (q, u)) = (line(prev), line(i));
+        let denom = geom::cross(t, u);
+        if denom.abs() < 1e-9 {
+            // Edges in line meet only where they move alike.
+            if w[i] != w[prev] {
+                return None;
+            }
+            out.push(q);
+            continue;
+        }
+        out.push(p + t * (geom::cross(q - p, u) / denom));
+    }
+    let turned = (0..n).any(|i| (out[(i + 1) % n] - out[i]).dot(line(i).1) <= 1e-6);
+    let crossing = (0..n).any(|i| {
+        ((i + 2)..n).any(|j| {
+            (j + 1) % n != i
+                && geom::segment_intersection(out[i], out[(i + 1) % n], out[j], out[(j + 1) % n])
+                    .is_some()
+        })
+    });
+    (!turned && !crossing).then_some(out)
+}
+
+/// A pitched roof over a mass at about 29°: the sloping edges ([`pitches`]) moved in as far as
+/// they go to the ridge (the straight skeleton's roof for a convex footprint, nearly) or
+/// [`RUN_MAX`], the gable ends standing up from their walls in `gable`. False where the
+/// footprint will not take one; it then gets a flat roof.
+fn pitched(
+    mesh: &mut TriMesh,
+    m: &Mass,
+    edges: &[Option<FaceKind>],
+    gable: u8,
+    size: f64,
+    centre: Vec3,
+) -> bool {
     let fp = &m.footprint;
     let n = fp.len();
-    let fits = |d: f64| geom::inset(fp, d).filter(|p| p.len() == n);
+    let Some(w) = pitches(fp, edges) else {
+        return false;
+    };
+    let fits = |d: f64| ridge(fp, &w, d);
     if fits(0.5).is_none() {
         return false;
     }
-    let (mut lo, mut hi) = (0.5, 30.0);
-    for _ in 0..14 {
-        let mid = (lo + hi) * 0.5;
-        if fits(mid).is_some() {
-            lo = mid;
-        } else {
-            hi = mid;
+    // The run to the ridge, or the longest, the top then a terrace.
+    let (d, top) = if fits(RUN_MAX).is_some() {
+        (RUN_MAX, ROOF_TERRACE)
+    } else {
+        let (mut lo, mut hi) = (0.5, RUN_MAX);
+        for _ in 0..12 {
+            let mid = (lo + hi) * 0.5;
+            if fits(mid).is_some() {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
         }
-    }
-    let d = lo * 0.97;
+        (lo * 0.97, ROOF_TILE)
+    };
     let Some(ridge) = fits(d) else {
         return false;
     };
     let rise = d * 0.55;
     let at = |p: DVec2, h: f64| world(size, p, h) - centre;
-    let face = |mesh: &mut TriMesh, p: [Vec3; 3]| {
-        let mut normal = (p[1] - p[0]).cross(p[2] - p[0]).normalize_or_zero();
-        if normal.y < 0.0 {
-            normal = -normal;
-        }
-        triangle_uv(mesh, p, [[0.0; 2]; 3], normal, ROOF_TILE);
-    };
     for i in 0..n {
         let j = (i + 1) % n;
         let (a, b) = (at(fp[i], m.height), at(fp[j], m.height));
         let (c, e) = (at(ridge[j], m.height + rise), at(ridge[i], m.height + rise));
-        face(mesh, [a, b, c]);
-        face(mesh, [a, c, e]);
+        let (normal, section) = if w[i] == 0.0 {
+            // A gable: the wall carried up, facing out.
+            let t = (fp[j] - fp[i]).normalize_or_zero();
+            (Vec3::new(t.y as f32, 0.0, -t.x as f32), gable)
+        } else {
+            let normal = (b - a).cross(c - a).normalize_or_zero();
+            (normal * normal.y.signum(), ROOF_TILE)
+        };
+        triangle_uv(mesh, [a, b, c], [[0.0; 2]; 3], normal, section);
+        triangle_uv(mesh, [a, c, e], [[0.0; 2]; 3], normal, section);
     }
     for t in geom::triangulate(&ridge) {
-        face(mesh, t.map(|i| at(ridge[i], m.height + rise)));
+        let p = t.map(|i| at(ridge[i], m.height + rise));
+        triangle_uv(mesh, p, [[0.0; 2]; 3], Vec3::Y, top);
     }
     true
 }

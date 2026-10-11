@@ -334,14 +334,19 @@ the water.*
 
 ![The old town's roofs](images/city-plan-roofs.png)
 
-*The old town on both banks from 90 m up: terracotta roofs hipped from every side; beyond it,
-the green, solar and terrace roofs.* A district's share of tiled roofs is its kind's unless its
-style bible sets it (`DistrictSpec::tiled_share`): 85 % in an old town, 90 % in a village, none
-elsewhere. The bible's green-roof check counts the flat roofs only. Each roof rises at about 29°
-from every edge to a ridge, the footprint moved in as far as it goes. That is the straight
-skeleton's roof for a convex footprint, near enough. The tiles are the brick courses tinted
-terracotta. Each lot hips its own roof, so a row's roofs read stepped; continuous ridges along
-a row come with the straight skeleton (#247).
+*The old town on both banks from 90 m up: the terracotta roofs of a row share one ridge along
+the street, stepping where the heights change; beyond it, the green, solar and terrace roofs.*
+A district's share of tiled roofs is its kind's unless its style bible sets it
+(`DistrictSpec::tiled_share`): 85 % in an old town, 90 % in a village, none elsewhere. The
+bible's green-roof check counts the flat roofs only.
+
+Each roof rises at about 29° from its street and court walls to a ridge, those edges moved in
+as far as they go (the straight skeleton's roof for a convex footprint, near enough). A wall
+onto a neighbour (`facades::edge_kinds`), across the main front and at most 18 m long, carries
+a gable instead. So the houses of a row share one ridge, and a house taller than its neighbour
+shows its gable above theirs. A free-standing building is hipped on every side. A roof stops
+rising after an 8 m run (4.4 m up), its top then a terrace. The tiles are the brick courses
+tinted terracotta.
 
 ## The people on foot (D-059's step 6, a proof of concept)
 
