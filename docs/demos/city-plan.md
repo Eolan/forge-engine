@@ -405,6 +405,13 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
 - **dropped kerbs:** each raised pavement slopes down to the paved corner over 1.6 m at both
   ends, its whole width, where people cross at the junction (1 in 12, step-free: #263). The
   open ends showed under the pavement.
+- **squares on one level:** a square lies flush with the raised pavements round it (0.30), its
+  fountain, benches, chess tables, lawn and landmark with it. Round it runs a 1.7 m stone
+  border, level beside a raised pavement and sloping 1 in 12 down to a shared street or a
+  dropped kerb, so its slopes are round it, not inside it (the owner). A skirt below the edge
+  leaves no gap. The squares lay at the blocks' 0.08, a step down from the pavement with no
+  face, and the two pavings' patterns met at a seam (the owner's view `1672.87,…`). Gardens and
+  parks keep 0.08, with the pavement's back face down to them.
 - **street-workout parks:** one in each park of a hectare or more, 14 by 10 m on a rubber
   floor:
   - pull-up bars at three heights, monkey bars, parallel bars, a dip station;

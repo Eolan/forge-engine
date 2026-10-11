@@ -326,6 +326,7 @@ impl PlanScenario {
         let mut tiles = Tiles::new(size);
         let shore = ground_shore(site);
         ground_and_water(&mut tiles, &shore);
+        let levels = PavementLevels::new(plan);
         for block in &plan.blocks {
             let section = match block.use_ {
                 BlockUse::Built => GARDEN,
@@ -334,14 +335,18 @@ impl PlanScenario {
                 // A quay's face holds its river: the land under it is the ground's paving.
                 BlockUse::Quay => continue,
             };
-            tiles.flat(&block.polygon, 0.08, section, false);
+            if block.use_ == BlockUse::Square {
+                square(&mut tiles, &levels, &block.polygon);
+            } else {
+                tiles.flat(&block.polygon, 0.08, section, false);
+            }
             // A large square (1.5 ha or more): a lawn in its middle, 14 m inside its building
             // lines, its paved border under the trees and the benches.
             if block.use_ == BlockUse::Square
                 && block.area >= 15_000.0
                 && let Some(middle) = geom::inset(&block.buildable, 14.0)
             {
-                tiles.flat(&middle, 0.10, PARK, false);
+                tiles.flat(&middle, SQUARE_LEVEL + 0.02, PARK, false);
             }
         }
         // The quays' land as lawns, cell by cell (their faces hold water), under the trees.
@@ -617,7 +622,13 @@ impl PlanScenario {
             kit_meshes.push(mesh);
             let id = (kit_meshes.len() - 1) as u32;
             let turn = glam::Quat::from_rotation_y((-dir.y).atan2(dir.x) as f32);
-            let at = Mat4::from_rotation_translation(turn, world(size, centre, 0.16));
+            // On a square, on its level; a quay's crane on the ground.
+            let base = if b.use_ == BlockUse::Square {
+                SQUARE_LEVEL + 0.08
+            } else {
+                0.16
+            };
+            let at = Mat4::from_rotation_translation(turn, world(size, centre, base));
             kit_instances.push((id, at, group));
             hall_squares.push(i);
         }
@@ -643,7 +654,7 @@ impl PlanScenario {
                         let turn = (face.x as f32).atan2(face.y as f32);
                         Mat4::from_rotation_translation(
                             glam::Quat::from_rotation_y(turn),
-                            world(size, p, 0.16),
+                            world(size, p, SQUARE_LEVEL + 0.08),
                         )
                     })
             })
@@ -684,7 +695,10 @@ impl PlanScenario {
             for p in spots {
                 let face = (middle - p).normalize_or_zero();
                 let turn = glam::Quat::from_rotation_y((face.x as f32).atan2(face.y as f32));
-                chess.push(Mat4::from_rotation_translation(turn, world(size, p, 0.08)));
+                chess.push(Mat4::from_rotation_translation(
+                    turn,
+                    world(size, p, SQUARE_LEVEL),
+                ));
             }
         }
         if !chess.is_empty() {
@@ -714,7 +728,7 @@ impl PlanScenario {
                 Mat4::from_scale_rotation_translation(
                     Vec3::splat(scale),
                     glam::Quat::IDENTITY,
-                    world(size, b.centre, 0.16),
+                    world(size, b.centre, SQUARE_LEVEL + 0.08),
                 )
             })
             .collect();
@@ -2982,6 +2996,20 @@ fn pavements(tiles: &mut Tiles, plan: &CityPlan) {
                     normal,
                     PAVING,
                 );
+                // Its back, from the blocks' ground up to the slope.
+                let away = Vec3::new(n.x as f32, 0.0, n.y as f32);
+                triangle(
+                    &mut tile.ground,
+                    [p(lo_out, 0.08), p(hi_out, 0.08), p(hi_out, 0.30)],
+                    away,
+                    PAVING,
+                );
+                triangle(
+                    &mut tile.ground,
+                    [p(lo_out, 0.08), p(hi_out, 0.30), p(lo_out, base)],
+                    away,
+                    PAVING,
+                );
             }
             let outer = offset_line(&line, side * half);
             let inner = offset_line(&line, side * (half - pavement));
@@ -2991,6 +3019,30 @@ fn pavements(tiles: &mut Tiles, plan: &CityPlan) {
                 (&inner, &outer)
             };
             strip(tiles, left, right, 0.30, PAVING);
+            // Its back, from the blocks' ground (0.08) up to the pavement, facing away from the
+            // road: by a square, a park or a gap between buildings the pavement's edge was open,
+            // a dark seam (the owner's view `1672.87,…`).
+            for w in outer.windows(2) {
+                let tile = tiles.at(w[0]);
+                let centre = tile.centre;
+                let (a, b) = (w[0], w[1]);
+                let t = (b - a).normalize_or_zero();
+                let away = DVec2::new(-t.y, t.x) * side;
+                let normal = Vec3::new(away.x as f32, 0.0, away.y as f32);
+                let p = |q: DVec2, h: f64| world(size, q, h) - centre;
+                triangle(
+                    &mut tile.ground,
+                    [p(a, 0.08), p(b, 0.08), p(b, 0.30)],
+                    normal,
+                    PAVING,
+                );
+                triangle(
+                    &mut tile.ground,
+                    [p(a, 0.08), p(b, 0.30), p(a, 0.30)],
+                    normal,
+                    PAVING,
+                );
+            }
             // The kerb: from the carriageway's top up to the pavement's, facing the road.
             for w in inner.windows(2) {
                 let tile = tiles.at(w[0]);
@@ -3017,6 +3069,168 @@ fn pavements(tiles: &mut Tiles, plan: &CityPlan) {
     }
     for ring in corners(plan, &widest) {
         tiles.flat(&ring, CORNER_LEVEL, PAVING, false);
+    }
+}
+
+/// The squares' level, metres: flush with the raised pavements round them (the owner: the
+/// whole place on one level, its slopes round it, not inside). They lay at the blocks' 0.08,
+/// a step down from the pavements with no face, and the two pavings' patterns met at a seam.
+const SQUARE_LEVEL: f64 = 0.30;
+/// The stone border round a square, metres: level by a raised pavement, else sloping 1 in 12
+/// from the street's level up to the square's (14 cm over 1.7 m).
+const SQUARE_BORDER: f64 = 1.7;
+
+/// The raised pavements' surface level at a point of the plan, from the avenues' profiles and
+/// their dropped kerbs, as [`pavements`] draws them.
+struct PavementLevels<'a> {
+    plan: &'a CityPlan,
+    widest: Vec<f64>,
+    grid: geom::PointGrid,
+}
+
+impl<'a> PavementLevels<'a> {
+    fn new(plan: &'a CityPlan) -> Self {
+        let mut grid = geom::PointGrid::new(plan.size, 50.0);
+        for (k, e) in plan.roads.edges.iter().enumerate() {
+            if e.profile.pavement() > 0.0 {
+                for p in geom::resample(&e.points, 8.0) {
+                    grid.insert(p, k as u32);
+                }
+            }
+        }
+        Self {
+            plan,
+            widest: widest_at(plan),
+            grid,
+        }
+    }
+
+    /// The level at `p`: a pavement's (0.30 raised, down its dropped kerbs to the corners'
+    /// level), or `None` off every raised pavement.
+    fn at(&self, p: DVec2) -> Option<f64> {
+        let mut best: Option<f64> = None;
+        self.grid.for_each_within(p, 30.0, |_, k| {
+            let e = &self.plan.roads.edges[k as usize];
+            let (half, pave) = (e.profile.width() * 0.5, e.profile.pavement());
+            // The nearest point of its centreline: how far along and how far off.
+            let (mut d, mut s, mut walked) = (f64::MAX, 0.0, 0.0);
+            for w in e.points.windows(2) {
+                let t = geom::closest_on_segment(p, w[0], w[1]);
+                let q = w[0] + (w[1] - w[0]) * t;
+                if q.distance(p) < d {
+                    d = q.distance(p);
+                    s = walked + w[0].distance(w[1]) * t;
+                }
+                walked += w[0].distance(w[1]);
+            }
+            if d < half - pave - 0.05 || d > half + 0.05 {
+                return;
+            }
+            let (start, end) = (
+                self.widest[e.a as usize] + 1.0,
+                walked - self.widest[e.b as usize] - 1.0,
+            );
+            if end - start < 4.0 + 2.0 * RAMP {
+                return;
+            }
+            let level = if s <= start || s >= end {
+                CORNER_LEVEL
+            } else {
+                let up = ((s - start).min(end - s) / RAMP).min(1.0);
+                CORNER_LEVEL + (0.30 - CORNER_LEVEL) * up
+            };
+            best = Some(best.map_or(level, |b: f64| b.max(level)));
+        });
+        best
+    }
+}
+
+/// A square on [`SQUARE_LEVEL`]: its middle flat, and round it a stone border of
+/// [`SQUARE_BORDER`] from the level outside each point of its edge (a pavement's, else a
+/// street's 0.16) up to the square's, with a skirt below its edge so no gap shows.
+fn square(tiles: &mut Tiles, levels: &PavementLevels, polygon: &[DVec2]) {
+    let mut edge = polygon.to_vec();
+    if geom::signed_area(&edge) < 0.0 {
+        edge.reverse();
+    }
+    // Points every 4 m or less along the edge, so the border follows the dropped kerbs.
+    let mut closed = edge.clone();
+    closed.push(edge[0]);
+    let mut ring = geom::resample(&closed, 4.0);
+    ring.pop();
+    ring.dedup_by(|a, b| a.distance(*b) < 0.05);
+    let n = ring.len();
+    let size = tiles.size;
+    let inner = geom::inset(&ring, SQUARE_BORDER).filter(|q| q.len() == n);
+    // Outside each point: the mean of its two edges' outward normals (right of a positive ring).
+    let out = |i: usize| {
+        let (a, b, c) = (ring[(i + n - 1) % n], ring[i], ring[(i + 1) % n]);
+        let normal = |d: DVec2| {
+            let t = d.normalize_or_zero();
+            DVec2::new(t.y, -t.x)
+        };
+        (normal(b - a) + normal(c - b)).normalize_or_zero()
+    };
+    let low: Vec<f64> = (0..n)
+        .map(|i| {
+            levels
+                .at(ring[i] + out(i) * 1.0)
+                .unwrap_or(0.16)
+                .min(SQUARE_LEVEL)
+        })
+        .collect();
+    let Some(inner) = inner else {
+        tiles.flat(&ring, SQUARE_LEVEL, PAVING, false);
+        skirt(tiles, &ring, &vec![SQUARE_LEVEL; n], size);
+        return;
+    };
+    tiles.flat(&inner, SQUARE_LEVEL, PAVING, false);
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let tile = tiles.at(ring[i]);
+        let centre = tile.centre;
+        let p = |q: DVec2, h: f64| world(size, q, h) - centre;
+        let quad = [
+            p(ring[i], low[i]),
+            p(ring[j], low[j]),
+            p(inner[j], SQUARE_LEVEL),
+            p(inner[i], SQUARE_LEVEL),
+        ];
+        for tri in [[0, 1, 2], [0, 2, 3]] {
+            let t = tri.map(|k| quad[k]);
+            let mut up = (t[1] - t[0]).cross(t[2] - t[0]).normalize_or_zero();
+            if up.y < 0.0 {
+                up = -up;
+            }
+            triangle(&mut tile.ground, t, up, QUAY);
+        }
+    }
+    skirt(tiles, &ring, &low, size);
+}
+
+/// A face down from each point of a positive ring's edge at `top[i]` to the ground, facing out.
+fn skirt(tiles: &mut Tiles, ring: &[DVec2], top: &[f64], size: f64) {
+    let n = ring.len();
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let (a, b) = (ring[i], ring[j]);
+        let t = (b - a).normalize_or_zero();
+        let out = Vec3::new(t.y as f32, 0.0, -t.x as f32);
+        let tile = tiles.at(a);
+        let centre = tile.centre;
+        let p = |q: DVec2, h: f64| world(size, q, h) - centre;
+        triangle(
+            &mut tile.ground,
+            [p(a, 0.0), p(b, 0.0), p(b, top[j])],
+            out,
+            QUAY,
+        );
+        triangle(
+            &mut tile.ground,
+            [p(a, 0.0), p(b, top[j]), p(a, top[i])],
+            out,
+            QUAY,
+        );
     }
 }
 
