@@ -1866,7 +1866,8 @@ impl Scenario for PlanScenario {
             materials.textures.add(&shop_normal)?,
             materials.textures.add(&shop_lights)?,
         );
-        // Lit windows of about 12 cd/m² (behind curtains, seen from the street). The shading is per unit of the frame's reference
+        // Lit windows of about 5 cd/m² on average (behind curtains, seen from the street: 12 blew
+        // them out white, the owner found the lights too strong and all alike). The shading is per unit of the frame's reference
         // illuminance (D-046: the sun's 128 klux by day, the Moon's tenths of a lux at night), so
         // an emissive of L·π / reference gives L. A stopgap for a run held at one time of day
         // (`--time-of-day`): step 5's lights give the renderer emissive light in absolute units.
@@ -1878,7 +1879,8 @@ impl Scenario for PlanScenario {
             }
             forge_render::night::NightLights::new(&celestial.at(t, sun), sun).reference
         });
-        let glow = 12.0 * std::f32::consts::PI / reference;
+        let unit = std::f32::consts::PI / reference;
+        let glow = 5.0 * unit;
         // The textured boxes beyond the kit's reach glow at 15 % of it. Their windows light as
         // the kit's do, but at the horizon facade stacks on facade with no dark roof or street
         // between, and the far city read as a band of white (the owner, 2026-10-11). A stopgap
@@ -1972,13 +1974,18 @@ impl Scenario for PlanScenario {
             ([0.22, 0.38, 0.52], [0.14, 0.19, 0.32], [0.20, 0.20, 0.21]),
             ([0.76, 0.73, 0.66], [0.78, 0.70, 0.55], [0.20, 0.20, 0.21]),
         ];
-        let glass = |lit: bool| RenderLayer {
-            emissive: if lit {
-                // The same room as the facade texture's lit windows, warm.
-                [glow, glow * 0.78, glow * 0.5]
-            } else {
-                [0.0; 3]
-            },
+        // Each lit building's light: its luminance (cd/m²) and colour. People choose dim, diffuse
+        // light of different colours (the owner): a dim warm lamp, a brighter warm room, a
+        // neutral one, a television's blue. Until the residents light their own windows by
+        // what they do (D-060's step 3).
+        const LIT: [(f32, [f32; 3]); 4] = [
+            (3.0, [1.0, 0.68, 0.40]),
+            (8.0, [1.0, 0.80, 0.55]),
+            (6.0, [1.0, 0.92, 0.80]),
+            (2.5, [0.70, 0.82, 1.0]),
+        ];
+        let glass = |light: Option<(f32, [f32; 3])>| RenderLayer {
+            emissive: light.map_or([0.0; 3], |(l, c)| c.map(|v| v * l * unit)),
             reflectance: 0.06,
             // Each window its own mix of dark glass and the net curtains behind it, from bare
             // to drawn (the owner, 2026-10-11: the windows read dark; in France many homes keep
@@ -1994,7 +2001,10 @@ impl Scenario for PlanScenario {
                     (format!("{group} render"), render([0.94, 0.88, 0.76])),
                     (format!("{group} stone"), stone),
                     (format!("{group} frame"), colour(frame, 40.0, 0.1)),
-                    (format!("{group} glass"), glass(k % 2 == 1)),
+                    (
+                        format!("{group} glass"),
+                        glass((k % 2 == 1).then_some(LIT[k / 2])),
+                    ),
                     (format!("{group} shutter"), colour(shutter, 14.0, 0.05)),
                     (
                         format!("{group} iron"),
@@ -2058,7 +2068,7 @@ impl Scenario for PlanScenario {
                     "plan crane frame".into(),
                     colour([0.12, 0.12, 0.13], 40.0, 0.15),
                 ),
-                ("plan crane glass".into(), glass(false)),
+                ("plan crane glass".into(), glass(None)),
                 (
                     "plan crane paint".into(),
                     colour([0.55, 0.11, 0.07], 40.0, 0.2),
@@ -2118,7 +2128,7 @@ impl Scenario for PlanScenario {
                         format!("{group} body"),
                         colour([0.86, 0.86, 0.84], 60.0, 0.25),
                     ),
-                    (format!("{group} glass"), glass(false)),
+                    (format!("{group} glass"), glass(None)),
                     (format!("{group} stripe"), colour(stripe, 60.0, 0.25)),
                     (
                         format!("{group} running gear"),
@@ -2136,7 +2146,7 @@ impl Scenario for PlanScenario {
                     "plan boat hull".into(),
                     colour([0.88, 0.88, 0.86], 80.0, 0.3),
                 ),
-                ("plan boat glass".into(), glass(false)),
+                ("plan boat glass".into(), glass(None)),
                 (
                     "plan boat band".into(),
                     colour([0.05, 0.42, 0.45], 60.0, 0.25),
@@ -2221,8 +2231,9 @@ impl Scenario for PlanScenario {
             ],
         );
         let tree_rows = [materials.of("plan-tree-a"), materials.of("plan-tree-b")];
-        // Lamp heads of about 3 000 cd/m², shielded LEDs at 2 700 K (the style bible's lighting).
-        let head = 3000.0 * std::f32::consts::PI / reference;
+        // Lamp heads of about 1 000 cd/m²: shielded LEDs at 2 700 K behind a frosted diffuser (the
+        // style bible's lighting). At 3 000 their halos read too strong (the owner).
+        let head = 1000.0 * unit;
         materials.add_rows(
             "plan-lamp",
             vec![

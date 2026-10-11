@@ -2579,10 +2579,8 @@ impl Demo for Gallery {
         let dlaa_on = self.dlaa_on;
         if let Some((dlss, display)) = self.dlaa.as_mut().filter(|_| dlaa_on) {
             // DLAA (D-045): the jittered frame, its depth and motion to DLSS, its HDR image through
-            // the tone curve with bloom.
-            let bloom = self
-                .bloom_on
-                .then(|| self.bloom.draw(&mut frame.graph, taa_frame.color, extent));
+            // the tone curve with bloom, drawn from DLAA's resolved image: from the jittered frame a
+            // light smaller than a pixel made its halo pulse (the owner saw the lamps shimmer).
             let upscaled = dlss.upscale(
                 &mut frame.graph,
                 ctx.frames_rendered,
@@ -2596,6 +2594,9 @@ impl Demo for Gallery {
                 motion,
                 exposure,
             )?;
+            let bloom = self
+                .bloom_on
+                .then(|| self.bloom.draw(&mut frame.graph, upscaled, extent));
             display.draw(
                 &mut frame.graph,
                 upscaled,
@@ -2606,18 +2607,25 @@ impl Demo for Gallery {
             );
             return Ok(());
         }
-        let bloom = self
-            .bloom_on
-            .then(|| self.bloom.draw(&mut frame.graph, taa_frame.color, extent));
-        let history = self.taa.resolve(
+        // The bloom from the resolved history, not the jittered frame (a light smaller than a
+        // pixel made its halo pulse: the owner saw the lamps shimmer at night).
+        let history = self.taa.resolve_history(
             &mut frame.graph,
             &taa_frame,
             targets.depth,
             motion,
+            reactive.filter(|_| !self.args.no_reactive),
+        );
+        let bloom = self
+            .bloom_on
+            .then(|| self.bloom.draw(&mut frame.graph, history, extent));
+        self.taa.show(
+            &mut frame.graph,
+            history,
+            extent,
             frame.target,
             self.tonemap,
             bloom,
-            reactive.filter(|_| !self.args.no_reactive),
         );
         if let Some(h) = hasher {
             use forge_render::debug_hash::HashKind;

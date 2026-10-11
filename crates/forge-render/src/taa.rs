@@ -598,15 +598,45 @@ impl Taa {
         bloom: Option<ImageHandle>,
         reactive: Option<ImageHandle>,
     ) -> ImageHandle {
-        use vk::PipelineStageFlags2 as S;
-        let history_written = self.resolve_pass(
+        let history = self.resolve_history(graph, frame, depth, motion, reactive);
+        self.show(graph, history, frame.extent, output, curve, bloom);
+        history
+    }
+
+    /// The first half of [`Taa::resolve`]: this frame into the next history, returned. A bloom
+    /// chain drawn from that history (rather than from the jittered frame) holds still: from
+    /// the frame, a light smaller than a pixel covered a different share of it each frame, and
+    /// its halo pulsed (the owner saw the lamps shimmer at night).
+    pub fn resolve_history<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        frame: &TaaFrame,
+        depth: ImageHandle,
+        motion: ImageHandle,
+        reactive: Option<ImageHandle>,
+    ) -> ImageHandle {
+        self.resolve_pass(
             graph,
             "temporal/TAA resolve",
             frame,
             depth,
             motion,
             reactive,
-        );
+        )
+    }
+
+    /// The second half of [`Taa::resolve`]: `history` (of `extent`) shown in `output` through
+    /// `curve`, sharpened with [`Taa::sharpen`], `bloom` blended in.
+    pub fn show<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        history_written: ImageHandle,
+        extent: vk::Extent2D,
+        output: ImageHandle,
+        curve: Tonemap,
+        bloom: Option<ImageHandle>,
+    ) {
+        use vk::PipelineStageFlags2 as S;
         let encoding = OutputPush::new(
             OutputEncoding::for_format(self.output_format),
             &self.hdr,
@@ -619,7 +649,6 @@ impl Taa {
         );
         let bloom_strength = self.bloom_strength;
         let tables = self.tables.push();
-        let extent = frame.extent;
         // Unsharpened (or with TAA off), the same pass shows the history as it is.
         let sharpen = self.sharpen.filter(|_| self.enabled);
         let sharpness = sharpen.map_or(0.0, |stops| (-stops).exp2());
@@ -656,7 +685,6 @@ impl Taa {
             );
             Ok(())
         });
-        history_written
     }
 }
 
