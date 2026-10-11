@@ -326,7 +326,8 @@ slivers included.
 nearest their anchor becomes one. A crane gets none: it stands on a quay. Each then stands on the nearest square of 0.15 ha or more
 within 160 m (`Landmark::square`). A terraced hall without one takes the nearest quay within
 250 m. A gantry crane looks for a quay first, the nearest within 600 m, and a square after.
-Four have models (`forge_geom::landmarks`):
+A weir bridge needs no block: it spans its river at its anchor. Five have models
+(`forge_geom::landmarks`):
 - **the market hall,** the iron and glass halls the Midi's old towns built on their squares:
   - a stone plinth, iron columns every bay on stone bases, girders at the eaves;
   - a pitched glass roof on iron rafters, with a glazed lantern along the ridge;
@@ -338,7 +339,19 @@ Four have models (`forge_geom::landmarks`):
   over the nearest water with its stays, the trolley, its cab and its hook. It is drawn only
   where it finds a site;
 - **the pavilion,** a belvedere's domed rotunda on a stepped octagonal platform, eight
-  columns, a green copper dome and its lantern, larger on larger squares.
+  columns, a green copper dome and its lantern, larger on larger squares;
+- **the weir bridge,** square to the flow where the river passes nearest its anchor:
+  - a stepped stone weir from bank to bank, its crest just above the water;
+  - stone piers every 10 m or so carrying a railed footbridge 1.2 m up, a ramp down to each
+    bank;
+  - a sluice gate across each bay upstream, and over each pier a steel portal with its
+    gate's hoist.
+
+  The example has one upstream of the old town's bridge.
+
+![The weir bridge](images/city-plan-weir.png)
+
+*The example's weir bridge seen from downstream, the old town on the left bank.*
 
 Each stands inside its square's outer tree row (the inner row and, on a quay, the trees within
 45 m give way), along the square's longest side, in its own material group, in place of the

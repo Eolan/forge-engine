@@ -1,6 +1,7 @@
 //! Landmark buildings as part programs: a covered market hall of iron and glass, the
 //! kind the old towns of the Midi built on their squares in the nineteenth century; a long, low
-//! hall whose roof steps down in public terraces; a shipyard gantry crane kept. Every model
+//! hall whose roof steps down in public terraces; a shipyard gantry crane kept; a belvedere's
+//! pavilion; a weir with its footbridge and sluice-gate portals. Every model
 //! uses the kit's section layout ([`crate::modules`]), so the kit's material groups dress it, and
 //! stands on `y = 0` round the origin, its length along `x`.
 
@@ -284,26 +285,6 @@ pub fn terraced_hall(length: f32, width: f32) -> TriMesh {
 pub fn gantry_crane(span: f32, height: f32) -> TriMesh {
     let mut m = TriMesh::default();
     let hs = span * 0.5;
-    let bar = |m: &mut TriMesh, a: Vec3, b: Vec3, w: f32, section: u8| {
-        let d = b - a;
-        let r = glam::Quat::from_rotation_arc(Vec3::Y, d.normalize());
-        let mut part = TriMesh::default();
-        cuboid(
-            &mut part,
-            Vec3::new(-w, -d.length() * 0.5, -w),
-            Vec3::new(w, d.length() * 0.5, w),
-            section,
-            ALL,
-        );
-        let base = m.positions.len() as u32;
-        let c = (a + b) * 0.5;
-        for (p, n) in part.positions.iter().zip(&part.normals) {
-            m.positions.push((c + r * Vec3::from(*p)).to_array());
-            m.normals.push((r * Vec3::from(*n)).to_array());
-        }
-        m.indices.extend(part.indices.iter().map(|i| base + i));
-        m.sections.extend(part.sections);
-    };
     let girder = height;
     for z in [-hs, hs] {
         // The bogie on its rail, and the leg's A-frame up to the girder.
@@ -477,6 +458,179 @@ pub fn pavilion(radius: f32) -> TriMesh {
     m
 }
 
+/// A weir bridge `span` metres from bank to bank along `x`, the river flowing along `+z`, its
+/// water and banks at `y = 0`: a stepped stone weir across the river, its crest just above the
+/// water and a lower step downstream; stone piers every bay or so of 10 m carrying a footbridge
+/// deck 1.2 m up, reached by a ramp from each bank; a sluice gate across each bay upstream; and
+/// over each pier a steel portal with its gate's hoist.
+pub fn weir_bridge(span: f32) -> TriMesh {
+    let mut m = TriMesh::default();
+    let v = Vec3::new;
+    let hs = span * 0.5;
+    let (ramp, deck, slab, hw) = (8.0_f32.min(span * 0.2), 1.2, 0.35, 1.8);
+    let (d0, d1) = (-hs + ramp, hs - ramp);
+    // The weir: its crest, then a lower step downstream.
+    cuboid(
+        &mut m,
+        v(-hs, 0.0, -2.2),
+        v(hs, 0.45, 0.8),
+        STONE,
+        ALL & !NEG_Y,
+    );
+    cuboid(
+        &mut m,
+        v(-hs, 0.0, 0.8),
+        v(hs, 0.2, 3.4),
+        STONE,
+        ALL & !NEG_Y & !NEG_Z,
+    );
+    // The deck, and a ramp down to each bank with its sides.
+    cuboid(&mut m, v(d0, deck - slab, -hw), v(d1, deck, hw), STONE, ALL);
+    for (x0, x1, y0, y1) in [(-hs, d0, 0.16, deck), (d1, hs, deck, 0.16)] {
+        quad(
+            &mut m,
+            [v(x0, y0, hw), v(x1, y1, hw), v(x1, y1, -hw), v(x0, y0, -hw)],
+            STONE,
+        );
+        quad(
+            &mut m,
+            [v(x0, 0.0, hw), v(x1, 0.0, hw), v(x1, y1, hw), v(x0, y0, hw)],
+            STONE,
+        );
+        quad(
+            &mut m,
+            [
+                v(x1, 0.0, -hw),
+                v(x0, 0.0, -hw),
+                v(x0, y0, -hw),
+                v(x1, y1, -hw),
+            ],
+            STONE,
+        );
+        // The railings down the ramp.
+        for z in [-hw + 0.1, hw - 0.1] {
+            bar(
+                &mut m,
+                v(x0, y0 + 1.05, z),
+                v(x1, y1 + 1.05, z),
+                0.04,
+                METAL,
+            );
+        }
+    }
+    // The piers, the gates between them and the portals over them.
+    let bays = ((d1 - d0) / 10.0).round().max(1.0) as u32;
+    let bay = (d1 - d0) / bays as f32;
+    for k in 0..=bays {
+        let x = d0 + bay * k as f32;
+        cuboid(
+            &mut m,
+            v(x - 0.8, 0.0, -3.0),
+            v(x + 0.8, deck - slab, 3.6),
+            STONE,
+            ALL & !NEG_Y,
+        );
+        // The pier's nose upstream, cutting the water.
+        quad(
+            &mut m,
+            [
+                v(x - 0.8, deck, -3.0),
+                v(x, deck, -4.2),
+                v(x, 0.0, -4.2),
+                v(x - 0.8, 0.0, -3.0),
+            ],
+            STONE,
+        );
+        quad(
+            &mut m,
+            [
+                v(x, deck, -4.2),
+                v(x + 0.8, deck, -3.0),
+                v(x + 0.8, 0.0, -3.0),
+                v(x, 0.0, -4.2),
+            ],
+            STONE,
+        );
+        let top = 6.4;
+        for z in [-hw - 0.4, hw + 0.4] {
+            cuboid(
+                &mut m,
+                v(x - 0.25, deck, z - 0.25),
+                v(x + 0.25, top, z + 0.25),
+                METAL,
+                ALL & !NEG_Y,
+            );
+        }
+        cuboid(
+            &mut m,
+            v(x - 0.3, top, -hw - 0.7),
+            v(x + 0.3, top + 0.6, hw + 0.7),
+            METAL,
+            ALL,
+        );
+        cuboid(
+            &mut m,
+            v(x - 0.6, top + 0.6, -0.7),
+            v(x + 0.6, top + 1.5, 0.7),
+            METAL,
+            ALL & !NEG_Y,
+        );
+        if k < bays {
+            cuboid(
+                &mut m,
+                v(x + 0.8, 0.0, -2.6),
+                v(x + bay - 0.8, 0.9, -2.45),
+                METAL,
+                ALL & !NEG_Y,
+            );
+        }
+    }
+    // The railings along the deck: posts every 2 m and the handrail.
+    for z in [-hw + 0.1, hw - 0.1] {
+        cuboid(
+            &mut m,
+            v(d0, deck + 1.0, z - 0.05),
+            v(d1, deck + 1.08, z + 0.05),
+            METAL,
+            ALL,
+        );
+        let posts = ((d1 - d0) / 2.0).round().max(1.0) as u32;
+        for k in 0..=posts {
+            let x = d0 + (d1 - d0) * k as f32 / posts as f32;
+            cuboid(
+                &mut m,
+                v(x - 0.04, deck, z - 0.04),
+                v(x + 0.04, deck + 1.0, z + 0.04),
+                METAL,
+                ALL & !NEG_Y & !POS_Y,
+            );
+        }
+    }
+    m
+}
+
+/// A square bar `2 w` thick from `a` to `b`.
+fn bar(m: &mut TriMesh, a: Vec3, b: Vec3, w: f32, section: u8) {
+    let d = b - a;
+    let r = glam::Quat::from_rotation_arc(Vec3::Y, d.normalize());
+    let mut part = TriMesh::default();
+    cuboid(
+        &mut part,
+        Vec3::new(-w, -d.length() * 0.5, -w),
+        Vec3::new(w, d.length() * 0.5, w),
+        section,
+        ALL,
+    );
+    let base = m.positions.len() as u32;
+    let c = (a + b) * 0.5;
+    for (p, n) in part.positions.iter().zip(&part.normals) {
+        m.positions.push((c + r * Vec3::from(*p)).to_array());
+        m.normals.push((r * Vec3::from(*n)).to_array());
+    }
+    m.indices.extend(part.indices.iter().map(|i| base + i));
+    m.sections.extend(part.sections);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -488,6 +642,7 @@ mod tests {
             (terraced_hall(60.0, 24.0), Vec3::new(30.5, 0.0, 12.5), 20.0),
             (gantry_crane(30.0, 32.0), Vec3::new(28.0, 0.0, 17.5), 47.0),
             (pavilion(5.0), Vec3::new(6.3, 0.0, 6.3), 11.0),
+            (weir_bridge(70.0), Vec3::new(35.1, 0.0, 4.2), 8.0),
         ] {
             assert!(m.triangle_count() > 100);
             assert!(m.sections.iter().all(|&s| s < SECTIONS));

@@ -161,6 +161,20 @@ fn world(size: f64, p: DVec2, height: f64) -> Vec3 {
     )
 }
 
+/// The point of the site's rivers nearest `p`, the river's direction there and its width.
+fn river_crossing(site: &Site, p: DVec2) -> Option<(DVec2, DVec2, f64)> {
+    site.rivers
+        .iter()
+        .filter_map(|r| {
+            let line = geom::resample(&r.centreline, 5.0);
+            let n = line.len();
+            let i = (0..n).min_by(|&a, &b| line[a].distance(p).total_cmp(&line[b].distance(p)))?;
+            let along = (line[(i + 1).min(n - 1)] - line[i.saturating_sub(1)]).normalize_or_zero();
+            (along != DVec2::ZERO).then_some((line[i], along, r.width))
+        })
+        .min_by(|a, b| a.0.distance(p).total_cmp(&b.0.distance(p)))
+}
+
 /// A flat colour row.
 fn colour(rgb: [f32; 3], power: f32, specular: f32) -> RenderLayer {
     RenderLayer {
@@ -388,6 +402,19 @@ impl PlanScenario {
         let mut hall_squares = Vec::new();
         for l in &plan.landmarks {
             use forge_procgen::city::LandmarkKind;
+            // A weir bridge across the river nearest its anchor, square to the flow, landing on
+            // both banks.
+            if l.kind == LandmarkKind::WeirBridge {
+                if let Some((at, along, width)) = river_crossing(site, l.pos) {
+                    kit_meshes.push(forge_geom::landmarks::weir_bridge((width + 18.0) as f32));
+                    let id = (kit_meshes.len() - 1) as u32;
+                    let across = DVec2::new(-along.y, along.x);
+                    let turn = glam::Quat::from_rotation_y((-across.y).atan2(across.x) as f32);
+                    let at = Mat4::from_rotation_translation(turn, world(size, at, 0.04));
+                    kit_instances.push((id, at, HALL_GROUP));
+                }
+                continue;
+            }
             let Some(i) = l.square else {
                 continue;
             };
@@ -446,7 +473,7 @@ impl PlanScenario {
                     HALL_GROUP,
                     axis,
                 ),
-                LandmarkKind::Other => continue,
+                LandmarkKind::WeirBridge | LandmarkKind::Other => continue,
             };
             kit_meshes.push(mesh);
             let id = (kit_meshes.len() - 1) as u32;

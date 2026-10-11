@@ -183,6 +183,12 @@ pub fn params(size: f64) -> CityParams {
                 anchor: at(0.84, 0.70),
                 kind: LandmarkKind::TerracedHall,
             },
+            // On the river upstream of the old town's bridge (the river's t = 0.43).
+            LandmarkSpec {
+                name: "weir bridge".into(),
+                anchor: at(0.37, 0.516),
+                kind: LandmarkKind::WeirBridge,
+            },
         ],
         park_reach: 300.0,
         park_min_area: 10_000.0,

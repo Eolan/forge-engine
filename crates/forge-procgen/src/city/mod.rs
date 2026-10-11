@@ -339,6 +339,9 @@ pub enum LandmarkKind {
     GantryCrane,
     /// A belvedere's domed pavilion, open on every side to the view.
     Pavilion,
+    /// A weir across a river with a footbridge over it, its sluice gates' portals standing
+    /// over the piers. It spans the river at its anchor and needs no block.
+    WeirBridge,
     /// Anything else: placed, not drawn yet.
     #[default]
     Other,
@@ -360,13 +363,14 @@ pub struct LandmarkSpec {
 pub struct Landmark {
     /// Its name.
     pub name: String,
-    /// Where it stands.
+    /// Where it stands: the main-road node nearest its anchor, or the anchor itself for a weir
+    /// bridge.
     pub pos: DVec2,
     /// What it is.
     pub kind: LandmarkKind,
     /// The block it stands on (an index into the plan's blocks): the nearest square of 0.15 ha
-    /// or more within 160 m of its anchor; for a waterside landmark (the terraced hall, the
-    /// crane) without one, the nearest quay within 250 m.
+    /// or more within 160 m of its anchor; for a terraced hall without one, the nearest quay
+    /// within 250 m; for a crane, the nearest quay within 600 m first. None for a weir bridge.
     pub square: Option<usize>,
 }
 
@@ -548,7 +552,10 @@ fn landmark_site(blocks: &[Block], l: &LandmarkSpec) -> Option<usize> {
             .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)))
             .map(|(_, i)| i)
     };
-    // A crane stands on a quay, the nearest within 600 m.
+    // A weir bridge spans its river; a crane stands on a quay, the nearest within 600 m.
+    if l.kind == LandmarkKind::WeirBridge {
+        return None;
+    }
     if l.kind == LandmarkKind::GantryCrane {
         return nearest(BlockUse::Quay, 2000.0, 600.0)
             .or_else(|| nearest(BlockUse::Square, 1500.0, 160.0));
@@ -658,7 +665,7 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
     );
     // Squares at the built districts' centres and the landmarks, and the old towns' small ones.
     // A district's square at most 1 ha; a landmark's 0.15–3.5 ha (a hall needs room). A crane
-    // stands on a quay and gets none.
+    // (on a quay) and a weir bridge (across its river) get none.
     let anchors: Vec<(DVec2, (f64, f64))> = params
         .districts
         .iter()
@@ -668,7 +675,7 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
             params
                 .landmarks
                 .iter()
-                .filter(|l| l.kind != LandmarkKind::GantryCrane)
+                .filter(|l| !matches!(l.kind, LandmarkKind::GantryCrane | LandmarkKind::WeirBridge))
                 .map(|l| (l.anchor, (1_500.0, 35_000.0))),
         )
         .collect();
@@ -707,7 +714,11 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
         .iter()
         .map(|l| Landmark {
             name: l.name.clone(),
-            pos: transit::nearest_main_node(&roads, l.anchor).unwrap_or(l.anchor),
+            // A weir bridge spans its river at its anchor, off the roads.
+            pos: match l.kind {
+                LandmarkKind::WeirBridge => l.anchor,
+                _ => transit::nearest_main_node(&roads, l.anchor).unwrap_or(l.anchor),
+            },
             kind: l.kind,
             square: landmark_site(&blocks, l),
         })
