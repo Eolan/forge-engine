@@ -3976,3 +3976,58 @@ Each note's city-specific appendix stays in the sandbox.
 *(research: assets-and-licences.md, population-simulation.md, procedural-content.md,
 city-generation.md §7–§19, people.md, transit-and-vehicles.md; issues #83–#90, #168, #222,
 #224, #231, #234, #39)*
+
+## D-060 — Buildings carry their structure: storeys, walls with their thickness, openings, cores and units 🟡 (proposed 2026-10-11, for the owner's review)
+
+**The question:** the owner's notes during D-059's sandbox work (2026-10-11). Walls have a
+thickness, and old stone houses thicker ones than recent buildings; trams too. The floors
+between storeys have a thickness. Heights, widths and lengths must add up for the structures
+to stay consistent. A varied kit of modules may simplify physics and destruction later, as in
+Battlefield 6. And the interiors, by use, are wanted to judge the buildings' sizes (#248).
+Today a building is a mass (a footprint, a 4.2 m ground floor and 3.2 m upper floors), dressed
+with a facade kit; nothing has a thickness, and the population counts gross area at 40 m² a
+person.
+
+**The proposal** (`research/building-structure.md`):
+1. **A building's data holds its structure:**
+   - its storeys: level, floor to floor, slab thickness, clear height;
+   - a wall graph: segments with their thickness, material and role (façade, party, courtyard,
+     core, partition), and openings with sill, head and reveal;
+   - a core: stairs and lift;
+   - its units: use, type, rooms.
+
+   The façade grammar puts its windows into those openings, their reveals as deep as the wall.
+2. **A 0.30 m planning module** (a 0.90 m door is three, a 1.20 m corridor four), the façade's
+   outer face on the building line, the thickness inwards. Thicknesses and heights by style:
+   - old stone town: façades 0.60 m, party walls 0.50;
+   - Haussmann and the 1800s: 0.45 to 0.40 and 0.40;
+   - modern: 0.35 and 0.20;
+   - slabs 0.27–0.30 m;
+   - the floor-to-floor heights in the style bible per style, the note's table.
+3. **Checks as tests:** the storeys add up to the height; gross area (outer faces) and net area
+   (the rooms) are both kept, net over gross about 0.80 modern and 0.70–0.75 in old stone.
+4. **The population from net area** (or by dwelling type): 32.4 m² a person, INSEE's figure, in
+   place of 40 m² gross, which is right for modern buildings and too many in old stone ones.
+5. **Accessibility as generator rules:** lifts from R+3 and in shops and offices with public upper
+   floors, type 2 cars (1.10 × 1.40 m), 0.90 m doors, 1.20 m corridors, step-free entrances (#263).
+6. **The order:**
+   1. the data, the tables and the tests, the population retuned;
+   2. the façade kit reads the walls, and collision is made from walls and slabs;
+   3. cores and units on the grid, interior mapping fed by the same rooms, then enterable
+      interiors by use (#248);
+   4. destruction: a panel graph (a bay of one storey), connectivity to the foundations,
+      pre-cut chunks as Jolt debris, the state on the server.
+7. **The trams** get the same treatment in their model: walls of 60–100 mm, a floor 350 mm over
+   the rails, about 2.2 m clear inside (done roughly on 2026-10-11).
+
+**Patents to clear first, flagged by the note:**
+- **Sony US 8,152,613** (to about 2030): stress nodes per tile breaking over a threshold. An
+  overload pass waits for a patent check and the owner's go; connectivity to anchors differs.
+- **Celsys US 12,700,170** (to about 2042): full rendering of the room one is in, interior mapping
+  for the others, swapping as one moves, a see-through door. Avoid that combination, or ask.
+
+**Not decided:** whether the kit's modules become physical panels (one body set per bay and
+storey) or the structure stays data with the kit as its dressing. The note leans to panels
+built from the wall graph, so destruction and collision share one structure.
+
+*(research: building-structure.md; issues #248, #263)*
