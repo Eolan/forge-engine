@@ -933,6 +933,22 @@ pub(crate) const RAMP: f64 = 1.6;
 const CORNER_LEVEL: f64 = AVENUE_LEVEL + 0.01;
 /// A tram stop's platform, metres: a tram's length and a little.
 const PLATFORM: f32 = 36.0;
+/// A stop's screen on its platform: on the totem's side towards the track, at eye height
+/// (`furniture::tram_stop`'s totem stands 5 m short of the platform's middle, 1.6 m in), over the
+/// top of its lit panel.
+const SCREEN_ON_PLATFORM: Vec3 = Vec3::new(PLATFORM * 0.5 - 5.0, 0.28 + 1.98, 1.575);
+/// Screens of each plate drawn at most, and how far from the camera, metres.
+const SCREENS: usize = 12;
+const SCREEN_REACH: f32 = 150.0;
+
+/// A stop's screen: where it hangs (facing −z), and the stop it shows the next tram of.
+#[derive(Clone, Copy, Debug)]
+struct StopScreen {
+    at: Mat4,
+    line: usize,
+    stop: usize,
+    outbound: bool,
+}
 /// The trams' sections: a cab, three passenger sections, a cab.
 const TRAM_SECTIONS: usize = 5;
 /// The trams' liveries: one group a line, the stripe in its colour.
@@ -2104,6 +2120,24 @@ impl Scenario for PlanScenario {
             ],
         );
         let materials_boat = materials.of("plan-boat");
+        // The stops' screens: their atlas lit, amber on black, about 240 cd/m².
+        let screen_atlas = materials.textures.add(&signs::screen_atlas())?;
+        materials.add_rows(
+            "plan-screen",
+            vec![(
+                "plan screen".into(),
+                RenderLayer {
+                    albedo_texture: Some(screen_atlas),
+                    emissive: [glow * 20.0; 3],
+                    uv: Some(UvMapping {
+                        emissive_texture: Some(screen_atlas),
+                        ..UvMapping::default()
+                    }),
+                    ..colour([1.0, 1.0, 1.0], 20.0, 0.1)
+                },
+            )],
+        );
+        let materials_screen = materials.of("plan-screen");
         // The figures' clothes: skin, top, bottom, hair and shoes, eight ways.
         let people: [([f32; 3], [f32; 3], [f32; 3]); 8] = [
             ([0.62, 0.44, 0.34], [0.80, 0.80, 0.78], [0.10, 0.14, 0.26]),
@@ -2275,6 +2309,15 @@ impl Scenario for PlanScenario {
             builder.set_mesh_material(boat, materials_boat);
             tram_movers.push((boat, self.boats.len() as u32));
         }
+        // The stops' screens: a plate a row of their atlas, `SCREENS` of each, moved onto the
+        // nearest totems each frame by what they show.
+        if !self.trams.is_empty() {
+            for row in 0..signs::ROWS {
+                let plate = builder.add_mesh(&MeshletMesh::build(&signs::screen_plate(row)));
+                builder.set_mesh_material(plate, materials_screen);
+                tram_movers.push((plate, SCREENS as u32));
+            }
+        }
         if !tram_movers.is_empty() {
             builder.reserve_movers(&tram_movers);
         }
@@ -2299,6 +2342,22 @@ impl Scenario for PlanScenario {
                 "trams of two lines within 30 m on one track, over a game hour in 5 s steps"
             );
         }
+        // Where to look at a stop's screen: on its platform, 1.2 m in front of the first.
+        if let Some((at, _, _)) = self
+            .trams
+            .first()
+            .and_then(|r| r.platforms(self.size).first().copied())
+        {
+            let screen = at.transform_point3(SCREEN_ON_PLATFORM);
+            let eye = screen - at.z_axis.truncate() * 1.2 + at.x_axis.truncate() * 0.4;
+            let to = (screen - eye).normalize_or_zero();
+            let yaw = (-to.x).atan2(-to.z).to_degrees();
+            tracing::info!(
+                "a stop's screen: --view={:.1},1.7,{:.1},{yaw:.1},5",
+                eye.x,
+                eye.z
+            );
+        }
         Ok((
             scene,
             Box::new(PlanRunning {
@@ -2311,6 +2370,21 @@ impl Scenario for PlanScenario {
                 walk_on_start: self.walk_on_start,
                 ride_at: self.ride_after.map(|s| self.clock + s),
                 riding: None,
+                screens: self
+                    .trams
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(line, run)| {
+                        run.platforms(self.size)
+                            .into_iter()
+                            .map(move |(at, stop, outbound)| StopScreen {
+                                at: at * Mat4::from_translation(SCREEN_ON_PLATFORM),
+                                line,
+                                stop,
+                                outbound,
+                            })
+                    })
+                    .collect(),
                 crowd: self.crowd.take(),
                 camera: glam::Vec2::ZERO,
                 size: self.size,
@@ -2342,6 +2416,8 @@ struct PlanRunning {
     /// The tram ridden (C): its line, its vehicle and section, and whether the rider walked
     /// before boarding.
     riding: Option<Ride>,
+    /// Each stop's screen, on its totem (none without trams).
+    screens: Vec<StopScreen>,
 }
 
 /// A ride aboard a tram ([`PlanRunning::toggle_ride`]).
@@ -2543,6 +2619,56 @@ impl Running for PlanRunning {
         // Then the boats, one a crossing.
         for boat in &self.boats {
             transforms.push(place(boat.at(self.clock, self.size)));
+        }
+        // Then the stops' screens: the plate of each nearby totem's next tram, [`SCREENS`] of
+        // each plate, the nearest first; still, as a plate changes hands when the minute does.
+        if !self.screens.is_empty() {
+            still.resize(transforms.len(), false);
+            let mut near: Vec<(f32, usize)> = self
+                .screens
+                .iter()
+                .enumerate()
+                .filter_map(|(i, s)| {
+                    let p = s.at.w_axis;
+                    let d = (p.x - self.camera.x).powi(2) + (p.z - self.camera.y).powi(2);
+                    (d < SCREEN_REACH * SCREEN_REACH).then_some((d, i))
+                })
+                .collect();
+            near.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let mut rows: Vec<Vec<Mat4>> = vec![Vec::new(); signs::ROWS];
+            for (_, i) in near {
+                let s = &self.screens[i];
+                let Some(wait) = self.trams[s.line]
+                    .timetable
+                    .next_arrival(s.stop, s.outbound, self.clock)
+                else {
+                    continue;
+                };
+                let row = if wait < 30.0 {
+                    0
+                } else {
+                    ((wait / 60.0).ceil() as usize).min(signs::ROWS - 1)
+                };
+                if rows[row].len() < SCREENS {
+                    rows[row].push(s.at);
+                }
+            }
+            for row in rows {
+                for k in 0..SCREENS {
+                    still.push(true);
+                    transforms.push(match row.get(k) {
+                        Some(at) => {
+                            let (_, rotation, position) = at.to_scale_rotation_translation();
+                            MoverTransform {
+                                position: position - origin,
+                                rotation,
+                                scale: 1.0,
+                            }
+                        }
+                        None => place((Vec3::new(0.0, -1000.0, 0.0) + origin, 0.0)),
+                    });
+                }
+            }
         }
         scene.set_movers_still(&transforms, |k| still.get(k).copied().unwrap_or(false));
     }

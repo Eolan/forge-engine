@@ -259,9 +259,59 @@ pub fn mesh(sign: &Sign) -> TriMesh {
 /// The names' atlas: a row each, white on a deep blue, left-aligned, with its mipmaps. Without
 /// the font (not run from the engine's folder), plain blue.
 pub fn atlas(names: &[String]) -> TextureData {
+    text_atlas(names, [0.03, 0.12, 0.33], [0.92, 0.92, 0.90], "sign names")
+}
+
+/// The stops' screens' atlas: a row per [`screen_rows`], amber on black.
+pub fn screen_atlas() -> TextureData {
+    text_atlas(
+        &screen_rows(),
+        [0.004, 0.004, 0.006],
+        [1.0, 0.55, 0.12],
+        "stop screens",
+    )
+}
+
+/// A stop's screen showing row `row` of [`screen_atlas`]: a plate 0.4 by 0.18 m round the
+/// origin, facing −z, its text from its left end.
+pub fn screen_plate(row: usize) -> TriMesh {
+    let (w, h) = (0.4_f32, 0.18_f32);
+    let span = w / h * (SIZE / ROWS) as f32 / SIZE as f32;
+    let (v0, v1) = (row as f32 / ROWS as f32, (row + 1) as f32 / ROWS as f32);
+    let mut m = TriMesh::default();
+    // Seen from −z, its left is +x.
+    let p = [
+        Vec3::new(w * 0.5, h * 0.5, 0.0),
+        Vec3::new(-w * 0.5, h * 0.5, 0.0),
+        Vec3::new(-w * 0.5, -h * 0.5, 0.0),
+        Vec3::new(w * 0.5, -h * 0.5, 0.0),
+    ];
+    let uv = [[0.0, v0], [span, v0], [span, v1], [0.0, v1]];
+    for (q, t) in p.into_iter().zip(uv) {
+        m.positions.push(q.to_array());
+        m.normals.push([0.0, 0.0, -1.0]);
+        m.uvs.push(t);
+    }
+    // Counter-clockwise seen from −z.
+    m.indices.extend([0, 2, 1, 0, 3, 2]);
+    m.sections.extend([0, 0]);
+    m
+}
+
+/// What a stop's screen shows, by row: the next tram due, then in 1 to 14 minutes, then in 15
+/// or more.
+pub fn screen_rows() -> Vec<String> {
+    let mut rows = vec!["Due".to_owned()];
+    rows.extend((1..15).map(|m| format!("{m} min")));
+    rows.push("15+ min".to_owned());
+    rows
+}
+
+/// `names`, a row each, `fg` on `bg` (linear colours), with its mipmaps; plain `bg` without the
+/// font.
+fn text_atlas(names: &[String], bg: [f32; 3], fg: [f32; 3], name: &'static str) -> TextureData {
     use ab_glyph::{Font, FontRef, PxScale, ScaleFont, point};
-    let blue = [0.03_f32, 0.12, 0.33];
-    let white = [0.92_f32, 0.92, 0.90];
+    let (blue, white) = (bg, fg);
     let mut cover = vec![0.0_f32; SIZE * SIZE];
     let row_px = SIZE / ROWS;
     let bytes = std::fs::read(FONT)
@@ -330,7 +380,7 @@ pub fn atlas(names: &[String]) -> TextureData {
         levels.push(encode(&level));
     }
     TextureData {
-        name: "sign names".into(),
+        name: name.into(),
         size: SIZE as u32,
         height: SIZE as u32,
         srgb: true,

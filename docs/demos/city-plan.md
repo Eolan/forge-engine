@@ -355,8 +355,11 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
   The owner asked for shops, restaurants and cafés round the large squares, above all by the
   river and the sea.
 - **tram stops:** a 36 m platform 2.3 m deep, level with the trams' floor by each track, and a
-  glass shelter with a bench and a lit totem for the next trams' times (its screen is lit but
-  shows no times yet). A ramp of 1 in 12 runs down to the road at each end, the platform's
+  glass shelter with a bench and a lit totem. Its screen shows the next tram, amber on black:
+  "Due", "1 min" to "14 min", or "15+ min", from `Timetable::next_arrival`. The plates are one
+  atlas row each (`signs::screen_plate`), twelve of each kept as movers and set each frame on the
+  totems within 150 m of the camera, nearest first (the owner asked for the screens).
+  A ramp of 1 in 12 runs down to the road at each end, the platform's
   whole depth: it was reached only by a 28 cm step (the owner: not accessible). Each stop
   stands in the middle of the stretch between the junctions round it. Snapped to a junction,
   its platforms and ramps, 37 m either way, stood across the crossings, and bikes rode through
