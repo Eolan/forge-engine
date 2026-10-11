@@ -117,10 +117,17 @@ from the site's cells. A private sandbox hands its own plan to `PlanScenario::ne
 
 | | |
 |---|---|
-| Meshes / triangles / trees | 484 / 184 k / 36 224 instances of one tree |
+| Meshes / triangles / trees | 484 / 309 k / 36 717 instances of one tree |
 | Built and cooked | 1.3 s |
-| GPU frame at 2800 × 1575, this view | 3.66 ms (3.33 without the trees) |
+| GPU frame at 2800 × 1575, this view | 3.84 ms (3.33 without trees or facade textures) |
 | p50 / p99 frame | 3.67 / 7.28 ms |
+
+![Closer, 35 m up](images/city-plan-3d-near.png)
+
+*35 m up: the walls' window bays and shopfronts are two generated textures
+(`forge_render::textures::facade` and `shopfront`) read through the walls' coordinates, a shop
+band on the ground floor along avenues and lanes, window bays above, four render tints of the
+palette chosen by lot. Variety in the facades themselves comes with D-039's modules.*
 
 ## Next (#245–#247)
 

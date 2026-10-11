@@ -290,6 +290,92 @@ pub fn brick(seed: u64, size: u32) -> [TextureData; 2] {
     ]
 }
 
+/// A facade's bay over one floor (D-059's city): pale plaster with a recessed window, its
+/// frame and sill, louvred shutters either side and a string course at the floor line. `u`
+/// runs across the bay, `v` down the floor; the row's colour tints it (the plaster's render).
+pub fn facade(seed: u64, size: u32) -> [TextureData; 2] {
+    let window = |u: f32, v: f32| (0.30..0.70).contains(&u) && (0.20..0.78).contains(&v);
+    let frame = |u: f32, v: f32| (0.28..0.72).contains(&u) && (0.18..0.80).contains(&v);
+    let shutter = |u: f32, v: f32| {
+        ((0.17..0.28).contains(&u) || (0.72..0.83).contains(&u)) && (0.18..0.80).contains(&v)
+    };
+    let sill = |u: f32, v: f32| (0.26..0.74).contains(&u) && (0.80..0.83).contains(&v);
+    let course = |v: f32| v > 0.95;
+    let heights = grid(size, |u, v| {
+        let grain = 0.08 * fbm(seed ^ 0xFA, u, v, 32, 3);
+        if window(u, v) {
+            -0.8
+        } else if frame(u, v) {
+            -0.3
+        } else if shutter(u, v) {
+            0.15 + 0.1 * ((v * 60.0).fract() - 0.5).abs()
+        } else if sill(u, v) || course(v) {
+            0.35
+        } else {
+            grain
+        }
+    });
+    let colours = grid(size, |u, v| {
+        let grime = 0.9 + 0.15 * fbm(seed ^ 0x6E1, u, v, 16, 3);
+        if window(u, v) {
+            // Glass: dark, a little lighter at the top where it catches the sky.
+            mix3(
+                [0.03, 0.04, 0.05],
+                [0.10, 0.12, 0.14],
+                1.0 - (v - 0.2) / 0.58,
+            )
+        } else if frame(u, v) {
+            [0.85, 0.85, 0.82]
+        } else if shutter(u, v) {
+            let slat = 0.85 + 0.15 * ((v * 60.0).fract() > 0.5) as i32 as f32;
+            [0.20 * slat, 0.30 * slat, 0.25 * slat]
+        } else if sill(u, v) || course(v) {
+            [0.88, 0.86, 0.80]
+        } else {
+            [0.80 * grime, 0.79 * grime, 0.76 * grime]
+        }
+    });
+    [
+        albedo_texture("facade albedo", size, colours),
+        normal_texture("facade normal", size, &heights, size as f32 / 48.0),
+    ]
+}
+
+/// A ground floor's bay of shopfront (D-059's city): a fascia band, a tall glazed front between
+/// stone piers, a stone plinth. `u` across the bay, `v` down the floor.
+pub fn shopfront(seed: u64, size: u32) -> [TextureData; 2] {
+    let pier = |u: f32| !(0.07..0.93).contains(&u);
+    let fascia = |v: f32| v < 0.17;
+    let glass = |u: f32, v: f32| (0.09..0.91).contains(&u) && (0.22..0.93).contains(&v);
+    let mullion = |u: f32| (0.495..0.505).contains(&u);
+    let heights = grid(size, |u, v| {
+        if pier(u) || v > 0.95 {
+            0.3 + 0.05 * fbm(seed ^ 0x5701, u, v, 32, 2)
+        } else if glass(u, v) && !mullion(u) {
+            -0.6
+        } else {
+            0.0
+        }
+    });
+    let colours = grid(size, |u, v| {
+        let stone = [0.78, 0.74, 0.66].map(|c| c * (0.9 + 0.15 * fbm(seed ^ 0x5702, u, v, 32, 3)));
+        if pier(u) || v > 0.95 {
+            stone
+        } else if fascia(v) {
+            [0.16, 0.24, 0.20]
+        } else if glass(u, v) && !mullion(u) {
+            // A lit shop's warm interior behind the glass, darker low down.
+            mix3([0.20, 0.16, 0.11], [0.06, 0.06, 0.07], (v - 0.22) / 0.71)
+        } else {
+            [0.22, 0.22, 0.22]
+        }
+    });
+    [
+        albedo_texture("shopfront albedo", size, colours),
+        normal_texture("shopfront normal", size, &heights, size as f32 / 48.0),
+    ]
+}
+
 /// Ground: short grass with patches of bare soil.
 pub fn grass(seed: u64, size: u32) -> [TextureData; 2] {
     let heights = grid(size, |u, v| fbm(seed ^ 0x6A55, u, v, 32, 4));

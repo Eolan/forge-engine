@@ -16,15 +16,16 @@ use anyhow::Result;
 use city_blocks::scenario::{Look, Running, Scenario};
 use city_blocks::{Args, CityMaterials, Cooked, scene_origin};
 use forge_app::{FlyCamera, Input, Setup};
-use forge_core::material::RenderLayer;
+use forge_core::material::{RenderLayer, TextureId, UvMapping};
 use forge_geom::MeshletMesh;
 use forge_geom::city::PropSpec;
 use forge_geom::procedural::TriMesh;
-use forge_procgen::city::mass::{Mass, Roof};
+use forge_procgen::city::mass::{FLOOR, GROUND_FLOOR, Mass, Roof};
 use forge_procgen::city::trees::Tree;
 use forge_procgen::city::{BlockUse, CityPlan, LAGOON, SEA, Site, geom};
 use forge_render::MeshletScene;
 use forge_render::MeshletSceneBuilder;
+use forge_render::textures;
 use glam::{DVec2, Mat4, Vec3};
 use winit::keyboard::KeyCode;
 
@@ -39,11 +40,13 @@ const PAVING: u8 = 3;
 const STREET: u8 = 4;
 const TRACK: u8 = 5;
 const WATER: u8 = 6;
-/// Mass sections.
+/// Mass sections: four wall tints, the shop band, three roofs.
 const WALL: u8 = 0;
-const ROOF_GREEN: u8 = 1;
-const ROOF_SOLAR: u8 = 2;
-const ROOF_TERRACE: u8 = 3;
+const TINTS: u8 = 4;
+const SHOP: u8 = 4;
+const ROOF_GREEN: u8 = 5;
+const ROOF_SOLAR: u8 = 6;
+const ROOF_TERRACE: u8 = 7;
 
 /// One tile's two meshes, positions relative to its centre.
 struct Tile {
@@ -309,13 +312,78 @@ fn ribbon(tiles: &mut Tiles, points: &[DVec2], width: f64, height: f64, section:
     }
 }
 
-/// A mass: its walls and its roof.
+/// A bay's width on the facades, metres: one repeat of the facade texture across.
+const BAY: f64 = 3.0;
+
+/// Adds a triangle with texture coordinates, turned so its face looks along `normal`.
+fn triangle_uv(
+    mesh: &mut TriMesh,
+    mut p: [Vec3; 3],
+    mut uv: [[f32; 2]; 3],
+    normal: Vec3,
+    section: u8,
+) {
+    if (p[1] - p[0]).cross(p[2] - p[0]).dot(normal) < 0.0 {
+        p.swap(1, 2);
+        uv.swap(1, 2);
+    }
+    let base = mesh.positions.len() as u32;
+    for (q, t) in p.into_iter().zip(uv) {
+        mesh.positions.push(q.to_array());
+        mesh.normals.push(normal.to_array());
+        mesh.uvs.push(t);
+    }
+    mesh.indices.extend([base, base + 1, base + 2]);
+    mesh.sections.push(section);
+}
+
+/// A wall quad from `y0` to `y1`, its texture repeating every bay across (the bays centred on
+/// the wall) and every `floor` metres up from `y0`.
+#[allow(clippy::too_many_arguments)]
+fn wall_band(
+    mesh: &mut TriMesh,
+    (a, b): (Vec3, Vec3),
+    length: f64,
+    (y0, y1): (f32, f32),
+    floor: f32,
+    out: Vec3,
+    section: u8,
+) {
+    let bays = (length / BAY).floor().max(1.0);
+    let offset = ((length - bays * BAY) * 0.5 / BAY) as f32;
+    let (u0, u1) = (-offset, (length / BAY) as f32 - offset);
+    let v = |y: f32| -(y - y0) / floor;
+    let (pa0, pb0) = (a + Vec3::Y * y0, b + Vec3::Y * y0);
+    let (pa1, pb1) = (a + Vec3::Y * y1, b + Vec3::Y * y1);
+    triangle_uv(
+        mesh,
+        [pa0, pb0, pb1],
+        [[u0, v(y0)], [u1, v(y0)], [u1, v(y1)]],
+        out,
+        section,
+    );
+    triangle_uv(
+        mesh,
+        [pa0, pb1, pa1],
+        [[u0, v(y0)], [u1, v(y1)], [u0, v(y1)]],
+        out,
+        section,
+    );
+}
+
+/// A mass: its walls (a shop band on the ground floor where the street is lively, window bays
+/// above, one of four tints by its lot) and its roof.
 fn mass(tiles: &mut Tiles, m: &Mass) {
     let size = tiles.size;
     let tile = tiles.at(m.footprint[0]);
     let centre = tile.centre;
     let mesh = &mut tile.masses;
     let n = m.footprint.len();
+    let tint = (m.lot.wrapping_mul(2_654_435_761) >> 30) as u8 % TINTS;
+    // Shops along avenues and in pedestrian lanes.
+    let shops = m.street_width >= 20.0 || m.street_width <= 8.0;
+    let ground = GROUND_FLOOR as f32;
+    let top = m.height as f32;
     for i in 0..n {
         let (a, b) = (m.footprint[i], m.footprint[(i + 1) % n]);
         let t = (b - a).normalize_or_zero();
@@ -324,13 +392,33 @@ fn mass(tiles: &mut Tiles, m: &Mass) {
         }
         // Outward: right of the edge for a positive outline.
         let out = Vec3::new(t.y as f32, 0.0, -t.x as f32);
-        let (a0, b0) = (world(size, a, 0.0) - centre, world(size, b, 0.0) - centre);
-        let (a1, b1) = (
-            world(size, a, m.height) - centre,
-            world(size, b, m.height) - centre,
+        let ends = (world(size, a, 0.0) - centre, world(size, b, 0.0) - centre);
+        let length = a.distance(b);
+        let (lower, floor) = if shops {
+            (SHOP, ground)
+        } else {
+            (WALL + tint, FLOOR as f32)
+        };
+        wall_band(
+            mesh,
+            ends,
+            length,
+            (0.0, ground.min(top)),
+            floor,
+            out,
+            lower,
         );
-        triangle(mesh, [a0, b0, b1], out, WALL);
-        triangle(mesh, [a0, b1, a1], out, WALL);
+        if top > ground {
+            wall_band(
+                mesh,
+                ends,
+                length,
+                (ground, top),
+                FLOOR as f32,
+                out,
+                WALL + tint,
+            );
+        }
     }
     let roof = match m.roof {
         Roof::Green => ROOF_GREEN,
@@ -339,7 +427,7 @@ fn mass(tiles: &mut Tiles, m: &Mass) {
     };
     for t in geom::triangulate(&m.footprint) {
         let p = t.map(|i| world(size, m.footprint[i], m.height) - centre);
-        triangle(mesh, p, Vec3::Y, roof);
+        triangle_uv(mesh, p, [[0.0; 2]; 3], Vec3::Y, roof);
     }
 }
 
@@ -384,10 +472,45 @@ impl Scenario for PlanScenario {
                 ("plan water".into(), colour([0.05, 0.12, 0.15], 900.0, 0.9)),
             ],
         );
+        // The facades: a window bay and a shopfront, read by the walls' coordinates.
+        let [facade_albedo, facade_normal] = textures::facade(21, 512);
+        let [shop_albedo, shop_normal] = textures::shopfront(22, 512);
+        let facade = (
+            materials.textures.add(&facade_albedo)?,
+            materials.textures.add(&facade_normal)?,
+        );
+        let shop = (
+            materials.textures.add(&shop_albedo)?,
+            materials.textures.add(&shop_normal)?,
+        );
+        let mapped = |rgb: [f32; 3], (albedo, normal): (TextureId, TextureId)| RenderLayer {
+            albedo_texture: Some(albedo),
+            normal_texture: Some(normal),
+            normal_strength: 1.0,
+            uv: Some(UvMapping::default()),
+            ..colour(rgb, 12.0, 0.04)
+        };
         materials.add_rows(
             "plan-mass",
             vec![
-                ("plan wall".into(), colour([0.72, 0.66, 0.58], 10.0, 0.03)),
+                // The render tints of the palette: sand, ochre, pale rose, off-white.
+                (
+                    "plan wall (sand)".into(),
+                    mapped([0.94, 0.88, 0.76], facade),
+                ),
+                (
+                    "plan wall (ochre)".into(),
+                    mapped([0.92, 0.80, 0.62], facade),
+                ),
+                (
+                    "plan wall (rose)".into(),
+                    mapped([0.90, 0.76, 0.68], facade),
+                ),
+                (
+                    "plan wall (white)".into(),
+                    mapped([0.95, 0.93, 0.88], facade),
+                ),
+                ("plan shopfront".into(), mapped([1.0, 1.0, 1.0], shop)),
                 (
                     "plan green roof".into(),
                     colour([0.24, 0.40, 0.17], 6.0, 0.02),
