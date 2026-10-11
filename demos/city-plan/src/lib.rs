@@ -263,6 +263,8 @@ pub struct PlanScenario {
     walls: Vec<Vec<Vec3>>,
     /// How many passages into courts, and where to look into one, for the log.
     passage_note: String,
+    /// Each mass's net floor area (D-060), for the people's homes and jobs.
+    nets: Vec<f64>,
     walk_on_start: bool,
     /// The names the fingerposts' blades carry, a row of their atlas each.
     sign_names: Vec<String>,
@@ -845,6 +847,7 @@ impl PlanScenario {
             clock: 3600.0,
             walls: wall_pieces(size, masses, &structures),
             passage_note,
+            nets: structures.iter().map(|s| s.net).collect(),
             walk_on_start: false,
             ride_after: None,
             games,
@@ -900,8 +903,10 @@ impl PlanScenario {
         let timetables = self.trams.iter().map(|r| r.timetable.clone()).collect();
         let games = std::mem::take(&mut self.games);
         self.crowd = Some(
-            crowd::Crowd::new(plan, masses, hour, seats, platforms, timetables, mix)
-                .with_games(games),
+            crowd::Crowd::new(
+                plan, masses, &self.nets, hour, seats, platforms, timetables, mix,
+            )
+            .with_games(games),
         );
         self
     }

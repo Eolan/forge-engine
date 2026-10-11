@@ -363,6 +363,23 @@ pub fn structures(plan: &CityPlan, masses: &[Mass]) -> Vec<Structure> {
         })
         .collect();
     passages(plan, masses, &mut out);
+    // A court door that opens onto a spot no one can walk to (a light well between the
+    // building's wings, a garden closed by its neighbours) goes back to a window.
+    let (doors, _) = unreached(plan, masses, &out);
+    for (m, k) in doors {
+        let s = &mut out[m as usize];
+        let o = s.openings[k];
+        if s.walls[o.wall].role == WallRole::Court {
+            let t = s.era.table();
+            s.openings[k] = Opening {
+                kind: OpeningKind::Window,
+                width: t.window,
+                sill: 1.0,
+                head: s.storeys[0].clear() - 0.4,
+                ..o
+            };
+        }
+    }
     out
 }
 
@@ -537,14 +554,18 @@ fn openings(m: &Mass, era: Era, storeys: &[Storey], walls: &[Wall]) -> Vec<Openi
             }
         }
     }
-    // The door: the ground opening nearest the middle of the longest open street stretch.
-    let best = walls
-        .iter()
-        .enumerate()
-        .filter(|(_, w)| w.role == WallRole::Street)
-        .flat_map(|(i, w)| w.open[0].iter().map(move |&(lo, hi)| (i, lo, hi)))
-        .max_by(|x, y| (x.2 - x.1).total_cmp(&(y.2 - y.1)));
-    if let Some((w, lo, hi)) = best {
+    // The doors: from the street, and from the court to the stairs (the owner: no door onto the
+    // court). Each the ground opening nearest the middle of its side's longest open stretch.
+    for role in [WallRole::Street, WallRole::Court] {
+        let best = walls
+            .iter()
+            .enumerate()
+            .filter(|(_, w)| w.role == role)
+            .flat_map(|(i, w)| w.open[0].iter().map(move |&(lo, hi)| (i, lo, hi)))
+            .max_by(|x, y| (x.2 - x.1).total_cmp(&(y.2 - y.1)));
+        let Some((w, lo, hi)) = best else {
+            continue;
+        };
         let middle = (lo + hi) * 0.5;
         let door = out
             .iter()
@@ -693,6 +714,179 @@ pub fn court_access(plan: &CityPlan, masses: &[Mass], structures: &[Structure]) 
     (courts.len(), reached)
 }
 
+/// What someone on foot cannot reach from the streets (the owner: emulate people's routines and
+/// see what blocks them): each door whose step outside is shut off, as (mass, opening), and each
+/// block whose court no one can walk into. Block by block, the ground on a grid of
+/// [`REACH_CELL`]: the buildings block it, their passages open through them, and the streets
+/// round the block (outside its outline) are where everyone starts. The flats and floors come
+/// with the buildings' stairs and units (D-060's step 3).
+pub fn unreached(
+    plan: &CityPlan,
+    masses: &[Mass],
+    structures: &[Structure],
+) -> (Vec<(u32, usize)>, Vec<u32>) {
+    let mut by_block: HashMap<u32, Vec<usize>> = HashMap::new();
+    for (i, m) in masses.iter().enumerate() {
+        by_block
+            .entry(plan.lots[m.lot as usize].block)
+            .or_default()
+            .push(i);
+    }
+    let mut blocks: Vec<u32> = by_block.keys().copied().collect();
+    blocks.sort_unstable();
+    let (mut doors, mut courts) = (Vec::new(), Vec::new());
+    let c = REACH_CELL;
+    for b in blocks {
+        let block = &plan.blocks[b as usize];
+        let list = &by_block[&b];
+        // The block and a street's width round it.
+        let (lo, hi) = block.polygon.iter().fold(
+            (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)),
+            |(lo, hi), &p| (lo.min(p), hi.max(p)),
+        );
+        let (lo, hi) = (lo - DVec2::splat(6.0), hi + DVec2::splat(6.0));
+        let (nx, ny) = (
+            ((hi.x - lo.x) / c).ceil() as usize,
+            ((hi.y - lo.y) / c).ceil() as usize,
+        );
+        let index = |p: DVec2| {
+            let (x, y) = (((p.x - lo.x) / c).floor(), ((p.y - lo.y) / c).floor());
+            (x >= 0.0 && y >= 0.0 && (x as usize) < nx && (y as usize) < ny)
+                .then(|| y as usize * nx + x as usize)
+        };
+        // Each polygon's cells, those whose middles it holds: row by row, between its edges'
+        // crossings (even-odd, as `geom::contains`).
+        let cells_of = |polygon: &[DVec2], f: &mut dyn FnMut(usize)| {
+            let (a, z) = polygon.iter().fold(
+                (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)),
+                |(a, z), &p| (a.min(p), z.max(p)),
+            );
+            let y0 = ((a.y - lo.y) / c).floor().max(0.0) as usize;
+            let y1 = (((z.y - lo.y) / c).ceil() as usize).min(ny);
+            let n = polygon.len();
+            let mut crossings = Vec::new();
+            for y in y0..y1 {
+                let py = lo.y + (y as f64 + 0.5) * c;
+                crossings.clear();
+                for i in 0..n {
+                    let (p, q) = (polygon[i], polygon[(i + 1) % n]);
+                    if (p.y <= py) != (q.y <= py) {
+                        crossings.push(p.x + (py - p.y) * (q.x - p.x) / (q.y - p.y));
+                    }
+                }
+                crossings.sort_by(f64::total_cmp);
+                for span in crossings.as_chunks::<2>().0 {
+                    let from = ((span[0] - lo.x) / c - 0.5).ceil().max(0.0) as usize;
+                    let to = ((span[1] - lo.x) / c - 0.5).floor();
+                    if to < 0.0 {
+                        continue;
+                    }
+                    for x in from..=(to as usize).min(nx - 1) {
+                        f(y * nx + x);
+                    }
+                }
+            }
+        };
+        let mut blocked = vec![false; nx * ny];
+        for &i in list {
+            cells_of(&masses[i].footprint, &mut |k| blocked[k] = true);
+        }
+        // The passages open: from their street mouth to their court mouth.
+        for &i in list {
+            let s = &structures[i];
+            let mouths: Vec<(DVec2, DVec2)> = s
+                .openings
+                .iter()
+                .filter(|o| o.kind == OpeningKind::Passage)
+                .map(|o| {
+                    let w = &s.walls[o.wall];
+                    let t = (w.b - w.a).normalize_or_zero();
+                    (w.a + t * o.span().0, w.a + t * o.span().1)
+                })
+                .collect();
+            for pair in mouths.as_chunks::<2>().0 {
+                let [(p0, q0), (p1, q1)] = *pair;
+                let (p1, q1) =
+                    if p0.distance(p1) + q0.distance(q1) <= p0.distance(q1) + q0.distance(p1) {
+                        (p1, q1)
+                    } else {
+                        (q1, p1)
+                    };
+                let mut tunnel = vec![p0, q0, q1, p1];
+                if geom::signed_area(&tunnel) < 0.0 {
+                    tunnel.reverse();
+                }
+                cells_of(&tunnel, &mut |k| blocked[k] = false);
+            }
+        }
+        // From the streets: every open cell outside the block's outline.
+        let mut inside = vec![false; nx * ny];
+        cells_of(&block.polygon, &mut |k| inside[k] = true);
+        let mut seen = vec![false; nx * ny];
+        let mut queue = std::collections::VecDeque::new();
+        for k in 0..nx * ny {
+            if !blocked[k] && !inside[k] {
+                seen[k] = true;
+                queue.push_back(k);
+            }
+        }
+        while let Some(k) = queue.pop_front() {
+            let (x, y) = (k % nx, k / nx);
+            let mut visit = |k: usize| {
+                if !blocked[k] && !seen[k] {
+                    seen[k] = true;
+                    queue.push_back(k);
+                }
+            };
+            if x > 0 {
+                visit(k - 1);
+            }
+            if x + 1 < nx {
+                visit(k + 1);
+            }
+            if y > 0 {
+                visit(k - nx);
+            }
+            if y + 1 < ny {
+                visit(k + nx);
+            }
+        }
+        // Each door's step outside, 0.6 m out from its middle.
+        for &i in list {
+            let s = &structures[i];
+            for (k, o) in s.openings.iter().enumerate() {
+                if o.kind != OpeningKind::Door {
+                    continue;
+                }
+                let w = &s.walls[o.wall];
+                let t = (w.b - w.a).normalize_or_zero();
+                let step = w.a + t * o.along + DVec2::new(t.y, -t.x) * 0.6;
+                if !index(step).is_some_and(|k| seen[k]) {
+                    doors.push((i as u32, k));
+                }
+            }
+        }
+        // The court: any of its open cells reached.
+        if let Some(court) = &block.courtyard {
+            let mut open = 0;
+            let mut reached = 0;
+            cells_of(court, &mut |k| {
+                if !blocked[k] {
+                    open += 1;
+                    reached += usize::from(seen[k]);
+                }
+            });
+            if open > 0 && reached == 0 {
+                courts.push(b);
+            }
+        }
+    }
+    (doors, courts)
+}
+
+/// The ground's cell for [`unreached`], metres: narrower than a door or a gap one walks through.
+pub const REACH_CELL: f64 = 0.5;
+
 /// The blocks whose court is reached without a passage: a lot on their streets left open (a gap
 /// between their buildings).
 fn reached(plan: &CityPlan, masses: &[Mass]) -> std::collections::HashSet<u32> {
@@ -806,5 +1000,25 @@ mod tests {
             "{} of {courts} courts unreached",
             courts - reached
         );
+    }
+
+    #[test]
+    fn people_reach_every_door_and_court_from_the_streets() {
+        let (city, masses) = example_city();
+        let all = structures(&city, &masses);
+        let (doors, courts) = unreached(&city, &masses, &all);
+        let held: usize = all
+            .iter()
+            .map(|s| {
+                s.openings
+                    .iter()
+                    .filter(|o| o.kind == OpeningKind::Door)
+                    .count()
+            })
+            .sum();
+        // Street doors and court doors; the court doors no one could reach were made windows.
+        assert!(held > masses.len() / 2, "{held} doors");
+        assert!(doors.is_empty(), "{} doors unreached", doors.len());
+        assert!(courts.is_empty(), "{} courts unreached", courts.len());
     }
 }

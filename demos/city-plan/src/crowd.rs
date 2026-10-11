@@ -268,10 +268,13 @@ pub struct Platform {
 }
 
 impl Crowd {
-    /// The people of `plan`'s `masses`, their day run to `hour` (game hours from midnight).
+    /// The people of `plan`'s `masses` (each its net floor area in `nets`), their day run to
+    /// `hour` (game hours from midnight).
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         plan: &CityPlan,
         masses: &[Mass],
+        nets: &[f64],
         hour: f64,
         seats: Vec<(Vec3, f32)>,
         platforms: Vec<Platform>,
@@ -288,14 +291,10 @@ impl Crowd {
                 k as u32,
             );
         }
-        // Homes and jobs from each building's net floor area (D-060).
-        let nets: Vec<f64> = forge_procgen::city::structure::structures(plan, masses)
-            .iter()
-            .map(|s| s.net)
-            .collect();
+        // Homes and jobs from each building's net floor area (D-060), `nets` in mass order.
         let buildings: Vec<Building> = masses
             .iter()
-            .zip(&nets)
+            .zip(nets)
             .map(|(m, &net)| {
                 let c = geom::centroid(&m.footprint);
                 Building {

@@ -658,34 +658,71 @@ fn shop(m: &mut TriMesh, w: f32, h: f32, awning: bool) {
     );
     let riser = 0.45;
     let glass = d + 0.06;
-    cuboid(
-        m,
-        Vec3::new(0.0, 0.0, d),
-        Vec3::new(w, riser, glass + 0.04),
-        STONE,
-        POS_Z | POS_Y,
-    );
+    // The shop's door at its right end, glazed to the floor and step-free (0.90 m clear: #263);
+    // the whole front where it is narrower than a door and a pane (the owner missed the shops'
+    // doors).
+    let door = if w >= 1.9 { 0.95 } else { w };
+    let shown = w - door;
+    if shown > 0.0 {
+        cuboid(
+            m,
+            Vec3::new(0.0, 0.0, d),
+            Vec3::new(shown, riser, glass + 0.04),
+            STONE,
+            POS_Z | POS_Y,
+        );
+        quad(
+            m,
+            [
+                Vec3::new(0.0, riser, glass),
+                Vec3::new(shown, riser, glass),
+                Vec3::new(shown, top, glass),
+                Vec3::new(0.0, top, glass),
+            ],
+            GLASS,
+        );
+    }
     quad(
         m,
         [
-            Vec3::new(0.0, riser, glass),
-            Vec3::new(w, riser, glass),
+            Vec3::new(shown, 0.0, glass),
+            Vec3::new(w, 0.0, glass),
             Vec3::new(w, top, glass),
-            Vec3::new(0.0, top, glass),
+            Vec3::new(shown, top, glass),
         ],
         GLASS,
     );
-    let panes = (w / 1.4).ceil().max(1.0) as u32;
     let f = 0.05;
     let frame = |m: &mut TriMesh, lo: Vec3, hi: Vec3| cuboid(m, lo, hi, FRAME, NO_BACK);
+    let panes = (shown / 1.4).ceil().max(1.0) as u32;
     for k in 0..=panes {
-        let x = (w * k as f32 / panes as f32).clamp(f * 0.5, w - f * 0.5);
+        let x = (shown * k as f32 / panes as f32).clamp(f * 0.5, w - f * 0.5);
         frame(
             m,
             Vec3::new(x - f * 0.5, riser, glass - 0.01),
             Vec3::new(x + f * 0.5, top, glass + 0.05),
         );
     }
+    // The door's frame to the floor, its transom and its push bar.
+    for x in [shown, w] {
+        let x = x.clamp(f * 0.5, w - f * 0.5);
+        frame(
+            m,
+            Vec3::new(x - f * 0.5, 0.0, glass - 0.01),
+            Vec3::new(x + f * 0.5, top, glass + 0.05),
+        );
+    }
+    let transom = top.min(2.25);
+    frame(
+        m,
+        Vec3::new(shown, transom - f, glass - 0.01),
+        Vec3::new(w, transom, glass + 0.05),
+    );
+    frame(
+        m,
+        Vec3::new(shown + 0.1, 1.0, glass + 0.05),
+        Vec3::new(w - 0.1, 1.04, glass + 0.09),
+    );
     frame(
         m,
         Vec3::new(0.0, top - f, glass - 0.01),

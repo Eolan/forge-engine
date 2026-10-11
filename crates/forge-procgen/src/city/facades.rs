@@ -483,19 +483,22 @@ mod tests {
         let windows = grammar.symbol("window").unwrap();
         assert!(dressed.iter().any(|d| d.terminal.module == windows));
         let doors = grammar.symbol("door").unwrap();
-        let built = some
+        // Every door the structures hold is dressed as one: the street's and the court's.
+        let held: usize = some
             .iter()
-            .filter(|&&i| {
+            .map(|&i| {
                 structures[i]
                     .openings
                     .iter()
-                    .any(|o| o.kind == OpeningKind::Door)
+                    .filter(|o| o.kind == OpeningKind::Door)
+                    .count()
             })
-            .count();
+            .sum();
         let dressed_doors = dressed
             .iter()
             .filter(|d| d.terminal.module == doors)
             .count();
-        assert_eq!(dressed_doors, built, "one door a building");
+        assert!(held >= some.len() / 2, "{held} doors");
+        assert_eq!(dressed_doors, held, "every door dressed");
     }
 }
