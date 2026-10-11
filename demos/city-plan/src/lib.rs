@@ -257,6 +257,8 @@ pub struct PlanScenario {
     /// Each mass's footprint (the world's x and z) and its top, for the walker's walls.
     walls: Vec<(Vec<glam::Vec2>, f32)>,
     walk_on_start: bool,
+    /// Seconds into the run at which to board the nearest tram (scripted rides).
+    ride_after: Option<f64>,
     crowd: Option<crowd::Crowd>,
     size: f64,
     /// What the kit built, logged once the app logs.
@@ -656,6 +658,7 @@ impl PlanScenario {
                 })
                 .collect(),
             walk_on_start: false,
+            ride_after: None,
             crowd: None,
             size,
             camera,
@@ -714,6 +717,12 @@ impl PlanScenario {
     /// Walking from the start, in first person where the camera stands (Enter frees it).
     pub fn walking(mut self) -> Self {
         self.walk_on_start = true;
+        self
+    }
+
+    /// Boarding the tram nearest the camera `after` seconds into the run, as C does.
+    pub fn riding(mut self, after: f64) -> Self {
+        self.ride_after = Some(after);
         self
     }
 
@@ -1999,6 +2008,8 @@ impl Scenario for PlanScenario {
                 walls: walk::Walls::new(self.walls.clone()),
                 walker: None,
                 walk_on_start: self.walk_on_start,
+                ride_at: self.ride_after.map(|s| self.clock + s),
+                riding: None,
                 crowd: self.crowd.take(),
                 camera: glam::Vec2::ZERO,
                 size: self.size,
@@ -2025,7 +2036,26 @@ struct PlanRunning {
     camera: glam::Vec2,
     /// The scene's origin, which the movers' positions are relative to.
     origin: Vec3,
+    /// The service clock at which to board the nearest tram (a scripted ride).
+    ride_at: Option<f64>,
+    /// The tram ridden (C): its line, its vehicle and section, and whether the rider walked
+    /// before boarding.
+    riding: Option<Ride>,
 }
+
+/// A ride aboard a tram ([`PlanRunning::toggle_ride`]).
+#[derive(Clone, Copy, Debug)]
+struct Ride {
+    line: usize,
+    vehicle: usize,
+    section: usize,
+    walked: bool,
+    /// Whether the camera was turned the way the tram runs.
+    facing: bool,
+}
+
+/// How near a tram's section the camera must stand to board it, metres.
+const BOARD_REACH: f32 = 10.0;
 
 impl PlanRunning {
     /// Walks from where the camera stands, or frees the camera.
@@ -2037,16 +2067,79 @@ impl PlanRunning {
                 .ok(),
         };
     }
+
+    /// Boards the tram section nearest the camera within `reach` metres, standing in its
+    /// aisle; or, aboard, gets off on the platform's side, walking again if the rider walked.
+    fn toggle_ride(&mut self, camera: &FlyCamera, reach: f32) {
+        if let Some(ride) = self.riding.take() {
+            let (at, yaw) =
+                self.trams[ride.line].sections(ride.vehicle, self.clock, self.size)[ride.section];
+            // The platforms stand left of the way the tram runs.
+            let left = glam::Quat::from_rotation_y(yaw) * Vec3::NEG_Z;
+            let off = at + left * (vehicles::TRAM_WIDTH * 0.5 + 1.2) + Vec3::Y * walk::EYES;
+            tracing::info!(line = ride.line, "off the tram");
+            if ride.walked {
+                self.walker = walk::Walker::new(&self.walls, off)
+                    .inspect_err(|e| tracing::warn!("the walker: {e}"))
+                    .ok();
+            }
+            return;
+        }
+        let mut best: Option<(f32, Ride)> = None;
+        for (line, run) in self.trams.iter().enumerate() {
+            for vehicle in 0..run.timetable.vehicles() {
+                for (section, (at, _)) in run
+                    .sections(vehicle, self.clock, self.size)
+                    .iter()
+                    .enumerate()
+                {
+                    let d = (*at - camera.position).with_y(0.0).length();
+                    if d < reach && best.is_none_or(|(b, _)| d < b) {
+                        let walked = self.walker.is_some();
+                        best = Some((
+                            d,
+                            Ride {
+                                line,
+                                vehicle,
+                                section,
+                                walked,
+                                facing: false,
+                            },
+                        ));
+                    }
+                }
+            }
+        }
+        match best {
+            Some((_, ride)) => {
+                tracing::info!(
+                    line = ride.line,
+                    vehicle = ride.vehicle,
+                    "aboard a tram (C to get off)"
+                );
+                self.walker = None;
+                self.riding = Some(ride);
+            }
+            None => tracing::info!("no tram within {reach} m to board"),
+        }
+    }
 }
 
 impl Running for PlanRunning {
     fn key_pressed(&mut self, code: KeyCode, camera: &FlyCamera) -> bool {
-        // Enter: walk the streets in first person, or fly again.
-        if code == KeyCode::Enter {
-            self.toggle_walk(camera);
-            return true;
+        // Enter: walk the streets in first person, or fly again. C: board the nearest tram,
+        // or get off it.
+        match code {
+            KeyCode::Enter if self.riding.is_none() => {
+                self.toggle_walk(camera);
+                true
+            }
+            KeyCode::KeyC => {
+                self.toggle_ride(camera, BOARD_REACH);
+                true
+            }
+            _ => false,
         }
-        false
     }
 
     fn update(
@@ -2067,6 +2160,11 @@ impl Running for PlanRunning {
             self.walk_on_start = false;
             self.toggle_walk(camera);
         }
+        if self.ride_at.is_some_and(|at| self.clock >= at) {
+            self.ride_at = None;
+            // A scripted ride boards the nearest tram anywhere.
+            self.toggle_ride(camera, f32::MAX);
+        }
         if let Some(walker) = &mut self.walker {
             let walk = city_blocks::wished_walk(args, camera.yaw, input);
             walker.advance(&self.walls, walk, f64::from(step));
@@ -2079,6 +2177,24 @@ impl Running for PlanRunning {
     }
 
     fn follow(&mut self, camera: &mut FlyCamera) {
+        // Aboard: standing in the section's aisle, the view where the mouse turns it.
+        if let Some(ride) = &mut self.riding {
+            let (at, yaw) =
+                self.trams[ride.line].sections(ride.vehicle, self.clock, self.size)[ride.section];
+            camera.position = at + Vec3::Y * (vehicles::FLOOR + walk::EYES);
+            // On boarding, facing the way it runs (the rear cab is turned round).
+            if !ride.facing {
+                ride.facing = true;
+                let ahead = if ride.section + 1 == TRAM_SECTIONS {
+                    yaw - std::f32::consts::PI
+                } else {
+                    yaw
+                };
+                camera.yaw = ahead - std::f32::consts::FRAC_PI_2;
+                camera.pitch = 0.0;
+            }
+            return;
+        }
         // In first person: the camera at the walker's eyes, the view where the mouse turns it.
         if let Some(walker) = &self.walker {
             camera.position = walker.feet() + Vec3::Y * walk::EYES;

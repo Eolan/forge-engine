@@ -29,6 +29,9 @@ pub const SECTION_LENGTH: f32 = 6.4;
 pub const SECTION_GAP: f32 = 0.3;
 /// The car's width, metres.
 pub const TRAM_WIDTH: f32 = 2.4;
+/// A section's floor over the rails, metres: a low floor, level with the stops' platforms
+/// (0.28 m over the 0.16 m pavement, the rails at 0.22).
+pub const FLOOR: f32 = 0.25;
 /// How far a cab's nose stands past its section, metres.
 pub const NOSE: f32 = 0.55;
 
@@ -47,24 +50,28 @@ pub fn tram_section(cab: bool) -> TriMesh {
     let mut m = TriMesh::default();
     let (h, w) = (SECTION_LENGTH * 0.5, TRAM_WIDTH * 0.5);
     let sides = POS_Z | NEG_Z;
-    // Running gear and skirt.
+    // Running gear and skirt under a low floor, level with the stops' platforms: the floor's top
+    // is the running gear's, `FLOOR` over the rails.
     cuboid(
         &mut m,
         Vec3::new(-h + 0.3, 0.05, -w + 0.12),
-        Vec3::new(h - 0.3, 0.4, w - 0.12),
+        Vec3::new(h - 0.3, FLOOR, w - 0.12),
         UNDER,
         ALL,
     );
-    // The lower body either side of the doors, the stripe over it.
+    // The lower body either side of the doors, hollow: a panel each side, the stripe over it.
     let door = 0.7;
+    let panel = 0.06;
     for (x0, x1) in [(-h, -door), (door, h)] {
-        cuboid(
-            &mut m,
-            Vec3::new(x0, 0.4, -w),
-            Vec3::new(x1, 1.05, w),
-            BODY,
-            sides | POS_Y | NEG_Y,
-        );
+        for (z0, z1) in [(-w, -w + panel), (w - panel, w)] {
+            cuboid(
+                &mut m,
+                Vec3::new(x0, FLOOR, z0),
+                Vec3::new(x1, 1.05, z1),
+                BODY,
+                ALL & !NEG_Y,
+            );
+        }
         cuboid(
             &mut m,
             Vec3::new(x0, 0.82, -w - 0.01),
@@ -73,10 +80,50 @@ pub fn tram_section(cab: bool) -> TriMesh {
             sides,
         );
     }
+    // Inside: two seats facing each other by each window between the doors and the ends, a
+    // ceiling 2.25 m over the floor (the owner found the inside small: it was a solid body to
+    // 1.05 m with no inside faces).
+    let mut x = door + 0.45;
+    while x + 0.95 <= h - 0.15 {
+        for z in [-w + panel, w - panel - 0.5] {
+            for (s0, s1, back) in [(x, x + 0.45, x), (x + 0.5, x + 0.95, x + 0.89)] {
+                for k in [1.0_f32, -1.0] {
+                    let (a, b) = if k > 0.0 { (s0, s1) } else { (-s1, -s0) };
+                    cuboid(
+                        &mut m,
+                        Vec3::new(a, FLOOR + 0.4, z),
+                        Vec3::new(b, FLOOR + 0.46, z + 0.5),
+                        STRIPE,
+                        ALL,
+                    );
+                    let (c, d) = if k > 0.0 {
+                        (back, back + 0.06)
+                    } else {
+                        (-back - 0.06, -back)
+                    };
+                    cuboid(
+                        &mut m,
+                        Vec3::new(c, FLOOR + 0.46, z),
+                        Vec3::new(d, FLOOR + 1.05, z + 0.5),
+                        STRIPE,
+                        ALL,
+                    );
+                }
+            }
+        }
+        x += 1.6;
+    }
+    cuboid(
+        &mut m,
+        Vec3::new(-h, FLOOR + 2.25, -w + panel),
+        Vec3::new(h, 2.55, w - panel),
+        BODY,
+        NEG_Y,
+    );
     // The doors: glazed, a little inside the body, floor to roof line.
     cuboid(
         &mut m,
-        Vec3::new(-door, 0.4, -w + 0.04),
+        Vec3::new(-door, FLOOR, -w + 0.04),
         Vec3::new(door, 2.55, w - 0.04),
         GLASS,
         sides,
@@ -93,13 +140,15 @@ pub fn tram_section(cab: bool) -> TriMesh {
     while x <= h + 1e-3 {
         if x.abs() > door + 0.05 || (x.abs() - door).abs() < 0.1 {
             let (a, b) = ((x - 0.08).max(-h), (x + 0.08).min(h));
-            cuboid(
-                &mut m,
-                Vec3::new(a, 1.05, -w),
-                Vec3::new(b, 2.55, w),
-                BODY,
-                sides,
-            );
+            for (z0, z1) in [(-w, -w + panel), (w - panel, w)] {
+                cuboid(
+                    &mut m,
+                    Vec3::new(a, 1.05, z0),
+                    Vec3::new(b, 2.55, z1),
+                    BODY,
+                    ALL & !POS_Y & !NEG_Y,
+                );
+            }
         }
         x += 1.6;
     }
@@ -122,7 +171,7 @@ pub fn tram_section(cab: bool) -> TriMesh {
     let bellows = |m: &mut TriMesh, x0: f32, x1: f32| {
         cuboid(
             m,
-            Vec3::new(x0, 0.45, -w + 0.15),
+            Vec3::new(x0, FLOOR, -w + 0.15),
             Vec3::new(x1, 3.05, w - 0.15),
             UNDER,
             ALL,

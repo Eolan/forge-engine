@@ -40,6 +40,9 @@ struct Cli {
     /// app's `--walk vx,vz` scripts the walk).
     #[arg(long)]
     walk_start: bool,
+    /// Board the tram nearest the camera this many seconds in (C boards and gets off by hand).
+    #[arg(long)]
+    ride: Option<f64>,
     /// The plan's people from this game hour (8.2 for the morning's walk to work), those walking
     /// round the camera drawn as figures.
     #[arg(long)]
@@ -137,6 +140,10 @@ fn main() -> anyhow::Result<()> {
         scenario.walking()
     } else {
         scenario
+    };
+    let scenario = match cli.ride {
+        Some(after) => scenario.riding(after),
+        None => scenario,
     };
     city_blocks::run(cli.app, "forge city-plan", Some(Box::new(scenario)))
 }
