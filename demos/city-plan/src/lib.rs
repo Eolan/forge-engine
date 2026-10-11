@@ -997,18 +997,20 @@ fn kit(
             instances.push((id, transform, colour * 2 + u8::from(lit)));
             // A café's terrace before a third of the shopfronts on the avenues' pavements and
             // in the lanes, on the pavement's level.
-            let lively = m.street_width >= 20.0 || m.street_width <= 8.0;
+            let lively = m.street_width >= 18.0 || m.street_width <= 8.0;
             if name.starts_with("shop")
                 && face.kind == FaceKind::Street
                 && lively
                 && spot.is_multiple_of(3)
             {
-                let key = (TERRACE, (w * 100.0).round() as i32, 0);
+                // One of four layouts by the shopfront, so neighbouring terraces differ.
+                let variant = ((spot >> 8) % 4) as u32;
+                let key = (TERRACE, (w * 100.0).round() as i32, variant as i32);
                 let id = *keys.entry(key).or_insert_with(|| {
-                    meshes.push(forge_geom::furniture::terrace(w));
+                    meshes.push(forge_geom::furniture::terrace(w, variant));
                     (meshes.len() - 1) as u32
                 });
-                let level = if m.street_width >= 20.0 { 0.30 } else { 0.16 };
+                let level = if m.street_width >= 18.0 { 0.30 } else { 0.16 };
                 let at = Mat4::from_cols(
                     x.extend(0.0),
                     y.extend(0.0),
@@ -1016,7 +1018,7 @@ fn kit(
                     (pos + Vec3::Y * level).extend(1.0),
                 );
                 instances.push((id, at, colour * 2));
-                for (p, d) in forge_geom::furniture::terrace_seats(w) {
+                for (p, d) in forge_geom::furniture::terrace_seats(w, variant) {
                     let (p, d) = (at.transform_point3(p), at.transform_vector3(d));
                     seats.push((p, (-d.z).atan2(d.x)));
                 }
@@ -1210,7 +1212,7 @@ fn mass(tiles: &mut Tiles, m: &Mass, edges: &[Option<FaceKind>]) {
     let n = m.footprint.len();
     let tint = tint_of(m.lot);
     // Shops along avenues and in pedestrian lanes.
-    let shops = m.street_width >= 20.0 || m.street_width <= 8.0;
+    let shops = m.street_width >= 18.0 || m.street_width <= 8.0;
     let ground = GROUND_FLOOR as f32;
     let top = m.height as f32;
     for i in 0..n {

@@ -30,7 +30,7 @@ Ground -> split(y) { ~3.9: GroundStorey | 0.3: Band }
 Band -> insert(band)
 GroundStorey -> split(x) { ~0.5: Wall | {bay: GroundBay}* | ~0.5: Wall }
 GroundBay [entrance && middle] -> split(x) { ~1: Wall | 1.6: Door | ~1: Wall }
-GroundBay [street && street_width >= 20] -> Shops
+GroundBay [street && street_width >= 18] -> Shops
 GroundBay [street && street_width <= 8] -> Shops
 GroundBay [court] -> split(x) { ~1: Wall | 1.0: CourtColumn | ~1: Wall }
 GroundBay -> split(x) { ~1: Wall | 1.2: LowColumn | ~1: Wall }

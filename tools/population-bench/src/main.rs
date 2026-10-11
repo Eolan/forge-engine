@@ -45,7 +45,7 @@ fn main() -> Result<()> {
                 pos: [c.x as f32, c.y as f32],
                 floor_area: (geom::signed_area(&m.footprint) * f64::from(m.floors) * args.scale)
                     as f32,
-                active_ground: m.street_width >= 20.0 || m.street_width <= 8.0,
+                active_ground: m.street_width >= 18.0 || m.street_width <= 8.0,
             }
         })
         .collect();

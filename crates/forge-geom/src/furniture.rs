@@ -10,39 +10,81 @@ use crate::modules::{
 };
 use crate::procedural::TriMesh;
 
-/// A café's terrace `w` metres along its shopfront: round tables a pace apart, each with two
-/// chairs facing across it under a parasol, between 0.6 and 2.6 m out from the wall.
-pub fn terrace(w: f32) -> TriMesh {
+/// A café's terrace `w` metres along its shopfront in one of four layouts (`variant`): round
+/// tables in two staggered rows, turned their own ways, two to four bistro chairs round each,
+/// a parasol over every other table (see `terrace_layout`).
+pub fn terrace(w: f32, variant: u32) -> TriMesh {
     let mut m = TriMesh::default();
-    let tables = (w / 1.6).floor().max(1.0) as u32;
-    let step = w / tables as f32;
-    for k in 0..tables {
-        let c = Vec3::new(step * (k as f32 + 0.5), 0.0, 1.6);
+    for (k, (c, chairs)) in terrace_layout(w, variant).into_iter().enumerate() {
         table(&mut m, c);
-        for side in [-1.0_f32, 1.0] {
-            chair(&mut m, c + Vec3::new(0.0, 0.0, 0.62 * side), -side);
+        for (p, facing) in chairs {
+            let mut one = TriMesh::default();
+            chair(&mut one, Vec3::ZERO, 1.0);
+            // The chair faces +z: turned to face its table.
+            let turn = glam::Quat::from_rotation_y(facing.x.atan2(facing.z));
+            let base = m.positions.len() as u32;
+            for (q, n) in one.positions.iter().zip(&one.normals) {
+                m.positions.push((p + turn * Vec3::from(*q)).to_array());
+                m.normals.push((turn * Vec3::from(*n)).to_array());
+            }
+            m.indices.extend(one.indices.iter().map(|i| base + i));
+            m.sections.extend(one.sections);
         }
-        parasol(&mut m, c);
+        if k % 2 == 0 {
+            parasol(&mut m, c);
+        }
     }
     m
 }
 
-/// The seats of [`terrace`]`(w)`: each chair's place on the ground under its seat and the way a
-/// person on it faces (towards the table), in the terrace's frame.
-pub fn terrace_seats(w: f32) -> Vec<(Vec3, Vec3)> {
-    let tables = (w / 1.6).floor().max(1.0) as u32;
+/// The seats of [`terrace`]`(w, variant)`: each chair's place on the ground under its seat and the
+/// way a person on it faces (towards the table), in the terrace's frame.
+pub fn terrace_seats(w: f32, variant: u32) -> Vec<(Vec3, Vec3)> {
+    terrace_layout(w, variant)
+        .into_iter()
+        .flat_map(|(_, chairs)| chairs)
+        .collect()
+}
+
+/// A terrace's tables and their chairs, the same for the same `w` and `variant`: a table every
+/// 1.3 m or so along the shopfront, in two staggered rows (0.95 and 1.7 m out), each a little off
+/// its place and turned its own way, with two to four chairs round it 0.62 m from its middle
+/// (the owner, 2026-10-11: several tables round, not aligned, a bit organic). Everything stays
+/// within 2.65 m of the wall: the walkers pass at 3 m.
+fn terrace_layout(w: f32, variant: u32) -> Vec<(Vec3, Vec<(Vec3, Vec3)>)> {
+    let hash = |k: u32, salt: u32| {
+        let mut x = k.wrapping_mul(0x9E37_79B9)
+            ^ salt.wrapping_mul(0x85EB_CA6B)
+            ^ variant.wrapping_mul(0xC2B2_AE35);
+        x ^= x >> 15;
+        x = x.wrapping_mul(0x2C1B_3C6D);
+        x ^= x >> 12;
+        (x & 0xFFFF) as f32 / 65_535.0
+    };
+    let tables = (w / 1.3).floor().max(1.0) as u32;
     let step = w / tables as f32;
-    let mut out = Vec::new();
-    for k in 0..tables {
-        let c = Vec3::new(step * (k as f32 + 0.5), 0.0, 1.6);
-        for side in [-1.0_f32, 1.0] {
-            out.push((
-                c + Vec3::new(0.0, 0.0, 0.62 * side),
-                Vec3::new(0.0, 0.0, -side),
-            ));
-        }
-    }
-    out
+    (0..tables)
+        .map(|k| {
+            let row = if (k + variant).is_multiple_of(2) {
+                0.95
+            } else {
+                1.7
+            };
+            let x = step * (k as f32 + 0.5) + (hash(k, 1) - 0.5) * step * 0.4;
+            let z = row + (hash(k, 2) - 0.5) * 0.2;
+            let c = Vec3::new(x.clamp(0.45, (w - 0.45).max(0.45)), 0.0, z);
+            let chairs = 2 + (hash(k, 3) * 2.99) as u32;
+            let turn = hash(k, 4) * std::f32::consts::TAU;
+            let seats = (0..chairs)
+                .map(|j| {
+                    let a = turn + j as f32 * std::f32::consts::TAU / chairs as f32;
+                    let out = Vec3::new(a.cos(), 0.0, a.sin());
+                    (c + out * 0.62, -out)
+                })
+                .collect();
+            (c, seats)
+        })
+        .collect()
 }
 
 /// A round table on a pedestal: an octagonal wooden top 0.7 m across, 0.75 m up.
@@ -294,8 +336,8 @@ mod tests {
     fn furniture_stays_in_its_place() {
         for (m, (lo, hi)) in [
             (
-                terrace(4.0),
-                (Vec3::new(-0.2, 0.0, 0.4), Vec3::new(4.2, 2.7, 2.8)),
+                terrace(4.0, 1),
+                (Vec3::new(-0.7, 0.0, -0.1), Vec3::new(4.7, 2.7, 2.95)),
             ),
             (
                 tram_stop(32.0),
@@ -310,8 +352,14 @@ mod tests {
                 assert!(p.cmpge(lo).all() && p.cmple(hi).all(), "{p}");
             }
         }
-        // A table a pace and a half.
-        let tris = |w: f32| terrace(w).triangle_count();
-        assert_eq!(tris(3.2), 2 * tris(1.6));
+        // Two to four chairs a table, the same layout for the same variant, within reach of the
+        // walkers' line 3 m out; the variants differ.
+        for variant in 0..4 {
+            let seats = terrace_seats(6.5, variant);
+            assert!((10..=20).contains(&seats.len()), "{}", seats.len());
+            assert_eq!(seats, terrace_seats(6.5, variant));
+            assert!(seats.iter().all(|(p, _)| p.z > 0.0 && p.z + 0.22 < 2.7));
+        }
+        assert_ne!(terrace_seats(6.5, 0), terrace_seats(6.5, 1));
     }
 }

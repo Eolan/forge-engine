@@ -199,10 +199,10 @@ neighbours differ.
 
 | The kit within 450 m of the avenue view (example city) | |
 |---|---|
-| Buildings / faces / terminals | 1 021 / 4 466 / 198 443 |
-| Instances / unique modules | 35 952 / 20 (9.7 M instanced triangles) |
-| Merged triangles added (walls, bands, cornices) | 417 k |
-| Derived and assembled | 78 ms (one thread) |
+| Buildings / faces / terminals | 1 021 / 4 466 / 198 335 |
+| Instances / unique modules | 35 985 / 32 (9.8 M instanced triangles; four terrace layouts a width) |
+| Merged triangles added (walls, bands, cornices) | 416 k |
+| Derived and assembled | 80 ms (one thread) |
 | Longest run of one opening along a floor of a street front | 10 |
 | GPU frame at 2800 × 1575, this view, best of 3 | 3.78 ms (3.42 ms with `--detail 0`) |
 | Scene built and cooked | 2.79 s (2.35 s) |
@@ -311,9 +311,12 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
 *The example's crossing from mid-river: the shuttle by its north landing.*
 
 **Street furniture** (`forge_geom::furniture`) in the kit's section layout:
-- **café terraces:** tables a pace and a half apart, bistro chairs, market parasols. They stand
-  before a third of the kit's shopfronts on the avenues' pavements and in the lanes, coloured as
-  the building's awnings.
+- **café terraces:** round tables in two staggered rows, a little off their places and turned
+  their own ways, two to four bistro chairs round each, a parasol over every other table. There
+  are four layouts a width, chosen by the shopfront, so neighbours differ (the owner asked for
+  several tables round each café, not aligned, a bit organic). They stand within 2.65 m of the
+  wall, before a third of the kit's shopfronts on the avenues' pavements and in the lanes,
+  coloured as the building's awnings. A street counts as lively from 18 m (the avenues).
 - **tram stops:** a 36 m platform level with the trams' floor by each track, and a glass
   shelter with a bench and a lit totem for the next trams' times.
 
