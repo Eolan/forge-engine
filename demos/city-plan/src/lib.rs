@@ -270,6 +270,8 @@ pub struct PlanScenario {
     kit_report: Option<String>,
     /// The terraces' seats, for the crowd.
     seats: Vec<(Vec3, f32)>,
+    /// The chess tables: each one's middle and its two seats among `seats`.
+    games: Vec<(Vec3, [usize; 2])>,
     camera: FlyCamera,
     title: String,
     triangles: usize,
@@ -654,6 +656,7 @@ impl PlanScenario {
         // the squares rather than stand there).
         let held: Vec<usize> = plan.landmarks.iter().filter_map(|l| l.square).collect();
         let mut chess = Vec::new();
+        let mut games = Vec::new();
         for (_, b) in
             plan.blocks.iter().enumerate().filter(|(i, b)| {
                 b.use_ == BlockUse::Square && b.area >= 1500.0 && !held.contains(i)
@@ -684,6 +687,7 @@ impl PlanScenario {
             let id = (kit_meshes.len() - 1) as u32;
             for at in chess {
                 kit_instances.push((id, at, 0));
+                games.push((at.w_axis.truncate(), [seats.len(), seats.len() + 1]));
                 for (p, d) in forge_geom::furniture::chess_seats() {
                     let (p, d) = (at.transform_point3(p), at.transform_vector3(d));
                     seats.push((p, (-d.z).atan2(d.x)));
@@ -796,6 +800,7 @@ impl PlanScenario {
                 .collect(),
             walk_on_start: false,
             ride_after: None,
+            games,
             sign_names,
             crowd: None,
             size,
@@ -846,9 +851,11 @@ impl PlanScenario {
             })
             .collect();
         let timetables = self.trams.iter().map(|r| r.timetable.clone()).collect();
-        self.crowd = Some(crowd::Crowd::new(
-            plan, masses, hour, seats, platforms, timetables, mix,
-        ));
+        let games = std::mem::take(&mut self.games);
+        self.crowd = Some(
+            crowd::Crowd::new(plan, masses, hour, seats, platforms, timetables, mix)
+                .with_games(games),
+        );
         self
     }
 

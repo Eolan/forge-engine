@@ -48,6 +48,8 @@ const NEW_ROUTES: usize = 40;
 const RIDE_MAX: f64 = 6.5;
 /// A terrace seat's figure is told apart from the people by this plus the seat's number.
 const SEATED: u32 = 1 << 31;
+/// A chess game's watcher, told apart by this plus eight a game and their number.
+const WATCHING: u32 = 3 << 30;
 /// An empty slot.
 const EMPTY: u32 = u32::MAX;
 
@@ -232,6 +234,8 @@ pub struct Crowd {
     /// neighbourhood: the cafés within [`NEIGHBOURHOOD`] and how many seats.
     seats: Vec<(Vec3, f32)>,
     neighbourhoods: Vec<(Vec<u32>, u32)>,
+    /// The chess tables: each one's middle and its two seats among `seats`.
+    games: Vec<(Vec3, [usize; 2])>,
     /// The tram stops' platforms, their middles on the plan found by a grid, the lines'
     /// timetables, and who has boarded from a platform (until their trip ends).
     platforms: Vec<Platform>,
@@ -387,6 +391,7 @@ impl Crowd {
             size: plan.size,
             seats,
             neighbourhoods,
+            games: Vec::new(),
             stop_grid,
             timetables,
             boarded: HashSet::new(),
@@ -458,25 +463,57 @@ impl Crowd {
     /// a palette's seated mesh each.
     fn seat_people(&mut self, c: DVec2, out: &mut [Vec<(u32, Vec3, f32)>]) {
         let half = self.size * 0.5;
-        for (k, &(p, turn)) in self.seats.iter().enumerate() {
-            let at = DVec2::new(f64::from(p.x) + half, f64::from(p.z) + half);
-            if at.distance(c) > REACH {
-                continue;
-            }
+        // Whether seat `k` is taken: in the share the people out round it make of the seats
+        // there, the same seats while the share holds (a hash of the seat, not a draw).
+        let taken = |k: usize| {
             let (cafes, around) = &self.neighbourhoods[k];
             let people: u32 = cafes
                 .iter()
                 .filter_map(|&q| self.counts.get(q as usize))
                 .sum();
             let share = (f64::from(people) / f64::from((*around).max(1))).min(0.9);
-            // The same seats stay taken while the share holds (a hash of the seat, not a draw).
             let pick = (k as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 54;
-            if (pick as f64) / 1024.0 >= share {
+            (pick as f64) / 1024.0 < share
+        };
+        for (k, &(p, turn)) in self.seats.iter().enumerate() {
+            let at = DVec2::new(f64::from(p.x) + half, f64::from(p.z) + half);
+            if at.distance(c) > REACH || !taken(k) {
                 continue;
             }
             let mesh = (k * 7 + 3) % GROUPS * POSES + 3;
             out[mesh].push((SEATED + k as u32, p, turn));
         }
+        // Round a chess game being played, more people stand and watch than play: two to five,
+        // a step back from the table on the players' sides, facing it (the owner, 2026-10-11).
+        for (g, &(middle, [a, b])) in self.games.iter().enumerate() {
+            let at = DVec2::new(f64::from(middle.x) + half, f64::from(middle.z) + half);
+            if at.distance(c) > REACH || !(taken(a) && taken(b)) {
+                continue;
+            }
+            let h = (g as u64 + 1).wrapping_mul(0xD1B5_4A32_D192_ED03);
+            let watchers = 2 + (h % 4) as usize;
+            // The players sit along the table's local z; the watchers stand round its x sides.
+            let (pa, pb) = (self.seats[a].0, self.seats[b].0);
+            let across = (pa - pb).with_y(0.0).normalize_or_zero();
+            let side = Vec3::new(-across.z, 0.0, across.x);
+            for w in 0..watchers {
+                let bits = h >> (8 * w);
+                let lean = (bits & 0xFF) as f32 / 255.0 - 0.5;
+                let s = if w % 2 == 0 { 1.0 } else { -1.0 };
+                let dir = (side * s + across * lean * 1.4).normalize_or_zero();
+                let spot = middle + dir * (1.3 + ((bits >> 8) & 0x3F) as f32 / 120.0);
+                let face = middle - spot;
+                let mesh = (((bits >> 16) as usize) % GROUPS) * POSES + 1;
+                out[mesh].push((WATCHING + (g * 8 + w) as u32, spot, (-face.z).atan2(face.x)));
+            }
+        }
+    }
+
+    /// The chess tables, each its middle and its two seats among the seats: their games draw
+    /// watchers ([`Self::seat_people`]).
+    pub fn with_games(mut self, games: Vec<(Vec3, [usize; 2])>) -> Self {
+        self.games = games;
+        self
     }
 
     /// Advances the people's day by `real` seconds.
