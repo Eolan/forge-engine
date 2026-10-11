@@ -226,6 +226,8 @@ impl Personality {
 pub struct World {
     /// The places.
     pub places: Vec<Place>,
+    /// The places' bounds, metres: the lowest and highest corner.
+    pub bounds: [[f32; 2]; 2],
     cell: f32,
     side: usize,
     grids: Vec<Vec<Vec<u32>>>,
@@ -241,8 +243,17 @@ impl World {
             let y = ((p.pos[1] / cell).floor().max(0.0) as usize).min(side - 1);
             grids[p.kind as usize][y * side + x].push(i as u32);
         }
+        let bounds = places
+            .iter()
+            .fold([[f32::MAX; 2], [f32::MIN; 2]], |[lo, hi], p| {
+                [
+                    [lo[0].min(p.pos[0]), lo[1].min(p.pos[1])],
+                    [hi[0].max(p.pos[0]), hi[1].max(p.pos[1])],
+                ]
+            });
         Self {
             places,
+            bounds,
             cell,
             side,
             grids,
@@ -306,6 +317,8 @@ pub struct Population {
     pub at: Vec<u32>,
     /// Their trip's destination (meaningful on a trip).
     pub dest: Vec<u32>,
+    /// Where their trip set out from (meaningful on a trip).
+    pub origin: Vec<u32>,
     /// Since when they are where they are.
     pub since: Vec<GameSeconds>,
     /// Their day.
@@ -327,7 +340,7 @@ impl Population {
 
     /// The bytes a person takes in the columns.
     pub fn bytes_per_person() -> usize {
-        4 + 4 + 1 + 4 + 4 + 4 + 4 + 4 + 2 + 1
+        4 + 4 + 1 + 4 + 4 + 4 + 4 + 4 + 4 + 2 + 1
     }
 }
 
@@ -371,12 +384,23 @@ pub fn generate(world: &World, mix: &Mix, seed: Seed) -> Population {
             let personality = Personality((rng.next_u32()) & 0xF_FFFF);
             let anchor = match role {
                 Role::Worker | Role::NightWorker => {
-                    let distance = -2500.0 * dmath::ln(1.0 - rng.next_f64() * 0.98);
-                    let (s, c) = dmath::sin_cos(rng.next_f64() * std::f64::consts::TAU);
-                    let target = [
-                        home.pos[0] + (c * distance) as f32,
-                        home.pos[1] + (s * distance) as f32,
-                    ];
+                    // A target outside the city's places is drawn again (up to eight times), or
+                    // the jobs would pile up on its edges.
+                    let [lo, hi] = world.bounds;
+                    let mut target = home.pos;
+                    for _ in 0..8 {
+                        let distance = -2500.0 * dmath::ln(1.0 - rng.next_f64() * 0.98);
+                        let (s, c) = dmath::sin_cos(rng.next_f64() * std::f64::consts::TAU);
+                        target = [
+                            home.pos[0] + (c * distance) as f32,
+                            home.pos[1] + (s * distance) as f32,
+                        ];
+                        if (lo[0]..=hi[0]).contains(&target[0])
+                            && (lo[1]..=hi[1]).contains(&target[1])
+                        {
+                            break;
+                        }
+                    }
                     world
                         .near(PlaceKind::Work, target, rng.next_u64())
                         .unwrap_or(NONE)
@@ -393,6 +417,7 @@ pub fn generate(world: &World, mix: &Mix, seed: Seed) -> Population {
             pop.seed.push(own as u32);
             pop.at.push(h as u32);
             pop.dest.push(NONE);
+            pop.origin.push(NONE);
             pop.since.push(0);
             pop.day.push(0);
             pop.step.push(0);
@@ -533,6 +558,23 @@ pub fn travel_time(world: &World, from: u32, to: u32, personality: Personality) 
     s.round().max(60.0) as GameSeconds
 }
 
+/// What a person is doing, for a map.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Doing {
+    /// At home.
+    Home,
+    /// At work or school.
+    Anchor,
+    /// Shopping.
+    Shop,
+    /// In a café, a restaurant or a bar.
+    Out,
+    /// In a park.
+    Park,
+    /// On the way.
+    Travelling,
+}
+
 /// Where everyone is, by kind of place.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Census {
@@ -625,9 +667,49 @@ impl<'w> Sim<'w> {
         }
         let time = travel_time(self.world, here, next.place, pop.personality[p]);
         pop.at[p] = TRIP;
+        pop.origin[p] = here;
         pop.dest[p] = next.place;
         pop.since[p] = now;
         now + time
+    }
+
+    /// Everyone's position now and what they are doing: at a place, scattered a little about it
+    /// (by their seed); on a trip, along the straight line from where they set out, by the share
+    /// of the trip's time gone.
+    pub fn positions(&self) -> Vec<([f32; 2], Doing)> {
+        let places = &self.world.places;
+        (0..self.pop.len())
+            .map(|p| {
+                let at = self.pop.at[p];
+                if at & TRIP != 0 {
+                    let (from, to) = (self.pop.origin[p], self.pop.dest[p]);
+                    let time = travel_time(self.world, from, to, self.pop.personality[p]);
+                    let gone = (self.now.saturating_sub(self.pop.since[p])) as f32 / time as f32;
+                    let (a, b) = (places[from as usize].pos, places[to as usize].pos);
+                    let t = gone.clamp(0.0, 1.0);
+                    return (
+                        [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t],
+                        Doing::Travelling,
+                    );
+                }
+                let s = self.pop.seed[p];
+                let jitter = |bits: u32| ((bits & 0xFF) as f32 / 255.0 - 0.5) * 24.0;
+                let q = places[at as usize].pos;
+                let pos = [q[0] + jitter(s), q[1] + jitter(s >> 8)];
+                let doing = if at == self.pop.anchor[p] {
+                    Doing::Anchor
+                } else {
+                    match places[at as usize].kind {
+                        PlaceKind::Home => Doing::Home,
+                        PlaceKind::Work | PlaceKind::School => Doing::Anchor,
+                        PlaceKind::Shop => Doing::Shop,
+                        PlaceKind::Food | PlaceKind::Leisure => Doing::Out,
+                        PlaceKind::Park => Doing::Park,
+                    }
+                };
+                (pos, doing)
+            })
+            .collect()
     }
 
     /// Where everyone is now.

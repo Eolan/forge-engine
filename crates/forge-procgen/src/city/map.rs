@@ -349,6 +349,8 @@ pub struct Label {
     pub px: f32,
     /// Its colour.
     pub colour: [u8; 3],
+    /// The halo's colour round it.
+    pub halo: [u8; 3],
 }
 
 /// The plan's own names: its districts at their anchors (those on land in the frame), its
@@ -367,6 +369,7 @@ pub fn labels(plan: &CityPlan) -> Vec<Label> {
                 text: d.name.clone(),
                 px: 30.0,
                 colour: [60, 50, 44],
+                halo: [255; 3],
             });
         }
     }
@@ -376,6 +379,7 @@ pub fn labels(plan: &CityPlan) -> Vec<Label> {
             text: l.name.clone(),
             px: 24.0,
             colour: [150, 20, 30],
+            halo: [255; 3],
         });
     }
     for line in &plan.tram_lines {
@@ -385,6 +389,7 @@ pub fn labels(plan: &CityPlan) -> Vec<Label> {
                 text: line.name.clone(),
                 px: 20.0,
                 colour: line.colour,
+                halo: [255; 3],
             });
         }
     }
@@ -462,7 +467,7 @@ impl Canvas {
                 (-1, 1),
                 (1, -1),
             ] {
-                self.blend(px + dx, py + dy, [255, 255, 255], v * 0.85);
+                self.blend(px + dx, py + dy, label.halo, v * 0.85);
             }
         }
         for &(px, py, v) in &coverage {
@@ -726,6 +731,64 @@ pub fn write_massing(
         let mut ring = roof.clone();
         ring.push(roof[0]);
         canvas.stroke(&ring, 0.5 * metres_per_pixel, [96, 90, 84]);
+    }
+    canvas.save(path)
+}
+
+/// People (or anything) as points over a dark version of the plan: each point brightens its pixel
+/// by its colour, so crowds glow; a caption in `font` at the top left.
+pub fn write_points(
+    site: &Site,
+    plan: &CityPlan,
+    points: &[([f32; 2], [u8; 3])],
+    path: &Path,
+    metres_per_pixel: f64,
+    caption: Option<(&str, &[u8])>,
+) -> image::ImageResult<()> {
+    let mut canvas = Canvas::new(plan.size, metres_per_pixel);
+    canvas.pixels.fill([16, 18, 24]);
+    for block in &plan.blocks {
+        let c = match block.use_ {
+            BlockUse::Built => [32, 34, 40],
+            BlockUse::Park => [20, 36, 24],
+            _ => [26, 27, 32],
+        };
+        canvas.fill(&block.polygon, c);
+    }
+    let s = metres_per_pixel;
+    for y in 0..canvas.side {
+        for x in 0..canvas.side {
+            let p = DVec2::new((x as f64 + 0.5) * s, (y as f64 + 0.5) * s);
+            if site.water_at(p) != LAND {
+                canvas.pixels[y as usize * canvas.side as usize + x as usize] = [10, 18, 30];
+            }
+        }
+    }
+    for e in &plan.roads.edges {
+        canvas.stroke(&e.points, e.profile.width(), [40, 40, 46]);
+    }
+    for &(pos, c) in points {
+        let x = (f64::from(pos[0]) / s) as i64;
+        let y = (f64::from(pos[1]) / s) as i64;
+        if x < 0 || y < 0 || x as u32 >= canvas.side || y as u32 >= canvas.side {
+            continue;
+        }
+        let px = &mut canvas.pixels[y as usize * canvas.side as usize + x as usize];
+        for k in 0..3 {
+            px[k] = px[k].saturating_add(c[k] / 3);
+        }
+    }
+    if let Some((text, bytes)) = caption
+        && let Ok(font) = ab_glyph::FontRef::try_from_slice(bytes)
+    {
+        let label = Label {
+            pos: DVec2::new(plan.size * 0.5, 40.0 * s),
+            text: text.to_string(),
+            px: 40.0,
+            colour: [235, 235, 235],
+            halo: [16, 18, 24],
+        };
+        canvas.text(&font, &label, &mut Vec::new());
     }
     canvas.save(path)
 }

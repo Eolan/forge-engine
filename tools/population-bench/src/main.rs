@@ -50,13 +50,51 @@ fn main() -> Result<()> {
         .filter(|b| b.use_ == BlockUse::Park)
         .map(|b| [b.centre.x as f32, b.centre.y as f32])
         .collect();
-    let report = run(&buildings, &parks, args.size as f32, args.days);
+    let shots = Shots {
+        site: &site,
+        plan: &plan,
+        out: std::path::PathBuf::from("captures/population"),
+    };
+    let report = run(
+        &buildings,
+        &parks,
+        args.size as f32,
+        args.days,
+        Some(&shots),
+    );
     println!("{report}");
     Ok(())
 }
 
-/// Makes the population of `buildings` and `parks` and runs it for `days`, returning the report.
-fn run(buildings: &[Building], parks: &[[f32; 2]], size: f32, days: u32) -> String {
+/// Where to draw the population at 08:00, 13:00 and 21:00 of the first day.
+struct Shots<'a> {
+    site: &'a city::Site,
+    plan: &'a city::CityPlan,
+    out: std::path::PathBuf,
+}
+
+/// A person's colour on the maps by what they are doing.
+fn colour(doing: population::Doing) -> [u8; 3] {
+    use population::Doing;
+    match doing {
+        Doing::Home => [70, 90, 160],
+        Doing::Anchor => [255, 170, 60],
+        Doing::Shop => [120, 220, 255],
+        Doing::Out => [255, 80, 200],
+        Doing::Park => [90, 230, 110],
+        Doing::Travelling => [255, 255, 220],
+    }
+}
+
+/// Makes the population of `buildings` and `parks` and runs it for `days`, returning the report;
+/// draws it at three hours of the first day when `shots` says where.
+fn run(
+    buildings: &[Building],
+    parks: &[[f32; 2]],
+    size: f32,
+    days: u32,
+    shots: Option<&Shots>,
+) -> String {
     let mut out = String::new();
     let t = Instant::now();
     let places = places_from_buildings(buildings, parks, &Uses::default());
@@ -84,6 +122,27 @@ fn run(buildings: &[Building], parks: &[[f32; 2]], size: f32, days: u32) -> Stri
     let t = Instant::now();
     for hour in 1..=days * 24 {
         sim.run_until(hour * 3600);
+        if let Some(shots) = shots
+            && [8, 13, 21].contains(&hour)
+        {
+            let _ = std::fs::create_dir_all(&shots.out);
+            let points: Vec<_> = sim
+                .positions()
+                .into_iter()
+                .map(|(p, d)| (p, colour(d)))
+                .collect();
+            let font = std::fs::read("assets/fonts/jetbrains-mono/JetBrainsMono-Variable.ttf").ok();
+            let caption = format!("{hour:02}:00, {n} people");
+            let path = shots.out.join(format!("people-{hour:02}.png"));
+            let _ = city::map::write_points(
+                shots.site,
+                shots.plan,
+                &points,
+                &path,
+                4.0,
+                font.as_deref().map(|f| (caption.as_str(), f)),
+            );
+        }
         if hour % 3 == 0 || hour <= 24 {
             let c = sim.census();
             let pc = |v: u32| 100.0 * v as f64 / n as f64;
