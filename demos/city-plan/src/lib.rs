@@ -34,6 +34,8 @@ use forge_sim::transit::{Service, Timetable};
 use glam::{DVec2, Mat4, Vec3};
 use winit::keyboard::KeyCode;
 
+mod walk;
+
 /// A tile's side, metres.
 pub const TILE: f64 = 250.0;
 
@@ -181,6 +183,9 @@ pub struct PlanScenario {
     /// The tram lines' runs, and the service's clock at the start, seconds.
     trams: Vec<TramRun>,
     clock: f64,
+    /// Each mass's footprint (the world's x and z) and its top, for the walker's walls.
+    walls: Vec<(Vec<glam::Vec2>, f32)>,
+    walk_on_start: bool,
     size: f64,
     /// What the kit built, logged once the app logs.
     kit_report: Option<String>,
@@ -363,6 +368,21 @@ impl PlanScenario {
             kit_report,
             trams,
             clock: 3600.0,
+            walls: masses
+                .iter()
+                .map(|m| {
+                    let footprint = m
+                        .footprint
+                        .iter()
+                        .map(|&p| {
+                            let w = world(size, p, 0.0);
+                            glam::Vec2::new(w.x, w.z)
+                        })
+                        .collect();
+                    (footprint, m.height as f32 + 0.9)
+                })
+                .collect(),
+            walk_on_start: false,
             size,
             camera,
             title: format!(
@@ -375,6 +395,12 @@ impl PlanScenario {
             ),
             triangles,
         }
+    }
+
+    /// Walking from the start, in first person where the camera stands (Enter frees it).
+    pub fn walking(mut self) -> Self {
+        self.walk_on_start = true;
+        self
     }
 
     /// The trams' service clock at the start, seconds (an hour in by default, every vehicle
@@ -1254,6 +1280,9 @@ impl Scenario for PlanScenario {
                 title: self.title.clone(),
                 trams: self.trams.clone(),
                 clock: self.clock,
+                walls: walk::Walls::new(self.walls.clone()),
+                walker: None,
+                walk_on_start: self.walk_on_start,
                 size: self.size,
                 origin: scene_origin(args).to_f64().as_vec3(),
             }),
@@ -1268,25 +1297,54 @@ struct PlanRunning {
     /// The service's clock, seconds.
     clock: f64,
     size: f64,
+    /// The masses as walls, the walker among them, and whether it walks from the start.
+    walls: walk::Walls,
+    walker: Option<walk::Walker>,
+    walk_on_start: bool,
     /// The scene's origin, which the movers' positions are relative to.
     origin: Vec3,
 }
 
+impl PlanRunning {
+    /// Walks from where the camera stands, or frees the camera.
+    fn toggle_walk(&mut self, camera: &FlyCamera) {
+        self.walker = match self.walker.take() {
+            Some(_) => None,
+            None => walk::Walker::new(&self.walls, camera.position)
+                .inspect_err(|e| tracing::warn!("the walker: {e}"))
+                .ok(),
+        };
+    }
+}
+
 impl Running for PlanRunning {
-    fn key_pressed(&mut self, _code: KeyCode, _camera: &FlyCamera) -> bool {
+    fn key_pressed(&mut self, code: KeyCode, camera: &FlyCamera) -> bool {
+        // Enter: walk the streets in first person, or fly again.
+        if code == KeyCode::Enter {
+            self.toggle_walk(camera);
+            return true;
+        }
         false
     }
 
     fn update(
         &mut self,
-        _args: &Args,
-        _input: &Input,
-        _camera: &FlyCamera,
+        args: &Args,
+        input: &Input,
+        camera: &FlyCamera,
         _frame: u64,
         _dt: f32,
         step: f32,
     ) -> Option<f64> {
         self.clock += f64::from(step);
+        if self.walk_on_start {
+            self.walk_on_start = false;
+            self.toggle_walk(camera);
+        }
+        if let Some(walker) = &mut self.walker {
+            let walk = city_blocks::wished_walk(args, camera.yaw, input);
+            walker.advance(&self.walls, walk, f64::from(step));
+        }
         None
     }
 
@@ -1294,7 +1352,12 @@ impl Running for PlanRunning {
         None
     }
 
-    fn follow(&mut self, _camera: &mut FlyCamera) {}
+    fn follow(&mut self, camera: &mut FlyCamera) {
+        // In first person: the camera at the walker's eyes, the view where the mouse turns it.
+        if let Some(walker) = &self.walker {
+            camera.position = walker.feet() + Vec3::Y * walk::EYES;
+        }
+    }
 
     fn movers(&mut self, scene: &mut MeshletScene) {
         if self.trams.is_empty() {

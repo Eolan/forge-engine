@@ -700,7 +700,8 @@ The research is `assets-and-licences.md`, `population-simulation.md`, `procedura
    Next: the module grid, a proxy per building, roofs from the straight skeleton (#247).
 3. **Vegetation:** trees, grass, parks. Begun 2026-10-11: street, park, quay and courtyard
    trees as instances.
-4. **The player** in the streets in first person; interiors by use in speed tiers.
+4. **The player** in the streets in first person; interiors by use in speed tiers. Begun
+   2026-10-11: walking in first person among the masses (`city-plan`, Enter).
 5. **Night:** many local lights. Previewed 2026-10-11: lit windows. The probes flood the scene
    with them (#254).
 6. **People:** the human runtime and crowds at scale.

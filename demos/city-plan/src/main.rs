@@ -36,6 +36,10 @@ struct Cli {
     /// `lead` seconds in (a capture's frame over 60).
     #[arg(long, value_delimiter = ',', allow_hyphen_values = true)]
     tram: Option<Vec<f64>>,
+    /// Walk in first person from the start where the camera stands (Enter toggles it; the
+    /// app's `--walk vx,vz` scripts the walk).
+    #[arg(long)]
+    walk_start: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -113,6 +117,11 @@ fn main() -> anyhow::Result<()> {
         }
         Some(_) => anyhow::bail!("--tram takes x,z,lead"),
         None => scenario,
+    };
+    let scenario = if cli.walk_start {
+        scenario.walking()
+    } else {
+        scenario
     };
     city_blocks::run(cli.app, "forge city-plan", Some(Box::new(scenario)))
 }

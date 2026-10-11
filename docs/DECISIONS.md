@@ -3937,7 +3937,8 @@ Each note's city-specific appendix stays in the sandbox.
        along the streets, trees in parks, on quays and in courtyards, drawn as one instanced
        low-poly tree.
     4. **The player** walking the streets in first person; interiors furnished by use, in tiers
-       (`city-generation.md` §17).
+       (`city-generation.md` §17). *Begun 2026-10-11:* walking in first person in
+       `demos/city-plan` (Enter), a Jolt character among the masses as walls.
     5. **Night:** many local lights. *Previewed 2026-10-11:* lit windows from emissive maps.
        The probes flood the scene with that light (#254).
     6. **People:** the runtime, crowds at scale, navigation, then lives and schedules.

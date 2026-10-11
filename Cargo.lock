@@ -358,6 +358,7 @@ dependencies = [
  "forge-app",
  "forge-core",
  "forge-geom",
+ "forge-physics",
  "forge-procgen",
  "forge-render",
  "forge-sim",

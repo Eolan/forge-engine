@@ -266,6 +266,24 @@ The example's two lines run 10 trams.
 - **tram stops:** a 36 m platform level with the trams' floor by each track, and a glass
   shelter with a bench and a lit totem for the next trams' times.
 
+## Walking the streets (D-059's step 4)
+
+```
+cargo run --release -p city-plan -- --street        # then Enter: walk; Enter again: fly
+cargo run --release -p city-plan -- --street --walk-start --walk=1.0,-1.4   # a scripted walk
+```
+
+Enter puts a Jolt character (1.8 m, the island's walker's) on the ground where the camera
+stands, and the camera at its eyes, 1.65 m up. WASD walks along the view, Shift runs, and the
+mouse turns the view. The masses round it are its walls: each footprint's convex hull raised to
+its parapet, kept within 80 m as it goes. The ground is one slab at the streets' level, and the
+pavements' 14 cm are stepped. A walk east into a lane's facade stops at its render.
+
+![A walk up a lane](images/city-plan-walk.png)
+
+*Three seconds up a lane at eye height, walked by the script: café terraces, a street tree, the
+first floor's balconies.*
+
 ## Next (#245–#247)
 
 - Squares at the radial districts' centres; the landmarks' sightlines.
