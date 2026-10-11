@@ -201,7 +201,7 @@ neighbours differ.
 |---|---|
 | Buildings / faces / terminals | 1 010 / 4 435 / 166 418 |
 | Instances / unique modules | 30 232 / 20 (8.1 M instanced triangles) |
-| Merged triangles added (walls, bands, cornices) | 383 k |
+| Merged triangles added (walls, bands, cornices) | 363 k |
 | Derived and assembled | 68 ms (one thread) |
 | Longest run of one opening along a floor of a street front | 10 |
 | GPU frame at 2800 × 1575, this view, best of 3 | 3.78 ms (3.42 ms with `--detail 0`) |
