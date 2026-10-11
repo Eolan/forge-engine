@@ -1609,8 +1609,10 @@ impl Scenario for PlanScenario {
                 [0.0; 3]
             },
             reflectance: 0.06,
-            // Each window its own mix of dark glass and the curtains behind it.
-            color_b: [0.17, 0.15, 0.13],
+            // Each window its own mix of dark glass and the net curtains behind it, from bare
+            // to drawn (the owner, 2026-10-11: the windows read dark; in France many homes keep
+            // sheers so the street cannot see in). A share per style comes with #259.
+            color_b: [0.52, 0.50, 0.46],
             ..colour([0.03, 0.035, 0.04], 3000.0, 0.6)
         };
         for (k, &group) in KIT_GROUPS.iter().enumerate() {
