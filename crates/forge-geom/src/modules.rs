@@ -133,17 +133,17 @@ pub fn module(name: &str, w: f32, h: f32) -> Option<TriMesh> {
 }
 
 /// Faces of a cuboid, as bits.
-const POS_X: u8 = 1;
-const NEG_X: u8 = 2;
-const POS_Y: u8 = 4;
-const NEG_Y: u8 = 8;
-const POS_Z: u8 = 16;
-const NEG_Z: u8 = 32;
-const ALL: u8 = 63;
-const NO_BACK: u8 = ALL & !NEG_Z;
+pub(crate) const POS_X: u8 = 1;
+pub(crate) const NEG_X: u8 = 2;
+pub(crate) const POS_Y: u8 = 4;
+pub(crate) const NEG_Y: u8 = 8;
+pub(crate) const POS_Z: u8 = 16;
+pub(crate) const NEG_Z: u8 = 32;
+pub(crate) const ALL: u8 = 63;
+pub(crate) const NO_BACK: u8 = ALL & !NEG_Z;
 
 /// A quad, its corners counter-clockwise seen from its front.
-fn quad(m: &mut TriMesh, p: [Vec3; 4], section: u8) {
+pub(crate) fn quad(m: &mut TriMesh, p: [Vec3; 4], section: u8) {
     let n = (p[2] - p[0]).cross(p[3] - p[1]).normalize_or_zero();
     let base = m.positions.len() as u32;
     for q in p {
@@ -178,7 +178,7 @@ fn wall_quad(w: f32, h: f32, z: f32) -> [Vec3; 4] {
 }
 
 /// The faces `faces` of the box from `lo` to `hi`.
-fn cuboid(m: &mut TriMesh, lo: Vec3, hi: Vec3, section: u8, faces: u8) {
+pub(crate) fn cuboid(m: &mut TriMesh, lo: Vec3, hi: Vec3, section: u8, faces: u8) {
     let (a, b) = (lo, hi);
     let v = |x: f32, y: f32, z: f32| Vec3::new(x, y, z);
     let all = [

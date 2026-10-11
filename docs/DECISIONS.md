@@ -3941,7 +3941,9 @@ Each note's city-specific appendix stays in the sandbox.
     5. **Night:** many local lights. *Previewed 2026-10-11:* lit windows from emissive maps.
        The probes flood the scene with that light (#254).
     6. **People:** the runtime, crowds at scale, navigation, then lives and schedules.
-    7. **Public transport:** trams, taxis, boats; then vehicles to pilot.
+    7. **Public transport:** trams, taxis, boats; then vehicles to pilot. *Begun 2026-10-11:*
+       trams as timetabled runs (`forge_sim::transit`), a part-program model
+       (`forge_geom::vehicles`), drawn as movers on double tracks in `demos/city-plan` (#253).
     8. **The population server,** scaled to 1 M and beyond; multiplayer clients.
     9. **Ambient audio.** Later: ships, aircraft, drones, weather, third person, LLM dialogue,
        visemes.

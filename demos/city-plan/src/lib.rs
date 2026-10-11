@@ -19,17 +19,18 @@ use forge_app::{FlyCamera, Input, Setup};
 use forge_core::material::{RenderLayer, TextureId, UvMapping};
 use forge_geom::MeshletMesh;
 use forge_geom::city::PropSpec;
-use forge_geom::modules;
 use forge_geom::procedural::TriMesh;
+use forge_geom::{modules, vehicles};
 use forge_procgen::city::facades::{self, FaceKind};
 use forge_procgen::city::lamps::Lamp;
 use forge_procgen::city::mass::{FLOOR, GROUND_FLOOR, Mass, Roof};
 use forge_procgen::city::trees::Tree;
 use forge_procgen::city::{BlockUse, CityPlan, LAGOON, SEA, Site, geom};
 use forge_procgen::grammar::Grammar;
-use forge_render::MeshletScene;
 use forge_render::MeshletSceneBuilder;
 use forge_render::textures;
+use forge_render::{MeshletScene, MoverTransform};
+use forge_sim::transit::{Service, Timetable};
 use glam::{DVec2, Mat4, Vec3};
 use winit::keyboard::KeyCode;
 
@@ -177,6 +178,10 @@ pub struct PlanScenario {
     /// The style kit's instanced modules and their instances (module, transform, group).
     kit_meshes: Vec<TriMesh>,
     kit_instances: Vec<(u32, Mat4, u8)>,
+    /// The tram lines' runs, and the service's clock at the start, seconds.
+    trams: Vec<TramRun>,
+    clock: f64,
+    size: f64,
     /// What the kit built, logged once the app logs.
     kit_report: Option<String>,
     camera: FlyCamera,
@@ -265,12 +270,16 @@ impl PlanScenario {
             ribbon(&mut tiles, &e.points, e.profile.width(), 0.16, section);
         }
         pavements(&mut tiles, plan);
+        // Two tracks a line, one each way, on the right of the way they run.
         for line in &plan.tram_lines {
-            for offset in [-0.7, 0.7] {
-                let rail = offset_line(&line.points, offset);
-                ribbon(&mut tiles, &rail, 0.25, 0.22, TRACK);
+            for track in [-TRACK_OFFSET, TRACK_OFFSET] {
+                for rail in [-0.72, 0.72] {
+                    let rail = offset_line(&line.points, track + rail);
+                    ribbon(&mut tiles, &rail, 0.25, 0.22, TRACK);
+                }
             }
         }
+        let trams: Vec<TramRun> = plan.tram_lines.iter().filter_map(TramRun::new).collect();
         let mut near = Vec::new();
         for (i, m) in masses.iter().enumerate() {
             match detail {
@@ -341,6 +350,9 @@ impl PlanScenario {
             kit_meshes,
             kit_instances,
             kit_report,
+            trams,
+            clock: 3600.0,
+            size,
             camera,
             title: format!(
                 "{title}: {} masses ({} from the kit), {} trees, {:.0} km of streets, {} tram stops",
@@ -352,6 +364,134 @@ impl PlanScenario {
             ),
             triangles,
         }
+    }
+
+    /// The trams' service clock at the start, seconds (an hour in by default, every vehicle
+    /// out).
+    pub fn with_clock(mut self, seconds: f64) -> Self {
+        self.clock = seconds;
+        self
+    }
+
+    /// A clock, within the service's first two hours, at which a tram's front comes within
+    /// 40 m of `p` on the plan, `lead` seconds before it is nearest: for a capture that shows one.
+    pub fn tram_near(&self, p: DVec2, lead: f64) -> Option<f64> {
+        let mut best: Option<(f64, f64)> = None;
+        for run in &self.trams {
+            for k in 0..run.timetable.vehicles() {
+                let mut t = 3600.0;
+                while t < 3600.0 + 7200.0 {
+                    let s = run.timetable.at(k, t).s;
+                    let d = run.track(s).0.distance(p);
+                    if d < 40.0 && best.is_none_or(|(bd, _)| d < bd) {
+                        best = Some((d, t));
+                    }
+                    t += 2.0;
+                }
+            }
+        }
+        best.map(|(_, t)| t - lead)
+    }
+}
+
+/// How far each of a line's two tracks lies from its centreline, metres.
+const TRACK_OFFSET: f64 = 1.6;
+/// The trams' sections: a cab, three passenger sections, a cab.
+const TRAM_SECTIONS: usize = 5;
+/// The trams' liveries: one group a line, the stripe in its colour.
+const TRAM_GROUPS: [&str; 8] = [
+    "plan-tram-0",
+    "plan-tram-1",
+    "plan-tram-2",
+    "plan-tram-3",
+    "plan-tram-4",
+    "plan-tram-5",
+    "plan-tram-6",
+    "plan-tram-7",
+];
+
+/// A tram line's runs: its track and its timetable (`forge_sim::transit`).
+#[derive(Clone)]
+struct TramRun {
+    points: Vec<DVec2>,
+    /// Distance along `points` at each point, metres.
+    along: Vec<f64>,
+    timetable: Timetable,
+    colour: [u8; 3],
+}
+
+impl TramRun {
+    /// A line's runs, its stops at their distances along it; `None` with fewer than two.
+    fn new(line: &forge_procgen::city::TramLine) -> Option<Self> {
+        let points = line.points.clone();
+        let mut along = vec![0.0];
+        for w in points.windows(2) {
+            along.push(along[along.len() - 1] + w[0].distance(w[1]));
+        }
+        // Each stop at the distance of its nearest point on the route, 60 m apart at least.
+        let mut stops: Vec<f64> = line
+            .stops
+            .iter()
+            .map(|&stop| {
+                let mut best = (f64::MAX, 0.0);
+                for (i, w) in points.windows(2).enumerate() {
+                    let t = geom::closest_on_segment(stop, w[0], w[1]);
+                    let q = w[0] + (w[1] - w[0]) * t;
+                    let d = q.distance(stop);
+                    if d < best.0 {
+                        best = (d, along[i] + w[0].distance(q));
+                    }
+                }
+                best.1
+            })
+            .collect();
+        stops.sort_by(f64::total_cmp);
+        stops.dedup_by(|a, b| (*a - *b).abs() < 60.0);
+        (stops.len() >= 2).then(|| Self {
+            points,
+            along,
+            timetable: Timetable::new(&stops, Service::default()),
+            colour: line.colour,
+        })
+    }
+
+    /// The point `s` metres along the route and its unit direction, carried straight on past
+    /// either end.
+    fn track(&self, s: f64) -> (DVec2, DVec2) {
+        let length = self.along[self.along.len() - 1];
+        let inside = s.clamp(0.0, length);
+        let p = geom::point_at(&self.points, inside);
+        let t = geom::tangent_at(&self.points, inside);
+        (p + t * (s - inside), t)
+    }
+
+    /// The transforms of vehicle `k`'s sections at `time`, in a plan of side `size`: the
+    /// front cab, the passenger sections, the rear cab (turned round), each set by its two
+    /// ends on the track of the way it runs.
+    fn sections(&self, k: usize, time: f64, size: f64) -> [(Vec3, f32); TRAM_SECTIONS] {
+        use forge_geom::vehicles::{SECTION_GAP, SECTION_LENGTH};
+        let run = self.timetable.at(k, time);
+        let (dir, side) = if run.outbound {
+            (1.0, TRACK_OFFSET)
+        } else {
+            (-1.0, -TRACK_OFFSET)
+        };
+        let on_track = |s: f64| {
+            let (p, t) = self.track(s);
+            p + DVec2::new(-t.y, t.x) * side
+        };
+        let pitch = f64::from(SECTION_LENGTH + SECTION_GAP);
+        std::array::from_fn(|i| {
+            let front = run.s - dir * (pitch * i as f64 + f64::from(SECTION_GAP) * 0.5);
+            let rear = front - dir * f64::from(SECTION_LENGTH);
+            let (a, b) = (on_track(front), on_track(rear));
+            let heading = (a - b).normalize_or_zero();
+            let mut yaw = (-heading.y).atan2(heading.x) as f32;
+            if i + 1 == TRAM_SECTIONS {
+                yaw += std::f32::consts::PI;
+            }
+            (world(size, (a + b) * 0.5, 0.22), yaw)
+        })
     }
 }
 
@@ -900,6 +1040,30 @@ impl Scenario for PlanScenario {
             );
         }
         let kit_rows: Vec<_> = KIT_GROUPS.iter().map(|g| materials.of(g)).collect();
+        // The trams' liveries: white bodies, dark glass, the line's colour as the stripe.
+        let linear = |c: u8| (f32::from(c) / 255.0).powf(2.2);
+        for (k, &group) in TRAM_GROUPS.iter().enumerate() {
+            let stripe = self
+                .trams
+                .get(k)
+                .map_or([0.6, 0.1, 0.1], |r| r.colour.map(linear));
+            materials.add_rows(
+                group,
+                vec![
+                    (
+                        format!("{group} body"),
+                        colour([0.86, 0.86, 0.84], 60.0, 0.25),
+                    ),
+                    (format!("{group} glass"), glass(false)),
+                    (format!("{group} stripe"), colour(stripe, 60.0, 0.25)),
+                    (
+                        format!("{group} running gear"),
+                        colour([0.07, 0.07, 0.08], 30.0, 0.1),
+                    ),
+                ],
+            );
+        }
+        let tram_rows: Vec<_> = TRAM_GROUPS.iter().map(|g| materials.of(g)).collect();
         let trunk = colour([0.20, 0.15, 0.11], 8.0, 0.02);
         materials.add_rows(
             "plan-tree-a",
@@ -993,12 +1157,32 @@ impl Scenario for PlanScenario {
         if let Some(report) = &self.kit_report {
             tracing::info!("{report}");
         }
+        // The trams: a cab and a passenger section's meshes a line, in its livery; their
+        // instances are movers, the table's last.
+        let mut tram_movers = Vec::new();
+        for (i, run) in self.trams.iter().enumerate() {
+            let row = tram_rows[i % tram_rows.len()];
+            let cab = builder.add_mesh(&MeshletMesh::build(&vehicles::tram_section(true)));
+            let middle = builder.add_mesh(&MeshletMesh::build(&vehicles::tram_section(false)));
+            builder.set_mesh_material(cab, row);
+            builder.set_mesh_material(middle, row);
+            let n = run.timetable.vehicles() as u32;
+            tram_movers.extend([(cab, 2 * n), (middle, (TRAM_SECTIONS as u32 - 2) * n)]);
+        }
+        if !tram_movers.is_empty() {
+            builder.reserve_movers(&tram_movers);
+        }
         let mut scene = builder.build(&ctx.device)?;
         scene.build_tlas(&ctx.device, &ctx.shaders)?;
         tracing::info!(
             meshes,
             trees = self.trees.len(),
             lamps = self.lamps.len(),
+            trams = self
+                .trams
+                .iter()
+                .map(|r| r.timetable.vehicles())
+                .sum::<usize>(),
             triangles = self.triangles,
             ms = start.elapsed().as_millis(),
             "the plan's scene"
@@ -1007,14 +1191,24 @@ impl Scenario for PlanScenario {
             scene,
             Box::new(PlanRunning {
                 title: self.title.clone(),
+                trams: self.trams.clone(),
+                clock: self.clock,
+                size: self.size,
+                origin: scene_origin(args).to_f64().as_vec3(),
             }),
         ))
     }
 }
 
-/// The plan's scene while it runs: nothing moves.
+/// The plan's scene while it runs: the trams run their timetables.
 struct PlanRunning {
     title: String,
+    trams: Vec<TramRun>,
+    /// The service's clock, seconds.
+    clock: f64,
+    size: f64,
+    /// The scene's origin, which the movers' positions are relative to.
+    origin: Vec3,
 }
 
 impl Running for PlanRunning {
@@ -1029,8 +1223,9 @@ impl Running for PlanRunning {
         _camera: &FlyCamera,
         _frame: u64,
         _dt: f32,
-        _step: f32,
+        step: f32,
     ) -> Option<f64> {
+        self.clock += f64::from(step);
         None
     }
 
@@ -1040,7 +1235,31 @@ impl Running for PlanRunning {
 
     fn follow(&mut self, _camera: &mut FlyCamera) {}
 
-    fn movers(&mut self, _scene: &mut MeshletScene) {}
+    fn movers(&mut self, scene: &mut MeshletScene) {
+        if self.trams.is_empty() {
+            return;
+        }
+        // In the order the movers were reserved: a line's cabs (front and rear of each
+        // vehicle), then its passenger sections.
+        let mut transforms = Vec::new();
+        let place = |(at, yaw): (Vec3, f32)| MoverTransform {
+            position: at - self.origin,
+            rotation: glam::Quat::from_rotation_y(yaw),
+            scale: 1.0,
+        };
+        for run in &self.trams {
+            let vehicles: Vec<_> = (0..run.timetable.vehicles())
+                .map(|k| run.sections(k, self.clock, self.size))
+                .collect();
+            for v in &vehicles {
+                transforms.extend([place(v[0]), place(v[TRAM_SECTIONS - 1])]);
+            }
+            for v in &vehicles {
+                transforms.extend(v[1..TRAM_SECTIONS - 1].iter().map(|&s| place(s)));
+            }
+        }
+        scene.set_movers(&transforms);
+    }
 
     fn title(&mut self) -> String {
         self.title.clone()

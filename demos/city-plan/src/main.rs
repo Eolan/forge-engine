@@ -32,6 +32,10 @@ struct Cli {
     /// when not given.
     #[arg(long)]
     rules: Option<std::path::PathBuf>,
+    /// `x,z,lead`: start the trams' clock so that one passes nearest the world's point (x, z)
+    /// `lead` seconds in (a capture's frame over 60).
+    #[arg(long, value_delimiter = ',', allow_hyphen_values = true)]
+    tram: Option<Vec<f64>>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -99,5 +103,16 @@ fn main() -> anyhow::Result<()> {
         "city plan",
         (cli.detail > 0.0).then_some(&detail),
     );
+    let scenario = match cli.tram.as_deref() {
+        Some(&[x, z, lead]) => {
+            let at = DVec2::new(x + half, z + half);
+            match scenario.tram_near(at, lead) {
+                Some(clock) => scenario.with_clock(clock),
+                None => scenario,
+            }
+        }
+        Some(_) => anyhow::bail!("--tram takes x,z,lead"),
+        None => scenario,
+    };
     city_blocks::run(cli.app, "forge city-plan", Some(Box::new(scenario)))
 }

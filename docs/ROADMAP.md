@@ -704,7 +704,8 @@ The research is `assets-and-licences.md`, `population-simulation.md`, `procedura
 5. **Night:** many local lights. Previewed 2026-10-11: lit windows. The probes flood the scene
    with them (#254).
 6. **People:** the human runtime and crowds at scale.
-7. **Public transport:** trams, public automated taxis, boats.
+7. **Public transport:** trams, public automated taxis, boats. Begun 2026-10-11: trams on
+   their timetables, moving along double tracks (#253).
 8. **The population server:** event-driven records in `forge-sim`, 1 M then 4 M.
 9. **Ambient audio.**
 

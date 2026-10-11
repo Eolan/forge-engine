@@ -395,6 +395,9 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   and repeat with absolute, relative and floating sizes, the component split of a mass into
   faces, conditions on the context, and terminals that insert modules. The research found no
   patent on the grammar itself (`city-generation.md`, Patents).
+- **Timetabled runs** (`forge_sim::transit`). The General Transit Feed Specification's model
+  (GTFS, gtfs.org): routes, trips, stop times and frequencies, a vehicle's place a function of
+  its schedule.
 - **Polylines and polygons.** David H. Douglas, Thomas K. Peucker, "Algorithms for the reduction
   of the number of points required to represent a digitized line or its caricature", *The
   Canadian Cartographer* 10(2), 1973; Ivan E. Sutherland, Gary W. Hodgman, "Reentrant polygon

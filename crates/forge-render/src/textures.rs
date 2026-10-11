@@ -337,14 +337,14 @@ pub fn paving(seed: u64, size: u32) -> [TextureData; 2] {
 pub fn asphalt(seed: u64, size: u32) -> [TextureData; 2] {
     let heights = grid(size, |u, v| {
         let stones = fbm(seed ^ 0xA66, u, v, 160, 2);
-        0.6 * smoothstep(0.55, 0.7, stones) + 0.4 * fbm(seed, u, v, 40, 3)
+        0.3 * smoothstep(0.55, 0.7, stones) + 0.7 * fbm(seed, u, v, 40, 3)
     });
     let colours = grid(size, |u, v| {
         let stones = fbm(seed ^ 0xA66, u, v, 160, 2);
         let aggregate = smoothstep(0.58, 0.72, stones);
         let wear = fbm(seed ^ 0x3EA, u, v, 4, 4);
-        let base = 0.16 + 0.07 * wear;
-        let c = base + 0.14 * aggregate;
+        let base = 0.17 + 0.05 * wear;
+        let c = base + 0.05 * aggregate;
         [c, c * 0.98, c * 0.95]
     });
     [

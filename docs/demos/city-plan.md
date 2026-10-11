@@ -233,6 +233,31 @@ across and its height up. The one model is a trunk forking into three limbs unde
 of seven smooth lumps (about 620 triangles), so the crowns no longer hide the facades from
 the pavement.
 
+## Trams on their timetables (#253)
+
+```
+cargo run --release -p city-plan -- --street --tram=X,Z,LEAD   # a tram passes (X, Z) LEAD s in
+```
+
+![Trams](images/city-plan-tram.png)
+
+*A five-section tram on the river avenue, from the pavement and from 40 m up: white bodies in
+the line's colour, articulated round the curve, on the right-hand track.*
+- **The timetable** (`forge_sim::transit`) runs vehicles out along their line and back:
+  - each leg from stop to stop on a trapezoidal profile (50 km/h at most, 1.1 m/s²);
+  - 25 s at each stop, 3 minutes at each end, a vehicle every 6 minutes;
+  - a run's place is a pure function of the time (GTFS's model of trips and frequencies), so a
+    server, its clients and every stop display compute the same tram from nothing sent.
+- **The model** (`forge_geom::vehicles`) is a part program like the kit's: five sections of
+  6.4 m (two cabs with raked windscreens, three passenger sections), glazed doors, the livery's
+  stripe, roof pods, bellows between sections. It takes its power from the ground, as in
+  Bordeaux and Nice, so the streets have no overhead wires.
+- **In the scene,** each line gets two tracks 3.2 m apart, one each way. Each section is a
+  mover set every frame by its two ends on the track (the bogie points), so a tram bends
+  through curves.
+
+The example's two lines run 10 trams.
+
 ## Next (#245–#247)
 
 - Squares at the radial districts' centres; the landmarks' sightlines.

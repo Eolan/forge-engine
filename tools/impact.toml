@@ -22,6 +22,8 @@
 "crates/forge-procgen/src/city/**" = []
 "crates/forge-procgen/src/grammar.rs" = []
 "crates/forge-geom/src/modules.rs" = []
+"crates/forge-geom/src/vehicles.rs" = []
+"crates/forge-sim/src/transit.rs" = []
 "tools/city-map/**" = []
 "demos/city-plan/**" = []
 "crates/forge-sim/src/population.rs" = []

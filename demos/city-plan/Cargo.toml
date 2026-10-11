@@ -25,6 +25,7 @@ forge-core = { workspace = true }
 forge-geom = { workspace = true }
 forge-procgen = { workspace = true }
 forge-render = { workspace = true }
+forge-sim = { workspace = true }
 glam = { workspace = true }
 tracing = { workspace = true }
 winit = { workspace = true }
