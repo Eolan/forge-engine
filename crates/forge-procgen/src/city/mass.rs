@@ -208,7 +208,15 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
                 }
             })
             .collect();
-        let pieces = absorb_thin(pieces);
+        // No wedge to a point: acute corners cut square (the owner saw an impossible building at a
+        // block's sharp corner).
+        let pieces = absorb_thin(
+            pieces
+                .iter()
+                .map(|p| blunt(p))
+                .filter(|p| p.len() >= 3 && geom::signed_area(p) >= 20.0)
+                .collect(),
+        );
         if pieces.is_empty() {
             continue;
         }
@@ -352,6 +360,41 @@ const MIN_THICKNESS: f64 = 4.0;
 fn thickness(piece: &[DVec2]) -> f64 {
     let (_, extent, _) = geom::oriented_extent(piece);
     extent.x.min(extent.y)
+}
+
+/// The sharpest corner a building keeps, radians: 55°.
+const SHARPEST: f64 = 55.0 * std::f64::consts::PI / 180.0;
+/// How wide an acute corner's cut is, metres: a room's width.
+const BLUNT: f64 = 6.0;
+
+/// A footprint (positive area) with each corner sharper than [`SHARPEST`] cut square to its
+/// bisector where the wedge is [`BLUNT`] wide: a chamfered corner, not a wedge to a point.
+fn blunt(polygon: &[DVec2]) -> Vec<DVec2> {
+    let mut out = polygon.to_vec();
+    for _ in 0..4 {
+        let n = out.len();
+        if n < 3 {
+            break;
+        }
+        let acute = (0..n).find_map(|i| {
+            let (prev, v, next) = (out[(i + n - 1) % n], out[i], out[(i + 1) % n]);
+            let (a, b) = (
+                (prev - v).normalize_or_zero(),
+                (next - v).normalize_or_zero(),
+            );
+            let convex = geom::cross(v - prev, next - v) > 0.0;
+            let angle = a.angle_to(b).abs();
+            (convex && angle > 1e-3 && angle < SHARPEST).then_some((v, a, b, angle))
+        });
+        let Some((v, a, b, angle)) = acute else {
+            break;
+        };
+        let inward = (a + b).normalize_or_zero();
+        let cut = v + inward * (BLUNT * 0.5 / (angle * 0.5).tan());
+        // Keep what lies beyond the cut, away from the corner.
+        out = geom::clip_half_plane(&out, cut, DVec2::new(inward.y, -inward.x));
+    }
+    out
 }
 
 /// A lot's strips with each thinner than [`MIN_THICKNESS`] (what is left along a second street
@@ -504,5 +547,31 @@ mod tests {
         assert!(thinnest >= MIN_THICKNESS, "a mass {thinnest:.1} m thick");
         let green = masses.iter().filter(|m| m.roof == Roof::Green).count();
         assert!(green * 3 > masses.len(), "about half the roofs are green");
+    }
+
+    #[test]
+    fn no_building_comes_to_a_point() {
+        let size = 4000.0;
+        let city = plan(&example::site(size, 10.0), &example::params(size));
+        let masses = masses(&city, &StyleBible::default(), 9);
+        let mut sharp = 0;
+        for m in &masses {
+            let n = m.footprint.len();
+            for i in 0..n {
+                let (prev, v, next) = (
+                    m.footprint[(i + n - 1) % n],
+                    m.footprint[i],
+                    m.footprint[(i + 1) % n],
+                );
+                let (a, b) = (
+                    (prev - v).normalize_or_zero(),
+                    (next - v).normalize_or_zero(),
+                );
+                if geom::cross(v - prev, next - v) > 0.0 && a.angle_to(b).abs() < SHARPEST - 1e-6 {
+                    sharp += 1;
+                }
+            }
+        }
+        assert_eq!(sharp, 0, "{sharp} corners sharper than 55°");
     }
 }
