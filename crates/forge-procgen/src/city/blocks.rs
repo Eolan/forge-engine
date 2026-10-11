@@ -159,7 +159,7 @@ pub fn courtyards(blocks: &mut [Block], roads: &RoadGraph, districts: &[District
         if let Some(inside) = lines.clone().or_else(|| geom::inset(&b.polygon, least)) {
             b.buildable = inside;
         }
-        let Some(depth) = districts[b.district].kind.building_depth() else {
+        let Some(depth) = districts[b.district].building_depth() else {
             continue;
         };
         // A building's depth behind the building lines, or behind the widest street's.

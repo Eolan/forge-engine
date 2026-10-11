@@ -230,9 +230,17 @@ pub struct DistrictSpec {
     pub lot_area: f64,
     /// Its buildings' floors, lowest and highest.
     pub floors: (u8, u8),
+    /// Its buildings' depth behind their building line, metres; its kind's when `None`.
+    pub depth: Option<f64>,
 }
 
 impl DistrictSpec {
+    /// Its buildings' depth behind their building line, metres: its own, or its kind's; `None`
+    /// where it has no perimeter blocks.
+    pub fn building_depth(&self) -> Option<f64> {
+        self.kind.building_depth().map(|d| self.depth.unwrap_or(d))
+    }
+
     /// A plain district for tests.
     pub fn test(anchor: DVec2, radius: f64, pattern: Pattern, grid_angle: f64) -> Self {
         Self {
@@ -245,6 +253,7 @@ impl DistrictSpec {
             street_spacing: 100.0,
             lot_area: 400.0,
             floors: (4, 6),
+            depth: None,
         }
     }
 }

@@ -116,7 +116,7 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
         // first: a lot between two streets is built on both, a corner lot wraps its corner, and
         // the courtyard (inset by the widest street round the block) stays clear. Subtracting
         // the courtyard's convex hull instead ate the buildings along concave and curved sides.
-        let pieces = match district.kind.building_depth() {
+        let pieces = match district.building_depth() {
             Some(depth) => {
                 let mut rest = inside.clone();
                 let mut strips = Vec::new();

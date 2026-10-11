@@ -64,6 +64,7 @@ pub fn params(size: f64) -> CityParams {
         street_spacing: spacing,
         lot_area: lot,
         floors,
+        depth: None,
     };
     let r = size;
     CityParams {

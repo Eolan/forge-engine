@@ -22,6 +22,9 @@ pub struct DistrictStyle {
     pub street_spacing: f64,
     /// The walls' material, by name in the city's palette.
     pub walls: String,
+    /// A building's depth behind its building line, metres; its kind's when not given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth: Option<f64>,
 }
 
 /// A city's rules.
@@ -85,6 +88,9 @@ impl StyleBible {
                 d.floors = style.floors;
                 d.lot_area = style.lot_area;
                 d.street_spacing = style.street_spacing;
+                if style.depth.is_some() {
+                    d.depth = style.depth;
+                }
             }
         }
         params.park_reach = self.park_reach;
@@ -235,8 +241,19 @@ mod tests {
         assert_eq!(bible.height_to_width, 1.2);
         assert_eq!(bible.green_roofs, StyleBible::default().green_roofs);
         assert_eq!(bible.districts[0].floors, (5, 7));
+        assert_eq!(bible.districts[0].depth, None);
         let back = StyleBible::from_toml(&bible.to_toml().expect("writes")).expect("reads back");
         assert_eq!(back, bible);
+        // A district's depth, when given, replaces its kind's.
+        let deep = StyleBible::from_toml(&format!("{text}depth = 18.0\n")).expect("reads");
+        let mut params = example::params(4000.0);
+        deep.apply(&mut params);
+        let perimeter = params
+            .districts
+            .iter()
+            .find(|d| d.kind == DistrictKind::Perimeter)
+            .expect("the example has one");
+        assert_eq!(perimeter.building_depth(), Some(18.0));
     }
 
     #[test]
