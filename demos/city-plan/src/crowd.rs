@@ -1,10 +1,12 @@
-//! The population on foot round the camera (D-059's step 6; `population-simulation.md`'s T0: the
-//! drawn crowd is the real population). The plan's people (`forge_sim::population`) run on the
-//! game's clock, four game seconds a real second. Those walking within [`REACH`] of the camera
-//! are drawn as placeholder figures (`forge_geom::figures`) on the pavements of their route:
-//! the road graph's shortest way (A*) from the street nearest where they set out to the street
-//! nearest where they go, walked at the pace their trip's time gives. Trips quicker than a walk
-//! (by bike or tram) are not drawn yet.
+//! The population on the streets round the camera (D-059's step 6; `population-simulation.md`'s
+//! T0: the drawn crowd is the real population). The plan's people (`forge_sim::population`) run
+//! on the real clock here (see [`TIME_SCALE`]). Those within [`REACH`] of the camera are drawn as
+//! placeholder figures (`forge_geom::figures`):
+//! - on their way, along the road graph's shortest way (A*) from the street nearest where they set
+//!   out to the street nearest where they go, at the pace their trip's time gives: walking on the
+//!   pavement, or riding a bike in the carriageway's right lane when quicker than a walk (trips
+//!   quicker than a bike ride the trams, and are not drawn yet);
+//! - in a park, standing about it.
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
@@ -18,7 +20,7 @@ use glam::{DVec2, Vec2, Vec3};
 
 /// The figures' palettes.
 pub const GROUPS: usize = 8;
-/// Figures a mesh (a palette walking, or standing) shows at most.
+/// Figures a mesh (a palette walking, standing or riding) shows at most.
 pub const PER_MESH: usize = 60;
 /// How far round the camera people are drawn, metres.
 const REACH: f64 = 220.0;
@@ -30,13 +32,15 @@ const TIME_SCALE: f64 = 1.0;
 const NEW_ROUTES: usize = 40;
 /// The fastest a drawn walker goes, m/s.
 const WALK_MAX: f64 = 2.2;
+/// The fastest a drawn cyclist goes, m/s; faster trips ride the trams.
+const RIDE_MAX: f64 = 6.5;
 
-/// A walk along the streets: its points and, per segment, how far right of the line the
-/// pavement runs.
+/// A way along the streets: its points and, per segment, its street's half width and its
+/// pavement's level.
 struct Route {
     points: Vec<DVec2>,
     along: Vec<f64>,
-    side: Vec<f64>,
+    half: Vec<f64>,
     level: Vec<f32>,
 }
 
@@ -45,9 +49,9 @@ impl Route {
         self.along[self.along.len() - 1]
     }
 
-    /// The point `s` metres along, on the pavement to the right, the way it faces and the
-    /// pavement's level.
-    fn at(&self, s: f64) -> (DVec2, DVec2, f32) {
+    /// The point `s` metres along, on the right: the pavement on foot, the carriageway's lane
+    /// riding; the way it faces and the ground's level there.
+    fn at(&self, s: f64, riding: bool) -> (DVec2, DVec2, f32) {
         let s = s.clamp(0.0, self.length());
         let i = self
             .along
@@ -63,11 +67,13 @@ impl Route {
         let dir = (b - a).normalize_or_zero();
         // In the plan's frame (y south) the right of the way is (-dy, dx).
         let right = DVec2::new(-dir.y, dir.x);
-        (
-            a + (b - a) * t + right * self.side[i - 1],
-            dir,
-            self.level[i - 1],
-        )
+        let half = self.half[i - 1];
+        let (side, level) = if riding {
+            ((half - 4.5).max(1.2), 0.16)
+        } else {
+            ((half - 2.0).max(1.0), self.level[i - 1])
+        };
+        (a + (b - a) * t + right * side, dir, level)
     }
 }
 
@@ -131,8 +137,8 @@ impl Crowd {
         for (i, e) in plan.roads.edges.iter().enumerate() {
             adj[e.a as usize].push((e.b, i as u32, true));
             adj[e.b as usize].push((e.a, i as u32, false));
-            // The pavement: two metres in from the street's edge; the avenues' raised.
-            let side = (e.profile.width() * 0.5 - 2.0).max(1.0);
+            // The street's half width, and its pavement's level: the avenues' raised.
+            let side = e.profile.width() * 0.5;
             let level = match e.profile {
                 Profile::TramAvenue | Profile::Avenue => 0.30,
                 _ => 0.16,
@@ -169,12 +175,12 @@ impl Crowd {
     }
 
     /// The figures to draw round `camera` (the world's x and z): for each of the
-    /// `2 × GROUPS` meshes in order (each palette walking, then standing), up to [`PER_MESH`]
+    /// `3 × GROUPS` meshes in order (each palette walking, standing, riding), up to [`PER_MESH`]
     /// places and turns.
     pub fn figures(&mut self, camera: Vec2) -> Vec<Vec<(Vec3, f32)>> {
         let half = self.size * 0.5;
         let c = DVec2::new(f64::from(camera.x) + half, f64::from(camera.y) + half);
-        let mut out = vec![Vec::new(); 2 * GROUPS];
+        let mut out = vec![Vec::new(); 3 * GROUPS];
         let mut budget = NEW_ROUTES;
         let places = &self.sim.world.places;
         let now = self.clock;
@@ -191,7 +197,7 @@ impl Crowd {
                         f64::from(q[0]) + jitter(s),
                         f64::from(q[1]) + jitter(s >> 8),
                     );
-                    let mesh = (s as usize % GROUPS) * 2 + 1;
+                    let mesh = (s as usize % GROUPS) * 3 + 1;
                     let inside = self.parks.iter().any(|p| geom::contains(p, q));
                     if inside && q.distance(c) <= REACH && out[mesh].len() < PER_MESH {
                         let at = Vec3::new((q.x - half) as f32, 0.08, (q.y - half) as f32);
@@ -219,18 +225,20 @@ impl Crowd {
                 budget -= 1;
                 let route = self
                     .route(a, b)
-                    .filter(|r| r.length() / f64::from(trip.time.max(1)) <= WALK_MAX);
+                    .filter(|r| r.length() / f64::from(trip.time.max(1)) <= RIDE_MAX);
                 self.routes.insert(key, route);
             }
             let Some(Some(route)) = self.routes.get(&key) else {
                 continue;
             };
-            let (q, dir, level) = route.at(gone * route.length());
+            // On foot, or riding a bike: by the pace the trip's time gives.
+            let riding = route.length() / f64::from(trip.time.max(1)) > WALK_MAX;
+            let (q, dir, level) = route.at(gone * route.length(), riding);
             if q.distance(c) > REACH {
                 continue;
             }
             let seed = self.sim.pop.seed[p];
-            let mesh = (seed as usize % GROUPS) * 2;
+            let mesh = (seed as usize % GROUPS) * 3 + if riding { 2 } else { 0 };
             if out[mesh].len() >= PER_MESH {
                 continue;
             }
@@ -295,7 +303,7 @@ impl Crowd {
         }
         legs.reverse();
         let mut points = Vec::new();
-        let mut side = Vec::new();
+        let mut half = Vec::new();
         let mut level = Vec::new();
         for (e, fwd) in legs {
             let (pts, s, l) = &self.plan_edges[e as usize];
@@ -308,7 +316,7 @@ impl Crowd {
                     continue;
                 }
                 points.push(p);
-                side.push(*s);
+                half.push(*s);
                 level.push(*l as f32);
             }
         }
@@ -322,7 +330,7 @@ impl Crowd {
         Some(Route {
             points,
             along,
-            side,
+            half,
             level,
         })
     }

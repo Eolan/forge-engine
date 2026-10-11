@@ -288,17 +288,19 @@ cargo run --release -p city-plan -- --street --people 16.3   # from 16:18
 
 ![People](images/city-plan-people.png)
 
-*From 16:18: the park's visitors standing about it, and the evening's walkers on the river
-avenue.* `--people HOUR` builds the plan's population from the masses (`forge_sim::population`,
-295 789 people, 2 s) and runs its day to that hour. Each frame:
+*From 16:18, the park's visitors standing about it; at 08:12, the morning's cyclists in the
+river avenue's lanes and walkers on its pavements.* `--people HOUR` builds the plan's population
+from the masses (`forge_sim::population`, 295 789 people, 2 s) and runs its day to that hour.
+Each frame:
 - **who is drawn:** people within 220 m of the camera, as placeholder figures
-  (`forge_geom::figures`: blocky, in eight palettes, walking or standing);
-- **those on foot:** each walks the shortest way along the streets (A* on the road graph) from
-  the street nearest their start to the street nearest their goal, on its pavement, at the pace
-  their trip's time gives;
-- **those in a park:** they stand about it.
+  (`forge_geom::figures`: blocky, in eight palettes, walking, standing or riding a bike);
+- **those on their way:** each goes the shortest way along the streets (A* on the road graph)
+  from the street nearest their start to the street nearest their goal, at the pace their
+  trip's time gives: on the pavement up to 2.2 m/s, by bike in the carriageway's right lane up
+  to 6.5 m/s;
+- **those in a park:** they stand about it, kept 9 m inside its streets.
 
-Trips quicker than a walk (bike, tram) are not drawn yet. The drawn crowd runs on the real
+Faster trips ride the trams and are not drawn yet. The drawn crowd runs on the real
 clock, a game second a second: at the game's four, its walkers would cross the screen at
 5 m/s, and how the two clocks meet near the player is D-059's open question. #251's humans
 replace the figures.

@@ -106,6 +106,105 @@ pub fn walker(height: f32, stride: f32) -> TriMesh {
     m
 }
 
+/// A cyclist on a city bike, riding along `+x`: two wheels (shoes' section, their tyres), the
+/// frame and the handlebars (bottom's), the rider upright on the saddle, hands on the bars.
+pub fn cyclist(height: f32) -> TriMesh {
+    let mut m = TriMesh::default();
+    let k = height / 1.72;
+    let r = 0.34;
+    // The wheels: thin octagonal rings in the x–y plane, as boxes round each rim.
+    for cx in [-0.52, 0.52] {
+        for i in 0..8 {
+            let a = i as f32 / 8.0 * std::f32::consts::TAU;
+            let at = Vec3::new(cx + a.cos() * r, r + a.sin() * r, 0.0);
+            part(
+                &mut m,
+                at,
+                Vec3::new(0.02, 0.135, 0.02),
+                Quat::from_rotation_z(a),
+                SHOES,
+            );
+        }
+    }
+    // The frame: down tube, top tube, seat post, fork, the bars.
+    let bar = |m: &mut TriMesh, a: Vec3, b: Vec3, w: f32, section: u8| {
+        let d = b - a;
+        let r = Quat::from_rotation_arc(Vec3::Y, d.normalize());
+        part(
+            m,
+            (a + b) * 0.5,
+            Vec3::new(w, d.length() * 0.5, w),
+            r,
+            section,
+        );
+    };
+    let (rear, front) = (Vec3::new(-0.52, r, 0.0), Vec3::new(0.52, r, 0.0));
+    let (seat, head) = (Vec3::new(-0.18, 0.95, 0.0), Vec3::new(0.38, 0.98, 0.0));
+    let crank = Vec3::new(-0.05, 0.32, 0.0);
+    bar(&mut m, rear, seat, 0.02, BOTTOM);
+    bar(&mut m, crank, seat, 0.025, BOTTOM);
+    bar(&mut m, crank, head, 0.025, BOTTOM);
+    bar(&mut m, rear, crank, 0.02, BOTTOM);
+    bar(&mut m, front, head, 0.025, BOTTOM);
+    part(
+        &mut m,
+        head + Vec3::new(0.05, 0.08, 0.0),
+        Vec3::new(0.02, 0.02, 0.28),
+        Quat::IDENTITY,
+        SHOES,
+    );
+    // The rider: hips over the saddle, legs to the pedals, the body leaning to the bars.
+    let hip = seat + Vec3::new(0.0, 0.1, 0.0);
+    for (z, foot) in [
+        (0.1, Vec3::new(0.12, 0.25, 0.1)),
+        (-0.1, Vec3::new(-0.2, 0.42, -0.1)),
+    ] {
+        let knee = Vec3::new(0.15, 0.62, z);
+        bar(
+            &mut m,
+            hip + Vec3::new(0.0, 0.0, z),
+            knee,
+            0.065 * k,
+            BOTTOM,
+        );
+        bar(&mut m, knee, foot, 0.06 * k, BOTTOM);
+    }
+    let shoulder = hip + Vec3::new(0.2, 0.55 * k, 0.0);
+    let lean = Quat::from_rotation_arc(Vec3::Y, (shoulder - hip).normalize());
+    part(
+        &mut m,
+        (hip + shoulder) * 0.5,
+        Vec3::new(0.11, (shoulder - hip).length() * 0.5, 0.18) * Vec3::new(k, 1.0, k),
+        lean,
+        TOP,
+    );
+    for z in [0.22, -0.22] {
+        bar(
+            &mut m,
+            shoulder + Vec3::new(0.0, -0.04, z),
+            head + Vec3::new(0.05, 0.08, z * 0.9),
+            0.045 * k,
+            TOP,
+        );
+    }
+    let face = shoulder + Vec3::new(0.06, 0.18 * k, 0.0);
+    part(
+        &mut m,
+        face,
+        Vec3::new(0.1, 0.12, 0.085) * k,
+        Quat::IDENTITY,
+        SKIN,
+    );
+    part(
+        &mut m,
+        face + Vec3::new(-0.015, 0.09, 0.0) * k,
+        Vec3::new(0.105, 0.045, 0.09) * k,
+        Quat::IDENTITY,
+        SHOES,
+    );
+    m
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,5 +223,22 @@ mod tests {
             assert!(m.sections.iter().all(|&s| s < SECTIONS));
             assert_eq!(m.sections.len(), m.triangle_count());
         }
+    }
+
+    #[test]
+    fn a_cyclist_rides_on_its_wheels() {
+        let m = cyclist(1.72);
+        let (lo, hi) = m.positions.iter().fold(
+            (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)),
+            |(lo, hi), p| (lo.min(Vec3::from(*p)), hi.max(Vec3::from(*p))),
+        );
+        assert!(lo.y.abs() < 0.05, "{lo}");
+        assert!(hi.y > 1.5 && hi.y < 2.0, "{hi}");
+        assert!(lo.x > -1.0 && hi.x < 1.0 && hi.z.abs() < 0.4);
+        assert!(
+            m.normals
+                .iter()
+                .all(|n| (Vec3::from(*n).length() - 1.0).abs() < 1e-3)
+        );
     }
 }
