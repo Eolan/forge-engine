@@ -1378,12 +1378,21 @@ impl Scenario for PlanScenario {
             );
         }
         let people_rows: Vec<_> = PEOPLE_GROUPS.iter().map(|g| materials.of(g)).collect();
-        let trunk = colour([0.20, 0.15, 0.11], 8.0, 0.02);
+        // Each tree its own mix of two tones (the rows' colour A and B): bark from grey-brown to
+        // the planes' pale patches, leaves from deep to yellowish green.
+        let tones = |a: [f32; 3], b: [f32; 3], power: f32| RenderLayer {
+            color_b: b,
+            ..colour(a, power, 0.02)
+        };
+        let trunk = tones([0.20, 0.15, 0.11], [0.42, 0.38, 0.30], 8.0);
         materials.add_rows(
             "plan-tree-a",
             vec![
                 ("plan trunk".into(), trunk),
-                ("plan leaves".into(), colour([0.10, 0.22, 0.07], 6.0, 0.02)),
+                (
+                    "plan leaves".into(),
+                    tones([0.08, 0.19, 0.06], [0.16, 0.27, 0.07], 6.0),
+                ),
             ],
         );
         materials.add_rows(
@@ -1392,7 +1401,7 @@ impl Scenario for PlanScenario {
                 ("plan trunk (b)".into(), trunk),
                 (
                     "plan leaves (b)".into(),
-                    colour([0.15, 0.25, 0.08], 6.0, 0.02),
+                    tones([0.12, 0.23, 0.07], [0.22, 0.30, 0.09], 6.0),
                 ),
             ],
         );
