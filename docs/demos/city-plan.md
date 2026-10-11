@@ -32,7 +32,7 @@ cargo run --release -p city-map -- --size 4000 --scale 2 --out captures/city
 | Lots | recursive splits across each piece's long axis (Vanegas et al. 2012); only the pieces on a street are kept where a block has a courtyard | `city::blocks` |
 | Forest | ground above a height or steeper than a slope goes to the first reserve district (a real site's hills) | `city::district_field` |
 | Transit | tram lines by the shortest path through their waypoints, main roads preferred (a waypoint far from any main road snaps to the nearest street); stops every 450 m moved to nearby junctions; lines added until a target share of blocks has a stop within 400 m (`transit::cover`); boat crossings where a river runs long without a bridge; street profiles (tram avenue, avenue, shared, pedestrian, path) | `city::transit` |
-| Masses | each lot's building: the lot inside the building line, less the courtyard's hull; floors from the district's range, capped by the street's profile; green, solar or terrace roofs | `city::mass` |
+| Masses | each lot's building: the lot cut by the building line of each street it touches, less the courtyard's hull (or a building's depth along its street where no courtyard fits); floors from the district's range, capped by the street's profile; green, solar or terrace roofs | `city::mass` |
 | Maps and numbers | a small rasteriser: the plan, a checks map (blocks by what they lack), an oblique massing view of any window; the plan's numbers and its digest | `city::map` |
 
 Everything is a pure function of the site and the parameters. Costs are integers in the
@@ -51,7 +51,7 @@ router, and `forge_core::dmath` does the trigonometry. Two runs give the same di
 | Built blocks within 400 m of a tram stop | 45 % (two lines, no line added) |
 | Streets' share of the land | 21.5 % |
 | Tram lines | 7.8 km, 19 stops |
-| Masses / floor area | 14 647 / 21.6 km² (15 ms) |
+| Masses / floor area | 15 155 / 22.5 km² (13 ms) |
 
 | Stage | Time |
 |---|---|
@@ -82,9 +82,7 @@ router, and `forge_core::dmath` does the trigonometry. Two runs give the same di
 
 *A kilometre round the example's centre, seen obliquely from the south: perimeter blocks of
 4–8 floors round their courtyards, green, solar and terrace roofs, the river and a bridge, two
-tram lines.* Blocks whose outline is too curved for the building line's inset stay empty for
-now.
-
+tram lines.*
 ## In 3D
 
 ```
@@ -108,7 +106,7 @@ solar, terrace). A private sandbox hands its own plan to `PlanScenario::new`.
 
 ## Next (#245–#247)
 
-- Building lines per street profile, and a fallback where the inset fails.
+- Building lines per street profile.
 - Squares at the radial districts' centres; the landmarks' sightlines.
 - More checks on the checks map; a legend and labels.
 - The style bible as data (#246).

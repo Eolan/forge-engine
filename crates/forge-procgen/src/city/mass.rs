@@ -53,16 +53,6 @@ pub fn masses(plan: &CityPlan, green_roofs: f64, seed: u64) -> Vec<Mass> {
             streets.insert(p, i as u32);
         }
     }
-    // Each built block's building line: its outline moved in by half a street.
-    let building_lines: Vec<Option<Vec<DVec2>>> = plan
-        .blocks
-        .iter()
-        .map(|b| {
-            (b.use_ == BlockUse::Built)
-                .then(|| geom::inset(&b.polygon, STREET_HALF))
-                .flatten()
-        })
-        .collect();
     let mut out = Vec::new();
     for (index, lot) in plan.lots.iter().enumerate() {
         if !lot.frontage {
@@ -80,23 +70,39 @@ pub fn masses(plan: &CityPlan, green_roofs: f64, seed: u64) -> Vec<Mass> {
         let Some((a, t)) = frontage(&lot.polygon, &block.polygon) else {
             continue;
         };
-        // The lot inside the building line, less the courtyard: pieces that close round the
-        // block's corners.
-        let Some(line) = building_lines[lot.block as usize].as_ref() else {
-            continue;
-        };
+        // The lot inside the building line: cut by each block edge it touches, moved in by half
+        // a street (an inset of the whole outline fails on curved, concave blocks). Less the
+        // courtyard, the pieces close round the block's corners.
         let mut inside = lot.polygon.clone();
-        let k = line.len();
-        for i in 0..k {
+        let n = block.polygon.len();
+        for i in 0..n {
             if inside.len() < 3 {
                 break;
             }
-            let (p, q) = (line[i], line[(i + 1) % k]);
-            inside = geom::clip_half_plane(&inside, p, (q - p).normalize_or_zero());
+            let (p, q) = (block.polygon[i], block.polygon[(i + 1) % n]);
+            let edge = (q - p).normalize_or_zero();
+            let touches = lot
+                .polygon
+                .iter()
+                .any(|&v| geom::distance_to_segment(v, p, q) < 0.5);
+            if edge == DVec2::ZERO || !touches {
+                continue;
+            }
+            let inward = DVec2::new(-edge.y, edge.x);
+            inside = geom::clip_half_plane(&inside, p + inward * STREET_HALF, edge);
         }
-        let pieces = match &block.courtyard {
-            Some(courtyard) => outside_of(&inside, &geom::convex_hull(courtyard)),
-            None => vec![inside],
+        let pieces = match (&block.courtyard, district.kind.building_depth()) {
+            (Some(courtyard), _) => outside_of(&inside, &geom::convex_hull(courtyard)),
+            // No courtyard fits: a strip of a building's depth along the street it fronts.
+            (None, Some(depth)) => {
+                let inward = DVec2::new(-t.y, t.x);
+                vec![geom::clip_half_plane(
+                    &inside,
+                    a + inward * (STREET_HALF + depth),
+                    -t,
+                )]
+            }
+            (None, None) => vec![inside],
         };
         let pieces: Vec<Vec<DVec2>> = pieces
             .into_iter()
