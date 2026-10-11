@@ -364,7 +364,15 @@ impl PlanScenario {
             .iter()
             .filter(|b| b.use_ == BlockUse::Square && b.area >= 1500.0)
             .filter(|b| geom::contains(&b.polygon, b.centre))
-            .map(|b| Mat4::from_translation(world(size, b.centre, 0.16)))
+            // Grander on grander squares: 1.0 at 0.15 ha to 1.8 at 1 ha.
+            .map(|b| {
+                let scale = (b.area.sqrt() / 55.0).clamp(1.0, 1.8) as f32;
+                Mat4::from_scale_rotation_translation(
+                    Vec3::splat(scale),
+                    glam::Quat::IDENTITY,
+                    world(size, b.centre, 0.16),
+                )
+            })
             .collect();
         if !fountains.is_empty() {
             kit_meshes.push(forge_geom::furniture::fountain());

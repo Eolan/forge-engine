@@ -47,14 +47,14 @@ router, and `forge_core::dmath` does the trigonometry. Two runs give the same di
 |---|---|
 | Land | 14.3 km² |
 | Main roads / streets | 59 km / 149 km, 8 bridges |
-| Built blocks / parks / squares | 663 (mean 1.66 ha) / 48 / 16 |
-| Lots / blocks with a courtyard | 10 986 / 592 |
+| Built blocks / parks / squares | 667 (mean 1.66 ha) / 48 / 12 |
+| Lots / blocks with a courtyard | 11 048 / 596 |
 | Parks' share of the land | 10.5 % |
 | Built blocks with a 1 ha park within 300 m | 100 % |
 | Built blocks within 400 m of a tram stop | 45 % (two lines, no line added) |
 | Streets' share of the land | 21.5 % |
 | Tram lines | 7.8 km, 19 stops |
-| Masses / floor area | 12 804 / 18.2 km² (12 ms; floors capped by street width) |
+| Masses / floor area | 12 877 / 18.3 km² (12 ms; floors capped by street width) |
 
 | Stage | Time |
 |---|---|
@@ -282,12 +282,17 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
 ![The old town's piazza](images/city-plan-piazza.png)
 
 *The old town's piazza at 18:00: paved in limestone, its fountain in the middle, plane trees
-round it, shops on three sides.* The block nearest each built district's centre and each
-landmark becomes a square (within 150 m, at most 2 ha). So do the old towns' blocks of
-600–3 000 m² that stand 180 m from any other square: their small squares. Squares are paved,
-with a row of trees every 10 m, 3 m inside their building lines, and a fountain in the middle
-of those of 0.15 ha or more (`furniture::fountain`). The example has 16 squares, slivers
-included, and 9 fountains.
+round it, shops on three sides.* Squares come from three rules:
+- the block nearest each built district's centre and each landmark becomes a square (within
+  150 m, at most 1 ha), unless one already opens within 120 m;
+- so do the old towns' blocks of 600–3 000 m² that stand 180 m from any other square: their
+  small squares;
+- slivers too small to build on.
+
+Squares are paved, with a row of trees every 10 m, 3 m inside their building lines. Those of
+0.5 ha or more get a second row 11 m further in, an alley of planes (a Provençal *cours*). A
+fountain stands in the middle of those of 0.15 ha or more (`furniture::fountain`), grander on
+grander squares. The example has 12 squares, slivers included.
 
 ## Tiled roofs in the old towns
 

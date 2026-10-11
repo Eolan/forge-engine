@@ -106,27 +106,41 @@ pub fn trees(site: &Site, plan: &CityPlan, seed: u64) -> Vec<Tree> {
         );
     }
     // Squares of 0.15 ha or more: a row of plane trees 3 m inside their building lines, every
-    // 10 m, the middle left open.
+    // 10 m, the middle left open; those of 0.5 ha or more a second row 11 m further in, an
+    // alley of planes round them (a Provençal cours).
     for b in plan
         .blocks
         .iter()
         .filter(|b| b.use_ == BlockUse::Square && b.area >= 1500.0)
     {
-        let Some(ring) = geom::inset(&b.buildable, 3.0) else {
+        let Some(outer) = geom::inset(&b.buildable, 3.0) else {
             continue;
         };
-        let mut closed = ring.clone();
-        closed.push(ring[0]);
-        for p in geom::resample(&closed, 10.0) {
-            if site.water_at(p) != LAND || junctions.any_within(p, 6.0, |_| false) {
-                continue;
+        let mut rings = vec![outer.clone()];
+        if b.area >= 5000.0 {
+            // The second row: the first drawn 11 m in towards the middle (a square is near
+            // convex; an inset's corner checks refuse many).
+            let c = geom::centroid(&outer);
+            let reach = outer.iter().map(|p| p.distance(c)).sum::<f64>() / outer.len() as f64;
+            if reach > 22.0 {
+                let k = 1.0 - 11.0 / reach;
+                rings.push(outer.iter().map(|&p| c + (p - c) * k).collect());
             }
-            out.push(Tree {
-                pos: p,
-                height: rng.range_f64(10.0, 14.0),
-                crown: rng.range_f64(3.2, 4.2),
-                setting: Setting::Street,
-            });
+        }
+        for ring in rings {
+            let mut closed = ring.clone();
+            closed.push(ring[0]);
+            for p in geom::resample(&closed, 10.0) {
+                if site.water_at(p) != LAND || junctions.any_within(p, 6.0, |_| false) {
+                    continue;
+                }
+                out.push(Tree {
+                    pos: p,
+                    height: rng.range_f64(10.0, 14.0),
+                    crown: rng.range_f64(3.2, 4.2),
+                    setting: Setting::Street,
+                });
+            }
         }
     }
     // Courtyards: a looser grid.
