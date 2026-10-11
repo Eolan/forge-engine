@@ -90,6 +90,18 @@ pub fn trees(site: &Site, plan: &CityPlan, seed: u64) -> Vec<Tree> {
             &mut out,
         );
     }
+    // Quays: the land between the streets and a river, a promenade under trees.
+    for b in plan.blocks.iter().filter(|b| b.use_ == BlockUse::Quay) {
+        scatter(
+            site,
+            &b.polygon,
+            14.0,
+            0.45,
+            Setting::Park,
+            &mut rng,
+            &mut out,
+        );
+    }
     // Courtyards: a looser grid.
     for b in plan.blocks.iter().filter(|b| b.use_ == BlockUse::Built) {
         if let Some(c) = &b.courtyard {
