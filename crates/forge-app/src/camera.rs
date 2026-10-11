@@ -18,7 +18,7 @@ pub struct FlyCamera {
     pub fov_y: f32,
     /// Near plane (metres).
     pub near: f32,
-    /// Base speed (m/s); Shift multiplies by 5.
+    /// Base speed (m/s); Shift multiplies by 5, Ctrl by 25.
     pub speed: f32,
     /// Radians per pixel of mouse motion.
     pub sensitivity: f32,
@@ -95,11 +95,15 @@ impl FlyCamera {
         if input.is_down(KeyCode::KeyQ) {
             motion -= Vec3::Y;
         }
-        let speed = if input.is_down(KeyCode::ShiftLeft) {
-            self.speed * 5.0
-        } else {
-            self.speed
-        };
+        // Shift for five times the speed, Ctrl for twenty-five (across a city or a planet's
+        // ground), both for both.
+        let mut speed = self.speed;
+        if input.is_down(KeyCode::ShiftLeft) {
+            speed *= 5.0;
+        }
+        if input.is_down(KeyCode::ControlLeft) {
+            speed *= 25.0;
+        }
         self.position += motion.normalize_or_zero() * speed * dt;
     }
 }

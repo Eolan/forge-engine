@@ -63,7 +63,8 @@ cargo clippy --workspace --all-targets
 
 All rendering demos share these options: `--vsync`, `--validate` (Vulkan validation layer),
 `--frames N` (exit after N frames, for headless runs), `--capture out.png --capture-frame N`
-(save frame N as a PNG). Right mouse drag looks around, WASD/QE move, Shift is fast, Esc quits.
+(save frame N as a PNG). Right mouse drag looks around, WASD/QE move, Shift is 5 times faster
+and Ctrl 25 times (both together 125), Esc quits.
 
 ### `asteroids` — the ballad
 
