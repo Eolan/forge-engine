@@ -6,7 +6,7 @@
 use glam::Vec3;
 
 use crate::modules::{
-    ALL, FABRIC, GLASS, METAL, NEG_Y, NO_BACK, PLASTER, POS_Y, SHUTTER, STONE, WOOD, cuboid, quad,
+    ALL, FABRIC, GLASS, METAL, NEG_Y, NO_BACK, POS_Y, SHUTTER, STONE, WOOD, cuboid, quad,
 };
 use crate::procedural::TriMesh;
 
@@ -179,153 +179,94 @@ fn prism(m: &mut TriMesh, c: Vec3, r: f32, t: f32, sides: u32, section: u8) {
     }
 }
 
-/// A children's playground round the origin, 16 m along `x` by 12 m: a soft floor (the kit's
-/// fabric colour), a low iron fence with a gate on the `-z` side, two swings on a frame, a slide
-/// from a small tower with its ladder, a climbing frame, and a sandpit in a stone border (the
-/// owner, 2026-10-11: playgrounds in the city).
-pub fn playground() -> TriMesh {
+/// A street-workout park round the origin, 14 m along `x` by 10 m, open on every side: a rubber
+/// floor (the kit's stone colour), pull-up bars at three heights, monkey bars, parallel bars, a
+/// dip station, wall bars, push-up handles and an inclined sit-up bench (the owner, 2026-10-11:
+/// workout equipment rather than playgrounds; the sandbox has no children).
+pub fn street_workout() -> TriMesh {
     let mut m = TriMesh::default();
     let v = Vec3::new;
-    let (hx, hz) = (8.0, 6.0);
-    let post = |m: &mut TriMesh, x: f32, z: f32, h: f32, r: f32, section: u8| {
+    let (hx, hz) = (7.0, 5.0);
+    let post = |m: &mut TriMesh, x: f32, z: f32, h: f32| {
         cuboid(
             m,
-            v(x - r, 0.0, z - r),
-            v(x + r, h, z + r),
-            section,
+            v(x - 0.05, 0.0, z - 0.05),
+            v(x + 0.05, h, z + 0.05),
+            METAL,
             ALL & !NEG_Y,
+        );
+    };
+    // A bar from `a` to `b` along x or z, 4 cm thick.
+    let bar = |m: &mut TriMesh, a: Vec3, b: Vec3| {
+        let (lo, hi) = (a.min(b), a.max(b));
+        cuboid(
+            m,
+            lo - Vec3::splat(0.02),
+            hi + Vec3::splat(0.02),
+            METAL,
+            ALL,
         );
     };
     cuboid(
         &mut m,
         v(-hx, 0.0, -hz),
-        v(hx, 0.05, hz),
-        FABRIC,
+        v(hx, 0.04, hz),
+        STONE,
         ALL & !NEG_Y,
     );
-    // The fence: a post every 2 m round the edge, a rail 0.9 m up; the gate a gap in the -z side.
-    for (a, b) in [
-        (v(-hx, 0.0, -hz), v(-1.0, 0.0, -hz)),
-        (v(1.0, 0.0, -hz), v(hx, 0.0, -hz)),
-        (v(hx, 0.0, -hz), v(hx, 0.0, hz)),
-        (v(hx, 0.0, hz), v(-hx, 0.0, hz)),
-        (v(-hx, 0.0, hz), v(-hx, 0.0, -hz)),
-    ] {
-        let posts = ((b - a).length() / 2.0).ceil().max(1.0) as u32;
-        for k in 0..=posts {
-            let p = a + (b - a) * (k as f32 / posts as f32);
-            post(&mut m, p.x, p.z, 0.95, 0.03, METAL);
+    // Pull-up bars at 2.0, 2.3 and 2.6 m, 1.2 m wide each, on a row of posts.
+    for (k, h) in [2.0, 2.3, 2.6].into_iter().enumerate() {
+        let x = -6.0 + k as f32 * 1.2;
+        post(&mut m, x, -3.5, h + 0.05);
+        post(&mut m, x + 1.2, -3.5, h + 0.05);
+        bar(&mut m, v(x, h, -3.5), v(x + 1.2, h, -3.5));
+    }
+    // Monkey bars: two rails 2.3 m up, 4 m long, rungs every 0.4 m.
+    for (x, z) in [(-2.0, -4.0), (2.0, -4.0), (-2.0, -3.2), (2.0, -3.2)] {
+        post(&mut m, x, z, 2.35);
+    }
+    for z in [-4.0, -3.2] {
+        bar(&mut m, v(-2.0, 2.3, z), v(2.0, 2.3, z));
+    }
+    for k in 0..=10 {
+        let x = -2.0 + k as f32 * 0.4;
+        bar(&mut m, v(x, 2.3, -4.0), v(x, 2.3, -3.2));
+    }
+    // Parallel bars 1.2 m up, 2.5 m long, 0.5 m apart; and a dip station beside them.
+    for z in [0.0, 0.5] {
+        for x in [-5.5, -3.0] {
+            post(&mut m, x, z, 1.2);
         }
-        let (lo, hi) = (a.min(b), a.max(b));
-        cuboid(
-            &mut m,
-            v(lo.x - 0.02, 0.86, lo.z - 0.02),
-            v(hi.x + 0.02, 0.92, hi.z + 0.02),
-            METAL,
-            ALL,
-        );
+        bar(&mut m, v(-5.5, 1.2, z), v(-3.0, 1.2, z));
     }
-    // Two swings: a frame of four posts and a beam 2.4 m up, each seat on two hangers.
-    for (x, z) in [(-6.6, -1.8), (-6.6, 1.8), (-3.4, -1.8), (-3.4, 1.8)] {
-        post(&mut m, x, z, 2.4, 0.05, METAL);
+    for z in [1.8, 2.4] {
+        post(&mut m, -4.5, z, 1.1);
+        bar(&mut m, v(-4.5, 1.1, z), v(-3.8, 1.1, z));
     }
-    for z in [-1.8, 1.8] {
-        cuboid(
-            &mut m,
-            v(-6.7, 2.35, z - 0.05),
-            v(-3.3, 2.45, z + 0.05),
-            METAL,
-            ALL,
-        );
+    // Wall bars: two posts 2.4 m tall, a rung every 0.25 m.
+    post(&mut m, 4.0, 3.8, 2.45);
+    post(&mut m, 5.0, 3.8, 2.45);
+    for k in 1..=9 {
+        let y = k as f32 * 0.25;
+        bar(&mut m, v(4.0, y, 3.8), v(5.0, y, 3.8));
     }
-    for x in [-5.6, -4.4] {
-        for z in [-0.25, 0.25] {
-            cuboid(
-                &mut m,
-                v(x - 0.01, 0.45, z - 0.01),
-                v(x + 0.01, 2.35, z + 0.01),
-                METAL,
-                ALL,
-            );
-        }
-        cuboid(
-            &mut m,
-            v(x - 0.22, 0.42, -0.28),
-            v(x + 0.22, 0.47, 0.28),
-            WOOD,
-            ALL,
-        );
+    // Push-up handles: low bars on short posts.
+    for x in [0.0, 1.2] {
+        post(&mut m, x, 2.0, 0.3);
+        post(&mut m, x, 2.6, 0.3);
+        bar(&mut m, v(x, 0.3, 2.0), v(x, 0.3, 2.6));
     }
-    // The beam across the two frames.
-    cuboid(&mut m, v(-5.05, 2.4, -1.8), v(-4.95, 2.5, 1.8), METAL, ALL);
-    // The slide: a tower with a 1.4 m deck, its ladder, and the chute down to the floor.
-    for (x, z) in [(2.0, 1.0), (3.2, 1.0), (2.0, 2.2), (3.2, 2.2)] {
-        post(&mut m, x, z, 2.4, 0.06, WOOD);
-    }
-    cuboid(&mut m, v(1.94, 1.36, 0.94), v(3.26, 1.44, 2.26), WOOD, ALL);
-    cuboid(
-        &mut m,
-        v(1.94, 2.3, 0.94),
-        v(3.26, 2.42, 2.26),
-        SHUTTER,
-        ALL,
-    );
-    for k in 0..5 {
-        let y = 0.3 + k as f32 * 0.27;
-        cuboid(&mut m, v(1.4, y, 1.2), v(1.94, y + 0.04, 2.0), WOOD, ALL);
-    }
-    let (top, foot, (z0, z1)) = ((3.26, 1.42), (6.4, 0.3), (1.25, 1.95));
-    let chute = [
-        v(top.0, top.1, z0),
-        v(top.0, top.1, z1),
-        v(foot.0, foot.1, z1),
-        v(foot.0, foot.1, z0),
+    // An inclined sit-up bench: a wooden board from 0.3 to 0.7 m up on its frame.
+    let board = [
+        v(4.0, 0.3, 0.0),
+        v(4.0, 0.3, 0.4),
+        v(5.8, 0.7, 0.4),
+        v(5.8, 0.7, 0.0),
     ];
-    quad(&mut m, chute, SHUTTER);
-    quad(&mut m, [chute[3], chute[2], chute[1], chute[0]], SHUTTER);
-    // The climbing frame: a cube of bars, 2 m a side.
-    for x in [-1.5, -0.5, 0.5] {
-        for z in [2.5, 3.5, 4.5] {
-            post(&mut m, x, z, 2.0, 0.03, METAL);
-        }
-    }
-    for y in [0.7, 1.35, 2.0] {
-        for z in [2.5, 3.5, 4.5] {
-            cuboid(
-                &mut m,
-                v(-1.53, y - 0.03, z - 0.03),
-                v(0.53, y + 0.03, z + 0.03),
-                METAL,
-                ALL,
-            );
-        }
-        for x in [-1.5, -0.5, 0.5] {
-            cuboid(
-                &mut m,
-                v(x - 0.03, y - 0.03, 2.47),
-                v(x + 0.03, y + 0.03, 4.53),
-                METAL,
-                ALL,
-            );
-        }
-    }
-    // The sandpit: a stone border round sand (the render's warm colour).
-    let (sx0, sx1, sz0, sz1) = (2.5, 6.5, -4.8, -2.0);
-    cuboid(
-        &mut m,
-        v(sx0, 0.0, sz0),
-        v(sx1, 0.12, sz1),
-        PLASTER,
-        ALL & !NEG_Y,
-    );
-    for (a, b) in [
-        (v(sx0 - 0.2, 0.0, sz0 - 0.2), v(sx1 + 0.2, 0.3, sz0)),
-        (v(sx0 - 0.2, 0.0, sz1), v(sx1 + 0.2, 0.3, sz1 + 0.2)),
-        (v(sx0 - 0.2, 0.0, sz0), v(sx0, 0.3, sz1)),
-        (v(sx1, 0.0, sz0), v(sx1 + 0.2, 0.3, sz1)),
-    ] {
-        cuboid(&mut m, a, b, STONE, ALL & !NEG_Y);
-    }
+    quad(&mut m, board, WOOD);
+    quad(&mut m, [board[3], board[2], board[1], board[0]], WOOD);
+    post(&mut m, 4.1, 0.2, 0.3);
+    post(&mut m, 5.7, 0.2, 0.7);
     m
 }
 
@@ -490,8 +431,8 @@ mod tests {
                 (Vec3::new(-0.7, 0.0, -0.1), Vec3::new(4.7, 2.7, 2.95)),
             ),
             (
-                playground(),
-                (Vec3::new(-8.1, 0.0, -6.1), Vec3::new(8.1, 2.6, 6.1)),
+                street_workout(),
+                (Vec3::new(-7.1, 0.0, -5.1), Vec3::new(7.1, 2.7, 5.1)),
             ),
             (
                 tram_stop(32.0),

@@ -420,8 +420,13 @@ impl PlanScenario {
                 )
             })
             .collect();
+        // The lamps within the detailed reach and a little beyond: further off, a lamp head of
+        // 3 000 cd/m² is far smaller than a pixel, and thousands of them flickered into a band
+        // of light along the horizon at night (the owner, 2026-10-11). The far streets' light
+        // comes with step 5's clustered lights (#254).
         let lamps = lamps
             .iter()
+            .filter(|l| detail.is_none_or(|d| l.pos.distance(d.centre) < d.radius + 500.0))
             .map(|l| {
                 let turn = (-l.facing.x).atan2(-l.facing.y) as f32;
                 (world(size, l.pos, 0.0), (l.height / 8.0) as f32, turn)
@@ -588,13 +593,13 @@ impl PlanScenario {
             let id = (kit_meshes.len() - 1) as u32;
             kit_instances.extend(fountains.into_iter().map(|at| (id, at, 0)));
         }
-        // A playground in each park of a hectare or more, along the park's longest edge, its
-        // floor in the kit's first colour; the trees keep clear of it.
-        let playgrounds = forge_procgen::city::trees::playground_sites(plan);
-        if !playgrounds.is_empty() {
-            kit_meshes.push(forge_geom::furniture::playground());
+        // A street-workout park in each park of a hectare or more, along the park's longest
+        // edge; the trees keep clear of it.
+        let workouts = forge_procgen::city::trees::workout_sites(plan);
+        if !workouts.is_empty() {
+            kit_meshes.push(forge_geom::furniture::street_workout());
             let id = (kit_meshes.len() - 1) as u32;
-            for (p, axis) in playgrounds {
+            for (p, axis) in workouts {
                 let turn = glam::Quat::from_rotation_y((-axis.y).atan2(axis.x) as f32);
                 let at = Mat4::from_rotation_translation(turn, world(size, p, 0.09));
                 kit_instances.push((id, at, 0));

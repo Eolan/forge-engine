@@ -34,9 +34,10 @@ pub struct Tree {
     pub setting: Setting,
 }
 
-/// A playground in each park of a hectare or more (the owner, 2026-10-11): its middle, the
-/// park's inside point, and its long axis, the park's longest edge's.
-pub fn playground_sites(plan: &CityPlan) -> Vec<(DVec2, DVec2)> {
+/// A street-workout park in each park of a hectare or more (the owner, 2026-10-11: workout
+/// equipment, no playgrounds): its middle, the park's inside point, and its long axis, the
+/// park's longest edge's.
+pub fn workout_sites(plan: &CityPlan) -> Vec<(DVec2, DVec2)> {
     plan.blocks
         .iter()
         .filter(|b| b.use_ == BlockUse::Park && b.area >= 10_000.0)
@@ -128,9 +129,9 @@ pub fn trees(site: &Site, plan: &CityPlan, seed: u64) -> Vec<Tree> {
         .map(|i| plan.blocks[i].centre)
         .collect();
     out.retain(|t| held.iter().all(|c| c.distance(t.pos) > 45.0));
-    // Clear of the playgrounds: 12 m round each (it is 16 by 12 m).
-    let playgrounds = playground_sites(plan);
-    out.retain(|t| playgrounds.iter().all(|(c, _)| c.distance(t.pos) > 12.0));
+    // Clear of the workout parks: 11 m round each (each is 14 by 10 m).
+    let workouts = workout_sites(plan);
+    out.retain(|t| workouts.iter().all(|(c, _)| c.distance(t.pos) > 11.0));
     // Squares of 0.15 ha or more: a row of plane trees 3 m inside their building lines, every
     // 10 m, the middle left open; those of 0.5 ha or more a second row 11 m further in, an
     // alley of planes round them (a Provençal cours).
