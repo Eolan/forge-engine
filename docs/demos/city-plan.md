@@ -186,7 +186,7 @@ Three stages, each generic:
   - a text form with line-numbered errors.
 - **`forge_geom::modules`, the kit:** wall, party wall, string course, cornice, parapet, French
   window (with or without shutters, a quarter of them closed), low window, courtyard window, balcony, entrance, shopfront
-  with or without an awning. Each module is a small part program of boxes and quads with one
+  with or without an awning (its valance 2.3 m up, so walkers pass under it). Each module is a small part program of boxes and quads with one
   section layout, so eight material groups dress any of them: four shutter colours, each with
   dark and lit glass (each window its own mix of dark glass and curtains). Walls, bands and
   cornices change size with every scope and are merged into

@@ -692,7 +692,8 @@ fn shop(m: &mut TriMesh, w: f32, h: f32, awning: bool) {
         NO_BACK,
     );
     if awning {
-        let (y0, y1, out) = (top + 0.35, top - 0.35, 1.5);
+        // Its valance 2.3 m up over a 2.6 m shopfront: walkers pass under it.
+        let (y0, y1, out) = (top + 0.55, top - 0.05, 1.5);
         // Its cheeks, seen from both sides.
         for x in [0.0, w] {
             let cheek = [
