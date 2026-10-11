@@ -16,6 +16,8 @@ Facade [party] -> insert(blank)
 Facade -> split(y, level) { ground: Ground | {~floor: Floor}* | 0.9: Top }
 
 # Above the roof line: a cornice on the street, then the parapet round the roof.
+Top [tiled] -> split(y) { 0.4: Cornice | ~0.5: Eaves }
+Eaves -> nil
 Top [court] -> Parapet
 Top -> split(y) { 0.4: Cornice | ~0.5: Parapet }
 Cornice -> insert(cornice)
@@ -43,14 +45,16 @@ LowWindow -> insert(window_low)
 
 # The upper floors: bays of French windows; balconies on the first floor of the street front,
 # and on the top floor too for some buildings.
-Floor -> split(x) { ~0.5: Wall | {bay: Bay}* | ~0.5: Wall }
+Floor -> split(x, column) { ~0.5: Wall | {bay: Bay}* | ~0.5: Wall }
 Bay [court] -> split(x) { ~1: Wall | 1.0: CourtColumn | ~1: Wall }
 Bay [level.index == 0 && balconies >= 1] -> BalconyBay
 Bay [level.last && balconies >= 2] -> BalconyBay
 Bay -> split(x) { ~1: Wall | 1.2: WindowColumn | ~1: Wall }
 BalconyBay -> split(x) { ~1: Wall | 1.2: BalconyColumn | ~1: Wall }
 WindowColumn -> split(y) { 0.1: Wall | 2.5: Window | ~1: Wall }
-Window [shutters] -> insert(window)
+Window [shutters] -> choose(column.index, level.index) { 3: OpenWindow | 1: ClosedWindow }
+OpenWindow -> insert(window)
+ClosedWindow -> insert(window_closed)
 Window -> insert(window_plain)
 BalconyColumn -> split(y) { 0.1: Wall | 2.5: Balcony | ~1: Wall }
 Balcony -> insert(balcony)

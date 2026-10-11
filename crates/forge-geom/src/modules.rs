@@ -37,7 +37,7 @@ pub const PARTY: u8 = 8;
 pub const SECTIONS: u8 = 9;
 
 /// The modules the kit builds.
-pub const NAMES: [&str; 13] = [
+pub const NAMES: [&str; 14] = [
     "wall",
     "blank",
     "band",
@@ -45,6 +45,7 @@ pub const NAMES: [&str; 13] = [
     "parapet",
     "window",
     "window_plain",
+    "window_closed",
     "window_low",
     "window_court",
     "balcony",
@@ -109,6 +110,18 @@ pub fn module(name: &str, w: f32, h: f32) -> Option<TriMesh> {
             if name == "window" {
                 shutters(&mut m, w, h, 0.15);
             }
+        }
+        "window_closed" => {
+            window(&mut m, w, h, 0.22, true);
+            surround(&mut m, w, h, 0.15, 0.22);
+            sill(&mut m, w, 0.22, 0.07);
+            closed_shutters(&mut m, w, h);
+            railing(
+                &mut m,
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(w, 0.0, 0.0),
+                1.0,
+            );
         }
         "window_low" => {
             window(&mut m, w, h, 0.22, true);
@@ -360,66 +373,79 @@ fn sill(m: &mut TriMesh, w: f32, depth: f32, out: f32) {
 fn shutters(m: &mut TriMesh, w: f32, h: f32, beside: f32) {
     let leaf = w * 0.5;
     for x0 in [-beside - leaf, w + beside] {
-        let x1 = x0 + leaf;
-        let (zb, zf) = (0.03, 0.055);
-        // The leaf's frame: stiles and rails.
-        let (stile, rail) = (0.05, 0.08);
-        cuboid(
+        shutter_leaf(m, x0, x0 + leaf, h, 0.02);
+    }
+}
+
+/// Two louvred shutters closed over an opening, in its reveal just behind the wall's face.
+fn closed_shutters(m: &mut TriMesh, w: f32, h: f32) {
+    let leaf = w * 0.5;
+    for x0 in [0.0, leaf] {
+        shutter_leaf(m, x0, x0 + leaf, h, -0.08);
+    }
+}
+
+/// One louvred shutter from `x0` to `x1`, `h` tall, its back at depth `z0`: a frame of stiles
+/// and rails round sloping slats.
+fn shutter_leaf(m: &mut TriMesh, x0: f32, x1: f32, h: f32, z0: f32) {
+    let (zb, zf) = (z0 + 0.01, z0 + 0.035);
+    // The leaf's frame: stiles and rails.
+    let (stile, rail) = (0.05, 0.08);
+    cuboid(
+        m,
+        Vec3::new(x0, 0.0, z0),
+        Vec3::new(x0 + stile, h, zf + 0.005),
+        SHUTTER,
+        NO_BACK,
+    );
+    cuboid(
+        m,
+        Vec3::new(x1 - stile, 0.0, z0),
+        Vec3::new(x1, h, zf + 0.005),
+        SHUTTER,
+        NO_BACK,
+    );
+    cuboid(
+        m,
+        Vec3::new(x0 + stile, 0.0, z0),
+        Vec3::new(x1 - stile, rail, zf + 0.005),
+        SHUTTER,
+        NO_BACK,
+    );
+    cuboid(
+        m,
+        Vec3::new(x0 + stile, h - rail, z0),
+        Vec3::new(x1 - stile, h, zf + 0.005),
+        SHUTTER,
+        NO_BACK,
+    );
+    // The slats: each slopes back from its lower edge, its underside shows below it.
+    let (xa, xb) = (x0 + stile, x1 - stile);
+    let pitch = 0.07;
+    let slats = ((h - 2.0 * rail) / pitch).floor() as u32;
+    let start = rail + ((h - 2.0 * rail) - slats as f32 * pitch) * 0.5;
+    for k in 0..slats {
+        let y = start + k as f32 * pitch;
+        quad(
             m,
-            Vec3::new(x0, 0.0, 0.02),
-            Vec3::new(x0 + stile, h, zf + 0.005),
+            [
+                Vec3::new(xa, y, zf),
+                Vec3::new(xb, y, zf),
+                Vec3::new(xb, y + pitch, zb),
+                Vec3::new(xa, y + pitch, zb),
+            ],
             SHUTTER,
-            NO_BACK,
         );
-        cuboid(
+        quad(
             m,
-            Vec3::new(x1 - stile, 0.0, 0.02),
-            Vec3::new(x1, h, zf + 0.005),
+            [
+                Vec3::new(xa, y, zb),
+                Vec3::new(xb, y, zb),
+                Vec3::new(xb, y, zf),
+                Vec3::new(xa, y, zf),
+            ],
             SHUTTER,
-            NO_BACK,
         );
-        cuboid(
-            m,
-            Vec3::new(x0 + stile, 0.0, 0.02),
-            Vec3::new(x1 - stile, rail, zf + 0.005),
-            SHUTTER,
-            NO_BACK,
-        );
-        cuboid(
-            m,
-            Vec3::new(x0 + stile, h - rail, 0.02),
-            Vec3::new(x1 - stile, h, zf + 0.005),
-            SHUTTER,
-            NO_BACK,
-        );
-        // The slats: each slopes back from its lower edge, its underside shows below it.
-        let (xa, xb) = (x0 + stile, x1 - stile);
-        let pitch = 0.07;
-        let slats = ((h - 2.0 * rail) / pitch).floor() as u32;
-        let start = rail + ((h - 2.0 * rail) - slats as f32 * pitch) * 0.5;
-        for k in 0..slats {
-            let y = start + k as f32 * pitch;
-            quad(
-                m,
-                [
-                    Vec3::new(xa, y, zf),
-                    Vec3::new(xb, y, zf),
-                    Vec3::new(xb, y + pitch, zb),
-                    Vec3::new(xa, y + pitch, zb),
-                ],
-                SHUTTER,
-            );
-            quad(
-                m,
-                [
-                    Vec3::new(xa, y, zb),
-                    Vec3::new(xb, y, zb),
-                    Vec3::new(xb, y, zf),
-                    Vec3::new(xa, y, zf),
-                ],
-                SHUTTER,
-            );
-        }
     }
 }
 

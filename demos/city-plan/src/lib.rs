@@ -1164,6 +1164,8 @@ impl Scenario for PlanScenario {
                 [0.0; 3]
             },
             reflectance: 0.06,
+            // Each window its own mix of dark glass and the curtains behind it.
+            color_b: [0.17, 0.15, 0.13],
             ..colour([0.03, 0.035, 0.04], 3000.0, 0.6)
         };
         for (k, &group) in KIT_GROUPS.iter().enumerate() {

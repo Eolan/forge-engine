@@ -169,8 +169,8 @@ pub fn faces(plan: &CityPlan, masses: &[Mass]) -> Vec<Face> {
 }
 
 /// A face's attributes for a grammar: `street`, `court` and `party` (1 for its kind),
-/// `corner_left`, `corner_right`, `entrance`, `floors`, `street_width`, and the storey heights
-/// `ground` and `floor`.
+/// `corner_left`, `corner_right`, `entrance`, `tiled` (a pitched roof over it), `floors`,
+/// `street_width`, and the storey heights `ground` and `floor`.
 pub fn attrs(grammar: &Grammar, face: &Face, m: &Mass) -> Attrs {
     let flag = |b: bool| f64::from(u8::from(b));
     grammar.attrs(&[
@@ -180,6 +180,7 @@ pub fn attrs(grammar: &Grammar, face: &Face, m: &Mass) -> Attrs {
         ("corner_left", flag(face.corners[0])),
         ("corner_right", flag(face.corners[1])),
         ("entrance", flag(face.entrance)),
+        ("tiled", flag(m.roof == mass::Roof::Tiled)),
         ("floors", f64::from(m.floors)),
         ("street_width", m.street_width),
         ("ground", mass::GROUND_FLOOR),
@@ -279,7 +280,10 @@ mod tests {
             area[*f as usize] += t.scope.size.x * t.scope.size.y;
         }
         for (face, a) in some.iter().zip(area) {
-            let full = face.width() * (face.height + 0.9);
+            // A tiled roof's face stops at its cornice (the eaves are nil); party walls are whole.
+            let tiled = masses[face.mass as usize].roof == mass::Roof::Tiled
+                && face.kind != FaceKind::Party;
+            let full = face.width() * (face.height + if tiled { 0.4 } else { 0.9 });
             assert!((a - full).abs() < 1e-6 * full.max(1.0), "{a} of {full}");
         }
         let windows = grammar.symbol("window").unwrap();

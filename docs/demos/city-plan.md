@@ -185,10 +185,11 @@ Three stages, each generic:
   - `let` values each building draws from its seed;
   - a text form with line-numbered errors.
 - **`forge_geom::modules`, the kit:** wall, party wall, string course, cornice, parapet, French
-  window (with or without shutters), low window, courtyard window, balcony, entrance, shopfront
+  window (with or without shutters, a quarter of them closed), low window, courtyard window, balcony, entrance, shopfront
   with or without an awning. Each module is a small part program of boxes and quads with one
   section layout, so eight material groups dress any of them: four shutter colours, each with
-  dark and lit glass. Walls, bands and cornices change size with every scope and are merged into
+  dark and lit glass (each window its own mix of dark glass and curtains). Walls, bands and
+  cornices change size with every scope and are merged into
   the tiles; openings repeat at a few sizes and are instanced.
 
 The engine's example style set is `crates/forge-procgen/src/city/mediterranean.rules`, about
