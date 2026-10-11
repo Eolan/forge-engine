@@ -131,6 +131,16 @@ impl Site {
         }
     }
 
+    /// The ground's height at `p` (the nearest cell) and its slope there, rise over run.
+    pub fn ground_at(&self, p: DVec2) -> (f32, f32) {
+        let n = self.ground.size;
+        let s = self.ground.spacing;
+        let x = (p.x / s).round().clamp(0.0, (n - 1) as f64) as u32;
+        let y = (p.y / s).round().clamp(0.0, (n - 1) as f64) as u32;
+        let (gx, gy) = self.ground.gradient(x, y);
+        (self.ground.get(x, y), (gx * gx + gy * gy).sqrt())
+    }
+
     /// The land's area, square metres.
     pub fn land_area(&self) -> f64 {
         let s = self.water.spacing;
@@ -338,6 +348,10 @@ pub struct CityParams {
     pub park_min_area: f64,
     /// The largest share of the land the parks may take.
     pub park_share_cap: f64,
+    /// Ground higher than this, metres, is left as forest (to the first reserve district).
+    pub forest_above: f32,
+    /// Ground steeper than this (rise over run) is left as forest.
+    pub forest_slope: f32,
 }
 
 /// The plan's numbers, the table judged beside the map.
@@ -426,13 +440,31 @@ pub fn district_index(field: &Field2<u8>, p: DVec2) -> Option<usize> {
 }
 
 /// Stage 1: each land cell's district, by the nearest anchor relative to its radius, the
-/// boundaries roughened by a noise of ±12 %.
-pub fn district_field(site: &Site, districts: &[DistrictSpec], seed: u64, cell: f64) -> Field2<u8> {
+/// boundaries roughened by a noise of ±12 %. Ground higher than `forest.0` metres or steeper
+/// than `forest.1` goes to the first [`DistrictKind::Reserve`] district, if there is one: the
+/// hills stay wooded.
+pub fn district_field(
+    site: &Site,
+    districts: &[DistrictSpec],
+    forest: (f32, f32),
+    seed: u64,
+    cell: f64,
+) -> Field2<u8> {
     let n = (site.size / cell).ceil() as u32 + 1;
+    let reserve = districts
+        .iter()
+        .position(|d| d.kind == DistrictKind::Reserve)
+        .map(|i| i as u8);
     Field2::from_fn(n, cell, |x, y| {
         let p = DVec2::new(x as f64 * cell, y as f64 * cell);
         if site.water_at(p) != LAND {
             return u8::MAX;
+        }
+        if let Some(reserve) = reserve {
+            let (height, slope) = site.ground_at(p);
+            if height > forest.0 || slope > forest.1 {
+                return reserve;
+            }
         }
         let wobble = 1.0 + 0.12 * noise::fbm(seed, p.x / 700.0, p.y / 700.0, 3, 2.0, 0.5);
         let mut best = (f64::MAX, u8::MAX);
@@ -458,6 +490,7 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
     let districts_field = district_field(
         site,
         &params.districts,
+        (params.forest_above, params.forest_slope),
         seed.derive_str("districts").value(),
         20.0,
     );
