@@ -695,9 +695,11 @@ The research is `assets-and-licences.md`, `population-simulation.md`, `procedura
    - masses per lot under a style bible (#246);
    - facade textures (window bays, shopfronts), drawn in 3D by `demos/city-plan`;
    - buildings from a split grammar and the first kit near the view (#247): shutters,
-     balconies, shopfronts, entrances, cornices.
+     balconies, shopfronts, entrances, cornices;
+   - tiled roof rows under one ridge, no sliver masses;
+   - squares and five landmark models.
 
-   Next: the module grid, a proxy per building, roofs from the straight skeleton (#247).
+   Next: the module grid, a proxy per building (#247).
 3. **Vegetation:** trees, grass, parks. Begun 2026-10-11: street, park, quay and courtyard
    trees as instances.
 4. **The player** in the streets in first person; interiors by use in speed tiers. Begun
@@ -707,8 +709,10 @@ The research is `assets-and-licences.md`, `population-simulation.md`, `procedura
 6. **People:** the human runtime and crowds at scale. Begun 2026-10-11: the population on foot
    round the camera, placeholder figures on street routes (`city-plan --people`).
 7. **Public transport:** trams, public automated taxis, boats. Begun 2026-10-11: trams on
-   their timetables, moving along double tracks (#253).
-8. **The population server:** event-driven records in `forge-sim`, 1 M then 4 M.
+   their timetables, moving along double tracks, people boarding them; river shuttles (#253).
+8. **The population server:** event-driven records in `forge-sim`, 1 M then 4 M. Begun
+   2026-10-11: 4 M people on six workers with one digest, snapshots of the running state
+   (#250).
 9. **Ambient audio.**
 
 ## Later — Smart systems: prediction, importance and budgets (#222)

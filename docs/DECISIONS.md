@@ -3931,8 +3931,14 @@ Each note's city-specific appendix stays in the sandbox.
          with its text form (`forge_procgen::grammar`), the first style set's rules and kit
          (`forge_geom::modules`), the buildings near the view drawn from them.
 
-       Next for #247: the module grid, a proxy per building, roofs from the straight
-       skeleton.
+       Since then:
+       - tiled roofs in the old towns, each row under one ridge with gables on the party
+         walls;
+       - no sliver masses;
+       - squares and five landmark models (market hall, terraced hall, gantry crane,
+         pavilion, weir bridge).
+
+       Next for #247: the module grid, a proxy per building.
     3. **Vegetation:** trees, grass, parks. *Begun 2026-10-11:* `city::trees` places rows
        along the streets, trees in parks, on quays and in courtyards, drawn as one instanced
        low-poly tree.
@@ -3947,8 +3953,11 @@ Each note's city-specific appendix stays in the sandbox.
     7. **Public transport:** trams, taxis, boats; then vehicles to pilot. *Begun 2026-10-11:*
        trams as timetabled runs (`forge_sim::transit`), a part-program model
        (`forge_geom::vehicles`), drawn as movers on double tracks in `demos/city-plan` (#253);
-       a river shuttle boat at each crossing, on a two-stop timetable.
-    8. **The population server,** scaled to 1 M and beyond; multiplayer clients.
+       a river shuttle boat at each crossing, on a two-stop timetable; people boarding from
+       the platforms; lines ending at one hub staggered.
+    8. **The population server,** scaled to 1 M and beyond; multiplayer clients. *Begun
+       2026-10-11:* `forge_sim::population` (#250): the day of 4 M people on six workers with
+       one digest, and snapshots of the running state.
     9. **Ambient audio.** Later: ships, aircraft, drones, weather, third person, LLM dialogue,
        visemes.
 
