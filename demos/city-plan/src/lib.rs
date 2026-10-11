@@ -663,7 +663,19 @@ impl PlanScenario {
 
     /// The plan's people on their clock from `hour` (game hours), those walking round the
     /// camera drawn as figures (`crowd`).
-    pub fn with_people(mut self, plan: &CityPlan, masses: &[Mass], hour: f64) -> Self {
+    pub fn with_people(self, plan: &CityPlan, masses: &[Mass], hour: f64) -> Self {
+        self.with_people_mix(plan, masses, hour, &forge_sim::population::Mix::default())
+    }
+
+    /// [`Self::with_people`] with the population's `mix` of roles: `Mix::adults()` for a
+    /// world with no children in it.
+    pub fn with_people_mix(
+        mut self,
+        plan: &CityPlan,
+        masses: &[Mass],
+        hour: f64,
+        mix: &forge_sim::population::Mix,
+    ) -> Self {
         let seats = std::mem::take(&mut self.seats);
         // Each platform with its line, stop and way, and the lines' timetables: who waits there
         // boards the trams that stand at it.
@@ -684,7 +696,7 @@ impl PlanScenario {
             .collect();
         let timetables = self.trams.iter().map(|r| r.timetable.clone()).collect();
         self.crowd = Some(crowd::Crowd::new(
-            plan, masses, hour, seats, platforms, timetables,
+            plan, masses, hour, seats, platforms, timetables, mix,
         ));
         self
     }

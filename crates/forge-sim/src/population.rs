@@ -194,6 +194,22 @@ impl Default for Mix {
     }
 }
 
+impl Mix {
+    /// The default mix without children, the other shares scaled to fill their place: for a
+    /// world that has none (a game world where no child should ever come to harm).
+    pub fn adults() -> Self {
+        let d = Self::default();
+        let k = 1.0 / (1.0 - d.child);
+        Self {
+            worker: d.worker * k,
+            night_worker: d.night_worker * k,
+            student: d.student * k,
+            child: 0.0,
+            retiree: d.retiree * k,
+        }
+    }
+}
+
 /// Five traits of four bits each: openness, conscientiousness, extraversion, agreeableness,
 /// neuroticism (the Big Five), 0 to 15.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1109,6 +1125,17 @@ mod tests {
             (sim.digest(), sim.events)
         };
         assert_eq!(run(), run());
+    }
+
+    #[test]
+    fn an_adults_mix_has_no_children() {
+        let world = town();
+        let pop = generate(&world, &Mix::adults(), Seed::new(5));
+        assert!(pop.len() > 100);
+        assert!(pop.role.iter().all(|&r| r != Role::Child));
+        // The other roles take the children's place, in their usual proportions.
+        let workers = pop.role.iter().filter(|&&r| r == Role::Worker).count();
+        assert!(workers * 2 > pop.len() / 2, "{workers} of {}", pop.len());
     }
 
     #[test]

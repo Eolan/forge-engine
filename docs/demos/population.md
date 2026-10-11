@@ -52,15 +52,16 @@ compares the digests).
 with its own calendar on its own thread. Nobody acts on anyone else yet, so the shards' events
 depend on their own people alone. A test checks that the digest, the events, the census and the
 positions are equal at one, three and six workers, to the bit. The bench (six workers) and a
-1 055 437-person city (the private sandbox's):
+1 055 437-person city (the private sandbox's). The sandbox is all adults (`Mix::adults()`): the
+default mix without its 15 % of children, the other roles scaled to fill their place.
 
 | | One worker | Six workers |
 |---|---|---|
 | The example, 307 283 people, two days | 2.68 s | 0.51 s (5.2 times) |
-| A million-person city, two days | 8.9 s | 1.7 s (5.3 times) |
+| A million-person city, two days | 9.4 s | 1.8 s (5.2 times) |
 | 4 226 650 people (`population-bench --scale 13.5`: the example's floors 13.5 times over), two days | 48.1 s | 8.8 s (5.5 times) |
 
-The million needs 38.0 MB, 315 events a real second at one game hour per 15 minutes, and 0.02 %
+The million needs 38.0 MB, 323 events a real second at one game hour per 15 minutes, and 0.02 %
 of one core. That is #250's first test, with the digests equal at one and six workers. At 4 M:
 152.2 MB, generated in 27 s (on one thread), 1 262 events a real second, 0.11 % of one core; the
 same digest at six workers.

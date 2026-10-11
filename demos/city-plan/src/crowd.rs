@@ -194,6 +194,7 @@ impl Crowd {
         seats: Vec<(Vec3, f32)>,
         platforms: Vec<Platform>,
         timetables: Vec<Timetable>,
+        mix: &Mix,
     ) -> Self {
         let mut stop_grid = PointGrid::new(plan.size, 100.0);
         for (k, p) in platforms.iter().enumerate() {
@@ -226,7 +227,7 @@ impl Crowd {
         // The demo's lifetime: the places live as long as the app.
         let world: &'static World =
             Box::leak(Box::new(World::new(places, plan.size as f32, 250.0)));
-        let pop = population::generate(world, &Mix::default(), Seed::new(2026));
+        let pop = population::generate(world, mix, Seed::new(2026));
         let mut sim = Sim::new(world, pop);
         let clock = hour * 3600.0;
         sim.run_until(clock as u32);
