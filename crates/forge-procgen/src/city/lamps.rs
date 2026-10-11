@@ -1,11 +1,12 @@
-//! Street lamps of the plan: along each street by its profile, at the pavement's edge, none in
-//! the junctions. Where Phase 4's many lights will stand (D-059's step 5); shielded and dimmed
-//! when the street is empty, as the style bible's lighting asks.
+//! Street lamps of the plan: along each street by its profile, between the trees by an avenue's
+//! kerb and at the pavement's edge elsewhere, none in the junctions. Where Phase 4's many lights
+//! will stand (D-059's step 5); shielded and dimmed when the street is empty, as the style
+//! bible's lighting asks.
 
 use glam::DVec2;
 
 use super::geom::{self, PointGrid};
-use super::{CityPlan, LAND, Profile, Site};
+use super::{CityPlan, LAND, Profile, Site, trees};
 
 /// A street lamp.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -16,7 +17,13 @@ pub struct Lamp {
     pub facing: DVec2,
     /// Its height, metres.
     pub height: f64,
+    /// Whether a second arm reaches back over the pavement (an avenue's kerb lamps).
+    pub double: bool,
 }
+
+/// A row of lamps along a street: its offset from the centreline, its spacing, the lamps' height,
+/// and on an avenue whether its kerb slot `k` holds a lamp.
+type LampRow = (f64, f64, f64, Option<fn(usize) -> bool>);
 
 /// No two lamps closer than this, metres: a street's lamps stop where another's already light.
 const APART: f64 = 12.0;
@@ -40,24 +47,42 @@ pub fn lamps(site: &Site, plan: &CityPlan) -> Vec<Lamp> {
     }
     let mut placed = PointGrid::new(plan.size, APART);
     for e in &plan.roads.edges {
-        // Sides, spacing and height by profile; staggered on the two sides.
-        let (sides, spacing, height): (&[f64], f64, f64) = match e.profile {
-            Profile::TramAvenue | Profile::Avenue => (&[-1.0, 1.0], 28.0, 8.0),
-            Profile::Shared => (&[1.0], 30.0, 6.0),
-            Profile::Pedestrian => (&[1.0], 24.0, 4.5),
-            Profile::Path => (&[1.0], 35.0, 4.0),
-        };
         let half = e.profile.width() * 0.5;
         let length = e.length();
-        for (k, &side) in sides.iter().enumerate() {
-            let offset = side * (half - 0.8).max(0.5);
-            let mut s = spacing * (0.25 + 0.5 * k as f64);
+        // An avenue's lamps stand in its kerb rows' free slots, between the trees, lighting the
+        // carriageway and the pavement from two arms (the owner, 2026-10-11: by the road, one
+        // of each in turn with the trees). Other streets: one side, at the pavement's edge.
+        let rows: Vec<LampRow> = match trees::kerb_rows(e.profile) {
+            Some(rows) => rows
+                .iter()
+                .map(|&(offset, lamp)| (offset, trees::KERB_SLOT, 8.0, Some(lamp)))
+                .collect(),
+            None => {
+                let (spacing, height) = match e.profile {
+                    Profile::Shared => (30.0, 6.0),
+                    Profile::Pedestrian => (24.0, 4.5),
+                    _ => (35.0, 4.0),
+                };
+                vec![((half - 0.8).max(0.5), spacing, height, None)]
+            }
+        };
+        for (offset, spacing, height, slots) in rows {
+            let mut s = if slots.is_some() {
+                spacing * 0.5
+            } else {
+                spacing * 0.25
+            };
+            let mut slot = 0;
             while s < length {
                 let p = geom::point_at(&e.points, s);
                 let t = geom::tangent_at(&e.points, s);
                 let normal = DVec2::new(-t.y, t.x);
                 let q = p + normal * offset;
                 s += spacing;
+                slot += 1;
+                if slots.is_some_and(|lamp| !lamp(slot - 1)) {
+                    continue;
+                }
                 let in_junction = junctions.any_within(q, 40.0, |n| {
                     plan.roads.nodes[n as usize].pos.distance(q) >= reach[n as usize] + 4.0
                 });
@@ -68,8 +93,9 @@ pub fn lamps(site: &Site, plan: &CityPlan) -> Vec<Lamp> {
                 placed.insert(q, out.len() as u32);
                 out.push(Lamp {
                     pos: q,
-                    facing: -normal * side.signum(),
+                    facing: -normal * offset.signum(),
                     height,
+                    double: slots.is_some(),
                 });
             }
         }

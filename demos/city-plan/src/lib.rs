@@ -248,7 +248,7 @@ pub struct PlanScenario {
     /// height over the model's 10 m up), its turn and which of the two leaf colours it uses.
     trees: Vec<(Vec3, Vec3, f32, usize)>,
     /// Each lamp's place, scale (its height over the model's 8 m) and turn.
-    lamps: Vec<(Vec3, f32, f32)>,
+    lamps: Vec<(Vec3, f32, f32, bool)>,
     /// The style kit's instanced modules and their instances (module, transform, group).
     kit_meshes: Vec<TriMesh>,
     kit_instances: Vec<(u32, Mat4, u8)>,
@@ -437,10 +437,37 @@ impl PlanScenario {
             .map(|t| t.ground.triangle_count() + t.masses.triangle_count())
             .sum();
         let st = &plan.stats;
+        // No tree over a tram stop or within 6 m of its platform (the owner, 2026-10-11): the
+        // platforms in their own frames (x along, z away from the track).
+        let stops: Vec<Mat4> = trams
+            .iter()
+            .flat_map(|r| r.platforms(size))
+            .map(|(at, _, _)| at.inverse())
+            .collect();
+        let mut stop_grid = forge_procgen::city::geom::PointGrid::new(size, 50.0);
+        for (k, s) in stops.iter().enumerate() {
+            let c = s
+                .inverse()
+                .transform_point3(Vec3::new(PLATFORM * 0.5, 0.0, 1.15));
+            stop_grid.insert(
+                DVec2::new(f64::from(c.x) + size * 0.5, f64::from(c.z) + size * 0.5),
+                k as u32,
+            );
+        }
+        let trees: Vec<&Tree> = trees
+            .iter()
+            .filter(|t| {
+                let w = world(size, t.pos, 0.0);
+                !stop_grid.any_within(t.pos, 30.0, |k| {
+                    let l = stops[k as usize].transform_point3(w);
+                    !((-6.0..PLATFORM + 6.0).contains(&l.x) && (-6.0..2.3 + 6.0).contains(&l.z))
+                })
+            })
+            .collect();
         let tree_count = trees.len();
         // The trunks, which the benches keep clear of.
         let mut trunks = forge_procgen::city::geom::PointGrid::new(size, 10.0);
-        for t in trees {
+        for t in &trees {
             trunks.insert(t.pos, 0);
         }
         let trees = trees
@@ -469,7 +496,12 @@ impl PlanScenario {
             .filter(|l| detail.is_none_or(|d| l.pos.distance(d.centre) < d.radius + 500.0))
             .map(|l| {
                 let turn = (-l.facing.x).atan2(-l.facing.y) as f32;
-                (world(size, l.pos, 0.0), (l.height / 8.0) as f32, turn)
+                (
+                    world(size, l.pos, 0.0),
+                    (l.height / 8.0) as f32,
+                    turn,
+                    l.double,
+                )
             })
             .collect();
         let mut seats = Vec::new();
@@ -2085,14 +2117,19 @@ impl Scenario for PlanScenario {
             }
         }
         if !self.lamps.is_empty() {
-            let model = builder.add_mesh(&MeshletMesh::build(&lamp_model()));
-            for &(at, scale, turn) in &self.lamps {
+            let models = [false, true]
+                .map(|double| builder.add_mesh(&MeshletMesh::build(&lamp_model(double))));
+            for &(at, scale, turn, double) in &self.lamps {
                 let transform = Mat4::from_scale_rotation_translation(
                     Vec3::splat(scale),
                     glam::Quat::from_rotation_y(turn),
                     at,
                 );
-                builder.add_instance_with_material(model, transform, lamp_row);
+                builder.add_instance_with_material(
+                    models[usize::from(double)],
+                    transform,
+                    lamp_row,
+                );
             }
         }
         let kit_ids: Vec<_> = self
@@ -2831,9 +2868,11 @@ fn corners(tiles: &mut Tiles, plan: &CityPlan, widest: &[f64]) {
     }
 }
 
-/// A street lamp 8 m tall: a hexagonal pole and an arm reaching 1.4 m along −z (section 0), and a
-/// lamp head under the arm's end (section 1, emissive).
-fn lamp_model() -> TriMesh {
+/// A street lamp 8 m tall: a hexagonal pole and an arm reaching 1.4 m along −z over the road, and
+/// when `double` a second reaching 1 m along +z over the pavement (section 0); under each arm's end
+/// a dark housing (section 0) lit only underneath (section 1, emissive): shielded, no light into
+/// the sky (the owner, 2026-10-11).
+fn lamp_model(double: bool) -> TriMesh {
     let mut mesh = TriMesh::default();
     let sides = 6;
     for k in 0..sides {
@@ -2918,17 +2957,41 @@ fn lamp_model() -> TriMesh {
             triangle(mesh, [q[0], q[2], q[3]], n, section);
         }
     };
-    boxed(
-        &mut mesh,
-        Vec3::new(-0.04, 7.85, -1.45),
-        Vec3::new(0.04, 7.95, 0.0),
-        0,
-    );
-    boxed(
-        &mut mesh,
-        Vec3::new(-0.14, 7.70, -1.70),
-        Vec3::new(0.14, 7.85, -1.10),
-        1,
-    );
+    // The arms: over the road along −z, and over the pavement along +z.
+    let arms: &[f32] = if double { &[-1.0, 1.0] } else { &[-1.0] };
+    for &way in arms {
+        let reach = if way < 0.0 { 1.45 } else { 1.05 };
+        let (z0, z1) = if way < 0.0 {
+            (-reach, 0.0)
+        } else {
+            (0.0, reach)
+        };
+        boxed(
+            &mut mesh,
+            Vec3::new(-0.04, 7.85, z0),
+            Vec3::new(0.04, 7.95, z1),
+            0,
+        );
+        // The housing, dark, and under it the lit lens, facing down only.
+        let (h0, h1) = if way < 0.0 {
+            (-reach - 0.25, -reach + 0.35)
+        } else {
+            (reach - 0.35, reach + 0.25)
+        };
+        boxed(
+            &mut mesh,
+            Vec3::new(-0.14, 7.70, h0),
+            Vec3::new(0.14, 7.85, h1),
+            0,
+        );
+        let lens = [
+            Vec3::new(-0.12, 7.69, h0 + 0.02),
+            Vec3::new(0.12, 7.69, h0 + 0.02),
+            Vec3::new(0.12, 7.69, h1 - 0.02),
+            Vec3::new(-0.12, 7.69, h1 - 0.02),
+        ];
+        triangle(&mut mesh, [lens[0], lens[1], lens[2]], -Vec3::Y, 1);
+        triangle(&mut mesh, [lens[0], lens[2], lens[3]], -Vec3::Y, 1);
+    }
     mesh
 }

@@ -45,6 +45,28 @@ pub fn workout_sites(plan: &CityPlan) -> Vec<(DVec2, DVec2)> {
         .collect()
 }
 
+/// An avenue's kerb rows' slot spacing, metres: trees and lamps alternate along each row, so a
+/// row has a tree every 16 m and a lamp halfway between (the owner, 2026-10-11: lamps and trees
+/// in conflict, a bit too many trees; one of each in turn).
+pub const KERB_SLOT: f64 = 8.0;
+
+/// A kerb row: its offset from the centreline, and whether its slot `k` holds a lamp.
+pub type KerbRow = (f64, fn(usize) -> bool);
+
+/// An avenue's kerb rows (`None` for other profiles): each row's offset from the centreline (a
+/// metre into the pavement from the kerb), its slots every [`KERB_SLOT`] from half a slot in,
+/// and on each row whether the slot `k` holds a lamp: odd slots on the left row, even ones on
+/// the right, so the two sides stagger.
+pub fn kerb_rows(profile: Profile) -> Option<[KerbRow; 2]> {
+    match profile {
+        Profile::TramAvenue | Profile::Avenue => {
+            let kerb = (profile.width() * 0.5 - profile.pavement() + 1.0).max(0.0);
+            Some([(-kerb, |k| k % 2 == 1), (kerb, |k| k % 2 == 0)])
+        }
+        _ => None,
+    }
+}
+
 /// The plan's trees.
 pub fn trees(site: &Site, plan: &CityPlan, seed: u64) -> Vec<Tree> {
     let mut out = Vec::new();
@@ -64,27 +86,32 @@ pub fn trees(site: &Site, plan: &CityPlan, seed: u64) -> Vec<Tree> {
         // pavement (the owner, 2026-10-11: 2.5 m from the facades their crowns went into the
         // buildings); a shared street's and a lane's in their middle, off the walkers' lines.
         let half = e.profile.width() * 0.5;
-        let (rows, spacing, height, crown): (Vec<f64>, f64, (f64, f64), (f64, f64)) =
-            match e.profile {
-                Profile::TramAvenue | Profile::Avenue => {
-                    let kerb = (half - e.profile.pavement() + 1.0).max(0.0);
-                    (vec![-kerb, kerb], 9.0, (11.0, 15.0), (3.5, 4.8))
-                }
-                Profile::Shared => (vec![0.0], 11.0, (7.0, 10.0), (2.4, 3.4)),
-                Profile::Pedestrian => (vec![0.0], 18.0, (5.0, 7.0), (1.8, 2.5)),
-                Profile::Path => (Vec::new(), 0.0, (0.0, 0.0), (0.0, 0.0)),
-            };
+        // An avenue's rows by the kerb, a tree in every other slot (the lamps take the rest).
+        let lamp_free: fn(usize) -> bool = |_| false;
+        let (rows, spacing, height, crown): (Vec<KerbRow>, f64, _, _) = match kerb_rows(e.profile) {
+            Some(rows) => (rows.to_vec(), KERB_SLOT, (11.0, 15.0), (3.5, 4.8)),
+            None => match e.profile {
+                Profile::Shared => (vec![(0.0, lamp_free)], 14.0, (7.0, 10.0), (2.4, 3.4)),
+                Profile::Pedestrian => (vec![(0.0, lamp_free)], 18.0, (5.0, 7.0), (1.8, 2.5)),
+                _ => (Vec::new(), 0.0, (0.0, 0.0), (0.0, 0.0)),
+            },
+        };
         let length = e.length();
-        for &offset in &rows {
+        for &(offset, lamp) in &rows {
             // The crown stops half a metre short of the building line.
             let room = (half - offset.abs() - 0.5).max(1.0);
             let mut s = spacing * 0.5;
+            let mut slot = 0;
             while s < length {
                 let p = geom::point_at(&e.points, s);
                 let t = geom::tangent_at(&e.points, s);
                 let q = p + DVec2::new(-t.y, t.x) * offset;
                 s += spacing;
-                if junctions.any_within(q, 10.0, |_| false) || site.water_at(q) != LAND {
+                slot += 1;
+                if lamp(slot - 1)
+                    || junctions.any_within(q, 10.0, |_| false)
+                    || site.water_at(q) != LAND
+                {
                     continue;
                 }
                 out.push(Tree {
@@ -96,13 +123,14 @@ pub fn trees(site: &Site, plan: &CityPlan, seed: u64) -> Vec<Tree> {
             }
         }
     }
-    // Parks: a jittered grid, two thirds filled, glades left open.
+    // Parks: a jittered grid, a little over half filled, glades left open (two thirds were a
+    // bit many, the owner found).
     for b in plan.blocks.iter().filter(|b| b.use_ == BlockUse::Park) {
         scatter(
             site,
             &b.polygon,
             13.0,
-            0.66,
+            0.55,
             Setting::Park,
             &mut rng,
             &mut out,
@@ -179,6 +207,49 @@ pub fn trees(site: &Site, plan: &CityPlan, seed: u64) -> Vec<Tree> {
             scatter(site, c, 16.0, 0.5, Setting::Courtyard, &mut rng, &mut out);
         }
     }
+    // The parks', the quays' and the courtyards' trees off the roads and paths (a metre and a
+    // half clear of their edges), and every tree off a river's bank (4 m clear of its water):
+    // the owner saw trees on the water, the roads and the paths (2026-10-11).
+    let mut ways: Vec<(f64, PointGrid)> = Vec::new();
+    for e in &plan.roads.edges {
+        let half = e.profile.width() * 0.5;
+        let k = match ways.iter().position(|(h, _)| (*h - half).abs() < 0.01) {
+            Some(k) => k,
+            None => {
+                ways.push((half, PointGrid::new(plan.size, 20.0)));
+                ways.len() - 1
+            }
+        };
+        for p in geom::resample(&e.points, 2.0) {
+            ways[k].1.insert(p, 0);
+        }
+    }
+    // The rivers' centrelines every 2 m, with the reach a tree keeps from each.
+    let banks: Vec<(f64, PointGrid)> = site
+        .rivers
+        .iter()
+        .map(|r| {
+            let mut grid = PointGrid::new(plan.size, 40.0);
+            for p in geom::resample(&r.centreline, 2.0) {
+                grid.insert(p, 0);
+            }
+            (r.width * 0.5 + 4.0, grid)
+        })
+        .collect();
+    out.retain(|t| {
+        let near = |grids: &[(f64, PointGrid)], extra: f64| {
+            grids
+                .iter()
+                .any(|(reach, grid)| grid.any_within(t.pos, reach + extra, |_| false))
+        };
+        !(t.setting != Setting::Street && near(&ways, 1.5)) && !near(&banks, 0.0)
+    });
+    // And none where a lamp stands, whichever street's it is: the lamps take precedence.
+    let mut lamps = PointGrid::new(plan.size, 20.0);
+    for l in super::lamps::lamps(site, plan) {
+        lamps.insert(l.pos, 0);
+    }
+    out.retain(|t| !lamps.any_within(t.pos, 3.0, |_| false));
     out
 }
 
@@ -236,6 +307,45 @@ fn scatter(
 mod tests {
     use super::super::{example, plan};
     use super::*;
+
+    #[test]
+    fn trees_keep_off_the_ways_the_banks_and_the_lamps() {
+        let size = 4000.0;
+        let site = example::site(size, 10.0);
+        let city = plan(&site, &example::params(size));
+        let trees = trees(&site, &city, 3);
+        let lamps = super::super::lamps::lamps(&site, &city);
+        // No tree where a lamp stands: an avenue's kerb rows take them in turn.
+        for l in &lamps {
+            assert!(
+                trees.iter().all(|t| t.pos.distance(l.pos) > 3.0),
+                "a tree on {}",
+                l.pos
+            );
+        }
+        assert!(lamps.iter().any(|l| l.double));
+        for t in &trees {
+            for r in &site.rivers {
+                let line = &r.centreline;
+                let d = line
+                    .windows(2)
+                    .map(|w| geom::distance_to_segment(t.pos, w[0], w[1]))
+                    .fold(f64::MAX, f64::min);
+                assert!(d > r.width * 0.5 + 3.0, "a tree on the river at {}", t.pos);
+            }
+            if t.setting == Setting::Street {
+                continue;
+            }
+            for e in &city.roads.edges {
+                let d = e
+                    .points
+                    .windows(2)
+                    .map(|w| geom::distance_to_segment(t.pos, w[0], w[1]))
+                    .fold(f64::MAX, f64::min);
+                assert!(d > e.profile.width() * 0.5, "a tree on a road at {}", t.pos);
+            }
+        }
+    }
 
     #[test]
     fn trees_line_the_streets_and_fill_the_parks_on_land() {
