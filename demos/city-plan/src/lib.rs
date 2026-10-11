@@ -940,6 +940,9 @@ const CORNER_LEVEL: f64 = AVENUE_LEVEL + 0.01;
 /// width and half a metre for its sections' overhang on a curve and a margin.
 const SWEPT: f64 = TRACK_OFFSET + 1.35 + 0.5;
 
+/// The radius a paved corner's kerb turns on at a junction, metres: a town street's.
+const KERB_RADIUS: f64 = 6.0;
+
 /// The distance between segments `p q` and `a b`, zero where they cross.
 fn segment_gap(p: DVec2, q: DVec2, a: DVec2, b: DVec2) -> f64 {
     if geom::segment_intersection(p, q, a, b).is_some() {
@@ -3110,9 +3113,9 @@ fn corners(plan: &CityPlan, widest: &[f64]) -> Vec<Vec<DVec2>> {
                         .all(|&(p, q)| segment_gap(p, q, w[0], w[1]) >= SWEPT)
                 })
             };
-            let Some(kerb) = (0..=8)
-                .map(|t| kerb.lerp(wall, t as f64 / 8.0))
-                .find(|&k| clear(k))
+            let Some((cut, kerb)) = (0..=8)
+                .map(|t| (t > 0, kerb.lerp(wall, t as f64 / 8.0)))
+                .find(|&(_, k)| clear(k))
             else {
                 continue;
             };
@@ -3131,11 +3134,18 @@ fn corners(plan: &CityPlan, widest: &[f64]) -> Vec<Vec<DVec2>> {
             {
                 continue;
             }
-            let ring = if geom::signed_area(&corner) < 0.0 {
-                corner.iter().rev().copied().collect::<Vec<_>>()
+            // The kerb turns the corner on an arc of `KERB_RADIUS` (shorter where its sides are
+            // short), as kerbs do, unless a tram's path cut it back: it came to a point (the
+            // owner: some things need rounding).
+            let mut ring = corner[1..4].to_vec();
+            if cut {
+                ring.extend([b_in, kerb, a_in]);
             } else {
-                corner.to_vec()
-            };
+                ring.extend(geom::fillet(&[b_in, kerb, a_in], KERB_RADIUS, 0.75));
+            }
+            if geom::signed_area(&ring) < 0.0 {
+                ring.reverse();
+            }
             rings.push(ring);
         }
     }

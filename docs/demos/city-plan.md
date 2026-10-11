@@ -399,7 +399,9 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
   and in along the kerbs; it was asphalt to the buildings. Where a tram turns, the corner's kerb
   point is drawn back towards the building until the swept path is clear (the outer track, half
   a car and 0.5 m, 3.45 m from the line), or the corner is left out: the inner track crossed a
-  corner's tip (the owner: the tracks should use the junction, not the pavement).
+  corner's tip (the owner: the tracks should use the junction, not the pavement). Otherwise the
+  kerb turns the corner on a 6 m arc, shorter where its sides are short (`geom::fillet`): it came
+  to a point (the owner: some things need rounding).
 - **dropped kerbs:** each raised pavement slopes down to the paved corner over 1.6 m at both
   ends, its whole width, where people cross at the junction (1 in 12, step-free: #263). The
   open ends showed under the pavement.
