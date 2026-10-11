@@ -141,6 +141,25 @@ impl Timetable {
         (self.cycle / self.service.headway).ceil() as usize
     }
 
+    /// Seconds from `t` until a vehicle stands at stop `stop` running `outbound` (0 while one
+    /// stands there), or `None` if none ever does: an end of the line, the way it ends. What a
+    /// stop's display shows (the owner, 2026-10-11: a screen with the next tram's time).
+    pub fn next_arrival(&self, stop: usize, outbound: bool, t: f64) -> Option<f64> {
+        let &(start, length, _) = self.steps.iter().find(|(_, _, step)| {
+            matches!(step, Step::Stand { stop: i, outbound: o } if *i == stop && *o == outbound)
+        })?;
+        (0..self.vehicles())
+            .map(|k| {
+                let local = (t - k as f64 * self.service.headway).rem_euclid(self.cycle);
+                if (start..start + length).contains(&local) {
+                    0.0
+                } else {
+                    (start - local).rem_euclid(self.cycle)
+                }
+            })
+            .min_by(f64::total_cmp)
+    }
+
     /// Where vehicle `k` is at time `t` seconds (any `t`: the service runs round the clock).
     pub fn at(&self, k: usize, t: f64) -> RunState {
         let local = (t - k as f64 * self.service.headway).rem_euclid(self.cycle);
@@ -201,6 +220,33 @@ fn leg_distance(d: f64, t: f64, total: f64, s: &Service) -> (f64, f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stop_knows_its_next_tram() {
+        let line = line();
+        let stands = |stop: usize, outbound: bool, t: f64| {
+            (0..line.vehicles()).any(|k| {
+                let r = line.at(k, t);
+                r.at_stop == Some(stop) && r.outbound == outbound
+            })
+        };
+        for t in [0.0, 137.0, 1000.0, 5555.0] {
+            for stop in 1..4 {
+                for outbound in [true, false] {
+                    let wait = line.next_arrival(stop, outbound, t).expect("served");
+                    // Within a headway, and a vehicle stands there then, not just before.
+                    assert!(wait <= Service::default().headway + 1e-6, "{wait}");
+                    assert!(stands(stop, outbound, t + wait + 0.5));
+                    if wait > 1.0 {
+                        assert!(!stands(stop, outbound, t + wait - 1.0));
+                    }
+                }
+            }
+        }
+        // The line's end, the way it ends: no tram stops there going on.
+        assert_eq!(line.next_arrival(4, true, 0.0), None);
+        assert!(line.next_arrival(4, false, 0.0).is_some());
+    }
 
     fn line() -> Timetable {
         Timetable::new(&[0.0, 400.0, 900.0, 1300.0, 2000.0], Service::default())
