@@ -37,7 +37,8 @@ pub struct StyleBible {
     /// Its name.
     pub name: String,
     /// A building's height is at most this times the width of the street it fronts (Paris has
-    /// held roughly 1 to 1.5 since 1784).
+    /// held roughly 1 to 1.5 since 1784; old Mediterranean towns go past 2 in their lanes). The
+    /// default, 1.75, keeps the homes the narrower street profiles of 2026-10-11 would cost.
     pub height_to_width: f64,
     /// The share of roofs that are green.
     pub green_roofs: f64,
@@ -60,7 +61,7 @@ impl Default for StyleBible {
     fn default() -> Self {
         Self {
             name: "default".into(),
-            height_to_width: 1.5,
+            height_to_width: 1.75,
             green_roofs: 0.5,
             green_area: 0.3,
             park_reach: 300.0,

@@ -54,6 +54,8 @@ struct Route {
     along: Vec<f64>,
     half: Vec<f64>,
     level: Vec<f32>,
+    /// Per point (as `half`), its street's raised pavement's width; 0 on a shared surface.
+    pave: Vec<f64>,
 }
 
 impl Route {
@@ -61,14 +63,18 @@ impl Route {
         self.along[self.along.len() - 1]
     }
 
-    /// How far right of segment `i`'s centreline its walkers or riders go: the pavement on
-    /// foot, the carriageway's lane riding.
+    /// How far right of segment `i`'s centreline its walkers or riders go. On foot, 3 m from
+    /// the building line: past the café terraces (2.4 m deep), short of the trees at the kerb
+    /// or down a shared street's middle. Riding, in the bike strip a metre from the kerb, or
+    /// on a shared surface 3.4 m in from the building line.
     fn side(&self, i: usize, riding: bool) -> f64 {
-        let half = self.half[i];
-        if riding {
-            (half - 4.5).max(1.2)
+        let (half, pave) = (self.half[i], self.pave[i]);
+        if !riding {
+            (half - 3.0).max(1.0)
+        } else if pave > 0.0 {
+            (half - pave - 1.0).max(1.2)
         } else {
-            (half - 2.0).max(1.0)
+            (half - 3.4).max(1.2)
         }
     }
 
@@ -142,7 +148,7 @@ pub struct Crowd {
     /// Game seconds.
     clock: f64,
     graph: Graph,
-    plan_edges: Vec<(Vec<DVec2>, f64, f64)>,
+    plan_edges: Vec<(Vec<DVec2>, f64, f64, f64)>,
     routes: HashMap<u32, Option<Route>>,
     /// The parks' outlines: their visitors stand inside them.
     parks: Vec<Vec<DVec2>>,
@@ -241,7 +247,7 @@ impl Crowd {
                 Profile::TramAvenue | Profile::Avenue => 0.30,
                 _ => 0.16,
             };
-            plan_edges.push((e.points.clone(), side, level));
+            plan_edges.push((e.points.clone(), side, level, e.profile.pavement()));
         }
         // Each terrace seat's neighbourhood: the cafés and the seats within 300 m of it. A seat
         // is taken in the share the people out at those cafés make of those seats.
@@ -588,8 +594,9 @@ impl Crowd {
         let mut points = Vec::new();
         let mut half = Vec::new();
         let mut level = Vec::new();
+        let mut pave = Vec::new();
         for (e, fwd) in legs {
-            let (pts, s, l) = &self.plan_edges[e as usize];
+            let (pts, s, l, pv) = &self.plan_edges[e as usize];
             let mut pts = pts.clone();
             if !fwd {
                 pts.reverse();
@@ -601,6 +608,7 @@ impl Crowd {
                 points.push(p);
                 half.push(*s);
                 level.push(*l as f32);
+                pave.push(*pv);
             }
         }
         if points.len() < 2 {
@@ -615,6 +623,7 @@ impl Crowd {
             along,
             half,
             level,
+            pave,
         })
     }
 }
@@ -642,6 +651,7 @@ mod tests {
                 along,
                 half: vec![14.0, 8.0, 8.0],
                 level: vec![0.3, 0.16, 0.16],
+                pave: vec![6.0, 0.0, 0.0],
             };
             for riding in [false, true] {
                 let mut last = route.at(0.0, riding).0;

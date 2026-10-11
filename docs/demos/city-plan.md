@@ -31,7 +31,7 @@ cargo run --release -p city-map -- --size 4000 --scale 2 --out captures/city
 | Blocks | quays where a face holds water; parks from park districts, then from the 3-30-300 rule (a park of 1 ha within 300 m of every built block); squares: the built block nearest each built district's centre and each landmark, and small ones through old towns 180 m apart (`add_squares`); once the streets' profiles are known, a buildable outline per block on each street's building line (`geom::inset_by`) and a courtyard a building's depth inside it | `city::blocks` |
 | Lots | recursive splits across each piece's long axis (Vanegas et al. 2012); only the pieces on a street are kept where a block has a courtyard | `city::blocks` |
 | Forest | ground above a height or steeper than a slope goes to the first reserve district (a real site's hills) | `city::district_field` |
-| Transit | tram lines by the shortest path through their waypoints, main roads preferred (a waypoint far from any main road snaps to the nearest street); stops every 450 m moved to nearby junctions; lines added until a target share of blocks has a stop within 400 m (`transit::cover`); boat crossings where a river runs long without a bridge; street profiles (tram avenue, avenue, shared, pedestrian, path) | `city::transit` |
+| Transit | tram lines by the shortest path through their waypoints, main roads preferred (a waypoint far from any main road snaps to the nearest street); stops every 450 m moved to nearby junctions; lines added until a target share of blocks has a stop within 400 m (`transit::cover`); boat crossings where a river runs long without a bridge; street profiles between building lines (tram avenue 24 m with 6 m pavements, avenue 18 m with 5 m pavements, shared street 10 m, pedestrian 8 m, path 4 m: narrowed on 2026-10-11 after the owner found too much road, the default height-to-width ratio raised from 1.5 to 1.75 to keep the homes) | `city::transit` |
 | Masses | each lot's building: strips of its district's building depth along each street the lot fronts (lots are cut inside the block's building lines, half each street's profile width from its centreline); floors from the district's range, capped by the style bible's height-to-width ratio on the street it fronts; green, solar or terrace roofs | `city::mass` |
 | Style bible | one TOML record of the city's rules (height to street width, green roofs, green area per block, park and stop reach, the streets' share, per-district floors, lots, spacing, building depth, tiled roofs and walls), put into the plan's parameters and measured by a checker that names what fails | `city::bible` |
 | Trees | rows along the streets by profile (on avenues one a side by the kerb, a metre into the pavement, every 9 m; one down the middle of shared streets every 11 m and of lanes every 18 m), each crown stopping half a metre short of the building line, none within 10 m of a junction; a jittered grid in parks (13 m, two thirds filled), on the quays (14 m, under half) and in courtyards (16 m, half) | `city::trees` |
@@ -48,13 +48,13 @@ router, and `forge_core::dmath` does the trigonometry. Two runs give the same di
 | Land | 14.3 km² |
 | Main roads / streets | 59 km / 149 km, 8 bridges |
 | Built blocks / parks / squares | 667 (mean 1.66 ha) / 48 / 12 |
-| Lots / blocks with a courtyard | 10 985 / 599 |
+| Lots / blocks with a courtyard | 11 224 / 605 |
 | Parks' share of the land | 10.5 % |
 | Built blocks with a 1 ha park within 300 m | 100 % |
 | Built blocks within 400 m of a tram stop | 45 % (two lines, no line added) |
-| Streets' share of the land | 21.5 % |
+| Streets' share of the land | 18.0 % |
 | Tram lines | 7.8 km, 19 stops |
-| Masses / floor area | 12 373 / 18.4 km² (13 ms; floors capped by street width) |
+| Masses / floor area | 12 614 / 19.0 km² (13 ms; floors capped by street width) |
 
 | Stage | Time |
 |---|---|
@@ -199,10 +199,10 @@ neighbours differ.
 
 | The kit within 450 m of the avenue view (example city) | |
 |---|---|
-| Buildings / faces / terminals | 1 010 / 4 435 / 166 418 |
-| Instances / unique modules | 30 232 / 20 (8.1 M instanced triangles) |
-| Merged triangles added (walls, bands, cornices) | 363 k |
-| Derived and assembled | 68 ms (one thread) |
+| Buildings / faces / terminals | 1 021 / 4 466 / 198 443 |
+| Instances / unique modules | 35 952 / 20 (9.7 M instanced triangles) |
+| Merged triangles added (walls, bands, cornices) | 417 k |
+| Derived and assembled | 78 ms (one thread) |
 | Longest run of one opening along a floor of a street front | 10 |
 | GPU frame at 2800 × 1575, this view, best of 3 | 3.78 ms (3.42 ms with `--detail 0`) |
 | Scene built and cooked | 2.79 s (2.35 s) |
@@ -408,7 +408,7 @@ cargo run --release -p city-plan -- --street --people 16.3   # from 16:18
 *Top: from 16:18, the park's visitors standing about it; at 08:12, the morning's cyclists in the
 river avenue's lanes and walkers on its pavements. Bottom: at 20:00, a lane's café terraces; the
 evening's walkers.* `--people HOUR` builds the plan's population from the masses
-(`forge_sim::population`, 297 251 people, 2 s) and runs its day to that hour. Each frame:
+(`forge_sim::population`, 307 283 people, 2 s) and runs its day to that hour. Each frame:
 - **who is drawn:** people within 220 m of the camera, as placeholder figures
   (`forge_geom::figures`: blocky, in eight palettes, walking (a left stride, passing, a right
   stride, a pose every 0.7 m along the way), standing, riding a bike or

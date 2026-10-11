@@ -2301,7 +2301,6 @@ pub fn street_camera(plan: &CityPlan, near: DVec2) -> Option<FlyCamera> {
 /// surfaces): each side a strip of the profile's pavement 14 cm over the carriageway and a kerb
 /// face towards it, cut back at each end by the widest street meeting there.
 fn pavements(tiles: &mut Tiles, plan: &CityPlan) {
-    use forge_procgen::city::Profile;
     let size = tiles.size;
     let mut widest = vec![0.0_f64; plan.roads.nodes.len()];
     for e in &plan.roads.edges {
@@ -2310,11 +2309,10 @@ fn pavements(tiles: &mut Tiles, plan: &CityPlan) {
         widest[e.b as usize] = widest[e.b as usize].max(half);
     }
     for e in &plan.roads.edges {
-        let pavement = match e.profile {
-            Profile::TramAvenue => 5.0,
-            Profile::Avenue => 4.5,
-            _ => continue,
-        };
+        let pavement = e.profile.pavement();
+        if pavement <= 0.0 {
+            continue;
+        }
         let length = e.length();
         let (start, end) = (
             widest[e.a as usize] + 1.0,

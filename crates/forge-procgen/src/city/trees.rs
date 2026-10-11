@@ -56,12 +56,7 @@ pub fn trees(site: &Site, plan: &CityPlan, seed: u64) -> Vec<Tree> {
         let (rows, spacing, height, crown): (Vec<f64>, f64, (f64, f64), (f64, f64)) =
             match e.profile {
                 Profile::TramAvenue | Profile::Avenue => {
-                    let pavement = if e.profile == Profile::TramAvenue {
-                        5.0
-                    } else {
-                        4.5
-                    };
-                    let kerb = (half - pavement + 1.0).max(0.0);
+                    let kerb = (half - e.profile.pavement() + 1.0).max(0.0);
                     (vec![-kerb, kerb], 9.0, (11.0, 15.0), (3.5, 4.8))
                 }
                 Profile::Shared => (vec![0.0], 11.0, (7.0, 10.0), (2.4, 3.4)),

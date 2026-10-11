@@ -305,14 +305,26 @@ impl Profile {
         }
     }
 
-    /// The width between the building lines, metres.
+    /// The width between the building lines, metres. A city without private cars needs little
+    /// carriageway (the owner, 2026-10-11: "a lot of wasted space for the road"): a tram
+    /// avenue's two tracks and bike strips take 12 m, an avenue's shared lanes 8 m.
     pub fn width(self) -> f64 {
         match self {
-            Self::TramAvenue => 28.0,
-            Self::Avenue => 22.0,
-            Self::Shared => 12.0,
+            Self::TramAvenue => 24.0,
+            Self::Avenue => 18.0,
+            Self::Shared => 10.0,
             Self::Pedestrian => 8.0,
             Self::Path => 4.0,
+        }
+    }
+
+    /// Each raised pavement's width, metres, room for a row of trees by the kerb and café
+    /// terraces by the shops; 0 where the whole street is one shared surface.
+    pub fn pavement(self) -> f64 {
+        match self {
+            Self::TramAvenue => 6.0,
+            Self::Avenue => 5.0,
+            Self::Shared | Self::Pedestrian | Self::Path => 0.0,
         }
     }
 }
