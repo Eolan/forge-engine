@@ -34,7 +34,7 @@ GroundBay -> split(x) { ~1: Wall | 1.2: LowColumn | ~1: Wall }
 Shops -> split(x) { 0.3: Wall | ~1: Shop | 0.3: Wall }
 Door -> split(y) { 3.0: Entrance | ~1: Wall }
 Entrance -> insert(door)
-Shop -> split(y) { 3.3: Shopfront | ~1: Wall }
+Shop -> split(y) { 2.6: Shopfront | ~1: Wall }
 Shopfront -> choose(index) { 1: ShopOpen | 1: ShopAwning }
 ShopOpen -> insert(shop)
 ShopAwning -> insert(shop_awning)

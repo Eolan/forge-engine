@@ -155,6 +155,18 @@ fn quad(m: &mut TriMesh, p: [Vec3; 4], section: u8) {
     m.sections.extend([section, section]);
 }
 
+/// A triangle, its corners counter-clockwise seen from its front.
+fn triangle(m: &mut TriMesh, p: [Vec3; 3], section: u8) {
+    let n = (p[1] - p[0]).cross(p[2] - p[0]).normalize_or_zero();
+    let base = m.positions.len() as u32;
+    for q in p {
+        m.positions.push(q.to_array());
+        m.normals.push(n.to_array());
+    }
+    m.indices.extend([base, base + 1, base + 2]);
+    m.sections.push(section);
+}
+
 /// The wall's quad at depth `z`.
 fn wall_quad(w: f32, h: f32, z: f32) -> [Vec3; 4] {
     [
@@ -574,10 +586,11 @@ fn door(m: &mut TriMesh, w: f32, h: f32) {
     );
 }
 
-/// A shopfront: a deep opening glazed over a stone stall riser, mullions, a painted fascia
-/// over it, and an awning pulled out when `awning`.
+/// A shopfront: a deep opening the scope's size, glazed over a stone stall riser, mullions; a
+/// painted fascia over it, on the wall above the scope (the wall's own module shows round it);
+/// and an awning pulled out from the fascia when `awning`.
 fn shop(m: &mut TriMesh, w: f32, h: f32, awning: bool) {
-    let top = h - 0.75;
+    let top = h;
     let d = -0.3;
     quad(
         m,
@@ -648,12 +661,22 @@ fn shop(m: &mut TriMesh, w: f32, h: f32, awning: bool) {
     cuboid(
         m,
         Vec3::new(-0.1, top + 0.1, 0.0),
-        Vec3::new(w + 0.1, h - 0.12, 0.07),
+        Vec3::new(w + 0.1, top + 0.62, 0.07),
         SHUTTER,
         NO_BACK,
     );
     if awning {
         let (y0, y1, out) = (top + 0.35, top - 0.35, 1.5);
+        // Its cheeks, seen from both sides.
+        for x in [0.0, w] {
+            let cheek = [
+                Vec3::new(x, y0, 0.08),
+                Vec3::new(x, y1, out),
+                Vec3::new(x, y1 - 0.22, out),
+            ];
+            triangle(m, cheek, FABRIC);
+            triangle(m, [cheek[0], cheek[2], cheek[1]], FABRIC);
+        }
         let slope = [
             Vec3::new(0.0, y1, out),
             Vec3::new(w, y1, out),
