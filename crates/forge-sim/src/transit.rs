@@ -121,6 +121,11 @@ impl Timetable {
         }
     }
 
+    /// The stops' distances along the track, metres.
+    pub fn stops(&self) -> &[f64] {
+        &self.stops
+    }
+
     /// Seconds a vehicle takes out and back, turns included.
     pub fn cycle(&self) -> f64 {
         self.cycle

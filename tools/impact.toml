@@ -23,6 +23,7 @@
 "crates/forge-procgen/src/grammar.rs" = []
 "crates/forge-geom/src/modules.rs" = []
 "crates/forge-geom/src/vehicles.rs" = []
+"crates/forge-geom/src/furniture.rs" = []
 "crates/forge-sim/src/transit.rs" = []
 "tools/city-map/**" = []
 "demos/city-plan/**" = []

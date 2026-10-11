@@ -6,6 +6,7 @@
 pub mod cache;
 pub mod city;
 pub mod fracture;
+pub mod furniture;
 pub mod lod;
 pub mod meshlet;
 pub mod model;

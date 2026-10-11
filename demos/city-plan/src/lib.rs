@@ -321,7 +321,7 @@ impl PlanScenario {
                 (world(size, l.pos, 0.0), (l.height / 8.0) as f32, turn)
             })
             .collect();
-        let (kit_meshes, kit_instances, kit_report) =
+        let (mut kit_meshes, mut kit_instances, kit_report) =
             kit.map_or((Vec::new(), Vec::new(), None), |k| {
                 let instanced: usize = k
                     .instances
@@ -343,6 +343,17 @@ impl PlanScenario {
                 );
                 (k.meshes, k.instances, Some(report))
             });
+        // The tram stops, a platform by each track.
+        if !trams.is_empty() {
+            kit_meshes.push(forge_geom::furniture::tram_stop(PLATFORM));
+            let stop = (kit_meshes.len() - 1) as u32;
+            for run in &trams {
+                for at in run.platforms(size) {
+                    // The kit's first colour, its glass lit: the shelter and the totem glow.
+                    kit_instances.push((stop, at, 1));
+                }
+            }
+        }
         Self {
             tiles: tiles.tiles,
             trees,
@@ -394,8 +405,12 @@ impl PlanScenario {
     }
 }
 
+/// The kit's key for a terrace's mesh (no grammar symbol is this high).
+const TERRACE: u16 = u16::MAX;
 /// How far each of a line's two tracks lies from its centreline, metres.
 const TRACK_OFFSET: f64 = 1.6;
+/// A tram stop's platform, metres: a tram's length and a little.
+const PLATFORM: f32 = 36.0;
 /// The trams' sections: a cab, three passenger sections, a cab.
 const TRAM_SECTIONS: usize = 5;
 /// The trams' liveries: one group a line, the stripe in its colour.
@@ -463,6 +478,30 @@ impl TramRun {
         let p = geom::point_at(&self.points, inside);
         let t = geom::tangent_at(&self.points, inside);
         (p + t * (s - inside), t)
+    }
+
+    /// Each stop's two platforms, one beyond each track (a tram's half width and a hand from
+    /// it), each running the way its trams do, in a plan of side `size`.
+    fn platforms(&self, size: f64) -> Vec<Mat4> {
+        let mut out = Vec::new();
+        let length = f64::from(PLATFORM);
+        for &s in self.timetable.stops() {
+            let (p, t) = self.track(s);
+            let n = DVec2::new(-t.y, t.x);
+            for side in [1.0, -1.0] {
+                let (along, away) = (t * side, n * side);
+                // A tram stands with its front at the stop and its body behind.
+                let corner = p - along * (length - 2.0) + away * (TRACK_OFFSET + 1.35);
+                let axis = |d: DVec2| Vec3::new(d.x as f32, 0.0, d.y as f32);
+                out.push(Mat4::from_cols(
+                    axis(along).extend(0.0),
+                    Vec3::Y.extend(0.0),
+                    axis(away).extend(0.0),
+                    world(size, corner, 0.16).extend(1.0),
+                ));
+            }
+        }
+        out
     }
 
     /// The transforms of vehicle `k`'s sections at `time`, in a plan of side `size`: the
@@ -579,6 +618,28 @@ fn kit(tiles: &mut Tiles, plan: &CityPlan, masses: &[Mass], near: &[usize], d: &
             let transform =
                 Mat4::from_cols(x.extend(0.0), y.extend(0.0), z.extend(0.0), pos.extend(1.0));
             instances.push((id, transform, colour * 2 + u8::from(lit)));
+            // A café's terrace before a third of the shopfronts on the avenues' pavements and
+            // in the lanes, on the pavement's level.
+            let lively = m.street_width >= 20.0 || m.street_width <= 8.0;
+            if name.starts_with("shop")
+                && face.kind == FaceKind::Street
+                && lively
+                && spot.is_multiple_of(3)
+            {
+                let key = (TERRACE, (w * 100.0).round() as i32, 0);
+                let id = *keys.entry(key).or_insert_with(|| {
+                    meshes.push(forge_geom::furniture::terrace(w));
+                    (meshes.len() - 1) as u32
+                });
+                let level = if m.street_width >= 20.0 { 0.30 } else { 0.16 };
+                let at = Mat4::from_cols(
+                    x.extend(0.0),
+                    y.extend(0.0),
+                    z.extend(0.0),
+                    (pos + Vec3::Y * level).extend(1.0),
+                );
+                instances.push((id, at, colour * 2));
+            }
             // Runs of one opening along a floor of a street front.
             if face.kind == FaceKind::Street {
                 let row = (f, (o.y * 10.0).round() as i64);

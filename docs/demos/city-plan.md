@@ -241,7 +241,8 @@ cargo run --release -p city-plan -- --street --tram=X,Z,LEAD   # a tram passes (
 
 ![Trams](images/city-plan-tram.png)
 
-*A five-section tram on the river avenue, from the pavement and from 40 m up: white bodies in
+*A five-section tram on the river avenue from the pavement and from 40 m up (a stop's platform
+and shelter beyond it), and a lane's café terraces: white bodies in
 the line's colour, articulated round the curve, on the right-hand track.*
 - **The timetable** (`forge_sim::transit`) runs vehicles out along their line and back:
   - each leg from stop to stop on a trapezoidal profile (50 km/h at most, 1.1 m/s²);
@@ -257,6 +258,13 @@ the line's colour, articulated round the curve, on the right-hand track.*
   through curves.
 
 The example's two lines run 10 trams.
+
+**Street furniture** (`forge_geom::furniture`) in the kit's section layout:
+- **café terraces:** tables a pace and a half apart, bistro chairs, market parasols. They stand
+  before a third of the kit's shopfronts on the avenues' pavements and in the lanes, coloured as
+  the building's awnings.
+- **tram stops:** a 36 m platform level with the trams' floor by each track, and a glass
+  shelter with a bench and a lit totem for the next trams' times.
 
 ## Next (#245–#247)
 
