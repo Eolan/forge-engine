@@ -28,6 +28,9 @@ pub struct DistrictStyle {
     /// The share of its roofs pitched and tiled; its kind's when not given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tiled_roofs: Option<f64>,
+    /// Open blocks: the share of a block's middle lots left as gardens; none when not given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gaps: Option<f64>,
 }
 
 /// A city's rules.
@@ -97,6 +100,9 @@ impl StyleBible {
                 }
                 if style.tiled_roofs.is_some() {
                     d.tiled_roofs = style.tiled_roofs;
+                }
+                if style.gaps.is_some() {
+                    d.gaps = style.gaps;
                 }
             }
         }

@@ -78,9 +78,10 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
             open_blocks.insert(b.centre, i as u32);
         }
     }
+    let gaps = open_gaps(plan, seed);
     let mut out = Vec::new();
     for (index, lot) in plan.lots.iter().enumerate() {
-        if !lot.frontage {
+        if !lot.frontage || gaps.contains(&index) {
             continue;
         }
         let block = &plan.blocks[lot.block as usize];
@@ -254,6 +255,74 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
     out
 }
 
+/// The longest front a block in an open-block district runs before a gap, metres.
+const RUN_MAX: f64 = 120.0;
+
+/// Open blocks (`DistrictSpec::gaps`): the lots left as gardens between the buildings, so light,
+/// views and people reach the courtyards (the owner found the long rows of big buildings too
+/// close, 2026-10-11). Each block's street lots in order round its outline: a lot between its
+/// corners (one street front) becomes a gap at the district's share, and wherever the front
+/// has run [`RUN_MAX`] since the last gap; never two side by side.
+fn open_gaps(plan: &CityPlan, seed: u64) -> std::collections::HashSet<usize> {
+    let mut by_block: std::collections::HashMap<u32, Vec<usize>> = Default::default();
+    for (i, lot) in plan.lots.iter().enumerate() {
+        if lot.frontage {
+            by_block.entry(lot.block).or_default().push(i);
+        }
+    }
+    let mut gaps = std::collections::HashSet::new();
+    let mut blocks: Vec<_> = by_block.into_iter().collect();
+    blocks.sort_by_key(|(b, _)| *b);
+    for (b, lots) in blocks {
+        let block = &plan.blocks[b as usize];
+        let share = plan.districts[block.district].gap_share();
+        if share <= 0.0 || block.use_ != BlockUse::Built {
+            continue;
+        }
+        let outline = &block.buildable;
+        let n = outline.len();
+        // Where each edge starts along the outline.
+        let mut start = Vec::with_capacity(n);
+        let mut s = 0.0;
+        for i in 0..n {
+            start.push(s);
+            s += outline[i].distance(outline[(i + 1) % n]);
+        }
+        // Each lot: where its front lies along the outline, its length, its street edges.
+        let mut fronts: Vec<(f64, f64, usize, usize)> = lots
+            .iter()
+            .filter_map(|&l| {
+                let poly = &plan.lots[l].polygon;
+                let shared: Vec<(usize, f64)> = (0..n)
+                    .map(|i| (i, shared_length(poly, outline[i], outline[(i + 1) % n])))
+                    .filter(|&(_, len)| len >= 3.0)
+                    .collect();
+                let &(edge, length) = shared.iter().max_by(|a, b| a.1.total_cmp(&b.1))?;
+                let (a, q) = (outline[edge], outline[(edge + 1) % n]);
+                let t = (q - a).normalize_or_zero();
+                let along = start[edge] + (geom::centroid(poly) - a).dot(t);
+                Some((along, length, shared.len(), l))
+            })
+            .collect();
+        fronts.sort_by(|x, y| x.0.total_cmp(&y.0));
+        let mut run = 0.0;
+        let mut last = false;
+        for (_, length, edges, l) in fronts {
+            let draw =
+                SplitMix64::new(seed ^ (l as u64).wrapping_mul(0xD1B5_4A32_D192_ED03)).next_f64();
+            if edges == 1 && !last && (draw < share || run >= RUN_MAX) {
+                gaps.insert(l);
+                run = 0.0;
+                last = true;
+            } else {
+                run += length;
+                last = false;
+            }
+        }
+    }
+    gaps
+}
+
 /// The thinnest a building stands, metres.
 const MIN_THICKNESS: f64 = 4.0;
 
@@ -323,6 +392,37 @@ mod tests {
     use super::super::{example, plan};
     use super::*;
     use crate::city::bible::StyleBible;
+
+    #[test]
+    fn open_blocks_leave_gaps_between_their_corners() {
+        let size = 4000.0;
+        let site = example::site(size, 10.0);
+        let mut params = example::params(size);
+        let closed = plan(&site, &params);
+        for d in &mut params.districts {
+            d.gaps = Some(0.1);
+        }
+        let open = plan(&site, &params);
+        let gaps = open_gaps(&open, 9);
+        assert!(!gaps.is_empty());
+        // Gaps fall between a block's corners: a lot with one street front.
+        for &l in &gaps {
+            let lot = &open.lots[l];
+            let outline = &open.blocks[lot.block as usize].buildable;
+            let n = outline.len();
+            let fronts = (0..n)
+                .filter(|&i| shared_length(&lot.polygon, outline[i], outline[(i + 1) % n]) >= 3.0)
+                .count();
+            assert_eq!(fronts, 1);
+        }
+        let style = StyleBible::default();
+        let (with, without) = (
+            masses(&open, &style, 9).len(),
+            masses(&closed, &style, 9).len(),
+        );
+        assert!(with < without, "{with} masses with gaps, {without} without");
+        assert_eq!(closed.lots.len(), open.lots.len());
+    }
 
     #[test]
     fn the_buildings_round_the_squares_and_quays_open_onto_them() {

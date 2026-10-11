@@ -234,6 +234,10 @@ pub struct DistrictSpec {
     pub depth: Option<f64>,
     /// The share of its roofs pitched and tiled; its kind's when `None`.
     pub tiled_roofs: Option<f64>,
+    /// Open blocks: the share of a block's lots between its corners left as gardens, gaps
+    /// between its buildings that let light, views and people into the courtyard. None by
+    /// default.
+    pub gaps: Option<f64>,
 }
 
 impl DistrictSpec {
@@ -245,6 +249,12 @@ impl DistrictSpec {
             DistrictKind::Village => 0.9,
             _ => 0.0,
         })
+    }
+
+    /// The share of its blocks' middle lots left as gardens ([`DistrictSpec::gaps`]): 0 unless
+    /// given.
+    pub fn gap_share(&self) -> f64 {
+        self.gaps.unwrap_or(0.0).clamp(0.0, 0.5)
     }
 
     /// Its buildings' depth behind their building line, metres: its own, or its kind's; `None`
@@ -267,6 +277,7 @@ impl DistrictSpec {
             floors: (4, 6),
             depth: None,
             tiled_roofs: None,
+            gaps: None,
         }
     }
 }
@@ -424,6 +435,10 @@ pub struct CityParams {
     pub forest_above: f32,
     /// Ground steeper than this (rise over run) is left as forest.
     pub forest_slope: f32,
+    /// Superblocks cut by streets: a built block longer than this many times its district's
+    /// street spacing gets a shared street across its middle, again until none is. `None` keeps
+    /// the traced streets alone.
+    pub max_block: Option<f64>,
 }
 
 /// The plan's numbers, the table judged beside the map.
@@ -665,7 +680,24 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
     let mut lines = main;
     lines.extend(streets);
     let mut roads = graph::build(site, &lines, 1.5, 60.0);
-    let faces = graph::faces(&roads);
+    let mut faces = graph::faces(&roads);
+    // Superblocks cut by streets, a cut a round (a 600 m block takes three).
+    if let Some(max) = params.max_block {
+        for _ in 0..4 {
+            let spacing = |p| {
+                kind_at(p)
+                    .filter(|d| d.building_depth().is_some())
+                    .map(|d| d.street_spacing)
+            };
+            let cuts = superblock_cuts(site, &faces, max, spacing);
+            if cuts.is_empty() {
+                break;
+            }
+            lines.extend(cuts);
+            roads = graph::build(site, &lines, 1.5, 60.0);
+            faces = graph::faces(&roads);
+        }
+    }
     lap("road graph and faces", &mut timings);
 
     let mut blocks = blocks::from_faces(site, &faces, &districts_field, &params.districts);
@@ -754,6 +786,53 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
     lap("stats", &mut timings);
     plan.timings = timings;
     plan
+}
+
+/// The streets that cut the superblocks among `faces` ([`CityParams::max_block`]): across the
+/// middle of each built block on land longer than `max` times its district's street spacing
+/// (`spacing` at a point, `None` where nothing is built), square to its length and 15 m past
+/// its edges, so the graph joins it to the streets round it. Where the traced streets ran far
+/// apart, a block's courtyard was a park of a hectare or more and its fronts ran for hundreds
+/// of metres (the owner's second walk, 2026-10-11).
+fn superblock_cuts(
+    site: &Site,
+    faces: &[Vec<DVec2>],
+    max: f64,
+    spacing: impl Fn(DVec2) -> Option<f64>,
+) -> Vec<streets::Streamline> {
+    let mut cuts = Vec::new();
+    for face in faces {
+        let area = geom::signed_area(face).abs();
+        if !(1_000.0..2.0e6).contains(&area) {
+            continue;
+        }
+        let (axis, extent, centre) = geom::oriented_extent(face);
+        let Some(spacing) = spacing(centre) else {
+            continue;
+        };
+        let (long, short) = (extent.x.max(extent.y), extent.x.min(extent.y));
+        if long < max * spacing || site.water_at(centre) != LAND {
+            continue;
+        }
+        let along = if extent.x >= extent.y {
+            axis
+        } else {
+            DVec2::new(-axis.y, axis.x)
+        };
+        let across = DVec2::new(-along.y, along.x);
+        let reach = short * 0.5 + 15.0;
+        let points = geom::resample(&[centre - across * reach, centre + across * reach], 10.0);
+        if points.iter().any(|&p| site.water_at(p) != LAND) {
+            continue;
+        }
+        cuts.push(streets::Streamline {
+            points,
+            minor: true,
+            class: RoadClass::Street,
+            bridges: Vec::new(),
+        });
+    }
+    cuts
 }
 
 #[cfg(test)]

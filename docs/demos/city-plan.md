@@ -102,6 +102,20 @@ example adds no tram lines, so it misses the stops. A city's own bible and its a
 *A kilometre round the example's centre, seen obliquely from the south: perimeter blocks of
 4–8 floors round their courtyards, green, solar and terrace roofs, the river and a bridge, two
 tram lines.*
+
+**Superblocks and open blocks (both off in the example).** Where the traced streets run far
+apart, a block's courtyard became a park of a hectare or more, and its fronts ran for hundreds
+of metres. The owner found the courtyards unrealistically large, and the long rows of big
+buildings too close, on their second walk (2026-10-11). A plan can now set two options:
+- `CityParams::max_block`: a built block longer than this many times its district's street
+  spacing gets a shared street across its middle, again until none is (four rounds at most).
+  In the private sandbox, at 1.6: 2 148 → 2 764 built blocks, the mean 1.67 → 1.31 ha, homes
+  919 k → 1.07 M people with the open blocks below.
+- `DistrictSpec::gaps` (open blocks, Portzamparc's *îlot ouvert*): a lot between a block's
+  corners left as a garden at the district's share, and wherever a block's front has run
+  120 m since the last gap; never two side by side. Light, views and people reach the
+  courtyard, and the walls beside a gap get windows.
+
 ## In 3D
 
 ```
@@ -284,7 +298,14 @@ the line's colour, articulated round the curve, on the right-hand track.*
 - **The model** (`forge_geom::vehicles`) is a part program like the kit's: five sections of
   6.4 m (two cabs with raked windscreens, three passenger sections), glazed doors, the livery's
   stripe, roof pods, bellows between sections. It takes its power from the ground, as in
-  Bordeaux and Nice, so the streets have no overhead wires.
+  Bordeaux and Nice, so the streets have no overhead wires. Inside: a low floor 25 cm over the
+  rails, level with the platforms; hollow sides; facing pairs of seats by the windows; a
+  ceiling 2.25 m up. It was a solid body to 1.05 m with no inside faces, and the owner found
+  it small.
+- **Riding:** C boards the tram section nearest the camera (within 10 m), standing in its
+  aisle and facing the way it runs; C again gets off on the platform's side, walking again if
+  the rider walked. `--ride SECONDS` boards the nearest tram anywhere that far into a scripted
+  run.
 - **In the scene,** each line gets two tracks 3.2 m apart, one each way. Each section is a
   mover set every frame by its two ends on the track (the bogie points), so a tram bends
   through curves.

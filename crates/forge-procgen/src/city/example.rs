@@ -66,6 +66,7 @@ pub fn params(size: f64) -> CityParams {
         floors,
         depth: None,
         tiled_roofs: None,
+        gaps: None,
     };
     let r = size;
     CityParams {
@@ -195,5 +196,6 @@ pub fn params(size: f64) -> CityParams {
         park_share_cap: 0.22,
         forest_above: f32::MAX,
         forest_slope: f32::MAX,
+        max_block: None,
     }
 }

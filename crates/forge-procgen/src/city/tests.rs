@@ -13,6 +13,36 @@ fn example_plan() -> (super::Site, super::CityPlan) {
 }
 
 #[test]
+fn superblocks_are_cut_by_streets() {
+    let size = 4000.0;
+    let site = example::site(size, 10.0);
+    let mut params = example::params(size);
+    let traced = plan(&site, &params);
+    params.max_block = Some(1.6);
+    let cut = plan(&site, &params);
+    // Built blocks longer than 1.6 times their district's spacing, with a little slack.
+    let long = |city: &super::CityPlan| {
+        city.blocks
+            .iter()
+            .filter(|b| b.use_ == BlockUse::Built)
+            .filter(|b| {
+                let (_, extent, _) = geom::oriented_extent(&b.polygon);
+                extent.x.max(extent.y) > 1.7 * city.districts[b.district].street_spacing
+            })
+            .count()
+    };
+    let (before, after) = (long(&traced), long(&cut));
+    assert!(before > 0);
+    assert!(
+        after * 3 <= before,
+        "{before} long blocks, {after} once cut"
+    );
+    assert!(cut.stats.built_blocks > traced.stats.built_blocks);
+    // Every street, the cuts too, has a line.
+    assert!(cut.roads.edges.iter().all(|e| e.points.len() >= 2));
+}
+
+#[test]
 fn the_example_city_has_streets_blocks_parks_and_trams() {
     let (site, city) = example_plan();
     let st = &city.stats;
