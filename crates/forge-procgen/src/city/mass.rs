@@ -23,6 +23,8 @@ pub enum Roof {
     Solar,
     /// A terrace people use.
     Terrace,
+    /// Pitched and tiled, hipped from every side: the old towns' terracotta.
+    Tiled,
 }
 
 /// A building's mass.
@@ -172,7 +174,10 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
         let floors = drawn.min(cap).max(1);
         let height = GROUND_FLOOR + f64::from(floors - 1) * FLOOR;
         let r = rng.next_f64();
-        let roof = if r < green_roofs {
+        let tiled = rng.next_f64() < district.tiled_share();
+        let roof = if tiled {
+            Roof::Tiled
+        } else if r < green_roofs {
             Roof::Green
         } else if r < green_roofs + (1.0 - green_roofs) * 0.6 {
             Roof::Solar

@@ -232,9 +232,21 @@ pub struct DistrictSpec {
     pub floors: (u8, u8),
     /// Its buildings' depth behind their building line, metres; its kind's when `None`.
     pub depth: Option<f64>,
+    /// The share of its roofs pitched and tiled; its kind's when `None`.
+    pub tiled_roofs: Option<f64>,
 }
 
 impl DistrictSpec {
+    /// The share of its roofs pitched and tiled: its own, or its kind's (most of an old town's
+    /// and a village's, none elsewhere, where roofs are green, solar or terraces).
+    pub fn tiled_share(&self) -> f64 {
+        self.tiled_roofs.unwrap_or(match self.kind {
+            DistrictKind::OldTown => 0.85,
+            DistrictKind::Village => 0.9,
+            _ => 0.0,
+        })
+    }
+
     /// Its buildings' depth behind their building line, metres: its own, or its kind's; `None`
     /// where it has no perimeter blocks.
     pub fn building_depth(&self) -> Option<f64> {
@@ -254,6 +266,7 @@ impl DistrictSpec {
             lot_area: 400.0,
             floors: (4, 6),
             depth: None,
+            tiled_roofs: None,
         }
     }
 }

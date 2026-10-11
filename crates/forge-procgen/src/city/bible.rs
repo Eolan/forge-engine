@@ -25,6 +25,9 @@ pub struct DistrictStyle {
     /// A building's depth behind its building line, metres; its kind's when not given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub depth: Option<f64>,
+    /// The share of its roofs pitched and tiled; its kind's when not given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tiled_roofs: Option<f64>,
 }
 
 /// A city's rules.
@@ -91,6 +94,9 @@ impl StyleBible {
                 if style.depth.is_some() {
                     d.depth = style.depth;
                 }
+                if style.tiled_roofs.is_some() {
+                    d.tiled_roofs = style.tiled_roofs;
+                }
             }
         }
         params.park_reach = self.park_reach;
@@ -151,9 +157,13 @@ pub fn check(plan: &CityPlan, masses: &[Mass], bible: &StyleBible) -> Vec<RuleRe
         failures,
         failing,
     });
-    // Green roofs.
+    // Green roofs, among the flat ones (tiled roofs are the old towns').
     let roof_area = |m: &Mass| geom::signed_area(&m.footprint).abs();
-    let total: f64 = masses.iter().map(roof_area).sum();
+    let total: f64 = masses
+        .iter()
+        .filter(|m| m.roof != Roof::Tiled)
+        .map(roof_area)
+        .sum();
     let green: f64 = masses
         .iter()
         .filter(|m| m.roof == Roof::Green)
@@ -161,7 +171,7 @@ pub fn check(plan: &CityPlan, masses: &[Mass], bible: &StyleBible) -> Vec<RuleRe
         .sum();
     let share = green / total.max(1.0);
     out.push(RuleResult {
-        rule: "green roofs' share",
+        rule: "green roofs' share of the flat roofs",
         value: share,
         limit: bible.green_roofs,
         holds: share + 0.05 >= bible.green_roofs,

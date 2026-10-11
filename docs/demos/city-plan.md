@@ -33,7 +33,7 @@ cargo run --release -p city-map -- --size 4000 --scale 2 --out captures/city
 | Forest | ground above a height or steeper than a slope goes to the first reserve district (a real site's hills) | `city::district_field` |
 | Transit | tram lines by the shortest path through their waypoints, main roads preferred (a waypoint far from any main road snaps to the nearest street); stops every 450 m moved to nearby junctions; lines added until a target share of blocks has a stop within 400 m (`transit::cover`); boat crossings where a river runs long without a bridge; street profiles (tram avenue, avenue, shared, pedestrian, path) | `city::transit` |
 | Masses | each lot's building: strips of its district's building depth along each street the lot fronts (lots are cut inside the block's building lines, half each street's profile width from its centreline); floors from the district's range, capped by the style bible's height-to-width ratio on the street it fronts; green, solar or terrace roofs | `city::mass` |
-| Style bible | one TOML record of the city's rules (height to street width, green roofs, green area per block, park and stop reach, the streets' share, per-district floors, lots, spacing, building depth and walls), put into the plan's parameters and measured by a checker that names what fails | `city::bible` |
+| Style bible | one TOML record of the city's rules (height to street width, green roofs, green area per block, park and stop reach, the streets' share, per-district floors, lots, spacing, building depth, tiled roofs and walls), put into the plan's parameters and measured by a checker that names what fails | `city::bible` |
 | Trees | rows along the streets by profile (two on avenues every 9 m, one on shared streets every 11 m, every 18 m in lanes), none within 10 m of a junction; a jittered grid in parks (13 m, two thirds filled), on the quays (14 m, under half) and in courtyards (16 m, half) | `city::trees` |
 | Lamps | along every street by profile (both sides of avenues every 28 m at 8 m, one side of shared streets every 30 m, lanes and paths lower), at the pavement's edge, none in junctions: where step 5's lights will stand | `city::lamps` |
 | Maps and numbers | a small rasteriser: the plan (with the districts', landmarks' and lines' names in the engine's font, kept from overlapping), a checks map (blocks by what they lack), an oblique massing view of any window; the plan's numbers and its digest | `city::map` |
@@ -265,6 +265,19 @@ The example's two lines run 10 trams.
   the building's awnings.
 - **tram stops:** a 36 m platform level with the trams' floor by each track, and a glass
   shelter with a bench and a lit totem for the next trams' times.
+
+## Tiled roofs in the old towns
+
+![The old town's roofs](images/city-plan-roofs.png)
+
+*The old town on both banks from 90 m up: terracotta roofs hipped from every side; beyond it,
+the green, solar and terrace roofs.* A district's share of tiled roofs is its kind's unless its
+style bible sets it (`DistrictSpec::tiled_share`): 85 % in an old town, 90 % in a village, none
+elsewhere. The bible's green-roof check counts the flat roofs only. Each roof rises at about 29°
+from every edge to a ridge, the footprint moved in as far as it goes. That is the straight
+skeleton's roof for a convex footprint, near enough. The tiles are the brick courses tinted
+terracotta. Each lot hips its own roof, so a row's roofs read stepped; continuous ridges along
+a row come with the straight skeleton (#247).
 
 ## Walking the streets (D-059's step 4)
 

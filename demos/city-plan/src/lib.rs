@@ -58,6 +58,8 @@ const ROOF_TERRACE: u8 = 7;
 const KIT_PLASTER: u8 = 8;
 const KIT_STONE: u8 = 12;
 const KIT_PARTY: u8 = 13;
+/// The tiled roofs' section on the masses.
+const ROOF_TILE: u8 = 14;
 /// The kit's instance groups: four shutter colours, each with dark and lit glass.
 const KIT_GROUPS: [&str; 8] = [
     "plan-kit-0",
@@ -892,7 +894,7 @@ fn mass(tiles: &mut Tiles, m: &Mass) {
     roof(tiles, m);
 }
 
-/// A mass's roof: green, solar or a terrace.
+/// A mass's roof: green, solar, a terrace, or pitched and tiled.
 fn roof(tiles: &mut Tiles, m: &Mass) {
     let size = tiles.size;
     let tile = tiles.at(m.footprint[0]);
@@ -901,11 +903,62 @@ fn roof(tiles: &mut Tiles, m: &Mass) {
         Roof::Green => ROOF_GREEN,
         Roof::Solar => ROOF_SOLAR,
         Roof::Terrace => ROOF_TERRACE,
+        Roof::Tiled => {
+            if hipped(&mut tile.masses, m, size, centre) {
+                return;
+            }
+            ROOF_TERRACE
+        }
     };
     for t in geom::triangulate(&m.footprint) {
         let p = t.map(|i| world(size, m.footprint[i], m.height) - centre);
         triangle_uv(&mut tile.masses, p, [[0.0; 2]; 3], Vec3::Y, section);
     }
+}
+
+/// A hipped roof over a mass: every edge slopes up at about 29° to the ridge, the footprint moved
+/// in as far as it goes (the straight skeleton's roof for a convex footprint, nearly). False
+/// where the footprint will not take one; it then gets a flat roof.
+fn hipped(mesh: &mut TriMesh, m: &Mass, size: f64, centre: Vec3) -> bool {
+    let fp = &m.footprint;
+    let n = fp.len();
+    let fits = |d: f64| geom::inset(fp, d).filter(|p| p.len() == n);
+    if fits(0.5).is_none() {
+        return false;
+    }
+    let (mut lo, mut hi) = (0.5, 30.0);
+    for _ in 0..14 {
+        let mid = (lo + hi) * 0.5;
+        if fits(mid).is_some() {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    let d = lo * 0.97;
+    let Some(ridge) = fits(d) else {
+        return false;
+    };
+    let rise = d * 0.55;
+    let at = |p: DVec2, h: f64| world(size, p, h) - centre;
+    let face = |mesh: &mut TriMesh, p: [Vec3; 3]| {
+        let mut normal = (p[1] - p[0]).cross(p[2] - p[0]).normalize_or_zero();
+        if normal.y < 0.0 {
+            normal = -normal;
+        }
+        triangle_uv(mesh, p, [[0.0; 2]; 3], normal, ROOF_TILE);
+    };
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let (a, b) = (at(fp[i], m.height), at(fp[j], m.height));
+        let (c, e) = (at(ridge[j], m.height + rise), at(ridge[i], m.height + rise));
+        face(mesh, [a, b, c]);
+        face(mesh, [a, c, e]);
+    }
+    for t in geom::triangulate(&ridge) {
+        face(mesh, t.map(|i| at(ridge[i], m.height + rise)));
+    }
+    true
 }
 
 impl Scenario for PlanScenario {
@@ -1044,6 +1097,15 @@ impl Scenario for PlanScenario {
             texture_scale: 1.5,
             ..render([0.82, 0.78, 0.70])
         };
+        // Terracotta tiles: the brick courses, tinted, read as rows of tiles from the street.
+        let [tile_albedo, tile_normal] = textures::brick(35, 512);
+        let tiles_row = RenderLayer {
+            albedo_texture: Some(materials.textures.add(&tile_albedo)?),
+            normal_texture: Some(materials.textures.add(&tile_normal)?),
+            texture_scale: 2.5,
+            normal_strength: 0.8,
+            ..colour([1.75, 2.0, 2.1], 10.0, 0.04)
+        };
         materials.add_rows(
             "plan-mass",
             vec![
@@ -1083,6 +1145,7 @@ impl Scenario for PlanScenario {
                 ("plan render (white)".into(), render([0.95, 0.93, 0.88])),
                 ("plan stone".into(), stone),
                 ("plan party wall".into(), render([0.78, 0.72, 0.64])),
+                ("plan tiled roof".into(), tiles_row),
             ],
         );
         // The kit's groups: shutters and fascias in sage, blue-grey, blue and warm white, with

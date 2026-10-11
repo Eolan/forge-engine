@@ -726,6 +726,7 @@ pub fn write_massing(
             Roof::Green => [126, 172, 98],
             Roof::Solar => [70, 82, 104],
             Roof::Terrace => [214, 206, 192],
+            Roof::Tiled => [190, 104, 70],
         };
         canvas.fill(&roof, c);
         let mut ring = roof.clone();
