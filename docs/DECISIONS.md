@@ -861,7 +861,11 @@ from compute (synchronization validation found the missing transfer stage). Tags
 `eValidUntilPresent`: `eOnlyValidNow` made Streamline copy every input first. The device
 enables Vulkan 1.3's `privateData`, which Streamline uses. Through the interposer, MAILBOX
 presents were held to the display's refresh in most runs, so the swapchain prefers
-IMMEDIATE when Streamline is loaded.
+IMMEDIATE when Streamline is loaded. *Amended 2026-10-11:* only in scripted runs, whose frame
+times are measured (`Pacing::Uncapped`). Interactive runs never tear (`Pacing::Smooth`: MAILBOX,
+else FIFO). At hundreds of frames a second, IMMEDIATE tore every interactive DLAA run into
+bands drawn at different times as the camera moved. The owner saw building faces drawn "late",
+"like a v-sync issue".
 
 *Measured* (1600×900 output, RTX 5070 Ti, ballad path average): TAA 0.333 ms GPU; DLAA
 0.768, Quality (1067×600) 0.690, Balanced 0.662, Performance (800×450) 0.646, Ultra
@@ -3755,7 +3759,7 @@ D-016's amendment of the same day:
   while the tile's own DAG cooks and checked with `--check-swaps` at the second swap. Not
   proposed yet.
 
-## D-059 — A city sandbox drives the engine: a private game-quality city on public engine work ✅ (accepted on the recommendations, 2026-10-11; provisional until the owner's review)
+## D-059 — A city sandbox drives the engine: a private game-quality city on public engine work ✅ (accepted on the recommendations, 2026-10-11; confirmed by the owner the same day, to be improved as we go)
 
 **The question:** the owner's direction of 2026-10-10. After the planet work (D-058), the next
 showcase driver is a city sandbox built as if for a game release, with Vuntra City as
@@ -3892,10 +3896,11 @@ Each note's city-specific appendix stays in the sandbox.
    - **Dialogue:** carried as line ids.
    - **No memories that spread between people** without the owner's go (Warner Bros.' Nemesis
      patents).
-9. **Time:** one game hour is 15 real minutes for now (a day lasts 6 hours). The transit
-   research's finding:
-   - **Capacity shrinks.** With vehicles at real speeds, a peak game hour lasts 15 real minutes,
-     so any line or fleet carries about a quarter of what it would per game hour in life. Capacity
+9. **Time:** one game hour is 20 real minutes (a day lasts 8 hours; `population::GAME_SPEED`).
+   It was 15 minutes until the owner's second walk (2026-10-11). People near the player walk
+   at their real pace, which the owner found right. The transit research's finding:
+   - **Capacity shrinks.** With vehicles at real speeds, a peak game hour lasts 20 real minutes,
+     so any line or fleet carries about a third of what it would per game hour in life. Capacity
      is planned in real time against demand in game time.
    - **The expected shares:** walking about 38 %, cycling 34 %, trams 22 %, taxis 2 %, boats
      1.5 %.

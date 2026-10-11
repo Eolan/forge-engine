@@ -340,7 +340,9 @@ pub fn fountain() -> TriMesh {
 /// glass on a steel frame with a bench, and a totem with the next trams' times.
 pub fn tram_stop(length: f32) -> TriMesh {
     let mut m = TriMesh::default();
-    let (deep, high) = (2.6, 0.28);
+    // 2.3 m deep: from a tram's side to 5.25 m off a tram avenue's centreline, which leaves
+    // the cyclists by the kerb clear (the owner saw people through a platform).
+    let (deep, high) = (2.3, 0.28);
     cuboid(
         &mut m,
         Vec3::new(0.0, 0.0, 0.0),
@@ -358,7 +360,7 @@ pub fn tram_stop(length: f32) -> TriMesh {
     );
     // The shelter: four posts, a glass roof, a glass back, a bench.
     let (x0, x1) = (length * 0.5 - 3.0, length * 0.5 + 3.0);
-    let (z0, z1) = (0.9, 2.4);
+    let (z0, z1) = (0.8, 2.05);
     let roof = high + 2.6;
     for x in [x0, x1] {
         for z in [z0, z1] {

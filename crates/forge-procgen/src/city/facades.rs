@@ -96,11 +96,24 @@ pub fn edge_kinds(plan: &CityPlan, masses: &[Mass]) -> Vec<Vec<Option<FaceKind>>
             }
             // Outward: right of the edge for a positive outline.
             let out_dir = DVec2::new(t.y, -t.x);
-            let mid = (a + b) * 0.5;
+            // A wall inside the building is one the lot's other masses cover all along: probed
+            // at five points, not only its middle. A wall they covered in part lost its whole
+            // face, and the street saw into the building (the owner's walk, 2026-10-11).
+            let covered = |s: f64| {
+                let q = a + (b - a) * s + out_dir * 0.75;
+                by_lot[&m.lot].iter().any(|&j| {
+                    j as usize != index && geom::contains(&masses[j as usize].footprint, q)
+                })
+            };
+            let bare: Vec<f64> = [0.5, 0.3, 0.7, 0.1, 0.9]
+                .into_iter()
+                .filter(|&s| !covered(s))
+                .collect();
+            let sibling = bare.is_empty();
+            // What the wall looks onto, from its open stretch nearest its middle.
+            let along = bare.first().copied().unwrap_or(0.5);
+            let mid = a + (b - a) * along;
             let probe = mid + out_dir * 0.75;
-            let sibling = by_lot[&m.lot].iter().any(|&j| {
-                j as usize != index && geom::contains(&masses[j as usize].footprint, probe)
-            });
             // The courtyard first, then a neighbour's lot, then the street: a wall within a
             // pace of its street's building line. What is left looks onto the lot's own garden.
             let courtyard = || {
@@ -203,6 +216,7 @@ pub fn attrs(grammar: &Grammar, face: &Face, m: &Mass) -> Attrs {
         ("tiled", flag(m.roof == mass::Roof::Tiled)),
         ("floors", f64::from(m.floors)),
         ("street_width", m.street_width),
+        ("open", flag(m.open)),
         ("ground", mass::GROUND_FLOOR),
         ("floor", mass::FLOOR),
     ])
@@ -247,6 +261,44 @@ mod tests {
     use super::super::bible::StyleBible;
     use super::super::{example, plan};
     use super::*;
+
+    #[test]
+    fn no_wall_is_left_open() {
+        // A mass's edge without a face must lie inside its lot's other masses all along: probed
+        // every tenth of it, at most one edge in a hundred is covered only in part.
+        let size = 4000.0;
+        let site = example::site(size, 10.0);
+        let city = plan(&site, &example::params(size));
+        let masses = mass::masses(&city, &StyleBible::default(), 9);
+        let kinds = edge_kinds(&city, &masses);
+        let (mut hidden, mut open) = (0, 0);
+        for (index, (m, kinds)) in masses.iter().zip(&kinds).enumerate() {
+            let n = m.footprint.len();
+            for (i, kind) in kinds.iter().enumerate() {
+                let (a, b) = (m.footprint[i], m.footprint[(i + 1) % n]);
+                if kind.is_some() || a.distance(b) < 0.5 {
+                    continue;
+                }
+                hidden += 1;
+                let t = (b - a).normalize();
+                let out_dir = DVec2::new(t.y, -t.x);
+                let inside = (1..10).all(|k| {
+                    let q = a + (b - a) * (f64::from(k) / 10.0) + out_dir * 0.75;
+                    masses.iter().enumerate().any(|(j, o)| {
+                        j != index && o.lot == m.lot && geom::contains(&o.footprint, q)
+                    })
+                });
+                if !inside {
+                    open += 1;
+                }
+            }
+        }
+        assert!(hidden > 0);
+        assert!(
+            open * 100 <= hidden,
+            "{open} of {hidden} hidden walls open in part"
+        );
+    }
 
     #[test]
     fn faces_look_onto_streets_courtyards_and_neighbours() {

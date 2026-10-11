@@ -18,13 +18,27 @@ pub struct Lamp {
     pub height: f64,
 }
 
+/// No two lamps closer than this, metres: a street's lamps stop where another's already light.
+const APART: f64 = 12.0;
+
 /// The plan's street lamps.
 pub fn lamps(site: &Site, plan: &CityPlan) -> Vec<Lamp> {
     let mut out = Vec::new();
-    let mut junctions = PointGrid::new(plan.size, 20.0);
+    // A junction keeps clear as far as its widest street's half width and a little: an
+    // avenue's lamps stand 11 m off its centreline, beyond any fixed radius round the node, and
+    // two streets' lamps met in its corners, side by side (the owner's walk, 2026-10-11).
+    let mut reach = vec![0.0f64; plan.roads.nodes.len()];
+    for e in &plan.roads.edges {
+        for n in [e.a, e.b] {
+            let r = &mut reach[n as usize];
+            *r = r.max(e.profile.width() * 0.5);
+        }
+    }
+    let mut junctions = PointGrid::new(plan.size, 40.0);
     for (i, n) in plan.roads.nodes.iter().enumerate() {
         junctions.insert(n.pos, i as u32);
     }
+    let mut placed = PointGrid::new(plan.size, APART);
     for e in &plan.roads.edges {
         // Sides, spacing and height by profile; staggered on the two sides.
         let (sides, spacing, height): (&[f64], f64, f64) = match e.profile {
@@ -44,9 +58,14 @@ pub fn lamps(site: &Site, plan: &CityPlan) -> Vec<Lamp> {
                 let normal = DVec2::new(-t.y, t.x);
                 let q = p + normal * offset;
                 s += spacing;
-                if junctions.any_within(q, 8.0, |_| false) || site.water_at(q) != LAND {
+                let in_junction = junctions.any_within(q, 40.0, |n| {
+                    plan.roads.nodes[n as usize].pos.distance(q) >= reach[n as usize] + 4.0
+                });
+                if in_junction || placed.any_within(q, APART, |_| false) || site.water_at(q) != LAND
+                {
                     continue;
                 }
+                placed.insert(q, out.len() as u32);
                 out.push(Lamp {
                     pos: q,
                     facing: -normal * side.signum(),
@@ -76,5 +95,24 @@ mod tests {
             lamps.len() as f64 / km
         );
         assert!(lamps.iter().all(|l| site.water_at(l.pos) == LAND));
+        // Never two side by side, nor in a junction's corners.
+        for (i, a) in lamps.iter().enumerate() {
+            assert!(
+                lamps[i + 1..]
+                    .iter()
+                    .all(|b| a.pos.distance(b.pos) >= APART),
+                "two lamps within {APART} m at {}",
+                a.pos
+            );
+        }
+        let mut reach = vec![0.0f64; city.roads.nodes.len()];
+        for e in &city.roads.edges {
+            for n in [e.a, e.b] {
+                reach[n as usize] = reach[n as usize].max(e.profile.width() * 0.5);
+            }
+        }
+        for (n, r) in city.roads.nodes.iter().zip(&reach) {
+            assert!(lamps.iter().all(|l| l.pos.distance(n.pos) >= r + 4.0));
+        }
     }
 }

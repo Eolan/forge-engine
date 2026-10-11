@@ -29,9 +29,9 @@ pub const POSES: usize = 5;
 pub const PER_MESH: usize = 60;
 /// How far round the camera people are drawn, metres.
 const REACH: f64 = 220.0;
-/// Game seconds a real second for the drawn crowd: one. The game's clock runs four (an hour in
-/// 15 real minutes), at which its walkers would cross the screen at 5 m/s; near the player
-/// people walk at their true pace, and how the two clocks meet is D-059's open question.
+/// Game seconds a real second for the drawn crowd: one. The game's clock runs three (an hour in
+/// 20 real minutes, `population::GAME_SPEED`), at which its walkers would cross the screen at
+/// 4 m/s; near the player people walk at their true pace (the owner: the pace looks right).
 const TIME_SCALE: f64 = 1.0;
 /// A terrace seat's neighbourhood, metres: the cafés whose people may sit there.
 const NEIGHBOURHOOD: f64 = 300.0;
@@ -46,6 +46,65 @@ const NEW_ROUTES: usize = 40;
 /// The fastest a drawn trip goes along its street route, m/s: a route much longer than the
 /// simulation's straight-line estimate is not drawn.
 const RIDE_MAX: f64 = 6.5;
+/// A terrace seat's figure is told apart from the people by this plus the seat's number.
+const SEATED: u32 = 1 << 31;
+/// An empty slot.
+const EMPTY: u32 = u32::MAX;
+
+/// A figure in a mesh's slot.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Figure {
+    /// Where it stands, in the scene.
+    pub at: Vec3,
+    /// Its turn about +y, radians.
+    pub turn: f32,
+    /// Whether the slot showed the same person last frame: its motion is then theirs. A slot
+    /// that changed hands has no motion of its own this frame.
+    pub kept: bool,
+}
+
+/// `found`'s figures (who, where, turn; at most [`PER_MESH`]) in a mesh's slots: who `slots`
+/// showed last frame keeps their slot, the others take the free ones in turn. `slots` then
+/// holds who each slot shows now.
+fn keep_slots(slots: &mut [u32], found: &[(u32, Vec3, f32)]) -> Vec<Option<Figure>> {
+    let was: HashMap<u32, usize> = slots
+        .iter()
+        .enumerate()
+        .filter(|&(_, &who)| who != EMPTY)
+        .map(|(k, &who)| (who, k))
+        .collect();
+    let mut shown = vec![None; slots.len()];
+    let mut now = vec![EMPTY; slots.len()];
+    let mut newcomers = Vec::new();
+    for &(who, at, turn) in found {
+        match was.get(&who) {
+            Some(&k) => {
+                shown[k] = Some(Figure {
+                    at,
+                    turn,
+                    kept: true,
+                });
+                now[k] = who;
+            }
+            None => newcomers.push((who, at, turn)),
+        }
+    }
+    let mut free = (0..slots.len())
+        .filter(|&k| now[k] == EMPTY)
+        .collect::<Vec<_>>()
+        .into_iter();
+    for (who, at, turn) in newcomers {
+        let Some(k) = free.next() else { break };
+        shown[k] = Some(Figure {
+            at,
+            turn,
+            kept: false,
+        });
+        now[k] = who;
+    }
+    slots.copy_from_slice(&now);
+    shown
+}
 
 /// A way along the streets: its points and, per segment, its street's half width and its
 /// pavement's level.
@@ -72,7 +131,9 @@ impl Route {
         if !riding {
             (half - 3.0).max(1.0)
         } else if pave > 0.0 {
-            (half - pave - 1.0).max(1.2)
+            // By the kerb, clear of the tram stops' platforms (which end 5.25 m off a tram
+            // avenue's centreline) and of the trams.
+            (half - pave - 0.35).max(1.2)
         } else {
             (half - 3.4).max(1.2)
         }
@@ -129,7 +190,11 @@ impl Route {
         let dir = (b - a)
             .try_normalize()
             .unwrap_or_else(|| (self.points[i] - self.points[i - 1]).normalize_or_zero());
-        let level = if riding { 0.16 } else { self.level[i - 1] };
+        let level = match (riding, self.pave[i - 1] > 0.0) {
+            (true, true) => crate::AVENUE_LEVEL as f32,
+            (true, false) => 0.16,
+            (false, _) => self.level[i - 1],
+        };
         (a + (b - a) * t, dir, level)
     }
 }
@@ -169,6 +234,8 @@ pub struct Crowd {
     near: Vec<u32>,
     /// The scan under way: the next person, and what it has found so far.
     scan: (usize, Vec<u32>, Vec<u32>),
+    /// Who each mesh's slots showed last frame ([`EMPTY`] where none).
+    slots: Vec<Vec<u32>>,
 }
 
 /// A tram stop's platform: where it stands (its corner, `x` along it, `z` away from its track),
@@ -213,7 +280,7 @@ impl Crowd {
                 Building {
                     pos: [c.x as f32, c.y as f32],
                     floor_area: (geom::signed_area(&m.footprint) * f64::from(m.floors)) as f32,
-                    active_ground: m.street_width >= 18.0 || m.street_width <= 8.0,
+                    active_ground: m.lively(),
                 }
             })
             .collect();
@@ -308,6 +375,7 @@ impl Crowd {
             counts: Vec::new(),
             near: Vec::new(),
             scan: (0, Vec::new(), Vec::new()),
+            slots: Vec::new(),
         }
     }
 
@@ -369,7 +437,7 @@ impl Crowd {
     /// The people out at cafés, seated at the terraces' seats within [`REACH`] of `c` (the plan's
     /// frame): each seat taken in the share the people out round it make of the seats round it,
     /// a palette's seated mesh each.
-    fn seat_people(&mut self, c: DVec2, out: &mut [Vec<(Vec3, f32)>]) {
+    fn seat_people(&mut self, c: DVec2, out: &mut [Vec<(u32, Vec3, f32)>]) {
         let half = self.size * 0.5;
         for (k, &(p, turn)) in self.seats.iter().enumerate() {
             let at = DVec2::new(f64::from(p.x) + half, f64::from(p.z) + half);
@@ -388,9 +456,7 @@ impl Crowd {
                 continue;
             }
             let mesh = (k * 7 + 3) % GROUPS * POSES + 3;
-            if out[mesh].len() < PER_MESH {
-                out[mesh].push((p, turn));
-            }
+            out[mesh].push((SEATED + k as u32, p, turn));
         }
     }
 
@@ -402,9 +468,34 @@ impl Crowd {
 
     /// The figures to draw round `camera` (the world's x and z): for each of the
     /// `POSES × GROUPS` meshes in order (each palette's left stride, standing, riding, seated,
-    /// right stride), up to [`PER_MESH`] places and turns; `tram_clock` is the trams' service
-    /// clock, whose standing trams the waiting people board.
-    pub fn figures(&mut self, camera: Vec2, tram_clock: f64) -> Vec<Vec<(Vec3, f32)>> {
+    /// right stride), its [`PER_MESH`] slots, each empty or a figure; `tram_clock` is the trams'
+    /// service clock, whose standing trams the waiting people board.
+    ///
+    /// A mesh shows the nearest of those it could show, so a full mesh drops the farthest, not
+    /// whoever the scan met last (the owner saw a walker ahead blink in and out). Someone drawn
+    /// in a mesh keeps their slot while they stay in it, so their motion is their own.
+    pub fn figures(&mut self, camera: Vec2, tram_clock: f64) -> Vec<Vec<Option<Figure>>> {
+        let out = self.candidates(camera, tram_clock);
+        let c = Vec3::new(camera.x, 0.0, camera.y);
+        if self.slots.len() != out.len() {
+            self.slots = vec![vec![EMPTY; PER_MESH]; out.len()];
+        }
+        out.into_iter()
+            .zip(&mut self.slots)
+            .map(|(mut found, slots)| {
+                if found.len() > PER_MESH {
+                    let far =
+                        |(_, at, _): &(u32, Vec3, f32)| (*at - c).with_y(0.0).length_squared();
+                    found.select_nth_unstable_by(PER_MESH - 1, |a, b| far(a).total_cmp(&far(b)));
+                    found.truncate(PER_MESH);
+                }
+                keep_slots(slots, &found)
+            })
+            .collect()
+    }
+
+    /// Everyone [`Self::figures`] could draw round `camera`, by mesh: (who, where, turn).
+    fn candidates(&mut self, camera: Vec2, tram_clock: f64) -> Vec<Vec<(u32, Vec3, f32)>> {
         let half = self.size * 0.5;
         let c = DVec2::new(f64::from(camera.x) + half, f64::from(camera.y) + half);
         let mut out = vec![Vec::new(); POSES * GROUPS];
@@ -445,12 +536,13 @@ impl Crowd {
                         f64::from(q[1]) + jitter(s >> 8),
                     );
                     let mesh = (s as usize % GROUPS) * POSES + 1;
-                    if q.distance(c) <= REACH
-                        && out[mesh].len() < PER_MESH
-                        && self.parks.iter().any(|p| geom::contains(p, q))
-                    {
+                    if q.distance(c) <= REACH && self.parks.iter().any(|p| geom::contains(p, q)) {
                         let at = Vec3::new((q.x - half) as f32, 0.08, (q.y - half) as f32);
-                        out[mesh].push((at, ((s >> 20) as f32 / 4096.0) * std::f32::consts::TAU));
+                        out[mesh].push((
+                            p as u32,
+                            at,
+                            ((s >> 20) as f32 / 4096.0) * std::f32::consts::TAU,
+                        ));
                     }
                 }
                 continue;
@@ -480,12 +572,12 @@ impl Crowd {
                     let s = self.sim.pop.seed[p];
                     let spot = corner
                         + along * (4.0 + (s % 28) as f32)
-                        + away * (0.8 + ((s >> 8) % 14) as f32 / 10.0)
+                        + away * (0.8 + ((s >> 8) % 12) as f32 / 10.0)
                         + Vec3::Y * 0.28;
                     let at = DVec2::new(f64::from(spot.x) + half, f64::from(spot.z) + half);
                     let mesh = (s as usize % GROUPS) * POSES + 1;
-                    if at.distance(c) <= REACH && out[mesh].len() < PER_MESH {
-                        out[mesh].push((spot, away.z.atan2(-away.x)));
+                    if at.distance(c) <= REACH {
+                        out[mesh].push((p as u32, spot, away.z.atan2(-away.x)));
                     }
                 }
                 continue;
@@ -523,11 +615,8 @@ impl Crowd {
                 [0, 1, 4, 1][((gone * route.length() / 0.7) as usize) % 4]
             };
             let mesh = (seed as usize % GROUPS) * POSES + pose;
-            if out[mesh].len() >= PER_MESH {
-                continue;
-            }
             let at = Vec3::new((q.x - half) as f32, level, (q.y - half) as f32);
-            out[mesh].push((at, (-dir.y).atan2(dir.x) as f32));
+            out[mesh].push((p as u32, at, (-dir.y).atan2(dir.x) as f32));
         }
         self.near = near;
         self.seat_people(c, &mut out);
@@ -632,6 +721,28 @@ impl Crowd {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn people_keep_their_slots() {
+        let mut slots = vec![EMPTY; 4];
+        let at = |x: f32| Vec3::new(x, 0.0, 0.0);
+        let first = keep_slots(&mut slots, &[(7, at(1.0), 0.0), (9, at(2.0), 0.0)]);
+        assert_eq!(slots, [7, 9, EMPTY, EMPTY]);
+        assert!(first.iter().flatten().all(|f| !f.kept));
+        // 7 goes, 5 comes, 9 walks on: 9 stays in its slot and moves, 5 takes the free one.
+        let next = keep_slots(&mut slots, &[(5, at(3.0), 0.0), (9, at(2.1), 0.0)]);
+        assert_eq!(slots, [5, 9, EMPTY, EMPTY]);
+        assert_eq!(
+            next[1],
+            Some(Figure {
+                at: at(2.1),
+                turn: 0.0,
+                kept: true
+            })
+        );
+        assert!(next[0].is_some_and(|f| !f.kept && f.at == at(3.0)));
+        assert_eq!(next[2], None);
+    }
 
     #[test]
     fn walkers_turn_corners_without_jumping() {

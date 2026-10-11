@@ -403,6 +403,11 @@ impl PlanScenario {
             .sum();
         let st = &plan.stats;
         let tree_count = trees.len();
+        // The trunks, which the benches keep clear of.
+        let mut trunks = forge_procgen::city::geom::PointGrid::new(size, 10.0);
+        for t in trees {
+            trunks.insert(t.pos, 0);
+        }
         let trees = trees
             .iter()
             .enumerate()
@@ -543,7 +548,8 @@ impl PlanScenario {
             hall_squares.push(i);
         }
         // Benches round each square of 0.15 ha or more, every 15 m inside its outer tree row,
-        // facing the middle; on a landmark's square they face it.
+        // facing the middle; on a landmark's square they face it. None where a trunk stands
+        // (the owner saw a tree through a bench).
         let benches: Vec<Mat4> = plan
             .blocks
             .iter()
@@ -553,15 +559,19 @@ impl PlanScenario {
                 let middle = geom::centroid(&b.buildable);
                 let mut closed = ring.clone();
                 closed.push(ring[0]);
-                geom::resample(&closed, 15.0).into_iter().map(move |p| {
-                    let face = (middle - p).normalize_or_zero();
-                    // The bench faces +z: turned so +z points at the middle.
-                    let turn = (face.x as f32).atan2(face.y as f32);
-                    Mat4::from_rotation_translation(
-                        glam::Quat::from_rotation_y(turn),
-                        world(size, p, 0.16),
-                    )
-                })
+                let trunks = &trunks;
+                geom::resample(&closed, 15.0)
+                    .into_iter()
+                    .filter(move |&p| !trunks.any_within(p, 2.2, |_| false))
+                    .map(move |p| {
+                        let face = (middle - p).normalize_or_zero();
+                        // The bench faces +z: turned so +z points at the middle.
+                        let turn = (face.x as f32).atan2(face.y as f32);
+                        Mat4::from_rotation_translation(
+                            glam::Quat::from_rotation_y(turn),
+                            world(size, p, 0.16),
+                        )
+                    })
             })
             .collect();
         if !benches.is_empty() {
@@ -755,7 +765,9 @@ const TERRACE: u16 = u16::MAX;
 const TRACK_OFFSET: f64 = 1.6;
 /// The avenues' carriageways' level, metres: a centimetre over the shared streets' 0.16, so the
 /// two do not fight where they overlap at a junction.
-const AVENUE_LEVEL: f64 = 0.17;
+pub(crate) const AVENUE_LEVEL: f64 = 0.17;
+/// A dropped kerb's length, metres: 13 cm down over it, a slope of 1 in 12 (#263).
+const RAMP: f64 = 1.6;
 /// A tram stop's platform, metres: a tram's length and a little.
 const PLATFORM: f32 = 36.0;
 /// The trams' sections: a cab, three passenger sections, a cab.
@@ -1025,12 +1037,13 @@ fn kit(
                 Mat4::from_cols(x.extend(0.0), y.extend(0.0), z.extend(0.0), pos.extend(1.0));
             instances.push((id, transform, colour * 2 + u8::from(lit)));
             // A café's terrace before a third of the shopfronts on the avenues' pavements and
-            // in the lanes, on the pavement's level.
-            let lively = m.street_width >= 18.0 || m.street_width <= 8.0;
+            // in the lanes, and two thirds of those facing a square, a park or a quay
+            // (restaurants and cafés by the water), on the pavement's level.
+            let lively = m.lively();
             if name.starts_with("shop")
                 && face.kind == FaceKind::Street
                 && lively
-                && spot.is_multiple_of(3)
+                && (spot.is_multiple_of(3) || (m.open && spot % 3 == 1))
             {
                 // One of four layouts by the shopfront, so neighbouring terraces differ.
                 let variant = ((spot >> 8) % 4) as u32;
@@ -1241,7 +1254,7 @@ fn mass(tiles: &mut Tiles, m: &Mass, edges: &[Option<FaceKind>]) {
     let n = m.footprint.len();
     let tint = tint_of(m.lot);
     // Shops along avenues and in pedestrian lanes.
-    let shops = m.street_width >= 18.0 || m.street_width <= 8.0;
+    let shops = m.lively();
     let ground = GROUND_FLOOR as f32;
     let top = m.height as f32;
     for i in 0..n {
@@ -2096,26 +2109,25 @@ impl Running for PlanRunning {
                 transforms.extend(v[1..TRAM_SECTIONS - 1].iter().map(|&s| place(s)));
             }
         }
-        // The crowd's slots change hands from frame to frame (a walker's pose is another mesh
-        // every 0.7 m; people come and go), so a slot's last transform is often someone
-        // else's: the figures get no motion of their own (2 cm a frame at a walk), only the
-        // camera's, or TAA smeared them along the swaps.
-        let crowd_slots = transforms.len()..;
+        // A crowd slot keeps its person while they stay in its mesh, and moves with them; a slot
+        // that changed hands (a walker's pose is another mesh every 0.7 m; people come and go)
+        // has no motion of its own that frame, or TAA would smear the figure along the swap.
+        let mut still = vec![false; transforms.len()];
         if let Some(crowd) = &mut self.crowd {
             // Unused figures wait far under the ground.
             let parked = (Vec3::new(0.0, -1000.0, 0.0) + self.origin, 0.0);
             for figures in crowd.figures(self.camera, self.clock) {
-                for k in 0..crowd::PER_MESH {
-                    transforms.push(place(figures.get(k).copied().unwrap_or(parked)));
+                for figure in figures {
+                    still.push(!figure.is_some_and(|f| f.kept));
+                    transforms.push(place(figure.map_or(parked, |f| (f.at, f.turn))));
                 }
             }
         }
-        let crowd_slots = crowd_slots.start..transforms.len();
         // Then the boats, one a crossing.
         for boat in &self.boats {
             transforms.push(place(boat.at(self.clock, self.size)));
         }
-        scene.set_movers_still(&transforms, |k| crowd_slots.contains(&k));
+        scene.set_movers_still(&transforms, |k| still.get(k).copied().unwrap_or(false));
     }
 
     fn title(&mut self) -> String {
@@ -2356,15 +2368,62 @@ fn pavements(tiles: &mut Tiles, plan: &CityPlan) {
             widest[e.a as usize] + 1.0,
             length - widest[e.b as usize] - 1.0,
         );
-        if end - start < 4.0 {
+        if end - start < 4.0 + 2.0 * RAMP {
             continue;
         }
+        // Raised between its ramps.
+        let (start, end) = (start + RAMP, end - RAMP);
         let steps = ((end - start) / 4.0).ceil() as usize;
         let line: Vec<DVec2> = (0..=steps)
             .map(|i| geom::point_at(&e.points, start + (end - start) * i as f64 / steps as f64))
             .collect();
         let half = e.profile.width() * 0.5;
         for side in [1.0, -1.0] {
+            // A dropped kerb at each end: the pavement slopes down to the carriageway over
+            // `RAMP` metres, the whole width, where people cross at the junction (step-free,
+            // #263). An open end showed under the pavement.
+            for (high, low) in [(start, start - RAMP), (end, end + RAMP)] {
+                let (h, l) = (
+                    geom::point_at(&e.points, high),
+                    geom::point_at(&e.points, low),
+                );
+                let t = geom::tangent_at(&e.points, high);
+                let n = DVec2::new(-t.y, t.x) * side;
+                let tile = tiles.at(h);
+                let centre = tile.centre;
+                let p = |q: DVec2, y: f64| world(size, q, y) - centre;
+                let (hi_out, hi_in) = (h + n * half, h + n * (half - pavement));
+                let (lo_out, lo_in) = (l + n * half, l + n * (half - pavement));
+                let base = AVENUE_LEVEL + 0.005;
+                let quad = [
+                    p(lo_in, base),
+                    p(lo_out, base),
+                    p(hi_out, 0.30),
+                    p(hi_in, 0.30),
+                ];
+                let mut up = (quad[1] - quad[0])
+                    .cross(quad[2] - quad[0])
+                    .normalize_or_zero();
+                if up.y < 0.0 {
+                    up = -up;
+                }
+                for tri in [[0, 1, 2], [0, 2, 3]] {
+                    triangle(&mut tile.ground, tri.map(|k| quad[k]), up, PAVING);
+                }
+                // The ramp's side by the carriageway, from nothing to the kerb's height.
+                let towards = -n;
+                let normal = Vec3::new(towards.x as f32, 0.0, towards.y as f32);
+                triangle(
+                    &mut tile.ground,
+                    [
+                        p(lo_in, AVENUE_LEVEL),
+                        p(hi_in, AVENUE_LEVEL),
+                        p(hi_in, 0.30),
+                    ],
+                    normal,
+                    PAVING,
+                );
+            }
             let outer = offset_line(&line, side * half);
             let inner = offset_line(&line, side * (half - pavement));
             let (left, right) = if side > 0.0 {

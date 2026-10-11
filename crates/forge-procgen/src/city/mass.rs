@@ -42,6 +42,18 @@ pub struct Mass {
     pub roof: Roof,
     /// The width of the street it fronts, metres.
     pub street_width: f64,
+    /// Whether it looks across its street onto a square, a park or a quay.
+    pub open: bool,
+}
+
+impl Mass {
+    /// Whether its ground floor is shops, cafés and bars: on the avenues (18 m or wider), on
+    /// the lanes (8 m or narrower), and facing a square, a park or a quay (the owner: large
+    /// squares want shops, restaurants and cafés round them, above all by the river and the
+    /// sea).
+    pub fn lively(&self) -> bool {
+        self.open || self.street_width >= 18.0 || self.street_width <= 8.0
+    }
 }
 
 /// A ground floor's height, metres.
@@ -57,6 +69,13 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
     for (i, e) in plan.roads.edges.iter().enumerate() {
         for p in geom::resample(&e.points, 10.0) {
             streets.insert(p, i as u32);
+        }
+    }
+    // The squares, parks and quays, by their centres: who looks onto them.
+    let mut open_blocks = PointGrid::new(plan.size, 100.0);
+    for (i, b) in plan.blocks.iter().enumerate() {
+        if matches!(b.use_, BlockUse::Square | BlockUse::Park | BlockUse::Quay) {
+            open_blocks.insert(b.centre, i as u32);
         }
     }
     let mut out = Vec::new();
@@ -191,6 +210,21 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
         let drawn = lo + rng.below(span) as u8;
         // Heights follow street widths: the bible's ratio caps the floors.
         let street_width = profile.width();
+        // Across the street from the middle of the lot's front: a square, a park or a quay?
+        let open = {
+            let c = geom::centroid(&lot.polygon);
+            let on = a + t * (c - a).dot(t);
+            let inward = DVec2::new(-t.y, t.x);
+            let outward = if geom::contains(&block.polygon, on + inward * 2.0) {
+                -inward
+            } else {
+                inward
+            };
+            let across = on + outward * (street_width + 8.0);
+            open_blocks.any_within(across, 1500.0, |b| {
+                !geom::contains(&plan.blocks[b as usize].polygon, across)
+            })
+        };
         let cap = bible.max_floors(street_width);
         let floors = drawn.min(cap).max(1);
         let height = GROUND_FLOOR + f64::from(floors - 1) * FLOOR;
@@ -213,6 +247,7 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
                 height,
                 roof,
                 street_width,
+                open,
             });
         }
     }
@@ -288,6 +323,30 @@ mod tests {
     use super::super::{example, plan};
     use super::*;
     use crate::city::bible::StyleBible;
+
+    #[test]
+    fn the_buildings_round_the_squares_and_quays_open_onto_them() {
+        let size = 4000.0;
+        let site = example::site(size, 10.0);
+        let city = plan(&site, &example::params(size));
+        let masses = masses(&city, &StyleBible::default(), 9);
+        let open: Vec<_> = masses.iter().filter(|m| m.open).collect();
+        let share = open.len() as f64 / masses.len() as f64;
+        assert!((0.02..0.4).contains(&share), "{share:.3} open");
+        // Each within its street's width and a little of a square, a park or a quay.
+        let near = |m: &Mass| {
+            let c = geom::centroid(&m.footprint);
+            city.blocks.iter().any(|b| {
+                matches!(b.use_, BlockUse::Square | BlockUse::Park | BlockUse::Quay)
+                    && (0..b.polygon.len()).any(|i| {
+                        let (p, q) = (b.polygon[i], b.polygon[(i + 1) % b.polygon.len()]);
+                        geom::distance_to_segment(c, p, q) < m.street_width + 40.0
+                    })
+            })
+        };
+        assert!(open.iter().all(|m| near(m)));
+        assert!(open.iter().all(|m| m.lively()));
+    }
 
     #[test]
     fn masses_stand_between_the_building_line_and_the_courtyard() {

@@ -35,7 +35,7 @@ cargo run --release -p city-map -- --size 4000 --scale 2 --out captures/city
 | Masses | each lot's building: strips of its district's building depth along each street the lot fronts (lots are cut inside the block's building lines, half each street's profile width from its centreline); floors from the district's range, capped by the style bible's height-to-width ratio on the street it fronts; green, solar or terrace roofs | `city::mass` |
 | Style bible | one TOML record of the city's rules (height to street width, green roofs, green area per block, park and stop reach, the streets' share, per-district floors, lots, spacing, building depth, tiled roofs and walls), put into the plan's parameters and measured by a checker that names what fails | `city::bible` |
 | Trees | rows along the streets by profile (on avenues one a side by the kerb, a metre into the pavement, every 9 m; one down the middle of shared streets every 11 m and of lanes every 18 m), each crown stopping half a metre short of the building line, none within 10 m of a junction; a jittered grid in parks (13 m, two thirds filled), on the quays (14 m, under half) and in courtyards (16 m, half) | `city::trees` |
-| Lamps | along every street by profile (both sides of avenues every 28 m at 8 m, one side of shared streets every 30 m, lanes and paths lower), at the pavement's edge, none in junctions: where step 5's lights will stand | `city::lamps` |
+| Lamps | along every street by profile (both sides of avenues every 28 m at 8 m, one side of shared streets every 30 m, lanes and paths lower), at the pavement's edge; none in a junction (within its widest street's half width and 4 m) and no two within 12 m (two streets' lamps stood side by side in the corners, the owner's second walk): where step 5's lights will stand | `city::lamps` |
 | Maps and numbers | a small rasteriser: the plan (with the districts', landmarks' and lines' names in the engine's font, kept from overlapping), a checks map (blocks by what they lack), an oblique massing view of any window; the plan's numbers and its digest | `city::map` |
 
 Everything is a pure function of the site and the parameters. Costs are integers in the
@@ -173,7 +173,10 @@ Three stages, each generic:
   - the **courtyard**: the wall looks into its own lot or block;
   - a **party wall**: a neighbour's lot lies against it.
 
-  Walls between two pieces of one lot are inside the building and get no face. A street face
+  Walls between two pieces of one lot are inside the building and get no face, if the lot's
+  other pieces cover them all along: each wall is probed at five points. A single probe at
+  its middle dropped 816 of 2 627 walls covered only in part, and the courtyards saw into
+  the buildings, their window frames floating (the owner's second walk). A street face
   knows the corners it turns, and each building's longest street face holds its entrance.
   `city-map` draws the split as `faces-centre.png`.
 - **`forge_procgen::grammar`, a split grammar** with CGA's operators (Müller et al. 2006):
@@ -316,9 +319,17 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
   are four layouts a width, chosen by the shopfront, so neighbours differ (the owner asked for
   several tables round each café, not aligned, a bit organic). They stand within 2.65 m of the
   wall, before a third of the kit's shopfronts on the avenues' pavements and in the lanes,
-  coloured as the building's awnings. A street counts as lively from 18 m (the avenues).
-- **tram stops:** a 36 m platform level with the trams' floor by each track, and a glass
-  shelter with a bench and a lit totem for the next trams' times.
+  and two thirds of those facing a square, a park or a quay. They are coloured as the
+  building's awnings. A ground floor is shops (`Mass::lively`, the grammar's `open`) on
+  streets of 18 m or more (the avenues), in the lanes, and facing a square, a park or a quay.
+  The owner asked for shops, restaurants and cafés round the large squares, above all by the
+  river and the sea.
+- **tram stops:** a 36 m platform 2.3 m deep, level with the trams' floor by each track, and a
+  glass shelter with a bench and a lit totem for the next trams' times.
+- **benches** keep 2.2 m clear of the trunks (the owner saw a tree through one).
+- **dropped kerbs:** each raised pavement slopes down to the carriageway over 1.6 m at both
+  ends, its whole width, where people cross at the junction (1 in 12, step-free: #263). The
+  open ends showed under the pavement.
 - **street-workout parks:** one in each park of a hectare or more, 14 by 10 m on a rubber
   floor:
   - pull-up bars at three heights, monkey bars, parallel bars, a dip station;
@@ -429,7 +440,8 @@ evening's walkers.* `--people HOUR` builds the plan's population from the masses
 - **those on their way,** as the simulation's trip goes (`population::Trip::mode`):
   - on foot or by bike: the shortest way along the streets (A* on the road graph) from the
     street nearest their start to the street nearest their goal, at the pace their trip's time
-    gives, walking on the pavement or riding in the carriageway's right lane. At a junction a
+    gives, walking on the pavement or riding in the carriageway's right lane, by the kerb and
+    at the carriageway's level (they rode through the tram stops' platforms, 13 cm up). At a junction a
     walker goes on to the corner where the pavements' lines meet and crosses straight over,
     as at a crossing; they jumped up to 17 m from one side to the other before;
   - by tram: waiting on the platform nearest their start for the trip's first five minutes,
@@ -437,9 +449,9 @@ evening's walkers.* `--people HOUR` builds the plan's population from the masses
     Aboard, they are not drawn yet (the trams' windows show no one).
 - **those in a park:** they stand about it, kept 9 m inside its streets.
 
-The drawn crowd runs on the real
-clock, a game second a second: at the game's four, its walkers would cross the screen at
-5 m/s, and how the two clocks meet near the player is D-059's open question. #251's humans
+The drawn crowd runs on the real clock, a game second a second: at the game's three (an hour
+in 20 real minutes, `population::GAME_SPEED`), its walkers would cross the screen at 4 m/s.
+Near the player people walk at their real pace, which the owner found right. #251's humans
 replace the figures.
 
 **What a frame costs.**
@@ -447,9 +459,15 @@ replace the figures.
   reach plus 300 m) and who is at each place. Each frame draws from the last whole scan.
 - Walking the million every frame took 77 ms on the CPU, about 15 frames a second (the
   owner's first walk). A street view with people now takes 2.3 ms a frame.
-- The figures' slots change hands from frame to frame: a walker's pose is another mesh every
-  0.7 m, and people come and go. So the figures get no motion of their own, only the
-  camera's (`set_movers_still`); TAA smeared them along the swaps.
+- **Who gets a slot.** A mesh (a palette in one pose) shows 60 figures. It shows the nearest
+  of those it could, so a full mesh drops the farthest. Before, it dropped whoever the scan
+  met last: in a busy street a walker ahead blinked in and out as their pose's mesh filled
+  (the owner's second walk).
+- **Motion vectors.** Someone keeps their slot while they stay in its mesh, and moves with it,
+  so TAA and DLAA follow them. A slot that changes hands has no motion of its own that frame
+  (`set_movers_still`): a walker's pose is another mesh every 0.7 m, and people come and go.
+  The first fix gave every figure no motion of its own, only the camera's. A walker keeping
+  pace ahead was then reprojected as the background and faded.
 
 ## Walking the streets (D-059's step 4)
 

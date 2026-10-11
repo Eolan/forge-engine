@@ -23,6 +23,9 @@ use forge_core::{Seed, SplitMix64, dmath};
 pub type GameSeconds = u32;
 /// A game day, seconds.
 pub const DAY: GameSeconds = 86_400;
+/// Game seconds a real second: a game hour in 20 real minutes, a day in 8 real hours (D-059,
+/// the owner's second walk, 2026-10-11; 15 minutes before).
+pub const GAME_SPEED: GameSeconds = 3;
 /// No place.
 pub const NONE: u32 = u32::MAX;
 /// The `at` column's flag for a person on a trip.

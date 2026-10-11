@@ -2,7 +2,7 @@
 //! masses as buildings, their homes, jobs, schools, shops, cafés and bars as places, the
 //! population that fits (`forge_sim::population`, #250), run through game days headless. Prints
 //! the census every game hour, the events and their cost, the bytes a person and the digest, and
-//! what a game hour of 15 real minutes asks of the server (D-059).
+//! what a game hour of 20 real minutes asks of the server (D-059).
 
 #![forbid(unsafe_code)]
 
@@ -13,7 +13,7 @@ use clap::Parser;
 use forge_core::Seed;
 use forge_procgen::city::{self, BlockUse, example, geom};
 use forge_sim::population::{
-    self, Building, DAY, Mix, Population, Sim, Uses, World, places_from_buildings,
+    self, Building, DAY, GAME_SPEED, Mix, Population, Sim, Uses, World, places_from_buildings,
 };
 
 #[derive(Parser, Debug)]
@@ -45,7 +45,7 @@ fn main() -> Result<()> {
                 pos: [c.x as f32, c.y as f32],
                 floor_area: (geom::signed_area(&m.footprint) * f64::from(m.floors) * args.scale)
                     as f32,
-                active_ground: m.street_width >= 18.0 || m.street_width <= 8.0,
+                active_ground: m.lively(),
             }
         })
         .collect();
@@ -167,13 +167,13 @@ fn run(
     let ran = t.elapsed().as_secs_f64();
     let per_day = sim.events as f64 / f64::from(days);
     out += &format!(
-        "{} events over {days} days ({:.1} a person a day) in {:.2} s: {:.0} ns an event; a game day at 1 h = 15 min (6 real hours) asks {:.0} events a real second, {:.4} % of one core\n",
+        "{} events over {days} days ({:.1} a person a day) in {:.2} s: {:.0} ns an event; a game day at 1 h = 20 min (8 real hours) asks {:.0} events a real second, {:.4} % of one core\n",
         sim.events,
         per_day / n as f64,
         ran,
         ran * 1e9 / sim.events as f64,
-        per_day / f64::from(DAY / 4),
-        100.0 * (ran / f64::from(days)) / f64::from(DAY / 4),
+        per_day / f64::from(DAY / GAME_SPEED),
+        100.0 * (ran / f64::from(days)) / f64::from(DAY / GAME_SPEED),
     );
     out += &format!("digest {:016x}", sim.digest());
     // A snapshot of the running state, restored over the base generated again (#250).
