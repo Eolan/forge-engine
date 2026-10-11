@@ -281,7 +281,9 @@ Checks:
 Double-buffering the atlases and the sky's tables lets them start during the previous frame's
 tail, but on the 5070 Ti that gains nothing. They then contend with the resolve (south
 2.06 → 2.13 ms, #95; `docs/PROFILE.md`), so the change is kept as a patch in
-`reports/2026-09-30-95/` for the RTX 3080 and AMD.
+`reports/2026-09-30-95/` for AMD. On the RTX 3080 (2026-10-11) it gains 0.23 ms of frame time
+in the 900p south view but nothing at 1440p (−0.04 south, +0.05 in the flight), so it stays out
+there too.
 
 ## The sky's reflection in the streets (issue #68, 2026-09-25)
 

@@ -281,7 +281,12 @@ resolve, TAA and post. The city then takes 2.06 → 2.13 ms south, 2.53 → 2.53
 2.66 → 2.63 and 3.85 → 3.75. The probe blend reads 0.34 → 0.72 ms and the resolve
 (`shading/standard`) 0.35 → 0.55 ms: beside the resolve, the probes contend for the units the
 geometry passes left idle. The change stays out of the engine, and its patch and numbers are
-in `reports/2026-09-30-95/`. What stays is the frame's measure. A frame whose async work starts
+in `reports/2026-09-30-95/`. On the RTX 3080 (2026-10-11), the patch on its base changes the
+frame time by −0.23 ms in the 900p south view (3.14 → 2.91), −0.04 in the 1440p south view
+and +0.05 in the 1440p flight (5.04 → 5.09). There the GPU's measure reads 0.07 ms above the
+frame time once the frames overlap. At that commit the serial frame is faster in three views
+of four. On today's frame, the 3080's 1440p flight runs 7.65 ms async against 7.63 serial,
+level. What stays is the frame's measure. A frame whose async work starts
 during the previous one is timed from that frame's end, so the overlap is not counted twice
 (the span read 3.90 ms for a 2.1 ms frame). Without overlap the number is the same.
 The frames after a streaming copy no longer wait for it again (#104, 2026-10-02). The graph

@@ -72,3 +72,53 @@ engine.
     moving it.
 - **Measure per member:** the vendors' advice is to measure the batch with and without each
   member (`docs/research/dynamic-scenes.md`).
+
+## On the RTX 3080 (2026-10-11, #39)
+
+The server PC: RTX 3080 10 GB, driver 617.42, i7-9700K, Vulkan SDK 1.4.357.
+- **Base:** the patch applied on `9b240b7`, the commit after `1ea31f4`, which adds
+  `GpuTimers::frame_ms`.
+- **Method:** two worktrees, base and patched, each running its own shaders. The city ran 3000
+  frames per run, three rounds alternating the builds, in four views (the 1440p flight added).
+
+The frame time is the CPU loop: the frame including its wait for a slot, with unthrottled
+frames on a GPU-bound run. Each cell is the mean of the three rounds, in ms.
+
+| View | async: before | after | `FORGE_ASYNC=0`: before | after |
+|---|---|---|---|---|
+| south, 1600 × 900 | 3.14 | **2.91** | 3.01 | 2.99 |
+| orbit | 3.60 | 3.59 | 3.72 | 3.68 |
+| south, 2560 × 1440 | 5.19 | 5.15 | 5.10 | 5.11 |
+| flight at 300 m/s, 2560 × 1440 | 5.04 | **5.09** | 4.98 | 4.96 |
+
+- **900p south, the one gain:** 0.23 ms, in every round. There the patched async frame is the
+  fastest of the four, 0.1 ms under the serial one.
+- **1440p, the 3080's target, no gain:**
+  - the south view is flat (−0.04; −0.11 to +0.04 by round);
+  - the flight costs 0.05 ms (+0.03 to +0.09 by round).
+- **The GPU's measure reads high with the overlap.**
+  - `frame_ms` averages 0.07 ms above the frame time in the patched async runs, and 0.03 ms
+    below it in the base's. On a GPU-bound run it cannot exceed it.
+  - By the GPU's measure the patch gains 0.16 ms in the 900p south view and costs 0.08 (the
+    1440p south view) and 0.17 (the flight).
+  - On the 5070 Ti the two measures agreed within 0.05 ms.
+  - On `main` the GPU's measure stays under the frame time: 7.61 against 7.65 ms in the 1440p
+    flight below.
+- **Where the time goes** in the flight (GPU zones):
+  - the resolve (`shading/standard`) goes 1.02 → 1.09 ms and the sky's irradiance 0.07 → 0.21;
+  - the probe blend goes 0.68 → 0.53;
+  - the same contention as on the 5070 Ti.
+- **In the 900p south view** the resolve goes 0.44 → 0.65 ms and the blend 0.33 → 0.96, but
+  the frame shrinks. There the overlap fills a bubble.
+- **Serial against async at this commit:** serial is faster in three views of four (all but
+  the orbit), by 0.06–0.13 ms.
+- **Serial against async on main today** (`471efdd`'s binaries, the 1440p flight, three
+  rounds of 6000 frames): the frame time is 7.65 ms async against 7.63 serial, level. On the
+  3080 the async queue neither gains nor costs in that flight.
+- **The patch draws the same frame on this GPU:** the south view, every page resident,
+  frame 60, differs in 0 of 1 440 000 pixels (ꟻLIP 0). Synchronization validation, which
+  includes the sky half, is clean on the city.
+
+**Outcome:** no gain on the 3080 at 1440p, where its target is, so the patch stays out. It
+would no longer apply to `main`: the probes and the sky have changed since, and the clouds
+added async passes it does not double-buffer. AMD (#67) is the one card left untried.
