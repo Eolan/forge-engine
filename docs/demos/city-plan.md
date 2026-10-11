@@ -202,8 +202,8 @@ neighbours differ.
 | Merged triangles added (walls, bands, cornices) | 355 k |
 | Derived and assembled | 71 ms (one thread) |
 | Longest run of one opening along a floor of a street front | 11 |
-| GPU frame at 2800 × 1575, this view, best of 3 | 3.79 ms (3.62 ms with `--detail 0`) |
-| Scene built and cooked | 2.96 s (2.57 s) |
+| GPU frame at 2800 × 1575, this view, best of 3 | 3.76 ms (3.42 ms with `--detail 0`) |
+| Scene built and cooked | 2.96 s (2.56 s) |
 
 ![Faces round the centre](images/city-plan-faces.png)
 
@@ -211,6 +211,12 @@ neighbours differ.
 walls grey, entrances as dots, corners in yellow. Lots without a courtyard are now built along
 every street they front (a strip along each), so a block between two streets has two
 fronts; 14 807 masses instead of 14 700.*
+
+**The trees, sized to their streets.** Mature planes of 11–15 m line the avenues, 7–10 m trees
+the shared streets and 5–7 m trees the lanes. Each instance is scaled by its own crown
+across and its height up. The one model is a trunk forking into three limbs under a crown
+of seven smooth lumps (about 620 triangles), so the crowns no longer hide the facades from
+the pavement.
 
 ## Next (#245–#247)
 
@@ -224,4 +230,4 @@ fronts; 14 807 masses instead of 14 700.*
   - corner pieces and quoins;
   - roofs from the straight skeleton;
   - trims and materials of release quality (#249).
-- The trees in front of the facades: finer models, so the street is not hidden by crowns.
+- Trees by species (vegetation-materials.md §1, the grower) in place of the one lumpy model.

@@ -169,9 +169,9 @@ fn colour(rgb: [f32; 3], power: f32, specular: f32) -> RenderLayer {
 /// A plan in 3D: its meshes, built on the CPU, cooked and drawn when the app builds the scene.
 pub struct PlanScenario {
     tiles: Vec<Tile>,
-    /// Each tree's place in the world, its scale (its height over the model's 10 m), its turn and
-    /// which of the two models it uses.
-    trees: Vec<(Vec3, f32, f32, usize)>,
+    /// Each tree's place in the world, its scale (its crown over the model's 4.2 m radius, its
+    /// height over the model's 10 m up), its turn and which of the two leaf colours it uses.
+    trees: Vec<(Vec3, Vec3, f32, usize)>,
     /// Each lamp's place, scale (its height over the model's 8 m) and turn.
     lamps: Vec<(Vec3, f32, f32)>,
     /// The style kit's instanced modules and their instances (module, transform, group).
@@ -288,7 +288,11 @@ impl PlanScenario {
                 let turn = (i as f32 * 2.399_963).rem_euclid(std::f32::consts::TAU);
                 (
                     world(size, t.pos, 0.0),
-                    (t.height / 10.0) as f32,
+                    Vec3::new(
+                        (t.crown / 4.2) as f32,
+                        (t.height / 10.0) as f32,
+                        (t.crown / 4.2) as f32,
+                    ),
                     turn,
                     i % 2,
                 )
@@ -910,7 +914,7 @@ impl Scenario for PlanScenario {
             let model = builder.add_mesh(&MeshletMesh::build(&tree_model()));
             for &(at, scale, turn, kind) in &self.trees {
                 let transform = Mat4::from_scale_rotation_translation(
-                    Vec3::splat(scale),
+                    scale,
                     glam::Quat::from_rotation_y(turn),
                     at,
                 );
@@ -1012,25 +1016,90 @@ fn strip(tiles: &mut Tiles, left: &[DVec2], right: &[DVec2], height: f64, sectio
     }
 }
 
-/// A tree 10 m tall: a hexagonal trunk to 4.5 m (section 0) and a crown (section 1), an
-/// icosahedron subdivided once and roughened, 4.2 m across its widest, its normals radial.
+/// A broadleaf tree 10 m tall, its crown 4.2 m in radius; each instance scales it to its tree's
+/// height and crown. A tapering trunk forks into three limbs (section 0) under a crown of lumps
+/// (section 1): a large one in the middle, five round it at different heights and one on top,
+/// each an icosahedron subdivided once, a little irregular and smooth-shaded.
 fn tree_model() -> TriMesh {
+    use std::f32::consts::TAU;
     let mut mesh = TriMesh::default();
-    // The trunk.
-    let sides = 6;
-    for k in 0..sides {
-        let a = k as f32 / sides as f32 * std::f32::consts::TAU;
-        let b = (k + 1) as f32 / sides as f32 * std::f32::consts::TAU;
-        let (pa, pb) = (
-            Vec3::new(a.cos() * 0.28, 0.0, a.sin() * 0.28),
-            Vec3::new(b.cos() * 0.28, 0.0, b.sin() * 0.28),
-        );
-        let up = Vec3::Y * 5.0;
-        let out = ((pa + pb) * 0.5).normalize();
-        triangle(&mut mesh, [pa, pb, pb + up], out, 0);
-        triangle(&mut mesh, [pa, pb + up, pa + up], out, 0);
+    limb(&mut mesh, Vec3::ZERO, Vec3::new(0.0, 4.4, 0.0), 0.3, 0.2);
+    for k in 0..3 {
+        let a = k as f32 * TAU / 3.0 + 0.5;
+        let end = Vec3::new(a.cos() * 1.7, 6.8, a.sin() * 1.7);
+        limb(&mut mesh, Vec3::new(0.0, 4.0, 0.0), end, 0.17, 0.07);
     }
-    // The crown: an icosahedron's faces, each cut in four, pushed onto an ellipsoid.
+    lump(&mut mesh, Vec3::new(0.0, 7.0, 0.0), 2.7, 0);
+    for k in 0..5_u32 {
+        let a = k as f32 * TAU / 5.0 + 0.2;
+        let y = 6.3 + 0.5 * ((k * 2) % 3) as f32;
+        lump(
+            &mut mesh,
+            Vec3::new(a.cos() * 2.2, y, a.sin() * 2.2),
+            2.0,
+            k + 1,
+        );
+    }
+    lump(&mut mesh, Vec3::new(0.3, 8.4, -0.2), 1.6, 7);
+    mesh
+}
+
+/// A triangle with a normal per corner, turned so it faces along their sum.
+fn smooth_triangle(mesh: &mut TriMesh, mut p: [Vec3; 3], mut n: [Vec3; 3], section: u8) {
+    if (p[1] - p[0]).cross(p[2] - p[0]).dot(n[0] + n[1] + n[2]) < 0.0 {
+        p.swap(1, 2);
+        n.swap(1, 2);
+    }
+    let base = mesh.positions.len() as u32;
+    for (q, m) in p.into_iter().zip(n) {
+        mesh.positions.push(q.to_array());
+        mesh.normals.push(m.to_array());
+    }
+    mesh.indices.extend([base, base + 1, base + 2]);
+    mesh.sections.push(section);
+}
+
+/// A tapering seven-sided limb from `a` (radius `ra`) to `b` (radius `rb`), section 0.
+fn limb(mesh: &mut TriMesh, a: Vec3, b: Vec3, ra: f32, rb: f32) {
+    let axis = (b - a).normalize();
+    let u = axis.any_orthonormal_vector();
+    let v = axis.cross(u);
+    let sides = 7;
+    let ring = |k: u32| {
+        let t = k as f32 / sides as f32 * std::f32::consts::TAU;
+        u * t.cos() + v * t.sin()
+    };
+    for k in 0..sides {
+        let (d0, d1) = (ring(k), ring(k + 1));
+        let (p0, p1) = (a + d0 * ra, a + d1 * ra);
+        let (q0, q1) = (b + d0 * rb, b + d1 * rb);
+        smooth_triangle(mesh, [p0, p1, q1], [d0, d1, d1], 0);
+        smooth_triangle(mesh, [p0, q1, q0], [d0, d1, d0], 0);
+    }
+}
+
+/// A crown's lump round `centre`, about `radius` across, a little flattened, its surface
+/// rippled by `seed`; section 1.
+fn lump(mesh: &mut TriMesh, centre: Vec3, radius: f32, seed: u32) {
+    let s = seed as f32 * 1.7;
+    let place = |d: Vec3| {
+        let d = d.normalize();
+        let bump = 1.0
+            + 0.09 * (d.x * 7.3 + d.y * 3.1 + d.z * 5.7 + s).sin()
+            + 0.05 * (d.x * 13.1 - d.z * 11.3 + s * 2.3).sin();
+        (
+            centre + Vec3::new(d.x, d.y * 0.85, d.z) * radius * bump,
+            Vec3::new(d.x, d.y / 0.85, d.z).normalize(),
+        )
+    };
+    for tri in icosphere() {
+        let p = tri.map(place);
+        smooth_triangle(mesh, p.map(|q| q.0), p.map(|q| q.1), 1);
+    }
+}
+
+/// An icosahedron's faces, each cut in four: 80 triangles of unit directions.
+fn icosphere() -> Vec<[Vec3; 3]> {
     let t = (1.0 + 5.0_f32.sqrt()) * 0.5;
     let v: [Vec3; 12] = [
         Vec3::new(-1.0, t, 0.0),
@@ -1068,26 +1137,13 @@ fn tree_model() -> TriMesh {
         [8, 6, 7],
         [9, 8, 1],
     ];
-    let centre = Vec3::new(0.0, 7.0, 0.0);
-    let place = |d: Vec3| {
-        let d = d.normalize();
-        // A little roughness, the same for the same direction.
-        let bump = 1.0 + 0.08 * (d.x * 7.3 + d.y * 3.1 + d.z * 5.7).sin();
-        (
-            centre + Vec3::new(d.x * 4.2, d.y * 3.6, d.z * 4.2) * bump,
-            d,
-        )
-    };
+    let mut out = Vec::with_capacity(80);
     for f in faces {
         let (a, b, c) = (v[f[0]], v[f[1]], v[f[2]]);
         let (ab, bc, ca) = ((a + b) * 0.5, (b + c) * 0.5, (c + a) * 0.5);
-        for tri in [[a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]] {
-            let p = tri.map(place);
-            let normal = (p[0].1 + p[1].1 + p[2].1).normalize();
-            triangle(&mut mesh, [p[0].0, p[1].0, p[2].0], normal, 1);
-        }
+        out.extend([[a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]]);
     }
-    mesh
+    out
 }
 
 /// A pedestrian's eye on the pavement of the avenue nearest `near`, 1.7 m up, looking along it.

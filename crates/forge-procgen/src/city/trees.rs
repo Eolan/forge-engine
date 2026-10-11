@@ -47,13 +47,16 @@ pub fn trees(site: &Site, plan: &CityPlan, seed: u64) -> Vec<Tree> {
         if e.bridge {
             continue;
         }
-        // Rows: offsets from the centreline and the spacing, by profile.
-        let (rows, spacing): (&[f64], f64) = match e.profile {
-            Profile::TramAvenue => (&[-0.5, 0.5], 9.0),
-            Profile::Avenue => (&[-0.5, 0.5], 9.0),
-            Profile::Shared => (&[0.5], 11.0),
-            Profile::Pedestrian => (&[0.0], 18.0),
-            Profile::Path => (&[], 0.0),
+        // Rows: offsets from the centreline and the spacing, by profile; and the trees' heights
+        // and crowns, which a street's width bounds: mature planes on the avenues, smaller
+        // trees on shared streets, small ones in the lanes, whose crowns must leave the
+        // facades in view.
+        let (rows, spacing, height, crown): (&[f64], f64, (f64, f64), (f64, f64)) = match e.profile
+        {
+            Profile::TramAvenue | Profile::Avenue => (&[-0.5, 0.5], 9.0, (11.0, 15.0), (3.5, 4.8)),
+            Profile::Shared => (&[0.5], 11.0, (7.0, 10.0), (2.4, 3.4)),
+            Profile::Pedestrian => (&[0.0], 18.0, (5.0, 7.0), (1.8, 2.5)),
+            Profile::Path => (&[], 0.0, (0.0, 0.0), (0.0, 0.0)),
         };
         let half = e.profile.width() * 0.5;
         let length = e.length();
@@ -71,8 +74,8 @@ pub fn trees(site: &Site, plan: &CityPlan, seed: u64) -> Vec<Tree> {
                 }
                 out.push(Tree {
                     pos: q,
-                    height: rng.range_f64(11.0, 16.0),
-                    crown: rng.range_f64(3.5, 5.0),
+                    height: rng.range_f64(height.0, height.1),
+                    crown: rng.range_f64(crown.0, crown.1),
                     setting: Setting::Street,
                 });
             }
