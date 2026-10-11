@@ -3923,11 +3923,19 @@ Each note's city-specific appendix stays in the sandbox.
        `forge-procgen::city`, `docs/demos/city-plan.md`. The sandbox's first map is of the
        Argens.
     2. **Buildings** from the grammar and kits in the first style set, far proxies, materials
-       of release quality.
-    3. **Vegetation:** trees, grass, parks.
+       of release quality. *Begun 2026-10-11:*
+       - each lot's mass (the grammar's first stage), its floors capped by the style bible
+         (#246, `city::bible`);
+       - facades as textures of window bays and shopfronts, drawn in 3D by `demos/city-plan`.
+
+       D-039's modules are next (#247).
+    3. **Vegetation:** trees, grass, parks. *Begun 2026-10-11:* `city::trees` places rows
+       along the streets, trees in parks, on quays and in courtyards, drawn as one instanced
+       low-poly tree.
     4. **The player** walking the streets in first person; interiors furnished by use, in tiers
        (`city-generation.md` §17).
-    5. **Night:** many local lights.
+    5. **Night:** many local lights. *Previewed 2026-10-11:* lit windows from emissive maps.
+       The probes flood the scene with that light (#254).
     6. **People:** the runtime, crowds at scale, navigation, then lives and schedules.
     7. **Public transport:** trams, taxis, boats; then vehicles to pilot.
     8. **The population server,** scaled to 1 M and beyond; multiplayer clients.

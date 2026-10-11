@@ -691,10 +691,16 @@ The research is `assets-and-licences.md`, `population-simulation.md`, `procedura
    Built 2026-10-11: districts, tensor-field streets, blocks with courtyards, parks by the
    3-30-300 rule, lots, tram lines covering the blocks, boat crossings, a checks map.
 2. **Buildings** from the grammar and module kits (D-039), first style set a Mediterranean-European
-   perimeter block; far proxies; materials with a history.
-3. **Vegetation:** trees, grass, parks.
+   perimeter block; far proxies; materials with a history. Begun 2026-10-11:
+   - masses per lot under a style bible (#246);
+   - facade textures (window bays, shopfronts), drawn in 3D by `demos/city-plan`.
+
+   Next, the modules (#247).
+3. **Vegetation:** trees, grass, parks. Begun 2026-10-11: street, park, quay and courtyard
+   trees as instances.
 4. **The player** in the streets in first person; interiors by use in speed tiers.
-5. **Night:** many local lights.
+5. **Night:** many local lights. Previewed 2026-10-11: lit windows. The probes flood the scene
+   with them (#254).
 6. **People:** the human runtime and crowds at scale.
 7. **Public transport:** trams, public automated taxis, boats.
 8. **The population server:** event-driven records in `forge-sim`, 1 M then 4 M.
