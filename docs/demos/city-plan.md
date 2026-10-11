@@ -348,6 +348,12 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
 - **tram stops:** a 36 m platform 2.3 m deep, level with the trams' floor by each track, and a
   glass shelter with a bench and a lit totem for the next trams' times.
 - **benches** keep 2.2 m clear of the trunks (the owner saw a tree through one).
+- **fingerposts** (`signs.rs`; the owner got lost on their second walk): at each junction where
+  two avenues meet, within the kit's reach, a dark pole by the kerb just past the dropped kerb,
+  clear of the trunks. Up to three blue blades, each pointing the way to one of the nearest
+  landmarks or built districts' centres (200 m to 4 km, at least 35° apart). Each carries its
+  name in white, read from its left end on both faces, from one 1024² atlas of names drawn
+  with the engine's JetBrains Mono (16 rows). 23 in the sandbox's kilometre round the harbour.
 - **dropped kerbs:** each raised pavement slopes down to the carriageway over 1.6 m at both
   ends, its whole width, where people cross at the junction (1 in 12, step-free: #263). The
   open ends showed under the pavement.

@@ -35,6 +35,7 @@ use glam::{DVec2, Mat4, Vec3};
 use winit::keyboard::KeyCode;
 
 mod crowd;
+mod signs;
 mod walk;
 
 /// A tile's side, metres.
@@ -257,6 +258,8 @@ pub struct PlanScenario {
     /// Each mass's footprint (the world's x and z) and its top, for the walker's walls.
     walls: Vec<(Vec<glam::Vec2>, f32)>,
     walk_on_start: bool,
+    /// The names the fingerposts' blades carry, a row of their atlas each.
+    sign_names: Vec<String>,
     /// Seconds into the run at which to board the nearest tram (scripted rides).
     ride_after: Option<f64>,
     crowd: Option<crowd::Crowd>,
@@ -617,6 +620,34 @@ impl PlanScenario {
                 kit_instances.push((id, at, 0));
             }
         }
+        // Fingerposts at the avenues' junctions where the kit stands, on the pavement's level.
+        let (signs, sign_names) = match detail {
+            Some(d) => signs::place(plan, d.centre, d.radius, |p| {
+                !trunks.any_within(p, 1.5, |_| false)
+            }),
+            None => (Vec::new(), Vec::new()),
+        };
+        let kit_report = kit_report.map(|r| match signs.first() {
+            Some(s) => {
+                let w = world(size, s.pos, 0.0);
+                format!(
+                    "{r}; {} fingerposts, one at --view={:.1},1.8,{:.1}",
+                    signs.len(),
+                    w.x,
+                    w.z
+                )
+            }
+            None => r,
+        });
+        for sign in &signs {
+            kit_meshes.push(signs::mesh(sign));
+            let id = (kit_meshes.len() - 1) as u32;
+            kit_instances.push((
+                id,
+                Mat4::from_translation(world(size, sign.pos, 0.30)),
+                SIGN_GROUP,
+            ));
+        }
         // The tram stops, a platform by each track.
         if !trams.is_empty() {
             kit_meshes.push(forge_geom::furniture::tram_stop(PLATFORM));
@@ -659,6 +690,7 @@ impl PlanScenario {
                 .collect(),
             walk_on_start: false,
             ride_after: None,
+            sign_names,
             crowd: None,
             size,
             camera,
@@ -768,6 +800,8 @@ const PEOPLE_GROUPS: [&str; 8] = [
 /// The landmarks' material groups, after the kit's eight: the halls', the crane's.
 const HALL_GROUP: u8 = 8;
 const CRANE_GROUP: u8 = 9;
+/// The fingerposts' material group.
+const SIGN_GROUP: u8 = 10;
 /// The kit's key for a terrace's mesh (no grammar symbol is this high).
 const TERRACE: u16 = u16::MAX;
 /// How far each of a line's two tracks lies from its centreline, metres.
@@ -776,7 +810,7 @@ const TRACK_OFFSET: f64 = 1.6;
 /// two do not fight where they overlap at a junction.
 pub(crate) const AVENUE_LEVEL: f64 = 0.17;
 /// A dropped kerb's length, metres: 13 cm down over it, a slope of 1 in 12 (#263).
-const RAMP: f64 = 1.6;
+pub(crate) const RAMP: f64 = 1.6;
 /// A tram stop's platform, metres: a tram's length and a little.
 const PLATFORM: f32 = 36.0;
 /// The trams' sections: a cab, three passenger sections, a cab.
@@ -1764,6 +1798,31 @@ impl Scenario for PlanScenario {
             ],
         );
         kit_rows.push(materials.of("plan-kit-crane"));
+        // The fingerposts: their names' atlas on the blades' faces, a dark green pole, blue
+        // edges.
+        let names = materials.textures.add(&signs::atlas(&self.sign_names))?;
+        materials.add_rows(
+            "plan-kit-sign",
+            vec![
+                (
+                    "plan sign face".into(),
+                    RenderLayer {
+                        albedo_texture: Some(names),
+                        uv: Some(UvMapping::default()),
+                        ..colour([1.0, 1.0, 1.0], 20.0, 0.05)
+                    },
+                ),
+                (
+                    "plan sign pole".into(),
+                    colour([0.05, 0.09, 0.07], 40.0, 0.2),
+                ),
+                (
+                    "plan sign edge".into(),
+                    colour([0.03, 0.12, 0.33], 20.0, 0.05),
+                ),
+            ],
+        );
+        kit_rows.push(materials.of("plan-kit-sign"));
         // The trams' liveries: white bodies, dark glass, the line's colour as the stripe.
         let linear = |c: u8| (f32::from(c) / 255.0).powf(2.2);
         for (k, &group) in TRAM_GROUPS.iter().enumerate() {

@@ -352,6 +352,7 @@ dependencies = [
 name = "city-plan"
 version = "0.1.0"
 dependencies = [
+ "ab_glyph",
  "anyhow",
  "city-blocks",
  "clap",

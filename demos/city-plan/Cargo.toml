@@ -17,6 +17,7 @@ dlss = ["city-blocks/dlss"]
 nrd = ["city-blocks/nrd"]
 
 [dependencies]
+ab_glyph = { workspace = true }
 anyhow = { workspace = true }
 city-blocks = { workspace = true }
 clap = { workspace = true }
