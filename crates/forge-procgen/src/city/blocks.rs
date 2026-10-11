@@ -11,7 +11,7 @@ use glam::DVec2;
 
 use super::geom::{self, PointGrid};
 use super::graph::RoadGraph;
-use super::{DistrictSpec, LAND, Site, district_index};
+use super::{DistrictKind, DistrictSpec, LAND, Site, district_index};
 use crate::field::Field2;
 
 /// What a block holds.
@@ -140,12 +140,13 @@ pub fn edge_half_width(grid: &PointGrid, roads: &RoadGraph, a: DVec2, b: DVec2) 
         })
 }
 
-/// Each built block's courtyard: its outline moved in by half the widest street round it and its
+/// Each built block's and square's buildable outline on the building lines, and each built
+/// block's courtyard: its outline moved in by half the widest street round it and its
 /// district's building depth, when the block is deep enough for one.
 pub fn courtyards(blocks: &mut [Block], roads: &RoadGraph, districts: &[DistrictSpec], size: f64) {
     let grid = street_grid(roads, size);
     for b in blocks.iter_mut() {
-        if b.use_ != BlockUse::Built {
+        if !matches!(b.use_, BlockUse::Built | BlockUse::Square) {
             continue;
         }
         let n = b.polygon.len();
@@ -159,7 +160,10 @@ pub fn courtyards(blocks: &mut [Block], roads: &RoadGraph, districts: &[District
         if let Some(inside) = lines.clone().or_else(|| geom::inset(&b.polygon, least)) {
             b.buildable = inside;
         }
-        let Some(depth) = districts[b.district].building_depth() else {
+        let Some(depth) = districts[b.district]
+            .building_depth()
+            .filter(|_| b.use_ == BlockUse::Built)
+        else {
             continue;
         };
         // A building's depth behind the building lines, or behind the widest street's.
@@ -235,6 +239,59 @@ fn distance_to_block(p: DVec2, block: &Block) -> f64 {
     (0..n)
         .map(|i| geom::distance_to_segment(p, block.polygon[i], block.polygon[(i + 1) % n]))
         .fold(f64::MAX, f64::min)
+}
+
+/// Squares (#245): the built block nearest each anchor (a district's centre, a landmark), within
+/// 150 m and at most 2 ha, becomes a square; and in old towns, blocks of 600–3 000 m² at least
+/// `spacing` metres from any other square, the small squares of a Mediterranean town. Returns
+/// how many blocks became squares.
+pub fn add_squares(
+    blocks: &mut [Block],
+    anchors: &[DVec2],
+    districts: &[DistrictSpec],
+    spacing: f64,
+) -> usize {
+    let mut made = 0;
+    for &anchor in anchors {
+        let nearest = blocks
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.use_ == BlockUse::Built && b.area <= 20_000.0)
+            .map(|(i, b)| {
+                let d = if geom::contains(&b.polygon, anchor) {
+                    0.0
+                } else {
+                    b.centre.distance(anchor)
+                };
+                (d, i)
+            })
+            .filter(|&(d, _)| d <= 150.0)
+            .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        if let Some((_, i)) = nearest {
+            blocks[i].use_ = BlockUse::Square;
+            blocks[i].courtyard = None;
+            made += 1;
+        }
+    }
+    let mut squares: Vec<DVec2> = blocks
+        .iter()
+        .filter(|b| b.use_ == BlockUse::Square && b.area >= 600.0)
+        .map(|b| b.centre)
+        .collect();
+    for b in blocks.iter_mut() {
+        if b.use_ != BlockUse::Built
+            || districts[b.district].kind != DistrictKind::OldTown
+            || !(600.0..=3_000.0).contains(&b.area)
+            || squares.iter().any(|s| s.distance(b.centre) < spacing)
+        {
+            continue;
+        }
+        b.use_ = BlockUse::Square;
+        b.courtyard = None;
+        squares.push(b.centre);
+        made += 1;
+    }
+    made
 }
 
 /// Turns blocks into parks until every built block has a park of `min_area` within `reach`
@@ -442,6 +499,40 @@ mod tests {
         let total: f64 = lots.iter().map(|l| l.area).sum();
         assert!((total - 14_400.0).abs() < 1e-6, "{total}");
         assert!(lots.iter().any(|l| !l.frontage));
+    }
+
+    #[test]
+    fn squares_open_at_the_anchors_and_space_out_in_old_towns() {
+        let mut blocks: Vec<Block> = (0..10)
+            .map(|i| Block {
+                polygon: square(i as f64 * 50.0, 0.0, 45.0),
+                area: 2025.0,
+                centre: DVec2::new(i as f64 * 50.0 + 22.5, 22.5),
+                district: 0,
+                use_: BlockUse::Built,
+                courtyard: None,
+                buildable: square(i as f64 * 50.0, 0.0, 45.0),
+            })
+            .collect();
+        let mut district =
+            DistrictSpec::test(DVec2::ZERO, 1000.0, super::super::Pattern::Grid, 0.0);
+        district.kind = DistrictKind::OldTown;
+        let made = add_squares(
+            &mut blocks,
+            &[DVec2::new(122.0, 20.0)],
+            std::slice::from_ref(&district),
+            180.0,
+        );
+        // The anchor's block, then one in four blocks of the old town (180 m apart, 50 m a block).
+        assert_eq!(blocks[2].use_, BlockUse::Square);
+        let squares: Vec<usize> = (0..10)
+            .filter(|&i| blocks[i].use_ == BlockUse::Square)
+            .collect();
+        assert_eq!(made, squares.len());
+        for w in squares.windows(2) {
+            assert!(blocks[w[1]].centre.distance(blocks[w[0]].centre) >= 180.0 - 1e-9);
+        }
+        assert!(squares.len() >= 2, "{squares:?}");
     }
 
     #[test]

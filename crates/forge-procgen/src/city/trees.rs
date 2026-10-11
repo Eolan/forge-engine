@@ -105,6 +105,30 @@ pub fn trees(site: &Site, plan: &CityPlan, seed: u64) -> Vec<Tree> {
             &mut out,
         );
     }
+    // Squares of 0.15 ha or more: a row of plane trees 3 m inside their building lines, every
+    // 10 m, the middle left open.
+    for b in plan
+        .blocks
+        .iter()
+        .filter(|b| b.use_ == BlockUse::Square && b.area >= 1500.0)
+    {
+        let Some(ring) = geom::inset(&b.buildable, 3.0) else {
+            continue;
+        };
+        let mut closed = ring.clone();
+        closed.push(ring[0]);
+        for p in geom::resample(&closed, 10.0) {
+            if site.water_at(p) != LAND || junctions.any_within(p, 6.0, |_| false) {
+                continue;
+            }
+            out.push(Tree {
+                pos: p,
+                height: rng.range_f64(10.0, 14.0),
+                crown: rng.range_f64(3.2, 4.2),
+                setting: Setting::Street,
+            });
+        }
+    }
     // Courtyards: a looser grid.
     for b in plan.blocks.iter().filter(|b| b.use_ == BlockUse::Built) {
         if let Some(c) = &b.courtyard {

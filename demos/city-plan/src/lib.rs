@@ -358,6 +358,19 @@ impl PlanScenario {
                 seats = k.seats;
                 (k.meshes, k.instances, Some(report))
             });
+        // A fountain in the middle of each square of 0.15 ha or more.
+        let fountains: Vec<Mat4> = plan
+            .blocks
+            .iter()
+            .filter(|b| b.use_ == BlockUse::Square && b.area >= 1500.0)
+            .filter(|b| geom::contains(&b.polygon, b.centre))
+            .map(|b| Mat4::from_translation(world(size, b.centre, 0.16)))
+            .collect();
+        if !fountains.is_empty() {
+            kit_meshes.push(forge_geom::furniture::fountain());
+            let id = (kit_meshes.len() - 1) as u32;
+            kit_instances.extend(fountains.into_iter().map(|at| (id, at, 0)));
+        }
         // The tram stops, a platform by each track.
         if !trams.is_empty() {
             kit_meshes.push(forge_geom::furniture::tram_stop(PLATFORM));

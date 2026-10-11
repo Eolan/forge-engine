@@ -28,7 +28,7 @@ cargo run --release -p city-map -- --size 4000 --scale 2 --out captures/city
 | Street pattern | a tensor field: a grid per district at its angle, rings at radial squares, the water's tangents near the coast and rivers (Chen et al. 2008) | `city::tensor` |
 | Streets | main roads traced first (bridging rivers up to 260 m), then streets at each district's spacing; each stops half a block short of a parallel street, and its end joins the nearest street ahead | `city::streets` |
 | Road graph | streets cut where they cross or meet, ends snapped, dead ends under 60 m pruned; blocks as the graph's bounded faces | `city::graph` |
-| Blocks | quays where a face holds water; parks from park districts, then from the 3-30-300 rule (a park of 1 ha within 300 m of every built block); once the streets' profiles are known, a buildable outline per block on each street's building line (`geom::inset_by`) and a courtyard a building's depth inside it | `city::blocks` |
+| Blocks | quays where a face holds water; parks from park districts, then from the 3-30-300 rule (a park of 1 ha within 300 m of every built block); squares: the built block nearest each built district's centre and each landmark, and small ones through old towns 180 m apart (`add_squares`); once the streets' profiles are known, a buildable outline per block on each street's building line (`geom::inset_by`) and a courtyard a building's depth inside it | `city::blocks` |
 | Lots | recursive splits across each piece's long axis (Vanegas et al. 2012); only the pieces on a street are kept where a block has a courtyard | `city::blocks` |
 | Forest | ground above a height or steeper than a slope goes to the first reserve district (a real site's hills) | `city::district_field` |
 | Transit | tram lines by the shortest path through their waypoints, main roads preferred (a waypoint far from any main road snaps to the nearest street); stops every 450 m moved to nearby junctions; lines added until a target share of blocks has a stop within 400 m (`transit::cover`); boat crossings where a river runs long without a bridge; street profiles (tram avenue, avenue, shared, pedestrian, path) | `city::transit` |
@@ -47,14 +47,14 @@ router, and `forge_core::dmath` does the trigonometry. Two runs give the same di
 |---|---|
 | Land | 14.3 km² |
 | Main roads / streets | 59 km / 149 km, 8 bridges |
-| Built blocks / parks | 674 (mean 1.66 ha) / 48 |
-| Lots / blocks with a courtyard | 11 088 / 602 |
+| Built blocks / parks / squares | 663 (mean 1.66 ha) / 48 / 16 |
+| Lots / blocks with a courtyard | 10 986 / 592 |
 | Parks' share of the land | 10.5 % |
 | Built blocks with a 1 ha park within 300 m | 100 % |
 | Built blocks within 400 m of a tram stop | 45 % (two lines, no line added) |
 | Streets' share of the land | 21.5 % |
 | Tram lines | 7.8 km, 19 stops |
-| Masses / floor area | 12 935 / 18.3 km² (12 ms; floors capped by street width) |
+| Masses / floor area | 12 804 / 18.2 km² (12 ms; floors capped by street width) |
 
 | Stage | Time |
 |---|---|
@@ -276,6 +276,18 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
   the building's awnings.
 - **tram stops:** a 36 m platform level with the trams' floor by each track, and a glass
   shelter with a bench and a lit totem for the next trams' times.
+
+## Squares (#245)
+
+![The old town's piazza](images/city-plan-piazza.png)
+
+*The old town's piazza at 18:00: paved in limestone, its fountain in the middle, plane trees
+round it, shops on three sides.* The block nearest each built district's centre and each
+landmark becomes a square (within 150 m, at most 2 ha). So do the old towns' blocks of
+600–3 000 m² that stand 180 m from any other square: their small squares. Squares are paved,
+with a row of trees every 10 m, 3 m inside their building lines, and a fountain in the middle
+of those of 0.15 ha or more (`furniture::fountain`). The example has 16 squares, slivers
+included, and 9 fountains.
 
 ## Tiled roofs in the old towns
 

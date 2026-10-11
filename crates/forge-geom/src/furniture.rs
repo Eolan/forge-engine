@@ -137,6 +137,18 @@ fn prism(m: &mut TriMesh, c: Vec3, r: f32, t: f32, sides: u32, section: u8) {
     }
 }
 
+/// A square's fountain round the origin: an octagonal stone basin 6.4 m across, brimming with
+/// water ([`GLASS`]'s section), a column in its middle carrying a bowl.
+pub fn fountain() -> TriMesh {
+    let mut m = TriMesh::default();
+    prism(&mut m, Vec3::new(0.0, 0.5, 0.0), 3.2, 0.5, 8, STONE);
+    prism(&mut m, Vec3::new(0.0, 0.52, 0.0), 2.9, 0.02, 8, GLASS);
+    prism(&mut m, Vec3::new(0.0, 1.5, 0.0), 0.25, 1.0, 8, STONE);
+    prism(&mut m, Vec3::new(0.0, 1.65, 0.0), 0.9, 0.15, 8, STONE);
+    prism(&mut m, Vec3::new(0.0, 1.67, 0.0), 0.8, 0.02, 8, GLASS);
+    m
+}
+
 /// A tram stop's platform `length` metres along its track, 2.6 m deep and 28 cm high (level with
 /// a low-floor tram's floor), its edge on the track's side at `z = 0`. In its middle a shelter of
 /// glass on a steel frame with a bench, and a totem with the next trams' times.

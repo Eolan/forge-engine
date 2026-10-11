@@ -423,6 +423,8 @@ pub struct PlanStats {
     pub stops: usize,
     /// Boat crossings.
     pub crossings: usize,
+    /// Squares (slivers and piazzas).
+    pub squares: usize,
     /// The plan's digest (D-016): equal on every machine and thread count.
     pub digest: u64,
 }
@@ -605,6 +607,15 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
         params.park_min_area,
         params.park_share_cap,
     );
+    // Squares at the built districts' centres and the landmarks, and the old towns' small ones.
+    let anchors: Vec<DVec2> = params
+        .districts
+        .iter()
+        .filter(|d| d.kind.building_depth().is_some())
+        .map(|d| d.anchor)
+        .chain(params.landmarks.iter().map(|l| l.anchor))
+        .collect();
+    blocks::add_squares(&mut blocks, &anchors, &params.districts, 180.0);
     lap("blocks and parks", &mut timings);
 
     let mut tram_lines = transit::route_trams(&roads, &params.tram_lines, params.stop_spacing);

@@ -629,6 +629,11 @@ pub fn stats(site: &Site, plan: &CityPlan, params: &CityParams) -> PlanStats {
         / 1000.0;
     st.stops = stops.len();
     st.crossings = plan.crossings.len();
+    st.squares = plan
+        .blocks
+        .iter()
+        .filter(|b| b.use_ == BlockUse::Square)
+        .count();
     st.digest = digest(plan);
     st
 }
