@@ -11,6 +11,9 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  # The demos are built and tested on the owner's machine (tools/verify.sh), not here: CI
+  # builds and tests the engine crates and the tools, and Clippy still checks the demos compile.
+  NO_DEMOS: --exclude asteroids --exclude city-blocks --exclude city-plan --exclude island --exclude meshlets --exclude physics-lab --exclude planet --exclude task-bench
 
 jobs:
   check:
@@ -30,10 +33,10 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
       - name: Build
-        run: cargo build --release --workspace
+        run: cargo build --release --workspace ${{ env.NO_DEMOS }}
       - name: Credits (docs/credits-crates.md up to date)
         run: cargo run --release -p credits -- --check
       - name: Test
-        run: cargo test --release --workspace
+        run: cargo test --release --workspace ${{ env.NO_DEMOS }}
       - name: Clippy
         run: cargo clippy --release --all-features --all-targets -- -D warnings

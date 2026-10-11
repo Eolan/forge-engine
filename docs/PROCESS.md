@@ -489,7 +489,10 @@ reach the GPU, and in Tier 2, and put its lines in the report.
 - The owner merges (squash) or says "merge" and the process session merges. Once the flow
   is on, sessions stop pushing to `main` even though the admin bypass would let them.
 - CI (`.github/workflows/ci.yml`) builds, tests, lints and checks formatting on Windows and
-  Linux; GPU demos and captures run on the owner's machine, not in CI.
+  Linux; GPU demos and captures run on the owner's machine, not in CI. Since 2026-10-11 (the
+  owner's call, to shorten the wait) CI builds and tests the engine crates and the tools only:
+  the demos' tests run in the local gate (`tools/verify.sh`), and CI's Clippy still checks
+  that the demos compile.
 
 ## Context hygiene
 
