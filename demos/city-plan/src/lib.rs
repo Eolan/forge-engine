@@ -21,7 +21,7 @@ use forge_geom::MeshletMesh;
 use forge_geom::city::PropSpec;
 use forge_geom::procedural::TriMesh;
 use forge_procgen::city::mass::{Mass, Roof};
-use forge_procgen::city::{BlockUse, CityPlan, LAND, Site, geom};
+use forge_procgen::city::{BlockUse, CityPlan, LAGOON, SEA, Site, geom};
 use forge_render::MeshletScene;
 use forge_render::MeshletSceneBuilder;
 use glam::{DVec2, Mat4, Vec3};
@@ -173,6 +173,19 @@ impl PlanScenario {
             };
             tiles.flat(&block.polygon, 0.08, section, false);
         }
+        // The rivers as smooth strips over the ground, their beds drawn as land: the cells'
+        // staircase would show along the quays.
+        for river in &site.rivers {
+            let line = geom::resample(&river.centreline, 15.0);
+            let half = river.width * 0.5;
+            strip(
+                &mut tiles,
+                &offset_line(&line, half),
+                &offset_line(&line, -half),
+                0.04,
+                WATER,
+            );
+        }
         for e in &plan.roads.edges {
             ribbon(&mut tiles, &e.points, e.profile.width(), 0.16, STREET);
         }
@@ -215,10 +228,10 @@ fn ground_and_water(site: &Site, tiles: &mut Tiles) {
     for y in 0..n {
         let mut x = 0;
         while x < n {
-            let wet = water.get(x, y) != LAND;
+            let wet = is_open_water(water.get(x, y));
             let start = x;
             let tile_end = ((x / per_tile) + 1) * per_tile;
-            while x < n && x < tile_end && (water.get(x, y) != LAND) == wet {
+            while x < n && x < tile_end && is_open_water(water.get(x, y)) == wet {
                 x += 1;
             }
             let (x0, x1) = (start as f64 * s, x as f64 * s);
@@ -346,7 +359,7 @@ impl Scenario for PlanScenario {
                 ("plan paving".into(), colour([0.60, 0.57, 0.52], 16.0, 0.04)),
                 ("plan street".into(), colour([0.42, 0.41, 0.40], 14.0, 0.04)),
                 ("plan track".into(), colour([0.16, 0.16, 0.17], 60.0, 0.3)),
-                ("plan water".into(), colour([0.02, 0.06, 0.09], 900.0, 0.9)),
+                ("plan water".into(), colour([0.05, 0.12, 0.15], 900.0, 0.9)),
             ],
         );
         materials.add_rows(
@@ -434,5 +447,20 @@ impl Running for PlanRunning {
 
     fn title(&mut self) -> String {
         self.title.clone()
+    }
+}
+
+/// Whether a water code is the sea or a lagoon, drawn from the site's cells (rivers are drawn as
+/// strips).
+fn is_open_water(code: u8) -> bool {
+    code == SEA || code == LAGOON
+}
+
+/// A flat strip between two polylines of the same length, a quad between each pair of points,
+/// in the tile of each quad's first corner.
+fn strip(tiles: &mut Tiles, left: &[DVec2], right: &[DVec2], height: f64, section: u8) {
+    for i in 0..left.len().min(right.len()).saturating_sub(1) {
+        let quad = [left[i], left[i + 1], right[i + 1], right[i]];
+        tiles.flat(&quad, height, section, false);
     }
 }

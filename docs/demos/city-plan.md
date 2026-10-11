@@ -95,14 +95,15 @@ cargo run --release -p city-plan
 city-blocks' renderer (sky, clouds, ray-traced soft shadows, probes, TAA) through its scene
 interface.* `demos/city-plan` turns any plan and its masses into meshes in tiles of 250 m: the
 site's land and water as runs of cells, blocks and street ribbons, walls and roofs (green,
-solar, terrace). A private sandbox hands its own plan to `PlanScenario::new`.
+solar, terrace). The rivers are smooth strips along their centrelines; the sea and lagoons come
+from the site's cells. A private sandbox hands its own plan to `PlanScenario::new`.
 
 | | |
 |---|---|
-| Meshes / triangles | 483 / 177 k |
+| Meshes / triangles | 484 / 184 k |
 | Built and cooked | 1.3 s |
-| GPU frame at 2800 × 1575, this view | 3.43 ms (shading 0.68, the meshlet pass 0.13) |
-| p50 / p99 frame | 3.42 / 7.38 ms |
+| GPU frame at 2800 × 1575, this view | 3.33 ms |
+| p50 / p99 frame | 3.33 / 6.68 ms |
 
 ## Next (#245–#247)
 
