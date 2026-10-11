@@ -255,7 +255,14 @@ impl PlanScenario {
             );
         }
         for e in &plan.roads.edges {
-            ribbon(&mut tiles, &e.points, e.profile.width(), 0.16, STREET);
+            // Asphalt on the avenues' carriageways; stone on shared streets, lanes and paths.
+            let section = match e.profile {
+                forge_procgen::city::Profile::TramAvenue | forge_procgen::city::Profile::Avenue => {
+                    STREET
+                }
+                _ => PAVING,
+            };
+            ribbon(&mut tiles, &e.points, e.profile.width(), 0.16, section);
         }
         pavements(&mut tiles, plan);
         for line in &plan.tram_lines {
@@ -703,14 +710,53 @@ impl Scenario for PlanScenario {
     ) -> Result<(MeshletScene, Box<dyn Running>)> {
         let start = std::time::Instant::now();
         let mut materials = CityMaterials::new(&ctx.device)?;
+        // The ground's textures, projected from above, their repeats dividing a tile's 250 m so
+        // the tiles meet without a seam: pale gravel on the quays, grass, limestone paving,
+        // asphalt.
+        let mut ground = |[albedo, normal]: [textures::TextureData; 2]| {
+            Ok::<_, anyhow::Error>((
+                materials.textures.add(&albedo)?,
+                materials.textures.add(&normal)?,
+            ))
+        };
+        let gravel = ground(textures::gravel(31, 512))?;
+        let grass = ground(textures::grass(32, 512))?;
+        let paving = ground(textures::paving(33, 1024))?;
+        let asphalt = ground(textures::asphalt(34, 1024))?;
+        let textured = |layer: RenderLayer,
+                        (albedo, normal): (TextureId, TextureId),
+                        scale: f32,
+                        stochastic: bool| RenderLayer {
+            albedo_texture: Some(albedo),
+            normal_texture: Some(normal),
+            texture_scale: scale,
+            normal_strength: 1.0,
+            hex_tiling: stochastic,
+            ..layer
+        };
         materials.add_rows(
             "plan-ground",
             vec![
-                ("plan ground".into(), colour([0.52, 0.49, 0.44], 12.0, 0.03)),
-                ("plan garden".into(), colour([0.30, 0.38, 0.22], 6.0, 0.02)),
-                ("plan park".into(), colour([0.22, 0.36, 0.14], 6.0, 0.02)),
-                ("plan paving".into(), colour([0.60, 0.57, 0.52], 16.0, 0.04)),
-                ("plan street".into(), colour([0.42, 0.41, 0.40], 14.0, 0.04)),
+                (
+                    "plan ground".into(),
+                    textured(colour([1.9, 1.8, 1.65], 12.0, 0.03), gravel, 1.25, true),
+                ),
+                (
+                    "plan garden".into(),
+                    textured(colour([3.0, 3.1, 3.4], 6.0, 0.02), grass, 5.0, true),
+                ),
+                (
+                    "plan park".into(),
+                    textured(colour([2.6, 3.0, 3.2], 6.0, 0.02), grass, 5.0, true),
+                ),
+                (
+                    "plan paving".into(),
+                    textured(colour([1.0, 1.0, 1.0], 16.0, 0.04), paving, 2.5, false),
+                ),
+                (
+                    "plan street".into(),
+                    textured(colour([1.0, 1.0, 1.0], 14.0, 0.05), asphalt, 5.0, true),
+                ),
                 ("plan track".into(), colour([0.16, 0.16, 0.17], 60.0, 0.3)),
                 ("plan water".into(), colour([0.05, 0.12, 0.15], 900.0, 0.9)),
             ],

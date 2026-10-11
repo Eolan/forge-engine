@@ -290,6 +290,69 @@ pub fn brick(seed: u64, size: u32) -> [TextureData; 2] {
     ]
 }
 
+/// Stone paving: pale limestone slabs in running bond, 4 across and 6 rows per repeat, each
+/// slab its own tint and wear, in fine dark joints; for pavements, lanes and squares.
+pub fn paving(seed: u64, size: u32) -> [TextureData; 2] {
+    const ACROSS: f32 = 4.0;
+    const ROWS: f32 = 6.0;
+    const JOINT: f32 = 0.025; // of a slab's height
+    let cell = |u: f32, v: f32| {
+        let row = (v * ROWS).floor();
+        let shift = unit_f32(hash_cell2(seed ^ 0x5A1B, 0, row as i32)) * 0.6 + 0.2;
+        let x = u * ACROSS + if row as i32 % 2 == 0 { 0.0 } else { shift };
+        let col = x.floor().rem_euclid(ACROSS);
+        let (fx, fy) = (x.fract(), (v * ROWS).fract());
+        // Distance to the nearest joint in slab heights (a slab is 1.5 times as long as tall).
+        let edge = (fx.min(1.0 - fx) * ROWS / ACROSS).min(fy.min(1.0 - fy));
+        (col as i32, row as i32, edge)
+    };
+    let heights = grid(size, |u, v| {
+        let (col, row, edge) = cell(u, v);
+        let tilt = 0.15 * unit_f32(hash_cell2(seed ^ 0x711, col, row));
+        let inset = smoothstep(JOINT * 0.5, JOINT * 1.5, edge);
+        inset * (0.7 + tilt) + 0.15 * fbm(seed ^ 0xB2, u, v, 48, 3)
+    });
+    let colours = grid(size, |u, v| {
+        let (col, row, edge) = cell(u, v);
+        let stone = unit_f32(hash_cell2(seed, col, row));
+        let worn = unit_f32(hash_cell2(seed ^ 0x3E3, col, row));
+        let slab = mix3([0.64, 0.60, 0.53], [0.72, 0.68, 0.60], stone);
+        let slab = mix3(slab, [0.55, 0.52, 0.47], worn * worn * 0.5);
+        let grain = 0.92 + 0.16 * fbm(seed ^ 0x6A1, u, v, 96, 2);
+        let blot = 0.94 + 0.12 * fbm(seed ^ 0xB10, u, v, 6, 3);
+        let slab = slab.map(|c| c * grain * blot);
+        mix3(
+            [0.30, 0.29, 0.27],
+            slab,
+            smoothstep(JOINT * 0.5, JOINT * 1.5, edge),
+        )
+    });
+    [
+        albedo_texture("paving albedo", size, colours),
+        normal_texture("paving normal", size, &heights, size as f32 / 96.0),
+    ]
+}
+
+/// Asphalt: a dark binder with light aggregate showing through, worn paler in broad patches.
+pub fn asphalt(seed: u64, size: u32) -> [TextureData; 2] {
+    let heights = grid(size, |u, v| {
+        let stones = fbm(seed ^ 0xA66, u, v, 160, 2);
+        0.6 * smoothstep(0.55, 0.7, stones) + 0.4 * fbm(seed, u, v, 40, 3)
+    });
+    let colours = grid(size, |u, v| {
+        let stones = fbm(seed ^ 0xA66, u, v, 160, 2);
+        let aggregate = smoothstep(0.58, 0.72, stones);
+        let wear = fbm(seed ^ 0x3EA, u, v, 4, 4);
+        let base = 0.16 + 0.07 * wear;
+        let c = base + 0.14 * aggregate;
+        [c, c * 0.98, c * 0.95]
+    });
+    [
+        albedo_texture("asphalt albedo", size, colours),
+        normal_texture("asphalt normal", size, &heights, size as f32 / 512.0),
+    ]
+}
+
 /// Bays across and floors up in one repeat of [`facade`]'s textures.
 pub const FACADE_CELLS: u32 = 4;
 
