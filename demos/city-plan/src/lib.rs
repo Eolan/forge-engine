@@ -931,6 +931,21 @@ pub(crate) const RAMP: f64 = 1.6;
 /// The paved corners' level at a junction and the dropped kerbs' foot: a centimetre over the
 /// avenues' carriageway, which runs under them.
 const CORNER_LEVEL: f64 = AVENUE_LEVEL + 0.01;
+/// How far a kerb keeps from a tram line's centreline, metres: the outer track, half a car's
+/// width and half a metre for its sections' overhang on a curve and a margin.
+const SWEPT: f64 = TRACK_OFFSET + 1.35 + 0.5;
+
+/// The distance between segments `p q` and `a b`, zero where they cross.
+fn segment_gap(p: DVec2, q: DVec2, a: DVec2, b: DVec2) -> f64 {
+    if geom::segment_intersection(p, q, a, b).is_some() {
+        return 0.0;
+    }
+    geom::distance_to_segment(p, a, b)
+        .min(geom::distance_to_segment(q, a, b))
+        .min(geom::distance_to_segment(a, p, q))
+        .min(geom::distance_to_segment(b, p, q))
+}
+
 /// A tram stop's platform, metres: a tram's length and a little.
 const PLATFORM: f32 = 36.0;
 /// A stop's screen on its platform: on the totem's side towards the track, at eye height
@@ -2899,12 +2914,7 @@ pub fn street_camera(plan: &CityPlan, near: DVec2) -> Option<FlyCamera> {
 /// face towards it, cut back at each end by the widest street meeting there.
 fn pavements(tiles: &mut Tiles, plan: &CityPlan) {
     let size = tiles.size;
-    let mut widest = vec![0.0_f64; plan.roads.nodes.len()];
-    for e in &plan.roads.edges {
-        let half = e.profile.width() * 0.5;
-        widest[e.a as usize] = widest[e.a as usize].max(half);
-        widest[e.b as usize] = widest[e.b as usize].max(half);
-    }
+    let widest = widest_at(plan);
     for e in &plan.roads.edges {
         let pavement = e.profile.pavement();
         if pavement <= 0.0 {
@@ -3003,14 +3013,34 @@ fn pavements(tiles: &mut Tiles, plan: &CityPlan) {
             }
         }
     }
-    corners(tiles, plan, &widest);
+    for ring in corners(plan, &widest) {
+        tiles.flat(&ring, CORNER_LEVEL, PAVING, false);
+    }
 }
 
-/// The corners between two avenues' pavements at a junction, paved flush at the dropped kerbs'
-/// foot ([`CORNER_LEVEL`]): from the end of one pavement round the building corner to the end
-/// of the other, and in along the kerbs to where they meet. They were asphalt, the carriageway
-/// running on to the buildings, and the pavements' ends stood out (the owner's second walk).
-fn corners(tiles: &mut Tiles, plan: &CityPlan, widest: &[f64]) {
+/// Each avenue's half width at each junction: the widest street meeting there.
+fn widest_at(plan: &CityPlan) -> Vec<f64> {
+    let mut widest = vec![0.0_f64; plan.roads.nodes.len()];
+    for e in &plan.roads.edges {
+        let half = e.profile.width() * 0.5;
+        widest[e.a as usize] = widest[e.a as usize].max(half);
+        widest[e.b as usize] = widest[e.b as usize].max(half);
+    }
+    widest
+}
+
+/// The corners between two avenues' pavements at a junction, to pave flush at the dropped
+/// kerbs' foot ([`CORNER_LEVEL`]): from the end of one pavement round the building corner to the
+/// end of the other, and in along the kerbs to where they meet. They were asphalt, the
+/// carriageway running on to the buildings, and the pavements' ends stood out (the owner's
+/// second walk). Counter-clockwise rings.
+fn corners(plan: &CityPlan, widest: &[f64]) -> Vec<Vec<DVec2>> {
+    let mut rings = Vec::new();
+    let tracks: Vec<[DVec2; 2]> = plan
+        .tram_lines
+        .iter()
+        .flat_map(|l| l.points.windows(2).map(|w| [w[0], w[1]]))
+        .collect();
     // Each node's ways out with pavements: the unit direction, the half width, the pavement.
     let mut ways: Vec<Vec<(DVec2, f64, f64)>> = vec![Vec::new(); plan.roads.nodes.len()];
     for e in &plan.roads.edges {
@@ -3062,12 +3092,37 @@ fn corners(tiles: &mut Tiles, plan: &CityPlan, widest: &[f64]) {
             ) else {
                 continue;
             };
-            let corner = [
+            let (a_in, b_in) = (
                 o + a.0 * s + na * (a.1 - a.2),
+                o + b.0 * s + nb * (b.1 - b.2),
+            );
+            // Where a tram turns here, the corner's kerb is cut back towards the building to
+            // clear its swept path, as streets are round a tram curve (the owner: the tracks
+            // should use the junction, not the pavement).
+            let near: Vec<[DVec2; 2]> = tracks
+                .iter()
+                .filter(|w| geom::distance_to_segment(o, w[0], w[1]) < s + a.1.max(b.1) + 4.0)
+                .copied()
+                .collect();
+            let clear = |k: DVec2| {
+                near.iter().all(|w| {
+                    [(a_in, k), (k, b_in)]
+                        .iter()
+                        .all(|&(p, q)| segment_gap(p, q, w[0], w[1]) >= SWEPT)
+                })
+            };
+            let Some(kerb) = (0..=8)
+                .map(|t| kerb.lerp(wall, t as f64 / 8.0))
+                .find(|&k| clear(k))
+            else {
+                continue;
+            };
+            let corner = [
+                a_in,
                 o + a.0 * s + na * a.1,
                 wall,
                 o + b.0 * s + nb * b.1,
-                o + b.0 * s + nb * (b.1 - b.2),
+                b_in,
                 kerb,
             ];
             // A sound corner only: its points within the junction's reach.
@@ -3082,9 +3137,10 @@ fn corners(tiles: &mut Tiles, plan: &CityPlan, widest: &[f64]) {
             } else {
                 corner.to_vec()
             };
-            tiles.flat(&ring, CORNER_LEVEL, PAVING, false);
+            rings.push(ring);
         }
     }
+    rings
 }
 
 /// A street lamp 8 m tall: a hexagonal pole and an arm reaching 1.4 m along −z over the road, and
@@ -3213,4 +3269,34 @@ fn lamp_model(double: bool) -> TriMesh {
         triangle(&mut mesh, [lens[0], lens[2], lens[3]], -Vec3::Y, 1);
     }
     mesh
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use forge_procgen::city::{example, plan};
+
+    #[test]
+    fn paved_corners_keep_clear_of_the_trams() {
+        let size = 4000.0;
+        let city = plan(&example::site(size, 10.0), &example::params(size));
+        assert!(!city.tram_lines.is_empty());
+        let rings = corners(&city, &widest_at(&city));
+        assert!(rings.len() > 100, "{} corners", rings.len());
+        for ring in &rings {
+            for (i, &p) in ring.iter().enumerate() {
+                let q = ring[(i + 1) % ring.len()];
+                for line in &city.tram_lines {
+                    for w in line.points.windows(2) {
+                        // The ring's sides along the pavements' ends and the buildings may lie
+                        // on a tram avenue's kerb line; none crosses into the swept path.
+                        assert!(
+                            segment_gap(p, q, w[0], w[1]) > TRACK_OFFSET + 1.35,
+                            "a corner's side {p} {q} runs over a track"
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
