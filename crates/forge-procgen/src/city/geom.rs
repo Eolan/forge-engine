@@ -296,42 +296,59 @@ pub fn convex_hull(points: &[DVec2]) -> Vec<DVec2> {
 /// signed area. `None` when the result folds over itself or comes closer than `d` to the
 /// outline somewhere (a block too thin or too concave for it).
 pub fn inset(polygon: &[DVec2], d: f64) -> Option<Vec<DVec2>> {
+    inset_by(polygon, &vec![d; polygon.len()])
+}
+
+/// A polygon moved inwards by `d[i]` metres along its edge `i` (from vertex `i` to `i + 1`):
+/// a block inside the building lines of streets of different widths. As [`inset`] otherwise;
+/// where two neighbouring edges are nearly parallel the corner is the mean of their moved ends.
+pub fn inset_by(polygon: &[DVec2], d: &[f64]) -> Option<Vec<DVec2>> {
     let n = polygon.len();
-    if n < 3 || signed_area(polygon) <= 0.0 {
+    if n < 3 || d.len() != n || signed_area(polygon) <= 0.0 {
         return None;
     }
-    // Each edge's line moved inwards (to its left, the inside of a positive polygon).
-    let lines: Vec<(DVec2, DVec2)> = (0..n)
+    // Each edge's line moved inwards (to its left, the inside of a positive polygon), with the
+    // vertex it starts from.
+    let lines: Vec<(DVec2, DVec2, f64, DVec2)> = (0..n)
         .filter_map(|i| {
             let (a, b) = (polygon[i], polygon[(i + 1) % n]);
             let t = (b - a).normalize_or_zero();
             (t != DVec2::ZERO).then(|| {
                 let normal = DVec2::new(-t.y, t.x);
-                (a + normal * d, t)
+                (a + normal * d[i], t, d[i], a)
             })
         })
         .collect();
     let m = lines.len();
     let mut out = Vec::with_capacity(m);
     for i in 0..m {
-        let (p, t) = lines[(i + m - 1) % m];
-        let (q, u) = lines[i];
+        let (p, t, dp, _) = lines[(i + m - 1) % m];
+        let (q, u, dq, corner) = lines[i];
         let denom = cross(t, u);
+        let mean = (p + t * (corner - p).dot(t) + q) * 0.5;
         if denom.abs() < 1e-6 {
-            out.push(q);
+            out.push(mean);
             continue;
         }
         let s = cross(q - p, u) / denom;
-        out.push(p + t * s);
+        let mitre = p + t * s;
+        // A long mitre where the edges nearly line up: their moved ends' mean instead.
+        out.push(if mitre.distance(corner) > 3.0 * dp.max(dq) {
+            mean
+        } else {
+            mitre
+        });
     }
     let area = signed_area(&out);
     if area <= 0.0 || area > signed_area(polygon) {
         return None;
     }
-    // Every corner inside the outline and at least ~d from it.
+    // Every corner inside the outline and at least ~the smallest inset from it.
+    let least = d.iter().copied().fold(f64::MAX, f64::min);
     let ok = out.iter().all(|&v| {
         contains(polygon, v)
-            && (0..n).all(|i| distance_to_segment(v, polygon[i], polygon[(i + 1) % n]) > d * 0.8)
+            && (0..n)
+                .all(|i| distance_to_segment(v, polygon[i], polygon[(i + 1) % n]) > least * 0.8)
     });
     // And no two non-adjacent edges cross.
     let crossing = (0..m).any(|i| {

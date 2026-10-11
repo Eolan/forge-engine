@@ -48,13 +48,13 @@ router, and `forge_core::dmath` does the trigonometry. Two runs give the same di
 | Land | 14.3 km² |
 | Main roads / streets | 59 km / 149 km, 8 bridges |
 | Built blocks / parks | 674 (mean 1.66 ha) / 48 |
-| Lots / blocks with a courtyard | 13 323 / 563 |
+| Lots / blocks with a courtyard | 11 088 / 602 |
 | Parks' share of the land | 10.5 % |
 | Built blocks with a 1 ha park within 300 m | 100 % |
 | Built blocks within 400 m of a tram stop | 45 % (two lines, no line added) |
 | Streets' share of the land | 21.5 % |
 | Tram lines | 7.8 km, 19 stops |
-| Masses / floor area | 14 807 / 20.5 km² (14 ms; floors capped by street width) |
+| Masses / floor area | 12 935 / 18.3 km² (12 ms; floors capped by street width) |
 
 | Stage | Time |
 |---|---|
@@ -197,20 +197,35 @@ neighbours differ.
 
 | The kit within 450 m of the avenue view (example city) | |
 |---|---|
-| Buildings / faces / terminals | 1 243 / 5 049 / 159 521 |
-| Instances / unique modules | 27 326 / 14 (8.3 M instanced triangles) |
-| Merged triangles added (walls, bands, cornices) | 355 k |
-| Derived and assembled | 71 ms (one thread) |
+| Buildings / faces / terminals | 1 116 / 4 719 / 171 494 |
+| Instances / unique modules | 29 600 / 14 (8.2 M instanced triangles) |
+| Merged triangles added (walls, bands, cornices) | 383 k |
+| Derived and assembled | 75 ms (one thread) |
 | Longest run of one opening along a floor of a street front | 11 |
-| GPU frame at 2800 × 1575, this view, best of 3 | 3.76 ms (3.42 ms with `--detail 0`) |
-| Scene built and cooked | 2.96 s (2.56 s) |
+| GPU frame at 2800 × 1575, this view, best of 3 | 3.78 ms (3.42 ms with `--detail 0`) |
+| Scene built and cooked | 2.79 s (2.35 s) |
 
 ![Faces round the centre](images/city-plan-faces.png)
 
 *The component split round the example's centre: street faces red, courtyard faces blue, party
-walls grey, entrances as dots, corners in yellow. Lots without a courtyard are now built along
-every street they front (a strip along each), so a block between two streets has two
-fronts; 14 807 masses instead of 14 700.*
+walls grey, entrances as dots, corners in yellow.*
+
+**Perimeter blocks, closed.** The first street views showed the avenues lined with gardens and
+the backs of buildings. Lots were cut from the block's outline on the streets' centrelines, so
+a lot on a 28 m avenue kept a metre or two behind the building line, and the courtyard's
+convex hull ate the buildings along concave sides. Now:
+- each block gets a buildable outline, moved in to each street's building line
+  (`geom::inset_by`);
+- lots are cut from that outline;
+- every lot is built as strips of its district's building depth along each street it fronts:
+  a lot between two streets has two fronts, and a corner lot wraps its corner;
+- the courtyard is the buildable outline moved in by that depth.
+
+The blocks close round their courtyards and the avenues are lined on both sides:
+- masses: 12 935 (was 14 807);
+- floors: 18.3 km² (was 20.5, now one building deep rather than up to 20 m);
+- blocks with a courtyard: 602 (was 563);
+- blocks under their green area: 83 (was 143).
 
 **The trees, sized to their streets.** Mature planes of 11–15 m line the avenues, 7–10 m trees
 the shared streets and 5–7 m trees the lanes. Each instance is scaled by its own crown

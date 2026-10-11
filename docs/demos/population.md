@@ -23,25 +23,25 @@ cargo run --release -p population-bench -- --days 2
 
 | | |
 |---|---|
-| Places | 36 256 |
-| People | 331 429, 36 bytes each (11.9 MB) |
-| Generation | 2.5 s |
-| Events | 6.4 a person a day; 1.6 µs each |
-| Two game days | 6.7 s |
-| A game hour of 15 real minutes asks | 99 events a real second: 0.016 % of one core |
+| Places | 28 425 |
+| People | 295 789, 36 bytes each (10.6 MB) |
+| Generation | 1.9 s |
+| Events | 6.4 a person a day; 0.65 µs each |
+| Two game days | 2.5 s |
+| A game hour of 15 real minutes asks | 88 events a real second: 0.006 % of one core |
 
 Where everyone is, by game hour (weekday, %):
 
 | Hour | Home | Work or school | Shops | Cafés | Bars | Parks | Travelling |
 |---|---|---|---|---|---|---|---|
 | 03 | 100.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 |
-| 08 | 42.3 | 44.3 | 0.0 | 0.0 | 0.0 | 0.0 | 13.4 |
-| 11 | 26.1 | 68.9 | 4.7 | 0.0 | 0.0 | 0.0 | 0.3 |
+| 08 | 42.3 | 43.9 | 0.0 | 0.0 | 0.0 | 0.0 | 13.7 |
+| 11 | 26.0 | 68.9 | 4.6 | 0.0 | 0.0 | 0.0 | 0.5 |
 | 13 | 31.1 | 55.5 | 0.0 | 13.4 | 0.0 | 0.0 | 0.0 |
-| 16 | 18.5 | 68.9 | 1.0 | 2.2 | 0.0 | 8.2 | 1.2 |
-| 18 | 60.7 | 14.9 | 4.3 | 5.3 | 4.1 | 5.4 | 5.2 |
-| 20 | 87.5 | 0.0 | 0.0 | 7.0 | 5.4 | 0.0 | 0.0 |
-| 22 | 88.2 | 3.0 | 0.0 | 3.3 | 5.3 | 0.0 | 0.2 |
+| 16 | 18.5 | 68.9 | 1.0 | 2.1 | 0.0 | 8.2 | 1.3 |
+| 18 | 60.7 | 14.9 | 4.3 | 5.3 | 4.1 | 5.5 | 5.2 |
+| 20 | 87.5 | 0.0 | 0.0 | 7.0 | 5.5 | 0.0 | 0.0 |
+| 22 | 88.0 | 3.0 | 0.0 | 3.3 | 5.3 | 0.0 | 0.4 |
 
 Night workers (3 %) are at work at night. The same seed gives the same day to the bit (a test
 compares the digests).

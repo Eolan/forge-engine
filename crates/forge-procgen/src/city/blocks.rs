@@ -43,6 +43,10 @@ pub struct Block {
     /// Its courtyard: the outline moved in by the street and a building's depth, when the
     /// block is deep enough for one.
     pub courtyard: Option<Vec<DVec2>>,
+    /// What can be built on: a built block's outline moved in to the building line of each
+    /// street round it (half the street's width), where its lots are cut. The outline itself
+    /// for the other blocks, and where the inset fails.
+    pub buildable: Vec<DVec2>,
 }
 
 /// A lot of a built block.
@@ -100,6 +104,7 @@ pub fn from_faces(
         let courtyard = None;
         let _ = kind;
         blocks.push(Block {
+            buildable: polygon.clone(),
             polygon,
             area,
             centre,
@@ -143,14 +148,25 @@ pub fn courtyards(blocks: &mut [Block], roads: &RoadGraph, districts: &[District
         if b.use_ != BlockUse::Built {
             continue;
         }
+        let n = b.polygon.len();
+        let halves: Vec<f64> = (0..n)
+            .map(|i| edge_half_width(&grid, roads, b.polygon[i], b.polygon[(i + 1) % n]))
+            .collect();
+        let half = halves.iter().copied().fold(STREET_HALF, f64::max);
+        // The building lines; a uniform inset by the narrowest street where they fold.
+        let least = halves.iter().copied().fold(f64::MAX, f64::min);
+        let lines = geom::inset_by(&b.polygon, &halves);
+        if let Some(inside) = lines.clone().or_else(|| geom::inset(&b.polygon, least)) {
+            b.buildable = inside;
+        }
         let Some(depth) = districts[b.district].kind.building_depth() else {
             continue;
         };
-        let n = b.polygon.len();
-        let half = (0..n)
-            .map(|i| edge_half_width(&grid, roads, b.polygon[i], b.polygon[(i + 1) % n]))
-            .fold(STREET_HALF, f64::max);
-        b.courtyard = geom::inset(&b.polygon, half + depth);
+        // A building's depth behind the building lines, or behind the widest street's.
+        b.courtyard = match &lines {
+            Some(inside) => geom::inset(inside, depth),
+            None => geom::inset(&b.polygon, half + depth),
+        };
     }
 }
 
@@ -322,7 +338,7 @@ pub fn subdivide(blocks: &[Block], districts: &[DistrictSpec], seed: u64) -> Vec
         let district = &districts[block.district];
         let target = district.lot_area;
         let mut rng = SplitMix64::new(seed ^ (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
-        let mut stack = vec![block.polygon.clone()];
+        let mut stack = vec![block.buildable.clone()];
         let mut pieces = Vec::new();
         while let Some(piece) = stack.pop() {
             let area = geom::signed_area(&piece).abs();
@@ -353,7 +369,7 @@ pub fn subdivide(blocks: &[Block], districts: &[DistrictSpec], seed: u64) -> Vec
         // courtyard. Without one (halls, thin blocks) the inner pieces stay as lots reached
         // through the others.
         for piece in pieces {
-            let frontage = touches_boundary(&piece, &block.polygon);
+            let frontage = touches_boundary(&piece, &block.buildable);
             if !frontage && block.courtyard.is_some() {
                 continue;
             }
@@ -397,6 +413,7 @@ mod tests {
         let polygon = square(0.0, 0.0, 120.0);
         let mut block = Block {
             courtyard: geom::inset(&polygon, STREET_HALF + 14.0),
+            buildable: polygon.clone(),
             polygon,
             area: 14_400.0,
             centre: DVec2::splat(60.0),
@@ -437,6 +454,7 @@ mod tests {
                 district: 0,
                 use_: BlockUse::Built,
                 courtyard: None,
+                buildable: square(i as f64 * 120.0, 0.0, 110.0),
             })
             .collect();
         add_parks(&mut blocks, 300.0, 10_000.0, 0.5);

@@ -95,37 +95,37 @@ pub fn faces(plan: &CityPlan, masses: &[Mass]) -> Vec<Face> {
             let sibling = by_lot[&m.lot].iter().any(|&j| {
                 j as usize != index && geom::contains(&masses[j as usize].footprint, probe)
             });
-            let kind = if sibling {
-                None
-            } else if !geom::contains(&lot.polygon, probe) {
-                let neighbour = lots_of[lot.block as usize]
-                    .iter()
-                    .any(|&l| l != m.lot && geom::contains(&plan.lots[l as usize].polygon, probe));
-                let courtyard = block
+            // The courtyard first, then a neighbour's lot, then the street: a wall within a
+            // pace of its street's building line. What is left looks onto the lot's own garden.
+            let courtyard = || {
+                block
                     .courtyard
                     .as_ref()
-                    .is_some_and(|c| geom::contains(c, probe));
-                Some(if courtyard {
-                    FaceKind::Court
-                } else if neighbour {
-                    FaceKind::Party
-                } else if geom::contains(&block.polygon, probe) {
-                    FaceKind::Court
-                } else {
-                    FaceKind::Street
-                })
-            } else {
+                    .is_some_and(|c| geom::contains(c, probe))
+            };
+            let neighbour = || {
+                lots_of[lot.block as usize]
+                    .iter()
+                    .any(|&l| l != m.lot && geom::contains(&plan.lots[l as usize].polygon, probe))
+            };
+            let on_street = || {
                 let k = block.polygon.len();
-                let on_street = (0..k).any(|e| {
+                (0..k).any(|e| {
                     let (p, q) = (block.polygon[e], block.polygon[(e + 1) % k]);
                     let half = edge_half_width(&streets, &plan.roads, p, q);
                     geom::distance_to_segment(mid, p, q) < half + 1.5
-                });
-                Some(if on_street {
-                    FaceKind::Street
-                } else {
-                    FaceKind::Court
                 })
+            };
+            let kind = if sibling {
+                None
+            } else if courtyard() {
+                Some(FaceKind::Court)
+            } else if neighbour() {
+                Some(FaceKind::Party)
+            } else if on_street() {
+                Some(FaceKind::Street)
+            } else {
+                Some(FaceKind::Court)
             };
             kinds.push(kind);
         }

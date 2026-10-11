@@ -71,21 +71,24 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
         if hi == 0 {
             continue;
         }
-        let Some((a, t)) = frontage(&lot.polygon, &block.polygon) else {
+        let outline = &block.buildable;
+        let Some((a, t)) = frontage(&lot.polygon, outline) else {
             continue;
         };
-        // The lot inside the building line: cut by each block edge it touches, moved in by half
-        // a street (an inset of the whole outline fails on curved, concave blocks). Less the
-        // courtyard, the pieces close round the block's corners.
+        // The lot inside the building line. Lots are cut from the block's buildable outline,
+        // already on the building lines; where that outline fell back to the streets'
+        // centrelines, each edge the lot touches cuts it by what is left of half its street.
         let mut inside = lot.polygon.clone();
-        let n = block.polygon.len();
-        // The block edges the lot fronts for 3 m or more, with their half-widths, longest first.
+        let n = outline.len();
+        let m = block.polygon.len();
+        // The edges the lot fronts for 3 m or more, with what is left of their streets' half
+        // widths, longest first.
         let mut fronts: Vec<(DVec2, DVec2, f64, f64)> = Vec::new();
         for i in 0..n {
             if inside.len() < 3 {
                 break;
             }
-            let (p, q) = (block.polygon[i], block.polygon[(i + 1) % n]);
+            let (p, q) = (outline[i], outline[(i + 1) % n]);
             let edge = (q - p).normalize_or_zero();
             let touches = lot
                 .polygon
@@ -95,7 +98,13 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
                 continue;
             }
             let inward = DVec2::new(-edge.y, edge.x);
-            let half = edge_half_width(&streets, &plan.roads, p, q);
+            let mid = (p + q) * 0.5;
+            let moved = (0..m)
+                .map(|j| {
+                    geom::distance_to_segment(mid, block.polygon[j], block.polygon[(j + 1) % m])
+                })
+                .fold(f64::MAX, f64::min);
+            let half = (edge_half_width(&streets, &plan.roads, p, q) - moved).max(0.0);
             inside = geom::clip_half_plane(&inside, p + inward * half, edge);
             let shared = shared_length(&lot.polygon, p, q);
             if shared >= 3.0 {
@@ -103,12 +112,12 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
             }
         }
         fronts.sort_by(|x, y| y.3.total_cmp(&x.3));
-        let pieces = match (&block.courtyard, district.kind.building_depth()) {
-            (Some(courtyard), _) => outside_of(&inside, &geom::convex_hull(courtyard)),
-            // No courtyard fits: strips of a building's depth along each street the lot fronts,
-            // the longest frontage first, so a lot between two streets is built on both and a
-            // corner lot wraps its corner.
-            (None, Some(depth)) => {
+        // Strips of a building's depth along each street the lot fronts, the longest frontage
+        // first: a lot between two streets is built on both, a corner lot wraps its corner, and
+        // the courtyard (inset by the widest street round the block) stays clear. Subtracting
+        // the courtyard's convex hull instead ate the buildings along concave and curved sides.
+        let pieces = match district.kind.building_depth() {
+            Some(depth) => {
                 let mut rest = inside.clone();
                 let mut strips = Vec::new();
                 for &(p, q, half, _) in &fronts {
@@ -125,11 +134,18 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
                 }
                 strips
             }
-            (None, None) => vec![inside],
+            None => vec![inside],
         };
         let pieces: Vec<Vec<DVec2>> = pieces
             .into_iter()
             .filter(|p| p.len() >= 3 && geom::signed_area(p).abs() >= 20.0)
+            // Slivers a strip leaves in the courtyard where the street bends.
+            .filter(|p| {
+                block
+                    .courtyard
+                    .as_ref()
+                    .is_none_or(|c| !geom::contains(c, geom::centroid(p)))
+            })
             .map(|p| {
                 if geom::signed_area(&p) < 0.0 {
                     p.into_iter().rev().collect()
@@ -175,27 +191,6 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
         }
     }
     out
-}
-
-/// A convex-enough polygon less a convex hole: the pieces outside each of the hole's edges in
-/// turn.
-fn outside_of(polygon: &[DVec2], hole: &[DVec2]) -> Vec<Vec<DVec2>> {
-    let mut rest = polygon.to_vec();
-    let mut pieces = Vec::new();
-    let n = hole.len();
-    for i in 0..n {
-        if rest.len() < 3 {
-            break;
-        }
-        let (p, q) = (hole[i], hole[(i + 1) % n]);
-        let t = (q - p).normalize_or_zero();
-        let out = geom::clip_half_plane(&rest, p, -t);
-        if out.len() >= 3 {
-            pieces.push(out);
-        }
-        rest = geom::clip_half_plane(&rest, p, t);
-    }
-    pieces
 }
 
 /// How much of a lot's outline lies along the block edge from `a` to `b`, metres.
