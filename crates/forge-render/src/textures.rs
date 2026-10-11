@@ -290,10 +290,23 @@ pub fn brick(seed: u64, size: u32) -> [TextureData; 2] {
     ]
 }
 
-/// A facade's bay over one floor (D-059's city): pale plaster with a recessed window, its
-/// frame and sill, louvred shutters either side and a string course at the floor line. `u`
-/// runs across the bay, `v` down the floor; the row's colour tints it (the plaster's render).
-pub fn facade(seed: u64, size: u32) -> [TextureData; 2] {
+/// Bays across and floors up in one repeat of [`facade`]'s textures.
+pub const FACADE_CELLS: u32 = 4;
+
+/// A facade over [`FACADE_CELLS`] bays and floors (D-059's city): pale plaster, each bay's
+/// window recessed with its frame and sill, louvred shutters either side (closed over the
+/// window in about a quarter of them), a string course at each floor line. `u` runs across the
+/// bays, `v` down the floors; the row's colour tints it (the plaster's render). The third
+/// texture is the windows lit at night, about 40 % of those open, warm or cool: an emissive map.
+pub fn facade(seed: u64, size: u32) -> [TextureData; 3] {
+    let cells = FACADE_CELLS as f32;
+    // A cell's index and the place inside it.
+    let cell = |u: f32, v: f32| {
+        let (x, y) = (u * cells, v * cells);
+        (x.floor() as i32, y.floor() as i32, x.fract(), y.fract())
+    };
+    let closed = |cx: i32, cy: i32| unit_f32(hash_cell2(seed ^ 0xC105, cx, cy)) < 0.25;
+    let lit = |cx: i32, cy: i32| unit_f32(hash_cell2(seed ^ 0x117, cx, cy)) < 0.4;
     let window = |u: f32, v: f32| (0.30..0.70).contains(&u) && (0.20..0.78).contains(&v);
     let frame = |u: f32, v: f32| (0.28..0.72).contains(&u) && (0.18..0.80).contains(&v);
     let shutter = |u: f32, v: f32| {
@@ -301,44 +314,83 @@ pub fn facade(seed: u64, size: u32) -> [TextureData; 2] {
     };
     let sill = |u: f32, v: f32| (0.26..0.74).contains(&u) && (0.80..0.83).contains(&v);
     let course = |v: f32| v > 0.95;
+    let slats = |v: f32| ((v * 60.0).fract() - 0.5).abs();
     let heights = grid(size, |u, v| {
+        let (cx, cy, fu, fv) = cell(u, v);
         let grain = 0.08 * fbm(seed ^ 0xFA, u, v, 32, 3);
-        if window(u, v) {
+        if window(fu, fv) && closed(cx, cy) {
+            0.1 + 0.1 * slats(fv)
+        } else if window(fu, fv) {
             -0.8
-        } else if frame(u, v) {
+        } else if frame(fu, fv) {
             -0.3
-        } else if shutter(u, v) {
-            0.15 + 0.1 * ((v * 60.0).fract() - 0.5).abs()
-        } else if sill(u, v) || course(v) {
+        } else if shutter(fu, fv) && !closed(cx, cy) {
+            0.15 + 0.1 * slats(fv)
+        } else if sill(fu, fv) || course(fv) {
             0.35
         } else {
             grain
         }
     });
     let colours = grid(size, |u, v| {
+        let (cx, cy, fu, fv) = cell(u, v);
         let grime = 0.9 + 0.15 * fbm(seed ^ 0x6E1, u, v, 16, 3);
-        if window(u, v) {
+        let shutter_colour = |fv: f32| {
+            let slat = 0.85 + 0.15 * f32::from(u8::from((fv * 60.0).fract() > 0.5));
+            [0.20 * slat, 0.30 * slat, 0.25 * slat]
+        };
+        if window(fu, fv) && closed(cx, cy) {
+            shutter_colour(fv)
+        } else if window(fu, fv) {
             // Glass: dark, a little lighter at the top where it catches the sky.
             mix3(
                 [0.03, 0.04, 0.05],
                 [0.10, 0.12, 0.14],
-                1.0 - (v - 0.2) / 0.58,
+                1.0 - (fv - 0.2) / 0.58,
             )
-        } else if frame(u, v) {
+        } else if frame(fu, fv) {
             [0.85, 0.85, 0.82]
-        } else if shutter(u, v) {
-            let slat = 0.85 + 0.15 * ((v * 60.0).fract() > 0.5) as i32 as f32;
-            [0.20 * slat, 0.30 * slat, 0.25 * slat]
-        } else if sill(u, v) || course(v) {
+        } else if shutter(fu, fv) && !closed(cx, cy) {
+            shutter_colour(fv)
+        } else if sill(fu, fv) || course(fv) {
             [0.88, 0.86, 0.80]
         } else {
             [0.80 * grime, 0.79 * grime, 0.76 * grime]
         }
     });
+    let lights = grid(size, |u, v| {
+        let (cx, cy, fu, fv) = cell(u, v);
+        if window(fu, fv) && !closed(cx, cy) && lit(cx, cy) {
+            let warm = unit_f32(hash_cell2(seed ^ 0x3A2, cx, cy));
+            // Warm interiors mostly, a few cooler; a little dimmer towards the window's foot.
+            let c = mix3(
+                [1.0, 0.72, 0.42],
+                [0.85, 0.85, 0.9],
+                (warm - 0.75).max(0.0) * 4.0,
+            );
+            c.map(|k| k * (0.75 + 0.25 * (1.0 - fv)))
+        } else {
+            [0.0; 3]
+        }
+    });
     [
         albedo_texture("facade albedo", size, colours),
-        normal_texture("facade normal", size, &heights, size as f32 / 48.0),
+        normal_texture("facade normal", size, &heights, size as f32 / 192.0),
+        albedo_texture("facade lights", size, lights),
     ]
+}
+
+/// The lit shopfronts at night: [`shopfront`]'s glazing as an emissive map.
+pub fn shopfront_lights(size: u32) -> TextureData {
+    let glass = |u: f32, v: f32| (0.09..0.91).contains(&u) && (0.22..0.93).contains(&v);
+    let colours = grid(size, |u, v| {
+        if glass(u, v) && !(0.495..0.505).contains(&u) {
+            [1.0, 0.82, 0.6]
+        } else {
+            [0.0; 3]
+        }
+    });
+    albedo_texture("shopfront lights", size, colours)
 }
 
 /// A ground floor's bay of shopfront (D-059's city): a fascia band, a tall glazed front between

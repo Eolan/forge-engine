@@ -496,11 +496,11 @@ pub struct Args {
     /// The sun held where `--day` has it this far through the cycle (0 sunrise, 0.5 noon, 1
     /// sunset, 1.5 midnight), the exposure metered from the scene as `--day`'s.
     #[arg(long, conflicts_with = "day")]
-    time_of_day: Option<f32>,
+    pub time_of_day: Option<f32>,
     /// The Moon's age with `--day` and `--time-of-day`, in lunations: 0 new, 0.25 first
     /// quarter, 0.5 full (D-046; default 0.4, a waxing gibbous).
     #[arg(long)]
-    moon_age: Option<f32>,
+    pub moon_age: Option<f32>,
     /// The Moon's light as a soft unshadowed fill in the sky's light, instead of a key light
     /// with traced shadows like the sun's (D-046's other answer, to compare).
     #[arg(long)]

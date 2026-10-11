@@ -337,8 +337,8 @@ fn triangle_uv(
     mesh.sections.push(section);
 }
 
-/// A wall quad from `y0` to `y1`, its texture repeating every bay across (the bays centred on
-/// the wall) and every `floor` metres up from `y0`.
+/// A wall quad from `y0` to `y1`, its texture repeating every `repeat` bays across (the bays
+/// centred on the wall) and every `repeat` floors of `floor` metres up from `y0`.
 #[allow(clippy::too_many_arguments)]
 fn wall_band(
     mesh: &mut TriMesh,
@@ -346,13 +346,14 @@ fn wall_band(
     length: f64,
     (y0, y1): (f32, f32),
     floor: f32,
+    repeat: f32,
     out: Vec3,
     section: u8,
 ) {
     let bays = (length / BAY).floor().max(1.0);
     let offset = ((length - bays * BAY) * 0.5 / BAY) as f32;
-    let (u0, u1) = (-offset, (length / BAY) as f32 - offset);
-    let v = |y: f32| -(y - y0) / floor;
+    let (u0, u1) = (-offset / repeat, ((length / BAY) as f32 - offset) / repeat);
+    let v = |y: f32| -(y - y0) / floor / repeat;
     let (pa0, pb0) = (a + Vec3::Y * y0, b + Vec3::Y * y0);
     let (pa1, pb1) = (a + Vec3::Y * y1, b + Vec3::Y * y1);
     triangle_uv(
@@ -394,27 +395,23 @@ fn mass(tiles: &mut Tiles, m: &Mass) {
         let out = Vec3::new(t.y as f32, 0.0, -t.x as f32);
         let ends = (world(size, a, 0.0) - centre, world(size, b, 0.0) - centre);
         let length = a.distance(b);
-        let (lower, floor) = if shops {
-            (SHOP, ground)
+        let cells = textures::FACADE_CELLS as f32;
+        let (lower, floor, repeat) = if shops {
+            (SHOP, ground, 1.0)
         } else {
-            (WALL + tint, FLOOR as f32)
+            (WALL + tint, FLOOR as f32, cells)
         };
-        wall_band(
-            mesh,
-            ends,
-            length,
-            (0.0, ground.min(top)),
-            floor,
-            out,
-            lower,
-        );
+        let base = (0.0, ground.min(top));
+        wall_band(mesh, ends, length, base, floor, repeat, out, lower);
         if top > ground {
+            let band = (ground, top);
             wall_band(
                 mesh,
                 ends,
                 length,
-                (ground, top),
+                band,
                 FLOOR as f32,
+                cells,
                 out,
                 WALL + tint,
             );
@@ -473,23 +470,46 @@ impl Scenario for PlanScenario {
             ],
         );
         // The facades: a window bay and a shopfront, read by the walls' coordinates.
-        let [facade_albedo, facade_normal] = textures::facade(21, 512);
+        let [facade_albedo, facade_normal, facade_lights] = textures::facade(21, 1024);
         let [shop_albedo, shop_normal] = textures::shopfront(22, 512);
+        let shop_lights = textures::shopfront_lights(512);
         let facade = (
             materials.textures.add(&facade_albedo)?,
             materials.textures.add(&facade_normal)?,
+            materials.textures.add(&facade_lights)?,
         );
         let shop = (
             materials.textures.add(&shop_albedo)?,
             materials.textures.add(&shop_normal)?,
+            materials.textures.add(&shop_lights)?,
         );
-        let mapped = |rgb: [f32; 3], (albedo, normal): (TextureId, TextureId)| RenderLayer {
-            albedo_texture: Some(albedo),
-            normal_texture: Some(normal),
-            normal_strength: 1.0,
-            uv: Some(UvMapping::default()),
-            ..colour(rgb, 12.0, 0.04)
-        };
+        // Lit windows of about 40 cd/m² (behind curtains, seen from the street). The shading is per unit of the frame's reference
+        // illuminance (D-046: the sun's 128 klux by day, the Moon's tenths of a lux at night), so
+        // an emissive of L·π / reference gives L. A stopgap for a run held at one time of day
+        // (`--time-of-day`): step 5's lights give the renderer emissive light in absolute units.
+        let sun = forge_render::starfield::SUN_ILLUMINANCE_1AU;
+        let reference = args.time_of_day.map_or(sun, |t| {
+            let mut celestial = forge_render::night::Celestial::default();
+            if let Some(age) = args.moon_age {
+                celestial.moon_age = age;
+            }
+            forge_render::night::NightLights::new(&celestial.at(t, sun), sun).reference
+        });
+        let glow = 40.0 * std::f32::consts::PI / reference;
+        let mapped =
+            |rgb: [f32; 3], (albedo, normal, lights): (TextureId, TextureId, TextureId)| {
+                RenderLayer {
+                    albedo_texture: Some(albedo),
+                    normal_texture: Some(normal),
+                    normal_strength: 1.0,
+                    emissive: [glow; 3],
+                    uv: Some(UvMapping {
+                        emissive_texture: Some(lights),
+                        ..UvMapping::default()
+                    }),
+                    ..colour(rgb, 12.0, 0.04)
+                }
+            };
         materials.add_rows(
             "plan-mass",
             vec![

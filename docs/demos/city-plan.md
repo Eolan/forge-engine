@@ -129,6 +129,16 @@ from the site's cells. A private sandbox hands its own plan to `PlanScenario::ne
 band on the ground floor along avenues and lanes, window bays above, four render tints of the
 palette chosen by lot. Variety in the facades themselves comes with D-039's modules.*
 
+![Night, three ways](images/city-plan-night.png)
+
+*Midnight (`--time-of-day 1.5`), 35 m up: about 40 % of the open windows lit, warm or cool, and the
+shopfronts, from emissive maps beside the facade textures. Left, metered; middle, a fixed EV 3;
+right, without the probes. The probes take the windows' light into the city many times over
+(the walls and courtyards glow as by day), so night views run with `--no-probes` until step 5
+gives the renderer emissive light in absolute units and the probes take it right (#254). The
+emissive is scaled by the frame's reference illuminance for a run held at one time of day: a
+stopgap.*
+
 ## Next (#245–#247)
 
 - Building lines per street profile.
