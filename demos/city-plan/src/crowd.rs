@@ -87,6 +87,8 @@ pub struct Crowd {
     graph: Graph,
     plan_edges: Vec<(Vec<DVec2>, f64, f64)>,
     routes: HashMap<u32, Option<Route>>,
+    /// The parks' outlines: their visitors stand inside them.
+    parks: Vec<Vec<DVec2>>,
     size: f64,
 }
 
@@ -149,6 +151,13 @@ impl Crowd {
             graph: Graph { nodes, adj, near },
             plan_edges,
             routes: HashMap::new(),
+            parks: plan
+                .blocks
+                .iter()
+                .filter(|b| b.use_ == BlockUse::Park)
+                // Inside the streets round them: a park's outline runs along their centrelines.
+                .map(|b| geom::inset(&b.polygon, 9.0).unwrap_or_else(|| b.polygon.clone()))
+                .collect(),
             size: plan.size,
         }
     }
@@ -183,7 +192,8 @@ impl Crowd {
                         f64::from(q[1]) + jitter(s >> 8),
                     );
                     let mesh = (s as usize % GROUPS) * 2 + 1;
-                    if q.distance(c) <= REACH && out[mesh].len() < PER_MESH {
+                    let inside = self.parks.iter().any(|p| geom::contains(p, q));
+                    if inside && q.distance(c) <= REACH && out[mesh].len() < PER_MESH {
                         let at = Vec3::new((q.x - half) as f32, 0.08, (q.y - half) as f32);
                         out[mesh].push((at, ((s >> 20) as f32 / 4096.0) * std::f32::consts::TAU));
                     }
