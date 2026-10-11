@@ -105,19 +105,31 @@ pub fn trees(site: &Site, plan: &CityPlan, seed: u64) -> Vec<Tree> {
             &mut out,
         );
     }
+    // Clear of the landmarks that stand on quays: 45 m round their quay's land point.
+    let held: Vec<DVec2> = plan
+        .landmarks
+        .iter()
+        .filter_map(|l| l.square)
+        .filter(|&i| plan.blocks[i].use_ == BlockUse::Quay)
+        .map(|i| plan.blocks[i].centre)
+        .collect();
+    out.retain(|t| held.iter().all(|c| c.distance(t.pos) > 45.0));
     // Squares of 0.15 ha or more: a row of plane trees 3 m inside their building lines, every
     // 10 m, the middle left open; those of 0.5 ha or more a second row 11 m further in, an
     // alley of planes round them (a Provençal cours).
-    for b in plan
+    for (index, b) in plan
         .blocks
         .iter()
-        .filter(|b| b.use_ == BlockUse::Square && b.area >= 1500.0)
+        .enumerate()
+        .filter(|(_, b)| b.use_ == BlockUse::Square && b.area >= 1500.0)
     {
         let Some(outer) = geom::inset(&b.buildable, 3.0) else {
             continue;
         };
         let mut rings = vec![outer.clone()];
-        if b.area >= 5000.0 {
+        // A landmark's square keeps its outer row only: the building stands inside it.
+        let holds_landmark = plan.landmarks.iter().any(|l| l.square == Some(index));
+        if b.area >= 5000.0 && !holds_landmark {
             // The second row: the first drawn 11 m in towards the middle (a square is near
             // convex; an inset's corner checks refuse many).
             let c = geom::centroid(&outer);

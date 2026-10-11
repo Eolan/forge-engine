@@ -295,17 +295,29 @@ Squares are paved, with a row of trees every 10 m, 3 m inside their building lin
 fountain stands in the middle of those of 0.15 ha or more (`furniture::fountain`), grander on
 grander squares. The example has 12 squares, slivers included.
 
-**The landmarks** (`LandmarkKind`) find their square: the nearest of 0.15 ha or more within
-160 m of their anchor (`Landmark::square`). The first landmark with a model is the market hall
-(`forge_geom::landmarks::market_hall`), the iron and glass halls the Midi's old towns built on
-their squares:
-- a stone plinth, iron columns every bay on stone bases, girders at the eaves;
-- a pitched glass roof on iron rafters, with a glazed lantern along the ridge;
-- two rows of stalls under striped canvas, the sides left open.
+**The landmarks** (`LandmarkKind`) get their own square: the built block of 0.15–3.5 ha
+nearest their anchor becomes one. Each then stands on the nearest square of 0.15 ha or more
+within 160 m (`Landmark::square`); a waterside landmark without one takes the nearest quay
+within 250 m. Three have models (`forge_geom::landmarks`):
+- **the market hall,** the iron and glass halls the Midi's old towns built on their squares:
+  - a stone plinth, iron columns every bay on stone bases, girders at the eaves;
+  - a pitched glass roof on iron rafters, with a glazed lantern along the ridge;
+  - two rows of stalls under striped canvas, the sides left open;
+- **the terraced hall,** a long, low civic hall whose roof steps down in four public terraces
+  towards the nearest water, each step wrapped in a glazed band, glass balustrades and benches
+  on the terraces, a glazed ground floor under a colonnade (the example's harbour house);
+- **the gantry crane,** a shipyard crane kept: A-framed legs on rail bogies, the girder, a jib
+  over the nearest water with its stays, the trolley, its cab and its hook. It is drawn only
+  where it finds a site.
 
-It stands inside its square's tree rows, along the square's longest side, in its own material
-group (pale glazing, iron painted dark green) and in place of the fountain. The other landmarks
-are placed but not drawn yet.
+Each stands inside its square's outer tree row (the inner row and, on a quay, the trees within
+45 m give way), along the square's longest side, in its own material group, in place of the
+fountain. The others are placed but not drawn yet.
+
+![The harbour house](images/city-plan-harbour-house.png)
+
+*The example's harbour house on its square by the beach, its terraces stepping down towards
+the water.*
 
 ## Tiled roofs in the old towns
 

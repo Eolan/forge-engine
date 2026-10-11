@@ -181,7 +181,7 @@ pub fn params(size: f64) -> CityParams {
             LandmarkSpec {
                 name: "harbour house".into(),
                 anchor: at(0.84, 0.70),
-                kind: LandmarkKind::Other,
+                kind: LandmarkKind::TerracedHall,
             },
         ],
         park_reach: 300.0,

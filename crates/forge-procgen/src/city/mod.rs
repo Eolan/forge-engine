@@ -333,6 +333,10 @@ pub struct TramLineSpec {
 pub enum LandmarkKind {
     /// A covered market hall of iron and glass, standing on its square.
     MarketHall,
+    /// A long, low civic hall whose roof steps down in public terraces towards the water.
+    TerracedHall,
+    /// A shipyard gantry crane kept as a landmark, its jib over the water.
+    GantryCrane,
     /// Anything else: placed, not drawn yet.
     #[default]
     Other,
@@ -358,8 +362,9 @@ pub struct Landmark {
     pub pos: DVec2,
     /// What it is.
     pub kind: LandmarkKind,
-    /// The square it stands on, if one opens within 160 m of its anchor (an index into the
-    /// plan's blocks).
+    /// The block it stands on (an index into the plan's blocks): the nearest square of 0.15 ha
+    /// or more within 160 m of its anchor; for a waterside landmark (the terraced hall, the
+    /// crane) without one, the nearest quay within 250 m.
     pub square: Option<usize>,
 }
 
@@ -529,6 +534,29 @@ pub fn district_field(
     })
 }
 
+/// The block a landmark stands on ([`Landmark::square`]).
+fn landmark_site(blocks: &[Block], l: &LandmarkSpec) -> Option<usize> {
+    let nearest = |use_: BlockUse, min_area: f64, reach: f64| {
+        blocks
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.use_ == use_ && b.area >= min_area)
+            .map(|(i, b)| (b.centre.distance(l.anchor), i))
+            .filter(|&(d, _)| d <= reach)
+            .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)))
+            .map(|(_, i)| i)
+    };
+    let waterside = matches!(
+        l.kind,
+        LandmarkKind::TerracedHall | LandmarkKind::GantryCrane
+    );
+    nearest(BlockUse::Square, 1500.0, 160.0).or_else(|| {
+        waterside
+            .then(|| nearest(BlockUse::Quay, 2000.0, 250.0))
+            .flatten()
+    })
+}
+
 /// Makes the plan.
 pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
     let mut timings = Vec::new();
@@ -625,12 +653,18 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
         params.park_share_cap,
     );
     // Squares at the built districts' centres and the landmarks, and the old towns' small ones.
-    let anchors: Vec<DVec2> = params
+    // A district's square at most 1 ha; a landmark's 0.15–3.5 ha (a hall or a crane needs room).
+    let anchors: Vec<(DVec2, (f64, f64))> = params
         .districts
         .iter()
         .filter(|d| d.kind.building_depth().is_some())
-        .map(|d| d.anchor)
-        .chain(params.landmarks.iter().map(|l| l.anchor))
+        .map(|d| (d.anchor, (0.0, 10_000.0)))
+        .chain(
+            params
+                .landmarks
+                .iter()
+                .map(|l| (l.anchor, (1_500.0, 35_000.0))),
+        )
         .collect();
     blocks::add_squares(&mut blocks, &anchors, &params.districts, 180.0);
     lap("blocks and parks", &mut timings);
@@ -669,14 +703,7 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
             name: l.name.clone(),
             pos: transit::nearest_main_node(&roads, l.anchor).unwrap_or(l.anchor),
             kind: l.kind,
-            square: blocks
-                .iter()
-                .enumerate()
-                .filter(|(_, b)| b.use_ == BlockUse::Square && b.area >= 1500.0)
-                .map(|(i, b)| (b.centre.distance(l.anchor), i))
-                .filter(|&(d, _)| d <= 160.0)
-                .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)))
-                .map(|(_, i)| i),
+            square: landmark_site(&blocks, l),
         })
         .collect();
     lap("landmarks", &mut timings);

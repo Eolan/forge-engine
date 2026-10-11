@@ -358,23 +358,72 @@ impl PlanScenario {
                 seats = k.seats;
                 (k.meshes, k.instances, Some(report))
             });
-        // The market halls on their squares, inside the squares' tree rows, along their longest
-        // side.
+        // The landmarks with a model on their squares, inside the squares' tree rows, along their
+        // longest side: the terraced hall and the crane facing the nearest water with their low
+        // end or their jib.
         let mut hall_squares = Vec::new();
         for l in &plan.landmarks {
-            let (forge_procgen::city::LandmarkKind::MarketHall, Some(i)) = (l.kind, l.square)
-            else {
+            use forge_procgen::city::LandmarkKind;
+            let Some(i) = l.square else {
                 continue;
             };
             let b = &plan.blocks[i];
             let (axis, extent, centre) = geom::oriented_extent(&b.buildable);
-            let length = (extent.x - 30.0).clamp(18.0, 48.0) as f32;
-            let width = (extent.y - 30.0).clamp(12.0, 26.0) as f32;
-            kit_meshes.push(forge_geom::landmarks::market_hall(length, width));
+            // On a quay (it holds water): its land point, a fixed size, the water any way.
+            let on_quay = b.use_ == BlockUse::Quay;
+            let (centre, extent) = if on_quay {
+                (b.centre, DVec2::new(74.0, 44.0))
+            } else {
+                (centre, extent)
+            };
+            let to_water = |dir: DVec2| {
+                (1..40)
+                    .map(|k| f64::from(k) * 10.0)
+                    .find(|&s| site.water_at(centre + dir * s) != forge_procgen::city::LAND)
+                    .unwrap_or(f64::MAX)
+            };
+            let normal = DVec2::new(-axis.y, axis.x);
+            let ways: &[DVec2] = if on_quay {
+                &[axis, -axis, normal, -normal]
+            } else {
+                &[axis, -axis]
+            };
+            let seaward = ways
+                .iter()
+                .copied()
+                .min_by(|a, b| to_water(*a).total_cmp(&to_water(*b)))
+                .unwrap_or(axis);
+            let (mesh, group, dir) = match l.kind {
+                LandmarkKind::MarketHall => {
+                    let length = (extent.x - 30.0).clamp(18.0, 48.0) as f32;
+                    let width = (extent.y - 30.0).clamp(12.0, 26.0) as f32;
+                    (
+                        forge_geom::landmarks::market_hall(length, width),
+                        HALL_GROUP,
+                        axis,
+                    )
+                }
+                LandmarkKind::TerracedHall => {
+                    let length = (extent.x - 26.0).clamp(30.0, 80.0) as f32;
+                    let width = (extent.y - 26.0).clamp(14.0, 30.0) as f32;
+                    (
+                        forge_geom::landmarks::terraced_hall(length, width),
+                        HALL_GROUP,
+                        seaward,
+                    )
+                }
+                LandmarkKind::GantryCrane => (
+                    forge_geom::landmarks::gantry_crane(28.0, 30.0),
+                    CRANE_GROUP,
+                    seaward,
+                ),
+                LandmarkKind::Other => continue,
+            };
+            kit_meshes.push(mesh);
             let id = (kit_meshes.len() - 1) as u32;
-            let turn = glam::Quat::from_rotation_y((-axis.y).atan2(axis.x) as f32);
+            let turn = glam::Quat::from_rotation_y((-dir.y).atan2(dir.x) as f32);
             let at = Mat4::from_rotation_translation(turn, world(size, centre, 0.16));
-            kit_instances.push((id, at, HALL_GROUP));
+            kit_instances.push((id, at, group));
             hall_squares.push(i);
         }
         // A fountain in the middle of each other square of 0.15 ha or more.
@@ -515,8 +564,9 @@ const PEOPLE_GROUPS: [&str; 8] = [
     "plan-people-6",
     "plan-people-7",
 ];
-/// The market halls' material group, after the kit's eight.
+/// The landmarks' material groups, after the kit's eight: the halls', the crane's.
 const HALL_GROUP: u8 = 8;
+const CRANE_GROUP: u8 = 9;
 /// The kit's key for a terrace's mesh (no grammar symbol is this high).
 const TERRACE: u16 = u16::MAX;
 /// How far each of a line's two tracks lies from its centreline, metres.
@@ -1369,6 +1419,37 @@ impl Scenario for PlanScenario {
         );
         let mut kit_rows: Vec<_> = KIT_GROUPS.iter().map(|g| materials.of(g)).collect();
         kit_rows.push(materials.of("plan-kit-hall"));
+        // The crane's: steel painted shipyard red, dark bogies and cables.
+        materials.add_rows(
+            "plan-kit-crane",
+            vec![
+                ("plan crane render".into(), render([0.94, 0.88, 0.76])),
+                ("plan crane stone".into(), stone),
+                (
+                    "plan crane frame".into(),
+                    colour([0.12, 0.12, 0.13], 40.0, 0.15),
+                ),
+                ("plan crane glass".into(), glass(false)),
+                (
+                    "plan crane paint".into(),
+                    colour([0.55, 0.11, 0.07], 40.0, 0.2),
+                ),
+                (
+                    "plan crane steel".into(),
+                    colour([0.10, 0.10, 0.11], 40.0, 0.25),
+                ),
+                (
+                    "plan crane canvas".into(),
+                    colour([0.78, 0.30, 0.22], 6.0, 0.02),
+                ),
+                (
+                    "plan crane wood".into(),
+                    colour([0.40, 0.27, 0.16], 20.0, 0.05),
+                ),
+                ("plan crane party".into(), render([0.78, 0.72, 0.64])),
+            ],
+        );
+        kit_rows.push(materials.of("plan-kit-crane"));
         // The trams' liveries: white bodies, dark glass, the line's colour as the stripe.
         let linear = |c: u8| (f32::from(c) / 255.0).powf(2.2);
         for (k, &group) in TRAM_GROUPS.iter().enumerate() {

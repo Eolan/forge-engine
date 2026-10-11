@@ -242,17 +242,18 @@ fn distance_to_block(p: DVec2, block: &Block) -> f64 {
 }
 
 /// Squares (#245): the built block nearest each anchor (a district's centre, a landmark), within
-/// 150 m and at most 1 ha, becomes a square unless one already opens within 120 m; and in old
+/// 150 m and within the anchor's range of areas (m²), becomes a square unless one already opens
+/// within 120 m; and in old
 /// towns, blocks of 600–3 000 m² at least `spacing` metres from any other square, the small
 /// squares of a Mediterranean town. Returns how many blocks became squares.
 pub fn add_squares(
     blocks: &mut [Block],
-    anchors: &[DVec2],
+    anchors: &[(DVec2, (f64, f64))],
     districts: &[DistrictSpec],
     spacing: f64,
 ) -> usize {
     let mut made = 0;
-    for &anchor in anchors {
+    for &(anchor, (smallest, largest)) in anchors {
         // One square to a place: none where one already opens within 120 m.
         let near_one = blocks.iter().any(|b| {
             b.use_ == BlockUse::Square && b.area >= 600.0 && b.centre.distance(anchor) < 120.0
@@ -263,7 +264,7 @@ pub fn add_squares(
         let nearest = blocks
             .iter()
             .enumerate()
-            .filter(|(_, b)| b.use_ == BlockUse::Built && b.area <= 10_000.0)
+            .filter(|(_, b)| b.use_ == BlockUse::Built && (smallest..=largest).contains(&b.area))
             .map(|(i, b)| {
                 let d = if geom::contains(&b.polygon, anchor) {
                     0.0
@@ -526,7 +527,7 @@ mod tests {
         district.kind = DistrictKind::OldTown;
         let made = add_squares(
             &mut blocks,
-            &[DVec2::new(122.0, 20.0)],
+            &[(DVec2::new(122.0, 20.0), (0.0, 10_000.0))],
             std::slice::from_ref(&district),
             180.0,
         );

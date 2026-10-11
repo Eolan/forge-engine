@@ -1,11 +1,15 @@
-//! Landmark buildings as part programs: the first is a covered market hall of iron and glass, the
-//! kind the old towns of the Midi built on their squares in the nineteenth century. Every model
+//! Landmark buildings as part programs: a covered market hall of iron and glass, the
+//! kind the old towns of the Midi built on their squares in the nineteenth century; a long, low
+//! hall whose roof steps down in public terraces; a shipyard gantry crane kept. Every model
 //! uses the kit's section layout ([`crate::modules`]), so the kit's material groups dress it, and
 //! stands on `y = 0` round the origin, its length along `x`.
 
 use glam::Vec3;
 
-use crate::modules::{ALL, FABRIC, GLASS, METAL, NEG_Y, NO_BACK, POS_Y, STONE, WOOD, cuboid, quad};
+use crate::modules::{
+    ALL, FABRIC, GLASS, METAL, NEG_Y, NEG_Z, NO_BACK, POS_X, POS_Y, POS_Z, SHUTTER, STONE, WOOD,
+    cuboid, quad,
+};
 use crate::procedural::TriMesh;
 
 /// A covered market hall `length` by `width` metres: a stone plinth, iron columns every bay with
@@ -180,10 +184,241 @@ pub fn market_hall(length: f32, width: f32) -> TriMesh {
     m
 }
 
+/// A long, low civic hall `length` by `width` metres whose roof is a public terrace stepping
+/// down towards `+x` in four steps (the end that faces the water): each step a white volume
+/// wrapped in a glazed band, a glass balustrade along each terrace's edge, a glazed ground floor.
+pub fn terraced_hall(length: f32, width: f32) -> TriMesh {
+    let mut m = TriMesh::default();
+    let (hl, hw) = (length * 0.5, width * 0.5);
+    let steps = 4;
+    let rise = 3.2;
+    let ground = 4.5;
+    // The glazed ground floor under the first step, set back a pace behind its columns.
+    cuboid(
+        &mut m,
+        Vec3::new(-hl + 1.0, 0.0, -hw + 1.0),
+        Vec3::new(hl - 1.0, ground, hw - 1.0),
+        GLASS,
+        ALL & !NEG_Y & !POS_Y,
+    );
+    let mut x = -hl;
+    while x <= hl + 1e-3 {
+        for z in [-hw + 0.3, hw - 0.3] {
+            cuboid(
+                &mut m,
+                Vec3::new(x - 0.2, 0.0, z - 0.2),
+                Vec3::new(x + 0.2, ground, z + 0.2),
+                STONE,
+                ALL & !NEG_Y & !POS_Y,
+            );
+        }
+        x += length / 10.0;
+    }
+    for k in 0..steps {
+        // Step k runs from the land end to a quarter less each time, a storey higher.
+        let x1 = hl - length * k as f32 / steps as f32;
+        let (y0, y1) = (ground + rise * k as f32, ground + rise * (k + 1) as f32);
+        cuboid(
+            &mut m,
+            Vec3::new(-hl, y0, -hw),
+            Vec3::new(x1, y1, hw),
+            STONE,
+            ALL & !NEG_Y,
+        );
+        // Its glazed band, a little proud of the walls.
+        let (b0, b1) = (y0 + 0.6, y1 - 0.5);
+        cuboid(
+            &mut m,
+            Vec3::new(-hl + 0.6, b0, -hw - 0.03),
+            Vec3::new(x1 - 0.6, b1, hw + 0.03),
+            GLASS,
+            POS_Z | NEG_Z,
+        );
+        cuboid(
+            &mut m,
+            Vec3::new(x1 - 0.1, b0, -hw + 0.6),
+            Vec3::new(x1 + 0.03, b1, hw - 0.6),
+            GLASS,
+            POS_X,
+        );
+        // The terrace's glass balustrade along its edge and sides.
+        let top = y1;
+        let next = hl - length * (k + 1) as f32 / steps as f32;
+        let (bx0, bx1) = (next.max(-hl), x1);
+        cuboid(
+            &mut m,
+            Vec3::new(bx1 - 0.08, top, -hw),
+            Vec3::new(bx1, top + 1.1, hw),
+            GLASS,
+            ALL,
+        );
+        for z in [-hw, hw - 0.08] {
+            cuboid(
+                &mut m,
+                Vec3::new(bx0, top, z),
+                Vec3::new(bx1, top + 1.1, z + 0.08),
+                GLASS,
+                ALL,
+            );
+        }
+        // The terrace's benches, one a bay.
+        let bays = ((bx1 - bx0) / 6.0).floor() as u32;
+        for b in 0..bays {
+            let cx = bx0 + 3.0 + b as f32 * 6.0;
+            cuboid(
+                &mut m,
+                Vec3::new(cx - 1.0, top, -0.3),
+                Vec3::new(cx + 1.0, top + 0.45, 0.3),
+                WOOD,
+                ALL & !NEG_Y,
+            );
+        }
+    }
+    m
+}
+
+/// A shipyard gantry crane kept as a landmark, `span` metres between its legs along `z` and
+/// `height` to its girder: two A-framed legs on their rail bogies, the girder across, the
+/// trolley and its glazed cab, and a jib reaching out over the water along `+x`. Its steel is
+/// [`SHUTTER`]'s section (the paint), its bogies and cables [`METAL`].
+pub fn gantry_crane(span: f32, height: f32) -> TriMesh {
+    let mut m = TriMesh::default();
+    let hs = span * 0.5;
+    let bar = |m: &mut TriMesh, a: Vec3, b: Vec3, w: f32, section: u8| {
+        let d = b - a;
+        let r = glam::Quat::from_rotation_arc(Vec3::Y, d.normalize());
+        let mut part = TriMesh::default();
+        cuboid(
+            &mut part,
+            Vec3::new(-w, -d.length() * 0.5, -w),
+            Vec3::new(w, d.length() * 0.5, w),
+            section,
+            ALL,
+        );
+        let base = m.positions.len() as u32;
+        let c = (a + b) * 0.5;
+        for (p, n) in part.positions.iter().zip(&part.normals) {
+            m.positions.push((c + r * Vec3::from(*p)).to_array());
+            m.normals.push((r * Vec3::from(*n)).to_array());
+        }
+        m.indices.extend(part.indices.iter().map(|i| base + i));
+        m.sections.extend(part.sections);
+    };
+    let girder = height;
+    for z in [-hs, hs] {
+        // The bogie on its rail, and the leg's A-frame up to the girder.
+        cuboid(
+            &mut m,
+            Vec3::new(-4.0, 0.0, z - 0.8),
+            Vec3::new(4.0, 1.4, z + 0.8),
+            METAL,
+            ALL & !NEG_Y,
+        );
+        for x in [-3.2, 3.2] {
+            bar(
+                &mut m,
+                Vec3::new(x, 1.4, z),
+                Vec3::new(x * 0.25, girder, z),
+                0.45,
+                SHUTTER,
+            );
+        }
+        bar(
+            &mut m,
+            Vec3::new(-2.0, girder * 0.45, z),
+            Vec3::new(2.0, girder * 0.45, z),
+            0.3,
+            SHUTTER,
+        );
+    }
+    // The girder, a box across the span and on along the jib over the water.
+    let reach = span * 0.9;
+    cuboid(
+        &mut m,
+        Vec3::new(-1.2, girder, -hs - 2.0),
+        Vec3::new(1.2, girder + 2.6, hs + 2.0),
+        SHUTTER,
+        ALL,
+    );
+    bar(
+        &mut m,
+        Vec3::new(0.0, girder + 1.3, 0.0),
+        Vec3::new(reach, girder + 1.0, 0.0),
+        0.9,
+        SHUTTER,
+    );
+    // The jib's stays from a mast over the middle.
+    bar(
+        &mut m,
+        Vec3::new(0.0, girder + 2.6, 0.0),
+        Vec3::new(0.0, girder + 12.0, 0.0),
+        0.5,
+        SHUTTER,
+    );
+    for target in [reach * 0.5, reach] {
+        bar(
+            &mut m,
+            Vec3::new(0.0, girder + 12.0, 0.0),
+            Vec3::new(target, girder + 1.8, 0.0),
+            0.08,
+            METAL,
+        );
+    }
+    // The trolley on the jib, its cab under it, the hook's cables.
+    let tx = reach * 0.6;
+    cuboid(
+        &mut m,
+        Vec3::new(tx - 2.0, girder - 1.2, -1.6),
+        Vec3::new(tx + 2.0, girder + 0.1, 1.6),
+        SHUTTER,
+        ALL,
+    );
+    cuboid(
+        &mut m,
+        Vec3::new(tx - 1.2, girder - 3.6, -1.1),
+        Vec3::new(tx + 1.2, girder - 1.2, 1.1),
+        GLASS,
+        ALL,
+    );
+    for z in [-0.4, 0.4] {
+        bar(
+            &mut m,
+            Vec3::new(tx, girder - 1.2, z),
+            Vec3::new(tx, girder * 0.35, z),
+            0.03,
+            METAL,
+        );
+    }
+    cuboid(
+        &mut m,
+        Vec3::new(tx - 0.6, girder * 0.35 - 1.0, -0.6),
+        Vec3::new(tx + 0.6, girder * 0.35, 0.6),
+        METAL,
+        ALL,
+    );
+    m
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::modules::SECTIONS;
+
+    #[test]
+    fn the_terraced_hall_and_the_crane_stand_within_their_sizes() {
+        for (m, half, top) in [
+            (terraced_hall(60.0, 24.0), Vec3::new(30.5, 0.0, 12.5), 20.0),
+            (gantry_crane(30.0, 32.0), Vec3::new(28.0, 0.0, 17.5), 47.0),
+        ] {
+            assert!(m.triangle_count() > 100);
+            assert!(m.sections.iter().all(|&s| s < SECTIONS));
+            for p in &m.positions {
+                let p = Vec3::from(*p);
+                assert!(p.x.abs() <= half.x && p.z.abs() <= half.z, "{p}");
+                assert!(p.y >= -0.01 && p.y <= top, "{p}");
+            }
+        }
+    }
 
     #[test]
     fn the_market_hall_stands_within_its_size() {
