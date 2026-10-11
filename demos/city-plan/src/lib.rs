@@ -738,3 +738,31 @@ fn tree_model() -> TriMesh {
     }
     mesh
 }
+
+/// A pedestrian's eye on the pavement of the avenue nearest `near`, 1.7 m up, looking along it.
+pub fn street_camera(plan: &CityPlan, near: DVec2) -> Option<FlyCamera> {
+    use forge_procgen::city::Profile;
+    let edge = plan
+        .roads
+        .edges
+        .iter()
+        .filter(|e| matches!(e.profile, Profile::TramAvenue | Profile::Avenue) && !e.bridge)
+        .min_by(|a, b| {
+            let da = geom::point_at(&a.points, a.length() * 0.5).distance_squared(near);
+            let db = geom::point_at(&b.points, b.length() * 0.5).distance_squared(near);
+            da.partial_cmp(&db).expect("finite")
+        })?;
+    let s = edge.length() * 0.3;
+    let t = geom::tangent_at(&edge.points, s);
+    let side = DVec2::new(-t.y, t.x) * (edge.profile.width() * 0.5 - 4.5);
+    let p = geom::point_at(&edge.points, s) + side;
+    let half = plan.size * 0.5;
+    Some(FlyCamera {
+        position: Vec3::new((p.x - half) as f32, 1.7, (p.y - half) as f32),
+        // Yaw 0 looks north (−z), a quarter turn west.
+        yaw: (-t.x).atan2(-t.y) as f32,
+        pitch: 0.05,
+        speed: 3.0,
+        ..FlyCamera::default()
+    })
+}

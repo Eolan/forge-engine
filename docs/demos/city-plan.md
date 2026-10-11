@@ -129,6 +129,12 @@ from the site's cells. A private sandbox hands its own plan to `PlanScenario::ne
 band on the ground floor along avenues and lanes, window bays above, four render tints of the
 palette chosen by lot. Variety in the facades themselves comes with D-039's modules.*
 
+![At eye height](images/city-plan-street.png)
+
+*At eye height on the river avenue (`--street`): shopfronts, shuttered window bays, the
+tree-lined quay and the river. Street level shows what comes next: pavements and kerbs, street
+furniture, finer trees, the modules (#247).*
+
 ![Night, three ways](images/city-plan-night.png)
 
 *Midnight (`--time-of-day 1.5`), 35 m up: about 40 % of the open windows lit, warm or cool, and the

@@ -17,6 +17,9 @@ struct Cli {
     /// The example's side, metres.
     #[arg(long, default_value_t = 4000.0)]
     size: f64,
+    /// Start on the pavement of the avenue nearest the centre, at eye height.
+    #[arg(long)]
+    street: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -42,6 +45,11 @@ fn main() -> anyhow::Result<()> {
         pitch: -0.32,
         speed: 40.0,
         ..FlyCamera::default()
+    };
+    let camera = if cli.street {
+        city_plan::street_camera(&plan, centre).unwrap_or(camera)
+    } else {
+        camera
     };
     let scenario = city_plan::PlanScenario::new(&site, &plan, &masses, &trees, camera, "city plan");
     city_blocks::run(cli.app, "forge city-plan", Some(Box::new(scenario)))
