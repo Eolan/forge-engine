@@ -23,13 +23,14 @@ cargo run --release -p population-bench -- --days 2
 
 | | |
 |---|---|
-| Places | 28 425 |
-| People | 295 789, 36 bytes each (10.6 MB) |
+| Places | 28 261 |
+| People | 295 307, 36 bytes each (10.6 MB) |
 | Generation | 1.9 s |
 | Events | 6.4 a person a day; 0.65 µs each |
 | Two game days | 2.5 s |
 | A game hour of 15 real minutes asks | 88 events a real second: 0.006 % of one core |
-| Six workers (`population::Shards`) | the two days in 0.49 s, 5.0 times one, the same digest to the bit |
+| Six workers (`population::Shards`) | the two days in 0.47 s, 5.0 times one, the same digest to the bit |
+| A snapshot (`Sim::snapshot`, `Sim::restore`) | 6.8 MB, 23 bytes a person, saved in 2 ms, restored in 7 ms, the same digest |
 
 Where everyone is, by game hour (weekday, %):
 
@@ -55,7 +56,7 @@ positions are equal at one, three and six workers, to the bit. The bench (six wo
 
 | | One worker | Six workers |
 |---|---|---|
-| The example, 295 789 people, two days | 2.45 s | 0.49 s (5.0 times) |
+| The example, 295 307 people, two days | 2.36 s | 0.47 s (5.0 times) |
 | A million-person city, two days | 8.5 s | 1.7 s (5.2 times) |
 | 4 074 555 people (`population-bench --scale 13.5`: the example's floors 13.5 times over), two days | 44.8 s | 8.2 s (5.5 times) |
 
@@ -76,6 +77,9 @@ lunch hour's cafés, the evening out.*
 - Places' capacities and opening hours; appointments between friends (the night out).
 - Routes on the streets and transit with link queues (#253).
 - The spatial index of who is where by cell, and the near tiers round a player.
-- Persistence: snapshots of the changed columns and the input log.
+- Persistence: the snapshot exists (what changes as people live, over the base generated again
+  from the seed; a test restores it mid-day and runs on to the same digest). Next: the input log
+  of what players change, compression (LZ4, a dependency to agree first), and snapshots of the
+  shards.
 - The cost per event: plans are made again on every event, 0.65 µs; caching a person's day would
   cut it, if a fast-forward needs it.

@@ -829,6 +829,156 @@ impl<'w> Sim<'w> {
         }
         h
     }
+
+    /// A snapshot of what changes as the people live (#250's persistence): where each is, where
+    /// bound and from where, since when, their day and their step in it, and the time of their
+    /// next event; with the game second and the events handled. Column by column, little-endian,
+    /// 23 bytes a person. Homes, work, roles, personalities and seeds are not in it: they are the
+    /// generated base, made again from the seed (D-053).
+    pub fn snapshot(&self) -> Vec<u8> {
+        let n = self.pop.len();
+        let mut next = vec![0 as GameSeconds; n];
+        for &Reverse((time, p)) in &self.queue {
+            next[p as usize] = time;
+        }
+        let mut out = Vec::with_capacity(SNAPSHOT_HEADER + n * SNAPSHOT_BYTES);
+        out.extend_from_slice(SNAPSHOT_MAGIC);
+        out.extend_from_slice(&SNAPSHOT_VERSION.to_le_bytes());
+        out.extend_from_slice(&(n as u32).to_le_bytes());
+        out.extend_from_slice(&self.now.to_le_bytes());
+        out.extend_from_slice(&self.events.to_le_bytes());
+        let pop = &self.pop;
+        for column in [&pop.at, &pop.dest, &pop.origin, &pop.since, &next] {
+            for v in column {
+                out.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        for v in &pop.day {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        out.extend_from_slice(&pop.step);
+        out
+    }
+
+    /// A population restored from a [`Sim::snapshot`] over its generated `base`.
+    pub fn restore(
+        world: &'w World,
+        base: Population,
+        bytes: &[u8],
+    ) -> Result<Self, SnapshotError> {
+        let mut r = Reader { bytes, at: 0 };
+        if r.take(4)? != SNAPSHOT_MAGIC {
+            return Err(SnapshotError::NotASnapshot);
+        }
+        let version = r.u32()?;
+        if version != SNAPSHOT_VERSION {
+            return Err(SnapshotError::Version(version));
+        }
+        let n = r.u32()? as usize;
+        if n != base.len() {
+            return Err(SnapshotError::People {
+                snapshot: n,
+                base: base.len(),
+            });
+        }
+        let now = r.u32()?;
+        let events = r.u64()?;
+        let mut pop = base;
+        let column = |r: &mut Reader| (0..n).map(|_| r.u32()).collect::<Result<Vec<_>, _>>();
+        pop.at = column(&mut r)?;
+        pop.dest = column(&mut r)?;
+        pop.origin = column(&mut r)?;
+        pop.since = column(&mut r)?;
+        let next = column(&mut r)?;
+        pop.day = (0..n)
+            .map(|_| r.take(2).map(|b| u16::from_le_bytes([b[0], b[1]])))
+            .collect::<Result<_, _>>()?;
+        pop.step = r.take(n)?.to_vec();
+        if r.at != bytes.len() {
+            return Err(SnapshotError::Length);
+        }
+        let queue = next
+            .iter()
+            .enumerate()
+            .map(|(p, &time)| Reverse((time, p as u32)))
+            .collect();
+        Ok(Self {
+            world,
+            pop,
+            queue,
+            now,
+            events,
+        })
+    }
+}
+
+/// The start of a population snapshot.
+const SNAPSHOT_MAGIC: &[u8; 4] = b"FPOP";
+/// Its layout's version.
+const SNAPSHOT_VERSION: u32 = 1;
+/// Its header's bytes: the magic, the version, the people, the game second, the events.
+pub const SNAPSHOT_HEADER: usize = 4 + 4 + 4 + 4 + 8;
+/// Its bytes a person: four `u32` columns, the next event's time, the day and the step.
+pub const SNAPSHOT_BYTES: usize = 4 * 4 + 4 + 2 + 1;
+
+/// Why a snapshot does not restore.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SnapshotError {
+    /// It does not start as a snapshot does.
+    NotASnapshot,
+    /// It is of another layout's version.
+    Version(u32),
+    /// It holds another number of people than the base it is restored over.
+    People {
+        /// Its people.
+        snapshot: usize,
+        /// The base's.
+        base: usize,
+    },
+    /// It ends early, or goes on past its end.
+    Length,
+}
+
+impl std::fmt::Display for SnapshotError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotASnapshot => write!(f, "not a population snapshot"),
+            Self::Version(v) => write!(f, "a snapshot of layout version {v}"),
+            Self::People { snapshot, base } => {
+                write!(f, "a snapshot of {snapshot} people over a base of {base}")
+            }
+            Self::Length => write!(f, "a snapshot of the wrong length"),
+        }
+    }
+}
+
+impl std::error::Error for SnapshotError {}
+
+/// Reads a snapshot's bytes in order.
+struct Reader<'a> {
+    bytes: &'a [u8],
+    at: usize,
+}
+
+impl<'a> Reader<'a> {
+    fn take(&mut self, n: usize) -> Result<&'a [u8], SnapshotError> {
+        let end = self.at.checked_add(n).ok_or(SnapshotError::Length)?;
+        let out = self.bytes.get(self.at..end).ok_or(SnapshotError::Length)?;
+        self.at = end;
+        Ok(out)
+    }
+
+    fn u32(&mut self) -> Result<u32, SnapshotError> {
+        self.take(4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
+
+    fn u64(&mut self) -> Result<u64, SnapshotError> {
+        let b = self.take(8)?;
+        let mut a = [0; 8];
+        a.copy_from_slice(b);
+        Ok(u64::from_le_bytes(a))
+    }
 }
 
 /// FNV-1a's offset basis.
@@ -959,6 +1109,37 @@ mod tests {
             (sim.digest(), sim.events)
         };
         assert_eq!(run(), run());
+    }
+
+    #[test]
+    fn a_snapshot_restored_runs_on_to_the_same_day() {
+        let world = town();
+        let pop = || generate(&world, &Mix::default(), Seed::new(9));
+        let mut straight = Sim::new(&world, pop());
+        straight.run_until(hm(13, 0));
+        let bytes = straight.snapshot();
+        assert_eq!(
+            bytes.len(),
+            SNAPSHOT_HEADER + straight.pop.len() * SNAPSHOT_BYTES
+        );
+        let mut restored = Sim::restore(&world, pop(), &bytes).expect("restores");
+        assert_eq!(restored.digest(), straight.digest());
+        for sim in [&mut straight, &mut restored] {
+            sim.run_until(DAY + hm(9, 0));
+        }
+        assert_eq!(restored.digest(), straight.digest());
+        assert_eq!(restored.events, straight.events);
+        // Damaged snapshots say why.
+        let mut short = bytes.clone();
+        short.pop();
+        assert_eq!(
+            Sim::restore(&world, pop(), &short).err(),
+            Some(SnapshotError::Length)
+        );
+        assert_eq!(
+            Sim::restore(&world, pop(), b"nope").err(),
+            Some(SnapshotError::NotASnapshot)
+        );
     }
 
     #[test]

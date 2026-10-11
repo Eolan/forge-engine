@@ -176,6 +176,26 @@ fn run(
         100.0 * (ran / f64::from(days)) / f64::from(DAY / 4),
     );
     out += &format!("digest {:016x}", sim.digest());
+    // A snapshot of the running state, restored over the base generated again (#250).
+    let t = Instant::now();
+    let bytes = sim.snapshot();
+    let saved = t.elapsed().as_secs_f64();
+    let base = population::generate(&world, &Mix::default(), Seed::new(2026));
+    let t = Instant::now();
+    let restored = Sim::restore(&world, base, &bytes).map(|r| r.digest());
+    let loaded = t.elapsed().as_secs_f64();
+    out += &format!(
+        "\nsnapshot: {:.1} MB ({} bytes a person) in {:.0} ms, restored in {:.0} ms, {}",
+        bytes.len() as f64 / 1e6,
+        population::SNAPSHOT_BYTES,
+        saved * 1e3,
+        loaded * 1e3,
+        match restored {
+            Ok(d) if d == sim.digest() => "the same digest".to_owned(),
+            Ok(_) => "DIFFERENT".to_owned(),
+            Err(e) => format!("not restored: {e}"),
+        }
+    );
     // The same days in shards on worker threads (#250): the same digest, faster.
     for workers in [6] {
         let pop = population::generate(&world, &Mix::default(), Seed::new(2026));

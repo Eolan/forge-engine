@@ -354,7 +354,7 @@ cargo run --release -p city-plan -- --street --people 16.3   # from 16:18
 *Top: from 16:18, the park's visitors standing about it; at 08:12, the morning's cyclists in the
 river avenue's lanes and walkers on its pavements. Bottom: at 20:00, a lane's café terraces; the
 evening's walkers.* `--people HOUR` builds the plan's population from the masses
-(`forge_sim::population`, 295 789 people, 2 s) and runs its day to that hour. Each frame:
+(`forge_sim::population`, 295 307 people, 2 s) and runs its day to that hour. Each frame:
 - **who is drawn:** people within 220 m of the camera, as placeholder figures
   (`forge_geom::figures`: blocky, in eight palettes, walking (a left stride, passing, a right
   stride, a pose every 0.7 m along the way), standing, riding a bike or
