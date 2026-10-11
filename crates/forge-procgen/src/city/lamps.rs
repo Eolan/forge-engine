@@ -26,7 +26,8 @@ pub struct Lamp {
 type LampRow = (f64, f64, f64, Option<fn(usize) -> bool>);
 
 /// No two lamps closer than this, metres: a street's lamps stop where another's already light.
-const APART: f64 = 12.0;
+/// Across an avenue's 6 m carriageway the two kerb rows' staggered lamps stand 11 m apart.
+const APART: f64 = 10.0;
 
 /// The plan's street lamps.
 pub fn lamps(site: &Site, plan: &CityPlan) -> Vec<Lamp> {

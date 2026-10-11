@@ -335,7 +335,7 @@ impl Profile {
     pub fn pavement(self) -> f64 {
         match self {
             Self::TramAvenue => 6.0,
-            Self::Avenue => 5.0,
+            Self::Avenue => 6.0,
             Self::Shared | Self::Pedestrian | Self::Path => 0.0,
         }
     }

@@ -50,17 +50,21 @@ pub fn workout_sites(plan: &CityPlan) -> Vec<(DVec2, DVec2)> {
 /// in conflict, a bit too many trees; one of each in turn).
 pub const KERB_SLOT: f64 = 8.0;
 
+/// How far a street tree's crown keeps from the building line, metres: clear of the windows
+/// (the owner, 2026-10-11: a canopy a few centimetres from the windows).
+pub const CROWN_CLEAR: f64 = 2.5;
+
 /// A kerb row: its offset from the centreline, and whether its slot `k` holds a lamp.
 pub type KerbRow = (f64, fn(usize) -> bool);
 
-/// An avenue's kerb rows (`None` for other profiles): each row's offset from the centreline (a
-/// metre into the pavement from the kerb), its slots every [`KERB_SLOT`] from half a slot in,
+/// An avenue's kerb rows (`None` for other profiles): each row's offset from the centreline (0.8
+/// m into the pavement from the kerb), its slots every [`KERB_SLOT`] from half a slot in,
 /// and on each row whether the slot `k` holds a lamp: odd slots on the left row, even ones on
 /// the right, so the two sides stagger.
 pub fn kerb_rows(profile: Profile) -> Option<[KerbRow; 2]> {
     match profile {
         Profile::TramAvenue | Profile::Avenue => {
-            let kerb = (profile.width() * 0.5 - profile.pavement() + 1.0).max(0.0);
+            let kerb = (profile.width() * 0.5 - profile.pavement() + 0.8).max(0.0);
             Some([(-kerb, |k| k % 2 == 1), (kerb, |k| k % 2 == 0)])
         }
         _ => None,
@@ -81,15 +85,16 @@ pub fn trees(site: &Site, plan: &CityPlan, seed: u64) -> Vec<Tree> {
             continue;
         }
         // Rows: their offsets from the centreline and the spacing, by profile; and the trees'
-        // heights and crowns: mature planes on the avenues, smaller trees on shared streets,
-        // small ones in the lanes. An avenue's rows stand by the kerb, a metre into each
+        // heights and crowns: trimmed street trees on the avenues, smaller ones on shared streets,
+        // small ones in the lanes. An avenue's rows stand by the kerb, 0.8 m into each
         // pavement (the owner, 2026-10-11: 2.5 m from the facades their crowns went into the
-        // buildings); a shared street's and a lane's in their middle, off the walkers' lines.
+        // buildings; then, 4 m off, a canopy at the windows, which no one living there would
+        // want); a shared street's and a lane's in their middle, off the walkers' lines.
         let half = e.profile.width() * 0.5;
         // An avenue's rows by the kerb, a tree in every other slot (the lamps take the rest).
         let lamp_free: fn(usize) -> bool = |_| false;
         let (rows, spacing, height, crown): (Vec<KerbRow>, f64, _, _) = match kerb_rows(e.profile) {
-            Some(rows) => (rows.to_vec(), KERB_SLOT, (11.0, 15.0), (3.5, 4.8)),
+            Some(rows) => (rows.to_vec(), KERB_SLOT, (9.0, 12.0), (2.4, 3.2)),
             None => match e.profile {
                 Profile::Shared => (vec![(0.0, lamp_free)], 14.0, (7.0, 10.0), (2.4, 3.4)),
                 Profile::Pedestrian => (vec![(0.0, lamp_free)], 18.0, (5.0, 7.0), (1.8, 2.5)),
@@ -98,8 +103,8 @@ pub fn trees(site: &Site, plan: &CityPlan, seed: u64) -> Vec<Tree> {
         };
         let length = e.length();
         for &(offset, lamp) in &rows {
-            // The crown stops half a metre short of the building line.
-            let room = (half - offset.abs() - 0.5).max(1.0);
+            // The crown keeps [`CROWN_CLEAR`] from the building line.
+            let room = (half - offset.abs() - CROWN_CLEAR).max(1.0);
             let mut s = spacing * 0.5;
             let mut slot = 0;
             while s < length {
