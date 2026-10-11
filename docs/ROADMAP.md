@@ -675,6 +675,31 @@ The items below are the phase's original outline; the plan above orders them.
      - A coarse volume holds the light too faint to draw.
      - Its decision comes with the galaxy, after D-057.
 
+## Now — The city sandbox drives the engine (D-059)
+
+The owner's direction of 2026-10-10: a private city sandbox, built as if for a game release,
+drives the engine's next work. The engine stays public; the sandbox does not (D-059, 1).
+- **The city:** a current European city a few years ahead, much greener, by the sea with a
+  river.
+- **The people:** a million persistent people.
+- **Transport:** public transport only.
+- **The player:** first person; multiplayer from the start.
+
+The research is `assets-and-licences.md`, `population-simulation.md`, `procedural-content.md`,
+`city-generation.md` §7–§19, `people.md` and `transit-and-vehicles.md`. The steps:
+1. **The city's plan judged as a map** (`forge-procgen::city`, `docs/demos/city-plan.md`).
+   Built 2026-10-11: districts, tensor-field streets, blocks with courtyards, parks by the
+   3-30-300 rule, lots, tram lines covering the blocks, boat crossings, a checks map.
+2. **Buildings** from the grammar and module kits (D-039), first style set a Mediterranean-European
+   perimeter block; far proxies; materials with a history.
+3. **Vegetation:** trees, grass, parks.
+4. **The player** in the streets in first person; interiors by use in speed tiers.
+5. **Night:** many local lights.
+6. **People:** the human runtime and crowds at scale.
+7. **Public transport:** trams, public automated taxis, boats.
+8. **The population server:** event-driven records in `forge-sim`, 1 M then 4 M.
+9. **Ambient audio.**
+
 ## Later — Smart systems: prediction, importance and budgets (#222)
 
 The owner's idea of 2026-10-10: load what the game will most likely need next, draw and update

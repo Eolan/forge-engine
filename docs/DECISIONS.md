@@ -1757,7 +1757,8 @@ response comes from the atlas as `civilisations-styles.md` says. The module grid
 that cannot be retrofitted.
 *(research: city-generation.md §3–§6; procedural.md §2, §4; vegetation-materials.md §4; issues
 #84, #85, #86, #88, #89, #91)* Proposed 2026-09-26; accepted by the owner 2026-09-30 as
-proposed ("go with recommendations").
+proposed ("go with recommendations"). *Amended by D-059 (2026-10-11):* the first style set is a
+Mediterranean-European perimeter block for the city sandbox, ahead of the medieval village.
 
 ## D-040 — The rivers' grading: the channels carry the hillslopes' material away, and the valley floors widen into floodplains ✅ (2026-10-01)
 
@@ -1923,6 +1924,10 @@ corestones, tors and slabs, limestone's blocks and flags, where rocks gather. Th
 granite's coarse sandy soil) lies on its gentle ground round the outcrops since #135.
 
 ## D-043 — Changes are checked in tiers: an impact map, sentinels, accepted sets ✅ (2026-10-02)
+
+*For a while (D-059, 10; the owner, 2026-10-10):* the city sandbox's checks and its "day in the
+city" flight are the regression check. The gate still runs on every push, and the demos'
+captures run when a change touches what they draw.
 
 The owner's pick of 2026-10-02, on #131: "Ok with your plan, the 3DMark model would be way less
 often anyway. Go with 1, 2, 3 way of testing." The whole batch on every change had grown to
@@ -3749,3 +3754,172 @@ D-016's amendment of the same day:
 - **Left, if a cut's wait matters again:** the DAG template set aside earlier (23 ms), shown
   while the tile's own DAG cooks and checked with `--check-swaps` at the second swap. Not
   proposed yet.
+
+## D-059 — A city sandbox drives the engine: a private game-quality city on public engine work ✅ (accepted on the recommendations, 2026-10-11; provisional until the owner's review)
+
+**The question:** the owner's direction of 2026-10-10. After the planet work (D-058), the next
+showcase driver is a city sandbox built as if for a game release, with Vuntra City as
+inspiration rather than method:
+- **The place:** a city by the sea with a river, parks and landmarks. Every building, home and
+  structure is enterable, with an interior that fits its use.
+- **The people:** a persistent population of at least a million, each with a home, work,
+  appointments and a personality. Multiplayer from the start, with the owner's second PC (an
+  i7 and an RTX 3080) as the server.
+- **The player and transport:** first person, and public transport.
+- **The look:** release quality and one consistent style.
+
+The owner refined it the same day:
+- **The look:** not futuristic. A current European city a few years ahead, modernised and mixed
+  much more with nature, with a few landmarks.
+- **Transport:** all electric public transport. Trams; *public* automated taxis that may share
+  the tram tracks where they are laid flush (Nantes); river taxi-boats crossing at several
+  points (Navibus). No private cars, less room for roads, more for people.
+- **Technology:** integrated with the city and nature, people's well-being first, no fossil
+  fuels.
+- **Thirteen ideas accepted:**
+  - the real site chosen now;
+  - the smart pad as the player's interface;
+  - live data on the city's screens;
+  - darker nights with stars;
+  - a quiet city;
+  - weekly events;
+  - regulars and a friend group;
+  - streets as play spaces;
+  - visible nature;
+  - rooftops;
+  - swimming;
+  - a "day in the city" flight as the regression check;
+  - a style bible as data.
+
+The owner's instruction of 2026-10-11 was "Follow recommendations for now. Tomorrow sum up the
+choices you made. Start implementing when you are ready." So this entry records the research's
+recommendations as accepted, and each one stays open to the owner's review. The choices made
+on the way are listed for that review in the sandbox (`docs/choices-2026-10-11.md`).
+
+**The research** (2026-10-10, one agent at a time):
+- `assets-and-licences.md`;
+- `population-simulation.md`;
+- `procedural-content.md`;
+- `city-generation.md` §7–§19;
+- `people.md`;
+- `transit-and-vehicles.md` (still running when this entry was written).
+
+Each note's city-specific appendix stays in the sandbox.
+
+**Accepted:**
+
+1. **The publication split** ✅ (the owner's rule, binding from the first file):
+   - **The engine stays public.** Generic engine work goes into `forge-engine` as usual, through
+     its issues and decisions: layout, grammar, interiors, crowds, transit, simulation tiers,
+     netcode.
+   - **The sandbox stays private.** Its code, data, generated content, city research and any
+     bought or licence-restricted assets live in `../city-sandbox/`, a local git repository with
+     no remote (the owner's choice, its C-001). It uses the engine's crates by path and is never
+     pushed; a private remote comes only on the owner's go.
+   - **Plans:** city-specific plans live in its local `docs/TRACKER.md`, not on the public
+     tracker. The engine's own demos use placeholders.
+2. **Scope and scale:**
+   - The first city is about 8 km across for a million people, on a flat sandbox.
+   - Its coast and river come from the real ground: the Argens plain at Fréjus, from Forge's
+     GLO-90 mosaic. Of the three sites measured, it is the only one with room for 8 km of flat
+     land. So moving the city onto the planet later is a placement, not a redesign.
+   - Four million people means a larger map (about 16 km), not a denser city.
+3. **Art direction and the first style set:**
+   - **The look:** the owner's direction above.
+   - **The first style set** ✅ (the owner, 2026-10-11): a Mediterranean-European perimeter
+     block. This amends D-039's order: the city comes before the medieval village.
+   - **Consistency:** a style bible as one data file (palette, heights by street width,
+     cornice lines, opening rhythm, green scores, the 3-30-300 rule, lighting), which every
+     generator reads and checks its output against (`city-generation.md` §15).
+4. **Transport:**
+   - **Trams.**
+   - **Public automated taxis** on paved tram lanes and service streets. In the car-free core
+     they drive only at walking pace, for reduced mobility and late night; never on grass track.
+   - **River taxi-boats** and a river line.
+   - **Bikes everywhere.**
+   - **Service vehicles** filtered by class and hour (Ghent, Pontevedra): hubs and cargo bikes,
+     morning windows, quiet night trucks.
+   - **Emergency access:** a 4 m strip along every facade.
+   - **No private cars.**
+
+   The transit simulation will follow `transit-and-vehicles.md`.
+5. **Asset policy** (`assets-and-licences.md`):
+   - **Four licence classes.** The public repository holds only class 1, through D-048's fetch
+     (never committed).
+   - **Class 2** (MetaHuman, Fab and Megascans, KitBash3D, Substance assets, trees from a tree
+     tool) lives in the sandbox's ignored library, with a manifest of licence, conditions and
+     date.
+   - **A release** packs its assets protected, under its own data licence.
+   - **Learned models** train on class 1 or Forge's own data only.
+   - **Quaternius** counts as class 2 until a fresh download's licence file says CC0.
+   - **Nothing is bought or downloaded without the owner's go.** The paid shortlist waits for
+     the owner's review.
+6. **Procedural first** (`procedural-content.md`):
+   - full PBR materials with wear derived from the geometry, plus trims and decals;
+   - objects as part programs;
+   - a cook stage (clean, unwrap, bake) into the D-053 cache.
+
+   Material Maker (MIT) and headless Blender Geometry Nodes run offline. Generative 3D AI
+   stays out of the engine path (D-016; Hunyuan3D's licence excludes the EU).
+7. **The population and the server** (`population-simulation.md`):
+   - **The tiers:**
+     - everyone as a compact record advanced by events (T3);
+     - coarse agents near players (T2);
+     - full agents within about 150 m (T1);
+     - the drawn crowd is the real population (T0).
+   - **The server's CPU decides everything** (D-016). The RTX 3080 works offline: generation,
+     calibration, fast-forward tests.
+   - **Persistence:** snapshots of the changed columns plus an input log.
+   - **Interest:** by cells and a priority accumulator (D-010), not by entity-held query
+     components (Improbable's patents).
+8. **People** (`people.md`):
+   - **The sandbox** uses MetaHumans (class 2), read by a Rust port of the MIT DNA and RigLogic
+     code.
+   - **The public demos** use class 1 placeholders (MPFB, Anny, Rocketbox).
+   - **LOD:** skeletal near, baked bone-animation crowds, impostors to 1.5 km.
+   - **Clothes:** fitted by offline binding and morphs.
+   - **Dialogue:** carried as line ids.
+   - **No memories that spread between people** without the owner's go (Warner Bros.' Nemesis
+     patents).
+9. **Time:** one game hour is 15 real minutes for now (a day lasts 6 hours).
+10. **Testing, for a while** (the owner, 2026-10-10):
+    - **The regression check:** the sandbox's checks and its "day in the city" flight replace
+      the Tier 0/1/2 GPU batch. Running the simulation and every tier for each change would
+      take too long.
+    - **The gate stays** on every push: build, tests, clippy, formatting, credits, as CI.
+    - **Labs** stay for experiments before they go into the engine or the sandbox.
+    - **The demos** still build and test. Their captures run when a change touches what they
+      draw.
+
+    `tools/impact.toml` maps the new city paths to the gate.
+11. **Patents and giving back** (the owner's rules, `CLAUDE.md` and `CREDITS.md`):
+    - every note flags the patents it meets;
+    - decisions prefer unpatented or expired methods;
+    - a live patent waits for the owner's go;
+    - part of any profits goes to the free projects a release leaned on.
+12. **The steps,** each ending in a visible, measured, verified result:
+    1. **The city's plan on the flat sandbox, judged as a map.** Built 2026-10-11:
+       `forge-procgen::city`, `docs/demos/city-plan.md`. The sandbox's first map is of the
+       Argens.
+    2. **Buildings** from the grammar and kits in the first style set, far proxies, materials
+       of release quality.
+    3. **Vegetation:** trees, grass, parks.
+    4. **The player** walking the streets in first person; interiors furnished by use, in tiers
+       (`city-generation.md` §17).
+    5. **Night:** many local lights.
+    6. **People:** the runtime, crowds at scale, navigation, then lives and schedules.
+    7. **Public transport:** trams, taxis, boats; then vehicles to pilot.
+    8. **The population server,** scaled to 1 M and beyond; multiplayer clients.
+    9. **Ambient audio.** Later: ships, aircraft, drones, weather, third person, LLM dialogue,
+       visemes.
+
+*Not chosen:*
+- **The Var's mouth as the site:** about 20 km² of flat land, so the city would climb the hills
+  in terraces.
+- **A sandbox folder inside this repository:** one wrong `git add` would publish it.
+- **Generated floor plans from learned models:** research-only licences.
+- **GPU-side population ticks on the server:** D-016, and servers rarely have a GPU.
+
+*(research: assets-and-licences.md, population-simulation.md, procedural-content.md,
+city-generation.md §7–§19, people.md, transit-and-vehicles.md; issues #83–#90, #168, #222,
+#224, #231, #234, #39)*

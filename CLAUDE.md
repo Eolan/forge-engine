@@ -50,6 +50,10 @@ cargo run --release -q -p credits -- --check
 - **Tier 2, a milestone** (every ~5 commits, before a showcase; `--tier 2`): Tier 1, the batch
   with `FORGE_ASYNC=0`, `tools/origins.sh`, and the real-time tour for the owner.
 
+For a while (D-059, 10), the city sandbox's checks and its "day in the city" flight are the
+regression check. The gate stays on every push, and the demos' captures run when a change
+touches what they draw.
+
 What must hold:
 - The culling A/B harness (`--no-occlusion`, `--no-cone`), streamed against resident, and the
   mesh path against the fallback differ in **0 pixels**, and `--show-culled` shows no red.
