@@ -279,11 +279,11 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
 
 ## Squares (#245)
 
-![The old town's piazza](images/city-plan-piazza.png)
+![A square](images/city-plan-piazza.png)
 
 *A square by the river avenue at 18:00, from the pavement: paved in limestone, its fountain in
-the middle, an alley of planes round it, each tree in its own tones,
-shops round it.* Squares come from three rules:
+the middle, an alley of planes round it (each tree in its own tones), shops round it.* Squares
+come from three rules:
 - the block nearest each built district's centre and each landmark becomes a square (within
   150 m, at most 1 ha), unless one already opens within 120 m;
 - so do the old towns' blocks of 600–3 000 m² that stand 180 m from any other square: their
