@@ -1475,7 +1475,7 @@ impl Scenario for PlanScenario {
                     "plan street".into(),
                     textured(colour([1.0, 1.0, 1.0], 14.0, 0.05), asphalt, 5.0, true),
                 ),
-                ("plan track".into(), colour([0.16, 0.16, 0.17], 60.0, 0.3)),
+                ("plan track".into(), colour([0.16, 0.16, 0.17], 14.0, 0.3)),
                 ("plan water".into(), colour([0.05, 0.12, 0.15], 900.0, 0.9)),
             ],
         );
