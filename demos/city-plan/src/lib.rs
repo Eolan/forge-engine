@@ -34,6 +34,7 @@ use forge_sim::transit::{Service, Timetable};
 use glam::{DVec2, Mat4, Vec3};
 use winit::keyboard::KeyCode;
 
+mod crowd;
 mod walk;
 
 /// A tile's side, metres.
@@ -188,6 +189,7 @@ pub struct PlanScenario {
     /// Each mass's footprint (the world's x and z) and its top, for the walker's walls.
     walls: Vec<(Vec<glam::Vec2>, f32)>,
     walk_on_start: bool,
+    crowd: Option<crowd::Crowd>,
     size: f64,
     /// What the kit built, logged once the app logs.
     kit_report: Option<String>,
@@ -385,6 +387,7 @@ impl PlanScenario {
                 })
                 .collect(),
             walk_on_start: false,
+            crowd: None,
             size,
             camera,
             title: format!(
@@ -397,6 +400,13 @@ impl PlanScenario {
             ),
             triangles,
         }
+    }
+
+    /// The plan's people on their clock from `hour` (game hours), those walking round the
+    /// camera drawn as figures (`crowd`).
+    pub fn with_people(mut self, plan: &CityPlan, masses: &[Mass], hour: f64) -> Self {
+        self.crowd = Some(crowd::Crowd::new(plan, masses, hour));
+        self
     }
 
     /// Walking from the start, in first person where the camera stands (Enter frees it).
@@ -433,6 +443,17 @@ impl PlanScenario {
     }
 }
 
+/// The crowd's palettes, a material group each.
+const PEOPLE_GROUPS: [&str; 8] = [
+    "plan-people-0",
+    "plan-people-1",
+    "plan-people-2",
+    "plan-people-3",
+    "plan-people-4",
+    "plan-people-5",
+    "plan-people-6",
+    "plan-people-7",
+];
 /// The kit's key for a terrace's mesh (no grammar symbol is this high).
 const TERRACE: u16 = u16::MAX;
 /// How far each of a line's two tracks lies from its centreline, metres.
@@ -983,7 +1004,7 @@ impl Scenario for PlanScenario {
     }
 
     fn build(
-        self: Box<Self>,
+        mut self: Box<Self>,
         ctx: &Setup,
         args: &Args,
         _cooked: Cooked,
@@ -1216,6 +1237,33 @@ impl Scenario for PlanScenario {
             );
         }
         let tram_rows: Vec<_> = TRAM_GROUPS.iter().map(|g| materials.of(g)).collect();
+        // The figures' clothes: skin, top, bottom, hair and shoes, eight ways.
+        let people: [([f32; 3], [f32; 3], [f32; 3]); 8] = [
+            ([0.62, 0.44, 0.34], [0.80, 0.80, 0.78], [0.10, 0.14, 0.26]),
+            ([0.45, 0.30, 0.22], [0.55, 0.12, 0.10], [0.20, 0.20, 0.22]),
+            ([0.70, 0.52, 0.42], [0.20, 0.35, 0.50], [0.55, 0.48, 0.36]),
+            ([0.30, 0.20, 0.15], [0.90, 0.85, 0.70], [0.12, 0.12, 0.14]),
+            ([0.66, 0.48, 0.38], [0.25, 0.42, 0.28], [0.15, 0.20, 0.35]),
+            ([0.52, 0.36, 0.27], [0.75, 0.55, 0.20], [0.30, 0.25, 0.20]),
+            ([0.72, 0.56, 0.46], [0.40, 0.25, 0.45], [0.85, 0.82, 0.76]),
+            ([0.38, 0.26, 0.19], [0.15, 0.15, 0.17], [0.40, 0.42, 0.45]),
+        ];
+        for (k, &group) in PEOPLE_GROUPS.iter().enumerate() {
+            let (skin, top, bottom) = people[k];
+            materials.add_rows(
+                group,
+                vec![
+                    (format!("{group} skin"), colour(skin, 20.0, 0.04)),
+                    (format!("{group} top"), colour(top, 8.0, 0.02)),
+                    (format!("{group} bottom"), colour(bottom, 8.0, 0.02)),
+                    (
+                        format!("{group} hair and shoes"),
+                        colour([0.06, 0.05, 0.04], 20.0, 0.05),
+                    ),
+                ],
+            );
+        }
+        let people_rows: Vec<_> = PEOPLE_GROUPS.iter().map(|g| materials.of(g)).collect();
         let trunk = colour([0.20, 0.15, 0.11], 8.0, 0.02);
         materials.add_rows(
             "plan-tree-a",
@@ -1321,6 +1369,20 @@ impl Scenario for PlanScenario {
             let n = run.timetable.vehicles() as u32;
             tram_movers.extend([(cab, 2 * n), (middle, (TRAM_SECTIONS as u32 - 2) * n)]);
         }
+        // The crowd's figures: each palette walking and standing, a mesh each.
+        if self.crowd.is_some() {
+            for (g, &row) in people_rows.iter().enumerate().take(crowd::GROUPS) {
+                // A stride for the walkers, standing for the parks' people.
+                for stride in [0.3, 0.0] {
+                    let height = 1.62 + 0.04 * (g % 5) as f32;
+                    let mesh = builder.add_mesh(&MeshletMesh::build(&forge_geom::figures::walker(
+                        height, stride,
+                    )));
+                    builder.set_mesh_material(mesh, row);
+                    tram_movers.push((mesh, crowd::PER_MESH as u32));
+                }
+            }
+        }
         if !tram_movers.is_empty() {
             builder.reserve_movers(&tram_movers);
         }
@@ -1348,6 +1410,8 @@ impl Scenario for PlanScenario {
                 walls: walk::Walls::new(self.walls.clone()),
                 walker: None,
                 walk_on_start: self.walk_on_start,
+                crowd: self.crowd.take(),
+                camera: glam::Vec2::ZERO,
                 size: self.size,
                 origin: scene_origin(args).to_f64().as_vec3(),
             }),
@@ -1366,6 +1430,9 @@ struct PlanRunning {
     walls: walk::Walls,
     walker: Option<walk::Walker>,
     walk_on_start: bool,
+    /// The population on foot round the camera, and where the camera last stood (x, z).
+    crowd: Option<crowd::Crowd>,
+    camera: glam::Vec2,
     /// The scene's origin, which the movers' positions are relative to.
     origin: Vec3,
 }
@@ -1402,6 +1469,10 @@ impl Running for PlanRunning {
         step: f32,
     ) -> Option<f64> {
         self.clock += f64::from(step);
+        self.camera = glam::Vec2::new(camera.position.x, camera.position.z);
+        if let Some(crowd) = &mut self.crowd {
+            crowd.advance(f64::from(step));
+        }
         if self.walk_on_start {
             self.walk_on_start = false;
             self.toggle_walk(camera);
@@ -1425,14 +1496,15 @@ impl Running for PlanRunning {
     }
 
     fn movers(&mut self, scene: &mut MeshletScene) {
-        if self.trams.is_empty() {
+        if self.trams.is_empty() && self.crowd.is_none() {
             return;
         }
         // In the order the movers were reserved: a line's cabs (front and rear of each
-        // vehicle), then its passenger sections.
+        // vehicle), then its passenger sections; then the crowd's figures, mesh by mesh.
         let mut transforms = Vec::new();
-        let place = |(at, yaw): (Vec3, f32)| MoverTransform {
-            position: at - self.origin,
+        let origin = self.origin;
+        let place = move |(at, yaw): (Vec3, f32)| MoverTransform {
+            position: at - origin,
             rotation: glam::Quat::from_rotation_y(yaw),
             scale: 1.0,
         };
@@ -1445,6 +1517,15 @@ impl Running for PlanRunning {
             }
             for v in &vehicles {
                 transforms.extend(v[1..TRAM_SECTIONS - 1].iter().map(|&s| place(s)));
+            }
+        }
+        if let Some(crowd) = &mut self.crowd {
+            // Unused figures wait far under the ground.
+            let parked = (Vec3::new(0.0, -1000.0, 0.0) + self.origin, 0.0);
+            for figures in crowd.figures(self.camera) {
+                for k in 0..crowd::PER_MESH {
+                    transforms.push(place(figures.get(k).copied().unwrap_or(parked)));
+                }
             }
         }
         scene.set_movers(&transforms);

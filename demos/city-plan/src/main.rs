@@ -40,6 +40,10 @@ struct Cli {
     /// app's `--walk vx,vz` scripts the walk).
     #[arg(long)]
     walk_start: bool,
+    /// The plan's people from this game hour (8.2 for the morning's walk to work), those walking
+    /// round the camera drawn as figures.
+    #[arg(long)]
+    people: Option<f64>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -116,6 +120,10 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Some(_) => anyhow::bail!("--tram takes x,z,lead"),
+        None => scenario,
+    };
+    let scenario = match cli.people {
+        Some(hour) => scenario.with_people(&plan, &masses, hour),
         None => scenario,
     };
     let scenario = if cli.walk_start {

@@ -584,6 +584,19 @@ pub fn travel_time(world: &World, from: u32, to: u32, personality: Personality) 
     s.round().max(60.0) as GameSeconds
 }
 
+/// A trip under way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Trip {
+    /// The place it set out from.
+    pub from: u32,
+    /// The place it goes to.
+    pub to: u32,
+    /// When it set out.
+    pub since: GameSeconds,
+    /// How long it takes.
+    pub time: GameSeconds,
+}
+
 /// What a person is doing, for a map.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Doing {
@@ -697,6 +710,19 @@ impl<'w> Sim<'w> {
         pop.dest[p] = next.place;
         pop.since[p] = now;
         now + time
+    }
+
+    /// Person `p`'s trip, if on one: from where, to where, since when and for how long.
+    pub fn trip(&self, p: usize) -> Option<Trip> {
+        (self.pop.at[p] & TRIP != 0).then(|| {
+            let (from, to) = (self.pop.origin[p], self.pop.dest[p]);
+            Trip {
+                from,
+                to,
+                since: self.pop.since[p],
+                time: travel_time(self.world, from, to, self.pop.personality[p]),
+            }
+        })
     }
 
     /// Everyone's position now and what they are doing: at a place, scattered a little about it

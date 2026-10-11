@@ -280,6 +280,29 @@ skeleton's roof for a convex footprint, near enough. The tiles are the brick cou
 terracotta. Each lot hips its own roof, so a row's roofs read stepped; continuous ridges along
 a row come with the straight skeleton (#247).
 
+## The people on foot (D-059's step 6, a proof of concept)
+
+```
+cargo run --release -p city-plan -- --street --people 16.3   # from 16:18
+```
+
+![People](images/city-plan-people.png)
+
+*From 16:18: the park's visitors standing about it, and the evening's walkers on the river
+avenue.* `--people HOUR` builds the plan's population from the masses (`forge_sim::population`,
+295 789 people, 2 s) and runs its day to that hour. Each frame:
+- **who is drawn:** people within 220 m of the camera, as placeholder figures
+  (`forge_geom::figures`: blocky, in eight palettes, walking or standing);
+- **those on foot:** each walks the shortest way along the streets (A* on the road graph) from
+  the street nearest their start to the street nearest their goal, on its pavement, at the pace
+  their trip's time gives;
+- **those in a park:** they stand about it.
+
+Trips quicker than a walk (bike, tram) are not drawn yet. The drawn crowd runs on the real
+clock, a game second a second: at the game's four, its walkers would cross the screen at
+5 m/s, and how the two clocks meet near the player is D-059's open question. #251's humans
+replace the figures.
+
 ## Walking the streets (D-059's step 4)
 
 ```

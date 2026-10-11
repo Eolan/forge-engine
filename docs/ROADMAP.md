@@ -704,7 +704,8 @@ The research is `assets-and-licences.md`, `population-simulation.md`, `procedura
    2026-10-11: walking in first person among the masses (`city-plan`, Enter).
 5. **Night:** many local lights. Previewed 2026-10-11: lit windows. The probes flood the scene
    with them (#254).
-6. **People:** the human runtime and crowds at scale.
+6. **People:** the human runtime and crowds at scale. Begun 2026-10-11: the population on foot
+   round the camera, placeholder figures on street routes (`city-plan --people`).
 7. **Public transport:** trams, public automated taxis, boats. Begun 2026-10-11: trams on
    their timetables, moving along double tracks (#253).
 8. **The population server:** event-driven records in `forge-sim`, 1 M then 4 M.
