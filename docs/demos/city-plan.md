@@ -283,6 +283,18 @@ the line's colour, articulated round the curve, on the right-hand track.*
 
 The example's two lines run 10 trams.
 
+Lines share their tracks where they share an avenue, and nothing yet keeps their trams apart.
+Lines ending at one hub stood their trams on the same spot for their three-minute turns. Each
+further line ending within 30 m of another's terminus now ends 45 m before it, along its own
+track. The log counts the trams of two lines within 30 m on one track, every 5 s over a game
+hour:
+- a 21-line city: 685 such pairs, down from 985;
+- the example: 4.
+
+The rest are trams turning at a terminus that another line runs through, and chance meetings
+on shared avenues. Spacing trams on a shared track needs the lines' timetables planned
+together (holding at stops, as real networks do).
+
 **River shuttles** (Nantes' Navibus, smaller): an electric boat for about twenty people
 (`vehicles::shuttle_boat`: a hull with bows at both ends, a glazed cabin under a solar roof, ramps
 at both ends) runs out and back at each of the plan's boat crossings. It uses the same

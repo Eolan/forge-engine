@@ -161,6 +161,58 @@ fn world(size: f64, p: DVec2, height: f64) -> Vec3 {
     )
 }
 
+/// Lines ending at one hub stood their trams on one spot for their turns: each further line
+/// ending within 30 m of another's terminus now ends 45 m before it, along its own track
+/// (while its last leg stays 60 m or more).
+fn stagger_termini(trams: &mut [TramRun]) {
+    let mut ends: Vec<DVec2> = Vec::new();
+    for run in trams.iter_mut() {
+        let mut stops = run.timetable.stops().to_vec();
+        let n = stops.len();
+        for (end, next) in [(0, 1), (n - 1, n - 2)] {
+            let p = run.track(stops[end]).0;
+            let taken = ends.iter().filter(|e| e.distance(p) < 30.0).count() as f64;
+            let moved = stops[end] + (stops[next] - stops[end]).signum() * 45.0 * taken;
+            if (stops[next] - moved).abs() >= 60.0
+                && (moved - stops[end]).abs() < (stops[next] - stops[end]).abs()
+            {
+                stops[end] = moved;
+            }
+            ends.push(p);
+        }
+        run.timetable = run.timetable.with_stops(&stops);
+    }
+}
+
+/// How often two trams of different lines stand within 30 m of each other on one track (each
+/// pair at each 5 s step of the service's second hour): trams running through each other.
+fn tram_overlaps(trams: &[TramRun]) -> usize {
+    let mut count = 0;
+    let mut t = 3600.0;
+    while t < 7200.0 {
+        // Each tram's place on its track and its heading.
+        let mut at: Vec<(usize, DVec2, DVec2)> = Vec::new();
+        for (line, run) in trams.iter().enumerate() {
+            for k in 0..run.timetable.vehicles() {
+                let state = run.timetable.at(k, t);
+                let (p, along) = run.track(state.s);
+                let side = if state.outbound { 1.0 } else { -1.0 };
+                let n = DVec2::new(-along.y, along.x);
+                at.push((line, p + n * side * TRACK_OFFSET, along * side));
+            }
+        }
+        for (i, a) in at.iter().enumerate() {
+            for b in &at[i + 1..] {
+                if a.0 != b.0 && a.1.distance(b.1) < 30.0 && a.2.dot(b.2) > 0.7 {
+                    count += 1;
+                }
+            }
+        }
+        t += 5.0;
+    }
+    count
+}
+
 /// The point of the site's rivers nearest `p`, the river's direction there and its width.
 fn river_crossing(site: &Site, p: DVec2) -> Option<(DVec2, DVec2, f64)> {
     site.rivers
@@ -328,7 +380,8 @@ impl PlanScenario {
                 }
             }
         }
-        let trams: Vec<TramRun> = plan.tram_lines.iter().filter_map(TramRun::new).collect();
+        let mut trams: Vec<TramRun> = plan.tram_lines.iter().filter_map(TramRun::new).collect();
+        stagger_termini(&mut trams);
         // What each wall looks onto: the kit's faces and where the roofs end in gables.
         let edges = facades::edge_kinds(plan, masses);
         let mut near = Vec::new();
@@ -1874,6 +1927,12 @@ impl Scenario for PlanScenario {
             ms = start.elapsed().as_millis(),
             "the plan's scene"
         );
+        if self.trams.len() > 1 {
+            tracing::info!(
+                pairs = tram_overlaps(&self.trams),
+                "trams of two lines within 30 m on one track, over a game hour in 5 s steps"
+            );
+        }
         Ok((
             scene,
             Box::new(PlanRunning {

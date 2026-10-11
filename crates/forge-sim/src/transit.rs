@@ -121,6 +121,11 @@ impl Timetable {
         }
     }
 
+    /// The same service over other stops (as [`Timetable::new`]).
+    pub fn with_stops(&self, stops: &[f64]) -> Self {
+        Self::new(stops, self.service)
+    }
+
     /// The stops' distances along the track, metres.
     pub fn stops(&self) -> &[f64] {
         &self.stops
