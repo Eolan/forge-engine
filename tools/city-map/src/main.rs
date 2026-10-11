@@ -91,6 +91,16 @@ fn main() -> Result<()> {
     let window = (params.centre - DVec2::splat(500.0), 1000.0);
     city::map::write_massing(&site, &plan, &masses, &near, window, 0.5, 0.7)
         .context("writing the close massing")?;
+    let faces = city::facades::faces(&plan, &masses);
+    city::map::write_faces(
+        &site,
+        &plan,
+        &faces,
+        &args.out.join("faces-centre.png"),
+        (params.centre - DVec2::splat(200.0), 400.0),
+        0.2,
+    )
+    .context("writing the faces")?;
     println!("checks, massing: {}", args.out.display());
     Ok(())
 }

@@ -9,6 +9,7 @@ pub mod fracture;
 pub mod lod;
 pub mod meshlet;
 pub mod model;
+pub mod modules;
 pub mod page;
 pub mod procedural;
 pub mod skin;

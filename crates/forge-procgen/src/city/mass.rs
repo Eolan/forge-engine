@@ -79,6 +79,8 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
         // courtyard, the pieces close round the block's corners.
         let mut inside = lot.polygon.clone();
         let n = block.polygon.len();
+        // The block edges the lot fronts for 3 m or more, with their half-widths, longest first.
+        let mut fronts: Vec<(DVec2, DVec2, f64, f64)> = Vec::new();
         for i in 0..n {
             if inside.len() < 3 {
                 break;
@@ -95,17 +97,33 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
             let inward = DVec2::new(-edge.y, edge.x);
             let half = edge_half_width(&streets, &plan.roads, p, q);
             inside = geom::clip_half_plane(&inside, p + inward * half, edge);
+            let shared = shared_length(&lot.polygon, p, q);
+            if shared >= 3.0 {
+                fronts.push((p, q, half, shared));
+            }
         }
+        fronts.sort_by(|x, y| y.3.total_cmp(&x.3));
         let pieces = match (&block.courtyard, district.kind.building_depth()) {
             (Some(courtyard), _) => outside_of(&inside, &geom::convex_hull(courtyard)),
-            // No courtyard fits: a strip of a building's depth along the street it fronts.
+            // No courtyard fits: strips of a building's depth along each street the lot fronts,
+            // the longest frontage first, so a lot between two streets is built on both and a
+            // corner lot wraps its corner.
             (None, Some(depth)) => {
-                let inward = DVec2::new(-t.y, t.x);
-                vec![geom::clip_half_plane(
-                    &inside,
-                    a + inward * (edge_half_width(&streets, &plan.roads, a, a + t) + depth),
-                    -t,
-                )]
+                let mut rest = inside.clone();
+                let mut strips = Vec::new();
+                for &(p, q, half, _) in &fronts {
+                    if rest.len() < 3 {
+                        break;
+                    }
+                    let edge = (q - p).normalize_or_zero();
+                    let line = p + DVec2::new(-edge.y, edge.x) * (half + depth);
+                    let near = geom::clip_half_plane(&rest, line, -edge);
+                    if near.len() >= 3 {
+                        strips.push(near);
+                    }
+                    rest = geom::clip_half_plane(&rest, line, edge);
+                }
+                strips
             }
             (None, None) => vec![inside],
         };
@@ -180,22 +198,27 @@ fn outside_of(polygon: &[DVec2], hole: &[DVec2]) -> Vec<Vec<DVec2>> {
     pieces
 }
 
+/// How much of a lot's outline lies along the block edge from `a` to `b`, metres.
+fn shared_length(lot: &[DVec2], a: DVec2, b: DVec2) -> f64 {
+    let m = lot.len();
+    let mut shared = 0.0;
+    for j in 0..m {
+        let (p, q) = (lot[j], lot[(j + 1) % m]);
+        if geom::distance_to_segment(p, a, b) < 0.5 && geom::distance_to_segment(q, a, b) < 0.5 {
+            shared += p.distance(q);
+        }
+    }
+    shared
+}
+
 /// The block edge a lot fronts on: its start and unit direction, the edge sharing the longest
 /// stretch with the lot's outline.
 fn frontage(lot: &[DVec2], block: &[DVec2]) -> Option<(DVec2, DVec2)> {
     let n = block.len();
-    let m = lot.len();
     let mut best: Option<(f64, usize)> = None;
     for i in 0..n {
         let (a, b) = (block[i], block[(i + 1) % n]);
-        let mut shared = 0.0;
-        for j in 0..m {
-            let (p, q) = (lot[j], lot[(j + 1) % m]);
-            if geom::distance_to_segment(p, a, b) < 0.5 && geom::distance_to_segment(q, a, b) < 0.5
-            {
-                shared += p.distance(q);
-            }
-        }
+        let shared = shared_length(lot, a, b);
         if shared > 1.0 && best.is_none_or(|(s, _)| shared > s) {
             best = Some((shared, i));
         }

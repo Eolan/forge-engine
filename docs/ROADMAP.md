@@ -693,9 +693,11 @@ The research is `assets-and-licences.md`, `population-simulation.md`, `procedura
 2. **Buildings** from the grammar and module kits (D-039), first style set a Mediterranean-European
    perimeter block; far proxies; materials with a history. Begun 2026-10-11:
    - masses per lot under a style bible (#246);
-   - facade textures (window bays, shopfronts), drawn in 3D by `demos/city-plan`.
+   - facade textures (window bays, shopfronts), drawn in 3D by `demos/city-plan`;
+   - buildings from a split grammar and the first kit near the view (#247): shutters,
+     balconies, shopfronts, entrances, cornices.
 
-   Next, the modules (#247).
+   Next: the module grid, a proxy per building, roofs from the straight skeleton (#247).
 3. **Vegetation:** trees, grass, parks. Begun 2026-10-11: street, park, quay and courtyard
    trees as instances.
 4. **The player** in the streets in first person; interiors by use in speed tiers.

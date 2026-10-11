@@ -54,7 +54,7 @@ router, and `forge_core::dmath` does the trigonometry. Two runs give the same di
 | Built blocks within 400 m of a tram stop | 45 % (two lines, no line added) |
 | Streets' share of the land | 21.5 % |
 | Tram lines | 7.8 km, 19 stops |
-| Masses / floor area | 14 700 / 20.5 km² (14 ms; floors capped by street width) |
+| Masses / floor area | 14 807 / 20.5 km² (14 ms; floors capped by street width) |
 
 | Stage | Time |
 |---|---|
@@ -149,9 +149,79 @@ gives the renderer emissive light in absolute units and the probes take it right
 emissive is scaled by the frame's reference illuminance for a run held at one time of day: a
 stopgap.*
 
+## Buildings from the grammar and the kit (D-039, #247)
+
+```
+cargo run --release -p city-plan -- --street --detail 450
+cargo run --release -p city-plan -- --rules my-style.rules   # another style set's rules
+```
+
+![The kit's buildings](images/city-plan-kit.png)
+
+*Within `--detail` metres of the view (450 here), each mass is built from the first style set's
+rules and kit; beyond, it stays a textured box. Top left, a lane at 16:40: French windows with
+louvred shutters, balconies on consoles with wrought-iron railings on the first floor,
+shopfronts with fascias, a string course over the ground floor, the cornice, sun shadows
+across it all. Top right, the same lane at night, lit windows, without the probes (#254).
+Bottom left, the river avenue's shops, entrances and awnings. Bottom right, from 60 m: the
+kit's quay front, the textured masses behind.*
+
+Three stages, each generic:
+- **`forge_procgen::city::facades`, the component split.** Each mass's walls become faces that
+  look onto:
+  - the **street**: outside the wall is street, up to the building line;
+  - the **courtyard**: the wall looks into its own lot or block;
+  - a **party wall**: a neighbour's lot lies against it.
+
+  Walls between two pieces of one lot are inside the building and get no face. A street face
+  knows the corners it turns, and each building's longest street face holds its entrance.
+  `city-map` draws the split as `faces-centre.png`.
+- **`forge_procgen::grammar`, a split grammar** with CGA's operators (Müller et al. 2006):
+  - scopes split along x or y into parts sized absolute, relative (`'0.5`) or floating (`~1`),
+    which may name an attribute;
+  - repeats `{ ... }*`, whose members know their index, count, first, last and middle;
+  - conditions on the context (`[street && level.index == 0]`);
+  - weighted choices, per building or per attribute;
+  - `let` values each building draws from its seed;
+  - a text form with line-numbered errors.
+- **`forge_geom::modules`, the kit:** wall, party wall, string course, cornice, parapet, French
+  window (with or without shutters), low window, courtyard window, balcony, entrance, shopfront
+  with or without an awning. Each module is a small part program of boxes and quads with one
+  section layout, so eight material groups dress any of them: four shutter colours, each with
+  dark and lit glass. Walls, bands and cornices change size with every scope and are merged into
+  the tiles; openings repeat at a few sizes and are instanced.
+
+The engine's example style set is `crates/forge-procgen/src/city/mediterranean.rules`, about
+fifty lines. Each building picks its bay (2.8–3.4 m), its balconies and its shutters, and
+neighbours differ.
+
+| The kit within 450 m of the avenue view (example city) | |
+|---|---|
+| Buildings / faces / terminals | 1 243 / 5 049 / 159 521 |
+| Instances / unique modules | 27 326 / 14 (8.3 M instanced triangles) |
+| Merged triangles added (walls, bands, cornices) | 355 k |
+| Derived and assembled | 71 ms (one thread) |
+| Longest run of one opening along a floor of a street front | 11 |
+| GPU frame at 2800 × 1575, this view, best of 3 | 3.79 ms (3.62 ms with `--detail 0`) |
+| Scene built and cooked | 2.96 s (2.57 s) |
+
+![Faces round the centre](images/city-plan-faces.png)
+
+*The component split round the example's centre: street faces red, courtyard faces blue, party
+walls grey, entrances as dots, corners in yellow. Lots without a courtyard are now built along
+every street they front (a strip along each), so a block between two streets has two
+fronts; 14 807 masses instead of 14 700.*
+
 ## Next (#245–#247)
 
 - Squares at the radial districts' centres; the landmarks' sightlines.
 - More checks on the checks map; a legend.
-- The style bible's palette into the materials; more rules (cornice lines, opening rhythm) once facades exist (#246).
-- Then buildings from the grammar (D-039, #247).
+- The style bible's palette into the materials; more rules (cornice lines, opening rhythm) now
+  that facades exist (#246).
+- The kit, next (#247):
+  - the 0.5 m module grid and its footprint checks;
+  - a merged proxy per building (#38) in place of the textured boxes;
+  - corner pieces and quoins;
+  - roofs from the straight skeleton;
+  - trims and materials of release quality (#249).
+- The trees in front of the facades: finer models, so the street is not hidden by crowns.

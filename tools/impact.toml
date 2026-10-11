@@ -20,6 +20,8 @@
 "tools/sharpness/**" = []
 # The city plan (D-059): a generator no demo draws yet, judged by its map and its tests.
 "crates/forge-procgen/src/city/**" = []
+"crates/forge-procgen/src/grammar.rs" = []
+"crates/forge-geom/src/modules.rs" = []
 "tools/city-map/**" = []
 "demos/city-plan/**" = []
 "crates/forge-sim/src/population.rs" = []

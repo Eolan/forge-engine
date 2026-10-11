@@ -389,6 +389,12 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   Research* 34(3), 2023: a park of at least a hectare within 300 m of every home.
 - **Convex hulls.** A. M. Andrew, "Another efficient algorithm for convex hulls in two
   dimensions", *Information Processing Letters* 9(5), 1979: the monotone chain.
+- **Buildings from a split grammar** (`forge_procgen::grammar`, `city::facades`, D-039). Pascal
+  Müller, Peter Wonka, Simon Haegler, Andreas Ulmer, Luc Van Gool, "Procedural Modeling of
+  Buildings", *ACM Transactions on Graphics* 25(3), SIGGRAPH 2006 (CGA shape): scopes, split
+  and repeat with absolute, relative and floating sizes, the component split of a mass into
+  faces, conditions on the context, and terminals that insert modules. The research found no
+  patent on the grammar itself (`city-generation.md`, Patents).
 - **Polylines and polygons.** David H. Douglas, Thomas K. Peucker, "Algorithms for the reduction
   of the number of points required to represent a digitized line or its caricature", *The
   Canadian Cartographer* 10(2), 1973; Ivan E. Sutherland, Gary W. Hodgman, "Reentrant polygon

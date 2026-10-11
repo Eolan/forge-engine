@@ -19,11 +19,14 @@ use forge_app::{FlyCamera, Input, Setup};
 use forge_core::material::{RenderLayer, TextureId, UvMapping};
 use forge_geom::MeshletMesh;
 use forge_geom::city::PropSpec;
+use forge_geom::modules;
 use forge_geom::procedural::TriMesh;
+use forge_procgen::city::facades::{self, FaceKind};
 use forge_procgen::city::lamps::Lamp;
 use forge_procgen::city::mass::{FLOOR, GROUND_FLOOR, Mass, Roof};
 use forge_procgen::city::trees::Tree;
 use forge_procgen::city::{BlockUse, CityPlan, LAGOON, SEA, Site, geom};
+use forge_procgen::grammar::Grammar;
 use forge_render::MeshletScene;
 use forge_render::MeshletSceneBuilder;
 use forge_render::textures;
@@ -48,6 +51,21 @@ const SHOP: u8 = 4;
 const ROOF_GREEN: u8 = 5;
 const ROOF_SOLAR: u8 = 6;
 const ROOF_TERRACE: u8 = 7;
+/// The kit's merged sections on the masses: four render tints, stone, party walls.
+const KIT_PLASTER: u8 = 8;
+const KIT_STONE: u8 = 12;
+const KIT_PARTY: u8 = 13;
+/// The kit's instance groups: four shutter colours, each with dark and lit glass.
+const KIT_GROUPS: [&str; 8] = [
+    "plan-kit-0",
+    "plan-kit-1",
+    "plan-kit-2",
+    "plan-kit-3",
+    "plan-kit-4",
+    "plan-kit-5",
+    "plan-kit-6",
+    "plan-kit-7",
+];
 
 /// One tile's two meshes, positions relative to its centre.
 struct Tile {
@@ -156,9 +174,31 @@ pub struct PlanScenario {
     trees: Vec<(Vec3, f32, f32, usize)>,
     /// Each lamp's place, scale (its height over the model's 8 m) and turn.
     lamps: Vec<(Vec3, f32, f32)>,
+    /// The style kit's instanced modules and their instances (module, transform, group).
+    kit_meshes: Vec<TriMesh>,
+    kit_instances: Vec<(u32, Mat4, u8)>,
+    /// What the kit built, logged once the app logs.
+    kit_report: Option<String>,
     camera: FlyCamera,
     title: String,
     triangles: usize,
+}
+
+/// Buildings drawn from a style set's grammar and kit (D-039's modules) within `radius` of
+/// `centre`; the masses beyond stay walls with facade textures.
+pub struct Detail<'a> {
+    /// The style set's rules.
+    pub grammar: &'a Grammar,
+    /// Their start shape's rule.
+    pub start: &'a str,
+    /// What the style puts over the roof line, metres.
+    pub top: f64,
+    /// Where, on the plan.
+    pub centre: DVec2,
+    /// How far round it, metres.
+    pub radius: f64,
+    /// The style's seed.
+    pub seed: u64,
 }
 
 impl PlanScenario {
@@ -172,6 +212,21 @@ impl PlanScenario {
         lamps: &[Lamp],
         camera: FlyCamera,
         title: &str,
+    ) -> Self {
+        Self::detailed(site, plan, masses, trees, lamps, camera, title, None)
+    }
+
+    /// As [`PlanScenario::new`], with the buildings near `detail`'s centre made of its kit.
+    #[allow(clippy::too_many_arguments)]
+    pub fn detailed(
+        site: &Site,
+        plan: &CityPlan,
+        masses: &[Mass],
+        trees: &[Tree],
+        lamps: &[Lamp],
+        camera: FlyCamera,
+        title: &str,
+        detail: Option<&Detail>,
     ) -> Self {
         let size = plan.size;
         let mut tiles = Tiles::new(size);
@@ -209,9 +264,16 @@ impl PlanScenario {
                 ribbon(&mut tiles, &rail, 0.25, 0.22, TRACK);
             }
         }
-        for m in masses {
-            mass(&mut tiles, m);
+        let mut near = Vec::new();
+        for (i, m) in masses.iter().enumerate() {
+            match detail {
+                Some(d) if geom::centroid(&m.footprint).distance(d.centre) < d.radius => {
+                    near.push(i);
+                }
+                _ => mass(&mut tiles, m),
+            }
         }
+        let kit = detail.map(|d| kit(&mut tiles, plan, masses, &near, d));
         let triangles = tiles
             .tiles
             .iter()
@@ -239,20 +301,179 @@ impl PlanScenario {
                 (world(size, l.pos, 0.0), (l.height / 8.0) as f32, turn)
             })
             .collect();
+        let (kit_meshes, kit_instances, kit_report) =
+            kit.map_or((Vec::new(), Vec::new(), None), |k| {
+                let instanced: usize = k
+                    .instances
+                    .iter()
+                    .map(|i| k.meshes[i.0 as usize].triangle_count())
+                    .sum();
+                let report = format!(
+                    "the kit's buildings: {} buildings, {} faces, {} terminals, {} instances of \
+                     {} unique modules ({} k instanced triangles), longest run of one opening \
+                     {}, derived and assembled in {:.0} ms",
+                    near.len(),
+                    k.faces,
+                    k.terminals,
+                    k.instances.len(),
+                    k.meshes.len(),
+                    instanced / 1000,
+                    k.longest_run,
+                    k.ms
+                );
+                (k.meshes, k.instances, Some(report))
+            });
         Self {
             tiles: tiles.tiles,
             trees,
             lamps,
+            kit_meshes,
+            kit_instances,
+            kit_report,
             camera,
             title: format!(
-                "{title}: {} masses, {} trees, {:.0} km of streets, {} tram stops",
+                "{title}: {} masses ({} from the kit), {} trees, {:.0} km of streets, {} tram stops",
                 masses.len(),
+                near.len(),
                 tree_count,
                 st.main_km + st.street_km,
                 st.stops
             ),
             triangles,
         }
+    }
+}
+
+/// The kit's share of a scene.
+struct Kit {
+    /// The instanced modules.
+    meshes: Vec<TriMesh>,
+    /// Their instances: module, transform, material group.
+    instances: Vec<(u32, Mat4, u8)>,
+    faces: usize,
+    terminals: usize,
+    /// The longest run of identical openings along one floor of one street front.
+    longest_run: usize,
+    /// Derivation and assembly, milliseconds.
+    ms: f64,
+}
+
+/// A 64-bit mix (SplitMix64's finaliser).
+fn mix(mut z: u64) -> u64 {
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// A mass's render tint, one of [`TINTS`], the same near (the kit's walls) and far (the facade
+/// texture's).
+fn tint_of(lot: u32) -> u8 {
+    (lot.wrapping_mul(2_654_435_761) >> 30) as u8 % TINTS
+}
+
+/// The masses `near` built from `d`'s grammar and kit: each face derived, the walls, bands and
+/// cornices merged into the tiles, the openings instanced; and their roofs.
+fn kit(tiles: &mut Tiles, plan: &CityPlan, masses: &[Mass], near: &[usize], d: &Detail) -> Kit {
+    let start = std::time::Instant::now();
+    let size = tiles.size;
+    let wanted: std::collections::HashSet<u32> = near.iter().map(|&i| i as u32).collect();
+    let faces: Vec<facades::Face> = facades::faces(plan, masses)
+        .into_iter()
+        .filter(|f| wanted.contains(&f.mass))
+        .collect();
+    let (terminals, _stats) = facades::derive(d.grammar, d.start, &faces, masses, d.top, d.seed);
+    let mut keys: std::collections::HashMap<(u16, i32, i32), u32> =
+        std::collections::HashMap::new();
+    let mut meshes = Vec::new();
+    let mut instances = Vec::new();
+    let (mut run, mut longest_run, mut last) = (0, 0, None);
+    for &(f, t) in &terminals {
+        let face = &faces[f as usize];
+        let m = &masses[face.mass as usize];
+        let name = d.grammar.name(t.module);
+        let (w, h) = (t.scope.size.x as f32, t.scope.size.y as f32);
+        let o = t.scope.origin;
+        let pos = Vec3::new(
+            (o.x - size * 0.5) as f32,
+            o.y as f32,
+            (o.z - size * 0.5) as f32,
+        );
+        let (x, y, z) = (
+            t.scope.x.as_vec3(),
+            t.scope.y.as_vec3(),
+            t.scope.normal().as_vec3(),
+        );
+        if modules::shared(name) {
+            let key = (
+                t.module,
+                (w * 100.0).round() as i32,
+                (h * 100.0).round() as i32,
+            );
+            let id = match keys.get(&key) {
+                Some(&id) => id,
+                None => {
+                    let Some(mesh) = modules::module(name, w, h) else {
+                        continue;
+                    };
+                    meshes.push(mesh);
+                    let id = (meshes.len() - 1) as u32;
+                    keys.insert(key, id);
+                    id
+                }
+            };
+            let colour = (mix(u64::from(m.lot)) % 4) as u8;
+            let spot = mix(u64::from(pos.x.to_bits()) << 32 | u64::from(pos.z.to_bits()))
+                ^ mix(u64::from(pos.y.to_bits()));
+            let lit = spot % 10 < 3;
+            let transform =
+                Mat4::from_cols(x.extend(0.0), y.extend(0.0), z.extend(0.0), pos.extend(1.0));
+            instances.push((id, transform, colour * 2 + u8::from(lit)));
+            // Runs of one opening along a floor of a street front.
+            if face.kind == FaceKind::Street {
+                let row = (f, (o.y * 10.0).round() as i64);
+                if last == Some((row, id)) {
+                    run += 1;
+                } else {
+                    run = 1;
+                }
+                last = Some((row, id));
+                longest_run = longest_run.max(run);
+            }
+        } else {
+            let Some(mesh) = modules::module(name, w, h) else {
+                continue;
+            };
+            let tint = tint_of(m.lot);
+            let tile = tiles.at(m.footprint[0]);
+            let at = pos - tile.centre;
+            let dst = &mut tile.masses;
+            let base = dst.positions.len() as u32;
+            for (p, n) in mesh.positions.iter().zip(&mesh.normals) {
+                let (p, n) = (Vec3::from(*p), Vec3::from(*n));
+                dst.positions
+                    .push((at + x * p.x + y * p.y + z * p.z).to_array());
+                dst.normals.push((x * n.x + y * n.y + z * n.z).to_array());
+                dst.uvs.push([0.0; 2]);
+            }
+            dst.indices.extend(mesh.indices.iter().map(|i| base + i));
+            dst.sections
+                .extend((0..mesh.triangle_count()).map(|t| match mesh.section(t) {
+                    modules::PLASTER => KIT_PLASTER + tint,
+                    modules::PARTY => KIT_PARTY,
+                    _ => KIT_STONE,
+                }));
+        }
+    }
+    for &i in near {
+        roof(tiles, &masses[i]);
+    }
+    Kit {
+        meshes,
+        instances,
+        faces: faces.len(),
+        terminals: terminals.len(),
+        longest_run,
+        ms: start.elapsed().as_secs_f64() * 1e3,
     }
 }
 
@@ -393,7 +614,7 @@ fn mass(tiles: &mut Tiles, m: &Mass) {
     let centre = tile.centre;
     let mesh = &mut tile.masses;
     let n = m.footprint.len();
-    let tint = (m.lot.wrapping_mul(2_654_435_761) >> 30) as u8 % TINTS;
+    let tint = tint_of(m.lot);
     // Shops along avenues and in pedestrian lanes.
     let shops = m.street_width >= 20.0 || m.street_width <= 8.0;
     let ground = GROUND_FLOOR as f32;
@@ -430,14 +651,22 @@ fn mass(tiles: &mut Tiles, m: &Mass) {
             );
         }
     }
-    let roof = match m.roof {
+    roof(tiles, m);
+}
+
+/// A mass's roof: green, solar or a terrace.
+fn roof(tiles: &mut Tiles, m: &Mass) {
+    let size = tiles.size;
+    let tile = tiles.at(m.footprint[0]);
+    let centre = tile.centre;
+    let section = match m.roof {
         Roof::Green => ROOF_GREEN,
         Roof::Solar => ROOF_SOLAR,
         Roof::Terrace => ROOF_TERRACE,
     };
     for t in geom::triangulate(&m.footprint) {
         let p = t.map(|i| world(size, m.footprint[i], m.height) - centre);
-        triangle_uv(mesh, p, [[0.0; 2]; 3], Vec3::Y, roof);
+        triangle_uv(&mut tile.masses, p, [[0.0; 2]; 3], Vec3::Y, section);
     }
 }
 
@@ -523,6 +752,21 @@ impl Scenario for PlanScenario {
                     ..colour(rgb, 12.0, 0.04)
                 }
             };
+        // The kit's render and stone, projected: concrete's relief, faint, under the tint (its
+        // colour map's pits read as stains on a render).
+        let [_, grain_normal] = textures::concrete(23, 512);
+        let grain = materials.textures.add(&grain_normal)?;
+        let render = |rgb: [f32; 3]| RenderLayer {
+            normal_texture: Some(grain),
+            texture_scale: 2.0,
+            normal_strength: 0.25,
+            hex_tiling: true,
+            ..colour(rgb, 10.0, 0.03)
+        };
+        let stone = RenderLayer {
+            texture_scale: 1.5,
+            ..render([0.82, 0.78, 0.70])
+        };
         materials.add_rows(
             "plan-mass",
             vec![
@@ -556,8 +800,56 @@ impl Scenario for PlanScenario {
                     "plan terrace".into(),
                     colour([0.66, 0.62, 0.56], 14.0, 0.04),
                 ),
+                ("plan render (sand)".into(), render([0.94, 0.88, 0.76])),
+                ("plan render (ochre)".into(), render([0.92, 0.80, 0.62])),
+                ("plan render (rose)".into(), render([0.90, 0.76, 0.68])),
+                ("plan render (white)".into(), render([0.95, 0.93, 0.88])),
+                ("plan stone".into(), stone),
+                ("plan party wall".into(), render([0.78, 0.72, 0.64])),
             ],
         );
+        // The kit's groups: shutters and fascias in sage, blue-grey, blue and warm white, with
+        // their awnings and frames; each with dark glass and with lit glass.
+        let palettes = [
+            ([0.36, 0.46, 0.34], [0.60, 0.28, 0.18], [0.86, 0.85, 0.80]),
+            ([0.40, 0.48, 0.55], [0.14, 0.30, 0.20], [0.86, 0.85, 0.80]),
+            ([0.22, 0.38, 0.52], [0.14, 0.19, 0.32], [0.20, 0.20, 0.21]),
+            ([0.76, 0.73, 0.66], [0.78, 0.70, 0.55], [0.20, 0.20, 0.21]),
+        ];
+        let glass = |lit: bool| RenderLayer {
+            emissive: if lit {
+                // A room behind curtains, about 2 cd/m², warm.
+                [glow * 0.06, glow * 0.042, glow * 0.022]
+            } else {
+                [0.0; 3]
+            },
+            reflectance: 0.06,
+            ..colour([0.03, 0.035, 0.04], 3000.0, 0.6)
+        };
+        for (k, &group) in KIT_GROUPS.iter().enumerate() {
+            let (shutter, fabric, frame) = palettes[k / 2];
+            materials.add_rows(
+                group,
+                vec![
+                    (format!("{group} render"), render([0.94, 0.88, 0.76])),
+                    (format!("{group} stone"), stone),
+                    (format!("{group} frame"), colour(frame, 40.0, 0.1)),
+                    (format!("{group} glass"), glass(k % 2 == 1)),
+                    (format!("{group} shutter"), colour(shutter, 14.0, 0.05)),
+                    (
+                        format!("{group} iron"),
+                        colour([0.05, 0.05, 0.05], 30.0, 0.15),
+                    ),
+                    (format!("{group} awning"), colour(fabric, 6.0, 0.02)),
+                    (
+                        format!("{group} door"),
+                        colour([0.28, 0.17, 0.10], 30.0, 0.1),
+                    ),
+                    (format!("{group} party"), render([0.78, 0.72, 0.64])),
+                ],
+            );
+        }
+        let kit_rows: Vec<_> = KIT_GROUPS.iter().map(|g| materials.of(g)).collect();
         let trunk = colour([0.20, 0.15, 0.11], 8.0, 0.02);
         materials.add_rows(
             "plan-tree-a",
@@ -635,6 +927,21 @@ impl Scenario for PlanScenario {
                 );
                 builder.add_instance_with_material(model, transform, lamp_row);
             }
+        }
+        let kit_ids: Vec<_> = self
+            .kit_meshes
+            .iter()
+            .map(|m| builder.add_mesh(&MeshletMesh::build(m)))
+            .collect();
+        for &(module, transform, group) in &self.kit_instances {
+            builder.add_instance_with_material(
+                kit_ids[module as usize],
+                transform,
+                kit_rows[group as usize],
+            );
+        }
+        if let Some(report) = &self.kit_report {
+            tracing::info!("{report}");
         }
         let mut scene = builder.build(&ctx.device)?;
         scene.build_tlas(&ctx.device, &ctx.shaders)?;

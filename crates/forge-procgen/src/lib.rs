@@ -32,6 +32,8 @@
 //! - [`city`]: a city's plan before any building (D-059): districts, streets traced in a tensor
 //!   field, the road graph, blocks with courtyards, parks by the 3-30-300 rule, lots, tram lines,
 //!   boat crossings and landmarks, drawn as a map (`cargo run -p city-map`).
+//! - [`grammar`]: a split grammar on flat scopes (D-039's control grammar, CGA's operators) with a
+//!   text form: floors, bays and the modules a building's faces are made of.
 //! - [`valley`]: the rivers' valleys carved into the field: a floor for the water, a bench or a
 //!   floodplain on the gentler reaches, the walls' foot lowered to meet it; and the steep
 //!   valleys' ground painted: gravel beds, scree at the walls' foot, scrub on the walls.
@@ -55,6 +57,7 @@ pub mod coast;
 pub mod erosion;
 pub mod field;
 pub mod flow;
+pub mod grammar;
 pub mod hydrology;
 pub mod island;
 pub mod lake;

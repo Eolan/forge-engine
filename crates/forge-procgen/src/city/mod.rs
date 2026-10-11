@@ -24,6 +24,7 @@
 pub mod bible;
 pub mod blocks;
 pub mod example;
+pub mod facades;
 pub mod geom;
 pub mod graph;
 pub mod lamps;

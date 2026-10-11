@@ -7,7 +7,7 @@
 use clap::{CommandFactory, FromArgMatches, Parser};
 use forge_app::FlyCamera;
 use forge_procgen::city::{self, example, mass};
-use glam::Vec3;
+use glam::{DVec2, Vec3};
 
 /// The shared app's flags and the plan's.
 #[derive(Parser, Debug)]
@@ -20,6 +20,18 @@ struct Cli {
     /// Start on the pavement of the avenue nearest the centre, at eye height.
     #[arg(long)]
     street: bool,
+    /// Turn the street view this many degrees to the left (90 faces the far side's buildings,
+    /// -90 the near side's).
+    #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
+    turn: f32,
+    /// Build the masses within this many metres of the view from the style's grammar and kit
+    /// (D-039); 0 draws every mass with facade textures.
+    #[arg(long, default_value_t = 400.0)]
+    detail: f64,
+    /// A style set's rules in the grammar's text form; the engine's Mediterranean example
+    /// when not given.
+    #[arg(long)]
+    rules: Option<std::path::PathBuf>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -48,11 +60,44 @@ fn main() -> anyhow::Result<()> {
         ..FlyCamera::default()
     };
     let camera = if cli.street {
-        city_plan::street_camera(&plan, centre).unwrap_or(camera)
+        city_plan::street_camera(&plan, centre).map_or(camera, |mut c| {
+            c.yaw += cli.turn.to_radians();
+            c
+        })
     } else {
         camera
     };
-    let scenario =
-        city_plan::PlanScenario::new(&site, &plan, &masses, &trees, &lamps, camera, "city plan");
+    // The kit round the street view, or round the centre seen from the air.
+    let text = match &cli.rules {
+        Some(path) => std::fs::read_to_string(path)?,
+        None => city::facades::MEDITERRANEAN.to_owned(),
+    };
+    let grammar = forge_procgen::grammar::Grammar::parse(&text)?;
+    let half = cli.size * 0.5;
+    let detail = city_plan::Detail {
+        grammar: &grammar,
+        start: "Facade",
+        top: 0.9,
+        centre: if cli.street {
+            DVec2::new(
+                f64::from(camera.position.x) + half,
+                f64::from(camera.position.z) + half,
+            )
+        } else {
+            centre
+        },
+        radius: cli.detail,
+        seed: 12,
+    };
+    let scenario = city_plan::PlanScenario::detailed(
+        &site,
+        &plan,
+        &masses,
+        &trees,
+        &lamps,
+        camera,
+        "city plan",
+        (cli.detail > 0.0).then_some(&detail),
+    );
     city_blocks::run(cli.app, "forge city-plan", Some(Box::new(scenario)))
 }

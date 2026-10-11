@@ -3926,9 +3926,13 @@ Each note's city-specific appendix stays in the sandbox.
        of release quality. *Begun 2026-10-11:*
        - each lot's mass (the grammar's first stage), its floors capped by the style bible
          (#246, `city::bible`);
-       - facades as textures of window bays and shopfronts, drawn in 3D by `demos/city-plan`.
+       - facades as textures of window bays and shopfronts, drawn in 3D by `demos/city-plan`;
+       - D-039's first build (#247): the component split (`city::facades`), the split grammar
+         with its text form (`forge_procgen::grammar`), the first style set's rules and kit
+         (`forge_geom::modules`), the buildings near the view drawn from them.
 
-       D-039's modules are next (#247).
+       Next for #247: the module grid, a proxy per building, roofs from the straight
+       skeleton.
     3. **Vegetation:** trees, grass, parks. *Begun 2026-10-11:* `city::trees` places rows
        along the streets, trees in parks, on quays and in courtyards, drawn as one instanced
        low-poly tree.

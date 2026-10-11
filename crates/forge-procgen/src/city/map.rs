@@ -792,3 +792,58 @@ pub fn write_points(
     }
     canvas.save(path)
 }
+
+/// Each mass's faces (the grammar's component split, `city::facades`) as strokes over the plan's
+/// ground in `window`: street faces red, courtyard faces blue, party walls grey, the entrances
+/// as dots, corners as rings.
+pub fn write_faces(
+    site: &Site,
+    plan: &CityPlan,
+    faces: &[super::facades::Face],
+    path: &Path,
+    window: (DVec2, f64),
+    metres_per_pixel: f64,
+) -> image::ImageResult<()> {
+    use super::facades::FaceKind;
+    let mut canvas = Canvas::window(window.0, window.1, metres_per_pixel);
+    for block in &plan.blocks {
+        let c = match block.use_ {
+            BlockUse::Park => PARK,
+            BlockUse::Quay => QUAY,
+            BlockUse::Square => SQUARE,
+            BlockUse::Built => COURTYARD,
+        };
+        canvas.fill(&block.polygon, c);
+    }
+    paint_water(&mut canvas, site);
+    for e in &plan.roads.edges {
+        canvas.stroke(&e.points, e.profile.width(), [236, 232, 224]);
+    }
+    let w = 1.6 * metres_per_pixel;
+    for f in faces {
+        let c = match f.kind {
+            FaceKind::Street => [214, 48, 40],
+            FaceKind::Court => [48, 96, 214],
+            FaceKind::Party => [120, 120, 120],
+        };
+        canvas.stroke(&[f.left, f.right], w, c);
+        if f.entrance {
+            let mid = (f.left + f.right) * 0.5;
+            canvas.stroke(
+                &[mid, mid + DVec2::splat(0.01)],
+                4.0 * metres_per_pixel,
+                [20, 20, 20],
+            );
+        }
+        for (corner, p) in f.corners.iter().zip([f.left, f.right]) {
+            if *corner {
+                canvas.stroke(
+                    &[p, p + DVec2::splat(0.01)],
+                    3.0 * metres_per_pixel,
+                    [240, 180, 0],
+                );
+            }
+        }
+    }
+    canvas.save(path)
+}

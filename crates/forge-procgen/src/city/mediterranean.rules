@@ -1,0 +1,60 @@
+# The engine's example style set: a Mediterranean-European perimeter block (D-059's first
+# style set). Rendered walls in warm tints; tall French windows with shutters; balconies on
+# the first floor of the street fronts; shops on the avenues and the lanes; a string course
+# over the ground floor, a cornice and a parapet. Each building picks its bays, balconies and
+# shutters from its seed, so neighbours differ and one building's faces agree.
+#
+# The start shape is `Facade`, with the attributes `city::facades::attrs` gives it (street,
+# court, party, corner_left, corner_right, entrance, floors, street_width, ground, floor) and a
+# scope 0.9 m above the roof line for the parapet.
+
+let bay = 2.8 | 3.0 | 3.2 | 3.4
+let balconies = 0 | 1 | 1 | 2
+let shutters = 0 | 1 | 1 | 1
+
+Facade [party] -> insert(blank)
+Facade -> split(y, level) { ground: Ground | {~floor: Floor}* | 0.9: Top }
+
+# Above the roof line: a cornice on the street, then the parapet round the roof.
+Top [court] -> Parapet
+Top -> split(y) { 0.4: Cornice | ~0.5: Parapet }
+Cornice -> insert(cornice)
+Parapet -> insert(parapet)
+
+# The ground floor: shops, the entrance and windows, then a string course on the street.
+Ground [court] -> GroundStorey
+Ground -> split(y) { ~3.9: GroundStorey | 0.3: Band }
+Band -> insert(band)
+GroundStorey -> split(x) { ~0.5: Wall | {bay: GroundBay}* | ~0.5: Wall }
+GroundBay [entrance && middle] -> split(x) { ~1: Wall | 1.6: Door | ~1: Wall }
+GroundBay [street && street_width >= 20] -> Shops
+GroundBay [street && street_width <= 8] -> Shops
+GroundBay [court] -> split(x) { ~1: Wall | 1.0: CourtColumn | ~1: Wall }
+GroundBay -> split(x) { ~1: Wall | 1.2: LowColumn | ~1: Wall }
+Shops -> split(x) { 0.3: Wall | ~1: Shop | 0.3: Wall }
+Door -> split(y) { 3.0: Entrance | ~1: Wall }
+Entrance -> insert(door)
+Shop -> split(y) { 3.3: Shopfront | ~1: Wall }
+Shopfront -> choose(index) { 1: ShopOpen | 1: ShopAwning }
+ShopOpen -> insert(shop)
+ShopAwning -> insert(shop_awning)
+LowColumn -> split(y) { 1.0: Wall | 2.2: LowWindow | ~1: Wall }
+LowWindow -> insert(window_low)
+
+# The upper floors: bays of French windows; balconies on the first floor of the street front,
+# and on the top floor too for some buildings.
+Floor -> split(x) { ~0.5: Wall | {bay: Bay}* | ~0.5: Wall }
+Bay [court] -> split(x) { ~1: Wall | 1.0: CourtColumn | ~1: Wall }
+Bay [level.index == 0 && balconies >= 1] -> BalconyBay
+Bay [level.last && balconies >= 2] -> BalconyBay
+Bay -> split(x) { ~1: Wall | 1.2: WindowColumn | ~1: Wall }
+BalconyBay -> split(x) { ~1: Wall | 1.2: BalconyColumn | ~1: Wall }
+WindowColumn -> split(y) { 0.1: Wall | 2.5: Window | ~1: Wall }
+Window [shutters] -> insert(window)
+Window -> insert(window_plain)
+BalconyColumn -> split(y) { 0.1: Wall | 2.5: Balcony | ~1: Wall }
+Balcony -> insert(balcony)
+CourtColumn -> split(y) { 0.9: Wall | 1.6: CourtWindow | ~1: Wall }
+CourtWindow -> insert(window_court)
+
+Wall -> insert(wall)
