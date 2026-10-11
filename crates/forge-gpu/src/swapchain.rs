@@ -64,6 +64,21 @@ pub struct HdrMetadata {
     pub max_fall: f32,
 }
 
+/// How the swapchain paces its presents.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pacing {
+    /// One present a refresh (FIFO).
+    Vsync,
+    /// As fast as the frames come, never tearing: mailbox, else FIFO. Interactive runs: an
+    /// immediate present at hundreds of frames a second tears the image into bands drawn at
+    /// different times as the camera moves (the owner's walk, 2026-10-11).
+    Smooth,
+    /// As fast as possible, tearing allowed: immediate through Streamline (whose mailbox
+    /// presents are held to the refresh), else mailbox, else immediate. Scripted runs, whose
+    /// frame times are measured.
+    Uncapped,
+}
+
 /// The window's presentable images.
 pub struct Swapchain {
     device: Arc<Device>,
@@ -76,20 +91,20 @@ pub struct Swapchain {
     sampled: Vec<SampledImageId>,
     format: vk::Format,
     extent: vk::Extent2D,
-    vsync: bool,
+    pacing: Pacing,
     /// The mode asked for, and the one the surface gave.
     requested: SurfaceMode,
     mode: SurfaceMode,
 }
 
 impl Swapchain {
-    /// Creates a swapchain for `surface`. `vsync` selects FIFO; otherwise mailbox/immediate.
+    /// Creates a swapchain for `surface`, its presents paced by `pacing`.
     pub fn new(
         device: Arc<Device>,
         surface: Arc<Surface>,
         width: u32,
         height: u32,
-        vsync: bool,
+        pacing: Pacing,
     ) -> Result<Self> {
         let mut this = Self {
             device,
@@ -100,7 +115,7 @@ impl Swapchain {
             sampled: Vec::new(),
             format: vk::Format::UNDEFINED,
             extent: vk::Extent2D::default(),
-            vsync,
+            pacing,
             requested: SurfaceMode::Sdr,
             mode: SurfaceMode::Sdr,
         };
@@ -202,17 +217,21 @@ impl Swapchain {
             _ => None,
         }
         .filter(|mode| modes.contains(mode));
+        let uncapped = self.pacing == Pacing::Uncapped;
         let present_mode = if let Some(mode) = forced {
             mode
-        } else if self.vsync {
+        } else if self.pacing == Pacing::Vsync {
             vk::PresentModeKHR::FIFO
-        } else if instance.through_streamline() && modes.contains(&vk::PresentModeKHR::IMMEDIATE) {
+        } else if uncapped
+            && instance.through_streamline()
+            && modes.contains(&vk::PresentModeKHR::IMMEDIATE)
+        {
             // Through Streamline's interposer, MAILBOX presents were held to the display's
             // refresh in most runs (the acquire waited 8 ms at 120 Hz); IMMEDIATE never was.
             vk::PresentModeKHR::IMMEDIATE
         } else if modes.contains(&vk::PresentModeKHR::MAILBOX) {
             vk::PresentModeKHR::MAILBOX
-        } else if modes.contains(&vk::PresentModeKHR::IMMEDIATE) {
+        } else if uncapped && modes.contains(&vk::PresentModeKHR::IMMEDIATE) {
             vk::PresentModeKHR::IMMEDIATE
         } else {
             vk::PresentModeKHR::FIFO

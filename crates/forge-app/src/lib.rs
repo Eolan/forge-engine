@@ -38,8 +38,8 @@ pub use forge_gpu::vk;
 use forge_gpu::{
     Buffer, BufferAccess, BufferDesc, Device, DeviceOptions, FRAMES_IN_FLIGHT, FrameGraph,
     FrameSlot, Frames, GraphBuffer, GraphStats, ImageAccess, ImageHandle, Instance, MemoryCategory,
-    MemoryLocation, RawImage, RenderGraph, ResourceState, ShaderCompiler, Surface, SurfaceMode,
-    Swapchain, VENDOR_NVIDIA,
+    MemoryLocation, Pacing, RawImage, RenderGraph, ResourceState, ShaderCompiler, Surface,
+    SurfaceMode, Swapchain, VENDOR_NVIDIA,
 };
 pub use hdr::{
     ContentLight, DisplayOutput, DisplaySettings, HdrMode, OFFSCREEN_FORMAT, PEAKS, preset_peak,
@@ -65,7 +65,8 @@ pub struct AppConfig {
     pub width: u32,
     /// Initial window size.
     pub height: u32,
-    /// Vertical sync.
+    /// Vertical sync. Without it, interactive runs present as fast as they draw without tearing
+    /// and scripted runs (a frame limit) uncapped ([`Pacing`]).
     pub vsync: bool,
     /// Vulkan validation layer (always on in debug builds).
     pub validate: bool,
@@ -704,7 +705,14 @@ impl<D: Demo> State<D> {
             Arc::clone(&surface),
             size.width,
             size.height,
-            config.vsync,
+            // Scripted runs measure their frames uncapped; interactive ones never tear.
+            if config.vsync {
+                Pacing::Vsync
+            } else if config.frame_limit.is_some() {
+                Pacing::Uncapped
+            } else {
+                Pacing::Smooth
+            },
         )?;
         // What the OS says of the window's display (issue #94), under the calibration saved for
         // it and the flags (#125). Scripted runs keep to the OS's values, so captures do not
