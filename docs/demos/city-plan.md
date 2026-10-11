@@ -190,7 +190,9 @@ Three stages, each generic:
   Walls between two pieces of one lot are inside the building and get no face, if the lot's
   other pieces cover them all along: each wall is probed at five points. A single probe at
   its middle dropped 816 of 2 627 walls covered only in part, and the courtyards saw into
-  the buildings, their window frames floating (the owner's second walk). A street face
+  the buildings, their window frames floating (the owner's second walk). A wall with another
+  lot's building within 2.5 m is a party wall, blank, whatever lies between: a slit between two
+  buildings had windows facing a wall a metre away. A street face
   knows the corners it turns, and each building's longest street face holds its entrance.
   `city-map` draws the split as `faces-centre.png`.
 - **`forge_procgen::grammar`, a split grammar** with CGA's operators (Müller et al. 2006):

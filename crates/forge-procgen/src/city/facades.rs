@@ -130,6 +130,18 @@ pub fn edge_kinds(plan: &CityPlan, masses: &[Mass]) -> Vec<Vec<Option<FaceKind>>
                         && geom::contains(&plan.lots[l as usize].polygon, probe)
                 })
             };
+            // A neighbour's building within 2.5 m, whatever lies between: a wall a metre from
+            // another is blank, not windows onto a slit (the owner's second walk).
+            let close = mid + out_dir * 2.5;
+            let crowded = || {
+                lots_of[lot.block as usize].iter().any(|&l| {
+                    l != m.lot
+                        && by_lot.get(&l).is_some_and(|ms| {
+                            ms.iter()
+                                .any(|&j| geom::contains(&masses[j as usize].footprint, close))
+                        })
+                })
+            };
             let on_street = || {
                 let k = block.polygon.len();
                 (0..k).any(|e| {
@@ -140,6 +152,8 @@ pub fn edge_kinds(plan: &CityPlan, masses: &[Mass]) -> Vec<Vec<Option<FaceKind>>
             };
             let kind = if sibling {
                 None
+            } else if crowded() {
+                Some(FaceKind::Party)
             } else if courtyard() {
                 Some(FaceKind::Court)
             } else if neighbour() {

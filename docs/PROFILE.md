@@ -1337,6 +1337,35 @@ A room's probes 1 m apart instead of 4 (#175), the same number of probes, Sponza
 view at noon, 1600 × 900, 616 frames: the frame 2.24 → 2.41 ms, `gi/probe rays` 0.90 → 1.02,
 `gi/probe blend` 0.26 → 0.31.
 
+## `city-plan` — a city's plan in 3D, measured on the private sandbox's city (D-059, 2026-10-11)
+
+RTX 5070 Ti, 1600 × 900, TAA, 600 frames, a city of 37 816 masses (1 256 of them in the kit
+within 1 km: 104 M instanced triangles), 118 k trees and 1 million people. Two views: at street
+level by the harbour with the people at 17:00, and the oblique overview of the same place.
+
+| | Street, people | Overview |
+|---|---|---|
+| GPU frame | 2.37 ms | 3.87 ms |
+| CPU frame (without the wait) | 1.79 ms | 0.91 ms |
+| `cpu/declare passes` (the crowd's figures and movers included) | 1.35 ms | 0.44 ms |
+| p50 / p99 frame | 2.34 / 3.37 ms | 3.87 / 4.79 ms |
+
+The largest passes:
+- **Street:**
+  - `gi/probe rays` 0.58 and `gi/probe blend` 0.51 ms: 46 % of the frame;
+  - `shading/standard` 0.38, the first cluster cull 0.27, `shadow/trace` 0.25, `movers/tlas`
+    0.24 (the crowd's 2 400 slots and the trams), `sky/clouds` 0.23.
+- **Overview:**
+  - the first cluster cull 0.93 and the first software raster 0.67 ms: the kit's thin details
+    seen from 150 m, small triangles in the software rasteriser;
+  - `shading/standard` 0.44, the probes 0.69.
+
+Nothing needs work now (the owner's rule: profile now and then, deep optimisation later unless
+something stands out). Two things to watch:
+- **The probes:** half the street frame.
+- **The kit from afar:** its thin details (louvres, railings, mullions) fill the software
+  rasteriser. The far forms of the trim-sheet study would cut both that cost and the shimmer.
+
 ## `planet` — a planet from orbit to its ground (#220, D-056, 2026-10-10)
 
 RTX 5070 Ti, 1600 × 900, TAA, the descent held at its golden shots (`--shot`), sunny 16, 118
