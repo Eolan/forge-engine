@@ -57,9 +57,12 @@ positions are equal at one, three and six workers, to the bit. The bench (six wo
 |---|---|---|
 | The example, 295 789 people, two days | 2.45 s | 0.49 s (5.0 times) |
 | A million-person city, two days | 8.5 s | 1.7 s (5.2 times) |
+| 4 074 555 people (`population-bench --scale 13.5`: the example's floors 13.5 times over), two days | 44.8 s | 8.2 s (5.5 times) |
 
 The million needs 36.6 MB, 303 events a real second at one game hour per 15 minutes, and 0.02 %
-of one core. That is #250's first test, with the digests equal at one and six workers.
+of one core. That is #250's first test, with the digests equal at one and six workers. At 4 M:
+146.7 MB, generated in 26 s (on one thread), 1 216 events a real second, 0.10 % of one core; the
+same digest at six workers.
 
 ![The example city's people at 08:00, 13:00 and 21:00](images/population-day.png)
 

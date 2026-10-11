@@ -25,6 +25,10 @@ struct Args {
     /// Game days to run.
     #[arg(long, default_value_t = 2)]
     days: u32,
+    /// Every building's floors this many times over (a scale test: 13.5 gives about 4 M people
+    /// in the example's 4 km); no maps then.
+    #[arg(long, default_value_t = 1.0)]
+    scale: f64,
 }
 
 fn main() -> Result<()> {
@@ -39,7 +43,8 @@ fn main() -> Result<()> {
             let c = geom::centroid(&m.footprint);
             Building {
                 pos: [c.x as f32, c.y as f32],
-                floor_area: (geom::signed_area(&m.footprint) * f64::from(m.floors)) as f32,
+                floor_area: (geom::signed_area(&m.footprint) * f64::from(m.floors) * args.scale)
+                    as f32,
                 active_ground: m.street_width >= 20.0 || m.street_width <= 8.0,
             }
         })
@@ -60,7 +65,7 @@ fn main() -> Result<()> {
         &parks,
         args.size as f32,
         args.days,
-        Some(&shots),
+        (args.scale == 1.0).then_some(&shots),
     );
     println!("{report}");
     Ok(())
