@@ -487,9 +487,11 @@ river avenue's lanes and walkers on its pavements. Bottom: at 20:00, a lane's ca
 evening's walkers.* `--people HOUR` builds the plan's population from the masses
 (`forge_sim::population`, 307 283 people, 2 s) and runs its day to that hour. Each frame:
 - **who is drawn:** people within 220 m of the camera, as placeholder figures
-  (`forge_geom::figures`: blocky, in eight palettes, walking (a left stride, passing, a right
-  stride, a pose every 0.7 m along the way), standing, riding a bike or
-  seated);
+  (`forge_geom::figures`: blocky, in eight palettes, walking, standing, riding a bike or
+  seated). A walk is a 1.4 m gait cycle of eight poses: a left stride, a half stride, passing,
+  a half, a right stride, a half, passing, a half, a new pose every 17.5 cm, each person at
+  their own phase. Four poses held 0.7 m each read as jerky (the owner); skinned humans
+  replace them with #251;
 - **those out at a café:** seated at the kit's terraces. Each seat is taken in the share that
   the people out at the cafés within 300 m make of the seats there, up to nine in ten. The
   same seats stay taken while the share holds.

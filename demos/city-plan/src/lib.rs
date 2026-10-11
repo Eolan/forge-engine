@@ -2286,7 +2286,7 @@ impl Scenario for PlanScenario {
         }
         // The crowd's figures, each palette in its poses (`crowd::POSES`): the left stride,
         // standing (the parks' and the platforms' people), riding, seated (the cafés'), the
-        // right stride; a mesh each.
+        // right stride, and the half strides between; a mesh each.
         if self.crowd.is_some() {
             for (g, &row) in people_rows.iter().enumerate().take(crowd::GROUPS) {
                 let height = 1.62 + 0.04 * (g % 5) as f32;
@@ -2296,6 +2296,8 @@ impl Scenario for PlanScenario {
                     forge_geom::figures::cyclist(height),
                     forge_geom::figures::sitter(height),
                     forge_geom::figures::walker(height, -0.3),
+                    forge_geom::figures::walker(height, 0.15),
+                    forge_geom::figures::walker(height, -0.15),
                 ] {
                     let mesh = builder.add_mesh(&MeshletMesh::build(&figure));
                     builder.set_mesh_material(mesh, row);

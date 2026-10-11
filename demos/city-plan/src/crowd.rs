@@ -23,8 +23,9 @@ use glam::{DVec2, Vec2, Vec3};
 
 /// The figures' palettes.
 pub const GROUPS: usize = 8;
-/// The meshes of each palette: left stride, standing, riding, seated, right stride.
-pub const POSES: usize = 5;
+/// The meshes of each palette: left stride, standing, riding, seated, right stride, and the half
+/// strides left and right between them.
+pub const POSES: usize = 7;
 /// Figures a mesh (a palette in one pose) shows at most.
 pub const PER_MESH: usize = 60;
 /// How far round the camera people are drawn, metres.
@@ -525,8 +526,8 @@ impl Crowd {
 
     /// The figures to draw round `camera` (the world's x and z): for each of the
     /// `POSES × GROUPS` meshes in order (each palette's left stride, standing, riding, seated,
-    /// right stride), its [`PER_MESH`] slots, each empty or a figure; `tram_clock` is the trams'
-    /// service clock, whose standing trams the waiting people board.
+    /// right stride, the half strides), its [`PER_MESH`] slots, each empty or a figure;
+    /// `tram_clock` is the trams' service clock, whose standing trams the waiting people board.
     ///
     /// A mesh shows the nearest of those it could show, so a full mesh drops the farthest, not
     /// whoever the scan met last (the owner saw a walker ahead blink in and out). Someone drawn
@@ -670,12 +671,14 @@ impl Crowd {
                 continue;
             }
             let seed = self.sim.pop.seed[p];
-            // Riding, or walking: the left stride, passing, the right stride, passing, a pose
-            // every 0.7 m along the way.
+            // Riding, or walking a gait cycle of 1.4 m in eight poses: the left stride, half,
+            // passing, half, the right stride, half, passing, half. Four poses held 0.7 m each
+            // read as jerky (the owner); each person starts at their own phase.
             let pose = if riding {
                 2
             } else {
-                [0, 1, 4, 1][((gone * route.length() / 0.7) as usize) % 4]
+                let phase = (gone * route.length() / 0.175) as usize + seed as usize;
+                [0, 5, 1, 6, 4, 6, 1, 5][phase % 8]
             };
             let mesh = (seed as usize % GROUPS) * POSES + pose;
             let at = Vec3::new((q.x - half) as f32, level, (q.y - half) as f32);
