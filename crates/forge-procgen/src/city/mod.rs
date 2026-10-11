@@ -31,6 +31,7 @@ pub mod mass;
 pub mod streets;
 pub mod tensor;
 pub mod transit;
+pub mod trees;
 
 use std::time::Instant;
 

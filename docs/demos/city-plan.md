@@ -34,6 +34,7 @@ cargo run --release -p city-map -- --size 4000 --scale 2 --out captures/city
 | Transit | tram lines by the shortest path through their waypoints, main roads preferred (a waypoint far from any main road snaps to the nearest street); stops every 450 m moved to nearby junctions; lines added until a target share of blocks has a stop within 400 m (`transit::cover`); boat crossings where a river runs long without a bridge; street profiles (tram avenue, avenue, shared, pedestrian, path) | `city::transit` |
 | Masses | each lot's building: the lot cut by the building line of each street it touches, less the courtyard's hull (or a building's depth along its street where no courtyard fits); floors from the district's range, capped by the style bible's height-to-width ratio on the street it fronts; green, solar or terrace roofs | `city::mass` |
 | Style bible | one TOML record of the city's rules (height to street width, green roofs, green area per block, park and stop reach, the streets' share, per-district floors, lots, spacing and walls), put into the plan's parameters and measured by a checker that names what fails | `city::bible` |
+| Trees | rows along the streets by profile (two on avenues every 9 m, one on shared streets every 11 m, every 18 m in lanes), none within 10 m of a junction; a jittered grid in parks (13 m, two thirds filled) and courtyards (16 m, half) | `city::trees` |
 | Maps and numbers | a small rasteriser: the plan (with the districts', landmarks' and lines' names in the engine's font, kept from overlapping), a checks map (blocks by what they lack), an oblique massing view of any window; the plan's numbers and its digest | `city::map` |
 
 Everything is a pure function of the site and the parameters. Costs are integers in the
@@ -107,7 +108,7 @@ cargo run --release -p city-plan
 
 ![The example city in 3D](images/city-plan-3d.png)
 
-*The example city's masses, gardens, parks, streets, tram tracks and river, drawn by
+*The example city's masses, trees, gardens, parks, streets, tram tracks and river, drawn by
 city-blocks' renderer (sky, clouds, ray-traced soft shadows, probes, TAA) through its scene
 interface.* `demos/city-plan` turns any plan and its masses into meshes in tiles of 250 m: the
 site's land and water as runs of cells, blocks and street ribbons, walls and roofs (green,
@@ -116,10 +117,10 @@ from the site's cells. A private sandbox hands its own plan to `PlanScenario::ne
 
 | | |
 |---|---|
-| Meshes / triangles | 484 / 184 k |
+| Meshes / triangles / trees | 484 / 184 k / 36 224 instances of one tree |
 | Built and cooked | 1.3 s |
-| GPU frame at 2800 × 1575, this view | 3.33 ms |
-| p50 / p99 frame | 3.33 / 6.68 ms |
+| GPU frame at 2800 × 1575, this view | 3.66 ms (3.33 without the trees) |
+| p50 / p99 frame | 3.67 / 7.28 ms |
 
 ## Next (#245–#247)
 

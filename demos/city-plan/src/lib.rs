@@ -21,6 +21,7 @@ use forge_geom::MeshletMesh;
 use forge_geom::city::PropSpec;
 use forge_geom::procedural::TriMesh;
 use forge_procgen::city::mass::{Mass, Roof};
+use forge_procgen::city::trees::Tree;
 use forge_procgen::city::{BlockUse, CityPlan, LAGOON, SEA, Site, geom};
 use forge_render::MeshletScene;
 use forge_render::MeshletSceneBuilder;
@@ -146,17 +147,22 @@ fn colour(rgb: [f32; 3], power: f32, specular: f32) -> RenderLayer {
 /// A plan in 3D: its meshes, built on the CPU, cooked and drawn when the app builds the scene.
 pub struct PlanScenario {
     tiles: Vec<Tile>,
+    /// Each tree's place in the world, its scale (its height over the model's 10 m), its turn and
+    /// which of the two models it uses.
+    trees: Vec<(Vec3, f32, f32, usize)>,
     camera: FlyCamera,
     title: String,
     triangles: usize,
 }
 
 impl PlanScenario {
-    /// The scene of `plan` on `site` with its `masses`, the camera starting at `camera`.
+    /// The scene of `plan` on `site` with its `masses` and `trees`, the camera starting at
+    /// `camera`.
     pub fn new(
         site: &Site,
         plan: &CityPlan,
         masses: &[Mass],
+        trees: &[Tree],
         camera: FlyCamera,
         title: &str,
     ) -> Self {
@@ -204,12 +210,28 @@ impl PlanScenario {
             .map(|t| t.ground.triangle_count() + t.masses.triangle_count())
             .sum();
         let st = &plan.stats;
+        let tree_count = trees.len();
+        let trees = trees
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                let turn = (i as f32 * 2.399_963).rem_euclid(std::f32::consts::TAU);
+                (
+                    world(size, t.pos, 0.0),
+                    (t.height / 10.0) as f32,
+                    turn,
+                    i % 2,
+                )
+            })
+            .collect();
         Self {
             tiles: tiles.tiles,
+            trees,
             camera,
             title: format!(
-                "{title}: {} masses, {:.0} km of streets, {} tram stops",
+                "{title}: {} masses, {} trees, {:.0} km of streets, {} tram stops",
                 masses.len(),
+                tree_count,
                 st.main_km + st.street_km,
                 st.stops
             ),
@@ -380,6 +402,25 @@ impl Scenario for PlanScenario {
                 ),
             ],
         );
+        let trunk = colour([0.20, 0.15, 0.11], 8.0, 0.02);
+        materials.add_rows(
+            "plan-tree-a",
+            vec![
+                ("plan trunk".into(), trunk),
+                ("plan leaves".into(), colour([0.10, 0.22, 0.07], 6.0, 0.02)),
+            ],
+        );
+        materials.add_rows(
+            "plan-tree-b",
+            vec![
+                ("plan trunk (b)".into(), trunk),
+                (
+                    "plan leaves (b)".into(),
+                    colour([0.15, 0.25, 0.08], 6.0, 0.02),
+                ),
+            ],
+        );
+        let tree_rows = [materials.of("plan-tree-a"), materials.of("plan-tree-b")];
         let ground_row = materials.of("plan-ground");
         let mass_row = materials.of("plan-mass");
         let mut builder = MeshletSceneBuilder::new();
@@ -398,10 +439,22 @@ impl Scenario for PlanScenario {
                 meshes += 1;
             }
         }
+        if !self.trees.is_empty() {
+            let model = builder.add_mesh(&MeshletMesh::build(&tree_model()));
+            for &(at, scale, turn, kind) in &self.trees {
+                let transform = Mat4::from_scale_rotation_translation(
+                    Vec3::splat(scale),
+                    glam::Quat::from_rotation_y(turn),
+                    at,
+                );
+                builder.add_instance_with_material(model, transform, tree_rows[kind]);
+            }
+        }
         let mut scene = builder.build(&ctx.device)?;
         scene.build_tlas(&ctx.device, &ctx.shaders)?;
         tracing::info!(
             meshes,
+            trees = self.trees.len(),
             triangles = self.triangles,
             ms = start.elapsed().as_millis(),
             "the plan's scene"
@@ -463,4 +516,82 @@ fn strip(tiles: &mut Tiles, left: &[DVec2], right: &[DVec2], height: f64, sectio
         let quad = [left[i], left[i + 1], right[i + 1], right[i]];
         tiles.flat(&quad, height, section, false);
     }
+}
+
+/// A tree 10 m tall: a hexagonal trunk to 4.5 m (section 0) and a crown (section 1), an
+/// icosahedron subdivided once and roughened, 4.2 m across its widest, its normals radial.
+fn tree_model() -> TriMesh {
+    let mut mesh = TriMesh::default();
+    // The trunk.
+    let sides = 6;
+    for k in 0..sides {
+        let a = k as f32 / sides as f32 * std::f32::consts::TAU;
+        let b = (k + 1) as f32 / sides as f32 * std::f32::consts::TAU;
+        let (pa, pb) = (
+            Vec3::new(a.cos() * 0.28, 0.0, a.sin() * 0.28),
+            Vec3::new(b.cos() * 0.28, 0.0, b.sin() * 0.28),
+        );
+        let up = Vec3::Y * 5.0;
+        let out = ((pa + pb) * 0.5).normalize();
+        triangle(&mut mesh, [pa, pb, pb + up], out, 0);
+        triangle(&mut mesh, [pa, pb + up, pa + up], out, 0);
+    }
+    // The crown: an icosahedron's faces, each cut in four, pushed onto an ellipsoid.
+    let t = (1.0 + 5.0_f32.sqrt()) * 0.5;
+    let v: [Vec3; 12] = [
+        Vec3::new(-1.0, t, 0.0),
+        Vec3::new(1.0, t, 0.0),
+        Vec3::new(-1.0, -t, 0.0),
+        Vec3::new(1.0, -t, 0.0),
+        Vec3::new(0.0, -1.0, t),
+        Vec3::new(0.0, 1.0, t),
+        Vec3::new(0.0, -1.0, -t),
+        Vec3::new(0.0, 1.0, -t),
+        Vec3::new(t, 0.0, -1.0),
+        Vec3::new(t, 0.0, 1.0),
+        Vec3::new(-t, 0.0, -1.0),
+        Vec3::new(-t, 0.0, 1.0),
+    ];
+    let faces: [[usize; 3]; 20] = [
+        [0, 11, 5],
+        [0, 5, 1],
+        [0, 1, 7],
+        [0, 7, 10],
+        [0, 10, 11],
+        [1, 5, 9],
+        [5, 11, 4],
+        [11, 10, 2],
+        [10, 7, 6],
+        [7, 1, 8],
+        [3, 9, 4],
+        [3, 4, 2],
+        [3, 2, 6],
+        [3, 6, 8],
+        [3, 8, 9],
+        [4, 9, 5],
+        [2, 4, 11],
+        [6, 2, 10],
+        [8, 6, 7],
+        [9, 8, 1],
+    ];
+    let centre = Vec3::new(0.0, 7.0, 0.0);
+    let place = |d: Vec3| {
+        let d = d.normalize();
+        // A little roughness, the same for the same direction.
+        let bump = 1.0 + 0.08 * (d.x * 7.3 + d.y * 3.1 + d.z * 5.7).sin();
+        (
+            centre + Vec3::new(d.x * 4.2, d.y * 3.6, d.z * 4.2) * bump,
+            d,
+        )
+    };
+    for f in faces {
+        let (a, b, c) = (v[f[0]], v[f[1]], v[f[2]]);
+        let (ab, bc, ca) = ((a + b) * 0.5, (b + c) * 0.5, (c + a) * 0.5);
+        for tri in [[a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]] {
+            let p = tri.map(place);
+            let normal = (p[0].1 + p[1].1 + p[2].1).normalize();
+            triangle(&mut mesh, [p[0].0, p[1].0, p[2].0], normal, 1);
+        }
+    }
+    mesh
 }
