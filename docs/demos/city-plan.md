@@ -279,11 +279,11 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
 
 ## Squares (#245)
 
-![A square](images/city-plan-piazza.png)
+![A square and the market hall](images/city-plan-piazza.png)
 
-*A square by the river avenue at 18:00, from the pavement: paved in limestone, its fountain in
-the middle, an alley of planes round it (each tree in its own tones), shops round it.* Squares
-come from three rules:
+*Left: a square by the river avenue at 18:00, from the pavement, paved in limestone, its
+fountain in the middle, an alley of planes round it (each tree in its own tones), shops round
+it. Right: the market hall on its square, from 40 m up.* Squares come from three rules:
 - the block nearest each built district's centre and each landmark becomes a square (within
   150 m, at most 1 ha), unless one already opens within 120 m;
 - so do the old towns' blocks of 600–3 000 m² that stand 180 m from any other square: their
@@ -294,6 +294,18 @@ Squares are paved, with a row of trees every 10 m, 3 m inside their building lin
 0.5 ha or more get a second row 11 m further in, an alley of planes (a Provençal *cours*). A
 fountain stands in the middle of those of 0.15 ha or more (`furniture::fountain`), grander on
 grander squares. The example has 12 squares, slivers included.
+
+**The landmarks** (`LandmarkKind`) find their square: the nearest of 0.15 ha or more within
+160 m of their anchor (`Landmark::square`). The first landmark with a model is the market hall
+(`forge_geom::landmarks::market_hall`), the iron and glass halls the Midi's old towns built on
+their squares:
+- a stone plinth, iron columns every bay on stone bases, girders at the eaves;
+- a pitched glass roof on iron rafters, with a glazed lantern along the ridge;
+- two rows of stalls under striped canvas, the sides left open.
+
+It stands inside its square's tree rows, along the square's longest side, in its own material
+group (pale glazing, iron painted dark green) and in place of the fountain. The other landmarks
+are placed but not drawn yet.
 
 ## Tiled roofs in the old towns
 

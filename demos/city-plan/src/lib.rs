@@ -358,10 +358,32 @@ impl PlanScenario {
                 seats = k.seats;
                 (k.meshes, k.instances, Some(report))
             });
-        // A fountain in the middle of each square of 0.15 ha or more.
+        // The market halls on their squares, inside the squares' tree rows, along their longest
+        // side.
+        let mut hall_squares = Vec::new();
+        for l in &plan.landmarks {
+            let (forge_procgen::city::LandmarkKind::MarketHall, Some(i)) = (l.kind, l.square)
+            else {
+                continue;
+            };
+            let b = &plan.blocks[i];
+            let (axis, extent, centre) = geom::oriented_extent(&b.buildable);
+            let length = (extent.x - 30.0).clamp(18.0, 48.0) as f32;
+            let width = (extent.y - 30.0).clamp(12.0, 26.0) as f32;
+            kit_meshes.push(forge_geom::landmarks::market_hall(length, width));
+            let id = (kit_meshes.len() - 1) as u32;
+            let turn = glam::Quat::from_rotation_y((-axis.y).atan2(axis.x) as f32);
+            let at = Mat4::from_rotation_translation(turn, world(size, centre, 0.16));
+            kit_instances.push((id, at, HALL_GROUP));
+            hall_squares.push(i);
+        }
+        // A fountain in the middle of each other square of 0.15 ha or more.
         let fountains: Vec<Mat4> = plan
             .blocks
             .iter()
+            .enumerate()
+            .filter(|(i, _)| !hall_squares.contains(i))
+            .map(|(_, b)| b)
             .filter(|b| b.use_ == BlockUse::Square && b.area >= 1500.0)
             .filter(|b| geom::contains(&b.polygon, b.centre))
             // Grander on grander squares: 1.0 at 0.15 ha to 1.8 at 1 ha.
@@ -493,6 +515,8 @@ const PEOPLE_GROUPS: [&str; 8] = [
     "plan-people-6",
     "plan-people-7",
 ];
+/// The market halls' material group, after the kit's eight.
+const HALL_GROUP: u8 = 8;
 /// The kit's key for a terrace's mesh (no grammar symbol is this high).
 const TERRACE: u16 = u16::MAX;
 /// How far each of a line's two tracks lies from its centreline, metres.
@@ -1306,7 +1330,45 @@ impl Scenario for PlanScenario {
                 ],
             );
         }
-        let kit_rows: Vec<_> = KIT_GROUPS.iter().map(|g| materials.of(g)).collect();
+        // The market halls' group: pale glazing that catches the sky, iron painted dark green
+        // (as Baltard's halls were), striped canvas over the stalls.
+        materials.add_rows(
+            "plan-kit-hall",
+            vec![
+                ("plan hall render".into(), render([0.94, 0.88, 0.76])),
+                ("plan hall stone".into(), stone),
+                (
+                    "plan hall frame".into(),
+                    colour([0.10, 0.20, 0.16], 40.0, 0.15),
+                ),
+                (
+                    "plan hall glass".into(),
+                    RenderLayer {
+                        reflectance: 0.08,
+                        ..colour([0.42, 0.50, 0.50], 2000.0, 0.7)
+                    },
+                ),
+                (
+                    "plan hall paint".into(),
+                    colour([0.10, 0.20, 0.16], 30.0, 0.1),
+                ),
+                (
+                    "plan hall iron".into(),
+                    colour([0.10, 0.20, 0.16], 40.0, 0.15),
+                ),
+                (
+                    "plan hall canvas".into(),
+                    colour([0.78, 0.30, 0.22], 6.0, 0.02),
+                ),
+                (
+                    "plan hall stalls".into(),
+                    colour([0.40, 0.27, 0.16], 20.0, 0.05),
+                ),
+                ("plan hall party".into(), render([0.78, 0.72, 0.64])),
+            ],
+        );
+        let mut kit_rows: Vec<_> = KIT_GROUPS.iter().map(|g| materials.of(g)).collect();
+        kit_rows.push(materials.of("plan-kit-hall"));
         // The trams' liveries: white bodies, dark glass, the line's colour as the stripe.
         let linear = |c: u8| (f32::from(c) / 255.0).powf(2.2);
         for (k, &group) in TRAM_GROUPS.iter().enumerate() {

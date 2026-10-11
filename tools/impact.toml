@@ -25,6 +25,7 @@
 "crates/forge-geom/src/vehicles.rs" = []
 "crates/forge-geom/src/furniture.rs" = []
 "crates/forge-geom/src/figures.rs" = []
+"crates/forge-geom/src/landmarks.rs" = []
 "crates/forge-sim/src/transit.rs" = []
 "tools/city-map/**" = []
 "demos/city-plan/**" = []

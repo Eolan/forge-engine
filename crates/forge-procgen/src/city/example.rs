@@ -7,8 +7,8 @@ use forge_core::{Seed, dmath};
 use glam::DVec2;
 
 use super::{
-    BoundaryInfluence, CityParams, DistrictKind, DistrictSpec, LandmarkSpec, Pattern, SEA, Site,
-    TramLineSpec, Waterway,
+    BoundaryInfluence, CityParams, DistrictKind, DistrictSpec, LandmarkKind, LandmarkSpec, Pattern,
+    SEA, Site, TramLineSpec, Waterway,
 };
 
 /// The example's site: `size` metres square, its masks in cells of `cell` metres.
@@ -176,10 +176,12 @@ pub fn params(size: f64) -> CityParams {
             LandmarkSpec {
                 name: "market hall".into(),
                 anchor: at(0.42, 0.48),
+                kind: LandmarkKind::MarketHall,
             },
             LandmarkSpec {
                 name: "harbour house".into(),
                 anchor: at(0.84, 0.70),
+                kind: LandmarkKind::Other,
             },
         ],
         park_reach: 300.0,

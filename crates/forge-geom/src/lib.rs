@@ -8,6 +8,7 @@ pub mod city;
 pub mod figures;
 pub mod fracture;
 pub mod furniture;
+pub mod landmarks;
 pub mod lod;
 pub mod meshlet;
 pub mod model;

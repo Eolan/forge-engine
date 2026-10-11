@@ -328,6 +328,16 @@ pub struct TramLineSpec {
     pub waypoints: Vec<DVec2>,
 }
 
+/// What a landmark is, for the model that draws it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LandmarkKind {
+    /// A covered market hall of iron and glass, standing on its square.
+    MarketHall,
+    /// Anything else: placed, not drawn yet.
+    #[default]
+    Other,
+}
+
 /// A landmark to place: snapped to the nearest main-road node.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LandmarkSpec {
@@ -335,6 +345,8 @@ pub struct LandmarkSpec {
     pub name: String,
     /// Where it should stand, roughly.
     pub anchor: DVec2,
+    /// What it is.
+    pub kind: LandmarkKind,
 }
 
 /// A placed landmark.
@@ -344,6 +356,11 @@ pub struct Landmark {
     pub name: String,
     /// Where it stands.
     pub pos: DVec2,
+    /// What it is.
+    pub kind: LandmarkKind,
+    /// The square it stands on, if one opens within 160 m of its anchor (an index into the
+    /// plan's blocks).
+    pub square: Option<usize>,
 }
 
 /// Everything the plan is made from, besides the site.
@@ -651,6 +668,15 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
         .map(|l| Landmark {
             name: l.name.clone(),
             pos: transit::nearest_main_node(&roads, l.anchor).unwrap_or(l.anchor),
+            kind: l.kind,
+            square: blocks
+                .iter()
+                .enumerate()
+                .filter(|(_, b)| b.use_ == BlockUse::Square && b.area >= 1500.0)
+                .map(|(i, b)| (b.centre.distance(l.anchor), i))
+                .filter(|&(d, _)| d <= 160.0)
+                .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)))
+                .map(|(_, i)| i),
         })
         .collect();
     lap("landmarks", &mut timings);
