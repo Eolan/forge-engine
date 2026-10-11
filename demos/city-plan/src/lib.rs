@@ -362,13 +362,15 @@ impl PlanScenario {
         }
         for e in &plan.roads.edges {
             // Asphalt on the avenues' carriageways; stone on shared streets, lanes and paths.
-            let section = match e.profile {
+            // The avenues lie a centimetre over the rest: at a junction the two overlap, and
+            // at one height they fought.
+            let (section, height) = match e.profile {
                 forge_procgen::city::Profile::TramAvenue | forge_procgen::city::Profile::Avenue => {
-                    STREET
+                    (STREET, AVENUE_LEVEL)
                 }
-                _ => PAVING,
+                _ => (PAVING, 0.16),
             };
-            ribbon(&mut tiles, &e.points, e.profile.width(), 0.16, section);
+            ribbon(&mut tiles, &e.points, e.profile.width(), height, section);
         }
         pavements(&mut tiles, plan);
         // Two tracks a line, one each way, on the right of the way they run.
@@ -722,6 +724,9 @@ const CRANE_GROUP: u8 = 9;
 const TERRACE: u16 = u16::MAX;
 /// How far each of a line's two tracks lies from its centreline, metres.
 const TRACK_OFFSET: f64 = 1.6;
+/// The avenues' carriageways' level, metres: a centimetre over the shared streets' 0.16, so the
+/// two do not fight where they overlap at a junction.
+const AVENUE_LEVEL: f64 = 0.17;
 /// A tram stop's platform, metres: a tram's length and a little.
 const PLATFORM: f32 = 36.0;
 /// The trams' sections: a cab, three passenger sections, a cab.
@@ -2053,6 +2058,11 @@ impl Running for PlanRunning {
                 transforms.extend(v[1..TRAM_SECTIONS - 1].iter().map(|&s| place(s)));
             }
         }
+        // The crowd's slots change hands from frame to frame (a walker's pose is another mesh
+        // every 0.7 m; people come and go), so a slot's last transform is often someone
+        // else's: the figures get no motion of their own (2 cm a frame at a walk), only the
+        // camera's, or TAA smeared them along the swaps.
+        let crowd_slots = transforms.len()..;
         if let Some(crowd) = &mut self.crowd {
             // Unused figures wait far under the ground.
             let parked = (Vec3::new(0.0, -1000.0, 0.0) + self.origin, 0.0);
@@ -2062,11 +2072,12 @@ impl Running for PlanRunning {
                 }
             }
         }
+        let crowd_slots = crowd_slots.start..transforms.len();
         // Then the boats, one a crossing.
         for boat in &self.boats {
             transforms.push(place(boat.at(self.clock, self.size)));
         }
-        scene.set_movers(&transforms);
+        scene.set_movers_still(&transforms, |k| crowd_slots.contains(&k));
     }
 
     fn title(&mut self) -> String {
@@ -2337,13 +2348,13 @@ fn pavements(tiles: &mut Tiles, plan: &CityPlan) {
                 let p = |q: DVec2, h: f64| world(size, q, h) - centre;
                 triangle(
                     &mut tile.ground,
-                    [p(a, 0.16), p(b, 0.16), p(b, 0.30)],
+                    [p(a, AVENUE_LEVEL), p(b, AVENUE_LEVEL), p(b, 0.30)],
                     normal,
                     PAVING,
                 );
                 triangle(
                     &mut tile.ground,
-                    [p(a, 0.16), p(b, 0.30), p(a, 0.30)],
+                    [p(a, AVENUE_LEVEL), p(b, 0.30), p(a, 0.30)],
                     normal,
                     PAVING,
                 );
