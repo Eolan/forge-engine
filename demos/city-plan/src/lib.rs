@@ -428,7 +428,7 @@ fn kit(tiles: &mut Tiles, plan: &CityPlan, masses: &[Mass], near: &[usize], d: &
             let colour = (mix(u64::from(m.lot)) % 4) as u8;
             let spot = mix(u64::from(pos.x.to_bits()) << 32 | u64::from(pos.z.to_bits()))
                 ^ mix(u64::from(pos.y.to_bits()));
-            let lit = spot % 10 < 3;
+            let lit = spot % 10 < 4;
             let transform =
                 Mat4::from_cols(x.extend(0.0), y.extend(0.0), z.extend(0.0), pos.extend(1.0));
             instances.push((id, transform, colour * 2 + u8::from(lit)));
@@ -729,7 +729,7 @@ impl Scenario for PlanScenario {
             materials.textures.add(&shop_normal)?,
             materials.textures.add(&shop_lights)?,
         );
-        // Lit windows of about 40 cd/m² (behind curtains, seen from the street). The shading is per unit of the frame's reference
+        // Lit windows of about 12 cd/m² (behind curtains, seen from the street). The shading is per unit of the frame's reference
         // illuminance (D-046: the sun's 128 klux by day, the Moon's tenths of a lux at night), so
         // an emissive of L·π / reference gives L. A stopgap for a run held at one time of day
         // (`--time-of-day`): step 5's lights give the renderer emissive light in absolute units.
@@ -741,7 +741,7 @@ impl Scenario for PlanScenario {
             }
             forge_render::night::NightLights::new(&celestial.at(t, sun), sun).reference
         });
-        let glow = 40.0 * std::f32::consts::PI / reference;
+        let glow = 12.0 * std::f32::consts::PI / reference;
         let mapped =
             |rgb: [f32; 3], (albedo, normal, lights): (TextureId, TextureId, TextureId)| {
                 RenderLayer {
@@ -822,8 +822,8 @@ impl Scenario for PlanScenario {
         ];
         let glass = |lit: bool| RenderLayer {
             emissive: if lit {
-                // A room behind curtains, about 2 cd/m², warm.
-                [glow * 0.06, glow * 0.042, glow * 0.022]
+                // The same room as the facade texture's lit windows, warm.
+                [glow, glow * 0.78, glow * 0.5]
             } else {
                 [0.0; 3]
             },
