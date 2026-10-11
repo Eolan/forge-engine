@@ -23,6 +23,7 @@
 
 pub mod bible;
 pub mod blocks;
+pub mod cores;
 pub mod example;
 pub mod facades;
 pub mod geom;

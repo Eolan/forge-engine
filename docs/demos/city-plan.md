@@ -118,7 +118,8 @@ buildings too close, on their second walk (2026-10-11). A plan can now set two o
   ring (the owner's photos of open blocks: open, organic, not oppressive). Light, views and
   people reach the courtyard, the walls beside a gap get windows, and in 3D a paved path runs
   from each gap to the court's middle. The sandbox opens its modern districts (runs of 35–55 m,
-  gaps 10–25 %) and keeps its centre and old town closed: about 1.05 M people.
+  gaps 10–25 %) and keeps its centre and old town closed: about 1.05 M people (977 k once the
+  stair cores took their floor, step 3).
 
 **Footprints.** A footprint's corner sharper than 55° is chamfered where its wedge is 6 m
 wide, or at 0.45 of its shorter side: a building came to a point at a block's sharp corner by
@@ -341,22 +342,65 @@ kit reading the walls, collision, interiors, destruction):
   nothing stands against: a lower neighbour covers only the storeys below its roof.
 - **Openings** go on those stretches only, bays centred and kept 0.6 m off the ends, so they line
   up storey over storey and no window is cut by a neighbour (the owner: "not realistic at
-  all"). Shopfronts on lively ground floors, windows elsewhere, each building's door (1.2 m,
-  step-free) in the middle of its longest street stretch.
+  all"). Shopfronts on lively ground floors, windows elsewhere, the doors (1.2 m, step-free)
+  where the stair cores stand (below), or in the middle of the longest street stretch.
 - **Courts.** A passage of 3.0 by 3.6 m runs through one building of each block whose court no
   gap reaches, on its street and court walls (the owner: a door into every inner court). The
-  sandbox: 2 081 of 2 087 courts reached, 217 by a passage.
+  sandbox: 2 082 of 2 087 courts reached, 201 by a passage.
 - **Areas.** Gross to the outer faces; net inside the walls (a party wall counts half), less the
-  stairs (12, 24 with the 1800s' service stairs, 18 m² a storey) and a lift from four storeys
-  (4.5 m²) in each building's largest mass, less the partitions and flues (5–8 %). Net over gross
-  on the example: modern 0.828, the 1800s 0.809, old stone 0.722 (the note: about 0.82 modern,
-  0.70–0.75 old stone).
+  stair cores below on every storey, less the partitions and flues (5–10 %, the 1800s' with
+  their service stairs). Net over gross on the example: modern 0.777, the 1800s 0.732, old stone
+  0.655. The note expected about 0.82 modern and 0.70–0.75 old stone, but without lifts: here
+  every building of four storeys or more has one (the owner's accessibility), where old houses
+  rarely do. With the stairs counted as a flat 12–24 m² a storey and one lift a building, it
+  read 0.828, 0.809 and 0.722.
 - **The population** counts homes from net area at INSEE's 32.4 m² a person, jobs at 25 m²: the
-  sandbox's city houses 1 301 827 people (1 048 538 before).
-- **Cost:** 0.36 s for the example's masses, 0.62 s for the sandbox's 39 048 (3.4 M openings).
+  sandbox's city housed 1 301 827 people at step 1 (1 048 538 before); about 977 k today, after
+  the open blocks, the narrower streets and the cores.
+- **Cost:** 0.62 s for the sandbox's 39 048 masses at step 1 (3.4 M openings); 2.25 s today for
+  its 31 538 (3.1 M openings) with the reach check and the cores.
 
-Not yet: the kit still dresses the faces by the grammar, not by these openings (step 2), and the
-far boxes still repeat their texture.
+### Stair cores (D-060, step 3)
+
+`city::cores` puts the stairs and lifts in, by the French rules (the research note's §1):
+
+- **The core.** Behind a street door: a hall 1.50 m wide, where a wheelchair turns, and the
+  landing on every storey, where the flats' doors open. A dog-leg stair beside it: flights 1.00 m
+  between handrails, risers of 17 cm at most on 28 cm goings (2h + g between 0.61 and 0.62 m,
+  Blondel's comfortable stair), a landing as wide as a flight at each end. Its length follows the
+  tallest storey: 4.6 m for 2.8 m storeys, 5.8 m under a 4.2 m shop. From four storeys (R+3) a
+  lift: a type 2 car (1.10 × 1.40 m) in a 1.60 × 1.90 m shaft. The lift stands beside the hall
+  (6.0 m along the street), or on a floor under 150 m² behind it (4.4 m).
+- **How many.** One every 20 m of street front, and enough that every floor lies within about 25 m
+  of a landing. A wing under 100 m² beside another mass of its building is reached from that
+  one's core.
+- **Where.** On a ground bay of the street walls nearest each core's share of the front, else
+  anywhere along an open stretch, else on a court wall. The core must fit inside the walls and
+  stand clear of the others. Its door replaces the openings there. The shopfronts its walls
+  stand behind become windows, so no shop window shows a stair. A court passage keeps its
+  stretch: a core in its way moves aside (it took the only place, and courts went unreached). A
+  core whose door opens onto a court no one reaches is dropped.
+- **On the roof.** Under a garden or a terrace, the core climbs on to the roof. A head house
+  2.7 m tall stands over it, with a door out from the hall (the owner: a garden on the roof
+  means a way up). Every lift's overrun rises 1.2 m over the roof or the head house. Under a
+  pitched roof nothing shows.
+- **Checks** (`every_building_has_stairs_and_lifts_that_fit_and_reach_its_floors`), on the
+  example:
+  - 15 502 cores, 15 171 with a lift, 10 294 up to the roof;
+  - each core's door is in its hall, on its wall's ground storey, and the core lies inside the
+    walls;
+  - 11 of 11 614 masses that need a core have none: slivers;
+  - 117 of 12 613 upper masses lie more than 25 m from a landing at a far corner.
+- **The sandbox:**
+  - 41 041 cores, 39 748 with a lift, 29 252 up to the roof;
+  - 201 passages, 2 082 of 2 087 courts reached;
+  - no door unreached on foot;
+  - 48.0 km² net of 61.7 gross (0.78, 0.83 before): homes for about 977 k people (1 045 k
+    before);
+  - the structure in 2.25 s (2.08 s before).
+
+Next in step 3: the flats on each landing, the reach check up the stairs to every flat, the
+population by flat, then the rooms behind the windows and going inside.
 
 ## Trams on their timetables (#253)
 

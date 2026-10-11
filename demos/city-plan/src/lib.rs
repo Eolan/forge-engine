@@ -513,6 +513,7 @@ impl PlanScenario {
         // The buildings' structure (D-060): the kit dresses it, the walker walks against it.
         let structures = structure::structures(plan, masses);
         aprons(&mut tiles, masses, &structures);
+        head_houses(&mut tiles, masses, &structures);
         let kit = detail.map(|d| kit(&mut tiles, masses, &structures, &edges, &near, d));
         // The passages into the courts (D-060), and where to look into one: 10 m out on the
         // street before the kit's first, for the log once the app logs.
@@ -1550,6 +1551,121 @@ fn aprons(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure]) {
             );
         }
     }
+}
+
+/// How high a head house stands over its roof, metres: a storey's clear height and its slab.
+const HEAD_HOUSE: f64 = 2.7;
+/// How far a lift's overrun rises over the roof, or over the head house, metres.
+const OVERRUN: f64 = 1.2;
+
+/// The cores' tops (D-060, step 3). Over each core that climbs to a garden or a terrace, a head
+/// house the stair and the lift arrive in, its door out on to the roof from the hall; over each
+/// lift a little higher, its overrun. On the other flat roofs the lift's overrun alone; under a
+/// pitched roof nothing shows. The owner: a garden on the roof means a way up.
+fn head_houses(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure]) {
+    for (m, s) in masses.iter().zip(structures) {
+        if m.roof == Roof::Tiled {
+            continue;
+        }
+        let section = KIT_PLASTER + tint_of(m.lot);
+        for c in &s.cores {
+            let top = m.height;
+            if c.roof {
+                prism(tiles, &c.outline, top, top + HEAD_HOUSE, section);
+                // The door on the hall's open side: its back, or where the lift stands behind
+                // the hall (a compact core), the side past the hall's end.
+                let hall = (c.hall[0] + c.hall[1] + c.hall[2] + c.hall[3]) * 0.25;
+                let compact = c.hall[0].distance(c.hall[3]) < c.deep - 0.1;
+                let edges = if compact { [1, 3] } else { [2, 2] };
+                let k = *edges
+                    .iter()
+                    .min_by(|&&a, &&b| {
+                        let d = |k: usize| {
+                            geom::distance_to_segment(hall, c.outline[k], c.outline[(k + 1) % 4])
+                        };
+                        d(a).total_cmp(&d(b))
+                    })
+                    .unwrap_or(&2);
+                let (a, b) = (c.outline[k], c.outline[(k + 1) % 4]);
+                let along = geom::closest_on_segment(hall, a, b) * a.distance(b);
+                roof_door(tiles, m, a, b, along, top);
+            }
+            if let Some(shaft) = c.lift {
+                let base = if c.roof { top + HEAD_HOUSE } else { top };
+                let middle = (shaft[0] + shaft[1] + shaft[2] + shaft[3]) * 0.25;
+                let grown = shaft.map(|p| p + (p - middle).normalize_or_zero() * 0.28);
+                prism(tiles, &grown, base, base + OVERRUN, section);
+            }
+        }
+    }
+}
+
+/// A box over the outline `ring` (counter-clockwise) from `y0` to `y1`: its walls and its flat
+/// top, in `section`.
+fn prism(tiles: &mut Tiles, ring: &[DVec2], y0: f64, y1: f64, section: u8) {
+    let size = tiles.size;
+    let tile = tiles.at(ring[0]);
+    let centre = tile.centre;
+    let at = |q: DVec2, h: f64| world(size, q, h) - centre;
+    let n = ring.len();
+    for i in 0..n {
+        let (a, b) = (ring[i], ring[(i + 1) % n]);
+        let t = (b - a).normalize_or_zero();
+        let out = Vec3::new(t.y as f32, 0.0, -t.x as f32);
+        let (l, h) = ((a.distance(b) / 3.0) as f32, ((y1 - y0) / 3.0) as f32);
+        triangle_uv(
+            &mut tile.masses,
+            [at(a, y0), at(b, y0), at(b, y1)],
+            [[0.0, 0.0], [l, 0.0], [l, -h]],
+            out,
+            section,
+        );
+        triangle_uv(
+            &mut tile.masses,
+            [at(a, y0), at(b, y1), at(a, y1)],
+            [[0.0, 0.0], [l, -h], [0.0, -h]],
+            out,
+            section,
+        );
+    }
+    for t in geom::triangulate(ring) {
+        let p = t.map(|i| at(ring[i], y1));
+        triangle_uv(&mut tile.masses, p, [[0.0; 2]; 3], Vec3::Y, ROOF_TERRACE);
+    }
+}
+
+/// The kit's door in the wall `a b` (counter-clockwise round its box) at `along`, on the roof at
+/// `level`: out on to the garden or the terrace.
+fn roof_door(tiles: &mut Tiles, m: &Mass, a: DVec2, b: DVec2, along: f64, level: f64) {
+    let (w, h) = (1.0_f32, 2.2_f32);
+    let Some(mesh) = modules::module("door", w, h) else {
+        return;
+    };
+    let size = tiles.size;
+    let t = (b - a).normalize_or_zero();
+    let x = Vec3::new(t.x as f32, 0.0, t.y as f32);
+    let z = Vec3::new(t.y as f32, 0.0, -t.x as f32);
+    let y = Vec3::Y;
+    let origin = a + t * (along - f64::from(w) * 0.5);
+    let tint = tint_of(m.lot);
+    let tile = tiles.at(origin);
+    let at = world(size, origin, level) - tile.centre;
+    let dst = &mut tile.masses;
+    let base = dst.positions.len() as u32;
+    for (p, n) in mesh.positions.iter().zip(&mesh.normals) {
+        let (p, n) = (Vec3::from(*p), Vec3::from(*n));
+        dst.positions
+            .push((at + x * p.x + y * p.y + z * p.z).to_array());
+        dst.normals.push((x * n.x + y * n.y + z * n.z).to_array());
+        dst.uvs.push([0.0; 2]);
+    }
+    dst.indices.extend(mesh.indices.iter().map(|i| base + i));
+    dst.sections
+        .extend((0..mesh.triangle_count()).map(|t| match mesh.section(t) {
+            modules::PLASTER => KIT_PLASTER + tint,
+            modules::PARTY => KIT_PARTY,
+            _ => KIT_STONE,
+        }));
 }
 
 /// A bridge's parapet: how high over its pavement and how thick, metres.

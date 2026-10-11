@@ -13,6 +13,7 @@ use std::collections::HashMap;
 
 use glam::DVec2;
 
+use super::cores::{self, Core};
 use super::facades::{FaceKind, edge_kinds};
 use super::mass::Mass;
 use super::{CityPlan, DistrictKind, geom};
@@ -55,14 +56,11 @@ pub struct EraTable {
     pub window: f64,
     /// An upper window's sill over its floor.
     pub sill: f64,
-    /// The stairs and landings a storey gives up, m².
-    pub stairs: f64,
-    /// The share of the rest the partitions, shafts and reveals take.
+    /// The share of the floor inside the walls and outside the cores that the partitions,
+    /// shafts and reveals take.
     pub partitions: f64,
 }
 
-/// A lift's shaft and landing a storey, m² (EN 81-70 type 2, 1.10 × 1.40 m inside).
-pub const LIFT: f64 = 4.5;
 /// Lifts from this many storeys (R+3: France, permits since 2019).
 pub const LIFT_FROM: usize = 4;
 /// Keep an opening this far from either end of its open stretch, metres.
@@ -85,7 +83,6 @@ const OLD_STONE: EraTable = EraTable {
     bay: 3.3,
     window: 1.0,
     sill: 0.9,
-    stairs: 12.0,
     partitions: 0.07,
 };
 
@@ -102,10 +99,8 @@ const NINETEENTH: EraTable = EraTable {
     bay: 3.0,
     window: 1.2,
     sill: 0.1,
-    // The main stairs and the service stairs.
-    stairs: 24.0,
-    // Partitions, and the chimney flues in them.
-    partitions: 0.08,
+    // Partitions, the chimney flues in them, and the service stairs.
+    partitions: 0.10,
 };
 
 const MODERN: EraTable = EraTable {
@@ -121,7 +116,6 @@ const MODERN: EraTable = EraTable {
     bay: 2.7,
     window: 1.4,
     sill: 0.5,
-    stairs: 18.0,
     partitions: 0.05,
 };
 
@@ -268,11 +262,12 @@ pub struct Structure {
     pub walls: Vec<Wall>,
     /// Its openings.
     pub openings: Vec<Opening>,
-    /// Whether it holds its building's stairs (and lift, from [`LIFT_FROM`] storeys).
-    pub core: bool,
+    /// Its stair cores ([`super::cores`]): none on one storey, or in a small wing reached from
+    /// its building's other mass.
+    pub cores: Vec<Core>,
     /// Its gross floor area, to the walls' outer faces, m².
     pub gross: f64,
-    /// Its net floor area: inside the walls, less the stairs, lift, partitions and shafts, m².
+    /// Its net floor area: inside the walls, less the cores, partitions and shafts, m².
     pub net: f64,
 }
 
@@ -344,25 +339,29 @@ pub fn storeys(era: Era, heights: &[f64]) -> Vec<Storey> {
 pub fn structures(plan: &CityPlan, masses: &[Mass]) -> Vec<Structure> {
     let kinds = edge_kinds(plan, masses);
     let index = MassIndex::new(masses);
-    // Each lot's core: in its largest mass.
-    let mut core_of: HashMap<u32, (u32, f64)> = HashMap::new();
-    for (i, m) in masses.iter().enumerate() {
-        let area = geom::signed_area(&m.footprint).abs();
-        let e = core_of.entry(m.lot).or_insert((i as u32, area));
-        if area > e.1 {
-            *e = (i as u32, area);
-        }
-    }
     let mut out: Vec<Structure> = masses
         .iter()
         .enumerate()
-        .map(|(i, m)| {
-            let era = era_of(plan, m);
-            let core = core_of.get(&m.lot).is_some_and(|c| c.0 == i as u32);
-            structure(plan, masses, &index, &kinds[i], i, era, core)
-        })
+        .map(|(i, m)| structure(plan, masses, &index, &kinds[i], i, era_of(plan, m), &[]))
         .collect();
-    passages(plan, masses, &mut out);
+    // The passages into the courts: a core standing in a passage's way moves aside (it took the
+    // only place for one, and a court went unreached).
+    for (i, mouths) in passages(plan, masses, &out) {
+        let avoid: Vec<(usize, f64, f64)> = mouths
+            .iter()
+            .map(|&(w, along)| (w, along - PASSAGE_CLEAR, along + PASSAGE_CLEAR))
+            .collect();
+        let blocked = out[i].cores.iter().any(|c| {
+            avoid
+                .iter()
+                .any(|&(w, lo, hi)| c.wall == w && c.span.0 < hi && c.span.1 > lo)
+        });
+        if blocked {
+            let era = era_of(plan, &masses[i]);
+            out[i] = structure(plan, masses, &index, &kinds[i], i, era, &avoid);
+        }
+        open_passage(&mut out[i], mouths);
+    }
     // A court door that opens onto a spot no one can walk to (a light well between the
     // building's wings, a garden closed by its neighbours) goes back to a window.
     let (doors, _) = unreached(plan, masses, &out);
@@ -378,12 +377,15 @@ pub fn structures(plan: &CityPlan, masses: &[Mass]) -> Vec<Structure> {
                 head: s.storeys[0].clear() - 0.4,
                 ..o
             };
+            // A core behind it is shut off with it.
+            s.cores.retain(|c| c.door != k);
         }
     }
     out
 }
 
-/// One mass's structure, its passage left to [`passages`].
+/// One mass's structure, its passage left to [`passages`]; its cores clear of the stretches
+/// `avoid` (wall, from, to) a passage keeps.
 fn structure(
     plan: &CityPlan,
     masses: &[Mass],
@@ -391,7 +393,7 @@ fn structure(
     kinds: &[Option<FaceKind>],
     i: usize,
     era: Era,
-    core: bool,
+    avoid: &[(usize, f64, f64)],
 ) -> Structure {
     let m = &masses[i];
     let t = era.table();
@@ -426,15 +428,30 @@ fn structure(
             open,
         });
     }
-    let openings = openings(m, era, &storeys, &walls);
-    let (gross, net) = areas(m, era, &walls, core);
+    let mut openings = openings(m, era, &storeys, &walls);
+    // The floor inside the walls, each edge moved in by its wall's thickness.
+    let thickness: Vec<f64> = walls.iter().map(|w| w.thickness).collect();
+    let inside = floor(m, &thickness);
+    let plate = inside.as_ref().map_or(0.0, |p| geom::signed_area(p).abs());
+    let cores = match &inside {
+        Some(floor) if cores::needs_cores(m, &walls, plate) => {
+            cores::place(m, &storeys, &walls, &mut openings, floor, t.window, avoid)
+        }
+        _ => Vec::new(),
+    };
+    // The street door where no core took one (a shop, a house, a wing), and the court's.
+    if cores.is_empty() {
+        add_door(m, &storeys, &walls, &mut openings, WallRole::Street);
+    }
+    add_door(m, &storeys, &walls, &mut openings, WallRole::Court);
+    let (gross, net) = areas(m, era, &walls, inside.as_deref(), &cores);
     Structure {
         mass: i as u32,
         era,
         storeys,
         walls,
         openings,
-        core,
+        cores,
         gross,
         net,
     }
@@ -559,41 +576,36 @@ fn openings(m: &Mass, era: Era, storeys: &[Storey], walls: &[Wall]) -> Vec<Openi
             }
         }
     }
-    // The doors: from the street, and from the court to the stairs (the owner: no door onto the
-    // court). Each the ground opening nearest the middle of its side's longest open stretch.
-    for role in [WallRole::Street, WallRole::Court] {
-        let best = walls
-            .iter()
-            .enumerate()
-            .filter(|(_, w)| w.role == role)
-            .flat_map(|(i, w)| w.open[0].iter().map(move |&(lo, hi)| (i, lo, hi)))
-            .max_by(|x, y| (x.2 - x.1).total_cmp(&(y.2 - y.1)));
-        let Some((w, lo, hi)) = best else {
-            continue;
-        };
-        let middle = (lo + hi) * 0.5;
-        let door = out
-            .iter()
-            .enumerate()
-            .filter(|(_, o)| o.wall == w && o.storey == 0)
-            .min_by(|x, y| {
-                (x.1.along - middle)
-                    .abs()
-                    .total_cmp(&(y.1.along - middle).abs())
-            })
-            .map(|(k, _)| k);
-        if let Some(k) = door {
-            let (clear, level) = (storeys[0].clear(), outside(m, walls[w].role));
-            out[k] = Opening {
-                kind: OpeningKind::Door,
-                width: DOOR,
-                sill: level,
-                head: (clear - 0.4).min(level + 2.6),
-                ..out[k]
-            };
-        }
-    }
     out
+}
+
+/// A door on a wall of `role`: the ground window or shopfront nearest the middle of that side's
+/// longest open stretch. The street's where no core took one; the court's to the stairs (the
+/// owner: no door onto the court).
+fn add_door(m: &Mass, storeys: &[Storey], walls: &[Wall], out: &mut [Opening], role: WallRole) {
+    let best = walls
+        .iter()
+        .enumerate()
+        .filter(|(_, w)| w.role == role)
+        .flat_map(|(i, w)| w.open[0].iter().map(move |&(lo, hi)| (i, lo, hi)))
+        .max_by(|x, y| (x.2 - x.1).total_cmp(&(y.2 - y.1)));
+    let Some((w, lo, hi)) = best else {
+        return;
+    };
+    let middle = (lo + hi) * 0.5;
+    let door = out
+        .iter()
+        .enumerate()
+        .filter(|(_, o)| o.wall == w && o.storey == 0 && o.kind != OpeningKind::Door)
+        .min_by(|x, y| {
+            (x.1.along - middle)
+                .abs()
+                .total_cmp(&(y.1.along - middle).abs())
+        })
+        .map(|(k, _)| k);
+    if let Some(k) = door {
+        out[k] = cores::door(m, storeys, walls, &out[k]);
+    }
 }
 
 /// The ground's level before a wall of mass `m`, metres: an avenue's raised pavement (0.30), a
@@ -608,40 +620,48 @@ pub fn outside(m: &Mass, role: WallRole) -> f64 {
     }
 }
 
+/// A mass's floor inside its walls: each edge moved in by its wall's `thickness`, dropping the
+/// short edges the move turns over (a footprint's chamfers and kinks; without, a tenth of the
+/// buildings had no floor and so no stairs).
+/// The inside walls between a building's masses count 5 cm: at nothing the inset refused them.
+pub fn floor(m: &Mass, thickness: &[f64]) -> Option<Vec<DVec2>> {
+    let d: Vec<f64> = thickness.iter().map(|&t| t.max(0.05)).collect();
+    geom::inset_by(&m.footprint, &d).or_else(|| geom::inset_by_collapsing(&m.footprint, &d))
+}
+
 /// A mass's gross and net floor area: gross to the outer faces on every storey; net inside the
-/// walls (each edge moved in by its wall's thickness), less its building's stairs and lift on
-/// every storey of the mass holding them, less the era's share for partitions, shafts and
-/// reveals.
-fn areas(m: &Mass, era: Era, walls: &[Wall], core: bool) -> (f64, f64) {
+/// walls (`inside`, the floor with each edge moved in by its wall's thickness), less its cores
+/// on every storey, less the era's share for partitions, shafts and reveals.
+fn areas(
+    m: &Mass,
+    era: Era,
+    walls: &[Wall],
+    inside: Option<&[DVec2]>,
+    cores: &[Core],
+) -> (f64, f64) {
     let t = era.table();
     let floors = m.storeys.len() as f64;
     let outline = geom::signed_area(&m.footprint).abs();
-    let thickness: Vec<f64> = walls.iter().map(|w| w.thickness).collect();
-    let inside = geom::inset_by(&m.footprint, &thickness)
-        .map(|p| geom::signed_area(&p).abs())
-        .unwrap_or_else(|| {
+    let inside = inside.map_or_else(
+        || {
             let wall_area: f64 = walls.iter().map(|w| w.length() * w.thickness).sum();
             (outline - wall_area).max(0.0)
-        });
-    let circulation = if core && m.storeys.len() >= 2 {
-        t.stairs
-            + if m.storeys.len() >= LIFT_FROM {
-                LIFT
-            } else {
-                0.0
-            }
-    } else {
-        0.0
-    };
+        },
+        |p| geom::signed_area(p).abs(),
+    );
+    let circulation: f64 = cores.iter().map(Core::area).sum();
     let net = ((inside - circulation).max(0.0) * (1.0 - t.partitions)) * floors;
     (outline * floors, net)
 }
 
-/// A passage from the street into each block's inner court: through the mass whose street wall
-/// lies across from its court wall with the longest open ground stretch, on both walls, the
-/// ground openings it meets taken out. A block with an open gap between its buildings needs
-/// none.
-fn passages(plan: &CityPlan, masses: &[Mass], structures: &mut [Structure]) {
+/// A passage into a court through a mass: its mass, and its mouths, (wall, middle) on its
+/// street wall then on its court wall.
+type Passage = (usize, [(usize, f64); 2]);
+
+/// The passages from the street into each block's inner court: through the mass whose street
+/// wall lies across from its court wall with the longest open ground stretch, on both walls. A
+/// block with an open gap between its buildings needs none.
+fn passages(plan: &CityPlan, masses: &[Mass], structures: &[Structure]) -> Vec<Passage> {
     let mut by_block: HashMap<u32, Vec<usize>> = HashMap::new();
     for (i, m) in masses.iter().enumerate() {
         by_block
@@ -652,11 +672,12 @@ fn passages(plan: &CityPlan, masses: &[Mass], structures: &mut [Structure]) {
     let open = reached(plan, masses);
     let mut blocks: Vec<u32> = by_block.keys().copied().collect();
     blocks.sort_unstable();
+    let mut out = Vec::new();
     for b in blocks {
         if plan.blocks[b as usize].courtyard.is_none() || open.contains(&b) {
             continue;
         }
-        // (mass, street wall, court wall, the passage's middle on each).
+        // (mass, street wall, court wall, the passage's middle on each, the stretch's length).
         let mut best: Option<(usize, usize, usize, f64, f64, f64)> = None;
         for &i in &by_block[&b] {
             let s = &structures[i];
@@ -686,25 +707,39 @@ fn passages(plan: &CityPlan, masses: &[Mass], structures: &mut [Structure]) {
                 }
             }
         }
-        let Some((i, sw, cw, at_street, at_court, _)) = best else {
-            continue;
-        };
-        let s = &mut structures[i];
-        // Under its storey's ceiling with a lintel, as the other openings: no higher than 3.6 m.
-        let head = PASSAGE.1.min(s.storeys[0].clear() - 0.3);
-        for (w, along) in [(sw, at_street), (cw, at_court)] {
-            let (lo, hi) = (along - PASSAGE.0 * 0.5 - 0.3, along + PASSAGE.0 * 0.5 + 0.3);
-            s.openings
-                .retain(|o| !(o.wall == w && o.storey == 0 && o.span().1 > lo && o.span().0 < hi));
-            s.openings.push(Opening {
-                wall: w,
-                storey: 0,
-                along,
-                width: PASSAGE.0,
-                sill: 0.0,
-                head,
-                kind: OpeningKind::Passage,
-            });
+        if let Some((i, sw, cw, at_street, at_court, _)) = best {
+            out.push((i, [(sw, at_street), (cw, at_court)]));
+        }
+    }
+    out
+}
+
+/// The stretch a passage's mouth keeps clear on its wall, either side of its middle, metres.
+const PASSAGE_CLEAR: f64 = PASSAGE.0 * 0.5 + 0.3;
+
+/// Opens a passage's mouths in its mass: the ground openings they meet taken out, its cores'
+/// doors found again after.
+fn open_passage(s: &mut Structure, mouths: [(usize, f64); 2]) {
+    let doors: Vec<Opening> = s.cores.iter().map(|c| s.openings[c.door]).collect();
+    // Under its storey's ceiling with a lintel, as the other openings: no higher than 3.6 m.
+    let head = PASSAGE.1.min(s.storeys[0].clear() - 0.3);
+    for (w, along) in mouths {
+        let (lo, hi) = (along - PASSAGE_CLEAR, along + PASSAGE_CLEAR);
+        s.openings
+            .retain(|o| !(o.wall == w && o.storey == 0 && o.span().1 > lo && o.span().0 < hi));
+        s.openings.push(Opening {
+            wall: w,
+            storey: 0,
+            along,
+            width: PASSAGE.0,
+            sill: 0.0,
+            head,
+            kind: OpeningKind::Passage,
+        });
+    }
+    for (c, door) in s.cores.iter_mut().zip(doors) {
+        if let Some(k) = s.openings.iter().position(|o| *o == door) {
+            c.door = k;
         }
     }
 }
@@ -1000,9 +1035,80 @@ mod tests {
         ] {
             if let (Some(g), Some(n)) = (gross.get(&era), net.get(&era)) {
                 let r = n / g;
+                println!("{era:?} net over gross {r:.3}");
                 assert!((lo..=hi).contains(&r), "{era:?} net over gross {r:.3}");
             }
         }
+    }
+
+    #[test]
+    fn every_building_has_stairs_and_lifts_that_fit_and_reach_its_floors() {
+        use crate::city::mass::Roof;
+        let (city, masses) = example_city();
+        let all = structures(&city, &masses);
+        // Each lot's halls, to see that every upper floor is near one.
+        let mut halls: HashMap<u32, Vec<DVec2>> = HashMap::new();
+        let (mut cores, mut lifts, mut roofs, mut missing, mut needing) = (0, 0, 0, 0, 0);
+        for s in &all {
+            let m = &masses[s.mass as usize];
+            let thickness: Vec<f64> = s.walls.iter().map(|w| w.thickness).collect();
+            let floor = floor(m, &thickness);
+            let plate = floor.as_ref().map_or(0.0, |p| geom::signed_area(p).abs());
+            if floor.is_some() && cores::needs_cores(m, &s.walls, plate) {
+                needing += 1;
+                missing += usize::from(s.cores.is_empty());
+            }
+            for (k, c) in s.cores.iter().enumerate() {
+                cores += 1;
+                lifts += usize::from(c.lift.is_some());
+                roofs += usize::from(c.roof);
+                // Its door: in the middle of its hall, on the ground storey of its wall.
+                let o = &s.openings[c.door];
+                assert_eq!(o.kind, OpeningKind::Door);
+                assert_eq!((o.wall, o.storey), (c.wall, 0));
+                assert!(o.span().0 >= c.span.0 && o.span().1 <= c.span.1);
+                // Inside the walls.
+                let floor = floor.as_ref().expect("a core needs a floor");
+                let middle = (c.outline[0] + c.outline[1] + c.outline[2] + c.outline[3]) * 0.25;
+                for p in c.outline {
+                    assert!(geom::contains(floor, p + (middle - p).normalize() * 0.05));
+                }
+                // Clear of the others on its wall.
+                for d in &s.cores[k + 1..] {
+                    assert!(d.wall != c.wall || d.span.0 >= c.span.1 || d.span.1 <= c.span.0);
+                }
+                // A lift from R+3; up to the roof under a garden or a terrace.
+                assert_eq!(c.lift.is_some(), m.storeys.len() >= LIFT_FROM);
+                assert_eq!(c.roof, matches!(m.roof, Roof::Green | Roof::Terrace));
+                assert_eq!(c.risers.len(), m.storeys.len() + usize::from(c.roof));
+                halls
+                    .entry(m.lot)
+                    .or_default()
+                    .push((c.hall[0] + c.hall[1] + c.hall[2] + c.hall[3]) * 0.25);
+            }
+        }
+        // Every upper floor within 25 m of a landing in its building (as the crow flies).
+        let mut far = 0;
+        let mut upper = 0;
+        for m in masses.iter().filter(|m| m.storeys.len() >= 2) {
+            upper += 1;
+            let near = halls.get(&m.lot).is_some_and(|h| {
+                m.footprint
+                    .iter()
+                    .all(|&p| h.iter().any(|&q| p.distance(q) <= cores::REACH))
+            });
+            far += usize::from(!near);
+        }
+        println!(
+            "{cores} cores, {lifts} with a lift, {roofs} up to the roof; {missing} of {needing} \
+             masses without; {far} of {upper} upper masses far from a landing"
+        );
+        assert!(cores > 10_000, "{cores} cores");
+        assert!(
+            missing * 100 <= needing,
+            "{missing} of {needing} without a core"
+        );
+        assert!(far * 50 <= upper, "{far} of {upper} far from a landing");
     }
 
     #[test]
