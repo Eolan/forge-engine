@@ -106,6 +106,70 @@ pub fn walker(height: f32, stride: f32) -> TriMesh {
     m
 }
 
+/// A figure `height` metres tall seated on a chair whose seat is 0.5 m up, facing `+x` with its
+/// forearms forward on a table; its hips over the origin.
+pub fn sitter(height: f32) -> TriMesh {
+    let mut m = TriMesh::default();
+    let k = height / 1.72;
+    let seat = 0.5;
+    let bar = |m: &mut TriMesh, a: Vec3, b: Vec3, w: f32, section: u8| {
+        let d = b - a;
+        let r = Quat::from_rotation_arc(Vec3::Y, d.normalize());
+        part(
+            m,
+            (a + b) * 0.5,
+            Vec3::new(w, d.length() * 0.5, w),
+            r,
+            section,
+        );
+    };
+    for z in [0.09 * k, -0.09 * k] {
+        let (hip, knee) = (Vec3::new(0.0, seat, z), Vec3::new(0.44 * k, seat, z));
+        let foot = Vec3::new(0.46 * k, 0.06, z);
+        bar(&mut m, hip, knee, 0.068 * k, BOTTOM);
+        bar(&mut m, knee, foot, 0.06 * k, BOTTOM);
+        part(
+            &mut m,
+            foot + Vec3::new(0.06 * k, -0.02, 0.0),
+            Vec3::new(0.12, 0.04, 0.06) * k,
+            Quat::IDENTITY,
+            SHOES,
+        );
+    }
+    let shoulder = seat + 0.56 * k;
+    part(
+        &mut m,
+        Vec3::new(-0.02 * k, seat + 0.29 * k, 0.0),
+        Vec3::new(0.11, 0.3, 0.18) * k,
+        Quat::IDENTITY,
+        TOP,
+    );
+    for z in [0.23 * k, -0.23 * k] {
+        let s = Vec3::new(0.0, shoulder - 0.04 * k, z);
+        let elbow = Vec3::new(0.12 * k, seat + 0.26 * k, z);
+        let hand = Vec3::new(0.42 * k, seat + 0.26 * k, z * 0.7);
+        bar(&mut m, s, elbow, 0.05 * k, TOP);
+        bar(&mut m, elbow, hand, 0.045 * k, TOP);
+        part(&mut m, hand, Vec3::splat(0.045 * k), Quat::IDENTITY, SKIN);
+    }
+    let head = Vec3::new(0.01 * k, shoulder + 0.18 * k, 0.0);
+    part(
+        &mut m,
+        head,
+        Vec3::new(0.1, 0.12, 0.085) * k,
+        Quat::IDENTITY,
+        SKIN,
+    );
+    part(
+        &mut m,
+        head + Vec3::new(-0.015, 0.09, 0.0) * k,
+        Vec3::new(0.105, 0.045, 0.09) * k,
+        Quat::IDENTITY,
+        SHOES,
+    );
+    m
+}
+
 /// A cyclist on a city bike, riding along `+x`: two wheels (shoes' section, their tyres), the
 /// frame and the handlebars (bottom's), the rider upright on the saddle, hands on the bars.
 pub fn cyclist(height: f32) -> TriMesh {
@@ -223,6 +287,15 @@ mod tests {
             assert!(m.sections.iter().all(|&s| s < SECTIONS));
             assert_eq!(m.sections.len(), m.triangle_count());
         }
+    }
+
+    #[test]
+    fn a_sitter_sits_at_a_chair_s_height() {
+        let m = sitter(1.72);
+        let hi = m.positions.iter().fold(f32::MIN, |h, p| h.max(p[1]));
+        let lo = m.positions.iter().fold(f32::MAX, |h, p| h.min(p[1]));
+        assert!(lo.abs() < 0.05 && hi > 1.2 && hi < 1.45, "{lo} {hi}");
+        assert!(m.sections.iter().all(|&s| s < SECTIONS));
     }
 
     #[test]

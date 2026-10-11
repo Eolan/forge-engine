@@ -6,7 +6,9 @@
 //!   out to the street nearest where they go, at the pace their trip's time gives: walking on the
 //!   pavement, or riding a bike in the carriageway's right lane when quicker than a walk (trips
 //!   quicker than a bike ride the trams, and are not drawn yet);
-//! - in a park, standing about it.
+//! - in a park, standing about it;
+//! - out at a café: seated at the terraces round it, in the share the people out there make of
+//!   the seats.
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
@@ -20,7 +22,7 @@ use glam::{DVec2, Vec2, Vec3};
 
 /// The figures' palettes.
 pub const GROUPS: usize = 8;
-/// Figures a mesh (a palette walking, standing or riding) shows at most.
+/// Figures a mesh (a palette walking, standing, riding or seated) shows at most.
 pub const PER_MESH: usize = 60;
 /// How far round the camera people are drawn, metres.
 const REACH: f64 = 220.0;
@@ -28,6 +30,10 @@ const REACH: f64 = 220.0;
 /// 15 real minutes), at which its walkers would cross the screen at 5 m/s; near the player
 /// people walk at their true pace, and how the two clocks meet is D-059's open question.
 const TIME_SCALE: f64 = 1.0;
+/// A terrace seat's neighbourhood, metres: the cafés whose people may sit there.
+const NEIGHBOURHOOD: f64 = 300.0;
+/// Calls between two counts of who is where (the cafés' people).
+const RECOUNT: u32 = 30;
 /// Routes found a frame at most.
 const NEW_ROUTES: usize = 40;
 /// The fastest a drawn walker goes, m/s.
@@ -96,11 +102,18 @@ pub struct Crowd {
     /// The parks' outlines: their visitors stand inside them.
     parks: Vec<Vec<DVec2>>,
     size: f64,
+    /// The terraces' seats (the world's place, the sitter's turn), and each seat's
+    /// neighbourhood: the cafés within [`NEIGHBOURHOOD`] and how many seats.
+    seats: Vec<(Vec3, f32)>,
+    neighbourhoods: Vec<(Vec<u32>, u32)>,
+    /// People at each place, counted every [`RECOUNT`] calls.
+    counts: Vec<u32>,
+    calls: u32,
 }
 
 impl Crowd {
     /// The people of `plan`'s `masses`, their day run to `hour` (game hours from midnight).
-    pub fn new(plan: &CityPlan, masses: &[Mass], hour: f64) -> Self {
+    pub fn new(plan: &CityPlan, masses: &[Mass], hour: f64, seats: Vec<(Vec3, f32)>) -> Self {
         let buildings: Vec<Building> = masses
             .iter()
             .map(|m| {
@@ -145,9 +158,38 @@ impl Crowd {
             };
             plan_edges.push((e.points.clone(), side, level));
         }
+        // Each terrace seat's neighbourhood: the cafés and the seats within 300 m of it. A seat
+        // is taken in the share the people out at those cafés make of those seats.
+        let half = plan.size * 0.5;
+        let mut cafe_grid = PointGrid::new(plan.size, 100.0);
+        for (i, q) in world.places.iter().enumerate() {
+            if q.kind == PlaceKind::Food {
+                cafe_grid.insert(
+                    DVec2::new(f64::from(q.pos[0]), f64::from(q.pos[1])),
+                    i as u32,
+                );
+            }
+        }
+        let mut seat_grid = PointGrid::new(plan.size, 100.0);
+        let plan_at = |p: Vec3| DVec2::new(f64::from(p.x) + half, f64::from(p.z) + half);
+        for (k, (p, _)) in seats.iter().enumerate() {
+            seat_grid.insert(plan_at(*p), k as u32);
+        }
+        let neighbourhoods: Vec<(Vec<u32>, u32)> = seats
+            .iter()
+            .map(|(p, _)| {
+                let at = plan_at(*p);
+                let mut cafes = Vec::new();
+                cafe_grid.for_each_within(at, NEIGHBOURHOOD, |_, cafe| cafes.push(cafe));
+                let mut around = 0;
+                seat_grid.for_each_within(at, NEIGHBOURHOOD, |_, _| around += 1);
+                (cafes, around)
+            })
+            .collect();
         tracing::info!(
             people = sim.pop.len(),
             places = world.places.len(),
+            seats = seats.len(),
             hour,
             "the crowd: the plan's people on their clock"
         );
@@ -165,6 +207,47 @@ impl Crowd {
                 .map(|b| geom::inset(&b.polygon, 9.0).unwrap_or_else(|| b.polygon.clone()))
                 .collect(),
             size: plan.size,
+            seats,
+            neighbourhoods,
+            counts: Vec::new(),
+            calls: 0,
+        }
+    }
+
+    /// The people out at cafés, seated at the terraces' seats within [`REACH`] of `c` (the plan's
+    /// frame): each seat taken in the share the people out round it make of the seats round it,
+    /// a palette's seated mesh each.
+    fn seat_people(&mut self, c: DVec2, out: &mut [Vec<(Vec3, f32)>]) {
+        if self.calls.is_multiple_of(RECOUNT) || self.counts.is_empty() {
+            self.counts = vec![0; self.sim.world.places.len()];
+            for p in 0..self.sim.pop.len() {
+                if self.sim.trip(p).is_none() {
+                    let at = self.sim.pop.at[p] as usize;
+                    if let Some(n) = self.counts.get_mut(at) {
+                        *n += 1;
+                    }
+                }
+            }
+        }
+        self.calls = self.calls.wrapping_add(1);
+        let half = self.size * 0.5;
+        for (k, &(p, turn)) in self.seats.iter().enumerate() {
+            let at = DVec2::new(f64::from(p.x) + half, f64::from(p.z) + half);
+            if at.distance(c) > REACH {
+                continue;
+            }
+            let (cafes, around) = &self.neighbourhoods[k];
+            let people: u32 = cafes.iter().map(|&q| self.counts[q as usize]).sum();
+            let share = (f64::from(people) / f64::from((*around).max(1))).min(0.9);
+            // The same seats stay taken while the share holds (a hash of the seat, not a draw).
+            let pick = (k as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 54;
+            if (pick as f64) / 1024.0 >= share {
+                continue;
+            }
+            let mesh = (k * 7 + 3) % GROUPS * 4 + 3;
+            if out[mesh].len() < PER_MESH {
+                out[mesh].push((p, turn));
+            }
         }
     }
 
@@ -175,12 +258,12 @@ impl Crowd {
     }
 
     /// The figures to draw round `camera` (the world's x and z): for each of the
-    /// `3 × GROUPS` meshes in order (each palette walking, standing, riding), up to [`PER_MESH`]
+    /// `4 × GROUPS` meshes in order (each palette walking, standing, riding, seated), up to [`PER_MESH`]
     /// places and turns.
     pub fn figures(&mut self, camera: Vec2) -> Vec<Vec<(Vec3, f32)>> {
         let half = self.size * 0.5;
         let c = DVec2::new(f64::from(camera.x) + half, f64::from(camera.y) + half);
-        let mut out = vec![Vec::new(); 3 * GROUPS];
+        let mut out = vec![Vec::new(); 4 * GROUPS];
         let mut budget = NEW_ROUTES;
         let places = &self.sim.world.places;
         let now = self.clock;
@@ -197,7 +280,7 @@ impl Crowd {
                         f64::from(q[0]) + jitter(s),
                         f64::from(q[1]) + jitter(s >> 8),
                     );
-                    let mesh = (s as usize % GROUPS) * 3 + 1;
+                    let mesh = (s as usize % GROUPS) * 4 + 1;
                     let inside = self.parks.iter().any(|p| geom::contains(p, q));
                     if inside && q.distance(c) <= REACH && out[mesh].len() < PER_MESH {
                         let at = Vec3::new((q.x - half) as f32, 0.08, (q.y - half) as f32);
@@ -238,13 +321,14 @@ impl Crowd {
                 continue;
             }
             let seed = self.sim.pop.seed[p];
-            let mesh = (seed as usize % GROUPS) * 3 + if riding { 2 } else { 0 };
+            let mesh = (seed as usize % GROUPS) * 4 + if riding { 2 } else { 0 };
             if out[mesh].len() >= PER_MESH {
                 continue;
             }
             let at = Vec3::new((q.x - half) as f32, level, (q.y - half) as f32);
             out[mesh].push((at, (-dir.y).atan2(dir.x) as f32));
         }
+        self.seat_people(c, &mut out);
         // Forget the routes of trips that have ended.
         if self.routes.len() > 20_000 {
             let sim = &self.sim;

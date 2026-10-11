@@ -298,12 +298,16 @@ cargo run --release -p city-plan -- --street --people 16.3   # from 16:18
 
 ![People](images/city-plan-people.png)
 
-*From 16:18, the park's visitors standing about it; at 08:12, the morning's cyclists in the
-river avenue's lanes and walkers on its pavements.* `--people HOUR` builds the plan's population
-from the masses (`forge_sim::population`, 295 789 people, 2 s) and runs its day to that hour.
-Each frame:
+*Top: from 16:18, the park's visitors standing about it; at 08:12, the morning's cyclists in the
+river avenue's lanes and walkers on its pavements. Bottom: at 20:00, a lane's café terraces; the
+evening's walkers.* `--people HOUR` builds the plan's population from the masses
+(`forge_sim::population`, 295 789 people, 2 s) and runs its day to that hour. Each frame:
 - **who is drawn:** people within 220 m of the camera, as placeholder figures
-  (`forge_geom::figures`: blocky, in eight palettes, walking, standing or riding a bike);
+  (`forge_geom::figures`: blocky, in eight palettes, walking, standing, riding a bike or
+  seated);
+- **those out at a café:** seated at the kit's terraces. Each seat is taken in the share that
+  the people out at the cafés within 300 m make of the seats there, up to nine in ten. The
+  same seats stay taken while the share holds.
 - **those on their way:** each goes the shortest way along the streets (A* on the road graph)
   from the street nearest their start to the street nearest their goal, at the pace their
   trip's time gives: on the pavement up to 2.2 m/s, by bike in the carriageway's right lane up

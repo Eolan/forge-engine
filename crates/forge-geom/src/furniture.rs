@@ -27,6 +27,24 @@ pub fn terrace(w: f32) -> TriMesh {
     m
 }
 
+/// The seats of [`terrace`]`(w)`: each chair's place on the ground under its seat and the way a
+/// person on it faces (towards the table), in the terrace's frame.
+pub fn terrace_seats(w: f32) -> Vec<(Vec3, Vec3)> {
+    let tables = (w / 1.6).floor().max(1.0) as u32;
+    let step = w / tables as f32;
+    let mut out = Vec::new();
+    for k in 0..tables {
+        let c = Vec3::new(step * (k as f32 + 0.5), 0.0, 1.6);
+        for side in [-1.0_f32, 1.0] {
+            out.push((
+                c + Vec3::new(0.0, 0.0, 0.62 * side),
+                Vec3::new(0.0, 0.0, -side),
+            ));
+        }
+    }
+    out
+}
+
 /// A round table on a pedestal: an octagonal wooden top 0.7 m across, 0.75 m up.
 fn table(m: &mut TriMesh, c: Vec3) {
     prism(m, c + Vec3::Y * 0.72, 0.35, 0.04, 8, WOOD);

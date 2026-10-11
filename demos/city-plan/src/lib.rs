@@ -195,6 +195,8 @@ pub struct PlanScenario {
     size: f64,
     /// What the kit built, logged once the app logs.
     kit_report: Option<String>,
+    /// The terraces' seats, for the crowd.
+    seats: Vec<(Vec3, f32)>,
     camera: FlyCamera,
     title: String,
     triangles: usize,
@@ -332,6 +334,7 @@ impl PlanScenario {
                 (world(size, l.pos, 0.0), (l.height / 8.0) as f32, turn)
             })
             .collect();
+        let mut seats = Vec::new();
         let (mut kit_meshes, mut kit_instances, kit_report) =
             kit.map_or((Vec::new(), Vec::new(), None), |k| {
                 let instanced: usize = k
@@ -352,6 +355,7 @@ impl PlanScenario {
                     k.longest_run,
                     k.ms
                 );
+                seats = k.seats;
                 (k.meshes, k.instances, Some(report))
             });
         // The tram stops, a platform by each track.
@@ -372,6 +376,7 @@ impl PlanScenario {
             kit_meshes,
             kit_instances,
             kit_report,
+            seats,
             trams,
             boats: plan
                 .crossings
@@ -412,7 +417,8 @@ impl PlanScenario {
     /// The plan's people on their clock from `hour` (game hours), those walking round the
     /// camera drawn as figures (`crowd`).
     pub fn with_people(mut self, plan: &CityPlan, masses: &[Mass], hour: f64) -> Self {
-        self.crowd = Some(crowd::Crowd::new(plan, masses, hour));
+        let seats = std::mem::take(&mut self.seats);
+        self.crowd = Some(crowd::Crowd::new(plan, masses, hour, seats));
         self
     }
 
@@ -647,6 +653,8 @@ struct Kit {
     terminals: usize,
     /// The longest run of identical openings along one floor of one street front.
     longest_run: usize,
+    /// The terraces' seats: where each chair stands and the way its sitter faces.
+    seats: Vec<(Vec3, f32)>,
     /// Derivation and assembly, milliseconds.
     ms: f64,
 }
@@ -679,6 +687,7 @@ fn kit(tiles: &mut Tiles, plan: &CityPlan, masses: &[Mass], near: &[usize], d: &
         std::collections::HashMap::new();
     let mut meshes = Vec::new();
     let mut instances = Vec::new();
+    let mut seats = Vec::new();
     let (mut run, mut longest_run, mut last) = (0, 0, None);
     for &(f, t) in &terminals {
         let face = &faces[f as usize];
@@ -742,6 +751,10 @@ fn kit(tiles: &mut Tiles, plan: &CityPlan, masses: &[Mass], near: &[usize], d: &
                     (pos + Vec3::Y * level).extend(1.0),
                 );
                 instances.push((id, at, colour * 2));
+                for (p, d) in forge_geom::furniture::terrace_seats(w) {
+                    let (p, d) = (at.transform_point3(p), at.transform_vector3(d));
+                    seats.push((p, (-d.z).atan2(d.x)));
+                }
             }
             // Runs of one opening along a floor of a street front.
             if face.kind == FaceKind::Street {
@@ -788,6 +801,7 @@ fn kit(tiles: &mut Tiles, plan: &CityPlan, masses: &[Mass], near: &[usize], d: &
         faces: faces.len(),
         terminals: terminals.len(),
         longest_run,
+        seats,
         ms: start.elapsed().as_secs_f64() * 1e3,
     }
 }
@@ -1443,7 +1457,8 @@ impl Scenario for PlanScenario {
             let n = run.timetable.vehicles() as u32;
             tram_movers.extend([(cab, 2 * n), (middle, (TRAM_SECTIONS as u32 - 2) * n)]);
         }
-        // The crowd's figures: each palette walking, standing (the parks' people) and riding,
+        // The crowd's figures: each palette walking, standing (the parks' people), riding and
+        // seated (the cafés'),
         // a mesh each.
         if self.crowd.is_some() {
             for (g, &row) in people_rows.iter().enumerate().take(crowd::GROUPS) {
@@ -1452,6 +1467,7 @@ impl Scenario for PlanScenario {
                     forge_geom::figures::walker(height, 0.3),
                     forge_geom::figures::walker(height, 0.0),
                     forge_geom::figures::cyclist(height),
+                    forge_geom::figures::sitter(height),
                 ] {
                     let mesh = builder.add_mesh(&MeshletMesh::build(&figure));
                     builder.set_mesh_material(mesh, row);
