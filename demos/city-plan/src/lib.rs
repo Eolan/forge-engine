@@ -1585,10 +1585,13 @@ fn mass(tiles: &mut Tiles, m: &Mass, edges: &[Option<FaceKind>]) {
         let ends = (world(size, a, 0.0) - centre, world(size, b, 0.0) - centre);
         let length = a.distance(b);
         let cells = textures::FACADE_CELLS as f32;
+        // The ground storey is one cell, stretched to its height: at 3.2 m a cell, its 4.2 m showed
+        // a row of window stubs under the first floor, cut where the upper band starts again
+        // (the owner's "bugged windows" on the first floor).
         let (lower, floor, repeat) = if shops {
             (SHOP, ground, 1.0)
         } else {
-            (WALL + tint, FLOOR as f32, cells)
+            (WALL + tint, ground, cells)
         };
         let base = (0.0, ground.min(top));
         wall_band(mesh, ends, length, base, floor, repeat, out, lower);
