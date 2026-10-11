@@ -417,6 +417,21 @@ pub fn tram_stop(length: f32, deep: f32, back: bool) -> TriMesh {
                 triangle(&mut m, [tri[0], tri[2], tri[1]], STONE);
             }
         }
+        // Each back corner, where an end ramp meets the back slope: a hip of two planes, each
+        // carrying one of them on, so no notch is left between the two.
+        for (x0, out) in [(0.0, -1.0_f32), (length, 1.0)] {
+            let top = Vec3::new(x0, high, deep);
+            let a = Vec3::new(x0 + out * run, 0.0, deep);
+            let b = Vec3::new(x0 + out * run, 0.0, deep + run);
+            let c = Vec3::new(x0, 0.0, deep + run);
+            for tri in [[top, a, b], [top, b, c]] {
+                if (tri[1] - tri[0]).cross(tri[2] - tri[0]).y >= 0.0 {
+                    triangle(&mut m, tri, STONE);
+                } else {
+                    triangle(&mut m, [tri[0], tri[2], tri[1]], STONE);
+                }
+            }
+        }
     }
     cuboid(
         &mut m,
