@@ -1,0 +1,18 @@
+[package]
+name = "population-bench"
+description = "A city plan's population from its masses (forge-sim::population), run through game days headless: the census by hour, the events, their cost and the digest."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+forge-core = { workspace = true }
+forge-procgen = { workspace = true }
+forge-sim = { workspace = true }

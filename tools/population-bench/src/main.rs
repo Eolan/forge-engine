@@ -1,0 +1,116 @@
+//! `population-bench --days 2`: the example city's plan (`forge_procgen::city::example`), its
+//! masses as buildings, their homes, jobs, schools, shops, cafés and bars as places, the
+//! population that fits (`forge_sim::population`, #250), run through game days headless. Prints
+//! the census every game hour, the events and their cost, the bytes a person and the digest, and
+//! what a game hour of 15 real minutes asks of the server (D-059).
+
+#![forbid(unsafe_code)]
+
+use std::time::Instant;
+
+use anyhow::Result;
+use clap::Parser;
+use forge_core::Seed;
+use forge_procgen::city::{self, BlockUse, example, geom};
+use forge_sim::population::{
+    self, Building, DAY, Mix, Population, Sim, Uses, World, places_from_buildings,
+};
+
+#[derive(Parser, Debug)]
+#[command(about = "A city's population through game days, headless")]
+struct Args {
+    /// The example's side, metres.
+    #[arg(long, default_value_t = 4000.0)]
+    size: f64,
+    /// Game days to run.
+    #[arg(long, default_value_t = 2)]
+    days: u32,
+}
+
+fn main() -> Result<()> {
+    let args = Args::parse();
+    let site = example::site(args.size, 10.0);
+    let params = example::params(args.size);
+    let plan = city::plan(&site, &params);
+    let masses = city::mass::masses(&plan, &city::bible::StyleBible::default(), 11);
+    let buildings: Vec<Building> = masses
+        .iter()
+        .map(|m| {
+            let c = geom::centroid(&m.footprint);
+            Building {
+                pos: [c.x as f32, c.y as f32],
+                floor_area: (geom::signed_area(&m.footprint) * f64::from(m.floors)) as f32,
+                active_ground: m.street_width >= 20.0 || m.street_width <= 8.0,
+            }
+        })
+        .collect();
+    let parks: Vec<[f32; 2]> = plan
+        .blocks
+        .iter()
+        .filter(|b| b.use_ == BlockUse::Park)
+        .map(|b| [b.centre.x as f32, b.centre.y as f32])
+        .collect();
+    let report = run(&buildings, &parks, args.size as f32, args.days);
+    println!("{report}");
+    Ok(())
+}
+
+/// Makes the population of `buildings` and `parks` and runs it for `days`, returning the report.
+fn run(buildings: &[Building], parks: &[[f32; 2]], size: f32, days: u32) -> String {
+    let mut out = String::new();
+    let t = Instant::now();
+    let places = places_from_buildings(buildings, parks, &Uses::default());
+    let world = World::new(places, size, 250.0);
+    let made_places = t.elapsed().as_secs_f64();
+    let t = Instant::now();
+    let pop: Population = population::generate(&world, &Mix::default(), Seed::new(2026));
+    let generated = t.elapsed().as_secs_f64();
+    let n = pop.len();
+    out += &format!(
+        "{} places, {n} people, {} bytes a person ({:.1} MB); places {:.0} ms, people {:.0} ms\n",
+        world.places.len(),
+        Population::bytes_per_person(),
+        (n * Population::bytes_per_person()) as f64 / 1e6,
+        made_places * 1e3,
+        generated * 1e3
+    );
+    let t = Instant::now();
+    let mut sim = Sim::new(&world, pop);
+    let start = t.elapsed().as_secs_f64();
+    out += &format!(
+        "calendar {:.0} ms\nhour   home  at work/school  shops  cafés  bars  parks  travelling\n",
+        start * 1e3
+    );
+    let t = Instant::now();
+    for hour in 1..=days * 24 {
+        sim.run_until(hour * 3600);
+        if hour % 3 == 0 || hour <= 24 {
+            let c = sim.census();
+            let pc = |v: u32| 100.0 * v as f64 / n as f64;
+            out += &format!(
+                "{:>4}  {:>5.1}  {:>13.1}  {:>5.1}  {:>5.1}  {:>4.1}  {:>5.1}  {:>10.1}\n",
+                hour,
+                pc(c.home),
+                pc(c.anchor),
+                pc(c.shop),
+                pc(c.food),
+                pc(c.leisure),
+                pc(c.park),
+                pc(c.travelling)
+            );
+        }
+    }
+    let ran = t.elapsed().as_secs_f64();
+    let per_day = sim.events as f64 / f64::from(days);
+    out += &format!(
+        "{} events over {days} days ({:.1} a person a day) in {:.2} s: {:.0} ns an event; a game day at 1 h = 15 min (6 real hours) asks {:.0} events a real second, {:.4} % of one core\n",
+        sim.events,
+        per_day / n as f64,
+        ran,
+        ran * 1e9 / sim.events as f64,
+        per_day / f64::from(DAY / 4),
+        100.0 * (ran / f64::from(days)) / f64::from(DAY / 4),
+    );
+    out += &format!("digest {:016x}", sim.digest());
+    out
+}

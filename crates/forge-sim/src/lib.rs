@@ -619,5 +619,7 @@ impl<S: Simulation> Client<S> {
     }
 }
 
+pub mod population;
+
 #[cfg(test)]
 mod tests;

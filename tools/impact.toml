@@ -22,6 +22,8 @@
 "crates/forge-procgen/src/city/**" = []
 "tools/city-map/**" = []
 "demos/city-plan/**" = []
+"crates/forge-sim/src/population.rs" = []
+"tools/population-bench/**" = []
 # Claude's settings and its agents' worktrees: never built, never committed (#220).
 ".claude/**" = []
 
