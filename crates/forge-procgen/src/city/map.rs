@@ -42,15 +42,22 @@ const QUAY: [u8; 3] = [222, 214, 198];
 struct Canvas {
     side: u32,
     metres_per_pixel: f64,
+    origin: DVec2,
     pixels: Vec<[u8; 3]>,
 }
 
 impl Canvas {
     fn new(size: f64, metres_per_pixel: f64) -> Self {
+        Self::window(DVec2::ZERO, size, metres_per_pixel)
+    }
+
+    /// A canvas over the square of `size` metres whose top-left corner is `origin`.
+    fn window(origin: DVec2, size: f64, metres_per_pixel: f64) -> Self {
         let side = (size / metres_per_pixel).ceil() as u32;
         Self {
             side,
             metres_per_pixel,
+            origin,
             pixels: vec![LAND_C; (side as usize) * (side as usize)],
         }
     }
@@ -64,7 +71,7 @@ impl Canvas {
     /// Fills a polygon (even-odd), pixel centres inside.
     fn fill(&mut self, polygon: &[DVec2], c: [u8; 3]) {
         let s = self.metres_per_pixel;
-        let pts: Vec<DVec2> = polygon.iter().map(|&p| p / s).collect();
+        let pts: Vec<DVec2> = polygon.iter().map(|&p| (p - self.origin) / s).collect();
         let (lo, hi) = pts.iter().fold(
             (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)),
             |(lo, hi), &p| (lo.min(p), hi.max(p)),
@@ -85,8 +92,8 @@ impl Canvas {
             xs.sort_by(|a, b| a.partial_cmp(b).expect("finite"));
             for pair in xs.chunks(2) {
                 if let [xa, xb] = pair {
-                    let x0 = (xa - 0.5).ceil() as i64;
-                    let x1 = (xb - 0.5).floor() as i64;
+                    let x0 = ((xa - 0.5).ceil() as i64).max(0);
+                    let x1 = ((xb - 0.5).floor() as i64).min(self.side as i64 - 1);
                     for x in x0..=x1 {
                         self.put(x, y, c);
                     }
@@ -100,7 +107,7 @@ impl Canvas {
         let s = self.metres_per_pixel;
         let half = (width / s * 0.5).max(0.5);
         for w in points.windows(2) {
-            let (a, b) = (w[0] / s, w[1] / s);
+            let (a, b) = ((w[0] - self.origin) / s, (w[1] - self.origin) / s);
             let lo = a.min(b) - half;
             let hi = a.max(b) + half;
             for y in lo.y.floor() as i64..=hi.y.ceil() as i64 {
@@ -320,7 +327,7 @@ fn paint_water(canvas: &mut Canvas, site: &Site) {
     let beach_cells = (40.0 / water.spacing).ceil() as i64;
     for y in 0..canvas.side {
         for x in 0..canvas.side {
-            let p = DVec2::new((x as f64 + 0.5) * s, (y as f64 + 0.5) * s);
+            let p = canvas.origin + DVec2::new((x as f64 + 0.5) * s, (y as f64 + 0.5) * s);
             let c = match site.water_at(p) {
                 LAND => continue,
                 RIVER => RIVER_C,
@@ -500,4 +507,74 @@ pub fn digest(plan: &CityPlan) -> u64 {
         }
     }
     h
+}
+
+/// The masses in an oblique view from the south, a tilt of `tilt` screen metres up per metre of
+/// height, over the plan's ground: walls facing the viewer shaded by their direction, roofs
+/// coloured by what they carry (green, solar, terrace).
+pub fn write_massing(
+    site: &Site,
+    plan: &CityPlan,
+    masses: &[super::mass::Mass],
+    path: &Path,
+    window: (DVec2, f64),
+    metres_per_pixel: f64,
+    tilt: f64,
+) -> image::ImageResult<()> {
+    use super::mass::Roof;
+    let mut canvas = Canvas::window(window.0, window.1, metres_per_pixel);
+    // The ground: courtyards and gardens, parks, squares, water, then the streets.
+    for block in &plan.blocks {
+        let c = match block.use_ {
+            BlockUse::Park => PARK,
+            BlockUse::Quay => QUAY,
+            BlockUse::Square => SQUARE,
+            BlockUse::Built => COURTYARD,
+        };
+        canvas.fill(&block.polygon, c);
+    }
+    paint_water(&mut canvas, site);
+    for e in &plan.roads.edges {
+        canvas.stroke(&e.points, e.profile.width(), [236, 232, 224]);
+    }
+    for line in &plan.tram_lines {
+        canvas.stroke(&line.points, 2.0, line.colour);
+    }
+    // Far masses first: the viewer stands to the south (+y).
+    let mut order: Vec<&super::mass::Mass> = masses.iter().collect();
+    order.sort_by(|a, b| {
+        let ya = a.footprint.iter().fold(f64::MIN, |m, p| m.max(p.y));
+        let yb = b.footprint.iter().fold(f64::MIN, |m, p| m.max(p.y));
+        ya.partial_cmp(&yb).expect("finite")
+    });
+    let light = DVec2::new(-0.6, 0.8);
+    for m in order {
+        let lot = &plan.lots[m.lot as usize];
+        let kind = plan.districts[plan.blocks[lot.block as usize].district].kind;
+        let base = district_colour(kind).map(|v| f64::from(v).mul_add(0.5, 127.0));
+        let lift = DVec2::new(0.0, -m.height * tilt);
+        let n = m.footprint.len();
+        for i in 0..n {
+            let (a, b) = (m.footprint[i], m.footprint[(i + 1) % n]);
+            let t = (b - a).normalize_or_zero();
+            let outward = DVec2::new(t.y, -t.x);
+            if outward.y <= 0.0 {
+                continue;
+            }
+            let shade = 0.62 + 0.38 * outward.dot(light).max(0.0);
+            let c = base.map(|v| (v * shade).min(255.0) as u8);
+            canvas.fill(&[a, b, b + lift, a + lift], c);
+        }
+        let roof: Vec<DVec2> = m.footprint.iter().map(|&p| p + lift).collect();
+        let c = match m.roof {
+            Roof::Green => [126, 172, 98],
+            Roof::Solar => [70, 82, 104],
+            Roof::Terrace => [214, 206, 192],
+        };
+        canvas.fill(&roof, c);
+        let mut ring = roof.clone();
+        ring.push(roof[0]);
+        canvas.stroke(&ring, 0.5 * metres_per_pixel, [96, 90, 84]);
+    }
+    canvas.save(path)
 }

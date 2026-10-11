@@ -11,6 +11,7 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use clap::Parser;
 use forge_procgen::city::{self, example};
+use glam::DVec2;
 
 #[derive(Parser, Debug)]
 #[command(about = "The example city's plan as a PNG map, with its numbers")]
@@ -49,5 +50,29 @@ fn main() -> Result<()> {
         path.display(),
         t.elapsed().as_secs_f64() * 1e3
     );
+    let checks = args.out.join("checks.png");
+    city::map::write_checks(&site, &plan, &params, &checks, args.scale)
+        .context("writing the checks")?;
+    let t = Instant::now();
+    let masses = city::mass::masses(&plan, 0.5, 11);
+    let floor_area: f64 = masses
+        .iter()
+        .map(|m| city::geom::signed_area(&m.footprint) * f64::from(m.floors))
+        .sum();
+    println!(
+        "masses: {} in {:.0} ms, {:.1} km² of floors",
+        masses.len(),
+        t.elapsed().as_secs_f64() * 1e3,
+        floor_area / 1e6
+    );
+    let whole = args.out.join("massing.png");
+    let frame = (DVec2::ZERO, args.size);
+    city::map::write_massing(&site, &plan, &masses, &whole, frame, args.scale, 0.7)
+        .context("writing the massing")?;
+    let near = args.out.join("massing-centre.png");
+    let window = (params.centre - DVec2::splat(500.0), 1000.0);
+    city::map::write_massing(&site, &plan, &masses, &near, window, 0.5, 0.7)
+        .context("writing the close massing")?;
+    println!("checks, massing: {}", args.out.display());
     Ok(())
 }

@@ -14,3 +14,4 @@ workspace = true
 anyhow = { workspace = true }
 clap = { workspace = true }
 forge-procgen = { workspace = true }
+glam = { workspace = true }

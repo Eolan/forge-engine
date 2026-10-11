@@ -30,8 +30,10 @@ cargo run --release -p city-map -- --size 4000 --scale 2 --out captures/city
 | Road graph | streets cut where they cross or meet, ends snapped, dead ends under 60 m pruned; blocks as the graph's bounded faces | `city::graph` |
 | Blocks | quays where a face holds water; parks from park districts, then from the 3-30-300 rule (a park of 1 ha within 300 m of every built block); a courtyard per block, inset by the street and a building's depth | `city::blocks` |
 | Lots | recursive splits across each piece's long axis (Vanegas et al. 2012); only the pieces on a street are kept where a block has a courtyard | `city::blocks` |
-| Transit | tram lines by the shortest path through their waypoints, main roads preferred; stops every 450 m moved to nearby junctions; boat crossings where a river runs long without a bridge; street profiles (tram avenue, avenue, shared, pedestrian, path) | `city::transit` |
-| Map and numbers | a small rasteriser; the plan's numbers and its digest | `city::map` |
+| Forest | ground above a height or steeper than a slope goes to the first reserve district (a real site's hills) | `city::district_field` |
+| Transit | tram lines by the shortest path through their waypoints, main roads preferred (a waypoint far from any main road snaps to the nearest street); stops every 450 m moved to nearby junctions; lines added until a target share of blocks has a stop within 400 m (`transit::cover`); boat crossings where a river runs long without a bridge; street profiles (tram avenue, avenue, shared, pedestrian, path) | `city::transit` |
+| Masses | each lot's building: the lot inside the building line, less the courtyard's hull; floors from the district's range, capped by the street's profile; green, solar or terrace roofs | `city::mass` |
+| Maps and numbers | a small rasteriser: the plan, a checks map (blocks by what they lack), an oblique massing view of any window; the plan's numbers and its digest | `city::map` |
 
 Everything is a pure function of the site and the parameters. Costs are integers in the
 router, and `forge_core::dmath` does the trigonometry. Two runs give the same digest (D-016).
@@ -46,19 +48,20 @@ router, and `forge_core::dmath` does the trigonometry. Two runs give the same di
 | Lots / blocks with a courtyard | 12 930 / 608 |
 | Parks' share of the land | 10.5 % |
 | Built blocks with a 1 ha park within 300 m | 100 % |
-| Built blocks within 400 m of a tram stop | 47 % (two lines) |
+| Built blocks within 400 m of a tram stop | 45 % (two lines, no line added) |
 | Streets' share of the land | 21.5 % |
-| Tram lines | 7.8 km, 20 stops |
+| Tram lines | 7.8 km, 19 stops |
+| Masses / floor area | 14 647 / 21.6 km² (15 ms) |
 
 | Stage | Time |
 |---|---|
 | districts | 2.3 ms |
 | tensor field | 7.5 ms |
-| main roads | 2.1 ms |
+| main roads | 2.3 ms |
 | streets | 8.6 ms |
-| road graph and faces | 10.5 ms |
+| road graph and faces | 10.3 ms |
 | blocks, parks and lots | 10.2 ms |
-| transit and landmarks | 0.2 ms |
+| transit and landmarks | 0.3 ms |
 | **the whole plan** | **≈ 42 ms** |
 
 ## Tests
@@ -69,12 +72,23 @@ router, and `forge_core::dmath` does the trigonometry. Two runs give the same di
 - every built block has its park within reach;
 - the plan is the same every time;
 - no two roads cross except at a node;
-- lots sit inside their blocks.
+- lots sit inside their blocks;
+- added lines raise the stop coverage by over 20 points;
+- masses stand inside their blocks and outside their courtyards.
 
-## Next
+## Massing
 
-- The lots' building lines (the block inset per street profile).
-- Squares at the radial districts' centres.
-- The landmarks' sightlines.
-- Checks drawn as overlays.
-- Then buildings from the grammar (D-039).
+![The example's centre as masses](images/city-plan-massing.png)
+
+*A kilometre round the example's centre, seen obliquely from the south: perimeter blocks of
+4–8 floors round their courtyards, green, solar and terrace roofs, the river and a bridge, two
+tram lines.* Blocks whose outline is too curved for the building line's inset stay empty for
+now.
+
+## Next (#245–#247)
+
+- Building lines per street profile, and a fallback where the inset fails.
+- Squares at the radial districts' centres; the landmarks' sightlines.
+- More checks on the checks map; a legend and labels.
+- The style bible as data (#246).
+- Then buildings from the grammar (D-039, #247).

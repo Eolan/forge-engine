@@ -203,6 +203,43 @@ pub fn clip_half_plane(polygon: &[DVec2], origin: DVec2, direction: DVec2) -> Ve
     out
 }
 
+/// The convex hull of a set of points (Andrew's monotone chain), positive area, no collinear
+/// points.
+pub fn convex_hull(points: &[DVec2]) -> Vec<DVec2> {
+    let mut p = points.to_vec();
+    p.sort_by(|a, b| {
+        a.x.partial_cmp(&b.x)
+            .expect("finite")
+            .then(a.y.partial_cmp(&b.y).expect("finite"))
+    });
+    p.dedup();
+    if p.len() < 3 {
+        return p;
+    }
+    let mut hull: Vec<DVec2> = Vec::with_capacity(2 * p.len());
+    for pass in 0..2 {
+        let start = hull.len();
+        let iter: Box<dyn Iterator<Item = &DVec2>> = if pass == 0 {
+            Box::new(p.iter())
+        } else {
+            Box::new(p.iter().rev())
+        };
+        for &q in iter {
+            while hull.len() >= start + 2
+                && cross(
+                    hull[hull.len() - 1] - hull[hull.len() - 2],
+                    q - hull[hull.len() - 2],
+                ) <= 0.0
+            {
+                hull.pop();
+            }
+            hull.push(q);
+        }
+        hull.pop();
+    }
+    hull
+}
+
 /// A polygon moved `d` metres inwards on every side (mitred corners), for a polygon of positive
 /// signed area. `None` when the result folds over itself or comes closer than `d` to the
 /// outline somewhere (a block too thin or too concave for it).

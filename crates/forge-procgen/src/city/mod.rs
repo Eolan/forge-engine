@@ -26,6 +26,7 @@ pub mod example;
 pub mod geom;
 pub mod graph;
 pub mod map;
+pub mod mass;
 pub mod streets;
 pub mod tensor;
 pub mod transit;
