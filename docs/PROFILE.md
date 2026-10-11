@@ -1339,17 +1339,22 @@ view at noon, 1600 × 900, 616 frames: the frame 2.24 → 2.41 ms, `gi/probe ray
 
 ## `city-plan` — a city's plan in 3D, measured on the private sandbox's city (D-059, 2026-10-11)
 
-RTX 5070 Ti, 1600 × 900, TAA, 600 frames, a city of 37 816 masses (1 256 of them in the kit
-within 1 km: 104 M instanced triangles), 118 k trees and 1 million people. Two views: at street
+RTX 5070 Ti, 1600 × 900, TAA, 600 frames, a city of 37 506 masses (1 257 of them in the kit
+within 1 km: 85 M instanced triangles), 85 615 trees and 1 million people. Two views: at street
 level by the harbour with the people at 17:00, and the oblique overview of the same place.
 
 | | Street, people | Overview |
 |---|---|---|
-| GPU frame | 2.37 ms | 3.87 ms |
-| CPU frame (without the wait) | 1.79 ms | 0.91 ms |
-| `cpu/declare passes` (the crowd's figures and movers included) | 1.35 ms | 0.44 ms |
-| p50 / p99 frame | 2.34 / 3.37 ms | 3.87 / 4.79 ms |
+| GPU frame | 2.45 ms (2.37 at midday) | 3.94 ms (3.87) |
+| CPU frame (without the wait) | 1.78 ms | 1.25 ms |
+| `cpu/declare passes` (the crowd's figures and movers included) | 1.29 ms | 0.76 ms |
+| p50 / p99 frame | 2.45 / 3.29 ms | 3.95 / 4.72 ms |
 
+
+Remeasured late afternoon, after the smooth shore, the boarding areas, the squares' borders, the
+kerb arcs and the smaller street trees: the GPU frames within run-to-run spread (one run each).
+The overview's `cpu/declare passes` rose from 0.44 to 0.76 ms: the stops' screens and the
+crowd's nearest-first slots, both set every frame; small, to watch.
 The largest passes:
 - **Street:**
   - `gi/probe rays` 0.58 and `gi/probe blend` 0.51 ms: 46 % of the frame;
