@@ -48,13 +48,13 @@ router, and `forge_core::dmath` does the trigonometry. Two runs give the same di
 | Land | 14.3 km² |
 | Main roads / streets | 59 km / 149 km, 8 bridges |
 | Built blocks / parks / squares | 667 (mean 1.66 ha) / 48 / 12 |
-| Lots / blocks with a courtyard | 11 048 / 596 |
+| Lots / blocks with a courtyard | 10 985 / 599 |
 | Parks' share of the land | 10.5 % |
 | Built blocks with a 1 ha park within 300 m | 100 % |
 | Built blocks within 400 m of a tram stop | 45 % (two lines, no line added) |
 | Streets' share of the land | 21.5 % |
 | Tram lines | 7.8 km, 19 stops |
-| Masses / floor area | 12 877 / 18.3 km² (12 ms; floors capped by street width) |
+| Masses / floor area | 12 373 / 18.4 km² (13 ms; floors capped by street width) |
 
 | Stage | Time |
 |---|---|
@@ -199,11 +199,11 @@ neighbours differ.
 
 | The kit within 450 m of the avenue view (example city) | |
 |---|---|
-| Buildings / faces / terminals | 1 116 / 4 719 / 171 494 |
-| Instances / unique modules | 29 600 / 14 (8.2 M instanced triangles) |
+| Buildings / faces / terminals | 1 010 / 4 435 / 166 418 |
+| Instances / unique modules | 30 232 / 20 (8.1 M instanced triangles) |
 | Merged triangles added (walls, bands, cornices) | 383 k |
-| Derived and assembled | 75 ms (one thread) |
-| Longest run of one opening along a floor of a street front | 11 |
+| Derived and assembled | 68 ms (one thread) |
+| Longest run of one opening along a floor of a street front | 10 |
 | GPU frame at 2800 × 1575, this view, best of 3 | 3.78 ms (3.42 ms with `--detail 0`) |
 | Scene built and cooked | 2.79 s (2.35 s) |
 
@@ -228,6 +228,24 @@ The blocks close round their courtyards and the avenues are lined on both sides:
 - floors: 18.3 km² (was 20.5, now one building deep rather than up to 20 m);
 - blocks with a courtyard: 602 (was 563);
 - blocks under their green area: 83 (was 143).
+
+**No slivers.** One mass in 17 was a slab 2–4 m thick, a blank party wall seen from the street.
+Two causes:
+- **Short street edges set far back.** Where a short edge between two wide streets turned over
+  when moved to its building line, the block fell back to a uniform inset by its narrowest
+  street. Its lots along the wide street then kept up to 11 m of street, leaving a 2–3 m
+  building. The building lines now drop each edge the move turns over
+  (`geom::inset_by_collapsing`, the straight skeleton's edge event).
+- **Corner lots.** A corner lot a little deeper than its first strip left a sliver along its
+  second street. The first strip now takes that sliver in. A sliver it cannot take joins
+  another strip of its lot where the two make a convex piece, or is dropped.
+
+No building is now under 4 m thick:
+- masses: 12 373 (was 12 877);
+- floors: 18.4 km² (was 18.3);
+- lots: 10 985 (was 11 048).
+
+An empty lot is a garden, not a neighbour: a wall onto one is a court face with windows.
 
 **The trees, sized to their streets.** Mature planes of 11–15 m line the avenues, 7–10 m trees
 the shared streets and 5–7 m trees the lanes. Each instance is scaled by its own crown
@@ -359,7 +377,7 @@ cargo run --release -p city-plan -- --street --people 16.3   # from 16:18
 *Top: from 16:18, the park's visitors standing about it; at 08:12, the morning's cyclists in the
 river avenue's lanes and walkers on its pavements. Bottom: at 20:00, a lane's café terraces; the
 evening's walkers.* `--people HOUR` builds the plan's population from the masses
-(`forge_sim::population`, 295 307 people, 2 s) and runs its day to that hour. Each frame:
+(`forge_sim::population`, 297 251 people, 2 s) and runs its day to that hour. Each frame:
 - **who is drawn:** people within 220 m of the camera, as placeholder figures
   (`forge_geom::figures`: blocky, in eight palettes, walking (a left stride, passing, a right
   stride, a pose every 0.7 m along the way), standing, riding a bike or

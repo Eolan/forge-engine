@@ -23,13 +23,13 @@ cargo run --release -p population-bench -- --days 2
 
 | | |
 |---|---|
-| Places | 28 261 |
-| People | 295 307, 36 bytes each (10.6 MB) |
-| Generation | 1.9 s |
-| Events | 6.4 a person a day; 0.65 µs each |
-| Two game days | 2.5 s |
-| A game hour of 15 real minutes asks | 88 events a real second: 0.006 % of one core |
-| Six workers (`population::Shards`) | the two days in 0.47 s, 5.0 times one, the same digest to the bit |
+| Places | 27 153 |
+| People | 297 251, 36 bytes each (10.7 MB) |
+| Generation | 1.8 s |
+| Events | 6.4 a person a day; 0.60 µs each |
+| Two game days | 2.3 s |
+| A game hour of 15 real minutes asks | 89 events a real second: 0.005 % of one core |
+| Six workers (`population::Shards`) | the two days in 0.47 s, 4.9 times one, the same digest to the bit |
 | A snapshot (`Sim::snapshot`, `Sim::restore`) | 6.8 MB, 23 bytes a person, saved in 2 ms, restored in 7 ms, the same digest |
 
 Where everyone is, by game hour (weekday, %):
@@ -37,9 +37,9 @@ Where everyone is, by game hour (weekday, %):
 | Hour | Home | Work or school | Shops | Cafés | Bars | Parks | Travelling |
 |---|---|---|---|---|---|---|---|
 | 03 | 100.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 |
-| 08 | 42.3 | 43.9 | 0.0 | 0.0 | 0.0 | 0.0 | 13.7 |
+| 08 | 42.3 | 43.7 | 0.0 | 0.0 | 0.0 | 0.0 | 14.0 |
 | 11 | 26.0 | 68.9 | 4.6 | 0.0 | 0.0 | 0.0 | 0.5 |
-| 13 | 31.1 | 55.5 | 0.0 | 13.4 | 0.0 | 0.0 | 0.0 |
+| 13 | 31.1 | 55.5 | 0.0 | 13.3 | 0.0 | 0.0 | 0.0 |
 | 16 | 18.5 | 68.9 | 1.0 | 2.1 | 0.0 | 8.2 | 1.3 |
 | 18 | 60.7 | 14.9 | 4.3 | 5.3 | 4.1 | 5.5 | 5.2 |
 | 20 | 87.5 | 0.0 | 0.0 | 7.0 | 5.5 | 0.0 | 0.0 |
@@ -52,17 +52,17 @@ compares the digests).
 with its own calendar on its own thread. Nobody acts on anyone else yet, so the shards' events
 depend on their own people alone. A test checks that the digest, the events, the census and the
 positions are equal at one, three and six workers, to the bit. The bench (six workers) and a
-1 015 359-person city (the private sandbox's):
+1 022 865-person city (the private sandbox's):
 
 | | One worker | Six workers |
 |---|---|---|
-| The example, 295 307 people, two days | 2.36 s | 0.47 s (5.0 times) |
-| A million-person city, two days | 8.5 s | 1.7 s (5.2 times) |
-| 4 074 555 people (`population-bench --scale 13.5`: the example's floors 13.5 times over), two days | 44.8 s | 8.2 s (5.5 times) |
+| The example, 297 251 people, two days | 2.29 s | 0.47 s (4.9 times) |
+| A million-person city, two days | 7.9 s | 1.5 s (5.4 times) |
+| 4 091 061 people (`population-bench --scale 13.5`: the example's floors 13.5 times over), two days | 44.6 s | 8.0 s (5.6 times) |
 
-The million needs 36.6 MB, 303 events a real second at one game hour per 15 minutes, and 0.02 %
+The million needs 36.8 MB, 305 events a real second at one game hour per 15 minutes, and 0.02 %
 of one core. That is #250's first test, with the digests equal at one and six workers. At 4 M:
-146.7 MB, generated in 26 s (on one thread), 1 216 events a real second, 0.10 % of one core; the
+147.3 MB, generated in 25 s (on one thread), 1 221 events a real second, 0.10 % of one core; the
 same digest at six workers.
 
 ![The example city's people at 08:00, 13:00 and 21:00](images/population-day.png)

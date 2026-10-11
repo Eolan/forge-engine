@@ -109,10 +109,13 @@ pub fn edge_kinds(plan: &CityPlan, masses: &[Mass]) -> Vec<Vec<Option<FaceKind>>
                     .as_ref()
                     .is_some_and(|c| geom::contains(c, probe))
             };
+            // A neighbour's lot with a building on it: an empty lot is a garden.
             let neighbour = || {
-                lots_of[lot.block as usize]
-                    .iter()
-                    .any(|&l| l != m.lot && geom::contains(&plan.lots[l as usize].polygon, probe))
+                lots_of[lot.block as usize].iter().any(|&l| {
+                    l != m.lot
+                        && by_lot.contains_key(&l)
+                        && geom::contains(&plan.lots[l as usize].polygon, probe)
+                })
             };
             let on_street = || {
                 let k = block.polygon.len();

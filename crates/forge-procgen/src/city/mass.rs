@@ -120,21 +120,41 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
         // the courtyard's convex hull instead ate the buildings along concave and curved sides.
         let pieces = match district.building_depth() {
             Some(depth) => {
-                let mut rest = inside.clone();
-                let mut strips = Vec::new();
-                for &(p, q, half, _) in &fronts {
-                    if rest.len() < 3 {
-                        break;
+                // The strips, the first `extra` metres deeper, with their fronts' indices.
+                let strips = |extra: f64| {
+                    let mut rest = inside.clone();
+                    let mut strips = Vec::new();
+                    for (k, &(p, q, half, _)) in fronts.iter().enumerate() {
+                        if rest.len() < 3 {
+                            break;
+                        }
+                        let edge = (q - p).normalize_or_zero();
+                        let deep = if k == 0 { depth + extra } else { depth };
+                        let line = p + DVec2::new(-edge.y, edge.x) * (half + deep);
+                        let near = geom::clip_half_plane(&rest, line, -edge);
+                        if near.len() >= 3 {
+                            strips.push((k, near));
+                        }
+                        rest = geom::clip_half_plane(&rest, line, edge);
                     }
-                    let edge = (q - p).normalize_or_zero();
-                    let line = p + DVec2::new(-edge.y, edge.x) * (half + depth);
-                    let near = geom::clip_half_plane(&rest, line, -edge);
-                    if near.len() >= 3 {
-                        strips.push(near);
-                    }
-                    rest = geom::clip_half_plane(&rest, line, edge);
-                }
-                strips
+                    strips
+                };
+                // A corner lot a little deeper than the first strip leaves a sliver along its
+                // second street: the first strip takes it in instead.
+                let first = strips(0.0);
+                let sliver = first
+                    .iter()
+                    .filter(|(k, s)| {
+                        *k > 0 && geom::signed_area(s).abs() >= 20.0 && thickness(s) < MIN_THICKNESS
+                    })
+                    .map(|(_, s)| thickness(s))
+                    .fold(0.0, f64::max);
+                let chosen = if sliver > 0.0 {
+                    strips(sliver + 0.5)
+                } else {
+                    first
+                };
+                chosen.into_iter().map(|(_, s)| s).collect()
             }
             None => vec![inside],
         };
@@ -156,6 +176,7 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
                 }
             })
             .collect();
+        let pieces = absorb_thin(pieces);
         if pieces.is_empty() {
             continue;
         }
@@ -196,6 +217,40 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
         }
     }
     out
+}
+
+/// The thinnest a building stands, metres.
+const MIN_THICKNESS: f64 = 4.0;
+
+/// A piece's thickness: the lesser of its extents along and across its longest edge.
+fn thickness(piece: &[DVec2]) -> f64 {
+    let (_, extent, _) = geom::oriented_extent(piece);
+    extent.x.min(extent.y)
+}
+
+/// A lot's strips with each thinner than [`MIN_THICKNESS`] (what is left along a second street
+/// past the first strip, at a corner) joined to another of them where the two make a convex
+/// piece (their hull adds under 3 %), or dropped.
+fn absorb_thin(mut pieces: Vec<Vec<DVec2>>) -> Vec<Vec<DVec2>> {
+    let mut i = 0;
+    while i < pieces.len() {
+        if thickness(&pieces[i]) >= MIN_THICKNESS {
+            i += 1;
+            continue;
+        }
+        let thin = pieces.remove(i);
+        let area = geom::signed_area(&thin);
+        let hull = |other: &[DVec2]| {
+            let points: Vec<DVec2> = other.iter().chain(&thin).copied().collect();
+            let hull = geom::convex_hull(&points);
+            (geom::signed_area(&hull) <= (geom::signed_area(other) + area) * 1.03).then_some(hull)
+        };
+        if let Some((j, joined)) = (0..pieces.len()).find_map(|j| hull(&pieces[j]).map(|h| (j, h)))
+        {
+            pieces[j] = joined;
+        }
+    }
+    pieces
 }
 
 /// How much of a lot's outline lies along the block edge from `a` to `b`, metres.
@@ -260,6 +315,12 @@ mod tests {
                 assert!(!geom::contains(courtyard, c), "a mass in its courtyard");
             }
         }
+        // No sliver of a building: what is left past a corner strip joins it.
+        let thinnest = masses
+            .iter()
+            .map(|m| thickness(&m.footprint))
+            .fold(f64::MAX, f64::min);
+        assert!(thinnest >= MIN_THICKNESS, "a mass {thinnest:.1} m thick");
         let green = masses.iter().filter(|m| m.roof == Roof::Green).count();
         assert!(green * 3 > masses.len(), "about half the roofs are green");
     }

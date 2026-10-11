@@ -154,9 +154,11 @@ pub fn courtyards(blocks: &mut [Block], roads: &RoadGraph, districts: &[District
             .map(|i| edge_half_width(&grid, roads, b.polygon[i], b.polygon[(i + 1) % n]))
             .collect();
         let half = halves.iter().copied().fold(STREET_HALF, f64::max);
-        // The building lines; a uniform inset by the narrowest street where they fold.
+        // The building lines, a short edge between two wide streets dropped where the move
+        // turns it over; a uniform inset by the narrowest street where they still fold.
         let least = halves.iter().copied().fold(f64::MAX, f64::min);
-        let lines = geom::inset_by(&b.polygon, &halves);
+        let lines = geom::inset_by(&b.polygon, &halves)
+            .or_else(|| geom::inset_by_collapsing(&b.polygon, &halves));
         if let Some(inside) = lines.clone().or_else(|| geom::inset(&b.polygon, least)) {
             b.buildable = inside;
         }

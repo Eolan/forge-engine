@@ -339,11 +339,75 @@ pub fn inset_by(polygon: &[DVec2], d: &[f64]) -> Option<Vec<DVec2>> {
             mitre
         });
     }
-    let area = signed_area(&out);
-    if area <= 0.0 || area > signed_area(polygon) {
+    valid_inset(polygon, d, &out).then_some(out)
+}
+
+/// As [`inset_by`], dropping each edge the move turns over (a short edge between two that move
+/// further in: the straight skeleton's edge event) until none does.
+pub fn inset_by_collapsing(polygon: &[DVec2], d: &[f64]) -> Option<Vec<DVec2>> {
+    let n = polygon.len();
+    if n < 3 || d.len() != n || signed_area(polygon) <= 0.0 {
         return None;
     }
-    // Every corner inside the outline and at least ~the smallest inset from it.
+    let mut kept: Vec<usize> = (0..n)
+        .filter(|&i| polygon[i] != polygon[(i + 1) % n])
+        .collect();
+    loop {
+        let m = kept.len();
+        if m < 3 {
+            return None;
+        }
+        // Each kept edge's line moved inwards, its direction, and where it starts.
+        let lines: Vec<(DVec2, DVec2, DVec2)> = kept
+            .iter()
+            .map(|&i| {
+                let (a, b) = (polygon[i], polygon[(i + 1) % n]);
+                let t = (b - a).normalize();
+                (a + DVec2::new(-t.y, t.x) * d[i], t, a)
+            })
+            .collect();
+        let out: Vec<DVec2> = (0..m)
+            .map(|k| {
+                let prev = (k + m - 1) % m;
+                let ((p, t, _), (q, u, corner)) = (lines[prev], lines[k]);
+                let mean = (p + t * (corner - p).dot(t) + q) * 0.5;
+                let denom = cross(t, u);
+                if denom.abs() < 1e-6 {
+                    return mean;
+                }
+                let mitre = p + t * (cross(q - p, u) / denom);
+                // As inset_by: a long mitre between neighbours nearly in line, their mean.
+                let (i, j) = (kept[prev], kept[k]);
+                let neighbours = (i + 1) % n == j;
+                if neighbours && mitre.distance(corner) > 3.0 * d[i].max(d[j]) {
+                    mean
+                } else {
+                    mitre
+                }
+            })
+            .collect();
+        let turned = (0..m)
+            .map(|k| ((out[(k + 1) % m] - out[k]).dot(lines[k].1), k))
+            .filter(|&(along, _)| along < 0.0)
+            .min_by(|a, b| a.0.total_cmp(&b.0));
+        match turned {
+            Some((_, k)) => {
+                kept.remove(k);
+            }
+            None => return valid_inset(polygon, d, &out).then_some(out),
+        }
+    }
+}
+
+/// Whether `out` is a fair inset of `polygon` by `d`: positive and smaller, every corner inside
+/// the outline and at least ~the smallest inset from it, and no two non-adjacent edges crossing.
+fn valid_inset(polygon: &[DVec2], d: &[f64], out: &[DVec2]) -> bool {
+    let n = polygon.len();
+    let m = out.len();
+    let area = signed_area(out);
+    if area <= 0.0 || area > signed_area(polygon) {
+        return false;
+    }
     let least = d.iter().copied().fold(f64::MAX, f64::min);
     let ok = out.iter().all(|&v| {
         contains(polygon, v)
@@ -359,7 +423,7 @@ pub fn inset_by(polygon: &[DVec2], d: &[f64]) -> Option<Vec<DVec2>> {
                     .is_some()
         })
     });
-    (ok && !crossing).then_some(out)
+    ok && !crossing
 }
 
 /// A polygon's oriented box by its longest edge: the unit axis along that edge and the extents
@@ -471,6 +535,28 @@ impl PointGrid {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_short_edge_between_wide_streets_collapses() {
+        // A 60 × 40 block cut at one corner by a 6 m edge; the two long sides round that corner
+        // move in 14 m, the rest 4 m. The short edge turns over and goes, the long sides meet.
+        let block = [
+            DVec2::new(0.0, 0.0),
+            DVec2::new(60.0, 0.0),
+            DVec2::new(60.0, 36.0),
+            DVec2::new(56.0, 40.0),
+            DVec2::new(0.0, 40.0),
+        ];
+        let d = [4.0, 14.0, 14.0, 14.0, 4.0];
+        let inside = inset_by_collapsing(&block, &d).expect("an inset");
+        assert_eq!(inside.len(), 4, "{inside:?}");
+        let corner = inside
+            .iter()
+            .copied()
+            .max_by(|a, b| (a.x + a.y).total_cmp(&(b.x + b.y)))
+            .expect("corners");
+        assert!(corner.distance(DVec2::new(46.0, 26.0)) < 0.5, "{corner:?}");
+    }
 
     #[test]
     fn segments_cross_where_expected() {
