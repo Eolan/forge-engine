@@ -277,7 +277,11 @@ Each crown stops half a metre short of the building line.
 
 **The riverbanks.** A quay's land is lawn under its trees, laid cell by cell over the site's
 land (a quay's face holds water). Along each bank a stone promenade 8 m wide follows the river;
-where a street runs by the river, the street lies over it.
+where a street runs by the river, the street lies over it. The promenade is laid on land only:
+where the river runs into the harbour it floated over the open water. Stone quay walls drop
+from the ground to 1.2 m below it wherever a land cell meets open water (the sea and lagoons lie
+0.6 m down); the drop showed nothing, the water's edge a dark band (the owner's second walk).
+The harbour's water itself is still a flat mirror: the island's FFT sea is the next step.
 
 ## Trams on their timetables (#253)
 

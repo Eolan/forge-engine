@@ -49,6 +49,8 @@ const PAVING: u8 = 3;
 const STREET: u8 = 4;
 const TRACK: u8 = 5;
 const WATER: u8 = 6;
+/// The quay walls' section on the ground.
+const QUAY: u8 = 7;
 /// Mass sections: four wall tints, the shop band, three roofs.
 const WALL: u8 = 0;
 const TINTS: u8 = 4;
@@ -355,14 +357,19 @@ impl PlanScenario {
                 0.04,
                 WATER,
             );
+            // On land only: where the river runs into the harbour's water, the promenade
+            // floated over it, the water dark under it (the owner's second walk).
             for side in [1.0, -1.0] {
-                strip(
-                    &mut tiles,
-                    &offset_line(&line, side * (half + 8.0)),
-                    &offset_line(&line, side * half),
-                    0.05,
-                    PAVING,
+                let (outer, inner) = (
+                    offset_line(&line, side * (half + 8.0)),
+                    offset_line(&line, side * half),
                 );
+                for i in 0..outer.len().min(inner.len()).saturating_sub(1) {
+                    let quad = [outer[i], outer[i + 1], inner[i + 1], inner[i]];
+                    if quad.iter().all(|&p| !is_open_water(site.water_at(p))) {
+                        tiles.flat(&quad, 0.05, PAVING, false);
+                    }
+                }
             }
         }
         for e in &plan.roads.edges {
@@ -1192,6 +1199,49 @@ fn ground_and_water(site: &Site, tiles: &mut Tiles) {
             }
         }
     }
+    // Stone quay walls from the ground down to the water and below it, wherever a dry cell meets
+    // open water: the drop showed nothing, the water's edge a dark band.
+    let size = tiles.size;
+    let dry = |x: i64, y: i64| {
+        (0..n as i64).contains(&x)
+            && (0..n as i64).contains(&y)
+            && !is_open_water(water.get(x as u32, y as u32))
+    };
+    for y in 0..n as i64 {
+        for x in 0..n as i64 {
+            if !dry(x, y) {
+                continue;
+            }
+            // Each wet neighbour: the shared edge's two ends, and the way to the water.
+            for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let (nx, ny) = (x + dx, y + dy);
+                if !(0..n as i64).contains(&nx) || !(0..n as i64).contains(&ny) || dry(nx, ny) {
+                    continue;
+                }
+                let c = DVec2::new((x as f64 + 0.5) * s, (y as f64 + 0.5) * s);
+                let out = DVec2::new(dx as f64, dy as f64);
+                let along = DVec2::new(-out.y, out.x);
+                let mid = c + out * (s * 0.5);
+                let (a, b) = (mid - along * (s * 0.5), mid + along * (s * 0.5));
+                let tile = tiles.at(mid);
+                let centre = tile.centre;
+                let p = |q: DVec2, h: f64| world(size, q, h) - centre;
+                let normal = Vec3::new(out.x as f32, 0.0, out.y as f32);
+                triangle(
+                    &mut tile.ground,
+                    [p(a, 0.0), p(b, 0.0), p(b, -1.2)],
+                    normal,
+                    QUAY,
+                );
+                triangle(
+                    &mut tile.ground,
+                    [p(a, 0.0), p(b, -1.2), p(a, -1.2)],
+                    normal,
+                    QUAY,
+                );
+            }
+        }
+    }
 }
 
 /// A polyline moved `d` metres to its left.
@@ -1572,6 +1622,10 @@ impl Scenario for PlanScenario {
                 ),
                 ("plan track".into(), colour([0.16, 0.16, 0.17], 14.0, 0.3)),
                 ("plan water".into(), colour([0.05, 0.12, 0.15], 900.0, 0.9)),
+                (
+                    "plan quay wall".into(),
+                    colour([0.62, 0.58, 0.51], 10.0, 0.03),
+                ),
             ],
         );
         // The facades: a window bay and a shopfront, read by the walls' coordinates.
