@@ -349,6 +349,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "city-plan"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "city-blocks",
+ "clap",
+ "forge-app",
+ "forge-core",
+ "forge-geom",
+ "forge-procgen",
+ "forge-render",
+ "glam",
+ "tracing",
+ "winit",
+]
+
+[[package]]
 name = "clap"
 version = "4.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"

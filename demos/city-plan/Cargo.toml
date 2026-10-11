@@ -1,0 +1,30 @@
+[package]
+name = "city-plan"
+description = "A city's plan in 3D (D-059): its masses, streets, parks and water drawn by city-blocks' renderer, for any plan from forge-procgen::city."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# DLAA through NVIDIA Streamline for `--dlaa` (Windows, the SDK in `streamline-sdk/`, an RTX GPU).
+dlss = ["city-blocks/dlss"]
+# NVIDIA NRD's SIGMA for the sun's soft shadows (D-049; city-blocks turns it on by default).
+nrd = ["city-blocks/nrd"]
+
+[dependencies]
+anyhow = { workspace = true }
+city-blocks = { workspace = true }
+clap = { workspace = true }
+forge-app = { workspace = true }
+forge-core = { workspace = true }
+forge-geom = { workspace = true }
+forge-procgen = { workspace = true }
+forge-render = { workspace = true }
+glam = { workspace = true }
+tracing = { workspace = true }
+winit = { workspace = true }

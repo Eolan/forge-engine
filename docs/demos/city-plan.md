@@ -85,6 +85,27 @@ router, and `forge_core::dmath` does the trigonometry. Two runs give the same di
 tram lines.* Blocks whose outline is too curved for the building line's inset stay empty for
 now.
 
+## In 3D
+
+```
+cargo run --release -p city-plan
+```
+
+![The example city in 3D](images/city-plan-3d.png)
+
+*The example city's masses, gardens, parks, streets, tram tracks and river, drawn by
+city-blocks' renderer (sky, clouds, ray-traced soft shadows, probes, TAA) through its scene
+interface.* `demos/city-plan` turns any plan and its masses into meshes in tiles of 250 m: the
+site's land and water as runs of cells, blocks and street ribbons, walls and roofs (green,
+solar, terrace). A private sandbox hands its own plan to `PlanScenario::new`.
+
+| | |
+|---|---|
+| Meshes / triangles | 483 / 177 k |
+| Built and cooked | 1.3 s |
+| GPU frame at 2800 × 1575, this view | 3.43 ms (shading 0.68, the meshlet pass 0.13) |
+| p50 / p99 frame | 3.42 / 7.38 ms |
+
 ## Next (#245–#247)
 
 - Building lines per street profile, and a fallback where the inset fails.

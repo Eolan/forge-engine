@@ -203,6 +203,58 @@ pub fn clip_half_plane(polygon: &[DVec2], origin: DVec2, direction: DVec2) -> Ve
     out
 }
 
+/// A simple polygon's triangles by ear clipping, as index triples into it, each turning the way
+/// the polygon does. Exact operations only; a polygon whose ears run out (a self-touching
+/// outline) gives the triangles found so far.
+pub fn triangulate(polygon: &[DVec2]) -> Vec<[usize; 3]> {
+    let n = polygon.len();
+    if n < 3 {
+        return Vec::new();
+    }
+    let sign = if signed_area(polygon) >= 0.0 {
+        1.0
+    } else {
+        -1.0
+    };
+    let mut ring: Vec<usize> = (0..n).collect();
+    let mut out = Vec::with_capacity(n - 2);
+    let mut misses = 0;
+    let mut i = 0;
+    while ring.len() > 3 && misses < ring.len() {
+        let m = ring.len();
+        let (ia, ib, ic) = (ring[(i + m - 1) % m], ring[i % m], ring[(i + 1) % m]);
+        let (a, b, c) = (polygon[ia], polygon[ib], polygon[ic]);
+        let convex = cross(b - a, c - b) * sign > 0.0;
+        let empty = convex
+            && ring.iter().all(|&j| {
+                if j == ia || j == ib || j == ic {
+                    return true;
+                }
+                let p = polygon[j];
+                // Outside (or on an edge of) triangle a b c.
+                let d1 = cross(b - a, p - a) * sign;
+                let d2 = cross(c - b, p - b) * sign;
+                let d3 = cross(a - c, p - c) * sign;
+                d1 < 0.0 || d2 < 0.0 || d3 < 0.0
+            });
+        if empty {
+            out.push([ia, ib, ic]);
+            ring.remove(i % m);
+            misses = 0;
+            if i >= ring.len() {
+                i = 0;
+            }
+        } else {
+            i = (i + 1) % m;
+            misses += 1;
+        }
+    }
+    if ring.len() == 3 {
+        out.push([ring[0], ring[1], ring[2]]);
+    }
+    out
+}
+
 /// The convex hull of a set of points (Andrew's monotone chain), positive area, no collinear
 /// points.
 pub fn convex_hull(points: &[DVec2]) -> Vec<DVec2> {
@@ -450,6 +502,29 @@ mod tests {
         assert_eq!(
             simple,
             vec![DVec2::ZERO, DVec2::new(10.0, 0.0), DVec2::new(10.0, 10.0)]
+        );
+    }
+
+    #[test]
+    fn an_l_shape_is_cut_into_four_triangles_covering_it() {
+        let l = [
+            DVec2::new(0.0, 0.0),
+            DVec2::new(4.0, 0.0),
+            DVec2::new(4.0, 2.0),
+            DVec2::new(2.0, 2.0),
+            DVec2::new(2.0, 4.0),
+            DVec2::new(0.0, 4.0),
+        ];
+        let tris = triangulate(&l);
+        assert_eq!(tris.len(), 4);
+        let area: f64 = tris
+            .iter()
+            .map(|t| signed_area(&[l[t[0]], l[t[1]], l[t[2]]]))
+            .sum();
+        assert!((area - 12.0).abs() < 1e-9, "{area}");
+        assert!(
+            tris.iter()
+                .all(|t| signed_area(&[l[t[0]], l[t[1]], l[t[2]]]) > 0.0)
         );
     }
 
