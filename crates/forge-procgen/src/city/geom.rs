@@ -75,6 +75,50 @@ pub fn tangent_at(points: &[DVec2], s: f64) -> DVec2 {
     }
 }
 
+/// A polyline with each corner rounded into an arc of `radius` metres, sampled every `step`
+/// metres or so: a tram, a train or a car does not turn at a point. Where the segments either
+/// side are short, the arc shrinks so that it never takes more than 45 % of either, and two
+/// arcs never overlap. Turns under a degree are left as they are.
+pub fn fillet(points: &[DVec2], radius: f64, step: f64) -> Vec<DVec2> {
+    let n = points.len();
+    if n < 3 {
+        return points.to_vec();
+    }
+    let mut out = vec![points[0]];
+    for i in 1..n - 1 {
+        let (a, v, b) = (points[i - 1], points[i], points[i + 1]);
+        let (din, dout) = ((v - a).normalize_or_zero(), (b - v).normalize_or_zero());
+        let turn = din.angle_to(dout).abs();
+        if turn < 1f64.to_radians() || din == DVec2::ZERO || dout == DVec2::ZERO {
+            out.push(v);
+            continue;
+        }
+        // The tangent length for the radius, shortened to fit the segments.
+        let half = (turn * 0.5).tan();
+        let room = 0.45 * a.distance(v).min(v.distance(b));
+        let t = (radius * half).min(room);
+        let r = t / half;
+        let (start, end) = (v - din * t, v + dout * t);
+        // The arc's centre lies on the inside of the turn, `r` from both tangent points.
+        let inward = DVec2::new(-din.y, din.x) * din.perp_dot(dout).signum();
+        let centre = start + inward * r;
+        let (a0, a1) = ((start - centre).to_angle(), (end - centre).to_angle());
+        let mut sweep = a1 - a0;
+        if sweep > std::f64::consts::PI {
+            sweep -= std::f64::consts::TAU;
+        } else if sweep < -std::f64::consts::PI {
+            sweep += std::f64::consts::TAU;
+        }
+        let k = ((r * sweep.abs()) / step).ceil().max(1.0) as usize;
+        for j in 0..=k {
+            let angle = a0 + sweep * j as f64 / k as f64;
+            out.push(centre + DVec2::from_angle(angle) * r);
+        }
+    }
+    out.push(points[n - 1]);
+    out
+}
+
 /// A polyline resampled every `step` metres (its last point kept).
 pub fn resample(points: &[DVec2], step: f64) -> Vec<DVec2> {
     let length = polyline_length(points);
@@ -535,6 +579,43 @@ impl PointGrid {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn corners_round_into_arcs_of_the_radius() {
+        // A right angle between two 100 m legs, then a short dog-leg.
+        let line = [
+            DVec2::new(0.0, 0.0),
+            DVec2::new(100.0, 0.0),
+            DVec2::new(100.0, 100.0),
+            DVec2::new(104.0, 104.0),
+        ];
+        let round = fillet(&line, 18.0, 2.0);
+        assert_eq!(round[0], line[0]);
+        assert_eq!(round[round.len() - 1], line[3]);
+        // No turn sharper than an 18 m radius allows over the step, but at the short leg.
+        for w in round.windows(3) {
+            let (a, b) = (w[1] - w[0], w[2] - w[1]);
+            if a.length() < 0.1 || b.length() < 0.1 || w[1].x > 99.0 && w[1].y > 90.0 {
+                continue;
+            }
+            let turn = a.angle_to(b).abs();
+            let reach = (a.length() + b.length()) * 0.5;
+            assert!(
+                turn <= reach / 18.0 * 1.2 + 1e-6,
+                "{turn} over {reach} m at {}",
+                w[1]
+            );
+        }
+        // The corner is cut by r(√2 − 1) at its bisector.
+        let nearest = round
+            .iter()
+            .map(|p| p.distance(DVec2::new(100.0, 0.0)))
+            .fold(f64::MAX, f64::min);
+        assert!(
+            (nearest - 18.0 * (2f64.sqrt() - 1.0)).abs() < 0.2,
+            "{nearest}"
+        );
+    }
 
     #[test]
     fn a_short_edge_between_wide_streets_collapses() {

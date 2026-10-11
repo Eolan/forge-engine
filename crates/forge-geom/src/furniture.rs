@@ -6,7 +6,7 @@
 use glam::Vec3;
 
 use crate::modules::{
-    ALL, FABRIC, GLASS, METAL, NEG_Y, NO_BACK, POS_Y, SHUTTER, STONE, WOOD, cuboid, quad,
+    ALL, FABRIC, GLASS, METAL, NEG_Y, NO_BACK, POS_Y, SHUTTER, STONE, WOOD, cuboid, quad, triangle,
 };
 use crate::procedural::TriMesh;
 
@@ -408,6 +408,32 @@ pub fn tram_stop(length: f32) -> TriMesh {
         STONE,
         ALL & !NEG_Y,
     );
+    // A ramp down to the road at each end, the platform's whole depth, 1 in 12 (3.4 m): the
+    // platform was reached only by a 28 cm step (the owner: not accessible).
+    let run = high * 12.0;
+    for (x0, x1) in [(0.0, -run), (length, length + run)] {
+        let (top, foot) = (Vec3::new(x0, high, 0.0), Vec3::new(x1, 0.0, 0.0));
+        let z = Vec3::new(0.0, 0.0, deep);
+        // Its slope, facing up and out.
+        let slope = [foot, top, top + z, foot + z];
+        let up = (top - foot).cross(z);
+        if up.y > 0.0 {
+            quad(&mut m, slope, STONE);
+        } else {
+            quad(&mut m, [foot + z, top + z, top, foot], STONE);
+        }
+        // Its two sides.
+        let low = Vec3::new(x0, 0.0, 0.0);
+        for (side, out) in [(Vec3::ZERO, -1.0_f32), (z, 1.0)] {
+            let tri = [low + side, top + side, foot + side];
+            let n = (tri[1] - tri[0]).cross(tri[2] - tri[0]);
+            if n.z * out >= 0.0 {
+                triangle(&mut m, tri, STONE);
+            } else {
+                triangle(&mut m, [tri[0], tri[2], tri[1]], STONE);
+            }
+        }
+    }
     // The tactile strip along its edge.
     cuboid(
         &mut m,
@@ -496,7 +522,8 @@ mod tests {
             ),
             (
                 tram_stop(32.0),
-                (Vec3::new(-0.1, 0.0, 0.0), Vec3::new(32.1, 3.1, 2.7)),
+                // With a 3.4 m ramp at each end.
+                (Vec3::new(-3.4, 0.0, 0.0), Vec3::new(35.4, 3.1, 2.7)),
             ),
         ] {
             assert!(m.triangle_count() > 20);

@@ -355,7 +355,15 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
   The owner asked for shops, restaurants and cafés round the large squares, above all by the
   river and the sea.
 - **tram stops:** a 36 m platform 2.3 m deep, level with the trams' floor by each track, and a
-  glass shelter with a bench and a lit totem for the next trams' times.
+  glass shelter with a bench and a lit totem for the next trams' times (its screen is lit but
+  shows no times yet). A ramp of 1 in 12 runs down to the road at each end, the platform's
+  whole depth: it was reached only by a 28 cm step (the owner: not accessible). Each stop
+  stands in the middle of the stretch between the junctions round it. Snapped to a junction,
+  its platforms and ramps, 37 m either way, stood across the crossings, and bikes rode through
+  them.
+- **tram lines** turn on arcs: each line is simplified to 0.5 m, then every corner is rounded to
+  18 m, about a low-floor tram's tightest in the street (`geom::fillet`, `transit::TRAM_RADIUS`).
+  The tracks turned at right angles in the junctions.
 - **benches** keep 2.2 m clear of the trunks (the owner saw a tree through one).
 - **chess tables** (`furniture::chess_table`): four round the fountain of each square of
   0.15 ha or more without a landmark, 9 m from its middle on the diagonals. Each is a stone

@@ -169,7 +169,7 @@ pub(crate) fn quad(m: &mut TriMesh, p: [Vec3; 4], section: u8) {
 }
 
 /// A triangle, its corners counter-clockwise seen from its front.
-fn triangle(m: &mut TriMesh, p: [Vec3; 3], section: u8) {
+pub(crate) fn triangle(m: &mut TriMesh, p: [Vec3; 3], section: u8) {
     let n = (p[1] - p[0]).cross(p[2] - p[0]).normalize_or_zero();
     let base = m.positions.len() as u32;
     for q in p {

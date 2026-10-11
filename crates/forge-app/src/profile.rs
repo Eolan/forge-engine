@@ -605,9 +605,11 @@ fn group_of(label: &str) -> &str {
     label.split_once('/').map_or("other", |(group, _)| group)
 }
 
-/// The main thread blocked on the GPU: shown, but not counted as CPU work.
+/// The main thread blocked on the GPU, or on the display (the swapchain's acquire, held to the
+/// refresh when the presents never tear): shown, but not counted as CPU work. The owner's
+/// overlay read 7.84 ms of CPU, 94 %, that was the wait for the display.
 fn is_wait(zone: &Zone) -> bool {
-    zone.label.contains("wait for GPU")
+    zone.label.contains("wait for GPU") || zone.label.contains("acquire swapchain image")
 }
 
 /// At most `width` characters.

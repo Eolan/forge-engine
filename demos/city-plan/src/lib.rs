@@ -419,7 +419,11 @@ impl PlanScenario {
                 }
             }
         }
-        let mut trams: Vec<TramRun> = plan.tram_lines.iter().filter_map(TramRun::new).collect();
+        let mut trams: Vec<TramRun> = plan
+            .tram_lines
+            .iter()
+            .filter_map(|l| TramRun::new(l, plan))
+            .collect();
         stagger_termini(&mut trams);
         // What each wall looks onto: the kit's faces and where the roofs end in gables.
         let edges = facades::edge_kinds(plan, masses);
@@ -1001,28 +1005,64 @@ struct TramRun {
 }
 
 impl TramRun {
-    /// A line's runs, its stops at their distances along it; `None` with fewer than two.
-    fn new(line: &forge_procgen::city::TramLine) -> Option<Self> {
+    /// A line's runs on `plan`, its stops at their distances along it; `None` with fewer than
+    /// two.
+    fn new(line: &forge_procgen::city::TramLine, plan: &CityPlan) -> Option<Self> {
         let points = line.points.clone();
         let mut along = vec![0.0];
         for w in points.windows(2) {
             along.push(along[along.len() - 1] + w[0].distance(w[1]));
         }
-        // Each stop at the distance of its nearest point on the route, 60 m apart at least.
+        // The distance along the route of the point nearest `q`, and how far `q` lies off it.
+        let project = |q: DVec2| {
+            let mut best = (f64::MAX, 0.0);
+            for (i, w) in points.windows(2).enumerate() {
+                let t = geom::closest_on_segment(q, w[0], w[1]);
+                let p = w[0] + (w[1] - w[0]) * t;
+                let d = p.distance(q);
+                if d < best.0 {
+                    best = (d, along[i] + w[0].distance(p));
+                }
+            }
+            best
+        };
+        // The junctions it runs through, each with how far it reaches along the route: its
+        // widest street's half width and two metres.
+        let mut widest = std::collections::HashMap::new();
+        for e in &plan.roads.edges {
+            for n in [e.a, e.b] {
+                let w: &mut f64 = widest.entry(n).or_insert(0.0);
+                *w = w.max(e.profile.width() * 0.5);
+            }
+        }
+        let mut junctions: Vec<(f64, f64)> = line
+            .edges
+            .iter()
+            .flat_map(|&e| {
+                let e = &plan.roads.edges[e as usize];
+                [e.a, e.b]
+            })
+            .filter_map(|n| {
+                let (off, s) = project(plan.roads.nodes[n as usize].pos);
+                (off < 15.0).then(|| (s, widest.get(&n).copied().unwrap_or(0.0) + 2.0))
+            })
+            .collect();
+        junctions.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // Each stop at the distance of its nearest point on the route, then moved to the middle
+        // of the stretch between the junctions round it: its two platforms and their ramps
+        // reach 37.4 m either way, and stood across the junctions and their crossings (the
+        // owner saw bikes ride through them). 60 m apart at least.
         let mut stops: Vec<f64> = line
             .stops
             .iter()
             .map(|&stop| {
-                let mut best = (f64::MAX, 0.0);
-                for (i, w) in points.windows(2).enumerate() {
-                    let t = geom::closest_on_segment(stop, w[0], w[1]);
-                    let q = w[0] + (w[1] - w[0]) * t;
-                    let d = q.distance(stop);
-                    if d < best.0 {
-                        best = (d, along[i] + w[0].distance(q));
-                    }
+                let s = project(stop).1;
+                let before = junctions.iter().rev().find(|j| j.0 <= s);
+                let after = junctions.iter().find(|j| j.0 > s);
+                match (before, after) {
+                    (Some(&(a, ra)), Some(&(b, rb))) if b - rb > a + ra => (a + ra + b - rb) * 0.5,
+                    _ => s,
                 }
-                best.1
             })
             .collect();
         stops.sort_by(f64::total_cmp);

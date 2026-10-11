@@ -15,6 +15,11 @@ use super::{
 };
 use crate::field::Field2;
 
+/// The radius a tram line's corners are rounded to, metres: about a low-floor tram's tightest in
+/// street running (18–25 m), the tighter so the curve stays in the junction's carriageway where
+/// two avenues meet.
+pub const TRAM_RADIUS: f64 = 18.0;
+
 /// A routed tram line.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TramLine {
@@ -206,7 +211,9 @@ pub fn route_trams(graph: &RoadGraph, specs: &[TramLineSpec], stop_spacing: f64)
                 name: spec.name.clone(),
                 colour: spec.colour,
                 edges,
-                points,
+                // Simplified, then each corner rounded: trams turn on arcs, not at a point (the
+                // owner saw the tracks turn at right angles in a junction).
+                points: geom::fillet(&geom::simplify(&points, 0.5), TRAM_RADIUS, 2.0),
                 stops,
             });
         }
