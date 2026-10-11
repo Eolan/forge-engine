@@ -319,6 +319,13 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
   coloured as the building's awnings. A street counts as lively from 18 m (the avenues).
 - **tram stops:** a 36 m platform level with the trams' floor by each track, and a glass
   shelter with a bench and a lit totem for the next trams' times.
+- **street-workout parks:** one in each park of a hectare or more, 14 by 10 m on a rubber
+  floor:
+  - pull-up bars at three heights, monkey bars, parallel bars, a dip station;
+  - wall bars, push-up handles, an inclined sit-up bench.
+
+  The park's trees keep clear of it. There are no playgrounds: the owner wants no children in
+  the cities.
 
 ## Squares (#245)
 
