@@ -44,6 +44,9 @@ struct Cli {
     /// round the camera drawn as figures.
     #[arg(long)]
     people: Option<f64>,
+    /// The trams' and boats' service clock at the start, seconds (3600 by default).
+    #[arg(long)]
+    clock: Option<f64>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -111,6 +114,10 @@ fn main() -> anyhow::Result<()> {
         "city plan",
         (cli.detail > 0.0).then_some(&detail),
     );
+    let scenario = match cli.clock {
+        Some(clock) => scenario.with_clock(clock),
+        None => scenario,
+    };
     let scenario = match cli.tram.as_deref() {
         Some(&[x, z, lead]) => {
             let at = DVec2::new(x + half, z + half);

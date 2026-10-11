@@ -260,6 +260,16 @@ the line's colour, articulated round the curve, on the right-hand track.*
 
 The example's two lines run 10 trams.
 
+**River shuttles** (Nantes' Navibus, smaller): an electric boat for about twenty people
+(`vehicles::shuttle_boat`: a hull with bows at both ends, a glazed cabin under a solar roof, ramps
+at both ends) runs out and back at each of the plan's boat crossings. It uses the same
+timetable as the trams, with two stops at the water's edges: 3.5 m/s at most, 45 s at each
+landing. `--clock SECONDS` sets the service's clock for a capture.
+
+![A river shuttle](images/city-plan-boat.png)
+
+*The example's crossing from mid-river: the shuttle by its north landing.*
+
 **Street furniture** (`forge_geom::furniture`) in the kit's section layout:
 - **café terraces:** tables a pace and a half apart, bistro chairs, market parasols. They stand
   before a third of the kit's shopfronts on the avenues' pavements and in the lanes, coloured as

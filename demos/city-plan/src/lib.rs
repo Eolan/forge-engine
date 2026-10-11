@@ -185,6 +185,8 @@ pub struct PlanScenario {
     kit_instances: Vec<(u32, Mat4, u8)>,
     /// The tram lines' runs, and the service's clock at the start, seconds.
     trams: Vec<TramRun>,
+    /// The river shuttles, one a crossing.
+    boats: Vec<BoatRun>,
     clock: f64,
     /// Each mass's footprint (the world's x and z) and its top, for the walker's walls.
     walls: Vec<(Vec<glam::Vec2>, f32)>,
@@ -371,6 +373,11 @@ impl PlanScenario {
             kit_instances,
             kit_report,
             trams,
+            boats: plan
+                .crossings
+                .iter()
+                .map(|c| BoatRun::new(c, site))
+                .collect(),
             clock: 3600.0,
             walls: masses
                 .iter()
@@ -475,6 +482,53 @@ const TRAM_GROUPS: [&str; 8] = [
 ];
 
 /// A tram line's runs: its track and its timetable (`forge_sim::transit`).
+/// A river shuttle's runs between its two landings (Nantes' Navibus): one boat out and back on
+/// a two-stop timetable, its place a function of the time as the trams' is.
+#[derive(Clone)]
+struct BoatRun {
+    a: DVec2,
+    b: DVec2,
+    timetable: Timetable,
+}
+
+impl BoatRun {
+    /// The shuttle of a crossing: 3.5 m/s at most, gentle at the landings, 45 s at each. It
+    /// lands at the water's edges along the crossing, its ends at the quays.
+    fn new(c: &forge_procgen::city::BoatCrossing, site: &Site) -> Self {
+        let length = c.a.distance(c.b).max(1.0);
+        let dir = (c.b - c.a) / length;
+        let wet: Vec<f64> = (0..length as usize)
+            .map(|k| k as f64)
+            .filter(|&s| site.water_at(c.a + dir * s) != forge_procgen::city::LAND)
+            .collect();
+        let (first, last) = match (wet.first(), wet.last()) {
+            (Some(&f), Some(&l)) if l - f > 20.0 => (f + 4.0, l - 4.0),
+            _ => (0.0, length),
+        };
+        let service = Service {
+            cruise: 3.5,
+            accel: 0.25,
+            dwell: 45.0,
+            turnaround: 45.0,
+            headway: 1e6,
+        };
+        Self {
+            a: c.a + dir * first,
+            b: c.a + dir * last,
+            timetable: Timetable::new(&[0.0, last - first], service),
+        }
+    }
+
+    /// Where the boat is at `time` and its turn, on the water's level, in a plan of side
+    /// `size`.
+    fn at(&self, time: f64, size: f64) -> (Vec3, f32) {
+        let run = self.timetable.at(0, time);
+        let dir = (self.b - self.a).normalize_or_zero();
+        let p = self.a + dir * run.s;
+        (world(size, p, 0.04), (-dir.y).atan2(dir.x) as f32)
+    }
+}
+
 #[derive(Clone)]
 struct TramRun {
     points: Vec<DVec2>,
@@ -1237,6 +1291,26 @@ impl Scenario for PlanScenario {
             );
         }
         let tram_rows: Vec<_> = TRAM_GROUPS.iter().map(|g| materials.of(g)).collect();
+        // The boats: a white hull, dark glass, a teal band, the solar roof.
+        materials.add_rows(
+            "plan-boat",
+            vec![
+                (
+                    "plan boat hull".into(),
+                    colour([0.88, 0.88, 0.86], 80.0, 0.3),
+                ),
+                ("plan boat glass".into(), glass(false)),
+                (
+                    "plan boat band".into(),
+                    colour([0.05, 0.42, 0.45], 60.0, 0.25),
+                ),
+                (
+                    "plan boat roof".into(),
+                    colour([0.04, 0.06, 0.10], 300.0, 0.5),
+                ),
+            ],
+        );
+        let materials_boat = materials.of("plan-boat");
         // The figures' clothes: skin, top, bottom, hair and shoes, eight ways.
         let people: [([f32; 3], [f32; 3], [f32; 3]); 8] = [
             ([0.62, 0.44, 0.34], [0.80, 0.80, 0.78], [0.10, 0.14, 0.26]),
@@ -1385,6 +1459,12 @@ impl Scenario for PlanScenario {
                 }
             }
         }
+        // The boats, one a crossing, in their livery.
+        if !self.boats.is_empty() {
+            let boat = builder.add_mesh(&MeshletMesh::build(&vehicles::shuttle_boat()));
+            builder.set_mesh_material(boat, materials_boat);
+            tram_movers.push((boat, self.boats.len() as u32));
+        }
         if !tram_movers.is_empty() {
             builder.reserve_movers(&tram_movers);
         }
@@ -1408,6 +1488,7 @@ impl Scenario for PlanScenario {
             Box::new(PlanRunning {
                 title: self.title.clone(),
                 trams: self.trams.clone(),
+                boats: self.boats.clone(),
                 clock: self.clock,
                 walls: walk::Walls::new(self.walls.clone()),
                 walker: None,
@@ -1425,6 +1506,7 @@ impl Scenario for PlanScenario {
 struct PlanRunning {
     title: String,
     trams: Vec<TramRun>,
+    boats: Vec<BoatRun>,
     /// The service's clock, seconds.
     clock: f64,
     size: f64,
@@ -1498,7 +1580,7 @@ impl Running for PlanRunning {
     }
 
     fn movers(&mut self, scene: &mut MeshletScene) {
-        if self.trams.is_empty() && self.crowd.is_none() {
+        if self.trams.is_empty() && self.crowd.is_none() && self.boats.is_empty() {
             return;
         }
         // In the order the movers were reserved: a line's cabs (front and rear of each
@@ -1529,6 +1611,10 @@ impl Running for PlanRunning {
                     transforms.push(place(figures.get(k).copied().unwrap_or(parked)));
                 }
             }
+        }
+        // Then the boats, one a crossing.
+        for boat in &self.boats {
+            transforms.push(place(boat.at(self.clock, self.size)));
         }
         scene.set_movers(&transforms);
     }

@@ -190,6 +190,107 @@ fn nose(m: &mut TriMesh, h: f32, w: f32) {
     );
 }
 
+/// A river shuttle boat, electric, for about twenty people (Nantes' Navibus at a smaller size):
+/// 9 m long and 3.2 m wide along `x`, its waterline at `y = 0`. A hull tapering to the bow
+/// ([`BODY`]), a glazed cabin ([`GLASS`] between [`BODY`] posts), a roof of solar panels
+/// ([`UNDER`]), the livery's band along the gunwale ([`STRIPE`]), ramps at both ends to land
+/// either way.
+pub fn shuttle_boat() -> TriMesh {
+    let mut m = TriMesh::default();
+    let (half_l, half_w) = (4.5_f32, 1.6_f32);
+    // The hull: a box, its ends' corners drawn in to bows at both ends.
+    let deck = 0.55;
+    let keel = -0.45;
+    let ring = |y: f32, narrow: f32| {
+        [
+            Vec3::new(-half_l, y, -half_w * narrow),
+            Vec3::new(-half_l + 1.2, y, -half_w),
+            Vec3::new(half_l - 1.2, y, -half_w),
+            Vec3::new(half_l, y, -half_w * narrow),
+            Vec3::new(half_l, y, half_w * narrow),
+            Vec3::new(half_l - 1.2, y, half_w),
+            Vec3::new(-half_l + 1.2, y, half_w),
+            Vec3::new(-half_l, y, half_w * narrow),
+        ]
+    };
+    let (top, bottom) = (ring(deck, 0.45), ring(keel, 0.3));
+    for i in 0..8 {
+        let j = (i + 1) % 8;
+        let out = ((top[i] + top[j]) * 0.5).with_y(0.0);
+        facing(&mut m, [bottom[i], bottom[j], top[j], top[i]], out, BODY);
+    }
+    // The deck and the bottom, as fans from the middle.
+    for i in 0..8 {
+        let j = (i + 1) % 8;
+        let c = Vec3::new(0.0, deck, 0.0);
+        facing(&mut m, [c, top[j], top[i], c], Vec3::Y, BODY);
+        let c = Vec3::new(0.0, keel, 0.0);
+        facing(&mut m, [c, bottom[i], bottom[j], c], -Vec3::Y, BODY);
+    }
+    // The band along the gunwale.
+    for i in 0..8 {
+        let j = (i + 1) % 8;
+        let out = ((top[i] + top[j]) * 0.5).with_y(0.0).normalize_or_zero() * 0.01;
+        let (a, b) = (top[i] + out, top[j] + out);
+        let d = Vec3::new(0.0, -0.18, 0.0);
+        facing(&mut m, [a + d, b + d, b, a], out, STRIPE);
+    }
+    // The cabin: glass sides between posts, a solar roof overhanging.
+    let (cx, cz, ch) = (2.6, 1.25, deck + 2.1);
+    cuboid(
+        &mut m,
+        Vec3::new(-cx, deck, -cz),
+        Vec3::new(cx, deck + 0.7, cz),
+        BODY,
+        ALL & !NEG_Y,
+    );
+    cuboid(
+        &mut m,
+        Vec3::new(-cx, deck + 0.7, -cz + 0.02),
+        Vec3::new(cx, ch, cz - 0.02),
+        GLASS,
+        ALL & !NEG_Y & !POS_Y,
+    );
+    for x in [-cx, -cx / 3.0, cx / 3.0, cx] {
+        for z in [-cz, cz] {
+            cuboid(
+                &mut m,
+                Vec3::new(x - 0.06, deck + 0.7, z - 0.06),
+                Vec3::new(x + 0.06, ch, z + 0.06),
+                BODY,
+                ALL & !NEG_Y & !POS_Y,
+            );
+        }
+    }
+    cuboid(
+        &mut m,
+        Vec3::new(-cx - 0.5, ch, -cz - 0.2),
+        Vec3::new(cx + 0.5, ch + 0.12, cz + 0.2),
+        BODY,
+        ALL,
+    );
+    cuboid(
+        &mut m,
+        Vec3::new(-cx - 0.4, ch + 0.12, -cz - 0.1),
+        Vec3::new(cx + 0.4, ch + 0.16, cz + 0.1),
+        UNDER,
+        POS_Y | POS_X | NEG_X | POS_Z | NEG_Z,
+    );
+    // The ramps, raised at both ends.
+    for s in [-1.0_f32, 1.0] {
+        let x0 = s * (half_l - 0.15);
+        let x1 = s * (half_l - 1.1);
+        cuboid(
+            &mut m,
+            Vec3::new(x0.min(x1), deck, -0.55),
+            Vec3::new(x0.max(x1), deck + 0.08, 0.55),
+            UNDER,
+            ALL,
+        );
+    }
+    m
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,5 +319,23 @@ mod tests {
                     .all(|n| (Vec3::from(*n).length() - 1.0).abs() < 1e-4)
             );
         }
+    }
+
+    #[test]
+    fn the_boat_floats_within_its_size() {
+        let m = shuttle_boat();
+        assert!(m.sections.iter().all(|&s| s < SECTIONS));
+        for p in &m.positions {
+            let p = Vec3::from(*p);
+            assert!(
+                p.x.abs() <= 5.0 && p.z.abs() <= 1.7 && p.y >= -0.5 && p.y <= 3.0,
+                "{p}"
+            );
+        }
+        assert!(
+            m.normals
+                .iter()
+                .all(|n| (Vec3::from(*n).length() - 1.0).abs() < 1e-3)
+        );
     }
 }

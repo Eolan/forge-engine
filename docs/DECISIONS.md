@@ -3946,7 +3946,8 @@ Each note's city-specific appendix stays in the sandbox.
        along the streets (`demos/city-plan --people`), until #251's humans.
     7. **Public transport:** trams, taxis, boats; then vehicles to pilot. *Begun 2026-10-11:*
        trams as timetabled runs (`forge_sim::transit`), a part-program model
-       (`forge_geom::vehicles`), drawn as movers on double tracks in `demos/city-plan` (#253).
+       (`forge_geom::vehicles`), drawn as movers on double tracks in `demos/city-plan` (#253);
+       a river shuttle boat at each crossing, on a two-stop timetable.
     8. **The population server,** scaled to 1 M and beyond; multiplayer clients.
     9. **Ambient audio.** Later: ships, aircraft, drones, weather, third person, LLM dialogue,
        visemes.
