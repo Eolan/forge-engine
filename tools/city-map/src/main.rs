@@ -57,7 +57,8 @@ fn main() -> Result<()> {
     city::map::write_checks(&site, &plan, &params, &checks, args.scale)
         .context("writing the checks")?;
     let t = Instant::now();
-    let masses = city::mass::masses(&plan, 0.5, 11);
+    let bible = city::bible::StyleBible::default();
+    let masses = city::mass::masses(&plan, &bible, 11);
     let floor_area: f64 = masses
         .iter()
         .map(|m| city::geom::signed_area(&m.footprint) * f64::from(m.floors))
@@ -68,6 +69,20 @@ fn main() -> Result<()> {
         t.elapsed().as_secs_f64() * 1e3,
         floor_area / 1e6
     );
+    for r in city::bible::check(&plan, &masses, &bible) {
+        println!(
+            "{} {}: {:.3} (limit {:.3}){}",
+            if r.holds { "ok  " } else { "FAIL" },
+            r.rule,
+            r.value,
+            r.limit,
+            if r.failing > 0 {
+                format!("; {} failing, e.g. {}", r.failing, r.failures.join(", "))
+            } else {
+                String::new()
+            }
+        );
+    }
     let whole = args.out.join("massing.png");
     let frame = (DVec2::ZERO, args.size);
     city::map::write_massing(&site, &plan, &masses, &whole, frame, args.scale, 0.7)

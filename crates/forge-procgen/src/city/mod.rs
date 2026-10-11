@@ -21,6 +21,7 @@
 //! 7. **Landmarks**, the street profiles that follow from the transit, and the
 //!    [`PlanStats`] the map is judged with ([`map`] draws it).
 
+pub mod bible;
 pub mod blocks;
 pub mod example;
 pub mod geom;
@@ -161,7 +162,7 @@ pub enum Pattern {
 }
 
 /// What a district is for; it decides its streets' profile, its parks and its colour.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DistrictKind {
     /// An old town: lanes, small squares, pedestrian streets.
     OldTown,

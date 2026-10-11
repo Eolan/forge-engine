@@ -68,7 +68,7 @@ Where Forge uses them:
 - `serde`: city-blocks, forge-core, forge-procgen, forge-terrain
 - `serde_json`: credits, forge-geom
 - `thiserror`: forge-anim, forge-geom, forge-gpu, forge-physics, forge-sim
-- `toml`: city-blocks, forge-terrain
+- `toml`: city-blocks, forge-procgen, forge-terrain
 - `tracing`: asteroids, city-blocks, city-plan, forge-app, forge-core, forge-gpu, forge-render, forge-task, forge-terrain, meshlets, physics-lab, planet
 - `tracing-subscriber`: forge-app
 - `tracy-client`: forge-app, forge-task

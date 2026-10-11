@@ -9,6 +9,7 @@
 use forge_core::SplitMix64;
 use glam::DVec2;
 
+use super::bible::StyleBible;
 use super::blocks::{BlockUse, STREET_HALF};
 use super::geom::{self, PointGrid};
 use super::{CityPlan, Profile};
@@ -37,6 +38,8 @@ pub struct Mass {
     pub height: f64,
     /// What its roof carries.
     pub roof: Roof,
+    /// The width of the street it fronts, metres.
+    pub street_width: f64,
 }
 
 /// A ground floor's height, metres.
@@ -45,7 +48,8 @@ pub const GROUND_FLOOR: f64 = 4.2;
 pub const FLOOR: f64 = 3.2;
 
 /// The masses of every lot on a street.
-pub fn masses(plan: &CityPlan, green_roofs: f64, seed: u64) -> Vec<Mass> {
+pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
+    let green_roofs = bible.green_roofs;
     // The streets' points, to find the profile a lot faces.
     let mut streets = PointGrid::new(plan.size, 50.0);
     for (i, e) in plan.roads.edges.iter().enumerate() {
@@ -127,12 +131,10 @@ pub fn masses(plan: &CityPlan, green_roofs: f64, seed: u64) -> Vec<Mass> {
         let mut rng = SplitMix64::new(seed ^ (index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let span = u64::from(hi.saturating_sub(lo)) + 1;
         let drawn = lo + rng.below(span) as u8;
-        let cap = match profile {
-            Profile::TramAvenue | Profile::Avenue => hi,
-            Profile::Shared => lo + (hi - lo) * 2 / 3,
-            Profile::Pedestrian | Profile::Path => lo + (hi - lo) / 3,
-        };
-        let floors = drawn.min(cap).max(lo.max(1));
+        // Heights follow street widths: the bible's ratio caps the floors.
+        let street_width = profile.width();
+        let cap = bible.max_floors(street_width);
+        let floors = drawn.min(cap).max(1);
         let height = GROUND_FLOOR + f64::from(floors - 1) * FLOOR;
         let r = rng.next_f64();
         let roof = if r < green_roofs {
@@ -149,6 +151,7 @@ pub fn masses(plan: &CityPlan, green_roofs: f64, seed: u64) -> Vec<Mass> {
                 floors,
                 height,
                 roof,
+                street_width,
             });
         }
     }
@@ -205,13 +208,14 @@ fn frontage(lot: &[DVec2], block: &[DVec2]) -> Option<(DVec2, DVec2)> {
 mod tests {
     use super::super::{example, plan};
     use super::*;
+    use crate::city::bible::StyleBible;
 
     #[test]
     fn masses_stand_between_the_building_line_and_the_courtyard() {
         let size = 4000.0;
         let site = example::site(size, 10.0);
         let city = plan(&site, &example::params(size));
-        let masses = masses(&city, 0.5, 9);
+        let masses = masses(&city, &StyleBible::default(), 9);
         assert!(
             masses.len() > city.lots.len() / 2,
             "{} of {}",

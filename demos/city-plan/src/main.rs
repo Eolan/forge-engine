@@ -28,7 +28,7 @@ fn main() -> anyhow::Result<()> {
     let site = example::site(cli.size, 10.0);
     let params = example::params(cli.size);
     let plan = city::plan(&site, &params);
-    let masses = mass::masses(&plan, 0.5, 11);
+    let masses = mass::masses(&plan, &city::bible::StyleBible::default(), 11);
     // Over the river south of the centre, looking north across it.
     let centre = params.centre;
     let camera = FlyCamera {

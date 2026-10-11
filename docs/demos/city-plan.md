@@ -32,7 +32,8 @@ cargo run --release -p city-map -- --size 4000 --scale 2 --out captures/city
 | Lots | recursive splits across each piece's long axis (Vanegas et al. 2012); only the pieces on a street are kept where a block has a courtyard | `city::blocks` |
 | Forest | ground above a height or steeper than a slope goes to the first reserve district (a real site's hills) | `city::district_field` |
 | Transit | tram lines by the shortest path through their waypoints, main roads preferred (a waypoint far from any main road snaps to the nearest street); stops every 450 m moved to nearby junctions; lines added until a target share of blocks has a stop within 400 m (`transit::cover`); boat crossings where a river runs long without a bridge; street profiles (tram avenue, avenue, shared, pedestrian, path) | `city::transit` |
-| Masses | each lot's building: the lot cut by the building line of each street it touches, less the courtyard's hull (or a building's depth along its street where no courtyard fits); floors from the district's range, capped by the street's profile; green, solar or terrace roofs | `city::mass` |
+| Masses | each lot's building: the lot cut by the building line of each street it touches, less the courtyard's hull (or a building's depth along its street where no courtyard fits); floors from the district's range, capped by the style bible's height-to-width ratio on the street it fronts; green, solar or terrace roofs | `city::mass` |
+| Style bible | one TOML record of the city's rules (height to street width, green roofs, green area per block, park and stop reach, the streets' share, per-district floors, lots, spacing and walls), put into the plan's parameters and measured by a checker that names what fails | `city::bible` |
 | Maps and numbers | a small rasteriser: the plan (with the districts', landmarks' and lines' names in the engine's font, kept from overlapping), a checks map (blocks by what they lack), an oblique massing view of any window; the plan's numbers and its digest | `city::map` |
 
 Everything is a pure function of the site and the parameters. Costs are integers in the
@@ -51,7 +52,7 @@ router, and `forge_core::dmath` does the trigonometry. Two runs give the same di
 | Built blocks within 400 m of a tram stop | 45 % (two lines, no line added) |
 | Streets' share of the land | 21.5 % |
 | Tram lines | 7.8 km, 19 stops |
-| Masses / floor area | 15 155 / 22.5 km² (13 ms) |
+| Masses / floor area | 15 155 / 19.7 km² (13 ms; floors capped by street width) |
 
 | Stage | Time |
 |---|---|
@@ -75,6 +76,21 @@ router, and `forge_core::dmath` does the trigonometry. Two runs give the same di
 - lots sit inside their blocks;
 - added lines raise the stop coverage by over 20 points;
 - masses stand inside their blocks and outside their courtyards.
+
+## The style bible's checks (the example)
+
+```
+ok   height at most the street's width times the ratio: 1.000
+ok   green roofs' share: 0.507 (limit 0.500)
+FAIL built blocks at their green area: 0.889 (limit 1.000); 75 failing, e.g. block 10: 0.08, …
+ok   built blocks with a park within reach: 1.000
+FAIL built blocks within 400 m of a tram stop: 0.454 (limit 0.900)
+ok   streets' share of the land at most: 0.215 (limit 0.250)
+```
+
+The old town's small blocks have no room for a courtyard, so they miss the green area; the
+example adds no tram lines, so it misses the stops. A city's own bible and its added lines
+(`max_extra_lines`) close those.
 
 ## Massing
 
@@ -110,5 +126,5 @@ from the site's cells. A private sandbox hands its own plan to `PlanScenario::ne
 - Building lines per street profile.
 - Squares at the radial districts' centres; the landmarks' sightlines.
 - More checks on the checks map; a legend.
-- The style bible as data (#246).
+- The style bible's palette into the materials; more rules (cornice lines, opening rhythm) once facades exist (#246).
 - Then buildings from the grammar (D-039, #247).
