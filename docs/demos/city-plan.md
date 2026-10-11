@@ -298,10 +298,10 @@ three rules:
 Squares are paved, with a row of trees every 10 m, 3 m inside their building lines. Those of
 0.5 ha or more get a second row 11 m further in, an alley of planes (a Provençal *cours*). A
 fountain stands in the middle of those of 0.15 ha or more (`furniture::fountain`), grander on
-grander squares, and benches stand every 15 m inside the trees, facing the middle. Squares of
-1.5 ha or more are gardens: a lawn in the middle, 14 m inside their building lines, a paved
-border round it under the trees
-(`furniture::bench`). The example has 12 squares, slivers included.
+grander squares, and benches stand every 15 m inside the trees, facing the middle
+(`furniture::bench`). Squares of 1.5 ha or more are gardens: a lawn in the middle, 14 m inside
+their building lines, a paved border round it under the trees. The example has 12 squares,
+slivers included.
 
 **The landmarks** (`LandmarkKind`) get their own square: the built block of 0.15–3.5 ha
 nearest their anchor becomes one. Each then stands on the nearest square of 0.15 ha or more
