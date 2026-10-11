@@ -455,6 +455,10 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
 - **dropped kerbs:** each raised pavement slopes down to the paved corner over 1.6 m at both
   ends, its whole width, where people cross at the junction (1 in 12, step-free: #263). The
   open ends showed under the pavement.
+- **bridges:** a stone parapet a metre over the pavement along both edges, 0.35 m thick, and
+  the deck's side below it down to the water; the walker walks against the parapets. The
+  pavements stopped at a bare edge over the river (the owner: the bridges' pavements looked
+  broken).
 - **squares on one level:** a square lies flush with the raised pavements round it (0.30), its
   fountain, benches, chess tables, lawn and landmark with it. Round it runs a 1.7 m stone
   border, level beside a raised pavement and sloping 1 in 12 down to a shared street or a

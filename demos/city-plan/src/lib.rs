@@ -455,6 +455,7 @@ impl PlanScenario {
             ribbon(&mut tiles, &e.points, e.profile.width(), height, section);
         }
         pavements(&mut tiles, plan);
+        bridges(&mut tiles, plan);
         // Two tracks a line, one each way, on the right of the way they run.
         for line in &plan.tram_lines {
             for track in [-TRACK_OFFSET, TRACK_OFFSET] {
@@ -502,6 +503,33 @@ impl PlanScenario {
             passages_in(&mut (0..masses.len())),
             passages_in(&mut near.iter().copied())
         );
+        // And on the nearest bridge's pavement, a quarter along, looking along it.
+        if let Some(d) = detail
+            && let Some(e) = plan
+                .roads
+                .edges
+                .iter()
+                .filter(|e| e.bridge && e.profile.pavement() > 0.0 && e.points.len() >= 2)
+                .min_by(|a, b| {
+                    let mid = |e: &forge_procgen::city::RoadEdge| {
+                        geom::point_at(&e.points, e.length() * 0.5)
+                    };
+                    mid(a)
+                        .distance(d.centre)
+                        .total_cmp(&mid(b).distance(d.centre))
+                })
+        {
+            let s = e.length() * 0.25;
+            let (p, t) = (geom::point_at(&e.points, s), geom::tangent_at(&e.points, s));
+            let side =
+                DVec2::new(-t.y, t.x) * (e.profile.width() * 0.5 - e.profile.pavement() * 0.5);
+            let eye = world(size, p + side, 1.9);
+            let yaw = (-t.x).atan2(-t.y).to_degrees();
+            passage_note += &format!(
+                "; a bridge's pavement at --view={:.1},1.9,{:.1},{yaw:.1},-10",
+                eye.x, eye.z
+            );
+        }
         if let Some((wall, o)) = near.iter().find_map(|&i| {
             let s = &structures[i];
             s.openings
@@ -881,7 +909,10 @@ impl PlanScenario {
                 .map(|c| BoatRun::new(c, site))
                 .collect(),
             clock: 3600.0,
-            walls: wall_pieces(size, masses, &structures),
+            walls: wall_pieces(size, masses, &structures)
+                .into_iter()
+                .chain(parapet_pieces(size, plan))
+                .collect(),
             passage_note,
             nets: structures.iter().map(|s| s.net).collect(),
             walk_on_start: false,
@@ -1449,6 +1480,85 @@ fn kit(
         seats,
         ms: start.elapsed().as_secs_f64() * 1e3,
     }
+}
+
+/// A bridge's parapet: how high over its pavement and how thick, metres.
+const PARAPET: (f64, f64) = (1.0, 0.35);
+
+/// Each bridge's two parapet lines: the outer edge and the inner face's, along the edge's points
+/// every 4 m, and the pavement's level they stand on.
+fn parapet_lines(plan: &CityPlan) -> Vec<(Vec<DVec2>, Vec<DVec2>, f64)> {
+    let mut out = Vec::new();
+    for e in plan.roads.edges.iter().filter(|e| e.bridge) {
+        let line = geom::resample(&e.points, 4.0);
+        if line.len() < 2 {
+            continue;
+        }
+        let half = e.profile.width() * 0.5;
+        let base = if e.profile.pavement() > 0.0 {
+            0.30
+        } else {
+            0.16
+        };
+        for side in [1.0, -1.0] {
+            out.push((
+                offset_line(&line, side * half),
+                offset_line(&line, side * (half - PARAPET.1)),
+                base,
+            ));
+        }
+    }
+    out
+}
+
+/// The bridges' stone parapets along both edges, a metre over the pavement, and the deck's side
+/// below them down to the water: the pavements stopped at a bare edge over the river (the
+/// owner: the bridges' pavements looked broken).
+fn bridges(tiles: &mut Tiles, plan: &CityPlan) {
+    let size = tiles.size;
+    for (outer, inner, base) in parapet_lines(plan) {
+        let top = base + PARAPET.0;
+        strip(tiles, &outer, &inner, top, QUAY);
+        for (line, other, bottom) in [(&outer, &inner, WATER_LEVEL), (&inner, &outer, base)] {
+            for (k, w) in line.windows(2).enumerate() {
+                let (a, b) = (w[0], w[1]);
+                // Facing away from the other line: out over the water, or in over the pavement.
+                let away = (a - other[k]).normalize_or_zero();
+                let normal = Vec3::new(away.x as f32, 0.0, away.y as f32);
+                let tile = tiles.at(a);
+                let centre = tile.centre;
+                let p = |q: DVec2, h: f64| world(size, q, h) - centre;
+                triangle(
+                    &mut tile.ground,
+                    [p(a, bottom), p(b, bottom), p(b, top)],
+                    normal,
+                    QUAY,
+                );
+                triangle(
+                    &mut tile.ground,
+                    [p(a, bottom), p(b, top), p(a, top)],
+                    normal,
+                    QUAY,
+                );
+            }
+        }
+    }
+}
+
+/// The bridges' parapets as the walker's convex pieces, a segment each.
+fn parapet_pieces(size: f64, plan: &CityPlan) -> Vec<Vec<Vec3>> {
+    let mut out = Vec::new();
+    for (outer, inner, base) in parapet_lines(plan) {
+        for k in 0..outer.len().min(inner.len()).saturating_sub(1) {
+            out.push(
+                [outer[k], outer[k + 1], inner[k + 1], inner[k]]
+                    .into_iter()
+                    .flat_map(|q| [world(size, q, 0.0), world(size, q, base + PARAPET.0)])
+                    .collect(),
+            );
+        }
+    }
+    out
 }
 
 /// The buildings' walls as the walker's convex pieces, the world's metres (D-060): each street,
