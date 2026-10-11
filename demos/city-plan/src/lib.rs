@@ -24,6 +24,7 @@ use forge_geom::{modules, vehicles};
 use forge_procgen::city::facades::{self, FaceKind};
 use forge_procgen::city::lamps::Lamp;
 use forge_procgen::city::mass::{FLOOR, GROUND_FLOOR, Mass, Roof};
+use forge_procgen::city::shore::Shore;
 use forge_procgen::city::trees::Tree;
 use forge_procgen::city::{BlockUse, CityPlan, LAGOON, SEA, Site, geom};
 use forge_procgen::grammar::Grammar;
@@ -323,8 +324,8 @@ impl PlanScenario {
     ) -> Self {
         let size = plan.size;
         let mut tiles = Tiles::new(size);
-        let near_rivers = by_rivers(site);
-        ground_and_water(site, &mut tiles, &near_rivers);
+        let shore = ground_shore(site);
+        ground_and_water(&mut tiles, &shore);
         for block in &plan.blocks {
             let section = match block.use_ {
                 BlockUse::Built => GARDEN,
@@ -345,7 +346,7 @@ impl PlanScenario {
         }
         // The quays' land as lawns, cell by cell (their faces hold water), under the trees.
         for block in plan.blocks.iter().filter(|b| b.use_ == BlockUse::Quay) {
-            lawn(site, &mut tiles, &block.polygon, &near_rivers);
+            lawn(&mut tiles, &shore, &block.polygon);
         }
         // The rivers as smooth strips at the water's level, the sea's: the cells' staircase
         // would show along the quays. Along each bank a stone wall down to the water and a stone
@@ -1350,54 +1351,70 @@ fn kit(
 /// waters: the owner's second walk).
 const WATER_LEVEL: f64 = -0.6;
 /// The rivers' promenades' width along each bank, metres: wide enough to cover the cells by the
-/// river that are drawn as water ([`by_rivers`]).
+/// river that are drawn as water ([`ground_shore`]).
 const PROMENADE: f64 = 13.0;
 
-/// The site's cells within a river's half width and three quarters of a cell of its centreline:
-/// drawn as water, under the river's smooth strip and its promenades, so no land cell juts into
-/// the river.
-fn by_rivers(site: &Site) -> Vec<bool> {
-    let water = &site.water;
-    let (s, n) = (water.spacing, water.size as i64);
-    let mut near = vec![false; (n * n) as usize];
-    for river in &site.rivers {
-        let reach = river.width * 0.5 + 0.75 * s;
-        let line = geom::resample(&river.centreline, 15.0);
-        for w in line.windows(2) {
-            let (lo, hi) = (w[0].min(w[1]) - reach, w[0].max(w[1]) + reach);
-            let cell = |v: f64| ((v / s).floor() as i64).clamp(0, n - 1);
-            for y in cell(lo.y)..=cell(hi.y) {
-                for x in cell(lo.x)..=cell(hi.x) {
-                    let c = DVec2::new((x as f64 + 0.5) * s, (y as f64 + 0.5) * s);
-                    if geom::distance_to_segment(c, w[0], w[1]) < reach {
-                        near[(y * n + x) as usize] = true;
-                    }
-                }
-            }
-        }
-    }
-    near
+/// The site's shore for the ground: the rivers' beds widened by three quarters of a cell each
+/// side, drawn as water under the rivers' smooth strips and their promenades, so no land juts
+/// into a river.
+fn ground_shore(site: &Site) -> Shore {
+    Shore::new(site, 0.75 * site.water.spacing)
 }
 
-/// The site's land and water as runs of cells along each row, in the tiles the runs start in
-/// (a run is cut at tile edges); the cells by the rivers ([`by_rivers`]) as water.
-fn ground_and_water(site: &Site, tiles: &mut Tiles, near: &[bool]) {
-    let water = &site.water;
-    let s = water.spacing;
-    let n = water.size;
+/// The site's land and water: the grid's whole squares in runs along each row (a run is cut at
+/// tile edges), and the squares the shore crosses cut along it ([`Shore`]), not the cells'
+/// staircase (the owner's plan, 2026-10-11). Along the shore a stone quay wall from the ground
+/// down past the water: the drop showed nothing, the water's edge a dark band.
+fn ground_and_water(tiles: &mut Tiles, shore: &Shore) {
+    let s = shore.spacing();
+    let n = shore.size() - 1;
     let per_tile = (TILE / s).round().max(1.0) as u32;
-    let wet_at = |x: u32, y: u32| is_open_water(water.get(x, y)) || near[(y * n + x) as usize];
+    let size = tiles.size;
     for y in 0..n {
         let mut x = 0;
         while x < n {
-            let wet = wet_at(x, y);
+            let Some(wet) = shore.whole(x, y) else {
+                let square = shore.square(x, y);
+                for piece in &square.dry {
+                    tiles.flat(piece, 0.0, GROUND, false);
+                }
+                for piece in &square.wet {
+                    tiles.flat(piece, WATER_LEVEL, WATER, false);
+                }
+                for &([a, b], out) in &square.shore {
+                    let along = DVec2::new(-out.y, out.x);
+                    let (a, b) = if (b - a).dot(along) < 0.0 {
+                        (b, a)
+                    } else {
+                        (a, b)
+                    };
+                    let tile = tiles.at((a + b) * 0.5);
+                    let centre = tile.centre;
+                    let p = |q: DVec2, h: f64| world(size, q, h) - centre;
+                    let normal = Vec3::new(out.x as f32, 0.0, out.y as f32);
+                    triangle(
+                        &mut tile.ground,
+                        [p(a, 0.0), p(b, 0.0), p(b, -1.2)],
+                        normal,
+                        QUAY,
+                    );
+                    triangle(
+                        &mut tile.ground,
+                        [p(a, 0.0), p(b, -1.2), p(a, -1.2)],
+                        normal,
+                        QUAY,
+                    );
+                }
+                x += 1;
+                continue;
+            };
             let start = x;
             let tile_end = ((x / per_tile) + 1) * per_tile;
-            while x < n && x < tile_end && wet_at(x, y) == wet {
+            while x < n && x < tile_end && shore.whole(x, y) == Some(wet) {
                 x += 1;
             }
-            let (x0, x1) = (start as f64 * s, x as f64 * s);
-            let (y0, y1) = (y as f64 * s, (y + 1) as f64 * s);
+            let (x0, x1) = (f64::from(start) * s, f64::from(x) * s);
+            let (y0, y1) = (f64::from(y) * s, f64::from(y + 1) * s);
             let quad = [
                 DVec2::new(x0, y0),
                 DVec2::new(x1, y0),
@@ -1408,48 +1425,6 @@ fn ground_and_water(site: &Site, tiles: &mut Tiles, near: &[bool]) {
                 tiles.flat(&quad, WATER_LEVEL, WATER, false);
             } else {
                 tiles.flat(&quad, 0.0, GROUND, false);
-            }
-        }
-    }
-    // Stone quay walls from the ground down to the water and below it, wherever a dry cell meets
-    // water (the river's cells under its promenade too): the drop showed nothing, the water's
-    // edge a dark band.
-    let size = tiles.size;
-    let dry = |x: i64, y: i64| {
-        (0..n as i64).contains(&x) && (0..n as i64).contains(&y) && !wet_at(x as u32, y as u32)
-    };
-    for y in 0..n as i64 {
-        for x in 0..n as i64 {
-            if !dry(x, y) {
-                continue;
-            }
-            // Each wet neighbour: the shared edge's two ends, and the way to the water.
-            for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
-                let (nx, ny) = (x + dx, y + dy);
-                if !(0..n as i64).contains(&nx) || !(0..n as i64).contains(&ny) || dry(nx, ny) {
-                    continue;
-                }
-                let c = DVec2::new((x as f64 + 0.5) * s, (y as f64 + 0.5) * s);
-                let out = DVec2::new(dx as f64, dy as f64);
-                let along = DVec2::new(-out.y, out.x);
-                let mid = c + out * (s * 0.5);
-                let (a, b) = (mid - along * (s * 0.5), mid + along * (s * 0.5));
-                let tile = tiles.at(mid);
-                let centre = tile.centre;
-                let p = |q: DVec2, h: f64| world(size, q, h) - centre;
-                let normal = Vec3::new(out.x as f32, 0.0, out.y as f32);
-                triangle(
-                    &mut tile.ground,
-                    [p(a, 0.0), p(b, 0.0), p(b, -1.2)],
-                    normal,
-                    QUAY,
-                );
-                triangle(
-                    &mut tile.ground,
-                    [p(a, 0.0), p(b, -1.2), p(a, -1.2)],
-                    normal,
-                    QUAY,
-                );
             }
         }
     }
@@ -2701,26 +2676,32 @@ fn is_open_water(code: u8) -> bool {
     code == SEA || code == LAGOON
 }
 
-/// The land of a polygon as lawn: runs of the site's land cells inside it along each row, 3 cm
-/// over the ground, but for the cells by the rivers (`near`, drawn as water under the promenades).
-fn lawn(site: &Site, tiles: &mut Tiles, polygon: &[DVec2], near: &[bool]) {
-    let water = &site.water;
-    let s = water.spacing;
+/// The land of a polygon as lawn, 3 cm over the ground: runs of the grid's dry squares whose
+/// middles lie inside it along each row, and the dry pieces of the squares the shore crosses.
+fn lawn(tiles: &mut Tiles, shore: &Shore, polygon: &[DVec2]) {
+    let s = shore.spacing();
+    let n = shore.size() - 1;
     let (lo, hi) = polygon.iter().fold(
         (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)),
         |(lo, hi), &p| (lo.min(p), hi.max(p)),
     );
-    let cell = |v: f64| ((v / s).floor().max(0.0) as u32).min(water.size - 1);
+    let cell = |v: f64| ((v / s).floor().max(0.0) as u32).min(n - 1);
     let (x0, x1) = (cell(lo.x), cell(hi.x));
     for y in cell(lo.y)..=cell(hi.y) {
         let mut x = x0;
         while x <= x1 {
-            let inside = |x: u32| {
-                let c = DVec2::new((f64::from(x) + 0.5) * s, (f64::from(y) + 0.5) * s);
-                water.get(x, y) == forge_procgen::city::LAND
-                    && !near[(y * water.size + x) as usize]
-                    && geom::contains(polygon, c)
-            };
+            let middle = |x: u32| DVec2::new((f64::from(x) + 0.5) * s, (f64::from(y) + 0.5) * s);
+            if shore.whole(x, y).is_none() {
+                for piece in shore.square(x, y).dry {
+                    if geom::contains(polygon, geom::centroid(&piece)) {
+                        tiles.flat(&piece, 0.03, PARK, false);
+                    }
+                }
+                x += 1;
+                continue;
+            }
+            let inside =
+                |x: u32| shore.whole(x, y) == Some(false) && geom::contains(polygon, middle(x));
             if !inside(x) {
                 x += 1;
                 continue;

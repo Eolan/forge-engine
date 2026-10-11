@@ -10,7 +10,9 @@ use image::{ImageBuffer, Rgb};
 
 use super::blocks::BlockUse;
 use super::geom;
-use super::{CityParams, CityPlan, DistrictKind, LAGOON, LAND, PlanStats, Profile, RIVER, Site};
+use super::shore::Shore;
+use super::{CityParams, CityPlan, DistrictKind, LAGOON, LAND, PlanStats, Profile, Site};
+use crate::field::Field2;
 
 /// A district kind's colour on the map.
 fn district_colour(kind: DistrictKind) -> [u8; 3] {
@@ -476,55 +478,114 @@ impl Canvas {
     }
 }
 
-/// Water and beaches from the site's mask, over the blocks (a quay's face holds its river).
+/// Water and beaches from the site's mask, over the blocks (a quay's face holds its river), along
+/// their smooth edges ([`Shore`], and the beaches 40 m from the sea by a distance field), not the
+/// cells' staircase.
 fn paint_water(canvas: &mut Canvas, site: &Site) {
     let s = canvas.metres_per_pixel;
-    let water = &site.water;
-    let beach_cells = (40.0 / water.spacing).ceil() as i64;
+    let shore = Shore::new(site, 0.0);
+    let to_sea = sea_distance(site);
     for y in 0..canvas.side {
         for x in 0..canvas.side {
             let p = canvas.origin + DVec2::new((x as f64 + 0.5) * s, (y as f64 + 0.5) * s);
-            let c = match site.water_at(p) {
-                LAND => continue,
-                RIVER => RIVER_C,
-                LAGOON => LAGOON_C,
-                _ => SEA,
+            let (sea, river) = shore.parts(p);
+            let c = if river >= 0.5 && river >= sea {
+                RIVER_C
+            } else if sea >= 0.5 {
+                if lagoon_share(site, p) >= 0.5 {
+                    LAGOON_C
+                } else {
+                    SEA
+                }
+            } else if bilinear(&to_sea, p) <= 40.0 {
+                // Sand along the sea.
+                BEACH
+            } else {
+                continue;
             };
             canvas.pixels[y as usize * canvas.side as usize + x as usize] = c;
         }
     }
-    // Sand along the sea: land cells within 40 m of it.
-    let n = water.size as i64;
-    for cy in 0..n {
-        for cx in 0..n {
-            if water.get(cx as u32, cy as u32) != LAND {
-                continue;
-            }
-            let near_sea = (-beach_cells..=beach_cells).any(|dy| {
-                (-beach_cells..=beach_cells).any(|dx| {
-                    let (x, y) = (cx + dx, cy + dy);
-                    x >= 0
-                        && y >= 0
-                        && x < n
-                        && y < n
-                        && water.get(x as u32, y as u32) == super::SEA
-                })
-            });
-            if near_sea {
-                let p = DVec2::new(cx as f64, cy as f64) * water.spacing;
-                let half = water.spacing * 0.5;
-                canvas.fill(
-                    &[
-                        p + DVec2::new(-half, -half),
-                        p + DVec2::new(half, -half),
-                        p + DVec2::new(half, half),
-                        p + DVec2::new(-half, half),
-                    ],
-                    BEACH,
-                );
+}
+
+/// Each sample's distance to the sea's nearest cell, metres: a two-pass chamfer over the mask
+/// (orthogonal steps of a cell, diagonal of 1.414), within 4 % of the true distance.
+fn sea_distance(site: &Site) -> Field2<f32> {
+    let water = &site.water;
+    let (n, s) = (water.size, water.spacing);
+    let far = f32::MAX / 2.0;
+    let mut d = Field2::from_fn(n, s, |x, y| {
+        if water.get(x, y) == super::SEA {
+            0.0
+        } else {
+            far
+        }
+    });
+    let (a, b) = (s as f32, (s * std::f64::consts::SQRT_2) as f32);
+    let ni = n as i64;
+    let relax = |d: &mut Field2<f32>, x: i64, y: i64, steps: &[(i64, i64, f32)]| {
+        let mut best = d.get(x as u32, y as u32);
+        for &(dx, dy, w) in steps {
+            let (u, v) = (x + dx, y + dy);
+            if (0..ni).contains(&u) && (0..ni).contains(&v) {
+                best = best.min(d.get(u as u32, v as u32) + w);
             }
         }
+        d.set(x as u32, y as u32, best);
+    };
+    let forward = [(-1, 0, a), (0, -1, a), (-1, -1, b), (1, -1, b)];
+    let backward = [(1, 0, a), (0, 1, a), (1, 1, b), (-1, 1, b)];
+    for y in 0..ni {
+        for x in 0..ni {
+            relax(&mut d, x, y, &forward);
+        }
     }
+    for y in (0..ni).rev() {
+        for x in (0..ni).rev() {
+            relax(&mut d, x, y, &backward);
+        }
+    }
+    d
+}
+
+/// A field's value at `p`, bilinear between its samples (clamped to the frame).
+fn bilinear(f: &Field2<f32>, p: DVec2) -> f64 {
+    let n = f.size;
+    let last = f64::from(n - 1);
+    let (fx, fy) = (
+        (p.x / f.spacing).clamp(0.0, last),
+        (p.y / f.spacing).clamp(0.0, last),
+    );
+    let (x0, y0) = (
+        (fx as u32).min(n.saturating_sub(2)),
+        (fy as u32).min(n.saturating_sub(2)),
+    );
+    let (tx, ty) = (fx - f64::from(x0), fy - f64::from(y0));
+    let g = |x: u32, y: u32| f64::from(f.get(x, y));
+    let top = g(x0, y0) + (g(x0 + 1, y0) - g(x0, y0)) * tx;
+    let bottom = g(x0, y0 + 1) + (g(x0 + 1, y0 + 1) - g(x0, y0 + 1)) * tx;
+    top + (bottom - top) * ty
+}
+
+/// The share of lagoon among the four samples round `p`, bilinear: where the lagoons meet the sea,
+/// a smooth line between their colours.
+fn lagoon_share(site: &Site, p: DVec2) -> f64 {
+    let water = &site.water;
+    let n = water.size;
+    let last = f64::from(n - 1);
+    let (fx, fy) = (
+        (p.x / water.spacing).clamp(0.0, last),
+        (p.y / water.spacing).clamp(0.0, last),
+    );
+    let (x0, y0) = (
+        (fx as u32).min(n.saturating_sub(2)),
+        (fy as u32).min(n.saturating_sub(2)),
+    );
+    let (tx, ty) = (fx - f64::from(x0), fy - f64::from(y0));
+    let g = |x: u32, y: u32| f64::from(u8::from(water.get(x, y) == LAGOON));
+    let top = g(x0, y0) + (g(x0 + 1, y0) - g(x0, y0)) * tx;
+    let bottom = g(x0, y0 + 1) + (g(x0 + 1, y0 + 1) - g(x0, y0 + 1)) * tx;
+    top + (bottom - top) * ty
 }
 
 /// Blocks by use and district, the lots' outlines, then the courtyards over them.

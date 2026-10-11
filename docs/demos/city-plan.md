@@ -277,16 +277,25 @@ owner's first walk, 2026-10-11). An avenue's trees now stand by the kerb, a metr
 pavement, and shared streets and lanes have theirs down the middle, off the walkers' lines.
 Each crown stops half a metre short of the building line.
 
-**The riverbanks.** A quay's land is lawn under its trees, laid cell by cell over the site's
-land (a quay's face holds water). The sea, the lagoons and the rivers share one level, 0.6 m
-under the ground; the river lay over the ground and met the harbour 0.6 m higher, a dark step
-between the two waters (the owner's second walk). The cells within a river's half width and
-three quarters of a cell of its centreline are drawn as water too, so no land cell juts into
-it. Along each bank a stone wall drops to 1.2 m under the ground, and a stone promenade 13 m
-wide follows the river over those cells; where a street runs by the river, the street lies over
-it. The promenade is laid on land only: where the river runs into the harbour it floated over
-the open water. Stone quay walls drop the same way wherever a land cell meets open water. The
-harbour's water itself is still a flat mirror: the island's FFT sea is the next step.
+**The riverbanks and the shore.** The site's water mask is 10 m cells, and drawn as cells every
+quay and beach was a staircase (the owner's plan view). The shore is now one smooth line
+(`city::shore::Shore`): the sea's and the lagoons' cells blurred over two cells (a 5-tap tent),
+the rivers measured from their centrelines, one wetness per sample whose half-way contour,
+bilinear between the samples, is the shore. The ground's squares the shore crosses are cut
+along it (marching squares; where two opposite corners are wet the water joins across), the
+rest drawn whole in runs. The map draws its water the same way, and its beaches 40 m from the
+sea by a chamfer distance field. Artificial edges (a quay wall, a building in the water) may
+keep straight, stepped lines later; the natural shore is smooth.
+
+The sea, the lagoons and the rivers share one level, 0.6 m under the ground; the river lay over
+the ground and met the harbour 0.6 m higher, a dark step between the two waters (the owner's
+second walk). For the ground the rivers' beds are widened by three quarters of a cell each side,
+so no land juts into them. Along each bank a stone wall drops to 1.2 m under the ground, and a
+stone promenade 13 m wide follows the river over the widened bed; where a street runs by the
+river, the street lies over it. The promenade is laid on land only: where the river runs into
+the harbour it floated over the open water. Stone quay walls drop the same way along the shore.
+A quay's land is lawn under its trees, the dry squares and pieces inside it. The harbour's
+water itself is still a flat mirror: the island's FFT sea is the next step.
 
 ## Trams on their timetables (#253)
 

@@ -30,6 +30,7 @@ pub mod graph;
 pub mod lamps;
 pub mod map;
 pub mod mass;
+pub mod shore;
 pub mod streets;
 pub mod tensor;
 pub mod transit;
