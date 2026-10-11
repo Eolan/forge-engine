@@ -33,6 +33,7 @@ fn main() -> anyhow::Result<()> {
     let plan = city::plan(&site, &params);
     let masses = mass::masses(&plan, &city::bible::StyleBible::default(), 11);
     let trees = city::trees::trees(&site, &plan, 5);
+    let lamps = city::lamps::lamps(&site, &plan);
     // Over the river south of the centre, looking north across it.
     let centre = params.centre;
     let camera = FlyCamera {
@@ -51,6 +52,7 @@ fn main() -> anyhow::Result<()> {
     } else {
         camera
     };
-    let scenario = city_plan::PlanScenario::new(&site, &plan, &masses, &trees, camera, "city plan");
+    let scenario =
+        city_plan::PlanScenario::new(&site, &plan, &masses, &trees, &lamps, camera, "city plan");
     city_blocks::run(cli.app, "forge city-plan", Some(Box::new(scenario)))
 }

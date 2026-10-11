@@ -35,6 +35,7 @@ cargo run --release -p city-map -- --size 4000 --scale 2 --out captures/city
 | Masses | each lot's building: the lot cut by the building line of each street it touches (half that street's profile width from its centreline), less the courtyard's hull (or a building's depth along its street where no courtyard fits); floors from the district's range, capped by the style bible's height-to-width ratio on the street it fronts; green, solar or terrace roofs | `city::mass` |
 | Style bible | one TOML record of the city's rules (height to street width, green roofs, green area per block, park and stop reach, the streets' share, per-district floors, lots, spacing and walls), put into the plan's parameters and measured by a checker that names what fails | `city::bible` |
 | Trees | rows along the streets by profile (two on avenues every 9 m, one on shared streets every 11 m, every 18 m in lanes), none within 10 m of a junction; a jittered grid in parks (13 m, two thirds filled), on the quays (14 m, under half) and in courtyards (16 m, half) | `city::trees` |
+| Lamps | along every street by profile (both sides of avenues every 28 m at 8 m, one side of shared streets every 30 m, lanes and paths lower), at the pavement's edge, none in junctions: where step 5's lights will stand | `city::lamps` |
 | Maps and numbers | a small rasteriser: the plan (with the districts', landmarks' and lines' names in the engine's font, kept from overlapping), a checks map (blocks by what they lack), an oblique massing view of any window; the plan's numbers and its digest | `city::map` |
 
 Everything is a pure function of the site and the parameters. Costs are integers in the
@@ -132,10 +133,11 @@ palette chosen by lot. Variety in the facades themselves comes with D-039's modu
 
 ![At eye height](images/city-plan-street.png)
 
-*At eye height on the river avenue (`--street`): buildings behind raised pavements with kerbs,
-shopfronts and shuttered window bays, a row of plane-like trees each side, tram tracks, the
-tree-lined quay and the river. Next at this height: street furniture, finer trees, the modules
-(#247).*
+*At eye height on the river avenue (`--street`), late afternoon and midnight: buildings behind raised
+pavements with kerbs, shopfronts and shuttered window bays, a row of plane-like trees each side,
+tram tracks, the tree-lined quay and the river; at night the shopfronts and windows glow (lamps
+stand along the streets, their heads in the crowns, and light nothing yet: step 5). Next at this
+height: finer trees, street furniture, the modules (#247).*
 
 ![Night, three ways](images/city-plan-night.png)
 

@@ -20,6 +20,7 @@ use forge_core::material::{RenderLayer, TextureId, UvMapping};
 use forge_geom::MeshletMesh;
 use forge_geom::city::PropSpec;
 use forge_geom::procedural::TriMesh;
+use forge_procgen::city::lamps::Lamp;
 use forge_procgen::city::mass::{FLOOR, GROUND_FLOOR, Mass, Roof};
 use forge_procgen::city::trees::Tree;
 use forge_procgen::city::{BlockUse, CityPlan, LAGOON, SEA, Site, geom};
@@ -153,6 +154,8 @@ pub struct PlanScenario {
     /// Each tree's place in the world, its scale (its height over the model's 10 m), its turn and
     /// which of the two models it uses.
     trees: Vec<(Vec3, f32, f32, usize)>,
+    /// Each lamp's place, scale (its height over the model's 8 m) and turn.
+    lamps: Vec<(Vec3, f32, f32)>,
     camera: FlyCamera,
     title: String,
     triangles: usize,
@@ -166,6 +169,7 @@ impl PlanScenario {
         plan: &CityPlan,
         masses: &[Mass],
         trees: &[Tree],
+        lamps: &[Lamp],
         camera: FlyCamera,
         title: &str,
     ) -> Self {
@@ -228,9 +232,17 @@ impl PlanScenario {
                 )
             })
             .collect();
+        let lamps = lamps
+            .iter()
+            .map(|l| {
+                let turn = (-l.facing.x).atan2(-l.facing.y) as f32;
+                (world(size, l.pos, 0.0), (l.height / 8.0) as f32, turn)
+            })
+            .collect();
         Self {
             tiles: tiles.tiles,
             trees,
+            lamps,
             camera,
             title: format!(
                 "{title}: {} masses, {} trees, {:.0} km of streets, {} tram stops",
@@ -565,6 +577,25 @@ impl Scenario for PlanScenario {
             ],
         );
         let tree_rows = [materials.of("plan-tree-a"), materials.of("plan-tree-b")];
+        // Lamp heads of about 3 000 cd/m², shielded LEDs at 2 700 K (the style bible's lighting).
+        let head = 3000.0 * std::f32::consts::PI / reference;
+        materials.add_rows(
+            "plan-lamp",
+            vec![
+                (
+                    "plan lamp pole".into(),
+                    colour([0.06, 0.09, 0.08], 40.0, 0.2),
+                ),
+                (
+                    "plan lamp head".into(),
+                    RenderLayer {
+                        emissive: [head, head * 0.78, head * 0.55],
+                        ..colour([0.8, 0.8, 0.78], 40.0, 0.2)
+                    },
+                ),
+            ],
+        );
+        let lamp_row = materials.of("plan-lamp");
         let ground_row = materials.of("plan-ground");
         let mass_row = materials.of("plan-mass");
         let mut builder = MeshletSceneBuilder::new();
@@ -594,11 +625,23 @@ impl Scenario for PlanScenario {
                 builder.add_instance_with_material(model, transform, tree_rows[kind]);
             }
         }
+        if !self.lamps.is_empty() {
+            let model = builder.add_mesh(&MeshletMesh::build(&lamp_model()));
+            for &(at, scale, turn) in &self.lamps {
+                let transform = Mat4::from_scale_rotation_translation(
+                    Vec3::splat(scale),
+                    glam::Quat::from_rotation_y(turn),
+                    at,
+                );
+                builder.add_instance_with_material(model, transform, lamp_row);
+            }
+        }
         let mut scene = builder.build(&ctx.device)?;
         scene.build_tlas(&ctx.device, &ctx.shaders)?;
         tracing::info!(
             meshes,
             trees = self.trees.len(),
+            lamps = self.lamps.len(),
             triangles = self.triangles,
             ms = start.elapsed().as_millis(),
             "the plan's scene"
@@ -832,4 +875,106 @@ fn pavements(tiles: &mut Tiles, plan: &CityPlan) {
             }
         }
     }
+}
+
+/// A street lamp 8 m tall: a hexagonal pole and an arm reaching 1.4 m along −z (section 0), and a
+/// lamp head under the arm's end (section 1, emissive).
+fn lamp_model() -> TriMesh {
+    let mut mesh = TriMesh::default();
+    let sides = 6;
+    for k in 0..sides {
+        let a = k as f32 / sides as f32 * std::f32::consts::TAU;
+        let b = (k + 1) as f32 / sides as f32 * std::f32::consts::TAU;
+        let (pa, pb) = (
+            Vec3::new(a.cos() * 0.07, 0.0, a.sin() * 0.07),
+            Vec3::new(b.cos() * 0.07, 0.0, b.sin() * 0.07),
+        );
+        let up = Vec3::Y * 8.0;
+        let out = ((pa + pb) * 0.5).normalize();
+        triangle(&mut mesh, [pa, pb, pb + up], out, 0);
+        triangle(&mut mesh, [pa, pb + up, pa + up], out, 0);
+    }
+    // A box from `lo` to `hi` in a section.
+    let boxed = |mesh: &mut TriMesh, lo: Vec3, hi: Vec3, section: u8| {
+        let c = |x: bool, y: bool, z: bool| {
+            Vec3::new(
+                if x { hi.x } else { lo.x },
+                if y { hi.y } else { lo.y },
+                if z { hi.z } else { lo.z },
+            )
+        };
+        let faces = [
+            (
+                Vec3::X,
+                [
+                    c(true, false, false),
+                    c(true, true, false),
+                    c(true, true, true),
+                    c(true, false, true),
+                ],
+            ),
+            (
+                -Vec3::X,
+                [
+                    c(false, false, false),
+                    c(false, false, true),
+                    c(false, true, true),
+                    c(false, true, false),
+                ],
+            ),
+            (
+                Vec3::Y,
+                [
+                    c(false, true, false),
+                    c(false, true, true),
+                    c(true, true, true),
+                    c(true, true, false),
+                ],
+            ),
+            (
+                -Vec3::Y,
+                [
+                    c(false, false, false),
+                    c(true, false, false),
+                    c(true, false, true),
+                    c(false, false, true),
+                ],
+            ),
+            (
+                Vec3::Z,
+                [
+                    c(false, false, true),
+                    c(true, false, true),
+                    c(true, true, true),
+                    c(false, true, true),
+                ],
+            ),
+            (
+                -Vec3::Z,
+                [
+                    c(false, false, false),
+                    c(false, true, false),
+                    c(true, true, false),
+                    c(true, false, false),
+                ],
+            ),
+        ];
+        for (n, q) in faces {
+            triangle(mesh, [q[0], q[1], q[2]], n, section);
+            triangle(mesh, [q[0], q[2], q[3]], n, section);
+        }
+    };
+    boxed(
+        &mut mesh,
+        Vec3::new(-0.04, 7.85, -1.45),
+        Vec3::new(0.04, 7.95, 0.0),
+        0,
+    );
+    boxed(
+        &mut mesh,
+        Vec3::new(-0.14, 7.70, -1.70),
+        Vec3::new(0.14, 7.85, -1.10),
+        1,
+    );
+    mesh
 }

@@ -26,6 +26,7 @@ pub mod blocks;
 pub mod example;
 pub mod geom;
 pub mod graph;
+pub mod lamps;
 pub mod map;
 pub mod mass;
 pub mod streets;
