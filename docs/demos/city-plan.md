@@ -193,7 +193,8 @@ Three stages, each generic:
   the tiles; openings repeat at a few sizes and are instanced.
 
 The engine's example style set is `crates/forge-procgen/src/city/mediterranean.rules`, about
-fifty lines. Each building picks its bay (2.8–3.4 m), its balconies and its shutters, and
+fifty lines. Each building picks its bay (2.8–3.4 m), its balconies, its shutters and whether its
+top floor is an attic storey of small windows, and
 neighbours differ.
 
 | The kit within 450 m of the avenue view (example city) | |

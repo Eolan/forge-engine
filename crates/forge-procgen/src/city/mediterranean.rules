@@ -11,6 +11,7 @@
 let bay = 2.8 | 3.0 | 3.2 | 3.4
 let balconies = 0 | 1 | 1 | 2
 let shutters = 0 | 1 | 1 | 1
+let attic = 0 | 0 | 1
 
 Facade [party] -> insert(blank)
 Facade -> split(y, level) { ground: Ground | {~floor: Floor}* | 0.9: Top }
@@ -44,11 +45,13 @@ LowColumn -> split(y) { 1.0: Wall | 2.2: LowWindow | ~1: Wall }
 LowWindow -> insert(window_low)
 
 # The upper floors: bays of French windows; balconies on the first floor of the street front,
+# and on the top floor too for some buildings, or an attic storey of small windows.
 # and on the top floor too for some buildings.
 Floor -> split(x, column) { ~0.5: Wall | {bay: Bay}* | ~0.5: Wall }
 Bay [court] -> split(x) { ~1: Wall | 1.0: CourtColumn | ~1: Wall }
 Bay [level.index == 0 && balconies >= 1] -> BalconyBay
 Bay [level.last && balconies >= 2] -> BalconyBay
+Bay [level.last && attic && level.count >= 3] -> split(x) { ~1: Wall | 1.0: AtticColumn | ~1: Wall }
 Bay -> split(x) { ~1: Wall | 1.2: WindowColumn | ~1: Wall }
 BalconyBay -> split(x) { ~1: Wall | 1.2: BalconyColumn | ~1: Wall }
 WindowColumn -> split(y) { 0.1: Wall | 2.5: Window | ~1: Wall }
@@ -60,5 +63,8 @@ BalconyColumn -> split(y) { 0.1: Wall | 2.5: Balcony | ~1: Wall }
 Balcony -> insert(balcony)
 CourtColumn -> split(y) { 0.9: Wall | 1.6: CourtWindow | ~1: Wall }
 CourtWindow -> insert(window_court)
+# An attic storey: small square windows high in the top floor, under the cornice.
+AtticColumn -> split(y) { ~1: Wall | 1.3: AtticWindow | 0.5: Wall }
+AtticWindow -> insert(window_court)
 
 Wall -> insert(wall)
