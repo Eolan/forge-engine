@@ -47,22 +47,31 @@ pub fn trees(site: &Site, plan: &CityPlan, seed: u64) -> Vec<Tree> {
         if e.bridge {
             continue;
         }
-        // Rows: offsets from the centreline and the spacing, by profile; and the trees' heights
-        // and crowns, which a street's width bounds: mature planes on the avenues, smaller
-        // trees on shared streets, small ones in the lanes, whose crowns must leave the
-        // facades in view.
-        let (rows, spacing, height, crown): (&[f64], f64, (f64, f64), (f64, f64)) = match e.profile
-        {
-            Profile::TramAvenue | Profile::Avenue => (&[-0.5, 0.5], 9.0, (11.0, 15.0), (3.5, 4.8)),
-            Profile::Shared => (&[0.5], 11.0, (7.0, 10.0), (2.4, 3.4)),
-            Profile::Pedestrian => (&[0.0], 18.0, (5.0, 7.0), (1.8, 2.5)),
-            Profile::Path => (&[], 0.0, (0.0, 0.0), (0.0, 0.0)),
-        };
+        // Rows: their offsets from the centreline and the spacing, by profile; and the trees'
+        // heights and crowns: mature planes on the avenues, smaller trees on shared streets,
+        // small ones in the lanes. An avenue's rows stand by the kerb, a metre into each
+        // pavement (the owner, 2026-10-11: 2.5 m from the facades their crowns went into the
+        // buildings); a shared street's and a lane's in their middle, off the walkers' lines.
         let half = e.profile.width() * 0.5;
+        let (rows, spacing, height, crown): (Vec<f64>, f64, (f64, f64), (f64, f64)) =
+            match e.profile {
+                Profile::TramAvenue | Profile::Avenue => {
+                    let pavement = if e.profile == Profile::TramAvenue {
+                        5.0
+                    } else {
+                        4.5
+                    };
+                    let kerb = (half - pavement + 1.0).max(0.0);
+                    (vec![-kerb, kerb], 9.0, (11.0, 15.0), (3.5, 4.8))
+                }
+                Profile::Shared => (vec![0.0], 11.0, (7.0, 10.0), (2.4, 3.4)),
+                Profile::Pedestrian => (vec![0.0], 18.0, (5.0, 7.0), (1.8, 2.5)),
+                Profile::Path => (Vec::new(), 0.0, (0.0, 0.0), (0.0, 0.0)),
+            };
         let length = e.length();
-        for &side in rows {
-            // Inside the pavement's edge: 2.5 m from the building line.
-            let offset = side * 2.0 * (half - 2.5).max(0.0);
+        for &offset in &rows {
+            // The crown stops half a metre short of the building line.
+            let room = (half - offset.abs() - 0.5).max(1.0);
             let mut s = spacing * 0.5;
             while s < length {
                 let p = geom::point_at(&e.points, s);
@@ -75,7 +84,7 @@ pub fn trees(site: &Site, plan: &CityPlan, seed: u64) -> Vec<Tree> {
                 out.push(Tree {
                     pos: q,
                     height: rng.range_f64(height.0, height.1),
-                    crown: rng.range_f64(crown.0, crown.1),
+                    crown: rng.range_f64(crown.0, crown.1).min(room),
                     setting: Setting::Street,
                 });
             }

@@ -34,7 +34,7 @@ cargo run --release -p city-map -- --size 4000 --scale 2 --out captures/city
 | Transit | tram lines by the shortest path through their waypoints, main roads preferred (a waypoint far from any main road snaps to the nearest street); stops every 450 m moved to nearby junctions; lines added until a target share of blocks has a stop within 400 m (`transit::cover`); boat crossings where a river runs long without a bridge; street profiles (tram avenue, avenue, shared, pedestrian, path) | `city::transit` |
 | Masses | each lot's building: strips of its district's building depth along each street the lot fronts (lots are cut inside the block's building lines, half each street's profile width from its centreline); floors from the district's range, capped by the style bible's height-to-width ratio on the street it fronts; green, solar or terrace roofs | `city::mass` |
 | Style bible | one TOML record of the city's rules (height to street width, green roofs, green area per block, park and stop reach, the streets' share, per-district floors, lots, spacing, building depth, tiled roofs and walls), put into the plan's parameters and measured by a checker that names what fails | `city::bible` |
-| Trees | rows along the streets by profile (two on avenues every 9 m, one on shared streets every 11 m, every 18 m in lanes), none within 10 m of a junction; a jittered grid in parks (13 m, two thirds filled), on the quays (14 m, under half) and in courtyards (16 m, half) | `city::trees` |
+| Trees | rows along the streets by profile (on avenues one a side by the kerb, a metre into the pavement, every 9 m; one down the middle of shared streets every 11 m and of lanes every 18 m), each crown stopping half a metre short of the building line, none within 10 m of a junction; a jittered grid in parks (13 m, two thirds filled), on the quays (14 m, under half) and in courtyards (16 m, half) | `city::trees` |
 | Lamps | along every street by profile (both sides of avenues every 28 m at 8 m, one side of shared streets every 30 m, lanes and paths lower), at the pavement's edge, none in junctions: where step 5's lights will stand | `city::lamps` |
 | Maps and numbers | a small rasteriser: the plan (with the districts', landmarks' and lines' names in the engine's font, kept from overlapping), a checks map (blocks by what they lack), an oblique massing view of any window; the plan's numbers and its digest | `city::map` |
 
@@ -253,6 +253,11 @@ across and its height up. The one model is a trunk forking into three limbs unde
 of seven smooth lumps (about 620 triangles), so the crowns no longer hide the facades from
 the pavement.
 
+The rows stood 2.5 m from the building lines, and their crowns went into the facades (the
+owner's first walk, 2026-10-11). An avenue's trees now stand by the kerb, a metre into the
+pavement, and shared streets and lanes have theirs down the middle, off the walkers' lines.
+Each crown stops half a metre short of the building line.
+
 **The riverbanks.** A quay's land is lawn under its trees, laid cell by cell over the site's
 land (a quay's face holds water). Along each bank a stone promenade 8 m wide follows the river;
 where a street runs by the river, the street lies over it.
@@ -426,6 +431,15 @@ The drawn crowd runs on the real
 clock, a game second a second: at the game's four, its walkers would cross the screen at
 5 m/s, and how the two clocks meet near the player is D-059's open question. #251's humans
 replace the figures.
+
+**What a frame costs.**
+- A scan of the population over 30 frames keeps who may be drawn round the camera (the
+  reach plus 300 m) and who is at each place. Each frame draws from the last whole scan.
+- Walking the million every frame took 77 ms on the CPU, about 15 frames a second (the
+  owner's first walk). A street view with people now takes 2.3 ms a frame.
+- The figures' slots change hands from frame to frame: a walker's pose is another mesh every
+  0.7 m, and people come and go. So the figures get no motion of their own, only the
+  camera's (`set_movers_still`); TAA smeared them along the swaps.
 
 ## Walking the streets (D-059's step 4)
 
