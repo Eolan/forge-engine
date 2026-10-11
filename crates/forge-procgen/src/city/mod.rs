@@ -37,6 +37,7 @@ pub mod structure;
 pub mod tensor;
 pub mod transit;
 pub mod trees;
+pub mod units;
 
 use std::time::Instant;
 

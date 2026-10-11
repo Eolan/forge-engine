@@ -399,8 +399,47 @@ kit reading the walls, collision, interiors, destruction):
     before);
   - the structure in 2.25 s (2.08 s before).
 
-Next in step 3: the flats on each landing, the reach check up the stairs to every flat, the
-population by flat, then the rooms behind the windows and going inside.
+### Flats and shops (D-060, step 3)
+
+`city::units` cuts each storey into units round its cores, the French way, two to four homes a
+landing:
+
+- **Territories.** Each core serves the floor nearer to it than to any other core, cut by the
+  bisectors between their middles. Cores on a corner's two walls share the floor too.
+- **The landing.** Behind the core a lobby 1.40 m deep continues the hall, and the doors open
+  there:
+  - on each side of the core, a flat runs through from the street to the court, with two
+    aspects;
+  - behind the lobby, where the building is deep enough (25 m² or more), a smaller flat looks
+    onto the court;
+  - a side too big for one flat (over 110 m² net) gets a corridor continuing the lobby, with
+    single-aspect flats either side, drawn from the French mix of new homes (T1 10 %, T2 25 %,
+    T3 38 %, T4 22 %, T5 5 % at 30, 46, 66, 86 and 100 m²) and 3.6 m wide at least;
+  - a narrow house's compact core serves one flat a storey;
+  - a unit under 25 m² joins its nearest neighbour.
+- **Uses.** A lively ground storey holds shops, entered from the street. A unit with no window on
+  its storey is a store room. A home's main rooms follow its net area (under 40 m² a T1, 56 a
+  T2, 76 a T3, 93 a T4, then T5).
+- **Checks:**
+  - **Areas** (`every_floor_is_cut_into_homes_that_add_up_and_open_on_a_landing`): the units and
+    landings add up to the net area within 5 % in all 12 610 masses with storeys. 19 of 229 174
+    homes have their door more than 0.6 m from their landing.
+  - **The walk** (`people_reach_every_home_from_the_street_by_stairs_and_lift`): people go from
+    the street, on foot to the core's door (the reach check), up its stairs, and from R+3 by
+    lift, to every home's door. None is stranded. 5 424 homes sit in small wings reached
+    through their building's other mass.
+- **The example:** 229 174 homes, 98 277 of them through flats; T1 16 %, T2 31 %, T3 26 %, T4
+  13 %, T5 13 %. There are more large flats than in the new-build mix: the centres' and the
+  waterfront's 14–16 m deep buildings make big through flats, as 1800s blocks have. Also 8 955
+  shops and 4 634 store rooms.
+- **The sandbox:** 673 593 homes, 38 % of them through flats; T1 16 %, T2 34 %, T3 25 %, T4
+  13 %, T5 12 %. Also 19 640 shops and 25 374 store rooms. The structure takes 2.9 s with the
+  units (2.25 s without).
+
+Next in step 3: which upper floors are offices and which homes, so the population counts by
+home (673 593 homes at the French 2.2 people a household would be 1.48 M; the net-area count
+says 977 k with a third of the floors not homes). Then the rooms behind the windows, lit by
+their residents, and going inside.
 
 ## Trams on their timetables (#253)
 

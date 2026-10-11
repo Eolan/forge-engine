@@ -16,6 +16,7 @@ use glam::DVec2;
 use super::cores::{self, Core};
 use super::facades::{FaceKind, edge_kinds};
 use super::mass::Mass;
+use super::units::{self, Landing, Unit};
 use super::{CityPlan, DistrictKind, geom};
 
 /// How a building is built: its walls', slabs' and storeys' era.
@@ -265,6 +266,10 @@ pub struct Structure {
     /// Its stair cores ([`super::cores`]): none on one storey, or in a small wing reached from
     /// its building's other mass.
     pub cores: Vec<Core>,
+    /// Its flats, shops and store rooms, storey by storey ([`super::units`]).
+    pub units: Vec<Unit>,
+    /// Its storeys' lobbies and corridors, where the flats' doors open.
+    pub landings: Vec<Landing>,
     /// Its gross floor area, to the walls' outer faces, m².
     pub gross: f64,
     /// Its net floor area: inside the walls, less the cores, partitions and shafts, m².
@@ -381,6 +386,19 @@ pub fn structures(plan: &CityPlan, masses: &[Mass]) -> Vec<Structure> {
             s.cores.retain(|c| c.door != k);
         }
     }
+    // The flats round the cores, once the doors and the passages are settled, and the net area
+    // again (a dropped core gave its floor back).
+    for (i, s) in out.iter_mut().enumerate() {
+        let m = &masses[i];
+        let thickness: Vec<f64> = s.walls.iter().map(|w| w.thickness).collect();
+        let inside = floor(m, &thickness);
+        (s.gross, s.net) = areas(m, s.era, &s.walls, inside.as_deref(), &s.cores);
+        if let Some(f) = &inside {
+            let seed = (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            let (u, l) = units::units(m, s, f, s.era.table().partitions, seed);
+            (s.units, s.landings) = (u, l);
+        }
+    }
     out
 }
 
@@ -452,6 +470,8 @@ fn structure(
         walls,
         openings,
         cores,
+        units: Vec::new(),
+        landings: Vec::new(),
         gross,
         net,
     }
