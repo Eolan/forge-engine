@@ -33,7 +33,7 @@ cargo run --release -p city-map -- --size 4000 --scale 2 --out captures/city
 | Forest | ground above a height or steeper than a slope goes to the first reserve district (a real site's hills) | `city::district_field` |
 | Transit | tram lines by the shortest path through their waypoints, main roads preferred (a waypoint far from any main road snaps to the nearest street); stops every 450 m moved to nearby junctions; lines added until a target share of blocks has a stop within 400 m (`transit::cover`); boat crossings where a river runs long without a bridge; street profiles (tram avenue, avenue, shared, pedestrian, path) | `city::transit` |
 | Masses | each lot's building: the lot cut by the building line of each street it touches, less the courtyard's hull (or a building's depth along its street where no courtyard fits); floors from the district's range, capped by the street's profile; green, solar or terrace roofs | `city::mass` |
-| Maps and numbers | a small rasteriser: the plan, a checks map (blocks by what they lack), an oblique massing view of any window; the plan's numbers and its digest | `city::map` |
+| Maps and numbers | a small rasteriser: the plan (with the districts', landmarks' and lines' names in the engine's font, kept from overlapping), a checks map (blocks by what they lack), an oblique massing view of any window; the plan's numbers and its digest | `city::map` |
 
 Everything is a pure function of the site and the parameters. Costs are integers in the
 router, and `forge_core::dmath` does the trigonometry. Two runs give the same digest (D-016).
@@ -109,6 +109,6 @@ from the site's cells. A private sandbox hands its own plan to `PlanScenario::ne
 
 - Building lines per street profile.
 - Squares at the radial districts' centres; the landmarks' sightlines.
-- More checks on the checks map; a legend and labels.
+- More checks on the checks map; a legend.
 - The style bible as data (#246).
 - Then buildings from the grammar (D-039, #247).

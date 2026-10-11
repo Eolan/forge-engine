@@ -255,6 +255,18 @@ pub fn write(
     path: &Path,
     metres_per_pixel: f64,
 ) -> image::ImageResult<()> {
+    write_labelled(site, plan, path, metres_per_pixel, &[], None)
+}
+
+/// [`write`] with names drawn over the map in `font` (a TTF's bytes; none without one).
+pub fn write_labelled(
+    site: &Site,
+    plan: &CityPlan,
+    path: &Path,
+    metres_per_pixel: f64,
+    labels: &[Label],
+    font: Option<&[u8]>,
+) -> image::ImageResult<()> {
     let mut canvas = Canvas::new(plan.size, metres_per_pixel);
     let s = metres_per_pixel;
     paint_blocks(&mut canvas, plan);
@@ -317,7 +329,146 @@ pub fn write(
         ];
         canvas.fill(&diamond, [196, 30, 40]);
     }
+    if let Some(font) = font.and_then(|bytes| ab_glyph::FontRef::try_from_slice(bytes).ok()) {
+        let mut placed: Vec<[f32; 4]> = Vec::new();
+        for label in labels {
+            canvas.text(&font, label, &mut placed);
+        }
+    }
     canvas.save(path)
+}
+
+/// A name drawn on a map, centred on its place.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Label {
+    /// Its place, metres on the plan.
+    pub pos: DVec2,
+    /// What it says.
+    pub text: String,
+    /// Its height, pixels.
+    pub px: f32,
+    /// Its colour.
+    pub colour: [u8; 3],
+}
+
+/// The plan's own names: its districts at their anchors (those on land in the frame), its
+/// landmarks beside their marks, and each tram line at its first stop.
+pub fn labels(plan: &CityPlan) -> Vec<Label> {
+    let mut out = Vec::new();
+    for d in &plan.districts {
+        let inside = d.anchor.min_element() >= 0.0 && d.anchor.max_element() <= plan.size;
+        if inside
+            && plan
+                .district_at(d.anchor)
+                .is_some_and(|at| at.name == d.name)
+        {
+            out.push(Label {
+                pos: d.anchor,
+                text: d.name.clone(),
+                px: 30.0,
+                colour: [60, 50, 44],
+            });
+        }
+    }
+    for l in &plan.landmarks {
+        out.push(Label {
+            pos: l.pos + DVec2::new(0.0, 90.0),
+            text: l.name.clone(),
+            px: 24.0,
+            colour: [150, 20, 30],
+        });
+    }
+    for line in &plan.tram_lines {
+        if let Some(&first) = line.stops.first() {
+            out.push(Label {
+                pos: first + DVec2::new(0.0, -60.0),
+                text: line.name.clone(),
+                px: 20.0,
+                colour: line.colour,
+            });
+        }
+    }
+    out
+}
+
+impl Canvas {
+    /// Blends `c` into a pixel by `coverage`.
+    fn blend(&mut self, x: i64, y: i64, c: [u8; 3], coverage: f32) {
+        if x < 0 || y < 0 || x as u32 >= self.side || y as u32 >= self.side {
+            return;
+        }
+        let p = &mut self.pixels[y as usize * self.side as usize + x as usize];
+        for k in 0..3 {
+            let a = f32::from(p[k]);
+            p[k] = (a + (f32::from(c[k]) - a) * coverage.clamp(0.0, 1.0)).round() as u8;
+        }
+    }
+
+    /// A label centred on its place, over a white halo. One that would overlap a label already
+    /// drawn (`placed`, pixel boxes) moves down a line, up to three times, or is left out.
+    fn text(&mut self, font: &ab_glyph::FontRef, label: &Label, placed: &mut Vec<[f32; 4]>) {
+        use ab_glyph::{Font, PxScale, ScaleFont, point};
+        let units_per_em = font.units_per_em().unwrap_or(1000.0);
+        let scale = PxScale::from(label.px * font.height_unscaled() / units_per_em);
+        let scaled = font.as_scaled(scale);
+        let width: f32 = label
+            .text
+            .chars()
+            .map(|c| scaled.h_advance(scaled.glyph_id(c)))
+            .sum();
+        let centre = (label.pos - self.origin) / self.metres_per_pixel;
+        let left = centre.x as f32 - width * 0.5;
+        let height = scaled.height();
+        let mut top = centre.y as f32 - height * 0.5;
+        let overlaps = |top: f32, placed: &[[f32; 4]]| {
+            placed
+                .iter()
+                .any(|b| left < b[2] && left + width > b[0] && top < b[3] && top + height > b[1])
+        };
+        let mut tries = 0;
+        while overlaps(top, placed) {
+            tries += 1;
+            if tries > 3 {
+                return;
+            }
+            top += height;
+        }
+        placed.push([left, top, left + width, top + height]);
+        let mut coverage = Vec::new();
+        let mut x = left;
+        for c in label.text.chars() {
+            let mut glyph = scaled.scaled_glyph(c);
+            glyph.position = point(x, top + scaled.ascent());
+            x += scaled.h_advance(glyph.id);
+            if let Some(outlined) = font.outline_glyph(glyph) {
+                let bounds = outlined.px_bounds();
+                outlined.draw(|gx, gy, v| {
+                    coverage.push((
+                        bounds.min.x as i64 + i64::from(gx),
+                        bounds.min.y as i64 + i64::from(gy),
+                        v,
+                    ));
+                });
+            }
+        }
+        for &(px, py, v) in &coverage {
+            for (dx, dy) in [
+                (-2, 0),
+                (2, 0),
+                (0, -2),
+                (0, 2),
+                (-1, -1),
+                (1, 1),
+                (-1, 1),
+                (1, -1),
+            ] {
+                self.blend(px + dx, py + dy, [255, 255, 255], v * 0.85);
+            }
+        }
+        for &(px, py, v) in &coverage {
+            self.blend(px, py, label.colour, v);
+        }
+    }
 }
 
 /// Water and beaches from the site's mask, over the blocks (a quay's face holds its river).

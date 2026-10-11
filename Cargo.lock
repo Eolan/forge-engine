@@ -775,6 +775,7 @@ dependencies = [
 name = "forge-procgen"
 version = "0.1.0"
 dependencies = [
+ "ab_glyph",
  "forge-core",
  "forge-task",
  "glam",

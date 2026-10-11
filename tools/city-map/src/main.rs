@@ -44,7 +44,10 @@ fn main() -> Result<()> {
     println!("{:#?}", plan.stats);
     let path = args.out.join("plan.png");
     let t = Instant::now();
-    city::map::write(&site, &plan, &path, args.scale).context("writing the map")?;
+    let font = std::fs::read("assets/fonts/jetbrains-mono/JetBrainsMono-Variable.ttf").ok();
+    let labels = city::map::labels(&plan);
+    city::map::write_labelled(&site, &plan, &path, args.scale, &labels, font.as_deref())
+        .context("writing the map")?;
     println!(
         "map: {} in {:.0} ms",
         path.display(),

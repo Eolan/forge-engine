@@ -16,3 +16,4 @@ serde = { workspace = true }
 forge-task = { workspace = true }
 glam = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png"] }
+ab_glyph = { workspace = true }
