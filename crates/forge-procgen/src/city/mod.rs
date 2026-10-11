@@ -337,6 +337,8 @@ pub enum LandmarkKind {
     TerracedHall,
     /// A shipyard gantry crane kept as a landmark, its jib over the water.
     GantryCrane,
+    /// A belvedere's domed pavilion, open on every side to the view.
+    Pavilion,
     /// Anything else: placed, not drawn yet.
     #[default]
     Other,

@@ -399,6 +399,84 @@ pub fn gantry_crane(span: f32, height: f32) -> TriMesh {
     m
 }
 
+/// A belvedere's pavilion, `radius` metres round the origin: a stepped octagonal platform, eight
+/// stone columns carrying a ring of entablature, and a dome of eight ribbed segments over it, a
+/// lantern on top; open on every side to the view.
+pub fn pavilion(radius: f32) -> TriMesh {
+    use std::f32::consts::TAU;
+    let mut m = TriMesh::default();
+    let sides = 8;
+    let corner = |r: f32, k: u32, y: f32| {
+        let a = (k as f32 + 0.5) / sides as f32 * TAU;
+        Vec3::new(a.cos() * r, y, a.sin() * r)
+    };
+    // The platform: two octagonal steps.
+    for (r, y0, y1) in [(radius + 1.2, 0.0, 0.3), (radius + 0.6, 0.3, 0.6)] {
+        for k in 0..sides {
+            let (a, b) = (corner(r, k, y0), corner(r, k + 1, y0));
+            let (c, d) = (corner(r, k + 1, y1), corner(r, k, y1));
+            quad(&mut m, [b, a, d, c], STONE);
+            quad(
+                &mut m,
+                [Vec3::new(0.0, y1, 0.0), c, d, Vec3::new(0.0, y1, 0.0)],
+                STONE,
+            );
+        }
+    }
+    // The columns at the corners.
+    let (base, top) = (0.6, 4.6);
+    for k in 0..sides {
+        let c = corner(radius, k, 0.0);
+        cuboid(
+            &mut m,
+            Vec3::new(c.x - 0.22, base, c.z - 0.22),
+            Vec3::new(c.x + 0.22, top, c.z + 0.22),
+            STONE,
+            ALL & !NEG_Y & !POS_Y,
+        );
+        cuboid(
+            &mut m,
+            Vec3::new(c.x - 0.32, top, c.z - 0.32),
+            Vec3::new(c.x + 0.32, top + 0.2, c.z + 0.32),
+            STONE,
+            ALL,
+        );
+    }
+    // The entablature: an octagonal ring, faced outside and in, its underside.
+    let (e0, e1) = (top + 0.2, top + 0.9);
+    let (ro, ri) = (radius + 0.45, radius - 0.45);
+    for k in 0..sides {
+        let (a, b) = (corner(ro, k, e0), corner(ro, k + 1, e0));
+        quad(&mut m, [b, a, a.with_y(e1), b.with_y(e1)], STONE);
+        let (c, d) = (corner(ri, k, e0), corner(ri, k + 1, e0));
+        quad(&mut m, [c, d, d.with_y(e1), c.with_y(e1)], STONE);
+        quad(&mut m, [a, b, d, c], STONE);
+    }
+    // The dome: segments from the ring to the crown, curved in six steps, then the lantern.
+    let crown = e1 + radius * 0.8;
+    let ring = |t: f32, k: u32| {
+        let r = ro * (1.0 - t * t).sqrt().max(0.05);
+        corner(r, k, e1 + (crown - e1) * t)
+    };
+    let steps = 6;
+    for k in 0..sides {
+        for s in 0..steps {
+            let (t0, t1) = (s as f32 / steps as f32, (s + 1) as f32 / steps as f32);
+            let p = [ring(t0, k), ring(t0, k + 1), ring(t1, k + 1), ring(t1, k)];
+            quad(&mut m, [p[1], p[0], p[3], p[2]], METAL);
+            quad(&mut m, p, METAL);
+        }
+    }
+    cuboid(
+        &mut m,
+        Vec3::new(-0.4, crown - 0.1, -0.4),
+        Vec3::new(0.4, crown + 1.0, 0.4),
+        GLASS,
+        ALL,
+    );
+    m
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -409,6 +487,7 @@ mod tests {
         for (m, half, top) in [
             (terraced_hall(60.0, 24.0), Vec3::new(30.5, 0.0, 12.5), 20.0),
             (gantry_crane(30.0, 32.0), Vec3::new(28.0, 0.0, 17.5), 47.0),
+            (pavilion(5.0), Vec3::new(6.3, 0.0, 6.3), 11.0),
         ] {
             assert!(m.triangle_count() > 100);
             assert!(m.sections.iter().all(|&s| s < SECTIONS));

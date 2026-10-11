@@ -258,6 +258,14 @@ impl PlanScenario {
                 BlockUse::Quay => continue,
             };
             tiles.flat(&block.polygon, 0.08, section, false);
+            // A large square (1.5 ha or more): a lawn in its middle, 14 m inside its building
+            // lines, its paved border under the trees and the benches.
+            if block.use_ == BlockUse::Square
+                && block.area >= 15_000.0
+                && let Some(middle) = geom::inset(&block.buildable, 14.0)
+            {
+                tiles.flat(&middle, 0.10, PARK, false);
+            }
         }
         // The quays' land as lawns, cell by cell (their faces hold water), under the trees.
         for block in plan.blocks.iter().filter(|b| b.use_ == BlockUse::Quay) {
@@ -430,6 +438,11 @@ impl PlanScenario {
                     forge_geom::landmarks::gantry_crane(28.0, 30.0),
                     CRANE_GROUP,
                     seaward,
+                ),
+                LandmarkKind::Pavilion => (
+                    forge_geom::landmarks::pavilion((b.area.sqrt() / 14.0).clamp(5.0, 9.0) as f32),
+                    HALL_GROUP,
+                    axis,
                 ),
                 LandmarkKind::Other => continue,
             };
