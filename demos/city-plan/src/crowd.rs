@@ -288,13 +288,19 @@ impl Crowd {
                 k as u32,
             );
         }
+        // Homes and jobs from each building's net floor area (D-060).
+        let nets: Vec<f64> = forge_procgen::city::structure::structures(plan, masses)
+            .iter()
+            .map(|s| s.net)
+            .collect();
         let buildings: Vec<Building> = masses
             .iter()
-            .map(|m| {
+            .zip(&nets)
+            .map(|(m, &net)| {
                 let c = geom::centroid(&m.footprint);
                 Building {
                     pos: [c.x as f32, c.y as f32],
-                    floor_area: (geom::signed_area(&m.footprint) * f64::from(m.floors)) as f32,
+                    floor_area: net as f32,
                     active_ground: m.lively(),
                     appeal: if m.open { 1.0 } else { 0.0 },
                 }

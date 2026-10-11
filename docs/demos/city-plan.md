@@ -299,6 +299,50 @@ the harbour it floated over the open water. Stone quay walls drop the same way a
 A quay's land is lawn under its trees, the dry squares and pieces inside it. The harbour's
 water itself is still a flat mirror: the island's FFT sea is the next step.
 
+## Buildings carry their structure (D-060, step 1: #264)
+
+`city::structure` gives every mass its structure, as data the next steps build on (the façade
+kit reading the walls, collision, interiors, destruction):
+
+- **Eras.** Each district's buildings have an era, with the research note's dimensions
+  (`docs/research/building-structure.md` §5): old stone (the old towns and villages), the 1800s
+  (the centres and seafronts), modern (the rest).
+
+  | Metres | Old stone | 1800s | Modern |
+  |---|---|---|---|
+  | Façade / party (shared) / rear wall | 0.60 / 0.50 / 0.45 | 0.45 / 0.40 / 0.30 | 0.35 / 0.20 / 0.35 |
+  | Slab | 0.30 | 0.30 | 0.27 |
+  | Ground storey, shops / homes | 3.6 / 3.6 | 4.2 / 4.2 | 4.2 / 3.0 |
+  | Upper storeys | 3.2, 3.1, 3.0, then 2.9 | a noble 3.4, 3.1, 2.9, an attic of 2.8 | 2.8 |
+  | Window bay / window | 3.3 / 1.0 | 3.0 / 1.2 | 2.7 / 1.4 |
+
+- **Storeys.** A mass's storeys come from its era, and its height is their sum (`Mass::storeys`):
+  the street's ratio caps how many fit (`StyleBible::max_floors`). The grammar's `ground` and
+  `floor` follow each mass. A modern block now fits more storeys of 2.8 m under the same
+  height: in the sandbox's city the floors went from 67.5 to 77.5 km² gross.
+- **Walls.** Each footprint edge is a wall with its thickness inwards and its role (street,
+  court, party, inside the building). It is probed every 0.5 m, 0.75 m out (another mass) and
+  2.5 m out (another building that close leaves a slit), and each storey keeps the stretches
+  nothing stands against: a lower neighbour covers only the storeys below its roof.
+- **Openings** go on those stretches only, bays centred and kept 0.6 m off the ends, so they line
+  up storey over storey and no window is cut by a neighbour (the owner: "not realistic at
+  all"). Shopfronts on lively ground floors, windows elsewhere, each building's door (1.2 m,
+  step-free) in the middle of its longest street stretch.
+- **Courts.** A passage of 3.0 by 3.6 m runs through one building of each block whose court no
+  gap reaches, on its street and court walls (the owner: a door into every inner court). The
+  sandbox: 2 081 of 2 087 courts reached, 217 by a passage.
+- **Areas.** Gross to the outer faces; net inside the walls (a party wall counts half), less the
+  stairs (12, 24 with the 1800s' service stairs, 18 m² a storey) and a lift from four storeys
+  (4.5 m²) in each building's largest mass, less the partitions and flues (5–8 %). Net over gross
+  on the example: modern 0.828, the 1800s 0.809, old stone 0.722 (the note: about 0.82 modern,
+  0.70–0.75 old stone).
+- **The population** counts homes from net area at INSEE's 32.4 m² a person, jobs at 25 m²: the
+  sandbox's city houses 1 301 827 people (1 048 538 before).
+- **Cost:** 0.36 s for the example's masses, 0.62 s for the sandbox's 39 048 (3.4 M openings).
+
+Not yet: the kit still dresses the faces by the grammar, not by these openings (step 2), and the
+far boxes still repeat their texture.
+
 ## Trams on their timetables (#253)
 
 ```

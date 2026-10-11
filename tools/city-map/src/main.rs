@@ -68,15 +68,16 @@ fn main() -> Result<()> {
     let t = Instant::now();
     let bible = city::bible::StyleBible::default();
     let masses = city::mass::masses(&plan, &bible, 11);
-    let floor_area: f64 = masses
-        .iter()
-        .map(|m| city::geom::signed_area(&m.footprint) * f64::from(m.floors))
-        .sum();
+    let structures = city::structure::structures(&plan, &masses);
+    let gross: f64 = structures.iter().map(|s| s.gross).sum();
+    let net: f64 = structures.iter().map(|s| s.net).sum();
     println!(
-        "masses: {} in {:.0} ms, {:.1} km² of floors",
+        "masses: {} and their structure in {:.0} ms, {:.1} km² of floors gross, {:.1} net ({:.2})",
         masses.len(),
         t.elapsed().as_secs_f64() * 1e3,
-        floor_area / 1e6
+        gross / 1e6,
+        net / 1e6,
+        net / gross
     );
     for r in city::bible::check(&plan, &masses, &bible) {
         println!(

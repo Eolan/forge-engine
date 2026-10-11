@@ -32,6 +32,7 @@ pub mod map;
 pub mod mass;
 pub mod shore;
 pub mod streets;
+pub mod structure;
 pub mod tensor;
 pub mod transit;
 pub mod trees;

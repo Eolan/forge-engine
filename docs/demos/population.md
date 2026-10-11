@@ -12,7 +12,7 @@ cargo run --release -p population-bench -- --days 2
 
 | Part | How |
 |---|---|
-| Places | from a city plan's masses: homes and jobs by floor area (two thirds homes at 40 m² a person, jobs at 30 m²), a school in every 120 buildings, active ground floors (on the avenues and the lanes, and facing a square, a park or a quay: `Mass::lively`) as shops, cafés and bars in turn, the parks (`places_from_buildings`) |
+| Places | from a city plan's masses: homes and jobs by their net floor area (`city::structure`, D-060: two thirds homes at INSEE's 32.4 m² net a person, jobs at 25 m² net; it was 40 and 30 m² gross), a school in every 120 buildings, active ground floors (on the avenues and the lanes, and facing a square, a park or a quay: `Mass::lively`) as shops, cafés and bars in turn, the parks (`places_from_buildings`) |
 | People | everyone the homes hold; roles by a mix (45 % day workers, 3 % night workers, 9 % students, 15 % children, 28 % retired or at home); five personality traits of four bits; work at a distance drawn from a log-normal (median 6 km, σ 0.8) in a random direction, drawn again when it falls outside the city, so that an 8 km city by the sea commutes a median 3.3 km straight, 23 % under 2 km, near French dense centres' (`docs/research/trip-distances.md`); school the nearest (`generate`) |
 | Records | a structure of arrays, 36 bytes a person: home, anchor, role, personality, seed, where (a place or a trip, its origin and destination), since when, day, step |
 | Days | never stored: each person's plan for a day is made again from their seed, role, personality and the day's number whenever an event needs it; weekdays and weekends differ; the conscientious rise earlier, the extraverted go out more and later; an afternoon out goes mostly to the cafés and tea rooms, the shops and the pubs, a park now and then (the parks took everyone out before; the owner, 2026-10-11) |
@@ -23,14 +23,14 @@ cargo run --release -p population-bench -- --days 2
 
 | | |
 |---|---|
-| Places | 28 520 |
-| People | 307 283, 36 bytes each (11.1 MB) |
+| Places | 28 518 |
+| People | 348 999, 36 bytes each (12.6 MB): 307 283 before net areas and the storeys by era |
 | Generation | 0.3 s |
-| Events | 6.7 a person a day; 1.7 µs each (an outing weighs 32 places and more: see "Outings") |
-| Two game days | 7.0 s |
-| A game hour of 20 real minutes asks | 71 events a real second: 0.012 % of one core |
-| Six workers (`population::Shards`) | the two days in 1.35 s, 5.1 times one, the same digest to the bit |
-| A snapshot (`Sim::snapshot`, `Sim::restore`) | 7.1 MB, 23 bytes a person, saved in 2 ms, restored in 9 ms, the same digest |
+| Events | 6.7 a person a day; 1.65 µs each (an outing weighs 32 places and more: see "Outings") |
+| Two game days | 7.7 s |
+| A game hour of 20 real minutes asks | 81 events a real second: 0.013 % of one core |
+| Six workers (`population::Shards`) | the two days in 1.51 s, 5.1 times one, the same digest to the bit |
+| A snapshot (`Sim::snapshot`, `Sim::restore`) | 8.0 MB, 23 bytes a person, saved in 2 ms, restored in 8 ms, the same digest |
 
 Where everyone is, by game hour (weekday, %):
 
@@ -79,11 +79,11 @@ default mix without its 15 % of children, the other roles scaled to fill their p
 
 | | One worker | Six workers |
 |---|---|---|
-| The example, 307 283 people, two days | 7.0 s | 1.35 s (5.1 times) |
-| A million-person city (the private sandbox's, 1 048 538 people), two days | 29.3 s | not measured since the outings changed |
-| 4 226 650 people (`population-bench --scale 13.5`: the example's floors 13.5 times over), two days | 108.6 s | 22.6 s (4.8 times) |
+| The example, 348 999 people, two days | 7.7 s | 1.51 s (5.1 times) |
+| The private sandbox's city, 1 301 827 people (1 048 538 before net areas and the storeys by era), two days | 36.1 s | 6.7 s (5.3 times) |
+| 4 226 650 people (`population-bench --scale 13.5`: the example's floors 13.5 times over, before net areas), two days | 108.6 s | 22.6 s (4.8 times) |
 
-The million needs 37.7 MB, 250 events a real second at one game hour per 20 minutes, and 0.05 %
+The sandbox's 1.3 M need 46.9 MB, 311 events a real second at one game hour per 20 minutes, and 0.06 %
 of one core. That is #250's first test, with the digests equal at one and six workers. At 4 M:
 152.2 MB, generated in 4 s (on one thread), 982 events a real second, 0.19 % of one core; the
 same digest at six workers.

@@ -111,11 +111,21 @@ impl StyleBible {
         params.stop_target = self.stop_target;
     }
 
-    /// The most floors a building may have on a street `width` metres wide.
-    pub fn max_floors(&self, width: f64) -> u8 {
+    /// The most floors a building of `era` (with shops on its ground floor or not) may have on a
+    /// street `width` metres wide: as many of its storeys as fit under the height the ratio
+    /// allows.
+    pub fn max_floors(&self, width: f64, era: super::structure::Era, shops: bool) -> u8 {
         let height = self.height_to_width * width;
-        let floors = ((height - super::mass::GROUND_FLOOR) / super::mass::FLOOR).floor() + 1.0;
-        floors.clamp(1.0, 60.0) as u8
+        let storeys = era.storeys(60, shops);
+        let mut top = 0.0;
+        let fits = storeys
+            .iter()
+            .take_while(|&&h| {
+                top += h;
+                top <= height + 1e-9
+            })
+            .count();
+        fits.clamp(1, 60) as u8
     }
 }
 

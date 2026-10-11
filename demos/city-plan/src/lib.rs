@@ -23,7 +23,7 @@ use forge_geom::procedural::TriMesh;
 use forge_geom::{modules, vehicles};
 use forge_procgen::city::facades::{self, FaceKind};
 use forge_procgen::city::lamps::Lamp;
-use forge_procgen::city::mass::{FLOOR, GROUND_FLOOR, Mass, Roof};
+use forge_procgen::city::mass::{Mass, Roof};
 use forge_procgen::city::shore::Shore;
 use forge_procgen::city::trees::Tree;
 use forge_procgen::city::{BlockUse, CityPlan, LAGOON, SEA, Site, geom};
@@ -1572,7 +1572,7 @@ fn mass(tiles: &mut Tiles, m: &Mass, edges: &[Option<FaceKind>]) {
     let tint = tint_of(m.lot);
     // Shops along avenues and in pedestrian lanes.
     let shops = m.lively();
-    let ground = GROUND_FLOOR as f32;
+    let ground = m.ground() as f32;
     let top = m.height as f32;
     for i in 0..n {
         let (a, b) = (m.footprint[i], m.footprint[(i + 1) % n]);
@@ -1602,7 +1602,7 @@ fn mass(tiles: &mut Tiles, m: &Mass, edges: &[Option<FaceKind>]) {
                 ends,
                 length,
                 band,
-                FLOOR as f32,
+                m.upper() as f32,
                 cells,
                 out,
                 WALL + tint,

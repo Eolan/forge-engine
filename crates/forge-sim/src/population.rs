@@ -86,7 +86,8 @@ pub struct Place {
 pub struct Building {
     /// Where it is, metres.
     pub pos: [f32; 2],
-    /// Its floors' area, m².
+    /// Its floors' net area (inside the walls, less stairs, lifts and partitions:
+    /// `forge_procgen::city::structure`, D-060), m².
     pub floor_area: f32,
     /// Whether its ground floor is a shop, a café or a bar.
     pub active_ground: bool,
@@ -100,9 +101,9 @@ pub struct Building {
 pub struct Uses {
     /// The share of floors that are homes.
     pub homes: f32,
-    /// Home floor area a person, m².
+    /// Net home floor area a person, m² (INSEE: 32.4 in apartments).
     pub home_area: f32,
-    /// Work floor area a job, m².
+    /// Net work floor area a job, m².
     pub job_area: f32,
     /// One building in this many is a school.
     pub school_every: u32,
@@ -112,8 +113,9 @@ impl Default for Uses {
     fn default() -> Self {
         Self {
             homes: 0.66,
-            home_area: 40.0,
-            job_area: 30.0,
+            home_area: 32.4,
+            // 30 m² gross a job, net about 0.82 of gross.
+            job_area: 25.0,
             school_every: 120,
         }
     }

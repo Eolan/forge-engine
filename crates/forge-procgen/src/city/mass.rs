@@ -36,7 +36,10 @@ pub struct Mass {
     pub footprint: Vec<DVec2>,
     /// Its floors.
     pub floors: u8,
-    /// Its height to the roof, metres: a 4.2 m ground floor and 3.2 m upper floors.
+    /// Each storey's floor to floor, ground first, metres: by its district's era
+    /// ([`super::structure::Era::storeys`]).
+    pub storeys: Vec<f64>,
+    /// Its height to the roof, metres: its storeys' sum.
     pub height: f64,
     /// What its roof carries.
     pub roof: Roof,
@@ -54,12 +57,21 @@ impl Mass {
     pub fn lively(&self) -> bool {
         self.open || self.street_width >= 18.0 || self.street_width <= 8.0
     }
-}
 
-/// A ground floor's height, metres.
-pub const GROUND_FLOOR: f64 = 4.2;
-/// An upper floor's height, metres.
-pub const FLOOR: f64 = 3.2;
+    /// Its ground storey's floor to floor, metres.
+    pub fn ground(&self) -> f64 {
+        self.storeys.first().copied().unwrap_or(self.height)
+    }
+
+    /// Its upper storeys' mean floor to floor, metres (its ground storey's if it has none).
+    pub fn upper(&self) -> f64 {
+        if self.storeys.len() < 2 {
+            self.ground()
+        } else {
+            (self.height - self.ground()) / (self.storeys.len() - 1) as f64
+        }
+    }
+}
 
 /// The masses of every lot on a street.
 pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
@@ -226,9 +238,14 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
                 !geom::contains(&plan.blocks[b as usize].polygon, across)
             })
         };
-        let cap = bible.max_floors(street_width);
+        // Its storeys by its district's era (D-060): shops' or homes' ground storey, then the
+        // uppers; the bible's ratio caps how many fit, and the height is their sum.
+        let era = super::structure::Era::of(district.kind);
+        let shops = open || street_width >= 18.0 || street_width <= 8.0;
+        let cap = bible.max_floors(street_width, era, shops);
         let floors = drawn.min(cap).max(1);
-        let height = GROUND_FLOOR + f64::from(floors - 1) * FLOOR;
+        let storeys = era.storeys(floors, shops);
+        let height = storeys.iter().sum();
         let r = rng.next_f64();
         let tiled = rng.next_f64() < district.tiled_share();
         let roof = if tiled {
@@ -245,6 +262,7 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
                 lot: index as u32,
                 footprint,
                 floors,
+                storeys: storeys.clone(),
                 height,
                 roof,
                 street_width,
@@ -463,7 +481,7 @@ mod tests {
         for m in masses.iter().take(2000) {
             let lot = &city.lots[m.lot as usize];
             let block = &city.blocks[lot.block as usize];
-            assert!(m.height >= GROUND_FLOOR);
+            assert!((m.height - m.storeys.iter().sum::<f64>()).abs() < 1e-9 && m.height >= 3.0);
             assert!(geom::signed_area(&m.footprint) > 0.0);
             let c = geom::centroid(&m.footprint);
             assert!(

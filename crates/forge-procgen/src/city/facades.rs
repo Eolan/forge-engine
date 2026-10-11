@@ -217,7 +217,7 @@ pub fn faces_of(masses: &[Mass], kinds: &[Vec<Option<FaceKind>>]) -> Vec<Face> {
 
 /// A face's attributes for a grammar: `street`, `court` and `party` (1 for its kind),
 /// `corner_left`, `corner_right`, `entrance`, `tiled` (a pitched roof over it), `floors`,
-/// `street_width`, and the storey heights `ground` and `floor`.
+/// `street_width`, and the storey heights `ground` and `floor` (its uppers' mean).
 pub fn attrs(grammar: &Grammar, face: &Face, m: &Mass) -> Attrs {
     let flag = |b: bool| f64::from(u8::from(b));
     grammar.attrs(&[
@@ -231,8 +231,8 @@ pub fn attrs(grammar: &Grammar, face: &Face, m: &Mass) -> Attrs {
         ("floors", f64::from(m.floors)),
         ("street_width", m.street_width),
         ("open", flag(m.open)),
-        ("ground", mass::GROUND_FLOOR),
-        ("floor", mass::FLOOR),
+        ("ground", m.ground()),
+        ("floor", m.upper()),
     ])
 }
 
