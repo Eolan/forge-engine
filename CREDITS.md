@@ -376,6 +376,22 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   - **Each drop's random numbers:** the `pcg3d` hash of Mark Jarzynski and Marc Olano, "Hash
     Functions for GPU Rendering", *Journal of Computer Graphics Techniques* 9(3), 2020.
 
+**City plans** (`forge_procgen::city`, D-059):
+- **Streets from a tensor field.** Guoning Chen, Gregory Esch, Peter Wonka, Pascal Müller,
+  Eugene Zhang, "Interactive Procedural Street Modeling", *ACM Transactions on Graphics* 27(3),
+  SIGGRAPH 2008: the grid, radial and boundary basis fields, their weighted sum, and the
+  streamlines traced along the eigenvectors with a separation and a join.
+- **Lots.** Carlos A. Vanegas, Tom Kelly, Basil Weber, Jan Halatsch, Daniel G. Aliaga, Pascal
+  Müller, "Procedural Generation of Parcels in Urban Modeling", *Computer Graphics Forum* 31(2),
+  Eurographics 2012: recursive splits across each piece's oriented box, lots on a street.
+- **Parks within reach.** Cecil C. Konijnendijk, "Evidence-based guidelines for greener,
+  healthier, more resilient neighbourhoods: Introducing the 3–30–300 rule", *Journal of Forestry
+  Research* 34(3), 2023: a park of at least a hectare within 300 m of every home.
+- **Polylines and polygons.** David H. Douglas, Thomas K. Peucker, "Algorithms for the reduction
+  of the number of points required to represent a digitized line or its caricature", *The
+  Canadian Cartographer* 10(2), 1973; Ivan E. Sutherland, Gary W. Hodgman, "Reentrant polygon
+  clipping", *Communications of the ACM* 17(1), 1974.
+
 **Simulation and networking** (`forge-sim`, `forge-physics`, the physics lab):
 - **The fixed tick.** Glenn Fiedler, "Fix Your Timestep!", Gaffer On Games, 2004: the
   simulation advanced in fixed steps from an accumulator, drawn between the last two (#136).

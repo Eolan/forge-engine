@@ -1,0 +1,16 @@
+[package]
+name = "city-map"
+description = "Makes the example city's plan (forge-procgen::city) and writes it as a PNG map with its numbers and timings."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+forge-procgen = { workspace = true }

@@ -29,6 +29,9 @@
 //! - [`river`]: the rivers' water: each river's course smoothed into a ribbon of points with
 //!   its width, depth, speed and a level that only falls, for the GPU.
 //! - [`channel`]: the rivers' channels carved under that water, on cells drawn finer.
+//! - [`city`]: a city's plan before any building (D-059): districts, streets traced in a tensor
+//!   field, the road graph, blocks with courtyards, parks by the 3-30-300 rule, lots, tram lines,
+//!   boat crossings and landmarks, drawn as a map (`cargo run -p city-map`).
 //! - [`valley`]: the rivers' valleys carved into the field: a floor for the water, a bench or a
 //!   floodplain on the gentler reaches, the walls' foot lowered to meet it; and the steep
 //!   valleys' ground painted: gravel beds, scree at the walls' foot, scrub on the walls.
@@ -47,6 +50,7 @@
 pub mod amplify;
 pub mod beach;
 pub mod channel;
+pub mod city;
 pub mod coast;
 pub mod erosion;
 pub mod field;

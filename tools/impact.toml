@@ -18,6 +18,9 @@
 "**/*.md" = []
 "tools/credits/**" = []
 "tools/sharpness/**" = []
+# The city plan (D-059): a generator no demo draws yet, judged by its map and its tests.
+"crates/forge-procgen/src/city/**" = []
+"tools/city-map/**" = []
 # Claude's settings and its agents' worktrees: never built, never committed (#220).
 ".claude/**" = []
 
