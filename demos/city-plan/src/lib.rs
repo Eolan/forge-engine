@@ -1525,13 +1525,18 @@ impl Scenario for PlanScenario {
             forge_render::night::NightLights::new(&celestial.at(t, sun), sun).reference
         });
         let glow = 12.0 * std::f32::consts::PI / reference;
+        // The textured boxes beyond the kit's reach glow at 15 % of it. Their windows light as
+        // the kit's do, but at the horizon facade stacks on facade with no dark roof or street
+        // between, and the far city read as a band of white (the owner, 2026-10-11). A stopgap
+        // until a proxy per building (#38) draws the far city as the kit would.
+        let far_glow = glow * 0.15;
         let mapped =
             |rgb: [f32; 3], (albedo, normal, lights): (TextureId, TextureId, TextureId)| {
                 RenderLayer {
                     albedo_texture: Some(albedo),
                     normal_texture: Some(normal),
                     normal_strength: 1.0,
-                    emissive: [glow; 3],
+                    emissive: [far_glow; 3],
                     uv: Some(UvMapping {
                         emissive_texture: Some(lights),
                         ..UvMapping::default()
