@@ -605,6 +605,14 @@ fn per_km(kind: PlaceKind) -> f32 {
     }
 }
 
+/// Person `p`'s household, as a key: one of their home's households (2.2 residents each, the
+/// French mean), theirs by their seed.
+pub fn household(world: &World, pop: &Population, p: usize) -> u64 {
+    let home = pop.home[p];
+    let households = ((world.places[home as usize].capacity as f32 / 2.2) as u32).max(1);
+    (u64::from(home) << 24) ^ u64::from(pop.seed[p] % households)
+}
+
 /// Person `p`'s plan for day `day`, made from their seed, role and personality.
 pub fn plan(world: &World, pop: &Population, p: usize, day: u16) -> Plan {
     let mut rng = SplitMix64::new((u64::from(pop.seed[p]) << 16) ^ u64::from(day));
@@ -643,8 +651,32 @@ pub fn plan(world: &World, pop: &Population, p: usize, day: u16) -> Plan {
                     .unwrap_or(anchor);
                 plan.push(lunch, hm(13, 0) + j(0, 900));
             }
-            let leave = hm(17, 0) + j(0, 5400);
+            // One workday in ten a workplace goes for a drink after work, and its outgoing
+            // people join: one time and one bar for all, near work, so they leave and walk
+            // together (the owner: people go out with friends, family, sometimes coworkers).
+            let crew =
+                SplitMix64::new((u64::from(anchor) << 20) ^ u64::from(day) ^ 0xC0FFEE).next_u64();
+            let drinks = crew.is_multiple_of(10) && j(0, 15) < out;
+            let leave = if drinks {
+                hm(18, 0) + ((crew >> 8) % 1800) as u32
+            } else {
+                hm(17, 0) + j(0, 5400)
+            };
             plan.push(anchor, leave);
+            if drinks {
+                let bar = world
+                    .choose(
+                        PlaceKind::Leisure,
+                        world.places[anchor as usize].pos,
+                        crew >> 16,
+                        2.0,
+                        0.0,
+                    )
+                    .unwrap_or(home);
+                plan.push(bar, leave + 5400 + ((crew >> 40) % 2700) as u32);
+                plan.push(home, DAY);
+                return plan;
+            }
             // On the way home, about one in seven: the shops near work (France: 15 % of
             // home-work journeys stop on the way; docs/research/trip-distances.md).
             if j(0, 99) < 15 {
@@ -706,6 +738,25 @@ pub fn plan(world: &World, pop: &Population, p: usize, day: u16) -> Plan {
             plan.push(home, leave);
             if errand {
                 plan.push(near(PlaceKind::Shop, pick), leave + 1800 + j(0, 2700));
+            }
+            // At weekends, two days in seven, a household goes out together: one place and one
+            // time for all of it, so they leave and walk together ([`household`]).
+            let family =
+                SplitMix64::new(household(world, pop, p) ^ (u64::from(day) << 48)).next_u64();
+            if weekend && family % 7 < 2 {
+                let kind = match (family >> 8) % 4 {
+                    0 => PlaceKind::Park,
+                    1 | 2 => PlaceKind::Food,
+                    _ => PlaceKind::Shop,
+                };
+                let leave = hm(15, 0) + ((family >> 16) % 3600) as u32;
+                plan.push(home, leave);
+                let place = world
+                    .choose(kind, pos, family >> 24, per_km(kind), bonus)
+                    .unwrap_or(home);
+                plan.push(place, leave + 5400 + ((family >> 40) % 1800) as u32);
+                plan.push(home, DAY);
+                return plan;
             }
             plan.push(home, hm(15, 0) + j(0, 3600));
             // The afternoon out on two days in five: a café or a tea room, the shops, a pub, a
@@ -1267,6 +1318,49 @@ mod tests {
             world.choose(PlaceKind::Food, from, 42, 1.5, APPEAL_KM),
             world.choose(PlaceKind::Food, from, 42, 1.5, APPEAL_KM)
         );
+    }
+
+    #[test]
+    fn households_and_coworkers_go_out_together() {
+        let world = town();
+        let pop = generate(&world, &Mix::default(), Seed::new(4));
+        // The steps out of home and work that two people share, place and time.
+        let shared = |day: u16, key: &dyn Fn(usize) -> Option<u64>| {
+            let mut groups: std::collections::HashMap<u64, Vec<usize>> = Default::default();
+            for p in 0..pop.len() {
+                if let Some(k) = key(p) {
+                    groups.entry(k).or_default().push(p);
+                }
+            }
+            let mut together = 0;
+            for members in groups.values().filter(|m| m.len() >= 2) {
+                let steps = |p: usize| {
+                    let plan = plan(&world, &pop, p, day);
+                    plan.steps[..plan.len as usize]
+                        .iter()
+                        .filter(|s| s.place != pop.home[p] && s.place != pop.anchor[p])
+                        .map(|s| (s.place, s.until))
+                        .collect::<Vec<_>>()
+                };
+                let first = steps(members[0]);
+                if members[1..]
+                    .iter()
+                    .any(|&q| steps(q).iter().any(|s| first.contains(s)))
+                {
+                    together += 1;
+                }
+            }
+            together
+        };
+        // A Saturday: households out together.
+        let families = shared(5, &|p| Some(household(&world, &pop, p)));
+        assert!(families > 20, "{families} households out together");
+        // A Wednesday: coworkers off for a drink.
+        let workplace = |p: usize| {
+            (pop.role[p] == Role::Worker && pop.anchor[p] != NONE).then(|| u64::from(pop.anchor[p]))
+        };
+        let crews = shared(2, &workplace);
+        assert!(crews > 3, "{crews} workplaces out together");
     }
 
     #[test]

@@ -703,6 +703,11 @@ impl Crowd {
                 level = level.max(boarding);
             }
             let seed = self.sim.pop.seed[p];
+            // Each a little to one side of the line, by their seed (±0.6 m on foot, ±0.3 m
+            // riding): a household or a workplace going out together walks side by side
+            // rather than in one another.
+            let aside = (((seed >> 8) % 9) as f64 - 4.0) * if riding { 0.075 } else { 0.15 };
+            let q = q + DVec2::new(-dir.y, dir.x) * aside;
             // Riding, or walking a gait cycle of 1.4 m in eight poses: the left stride, half,
             // passing, half, the right stride, half, passing, half. Four poses held 0.7 m each
             // read as jerky (the owner); each person starts at their own phase.

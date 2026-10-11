@@ -60,6 +60,15 @@ compares the digests).
   - Before, it was one of the four nearest: trips of 100–300 m, and nobody left their block.
 - **On the way home.** About one worker in seven stops at the shops near work.
 - **Lunch** stays near work, chosen among the four nearest.
+- **Together** (the owner: people go out with friends, family, sometimes coworkers). Plans stay
+  each person's own pure function, so a group is a shared key, not a message:
+  - a household (`population::household`: one of its home's households, 2.2 residents each,
+    the French mean, theirs by their seed) goes out together two weekend days in seven, to a
+    park, a café or the shops, every member with the same place, leaving time and return;
+  - a workplace goes for a drink one workday in ten, and its more outgoing workers (about half)
+    leave at the same time for the same bar near work.
+  The drawn crowd sets each person up to 0.6 m to one side of the line by their seed, so a group
+  on one trip walks side by side. Friends across the city need a social graph: later.
 
 **On worker threads** (`population::Shards`): the people are split into contiguous runs, each
 with its own calendar on its own thread. Nobody acts on anyone else yet, so the shards' events
