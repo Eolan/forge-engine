@@ -149,6 +149,98 @@ fn offset(points: &[DVec2], d: f64) -> Vec<DVec2> {
         .collect()
 }
 
+/// What a built block lacks, for the checks map.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Lack {
+    /// Nothing: a park within reach and a tram stop within 400 m.
+    None,
+    /// No tram stop within 400 m.
+    Stop,
+    /// No park of the minimum area within reach.
+    Park,
+    /// Neither.
+    Both,
+}
+
+/// Each block's lack (squares, parks and quays lack nothing).
+pub fn lacks(plan: &CityPlan, params: &CityParams) -> Vec<Lack> {
+    let stops: Vec<DVec2> = plan
+        .tram_lines
+        .iter()
+        .flat_map(|l| l.stops.iter().copied())
+        .collect();
+    let parks: Vec<&super::Block> = plan
+        .blocks
+        .iter()
+        .filter(|b| b.use_ == BlockUse::Park && b.area >= params.park_min_area)
+        .collect();
+    plan.blocks
+        .iter()
+        .map(|b| {
+            if b.use_ != BlockUse::Built {
+                return Lack::None;
+            }
+            let stop = stops.iter().any(|s| s.distance(b.centre) <= 400.0);
+            let park = parks
+                .iter()
+                .any(|p| block_within(b.centre, p, params.park_reach));
+            match (stop, park) {
+                (true, true) => Lack::None,
+                (false, true) => Lack::Stop,
+                (true, false) => Lack::Park,
+                (false, false) => Lack::Both,
+            }
+        })
+        .collect()
+}
+
+/// Whether `p` lies within `reach` of a block.
+fn block_within(p: DVec2, block: &super::Block, reach: f64) -> bool {
+    if geom::contains(&block.polygon, p) {
+        return true;
+    }
+    let n = block.polygon.len();
+    (0..n).any(|i| {
+        geom::distance_to_segment(p, block.polygon[i], block.polygon[(i + 1) % n]) <= reach
+    })
+}
+
+/// The checks as a map: the plan's water, streets and transit over its blocks coloured by what
+/// they lack (green: nothing; orange: a tram stop within 400 m; red: a park within reach;
+/// purple: both).
+pub fn write_checks(
+    site: &Site,
+    plan: &CityPlan,
+    params: &CityParams,
+    path: &Path,
+    metres_per_pixel: f64,
+) -> image::ImageResult<()> {
+    let mut canvas = Canvas::new(plan.size, metres_per_pixel);
+    for (block, lack) in plan.blocks.iter().zip(lacks(plan, params)) {
+        let c = match (block.use_, lack) {
+            (BlockUse::Park, _) => PARK,
+            (BlockUse::Built, Lack::None) => [176, 214, 160],
+            (BlockUse::Built, Lack::Stop) => [240, 170, 80],
+            (BlockUse::Built, Lack::Park) => [220, 80, 70],
+            (BlockUse::Built, Lack::Both) => [150, 70, 160],
+            _ => SQUARE,
+        };
+        canvas.fill(&block.polygon, c);
+    }
+    paint_water(&mut canvas, site);
+    for e in &plan.roads.edges {
+        canvas.stroke(&e.points, e.profile.width(), [250, 248, 244]);
+    }
+    for line in &plan.tram_lines {
+        canvas.stroke(&line.points, 6.0, line.colour);
+        for &stop in &line.stops {
+            canvas.disc(stop, 14.0, [40, 40, 48]);
+            canvas.disc(stop, 9.0, [255, 255, 255]);
+        }
+    }
+    canvas.save(path)
+}
+
 /// Draws the plan over its site at `metres_per_pixel` and writes it as a PNG.
 pub fn write(
     site: &Site,

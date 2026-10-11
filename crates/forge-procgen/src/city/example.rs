@@ -167,6 +167,8 @@ pub fn params(size: f64) -> CityParams {
             },
         ],
         stop_spacing: 450.0,
+        stop_target: 0.0,
+        max_extra_lines: 0,
         boat_gap: 700.0,
         landmarks: vec![
             LandmarkSpec {

@@ -338,6 +338,11 @@ pub struct CityParams {
     pub tram_lines: Vec<TramLineSpec>,
     /// The spacing of tram stops, metres.
     pub stop_spacing: f64,
+    /// Lines are added ([`transit::cover`]) until this share of the built blocks has a stop
+    /// within 400 m...
+    pub stop_target: f64,
+    /// ... or this many lines were added (0: none).
+    pub max_extra_lines: usize,
     /// A boat crossing every this many metres of river without a bridge.
     pub boat_gap: f64,
     /// The landmarks.
@@ -576,7 +581,24 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
     let lots = blocks::subdivide(&blocks, &params.districts, seed.derive_str("lots").value());
     lap("blocks, parks and lots", &mut timings);
 
-    let tram_lines = transit::route_trams(&roads, &params.tram_lines, params.stop_spacing);
+    let mut tram_lines = transit::route_trams(&roads, &params.tram_lines, params.stop_spacing);
+    if params.max_extra_lines > 0 {
+        let centres: Vec<DVec2> = blocks
+            .iter()
+            .filter(|b| b.use_ == BlockUse::Built)
+            .map(|b| b.centre)
+            .collect();
+        let extra = transit::cover(
+            &roads,
+            &centres,
+            &tram_lines,
+            400.0,
+            params.stop_spacing,
+            params.stop_target,
+            params.max_extra_lines,
+        );
+        tram_lines.extend(extra);
+    }
     let crossings = transit::boat_crossings(site, &roads, params.boat_gap);
     transit::assign_profiles(&mut roads, &tram_lines, &districts_field, &params.districts);
     let landmarks = params

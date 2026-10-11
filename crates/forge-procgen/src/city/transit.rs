@@ -133,10 +133,20 @@ pub fn route_trams(graph: &RoadGraph, specs: &[TramLineSpec], stop_spacing: f64)
     let main = main_nodes(graph);
     let mut lines = Vec::new();
     for spec in specs {
+        // Each waypoint to the nearest main-road node, or to the nearest node of any street
+        // when no main road comes within 150 m.
+        let any = vec![false; graph.nodes.len()];
         let nodes: Vec<usize> = spec
             .waypoints
             .iter()
-            .filter_map(|&p| nearest_node(graph, p, &main))
+            .filter_map(|&p| {
+                let on_main = nearest_node(graph, p, &main)?;
+                if graph.nodes[on_main].pos.distance(p) <= 150.0 {
+                    Some(on_main)
+                } else {
+                    nearest_node(graph, p, &any)
+                }
+            })
             .collect();
         let mut edges = Vec::new();
         let mut node_path = vec![];
@@ -202,6 +212,123 @@ pub fn route_trams(graph: &RoadGraph, specs: &[TramLineSpec], stop_spacing: f64)
         }
     }
     lines
+}
+
+/// Lines added until `target` of the built blocks have a stop within `catchment` metres (or
+/// `max_lines` are added). Each new line serves the largest cluster of blocks left without a
+/// stop: it runs along the cluster's long axis (the principal direction of the blocks within
+/// 1.5 km) between its farthest blocks, from the nearest existing stop. Pure and in a fixed
+/// order, like the rest of the plan.
+pub fn cover(
+    graph: &RoadGraph,
+    centres: &[DVec2],
+    lines: &[TramLine],
+    catchment: f64,
+    stop_spacing: f64,
+    target: f64,
+    max_lines: usize,
+) -> Vec<TramLine> {
+    const PALETTE: [[u8; 3]; 6] = [
+        [96, 96, 96],
+        [160, 110, 60],
+        [60, 130, 130],
+        [130, 60, 90],
+        [90, 120, 40],
+        [70, 70, 150],
+    ];
+    let mut added: Vec<TramLine> = Vec::new();
+    let mut tried: Vec<DVec2> = Vec::new();
+    for k in 0..max_lines * 3 {
+        if added.len() >= max_lines {
+            break;
+        }
+        let stops: Vec<DVec2> = lines
+            .iter()
+            .chain(added.iter())
+            .flat_map(|l| l.stops.iter().copied())
+            .collect();
+        let uncovered: Vec<DVec2> = centres
+            .iter()
+            .copied()
+            .filter(|c| !stops.iter().any(|s| s.distance(*c) <= catchment))
+            .collect();
+        let share = 1.0 - uncovered.len() as f64 / centres.len().max(1) as f64;
+        if share >= target || uncovered.is_empty() {
+            break;
+        }
+        // The densest uncovered block not tried yet: the most uncovered neighbours within
+        // 600 m.
+        let Some(&seed) = uncovered
+            .iter()
+            .filter(|c| !tried.iter().any(|t| t.distance(**c) <= 300.0))
+            .max_by_key(|c| {
+                uncovered
+                    .iter()
+                    .filter(|o| o.distance(**c) <= 600.0)
+                    .count()
+            })
+        else {
+            break;
+        };
+        tried.push(seed);
+        let cluster: Vec<DVec2> = uncovered
+            .iter()
+            .copied()
+            .filter(|c| c.distance(seed) <= 1500.0)
+            .collect();
+        let mean = cluster.iter().copied().sum::<DVec2>() / cluster.len() as f64;
+        // The principal axis of the cluster (the covariance's larger eigenvector).
+        let (mut sxx, mut sxy, mut syy) = (0.0, 0.0, 0.0);
+        for c in &cluster {
+            let d = *c - mean;
+            sxx += d.x * d.x;
+            sxy += d.x * d.y;
+            syy += d.y * d.y;
+        }
+        let angle = 0.5 * forge_core::dmath::atan2(2.0 * sxy, sxx - syy);
+        let (s, c) = forge_core::dmath::sin_cos(angle);
+        let axis = DVec2::new(c, s);
+        let along = |p: DVec2| (p - mean).dot(axis);
+        let (lo, hi) = cluster.iter().fold((f64::MAX, f64::MIN), |(lo, hi), p| {
+            (lo.min(along(*p)), hi.max(along(*p)))
+        });
+        let (a, b) = (mean + axis * lo, mean + axis * hi);
+        // From the existing stop nearest either end.
+        let nearest = |p: DVec2| {
+            stops.iter().copied().min_by(|x, y| {
+                x.distance_squared(p)
+                    .partial_cmp(&y.distance_squared(p))
+                    .expect("finite")
+            })
+        };
+        let waypoints = match (nearest(a), nearest(b)) {
+            (Some(sa), Some(sb)) if sa.distance(a) <= sb.distance(b) => vec![sa, a, b],
+            (_, Some(sb)) => vec![sb, b, a],
+            _ => vec![a, b],
+        };
+        let spec = TramLineSpec {
+            name: format!("auto {}", k + 1),
+            colour: PALETTE[k % PALETTE.len()],
+            waypoints,
+        };
+        let routed = route_trams(graph, std::slice::from_ref(&spec), stop_spacing);
+        let Some(line) = routed.into_iter().next() else {
+            continue;
+        };
+        // A line must serve at least a few blocks that had no stop.
+        let gain = uncovered
+            .iter()
+            .filter(|c| line.stops.iter().any(|s| s.distance(**c) <= catchment))
+            .count();
+        if gain < 5 {
+            continue;
+        }
+        let mut line = line;
+        line.name = format!("auto {}", added.len() + 1);
+        line.colour = PALETTE[added.len() % PALETTE.len()];
+        added.push(line);
+    }
+    added
 }
 
 /// Boat crossings where a river runs more than `gap` metres without a bridge, evenly spaced,

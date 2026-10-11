@@ -78,3 +78,20 @@ fn courtyards_sit_inside_built_blocks() {
     }
     let _ = DVec2::ZERO;
 }
+
+#[test]
+fn added_lines_bring_stops_to_the_blocks_left_without() {
+    let size = 4000.0;
+    let site = example::site(size, 10.0);
+    let mut params = example::params(size);
+    let before = plan(&site, &params).stats.stop_coverage;
+    params.stop_target = 0.9;
+    params.max_extra_lines = 6;
+    let after = plan(&site, &params);
+    assert!(
+        after.stats.stop_coverage > before + 0.2,
+        "{before} → {}",
+        after.stats.stop_coverage
+    );
+    assert!(after.tram_lines.len() > params.tram_lines.len());
+}
