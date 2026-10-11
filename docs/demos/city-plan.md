@@ -324,8 +324,9 @@ slivers included.
 
 **The landmarks** (`LandmarkKind`) get their own square: the built block of 0.15–3.5 ha
 nearest their anchor becomes one. Each then stands on the nearest square of 0.15 ha or more
-within 160 m (`Landmark::square`); a waterside landmark without one takes the nearest quay
-within 250 m. Four have models (`forge_geom::landmarks`):
+within 160 m (`Landmark::square`). A terraced hall without one takes the nearest quay within
+250 m. A gantry crane looks for a quay first, the nearest within 600 m, and a square after.
+Four have models (`forge_geom::landmarks`):
 - **the market hall,** the iron and glass halls the Midi's old towns built on their squares:
   - a stone plinth, iron columns every bay on stone bases, girders at the eaves;
   - a pitched glass roof on iron rafters, with a glazed lantern along the ridge;

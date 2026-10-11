@@ -548,10 +548,12 @@ fn landmark_site(blocks: &[Block], l: &LandmarkSpec) -> Option<usize> {
             .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)))
             .map(|(_, i)| i)
     };
-    let waterside = matches!(
-        l.kind,
-        LandmarkKind::TerracedHall | LandmarkKind::GantryCrane
-    );
+    // A crane stands on a quay, the nearest within 600 m.
+    if l.kind == LandmarkKind::GantryCrane {
+        return nearest(BlockUse::Quay, 2000.0, 600.0)
+            .or_else(|| nearest(BlockUse::Square, 1500.0, 160.0));
+    }
+    let waterside = l.kind == LandmarkKind::TerracedHall;
     nearest(BlockUse::Square, 1500.0, 160.0).or_else(|| {
         waterside
             .then(|| nearest(BlockUse::Quay, 2000.0, 250.0))
