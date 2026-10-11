@@ -569,19 +569,38 @@ pub fn plan(world: &World, pop: &Population, p: usize, day: u16) -> Plan {
     plan
 }
 
-/// How long a trip takes, game seconds: on foot under 1.2 km (1.3 m/s), by bike under 4 km
-/// (4.5 m/s) for the open, else by tram (5.5 m/s with a 5-minute wait); the street distance a
-/// third longer than the straight line.
-pub fn travel_time(world: &World, from: u32, to: u32, personality: Personality) -> GameSeconds {
+/// How a trip goes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    /// On foot.
+    Walk,
+    /// By bike.
+    Bike,
+    /// By tram, after a wait at the stop of [`TRAM_WAIT`] seconds.
+    Tram,
+}
+
+/// The wait at the stop a tram trip begins with, game seconds.
+pub const TRAM_WAIT: GameSeconds = 300;
+
+/// How a trip goes and how long it takes, game seconds: on foot under 1.2 km (1.3 m/s), by bike
+/// under 4 km (4.5 m/s) for the open, else by tram (5.5 m/s after a 5-minute wait); the street
+/// distance a third longer than the straight line.
+pub fn travel(world: &World, from: u32, to: u32, personality: Personality) -> (Mode, GameSeconds) {
     let d = world.distance(from, to) * 1.3;
-    let s = if d < 1200.0 {
-        d / 1.3
+    let (mode, s) = if d < 1200.0 {
+        (Mode::Walk, d / 1.3)
     } else if d < 4000.0 && personality.openness() >= 5 {
-        d / 4.5
+        (Mode::Bike, d / 4.5)
     } else {
-        300.0 + d / 5.5
+        (Mode::Tram, TRAM_WAIT as f32 + d / 5.5)
     };
-    s.round().max(60.0) as GameSeconds
+    (mode, s.round().max(60.0) as GameSeconds)
+}
+
+/// How long a trip takes, game seconds ([`travel`]'s time).
+pub fn travel_time(world: &World, from: u32, to: u32, personality: Personality) -> GameSeconds {
+    travel(world, from, to, personality).1
 }
 
 /// A trip under way.
@@ -595,6 +614,8 @@ pub struct Trip {
     pub since: GameSeconds,
     /// How long it takes.
     pub time: GameSeconds,
+    /// How it goes.
+    pub mode: Mode,
 }
 
 /// What a person is doing, for a map.
@@ -712,15 +733,17 @@ impl<'w> Sim<'w> {
         now + time
     }
 
-    /// Person `p`'s trip, if on one: from where, to where, since when and for how long.
+    /// Person `p`'s trip, if on one: from where, to where, since when, for how long and how.
     pub fn trip(&self, p: usize) -> Option<Trip> {
         (self.pop.at[p] & TRIP != 0).then(|| {
             let (from, to) = (self.pop.origin[p], self.pop.dest[p]);
+            let (mode, time) = travel(self.world, from, to, self.pop.personality[p]);
             Trip {
                 from,
                 to,
                 since: self.pop.since[p],
-                time: travel_time(self.world, from, to, self.pop.personality[p]),
+                time,
+                mode,
             }
         })
     }

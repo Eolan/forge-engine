@@ -308,13 +308,15 @@ evening's walkers.* `--people HOUR` builds the plan's population from the masses
 - **those out at a café:** seated at the kit's terraces. Each seat is taken in the share that
   the people out at the cafés within 300 m make of the seats there, up to nine in ten. The
   same seats stay taken while the share holds.
-- **those on their way:** each goes the shortest way along the streets (A* on the road graph)
-  from the street nearest their start to the street nearest their goal, at the pace their
-  trip's time gives: on the pavement up to 2.2 m/s, by bike in the carriageway's right lane up
-  to 6.5 m/s;
+- **those on their way,** as the simulation's trip goes (`population::Trip::mode`):
+  - on foot or by bike: the shortest way along the streets (A* on the road graph) from the
+    street nearest their start to the street nearest their goal, at the pace their trip's time
+    gives, walking on the pavement or riding in the carriageway's right lane;
+  - by tram: waiting on the platform nearest their start for the trip's first five minutes.
+    Aboard, they are not drawn yet.
 - **those in a park:** they stand about it, kept 9 m inside its streets.
 
-Faster trips ride the trams and are not drawn yet. The drawn crowd runs on the real
+The drawn crowd runs on the real
 clock, a game second a second: at the game's four, its walkers would cross the screen at
 5 m/s, and how the two clocks meet near the player is D-059's open question. #251's humans
 replace the figures.

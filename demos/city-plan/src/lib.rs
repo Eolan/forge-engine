@@ -418,7 +418,12 @@ impl PlanScenario {
     /// camera drawn as figures (`crowd`).
     pub fn with_people(mut self, plan: &CityPlan, masses: &[Mass], hour: f64) -> Self {
         let seats = std::mem::take(&mut self.seats);
-        self.crowd = Some(crowd::Crowd::new(plan, masses, hour, seats));
+        let platforms: Vec<Mat4> = self
+            .trams
+            .iter()
+            .flat_map(|r| r.platforms(self.size))
+            .collect();
+        self.crowd = Some(crowd::Crowd::new(plan, masses, hour, seats, &platforms));
         self
     }
 

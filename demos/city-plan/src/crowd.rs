@@ -4,8 +4,8 @@
 //! placeholder figures (`forge_geom::figures`):
 //! - on their way, along the road graph's shortest way (A*) from the street nearest where they set
 //!   out to the street nearest where they go, at the pace their trip's time gives: walking on the
-//!   pavement, or riding a bike in the carriageway's right lane when quicker than a walk (trips
-//!   quicker than a bike ride the trams, and are not drawn yet);
+//!   pavement, or riding a bike in the carriageway's right lane, as the simulation's trip goes;
+//!   by tram, waiting on the platform nearest their start (aboard, not drawn yet);
 //! - in a park, standing about it;
 //! - out at a café: seated at the terraces round it, in the share the people out there make of
 //!   the seats.
@@ -17,7 +17,7 @@ use forge_core::Seed;
 use forge_procgen::city::geom::{self, PointGrid};
 use forge_procgen::city::mass::Mass;
 use forge_procgen::city::{BlockUse, CityPlan, Profile};
-use forge_sim::population::{self, Building, Mix, PlaceKind, Sim, Uses, World};
+use forge_sim::population::{self, Building, Mix, Mode, PlaceKind, Sim, TRAM_WAIT, Uses, World};
 use glam::{DVec2, Vec2, Vec3};
 
 /// The figures' palettes.
@@ -36,9 +36,8 @@ const NEIGHBOURHOOD: f64 = 300.0;
 const RECOUNT: u32 = 30;
 /// Routes found a frame at most.
 const NEW_ROUTES: usize = 40;
-/// The fastest a drawn walker goes, m/s.
-const WALK_MAX: f64 = 2.2;
-/// The fastest a drawn cyclist goes, m/s; faster trips ride the trams.
+/// The fastest a drawn trip goes along its street route, m/s: a route much longer than the
+/// simulation's straight-line estimate is not drawn.
 const RIDE_MAX: f64 = 6.5;
 
 /// A way along the streets: its points and, per segment, its street's half width and its
@@ -106,6 +105,10 @@ pub struct Crowd {
     /// neighbourhood: the cafés within [`NEIGHBOURHOOD`] and how many seats.
     seats: Vec<(Vec3, f32)>,
     neighbourhoods: Vec<(Vec<u32>, u32)>,
+    /// The tram stops' platforms (a corner, the unit way along it, the unit way away from its
+    /// track) and their middles on the plan, found by a grid.
+    platforms: Vec<(Vec3, Vec3, Vec3)>,
+    stop_grid: PointGrid,
     /// People at each place, counted every [`RECOUNT`] calls.
     counts: Vec<u32>,
     calls: u32,
@@ -113,7 +116,32 @@ pub struct Crowd {
 
 impl Crowd {
     /// The people of `plan`'s `masses`, their day run to `hour` (game hours from midnight).
-    pub fn new(plan: &CityPlan, masses: &[Mass], hour: f64, seats: Vec<(Vec3, f32)>) -> Self {
+    pub fn new(
+        plan: &CityPlan,
+        masses: &[Mass],
+        hour: f64,
+        seats: Vec<(Vec3, f32)>,
+        platforms: &[glam::Mat4],
+    ) -> Self {
+        let platforms: Vec<(Vec3, Vec3, Vec3)> = platforms
+            .iter()
+            .map(|m| {
+                (
+                    m.w_axis.truncate(),
+                    m.x_axis.truncate(),
+                    m.z_axis.truncate(),
+                )
+            })
+            .collect();
+        let mut stop_grid = PointGrid::new(plan.size, 100.0);
+        for (k, (corner, along, _)) in platforms.iter().enumerate() {
+            let mid = *corner + *along * 18.0;
+            let half = plan.size * 0.5;
+            stop_grid.insert(
+                DVec2::new(f64::from(mid.x) + half, f64::from(mid.z) + half),
+                k as u32,
+            );
+        }
         let buildings: Vec<Building> = masses
             .iter()
             .map(|m| {
@@ -209,6 +237,8 @@ impl Crowd {
             size: plan.size,
             seats,
             neighbourhoods,
+            stop_grid,
+            platforms,
             counts: Vec::new(),
             calls: 0,
         }
@@ -296,6 +326,26 @@ impl Crowd {
             );
             let gone =
                 ((now - f64::from(trip.since)) / f64::from(trip.time.max(1))).clamp(0.0, 1.0);
+            // By tram: waiting at the platform nearest where they set out, then aboard (not
+            // drawn yet).
+            if trip.mode == Mode::Tram {
+                if now - f64::from(trip.since) < f64::from(TRAM_WAIT)
+                    && let Some((_, k)) = self.stop_grid.nearest(a, 500.0)
+                {
+                    let (corner, along, away) = self.platforms[k as usize];
+                    let s = self.sim.pop.seed[p];
+                    let spot = corner
+                        + along * (4.0 + (s % 28) as f32)
+                        + away * (0.8 + ((s >> 8) % 14) as f32 / 10.0)
+                        + Vec3::Y * 0.28;
+                    let at = DVec2::new(f64::from(spot.x) + half, f64::from(spot.z) + half);
+                    let mesh = (s as usize % GROUPS) * 4 + 1;
+                    if at.distance(c) <= REACH && out[mesh].len() < PER_MESH {
+                        out[mesh].push((spot, away.z.atan2(-away.x)));
+                    }
+                }
+                continue;
+            }
             // Near the camera by the straight line first, which the route stays close to.
             if (a + (b - a) * gone).distance(c) > REACH * 1.5 {
                 continue;
@@ -314,8 +364,8 @@ impl Crowd {
             let Some(Some(route)) = self.routes.get(&key) else {
                 continue;
             };
-            // On foot, or riding a bike: by the pace the trip's time gives.
-            let riding = route.length() / f64::from(trip.time.max(1)) > WALK_MAX;
+            // On foot, or riding a bike.
+            let riding = trip.mode == Mode::Bike;
             let (q, dir, level) = route.at(gone * route.length(), riding);
             if q.distance(c) > REACH {
                 continue;
