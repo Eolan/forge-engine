@@ -3977,7 +3977,7 @@ Each note's city-specific appendix stays in the sandbox.
 city-generation.md §7–§19, people.md, transit-and-vehicles.md; issues #83–#90, #168, #222,
 #224, #231, #234, #39)*
 
-## D-060 — Buildings carry their structure: storeys, walls with their thickness, openings, cores and units 🟡 (proposed 2026-10-11, for the owner's review)
+## D-060 — Buildings carry their structure: storeys, walls with their thickness, openings, cores and units ✅ (accepted on the recommendations by the owner, 2026-10-11; to be worked on first, as it shapes the rest)
 
 **The question:** the owner's notes during D-059's sandbox work (2026-10-11). Walls have a
 thickness, and old stone houses thicker ones than recent buildings; trams too. The floors
@@ -4026,8 +4026,19 @@ person.
 - **Celsys US 12,700,170** (to about 2042): full rendering of the room one is in, interior mapping
   for the others, swapping as one moves, a see-through door. Avoid that combination, or ask.
 
-**Not decided:** whether the kit's modules become physical panels (one body set per bay and
-storey) or the structure stays data with the kit as its dressing. The note leans to panels
-built from the wall graph, so destruction and collision share one structure.
+**Panels or data:** the note's lean, taken with the recommendations: panels built from the wall
+graph (one body set per bay and storey), so destruction and collision share one structure, the
+kit dressing them.
+
+**The owner's go (2026-10-11),** with notes for the structure system:
+- openings come from the walls: no window where another building covers the wall (windows cut
+  by a neighbour were "not realistic at all"), and storeys that add up (a squashed row of
+  first-floor windows);
+- every block's inner court reached through a door or a passage from the street;
+- lit windows from the people living there, by what they are doing (the population's
+  activity, not a texture);
+- smaller courtyards as communal gardens the neighbours tend, and real parks here and there;
+- the patent checks before the steps that need them: Sony's tile stress before any overload
+  pass (step 4), Celsys's room swapping before the interiors' rendering (step 3).
 
 *(research: building-structure.md; issues #248, #263)*
