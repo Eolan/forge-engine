@@ -363,13 +363,18 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
   streets of 18 m or more (the avenues), in the lanes, and facing a square, a park or a quay.
   The owner asked for shops, restaurants and cafés round the large squares, above all by the
   river and the sea.
-- **tram stops:** a 36 m platform 2.3 m deep, level with the trams' floor by each track, and a
-  glass shelter with a bench and a lit totem. Its screen shows the next tram, amber on black:
-  "Due", "1 min" to "14 min", or "15+ min", from `Timetable::next_arrival`. The plates are one
-  atlas row each (`signs::screen_plate`), twelve of each kept as movers and set each frame on the
-  totems within 150 m of the camera, nearest first (the owner asked for the screens).
-  A ramp of 1 in 12 runs down to the road at each end, the platform's
-  whole depth: it was reached only by a 28 cm step (the owner: not accessible). Each stop
+- **tram stops:** a 36 m boarding area by each track, level with the trams' floor (28 cm over
+  the road), from the tram's side across the carriageway to the kerb and half a metre into the
+  pavement (3.55 m on a tram avenue, `boarding_deep`), and a glass shelter with a bench and a
+  lit totem. Its screen shows the next tram, amber on black: "Due", "1 min" to "14 min", or
+  "15+ min", from `Timetable::next_arrival`. The plates are one atlas row each
+  (`signs::screen_plate`), twelve of each kept as movers and set each frame on the totems within
+  150 m of the camera, nearest first (the owner asked for the screens).
+  Ramps of 1 in 12 run down to the road at each end, and along its back down to the pavement,
+  so someone on the pavement rolls onto it anywhere: the platform was first reached by a 28 cm
+  step, then stood 0.75 m off the kerb with the road between (the owner: not accessible). The
+  bikes' strip by the kerb runs over it behind the shelter, at its height, as a cycle track
+  crosses a stop's boarding area in Dutch and German streets; it was a 0.75 m channel. Each stop
   stands in the middle of the stretch between the junctions round it. Snapped to a junction,
   its platforms and ramps, 37 m either way, stood across the crossings, and bikes rode through
   them.

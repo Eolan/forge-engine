@@ -393,14 +393,31 @@ pub fn fountain() -> TriMesh {
     m
 }
 
-/// A tram stop's platform `length` metres along its track, 2.3 m deep and 28 cm high (level with
-/// a low-floor tram's floor), its edge on the track's side at `z = 0`. In its middle a shelter of
-/// glass on a steel frame with a bench, and a totem with the next trams' times.
-pub fn tram_stop(length: f32) -> TriMesh {
+/// A tram stop's platform `length` metres along its track, `deep` metres deep (2.3 at least: the
+/// shelter's) and 28 cm high (level with a low-floor tram's floor), its edge on the track's side
+/// at `z = 0`. In its middle a shelter of glass on a steel frame with a bench, and a totem with
+/// the next trams' times. Deep enough, it reaches across to the pavement as one boarding area,
+/// with a cycle track behind the shelter; with `back`, its back slopes down 1 in 12 as well (to
+/// `z = deep + 3.36`), so a raised pavement meets it level anywhere along it.
+pub fn tram_stop(length: f32, deep: f32, back: bool) -> TriMesh {
     let mut m = TriMesh::default();
-    // 2.3 m deep: from a tram's side to 5.25 m off a tram avenue's centreline, which leaves
-    // the cyclists by the kerb clear (the owner saw people through a platform).
-    let (deep, high) = (2.3, 0.28);
+    let (deep, high) = (deep.max(2.3), 0.28);
+    if back {
+        let run = high * 12.0;
+        let (top, foot) = (Vec3::new(0.0, high, deep), Vec3::new(0.0, 0.0, deep + run));
+        let x = Vec3::new(length, 0.0, 0.0);
+        quad(&mut m, [foot, foot + x, top + x, top], STONE);
+        let low = Vec3::new(0.0, 0.0, deep);
+        for (side, out) in [(Vec3::ZERO, -1.0_f32), (x, 1.0)] {
+            let tri = [low + side, top + side, foot + side];
+            let n = (tri[1] - tri[0]).cross(tri[2] - tri[0]);
+            if n.x * out >= 0.0 {
+                triangle(&mut m, tri, STONE);
+            } else {
+                triangle(&mut m, [tri[0], tri[2], tri[1]], STONE);
+            }
+        }
+    }
     cuboid(
         &mut m,
         Vec3::new(0.0, 0.0, 0.0),
@@ -521,9 +538,14 @@ mod tests {
                 (Vec3::new(-7.1, 0.0, -5.1), Vec3::new(7.1, 2.7, 5.1)),
             ),
             (
-                tram_stop(32.0),
+                tram_stop(32.0, 2.3, false),
                 // With a 3.4 m ramp at each end.
                 (Vec3::new(-3.4, 0.0, 0.0), Vec3::new(35.4, 3.1, 2.7)),
+            ),
+            (
+                // A boarding area across to the pavement, its back sloped: the shelter kept.
+                tram_stop(32.0, 3.55, true),
+                (Vec3::new(-3.4, 0.0, 0.0), Vec3::new(35.4, 3.1, 3.55 + 3.36)),
             ),
         ] {
             assert!(m.triangle_count() > 20);

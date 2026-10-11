@@ -765,7 +765,11 @@ impl PlanScenario {
         }
         // The tram stops, a platform by each track.
         if !trams.is_empty() {
-            kit_meshes.push(forge_geom::furniture::tram_stop(PLATFORM));
+            kit_meshes.push(forge_geom::furniture::tram_stop(
+                PLATFORM,
+                boarding_deep() as f32,
+                true,
+            ));
             let stop = (kit_meshes.len() - 1) as u32;
             for run in &trams {
                 for (at, _, _) in run.platforms(size) {
@@ -948,7 +952,21 @@ fn segment_gap(p: DVec2, q: DVec2, a: DVec2, b: DVec2) -> f64 {
 }
 
 /// A tram stop's platform, metres: a tram's length and a little.
-const PLATFORM: f32 = 36.0;
+pub(crate) const PLATFORM: f32 = 36.0;
+
+/// A tram stop's boarding area's depth from the track's side, metres: across the carriageway to
+/// a tram avenue's kerb and half a metre into its pavement, at the platform's height, ramped
+/// 1 in 12 at both ends and along its back down to the pavement (1.7 m over it), short of the
+/// walkers' line 3 m from the buildings. Someone on the pavement rolls up onto it anywhere; the
+/// bikes' strip by the kerb runs over it behind the shelter (the owner: a stop was not
+/// accessible, and bikes rode through it).
+pub(crate) fn boarding_deep() -> f64 {
+    let p = forge_procgen::city::Profile::TramAvenue;
+    p.width() * 0.5 - p.pavement() - (TRACK_OFFSET + 1.35) + 0.5
+}
+
+/// A tram stop's platform's height over the carriageway's base (0.16), metres.
+pub(crate) const PLATFORM_HIGH: f64 = 0.28;
 /// A stop's screen on its platform: on the totem's side towards the track, at eye height
 /// (`furniture::tram_stop`'s totem stands 5 m short of the platform's middle, 1.6 m in), over the
 /// top of its lit panel.

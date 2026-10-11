@@ -142,8 +142,8 @@ impl Route {
         if !riding {
             (half - 3.0).max(1.0)
         } else if pave > 0.0 {
-            // By the kerb, clear of the tram stops' platforms (which end 5.25 m off a tram
-            // avenue's centreline) and of the trams.
+            // By the kerb, clear of the trams; at a stop, over its boarding area behind the
+            // shelter, at its height (`Crowd::boarding_level`).
             (half - pave - 0.35).max(1.2)
         } else {
             (half - 3.4).max(1.2)
@@ -518,6 +518,35 @@ impl Crowd {
         self
     }
 
+    /// The level of a tram stop's boarding area at `q` on the plan, its ramps' slope at its ends,
+    /// or `None` off every boarding area: the bikes' strip by the kerb runs over them.
+    fn boarding_level(&self, q: DVec2) -> Option<f32> {
+        let half = self.size * 0.5;
+        let w = Vec3::new((q.x - half) as f32, 0.0, (q.y - half) as f32);
+        let (deep, high) = (crate::boarding_deep() as f32, crate::PLATFORM_HIGH as f32);
+        let (length, run) = (crate::PLATFORM, crate::PLATFORM_HIGH as f32 * 12.0);
+        let mut level = None;
+        self.stop_grid.for_each_within(q, 40.0, |_, k| {
+            let at = self.platforms[k as usize].at;
+            let corner = at.w_axis.truncate();
+            let d = w - Vec3::new(corner.x, 0.0, corner.z);
+            let (x, z) = (d.dot(at.x_axis.truncate()), d.dot(at.z_axis.truncate()));
+            if !(0.0..=deep).contains(&z) || !(-run..=length + run).contains(&x) {
+                return;
+            }
+            let h = if x < 0.0 {
+                high * (1.0 + x / run)
+            } else if x > length {
+                high * (1.0 - (x - length) / run)
+            } else {
+                high
+            };
+            let y = corner.y + h;
+            level = Some(level.map_or(y, |l: f32| l.max(y)));
+        });
+        level
+    }
+
     /// Advances the people's day by `real` seconds.
     pub fn advance(&mut self, real: f64) {
         self.clock += real * TIME_SCALE;
@@ -666,9 +695,12 @@ impl Crowd {
             };
             // On foot, or riding a bike.
             let riding = trip.mode == Mode::Bike;
-            let (q, dir, level) = route.at(gone * route.length(), riding);
+            let (q, dir, mut level) = route.at(gone * route.length(), riding);
             if q.distance(c) > REACH {
                 continue;
+            }
+            if riding && let Some(boarding) = self.boarding_level(q) {
+                level = level.max(boarding);
             }
             let seed = self.sim.pop.seed[p];
             // Riding, or walking a gait cycle of 1.4 m in eight poses: the left stride, half,
