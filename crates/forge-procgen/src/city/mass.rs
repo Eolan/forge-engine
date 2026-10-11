@@ -1,6 +1,6 @@
 //! Mass models: each lot's building as a footprint and a height, the first stage of D-039's
 //! grammar ("a mass model fitted to its lot"). A lot's building fills the strip between the
-//! building line (the block's outline moved in by [`STREET_HALF`]) and the courtyard (a
+//! building line (the block's outline moved in by half the width of each street it fronts) and the courtyard (a
 //! building's depth further in), measured from the street it faces. Its floors come from its
 //! district's range, capped by its street's profile: the tallest on avenues, lower on shared
 //! streets, the lowest on pedestrian lanes (heights that follow street widths,
@@ -10,7 +10,7 @@ use forge_core::SplitMix64;
 use glam::DVec2;
 
 use super::bible::StyleBible;
-use super::blocks::{BlockUse, STREET_HALF};
+use super::blocks::{BlockUse, edge_half_width};
 use super::geom::{self, PointGrid};
 use super::{CityPlan, Profile};
 
@@ -93,7 +93,8 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
                 continue;
             }
             let inward = DVec2::new(-edge.y, edge.x);
-            inside = geom::clip_half_plane(&inside, p + inward * STREET_HALF, edge);
+            let half = edge_half_width(&streets, &plan.roads, p, q);
+            inside = geom::clip_half_plane(&inside, p + inward * half, edge);
         }
         let pieces = match (&block.courtyard, district.kind.building_depth()) {
             (Some(courtyard), _) => outside_of(&inside, &geom::convex_hull(courtyard)),
@@ -102,7 +103,7 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
                 let inward = DVec2::new(-t.y, t.x);
                 vec![geom::clip_half_plane(
                     &inside,
-                    a + inward * (STREET_HALF + depth),
+                    a + inward * (edge_half_width(&streets, &plan.roads, a, a + t) + depth),
                     -t,
                 )]
             }

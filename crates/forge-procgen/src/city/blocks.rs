@@ -10,6 +10,7 @@ use forge_core::SplitMix64;
 use glam::DVec2;
 
 use super::geom::{self, PointGrid};
+use super::graph::RoadGraph;
 use super::{DistrictSpec, LAND, Site, district_index};
 use crate::field::Field2;
 
@@ -95,10 +96,9 @@ pub fn from_faces(
         } else {
             BlockUse::Built
         };
-        let courtyard = match (use_, kind.building_depth()) {
-            (BlockUse::Built, Some(depth)) => geom::inset(&polygon, STREET_HALF + depth),
-            _ => None,
-        };
+        // Courtyards come once the streets' profiles are known ([`courtyards`]).
+        let courtyard = None;
+        let _ = kind;
         blocks.push(Block {
             polygon,
             area,
@@ -112,8 +112,47 @@ pub fn from_faces(
 }
 
 /// Half a street's width plus its pavement, from a block's outline on the streets'
-/// centrelines to its building line, metres.
+/// centrelines to its building line, metres, where the street's own profile is not known.
 pub const STREET_HALF: f64 = 6.0;
+
+/// The streets' centrelines sampled every 10 m, each sample tagged with its edge.
+pub fn street_grid(roads: &RoadGraph, size: f64) -> PointGrid {
+    let mut grid = PointGrid::new(size, 50.0);
+    for (i, e) in roads.edges.iter().enumerate() {
+        for p in geom::resample(&e.points, 10.0) {
+            grid.insert(p, i as u32);
+        }
+    }
+    grid
+}
+
+/// Half the width of the street along a block's edge from `a` to `b` (its building line's
+/// distance from the centreline), [`STREET_HALF`] when no street is found.
+pub fn edge_half_width(grid: &PointGrid, roads: &RoadGraph, a: DVec2, b: DVec2) -> f64 {
+    grid.nearest((a + b) * 0.5, 30.0)
+        .map_or(STREET_HALF, |(_, e)| {
+            roads.edges[e as usize].profile.width() * 0.5
+        })
+}
+
+/// Each built block's courtyard: its outline moved in by half the widest street round it and its
+/// district's building depth, when the block is deep enough for one.
+pub fn courtyards(blocks: &mut [Block], roads: &RoadGraph, districts: &[DistrictSpec], size: f64) {
+    let grid = street_grid(roads, size);
+    for b in blocks.iter_mut() {
+        if b.use_ != BlockUse::Built {
+            continue;
+        }
+        let Some(depth) = districts[b.district].kind.building_depth() else {
+            continue;
+        };
+        let n = b.polygon.len();
+        let half = (0..n)
+            .map(|i| edge_half_width(&grid, roads, b.polygon[i], b.polygon[(i + 1) % n]))
+            .fold(STREET_HALF, f64::max);
+        b.courtyard = geom::inset(&b.polygon, half + depth);
+    }
+}
 
 /// The share of a polygon's area over water, sampled every 10 m, and a land point of it.
 fn water_share(site: &Site, polygon: &[DVec2]) -> (f64, Option<DVec2>) {

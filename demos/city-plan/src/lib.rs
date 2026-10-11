@@ -198,6 +198,7 @@ impl PlanScenario {
         for e in &plan.roads.edges {
             ribbon(&mut tiles, &e.points, e.profile.width(), 0.16, STREET);
         }
+        pavements(&mut tiles, plan);
         for line in &plan.tram_lines {
             for offset in [-0.7, 0.7] {
                 let rail = offset_line(&line.points, offset);
@@ -765,4 +766,70 @@ pub fn street_camera(plan: &CityPlan, near: DVec2) -> Option<FlyCamera> {
         speed: 3.0,
         ..FlyCamera::default()
     })
+}
+
+/// Raised pavements with kerbs along the avenues (shared streets, lanes and paths are level
+/// surfaces): each side a strip of the profile's pavement 14 cm over the carriageway and a kerb
+/// face towards it, cut back at each end by the widest street meeting there.
+fn pavements(tiles: &mut Tiles, plan: &CityPlan) {
+    use forge_procgen::city::Profile;
+    let size = tiles.size;
+    let mut widest = vec![0.0_f64; plan.roads.nodes.len()];
+    for e in &plan.roads.edges {
+        let half = e.profile.width() * 0.5;
+        widest[e.a as usize] = widest[e.a as usize].max(half);
+        widest[e.b as usize] = widest[e.b as usize].max(half);
+    }
+    for e in &plan.roads.edges {
+        let pavement = match e.profile {
+            Profile::TramAvenue => 5.0,
+            Profile::Avenue => 4.5,
+            _ => continue,
+        };
+        let length = e.length();
+        let (start, end) = (
+            widest[e.a as usize] + 1.0,
+            length - widest[e.b as usize] - 1.0,
+        );
+        if end - start < 4.0 {
+            continue;
+        }
+        let steps = ((end - start) / 4.0).ceil() as usize;
+        let line: Vec<DVec2> = (0..=steps)
+            .map(|i| geom::point_at(&e.points, start + (end - start) * i as f64 / steps as f64))
+            .collect();
+        let half = e.profile.width() * 0.5;
+        for side in [1.0, -1.0] {
+            let outer = offset_line(&line, side * half);
+            let inner = offset_line(&line, side * (half - pavement));
+            let (left, right) = if side > 0.0 {
+                (&outer, &inner)
+            } else {
+                (&inner, &outer)
+            };
+            strip(tiles, left, right, 0.30, PAVING);
+            // The kerb: from the carriageway's top up to the pavement's, facing the road.
+            for w in inner.windows(2) {
+                let tile = tiles.at(w[0]);
+                let centre = tile.centre;
+                let (a, b) = (w[0], w[1]);
+                let t = (b - a).normalize_or_zero();
+                let towards = DVec2::new(-t.y, t.x) * -side;
+                let normal = Vec3::new(towards.x as f32, 0.0, towards.y as f32);
+                let p = |q: DVec2, h: f64| world(size, q, h) - centre;
+                triangle(
+                    &mut tile.ground,
+                    [p(a, 0.16), p(b, 0.16), p(b, 0.30)],
+                    normal,
+                    PAVING,
+                );
+                triangle(
+                    &mut tile.ground,
+                    [p(a, 0.16), p(b, 0.30), p(a, 0.30)],
+                    normal,
+                    PAVING,
+                );
+            }
+        }
+    }
 }

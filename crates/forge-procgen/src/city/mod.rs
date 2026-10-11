@@ -581,8 +581,7 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
         params.park_min_area,
         params.park_share_cap,
     );
-    let lots = blocks::subdivide(&blocks, &params.districts, seed.derive_str("lots").value());
-    lap("blocks, parks and lots", &mut timings);
+    lap("blocks and parks", &mut timings);
 
     let mut tram_lines = transit::route_trams(&roads, &params.tram_lines, params.stop_spacing);
     if params.max_extra_lines > 0 {
@@ -604,6 +603,13 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
     }
     let crossings = transit::boat_crossings(site, &roads, params.boat_gap);
     transit::assign_profiles(&mut roads, &tram_lines, &districts_field, &params.districts);
+    lap("transit", &mut timings);
+
+    // Courtyards and lots once the streets' widths are known.
+    blocks::courtyards(&mut blocks, &roads, &params.districts, site.size);
+    let lots = blocks::subdivide(&blocks, &params.districts, seed.derive_str("lots").value());
+    lap("courtyards and lots", &mut timings);
+
     let landmarks = params
         .landmarks
         .iter()
@@ -612,7 +618,7 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
             pos: transit::nearest_main_node(&roads, l.anchor).unwrap_or(l.anchor),
         })
         .collect();
-    lap("transit and landmarks", &mut timings);
+    lap("landmarks", &mut timings);
 
     let mut plan = CityPlan {
         size: site.size,

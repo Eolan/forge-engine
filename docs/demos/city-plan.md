@@ -28,11 +28,11 @@ cargo run --release -p city-map -- --size 4000 --scale 2 --out captures/city
 | Street pattern | a tensor field: a grid per district at its angle, rings at radial squares, the water's tangents near the coast and rivers (Chen et al. 2008) | `city::tensor` |
 | Streets | main roads traced first (bridging rivers up to 260 m), then streets at each district's spacing; each stops half a block short of a parallel street, and its end joins the nearest street ahead | `city::streets` |
 | Road graph | streets cut where they cross or meet, ends snapped, dead ends under 60 m pruned; blocks as the graph's bounded faces | `city::graph` |
-| Blocks | quays where a face holds water; parks from park districts, then from the 3-30-300 rule (a park of 1 ha within 300 m of every built block); a courtyard per block, inset by the street and a building's depth | `city::blocks` |
+| Blocks | quays where a face holds water; parks from park districts, then from the 3-30-300 rule (a park of 1 ha within 300 m of every built block); a courtyard per block, inset by half the widest street round it and a building's depth, once the streets' profiles are known | `city::blocks` |
 | Lots | recursive splits across each piece's long axis (Vanegas et al. 2012); only the pieces on a street are kept where a block has a courtyard | `city::blocks` |
 | Forest | ground above a height or steeper than a slope goes to the first reserve district (a real site's hills) | `city::district_field` |
 | Transit | tram lines by the shortest path through their waypoints, main roads preferred (a waypoint far from any main road snaps to the nearest street); stops every 450 m moved to nearby junctions; lines added until a target share of blocks has a stop within 400 m (`transit::cover`); boat crossings where a river runs long without a bridge; street profiles (tram avenue, avenue, shared, pedestrian, path) | `city::transit` |
-| Masses | each lot's building: the lot cut by the building line of each street it touches, less the courtyard's hull (or a building's depth along its street where no courtyard fits); floors from the district's range, capped by the style bible's height-to-width ratio on the street it fronts; green, solar or terrace roofs | `city::mass` |
+| Masses | each lot's building: the lot cut by the building line of each street it touches (half that street's profile width from its centreline), less the courtyard's hull (or a building's depth along its street where no courtyard fits); floors from the district's range, capped by the style bible's height-to-width ratio on the street it fronts; green, solar or terrace roofs | `city::mass` |
 | Style bible | one TOML record of the city's rules (height to street width, green roofs, green area per block, park and stop reach, the streets' share, per-district floors, lots, spacing and walls), put into the plan's parameters and measured by a checker that names what fails | `city::bible` |
 | Trees | rows along the streets by profile (two on avenues every 9 m, one on shared streets every 11 m, every 18 m in lanes), none within 10 m of a junction; a jittered grid in parks (13 m, two thirds filled), on the quays (14 m, under half) and in courtyards (16 m, half) | `city::trees` |
 | Maps and numbers | a small rasteriser: the plan (with the districts', landmarks' and lines' names in the engine's font, kept from overlapping), a checks map (blocks by what they lack), an oblique massing view of any window; the plan's numbers and its digest | `city::map` |
@@ -47,13 +47,13 @@ router, and `forge_core::dmath` does the trigonometry. Two runs give the same di
 | Land | 14.3 km² |
 | Main roads / streets | 59 km / 149 km, 8 bridges |
 | Built blocks / parks | 674 (mean 1.66 ha) / 48 |
-| Lots / blocks with a courtyard | 12 930 / 608 |
+| Lots / blocks with a courtyard | 13 323 / 563 |
 | Parks' share of the land | 10.5 % |
 | Built blocks with a 1 ha park within 300 m | 100 % |
 | Built blocks within 400 m of a tram stop | 45 % (two lines, no line added) |
 | Streets' share of the land | 21.5 % |
 | Tram lines | 7.8 km, 19 stops |
-| Masses / floor area | 15 155 / 19.7 km² (13 ms; floors capped by street width) |
+| Masses / floor area | 14 700 / 20.5 km² (14 ms; floors capped by street width) |
 
 | Stage | Time |
 |---|---|
@@ -62,8 +62,9 @@ router, and `forge_core::dmath` does the trigonometry. Two runs give the same di
 | main roads | 2.3 ms |
 | streets | 8.6 ms |
 | road graph and faces | 10.3 ms |
-| blocks, parks and lots | 10.2 ms |
-| transit and landmarks | 0.3 ms |
+| blocks and parks | 5.5 ms |
+| transit | 0.2 ms |
+| courtyards and lots | 5.8 ms |
 | **the whole plan** | **≈ 42 ms** |
 
 ## Tests
@@ -83,7 +84,7 @@ router, and `forge_core::dmath` does the trigonometry. Two runs give the same di
 ```
 ok   height at most the street's width times the ratio: 1.000
 ok   green roofs' share: 0.507 (limit 0.500)
-FAIL built blocks at their green area: 0.889 (limit 1.000); 75 failing, e.g. block 10: 0.08, …
+FAIL built blocks at their green area: 0.788 (limit 1.000); 143 failing, e.g. block 10: 0.06, …
 ok   built blocks with a park within reach: 1.000
 FAIL built blocks within 400 m of a tram stop: 0.454 (limit 0.900)
 ok   streets' share of the land at most: 0.215 (limit 0.250)
@@ -131,9 +132,10 @@ palette chosen by lot. Variety in the facades themselves comes with D-039's modu
 
 ![At eye height](images/city-plan-street.png)
 
-*At eye height on the river avenue (`--street`): shopfronts, shuttered window bays, the
-tree-lined quay and the river. Street level shows what comes next: pavements and kerbs, street
-furniture, finer trees, the modules (#247).*
+*At eye height on the river avenue (`--street`): buildings behind raised pavements with kerbs,
+shopfronts and shuttered window bays, a row of plane-like trees each side, tram tracks, the
+tree-lined quay and the river. Next at this height: street furniture, finer trees, the modules
+(#247).*
 
 ![Night, three ways](images/city-plan-night.png)
 
@@ -147,7 +149,6 @@ stopgap.*
 
 ## Next (#245–#247)
 
-- Building lines per street profile.
 - Squares at the radial districts' centres; the landmarks' sightlines.
 - More checks on the checks map; a legend.
 - The style bible's palette into the materials; more rules (cornice lines, opening rhythm) once facades exist (#246).
