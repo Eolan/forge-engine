@@ -352,6 +352,42 @@ impl PlanScenario {
                 tiles.flat(&middle, SQUARE_LEVEL + 0.02, PARK, false);
             }
         }
+        // Paths across the open blocks' greens: from each gap between the buildings (a street
+        // lot left open) to the court's middle, paved, 2.4 m wide (the owner's photos of open
+        // blocks: a shared green with paths through it).
+        let built: std::collections::HashSet<u32> = masses.iter().map(|m| m.lot).collect();
+        for (i, lot) in plan.lots.iter().enumerate() {
+            let block = &plan.blocks[lot.block as usize];
+            let Some(court) = &block.courtyard else {
+                continue;
+            };
+            if !lot.frontage || built.contains(&(i as u32)) || block.use_ != BlockUse::Built {
+                continue;
+            }
+            // From the street's edge nearest the gap's middle to the court's.
+            let middle = geom::centroid(&lot.polygon);
+            let n = block.polygon.len();
+            let from = (0..n)
+                .map(|k| {
+                    let (a, b) = (block.polygon[k], block.polygon[(k + 1) % n]);
+                    a + (b - a) * geom::closest_on_segment(middle, a, b)
+                })
+                .min_by(|p, q| p.distance(middle).total_cmp(&q.distance(middle)));
+            let Some(from) = from else {
+                continue;
+            };
+            let line = geom::resample(&[from, geom::centroid(court)], 2.0);
+            if line.len() < 2 {
+                continue;
+            }
+            strip(
+                &mut tiles,
+                &offset_line(&line, 1.2),
+                &offset_line(&line, -1.2),
+                0.12,
+                PAVING,
+            );
+        }
         // The quays' land as lawns, cell by cell (their faces hold water), under the trees.
         for block in plan.blocks.iter().filter(|b| b.use_ == BlockUse::Quay) {
             lawn(&mut tiles, &shore, &block.polygon);

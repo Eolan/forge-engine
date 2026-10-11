@@ -31,6 +31,9 @@ pub struct DistrictStyle {
     /// Open blocks: the share of a block's middle lots left as gardens; none when not given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gaps: Option<f64>,
+    /// Open blocks: the longest front before a gap, metres; 120 when not given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<f64>,
 }
 
 /// A city's rules.
@@ -100,6 +103,9 @@ impl StyleBible {
                 }
                 if style.tiled_roofs.is_some() {
                     d.tiled_roofs = style.tiled_roofs;
+                }
+                if style.run.is_some() {
+                    d.run = style.run;
                 }
                 if style.gaps.is_some() {
                     d.gaps = style.gaps;

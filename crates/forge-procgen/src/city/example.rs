@@ -67,6 +67,7 @@ pub fn params(size: f64) -> CityParams {
         depth: None,
         tiled_roofs: None,
         gaps: None,
+        run: None,
     };
     let r = size;
     CityParams {

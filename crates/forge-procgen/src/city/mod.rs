@@ -240,6 +240,10 @@ pub struct DistrictSpec {
     /// between its buildings that let light, views and people into the courtyard. None by
     /// default.
     pub gaps: Option<f64>,
+    /// Open blocks: the longest front a building runs before a gap, metres (120 when `None`).
+    /// Under 60 m the corners open too: separate buildings round a shared green rather than a
+    /// ring (the owner's photos of open blocks, 2026-10-11).
+    pub run: Option<f64>,
 }
 
 impl DistrictSpec {
@@ -251,6 +255,11 @@ impl DistrictSpec {
             DistrictKind::Village => 0.9,
             _ => 0.0,
         })
+    }
+
+    /// The longest front its buildings run before a gap, metres ([`DistrictSpec::run`]).
+    pub fn run_max(&self) -> f64 {
+        self.run.unwrap_or(120.0).max(10.0)
     }
 
     /// The share of its blocks' middle lots left as gardens ([`DistrictSpec::gaps`]): 0 unless
@@ -280,6 +289,7 @@ impl DistrictSpec {
             depth: None,
             tiled_roofs: None,
             gaps: None,
+            run: None,
         }
     }
 }

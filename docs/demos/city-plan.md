@@ -113,8 +113,12 @@ buildings too close, on their second walk (2026-10-11). A plan can now set two o
   919 k → 1.07 M people with the open blocks below.
 - `DistrictSpec::gaps` (open blocks, Portzamparc's *îlot ouvert*): a lot between a block's
   corners left as a garden at the district's share, and wherever a block's front has run
-  120 m since the last gap; never two side by side. Light, views and people reach the
-  courtyard, and the walls beside a gap get windows.
+  `DistrictSpec::run` (120 m when not given) since the last gap; never two side by side. Under
+  60 m a corner lot may be a gap too: separate buildings round a shared green rather than a
+  ring (the owner's photos of open blocks: open, organic, not oppressive). Light, views and
+  people reach the courtyard, the walls beside a gap get windows, and in 3D a paved path runs
+  from each gap to the court's middle. The sandbox opens its modern districts (runs of 35–55 m,
+  gaps 10–25 %) and keeps its centre and old town closed: about 1.05 M people.
 
 ## In 3D
 

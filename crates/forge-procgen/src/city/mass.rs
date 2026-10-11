@@ -273,14 +273,16 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
     out
 }
 
-/// The longest front a block in an open-block district runs before a gap, metres.
-const RUN_MAX: f64 = 120.0;
+/// Under this run (metres) an open-block district opens its corners too.
+const OPEN_CORNERS: f64 = 60.0;
 
 /// Open blocks (`DistrictSpec::gaps`): the lots left as gardens between the buildings, so light,
 /// views and people reach the courtyards (the owner found the long rows of big buildings too
 /// close, 2026-10-11). Each block's street lots in order round its outline: a lot between its
 /// corners (one street front) becomes a gap at the district's share, and wherever the front
-/// has run [`RUN_MAX`] since the last gap; never two side by side.
+/// has run its district's [`super::DistrictSpec::run_max`] since the last gap; never two side by
+/// side. Where that run is under [`OPEN_CORNERS`], a corner lot may be a gap too: separate
+/// buildings round a shared green (the owner: open and organic, not oppressive).
 fn open_gaps(plan: &CityPlan, seed: u64) -> std::collections::HashSet<usize> {
     let mut by_block: std::collections::HashMap<u32, Vec<usize>> = Default::default();
     for (i, lot) in plan.lots.iter().enumerate() {
@@ -293,7 +295,9 @@ fn open_gaps(plan: &CityPlan, seed: u64) -> std::collections::HashSet<usize> {
     blocks.sort_by_key(|(b, _)| *b);
     for (b, lots) in blocks {
         let block = &plan.blocks[b as usize];
-        let share = plan.districts[block.district].gap_share();
+        let district = &plan.districts[block.district];
+        let (share, run_max) = (district.gap_share(), district.run_max());
+        let corners = run_max < OPEN_CORNERS;
         if share <= 0.0 || block.use_ != BlockUse::Built {
             continue;
         }
@@ -328,7 +332,7 @@ fn open_gaps(plan: &CityPlan, seed: u64) -> std::collections::HashSet<usize> {
         for (_, length, edges, l) in fronts {
             let draw =
                 SplitMix64::new(seed ^ (l as u64).wrapping_mul(0xD1B5_4A32_D192_ED03)).next_f64();
-            if edges == 1 && !last && (draw < share || run >= RUN_MAX) {
+            if (edges == 1 || corners) && !last && (draw < share || run >= run_max) {
                 gaps.insert(l);
                 run = 0.0;
                 last = true;
