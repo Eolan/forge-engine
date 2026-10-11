@@ -657,7 +657,8 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
         params.park_share_cap,
     );
     // Squares at the built districts' centres and the landmarks, and the old towns' small ones.
-    // A district's square at most 1 ha; a landmark's 0.15–3.5 ha (a hall or a crane needs room).
+    // A district's square at most 1 ha; a landmark's 0.15–3.5 ha (a hall needs room). A crane
+    // stands on a quay and gets none.
     let anchors: Vec<(DVec2, (f64, f64))> = params
         .districts
         .iter()
@@ -667,6 +668,7 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
             params
                 .landmarks
                 .iter()
+                .filter(|l| l.kind != LandmarkKind::GantryCrane)
                 .map(|l| (l.anchor, (1_500.0, 35_000.0))),
         )
         .collect();

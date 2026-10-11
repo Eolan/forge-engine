@@ -323,7 +323,7 @@ their building lines, a paved border round it under the trees. The example has 1
 slivers included.
 
 **The landmarks** (`LandmarkKind`) get their own square: the built block of 0.15–3.5 ha
-nearest their anchor becomes one. Each then stands on the nearest square of 0.15 ha or more
+nearest their anchor becomes one. A crane gets none: it stands on a quay. Each then stands on the nearest square of 0.15 ha or more
 within 160 m (`Landmark::square`). A terraced hall without one takes the nearest quay within
 250 m. A gantry crane looks for a quay first, the nearest within 600 m, and a square after.
 Four have models (`forge_geom::landmarks`):
