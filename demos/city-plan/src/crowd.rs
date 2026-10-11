@@ -35,8 +35,12 @@ const REACH: f64 = 220.0;
 const TIME_SCALE: f64 = 1.0;
 /// A terrace seat's neighbourhood, metres: the cafés whose people may sit there.
 const NEIGHBOURHOOD: f64 = 300.0;
-/// Calls between two counts of who is where (the cafés' people).
-const RECOUNT: u32 = 30;
+/// Frames a scan of the whole population takes: who may be drawn round the camera, and who is
+/// at each place (the cafés' people). Each frame scans its share, so no frame walks the million.
+const SCAN_FRAMES: usize = 30;
+/// How much further than [`REACH`] the scan looks, metres: the camera may move, and a route
+/// strays from its straight line, before the next scan ends.
+const SCAN_MARGIN: f64 = 300.0;
 /// Routes found a frame at most.
 const NEW_ROUTES: usize = 40;
 /// The fastest a drawn trip goes along its street route, m/s: a route much longer than the
@@ -153,9 +157,12 @@ pub struct Crowd {
     stop_grid: PointGrid,
     timetables: Vec<Timetable>,
     boarded: HashSet<u32>,
-    /// People at each place, counted every [`RECOUNT`] calls.
+    /// People at each place, from the last whole scan.
     counts: Vec<u32>,
-    calls: u32,
+    /// The people who may be drawn round the camera, from the last whole scan.
+    near: Vec<u32>,
+    /// The scan under way: the next person, and what it has found so far.
+    scan: (usize, Vec<u32>, Vec<u32>),
 }
 
 /// A tram stop's platform: where it stands (its corner, `x` along it, `z` away from its track),
@@ -292,7 +299,63 @@ impl Crowd {
             boarded: HashSet::new(),
             platforms,
             counts: Vec::new(),
-            calls: 0,
+            near: Vec::new(),
+            scan: (0, Vec::new(), Vec::new()),
+        }
+    }
+
+    /// Scans `n` more people for who may be drawn round `c` (the plan's frame) and who is at
+    /// each place; at the population's end the scan's findings replace the last ones.
+    fn scan(&mut self, c: DVec2, n: usize) {
+        let places = &self.sim.world.places;
+        let total = self.sim.pop.len();
+        let (next, found, counts) = &mut self.scan;
+        if counts.len() != places.len() {
+            *counts = vec![0; places.len()];
+        }
+        let end = (*next + n).min(total);
+        let now = self.clock;
+        let pos = |i: u32| {
+            let q = places[i as usize].pos;
+            DVec2::new(f64::from(q[0]), f64::from(q[1]))
+        };
+        for p in *next..end {
+            match self.sim.trip(p) {
+                None => {
+                    let at = self.sim.pop.at[p];
+                    if let Some(k) = counts.get_mut(at as usize) {
+                        *k += 1;
+                    }
+                    // In a park: standing up to 70 m from its place.
+                    if places
+                        .get(at as usize)
+                        .is_some_and(|q| q.kind == PlaceKind::Park)
+                        && pos(at).distance(c) <= REACH + 100.0 + SCAN_MARGIN
+                    {
+                        found.push(p as u32);
+                    }
+                }
+                Some(trip) => {
+                    let (a, b) = (pos(trip.from), pos(trip.to));
+                    let near = if trip.mode == Mode::Tram {
+                        // Waiting at the platform nearest where they set out.
+                        a.distance(c) <= REACH + 500.0 + SCAN_MARGIN
+                    } else {
+                        let gone = ((now - f64::from(trip.since)) / f64::from(trip.time.max(1)))
+                            .clamp(0.0, 1.0);
+                        (a + (b - a) * gone).distance(c) <= REACH * 1.5 + SCAN_MARGIN
+                    };
+                    if near {
+                        found.push(p as u32);
+                    }
+                }
+            }
+        }
+        *next = end;
+        if end == total {
+            self.near = std::mem::take(found);
+            self.counts = std::mem::replace(counts, vec![0; places.len()]);
+            *next = 0;
         }
     }
 
@@ -300,18 +363,6 @@ impl Crowd {
     /// frame): each seat taken in the share the people out round it make of the seats round it,
     /// a palette's seated mesh each.
     fn seat_people(&mut self, c: DVec2, out: &mut [Vec<(Vec3, f32)>]) {
-        if self.calls.is_multiple_of(RECOUNT) || self.counts.is_empty() {
-            self.counts = vec![0; self.sim.world.places.len()];
-            for p in 0..self.sim.pop.len() {
-                if self.sim.trip(p).is_none() {
-                    let at = self.sim.pop.at[p] as usize;
-                    if let Some(n) = self.counts.get_mut(at) {
-                        *n += 1;
-                    }
-                }
-            }
-        }
-        self.calls = self.calls.wrapping_add(1);
         let half = self.size * 0.5;
         for (k, &(p, turn)) in self.seats.iter().enumerate() {
             let at = DVec2::new(f64::from(p.x) + half, f64::from(p.z) + half);
@@ -319,7 +370,10 @@ impl Crowd {
                 continue;
             }
             let (cafes, around) = &self.neighbourhoods[k];
-            let people: u32 = cafes.iter().map(|&q| self.counts[q as usize]).sum();
+            let people: u32 = cafes
+                .iter()
+                .filter_map(|&q| self.counts.get(q as usize))
+                .sum();
             let share = (f64::from(people) / f64::from((*around).max(1))).min(0.9);
             // The same seats stay taken while the share holds (a hash of the seat, not a draw).
             let pick = (k as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 54;
@@ -358,9 +412,19 @@ impl Crowd {
                 }
             }
         }
+        // This frame's share of the scan; the whole of it before the first frame.
+        let total = self.sim.pop.len();
+        let share = if self.counts.is_empty() {
+            total
+        } else {
+            total.div_ceil(SCAN_FRAMES)
+        };
+        self.scan(c, share);
+        let near = std::mem::take(&mut self.near);
         let places = &self.sim.world.places;
         let now = self.clock;
-        for p in 0..self.sim.pop.len() {
+        for &p in &near {
+            let p = p as usize;
             let Some(trip) = self.sim.trip(p) else {
                 // In a park: standing about it, scattered by their seed as the maps show them.
                 let at = self.sim.pop.at[p] as usize;
@@ -374,8 +438,10 @@ impl Crowd {
                         f64::from(q[1]) + jitter(s >> 8),
                     );
                     let mesh = (s as usize % GROUPS) * POSES + 1;
-                    let inside = self.parks.iter().any(|p| geom::contains(p, q));
-                    if inside && q.distance(c) <= REACH && out[mesh].len() < PER_MESH {
+                    if q.distance(c) <= REACH
+                        && out[mesh].len() < PER_MESH
+                        && self.parks.iter().any(|p| geom::contains(p, q))
+                    {
                         let at = Vec3::new((q.x - half) as f32, 0.08, (q.y - half) as f32);
                         out[mesh].push((at, ((s >> 20) as f32 / 4096.0) * std::f32::consts::TAU));
                     }
@@ -456,6 +522,7 @@ impl Crowd {
             let at = Vec3::new((q.x - half) as f32, level, (q.y - half) as f32);
             out[mesh].push((at, (-dir.y).atan2(dir.x) as f32));
         }
+        self.near = near;
         self.seat_people(c, &mut out);
         // Forget who boarded once their trip has ended, and the routes of trips that have ended.
         if self.boarded.len() > 5000 {
