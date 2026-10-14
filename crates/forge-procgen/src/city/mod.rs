@@ -690,6 +690,10 @@ fn landmark_site(blocks: &[Block], l: &LandmarkSpec) -> Option<usize> {
     })
 }
 
+/// How far apart along a river its bridges stand, metres: about a city centre's (Paris's run 300
+/// to 400 m apart in its centre; the boats cross between them).
+pub const BRIDGE_SPACING: f64 = 450.0;
+
 /// Makes the plan.
 pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
     let mut timings = Vec::new();
@@ -733,7 +737,19 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
         Some(_) => Some(params.main_spacing),
         None => Some(params.main_spacing),
     };
+    // The bridges first (D-061): one every BRIDGE_SPACING along each river between built
+    // districts, square to it at its narrowest; main roads cross only there, and each site's
+    // ends seed them.
+    let built = |p: DVec2| {
+        kind_at(p).is_some_and(|d| d.kind != DistrictKind::Reserve && !d.kind.is_green())
+    };
+    let sites = if params.max_bridge > 0.0 {
+        streets::bridge_sites(site, BRIDGE_SPACING, params.max_bridge, &built)
+    } else {
+        Vec::new()
+    };
     let mut seeds = vec![params.centre];
+    seeds.extend(sites.iter().flat_map(|s| [s.a, s.b]));
     seeds.extend(params.districts.iter().map(|d| d.anchor));
     let main = streets::trace_level(
         &field,
@@ -743,6 +759,7 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
         &main_spacing,
         &seeds,
         seed.derive_str("main roads").value(),
+        &sites,
     );
     lap("main roads", &mut timings);
 
@@ -769,13 +786,18 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
         &street_spacing,
         &seeds,
         seed.derive_str("streets").value(),
+        &[],
     );
     lap("streets", &mut timings);
 
     let mut lines = main;
     lines.extend(streets);
+    // The bridge sites no traced road took get one, straight on inland to the first street on
+    // either side.
+    let connected = streets::connect_sites(site, &sites, &lines);
+    lines.extend(connected);
     let mut roads = graph::build(site, &lines, 1.5, 60.0);
-    graph::tidy(&mut roads, site, 60.0);
+    graph::tidy(&mut roads, site);
     let mut faces = graph::faces(&roads);
     // Superblocks cut by streets, a cut a round (a 600 m block takes three).
     if let Some(max) = params.max_block {
@@ -791,7 +813,7 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
             }
             lines.extend(cuts);
             roads = graph::build(site, &lines, 1.5, 60.0);
-            graph::tidy(&mut roads, site, 60.0);
+            graph::tidy(&mut roads, site);
             faces = graph::faces(&roads);
         }
     }

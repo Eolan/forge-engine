@@ -70,6 +70,7 @@ pub fn trace_level(
     spacing: &dyn Fn(DVec2) -> Option<f64>,
     seeds: &[DVec2],
     seed: u64,
+    sites: &[BridgeSite],
 ) -> Vec<Streamline> {
     let size = field.size();
     let mut families = [PointGrid::new(size, 40.0), PointGrid::new(size, 40.0)];
@@ -110,10 +111,12 @@ pub fn trace_level(
         }
         let id = lines.len() as u32;
         let grid = &families[usize::from(minor)];
-        let (forward, fwd_stop, fwd_bridges) =
-            trace_half(field, site, grid, params, spacing, start, minor, 1.0, id);
-        let (backward, back_stop, back_bridges) =
-            trace_half(field, site, grid, params, spacing, start, minor, -1.0, id);
+        let (forward, fwd_stop, fwd_bridges) = trace_half(
+            field, site, grid, params, spacing, start, minor, 1.0, id, sites,
+        );
+        let (backward, back_stop, back_bridges) = trace_half(
+            field, site, grid, params, spacing, start, minor, -1.0, id, sites,
+        );
         let mut points: Vec<DVec2> = backward.iter().rev().copied().collect();
         let offset = points.len();
         points.extend_from_slice(&forward[1..]);
@@ -196,6 +199,7 @@ fn trace_half(
     minor: bool,
     sign: f64,
     id: u32,
+    sites: &[BridgeSite],
 ) -> (Vec<DVec2>, Stop, Vec<(usize, usize)>) {
     let mut points = vec![start];
     let mut bridges = Vec::new();
@@ -226,6 +230,22 @@ fn trace_half(
         let water = site.water_at(q);
         if water != LAND {
             // Bridge a river if land comes back within reach, straight ahead.
+            // With bridge sites, a road crosses only at one: along the bank to its near end,
+            // over to its far end, and on from there the bridge's way.
+            if water == RIVER && params.max_bridge > 0.0 && !sites.is_empty() {
+                if let Some((near, far)) = bridge_ahead(sites, p, dir) {
+                    if near.distance(p) > 0.5 {
+                        points.push(near);
+                    }
+                    let first = points.len() - 1;
+                    points.push(far);
+                    bridges.push((first, points.len() - 1));
+                    length += p.distance(near) + near.distance(far);
+                    dir = (far - near).normalize_or_zero();
+                    continue;
+                }
+                return (points, Stop::Edge, bridges);
+            }
             if water == RIVER && params.max_bridge > 0.0 {
                 let mut far = q;
                 let mut crossed = h;
@@ -292,6 +312,139 @@ fn nearest_ahead(
     best.map(|(_, q)| q)
 }
 
+/// Where a river is bridged: a crossing chosen before any road is traced (D-061), its two ends
+/// on the banks. Main roads cross only here. Left to the streamlines, two roads a few dozen
+/// metres apart each threw a bridge, sometimes across each other over the water (the owner:
+/// "bridges are still a mess").
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BridgeSite {
+    /// The end on one bank.
+    pub a: DVec2,
+    /// The end on the other.
+    pub b: DVec2,
+}
+
+/// The bridge sites along the site's rivers: one every `spacing` metres along each river inside
+/// the frame where `allowed` holds at both ends (the built districts), each square to the river
+/// and at the narrowest place within 80 m of its mark, no longer than `max_span`.
+pub fn bridge_sites(
+    site: &Site,
+    spacing: f64,
+    max_span: f64,
+    allowed: &dyn Fn(DVec2) -> bool,
+) -> Vec<BridgeSite> {
+    let mut out = Vec::new();
+    let inside = |p: DVec2| p.x >= 0.0 && p.y >= 0.0 && p.x <= site.size && p.y <= site.size;
+    for river in &site.rivers {
+        let line = &river.centreline;
+        let length = super::geom::polyline_length(line);
+        // From the centreline at `s`, square to it, out to the land on either side.
+        let span = |s: f64| -> Option<(DVec2, DVec2)> {
+            let c = super::geom::point_at(line, s);
+            let t = super::geom::tangent_at(line, s);
+            let n = DVec2::new(-t.y, t.x);
+            let bank = |side: f64| {
+                let mut d = 0.0;
+                while d <= max_span {
+                    let p = c + n * (d * side);
+                    match site.water_at(p) {
+                        LAND => return Some(p + n * (2.0 * side)),
+                        RIVER => d += 2.0,
+                        _ => return None,
+                    }
+                }
+                None
+            };
+            let (a, b) = (bank(1.0)?, bank(-1.0)?);
+            (inside(a) && inside(b) && a.distance(b) <= max_span && allowed(a) && allowed(b))
+                .then_some((a, b))
+        };
+        let mut s = spacing * 0.5;
+        while s < length {
+            let best = (-8..=8)
+                .filter_map(|k| {
+                    let at = s + f64::from(k) * 10.0;
+                    span(at).map(|(a, b)| (a.distance(b) + 0.2 * (at - s).abs(), a, b))
+                })
+                .min_by(|x, y| x.0.total_cmp(&y.0));
+            if let Some((_, a, b)) = best {
+                out.push(BridgeSite { a, b });
+            }
+            s += spacing;
+        }
+    }
+    out
+}
+
+/// A road over each bridge site no traced road took: from each end straight on inland along the
+/// bridge's axis to the first road of `lines` it meets within 300 m, on land, a T-junction there.
+/// A site that meets none on either side keeps no bridge (the boats cross there). Joined to the
+/// nearest road point instead, a bridge landed on a turn along the quay (the owner).
+pub fn connect_sites(site: &Site, sites: &[BridgeSite], lines: &[Streamline]) -> Vec<Streamline> {
+    let used = |s: &BridgeSite| {
+        lines.iter().any(|l| {
+            l.points.iter().any(|p| p.distance(s.a) < 1.0)
+                && l.points.iter().any(|p| p.distance(s.b) < 1.0)
+        })
+    };
+    // The first road the ray from `from` along `way` meets, before any water.
+    let ahead = |from: DVec2, way: DVec2| -> Option<DVec2> {
+        let to = from + way * 300.0;
+        let mut best: Option<(f64, DVec2)> = None;
+        for line in lines {
+            for w in line.points.windows(2) {
+                if let Some((t, _)) = super::geom::segment_intersection(from, to, w[0], w[1])
+                    && t * 300.0 > 1.0
+                    && best.is_none_or(|(b, _)| t < b)
+                {
+                    best = Some((t, from + (to - from) * t));
+                }
+            }
+        }
+        best.map(|(_, q)| q)
+            .filter(|&q| !site.segment_crosses_water(from + way * 0.5, q))
+    };
+    let mut out = Vec::new();
+    for s in sites.iter().filter(|s| !used(s)) {
+        let way = (s.b - s.a).normalize_or_zero();
+        if let (Some(qa), Some(qb)) = (ahead(s.a, -way), ahead(s.b, way)) {
+            out.push(Streamline {
+                points: vec![qa, s.a, s.b, qb],
+                minor: false,
+                class: RoadClass::Main,
+                bridges: vec![(1, 2)],
+            });
+        }
+    }
+    out
+}
+
+/// The bridge site a street reaching the river at `p`, heading `dir`, takes: the nearest whose
+/// near end lies within 60 m, 12 m off its axis at most and which runs within 25° of the
+/// street's way, as its near and far ends.
+fn bridge_ahead(sites: &[BridgeSite], p: DVec2, dir: DVec2) -> Option<(DVec2, DVec2)> {
+    sites
+        .iter()
+        .filter_map(|s| {
+            let (near, far) = if s.a.distance(p) <= s.b.distance(p) {
+                (s.a, s.b)
+            } else {
+                (s.b, s.a)
+            };
+            let way = (far - near).normalize_or_zero();
+            // Arriving near its axis and nearly along it: a bridge lands straight, not on a
+            // turn along the quay (the owner saw a bridge land on an L).
+            let lateral = super::geom::cross(way, p - near).abs();
+            (near.distance(p) <= 60.0 && lateral <= 12.0 && way.dot(dir) > 0.9).then_some((
+                near.distance(p),
+                near,
+                far,
+            ))
+        })
+        .min_by(|x, y| x.0.total_cmp(&y.0))
+        .map(|(_, near, far)| (near, far))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -330,6 +483,7 @@ mod tests {
             &|_| Some(100.0),
             &[DVec2::splat(500.0)],
             7,
+            &[],
         );
         let horizontal: Vec<&Streamline> = lines.iter().filter(|l| !l.minor).collect();
         let vertical: Vec<&Streamline> = lines.iter().filter(|l| l.minor).collect();

@@ -220,9 +220,7 @@ pub fn route_trams(graph: &RoadGraph, specs: &[TramLineSpec], stop_spacing: f64)
                 name: spec.name.clone(),
                 colour: spec.colour,
                 edges,
-                // Simplified, then each corner rounded: trams turn on arcs, not at a point (the
-                // owner saw the tracks turn at right angles in a junction).
-                points: geom::fillet(&geom::simplify(&points, 0.5), TRAM_RADIUS, 2.0),
+                points: alignment(&points),
                 stops,
             });
         }
@@ -423,4 +421,22 @@ pub fn assign_profiles(
             (RoadClass::Street, false, _) => Profile::Shared,
         };
     }
+}
+
+/// How far a tram line's alignment may stray from its streets' centrelines, metres: inside the
+/// tram avenue's carriageway, short of its cycle tracks.
+const ALIGN_TOLERANCE: f64 = 1.5;
+
+/// A tram line's alignment along its route: long straights and a few deliberate curves, as
+/// tracks are laid. The route is first straightened to within [`ALIGN_TOLERANCE`] (the jogs where
+/// its streets meet at junctions go), then each corner is rounded: a junction's turn of 45° or
+/// more on [`TRAM_RADIUS`], a gentler bend on a longer arc, up to 120 m for a few degrees. Each
+/// small jog had been rounded on its own into a run of little S-bends (the owner: "trams
+/// wouldn't make a series of small undulating turns").
+pub fn alignment(route: &[DVec2]) -> Vec<DVec2> {
+    let radius = |turn: f64| {
+        let share = (turn / 45f64.to_radians()).min(1.0);
+        TRAM_RADIUS + (120.0 - TRAM_RADIUS) * (1.0 - share)
+    };
+    geom::fillet_by(&geom::simplify(route, ALIGN_TOLERANCE), &radius, 2.0)
 }

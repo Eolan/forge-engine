@@ -140,6 +140,9 @@ pub fn edge_half_width(grid: &PointGrid, roads: &RoadGraph, a: DVec2, b: DVec2) 
         })
 }
 
+/// The smallest courtyard kept, square metres: a small room's floor and a little.
+const MIN_COURT: f64 = 40.0;
+
 /// Each built block's and square's buildable outline on the building lines, and each built
 /// block's courtyard: its outline moved in by half the widest street round it and its
 /// district's building depth, when the block is deep enough for one.
@@ -169,10 +172,13 @@ pub fn courtyards(blocks: &mut [Block], roads: &RoadGraph, districts: &[District
             continue;
         };
         // A building's depth behind the building lines, or behind the widest street's.
+        // A court smaller than a room's floor is none: the block is built through (an 8 m²
+        // court was left that no one could walk into).
         b.courtyard = match &lines {
             Some(inside) => geom::inset(inside, depth),
             None => geom::inset(&b.polygon, half + depth),
-        };
+        }
+        .filter(|c| geom::signed_area(c).abs() >= MIN_COURT);
     }
 }
 

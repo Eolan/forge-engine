@@ -483,7 +483,7 @@ impl PlanScenario {
         let mut trams: Vec<TramRun> = plan
             .tram_lines
             .iter()
-            .filter_map(|l| TramRun::new(l, plan))
+            .filter_map(|l| TramRun::new(l, plan, site))
             .collect();
         stagger_termini(&mut trams);
         // What each wall looks onto: the kit's faces and where the roofs end in gables.
@@ -1167,7 +1167,7 @@ struct TramRun {
 impl TramRun {
     /// A line's runs on `plan`, its stops at their distances along it; `None` with fewer than
     /// two.
-    fn new(line: &forge_procgen::city::TramLine, plan: &CityPlan) -> Option<Self> {
+    fn new(line: &forge_procgen::city::TramLine, plan: &CityPlan, site: &Site) -> Option<Self> {
         let points = line.points.clone();
         let mut along = vec![0.0];
         for w in points.windows(2) {
@@ -1212,7 +1212,7 @@ impl TramRun {
         // (37.4 m either way) stand clear of every junction's reach and on straight track, the
         // whole tram level with its platform: they stood across the junctions and on the
         // curves (the owner: bikes rode through them, a stop jutted into the crossroad). A stop
-        // with no such place within 400 m stays where it was. 60 m apart at least.
+        // with no such place within 400 m is dropped. 60 m apart at least.
         let total = along[along.len() - 1];
         let span = f64::from(PLATFORM) + 1.4;
         let straight = |s: f64| {
@@ -1223,26 +1223,43 @@ impl TramRun {
             let tm = geom::tangent_at(&points, s);
             t0.dot(t1) > 2f64.to_radians().cos() && t0.dot(tm) > 2f64.to_radians().cos()
         };
+        // Never on a bridge: the whole platform on land, a metre past it each way (the owner).
+        let on_land = |s: f64| {
+            let steps = (2.0 * (span + 1.0) / 2.0).ceil() as usize;
+            (0..=steps).all(|k| {
+                let at = s - span - 1.0 + 2.0 * (span + 1.0) * k as f64 / steps as f64;
+                site.water_at(geom::point_at(&points, at.clamp(0.0, total)))
+                    == forge_procgen::city::LAND
+            })
+        };
         let fits = |s: f64| {
             s - span >= 0.0
                 && s + span <= total
                 && junctions.iter().all(|&(j, r)| (s - j).abs() >= r + span)
                 && straight(s)
+                && on_land(s)
         };
-        let mut stops: Vec<f64> = line
-            .stops
-            .iter()
-            .map(|&stop| {
-                let s = project(stop).1;
-                (0..=160)
-                    .flat_map(|k| {
-                        let d = f64::from(k) * 2.5;
-                        [s - d, s + d]
-                    })
-                    .find(|&c| fits(c))
-                    .unwrap_or(s)
-            })
-            .collect();
+        let placed = |fallback: bool| -> Vec<f64> {
+            line.stops
+                .iter()
+                .filter_map(|&stop| {
+                    let s = project(stop).1;
+                    (0..=160)
+                        .flat_map(|k| {
+                            let d = f64::from(k) * 2.5;
+                            [s - d, s + d]
+                        })
+                        .find(|&c| fits(c))
+                        .or(fallback.then_some(s))
+                })
+                .collect()
+        };
+        // A stop with no clean place is dropped; only a line left with fewer than two keeps them
+        // where they were (a stop stood in a junction, the owner).
+        let mut stops = placed(false);
+        if stops.len() < 2 {
+            stops = placed(true);
+        }
         stops.sort_by(f64::total_cmp);
         stops.dedup_by(|a, b| (*a - *b).abs() < 60.0);
         (stops.len() >= 2).then(|| Self {
@@ -1615,63 +1632,51 @@ fn roof_door(tiles: &mut Tiles, m: &Mass, a: DVec2, b: DVec2, along: f64, level:
 /// A bridge's parapet: how high over its pavement and how thick, metres.
 const PARAPET: (f64, f64) = (1.0, 0.35);
 
-/// Each bridge's parapet runs, both sides: the outer edge and the inner face's lines, every
-/// metre along its own side where that side crosses the water as drawn (a river's strip or the
-/// smooth shore's open water) and a metre on to meet the bank's wall, and the pavement's level
-/// they stand on. Cut by the site's cells they ran on over the land at each end and cut the
-/// promenades, then stopped short of the drawn banks (the owner).
+/// The parapets: wherever the street ground's own edge borders the water as drawn (a river's
+/// strip or the smooth shore's open water), each segment of that edge with its inner face's line
+/// [`PARAPET`]`.1` in, and the walking level they stand on (D-061). They follow a bridge's deck to
+/// the banks exactly, and a quay street's edge over the water too. Run along the bridges' centre
+/// lines' sides, they went on past a bridge's end into the junction at its head, a wedge on the
+/// quay (the owner); cut by the site's cells, they first ran over the land and stopped short.
 fn parapet_lines(
     plan: &CityPlan,
     site: &Site,
     shore: &Shore,
 ) -> Vec<(Vec<DVec2>, Vec<DVec2>, f64)> {
+    let rivers: Vec<(DVec2, DVec2, f64)> = site
+        .rivers
+        .iter()
+        .flat_map(|r| {
+            r.centreline
+                .windows(2)
+                .map(move |w| (w[0], w[1], r.width * 0.5))
+        })
+        .collect();
+    let wet = |p: DVec2| {
+        shore.parts(p).0 >= 0.5
+            || rivers
+                .iter()
+                .any(|&(a, b, h)| geom::distance_to_segment(p, a, b) < h)
+    };
     let mut out = Vec::new();
-    for e in plan.roads.edges.iter().filter(|e| e.bridge) {
-        let line = geom::resample(&e.points, 1.0);
-        if line.len() < 2 {
-            continue;
-        }
-        let half = e.profile.width() * 0.5;
-        let base = WALK_LEVEL;
-        // The rivers' segments near the bridge, with their half widths.
-        let reach = e.length() + 50.0;
-        let near: Vec<(DVec2, DVec2, f64)> = site
-            .rivers
-            .iter()
-            .flat_map(|r| {
-                r.centreline
-                    .windows(2)
-                    .map(move |w| (w[0], w[1], r.width * 0.5))
-            })
-            .filter(|&(a, b, _)| geom::distance_to_segment(line[0], a, b) < reach)
-            .collect();
-        let wet = |p: DVec2| {
-            shore.parts(p).0 >= 0.5
-                || near
-                    .iter()
-                    .any(|&(a, b, h)| geom::distance_to_segment(p, a, b) < h)
-        };
-        for side in [1.0, -1.0] {
-            let mid = offset_line(&line, side * (half - PARAPET.1 * 0.5));
-            let over: Vec<bool> = mid.windows(2).map(|w| wet((w[0] + w[1]) * 0.5)).collect();
-            let n = over.len();
-            let mut k = 0;
-            while k < n {
-                if !over[k] {
-                    k += 1;
-                    continue;
-                }
-                let from = k;
-                while k < n && over[k] {
-                    k += 1;
-                }
-                let run = &line[from.saturating_sub(1)..=(k + 1).min(n)];
-                out.push((
-                    offset_line(run, side * half),
-                    offset_line(run, side * (half - PARAPET.1)),
-                    base,
-                ));
+    for t in &plan.ground.tiles {
+        for &[a, b] in &t.outline {
+            let d = b - a;
+            let length = d.length();
+            if length < 1e-3 {
+                continue;
             }
+            // The street lies on the segment's left; the water, if any, on its right.
+            let inward = DVec2::new(-d.y, d.x) / length;
+            if !wet((a + b) * 0.5 - inward * 0.6) {
+                continue;
+            }
+            let inner = PARAPET.1;
+            out.push((
+                vec![a, b],
+                vec![a + inward * inner, b + inward * inner],
+                WALK_LEVEL,
+            ));
         }
     }
     out
@@ -3499,31 +3504,44 @@ fn street_ground(tiles: &mut Tiles, map: &ground::GroundMap, site: &Site) {
                     triangle(&mut tile.ground, p, up, PAVING);
                 }
             }
-            // Its sides, from its slope up to the pavement, facing into it.
+            // Its sides, from its slope up to the pavement, facing into it: only along the
+            // stretches where the ramp itself lies on one side and raised pavement on the other.
+            // Drawn over its whole outline, they stood on the carriageway where a rounded corner
+            // took the ramp's end, thin lines on the asphalt (the owner).
+            let square = [
+                t.min,
+                DVec2::new(t.max.x, t.min.y),
+                t.max,
+                DVec2::new(t.min.x, t.max.y),
+            ];
             for side in [-1.0, 1.0] {
-                let (a, b) = (
-                    ramp.kerb + ramp.along * (ramp.half * side),
-                    ramp.kerb + ramp.along * (ramp.half * side) + ramp.inward * ground::RAMP,
-                );
-                if !geom::contains(
-                    &[
-                        t.min,
-                        DVec2::new(t.max.x, t.min.y),
-                        t.max,
-                        DVec2::new(t.min.x, t.max.y),
-                    ],
-                    a,
-                ) {
-                    continue;
+                let edge = ramp.kerb + ramp.along * (ramp.half * side);
+                let steps = (ground::RAMP / 0.2).ceil() as usize;
+                for k in 0..steps {
+                    let (a, b) = (
+                        edge + ramp.inward * (ground::RAMP * k as f64 / steps as f64),
+                        edge + ramp.inward * (ground::RAMP * (k + 1) as f64 / steps as f64),
+                    );
+                    let mid = (a + b) * 0.5;
+                    let (inner, outer) = (
+                        mid - ramp.along * (side * 0.05),
+                        mid + ramp.along * (side * 0.05),
+                    );
+                    let on_ramp = ground::inside(shapes, inner);
+                    let beside = !map.on_carriageway(outer)
+                        && !t.ramps.iter().any(|(_, s)| ground::inside(s, outer));
+                    if !geom::contains(&square, mid) || !on_ramp || !beside {
+                        continue;
+                    }
+                    face(
+                        tiles,
+                        a,
+                        b,
+                        [ramp.level(a), ramp.level(b)],
+                        [WALK_LEVEL; 2],
+                        ramp.along * -side,
+                    );
                 }
-                face(
-                    tiles,
-                    a,
-                    b,
-                    [ramp.level(a), ramp.level(b)],
-                    [WALK_LEVEL; 2],
-                    ramp.along * -side,
-                );
             }
         }
         // The ramps near this tile, for the kerbs' height along them.

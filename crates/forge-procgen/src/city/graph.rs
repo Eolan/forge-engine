@@ -334,6 +334,8 @@ pub struct Defects {
     pub wet_nodes: usize,
     /// Pairs of bridges whose crossings lie within [`BRIDGE_GAP`] of each other.
     pub close_bridges: usize,
+    /// Bridges: the streets' stretches over water longer than 10 m.
+    pub bridges: usize,
     /// Streets running beside another so close that their areas overlap for 30 m or more.
     pub doubled_streets: usize,
 }
@@ -433,6 +435,7 @@ pub fn defects(graph: &RoadGraph, site: &Site) -> Defects {
                 .map(move |p| (k as u32, p))
         })
         .collect();
+    d.bridges = wet.len();
     for (i, &(ea, pa)) in wet.iter().enumerate() {
         for &(eb, pb) in &wet[i + 1..] {
             if ea != eb && pa.distance(pb) < BRIDGE_GAP {
@@ -477,15 +480,16 @@ pub fn defects(graph: &RoadGraph, site: &Site) -> Defects {
 
 /// Cleans the network before streets are built on it (D-061), so each junction is one place:
 /// - junctions closer than [`CLOSE`], or joined by a street shorter than it, become one, at
-///   their main roads' middle (else all of theirs), each street's end eased onto it over its
-///   last 30 m;
+///   their main roads' middle (else all of theirs), each street's moved end cut back and run
+///   straight on to it;
 /// - of two streets between the same junctions, of a pair leaving a node within [`SHARP`]
 ///   degrees, and of a pair running doubled side by side, the lesser goes (a street before a
 ///   main road, the shorter first);
-/// - then the dead ends shorter than `prune`.
+/// - then every dead end (but at the frame's edge), and the networks cut off with less than
+///   [`MIN_NETWORK`] of streets.
 ///
 /// Returns how many nodes were merged away and streets dropped.
-pub fn tidy(graph: &mut RoadGraph, site: &Site, prune: f64) -> (usize, usize) {
+pub fn tidy(graph: &mut RoadGraph, site: &Site) -> (usize, usize) {
     let n = graph.nodes.len();
     let mut degree = vec![0_usize; n];
     for e in &graph.edges {
@@ -739,11 +743,82 @@ pub fn tidy(graph: &mut RoadGraph, site: &Site, prune: f64) -> (usize, usize) {
     });
     dropped += before - graph.edges.len();
     let edges_before = graph.edges.len();
-    prune_dead_ends(graph, prune);
+    drop_dead_ends(graph, site.size);
+    keep_connected(graph, MIN_NETWORK);
+    prune_dead_ends(graph, 0.0);
     dropped += edges_before - graph.edges.len();
     (merged, dropped)
 }
 
+/// A street network smaller than this, metres of streets, cut off from the rest, is not built.
+pub const MIN_NETWORK: f64 = 3000.0;
+
+/// Removes every street that ends without reaching anything, again until none is left: a road
+/// goes on only where it is needed (the owner: a road ran on along the quay and stopped there).
+/// Ends within 5 m of the frame's edge stay: those streets go on beyond it.
+fn drop_dead_ends(graph: &mut RoadGraph, size: f64) {
+    let open = |p: DVec2| p.x < 5.0 || p.y < 5.0 || p.x > size - 5.0 || p.y > size - 5.0;
+    loop {
+        let mut degree = vec![0_u32; graph.nodes.len()];
+        for e in &graph.edges {
+            degree[e.a as usize] += 1;
+            degree[e.b as usize] += 1;
+        }
+        let dead = |n: u32| degree[n as usize] == 1 && !open(graph.nodes[n as usize].pos);
+        let before = graph.edges.len();
+        let keep: Vec<bool> = graph
+            .edges
+            .iter()
+            .map(|e| e.a != e.b && !dead(e.a) && !dead(e.b))
+            .collect();
+        let mut k = 0;
+        graph.edges.retain(|_| {
+            k += 1;
+            keep[k - 1]
+        });
+        if graph.edges.len() == before {
+            break;
+        }
+    }
+}
+
+/// Removes the street networks cut off from the rest with less than `min_length` metres of
+/// streets: a town is one network (the owner saw islands of city far from it).
+fn keep_connected(graph: &mut RoadGraph, min_length: f64) {
+    let n = graph.nodes.len();
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn root(parent: &mut [usize], mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    for e in &graph.edges {
+        let (a, b) = (
+            root(&mut parent, e.a as usize),
+            root(&mut parent, e.b as usize),
+        );
+        if a != b {
+            parent[a.max(b)] = a.min(b);
+        }
+    }
+    let mut length = vec![0.0_f64; n];
+    for e in &graph.edges {
+        let r = root(&mut parent, e.a as usize);
+        length[r] += e.length();
+    }
+    let keep: Vec<bool> = graph
+        .edges
+        .iter()
+        .map(|e| length[root(&mut parent, e.a as usize)] >= min_length)
+        .collect();
+    let mut k = 0;
+    graph.edges.retain(|_| {
+        k += 1;
+        keep[k - 1]
+    });
+}
 #[cfg(test)]
 mod tests {
     use super::*;

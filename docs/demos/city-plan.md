@@ -567,16 +567,40 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
   - **Checks:** `the_street_ground_is_one_map_with_every_surface_once` (the example's 0.403 km² of
     carriageway and 2.047 km² of walking ground, none of it both), and the crossroads' and
     pedestrian street's unit tests in `city::ground`. The map takes 0.1 s for the example.
+- **the network cleaned before it is drawn** (D-061, the owner: "junctions, road intersections
+  and bridges are still a mess"; the map drew the network faithfully, and the network was the
+  mess).
+  - **Counted** (`graph::defects`): close junctions, short streets, sharp meetings, nodes on the
+    water, bridges close together, doubled streets.
+  - **Junctions:** those within 20 m, or joined by a street shorter than that, become one
+    (`graph::tidy`). The groups are bounded (every member within 20 m of the middle), nearest
+    pairs first; joined unbounded, junctions chained across a dense grid and its streets
+    collapsed. Each street's moved end is cut back by twice the move and 5 m, and runs straight
+    on to the new junction.
+  - **Streets dropped:** of two drawn twice between the same junctions, of two leaving a node
+    within 25°, and of two running doubled side by side, the lesser goes.
+  - **Bridges planned first** (`streets::bridge_sites`): one every 450 m along each river
+    between built districts, square to it at its narrowest within 80 m. Main roads cross only
+    there, arriving within 12 m of its axis and 25° of its way. A site no road took gets one
+    straight on inland along its axis to the first street on either side, a T-junction there.
+  - **The sandbox:** close junctions 353 → 0, short streets 342 → 0, sharp meetings 81 → 0,
+    doubled streets 22 → 3, nodes on the water 1 → 0, close bridges 2 → 0, 12 bridges; the
+    homes unchanged (about 980 k people). Test: `the_network_has_one_place_for_each_junction`.
+- **tram alignments** (`transit::alignment`): the route straightened to within 1.5 m of its
+  streets, then each corner rounded, a junction's turn on 18 m and a gentle bend on a longer arc
+  (up to 120 m). Each little jog had been rounded on its own into a run of S-bends (the owner:
+  "trams wouldn't make a series of small undulating turns").
 - **the tiles' LOD** weighs normals (`CookOptions { normal_weight: 2.0 }`): at the coarser levels
   a pavement's kerb and back faces folded into its top, long tilted triangles where two paving
   patterns seemed to blend on the pavements and the bridges (the owner guessed an LOD issue).
 - **bridges:** a stone parapet a metre over the pavement along both edges, 0.35 m thick, and
   the deck's side below it down to the water; the walker walks against the parapets. The
   pavements stopped at a bare edge over the river (the owner: the bridges' pavements looked
-  broken). Each side's parapet stands where that side crosses the water as drawn (a river's
-  strip or the smooth shore's open water, tested every metre) and a metre on to meet the bank's
-  wall. Cut by the site's cells, they first ran on over the land and cut the promenades, then
-  stopped short of the drawn banks (the owner: both too short).
+  broken). The parapets stand wherever the street ground's own edge borders the water as drawn
+  (a river's strip or the smooth shore's open water), so they follow the deck to the banks and
+  a quay street's edge over the water too (D-061). Run along the bridges' centre lines' sides,
+  they went on past a bridge's end into the junction at its head, a wedge on the quay (the
+  owner); cut by the site's cells, they first ran over the land, then stopped short.
 - **street-workout parks:** one in each park of a hectare or more, 14 by 10 m on a rubber
   floor:
   - pull-up bars at three heights, monkey bars, parallel bars, a dip station;

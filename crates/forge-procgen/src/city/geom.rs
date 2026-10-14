@@ -80,6 +80,12 @@ pub fn tangent_at(points: &[DVec2], s: f64) -> DVec2 {
 /// side are short, the arc shrinks so that it never takes more than 45 % of either, and two
 /// arcs never overlap. Turns under a degree are left as they are.
 pub fn fillet(points: &[DVec2], radius: f64, step: f64) -> Vec<DVec2> {
+    fillet_by(points, &|_| radius, step)
+}
+
+/// [`fillet`] with each corner's radius chosen by its turn (radians): a gentle bend on a long arc,
+/// a junction's turn on a tight one.
+pub fn fillet_by(points: &[DVec2], radius: &dyn Fn(f64) -> f64, step: f64) -> Vec<DVec2> {
     let n = points.len();
     if n < 3 {
         return points.to_vec();
@@ -96,7 +102,7 @@ pub fn fillet(points: &[DVec2], radius: f64, step: f64) -> Vec<DVec2> {
         // The tangent length for the radius, shortened to fit the segments.
         let half = (turn * 0.5).tan();
         let room = 0.45 * a.distance(v).min(v.distance(b));
-        let t = (radius * half).min(room);
+        let t = (radius(turn) * half).min(room);
         let r = t / half;
         let (start, end) = (v - din * t, v + dout * t);
         // The arc's centre lies on the inside of the turn, `r` from both tangent points.
