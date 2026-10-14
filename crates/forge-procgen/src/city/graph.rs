@@ -576,9 +576,9 @@ pub fn tidy(graph: &mut RoadGraph, site: &Site) -> (usize, usize) {
         if s.1 > 0.0 { s.0 / s.1 } else { s.2 / s.3 }
     };
     let merged = (0..n).filter(|&i| roots[i] != i).count();
-    for i in 0..n {
+    for (i, node) in graph.nodes.iter_mut().enumerate() {
         if roots[i] == i {
-            graph.nodes[i].pos = place(i);
+            node.pos = place(i);
         }
     }
     let mut edges = Vec::with_capacity(graph.edges.len());

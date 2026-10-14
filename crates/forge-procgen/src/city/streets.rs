@@ -61,7 +61,8 @@ enum Stop {
 
 /// Traces one level of streets. `spacing(p)` is the separation at `p` (`None` where the level
 /// draws no street); `existing` holds the levels traced before, which count as streets of
-/// their family and as join targets.
+/// their family and as join targets; with `sites`, main roads bridge the rivers only there.
+#[allow(clippy::too_many_arguments)]
 pub fn trace_level(
     field: &TensorField,
     site: &Site,
