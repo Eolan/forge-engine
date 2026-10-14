@@ -158,7 +158,10 @@ from the site's cells. A private sandbox hands its own plan to `PlanScenario::ne
 *35 m up: the walls' window bays and shopfronts are two generated textures
 (`forge_render::textures::facade` and `shopfront`) read through the walls' coordinates, a shop
 band on the ground floor along avenues and lanes, window bays above, four render tints of the
-palette chosen by lot. Variety in the facades themselves comes with D-039's modules.*
+palette chosen by lot. Whole bays only, centred: the wall left at each end, and all of a wall
+shorter than a bay, is plain plaster (the end's part of a bay put a window and its shutter at
+the corner, the owner); walls onto a neighbour's lot are plain too. Variety in the facades
+themselves comes with D-039's modules.*
 
 ![At eye height](images/city-plan-street.png)
 
@@ -343,10 +346,21 @@ kit reading the walls, collision, interiors, destruction):
   court, party, inside the building). It is probed every 0.5 m, 0.75 m out (another mass) and
   2.5 m out (another building that close leaves a slit), and each storey keeps the stretches
   nothing stands against: a lower neighbour covers only the storeys below its roof.
-- **Openings** go on those stretches only, bays centred and kept 0.6 m off the ends, so they line
-  up storey over storey and no window is cut by a neighbour (the owner: "not realistic at
-  all"). Shopfronts on lively ground floors, windows elsewhere, the doors (1.2 m, step-free)
-  where the stair cores stand (below), or in the middle of the longest street stretch.
+- **Openings** go on those stretches only, bays centred, so they line up storey over storey and
+  no window is cut by a neighbour (the owner: "not realistic at all"). Shopfronts on lively
+  ground floors, windows elsewhere, the doors (1.2 m, step-free) where the stair cores stand
+  (below), or in the middle of the longest street stretch.
+  - **Room for the shutters.** Each window keeps room either side for its shutters folded back,
+    half its width beyond a 0.15 m surround.
+    - A pier of 0.4 m of wall remains between a shutter and a corner or a stretch's end; the
+      bays keep half a window and the pier off the ends.
+    - 0.1 m remains between two neighbours' shutters.
+    - Windows narrow (by the 10 cm) to fit, those the doors and the cores gave back too
+      (`structure::fit_shutters`).
+    - Before, a shutter wrapped round a building's corner (the owner), and the 2.7 m bays'
+      1.4 m windows had their shutters over each other.
+    - Test `shutters_fold_back_clear_of_corners_and_of_each_other`: 815 267 windows in the
+      example, none within the pier, none over a neighbour (3 and 161 before).
 - **Courts.** A passage of 3.0 by 3.6 m runs through one building of each block whose court no
   gap reaches, on its street and court walls (the owner: a door into every inner court). The
   sandbox: 2 082 of 2 087 courts reached, 201 by a passage.

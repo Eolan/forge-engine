@@ -2021,6 +2021,9 @@ fn ribbon(tiles: &mut Tiles, points: &[DVec2], width: f64, height: f64, section:
 
 /// A bay's width on the facades, metres: one repeat of the facade texture across.
 const BAY: f64 = 3.0;
+/// A window bay's plain wall, left of its shutter, as a share of the bay across
+/// (`textures::facade`: the shutters from 0.17).
+const BAY_PLAIN: (f32, f32) = (0.02, 0.13);
 
 /// Adds a triangle with texture coordinates, turned so its face looks along `normal`.
 fn triangle_uv(
@@ -2044,8 +2047,11 @@ fn triangle_uv(
     mesh.sections.push(section);
 }
 
-/// A wall quad from `y0` to `y1`, its texture repeating every `repeat` bays across (the bays
-/// centred on the wall) and every `repeat` floors of `floor` metres up from `y0`.
+/// A wall quad from `y0` to `y1`, its texture repeating every `repeat` bays across and every
+/// `repeat` floors of `floor` metres up from `y0`. Whole bays only, centred on the wall; the
+/// wall left at either end (all of a wall shorter than a bay) is plain, read from the bay's
+/// plain strip `plain` (a share of a bay across): mapped on, the end's part of a bay put a
+/// window's edge and its shutter at the building's corner (the owner).
 #[allow(clippy::too_many_arguments)]
 fn wall_band(
     mesh: &mut TriMesh,
@@ -2054,29 +2060,46 @@ fn wall_band(
     (y0, y1): (f32, f32),
     floor: f32,
     repeat: f32,
+    plain: (f32, f32),
     out: Vec3,
     section: u8,
 ) {
-    let bays = (length / BAY).floor().max(1.0);
-    let offset = ((length - bays * BAY) * 0.5 / BAY) as f32;
-    let (u0, u1) = (-offset / repeat, ((length / BAY) as f32 - offset) / repeat);
+    let len = length as f32;
+    let bays = (length / BAY).floor() as f32;
+    let margin = (len - bays * BAY as f32) * 0.5;
+    let flat = (plain.0 / repeat, plain.1 / repeat);
+    let pieces = if bays < 1.0 {
+        vec![(0.0, len, flat)]
+    } else {
+        vec![
+            (0.0, margin, flat),
+            (margin, len - margin, (0.0, bays / repeat)),
+            (len - margin, len, flat),
+        ]
+    };
     let v = |y: f32| -(y - y0) / floor / repeat;
-    let (pa0, pb0) = (a + Vec3::Y * y0, b + Vec3::Y * y0);
-    let (pa1, pb1) = (a + Vec3::Y * y1, b + Vec3::Y * y1);
-    triangle_uv(
-        mesh,
-        [pa0, pb0, pb1],
-        [[u0, v(y0)], [u1, v(y0)], [u1, v(y1)]],
-        out,
-        section,
-    );
-    triangle_uv(
-        mesh,
-        [pa0, pb1, pa1],
-        [[u0, v(y0)], [u1, v(y1)], [u0, v(y1)]],
-        out,
-        section,
-    );
+    for (s0, s1, (u0, u1)) in pieces {
+        if s1 - s0 < 1e-3 {
+            continue;
+        }
+        let (pa, pb) = (a + (b - a) * (s0 / len), a + (b - a) * (s1 / len));
+        let (pa0, pb0) = (pa + Vec3::Y * y0, pb + Vec3::Y * y0);
+        let (pa1, pb1) = (pa + Vec3::Y * y1, pb + Vec3::Y * y1);
+        triangle_uv(
+            mesh,
+            [pa0, pb0, pb1],
+            [[u0, v(y0)], [u1, v(y0)], [u1, v(y1)]],
+            out,
+            section,
+        );
+        triangle_uv(
+            mesh,
+            [pa0, pb1, pa1],
+            [[u0, v(y0)], [u1, v(y1)], [u0, v(y1)]],
+            out,
+            section,
+        );
+    }
 }
 
 /// A mass: its walls (a shop band on the ground floor where the street is lively, window bays
@@ -2102,17 +2125,35 @@ fn mass(tiles: &mut Tiles, m: &Mass, edges: &[Option<FaceKind>]) {
         let out = Vec3::new(t.y as f32, 0.0, -t.x as f32);
         let ends = (world(size, a, 0.0) - centre, world(size, b, 0.0) - centre);
         let length = a.distance(b);
+        // A wall onto the neighbour's lot is blank plaster where it shows over a lower
+        // neighbour: windows and shutters showed on the building's side (the owner).
+        if !matches!(edges.get(i), Some(Some(FaceKind::Street | FaceKind::Court))) {
+            let plain = (0.0, 1.0);
+            wall_band(
+                mesh,
+                ends,
+                length,
+                (0.0, top),
+                top,
+                1.0,
+                plain,
+                out,
+                KIT_PLASTER + tint,
+            );
+            continue;
+        }
         let cells = textures::FACADE_CELLS as f32;
         // The ground storey is one cell, stretched to its height: at 3.2 m a cell, its 4.2 m showed
         // a row of window stubs under the first floor, cut where the upper band starts again
         // (the owner's "bugged windows" on the first floor).
-        let (lower, floor, repeat) = if shops {
-            (SHOP, ground, 1.0)
+        // The plain strips: a shopfront's stone pier, a window bay's wall left of its shutter.
+        let (lower, floor, repeat, plain) = if shops {
+            (SHOP, ground, 1.0, (0.01, 0.06))
         } else {
-            (WALL + tint, ground, cells)
+            (WALL + tint, ground, cells, BAY_PLAIN)
         };
         let base = (0.0, ground.min(top));
-        wall_band(mesh, ends, length, base, floor, repeat, out, lower);
+        wall_band(mesh, ends, length, base, floor, repeat, plain, out, lower);
         if top > ground {
             let band = (ground, top);
             wall_band(
@@ -2122,6 +2163,7 @@ fn mass(tiles: &mut Tiles, m: &Mass, edges: &[Option<FaceKind>]) {
                 band,
                 m.upper() as f32,
                 cells,
+                BAY_PLAIN,
                 out,
                 WALL + tint,
             );

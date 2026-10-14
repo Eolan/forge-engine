@@ -329,3 +329,46 @@ fn taxis_wait_within_a_short_walk_of_every_block() {
     }
     assert!(far * 20 <= built.len(), "{far} blocks far from a stand");
 }
+
+#[test]
+fn shutters_fold_back_clear_of_corners_and_of_each_other() {
+    use super::structure::{OpeningKind, PIER, SHUTTER_BESIDE};
+    let (_, city) = example_plan();
+    let masses = super::mass::masses(&city, &super::bible::StyleBible::default(), 7);
+    let structures = super::structure::structures(&city, &masses);
+    let (mut windows, mut at_ends, mut over) = (0, 0, 0);
+    for s in &structures {
+        for (w, wall) in s.walls.iter().enumerate() {
+            for (k, stretches) in wall.open.iter().enumerate() {
+                // Each window's span with its shutters folded back either side.
+                let mut spans: Vec<(f64, f64)> = s
+                    .openings
+                    .iter()
+                    .filter(|o| o.wall == w && o.storey == k && o.kind == OpeningKind::Window)
+                    .map(|o| {
+                        let reach = o.width + SHUTTER_BESIDE;
+                        (o.along - reach, o.along + reach)
+                    })
+                    .collect();
+                spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+                windows += spans.len();
+                for &(a, b) in &spans {
+                    let inside = stretches
+                        .iter()
+                        .any(|&(lo, hi)| a >= lo + PIER - 1e-6 && b <= hi - PIER + 1e-6);
+                    at_ends += usize::from(!inside);
+                }
+                over += spans.windows(2).filter(|p| p[1].0 < p[0].1 - 1e-6).count();
+            }
+        }
+    }
+    println!(
+        "{windows} windows; {at_ends} with a shutter at a stretch's end, {over} over a neighbour's"
+    );
+    assert!(windows > 1000, "{windows} windows");
+    assert_eq!(
+        at_ends, 0,
+        "{at_ends} windows' shutters within {PIER} m of a corner or an end"
+    );
+    assert_eq!(over, 0, "{over} windows' shutters over their neighbours'");
+}

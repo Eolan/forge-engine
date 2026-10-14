@@ -66,6 +66,14 @@ pub struct EraTable {
 pub const LIFT_FROM: usize = 4;
 /// Keep an opening this far from either end of its open stretch, metres.
 pub const MARGIN: f64 = 0.6;
+/// A window's surround, which its shutters fold back beyond, metres
+/// (`forge_geom::modules`: each leaf half the window's width).
+pub const SHUTTER_BESIDE: f64 = 0.15;
+/// The wall left between a window's folded shutter and a corner or a stretch's end, metres:
+/// there is always some (the owner, a shutter wrapped round a building's corner).
+pub const PIER: f64 = 0.4;
+/// The wall left between two neighbouring windows' folded shutters, metres.
+const SHUTTER_GAP: f64 = 0.1;
 /// A passage into an inner court: its width and its height, metres (a carriage entrance).
 pub const PASSAGE: (f64, f64) = (3.0, 3.6);
 /// A door from the street: its width (0.90 m clear at least, #263), metres.
@@ -393,6 +401,11 @@ pub fn structures(plan: &CityPlan, masses: &[Mass]) -> Vec<Structure> {
             s.cores.retain(|c| c.door != k);
         }
     }
+    // The windows the doors and the cores gave back, at their era's width, fitted to the room
+    // their shutters have like the others.
+    for s in &mut out {
+        fit_shutters(s);
+    }
     // The flats round the cores, once the doors and the passages are settled, and the net area
     // again (a dropped core gave its floor back).
     for (i, s) in out.iter_mut().enumerate() {
@@ -559,7 +572,9 @@ fn openings(m: &Mass, era: Era, storeys: &[Storey], walls: &[Wall]) -> Vec<Openi
         }
         for (k, s) in storeys.iter().enumerate() {
             for &(lo, hi) in &wall.open[k] {
-                let room = hi - lo - 2.0 * MARGIN;
+                // Off the ends by the window's folded shutter and a pier, at least.
+                let end = MARGIN.max(t.window * 0.5 + PIER);
+                let room = hi - lo - 2.0 * end;
                 let bays = (room / t.bay).floor();
                 if bays < 1.0 && room < t.window {
                     continue;
@@ -590,6 +605,26 @@ fn openings(m: &Mass, era: Era, storeys: &[Storey], walls: &[Wall]) -> Vec<Openi
                             s.clear() - 0.35,
                         )
                     };
+                    // Room for a window's shutters folded back either side: a pier off the
+                    // stretch's ends, a gap to its neighbours' (they reached round corners and
+                    // over each other).
+                    let width = if kind == OpeningKind::Window {
+                        let ends = (along - lo).min(hi - along) - PIER - SHUTTER_BESIDE;
+                        let between = if bays > 1 {
+                            (bay - 2.0 * SHUTTER_BESIDE - SHUTTER_GAP) * 0.5
+                        } else {
+                            f64::INFINITY
+                        };
+                        let fit = width.min(ends).min(between);
+                        // Widths by the 10 cm, so the kit shares their meshes.
+                        let fit = (fit * 10.0).floor() / 10.0;
+                        if fit < 0.6 {
+                            continue;
+                        }
+                        fit
+                    } else {
+                        width
+                    };
                     out.push(Opening {
                         wall: w,
                         storey: k,
@@ -604,6 +639,63 @@ fn openings(m: &Mass, era: Era, storeys: &[Storey], walls: &[Wall]) -> Vec<Openi
         }
     }
     out
+}
+
+/// Each window of `s` as wide as its shutters, folded back either side, leave a [`PIER`] to its
+/// stretch's ends and [`SHUTTER_GAP`] to its neighbours (their shutters, or the other openings'
+/// edges), left to right, 0.6 m at least; widths by the 10 cm, so the kit shares their meshes.
+fn fit_shutters(s: &mut Structure) {
+    let walls = &s.walls;
+    let mut order: Vec<usize> = (0..s.openings.len()).collect();
+    order.sort_by(|&a, &b| {
+        let (p, q) = (&s.openings[a], &s.openings[b]);
+        (p.wall, p.storey)
+            .cmp(&(q.wall, q.storey))
+            .then(p.along.total_cmp(&q.along))
+    });
+    // How far an opening reaches either side of its middle.
+    let reach = |o: &Opening| {
+        if o.kind == OpeningKind::Window {
+            o.width + SHUTTER_BESIDE
+        } else {
+            o.width * 0.5
+        }
+    };
+    for (n, &i) in order.iter().enumerate() {
+        let o = s.openings[i];
+        if o.kind != OpeningKind::Window {
+            continue;
+        }
+        let same = |j: usize| {
+            let q = &s.openings[j];
+            q.wall == o.wall && q.storey == o.storey
+        };
+        let Some(&(lo, hi)) = walls[o.wall].open[o.storey]
+            .iter()
+            .find(|&&(lo, hi)| lo <= o.along && o.along <= hi)
+        else {
+            continue;
+        };
+        let mut left = lo + PIER;
+        if n > 0 && same(order[n - 1]) {
+            let p = &s.openings[order[n - 1]];
+            left = left.max(p.along + reach(p) + SHUTTER_GAP);
+        }
+        let mut right = hi - PIER;
+        if n + 1 < order.len() && same(order[n + 1]) {
+            let q = &s.openings[order[n + 1]];
+            // The next window shares the wall between them.
+            let theirs = if q.kind == OpeningKind::Window {
+                SHUTTER_BESIDE + (q.along - o.along - 2.0 * SHUTTER_BESIDE - SHUTTER_GAP) * 0.5
+            } else {
+                q.width * 0.5 + SHUTTER_GAP
+            };
+            right = right.min(q.along - theirs);
+        }
+        let fit = (o.along - left).min(right - o.along) - SHUTTER_BESIDE;
+        let fit = ((fit.min(o.width) * 10.0).floor() / 10.0).max(0.6);
+        s.openings[i].width = fit;
+    }
 }
 
 /// A door on a wall of `role`: the ground window or shopfront nearest the middle of that side's
