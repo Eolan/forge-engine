@@ -372,3 +372,69 @@ fn shutters_fold_back_clear_of_corners_and_of_each_other() {
     );
     assert_eq!(over, 0, "{over} windows' shutters over their neighbours'");
 }
+
+#[test]
+fn taxi_depots_stand_behind_the_building_lines_with_level_footways() {
+    use super::ground::{ROAD_LEVEL, WALK_LEVEL};
+    let (_, city) = example_plan();
+    let depots = &city.depots;
+    let industrial = depots
+        .iter()
+        .filter(|d| {
+            city.districts
+                .get(city.blocks[d.block as usize].district)
+                .is_some_and(|x| x.kind == super::DistrictKind::Industrial)
+        })
+        .count();
+    println!(
+        "{} depots for {} stands, {industrial} in industrial districts, {} cabs' room",
+        depots.len(),
+        city.taxi_stands.len(),
+        depots.iter().map(|d| d.capacity()).sum::<usize>()
+    );
+    assert!(
+        depots.len() >= city.taxi_stands.len() / 25,
+        "{} depots",
+        depots.len()
+    );
+    let masses = super::mass::masses(&city, &super::bible::StyleBible::default(), 7);
+    for (i, d) in depots.iter().enumerate() {
+        // Its deck off the streets, its block without flats.
+        let deck = d.footprint();
+        let off: f64 = city
+            .ground
+            .off_streets(&deck)
+            .iter()
+            .map(|s| geom::signed_area(&s[0]).abs())
+            .sum();
+        let area = geom::signed_area(&deck).abs();
+        assert!(
+            off > area * 0.99,
+            "depot {i}: {off:.0} of {area:.0} m² off the streets"
+        );
+        assert!(
+            masses
+                .iter()
+                .all(|m| city.lots[m.lot as usize].block != d.block),
+            "depot {i}: flats in its block"
+        );
+        // Both driveways, the way in and the way out, up the verge from the carriageway; the
+        // footway across them level.
+        for kerb in [d.kerb, d.exit_kerb()] {
+            let foot = city.ground.level_at(kerb + d.out * 0.2);
+            let footway = city.ground.level_at(kerb + d.out * (d.front - 1.0));
+            assert!(
+                foot < WALK_LEVEL - 0.05,
+                "depot {i}: its ramp's foot at {foot:.2}"
+            );
+            assert!(foot >= ROAD_LEVEL, "depot {i}: below the road");
+            assert_eq!(
+                footway, WALK_LEVEL,
+                "depot {i}: the footway at {footway:.2}"
+            );
+        }
+        for o in &depots[i + 1..] {
+            assert!(d.kerb.distance(o.kerb) >= 999.0, "two depots close");
+        }
+    }
+}

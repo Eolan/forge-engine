@@ -105,6 +105,12 @@ pub fn lamps(site: &Site, plan: &CityPlan) -> Vec<Lamp> {
             }
         }
     }
+    // None on a taxi depot's deck or its driveway.
+    out.retain(|l| {
+        plan.depots
+            .iter()
+            .all(|d| !d.on_driveway(l.pos, 1.0) && !d.on_deck(l.pos, 1.0))
+    });
     out
 }
 

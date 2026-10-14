@@ -227,7 +227,41 @@ pub enum Task {
     },
     /// Circulating round the busy places at a busy hour.
     Cruising,
+    /// Driving to a depot: no stand near had a bay free.
+    ToDepot {
+        /// The depot.
+        depot: u32,
+    },
+    /// Parked in a depot, charging, until a booking, a stand short of taxis or a busy hour
+    /// calls it out.
+    Parked {
+        /// The depot.
+        depot: u32,
+    },
 }
+
+/// A depot: a parking deck where the taxis no stand holds wait and charge.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Depot {
+    /// Its way in's spot on the network.
+    pub at: Spot,
+    /// Its way out's.
+    pub exit: Spot,
+    /// The taxis it holds.
+    pub capacity: u32,
+}
+
+/// How far a free taxi drives to a stand with a bay free before it goes to a depot instead,
+/// metres.
+pub const HOME_REACH: f64 = 1500.0;
+/// How often the depots send taxis out to the stands short of them, seconds.
+const REFILL: f64 = 30.0;
+/// How long a taxi takes to drive through a depot's deck, in from the street to its bay or out
+/// from it, seconds: up and down its ramps the one way round, at a walking pace or so.
+pub const DEPOT_DRIVE: f64 = 45.0;
+/// The least time between two taxis a depot sends out, seconds: they drive out through its deck
+/// one behind the other, not one on another.
+const OUT_GAP: f64 = 4.0;
 
 /// A booking from someone's communicator.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -252,6 +286,10 @@ pub struct Taxi {
     speed: f64,
     /// Seconds it has waited at a stop line.
     waited: f64,
+    /// Seconds before it reaches the street, driving out of a depot.
+    hold: f64,
+    /// When it parked in its depot, seconds: it drives through the deck to its bay after.
+    since: f64,
 }
 
 /// Where the demand comes from and goes to, and how much of it there is by the hour.
@@ -389,6 +427,11 @@ pub struct Fleet {
     pub by_tram: u64,
     /// The trips the trams did not serve that went another way than by taxi so far.
     pub otherwise: u64,
+    /// The depots.
+    pub depots: Vec<Depot>,
+    /// When each depot last sent a taxi out, seconds.
+    last_out: Vec<f64>,
+    next_refill: f64,
 }
 
 impl Fleet {
@@ -429,6 +472,8 @@ impl Fleet {
                 s: 0.0,
                 speed: 0.0,
                 waited: 0.0,
+                hold: 0.0,
+                since: f64::NEG_INFINITY,
             });
         }
         let mut cumulative = Vec::with_capacity(demand.places.len());
@@ -453,9 +498,51 @@ impl Fleet {
             next_booking: time,
             by_tram: 0,
             otherwise: 0,
+            depots: Vec::new(),
+            last_out: Vec::new(),
+            next_refill: time,
         };
         fleet.next_booking = time + fleet.gap();
         fleet
+    }
+
+    /// The fleet with `depots`: the taxis no stand's bays hold park in them, shared out by
+    /// their room, their spots kept clear of the junctions as the stands'.
+    pub fn with_depots(mut self, mut depots: Vec<Depot>) -> Self {
+        for d in &mut depots {
+            for spot in [&mut d.at, &mut d.exit] {
+                let length = self.net.links[spot.link as usize].length;
+                let margin = JUNCTION_CLEAR.min(length * 0.5);
+                spot.s = spot.s.clamp(margin, length - margin);
+            }
+        }
+        self.last_out = vec![f64::NEG_INFINITY; depots.len()];
+        self.depots = depots;
+        if self.depots.is_empty() {
+            return self;
+        }
+        let mut parked = vec![0_u32; self.depots.len()];
+        let mut next = 0;
+        for k in 0..self.taxis.len() {
+            let Task::Waiting { stand, bay } = self.taxis[k].task else {
+                continue;
+            };
+            if bay < self.stands[stand as usize].bays {
+                continue;
+            }
+            // The next depot with room, in turn; the first if all are full.
+            let n = self.depots.len();
+            let depot = (0..n)
+                .map(|i| (next + i) % n)
+                .find(|&d| parked[d] < self.depots[d].capacity)
+                .unwrap_or(0);
+            next = (depot + 1) % n;
+            parked[depot] += 1;
+            self.taxis[k].task = Task::Parked {
+                depot: depot as u32,
+            };
+        }
+        self
     }
 
     /// The network.
@@ -566,6 +653,24 @@ impl Fleet {
                     }
                 }
             }
+            // The depots' taxis too, one at a time from each as its driveway clears.
+            let mut left = vec![false; self.depots.len()];
+            for k in 0..self.taxis.len() {
+                if let Task::Parked { depot } = self.taxis[k].task
+                    && !left[depot as usize]
+                    && !self.crowded(self.depots[depot as usize].exit)
+                    && self.time - self.last_out[depot as usize] >= OUT_GAP
+                {
+                    left[depot as usize] = true;
+                    let at = self.depots[depot as usize].at;
+                    self.free(k, at);
+                }
+            }
+        }
+        // The stands short of taxis call them from the depots.
+        if !self.depots.is_empty() && self.time >= self.next_refill {
+            self.next_refill = self.time + REFILL;
+            self.refill();
         }
         // The junctions their holders have crossed are free again.
         for node in 0..self.holder.len() {
@@ -620,7 +725,10 @@ impl Fleet {
     /// (waiting in its lay-by, or with no route).
     fn on_leg(&self, k: usize) -> Option<(usize, f64)> {
         let t = &self.taxis[k];
-        if matches!(t.task, Task::Waiting { .. }) || t.route.legs.is_empty() {
+        if matches!(t.task, Task::Waiting { .. } | Task::Parked { .. })
+            || t.route.legs.is_empty()
+            || t.hold > 0.0
+        {
             return None;
         }
         let mut left = t.s.clamp(0.0, t.route.length);
@@ -652,7 +760,10 @@ impl Fleet {
     /// Whether taxi `k` is still crossing junction `node`: driving up to it or just past it.
     fn holds(&self, k: usize, node: u32) -> bool {
         let t = &self.taxis[k];
-        if matches!(t.task, Task::Waiting { .. } | Task::Stopped { .. }) {
+        if matches!(
+            t.task,
+            Task::Waiting { .. } | Task::Stopped { .. } | Task::Parked { .. }
+        ) {
             return false;
         }
         let Some((i, into)) = self.on_leg(k) else {
@@ -729,7 +840,11 @@ impl Fleet {
             .filter(|(_, t)| {
                 matches!(
                     t.task,
-                    Task::Waiting { .. } | Task::Returning { .. } | Task::Cruising
+                    Task::Waiting { .. }
+                        | Task::Returning { .. }
+                        | Task::Cruising
+                        | Task::Parked { .. }
+                        | Task::ToDepot { .. }
                 )
             })
             .map(|(k, _)| (self.pose(k).0.distance(p), k))
@@ -742,6 +857,7 @@ impl Fleet {
         let t = &self.taxis[k];
         match t.task {
             Task::Waiting { stand, .. } => self.stands[stand as usize].at,
+            Task::Parked { depot } => self.depots[depot as usize].at,
             _ => {
                 let mut left = t.s.clamp(0.0, t.route.length);
                 for leg in &t.route.legs {
@@ -771,11 +887,31 @@ impl Fleet {
 
     /// Sends taxi `k` from `from` to `to` on `task`.
     fn send(&mut self, k: usize, from: Spot, to: Spot, task: Task) {
+        // Out of a depot: by its way out, once through its deck.
+        let (from, hold) = match self.taxis[k].task {
+            Task::Parked { depot } => {
+                self.last_out[depot as usize] = self.time;
+                (self.depots[depot as usize].exit, DEPOT_DRIVE)
+            }
+            _ => (from, 0.0),
+        };
         let route = self.route(from, to);
         let t = &mut self.taxis[k];
         t.route = route;
         t.s = 0.0;
         t.task = task;
+        t.hold = hold;
+    }
+
+    /// Seconds before taxi `k` reaches the street, driving out of a depot's deck (0 elsewhere).
+    pub fn hold(&self, k: usize) -> f64 {
+        self.taxis[k].hold
+    }
+
+    /// When taxi `k` last parked in a depot, seconds on the fleet's clock: it drives through the
+    /// deck to its bay for [`DEPOT_DRIVE`] after.
+    pub fn since(&self, k: usize) -> f64 {
+        self.taxis[k].since
     }
 
     /// The shortest route from `from` to `to` (Dijkstra in whole millimetres, ties broken by
@@ -898,7 +1034,7 @@ impl Fleet {
     fn drive(&mut self, k: usize, dt: f64, gap: f64, lead: f64) {
         let task = self.taxis[k].task;
         match task {
-            Task::Waiting { .. } => return,
+            Task::Waiting { .. } | Task::Parked { .. } => return,
             Task::Stopped { left, then } => {
                 let left = left - dt;
                 if left > 0.0 {
@@ -916,6 +1052,11 @@ impl Fleet {
                 return;
             }
             _ => {}
+        }
+        // Still driving out through a depot's deck.
+        if self.taxis[k].hold > 0.0 {
+            self.taxis[k].hold = (self.taxis[k].hold - dt).max(0.0);
+            return;
         }
         let t = &mut self.taxis[k];
         // Speeding up to the cruise, slowing to stop at the route's end; and behind the taxi or
@@ -955,12 +1096,30 @@ impl Fleet {
                 };
             }
             Task::Returning { stand } => {
-                let bay = self
+                // The first bay free: a taxi called out of a bay leaves it to the next one in
+                // (counting them put two in one bay).
+                let taken: Vec<u32> = self
                     .taxis
                     .iter()
-                    .filter(|o| matches!(o.task, Task::Waiting { stand: s, .. } if s == stand))
-                    .count() as u32;
-                self.taxis[k].task = Task::Waiting { stand, bay };
+                    .filter_map(|o| match o.task {
+                        Task::Waiting { stand: s, bay } if s == stand => Some(bay),
+                        _ => None,
+                    })
+                    .collect();
+                let bay = (0..).find(|b| !taken.contains(b)).expect("a free bay");
+                if bay >= self.stands[stand as usize].bays && !self.depots.is_empty() {
+                    // Its stand filled while it came: on to a depot.
+                    let here = self.taxi_spot(k);
+                    let depot = self.depot_for(self.net.at(here).0);
+                    let to = self.depots[depot as usize].at;
+                    self.send(k, here, to, Task::ToDepot { depot });
+                } else {
+                    self.taxis[k].task = Task::Waiting { stand, bay };
+                }
+            }
+            Task::ToDepot { depot } => {
+                self.taxis[k].task = Task::Parked { depot };
+                self.taxis[k].since = self.time;
             }
             Task::Cruising => {
                 let here = self.taxi_spot(k);
@@ -984,6 +1143,21 @@ impl Fleet {
                 }
             }
         }
+        // A stand near with a bay free; else a depot, the nearest with room.
+        if !self.depots.is_empty() {
+            if let Some((stand, used)) = self.stand_for(p)
+                && used < self.stands[stand as usize].bays
+                && self.net.at(self.stands[stand as usize].at).0.distance(p) <= HOME_REACH
+            {
+                let to = self.stands[stand as usize].at;
+                self.send(k, here, to, Task::Returning { stand });
+                return;
+            }
+            let depot = self.depot_for(p);
+            let to = self.depots[depot as usize].at;
+            self.send(k, here, to, Task::ToDepot { depot });
+            return;
+        }
         match self.stand_for(p) {
             Some((stand, _)) => {
                 let to = self.stands[stand as usize].at;
@@ -996,11 +1170,79 @@ impl Fleet {
         }
     }
 
+    /// The depot nearest `p` with room (its parked taxis and those on their way); the nearest if
+    /// every one is full.
+    fn depot_for(&self, p: DVec2) -> u32 {
+        let mut used = vec![0_u32; self.depots.len()];
+        for t in &self.taxis {
+            if let Task::Parked { depot } | Task::ToDepot { depot } = t.task {
+                used[depot as usize] += 1;
+            }
+        }
+        let nearest = |room: bool| {
+            (0..self.depots.len())
+                .filter(|&d| !room || used[d] < self.depots[d].capacity)
+                .map(|d| (self.net.at(self.depots[d].at).0.distance(p), d))
+                .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)))
+                .map(|(_, d)| d as u32)
+        };
+        nearest(true).or_else(|| nearest(false)).unwrap_or(0)
+    }
+
+    /// Each stand short of taxis (all its bays at a quiet hour, one at a busy one, counting those
+    /// on their way) calls one from the nearest depot that has one parked, its driveway clear.
+    fn refill(&mut self) {
+        let want = |s: &Stand, busy: bool| if busy { 1 } else { s.bays };
+        let busy = self.busy();
+        let mut have = vec![0_u32; self.stands.len()];
+        let mut parked: Vec<Vec<usize>> = vec![Vec::new(); self.depots.len()];
+        for (k, t) in self.taxis.iter().enumerate() {
+            match t.task {
+                Task::Waiting { stand, .. } | Task::Returning { stand } => {
+                    have[stand as usize] += 1;
+                }
+                Task::Parked { depot } => parked[depot as usize].push(k),
+                _ => {}
+            }
+        }
+        let mut sent = vec![false; self.depots.len()];
+        for (stand, &got) in have.iter().enumerate() {
+            if got >= want(&self.stands[stand], busy) {
+                continue;
+            }
+            let at = self.net.at(self.stands[stand].at).0;
+            let depot = (0..self.depots.len())
+                .filter(|&d| !sent[d] && !parked[d].is_empty())
+                .min_by(|&a, &b| {
+                    let d = |i: usize| self.net.at(self.depots[i].at).0.distance(at);
+                    d(a).total_cmp(&d(b)).then(a.cmp(&b))
+                });
+            let Some(depot) = depot else {
+                continue;
+            };
+            if self.crowded(self.depots[depot].exit) || self.time - self.last_out[depot] < OUT_GAP {
+                continue;
+            }
+            sent[depot] = true;
+            let k = parked[depot].pop().expect("a parked taxi");
+            let (from, to) = (self.depots[depot].at, self.stands[stand].at);
+            self.send(
+                k,
+                from,
+                to,
+                Task::Returning {
+                    stand: stand as u32,
+                },
+            );
+        }
+    }
+
     /// Taxi `k`'s position and heading on the network (a waiting one's at its stand).
     pub fn pose(&self, k: usize) -> (DVec2, DVec2) {
         let t = &self.taxis[k];
         match t.task {
             Task::Waiting { stand, .. } => self.net.at(self.stands[stand as usize].at),
+            Task::Parked { depot } => self.net.at(self.depots[depot as usize].at),
             _ => t.route.at(&self.net, t.s),
         }
     }
@@ -1278,6 +1520,61 @@ mod tests {
         assert!(
             (0.15..0.35).contains(&share),
             "{share:.2} of the trips booked a taxi"
+        );
+    }
+
+    #[test]
+    fn the_taxis_no_stand_holds_wait_in_the_depots_and_refill_the_stands() {
+        let depots = vec![
+            Depot {
+                at: Spot { link: 30, s: 100.0 },
+                exit: Spot { link: 30, s: 80.0 },
+                capacity: 40,
+            },
+            Depot {
+                at: Spot { link: 90, s: 100.0 },
+                exit: Spot { link: 90, s: 80.0 },
+                capacity: 40,
+            },
+        ];
+        let mut f = fleet(40.0, 30).with_depots(depots);
+        let count = |f: &Fleet, p: fn(&Task) -> bool| f.taxis.iter().filter(|t| p(&t.task)).count();
+        let waiting = |t: &Task| matches!(t, Task::Waiting { .. });
+        let parked = |t: &Task| matches!(t, Task::Parked { .. });
+        assert_eq!(count(&f, waiting), 8, "two bays at each of four stands");
+        assert_eq!(count(&f, parked), 22);
+        // An hour on: the stands kept supplied, the free taxis back in a bay or a depot.
+        f.advance_to(f.time + 3600.0, 0.5);
+        let mut have = vec![0; f.stands.len()];
+        for t in &f.taxis {
+            if let Task::Waiting { stand, .. } | Task::Returning { stand } = t.task {
+                have[stand as usize] += 1;
+            }
+        }
+        let (left, wait) = f.service();
+        println!(
+            "an hour on: {} waiting, {} parked, stands {have:?}, {left} bookings waiting, mean wait {wait:.0} s",
+            count(&f, waiting),
+            count(&f, parked)
+        );
+        assert!(have.iter().all(|&h| h >= 1), "a stand left empty: {have:?}");
+        assert!(count(&f, parked) > 0);
+        // No bay holds two.
+        for t in &f.taxis {
+            if let Task::Waiting { stand, bay } = t.task {
+                assert!(
+                    bay < f.stands[stand as usize].bays,
+                    "a third taxi at stand {stand}"
+                );
+            }
+        }
+        // A busy hour calls them out.
+        f.demand.busy_over = 1.0;
+        f.advance_to(f.time + 600.0, 0.5);
+        assert!(
+            count(&f, parked) < 10,
+            "{} still parked at a busy hour",
+            count(&f, parked)
         );
     }
 }

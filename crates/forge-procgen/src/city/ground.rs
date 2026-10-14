@@ -97,6 +97,20 @@ impl Ramp {
         }
     }
 
+    /// A driveway's ramp for vehicles, its foot at the kerb: up the verge, `run` metres long, to
+    /// the walking level, flared at its sides; the footway beyond stays level.
+    pub fn driveway(kerb: DVec2, along: DVec2, inward: DVec2, half: f64, run: f64) -> Self {
+        Self {
+            kerb,
+            along,
+            inward,
+            half,
+            run,
+            flare: FLARE,
+            lip: DROPPED,
+        }
+    }
+
     /// Its outline, a trapezoid: along its foot (from a little past it, what it stands on trims
     /// it) its width and its flares either side, narrowing to its width `run` up.
     fn outline(&self) -> Vec<DVec2> {
@@ -498,7 +512,9 @@ fn arms(graph: &RoadGraph) -> Vec<Vec<Arm>> {
 impl GroundMap {
     /// The map of `graph`'s streets over a frame of side `size`, in tiles of side `tile`; the
     /// carriageways widened to clear the trams' swept paths along `trams`' lines, round the
-    /// junctions' corners too.
+    /// junctions' corners too; the taxi stands' `laybys` carriageway, and the depots'
+    /// `driveways` ramps up the verge.
+    #[allow(clippy::too_many_arguments)]
     pub fn build(
         graph: &RoadGraph,
         size: f64,
@@ -507,6 +523,7 @@ impl GroundMap {
         walks: &[(Vec<DVec2>, f64)],
         rivers: &[(Vec<DVec2>, f64)],
         laybys: &[Vec<DVec2>],
+        driveways: &[Ramp],
     ) -> Self {
         let arms = arms(graph);
         let driven_degree = |node: u32| arms[node as usize].iter().filter(|a| a.kerb > 0.0).count();
@@ -727,6 +744,12 @@ impl GroundMap {
             .flat_map(|c| c.stripes())
             .map(|s| Piece::from_points(&s))
             .collect();
+        // The depots' driveways up the verges, standing on the walking ground as the dropped
+        // kerbs do.
+        for r in driveways {
+            ramps.push(*r);
+            on_road.push(false);
+        }
         let ramp_pieces: Vec<Piece> = ramps
             .iter()
             .map(|r| Piece::from_points(&r.outline()))
@@ -1149,7 +1172,7 @@ mod tests {
     #[test]
     fn a_tram_crossroads_is_one_ground_with_round_kerbs_and_dropped_kerbs() {
         let graph = crossroads(Profile::TramAvenue, Profile::TramAvenue);
-        let map = GroundMap::build(&graph, 200.0, 200.0, &[], &[], &[], &[]);
+        let map = GroundMap::build(&graph, 200.0, 200.0, &[], &[], &[], &[], &[]);
         let t = &map.tiles[0];
         let (w, c) = (
             Profile::TramAvenue.width(),
@@ -1215,7 +1238,7 @@ mod tests {
     #[test]
     fn a_pedestrian_street_meets_an_avenue_on_its_pavement() {
         let graph = crossroads(Profile::Avenue, Profile::Pedestrian);
-        let map = GroundMap::build(&graph, 200.0, 200.0, &[], &[], &[], &[]);
+        let map = GroundMap::build(&graph, 200.0, 200.0, &[], &[], &[], &[], &[]);
         // The avenue's carriageway runs straight through: no corner rounded into the mouth.
         let t = &map.tiles[0];
         let c = Profile::Avenue.carriageway();
@@ -1251,7 +1274,7 @@ mod tests {
     #[test]
     fn a_taxi_road_s_crossings_are_raised_tables_flush_with_the_pavements() {
         let graph = crossroads(Profile::Avenue, Profile::Avenue);
-        let map = GroundMap::build(&graph, 200.0, 200.0, &[], &[], &[], &[]);
+        let map = GroundMap::build(&graph, 200.0, 200.0, &[], &[], &[], &[], &[]);
         let t = &map.tiles[0];
         let c = Profile::Avenue.carriageway();
         assert_eq!(map.crossings.len(), 4);

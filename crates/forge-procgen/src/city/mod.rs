@@ -696,6 +696,8 @@ pub struct CityPlan {
     pub ground: ground::GroundMap,
     /// The taxi stands (D-061).
     pub taxi_stands: Vec<taxi::Stand>,
+    /// The taxi depots (D-061): parking decks where the cabs no stand holds wait and charge.
+    pub depots: Vec<taxi::Depot>,
     /// The boat crossings.
     pub crossings: Vec<BoatCrossing>,
     /// The landmarks.
@@ -1112,6 +1114,39 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
     };
     let taxi_stands = taxi::stands(&roads, site, &tram_lines, &blocks, &junctions);
     let laybys: Vec<Vec<DVec2>> = taxi_stands.iter().map(|s| s.outline()).collect();
+    // The depots behind the building lines of the taxi roads, industrial districts first; their
+    // driveways' ramps up the verges.
+    let industrial: Vec<bool> = blocks
+        .iter()
+        .map(|b| {
+            params
+                .districts
+                .get(b.district)
+                .is_some_and(|d| d.kind == DistrictKind::Industrial)
+        })
+        .collect();
+    let anchors: Vec<DVec2> = params.landmarks.iter().map(|l| l.anchor).collect();
+    let depots = taxi::depots(
+        &roads,
+        site,
+        &blocks,
+        &industrial,
+        &taxi_stands,
+        &junctions,
+        &anchors,
+    );
+    let driveways: Vec<ground::Ramp> = depots
+        .iter()
+        .flat_map(|d| {
+            let verge = roads.edges[d.edge as usize]
+                .profile
+                .section()
+                .iter()
+                .find(|s| s.lane == Lane::Verge)
+                .map_or(2.5, |s| s.width);
+            d.ramps(verge)
+        })
+        .collect();
     let tracks: Vec<Vec<DVec2>> = tram_lines.iter().map(|l| l.points.clone()).collect();
     let walks = streets::promenades(site, ground::PROMENADE);
     let rivers: Vec<(Vec<DVec2>, f64)> = site
@@ -1127,6 +1162,7 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
         &walks,
         &rivers,
         &laybys,
+        &driveways,
     );
     lap("street ground", &mut timings);
     // Courtyards and lots once the streets' widths are known.
@@ -1160,6 +1196,7 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
         tram_lines,
         ground,
         taxi_stands,
+        depots,
         crossings,
         landmarks,
         stats: PlanStats::default(),

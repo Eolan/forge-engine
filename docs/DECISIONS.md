@@ -4206,7 +4206,16 @@ times they circulate round the busy places, where they will most likely find som
     bookings waiting and a 43 s mean wait at 9:00; the sandbox 1 727.
   - **Traffic:** car-following in each lane (the Intelligent Driver Model), one taxi at a time
     through a junction with room past it, stop lines 10 m before.
-  - **Not yet:** depots to charge in (the cabs behind a stand's two bays wait out of sight), and
-    the 8-seat shuttles.
+  - **Depots** (built 2026-10-15): split-level parking decks (177 cabs) behind the building
+    lines of the taxi roads, one for 25 stands, an industrial district preferred (counted 800 m
+    nearer) but never far from the stands they serve.
+    - **Circulation** (the owner asked how car parks keep their flows apart): one way round, an
+      up lane and a down lane on each side, the ways in and out apart, columns only between
+      bays.
+    - **Staff:** a stair and lift core with a door onto the pavement.
+    - **Driveways:** they climb the verge, so the footways stay level.
+    - **Use:** the cabs no stand holds park and charge there; the depots refill the stands and
+      send their cabs out at busy hours.
+  - **Not yet:** the 8-seat shuttles; batteries and charging times.
 - **Crossings (the owner's go):** raised tables on the taxi roads; dropped kerbs on the tram
   avenues.

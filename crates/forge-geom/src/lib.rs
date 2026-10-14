@@ -5,6 +5,7 @@
 
 pub mod cache;
 pub mod city;
+pub mod depot;
 pub mod figures;
 pub mod fracture;
 pub mod furniture;

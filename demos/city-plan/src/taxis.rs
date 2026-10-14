@@ -5,7 +5,7 @@
 use forge_procgen::city::blocks::BlockUse;
 use forge_procgen::city::mass::Mass;
 use forge_procgen::city::{CityPlan, taxi};
-use forge_sim::taxi::{Demand, Fleet, Link, Network, Stand, Task};
+use forge_sim::taxi::{Demand, Depot, Fleet, Link, Network, Spot, Stand, Task};
 use glam::{DVec2, Vec3};
 
 /// The share of a day's bookings in each hour from midnight: the night's few, the morning's and
@@ -37,10 +37,66 @@ const STEP: f64 = 0.25;
 /// The cabs a stand's lay-by holds, one each end.
 const BAYS: u32 = 2;
 
+/// Where a taxi is drawn.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Pose {
+    /// Its place on the plan.
+    pub at: DVec2,
+    /// Its yaw.
+    pub yaw: f32,
+    /// The level it stands on, metres.
+    pub level: f64,
+    /// Whether it is drawn.
+    pub shown: bool,
+}
+
+/// A point of depot `d`'s deck's frame (`forge_geom::depot`) on the plan, and its level.
+fn deck_point(d: &taxi::Depot, p: Vec3) -> (DVec2, f64) {
+    let walk = forge_procgen::city::ground::WALK_LEVEL;
+    let at = d.entrance() + d.across() * f64::from(p.x) - d.out * f64::from(p.z);
+    (at, walk + f64::from(p.y))
+}
+
+/// A direction of depot `d`'s deck's frame on the plan.
+fn deck_direction(d: &taxi::Depot, v: Vec3) -> DVec2 {
+    (d.across() * f64::from(v.x) - d.out * f64::from(v.z)).normalize_or_zero()
+}
+
+/// Where along `way` (a path in a deck's frame) a cab is at `t` of the way (0 to 1): the point
+/// and the way it heads, nose first, or backing out along the first stretch (`backing`).
+fn along_way(way: &[Vec3], t: f64, backing: bool) -> (Vec3, Vec3) {
+    let lengths: Vec<f32> = way.windows(2).map(|w| w[0].distance(w[1])).collect();
+    let total: f32 = lengths.iter().sum();
+    let mut left = t.clamp(0.0, 1.0) as f32 * total;
+    for (i, w) in way.windows(2).enumerate() {
+        if left <= lengths[i] || i + 1 == lengths.len() {
+            let f = if lengths[i] > 0.0 {
+                (left / lengths[i]).min(1.0)
+            } else {
+                1.0
+            };
+            let mut dir = Vec3::new(w[1].x - w[0].x, 0.0, w[1].z - w[0].z).normalize_or_zero();
+            if backing && i == 0 {
+                dir = -dir;
+            }
+            return (w[0].lerp(w[1], f), dir);
+        }
+        left -= lengths[i];
+    }
+    (way[0], Vec3::Z)
+}
+
 /// The scene's taxis.
 pub struct Taxis {
     fleet: Fleet,
     stands: Vec<taxi::Stand>,
+    depots: Vec<taxi::Depot>,
+    /// The bays of a depot's deck (`forge_geom::depot::bays`).
+    bays: Vec<forge_geom::depot::Bay>,
+    /// Each taxi's bay in its depot while it is parked or driving out: its depot and the bay.
+    bay_of: Vec<Option<(u32, usize)>>,
+    /// Each depot's bays taken.
+    taken: Vec<Vec<bool>>,
     /// The fleet's clock less the scene's.
     offset: f64,
     /// The share of the trips by tram or taxi that the trams do not serve (one change at most).
@@ -93,7 +149,7 @@ impl Taxis {
                     // The stand's place along its road: its kerb point's projection.
                     let spot = nearest_on(l, s.kerb);
                     Stand {
-                        at: forge_sim::taxi::Spot { link, s: spot },
+                        at: Spot { link, s: spot },
                         bays: BAYS,
                     }
                 })
@@ -145,14 +201,68 @@ impl Taxis {
         let taxis = ((peak / PEAK_TRIPS_PER_TAXI).round() as usize).clamp(10, 6000);
         let start = hour * 3600.0;
         let taxi_share = demand.taxi_share;
-        let fleet = Fleet::new(net, stands, taxis, demand, 0x7A_C1, start);
-        Some(Self {
+        // The depots, where the taxis no stand holds park and charge.
+        let depots: Vec<Depot> = plan
+            .depots
+            .iter()
+            .filter_map(|d| {
+                let link = link_of[d.edge as usize];
+                (link != u32::MAX).then(|| {
+                    let l = &net.links[link as usize];
+                    Depot {
+                        at: Spot {
+                            link,
+                            s: nearest_on(l, d.kerb),
+                        },
+                        exit: Spot {
+                            link,
+                            s: nearest_on(l, d.exit_kerb()),
+                        },
+                        capacity: d.capacity() as u32,
+                    }
+                })
+            })
+            .collect();
+        let fleet = Fleet::new(net, stands, taxis, demand, 0x7A_C1, start).with_depots(depots);
+        let bays = forge_geom::depot::bays();
+        let mut taxis = Self {
+            bay_of: vec![None; fleet.taxis.len()],
+            taken: vec![vec![false; bays.len()]; plan.depots.len()],
+            bays,
             fleet,
             stands: plan.taxi_stands.clone(),
+            depots: plan.depots.clone(),
             offset: start - clock,
             unserved,
             taxi_share,
-        })
+        };
+        taxis.keep_bays();
+        Some(taxis)
+    }
+
+    /// Each taxi parked in a depot to a bay of its own, the first free, until it has driven out
+    /// (taking each one's place in the order parked made the cabs jump bays as others left).
+    fn keep_bays(&mut self) {
+        for k in 0..self.fleet.taxis.len() {
+            let parked = match self.fleet.taxis[k].task {
+                Task::Parked { depot } => Some(depot),
+                _ => None,
+            };
+            match (parked, self.bay_of[k]) {
+                (Some(depot), None) => {
+                    let taken = &mut self.taken[depot as usize];
+                    if let Some(b) = taken.iter().position(|t| !t) {
+                        taken[b] = true;
+                        self.bay_of[k] = Some((depot, b));
+                    }
+                }
+                (None, Some((depot, b))) if self.fleet.hold(k) <= 0.0 => {
+                    self.taken[depot as usize][b] = false;
+                    self.bay_of[k] = None;
+                }
+                _ => {}
+            }
+        }
     }
 
     /// How many taxis there are.
@@ -169,36 +279,82 @@ impl Taxis {
             return;
         }
         self.fleet.advance_to(to, STEP);
+        self.keep_bays();
     }
 
-    /// Each taxi's position on the plan, its yaw, and the level it stands on.
-    pub fn poses(&self) -> Vec<(DVec2, f32)> {
+    /// Each taxi's place: in its lane, at the kerb, in its stand's lay-by, or in a bay of its
+    /// depot's deck, seen through its fins (the taxis behind a stand's bays with no depot to go
+    /// to are not shown: drawn, they stood one on another in the lay-by).
+    pub fn poses(&self) -> Vec<Pose> {
+        use forge_geom::depot::{way_in, way_out};
+        use forge_sim::taxi::DEPOT_DRIVE;
+        let road = forge_procgen::city::ground::ROAD_LEVEL;
+        let walk = forge_procgen::city::ground::WALK_LEVEL;
         (0..self.fleet.taxis.len())
             .map(|k| {
                 let (p, dir) = self.fleet.pose(k);
                 let right = DVec2::new(-dir.y, dir.x);
-                let (at, heading) = match self.fleet.taxis[k].task {
+                let pose = |at: DVec2, heading: DVec2, level: f64, shown: bool| Pose {
+                    at,
+                    yaw: (-heading.y).atan2(heading.x) as f32,
+                    level,
+                    shown,
+                };
+                // Along a way through a depot's deck: in from the lane before its way in, out
+                // to the lane before its way out.
+                let on_way = |depot: u32, way: Vec<Vec3>, t: f64, backing: bool| {
+                    let d = &self.depots[depot as usize];
+                    let (q, heading) = along_way(&way, t, backing);
+                    let (at, level) = deck_point(d, q);
+                    pose(at, deck_direction(d, heading), level, true)
+                };
+                let in_deck = matches!(self.fleet.taxis[k].task, Task::Parked { .. })
+                    || self.fleet.hold(k) > 0.0;
+                if let Some((depot, b)) = self.bay_of[k].filter(|_| in_deck) {
+                    let d = &self.depots[depot as usize];
+                    let bay = &self.bays[b];
+                    // The lane 1.5 m past the kerb, from the deck's front.
+                    let lane = (d.front + 1.5) as f32;
+                    let dip = (road - walk) as f32;
+                    let hold = self.fleet.hold(k);
+                    if hold > 0.0 {
+                        let t = 1.0 - hold / DEPOT_DRIVE;
+                        return on_way(depot, way_out(bay, lane, dip), t, true);
+                    }
+                    let since = self.fleet.time - self.fleet.since(k);
+                    if since < DEPOT_DRIVE {
+                        return on_way(depot, way_in(bay, lane, dip), since / DEPOT_DRIVE, false);
+                    }
+                    let (at, level) = deck_point(d, bay.at());
+                    return pose(at, deck_direction(d, bay.facing()), level, true);
+                }
+                match self.fleet.taxis[k].task {
                     // In its stand's lay-by, bay after bay along it.
                     Task::Waiting { stand, bay } => {
                         let s = &self.stands[stand as usize];
                         let along = (f64::from(bay % 2) - 0.5) * 6.0;
-                        (
-                            s.kerb + s.out * (taxi::DEPTH * 0.5) + s.along * along,
-                            s.along,
-                        )
+                        let at = s.kerb + s.out * (taxi::DEPTH * 0.5) + s.along * along;
+                        pose(at, s.along, road, bay < BAYS)
                     }
-                    Task::Stopped { .. } => (p + right * KERB, dir),
-                    _ => (p + right * LANE, dir),
-                };
-                (at, (-heading.y).atan2(heading.x) as f32)
+                    // Parked with every bay taken: out of sight.
+                    Task::Parked { depot } => {
+                        let d = &self.depots[depot as usize];
+                        pose(d.entrance(), d.out, road, false)
+                    }
+                    Task::Stopped { .. } => pose(p + right * KERB, dir, road, true),
+                    _ => pose(p + right * LANE, dir, road, true),
+                }
             })
             .collect()
     }
 
-    /// Whether taxi `k` waits behind its stand's bays: in a depot, not drawn (the depots, where
-    /// the cabs would charge, are not built yet; drawn, they stood one on another in the lay-by).
-    pub fn in_depot(&self, k: usize) -> bool {
-        matches!(self.fleet.taxis[k].task, Task::Waiting { bay, .. } if bay >= BAYS)
+    /// How many taxis are parked in the depots.
+    pub fn parked(&self) -> usize {
+        self.fleet
+            .taxis
+            .iter()
+            .filter(|t| matches!(t.task, Task::Parked { .. }))
+            .count()
     }
 
     /// Bookings waiting and the mean wait so far, seconds.
@@ -258,12 +414,12 @@ fn nearest_on(l: &Link, p: DVec2) -> f64 {
     at
 }
 
-/// The world position of a taxi standing at `p` on the plan, on the carriageway's level.
-pub fn world(size: f64, p: DVec2) -> Vec3 {
+/// The world position of a taxi drawn at `pose`.
+pub fn world(size: f64, pose: &Pose) -> Vec3 {
     Vec3::new(
-        (p.x - size * 0.5) as f32,
-        forge_procgen::city::ground::ROAD_LEVEL as f32,
-        (p.y - size * 0.5) as f32,
+        (pose.at.x - size * 0.5) as f32,
+        pose.level as f32,
+        (pose.at.y - size * 0.5) as f32,
     )
 }
 
@@ -284,51 +440,59 @@ mod tests {
         let structures = forge_procgen::city::structure::structures(&city, &masses);
         let nets: Vec<f64> = structures.iter().map(|s| s.net).collect();
         let mut taxis = Taxis::new(&city, &masses, &nets, 4.0, 0.0).expect("a fleet");
-        let poses = taxis.poses();
+        // Each where it should be: on a carriageway (its lane, a lay-by, the kerb), or on its
+        // depot's deck; none drawn on another.
+        let misplaced = |taxis: &Taxis| {
+            let poses = taxis.poses();
+            let mut off = 0;
+            for p in &poses {
+                // On a carriageway, or in or on the way through its depot's deck.
+                let placed = city.ground.on_carriageway(p.at)
+                    || city
+                        .depots
+                        .iter()
+                        .any(|d| d.on_deck(p.at, 0.0) || d.on_driveway(p.at, 0.5));
+                off += usize::from(p.shown && !placed);
+            }
+            let shown: Vec<&Pose> = poses.iter().filter(|p| p.shown).collect();
+            let stacked = (0..shown.len())
+                .flat_map(|i| (i + 1..shown.len()).map(move |j| (i, j)))
+                .filter(|&(i, j)| {
+                    shown[i].at.distance(shown[j].at) < 2.0
+                        && (shown[i].level - shown[j].level).abs() < 1.0
+                })
+                .count();
+            (off, stacked, taxis.parked())
+        };
+        let (off, stacked, parked) = misplaced(&taxis);
         println!(
-            "{} taxis; first {:?}",
-            poses.len(),
-            &poses[..3.min(poses.len())]
+            "{} taxis, {parked} parked in {} depots",
+            taxis.len(),
+            city.depots.len()
         );
-        let off = poses
-            .iter()
-            .filter(|(p, _)| !city.ground.on_carriageway(*p))
-            .count();
-        assert_eq!(
-            off,
-            0,
-            "{off} of {} waiting taxis off the carriageway",
-            poses.len()
-        );
-        // None drawn one on another: the cabs behind a stand's bays wait in a depot.
-        let drawn: Vec<DVec2> = (0..poses.len())
-            .filter(|&k| !taxis.in_depot(k))
-            .map(|k| poses[k].0)
-            .collect();
-        let stacked = (0..drawn.len())
-            .flat_map(|i| (i + 1..drawn.len()).map(move |j| (i, j)))
-            .filter(|&(i, j)| drawn[i].distance(drawn[j]) < 3.0)
-            .count();
+        assert_eq!(off, 0, "{off} of {} taxis out of place", taxis.len());
         assert_eq!(stacked, 0, "{stacked} pairs of cabs one on another");
-        // An hour on: every taxi still on a carriageway (its lane, a lay-by, the kerb).
+        assert!(parked > 0, "none in the depots");
+        // An hour on: still in place, give or take one in twenty on a turn or a ramp.
         taxis.advance(600.0);
         for _ in 0..6 {
             let t = taxis.fleet.time + 590.0;
             taxis.fleet.advance_to(t, STEP);
+            taxis.keep_bays();
         }
-        let off = taxis
-            .poses()
-            .iter()
-            .filter(|(p, _)| !city.ground.on_carriageway(*p))
-            .count();
+        let (off, stacked, parked) = misplaced(&taxis);
         let (waiting, wait) = taxis.service();
         println!(
-            "after an hour: {off} off the carriageway, {waiting} bookings waiting, mean wait {wait:.0} s"
+            "after an hour: {off} out of place, {stacked} stacked, {parked} parked, {waiting} bookings waiting, mean wait {wait:.0} s"
         );
         assert!(
             off * 20 <= taxis.len(),
-            "{off} of {} taxis off the carriageway",
+            "{off} of {} taxis out of place",
             taxis.len()
+        );
+        assert!(
+            stacked * 50 <= taxis.len(),
+            "{stacked} pairs one on another"
         );
     }
 
@@ -348,9 +512,11 @@ mod tests {
         // is stuck in a queue that does not clear.
         let t = taxis.fleet.time + 3600.0;
         taxis.fleet.advance_to(t, STEP);
+        taxis.keep_bays();
         let before = taxis.poses();
         let t = taxis.fleet.time + 120.0;
         taxis.fleet.advance_to(t, STEP);
+        taxis.keep_bays();
         let after = taxis.poses();
         let stuck = (0..taxis.len())
             .filter(|&k| {
@@ -360,7 +526,8 @@ mod tests {
                         | Task::Carrying { .. }
                         | Task::Returning { .. }
                         | Task::Cruising
-                ) && before[k].0.distance(after[k].0) < 0.5
+                        | Task::ToDepot { .. }
+                ) && before[k].at.distance(after[k].at) < 0.5
             })
             .count();
         let (waiting, wait) = taxis.service();
@@ -387,5 +554,14 @@ mod tests {
         );
         assert!(wait < 120.0, "a mean wait of {wait:.0} s");
         assert!(waiting * 20 <= taxis.len(), "{waiting} bookings waiting");
+    }
+
+    #[test]
+    fn the_plans_depots_are_the_decks_drawn() {
+        use forge_geom::depot;
+        assert_eq!(taxi::DEPOT_WIDTH, f64::from(depot::WIDTH));
+        assert_eq!(taxi::DEPOT_DEPTH, f64::from(depot::DEPTH));
+        assert_eq!(taxi::DEPOT_CAPACITY, depot::bays().len());
+        assert!((taxi::DEPOT_EXIT - f64::from(depot::EXIT_X)).abs() < 1e-4);
     }
 }

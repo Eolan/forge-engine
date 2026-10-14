@@ -623,19 +623,70 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
     - **Where each cab stands:**
       - in its lane, 1.5 m right of the centreline;
       - at the kerb, 2.3 m right, while it picks up or sets down;
-      - waiting: in its lay-by, two bays; those behind wait in a depot, not drawn (the depots,
-        where the cabs would charge, are not built yet).
+      - waiting: in its lay-by, two bays;
+      - parked: in a bay of its depot's deck, seen through the fins.
     - **The cab** (`vehicles::taxi_cab`): a 3.6 × 1.8 × 1.65 m pod with an ivory body, dark
       glass and an amber band. The cabs are drawn as movers after the trams.
+    - **Depots** (`city::taxi::depots`, `forge_geom::depot`): the parking decks where the taxis
+      no stand holds wait and charge, one for 25 stands (the example 4, the sandbox 9).
+      - **Sites:** behind the building line of a taxi road, 48 by 32 m in a built block.
+        - Clearances: 13 m from the block's other streets, 45 m from junctions, 40 m from
+          stands, 150 m from the landmarks.
+        - Each cluster of stands takes its nearest site, an industrial district's counted 800 m
+          nearer; depots stand 1 km apart.
+        - Their blocks hold no flats and no court paths.
+      - **The deck** (redone 2026-10-15). The owner asked whether the cabs could drive in, about
+        the door's height and the ramps, and how car parks keep the flows in and out apart. The
+        first deck had no ramps, a column in its way in, and 2.1 m under its lintel. The new
+        deck follows the usual practice (`docs/research/transit-and-vehicles.md` §9):
+        - **Split levels:** the front half's floors at 0, 3 and 6 m, the back half's 1.5 m
+          higher. Ramps of 1.5 m over 10 m (1 in 6.7) in the side strips join each half to the
+          other's next floors.
+        - **One way round:** the front aisle runs east and the back aisle west. Each strip has
+          an up lane and a down lane, so no ramp is shared both ways.
+        - **In and out apart:** the way in at the front's middle passes every floor's bays going
+          up. The way out leaves at the front's west corner, at the foot of the last down lane.
+          Each has its own one-lane driveway.
+        - **Clear ways:** columns stand 7.5 m apart, only between bays, at the strips' edges and
+          in the facades. Each level has 2.7 m clear, and the way in's fascia 2.3 m.
+        - **People:** a stair and lift core in the front's east corner opens onto the pavement
+          for the staff who keep the chargers and the cabs. The fleet would stop its cabs on a
+          floor they work (ISO 23374); that is not simulated.
+        - **Dress:** timber fins every half metre, concrete slabs, upstands round the ramps and
+          the half-level edges, solar panels over both roofs.
+        - **Room:** 177 bays, 15 to a row, four rows to a level of both halves.
+      - **The driveways** climb the 2.5 m verge from the carriageway (ramps flared at their
+        sides), then cross the footway at the walking level: nobody walking along steps down.
+      - **The sim:**
+        - the taxis past the stands' bays start parked, shared out by room;
+        - a free taxi goes to a stand with a bay free within 1.5 km, else to the nearest depot
+          with room;
+        - every 30 s the depots send one to each stand short of taxis (all its bays at a quiet
+          hour, one at a busy one);
+        - at busy hours they call their taxis out, one at a time;
+        - a cab drives through the deck in 45 s, in to its bay or out from it, and leaves 4 s
+          after the one before;
+        - an arriving taxi takes its stand's first free bay (counting the waiting ones put two
+          in one bay).
+      - **In the scene:** each parked cab keeps its own bay until it has driven out. Entering or
+        leaving, it follows the deck's way (`depot::way_in`, `way_out`): up the driveway, round
+        the floors the one way they run, nose into its bay, backing out of it.
     - **Numbers:**
-      - the example: 515 taxis. From 8:00, at 9:02: 2 645 trips by tram, 1 460 by taxi, none
-        waiting, a mean wait of 43 s, no taxi stuck;
-      - the sandbox: 1 727 taxis; the trams serve half of the trips by tram or taxi, 17 % of the
-        rest book a taxi.
-    - **Not yet:** the depots; the 8-seat shuttles; taxis that stop for people at the crossings.
+      - the example: 511 taxis, 349 of them parked in 4 depots at 4:00, 336 an hour on, none out
+        of place. From 8:00, at 9:02: 2 646 trips by tram, 1 372 by taxi, none waiting, a mean
+        wait of 40 s, no taxi stuck;
+      - the sandbox: 1 727 taxis in 9 depots; the trams serve half of the trips by tram or taxi,
+        17 % of the rest book a taxi.
+    - **Not yet:** the 8-seat shuttles; taxis that stop for people at the crossings; batteries
+      and charging times.
     - **Tests:**
-      - `waiting_taxis_stand_in_their_lay_bys_and_moving_ones_on_the_roads`: none off the
-        carriageway at the start, none drawn one on another; at most 1 in 20 an hour on;
+      - `waiting_taxis_stand_in_their_lay_bys_and_moving_ones_on_the_roads`: each on a
+        carriageway or its depot's deck, none drawn one on another, at the start and an hour on;
+      - `taxi_depots_stand_behind_the_building_lines_with_level_footways` and
+        `the_taxis_no_stand_holds_wait_in_the_depots_and_refill_the_stands`;
+      - `forge_geom::depot`'s: 177 bays clear of the columns, every bay reached one way round
+        and left by the way out, no step over 1.5 m nor slope over 1 in 6.25;
+        `the_plans_depots_are_the_decks_drawn`;
       - `at_the_morning_peak_the_taxis_keep_moving`: none stuck, a mean wait under 2 minutes,
         the trams carrying more than the taxis;
       - `forge-sim`'s tests: fetch-carry-return, determinism, busy-hour cruising, routes that

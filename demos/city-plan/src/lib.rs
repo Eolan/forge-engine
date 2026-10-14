@@ -821,6 +821,39 @@ impl PlanScenario {
                 kit_instances.push((id, at, 1));
             }
         }
+        // The taxi depots' decks, their fronts on the building lines facing their roads (D-061).
+        if !plan.depots.is_empty() {
+            kit_meshes.push(forge_geom::depot::taxi_depot());
+            let id = (kit_meshes.len() - 1) as u32;
+            for d in &plan.depots {
+                // The mesh's +z, out of its front, towards the road.
+                let x = d.across();
+                let turn = glam::Quat::from_rotation_y((-x.y).atan2(x.x) as f32);
+                let at =
+                    Mat4::from_rotation_translation(turn, world(size, d.entrance(), WALK_LEVEL));
+                kit_instances.push((id, at, 0));
+            }
+            // A view of the first from over its road, 10 m up.
+            let d = &plan.depots[0];
+            let eye = world(size, d.kerb - d.out * 3.0 + d.along * 40.0, 10.0);
+            let to = (world(size, d.entrance() + d.out * 16.0, 4.0) - eye).normalize_or_zero();
+            let yaw = (-to.x).atan2(-to.z).to_degrees();
+            let pitch = to.y.asin().to_degrees();
+            passage_note += &format!(
+                "; {} taxi depots, one at --view={:.1},10,{:.1},{yaw:.1},{pitch:.1}",
+                plan.depots.len(),
+                eye.x,
+                eye.z
+            );
+            // And its front from the pavement across the road: the ways in and out, the staff's door.
+            let eye = world(size, d.kerb - d.out * 12.0, 1.7);
+            let to = (world(size, d.entrance(), 1.0) - eye).normalize_or_zero();
+            let yaw = (-to.x).atan2(-to.z).to_degrees();
+            passage_note += &format!(
+                ", its front at --view={:.1},1.7,{:.1},{yaw:.1},4",
+                eye.x, eye.z
+            );
+        }
         // The bollards across the pedestrian ways' mouths onto the roads (D-061).
         if !plan.ground.bollards.is_empty() {
             kit_meshes.push(forge_geom::furniture::bollard());
@@ -3192,6 +3225,7 @@ impl Running for PlanRunning {
                 let (waiting, wait) = taxis.service();
                 tracing::info!(
                     taxis = taxis.len(),
+                    parked = taxis.parked(),
                     waiting,
                     mean_wait_s = wait.round(),
                     "the taxis"
@@ -3342,14 +3376,14 @@ impl Running for PlanRunning {
         // Then the taxis, moving.
         if let Some(taxis) = &self.taxis {
             still.resize(transforms.len(), false);
-            for (k, (p, yaw)) in taxis.poses().into_iter().enumerate() {
+            for pose in taxis.poses() {
                 still.push(false);
-                let mut at = taxis::world(self.size, p);
-                // Waiting behind its stand's bays: in a depot not built yet, out of sight.
-                if taxis.in_depot(k) {
+                let mut at = taxis::world(self.size, &pose);
+                // Not drawn: out of sight under the ground.
+                if !pose.shown {
                     at.y -= 50.0;
                 }
-                transforms.push(place((at, yaw)));
+                transforms.push(place((at, pose.yaw)));
             }
         }
         scene.set_movers_still(&transforms, |k| still.get(k).copied().unwrap_or(false));
@@ -3435,7 +3469,9 @@ fn court_paths(plan: &CityPlan, masses: &[Mass]) -> Vec<Vec<Vec<DVec2>>> {
         let Some(court) = &block.courtyard else {
             continue;
         };
-        if !lot.frontage || built.contains(&(i as u32)) || block.use_ != BlockUse::Built {
+        // None in a taxi depot's block: it has no flats, and its deck stands over the court.
+        let depot = plan.depots.iter().any(|d| d.block == lot.block);
+        if !lot.frontage || built.contains(&(i as u32)) || block.use_ != BlockUse::Built || depot {
             continue;
         }
         // From the block's edge nearest the gap's middle to the court's.

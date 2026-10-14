@@ -1442,6 +1442,54 @@ at 2026, after its insolvency and takeover by Wanfeng.
 
 ---
 
+## 9. Taxi depots: how car parks keep their flows apart (2026-10-15)
+
+The owner asked whether the first depot's cabs could drive in at all, and how car parks
+organise the flow of the cars going in and those going out. Automated cabs relax the human
+constraints, but people still need access for maintenance and repairs. A short search; the
+standards are paywalled, so only the published summaries were read.
+
+**What the sources say:**
+- **Flow.** Car parks are laid out so that a car going in passes as many bays as possible, and
+  one going out as few as possible. The steel-construction guide gives a one-way aisle of 6.0 m
+  and a two-way one of 6.95 m for bays at 90°.
+  ([steelconstruction.info, car parks](https://steelconstruction.info/sectors/retail-buildings/car-parks/))
+- **Standards.** AS/NZS 2890.1 covers parking modules, circulation roadways and ramps, and the
+  widths, gradients and queuing areas of driveways.
+  ([Standards Australia](https://store.standards.org.au/product/as-nzs-2890-1-2004))
+- **Ramps.** A ramp too steep or too narrow for the standard works as a single lane. Without
+  firm controls, cars meet head-on on it.
+  ([Dunedin City Council](https://www.dunedin.govt.nz/__data/assets/pdf_file/0007/603934/Andy-Carrs-powerpoint-presentation.pdf))
+- **Headroom.** One planning condition asks for 2.2 m, measured as AS 2890.1 sets.
+  ([NSW planning portal](https://apps.planningportal.nsw.gov.au/prweb/PRRestService/DocMgmt/v1/PublicDocuments/DATA-WORKATTACH-FILE%20PEC-DPE-EP-WORK%20PPS-2017SWC113!20190621T113955.203%20GMT))
+- **Older guidance.** It treats entry, control and exit as separate design points, and raises the
+  conflicts between pedestrians and vehicles. ([TRID](https://trid.trb.org/View/33276))
+- **Automated valet parking** (ISO 23374-1:2023) sets requirements for the facility's
+  environment, for remote assistance and recovery, and for stopping the vehicles in response to
+  the other users of the facility.
+  ([ISO 23374-1 listing](https://www.sis.se/produkter/informationsteknik-kontorsutrustning/ittillampningar/ittillampningar-inom-transport/iso-23374-12023))
+- **Bays.** A trade article notes that bays can narrow when no doors have to open.
+  ([ADAS & Autonomous Vehicle International](https://adas.mydigitalpublication.com/adas-autonomous-vehicle-international-september-2022/page-26))
+
+**What Forge took** (`forge_geom::depot`):
+- **Split levels.** The back half's floors stand half a storey above the front's, a common
+  efficient layout (the Car Park Designers' Handbook compares it with sloping decks).
+- **Ramps.** Short ramps of 1.5 m over 10 m (1 in 6.7, inside the usual maxima) run in the side
+  strips.
+- **One way round.** The front aisle runs east and the back aisle west. Each strip has an up lane
+  and a down lane, so no ramp is shared both ways.
+- **Ways in and out apart.** The way in at the front's middle passes the floors' bays going up.
+  The way out leaves at the corner at the foot of the last down lane.
+- **Clearances.** Each level has 2.7 m clear, and the way in's fascia 2.3 m.
+- **Clear ways.** Columns stand only between bays and at the strips' edges.
+- **Bays.** They stay 2.5 m wide: 1.8 m cabs are narrow, and staff walk between them.
+- **People.** A stair and lift core opens onto the pavement for the staff. The fleet's stop
+  command on a floor where they work (ISO 23374's) is noted, not simulated.
+- **Departures.** Cabs leave 4 s apart and drive through the deck in 45 s.
+
+*Not read:* the standards' full texts and the Handbook (paywalled). Its numbers are taken from
+the summaries above, and are *(estimates)* for a spec.
+
 ## What professional engines do
 
 | Game or system | Transit model | Schedule or headway | Passengers | Capacity and crowding | Riding along | What users noticed |
