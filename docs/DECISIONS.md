@@ -4047,7 +4047,19 @@ kit dressing them.
 - the patent checks before the steps that need them: Sony's tile stress before any overload
   pass (step 4), Celsys's room swapping before the interiors' rendering (step 3).
 
-*(research: building-structure.md; issues #248, #263)*
+**Ground floors (the owner, 2026-10-15).**
+- **The owner's note:** some ground-floor flats have a garden (*rez-de-jardin*), others are
+  plain (*rez-de-chaussée*). Round a green court they usually have a glazed bay, and a shared
+  kitchen garden is likely. Not every ground floor on a pavement is a shop: shops go on the main
+  roads, near the sights, in the centre, along the coast and the rivers.
+- **Research:** `research/ground-floors.md`.
+- *Built 2026-10-15:* which ground floors are shops comes from a chance by street and frontage,
+  with modifiers for the centre, the tram stops and the sights, drawn by stretches of street so
+  that shops form parades. The example has 31 shopfronts per 1 000 people (Paris 28).
+- *Next:* garden flats on the courts, shared kitchen gardens with raised beds, and planted
+  strips before the homes on the streets, all step-free.
+
+*(research: building-structure.md; ground-floors.md; issues #248, #263)*
 
 ## D-061 — The street ground as one map: cross-sections, junctions first, every surface once ✅ (proposed 2026-10-14; the owner's go the same day, in the order given)
 

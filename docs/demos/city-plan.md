@@ -520,10 +520,37 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
   several tables round each café, not aligned, a bit organic). They stand within 2.65 m of the
   wall, before a third of the kit's shopfronts on the avenues' pavements and in the lanes,
   and two thirds of those facing a square, a park or a quay. They are coloured as the
-  building's awnings. A ground floor is shops (`Mass::lively`, the grammar's `open`) on
-  streets of 18 m or more (the avenues), in the lanes, and facing a square, a park or a quay.
-  The owner asked for shops, restaurants and cafés round the large squares, above all by the
-  river and the sea.
+  building's awnings.
+- **Which ground floors are shops** (`Mass::active`, redone 2026-10-15). The owner: not every
+  ground floor on a pavement is a shop or a café; shops go on the main roads, near the sights,
+  in the centre, along the coast and the rivers. `research/ground-floors.md` gives the model, all
+  its numbers estimates calibrated on Paris and Barcelona.
+  - **A chance by street:**
+    - a central tram avenue 0.9, another 0.65;
+    - a central taxi road 0.75, another 0.35;
+    - an old town's lane 0.55, another pedestrian street 0.1;
+    - a shared street 0.35 in the old towns, 0.12 elsewhere.
+  - **Or by what it faces:** a square 0.9 in the centre and 0.6 elsewhere; the water 0.8 and
+    0.4; a park 0.35.
+  - **The neighbourhood's parades:** at least 0.5 within 400 m of each district's heart.
+  - **Then:**
+    - ×0.4 in industrial districts;
+    - less far from the centre (×0.8 at 3 km, ×0.6 past 5 km);
+    - +0.15 within 100 m of a tram stop (+0.07 within 250 m);
+    - +0.15 near a sight;
+    - at most 0.95.
+  - **Parades, not scatter:** the draw is shared by stretches of 120 m of a street (70 %), a
+    little by the lot.
+  - **The example:**
+    - 22 % of the ground floors are active, 96 % along the tram avenues and 13 % along the shared
+      streets;
+    - an active building's neighbour is active 65 % of the time;
+    - 30.9 shopfronts per 1 000 people (Paris 28, Barcelona 37);
+    - the old rule made every avenue, lane and open front shops.
+  - **Tests:** `shops_gather_where_people_pass_and_leave_most_ground_floors_homes` and
+    `a_city_has_about_as_many_shops_as_a_real_one`.
+  - **Next:** garden flats on the courts, shared kitchen gardens, and planted strips before the
+    homes on the streets (the research's §4.6–4.8).
 - **tram stops:** a 36 m boarding area by each track, level with the trams' floor (28 cm over
   the road), from the tram's side across the carriageway to the kerb and half a metre into the
   pavement (3.55 m on a tram avenue, `boarding_deep`), and a glass shelter with a bench and a

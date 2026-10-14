@@ -12,7 +12,7 @@ use glam::DVec2;
 use super::bible::StyleBible;
 use super::blocks::{BlockUse, edge_half_width};
 use super::geom::{self, PointGrid};
-use super::{CityPlan, Profile};
+use super::{CityPlan, DistrictKind, Profile};
 
 /// What a roof carries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,15 +47,18 @@ pub struct Mass {
     pub street_width: f64,
     /// Whether it looks across its street onto a square, a park or a quay.
     pub open: bool,
+    /// Whether its ground floor is shops, cafés and services rather than homes
+    /// (`active_chance`).
+    pub active: bool,
 }
 
 impl Mass {
-    /// Whether its ground floor is shops, cafés and bars: on the avenues (18 m or wider), on
-    /// the lanes (8 m or narrower), and facing a square, a park or a quay (the owner: large
-    /// squares want shops, restaurants and cafés round them, above all by the river and the
-    /// sea).
+    /// Whether its ground floor is shops, cafés and services: where commerce gathers, on the
+    /// main streets, by the tram stops, the squares, the sights and the water, in parades rather
+    /// than everywhere (`research/ground-floors.md`; the owner, 2026-10-15: not every ground
+    /// floor on a pavement is a shop or a café).
     pub fn lively(&self) -> bool {
-        self.open || self.street_width >= 18.0 || self.street_width <= 8.0
+        self.active
     }
 
     /// Its ground storey's floor to floor, metres.
@@ -91,6 +94,25 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
         }
     }
     let gaps = open_gaps(plan, seed);
+    // Where shops gather (`research/ground-floors.md` §4): the centre (its district's anchor),
+    // the tram stops, the sights.
+    let hub = plan
+        .districts
+        .iter()
+        .find(|d| d.kind == DistrictKind::Centre)
+        .or_else(|| {
+            plan.districts
+                .iter()
+                .find(|d| d.kind == DistrictKind::OldTown)
+        })
+        .map_or(DVec2::splat(plan.size * 0.5), |d| d.anchor);
+    let mut stops = PointGrid::new(plan.size, 100.0);
+    for l in &plan.tram_lines {
+        for &s in &l.stops {
+            stops.insert(s, 0);
+        }
+    }
+    let sights: Vec<DVec2> = plan.landmarks.iter().map(|l| l.pos).collect();
     let mut out = Vec::new();
     for (index, lot) in plan.lots.iter().enumerate() {
         if !lot.frontage || gaps.contains(&index) {
@@ -234,10 +256,8 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
         }
         // The profile of the street the lot faces.
         let front = a + t * 1.0;
-        let profile = streets
-            .nearest(front, 60.0)
-            .map(|(_, e)| plan.roads.edges[e as usize].profile)
-            .unwrap_or(Profile::Shared);
+        let street = streets.nearest(front, 60.0).map(|(_, e)| e);
+        let profile = street.map_or(Profile::Shared, |e| plan.roads.edges[e as usize].profile);
         let mut rng = SplitMix64::new(seed ^ (index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let span = u64::from(hi.saturating_sub(lo)) + 1;
         let drawn = lo + rng.below(span) as u8;
@@ -254,14 +274,44 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
                 inward
             };
             let across = on + outward * (street_width + 8.0);
-            open_blocks.any_within(across, 1500.0, |b| {
-                !geom::contains(&plan.blocks[b as usize].polygon, across)
-            })
+            // The square, park or quay across the street, if any.
+            let mut facing = None;
+            open_blocks.for_each_within(across, 1500.0, |_, b| {
+                let block = &plan.blocks[b as usize];
+                if facing.is_none() && geom::contains(&block.polygon, across) {
+                    facing = Some(block.use_);
+                }
+            });
+            facing
         };
+        // Its ground floor: shops, cafés and services, or homes (`research/ground-floors.md`:
+        // shops gather on the main streets, by the stops, the squares, the sights and the water;
+        // they were on every avenue and lane, the owner: not every ground floor is a shop).
+        let active = {
+            let c = geom::centroid(&lot.polygon);
+            let chance = active_chance(Frontage {
+                profile,
+                district: district.kind,
+                facing: open,
+                from_hub: c.distance(hub),
+                from_heart: c.distance(district.anchor),
+                stop: [100.0, 250.0].map(|r| stops.any_within(c, r, |_| false)),
+                sight: sights.iter().any(|s| s.distance(c) < 200.0),
+            });
+            // Drawn by stretches of about 120 m of a street, then a little by the lot: the shops
+            // of a street gather in parades rather than one here, one there.
+            let stretch = street.map_or(0, |e| {
+                let start = plan.roads.edges[e as usize].points[0];
+                (u64::from(e) << 16) ^ (front.distance(start) / 120.0) as u64
+            });
+            let draw = 0.7 * unit(seed ^ 0xAC71 ^ stretch) + 0.3 * unit(seed ^ index as u64);
+            draw < chance
+        };
+        let open = open.is_some();
         // Its storeys by its district's era (D-060): shops' or homes' ground storey, then the
         // uppers; the bible's ratio caps how many fit, and the height is their sum.
         let era = super::structure::Era::of(district.kind);
-        let shops = open || street_width >= 18.0 || street_width <= 8.0;
+        let shops = active;
         let cap = bible.max_floors(street_width, era, shops);
         let floors = drawn.min(cap).max(1);
         let storeys = era.storeys(floors, shops);
@@ -287,10 +337,88 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
                 roof,
                 street_width,
                 open,
+                active,
             });
         }
     }
     out
+}
+
+/// What a lot's street front is, for the chance its ground floor is active.
+struct Frontage {
+    /// The street it faces.
+    profile: Profile,
+    /// Its district's kind.
+    district: DistrictKind,
+    /// The open block across the street: a square, a park or a quay.
+    facing: Option<BlockUse>,
+    /// How far it lies from the city's centre, metres.
+    from_hub: f64,
+    /// How far it lies from its district's heart (its anchor), metres.
+    from_heart: f64,
+    /// Whether a tram stop lies within 100 m, and within 250 m.
+    stop: [bool; 2],
+    /// Whether a sight lies within 200 m.
+    sight: bool,
+}
+
+/// The chance that a ground floor on `f` is shops, cafés and services (`research/ground-floors.md`
+/// §4.2–4.3, all estimates there): by the street (a central high street 0.9, a tram avenue
+/// 0.65, a taxi road 0.35, an old town's lane 0.55, another pedestrian street 0.1), or what it
+/// faces (a square 0.9 in the centre, 0.6 elsewhere; the water 0.8 and 0.4; a park 0.35); then
+/// less far from the centre (×0.8 at 3 km, ×0.6 past 5 km), more by a tram stop (+0.15 within
+/// 100 m, +0.07 within 250 m) and a sight (+0.15), at most 0.95.
+fn active_chance(f: Frontage) -> f64 {
+    let central = matches!(f.district, DistrictKind::Centre) || f.from_hub < 1000.0;
+    let old = matches!(f.district, DistrictKind::Centre | DistrictKind::OldTown);
+    let by_street = match f.profile {
+        Profile::TramAvenue if central => 0.9,
+        Profile::TramAvenue => 0.65,
+        Profile::Avenue if central => 0.75,
+        Profile::Avenue => 0.35,
+        Profile::Pedestrian if old => 0.55,
+        Profile::Pedestrian => 0.1,
+        Profile::Shared if old => 0.35,
+        Profile::Shared => 0.12,
+        Profile::Path => 0.0,
+    };
+    let by_facing = match f.facing {
+        Some(BlockUse::Square) if central => 0.9,
+        Some(BlockUse::Square) => 0.6,
+        Some(BlockUse::Quay) if central => 0.8,
+        Some(BlockUse::Quay) => 0.4,
+        Some(BlockUse::Park) => 0.35,
+        _ => 0.0,
+    };
+    let mut chance = f64::max(by_street, by_facing);
+    // Round a district's heart, its own shopping streets: the neighbourhood's parades.
+    if f.from_heart < 400.0 && f.profile != Profile::Path {
+        chance = chance.max(0.5);
+    }
+    if f.district == DistrictKind::Industrial {
+        chance *= 0.4;
+    }
+    let far = ((f.from_hub - 1000.0) / 2000.0).clamp(0.0, 1.0) * 0.2
+        + ((f.from_hub - 3000.0) / 2000.0).clamp(0.0, 1.0) * 0.2;
+    chance *= 1.0 - far;
+    if f.stop[0] {
+        chance += 0.15;
+    } else if f.stop[1] {
+        chance += 0.07;
+    }
+    if f.sight {
+        chance += 0.15;
+    }
+    chance.clamp(0.0, 0.95)
+}
+
+/// A number in 0..1 from `key`.
+fn unit(key: u64) -> f64 {
+    let mut z = key.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    (z >> 11) as f64 / (1u64 << 53) as f64
 }
 
 /// Under this run (metres) an open-block district opens its corners too.
@@ -524,7 +652,82 @@ mod tests {
             })
         };
         assert!(open.iter().all(|m| near(m)));
-        assert!(open.iter().all(|m| m.lively()));
+        // Most of them shops and cafés, more than along the plain streets.
+        let active = |list: &[&Mass]| {
+            list.iter().filter(|m| m.active).count() as f64 / list.len().max(1) as f64
+        };
+        let plain: Vec<_> = masses.iter().filter(|m| !m.open).collect();
+        assert!(
+            active(&open) > 0.3,
+            "{:.2} of the open fronts active",
+            active(&open)
+        );
+        assert!(
+            active(&open) > active(&plain) + 0.1,
+            "open fronts {:.2}, plain {:.2}",
+            active(&open),
+            active(&plain)
+        );
+    }
+
+    #[test]
+    fn shops_gather_where_people_pass_and_leave_most_ground_floors_homes() {
+        // `research/ground-floors.md`: shops on the main streets, by the stops and the squares;
+        // a city's ground floors are not all shops (the owner).
+        let size = 4000.0;
+        let site = example::site(size, 10.0);
+        let city = plan(&site, &example::params(size));
+        let masses = masses(&city, &StyleBible::default(), 9);
+        let share = |profile: Option<Profile>| {
+            let list: Vec<&Mass> = masses
+                .iter()
+                .filter(|m| !m.open && profile.is_none_or(|p| p.width() == m.street_width))
+                .collect();
+            let active = list.iter().filter(|m| m.active).count();
+            (active as f64 / list.len().max(1) as f64, list.len())
+        };
+        let (all, _) = share(None);
+        let (tram, n_tram) = share(Some(Profile::TramAvenue));
+        let (shared, n_shared) = share(Some(Profile::Shared));
+        println!(
+            "active ground floors: {:.0} % of all, {:.0} % on the tram avenues ({n_tram}), {:.0} % on the shared streets ({n_shared})",
+            all * 100.0,
+            tram * 100.0,
+            shared * 100.0
+        );
+        assert!(
+            (0.1..0.6).contains(&all),
+            "{all:.2} of the ground floors active"
+        );
+        assert!(
+            tram > shared + 0.3,
+            "tram avenues {tram:.2}, shared streets {shared:.2}"
+        );
+        // In parades: an active building's street neighbour is more often active than chance.
+        let mut grid = PointGrid::new(size, 50.0);
+        for (k, m) in masses.iter().enumerate() {
+            grid.insert(geom::centroid(&m.footprint), k as u32);
+        }
+        let (mut pairs, mut both) = (0, 0);
+        for m in masses.iter().filter(|m| m.active) {
+            let c = geom::centroid(&m.footprint);
+            grid.for_each_within(c, 25.0, |_, k| {
+                let o = &masses[k as usize];
+                if o.lot != m.lot && o.street_width == m.street_width {
+                    pairs += 1;
+                    both += usize::from(o.active);
+                }
+            });
+        }
+        let together = both as f64 / pairs.max(1) as f64;
+        println!(
+            "an active building's neighbour active: {:.0} %",
+            together * 100.0
+        );
+        assert!(
+            together > all + 0.15,
+            "{together:.2} against {all:.2}: not in parades"
+        );
     }
 
     #[test]

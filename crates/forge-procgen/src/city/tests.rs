@@ -438,3 +438,29 @@ fn taxi_depots_stand_behind_the_building_lines_with_level_footways() {
         }
     }
 }
+
+#[test]
+fn a_city_has_about_as_many_shops_as_a_real_one() {
+    // `research/ground-floors.md` §4.1: 26–30 active ground floors per 1 000 people (Paris 28,
+    // Marseille 25): here, the shopfronts per 1 000 residents.
+    use super::structure::OpeningKind;
+    let (_, city) = example_plan();
+    let masses = super::mass::masses(&city, &super::bible::StyleBible::default(), 7);
+    let structures = super::structure::structures(&city, &masses);
+    let shopfronts: usize = structures
+        .iter()
+        .map(|s| {
+            s.openings
+                .iter()
+                .filter(|o| o.kind == OpeningKind::Shopfront)
+                .count()
+        })
+        .sum();
+    let people = structures.iter().map(|s| s.net).sum::<f64>() * (2.0 / 3.0) / 32.4;
+    let per_thousand = shopfronts as f64 / people * 1000.0;
+    println!("{shopfronts} shopfronts for {people:.0} people: {per_thousand:.1} per 1 000");
+    assert!(
+        (20.0..40.0).contains(&per_thousand),
+        "{per_thousand:.1} shopfronts per 1 000 people"
+    );
+}
