@@ -8,7 +8,7 @@
 //! through one another for now).
 
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, VecDeque};
+use std::collections::{BinaryHeap, HashMap, VecDeque};
 
 use forge_core::SplitMix64;
 use glam::DVec2;
@@ -146,6 +146,73 @@ impl Leg {
 /// A taxi in a lane: its link, its way along it, how far from the end it entered by, and its
 /// index. Sorted, the fleet's lanes front to back.
 type Lane = (u32, bool, f64, u32);
+
+/// How far from a link's centreline a person stands on its carriageway, metres: a lane each way
+/// and a little.
+pub const ON_ROAD: f64 = 3.2;
+/// How far short of a person on the carriageway a taxi stops, metres.
+const PEOPLE_CLEAR: f64 = 3.0;
+/// The cells of [`Segments`], metres.
+const SEGMENT_CELL: f64 = 25.0;
+
+/// A segment of a link: the link, how far along it the segment starts, its two ends.
+type Segment = (u32, f64, DVec2, DVec2);
+
+/// The network's segments in square cells, each with its link and how far along it it starts.
+#[derive(Clone, Debug, Default)]
+struct Segments {
+    cells: HashMap<(i32, i32), Vec<Segment>>,
+}
+
+impl Segments {
+    fn new(net: &Network) -> Self {
+        let mut cells: HashMap<(i32, i32), Vec<Segment>> = HashMap::new();
+        let cell = |v: f64| (v / SEGMENT_CELL).floor() as i32;
+        for (k, l) in net.links.iter().enumerate() {
+            let mut s = 0.0;
+            for w in l.points.windows(2) {
+                let (lo, hi) = (w[0].min(w[1]) - ON_ROAD, w[0].max(w[1]) + ON_ROAD);
+                for x in cell(lo.x)..=cell(hi.x) {
+                    for y in cell(lo.y)..=cell(hi.y) {
+                        cells
+                            .entry((x, y))
+                            .or_default()
+                            .push((k as u32, s, w[0], w[1]));
+                    }
+                }
+                s += w[0].distance(w[1]);
+            }
+        }
+        Self { cells }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.cells.is_empty()
+    }
+
+    /// The link `p` is within `within` of, the nearest, and how far along it.
+    fn nearest(&self, p: DVec2, within: f64) -> Option<(u32, f64)> {
+        let key = (
+            (p.x / SEGMENT_CELL).floor() as i32,
+            (p.y / SEGMENT_CELL).floor() as i32,
+        );
+        let mut best: Option<(f64, u32, f64)> = None;
+        for &(link, s0, a, b) in self.cells.get(&key)? {
+            let d = b - a;
+            let len = d.length();
+            let t = if len > 0.0 {
+                ((p - a).dot(d) / (len * len)).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let dist = (a + d * t).distance(p);
+            if dist <= within && best.is_none_or(|(bd, bl, _)| (dist, link) < (bd, bl)) {
+                best = Some((dist, link, s0 + len * t));
+            }
+        }
+        best.map(|(_, link, s)| (link, s))
+    }
+}
 
 /// Nobody holds the junction.
 const NOBODY: u32 = u32::MAX;
@@ -444,6 +511,10 @@ pub struct Fleet {
     /// When each depot last sent a taxi out, seconds.
     last_out: Vec<f64>,
     next_refill: f64,
+    /// The people on foot on the carriageways: their link and how far along it, by link.
+    people: Vec<(u32, f64)>,
+    /// The links' segments in cells, to find the link a person stands on.
+    segments: Segments,
 }
 
 impl Fleet {
@@ -515,6 +586,8 @@ impl Fleet {
             depots: Vec::new(),
             last_out: Vec::new(),
             next_refill: time,
+            people: Vec::new(),
+            segments: Segments::default(),
         };
         fleet.next_booking = time + fleet.gap();
         fleet
@@ -766,6 +839,20 @@ impl Fleet {
         }
     }
 
+    /// The people on foot on the carriageways now (`people`, on the plan): each within
+    /// [`ON_ROAD`] of a link's centreline is crossing it, and the taxis coming stop short of them.
+    pub fn set_people(&mut self, people: &[DVec2]) {
+        if self.segments.is_empty() {
+            self.segments = Segments::new(&self.net);
+        }
+        let mut found: Vec<(u32, f64)> = people
+            .iter()
+            .filter_map(|&p| self.segments.nearest(p, ON_ROAD))
+            .collect();
+        found.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+        self.people = found;
+    }
+
     /// Where taxi `k` is along its route: its leg and how far into it; `None` off the roads
     /// (waiting in its lay-by, or with no route).
     fn on_leg(&self, k: usize) -> Option<(usize, f64)> {
@@ -859,6 +946,36 @@ impl Fleet {
                 gap = to_leg + (at - leg.along(link(leg), 0.0)) - lengths;
                 lead = self.taxis[other as usize].speed;
                 break;
+            }
+            to_leg += leg.length();
+        }
+        // Anyone walking across the carriageway ahead: it stops short of them.
+        let mut to_leg = -into;
+        for leg in legs.iter().skip(i) {
+            if to_leg > LOOKAHEAD || to_leg > gap {
+                break;
+            }
+            let start = self.people.partition_point(|p| p.0 < leg.link);
+            for &(_, s) in self.people[start..].iter().take_while(|p| p.0 == leg.link) {
+                // How far along the leg they are, from its start.
+                let along = if leg.forward() {
+                    s - leg.from
+                } else {
+                    leg.from - s
+                };
+                if along < 0.0 || along > leg.length() {
+                    continue;
+                }
+                let ahead = to_leg + along;
+                if ahead > 0.5 {
+                    // Its front PEOPLE_CLEAR short: the following keeps STANDSTILL of it.
+                    let front = ahead - self.taxis[k].length * 0.5;
+                    let short = front - (PEOPLE_CLEAR - STANDSTILL);
+                    if short < gap {
+                        gap = short.max(0.0);
+                        lead = 0.0;
+                    }
+                }
             }
             to_leg += leg.length();
         }
@@ -1652,5 +1769,36 @@ mod tests {
         assert!(big > 5, "{big} groups");
         assert_eq!(cab_groups, 0, "a group in a cab");
         assert!(picked * 10 >= big * 8, "{picked} of {big} groups picked up");
+    }
+
+    #[test]
+    fn a_taxi_stops_for_someone_crossing_and_goes_on_once_they_are_over() {
+        let mut f = fleet(0.001, 1);
+        f.taxis[0].route = f.route(Spot { link: 0, s: 10.0 }, Spot { link: 0, s: 190.0 });
+        f.taxis[0].task = Task::Cruising;
+        // Someone crossing 120 m along, a metre off the centreline.
+        let (p, dir) = f.net.at(Spot { link: 0, s: 120.0 });
+        f.set_people(&[p + DVec2::new(-dir.y, dir.x)]);
+        f.advance_to(f.time + 40.0, 0.25);
+        let (at, _) = f.pose(0);
+        let short = p.distance(at);
+        assert!(
+            f.taxis[0].speed < 0.01,
+            "still moving at {}",
+            f.taxis[0].speed
+        );
+        assert!(
+            (PEOPLE_CLEAR..PEOPLE_CLEAR + 3.0).contains(&short),
+            "stopped {short:.2} m from them"
+        );
+        // Over: on it goes, to its route's end.
+        f.set_people(&[]);
+        f.advance_to(f.time + 40.0, 0.25);
+        // At its route's end it took another (back to a stand).
+        assert!(
+            f.taxis[0].task != Task::Cruising || f.taxis[0].s > 170.0,
+            "stuck at {:.1} m",
+            f.taxis[0].s
+        );
     }
 }

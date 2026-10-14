@@ -619,7 +619,11 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
         stop line 10 m before its node, behind the crossings (after 20 s they go anyway: no two
         queues wait on each other for ever);
       - pick-ups and stands keep 15 m from junctions;
-      - a taxi pulling out from the kerb goes before one standing level with it.
+      - a taxi pulling out from the kerb goes before one standing level with it;
+      - a taxi stops with its front 3 m short of anyone on foot on the carriageway ahead (within
+        3.2 m of the road's centreline: crossing at a zebra or a junction), the people drawn
+        round the camera (`Fleet::set_people`). Test
+        `a_taxi_stops_for_someone_crossing_and_goes_on_once_they_are_over`.
     - **Where each cab stands:**
       - in its lane, 1.5 m right of the centreline;
       - at the kerb, 2.3 m right, while it picks up or sets down;
@@ -686,8 +690,7 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
       - the sandbox: 1 727 taxis in 9 depots; the trams serve half of the trips by tram or taxi,
         17 % of the rest book a taxi.
     - **Not yet:**
-      - taxis that stop for people at the crossings: the walkers cross in the junction boxes,
-        not on the zebras, so both are to fix together;
+      - the walkers cross in the junction boxes, not on the zebras;
       - batteries and charging times;
       - shared rides.
     - **Tests:**

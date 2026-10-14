@@ -3072,6 +3072,7 @@ impl Scenario for PlanScenario {
                     .collect(),
                 crowd: self.crowd.take(),
                 taxis: self.taxis.take(),
+                walkers: Vec::new(),
                 camera: glam::Vec2::ZERO,
                 size: self.size,
                 origin: scene_origin(args).to_f64().as_vec3(),
@@ -3096,6 +3097,8 @@ struct PlanRunning {
     crowd: Option<crowd::Crowd>,
     /// The automated taxis.
     taxis: Option<taxis::Taxis>,
+    /// The people on foot drawn last frame, on the plan.
+    walkers: Vec<DVec2>,
     camera: glam::Vec2,
     /// The scene's origin, which the movers' positions are relative to.
     origin: Vec3,
@@ -3223,6 +3226,7 @@ impl Running for PlanRunning {
         }
         if let Some(taxis) = &mut self.taxis {
             let before = (self.clock - f64::from(step)) / 300.0;
+            taxis.set_people(&self.walkers);
             taxis.advance(self.clock);
             // Every five minutes of the service, how the taxis keep up.
             if before.floor() != (self.clock / 300.0).floor() {
@@ -3316,10 +3320,25 @@ impl Running for PlanRunning {
         if let Some(crowd) = &mut self.crowd {
             // Unused figures wait far under the ground.
             let parked = (Vec3::new(0.0, -1000.0, 0.0) + self.origin, 0.0);
-            for figures in crowd.figures(self.camera, self.clock) {
+            // The people on foot, on the plan: the taxis stop for those on a carriageway.
+            self.walkers.clear();
+            let half = (self.size * 0.5) as f32;
+            for (mesh, figures) in crowd
+                .figures(self.camera, self.clock)
+                .into_iter()
+                .enumerate()
+            {
+                let pose = mesh % crowd::POSES;
                 for figure in figures {
                     still.push(!figure.is_some_and(|f| f.kept));
                     transforms.push(place(figure.map_or(parked, |f| (f.at, f.turn))));
+                    // Not riding (2) nor seated (3).
+                    if let Some(f) = figure.filter(|_| pose != 2 && pose != 3) {
+                        self.walkers.push(DVec2::new(
+                            f64::from(f.at.x + half),
+                            f64::from(f.at.z + half),
+                        ));
+                    }
                 }
             }
         }

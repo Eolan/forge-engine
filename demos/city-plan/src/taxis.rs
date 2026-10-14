@@ -364,6 +364,12 @@ impl Taxis {
             .collect()
     }
 
+    /// The people on foot drawn round the camera, on the plan: the taxis stop for those crossing
+    /// a carriageway ahead of them.
+    pub fn set_people(&mut self, people: &[DVec2]) {
+        self.fleet.set_people(people);
+    }
+
     /// How many taxis are parked in the depots.
     pub fn parked(&self) -> usize {
         self.fleet
