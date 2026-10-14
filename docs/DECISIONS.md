@@ -4025,6 +4025,12 @@ person.
   overload pass waits for a patent check and the owner's go; connectivity to anchors differs.
 - **Celsys US 12,700,170** (to about 2042): full rendering of the room one is in, interior mapping
   for the others, swapping as one moves, a see-through door. Avoid that combination, or ask.
+  - **Claims read 2026-10-14** (granted 2026-08-04): claim 1 is the only independent claim. It
+    needs all three elements: interior mapping for the spaces one is not in; a passable door drawn
+    as if partly transparent onto them "to present that the door is passable"; and the swap as
+    one crosses. Windows are not in the claim. The owner's plan has no see-through door (interior
+    mapping behind windows, real rooms near, opaque doors, F builds the interior). Rule: never
+    draw a door see-through onto interior-mapped rooms. This is our reading, not legal advice.
 
 **Panels or data:** the note's lean, taken with the recommendations: panels built from the wall
 graph (one body set per bay and storey), so destruction and collision share one structure, the
@@ -4042,3 +4048,114 @@ kit dressing them.
   pass (step 4), Celsys's room swapping before the interiors' rendering (step 3).
 
 *(research: building-structure.md; issues #248, #263)*
+
+## D-061 — The street ground as one map: cross-sections, junctions first, every surface once 🟡 (proposed 2026-10-14)
+
+**The question.** In the owner's walk (2026-10-11) most of the bugs came from the street ground:
+- crossroads wrong wherever a pedestrian way meets the streets;
+- stops in junctions or on top of each other;
+- paths under buildings, or leading nowhere useful;
+- paved areas nobody can explain;
+- geometry over the water;
+- isolated islands of city while other areas stay empty.
+
+The owner (2026-10-14): "we will have to re-work the road/sidewalk system as there are a lot of
+bugs related to it".
+
+**What we have** (a survey of the code, 2026-10-14):
+- **The road graph** stores a centreline and a `Profile` per edge, with only a width and a pavement
+  width.
+- **The demo** draws each surface as its own patch: a ribbon per edge, pavement strips, ramps,
+  paved corners in several cases (a swap, a straight band, bend wedges, a cut for the trams' swept
+  path), promenades, squares and court paths.
+- **Overlaps** are kept apart by 1 cm height steps: 0.16, 0.17, 0.18, 0.30 and a dozen more.
+- **"Raised or not"** is decided four different ways.
+- **Blocks** are faces of the centrelines, moved in by a width read from the nearest street sample.
+- **Walkability** is computed three ways, and none of them reads what is drawn:
+  - the crowd walks the graph;
+  - the reach check uses its own raster;
+  - the first-person walker stands on a flat slab, so feet sink 14 cm on pavements.
+- **Stops** are snapped to junctions by the plan, then moved off them by the demo: two rules
+  that fight.
+- **Bridges** are found from an edge's midpoint.
+- **Districts** take every land cell in the frame, with no distance limit: the hills alone decide
+  where the city stops.
+
+Each bug fixed so far has been a local patch on this, and the next junction type breaks again.
+
+**The proposal.** It follows how city tools generally build streets (CityEngine's street shapes,
+for one): junction areas first, then the street between them, then the blocks from what is left.
+Every surface is drawn once.
+
+1. **Cross-sections as data.** A profile is a list of strips across the street, each with:
+   - its width and surface;
+   - its level: carriageway, kerb top, or flush;
+   - who uses it: walkers, bikes, taxis and service vehicles, trams;
+   - its furniture, trees or none.
+
+   The profiles follow `research/city-generation.md` §12, including the tram avenue at 26–32 m with
+   cycle tracks. Trams get a little wider (about 2.65 m, the owner asked), and the swept path of
+   two trams passing on a curve is checked.
+2. **Junctions first.** At each node, the arms' cross-sections are met:
+   - the carriageway core with kerbs turning on their radius;
+   - the pavement corners between the arms;
+   - a crossing on each driven arm, with dropped kerbs or a raised table.
+
+   Each kind of meeting is one rule, not a patch:
+
+   | The arms | The junction |
+   |---|---|
+   | driven × driven | a core with crossings |
+   | driven × pedestrian way | a continuous footway: the pavement level runs across the street's mouth |
+   | pedestrian × pedestrian | one flush plaza |
+   | a bend (two arms) | the strips mitred, their offsets kept true on the curve |
+
+3. **One ground map.** The streets between the junctions are each strip trimmed at the junction's
+   edge.
+   - Blocks are what is left: the building line is the pavement's real back edge.
+   - The map partitions the ground. Every point is exactly one region with one level: carriageway,
+     pavement, crossing, platform, path, plaza, court, lot, green, quay or deck.
+   - Kerbs and ramps are made where two regions' levels differ.
+   - The height steps go, and aprons and seams with them.
+   - Construction is direct, with no general polygon booleans. If they turn out to be needed,
+     `i_overlay` (MIT) is the candidate, after asking the owner.
+4. **Everyone reads the map.**
+   - **The pedestrian network:** footways, crossings, paths, court paths, passages and plazas, made
+     from the map.
+   - **Its users:** the crowd, the first-person walker's ground heights, and the reach check.
+   - **Rules:** paths keep clear of the masses, by a metre or two and more by ground-floor windows,
+     except through real passages.
+5. **Paths from people's trips.** After the buildings and stops, doors are routed to their stops,
+   shops and parks over the walkable ground:
+   - paths are laid where the routes gather (the desire lines planners follow);
+   - paths nobody uses are dropped;
+   - a check measures how direct each door's walk to its stop is.
+6. **Stops in the cross-section.** A stop is a stretch of the street whose section carries a
+   platform. The plan places it once, under one rule:
+   - shared by every line on that stretch;
+   - never within a junction's reach, on a curve or on a bridge;
+   - the tram's swept body tested against the platform's furniture.
+7. **Bridges and water.**
+   - A bridge spans the edge's actual wet stretch.
+   - Two bridges close side by side become one.
+   - A check finds any ground-map region over water that is not a deck or a quay.
+8. **Where the city is.**
+   - Districts get an outer limit, with countryside beyond it.
+   - A built area must connect to the centre by road. If it doesn't, it gets a reason to be there
+     (a village, a port, a station), or it isn't built.
+   - Density falls with the distance from the centre and the tram stops.
+9. **Checks as tests:**
+   - the ground map's regions don't overlap and leave no gap;
+   - every footway is connected;
+   - every driven arm of a junction has its crossing;
+   - no path runs under a mass or within its clearance;
+   - the stop rules hold;
+   - the walk to a stop is direct;
+   - nothing stands over water but decks and quays;
+   - no isolated fragment remains.
+
+**What stays:** the street tracing, the graph's cut and pruning, the faces and blocks (now inset
+from the ground map), the masses, the structures (D-060), the kit and the trams' timetables.
+
+**Order:** 1–3 first, with the demo drawing the map, the old patches deleted as their cases move
+in, and the captures compared. Then 4 and 6, then 5, 7 and 8.
