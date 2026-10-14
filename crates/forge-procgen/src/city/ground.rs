@@ -278,7 +278,8 @@ fn to_shapes(raw: Raw) -> Shapes {
 }
 
 /// A street's centreline stroked to `width`: flat ends at its junctions, round at a dead end,
-/// mitred where it bends.
+/// round where it bends (a mitre at a near reversal shot out as a spike, a walled wedge in the
+/// water at a river's mouth, the owner).
 fn stroke(points: &[DVec2], width: f64, round_a: bool, round_b: bool) -> Piece {
     let path: Vec<[f64; 2]> = points.iter().map(|p| p.to_array()).collect();
     let cap = |round| {
@@ -289,7 +290,7 @@ fn stroke(points: &[DVec2], width: f64, round_a: bool, round_b: bool) -> Piece {
         }
     };
     let style = StrokeStyle::new(width)
-        .line_join(LineJoin::Miter(0.2))
+        .line_join(LineJoin::Round(ARC))
         .start_cap(cap(round_a))
         .end_cap(cap(round_b));
     Piece::new(path.stroke(style, false).into_iter().flatten().collect())
@@ -676,6 +677,14 @@ impl GroundMap {
         }
     }
 
+    /// The rivers' water inside the box from `min` to `max`, as drawn: their strokes' union,
+    /// which cannot fold where a river turns sharply (strips between two offset lines did, a
+    /// light wedge in the water at a mouth, the owner).
+    pub fn water_in(&self, min: DVec2, max: DVec2) -> Shapes {
+        let water = union(&self.water, min, max);
+        to_shapes(boolean(&water, &rect(min, max), OverlayRule::Intersect))
+    }
+
     /// Whether any street, walk or river's water meets the box round `polygon`: if none, it lies
     /// off them whole.
     pub fn touches(&self, polygon: &[DVec2]) -> bool {
@@ -694,6 +703,16 @@ impl GroundMap {
         let off = boolean(&vec![piece.contours], &street, OverlayRule::Difference);
         to_shapes(boolean(&off, &water, OverlayRule::Difference))
     }
+}
+
+/// What of `polygon` lies inside `within`.
+pub fn clip(polygon: &[DVec2], within: &[DVec2]) -> Shapes {
+    let (a, b) = (Piece::from_points(polygon), Piece::from_points(within));
+    to_shapes(boolean(
+        &vec![a.contours],
+        &vec![b.contours],
+        OverlayRule::Intersect,
+    ))
 }
 
 /// Whether `p` lies in `shapes` (even-odd over all their contours).

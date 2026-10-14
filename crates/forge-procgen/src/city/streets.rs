@@ -321,16 +321,17 @@ pub fn promenades(site: &Site, width: f64) -> Vec<(Vec<DVec2>, f64)> {
     // The smooth shore the ground is drawn by: a promenade floated over the harbour's open
     // water where the cells said land (the owner's second walk).
     let shore = super::shore::Shore::new(site, 0.75 * site.water.spacing);
-    let dry = |p: DVec2| site.water_at(p) == LAND && shore.parts(p).0 < 0.5;
+    let dry = |p: DVec2| site.water_at(p) == LAND && shore.wetness(p) < 0.5;
     let mut out = Vec::new();
     for river in &site.rivers {
         let line = super::geom::resample(&river.centreline, 10.0);
         let half = river.width * 0.5;
         for side in [1.0, -1.0] {
             let mut run: Vec<DVec2> = Vec::new();
+            let mut last_d: Option<f64> = None;
             let mut flush = |run: &mut Vec<DVec2>| {
                 if super::geom::polyline_length(run) >= 60.0 {
-                    out.push((std::mem::take(run), width));
+                    out.push((forward_only(&std::mem::take(run)), width));
                 }
                 run.clear();
             };
@@ -342,11 +343,40 @@ pub fn promenades(site: &Site, width: f64) -> Vec<(Vec<DVec2>, f64)> {
                 }
                 .normalize_or_zero();
                 let n = DVec2::new(-t.y, t.x) * side;
-                let (middle, outer) = (c + n * (half + width * 0.5), c + n * (half + width));
-                if dry(middle) && dry(outer) {
+                // From the real bank: where the land starts past the river's strip, within 40 m,
+                // its whole width and a few metres behind on land. From the strip's edge it ran
+                // on as a slab over the open water where the bank turns away at the mouth.
+                let bank = (0..=40).map(f64::from).find(|&d| dry(c + n * (half + d)));
+                let Some(found) = bank else {
+                    flush(&mut run);
+                    continue;
+                };
+                // Within 12 m of the strip's edge, the embankment covers the edge cells from the
+                // edge itself: from the bank, a sliver of grass was left between it and the water.
+                let d = if found <= 12.0 { 0.0 } else { found };
+                let (middle, behind) = (
+                    c + n * (half + d + width * 0.5),
+                    c + n * (half + d + width + 3.0),
+                );
+                // Over the edge cells: no open sea under it, and its back on the land.
+                let sound = if d == 0.0 {
+                    shore.parts(middle).0 < 0.5 && dry(c + n * (half + width + 1.0))
+                } else {
+                    dry(middle) && dry(behind)
+                };
+                // A run breaks where its setback jumps (the bank's distance crossing the threshold):
+                // joined across, its line drew a thin walled spike over the water (the owner).
+                if sound && last_d.is_none_or(|l: f64| (l - d).abs() <= 3.0) {
                     run.push(middle);
+                    last_d = Some(d);
                 } else {
                     flush(&mut run);
+                    if sound {
+                        run.push(middle);
+                        last_d = Some(d);
+                    } else {
+                        last_d = None;
+                    }
                 }
             }
             flush(&mut run);
@@ -419,43 +449,58 @@ pub fn bridge_sites(
     out
 }
 
-/// The quays: along each bank of each river, `setback` metres past its edge, a walk wherever the
-/// bank runs through the built districts (`allowed`) for 100 m or more, on land and inside the
-/// frame. With no street along a bank, the land between the last street and the river was no
-/// block at all, bare ground with streets crossing it (the owner's "gigantic paved areas").
-pub fn quay_lines(site: &Site, setback: f64, allowed: &dyn Fn(DVec2) -> bool) -> Vec<Streamline> {
-    let inside = |p: DVec2| p.x >= 0.0 && p.y >= 0.0 && p.x <= site.size && p.y <= site.size;
-    let mut out = Vec::new();
-    for river in &site.rivers {
-        let line = &river.centreline;
-        let length = super::geom::polyline_length(line);
-        for side in [1.0, -1.0] {
-            let mut run: Vec<DVec2> = Vec::new();
-            let mut flush = |run: &mut Vec<DVec2>| {
-                if super::geom::polyline_length(run) >= 100.0 {
-                    out.push(Streamline {
-                        points: super::geom::simplify(run, 0.5),
-                        minor: false,
-                        class: RoadClass::Street,
-                        bridges: Vec::new(),
-                    });
-                }
-                run.clear();
-            };
-            let mut s = 0.0;
-            while s <= length {
-                let c = super::geom::point_at(line, s);
-                let t = super::geom::tangent_at(line, s);
-                let p = c + DVec2::new(-t.y, t.x) * (side * (river.width * 0.5 + setback));
-                if inside(p) && site.water_at(p) == LAND && allowed(p) {
-                    run.push(p);
-                } else {
-                    flush(&mut run);
-                }
-                s += 10.0;
-            }
-            flush(&mut run);
+/// A polyline without the points where it turns back on itself (a turn of more than 120°), each
+/// such point dropped until none is left: an offset line's small backtracks where its setback
+/// changes.
+fn forward_only(points: &[DVec2]) -> Vec<DVec2> {
+    let mut out = points.to_vec();
+    loop {
+        let n = out.len();
+        if n < 3 {
+            return out;
         }
+        let back = (1..n - 1).find(|&i| {
+            let (a, b) = (out[i] - out[i - 1], out[i + 1] - out[i]);
+            a.normalize_or_zero().dot(b.normalize_or_zero()) < -0.5
+        });
+        match back {
+            Some(i) => {
+                out.remove(i);
+            }
+            None => return out,
+        }
+    }
+}
+
+/// The quays: along each river's promenades ([`promenades`]) through the built districts
+/// (`allowed`) for 100 m or more, a walk down their middle, so they follow the real bank as the
+/// promenades do. With no street along a bank, the land between the last street and the river
+/// was no block at all, bare ground with streets crossing it (the owner's "gigantic paved
+/// areas"); set apart from the promenade, a quay ran out over the water where the drawn bank
+/// turned away from the river's strip.
+pub fn quay_lines(site: &Site, width: f64, allowed: &dyn Fn(DVec2) -> bool) -> Vec<Streamline> {
+    let mut out = Vec::new();
+    for (line, _) in promenades(site, width) {
+        let mut run: Vec<DVec2> = Vec::new();
+        let mut flush = |run: &mut Vec<DVec2>| {
+            if super::geom::polyline_length(run) >= 100.0 {
+                out.push(Streamline {
+                    points: super::geom::simplify(run, 0.5),
+                    minor: false,
+                    class: RoadClass::Street,
+                    bridges: Vec::new(),
+                });
+            }
+            run.clear();
+        };
+        for p in line {
+            if allowed(p) {
+                run.push(p);
+            } else {
+                flush(&mut run);
+            }
+        }
+        flush(&mut run);
     }
     out
 }

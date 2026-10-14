@@ -114,6 +114,97 @@ impl Site {
         (0..=steps).any(|i| self.water_at(a + (b - a) * (i as f64 / steps as f64)) != LAND)
     }
 
+    /// Turns land cells with six or more of their eight neighbours water into water (the most
+    /// common water among them), a few passes: the spits and slivers a cell or two wide that
+    /// painting the rivers' beds leaves by the sea. One stood at a river's mouth as a wedge of
+    /// stone walls in the water (the owner).
+    pub fn clear_slivers(&mut self, passes: usize) {
+        let n = self.water.size;
+        for _ in 0..passes {
+            let mut changes = Vec::new();
+            for y in 1..n.saturating_sub(1) {
+                for x in 1..n.saturating_sub(1) {
+                    if self.water.get(x, y) != LAND {
+                        continue;
+                    }
+                    let mut counts = [0_u32; 4];
+                    for (dx, dy) in [
+                        (-1, -1),
+                        (0, -1),
+                        (1, -1),
+                        (-1, 0),
+                        (1, 0),
+                        (-1, 1),
+                        (0, 1),
+                        (1, 1),
+                    ] {
+                        let w = self
+                            .water
+                            .get((x as i32 + dx) as u32, (y as i32 + dy) as u32);
+                        counts[usize::from(w.min(3))] += 1;
+                    }
+                    if counts[1] + counts[2] + counts[3] >= 6 {
+                        let kind = (1..4)
+                            .max_by_key(|&k| (counts[k], std::cmp::Reverse(k)))
+                            .unwrap_or(1);
+                        changes.push((x, y, kind as u8));
+                    }
+                }
+            }
+            if changes.is_empty() {
+                break;
+            }
+            for (x, y, kind) in changes {
+                self.water.set(x, y, kind);
+            }
+        }
+    }
+
+    /// Opens the land by `r` cells (eroded, then grown back): land thinner than about `2 r + 1`
+    /// cells goes to the water beside it. A spit between a river's bed and the sea stood at the
+    /// mouth as a wedge of walls in the water (the owner); [`Self::clear_slivers`] only takes the
+    /// thinnest.
+    pub fn open_land(&mut self, r: i32) {
+        let n = self.water.size as i32;
+        let at = |f: &Field2<u8>, x: i32, y: i32| {
+            f.get(x.clamp(0, n - 1) as u32, y.clamp(0, n - 1) as u32)
+        };
+        let land = |x: i32, y: i32| at(&self.water, x, y) == LAND;
+        let mut core = vec![false; (n * n) as usize];
+        for y in 0..n {
+            for x in 0..n {
+                core[(y * n + x) as usize] =
+                    (-r..=r).all(|dy| (-r..=r).all(|dx| land(x + dx, y + dy)));
+            }
+        }
+        let cored = |x: i32, y: i32| {
+            (0..n).contains(&x) && (0..n).contains(&y) && core[(y * n + x) as usize]
+        };
+        let mut changes = Vec::new();
+        for y in 0..n {
+            for x in 0..n {
+                if !land(x, y) || (-r..=r).any(|dy| (-r..=r).any(|dx| cored(x + dx, y + dy))) {
+                    continue;
+                }
+                // The nearest water's kind, ring by ring.
+                let kind = (1..=r + 2).find_map(|k| {
+                    (-k..=k)
+                        .flat_map(|dy| (-k..=k).map(move |dx| (dx, dy)))
+                        .find_map(|(dx, dy)| {
+                            let w = at(&self.water, x + dx, y + dy);
+                            (w != LAND).then_some(w)
+                        })
+                });
+                if let Some(kind) = kind {
+                    changes.push((x as u32, y as u32, kind));
+                }
+            }
+        }
+        for (x, y, kind) in changes {
+            self.water.set(x, y, kind);
+        }
+    }
+
     /// Paints each river's bed, its centreline widened to its width, into the water mask
     /// (never over the sea).
     pub fn paint_rivers(&mut self) {
@@ -694,7 +785,7 @@ fn landmark_site(blocks: &[Block], l: &LandmarkSpec) -> Option<usize> {
 /// to 400 m apart in its centre; the boats cross between them).
 pub const BRIDGE_SPACING: f64 = 450.0;
 
-/// How far a quay's centreline keeps from its river's edge, metres: a pedestrian street's half
+/// How far an industrial quay's walk keeps from the sea's edge, metres: a pedestrian street's half
 /// width and 2 m, the stone edge and its balustrade.
 pub const QUAY_SETBACK: f64 = 6.0;
 
@@ -805,7 +896,7 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
     let connected = streets::connect_sites(site, &sites, &lines);
     lines.extend(connected);
     // The quays along the rivers' banks, after the bridges took their roads inland.
-    let mut quays = streets::quay_lines(site, QUAY_SETBACK, &built);
+    let mut quays = streets::quay_lines(site, ground::PROMENADE, &built);
     // And along the sea: a beach before the promenade, or a working quay's edge in industry.
     let coast_setback = |p: DVec2| match kind_at(p).map(|d| d.kind) {
         Some(DistrictKind::Industrial) => QUAY_SETBACK,
@@ -814,6 +905,8 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
     quays.extend(streets::coast_lines(site, &coast_setback, &built));
     lines.extend(quays.iter().cloned());
     let mut roads = graph::build(site, &lines, 1.5, 60.0);
+    // Twice: the first pass moves junctions, and a pair it left may now be close.
+    graph::tidy(&mut roads, site);
     graph::tidy(&mut roads, site);
     let mut faces = graph::faces(&roads);
     // Superblocks cut by streets, a cut a round (a 600 m block takes three).
@@ -830,6 +923,8 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
             }
             lines.extend(cuts);
             roads = graph::build(site, &lines, 1.5, 60.0);
+            // Twice: the first pass moves junctions, and a pair it left may now be close.
+            graph::tidy(&mut roads, site);
             graph::tidy(&mut roads, site);
             faces = graph::faces(&roads);
         }

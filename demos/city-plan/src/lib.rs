@@ -398,16 +398,10 @@ impl PlanScenario {
         // The rivers as smooth strips at the water's level, the sea's: the cells' staircase
         // would show along the quays. Their promenades are walking ground in the street map
         // (D-061), the banks' walls and balustrades along its edge over the water ([`bridges`]).
-        for river in &site.rivers {
-            let line = geom::resample(&river.centreline, 15.0);
-            let half = river.width * 0.5;
-            strip(
-                &mut tiles,
-                &offset_line(&line, half),
-                &offset_line(&line, -half),
-                WATER_LEVEL,
-                WATER,
-            );
+        for t in &plan.ground.tiles {
+            for polygon in ground::simple_polygons(&plan.ground.water_in(t.min, t.max)) {
+                tiles.flat(&polygon, WATER_LEVEL, WATER, false);
+            }
         }
         street_ground(&mut tiles, &plan.ground, site);
         bridges(&mut tiles, plan, site, &shore);
@@ -1595,7 +1589,7 @@ fn parapet_lines(
     // The water as drawn: the smooth shore's or a river's strip, which no block covers now (a park
     // lay over a river's strip by the mouth, and a wall stood between it and an avenue, the owner).
     let wet = |p: DVec2| {
-        shore.parts(p).0 >= 0.5
+        shore.wetness(p) >= 0.5
             || rivers
                 .iter()
                 .any(|&(a, b, h)| geom::distance_to_segment(p, a, b) < h)
@@ -3177,13 +3171,17 @@ impl Running for PlanRunning {
 fn lawn(tiles: &mut Tiles, shore: &Shore, map: &ground::GroundMap, polygon: &[DVec2]) {
     // At the walking level, cut round the streets and promenades where they meet: lawns at
     // 3 cm met the quays' walks with a step (the owner: think wheelchair).
+    // Each piece cut to the quay's own face: whole cells ran past it under the next block's
+    // ground, a lighter rectangle where the two lay one on the other (the owner).
     let grass = |tiles: &mut Tiles, piece: &[DVec2]| {
-        if map.touches(piece) {
-            for p in ground::simple_polygons(&map.off_streets(piece)) {
-                tiles.flat(&p, WALK_LEVEL, PARK, false);
+        for inside in ground::simple_polygons(&ground::clip(piece, polygon)) {
+            if map.touches(&inside) {
+                for p in ground::simple_polygons(&map.off_streets(&inside)) {
+                    tiles.flat(&p, WALK_LEVEL, PARK, false);
+                }
+            } else {
+                tiles.flat(&inside, WALK_LEVEL, PARK, false);
             }
-        } else {
-            tiles.flat(piece, WALK_LEVEL, PARK, false);
         }
     };
     let s = shore.spacing();

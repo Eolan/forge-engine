@@ -7,7 +7,7 @@
 
 use glam::DVec2;
 
-use super::{LAGOON, SEA, Site, geom};
+use super::{LAGOON, RIVER, SEA, Site, geom};
 use crate::field::Field2;
 
 /// The tent filter's weights over five samples: the sea's blur.
@@ -42,26 +42,32 @@ impl Shore {
     pub fn new(site: &Site, margin: f64) -> Self {
         let water = &site.water;
         let (n, s) = (water.size, water.spacing);
-        let open = |x: i64, y: i64| {
-            let c = |v: i64| v.clamp(0, i64::from(n) - 1) as u32;
-            let code = water.get(c(x), c(y));
-            f64::from(u8::from(code == SEA || code == LAGOON))
+        // A water kind's cells blurred by the tent, separable: along the rows, then down the
+        // columns.
+        let blur = |wanted: &dyn Fn(u8) -> bool| {
+            let open = |x: i64, y: i64| {
+                let c = |v: i64| v.clamp(0, i64::from(n) - 1) as u32;
+                f64::from(u8::from(wanted(water.get(c(x), c(y)))))
+            };
+            let rows = Field2::from_fn(n, s, |x, y| {
+                (0..5)
+                    .map(|k| TENT[k] * open(i64::from(x) + k as i64 - 2, i64::from(y)))
+                    .sum::<f64>()
+                    / 9.0
+            });
+            Field2::from_fn(n, s, |x, y| {
+                let at = |y: i64| rows.get(x, y.clamp(0, i64::from(n) - 1) as u32);
+                ((0..5)
+                    .map(|k| TENT[k] * at(i64::from(y) + k as i64 - 2))
+                    .sum::<f64>()
+                    / 9.0) as f32
+            })
         };
-        // Separable: along the rows, then down the columns.
-        let rows = Field2::from_fn(n, s, |x, y| {
-            (0..5)
-                .map(|k| TENT[k] * open(i64::from(x) + k as i64 - 2, i64::from(y)))
-                .sum::<f64>()
-                / 9.0
-        });
-        let sea = Field2::from_fn(n, s, |x, y| {
-            let at = |y: i64| rows.get(x, y.clamp(0, i64::from(n) - 1) as u32);
-            ((0..5)
-                .map(|k| TENT[k] * at(i64::from(y) + k as i64 - 2))
-                .sum::<f64>()
-                / 9.0) as f32
-        });
-        let mut river = Field2::<f32>::new(n, s);
+        let sea = blur(&|code| code == SEA || code == LAGOON);
+        // The rivers: their cells blurred, and over them each bed's strip out to `margin`. The
+        // strip alone left the river cells past it at a mouth dry, a wedge walled in the water
+        // (the owner).
+        let mut river = blur(&|code| code == RIVER);
         for r in &site.rivers {
             let reach = r.width * 0.5 + margin;
             let line = geom::resample(&r.centreline, 15.0);

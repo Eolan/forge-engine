@@ -602,6 +602,19 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
     balustrade.
   - **Blocks and quay lawns** lie at the walking level, cut round the streets, the walks and the
     rivers' water. A park had covered a river's strip by the mouth.
+  - **The promenade follows the real bank.** Where the land starts within 12 m of the river's
+    strip, it covers the edge cells as an embankment from the strip itself. Farther off (at a
+    mouth), it starts at the bank. It needs no open sea under it and its back on land.
+  - **Quays share the promenade's line.** Its runs break where the setback jumps, and the
+    backtracks are dropped.
+  - **Mouth fixes.** All strokes join round. A mitre at a near reversal shot out as a walled spike
+    in the water at the mouth (the owner).
+  - **The rivers' water** is drawn from the same strokes, tile by tile. Strips between two offset
+    lines can fold.
+  - **The shore** counts the rivers' cells as well as their strip. Past the strip, at a mouth,
+    river cells had been dry.
+  - **The sandbox's site** opens its land by two cells (`Site::open_land`, after
+    `Site::clear_slivers`), so no spit thinner than about 40 m is left.
 - **open land as nature:** the ground outside the city is a dry, olive scrub. The reserves and
   any land outside every block carry a loose wood: a jittered grid of 16 m, under half filled, 8 m
   clear of the streets. They were gravel, which the owner took for paving.
