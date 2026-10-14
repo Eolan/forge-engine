@@ -574,6 +574,37 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
     apart at least. Trees and lamps keep out of the lay-bys. The example has 81 (15 of 610 built
     blocks are farther than 300 m: no taxi road near them), the sandbox 189. Test
     `taxis_wait_within_a_short_walk_of_every_block`.
+  - **The taxi fleet** (`forge_sim::taxi`, the owner's model: like Uber or inDrive, with no
+    drivers). The taxi roads make a two-way network. Each stand has two bays.
+    - **Bookings:** they arrive as a Poisson stream at the hour's rate. Weights:
+      - built blocks by their floor area;
+      - squares at 5 000 m².
+    - **Demand:** 0.08 trips a person a day over a daily profile with morning and evening peaks.
+      Trips shorter than 700 m walk or take the tram.
+    - **Fleet size:** one taxi for 90 trips a day.
+    - **Dispatch:** the nearest free taxi by road (Dijkstra in millimetres):
+      1. it drives to the booking, waits 25 s while the passenger gets in;
+      2. carries them, waits 25 s again;
+      3. returns to the nearest stand with a free bay.
+    - **Busy hours:** the hour's rate is above 1.3 times the day's mean. The taxis in a stand's
+      second bay then leave to cruise round the busy places.
+    - **Driving:** 8.3 m/s (30 km/h) with 1.5 m/s² to start and stop.
+    - **Where each cab stands:**
+      - in its lane, 1.5 m right of the centreline;
+      - at the kerb, 2.3 m right, while it picks up or sets down;
+      - waiting: in its lay-by, bay after bay.
+    - **The cab** (`vehicles::taxi_cab`): a 3.6 × 1.8 × 1.65 m pod with an ivory body, dark
+      glass and an amber band. The cabs are drawn as movers after the trams.
+    - **Numbers:**
+      - the example: 279 taxis; from 4 a.m., a mean wait of 25 s and none off the carriageway an hour on;
+      - the sandbox: 936 taxis.
+    - **Not yet:** the cabs pass through one another (no traffic), and there is one model, no
+      8-seat shuttles.
+    - **Tests:**
+      - `waiting_taxis_stand_in_their_lay_bys_and_moving_ones_on_the_roads`: none off the
+        carriageway at the start; at most 1 in 20 an hour on;
+      - `forge-sim`'s four tests: fetch-carry-return, determinism, busy-hour cruising, and routes
+        that follow the roads.
   - **No hairlines:** the junctions' pieces (corner wedges, gap mitres) reach 0.3 m into the
     strips they join, and the carriageway's gaps close among the driven arms only (a pedestrian
     street's mouth between an avenue's arms left a sliver of pavement on the asphalt).

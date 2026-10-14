@@ -4194,5 +4194,13 @@ times they circulate round the busy places, where they will most likely find som
 - So the stands are parking and pick-up places: lay-bys along the roads, by the tram stops,
   squares, the hospital and the station; depots in the industrial quarter.
 - A pick-up point within a short walk of every building, as a check.
+- *Built 2026-10-14 (`forge_sim::taxi`):*
+  - **Dispatch:** bookings go to the nearest free taxi by road. It fetches the passenger,
+    carries them, and returns to a stand with a free bay.
+  - **Busy hours** (the hour's rate above 1.3 times the day's mean): each stand's second taxi
+    cruises.
+  - **Fleet size:** one taxi for 90 trips a day. The example has 279 taxis, with a 25 s mean wait from 4 a.m.,
+    the sandbox 936.
+  - **Not yet:** traffic between the cabs.
 - **Crossings (the owner's go):** raised tables on the taxi roads; dropped kerbs on the tram
   avenues.

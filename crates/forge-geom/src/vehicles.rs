@@ -239,6 +239,70 @@ fn nose(m: &mut TriMesh, h: f32, w: f32) {
     );
 }
 
+/// An automated taxi for four (D-061, the owner's model: booked from a communicator, no driver):
+/// a cabin 3.6 m long, 1.8 m wide and 1.65 m tall along `x`, its wheels on `y = 0`. A painted
+/// lower body ([`BODY`]) with the livery's band ([`STRIPE`]) at the waist, a glass band all round
+/// over it with slim pillars ([`GLASS`]), a painted roof, four wheels in their arches
+/// ([`UNDER`]). Symmetric front to back: it drives either way, as such cabins do.
+pub fn taxi_cab() -> TriMesh {
+    let mut m = TriMesh::default();
+    let (l, w) = (1.8_f32, 0.9_f32);
+    // The wheels, under the body's arches.
+    for x in [-1.25_f32, 1.25] {
+        for z in [-0.78_f32, 0.78] {
+            cuboid(
+                &mut m,
+                Vec3::new(x - 0.3, 0.0, z - 0.11),
+                Vec3::new(x + 0.3, 0.6, z + 0.11),
+                UNDER,
+                ALL,
+            );
+        }
+    }
+    // The lower body, the waist's band, the glass, the roof.
+    cuboid(
+        &mut m,
+        Vec3::new(-l, 0.25, -w),
+        Vec3::new(l, 0.82, w),
+        BODY,
+        ALL & !NEG_Y,
+    );
+    cuboid(
+        &mut m,
+        Vec3::new(-l, 0.82, -w),
+        Vec3::new(l, 0.92, w),
+        STRIPE,
+        POS_X | NEG_X | POS_Z | NEG_Z,
+    );
+    cuboid(
+        &mut m,
+        Vec3::new(-l + 0.08, 0.92, -w + 0.04),
+        Vec3::new(l - 0.08, 1.52, w - 0.04),
+        GLASS,
+        POS_X | NEG_X | POS_Z | NEG_Z,
+    );
+    cuboid(
+        &mut m,
+        Vec3::new(-l + 0.02, 1.52, -w + 0.02),
+        Vec3::new(l - 0.02, 1.65, w - 0.02),
+        BODY,
+        ALL & !NEG_Y,
+    );
+    // The pillars at the corners and the doors' middles.
+    for x in [-l + 0.1, 0.0, l - 0.1] {
+        for z in [-w + 0.02, w - 0.02] {
+            cuboid(
+                &mut m,
+                Vec3::new(x - 0.05, 0.92, z - 0.03),
+                Vec3::new(x + 0.05, 1.52, z + 0.03),
+                BODY,
+                ALL,
+            );
+        }
+    }
+    m
+}
+
 /// A river shuttle boat, electric, for about twenty people (Nantes' Navibus at a smaller size):
 /// 9 m long and 3.2 m wide along `x`, its waterline at `y = 0`. A hull tapering to the bow
 /// ([`BODY`]), a glazed cabin ([`GLASS`] between [`BODY`] posts), a roof of solar panels

@@ -620,6 +620,7 @@ impl<S: Simulation> Client<S> {
 }
 
 pub mod population;
+pub mod taxi;
 pub mod transit;
 
 #[cfg(test)]

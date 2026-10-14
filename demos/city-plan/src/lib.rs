@@ -39,6 +39,7 @@ use winit::keyboard::KeyCode;
 
 mod crowd;
 mod signs;
+mod taxis;
 mod walk;
 
 /// A tile's side, metres.
@@ -275,6 +276,8 @@ pub struct PlanScenario {
     /// Seconds into the run at which to board the nearest tram (scripted rides).
     ride_after: Option<f64>,
     crowd: Option<crowd::Crowd>,
+    /// The automated taxis (D-061).
+    taxis: Option<taxis::Taxis>,
     size: f64,
     /// What the kit built, logged once the app logs.
     kit_report: Option<String>,
@@ -927,6 +930,7 @@ impl PlanScenario {
                 }
             }
         }
+        let nets: Vec<f64> = structures.iter().map(|s| s.net).collect();
         Self {
             tiles: tiles.tiles,
             trees,
@@ -947,12 +951,13 @@ impl PlanScenario {
                 .chain(parapet_pieces(size, plan, site, &shore))
                 .collect(),
             passage_note,
-            nets: structures.iter().map(|s| s.net).collect(),
+            nets: nets.clone(),
             walk_on_start: false,
             ride_after: None,
             games,
             sign_names,
             crowd: None,
+            taxis: taxis::Taxis::new(plan, masses, &nets, 8.0, 3600.0),
             size,
             camera,
             title: format!(
@@ -1008,6 +1013,8 @@ impl PlanScenario {
             )
             .with_games(games),
         );
+        // The taxis on the people's hour.
+        self.taxis = taxis::Taxis::new(plan, masses, &self.nets, hour, self.clock);
         self
     }
 
@@ -2688,6 +2695,26 @@ impl Scenario for PlanScenario {
             );
         }
         let tram_rows: Vec<_> = TRAM_GROUPS.iter().map(|g| materials.of(g)).collect();
+        // The taxis: ivory bodies, dark glass, an amber band, dark wheels.
+        materials.add_rows(
+            "plan-taxi",
+            vec![
+                (
+                    "plan taxi body".into(),
+                    colour([0.90, 0.88, 0.82], 60.0, 0.3),
+                ),
+                ("plan taxi glass".into(), glass(None)),
+                (
+                    "plan taxi band".into(),
+                    colour([0.85, 0.55, 0.10], 60.0, 0.3),
+                ),
+                (
+                    "plan taxi wheels".into(),
+                    colour([0.06, 0.06, 0.07], 30.0, 0.1),
+                ),
+            ],
+        );
+        let materials_taxi = materials.of("plan-taxi");
         // The boats: a white hull, dark glass, a teal band, the solar roof.
         materials.add_rows(
             "plan-boat",
@@ -2915,6 +2942,13 @@ impl Scenario for PlanScenario {
                 tram_movers.push((plate, SCREENS as u32));
             }
         }
+        // The taxis, last.
+        if let Some(t) = &self.taxis {
+            tracing::info!(taxis = t.len(), "the taxi fleet");
+            let cab = builder.add_mesh(&MeshletMesh::build(&vehicles::taxi_cab()));
+            builder.set_mesh_material(cab, materials_taxi);
+            tram_movers.push((cab, t.len() as u32));
+        }
         if !tram_movers.is_empty() {
             builder.reserve_movers(&tram_movers);
         }
@@ -2984,6 +3018,7 @@ impl Scenario for PlanScenario {
                     })
                     .collect(),
                 crowd: self.crowd.take(),
+                taxis: self.taxis.take(),
                 camera: glam::Vec2::ZERO,
                 size: self.size,
                 origin: scene_origin(args).to_f64().as_vec3(),
@@ -3006,6 +3041,8 @@ struct PlanRunning {
     walk_on_start: bool,
     /// The population on foot round the camera, and where the camera last stood (x, z).
     crowd: Option<crowd::Crowd>,
+    /// The automated taxis.
+    taxis: Option<taxis::Taxis>,
     camera: glam::Vec2,
     /// The scene's origin, which the movers' positions are relative to.
     origin: Vec3,
@@ -3131,6 +3168,20 @@ impl Running for PlanRunning {
         if let Some(crowd) = &mut self.crowd {
             crowd.advance(f64::from(step));
         }
+        if let Some(taxis) = &mut self.taxis {
+            let before = (self.clock - f64::from(step)) / 300.0;
+            taxis.advance(self.clock);
+            // Every five minutes of the service, how the taxis keep up.
+            if before.floor() != (self.clock / 300.0).floor() {
+                let (waiting, wait) = taxis.service();
+                tracing::info!(
+                    taxis = taxis.len(),
+                    waiting,
+                    mean_wait_s = wait.round(),
+                    "the taxis"
+                );
+            }
+        }
         if self.walk_on_start {
             self.walk_on_start = false;
             self.toggle_walk(camera);
@@ -3177,7 +3228,11 @@ impl Running for PlanRunning {
     }
 
     fn movers(&mut self, scene: &mut MeshletScene) {
-        if self.trams.is_empty() && self.crowd.is_none() && self.boats.is_empty() {
+        if self.trams.is_empty()
+            && self.crowd.is_none()
+            && self.boats.is_empty()
+            && self.taxis.is_none()
+        {
             return;
         }
         // In the order the movers were reserved: a line's cabs (front and rear of each
@@ -3266,6 +3321,14 @@ impl Running for PlanRunning {
                         None => place((Vec3::new(0.0, -1000.0, 0.0) + origin, 0.0)),
                     });
                 }
+            }
+        }
+        // Then the taxis, moving.
+        if let Some(taxis) = &self.taxis {
+            still.resize(transforms.len(), false);
+            for (p, yaw) in taxis.poses() {
+                still.push(false);
+                transforms.push(place((taxis::world(self.size, p), yaw)));
             }
         }
         scene.set_movers_still(&transforms, |k| still.get(k).copied().unwrap_or(false));
