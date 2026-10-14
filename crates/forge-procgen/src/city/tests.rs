@@ -188,3 +188,19 @@ fn the_street_ground_is_one_map_with_every_surface_once() {
         "{total:.0} against {strips:.0}"
     );
 }
+
+#[test]
+fn the_network_has_one_place_for_each_junction() {
+    let (site, city) = example_plan();
+    let d = super::graph::defects(&city.roads, &site);
+    println!("the example's network: {d:?}");
+    // Before the tidy (2026-10-14): 7 close junctions, 7 short streets, 5 sharp meetings, 1
+    // doubled street.
+    assert_eq!(
+        (d.close_junctions, d.short_streets, d.sharp_meetings),
+        (0, 0, 0),
+        "{d:?}"
+    );
+    assert_eq!((d.wet_nodes, d.close_bridges), (0, 0), "{d:?}");
+    assert!(d.doubled_streets <= 1, "{d:?}");
+}

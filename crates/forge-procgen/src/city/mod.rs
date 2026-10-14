@@ -775,6 +775,7 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
     let mut lines = main;
     lines.extend(streets);
     let mut roads = graph::build(site, &lines, 1.5, 60.0);
+    graph::tidy(&mut roads, site, 60.0);
     let mut faces = graph::faces(&roads);
     // Superblocks cut by streets, a cut a round (a 600 m block takes three).
     if let Some(max) = params.max_block {
@@ -790,6 +791,7 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
             }
             lines.extend(cuts);
             roads = graph::build(site, &lines, 1.5, 60.0);
+            graph::tidy(&mut roads, site, 60.0);
             faces = graph::faces(&roads);
         }
     }

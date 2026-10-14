@@ -210,14 +210,18 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
             .collect();
         // No wedge to a point: acute corners cut square (the owner saw an impossible building at a
         // block's sharp corner).
+        // After the thin strips join their neighbours: a joined piece's hull can bring a sharp
+        // corner back.
         let pieces: Vec<Vec<DVec2>> = absorb_thin(
             pieces
-                .iter()
-                .map(|p| blunt(p))
+                .into_iter()
                 .filter(|p| p.len() >= 3 && geom::signed_area(p) >= 20.0)
                 .collect(),
         )
         .into_iter()
+        // Cleaned first: near-repeated points made false corners that used up its cuts.
+        .map(|p| blunt(&geom::clean(&p, 0.01)))
+        .filter(|p| p.len() >= 3 && geom::signed_area(p) >= 20.0)
         // No repeated points or straight runs: ear clipping stalled on them (a roof lost half
         // its triangles).
         .map(|p| geom::clean(&p, 0.01))
