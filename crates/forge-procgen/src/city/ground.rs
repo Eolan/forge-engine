@@ -48,6 +48,8 @@ const CROSSING_GAP: f64 = 1.0;
 const FORK: f64 = 0.985;
 /// The arcs' segments, as their length over their radius.
 const ARC: f64 = 0.25;
+/// How far the junctions' pieces reach into the strips they join, metres.
+const OVERLAP: f64 = 0.3;
 
 /// The map's tiles' side, metres: the city demo's.
 pub const TILE: f64 = 250.0;
@@ -69,26 +71,50 @@ pub struct Ramp {
 }
 
 impl Ramp {
-    /// Its outline: from a little over the kerb (the carriageway trims it) to [`RAMP`] inside.
+    /// Its outline, a trapezoid: along the kerb (from a little over it, the carriageway trims
+    /// it) its width and a flare of [`FLARE`] either side, narrowing to its width [`RAMP`] in.
     fn outline(&self) -> Vec<DVec2> {
-        let (a, n) = (self.along * self.half, self.inward);
+        let (a, f, n) = (
+            self.along * self.half,
+            self.along * (self.half + FLARE + 0.5 * FLARE / RAMP),
+            self.inward,
+        );
         let (near, far) = (self.kerb - n * 0.5, self.kerb + n * RAMP);
-        vec![near - a, near + a, far + a, far - a]
+        vec![near - f, near + f, far + a, far - a]
     }
 
-    /// Whether `p` lies on it (its outline from the kerb in).
+    /// Whether `p` lies on it (its slopes from the kerb in, the flares too).
     pub fn contains(&self, p: DVec2) -> bool {
         let d = p - self.kerb;
         let (s, t) = (d.dot(self.along), d.dot(self.inward));
-        s.abs() <= self.half && (0.0..=RAMP).contains(&t)
+        (0.0..=RAMP).contains(&t) && s.abs() <= self.half + FLARE * (1.0 - t / RAMP)
     }
 
-    /// Its level at `p`, from the lip at the kerb to the walking level [`RAMP`] in.
+    /// Its level at `p`: from the lip at the kerb up to the walking level [`RAMP`] in, and in
+    /// each flare up to it [`FLARE`] along the kerb too, so its sides slope at 1 in 12 like its
+    /// middle. Vertical sides stood at its edges, a trip for anyone and a wall for a wheelchair
+    /// (the owner: "gentle slopes all around").
     pub fn level(&self, p: DVec2) -> f64 {
-        let t = ((p - self.kerb).dot(self.inward) / RAMP).clamp(0.0, 1.0);
-        ROAD_LEVEL + DROPPED + (WALK_LEVEL - ROAD_LEVEL - DROPPED) * t
+        let d = p - self.kerb;
+        let (s, t) = (d.dot(self.along), d.dot(self.inward));
+        let rise = (t / RAMP + (s.abs() - self.half).max(0.0) / FLARE).clamp(0.0, 1.0);
+        ROAD_LEVEL + DROPPED + (WALK_LEVEL - ROAD_LEVEL - DROPPED) * rise
+    }
+
+    /// Where its middle meets its flares, along the kerb, as points on the kerb line: its pieces
+    /// are planar between them.
+    pub fn creases(&self) -> [(DVec2, DVec2); 2] {
+        [-1.0, 1.0].map(|side| {
+            (
+                self.kerb + self.along * (self.half * side),
+                self.along * side,
+            )
+        })
     }
 }
+
+/// A dropped kerb's flare along the kerb each side, metres: its 13 cm at 1 in 12.
+pub const FLARE: f64 = 1.6;
 
 /// A crossing over a driven street at a junction.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -335,9 +361,11 @@ fn mitre(node: DVec2, i: DVec2, hi: f64, j: DVec2, hj: f64) -> Vec<DVec2> {
         .filter(|&(s, t)| s >= 0.0 && t >= 0.0)
         .map(|(s, _)| a - i * s)
         .filter(|c| c.distance(node) <= 2.0 * hi.max(hj));
+    // A little into both strips, so the union leaves no hairline along their ends.
+    let (ia, jb) = (i * OVERLAP, j * OVERLAP);
     match corner {
-        Some(c) => vec![node, a, c, b],
-        None => vec![node, a, b],
+        Some(c) => vec![node + ia, a + ia, a, c, b, b + jb, node + jb],
+        None => vec![node + ia, a + ia, a, b, b + jb, node + jb],
     }
 }
 
@@ -367,7 +395,10 @@ fn fillet(node: DVec2, i: &Arm, j: &Arm, radius: f64) -> Option<(Vec<DVec2>, f64
     let bisector = (u + v).normalize_or_zero();
     let sin_half = half_tan / (1.0 + half_tan * half_tan).sqrt();
     let centre = x + bisector * (r / sin_half);
-    let mut wedge = vec![ti, x, tj];
+    // Its sides a little into both strips: laid edge to edge on the kerb lines, the union left
+    // hairlines along them, the old corner's lines on the asphalt (the owner).
+    let (iu, iv) = (left(u) * OVERLAP, left(v) * OVERLAP);
+    let mut wedge = vec![ti, ti - iu, x - iu + iv, tj + iv, tj];
     // The arc from tj back to ti round the centre, on the corner's side.
     let (a0, a1) = (tj - centre, ti - centre);
     let sweep = forge_core::dmath::atan2(geom::cross(a0, a1), a0.dot(a1));
@@ -469,6 +500,22 @@ impl GroundMap {
             if m < 2 {
                 continue;
             }
+            // The carriageway's reflex gaps between consecutive driven arms, the walking ways
+            // between them left out: a pedestrian street's mouth between an avenue's two arms
+            // left a sliver of pavement on the asphalt (the owner).
+            let driven: Vec<&Arm> = list.iter().filter(|a| a.kerb > 0.0).collect();
+            let md = driven.len();
+            for k in 0..md {
+                let (i, j) = (driven[k], driven[(k + 1) % md]);
+                if md >= 2
+                    && (geom::cross(i.dir, j.dir) < 0.0
+                        || (geom::cross(i.dir, j.dir) == 0.0 && i.dir.dot(j.dir) < 0.0))
+                {
+                    wedges.push(Piece::from_points(&mitre(
+                        node, i.dir, i.kerb, j.dir, j.kerb,
+                    )));
+                }
+            }
             // How far along each arm its corners reach.
             let mut reach = vec![0.0_f64; m];
             for k in 0..m {
@@ -480,11 +527,6 @@ impl GroundMap {
                     streets.push(Piece::from_points(&mitre(
                         node, i.dir, i.half, j.dir, j.half,
                     )));
-                    if i.kerb > 0.0 && j.kerb > 0.0 {
-                        wedges.push(Piece::from_points(&mitre(
-                            node, i.dir, i.kerb, j.dir, j.kerb,
-                        )));
-                    }
                     continue;
                 }
                 if i.kerb > 0.0 && j.kerb > 0.0 {
@@ -886,9 +928,9 @@ mod tests {
             8,
             "a dropped kerb at each end of each crossing"
         );
-        // Each ramp lies whole on the pavement: 4 m × 1.6 m.
+        // Each ramp lies whole on the pavement: 4 m and its flares × 1.6 m.
         assert!(
-            (ramps - 8.0 * CROSSING * RAMP).abs() < 0.5,
+            (ramps - 8.0 * (CROSSING + FLARE) * RAMP).abs() < 0.5,
             "ramps {ramps:.2} m²"
         );
         // The levels: the carriageway's middle, a pavement, a ramp's foot and top, a block.

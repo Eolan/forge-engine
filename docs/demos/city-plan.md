@@ -555,7 +555,11 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
     0.5 m: `transit::SWEPT`), so the kerb keeps clear of it.
   - **Crossings:** a zebra 4 m wide on each driven arm of every junction, a metre past its corner
     or past a pedestrian way's mouth. A dropped kerb at each end slopes 1.6 m (1 in 12, #263) down
-    to a 1 cm lip: 862 crossings and 1 724 dropped kerbs in the example.
+    to a 1 cm lip, its sides flared at 1 in 12 too, so there is no edge to step or roll over (the
+    owner: "gentle slopes all around"): 862 crossings and 1 724 dropped kerbs in the example.
+  - **No hairlines:** the junctions' pieces (corner wedges, gap mitres) reach 0.3 m into the
+    strips they join, and the carriageway's gaps close among the driven arms only (a pedestrian
+    street's mouth between an avenue's arms left a sliver of pavement on the asphalt).
   - **One walking level** (0.30): pavements, shared and pedestrian streets, paths, squares,
     gardens and courts. Only the avenues' carriageways lie lower (0.16, a 14 cm kerb). A
     pedestrian way meeting an avenue runs on across its pavement (a continuous footway), and

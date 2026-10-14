@@ -3499,55 +3499,30 @@ fn street_ground(tiles: &mut Tiles, map: &ground::GroundMap, site: &Site) {
         }
         for (r, shapes) in &t.ramps {
             let ramp = map.ramps[*r as usize];
+            // Cut along its creases into its planar pieces (the middle, each flare), each
+            // triangle's corners at their levels. The flares slope up to the pavement, so no side
+            // faces: there is no edge to step or roll over (the owner).
+            let [(left, _), (right, _)] = ramp.creases();
+            let cut = DVec2::new(ramp.along.y, -ramp.along.x);
             for polygon in ground::simple_polygons(shapes) {
-                let tile = tiles.at(polygon[0]);
-                let centre = tile.centre;
-                for tri in geom::triangulate(&polygon) {
-                    let p = tri.map(|i| world(size, polygon[i], ramp.level(polygon[i])) - centre);
-                    let mut up = (p[1] - p[0]).cross(p[2] - p[0]).normalize_or_zero();
-                    if up.y < 0.0 {
-                        up = -up;
+                let middle =
+                    geom::clip_half_plane(&geom::clip_half_plane(&polygon, left, cut), right, -cut);
+                let pieces = [
+                    geom::clip_half_plane(&polygon, left, -cut),
+                    middle,
+                    geom::clip_half_plane(&polygon, right, cut),
+                ];
+                for piece in pieces.iter().filter(|p| p.len() >= 3) {
+                    let tile = tiles.at(piece[0]);
+                    let centre = tile.centre;
+                    for tri in geom::triangulate(piece) {
+                        let p = tri.map(|i| world(size, piece[i], ramp.level(piece[i])) - centre);
+                        let mut up = (p[1] - p[0]).cross(p[2] - p[0]).normalize_or_zero();
+                        if up.y < 0.0 {
+                            up = -up;
+                        }
+                        triangle(&mut tile.ground, p, up, PAVING);
                     }
-                    triangle(&mut tile.ground, p, up, PAVING);
-                }
-            }
-            // Its sides, from its slope up to the pavement, facing into it: only along the
-            // stretches where the ramp itself lies on one side and raised pavement on the other.
-            // Drawn over its whole outline, they stood on the carriageway where a rounded corner
-            // took the ramp's end, thin lines on the asphalt (the owner).
-            let square = [
-                t.min,
-                DVec2::new(t.max.x, t.min.y),
-                t.max,
-                DVec2::new(t.min.x, t.max.y),
-            ];
-            for side in [-1.0, 1.0] {
-                let edge = ramp.kerb + ramp.along * (ramp.half * side);
-                let steps = (ground::RAMP / 0.2).ceil() as usize;
-                for k in 0..steps {
-                    let (a, b) = (
-                        edge + ramp.inward * (ground::RAMP * k as f64 / steps as f64),
-                        edge + ramp.inward * (ground::RAMP * (k + 1) as f64 / steps as f64),
-                    );
-                    let mid = (a + b) * 0.5;
-                    let (inner, outer) = (
-                        mid - ramp.along * (side * 0.05),
-                        mid + ramp.along * (side * 0.05),
-                    );
-                    let on_ramp = ground::inside(shapes, inner);
-                    let beside = !map.on_carriageway(outer)
-                        && !t.ramps.iter().any(|(_, s)| ground::inside(s, outer));
-                    if !geom::contains(&square, mid) || !on_ramp || !beside {
-                        continue;
-                    }
-                    face(
-                        tiles,
-                        a,
-                        b,
-                        [ramp.level(a), ramp.level(b)],
-                        [WALK_LEVEL; 2],
-                        ramp.along * -side,
-                    );
                 }
             }
         }
@@ -3574,7 +3549,7 @@ fn street_ground(tiles: &mut Tiles, map: &ground::GroundMap, site: &Site) {
             let walk = DVec2::new(d.y, -d.x) / length;
             let near_ramp = ramps
                 .iter()
-                .any(|r| geom::distance_to_segment(r.kerb, a, b) < r.half + 0.5);
+                .any(|r| geom::distance_to_segment(r.kerb, a, b) < r.half + ground::FLARE + 0.5);
             let steps = if near_ramp {
                 (length / 0.5).ceil() as usize
             } else {
