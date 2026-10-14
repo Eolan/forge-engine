@@ -4159,3 +4159,31 @@ from the ground map), the masses, the structures (D-060), the kit and the trams'
 
 **Order:** 1–3 first, with the demo drawing the map, the old patches deleted as their cases move
 in, and the captures compared. Then 4 and 6, then 5, 7 and 8.
+
+**The street design, the owner's answer (2026-10-14),** after seeing the first map. "junctions,
+road intersections and bridges are still a mess": the map drew the network faithfully, and the
+network itself is the mess (crossing bridges, junction clusters, sharp meetings).
+- **Roads stay, for the taxis; the taxis stay off where people walk.**
+  - The main streets are normal two-way roads, a little futuristic but not too much, narrower:
+    automated taxis hold a 3 m lane.
+  - No one-way streets: a taxi must not tour the city to reach the next block. The main roads'
+    spacing keeps detours short.
+  - Tram avenues carry the tracks and a taxi lane each way.
+- **Every other street is for people only:**
+  - pedestrian streets with bollards at their mouths, deliveries and emergencies at set hours;
+  - a continuous footway across their mouths where they meet a road.
+- **Intersections only where roads meet:** zebras on raised tables, rounded kerbs, no traffic
+  lights.
+- **Taxi stations:**
+  - stands of 2–4 bays along the roads, by the tram stops, squares, the hospital and the station;
+  - depots for charging and cleaning in the industrial quarter;
+  - every building within a short walk of a stand, as a check.
+- **The vehicles** (proposed): a 4-seat cabin with facing seats as the standard (most trips carry
+  one or two people, but a family, luggage or a wheelchair with a companion fit), and an 8-seat
+  shuttle with a ramp for groups and accessibility.
+- **The network cleaned before it is drawn**, with a defect count:
+  - junctions closer than about 20 m merged;
+  - near-duplicate streets dropped;
+  - sharp meetings straightened;
+  - one bridge per crossing, roughly square to the river, no junction on it, a small square at
+    each head.
