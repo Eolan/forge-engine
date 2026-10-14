@@ -624,6 +624,11 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
         3.2 m of the road's centreline: crossing at a zebra or a junction), the people drawn
         round the camera (`Fleet::set_people`). Test
         `a_taxi_stops_for_someone_crossing_and_goes_on_once_they_are_over`.
+      - the walkers cross the streets on the zebras: at a junction, each driven street on the
+        way's right that has one is crossed on it, along the pavement to its near end and back
+        from its far end, at the road's level between the kerbs (or the table's); they crossed
+        in the junction's middle, where the taxis drive. Test
+        `walkers_cross_the_side_street_on_its_zebra`.
     - **Where each cab stands:**
       - in its lane, 1.5 m right of the centreline;
       - at the kerb, 2.3 m right, while it picks up or sets down;
@@ -690,7 +695,6 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
       - the sandbox: 1 727 taxis in 9 depots; the trams serve half of the trips by tram or taxi,
         17 % of the rest book a taxi.
     - **Not yet:**
-      - the walkers cross in the junction boxes, not on the zebras;
       - batteries and charging times;
       - shared rides.
     - **Tests:**

@@ -117,8 +117,23 @@ fn keep_slots(slots: &mut [u32], found: &[(u32, Vec3, f32)]) -> Vec<Option<Figur
     shown
 }
 
+/// A zebra crossing at a junction, as a walker takes it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Zebra {
+    /// The way its street leaves the junction, unit.
+    arm: DVec2,
+    /// How far from the junction's node it lies, metres.
+    from: f64,
+    /// Its ends on the pavements either side, past the kerbs.
+    ends: [DVec2; 2],
+    /// Where it meets each kerb, on the same sides as `ends`.
+    kerbs: [DVec2; 2],
+    /// Its level between the kerbs: the walking level on a raised table, else the road's.
+    level: f32,
+}
+
 /// A way along the streets: its points and, per segment, its street's half width and its
-/// pavement's level.
+/// pavement's level; and the walkers' way along it, over the zebras.
 struct Route {
     points: Vec<DVec2>,
     along: Vec<f64>,
@@ -126,9 +141,106 @@ struct Route {
     level: Vec<f32>,
     /// Per point (as `half`), its street's raised pavement's width; 0 on a shared surface.
     pave: Vec<f64>,
+    /// On foot: the pavements' corners, and round the junctions where the way crosses a street
+    /// with a zebra, over it (they crossed in the junction's middle, the taxis' way).
+    walk: Vec<(DVec2, f32)>,
+    /// How far along `walk` each of its points lies.
+    walk_along: Vec<f64>,
 }
 
 impl Route {
+    /// The route along `points` (its segments' `half` widths, `level`s and `pave`ments), its
+    /// junctions `junctions` (a point's index and its node) taking the `zebras` there.
+    fn new(
+        points: Vec<DVec2>,
+        half: Vec<f64>,
+        level: Vec<f32>,
+        pave: Vec<f64>,
+        junctions: &[(usize, u32)],
+        zebras: &HashMap<u32, Vec<Zebra>>,
+    ) -> Self {
+        let mut along = vec![0.0];
+        for w in points.windows(2) {
+            along.push(along[along.len() - 1] + w[0].distance(w[1]));
+        }
+        let mut route = Self {
+            points,
+            along,
+            half,
+            level,
+            pave,
+            walk: Vec::new(),
+            walk_along: Vec::new(),
+        };
+        route.walk = route.footway(junctions, zebras);
+        let mut walked = vec![0.0];
+        for w in route.walk.windows(2) {
+            walked.push(walked[walked.len() - 1] + w[0].0.distance(w[1].0));
+        }
+        route.walk_along = walked;
+        route
+    }
+
+    /// The walkers' way: each point's corner of the pavements, or at a junction whose streets
+    /// on the right of the way have zebras, along the pavement to each zebra, over it, and on.
+    fn footway(
+        &self,
+        junctions: &[(usize, u32)],
+        zebras: &HashMap<u32, Vec<Zebra>>,
+    ) -> Vec<(DVec2, f32)> {
+        let n = self.points.len();
+        let right = |d: DVec2| DVec2::new(-d.y, d.x);
+        let dir = |k: usize| (self.points[k + 1] - self.points[k]).normalize_or_zero();
+        let angle = |d: DVec2| d.y.atan2(d.x);
+        let tau = std::f64::consts::TAU;
+        let mut walk: Vec<(DVec2, f32)> = Vec::with_capacity(n);
+        for i in 0..n {
+            let level = self.level[i.min(n - 2)];
+            let node = junctions.iter().find(|j| j.0 == i).map(|j| j.1);
+            let list = node
+                .and_then(|v| zebras.get(&v))
+                .filter(|_| i > 0 && i + 1 < n);
+            if let Some(list) = list {
+                let (d0, d1) = (dir(i - 1), dir(i));
+                // The streets on the way's right between the one it leaves and the one it
+                // takes: turning from -d0 towards d1 the way the right turns.
+                let (start, sweep) = (angle(d1), (angle(-d0) - angle(d1)).rem_euclid(tau));
+                let mut crossed: Vec<(f64, &Zebra)> = list
+                    .iter()
+                    .filter_map(|z| {
+                        let a = (angle(z.arm) - start).rem_euclid(tau);
+                        (a > 0.05 && a < sweep - 0.05).then_some((sweep - a, z))
+                    })
+                    .collect();
+                if !crossed.is_empty() {
+                    // In the order the walker meets them, from the street it leaves.
+                    crossed.sort_by(|a, b| a.0.total_cmp(&b.0));
+                    let v = self.points[i];
+                    let (s0, s1) = (self.side(i - 1, false), self.side(i, false));
+                    let back = crossed[0]
+                        .1
+                        .from
+                        .min((self.along[i] - self.along[i - 1]) * 0.5);
+                    let after = crossed[crossed.len() - 1].1.from;
+                    walk.push((v + right(d0) * s0 - d0 * back, level));
+                    for (_, z) in crossed {
+                        let last = walk[walk.len() - 1].0;
+                        let near = usize::from(z.ends[1].distance(last) < z.ends[0].distance(last));
+                        let far = 1 - near;
+                        walk.push((z.ends[near], level));
+                        walk.push((z.kerbs[near], z.level));
+                        walk.push((z.kerbs[far], z.level));
+                        walk.push((z.ends[far], level));
+                    }
+                    let on = after.min((self.along[i + 1] - self.along[i]) * 0.5);
+                    walk.push((v + right(d1) * s1 + d1 * on, level));
+                    continue;
+                }
+            }
+            walk.push((self.corner(i, false), level));
+        }
+        walk
+    }
     fn length(&self) -> f64 {
         self.along[self.along.len() - 1]
     }
@@ -187,6 +299,24 @@ impl Route {
     /// crosses straight over, as at a crossing, rather than jumping from one side to the other.
     fn at(&self, s: f64, riding: bool) -> (DVec2, DVec2, f32) {
         let s = s.clamp(0.0, self.length());
+        // On foot, the same share of the walkers' way.
+        if !riding && self.walk.len() >= 2 && self.length() > 0.0 {
+            let total = self.walk_along[self.walk_along.len() - 1];
+            let w = s / self.length() * total;
+            let i = self
+                .walk_along
+                .partition_point(|&a| a <= w)
+                .clamp(1, self.walk.len() - 1);
+            let seg = self.walk_along[i] - self.walk_along[i - 1];
+            let t = if seg > 1e-9 {
+                (w - self.walk_along[i - 1]) / seg
+            } else {
+                0.0
+            };
+            let ((a, la), (b, lb)) = (self.walk[i - 1], self.walk[i]);
+            let dir = (b - a).normalize_or_zero();
+            return (a + (b - a) * t, dir, la + (lb - la) * t as f32);
+        }
         let i = self
             .along
             .partition_point(|&a| a <= s)
@@ -225,6 +355,8 @@ pub struct Crowd {
     clock: f64,
     graph: Graph,
     plan_edges: Vec<(Vec<DVec2>, f64, f64, f64)>,
+    /// The zebras at each junction, by its node.
+    zebras: HashMap<u32, Vec<Zebra>>,
     routes: HashMap<u32, Option<Route>>,
     /// The parks visitors stand about in, in the order of their places from
     /// `first_park` on.
@@ -350,6 +482,26 @@ impl Crowd {
             let level = crate::WALK_LEVEL;
             plan_edges.push((e.points.clone(), side, level, e.profile.pavement()));
         }
+        // The zebras, by the junction they serve: their ends a metre onto the pavements.
+        let mut zebras: HashMap<u32, Vec<Zebra>> = HashMap::new();
+        for c in &plan.ground.crossings {
+            let across = DVec2::new(-c.along.y, c.along.x);
+            let half = c.span * 0.5;
+            zebras.entry(c.node).or_default().push(Zebra {
+                arm: c.along,
+                from: c.centre.distance(nodes[c.node as usize]),
+                ends: [
+                    c.centre + across * (half + 1.0),
+                    c.centre - across * (half + 1.0),
+                ],
+                kerbs: [c.centre + across * half, c.centre - across * half],
+                level: if c.raised {
+                    crate::WALK_LEVEL as f32
+                } else {
+                    crate::ROAD_LEVEL as f32
+                },
+            });
+        }
         // Each terrace seat's neighbourhood: the cafés and the seats within 300 m of it. A seat
         // is taken in the share the people out at those cafés make of those seats.
         let half = plan.size * 0.5;
@@ -390,6 +542,7 @@ impl Crowd {
             clock,
             graph: Graph { nodes, adj, near },
             plan_edges,
+            zebras,
             routes: HashMap::new(),
             parks: open,
             first_park,
@@ -787,7 +940,7 @@ impl Crowd {
         let mut v = goal;
         while v != start {
             let (u, e, fwd) = came[v as usize]?;
-            legs.push((e, fwd));
+            legs.push((u, e, fwd));
             v = u;
         }
         legs.reverse();
@@ -795,7 +948,12 @@ impl Crowd {
         let mut half = Vec::new();
         let mut level = Vec::new();
         let mut pave = Vec::new();
-        for (e, fwd) in legs {
+        let mut junctions = Vec::new();
+        for (u, e, fwd) in legs {
+            // Where the last leg ended: the junction this one leaves.
+            if !points.is_empty() {
+                junctions.push((points.len() - 1, u));
+            }
             let (pts, s, l, pv) = &self.plan_edges[e as usize];
             let mut pts = pts.clone();
             if !fwd {
@@ -814,17 +972,14 @@ impl Crowd {
         if points.len() < 2 {
             return None;
         }
-        let mut along = vec![0.0];
-        for w in points.windows(2) {
-            along.push(along[along.len() - 1] + w[0].distance(w[1]));
-        }
-        Some(Route {
+        Some(Route::new(
             points,
-            along,
             half,
             level,
             pave,
-        })
+            &junctions,
+            &self.zebras,
+        ))
     }
 }
 
@@ -864,17 +1019,14 @@ mod tests {
                 DVec2::new(100.0, 100.0 * turn),
                 DVec2::new(160.0, 100.0 * turn),
             ];
-            let mut along = vec![0.0];
-            for w in points.windows(2) {
-                along.push(along[along.len() - 1] + w[0].distance(w[1]));
-            }
-            let route = Route {
+            let route = Route::new(
                 points,
-                along,
-                half: vec![14.0, 8.0, 8.0],
-                level: vec![0.3, 0.16, 0.16],
-                pave: vec![6.0, 0.0, 0.0],
-            };
+                vec![14.0, 8.0, 8.0],
+                vec![0.3, 0.16, 0.16],
+                vec![6.0, 0.0, 0.0],
+                &[(1, 0), (2, 1)],
+                &HashMap::new(),
+            );
             for riding in [false, true] {
                 let mut last = route.at(0.0, riding).0;
                 let mut s = 0.5;
@@ -890,5 +1042,58 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn walkers_cross_the_side_street_on_its_zebra() {
+        // East through a junction at (100, 0) with a street south off it, on the walker's right;
+        // its zebra 12 m down it, 6 m of carriageway.
+        let zebra = Zebra {
+            arm: DVec2::Y,
+            from: 12.0,
+            ends: [DVec2::new(96.0, 12.0), DVec2::new(104.0, 12.0)],
+            kerbs: [DVec2::new(97.0, 12.0), DVec2::new(103.0, 12.0)],
+            level: 0.16,
+        };
+        let zebras = HashMap::from([(7, vec![zebra])]);
+        let route = Route::new(
+            vec![DVec2::ZERO, DVec2::new(100.0, 0.0), DVec2::new(200.0, 0.0)],
+            vec![9.0, 9.0],
+            vec![0.3, 0.3],
+            vec![6.0, 6.0],
+            &[(1, 7)],
+            &zebras,
+        );
+        // Over the zebra, near end first, at the road's level between the kerbs.
+        let walk: Vec<DVec2> = route.walk.iter().map(|w| w.0).collect();
+        let near = walk.iter().position(|p| p.distance(zebra.ends[0]) < 1e-9);
+        let far = walk.iter().position(|p| p.distance(zebra.ends[1]) < 1e-9);
+        assert!(near.is_some() && far.is_some() && near < far, "{walk:?}");
+        let (_, _, level) = route.at(route.length() * 0.5, false);
+        assert!(level >= 0.16, "{level}");
+        // Never across the junction's middle: nowhere within 5 m of the node.
+        let mut s = 0.0;
+        while s <= route.length() {
+            let (p, _, _) = route.at(s, false);
+            assert!(
+                p.distance(DVec2::new(100.0, 0.0)) > 5.0,
+                "at {p} through the junction"
+            );
+            s += 0.25;
+        }
+        // A walker turning right there crosses nothing.
+        let right = Route::new(
+            vec![
+                DVec2::ZERO,
+                DVec2::new(100.0, 0.0),
+                DVec2::new(100.0, 100.0),
+            ],
+            vec![9.0, 9.0],
+            vec![0.3, 0.3],
+            vec![6.0, 6.0],
+            &[(1, 7)],
+            &zebras,
+        );
+        assert_eq!(right.walk.len(), 3, "{:?}", right.walk);
     }
 }
