@@ -621,6 +621,11 @@ pub struct CityParams {
     pub forest_above: f32,
     /// Ground steeper than this (rise over run) is left as forest.
     pub forest_slope: f32,
+    /// How far a district reaches, as a multiple of its radius: land farther from every district
+    /// stays countryside (no streets, no blocks; main roads still cross it). `None`: every land
+    /// cell takes its nearest district (islands of city grew wherever the hills left room, the
+    /// owner).
+    pub reach: Option<f64>,
     /// Superblocks cut by streets: a built block longer than this many times its district's
     /// street spacing gets a shared street across its middle, again until none is. `None` keeps
     /// the traced streets alone.
@@ -728,6 +733,7 @@ pub fn district_field(
     forest: (f32, f32),
     seed: u64,
     cell: f64,
+    reach: Option<f64>,
 ) -> Field2<u8> {
     let n = (site.size / cell).ceil() as u32 + 1;
     let reserve = districts
@@ -752,6 +758,10 @@ pub fn district_field(
             if score < best.0 {
                 best = (score, i as u8);
             }
+        }
+        // Beyond every district's reach: countryside.
+        if reach.is_some_and(|r| best.0 > r) {
+            return u8::MAX;
         }
         best.1
     })
@@ -812,6 +822,7 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
         (params.forest_above, params.forest_slope),
         seed.derive_str("districts").value(),
         20.0,
+        params.reach,
     );
     lap("districts", &mut timings);
 

@@ -140,8 +140,9 @@ pub fn edge_half_width(grid: &PointGrid, roads: &RoadGraph, a: DVec2, b: DVec2) 
         })
 }
 
-/// The smallest courtyard kept, square metres: a small room's floor and a little.
-const MIN_COURT: f64 = 40.0;
+/// The smallest courtyard kept, square metres: about 10 × 10 m (smaller ones were light wells no
+/// passage could reach).
+const MIN_COURT: f64 = 100.0;
 
 /// Each built block's and square's buildable outline on the building lines, and each built
 /// block's courtyard: its outline moved in by half the widest street round it and its

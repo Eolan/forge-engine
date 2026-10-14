@@ -654,6 +654,12 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
     river cells had been dry.
   - **The sandbox's site** opens its land by two cells (`Site::open_land`, after
     `Site::clear_slivers`), so no spit thinner than about 40 m is left.
+- **the city's outer limit** (`CityParams::reach`): land farther than `reach` radii from every district's
+  anchor stays countryside, with no streets or blocks (main roads still cross it). Every land
+  cell had taken its nearest district however far: islands of city grew wherever the hills left
+  room, with empty ground nearer in (the owner). The sandbox uses 1.5, with denser districts
+  and hillside quarters on the south bank's gentler slopes to keep its million. Courtyards under
+  100 m² are none: the block is built through, as such light wells had no passage to them.
 - **open land as nature:** the ground outside the city is a dry, olive scrub. The reserves and
   any land outside every block carry a loose wood: a jittered grid of 16 m, under half filled, 8 m
   clear of the streets. They were gravel, which the owner took for paving.

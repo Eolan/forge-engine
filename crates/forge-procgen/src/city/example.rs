@@ -197,6 +197,7 @@ pub fn params(size: f64) -> CityParams {
         park_share_cap: 0.22,
         forest_above: f32::MAX,
         forest_slope: f32::MAX,
+        reach: None,
         max_block: None,
     }
 }
