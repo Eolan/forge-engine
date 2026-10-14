@@ -183,6 +183,12 @@ pub struct RenderLayer {
     /// mesh stop sharing a pattern. For stochastic textures (rock, sand, concrete), never for
     /// structured ones (brick courses, tiles, windows), whose rows it would break.
     pub hex_tiling: bool,
+    /// Standard: project the textures, their hex tiles and their brightness noise from the
+    /// scene frame instead of the object's, with no offset per instance: continuous across
+    /// meshes. For static ground cut into meshes of its own origins (the city's tiles, where a
+    /// polygon kept in the next tile's mesh showed as a lighter band, the owner). Never for
+    /// movers (their pattern would slide) or rotated instances.
+    pub world_projected: bool,
     /// The share of light reflected at normal incidence (Fresnel's F0), rising towards 1 at
     /// grazing angles: 0.04 for most dielectrics (stone, plaster, plastic, uncoated glass),
     /// 0.2–0.4 for coated glass (issue #56).
@@ -274,6 +280,7 @@ impl Default for RenderLayer {
             texture_scale: 1.0,
             normal_strength: 1.0,
             hex_tiling: false,
+            world_projected: false,
             reflectance: 0.04,
             bubbles: 0.0,
             contour: None,

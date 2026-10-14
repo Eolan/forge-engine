@@ -141,6 +141,7 @@ static const uint MATERIAL_FLAG_UV = 2;         // the textures read the mesh's 
 static const uint MATERIAL_FLAG_MASKED = 4;     // cut out by the base colour's alpha (#171)
 static const uint MATERIAL_FLAG_DOUBLE_SIDED = 8; // drawn from both sides (#171)
 static const uint MATERIAL_FLAG_PLANET = 16;       // layered: the layers by height, slope and latitude on the frame's planet (#220)
+static const uint MATERIAL_FLAG_WORLD_PROJECTED = 32; // the textures and their noise from the scene frame, not the object's
 static const uint CUTOUT_GROUND_WINDOW = 1u << 31; // `cluster_cutouts`: windowed ground reaching into the ground window (#197)
 static const uint MESH_WINDOWED_GROUND = 1;     // Mesh::flags: its fragments in the frame's ground window go (#197)
 static const uint MESH_SCENE_SHADED = 2;        // Mesh::flags: a ground window's mesh, shaded where it stands in the scene (#197)
@@ -2864,14 +2865,19 @@ void standard_surface(Material mat, Surface s, out float3 albedo, out float3 n)
     if (mat.albedo_texture != TEXTURE_NONE || mat.normal_texture != TEXTURE_NONE)
     {
         float3 w = triplanar_weights(s.object_normal);
-        float3 p = s.object_position * mat.inv_texture_scale;
+        // Projected from the scene frame, the ground's tiles meet with one pattern and one
+        // noise: from each mesh's own origin, a polygon kept in the next tile's mesh showed as
+        // a band of another brightness (the city's pavements, the owner).
+        bool world = (mat.flags & MATERIAL_FLAG_WORLD_PROJECTED) != 0;
+        float3 p = (world ? s.world : s.object_position) * mat.inv_texture_scale;
         float3 dpdx = s.dpdx * mat.inv_texture_scale;
         float3 dpdy = s.dpdy * mat.inv_texture_scale;
         if ((mat.flags & MATERIAL_FLAG_HEX_TILING) != 0)
         {
             // Each instance its own place in the texture (a few dozen repeats away), so the
             // objects of one mesh stop sharing a pattern; then the hex tiles (issue #66).
-            p += hash_color(s.instance_id ^ 0x9E3779B9u) * 61.0;
+            if (!world)
+                p += hash_color(s.instance_id ^ 0x9E3779B9u) * 61.0;
             float broad = 0.65 * value_noise3(p * 0.137) + 0.35 * value_noise3(p * 0.41 + 17.0);
             float3 texel, bent;
             hex_triplanar(mat, s.object_normal, w, p, dpdx, dpdy, texel, bent);

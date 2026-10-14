@@ -611,6 +611,10 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
   - **No hairlines:** the junctions' pieces (corner wedges, gap mitres) reach 0.3 m into the
     strips they join, and the carriageway's gaps close among the driven arms only (a pedestrian
     street's mouth between an avenue's arms left a sliver of pavement on the asphalt).
+  - **One pattern across the tiles:** the ground's rows are projected from the scene frame
+    (`RenderLayer::world_projected`), not from each 250 m tile mesh's origin. A pavement polygon
+    kept in the next tile's mesh showed as a lighter band: its brightness noise (and the grass's
+    hex tiles, offset per instance) started from another origin (the owner).
   - **One walking level** (0.30): pavements, shared and pedestrian streets, paths, squares,
     gardens and courts. Only the avenues' carriageways lie lower (0.16, a 14 cm kerb). A
     pedestrian way meeting an avenue runs on across its pavement (a continuous footway), and

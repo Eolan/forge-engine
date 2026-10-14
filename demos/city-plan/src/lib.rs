@@ -2336,6 +2336,9 @@ impl Scenario for PlanScenario {
             texture_scale: scale,
             normal_strength: 1.0,
             hex_tiling: stochastic,
+            // One pattern and one noise across the tiles' meshes: from each tile's origin, a
+            // polygon kept in the next tile's mesh showed as a band of another brightness.
+            world_projected: true,
             ..layer
         };
         materials.add_rows(
