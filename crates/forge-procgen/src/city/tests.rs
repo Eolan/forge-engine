@@ -125,3 +125,66 @@ fn added_lines_bring_stops_to_the_blocks_left_without() {
     );
     assert!(after.tram_lines.len() > params.tram_lines.len());
 }
+
+#[test]
+fn the_street_ground_is_one_map_with_every_surface_once() {
+    use super::ground;
+    let (_, city) = example_plan();
+
+    let map = &city.ground;
+    let built = city
+        .timings
+        .iter()
+        .find(|t| t.0 == "street ground")
+        .map_or(0.0, |t| t.1 / 1e3);
+    let area = |shapes: &ground::Shapes| -> f64 {
+        shapes
+            .iter()
+            .flatten()
+            .map(|c| geom::signed_area(c))
+            .sum::<f64>()
+    };
+    let (mut road, mut walk, mut ramps) = (0.0, 0.0, 0.0);
+    let mut overlaps = 0;
+    for t in &map.tiles {
+        let r = area(&t.carriageway) + area(&t.crossings) + area(&t.stripes);
+        let w = area(&t.walk);
+        let ra: f64 = t.ramps.iter().map(|(_, s)| area(s)).sum();
+        road += r;
+        walk += w;
+        ramps += ra;
+        // No point of the walking ground is also carriageway: each walking shape's middle,
+        // where it lies in its shape.
+        for c in t.walk.iter().flat_map(|s| s.first()) {
+            let p = geom::centroid(c);
+            if geom::contains(c, p) && ground::inside(&t.walk, p) && map.on_carriageway(p) {
+                overlaps += 1;
+            }
+        }
+    }
+    let km2 = |a: f64| a / 1e6;
+    println!(
+        "street ground of the example ({:.1} s): carriageway {:.3} km², walking {:.3} km², \
+         ramps {:.0} m², {} crossings, {} dropped kerbs",
+        built,
+        km2(road),
+        km2(walk),
+        ramps,
+        map.crossings.len(),
+        map.ramps.len()
+    );
+    assert_eq!(overlaps, 0);
+    assert!(map.crossings.len() > 100, "{}", map.crossings.len());
+    // The streets' area against the sum of their strips, roughly (the junctions overlap).
+    let strips: f64 = city
+        .roads
+        .edges
+        .iter()
+        .map(|e| e.length() * e.profile.width())
+        .sum();
+    let total = road + walk + ramps;
+    assert!(
+        total < strips && total > 0.7 * strips,
+        "{total:.0} against {strips:.0}"
+    );
+}

@@ -16,7 +16,7 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 use forge_core::Seed;
 use forge_procgen::city::geom::{self, PointGrid};
 use forge_procgen::city::mass::Mass;
-use forge_procgen::city::{BlockUse, CityPlan, Profile};
+use forge_procgen::city::{BlockUse, CityPlan};
 use forge_sim::population::{self, Building, Mix, Mode, PlaceKind, Sim, TRAM_WAIT, Uses, World};
 use forge_sim::transit::Timetable;
 use glam::{DVec2, Vec2, Vec3};
@@ -202,8 +202,8 @@ impl Route {
             .try_normalize()
             .unwrap_or_else(|| (self.points[i] - self.points[i - 1]).normalize_or_zero());
         let level = match (riding, self.pave[i - 1] > 0.0) {
-            (true, true) => crate::AVENUE_LEVEL as f32,
-            (true, false) => 0.16,
+            (true, true) => crate::ROAD_LEVEL as f32,
+            (true, false) => crate::WALK_LEVEL as f32,
             (false, _) => self.level[i - 1],
         };
         (a + (b - a) * t, dir, level)
@@ -344,12 +344,10 @@ impl Crowd {
         for (i, e) in plan.roads.edges.iter().enumerate() {
             adj[e.a as usize].push((e.b, i as u32, true));
             adj[e.b as usize].push((e.a, i as u32, false));
-            // The street's half width, and its pavement's level: the avenues' raised.
+            // The street's half width, and its walking level: one level wherever people walk
+            // (D-061).
             let side = e.profile.width() * 0.5;
-            let level = match e.profile {
-                Profile::TramAvenue | Profile::Avenue => 0.30,
-                _ => 0.16,
-            };
+            let level = crate::WALK_LEVEL;
             plan_edges.push((e.points.clone(), side, level, e.profile.pavement()));
         }
         // Each terrace seat's neighbourhood: the cafés and the seats within 300 m of it. A seat
@@ -635,7 +633,11 @@ impl Crowd {
                     );
                     let mesh = (s as usize % GROUPS) * POSES + 1;
                     if q.distance(c) <= REACH && geom::contains(&park.inside, q) {
-                        let at = Vec3::new((q.x - half) as f32, 0.08, (q.y - half) as f32);
+                        let at = Vec3::new(
+                            (q.x - half) as f32,
+                            crate::WALK_LEVEL as f32,
+                            (q.y - half) as f32,
+                        );
                         out[mesh].push((
                             p as u32,
                             at,

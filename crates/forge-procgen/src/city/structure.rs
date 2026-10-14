@@ -628,16 +628,12 @@ fn add_door(m: &Mass, storeys: &[Storey], walls: &[Wall], out: &mut [Opening], r
     }
 }
 
-/// The ground's level before a wall of mass `m`, metres: an avenue's raised pavement (0.30), a
-/// shared street's or a lane's surface (0.16), a court's garden (0.08). A door's sill and a
-/// shopfront's stand on it: at 0 they sank under the pavement (the owner: buildings need
-/// foundations at the pavement's or the ground's height).
-pub fn outside(m: &Mass, role: WallRole) -> f64 {
-    match role {
-        WallRole::Street if m.street_width >= 18.0 => 0.30,
-        WallRole::Street => 0.16,
-        _ => 0.08,
-    }
+/// The ground's level before a wall of mass `m`, metres: the walking level, everywhere people
+/// walk (D-061), pavements, streets and courts alike. A door's sill and a shopfront's stand on
+/// it: at 0 they sank under the pavement (the owner: buildings need foundations at the
+/// pavement's or the ground's height).
+pub fn outside(_m: &Mass, _role: WallRole) -> f64 {
+    super::ground::WALK_LEVEL
 }
 
 /// A mass's floor inside its walls: each edge moved in by its wall's `thickness`, dropping the

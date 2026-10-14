@@ -20,6 +20,15 @@ use crate::field::Field2;
 /// two avenues meet.
 pub const TRAM_RADIUS: f64 = 18.0;
 
+/// How far each of a line's two tracks lies from its centreline, metres.
+pub const TRACK_OFFSET: f64 = 1.6;
+/// Half a tram's width, metres.
+pub const TRAM_HALF: f64 = 1.35;
+/// How far a tram's body reaches from its line's centreline, metres: the outer track, half a
+/// car and half a metre for its sections' overhang on a curve and a margin. Kerbs keep clear of
+/// it, round a junction's corners too.
+pub const SWEPT: f64 = TRACK_OFFSET + TRAM_HALF + 0.5;
+
 /// A routed tram line.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TramLine {

@@ -28,6 +28,7 @@ pub mod example;
 pub mod facades;
 pub mod geom;
 pub mod graph;
+pub mod ground;
 pub mod lamps;
 pub mod map;
 pub mod mass;
@@ -330,28 +331,106 @@ impl Profile {
         }
     }
 
-    /// The width between the building lines, metres. A city without private cars needs little
-    /// carriageway (the owner, 2026-10-11: "a lot of wasted space for the road"): a tram
-    /// avenue's two tracks and bike strips take 12 m, an avenue's shared lanes 8 m.
-    pub fn width(self) -> f64 {
-        match self {
-            Self::TramAvenue => 24.0,
-            Self::Avenue => 18.0,
-            Self::Shared => 10.0,
-            Self::Pedestrian => 8.0,
-            Self::Path => 4.0,
+    /// Its cross-section from one building line to the other (D-061). A city without private
+    /// cars needs little carriageway (the owner, 2026-10-11: "a lot of wasted space for the
+    /// road"): a tram avenue's two tracks, with the taxis on them, and its bike strips take
+    /// 12 m, an avenue's two lanes 6 m.
+    pub fn section(self) -> &'static [Strip] {
+        use Lane::*;
+        const fn s(lane: Lane, width: f64) -> Strip {
+            Strip { lane, width }
         }
+        const TRAM_AVENUE: [Strip; 7] = [
+            s(Footway, 3.5),
+            s(Verge, 2.5),
+            s(Cycle, 1.75),
+            s(Tracks, 8.5),
+            s(Cycle, 1.75),
+            s(Verge, 2.5),
+            s(Footway, 3.5),
+        ];
+        const AVENUE: [Strip; 6] = [
+            s(Footway, 3.5),
+            s(Verge, 2.5),
+            s(Drive, 3.0),
+            s(Drive, 3.0),
+            s(Verge, 2.5),
+            s(Footway, 3.5),
+        ];
+        const SHARED: [Strip; 1] = [s(Shared, 10.0)];
+        const PEDESTRIAN: [Strip; 1] = [s(Footway, 8.0)];
+        const PATH: [Strip; 1] = [s(Footway, 4.0)];
+        match self {
+            Self::TramAvenue => &TRAM_AVENUE,
+            Self::Avenue => &AVENUE,
+            Self::Shared => &SHARED,
+            Self::Pedestrian => &PEDESTRIAN,
+            Self::Path => &PATH,
+        }
+    }
+
+    /// The width between the building lines, metres: its section's.
+    pub fn width(self) -> f64 {
+        self.section().iter().map(|s| s.width).sum()
+    }
+
+    /// Its carriageway's width, metres: the strips below the kerb; 0 where the whole street is
+    /// one walking surface.
+    pub fn carriageway(self) -> f64 {
+        self.section()
+            .iter()
+            .filter(|s| !s.lane.raised())
+            .map(|s| s.width)
+            .sum()
+    }
+
+    /// Whether it has a carriageway below its kerbs.
+    pub fn driven(self) -> bool {
+        self.carriageway() > 0.0
     }
 
     /// Each raised pavement's width, metres, room for a row of trees by the kerb and café
     /// terraces by the shops; 0 where the whole street is one shared surface.
     pub fn pavement(self) -> f64 {
-        match self {
-            Self::TramAvenue => 6.0,
-            Self::Avenue => 6.0,
-            Self::Shared | Self::Pedestrian | Self::Path => 0.0,
+        if self.driven() {
+            (self.width() - self.carriageway()) * 0.5
+        } else {
+            0.0
         }
     }
+}
+
+/// What a strip of a street's cross-section carries (D-061).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Lane {
+    /// People walking, at the walking level.
+    Footway,
+    /// Trees, lamps, benches and terraces by the kerb, at the walking level.
+    Verge,
+    /// Bikes, on the carriageway by the kerb.
+    Cycle,
+    /// Taxis and service vehicles.
+    Drive,
+    /// The trams' two tracks, the taxis on them.
+    Tracks,
+    /// Everyone at walking pace on one level (a woonerf).
+    Shared,
+}
+
+impl Lane {
+    /// Whether it lies at the walking level, over the kerb.
+    pub fn raised(self) -> bool {
+        matches!(self, Self::Footway | Self::Verge | Self::Shared)
+    }
+}
+
+/// A strip of a street's cross-section.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Strip {
+    /// What it carries.
+    pub lane: Lane,
+    /// Its width, metres.
+    pub width: f64,
 }
 
 /// A tram line to route: its waypoints in order (its ends and what it must pass through).
@@ -515,6 +594,8 @@ pub struct CityPlan {
     pub lots: Vec<Lot>,
     /// The tram lines.
     pub tram_lines: Vec<TramLine>,
+    /// The street ground: every surface of the streets once, with its level (D-061).
+    pub ground: ground::GroundMap,
     /// The boat crossings.
     pub crossings: Vec<BoatCrossing>,
     /// The landmarks.
@@ -767,6 +848,10 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
     let lots = blocks::subdivide(&blocks, &params.districts, seed.derive_str("lots").value());
     lap("courtyards and lots", &mut timings);
 
+    let tracks: Vec<Vec<DVec2>> = tram_lines.iter().map(|l| l.points.clone()).collect();
+    let ground = ground::GroundMap::build(&roads, site.size, ground::TILE, &tracks);
+    lap("street ground", &mut timings);
+
     let landmarks = params
         .landmarks
         .iter()
@@ -791,6 +876,7 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
         blocks,
         lots,
         tram_lines,
+        ground,
         crossings,
         landmarks,
         stats: PlanStats::default(),

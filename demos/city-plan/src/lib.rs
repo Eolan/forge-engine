@@ -4,7 +4,8 @@
 //! its sky, sun, ray-traced shadows, probes and anti-aliasing:
 //! - the ground from the site's mask: land, and water a little below it;
 //! - gardens and courtyards, parks and squares from the blocks;
-//! - streets as ribbons of their profile's width, tram tracks along the lines;
+//! - the street ground from the plan's map (D-061): carriageways, crossings, pavements and kerbs,
+//!   tram tracks along the lines;
 //! - every mass as walls and a roof: green, solar or terrace.
 //!
 //! The binary draws the engine's invented example city; a private sandbox hands its own plan to
@@ -27,7 +28,7 @@ use forge_procgen::city::mass::{Mass, Roof};
 use forge_procgen::city::shore::Shore;
 use forge_procgen::city::structure::{self, OpeningKind, Structure, WallRole};
 use forge_procgen::city::trees::Tree;
-use forge_procgen::city::{BlockUse, CityPlan, Site, geom};
+use forge_procgen::city::{BlockUse, CityPlan, Site, geom, ground};
 use forge_procgen::grammar::Grammar;
 use forge_render::MeshletSceneBuilder;
 use forge_render::textures;
@@ -53,6 +54,8 @@ const TRACK: u8 = 5;
 const WATER: u8 = 6;
 /// The quay walls' section on the ground.
 const QUAY: u8 = 7;
+/// The crossings' paint.
+const MARKING: u8 = 8;
 /// Mass sections: four wall tints, the shop band, three roofs.
 const WALL: u8 = 0;
 const TINTS: u8 = 4;
@@ -329,7 +332,8 @@ impl PlanScenario {
         let mut tiles = Tiles::new(size);
         let shore = ground_shore(site);
         ground_and_water(&mut tiles, &shore);
-        let levels = PavementLevels::new(plan);
+        // The blocks off the streets, at the walking level as the pavements round them (D-061):
+        // one level wherever people walk, no step at a gap between the buildings.
         for block in &plan.blocks {
             let section = match block.use_ {
                 BlockUse::Built => GARDEN,
@@ -338,10 +342,8 @@ impl PlanScenario {
                 // A quay's face holds its river: the land under it is the ground's paving.
                 BlockUse::Quay => continue,
             };
-            if block.use_ == BlockUse::Square {
-                square(&mut tiles, &levels, &block.polygon);
-            } else {
-                tiles.flat(&block.polygon, 0.08, section, false);
+            for polygon in ground::simple_polygons(&plan.ground.off_streets(&block.polygon)) {
+                tiles.flat(&polygon, WALK_LEVEL, section, false);
             }
             // A large square (1.5 ha or more): a lawn in its middle, 14 m inside its building
             // lines, its paved border under the trees and the benches.
@@ -384,7 +386,7 @@ impl PlanScenario {
                 &mut tiles,
                 &offset_line(&line, 1.2),
                 &offset_line(&line, -1.2),
-                0.12,
+                WALK_LEVEL + 0.01,
                 PAVING,
             );
         }
@@ -467,22 +469,7 @@ impl PlanScenario {
                 }
             }
         }
-        for e in &plan.roads.edges {
-            // Asphalt on the avenues' carriageways; stone on shared streets, lanes and paths.
-            // The avenues lie a centimetre over the rest: at a junction the two overlap, and
-            // at one height they fought.
-            let (section, height) = match e.profile {
-                forge_procgen::city::Profile::TramAvenue | forge_procgen::city::Profile::Avenue => {
-                    (STREET, AVENUE_LEVEL)
-                }
-                _ => (PAVING, 0.16),
-            };
-            ribbon(&mut tiles, &e.points, e.profile.width(), height, section);
-        }
-        {
-            pavements(&mut tiles, plan);
-            bends(&mut tiles, plan);
-        }
+        street_ground(&mut tiles, &plan.ground, site);
         bridges(&mut tiles, plan, site, &shore);
         // Two tracks a line, one each way, on the right of the way they run.
         for line in &plan.tram_lines {
@@ -512,7 +499,6 @@ impl PlanScenario {
         }
         // The buildings' structure (D-060): the kit dresses it, the walker walks against it.
         let structures = structure::structures(plan, masses);
-        aprons(&mut tiles, masses, &structures);
         head_houses(&mut tiles, masses, &structures);
         let kit = detail.map(|d| kit(&mut tiles, masses, &structures, &edges, &near, d));
         // The passages into the courts (D-060), and where to look into one: 10 m out on the
@@ -877,7 +863,7 @@ impl PlanScenario {
             let id = (kit_meshes.len() - 1) as u32;
             for (p, axis) in workouts {
                 let turn = glam::Quat::from_rotation_y((-axis.y).atan2(axis.x) as f32);
-                let at = Mat4::from_rotation_translation(turn, world(size, p, 0.09));
+                let at = Mat4::from_rotation_translation(turn, world(size, p, WALK_LEVEL + 0.01));
                 kit_instances.push((id, at, 0));
             }
         }
@@ -1067,32 +1053,13 @@ const SIGN_GROUP: u8 = 10;
 /// The kit's key for a terrace's mesh (no grammar symbol is this high).
 const TERRACE: u16 = u16::MAX;
 /// How far each of a line's two tracks lies from its centreline, metres.
-const TRACK_OFFSET: f64 = 1.6;
-/// The avenues' carriageways' level, metres: a centimetre over the shared streets' 0.16, so the
-/// two do not fight where they overlap at a junction.
-pub(crate) const AVENUE_LEVEL: f64 = 0.17;
-/// A dropped kerb's length, metres: 13 cm down over it, a slope of 1 in 12 (#263).
-pub(crate) const RAMP: f64 = 1.6;
-/// The paved corners' level at a junction and the dropped kerbs' foot: a centimetre over the
-/// avenues' carriageway, which runs under them.
-const CORNER_LEVEL: f64 = AVENUE_LEVEL + 0.01;
-/// How far a kerb keeps from a tram line's centreline, metres: the outer track, half a car's
-/// width and half a metre for its sections' overhang on a curve and a margin.
-const SWEPT: f64 = TRACK_OFFSET + 1.35 + 0.5;
-
-/// The radius a paved corner's kerb turns on at a junction, metres: a town street's.
-const KERB_RADIUS: f64 = 6.0;
-
-/// The distance between segments `p q` and `a b`, zero where they cross.
-fn segment_gap(p: DVec2, q: DVec2, a: DVec2, b: DVec2) -> f64 {
-    if geom::segment_intersection(p, q, a, b).is_some() {
-        return 0.0;
-    }
-    geom::distance_to_segment(p, a, b)
-        .min(geom::distance_to_segment(q, a, b))
-        .min(geom::distance_to_segment(a, p, q))
-        .min(geom::distance_to_segment(b, p, q))
-}
+const TRACK_OFFSET: f64 = forge_procgen::city::transit::TRACK_OFFSET;
+/// The street ground's two levels (D-061): the carriageways' and the one people walk on.
+pub(crate) use forge_procgen::city::ground::{ROAD_LEVEL, WALK_LEVEL};
+/// The squares' level: the walking level, as everywhere people walk.
+const SQUARE_LEVEL: f64 = WALK_LEVEL;
+/// A passage's paving through a building: a centimetre over the block's ground under it.
+const PASSAGE_FLOOR: f64 = WALK_LEVEL + 0.01;
 
 /// A tram stop's platform, metres: a tram's length and a little.
 pub(crate) const PLATFORM: f32 = 36.0;
@@ -1466,7 +1433,7 @@ fn kit(
                     meshes.push(forge_geom::furniture::terrace(w, variant));
                     (meshes.len() - 1) as u32
                 });
-                let level = if m.street_width >= 18.0 { 0.30 } else { 0.16 };
+                let level = WALK_LEVEL as f32;
                 let at = Mat4::from_cols(
                     x.extend(0.0),
                     y.extend(0.0),
@@ -1527,29 +1494,6 @@ fn kit(
         longest_run,
         seats,
         ms: start.elapsed().as_secs_f64() * 1e3,
-    }
-}
-
-/// How far a building's apron runs out from its street walls, metres.
-const APRON: f64 = 1.0;
-
-/// A paved apron along every street wall, [`APRON`] wide at the level before it (just under an
-/// avenue's pavement or a street's surface), so the facade meets the ground with no gap: the
-/// blocks' garden showed in a strip between the pavement and the buildings (the owner:
-/// buildings need foundations at the pavement's height, no gap).
-fn aprons(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure]) {
-    for (m, s) in masses.iter().zip(structures) {
-        for wall in s.walls.iter().filter(|w| w.role == WallRole::Street) {
-            let t = (wall.b - wall.a).normalize_or_zero();
-            let out = DVec2::new(t.y, -t.x) * APRON;
-            let level = structure::outside(m, WallRole::Street) - 0.005;
-            tiles.flat(
-                &[wall.a, wall.b, wall.b + out, wall.a + out],
-                level,
-                PAVING,
-                false,
-            );
-        }
     }
 }
 
@@ -1688,11 +1632,7 @@ fn parapet_lines(
             continue;
         }
         let half = e.profile.width() * 0.5;
-        let base = if e.profile.pavement() > 0.0 {
-            0.30
-        } else {
-            0.16
-        };
+        let base = WALK_LEVEL;
         // The rivers' segments near the bridge, with their half widths.
         let reach = e.length() + 50.0;
         let near: Vec<(DVec2, DVec2, f64)> = site
@@ -1913,7 +1853,12 @@ fn passages(tiles: &mut Tiles, s: &Structure) {
                 -Vec3::Y,
             ),
             (
-                [at(p0, 0.09), at(p1, 0.09), at(q1, 0.09), at(q0, 0.09)],
+                [
+                    at(p0, PASSAGE_FLOOR),
+                    at(p1, PASSAGE_FLOOR),
+                    at(q1, PASSAGE_FLOOR),
+                    at(q0, PASSAGE_FLOOR),
+                ],
                 Vec3::Y,
             ),
         ];
@@ -2401,6 +2346,10 @@ impl Scenario for PlanScenario {
                 (
                     "plan quay wall".into(),
                     colour([0.62, 0.58, 0.51], 10.0, 0.03),
+                ),
+                (
+                    "plan marking".into(),
+                    colour([0.80, 0.80, 0.77], 30.0, 0.05),
                 ),
             ],
         );
@@ -3492,642 +3441,144 @@ pub fn street_camera(plan: &CityPlan, near: DVec2) -> Option<FlyCamera> {
     })
 }
 
-/// Raised pavements with kerbs along the avenues (shared streets, lanes and paths are level
-/// surfaces): each side a strip of the profile's pavement 14 cm over the carriageway and a kerb
-/// face towards it, cut back at each end by the widest street meeting there.
-fn pavements(tiles: &mut Tiles, plan: &CityPlan) {
+/// The street ground from the plan's map (D-061), each surface once at its level:
+/// - carriageways and crossings at [`ROAD_LEVEL`], the crossings' stripes painted;
+/// - the walking ground at [`WALK_LEVEL`];
+/// - the dropped kerbs sloping between the two;
+/// - a kerb's face along each carriageway, down to a centimetre at a dropped kerb;
+/// - the ramps' sides;
+/// - a face down from the street ground's edge to the open ground beside it (none over the
+///   water, where the bridges' sides stand).
+fn street_ground(tiles: &mut Tiles, map: &ground::GroundMap, site: &Site) {
     let size = tiles.size;
-    let widest = widest_at(plan);
-    let cuts = cut_ends(plan);
-    for (k, e) in plan.roads.edges.iter().enumerate() {
-        let pavement = e.profile.pavement();
-        if pavement <= 0.0 {
-            continue;
-        }
-        // Cut back for a crossing only where streets cross; a footpath between the buildings
-        // does not stop the pavement (the owner: false crossroads).
-        let (ca, cb) = cuts[k];
-        let Some((start, end)) = raised(
-            e.length(),
-            ca,
-            cb,
-            widest[e.a as usize],
-            widest[e.b as usize],
-        ) else {
-            continue;
-        };
-        let steps = ((end - start) / 4.0).ceil() as usize;
-        let line: Vec<DVec2> = (0..=steps)
-            .map(|i| geom::point_at(&e.points, start + (end - start) * i as f64 / steps as f64))
-            .collect();
-        let half = e.profile.width() * 0.5;
-        for side in [1.0, -1.0] {
-            // A dropped kerb at each end: the pavement slopes down to the carriageway over
-            // `RAMP` metres, the whole width, where people cross at the junction (step-free,
-            // #263). An open end showed under the pavement.
-            let ends = [(ca, start, start - RAMP), (cb, end, end + RAMP)];
-            for (high, low) in ends.into_iter().filter(|e| e.0).map(|e| (e.1, e.2)) {
-                let (h, l) = (
-                    geom::point_at(&e.points, high),
-                    geom::point_at(&e.points, low),
-                );
-                let t = geom::tangent_at(&e.points, high);
-                let n = DVec2::new(-t.y, t.x) * side;
-                let tile = tiles.at(h);
-                let centre = tile.centre;
-                let p = |q: DVec2, y: f64| world(size, q, y) - centre;
-                let (hi_out, hi_in) = (h + n * half, h + n * (half - pavement));
-                let (lo_out, lo_in) = (l + n * half, l + n * (half - pavement));
-                let base = CORNER_LEVEL;
-                let quad = [
-                    p(lo_in, base),
-                    p(lo_out, base),
-                    p(hi_out, 0.30),
-                    p(hi_in, 0.30),
-                ];
-                let mut up = (quad[1] - quad[0])
-                    .cross(quad[2] - quad[0])
-                    .normalize_or_zero();
-                if up.y < 0.0 {
-                    up = -up;
-                }
-                for tri in [[0, 1, 2], [0, 2, 3]] {
-                    triangle(&mut tile.ground, tri.map(|k| quad[k]), up, PAVING);
-                }
-                // The ramp's side by the carriageway, from nothing to the kerb's height.
-                let towards = -n;
-                let normal = Vec3::new(towards.x as f32, 0.0, towards.y as f32);
-                triangle(
-                    &mut tile.ground,
-                    [
-                        p(lo_in, AVENUE_LEVEL),
-                        p(hi_in, AVENUE_LEVEL),
-                        p(hi_in, 0.30),
-                    ],
-                    normal,
-                    PAVING,
-                );
-                // Its back, from the blocks' ground up to the slope.
-                let away = Vec3::new(n.x as f32, 0.0, n.y as f32);
-                triangle(
-                    &mut tile.ground,
-                    [p(lo_out, 0.08), p(hi_out, 0.08), p(hi_out, 0.30)],
-                    away,
-                    PAVING,
-                );
-                triangle(
-                    &mut tile.ground,
-                    [p(lo_out, 0.08), p(hi_out, 0.30), p(lo_out, base)],
-                    away,
-                    PAVING,
-                );
-            }
-            let outer = offset_line(&line, side * half);
-            let inner = offset_line(&line, side * (half - pavement));
-            let (left, right) = if side > 0.0 {
-                (&outer, &inner)
-            } else {
-                (&inner, &outer)
-            };
-            strip(tiles, left, right, 0.30, PAVING);
-            // Its back, from the blocks' ground (0.08) up to the pavement, facing away from the
-            // road: by a square, a park or a gap between buildings the pavement's edge was open,
-            // a dark seam (the owner's view `1672.87,…`).
-            for w in outer.windows(2) {
-                let tile = tiles.at(w[0]);
-                let centre = tile.centre;
-                let (a, b) = (w[0], w[1]);
-                let t = (b - a).normalize_or_zero();
-                let away = DVec2::new(-t.y, t.x) * side;
-                let normal = Vec3::new(away.x as f32, 0.0, away.y as f32);
-                let p = |q: DVec2, h: f64| world(size, q, h) - centre;
-                triangle(
-                    &mut tile.ground,
-                    [p(a, 0.08), p(b, 0.08), p(b, 0.30)],
-                    normal,
-                    PAVING,
-                );
-                triangle(
-                    &mut tile.ground,
-                    [p(a, 0.08), p(b, 0.30), p(a, 0.30)],
-                    normal,
-                    PAVING,
-                );
-            }
-            // The kerb: from the carriageway's top up to the pavement's, facing the road.
-            for w in inner.windows(2) {
-                let tile = tiles.at(w[0]);
-                let centre = tile.centre;
-                let (a, b) = (w[0], w[1]);
-                let t = (b - a).normalize_or_zero();
-                let towards = DVec2::new(-t.y, t.x) * -side;
-                let normal = Vec3::new(towards.x as f32, 0.0, towards.y as f32);
-                let p = |q: DVec2, h: f64| world(size, q, h) - centre;
-                triangle(
-                    &mut tile.ground,
-                    [p(a, AVENUE_LEVEL), p(b, AVENUE_LEVEL), p(b, 0.30)],
-                    normal,
-                    PAVING,
-                );
-                triangle(
-                    &mut tile.ground,
-                    [p(a, AVENUE_LEVEL), p(b, 0.30), p(a, 0.30)],
-                    normal,
-                    PAVING,
-                );
-            }
-        }
-    }
-    for ring in corners(plan, &widest) {
-        tiles.flat(&ring, CORNER_LEVEL, PAVING, false);
-    }
-}
-
-/// The squares' level, metres: flush with the raised pavements round them (the owner: the
-/// whole place on one level, its slopes round it, not inside). They lay at the blocks' 0.08,
-/// a step down from the pavements with no face, and the two pavings' patterns met at a seam.
-const SQUARE_LEVEL: f64 = 0.30;
-/// The stone border round a square, metres: level by a raised pavement, else sloping 1 in 12
-/// from the street's level up to the square's (14 cm over 1.7 m).
-const SQUARE_BORDER: f64 = 1.7;
-
-/// The raised pavements' surface level at a point of the plan, from the avenues' profiles and
-/// their dropped kerbs, as [`pavements`] draws them.
-struct PavementLevels<'a> {
-    plan: &'a CityPlan,
-    widest: Vec<f64>,
-    cuts: Vec<(bool, bool)>,
-    grid: geom::PointGrid,
-}
-
-impl<'a> PavementLevels<'a> {
-    fn new(plan: &'a CityPlan) -> Self {
-        let mut grid = geom::PointGrid::new(plan.size, 50.0);
-        for (k, e) in plan.roads.edges.iter().enumerate() {
-            if e.profile.pavement() > 0.0 {
-                for p in geom::resample(&e.points, 8.0) {
-                    grid.insert(p, k as u32);
-                }
-            }
-        }
-        Self {
-            plan,
-            widest: widest_at(plan),
-            cuts: cut_ends(plan),
-            grid,
-        }
-    }
-
-    /// The level at `p`: a pavement's (0.30 raised, down its dropped kerbs to the corners'
-    /// level), or `None` off every raised pavement.
-    fn at(&self, p: DVec2) -> Option<f64> {
-        let mut best: Option<f64> = None;
-        self.grid.for_each_within(p, 30.0, |_, k| {
-            let e = &self.plan.roads.edges[k as usize];
-            let (half, pave) = (e.profile.width() * 0.5, e.profile.pavement());
-            // The nearest point of its centreline: how far along and how far off.
-            let (mut d, mut s, mut walked) = (f64::MAX, 0.0, 0.0);
-            for w in e.points.windows(2) {
-                let t = geom::closest_on_segment(p, w[0], w[1]);
-                let q = w[0] + (w[1] - w[0]) * t;
-                if q.distance(p) < d {
-                    d = q.distance(p);
-                    s = walked + w[0].distance(w[1]) * t;
-                }
-                walked += w[0].distance(w[1]);
-            }
-            if d < half - pave - 0.05 || d > half + 0.05 {
+    // A vertical face along `a b` from `low` to `high` at each end, facing `out`.
+    let face =
+        |tiles: &mut Tiles, a: DVec2, b: DVec2, low: [f64; 2], high: [f64; 2], out: DVec2| {
+            if (high[0] - low[0]).max(high[1] - low[1]) < 0.002 {
                 return;
             }
-            let (ca, cb) = self.cuts[k as usize];
-            let Some((start, end)) = raised(
-                walked,
-                ca,
-                cb,
-                self.widest[e.a as usize],
-                self.widest[e.b as usize],
-            ) else {
-                return;
-            };
-            // Raised between the ramps; down them to the corners' level at a crossing.
-            let level = if s >= start && s <= end {
-                0.30
-            } else {
-                let (from, edge) = if s < start { (start, ca) } else { (end, cb) };
-                if !edge {
-                    0.30
-                } else {
-                    let up = (1.0 - (s - from).abs() / RAMP).max(0.0);
-                    CORNER_LEVEL + (0.30 - CORNER_LEVEL) * up
-                }
-            };
-            best = Some(best.map_or(level, |b: f64| b.max(level)));
-        });
-        best
-    }
-}
-
-/// A square on [`SQUARE_LEVEL`]: its middle flat, and round it a stone border of
-/// [`SQUARE_BORDER`] from the level outside each point of its edge (a pavement's, else a
-/// street's 0.16) up to the square's, with a skirt below its edge so no gap shows.
-fn square(tiles: &mut Tiles, levels: &PavementLevels, polygon: &[DVec2]) {
-    let mut edge = polygon.to_vec();
-    if geom::signed_area(&edge) < 0.0 {
-        edge.reverse();
-    }
-    // Points every 4 m or less along the edge, so the border follows the dropped kerbs.
-    let mut closed = edge.clone();
-    closed.push(edge[0]);
-    let mut ring = geom::resample(&closed, 4.0);
-    ring.pop();
-    ring.dedup_by(|a, b| a.distance(*b) < 0.05);
-    let n = ring.len();
-    let size = tiles.size;
-    let inner = geom::inset(&ring, SQUARE_BORDER).filter(|q| q.len() == n);
-    // Outside each point: the mean of its two edges' outward normals (right of a positive ring).
-    let out = |i: usize| {
-        let (a, b, c) = (ring[(i + n - 1) % n], ring[i], ring[(i + 1) % n]);
-        let normal = |d: DVec2| {
-            let t = d.normalize_or_zero();
-            DVec2::new(t.y, -t.x)
-        };
-        (normal(b - a) + normal(c - b)).normalize_or_zero()
-    };
-    let low: Vec<f64> = (0..n)
-        .map(|i| {
-            levels
-                .at(ring[i] + out(i) * 1.0)
-                .unwrap_or(0.16)
-                .min(SQUARE_LEVEL)
-        })
-        .collect();
-    let Some(inner) = inner else {
-        tiles.flat(&ring, SQUARE_LEVEL, PAVING, false);
-        skirt(tiles, &ring, &vec![SQUARE_LEVEL; n], size);
-        return;
-    };
-    tiles.flat(&inner, SQUARE_LEVEL, PAVING, false);
-    for i in 0..n {
-        let j = (i + 1) % n;
-        let tile = tiles.at(ring[i]);
-        let centre = tile.centre;
-        let p = |q: DVec2, h: f64| world(size, q, h) - centre;
-        let quad = [
-            p(ring[i], low[i]),
-            p(ring[j], low[j]),
-            p(inner[j], SQUARE_LEVEL),
-            p(inner[i], SQUARE_LEVEL),
-        ];
-        for tri in [[0, 1, 2], [0, 2, 3]] {
-            let t = tri.map(|k| quad[k]);
-            let mut up = (t[1] - t[0]).cross(t[2] - t[0]).normalize_or_zero();
-            if up.y < 0.0 {
-                up = -up;
-            }
-            triangle(&mut tile.ground, t, up, QUAY);
-        }
-    }
-    skirt(tiles, &ring, &low, size);
-}
-
-/// A face down from each point of a positive ring's edge at `top[i]` to the ground, facing out.
-fn skirt(tiles: &mut Tiles, ring: &[DVec2], top: &[f64], size: f64) {
-    let n = ring.len();
-    for i in 0..n {
-        let j = (i + 1) % n;
-        let (a, b) = (ring[i], ring[j]);
-        let t = (b - a).normalize_or_zero();
-        let out = Vec3::new(t.y as f32, 0.0, -t.x as f32);
-        let tile = tiles.at(a);
-        let centre = tile.centre;
-        let p = |q: DVec2, h: f64| world(size, q, h) - centre;
-        triangle(
-            &mut tile.ground,
-            [p(a, 0.0), p(b, 0.0), p(b, top[j])],
-            out,
-            QUAY,
-        );
-        triangle(
-            &mut tile.ground,
-            [p(a, 0.0), p(b, top[j]), p(a, top[i])],
-            out,
-            QUAY,
-        );
-    }
-}
-
-/// Whether a street a vehicle drives (an avenue or a shared street) runs on through a node.
-fn driven(p: forge_procgen::city::Profile) -> bool {
-    use forge_procgen::city::Profile;
-    matches!(p, Profile::TramAvenue | Profile::Avenue | Profile::Shared)
-}
-
-/// Which nodes are crossings, where a pavement stops at a dropped kerb: three or more driven
-/// streets meeting, or a driven street's end; two meeting are a bend (`bends`). A footpath between
-/// the buildings joining a street is not one: its pavement runs on (the owner: false
-/// crossroads, pavements cut where the other side is grass).
-fn crossings(plan: &CityPlan) -> Vec<bool> {
-    driven_ways(plan).iter().map(|w| w.len() != 2).collect()
-}
-
-/// Whether each edge's pavement stops at a dropped kerb at its start and at its end: at a
-/// crossing, or where it is not one of the two ways running on through the node (a stub, a
-/// footpath's own end).
-fn cut_ends(plan: &CityPlan) -> Vec<(bool, bool)> {
-    let ways = driven_ways(plan);
-    let cut = |k: usize, node: u32| {
-        let w = &ways[node as usize];
-        w.len() != 2 || !w.iter().any(|&(e, _, _)| e == k)
-    };
-    plan.roads
-        .edges
-        .iter()
-        .enumerate()
-        .map(|(k, e)| (cut(k, e.a), cut(k, e.b)))
-        .collect()
-}
-
-/// Each node's driven ways out: the edge, its unit direction out of the node, and whether the
-/// node is its start. A short dead end (a stub under 40 m) is no street to cross.
-fn driven_ways(plan: &CityPlan) -> Vec<Vec<(usize, DVec2, bool)>> {
-    let mut degree = vec![0usize; plan.roads.nodes.len()];
-    for e in &plan.roads.edges {
-        degree[e.a as usize] += 1;
-        degree[e.b as usize] += 1;
-    }
-    let mut ways: Vec<Vec<(usize, DVec2, bool)>> = vec![Vec::new(); plan.roads.nodes.len()];
-    for (k, e) in plan.roads.edges.iter().enumerate() {
-        let n = e.points.len();
-        let stub = (degree[e.a as usize] == 1 || degree[e.b as usize] == 1) && e.length() < 40.0;
-        if n < 2 || !driven(e.profile) || stub {
-            continue;
-        }
-        ways[e.a as usize].push((k, (e.points[1] - e.points[0]).normalize_or_zero(), true));
-        ways[e.b as usize].push((
-            k,
-            (e.points[n - 2] - e.points[n - 1]).normalize_or_zero(),
-            false,
-        ));
-    }
-    ways
-}
-
-/// Where two avenues meet at a bend that is no crossing, the wedge on the bend's outside
-/// paved from one pavement's end to the other's, with its kerb: the pavement stopped there and
-/// the outside of the bend was bare (the owner: a missing pavement by a bridge).
-fn bends(tiles: &mut Tiles, plan: &CityPlan) {
-    let size = tiles.size;
-    for (node, ways) in driven_ways(plan).iter().enumerate() {
-        if ways.len() != 2 {
-            continue;
-        }
-        let o = plan.roads.nodes[node].pos;
-        let profile = |k: usize| plan.roads.edges[k].profile;
-        let ((ka, da, _), (kb, db, _)) = (ways[0], ways[1]);
-        let (pa, pb) = (profile(ka), profile(kb));
-        if pa.pavement() <= 0.0 || pb.pavement() <= 0.0 {
-            continue;
-        }
-        // The outside of the bend: the side away from where the two ways turn.
-        let turn = da + db;
-        if turn.length() < 0.05 {
-            continue;
-        }
-        let out = -turn.normalize();
-        let side = |d: DVec2| {
-            let n = DVec2::new(-d.y, d.x);
-            if n.dot(out) >= 0.0 { n } else { -n }
-        };
-        let (na, nb) = (side(da), side(db));
-        let (ha, hb) = (pa.width() * 0.5, pb.width() * 0.5);
-        let ring = [
-            o + na * (ha - pa.pavement()),
-            o + na * ha,
-            o + nb * hb,
-            o + nb * (hb - pb.pavement()),
-        ];
-        tiles.flat(&ring, 0.30, PAVING, false);
-        // Its kerb along the inner edge, facing the road.
-        let (a, b) = (ring[0], ring[3]);
-        let tile = tiles.at(a);
-        let centre = tile.centre;
-        let p = |q: DVec2, h: f64| world(size, q, h) - centre;
-        let towards = -out;
-        let normal = Vec3::new(towards.x as f32, 0.0, towards.y as f32);
-        triangle(
-            &mut tile.ground,
-            [p(a, AVENUE_LEVEL), p(b, AVENUE_LEVEL), p(b, 0.30)],
-            normal,
-            PAVING,
-        );
-        triangle(
-            &mut tile.ground,
-            [p(a, AVENUE_LEVEL), p(b, 0.30), p(a, 0.30)],
-            normal,
-            PAVING,
-        );
-    }
-}
-
-/// Where a pavement of an edge `length` long is raised: from past the dropped kerb at each
-/// end that is a crossing (the widest street there, a metre, the ramp) to the same at the other,
-/// or from end to end where neither is; `None` where too short.
-fn raised(length: f64, ca: bool, cb: bool, wa: f64, wb: f64) -> Option<(f64, f64)> {
-    let start = if ca { wa + 1.0 + RAMP } else { 0.0 };
-    let end = if cb { length - wb - 1.0 - RAMP } else { length };
-    (end - start >= 4.0).then_some((start, end))
-}
-
-/// Each avenue's half width at each junction: the widest street meeting there.
-fn widest_at(plan: &CityPlan) -> Vec<f64> {
-    let mut widest = vec![0.0_f64; plan.roads.nodes.len()];
-    for e in &plan.roads.edges {
-        let half = e.profile.width() * 0.5;
-        widest[e.a as usize] = widest[e.a as usize].max(half);
-        widest[e.b as usize] = widest[e.b as usize].max(half);
-    }
-    widest
-}
-
-/// The corners between two avenues' pavements at a junction, to pave flush at the dropped
-/// kerbs' foot ([`CORNER_LEVEL`]): from the end of one pavement round the building corner to the
-/// end of the other, and in along the kerbs to where they meet. They were asphalt, the
-/// carriageway running on to the buildings, and the pavements' ends stood out (the owner's
-/// second walk). Counter-clockwise rings.
-fn corners(plan: &CityPlan, widest: &[f64]) -> Vec<Vec<DVec2>> {
-    let mut rings = Vec::new();
-    let tracks: Vec<[DVec2; 2]> = plan
-        .tram_lines
-        .iter()
-        .flat_map(|l| l.points.windows(2).map(|w| [w[0], w[1]]))
-        .collect();
-    // Each node's ways out with pavements, and the driven streets without (a shared street,
-    // paved to its edges): the unit direction, the half width, the pavement. A corner between
-    // an avenue and a shared street stayed asphalt by a bridge (the owner).
-    let mut ways: Vec<Vec<(DVec2, f64, f64)>> = vec![Vec::new(); plan.roads.nodes.len()];
-    for e in &plan.roads.edges {
-        let n = e.points.len();
-        let pave = e.profile.pavement();
-        if n < 2 || (pave <= 0.0 && !driven(e.profile)) {
-            continue;
-        }
-        let half = e.profile.width() * 0.5;
-        ways[e.a as usize].push(((e.points[1] - e.points[0]).normalize_or_zero(), half, pave));
-        ways[e.b as usize].push((
-            (e.points[n - 2] - e.points[n - 1]).normalize_or_zero(),
-            half,
-            pave,
-        ));
-    }
-    let cross = |a: DVec2, b: DVec2| a.x * b.y - a.y * b.x;
-    // Where the lines `p + a t` and `q + b u` meet.
-    let meet = |p: DVec2, a: DVec2, q: DVec2, b: DVec2| {
-        let d = cross(a, b);
-        (d.abs() > 1e-6).then(|| p + a * (cross(q - p, b) / d))
-    };
-    let crossing = crossings(plan);
-    for (i, node) in plan.roads.nodes.iter().enumerate() {
-        // Only where streets cross: a bend's pavements run on round it (`bends`).
-        if !crossing[i] {
-            continue;
-        }
-        let out = &mut ways[i];
-        if out.len() < 2 {
-            continue;
-        }
-        out.sort_by(|a, b| a.0.y.atan2(a.0.x).total_cmp(&b.0.y.atan2(b.0.x)));
-        let s = widest[i] + 1.0;
-        for k in 0..out.len() {
-            let (mut a, mut b) = (out[k], out[(k + 1) % out.len()]);
-            if out.len() == 2 && k == 1 {
-                break;
-            }
-            // Two paved ways (a third street without pavements): the corner between them on
-            // the side under a half turn, the inside of the bend. Only the other side was
-            // tried, and the inside stayed asphalt by a bridge (the owner).
-            if out.len() == 2 && a.0.angle_to(b.0) < 0.0 {
-                (a, b) = (b, a);
-            }
-            let angle = a.0.angle_to(b.0);
-            if a.2 <= 0.0 && b.2 <= 0.0 {
-                continue;
-            }
-            // Two ways running on nearly straight through a junction, nothing between them on
-            // this side: the strip between their edges, the kerb running from one's to the
-            // other's. A bridge's pavement stopped short of the street it ran on into, asphalt
-            // between (the owner).
-            if angle >= 2.8 && out.len() >= 3 {
-                let o = node.pos;
-                let (na, nb) = (DVec2::new(-a.0.y, a.0.x), DVec2::new(b.0.y, -b.0.x));
-                // One without a pavement (a shared street, paved to its edges, which may bend
-                // away at once): the other's pavement band carried on through the node, over its
-                // own asphalt end, to past the shared street's edge.
-                let band = |p: (DVec2, f64, f64), n: DVec2, beyond: f64| {
-                    [
-                        o + p.0 * s + n * (p.1 - p.2),
-                        o + p.0 * s + n * p.1,
-                        o - p.0 * beyond + n * p.1,
-                        o - p.0 * beyond + n * (p.1 - p.2),
-                    ]
-                };
-                let quad = if b.2 <= 0.0 {
-                    band(a, na, b.1 + 1.0)
-                } else if a.2 <= 0.0 {
-                    band(b, nb, a.1 + 1.0)
-                } else {
-                    [
-                        o + a.0 * s + na * (a.1 - a.2),
-                        o + a.0 * s + na * a.1,
-                        o + b.0 * s + nb * b.1,
-                        o + b.0 * s + nb * (b.1 - b.2),
-                    ]
-                };
-                let mut ring = geom::clean(&quad, 0.01);
-                if ring.len() >= 3 {
-                    if geom::signed_area(&ring) < 0.0 {
-                        ring.reverse();
-                    }
-                    rings.push(ring);
-                }
-                continue;
-            }
-            if !(0.6..2.8).contains(&angle) {
-                continue;
-            }
-            // Across each way, towards the other.
-            let side = |d: DVec2, other: DVec2| {
-                let n = DVec2::new(-d.y, d.x);
-                if n.dot(other) < 0.0 { -n } else { n }
-            };
-            let (na, nb) = (side(a.0, b.0), side(b.0, a.0));
-            let o = node.pos;
-            let (Some(kerb), Some(wall)) = (
-                meet(o + na * (a.1 - a.2), a.0, o + nb * (b.1 - b.2), b.0),
-                meet(o + na * a.1, a.0, o + nb * b.1, b.0),
-            ) else {
-                continue;
-            };
-            let (a_in, b_in) = (
-                o + a.0 * s + na * (a.1 - a.2),
-                o + b.0 * s + nb * (b.1 - b.2),
+            let tile = tiles.at(a);
+            let centre = tile.centre;
+            let p = |q: DVec2, h: f64| world(size, q, h) - centre;
+            let normal = Vec3::new(out.x as f32, 0.0, out.y as f32);
+            triangle(
+                &mut tile.ground,
+                [p(a, low[0]), p(b, low[1]), p(b, high[1])],
+                normal,
+                PAVING,
             );
-            // Where a tram turns here, the corner's kerb is cut back towards the building to
-            // clear its swept path, as streets are round a tram curve (the owner: the tracks
-            // should use the junction, not the pavement).
-            let near: Vec<[DVec2; 2]> = tracks
+            triangle(
+                &mut tile.ground,
+                [p(a, low[0]), p(b, high[1]), p(a, high[0])],
+                normal,
+                PAVING,
+            );
+        };
+    for t in &map.tiles {
+        for (shapes, level, section) in [
+            (&t.carriageway, ROAD_LEVEL, STREET),
+            (&t.crossings, ROAD_LEVEL, STREET),
+            (&t.stripes, ROAD_LEVEL, MARKING),
+            (&t.walk, WALK_LEVEL, PAVING),
+        ] {
+            for polygon in ground::simple_polygons(shapes) {
+                tiles.flat(&polygon, level, section, false);
+            }
+        }
+        for (r, shapes) in &t.ramps {
+            let ramp = map.ramps[*r as usize];
+            for polygon in ground::simple_polygons(shapes) {
+                let tile = tiles.at(polygon[0]);
+                let centre = tile.centre;
+                for tri in geom::triangulate(&polygon) {
+                    let p = tri.map(|i| world(size, polygon[i], ramp.level(polygon[i])) - centre);
+                    let mut up = (p[1] - p[0]).cross(p[2] - p[0]).normalize_or_zero();
+                    if up.y < 0.0 {
+                        up = -up;
+                    }
+                    triangle(&mut tile.ground, p, up, PAVING);
+                }
+            }
+            // Its sides, from its slope up to the pavement, facing into it.
+            for side in [-1.0, 1.0] {
+                let (a, b) = (
+                    ramp.kerb + ramp.along * (ramp.half * side),
+                    ramp.kerb + ramp.along * (ramp.half * side) + ramp.inward * ground::RAMP,
+                );
+                if !geom::contains(
+                    &[
+                        t.min,
+                        DVec2::new(t.max.x, t.min.y),
+                        t.max,
+                        DVec2::new(t.min.x, t.max.y),
+                    ],
+                    a,
+                ) {
+                    continue;
+                }
+                face(
+                    tiles,
+                    a,
+                    b,
+                    [ramp.level(a), ramp.level(b)],
+                    [WALK_LEVEL; 2],
+                    ramp.along * -side,
+                );
+            }
+        }
+        // The ramps near this tile, for the kerbs' height along them.
+        let ramps: Vec<ground::Ramp> = t
+            .ramps
+            .iter()
+            .map(|(r, _)| map.ramps[*r as usize])
+            .collect();
+        let top = |q: DVec2| {
+            ramps
                 .iter()
-                .filter(|w| geom::distance_to_segment(o, w[0], w[1]) < s + a.1.max(b.1) + 4.0)
-                .copied()
-                .collect();
-            let clear = |k: DVec2| {
-                near.iter().all(|w| {
-                    [(a_in, k), (k, b_in)]
-                        .iter()
-                        .all(|&(p, q)| segment_gap(p, q, w[0], w[1]) >= SWEPT)
-                })
-            };
-            let Some((cut, kerb)) = (0..=8)
-                .map(|t| (t > 0, kerb.lerp(wall, t as f64 / 8.0)))
-                .find(|&(_, k)| clear(k))
-            else {
-                continue;
-            };
-            let corner = [
-                a_in,
-                o + a.0 * s + na * a.1,
-                wall,
-                o + b.0 * s + nb * b.1,
-                b_in,
-                kerb,
-            ];
-            // A sound corner only: its points within the junction's reach.
-            if corner
-                .iter()
-                .any(|p| p.distance(o) > s + a.1.max(b.1) + 2.0)
-            {
+                .filter(|r| r.contains(q))
+                .map(|r| r.level(q))
+                .fold(WALK_LEVEL, f64::min)
+        };
+        for &[a, b] in &t.kerbs {
+            let d = b - a;
+            let length = d.length();
+            if length < 1e-4 {
                 continue;
             }
-            // The kerb turns the corner on an arc of `KERB_RADIUS` (shorter where its sides are
-            // short), as kerbs do, unless a tram's path cut it back: it came to a point (the
-            // owner: some things need rounding).
-            let mut ring = corner[1..4].to_vec();
-            if cut {
-                ring.extend([b_in, kerb, a_in]);
+            // The walking side is on the kerb's right; its face looks the other way, at the road.
+            let walk = DVec2::new(d.y, -d.x) / length;
+            let near_ramp = ramps
+                .iter()
+                .any(|r| geom::distance_to_segment(r.kerb, a, b) < r.half + 0.5);
+            let steps = if near_ramp {
+                (length / 0.5).ceil() as usize
             } else {
-                ring.extend(geom::fillet(&[b_in, kerb, a_in], KERB_RADIUS, 0.75));
+                1
+            };
+            for k in 0..steps {
+                let (p, q) = (
+                    a + d * (k as f64 / steps as f64),
+                    a + d * ((k + 1) as f64 / steps as f64),
+                );
+                let (hp, hq) = (top(p + walk * 0.05), top(q + walk * 0.05));
+                face(tiles, p, q, [ROAD_LEVEL; 2], [hp, hq], -walk);
             }
-            // A side without a pavement repeats its point: the ring without it.
-            let mut ring = geom::clean(&ring, 0.01);
-            if ring.len() < 3 {
+        }
+        for &[a, b] in &t.outline {
+            let d = b - a;
+            let length = d.length();
+            if length < 1e-4 {
                 continue;
             }
-            if geom::signed_area(&ring) < 0.0 {
-                ring.reverse();
+            let out = DVec2::new(d.y, -d.x) / length;
+            let mid = (a + b) * 0.5;
+            if site.water_at(mid + out * 0.5) != forge_procgen::city::LAND {
+                continue;
             }
-            rings.push(ring);
+            let level = map.level_at(mid - out * 0.05);
+            face(tiles, a, b, [0.0; 2], [level; 2], out);
         }
     }
-    rings
 }
 
 /// A street lamp 8 m tall: a hexagonal pole and an arm reaching 1.4 m along −z over the road, and
@@ -4256,34 +3707,4 @@ fn lamp_model(double: bool) -> TriMesh {
         triangle(&mut mesh, [lens[0], lens[2], lens[3]], -Vec3::Y, 1);
     }
     mesh
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use forge_procgen::city::{example, plan};
-
-    #[test]
-    fn paved_corners_keep_clear_of_the_trams() {
-        let size = 4000.0;
-        let city = plan(&example::site(size, 10.0), &example::params(size));
-        assert!(!city.tram_lines.is_empty());
-        let rings = corners(&city, &widest_at(&city));
-        assert!(rings.len() > 100, "{} corners", rings.len());
-        for ring in &rings {
-            for (i, &p) in ring.iter().enumerate() {
-                let q = ring[(i + 1) % ring.len()];
-                for line in &city.tram_lines {
-                    for w in line.points.windows(2) {
-                        // The ring's sides along the pavements' ends and the buildings may lie
-                        // on a tram avenue's kerb line; none crosses into the swept path.
-                        assert!(
-                            segment_gap(p, q, w[0], w[1]) > TRACK_OFFSET + 1.35,
-                            "a corner's side {p} {q} runs over a track"
-                        );
-                    }
-                }
-            }
-        }
-    }
 }

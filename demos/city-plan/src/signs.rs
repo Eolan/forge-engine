@@ -7,7 +7,7 @@ use forge_procgen::city::CityPlan;
 use forge_render::textures::TextureData;
 use glam::{DVec2, Vec3};
 
-use crate::RAMP;
+use forge_procgen::city::ground::RAMP;
 
 /// The names' atlas: this many rows, a name each.
 pub const ROWS: usize = 16;

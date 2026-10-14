@@ -72,6 +72,7 @@ This is a promise of intent, not a licence term.
 | [JoltC](https://github.com/SecondHalfGames/JoltC) | Second Half Games (Lucien Greathouse and contributors) | the model for `forge-physics`' C layer: opaque shape handles, the layer set-up | MIT OR Apache-2.0 |
 | [gltf](https://github.com/gltf-rs/gltf) | David Harvey-Macaulay and the gltf-rs contributors | reading glTF 2.0 models (`forge_geom::model`, #138) | MIT OR Apache-2.0 |
 | [zune-jpeg](https://github.com/etemesi254/zune-image) | Caleb Etemesi | the JPEG decoder under `image`, for the JPEG images models embed (D-047) | MIT OR Apache-2.0 OR Zlib |
+| [i_overlay](https://github.com/iShape-Rust/iOverlay) | Nail Sharipov and the iShape contributors | polygon booleans and strokes for the city's street ground (`forge_procgen::city::ground`, D-061): the streets' union, carriageways, crossings and blocks, in its integer mode | MIT OR Apache-2.0 |
 | [Blender](https://www.blender.org/) | the Blender Foundation and its contributors | a tool, not in the build: `assets/blender/boat.py`, `car.py`, `plane.py` and `ship.py` model the lab's boat, car, aeroplane and spaceship in it and export them as glTF (#138, #140, #141, #150); `skinned_creatures.py` the mannequin and the dog as skinned bodies with their armatures, bone-heat weights and clips (#143, #165), unwrapped by its smart UV projection and their textures baked by Cycles (#166) | GPL-2.0-or-later (the tool; what it makes is ours) |
 
 ## Assets

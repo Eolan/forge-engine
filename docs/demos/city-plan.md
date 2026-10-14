@@ -541,32 +541,32 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
   landmarks or built districts' centres (200 m to 4 km, at least 35° apart). Each carries its
   name in white, read from its left end on both faces, from one 1024² atlas of names drawn
   with the engine's JetBrains Mono (16 rows). 23 in the sandbox's kilometre round the harbour.
-- **paved corners:** at a junction, the corner between two avenues' pavements is paved flush
-  (1 cm over the carriageway) from one pavement's end round the building corner to the other's,
-  and in along the kerbs; it was asphalt to the buildings. Where a tram turns, the corner's kerb
-  point is drawn back towards the building until the swept path is clear (the outer track, half
-  a car and 0.5 m, 3.45 m from the line), or the corner is left out: the inner track crossed a
-  corner's tip (the owner: the tracks should use the junction, not the pavement). Otherwise the
-  kerb turns the corner on a 6 m arc, shorter where its sides are short (`geom::fillet`): it came
-  to a point (the owner: some things need rounding). A shared street, paved to its edges, counts
-  as a way: the corner between it and an avenue is paved to its edge. Where only two ways have
-  pavements, the corner on their side under a half turn is paved; the other side was tried and
-  the inside stayed asphalt. Two ways running on nearly straight through a junction get the
-  strip between their edges, or, where one has no pavement, the other's pavement carried on
-  through the node: a bridge's pavement stopped short of the street it ran on into, asphalt
-  between (the owner's two rectangles).
-- **dropped kerbs:** each raised pavement slopes down to the paved corner over 1.6 m at both
-  ends, its whole width, where people cross at the junction (1 in 12, step-free: #263). The
-  open ends showed under the pavement. Only real crossings cut a pavement: three or more
-  driven streets meeting, two turning by more than 30°, or a driven street's end. A footpath
-  between the buildings, or a dead end under 40 m, joins a street without stopping its
-  pavement (the owner: false crossroads, pavements cut where the other side is grass). Where
-  two avenues meet at a bend, the wedge on its outside is paved from one pavement to the other
-  with its kerb; it was bare.
-- **the buildings' feet:** a paved apron 1 m wide runs along every street wall at the level
-  before it, and the doors' and shopfronts' sills sit at that level (0.30 on an avenue, 0.16 on
-  a street, 0.08 in a court: `structure::outside`). A strip of the blocks' ground showed between
-  the pavement and the facades (the owner: buildings need foundations at the pavement's height).
+- **the street ground as one map** (D-061, `city::ground`; the owner, 2026-10-14: "a lot of
+  bugs" in the roads and pavements). Every surface of the streets is drawn once, at one level.
+  The old pieces were stacked a centimetre apart (0.16, 0.17, 0.18, 0.30) and patched case by
+  case: paved corners, swaps, straight bands, bend wedges, square borders, aprons.
+  - **Sections:** a street's cross-section is data (`Profile::section`: footway, verge, cycle,
+    drive, tracks, shared), so its width, carriageway and pavements are sums of its strips.
+  - **Streets:** each street is its centreline stroked to its width, and its carriageway to the
+    carriageway's width (`i_overlay`, integer mode). Arms end flat at their junctions, a mitre
+    fills a reflex gap, and dead ends are round. The union is the street ground.
+  - **Corners:** between two driven arms the kerb turns on 6 m, shorter where an arm is short.
+    Where a tram turns, the carriageway takes in its swept path (the outer track, half a car and
+    0.5 m: `transit::SWEPT`), so the kerb keeps clear of it.
+  - **Crossings:** a zebra 4 m wide on each driven arm of every junction, a metre past its corner
+    or past a pedestrian way's mouth. A dropped kerb at each end slopes 1.6 m (1 in 12, #263) down
+    to a 1 cm lip: 862 crossings and 1 724 dropped kerbs in the example.
+  - **One walking level** (0.30): pavements, shared and pedestrian streets, paths, squares,
+    gardens and courts. Only the avenues' carriageways lie lower (0.16, a 14 cm kerb). A
+    pedestrian way meeting an avenue runs on across its pavement (a continuous footway), and
+    the doors' and shopfronts' sills all stand at the walking level (`structure::outside`).
+  - **Faces:** a kerb's face along each carriageway, following a dropped kerb's slope, the
+    ramps' sides, and a face down from the street ground's edge to the open ground (none over
+    the water, where the bridges' sides stand).
+  - **Blocks:** what is left of each face off the streets (`GroundMap::off_streets`).
+  - **Checks:** `the_street_ground_is_one_map_with_every_surface_once` (the example's 0.403 km² of
+    carriageway and 2.047 km² of walking ground, none of it both), and the crossroads' and
+    pedestrian street's unit tests in `city::ground`. The map takes 0.1 s for the example.
 - **the tiles' LOD** weighs normals (`CookOptions { normal_weight: 2.0 }`): at the coarser levels
   a pavement's kerb and back faces folded into its top, long tilted triangles where two paving
   patterns seemed to blend on the pavements and the bridges (the owner guessed an LOD issue).
@@ -577,13 +577,6 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
   strip or the smooth shore's open water, tested every metre) and a metre on to meet the bank's
   wall. Cut by the site's cells, they first ran on over the land and cut the promenades, then
   stopped short of the drawn banks (the owner: both too short).
-- **squares on one level:** a square lies flush with the raised pavements round it (0.30), its
-  fountain, benches, chess tables, lawn and landmark with it. Round it runs a 1.7 m stone
-  border, level beside a raised pavement and sloping 1 in 12 down to a shared street or a
-  dropped kerb, so its slopes are round it, not inside it (the owner). A skirt below the edge
-  leaves no gap. The squares lay at the blocks' 0.08, a step down from the pavement with no
-  face, and the two pavings' patterns met at a seam (the owner's view `1672.87,…`). Gardens and
-  parks keep 0.08, with the pavement's back face down to them.
 - **street-workout parks:** one in each park of a hectare or more, 14 by 10 m on a rubber
   floor:
   - pull-up bars at three heights, monkey bars, parallel bars, a dip station;
