@@ -221,7 +221,8 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
         .into_iter()
         // Cleaned first: near-repeated points made false corners that used up its cuts.
         .map(|p| blunt(&geom::clean(&p, 0.01)))
-        .filter(|p| p.len() >= 3 && geom::signed_area(p) >= 20.0)
+        // A cut wedge can leave a sliver no room fits in: none.
+        .filter(|p| p.len() >= 3 && geom::signed_area(p) >= 20.0 && thickness(p) >= MIN_THICKNESS)
         // No repeated points or straight runs: ear clipping stalled on them (a roof lost half
         // its triangles).
         .map(|p| geom::clean(&p, 0.01))

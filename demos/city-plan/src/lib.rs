@@ -331,6 +331,7 @@ impl PlanScenario {
         let size = plan.size;
         let mut tiles = Tiles::new(size);
         let shore = ground_shore(site);
+        // The reserves' land as scrub and grass, the rest as the open ground's gravel.
         ground_and_water(&mut tiles, &shore);
         // The blocks off the streets, at the walking level as the pavements round them (D-061):
         // one level wherever people walk, no step at a gap between the buildings.
@@ -392,12 +393,11 @@ impl PlanScenario {
         }
         // The quays' land as lawns, cell by cell (their faces hold water), under the trees.
         for block in plan.blocks.iter().filter(|b| b.use_ == BlockUse::Quay) {
-            lawn(&mut tiles, &shore, &block.polygon);
+            lawn(&mut tiles, &shore, &plan.ground, &block.polygon);
         }
         // The rivers as smooth strips at the water's level, the sea's: the cells' staircase
-        // would show along the quays. Along each bank a stone wall down to the water and a stone
-        // promenade `PROMENADE` wide over the cells by the river (where a street runs by the
-        // river the street lies over it).
+        // would show along the quays. Their promenades are walking ground in the street map
+        // (D-061), the banks' walls and balustrades along its edge over the water ([`bridges`]).
         for river in &site.rivers {
             let line = geom::resample(&river.centreline, 15.0);
             let half = river.width * 0.5;
@@ -408,66 +408,6 @@ impl PlanScenario {
                 WATER_LEVEL,
                 WATER,
             );
-            // On land only: where the river runs into the harbour's water, the promenade
-            // floated over it, the water dark under it (the owner's second walk).
-            for side in [1.0, -1.0] {
-                let (outer, inner) = (
-                    offset_line(&line, side * (half + PROMENADE)),
-                    offset_line(&line, side * half),
-                );
-                let n = outer.len().min(inner.len()).saturating_sub(1);
-                // Nor over the smooth shore's open water (a slab of promenade floated over the
-                // harbour, the owner); its land side and middle only, by the smooth shore the ground follows: the
-                // river's edge lies on the shore, half wet, and the sea's cells reach past the
-                // drawn shore; both dropped the promenade by a bridge (the owner).
-                let mut on_land: Vec<bool> = (0..n)
-                    .map(|i| {
-                        let middle = (outer[i] + outer[i + 1] + inner[i] + inner[i + 1]) * 0.25;
-                        ![outer[i], outer[i + 1], middle]
-                            .iter()
-                            .any(|&p| shore.parts(p).0 >= 0.5)
-                    })
-                    .collect();
-                // And in runs of four quads (60 m) or more: a short one stood alone by a lawn's
-                // bank, a slab over the water (the owner).
-                let mut i = 0;
-                while i < n {
-                    let from = i;
-                    while i < n && on_land[i] == on_land[from] {
-                        i += 1;
-                    }
-                    if on_land[from] && i - from < 4 {
-                        on_land[from..i].fill(false);
-                    }
-                }
-                for i in 0..n {
-                    if !on_land[i] {
-                        continue;
-                    }
-                    let quad = [outer[i], outer[i + 1], inner[i + 1], inner[i]];
-                    tiles.flat(&quad, 0.05, PAVING, false);
-                    // The bank: from the promenade down past the water, facing the river.
-                    let (a, b) = (inner[i], inner[i + 1]);
-                    let t = (b - a).normalize_or_zero();
-                    let towards = DVec2::new(-t.y, t.x) * -side;
-                    let tile = tiles.at(a);
-                    let centre = tile.centre;
-                    let p = |q: DVec2, h: f64| world(size, q, h) - centre;
-                    let normal = Vec3::new(towards.x as f32, 0.0, towards.y as f32);
-                    triangle(
-                        &mut tile.ground,
-                        [p(a, 0.05), p(b, 0.05), p(b, WATER_LEVEL - 0.6)],
-                        normal,
-                        QUAY,
-                    );
-                    triangle(
-                        &mut tile.ground,
-                        [p(a, 0.05), p(b, WATER_LEVEL - 0.6), p(a, WATER_LEVEL - 0.6)],
-                        normal,
-                        QUAY,
-                    );
-                }
-            }
         }
         street_ground(&mut tiles, &plan.ground, site);
         bridges(&mut tiles, plan, site, &shore);
@@ -1652,6 +1592,8 @@ fn parapet_lines(
                 .map(move |w| (w[0], w[1], r.width * 0.5))
         })
         .collect();
+    // The water as drawn: the smooth shore's or a river's strip, which no block covers now (a park
+    // lay over a river's strip by the mouth, and a wall stood between it and an avenue, the owner).
     let wet = |p: DVec2| {
         shore.parts(p).0 >= 0.5
             || rivers
@@ -1887,9 +1829,6 @@ fn passages(tiles: &mut Tiles, s: &Structure) {
 /// meet (the river lay over the ground and the harbour 0.6 m under it, a step between the two
 /// waters: the owner's second walk).
 const WATER_LEVEL: f64 = -0.6;
-/// The rivers' promenades' width along each bank, metres: wide enough to cover the cells by the
-/// river that are drawn as water ([`ground_shore`]).
-const PROMENADE: f64 = 13.0;
 
 /// The site's shore for the ground: the rivers' beds widened by three quarters of a cell each
 /// side, drawn as water under the rivers' smooth strips and their promenades, so no land juts
@@ -2308,7 +2247,6 @@ impl Scenario for PlanScenario {
                 materials.textures.add(&normal)?,
             ))
         };
-        let gravel = ground(textures::gravel(31, 512))?;
         let grass = ground(textures::grass(32, 512))?;
         let paving = ground(textures::paving(33, 1024))?;
         let asphalt = ground(textures::asphalt(34, 1024))?;
@@ -2328,7 +2266,9 @@ impl Scenario for PlanScenario {
             vec![
                 (
                     "plan ground".into(),
-                    textured(colour([1.9, 1.8, 1.65], 12.0, 0.03), gravel, 1.25, true),
+                    // The open land: a drier, olive grass than the parks', the garrigue's (it was
+                    // gravel, the owner took it for paving).
+                    textured(colour([2.4, 2.5, 1.7], 6.0, 0.02), grass, 5.0, true),
                 ),
                 (
                     "plan garden".into(),
@@ -3234,7 +3174,18 @@ impl Running for PlanRunning {
 
 /// The land of a polygon as lawn, 3 cm over the ground: runs of the grid's dry squares whose
 /// middles lie inside it along each row, and the dry pieces of the squares the shore crosses.
-fn lawn(tiles: &mut Tiles, shore: &Shore, polygon: &[DVec2]) {
+fn lawn(tiles: &mut Tiles, shore: &Shore, map: &ground::GroundMap, polygon: &[DVec2]) {
+    // At the walking level, cut round the streets and promenades where they meet: lawns at
+    // 3 cm met the quays' walks with a step (the owner: think wheelchair).
+    let grass = |tiles: &mut Tiles, piece: &[DVec2]| {
+        if map.touches(piece) {
+            for p in ground::simple_polygons(&map.off_streets(piece)) {
+                tiles.flat(&p, WALK_LEVEL, PARK, false);
+            }
+        } else {
+            tiles.flat(piece, WALK_LEVEL, PARK, false);
+        }
+    };
     let s = shore.spacing();
     let n = shore.size() - 1;
     let (lo, hi) = polygon.iter().fold(
@@ -3250,7 +3201,7 @@ fn lawn(tiles: &mut Tiles, shore: &Shore, polygon: &[DVec2]) {
             if shore.whole(x, y).is_none() {
                 for piece in shore.square(x, y).dry {
                     if geom::contains(polygon, geom::centroid(&piece)) {
-                        tiles.flat(&piece, 0.03, PARK, false);
+                        grass(tiles, &piece);
                     }
                 }
                 x += 1;
@@ -3274,7 +3225,7 @@ fn lawn(tiles: &mut Tiles, shore: &Shore, polygon: &[DVec2]) {
                 DVec2::new(b, d),
                 DVec2::new(a, d),
             ];
-            tiles.flat(&quad, 0.03, PARK, false);
+            grass(tiles, &quad);
         }
     }
 }

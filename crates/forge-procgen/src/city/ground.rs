@@ -33,6 +33,8 @@ pub const WALK_LEVEL: f64 = 0.30;
 /// A dropped kerb's lip over the carriageway, metres: low enough for a wheelchair, high enough
 /// for a cane to find.
 pub const DROPPED: f64 = 0.01;
+/// A river promenade's width from the water's edge, metres.
+pub const PROMENADE: f64 = 13.0;
 /// The radius a kerb turns on at a corner between two driven streets, metres: a town street's.
 pub const KERB_RADIUS: f64 = 6.0;
 /// A dropped kerb's depth into the pavement, metres: 13 cm down over it, 1 in 12 (#263).
@@ -174,6 +176,8 @@ pub struct GroundMap {
     pub ramps: Vec<Ramp>,
     /// Each street's area, stroked to its width.
     streets: Vec<Piece>,
+    /// The rivers' water, as drawn: no ground over it.
+    water: Vec<Piece>,
 }
 
 /// A polygon with its bounding box.
@@ -412,7 +416,14 @@ impl GroundMap {
     /// The map of `graph`'s streets over a frame of side `size`, in tiles of side `tile`; the
     /// carriageways widened to clear the trams' swept paths along `trams`' lines, round the
     /// junctions' corners too.
-    pub fn build(graph: &RoadGraph, size: f64, tile: f64, trams: &[Vec<DVec2>]) -> Self {
+    pub fn build(
+        graph: &RoadGraph,
+        size: f64,
+        tile: f64,
+        trams: &[Vec<DVec2>],
+        walks: &[(Vec<DVec2>, f64)],
+        rivers: &[(Vec<DVec2>, f64)],
+    ) -> Self {
         let arms = arms(graph);
         let driven_degree = |node: u32| arms[node as usize].iter().filter(|a| a.kerb > 0.0).count();
         let degree = |node: u32| arms[node as usize].len();
@@ -435,6 +446,15 @@ impl GroundMap {
                 ));
             }
         }
+        // The walks beside the streets (the rivers' promenades): walking ground, no carriageway.
+        for (line, width) in walks.iter().filter(|w| w.0.len() >= 2) {
+            streets.push(stroke(line, *width, false, false));
+        }
+        let water: Vec<Piece> = rivers
+            .iter()
+            .filter(|r| r.0.len() >= 2)
+            .map(|(line, width)| stroke(line, *width, false, false))
+            .collect();
         for line in trams.iter().filter(|l| l.len() >= 2) {
             carriageways.push(stroke(line, 2.0 * super::transit::SWEPT, false, false));
         }
@@ -615,6 +635,7 @@ impl GroundMap {
             crossings,
             ramps,
             streets,
+            water,
         }
     }
 
@@ -655,15 +676,23 @@ impl GroundMap {
         }
     }
 
-    /// What of `polygon` lies off the streets (a block's ground).
+    /// Whether any street, walk or river's water meets the box round `polygon`: if none, it lies
+    /// off them whole.
+    pub fn touches(&self, polygon: &[DVec2]) -> bool {
+        let piece = Piece::from_points(polygon);
+        self.streets
+            .iter()
+            .chain(&self.water)
+            .any(|p| p.meets(piece.min, piece.max))
+    }
+
+    /// What of `polygon` lies off the streets and the rivers' water (a block's ground).
     pub fn off_streets(&self, polygon: &[DVec2]) -> Shapes {
         let piece = Piece::from_points(polygon);
         let street = union(&self.streets, piece.min, piece.max);
-        to_shapes(boolean(
-            &vec![piece.contours],
-            &street,
-            OverlayRule::Difference,
-        ))
+        let water = union(&self.water, piece.min, piece.max);
+        let off = boolean(&vec![piece.contours], &street, OverlayRule::Difference);
+        to_shapes(boolean(&off, &water, OverlayRule::Difference))
     }
 }
 
@@ -810,7 +839,7 @@ mod tests {
     #[test]
     fn a_crossroads_is_one_ground_with_round_kerbs_and_four_crossings() {
         let graph = crossroads(Profile::Avenue, Profile::Avenue);
-        let map = GroundMap::build(&graph, 200.0, 200.0, &[]);
+        let map = GroundMap::build(&graph, 200.0, 200.0, &[], &[], &[]);
         let t = &map.tiles[0];
         let (w, c) = (Profile::Avenue.width(), Profile::Avenue.carriageway());
         // The streets cover a cross of their width, no more, no less.
@@ -873,7 +902,7 @@ mod tests {
     #[test]
     fn a_pedestrian_street_meets_an_avenue_on_its_pavement() {
         let graph = crossroads(Profile::Avenue, Profile::Pedestrian);
-        let map = GroundMap::build(&graph, 200.0, 200.0, &[]);
+        let map = GroundMap::build(&graph, 200.0, 200.0, &[], &[], &[]);
         // The avenue's carriageway runs straight through: no corner rounded into the mouth.
         let t = &map.tiles[0];
         let c = Profile::Avenue.carriageway();

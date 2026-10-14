@@ -8,7 +8,7 @@ use glam::DVec2;
 
 use super::blocks::BlockUse;
 use super::geom::{self, PointGrid};
-use super::{CityPlan, LAND, Profile, Site};
+use super::{CityPlan, DistrictKind, LAND, Profile, Site};
 
 /// Where a tree stands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -152,6 +152,66 @@ pub fn trees(site: &Site, plan: &CityPlan, seed: u64) -> Vec<Tree> {
             &mut rng,
             &mut out,
         );
+    }
+    // The open land, the reserves (the hills, the wetlands) and whatever lies outside every block:
+    // a loose wood on a jittered grid of 16 m, under half filled, 8 m clear of every street. It
+    // was bare ground the owner took for paving.
+    let mut ways = PointGrid::new(plan.size, 40.0);
+    for e in &plan.roads.edges {
+        for p in geom::resample(&e.points, 6.0) {
+            ways.insert(p, 0);
+        }
+    }
+    // The blocks by the cells of 100 m their boxes touch.
+    let cell = 100.0;
+    let side = (plan.size / cell).ceil() as usize + 1;
+    let mut by_cell: Vec<Vec<u32>> = vec![Vec::new(); side * side];
+    let clampi = |v: f64| ((v / cell).floor().max(0.0) as usize).min(side - 1);
+    for (i, b) in plan.blocks.iter().enumerate() {
+        let (lo, hi) = b.polygon.iter().fold(
+            (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)),
+            |(lo, hi), &p| (lo.min(p), hi.max(p)),
+        );
+        for cy in clampi(lo.y)..=clampi(hi.y) {
+            for cx in clampi(lo.x)..=clampi(hi.x) {
+                by_cell[cy * side + cx].push(i as u32);
+            }
+        }
+    }
+    let in_block = |p: DVec2| {
+        by_cell[clampi(p.y) * side + clampi(p.x)]
+            .iter()
+            .any(|&i| geom::contains(&plan.blocks[i as usize].polygon, p))
+    };
+    let step = 16.0;
+    let mut y = step * 0.5;
+    while y < plan.size {
+        let mut x = step * 0.5;
+        while x < plan.size {
+            let p = DVec2::new(
+                x + rng.range_f64(-0.35, 0.35) * step,
+                y + rng.range_f64(-0.35, 0.35) * step,
+            );
+            let keep = rng.next_f64() < 0.45;
+            x += step;
+            let reserve = plan
+                .district_at(p)
+                .is_some_and(|d| d.kind == DistrictKind::Reserve);
+            if !keep
+                || site.water_at(p) != LAND
+                || ways.any_within(p, 8.0, |_| false)
+                || (!reserve && in_block(p))
+            {
+                continue;
+            }
+            out.push(Tree {
+                pos: p,
+                height: rng.range_f64(8.0, 16.0),
+                crown: rng.range_f64(3.0, 5.5),
+                setting: Setting::Park,
+            });
+        }
+        y += step;
     }
     // Clear of the landmarks that stand on quays: 45 m round their quay's land point.
     let held: Vec<DVec2> = plan

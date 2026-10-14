@@ -694,6 +694,14 @@ fn landmark_site(blocks: &[Block], l: &LandmarkSpec) -> Option<usize> {
 /// to 400 m apart in its centre; the boats cross between them).
 pub const BRIDGE_SPACING: f64 = 450.0;
 
+/// How far a quay's centreline keeps from its river's edge, metres: a pedestrian street's half
+/// width and 2 m, the stone edge and its balustrade.
+pub const QUAY_SETBACK: f64 = 6.0;
+
+/// How far the seafront's promenade keeps from the sea, metres: a beach's width and the
+/// promenade's half (the owner: sand beaches, hotels by the sea).
+pub const BEACH: f64 = 34.0;
+
 /// Makes the plan.
 pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
     let mut timings = Vec::new();
@@ -796,6 +804,15 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
     // either side.
     let connected = streets::connect_sites(site, &sites, &lines);
     lines.extend(connected);
+    // The quays along the rivers' banks, after the bridges took their roads inland.
+    let mut quays = streets::quay_lines(site, QUAY_SETBACK, &built);
+    // And along the sea: a beach before the promenade, or a working quay's edge in industry.
+    let coast_setback = |p: DVec2| match kind_at(p).map(|d| d.kind) {
+        Some(DistrictKind::Industrial) => QUAY_SETBACK,
+        _ => BEACH,
+    };
+    quays.extend(streets::coast_lines(site, &coast_setback, &built));
+    lines.extend(quays.iter().cloned());
     let mut roads = graph::build(site, &lines, 1.5, 60.0);
     graph::tidy(&mut roads, site);
     let mut faces = graph::faces(&roads);
@@ -865,6 +882,18 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
     }
     let crossings = transit::boat_crossings(site, &roads, params.boat_gap);
     transit::assign_profiles(&mut roads, &tram_lines, &districts_field, &params.districts);
+    // The quays are walks: pedestrian streets whatever their district.
+    for e in &mut roads.edges {
+        let mid = geom::point_at(&e.points, e.length() * 0.5);
+        let on_quay = quays.iter().any(|q| {
+            q.points
+                .windows(2)
+                .any(|w| geom::distance_to_segment(mid, w[0], w[1]) < 2.0)
+        });
+        if on_quay && e.class == RoadClass::Street {
+            e.profile = Profile::Pedestrian;
+        }
+    }
     lap("transit", &mut timings);
 
     // Courtyards and lots once the streets' widths are known.
@@ -873,7 +902,14 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
     lap("courtyards and lots", &mut timings);
 
     let tracks: Vec<Vec<DVec2>> = tram_lines.iter().map(|l| l.points.clone()).collect();
-    let ground = ground::GroundMap::build(&roads, site.size, ground::TILE, &tracks);
+    let walks = streets::promenades(site, ground::PROMENADE);
+    let rivers: Vec<(Vec<DVec2>, f64)> = site
+        .rivers
+        .iter()
+        .map(|r| (r.centreline.clone(), r.width))
+        .collect();
+    let ground =
+        ground::GroundMap::build(&roads, site.size, ground::TILE, &tracks, &walks, &rivers);
     lap("street ground", &mut timings);
 
     let landmarks = params

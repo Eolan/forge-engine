@@ -313,6 +313,48 @@ fn nearest_ahead(
     best.map(|(_, q)| q)
 }
 
+/// The rivers' promenades: along each bank a walk `width` metres wide from the water's edge,
+/// wherever it lies on land for 60 m or more, as its middle line and width (the street ground
+/// takes them in at the walking level, D-061). Drawn apart at 5 cm, they met the streets with a
+/// 25 cm step (the owner: no step and no edge, think wheelchair).
+pub fn promenades(site: &Site, width: f64) -> Vec<(Vec<DVec2>, f64)> {
+    // The smooth shore the ground is drawn by: a promenade floated over the harbour's open
+    // water where the cells said land (the owner's second walk).
+    let shore = super::shore::Shore::new(site, 0.75 * site.water.spacing);
+    let dry = |p: DVec2| site.water_at(p) == LAND && shore.parts(p).0 < 0.5;
+    let mut out = Vec::new();
+    for river in &site.rivers {
+        let line = super::geom::resample(&river.centreline, 10.0);
+        let half = river.width * 0.5;
+        for side in [1.0, -1.0] {
+            let mut run: Vec<DVec2> = Vec::new();
+            let mut flush = |run: &mut Vec<DVec2>| {
+                if super::geom::polyline_length(run) >= 60.0 {
+                    out.push((std::mem::take(run), width));
+                }
+                run.clear();
+            };
+            for (i, &c) in line.iter().enumerate() {
+                let t = if i + 1 < line.len() {
+                    line[i + 1] - c
+                } else {
+                    c - line[i - 1]
+                }
+                .normalize_or_zero();
+                let n = DVec2::new(-t.y, t.x) * side;
+                let (middle, outer) = (c + n * (half + width * 0.5), c + n * (half + width));
+                if dry(middle) && dry(outer) {
+                    run.push(middle);
+                } else {
+                    flush(&mut run);
+                }
+            }
+            flush(&mut run);
+        }
+    }
+    out
+}
+
 /// Where a river is bridged: a crossing chosen before any road is traced (D-061), its two ends
 /// on the banks. Main roads cross only here. Left to the streamlines, two roads a few dozen
 /// metres apart each threw a bridge, sometimes across each other over the water (the owner:
@@ -373,6 +415,194 @@ pub fn bridge_sites(
             }
             s += spacing;
         }
+    }
+    out
+}
+
+/// The quays: along each bank of each river, `setback` metres past its edge, a walk wherever the
+/// bank runs through the built districts (`allowed`) for 100 m or more, on land and inside the
+/// frame. With no street along a bank, the land between the last street and the river was no
+/// block at all, bare ground with streets crossing it (the owner's "gigantic paved areas").
+pub fn quay_lines(site: &Site, setback: f64, allowed: &dyn Fn(DVec2) -> bool) -> Vec<Streamline> {
+    let inside = |p: DVec2| p.x >= 0.0 && p.y >= 0.0 && p.x <= site.size && p.y <= site.size;
+    let mut out = Vec::new();
+    for river in &site.rivers {
+        let line = &river.centreline;
+        let length = super::geom::polyline_length(line);
+        for side in [1.0, -1.0] {
+            let mut run: Vec<DVec2> = Vec::new();
+            let mut flush = |run: &mut Vec<DVec2>| {
+                if super::geom::polyline_length(run) >= 100.0 {
+                    out.push(Streamline {
+                        points: super::geom::simplify(run, 0.5),
+                        minor: false,
+                        class: RoadClass::Street,
+                        bridges: Vec::new(),
+                    });
+                }
+                run.clear();
+            };
+            let mut s = 0.0;
+            while s <= length {
+                let c = super::geom::point_at(line, s);
+                let t = super::geom::tangent_at(line, s);
+                let p = c + DVec2::new(-t.y, t.x) * (side * (river.width * 0.5 + setback));
+                if inside(p) && site.water_at(p) == LAND && allowed(p) {
+                    run.push(p);
+                } else {
+                    flush(&mut run);
+                }
+                s += 10.0;
+            }
+            flush(&mut run);
+        }
+    }
+    out
+}
+
+/// The seafront and the harbour's quays: a walk along the sea's and the lagoons' shores,
+/// `setback(p)` metres inland (a beach's width before a promenade, or a quay's edge), wherever
+/// it runs through the built districts (`allowed`) for 100 m or more, on land. The line is the
+/// contour, by marching squares on the site's cells, of the distance to the sea less the
+/// setback.
+pub fn coast_lines(
+    site: &Site,
+    setback: &dyn Fn(DVec2) -> f64,
+    allowed: &dyn Fn(DVec2) -> bool,
+) -> Vec<Streamline> {
+    use super::{LAGOON, SEA};
+    let n = site.water.size as usize;
+    let s = site.water.spacing;
+    // The distance to the sea, by a two-pass chamfer (1 and √2 a step).
+    let mut d = vec![f64::MAX; n * n];
+    for y in 0..n {
+        for x in 0..n {
+            if matches!(site.water.get(x as u32, y as u32), SEA | LAGOON) {
+                d[y * n + x] = 0.0;
+            }
+        }
+    }
+    let diag = std::f64::consts::SQRT_2 * s;
+    let relax = |d: &mut Vec<f64>, x: usize, y: usize, nx: isize, ny: isize, w: f64| {
+        if nx >= 0 && ny >= 0 && (nx as usize) < n && (ny as usize) < n {
+            let v = d[ny as usize * n + nx as usize] + w;
+            if v < d[y * n + x] {
+                d[y * n + x] = v;
+            }
+        }
+    };
+    for y in 0..n {
+        for x in 0..n {
+            let (xi, yi) = (x as isize, y as isize);
+            relax(&mut d, x, y, xi - 1, yi, s);
+            relax(&mut d, x, y, xi, yi - 1, s);
+            relax(&mut d, x, y, xi - 1, yi - 1, diag);
+            relax(&mut d, x, y, xi + 1, yi - 1, diag);
+        }
+    }
+    for y in (0..n).rev() {
+        for x in (0..n).rev() {
+            let (xi, yi) = (x as isize, y as isize);
+            relax(&mut d, x, y, xi + 1, yi, s);
+            relax(&mut d, x, y, xi, yi + 1, s);
+            relax(&mut d, x, y, xi + 1, yi + 1, diag);
+            relax(&mut d, x, y, xi - 1, yi + 1, diag);
+        }
+    }
+    let at = |x: usize, y: usize| DVec2::new(x as f64 * s, y as f64 * s);
+    let f = |x: usize, y: usize| d[y * n + x].min(1e6) - setback(at(x, y));
+    // Marching squares: each square's crossing segments.
+    let mut segments: Vec<[DVec2; 2]> = Vec::new();
+    for y in 0..n - 1 {
+        for x in 0..n - 1 {
+            let corners = [(x, y), (x + 1, y), (x + 1, y + 1), (x, y + 1)];
+            let v: Vec<f64> = corners.iter().map(|&(cx, cy)| f(cx, cy)).collect();
+            let mut cross = Vec::new();
+            for k in 0..4 {
+                let (a, b) = (v[k], v[(k + 1) % 4]);
+                if (a < 0.0) != (b < 0.0) {
+                    let t = a / (a - b);
+                    let (pa, pb) = (
+                        at(corners[k].0, corners[k].1),
+                        at(corners[(k + 1) % 4].0, corners[(k + 1) % 4].1),
+                    );
+                    cross.push(pa + (pb - pa) * t);
+                }
+            }
+            if cross.len() == 2 {
+                segments.push([cross[0], cross[1]]);
+            } else if cross.len() == 4 {
+                segments.push([cross[0], cross[1]]);
+                segments.push([cross[2], cross[3]]);
+            }
+        }
+    }
+    // Chained into polylines by their shared ends.
+    let key = |p: DVec2| ((p.x * 1000.0).round() as i64, (p.y * 1000.0).round() as i64);
+    let mut ends: std::collections::HashMap<(i64, i64), Vec<usize>> = Default::default();
+    for (i, seg) in segments.iter().enumerate() {
+        for p in seg {
+            ends.entry(key(*p)).or_default().push(i);
+        }
+    }
+    let mut used = vec![false; segments.len()];
+    let mut lines: Vec<Vec<DVec2>> = Vec::new();
+    for start in 0..segments.len() {
+        if used[start] {
+            continue;
+        }
+        used[start] = true;
+        let mut line = vec![segments[start][0], segments[start][1]];
+        for forward in [true, false] {
+            loop {
+                let tip = if forward {
+                    *line.last().expect("two")
+                } else {
+                    line[0]
+                };
+                let next = ends
+                    .get(&key(tip))
+                    .and_then(|list| list.iter().copied().find(|&j| !used[j]));
+                let Some(j) = next else { break };
+                used[j] = true;
+                let seg = segments[j];
+                let other = if key(seg[0]) == key(tip) {
+                    seg[1]
+                } else {
+                    seg[0]
+                };
+                if forward {
+                    line.push(other);
+                } else {
+                    line.insert(0, other);
+                }
+            }
+        }
+        lines.push(line);
+    }
+    // Kept where they run on land through the built districts for 100 m or more.
+    let mut out = Vec::new();
+    for line in lines {
+        let mut run: Vec<DVec2> = Vec::new();
+        let mut flush = |run: &mut Vec<DVec2>| {
+            if super::geom::polyline_length(run) >= 100.0 {
+                out.push(Streamline {
+                    points: super::geom::simplify(run, 1.0),
+                    minor: false,
+                    class: RoadClass::Street,
+                    bridges: Vec::new(),
+                });
+            }
+            run.clear();
+        };
+        for p in line {
+            if site.water_at(p) == LAND && allowed(p) {
+                run.push(p);
+            } else {
+                flush(&mut run);
+            }
+        }
+        flush(&mut run);
     }
     out
 }

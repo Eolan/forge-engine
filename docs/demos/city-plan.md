@@ -586,6 +586,25 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
   - **The sandbox:** close junctions 353 → 0, short streets 342 → 0, sharp meetings 81 → 0,
     doubled streets 22 → 3, nodes on the water 1 → 0, close bridges 2 → 0, 12 bridges; the
     homes unchanged (about 980 k people). Test: `the_network_has_one_place_for_each_junction`.
+- **quays, promenades and the seafront** (D-061). With no street along a bank, the land between
+  the last street and the water was no block at all: bare ground with streets crossing it (the
+  owner's "gigantic paved areas").
+  - **Quays** (`streets::quay_lines`): a pedestrian walk along each river bank through the built
+    districts, 6 m from the water's edge.
+  - **Seafront** (`streets::coast_lines`): a promenade along the sea's and the lagoons' shores,
+    by marching squares on the distance to the sea. It runs 34 m inland, a beach before it (6 m in
+    the industrial quay).
+  - Both close the faces into blocks and are pedestrian whatever their district.
+  - **Promenades** (`streets::promenades`): 13 m along each river bank on land. They are walking
+    ground in the street map, so they meet the quays and streets with no step. They had been drawn
+    apart at 5 cm, a 25 cm edge (the owner: "avoid step and edge for accessibility, think
+    wheelchair all the time"). Their edge over the water gets the bank's stone wall and
+    balustrade.
+  - **Blocks and quay lawns** lie at the walking level, cut round the streets, the walks and the
+    rivers' water. A park had covered a river's strip by the mouth.
+- **open land as nature:** the ground outside the city is a dry, olive scrub. The reserves and
+  any land outside every block carry a loose wood: a jittered grid of 16 m, under half filled, 8 m
+  clear of the streets. They were gravel, which the owner took for paving.
 - **tram alignments** (`transit::alignment`): the route straightened to within 1.5 m of its
   streets, then each corner rounded, a junction's turn on 18 m and a gentle bend on a longer arc
   (up to 120 m). Each little jog had been rounded on its own into a run of S-bends (the owner:
