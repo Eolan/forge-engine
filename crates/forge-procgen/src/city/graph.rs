@@ -489,7 +489,6 @@ pub fn defects(graph: &RoadGraph, site: &Site) -> Defects {
 /// - of two streets between the same junctions, of a pair leaving a node within [`SHARP`]
 ///   degrees, and of a pair running doubled side by side, the lesser goes (a street before a
 ///   main road, the shorter first);
-
 /// - then every dead end (but at the frame's edge), and the networks cut off with less than
 ///   [`MIN_NETWORK`] of streets.
 ///
