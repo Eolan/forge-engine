@@ -4187,3 +4187,12 @@ network itself is the mess (crossing bridges, junction clusters, sharp meetings)
   - sharp meetings straightened;
   - one bridge per crossing, roughly square to the river, no junction on it, a small square at
     each head.
+
+**The taxis, the owner (2026-10-14):** fully automated, booked like Uber or inDrive from a
+person's smart pad or communicator; a taxi comes to them. Idle taxis park at set places. At busy
+times they circulate round the busy places, where they will most likely find someone to carry.
+- So the stands are parking and pick-up places: lay-bys along the roads, by the tram stops,
+  squares, the hospital and the station; depots in the industrial quarter.
+- A pick-up point within a short walk of every building, as a check.
+- **Crossings (the owner's go):** raised tables on the taxi roads; dropped kerbs on the tram
+  avenues.

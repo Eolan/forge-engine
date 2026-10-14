@@ -381,6 +381,17 @@ pub fn chess_seats() -> [(Vec3, Vec3); 2] {
     ]
 }
 
+/// A bollard on the origin: a steel post 0.9 m tall and 0.16 m across with a stone band near its
+/// top, which shows it to anyone low-sighted and in the dark. A row of them closes a pedestrian
+/// street's mouth to vehicles (D-061), 1.5 m apart so a wheelchair passes between.
+pub fn bollard() -> TriMesh {
+    let mut m = TriMesh::default();
+    prism(&mut m, Vec3::new(0.0, 0.72, 0.0), 0.08, 0.72, 8, METAL);
+    prism(&mut m, Vec3::new(0.0, 0.8, 0.0), 0.085, 0.08, 8, STONE);
+    prism(&mut m, Vec3::new(0.0, 0.9, 0.0), 0.08, 0.1, 8, METAL);
+    m
+}
+
 /// A square's fountain round the origin: an octagonal stone basin 6.4 m across, brimming with
 /// water ([`GLASS`]'s section), a column in its middle carrying a bowl.
 pub fn fountain() -> TriMesh {

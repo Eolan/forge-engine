@@ -475,7 +475,17 @@ impl PlanScenario {
         // The buildings' structure (D-060): the kit dresses it, the walker walks against it.
         let structures = structure::structures(plan, masses);
         head_houses(&mut tiles, masses, &structures);
-        let kit = detail.map(|d| kit(&mut tiles, masses, &structures, &edges, &near, d));
+        let kit = detail.map(|d| {
+            kit(
+                &mut tiles,
+                masses,
+                &structures,
+                &edges,
+                &near,
+                d,
+                &plan.ground.bollards,
+            )
+        });
         // The passages into the courts (D-060), and where to look into one: 10 m out on the
         // street before the kit's first, for the log once the app logs.
         let passages_in = |list: &mut dyn Iterator<Item = usize>| {
@@ -829,6 +839,15 @@ impl PlanScenario {
             kit_meshes.push(forge_geom::furniture::fountain());
             let id = (kit_meshes.len() - 1) as u32;
             kit_instances.extend(fountains.into_iter().map(|at| (id, at, 0)));
+        }
+        // The bollards across the pedestrian ways' mouths onto the roads (D-061).
+        if !plan.ground.bollards.is_empty() {
+            kit_meshes.push(forge_geom::furniture::bollard());
+            let id = (kit_meshes.len() - 1) as u32;
+            for &p in &plan.ground.bollards {
+                let at = Mat4::from_translation(world(size, p, plan.ground.level_at(p)));
+                kit_instances.push((id, at, 0));
+            }
         }
         // A street-workout park in each park of a hectare or more, along the park's longest
         // edge; the trees keep clear of it.
@@ -1384,6 +1403,7 @@ fn kit(
     edges: &[Vec<Option<FaceKind>>],
     near: &[usize],
     d: &Detail,
+    bollards: &[DVec2],
 ) -> Kit {
     let start = std::time::Instant::now();
     let size = tiles.size;
@@ -1449,6 +1469,11 @@ fn kit(
                 && street
                 && lively
                 && (spot.is_multiple_of(3) || (m.open && spot % 3 == 1))
+                // Clear of a pedestrian street's bollards: a terrace stood in their row (the owner:
+                // the tables and chairs too close).
+                && !bollards.iter().any(|b| {
+                    world(size, *b, 0.0).with_y(0.0).distance(pos.with_y(0.0)) < 8.0
+                })
             {
                 // One of four layouts by the shopfront, so neighbouring terraces differ.
                 let variant = ((spot >> 8) % 4) as u32;
@@ -3506,6 +3531,8 @@ fn street_ground(tiles: &mut Tiles, map: &ground::GroundMap, site: &Site) {
             (&t.carriageway, ROAD_LEVEL, STREET),
             (&t.crossings, ROAD_LEVEL, STREET),
             (&t.stripes, ROAD_LEVEL, MARKING),
+            (&t.raised, WALK_LEVEL, STREET),
+            (&t.raised_stripes, WALK_LEVEL, MARKING),
             (&t.walk, WALK_LEVEL, PAVING),
         ] {
             for polygon in ground::simple_polygons(shapes) {
@@ -3536,7 +3563,9 @@ fn street_ground(tiles: &mut Tiles, map: &ground::GroundMap, site: &Site) {
                         if up.y < 0.0 {
                             up = -up;
                         }
-                        triangle(&mut tile.ground, p, up, PAVING);
+                        // A table's ramp is the road's, a dropped kerb the pavement's.
+                        let section = if ramp.lip == 0.0 { STREET } else { PAVING };
+                        triangle(&mut tile.ground, p, up, section);
                     }
                 }
             }
@@ -3550,9 +3579,20 @@ fn street_ground(tiles: &mut Tiles, map: &ground::GroundMap, site: &Site) {
         let top = |q: DVec2| {
             ramps
                 .iter()
-                .filter(|r| r.contains(q))
+                .filter(|r| r.lip > 0.0 && r.contains(q))
                 .map(|r| r.level(q))
                 .fold(WALK_LEVEL, f64::min)
+        };
+        // The road side's level: a raised table's and its ramps' (no kerb along a table), else
+        // the carriageway's.
+        let low = |q: DVec2| {
+            if let Some(r) = ramps.iter().find(|r| r.lip == 0.0 && r.contains(q)) {
+                r.level(q)
+            } else if ground::inside(&t.raised, q) || ground::inside(&t.raised_stripes, q) {
+                WALK_LEVEL
+            } else {
+                ROAD_LEVEL
+            }
         };
         for &[a, b] in &t.kerbs {
             let d = b - a;
@@ -3576,7 +3616,8 @@ fn street_ground(tiles: &mut Tiles, map: &ground::GroundMap, site: &Site) {
                     a + d * ((k + 1) as f64 / steps as f64),
                 );
                 let (hp, hq) = (top(p + walk * 0.05), top(q + walk * 0.05));
-                face(tiles, p, q, [ROAD_LEVEL; 2], [hp, hq], -walk);
+                let (lp, lq) = (low(p - walk * 0.05), low(q - walk * 0.05));
+                face(tiles, p, q, [lp, lq], [hp, hq], -walk);
             }
         }
         for &[a, b] in &t.outline {

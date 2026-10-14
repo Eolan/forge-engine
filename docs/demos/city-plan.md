@@ -557,6 +557,15 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
     or past a pedestrian way's mouth. A dropped kerb at each end slopes 1.6 m (1 in 12, #263) down
     to a 1 cm lip, its sides flared at 1 in 12 too, so there is no edge to step or roll over (the
     owner: "gentle slopes all around"): 862 crossings and 1 724 dropped kerbs in the example.
+  - **Raised tables** on the taxi roads (the owner's go): a crossing over an avenue without trams lies
+    at the walking level from kerb to kerb, flat for a wheelchair, and taxis take a ramp of 1.5 m
+    up and down either side (14 cm, walking pace). Tram avenues keep dropped kerbs: rails take no
+    table. A kerb's face drops to nothing along a table. Test
+    `a_taxi_road_s_crossings_are_raised_tables_flush_with_the_pavements`.
+  - **Pedestrian streets:** the shared streets are for people only (bikes, deliveries at set
+    hours, no taxis; the owner). A row of bollards closes each walking way's mouth onto a road,
+    1.5 m behind its building line, 1.5 m apart at most (`furniture::bollard`, a steel post with a
+    pale band), and no café terrace stands within 8 m of them.
   - **No hairlines:** the junctions' pieces (corner wedges, gap mitres) reach 0.3 m into the
     strips they join, and the carriageway's gaps close among the driven arms only (a pedestrian
     street's mouth between an avenue's arms left a sliver of pavement on the asphalt).

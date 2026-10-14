@@ -405,7 +405,8 @@ pub enum Profile {
     TramAvenue,
     /// A main road without a tram yet: shared lanes, bikes, trees.
     Avenue,
-    /// A street shared by people, bikes and the service vehicles that may come in.
+    /// A pedestrian street, 10 m: people and bikes, deliveries at set hours behind its bollards,
+    /// no taxis (D-061: the owner, "taxis don't go where pedestrians are").
     Shared,
     /// A pedestrian street or lane.
     Pedestrian,
@@ -504,7 +505,7 @@ pub enum Lane {
     Drive,
     /// The trams' two tracks, the taxis on them.
     Tracks,
-    /// Everyone at walking pace on one level (a woonerf).
+    /// People and bikes on one level, deliveries at set hours.
     Shared,
 }
 

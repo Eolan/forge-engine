@@ -48,6 +48,10 @@ const CROSSING_GAP: f64 = 1.0;
 const FORK: f64 = 0.985;
 /// The arcs' segments, as their length over their radius.
 const ARC: f64 = 0.25;
+/// How far behind a road's building line a walking way's bollards stand, metres.
+const BOLLARD_SET_BACK: f64 = 1.5;
+/// The most between two bollards, metres: a wheelchair passes, a car does not.
+const BOLLARD_GAP: f64 = 1.5;
 /// The radius the inside of a gentle bend's building line turns on, metres.
 const BEND_RADIUS: f64 = 40.0;
 /// How far the junctions' pieces reach into the strips they join, metres.
@@ -59,52 +63,81 @@ pub const TILE: f64 = 250.0;
 /// A region of the plan: each shape an outer contour, then its holes.
 pub type Shapes = Vec<Vec<Vec<DVec2>>>;
 
-/// A dropped kerb: the pavement's ramp down to a crossing.
+/// A slope between the carriageway and the walking level: a dropped kerb (the pavement's ramp
+/// down to a crossing), or a raised table's ramp (the carriageway's up to it).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Ramp {
-    /// The middle of its foot on the kerb line.
+    /// The middle of its foot.
     pub kerb: DVec2,
-    /// Along the kerb, unit.
+    /// Across it, unit.
     pub along: DVec2,
-    /// From the kerb into the pavement, unit.
+    /// Up it, unit.
     pub inward: DVec2,
-    /// Half its width along the kerb, metres.
+    /// Half its width, metres.
     pub half: f64,
+    /// Its length up the slope, metres.
+    pub run: f64,
+    /// Its flares' length along its foot each side, metres (0: none).
+    pub flare: f64,
+    /// Its foot's lip over the carriageway, metres.
+    pub lip: f64,
 }
 
 impl Ramp {
-    /// Its outline, a trapezoid: along the kerb (from a little over it, the carriageway trims
-    /// it) its width and a flare of [`FLARE`] either side, narrowing to its width [`RAMP`] in.
+    /// A dropped kerb: [`RAMP`] long, flared, a centimetre's lip.
+    fn dropped(kerb: DVec2, along: DVec2, inward: DVec2, half: f64) -> Self {
+        Self {
+            kerb,
+            along,
+            inward,
+            half,
+            run: RAMP,
+            flare: FLARE,
+            lip: DROPPED,
+        }
+    }
+
+    /// Its outline, a trapezoid: along its foot (from a little past it, what it stands on trims
+    /// it) its width and its flares either side, narrowing to its width `run` up.
     fn outline(&self) -> Vec<DVec2> {
+        let flare = if self.flare > 0.0 {
+            self.flare + 0.5 * self.flare / self.run
+        } else {
+            0.0
+        };
         let (a, f, n) = (
             self.along * self.half,
-            self.along * (self.half + FLARE + 0.5 * FLARE / RAMP),
+            self.along * (self.half + flare),
             self.inward,
         );
-        let (near, far) = (self.kerb - n * 0.5, self.kerb + n * RAMP);
+        let (near, far) = (self.kerb - n * 0.5, self.kerb + n * self.run);
         vec![near - f, near + f, far + a, far - a]
     }
 
-    /// Whether `p` lies on it (its slopes from the kerb in, the flares too).
+    /// Whether `p` lies on it (its slopes from its foot up, the flares too).
     pub fn contains(&self, p: DVec2) -> bool {
         let d = p - self.kerb;
         let (s, t) = (d.dot(self.along), d.dot(self.inward));
-        (0.0..=RAMP).contains(&t) && s.abs() <= self.half + FLARE * (1.0 - t / RAMP)
+        (0.0..=self.run).contains(&t) && s.abs() <= self.half + self.flare * (1.0 - t / self.run)
     }
 
-    /// Its level at `p`: from the lip at the kerb up to the walking level [`RAMP`] in, and in
-    /// each flare up to it [`FLARE`] along the kerb too, so its sides slope at 1 in 12 like its
+    /// Its level at `p`: from the lip at its foot up to the walking level `run` up, and in each
+    /// flare up to it along its foot too, so a dropped kerb's sides slope at 1 in 12 like its
     /// middle. Vertical sides stood at its edges, a trip for anyone and a wall for a wheelchair
     /// (the owner: "gentle slopes all around").
     pub fn level(&self, p: DVec2) -> f64 {
         let d = p - self.kerb;
         let (s, t) = (d.dot(self.along), d.dot(self.inward));
-        let rise = (t / RAMP + (s.abs() - self.half).max(0.0) / FLARE).clamp(0.0, 1.0);
-        ROAD_LEVEL + DROPPED + (WALK_LEVEL - ROAD_LEVEL - DROPPED) * rise
+        let sideways = if self.flare > 0.0 {
+            (s.abs() - self.half).max(0.0) / self.flare
+        } else {
+            0.0
+        };
+        let rise = (t / self.run + sideways).clamp(0.0, 1.0);
+        ROAD_LEVEL + self.lip + (WALK_LEVEL - ROAD_LEVEL - self.lip) * rise
     }
 
-    /// Where its middle meets its flares, along the kerb, as points on the kerb line: its pieces
-    /// are planar between them.
+    /// Where its middle meets its flares, along its foot: its pieces are planar between them.
     pub fn creases(&self) -> [(DVec2, DVec2); 2] {
         [-1.0, 1.0].map(|side| {
             (
@@ -117,6 +150,8 @@ impl Ramp {
 
 /// A dropped kerb's flare along the kerb each side, metres: its 13 cm at 1 in 12.
 pub const FLARE: f64 = 1.6;
+/// A raised table's ramps' length, metres: 14 cm over 1.5 m, taken at a taxi's walking pace.
+pub const TABLE_RAMP: f64 = 1.5;
 
 /// A crossing over a driven street at a junction.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -131,6 +166,9 @@ pub struct Crossing {
     pub along: DVec2,
     /// The carriageway's width it spans, metres.
     pub span: f64,
+    /// Whether it is a raised table at the walking level (a taxi road's, D-061), else at the
+    /// carriageway's with a dropped kerb at each end (a tram avenue's: rails take no table).
+    pub raised: bool,
 }
 
 impl Crossing {
@@ -178,6 +216,10 @@ pub struct GroundTile {
     pub stripes: Shapes,
     /// The crossings between their stripes, at [`ROAD_LEVEL`].
     pub crossings: Shapes,
+    /// The raised tables' crossings between their stripes, at [`WALK_LEVEL`].
+    pub raised: Shapes,
+    /// The raised tables' paint, at [`WALK_LEVEL`].
+    pub raised_stripes: Shapes,
     /// The walking ground at [`WALK_LEVEL`], the ramps left out.
     pub walk: Shapes,
     /// The dropped kerbs, each with its ramp's index.
@@ -200,6 +242,8 @@ pub struct GroundMap {
     pub tiles: Vec<GroundTile>,
     /// The crossings.
     pub crossings: Vec<Crossing>,
+    /// The bollards across the walking ways' mouths onto the roads.
+    pub bollards: Vec<DVec2>,
     /// The dropped kerbs, two a crossing.
     pub ramps: Vec<Ramp>,
     /// Each street's area, stroked to its width.
@@ -508,6 +552,7 @@ impl GroundMap {
         // crossing on each driven arm of a junction past its corners.
         let mut wedges = Vec::new();
         let mut crossings = Vec::new();
+        let mut bollards = Vec::new();
         for (v, list) in arms.iter().enumerate() {
             let node = graph.nodes[v].pos;
             let m = list.len();
@@ -573,6 +618,36 @@ impl GroundMap {
                     }
                 }
             }
+            // Bollards across each walking way's mouth where it meets a driven road, just behind
+            // the road's pavement, 1.5 m apart at most (a wheelchair passes between): no taxi
+            // turns in where people walk (D-061, the owner).
+            let road = list
+                .iter()
+                .filter(|a| a.kerb > 0.0)
+                .map(|a| a.half)
+                .fold(0.0_f64, f64::max);
+            if road > 0.0 {
+                for arm in list.iter().filter(|a| a.kerb <= 0.0) {
+                    let s = road + BOLLARD_SET_BACK;
+                    if arm.length < s + 4.0 {
+                        continue;
+                    }
+                    let e = &graph.edges[arm.edge as usize];
+                    let points: Vec<DVec2> = if e.a == v as u32 {
+                        e.points.clone()
+                    } else {
+                        e.points.iter().rev().copied().collect()
+                    };
+                    let (at, t) = (geom::point_at(&points, s), geom::tangent_at(&points, s));
+                    let n = left(t);
+                    let span = 2.0 * arm.half - 1.0;
+                    let count = (span / BOLLARD_GAP).ceil() as usize + 1;
+                    for k in 0..count {
+                        let off = -span * 0.5 + span * k as f64 / (count - 1).max(1) as f64;
+                        bollards.push(at + n * off);
+                    }
+                }
+            }
             if m < 3 {
                 continue;
             }
@@ -597,23 +672,49 @@ impl GroundMap {
                     centre: geom::point_at(&points, s),
                     along: geom::tangent_at(&points, s),
                     span: e.profile.carriageway(),
+                    raised: e.profile == super::Profile::Avenue,
                 });
             }
         }
-        let ramps: Vec<Ramp> = crossings
-            .iter()
-            .flat_map(|c| {
-                let n = left(c.along);
-                [1.0, -1.0].map(|side| Ramp {
-                    kerb: c.centre + n * (c.span * 0.5 * side),
-                    along: c.along,
-                    inward: n * side,
-                    half: CROSSING * 0.5,
-                })
-            })
-            .collect();
+        // A dropped kerb at each end of a crossing at the carriageway's level; a raised table's
+        // two ramps up from the carriageway either side of one at the walking level (they stand
+        // on the carriageway, the dropped kerbs on the pavement).
+        let mut ramps: Vec<Ramp> = Vec::new();
+        let mut on_road: Vec<bool> = Vec::new();
+        for c in &crossings {
+            let n = left(c.along);
+            if c.raised {
+                for side in [1.0, -1.0] {
+                    ramps.push(Ramp {
+                        kerb: c.centre + c.along * (side * (CROSSING * 0.5 + TABLE_RAMP)),
+                        along: n,
+                        inward: c.along * -side,
+                        half: c.span * 0.5 + 1.0,
+                        run: TABLE_RAMP,
+                        flare: 0.0,
+                        lip: 0.0,
+                    });
+                    on_road.push(true);
+                }
+            } else {
+                for side in [1.0, -1.0] {
+                    ramps.push(Ramp::dropped(
+                        c.centre + n * (c.span * 0.5 * side),
+                        c.along,
+                        n * side,
+                        CROSSING * 0.5,
+                    ));
+                    on_road.push(false);
+                }
+            }
+        }
         let crossing_pieces: Vec<Piece> = crossings
             .iter()
+            .map(|c| Piece::from_points(&c.outline()))
+            .collect();
+        let raised_pieces: Vec<Piece> = crossings
+            .iter()
+            .filter(|c| c.raised)
             .map(|c| Piece::from_points(&c.outline()))
             .collect();
         let stripe_pieces: Vec<Piece> = crossings
@@ -652,40 +753,57 @@ impl GroundMap {
                     &road,
                     OverlayRule::Intersect,
                 );
+                let raised = boolean(
+                    &union(&raised_pieces, lo, hi),
+                    &crossing,
+                    OverlayRule::Intersect,
+                );
                 let stripes = boolean(
                     &union(&stripe_pieces, lo, hi),
                     &crossing,
                     OverlayRule::Intersect,
                 );
                 let walk_all = boolean(&street, &road, OverlayRule::Difference);
-                let near_ramps: Vec<u32> = (0..ramps.len() as u32)
-                    .filter(|&r| ramp_pieces[r as usize].meets(lo, hi))
-                    .collect();
-                // The ramps on the walking ground, cut out of it; each ramp's own piece of them.
-                let on_walk = boolean(
-                    &union(&ramp_pieces, lo, hi),
-                    &walk_all,
-                    OverlayRule::Intersect,
-                );
+                let open_road = boolean(&road, &crossing, OverlayRule::Difference);
+                // The ramps, each kind on what it stands on, cut out of it; each ramp's own
+                // piece of them.
+                let ramps_on = |kind: bool, ground: &Raw| {
+                    let pieces: Vec<Piece> = (0..ramps.len())
+                        .filter(|&r| on_road[r] == kind)
+                        .map(|r| ramp_pieces[r].clone())
+                        .collect();
+                    boolean(&union(&pieces, lo, hi), ground, OverlayRule::Intersect)
+                };
+                let on_walk = ramps_on(false, &walk_all);
+                let on_road_ramps = ramps_on(true, &open_road);
                 let walk = boolean(&walk_all, &on_walk, OverlayRule::Difference);
-                let on_tile = boolean(&on_walk, &square, OverlayRule::Intersect);
+                let carriageway = boolean(&open_road, &on_road_ramps, OverlayRule::Difference);
                 let mut ramp_shapes = Vec::new();
-                for &r in &near_ramps {
-                    let outline = vec![ramp_pieces[r as usize].contours.clone()];
-                    let on = boolean(&outline, &on_tile, OverlayRule::Intersect);
-                    if !on.is_empty() {
-                        ramp_shapes.push((r, to_shapes(on)));
+                for (kind, on) in [(false, &on_walk), (true, &on_road_ramps)] {
+                    let on_tile = boolean(on, &square, OverlayRule::Intersect);
+                    for r in (0..ramps.len()).filter(|&r| on_road[r] == kind) {
+                        if !ramp_pieces[r].meets(lo, hi) {
+                            continue;
+                        }
+                        let outline = vec![ramp_pieces[r].contours.clone()];
+                        let piece = boolean(&outline, &on_tile, OverlayRule::Intersect);
+                        if !piece.is_empty() {
+                            ramp_shapes.push((r as u32, to_shapes(piece)));
+                        }
                     }
                 }
                 let kerbs = segments(&road, min, max);
                 let outline = segments(&street, min, max);
                 let clip = |r: &Raw| to_shapes(boolean(r, &square, OverlayRule::Intersect));
+                let plain = boolean(&crossing, &raised, OverlayRule::Difference);
                 tiles.push(GroundTile {
                     min,
                     max,
-                    carriageway: clip(&boolean(&road, &crossing, OverlayRule::Difference)),
-                    stripes: clip(&stripes),
-                    crossings: clip(&boolean(&crossing, &stripes, OverlayRule::Difference)),
+                    carriageway: clip(&carriageway),
+                    stripes: clip(&boolean(&stripes, &raised, OverlayRule::Difference)),
+                    crossings: clip(&boolean(&plain, &stripes, OverlayRule::Difference)),
+                    raised_stripes: clip(&boolean(&stripes, &raised, OverlayRule::Intersect)),
+                    raised: clip(&boolean(&raised, &stripes, OverlayRule::Difference)),
                     walk: clip(&walk),
                     ramps: ramp_shapes,
                     kerbs,
@@ -699,6 +817,7 @@ impl GroundMap {
             tiles,
             crossings,
             ramps,
+            bollards,
             streets,
             water,
             lines,
@@ -720,7 +839,11 @@ impl GroundMap {
     /// Whether `p` lies on a carriageway (a crossing's included).
     pub fn on_carriageway(&self, p: DVec2) -> bool {
         self.tile_at(p).is_some_and(|t| {
-            inside(&t.carriageway, p) || inside(&t.crossings, p) || inside(&t.stripes, p)
+            inside(&t.carriageway, p)
+                || inside(&t.crossings, p)
+                || inside(&t.stripes, p)
+                || inside(&t.raised, p)
+                || inside(&t.raised_stripes, p)
         })
     }
 
@@ -1011,11 +1134,14 @@ mod tests {
     }
 
     #[test]
-    fn a_crossroads_is_one_ground_with_round_kerbs_and_four_crossings() {
-        let graph = crossroads(Profile::Avenue, Profile::Avenue);
+    fn a_tram_crossroads_is_one_ground_with_round_kerbs_and_dropped_kerbs() {
+        let graph = crossroads(Profile::TramAvenue, Profile::TramAvenue);
         let map = GroundMap::build(&graph, 200.0, 200.0, &[], &[], &[]);
         let t = &map.tiles[0];
-        let (w, c) = (Profile::Avenue.width(), Profile::Avenue.carriageway());
+        let (w, c) = (
+            Profile::TramAvenue.width(),
+            Profile::TramAvenue.carriageway(),
+        );
         // The streets cover a cross of their width, no more, no less.
         let street = 2.0 * 200.0 * w - w * w;
         let road = 2.0 * 200.0 * c - c * c;
@@ -1048,7 +1174,7 @@ mod tests {
         );
         // The levels: the carriageway's middle, a pavement, a ramp's foot and top, a block.
         assert_eq!(map.level_at(DVec2::new(130.0, 100.0)), ROAD_LEVEL);
-        assert_eq!(map.level_at(DVec2::new(130.0, 107.0)), WALK_LEVEL);
+        assert_eq!(map.level_at(DVec2::new(130.0, 109.0)), WALK_LEVEL);
         let r = map.ramps[0];
         let foot = map.level_at(r.kerb + r.inward * 0.05);
         assert!((foot - (ROAD_LEVEL + DROPPED)).abs() < 0.01, "foot {foot}");
@@ -1080,7 +1206,18 @@ mod tests {
         // The avenue's carriageway runs straight through: no corner rounded into the mouth.
         let t = &map.tiles[0];
         let c = Profile::Avenue.carriageway();
-        let total = area(&t.carriageway) + area(&t.crossings) + area(&t.stripes);
+        let road_ramps: f64 = t
+            .ramps
+            .iter()
+            .filter(|(r, _)| map.ramps[*r as usize].lip == 0.0)
+            .map(|(_, s)| area(s))
+            .sum();
+        let total = area(&t.carriageway)
+            + area(&t.crossings)
+            + area(&t.stripes)
+            + area(&t.raised)
+            + area(&t.raised_stripes)
+            + road_ramps;
         assert!((total - 200.0 * c).abs() < 1.0, "carriageway {total:.1} m²");
         // The pedestrian street's mouth lies at the walking level, up to the kerb.
         assert_eq!(
@@ -1098,6 +1235,48 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_taxi_road_s_crossings_are_raised_tables_flush_with_the_pavements() {
+        let graph = crossroads(Profile::Avenue, Profile::Avenue);
+        let map = GroundMap::build(&graph, 200.0, 200.0, &[], &[], &[]);
+        let t = &map.tiles[0];
+        let c = Profile::Avenue.carriageway();
+        assert_eq!(map.crossings.len(), 4);
+        assert!(map.crossings.iter().all(|x| x.raised));
+        // Two ramps each, on the carriageway, up to the table: no dropped kerb on the pavement.
+        assert_eq!(map.ramps.len(), 8);
+        assert!(map.ramps.iter().all(|r| r.lip == 0.0 && r.flare == 0.0));
+        // Each table's ramps lie on the carriageway: its width × their run at least (wider by a
+        // rounded corner, on the junction's side).
+        let ramps: f64 = t.ramps.iter().map(|(_, s)| area(s)).sum();
+        assert!(
+            ramps > 8.0 * c * TABLE_RAMP - 1.0 && ramps < 8.0 * (c + 4.0) * TABLE_RAMP,
+            "ramps {ramps:.1} m²"
+        );
+        for x in &map.crossings {
+            // The table at the walking level across the whole road, kerb to kerb.
+            for f in [-0.45, 0.0, 0.45] {
+                let p = x.centre + left(x.along) * (c * f);
+                assert_eq!(map.level_at(p), WALK_LEVEL, "table at {p}");
+            }
+            // Its ramps' middle halfway up, the road beyond at its own level.
+            let up = x.centre + x.along * (CROSSING * 0.5 + TABLE_RAMP * 0.5);
+            let down = x.centre - x.along * (CROSSING * 0.5 + TABLE_RAMP * 0.5);
+            let half = (ROAD_LEVEL + WALK_LEVEL) * 0.5;
+            assert!(
+                (map.level_at(up) - half).abs() < 0.01,
+                "{}",
+                map.level_at(up)
+            );
+            assert!(
+                (map.level_at(down) - half).abs() < 0.01,
+                "{}",
+                map.level_at(down)
+            );
+            let beyond = x.centre + x.along * (CROSSING * 0.5 + TABLE_RAMP + 1.0);
+            assert_eq!(map.level_at(beyond), ROAD_LEVEL);
+        }
+    }
     #[test]
     fn holes_are_sliced_away_for_triangulating() {
         let shapes: Shapes = vec![vec![
