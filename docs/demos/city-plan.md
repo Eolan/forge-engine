@@ -579,35 +579,55 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
     `taxis_wait_within_a_short_walk_of_every_block`.
   - **The taxi fleet** (`forge_sim::taxi`, the owner's model: like Uber or inDrive, with no
     drivers). The taxi roads make a two-way network. Each stand has two bays.
-    - **Bookings:** they arrive as a Poisson stream at the hour's rate. Weights:
-      - built blocks by their floor area;
-      - squares at 5 000 m².
-    - **Demand:** 0.08 trips a person a day over a daily profile with morning and evening peaks.
-      Trips shorter than 700 m walk or take the tram.
-    - **Fleet size:** one taxi for 90 trips a day.
+    - **Trams first** (the owner: not everybody takes a taxi, and it has to be useful to the one
+      who does):
+      - the trips by tram or taxi are 0.68 a person a day (D-059's shares: of some 2.8 trips,
+        22 % by tram, 2 % by taxi), over a daily profile with morning and evening peaks;
+      - a trip goes by tram when a line stops within 400 m of both ends, or a line near one end
+        meets one near the other (stops within 150 m: one change);
+      - of the trips the trams do not serve, a share books a taxi, set so that taxis carry 0.056
+        trips a person a day; the rest walk, cycle or change more;
+      - trips shorter than 700 m walk.
+    - **Bookings:** places weighted by floor area (built blocks) or 5 000 m² (squares).
+    - **Fleet size:** three trips a taxi in the busiest hour. One taxi for 90 trips a day left
+      527 bookings waiting at 9:00 (402 s on average).
     - **Dispatch:** the nearest free taxi by road (Dijkstra in millimetres):
       1. it drives to the booking, waits 25 s while the passenger gets in;
       2. carries them, waits 25 s again;
       3. returns to the nearest stand with a free bay.
-    - **Busy hours:** the hour's rate is above 1.3 times the day's mean. The taxis in a stand's
-      second bay then leave to cruise round the busy places.
-    - **Driving:** 8.3 m/s (30 km/h) with 1.5 m/s² to start and stop.
+    - **Busy hours:** the hour's rate is above 1.3 times the day's mean. The taxis behind a
+      stand's first leave to cruise round the busy places, one at a time as the road clears.
+    - **Traffic:**
+      - 8.3 m/s (30 km/h), 1.5 m/s² to start;
+      - each taxi follows the one ahead in its lane along its route (the Intelligent Driver
+        Model: 2 m standing, 1.2 s at speed, looking 60 m ahead);
+      - one taxi at a time crosses a junction, and only with room past it; the others wait at a
+        stop line 10 m before its node, behind the crossings (after 20 s they go anyway: no two
+        queues wait on each other for ever);
+      - pick-ups and stands keep 15 m from junctions;
+      - a taxi pulling out from the kerb goes before one standing level with it.
     - **Where each cab stands:**
       - in its lane, 1.5 m right of the centreline;
       - at the kerb, 2.3 m right, while it picks up or sets down;
-      - waiting: in its lay-by, bay after bay.
+      - waiting: in its lay-by, two bays; those behind wait in a depot, not drawn (the depots,
+        where the cabs would charge, are not built yet).
     - **The cab** (`vehicles::taxi_cab`): a 3.6 × 1.8 × 1.65 m pod with an ivory body, dark
       glass and an amber band. The cabs are drawn as movers after the trams.
     - **Numbers:**
-      - the example: 279 taxis; from 4 a.m., a mean wait of 25 s and none off the carriageway an hour on;
-      - the sandbox: 936 taxis.
-    - **Not yet:** the cabs pass through one another (no traffic), and there is one model, no
-      8-seat shuttles.
+      - the example: 515 taxis. From 8:00, at 9:02: 2 645 trips by tram, 1 460 by taxi, none
+        waiting, a mean wait of 43 s, no taxi stuck;
+      - the sandbox: 1 727 taxis; the trams serve half of the trips by tram or taxi, 17 % of the
+        rest book a taxi.
+    - **Not yet:** the depots; the 8-seat shuttles; taxis that stop for people at the crossings.
     - **Tests:**
       - `waiting_taxis_stand_in_their_lay_bys_and_moving_ones_on_the_roads`: none off the
-        carriageway at the start; at most 1 in 20 an hour on;
-      - `forge-sim`'s four tests: fetch-carry-return, determinism, busy-hour cruising, and routes
-        that follow the roads.
+        carriageway at the start, none drawn one on another; at most 1 in 20 an hour on;
+      - `at_the_morning_peak_the_taxis_keep_moving`: none stuck, a mean wait under 2 minutes,
+        the trams carrying more than the taxis;
+      - `forge-sim`'s tests: fetch-carry-return, determinism, busy-hour cruising, routes that
+        follow the roads, a taxi stopping behind one standing, no two overlapping in a lane
+        (6 122 pairs, the closest 2.0 m apart, 6 pulling out), one at a time in a junction
+        (19 463 samples, none shared), and trips one tram line serves taking the tram.
   - **No hairlines:** the junctions' pieces (corner wedges, gap mitres) reach 0.3 m into the
     strips they join, and the carriageway's gaps close among the driven arms only (a pedestrian
     street's mouth between an avenue's arms left a sliver of pavement on the asphalt).

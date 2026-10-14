@@ -4199,8 +4199,14 @@ times they circulate round the busy places, where they will most likely find som
     carries them, and returns to a stand with a free bay.
   - **Busy hours** (the hour's rate above 1.3 times the day's mean): each stand's second taxi
     cruises.
-  - **Fleet size:** one taxi for 90 trips a day. The example has 279 taxis, with a 25 s mean wait from 4 a.m.,
-    the sandbox 936.
-  - **Not yet:** traffic between the cabs.
+  - **Trams first** (the owner: not everybody takes a taxi, and it has to be useful to the one
+    who does): a trip goes by tram when one line serves both ends within 400 m, or two lines
+    with one change. A share of the other trips books a taxi, so that taxis carry D-059's 2 %.
+  - **Fleet size:** three trips a taxi in the busiest hour. The example has 515 taxis, with no
+    bookings waiting and a 43 s mean wait at 9:00; the sandbox 1 727.
+  - **Traffic:** car-following in each lane (the Intelligent Driver Model), one taxi at a time
+    through a junction with room past it, stop lines 10 m before.
+  - **Not yet:** depots to charge in (the cabs behind a stand's two bays wait out of sight), and
+    the 8-seat shuttles.
 - **Crossings (the owner's go):** raised tables on the taxi roads; dropped kerbs on the tram
   avenues.

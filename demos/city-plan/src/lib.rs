@@ -2913,7 +2913,12 @@ impl Scenario for PlanScenario {
         }
         // The taxis, last.
         if let Some(t) = &self.taxis {
-            tracing::info!(taxis = t.len(), "the taxi fleet");
+            tracing::info!(
+                taxis = t.len(),
+                unserved = format!("{:.0} %", t.unserved * 100.0),
+                taxi_share = format!("{:.0} %", t.taxi_share * 100.0),
+                "the taxi fleet: the trips by tram or taxi the trams do not serve, the share of them that book a taxi"
+            );
             let cab = builder.add_mesh(&MeshletMesh::build(&vehicles::taxi_cab()));
             builder.set_mesh_material(cab, materials_taxi);
             tram_movers.push((cab, t.len() as u32));
@@ -3295,9 +3300,14 @@ impl Running for PlanRunning {
         // Then the taxis, moving.
         if let Some(taxis) = &self.taxis {
             still.resize(transforms.len(), false);
-            for (p, yaw) in taxis.poses() {
+            for (k, (p, yaw)) in taxis.poses().into_iter().enumerate() {
                 still.push(false);
-                transforms.push(place((taxis::world(self.size, p), yaw)));
+                let mut at = taxis::world(self.size, p);
+                // Waiting behind its stand's bays: in a depot not built yet, out of sight.
+                if taxis.in_depot(k) {
+                    at.y -= 50.0;
+                }
+                transforms.push(place((at, yaw)));
             }
         }
         scene.set_movers_still(&transforms, |k| still.get(k).copied().unwrap_or(false));

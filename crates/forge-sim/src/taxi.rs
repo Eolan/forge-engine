@@ -119,6 +119,51 @@ struct Leg {
     to: f64,
 }
 
+impl Leg {
+    fn forward(&self) -> bool {
+        self.to >= self.from
+    }
+
+    fn length(&self) -> f64 {
+        (self.to - self.from).abs()
+    }
+
+    /// Metres from the end of `link` it enters by, `into` metres into the leg.
+    fn along(&self, link: &Link, into: f64) -> f64 {
+        if self.forward() {
+            self.from + into
+        } else {
+            link.length - self.from + into
+        }
+    }
+
+    /// The node it ends at (a leg before a route's last ends at its link's end).
+    fn end(&self, link: &Link) -> u32 {
+        if self.forward() { link.b } else { link.a }
+    }
+}
+
+/// A taxi in a lane: its link, its way along it, how far from the end it entered by, and its
+/// index. Sorted, the fleet's lanes front to back.
+type Lane = (u32, bool, f64, u32);
+
+/// Nobody holds the junction.
+const NOBODY: u32 = u32::MAX;
+
+/// The first taxi in the lane `link`, `forward` past `along` metres from its entry (or at it, by a
+/// higher index than `me`), other than `me`: how far along and which.
+fn first_past(lanes: &[Lane], link: u32, forward: bool, along: f64, me: u32) -> Option<(f64, u32)> {
+    let start = lanes.partition_point(|o| {
+        (o.0, o.1) < (link, forward)
+            || ((o.0, o.1) == (link, forward) && (o.2 < along || (o.2 == along && o.3 <= me)))
+    });
+    lanes[start..]
+        .iter()
+        .take_while(|o| o.0 == link && o.1 == forward)
+        .find(|o| o.3 != me)
+        .map(|o| (o.2, o.3))
+}
+
 /// A route over the network.
 #[derive(Clone, Debug, Default, PartialEq)]
 struct Route {
@@ -205,6 +250,8 @@ pub struct Taxi {
     route: Route,
     s: f64,
     speed: f64,
+    /// Seconds it has waited at a stop line.
+    waited: f64,
 }
 
 /// Where the demand comes from and goes to, and how much of it there is by the hour.
@@ -212,10 +259,68 @@ pub struct Taxi {
 pub struct Demand {
     /// Places people book from or go to, with their weight (homes and shops).
     pub places: Vec<(Spot, f64)>,
-    /// Bookings an hour across the city, hour by hour from midnight.
+    /// The trips an hour across the city that could take a taxi (by tram or by taxi), hour by
+    /// hour from midnight.
     pub per_hour: [f64; 24],
     /// The hours the fleet circulates rather than waits: bookings an hour over this.
     pub busy_over: f64,
+    /// Each tram line's stops: a trip with both ends within [`Demand::walk`] of one line's stops
+    /// takes the tram (the owner: a taxi has to be useful to the one who takes it).
+    pub tram_stops: Vec<Vec<DVec2>>,
+    /// How far people walk to a tram stop, metres.
+    pub walk: f64,
+    /// Which lines meet, by line: a trip takes the tram with one change where a line near its
+    /// start meets one near its end ([`Demand::meets`]).
+    pub tram_meets: Vec<Vec<bool>>,
+    /// The share of the trips the trams do not serve that book a taxi; the rest change trams,
+    /// walk or cycle.
+    pub taxi_share: f64,
+}
+
+impl Demand {
+    /// Which of the lines `stops` meet: two lines with stops within `change` metres of each
+    /// other, where people change trams.
+    pub fn meets(stops: &[Vec<DVec2>], change: f64) -> Vec<Vec<bool>> {
+        let n = stops.len();
+        let mut meets = vec![vec![false; n]; n];
+        for i in 0..n {
+            meets[i][i] = true;
+            for j in i + 1..n {
+                let m = stops[i]
+                    .iter()
+                    .any(|p| stops[j].iter().any(|q| p.distance(*q) <= change));
+                meets[i][j] = m;
+                meets[j][i] = m;
+            }
+        }
+        meets
+    }
+
+    /// Whether a trip from `a` to `b` takes the tram: a line stops within a walk of both, or a
+    /// line near `a` meets one near `b` (one change).
+    pub fn by_tram(&self, a: DVec2, b: DVec2) -> bool {
+        let near = |p: DVec2| -> Vec<usize> {
+            (0..self.tram_stops.len())
+                .filter(|&l| {
+                    self.tram_stops[l]
+                        .iter()
+                        .any(|s| s.distance(p) <= self.walk)
+                })
+                .collect()
+        };
+        let (from, to) = (near(a), near(b));
+        from.iter().any(|&i| {
+            to.iter().any(|&j| {
+                i == j
+                    || self
+                        .tram_meets
+                        .get(i)
+                        .and_then(|m| m.get(j))
+                        .copied()
+                        .unwrap_or(false)
+            })
+        })
+    }
 }
 
 /// A stand: its spot on the network and how many bays it has.
@@ -235,6 +340,29 @@ pub const ACCEL: f64 = 1.5;
 pub const DWELL: f64 = 25.0;
 /// The shortest trip people book a taxi for, metres (shorter, they walk or take the tram).
 pub const SHORTEST_TRIP: f64 = 700.0;
+/// A cab's length, metres (`forge_geom::vehicles::taxi_cab`).
+pub const LENGTH: f64 = 3.6;
+/// The gap a taxi keeps to the one ahead when both stand, metres.
+pub const STANDSTILL: f64 = 2.0;
+/// The time gap it keeps to the one ahead at speed, seconds.
+const HEADWAY: f64 = 1.2;
+/// How hard it brakes in comfort, metres a second squared.
+const BRAKE: f64 = 2.0;
+/// How far along its route it looks for the taxi ahead, metres.
+const LOOKAHEAD: f64 = 60.0;
+/// Where a taxi waits for a junction another holds: this far before its node, metres (behind
+/// the crossings round it).
+pub const STOP_LINE: f64 = 10.0;
+/// How far before a junction a taxi asks for it, metres.
+const APPROACH: f64 = 25.0;
+/// How far past a junction's node a taxi holds it, metres.
+const CLEAR: f64 = 8.0;
+/// How long a taxi waits at a stop line before it goes anyway, seconds: no two queues wait on
+/// each other for ever.
+const PATIENCE: f64 = 20.0;
+/// How far from a junction pick-ups and stands keep, metres (a taxi stopped there would hold
+/// the junction's traffic).
+pub const JUNCTION_CLEAR: f64 = 15.0;
 
 /// The fleet.
 #[derive(Clone, Debug)]
@@ -242,6 +370,8 @@ pub struct Fleet {
     net: Network,
     /// Each node's links out: (link, the other node, whether the link runs from this node).
     adjacency: Vec<Vec<(u32, u32, bool)>>,
+    /// The taxi crossing each junction (three links or more), or `NOBODY`.
+    holder: Vec<u32>,
     /// The stands.
     pub stands: Vec<Stand>,
     /// The taxis.
@@ -255,6 +385,10 @@ pub struct Fleet {
     /// The fleet's clock, seconds from midnight of day 0.
     pub time: f64,
     next_booking: f64,
+    /// The trips taken by tram so far: one line served both ends.
+    pub by_tram: u64,
+    /// The trips the trams did not serve that went another way than by taxi so far.
+    pub otherwise: u64,
 }
 
 impl Fleet {
@@ -262,9 +396,9 @@ impl Fleet {
     /// `time` seconds from midnight.
     pub fn new(
         net: Network,
-        stands: Vec<Stand>,
+        mut stands: Vec<Stand>,
         taxis: usize,
-        demand: Demand,
+        mut demand: Demand,
         seed: u64,
         time: f64,
     ) -> Self {
@@ -272,6 +406,18 @@ impl Fleet {
         for (k, l) in net.links.iter().enumerate() {
             adjacency[l.a as usize].push((k as u32, l.b, true));
             adjacency[l.b as usize].push((k as u32, l.a, false));
+        }
+        // Pick-ups and stands clear of the junctions.
+        let clear = |spot: &mut Spot| {
+            let length = net.links[spot.link as usize].length;
+            let margin = JUNCTION_CLEAR.min(length * 0.5);
+            spot.s = spot.s.clamp(margin, length - margin);
+        };
+        for (spot, _) in &mut demand.places {
+            clear(spot);
+        }
+        for stand in &mut stands {
+            clear(&mut stand.at);
         }
         let mut fleet_taxis = Vec::with_capacity(taxis);
         for k in 0..taxis {
@@ -282,6 +428,7 @@ impl Fleet {
                 route: Route::default(),
                 s: 0.0,
                 speed: 0.0,
+                waited: 0.0,
             });
         }
         let mut cumulative = Vec::with_capacity(demand.places.len());
@@ -290,8 +437,10 @@ impl Fleet {
             total += w.max(0.0);
             cumulative.push(total);
         }
+        let holder = vec![NOBODY; net.nodes.len()];
         let mut fleet = Self {
             net,
+            holder,
             adjacency,
             stands,
             taxis: fleet_taxis,
@@ -302,6 +451,8 @@ impl Fleet {
             rng: SplitMix64::new(seed),
             time,
             next_booking: time,
+            by_tram: 0,
+            otherwise: 0,
         };
         fleet.next_booking = time + fleet.gap();
         fleet
@@ -363,6 +514,15 @@ impl Fleet {
             if a.distance(b) < SHORTEST_TRIP {
                 continue;
             }
+            // By tram where one line serves both ends; else a share of them books a taxi.
+            if self.demand.by_tram(a, b) {
+                self.by_tram += 1;
+                continue;
+            }
+            if self.rng.next_f64() >= self.demand.taxi_share {
+                self.otherwise += 1;
+                continue;
+            }
             self.bookings.push(Booking {
                 time: made,
                 from,
@@ -382,12 +542,17 @@ impl Fleet {
             self.send(k, from, to, Task::Fetching { booking: b });
         }
         // At a busy hour the taxis waiting behind a stand's first go out to circulate round the
-        // busy places; one stays at each stand.
+        // busy places, one at a time as the road at the stand clears (they left together, one
+        // on another); one stays at each stand.
         if self.busy() {
+            let mut left = vec![false; self.stands.len()];
             for k in 0..self.taxis.len() {
                 if let Task::Waiting { stand, bay } = self.taxis[k].task
                     && bay > 0
+                    && !left[stand as usize]
+                    && !self.crowded(self.stands[stand as usize].at)
                 {
+                    left[stand as usize] = true;
                     let at = self.stands[stand as usize].at;
                     self.free(k, at);
                     // Its bay is freed: the ones behind move up.
@@ -402,9 +567,157 @@ impl Fleet {
                 }
             }
         }
-        for k in 0..self.taxis.len() {
-            self.drive(k, dt);
+        // The junctions their holders have crossed are free again.
+        for node in 0..self.holder.len() {
+            let h = self.holder[node];
+            if h != NOBODY && !self.holds(h as usize, node as u32) {
+                self.holder[node] = NOBODY;
+            }
         }
+        // The lanes as they stand at the step's start: each taxi follows the one ahead of it in
+        // its lane along its route, and waits at a junction another taxi crosses.
+        let mut lanes: Vec<Lane> = (0..self.taxis.len())
+            .filter_map(|k| {
+                let (i, into) = self.on_leg(k)?;
+                let leg = self.taxis[k].route.legs[i];
+                let link = &self.net.links[leg.link as usize];
+                Some((leg.link, leg.forward(), leg.along(link, into), k as u32))
+            })
+            .collect();
+        lanes.sort_by(|a, b| {
+            (a.0, a.1)
+                .cmp(&(b.0, b.1))
+                .then(a.2.total_cmp(&b.2))
+                .then(a.3.cmp(&b.3))
+        });
+        for k in 0..self.taxis.len() {
+            let (mut gap, mut lead, junction) = self.ahead(k, &lanes);
+            if let Some((node, room, to_node)) = junction {
+                let h = self.holder[node as usize];
+                let patient = self.taxis[k].waited >= PATIENCE;
+                if h != k as u32 && ((h == NOBODY && room) || patient) {
+                    self.holder[node as usize] = k as u32;
+                }
+                if self.holder[node as usize] == k as u32 {
+                    self.taxis[k].waited = 0.0;
+                } else if to_node > STOP_LINE - 1.0 {
+                    // At its stop line, behind the crossings round the junction.
+                    let line = (to_node - STOP_LINE).max(0.0);
+                    if line < gap {
+                        gap = line;
+                        lead = 0.0;
+                    }
+                    if self.taxis[k].speed < 0.5 {
+                        self.taxis[k].waited += dt;
+                    }
+                }
+            }
+            self.drive(k, dt, gap, lead);
+        }
+    }
+
+    /// Where taxi `k` is along its route: its leg and how far into it; `None` off the roads
+    /// (waiting in its lay-by, or with no route).
+    fn on_leg(&self, k: usize) -> Option<(usize, f64)> {
+        let t = &self.taxis[k];
+        if matches!(t.task, Task::Waiting { .. }) || t.route.legs.is_empty() {
+            return None;
+        }
+        let mut left = t.s.clamp(0.0, t.route.length);
+        let last = t.route.legs.len() - 1;
+        for (i, leg) in t.route.legs.iter().enumerate() {
+            if left <= leg.length() || i == last {
+                return Some((i, left.min(leg.length())));
+            }
+            left -= leg.length();
+        }
+        None
+    }
+
+    /// Whether a taxi on the road stands within a length and a gap of `spot`, either way.
+    fn crowded(&self, spot: Spot) -> bool {
+        (0..self.taxis.len()).any(|k| {
+            self.on_leg(k).is_some_and(|(i, into)| {
+                let leg = self.taxis[k].route.legs[i];
+                let s = if leg.forward() {
+                    leg.from + into
+                } else {
+                    leg.from - into
+                };
+                leg.link == spot.link && (s - spot.s).abs() < LENGTH + STANDSTILL
+            })
+        })
+    }
+
+    /// Whether taxi `k` is still crossing junction `node`: driving up to it or just past it.
+    fn holds(&self, k: usize, node: u32) -> bool {
+        let t = &self.taxis[k];
+        if matches!(t.task, Task::Waiting { .. } | Task::Stopped { .. }) {
+            return false;
+        }
+        let Some((i, into)) = self.on_leg(k) else {
+            return false;
+        };
+        let legs = &t.route.legs;
+        let link = |leg: &Leg| &self.net.links[leg.link as usize];
+        let coming = i + 1 < legs.len()
+            && legs[i].end(link(&legs[i])) == node
+            && legs[i].length() - into <= APPROACH;
+        let leaving = i > 0 && legs[i - 1].end(link(&legs[i - 1])) == node && into < CLEAR;
+        coming || leaving
+    }
+
+    /// What lies ahead of taxi `k` in `lanes`: the gap to the taxi in front along its route,
+    /// bumper to bumper (metres), and its speed; and the junction it nears, if any: its node,
+    /// whether there is room for the taxi past it, and how far the node is.
+    fn ahead(&self, k: usize, lanes: &[Lane]) -> (f64, f64, Option<(u32, bool, f64)>) {
+        let none = (f64::INFINITY, 0.0, None);
+        if matches!(self.taxis[k].task, Task::Stopped { .. }) {
+            return none;
+        }
+        let Some((i, into)) = self.on_leg(k) else {
+            return none;
+        };
+        let me = k as u32;
+        let legs = &self.taxis[k].route.legs;
+        let link = |leg: &Leg| &self.net.links[leg.link as usize];
+        let (mut gap, mut lead) = (f64::INFINITY, 0.0);
+        // In its own leg, then along the next ones as far as it looks.
+        let mut to_leg = -into;
+        for (j, leg) in legs.iter().enumerate().skip(i) {
+            if to_leg > LOOKAHEAD {
+                break;
+            }
+            let entry = if j == i { into } else { 0.0 };
+            let mut from = leg.along(link(leg), entry);
+            // Pulling out, it goes before a taxi level with it (one stopped at the kerb where it
+            // turned, which it waited behind for the whole stop).
+            if self.taxis[k].s < 0.01 && j == i {
+                from += 0.01;
+            }
+            if let Some((at, other)) = first_past(lanes, leg.link, leg.forward(), from, me)
+                && at <= leg.along(link(leg), leg.length()) + LENGTH
+            {
+                gap = to_leg + (at - leg.along(link(leg), 0.0)) - LENGTH;
+                lead = self.taxis[other as usize].speed;
+                break;
+            }
+            to_leg += leg.length();
+        }
+        // The junction at its leg's end.
+        let mut junction = None;
+        if i + 1 < legs.len() {
+            let node = legs[i].end(link(&legs[i]));
+            let to_node = legs[i].length() - into;
+            if self.adjacency[node as usize].len() >= 3 && to_node <= APPROACH {
+                let exit = &legs[i + 1];
+                let entry = exit.along(link(exit), 0.0);
+                let room = first_past(lanes, exit.link, exit.forward(), entry, me)
+                    .is_none_or(|(at, _)| at - entry >= 2.0 * LENGTH + STANDSTILL);
+                junction = Some((node, room, to_node));
+            }
+        }
+        (gap, lead, junction)
     }
 
     /// The free taxi nearest `spot` (waiting, returning or cruising), as the crow flies.
@@ -582,7 +895,7 @@ impl Fleet {
         order(true).or_else(|| order(false))
     }
 
-    fn drive(&mut self, k: usize, dt: f64) {
+    fn drive(&mut self, k: usize, dt: f64, gap: f64, lead: f64) {
         let task = self.taxis[k].task;
         match task {
             Task::Waiting { .. } => return,
@@ -605,16 +918,23 @@ impl Fleet {
             _ => {}
         }
         let t = &mut self.taxis[k];
-        // Speeding up to the cruise, slowing to stop at the route's end.
+        // Speeding up to the cruise, slowing to stop at the route's end; and behind the taxi or
+        // the stop line `gap` metres ahead, which goes at `lead`, the Intelligent Driver Model
+        // (Treiber, Hennecke and Helbing 2000): a gap of STANDSTILL standing, HEADWAY at speed.
         let remaining = (t.route.length - t.s).max(0.0);
         let can_stop = (2.0 * ACCEL * remaining).sqrt();
         let target = CRUISE.min(can_stop);
-        t.speed = if t.speed < target {
-            (t.speed + ACCEL * dt).min(target)
+        let v = t.speed;
+        let free = if v < target {
+            (v + ACCEL * dt).min(target)
         } else {
             target
         };
-        t.s += t.speed * dt;
+        let wanted = STANDSTILL + v * HEADWAY + v * (v - lead) / (2.0 * (ACCEL * BRAKE).sqrt());
+        let accel = ACCEL * (1.0 - (v / CRUISE).powi(4) - (wanted.max(0.0) / gap.max(0.1)).powi(2));
+        t.speed = free.min((v + accel * dt).max(0.0));
+        // Never into what is ahead.
+        t.s += (t.speed * dt).min((gap - 0.2).max(0.0));
         if t.s + 0.05 < t.route.length {
             return;
         }
@@ -746,6 +1066,10 @@ mod tests {
             places,
             per_hour: [per_hour; 24],
             busy_over: per_hour * 2.0,
+            tram_stops: Vec::new(),
+            walk: 400.0,
+            tram_meets: Vec::new(),
+            taxi_share: 1.0,
         };
         Fleet::new(net, stands, taxis, demand, 7, 8.0 * 3600.0)
     }
@@ -807,5 +1131,153 @@ mod tests {
         // Along the grid, the Manhattan distance at least.
         let manhattan = (p1 - p0).abs().element_sum();
         assert!(r.length + 1e-6 >= manhattan, "{} < {manhattan}", r.length);
+    }
+
+    #[test]
+    fn a_taxi_stops_behind_one_standing_in_its_lane() {
+        let mut f = fleet(0.001, 2);
+        // Taxi 1 stands at the kerb 100 m along link 0; taxi 0 drives up the same lane.
+        let ahead = f.route(Spot { link: 0, s: 20.0 }, Spot { link: 0, s: 100.0 });
+        f.taxis[1].route = ahead;
+        f.taxis[1].s = f.taxis[1].route.length;
+        f.taxis[1].task = Task::Stopped {
+            left: 1e6,
+            then: None,
+        };
+        let behind = f.route(Spot { link: 0, s: 10.0 }, Spot { link: 0, s: 190.0 });
+        f.taxis[0].route = behind;
+        f.taxis[0].task = Task::Cruising;
+        f.advance_to(f.time + 60.0, 0.25);
+        let (p0, _) = f.pose(0);
+        let (p1, _) = f.pose(1);
+        let gap = p0.distance(p1) - LENGTH;
+        assert!(
+            (STANDSTILL * 0.5..STANDSTILL + 1.0).contains(&gap),
+            "a gap of {gap:.2} m behind the standing taxi"
+        );
+        assert!(
+            f.taxis[0].speed < 0.01,
+            "still moving at {}",
+            f.taxis[0].speed
+        );
+    }
+
+    #[test]
+    fn no_two_taxis_overlap_in_a_lane() {
+        let mut f = fleet(400.0, 40);
+        f.demand.busy_over = 100.0;
+        let (mut worst, mut samples, mut queued, mut pulling) = (f64::INFINITY, 0, 0, 0);
+        for _ in 0..(2 * 3600 / 5) {
+            f.advance_to(f.time + 5.0, 0.25);
+            let mut lanes: Vec<(u32, bool, f64, usize)> = (0..f.taxis.len())
+                .filter_map(|k| {
+                    let (i, into) = f.on_leg(k)?;
+                    let leg = f.taxis[k].route.legs[i];
+                    let link = &f.net.links[leg.link as usize];
+                    Some((leg.link, leg.forward(), leg.along(link, into), k))
+                })
+                .collect();
+            lanes.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)).then(a.2.total_cmp(&b.2)));
+            for w in lanes.windows(2) {
+                if (w[0].0, w[0].1) != (w[1].0, w[1].1) {
+                    continue;
+                }
+                samples += 1;
+                let gap = w[1].2 - w[0].2 - LENGTH;
+                if gap < STANDSTILL + 1.0 {
+                    queued += 1;
+                }
+                // Pulling out from the kerb where it stopped, a taxi may pass by one standing
+                // level with it or cut in ahead of one coming: for a few seconds.
+                let starting = |k: usize| {
+                    !matches!(f.taxis[k].task, Task::Stopped { .. })
+                        && f.taxis[k].s < LENGTH + STANDSTILL
+                };
+                if starting(w[0].3) || starting(w[1].3) {
+                    pulling += usize::from(gap < -0.5);
+                    continue;
+                }
+                worst = worst.min(gap);
+            }
+        }
+        println!(
+            "{samples} pairs in one lane, {queued} queued, {pulling} pulling out across another, \
+             the closest others {worst:.2} m apart"
+        );
+        assert!(samples > 100, "only {samples} pairs met in a lane");
+        assert!(worst > -0.5, "two taxis {:.2} m into each other", -worst);
+        assert!(
+            pulling * 100 <= samples,
+            "{pulling} of {samples} pulling out across another"
+        );
+    }
+
+    #[test]
+    fn one_taxi_at_a_time_crosses_a_junction() {
+        let mut f = fleet(400.0, 40);
+        f.demand.busy_over = 100.0;
+        let junctions: Vec<DVec2> = (0..f.net.nodes.len())
+            .filter(|&n| f.adjacency[n].len() >= 3)
+            .map(|n| f.net.nodes[n])
+            .collect();
+        let (mut crossings, mut shared) = (0, 0);
+        for _ in 0..(2 * 3600 * 2) {
+            f.advance_to(f.time + 0.5, 0.25);
+            for &node in &junctions {
+                let inside = (0..f.taxis.len())
+                    .filter(|&k| f.on_leg(k).is_some() && f.pose(k).0.distance(node) < 4.0)
+                    .count();
+                crossings += usize::from(inside > 0);
+                shared += usize::from(inside > 1);
+            }
+        }
+        println!("{crossings} junction samples with a taxi in, {shared} with two or more");
+        assert!(
+            crossings > 100,
+            "only {crossings} junction samples with a taxi in"
+        );
+        assert!(
+            shared * 50 <= crossings,
+            "{shared} of {crossings} with two taxis in"
+        );
+    }
+
+    #[test]
+    fn a_trip_one_tram_line_serves_takes_the_tram() {
+        // A line along the grid's first row, a stop every 200 m: trips between places on that
+        // row go by tram; those to the far rows book taxis.
+        let mut f = fleet(400.0, 8);
+        f.demand.tram_stops = vec![
+            (0..8)
+                .map(|x| DVec2::new(f64::from(x) * 200.0, 0.0))
+                .collect(),
+        ];
+        let row = |spot: &Spot| f.net.at(*spot).0.y < 1.0;
+        let near: Vec<(Spot, f64)> = f
+            .demand
+            .places
+            .iter()
+            .copied()
+            .filter(|(s, _)| row(s))
+            .collect();
+        f.demand.places = near;
+        f.cumulative = (1..=f.demand.places.len()).map(|n| n as f64).collect();
+        f.advance_to(f.time + 3600.0, 0.5);
+        assert!(f.by_tram > 50, "{} trips by tram", f.by_tram);
+        assert!(
+            f.bookings.is_empty(),
+            "{} taxis booked along the line",
+            f.bookings.len()
+        );
+        // A share of the rest books.
+        let mut g = fleet(400.0, 8);
+        g.demand.taxi_share = 0.25;
+        g.advance_to(g.time + 3600.0, 0.5);
+        let (booked, other) = (g.bookings.len() as f64, g.otherwise as f64);
+        let share = booked / (booked + other);
+        assert!(
+            (0.15..0.35).contains(&share),
+            "{share:.2} of the trips booked a taxi"
+        );
     }
 }
