@@ -896,13 +896,65 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
     let connected = streets::connect_sites(site, &sites, &lines);
     lines.extend(connected);
     // The quays along the rivers' banks, after the bridges took their roads inland.
-    let mut quays = streets::quay_lines(site, ground::PROMENADE, &built);
+    // Where no traced street already runs along the bank within 25 m: two walks side by side.
+    let mut traced = geom::PointGrid::new(site.size, 40.0);
+    for l in &lines {
+        for p in geom::resample(&l.points, 5.0) {
+            traced.insert(p, 0);
+        }
+    }
+    let mut quays: Vec<streets::Streamline> = Vec::new();
+    for quay in streets::quay_lines(site, ground::PROMENADE, &built) {
+        let mut run: Vec<DVec2> = Vec::new();
+        let flush = |run: &mut Vec<DVec2>, quays: &mut Vec<streets::Streamline>| {
+            if geom::polyline_length(run) >= 100.0 {
+                quays.push(streets::Streamline {
+                    points: std::mem::take(run),
+                    ..quay.clone()
+                });
+            }
+            run.clear();
+        };
+        for p in geom::resample(&quay.points, 5.0) {
+            if traced.any_within(p, 25.0, |_| false) {
+                flush(&mut run, &mut quays);
+            } else {
+                run.push(p);
+            }
+        }
+        flush(&mut run, &mut quays);
+    }
     // And along the sea: a beach before the promenade, or a working quay's edge in industry.
     let coast_setback = |p: DVec2| match kind_at(p).map(|d| d.kind) {
         Some(DistrictKind::Industrial) => QUAY_SETBACK,
         _ => BEACH,
     };
-    quays.extend(streets::coast_lines(site, &coast_setback, &built));
+    // The seafront stops where it would run beside a river's quay: at the mouth both ran there,
+    // two walks 10 m apart.
+    let river_quays: Vec<DVec2> = quays
+        .iter()
+        .flat_map(|q| geom::resample(&q.points, 5.0))
+        .collect();
+    for coast in streets::coast_lines(site, &coast_setback, &built) {
+        let mut run: Vec<DVec2> = Vec::new();
+        let flush = |run: &mut Vec<DVec2>, quays: &mut Vec<streets::Streamline>| {
+            if geom::polyline_length(run) >= 100.0 {
+                quays.push(streets::Streamline {
+                    points: std::mem::take(run),
+                    ..coast.clone()
+                });
+            }
+            run.clear();
+        };
+        for p in geom::resample(&coast.points, 5.0) {
+            if river_quays.iter().any(|q| q.distance(p) < 30.0) {
+                flush(&mut run, &mut quays);
+            } else {
+                run.push(p);
+            }
+        }
+        flush(&mut run, &mut quays);
+    }
     lines.extend(quays.iter().cloned());
     let mut roads = graph::build(site, &lines, 1.5, 60.0);
     // Twice: the first pass moves junctions, and a pair it left may now be close.

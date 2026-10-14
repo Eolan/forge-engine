@@ -595,6 +595,19 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
   - **The sandbox:** close junctions 353 → 0, short streets 342 → 0, sharp meetings 81 → 0,
     doubled streets 22 → 3, nodes on the water 1 → 0, close bridges 2 → 0, 12 bridges; the
     homes unchanged (about 980 k people). Test: `the_network_has_one_place_for_each_junction`.
+  - **Checked over seeds** (the owner: "or else it will just go back if we change a param or the
+    seed"): `the_rules_hold_on_other_seeds` builds the example city on four seeds, and the
+    sandbox's `tests/seeds.rs` the real site on three. Each must have no network defect, every
+    street polygon covered by its triangles, and every door and court reached on foot. The real
+    site's seeds first showed what the example's did not:
+    - junctions straightened last came close again (straightening now runs first);
+    - narrow loops of one street traced up and back (two streets between the same junctions
+      under 25 m apart are one);
+    - streets judged at their width before a tram widened them into one another (judged at a
+      tram avenue's 24 m);
+    - a court with no wall stretch facing one (passages may run slant);
+    - a street door onto a pocket the block's buildings close (back to a window when its
+      building keeps another door).
 - **quays, promenades and the seafront** (D-061). With no street along a bank, the land between
   the last street and the water was no block at all: bare ground with streets crossing it (the
   owner's "gigantic paved areas").

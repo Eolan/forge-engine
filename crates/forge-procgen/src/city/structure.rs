@@ -373,7 +373,14 @@ pub fn structures(plan: &CityPlan, masses: &[Mass]) -> Vec<Structure> {
     for (m, k) in doors {
         let s = &mut out[m as usize];
         let o = s.openings[k];
-        if s.walls[o.wall].role == WallRole::Court {
+        // A street door too, onto a pocket the block's buildings close, while its building keeps
+        // another door.
+        let doors_left = s
+            .openings
+            .iter()
+            .filter(|q| q.kind == OpeningKind::Door)
+            .count();
+        if s.walls[o.wall].role == WallRole::Court || doors_left > 1 {
             let t = s.era.table();
             s.openings[k] = Opening {
                 kind: OpeningKind::Window,
@@ -712,12 +719,27 @@ fn passages(plan: &CityPlan, masses: &[Mass], structures: &[Structure]) -> Vec<P
                         if court.role != WallRole::Court {
                             continue;
                         }
-                        let along = geom::closest_on_segment(p, court.a, court.b) * court.length();
-                        let fits = court.open[0].iter().any(|&(l, h)| {
-                            along - PASSAGE.0 * 0.5 >= l && along + PASSAGE.0 * 0.5 <= h
-                        });
-                        if fits && best.is_none_or(|x| hi - lo > x.5) {
-                            best = Some((i, sw, cw, mid, along, hi - lo));
+                        // Straight across if it is open there, else the nearest place of an open
+                        // stretch wide enough, the passage running slant through the mass: only
+                        // straight across, a court with no stretch facing one went unreached on
+                        // other seeds.
+                        let across = geom::closest_on_segment(p, court.a, court.b) * court.length();
+                        let half = PASSAGE.0 * 0.5;
+                        let along = court.open[0]
+                            .iter()
+                            .filter(|&&(l, h)| h - l >= PASSAGE.0)
+                            .map(|&(l, h)| across.clamp(l + half, h - half))
+                            .min_by(|a, b| (a - across).abs().total_cmp(&(b - across).abs()));
+                        let Some(along) = along else { continue };
+                        let q = court.a + (court.b - court.a).normalize() * along;
+                        let slant = (along - across).abs();
+                        if slant > 0.0 && !geom::contains(&masses[i].footprint, (p + q) * 0.5) {
+                            continue;
+                        }
+                        // Straight ones first, then the longest street stretch.
+                        let score = hi - lo - 4.0 * slant;
+                        if best.is_none_or(|x| score > x.5) {
+                            best = Some((i, sw, cw, mid, along, score));
                         }
                     }
                 }

@@ -230,3 +230,59 @@ fn the_street_ground_triangulates_whole() {
     println!("street ground polygons: {whole} whole, {short} short of {lost:.0} m²");
     assert_eq!(short, 0, "{short} polygons short of {lost:.0} m²");
 }
+
+/// The rules that make the streets, the ground and the buildings hold on other seeds too, not
+/// only the one the views were checked on (the owner: "or else it will just go back if we change
+/// a param or the seed").
+#[test]
+fn the_rules_hold_on_other_seeds() {
+    use super::ground;
+    let size = 4000.0;
+    let site = example::site(size, 10.0);
+    let mut failures = Vec::new();
+    for seed in [0x5EED_0001_u64, 0x5EED_0042, 0xC17E_0003, 0xBEEF_0007] {
+        let mut params = example::params(size);
+        params.seed = forge_core::Seed::new(seed);
+        let city = plan(&site, &params);
+        let d = super::graph::defects(&city.roads, &site);
+        // The street ground drawn whole.
+        let mut short = 0;
+        for t in &city.ground.tiles {
+            for shapes in [&t.walk, &t.carriageway, &t.crossings] {
+                for polygon in ground::simple_polygons(shapes) {
+                    let area = geom::signed_area(&polygon).abs();
+                    let covered: f64 = ground::triangles(&polygon)
+                        .iter()
+                        .map(|tri| geom::signed_area(tri).abs())
+                        .sum();
+                    if covered < area * 0.999 - 0.01 {
+                        short += 1;
+                    }
+                }
+            }
+        }
+        // Everyone reaches their door and their court from the street.
+        let masses = super::mass::masses(&city, &super::bible::StyleBible::default(), seed);
+        let structures = super::structure::structures(&city, &masses);
+        let (doors, courts) = super::structure::unreached(&city, &masses, &structures);
+        println!(
+            "seed {seed:#x}: {d:?}; {short} polygons short; {} doors and {} courts unreached; {} masses",
+            doors.len(),
+            courts.len(),
+            masses.len()
+        );
+        let ok = d.close_junctions == 0
+            && d.short_streets == 0
+            && d.wet_nodes == 0
+            && d.close_bridges == 0
+            && d.sharp_meetings == 0
+            && d.doubled_streets == 0
+            && short == 0
+            && doors.is_empty()
+            && courts.is_empty();
+        if !ok {
+            failures.push(seed);
+        }
+    }
+    assert!(failures.is_empty(), "the rules fail on seeds {failures:x?}");
+}

@@ -344,6 +344,9 @@ pub struct Defects {
 pub const CLOSE: f64 = 20.0;
 /// Ways meeting at a node closer than this in direction meet too sharply, degrees.
 pub const SHARP: f64 = 25.0;
+/// Half the widest street's width (a tram avenue's), metres: how far a street may come to reach
+/// either side once the trams are routed.
+const WIDEST_HALF: f64 = 12.0;
 /// Bridges closer than this cross at one place, metres.
 pub const BRIDGE_GAP: f64 = 150.0;
 
@@ -479,18 +482,21 @@ pub fn defects(graph: &RoadGraph, site: &Site) -> Defects {
 }
 
 /// Cleans the network before streets are built on it (D-061), so each junction is one place:
+/// - through roads straightened across their junctions first ([`straighten`]);
 /// - junctions closer than [`CLOSE`], or joined by a street shorter than it, become one, at
 ///   their main roads' middle (else all of theirs), each street's moved end cut back and run
 ///   straight on to it;
 /// - of two streets between the same junctions, of a pair leaving a node within [`SHARP`]
 ///   degrees, and of a pair running doubled side by side, the lesser goes (a street before a
 ///   main road, the shorter first);
-/// - through roads straightened across their junctions ([`straighten`]);
+
 /// - then every dead end (but at the frame's edge), and the networks cut off with less than
 ///   [`MIN_NETWORK`] of streets.
 ///
 /// Returns how many nodes were merged away and streets dropped.
 pub fn tidy(graph: &mut RoadGraph, site: &Site) -> (usize, usize) {
+    // Straightened first: moved last, a junction could come close to another again.
+    straighten(graph, site);
     let n = graph.nodes.len();
     let mut degree = vec![0_usize; n];
     for e in &graph.edges {
@@ -621,7 +627,7 @@ pub fn tidy(graph: &mut RoadGraph, site: &Site) -> (usize, usize) {
     };
     let m = graph.edges.len();
     let mut gone = vec![false; m];
-    // Two streets between the same junctions whose middles lie within their half widths of each
+    // Two streets between the same junctions whose middles lie within 25 m of each
     // other: one street drawn twice. Farther apart they hold a block between them.
     let mut by_pair: std::collections::BTreeMap<(u32, u32), Vec<usize>> = Default::default();
     for (k, e) in graph.edges.iter().enumerate() {
@@ -637,7 +643,9 @@ pub fn tidy(graph: &mut RoadGraph, site: &Site) -> (usize, usize) {
                 let (ex, ey) = (&graph.edges[x], &graph.edges[y]);
                 let apart = geom::point_at(&ex.points, lx * 0.5)
                     .distance(geom::point_at(&ey.points, ly * 0.5));
-                let overlap = (ex.profile.width() + ey.profile.width()) * 0.5;
+                // Closer than a block could stand between (25 m): a narrow loop of one street
+                // traced up and back, its sides 10–15 m apart.
+                let overlap = ((ex.profile.width() + ey.profile.width()) * 0.5).max(25.0);
                 if !gone[x] && !gone[y] && lx.max(ly) < 1.5 * lx.min(ly) && apart < overlap {
                     gone[lesser(graph, x, y)] = true;
                 }
@@ -677,7 +685,9 @@ pub fn tidy(graph: &mut RoadGraph, site: &Site) -> (usize, usize) {
             continue;
         }
         let e = &graph.edges[k];
-        let (length, half) = (e.length(), e.profile.width() * 0.5);
+        // Judged at the widest a street may become (a tram avenue): judged at its width now, a
+        // pair passed that a tram widened into one another later.
+        let (length, half) = (e.length(), WIDEST_HALF);
         let mut hits: std::collections::BTreeMap<usize, usize> = Default::default();
         let mut s = 30.0;
         while s < length - 30.0 {
@@ -685,12 +695,7 @@ pub fn tidy(graph: &mut RoadGraph, site: &Site) -> (usize, usize) {
             let mut seen = Vec::new();
             samples.for_each_within(p, half + 12.0, |q, j| {
                 let j = j as usize;
-                let o = &graph.edges[j];
-                if j != k
-                    && !gone[j]
-                    && p.distance(q) < half + o.profile.width() * 0.5
-                    && !seen.contains(&j)
-                {
+                if j != k && !gone[j] && p.distance(q) < 2.0 * WIDEST_HALF && !seen.contains(&j) {
                     seen.push(j);
                 }
             });
@@ -713,7 +718,7 @@ pub fn tidy(graph: &mut RoadGraph, site: &Site) -> (usize, usize) {
     });
     dropped += before - graph.edges.len();
     let edges_before = graph.edges.len();
-    straighten(graph, site);
+
     drop_dead_ends(graph, site.size);
     keep_connected(graph, MIN_NETWORK);
     prune_dead_ends(graph, 0.0);
