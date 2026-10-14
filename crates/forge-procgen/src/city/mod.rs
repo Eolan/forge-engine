@@ -993,11 +993,6 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
     }
     lap("transit", &mut timings);
 
-    // Courtyards and lots once the streets' widths are known.
-    blocks::courtyards(&mut blocks, &roads, &params.districts, site.size);
-    let lots = blocks::subdivide(&blocks, &params.districts, seed.derive_str("lots").value());
-    lap("courtyards and lots", &mut timings);
-
     let tracks: Vec<Vec<DVec2>> = tram_lines.iter().map(|l| l.points.clone()).collect();
     let walks = streets::promenades(site, ground::PROMENADE);
     let rivers: Vec<(Vec<DVec2>, f64)> = site
@@ -1008,6 +1003,10 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
     let ground =
         ground::GroundMap::build(&roads, site.size, ground::TILE, &tracks, &walks, &rivers);
     lap("street ground", &mut timings);
+    // Courtyards and lots once the streets' widths are known.
+    blocks::courtyards(&mut blocks, &roads, &ground, &params.districts, site.size);
+    let lots = blocks::subdivide(&blocks, &params.districts, seed.derive_str("lots").value());
+    lap("courtyards and lots", &mut timings);
 
     let landmarks = params
         .landmarks

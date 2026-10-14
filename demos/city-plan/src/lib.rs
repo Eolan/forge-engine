@@ -343,8 +343,20 @@ impl PlanScenario {
                 // A quay's face holds its river: the land under it is the ground's paving.
                 BlockUse::Quay => continue,
             };
-            for polygon in ground::simple_polygons(&plan.ground.off_streets(&block.polygon)) {
-                tiles.flat(&polygon, WALK_LEVEL, section, false);
+            if block.use_ == BlockUse::Built {
+                // A paved forecourt along its streets, as the pavement it meets, its gardens
+                // behind: grass met the pavement in the gaps between the buildings (the owner).
+                let (front, rest) = plan.ground.forecourt(&block.polygon, FORECOURT);
+                for polygon in ground::simple_polygons(&front) {
+                    tiles.flat(&polygon, WALK_LEVEL, PAVING, false);
+                }
+                for polygon in ground::simple_polygons(&rest) {
+                    tiles.flat(&polygon, WALK_LEVEL, section, false);
+                }
+            } else {
+                for polygon in ground::simple_polygons(&plan.ground.off_streets(&block.polygon)) {
+                    tiles.flat(&polygon, WALK_LEVEL, section, false);
+                }
             }
             // A large square (1.5 ha or more): a lawn in its middle, 14 m inside its building
             // lines, its paved border under the trees and the benches.
@@ -1031,6 +1043,8 @@ const TRACK_OFFSET: f64 = forge_procgen::city::transit::TRACK_OFFSET;
 pub(crate) use forge_procgen::city::ground::{ROAD_LEVEL, WALK_LEVEL};
 /// The squares' level: the walking level, as everywhere people walk.
 const SQUARE_LEVEL: f64 = WALK_LEVEL;
+/// A built block's paved forecourt along its streets, metres deep.
+const FORECOURT: f64 = 2.0;
 /// A passage's paving through a building: a centimetre over the block's ground under it.
 const PASSAGE_FLOOR: f64 = WALK_LEVEL + 0.01;
 

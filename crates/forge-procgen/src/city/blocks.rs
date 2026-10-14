@@ -146,7 +146,13 @@ const MIN_COURT: f64 = 40.0;
 /// Each built block's and square's buildable outline on the building lines, and each built
 /// block's courtyard: its outline moved in by half the widest street round it and its
 /// district's building depth, when the block is deep enough for one.
-pub fn courtyards(blocks: &mut [Block], roads: &RoadGraph, districts: &[DistrictSpec], size: f64) {
+pub fn courtyards(
+    blocks: &mut [Block],
+    roads: &RoadGraph,
+    ground: &super::ground::GroundMap,
+    districts: &[DistrictSpec],
+    size: f64,
+) {
     let grid = street_grid(roads, size);
     for b in blocks.iter_mut() {
         if !matches!(b.use_, BlockUse::Built | BlockUse::Square) {
@@ -157,10 +163,31 @@ pub fn courtyards(blocks: &mut [Block], roads: &RoadGraph, districts: &[District
             .map(|i| edge_half_width(&grid, roads, b.polygon[i], b.polygon[(i + 1) % n]))
             .collect();
         let half = halves.iter().copied().fold(STREET_HALF, f64::max);
-        // The building lines, a short edge between two wide streets dropped where the move
-        // turns it over; a uniform inset by the narrowest street where they still fold.
+        // The building lines: the pavements' own back edge, what the street ground leaves of the
+        // face (D-061), so a building's front stands on it. Moved in by a width read from the
+        // nearest street, they missed it here and there, a strip of garden between the paving
+        // and the wall (the owner: "buildings have no foundations"). The inset where the map
+        // leaves nothing whole.
         let least = halves.iter().copied().fold(f64::MAX, f64::min);
-        let lines = geom::inset_by(&b.polygon, &halves)
+        let lines = ground
+            .off_streets(&b.polygon)
+            .into_iter()
+            .filter_map(|shape| shape.into_iter().next())
+            .map(|outer| geom::clean(&geom::simplify_closed(&outer, 0.05), 0.01))
+            .filter(|p| p.len() >= 3)
+            .max_by(|a, b| {
+                geom::signed_area(a)
+                    .abs()
+                    .total_cmp(&geom::signed_area(b).abs())
+            })
+            .filter(|p| geom::signed_area(p).abs() > 0.2 * b.area)
+            .map(|mut p| {
+                if geom::signed_area(&p) < 0.0 {
+                    p.reverse();
+                }
+                p
+            })
+            .or_else(|| geom::inset_by(&b.polygon, &halves))
             .or_else(|| geom::inset_by_collapsing(&b.polygon, &halves));
         if let Some(inside) = lines.clone().or_else(|| geom::inset(&b.polygon, least)) {
             b.buildable = inside;
@@ -175,7 +202,11 @@ pub fn courtyards(blocks: &mut [Block], roads: &RoadGraph, districts: &[District
         // A court smaller than a room's floor is none: the block is built through (an 8 m²
         // court was left that no one could walk into).
         b.courtyard = match &lines {
-            Some(inside) => geom::inset(inside, depth),
+            // The building lines' inset, else the face's by the widest street: the map's
+            // detailed lines can fold where the plain inset holds.
+            Some(inside) => {
+                geom::inset(inside, depth).or_else(|| geom::inset(&b.polygon, half + depth))
+            }
             None => geom::inset(&b.polygon, half + depth),
         }
         .filter(|c| geom::signed_area(c).abs() >= MIN_COURT);

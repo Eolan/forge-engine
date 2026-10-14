@@ -567,7 +567,12 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
   - **Faces:** a kerb's face along each carriageway, following a dropped kerb's slope, the
     ramps' sides, and a face down from the street ground's edge to the open ground (none over
     the water, where the bridges' sides stand).
-  - **Blocks:** what is left of each face off the streets (`GroundMap::off_streets`).
+  - **Blocks:** what is left of each face off the streets (`GroundMap::off_streets`). Their building
+    lines are the pavements' real back edge, so every street front stands on it. Moved in by a
+    width read from the nearest street, they missed it here and there, a strip of garden between
+    the paving and the wall (the owner: "buildings have no foundations"). A built block's ground
+    is paved 2 m deep along its streets (`GroundMap::forecourt`), its gardens behind: plain grass
+    had met the pavement in the gaps between the buildings.
   - **Checks:** `the_street_ground_is_one_map_with_every_surface_once` (the example's 0.403 km² of
     carriageway and 2.047 km² of walking ground, none of it both), and the crossroads' and
     pedestrian street's unit tests in `city::ground`. The map takes 0.1 s for the example.

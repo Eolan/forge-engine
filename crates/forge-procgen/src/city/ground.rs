@@ -202,6 +202,8 @@ pub struct GroundMap {
     pub ramps: Vec<Ramp>,
     /// Each street's area, stroked to its width.
     streets: Vec<Piece>,
+    /// Each street's and walk's centreline and width.
+    lines: Vec<(Vec<DVec2>, f64)>,
     /// The rivers' water, as drawn: no ground over it.
     water: Vec<Piece>,
 }
@@ -482,6 +484,13 @@ impl GroundMap {
         for (line, width) in walks.iter().filter(|w| w.0.len() >= 2) {
             streets.push(stroke(line, *width, false, false));
         }
+        // Each street's and walk's line and width, for the blocks' forecourts.
+        let lines: Vec<(Vec<DVec2>, f64)> = graph
+            .edges
+            .iter()
+            .map(|e| (e.points.clone(), e.profile.width()))
+            .chain(walks.iter().cloned())
+            .collect();
         let water: Vec<Piece> = rivers
             .iter()
             .filter(|r| r.0.len() >= 2)
@@ -679,6 +688,7 @@ impl GroundMap {
             ramps,
             streets,
             water,
+            lines,
         }
     }
 
@@ -744,6 +754,40 @@ impl GroundMap {
         let water = union(&self.water, piece.min, piece.max);
         let off = boolean(&vec![piece.contours], &street, OverlayRule::Difference);
         to_shapes(boolean(&off, &water, OverlayRule::Difference))
+    }
+
+    /// A block's ground off the streets split in two: its forecourt, within `depth` metres of a
+    /// street or a walk (paved, as the pavement it meets), and the rest (its gardens). Plain
+    /// grass met the pavement in the gaps between the buildings (the owner: they "would either
+    /// match the sidewalk or have a decoration").
+    pub fn forecourt(&self, polygon: &[DVec2], depth: f64) -> (Shapes, Shapes) {
+        let piece = Piece::from_points(polygon);
+        let (lo, hi) = (
+            piece.min - DVec2::splat(depth),
+            piece.max + DVec2::splat(depth),
+        );
+        let street = union(&self.streets, piece.min, piece.max);
+        let water = union(&self.water, piece.min, piece.max);
+        let off = boolean(&vec![piece.contours], &street, OverlayRule::Difference);
+        let off = boolean(&off, &water, OverlayRule::Difference);
+        let near: Vec<Piece> = self
+            .lines
+            .iter()
+            .filter(|(line, w)| {
+                // Its box, widened by its reach, meets the block's.
+                let (a, b) = line.iter().fold(
+                    (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)),
+                    |(a, b), &p| (a.min(p), b.max(p)),
+                );
+                let r = w * 0.5 + depth;
+                a.x - r <= hi.x && a.y - r <= hi.y && b.x + r >= lo.x && b.y + r >= lo.y
+            })
+            .map(|(line, w)| stroke(line, w + 2.0 * depth, true, true))
+            .collect();
+        let reach = union(&near, lo, hi);
+        let front = boolean(&off, &reach, OverlayRule::Intersect);
+        let rest = boolean(&off, &reach, OverlayRule::Difference);
+        (to_shapes(front), to_shapes(rest))
     }
 }
 
