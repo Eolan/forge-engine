@@ -900,8 +900,14 @@ impl GroundMap {
     /// A block's ground off the streets split in two: its forecourt, within `depth` metres of a
     /// street or a walk (paved, as the pavement it meets), and the rest (its gardens). Plain
     /// grass met the pavement in the gaps between the buildings (the owner: they "would either
-    /// match the sidewalk or have a decoration").
-    pub fn forecourt(&self, polygon: &[DVec2], depth: f64) -> (Shapes, Shapes) {
+    /// match the sidewalk or have a decoration"). `paths` (the paths across its green) are paved
+    /// with the forecourt, one surface: drawn over it, a path showed as a patch on the paving.
+    pub fn forecourt(
+        &self,
+        polygon: &[DVec2],
+        depth: f64,
+        paths: &[Vec<DVec2>],
+    ) -> (Shapes, Shapes) {
         let piece = Piece::from_points(polygon);
         let (lo, hi) = (
             piece.min - DVec2::splat(depth),
@@ -925,7 +931,9 @@ impl GroundMap {
             })
             .map(|(line, w)| stroke(line, w + 2.0 * depth, true, true))
             .collect();
-        let reach = union(&near, lo, hi);
+        let mut reach = union(&near, lo, hi);
+        let paths: Vec<Piece> = paths.iter().map(|p| Piece::from_points(p)).collect();
+        reach = boolean(&reach, &union(&paths, lo, hi), OverlayRule::Union);
         let front = boolean(&off, &reach, OverlayRule::Intersect);
         let rest = boolean(&off, &reach, OverlayRule::Difference);
         (to_shapes(front), to_shapes(rest))

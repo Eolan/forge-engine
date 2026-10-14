@@ -339,7 +339,8 @@ impl PlanScenario {
         ground_and_water(&mut tiles, &shore);
         // The blocks off the streets, at the walking level as the pavements round them (D-061):
         // one level wherever people walk, no step at a gap between the buildings.
-        for block in &plan.blocks {
+        let paths = court_paths(plan, masses);
+        for (b, block) in plan.blocks.iter().enumerate() {
             let section = match block.use_ {
                 BlockUse::Built => GARDEN,
                 BlockUse::Park => PARK,
@@ -350,7 +351,8 @@ impl PlanScenario {
             if block.use_ == BlockUse::Built {
                 // A paved forecourt along its streets, as the pavement it meets, its gardens
                 // behind: grass met the pavement in the gaps between the buildings (the owner).
-                let (front, rest) = plan.ground.forecourt(&block.polygon, FORECOURT);
+                // The paths across its green paved with it, one surface.
+                let (front, rest) = plan.ground.forecourt(&block.polygon, FORECOURT, &paths[b]);
                 for polygon in ground::simple_polygons(&front) {
                     tiles.flat(&polygon, WALK_LEVEL, PAVING, false);
                 }
@@ -370,9 +372,6 @@ impl PlanScenario {
             {
                 tiles.flat(&middle, SQUARE_LEVEL + 0.02, PARK, false);
             }
-        }
-        for polygon in court_paths(plan, masses) {
-            tiles.flat(&polygon, WALK_LEVEL + 0.01, PAVING, false);
         }
         // The quays' land as lawns, cell by cell (their faces hold water), under the trees.
         for block in plan.blocks.iter().filter(|b| b.use_ == BlockUse::Quay) {
@@ -3368,13 +3367,14 @@ fn lawn(tiles: &mut Tiles, shore: &Shore, map: &ground::GroundMap, polygon: &[DV
     }
 }
 
-/// The paths across the open blocks' greens: from each gap between the buildings (a street lot
-/// left open) to the court's middle, paved, 2.4 m wide (the owner's photos of open blocks: a
-/// shared green with paths through it). Off the streets only: the block's outline runs down the
-/// street's middle, and the paths' first metres lay over the carriageway (the owner).
-fn court_paths(plan: &CityPlan, masses: &[Mass]) -> Vec<Vec<DVec2>> {
+/// The paths across the open blocks' greens, block by block: from each gap between the buildings
+/// (a street lot left open) to the court's middle, 2.4 m wide (the owner's photos of open blocks:
+/// a shared green with paths through it). Each is paved with its block's forecourt, one surface
+/// off the streets: drawn over the paving, a path began down the street's middle, lay across the
+/// carriageway, and showed as a patch on the pavement (the owner).
+fn court_paths(plan: &CityPlan, masses: &[Mass]) -> Vec<Vec<Vec<DVec2>>> {
     let built: std::collections::HashSet<u32> = masses.iter().map(|m| m.lot).collect();
-    let mut paths = Vec::new();
+    let mut paths = vec![Vec::new(); plan.blocks.len()];
     for (i, lot) in plan.lots.iter().enumerate() {
         let block = &plan.blocks[lot.block as usize];
         let Some(court) = &block.courtyard else {
@@ -3401,7 +3401,7 @@ fn court_paths(plan: &CityPlan, masses: &[Mass]) -> Vec<Vec<DVec2>> {
         }
         let mut outline = offset_line(&line, 1.2);
         outline.extend(offset_line(&line, -1.2).into_iter().rev());
-        paths.extend(ground::simple_polygons(&plan.ground.off_streets(&outline)));
+        paths[lot.block as usize].push(outline);
     }
     paths
 }
@@ -3851,7 +3851,7 @@ mod tests {
     use forge_procgen::city::{example, plan};
 
     #[test]
-    fn the_court_paths_stay_off_the_carriageways() {
+    fn the_court_paths_are_paved_with_the_forecourts_off_the_carriageways() {
         let size = 4000.0;
         let site = example::site(size, 10.0);
         // The example's seed and the other seeds the plan's rules are checked on.
@@ -3872,35 +3872,48 @@ mod tests {
                 7,
             );
             let paths = court_paths(&city, &masses);
-            // Every half metre inside each path: none on a carriageway (a path's first metres
-            // lay over the road, the owner).
-            let (mut samples, mut on_road) = (0, 0);
-            for polygon in &paths {
-                let (lo, hi) = polygon.iter().fold(
-                    (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)),
-                    |(lo, hi), p| (lo.min(*p), hi.max(*p)),
-                );
-                let mut y = lo.y + 0.25;
-                while y < hi.y {
-                    let mut x = lo.x + 0.25;
-                    while x < hi.x {
-                        let p = DVec2::new(x, y);
-                        if geom::contains(polygon, p) {
-                            samples += 1;
-                            on_road += usize::from(city.ground.on_carriageway(p));
+            // Every half metre inside each path: on the block's ground it is paved (in the
+            // forecourt, not the garden), and none of the paving is on a carriageway (a path's
+            // first metres lay over the road, then showed as a patch on the pavement: the owner).
+            let (mut samples, mut on_road, mut grass) = (0, 0, 0);
+            for (b, block) in city.blocks.iter().enumerate() {
+                if paths[b].is_empty() {
+                    continue;
+                }
+                let (front, rest) = city.ground.forecourt(&block.polygon, FORECOURT, &paths[b]);
+                for polygon in &paths[b] {
+                    let (lo, hi) = polygon.iter().fold(
+                        (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)),
+                        |(lo, hi), p| (lo.min(*p), hi.max(*p)),
+                    );
+                    let mut y = lo.y + 0.25;
+                    while y < hi.y {
+                        let mut x = lo.x + 0.25;
+                        while x < hi.x {
+                            let p = DVec2::new(x, y);
+                            if geom::contains(polygon, p) {
+                                samples += 1;
+                                let paved = ground::inside(&front, p);
+                                on_road += usize::from(paved && city.ground.on_carriageway(p));
+                                grass += usize::from(ground::inside(&rest, p));
+                            }
+                            x += 0.5;
                         }
-                        x += 0.5;
+                        y += 0.5;
                     }
-                    y += 0.5;
                 }
             }
             println!(
-                "seed {seed:?}: {} court paths, {samples} samples, {on_road} on a carriageway",
-                paths.len()
+                "seed {seed:?}: {samples} path samples, {on_road} paved on a carriageway, {grass} on grass"
             );
+            assert!(samples > 1000, "seed {seed:?}: only {samples} path samples");
             assert_eq!(
                 on_road, 0,
-                "seed {seed:?}: {on_road} of {samples} path samples on a carriageway"
+                "seed {seed:?}: {on_road} of {samples} on a carriageway"
+            );
+            assert_eq!(
+                grass, 0,
+                "seed {seed:?}: {grass} of {samples} left as grass"
             );
         }
     }
