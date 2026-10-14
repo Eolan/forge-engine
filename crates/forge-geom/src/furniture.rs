@@ -392,6 +392,36 @@ pub fn bollard() -> TriMesh {
     m
 }
 
+/// A taxi stand's totem on the origin, facing ±`x`: a steel post 2.6 m tall carrying a lit panel
+/// 0.5 m wide and 0.9 m tall at eye height on both faces (its glass lit like a tram stop's), where
+/// the automated taxis wait to be called (D-061).
+pub fn taxi_totem() -> TriMesh {
+    let mut m = TriMesh::default();
+    prism(&mut m, Vec3::new(0.0, 2.6, 0.0), 0.06, 2.6, 8, METAL);
+    cuboid(
+        &mut m,
+        Vec3::new(-0.06, 1.6, -0.25),
+        Vec3::new(0.06, 2.5, 0.25),
+        METAL,
+        ALL,
+    );
+    for side in [-1.0_f32, 1.0] {
+        let x = 0.061 * side;
+        let (a, b, c, d) = (
+            Vec3::new(x, 1.65, -0.22),
+            Vec3::new(x, 1.65, 0.22),
+            Vec3::new(x, 2.45, 0.22),
+            Vec3::new(x, 2.45, -0.22),
+        );
+        if side > 0.0 {
+            quad(&mut m, [a, d, c, b], GLASS);
+        } else {
+            quad(&mut m, [a, b, c, d], GLASS);
+        }
+    }
+    m
+}
+
 /// A square's fountain round the origin: an octagonal stone basin 6.4 m across, brimming with
 /// water ([`GLASS`]'s section), a column in its middle carrying a bowl.
 pub fn fountain() -> TriMesh {

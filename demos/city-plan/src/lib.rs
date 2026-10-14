@@ -840,6 +840,18 @@ impl PlanScenario {
             let id = (kit_meshes.len() - 1) as u32;
             kit_instances.extend(fountains.into_iter().map(|at| (id, at, 0)));
         }
+        // The taxi stands' totems behind their lay-bys, their panels lit and facing along the road.
+        if !plan.taxi_stands.is_empty() {
+            kit_meshes.push(forge_geom::furniture::taxi_totem());
+            let id = (kit_meshes.len() - 1) as u32;
+            for s in &plan.taxi_stands {
+                let p = s.totem();
+                let turn = glam::Quat::from_rotation_y((-s.along.y).atan2(s.along.x) as f32);
+                let at =
+                    Mat4::from_rotation_translation(turn, world(size, p, plan.ground.level_at(p)));
+                kit_instances.push((id, at, 1));
+            }
+        }
         // The bollards across the pedestrian ways' mouths onto the roads (D-061).
         if !plan.ground.bollards.is_empty() {
             kit_meshes.push(forge_geom::furniture::bollard());

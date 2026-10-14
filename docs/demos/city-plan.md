@@ -566,6 +566,14 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
     hours, no taxis; the owner). A row of bollards closes each walking way's mouth onto a road,
     1.5 m behind its building line, 1.5 m apart at most (`furniture::bollard`, a steel post with a
     pale band), and no café terrace stands within 8 m of them.
+  - **Taxi stands** (`city::taxi`, the owner's model: automated taxis booked from a communicator,
+    waiting at stands when idle). A lay-by 14 m long and 2.5 m deep cut into a taxi road's verge at
+    the carriageway's level, its ends splayed, and a lit totem behind it (`furniture::taxi_totem`).
+    Only on avenues without trams, so no platform meets one. They go first by the tram stops and
+    squares (within 150 m), then wherever a built block is left without one within 300 m, 200 m
+    apart at least. Trees and lamps keep out of the lay-bys. The example has 81 (15 of 610 built
+    blocks are farther than 300 m: no taxi road near them), the sandbox 189. Test
+    `taxis_wait_within_a_short_walk_of_every_block`.
   - **No hairlines:** the junctions' pieces (corner wedges, gap mitres) reach 0.3 m into the
     strips they join, and the carriageway's gaps close among the driven arms only (a pedestrian
     street's mouth between an avenue's arms left a sliver of pavement on the asphalt).

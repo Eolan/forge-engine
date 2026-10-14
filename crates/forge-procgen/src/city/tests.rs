@@ -286,3 +286,46 @@ fn the_rules_hold_on_other_seeds() {
     }
     assert!(failures.is_empty(), "the rules fail on seeds {failures:x?}");
 }
+
+#[test]
+fn taxis_wait_within_a_short_walk_of_every_block() {
+    let (site, city) = example_plan();
+    let stands = &city.taxi_stands;
+    let built: Vec<DVec2> = city
+        .blocks
+        .iter()
+        .filter(|b| b.use_ == BlockUse::Built)
+        .map(|b| b.centre)
+        .collect();
+    let near = |p: DVec2| {
+        stands
+            .iter()
+            .map(|s| s.kerb.distance(p))
+            .fold(f64::MAX, f64::min)
+    };
+    let far = built
+        .iter()
+        .filter(|b| near(**b) > super::taxi::REACH)
+        .count();
+    println!(
+        "{} taxi stands; {far} of {} built blocks farther than {} m from one",
+        stands.len(),
+        built.len(),
+        super::taxi::REACH
+    );
+    assert!(stands.len() > 10, "{} stands", stands.len());
+    // Each on land, apart from the others, on a taxi road's carriageway level.
+    for (i, s) in stands.iter().enumerate() {
+        assert_eq!(site.water_at(s.kerb), LAND);
+        for o in &stands[i + 1..] {
+            assert!(s.kerb.distance(o.kerb) >= 199.0);
+        }
+        let inside = s.kerb + s.out * 1.0;
+        assert_eq!(
+            city.ground.level_at(inside),
+            super::ground::ROAD_LEVEL,
+            "lay-by at {inside}"
+        );
+    }
+    assert!(far * 20 <= built.len(), "{far} blocks far from a stand");
+}

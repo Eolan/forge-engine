@@ -506,6 +506,7 @@ impl GroundMap {
         trams: &[Vec<DVec2>],
         walks: &[(Vec<DVec2>, f64)],
         rivers: &[(Vec<DVec2>, f64)],
+        laybys: &[Vec<DVec2>],
     ) -> Self {
         let arms = arms(graph);
         let driven_degree = |node: u32| arms[node as usize].iter().filter(|a| a.kerb > 0.0).count();
@@ -545,6 +546,10 @@ impl GroundMap {
             .filter(|r| r.0.len() >= 2)
             .map(|(line, width)| stroke(line, *width, false, false))
             .collect();
+        // The taxi stands' lay-bys, cut into the verge at the carriageway's level.
+        for lay_by in laybys {
+            carriageways.push(Piece::from_points(lay_by));
+        }
         for line in trams.iter().filter(|l| l.len() >= 2) {
             carriageways.push(stroke(line, 2.0 * super::transit::SWEPT, false, false));
         }
@@ -1136,7 +1141,7 @@ mod tests {
     #[test]
     fn a_tram_crossroads_is_one_ground_with_round_kerbs_and_dropped_kerbs() {
         let graph = crossroads(Profile::TramAvenue, Profile::TramAvenue);
-        let map = GroundMap::build(&graph, 200.0, 200.0, &[], &[], &[]);
+        let map = GroundMap::build(&graph, 200.0, 200.0, &[], &[], &[], &[]);
         let t = &map.tiles[0];
         let (w, c) = (
             Profile::TramAvenue.width(),
@@ -1202,7 +1207,7 @@ mod tests {
     #[test]
     fn a_pedestrian_street_meets_an_avenue_on_its_pavement() {
         let graph = crossroads(Profile::Avenue, Profile::Pedestrian);
-        let map = GroundMap::build(&graph, 200.0, 200.0, &[], &[], &[]);
+        let map = GroundMap::build(&graph, 200.0, 200.0, &[], &[], &[], &[]);
         // The avenue's carriageway runs straight through: no corner rounded into the mouth.
         let t = &map.tiles[0];
         let c = Profile::Avenue.carriageway();
@@ -1238,7 +1243,7 @@ mod tests {
     #[test]
     fn a_taxi_road_s_crossings_are_raised_tables_flush_with_the_pavements() {
         let graph = crossroads(Profile::Avenue, Profile::Avenue);
-        let map = GroundMap::build(&graph, 200.0, 200.0, &[], &[], &[]);
+        let map = GroundMap::build(&graph, 200.0, 200.0, &[], &[], &[], &[]);
         let t = &map.tiles[0];
         let c = Profile::Avenue.carriageway();
         assert_eq!(map.crossings.len(), 4);

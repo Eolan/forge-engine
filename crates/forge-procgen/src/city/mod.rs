@@ -35,6 +35,7 @@ pub mod mass;
 pub mod shore;
 pub mod streets;
 pub mod structure;
+pub mod taxi;
 pub mod tensor;
 pub mod transit;
 pub mod trees;
@@ -688,6 +689,8 @@ pub struct CityPlan {
     pub tram_lines: Vec<TramLine>,
     /// The street ground: every surface of the streets once, with its level (D-061).
     pub ground: ground::GroundMap,
+    /// The taxi stands (D-061).
+    pub taxi_stands: Vec<taxi::Stand>,
     /// The boat crossings.
     pub crossings: Vec<BoatCrossing>,
     /// The landmarks.
@@ -1046,6 +1049,20 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
     }
     lap("transit", &mut timings);
 
+    // The taxi stands, before the street ground: their lay-bys are carriageway.
+    let junctions: Vec<DVec2> = {
+        let mut degree = vec![0_usize; roads.nodes.len()];
+        for e in &roads.edges {
+            degree[e.a as usize] += 1;
+            degree[e.b as usize] += 1;
+        }
+        (0..roads.nodes.len())
+            .filter(|&i| degree[i] >= 3)
+            .map(|i| roads.nodes[i].pos)
+            .collect()
+    };
+    let taxi_stands = taxi::stands(&roads, site, &tram_lines, &blocks, &junctions);
+    let laybys: Vec<Vec<DVec2>> = taxi_stands.iter().map(|s| s.outline()).collect();
     let tracks: Vec<Vec<DVec2>> = tram_lines.iter().map(|l| l.points.clone()).collect();
     let walks = streets::promenades(site, ground::PROMENADE);
     let rivers: Vec<(Vec<DVec2>, f64)> = site
@@ -1053,8 +1070,15 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
         .iter()
         .map(|r| (r.centreline.clone(), r.width))
         .collect();
-    let ground =
-        ground::GroundMap::build(&roads, site.size, ground::TILE, &tracks, &walks, &rivers);
+    let ground = ground::GroundMap::build(
+        &roads,
+        site.size,
+        ground::TILE,
+        &tracks,
+        &walks,
+        &rivers,
+        &laybys,
+    );
     lap("street ground", &mut timings);
     // Courtyards and lots once the streets' widths are known.
     blocks::courtyards(&mut blocks, &roads, &ground, &params.districts, site.size);
@@ -1086,6 +1110,7 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
         lots,
         tram_lines,
         ground,
+        taxi_stands,
         crossings,
         landmarks,
         stats: PlanStats::default(),

@@ -87,7 +87,11 @@ pub fn lamps(site: &Site, plan: &CityPlan) -> Vec<Lamp> {
                 let in_junction = junctions.any_within(q, 40.0, |n| {
                     plan.roads.nodes[n as usize].pos.distance(q) >= reach[n as usize] + 4.0
                 });
-                if in_junction || placed.any_within(q, APART, |_| false) || site.water_at(q) != LAND
+                // Not in a taxi stand's lay-by either: it is carriageway.
+                if in_junction
+                    || placed.any_within(q, APART, |_| false)
+                    || site.water_at(q) != LAND
+                    || plan.ground.on_carriageway(q)
                 {
                     continue;
                 }
