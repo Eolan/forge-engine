@@ -204,3 +204,29 @@ fn the_network_has_one_place_for_each_junction() {
     assert_eq!((d.wet_nodes, d.close_bridges), (0, 0), "{d:?}");
     assert!(d.doubled_streets <= 1, "{d:?}");
 }
+
+#[test]
+fn the_street_ground_triangulates_whole() {
+    use super::ground;
+    let (_, city) = example_plan();
+    let (mut whole, mut short, mut lost) = (0, 0, 0.0);
+    for t in &city.ground.tiles {
+        for shapes in [&t.walk, &t.carriageway] {
+            for polygon in ground::simple_polygons(shapes) {
+                let area = geom::signed_area(&polygon).abs();
+                let covered: f64 = ground::triangles(&polygon)
+                    .iter()
+                    .map(|tri| geom::signed_area(tri).abs())
+                    .sum();
+                if covered < area * 0.999 - 0.01 {
+                    short += 1;
+                    lost += area - covered;
+                } else {
+                    whole += 1;
+                }
+            }
+        }
+    }
+    println!("street ground polygons: {whole} whole, {short} short of {lost:.0} m²");
+    assert_eq!(short, 0, "{short} polygons short of {lost:.0} m²");
+}

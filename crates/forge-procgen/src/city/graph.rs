@@ -444,7 +444,8 @@ pub fn defects(graph: &RoadGraph, site: &Site) -> Defects {
         }
     }
     // Doubled streets: samples every 10 m, past 30 m from either end, that lie within both
-    // streets' half widths of another street that shares no node with it.
+    // streets' half widths of another street (one sharing a junction too: 30 m from its ends,
+    // an arm leaving at an angle is far off).
     let mut samples = PointGrid::new(site.size, 40.0);
     for (k, e) in graph.edges.iter().enumerate() {
         for p in geom::resample(&e.points, 5.0) {
@@ -461,8 +462,7 @@ pub fn defects(graph: &RoadGraph, site: &Site) -> Defects {
             let mut hit = false;
             samples.for_each_within(p, half + 12.0, |q, j| {
                 let o = &graph.edges[j as usize];
-                let shares = o.a == e.a || o.a == e.b || o.b == e.a || o.b == e.b;
-                if j as usize != k && !shares && p.distance(q) < half + o.profile.width() * 0.5 {
+                if j as usize != k && p.distance(q) < half + o.profile.width() * 0.5 {
                     hit = true;
                 }
             });
@@ -485,6 +485,7 @@ pub fn defects(graph: &RoadGraph, site: &Site) -> Defects {
 /// - of two streets between the same junctions, of a pair leaving a node within [`SHARP`]
 ///   degrees, and of a pair running doubled side by side, the lesser goes (a street before a
 ///   main road, the shorter first);
+/// - through roads straightened across their junctions ([`straighten`]);
 /// - then every dead end (but at the frame's edge), and the networks cut off with less than
 ///   [`MIN_NETWORK`] of streets.
 ///
@@ -590,37 +591,8 @@ pub fn tidy(graph: &mut RoadGraph, site: &Site) -> (usize, usize) {
             dropped += 1;
             continue;
         }
-        // Each moved end: the street's first stretch, twice the move and 5 m, cut, and the rest
-        // run straight on to the junction's new place. Easing the points along instead folded
-        // a street back on itself where its junction moved in along it.
         let (pa, pb) = (graph.nodes[a].pos, graph.nodes[b].pos);
-        let cut = |end: DVec2, now: DVec2| {
-            let d = end.distance(now);
-            if d < 1e-6 {
-                0.0
-            } else {
-                (2.0 * d + 5.0).min(length * 0.45)
-            }
-        };
-        let (ca, cb) = (
-            cut(e.points[0], pa),
-            cut(*e.points.last().expect("not empty"), pb),
-        );
-        let mut moved = vec![pa];
-        let mut s = 0.0;
-        if ca > 0.0 {
-            moved.push(geom::point_at(&e.points, ca));
-        }
-        for w in e.points.windows(2) {
-            s += w[0].distance(w[1]);
-            if s > ca + 1e-6 && s < length - cb - 1e-6 {
-                moved.push(w[1]);
-            }
-        }
-        if cb > 0.0 {
-            moved.push(geom::point_at(&e.points, length - cb));
-        }
-        moved.push(pb);
+        let mut moved = moved_ends(&e.points, pa, pb);
         // Points the move brought together go: a street needs a direction at each end.
         moved.dedup_by(|p, q| p.distance(*q) < 0.05);
         if moved.len() < 2 || geom::polyline_length(&moved) < 1.0 {
@@ -714,10 +686,8 @@ pub fn tidy(graph: &mut RoadGraph, site: &Site) -> (usize, usize) {
             samples.for_each_within(p, half + 12.0, |q, j| {
                 let j = j as usize;
                 let o = &graph.edges[j];
-                let shares = o.a == e.a || o.a == e.b || o.b == e.a || o.b == e.b;
                 if j != k
                     && !gone[j]
-                    && !shares
                     && p.distance(q) < half + o.profile.width() * 0.5
                     && !seen.contains(&j)
                 {
@@ -743,11 +713,145 @@ pub fn tidy(graph: &mut RoadGraph, site: &Site) -> (usize, usize) {
     });
     dropped += before - graph.edges.len();
     let edges_before = graph.edges.len();
+    straighten(graph, site);
     drop_dead_ends(graph, site.size);
     keep_connected(graph, MIN_NETWORK);
     prune_dead_ends(graph, 0.0);
     dropped += edges_before - graph.edges.len();
     (merged, dropped)
+}
+
+/// A street's line with its ends moved to `pa` and `pb`: each moved end's first stretch, twice
+/// the move and 5 m, cut, and the rest run straight on to the new place. Easing the points along
+/// instead folded a street back on itself where its junction moved in along it.
+fn moved_ends(points: &[DVec2], pa: DVec2, pb: DVec2) -> Vec<DVec2> {
+    let length = geom::polyline_length(points);
+    let cut = |end: DVec2, now: DVec2| {
+        let d = end.distance(now);
+        if d < 1e-6 {
+            0.0
+        } else {
+            (2.0 * d + 5.0).min(length * 0.45)
+        }
+    };
+    let (ca, cb) = (
+        cut(points[0], pa),
+        cut(*points.last().expect("not empty"), pb),
+    );
+    let mut moved = vec![pa];
+    let mut s = 0.0;
+    if ca > 0.0 {
+        moved.push(geom::point_at(points, ca));
+    }
+    for w in points.windows(2) {
+        s += w[0].distance(w[1]);
+        if s > ca + 1e-6 && s < length - cb - 1e-6 {
+            moved.push(w[1]);
+        }
+    }
+    if cb > 0.0 {
+        moved.push(geom::point_at(points, length - cb));
+    }
+    moved.push(pb);
+    moved
+}
+
+/// Through roads run straight across their junctions: where two streets leave a junction
+/// within 20° of straight on, the junction moves onto the line between their points 30 m out
+/// (by 8 m at most), and every street meeting there with it. Junctions stood where the traced
+/// streets happened to meet, and a road coming off a bridge took a dog-leg at the first one
+/// (the owner: "the road is not straight").
+pub fn straighten(graph: &mut RoadGraph, site: &Site) {
+    let n = graph.nodes.len();
+    let mut arms: Vec<Vec<(usize, bool)>> = vec![Vec::new(); n];
+    for (k, e) in graph.edges.iter().enumerate() {
+        arms[e.a as usize].push((k, true));
+        arms[e.b as usize].push((k, false));
+    }
+    // An arm's point `d` metres out from its node (at most half its length).
+    let out = |graph: &RoadGraph, (k, forward): (usize, bool), d: f64| {
+        let e = &graph.edges[k];
+        let length = e.length();
+        let s = d.min(length * 0.5);
+        geom::point_at(&e.points, if forward { s } else { length - s })
+    };
+    for v in 0..n {
+        if arms[v].len() < 3 {
+            continue;
+        }
+        let node = graph.nodes[v].pos;
+        let mains: Vec<(usize, bool)> = arms[v].iter().copied().collect();
+        #[allow(clippy::type_complexity)]
+        let mut best: Option<(f64, DVec2, DVec2, (usize, bool), (usize, bool))> = None;
+        for (i, &x) in mains.iter().enumerate() {
+            for &y in &mains[i + 1..] {
+                let (px, py) = (out(graph, x, 30.0), out(graph, y, 30.0));
+                let (dx, dy) = (
+                    (px - node).normalize_or_zero(),
+                    (py - node).normalize_or_zero(),
+                );
+                let straight = -dx.dot(dy);
+                if straight > 20f64.to_radians().cos() && best.is_none_or(|b| straight > b.0) {
+                    best = Some((straight, px, py, x, y));
+                }
+            }
+        }
+        let Some((_, px, py, x, y)) = best else {
+            continue;
+        };
+        let target = px + (py - px) * geom::closest_on_segment(node, px, py);
+        // Never off the land: a junction moved onto the water.
+        if target.distance(node) > 8.0 || site.water_at(target) != LAND {
+            continue;
+        }
+        graph.nodes[v].pos = target;
+        for &(k, forward) in &arms[v] {
+            let e = &mut graph.edges[k];
+            let through = (k, forward) == x || (k, forward) == y;
+            let mut moved = if through {
+                // A through arm runs straight from the junction to its point 30 m out: the
+                // traced line wiggled there (the owner: the road is not straight).
+                let length = e.length();
+                let s = 30.0_f64.min(length * 0.5);
+                let pts: Vec<DVec2> = if forward {
+                    e.points.clone()
+                } else {
+                    e.points.iter().rev().copied().collect()
+                };
+                let mut line = vec![target, geom::point_at(&pts, s)];
+                let mut walked = 0.0;
+                for w in pts.windows(2) {
+                    walked += w[0].distance(w[1]);
+                    if walked > s + 1e-6 {
+                        line.push(w[1]);
+                    }
+                }
+                if !forward {
+                    line.reverse();
+                }
+                line
+            } else {
+                let (pa, pb) = if forward {
+                    (target, *e.points.last().expect("not empty"))
+                } else {
+                    (e.points[0], target)
+                };
+                moved_ends(&e.points, pa, pb)
+            };
+            moved.dedup_by(|p, q| p.distance(*q) < 0.05);
+            if moved.len() >= 2 {
+                e.points = moved;
+            }
+        }
+    }
+    // The main roads' small wiggles out: a traced streamline jitters by a metre or two.
+    for e in graph
+        .edges
+        .iter_mut()
+        .filter(|e| e.class == RoadClass::Main)
+    {
+        e.points = geom::simplify(&e.points, 1.5);
+    }
 }
 
 /// A street network smaller than this, metres of streets, cut off from the rest, is not built.

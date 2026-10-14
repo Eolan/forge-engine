@@ -152,8 +152,9 @@ impl Tiles {
             &mut tile.ground
         };
         let centre = tile.centre;
-        for t in geom::triangulate(polygon) {
-            let p = t.map(|i| world(size, polygon[i], height) - centre);
+        // Whole: ear clipping alone gave up on some of the booleans' outlines, gaps in the ground.
+        for t in ground::triangles(polygon) {
+            let p = t.map(|q| world(size, q, height) - centre);
             triangle(mesh, p, Vec3::Y, section);
         }
     }
@@ -3529,8 +3530,8 @@ fn street_ground(tiles: &mut Tiles, map: &ground::GroundMap, site: &Site) {
                 for piece in pieces.iter().filter(|p| p.len() >= 3) {
                     let tile = tiles.at(piece[0]);
                     let centre = tile.centre;
-                    for tri in geom::triangulate(piece) {
-                        let p = tri.map(|i| world(size, piece[i], ramp.level(piece[i])) - centre);
+                    for tri in ground::triangles(piece) {
+                        let p = tri.map(|q| world(size, q, ramp.level(q)) - centre);
                         let mut up = (p[1] - p[0]).cross(p[2] - p[0]).normalize_or_zero();
                         if up.y < 0.0 {
                             up = -up;

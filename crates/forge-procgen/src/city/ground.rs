@@ -853,6 +853,62 @@ fn clip_segment(a: DVec2, b: DVec2, min: DVec2, max: DVec2) -> Option<[DVec2; 2]
     (t0 < t1).then(|| [a + d * t0, a + d * t1])
 }
 
+/// A simple polygon's triangles, whole. Ear clipping first; where it gives up short of the
+/// polygon's area (points the booleans left touching), the polygon is sliced across into strips
+/// 5 m wide and each strip clipped on its own, then 1 m wide. Ear clipping alone left gaps in the
+/// pavement the ground showed through (the owner).
+pub fn triangles(polygon: &[DVec2]) -> Vec<[DVec2; 3]> {
+    let area = geom::signed_area(polygon).abs();
+    let ears = |p: &[DVec2]| -> Vec<[DVec2; 3]> {
+        geom::triangulate(p)
+            .into_iter()
+            .map(|t| t.map(|k| p[k]))
+            .collect()
+    };
+    let covered =
+        |tris: &[[DVec2; 3]]| tris.iter().map(|t| geom::signed_area(t).abs()).sum::<f64>();
+    let first = ears(polygon);
+    if covered(&first) >= area * 0.999 - 0.01 {
+        return first;
+    }
+    let (lo, hi) = polygon.iter().fold(
+        (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)),
+        |(lo, hi), &p| (lo.min(p), hi.max(p)),
+    );
+    let mut best = first;
+    for step in [5.0, 1.0] {
+        let mut out = Vec::new();
+        let mut x = lo.x + step;
+        let mut strips: Vec<Vec<DVec2>> = vec![polygon.to_vec()];
+        while x < hi.x {
+            let line = vec![[x, lo.y - 1.0], [x, hi.y + 1.0]];
+            strips = strips
+                .into_iter()
+                .flat_map(|s| {
+                    let raw: Vec<[f64; 2]> = s.iter().map(|p| p.to_array()).collect();
+                    let pieces = vec![raw].slice_by(&line, FillRule::NonZero);
+                    if pieces.is_empty() {
+                        vec![s]
+                    } else {
+                        simple_polygons(&to_shapes(pieces))
+                    }
+                })
+                .collect();
+            x += step;
+        }
+        for strip in &strips {
+            out.extend(ears(strip));
+        }
+        if covered(&out) > covered(&best) {
+            best = out;
+        }
+        if covered(&best) >= area * 0.999 - 0.01 {
+            break;
+        }
+    }
+    best
+}
+
 /// `shapes` cut into simple polygons with no holes (each hole sliced through by a line across
 /// its shape), for triangulating.
 pub fn simple_polygons(shapes: &Shapes) -> Vec<Vec<DVec2>> {
