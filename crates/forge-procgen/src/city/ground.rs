@@ -48,6 +48,8 @@ const CROSSING_GAP: f64 = 1.0;
 const FORK: f64 = 0.985;
 /// The arcs' segments, as their length over their radius.
 const ARC: f64 = 0.25;
+/// The radius the inside of a gentle bend's building line turns on, metres.
+const BEND_RADIUS: f64 = 40.0;
 /// How far the junctions' pieces reach into the strips they join, metres.
 const OVERLAP: f64 = 0.3;
 
@@ -353,22 +355,25 @@ fn meet(a: DVec2, u: DVec2, b: DVec2, v: DVec2) -> Option<(f64, f64)> {
 fn left(u: DVec2) -> DVec2 {
     DVec2::new(-u.y, u.x)
 }
-
-/// The mitre filling the reflex gap between arms `i` and `j` (in turning order, the gap on `i`'s
-/// left) for strips of half widths `hi` and `hj` ending flat at `node`; a bevel where the mitre
-/// would run out past twice the wider half width.
+/// The piece filling the reflex gap between arms `i` and `j` (in turning order, the gap on `i`'s
+/// left) for strips of half widths `hi` and `hj` ending flat at `node`: an arc round the node,
+/// its radius going from one half width to the other, so the outside of a bend is round. A
+/// mitre came to a point, a kink in the pavement where a road bent at a junction (the owner).
 fn mitre(node: DVec2, i: DVec2, hi: f64, j: DVec2, hj: f64) -> Vec<DVec2> {
-    let (a, b) = (node + left(i) * hi, node - left(j) * hj);
-    let corner = meet(a, -i, b, -j)
-        .filter(|&(s, t)| s >= 0.0 && t >= 0.0)
-        .map(|(s, _)| a - i * s)
-        .filter(|c| c.distance(node) <= 2.0 * hi.max(hj));
+    let (a, b) = (left(i), -left(j));
+    let sweep = forge_core::dmath::atan2(geom::cross(a, b), a.dot(b));
+    let start = forge_core::dmath::atan2(a.y, a.x);
+    let steps = ((sweep.abs() * hi.max(hj) / 1.0).ceil() as usize).max(1);
     // A little into both strips, so the union leaves no hairline along their ends.
     let (ia, jb) = (i * OVERLAP, j * OVERLAP);
-    match corner {
-        Some(c) => vec![node + ia, a + ia, a, c, b, b + jb, node + jb],
-        None => vec![node + ia, a + ia, a, b, b + jb, node + jb],
+    let mut out = vec![node + ia, node + a * hi + ia];
+    for k in 0..=steps {
+        let t = k as f64 / steps as f64;
+        let (sn, cs) = forge_core::dmath::sin_cos(start + sweep * t);
+        out.push(node + DVec2::new(cs, sn) * (hi + (hj - hi) * t));
     }
+    out.extend([node + b * hj + jb, node + jb]);
+    out
 }
 
 /// The wedge rounding the kerb between driven arms `i` and `j` (`i`'s left, `j`'s right), at
@@ -537,6 +542,14 @@ impl GroundMap {
                         node, i.dir, i.half, j.dir, j.half,
                     )));
                     continue;
+                }
+                // The inside of a gentle bend (under 30°): its building line round too, on a long
+                // arc. It turned at a point, a kink in the pavement's edge (the owner).
+                if i.dir.dot(j.dir) < -(30f64.to_radians().cos()) {
+                    let (wi, wj) = (Arm { kerb: i.half, ..*i }, Arm { kerb: j.half, ..*j });
+                    if let Some((wedge, _, _)) = fillet(node, &wi, &wj, BEND_RADIUS) {
+                        streets.push(Piece::from_points(&wedge));
+                    }
                 }
                 if i.kerb > 0.0 && j.kerb > 0.0 {
                     if let Some((wedge, si, sj)) = fillet(node, i, j, KERB_RADIUS) {

@@ -76,6 +76,7 @@ pub fn trees(site: &Site, plan: &CityPlan, seed: u64) -> Vec<Tree> {
     let mut out = Vec::new();
     let mut rng = SplitMix64::new(seed);
     // Junctions: no tree within 10 m of one.
+    let mut placed = PointGrid::new(plan.size, 20.0);
     let mut junctions = PointGrid::new(plan.size, 20.0);
     for (i, n) in plan.roads.nodes.iter().enumerate() {
         junctions.insert(n.pos, i as u32);
@@ -116,9 +117,14 @@ pub fn trees(site: &Site, plan: &CityPlan, seed: u64) -> Vec<Tree> {
                 if lamp(slot - 1)
                     || junctions.any_within(q, 10.0, |_| false)
                     || site.water_at(q) != LAND
+                    // Never on a carriageway, nor beside another street's tree: two kerb rows
+                    // met at a junction's corner, two trees in one spot (the owner).
+                    || plan.ground.on_carriageway(q)
+                    || placed.any_within(q, 6.0, |_| false)
                 {
                     continue;
                 }
+                placed.insert(q, 0);
                 out.push(Tree {
                     pos: q,
                     height: rng.range_f64(height.0, height.1),

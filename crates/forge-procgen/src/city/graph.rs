@@ -775,12 +775,12 @@ pub fn straighten(graph: &mut RoadGraph, site: &Site) {
         let s = d.min(length * 0.5);
         geom::point_at(&e.points, if forward { s } else { length - s })
     };
-    for v in 0..n {
-        if arms[v].len() < 3 {
+    for (v, list) in arms.iter().enumerate() {
+        if list.len() < 3 {
             continue;
         }
         let node = graph.nodes[v].pos;
-        let mains: Vec<(usize, bool)> = arms[v].iter().copied().collect();
+        let mains: &[(usize, bool)] = list;
         #[allow(clippy::type_complexity)]
         let mut best: Option<(f64, DVec2, DVec2, (usize, bool), (usize, bool))> = None;
         for (i, &x) in mains.iter().enumerate() {
@@ -805,7 +805,7 @@ pub fn straighten(graph: &mut RoadGraph, site: &Site) {
             continue;
         }
         graph.nodes[v].pos = target;
-        for &(k, forward) in &arms[v] {
+        for &(k, forward) in list {
             let e = &mut graph.edges[k];
             let through = (k, forward) == x || (k, forward) == y;
             let mut moved = if through {
