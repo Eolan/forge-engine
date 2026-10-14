@@ -78,6 +78,8 @@ struct Record {
     range: ClusterRange,
     group: u32,
     source: u32,
+    /// Whether its group was simplified into a parent: else it is a root.
+    parented: bool,
     /// Global vertex indices of the cluster's triangles (needed to merge and partition).
     indices: Vec<u32>,
 }
@@ -255,6 +257,7 @@ fn build_dag_from(
                 records[c].gpu.parent_center = made.sphere.0;
                 records[c].gpu.parent_radius = made.sphere.1;
                 records[c].gpu.parent_error = made.error;
+                records[c].parented = true;
             }
             for cluster in made.clusters {
                 let c = append(
@@ -274,9 +277,11 @@ fn build_dag_from(
         current = next;
         level += 1;
     }
-    // Everything without a parent is a root (infinite parent error: never "too coarse").
+    // Everything without a parent is a root (infinite parent error: never "too coarse"). By its
+    // flag, not by a zero error and radius: a group squeezed to a point simplified with both
+    // zero, and its clusters became roots under the parent made from them (the city's ground).
     for record in &mut records {
-        if record.gpu.parent_error == 0.0 && record.gpu.parent_radius == 0.0 {
+        if !record.parented {
             record.gpu.parent_error = f32::INFINITY;
             record.gpu.parent_center = record.gpu.self_center;
             record.gpu.parent_radius = record.gpu.self_radius;
@@ -695,6 +700,7 @@ fn append(
         },
         group: NO_GROUP,
         source: NO_GROUP,
+        parented: false,
         indices,
     });
     records.len() - 1
@@ -789,5 +795,57 @@ mod tests {
         assert_eq!(majority_section([1, 1, 0]), 1);
         assert_eq!(majority_section([0, 0, 1]), 0);
         assert_eq!(majority_section([2, 2, 2]), 2);
+    }
+
+    #[test]
+    fn every_parent_comes_from_a_group_with_a_parent() {
+        use super::{GpuVertex, NO_GROUP, build_dag};
+        // The invariant the pages rely on: a cluster made from a group has that group's clusters
+        // under it, none a root. A group of the city's ground squeezed to a point simplified with
+        // zero error and radius, and the old test for a root (both zero) took its clusters for
+        // roots: its parent pointed at a group the pages never packed (2026-10-14). A plane with
+        // 2 000 triangles at one of its vertices, which the simplifier reaches but does not keep.
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        let vertex = |x: f32, z: f32, section: u8| GpuVertex {
+            position: [x, 0.0, z],
+            pad0: 0.0,
+            normal: [0.0, 1.0, 0.0],
+            section: f32::from(section),
+            uv: [0.0; 2],
+        };
+        let n = 64;
+        for z in 0..=n {
+            for x in 0..=n {
+                vertices.push(vertex(x as f32, z as f32, 0));
+            }
+        }
+        for z in 0..n {
+            for x in 0..n {
+                let i = z * (n + 1) + x;
+                indices.extend([i, i + n + 1, i + 1, i + 1, i + n + 1, i + n + 2]);
+            }
+        }
+        for _ in 0..2000 {
+            let base = vertices.len() as u32;
+            for _ in 0..3 {
+                vertices.push(vertex(32.0, 32.0, 3));
+            }
+            indices.extend([base, base + 1, base + 2]);
+        }
+        let sections: Vec<u8> = vertices.iter().map(|v| v.section as u8).collect();
+        let dag = build_dag(&indices, &vertices, &sections, 0.0, 8);
+        for (c, &source) in dag.cluster_source.iter().enumerate() {
+            if source == NO_GROUP {
+                continue;
+            }
+            let parented = (0..dag.meshlets.len()).any(|k| {
+                dag.cluster_group[k] == source && dag.meshlets[k].parent_error.is_finite()
+            });
+            assert!(
+                parented,
+                "cluster {c} comes from group {source}, whose clusters are roots"
+            );
+        }
     }
 }
