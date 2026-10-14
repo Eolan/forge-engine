@@ -4049,7 +4049,7 @@ kit dressing them.
 
 *(research: building-structure.md; issues #248, #263)*
 
-## D-061 — The street ground as one map: cross-sections, junctions first, every surface once 🟡 (proposed 2026-10-14)
+## D-061 — The street ground as one map: cross-sections, junctions first, every surface once ✅ (proposed 2026-10-14; the owner's go the same day, in the order given)
 
 **The question.** In the owner's walk (2026-10-11) most of the bugs came from the street ground:
 - crossroads wrong wherever a pedestrian way meets the streets;
