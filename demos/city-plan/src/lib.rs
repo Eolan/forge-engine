@@ -371,41 +371,8 @@ impl PlanScenario {
                 tiles.flat(&middle, SQUARE_LEVEL + 0.02, PARK, false);
             }
         }
-        // Paths across the open blocks' greens: from each gap between the buildings (a street
-        // lot left open) to the court's middle, paved, 2.4 m wide (the owner's photos of open
-        // blocks: a shared green with paths through it).
-        let built: std::collections::HashSet<u32> = masses.iter().map(|m| m.lot).collect();
-        for (i, lot) in plan.lots.iter().enumerate() {
-            let block = &plan.blocks[lot.block as usize];
-            let Some(court) = &block.courtyard else {
-                continue;
-            };
-            if !lot.frontage || built.contains(&(i as u32)) || block.use_ != BlockUse::Built {
-                continue;
-            }
-            // From the street's edge nearest the gap's middle to the court's.
-            let middle = geom::centroid(&lot.polygon);
-            let n = block.polygon.len();
-            let from = (0..n)
-                .map(|k| {
-                    let (a, b) = (block.polygon[k], block.polygon[(k + 1) % n]);
-                    a + (b - a) * geom::closest_on_segment(middle, a, b)
-                })
-                .min_by(|p, q| p.distance(middle).total_cmp(&q.distance(middle)));
-            let Some(from) = from else {
-                continue;
-            };
-            let line = geom::resample(&[from, geom::centroid(court)], 2.0);
-            if line.len() < 2 {
-                continue;
-            }
-            strip(
-                &mut tiles,
-                &offset_line(&line, 1.2),
-                &offset_line(&line, -1.2),
-                WALK_LEVEL + 0.01,
-                PAVING,
-            );
+        for polygon in court_paths(plan, masses) {
+            tiles.flat(&polygon, WALK_LEVEL + 0.01, PAVING, false);
         }
         // The quays' land as lawns, cell by cell (their faces hold water), under the trees.
         for block in plan.blocks.iter().filter(|b| b.use_ == BlockUse::Quay) {
@@ -3401,6 +3368,44 @@ fn lawn(tiles: &mut Tiles, shore: &Shore, map: &ground::GroundMap, polygon: &[DV
     }
 }
 
+/// The paths across the open blocks' greens: from each gap between the buildings (a street lot
+/// left open) to the court's middle, paved, 2.4 m wide (the owner's photos of open blocks: a
+/// shared green with paths through it). Off the streets only: the block's outline runs down the
+/// street's middle, and the paths' first metres lay over the carriageway (the owner).
+fn court_paths(plan: &CityPlan, masses: &[Mass]) -> Vec<Vec<DVec2>> {
+    let built: std::collections::HashSet<u32> = masses.iter().map(|m| m.lot).collect();
+    let mut paths = Vec::new();
+    for (i, lot) in plan.lots.iter().enumerate() {
+        let block = &plan.blocks[lot.block as usize];
+        let Some(court) = &block.courtyard else {
+            continue;
+        };
+        if !lot.frontage || built.contains(&(i as u32)) || block.use_ != BlockUse::Built {
+            continue;
+        }
+        // From the block's edge nearest the gap's middle to the court's.
+        let middle = geom::centroid(&lot.polygon);
+        let n = block.polygon.len();
+        let from = (0..n)
+            .map(|k| {
+                let (a, b) = (block.polygon[k], block.polygon[(k + 1) % n]);
+                a + (b - a) * geom::closest_on_segment(middle, a, b)
+            })
+            .min_by(|p, q| p.distance(middle).total_cmp(&q.distance(middle)));
+        let Some(from) = from else {
+            continue;
+        };
+        let line = geom::resample(&[from, geom::centroid(court)], 2.0);
+        if line.len() < 2 {
+            continue;
+        }
+        let mut outline = offset_line(&line, 1.2);
+        outline.extend(offset_line(&line, -1.2).into_iter().rev());
+        paths.extend(ground::simple_polygons(&plan.ground.off_streets(&outline)));
+    }
+    paths
+}
+
 /// A flat strip between two polylines of the same length, a quad between each pair of points,
 /// in the tile of each quad's first corner.
 fn strip(tiles: &mut Tiles, left: &[DVec2], right: &[DVec2], height: f64, section: u8) {
@@ -3838,4 +3843,65 @@ fn lamp_model(double: bool) -> TriMesh {
         triangle(&mut mesh, [lens[0], lens[2], lens[3]], -Vec3::Y, 1);
     }
     mesh
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use forge_procgen::city::{example, plan};
+
+    #[test]
+    fn the_court_paths_stay_off_the_carriageways() {
+        let size = 4000.0;
+        let site = example::site(size, 10.0);
+        // The example's seed and the other seeds the plan's rules are checked on.
+        for seed in [
+            None,
+            Some(0x5EED_0001_u64),
+            Some(0x5EED_0042),
+            Some(0xC17E_0003),
+        ] {
+            let mut params = example::params(size);
+            if let Some(seed) = seed {
+                params.seed = forge_core::Seed::new(seed);
+            }
+            let city = plan(&site, &params);
+            let masses = forge_procgen::city::mass::masses(
+                &city,
+                &forge_procgen::city::bible::StyleBible::default(),
+                7,
+            );
+            let paths = court_paths(&city, &masses);
+            // Every half metre inside each path: none on a carriageway (a path's first metres
+            // lay over the road, the owner).
+            let (mut samples, mut on_road) = (0, 0);
+            for polygon in &paths {
+                let (lo, hi) = polygon.iter().fold(
+                    (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)),
+                    |(lo, hi), p| (lo.min(*p), hi.max(*p)),
+                );
+                let mut y = lo.y + 0.25;
+                while y < hi.y {
+                    let mut x = lo.x + 0.25;
+                    while x < hi.x {
+                        let p = DVec2::new(x, y);
+                        if geom::contains(polygon, p) {
+                            samples += 1;
+                            on_road += usize::from(city.ground.on_carriageway(p));
+                        }
+                        x += 0.5;
+                    }
+                    y += 0.5;
+                }
+            }
+            println!(
+                "seed {seed:?}: {} court paths, {samples} samples, {on_road} on a carriageway",
+                paths.len()
+            );
+            assert_eq!(
+                on_road, 0,
+                "seed {seed:?}: {on_road} of {samples} path samples on a carriageway"
+            );
+        }
+    }
 }

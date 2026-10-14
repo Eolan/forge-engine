@@ -117,9 +117,11 @@ buildings too close, on their second walk (2026-10-11). A plan can now set two o
   60 m a corner lot may be a gap too: separate buildings round a shared green rather than a
   ring (the owner's photos of open blocks: open, organic, not oppressive). Light, views and
   people reach the courtyard, the walls beside a gap get windows, and in 3D a paved path runs
-  from each gap to the court's middle. The sandbox opens its modern districts (runs of 35–55 m,
-  gaps 10–25 %) and keeps its centre and old town closed: about 1.05 M people (977 k once the
-  stair cores took their floor, step 3).
+  from each gap to the court's middle, off the streets (it began on the street's centreline and
+  lay across the carriageway on some seeds, the owner; test
+  `the_court_paths_stay_off_the_carriageways`, four seeds). The sandbox opens its modern
+  districts (runs of 35–55 m, gaps 10–25 %) and keeps its centre and old town closed: about
+  1.05 M people (977 k once the stair cores took their floor, step 3).
 
 **Footprints.** A footprint's corner sharper than 55° is chamfered where its wedge is 6 m
 wide, or at 0.45 of its shorter side: a building came to a point at a block's sharp corner by
