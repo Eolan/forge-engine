@@ -660,6 +660,9 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
   room, with empty ground nearer in (the owner). The sandbox uses 1.5, with denser districts
   and hillside quarters on the south bank's gentler slopes to keep its million. Courtyards under
   100 m² are none: the block is built through, as such light wells had no passage to them.
+  Tram lines end in the city: a line's end waypoint out in the countryside moves in along it to
+  where the built districts begin, or goes (lines drawn to the frame's edges ran on into empty
+  land, the owner).
 - **open land as nature:** the ground outside the city is a dry, olive scrub. The reserves and
   any land outside every block carry a loose wood: a jittered grid of 16 m, under half filled, 8 m
   clear of the streets. They were gravel, which the owner took for paving.

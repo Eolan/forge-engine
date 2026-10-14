@@ -1024,7 +1024,45 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
     blocks::add_squares(&mut blocks, &anchors, &params.districts, 180.0);
     lap("blocks and parks", &mut timings);
 
-    let mut tram_lines = transit::route_trams(&roads, &params.tram_lines, params.stop_spacing);
+    // The lines end in the city: a waypoint out in the countryside (the lines were drawn to the
+    // frame's edges) moves in along its line to where the built districts begin, and one with no
+    // city between it and the next goes. Lines ran on into empty land (the owner).
+    let in_city = |p: DVec2| kind_at(p).is_some_and(|d| d.kind != DistrictKind::Reserve);
+    // The first point in the city from `from` towards `to`, every 25 m.
+    let edge_of_city = |from: DVec2, to: DVec2| {
+        let steps = (from.distance(to) / 25.0).ceil().max(1.0) as usize;
+        (1..=steps)
+            .map(|k| from + (to - from) * (k as f64 / steps as f64))
+            .find(|&q| in_city(q))
+    };
+    // From one end: drop the waypoints until one lies in the city, or moves in towards the next.
+    let trim_front = |w: &mut Vec<DVec2>| {
+        while w.len() >= 2 && !in_city(w[0]) {
+            match edge_of_city(w[0], w[1]) {
+                Some(q) => w[0] = q,
+                None => {
+                    w.remove(0);
+                }
+            }
+        }
+    };
+    let specs: Vec<TramLineSpec> = params
+        .tram_lines
+        .iter()
+        .map(|spec| {
+            let mut w = spec.waypoints.clone();
+            trim_front(&mut w);
+            w.reverse();
+            trim_front(&mut w);
+            w.reverse();
+            TramLineSpec {
+                waypoints: w,
+                ..spec.clone()
+            }
+        })
+        .filter(|s| s.waypoints.len() >= 2)
+        .collect();
+    let mut tram_lines = transit::route_trams(&roads, &specs, params.stop_spacing);
     if params.max_extra_lines > 0 {
         let centres: Vec<DVec2> = blocks
             .iter()
