@@ -440,3 +440,48 @@ pub fn alignment(route: &[DVec2]) -> Vec<DVec2> {
     };
     geom::fillet_by(&geom::simplify(route, ALIGN_TOLERANCE), &radius, 2.0)
 }
+
+/// One track where lines share a street: each line, in order, drawn onto the alignments of the
+/// lines before it wherever it runs beside one within 3 m and the same way (or the other way), in
+/// full within 1.5 m and blending off to 3 m, so a line leaving the trunk does so on a curve.
+/// Each line's own alignment laid two rails beside the other's, up to a metre or more apart.
+pub fn share_tracks(lines: &mut [TramLine]) {
+    for i in 1..lines.len() {
+        let (before, rest) = lines.split_at_mut(i);
+        let line = &mut rest[0];
+        let points = geom::resample(&line.points, 4.0);
+        let mut moved = Vec::with_capacity(points.len());
+        for (k, &p) in points.iter().enumerate() {
+            let t = if k + 1 < points.len() {
+                points[k + 1] - p
+            } else if k > 0 {
+                p - points[k - 1]
+            } else {
+                DVec2::ZERO
+            }
+            .normalize_or_zero();
+            let mut best: Option<(f64, DVec2)> = None;
+            for other in before.iter() {
+                for w in other.points.windows(2) {
+                    let along = (w[1] - w[0]).normalize_or_zero();
+                    if along.dot(t).abs() < 0.95 {
+                        continue;
+                    }
+                    let q = w[0] + (w[1] - w[0]) * geom::closest_on_segment(p, w[0], w[1]);
+                    let d = q.distance(p);
+                    if d < 3.0 && best.is_none_or(|(b, _)| d < b) {
+                        best = Some((d, q));
+                    }
+                }
+            }
+            moved.push(match best {
+                Some((d, q)) => {
+                    let pull = ((3.0 - d) / 1.5).clamp(0.0, 1.0);
+                    p + (q - p) * pull
+                }
+                None => p,
+            });
+        }
+        line.points = geom::simplify(&moved, 0.02);
+    }
+}

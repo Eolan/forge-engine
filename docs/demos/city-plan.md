@@ -622,6 +622,17 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
   streets, then each corner rounded, a junction's turn on 18 m and a gentle bend on a longer arc
   (up to 120 m). Each little jog had been rounded on its own into a run of S-bends (the owner:
   "trams wouldn't make a series of small undulating turns").
+- **one track, one stop, where lines share a street:**
+  - **Tracks** (`transit::share_tracks`): each line in turn is drawn onto the alignments of the
+    lines before it wherever it runs beside one within 3 m, the same way or the other. It moves
+    in full within 1.5 m and blends off to 3 m, so a line leaves the trunk on a curve. Only the
+    first line draws the shared rails. In the sandbox, 96 % of the shared stretches now lie
+    within 5 cm (56 % before), and the rest are the turnouts. Each line had laid its own rails
+    beside the other's, up to a metre or more apart.
+  - **Stops:** a line takes a stop the lines before it placed on its track within 150 m, and
+    each platform is drawn once. Several lines' stops stood one over another (the owner).
+  - **Placement:** stops keep clear of a junction's corners and crossings (a platform's ramp
+    met a zebra) and are never on a bridge. A stop with no clean place within 400 m is dropped.
 - **the tiles' LOD** weighs normals (`CookOptions { normal_weight: 2.0 }`): at the coarser levels
   a pavement's kerb and back faces folded into its top, long tilted triangles where two paving
   patterns seemed to blend on the pavements and the bridges (the owner guessed an LOD issue).

@@ -975,6 +975,8 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
         );
         tram_lines.extend(extra);
     }
+    // One track where lines share a street.
+    transit::share_tracks(&mut tram_lines);
     let crossings = transit::boat_crossings(site, &roads, params.boat_gap);
     transit::assign_profiles(&mut roads, &tram_lines, &districts_field, &params.districts);
     // The quays are walks: pedestrian streets whatever their district.

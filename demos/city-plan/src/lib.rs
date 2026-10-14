@@ -405,20 +405,48 @@ impl PlanScenario {
         }
         street_ground(&mut tiles, &plan.ground, site);
         bridges(&mut tiles, plan, site, &shore);
-        // Two tracks a line, one each way, on the right of the way they run.
-        for line in &plan.tram_lines {
-            for track in [-TRACK_OFFSET, TRACK_OFFSET] {
-                for rail in [-0.72, 0.72] {
-                    let rail = offset_line(&line.points, track + rail);
-                    ribbon(&mut tiles, &rail, 0.25, 0.22, TRACK);
+        // Two tracks a line, one each way, on the right of the way they run; where lines share a
+        // track (`transit::share_tracks`) only the first draws it: two lines' rails one over the
+        // other would fight.
+        for (i, line) in plan.tram_lines.iter().enumerate() {
+            let shared = |p: DVec2| {
+                plan.tram_lines[..i].iter().any(|o| {
+                    o.points
+                        .windows(2)
+                        .any(|w| geom::distance_to_segment(p, w[0], w[1]) < 0.05)
+                })
+            };
+            let points = geom::resample(&line.points, 4.0);
+            let mut runs: Vec<Vec<DVec2>> = vec![Vec::new()];
+            for (k, &p) in points.iter().enumerate() {
+                let next = points.get(k + 1).copied().unwrap_or(p);
+                if shared(p) && shared(next) {
+                    if !runs.last().is_some_and(Vec::is_empty) {
+                        runs.last_mut().expect("one").push(p);
+                        runs.push(Vec::new());
+                    }
+                } else {
+                    runs.last_mut().expect("one").push(p);
+                }
+            }
+            for run in runs.iter().filter(|r| r.len() >= 2) {
+                for track in [-TRACK_OFFSET, TRACK_OFFSET] {
+                    for rail in [-0.72, 0.72] {
+                        let rail = offset_line(run, track + rail);
+                        ribbon(&mut tiles, &rail, 0.25, 0.22, TRACK);
+                    }
                 }
             }
         }
-        let mut trams: Vec<TramRun> = plan
-            .tram_lines
-            .iter()
-            .filter_map(|l| TramRun::new(l, plan, site))
-            .collect();
+        // Line by line, each taking the stops the lines before it placed on its track.
+        let mut trams: Vec<TramRun> = Vec::new();
+        let mut taken: Vec<DVec2> = Vec::new();
+        for l in &plan.tram_lines {
+            if let Some(run) = TramRun::new(l, plan, site, &taken) {
+                taken.extend(run.timetable.stops().iter().map(|&s| run.track(s).0));
+                trams.push(run);
+            }
+        }
         stagger_termini(&mut trams);
         // What each wall looks onto: the kit's faces and where the roofs end in gables.
         let edges = facades::edge_kinds(plan, masses);
@@ -837,8 +865,19 @@ impl PlanScenario {
                 true,
             ));
             let stop = (kit_meshes.len() - 1) as u32;
+            // Each platform once: lines sharing a stop share its platforms (drawn per line, they
+            // stood one over another).
+            let mut drawn: Vec<Mat4> = Vec::new();
             for run in &trams {
                 for (at, _, _) in run.platforms(size) {
+                    let same = drawn.iter().any(|o| {
+                        o.w_axis.truncate().distance(at.w_axis.truncate()) < 3.0
+                            && o.x_axis.truncate().dot(at.x_axis.truncate()) > 0.95
+                    });
+                    if same {
+                        continue;
+                    }
+                    drawn.push(at);
                     // The kit's first colour, its glass lit: the shelter and the totem glow.
                     kit_instances.push((stop, at, 1));
                 }
@@ -1101,7 +1140,12 @@ struct TramRun {
 impl TramRun {
     /// A line's runs on `plan`, its stops at their distances along it; `None` with fewer than
     /// two.
-    fn new(line: &forge_procgen::city::TramLine, plan: &CityPlan, site: &Site) -> Option<Self> {
+    fn new(
+        line: &forge_procgen::city::TramLine,
+        plan: &CityPlan,
+        site: &Site,
+        taken: &[DVec2],
+    ) -> Option<Self> {
         let points = line.points.clone();
         let mut along = vec![0.0];
         for w in points.windows(2) {
@@ -1138,7 +1182,11 @@ impl TramRun {
             })
             .filter_map(|n| {
                 let (off, s) = project(plan.roads.nodes[n as usize].pos);
-                (off < 15.0).then(|| (s, widest.get(&n).copied().unwrap_or(0.0) + 2.0))
+                // Past its corners and its crossings: a platform's ramp met a zebra.
+                (off < 15.0).then(|| {
+                    let reach = ground::KERB_RADIUS + ground::CROSSING + 2.0;
+                    (s, widest.get(&n).copied().unwrap_or(0.0) + reach)
+                })
             })
             .collect();
         junctions.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -1178,6 +1226,16 @@ impl TramRun {
                 .iter()
                 .filter_map(|&stop| {
                     let s = project(stop).1;
+                    // A stop another line already has on this track within 150 m: the same one,
+                    // shared (several lines' stops stood one over another, the owner).
+                    let shared = taken
+                        .iter()
+                        .map(|&q| project(q))
+                        .filter(|&(off, at)| off < 2.5 && (at - s).abs() < 150.0 && fits(at))
+                        .min_by(|a, b| (a.1 - s).abs().total_cmp(&(b.1 - s).abs()));
+                    if let Some((_, at)) = shared {
+                        return Some(at);
+                    }
                     (0..=160)
                         .flat_map(|k| {
                             let d = f64::from(k) * 2.5;
