@@ -2994,9 +2994,13 @@ impl Scenario for PlanScenario {
                 taxi_share = format!("{:.0} %", t.taxi_share * 100.0),
                 "the taxi fleet: the trips by tram or taxi the trams do not serve, the share of them that book a taxi"
             );
+            // The cabs, then the shuttles: the fleet's last taxis.
             let cab = builder.add_mesh(&MeshletMesh::build(&vehicles::taxi_cab()));
             builder.set_mesh_material(cab, materials_taxi);
-            tram_movers.push((cab, t.len() as u32));
+            tram_movers.push((cab, (t.len() - t.shuttles()) as u32));
+            let shuttle = builder.add_mesh(&MeshletMesh::build(&vehicles::taxi_shuttle()));
+            builder.set_mesh_material(shuttle, materials_taxi);
+            tram_movers.push((shuttle, t.shuttles() as u32));
         }
         if !tram_movers.is_empty() {
             builder.reserve_movers(&tram_movers);

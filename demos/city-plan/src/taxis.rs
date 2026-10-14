@@ -28,6 +28,9 @@ const CHANGE: f64 = 150.0;
 /// take twenty minutes or so in town, and a booking should wait a minute or so (one taxi for 90
 /// trips a day left 527 bookings waiting at 9:00, 402 s on average; 4 an hour, 223 waiting).
 const PEAK_TRIPS_PER_TAXI: f64 = 3.0;
+/// The fleet's share of 8-seat shuttles: groups of five or more are about 3 % of the bookings
+/// (an estimate), and ride longer.
+const SHUTTLE_SHARE: f64 = 0.05;
 /// How far a moving taxi keeps right of its road's centreline, metres: in its lane.
 const LANE: f64 = 1.5;
 /// How far right of the centreline a taxi stops to pick up, metres: at the kerb.
@@ -223,7 +226,11 @@ impl Taxis {
                 })
             })
             .collect();
-        let fleet = Fleet::new(net, stands, taxis, demand, 0x7A_C1, start).with_depots(depots);
+        // A share of shuttles for the groups, one a depot at least.
+        let shuttles = ((taxis as f64 * SHUTTLE_SHARE).round() as usize).max(depots.len());
+        let fleet = Fleet::new(net, stands, taxis, demand, 0x7A_C1, start)
+            .with_shuttles(shuttles)
+            .with_depots(depots);
         let bays = forge_geom::depot::bays();
         let mut taxis = Self {
             bay_of: vec![None; fleet.taxis.len()],
@@ -263,6 +270,15 @@ impl Taxis {
                 _ => {}
             }
         }
+    }
+
+    /// How many of them are shuttles: the last ones.
+    pub fn shuttles(&self) -> usize {
+        self.fleet
+            .taxis
+            .iter()
+            .filter(|t| t.seats > forge_sim::taxi::CAB_SEATS)
+            .count()
     }
 
     /// How many taxis there are.

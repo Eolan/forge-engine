@@ -272,6 +272,8 @@ pub struct Booking {
     pub from: Spot,
     /// Where they go.
     pub to: Spot,
+    /// How many travel together.
+    pub party: u32,
     /// When a taxi picked them up, if one has.
     pub picked: Option<f64>,
 }
@@ -290,6 +292,10 @@ pub struct Taxi {
     hold: f64,
     /// When it parked in its depot, seconds: it drives through the deck to its bay after.
     since: f64,
+    /// Its seats: a cab's or a shuttle's.
+    pub seats: u32,
+    /// Its length, metres.
+    length: f64,
 }
 
 /// Where the demand comes from and goes to, and how much of it there is by the hour.
@@ -380,6 +386,12 @@ pub const DWELL: f64 = 25.0;
 pub const SHORTEST_TRIP: f64 = 700.0;
 /// A cab's length, metres (`forge_geom::vehicles::taxi_cab`).
 pub const LENGTH: f64 = 3.6;
+/// The seats in a cab: facing seats for four, or a wheelchair and a companion.
+pub const CAB_SEATS: u32 = 4;
+/// The seats in a shuttle, which has a ramp: for groups.
+pub const SHUTTLE_SEATS: u32 = 8;
+/// A shuttle's length, metres (`forge_geom::vehicles::taxi_shuttle`).
+pub const SHUTTLE_LENGTH: f64 = 5.0;
 /// The gap a taxi keeps to the one ahead when both stand, metres.
 pub const STANDSTILL: f64 = 2.0;
 /// The time gap it keeps to the one ahead at speed, seconds.
@@ -474,6 +486,8 @@ impl Fleet {
                 waited: 0.0,
                 hold: 0.0,
                 since: f64::NEG_INFINITY,
+                seats: CAB_SEATS,
+                length: LENGTH,
             });
         }
         let mut cumulative = Vec::with_capacity(demand.places.len());
@@ -504,6 +518,18 @@ impl Fleet {
         };
         fleet.next_booking = time + fleet.gap();
         fleet
+    }
+
+    /// The fleet with its last `n` taxis shuttles: [`SHUTTLE_SEATS`] seats, [`SHUTTLE_LENGTH`]
+    /// long, for the groups a cab cannot take (call it before [`Fleet::with_depots`], which parks
+    /// the taxis past the stands' bays).
+    pub fn with_shuttles(mut self, n: usize) -> Self {
+        let first = self.taxis.len().saturating_sub(n);
+        for t in &mut self.taxis[first..] {
+            t.seats = SHUTTLE_SEATS;
+            t.length = SHUTTLE_LENGTH;
+        }
+        self
     }
 
     /// The fleet with `depots`: the taxis no stand's bays hold park in them, shared out by
@@ -567,6 +593,19 @@ impl Fleet {
         -u.ln() / rate
     }
 
+    /// A party's size drawn for a booking: mostly one or two, a few groups up to eight (an
+    /// estimate after city taxi data: 1.3 to 1.6 people a trip on average).
+    fn party(&mut self) -> u32 {
+        let x = self.rng.next_f64();
+        match x {
+            x if x < 0.68 => 1,
+            x if x < 0.88 => 2,
+            x if x < 0.94 => 3,
+            x if x < 0.97 => 4,
+            _ => 5 + (self.rng.next_f64() * 4.0) as u32 % 4,
+        }
+    }
+
     /// A place drawn by its weight.
     fn place(&mut self) -> Option<Spot> {
         let total = *self.cumulative.last()?;
@@ -610,24 +649,30 @@ impl Fleet {
                 self.otherwise += 1;
                 continue;
             }
+            let party = self.party();
             self.bookings.push(Booking {
                 time: made,
                 from,
                 to,
+                party,
                 picked: None,
             });
             self.waiting.push_back((self.bookings.len() - 1) as u32);
         }
-        // Each waiting booking to the nearest free taxi.
-        while let Some(&b) = self.waiting.front() {
-            let Some(k) = self.nearest_free(self.bookings[b as usize].from) else {
-                break;
-            };
-            self.waiting.pop_front();
-            let from = self.taxi_spot(k);
-            let to = self.bookings[b as usize].from;
-            self.send(k, from, to, Task::Fetching { booking: b });
+        // Each waiting booking, in turn, to the nearest free taxi with seats enough; a group no
+        // free vehicle can take waits without holding up the ones behind it.
+        let mut left = VecDeque::new();
+        while let Some(b) = self.waiting.pop_front() {
+            let booking = self.bookings[b as usize];
+            match self.nearest_free(booking.from, booking.party) {
+                Some(k) => {
+                    let from = self.taxi_spot(k);
+                    self.send(k, from, booking.from, Task::Fetching { booking: b });
+                }
+                None => left.push_back(b),
+            }
         }
+        self.waiting = left;
         // At a busy hour the taxis waiting behind a stand's first go out to circulate round the
         // busy places, one at a time as the road at the stand clears (they left together, one
         // on another); one stays at each stand.
@@ -752,7 +797,7 @@ impl Fleet {
                 } else {
                     leg.from - into
                 };
-                leg.link == spot.link && (s - spot.s).abs() < LENGTH + STANDSTILL
+                leg.link == spot.link && (s - spot.s).abs() < SHUTTLE_LENGTH + STANDSTILL
             })
         })
     }
@@ -807,9 +852,11 @@ impl Fleet {
                 from += 0.01;
             }
             if let Some((at, other)) = first_past(lanes, leg.link, leg.forward(), from, me)
-                && at <= leg.along(link(leg), leg.length()) + LENGTH
+                && at <= leg.along(link(leg), leg.length()) + SHUTTLE_LENGTH
             {
-                gap = to_leg + (at - leg.along(link(leg), 0.0)) - LENGTH;
+                // Middle to middle, less the two half lengths.
+                let lengths = (self.taxis[k].length + self.taxis[other as usize].length) * 0.5;
+                gap = to_leg + (at - leg.along(link(leg), 0.0)) - lengths;
                 lead = self.taxis[other as usize].speed;
                 break;
             }
@@ -824,7 +871,7 @@ impl Fleet {
                 let exit = &legs[i + 1];
                 let entry = exit.along(link(exit), 0.0);
                 let room = first_past(lanes, exit.link, exit.forward(), entry, me)
-                    .is_none_or(|(at, _)| at - entry >= 2.0 * LENGTH + STANDSTILL);
+                    .is_none_or(|(at, _)| at - entry >= 2.0 * SHUTTLE_LENGTH + STANDSTILL);
                 junction = Some((node, room, to_node));
             }
         }
@@ -832,20 +879,21 @@ impl Fleet {
     }
 
     /// The free taxi nearest `spot` (waiting, returning or cruising), as the crow flies.
-    fn nearest_free(&self, spot: Spot) -> Option<usize> {
+    fn nearest_free(&self, spot: Spot, party: u32) -> Option<usize> {
         let (p, _) = self.net.at(spot);
         self.taxis
             .iter()
             .enumerate()
             .filter(|(_, t)| {
-                matches!(
-                    t.task,
-                    Task::Waiting { .. }
-                        | Task::Returning { .. }
-                        | Task::Cruising
-                        | Task::Parked { .. }
-                        | Task::ToDepot { .. }
-                )
+                t.seats >= party
+                    && matches!(
+                        t.task,
+                        Task::Waiting { .. }
+                            | Task::Returning { .. }
+                            | Task::Cruising
+                            | Task::Parked { .. }
+                            | Task::ToDepot { .. }
+                    )
             })
             .map(|(k, _)| (self.pose(k).0.distance(p), k))
             .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)))
@@ -1576,5 +1624,33 @@ mod tests {
             "{} still parked at a busy hour",
             count(&f, parked)
         );
+    }
+
+    #[test]
+    fn groups_ride_in_the_shuttles() {
+        let mut f = fleet(300.0, 24).with_shuttles(3);
+        let (mut groups, mut cab_groups) = (0, 0);
+        for _ in 0..(2 * 3600 / 10) {
+            f.advance_to(f.time + 10.0, 0.5);
+            for t in &f.taxis {
+                if let Task::Fetching { booking } | Task::Carrying { booking } = t.task {
+                    let party = f.bookings[booking as usize].party;
+                    if party > CAB_SEATS {
+                        groups += 1;
+                        cab_groups += usize::from(t.seats < party);
+                    }
+                }
+            }
+        }
+        let big = f.bookings.iter().filter(|b| b.party > CAB_SEATS).count();
+        let picked = f
+            .bookings
+            .iter()
+            .filter(|b| b.party > CAB_SEATS && b.picked.is_some())
+            .count();
+        println!("{big} groups booked, {picked} picked up; {groups} samples of a group riding");
+        assert!(big > 5, "{big} groups");
+        assert_eq!(cab_groups, 0, "a group in a cab");
+        assert!(picked * 10 >= big * 8, "{picked} of {big} groups picked up");
     }
 }

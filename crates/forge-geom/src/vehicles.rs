@@ -303,6 +303,67 @@ pub fn taxi_cab() -> TriMesh {
     m
 }
 
+/// An automated shuttle for eight (D-061: groups, and a ramp for wheelchairs), the cab's taller
+/// sibling: 5.0 m long, 2.0 m wide and 2.2 m tall along `x`, its wheels on `y = 0`, its floor
+/// low. The same parts and sections as [`taxi_cab`], a deeper glass band, sliding doors' frames
+/// on both sides.
+pub fn taxi_shuttle() -> TriMesh {
+    let mut m = TriMesh::default();
+    let (l, w) = (2.5_f32, 1.0_f32);
+    for x in [-1.75_f32, 1.75] {
+        for z in [-0.88_f32, 0.88] {
+            cuboid(
+                &mut m,
+                Vec3::new(x - 0.32, 0.0, z - 0.12),
+                Vec3::new(x + 0.32, 0.64, z + 0.12),
+                UNDER,
+                ALL,
+            );
+        }
+    }
+    cuboid(
+        &mut m,
+        Vec3::new(-l, 0.22, -w),
+        Vec3::new(l, 0.9, w),
+        BODY,
+        ALL & !NEG_Y,
+    );
+    cuboid(
+        &mut m,
+        Vec3::new(-l, 0.9, -w),
+        Vec3::new(l, 1.0, w),
+        STRIPE,
+        POS_X | NEG_X | POS_Z | NEG_Z,
+    );
+    cuboid(
+        &mut m,
+        Vec3::new(-l + 0.08, 1.0, -w + 0.04),
+        Vec3::new(l - 0.08, 2.0, w - 0.04),
+        GLASS,
+        POS_X | NEG_X | POS_Z | NEG_Z,
+    );
+    cuboid(
+        &mut m,
+        Vec3::new(-l + 0.02, 2.0, -w + 0.02),
+        Vec3::new(l - 0.02, 2.2, w - 0.02),
+        BODY,
+        ALL & !NEG_Y,
+    );
+    // The pillars: the corners and either side of the sliding doors in the middle.
+    for x in [-l + 0.1, -0.7, 0.7, l - 0.1] {
+        for z in [-w + 0.02, w - 0.02] {
+            cuboid(
+                &mut m,
+                Vec3::new(x - 0.06, 1.0, z - 0.03),
+                Vec3::new(x + 0.06, 2.0, z + 0.03),
+                BODY,
+                ALL,
+            );
+        }
+    }
+    m
+}
+
 /// A river shuttle boat, electric, for about twenty people (Nantes' Navibus at a smaller size):
 /// 9 m long and 3.2 m wide along `x`, its waterline at `y = 0`. A hull tapering to the bow
 /// ([`BODY`]), a glazed cabin ([`GLASS`] between [`BODY`] posts), a roof of solar panels

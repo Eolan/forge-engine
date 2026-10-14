@@ -4216,6 +4216,8 @@ times they circulate round the busy places, where they will most likely find som
     - **Driveways:** they climb the verge, so the footways stay level.
     - **Use:** the cabs no stand holds park and charge there; the depots refill the stands and
       send their cabs out at busy hours.
-  - **Not yet:** the 8-seat shuttles; batteries and charging times.
+  - **Shuttles** (built 2026-10-15): 8 seats with a ramp, 5 % of the fleet, for parties of five
+    or more.
+  - **Not yet:** batteries and charging times; shared rides.
 - **Crossings (the owner's go):** raised tables on the taxi roads; dropped kerbs on the tram
   avenues.

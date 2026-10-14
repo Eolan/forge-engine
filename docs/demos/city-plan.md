@@ -625,8 +625,16 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
       - at the kerb, 2.3 m right, while it picks up or sets down;
       - waiting: in its lay-by, two bays;
       - parked: in a bay of its depot's deck, seen through the fins.
-    - **The cab** (`vehicles::taxi_cab`): a 3.6 × 1.8 × 1.65 m pod with an ivory body, dark
-      glass and an amber band. The cabs are drawn as movers after the trams.
+    - **The vehicles** (`vehicles::taxi_cab`, `taxi_shuttle`): ivory bodies, dark glass and an
+      amber band, drawn as movers after the trams.
+      - A cab for four, 3.6 × 1.8 × 1.65 m: most trips.
+      - A shuttle for eight with a ramp, 5.0 × 2.0 × 2.2 m: 5 % of the fleet, one a depot at
+        least (26 in the example).
+      - A booking is for a party: one in 68 %, two in 20 %, three in 6 %, four in 3 %, five to
+        eight in 3 % *(estimates)*.
+      - A group goes to the nearest free shuttle. It waits without holding up the bookings
+        behind it. The lanes' gaps take each vehicle's own length. Test
+        `groups_ride_in_the_shuttles`.
     - **Depots** (`city::taxi::depots`, `forge_geom::depot`): the parking decks where the taxis
       no stand holds wait and charge, one for 25 stands (the example 4, the sandbox 9).
       - **Sites:** behind the building line of a taxi road, 48 by 32 m in a built block.
@@ -677,8 +685,11 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
         wait of 40 s, no taxi stuck;
       - the sandbox: 1 727 taxis in 9 depots; the trams serve half of the trips by tram or taxi,
         17 % of the rest book a taxi.
-    - **Not yet:** the 8-seat shuttles; taxis that stop for people at the crossings; batteries
-      and charging times.
+    - **Not yet:**
+      - taxis that stop for people at the crossings: the walkers cross in the junction boxes,
+        not on the zebras, so both are to fix together;
+      - batteries and charging times;
+      - shared rides.
     - **Tests:**
       - `waiting_taxis_stand_in_their_lay_bys_and_moving_ones_on_the_roads`: each on a
         carriageway or its depot's deck, none drawn one on another, at the start and an hour on;
