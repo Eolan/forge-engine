@@ -197,6 +197,14 @@ pub struct RenderLayer {
     /// part of the windows. For the kits' windows, whose glass lies on the mesh's `z` plane
     /// with the room towards −z.
     pub interior: bool,
+    /// Standard: a grating of upright bars drawn on one card, its bars this share of their
+    /// spacing wide and as deep (a railing's square bars): the mesh's `u` counts the bars, one a
+    /// unit, the first at 1. Drawn double-sided as a cut-out: the share of each pixel the bars
+    /// cover, over its footprint and widened by the bars' depth as the view slants along the
+    /// card, decides it against the frame's spatio-temporal noise, which TAA averages; the rays
+    /// meet the bars themselves. A railing's far form that cannot shimmer (D-013, trim sheets
+    /// §2.8): bars thinner than a pixel flickered as geometry.
+    pub grating: Option<f32>,
     /// The share of light reflected at normal incidence (Fresnel's F0), rising towards 1 at
     /// grazing angles: 0.04 for most dielectrics (stone, plaster, plastic, uncoated glass),
     /// 0.2–0.4 for coated glass (issue #56).
@@ -290,6 +298,7 @@ impl Default for RenderLayer {
             hex_tiling: false,
             world_projected: false,
             interior: false,
+            grating: None,
             reflectance: 0.04,
             bubbles: 0.0,
             contour: None,

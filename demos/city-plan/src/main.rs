@@ -28,6 +28,10 @@ struct Cli {
     /// (D-039); 0 draws every mass with facade textures.
     #[arg(long, default_value_t = 400.0)]
     detail: f64,
+    /// The kit's railings' bars on one card each, a grating that cannot flicker (costs the
+    /// overview about 0.45 ms for now, `research/trim-sheets.md` §2.9).
+    #[arg(long)]
+    railing_cards: bool,
     /// A style set's rules in the grammar's text form; the engine's Mediterranean example
     /// when not given.
     #[arg(long)]
@@ -105,6 +109,7 @@ fn main() -> anyhow::Result<()> {
         },
         radius: cli.detail,
         seed: 12,
+        railing_cards: cli.railing_cards,
     };
     let scenario = city_plan::PlanScenario::detailed(
         &site,

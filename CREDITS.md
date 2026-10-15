@@ -396,6 +396,12 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   and repeat with absolute, relative and floating sizes, the component split of a mass into
   faces, conditions on the context, and terminals that insert modules. The research found no
   patent on the grammar itself (`city-generation.md`, Patents).
+- **Railings as gratings** (`grating_coverage` in `shaders/meshlet.slang`). Darwyn Peachey,
+  "Building Procedural Textures", in David S. Ebert et al., *Texturing and Modeling: A
+  Procedural Approach*, 1994: the box-filtered pulse train, the bars' share of a pixel's
+  footprint. Emil Persson's phone-wire antialiasing (GPU Pro 5, 2014): thin geometry fading by
+  its coverage instead of thinning under a pixel; here the coverage is dithered against the
+  frame's noise for TAA to average.
 - **Rooms behind the windows** (`interior_room` in `shaders/meshlet.slang`, D-060). Joost van
   Dongen, "Interior Mapping: A new technique for rendering realistic buildings", Computer
   Graphics International 2008: the view ray traced into a room box behind the glass, in the

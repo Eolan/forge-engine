@@ -143,6 +143,7 @@ static const uint MATERIAL_FLAG_DOUBLE_SIDED = 8; // drawn from both sides (#171
 static const uint MATERIAL_FLAG_PLANET = 16;       // layered: the layers by height, slope and latitude on the frame's planet (#220)
 static const uint MATERIAL_FLAG_WORLD_PROJECTED = 32; // the textures and their noise from the scene frame, not the object's
 static const uint MATERIAL_FLAG_INTERIOR = 64;   // a window's glass with a room behind it (D-060's step 3)
+static const uint MATERIAL_FLAG_GRATING = 128;   // with MASKED: upright bars on one card, `alpha` their share of the mesh's u (`grating_coverage`)
 static const uint CUTOUT_GROUND_WINDOW = 1u << 31; // `cluster_cutouts`: windowed ground reaching into the ground window (#197)
 static const uint MESH_WINDOWED_GROUND = 1;     // Mesh::flags: its fragments in the frame's ground window go (#197)
 static const uint MESH_SCENE_SHADED = 2;        // Mesh::flags: a ground window's mesh, shaded where it stands in the scene (#197)
@@ -2096,7 +2097,27 @@ struct CutoutVertexOut
     float4 position : SV_Position;
     float2 uv : TEXCOORD0; // the mesh's UV (0 without them)
     float2 ground : TEXCOORD1; // its (x, z) in its mesh's frame, for the ground window (#197)
+    float slant : TEXCOORD2; // `card_slant`, for a grating's bars
 };
+
+// A grating's shading normal: its upright bars' faces, seen together, turn to the viewer as a
+// round bar's would. The card's own normal caught the sky at grazing views, a pale sheet where
+// the bars stood dark.
+float3 grating_normal(float3 view)
+{
+    float3 h = float3(view.x, 0.0, view.z);
+    return dot(h, h) > 1e-8 ? normalize(h) : view;
+}
+
+// How far the view slants along an upright card at a point `relative` to the camera, its normal
+// `n`: the tangent of the view's angle off the normal in the horizontal plane. A grating's square
+// bars look 1 + this times their width wide along the card (`grating_coverage`).
+float card_slant(float3 n, float3 relative)
+{
+    float3 along = cross(n, float3(0.0, 1.0, 0.0));
+    float3 v = normalize(relative);
+    return min(abs(dot(v, along)) / max(abs(dot(v, n)), 1e-3), 64.0);
+}
 
 [shader("mesh")]
 [outputtopology("triangle")]
@@ -2141,6 +2162,7 @@ void mesh_cutout_main(
         verts[thread].position = mul(f[0].view_proj, float4(relative, 1));
         verts[thread].uv = uvs ? paged_uv(f, uv_stream(f, base, m), thread) : float2(0.0);
         verts[thread].ground = v.position.xz;
+        verts[thread].slant = card_slant(normalize(instance_vector(inst, decode_normal(v.normal))), relative);
     }
 
     for (uint t = thread; t < triangle_count; t += MESH_GROUP_SIZE)
@@ -2190,6 +2212,7 @@ struct FallbackCutoutVertex
     nointerpolation uint id_base : VISIBILITY_ID;
     float2 uv : TEXCOORD0;
     float2 ground : TEXCOORD1; // its (x, z) in its mesh's frame, for the ground window (#197)
+    float slant : TEXCOORD2;   // `card_slant`
 };
 
 // `mesh_cutout_main` on the fallback path: the cut-out clusters' triangles, the others' collapsed.
@@ -2209,6 +2232,7 @@ FallbackCutoutVertex vertex_cutout_main(uint vertex_index : SV_VulkanVertexID, u
     o.id_base = slot << VISIBILITY_TRIANGLE_BITS;
     o.uv = float2(0.0);
     o.ground = v.position.xz;
+    o.slant = card_slant(normalize(instance_vector(inst, decode_normal(v.normal))), relative);
     if (f[0].meshes[inst.mesh].uvs != 0)
         o.uv = paged_uv(f, uv_stream(f, base, m), local);
     if (cluster_cutouts(f, inst, m) == 0)
@@ -2236,8 +2260,10 @@ uint frag_fallback_main(nointerpolation uint id_base : VISIBILITY_ID, uint trian
 // Whether a fragment of the cut-outs' raster stays (#171): a single-sided row's back faces go
 // (the cut-outs' pipeline culls no face), and a cut-out row's pixels whose base colour alpha,
 // the factor's times its map's at the pixel's UV, falls under its cutoff; and the windowed
-// ground's in the ground window, at `ground` in its mesh's frame (#197).
-bool cutout_kept(Frame* f, uint id, float2 uv, bool front, float2 ground)
+// ground's in the ground window, at `ground` in its mesh's frame (#197). A grating's pixels by
+// the share its bars cover (`grating_coverage`) against the frame's spatio-temporal noise at
+// `pixel`, `duv_dx` and `duv_dy` the UV's change per pixel and `slant` the view's (`card_slant`).
+bool cutout_kept(Frame* f, uint id, float2 uv, bool front, float2 ground, float2 duv_dx, float2 duv_dy, float slant, uint2 pixel)
 {
     uint slot = id >> VISIBILITY_TRIANGLE_BITS;
     uint2 record = f[0].visible[slot];
@@ -2250,6 +2276,20 @@ bool cutout_kept(Frame* f, uint id, float2 uv, bool front, float2 ground)
         return false;
     if ((mat.flags & MATERIAL_FLAG_MASKED) == 0)
         return true;
+    if ((mat.flags & MATERIAL_FLAG_GRATING) != 0)
+    {
+        // Kept or dropped by turns over the frames in the share the bars cover: TAA averages
+        // them into the bars' grey where they are thinner than a pixel, and they are sharp
+        // where wider. As geometry they flickered past 18 m (D-013, trim sheets §2.9).
+        float u = dot(mat.uv_u, float3(uv, 1.0));
+        float footprint = abs(dot(mat.uv_u.xy, duv_dx)) + abs(dot(mat.uv_u.xy, duv_dy));
+        float duty = mat.alpha * (1.0 + slant);
+        float cover = grating_coverage(u, footprint, duty);
+        // Bars two pixels wide or more keep a sharp edge, as geometry's, which TAA's jitter
+        // smooths; the noise along it speckled. Thinner bars are kept by turns.
+        float noise = spatio_temporal_noise(pixel, f[0].noise_frame).y;
+        return cover > lerp(0.5, noise, saturate(2.0 - duty / max(footprint, 1e-6)));
+    }
     float alpha = mat.alpha;
     if (mat.albedo_texture != TEXTURE_NONE)
     {
@@ -2260,20 +2300,41 @@ bool cutout_kept(Frame* f, uint id, float2 uv, bool front, float2 ground)
 }
 
 [shader("fragment")]
-uint frag_cutout_main(float2 uv : TEXCOORD0, float2 ground : TEXCOORD1, uint id : SV_PrimitiveID, bool front : SV_IsFrontFace) : SV_Target
+uint frag_cutout_main(float4 position : SV_Position, float2 uv : TEXCOORD0, float2 ground : TEXCOORD1, float slant : TEXCOORD2, uint id : SV_PrimitiveID, bool front : SV_IsFrontFace) : SV_Target
 {
-    if (!cutout_kept(push.frame, id, uv, front, ground))
+    float2 dx = ddx(uv);
+    float2 dy = ddy(uv);
+    if (!cutout_kept(push.frame, id, uv, front, ground, dx, dy, slant, uint2(position.xy)))
         discard;
     return id;
 }
 
 [shader("fragment")]
-uint frag_fallback_cutout_main(nointerpolation uint id_base : VISIBILITY_ID, float2 uv : TEXCOORD0, float2 ground : TEXCOORD1, uint triangle : SV_PrimitiveID, bool front : SV_IsFrontFace) : SV_Target
+uint frag_fallback_cutout_main(float4 position : SV_Position, nointerpolation uint id_base : VISIBILITY_ID, float2 uv : TEXCOORD0, float2 ground : TEXCOORD1, float slant : TEXCOORD2, uint triangle : SV_PrimitiveID, bool front : SV_IsFrontFace) : SV_Target
 {
     uint id = id_base | triangle;
-    if (!cutout_kept(push.frame, id, uv, front, ground))
+    float2 dx = ddx(uv);
+    float2 dy = ddy(uv);
+    if (!cutout_kept(push.frame, id, uv, front, ground, dx, dy, slant, uint2(position.xy)))
         discard;
     return id;
+}
+
+// The share of [u - footprint/2, u + footprint/2] a grating's bars cover, `duty` of a unit wide
+// and centred on the integers: the bars' count up to y = u + duty/2 is floor(y)·duty +
+// min(frac(y), duty), differenced over the footprint (a box filter, exact for the stripes).
+float grating_coverage(float u, float footprint, float duty)
+{
+    if (duty >= 1.0)
+        return 1.0;
+    float y = u + 0.5 * duty;
+    if (footprint < 1e-4)
+        return frac(y) < duty ? 1.0 : 0.0;
+    float y0 = y - 0.5 * footprint;
+    float y1 = y + 0.5 * footprint;
+    float a = floor(y0) * duty + min(frac(y0), duty);
+    float b = floor(y1) * duty + min(frac(y1), duty);
+    return saturate((b - a) / footprint);
 }
 
 // ------------------------------------------------------------------- merge ---
@@ -3831,8 +3892,11 @@ bool ray_candidate_kept(Frame* f, uint instance, uint primitive, float2 b)
     Material mat = f[0].materials[inst.material + rs[0].sections[tri]];
     if ((mat.flags & MATERIAL_FLAG_MASKED) == 0)
         return true;
+    bool grating = (mat.flags & MATERIAL_FLAG_GRATING) != 0;
+    if (grating && mesh.first_uv == RT_NO_UVS)
+        return true;
     float alpha = mat.alpha;
-    if (mat.albedo_texture != TEXTURE_NONE && mesh.first_uv != RT_NO_UVS)
+    if ((grating || mat.albedo_texture != TEXTURE_NONE) && mesh.first_uv != RT_NO_UVS)
     {
         float2 uv[3];
         [unroll]
@@ -3840,6 +3904,9 @@ bool ray_candidate_kept(Frame* f, uint instance, uint primitive, float2 b)
             uv[k] = rs[0].uvs[mesh.first_uv + rs[0].indices[tri * 3 + k]];
         float2 at = uv[0] + b.x * (uv[1] - uv[0]) + b.y * (uv[2] - uv[0]);
         float2 t = float2(dot(mat.uv_u, float3(at, 1.0)), dot(mat.uv_v, float3(at, 1.0)));
+        // A grating's bars themselves (`grating_coverage` with no footprint).
+        if (grating)
+            return frac(t.x + 0.5 * alpha) < alpha;
         alpha *= sample_image_level(mat.albedo_texture, mat.sampler, t, 0.0).a;
     }
     return alpha >= mat.alpha_cutoff;
@@ -4623,6 +4690,11 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
         s.n = -s.n;
         s.object_normal = -s.object_normal;
     }
+    if ((mat.flags & MATERIAL_FLAG_GRATING) != 0)
+    {
+        s.n = grating_normal(s.view);
+        s.object_normal = normalize(mul(transpose(frame), s.n));
+    }
     s.world = surface_scene;
     s.probes = resolve_push.probes; // read under a sky only
     s.shore = resolve_push.shore;
@@ -5029,6 +5101,8 @@ void sun_shadow_trace_main(uint3 id : SV_DispatchThreadID)
     if ((mat.flags & MATERIAL_FLAG_DOUBLE_SIDED) != 0
         && dot(cross(mul(frame, v1.position - v0.position), mul(frame, v2.position - v0.position)), -surface_relative) < 0.0)
         n = -n;
+    if ((mat.flags & MATERIAL_FLAG_GRATING) != 0)
+        n = grating_normal(normalize(-surface_relative));
     normal[pixel] = float4(n, 1.0);
     view_z[pixel] = dot(p.view_z.xyz, surface_relative) + p.view_z.w;
     float3 sun = normalize(f[0].sun_dir);

@@ -227,7 +227,10 @@ Three stages, each generic:
   section layout, so eight material groups dress any of them: four shutter colours, each with
   dark and lit glass (each window its own mix of dark glass and curtains). Walls, bands and
   cornices change size with every scope and are merged into
-  the tiles; openings repeat at a few sizes and are instanced.
+  the tiles; openings repeat at a few sizes and are instanced. With `--railing-cards` a
+  railing's bars are one card between its rails, a grating the cut-out raster draws by the
+  share of each pixel the bars cover, so they cannot flicker; off by default, it costs 0.13 ms
+  at street level and 0.45 ms from the air until #265 (`research/trim-sheets.md` §2.9).
 
 The engine's example style set is `crates/forge-procgen/src/city/mediterranean.rules`, about
 fifty lines. Each building picks its bay (2.8–3.4 m), its balconies, its shutters and whether its

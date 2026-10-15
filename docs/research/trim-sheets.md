@@ -232,7 +232,45 @@ sharpening, or relaxed clamping on a thin-feature mask like Unreal's [23].
     pair with DLAA.
 - **A caveat:** the bilinear read softens the earlier frame, so the comparison favours blur.
   It ranks one mode's changes, not modes against each other.
-- **Next:** the railings' far form, and the walls' and frames' edges at their silhouettes.
+- **Railings as gratings** (the same day; `RenderLayer::grating`, `forge_geom::modules::GRILLE`,
+  `city-plan --railing-cards`; off by default, see the cost below):
+  - **What it does.** Each railing's bars are one upright card between its rails, merged into
+    the tiles' railings meshes. The card's u counts the bars, and the cut-out raster keeps each
+    pixel by the share of it the bars cover.
+  - **The share** is the pulse train box-filtered over the pixel's footprint in u (Peachey's
+    filtered pulse train). The bars' depth widens them by the view's slant along the card:
+    1 + tan θ times their width, so a railing seen along the street closes as square bars do.
+  - **Kept or dropped.** Bars under two pixels are kept by turns against the frame's
+    spatio-temporal noise, which TAA averages into their grey. Wider bars keep a sharp edge at
+    half cover, as geometry's: the noise along it speckled. The screen-space noise is the
+    research's alternative to hashed alpha (§4).
+  - **Shading.** The card is shaded with a normal turned to the viewer, as the bars' faces seen
+    together: the card's own normal caught the sky at grazing views.
+  - **The rays** meet the bars themselves (no footprint), so the shadows keep their stripes.
+- **Measured** (the avenue, 2.5 px a frame, DLAA, ten frame pairs, the same build with the bars
+  as geometry):
+  - the middle 600 × 400 px: 2 331 → 1 937 pixels a frame pair (−17 %);
+  - the far facades on the left: 13 950 → 13 946 (unchanged: their windows' frames, shutters
+    and the buildings' edges dominate there now);
+  - the kit's instanced triangles: 54.6 M → 45.2 M (−17 %).
+- **The cost** (600 frames, the best of three, RTX 5070 Ti at 1600 × 900):
+  - at street level, 2.19 → 2.32 ms;
+  - from the default overview, 4.77 → 5.20 ms.
+- **Where the cost goes:**
+  - **Every cluster drawn twice.** With any cut-out row in the scene, both rasters run over
+    every visible cluster, each skipping the other's. In the overview `meshlet pass 1` rose from
+    0.40 to 0.93 ms. The software raster lost the balconies' clusters (0.94 → 0.83).
+  - **Moving the cards out of the modules changed nothing.** With the cards merged into the
+    tiles' own meshes, only their clusters are cut out, and the cost stayed the same.
+  - **Every ray non-opaque.** A scene with cut-out rows traces all its rays so
+    (`ray_opacity`): `shadow/trace` 0.20 → 0.27 ms and the probes' rays 0.54 → 0.61 at street
+    level.
+- **The verdict.** The flicker gain does not pay for 0.13–0.45 ms yet, so the bars stay
+  geometry. The cards come back once the cut-out raster has its own cluster list and opaque
+  instances are flagged in the TLAS (#265).
+- **The other demos** are unchanged with the new shader: the sentinels, the island and the lab,
+  200 captures on both paths, 0 pixels against the previous shader.
+- **Next:** the walls' and frames' edges at their silhouettes, the shutters' far form (§2.8).
 
 ## 3. Paving and ground patterns
 

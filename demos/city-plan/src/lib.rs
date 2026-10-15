@@ -91,6 +91,8 @@ struct Tile {
     centre: Vec3,
     ground: TriMesh,
     masses: TriMesh,
+    /// The kit's railings' bars, one card each, drawn as a grating (`take_cards`).
+    railings: TriMesh,
 }
 
 impl Tile {
@@ -99,6 +101,7 @@ impl Tile {
             centre,
             ground: TriMesh::default(),
             masses: TriMesh::default(),
+            railings: TriMesh::default(),
         }
     }
 }
@@ -307,6 +310,10 @@ pub struct Detail<'a> {
     pub radius: f64,
     /// The style's seed.
     pub seed: u64,
+    /// The railings' bars on one card each, a grating that cannot flicker, in place of
+    /// geometry (`--railing-cards`): it costs the overview 0.45 ms while the cut-out raster
+    /// runs every cluster twice (`research/trim-sheets.md` §2.9).
+    pub railing_cards: bool,
 }
 
 impl PlanScenario {
@@ -827,7 +834,9 @@ impl PlanScenario {
         let triangles = tiles
             .tiles
             .iter()
-            .map(|t| t.ground.triangle_count() + t.masses.triangle_count())
+            .map(|t| {
+                t.ground.triangle_count() + t.masses.triangle_count() + t.railings.triangle_count()
+            })
             .sum();
         let st = &plan.stats;
         // No tree over a tram stop or within 6 m of its platform (the owner, 2026-10-11): the
@@ -1950,6 +1959,34 @@ struct Kit {
     ms: f64,
 }
 
+/// Moves a module's railings' cards (its [`modules::GRILLE`] triangles) out into a mesh of their
+/// own, merged into the tiles' railings: only their clusters then take the cut-out raster, not
+/// the module's stone, frames and shutters with them. Empty without `--railing-cards`.
+fn take_cards(mesh: &mut TriMesh) -> TriMesh {
+    let mut cards = TriMesh::default();
+    let mut indices = Vec::with_capacity(mesh.indices.len());
+    let mut sections = Vec::with_capacity(mesh.sections.len());
+    for t in 0..mesh.triangle_count() {
+        let tri = &mesh.indices[t * 3..t * 3 + 3];
+        if mesh.section(t) != modules::GRILLE {
+            indices.extend_from_slice(tri);
+            sections.push(mesh.section(t));
+            continue;
+        }
+        let base = cards.positions.len() as u32;
+        for &i in tri {
+            cards.positions.push(mesh.positions[i as usize]);
+            cards.normals.push(mesh.normals[i as usize]);
+            cards.uvs.push(mesh.uvs[i as usize]);
+        }
+        cards.indices.extend([base, base + 1, base + 2]);
+    }
+    mesh.indices = indices;
+    mesh.sections = sections;
+    mesh.uvs.clear();
+    cards
+}
+
 /// A 64-bit mix (SplitMix64's finaliser).
 fn mix(mut z: u64) -> u64 {
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -1982,6 +2019,8 @@ fn kit(
     let mut keys: std::collections::HashMap<(u16, i32, i32, i32), u32> =
         std::collections::HashMap::new();
     let mut meshes = Vec::new();
+    // Each instanced module's railings' cards, by its mesh.
+    let mut cards: std::collections::HashMap<u32, TriMesh> = std::collections::HashMap::new();
     let mut instances = Vec::new();
     let mut seats = Vec::new();
     let (mut run, mut longest_run, mut last) = (0, 0, None);
@@ -2016,12 +2055,15 @@ fn kit(
             let id = match keys.get(&key) {
                 Some(&id) => id,
                 None => {
-                    let Some(mesh) = modules::module_deep(name, w, h, reveal) else {
+                    let Some(mut mesh) = modules::module_with(name, w, h, reveal, d.railing_cards)
+                    else {
                         continue;
                     };
+                    let railing = take_cards(&mut mesh);
                     meshes.push(mesh);
                     let id = (meshes.len() - 1) as u32;
                     keys.insert(key, id);
+                    cards.insert(id, railing);
                     id
                 }
             };
@@ -2032,6 +2074,23 @@ fn kit(
             let transform =
                 Mat4::from_cols(x.extend(0.0), y.extend(0.0), z.extend(0.0), pos.extend(1.0));
             instances.push((id, transform, colour * 2 + u8::from(lit)));
+            // Its railings' cards into its tile's railings.
+            if let Some(c) = cards.get(&id).filter(|c| !c.indices.is_empty()) {
+                let tile = tiles.at(m.footprint[0]);
+                let at = pos - tile.centre;
+                let dst = &mut tile.railings;
+                let base = dst.positions.len() as u32;
+                for ((p, n), uv) in c.positions.iter().zip(&c.normals).zip(&c.uvs) {
+                    let (p, n) = (Vec3::from(*p), Vec3::from(*n));
+                    dst.positions
+                        .push((at + x * p.x + y * p.y + z * p.z).to_array());
+                    dst.normals.push((x * n.x + y * n.y + z * n.z).to_array());
+                    dst.uvs.push(*uv);
+                }
+                dst.indices.extend(c.indices.iter().map(|i| base + i));
+                dst.sections
+                    .extend(std::iter::repeat_n(0, c.triangle_count()));
+            }
             // A café's terrace before a third of the shopfronts on the avenues' pavements and
             // in the lanes, and two thirds of those facing a square, a park or a quay
             // (restaurants and cafés by the water), on the pavement's level.
@@ -3239,6 +3298,18 @@ impl Scenario for PlanScenario {
             normal_strength: 0.8,
             ..colour([1.75, 2.0, 2.1], 10.0, 0.04)
         };
+        // The kit's railings' bars, one card each between the rails (D-013's far form): as
+        // geometry they flickered past 18 m.
+        materials.add_rows(
+            "plan-grille",
+            vec![(
+                "plan grille".into(),
+                RenderLayer {
+                    grating: Some(modules::BAR_SHARE),
+                    ..colour([0.05, 0.05, 0.05], 30.0, 0.15)
+                },
+            )],
+        );
         materials.add_rows(
             "plan-mass",
             vec![
@@ -3595,6 +3666,7 @@ impl Scenario for PlanScenario {
         let lamp_row = materials.of("plan-lamp");
         let ground_row = materials.of("plan-ground");
         let mass_row = materials.of("plan-mass");
+        let grille_row = materials.of("plan-grille");
         let mut builder = MeshletSceneBuilder::new();
         materials.apply(&mut builder, &[], &[]);
         builder.set_ray_traced(!args.no_shadows);
@@ -3602,7 +3674,11 @@ impl Scenario for PlanScenario {
         let mut meshes = 0;
         for tile in &self.tiles {
             let at = Mat4::from_translation(tile.centre);
-            for (mesh, row) in [(&tile.ground, ground_row), (&tile.masses, mass_row)] {
+            for (mesh, row) in [
+                (&tile.ground, ground_row),
+                (&tile.masses, mass_row),
+                (&tile.railings, grille_row),
+            ] {
                 if mesh.indices.is_empty() {
                     continue;
                 }

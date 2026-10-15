@@ -1370,6 +1370,12 @@ something stands out). Two things to watch:
 - **The probes:** half the street frame.
 - **The kit from afar:** its thin details (louvres, railings, mullions) fill the software
   rasteriser. The far forms of the trim-sheet study would cut both that cost and the shimmer.
+  - *2026-10-15:* the railings as gratings (`--railing-cards`) took 0.11 ms off the software
+    raster from the overview, but any cut-out row costs every cluster and every ray (#265):
+    - at street level, 2.19 → 2.32 ms;
+    - from the overview, 4.77 → 5.20 ms (`meshlet pass 1` 0.40 → 0.93).
+
+    Off by default until #265 (`research/trim-sheets.md` §2.9).
 
 ## `planet` — a planet from orbit to its ground (#220, D-056, 2026-10-10)
 

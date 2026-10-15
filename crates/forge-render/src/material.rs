@@ -109,6 +109,12 @@ pub const MATERIAL_WORLD_PROJECTED: u32 = 32;
 /// ([`forge_core::material::RenderLayer::interior`]).
 pub const MATERIAL_INTERIOR: u32 = 64;
 
+/// [`GpuMaterial`] flag: a grating of upright bars on one card
+/// ([`forge_core::material::RenderLayer::grating`]), with [`MATERIAL_MASKED`] and
+/// [`MATERIAL_DOUBLE_SIDED`]: `alpha` is the bars' share of their spacing, `uv_u` reads the
+/// mesh's `u`.
+pub const MATERIAL_GRATING: u32 = 128;
+
 /// The textures a world's materials sample, uploaded with their mips and visible to every
 /// shader through the bindless set. Released when dropped.
 pub struct TextureSet {
@@ -450,7 +456,12 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
                     } else {
                         0
                     }
-                    | if r.interior { MATERIAL_INTERIOR } else { 0 },
+                    | if r.interior { MATERIAL_INTERIOR } else { 0 }
+                    | if r.grating.is_some() {
+                        MATERIAL_GRATING | MATERIAL_MASKED | MATERIAL_DOUBLE_SIDED
+                    } else {
+                        0
+                    },
                 contour: r.contour.map_or(0, |c| u32::from(c.below) + 1),
                 contour_above: r.contour.map_or(0, |c| c.above),
                 contour_height: r.contour.map_or(0.0, |c| c.height),
@@ -468,7 +479,7 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
                 roughness: r.roughness,
                 occlusion_strength: uv.occlusion_strength,
                 alpha_cutoff: uv.alpha_cutoff.unwrap_or(0.0),
-                alpha: uv.alpha,
+                alpha: r.grating.unwrap_or(uv.alpha),
                 pad: 0,
             }
         })

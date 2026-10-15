@@ -33,8 +33,14 @@ pub const FABRIC: u8 = 6;
 pub const WOOD: u8 = 7;
 /// A party wall's bare render.
 pub const PARTY: u8 = 8;
+/// A railing's bars, drawn on one card whose `u` counts them (a grating row,
+/// `forge_core::material::RenderLayer::grating`, of [`BAR_SHARE`]).
+pub const GRILLE: u8 = 9;
 /// The number of sections.
-pub const SECTIONS: u8 = 9;
+pub const SECTIONS: u8 = 10;
+
+/// A railing's square bars: their width, a share of their spacing (3 cm every 12 cm).
+pub const BAR_SHARE: f32 = 0.25;
 
 /// The modules the kit builds.
 pub const NAMES: [&str; 15] = [
@@ -70,7 +76,21 @@ pub fn module(name: &str, w: f32, h: f32) -> Option<TriMesh> {
 /// A module `w` by `h` metres, its opening's reveal `reveal` metres deep: the window set back
 /// into a wall of its thickness (D-060: old stone's deep, modern walls' shallow).
 pub fn module_deep(name: &str, w: f32, h: f32, reveal: f32) -> Option<TriMesh> {
+    module_with(name, w, h, reveal, false)
+}
+
+/// [`module_deep`], its railings' bars as geometry or, with `cards`, one card each (a grating,
+/// [`GRILLE`]; the mesh then has UVs). The cards cannot flicker but draw through the cut-out
+/// raster, which costs more than they save for now (`research/trim-sheets.md` §2.9).
+pub fn module_with(name: &str, w: f32, h: f32, reveal: f32, cards: bool) -> Option<TriMesh> {
     let mut m = TriMesh::default();
+    let railing = |m: &mut TriMesh, a: Vec3, b: Vec3, height: f32| {
+        if cards {
+            railing_card(m, a, b, height);
+        } else {
+            railing_bars(m, a, b, height);
+        }
+    };
     match name {
         "wall" => quad(&mut m, wall_quad(w, h, 0.0), PLASTER),
         "blank" => quad(&mut m, wall_quad(w, h, 0.0), PARTY),
@@ -148,11 +168,15 @@ pub fn module_deep(name: &str, w: f32, h: f32, reveal: f32) -> Option<TriMesh> {
             window(&mut m, w, h, reveal, true);
             surround(&mut m, w, h, 0.15, 0.22);
             shutters(&mut m, w, h, 0.15);
-            balcony(&mut m, w);
+            balcony(&mut m, w, railing);
         }
         "door" => door(&mut m, w, h),
         "shop" | "shop_awning" => shop(&mut m, w, h, name == "shop_awning"),
         _ => return None,
+    }
+    // The parts after a railing's card get UVs too.
+    if !m.uvs.is_empty() {
+        m.uvs.resize(m.positions.len(), [0.0, 0.0]);
     }
     Some(m)
 }
@@ -461,9 +485,30 @@ fn shutter_leaf(m: &mut TriMesh, x0: f32, x1: f32, h: f32, z0: f32) {
     }
 }
 
-/// A wrought-iron railing `height` tall from `a` to `b`, a run along x or along z: rails top
-/// and bottom, square bars between.
-fn railing(m: &mut TriMesh, a: Vec3, b: Vec3, height: f32) {
+/// A railing's run from `lo` to `hi` along x or along z, its bars `step` apart, the first one
+/// `step` past `lo` and none at the ends.
+struct Run {
+    along_x: bool,
+    lo: Vec3,
+    length: f32,
+    bars: f32,
+    step: f32,
+}
+
+impl Run {
+    /// The point `t` metres along the run.
+    fn at(&self, t: f32) -> Vec3 {
+        if self.along_x {
+            Vec3::new(self.lo.x + t, 0.0, self.lo.z)
+        } else {
+            Vec3::new(self.lo.x, 0.0, self.lo.z + t)
+        }
+    }
+}
+
+/// A wrought-iron railing's rails `height` tall from `a` to `b`, a run along x or along z, top
+/// and bottom; its bars 3 cm square every 12 cm or a little more.
+fn rails(m: &mut TriMesh, a: Vec3, b: Vec3, height: f32) -> Run {
     let along_x = (b.x - a.x).abs() >= (b.z - a.z).abs();
     let (lo, hi) = (a.min(b), a.max(b));
     let r = 0.02;
@@ -478,17 +523,23 @@ fn railing(m: &mut TriMesh, a: Vec3, b: Vec3, height: f32) {
     rail(m, a.y + height - 0.04, a.y + height);
     rail(m, a.y + 0.08, a.y + 0.11);
     let length = if along_x { hi.x - lo.x } else { hi.z - lo.z };
-    let bars = (length / 0.12).floor().max(1.0) as u32;
-    let step = length / bars as f32;
+    let bars = (length / 0.12).floor().max(2.0);
+    Run {
+        along_x,
+        lo,
+        length,
+        bars,
+        step: length / bars,
+    }
+}
+
+/// A wrought-iron railing `height` tall from `a` to `b`: [`rails`], and square bars between.
+fn railing_bars(m: &mut TriMesh, a: Vec3, b: Vec3, height: f32) {
+    let run = rails(m, a, b, height);
     let s = 0.015;
     let faces = POS_X | NEG_X | POS_Z | NEG_Z;
-    for k in 1..bars {
-        let t = k as f32 * step;
-        let c = if along_x {
-            Vec3::new(lo.x + t, 0.0, lo.z)
-        } else {
-            Vec3::new(lo.x, 0.0, lo.z + t)
-        };
+    for k in 1..run.bars as u32 {
+        let c = run.at(k as f32 * run.step);
         cuboid(
             m,
             Vec3::new(c.x - s, a.y + 0.11, c.z - s),
@@ -499,8 +550,43 @@ fn railing(m: &mut TriMesh, a: Vec3, b: Vec3, height: f32) {
     }
 }
 
-/// A stone balcony on two consoles before an opening `w` wide, railed on three sides.
-fn balcony(m: &mut TriMesh, w: f32) {
+/// A wrought-iron railing `height` tall from `a` to `b`: [`rails`], and its bars on one card (a
+/// grating, [`GRILLE`]), from half a spacing past the first end to half a spacing short of the
+/// other. As geometry the bars are under a pixel past about 18 m and flicker as the view moves
+/// (D-013, trim sheets §2.9).
+fn railing_card(m: &mut TriMesh, a: Vec3, b: Vec3, height: f32) {
+    let run = rails(m, a, b, height);
+    let (along_x, bars) = (run.along_x, run.bars);
+    let (y0, y1) = (a.y + 0.11, a.y + height - 0.04);
+    let (p0, p1) = (run.at(run.step * 0.5), run.at(run.length - run.step * 0.5));
+    let normal = if along_x { Vec3::Z } else { Vec3::X };
+    // Every vertex before the card gets UVs too: a mesh has them for all its vertices or none.
+    m.uvs.resize(m.positions.len(), [0.0, 0.0]);
+    let base = m.positions.len() as u32;
+    for (p, u, y) in [
+        (p0, 0.5, y0),
+        (p1, bars - 0.5, y0),
+        (p1, bars - 0.5, y1),
+        (p0, 0.5, y1),
+    ] {
+        m.positions.push([p.x, y, p.z]);
+        m.normals.push(normal.to_array());
+        m.uvs.push([u, y]);
+    }
+    // Counter-clockwise seen from +z along x; from +x along z the order turns.
+    if along_x {
+        m.indices
+            .extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+    } else {
+        m.indices
+            .extend([base, base + 2, base + 1, base, base + 3, base + 2]);
+    }
+    m.sections.extend([GRILLE, GRILLE]);
+}
+
+/// A stone balcony on two consoles before an opening `w` wide, railed on three sides by
+/// `railing`.
+fn balcony(m: &mut TriMesh, w: f32, railing: impl Fn(&mut TriMesh, Vec3, Vec3, f32)) {
     let (x0, x1, deep) = (-0.45, w + 0.45, 0.8);
     cuboid(
         m,
@@ -781,11 +867,20 @@ mod tests {
 
     #[test]
     fn every_module_builds_within_its_sections() {
-        for name in NAMES {
-            let m = module(name, 1.2, 2.5).unwrap();
+        for (name, cards) in NAMES.iter().flat_map(|&n| [(n, false), (n, true)]) {
+            let m = module_with(name, 1.2, 2.5, 0.22, cards).unwrap();
+            assert_eq!(
+                m.sections.contains(&GRILLE),
+                cards && m.sections.contains(&METAL),
+                "{name}: the bars on cards exactly when asked"
+            );
             assert!(m.triangle_count() > 0, "{name}");
             assert_eq!(m.sections.len(), m.triangle_count(), "{name}");
             assert!(m.sections.iter().all(|&s| s < SECTIONS), "{name}");
+            assert!(
+                m.uvs.is_empty() || m.uvs.len() == m.positions.len(),
+                "{name}: UVs for some vertices only"
+            );
             assert!(
                 m.normals
                     .iter()
@@ -821,14 +916,50 @@ mod tests {
             assert!(window.positions[v][2] < -0.1);
         }
         // Triangles wind counter-clockwise round their normals.
-        for name in NAMES {
-            let m = module(name, 1.2, 2.5).unwrap();
+        for (name, cards) in NAMES.iter().flat_map(|&n| [(n, false), (n, true)]) {
+            let m = module_with(name, 1.2, 2.5, 0.22, cards).unwrap();
             for tri in m.indices.as_chunks::<3>().0 {
                 let p = tri.map(|i| Vec3::from(m.positions[i as usize]));
                 let n = Vec3::from(m.normals[tri[0] as usize]);
                 let face = (p[1] - p[0]).cross(p[2] - p[0]);
                 assert!(face.dot(n) >= -1e-6, "{name}");
             }
+        }
+    }
+
+    #[test]
+    fn railings_bars_are_one_card_that_counts_them() {
+        // A balcony railed on three sides: three cards, upright between the rails, each one's
+        // u running from half a bar past its first end to half a bar short of the other, its
+        // bars 12 cm apart or a little more.
+        let m = module_with("balcony", 1.2, 2.5, 0.22, true).unwrap();
+        let cards: Vec<usize> = (0..m.triangle_count())
+            .filter(|&t| m.sections[t] == GRILLE)
+            .collect();
+        assert_eq!(cards.len(), 6);
+        for pair in cards.chunks(2) {
+            let corners: Vec<usize> = pair
+                .iter()
+                .flat_map(|&t| m.indices[t * 3..t * 3 + 3].iter().map(|&i| i as usize))
+                .collect();
+            let p: Vec<Vec3> = corners
+                .iter()
+                .map(|&i| Vec3::from(m.positions[i]))
+                .collect();
+            let u: Vec<f32> = corners.iter().map(|&i| m.uvs[i][0]).collect();
+            let (u0, u1) = u
+                .iter()
+                .fold((f32::MAX, f32::MIN), |(a, b), &v| (a.min(v), b.max(v)));
+            assert_eq!(u0, 0.5);
+            let bars = u1 + 0.5;
+            assert_eq!(bars, bars.round());
+            let (lo, hi) = p
+                .iter()
+                .fold((Vec3::MAX, Vec3::MIN), |(a, b), &q| (a.min(q), b.max(q)));
+            let run = (hi - lo).x.max((hi - lo).z);
+            let step = run / (bars - 1.0);
+            assert!((0.12..0.15).contains(&step), "{step}");
+            assert!((lo.y - 0.11).abs() < 1e-5 && (hi.y - 0.96).abs() < 1e-5);
         }
     }
 }
