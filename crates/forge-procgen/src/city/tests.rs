@@ -554,7 +554,13 @@ fn court_gardens_keep_clear_of_the_buildings_the_paths_and_the_doors() {
             .collect();
         if p.kind.standing() {
             let mine = paths.get(&p.block).cloned().unwrap_or_default();
-            on_path += usize::from(probes.iter().any(|&q| inside_any(mine.iter().copied(), q)));
+            if let Some(q) = probes
+                .iter()
+                .find(|&&q| inside_any(mine.iter().copied(), q))
+            {
+                println!("a {:?} of block {} on a path at {q:.1}", p.kind, p.block);
+                on_path += 1;
+            }
         }
         if let Some(q) = probes.iter().find(|&&q| inside_any(&footprints, q)) {
             println!(
@@ -599,6 +605,67 @@ fn court_gardens_keep_clear_of_the_buildings_the_paths_and_the_doors() {
         blocked, 0,
         "{blocked} court doors or passages into a garden"
     );
+}
+
+#[test]
+fn court_paths_join_round_the_middle_instead_of_running_side_by_side() {
+    // The owner: close paths would first join the paths round the garden, like a hub; separate
+    // ones side by side waste the ground. Measured on each path's middle line, past its first
+    // 6 m (straight out of its door past the private gardens) and short of its last 3 m (where
+    // it joins): the share within 4 m of another path's middle line.
+    use super::gardens::{self, Kind};
+    let (_, city) = example_plan();
+    let masses = super::mass::masses(&city, &super::bible::StyleBible::default(), 7);
+    let structures = super::structure::structures(&city, &masses);
+    let pieces = gardens::gardens(&city, &masses, &structures);
+    // A path's middle line from its outline (its left side, then its right side back).
+    let middle = |o: &Vec<DVec2>| -> Vec<DVec2> {
+        let n = o.len();
+        (0..n / 2).map(|i| (o[i] + o[n - 1 - i]) * 0.5).collect()
+    };
+    let mut lines: std::collections::BTreeMap<u32, Vec<Vec<DVec2>>> = Default::default();
+    for p in pieces
+        .iter()
+        .filter(|p| p.kind == Kind::Path && p.outline.len() >= 6)
+    {
+        // Not the round places at the middles.
+        let c = geom::centroid(&p.outline);
+        let r = p.outline[0].distance(c);
+        if p.outline.len() == 12 && p.outline.iter().all(|q| (q.distance(c) - r).abs() < 1e-6) {
+            continue;
+        }
+        lines.entry(p.block).or_default().push(middle(&p.outline));
+    }
+    let (mut near, mut total) = (0, 0);
+    for list in lines.values() {
+        // Every path's ends: its door and where it joins.
+        let ends: Vec<DVec2> = list.iter().flat_map(|l| [l[0], l[l.len() - 1]]).collect();
+        for (i, line) in list.iter().enumerate() {
+            let length = geom::polyline_length(line);
+            let mut along = 0.0;
+            for k in 0..line.len() {
+                if k > 0 {
+                    along += line[k].distance(line[k - 1]);
+                }
+                let at_junction = ends.iter().any(|e| e.distance(line[k]) < 8.0);
+                if along < 6.0 || along > length - 3.0 || at_junction {
+                    continue;
+                }
+                total += 1;
+                let close = list.iter().enumerate().any(|(j, other)| {
+                    j != i
+                        && other
+                            .windows(2)
+                            .any(|w| geom::distance_to_segment(line[k], w[0], w[1]) < 4.0)
+                });
+                near += usize::from(close);
+            }
+        }
+    }
+    let share = near as f64 / total.max(1) as f64;
+    println!("{near} of {total} path samples within 4 m of another path: {share:.3}");
+    assert!(total > 1000, "{total} samples");
+    assert!(share < 0.05, "{share:.3} of the paths run beside another");
 }
 
 #[test]

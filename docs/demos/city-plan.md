@@ -567,9 +567,19 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
     `a_city_has_about_as_many_shops_as_a_real_one`.
 - **What the homes keep on the ground** (`city::gardens`, 2026-10-15; the research's §4.6–4.8).
   All of it is the generator's data, at the walking level and step-free; the scene draws it.
-  - **The courts' paths:** 2.4 m wide from each gap between the buildings and each passage,
-    1.8 m from each court door. Each runs straight out past the gardens, then to the court's
-    middle. They are paved with the forecourt, one surface.
+  - **The courts' paths** (2026-10-15, after the owner's review): one network round each
+    court's middle. The owner: close paths should first join the paths round the garden, like
+    a hub; separate ones side by side waste the ground.
+    - The middle is the kitchen garden in its paved ring 1.8 m wide, or a round paved place
+      7 m across in the courts without one.
+    - A path comes in from each gap between the buildings and each passage (2.4 m wide), and
+      from each court door (1.8 m). Each runs straight out past the private gardens, then to the
+      nearest point of the network laid so far, the nearest entrances first. A path goes to
+      the middle itself where joining would turn it more than 75° away from it.
+    - In the example, 3.9 % of the paths' length lies within 4 m of another path, away from
+      the junctions, against 50.7 % when each ran to the middle. They are about a quarter as
+      long.
+    - They are paved with the forecourt, one surface.
   - **The garden flats** (the *rez-de-jardin*): 8 m of a court wall each, laid out between the
     doors and passages, where the ground is open court or the building's own lot.
     - Half have a private garden 4.5 m deep: a terrace of 2.5 m before the flat, a lawn, a
@@ -582,10 +592,10 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
   - **Planters** 0.9 m deep and 0.45 m tall, against the facades of the homes on streets 8 m wide
     or more. They are broken 0.8 m either side of each door and passage, and none stand before
     a shop. The footway keeps 2.6 m on an avenue, and the walkers pass 3 m out.
-  - **A shared kitchen garden** in each green court of 600 m² or more, on paved ground near the
-    court's middle, on its sunniest (north) side that the paths leave free. It has eight beds
-    (four where only those fit), 1.2 × 4 m and 0.7 m tall for a seated gardener, on paths of
-    1.4 m, with a path from the middle.
+  - **A shared kitchen garden** in each green court of 600 m² or more, on paved ground at the
+    court's middle, where its paths meet, else as near it as fits on its sunniest (north)
+    side, clear of the private gardens. It has eight beds (four where only those fit),
+    1.2 × 4 m and 0.7 m tall for a seated gardener, on paths of 1.4 m.
   - **The gaps between the buildings** (open blocks) get a low hedge (0.8 m) along their street
     side, just behind the 2 m paved forecourt, broken a metre either side of the court's
     paths. They showed a plain lawn; the owner said a gap would "match the sidewalk or have a
@@ -603,13 +613,14 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
     - Out to 1.2 km, a pixel or two each, they speckled the facades' feet from the air.
     - The sandbox has 4 226; its planters' view takes 2.40 ms GPU.
   - **The example:**
-    - 9 106 court-side flats, 4 579 with a garden, every one with its glazed bay;
-    - 277 kitchen gardens of 1 864 beds;
-    - 20 379 planters;
+    - 8 880 court-side flats, 4 464 with a garden, every one with its glazed bay;
+    - 400 kitchen gardens of 3 200 beds;
+    - 20 377 planters (two gave way to a door's path round a building's corner);
     - none of the 15 701 street doors and passages and none of the 9 544 shopfronts behind a
       planter;
     - no court door or passage opening into a garden.
-  - **Tests:** `court_gardens_keep_clear_of_the_buildings_the_paths_and_the_doors` and
+  - **Tests:** `court_gardens_keep_clear_of_the_buildings_the_paths_and_the_doors`,
+    `court_paths_join_round_the_middle_instead_of_running_side_by_side` and
     `planters_line_the_homes_on_the_streets_and_leave_their_doors_clear`.
 - **tram stops:** a 36 m boarding area by each track, level with the trams' floor (28 cm over
   the road), from the tram's side across the carriageway to the kerb and half a metre into the

@@ -1,12 +1,14 @@
 //! What the homes keep round them on the ground (D-060's ground floors, the owner's note of
 //! 2026-10-15; `research/ground-floors.md` §4.6–4.8):
 //! - the paths across each green court, from the gaps between the buildings, the passages and
-//!   the court doors to the court's middle;
+//!   the court doors, joined into one network round the court's middle;
+//! - a shared kitchen garden of raised beds at the middle of each large court, a paved ring
+//!   round it where the paths meet;
 //! - the court-side ground-floor flats (the *rez-de-jardin*): about half with a private garden
 //!   behind hedges, a gate onto the court, the others with a terrace, each opening onto its
 //!   terrace through a glazed bay;
-//! - planted beds before the homes on the streets, broken at the doors;
-//! - a shared kitchen garden of raised beds in each large court, on its sunny side.
+//! - planted beds before the homes on the streets, broken at the doors, and low hedges along
+//!   the gaps between the buildings.
 //!
 //! All of it at the walking level and step-free: the beds raised for a seat, the paths level
 //! and wide enough for a wheelchair, a gate in every garden's hedge.
@@ -116,8 +118,14 @@ const BED: (f64, f64, f64) = (1.2, 4.0, 0.7);
 const BED_PATH: f64 = 1.4;
 /// The smallest court that gets a kitchen garden, m².
 const KITCHEN_COURT: f64 = 600.0;
-/// The nearest a kitchen garden's middle comes to its court's (where the paths meet), metres.
-const HUB: f64 = 2.0;
+/// The paved ring round a kitchen garden, metres wide, where the court's paths meet.
+const RING: f64 = 1.8;
+/// The round paved place where a court without a kitchen garden has its paths meet, metres
+/// across.
+const PLAZA: f64 = 7.0;
+/// Past this angle between the way to the nearest path and the way to the hub, a path goes to
+/// the hub instead of joining, degrees.
+const JOIN_ANGLE: f64 = 75.0;
 
 /// The court of block `b` when it is a green one: a built block's, outside a taxi depot.
 fn green_court(plan: &CityPlan, b: u32) -> Option<&[DVec2]> {
@@ -210,13 +218,35 @@ fn overlap(a: &[DVec2], b: &[DVec2]) -> bool {
     a.iter().any(|&p| geom::contains(b, p)) || b.iter().any(|&p| geom::contains(a, p))
 }
 
-/// The paths across the green courts (the owner's photos of open blocks: a shared green with
-/// paths through it), 2.4 m wide from each gap between the buildings (a street lot left open)
-/// and each passage, 1.8 m from each court door: straight out past the gardens, then to the
-/// court's middle.
+/// Where a path comes into a court: its mouth (a gap's on the street's middle, a door's or a
+/// passage's on its wall), where it has left the private gardens behind, and its half width.
+struct Entrance {
+    mouth: DVec2,
+    knee: DVec2,
+    half: f64,
+}
+
+/// The nearest point to `p` on any of `segments`.
+fn nearest_on(segments: &[(DVec2, DVec2)], p: DVec2) -> Option<DVec2> {
+    segments
+        .iter()
+        .map(|&(a, b)| a + (b - a) * geom::closest_on_segment(p, a, b))
+        .min_by(|x, y| x.distance(p).total_cmp(&y.distance(p)))
+}
+
+/// The paths across each green court (the owner's photos of open blocks: a shared green with
+/// paths through it), as one network round its middle (the owner: close paths join first,
+/// round the garden, like a hub):
+/// - its middle: a shared kitchen garden of raised beds with a paved ring round it, in the
+///   courts of [`KITCHEN_COURT`] or more where one fits, else a small round paved place;
+/// - a path in from each gap between the buildings (a street lot left open) and each passage,
+///   2.4 m wide, and from each court door, 1.8 m: straight out past the private gardens, then to
+///   the nearest point of the network laid so far, the nearest entrances first, so that close
+///   paths join instead of running side by side; to the middle itself where joining would turn
+///   them away from it.
 pub fn court_paths(plan: &CityPlan, masses: &[Mass], structures: &[Structure]) -> Vec<Piece> {
     let built: HashSet<u32> = masses.iter().map(|m| m.lot).collect();
-    let mut out = Vec::new();
+    let mut entrances: std::collections::BTreeMap<u32, Vec<Entrance>> = Default::default();
     for (i, lot) in plan.lots.iter().enumerate() {
         let Some(court) = green_court(plan, lot.block) else {
             continue;
@@ -224,7 +254,7 @@ pub fn court_paths(plan: &CityPlan, masses: &[Mass], structures: &[Structure]) -
         if !lot.frontage || built.contains(&(i as u32)) {
             continue;
         }
-        // From the block's edge nearest the gap's middle.
+        // From the block's edge nearest the gap's middle, into the court.
         let block = &plan.blocks[lot.block as usize];
         let middle = geom::centroid(&lot.polygon);
         let n = block.polygon.len();
@@ -234,21 +264,27 @@ pub fn court_paths(plan: &CityPlan, masses: &[Mass], structures: &[Structure]) -
                 a + (b - a) * geom::closest_on_segment(middle, a, b)
             })
             .min_by(|p, q| p.distance(middle).total_cmp(&q.distance(middle)));
-        if let Some(outline) = from.and_then(|f| path(&[f, geom::centroid(court)], PATH_HALF.0)) {
-            out.push(Piece {
-                kind: Kind::Path,
-                block: lot.block,
-                outline,
-                height: 0.0,
-            });
-        }
-    }
-    for (m, s) in masses.iter().zip(structures) {
-        let block = plan.lots[m.lot as usize].block;
-        let Some(court) = green_court(plan, block) else {
+        let Some(mouth) = from else {
             continue;
         };
         let hub = geom::centroid(court);
+        let way = (hub - mouth).normalize_or_zero();
+        let reach = mouth.distance(hub);
+        let knee = (0..reach as usize)
+            .map(|k| mouth + way * k as f64)
+            .find(|&p| geom::contains(court, p))
+            .unwrap_or(hub);
+        entrances.entry(lot.block).or_default().push(Entrance {
+            mouth,
+            knee,
+            half: PATH_HALF.0,
+        });
+    }
+    for (m, s) in masses.iter().zip(structures) {
+        let block = plan.lots[m.lot as usize].block;
+        if green_court(plan, block).is_none() {
+            continue;
+        }
         for o in &s.openings {
             let wall = &s.walls[o.wall];
             let half = match o.kind {
@@ -261,24 +297,205 @@ pub fn court_paths(plan: &CityPlan, masses: &[Mass], structures: &[Structure]) -
             }
             let (t, n) = frame(m, wall);
             let mouth = wall.a + t * o.along;
-            let knee = mouth + n * (GARDEN + 1.0);
-            // The bend only where the middle lies ahead of it (a turn under a right angle).
-            let line = if (hub - knee).dot(n) > 0.0 {
-                vec![mouth, knee, hub]
-            } else {
-                vec![mouth, hub]
+            entrances.entry(block).or_default().push(Entrance {
+                mouth,
+                knee: mouth + n * (GARDEN + 1.0),
+                half,
+            });
+        }
+    }
+    let mut out = Vec::new();
+    for (b, mut list) in entrances {
+        let Some(court) = green_court(plan, b) else {
+            continue;
+        };
+        let (pieces, rim) = court_middle(court, b);
+        out.extend(pieces);
+        let hub = geom::centroid(court);
+        let rim = if rim.is_empty() {
+            vec![(hub, hub)]
+        } else {
+            rim
+        };
+        // The nearest first: the further ones join them.
+        let to_rim =
+            |e: &Entrance| nearest_on(&rim, e.knee).map_or(f64::MAX, |p| p.distance(e.knee));
+        list.sort_by(|x, y| to_rim(x).total_cmp(&to_rim(y)));
+        let mut network = rim.clone();
+        for e in &list {
+            let (Some(join), Some(middle)) =
+                (nearest_on(&network, e.knee), nearest_on(&rim, e.knee))
+            else {
+                continue;
             };
-            if let Some(outline) = path(&line, half) {
+            let (a, c) = (
+                (join - e.knee).normalize_or_zero(),
+                (middle - e.knee).normalize_or_zero(),
+            );
+            let to = if a.dot(c) >= JOIN_ANGLE.to_radians().cos() {
+                join
+            } else {
+                middle
+            };
+            let mut line = vec![e.mouth];
+            if e.knee.distance(e.mouth) > 0.5 && e.knee.distance(to) > 1.0 {
+                line.push(e.knee);
+            }
+            line.push(to);
+            if let Some(outline) = path(&line, e.half) {
                 out.push(Piece {
                     kind: Kind::Path,
-                    block,
+                    block: b,
                     outline,
                     height: 0.0,
                 });
             }
+            // The rest join this path where it has left the gardens.
+            network.push((e.knee, to));
         }
     }
     out
+}
+
+/// A green court's middle and the rim its paths join: in a court of [`KITCHEN_COURT`] or more,
+/// a shared kitchen garden (raised beds in rows on paved ground with paths between them, at
+/// seated height for a wheelchair) in a paved ring [`RING`] wide, as near the court's middle
+/// as fits, else on its sunniest side (north, −y on the plan, catches the most sun), clear of
+/// the private gardens; else a round paved place [`PLAZA`] across at the middle.
+fn court_middle(court: &[DVec2], b: u32) -> (Vec<Piece>, Vec<(DVec2, DVec2)>) {
+    let (bw, bl, bh) = BED;
+    let hub = geom::centroid(court);
+    let mut pieces = Vec::new();
+    let inner = geom::inset(court, GARDEN + 1.0);
+    if geom::signed_area(court).abs() >= KITCHEN_COURT
+        && let Some(inner) = &inner
+    {
+        let (u, _, _) = geom::oriented_extent(court);
+        let v = DVec2::new(-u.y, u.x);
+        // The middle first, then eight ways out of it, the sunniest first.
+        let mut ways = [
+            u,
+            -u,
+            v,
+            -v,
+            (u + v).normalize(),
+            (u - v).normalize(),
+            (v - u).normalize(),
+            (-u - v).normalize(),
+        ];
+        ways.sort_by(|p, q| p.y.total_cmp(&q.y));
+        let placed = [(4_usize, 2_usize), (2, 2)]
+            .into_iter()
+            .find_map(|(cols, rows)| {
+                let wide = cols as f64 * bw + (cols + 1) as f64 * BED_PATH;
+                let deep = rows as f64 * bl + (rows + 1) as f64 * BED_PATH;
+                std::iter::once(hub)
+                    .chain(
+                        ways.iter()
+                            .flat_map(|&w| (1..20).map(move |k| hub + w * k as f64 * 2.0)),
+                    )
+                    .find_map(|centre| {
+                        let corner = move |x: f64, y: f64| {
+                            centre + u * (x - wide * 0.5) + v * (y - deep * 0.5)
+                        };
+                        let fits = [
+                            corner(-RING, -RING),
+                            corner(wide + RING, -RING),
+                            corner(wide + RING, deep + RING),
+                            corner(-RING, deep + RING),
+                        ]
+                        .iter()
+                        .all(|&p| geom::contains(inner, p));
+                        fits.then_some((corner, cols, rows, wide, deep))
+                    })
+            });
+        if let Some((corner, cols, rows, wide, deep)) = placed {
+            let quad = |x0: f64, y0: f64, x1: f64, y1: f64| {
+                ccw(vec![
+                    corner(x0, y0),
+                    corner(x1, y0),
+                    corner(x1, y1),
+                    corner(x0, y1),
+                ])
+            };
+            pieces.push(Piece {
+                kind: Kind::Plot,
+                block: b,
+                outline: quad(0.0, 0.0, wide, deep),
+                height: 0.0,
+            });
+            // The ring: its four sides round the plot.
+            for outline in [
+                quad(-RING, -RING, wide + RING, 0.0),
+                quad(-RING, deep, wide + RING, deep + RING),
+                quad(-RING, 0.0, 0.0, deep),
+                quad(wide, 0.0, wide + RING, deep),
+            ] {
+                pieces.push(Piece {
+                    kind: Kind::Path,
+                    block: b,
+                    outline,
+                    height: 0.0,
+                });
+            }
+            for r in 0..rows {
+                for c in 0..cols {
+                    let x = BED_PATH + c as f64 * (bw + BED_PATH);
+                    let y = BED_PATH + r as f64 * (bl + BED_PATH);
+                    pieces.push(Piece {
+                        kind: Kind::Bed,
+                        block: b,
+                        outline: quad(x, y, x + bw, y + bl),
+                        height: bh,
+                    });
+                }
+            }
+            let h = RING * 0.5;
+            let rim = [
+                corner(-h, -h),
+                corner(wide + h, -h),
+                corner(wide + h, deep + h),
+                corner(-h, deep + h),
+            ];
+            let rim = (0..4).map(|k| (rim[k], rim[(k + 1) % 4])).collect();
+            return (pieces, rim);
+        }
+    }
+    if !geom::contains(court, hub) {
+        return (pieces, Vec::new());
+    }
+    // A round paved place, a twelve-sided one (its corners from √3, exact on every machine,
+    // D-016); the paths end a metre into it.
+    let c = 3f64.sqrt() * 0.5;
+    let corners = [
+        (1.0, 0.0),
+        (c, 0.5),
+        (0.5, c),
+        (0.0, 1.0),
+        (-0.5, c),
+        (-c, 0.5),
+        (-1.0, 0.0),
+        (-c, -0.5),
+        (-0.5, -c),
+        (0.0, -1.0),
+        (0.5, -c),
+        (c, -0.5),
+    ];
+    let ring = |r: f64| -> Vec<DVec2> {
+        corners
+            .iter()
+            .map(|&(x, y)| hub + DVec2::new(x, y) * r)
+            .collect()
+    };
+    pieces.push(Piece {
+        kind: Kind::Path,
+        block: b,
+        outline: ccw(ring(PLAZA * 0.5)),
+        height: 0.0,
+    });
+    let rim = ring(PLAZA * 0.5 - 1.0);
+    let rim = (0..12).map(|k| (rim[k], rim[(k + 1) % 12])).collect();
+    (pieces, rim)
 }
 
 /// The court-side ground-floor flats with a garden or a terrace before them.
@@ -490,7 +707,6 @@ pub fn gardens(plan: &CityPlan, masses: &[Mass], structures: &[Structure]) -> Ve
         }
     }
     planters(plan, masses, structures, &mut out);
-    kitchen_gardens(plan, &mut out);
     gap_hedges(plan, masses, &mut out);
     out
 }
@@ -612,6 +828,13 @@ fn planters(plan: &CityPlan, masses: &[Mass], structures: &[Structure], out: &mu
         }
     }
     let (deep, height) = PLANTER;
+    // The courts' paths, by block: a door's path out of a building's end ran over the planter
+    // round its corner.
+    let mut paths: HashMap<u32, Vec<Vec<DVec2>>> = HashMap::new();
+    for p in out.iter().filter(|p| p.kind == Kind::Path) {
+        paths.entry(p.block).or_default().push(p.outline.clone());
+    }
+    let mut planted = Vec::new();
     for (m, s) in masses.iter().zip(structures) {
         if m.active {
             continue;
@@ -645,11 +868,15 @@ fn planters(plan: &CityPlan, masses: &[Mass], structures: &[Structure], out: &mu
                 let mut from = start;
                 for (a, b) in gaps.iter().copied().chain([(end, f64::INFINITY)]) {
                     let a = a.min(end);
-                    if a - from >= 2.0 {
-                        out.push(Piece {
+                    let outline = rect(wall, t, n, (from, a), (0.05, deep));
+                    let clear = paths
+                        .get(&block)
+                        .is_none_or(|ps| ps.iter().all(|p| !overlap(&outline, p)));
+                    if a - from >= 2.0 && clear {
+                        planted.push(Piece {
                             kind: Kind::Planter,
                             block,
-                            outline: rect(wall, t, n, (from, a), (0.05, deep)),
+                            outline,
                             height,
                         });
                     }
@@ -661,115 +888,7 @@ fn planters(plan: &CityPlan, masses: &[Mass], structures: &[Structure], out: &mu
             }
         }
     }
-}
-
-/// A shared kitchen garden in each green court of [`KITCHEN_COURT`] or more: raised beds in
-/// rows on paved ground with paths between and round them, as near the court's middle as the
-/// paths leave room, on its sunniest side (north of the middle, −y on the plan, catches the
-/// most sun), clear of the gardens; a path to it from the middle.
-fn kitchen_gardens(plan: &CityPlan, out: &mut Vec<Piece>) {
-    let (bw, bl, bh) = BED;
-    for b in 0..plan.blocks.len() as u32 {
-        let Some(court) = green_court(plan, b) else {
-            continue;
-        };
-        if geom::signed_area(court).abs() < KITCHEN_COURT {
-            continue;
-        }
-        let Some(inner) = geom::inset(court, GARDEN + 1.0) else {
-            continue;
-        };
-        let hub = geom::centroid(court);
-        let (u, _, _) = geom::oriented_extent(court);
-        let v = DVec2::new(-u.y, u.x);
-        // Eight ways out of the middle, the sunniest first.
-        let mut ways = [
-            u,
-            -u,
-            v,
-            -v,
-            (u + v).normalize(),
-            (u - v).normalize(),
-            (v - u).normalize(),
-            (-u - v).normalize(),
-        ];
-        ways.sort_by(|p, q| p.y.total_cmp(&q.y));
-        let paths: Vec<Vec<DVec2>> = out
-            .iter()
-            .filter(|p| p.block == b && p.kind == Kind::Path)
-            .map(|p| p.outline.clone())
-            .collect();
-        // The largest plot that fits, nearest the middle along the sunniest way, every 2 m.
-        let placed = [(4_usize, 2_usize), (2, 2)]
-            .into_iter()
-            .find_map(|(cols, rows)| {
-                let wide = cols as f64 * bw + (cols + 1) as f64 * BED_PATH;
-                let deep = rows as f64 * bl + (rows + 1) as f64 * BED_PATH;
-                ways.iter().find_map(|&way| {
-                    (0..40).find_map(|k| {
-                        let centre = hub + way * (HUB + k as f64 * 2.0);
-                        let corner = move |x: f64, y: f64| {
-                            centre + u * (x - wide * 0.5) + v * (y - deep * 0.5)
-                        };
-                        let plot = ccw(vec![
-                            corner(0.0, 0.0),
-                            corner(wide, 0.0),
-                            corner(wide, deep),
-                            corner(0.0, deep),
-                        ]);
-                        let fits = plot.iter().all(|&p| geom::contains(&inner, p))
-                            && paths.iter().all(|p| !overlap(&plot, p));
-                        fits.then_some((plot, corner, cols, rows, wide, deep))
-                    })
-                })
-            });
-        let Some((plot, corner, cols, rows, wide, deep)) = placed else {
-            continue;
-        };
-        out.push(Piece {
-            kind: Kind::Plot,
-            block: b,
-            outline: plot,
-            height: 0.0,
-        });
-        // The way in from the middle, from the side nearest it, as wide as the paths between
-        // the beds.
-        let door = [
-            corner(wide * 0.5, 0.0),
-            corner(wide, deep * 0.5),
-            corner(wide * 0.5, deep),
-            corner(0.0, deep * 0.5),
-        ]
-        .into_iter()
-        .min_by(|p, q| p.distance(hub).total_cmp(&q.distance(hub)))
-        .unwrap_or(hub);
-        if door.distance(hub) > 0.5 {
-            let side = (hub - door).normalize().perp() * (BED_PATH * 0.5);
-            out.push(Piece {
-                kind: Kind::Path,
-                block: b,
-                outline: ccw(vec![door - side, door + side, hub + side, hub - side]),
-                height: 0.0,
-            });
-        }
-        for r in 0..rows {
-            for c in 0..cols {
-                let x = BED_PATH + c as f64 * (bw + BED_PATH);
-                let y = BED_PATH + r as f64 * (bl + BED_PATH);
-                out.push(Piece {
-                    kind: Kind::Bed,
-                    block: b,
-                    outline: ccw(vec![
-                        corner(x, y),
-                        corner(x + bw, y),
-                        corner(x + bw, y + bl),
-                        corner(x, y + bl),
-                    ]),
-                    height: bh,
-                });
-            }
-        }
-    }
+    out.extend(planted);
 }
 
 /// A number in 0..1 from `key`.
