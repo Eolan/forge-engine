@@ -1378,6 +1378,12 @@ something stands out). Two things to watch:
     The rays now loop only over the instances with cut-out or jelly rows (#265): with the
     cards, 2.28 ms at street level and 5.19 ms from the overview. The raster's cost remains,
     so the cards stay off by default (`research/trim-sheets.md` §2.9).
+  - *2026-10-15, end of day* (the sandbox at 15:00, TAA, 600 frames, best of three):
+    - the street start, 2.21 ms; the default overview, 4.76 ms;
+    - the morning's figures, with the rooms behind the windows already in, were 2.19 and
+      4.77 ms;
+    - the court benches, the bike racks, the markets and the shops' rooms cost nothing
+      measurable.
 
 ## `planet` — a planet from orbit to its ground (#220, D-056, 2026-10-10)
 
