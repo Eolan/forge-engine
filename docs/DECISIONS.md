@@ -4075,11 +4075,19 @@ kit dressing them.
 
 **Step 3's rooms behind the windows (built 2026-10-15).** The kit's glass shows a room traced in
 its shader: interior mapping, with walls, a floor, a ceiling, a picture, a door and a piece of
-furniture, each window's own draw, and net curtains on some. A lit row's room takes 4 % of its
-luminance, so the room shows at night instead of a white pane. Windows only, so Celsys's claim
-is not met: no door is ever drawn see-through. The rooms are not yet the units' rooms (the
-same box for every window) and not yet lit by their residents (`demos/city-plan.md`, "Rooms
-behind the windows").
+furniture, each window's own draw, and net curtains on some. A lit row's room took 4 % of its
+luminance (a quarter since, below), so the room shows at night instead of a white pane. Windows
+only, so Celsys's claim is not met: no door is ever drawn see-through. The rooms are not yet the
+units' rooms: the same box for every window (`demos/city-plan.md`, "Rooms behind the windows").
+
+**Lit by their residents (built 2026-10-15).** With an hour, each home's windows light by its
+household: at home and awake or not. The day plans say where people are, and a sleep model was
+added: waking before the first outing, bed at the role's hour or after coming home. A window
+finds its flat among its storey's units, and the flats take the building's households in turn.
+At 21:00, 88 % of the kit's households are up, and 49 % of its windows are lit; at midnight,
+15 % and 10 %. The share of the hour remains for the shops and as the fallback. A lit room takes
+a quarter of its lamp, not 4 %: under the probes' street lamps no window looked lit from the
+pavement (`demos/city-plan.md`, "Lit by their residents").
 
 *(research: building-structure.md; ground-floors.md; issues #248, #263)*
 

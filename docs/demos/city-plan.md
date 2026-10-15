@@ -189,7 +189,8 @@ noon reference's scale, about nothing at night. At a fixed hour nothing changes:
 
 **The probes at night (2026-10-15, #254).** The probes' rays read each hit's emission at the
 row's full value, but the frame no longer shows it so:
-- a window's glass shows its room lit at 4 % of the lamp (8 % for a shop);
+- a window's glass shows its room lit at a share of the lamp (4 % then, 25 % since the residents
+  light their own; twice that for a shop);
 - a far facade emits only through its lit windows, the emissive map's few texels.
 
 The hits now emit as the frame shows them: the emissive map's average (its last mip, as the
@@ -490,43 +491,78 @@ No geometry is added: the glass's shading does it all. By day the room takes a t
 daylight that falls on the window, and the curtains, at the glass, all of it: a room as bright
 as the wall outside matched the walls from the air, and the facades lost their windows (a real
 room gets a few per cent; a third keeps it in sight from the street). At night a lit row's room
-takes 4 % of the row's luminance (3–8 cd/m²).
-The flat glow was too strong and all alike (the owner): at the full value the lit panes were
-white, and at 4 % the walls sit a stop or two over the night's grey and the room shows. The
-textured boxes beyond the kit light their windows to match (2.5 % of the glow, was 15 %: the far
-city shone white over the kit's rooms). Where a pixel covers more than 6 cm of the room its
+takes a quarter of the row's luminance (3–8 cd/m²), 0.75 to 2 cd/m².
+- The flat glow was too strong and all alike (the owner): at the full value the lit panes were
+  white.
+- At 4 % the walls sat a stop or two over the moonlit night's grey and the room showed. Once
+  the probes saw the street lamps (#254), the exposure rose to the walls they light, and from
+  the pavement no window looked lit.
+- At 25 % a lit room is level with a lamp-lit wall and still shows. A real one is brighter
+  still.
+- The textured boxes beyond the kit light their windows at 6 % of the glow. Matching the rooms
+  would take 15 %, but at the horizon the facades stack with no street between and the far city
+  read as a white band again (the owner, 2026-10-11). Where a pixel covers more than 6 cm of the room its
 edges would flicker as the room moves behind the glass, so the room fades into its mean colour
 by 25 cm. A turn of 2.5 pixels a frame shows the same shimmer as without the fade (138 695 and
 138 629 pixels over ten frames): a turn does not move the room behind the glass, so this
 measures the facades, not the rooms.
 
-**Lit by the hour.** The share of the windows lit follows the run's `--time-of-day`
-(`lit_share`; estimates until the residents light their own windows by what they do):
-- **homes:** a quarter at 17:00, half by 21:00, a quarter at 23:00, a tenth at midnight, one in
-  twenty in the small hours, some again before dawn;
-- **shops:** lit while open, 8:00 to 19:00, and a tenth of them all night for their displays;
-- **the far facades:** their texture's windows lit in the homes' share. Dimming a fixed two in
-  five instead left them lit at 3:00, the exposure rising to meet them.
-- **the trams:** they pause from 1:30 to 4:30, as French networks run from about half past four
+**Lit by their residents (D-060 step 3).** With `--time-of-day`, each home's windows light by
+what its people are doing at that hour (the owner: "lit windows from the people living there").
+The share of the hour came first, as an estimate.
+- **The people:** the crowd's (`crowd::people`, one seed), on a Tuesday with its Monday evening
+  counted. Only the residents of the kit's buildings are made (`population::generate_in`), each
+  the same person as in the whole population.
+- **Home and awake:** `population::home_awake`. Each person's day plan says where they are. A
+  sleep model was added (`population::sleep`):
+  - they wake 45 to 90 minutes before their first outing;
+  - they go to bed at their role's hour (22:30, students 23:30), later for the extraverted and
+    before a day off, or half an hour to an hour after coming home;
+  - a night worker on shift sleeps from coming home in the morning.
+- **A household's flat:** a window finds its flat from a point half a metre inside it, among its
+  storey's homes (`structure.units`). The flats take the building's households in turn
+  (`population::households`, 2.2 people each). A window in no flat (a landing, a wing) is lit in
+  the share of its building's households up.
+- **Its windows:**
+  - a household at home and awake lights 55 % of its windows after dark (the rooms in use), and
+    15 % in full day;
+  - a household out or asleep lights 2 % (a lamp left on, a hall light).
+- **The shops:** lit in the share of the hour (`lit_share`): while open, 8:00 to 19:00, and a
+  tenth of them all night for their displays.
+- **The far facades:** their texture's windows are lit in the share the kit's residents lit
+  theirs (`lit_share` without a kit). Dimming a fixed two in five instead left them lit at 3:00,
+  the exposure rising to meet them.
+- **The trams:** they pause from 1:30 to 4:30, as French networks run from about half past four
   to half past one (`tram_pause`). The running ones are hidden and every depot place is taken.
 
-Each window takes its own draw, so the lit ones change from hour to hour. Without
-`--time-of-day`, two windows in five are lit as before. Test `windows_light_by_the_hour`.
+| The sandbox, `--place old-centre` | 21:00 | midnight |
+|---|---|---|
+| households at home and awake (35 169 in the kit) | 88 % | 15 % |
+| homes' windows lit (213 331) | 49 % | 10 % |
+| windows that found their flat | 78 % | 78 % |
+
+The residents take 180 to 280 ms at start-up: 1.1 s when the whole city's million people were
+made. Without `--time-of-day`, two windows in five are lit as before. Tests
+`homes_are_awake_in_the_evening_and_asleep_in_the_small_hours` (forge-sim, on its test town: 3:00
+under 5 % awake, 20:30 over 60 %, night workers asleep in the morning),
+`some_homes_people_are_the_whole_populations`,
+`the_residents_light_their_flats_in_the_evening_and_sleep_in_the_small_hours` (the example city:
+87 % up at 21:00, none at 3:00, every home found from inside it) and `windows_light_by_the_hour`.
 
 **Shops behind the shopfronts.** The shopfronts' glass has its own section
 (`modules::SHOP_GLASS`) and row (`RenderLayer::shop`): no curtains, which 45 % of the shops had,
 and no sofa. A shop's floor is level with the glass's foot and it runs 6 m deep. Its pale walls
 are lined with shelves of goods, boards every 0.45 m from 0.3 to 2.1 m with boxes 0.3 m wide
 between them. It has a tiled floor and a counter at the back. A lit shop takes 8 % of its row's
-luminance, twice a home's.
+luminance, twice a home's (50 % since the residents light their own windows).
 
 The rooms stay outside views: the doors are never see-through (Celsys's claims, D-060), and
 going inside builds the real rooms.
 
 Next in step 3: which upper floors are offices and which homes, so the population counts by
 home (673 593 homes at the French 2.2 people a household would be 1.48 M; the net-area count
-says 977 k with a third of the floors not homes). Then the rooms lit by their residents, and
-going inside.
+says 977 k with a third of the floors not homes). Then going inside; the rooms are lit by their
+residents since 2026-10-15.
 
 ## Trams on their timetables (#253)
 

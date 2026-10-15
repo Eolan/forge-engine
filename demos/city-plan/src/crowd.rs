@@ -17,7 +17,9 @@ use forge_core::Seed;
 use forge_procgen::city::geom::{self, PointGrid};
 use forge_procgen::city::mass::Mass;
 use forge_procgen::city::{BlockUse, CityPlan};
-use forge_sim::population::{self, Building, Mix, Mode, PlaceKind, Sim, TRAM_WAIT, Uses, World};
+use forge_sim::population::{
+    self, Building, Mix, Mode, PlaceKind, Population, Sim, TRAM_WAIT, Uses, World,
+};
 use forge_sim::transit::Timetable;
 use glam::{DVec2, Vec2, Vec3};
 
@@ -350,6 +352,82 @@ struct Graph {
     near: PointGrid,
 }
 
+/// The people of a plan's buildings: their places, the people, and each mass's home place.
+pub struct People {
+    /// The places: homes, jobs, schools, shops, cafés, bars, and the parks last.
+    pub world: World,
+    /// The people.
+    pub population: Population,
+    /// Each mass's home place in `world`, where people live in it.
+    pub homes: Vec<Option<u32>>,
+}
+
+/// The people of `plan`'s `masses` (each its net floor area in `nets`), in `mix`'s roles: homes
+/// and jobs from each building's net floor area (D-060), and the plan's parks. One seed, so the
+/// crowd and the residents' lights ([`crate::residents`]) are the same people. `only`: just the
+/// residents of those masses, each the same person as in the whole population.
+pub fn people(
+    plan: &CityPlan,
+    masses: &[Mass],
+    nets: &[f64],
+    mix: &Mix,
+    only: Option<&[usize]>,
+) -> People {
+    let buildings: Vec<Building> = masses
+        .iter()
+        .zip(nets)
+        .map(|(m, &net)| {
+            let c = geom::centroid(&m.footprint);
+            Building {
+                pos: [c.x as f32, c.y as f32],
+                floor_area: net as f32,
+                active_ground: m.lively(),
+                appeal: if m.open { 1.0 } else { 0.0 },
+            }
+        })
+        .collect();
+    let parks: Vec<[f32; 2]> = plan
+        .blocks
+        .iter()
+        .filter(|b| b.use_ == BlockUse::Park)
+        .map(|b| [b.centre.x as f32, b.centre.y as f32])
+        .collect();
+    let uses = Uses::default();
+    let places = population::places_from_buildings(&buildings, &parks, &uses);
+    // The homes come in their buildings' order, one for each building with residents.
+    let mut found = places
+        .iter()
+        .enumerate()
+        .filter(|(_, q)| q.kind == PlaceKind::Home)
+        .map(|(i, _)| i as u32);
+    let homes: Vec<Option<u32>> = buildings
+        .iter()
+        .map(|b| {
+            if population::residents(b, &uses) > 0 {
+                found.next()
+            } else {
+                None
+            }
+        })
+        .collect();
+    let world = World::new(places, plan.size as f32, 250.0);
+    let population = match only {
+        None => population::generate(&world, mix, Seed::new(2026)),
+        Some(only) => {
+            let mut keep = vec![false; world.places.len()];
+            for h in only.iter().filter_map(|&m| homes[m]) {
+                keep[h as usize] = true;
+            }
+            population::generate_in(&world, mix, Seed::new(2026), &|h| keep[h as usize])
+        }
+    };
+    People {
+        world,
+        population,
+        homes,
+    }
+}
+
 /// The crowd: the population on its clock, and the walkers' routes.
 pub struct Crowd {
     sim: Sim<'static>,
@@ -430,20 +508,6 @@ impl Crowd {
                 k as u32,
             );
         }
-        // Homes and jobs from each building's net floor area (D-060), `nets` in mass order.
-        let buildings: Vec<Building> = masses
-            .iter()
-            .zip(nets)
-            .map(|(m, &net)| {
-                let c = geom::centroid(&m.footprint);
-                Building {
-                    pos: [c.x as f32, c.y as f32],
-                    floor_area: net as f32,
-                    active_ground: m.lively(),
-                    appeal: if m.open { 1.0 } else { 0.0 },
-                }
-            })
-            .collect();
         // The parks people go out to and stand about in: inside the streets round each, spread
         // over its extent from its middle.
         let open: Vec<Park> = plan
@@ -456,19 +520,15 @@ impl Crowd {
                 Park { inside, spread }
             })
             .collect();
-        let parks: Vec<[f32; 2]> = plan
-            .blocks
-            .iter()
-            .filter(|b| b.use_ == BlockUse::Park)
-            .map(|b| [b.centre.x as f32, b.centre.y as f32])
-            .collect();
-        let places = population::places_from_buildings(&buildings, &parks, &Uses::default());
+        let People {
+            world,
+            population: pop,
+            ..
+        } = people(plan, masses, nets, mix, None);
         // The parks' places come last, in that order.
-        let first_park = places.len() - parks.len();
+        let first_park = world.places.len() - open.len();
         // The demo's lifetime: the places live as long as the app.
-        let world: &'static World =
-            Box::leak(Box::new(World::new(places, plan.size as f32, 250.0)));
-        let pop = population::generate(world, mix, Seed::new(2026));
+        let world: &'static World = Box::leak(Box::new(world));
         let mut sim = Sim::new(world, pop);
         let clock = hour * 3600.0;
         sim.run_until(clock as u32);

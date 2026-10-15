@@ -3052,12 +3052,14 @@ static const float3 ROOM_CEILING = float3(0.90, 0.89, 0.86);
 static const float ROOM_DAYLIGHT = 0.35;
 static const float ROOM_CURTAINS = 0.45;
 // The share of a lit row's luminance (3 to 8 cd/m²) its room's lamp gives the walls: the flat glow
-// was too strong and all alike at night (the owner). The night's exposure puts its grey near
-// 0.13 cd/m²: a lit room's walls sit a stop or two over it and show the room, not a white pane.
-// city-plan's far facades light their windows to match.
-static const float ROOM_LAMP = 0.04;
+// was too strong and all alike at night (the owner). At 4 % (0.12 to 0.3 cd/m²) the rooms sat a
+// stop or two over the moonlit night's grey, but under the walls the street lamps light now that
+// the probes see them (#254): from the pavement no window looked lit. A quarter (0.75 to
+// 2 cd/m²) puts a lit room level with a lamp-lit wall, the room still in sight; a real one is
+// brighter still. city-plan's far facades light their windows to match.
+static const float ROOM_LAMP = 0.25;
 // A lit shop's share: its ceiling lights and displays twice a home's lamps.
-static const float ROOM_SHOP_LAMP = 0.08;
+static const float ROOM_SHOP_LAMP = 0.5;
 
 // A row's emission in the shading's units: as given, or with MATERIAL_FLAG_EMISSIVE_ABSOLUTE a
 // luminance in cd/m² over the frame's reference illuminance (D-046: the shading is per unit of

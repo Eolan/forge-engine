@@ -121,8 +121,14 @@ impl Default for Uses {
     }
 }
 
+/// How many people live in building `b`: its floor area's homes by `uses`.
+pub fn residents(b: &Building, uses: &Uses) -> u32 {
+    (b.floor_area * uses.homes / uses.home_area) as u32
+}
+
 /// Places from a city's buildings: homes and jobs by floor area, every `school_every`-th building
-/// a school, active ground floors as shops, cafés and bars in turn, and the parks.
+/// a school, active ground floors as shops, cafés and bars in turn, and the parks. The homes come
+/// in their buildings' order, one for each building with [`residents`].
 pub fn places_from_buildings(
     buildings: &[Building],
     parks: &[[f32; 2]],
@@ -130,7 +136,7 @@ pub fn places_from_buildings(
 ) -> Vec<Place> {
     let mut places = Vec::new();
     for (i, b) in buildings.iter().enumerate() {
-        let residents = (b.floor_area * uses.homes / uses.home_area) as u32;
+        let residents = residents(b, uses);
         if residents > 0 {
             places.push(Place {
                 kind: PlaceKind::Home,
@@ -480,7 +486,16 @@ impl Population {
 /// work at a distance drawn from a log-normal of median [`WORK_MEDIAN`] in a random direction,
 /// their school the nearest.
 pub fn generate(world: &World, mix: &Mix, seed: Seed) -> Population {
+    generate_in(world, mix, seed, &|_| true)
+}
+
+/// As [`generate`], only the people of the homes `keep` takes (by place): each the same person
+/// as in the whole population, from the same seed, at their own index here. The residents'
+/// lights need a few thousand buildings' people, not the city's million (D-060 step 3).
+pub fn generate_in(world: &World, mix: &Mix, seed: Seed, keep: &dyn Fn(u32) -> bool) -> Population {
     let mut pop = Population::default();
+    // Everyone's index in the whole population.
+    let mut id = 0_u64;
     let weights = [
         mix.worker,
         mix.night_worker,
@@ -500,9 +515,13 @@ pub fn generate(world: &World, mix: &Mix, seed: Seed) -> Population {
         if home.kind != PlaceKind::Home {
             continue;
         }
+        if !keep(h as u32) {
+            id += u64::from(home.capacity);
+            continue;
+        }
         for _ in 0..home.capacity {
-            let id = pop.len() as u64;
             let own = seed.derive(id).value();
+            id += 1;
             let mut rng = SplitMix64::new(own);
             let mut r = rng.next_f32() * total;
             let mut role = Role::Retiree;
@@ -607,12 +626,21 @@ fn per_km(kind: PlaceKind) -> f32 {
     }
 }
 
+/// How many households home place `home` holds: its residents by 2.2 (the French mean), at least
+/// one.
+pub fn households(world: &World, home: u32) -> u32 {
+    ((world.places[home as usize].capacity as f32 / 2.2) as u32).max(1)
+}
+
+/// Person `p`'s household among their home's [`households`], theirs by their seed.
+pub fn household_index(world: &World, pop: &Population, p: usize) -> u32 {
+    pop.seed[p] % households(world, pop.home[p])
+}
+
 /// Person `p`'s household, as a key: one of their home's households (2.2 residents each, the
 /// French mean), theirs by their seed.
 pub fn household(world: &World, pop: &Population, p: usize) -> u64 {
-    let home = pop.home[p];
-    let households = ((world.places[home as usize].capacity as f32 / 2.2) as u32).max(1);
-    (u64::from(home) << 24) ^ u64::from(pop.seed[p] % households)
+    (u64::from(pop.home[p]) << 24) ^ u64::from(household_index(world, pop, p))
 }
 
 /// Person `p`'s plan for day `day`, made from their seed, role and personality.
@@ -782,6 +810,66 @@ pub fn plan(world: &World, pop: &Population, p: usize, day: u16) -> Plan {
     // Home until the next day's first activity ends: the calendar plans that day then.
     plan.push(home, DAY);
     plan
+}
+
+/// When person `p` wakes on day `day` and goes to bed that night, from `today`, their [`plan`]
+/// for it: game seconds since the day's start, a bedtime past [`DAY`] falling in the next day's
+/// small hours. The windows needed it (D-060 step 3: the residents light their own windows).
+/// - They wake 45 to 90 minutes before their plan's first step ends: they leave then, or would
+///   on a day at home.
+/// - They go to bed at their role's hour or half an hour to an hour after coming home, whichever
+///   is later. The extraverted and the unconscientious go later, and everyone an hour later
+///   before a day off. A night worker on shift sleeps after coming home in the morning.
+pub fn sleep(pop: &Population, p: usize, day: u16, today: &Plan) -> (GameSeconds, GameSeconds) {
+    let mut rng =
+        SplitMix64::new((u64::from(pop.seed[p]) << 16) ^ u64::from(day) ^ (0x51EE9 << 40));
+    let mut j = |lo: u32, hi: u32| lo + (rng.next_u64() % u64::from(hi - lo + 1)) as u32;
+    let wake = today.steps[0].until.saturating_sub(j(2700, 5400));
+    let me = pop.personality[p];
+    let hour = match pop.role[p] {
+        Role::Child => hm(20, 30),
+        Role::Student => hm(23, 30),
+        Role::NightWorker => DAY + hm(0, 30),
+        Role::Worker | Role::Retiree => hm(22, 30),
+    };
+    // Friday's and Saturday's nights (the weekend is days 5 and 6 of each week).
+    let off = if matches!(day % 7, 4 | 5) { 3600 } else { 0 };
+    let usual = hour + off + me.extraversion() * 240 + j(0, 1800) - me.conscientiousness() * 120;
+    let home = pop.home[p];
+    let unwind = j(1800, 3600);
+    let back = today.steps[..today.len as usize]
+        .iter()
+        .rev()
+        .find(|s| s.place != home)
+        .map_or(0, |s| s.until + unwind);
+    (wake, usual.max(back))
+}
+
+/// Whether person `p` is at home and awake at `t`, game seconds into day `day` (under [`DAY`]).
+/// The evening before counts from day 1 on: a night out, a night shift or a late bedtime runs
+/// past midnight. Day 0, the run's first, starts with everyone at home, as the [`Sim`] does.
+pub fn home_awake(world: &World, pop: &Population, p: usize, day: u16, t: GameSeconds) -> bool {
+    let home = pop.home[p];
+    let today = plan(world, pop, p, day);
+    let at = |plan: &Plan, t: GameSeconds| {
+        plan.steps[..plan.len as usize]
+            .iter()
+            .find(|s| s.until > t)
+            .map(|s| s.place)
+    };
+    let before = (day > 0).then(|| plan(world, pop, p, day - 1));
+    let place = before
+        .as_ref()
+        .and_then(|b| at(b, DAY + t))
+        .or_else(|| at(&today, t))
+        .unwrap_or(home);
+    if place != home {
+        return false;
+    }
+    let bed_before = before.map_or(0, |b| sleep(pop, p, day - 1, &b).1);
+    let (wake, bed) = sleep(pop, p, day, &today);
+    let asleep = (DAY + t >= bed_before && t < wake) || t >= bed;
+    !asleep
 }
 
 /// How a trip goes.
@@ -1363,6 +1451,58 @@ mod tests {
         };
         let crews = shared(2, &workplace);
         assert!(crews > 3, "{crews} workplaces out together");
+    }
+
+    #[test]
+    fn homes_are_awake_in_the_evening_and_asleep_in_the_small_hours() {
+        let world = town();
+        let pop = generate(&world, &Mix::adults(), Seed::new(9));
+        // A Tuesday, its Monday night before: the share of people at home and awake.
+        let share = |h: u32, m: u32, role: Option<Role>| {
+            let people: Vec<usize> = (0..pop.len())
+                .filter(|&p| role.is_none_or(|r| pop.role[p] == r))
+                .collect();
+            let awake = people
+                .iter()
+                .filter(|&&p| home_awake(&world, &pop, p, 1, hm(h, m)))
+                .count();
+            awake as f64 / people.len() as f64
+        };
+        let (night, early, noon, evening, late) = (
+            share(3, 0, None),
+            share(6, 30, None),
+            share(12, 0, None),
+            share(20, 30, None),
+            share(23, 30, None),
+        );
+        assert!(night < 0.05, "3:00 {night}");
+        assert!(early > 0.10, "6:30 {early}");
+        assert!(noon < evening, "noon {noon}, 20:30 {evening}");
+        assert!(evening > 0.6, "20:30 {evening}");
+        assert!(late < evening && late > night, "23:30 {late}");
+        // The night workers sleep in the morning, home from their shift, and are out at night.
+        let shift = |h: u32| share(h, 0, Some(Role::NightWorker));
+        assert!(shift(9) < 0.2, "9:00 {}", shift(9));
+        assert!(shift(18) > 0.5, "18:00 {}", shift(18));
+        assert!(shift(2) < 0.2, "2:00 {}", shift(2));
+    }
+
+    #[test]
+    fn some_homes_people_are_the_whole_populations() {
+        let world = town();
+        let whole = generate(&world, &Mix::default(), Seed::new(3));
+        let some = generate_in(&world, &Mix::default(), Seed::new(3), &|h| h % 5 == 2);
+        let kept: Vec<usize> = (0..whole.len())
+            .filter(|&p| whole.home[p] % 5 == 2)
+            .collect();
+        assert_eq!(kept.len(), some.len());
+        for (q, &p) in kept.iter().enumerate() {
+            assert_eq!(
+                (whole.home[p], whole.anchor[p], whole.role[p], whole.seed[p]),
+                (some.home[q], some.anchor[q], some.role[q], some.seed[q])
+            );
+            assert_eq!(whole.personality[p], some.personality[q]);
+        }
     }
 
     #[test]

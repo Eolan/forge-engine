@@ -39,6 +39,7 @@ use glam::{DVec2, Mat4, Vec3};
 use winit::keyboard::KeyCode;
 
 mod crowd;
+mod residents;
 mod signs;
 mod taxis;
 mod walk;
@@ -288,6 +289,8 @@ pub struct PlanScenario {
     size: f64,
     /// What the kit built, logged once the app logs.
     kit_report: Option<String>,
+    /// The share of the kit's homes' windows their residents lit: the far city's too.
+    far_lit: Option<f64>,
     /// The terraces' seats, for the crowd.
     seats: Vec<(Vec3, f32)>,
     /// The chess tables: each one's middle and its two seats among `seats`.
@@ -316,9 +319,12 @@ pub struct Detail<'a> {
     /// geometry (`--railing-cards`): it costs the overview 0.45 ms while the cut-out raster
     /// runs every cluster twice (`research/trim-sheets.md` §2.9).
     pub railing_cards: bool,
-    /// The hour the windows are lit for (`lit_share`; the demos' `--time-of-day`), or `None`:
-    /// two windows in five.
+    /// The hour the windows are lit for (the demos' `--time-of-day`), or `None`: two windows in
+    /// five. The homes' windows light by their residents, at home and awake or not
+    /// (`residents`), the shops' by `lit_share`.
     pub lit_hour: Option<f64>,
+    /// The residents' roles (`with_people_mix`'s): `Mix::adults()` for a world with no children.
+    pub mix: forge_sim::population::Mix,
 }
 
 /// The hour (0 to 24) of a `--time-of-day` (0 sunrise, 0.5 noon, 1 sunset, 1.5 midnight), with
@@ -614,6 +620,11 @@ impl PlanScenario {
             );
         }
         let kit = detail.map(|d| {
+            // The residents at home and awake at the hour light their own windows.
+            let residents = d.lit_hour.map(|h| {
+                let nets: Vec<f64> = structures.iter().map(|s| s.net).collect();
+                residents::Residents::new(plan, masses, &nets, &d.mix, h, &near)
+            });
             kit(
                 &mut tiles,
                 masses,
@@ -621,6 +632,7 @@ impl PlanScenario {
                 &edges,
                 &near,
                 d,
+                residents.as_ref(),
                 &plan.ground.bollards,
             )
         });
@@ -1063,6 +1075,7 @@ impl PlanScenario {
             })
             .collect();
         let mut seats = Vec::new();
+        let far_lit = kit.as_ref().and_then(|k| k.homes_share);
         let (mut kit_meshes, mut kit_instances, kit_report) =
             kit.map_or((Vec::new(), Vec::new(), None), |k| {
                 let instanced: usize = k
@@ -1083,6 +1096,10 @@ impl PlanScenario {
                     k.longest_run,
                     k.ms
                 );
+                let report = match k.lights {
+                    Some(lights) => format!("{report}; {lights}"),
+                    None => report,
+                };
                 seats = k.seats;
                 (k.meshes, k.instances, Some(report))
             });
@@ -1568,6 +1585,7 @@ impl PlanScenario {
             kit_meshes,
             kit_instances,
             kit_report,
+            far_lit,
             seats,
             trams,
             boats: plan
@@ -2201,6 +2219,10 @@ struct Kit {
     seats: Vec<(Vec3, f32)>,
     /// Derivation and assembly, milliseconds.
     ms: f64,
+    /// The share of the homes' windows their residents lit, for the far city's.
+    homes_share: Option<f64>,
+    /// Who lit the homes' windows, for the log.
+    lights: Option<String>,
 }
 
 /// Moves a module's railings' cards (its [`modules::GRILLE`] triangles) out into a mesh of their
@@ -2248,6 +2270,7 @@ fn tint_of(lot: u32) -> u8 {
 /// storey of each wall dressed round its openings, the walls, bands and cornices merged into
 /// the tiles, the openings instanced, their reveals as deep as their walls allow; the passages
 /// into the courts open through the buildings; and their roofs.
+#[allow(clippy::too_many_arguments)]
 fn kit(
     tiles: &mut Tiles,
     masses: &[Mass],
@@ -2255,9 +2278,12 @@ fn kit(
     edges: &[Vec<Option<FaceKind>>],
     near: &[usize],
     d: &Detail,
+    residents: Option<&residents::Residents>,
     bollards: &[DVec2],
 ) -> Kit {
     let start = std::time::Instant::now();
+    // The homes' windows: lit by their flats' households, and how many.
+    let mut homes_lit = (0, 0, 0);
     let size = tiles.size;
     let (dressed, _stats) = facades::dress(d.grammar, structures, masses, near, d.top, d.seed);
     let mut keys: std::collections::HashMap<(u16, i32, i32, i32), u32> =
@@ -2314,11 +2340,30 @@ fn kit(
             let colour = (mix(u64::from(m.lot)) % 4) as u8;
             let spot = mix(u64::from(pos.x.to_bits()) << 32 | u64::from(pos.z.to_bits()))
                 ^ mix(u64::from(pos.y.to_bits()));
-            // Lit in the share of the hour (`lit_share`), each window its own draw.
-            let share = d
-                .lit_hour
-                .map_or(0.4, |h| lit_share(h, name.starts_with("shop")));
-            let lit = (((spot >> 20) % 1000) as f64) < share * 1000.0;
+            // A home's window lit by its flat's household, at home and awake or not (the flat
+            // holding a point half a metre inside it); a shop's in the share of the hour
+            // (`lit_share`), each window its own draw.
+            let shop = name.starts_with("shop");
+            let by_residents = residents.filter(|_| !shop).and_then(|r| {
+                let n = t.scope.normal();
+                let inside = DVec2::new(o.x, o.z)
+                    + DVec2::new(t.scope.x.x, t.scope.x.z) * (f64::from(w) * 0.5)
+                    - DVec2::new(n.x, n.z) * (wall.thickness + 0.5);
+                let s = &structures[piece.mass as usize];
+                let flat = piece
+                    .storey
+                    .and_then(|k| residents::flat_at(s, usize::from(k), inside));
+                homes_lit.2 += usize::from(flat.is_some());
+                r.lit(piece.mass as usize, flat, spot)
+            });
+            let lit = by_residents.unwrap_or_else(|| {
+                let share = d.lit_hour.map_or(0.4, |h| lit_share(h, shop));
+                (((spot >> 20) % 1000) as f64) < share * 1000.0
+            });
+            if let Some(l) = by_residents {
+                homes_lit.0 += 1;
+                homes_lit.1 += usize::from(l);
+            }
             let transform =
                 Mat4::from_cols(x.extend(0.0), y.extend(0.0), z.extend(0.0), pos.extend(1.0));
             instances.push((id, transform, colour * 2 + u8::from(lit)));
@@ -2421,6 +2466,17 @@ fn kit(
         longest_run,
         seats,
         ms: start.elapsed().as_secs_f64() * 1e3,
+        homes_share: residents.map(|_| homes_lit.1 as f64 / homes_lit.0.max(1) as f64),
+        lights: residents.map(|r| {
+            let (windows, lit, in_flat) = homes_lit;
+            format!(
+                "the residents' lights: {} of {} households at home and awake, {lit} of \
+                 {windows} homes' windows lit ({in_flat} in their flats), found in {:.0} ms",
+                r.households.1,
+                r.households.0,
+                r.seconds * 1e3
+            )
+        }),
     }
 }
 
@@ -3469,12 +3525,14 @@ impl Scenario for PlanScenario {
             ],
         );
         // The facades: a window bay and a shopfront, read by the walls' coordinates.
-        // Their windows lit in the homes' share of the hour (`lit_share`), as the kit's are: the
-        // far city goes to bed with the near one. Dimming a fixed two in five instead left the
-        // far city's windows lit at 3:00, the exposure raised to meet them.
-        let far_share = args
-            .time_of_day
-            .map_or(0.4, |t| lit_share(hour_of_day(t), false));
+        // Their windows lit in the share the kit's residents lit theirs, or the homes' share of
+        // the hour (`lit_share`) without a kit: the far city goes to bed with the near one.
+        // Dimming a fixed two in five instead left the far city's windows lit at 3:00, the
+        // exposure raised to meet them.
+        let far_share = self.far_lit.unwrap_or_else(|| {
+            args.time_of_day
+                .map_or(0.4, |t| lit_share(hour_of_day(t), false))
+        });
         let [facade_albedo, facade_normal, facade_lights] =
             textures::facade(21, 1024, far_share as f32);
         let [shop_albedo, shop_normal] = textures::shopfront(22, 512);
@@ -3500,11 +3558,12 @@ impl Scenario for PlanScenario {
         // (the owner, 2026-10-11). A stopgap until a proxy per building (#38) draws the far city
         // as the kit would.
         let far_glow = glow * 0.15;
-        // Their homes' windows as the kit's lit rooms read: the lamp's share of a lit row's
-        // luminance the room gets (ROOM_LAMP in meshlet.slang, 4 %) over walls, floor and
-        // furniture about 0.6 as bright as white. At 15 % the far windows shone white over the
-        // kit's rooms, which show their walls a few stops over the night's grey.
-        let far_rooms = glow * 0.025;
+        // Their homes' windows near the kit's lit rooms: the lamp's share of a lit row's luminance
+        // the room gets (ROOM_LAMP in meshlet.slang, 25 %) over walls, floor and furniture about
+        // 0.6 as bright as white would be 15 %, but at the horizon the facades stack with no
+        // street between and at 15 % the far city read as a band of white again. 6 % keeps it
+        // dotted (2.5 % went with the rooms' 4 %).
+        let far_rooms = glow * 0.06;
         let mapped = |rgb: [f32; 3],
                       (albedo, normal, lights): (TextureId, TextureId, TextureId),
                       glow: f32| {
