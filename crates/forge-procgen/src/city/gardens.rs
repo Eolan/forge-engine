@@ -42,6 +42,9 @@ pub enum Kind {
     /// A bench on the green beside a court's middle, facing it: its outline's first edge is its
     /// front, [`BENCH`] long.
     Bench,
+    /// A row of bike stands on a gap's forecourt, along its hedge: its outline's first edge
+    /// runs along the row, [`BIKE_RACK`] long.
+    BikeRack,
 }
 
 impl Kind {
@@ -52,7 +55,10 @@ impl Kind {
 
     /// Whether it stands over the ground, something people walk round.
     pub fn standing(self) -> bool {
-        matches!(self, Kind::Planter | Kind::Hedge | Kind::Bed | Kind::Bench)
+        matches!(
+            self,
+            Kind::Planter | Kind::Hedge | Kind::Bed | Kind::Bench | Kind::BikeRack
+        )
     }
 }
 
@@ -134,6 +140,9 @@ const JOIN_ANGLE: f64 = 75.0;
 pub const BENCH: (f64, f64, f64) = (1.8, 0.5, 0.1);
 /// The most benches round a court's middle, and the least room between two of them, metres.
 const BENCHES: (usize, f64) = (4, 3.0);
+/// A row of bike stands (`forge_geom::furniture::bike_rack`): its length, depth and height,
+/// metres.
+pub const BIKE_RACK: (f64, f64, f64) = (2.7, 0.3, 0.8);
 
 /// A court's middle ([`court_middle`]): its pieces, its rim's segments, and its benches' places
 /// with the way each would face.
@@ -814,6 +823,7 @@ fn gap_hedges(plan: &CityPlan, masses: &[Mass], out: &mut Vec<Piece>) {
         if green_court(plan, lot.block).is_none() || !lot.frontage || built.contains(&(i as u32)) {
             continue;
         }
+        let mut racked = false;
         let mine = paths.get(&lot.block).map_or(&[][..], Vec::as_slice);
         let n = lot.polygon.len();
         for k in 0..n {
@@ -860,6 +870,25 @@ fn gap_hedges(plan: &CityPlan, masses: &[Mass], out: &mut Vec<Piece>) {
                     (Some(s0), false) => {
                         if s - s0 >= 2.0 {
                             let side = |s: f64, off: f64| a + t * s + inward * (d + off);
+                            // A gap's first stretch of hedge long enough gets a bike rack on
+                            // the forecourt before it, for the residents and their visitors.
+                            let (long, deep, _) = BIKE_RACK;
+                            if !racked && s - 0.5 - s0 >= long + 1.0 {
+                                racked = true;
+                                let mid = (s0 + s - 0.5) * 0.5;
+                                let front = -(hw * 0.5 + 0.1 + 0.05 + deep);
+                                hedges.push(Piece {
+                                    kind: Kind::BikeRack,
+                                    block: lot.block,
+                                    outline: ccw(vec![
+                                        side(mid - long * 0.5, front),
+                                        side(mid + long * 0.5, front),
+                                        side(mid + long * 0.5, front + deep),
+                                        side(mid - long * 0.5, front + deep),
+                                    ]),
+                                    height: BIKE_RACK.2,
+                                });
+                            }
                             hedges.push(Piece {
                                 kind: Kind::Hedge,
                                 block: lot.block,

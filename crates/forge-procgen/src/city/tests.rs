@@ -828,6 +828,36 @@ fn open_blocks_gaps_are_hedged_behind_their_forecourts_but_where_their_paths_go_
         gap_lots.len()
     );
     assert_eq!(wrong, 0, "{wrong} gap hedges in a building or on a path");
+    // A bike rack before a hedge in most gaps: on the forecourt, clear of the buildings and the
+    // paths, the footway kept (its back 0.4 m off the hedge's front, the street side 1.6 m and
+    // more from the building line).
+    let racks: Vec<&gardens::Piece> = pieces.iter().filter(|p| p.kind == Kind::BikeRack).collect();
+    let mut astray = 0;
+    for r in &racks {
+        let c = geom::centroid(&r.outline);
+        let gap = gap_lots
+            .iter()
+            .find(|&&i| geom::contains(&city.lots[i].polygon, c));
+        let on_forecourt = gap.is_some_and(|&i| {
+            let lot = &city.lots[i].polygon;
+            let n = lot.len();
+            let edge = (0..n)
+                .map(|k| geom::distance_to_segment(c, lot[k], lot[(k + 1) % n]))
+                .fold(f64::MAX, f64::min);
+            (1.6..FORECOURT).contains(&edge)
+        });
+        let clear = r
+            .outline
+            .iter()
+            .all(|&q| !inside_any(&footprints, q) && !inside_any(paths.iter().copied(), q));
+        if !on_forecourt || !clear {
+            println!("a bike rack astray at {c:.1}");
+            astray += 1;
+        }
+    }
+    println!("{} bike racks", racks.len());
+    assert!(racks.len() >= gap_lots.len() / 3, "{} racks", racks.len());
+    assert_eq!(astray, 0, "{astray} racks off their forecourts");
 }
 
 #[test]

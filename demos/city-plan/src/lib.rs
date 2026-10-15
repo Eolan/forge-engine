@@ -535,10 +535,9 @@ impl PlanScenario {
         }
         head_houses(&mut tiles, masses, &structures);
         // The planters, the hedges and the kitchen gardens' beds (the owner's note, 2026-10-15).
-        for g in gardens
-            .iter()
-            .filter(|g| g.kind.standing() && g.kind != gardens::Kind::Bench)
-        {
+        for g in gardens.iter().filter(|g| {
+            g.kind.standing() && !matches!(g.kind, gardens::Kind::Bench | gardens::Kind::BikeRack)
+        }) {
             let side = match g.kind {
                 gardens::Kind::Hedge => ROOF_GREEN,
                 _ => KIT_STONE,
@@ -947,13 +946,16 @@ impl PlanScenario {
         // green tops read as carpet, and standing on them the plants showed their trunks like
         // bonsais. Further off, a pixel or two each, they speckled the facades' feet from the air.
         let mut plants = 0;
-        for (k, g) in gardens.iter().enumerate() {
+        for g in &gardens {
             let (spacing, crown, high, rows): (f64, f32, f32, &[f64]) = match g.kind {
                 gardens::Kind::Planter => (1.0, 0.12, 0.08, &[0.0]),
                 gardens::Kind::Bed => (0.8, 0.07, 0.04, &[-0.25, 0.25]),
                 _ => continue,
             };
             let c = geom::centroid(&g.outline);
+            // Each box's plants by its place: by its index in the list, a new garden piece
+            // before it (the benches, the racks) changed every plant after it.
+            let k = c.x.to_bits() ^ c.y.to_bits().rotate_left(29);
             if detail.is_none_or(|d| c.distance(d.centre) > PLANTS_REACH) {
                 continue;
             }
@@ -966,7 +968,7 @@ impl PlanScenario {
             let n = (long.length() / spacing).floor().max(1.0) as usize;
             for (r, &row) in rows.iter().enumerate() {
                 for j in 0..n {
-                    let h = mix((k as u64) << 20 ^ (r as u64) << 16 ^ j as u64);
+                    let h = mix(k ^ (r as u64) << 16 ^ (j as u64) << 40);
                     let vary = 0.85 + 0.3 * (h & 0xFF) as f32 / 255.0;
                     let p = c + long * ((j as f64 + 0.5) / n as f64 - 0.5) + short * row;
                     let base = WALK_LEVEL + g.height - f64::from(6.6 * high * vary);
@@ -1162,6 +1164,25 @@ impl PlanScenario {
             kit_meshes.push(forge_geom::furniture::bench());
             let id = (kit_meshes.len() - 1) as u32;
             kit_instances.extend(benches.into_iter().map(|at| (id, at, 0)));
+        }
+        // The gaps' bike racks (`gardens::Kind::BikeRack`), along their outlines' first edges.
+        let racks: Vec<Mat4> = gardens
+            .iter()
+            .filter(|g| g.kind == gardens::Kind::BikeRack)
+            .map(|g| {
+                let along = (g.outline[1] - g.outline[0]).normalize_or_zero();
+                // The row's x along the edge: turned about y so +x points along it.
+                let turn = (-along.y as f32).atan2(along.x as f32);
+                Mat4::from_rotation_translation(
+                    glam::Quat::from_rotation_y(turn),
+                    world(size, geom::centroid(&g.outline), WALK_LEVEL),
+                )
+            })
+            .collect();
+        if !racks.is_empty() {
+            kit_meshes.push(forge_geom::furniture::bike_rack());
+            let id = (kit_meshes.len() - 1) as u32;
+            kit_instances.extend(racks.into_iter().map(|at| (id, at, 0)));
         }
         // Chess tables round the fountain of each square of 0.15 ha or more without a landmark,
         // four 9 m from its middle on the diagonals, where they stand clear of the trunks and the

@@ -270,6 +270,34 @@ pub fn street_workout() -> TriMesh {
     m
 }
 
+/// A row of three bike stands 2.65 m long along `x`, centred on the origin: Sheffield stands, each
+/// an upturned U of steel 0.75 m tall and 0.7 m long in the row's line, every 0.95 m, a bike
+/// locked along each side.
+pub fn bike_rack() -> TriMesh {
+    let mut m = TriMesh::default();
+    let (t, top) = (0.025_f32, 0.75_f32);
+    for k in -1..=1 {
+        let x = k as f32 * 0.95;
+        for leg in [x - 0.35, x + 0.35] {
+            cuboid(
+                &mut m,
+                Vec3::new(leg - t, 0.0, -t),
+                Vec3::new(leg + t, top, t),
+                METAL,
+                ALL & !NEG_Y & !POS_Y,
+            );
+        }
+        cuboid(
+            &mut m,
+            Vec3::new(x - 0.35 - t, top, -t),
+            Vec3::new(x + 0.35 + t, top + 2.0 * t, t),
+            METAL,
+            ALL & !NEG_Y,
+        );
+    }
+    m
+}
+
 /// A park bench 1.8 m long along `x`, facing `+z`: wooden slats on two cast-iron end frames, a
 /// slatted back.
 pub fn bench() -> TriMesh {
@@ -585,6 +613,10 @@ mod tests {
     #[test]
     fn furniture_stays_in_its_place() {
         for (m, (lo, hi)) in [
+            (
+                bike_rack(),
+                (Vec3::new(-1.35, 0.0, -0.15), Vec3::new(1.35, 0.8, 0.15)),
+            ),
             (
                 terrace(4.0, 1),
                 (Vec3::new(-0.7, 0.0, -0.1), Vec3::new(4.7, 2.7, 2.95)),

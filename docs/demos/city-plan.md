@@ -664,9 +664,13 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
     decoration".
     - With open blocks on, the example has 3 091 such hedges in 1 770 gaps, none in a building
       or on a path; the sandbox has 16 476.
+    - A gap's first stretch of hedge 3.7 m long or more gets a bike rack before it on the
+      forecourt: three Sheffield stands in a row along the hedge, 1.65 to 1.95 m in from the
+      building line, so the footway keeps its width. With open blocks on, the example has
+      1 644 in 1 775 gaps.
     - Test `open_blocks_gaps_are_hedged_behind_their_forecourts_but_where_their_paths_go_in`.
-  - **The walker** walks round the planters, hedges, beds and benches. No tree stands on a
-    path, a terrace, a hedge, a bed or a bench.
+  - **The walker** walks round the planters, hedges, beds, benches and bike racks. No tree
+    stands on any of them, nor on a path or a terrace.
   - **Plants:** within 400 m of the kit's centre, shrubs every metre in the planters and two
     rows of vegetables every 0.8 m in the beds. They are small trees sunk in their boxes to their
     crowns' middles.
