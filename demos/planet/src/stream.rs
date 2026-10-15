@@ -161,11 +161,7 @@ pub(crate) fn cook_cells(
                             Some(h) => tile_mesh_from(planet, cell, &h),
                             None => tile_mesh(planet, cell),
                         };
-                        MeshletMesh::build_clustered(
-                            &mesh,
-                            clusters,
-                            CookOptions { normal_weight: 0.0 },
-                        )
+                        MeshletMesh::build_clustered(&mesh, clusters, CookOptions::default())
                     });
                 if let Err(error) = stored {
                     tracing::warn!(tile = %name, %error, "cooked tile not cached");

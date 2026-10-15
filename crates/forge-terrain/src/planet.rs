@@ -2475,13 +2475,13 @@ mod calibration {
             let mesh = tile_mesh(&planet, cell);
             let made = ms(t);
             let t = Instant::now();
-            let cooked = MeshletMesh::build_with(&mesh, CookOptions { normal_weight: 0.0 });
+            let cooked = MeshletMesh::build_with(&mesh, CookOptions::default());
             let cook = ms(t);
             let t = Instant::now();
             let by_cells = MeshletMesh::build_clustered(
                 &mesh,
                 &tile_clusters(world.tiles.samples),
-                CookOptions { normal_weight: 0.0 },
+                CookOptions::default(),
             );
             let clustered = ms(t);
             println!(
@@ -2506,7 +2506,7 @@ mod calibration {
                 &mesh.indices,
                 &vertices,
                 &vec![0; vertices.len()],
-                0.0,
+                CookOptions::default(),
                 forge_geom::MAX_LEVELS,
             );
             let dag_ms = ms(t);

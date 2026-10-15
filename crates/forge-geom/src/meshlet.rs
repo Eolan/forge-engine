@@ -93,6 +93,13 @@ pub struct CookOptions {
     /// left keep normals that no longer match the surface. With a weight of 1 a 90° turn
     /// counts like about a metre, so windows stay until they are about a pixel.
     pub normal_weight: f32,
+    /// Weight of the texture coordinates, in metres of error per unit of change: 0 leaves them
+    /// out. The simplifier collapses across seams (its permissive mode), so where a mesh's
+    /// coordinates jump (a facade's plain strip beside its window bays) a coarse level dragged
+    /// one side's coordinates over the other, the windows smeared into streaks, and a wall showed
+    /// a triangle from afar (the owner, 2026-10-15). About a texture repeat's width in metres
+    /// counts a shift of the texture as far as it shows on the wall.
+    pub uv_weight: f32,
 }
 
 /// The shape of a cooked DAG (the metrics the research asks to track: roots reached, fill).
@@ -153,7 +160,7 @@ impl MeshletMesh {
             &indices,
             &vertices,
             &vertex_section,
-            options.normal_weight,
+            options,
             lod::MAX_LEVELS,
         );
         Self::packed(mesh, &vertices, dag, grid)
@@ -176,7 +183,7 @@ impl MeshletMesh {
             clusters,
             &vertices,
             &vertex_section,
-            options.normal_weight,
+            options,
             lod::MAX_LEVELS,
         );
         Self::packed(mesh, &vertices, dag, grid)

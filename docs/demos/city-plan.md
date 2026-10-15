@@ -1152,6 +1152,12 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
 - **the tiles' LOD** weighs normals (`CookOptions { normal_weight: 2.0 }`): at the coarser levels
   a pavement's kerb and back faces folded into its top, long tilted triangles where two paving
   patterns seemed to blend on the pavements and the bridges (the owner guessed an LOD issue).
+  The far walls (`tile.masses`) also weigh their texture coordinates (`CookOptions::uv_weight`,
+  a unit the facade texture's four bays, 12 m): the permissive simplifier collapsed across the
+  facade's texture seams (plain band to window bays, ground floor to the storeys), and from afar
+  the lower storeys' windows smeared into diagonal streaks, with a triangle on a facade that went
+  away closer (the owner, 2026-10-15). Only the city's walls set it, so no other demo's cooking
+  changes. View: `reports/2026-10-15/facade-seams-before-after.png`.
 - **bridges:** a stone parapet a metre over the pavement along both edges, 0.35 m thick, and
   the deck's side below it down to the water; the walker walks against the parapets. The
   pavements stopped at a bare edge over the river (the owner: the bridges' pavements looked

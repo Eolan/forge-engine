@@ -3232,6 +3232,9 @@ fn wall_band(
     let flat = (plain.0 / repeat, plain.1 / repeat);
     let pieces = if bays < 1.0 {
         vec![(0.0, len, flat)]
+/// The far facades' texture coordinates in their levels of detail, metres of error per unit
+/// (`CookOptions::uv_weight`): a unit is the texture's [`textures::FACADE_CELLS`] bays, 12 m.
+const FACADE_UV_WEIGHT: f32 = textures::FACADE_CELLS as f32 * BAY as f32;
     } else {
         vec![
             (0.0, margin, flat),
@@ -4062,20 +4065,24 @@ impl Scenario for PlanScenario {
         let mut meshes = 0;
         for tile in &self.tiles {
             let at = Mat4::from_translation(tile.centre);
-            for (mesh, row) in [
-                (&tile.ground, ground_row),
-                (&tile.masses, mass_row),
-                (&tile.railings, grille_row),
+            for (mesh, row, uv_weight) in [
+                (&tile.ground, ground_row, 0.0),
+                (&tile.masses, mass_row, FACADE_UV_WEIGHT),
+                (&tile.railings, grille_row, 0.0),
             ] {
                 if mesh.indices.is_empty() {
                     continue;
                 }
                 // Normals weighed in the LOD: a pavement's kerb and back faces folded into its
                 // top at the coarser levels, long tilted triangles where the paving streaked (the
-                // owner saw two patterns blend on the pavements).
+                // owner saw two patterns blend on the pavements). The far facades' texture
+                // coordinates too: across their jumps the windows smeared into streaks.
                 let id = builder.add_mesh(&MeshletMesh::build_with(
                     mesh,
-                    forge_geom::meshlet::CookOptions { normal_weight: 2.0 },
+                    forge_geom::meshlet::CookOptions {
+                        normal_weight: 2.0,
+                        uv_weight,
+                    },
                 ));
                 builder.add_instance_with_material(id, at, row);
                 meshes += 1;

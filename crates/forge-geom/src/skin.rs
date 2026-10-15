@@ -357,7 +357,13 @@ impl SkinnedMesh {
     ) -> Self {
         let (vertices, indices, vertex_section, source) = split_sections(mesh);
         let indices = meshopt::optimize_vertex_cache(&indices, vertices.len());
-        let mut dag = lod::build_dag(&indices, &vertices, &vertex_section, 0.0, 1);
+        let mut dag = lod::build_dag(
+            &indices,
+            &vertices,
+            &vertex_section,
+            crate::meshlet::CookOptions::default(),
+            1,
+        );
         let (center, radius) = bound;
         for m in &mut dag.meshlets {
             cluster(m);

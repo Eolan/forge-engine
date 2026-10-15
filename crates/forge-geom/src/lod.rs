@@ -23,7 +23,9 @@
 use forge_core::pack::{par_chunks_mut, threads};
 use meshopt::{PositionDataAdapter, RadiusDataAdapter, SimplifyOptions, VertexDataAdapter};
 
-use crate::meshlet::{GpuMeshlet, GpuVertex, MESHLET_MAX_TRIANGLES, MESHLET_MAX_VERTICES};
+use crate::meshlet::{
+    CookOptions, GpuMeshlet, GpuVertex, MESHLET_MAX_TRIANGLES, MESHLET_MAX_VERTICES,
+};
 
 /// Clusters per simplification group.
 pub const GROUP_SIZE: usize = 8;
@@ -87,25 +89,18 @@ struct Record {
 /// Builds the DAG of `indices` over `vertices`. `indices` must be a valid triangle list.
 /// `vertex_section` gives every vertex's material section; no triangle may join two sections
 /// (`crate::meshlet` splits the vertices on section borders), and every cluster holds one.
-/// `normal_weight` adds the vertex normals to the simplification error (metres per unit of
-/// normal change; 0: geometry only, see `crate::meshlet::CookOptions`). It stops at `levels`
+/// `options` weigh the vertex normals and texture coordinates in the simplification error
+/// (`crate::meshlet::CookOptions`; 0: geometry only). It stops at `levels`
 /// levels (at most [`MAX_LEVELS`]): 1 leaves every cluster of level 0 a root, as a skinned
 /// mesh needs (`crate::skin`).
 pub fn build_dag(
     indices: &[u32],
     vertices: &[GpuVertex],
     vertex_section: &[u8],
-    normal_weight: f32,
+    options: CookOptions,
     levels: u32,
 ) -> ClusterDag {
-    build_dag_from(
-        indices,
-        None,
-        vertices,
-        vertex_section,
-        normal_weight,
-        levels,
-    )
+    build_dag_from(indices, None, vertices, vertex_section, options, levels)
 }
 
 /// [`build_dag`] with level 0's clusters given (#220): each a list of `indices`' triangles (by
@@ -118,7 +113,7 @@ pub fn build_dag_clustered(
     clusters: &[Vec<u32>],
     vertices: &[GpuVertex],
     vertex_section: &[u8],
-    normal_weight: f32,
+    options: CookOptions,
     levels: u32,
 ) -> ClusterDag {
     build_dag_from(
@@ -126,7 +121,7 @@ pub fn build_dag_clustered(
         Some(clusters),
         vertices,
         vertex_section,
-        normal_weight,
+        options,
         levels,
     )
 }
@@ -137,7 +132,7 @@ fn build_dag_from(
     clusters: Option<&[Vec<u32>]>,
     vertices: &[GpuVertex],
     vertex_section: &[u8],
-    normal_weight: f32,
+    options: CookOptions,
     levels: u32,
 ) -> ClusterDag {
     let mut dag = ClusterDag {
@@ -233,7 +228,7 @@ fn build_dag_from(
             locked: &locked,
             sections: &sections,
             has_sections,
-            normal_weight,
+            options,
         };
         let simplified = par_map(
             members.len(),
@@ -443,7 +438,7 @@ struct GroupInputs<'a> {
     locked: &'a [bool],
     sections: &'a Sections<'a>,
     has_sections: bool,
-    normal_weight: f32,
+    options: CookOptions,
 }
 
 /// What a group's simplification made: the group's sphere and error, and the clusters its
@@ -462,7 +457,7 @@ fn simplify_group(
     compactor: &mut Compactor,
 ) -> Option<Simplified> {
     let records = inputs.records;
-    let (normal_weight, has_sections) = (inputs.normal_weight, inputs.has_sections);
+    let has_sections = inputs.has_sections;
     let merged: Vec<u32> = members
         .iter()
         .flat_map(|&c| records[c].indices.iter().copied())
@@ -470,20 +465,21 @@ fn simplify_group(
     let subset = compactor.subset(&merged, inputs.vertices, inputs.locked);
     let target = (merged.len() / 3).div_ceil(2).max(1) * 3;
     let mut simplify_error = 0.0_f32;
-    let mut options = SimplifyOptions::LockBorder | SimplifyOptions::ErrorAbsolute;
+    let mut flags = SimplifyOptions::LockBorder | SimplifyOptions::ErrorAbsolute;
     if has_sections {
-        options |= SimplifyOptions::Permissive;
+        flags |= SimplifyOptions::Permissive;
     }
-    // The normals are the vertex's floats 4..7 and its section float 7: read in place.
+    // From the vertex's float 4 on: its normal (4..7), its section (7) and its texture
+    // coordinates (8..10), read in place, from the first weighed to the last.
     let floats: &[f32] = bytemuck::cast_slice(&subset.vertices);
-    let (attributes, weights): (&[f32], &[f32]) = match (normal_weight > 0.0, has_sections) {
-        (true, true) => (
-            &floats[4..],
-            &[normal_weight, normal_weight, normal_weight, SECTION_WEIGHT],
-        ),
-        (true, false) => (&floats[4..], &[normal_weight; 3]),
-        (false, true) => (&floats[7..], &[SECTION_WEIGHT]),
-        (false, false) => (&[], &[]),
+    let (n, uv) = (inputs.options.normal_weight, inputs.options.uv_weight);
+    let s = if has_sections { SECTION_WEIGHT } else { 0.0 };
+    let all = [n, n, n, s, uv, uv];
+    let first = all.iter().position(|&w| w > 0.0);
+    let last = all.iter().rposition(|&w| w > 0.0);
+    let (attributes, weights): (&[f32], &[f32]) = match (first, last) {
+        (Some(a), Some(b)) => (&floats[4 + a..], &all[a..=b]),
+        _ => (&[], &[]),
     };
     let simplified = if !weights.is_empty() {
         meshopt::simplify_with_attributes_and_locks(
@@ -495,7 +491,7 @@ fn simplify_group(
             &subset.locked,
             target,
             f32::MAX,
-            options,
+            flags,
             Some(&mut simplify_error),
         )
     } else {
@@ -505,7 +501,7 @@ fn simplify_group(
             &subset.locked,
             target,
             f32::MAX,
-            options,
+            flags,
             Some(&mut simplify_error),
         )
     };
@@ -834,7 +830,13 @@ mod tests {
             indices.extend([base, base + 1, base + 2]);
         }
         let sections: Vec<u8> = vertices.iter().map(|v| v.section as u8).collect();
-        let dag = build_dag(&indices, &vertices, &sections, 0.0, 8);
+        let dag = build_dag(
+            &indices,
+            &vertices,
+            &sections,
+            crate::meshlet::CookOptions::default(),
+            8,
+        );
         for (c, &source) in dag.cluster_source.iter().enumerate() {
             if source == NO_GROUP {
                 continue;

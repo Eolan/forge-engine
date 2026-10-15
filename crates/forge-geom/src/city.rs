@@ -230,6 +230,7 @@ impl PropSpec {
                 | PropKind::Terrain(_)
                 | PropKind::Heightfield(_) => 0.0,
             },
+            uv_weight: 0.0,
         }
     }
 
@@ -1484,7 +1485,10 @@ mod tests {
         );
         let built = crate::MeshletMesh::build_with(
             &mesh,
-            crate::meshlet::CookOptions { normal_weight: 1.0 },
+            crate::meshlet::CookOptions {
+                normal_weight: 1.0,
+                uv_weight: 0.0,
+            },
         );
         let at_level = |level: u32, section: u32| -> usize {
             built

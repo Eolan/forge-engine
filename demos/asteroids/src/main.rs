@@ -1376,6 +1376,7 @@ fn build_meshes(args: &Args) -> FieldMeshes {
                 // the rock's size on screen: its creases and relief stay until they are a pixel.
                 let options = CookOptions {
                     normal_weight: lod_normals * radius,
+                    uv_weight: 0.0,
                 };
                 *slot = Some(MeshletMesh::build_with(&mesh, options));
             });
@@ -1386,6 +1387,7 @@ fn build_meshes(args: &Args) -> FieldMeshes {
             &ship_mesh(),
             CookOptions {
                 normal_weight: lod_normals * SHIP_LENGTH * 0.5,
+                uv_weight: 0.0,
             },
         )
     });
