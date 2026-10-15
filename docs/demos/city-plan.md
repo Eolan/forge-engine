@@ -1314,9 +1314,13 @@ evening's walkers.* `--people HOUR` builds the plan's population from the masses
     at the carriageway's level (they rode through the tram stops' platforms, 13 cm up). At a junction a
     walker goes on to the corner where the pavements' lines meet and crosses straight over,
     as at a crossing; they jumped up to 17 m from one side to the other before;
-  - by tram: waiting on the platform nearest their start for the trip's first five minutes,
-    until a tram of that platform's line stands there going its way: then they board.
-    Aboard, they are not drawn yet (the trams' windows show no one).
+  - by tram: waiting for the trip's first five minutes at a platform of a line going their
+    way, found once per trip: among the platforms within 500 m of their start, one of a line
+    with a stop within 600 m of their end farther along its way (outbound if that stop's index
+    is the higher), nearest by the walks at both ends, else the nearest platform (they waited
+    at the nearest whatever its line and way: a crowd on a platform no tram came to, the
+    owner, 2026-10-15). Until a tram of that platform's line stands there going its way: then
+    they board. Aboard, they are not drawn yet (the trams' windows show no one).
 - **those in a park:** they stand about it, kept 9 m inside its streets, spread over its own
   extent. Squares are not places people go and stand in: that filled one with a crowd, and the
   owner pointed out people would rather be at the cafés, the pubs and the tea rooms, or

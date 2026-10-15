@@ -467,6 +467,10 @@ pub struct Crowd {
     stop_grid: PointGrid,
     timetables: Vec<Timetable>,
     boarded: HashSet<u32>,
+    /// Each line's stops' middles on the plan, by stop index.
+    line_stops: Vec<Vec<DVec2>>,
+    /// The platform each person on a tram trip waits at, by the trip's start.
+    waits: HashMap<u32, (u32, Option<u32>)>,
     /// People at each place, from the last whole scan.
     counts: Vec<u32>,
     /// The people who may be drawn round the camera, from the last whole scan.
@@ -514,6 +518,17 @@ impl Crowd {
                 DVec2::new(f64::from(mid.x) + half, f64::from(mid.z) + half),
                 k as u32,
             );
+        }
+        let mut line_stops: Vec<Vec<DVec2>> = vec![Vec::new(); timetables.len()];
+        for p in &platforms {
+            let (corner, along) = (p.at.w_axis.truncate(), p.at.x_axis.truncate());
+            let mid = corner + along * 18.0;
+            let half = plan.size * 0.5;
+            let stops = &mut line_stops[p.line];
+            if stops.len() <= p.stop {
+                stops.resize(p.stop + 1, DVec2::ZERO);
+            }
+            stops[p.stop] = DVec2::new(f64::from(mid.x) + half, f64::from(mid.z) + half);
         }
         // The parks people go out to and stand about in: inside the streets round each, spread
         // over its extent from its middle.
@@ -629,6 +644,8 @@ impl Crowd {
             stop_grid,
             timetables,
             boarded: HashSet::new(),
+            line_stops,
+            waits: HashMap::new(),
             platforms,
             counts: Vec::new(),
             near: Vec::new(),
@@ -818,6 +835,50 @@ impl Crowd {
         level
     }
 
+    /// The platform a person waits at for a tram trip from `a` to `b` (the plan's frame), found
+    /// once per trip: among the platforms within 500 m of `a`, one of a line with a stop within
+    /// 600 m of `b` on its way (outbound if that stop's index is the higher), nearest by the
+    /// walks at both ends; else the nearest. They waited at the nearest whatever its line and
+    /// its way (the owner: a crowd on a platform no tram came to).
+    fn wait_platform(&mut self, p: u32, since: u32, a: DVec2, b: DVec2) -> Option<u32> {
+        if let Some(&(at, k)) = self.waits.get(&p)
+            && at == since
+        {
+            return k;
+        }
+        let (platforms, line_stops) = (&self.platforms, &self.line_stops);
+        let mut best: Option<(f64, u32)> = None;
+        let mut nearest: Option<(f64, u32)> = None;
+        self.stop_grid.for_each_within(a, 500.0, |mid, k| {
+            let walk = mid.distance(a);
+            if nearest.is_none_or(|(d, _)| walk < d) {
+                nearest = Some((walk, k));
+            }
+            let pf = &platforms[k as usize];
+            let Some(stops) = line_stops.get(pf.line) else {
+                return;
+            };
+            let Some((j, far)) = stops
+                .iter()
+                .enumerate()
+                .map(|(j, q)| (j, q.distance(b)))
+                .min_by(|x, y| x.1.total_cmp(&y.1))
+            else {
+                return;
+            };
+            if j == pf.stop || far > 600.0 || (j > pf.stop) != pf.outbound {
+                return;
+            }
+            let score = walk + far;
+            if best.is_none_or(|(d, _)| score < d) {
+                best = Some((score, k));
+            }
+        });
+        let k = best.or(nearest).map(|(_, k)| k);
+        self.waits.insert(p, (since, k));
+        k
+    }
+
     /// Advances the people's day by `real` seconds.
     pub fn advance(&mut self, real: f64) {
         self.clock += real * TIME_SCALE;
@@ -933,7 +994,7 @@ impl Crowd {
             if trip.mode == Mode::Tram {
                 if now - f64::from(trip.since) < f64::from(TRAM_WAIT)
                     && !self.boarded.contains(&(p as u32))
-                    && let Some((_, k)) = self.stop_grid.nearest(a, 500.0)
+                    && let Some(k) = self.wait_platform(p as u32, trip.since, a, b)
                 {
                     let platform = self.platforms[k as usize];
                     if standing.contains(&(platform.line, platform.stop, platform.outbound)) {
