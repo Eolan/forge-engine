@@ -1554,11 +1554,13 @@ Neither covers the geometry.
 **What Forge took** (2026-10-15, `demos/city-plan`):
 - A crossover of 30 m before each end's platform: a tram coming in crosses to the track it
   leaves by and turns where it stands, the two platforms facing each other.
+- A crossover pair about every 3 km, on straight track on land, clear of the junctions and the
+  stops.
 - *Next:*
   - depots of about 1 ha for 10 trams on industrial land near line ends, 2–4 for a network,
     joined by double track;
-  - a crossover pair every 3 km;
-  - tail tracks past busy termini.
+  - tail tracks past busy termini;
+  - trams taking the crossover pairs round a broken-down tram.
 
 ## What professional engines do
 

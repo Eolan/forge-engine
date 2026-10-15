@@ -497,8 +497,13 @@ the line's colour, articulated round the curve, on the right-hand track.*
   - Test `trams_turn_where_they_stand_having_crossed_over_on_the_way_in`: over whole cycles, no
     section moves more than a quarter second at the cruise allows (3.8 m on the outer track of
     an 18 m curve).
-  - Depots, mid-line crossovers and tail tracks are next (`research/transit-and-vehicles.md`
-    §10).
+- **Crossover pairs along the lines:** about every 3 km, two crossovers one each way, 10 m
+  apart. A tram can pass a broken-down one on the other track and come back. They stand on
+  straight track on land, clear of the junctions and of the stops' platforms and ramps.
+  - The example has 6 on 26 km of line over three seeds; the sandbox 18.
+  - The trams don't take them yet.
+  - Test `crossover_pairs_stand_every_few_kilometres_clear_of_stops_and_junctions`.
+  - Depots and tail tracks are next (`research/transit-and-vehicles.md` §10).
 
 The example's two lines run 10 trams.
 

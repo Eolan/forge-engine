@@ -467,6 +467,22 @@ impl PlanScenario {
                     ribbon(&mut tiles, &points, 0.25, 0.223, TRACK);
                 }
             }
+            // And its crossover pairs along the line.
+            for start in run.crossover_pairs() {
+                for from in [start, start + CROSSOVER + 10.0] {
+                    let steps = CROSSOVER.ceil() as usize;
+                    for rail in [-0.72, 0.72] {
+                        let points: Vec<DVec2> = (0..=steps)
+                            .map(|k| {
+                                let s = from + CROSSOVER * k as f64 / steps as f64;
+                                let (p, t) = run.track(s);
+                                p + DVec2::new(-t.y, t.x) * (TramRun::pair_side(start, s) + rail)
+                            })
+                            .collect();
+                        ribbon(&mut tiles, &points, 0.25, 0.223, TRACK);
+                    }
+                }
+            }
         }
         // What each wall looks onto: the kit's faces and where the roofs end in gables.
         let edges = facades::edge_kinds(plan, masses);
@@ -609,6 +625,28 @@ impl PlanScenario {
             let pitch = to.y.asin().to_degrees();
             passage_note += &format!(
                 "; a tram terminus at --view={:.1},12,{:.1},{yaw:.1},{pitch:.1}",
+                eye.x, eye.z
+            );
+        }
+        // And the crossover pairs, the nearest the kit's centre from 12 m up over the line 25 m
+        // before it, looking along it.
+        let pairs: Vec<(&TramRun, f64)> = trams
+            .iter()
+            .flat_map(|r| r.crossover_pairs().into_iter().map(move |s| (r, s)))
+            .collect();
+        passage_note += &format!("; {} tram crossover pairs", pairs.len());
+        if let Some(d) = detail
+            && let Some(&(run, s)) = pairs.iter().min_by(|a, b| {
+                let far = |(r, s): &(&TramRun, f64)| r.track(*s).0.distance(d.centre);
+                far(a).total_cmp(&far(b))
+            })
+        {
+            let eye = world(size, run.track(s - 25.0).0, 12.0);
+            let to = (world(size, run.track(s + CROSSOVER + 5.0).0, 0.0) - eye).normalize_or_zero();
+            let yaw = (-to.x).atan2(-to.z).to_degrees();
+            let pitch = to.y.asin().to_degrees();
+            passage_note += &format!(
+                ", one at --view={:.1},12,{:.1},{yaw:.1},{pitch:.1}",
                 eye.x, eye.z
             );
         }
@@ -1319,6 +1357,8 @@ const TRAM_SECTIONS: usize = 5;
 const CROSSOVER: f64 = 30.0;
 /// The room between a terminus crossover and the tram standing at its stop, metres.
 const CROSSOVER_CLEAR: f64 = 4.0;
+/// A line's crossover pairs' spacing, metres (`research/transit-and-vehicles.md` §10).
+const CROSSOVER_EVERY: f64 = 3000.0;
 
 /// A tram's length, metres: its sections and the gaps between them.
 fn tram_length() -> f64 {
@@ -1393,6 +1433,11 @@ struct TramRun {
     along: Vec<f64>,
     timetable: Timetable,
     colour: [u8; 3],
+    /// The junctions it runs through: each one's distance along the route and how far it
+    /// reaches either way, metres.
+    junctions: Vec<(f64, f64)>,
+    /// The stretches of the route over water (its bridges), from and to, metres along it.
+    wet: Vec<(f64, f64)>,
 }
 
 impl TramRun {
@@ -1512,12 +1557,95 @@ impl TramRun {
         }
         stops.sort_by(f64::total_cmp);
         stops.dedup_by(|a, b| (*a - *b).abs() < 60.0);
+        // Its bridges, every 2 m along it.
+        let mut wet: Vec<(f64, f64)> = Vec::new();
+        let mut s = 0.0;
+        while s <= total {
+            if site.water_at(geom::point_at(&points, s)) != forge_procgen::city::LAND {
+                match wet.last_mut() {
+                    Some(w) if w.1 >= s - 2.5 => w.1 = s,
+                    _ => wet.push((s, s)),
+                }
+            }
+            s += 2.0;
+        }
         (stops.len() >= 2).then(|| Self {
             points,
             along,
             timetable: Timetable::new(&stops, Service::default()),
             colour: line.colour,
+            junctions,
+            wet,
         })
+    }
+
+    /// Where its crossover pairs begin along the route, one about every [`CROSSOVER_EVERY`]
+    /// metres between its ends' crossovers (a pair or a scissors every 2.5–4 km on French
+    /// networks): two crossovers one each way, [`CROSSOVER`] long and 10 m apart, so a tram can
+    /// pass a broken-down one on the other track and come back. Each on straight track on land,
+    /// clear of the junctions and of the stops' platforms and ramps.
+    fn crossover_pairs(&self) -> Vec<f64> {
+        let pair = 2.0 * CROSSOVER + 10.0;
+        let [(_, first), (last, _)] = self.crossovers();
+        let total = self.along[self.along.len() - 1];
+        let reach = f64::from(PLATFORM) * 0.5 + PLATFORM_HIGH * 12.0 + 5.0;
+        let fits = |s: f64| {
+            let (t0, t1) = (
+                geom::tangent_at(&self.points, s),
+                geom::tangent_at(&self.points, s + pair),
+            );
+            let tm = geom::tangent_at(&self.points, s + pair * 0.5);
+            s > first + 20.0
+                && s + pair < last.min(total) - 20.0
+                && t0.dot(t1) > 1f64.to_radians().cos()
+                && t0.dot(tm) > 1f64.to_radians().cos()
+                && self
+                    .junctions
+                    .iter()
+                    .all(|&(j, r)| j + r < s || j - r > s + pair)
+                && self
+                    .timetable
+                    .stops()
+                    .iter()
+                    .all(|&p| p + reach < s || p - reach > s + pair)
+                && self
+                    .wet
+                    .iter()
+                    .all(|&(a, b)| b + 10.0 < s || a - 10.0 > s + pair)
+        };
+        let mut out: Vec<f64> = Vec::new();
+        let mut aim = first + CROSSOVER_EVERY;
+        while aim + pair < last {
+            // The nearest place that fits within a kilometre either way, past the last pair.
+            let found = (0..=400)
+                .flat_map(|k| {
+                    let d = f64::from(k) * 2.5;
+                    [aim - d, aim + d]
+                })
+                .find(|&s| fits(s) && out.last().is_none_or(|&o| s > o + pair + 500.0));
+            if let Some(s) = found {
+                out.push(s);
+                aim = s + CROSSOVER_EVERY;
+            } else {
+                aim += CROSSOVER_EVERY;
+            }
+        }
+        out
+    }
+
+    /// How far left of the route a crossover pair beginning at `start` runs at `s`, its first
+    /// crossover from the left track to the right, its second back.
+    fn pair_side(start: f64, s: f64) -> f64 {
+        let smooth = |u: f64| {
+            let u = u.clamp(0.0, 1.0);
+            u * u * (3.0 - 2.0 * u)
+        };
+        let second = start + CROSSOVER + 10.0;
+        if s < second {
+            TRACK_OFFSET - 2.0 * TRACK_OFFSET * smooth((s - start) / CROSSOVER)
+        } else {
+            -TRACK_OFFSET + 2.0 * TRACK_OFFSET * smooth((s - second) / CROSSOVER)
+        }
     }
 
     /// The point `s` metres along the route and its unit direction, carried straight on past
@@ -4307,6 +4435,69 @@ mod tests {
                 "line {i}: a section moved {worst:.2} m in {dt} s"
             );
         }
+    }
+
+    #[test]
+    fn crossover_pairs_stand_every_few_kilometres_clear_of_stops_and_junctions() {
+        let size = 4000.0;
+        let site = example::site(size, 10.0);
+        let (mut pairs, mut km) = (0, 0.0);
+        for seed in [None, Some(0x5EED_0001_u64), Some(0xC17E_0003)] {
+            let mut params = example::params(size);
+            if let Some(seed) = seed {
+                params.seed = forge_core::Seed::new(seed);
+            }
+            let city = plan(&site, &params);
+            let mut taken: Vec<DVec2> = Vec::new();
+            for l in &city.tram_lines {
+                let Some(run) = TramRun::new(l, &city, &site, &taken) else {
+                    continue;
+                };
+                taken.extend(run.timetable.stops().iter().map(|&s| run.track(s).0));
+                let stops = run.timetable.stops();
+                km += (stops[stops.len() - 1] - stops[0]) / 1000.0;
+                let starts = run.crossover_pairs();
+                pairs += starts.len();
+                let span = 2.0 * CROSSOVER + 10.0;
+                for &s in &starts {
+                    for &p in stops {
+                        let reach = f64::from(PLATFORM) * 0.5;
+                        assert!(
+                            p + reach < s || p - reach > s + span,
+                            "a crossover pair on a stop's platform"
+                        );
+                    }
+                    for &(j, r) in &run.junctions {
+                        assert!(
+                            j + r < s || j - r > s + span,
+                            "a crossover pair in a junction"
+                        );
+                    }
+                    // On land, off the bridges.
+                    for k in 0..=(span / 2.0) as usize {
+                        let p = run.track(s + 2.0 * k as f64).0;
+                        assert_eq!(
+                            site.water_at(p),
+                            forge_procgen::city::LAND,
+                            "a crossover pair on a bridge"
+                        );
+                    }
+                    // Both tracks join again past it.
+                    assert!((TramRun::pair_side(s, s + span) - TRACK_OFFSET).abs() < 1e-9);
+                    assert!((TramRun::pair_side(s, s) - TRACK_OFFSET).abs() < 1e-9);
+                }
+                for w in starts.windows(2) {
+                    assert!(w[1] - w[0] > 500.0, "two pairs {:.0} m apart", w[1] - w[0]);
+                }
+            }
+        }
+        println!("{pairs} crossover pairs on {km:.1} km of line");
+        assert!(km > 0.0);
+        // About one every 3 km where the streets leave room.
+        assert!(
+            pairs as f64 >= km / 3.0 * 0.5,
+            "{pairs} pairs on {km:.1} km"
+        );
     }
 
     #[test]
