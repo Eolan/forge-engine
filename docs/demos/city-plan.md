@@ -1159,6 +1159,11 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
   The far walls (`tile.masses`) also weigh their texture coordinates (`CookOptions::uv_weight`,
   a unit the facade texture's four bays, 12 m): the permissive simplifier collapsed across the
   facade's texture seams (plain band to window bays, ground floor to the storeys), and from afar
+    A line left with fewer than two stops searched 800 m for a place clear of the junctions on
+    a curve before falling back on the stop's own place, which is a junction as often as not
+    (the owner, 2026-10-15: a stop over the intersection, the cross street's taxis driving
+    through its platforms). A new stop never stands within 120 m of another line's stop on the
+    same track: it shares that one or moves on (two stops stood one after the other).
   the lower storeys' windows smeared into diagonal streaks, with a triangle on a facade that went
   away closer (the owner, 2026-10-15). Only the city's walls set it, so no other demo's cooking
   changes. View: `reports/2026-10-15/facade-seams-before-after.png`.

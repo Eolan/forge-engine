@@ -2030,13 +2030,19 @@ impl TramRun {
                     == forge_procgen::city::LAND
             })
         };
-        let fits = |s: f64| {
+        // Clear of the junctions, on land, and not within 120 m of another line's stop on this
+        // track, which it shares instead (two stops stood one after the other, the owner).
+        let clear = |s: f64| {
             s - span >= 0.0
                 && s + span <= total
                 && junctions.iter().all(|&(j, r)| (s - j).abs() >= r + span)
-                && straight(s)
                 && on_land(s)
+                && taken.iter().all(|&q| {
+                    let (off, at) = project(q);
+                    off >= 2.5 || (at - s).abs() >= 120.0
+                })
         };
+        let fits = |s: f64| clear(s) && straight(s);
         let placed = |fallback: bool| -> Vec<f64> {
             line.stops
                 .iter()
@@ -2052,12 +2058,19 @@ impl TramRun {
                     if let Some((_, at)) = shared {
                         return Some(at);
                     }
-                    (0..=160)
-                        .flat_map(|k| {
+                    // A clean place within 400 m; else one clear of the junctions on a curve
+                    // within 800 m; the stop's own place, a junction as often as not, only as
+                    // a last resort (the owner: a stop over the intersection, the cross street's
+                    // taxis driving over its platforms).
+                    let around = |steps: u32| {
+                        (0..=steps).flat_map(move |k| {
                             let d = f64::from(k) * 2.5;
                             [s - d, s + d]
                         })
+                    };
+                    around(160)
                         .find(|&c| fits(c))
+                        .or_else(|| around(320).find(|&c| clear(c)))
                         .or(fallback.then_some(s))
                 })
                 .collect()
