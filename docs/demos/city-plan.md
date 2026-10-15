@@ -652,6 +652,12 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
     court's middle, where its paths meet, else as near it as fits on its sunniest (north)
     side, clear of the private gardens. It has eight beds (four where only those fit),
     1.2 × 4 m and 0.7 m tall for a seated gardener, on paths of 1.4 m.
+  - **Benches round each court's middle,** on the green 10 cm off its paving and facing it:
+    - by a kitchen garden, on its long sides' middles first, then its ends and quarters;
+    - by a round place, a quarter turn apart first;
+    - up to four a court, 3 m apart at least, none where a path arrives or a wing reaches in.
+    - The example has 2 001 in 535 courts. A court's benches are logged as a view.
+    - Test `court_benches_face_their_middles_paving_from_the_green`.
   - **The gaps between the buildings** (open blocks) get a low hedge (0.8 m) along their street
     side, just behind the 2 m paved forecourt, broken a metre either side of the court's
     paths. They showed a plain lawn; the owner said a gap would "match the sidewalk or have a
@@ -659,8 +665,8 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
     - With open blocks on, the example has 3 091 such hedges in 1 770 gaps, none in a building
       or on a path; the sandbox has 16 476.
     - Test `open_blocks_gaps_are_hedged_behind_their_forecourts_but_where_their_paths_go_in`.
-  - **The walker** walks round the planters, hedges and beds. No tree stands on a path, a
-    terrace, a hedge or a bed.
+  - **The walker** walks round the planters, hedges, beds and benches. No tree stands on a
+    path, a terrace, a hedge, a bed or a bench.
   - **Plants:** within 400 m of the kit's centre, shrubs every metre in the planters and two
     rows of vegetables every 0.8 m in the beds. They are small trees sunk in their boxes to their
     crowns' middles.

@@ -270,7 +270,13 @@ sharpening, or relaxed clamping on a thin-feature mask like Unreal's [23].
   instances are flagged in the TLAS (#265).
 - **The other demos** are unchanged with the new shader: the sentinels, the island and the lab,
   200 captures on both paths, 0 pixels against the previous shader.
-- **Next:** the walls' and frames' edges at their silhouettes, the shutters' far form (§2.8).
+- **The shutters' slats, flattened** (an experiment, not kept: each leaf's louvres one flat
+  quad): the far facades 13 950 → 13 905 pixels a frame pair, the middle 2 331 → 2 328. The
+  slats do not flicker at this view either. What the turn still flags is every edge alike, so
+  the metric has reached its floor here. A far form for the shutters would save triangles, not
+  flicker.
+- **Next:** a measure of flicker that does not flag every edge (a reference drawn with SSAA
+  along the same turn, `imgdiff --then`), before more far forms.
 
 ## 3. Paving and ground patterns
 

@@ -728,6 +728,44 @@ fn court_paths_join_round_the_middle_instead_of_running_side_by_side() {
 }
 
 #[test]
+fn court_benches_face_their_middles_paving_from_the_green() {
+    // Benches round the green courts' middles: each on the green (no path under it, the
+    // gardens test checks), its front a little off the middle's paving, facing it.
+    use super::gardens::{self, Kind};
+    let (_, city) = example_plan();
+    let masses = super::mass::masses(&city, &super::bible::StyleBible::default(), 7);
+    let structures = super::structure::structures(&city, &masses);
+    let pieces = gardens::gardens(&city, &masses, &structures);
+    let benches: Vec<&gardens::Piece> = pieces.iter().filter(|p| p.kind == Kind::Bench).collect();
+    let courts: std::collections::BTreeSet<u32> = benches.iter().map(|p| p.block).collect();
+    let mut astray = 0;
+    for b in &benches {
+        let o = &b.outline;
+        let front = o[1] - o[0];
+        assert!((front.length() - gardens::BENCH.0).abs() < 1e-9);
+        // Half a metre before its front's middle: the paving it faces.
+        let face = DVec2::new(front.y, -front.x).normalize();
+        let ahead = (o[0] + o[1]) * 0.5 + face * 0.5;
+        let paved = pieces
+            .iter()
+            .filter(|p| p.block == b.block && p.kind.paved())
+            .any(|p| geom::contains(&p.outline, ahead));
+        if !paved {
+            println!("a bench of block {} faces no paving at {ahead:.1}", b.block);
+            astray += 1;
+        }
+    }
+    println!("{} benches in {} courts", benches.len(), courts.len());
+    assert!(courts.len() >= 20, "{} courts with benches", courts.len());
+    assert!(
+        benches.len() >= 3 * courts.len(),
+        "{} benches",
+        benches.len()
+    );
+    assert_eq!(astray, 0, "{astray} benches facing no paving");
+}
+
+#[test]
 fn open_blocks_gaps_are_hedged_behind_their_forecourts_but_where_their_paths_go_in() {
     // The example with open blocks (`DistrictSpec::gaps`, the sandbox's): each gap's street
     // side gets a low hedge 2 m in from the building line, none across a court path.

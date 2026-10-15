@@ -535,7 +535,10 @@ impl PlanScenario {
         }
         head_houses(&mut tiles, masses, &structures);
         // The planters, the hedges and the kitchen gardens' beds (the owner's note, 2026-10-15).
-        for g in gardens.iter().filter(|g| g.kind.standing()) {
+        for g in gardens
+            .iter()
+            .filter(|g| g.kind.standing() && g.kind != gardens::Kind::Bench)
+        {
             let side = match g.kind {
                 gardens::Kind::Hedge => ROOF_GREEN,
                 _ => KIT_STONE,
@@ -791,6 +794,27 @@ impl PlanScenario {
                 eye.x, eye.z
             );
         }
+        // And the court benches nearest the kit's centre, from the middle's far side.
+        if let Some(d) = detail
+            && let Some(g) = gardens
+                .iter()
+                .filter(|g| g.kind == gardens::Kind::Bench)
+                .min_by(|a, b| {
+                    let far = |g: &gardens::Piece| geom::centroid(&g.outline).distance(d.centre);
+                    far(a).total_cmp(&far(b))
+                })
+        {
+            let front = g.outline[1] - g.outline[0];
+            let face = DVec2::new(front.y, -front.x).normalize_or_zero();
+            let eye = world(size, geom::centroid(&g.outline) + face * 7.0, 1.7);
+            let to = (world(size, geom::centroid(&g.outline), 0.5) - eye).normalize_or_zero();
+            let yaw = (-to.x).atan2(-to.z).to_degrees();
+            let pitch = to.y.asin().to_degrees();
+            passage_note += &format!(
+                "; a court's benches at --view={:.1},1.7,{:.1},{yaw:.1},{pitch:.1}",
+                eye.x, eye.z
+            );
+        }
         // And the planters 6 m long or more nearest the kit's centre, from 4 m out on the street
         // and 6 m before them, looking along them.
         if let Some(d) = detail
@@ -867,10 +891,15 @@ impl PlanScenario {
                 }
             }
         }
+        // A bench keeps a trunk 1.6 m from its middle, clear of its ends and back.
         let on_garden = |p: DVec2| {
             let mut on = false;
             kept.for_each_within(p, 10.0, |_, k| {
-                on = on || geom::contains(&gardens[k as usize].outline, p);
+                let g = &gardens[k as usize];
+                on = on
+                    || geom::contains(&g.outline, p)
+                    || (g.kind == gardens::Kind::Bench
+                        && geom::centroid(&g.outline).distance(p) < 1.6);
             });
             on
         };
@@ -1111,6 +1140,22 @@ impl PlanScenario {
                         )
                     })
             })
+            // And round the green courts' middles (`gardens::Kind::Bench`), each facing the
+            // paving its front edge looks onto.
+            .chain(
+                gardens
+                    .iter()
+                    .filter(|g| g.kind == gardens::Kind::Bench)
+                    .map(|g| {
+                        let front = g.outline[1] - g.outline[0];
+                        let face = DVec2::new(front.y, -front.x).normalize_or_zero();
+                        let turn = (face.x as f32).atan2(face.y as f32);
+                        Mat4::from_rotation_translation(
+                            glam::Quat::from_rotation_y(turn),
+                            world(size, geom::centroid(&g.outline), WALK_LEVEL),
+                        )
+                    }),
+            )
             .collect();
         let bench_spots: Vec<Vec3> = benches.iter().map(|m| m.w_axis.truncate()).collect();
         if !benches.is_empty() {

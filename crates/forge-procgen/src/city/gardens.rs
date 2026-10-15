@@ -39,6 +39,9 @@ pub enum Kind {
     Hedge,
     /// A kitchen garden's raised bed.
     Bed,
+    /// A bench on the green beside a court's middle, facing it: its outline's first edge is its
+    /// front, [`BENCH`] long.
+    Bench,
 }
 
 impl Kind {
@@ -49,7 +52,7 @@ impl Kind {
 
     /// Whether it stands over the ground, something people walk round.
     pub fn standing(self) -> bool {
-        matches!(self, Kind::Planter | Kind::Hedge | Kind::Bed)
+        matches!(self, Kind::Planter | Kind::Hedge | Kind::Bed | Kind::Bench)
     }
 }
 
@@ -126,6 +129,15 @@ const PLAZA: f64 = 7.0;
 /// Past this angle between the way to the nearest path and the way to the hub, a path goes to
 /// the hub instead of joining, degrees.
 const JOIN_ANGLE: f64 = 75.0;
+/// A bench: its length and depth (`forge_geom::furniture::bench`), and how far its front stands
+/// off the paving it faces, metres.
+pub const BENCH: (f64, f64, f64) = (1.8, 0.5, 0.1);
+/// The most benches round a court's middle, and the least room between two of them, metres.
+const BENCHES: (usize, f64) = (4, 3.0);
+
+/// A court's middle ([`court_middle`]): its pieces, its rim's segments, and its benches' places
+/// with the way each would face.
+type Middle = (Vec<Piece>, Vec<(DVec2, DVec2)>, Vec<(DVec2, DVec2)>);
 
 /// The court of block `b` when it is a green one: a built block's, outside a taxi or a tram
 /// depot.
@@ -285,11 +297,19 @@ pub fn court_paths(plan: &CityPlan, masses: &[Mass], structures: &[Structure]) -
         }
     }
     let mut out = Vec::new();
+    // Each block's buildings, which its benches keep out of (a wing can reach into the court).
+    let mut buildings: HashMap<u32, Vec<&[DVec2]>> = HashMap::new();
+    for m in masses {
+        let block = plan.lots[m.lot as usize].block;
+        buildings.entry(block).or_default().push(&m.footprint);
+    }
     for (b, mut list) in entrances {
         let Some(court) = green_court(plan, b) else {
             continue;
         };
-        let (pieces, rim) = court_middle(court, b);
+        let built_here = buildings.get(&b).map_or(&[][..], Vec::as_slice);
+        let (pieces, rim, seats) = court_middle(court, b);
+        let first = out.len();
         out.extend(pieces);
         let hub = geom::centroid(court);
         let rim = if rim.is_empty() {
@@ -333,16 +353,55 @@ pub fn court_paths(plan: &CityPlan, masses: &[Mass], structures: &[Structure]) -
             // The rest join this path where it has left the gardens.
             network.push((e.knee, to));
         }
+        // Benches on the green beside the middle, facing it, where no path arrives; spread
+        // round it, the first candidates first.
+        let mut placed: Vec<DVec2> = Vec::new();
+        for (at, facing) in seats {
+            let outline = bench(at, facing);
+            let clear = outline.iter().all(|&p| geom::contains(court, p))
+                && out[first..]
+                    .iter()
+                    .all(|p| !geom::overlaps(&p.outline, &outline))
+                && built_here.iter().all(|f| !geom::overlaps(f, &outline));
+            if clear
+                && placed.len() < BENCHES.0
+                && placed.iter().all(|q| q.distance(at) >= BENCHES.1)
+            {
+                placed.push(at);
+                out.push(Piece {
+                    kind: Kind::Bench,
+                    block: b,
+                    outline,
+                    height: 0.85,
+                });
+            }
+        }
     }
     out
+}
+
+/// A bench's footprint standing at `at`, facing `facing` (a unit vector): counter-clockwise,
+/// its front edge first.
+fn bench(at: DVec2, facing: DVec2) -> Vec<DVec2> {
+    let (long, deep, _) = BENCH;
+    let along = DVec2::new(-facing.y, facing.x) * (long * 0.5);
+    let front = facing * (deep * 0.5);
+    vec![
+        at + front - along,
+        at + front + along,
+        at - front + along,
+        at - front - along,
+    ]
 }
 
 /// A green court's middle and the rim its paths join: in a court of [`KITCHEN_COURT`] or more,
 /// a shared kitchen garden (raised beds in rows on paved ground with paths between them, at
 /// seated height for a wheelchair) in a paved ring [`RING`] wide, as near the court's middle
 /// as fits, else on its sunniest side (north, −y on the plan, catches the most sun), clear of
-/// the private gardens; else a round paved place [`PLAZA`] across at the middle.
-fn court_middle(court: &[DVec2], b: u32) -> (Vec<Piece>, Vec<(DVec2, DVec2)>) {
+/// the private gardens; else a round paved place [`PLAZA`] across at the middle. Its pieces,
+/// the rim's segments, and the places a bench could stand with the way it would face, the
+/// likeliest first.
+fn court_middle(court: &[DVec2], b: u32) -> Middle {
     let (bw, bl, bh) = BED;
     let hub = geom::centroid(court);
     let mut pieces = Vec::new();
@@ -438,11 +497,25 @@ fn court_middle(court: &[DVec2], b: u32) -> (Vec<Piece>, Vec<(DVec2, DVec2)>) {
                 corner(-h, deep + h),
             ];
             let rim = (0..4).map(|k| (rim[k], rim[(k + 1) % 4])).collect();
-            return (pieces, rim);
+            // Seats on the green past the ring, facing the beds: the long sides' middles, then
+            // the ends, then the long sides' quarters.
+            let (_, deep_bench, off) = BENCH;
+            let out_of = RING + off + deep_bench * 0.5;
+            let seats = [
+                (corner(wide * 0.5, -out_of), v),
+                (corner(wide * 0.5, deep + out_of), -v),
+                (corner(-out_of, deep * 0.5), u),
+                (corner(wide + out_of, deep * 0.5), -u),
+                (corner(wide * 0.2, -out_of), v),
+                (corner(wide * 0.8, deep + out_of), -v),
+                (corner(wide * 0.8, -out_of), v),
+                (corner(wide * 0.2, deep + out_of), -v),
+            ];
+            return (pieces, rim, seats.to_vec());
         }
     }
     if !geom::contains(court, hub) {
-        return (pieces, Vec::new());
+        return (pieces, Vec::new(), Vec::new());
     }
     // A round paved place, a twelve-sided one (its corners from √3, exact on every machine,
     // D-016); the paths end a metre into it.
@@ -475,7 +548,18 @@ fn court_middle(court: &[DVec2], b: u32) -> (Vec<Piece>, Vec<(DVec2, DVec2)>) {
     });
     let rim = ring(PLAZA * 0.5 - 1.0);
     let rim = (0..12).map(|k| (rim[k], rim[(k + 1) % 12])).collect();
-    (pieces, rim)
+    // Seats on the green past the place's sides, facing its middle, a quarter turn apart first.
+    let (_, deep_bench, off) = BENCH;
+    let seats = [0, 6, 3, 9, 1, 7, 4, 10, 2, 8, 5, 11]
+        .into_iter()
+        .map(|k| {
+            let (a, b) = (corners[k], corners[(k + 1) % 12]);
+            let out = DVec2::new(a.0 + b.0, a.1 + b.1).normalize();
+            let side = PLAZA * 0.5 * DVec2::new(a.0 + b.0, a.1 + b.1).length() * 0.5;
+            (hub + out * (side + off + deep_bench * 0.5), -out)
+        })
+        .collect();
+    (pieces, rim, seats)
 }
 
 /// The court-side ground-floor flats with a garden or a terrace before them.
