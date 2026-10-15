@@ -2306,6 +2306,12 @@ display pass; `docs/demos/island.md`, "The night".
   downloaded with the owner's go and kept as small derived files in `assets/sky`. A telephoto
   (`--fov`) shows the maria: past 8 pixels across, the disc is scaled towards the scene's
   adaptation (the eye's local adaptation), since the night's exposure burns it white.
+- **Emissive light (2026-10-15, #254):** the shading stays per unit of the frame's reference
+  illuminance. A row may now give its emission in cd/m² (`RenderLayer::emissive_absolute`), and
+  the shader converts it each frame by that reference (L·π / E). Lamps and lit windows then hold
+  through a running day, where a value in the shading's units is worth 160 cd/m² by day and
+  almost nothing at night. The rays' hits emit as the frame shows them (an emissive map's
+  average, a window's room at its lamp's share), so the probes no longer flood the night.
 
 ## D-047 — Texture coordinates in the cluster pages, and textures from glTF ✅ (proposed and accepted 2026-10-04)
 
