@@ -484,6 +484,13 @@ by 25 cm. A turn of 2.5 pixels a frame shows the same shimmer as without the fad
 138 629 pixels over ten frames): a turn does not move the room behind the glass, so this
 measures the facades, not the rooms.
 
+**Shops behind the shopfronts.** The shopfronts' glass has its own section
+(`modules::SHOP_GLASS`) and row (`RenderLayer::shop`): no curtains, which 45 % of the shops had,
+and no sofa. A shop's floor is level with the glass's foot and it runs 6 m deep. Its pale walls
+are lined with shelves of goods, boards every 0.45 m from 0.3 to 2.1 m with boxes 0.3 m wide
+between them. It has a tiled floor and a counter at the back. A lit shop takes 8 % of its row's
+luminance, twice a home's.
+
 The rooms stay outside views: the doors are never see-through (Celsys's claims, D-060), and
 going inside builds the real rooms.
 

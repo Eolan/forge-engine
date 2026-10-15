@@ -144,6 +144,7 @@ static const uint MATERIAL_FLAG_PLANET = 16;       // layered: the layers by hei
 static const uint MATERIAL_FLAG_WORLD_PROJECTED = 32; // the textures and their noise from the scene frame, not the object's
 static const uint MATERIAL_FLAG_INTERIOR = 64;   // a window's glass with a room behind it (D-060's step 3)
 static const uint MATERIAL_FLAG_GRATING = 128;   // with MASKED: upright bars on one card, `alpha` their share of the mesh's u (`grating_coverage`)
+static const uint MATERIAL_FLAG_SHOP = 256;      // with INTERIOR: a shop behind the glass (`interior_room`)
 static const uint CUTOUT_GROUND_WINDOW = 1u << 31; // `cluster_cutouts`: windowed ground reaching into the ground window (#197)
 static const uint MESH_WINDOWED_GROUND = 1;     // Mesh::flags: its fragments in the frame's ground window go (#197)
 static const uint MESH_SCENE_SHADED = 2;        // Mesh::flags: a ground window's mesh, shaded where it stands in the scene (#197)
@@ -3054,14 +3055,37 @@ static const float ROOM_CURTAINS = 0.45;
 // 0.13 cd/m²: a lit room's walls sit a stop or two over it and show the room, not a white pane.
 // city-plan's far facades light their windows to match.
 static const float ROOM_LAMP = 0.04;
+// A lit shop's share: its ceiling lights and displays twice a home's lamps.
+static const float ROOM_SHOP_LAMP = 0.08;
 
-float3 interior_room(float3 o, float3 d, uint id, float footprint)
+// Shelves of goods on a shop's wall at `along` metres along it and `up` over its floor: boards
+// every 0.45 m from 0.3 to 2.1 m, the goods between them in rows of boxes 0.3 m wide, short of
+// the board above, a shadow between neighbours.
+float3 shop_shelves(float along, float up, uint id, float3 wall)
 {
+    if (up < 0.3 || up > 2.1)
+        return wall;
+    float row = (up - 0.3) / 0.45;
+    if (frac(row) < 0.08)
+        return float3(0.30, 0.24, 0.18);
+    float x = along / 0.3;
+    uint block = uint(int(floor(x)));
+    float3 goods = hash_color(id ^ block * 0x9E3779B9u ^ uint(row) * 0x85EBCA6Bu) * 0.4 + 0.25;
+    // The gap over the goods and between two boxes, in their shade.
+    return frac(row) > 0.8 || frac(x) < 0.08 ? goods * 0.35 : goods;
+}
+
+// The room behind a window, or with `shop` a shop behind a shopfront: its floor level with the
+// glass's foot, 6 m deep, pale walls lined with shelves, a tiled floor and a counter.
+float3 interior_room(float3 o, float3 d, uint id, float footprint, bool shop)
+{
+    float3 room_low = shop ? float3(-1.4, 0.0, -6.0) : ROOM_LOW;
+    float3 room_high = shop ? float3(2.6, 3.6, 0.0) : ROOM_HIGH;
     // Rooms side by side and storey over storey behind wider and taller glass (a shopfront's).
-    float2 size = ROOM_HIGH.xy - ROOM_LOW.xy;
-    float2 cell = floor((o.xy - ROOM_LOW.xy) / size);
-    float3 lo = float3(ROOM_LOW.xy + cell * size, o.z + ROOM_LOW.z);
-    float3 hi = float3(ROOM_HIGH.xy + cell * size, o.z);
+    float2 size = room_high.xy - room_low.xy;
+    float2 cell = floor((o.xy - room_low.xy) / size);
+    float3 lo = float3(room_low.xy + cell * size, o.z + room_low.z);
+    float3 hi = float3(room_high.xy + cell * size, o.z);
     id ^= uint(int(cell.x) * 7919 + int(cell.y) * 104729);
     // The planes the ray leaves the box by: the nearest of them.
     float3 inv = 1.0 / d;
@@ -3070,20 +3094,28 @@ float3 interior_room(float3 o, float3 d, uint id, float footprint)
     float3 p = o + d * t;
     float3 h = hash_color(id ^ 0x51ED27u);
     float3 g = hash_color(id ^ 0xA5F3C1u);
-    float3 wall = ROOM_WALLS[min(uint(h.x * 4.0), 3u)];
+    float3 wall = shop ? float3(0.90, 0.89, 0.86) : ROOM_WALLS[min(uint(h.x * 4.0), 3u)];
+    float3 floor_colour = ROOM_FLOORS[shop ? 2u : min(uint(h.y * 3.0), 2u)];
     float3 c;
     float3 q = p - lo; // the hit in the room's corner frame
     float width = hi.x - lo.x;
     if (t == far.z)
     {
         c = wall * 0.8;
-        // A picture on the back wall, over the furniture.
-        float2 at = float2(q.x - width * (0.3 + 0.4 * g.x), q.y - 1.75);
-        if (abs(at.x) < 0.45 && abs(at.y) < 0.32)
-            c = abs(at.x) > 0.41 || abs(at.y) > 0.28 ? float3(0.12, 0.10, 0.08) : hash_color(id ^ 0x77u) * 0.6 + 0.15;
+        if (shop)
+            c = shop_shelves(q.x, q.y, id, c);
+        else
+        {
+            // A picture on the back wall, over the furniture.
+            float2 at = float2(q.x - width * (0.3 + 0.4 * g.x), q.y - 1.75);
+            if (abs(at.x) < 0.45 && abs(at.y) < 0.32)
+                c = abs(at.x) > 0.41 || abs(at.y) > 0.28 ? float3(0.12, 0.10, 0.08) : hash_color(id ^ 0x77u) * 0.6 + 0.15;
+        }
     }
     else if (t == far.y)
-        c = d.y < 0.0 ? ROOM_FLOORS[min(uint(h.y * 3.0), 2u)] : ROOM_CEILING;
+        c = d.y < 0.0 ? floor_colour : ROOM_CEILING;
+    else if (shop)
+        c = shop_shelves(q.z, q.y, id ^ 0x5u, wall);
     else
     {
         c = wall;
@@ -3104,14 +3136,15 @@ float3 interior_room(float3 o, float3 d, uint id, float footprint)
     if (t_in <= t_out && t_in > 0.0 && t_in < t)
     {
         float3 fp = o + d * t_in;
-        float3 fabric = hash_color(id ^ 0x3C1u) * 0.35 + 0.1;
+        // A shop's counter in pale wood, a home's sofa or sideboard in its fabric.
+        float3 fabric = shop ? float3(0.62, 0.52, 0.40) : hash_color(id ^ 0x3C1u) * 0.35 + 0.1;
         c = fp.y >= f_hi.y - 1e-3 ? fabric * 1.3 : fabric;
         p = fp;
     }
-    c *= lerp(1.0, 0.45, saturate((o.z - p.z) / -ROOM_LOW.z));
+    c *= lerp(1.0, 0.45, saturate((o.z - p.z) / -room_low.z));
     // Far away, where a pixel covers a hand's width of the room, its edges flicker as the camera
     // moves (the room shifts behind the glass with the view): it fades into its mean colour.
-    float3 mean = (wall * 0.5 + ROOM_FLOORS[min(uint(h.y * 3.0), 2u)] * 0.3 + ROOM_CEILING * 0.2) * 0.65;
+    float3 mean = (wall * 0.5 + floor_colour * 0.3 + ROOM_CEILING * 0.2) * 0.65;
     return lerp(c, mean, smoothstep(0.06, 0.25, footprint));
 }
 
@@ -3134,13 +3167,15 @@ float3 shade_standard(Frame* f, Material mat, Surface s)
                 return pane;
             // Each window's room by where it stands, so a city that gains or loses an instance
             // keeps its rooms (by its index, every window after it changed room).
-            float3 room = interior_room(s.object_position, d, s.instance_place, max(length(s.dpdx), length(s.dpdy)));
+            bool shop = (mat.flags & MATERIAL_FLAG_SHOP) != 0;
+            float3 room = interior_room(s.object_position, d, s.instance_place, max(length(s.dpdx), length(s.dpdy)), shop);
             float3 h = hash_color(s.instance_place);
-            float curtain = h.x < ROOM_CURTAINS ? 0.35 + 0.5 * h.x / ROOM_CURTAINS : 0.0;
+            // A shop keeps its window bare.
+            float curtain = !shop && h.x < ROOM_CURTAINS ? 0.35 + 0.5 * h.x / ROOM_CURTAINS : 0.0;
             // Lit by the daylight the window gets (a white wall's facing out), or the row's lamp.
             float ndl_white;
             float3 daylight = sun_light(f, float3(1.0, 1.0, 1.0), n, 1.0, 0.0, s.shadow, s.sky, s.ao, s.view, 0.0, s.world, s.probes, false, ndl_white);
-            float3 lamp = mat.emissive * ROOM_LAMP;
+            float3 lamp = mat.emissive * (shop ? ROOM_SHOP_LAMP : ROOM_LAMP);
             float3 seen = lerp(room * (daylight * ROOM_DAYLIGHT + lamp), mat.color_b * (daylight + lamp), curtain);
             // Through the glass, less what it reflects (Schlick).
             float fresnel = mat.reflectance + (1.0 - mat.reflectance) * pow(1.0 - saturate(dot(n, s.view)), 5.0);

@@ -3582,6 +3582,21 @@ impl Scenario for PlanScenario {
                         colour([0.28, 0.17, 0.10], 30.0, 0.1),
                     ),
                     (format!("{group} party"), render([0.78, 0.72, 0.64])),
+                    // The railings' cards are drawn by the tiles' own row (`take_cards`).
+                    (
+                        format!("{group} grille"),
+                        colour([0.05, 0.05, 0.05], 30.0, 0.15),
+                    ),
+                    // A shop behind the shopfronts' glass: no curtains, nor a living room
+                    // with a sofa as the homes had.
+                    (
+                        format!("{group} shop glass"),
+                        RenderLayer {
+                            interior: true,
+                            shop: true,
+                            ..glass((k % 2 == 1).then_some(LIT[k / 2]))
+                        },
+                    ),
                 ],
             );
         }

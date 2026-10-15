@@ -36,8 +36,10 @@ pub const PARTY: u8 = 8;
 /// A railing's bars, drawn on one card whose `u` counts them (a grating row,
 /// `forge_core::material::RenderLayer::grating`, of [`BAR_SHARE`]).
 pub const GRILLE: u8 = 9;
+/// A shopfront's glass, a shop behind it.
+pub const SHOP_GLASS: u8 = 10;
 /// The number of sections.
-pub const SECTIONS: u8 = 10;
+pub const SECTIONS: u8 = 11;
 
 /// A railing's square bars: their width, a share of their spacing (3 cm every 12 cm).
 pub const BAR_SHARE: f32 = 0.25;
@@ -769,7 +771,7 @@ fn shop(m: &mut TriMesh, w: f32, h: f32, awning: bool) {
                 Vec3::new(shown, top, glass),
                 Vec3::new(0.0, top, glass),
             ],
-            GLASS,
+            SHOP_GLASS,
         );
     }
     quad(
@@ -780,7 +782,7 @@ fn shop(m: &mut TriMesh, w: f32, h: f32, awning: bool) {
             Vec3::new(w, top, glass),
             Vec3::new(shown, top, glass),
         ],
-        GLASS,
+        SHOP_GLASS,
     );
     let f = 0.05;
     let frame = |m: &mut TriMesh, lo: Vec3, hi: Vec3| cuboid(m, lo, hi, FRAME, NO_BACK);

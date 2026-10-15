@@ -115,6 +115,10 @@ pub const MATERIAL_INTERIOR: u32 = 64;
 /// mesh's `u`.
 pub const MATERIAL_GRATING: u32 = 128;
 
+/// [`GpuMaterial`] flag, with [`MATERIAL_INTERIOR`]: a shop behind the glass
+/// ([`forge_core::material::RenderLayer::shop`]).
+pub const MATERIAL_SHOP: u32 = 256;
+
 /// The textures a world's materials sample, uploaded with their mips and visible to every
 /// shader through the bindless set. Released when dropped.
 pub struct TextureSet {
@@ -457,6 +461,11 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
                         0
                     }
                     | if r.interior { MATERIAL_INTERIOR } else { 0 }
+                    | if r.interior && r.shop {
+                        MATERIAL_SHOP
+                    } else {
+                        0
+                    }
                     | if r.grating.is_some() {
                         MATERIAL_GRATING | MATERIAL_MASKED | MATERIAL_DOUBLE_SIDED
                     } else {

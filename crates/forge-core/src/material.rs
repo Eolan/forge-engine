@@ -197,6 +197,10 @@ pub struct RenderLayer {
     /// part of the windows. For the kits' windows, whose glass lies on the mesh's `z` plane
     /// with the room towards −z.
     pub interior: bool,
+    /// With `interior`: a shop behind the glass rather than a home: its floor level with the
+    /// glass's foot, 6 m deep, shelves of goods on its walls, no curtain, and its lights
+    /// brighter than a home's.
+    pub shop: bool,
     /// Standard: a grating of upright bars drawn on one card, its bars this share of their
     /// spacing wide and as deep (a railing's square bars): the mesh's `u` counts the bars, one a
     /// unit, the first at 1. Drawn double-sided as a cut-out: the share of each pixel the bars
@@ -298,6 +302,7 @@ impl Default for RenderLayer {
             hex_tiling: false,
             world_projected: false,
             interior: false,
+            shop: false,
             grating: None,
             reflectance: 0.04,
             bubbles: 0.0,
