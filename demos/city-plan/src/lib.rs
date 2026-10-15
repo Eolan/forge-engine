@@ -865,11 +865,14 @@ impl PlanScenario {
             });
             on
         };
-        // Each with its index in the plan's list, which turns it and picks its model: dropping
-        // one turned every tree after it.
+        // Each turned and given its model by its place: by its index in a list, dropping one
+        // (here, or in the plan's) turned every tree after it.
         let trees: Vec<(usize, &Tree)> = trees
             .iter()
-            .enumerate()
+            .map(|t| {
+                let key = t.pos.x.to_bits() ^ t.pos.y.to_bits().rotate_left(29);
+                (mix(key) as usize, t)
+            })
             .filter(|(_, t)| {
                 let w = world(size, t.pos, 0.0);
                 !stop_grid.any_within(t.pos, 30.0, |k| {
@@ -887,7 +890,7 @@ impl PlanScenario {
         let mut trees: Vec<(Vec3, Vec3, f32, usize)> = trees
             .iter()
             .map(|&(i, t)| {
-                let turn = (i as f32 * 2.399_963).rem_euclid(std::f32::consts::TAU);
+                let turn = (i >> 8 & 0xFFFF) as f32 / 65535.0 * std::f32::consts::TAU;
                 (
                     world(size, t.pos, 0.0),
                     Vec3::new(
