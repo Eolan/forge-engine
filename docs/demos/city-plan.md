@@ -1267,10 +1267,15 @@ bible's green-roof check counts the flat roofs only.
 Each roof rises at about 29° from its street and court walls to a ridge, those edges moved in
 as far as they go (the straight skeleton's roof for a convex footprint, near enough). A wall
 onto a neighbour (`facades::edge_kinds`), across the main front and at most 18 m long, carries
-a gable instead. So the houses of a row share one ridge, and a house taller than its neighbour
-shows its gable above theirs. A free-standing building is hipped on every side. A roof stops
-rising after an 8 m run (4.4 m up), its top then a terrace. The tiles are the brick courses
-tinted terracotta.
+a gable instead when the neighbour stands as tall as the eaves all along it
+(`facades::neighbour_heights`, probed a pace outside the wall at five points). So the houses of
+a row share one ridge. A house taller than its neighbour showed its gable above theirs as a
+plaster wedge, which the owner circled on 2026-10-15 ("should not exist"): such a wall slopes
+like the others now, and only the blank party wall below the eaves stands over the lower roof.
+A free-standing building is hipped on every side. A roof stops rising after an 8 m run (4.4 m
+up), its top then a terrace. The tiles are the brick courses tinted terracotta, read by texture
+coordinates that run along the eaves (u along the eave, v up the slope, 2.5 m a repeat):
+projected from the world, their rows ran askew to the building (the owner, the same night).
 
 ## The people on foot (D-059's step 6, a proof of concept)
 

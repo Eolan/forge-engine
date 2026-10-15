@@ -4330,7 +4330,8 @@ The owner's goals, the same night:
 - **The order of the core:** geometry and LOD correctness first (the night's class of faults);
   materials (trim sheets, decals, layering); structures with interiors; flora placement and
   rendering with wind; characters' animation (which also fixes the popping people); then
-  sound, fauna and networking.
+  sound, fauna and networking. The owner added the particle system the same night (smoke,
+  dust, fire, rain, sparks: GPU work, so one session at a time), after the flora.
 
 **The owner's go, the same night** ("We will follow your plan"), with two answers:
 1. The licensed things that cannot be redistributed stay in a private repository; the core
@@ -4366,11 +4367,17 @@ The owner's goals, the same night:
 **First steps:**
 1. Finish the night's engine fixes on #264 (parapets mitred; the far walls' LOD weighs the
    texture seams).
-2. An issue for the first map: a generated Mediterranean village in its forest, entered on
-   foot, with its map check; the geometry and LOD faults from the sandbox's tracker fixed
-   there first.
+2. #266, the first map: a generated Mediterranean village in its forest, entered on foot,
+   with its map check; the geometry and LOD faults from the sandbox's tracker fixed there
+   first; before the village is laid out, a research note on the lots' shapes and the
+   joined-building types (the owner, the same night: non-rectangular buildings for no reason,
+   slivers and wedges between them; semi-detached, terraced, row, attached).
 3. The owner creates the private game repository; the city sandbox's `docs/TRACKER.md` keeps
    the city's twenty sightings for short sessions.
+   The parallel sessions off the GPU, each on one issue (the owner: "start the parallel
+   tasks", the same night): #267 sound (`forge-audio`, headless), #268 networking
+   (`forge-net`, headless), #269 flora and fauna (growth, placement and behaviour as data,
+   headless).
 4. The empty buildings: list what the kit and the structure draw inside a closed mass (floors,
    cores, the faked rooms) and cull it until entered; a suspect for the triangles past the
    roofs at the coarser levels of detail.

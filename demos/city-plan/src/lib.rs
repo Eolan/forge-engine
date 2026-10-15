@@ -76,6 +76,8 @@ const KIT_STONE: u8 = 12;
 const KIT_PARTY: u8 = 13;
 /// The tiled roofs' section on the masses.
 const ROOF_TILE: u8 = 14;
+/// The roof tiles' repeat, metres: the roofs' texture coordinates run along the eaves.
+const TILE_REPEAT: f64 = 2.5;
 /// The kit's instance groups: four shutter colours, each with dark and lit glass.
 const KIT_GROUPS: [&str; 8] = [
     "plan-kit-0",
@@ -594,15 +596,21 @@ impl PlanScenario {
                 }
             }
         }
-        // What each wall looks onto: the kit's faces and where the roofs end in gables.
+        // What each wall looks onto: the kit's faces and where the roofs end in gables, which
+        // want a neighbour as tall across the party wall (else the roof hips).
         let edges = facades::edge_kinds(plan, masses);
+        let tall: Vec<Vec<bool>> = facades::neighbour_heights(plan, masses)
+            .iter()
+            .zip(masses)
+            .map(|(h, m)| h.iter().map(|&n| n >= m.height - 0.5).collect())
+            .collect();
         let mut near = Vec::new();
         for (i, m) in masses.iter().enumerate() {
             match detail {
                 Some(d) if geom::centroid(&m.footprint).distance(d.centre) < d.radius => {
                     near.push(i);
                 }
-                _ => mass(&mut tiles, m, &edges[i]),
+                _ => mass(&mut tiles, m, &edges[i], &tall[i]),
             }
         }
         head_houses(&mut tiles, masses, &structures);
@@ -633,6 +641,7 @@ impl PlanScenario {
                 masses,
                 &structures,
                 &edges,
+                &tall,
                 &near,
                 d,
                 residents.as_ref(),
@@ -2321,6 +2330,7 @@ fn kit(
     masses: &[Mass],
     structures: &[Structure],
     edges: &[Vec<Option<FaceKind>>],
+    tall: &[Vec<bool>],
     near: &[usize],
     d: &Detail,
     residents: Option<&residents::Residents>,
@@ -2518,7 +2528,7 @@ fn kit(
     }
     for &i in near {
         passages(tiles, &structures[i]);
-        roof(tiles, &masses[i], &edges[i], KIT_PARTY);
+        roof(tiles, &masses[i], &edges[i], &tall[i], KIT_PARTY);
     }
     Kit {
         meshes,
@@ -3318,7 +3328,7 @@ fn wall_band(
 
 /// A mass: its walls (a shop band on the ground floor where the street is lively, window bays
 /// above, one of four tints by its lot) and its roof, `edges` saying what each wall looks onto.
-fn mass(tiles: &mut Tiles, m: &Mass, edges: &[Option<FaceKind>]) {
+fn mass(tiles: &mut Tiles, m: &Mass, edges: &[Option<FaceKind>], tall: &[bool]) {
     let size = tiles.size;
     let tile = tiles.at(m.footprint[0]);
     let centre = tile.centre;
@@ -3383,11 +3393,12 @@ fn mass(tiles: &mut Tiles, m: &Mass, edges: &[Option<FaceKind>]) {
             );
         }
     }
-    roof(tiles, m, edges, KIT_PLASTER + tint);
+    roof(tiles, m, edges, tall, KIT_PLASTER + tint);
 }
 
-/// A mass's roof: green, solar, a terrace, or pitched and tiled, its gables in `gable`.
-fn roof(tiles: &mut Tiles, m: &Mass, edges: &[Option<FaceKind>], gable: u8) {
+/// A mass's roof: green, solar, a terrace, or pitched and tiled, its gables (where the
+/// neighbour across a party wall is as `tall`) in `gable`.
+fn roof(tiles: &mut Tiles, m: &Mass, edges: &[Option<FaceKind>], tall: &[bool], gable: u8) {
     let size = tiles.size;
     let tile = tiles.at(m.footprint[0]);
     let centre = tile.centre;
@@ -3396,7 +3407,7 @@ fn roof(tiles: &mut Tiles, m: &Mass, edges: &[Option<FaceKind>], gable: u8) {
         Roof::Solar => ROOF_SOLAR,
         Roof::Terrace => ROOF_TERRACE,
         Roof::Tiled => {
-            if pitched(&mut tile.masses, m, edges, gable, size, centre) {
+            if pitched(&mut tile.masses, m, edges, tall, gable, size, centre) {
                 return;
             }
             ROOF_TERRACE
@@ -3415,11 +3426,12 @@ const GABLE_MAX: f64 = 18.0;
 const RUN_MAX: f64 = 8.0;
 
 /// Which edges of a footprint slope (1) and which end in a gable (0): a wall onto a neighbour
-/// or within the building, across the main front (its longest street wall, else its longest
-/// court wall) and at most [`GABLE_MAX`] long, carries a gable, so the houses of a row share
-/// one ridge along the street. The rest slope; with no gable the roof is hipped. `None` with
-/// no front.
-fn pitches(fp: &[DVec2], edges: &[Option<FaceKind>]) -> Option<Vec<f64>> {
+/// as `tall` (whose roof hides the gable's wall) or within the building, across the main front
+/// (its longest street wall, else its longest court wall) and at most [`GABLE_MAX`] long,
+/// carries a gable, so the houses of a row share one ridge along the street. The rest slope,
+/// a wall above a lower neighbour too (the owner, 2026-10-15: the gable stood as a wedge over
+/// its roof); with no gable the roof is hipped. `None` with no front.
+fn pitches(fp: &[DVec2], edges: &[Option<FaceKind>], tall: &[bool]) -> Option<Vec<f64>> {
     let n = fp.len();
     let edge = |i: usize| fp[(i + 1) % n] - fp[i];
     let open = |i: usize| matches!(edges[i], Some(FaceKind::Street | FaceKind::Court));
@@ -3435,7 +3447,7 @@ fn pitches(fp: &[DVec2], edges: &[Option<FaceKind>]) -> Option<Vec<f64>> {
             .map(|i| {
                 let across = edge(i).normalize_or_zero().dot(along).abs() < 0.5;
                 let length = edge(i).length();
-                if !open(i) && (0.5..=GABLE_MAX).contains(&length) && across {
+                if !open(i) && tall[i] && (0.5..=GABLE_MAX).contains(&length) && across {
                     0.0
                 } else {
                     1.0
@@ -3487,13 +3499,14 @@ fn pitched(
     mesh: &mut TriMesh,
     m: &Mass,
     edges: &[Option<FaceKind>],
+    tall: &[bool],
     gable: u8,
     size: f64,
     centre: Vec3,
 ) -> bool {
     let fp = &m.footprint;
     let n = fp.len();
-    let Some(w) = pitches(fp, edges) else {
+    let Some(w) = pitches(fp, edges, tall) else {
         return false;
     };
     let fits = |d: f64| ridge(fp, &w, d);
@@ -3519,25 +3532,46 @@ fn pitched(
         return false;
     };
     let rise = d * 0.55;
+    // The tiles run along the eaves: u along the eave, v up the slope, in the texture's
+    // repeats (projected from the world, their rows ran askew to the building, the owner).
+    let slope = ((d * d + rise * rise).sqrt() / TILE_REPEAT) as f32;
     let at = |p: DVec2, h: f64| world(size, p, h) - centre;
     for i in 0..n {
         let j = (i + 1) % n;
         let (a, b) = (at(fp[i], m.height), at(fp[j], m.height));
         let (c, e) = (at(ridge[j], m.height + rise), at(ridge[i], m.height + rise));
+        let t = (fp[j] - fp[i]).normalize_or_zero();
         let (normal, section) = if w[i] == 0.0 {
             // A gable: the wall carried up, facing out.
-            let t = (fp[j] - fp[i]).normalize_or_zero();
             (Vec3::new(t.y as f32, 0.0, -t.x as f32), gable)
         } else {
             let normal = (b - a).cross(c - a).normalize_or_zero();
             (normal * normal.y.signum(), ROOF_TILE)
         };
-        triangle_uv(mesh, [a, b, c], [[0.0; 2]; 3], normal, section);
-        triangle_uv(mesh, [a, c, e], [[0.0; 2]; 3], normal, section);
+        let u = |p: DVec2| ((p - fp[i]).dot(t) / TILE_REPEAT) as f32;
+        let (ub, uc, ue) = (u(fp[j]), u(ridge[j]), u(ridge[i]));
+        triangle_uv(
+            mesh,
+            [a, b, c],
+            [[0.0, 0.0], [ub, 0.0], [uc, slope]],
+            normal,
+            section,
+        );
+        triangle_uv(
+            mesh,
+            [a, c, e],
+            [[0.0, 0.0], [uc, slope], [ue, slope]],
+            normal,
+            section,
+        );
     }
     for t in geom::triangulate(&ridge) {
         let p = t.map(|i| at(ridge[i], m.height + rise));
-        triangle_uv(mesh, p, [[0.0; 2]; 3], Vec3::Y, top);
+        let uv = t.map(|i| {
+            let q = ridge[i] / TILE_REPEAT;
+            [q.x as f32, q.y as f32]
+        });
+        triangle_uv(mesh, p, uv, Vec3::Y, top);
     }
     true
 }
@@ -3713,11 +3747,13 @@ impl Scenario for PlanScenario {
         };
         // Terracotta tiles: the brick courses, tinted, read as rows of tiles from the street.
         let [tile_albedo, tile_normal] = textures::brick(35, 512);
+        // Read by the roofs' texture coordinates, which run along the eaves.
         let tiles_row = RenderLayer {
             albedo_texture: Some(materials.textures.add(&tile_albedo)?),
             normal_texture: Some(materials.textures.add(&tile_normal)?),
-            texture_scale: 2.5,
+            texture_scale: TILE_REPEAT as f32,
             normal_strength: 0.8,
+            uv: Some(UvMapping::default()),
             ..colour([1.75, 2.0, 2.1], 10.0, 0.04)
         };
         // The kit's railings' bars, one card each between the rails (D-013's far form): as

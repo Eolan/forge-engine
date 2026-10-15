@@ -68,12 +68,11 @@ pub fn faces(plan: &CityPlan, masses: &[Mass]) -> Vec<Face> {
     faces_of(masses, &edge_kinds(plan, masses))
 }
 
-/// What each edge of each mass's footprint looks onto (edge `i` from vertex `i` to `i + 1`):
-/// `None` for a wall inside its building (onto another mass of its lot) or a sliver under half
-/// a metre.
-pub fn edge_kinds(plan: &CityPlan, masses: &[Mass]) -> Vec<Vec<Option<FaceKind>>> {
-    let streets = street_grid(&plan.roads, plan.size);
-    // Each lot's masses, to tell walls inside a building from walls between lots.
+/// Each lot's masses (to tell walls inside a building from walls between lots), and each
+/// block's lots.
+type LotMaps = (std::collections::HashMap<u32, Vec<u32>>, Vec<Vec<u32>>);
+
+fn lot_maps(plan: &CityPlan, masses: &[Mass]) -> LotMaps {
     let mut by_lot: std::collections::HashMap<u32, Vec<u32>> = std::collections::HashMap::new();
     for (i, m) in masses.iter().enumerate() {
         by_lot.entry(m.lot).or_default().push(i as u32);
@@ -82,6 +81,53 @@ pub fn edge_kinds(plan: &CityPlan, masses: &[Mass]) -> Vec<Vec<Option<FaceKind>>
     for (i, lot) in plan.lots.iter().enumerate() {
         lots_of[lot.block as usize].push(i as u32);
     }
+    (by_lot, lots_of)
+}
+
+/// How tall the buildings across each edge of each mass's footprint stand (edge `i` from
+/// vertex `i` to `i + 1`): the lowest, along the wall, of the tallest mass a pace outside it
+/// at five points, of the lot's other masses or of the block's other lots; 0 where nothing
+/// stands at one of the points. A gable wants a neighbour as tall as its eaves all along.
+pub fn neighbour_heights(plan: &CityPlan, masses: &[Mass]) -> Vec<Vec<f64>> {
+    let (by_lot, lots_of) = lot_maps(plan, masses);
+    masses
+        .iter()
+        .enumerate()
+        .map(|(index, m)| {
+            let block = plan.lots[m.lot as usize].block as usize;
+            let n = m.footprint.len();
+            (0..n)
+                .map(|i| {
+                    let (a, b) = (m.footprint[i], m.footprint[(i + 1) % n]);
+                    let t = (b - a).normalize_or_zero();
+                    let out_dir = DVec2::new(t.y, -t.x);
+                    [0.1, 0.3, 0.5, 0.7, 0.9]
+                        .into_iter()
+                        .map(|s| {
+                            let probe = a + (b - a) * s + out_dir * 0.75;
+                            lots_of[block]
+                                .iter()
+                                .flat_map(|l| by_lot.get(l).into_iter().flatten())
+                                .filter(|&&j| {
+                                    j as usize != index
+                                        && geom::contains(&masses[j as usize].footprint, probe)
+                                })
+                                .map(|&j| masses[j as usize].height)
+                                .fold(0.0, f64::max)
+                        })
+                        .fold(f64::INFINITY, f64::min)
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// What each edge of each mass's footprint looks onto (edge `i` from vertex `i` to `i + 1`):
+/// `None` for a wall inside its building (onto another mass of its lot) or a sliver under half
+/// a metre.
+pub fn edge_kinds(plan: &CityPlan, masses: &[Mass]) -> Vec<Vec<Option<FaceKind>>> {
+    let streets = street_grid(&plan.roads, plan.size);
+    let (by_lot, lots_of) = lot_maps(plan, masses);
     let mut out = Vec::with_capacity(masses.len());
     for (index, m) in masses.iter().enumerate() {
         let lot = &plan.lots[m.lot as usize];
@@ -369,6 +415,54 @@ mod tests {
     use super::super::bible::StyleBible;
     use super::super::{example, plan};
     use super::*;
+
+    #[test]
+    fn a_gable_wants_a_neighbour_as_tall() {
+        // Across a street wall nothing stands; a wall inside a building has its sibling all
+        // along; and among the party walls some neighbours stand as tall and some lower, so
+        // the roofs' rule (a gable only over a neighbour as tall) bites both ways.
+        let size = 4000.0;
+        let site = example::site(size, 10.0);
+        let city = plan(&site, &example::params(size));
+        let masses = mass::masses(&city, &StyleBible::default(), 9);
+        let kinds = edge_kinds(&city, &masses);
+        let heights = neighbour_heights(&city, &masses);
+        let (mut streets, mut built_across, mut inside, mut open) = (0, 0, 0, 0);
+        let (mut as_tall, mut lower) = (0, 0);
+        for ((m, kinds), heights) in masses.iter().zip(&kinds).zip(&heights) {
+            let n = m.footprint.len();
+            for (i, (kind, &h)) in kinds.iter().zip(heights).enumerate() {
+                if m.footprint[i].distance(m.footprint[(i + 1) % n]) < 0.5 {
+                    continue;
+                }
+                match kind {
+                    Some(FaceKind::Street) => {
+                        streets += 1;
+                        built_across += usize::from(h > 0.0);
+                    }
+                    None => {
+                        inside += 1;
+                        open += usize::from(h == 0.0);
+                    }
+                    Some(FaceKind::Party) if h >= m.height - 0.5 => as_tall += 1,
+                    Some(FaceKind::Party) => lower += 1,
+                    _ => {}
+                }
+            }
+        }
+        assert!(
+            built_across * 100 <= streets,
+            "{built_across} of {streets} street walls have a building across them"
+        );
+        assert!(
+            open * 100 <= inside,
+            "{open} of {inside} walls inside a building have nothing across them"
+        );
+        assert!(
+            as_tall > 0 && lower > 0,
+            "party walls: {as_tall} with a neighbour as tall, {lower} with a lower one"
+        );
+    }
 
     #[test]
     fn no_wall_is_left_open() {
