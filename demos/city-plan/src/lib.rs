@@ -1639,7 +1639,8 @@ impl PlanScenario {
                 plan, masses, &self.nets, hour, seats, platforms, timetables, mix,
             )
             .with_games(games)
-            .with_stalls(std::mem::take(&mut self.stalls)),
+            .with_stalls(std::mem::take(&mut self.stalls))
+            .with_trams_paused(self.trams.iter().any(|r| r.paused)),
         );
         // The taxis on the people's hour.
         self.taxis = taxis::Taxis::new(plan, masses, &self.nets, hour, self.clock);

@@ -374,6 +374,8 @@ pub struct Crowd {
     /// The market stalls, each its place and turn (`furniture::market_stall`: its front to its
     /// `+z`).
     stalls: Vec<glam::Mat4>,
+    /// The trams in their night's pause (`crate::tram_pause`): none stands at a stop to board.
+    trams_paused: bool,
     /// The tram stops' platforms, their middles on the plan found by a grid, the lines'
     /// timetables, and who has boarded from a platform (until their trip ends).
     platforms: Vec<Platform>,
@@ -556,6 +558,7 @@ impl Crowd {
             neighbourhoods,
             games: Vec::new(),
             stalls: Vec::new(),
+            trams_paused: false,
             stop_grid,
             timetables,
             boarded: HashSet::new(),
@@ -712,6 +715,13 @@ impl Crowd {
         self
     }
 
+    /// With `paused`, the trams are in their night's pause: no tram stands at a stop for the
+    /// people waiting there to board.
+    pub fn with_trams_paused(mut self, paused: bool) -> Self {
+        self.trams_paused = paused;
+        self
+    }
+
     /// The level of a tram stop's boarding area at `q` on the plan, its ramps' slope at its ends,
     /// or `None` off every boarding area: the bikes' strip by the kerb runs over them.
     fn boarding_level(&self, q: DVec2) -> Option<f32> {
@@ -781,9 +791,15 @@ impl Crowd {
         let c = DVec2::new(f64::from(camera.x) + half, f64::from(camera.y) + half);
         let mut out = vec![Vec::new(); POSES * GROUPS];
         let mut budget = NEW_ROUTES;
-        // The trams standing at their stops now: (line, stop, outbound).
+        // The trams standing at their stops now: (line, stop, outbound). None in the night's
+        // pause: the people waiting board nothing.
         let mut standing = HashSet::new();
-        for (line, t) in self.timetables.iter().enumerate() {
+        for (line, t) in self
+            .timetables
+            .iter()
+            .enumerate()
+            .filter(|_| !self.trams_paused)
+        {
             for k in 0..t.vehicles() {
                 let run = t.at(k, tram_clock);
                 if let Some(stop) = run.at_stop {
