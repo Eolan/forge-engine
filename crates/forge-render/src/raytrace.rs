@@ -179,18 +179,21 @@ pub(crate) const TLAS_PUSH_BYTES: u32 = std::mem::size_of::<TlasPush>() as u32;
 
 /// `tlas_instances_main`'s push constants over the `count` first instances of the table at
 /// `instances`, their meshes' structures' addresses at `blas`, into the records at `records`,
-/// the structure in the frame whose zero is `origin` (#220: a dynamic scene's editor's).
+/// the structure in the frame whose zero is `origin` (#220: a dynamic scene's editor's); the
+/// rows the instances draw with read from `tables`' meshes and `materials` (#265).
 pub(crate) fn tlas_push(
     instances: u64,
-    blas: u64,
+    tables: &RayTables,
     records: u64,
     count: u32,
     origin: CellPos,
 ) -> TlasPush {
     TlasPush {
         instances,
-        blas,
+        blas: tables.blas_addresses.address(),
         records,
+        rt_meshes: tables.meshes.address(),
+        materials: tables.materials,
         count,
         first: 0,
         origin_cell: origin.cell.extend(0).to_array(),
@@ -205,6 +208,10 @@ pub(crate) struct TlasPush {
     instances: u64,
     blas: u64,
     records: u64,
+    /// The meshes' records ([`GpuRtMesh`]) and the material table: an instance whose rows are
+    /// all opaque is marked so in its record, and the rays skip their query loop for it (#265).
+    rt_meshes: u64,
+    materials: u64,
     count: u32,
     /// The first instance of the table the records cover: 0, or the movers' (#79).
     first: u32,
@@ -223,7 +230,14 @@ struct GpuRtMesh {
     shadow_start: f32,
     /// Its first vertex's UV in the UVs, [`NO_UVS`] without them (#171).
     first_uv: u32,
-    pad: [u32; 3],
+    /// The rows its instances draw with: its cut's highest section and one (#265).
+    rows: u32,
+    pad: [u32; 2],
+}
+
+/// The rows a cut's instances draw with: its highest section and one.
+fn cut_rows(cut: &Cut) -> u32 {
+    cut.sections.iter().max().map_or(1, |&s| s + 1)
 }
 
 /// [`GpuRtMesh::first_uv`] of a mesh without UVs (`RT_NO_UVS` in the shader).
@@ -265,6 +279,8 @@ pub(crate) struct RayTables {
     pub meshes: Arc<Buffer>,
     pub uvs: Arc<Buffer>,
     pub blas_addresses: Arc<Buffer>,
+    /// The material table's address ([`SceneRays::set_materials`]).
+    pub materials: u64,
 }
 
 /// The writes that put `cut`, mesh slot `mesh`'s, into `tables` from vertex `first_vertex` and
@@ -290,7 +306,8 @@ pub(crate) fn cut_writes<'a>(
         } else {
             first_vertex
         },
-        pad: [0; 3],
+        rows: cut_rows(cut),
+        pad: [0; 2],
     };
     let (v, t) = (u64::from(first_vertex), u64::from(first_triangle));
     let size = std::mem::size_of::<GpuRtMesh>() as u64;
@@ -383,9 +400,18 @@ pub struct SceneRays {
     /// The movers' structure (#79), rebuilt every frame ([`SceneRays::declare_movers`]), and
     /// the instance pass that writes its records.
     movers: Option<(DynamicTlas, Pipeline)>,
+    /// The material table's address, which the instance passes read ([`SceneRays::set_materials`]).
+    materials: u64,
 }
 
 impl SceneRays {
+    /// The scene's material table, at `address`: the instance passes mark an instance whose
+    /// rows are all opaque (no cut-out, no jelly), so the rays skip their query loop for it
+    /// (#265). Before the first build.
+    pub(crate) fn set_materials(&mut self, address: u64) {
+        self.materials = address;
+    }
+
     /// Builds one bottom-level structure per cut: a static one, or for a skinned mesh's cut
     /// ([`Cut::dynamic`]) one refitted every frame over the hit positions. With `capacity` (a
     /// dynamic scene, #220, which has no skinned mesh) the tables have room for the meshes it
@@ -434,7 +460,8 @@ impl SceneRays {
                 cut_error: c.error,
                 shadow_start: c.shadow_start,
                 first_uv,
-                pad: [0; 3],
+                rows: cut_rows(c),
+                pad: [0; 2],
             });
             uvs.extend_from_slice(&c.uvs);
             positions.extend(c.positions.iter().flatten());
@@ -587,6 +614,7 @@ impl SceneRays {
             blas_ms: ms + start.elapsed().as_secs_f64() * 1e3,
             tlas_ms: 0.0,
             movers: None,
+            materials: 0,
         })
     }
 
@@ -603,6 +631,7 @@ impl SceneRays {
             meshes: Arc::clone(&self.hit_data[1]),
             uvs: Arc::clone(&self.hit_data[2]),
             blas_addresses: Arc::clone(&self.blas_addresses),
+            materials: self.materials,
         })
     }
 
@@ -753,6 +782,8 @@ impl SceneRays {
             instances: instances_address,
             blas: self.blas_addresses.address(),
             records: tlas.records().address(),
+            rt_meshes: self.hit_data[1].address(),
+            materials: self.materials,
             count,
             first,
             origin_cell: origin.cell.extend(0).to_array(),
@@ -819,6 +850,8 @@ impl SceneRays {
             instances: instances.address(),
             blas: self.blas_addresses.address(),
             records: records.address(),
+            rt_meshes: self.hit_data[1].address(),
+            materials: self.materials,
             count,
             first: 0,
             origin_cell: origin.cell.extend(0).to_array(),

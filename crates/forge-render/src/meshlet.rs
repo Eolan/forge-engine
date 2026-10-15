@@ -1677,6 +1677,18 @@ impl MeshletSceneBuilder {
         let shown =
             |f: fn(&GpuMaterial) -> bool| self.materials.iter().zip(&used).any(|(m, &u)| u && f(m));
         let (cutouts, jelly) = (shown(GpuMaterial::cut_out), shown(GpuMaterial::jelly));
+        let materials = device.create_buffer_with_data(
+            &self.materials,
+            usage,
+            MemoryCategory::Geometry,
+            "materials",
+        )?;
+        // The structure's builds read the rows: an instance whose rows are all opaque tells it so
+        // (#265).
+        let mut rays = rays;
+        if let Some(rays) = &mut rays {
+            rays.set_materials(materials.address());
+        }
         Ok(MeshletScene {
             pool: GraphBuffer::new(pool),
             meshlets: Arc::new(table_with_room(
@@ -1774,12 +1786,7 @@ impl MeshletSceneBuilder {
                 .collect::<Result<Vec<_>>>()?,
             skins,
             rays,
-            materials: device.create_buffer_with_data(
-                &self.materials,
-                usage,
-                MemoryCategory::Geometry,
-                "materials",
-            )?,
+            materials,
             material_count: self.materials.len() as u32,
             cutouts,
             jelly,

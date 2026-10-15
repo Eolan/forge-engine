@@ -775,7 +775,7 @@ impl SceneEditor {
                 let tables = self.rays.as_ref().expect("rays with a structure");
                 let push = raytrace::tlas_push(
                     t.instances.address(),
-                    tables.blas_addresses.address(),
+                    tables,
                     t.records.address(),
                     instance_high,
                     self.origin,

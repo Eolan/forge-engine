@@ -284,7 +284,7 @@ public struct RtMesh
     public float cut_error;  // how far the cut may stand from the drawn surface, object space
     public float shadow_start; // how far its surfaces' shadow rays start, object space (0: SHADOW_BIAS; terrain, #96)
     public uint first_uv;      // its first vertex's UV in `RtScene::uvs`, RT_NO_UVS without them (#171)
-    public uint pad0;
+    public uint rows;          // the rows its instances draw with: its cut's highest section and one (#265)
     public uint pad1;
     public uint pad2;
 };
@@ -3859,11 +3859,12 @@ float denoised_sun_shadow(Frame* f, float3 n, uint2 pixel)
 // The rays trace the static structure, then the movers' (#79), rebuilt every frame.
 
 // The rays' flags: opaque, unless the scene has cut-out rows (#171) or jelly the shadow rays see
-// through (#180). Then every triangle is a candidate the query's loop keeps or passes
-// (`ray_candidate_kept`, `shadow_candidate_kept`), as an any-hit shader would.
+// through (#180). Then the instances with such rows are non-opaque in the structure
+// (`tlas_instances_main`), and their triangles are candidates the query's loop keeps or passes
+// (`ray_candidate_kept`, `shadow_candidate_kept`), as an any-hit shader would (#265).
 uint ray_opacity(Frame* f)
 {
-    return (f[0].flags & (FLAG_CUTOUTS | FLAG_JELLY)) != 0 ? RAY_FLAG_FORCE_NON_OPAQUE : RAY_FLAG_FORCE_OPAQUE;
+    return (f[0].flags & (FLAG_CUTOUTS | FLAG_JELLY)) != 0 ? RAY_FLAG_NONE : RAY_FLAG_FORCE_OPAQUE;
 }
 
 // The row of triangle `primitive` of instance `instance`, as the rays' scene has it.
@@ -5369,6 +5370,8 @@ struct TlasPush
     Instance* instances;
     uint64_t* blas;   // per mesh
     uint* records;    // 16 words per instance
+    RtMesh* rt_meshes;   // per mesh: the rows its instances draw with (#265)
+    Material* materials; // the rows
     uint count;
     uint first;       // the first instance of the table it covers: 0, or the movers' (#79)
     int4 origin_cell;    // the scene frame's origin (issue #93): its cell...
@@ -5403,10 +5406,31 @@ void tlas_instances_main(uint3 id : SV_DispatchThreadID)
     bool vacant = (inst.flags & INSTANCE_VACANT) != 0;
     uint mask = vacant ? 0u : 0xFFu;
     r[12] = (index & 0xFFFFFFu) | (mask << 24);
-    r[13] = 0x1u << 24; // VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT
+    // An instance with a cut-out or a jelly row stays non-opaque, so the rays' query loop keeps
+    // or passes its triangles; the others are opaque, as their structures' geometry is, and
+    // the loop never sees them: one cut-out row made every ray of the scene loop (#265).
+    bool loops = !vacant && !rows_opaque(inst);
+    // VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT, and FORCE_NO_OPAQUE for those.
+    r[13] = (0x1u | (loops ? 0x8u : 0x0u)) << 24;
     uint64_t blas = vacant ? 0 : tlas_push.blas[inst.mesh];
     r[14] = uint(blas);
     r[15] = uint(blas >> 32);
+}
+
+// Whether every row the instance draws with is opaque to the rays: no cut-out, no jelly. Without
+// the rows (no table given), none is.
+bool rows_opaque(Instance inst)
+{
+    if (tlas_push.materials == nullptr || tlas_push.rt_meshes == nullptr)
+        return false;
+    uint rows = tlas_push.rt_meshes[inst.mesh].rows;
+    for (uint s = 0; s < rows; s++)
+    {
+        Material mat = tlas_push.materials[inst.material + s];
+        if ((mat.flags & MATERIAL_FLAG_MASKED) != 0 || mat.class_index == MATERIAL_CLASS_JELLY)
+            return false;
+    }
+    return true;
 }
 
 // ---------------------------------------------------------------- placement ---

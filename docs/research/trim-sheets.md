@@ -262,12 +262,15 @@ sharpening, or relaxed clamping on a thin-feature mask like Unreal's [23].
     0.40 to 0.93 ms. The software raster lost the balconies' clusters (0.94 → 0.83).
   - **Moving the cards out of the modules changed nothing.** With the cards merged into the
     tiles' own meshes, only their clusters are cut out, and the cost stayed the same.
-  - **Every ray non-opaque.** A scene with cut-out rows traces all its rays so
+  - **Every ray non-opaque.** A scene with cut-out rows traced all its rays so
     (`ray_opacity`): `shadow/trace` 0.20 → 0.27 ms and the probes' rays 0.54 → 0.61 at street
     level.
-- **The verdict.** The flicker gain does not pay for 0.13–0.45 ms yet, so the bars stay
-  geometry. The cards come back once the cut-out raster has its own cluster list and opaque
-  instances are flagged in the TLAS (#265).
+    - Now only the instances with a cut-out or jelly row are non-opaque in the TLAS (#265).
+      The rays loop over those alone: `shadow/trace` is 0.24 and the probes' rays 0.55.
+    - Street level with the cards: 2.32 → 2.28 ms (2.19 without them).
+    - The overview: 5.20 → 5.19 ms. The cost there is the raster's.
+- **The verdict.** The flicker gain does not pay for 0.09–0.43 ms yet, so the bars stay
+  geometry. The cards come back once the cut-out raster has its own cluster list (#265).
 - **The other demos** are unchanged with the new shader: the sentinels, the island and the lab,
   200 captures on both paths, 0 pixels against the previous shader.
 - **The shutters' slats, flattened** (an experiment, not kept: each leaf's louvres one flat

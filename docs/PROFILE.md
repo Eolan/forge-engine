@@ -1375,7 +1375,9 @@ something stands out). Two things to watch:
     - at street level, 2.19 → 2.32 ms;
     - from the overview, 4.77 → 5.20 ms (`meshlet pass 1` 0.40 → 0.93).
 
-    Off by default until #265 (`research/trim-sheets.md` §2.9).
+    The rays now loop only over the instances with cut-out or jelly rows (#265): with the
+    cards, 2.28 ms at street level and 5.19 ms from the overview. The raster's cost remains,
+    so the cards stay off by default (`research/trim-sheets.md` §2.9).
 
 ## `planet` — a planet from orbit to its ground (#220, D-056, 2026-10-10)
 
