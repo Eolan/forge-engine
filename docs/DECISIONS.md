@@ -4260,7 +4260,9 @@ times they circulate round the busy places, where they will most likely find som
   - **Fleet size:** three trips a taxi in the busiest hour. The example has 515 taxis, with no
     bookings waiting and a 43 s mean wait at 9:00; the sandbox 1 727.
   - **Traffic:** car-following in each lane (the Intelligent Driver Model), one taxi at a time
-    through a junction with room past it, stop lines 10 m before.
+    through a junction with room past it, stop lines 10 m before. The drawn pose rounds each
+    corner between two legs on a 7 m radius through the node (2026-10-16; the owner: the taxis
+    turned on the spot), the simulation keeping to the lines.
   - **Depots** (built 2026-10-15): split-level parking decks (177 cabs) behind the building
     lines of the taxi roads, one for 25 stands, an industrial district preferred (counted 800 m
     nearer) but never far from the stands they serve.

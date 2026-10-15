@@ -238,21 +238,54 @@ struct Route {
     length: f64,
 }
 
+/// The radius a taxi's drawn path rounds a junction's corner on, metres (less on short legs): it
+/// turned on the spot from one link's line onto the next (the owner, 2026-10-15).
+const TURN_RADIUS: f64 = 7.0;
+
 impl Route {
-    /// The position and heading `s` metres along.
+    /// The position and heading `s` metres along: on the legs' lines, each corner between two
+    /// legs rounded on [`TURN_RADIUS`] as a quadratic curve through the node, so a taxi turns as
+    /// a car does. The simulation keeps to the lines (`s` and the gaps); only the pose bends.
     fn at(&self, net: &Network, s: f64) -> (DVec2, DVec2) {
         let mut left = s.clamp(0.0, self.length);
-        for leg in &self.legs {
-            let len = (leg.to - leg.from).abs();
-            if left <= len || std::ptr::eq(leg, self.legs.last().expect("a leg")) {
-                let forward = leg.to >= leg.from;
-                let along = if forward {
-                    leg.from + left.min(len)
+        let length = |j: usize| (self.legs[j].to - self.legs[j].from).abs();
+        let pose = |j: usize, d: f64| {
+            let leg = &self.legs[j];
+            let d = d.clamp(0.0, length(j));
+            let forward = leg.to >= leg.from;
+            let along = if forward { leg.from + d } else { leg.from - d };
+            let (p, dir) = net.links[leg.link as usize].at(along);
+            (p, if forward { dir } else { -dir })
+        };
+        let n = self.legs.len();
+        for i in 0..n {
+            let len = length(i);
+            if left <= len || i + 1 == n {
+                let radius = |j: usize| TURN_RADIUS.min(length(j) * 0.5).min(length(j + 1) * 0.5);
+                // Into the corner at this leg's end, or out of the one at its start: `t` runs
+                // from 0 a radius before the node to 1 a radius after it.
+                let corner = if i + 1 < n && left > len - radius(i) {
+                    Some((i, (left - (len - radius(i))) / (2.0 * radius(i))))
+                } else if i > 0 && left < radius(i - 1) {
+                    Some((i - 1, 0.5 + left / (2.0 * radius(i - 1))))
                 } else {
-                    leg.from - left.min(len)
+                    None
                 };
-                let (p, dir) = net.links[leg.link as usize].at(along);
-                return (p, if forward { dir } else { -dir });
+                if let Some((j, t)) = corner {
+                    let r = radius(j);
+                    if r > 0.05 {
+                        let (a, _) = pose(j, length(j) - r);
+                        let (b, _) = pose(j, length(j));
+                        let (c, _) = pose(j + 1, r);
+                        let (t, u) = (t.clamp(0.0, 1.0), 1.0 - t.clamp(0.0, 1.0));
+                        let p = a * (u * u) + b * (2.0 * u * t) + c * (t * t);
+                        let d = ((b - a) * u + (c - b) * t).normalize_or_zero();
+                        if d != DVec2::ZERO {
+                            return (p, d);
+                        }
+                    }
+                }
+                return pose(i, left);
             }
             left -= len;
         }
@@ -1538,6 +1571,52 @@ mod tests {
         // Along the grid, the Manhattan distance at least.
         let manhattan = (p1 - p0).abs().element_sum();
         assert!(r.length + 1e-6 >= manhattan, "{} < {manhattan}", r.length);
+    }
+
+    #[test]
+    fn a_taxi_rounds_its_corners() {
+        // At the first turn of a route over the grid, the pose at the node lies inside the
+        // corner, heading between the two legs' ways, and a radius or two away it is back on
+        // the lines.
+        let f = fleet(1.0, 1);
+        let r = f.route(
+            Spot { link: 0, s: 50.0 },
+            Spot {
+                link: 100,
+                s: 150.0,
+            },
+        );
+        let way = |leg: &Leg, at: f64| {
+            let (_, d) = f.net.links[leg.link as usize].at(at);
+            if leg.to >= leg.from { d } else { -d }
+        };
+        let mut start = 0.0;
+        let mut turned = false;
+        for j in 0..r.legs.len() - 1 {
+            let len = (r.legs[j].to - r.legs[j].from).abs();
+            let (d0, d1) = (
+                way(&r.legs[j], r.legs[j].to),
+                way(&r.legs[j + 1], r.legs[j + 1].from),
+            );
+            if d0.dot(d1) < 0.99 {
+                let corner = f.net.links[r.legs[j].link as usize].at(r.legs[j].to).0;
+                let (node, dn) = r.at(&f.net, start + len);
+                let off = node.distance(corner);
+                assert!(off > 0.5 && off < TURN_RADIUS, "{off} m off the node");
+                assert!(
+                    dn.dot((d0 + d1).normalize()) > 0.99,
+                    "{dn} between {d0} and {d1}"
+                );
+                let (before, db) = r.at(&f.net, start + len - 2.0 * TURN_RADIUS);
+                let (after, da) = r.at(&f.net, start + len + 2.0 * TURN_RADIUS);
+                assert!(before.distance(corner) > 1.5 * TURN_RADIUS && db.dot(d0) > 0.999);
+                assert!(after.distance(corner) > 1.5 * TURN_RADIUS && da.dot(d1) > 0.999);
+                turned = true;
+                break;
+            }
+            start += len;
+        }
+        assert!(turned, "no turn on the route");
     }
 
     #[test]
