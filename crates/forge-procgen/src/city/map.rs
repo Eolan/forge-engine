@@ -1037,3 +1037,35 @@ pub fn write_parcels(
     canvas.stroke(&outline, metres_per_pixel * 2.0, [20, 20, 20]);
     canvas.save(path)
 }
+
+/// A block's houses on their lots, for a look: the court green, the lots pale with their street
+/// sides red, each footprint a sand darker by its storeys, the block's outline black.
+pub fn write_houses(
+    block: &[DVec2],
+    houses: &[super::houses::House],
+    court: &[DVec2],
+    path: &Path,
+    metres_per_pixel: f64,
+) -> image::ImageResult<()> {
+    let (lo, hi) = block.iter().fold(
+        (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)),
+        |(a, b), &p| (a.min(p), b.max(p)),
+    );
+    let size = (hi - lo).max_element() + 10.0;
+    let mut canvas = Canvas::window(lo - DVec2::splat(5.0), size, metres_per_pixel);
+    canvas.fill(court, [122, 172, 92]);
+    for h in houses {
+        canvas.fill(&h.lot, [226, 214, 190]);
+        let mut outline = h.lot.clone();
+        outline.push(h.lot[0]);
+        canvas.stroke(&outline, metres_per_pixel * 1.5, [90, 80, 60]);
+        canvas.stroke(&h.lot[..2], metres_per_pixel * 3.0, [214, 48, 40]);
+        let storeys = h.plan.storeys.len().min(4) as u8;
+        let shade = 190 - 30 * storeys;
+        canvas.fill(&h.footprint, [shade + 30, shade, shade - 40]);
+    }
+    let mut outline = block.to_vec();
+    outline.push(block[0]);
+    canvas.stroke(&outline, metres_per_pixel * 2.0, [20, 20, 20]);
+    canvas.save(path)
+}

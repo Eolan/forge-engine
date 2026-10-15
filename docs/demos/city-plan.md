@@ -346,7 +346,12 @@ so the storeys stack, and no room goes under what it asked nor under the 9 m² t
 decree wants for a main room. The footprint's depth and the storeys come out of the rooms.
 Tested on a modest family of four on a 6 m lot (two storeys, the ground floor the day's), a
 poor household of three (the minimums kept), a rich house of five on 14 m (its suites
-upstairs). Next: the plans on the strips' lots, and the structures (D-060) built from them.
+upstairs). **On their lots** (`city::houses`): each strip's lot gets a household's plan at the
+lot's width and the strip's depth less a 1.5 m yard; the footprint runs from the street to the
+plan's depth, cut to the lot where a corner lot narrows, the rest of the lot the garden.
+`HOUSES_PNG=path cargo test -p forge-procgen houses` draws the trapezoid block's houses, their
+footprints shaded by their storeys. Next: the structures (D-060) built from the plans, and the
+village on a small site.
 
 **The trees, sized to their streets.** Trimmed street trees of 9–12 m line the avenues, 7–10 m trees
 the shared streets and 5–7 m trees the lanes. Each instance is scaled by its own crown

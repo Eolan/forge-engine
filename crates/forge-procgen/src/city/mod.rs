@@ -30,6 +30,7 @@ pub mod gardens;
 pub mod geom;
 pub mod graph;
 pub mod ground;
+pub mod houses;
 pub mod lamps;
 pub mod map;
 pub mod mass;

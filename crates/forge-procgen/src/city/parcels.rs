@@ -85,21 +85,44 @@ pub fn strips(
             cuts.push(s);
         }
         cuts.push(length);
-        for k in 0..cuts.len() - 1 {
-            let (s0, s1) = (cuts[k], cuts[k + 1]);
-            let mut lot = strip.clone();
-            if k > 0 {
-                // After the cut at s0: the right of the inward line through it.
-                lot = geom::clip_half_plane(&lot, a + t * s0, -inward);
+        let cut = |cuts: &[f64]| -> Vec<Vec<DVec2>> {
+            let mut out = Vec::new();
+            for k in 0..cuts.len() - 1 {
+                let (s0, s1) = (cuts[k], cuts[k + 1]);
+                let mut lot = strip.clone();
+                if k > 0 {
+                    // After the cut at s0: the right of the inward line through it.
+                    lot = geom::clip_half_plane(&lot, a + t * s0, -inward);
+                }
+                if k + 2 < cuts.len() {
+                    // Before the cut at s1: its left.
+                    lot = geom::clip_half_plane(&lot, a + t * s1, inward);
+                }
+                if lot.len() >= 3 && geom::signed_area(&lot).abs() > 1.0 {
+                    out.push(from_the_street(lot, a, b));
+                }
             }
-            if k + 2 < cuts.len() {
-                // Before the cut at s1: its left.
-                lot = geom::clip_half_plane(&lot, a + t * s1, inward);
+            out
+        };
+        let mut here = cut(&cuts);
+        // A corner lot cut to a sliver by an acute corner's bisector joins its neighbour: the
+        // cut between them goes (a lot under half the least lot's area is a sliver).
+        let sliver = ty.width.0 * ty.depth * 0.5;
+        for _ in 0..2 {
+            let m = here.len();
+            if m < 2 || cuts.len() < 3 {
+                break;
             }
-            if lot.len() >= 3 && geom::signed_area(&lot).abs() > 1.0 {
-                lots.push(from_the_street(lot, a, b));
+            if geom::signed_area(&here[0]).abs() < sliver {
+                cuts.remove(1);
+            } else if geom::signed_area(&here[m - 1]).abs() < sliver {
+                cuts.remove(cuts.len() - 2);
+            } else {
+                break;
             }
+            here = cut(&cuts);
         }
+        lots.extend(here);
     }
     Some((lots, court))
 }
@@ -170,7 +193,8 @@ mod tests {
                 frontage(lot),
                 ty.width.0
             );
-            assert!(frontage(lot) <= ty.width.1 + ty.width.0 + 1e-6);
+            // The last lot may take a short remainder, a corner lot its sliver neighbour.
+            assert!(frontage(lot) <= 2.0 * ty.width.1 + ty.width.0 + 1e-6);
             for k in 0..lot.len() {
                 let (p, q, r) = (
                     lot[(k + lot.len() - 1) % lot.len()],
@@ -225,7 +249,7 @@ mod tests {
             }
             inner += 1;
         }
-        assert!(inner >= 10, "{inner} inner lots");
+        assert!(inner >= 6, "{inner} inner lots");
     }
 
     /// With `PARCELS_PNG=path`, the trapezoid's lots drawn there for a look.
