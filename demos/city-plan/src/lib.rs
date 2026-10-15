@@ -673,6 +673,42 @@ impl PlanScenario {
                 eye.x, eye.z
             );
         }
+        // And the gap between buildings nearest the kit's centre, from the street's middle
+        // looking in along its path.
+        if let Some(d) = detail
+            && let Some(g) = gardens
+                .iter()
+                .filter(|g| g.kind == gardens::Kind::Path && g.outline.len() >= 8)
+                .filter(|g| {
+                    let n = g.outline.len();
+                    // A gap's path starts on the block's edge, the street's middle.
+                    !plan.blocks[g.block as usize]
+                        .courtyard
+                        .as_ref()
+                        .is_some_and(|c| geom::contains(c, (g.outline[0] + g.outline[n - 1]) * 0.5))
+                        && plan
+                            .ground
+                            .on_carriageway((g.outline[0] + g.outline[n - 1]) * 0.5)
+                })
+                .min_by(|a, b| {
+                    let far = |g: &gardens::Piece| g.outline[0].distance(d.centre);
+                    far(a).total_cmp(&far(b))
+                })
+        {
+            let n = g.outline.len();
+            let start = (g.outline[0] + g.outline[n - 1]) * 0.5;
+            let next = (g.outline[1] + g.outline[n - 2]) * 0.5;
+            let dir = (next - start).normalize_or_zero();
+            let eye = world(size, start - dir * 3.0, 1.7);
+            let to = world(size, start + dir * 20.0, 0.8) - eye;
+            let to = to.normalize_or_zero();
+            let yaw = (-to.x).atan2(-to.z).to_degrees();
+            let pitch = to.y.asin().to_degrees();
+            passage_note += &format!(
+                "; a gap between buildings at --view={:.1},1.7,{:.1},{yaw:.1},{pitch:.1}",
+                eye.x, eye.z
+            );
+        }
         // And the planters 6 m long or more nearest the kit's centre, from 4 m out on the street
         // and 6 m before them, looking along them.
         if let Some(d) = detail
@@ -1353,8 +1389,9 @@ const TRACK_OFFSET: f64 = forge_procgen::city::transit::TRACK_OFFSET;
 pub(crate) use forge_procgen::city::ground::{ROAD_LEVEL, WALK_LEVEL};
 /// The squares' level: the walking level, as everywhere people walk.
 const SQUARE_LEVEL: f64 = WALK_LEVEL;
-/// A built block's paved forecourt along its streets, metres deep.
-const FORECOURT: f64 = 2.0;
+/// A built block's paved forecourt along its streets, metres deep (the gaps' hedges stand
+/// behind it).
+const FORECOURT: f64 = gardens::FORECOURT;
 /// A passage's paving through a building: a centimetre over the block's ground under it.
 const PASSAGE_FLOOR: f64 = WALK_LEVEL + 0.01;
 

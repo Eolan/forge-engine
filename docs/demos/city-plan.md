@@ -586,6 +586,13 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
     court's middle, on its sunniest (north) side that the paths leave free. It has eight beds
     (four where only those fit), 1.2 × 4 m and 0.7 m tall for a seated gardener, on paths of
     1.4 m, with a path from the middle.
+  - **The gaps between the buildings** (open blocks) get a low hedge (0.8 m) along their street
+    side, just behind the 2 m paved forecourt, broken a metre either side of the court's
+    paths. They showed a plain lawn; the owner said a gap would "match the sidewalk or have a
+    decoration".
+    - With open blocks on, the example has 3 091 such hedges in 1 770 gaps, none in a building
+      or on a path; the sandbox has 16 476.
+    - Test `open_blocks_gaps_are_hedged_behind_their_forecourts_but_where_their_paths_go_in`.
   - **The walker** walks round the planters, hedges and beds. No tree stands on a path, a
     terrace, a hedge or a bed.
   - **Plants:** within 400 m of the kit's centre, shrubs every metre in the planters and two

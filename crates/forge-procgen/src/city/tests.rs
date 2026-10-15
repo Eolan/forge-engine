@@ -602,6 +602,71 @@ fn court_gardens_keep_clear_of_the_buildings_the_paths_and_the_doors() {
 }
 
 #[test]
+fn open_blocks_gaps_are_hedged_behind_their_forecourts_but_where_their_paths_go_in() {
+    // The example with open blocks (`DistrictSpec::gaps`, the sandbox's): each gap's street
+    // side gets a low hedge 2 m in from the building line, none across a court path.
+    use super::gardens::{self, FORECOURT, Kind};
+    let size = 4000.0;
+    let site = example::site(size, 10.0);
+    let mut params = example::params(size);
+    for d in &mut params.districts {
+        d.gaps = Some(0.25);
+    }
+    let city = plan(&site, &params);
+    let masses = super::mass::masses(&city, &super::bible::StyleBible::default(), 7);
+    let structures = super::structure::structures(&city, &masses);
+    let pieces = gardens::gardens(&city, &masses, &structures);
+    let low: Vec<&gardens::Piece> = pieces
+        .iter()
+        .filter(|p| p.kind == Kind::Hedge && (p.height - 0.8).abs() < 1e-9)
+        .collect();
+    let built: std::collections::HashSet<u32> = masses.iter().map(|m| m.lot).collect();
+    let gap_lots: Vec<usize> = city
+        .lots
+        .iter()
+        .enumerate()
+        .filter(|(i, l)| {
+            l.frontage
+                && !built.contains(&(*i as u32))
+                && city.blocks[l.block as usize].courtyard.is_some()
+        })
+        .map(|(i, _)| i)
+        .collect();
+    // Those standing in a gap: a hedge's middle inside a gap lot.
+    let in_gaps = low
+        .iter()
+        .filter(|h| {
+            let c = geom::centroid(&h.outline);
+            gap_lots
+                .iter()
+                .any(|&i| geom::contains(&city.lots[i].polygon, c))
+        })
+        .count();
+    let footprints: Vec<Vec<DVec2>> = masses.iter().map(|m| m.footprint.clone()).collect();
+    let paths: Vec<&Vec<DVec2>> = pieces
+        .iter()
+        .filter(|p| p.kind == Kind::Path)
+        .map(|p| &p.outline)
+        .collect();
+    let mut wrong = 0;
+    for h in &low {
+        let c = geom::centroid(&h.outline);
+        wrong += usize::from(inside_any(&footprints, c) || inside_any(paths.iter().copied(), c));
+    }
+    println!(
+        "{} gap lots, {in_gaps} hedges in them (forecourt {FORECOURT} m), {wrong} wrong",
+        gap_lots.len()
+    );
+    assert!(gap_lots.len() > 20, "{} gap lots", gap_lots.len());
+    assert!(
+        in_gaps >= gap_lots.len() / 2,
+        "{in_gaps} hedges for {} gaps",
+        gap_lots.len()
+    );
+    assert_eq!(wrong, 0, "{wrong} gap hedges in a building or on a path");
+}
+
+#[test]
 fn planters_line_the_homes_on_the_streets_and_leave_their_doors_clear() {
     // `research/ground-floors.md` §4.6: the homes on the streets behind a planted strip, never
     // raised; none before a shop, and every door and passage clear.

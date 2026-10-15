@@ -79,6 +79,9 @@ pub struct Flat {
     pub garden: bool,
 }
 
+/// A built block's paved forecourt along its streets, metres deep from the building line: the
+/// pavement it meets, carried into the gaps between the buildings.
+pub const FORECOURT: f64 = 2.0;
 /// A court-side flat's width along its wall, metres: one garden or terrace each.
 pub const FLAT: f64 = 8.0;
 /// A garden's depth out from its wall, metres: 36 m² for a flat, Home Select's 25–40.
@@ -488,7 +491,115 @@ pub fn gardens(plan: &CityPlan, masses: &[Mass], structures: &[Structure]) -> Ve
     }
     planters(plan, masses, structures, &mut out);
     kitchen_gardens(plan, &mut out);
+    gap_hedges(plan, masses, &mut out);
     out
+}
+
+/// A low hedge along each gap between the buildings on a green court's streets (a street lot
+/// left open), just behind its paved forecourt, broken a metre either side of the court's
+/// paths: the gaps showed a plain lawn (the owner: a gap would "match the sidewalk or have a
+/// decoration"; Paris's residents asked for low planting rather than fences,
+/// `research/ground-floors.md` §3).
+fn gap_hedges(plan: &CityPlan, masses: &[Mass], out: &mut Vec<Piece>) {
+    let built: HashSet<u32> = masses.iter().map(|m| m.lot).collect();
+    let mut streets = PointGrid::new(plan.size, 20.0);
+    for (k, e) in plan.roads.edges.iter().enumerate() {
+        for p in geom::resample(&e.points, 2.0) {
+            streets.insert(p, k as u32);
+        }
+    }
+    // The buildings' outlines every 8 m: a point inside one lies within 30 m of its samples.
+    let mut near = PointGrid::new(plan.size, 30.0);
+    for (k, m) in masses.iter().enumerate() {
+        let mut ring = m.footprint.clone();
+        ring.push(m.footprint[0]);
+        for p in geom::resample(&ring, 8.0) {
+            near.insert(p, k as u32);
+        }
+    }
+    let in_building = |p: DVec2| {
+        let mut inside = false;
+        near.for_each_within(p, 30.0, |_, k| {
+            inside = inside || geom::contains(&masses[k as usize].footprint, p);
+        });
+        inside
+    };
+    let mut paths: HashMap<u32, Vec<Vec<DVec2>>> = HashMap::new();
+    for p in out.iter().filter(|p| p.kind == Kind::Path) {
+        paths.entry(p.block).or_default().push(p.outline.clone());
+    }
+    let (hw, _, low) = HEDGE;
+    let mut hedges = Vec::new();
+    for (i, lot) in plan.lots.iter().enumerate() {
+        if green_court(plan, lot.block).is_none() || !lot.frontage || built.contains(&(i as u32)) {
+            continue;
+        }
+        let mine = paths.get(&lot.block).map_or(&[][..], Vec::as_slice);
+        let n = lot.polygon.len();
+        for k in 0..n {
+            let (a, b) = (lot.polygon[k], lot.polygon[(k + 1) % n]);
+            let length = a.distance(b);
+            let mid = (a + b) * 0.5;
+            // Its sides on a street's building line: half the street's width from its middle.
+            let Some((_, e)) = streets.nearest(mid, 40.0) else {
+                continue;
+            };
+            let street = &plan.roads.edges[e as usize];
+            let off = street
+                .points
+                .windows(2)
+                .map(|w| geom::distance_to_segment(mid, w[0], w[1]))
+                .fold(f64::MAX, f64::min);
+            if length < 4.0 || (off - street.profile.width() * 0.5).abs() > 1.5 {
+                continue;
+            }
+            let t = (b - a) / length;
+            let mut inward = DVec2::new(-t.y, t.x);
+            if !geom::contains(&lot.polygon, mid + inward * 0.5) {
+                inward = -inward;
+            }
+            let d = FORECOURT + hw * 0.5 + 0.1;
+            // Every half metre along the line, where it lies in the lot, half a metre clear of
+            // the buildings and a metre clear of the paths.
+            let clear = |p: DVec2| {
+                geom::contains(&lot.polygon, p)
+                    && [p, p + t * 0.5, p - t * 0.5, p + inward * 0.5]
+                        .iter()
+                        .all(|&q| !in_building(q))
+                    && mine
+                        .iter()
+                        .all(|o| [p, p + t, p - t].iter().all(|&q| !geom::contains(o, q)))
+            };
+            let steps = (length / 0.5).floor() as usize;
+            let mut from: Option<f64> = None;
+            for j in 0..=steps {
+                let s = j as f64 * 0.5;
+                let good = j < steps && clear(a + t * s + inward * d);
+                match (from, good) {
+                    (None, true) => from = Some(s),
+                    (Some(s0), false) => {
+                        if s - s0 >= 2.0 {
+                            let side = |s: f64, off: f64| a + t * s + inward * (d + off);
+                            hedges.push(Piece {
+                                kind: Kind::Hedge,
+                                block: lot.block,
+                                outline: ccw(vec![
+                                    side(s0, -hw * 0.5),
+                                    side(s - 0.5, -hw * 0.5),
+                                    side(s - 0.5, hw * 0.5),
+                                    side(s0, hw * 0.5),
+                                ]),
+                                height: low,
+                            });
+                        }
+                        from = None;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    out.extend(hedges);
 }
 
 /// Planted beds before the homes on the streets 8 m wide or more, against the facade on the
