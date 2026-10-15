@@ -44,8 +44,9 @@ fn facing(m: &mut TriMesh, mut p: [Vec3; 4], out: Vec3, section: u8) {
 }
 
 /// One of a tram's sections: a cab, its nose forward, when `cab`; else a passenger section with
-/// its bellows at both ends. Sides of glass between pillars over a painted skirt with the
-/// livery's stripe, a door pair in the middle, the roof's equipment pods.
+/// its bellows at both ends. Sides of glass between slim pillars over a low painted skirt with the
+/// livery's stripe, roof lights sloping in to the roof, a door pair in the middle, upholstered
+/// seats inside, the roof's equipment pods.
 pub fn tram_section(cab: bool) -> TriMesh {
     let mut m = TriMesh::default();
     let (h, w) = (SECTION_LENGTH * 0.5, TRAM_WIDTH * 0.5);
@@ -60,91 +61,104 @@ pub fn tram_section(cab: bool) -> TriMesh {
         ALL,
     );
     // The lower body either side of the doors, hollow: a panel each side, the stripe over it.
+    // Low, so the glass comes down to a seated passenger's elbow (the owner: more glass).
     let door = 0.7;
     let panel = 0.06;
+    let sill = 0.95;
     for (x0, x1) in [(-h, -door), (door, h)] {
         for (z0, z1) in [(-w, -w + panel), (w - panel, w)] {
             cuboid(
                 &mut m,
                 Vec3::new(x0, FLOOR, z0),
-                Vec3::new(x1, 1.05, z1),
+                Vec3::new(x1, sill, z1),
                 BODY,
                 ALL & !NEG_Y,
             );
         }
         cuboid(
             &mut m,
-            Vec3::new(x0, 0.82, -w - 0.01),
-            Vec3::new(x1, 0.98, w + 0.01),
+            Vec3::new(x0, 0.74, -w - 0.01),
+            Vec3::new(x1, 0.88, w + 0.01),
             STRIPE,
             sides,
         );
     }
-    // Inside: two seats facing each other by each window between the doors and the ends, a
-    // ceiling 2.25 m over the floor (the owner found the inside small: it was a solid body to
-    // 1.05 m with no inside faces).
+    // Inside: two seats facing each other by each window between the doors and the ends,
+    // upholstered: a deep cushion and a tall back with a headrest (the owner: more comfortable
+    // seats; and the inside was small, a solid body to 1.05 m with no inside faces).
     let mut x = door + 0.45;
     while x + 0.95 <= h - 0.15 {
         for z in [-w + panel, w - panel - 0.5] {
-            for (s0, s1, back) in [(x, x + 0.45, x), (x + 0.5, x + 0.95, x + 0.89)] {
+            for (s0, s1, back) in [(x, x + 0.45, x), (x + 0.5, x + 0.95, x + 0.87)] {
                 for k in [1.0_f32, -1.0] {
                     let (a, b) = if k > 0.0 { (s0, s1) } else { (-s1, -s0) };
                     cuboid(
                         &mut m,
-                        Vec3::new(a, FLOOR + 0.4, z),
-                        Vec3::new(b, FLOOR + 0.46, z + 0.5),
+                        Vec3::new(a, FLOOR + 0.36, z + 0.02),
+                        Vec3::new(b, FLOOR + 0.48, z + 0.48),
                         STRIPE,
                         ALL,
                     );
                     let (c, d) = if k > 0.0 {
-                        (back, back + 0.06)
+                        (back, back + 0.08)
                     } else {
-                        (-back - 0.06, -back)
+                        (-back - 0.08, -back)
                     };
                     cuboid(
                         &mut m,
-                        Vec3::new(c, FLOOR + 0.46, z),
-                        Vec3::new(d, FLOOR + 1.05, z + 0.5),
+                        Vec3::new(c, FLOOR + 0.48, z + 0.02),
+                        Vec3::new(d, FLOOR + 1.12, z + 0.48),
                         STRIPE,
                         ALL,
+                    );
+                    // The headrest, narrower than the back.
+                    cuboid(
+                        &mut m,
+                        Vec3::new(c, FLOOR + 1.12, z + 0.1),
+                        Vec3::new(d, FLOOR + 1.3, z + 0.4),
+                        STRIPE,
+                        ALL & !NEG_Y,
                     );
                 }
             }
         }
         x += 1.6;
     }
+    // The glass runs to `eave`, where the panoramic roof lights slope in over the passengers'
+    // heads to the roof (the owner: a dome-like glazing), its middle a ceiling under the pods.
+    let (eave, roof, inset) = (2.8, 3.22, 0.5);
     cuboid(
         &mut m,
-        Vec3::new(-h, FLOOR + 2.25, -w + panel),
-        Vec3::new(h, 2.55, w - panel),
+        Vec3::new(-h, roof - 0.08, -w + inset),
+        Vec3::new(h, roof, w - inset),
         BODY,
         NEG_Y,
     );
-    // The doors: glazed, a little inside the body, floor to roof line.
+    // The doors: glazed, a little inside the body, floor to the eave.
     cuboid(
         &mut m,
         Vec3::new(-door, FLOOR, -w + 0.04),
-        Vec3::new(door, 2.55, w - 0.04),
+        Vec3::new(door, eave, w - 0.04),
         GLASS,
         sides,
     );
-    // The window band: glass a little inside the body, pillars flush with it.
+    // The window band: glass a little inside the body, slim pillars flush with it.
     cuboid(
         &mut m,
-        Vec3::new(-h, 1.05, -w + 0.03),
-        Vec3::new(h, 2.55, w - 0.03),
+        Vec3::new(-h, sill, -w + 0.03),
+        Vec3::new(h, eave, w - 0.03),
         GLASS,
         sides,
     );
     let mut x = -h;
     while x <= h + 1e-3 {
         if x.abs() > door + 0.05 || (x.abs() - door).abs() < 0.1 {
-            let (a, b) = ((x - 0.08).max(-h), (x + 0.08).min(h));
+            let (a, b) = ((x - 0.05).max(-h), (x + 0.05).min(h));
             for (z0, z1) in [(-w, -w + panel), (w - panel, w)] {
                 cuboid(
                     &mut m,
-                    Vec3::new(a, 1.05, z0),
-                    Vec3::new(b, 2.55, z1),
+                    Vec3::new(a, sill, z0),
+                    Vec3::new(b, eave, z1),
                     BODY,
                     ALL & !POS_Y & !NEG_Y,
                 );
@@ -152,18 +166,37 @@ pub fn tram_section(cab: bool) -> TriMesh {
         }
         x += 1.6;
     }
-    // The upper body and the roof with its pods.
+    // A slim eave band, the roof lights over it sloping in to the roof (both faces: seen from
+    // the street and from inside), the roof and its pods.
     cuboid(
         &mut m,
-        Vec3::new(-h, 2.55, -w),
-        Vec3::new(h, 3.2, w),
+        Vec3::new(-h, eave, -w),
+        Vec3::new(h, eave + 0.1, w),
         BODY,
         sides | POS_Y,
     );
+    for s in [-1.0_f32, 1.0] {
+        let light = [
+            Vec3::new(-h, eave + 0.1, s * (w - 0.02)),
+            Vec3::new(h, eave + 0.1, s * (w - 0.02)),
+            Vec3::new(h, roof, s * (w - inset)),
+            Vec3::new(-h, roof, s * (w - inset)),
+        ];
+        let out = Vec3::new(0.0, 1.0, s).normalize();
+        facing(&mut m, light, out, GLASS);
+        facing(&mut m, light, -out, GLASS);
+    }
     cuboid(
         &mut m,
-        Vec3::new(-h + 0.8, 3.2, -0.8),
-        Vec3::new(h - 0.8, 3.48, 0.8),
+        Vec3::new(-h, roof, -w + inset),
+        Vec3::new(h, roof + 0.02, w - inset),
+        BODY,
+        POS_Y | POS_Z | NEG_Z,
+    );
+    cuboid(
+        &mut m,
+        Vec3::new(-h + 0.8, roof + 0.02, -0.6),
+        Vec3::new(h - 0.8, roof + 0.27, 0.6),
         UNDER,
         ALL & !NEG_Y,
     );
@@ -186,54 +219,54 @@ pub fn tram_section(cab: bool) -> TriMesh {
     m
 }
 
-/// A cab's nose past `x = h`: the lower front, a raked windscreen, its painted cheeks and the
-/// headlights' band.
+/// A cab's nose past `x = h`: the lower front, a raked windscreen wrapping round its sides
+/// (glass cheeks), and the headlights' band.
 fn nose(m: &mut TriMesh, h: f32, w: f32) {
     let f = h + NOSE;
     // The lower front, rounded off by a step.
     cuboid(
         m,
         Vec3::new(h, 0.3, -w + 0.05),
-        Vec3::new(f, 1.05, w - 0.05),
+        Vec3::new(f, 0.95, w - 0.05),
         BODY,
         POS_X | POS_Y | NEG_Y | POS_Z | NEG_Z,
     );
     cuboid(
         m,
-        Vec3::new(h, 0.82, -w + 0.04),
-        Vec3::new(f + 0.01, 0.98, w - 0.04),
+        Vec3::new(h, 0.74, -w + 0.04),
+        Vec3::new(f + 0.01, 0.88, w - 0.04),
         STRIPE,
         POS_X | POS_Z | NEG_Z,
     );
     // The windscreen, raked back to the roof line.
-    let top = 2.9;
+    let top = 3.0;
     let screen = [
-        Vec3::new(f, 1.05, -w + 0.08),
-        Vec3::new(f, 1.05, w - 0.08),
+        Vec3::new(f, 0.95, -w + 0.08),
+        Vec3::new(f, 0.95, w - 0.08),
         Vec3::new(h + 0.08, top, w - 0.08),
         Vec3::new(h + 0.08, top, -w + 0.08),
     ];
     facing(m, screen, Vec3::new(1.0, 0.4, 0.0), GLASS);
-    // Its cheeks.
+    // Its cheeks, glazed: the screen wraps round the cab.
     for z in [-w + 0.05, w - 0.05] {
         let out = Vec3::new(0.0, 0.0, z.signum());
         facing(
             m,
             [
-                Vec3::new(h, 1.05, z),
-                Vec3::new(f, 1.05, z),
+                Vec3::new(h, 0.95, z),
+                Vec3::new(f, 0.95, z),
                 Vec3::new(h + 0.08, top, z),
                 Vec3::new(h, top, z),
             ],
             out,
-            BODY,
+            GLASS,
         );
     }
     // The roof's front over the screen.
     cuboid(
         m,
         Vec3::new(h, top, -w),
-        Vec3::new(h + 0.12, 3.2, w),
+        Vec3::new(h + 0.12, 3.24, w),
         BODY,
         POS_X | POS_Y | POS_Z | NEG_Z | NEG_X,
     );

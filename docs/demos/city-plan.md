@@ -519,9 +519,17 @@ the line's colour, articulated round the curve, on the right-hand track.*
   6.4 m (two cabs with raked windscreens, three passenger sections), glazed doors, the livery's
   stripe, roof pods, bellows between sections. It takes its power from the ground, as in
   Bordeaux and Nice, so the streets have no overhead wires. Inside: a low floor 25 cm over the
-  rails, level with the platforms; hollow sides; facing pairs of seats by the windows; a
-  ceiling 2.25 m up. It was a solid body to 1.05 m with no inside faces, and the owner found
-  it small.
+  rails, level with the platforms; hollow sides; facing pairs of seats by the windows. It was a
+  solid body to 1.05 m with no inside faces, and the owner found it small.
+  - **Modernised (2026-10-15).** The owner asked for more futuristic trams with more glass and
+    a dome-like glazing, and more comfortable-looking seats:
+    - the glass runs from 0.95 to 2.8 m between slimmer pillars;
+    - roof lights slope in from the eave to the roof over the passengers' heads, a ceiling
+      0.5 m in from each side under the pods;
+    - the cabs' windscreens wrap round their sides;
+    - the seats have deep cushions, tall backs and headrests.
+
+    Rounded windows wait for curved parts in the part programs.
 - **Riding:** C boards the tram section nearest the camera (within 10 m), standing in its
   aisle and facing the way it runs; C again gets off on the platform's side, walking again if
   the rider walked. `--ride SECONDS` boards the nearest tram anywhere that far into a scripted
