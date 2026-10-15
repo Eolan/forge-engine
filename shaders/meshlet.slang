@@ -2981,8 +2981,11 @@ static const float3 ROOM_FLOORS[3] = {
 };
 static const float3 ROOM_CEILING = float3(0.90, 0.89, 0.86);
 // The share of the window's daylight a room's walls get, and the share of the windows with net
-// curtains (the owner: in France many homes keep sheers so the street cannot see in).
-static const float ROOM_DAYLIGHT = 1.0;
+// curtains (the owner: in France many homes keep sheers so the street cannot see in). The
+// curtains hang at the glass and take all of it. A room lit as brightly as the wall outside
+// matched the walls from afar, and the facades lost their windows; a room gets a few per cent of
+// the daylight outside, but a third keeps the room in sight from the street.
+static const float ROOM_DAYLIGHT = 0.35;
 static const float ROOM_CURTAINS = 0.45;
 // The share of a lit row's luminance (3 to 8 cd/m²) its room's lamp gives the walls: the flat glow
 // was too strong and all alike at night (the owner). The night's exposure puts its grey near
@@ -3070,13 +3073,14 @@ float3 shade_standard(Frame* f, Material mat, Surface s)
             float3 room = interior_room(s.object_position, d, s.instance_id, max(length(s.dpdx), length(s.dpdy)));
             float3 h = hash_color(s.instance_id);
             float curtain = h.x < ROOM_CURTAINS ? 0.35 + 0.5 * h.x / ROOM_CURTAINS : 0.0;
-            float3 seen = lerp(room, mat.color_b, curtain);
             // Lit by the daylight the window gets (a white wall's facing out), or the row's lamp.
             float ndl_white;
             float3 daylight = sun_light(f, float3(1.0, 1.0, 1.0), n, 1.0, 0.0, s.shadow, s.sky, s.ao, s.view, 0.0, s.world, s.probes, false, ndl_white);
+            float3 lamp = mat.emissive * ROOM_LAMP;
+            float3 seen = lerp(room * (daylight * ROOM_DAYLIGHT + lamp), mat.color_b * (daylight + lamp), curtain);
             // Through the glass, less what it reflects (Schlick).
             float fresnel = mat.reflectance + (1.0 - mat.reflectance) * pow(1.0 - saturate(dot(n, s.view)), 5.0);
-            return pane + seen * (daylight * ROOM_DAYLIGHT + mat.emissive * ROOM_LAMP) * (1.0 - fresnel);
+            return pane + seen * (1.0 - fresnel);
         }
         standard_surface(mat, s, albedo, n);
     }

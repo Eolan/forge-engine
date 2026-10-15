@@ -467,8 +467,11 @@ The ray leaves the box by a wall, the floor, the ceiling or the back wall:
   sideboard) against the back, which the ray can meet first;
 - the depths darker, and net curtains on 45 % of the windows, from sheer to drawn.
 
-No geometry is added: the glass's shading does it all. By day the room takes the daylight that
-falls on the window; at night a lit row's room takes 4 % of the row's luminance (3–8 cd/m²).
+No geometry is added: the glass's shading does it all. By day the room takes a third of the
+daylight that falls on the window, and the curtains, at the glass, all of it: a room as bright
+as the wall outside matched the walls from the air, and the facades lost their windows (a real
+room gets a few per cent; a third keeps it in sight from the street). At night a lit row's room
+takes 4 % of the row's luminance (3–8 cd/m²).
 The flat glow was too strong and all alike (the owner): at the full value the lit panes were
 white, and at 4 % the walls sit a stop or two over the night's grey and the room shows. The
 textured boxes beyond the kit light their windows to match (2.5 % of the glow, was 15 %: the far
