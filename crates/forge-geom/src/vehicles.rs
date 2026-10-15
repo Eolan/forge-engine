@@ -186,7 +186,9 @@ pub fn tram_section(cab: bool) -> TriMesh {
         ];
         let out = Vec3::new(0.0, 1.0, s).normalize();
         facing(&mut m, light, out, GLASS);
-        facing(&mut m, light, -out, GLASS);
+        // Its inside face 2 cm in: the two faces on one plane fought on a moving tram's roof
+        // (the owner, 2026-10-15), as a market stall's canvas folded into itself.
+        facing(&mut m, light.map(|p| p - out * 0.02), -out, GLASS);
     }
     cuboid(
         &mut m,
@@ -202,21 +204,23 @@ pub fn tram_section(cab: bool) -> TriMesh {
         UNDER,
         ALL & !NEG_Y,
     );
-    // The ends: a bellows to the next section, or the cab's nose.
-    let bellows = |m: &mut TriMesh, x0: f32, x1: f32| {
+    // The ends: a bellows to the next section, or the cab's nose. The front one 2 cm smaller, so
+    // it nests in the next section's: on a curve the two overlap, and their tops and sides on
+    // one plane fought (the owner saw a moving tram's roof flicker, 2026-10-15).
+    let bellows = |m: &mut TriMesh, x0: f32, x1: f32, inset: f32| {
         cuboid(
             m,
-            Vec3::new(x0, FLOOR, -w + 0.15),
-            Vec3::new(x1, 3.05, w - 0.15),
+            Vec3::new(x0, FLOOR + inset, -w + 0.15 + inset),
+            Vec3::new(x1, 3.05 - inset, w - 0.15 - inset),
             UNDER,
             ALL,
         );
     };
-    bellows(&mut m, -h - SECTION_GAP * 0.5, -h);
+    bellows(&mut m, -h - SECTION_GAP * 0.5, -h, 0.0);
     if cab {
         nose(&mut m, h, w);
     } else {
-        bellows(&mut m, h, h + SECTION_GAP * 0.5);
+        bellows(&mut m, h, h + SECTION_GAP * 0.5, 0.02);
     }
     m
 }

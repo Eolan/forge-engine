@@ -206,6 +206,28 @@ pub(crate) fn quad(m: &mut TriMesh, p: [Vec3; 4], section: u8) {
     m.sections.extend([section, section]);
 }
 
+/// How far behind a thin sheet's front its back face stands, metres. Two faces on one plane fold
+/// into each other in the coarser levels of detail: a market stall's canvas lost half of itself
+/// from the air, the shops' awnings all of themselves while their shadows stayed, and a moving
+/// tram's roof lights flickered (the owner, 2026-10-15).
+pub(crate) const SHEET: f32 = 0.02;
+
+/// A thin sheet seen from both sides: [`quad`] `p`, and its back [`SHEET`] behind it.
+pub(crate) fn sheet(m: &mut TriMesh, p: [Vec3; 4], section: u8) {
+    quad(m, p, section);
+    let n = (p[2] - p[0]).cross(p[3] - p[1]).normalize_or_zero();
+    let b = p.map(|q| q - n * SHEET);
+    quad(m, [b[1], b[0], b[3], b[2]], section);
+}
+
+/// A thin triangle seen from both sides: [`triangle`] `p`, and its back [`SHEET`] behind it.
+pub(crate) fn sheet_triangle(m: &mut TriMesh, p: [Vec3; 3], section: u8) {
+    triangle(m, p, section);
+    let n = (p[1] - p[0]).cross(p[2] - p[0]).normalize_or_zero();
+    let b = p.map(|q| q - n * SHEET);
+    triangle(m, [b[0], b[2], b[1]], section);
+}
+
 /// A triangle, its corners counter-clockwise seen from its front.
 pub(crate) fn triangle(m: &mut TriMesh, p: [Vec3; 3], section: u8) {
     let n = (p[1] - p[0]).cross(p[2] - p[0]).normalize_or_zero();
@@ -831,25 +853,24 @@ fn shop(m: &mut TriMesh, w: f32, h: f32, awning: bool) {
     if awning {
         // Its valance 2.3 m up over a 2.6 m shopfront: walkers pass under it.
         let (y0, y1, out) = (top + 0.55, top - 0.05, 1.5);
-        // Its cheeks, seen from both sides.
+        // Its cheeks, seen from both sides (sheets: on one plane, the faces folded into each
+        // other far off, and only a cheek's blade was left with the awning's shadow).
         for x in [0.0, w] {
             let cheek = [
                 Vec3::new(x, y0, 0.08),
                 Vec3::new(x, y1, out),
                 Vec3::new(x, y1 - 0.22, out),
             ];
-            triangle(m, cheek, FABRIC);
-            triangle(m, [cheek[0], cheek[2], cheek[1]], FABRIC);
+            sheet_triangle(m, cheek, FABRIC);
         }
+        // Its slope, its underside seen from the pavement, and the valance along its front.
         let slope = [
             Vec3::new(0.0, y1, out),
             Vec3::new(w, y1, out),
             Vec3::new(w, y0, 0.08),
             Vec3::new(0.0, y0, 0.08),
         ];
-        quad(m, slope, FABRIC);
-        // Its underside, seen from the pavement, and the valance along its front.
-        quad(m, [slope[1], slope[0], slope[3], slope[2]], FABRIC);
+        sheet(m, slope, FABRIC);
         quad(
             m,
             [

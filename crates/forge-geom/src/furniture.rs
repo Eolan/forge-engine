@@ -6,7 +6,8 @@
 use glam::Vec3;
 
 use crate::modules::{
-    ALL, FABRIC, GLASS, METAL, NEG_Y, NO_BACK, POS_Y, SHUTTER, STONE, WOOD, cuboid, quad, triangle,
+    ALL, FABRIC, GLASS, METAL, NEG_Y, NO_BACK, POS_Y, SHUTTER, STONE, WOOD, cuboid, quad, sheet,
+    triangle,
 };
 use crate::procedural::TriMesh;
 
@@ -337,12 +338,7 @@ pub fn market_stall() -> TriMesh {
         Vec3::new(hw + 0.05, 2.3, hd + 0.1),
         Vec3::new(-hw - 0.05, 2.3, hd + 0.1),
     ];
-    quad(&mut m, valance, FABRIC);
-    quad(
-        &mut m,
-        [valance[1], valance[0], valance[3], valance[2]],
-        FABRIC,
-    );
+    sheet(&mut m, valance, FABRIC);
     m
 }
 

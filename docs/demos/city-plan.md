@@ -248,6 +248,16 @@ Three stages, each generic:
   railing's bars are one card between its rails, a grating the cut-out raster draws by the
   share of each pixel the bars cover, so they cannot flicker; off by default, it costs 0.09 ms
   at street level and 0.43 ms from the air until #265 (`research/trim-sheets.md` §2.9).
+- **Thin sheets** (2026-10-15, the owner's sightings in a running test). The awnings, the stalls'
+  valances, the Market Hall's glass roof, the terraced hall's canopies, the belvedere's dome and
+  the trams' roof lights are drawn from both sides as `modules::sheet`, their back face 2 cm
+  behind the front.
+  - **The fault:** the two faces stood on one plane, and the coarser levels of detail folded
+    them into each other. From the air the awnings vanished but for a cheek's thin blue blade,
+    while the ray-traced shadows still cast them on the pavement: "shadows on each side of the
+    building" with nothing over them.
+  - **Also:** a moving tram's roof flickered.
+  - The stalls' canvas had been fixed this way that morning.
 
 The engine's example style set is `crates/forge-procgen/src/city/mediterranean.rules`, about
 fifty lines. Each building picks its bay (2.8–3.4 m), its balconies, its shutters and whether its
@@ -644,6 +654,10 @@ the line's colour, articulated round the curve, on the right-hand track.*
       0.5 m in from each side under the pods;
     - the cabs' windscreens wrap round their sides;
     - the seats have deep cushions, tall backs and headrests.
+    - *Fixed the same evening* (the owner saw a moving tram's roof flicker): the roof lights'
+      inside face stands 2 cm in from their outside one. Each section's front bellows is 2 cm
+      smaller than the back one, so on a curve it nests in the next section's: their tops and
+      sides lay on one plane there.
 
     Rounded windows wait for curved parts in the part programs. The cars are 2.55 m wide (were
     2.4; the owner: a little wider, more comfortable inside). The platforms' edges stand 1.35 m

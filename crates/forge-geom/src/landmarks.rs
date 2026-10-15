@@ -9,7 +9,7 @@ use glam::Vec3;
 
 use crate::modules::{
     ALL, FABRIC, GLASS, METAL, NEG_Y, NEG_Z, NO_BACK, POS_X, POS_Y, POS_Z, SHUTTER, STONE, WOOD,
-    cuboid, quad,
+    cuboid, quad, sheet,
 };
 use crate::procedural::TriMesh;
 
@@ -100,8 +100,7 @@ pub fn market_hall(length: f32, width: f32) -> TriMesh {
     };
     for z_edge in [zl, zr] {
         let p = slope(z_edge);
-        quad(&mut m, p, GLASS);
-        quad(&mut m, [p[1], p[0], p[3], p[2]], GLASS);
+        sheet(&mut m, p, GLASS);
     }
     for x in [-hl, hl] {
         let g = [
@@ -110,8 +109,7 @@ pub fn market_hall(length: f32, width: f32) -> TriMesh {
             Vec3::new(x, ridge, 0.0),
             Vec3::new(x, ridge, 0.0),
         ];
-        quad(&mut m, g, GLASS);
-        quad(&mut m, [g[1], g[0], g[3], g[2]], GLASS);
+        sheet(&mut m, g, GLASS);
     }
     for i in 0..=bays {
         let x = -hl + length * i as f32 / bays as f32;
@@ -169,8 +167,7 @@ pub fn market_hall(length: f32, width: f32) -> TriMesh {
                 Vec3::new(x + 1.8, top, z + row * 0.9),
                 Vec3::new(x - 1.8, top, z + row * 0.9),
             ];
-            quad(&mut m, canopy, FABRIC);
-            quad(&mut m, [canopy[1], canopy[0], canopy[3], canopy[2]], FABRIC);
+            sheet(&mut m, canopy, FABRIC);
             for dx in [-1.6, 1.6] {
                 cuboid(
                     &mut m,
@@ -444,8 +441,7 @@ pub fn pavilion(radius: f32) -> TriMesh {
         for s in 0..steps {
             let (t0, t1) = (s as f32 / steps as f32, (s + 1) as f32 / steps as f32);
             let p = [ring(t0, k), ring(t0, k + 1), ring(t1, k + 1), ring(t1, k)];
-            quad(&mut m, [p[1], p[0], p[3], p[2]], METAL);
-            quad(&mut m, p, METAL);
+            sheet(&mut m, p, METAL);
         }
     }
     cuboid(
