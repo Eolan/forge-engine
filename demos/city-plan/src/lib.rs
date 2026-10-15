@@ -316,6 +316,55 @@ pub struct Detail<'a> {
     /// geometry (`--railing-cards`): it costs the overview 0.45 ms while the cut-out raster
     /// runs every cluster twice (`research/trim-sheets.md` §2.9).
     pub railing_cards: bool,
+    /// The hour the windows are lit for (`lit_share`; the demos' `--time-of-day`), or `None`:
+    /// two windows in five.
+    pub lit_hour: Option<f64>,
+}
+
+/// The hour (0 to 24) of a `--time-of-day` (0 sunrise, 0.5 noon, 1 sunset, 1.5 midnight), with
+/// the sun up from 6 to 18.
+pub fn hour_of_day(time_of_day: f32) -> f64 {
+    (6.0 + f64::from(time_of_day) * 12.0).rem_euclid(24.0)
+}
+
+/// The share of a building's windows lit at `hour` (0 to 24), a shop's when `shop` (estimates,
+/// until the residents light their own windows by what they do, D-060's step 3): homes lit
+/// through the evening, half of them by nine, a tenth at midnight and one in twenty in the small
+/// hours, some again before dawn; shops lit while open, 8 to 19, and a few windows' displays
+/// all night. Daylight drowns them anyway.
+pub fn lit_share(hour: f64, shop: bool) -> f64 {
+    const HOMES: [(f64, f64); 12] = [
+        (0.0, 0.10),
+        (1.0, 0.05),
+        (5.0, 0.05),
+        (6.0, 0.15),
+        (7.0, 0.25),
+        (9.0, 0.15),
+        (17.0, 0.25),
+        (19.0, 0.45),
+        (21.0, 0.50),
+        (22.0, 0.40),
+        (23.0, 0.25),
+        (24.0, 0.10),
+    ];
+    const SHOPS: [(f64, f64); 7] = [
+        (0.0, 0.10),
+        (7.0, 0.10),
+        (8.0, 0.60),
+        (19.0, 0.80),
+        (20.0, 0.30),
+        (21.0, 0.15),
+        (24.0, 0.10),
+    ];
+    let curve: &[(f64, f64)] = if shop { &SHOPS } else { &HOMES };
+    let hour = hour.clamp(0.0, 24.0);
+    curve
+        .windows(2)
+        .find(|w| hour <= w[1].0)
+        .map_or(curve[curve.len() - 1].1, |w| {
+            let t = (hour - w[0].0) / (w[1].0 - w[0].0);
+            w[0].1 + (w[1].1 - w[0].1) * t
+        })
 }
 
 impl PlanScenario {
@@ -2243,7 +2292,11 @@ fn kit(
             let colour = (mix(u64::from(m.lot)) % 4) as u8;
             let spot = mix(u64::from(pos.x.to_bits()) << 32 | u64::from(pos.z.to_bits()))
                 ^ mix(u64::from(pos.y.to_bits()));
-            let lit = spot % 10 < 4;
+            // Lit in the share of the hour (`lit_share`), each window its own draw.
+            let share = d
+                .lit_hour
+                .map_or(0.4, |h| lit_share(h, name.starts_with("shop")));
+            let lit = (((spot >> 20) % 1000) as f64) < share * 1000.0;
             let transform =
                 Mat4::from_cols(x.extend(0.0), y.extend(0.0), z.extend(0.0), pos.extend(1.0));
             instances.push((id, transform, colour * 2 + u8::from(lit)));
@@ -3431,7 +3484,12 @@ impl Scenario for PlanScenario {
         // luminance the room gets (ROOM_LAMP in meshlet.slang, 4 %) over walls, floor and
         // furniture about 0.6 as bright as white. At 15 % the far windows shone white over the
         // kit's rooms, which show their walls a few stops over the night's grey.
-        let far_rooms = glow * 0.025;
+        // Their lit windows are a fixed two in five of the texture's: dimmed with the homes'
+        // share of the hour (`lit_share`), the far city fades as the near one goes to bed.
+        let far_share = args
+            .time_of_day
+            .map_or(0.4, |t| lit_share(hour_of_day(t), false));
+        let far_rooms = glow * 0.025 * (far_share / 0.4) as f32;
         let mapped = |rgb: [f32; 3],
                       (albedo, normal, lights): (TextureId, TextureId, TextureId),
                       glow: f32| {
@@ -5117,6 +5175,24 @@ mod tests {
             pairs as f64 >= km / 3.0 * 0.5,
             "{pairs} pairs on {km:.1} km"
         );
+    }
+
+    #[test]
+    fn windows_light_by_the_hour() {
+        // `--time-of-day`: sunrise at 6, noon at 12, sunset at 18, midnight at 1.5.
+        assert_eq!(hour_of_day(0.0), 6.0);
+        assert_eq!(hour_of_day(1.0), 18.0);
+        assert_eq!(hour_of_day(1.5), 0.0);
+        // Homes: the evening's peak, the small hours dark; shops lit while open.
+        let home = |h: f64| lit_share(h, false);
+        let shop = |h: f64| lit_share(h, true);
+        assert!(home(21.0) >= 0.45 && home(3.0) <= 0.06);
+        assert!(home(21.0) > home(23.5) && home(23.5) > home(2.0));
+        assert!(shop(12.0) > 0.6 && shop(2.0) <= 0.1);
+        for h in 0..=48 {
+            let h = f64::from(h) * 0.5;
+            assert!((0.0..=1.0).contains(&home(h)) && (0.0..=1.0).contains(&shop(h)));
+        }
     }
 
     #[test]

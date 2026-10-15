@@ -110,6 +110,7 @@ fn main() -> anyhow::Result<()> {
         radius: cli.detail,
         seed: 12,
         railing_cards: cli.railing_cards,
+        lit_hour: cli.app.time_of_day.map(city_plan::hour_of_day),
     };
     let scenario = city_plan::PlanScenario::detailed(
         &site,

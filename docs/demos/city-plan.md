@@ -484,6 +484,16 @@ by 25 cm. A turn of 2.5 pixels a frame shows the same shimmer as without the fad
 138 629 pixels over ten frames): a turn does not move the room behind the glass, so this
 measures the facades, not the rooms.
 
+**Lit by the hour.** The share of the windows lit follows the run's `--time-of-day`
+(`lit_share`; estimates until the residents light their own windows by what they do):
+- **homes:** a quarter at 17:00, half by 21:00, a quarter at 23:00, a tenth at midnight, one in
+  twenty in the small hours, some again before dawn;
+- **shops:** lit while open, 8:00 to 19:00, and a tenth of them all night for their displays;
+- **the far facades:** dimmed with the homes' share.
+
+Each window takes its own draw, so the lit ones change from hour to hour. Without
+`--time-of-day`, two windows in five are lit as before. Test `windows_light_by_the_hour`.
+
 **Shops behind the shopfronts.** The shopfronts' glass has its own section
 (`modules::SHOP_GLASS`) and row (`RenderLayer::shop`): no curtains, which 45 % of the shops had,
 and no sofa. A shop's floor is level with the glass's foot and it runs 6 m deep. Its pale walls
