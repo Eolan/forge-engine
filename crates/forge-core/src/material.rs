@@ -189,6 +189,14 @@ pub struct RenderLayer {
     /// polygon kept in the next tile's mesh showed as a lighter band, the owner). Never for
     /// movers (their pattern would slide) or rotated instances.
     pub world_projected: bool,
+    /// Standard: a window's glass with a room behind it (interior mapping, D-060's step 3): a
+    /// ray from the glass into a box in the mesh's own space (a room 4 m wide and 4.5 m deep,
+    /// its floor 0.9 m under the glass's foot and its ceiling 2.6 m over it), its walls, floor
+    /// and ceiling coloured by the instance, lit by the daylight the window gets or by the row's
+    /// `emissive` as a lamp; the glass reflects in front, and `color_b` is a net curtain over
+    /// part of the windows. For the kits' windows, whose glass lies on the mesh's `z` plane
+    /// with the room towards −z.
+    pub interior: bool,
     /// The share of light reflected at normal incidence (Fresnel's F0), rising towards 1 at
     /// grazing angles: 0.04 for most dielectrics (stone, plaster, plastic, uncoated glass),
     /// 0.2–0.4 for coated glass (issue #56).
@@ -281,6 +289,7 @@ impl Default for RenderLayer {
             normal_strength: 1.0,
             hex_tiling: false,
             world_projected: false,
+            interior: false,
             reflectance: 0.04,
             bubbles: 0.0,
             contour: None,

@@ -396,6 +396,10 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   and repeat with absolute, relative and floating sizes, the component split of a mass into
   faces, conditions on the context, and terminals that insert modules. The research found no
   patent on the grammar itself (`city-generation.md`, Patents).
+- **Rooms behind the windows** (`interior_room` in `shaders/meshlet.slang`, D-060). Joost van
+  Dongen, "Interior Mapping: A new technique for rendering realistic buildings", Computer
+  Graphics International 2008: the view ray traced into a room box behind the glass, in the
+  window's own space. No patent found on the technique itself (`building-structure.md`).
 - **Timetabled runs** (`forge_sim::transit`). The General Transit Feed Specification's model
   (GTFS, gtfs.org): routes, trips, stop times and frequencies, a vehicle's place a function of
   its schedule.

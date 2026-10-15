@@ -105,6 +105,10 @@ pub const MATERIAL_PLANET: u32 = 16;
 /// ([`forge_core::material::RenderLayer::world_projected`]).
 pub const MATERIAL_WORLD_PROJECTED: u32 = 32;
 
+/// [`GpuMaterial`] flag: a window's glass with a room behind it
+/// ([`forge_core::material::RenderLayer::interior`]).
+pub const MATERIAL_INTERIOR: u32 = 64;
+
 /// The textures a world's materials sample, uploaded with their mips and visible to every
 /// shader through the bindless set. Released when dropped.
 pub struct TextureSet {
@@ -445,7 +449,8 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
                         MATERIAL_WORLD_PROJECTED
                     } else {
                         0
-                    },
+                    }
+                    | if r.interior { MATERIAL_INTERIOR } else { 0 },
                 contour: r.contour.map_or(0, |c| u32::from(c.below) + 1),
                 contour_above: r.contour.map_or(0, |c| c.above),
                 contour_height: r.contour.map_or(0.0, |c| c.height),

@@ -453,10 +453,38 @@ landing:
   13 %, T5 12 %. Also 19 640 shops and 25 374 store rooms. The structure takes 2.9 s with the
   units (2.25 s without).
 
+### Rooms behind the windows (D-060, step 3)
+
+The kit's glass shows a room behind it, seen from outside (interior mapping, Van Dongen 2008;
+`interior_room` in `shaders/meshlet.slang`). A material row with `RenderLayer::interior` set
+traces the view ray into a box in the window's own space: 4 m wide, 3.5 m high and 4.5 m deep,
+the glass on its front face, one box per cell when the glass is wider or taller (a shopfront's).
+The ray leaves the box by a wall, the floor, the ceiling or the back wall:
+
+- walls in one of four colours (cream, grey-blue, sand, sage), a floor of dark wood, oak or
+  tiles, a white ceiling, each window's own draw;
+- a picture on the back wall, a door in one side wall, a low piece of furniture (a sofa, a
+  sideboard) against the back, which the ray can meet first;
+- the depths darker, and net curtains on 45 % of the windows, from sheer to drawn.
+
+No geometry is added: the glass's shading does it all. By day the room takes the daylight that
+falls on the window; at night a lit row's room takes 4 % of the row's luminance (3–8 cd/m²).
+The flat glow was too strong and all alike (the owner): at the full value the lit panes were
+white, and at 4 % the walls sit a stop or two over the night's grey and the room shows. The
+textured boxes beyond the kit light their windows to match (2.5 % of the glow, was 15 %: the far
+city shone white over the kit's rooms). Where a pixel covers more than 6 cm of the room its
+edges would flicker as the room moves behind the glass, so the room fades into its mean colour
+by 25 cm. A turn of 2.5 pixels a frame shows the same shimmer as without the fade (138 695 and
+138 629 pixels over ten frames): a turn does not move the room behind the glass, so this
+measures the facades, not the rooms.
+
+The rooms stay outside views: the doors are never see-through (Celsys's claims, D-060), and
+going inside builds the real rooms.
+
 Next in step 3: which upper floors are offices and which homes, so the population counts by
 home (673 593 homes at the French 2.2 people a household would be 1.48 M; the net-area count
-says 977 k with a third of the floors not homes). Then the rooms behind the windows, lit by
-their residents, and going inside.
+says 977 k with a third of the floors not homes). Then the rooms lit by their residents, and
+going inside.
 
 ## Trams on their timetables (#253)
 

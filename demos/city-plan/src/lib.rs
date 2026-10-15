@@ -3190,25 +3190,31 @@ impl Scenario for PlanScenario {
         });
         let unit = std::f32::consts::PI / reference;
         let glow = 5.0 * unit;
-        // The textured boxes beyond the kit's reach glow at 15 % of it. Their windows light as
-        // the kit's do, but at the horizon facade stacks on facade with no dark roof or street
-        // between, and the far city read as a band of white (the owner, 2026-10-11). A stopgap
-        // until a proxy per building (#38) draws the far city as the kit would.
+        // The textured boxes' shopfronts glow at 15 % of it: at the horizon facade stacks on
+        // facade with no dark roof or street between, and the far city read as a band of white
+        // (the owner, 2026-10-11). A stopgap until a proxy per building (#38) draws the far city
+        // as the kit would.
         let far_glow = glow * 0.15;
-        let mapped =
-            |rgb: [f32; 3], (albedo, normal, lights): (TextureId, TextureId, TextureId)| {
-                RenderLayer {
-                    albedo_texture: Some(albedo),
-                    normal_texture: Some(normal),
-                    normal_strength: 1.0,
-                    emissive: [far_glow; 3],
-                    uv: Some(UvMapping {
-                        emissive_texture: Some(lights),
-                        ..UvMapping::default()
-                    }),
-                    ..colour(rgb, 12.0, 0.04)
-                }
-            };
+        // Their homes' windows as the kit's lit rooms read: the lamp's share of a lit row's
+        // luminance the room gets (ROOM_LAMP in meshlet.slang, 4 %) over walls, floor and
+        // furniture about 0.6 as bright as white. At 15 % the far windows shone white over the
+        // kit's rooms, which show their walls a few stops over the night's grey.
+        let far_rooms = glow * 0.025;
+        let mapped = |rgb: [f32; 3],
+                      (albedo, normal, lights): (TextureId, TextureId, TextureId),
+                      glow: f32| {
+            RenderLayer {
+                albedo_texture: Some(albedo),
+                normal_texture: Some(normal),
+                normal_strength: 1.0,
+                emissive: [glow; 3],
+                uv: Some(UvMapping {
+                    emissive_texture: Some(lights),
+                    ..UvMapping::default()
+                }),
+                ..colour(rgb, 12.0, 0.04)
+            }
+        };
         // The kit's render and stone, projected: concrete's relief, faint, under the tint (its
         // colour map's pits read as stains on a render).
         let [_, grain_normal] = textures::concrete(23, 512);
@@ -3239,21 +3245,24 @@ impl Scenario for PlanScenario {
                 // The render tints of the palette: sand, ochre, pale rose, off-white.
                 (
                     "plan wall (sand)".into(),
-                    mapped([0.94, 0.88, 0.76], facade),
+                    mapped([0.94, 0.88, 0.76], facade, far_rooms),
                 ),
                 (
                     "plan wall (ochre)".into(),
-                    mapped([0.92, 0.80, 0.62], facade),
+                    mapped([0.92, 0.80, 0.62], facade, far_rooms),
                 ),
                 (
                     "plan wall (rose)".into(),
-                    mapped([0.90, 0.76, 0.68], facade),
+                    mapped([0.90, 0.76, 0.68], facade, far_rooms),
                 ),
                 (
                     "plan wall (white)".into(),
-                    mapped([0.95, 0.93, 0.88], facade),
+                    mapped([0.95, 0.93, 0.88], facade, far_rooms),
                 ),
-                ("plan shopfront".into(), mapped([1.0, 1.0, 1.0], shop)),
+                (
+                    "plan shopfront".into(),
+                    mapped([1.0, 1.0, 1.0], shop, far_glow),
+                ),
                 (
                     "plan green roof".into(),
                     colour([0.24, 0.40, 0.17], 6.0, 0.02),
@@ -3310,9 +3319,13 @@ impl Scenario for PlanScenario {
                     (format!("{group} render"), render([0.94, 0.88, 0.76])),
                     (format!("{group} stone"), stone),
                     (format!("{group} frame"), colour(frame, 40.0, 0.1)),
+                    // A room behind each window (D-060's step 3): the windows read dark.
                     (
                         format!("{group} glass"),
-                        glass((k % 2 == 1).then_some(LIT[k / 2])),
+                        RenderLayer {
+                            interior: true,
+                            ..glass((k % 2 == 1).then_some(LIT[k / 2]))
+                        },
                     ),
                     (format!("{group} shutter"), colour(shutter, 14.0, 0.05)),
                     (

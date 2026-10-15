@@ -4067,6 +4067,14 @@ kit dressing them.
   - All of it is step-free. The example has 9 106 garden flats, half with gardens, and 277
     kitchen gardens.
 
+**Step 3's rooms behind the windows (built 2026-10-15).** The kit's glass shows a room traced in
+its shader: interior mapping, with walls, a floor, a ceiling, a picture, a door and a piece of
+furniture, each window's own draw, and net curtains on some. A lit row's room takes 4 % of its
+luminance, so the room shows at night instead of a white pane. Windows only, so Celsys's claim
+is not met: no door is ever drawn see-through. The rooms are not yet the units' rooms (the
+same box for every window) and not yet lit by their residents (`demos/city-plan.md`, "Rooms
+behind the windows").
+
 *(research: building-structure.md; ground-floors.md; issues #248, #263)*
 
 ## D-061 — The street ground as one map: cross-sections, junctions first, every surface once ✅ (proposed 2026-10-14; the owner's go the same day, in the order given)

@@ -142,6 +142,7 @@ static const uint MATERIAL_FLAG_MASKED = 4;     // cut out by the base colour's 
 static const uint MATERIAL_FLAG_DOUBLE_SIDED = 8; // drawn from both sides (#171)
 static const uint MATERIAL_FLAG_PLANET = 16;       // layered: the layers by height, slope and latitude on the frame's planet (#220)
 static const uint MATERIAL_FLAG_WORLD_PROJECTED = 32; // the textures and their noise from the scene frame, not the object's
+static const uint MATERIAL_FLAG_INTERIOR = 64;   // a window's glass with a room behind it (D-060's step 3)
 static const uint CUTOUT_GROUND_WINDOW = 1u << 31; // `cluster_cutouts`: windowed ground reaching into the ground window (#197)
 static const uint MESH_WINDOWED_GROUND = 1;     // Mesh::flags: its fragments in the frame's ground window go (#197)
 static const uint MESH_SCENE_SHADED = 2;        // Mesh::flags: a ground window's mesh, shaded where it stands in the scene (#197)
@@ -2960,6 +2961,95 @@ float3 shade_uv_mapped(Frame* f, Material mat, Surface s)
     return sun_light(f, diffuse, n, power, specular, s.shadow, s.sky, ao, s.view, reflectance, s.world, s.probes, s.traced, ndl) + emissive;
 }
 
+// The room behind a window's glass (interior mapping, D-060's step 3; Van Dongen, "Interior
+// Mapping", 2008): a box in the window mesh's own space, the glass on its z plane and the room
+// towards −z, from 1.4 m left of the glass's left edge, 0.9 m under its foot, 4.5 m deep. Its
+// walls, floor and ceiling are coloured by the instance, the back wall and the depths darker:
+// the light comes in through the window.
+static const float3 ROOM_LOW = float3(-1.4, -0.9, -4.5);
+static const float3 ROOM_HIGH = float3(2.6, 2.6, 0.0);
+static const float3 ROOM_WALLS[4] = {
+    float3(0.86, 0.83, 0.76), // cream
+    float3(0.80, 0.83, 0.85), // pale grey-blue
+    float3(0.85, 0.78, 0.68), // warm sand
+    float3(0.78, 0.82, 0.74), // sage
+};
+static const float3 ROOM_FLOORS[3] = {
+    float3(0.40, 0.28, 0.18), // dark wood
+    float3(0.58, 0.44, 0.30), // oak
+    float3(0.56, 0.55, 0.52), // tiles
+};
+static const float3 ROOM_CEILING = float3(0.90, 0.89, 0.86);
+// The share of the window's daylight a room's walls get, and the share of the windows with net
+// curtains (the owner: in France many homes keep sheers so the street cannot see in).
+static const float ROOM_DAYLIGHT = 1.0;
+static const float ROOM_CURTAINS = 0.45;
+// The share of a lit row's luminance (3 to 8 cd/m²) its room's lamp gives the walls: the flat glow
+// was too strong and all alike at night (the owner). The night's exposure puts its grey near
+// 0.13 cd/m²: a lit room's walls sit a stop or two over it and show the room, not a white pane.
+// city-plan's far facades light their windows to match.
+static const float ROOM_LAMP = 0.04;
+
+float3 interior_room(float3 o, float3 d, uint id, float footprint)
+{
+    // Rooms side by side and storey over storey behind wider and taller glass (a shopfront's).
+    float2 size = ROOM_HIGH.xy - ROOM_LOW.xy;
+    float2 cell = floor((o.xy - ROOM_LOW.xy) / size);
+    float3 lo = float3(ROOM_LOW.xy + cell * size, o.z + ROOM_LOW.z);
+    float3 hi = float3(ROOM_HIGH.xy + cell * size, o.z);
+    id ^= uint(int(cell.x) * 7919 + int(cell.y) * 104729);
+    // The planes the ray leaves the box by: the nearest of them.
+    float3 inv = 1.0 / d;
+    float3 far = max((lo - o) * inv, (hi - o) * inv);
+    float t = min(far.x, min(far.y, far.z));
+    float3 p = o + d * t;
+    float3 h = hash_color(id ^ 0x51ED27u);
+    float3 g = hash_color(id ^ 0xA5F3C1u);
+    float3 wall = ROOM_WALLS[min(uint(h.x * 4.0), 3u)];
+    float3 c;
+    float3 q = p - lo; // the hit in the room's corner frame
+    float width = hi.x - lo.x;
+    if (t == far.z)
+    {
+        c = wall * 0.8;
+        // A picture on the back wall, over the furniture.
+        float2 at = float2(q.x - width * (0.3 + 0.4 * g.x), q.y - 1.75);
+        if (abs(at.x) < 0.45 && abs(at.y) < 0.32)
+            c = abs(at.x) > 0.41 || abs(at.y) > 0.28 ? float3(0.12, 0.10, 0.08) : hash_color(id ^ 0x77u) * 0.6 + 0.15;
+    }
+    else if (t == far.y)
+        c = d.y < 0.0 ? ROOM_FLOORS[min(uint(h.y * 3.0), 2u)] : ROOM_CEILING;
+    else
+    {
+        c = wall;
+        // A door in one of the side walls, towards the back.
+        bool door_side = g.y < 0.5 ? p.x <= lo.x + 1e-3 : p.x >= hi.x - 1e-3;
+        float back = q.z;
+        if (door_side && back > 0.6 && back < 1.5 && q.y < 2.1)
+            c = float3(0.36, 0.26, 0.18);
+    }
+    // A low piece of furniture against the back wall (a sideboard, a sofa), in front of the
+    // wall behind it when the ray meets it first.
+    float3 f_lo = float3(lo.x + width * (0.2 + 0.3 * g.z), lo.y, lo.z);
+    float3 f_hi = float3(f_lo.x + 1.8, lo.y + 0.8, lo.z + 0.7);
+    float3 n0 = (f_lo - o) * inv;
+    float3 n1 = (f_hi - o) * inv;
+    float t_in = max(max(min(n0.x, n1.x), min(n0.y, n1.y)), min(n0.z, n1.z));
+    float t_out = min(min(max(n0.x, n1.x), max(n0.y, n1.y)), max(n0.z, n1.z));
+    if (t_in <= t_out && t_in > 0.0 && t_in < t)
+    {
+        float3 fp = o + d * t_in;
+        float3 fabric = hash_color(id ^ 0x3C1u) * 0.35 + 0.1;
+        c = fp.y >= f_hi.y - 1e-3 ? fabric * 1.3 : fabric;
+        p = fp;
+    }
+    c *= lerp(1.0, 0.45, saturate((o.z - p.z) / -ROOM_LOW.z));
+    // Far away, where a pixel covers a hand's width of the room, its edges flicker as the camera
+    // moves (the room shifts behind the glass with the view): it fades into its mean colour.
+    float3 mean = (wall * 0.5 + ROOM_FLOORS[min(uint(h.y * 3.0), 2u)] * 0.3 + ROOM_CEILING * 0.2) * 0.65;
+    return lerp(c, mean, smoothstep(0.06, 0.25, footprint));
+}
+
 float3 shade_standard(Frame* f, Material mat, Surface s)
 {
     float3 albedo;
@@ -2968,6 +3058,26 @@ float3 shade_standard(Frame* f, Material mat, Surface s)
     {
         if ((mat.flags & MATERIAL_FLAG_UV) != 0 && s.has_uv)
             return shade_uv_mapped(f, mat, s);
+        if ((mat.flags & MATERIAL_FLAG_INTERIOR) != 0)
+        {
+            // The pane: its reflection over dark glass.
+            float ndl;
+            float3 pane = sun_light(f, mat.color_a, n, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, s.world, s.probes, s.traced, ndl);
+            // The room behind, seen along the view into the mesh's space.
+            float3 d = normalize(mul(transpose(s.frame), -s.view));
+            if (d.z > -1e-3)
+                return pane;
+            float3 room = interior_room(s.object_position, d, s.instance_id, max(length(s.dpdx), length(s.dpdy)));
+            float3 h = hash_color(s.instance_id);
+            float curtain = h.x < ROOM_CURTAINS ? 0.35 + 0.5 * h.x / ROOM_CURTAINS : 0.0;
+            float3 seen = lerp(room, mat.color_b, curtain);
+            // Lit by the daylight the window gets (a white wall's facing out), or the row's lamp.
+            float ndl_white;
+            float3 daylight = sun_light(f, float3(1.0, 1.0, 1.0), n, 1.0, 0.0, s.shadow, s.sky, s.ao, s.view, 0.0, s.world, s.probes, false, ndl_white);
+            // Through the glass, less what it reflects (Schlick).
+            float fresnel = mat.reflectance + (1.0 - mat.reflectance) * pow(1.0 - saturate(dot(n, s.view)), 5.0);
+            return pane + seen * (daylight * ROOM_DAYLIGHT + mat.emissive * ROOM_LAMP) * (1.0 - fresnel);
+        }
         standard_surface(mat, s, albedo, n);
     }
     float ndl;
