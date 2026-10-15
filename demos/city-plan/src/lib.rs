@@ -773,7 +773,7 @@ impl PlanScenario {
         for (_, t) in &trees {
             trunks.insert(t.pos, 0);
         }
-        let trees = trees
+        let mut trees: Vec<(Vec3, Vec3, f32, usize)> = trees
             .iter()
             .map(|&(i, t)| {
                 let turn = (i as f32 * 2.399_963).rem_euclid(std::f32::consts::TAU);
@@ -789,6 +789,45 @@ impl PlanScenario {
                 )
             })
             .collect();
+        // Shrubs in the planters and vegetables in the kitchen gardens' beds near the kit, as
+        // small trees sunk in their boxes to the middle of their crowns (7 of a tree's height's
+        // tenths up), the trunks hidden: the boxes' flat green tops read as carpet, and standing
+        // on them the plants showed their trunks like bonsais.
+        let mut plants = 0;
+        for (k, g) in gardens.iter().enumerate() {
+            let (spacing, crown, high, rows): (f64, f32, f32, &[f64]) = match g.kind {
+                gardens::Kind::Planter => (1.0, 0.12, 0.08, &[0.0]),
+                gardens::Kind::Bed => (0.8, 0.07, 0.04, &[-0.25, 0.25]),
+                _ => continue,
+            };
+            let c = geom::centroid(&g.outline);
+            if detail.is_none_or(|d| c.distance(d.centre) > d.radius + 200.0) {
+                continue;
+            }
+            let (e0, e1) = (g.outline[1] - g.outline[0], g.outline[2] - g.outline[1]);
+            let (long, short) = if e0.length() >= e1.length() {
+                (e0, e1)
+            } else {
+                (e1, e0)
+            };
+            let n = (long.length() / spacing).floor().max(1.0) as usize;
+            for (r, &row) in rows.iter().enumerate() {
+                for j in 0..n {
+                    let h = mix((k as u64) << 20 ^ (r as u64) << 16 ^ j as u64);
+                    let vary = 0.85 + 0.3 * (h & 0xFF) as f32 / 255.0;
+                    let p = c + long * ((j as f64 + 0.5) / n as f64 - 0.5) + short * row;
+                    let base = WALK_LEVEL + g.height - f64::from(6.6 * high * vary);
+                    trees.push((
+                        world(size, p, base),
+                        Vec3::new(crown * vary, high * vary, crown * vary),
+                        ((h >> 8) & 0xFFFF) as f32 / 65535.0 * std::f32::consts::TAU,
+                        ((h >> 24) & 1) as usize,
+                    ));
+                    plants += 1;
+                }
+            }
+        }
+        passage_note += &format!("; {plants} plants in the planters and beds");
         // The lamps within the detailed reach and a little beyond: further off, a lamp head of
         // 3 000 cd/m² is far smaller than a pixel, and thousands of them flickered into a band
         // of light along the horizon at night (the owner, 2026-10-11). The far streets' light
