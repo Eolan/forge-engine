@@ -981,6 +981,7 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
     // Twice: the first pass moves junctions, and a pair it left may now be close.
     graph::tidy(&mut roads, site);
     graph::tidy(&mut roads, site);
+    graph::smooth_jogs(&mut roads, site);
     let mut faces = graph::faces(&roads);
     // Superblocks cut by streets, a cut a round (a 600 m block takes three).
     if let Some(max) = params.max_block {
@@ -999,6 +1000,7 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
             // Twice: the first pass moves junctions, and a pair it left may now be close.
             graph::tidy(&mut roads, site);
             graph::tidy(&mut roads, site);
+            graph::smooth_jogs(&mut roads, site);
             faces = graph::faces(&roads);
         }
     }

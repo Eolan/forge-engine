@@ -917,3 +917,25 @@ fn planters_line_the_homes_on_the_streets_and_leave_their_doors_clear() {
         "{before_shops} shopfronts behind a planter"
     );
 }
+
+#[test]
+fn no_street_is_left_with_a_jog() {
+    // Every street's line, after the plan's smoothing: no corner over 60° followed within 45 m
+    // by one the other way (a traced street joined to the one ahead by a stub; the owner:
+    // "one gentle turn would be enough"). The example has them before the pass.
+    let size = 4000.0;
+    let site = example::site(size, 10.0);
+    let city = plan(&site, &example::params(size));
+    let left: usize = city
+        .roads
+        .edges
+        .iter()
+        .map(|e| super::graph::jogs(&e.points).len())
+        .sum();
+    assert_eq!(left, 0, "{left} jogs left in the streets");
+    assert!(
+        city.roads.edges.len() > 1000,
+        "{} edges",
+        city.roads.edges.len()
+    );
+}

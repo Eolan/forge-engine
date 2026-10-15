@@ -966,6 +966,25 @@ pub fn write_ground(
         fill(&t.raised_stripes, [236, 234, 228]);
         fill(&t.walk, [206, 200, 190]);
     }
+    // The road graph's nodes in the window, their degree and their arms' ways, for a look at a
+    // junction or a bend by its numbers.
+    let mut degree = vec![0usize; plan.roads.nodes.len()];
+    for e in &plan.roads.edges {
+        degree[e.a as usize] += 1;
+        degree[e.b as usize] += 1;
+    }
+    for (i, node) in plan.roads.nodes.iter().enumerate() {
+        let p = node.pos;
+        if p.x >= lo.x && p.y >= lo.y && p.x <= hi.x && p.y <= hi.y {
+            eprintln!(
+                "node {i} at {:.1},{:.1}: {} ways",
+                p.x - plan.size * 0.5,
+                p.y - plan.size * 0.5,
+                degree[i]
+            );
+            canvas.disc(p, metres_per_pixel * 3.0, [200, 30, 30]);
+        }
+    }
     for block in &plan.blocks {
         let (blo, bhi) = block.polygon.iter().fold(
             (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)),

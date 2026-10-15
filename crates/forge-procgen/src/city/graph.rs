@@ -858,6 +858,99 @@ pub fn straighten(graph: &mut RoadGraph, site: &Site) {
     }
 }
 
+/// A turn over this, degrees, is a corner for [`jogs`].
+const JOG_TURN: f64 = 60.0;
+/// Two corners within this, metres, turning opposite ways, are a jog.
+const JOG_SPAN: f64 = 45.0;
+
+/// The signed turn at `points[k]`, radians, positive to the left.
+fn turn_at(points: &[DVec2], k: usize) -> f64 {
+    let d0 = (points[k] - points[k - 1]).normalize_or_zero();
+    let d1 = (points[k + 1] - points[k]).normalize_or_zero();
+    geom::cross(d0, d1).atan2(d0.dot(d1))
+}
+
+/// A line's jogs: each a corner turning over [`JOG_TURN`] one way and, within [`JOG_SPAN`]
+/// along the line, the next corner turning over [`JOG_TURN`] the other way, as `(i, j)` point
+/// indices. A traced street joined to the one ahead by a stub takes two right angles.
+pub fn jogs(points: &[DVec2]) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let limit = JOG_TURN.to_radians();
+    let mut i = 1;
+    while i + 1 < points.len() {
+        let t0 = turn_at(points, i);
+        if t0.abs() < limit {
+            i += 1;
+            continue;
+        }
+        let mut span = 0.0;
+        let mut j = i + 1;
+        while j + 1 < points.len() {
+            span += points[j - 1].distance(points[j]);
+            if span > JOG_SPAN {
+                break;
+            }
+            let t1 = turn_at(points, j);
+            if t1.abs() >= limit {
+                if t1.signum() != t0.signum() {
+                    out.push((i, j));
+                    i = j;
+                }
+                break;
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+    out
+}
+
+/// The streets' dog-legs smoothed: each jog ([`jogs`]) gives way to one S-curve from 12 m
+/// before its first corner to 12 m past its second, tangent to the street at both ends, the
+/// corners and the stub between them gone (the owner, 2026-10-15: two right-angle turns close
+/// together, "one gentle turn would be enough"). A curve that would leave the land, and a
+/// bridge, stay as they are. The number smoothed.
+pub fn smooth_jogs(graph: &mut RoadGraph, site: &Site) -> usize {
+    let mut count = 0;
+    for e in graph.edges.iter_mut().filter(|e| !e.bridge) {
+        let mut pts = e.points.clone();
+        // From the last jog back, so the earlier indices hold.
+        for (i, j) in jogs(&pts).into_iter().rev() {
+            let (din, dout) = (
+                (pts[i] - pts[i - 1]).normalize_or_zero(),
+                (pts[j + 1] - pts[j]).normalize_or_zero(),
+            );
+            let ri = 12f64.min(pts[i - 1].distance(pts[i]) * 0.5);
+            let rj = 12f64.min(pts[j].distance(pts[j + 1]) * 0.5);
+            let (p0, p3) = (pts[i] - din * ri, pts[j] + dout * rj);
+            let k = p0.distance(p3) * 0.45;
+            let (p1, p2) = (p0 + din * k, p3 - dout * k);
+            let curve: Vec<DVec2> = (0..=8)
+                .map(|s| {
+                    let t = f64::from(s) / 8.0;
+                    let u = 1.0 - t;
+                    p0 * (u * u * u)
+                        + p1 * (3.0 * u * u * t)
+                        + p2 * (3.0 * u * t * t)
+                        + p3 * (t * t * t)
+                })
+                .collect();
+            if curve.iter().any(|&q| site.water_at(q) != LAND) {
+                continue;
+            }
+            let mut next = pts[..i].to_vec();
+            next.extend(curve);
+            next.extend_from_slice(&pts[j + 1..]);
+            pts = next;
+            count += 1;
+        }
+        if pts.len() != e.points.len() {
+            e.points = pts;
+        }
+    }
+    count
+}
+
 /// A street network smaller than this, metres of streets, cut off from the rest, is not built.
 pub const MIN_NETWORK: f64 = 3000.0;
 
