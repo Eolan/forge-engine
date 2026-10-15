@@ -4664,16 +4664,15 @@ impl Running for PlanRunning {
             let mut rows: Vec<Vec<Mat4>> = vec![Vec::new(); signs::ROWS];
             for (_, i) in near {
                 let s = &self.screens[i];
-                let Some(wait) = self.trams[s.line]
+                let row = match self.trams[s.line]
                     .timetable
                     .next_arrival(s.stop, s.outbound, self.clock)
-                else {
-                    continue;
-                };
-                let row = if wait < 30.0 {
-                    0
-                } else {
-                    ((wait / 60.0).ceil() as usize).min(signs::ROWS - 1)
+                {
+                    Some(wait) if wait < 30.0 => 0,
+                    Some(wait) => ((wait / 60.0).ceil() as usize).min(signs::NO_SERVICE - 1),
+                    // No tram due this way (a terminus's far platform, the night's pause): the
+                    // screen says so rather than nothing.
+                    None => signs::NO_SERVICE,
                 };
                 if rows[row].len() < SCREENS {
                     rows[row].push(s.at);

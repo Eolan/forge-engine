@@ -10,7 +10,9 @@ use glam::{DVec2, Vec3};
 use forge_procgen::city::ground::RAMP;
 
 /// The names' atlas: this many rows, a name each.
-pub const ROWS: usize = 16;
+pub const ROWS: usize = 17;
+/// The row that says no tram is due this way: a terminus's far platform, the night's pause.
+pub const NO_SERVICE: usize = ROWS - 1;
 /// The atlas's side, pixels.
 const SIZE: usize = 1024;
 /// A blade's length and height, metres.
@@ -200,7 +202,7 @@ pub fn mesh(sign: &Sign) -> TriMesh {
         let y1 = 2.95 - 0.32 * k as f32;
         let y0 = y1 - high;
         let (inner, outer) = (d * 0.06, d * (0.06 + length));
-        let (v0, v1) = (row as f32 / ROWS as f32, (row + 1) as f32 / ROWS as f32);
+        let (v0, v1) = row_span(row);
         for s in [1.0_f32, -1.0] {
             let normal = (side * s).normalize();
             // Seen from this face, its right is the view's right: (−n) × y.
@@ -272,12 +274,23 @@ pub fn screen_atlas() -> TextureData {
     )
 }
 
+/// The atlas's texture coordinates of `row`, top and bottom: by the row's pixels, as the atlas
+/// draws them (`SIZE / ROWS` each), not the row's share of the image, which drifts by a few
+/// pixels when the rows do not divide it.
+fn row_span(row: usize) -> (f32, f32) {
+    let px = SIZE / ROWS;
+    (
+        (row * px) as f32 / SIZE as f32,
+        ((row + 1) * px) as f32 / SIZE as f32,
+    )
+}
+
 /// A stop's screen showing row `row` of [`screen_atlas`]: a plate 0.4 by 0.18 m round the
 /// origin, facing −z, its text from its left end.
 pub fn screen_plate(row: usize) -> TriMesh {
     let (w, h) = (0.4_f32, 0.18_f32);
     let span = w / h * (SIZE / ROWS) as f32 / SIZE as f32;
-    let (v0, v1) = (row as f32 / ROWS as f32, (row + 1) as f32 / ROWS as f32);
+    let (v0, v1) = row_span(row);
     let mut m = TriMesh::default();
     // Seen from −z, its left is +x.
     let p = [
@@ -304,6 +317,9 @@ pub fn screen_rows() -> Vec<String> {
     let mut rows = vec!["Due".to_owned()];
     rows.extend((1..15).map(|m| format!("{m} min")));
     rows.push("15+ min".to_owned());
+    // Rather than a dark screen where no tram is due this way (the owner: "the tram's minutes
+    // not showing, no tram coming, a lot of people waiting").
+    rows.push("No service".to_owned());
     rows
 }
 
