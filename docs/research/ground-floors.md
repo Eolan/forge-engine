@@ -32,6 +32,10 @@ Barcelona ≈ 1.67 M (61 875 premises ÷ 3.7 per 100).
 - **Shared kitchen gardens:** raised beds 0.6–0.9 m high and level paths of 1.2–1.4 m, so a
   wheelchair user can garden too.
 - **Patents:** none found on procedural placement of shops.
+- **In the generator** (2026-10-15):
+  - §4.2–4.3 choose which ground floors are shops (`Mass::active`);
+  - §4.6–4.8 give the garden flats, the street planters and the kitchen gardens
+    (`city::gardens`, `docs/demos/city-plan.md`).
 
 ## 1. How retail spreads through European cities
 

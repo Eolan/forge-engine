@@ -4056,8 +4056,16 @@ kit dressing them.
 - *Built 2026-10-15:* which ground floors are shops comes from a chance by street and frontage,
   with modifiers for the centre, the tram stops and the sights, drawn by stretches of street so
   that shops form parades. The example has 31 shopfronts per 1 000 people (Paris 28).
-- *Next:* garden flats on the courts, shared kitchen gardens with raised beds, and planted
-  strips before the homes on the streets, all step-free.
+- *Built 2026-10-15 (`city::gardens`):*
+  - Paths cross each green court from its gaps, passages and court doors to its middle.
+  - Its ground-floor flats line its walls, 8 m each between the doors. Half have a hedged
+    garden with a gate, the others a terrace. Each opens onto its terrace through a glazed bay
+    to the floor.
+  - Planters stand before the homes on the streets, broken at the doors.
+  - Each court of 600 m² or more has a kitchen garden of raised beds 0.7 m tall on paths of
+    1.4 m.
+  - All of it is step-free. The example has 9 106 garden flats, half with gardens, and 277
+    kitchen gardens.
 
 *(research: building-structure.md; ground-floors.md; issues #248, #263)*
 

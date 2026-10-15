@@ -37,7 +37,7 @@ pub const PARTY: u8 = 8;
 pub const SECTIONS: u8 = 9;
 
 /// The modules the kit builds.
-pub const NAMES: [&str; 14] = [
+pub const NAMES: [&str; 15] = [
     "wall",
     "blank",
     "band",
@@ -48,6 +48,7 @@ pub const NAMES: [&str; 14] = [
     "window_closed",
     "window_low",
     "window_court",
+    "bay",
     "balcony",
     "door",
     "shop",
@@ -140,6 +141,9 @@ pub fn module_deep(name: &str, w: f32, h: f32, reveal: f32) -> Option<TriMesh> {
             window(&mut m, w, h, reveal, false);
             sill(&mut m, w, reveal, 0.05);
         }
+        // A glazed sliding bay to the floor, onto a terrace: two leaves, no sill, its threshold
+        // flush with the floor.
+        "bay" => window(&mut m, w, h, reveal, true),
         "balcony" => {
             window(&mut m, w, h, reveal, true);
             surround(&mut m, w, h, 0.15, 0.22);

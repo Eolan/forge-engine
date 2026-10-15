@@ -23,6 +23,7 @@ use forge_geom::city::PropSpec;
 use forge_geom::procedural::TriMesh;
 use forge_geom::{modules, vehicles};
 use forge_procgen::city::facades::{self, FaceKind};
+use forge_procgen::city::gardens;
 use forge_procgen::city::lamps::Lamp;
 use forge_procgen::city::mass::{Mass, Roof};
 use forge_procgen::city::shore::Shore;
@@ -337,9 +338,20 @@ impl PlanScenario {
         let shore = ground_shore(site);
         // The reserves' land as scrub and grass, the rest as the open ground's gravel.
         ground_and_water(&mut tiles, &shore);
+        // The buildings' structure (D-060): the kit dresses it, the walker walks against it, the
+        // gardens and the paths round the courts start from its doors.
+        let structures = structure::structures(plan, masses);
+        let gardens = gardens::gardens(plan, masses, &structures);
+        // Each block's paved ground off its forecourt: the paths across its court, the flats'
+        // terraces, its kitchen garden's. Paved with the forecourt, one surface: drawn over the
+        // paving, a path began down the street's middle, lay across the carriageway, and showed
+        // as a patch on the pavement (the owner).
+        let mut paths = vec![Vec::new(); plan.blocks.len()];
+        for g in gardens.iter().filter(|g| g.kind.paved()) {
+            paths[g.block as usize].push(g.outline.clone());
+        }
         // The blocks off the streets, at the walking level as the pavements round them (D-061):
         // one level wherever people walk, no step at a gap between the buildings.
-        let paths = court_paths(plan, masses);
         for (b, block) in plan.blocks.iter().enumerate() {
             let section = match block.use_ {
                 BlockUse::Built => GARDEN,
@@ -441,9 +453,22 @@ impl PlanScenario {
                 _ => mass(&mut tiles, m, &edges[i]),
             }
         }
-        // The buildings' structure (D-060): the kit dresses it, the walker walks against it.
-        let structures = structure::structures(plan, masses);
         head_houses(&mut tiles, masses, &structures);
+        // The planters, the hedges and the kitchen gardens' beds (the owner's note, 2026-10-15).
+        for g in gardens.iter().filter(|g| g.kind.standing()) {
+            let side = match g.kind {
+                gardens::Kind::Hedge => ROOF_GREEN,
+                _ => KIT_STONE,
+            };
+            prism_topped(
+                &mut tiles,
+                &g.outline,
+                WALK_LEVEL,
+                WALK_LEVEL + g.height,
+                side,
+                ROOF_GREEN,
+            );
+        }
         let kit = detail.map(|d| {
             kit(
                 &mut tiles,
@@ -515,6 +540,66 @@ impl PlanScenario {
             let yaw = (-to.x).atan2(-to.z).to_degrees();
             passage_note += &format!("; one at --view={:.1},1.7,{:.1},{yaw:.1},0", eye.x, eye.z);
         }
+        // And the court of the kitchen garden nearest the kit's centre, from 25 m south of it
+        // and 20 m up, looking north over it.
+        if let Some(d) = detail
+            && let Some(plot) = gardens
+                .iter()
+                .filter(|g| g.kind == gardens::Kind::Plot)
+                .map(|g| geom::centroid(&g.outline))
+                .min_by(|a, b| a.distance(d.centre).total_cmp(&b.distance(d.centre)))
+        {
+            let eye = world(size, plot + DVec2::new(0.0, 25.0), 20.0);
+            let flats = gardens
+                .iter()
+                .filter(|g| g.kind == gardens::Kind::Lawn)
+                .count()
+                / 2;
+            passage_note += &format!(
+                "; {flats} garden flats, a court's gardens at --view={:.1},20.0,{:.1},0.0,-38.7",
+                eye.x, eye.z
+            );
+        }
+        // And the planters 6 m long or more nearest the kit's centre, from 4 m out on the street
+        // and 6 m before them, looking along them.
+        if let Some(d) = detail
+            && let Some(g) = gardens
+                .iter()
+                .filter(|g| {
+                    g.kind == gardens::Kind::Planter
+                        && g.outline[0]
+                            .distance(g.outline[1])
+                            .max(g.outline[1].distance(g.outline[2]))
+                            >= 6.0
+                })
+                .min_by(|a, b| {
+                    let far = |g: &gardens::Piece| geom::centroid(&g.outline).distance(d.centre);
+                    far(a).total_cmp(&far(b))
+                })
+        {
+            let c = geom::centroid(&g.outline);
+            let (e0, e1) = (g.outline[1] - g.outline[0], g.outline[2] - g.outline[1]);
+            let u = if e0.length() > e1.length() { e0 } else { e1 }.normalize_or_zero();
+            // Away from its building.
+            let built = |p: DVec2| {
+                masses.iter().any(|m| {
+                    plan.lots[m.lot as usize].block == g.block && geom::contains(&m.footprint, p)
+                })
+            };
+            let v = if built(c + u.perp() * 3.0) {
+                -u.perp()
+            } else {
+                u.perp()
+            };
+            let eye = world(size, c + v * 4.0 - u * 6.0, 1.7);
+            let to = (world(size, c + u * 2.0, 0.6) - eye).normalize_or_zero();
+            let yaw = (-to.x).atan2(-to.z).to_degrees();
+            let pitch = to.y.asin().to_degrees();
+            passage_note += &format!(
+                "; a home's planters at --view={:.1},1.7,{:.1},{yaw:.1},{pitch:.1}",
+                eye.x, eye.z
+            );
+        }
         let triangles = tiles
             .tiles
             .iter()
@@ -538,26 +623,46 @@ impl PlanScenario {
                 k as u32,
             );
         }
-        let trees: Vec<&Tree> = trees
+        // Nor on the courts' paths, the terraces, the hedges and the beds: on the lawns only.
+        let mut kept = forge_procgen::city::geom::PointGrid::new(size, 10.0);
+        for (k, g) in gardens.iter().enumerate() {
+            if g.kind != gardens::Kind::Lawn {
+                let mut ring = g.outline.clone();
+                ring.push(g.outline[0]);
+                for p in geom::resample(&ring, 4.0) {
+                    kept.insert(p, k as u32);
+                }
+            }
+        }
+        let on_garden = |p: DVec2| {
+            let mut on = false;
+            kept.for_each_within(p, 10.0, |_, k| {
+                on = on || geom::contains(&gardens[k as usize].outline, p);
+            });
+            on
+        };
+        // Each with its index in the plan's list, which turns it and picks its model: dropping
+        // one turned every tree after it.
+        let trees: Vec<(usize, &Tree)> = trees
             .iter()
-            .filter(|t| {
+            .enumerate()
+            .filter(|(_, t)| {
                 let w = world(size, t.pos, 0.0);
                 !stop_grid.any_within(t.pos, 30.0, |k| {
                     let l = stops[k as usize].transform_point3(w);
                     !((-6.0..PLATFORM + 6.0).contains(&l.x) && (-6.0..2.3 + 6.0).contains(&l.z))
-                })
+                }) && !on_garden(t.pos)
             })
             .collect();
         let tree_count = trees.len();
         // The trunks, which the benches keep clear of.
         let mut trunks = forge_procgen::city::geom::PointGrid::new(size, 10.0);
-        for t in &trees {
+        for (_, t) in &trees {
             trunks.insert(t.pos, 0);
         }
         let trees = trees
             .iter()
-            .enumerate()
-            .map(|(i, t)| {
+            .map(|&(i, t)| {
                 let turn = (i as f32 * 2.399_963).rem_euclid(std::f32::consts::TAU);
                 (
                     world(size, t.pos, 0.0),
@@ -948,6 +1053,7 @@ impl PlanScenario {
             walls: wall_pieces(size, masses, &structures)
                 .into_iter()
                 .chain(parapet_pieces(size, plan, site, &shore))
+                .chain(garden_pieces(size, &gardens))
                 .collect(),
             passage_note,
             nets: nets.clone(),
@@ -1611,9 +1717,15 @@ fn head_houses(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure]) {
     }
 }
 
-/// A box over the outline `ring` (counter-clockwise) from `y0` to `y1`: its walls and its flat
-/// top, in `section`.
+/// A box over the outline `ring` (counter-clockwise) from `y0` to `y1`: its walls in `section`,
+/// its flat top a roof terrace's.
 fn prism(tiles: &mut Tiles, ring: &[DVec2], y0: f64, y1: f64, section: u8) {
+    prism_topped(tiles, ring, y0, y1, section, ROOF_TERRACE);
+}
+
+/// A box over the outline `ring` (counter-clockwise) from `y0` to `y1`: its walls in `section`,
+/// its flat top in `top`.
+fn prism_topped(tiles: &mut Tiles, ring: &[DVec2], y0: f64, y1: f64, section: u8, top: u8) {
     let size = tiles.size;
     let tile = tiles.at(ring[0]);
     let centre = tile.centre;
@@ -1641,8 +1753,27 @@ fn prism(tiles: &mut Tiles, ring: &[DVec2], y0: f64, y1: f64, section: u8) {
     }
     for t in geom::triangulate(ring) {
         let p = t.map(|i| at(ring[i], y1));
-        triangle_uv(&mut tile.masses, p, [[0.0; 2]; 3], Vec3::Y, ROOF_TERRACE);
+        triangle_uv(&mut tile.masses, p, [[0.0; 2]; 3], Vec3::Y, top);
     }
+}
+
+/// The gardens' planters, hedges and beds as the walker's convex pieces, the world's metres.
+fn garden_pieces(size: f64, gardens: &[gardens::Piece]) -> Vec<Vec<Vec3>> {
+    gardens
+        .iter()
+        .filter(|g| g.kind.standing())
+        .map(|g| {
+            g.outline
+                .iter()
+                .flat_map(|&p| {
+                    [
+                        world(size, p, WALK_LEVEL),
+                        world(size, p, WALK_LEVEL + g.height),
+                    ]
+                })
+                .collect()
+        })
+        .collect()
 }
 
 /// The kit's door in the wall `a b` (counter-clockwise round its box) at `along`, on the roof at
@@ -3479,47 +3610,6 @@ fn lawn(tiles: &mut Tiles, shore: &Shore, map: &ground::GroundMap, polygon: &[DV
     }
 }
 
-/// The paths across the open blocks' greens, block by block: from each gap between the buildings
-/// (a street lot left open) to the court's middle, 2.4 m wide (the owner's photos of open blocks:
-/// a shared green with paths through it). Each is paved with its block's forecourt, one surface
-/// off the streets: drawn over the paving, a path began down the street's middle, lay across the
-/// carriageway, and showed as a patch on the pavement (the owner).
-fn court_paths(plan: &CityPlan, masses: &[Mass]) -> Vec<Vec<Vec<DVec2>>> {
-    let built: std::collections::HashSet<u32> = masses.iter().map(|m| m.lot).collect();
-    let mut paths = vec![Vec::new(); plan.blocks.len()];
-    for (i, lot) in plan.lots.iter().enumerate() {
-        let block = &plan.blocks[lot.block as usize];
-        let Some(court) = &block.courtyard else {
-            continue;
-        };
-        // None in a taxi depot's block: it has no flats, and its deck stands over the court.
-        let depot = plan.depots.iter().any(|d| d.block == lot.block);
-        if !lot.frontage || built.contains(&(i as u32)) || block.use_ != BlockUse::Built || depot {
-            continue;
-        }
-        // From the block's edge nearest the gap's middle to the court's.
-        let middle = geom::centroid(&lot.polygon);
-        let n = block.polygon.len();
-        let from = (0..n)
-            .map(|k| {
-                let (a, b) = (block.polygon[k], block.polygon[(k + 1) % n]);
-                a + (b - a) * geom::closest_on_segment(middle, a, b)
-            })
-            .min_by(|p, q| p.distance(middle).total_cmp(&q.distance(middle)));
-        let Some(from) = from else {
-            continue;
-        };
-        let line = geom::resample(&[from, geom::centroid(court)], 2.0);
-        if line.len() < 2 {
-            continue;
-        }
-        let mut outline = offset_line(&line, 1.2);
-        outline.extend(offset_line(&line, -1.2).into_iter().rev());
-        paths[lot.block as usize].push(outline);
-    }
-    paths
-}
-
 /// A flat strip between two polylines of the same length, a quad between each pair of points,
 /// in the tile of each quad's first corner.
 fn strip(tiles: &mut Tiles, left: &[DVec2], right: &[DVec2], height: f64, section: u8) {
@@ -3985,8 +4075,14 @@ mod tests {
                 &forge_procgen::city::bible::StyleBible::default(),
                 7,
             );
-            let paths = court_paths(&city, &masses);
-            // Every half metre inside each path: on the block's ground it is paved (in the
+            let structures = structure::structures(&city, &masses);
+            let mut paths = vec![Vec::new(); city.blocks.len()];
+            for g in gardens::gardens(&city, &masses, &structures) {
+                if g.kind.paved() {
+                    paths[g.block as usize].push(g.outline);
+                }
+            }
+            // Every metre inside each paved piece: on the block's ground it is paved (in the
             // forecourt, not the garden), and none of the paving is on a carriageway (a path's
             // first metres lay over the road, then showed as a patch on the pavement: the owner).
             let (mut samples, mut on_road, mut grass) = (0, 0, 0);
@@ -4000,20 +4096,32 @@ mod tests {
                         (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)),
                         |(lo, hi), p| (lo.min(*p), hi.max(*p)),
                     );
-                    let mut y = lo.y + 0.25;
+                    let mut y = lo.y + 0.5;
                     while y < hi.y {
-                        let mut x = lo.x + 0.25;
+                        let mut x = lo.x + 0.5;
                         while x < hi.x {
                             let p = DVec2::new(x, y);
                             if geom::contains(polygon, p) {
                                 samples += 1;
                                 let paved = ground::inside(&front, p);
                                 on_road += usize::from(paved && city.ground.on_carriageway(p));
-                                grass += usize::from(ground::inside(&rest, p));
+                                // A sample on the outline itself (within a centimetre) may fall
+                                // either side of the overlay's edge.
+                                let n = polygon.len();
+                                let on_edge = || {
+                                    (0..n).any(|k| {
+                                        geom::distance_to_segment(
+                                            p,
+                                            polygon[k],
+                                            polygon[(k + 1) % n],
+                                        ) < 0.01
+                                    })
+                                };
+                                grass += usize::from(ground::inside(&rest, p) && !on_edge());
                             }
-                            x += 0.5;
+                            x += 1.0;
                         }
-                        y += 0.5;
+                        y += 1.0;
                     }
                 }
             }

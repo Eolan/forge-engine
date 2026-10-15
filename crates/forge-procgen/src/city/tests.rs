@@ -340,11 +340,17 @@ fn shutters_fold_back_clear_of_corners_and_of_each_other() {
     for s in &structures {
         for (w, wall) in s.walls.iter().enumerate() {
             for (k, stretches) in wall.open.iter().enumerate() {
-                // Each window's span with its shutters folded back either side.
+                // Each window's span with its shutters folded back either side; the garden flats'
+                // glazed bays (to the floor) have none.
                 let mut spans: Vec<(f64, f64)> = s
                     .openings
                     .iter()
-                    .filter(|o| o.wall == w && o.storey == k && o.kind == OpeningKind::Window)
+                    .filter(|o| {
+                        o.wall == w
+                            && o.storey == k
+                            && o.kind == OpeningKind::Window
+                            && o.sill > 0.0
+                    })
                     .map(|o| {
                         let reach = o.width + SHUTTER_BESIDE;
                         (o.along - reach, o.along + reach)
@@ -462,5 +468,193 @@ fn a_city_has_about_as_many_shops_as_a_real_one() {
     assert!(
         (20.0..40.0).contains(&per_thousand),
         "{per_thousand:.1} shopfronts per 1 000 people"
+    );
+}
+
+/// Whether `p` lies inside any of `outlines` (a box test first).
+fn inside_any<'a>(outlines: impl IntoIterator<Item = &'a Vec<DVec2>>, p: DVec2) -> bool {
+    outlines.into_iter().any(|o| {
+        let (lo, hi) = o.iter().fold(
+            (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)),
+            |(lo, hi), &q| (lo.min(q), hi.max(q)),
+        );
+        p.x >= lo.x && p.y >= lo.y && p.x <= hi.x && p.y <= hi.y && geom::contains(o, p)
+    })
+}
+
+#[test]
+fn court_gardens_keep_clear_of_the_buildings_the_paths_and_the_doors() {
+    // `research/ground-floors.md` §4.7–4.8: about half the court-side flats with a garden, the
+    // rest with a terrace, each opening onto it through a glazed bay; a kitchen garden in the
+    // large courts.
+    use super::gardens::{self, Kind};
+    use super::structure::{OpeningKind, WallRole};
+    let (_, city) = example_plan();
+    let masses = super::mass::masses(&city, &super::bible::StyleBible::default(), 7);
+    let structures = super::structure::structures(&city, &masses);
+    let pieces = gardens::gardens(&city, &masses, &structures);
+    let flats = gardens::flats(&city, &masses, &structures);
+    let count = |k: Kind| pieces.iter().filter(|p| p.kind == k).count();
+    let gardened = flats.iter().filter(|f| f.garden).count();
+    let bays = flats
+        .iter()
+        .filter(|f| {
+            structures[f.mass as usize].openings.iter().any(|o| {
+                o.wall == f.wall
+                    && o.storey == 0
+                    && o.kind == OpeningKind::Window
+                    && o.sill == 0.0
+                    && o.along > f.from
+                    && o.along < f.to
+            })
+        })
+        .count();
+    println!(
+        "{} court-side flats, {gardened} with a garden, {bays} with a glazed bay; {} paths, {} \
+         hedges, {} kitchen gardens of {} beds, {} planters",
+        flats.len(),
+        count(Kind::Path),
+        count(Kind::Hedge),
+        count(Kind::Plot),
+        count(Kind::Bed),
+        count(Kind::Planter)
+    );
+    assert!(flats.len() > 200, "{} flats", flats.len());
+    let share = gardened as f64 / flats.len() as f64;
+    assert!(
+        (0.4..0.6).contains(&share),
+        "{share:.2} of the flats gardened"
+    );
+    assert!(
+        bays * 10 >= flats.len() * 9,
+        "{bays} bays for {} flats",
+        flats.len()
+    );
+    assert!(
+        count(Kind::Plot) >= 5,
+        "{} kitchen gardens",
+        count(Kind::Plot)
+    );
+    assert_eq!(count(Kind::Bed) % 4, 0);
+    // The paths, by block.
+    let mut paths: std::collections::HashMap<u32, Vec<&Vec<DVec2>>> = Default::default();
+    for p in pieces.iter().filter(|p| p.kind == Kind::Path) {
+        paths.entry(p.block).or_default().push(&p.outline);
+    }
+    let footprints: Vec<Vec<DVec2>> = masses.iter().map(|m| m.footprint.clone()).collect();
+    let (mut on_path, mut in_building) = (0, 0);
+    for p in pieces.iter().filter(|p| p.kind != Kind::Path) {
+        // Its corners a little in, and its middle.
+        let middle = geom::centroid(&p.outline);
+        let probes: Vec<DVec2> = p
+            .outline
+            .iter()
+            .map(|&q| q + (middle - q).normalize_or_zero() * 0.1)
+            .chain([middle])
+            .collect();
+        if p.kind.standing() {
+            let mine = paths.get(&p.block).cloned().unwrap_or_default();
+            on_path += usize::from(probes.iter().any(|&q| inside_any(mine.iter().copied(), q)));
+        }
+        if let Some(q) = probes.iter().find(|&&q| inside_any(&footprints, q)) {
+            println!(
+                "a {:?} of block {} in a building at {q:.1}",
+                p.kind, p.block
+            );
+            in_building += 1;
+        }
+    }
+    assert_eq!(on_path, 0, "{on_path} planters, hedges or beds on a path");
+    assert_eq!(in_building, 0, "{in_building} pieces inside a building");
+    // Every court door and passage opens onto a path, not into a garden.
+    let mut blocked = 0;
+    for (m, s) in masses.iter().zip(&structures) {
+        let block = city.lots[m.lot as usize].block;
+        for o in &s.openings {
+            let wall = &s.walls[o.wall];
+            if o.storey != 0
+                || wall.role != WallRole::Court
+                || !matches!(o.kind, OpeningKind::Door | OpeningKind::Passage)
+                || !paths.contains_key(&block)
+            {
+                continue;
+            }
+            let t = (wall.b - wall.a).normalize_or_zero();
+            let mouth = wall.a + t * o.along;
+            let n = DVec2::new(t.y, -t.x);
+            let n = if geom::contains(&m.footprint, mouth + n * 0.3) {
+                -n
+            } else {
+                n
+            };
+            let step = mouth + n * 1.0;
+            let standing = pieces
+                .iter()
+                .filter(|p| p.block == block && (p.kind.standing() || p.kind == Kind::Lawn))
+                .map(|p| &p.outline);
+            blocked += usize::from(inside_any(standing, step));
+        }
+    }
+    assert_eq!(
+        blocked, 0,
+        "{blocked} court doors or passages into a garden"
+    );
+}
+
+#[test]
+fn planters_line_the_homes_on_the_streets_and_leave_their_doors_clear() {
+    // `research/ground-floors.md` §4.6: the homes on the streets behind a planted strip, never
+    // raised; none before a shop, and every door and passage clear.
+    use super::gardens::{self, Kind, PLANTER};
+    use super::structure::{OpeningKind, WallRole};
+    let (_, city) = example_plan();
+    let masses = super::mass::masses(&city, &super::bible::StyleBible::default(), 7);
+    let structures = super::structure::structures(&city, &masses);
+    let planters: Vec<Vec<DVec2>> = gardens::gardens(&city, &masses, &structures)
+        .into_iter()
+        .filter(|p| p.kind == Kind::Planter)
+        .map(|p| p.outline)
+        .collect();
+    let (mut doors, mut blocked, mut shops, mut before_shops) = (0, 0, 0, 0);
+    for (m, s) in masses.iter().zip(&structures) {
+        for o in s.openings.iter().filter(|o| o.storey == 0) {
+            let wall = &s.walls[o.wall];
+            if wall.role != WallRole::Street {
+                continue;
+            }
+            let t = (wall.b - wall.a).normalize_or_zero();
+            let n = DVec2::new(t.y, -t.x);
+            let mid = wall.a + t * o.along;
+            let n = if geom::contains(&m.footprint, mid + n * 0.3) {
+                -n
+            } else {
+                n
+            };
+            // Half a planter's depth out, before the opening's middle and its edges.
+            let probes = [-0.5, 0.0, 0.5].map(|k| mid + t * (o.width * k) + n * (PLANTER.0 * 0.5));
+            let hit = probes.iter().any(|&p| inside_any(&planters, p));
+            match o.kind {
+                OpeningKind::Door | OpeningKind::Passage => {
+                    doors += 1;
+                    blocked += usize::from(hit);
+                }
+                OpeningKind::Shopfront => {
+                    shops += 1;
+                    before_shops += usize::from(hit);
+                }
+                OpeningKind::Window => {}
+            }
+        }
+    }
+    println!(
+        "{} planters; {doors} street doors and passages, {blocked} blocked; {shops} shopfronts, \
+         {before_shops} behind a planter",
+        planters.len()
+    );
+    assert!(planters.len() > 500, "{} planters", planters.len());
+    assert_eq!(blocked, 0, "{blocked} doors or passages behind a planter");
+    assert_eq!(
+        before_shops, 0,
+        "{before_shops} shopfronts behind a planter"
     );
 }

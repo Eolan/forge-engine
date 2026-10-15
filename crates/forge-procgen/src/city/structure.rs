@@ -406,6 +406,10 @@ pub fn structures(plan: &CityPlan, masses: &[Mass]) -> Vec<Structure> {
     for s in &mut out {
         fit_shutters(s);
     }
+    // The court-side ground-floor flats open onto their gardens and terraces through glazed
+    // bays (the owner's note, 2026-10-15).
+    let flats = super::gardens::flats(plan, masses, &out);
+    super::gardens::glaze(&mut out, &flats);
     // The flats round the cores, once the doors and the passages are settled, and the net area
     // again (a dropped core gave its floor back).
     for (i, s) in out.iter_mut().enumerate() {

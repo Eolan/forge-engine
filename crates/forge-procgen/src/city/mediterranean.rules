@@ -46,6 +46,10 @@ Opening [opening.kind == 2] -> split(y) { sill: Wall | glass: Shopfront | ~1: Wa
 Shopfront -> choose(index) { 1: ShopOpen | 1: ShopAwning }
 ShopOpen -> insert(shop)
 ShopAwning -> insert(shop_awning)
+# The garden flats' glazed bays onto their terraces: to the floor, the threshold flush (the
+# owner's note, 2026-10-15).
+Opening [court && level.index == 0 && sill < 0.05] -> split(y) { glass: GardenBay | ~1: Wall }
+GardenBay -> insert(bay)
 # The courtyards: plain windows.
 Opening [court] -> split(y) { sill: Wall | glass: CourtWindow | ~1: Wall }
 CourtWindow -> insert(window_court)

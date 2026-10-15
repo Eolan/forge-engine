@@ -549,8 +549,38 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
     - the old rule made every avenue, lane and open front shops.
   - **Tests:** `shops_gather_where_people_pass_and_leave_most_ground_floors_homes` and
     `a_city_has_about_as_many_shops_as_a_real_one`.
-  - **Next:** garden flats on the courts, shared kitchen gardens, and planted strips before the
-    homes on the streets (the research's §4.6–4.8).
+- **What the homes keep on the ground** (`city::gardens`, 2026-10-15; the research's §4.6–4.8).
+  All of it is the generator's data, at the walking level and step-free; the scene draws it.
+  - **The courts' paths:** 2.4 m wide from each gap between the buildings and each passage,
+    1.8 m from each court door. Each runs straight out past the gardens, then to the court's
+    middle. They are paved with the forecourt, one surface.
+  - **The garden flats** (the *rez-de-jardin*): 8 m of a court wall each, laid out between the
+    doors and passages, where the ground is open court or the building's own lot.
+    - Half have a private garden 4.5 m deep: a terrace of 2.5 m before the flat, a lawn, a
+      hedge of 1.4 m between neighbours, and a hedge of 0.8 m along the court with a 1.2 m gate
+      and a paved way to it.
+    - The others have a terrace of 1.8 m between two short hedges.
+    - Each opens onto its terrace through a glazed sliding bay to the floor (the owner's
+      "baie vitrée"): up to 2.4 m wide, its threshold flush. It is the style's `GardenBay`, the
+      kit's `bay` module, with no shutters.
+  - **Planters** 0.9 m deep and 0.45 m tall, against the facades of the homes on streets 8 m wide
+    or more. They are broken 0.8 m either side of each door and passage, and none stand before
+    a shop. The footway keeps 2.6 m on an avenue, and the walkers pass 3 m out.
+  - **A shared kitchen garden** in each green court of 600 m² or more, on paved ground near the
+    court's middle, on its sunniest (north) side that the paths leave free. It has eight beds
+    (four where only those fit), 1.2 × 4 m and 0.7 m tall for a seated gardener, on paths of
+    1.4 m, with a path from the middle.
+  - **The walker** walks round the planters, hedges and beds. No tree stands on a path, a
+    terrace, a hedge or a bed.
+  - **The example:**
+    - 9 106 court-side flats, 4 579 with a garden, every one with its glazed bay;
+    - 277 kitchen gardens of 1 864 beds;
+    - 20 379 planters;
+    - none of the 15 701 street doors and passages and none of the 9 544 shopfronts behind a
+      planter;
+    - no court door or passage opening into a garden.
+  - **Tests:** `court_gardens_keep_clear_of_the_buildings_the_paths_and_the_doors` and
+    `planters_line_the_homes_on_the_streets_and_leave_their_doors_clear`.
 - **tram stops:** a 36 m boarding area by each track, level with the trams' floor (28 cm over
   the road), from the tram's side across the carriageway to the kerb and half a metre into the
   pavement (3.55 m on a tram avenue, `boarding_deep`), and a glass shelter with a bench and a
