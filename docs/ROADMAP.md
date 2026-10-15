@@ -675,10 +675,29 @@ The items below are the phase's original outline; the plan above orders them.
      - A coarse volume holds the light too faint to draw.
      - Its decision comes with the galaxy, after D-057.
 
-## Now — The city sandbox drives the engine (D-059)
+## Now — Mission maps drive the core (D-062)
+
+The owner's decision of 2026-10-15: small, fully generated places with a mission each drive
+the core technologies, which the city and the demos take back. The engine stays public; the
+game (scenarios, missions, licensed assets) is a private repository, as the city sandbox.
+1. **The first map:** a Mediterranean village from the city's buildings, in a local forest,
+   entered on foot: enterable buildings from a structure generator, props, plants, the day
+   cycle, one objective. No enemies or weapons until it looks right still and moving.
+2. **The check per commit:** the gate, then one seed, six views and a walked path against an
+   accepted set, two minutes. The tiers run at milestones on the owner's word.
+3. **The core, in order:** geometry and LOD correctness; materials (trim sheets, decals,
+   layering); structures with interiors; flora; characters' animation; sound, fauna and
+   networking, the last three in parallel sessions off the GPU.
+4. **Then the first scenario:** zombies (melee); later a base to infiltrate, a solo fight.
+5. **Rendering:** RT-first; DLSS 4's features, a neural radiance cache, path tracing when the
+   quality asks; no non-RT fallbacks for new work.
+
+## The integration target — The city sandbox (D-059)
 
 The owner's direction of 2026-10-10: a private city sandbox, built as if for a game release,
-drives the engine's next work. The engine stays public; the sandbox does not (D-059, 1).
+drove the engine's work to 2026-10-15; it is now the integration target of the maps' core
+(D-062), with its own faults fixed in short sessions. The engine stays public; the sandbox does
+not (D-059, 1).
 - **The city:** a current European city a few years ahead, much greener, by the sea with a
   river.
 - **The people:** a million persistent people.

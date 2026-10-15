@@ -4276,3 +4276,106 @@ times they circulate round the busy places, where they will most likely find som
   - **Not yet:** batteries and charging times; shared rides.
 - **Crossings (the owner's go):** raised tables on the taxi roads; dropped kerbs on the tram
   avenues.
+
+## D-062 — Mission maps drive the core: small generated places first, the city as the integration target ✅ (proposed 2026-10-15 on the owner's question; the owner's go the same night)
+
+**The question:** the owner, on 2026-10-15, after their second flight over the sandbox (twenty
+sightings with their views, `city-sandbox/docs/TRACKER.md`): "I wonder if we should not change
+strategy and reduce the scope and work on different technologies independently in sub sessions
+when possible like network, sound system, textures system, and so on [systems for flora and
+fauna], like the core thing that we can merge as we progress with the simulations or demos."
+The proposal: a first-person game whose maps, small at first, are fully generated with a
+mission each (zombies; a village with a military base to infiltrate, soldiers to avoid or to
+fight; a Battlefield-like solo fight), detailed enough to go into the places, so that issues
+show sooner, the core technologies backported to the city and the demos. "The demos were not
+bad but were maybe too small in scope and were getting very long to test when running the full
+tests suite with tier 0, 1 and 2."
+
+The owner's goals, the same night:
+- in the end, to generate different environments, biomes, planets, solar systems, places,
+  weathers, fluids, structures, styles of civilisation (primitive, medieval, futuristic,
+  dystopic, cyberpunk-like), with beautiful and physically accurate graphics, loading times and
+  performance tracked;
+- on rendering: "if required, would go full DLSS 4.5 (or 4 if not available) with DLSS and ray
+  reconstruction, ray traced shadows, ray traced reflection, hybrid ray tracing, path tracing,
+  hardware flip metering, neural radiance cache, the best we can do, and stop caring for less
+  nice rendering methods except maybe the AMD equivalent" (no AMD hardware to test on);
+- the city renders many useless things inside its empty buildings (shadows, anomalies).
+
+**The recommendation** (the session's answer): agree, with two changes.
+- **Why:** about half of the night's sightings are engine faults (triangles past roofs, smeared
+  textures, shimmering faces, grilles, shadow pops, z-fighting, a reflective underside) that any
+  detailed place shows, and the city shows slowest: half a minute to load, a million people in
+  the way, layout faults hiding the engine's. A small map loads in seconds, is shot from a few
+  fixed views in a minute, and can be entered. The tiers grew long because each demo tests one
+  feature alone, while the owner looks at everything at once.
+- **Change 1, the first milestone is a place, not a game:** one generated village or compound,
+  enterable buildings from a structure generator, props, plants, the day cycle, one objective
+  (reach a room, find an item), the player walking. No enemies or weapons until the map looks
+  right still and moving: combat brings four systems at once (characters' animation, AI,
+  weapons, a HUD), each weeks, and they would look bad on a world that still shimmers. When the
+  world holds, zombies first (melee, no aim, no cover tactics).
+- **Change 2, parallel sessions only off the GPU:** sound, networking and the simulation side of
+  flora and fauna (growth rules, animals' behaviour) as CPU-only crates with headless tests, no
+  GPU lock, no window on the second screen. Anything that renders (materials, the plants'
+  rendering, the map) in one session at a time. Each session owns its crates; the CI queue and
+  the one-research-agent rule stay shared; three sessions at most.
+- **The check per commit becomes a map check:** build, tests, clippy, then one seed, six fixed
+  views and one walked path compared with accepted shots, about two minutes, as the sandbox's
+  day check does. Tier 1 and 2 become milestone checks the owner starts (like
+  `tools/amd-check.sh`), not the gate (D-043 amended).
+- **The city stays the integration target:** its layout faults are hours each (the tram stops,
+  the double turn, the too-close walls) for short sessions; its day check runs at milestones;
+  the structures, materials and plants built for the maps are backported.
+- **The order of the core:** geometry and LOD correctness first (the night's class of faults);
+  materials (trim sheets, decals, layering); structures with interiors; flora placement and
+  rendering with wind; characters' animation (which also fixes the popping people); then
+  sound, fauna and networking.
+
+**The owner's go, the same night** ("We will follow your plan"), with two answers:
+1. The licensed things that cannot be redistributed stay in a private repository; the core
+   engine stays free of them. So the generators and systems go into forge-engine, public, and
+   the scenarios, missions and licensed assets into a private repository, as the city sandbox.
+2. The style: the owner thought of a more tropical architecture (the Yucatán, South America,
+   Africa, Asia) but starts with what we have: the first map is a Mediterranean village built
+   from the city's buildings, in a local forest (pines, oaks, garrigue) rather than a jungle.
+
+**Decided:**
+- **Mission maps drive the core** from here. D-059's city sandbox stands as the integration
+  target and keeps its content rules; its step order waits on the maps' technologies.
+- **Repositories:** the engine public; the game private (a repository the owner creates, under
+  the city sandbox's rules: never published, nothing bought or downloaded without the owner's
+  go). Until it exists, the map's generic parts live in `demos/`, nothing licensed.
+- **The check:** `tools/verify.sh` keeps the gate on every push; a map check (one seed, fixed
+  views, a walked path, an accepted set) is the check per commit for the map's demo; Tier 1
+  and 2 run at milestones on the owner's word. D-043 is amended so.
+- **Parallel sessions:** off the GPU only, each on its own crates, three at most; research one
+  agent at a time.
+- **Rendering:** RT-first on the RTX 5070 Ti (D-008's requirement stands). New rendering work
+  targets DLSS 4's features through Streamline (super resolution, ray reconstruction, frame
+  generation with hardware flip metering), a neural radiance cache, hybrid ray tracing and path
+  tracing when the quality asks, each flagged for patents as the research rule wants. No work
+  on lesser methods: a new feature needs no non-RT fallback. Cross-vendor Vulkan code stays
+  the rule (no subgroup size assumed, limits read from the device), and the AMD equivalents
+  (FSR 4) come when they can be tested.
+- **The engine's long goal** (the owner's list): environments, biomes, planets and solar
+  systems, weathers, fluids, structures and civilisations in many styles, beautiful and
+  physically accurate, with loading time and performance tracked. Each map scenario exercises
+  one slice of it.
+
+**First steps:**
+1. Finish the night's engine fixes on #264 (parapets mitred; the far walls' LOD weighs the
+   texture seams).
+2. An issue for the first map: a generated Mediterranean village in its forest, entered on
+   foot, with its map check; the geometry and LOD faults from the sandbox's tracker fixed
+   there first.
+3. The owner creates the private game repository; the city sandbox's `docs/TRACKER.md` keeps
+   the city's twenty sightings for short sessions.
+4. The empty buildings: list what the kit and the structure draw inside a closed mass (floors,
+   cores, the faked rooms) and cull it until entered; a suspect for the triangles past the
+   roofs at the coarser levels of detail.
+5. Research to refresh for the maps: structures with interiors (D-060 continues on the maps),
+   trim sheets (`research/trim-sheets.md`), flora (`research/planet-environment.md`), DLSS 4's
+   features and the neural radiance cache (patents flagged). A resource the owner named for
+   physics and interstellar travel: Kitten Space Agency (in development,
+   `https://ahwoo.com/app/100000/kitten-space-agency`).
