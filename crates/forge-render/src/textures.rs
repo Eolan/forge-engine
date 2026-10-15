@@ -360,8 +360,9 @@ pub const FACADE_CELLS: u32 = 4;
 /// window recessed with its frame and sill, louvred shutters either side (closed over the
 /// window in about a quarter of them), a string course at each floor line. `u` runs across the
 /// bays, `v` down the floors; the row's colour tints it (the plaster's render). The third
-/// texture is the windows lit at night, about 40 % of those open, warm or cool: an emissive map.
-pub fn facade(seed: u64, size: u32) -> [TextureData; 3] {
+/// texture is the windows lit at night, `lit` of those open (the city plan's share of the hour),
+/// warm or cool: an emissive map.
+pub fn facade(seed: u64, size: u32, lit: f32) -> [TextureData; 3] {
     let cells = FACADE_CELLS as f32;
     // A cell's index and the place inside it.
     let cell = |u: f32, v: f32| {
@@ -369,7 +370,8 @@ pub fn facade(seed: u64, size: u32) -> [TextureData; 3] {
         (x.floor() as i32, y.floor() as i32, x.fract(), y.fract())
     };
     let closed = |cx: i32, cy: i32| unit_f32(hash_cell2(seed ^ 0xC105, cx, cy)) < 0.25;
-    let lit = |cx: i32, cy: i32| unit_f32(hash_cell2(seed ^ 0x117, cx, cy)) < 0.4;
+    let share = lit;
+    let lit = |cx: i32, cy: i32| unit_f32(hash_cell2(seed ^ 0x117, cx, cy)) < share;
     let window = |u: f32, v: f32| (0.30..0.70).contains(&u) && (0.20..0.78).contains(&v);
     let frame = |u: f32, v: f32| (0.28..0.72).contains(&u) && (0.18..0.80).contains(&v);
     let shutter = |u: f32, v: f32| {

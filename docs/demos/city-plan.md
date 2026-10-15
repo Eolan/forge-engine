@@ -489,7 +489,10 @@ measures the facades, not the rooms.
 - **homes:** a quarter at 17:00, half by 21:00, a quarter at 23:00, a tenth at midnight, one in
   twenty in the small hours, some again before dawn;
 - **shops:** lit while open, 8:00 to 19:00, and a tenth of them all night for their displays;
-- **the far facades:** dimmed with the homes' share.
+- **the far facades:** their texture's windows lit in the homes' share. Dimming a fixed two in
+  five instead left them lit at 3:00, the exposure rising to meet them.
+- **the trams:** they pause from 1:30 to 4:30, as French networks run from about half past four
+  to half past one (`tram_pause`). The running ones are hidden and every depot place is taken.
 
 Each window takes its own draw, so the lit ones change from hour to hour. Without
 `--time-of-day`, two windows in five are lit as before. Test `windows_light_by_the_hour`.

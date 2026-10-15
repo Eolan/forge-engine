@@ -327,6 +327,12 @@ pub fn hour_of_day(time_of_day: f32) -> f64 {
     (6.0 + f64::from(time_of_day) * 12.0).rem_euclid(24.0)
 }
 
+/// Whether the trams pause at `hour` (0 to 24): from 1:30 to 4:30 the lines stop and their trams
+/// stand in the depots, as French networks run from about half past four to half past one.
+pub fn tram_pause(hour: f64) -> bool {
+    (1.5..4.5).contains(&hour)
+}
+
 /// The share of a building's windows lit at `hour` (0 to 24), a shop's when `shop` (estimates,
 /// until the residents light their own windows by what they do, D-060's step 3): homes lit
 /// through the evening, half of them by nine, a tenth at midnight and one in twenty in the small
@@ -528,16 +534,21 @@ impl PlanScenario {
             }
         }
         stagger_termini(&mut trams);
-        // The trams the depots keep: two places in three taken, in their lines' liveries.
+        // The trams the depots keep: two places in three taken, in their lines' liveries; every
+        // place in the night's pause, when the lines' trams are all in.
+        let night = detail.and_then(|d| d.lit_hour).is_some_and(tram_pause);
         for d in &plan.tram_depots {
             let Some(run) = trams.iter_mut().find(|r| r.line == d.line) else {
                 continue;
             };
             for (k, (at, along)) in d.places().into_iter().enumerate() {
-                if !mix(k as u64 ^ (u64::from(d.block) << 16)).is_multiple_of(3) {
+                if night || !mix(k as u64 ^ (u64::from(d.block) << 16)).is_multiple_of(3) {
                     run.parked.push(parked_sections(at, along, size));
                 }
             }
+        }
+        for run in &mut trams {
+            run.paused = night;
         }
         // Each terminus's crossover, the rails from the track the trams come in on to the one
         // they leave by, 3 mm over the straight rails they cross.
@@ -1832,6 +1843,8 @@ struct TramRun {
     /// The trams its depot keeps, standing: each one's sections as [`TramRun::sections`] gives
     /// them.
     parked: Vec<[(Vec3, f32); TRAM_SECTIONS]>,
+    /// In the night's pause ([`tram_pause`]): its trams all in their depots, none running.
+    paused: bool,
 }
 
 /// The sections of a tram standing with its middle at `at`, the way `along`, in a depot's yard
@@ -1998,6 +2011,7 @@ impl TramRun {
             wet,
             line: 0,
             parked: Vec::new(),
+            paused: false,
         })
     }
 
@@ -3447,7 +3461,14 @@ impl Scenario for PlanScenario {
             ],
         );
         // The facades: a window bay and a shopfront, read by the walls' coordinates.
-        let [facade_albedo, facade_normal, facade_lights] = textures::facade(21, 1024);
+        // Their windows lit in the homes' share of the hour (`lit_share`), as the kit's are: the
+        // far city goes to bed with the near one. Dimming a fixed two in five instead left the
+        // far city's windows lit at 3:00, the exposure raised to meet them.
+        let far_share = args
+            .time_of_day
+            .map_or(0.4, |t| lit_share(hour_of_day(t), false));
+        let [facade_albedo, facade_normal, facade_lights] =
+            textures::facade(21, 1024, far_share as f32);
         let [shop_albedo, shop_normal] = textures::shopfront(22, 512);
         let shop_lights = textures::shopfront_lights(512);
         let facade = (
@@ -3484,12 +3505,7 @@ impl Scenario for PlanScenario {
         // luminance the room gets (ROOM_LAMP in meshlet.slang, 4 %) over walls, floor and
         // furniture about 0.6 as bright as white. At 15 % the far windows shone white over the
         // kit's rooms, which show their walls a few stops over the night's grey.
-        // Their lit windows are a fixed two in five of the texture's: dimmed with the homes'
-        // share of the hour (`lit_share`), the far city fades as the near one goes to bed.
-        let far_share = args
-            .time_of_day
-            .map_or(0.4, |t| lit_share(hour_of_day(t), false));
-        let far_rooms = glow * 0.025 * (far_share / 0.4) as f32;
+        let far_rooms = glow * 0.025;
         let mapped = |rgb: [f32; 3],
                       (albedo, normal, lights): (TextureId, TextureId, TextureId),
                       glow: f32| {
@@ -4346,9 +4362,17 @@ impl Running for PlanRunning {
             scale: 1.0,
         };
         for run in &self.trams {
-            // Its running trams, then those its depot keeps.
+            // Its running trams, then those its depot keeps. In the night's pause the running
+            // ones wait far under the ground, as unused figures do.
+            let away = [(Vec3::new(0.0, -1000.0, 0.0) + origin, 0.0); TRAM_SECTIONS];
             let vehicles: Vec<_> = (0..run.timetable.vehicles())
-                .map(|k| run.sections(k, self.clock, self.size))
+                .map(|k| {
+                    if run.paused {
+                        away
+                    } else {
+                        run.sections(k, self.clock, self.size)
+                    }
+                })
                 .chain(run.parked.iter().copied())
                 .collect();
             for v in &vehicles {
@@ -5189,6 +5213,9 @@ mod tests {
         assert!(home(21.0) >= 0.45 && home(3.0) <= 0.06);
         assert!(home(21.0) > home(23.5) && home(23.5) > home(2.0));
         assert!(shop(12.0) > 0.6 && shop(2.0) <= 0.1);
+        // The trams pause from 1:30 to 4:30.
+        assert!(tram_pause(hour_of_day(1.75)) && !tram_pause(hour_of_day(1.5)));
+        assert!(!tram_pause(5.0) && !tram_pause(23.0));
         for h in 0..=48 {
             let h = f64::from(h) * 0.5;
             assert!((0.0..=1.0).contains(&home(h)) && (0.0..=1.0).contains(&shop(h)));
