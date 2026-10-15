@@ -35,7 +35,7 @@ pub fn houses(
     lots.iter()
         .enumerate()
         .filter(|(_, lot)| lot.len() >= 3)
-        .map(|(k, lot)| {
+        .filter_map(|(k, lot)| {
             let (people, means) = household(k);
             let width = parcels::frontage(lot);
             let plan = rooms::plan(
@@ -55,12 +55,17 @@ pub fn houses(
                     break;
                 }
             }
-            House {
+            // A corner wedge too narrow for a house (its footprint cut to nothing) stays a
+            // garden.
+            if footprint.len() < 3 || geom::signed_area(&footprint).abs() < 4.0 {
+                return None;
+            }
+            Some(House {
                 lot: lot.clone(),
                 plan,
                 footprint,
                 household: (people, means),
-            }
+            })
         })
         .collect()
 }

@@ -74,9 +74,14 @@ pub fn village(site: &Site, params: &CityParams, seed: u64) -> Village {
             continue;
         }
         let n = block.buildable.len();
-        let Some((lots, court)) =
+        // The village's depth first; a thin block takes a shallower strip, down to a house with
+        // no yard; one too thin for that keeps no houses.
+        let cut = [ty.depth, 11.0, 8.0].into_iter().find_map(|depth| {
+            let ty = ParcelType { depth, ..ty };
             parcels::strips(&block.buildable, &vec![true; n], &ty, seed ^ b as u64)
-        else {
+                .map(|(lots, court)| (ty, lots, court))
+        });
+        let Some((ty, lots, court)) = cut else {
             without += 1;
             continue;
         };
