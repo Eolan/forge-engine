@@ -92,6 +92,69 @@ struct Args {
     /// nits) as 32-bit float EXR files, for NVIDIA's tool or an HDR image viewer.
     #[arg(long, num_args = 2, value_names = ["A_EXR", "B_EXR"])]
     exr: Option<Vec<PathBuf>>,
+    /// Compare `a` at (x + dx, y + dy) with `b`'s pixel at (x, y), over the part both cover:
+    /// "dx,dy", in pixels, fractions read between pixels (bilinear). With `a` a frame and `b`
+    /// the one before, as the camera turns a few pixels a frame (`--yaw-rate`), what is left
+    /// flickers: shimmer in motion. A fraction of a pixel a frame shows what a whole number
+    /// hides, the samples falling elsewhere on the scene each frame.
+    #[arg(long, value_parser = parse_offset, allow_hyphen_values = true)]
+    shift: Option<[f64; 2]>,
+    /// Compare only this region, "x,y,width,height" (after `--shift`): the image's middle,
+    /// where a turn moves every depth alike.
+    #[arg(long, value_parser = parse_rect)]
+    region: Option<[u32; 4]>,
+}
+
+fn parse_offset(text: &str) -> std::result::Result<[f64; 2], String> {
+    let parts: Vec<f64> = text
+        .split(',')
+        .map(|p| p.trim().parse::<f64>().map_err(|e| e.to_string()))
+        .collect::<std::result::Result<_, _>>()?;
+    parts.try_into().map_err(|_| "expected dx,dy".to_owned())
+}
+
+/// `a` and `b` over the part both cover with `a` read `shift` pixels off (bilinear between
+/// pixels), then cut to `region`.
+fn aligned(
+    a: image::RgbaImage,
+    b: image::RgbaImage,
+    shift: Option<[f64; 2]>,
+    region: Option<[u32; 4]>,
+) -> (image::RgbaImage, image::RgbaImage) {
+    use image::imageops::crop_imm;
+    let (mut a, mut b) = (a, b);
+    if let Some([dx, dy]) = shift {
+        let (w, h) = (i64::from(a.width()), i64::from(a.height()));
+        let (ix, iy) = (dx.floor() as i64, dy.floor() as i64);
+        let (tx, ty) = (dx - ix as f64, dy - iy as f64);
+        // `b`'s pixels whose `a` samples (and their neighbours, between pixels) lie inside.
+        let (x0, x1) = ((-ix).max(0), (w - ix - i64::from(tx > 0.0)).min(w));
+        let (y0, y1) = ((-iy).max(0), (h - iy - i64::from(ty > 0.0)).min(h));
+        let (cw, ch) = ((x1 - x0).max(0) as u32, (y1 - y0).max(0) as u32);
+        let read = |x: i64, y: i64| a.get_pixel(x as u32, y as u32).0.map(f64::from);
+        let moved = image::RgbaImage::from_fn(cw, ch, |x, y| {
+            let (sx, sy) = (x0 + i64::from(x) + ix, y0 + i64::from(y) + iy);
+            let at = |ox: i64, oy: i64| read(sx + ox, sy + oy);
+            let (p00, p10) = (at(0, 0), if tx > 0.0 { at(1, 0) } else { at(0, 0) });
+            let (p01, p11) = if ty > 0.0 {
+                (at(0, 1), if tx > 0.0 { at(1, 1) } else { at(0, 1) })
+            } else {
+                (p00, p10)
+            };
+            image::Rgba(std::array::from_fn(|c| {
+                let top = p00[c] * (1.0 - tx) + p10[c] * tx;
+                let bottom = p01[c] * (1.0 - tx) + p11[c] * tx;
+                (top * (1.0 - ty) + bottom * ty).round() as u8
+            }))
+        });
+        a = moved;
+        b = crop_imm(&b, x0 as u32, y0 as u32, cw, ch).to_image();
+    }
+    if let Some([x, y, w, h]) = region {
+        a = crop_imm(&a, x, y, w, h).to_image();
+        b = crop_imm(&b, x, y, w, h).to_image();
+    }
+    (a, b)
 }
 
 fn parse_point(text: &str) -> std::result::Result<[u32; 2], String> {
@@ -192,7 +255,9 @@ fn main() -> Result<ExitCode> {
     // so one 10-bit code apart counts; the tolerance stays in 8-bit steps (times 257).
     let sixteen =
         |i: &image::DynamicImage| i.color().bytes_per_pixel() == 2 * i.color().channel_count();
-    let wide = (sixteen(&a_image) && sixteen(&b_image))
+    // Shifted or cut to a region, the 8-bit pixels alone.
+    let moved = args.shift.is_some() || args.region.is_some();
+    let wide = (sixteen(&a_image) && sixteen(&b_image) && !moved)
         .then(|| (a_image.to_rgba16(), b_image.to_rgba16()));
     let a = a_image.to_rgba8();
     let b = b_image.to_rgba8();
@@ -203,6 +268,7 @@ fn main() -> Result<ExitCode> {
             b.dimensions()
         );
     }
+    let (a, b) = aligned(a, b, args.shift, args.region);
     let (width, height) = a.dimensions();
     let mut different = 0_u64;
     let mut max_error = 0_u8;

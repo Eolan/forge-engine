@@ -542,6 +542,12 @@ pub struct Args {
     /// each frame, for measuring sharpness in motion (#159).
     #[arg(long, conflicts_with_all = ["fly", "orbit", "tour", "dolly"])]
     pan: Option<f32>,
+    /// Turn from the start view at this many degrees a second, to the right (a frame at a time
+    /// with `--fixed-step`): the image's middle moves sideways by the same few pixels each frame
+    /// whatever its depth, so a frame shifted back (`imgdiff --shift`) shows what flickers, for
+    /// measuring shimmer in motion.
+    #[arg(long, conflicts_with_all = ["fly", "orbit", "tour", "dolly", "pan"])]
+    yaw_rate: Option<f32>,
     /// Bloom strength, the share of the shown image that is bloom (0 for none; B toggles it).
     #[arg(long, default_value_t = 0.04)]
     bloom: f32,
@@ -1639,6 +1645,9 @@ impl Demo for Gallery {
             let step = if self.args.fixed_step { 1.0 / 60.0 } else { dt };
             let right = self.camera.forward().cross(Vec3::Y).normalize_or_zero();
             self.camera.position += right * speed * step;
+        } else if let Some(rate) = self.args.yaw_rate {
+            let step = if self.args.fixed_step { 1.0 / 60.0 } else { dt };
+            self.camera.yaw -= rate.to_radians() * step;
         } else if self.args.orbit {
             // Deterministic per frame (not per second) so captures at a frame index match.
             let angle = self.frame as f32 * 0.004;

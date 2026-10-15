@@ -478,9 +478,9 @@ fn railing(m: &mut TriMesh, a: Vec3, b: Vec3, height: f32) {
     rail(m, a.y + height - 0.04, a.y + height);
     rail(m, a.y + 0.08, a.y + 0.11);
     let length = if along_x { hi.x - lo.x } else { hi.z - lo.z };
-    let bars = (length / 0.11).floor().max(1.0) as u32;
+    let bars = (length / 0.12).floor().max(1.0) as u32;
     let step = length / bars as f32;
-    let s = 0.009;
+    let s = 0.015;
     let faces = POS_X | NEG_X | POS_Z | NEG_Z;
     for k in 1..bars {
         let t = k as f32 * step;

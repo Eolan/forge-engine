@@ -216,6 +216,24 @@ sharpening, or relaxed clamping on a thin-feature mask like Unreal's [23].
   - Mid: width clamp only.
   - Far: bake the glazing bars into the window card.
 
+### 2.9 Measured in Forge (2026-10-15)
+
+- **The method.** A camera turning at a steady rate (`--yaw-rate`) moves the image's middle by
+  the same pixels each frame, whatever its depth. `imgdiff --shift dx,dy --region x,y,w,h`
+  compares a frame with the one before read that many pixels off; what is left flickers.
+- **Whole pixels a frame** (2 px; the sandbox's avenue, the middle 300 × 500 px):
+  - DLAA, the interactive default: 2 pixels a frame change by more than 12 levels;
+  - TAA: 351;
+  - the SSAA run: 75.
+- **Fractions of a pixel a frame** (2.5 px; the samples land elsewhere on the scene each frame):
+  - the flicker sits on the balconies' railings;
+  - their 1.8 cm bars every 11 cm are under a pixel past about 18 m;
+  - bars of 3 cm every 12 cm (`forge_geom::modules`) cut it from 1 767 to 731 pixels a frame
+    pair with DLAA.
+- **A caveat:** the bilinear read softens the earlier frame, so the comparison favours blur.
+  It ranks one mode's changes, not modes against each other.
+- **Next:** the railings' far form, and the walls' and frames' edges at their silhouettes.
+
 ## 3. Paving and ground patterns
 
 ### 3.1 Align UVs to each region, not to the world
