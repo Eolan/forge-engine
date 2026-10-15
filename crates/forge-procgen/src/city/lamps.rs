@@ -64,7 +64,10 @@ pub fn lamps(site: &Site, plan: &CityPlan) -> Vec<Lamp> {
                     Profile::Pedestrian => (24.0, 4.5),
                     _ => (35.0, 4.0),
                 };
-                vec![((half - 0.8).max(0.5), spacing, height, None)]
+                // 1.6 m in from the building line, clear of the balconies, which reach a
+                // metre out: at 0.8 m a lamp's post stood through a balcony's grille (the
+                // owner's flight, 2026-10-15).
+                vec![((half - 1.6).max(0.5), spacing, height, None)]
             }
         };
         for (offset, spacing, height, slots) in rows {
