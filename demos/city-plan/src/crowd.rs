@@ -16,9 +16,10 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 use forge_core::Seed;
 use forge_procgen::city::geom::{self, PointGrid};
 use forge_procgen::city::mass::Mass;
+use forge_procgen::city::units::Occupancy;
 use forge_procgen::city::{BlockUse, CityPlan};
 use forge_sim::population::{
-    self, Building, Mix, Mode, PlaceKind, Population, Sim, TRAM_WAIT, Uses, World,
+    self, Building, Homes, Mix, Mode, PlaceKind, Population, Sim, TRAM_WAIT, Uses, World,
 };
 use forge_sim::transit::Timetable;
 use glam::{DVec2, Vec2, Vec3};
@@ -362,27 +363,33 @@ pub struct People {
     pub homes: Vec<Option<u32>>,
 }
 
-/// The people of `plan`'s `masses` (each its net floor area in `nets`), in `mix`'s roles: homes
-/// and jobs from each building's net floor area (D-060), and the plan's parks. One seed, so the
-/// crowd and the residents' lights ([`crate::residents`]) are the same people. `only`: just the
-/// residents of those masses, each the same person as in the whole population.
+/// The people of `plan`'s `masses` (each what it holds in `holds`), in `mix`'s roles: its homes
+/// and jobs counted unit by unit (D-060 step 3: a household to each occupied flat), and the
+/// plan's parks. One seed, so the crowd and the residents' lights ([`crate::residents`]) are the
+/// same people. `only`: just the residents of those masses, each the same person as in the whole
+/// population.
 pub fn people(
     plan: &CityPlan,
     masses: &[Mass],
-    nets: &[f64],
+    holds: &[Occupancy],
     mix: &Mix,
     only: Option<&[usize]>,
 ) -> People {
     let buildings: Vec<Building> = masses
         .iter()
-        .zip(nets)
-        .map(|(m, &net)| {
+        .zip(holds)
+        .map(|(m, o)| {
             let c = geom::centroid(&m.footprint);
             Building {
                 pos: [c.x as f32, c.y as f32],
-                floor_area: net as f32,
+                floor_area: o.net as f32,
                 active_ground: m.lively(),
                 appeal: if m.open { 1.0 } else { 0.0 },
+                homes: Some(Homes {
+                    households: o.households,
+                    residents: o.residents,
+                }),
+                jobs: Some(o.jobs),
             }
         })
         .collect();
@@ -485,13 +492,13 @@ pub struct Platform {
 }
 
 impl Crowd {
-    /// The people of `plan`'s `masses` (each its net floor area in `nets`), their day run to
+    /// The people of `plan`'s `masses` (each what it holds in `holds`), their day run to
     /// `hour` (game hours from midnight).
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         plan: &CityPlan,
         masses: &[Mass],
-        nets: &[f64],
+        holds: &[Occupancy],
         hour: f64,
         seats: Vec<(Vec3, f32)>,
         platforms: Vec<Platform>,
@@ -524,7 +531,7 @@ impl Crowd {
             world,
             population: pop,
             ..
-        } = people(plan, masses, nets, mix, None);
+        } = people(plan, masses, holds, mix, None);
         // The parks' places come last, in that order.
         let first_park = world.places.len() - open.len();
         // The demo's lifetime: the places live as long as the app.

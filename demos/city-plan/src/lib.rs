@@ -29,6 +29,7 @@ use forge_procgen::city::mass::{Mass, Roof};
 use forge_procgen::city::shore::Shore;
 use forge_procgen::city::structure::{self, OpeningKind, Structure, WallRole};
 use forge_procgen::city::trees::Tree;
+use forge_procgen::city::units::{self, Occupancy};
 use forge_procgen::city::{BlockUse, CityPlan, Site, geom, ground};
 use forge_procgen::grammar::Grammar;
 use forge_render::MeshletSceneBuilder;
@@ -276,8 +277,9 @@ pub struct PlanScenario {
     walls: Vec<Vec<Vec3>>,
     /// How many passages into courts, and where to look into one, for the log.
     passage_note: String,
-    /// Each mass's net floor area (D-060), for the people's homes and jobs.
-    nets: Vec<f64>,
+    /// What each mass holds (D-060 step 3): its homes' households and residents, its jobs, its
+    /// net floor area.
+    holds: Vec<Occupancy>,
     walk_on_start: bool,
     /// The names the fingerposts' blades carry, a row of their atlas each.
     sign_names: Vec<String>,
@@ -414,6 +416,8 @@ impl PlanScenario {
         // The buildings' structure (D-060): the kit dresses it, the walker walks against it, the
         // gardens and the paths round the courts start from its doors.
         let structures = structure::structures(plan, masses);
+        // Who each building holds, counted by home and workplace (D-060 step 3).
+        let holds: Vec<Occupancy> = structures.iter().map(units::occupancy).collect();
         let gardens = gardens::gardens(plan, masses, &structures);
         // Each block's paved ground off its forecourt: the paths across its court, the flats'
         // terraces, its kitchen garden's. Paved with the forecourt, one surface: drawn over the
@@ -622,8 +626,7 @@ impl PlanScenario {
         let kit = detail.map(|d| {
             // The residents at home and awake at the hour light their own windows.
             let residents = d.lit_hour.map(|h| {
-                let nets: Vec<f64> = structures.iter().map(|s| s.net).collect();
-                residents::Residents::new(plan, masses, &nets, &d.mix, h, &near)
+                residents::Residents::new(plan, masses, &structures, &holds, &d.mix, h, &near)
             });
             kit(
                 &mut tiles,
@@ -927,6 +930,42 @@ impl PlanScenario {
                 "; a home's planters at --view={:.1},1.7,{:.1},{yaw:.1},{pitch:.1}",
                 eye.x, eye.z
             );
+        }
+        // The kit's office buildings (D-060 step 3), and one seen from its street: 15 m out from
+        // the middle of its longest street wall (15 m: from 25 a square's pavilion stood in the
+        // way), looking up at its third storey.
+        if let Some(d) = detail {
+            let offices = near
+                .iter()
+                .filter(|&&i| masses[i].office_building())
+                .count();
+            let one = near
+                .iter()
+                .filter(|&&i| masses[i].office_building())
+                .filter_map(|&i| {
+                    structures[i]
+                        .walls
+                        .iter()
+                        .filter(|w| w.role == WallRole::Street)
+                        .max_by(|a, b| a.length().total_cmp(&b.length()))
+                })
+                .min_by(|a, b| {
+                    let far = |w: &structure::Wall| ((w.a + w.b) * 0.5).distance(d.centre);
+                    far(a).total_cmp(&far(b))
+                });
+            passage_note += &format!("; {offices} office buildings in the kit");
+            if let Some(w) = one {
+                let t = (w.b - w.a).normalize_or_zero();
+                let mid = (w.a + w.b) * 0.5;
+                let eye = world(size, mid + DVec2::new(t.y, -t.x) * 15.0, 1.7);
+                let to = (world(size, mid, 8.0) - eye).normalize_or_zero();
+                let yaw = (-to.x).atan2(-to.z).to_degrees();
+                let pitch = to.y.asin().to_degrees();
+                passage_note += &format!(
+                    ", one at --view={:.1},1.7,{:.1},{yaw:.1},{pitch:.1}",
+                    eye.x, eye.z
+                );
+            }
         }
         let triangles = tiles
             .tiles
@@ -1577,7 +1616,6 @@ impl PlanScenario {
                 }
             }
         }
-        let nets: Vec<f64> = structures.iter().map(|s| s.net).collect();
         Self {
             tiles: tiles.tiles,
             trees,
@@ -1602,14 +1640,14 @@ impl PlanScenario {
                 .chain(stall_walls)
                 .collect(),
             passage_note,
-            nets: nets.clone(),
+            holds: holds.clone(),
             walk_on_start: false,
             ride_after: None,
             games,
             stalls: stalls.iter().map(|&(at, _)| at).collect(),
             sign_names,
             crowd: None,
-            taxis: taxis::Taxis::new(plan, masses, &nets, 8.0, 3600.0),
+            taxis: taxis::Taxis::new(plan, masses, &holds, 8.0, 3600.0),
             size,
             camera,
             title: format!(
@@ -1661,14 +1699,21 @@ impl PlanScenario {
         let games = std::mem::take(&mut self.games);
         self.crowd = Some(
             crowd::Crowd::new(
-                plan, masses, &self.nets, hour, seats, platforms, timetables, mix,
+                plan,
+                masses,
+                &self.holds,
+                hour,
+                seats,
+                platforms,
+                timetables,
+                mix,
             )
             .with_games(games)
             .with_stalls(std::mem::take(&mut self.stalls))
             .with_trams_paused(self.trams.iter().any(|r| r.paused)),
         );
         // The taxis on the people's hour.
-        self.taxis = taxis::Taxis::new(plan, masses, &self.nets, hour, self.clock);
+        self.taxis = taxis::Taxis::new(plan, masses, &self.holds, hour, self.clock);
         self
     }
 
@@ -2284,6 +2329,8 @@ fn kit(
     let start = std::time::Instant::now();
     // The homes' windows: lit by their flats' households, and how many.
     let mut homes_lit = (0, 0, 0);
+    // The offices' windows, and how many lit.
+    let mut offices_lit = (0, 0);
     let size = tiles.size;
     let (dressed, _stats) = facades::dress(d.grammar, structures, masses, near, d.top, d.seed);
     let mut keys: std::collections::HashMap<(u16, i32, i32, i32), u32> =
@@ -2340,29 +2387,44 @@ fn kit(
             let colour = (mix(u64::from(m.lot)) % 4) as u8;
             let spot = mix(u64::from(pos.x.to_bits()) << 32 | u64::from(pos.z.to_bits()))
                 ^ mix(u64::from(pos.y.to_bits()));
-            // A home's window lit by its flat's household, at home and awake or not (the flat
-            // holding a point half a metre inside it); a shop's in the share of the hour
-            // (`lit_share`), each window its own draw.
-            let shop = name.starts_with("shop");
-            let by_residents = residents.filter(|_| !shop).and_then(|r| {
+            // Its unit, holding a point half a metre inside it. A home's window lit by its
+            // household, at home and awake or not (an empty flat dark); an office's by the
+            // working day (`office_lights`); a shop's in the share of the hour (`lit_share`).
+            // Each window its own draw.
+            let s = &structures[piece.mass as usize];
+            let unit = piece.storey.and_then(|k| {
                 let n = t.scope.normal();
                 let inside = DVec2::new(o.x, o.z)
                     + DVec2::new(t.scope.x.x, t.scope.x.z) * (f64::from(w) * 0.5)
                     - DVec2::new(n.x, n.z) * (wall.thickness + 0.5);
-                let s = &structures[piece.mass as usize];
-                let flat = piece
-                    .storey
-                    .and_then(|k| residents::flat_at(s, usize::from(k), inside));
-                homes_lit.2 += usize::from(flat.is_some());
-                r.lit(piece.mass as usize, flat, spot)
+                residents::unit_at(s, usize::from(k), inside)
             });
+            let use_ = unit.map(|k| s.units[k].use_);
+            let shop = name.starts_with("shop") || use_ == Some(units::Use::Shop);
+            let office = use_ == Some(units::Use::Office);
+            let by_residents = residents
+                .filter(|_| !shop && !office)
+                .and_then(|r| r.lit(s, unit, spot));
+            if by_residents.is_some() {
+                homes_lit.2 += usize::from(matches!(use_, Some(units::Use::Home(_))));
+            }
             let lit = by_residents.unwrap_or_else(|| {
-                let share = d.lit_hour.map_or(0.4, |h| lit_share(h, shop));
+                let share = d.lit_hour.map_or(0.4, |h| {
+                    if office {
+                        residents::office_lights(h)
+                    } else {
+                        lit_share(h, shop)
+                    }
+                });
                 (((spot >> 20) % 1000) as f64) < share * 1000.0
             });
             if let Some(l) = by_residents {
                 homes_lit.0 += 1;
                 homes_lit.1 += usize::from(l);
+            }
+            if office {
+                offices_lit.0 += 1;
+                offices_lit.1 += usize::from(lit);
             }
             let transform =
                 Mat4::from_cols(x.extend(0.0), y.extend(0.0), z.extend(0.0), pos.extend(1.0));
@@ -2469,9 +2531,11 @@ fn kit(
         homes_share: residents.map(|_| homes_lit.1 as f64 / homes_lit.0.max(1) as f64),
         lights: residents.map(|r| {
             let (windows, lit, in_flat) = homes_lit;
+            let (offices, offices_on) = offices_lit;
             format!(
                 "the residents' lights: {} of {} households at home and awake, {lit} of \
-                 {windows} homes' windows lit ({in_flat} in their flats), found in {:.0} ms",
+                 {windows} homes' windows lit ({in_flat} in their flats), {offices_on} of \
+                 {offices} offices' windows, found in {:.0} ms",
                 r.households.1,
                 r.households.0,
                 r.seconds * 1e3

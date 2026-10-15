@@ -79,6 +79,18 @@ pub struct Place {
     /// How far it draws people from: 0 an ordinary place, 1 a shop, café or bar on a square, a
     /// park or the water (worth [`APPEAL_KM`] more of the way), a park 0.5.
     pub appeal: f32,
+    /// A home's households, its residents dealt among them in turn ([`household_index`]); 0
+    /// elsewhere.
+    pub households: u32,
+}
+
+/// A building's homes, counted flat by flat (D-060 step 3) rather than from its floor area.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Homes {
+    /// Its occupied homes: one household each.
+    pub households: u32,
+    /// The people living in them.
+    pub residents: u32,
 }
 
 /// A building of a city, as the population sees it.
@@ -94,6 +106,11 @@ pub struct Building {
     /// How far its shop, café or bar draws people from ([`Place::appeal`]): 1 on a square, a
     /// park or the water, else 0.
     pub appeal: f32,
+    /// Its homes counted flat by flat, or `None`: from its floor area by [`Uses`].
+    pub homes: Option<Homes>,
+    /// Its jobs counted by its workplaces' floor area, or `None`: from its floor area by
+    /// [`Uses`].
+    pub jobs: Option<u32>,
 }
 
 /// How a city's floor area is used.
@@ -121,46 +138,52 @@ impl Default for Uses {
     }
 }
 
-/// How many people live in building `b`: its floor area's homes by `uses`.
+/// How many people live in building `b`: its homes counted flat by flat, or its floor area's
+/// homes by `uses`.
 pub fn residents(b: &Building, uses: &Uses) -> u32 {
-    (b.floor_area * uses.homes / uses.home_area) as u32
+    b.homes
+        .map_or((b.floor_area * uses.homes / uses.home_area) as u32, |h| {
+            h.residents
+        })
 }
 
-/// Places from a city's buildings: homes and jobs by floor area, every `school_every`-th building
-/// a school, active ground floors as shops, cafés and bars in turn, and the parks. The homes come
-/// in their buildings' order, one for each building with [`residents`].
+/// Places from a city's buildings: homes and jobs (counted, or by floor area), every
+/// `school_every`-th building a school, active ground floors as shops, cafés and bars in turn,
+/// and the parks. The homes come in their buildings' order, one for each building with
+/// [`residents`]; a home's households are its counted ones, or one for every 2.2 residents (the
+/// French mean).
 pub fn places_from_buildings(
     buildings: &[Building],
     parks: &[[f32; 2]],
     uses: &Uses,
 ) -> Vec<Place> {
     let mut places = Vec::new();
+    let place = |kind, pos, capacity, appeal| Place {
+        kind,
+        pos,
+        capacity,
+        appeal,
+        households: 0,
+    };
     for (i, b) in buildings.iter().enumerate() {
         let residents = residents(b, uses);
         if residents > 0 {
+            let households = b
+                .homes
+                .map_or((residents as f32 / 2.2) as u32, |h| h.households);
             places.push(Place {
-                kind: PlaceKind::Home,
-                pos: b.pos,
-                capacity: residents,
-                appeal: 0.0,
+                households: households.clamp(1, residents),
+                ..place(PlaceKind::Home, b.pos, residents, 0.0)
             });
         }
-        let jobs = (b.floor_area * (1.0 - uses.homes) / uses.job_area) as u32;
+        let jobs = b
+            .jobs
+            .unwrap_or((b.floor_area * (1.0 - uses.homes) / uses.job_area) as u32);
         let school = uses.school_every > 0 && i as u32 % uses.school_every == uses.school_every / 2;
         if school {
-            places.push(Place {
-                kind: PlaceKind::School,
-                pos: b.pos,
-                capacity: 600,
-                appeal: 0.0,
-            });
+            places.push(place(PlaceKind::School, b.pos, 600, 0.0));
         } else if jobs > 0 {
-            places.push(Place {
-                kind: PlaceKind::Work,
-                pos: b.pos,
-                capacity: jobs,
-                appeal: 0.0,
-            });
+            places.push(place(PlaceKind::Work, b.pos, jobs, 0.0));
         }
         if b.active_ground {
             let kind = match i % 3 {
@@ -168,20 +191,14 @@ pub fn places_from_buildings(
                 1 => PlaceKind::Food,
                 _ => PlaceKind::Leisure,
             };
-            places.push(Place {
-                kind,
-                pos: b.pos,
-                capacity: 40,
-                appeal: b.appeal,
-            });
+            places.push(place(kind, b.pos, 40, b.appeal));
         }
     }
-    places.extend(parks.iter().map(|&pos| Place {
-        kind: PlaceKind::Park,
-        pos,
-        capacity: 500,
-        appeal: 0.5,
-    }));
+    places.extend(
+        parks
+            .iter()
+            .map(|&pos| place(PlaceKind::Park, pos, 500, 0.5)),
+    );
     places
 }
 
@@ -417,6 +434,8 @@ impl World {
 pub struct Population {
     /// Their home.
     pub home: Vec<u32>,
+    /// Their household among their home's ([`household_index`]).
+    pub household: Vec<u16>,
     /// Their work or school ([`NONE`] for none).
     pub anchor: Vec<u32>,
     /// Their role.
@@ -452,7 +471,7 @@ impl Population {
 
     /// The bytes a person takes in the columns.
     pub fn bytes_per_person() -> usize {
-        4 + 4 + 1 + 4 + 4 + 4 + 4 + 4 + 4 + 2 + 1
+        4 + 2 + 4 + 1 + 4 + 4 + 4 + 4 + 4 + 4 + 2 + 1
     }
 
     /// The people in `parts` contiguous runs of nearly equal length, in order.
@@ -465,6 +484,7 @@ impl Population {
             let from = n * k / parts;
             out.push(Population {
                 home: self.home.split_off(from),
+                household: self.household.split_off(from),
                 anchor: self.anchor.split_off(from),
                 role: self.role.split_off(from),
                 personality: self.personality.split_off(from),
@@ -519,7 +539,7 @@ pub fn generate_in(world: &World, mix: &Mix, seed: Seed, keep: &dyn Fn(u32) -> b
             id += u64::from(home.capacity);
             continue;
         }
-        for _ in 0..home.capacity {
+        for i in 0..home.capacity {
             let own = seed.derive(id).value();
             id += 1;
             let mut rng = SplitMix64::new(own);
@@ -566,6 +586,7 @@ pub fn generate_in(world: &World, mix: &Mix, seed: Seed, keep: &dyn Fn(u32) -> b
                 Role::Retiree => NONE,
             };
             pop.home.push(h as u32);
+            pop.household.push((i % home.households.max(1)) as u16);
             pop.anchor.push(anchor);
             pop.role.push(role);
             pop.personality.push(personality);
@@ -626,19 +647,18 @@ fn per_km(kind: PlaceKind) -> f32 {
     }
 }
 
-/// How many households home place `home` holds: its residents by 2.2 (the French mean), at least
-/// one.
+/// How many households home place `home` holds ([`Place::households`]), at least one.
 pub fn households(world: &World, home: u32) -> u32 {
-    ((world.places[home as usize].capacity as f32 / 2.2) as u32).max(1)
+    world.places[home as usize].households.max(1)
 }
 
-/// Person `p`'s household among their home's [`households`], theirs by their seed.
+/// Person `p`'s household among their home's [`households`]: its residents are dealt among them
+/// in turn, so each has someone.
 pub fn household_index(world: &World, pop: &Population, p: usize) -> u32 {
-    pop.seed[p] % households(world, pop.home[p])
+    u32::from(pop.household[p]) % households(world, pop.home[p])
 }
 
-/// Person `p`'s household, as a key: one of their home's households (2.2 residents each, the
-/// French mean), theirs by their seed.
+/// Person `p`'s household, as a key: one of their home's households ([`household_index`]).
 pub fn household(world: &World, pop: &Population, p: usize) -> u64 {
     (u64::from(pop.home[p]) << 24) ^ u64::from(household_index(world, pop, p))
 }
@@ -1364,6 +1384,8 @@ mod tests {
                     active_ground: (x + y) % 3 == 0,
                     // The town's middle row looks onto its square.
                     appeal: if y == 10 { 1.0 } else { 0.0 },
+                    homes: None,
+                    jobs: None,
                 });
             }
         }

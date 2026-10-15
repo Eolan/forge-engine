@@ -50,6 +50,10 @@ pub struct Mass {
     /// Whether its ground floor is shops, cafés and services rather than homes
     /// (`active_chance`).
     pub active: bool,
+    /// How many of its upper storeys, from the first floor up, are workplaces rather than homes
+    /// (`office_chance`): offices, practices and services. All of them make an office building,
+    /// whose ground floor is its reception where it has no shops.
+    pub offices: u8,
 }
 
 impl Mass {
@@ -59,6 +63,18 @@ impl Mass {
     /// floor on a pavement is a shop or a café).
     pub fn lively(&self) -> bool {
         self.active
+    }
+
+    /// Whether every upper storey is a workplace: an office building.
+    pub fn office_building(&self) -> bool {
+        self.storeys.len() >= 2 && usize::from(self.offices) + 1 >= self.storeys.len()
+    }
+
+    /// Whether storey `k` (0 the ground) is a workplace: one of its [`Mass::offices`], or an
+    /// office building's ground storey without shops.
+    pub fn works(&self, k: usize) -> bool {
+        (k >= 1 && k <= usize::from(self.offices))
+            || (k == 0 && !self.active && self.office_building())
     }
 
     /// Its ground storey's floor to floor, metres.
@@ -110,6 +126,21 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
     for l in &plan.tram_lines {
         for &s in &l.stops {
             stops.insert(s, 0);
+        }
+    }
+    // The interchanges, where offices gather (`research/city-generation.md` §14: offices in a
+    // share of upper floors near the tram hubs): a stop with another line's within 150 m.
+    let mut interchanges = PointGrid::new(plan.size, 100.0);
+    for (i, l) in plan.tram_lines.iter().enumerate() {
+        for &s in &l.stops {
+            let shared = plan
+                .tram_lines
+                .iter()
+                .enumerate()
+                .any(|(j, o)| j != i && o.stops.iter().any(|&q| q.distance(s) < 150.0));
+            if shared {
+                interchanges.insert(s, 0);
+            }
         }
     }
     let sights: Vec<DVec2> = plan.landmarks.iter().map(|l| l.pos).collect();
@@ -322,6 +353,44 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
         let floors = drawn.min(cap).max(1);
         let storeys = era.storeys(floors, shops);
         let height = storeys.iter().sum();
+        // Its workplaces upstairs (D-060 step 3): offices over the shops on the main streets,
+        // whole office buildings by the interchanges. Drawn by block, then a little by the lot,
+        // so offices gather; from R+2 up.
+        let offices = {
+            let c = geom::centroid(&lot.polygon);
+            let first = office_chance(Frontage {
+                profile,
+                district: district.kind,
+                facing: None,
+                from_hub: c.distance(hub),
+                from_heart: c.distance(district.anchor),
+                stop: [100.0, 250.0].map(|r| stops.any_within(c, r, |_| false)),
+                sight: false,
+            });
+            let hub_near = [150.0, 400.0].map(|r| interchanges.any_within(c, r, |_| false));
+            let whole = first * WHOLE_OFFICE
+                + if hub_near[0] {
+                    0.35
+                } else if hub_near[1] {
+                    0.15
+                } else {
+                    0.0
+                };
+            // A block's draw and the lot's mixed, made even again so a chance is what it says.
+            let draw = even_mix(
+                unit(seed ^ 0x0FF1CE ^ u64::from(lot.block)),
+                unit(seed ^ 0xB0A2D ^ index as u64),
+            );
+            let upper = floors.saturating_sub(1);
+            if floors < 3 || draw >= (whole + first).min(0.9) {
+                0
+            } else if draw < whole {
+                upper
+            } else {
+                // The first floor, and the second over five storeys.
+                upper.min(1 + u8::from(floors > 5))
+            }
+        };
         let r = rng.next_f64();
         let tiled = rng.next_f64() < district.tiled_share();
         let roof = if tiled {
@@ -344,6 +413,7 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
                 street_width,
                 open,
                 active,
+                offices,
             });
         }
     }
@@ -416,6 +486,57 @@ fn active_chance(f: Frontage) -> f64 {
         chance += 0.15;
     }
     chance.clamp(0.0, 0.95)
+}
+
+/// The share of a lot's [`office_chance`] that makes it a whole office building as well, on top
+/// of the interchanges' (+0.35 within 150 m, +0.15 within 400 m).
+const WHOLE_OFFICE: f64 = 0.35;
+
+/// `0.6 a + 0.4 b` for two even draws, made even again (its distribution function): the block's
+/// share keeps neighbours alike, and a chance stays the chance it says. The sum alone made a
+/// 15 % chance come out at 5 %.
+fn even_mix(a: f64, b: f64) -> f64 {
+    let s = 0.6 * a + 0.4 * b;
+    if s < 0.4 {
+        s * s / 0.48
+    } else if s < 0.6 {
+        (s - 0.2) / 0.6
+    } else {
+        1.0 - (1.0 - s) * (1.0 - s) / 0.48
+    }
+}
+
+/// The chance that a lot's building has workplaces on its first floors: offices, practices and
+/// services over the shops or the homes' hall (D-060 step 3; `research/city-generation.md` §14:
+/// uses by floor and frontage, offices in a share of upper floors near the tram hubs; Euronantes
+/// and Part-Dieu by their stations). All estimates: by the street (a central tram avenue 0.6, a
+/// tram avenue 0.4, a central avenue 0.5, an avenue 0.3, a central lane or shared street 0.3,
+/// elsewhere 0.15), the converted halls' quarter more (×1.3, the Île de Nantes), the old town and
+/// the eco-quarters less (×0.6), the villages hardly (×0.2); less far from the centre, more by a
+/// tram stop (+0.1 within 100 m).
+fn office_chance(f: Frontage) -> f64 {
+    let central = matches!(f.district, DistrictKind::Centre) || f.from_hub < 1000.0;
+    let by_street = match f.profile {
+        Profile::TramAvenue if central => 0.6,
+        Profile::TramAvenue => 0.4,
+        Profile::Avenue if central => 0.5,
+        Profile::Avenue => 0.3,
+        Profile::Pedestrian | Profile::Shared if central => 0.3,
+        Profile::Pedestrian | Profile::Shared => 0.15,
+        Profile::Path => 0.0,
+    };
+    let by_district = match f.district {
+        DistrictKind::Industrial => 1.3,
+        DistrictKind::OldTown | DistrictKind::Eco => 0.6,
+        DistrictKind::Village => 0.2,
+        _ => 1.0,
+    };
+    let far = ((f.from_hub - 1500.0) / 3000.0).clamp(0.0, 0.5);
+    let mut chance = by_street * by_district * (1.0 - far);
+    if f.stop[0] {
+        chance += 0.1;
+    }
+    chance.clamp(0.0, 0.9)
 }
 
 /// A number in 0..1 from `key`.

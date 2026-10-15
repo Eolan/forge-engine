@@ -66,7 +66,10 @@ come from search results. Nothing was downloaded beyond three PDFs a fetch read 
   100 m² [27].
 - New collective dwellings (2013): T1 8–13 %, T2 24–26 %, T3 37–39 %, T4 22–23 %, T5 about
   4 % [9].
-- INSEE 2013: an apartment averages 63.0 m², 32.4 m² a person (45.1 in houses) [28].
+- INSEE 2013: an apartment averages 63.0 m², 32.4 m² a person (45.1 in houses) [28]. A flat
+  has 2.9 rooms on average, and its people 1.5 rooms each (1.3 in 1984), so about 1.9 people a
+  flat; the rooms counted are the living rooms and bedrooms, the kitchen over 12 m², not the
+  hall, bathroom or WC [28].
 - **Gross to net:** over 1 400 certified schemes, gross (SHON, to the walls' outer faces) over
   net (SHAB, without walls, partitions, stairs, shafts, reveals and space under 1.80 m) is about
   1.22–1.23, flats and grouped houses alike [9]: net ≈ 0.82 × gross.

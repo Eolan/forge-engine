@@ -4,6 +4,7 @@
 
 use forge_procgen::city::blocks::BlockUse;
 use forge_procgen::city::mass::Mass;
+use forge_procgen::city::units::Occupancy;
 use forge_procgen::city::{CityPlan, taxi};
 use forge_sim::taxi::{Demand, Depot, Fleet, Link, Network, Spot, Stand, Task};
 use glam::{DVec2, Vec3};
@@ -109,12 +110,12 @@ pub struct Taxis {
 }
 
 impl Taxis {
-    /// The fleet for `plan` and its `masses` (`nets`: each mass's net floor area), its day at
+    /// The fleet for `plan` and its `masses` (`holds`: who each holds), its day at
     /// `hour` when the scene's clock reads `clock`; `None` without taxi roads or stands.
     pub fn new(
         plan: &CityPlan,
         masses: &[Mass],
-        nets: &[f64],
+        holds: &[Occupancy],
         hour: f64,
         clock: f64,
     ) -> Option<Self> {
@@ -160,8 +161,8 @@ impl Taxis {
             .collect();
         // Where people book from and go to: the built blocks by their floor area, the squares.
         let mut area = vec![0.0_f64; plan.blocks.len()];
-        for (m, &n) in masses.iter().zip(nets) {
-            area[plan.lots[m.lot as usize].block as usize] += n;
+        for (m, o) in masses.iter().zip(holds) {
+            area[plan.lots[m.lot as usize].block as usize] += o.net;
         }
         let places = plan
             .blocks
@@ -178,7 +179,8 @@ impl Taxis {
                     .flatten()
             })
             .collect();
-        let people: f64 = nets.iter().sum::<f64>() * (2.0 / 3.0) / 32.4;
+        // The residents, counted by home (D-060 step 3).
+        let people: f64 = holds.iter().map(|o| f64::from(o.residents)).sum();
         let daily = people * TRANSIT_TRIPS_PER_PERSON;
         let total: f64 = HOURLY.iter().sum();
         let per_hour = HOURLY.map(|h| daily * h / total);
@@ -460,8 +462,11 @@ mod tests {
             7,
         );
         let structures = forge_procgen::city::structure::structures(&city, &masses);
-        let nets: Vec<f64> = structures.iter().map(|s| s.net).collect();
-        let mut taxis = Taxis::new(&city, &masses, &nets, 4.0, 0.0).expect("a fleet");
+        let holds: Vec<Occupancy> = structures
+            .iter()
+            .map(forge_procgen::city::units::occupancy)
+            .collect();
+        let mut taxis = Taxis::new(&city, &masses, &holds, 4.0, 0.0).expect("a fleet");
         // Each where it should be: on a carriageway (its lane, a lay-by, the kerb), or on its
         // depot's deck; none drawn on another.
         let misplaced = |taxis: &Taxis| {
@@ -528,8 +533,11 @@ mod tests {
             7,
         );
         let structures = forge_procgen::city::structure::structures(&city, &masses);
-        let nets: Vec<f64> = structures.iter().map(|s| s.net).collect();
-        let mut taxis = Taxis::new(&city, &masses, &nets, 8.0, 0.0).expect("a fleet");
+        let holds: Vec<Occupancy> = structures
+            .iter()
+            .map(forge_procgen::city::units::occupancy)
+            .collect();
+        let mut taxis = Taxis::new(&city, &masses, &holds, 8.0, 0.0).expect("a fleet");
         // An hour of the peak, then two minutes: a taxi on its way that has not moved in them
         // is stuck in a queue that does not clear.
         let t = taxis.fleet.time + 3600.0;

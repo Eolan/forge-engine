@@ -612,6 +612,10 @@ fn flats_beside(
         let Some(court) = green_court(plan, lot.block) else {
             continue;
         };
+        // An office building's reception has no garden flats.
+        if m.works(0) {
+            continue;
+        }
         let paths = by_block.get(&lot.block).map_or(&[][..], Vec::as_slice);
         for (w, wall) in s.walls.iter().enumerate() {
             if wall.role != WallRole::Court {
@@ -929,7 +933,8 @@ fn planters(plan: &CityPlan, masses: &[Mass], structures: &[Structure], out: &mu
     }
     let mut planted = Vec::new();
     for (m, s) in masses.iter().zip(structures) {
-        if m.active {
+        // Before homes only: not before shops, nor an office building's reception.
+        if m.active || m.works(0) {
             continue;
         }
         let block = plan.lots[m.lot as usize].block;

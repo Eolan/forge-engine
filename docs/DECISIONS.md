@@ -4089,6 +4089,19 @@ At 21:00, 88 % of the kit's households are up, and 49 % of its windows are lit; 
 a quarter of its lamp, not 4 %: under the probes' street lamps no window looked lit from the
 pavement (`demos/city-plan.md`, "Lit by their residents").
 
+**Offices and homes upstairs (built 2026-10-15).** Step 3's first item: uses go by floor and
+frontage (`research/city-generation.md` §14).
+- **Where:** offices over the shops on the main streets (the first floor, the second over five
+  storeys), and whole office buildings by the tram interchanges, by a chance per lot drawn by
+  block. About 14 % of the upper floors in the example, 42 % within 400 m of an interchange.
+- **The population counts by home:** each occupied flat is a household (5 % stand empty). Its
+  people are its rooms at INSEE's 1.5 rooms a person in flats, about 1.9 a flat. The jobs are the
+  offices' floor at 15 m² an employee and the shops' at 25 m².
+- **The result:** the sandbox keeps its million (1 043 k in 585 900 homes, 576 k jobs). Office
+  windows light by the working day, and the residents' windows by their own household.
+
+`demos/city-plan.md`, "Offices and homes upstairs".
+
 *(research: building-structure.md; ground-floors.md; issues #248, #263)*
 
 ## D-061 — The street ground as one map: cross-sections, junctions first, every surface once ✅ (proposed 2026-10-14; the owner's go the same day, in the order given)

@@ -1,12 +1,13 @@
 //! The residents' lights (D-060 step 3): who is at home and awake at the hour, household by
 //! household, so each flat's windows light by what its people are doing, not by a share of the
-//! hour (the owner: "lit windows from the people living there").
+//! hour (the owner: "lit windows from the people living there"). Each occupied flat holds one
+//! household, and an empty one stays dark. Offices light by the working day (`office_lights`).
 
 use forge_procgen::city::CityPlan;
 use forge_procgen::city::geom;
 use forge_procgen::city::mass::Mass;
 use forge_procgen::city::structure::Structure;
-use forge_procgen::city::units::Use;
+use forge_procgen::city::units::{self, Occupancy, Use};
 use forge_sim::population::{self, Mix};
 use glam::DVec2;
 
@@ -30,6 +31,9 @@ pub struct Residents {
     /// Per mass, per household, whether one of its people is at home and awake (empty where
     /// nobody lives or the mass was not asked for).
     awake: Vec<Vec<bool>>,
+    /// Per mass, each unit's household: its occupied homes take them in order
+    /// ([`units::occupants`]); `None` for an empty home or another use.
+    flats: Vec<Vec<Option<u32>>>,
     /// The share of an awake household's windows lit at the hour.
     lamps: f64,
     /// How long it took, seconds.
@@ -39,12 +43,13 @@ pub struct Residents {
 }
 
 impl Residents {
-    /// The people of `plan`'s `masses` (`nets`: each mass's net floor area) in `mix`'s roles, at
-    /// home and awake or not at `hour` (0 to 24): those of the masses `near`.
+    /// The people of `plan`'s `masses` (`structures`: their units; `holds`: who each holds) in
+    /// `mix`'s roles, at home and awake or not at `hour` (0 to 24): those of the masses `near`.
     pub fn new(
         plan: &CityPlan,
         masses: &[Mass],
-        nets: &[f64],
+        structures: &[Structure],
+        holds: &[Occupancy],
         mix: &Mix,
         hour: f64,
         near: &[usize],
@@ -54,7 +59,7 @@ impl Residents {
             world,
             population: pop,
             homes,
-        } = people(plan, masses, nets, mix, Some(near));
+        } = people(plan, masses, holds, mix, Some(near));
         // The people of each home: one run in the population, home by home.
         let mut first = vec![(usize::MAX, 0); world.places.len()];
         for p in 0..pop.len() {
@@ -66,6 +71,7 @@ impl Residents {
         }
         let t = (hour.rem_euclid(24.0) * 3600.0) as u32;
         let mut awake = vec![Vec::new(); masses.len()];
+        let mut flats = vec![Vec::new(); masses.len()];
         let mut households = (0, 0);
         for &m in near {
             let Some(h) = homes[m] else {
@@ -82,27 +88,44 @@ impl Residents {
             households.0 += up.len();
             households.1 += up.iter().filter(|&&a| a).count();
             awake[m] = up;
+            // The occupied homes take the households in order, as the population counts them.
+            let s = &structures[m];
+            let mut next = 0;
+            flats[m] = (0..s.units.len())
+                .map(|k| {
+                    (units::occupants(s, k) > 0).then(|| {
+                        next += 1;
+                        next - 1
+                    })
+                })
+                .collect();
         }
         Self {
             awake,
+            flats,
             lamps: lamps(hour),
             seconds: start.elapsed().as_secs_f64(),
             households,
         }
     }
 
-    /// Whether a window of mass `mass` is lit: by its flat's household (`flat`: the mass's
-    /// homes in order, a household to each in turn), or in the share of the mass's households
-    /// awake where the window is in no flat; `spot` is the window's own draw. `None` where
-    /// nobody lives in the mass.
-    pub fn lit(&self, mass: usize, flat: Option<usize>, spot: u64) -> Option<bool> {
-        let awake = &self.awake[mass];
+    /// Whether a window of `s` is lit: by the household of its unit `unit` (an index into its
+    /// units; an empty home stays dark), or in the share of the building's households awake
+    /// where the window is in no home; `spot` is the window's own draw. `None` where nobody
+    /// lives in the building.
+    pub fn lit(&self, s: &Structure, unit: Option<usize>, spot: u64) -> Option<bool> {
+        let m = s.mass as usize;
+        let awake = &self.awake[m];
         if awake.is_empty() {
             return None;
         }
         let draw = |shift: u32| ((spot >> shift) % 1000) as f64 / 1000.0;
-        let up = match flat {
-            Some(k) => awake[k % awake.len()],
+        let home = unit.filter(|&k| matches!(s.units[k].use_, Use::Home(_)));
+        let up = match home {
+            Some(k) => match self.flats[m].get(k).copied().flatten() {
+                Some(j) => awake[j as usize % awake.len()],
+                None => return Some(false),
+            },
             None => draw(8) < awake.iter().filter(|&&a| a).count() as f64 / awake.len() as f64,
         };
         Some(if up {
@@ -123,12 +146,38 @@ pub fn lamps(hour: f64) -> f64 {
     AFTER_DARK + (BY_DAY - AFTER_DARK) * day
 }
 
-/// The home of `s` (its flats in order, [`Use::Home`]) on `storey` holding `p` (on the plan): a
-/// window's flat, from a point just inside it.
-pub fn flat_at(s: &Structure, storey: usize, p: DVec2) -> Option<usize> {
+/// The share of the offices' windows lit at `hour` (0 to 24) on a working day, all estimates:
+/// most from 8:00 to 18:00, fewer at lunch, the cleaners in the evening, a few left on all night.
+pub fn office_lights(hour: f64) -> f64 {
+    const CURVE: [(f64, f64); 12] = [
+        (0.0, 0.04),
+        (6.0, 0.05),
+        (7.0, 0.2),
+        (8.0, 0.7),
+        (12.0, 0.75),
+        (13.0, 0.6),
+        (14.0, 0.75),
+        (17.0, 0.7),
+        (18.0, 0.45),
+        (19.0, 0.25),
+        (21.0, 0.1),
+        (24.0, 0.04),
+    ];
+    let hour = hour.clamp(0.0, 24.0);
+    CURVE
+        .windows(2)
+        .find(|w| hour <= w[1].0)
+        .map_or(CURVE[CURVE.len() - 1].1, |w| {
+            let t = (hour - w[0].0) / (w[1].0 - w[0].0);
+            w[0].1 + (w[1].1 - w[0].1) * t
+        })
+}
+
+/// The unit of `s` on `storey` holding `p` (on the plan), an index into its units: a window's,
+/// from a point just inside it.
+pub fn unit_at(s: &Structure, storey: usize, p: DVec2) -> Option<usize> {
     s.units
         .iter()
-        .filter(|u| matches!(u.use_, Use::Home(_)))
         .position(|u| u.storey == storey && u.pieces.iter().any(|q| geom::contains(q, p)))
 }
 
@@ -147,18 +196,34 @@ mod tests {
             7,
         );
         let structures = structure::structures(&city, &masses);
-        let nets: Vec<f64> = structures.iter().map(|s| s.net).collect();
+        let holds: Vec<Occupancy> = structures.iter().map(units::occupancy).collect();
         let near: Vec<usize> = (0..masses.len()).step_by(7).collect();
-        // The share of households at home and awake, and of a flat's windows lit.
+        // The share of households at home and awake, and of the homes' windows lit (one window
+        // a home, the empty ones dark).
         let at = |hour: f64| {
-            let r = Residents::new(&city, &masses, &nets, &Mix::adults(), hour, &near);
+            let r = Residents::new(
+                &city,
+                &masses,
+                &structures,
+                &holds,
+                &Mix::adults(),
+                hour,
+                &near,
+            );
             let (all, up) = r.households;
             assert!(all > 500, "{all} households");
             let lit = near
                 .iter()
-                .flat_map(|&m| (0..40_u64).map(move |k| (m, k)))
-                .filter_map(|(m, k)| {
-                    r.lit(m, Some(k as usize), k.wrapping_mul(0x9E37_79B9_7F4A_7C15))
+                .flat_map(|&m| {
+                    let s = &structures[m];
+                    (0..s.units.len())
+                        .filter(|&k| matches!(s.units[k].use_, Use::Home(_)))
+                        .map(move |k| (s, k))
+                })
+                .filter_map(|(s, k)| {
+                    let spot =
+                        (u64::from(s.mass) << 20 ^ k as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+                    r.lit(s, Some(k), spot)
                 })
                 .collect::<Vec<bool>>();
             let windows = lit.iter().filter(|&&l| l).count() as f64 / lit.len() as f64;
@@ -167,18 +232,22 @@ mod tests {
         let (evening, evening_lit) = at(21.0);
         let (noon, _) = at(12.0);
         let (night, night_lit) = at(3.0);
-        println!("awake at home: 21:00 {evening:.2}, 12:00 {noon:.2}, 3:00 {night:.2}");
+        println!(
+            "awake at home: 21:00 {evening:.2}, 12:00 {noon:.2}, 3:00 {night:.2}; homes' windows \
+             lit: 21:00 {evening_lit:.2}, 3:00 {night_lit:.2}"
+        );
         assert!(evening > 0.7, "21:00 {evening}");
         assert!(noon < evening, "12:00 {noon}");
         assert!(night < 0.1, "3:00 {night}");
         // About half the windows lit at 21:00, one in twenty or fewer at 3:00.
         assert!((0.35..0.6).contains(&evening_lit), "21:00 {evening_lit}");
         assert!(night_lit < 0.06, "3:00 {night_lit}");
-        // Each home is found from a point inside it, as a window finds its flat.
-        let (mut homes, mut found) = (0, 0);
+        // The offices by day, hardly at night.
+        assert!(office_lights(10.0) > 0.6 && office_lights(3.0) < 0.06);
+        // Each unit is found from a point inside it, as a window finds its own.
+        let (mut checked, mut found) = (0, 0);
         for s in &structures {
-            let ordinals = s.units.iter().filter(|u| matches!(u.use_, Use::Home(_)));
-            for (k, u) in ordinals.enumerate() {
+            for (k, u) in s.units.iter().enumerate() {
                 let Some(piece) = u.pieces.iter().max_by(|a, b| {
                     geom::signed_area(a)
                         .abs()
@@ -190,13 +259,13 @@ mod tests {
                 if !geom::contains(piece, p) {
                     continue;
                 }
-                homes += 1;
-                found += usize::from(flat_at(s, u.storey, p) == Some(k));
+                checked += 1;
+                found += usize::from(unit_at(s, u.storey, p) == Some(k));
             }
         }
         assert!(
-            homes > 1000 && found == homes,
-            "{found} of {homes} homes found"
+            checked > 1000 && found == checked,
+            "{found} of {checked} units found"
         );
     }
 }

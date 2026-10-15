@@ -52,6 +52,9 @@ fn main() -> Result<()> {
                 floor_area: (net * args.scale) as f32,
                 active_ground: m.lively(),
                 appeal: if m.open { 1.0 } else { 0.0 },
+                // Scaled floor area, so by floor area: the bench's 2–4 M.
+                homes: None,
+                jobs: None,
             }
         })
         .collect();

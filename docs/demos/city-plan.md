@@ -454,9 +454,9 @@ landing:
     T3 38 %, T4 22 %, T5 5 % at 30, 46, 66, 86 and 100 m²) and 3.6 m wide at least;
   - a narrow house's compact core serves one flat a storey;
   - a unit under 25 m² joins its nearest neighbour.
-- **Uses.** A lively ground storey holds shops, entered from the street. A unit with no window on
-  its storey is a store room. A home's main rooms follow its net area (under 40 m² a T1, 56 a
-  T2, 76 a T3, 93 a T4, then T5).
+- **Uses.** A lively ground storey holds shops, entered from the street. The storeys a building
+  keeps for work hold offices (below). A unit with no window on its storey is a store room. A
+  home's main rooms follow its net area (under 40 m² a T1, 56 a T2, 76 a T3, 93 a T4, then T5).
 - **Checks:**
   - **Areas** (`every_floor_is_cut_into_homes_that_add_up_and_open_on_a_landing`): the units and
     landings add up to the net area within 5 % in all 12 610 masses with storeys. 19 of 229 174
@@ -471,7 +471,55 @@ landing:
   shops and 4 634 store rooms.
 - **The sandbox:** 673 593 homes, 38 % of them through flats; T1 16 %, T2 34 %, T3 25 %, T4
   13 %, T5 12 %. Also 19 640 shops and 25 374 store rooms. The structure takes 2.9 s with the
-  units (2.25 s without).
+  units (2.25 s without). These are the counts before the offices (below).
+
+### Offices and homes upstairs (D-060, step 3)
+
+The upper floors are no longer all homes. Uses go by floor and frontage
+(`research/city-generation.md` §14): offices over the shops on the main streets, whole office
+buildings by the tram interchanges, as Euronantes and Part-Dieu stand by their stations.
+- **Which buildings** (`mass::office_chance`, all estimates): a chance by the street (a central
+  tram avenue 0.6, a tram avenue 0.4, a central avenue 0.5, an avenue 0.3, a central lane or
+  shared street 0.3, elsewhere 0.15), and by the district (the converted halls ×1.3, the old
+  town and the eco-quarters ×0.6, the villages ×0.2). It falls off away from the centre and
+  rises by a stop (+0.1 within 100 m).
+- **How many storeys:** from R+2 up, a lot draws:
+  - offices on its first floor (and the second over five storeys), at that chance;
+  - or the whole building, at 0.35 of it plus +0.35 within 150 m of an interchange (+0.15
+    within 400 m). An interchange is a stop with another line's within 150 m.
+
+  The ground floor of an office building without shops is its reception, with no garden flats
+  and no homes' planters.
+- **Drawn by block, then a little by the lot,** so offices gather. The draw is made even again
+  (`mass::even_mix`): mixing a block's number with the lot's had turned a 15 % chance into 5 %.
+- **The units:** a storey kept for work is cut as the homes are (offices to let) and marked
+  `Use::Office`.
+
+**The population counts by home.** Each home holds one household, unless it stands empty: 5 %
+do, the design value of `research/city-generation.md`.
+- **Its people:** its main rooms by INSEE's 1.5 rooms a person in flats, at least one, the
+  fraction drawn (`units::occupants`). That is about 1.9 a flat, INSEE's 2.9 rooms over 1.5
+  (`research/building-structure.md`).
+- **The jobs:** the offices' floor at the British Council for Offices' 15 m² an employee, and the
+  shops' at 25 m² (`units::occupancy`).
+- **The population:** it takes these counts (`population::Homes`, `Building::jobs`) in place of
+  the old two thirds of the floor area at 32.4 m² a person. Each home's residents are dealt
+  among its households in turn (`Population::household`), so every counted household has
+  someone. The crowd, the taxis' bookings and the residents' lights all count this way.
+
+| | the example | the sandbox |
+|---|---|---|
+| upper floors as workplaces | 13.6 % (42 % within 400 m of an interchange, 12 % elsewhere) | 13 % fewer homes |
+| buildings with offices upstairs, office buildings | 3 104, 995 | 7 883, 3 932 |
+| homes | 183 618 | 585 900 (was 673 593) |
+| office units | 26 632 | 122 733 |
+| households, people (a home) | 174 416, 331 645 (1.90) | 556 765, 1 043 k |
+| jobs | 133 837 | 575 990 |
+
+The sandbox keeps its million: the old count by floor area gave 977 k to 1 045 k. Test
+`offices_gather_upstairs_by_the_interchanges_and_the_homes_count_the_people`. From the street an
+office building still looks like its neighbours, shutters and balconies included: offices'
+facades and rooms come later. One in the kit is logged (`one at --view=`).
 
 ### Rooms behind the windows (D-060, step 3)
 
@@ -519,14 +567,17 @@ The share of the hour came first, as an estimate.
   - they go to bed at their role's hour (22:30, students 23:30), later for the extraverted and
     before a day off, or half an hour to an hour after coming home;
   - a night worker on shift sleeps from coming home in the morning.
-- **A household's flat:** a window finds its flat from a point half a metre inside it, among its
-  storey's homes (`structure.units`). The flats take the building's households in turn
-  (`population::households`, 2.2 people each). A window in no flat (a landing, a wing) is lit in
-  the share of its building's households up.
+- **A household's flat:** a window finds its unit from a point half a metre inside it, among its
+  storey's (`residents::unit_at`). Each occupied flat holds its own household, since the
+  population counts by home ("Offices and homes upstairs"); an empty flat stays dark. A window in
+  no unit (a landing, a wing) is lit in the share of its building's households up.
 - **Its windows:**
   - a household at home and awake lights 55 % of its windows after dark (the rooms in use), and
     15 % in full day;
   - a household out or asleep lights 2 % (a lamp left on, a hall light).
+- **The offices:** lit by the working day (`residents::office_lights`, estimates): 70–75 % from
+  8:00 to 17:00, fewer at lunch, a quarter at 19:00 as the cleaners go round, a tenth at 21:00,
+  4 % all night.
 - **The shops:** lit in the share of the hour (`lit_share`): while open, 8:00 to 19:00, and a
   tenth of them all night for their displays.
 - **The far facades:** their texture's windows are lit in the share the kit's residents lit
@@ -537,9 +588,10 @@ The share of the hour came first, as an estimate.
 
 | The sandbox, `--place old-centre` | 21:00 | midnight |
 |---|---|---|
-| households at home and awake (35 169 in the kit) | 88 % | 15 % |
-| homes' windows lit (213 331) | 49 % | 10 % |
-| windows that found their flat | 78 % | 78 % |
+| households at home and awake (33 243 in the kit, one a flat) | 96 % | 13 % |
+| homes' windows lit (145 497) | 51 % | 9 % |
+| windows that found their flat | 80 % | 80 % |
+| offices' windows lit (49 212) | 10 % | 4 % |
 
 The residents take 180 to 280 ms at start-up: 1.1 s when the whole city's million people were
 made. Without `--time-of-day`, two windows in five are lit as before. Tests
@@ -547,7 +599,7 @@ made. Without `--time-of-day`, two windows in five are lit as before. Tests
 under 5 % awake, 20:30 over 60 %, night workers asleep in the morning),
 `some_homes_people_are_the_whole_populations`,
 `the_residents_light_their_flats_in_the_evening_and_sleep_in_the_small_hours` (the example city:
-87 % up at 21:00, none at 3:00, every home found from inside it) and `windows_light_by_the_hour`.
+96 % up at 21:00, none at 3:00, every unit found from inside it) and `windows_light_by_the_hour`.
 
 **Shops behind the shopfronts.** The shopfronts' glass has its own section
 (`modules::SHOP_GLASS`) and row (`RenderLayer::shop`): no curtains, which 45 % of the shops had,
@@ -559,10 +611,9 @@ luminance, twice a home's (50 % since the residents light their own windows).
 The rooms stay outside views: the doors are never see-through (Celsys's claims, D-060), and
 going inside builds the real rooms.
 
-Next in step 3: which upper floors are offices and which homes, so the population counts by
-home (673 593 homes at the French 2.2 people a household would be 1.48 M; the net-area count
-says 977 k with a third of the floors not homes). Then going inside; the rooms are lit by their
-residents since 2026-10-15.
+Next in step 3: the units' rooms behind the windows (an office shows a home's sofa for now),
+then the near rooms drawn for real with people in them, and F to enter. Offices and homes upstairs
+and the residents' lights were done on 2026-10-15.
 
 ## Trams on their timetables (#253)
 

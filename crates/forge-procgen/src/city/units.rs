@@ -8,7 +8,8 @@
 //!   single-aspect flats either side of it, sized by the French mix of new homes;
 //! - a narrow house's compact core (the lift behind the hall) serves one flat a storey.
 //!
-//! A lively ground storey holds shops instead, entered from the street. A unit with no window
+//! A lively ground storey holds shops instead, entered from the street, and the storeys its mass
+//! keeps for work hold offices ([`Mass::works`]): the same cut, to let. A unit with no window
 //! on its storey is a store room, not a home. A small wing without a core is reached through
 //! its building's other mass.
 
@@ -46,6 +47,9 @@ pub enum Use {
     Home(u8),
     /// A shop, a café or a bar on a lively ground storey, entered from the street.
     Shop,
+    /// Offices, a practice or a service upstairs, or an office building's reception: on a
+    /// storey its mass keeps for work ([`Mass::works`]).
+    Office,
     /// A room without a window: a store room, a bike room.
     Store,
 }
@@ -156,6 +160,14 @@ pub fn units(
     };
     for k in 0..s.storeys.len() {
         let shops = k == 0 && m.lively();
+        let work = !shops && m.works(k);
+        let use_ = if shops {
+            Use::Shop
+        } else if work {
+            Use::Office
+        } else {
+            Use::Home(0)
+        };
         if s.cores.is_empty() {
             // One unit a storey: a house, a shop, or a wing reached through its other mass.
             let pieces = vec![floor.to_vec()];
@@ -170,7 +182,7 @@ pub fn units(
                 net: area(&pieces),
                 pieces,
                 door,
-                use_: if shops { Use::Shop } else { Use::Home(0) },
+                use_,
                 windows: 0,
                 through: false,
             });
@@ -222,7 +234,7 @@ pub fn units(
                     net: area(&pieces),
                     pieces,
                     door,
-                    use_: if shops { Use::Shop } else { Use::Home(0) },
+                    use_,
                     windows: 0,
                     through: false,
                 });
@@ -342,6 +354,69 @@ pub fn units(
     (units, landings)
 }
 
+/// Main rooms a person in a French flat: 1.5 (INSEE, *Les conditions de logement fin 2013*,
+/// Insee Première 1546), with 2.9 rooms a flat, so about 1.9 people a flat.
+pub const ROOMS_A_PERSON: f64 = 1.5;
+/// The share of homes standing empty: 5 %, the design value of `research/city-generation.md`'s
+/// table per 1 000 residents.
+pub const VACANT: f64 = 0.05;
+/// Net office floor a job, m²: the British Council for Offices' 15 m² an employee
+/// (`research/city-generation.md`).
+pub const OFFICE_AREA: f64 = 15.0;
+/// Net shop floor a job, m²: the population's default (30 m² gross).
+pub const SHOP_AREA: f64 = 25.0;
+
+/// The people living in unit `k` of `s`: a home's main rooms by [`ROOMS_A_PERSON`], at least one,
+/// the fraction drawn; nobody in [`VACANT`] of the homes, nor in any other unit.
+pub fn occupants(s: &Structure, k: usize) -> u8 {
+    let Use::Home(rooms) = s.units[k].use_ else {
+        return 0;
+    };
+    let key = (u64::from(s.mass) << 20) ^ k as u64;
+    let unit = |salt: u64| (mix64(key ^ salt) >> 11) as f64 / (1u64 << 53) as f64;
+    if unit(0x07AC_44E7) < VACANT {
+        return 0;
+    }
+    let people = (f64::from(rooms) / ROOMS_A_PERSON).max(1.0);
+    (people.floor() + f64::from(u8::from(unit(0x009E_091E) < people.fract()))) as u8
+}
+
+/// Who a structure holds, and its floor.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Occupancy {
+    /// Its occupied homes, a household each.
+    pub households: u32,
+    /// The people living in them ([`occupants`]).
+    pub residents: u32,
+    /// Its jobs: its offices' floor by [`OFFICE_AREA`], its shops' by [`SHOP_AREA`].
+    pub jobs: u32,
+    /// Its net floor area, m² ([`Structure::net`]).
+    pub net: f64,
+}
+
+/// Who `s` holds: the population counted by home (D-060 step 3).
+pub fn occupancy(s: &Structure) -> Occupancy {
+    let mut o = Occupancy {
+        net: s.net,
+        ..Occupancy::default()
+    };
+    let (mut offices, mut shops) = (0.0, 0.0);
+    for (k, u) in s.units.iter().enumerate() {
+        match u.use_ {
+            Use::Home(_) => {
+                let people = occupants(s, k);
+                o.households += u32::from(people > 0);
+                o.residents += u32::from(people);
+            }
+            Use::Office => offices += u.net,
+            Use::Shop => shops += u.net,
+            Use::Store => {}
+        }
+    }
+    o.jobs = (offices / OFFICE_AREA + shops / SHOP_AREA) as u32;
+    o
+}
+
 /// A home's main rooms by its net area (the research note's sizes: a studio 37 m², a T2 42–48,
 /// a T3 65–67, a T4 86, a T5 100).
 pub fn rooms(net: f64) -> u8 {
@@ -428,6 +503,7 @@ mod tests {
         let masses = mass::masses(&city, &crate::city::bible::StyleBible::default(), 7);
         let all = structure::structures(&city, &masses);
         let (mut rooms, mut shops, mut stores, mut through, mut homes) = ([0usize; 6], 0, 0, 0, 0);
+        let mut offices = 0;
         let (mut off, mut checked, mut far) = (0, 0, 0);
         for s in &all {
             let p = s.era.table().partitions;
@@ -451,6 +527,7 @@ mod tests {
                         through += usize::from(u.through);
                     }
                     Use::Shop => shops += 1,
+                    Use::Office => offices += 1,
                     Use::Store => stores += 1,
                 }
                 // A flat's door on its core's hall, lobby or corridor.
@@ -469,15 +546,81 @@ mod tests {
             }
         }
         println!(
-            "{homes} homes (T1–T5: {:?}), {through} through, {shops} shops, {stores} store \
-             rooms; {off} of {checked} masses whose units and landings miss their net area by \
-             over 5 %; {far} doors off their landing",
+            "{homes} homes (T1–T5: {:?}), {through} through, {shops} shops, {offices} offices, \
+             {stores} store rooms; {off} of {checked} masses whose units and landings miss their \
+             net area by over 5 %; {far} doors off their landing",
             &rooms[1..]
         );
         assert!(homes > 50_000, "{homes} homes");
         assert!(off * 50 <= checked, "{off} of {checked} masses off");
         assert!(far * 100 <= homes, "{far} doors off their landing");
         assert!(stores * 20 <= homes, "{stores} store rooms");
+    }
+
+    #[test]
+    fn offices_gather_upstairs_by_the_interchanges_and_the_homes_count_the_people() {
+        let size = 4000.0;
+        let city = plan(&example::site(size, 10.0), &example::params(size));
+        let masses = mass::masses(&city, &crate::city::bible::StyleBible::default(), 7);
+        let all = structure::structures(&city, &masses);
+        // The interchanges: a stop with another line's within 150 m.
+        let lines = &city.tram_lines;
+        let hubs: Vec<DVec2> = lines
+            .iter()
+            .enumerate()
+            .flat_map(|(i, l)| {
+                l.stops.iter().copied().filter(move |&s| {
+                    lines
+                        .iter()
+                        .enumerate()
+                        .any(|(j, o)| j != i && o.stops.iter().any(|&q| q.distance(s) < 150.0))
+                })
+            })
+            .collect();
+        // The upper floors' net area, offices and all, near an interchange and elsewhere.
+        let (mut near, mut far) = ([0.0_f64; 2], [0.0_f64; 2]);
+        let (mut buildings, mut whole, mut receptions) = (0, 0, 0);
+        let mut total = Occupancy::default();
+        for (m, s) in masses.iter().zip(&all) {
+            let c = geom::centroid(&m.footprint);
+            let by_hub = hubs.iter().any(|h| h.distance(c) < 400.0);
+            for u in s.units.iter().filter(|u| u.storey > 0) {
+                let side = if by_hub { &mut near } else { &mut far };
+                side[0] += u.net;
+                side[1] += if u.use_ == Use::Office { u.net } else { 0.0 };
+            }
+            buildings += usize::from(m.offices > 0);
+            whole += usize::from(m.office_building());
+            receptions += usize::from(
+                s.units
+                    .iter()
+                    .any(|u| u.storey == 0 && u.use_ == Use::Office),
+            );
+            let o = occupancy(s);
+            total.households += o.households;
+            total.residents += o.residents;
+            total.jobs += o.jobs;
+        }
+        let share = |a: [f64; 2]| a[1] / a[0].max(1.0);
+        let all_share = (near[1] + far[1]) / (near[0] + far[0]);
+        let per_home = f64::from(total.residents) / f64::from(total.households);
+        println!(
+            "upper floors as workplaces: {:.1} % ({:.1} % within 400 m of {} interchanges, \
+             {:.1} % elsewhere); {buildings} buildings with offices, {whole} office buildings, \
+             {receptions} receptions; {} households, {} residents ({per_home:.2} a home), {} jobs",
+            all_share * 100.0,
+            share(near) * 100.0,
+            hubs.len(),
+            share(far) * 100.0,
+            total.households,
+            total.residents,
+            total.jobs
+        );
+        assert!((0.08..0.3).contains(&all_share), "{all_share}");
+        assert!(share(near) > 1.5 * share(far));
+        assert!(whole > 0 && receptions > 0);
+        // INSEE: 2.9 rooms a flat at 1.5 a person, about 1.9 people a home.
+        assert!((1.7..2.1).contains(&per_home), "{per_home}");
     }
 
     #[test]
