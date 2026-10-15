@@ -920,6 +920,20 @@ grander squares, and benches stand every 15 m inside the trees, facing the middl
 their building lines, a paved border round it under the trees. The example has 12 squares,
 slivers included.
 
+**Water mirrors** (2026-10-15; the owner: "water mirrors as in Nantes"). Two centimetres of still
+water over dark granite, level with the paving, as in Bordeaux's (130 × 42 m) and Nantes'
+mirrors. The sky and the facades show in it through the mirror rays. They go on the squares
+without a landmark:
+- every other square of 1.5 ha or more, in place of its lawn: up to 80 × 30 m;
+- every third square of 0.15 ha or more, in place of its fountain: up to 30 × 9 m, 14 m inside
+  the building lines from 0.5 ha and 8 m below, clear of the trees and the benches. The chess
+  tables move out of the water.
+
+The lawns and the mirrors are cut out of the paving (`GroundMap::off_streets_split`): one laid
+2 cm over the other could fight it. The example's squares of 0.15 ha or more mostly hold its
+landmarks; four seeds give one mirror. The test is
+`water_mirrors_lie_level_in_their_squares_clear_of_the_trees_and_benches`.
+
 **The landmarks** (`LandmarkKind`) get their own square: the built block of 0.15–3.5 ha
 nearest their anchor becomes one. A crane gets none: it stands on a quay. Each then stands on the nearest square of 0.15 ha or more
 within 160 m (`Landmark::square`). A terraced hall without one takes the nearest quay within

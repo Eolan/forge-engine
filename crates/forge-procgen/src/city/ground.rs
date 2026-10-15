@@ -920,6 +920,23 @@ impl GroundMap {
         to_shapes(boolean(&off, &water, OverlayRule::Difference))
     }
 
+    /// What of `polygon` lies off the streets and the rivers' water, split in two: inside
+    /// `inner` and outside it. One level drawn as two surfaces that meet edge to edge (a
+    /// square's lawn or water mirror cut out of its paving), where one laid over the other would
+    /// fight it.
+    pub fn off_streets_split(&self, polygon: &[DVec2], inner: &[DVec2]) -> (Shapes, Shapes) {
+        let piece = Piece::from_points(polygon);
+        let street = union(&self.streets, piece.min, piece.max);
+        let water = union(&self.water, piece.min, piece.max);
+        let off = boolean(&vec![piece.contours], &street, OverlayRule::Difference);
+        let off = boolean(&off, &water, OverlayRule::Difference);
+        let cut = vec![Piece::from_points(inner).contours];
+        (
+            to_shapes(boolean(&off, &cut, OverlayRule::Intersect)),
+            to_shapes(boolean(&off, &cut, OverlayRule::Difference)),
+        )
+    }
+
     /// A block's ground off the streets split in two: its forecourt, within `depth` metres of a
     /// street or a walk (paved, as the pavement it meets), and the rest (its gardens). Plain
     /// grass met the pavement in the gaps between the buildings (the owner: they "would either

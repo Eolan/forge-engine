@@ -58,6 +58,9 @@ const WATER: u8 = 6;
 const QUAY: u8 = 7;
 /// The crossings' paint.
 const MARKING: u8 = 8;
+/// A square's water mirror: a film of water over dark stone (the owner: "water mirrors as in
+/// Nantes").
+const MIRROR: u8 = 9;
 /// Mass sections: four wall tints, the shop band, three roofs.
 const WALL: u8 = 0;
 const TINTS: u8 = 4;
@@ -350,6 +353,8 @@ impl PlanScenario {
         for g in gardens.iter().filter(|g| g.kind.paved()) {
             paths[g.block as usize].push(g.outline.clone());
         }
+        // The large squares' middles: lawns and water mirrors.
+        let middles = square_middles(plan);
         // The blocks off the streets, at the walking level as the pavements round them (D-061):
         // one level wherever people walk, no step at a gap between the buildings.
         for (b, block) in plan.blocks.iter().enumerate() {
@@ -371,18 +376,21 @@ impl PlanScenario {
                 for polygon in ground::simple_polygons(&rest) {
                     tiles.flat(&polygon, WALK_LEVEL, section, false);
                 }
+            } else if let Some((middle, mirror)) = &middles[b] {
+                // A large square's lawn or water mirror, cut out of its paving at its level: one
+                // laid over the other would fight it, and the water is level with the stone.
+                let (inside, outside) = plan.ground.off_streets_split(&block.polygon, middle);
+                let within = if *mirror { MIRROR } else { PARK };
+                for polygon in ground::simple_polygons(&inside) {
+                    tiles.flat(&polygon, SQUARE_LEVEL, within, false);
+                }
+                for polygon in ground::simple_polygons(&outside) {
+                    tiles.flat(&polygon, SQUARE_LEVEL, section, false);
+                }
             } else {
                 for polygon in ground::simple_polygons(&plan.ground.off_streets(&block.polygon)) {
                     tiles.flat(&polygon, WALK_LEVEL, section, false);
                 }
-            }
-            // A large square (1.5 ha or more): a lawn in its middle, 14 m inside its building
-            // lines, its paved border under the trees and the benches.
-            if block.use_ == BlockUse::Square
-                && block.area >= 15_000.0
-                && let Some(middle) = geom::inset(&block.buildable, 14.0)
-            {
-                tiles.flat(&middle, SQUARE_LEVEL + 0.02, PARK, false);
             }
         }
         // The quays' land as lawns, cell by cell (their faces hold water), under the trees.
@@ -557,6 +565,29 @@ impl PlanScenario {
                 / 2;
             passage_note += &format!(
                 "; {flats} garden flats, a court's gardens at --view={:.1},20.0,{:.1},0.0,-38.7",
+                eye.x, eye.z
+            );
+        }
+        // And the water mirror nearest the kit's centre, from 6 m off its long side's middle at
+        // eye height, looking across it.
+        let mirrors: Vec<&Vec<DVec2>> = middles
+            .iter()
+            .filter_map(|m| m.as_ref().filter(|(_, mirror)| *mirror).map(|(r, _)| r))
+            .collect();
+        passage_note += &format!("; {} water mirrors", mirrors.len());
+        if let Some(d) = detail
+            && let Some(r) = mirrors.iter().min_by(|a, b| {
+                let far = |r: &Vec<DVec2>| geom::centroid(r).distance(d.centre);
+                far(a).total_cmp(&far(b))
+            })
+        {
+            let (side, middle) = ((r[0] + r[1]) * 0.5, geom::centroid(r));
+            let eye = world(size, side + (side - middle).normalize_or_zero() * 6.0, 1.7);
+            let to = (world(size, middle, 0.0) - eye).normalize_or_zero();
+            let yaw = (-to.x).atan2(-to.z).to_degrees();
+            let pitch = to.y.asin().to_degrees();
+            passage_note += &format!(
+                ", one at --view={:.1},1.7,{:.1},{yaw:.1},{pitch:.1}",
                 eye.x, eye.z
             );
         }
@@ -848,9 +879,18 @@ impl PlanScenario {
         // in the share of the people out round them (the owner: give people something to do in
         // the squares rather than stand there).
         let held: Vec<usize> = plan.landmarks.iter().filter_map(|l| l.square).collect();
+        // Nothing stands in a water mirror, nor within a metre and a half of it.
+        let in_mirror = |i: usize, p: DVec2| {
+            middles[i].as_ref().is_some_and(|(m, mirror)| {
+                let n = m.len();
+                *mirror
+                    && (geom::contains(m, p)
+                        || (0..n).any(|k| geom::distance_to_segment(p, m[k], m[(k + 1) % n]) < 1.5))
+            })
+        };
         let mut chess = Vec::new();
         let mut games = Vec::new();
-        for (_, b) in
+        for (i, b) in
             plan.blocks.iter().enumerate().filter(|(i, b)| {
                 b.use_ == BlockUse::Square && b.area >= 1500.0 && !held.contains(i)
             })
@@ -868,6 +908,7 @@ impl PlanScenario {
                     geom::contains(&b.buildable, p)
                         && !trunks.any_within(p, 2.0, |_| false)
                         && bench_spots.iter().all(|s| s.with_y(0.0).distance(w) > 3.0)
+                        && !in_mirror(i, p)
                 });
             for p in spots {
                 let face = (middle - p).normalize_or_zero();
@@ -890,12 +931,15 @@ impl PlanScenario {
                 }
             }
         }
-        // A fountain in the middle of each other square of 0.15 ha or more.
+        // A fountain in the middle of each other square of 0.15 ha or more, but for those with a
+        // water mirror there.
         let fountains: Vec<Mat4> = plan
             .blocks
             .iter()
             .enumerate()
-            .filter(|(i, _)| !hall_squares.contains(i))
+            .filter(|&(i, _)| {
+                !hall_squares.contains(&i) && !middles[i].as_ref().is_some_and(|(_, m)| *m)
+            })
             .map(|(_, b)| b)
             .filter(|b| b.use_ == BlockUse::Square && b.area >= 1500.0)
             .filter(|b| geom::contains(&b.polygon, b.centre))
@@ -2582,6 +2626,12 @@ impl Scenario for PlanScenario {
                     "plan marking".into(),
                     colour([0.80, 0.80, 0.77], 30.0, 0.05),
                 ),
+                // Two centimetres of still water over dark granite: the sky and the
+                // buildings in it, as in Bordeaux's and Nantes' mirrors.
+                (
+                    "plan water mirror".into(),
+                    colour([0.03, 0.035, 0.04], 2000.0, 0.9),
+                ),
             ],
         );
         // The facades: a window bay and a shopfront, read by the walls' coordinates.
@@ -3548,6 +3598,80 @@ impl Running for PlanRunning {
     }
 }
 
+/// The middle of the squares, inside their trees and benches (the owner: "water mirrors as in
+/// Nantes"; Bordeaux's is 130 × 42 m, Nantes' smaller):
+/// - each large square (1.5 ha or more): a lawn 14 m inside its building lines, and on every
+///   other one without a landmark a water mirror instead, a rectangle along the square of up to
+///   80 × 30 m;
+/// - every third square of 0.15 ha or more without a landmark: a water mirror of up to
+///   30 × 9 m in place of its fountain, its chess tables beside it; 14 m inside its building
+///   lines from 0.5 ha (its alley's inner row of trees stands 14 m in), 8 m below (its benches
+///   stand 6 m in).
+///
+/// Each with whether it is a mirror; `None` for the other blocks.
+fn square_middles(plan: &CityPlan) -> Vec<Option<(Vec<DVec2>, bool)>> {
+    let held: Vec<usize> = plan.landmarks.iter().filter_map(|l| l.square).collect();
+    let (mut large, mut medium) = (0, 0);
+    plan.blocks
+        .iter()
+        .enumerate()
+        .map(|(i, b)| {
+            if b.use_ != BlockUse::Square || b.area < 1_500.0 {
+                return None;
+            }
+            let lawn = b.area >= 15_000.0;
+            let middle = || geom::inset(&b.buildable, 14.0).filter(|_| lawn);
+            let margin = if b.area >= 5_000.0 { 14.0 } else { 8.0 };
+            if held.contains(&i) {
+                return middle().map(|m| (m, false));
+            }
+            let (cap, wanted) = if lawn {
+                large += 1;
+                ((40.0, 15.0), large % 2 == 1)
+            } else {
+                medium += 1;
+                ((15.0, 4.5), medium % 3 == 1)
+            };
+            if wanted && let Some(rect) = mirror_in(&b.buildable, margin, cap) {
+                return Some((rect, true));
+            }
+            middle().map(|m| (m, false))
+        })
+        .collect()
+}
+
+/// The largest rectangle along `polygon`'s longest side, at most `cap` metres either side of
+/// its middle (along, across), 8 × 4 m at least, whose corners and sides' middles lie `margin`
+/// metres or more inside it.
+fn mirror_in(polygon: &[DVec2], margin: f64, cap: (f64, f64)) -> Option<Vec<DVec2>> {
+    let (axis, extent, centre) = geom::oriented_extent(polygon);
+    let across = DVec2::new(-axis.y, axis.x);
+    let n = polygon.len();
+    let inside = |p: DVec2| {
+        geom::contains(polygon, p)
+            && (0..n)
+                .all(|k| geom::distance_to_segment(p, polygon[k], polygon[(k + 1) % n]) >= margin)
+    };
+    let (mut l, mut w) = (
+        (extent.x * 0.5 - margin).min(cap.0),
+        (extent.y * 0.5 - margin).min(cap.1),
+    );
+    while l >= 4.0 && w >= 2.0 {
+        let rect = vec![
+            centre - axis * l - across * w,
+            centre + axis * l - across * w,
+            centre + axis * l + across * w,
+            centre - axis * l + across * w,
+        ];
+        let sides = (0..4).map(|k| (rect[k] + rect[(k + 1) % 4]) * 0.5);
+        if rect.iter().copied().chain(sides).all(inside) {
+            return Some(rect);
+        }
+        (l, w) = (l * 0.8, w * 0.8);
+    }
+    None
+}
+
 /// The land of a polygon as lawn, 3 cm over the ground: runs of the grid's dry squares whose
 /// middles lie inside it along each row, and the dry pieces of the squares the shore crosses.
 fn lawn(tiles: &mut Tiles, shore: &Shore, map: &ground::GroundMap, polygon: &[DVec2]) {
@@ -4053,6 +4177,74 @@ fn lamp_model(double: bool) -> TriMesh {
 mod tests {
     use super::*;
     use forge_procgen::city::{example, plan};
+
+    #[test]
+    fn water_mirrors_lie_level_in_their_squares_clear_of_the_trees_and_benches() {
+        let size = 4000.0;
+        let site = example::site(size, 10.0);
+        let (mut mirrors, mut squares) = (0, 0);
+        // The example's seed and the other seeds the plan's rules are checked on.
+        for seed in [
+            None,
+            Some(0x5EED_0001_u64),
+            Some(0x5EED_0042),
+            Some(0xC17E_0003),
+        ] {
+            let mut params = example::params(size);
+            if let Some(seed) = seed {
+                params.seed = forge_core::Seed::new(seed);
+            }
+            let city = plan(&site, &params);
+            squares += city
+                .blocks
+                .iter()
+                .filter(|b| b.use_ == BlockUse::Square && b.area >= 1_500.0)
+                .count();
+            mirrors += mirrors_checked(&city);
+        }
+        println!("{squares} squares of 0.15 ha or more, {mirrors} water mirrors");
+        // Most of the example's squares hold its landmarks.
+        assert!(mirrors >= 1, "no water mirror in four cities");
+    }
+
+    /// `city`'s water mirrors, each checked: on a square without a landmark, clear of its trees
+    /// and benches.
+    fn mirrors_checked(city: &CityPlan) -> usize {
+        let middles = square_middles(city);
+        let mut mirrors = 0;
+        for (i, m) in middles.iter().enumerate() {
+            let Some((outline, mirror)) = m else {
+                continue;
+            };
+            let b = &city.blocks[i];
+            assert_eq!(b.use_, BlockUse::Square);
+            if !*mirror {
+                assert!(b.area >= 15_000.0, "a lawn on a square of {:.0} m²", b.area);
+                continue;
+            }
+            mirrors += 1;
+            assert!(
+                city.landmarks.iter().all(|l| l.square != Some(i)),
+                "a mirror under a landmark"
+            );
+            // Inside the alley's inner row of trees (14 m in from 0.5 ha) and the benches (6 m
+            // in), with room to walk round it.
+            let margin = if b.area >= 5_000.0 { 14.0 } else { 8.0 };
+            let n = b.buildable.len();
+            for &p in outline {
+                let edge = (0..n)
+                    .map(|k| geom::distance_to_segment(p, b.buildable[k], b.buildable[(k + 1) % n]))
+                    .fold(f64::MAX, f64::min);
+                assert!(
+                    geom::contains(&b.buildable, p) && edge >= margin - 1e-6,
+                    "a mirror's corner {edge:.1} m from its square's edge"
+                );
+            }
+            let area = geom::signed_area(outline);
+            assert!(area >= 32.0, "a mirror of {area:.0} m²");
+        }
+        mirrors
+    }
 
     #[test]
     fn the_court_paths_are_paved_with_the_forecourts_off_the_carriageways() {
