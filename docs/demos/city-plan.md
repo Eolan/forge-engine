@@ -177,8 +177,15 @@ height: finer trees, street furniture, the modules (#247).*
 shopfronts, from emissive maps beside the facade textures. Left, metered; middle, a fixed EV 3;
 right, without the probes. The probes took the windows' light into the city many times over
 (the walls and courtyards glowed as by day), so night views ran with `--no-probes` (#254). The
-emissive is scaled by the frame's reference illuminance for a run held at one time of day: a
+emissive was scaled by the frame's reference illuminance for a run held at one time of day: a
 stopgap.*
+
+**Emissive in cd/m² (2026-10-15, #254).** The windows', shopfronts', screens' and lamps' rows
+give their luminance in cd/m² (`RenderLayer::emissive_absolute`). The renderer converts it each
+frame by the reference illuminance it shades in (D-046: L·π / E). A running day (`--day 40`) at
+21:00 now shows the lamps and the lit windows as `--time-of-day 1.25` does. Before, they kept the
+noon reference's scale, about nothing at night. At a fixed hour nothing changes: 72 pixels of
+1.4 M.
 
 **The probes at night (2026-10-15, #254).** The probes' rays read each hit's emission at the
 row's full value, but the frame no longer shows it so:

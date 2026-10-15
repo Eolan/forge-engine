@@ -145,6 +145,7 @@ static const uint MATERIAL_FLAG_WORLD_PROJECTED = 32; // the textures and their 
 static const uint MATERIAL_FLAG_INTERIOR = 64;   // a window's glass with a room behind it (D-060's step 3)
 static const uint MATERIAL_FLAG_GRATING = 128;   // with MASKED: upright bars on one card, `alpha` their share of the mesh's u (`grating_coverage`)
 static const uint MATERIAL_FLAG_SHOP = 256;      // with INTERIOR: a shop behind the glass (`interior_room`)
+static const uint MATERIAL_FLAG_EMISSIVE_ABSOLUTE = 512; // `emissive` in cd/m², converted by the frame's reference illuminance (`emission`, #254)
 static const uint CUTOUT_GROUND_WINDOW = 1u << 31; // `cluster_cutouts`: windowed ground reaching into the ground window (#197)
 static const uint MESH_WINDOWED_GROUND = 1;     // Mesh::flags: its fragments in the frame's ground window go (#197)
 static const uint MESH_SCENE_SHADED = 2;        // Mesh::flags: a ground window's mesh, shaded where it stands in the scene (#197)
@@ -2992,7 +2993,7 @@ float3 shade_uv_mapped(Frame* f, Material mat, Surface s)
         float occlusion = 1.0 + mat.occlusion_strength * (sample_image_grad(mat.occlusion_texture, mat.sampler, uv, gx, gy).r - 1.0);
         ao = ao >= 0.0 ? ao * occlusion : occlusion;
     }
-    float3 emissive = mat.emissive;
+    float3 emissive = emission(f, mat);
     if (mat.emissive_texture != TEXTURE_NONE)
         emissive *= sample_image_grad(mat.emissive_texture, mat.sampler, uv, gx, gy).rgb;
     float3 n = s.n;
@@ -3057,6 +3058,17 @@ static const float ROOM_CURTAINS = 0.45;
 static const float ROOM_LAMP = 0.04;
 // A lit shop's share: its ceiling lights and displays twice a home's lamps.
 static const float ROOM_SHOP_LAMP = 0.08;
+
+// A row's emission in the shading's units: as given, or with MATERIAL_FLAG_EMISSIVE_ABSOLUTE a
+// luminance in cd/m² over the frame's reference illuminance (D-046: the shading is per unit of
+// it, so L·π / E gives L), the same light at noon and at midnight as the reference changes
+// (#254: a run whose day cycles kept its windows at the brightness of the hour it was built).
+float3 emission(Frame* f, Material mat)
+{
+    if ((mat.flags & MATERIAL_FLAG_EMISSIVE_ABSOLUTE) == 0)
+        return mat.emissive;
+    return mat.emissive * (3.14159265 / max(f[0].sun_illuminance, 1e-9));
+}
 
 // Shelves of goods on a shop's wall at `along` metres along it and `up` over its floor: boards
 // every 0.45 m from 0.3 to 2.1 m, the goods between them in rows of boxes 0.3 m wide, short of
@@ -3175,7 +3187,7 @@ float3 shade_standard(Frame* f, Material mat, Surface s)
             // Lit by the daylight the window gets (a white wall's facing out), or the row's lamp.
             float ndl_white;
             float3 daylight = sun_light(f, float3(1.0, 1.0, 1.0), n, 1.0, 0.0, s.shadow, s.sky, s.ao, s.view, 0.0, s.world, s.probes, false, ndl_white);
-            float3 lamp = mat.emissive * (shop ? ROOM_SHOP_LAMP : ROOM_LAMP);
+            float3 lamp = emission(f, mat) * (shop ? ROOM_SHOP_LAMP : ROOM_LAMP);
             float3 seen = lerp(room * (daylight * ROOM_DAYLIGHT + lamp), mat.color_b * (daylight + lamp), curtain);
             // Through the glass, less what it reflects (Schlick).
             float fresnel = mat.reflectance + (1.0 - mat.reflectance) * pow(1.0 - saturate(dot(n, s.view)), 5.0);
@@ -3184,7 +3196,7 @@ float3 shade_standard(Frame* f, Material mat, Surface s)
         standard_surface(mat, s, albedo, n);
     }
     float ndl;
-    return sun_light(f, albedo, n, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, s.world, s.probes, s.traced, ndl) + mat.emissive;
+    return sun_light(f, albedo, n, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, s.world, s.probes, s.traced, ndl) + emission(f, mat);
 }
 
 // The wet sand (issue #105). The swash's sheet is a function of position and time
@@ -3389,7 +3401,7 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
     float3 n = s.n;
     float specular_power = mat.specular_power;
     float specular = mat.specular;
-    float3 emissive = mat.emissive;
+    float3 emissive = emission(f, mat);
     float reflectance = mat.reflectance;
     if (!debug_albedo(f, s.meshlet_index, s.lod_level, albedo))
     {
@@ -3411,7 +3423,7 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
         specular_power = a.specular_power;
         specular = a.specular;
         reflectance = a.reflectance;
-        emissive = a.emissive;
+        emissive = emission(f, a);
         if (second != first && w_second > 0.0)
         {
             Material b = f[0].materials[row + 1 + second];
@@ -3422,7 +3434,7 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
             n = normalize(lerp(n_a, n_b, blend));
             specular = lerp(a.specular, b.specular, blend);
             reflectance = lerp(a.reflectance, b.reflectance, blend);
-            emissive = lerp(a.emissive, b.emissive, blend);
+            emissive = lerp(emission(f, a), emission(f, b), blend);
             // A planet's water and land meet along every coast (#220): with the heavier row's power
             // alone, the land's broad highlight took half the water's strength there, a bright line.
             if ((mat.flags & MATERIAL_FLAG_PLANET) != 0u)
@@ -3718,7 +3730,7 @@ float3 shade_ice(Frame* f, Material mat, Surface s)
         // through the thin edges of a backlit rock.
         color += ICE_GLOW * albedo * f[0].sun_color.rgb * s.transmitted;
     }
-    return color + mat.scatter * saturate(1.0 - abs(ndl)) + mat.emissive; // rim scatter
+    return color + mat.scatter * saturate(1.0 - abs(ndl)) + emission(f, mat); // rim scatter
 }
 
 // ------------------------------------------------------------------ resolve ---
@@ -4161,7 +4173,7 @@ RayHit ray_hit(Frame* f, uint instance, uint primitive, float2 b, float3 origin,
     hit.albedo = lerp(mat.color_a, mat.color_b, hash_color(tint).x);
     if (mat.albedo_texture != TEXTURE_NONE)
         hit.albedo *= sample_image_level(mat.albedo_texture, SAMPLER_LINEAR_REPEAT, float2(0.5, 0.5), 16.0).rgb;
-    hit.emissive = mat.emissive;
+    hit.emissive = emission(f, mat);
     // What the hit emits as the frame shows it (#254): an emissive map's average (its last mip,
     // as the albedo), and a window's room its lamp's share over walls about half as bright as
     // white (`interior_room`). With the row's full value the lit windows' and the far facades'
@@ -4585,7 +4597,7 @@ float3 shade_jelly(Frame* f, Material mat, Surface s, uint instance, bool traced
     float roughness = sqrt(sqrt(2.0 / (mat.specular_power + 2.0)));
     float nv = saturate(dot(s.n, s.view));
     float fresnel = mat.reflectance + (max(1.0 - roughness, mat.reflectance) - mat.reflectance) * pow(1.0 - nv, 5.0);
-    return color + (1.0 - fresnel) * s.transmitted + mat.emissive;
+    return color + (1.0 - fresnel) * s.transmitted + emission(f, mat);
 }
 
 // The tile list after the classes': tiles holding a smooth row whose mirror ray `reflections_main`

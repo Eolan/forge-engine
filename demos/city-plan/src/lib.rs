@@ -3490,20 +3490,11 @@ impl Scenario for PlanScenario {
             materials.textures.add(&shop_lights)?,
         );
         // Lit windows of about 5 cd/m² on average (behind curtains, seen from the street: 12 blew
-        // them out white, the owner found the lights too strong and all alike). The shading is per unit of the frame's reference
-        // illuminance (D-046: the sun's 128 klux by day, the Moon's tenths of a lux at night), so
-        // an emissive of L·π / reference gives L. A stopgap for a run held at one time of day
-        // (`--time-of-day`): step 5's lights give the renderer emissive light in absolute units.
-        let sun = forge_render::starfield::SUN_ILLUMINANCE_1AU;
-        let reference = args.time_of_day.map_or(sun, |t| {
-            let mut celestial = forge_render::night::Celestial::default();
-            if let Some(age) = args.moon_age {
-                celestial.moon_age = age;
-            }
-            forge_render::night::NightLights::new(&celestial.at(t, sun), sun).reference
-        });
-        let unit = std::f32::consts::PI / reference;
-        let glow = 5.0 * unit;
+        // them out white, the owner found the lights too strong and all alike). The rows' emissive
+        // is in cd/m² (`RenderLayer::emissive_absolute`, #254): the renderer converts it by the
+        // frame's reference illuminance, so it holds through a running day (`--day`) as at one
+        // time of day. It was scaled once by the reference of `--time-of-day`'s hour.
+        let glow = 5.0;
         // The textured boxes' shopfronts glow at 15 % of it: at the horizon facade stacks on
         // facade with no dark roof or street between, and the far city read as a band of white
         // (the owner, 2026-10-11). A stopgap until a proxy per building (#38) draws the far city
@@ -3522,6 +3513,7 @@ impl Scenario for PlanScenario {
                 normal_texture: Some(normal),
                 normal_strength: 1.0,
                 emissive: [glow; 3],
+                emissive_absolute: true,
                 uv: Some(UvMapping {
                     emissive_texture: Some(lights),
                     ..UvMapping::default()
@@ -3629,7 +3621,8 @@ impl Scenario for PlanScenario {
             (2.5, [0.70, 0.82, 1.0]),
         ];
         let glass = |light: Option<(f32, [f32; 3])>| RenderLayer {
-            emissive: light.map_or([0.0; 3], |(l, c)| c.map(|v| v * l * unit)),
+            emissive: light.map_or([0.0; 3], |(l, c)| c.map(|v| v * l)),
+            emissive_absolute: true,
             reflectance: 0.06,
             // Each window its own mix of dark glass and the net curtains behind it, from bare
             // to drawn (the owner, 2026-10-11: the windows read dark; in France many homes keep
@@ -3850,6 +3843,7 @@ impl Scenario for PlanScenario {
                 RenderLayer {
                     albedo_texture: Some(screen_atlas),
                     emissive: [glow * 20.0; 3],
+                    emissive_absolute: true,
                     uv: Some(UvMapping {
                         emissive_texture: Some(screen_atlas),
                         ..UvMapping::default()
@@ -3916,7 +3910,7 @@ impl Scenario for PlanScenario {
         let tree_rows = [materials.of("plan-tree-a"), materials.of("plan-tree-b")];
         // Lamp heads of about 1 000 cd/m²: shielded LEDs at 2 700 K behind a frosted diffuser (the
         // style bible's lighting). At 3 000 their halos read too strong (the owner).
-        let head = 1000.0 * unit;
+        let head = 1000.0;
         materials.add_rows(
             "plan-lamp",
             vec![
@@ -3928,6 +3922,7 @@ impl Scenario for PlanScenario {
                     "plan lamp head".into(),
                     RenderLayer {
                         emissive: [head, head * 0.78, head * 0.55],
+                        emissive_absolute: true,
                         ..colour([0.8, 0.8, 0.78], 40.0, 0.2)
                     },
                 ),

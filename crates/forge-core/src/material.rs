@@ -164,8 +164,13 @@ pub struct RenderLayer {
     pub roughness: f32,
     /// Weight of the highlight.
     pub specular: f32,
-    /// Light the surface emits, in the units of the colours.
+    /// Light the surface emits, in the units of the colours, or with `emissive_absolute` a
+    /// luminance in cd/m².
     pub emissive: [f32; 3],
+    /// `emissive` is a luminance in cd/m², converted each frame by the frame's reference
+    /// illuminance (D-046): the same light at noon and at midnight, through a running day
+    /// (#254). Without it, `emissive` is in the shading's units, relative to that reference.
+    pub emissive_absolute: bool,
     /// Ice: light scattered back where the surface turns away from the sun.
     pub scatter: [f32; 3],
     /// Standard: an albedo texture multiplied into the base colour, projected along the
@@ -294,6 +299,7 @@ impl Default for RenderLayer {
             roughness: 0.6,
             specular: 0.05,
             emissive: [0.0; 3],
+            emissive_absolute: false,
             scatter: [0.0; 3],
             albedo_texture: None,
             normal_texture: None,

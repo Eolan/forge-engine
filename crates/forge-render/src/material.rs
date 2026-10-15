@@ -119,6 +119,10 @@ pub const MATERIAL_GRATING: u32 = 128;
 /// ([`forge_core::material::RenderLayer::shop`]).
 pub const MATERIAL_SHOP: u32 = 256;
 
+/// [`GpuMaterial`] flag: `emissive` in cd/m², converted each frame by the frame's reference
+/// illuminance ([`forge_core::material::RenderLayer::emissive_absolute`], #254).
+pub const MATERIAL_EMISSIVE_ABSOLUTE: u32 = 512;
+
 /// The textures a world's materials sample, uploaded with their mips and visible to every
 /// shader through the bindless set. Released when dropped.
 pub struct TextureSet {
@@ -463,6 +467,11 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
                     | if r.interior { MATERIAL_INTERIOR } else { 0 }
                     | if r.interior && r.shop {
                         MATERIAL_SHOP
+                    } else {
+                        0
+                    }
+                    | if r.emissive_absolute {
+                        MATERIAL_EMISSIVE_ABSOLUTE
                     } else {
                         0
                     }
