@@ -51,6 +51,8 @@ const RIDE_MAX: f64 = 6.5;
 const SEATED: u32 = 1 << 31;
 /// A chess game's watcher, told apart by this plus eight a game and their number.
 const WATCHING: u32 = 3 << 30;
+/// A market's stallholder or shopper, told apart by this plus eight a stall and their number.
+const MARKET: u32 = 7 << 29;
 /// An empty slot.
 const EMPTY: u32 = u32::MAX;
 
@@ -369,6 +371,9 @@ pub struct Crowd {
     neighbourhoods: Vec<(Vec<u32>, u32)>,
     /// The chess tables: each one's middle and its two seats among `seats`.
     games: Vec<(Vec3, [usize; 2])>,
+    /// The market stalls, each its place and turn (`furniture::market_stall`: its front to its
+    /// `+z`).
+    stalls: Vec<glam::Mat4>,
     /// The tram stops' platforms, their middles on the plan found by a grid, the lines'
     /// timetables, and who has boarded from a platform (until their trip ends).
     platforms: Vec<Platform>,
@@ -550,6 +555,7 @@ impl Crowd {
             seats,
             neighbourhoods,
             games: Vec::new(),
+            stalls: Vec::new(),
             stop_grid,
             timetables,
             boarded: HashSet::new(),
@@ -665,12 +671,44 @@ impl Crowd {
                 out[mesh].push((WATCHING + (g * 8 + w) as u32, spot, (-face.z).atan2(face.x)));
             }
         }
+        // At each market stall its stallholder behind the table, and nought to three people
+        // before it in the aisle, looking at the crates.
+        for (s, at) in self.stalls.iter().enumerate() {
+            let middle = at.w_axis.truncate();
+            let here = DVec2::new(f64::from(middle.x) + half, f64::from(middle.z) + half);
+            if here.distance(c) > REACH {
+                continue;
+            }
+            let h = (s as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            let front = at.z_axis.truncate();
+            let shoppers = (h % 4) as usize;
+            for k in 0..=shoppers {
+                let bits = h >> (8 * k + 2);
+                let x = ((bits & 0xFF) as f32 / 255.0 - 0.5) * 2.2;
+                // The stallholder first, behind the table facing out; then the shoppers.
+                let (z, face) = if k == 0 {
+                    (-0.45, front)
+                } else {
+                    (1.5 + ((bits >> 8) & 0x3F) as f32 / 100.0, -front)
+                };
+                let spot = at.transform_point3(Vec3::new(x, 0.0, z));
+                let mesh = (((bits >> 16) as usize) % GROUPS) * POSES + 1;
+                out[mesh].push((MARKET + (s * 8 + k) as u32, spot, (-face.z).atan2(face.x)));
+            }
+        }
     }
 
     /// The chess tables, each its middle and its two seats among the seats: their games draw
     /// watchers ([`Self::seat_people`]).
     pub fn with_games(mut self, games: Vec<(Vec3, [usize; 2])>) -> Self {
         self.games = games;
+        self
+    }
+
+    /// The market stalls, each its place and turn: each has its stallholder and a few shoppers
+    /// ([`Self::seat_people`]).
+    pub fn with_stalls(mut self, stalls: Vec<glam::Mat4>) -> Self {
+        self.stalls = stalls;
         self
     }
 

@@ -292,6 +292,8 @@ pub struct PlanScenario {
     seats: Vec<(Vec3, f32)>,
     /// The chess tables: each one's middle and its two seats among `seats`.
     games: Vec<(Vec3, [usize; 2])>,
+    /// The market stalls, for the crowd's stallholders and shoppers.
+    stalls: Vec<Mat4>,
     camera: FlyCamera,
     title: String,
     triangles: usize,
@@ -1519,6 +1521,7 @@ impl PlanScenario {
             walk_on_start: false,
             ride_after: None,
             games,
+            stalls: stalls.iter().map(|&(at, _)| at).collect(),
             sign_names,
             crowd: None,
             taxis: taxis::Taxis::new(plan, masses, &nets, 8.0, 3600.0),
@@ -1575,7 +1578,8 @@ impl PlanScenario {
             crowd::Crowd::new(
                 plan, masses, &self.nets, hour, seats, platforms, timetables, mix,
             )
-            .with_games(games),
+            .with_games(games)
+            .with_stalls(std::mem::take(&mut self.stalls)),
         );
         // The taxis on the people's hour.
         self.taxis = taxis::Taxis::new(plan, masses, &self.nets, hour, self.clock);

@@ -726,8 +726,10 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
   - **A stall:** 3 × 2 m, a trestle table with crates along its front, four poles and a canvas
     sloping from 2.5 to 2.3 m, in the kit's four awning colours. The walker walks round it.
   - **The sandbox:** 147 stalls on 5 squares; the nearest is logged as a view.
-  - **Later:** market days and mornings only, with the week's rhythm; stallholders and
-    shoppers.
+  - **The people** (with `--people`): within 220 m of the camera, each stall has its
+    stallholder standing behind the table and nought to three shoppers in the aisle looking at
+    the crates, as the chess games have their watchers.
+  - **Later:** market days and mornings only, with the week's rhythm.
 - **fingerposts** (`signs.rs`; the owner got lost on their second walk): at each junction where
   two avenues meet, within the kit's reach, a dark pole by the kerb just past the dropped kerb,
   clear of the trunks. Up to three blue blades, each pointing the way to one of the nearest
