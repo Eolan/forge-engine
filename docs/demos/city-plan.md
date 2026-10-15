@@ -332,6 +332,22 @@ rectangle and a trapezoid (every lot's frontage on the outline, no lot under the
 every inner party side square to the street); `PARCELS_PNG=path cargo test -p forge-procgen
 the_trapezoid` draws one. The first map's village takes it first; the city, block by block.
 
+**Houses from their rooms** (`city::rooms`, 2026-10-16; the research's §4): the owner's
+principle that a house is thought from its rooms. `rooms::programme` gives a household's
+rooms from its size and its means (poor: one or two rooms at the minimums, the kitchen in the
+living room; modest: a living room, a kitchen, a bedroom a couple and one a child or two;
+comfortable: a bedroom a person, a dining room, a study, two bathrooms; rich: a salon, suites
+with their bathrooms, service rooms), each with its area; `rooms::plan` lays them on a lot of
+a given width, a hall with the stair 2.2 m wide along one party wall the whole depth, the rooms
+in a column beside it from the front to the back at the depth their area asks (2.6 to 6.5 m),
+the day rooms on the ground floor, the bedrooms upstairs once the day rooms take half the
+depth, a new storey when one is full; every storey's last room stretches to the house's depth
+so the storeys stack, and no room goes under what it asked nor under the 9 m² the decency
+decree wants for a main room. The footprint's depth and the storeys come out of the rooms.
+Tested on a modest family of four on a 6 m lot (two storeys, the ground floor the day's), a
+poor household of three (the minimums kept), a rich house of five on 14 m (its suites
+upstairs). Next: the plans on the strips' lots, and the structures (D-060) built from them.
+
 **The trees, sized to their streets.** Trimmed street trees of 9–12 m line the avenues, 7–10 m trees
 the shared streets and 5–7 m trees the lanes. Each instance is scaled by its own crown
 across and its height up. The one model is a trunk forking into three limbs under a crown
