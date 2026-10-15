@@ -68,7 +68,8 @@ Options:
 - `--no-probes` lights the shaded sides with the open sky's light instead of the probes'
   (**P** toggles them), `--show-gi` shows that light alone on white surfaces (**U**),
   `--probe-rays N` sets the rays per probe (128), `--probe-cascades N` the cascades (5) and
-  `--probe-cadence N` how many frames a settled probe waits between updates (2).
+  `--probe-cadence N` how many frames a settled probe waits between updates (1 since
+  2026-10-16; 2 from #103 until then, see below).
 - `--no-reflections` draws without the sky's reflection (**F** toggles it).
 - `--no-ray-reflections` reflects only the sky in the glass and the water (**Y** toggles the mirror rays).
 - `--no-reflection-history` leaves the glass's mirror rays to TAA alone, without their history (#176).
@@ -105,6 +106,15 @@ probes update every frame, so the planes the camera brings in converge as fast a
   fixed-step flight, so there is no lag to see at speed.
 - **Other settings:** `--probe-cadence 1` gives the previous build's pixels; 4 saves another
   0.1 ms for a slow change of 0.24 %.
+- **The default went back to 1 on 2026-10-16.** In the city sandbox, standing still with the
+  crowd about under DLAA, a facade re-lit with no one in front of it: consecutive captures ten
+  frames apart differed on 1.2 % of their pixels once in ten, against 0.4 % at cadence 1 and
+  0.35 % with no probes at all, while the shadow denoiser and the reflections changed nothing
+  (the owner's "shadow recalculation while just staying in place"). A settled probe's update
+  at cadence 2 is a bigger step less often (`hysteresis²`), and a passer-by changing its rays'
+  hits shows as a step on the walls it lights. Cadence 1 costs 0.18 ms on that view (2.65 →
+  2.83 ms, the rays 0.56 → 0.78 and the blend 0.45 → 0.63). The step at a cadence over 1 is
+  the thing to smooth if the 0.2 ms matters again.
 
 ## Specks on walls in shade (issue #102, 2026-09-30)
 

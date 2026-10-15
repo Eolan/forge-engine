@@ -343,8 +343,12 @@ against cadence 1 and 4 on one build, three rounds alternating (medians):
 - **The look** against cadence 1 at frame 600: ꟻLIP mean 0.006 at 2 and 0.008 at 4, the
   largest 0.10–0.11. The fixed-step flight at frames 300 and 900 gives the same (0.005–0.006,
   the largest 0.09–0.12), so there is no visible lag at speed.
-- **The default is 2:** most of the gain for a small rise in the slow change;
-  `--probe-cadence 4` is there for a slower GPU.
+- **The default was 2** (most of the gain for a small rise in the slow change) **until
+  2026-10-16, and is 1 since:** in the city with the crowd about, a settled probe's bigger,
+  rarer step re-lit a facade as people passed (1.2 % of a view's pixels between two captures,
+  0.4 % at cadence 1; `docs/demos/city-blocks.md`, "The probes' cadence"). Cadence 1 costs
+  0.18 ms on that street view (2.65 → 2.83 ms). `--probe-cadence 2` or 4 is there for a
+  slower GPU.
 
 With the mirror rays' history (#176, D-050, 2026-10-07): the default view at 1600 × 900, 600
 frames, three runs each alternating with `--no-reflection-history`:

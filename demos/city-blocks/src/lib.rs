@@ -446,8 +446,11 @@ pub struct Args {
     /// between frames of a still camera is then the aliasing alone).
     #[arg(long)]
     sea_time: Option<f64>,
-    /// A settled probe updates every this many frames, on its turn (1 to 8; issue #103).
-    #[arg(long, default_value_t = ProbeParams::default().cadence)]
+    /// A settled probe updates every this many frames, on its turn (1 to 8; issue #103). The
+    /// city's default is 1, every probe every frame: at 2 (#103's 0.2 ms) a probe's update
+    /// stepped a facade's light as people passed, the "shadow recalculation" the owner saw
+    /// standing still (2026-10-16: 1.2 % of a view's pixels between two frames, 0.4 % at 1).
+    #[arg(long, default_value_t = 1)]
     probe_cadence: u32,
     /// Show the diffuse light alone, on white surfaces, instead of the shading: the probes'
     /// (the open sky's with `--no-probes`); U toggles it.
