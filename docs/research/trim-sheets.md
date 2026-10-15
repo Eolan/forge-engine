@@ -269,8 +269,10 @@ sharpening, or relaxed clamping on a thin-feature mask like Unreal's [23].
       The rays loop over those alone: `shadow/trace` is 0.24 and the probes' rays 0.55.
     - Street level with the cards: 2.32 → 2.28 ms (2.19 without them).
     - The overview: 5.20 → 5.19 ms. The cost there is the raster's.
-- **The verdict.** The flicker gain does not pay for 0.09–0.43 ms yet, so the bars stay
-  geometry. The cards come back once the cut-out raster has its own cluster list (#265).
+- **The verdict.** The flicker gain does not pay for 0.09–0.43 ms, so the bars stay geometry.
+  The measure against a reference (below) finds no gain at all on DLAA. The cards stay as an
+  option for TAA or lower resolutions, cheaper once the cut-out raster has its own cluster list
+  (#265).
 - **The other demos** are unchanged with the new shader: the sentinels, the island and the lab,
   200 captures on both paths, 0 pixels against the previous shader.
 - **The shutters' slats, flattened** (an experiment, not kept: each leaf's louvres one flat
@@ -278,8 +280,17 @@ sharpening, or relaxed clamping on a thin-feature mask like Unreal's [23].
   slats do not flicker at this view either. What the turn still flags is every edge alike, so
   the metric has reached its floor here. A far form for the shutters would save triangles, not
   flicker.
-- **Next:** a measure of flicker that does not flag every edge (a reference drawn with SSAA
-  along the same turn, `imgdiff --then`), before more far forms.
+- **Against a reference** (the same day): the same turn drawn with `--ssaa` (2 × 2) as the
+  reference.
+  - `imgdiff dlaa ssaa --then dlaa' ssaa'` counts the pixels whose change from one frame to the
+    next differs from the reference's by more than 12 levels. The moving edges change alike in
+    both and drop out; what is left is the aliasing and TAA's own error.
+  - Each build against its own reference, eight frame pairs: bars as geometry 32 785 pixels a
+    pair (2.3 % of the frame), the railing cards 32 834. No difference.
+  - So at this view the railings no longer flicker more than the reference's own bars, and the
+    cards buy nothing on DLAA. They stay off (with #265's cost besides).
+- **Next:** this reference measure on the views the owner walks (the old town's lanes at
+  night, the harbour); far forms only where it shows a part flickering.
 
 ## 3. Paving and ground patterns
 
