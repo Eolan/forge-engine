@@ -175,11 +175,20 @@ height: finer trees, street furniture, the modules (#247).*
 
 *Midnight (`--time-of-day 1.5`), 35 m up: about 40 % of the open windows lit, warm or cool, and the
 shopfronts, from emissive maps beside the facade textures. Left, metered; middle, a fixed EV 3;
-right, without the probes. The probes take the windows' light into the city many times over
-(the walls and courtyards glow as by day), so night views run with `--no-probes` until step 5
-gives the renderer emissive light in absolute units and the probes take it right (#254). The
+right, without the probes. The probes took the windows' light into the city many times over
+(the walls and courtyards glowed as by day), so night views ran with `--no-probes` (#254). The
 emissive is scaled by the frame's reference illuminance for a run held at one time of day: a
 stopgap.*
+
+**The probes at night (2026-10-15, #254).** The probes' rays read each hit's emission at the
+row's full value, but the frame no longer shows it so:
+- a window's glass shows its room lit at 4 % of the lamp (8 % for a shop);
+- a far facade emits only through its lit windows, the emissive map's few texels.
+
+The hits now emit as the frame shows them: the emissive map's average (its last mip, as the
+albedo), and a window's lamp share over walls about half as bright as white. At 21:00 from 30 m,
+the facades that glowed as by day are dark now. The street lamps light their streets and the
+facades beside them, and the lit windows dot the city. Night views run with the probes again.
 
 ## Buildings from the grammar and the kit (D-039, #247)
 

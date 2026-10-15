@@ -4162,6 +4162,14 @@ RayHit ray_hit(Frame* f, uint instance, uint primitive, float2 b, float3 origin,
     if (mat.albedo_texture != TEXTURE_NONE)
         hit.albedo *= sample_image_level(mat.albedo_texture, SAMPLER_LINEAR_REPEAT, float2(0.5, 0.5), 16.0).rgb;
     hit.emissive = mat.emissive;
+    // What the hit emits as the frame shows it (#254): an emissive map's average (its last mip,
+    // as the albedo), and a window's room its lamp's share over walls about half as bright as
+    // white (`interior_room`). With the row's full value the lit windows' and the far facades'
+    // light flooded the probes at night.
+    if (mat.emissive_texture != TEXTURE_NONE)
+        hit.emissive *= sample_image_level(mat.emissive_texture, SAMPLER_LINEAR_REPEAT, float2(0.5, 0.5), 16.0).rgb;
+    if ((mat.flags & MATERIAL_FLAG_INTERIOR) != 0)
+        hit.emissive *= ((mat.flags & MATERIAL_FLAG_SHOP) != 0 ? ROOM_SHOP_LAMP : ROOM_LAMP) * 0.55;
     return hit;
 }
 
