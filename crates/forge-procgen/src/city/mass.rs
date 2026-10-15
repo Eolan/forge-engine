@@ -119,8 +119,14 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
             continue;
         }
         let block = &plan.blocks[lot.block as usize];
-        // A taxi depot's block holds its deck, no flats.
-        if block.use_ != BlockUse::Built || plan.depots.iter().any(|d| d.block == lot.block) {
+        // A taxi depot's block holds its deck, no flats; a tram depot's yard none on its lots.
+        if block.use_ != BlockUse::Built
+            || plan.depots.iter().any(|d| d.block == lot.block)
+            || plan
+                .tram_depots
+                .iter()
+                .any(|d| d.block == lot.block && d.covers(&lot.polygon))
+        {
             continue;
         }
         let district = &plan.districts[block.district];

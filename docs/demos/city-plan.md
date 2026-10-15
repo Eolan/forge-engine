@@ -503,7 +503,29 @@ the line's colour, articulated round the curve, on the right-hand track.*
   - The example has 6 on 26 km of line over three seeds; the sandbox 18.
   - The trams don't take them yet.
   - Test `crossover_pairs_stand_every_few_kilometres_clear_of_stops_and_junctions`.
-  - Depots and tail tracks are next (`research/transit-and-vehicles.md` §10).
+  - Tail tracks are next (`research/transit-and-vehicles.md` §10).
+- **Tram depots** (`city::tram_depot`, 2026-10-15; the owner asked for depots for maintenance
+  and stabling). About one for three lines, 2–4 for a network of 5–8, near a line's end where
+  a tram avenue's block holds a yard of 6 trams or more behind its building line. Industrial
+  land comes first, and the depots stand 1.5 km apart.
+  - **The link:** a single track leaves the line's near track on an S-curve (25 m curves). It
+    rises up the verge on a ramp from the carriageway to the walking level, so the footway it
+    crosses stays level, and becomes the yard's first track.
+  - **The yard:** parallel stabling tracks 4.6 m apart, in asphalt behind a low wall along the
+    street. The next two tracks leave the first on S-curves; the deeper ones turn off a 45°
+    ladder on 20 m curves. Each place is a tram and 5 m (38 m).
+  - **The hall:** over the three deepest tracks' far ends, 50 m long and 9 m high, open towards
+    the yard, with solar panels on its roof.
+  - **The trams kept:** two places in three hold a tram in its line's livery, standing; the
+    lines' timetables run round the clock, so none goes in or out yet.
+  - Only the lots under a yard lose their buildings, and the depot's block has no court
+    gardens. Stops keep off the links as they keep off junctions.
+  - The example has one depot of 8–13 trams in each of three seeds; the sandbox has 4,
+    keeping 42 trams.
+  - Tests:
+    - `a_depot_s_tracks_curve_no_tighter_than_a_tram_turns_and_hold_its_places`;
+    - `tram_depots_stand_behind_the_building_lines_near_the_lines_ends`;
+    - `a_depot_s_trams_stand_on_its_tracks_in_their_places`.
 
 The example's two lines run 10 trams.
 

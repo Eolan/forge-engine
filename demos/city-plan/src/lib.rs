@@ -369,7 +369,25 @@ impl PlanScenario {
                 // A paved forecourt along its streets, as the pavement it meets, its gardens
                 // behind: grass met the pavement in the gaps between the buildings (the owner).
                 // The paths across its green paved with it, one surface.
-                let (front, rest) = plan.ground.forecourt(&block.polygon, FORECOURT, &paths[b]);
+                // A tram depot's yard paved with the forecourt, then cut out of it in asphalt.
+                let yard = plan
+                    .tram_depots
+                    .iter()
+                    .find(|d| d.block == b as u32)
+                    .map(|d| d.yard());
+                let mut ways = paths[b].clone();
+                ways.extend(yard.clone());
+                let (front, rest) = plan.ground.forecourt(&block.polygon, FORECOURT, &ways);
+                let front = match &yard {
+                    Some(yard) => {
+                        let (inside, outside) = ground::split(&front, yard);
+                        for polygon in ground::simple_polygons(&inside) {
+                            tiles.flat(&polygon, WALK_LEVEL, STREET, false);
+                        }
+                        outside
+                    }
+                    None => front,
+                };
                 for polygon in ground::simple_polygons(&front) {
                     tiles.flat(&polygon, WALK_LEVEL, PAVING, false);
                 }
@@ -440,16 +458,29 @@ impl PlanScenario {
                 }
             }
         }
+        let depot_walls = tram_depots(&mut tiles, plan);
         // Line by line, each taking the stops the lines before it placed on its track.
         let mut trams: Vec<TramRun> = Vec::new();
         let mut taken: Vec<DVec2> = Vec::new();
-        for l in &plan.tram_lines {
-            if let Some(run) = TramRun::new(l, plan, site, &taken) {
+        for (i, l) in plan.tram_lines.iter().enumerate() {
+            if let Some(mut run) = TramRun::new(l, plan, site, &taken) {
+                run.line = i;
                 taken.extend(run.timetable.stops().iter().map(|&s| run.track(s).0));
                 trams.push(run);
             }
         }
         stagger_termini(&mut trams);
+        // The trams the depots keep: two places in three taken, in their lines' liveries.
+        for d in &plan.tram_depots {
+            let Some(run) = trams.iter_mut().find(|r| r.line == d.line) else {
+                continue;
+            };
+            for (k, (at, along)) in d.places().into_iter().enumerate() {
+                if !mix(k as u64 ^ (u64::from(d.block) << 16)).is_multiple_of(3) {
+                    run.parked.push(parked_sections(at, along, size));
+                }
+            }
+        }
         // Each terminus's crossover, the rails from the track the trams come in on to the one
         // they leave by, 3 mm over the straight rails they cross.
         for run in &trams {
@@ -626,6 +657,50 @@ impl PlanScenario {
             passage_note += &format!(
                 "; a tram terminus at --view={:.1},12,{:.1},{yaw:.1},{pitch:.1}",
                 eye.x, eye.z
+            );
+        }
+        // And the tram depots, the nearest the kit's centre from 15 m up over the street 30 m
+        // before its yard, looking along it.
+        let parked: usize = trams.iter().map(|r| r.parked.len()).sum();
+        passage_note += &format!(
+            "; {} tram depots keeping {parked} trams",
+            plan.tram_depots.len()
+        );
+        if let Some(d) = detail
+            && let Some(depot) = plan.tram_depots.iter().min_by(|a, b| {
+                let far = |t: &forge_procgen::city::tram_depot::TramDepot| {
+                    geom::centroid(&t.yard()).distance(d.centre)
+                };
+                far(a).total_cmp(&far(b))
+            })
+        {
+            // From above, from the footway where its link crosses, and before its hall.
+            let view = |eye: Vec3, at: Vec3| {
+                let to = (at - eye).normalize_or_zero();
+                format!(
+                    "--view={:.1},{:.1},{:.1},{:.1},{:.1}",
+                    eye.x,
+                    eye.y,
+                    eye.z,
+                    (-to.x).atan2(-to.z).to_degrees(),
+                    to.y.asin().to_degrees()
+                )
+            };
+            let deep = 12.0;
+            passage_note += &format!(
+                ", one at {}, its link at {}, its hall at {}",
+                view(
+                    world(size, depot.at(-30.0, -depot.half), 15.0),
+                    world(size, depot.at(depot.length * 0.6, deep), 0.0)
+                ),
+                view(
+                    world(size, depot.at(-40.0, -2.0), 1.7),
+                    world(size, depot.at(-15.0, -6.0), 0.3)
+                ),
+                view(
+                    world(size, depot.at(depot.length - 110.0, -depot.half), 14.0),
+                    world(size, depot.at(depot.length - 25.0, deep + 6.0), 4.0)
+                )
             );
         }
         // And the crossover pairs, the nearest the kit's centre from 12 m up over the line 25 m
@@ -1256,6 +1331,7 @@ impl PlanScenario {
                 .into_iter()
                 .chain(parapet_pieces(size, plan, site, &shore))
                 .chain(garden_pieces(size, &gardens))
+                .chain(depot_walls)
                 .collect(),
             passage_note,
             nets: nets.clone(),
@@ -1517,6 +1593,28 @@ struct TramRun {
     junctions: Vec<(f64, f64)>,
     /// The stretches of the route over water (its bridges), from and to, metres along it.
     wet: Vec<(f64, f64)>,
+    /// Its line, an index into the plan's tram lines.
+    line: usize,
+    /// The trams its depot keeps, standing: each one's sections as [`TramRun::sections`] gives
+    /// them.
+    parked: Vec<[(Vec3, f32); TRAM_SECTIONS]>,
+}
+
+/// The sections of a tram standing with its middle at `at`, the way `along`, in a depot's yard
+/// (its rails at the walking level), in a plan of side `size`.
+fn parked_sections(at: DVec2, along: DVec2, size: f64) -> [(Vec3, f32); TRAM_SECTIONS] {
+    use forge_geom::vehicles::{SECTION_GAP, SECTION_LENGTH};
+    let pitch = f64::from(SECTION_LENGTH + SECTION_GAP);
+    let nose = at + along * tram_length() * 0.5;
+    let mut yaw = (-along.y).atan2(along.x) as f32;
+    std::array::from_fn(|i| {
+        let front = nose - along * pitch * i as f64;
+        let rear = front - along * f64::from(SECTION_LENGTH);
+        if i + 1 == TRAM_SECTIONS {
+            yaw += std::f32::consts::PI;
+        }
+        (world(size, (front + rear) * 0.5, WALK_LEVEL + 0.06), yaw)
+    })
 }
 
 impl TramRun {
@@ -1571,6 +1669,15 @@ impl TramRun {
                 })
             })
             .collect();
+        // A tram depot's link leaving this route keeps the stops off it as a junction does.
+        for d in &plan.tram_depots {
+            let link = d.link();
+            let (off, from) = project(link[0]);
+            if off < 5.0 {
+                let to = project(link[link.len() / 2]).1;
+                junctions.push(((from + to) * 0.5, (to - from).abs() + 10.0));
+            }
+        }
         junctions.sort_by(|a, b| a.0.total_cmp(&b.0));
         // Each stop at the nearest place along the route where its two platforms and their ramps
         // (37.4 m either way) stand clear of every junction's reach and on straight track, the
@@ -1655,6 +1762,8 @@ impl TramRun {
             colour: line.colour,
             junctions,
             wet,
+            line: 0,
+            parked: Vec::new(),
         })
     }
 
@@ -2090,6 +2199,130 @@ fn prism_topped(tiles: &mut Tiles, ring: &[DVec2], y0: f64, y1: f64, section: u8
         let p = t.map(|i| at(ring[i], y1));
         triangle_uv(&mut tile.masses, p, [[0.0; 2]; 3], Vec3::Y, top);
     }
+}
+
+/// A ribbon along `points` rising and falling with `heights`, a quad per segment.
+fn ribbon_sloped(tiles: &mut Tiles, points: &[DVec2], heights: &[f64], width: f64, section: u8) {
+    let half = width * 0.5;
+    let size = tiles.size;
+    for k in 0..points.len().min(heights.len()).saturating_sub(1) {
+        let (a, b) = (points[k], points[k + 1]);
+        let t = (b - a).normalize_or_zero();
+        if t == DVec2::ZERO {
+            continue;
+        }
+        let n = DVec2::new(-t.y, t.x) * half;
+        let tile = tiles.at(a);
+        let centre = tile.centre;
+        let at = |p: DVec2, h: f64| world(size, p, h) - centre;
+        let (ha, hb) = (heights[k], heights[k + 1]);
+        let quad = [at(a + n, ha), at(b + n, hb), at(b - n, hb), at(a - n, ha)];
+        triangle(
+            &mut tile.ground,
+            [quad[0], quad[1], quad[2]],
+            Vec3::Y,
+            section,
+        );
+        triangle(
+            &mut tile.ground,
+            [quad[0], quad[2], quad[3]],
+            Vec3::Y,
+            section,
+        );
+    }
+}
+
+/// The tram depots (`city::tram_depot`): each link's rails from the line's near track on the
+/// carriageway up its verge's ramp to the walking level and across the footway, the yard's
+/// tracks, the maintenance hall over the deepest tracks' far ends (open towards the yard, the
+/// trams' way in, solar panels on its roof), and a low wall along the yard's front either side
+/// of the link. The halls' and the walls' pieces for the walker.
+fn tram_depots(tiles: &mut Tiles, plan: &CityPlan) -> Vec<Vec<Vec3>> {
+    let size = tiles.size;
+    // A rail's top over the ground under it.
+    let top = 0.06;
+    let mut pieces = Vec::new();
+    // A slab along `a b`, `deep` metres towards `inside`, from `y0` to `y1`: drawn, and kept for
+    // the walker.
+    let mut slab = |tiles: &mut Tiles,
+                    a: DVec2,
+                    b: DVec2,
+                    inside: DVec2,
+                    deep: f64,
+                    y0: f64,
+                    y1: f64,
+                    section: u8| {
+        let t = (b - a).normalize_or_zero();
+        let mut n = DVec2::new(-t.y, t.x);
+        if n.dot(inside - a) < 0.0 {
+            n = -n;
+        }
+        let mut ring = vec![a, b, b + n * deep, a + n * deep];
+        if geom::signed_area(&ring) < 0.0 {
+            ring.reverse();
+        }
+        prism(tiles, &ring, y0, y1, section);
+        pieces.push(
+            ring.iter()
+                .flat_map(|&p| [world(size, p, y0), world(size, p, y1)])
+                .collect::<Vec<Vec3>>(),
+        );
+    };
+    for d in &plan.tram_depots {
+        let link = d.link();
+        for rail in [-0.72, 0.72] {
+            let points = offset_line(&link, rail);
+            let heights: Vec<f64> = points
+                .iter()
+                .map(|&p| ROAD_LEVEL + top + (WALK_LEVEL - ROAD_LEVEL) * d.level_at(p))
+                .collect();
+            ribbon_sloped(tiles, &points, &heights, 0.25, TRACK);
+        }
+        for track in d.tracks() {
+            for rail in [-0.72, 0.72] {
+                ribbon(
+                    tiles,
+                    &offset_line(&track, rail),
+                    0.25,
+                    WALK_LEVEL + top,
+                    TRACK,
+                );
+            }
+        }
+        // The hall: its walls but the one facing the yard, a lintel over that one's opening,
+        // its roof.
+        let (_, high, _) = forge_procgen::city::tram_depot::HALL;
+        let hall = d.hall();
+        let middle = geom::centroid(&hall);
+        let front = (0..4)
+            .min_by(|&i, &j| {
+                let x = |k: usize| ((hall[k] + hall[(k + 1) % 4]) * 0.5 - d.origin).dot(d.along);
+                x(i).total_cmp(&x(j))
+            })
+            .unwrap_or(0);
+        let (y0, y1) = (WALK_LEVEL, WALK_LEVEL + high);
+        for k in 0..4 {
+            let (a, b) = (hall[k], hall[(k + 1) % 4]);
+            let from = if k == front { y1 - 3.5 } else { y0 };
+            slab(tiles, a, b, middle, 0.3, from, y1, KIT_PLASTER);
+        }
+        prism_topped(tiles, &hall, y1, y1 + 0.3, KIT_PLASTER, ROOF_SOLAR);
+        // The front's low wall either side of the link.
+        let inside = d.at(d.length * 0.5, 10.0);
+        for (a, b) in d.front() {
+            slab(
+                tiles,
+                a,
+                b,
+                inside,
+                0.3,
+                WALK_LEVEL,
+                WALK_LEVEL + 1.2,
+                KIT_STONE,
+            );
+        }
+    }
+    pieces
 }
 
 /// The gardens' planters, hedges and beds as the walker's convex pieces, the world's metres.
@@ -3419,7 +3652,7 @@ impl Scenario for PlanScenario {
             let middle = builder.add_mesh(&MeshletMesh::build(&vehicles::tram_section(false)));
             builder.set_mesh_material(cab, row);
             builder.set_mesh_material(middle, row);
-            let n = run.timetable.vehicles() as u32;
+            let n = (run.timetable.vehicles() + run.parked.len()) as u32;
             tram_movers.extend([(cab, 2 * n), (middle, (TRAM_SECTIONS as u32 - 2) * n)]);
         }
         // The crowd's figures, each palette in its poses (`crowd::POSES`): the left stride,
@@ -3775,8 +4008,10 @@ impl Running for PlanRunning {
             scale: 1.0,
         };
         for run in &self.trams {
+            // Its running trams, then those its depot keeps.
             let vehicles: Vec<_> = (0..run.timetable.vehicles())
                 .map(|k| run.sections(k, self.clock, self.size))
+                .chain(run.parked.iter().copied())
                 .collect();
             for v in &vehicles {
                 transforms.extend([place(v[0]), place(v[TRAM_SECTIONS - 1])]);
@@ -4468,6 +4703,31 @@ fn lamp_model(double: bool) -> TriMesh {
 mod tests {
     use super::*;
     use forge_procgen::city::{example, plan};
+
+    #[test]
+    fn a_depot_s_trams_stand_on_its_tracks_in_their_places() {
+        use forge_procgen::city::tram_depot::PLACE;
+        // A tram and a few metres in each place: the cabs never touch the next tram.
+        assert!(
+            tram_length() + 4.0 <= PLACE,
+            "a {:.1} m tram",
+            tram_length()
+        );
+        let size = 4000.0;
+        let site = example::site(size, 10.0);
+        let city = plan(&site, &example::params(size));
+        let depot = city.tram_depots.first().expect("a depot in the example");
+        for (at, along) in depot.places() {
+            let sections = parked_sections(at, along, size);
+            // Its middle at the place's, along its track at the yard's level.
+            let middle = (sections[0].0 + sections[TRAM_SECTIONS - 1].0) * 0.5;
+            assert!(middle.distance(world(size, at, WALK_LEVEL + 0.06)) < 1e-3);
+            for (p, _) in sections {
+                let q = DVec2::new(f64::from(p.x) + size * 0.5, f64::from(p.z) + size * 0.5);
+                assert!(depot.on_yard(q, 0.0), "a section off the yard");
+            }
+        }
+    }
 
     #[test]
     fn trams_turn_where_they_stand_having_crossed_over_on_the_way_in() {

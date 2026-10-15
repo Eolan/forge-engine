@@ -608,6 +608,65 @@ fn court_gardens_keep_clear_of_the_buildings_the_paths_and_the_doors() {
 }
 
 #[test]
+fn tram_depots_stand_behind_the_building_lines_near_the_lines_ends() {
+    // The owner: one or more tram depots for maintenance and stabling
+    // (`research/transit-and-vehicles.md` §10: about one for three lines, near their ends).
+    use super::ground::WALK_LEVEL;
+    let size = 4000.0;
+    let site = example::site(size, 10.0);
+    let mut total = 0;
+    for seed in [None, Some(0x5EED_0001_u64), Some(0x5EED_0042)] {
+        let mut params = example::params(size);
+        if let Some(seed) = seed {
+            params.seed = forge_core::Seed::new(seed);
+        }
+        let city = plan(&site, &params);
+        let masses = super::mass::masses(&city, &super::bible::StyleBible::default(), 7);
+        for (i, d) in city.tram_depots.iter().enumerate() {
+            let line = &city.tram_lines[d.line];
+            let length = geom::polyline_length(&line.points);
+            // Its link leaves near one of the line's ends.
+            let start = d.link()[0];
+            let along = (0..=(length / 5.0) as usize)
+                .map(|k| k as f64 * 5.0)
+                .min_by(|&a, &b| {
+                    geom::point_at(&line.points, a)
+                        .distance(start)
+                        .total_cmp(&geom::point_at(&line.points, b).distance(start))
+                })
+                .unwrap_or(0.0);
+            let from_end = along.min(length - along);
+            println!(
+                "seed {seed:?} depot {i}: line {}, {} tracks of {:.0} m, {} trams, {from_end:.0} m \
+                 from the line's end",
+                d.line,
+                d.tracks,
+                d.length,
+                d.capacity()
+            );
+            assert!(d.capacity() >= 6, "{} places", d.capacity());
+            assert!(from_end <= 900.0, "{from_end:.0} m from the line's end");
+            // No building over its yard, none of the line's stops by its link.
+            for m in &masses {
+                assert!(
+                    !m.footprint.iter().any(|&p| d.on_yard(p, 0.0)),
+                    "a building in a depot's yard"
+                );
+            }
+            for &s in &line.stops {
+                assert!(!d.on_link(s, 30.0), "a stop on a depot's link");
+            }
+            // The footway it crosses stays level; the yard is at the walking level.
+            let yard = d.yard();
+            let c = geom::centroid(&yard);
+            assert!(city.ground.level_at(c) == WALK_LEVEL || !city.ground.on_carriageway(c));
+            total += 1;
+        }
+    }
+    assert!(total >= 2, "{total} depots in three cities");
+}
+
+#[test]
 fn court_paths_join_round_the_middle_instead_of_running_side_by_side() {
     // The owner: close paths would first join the paths round the garden, like a hub; separate
     // ones side by side waste the ground. Measured on each path's middle line, past its first

@@ -990,6 +990,25 @@ pub fn clip(polygon: &[DVec2], within: &[DVec2]) -> Shapes {
     ))
 }
 
+/// `shapes` split by the polygon `inner`: what lies inside it, and what outside (a block's
+/// forecourt round a depot's yard, drawn in another surface).
+pub fn split(shapes: &Shapes, inner: &[DVec2]) -> (Shapes, Shapes) {
+    let raw: Raw = shapes
+        .iter()
+        .map(|shape| {
+            shape
+                .iter()
+                .map(|c| c.iter().map(|p| [p.x, p.y]).collect())
+                .collect()
+        })
+        .collect();
+    let cut = vec![Piece::from_points(inner).contours];
+    (
+        to_shapes(boolean(&raw, &cut, OverlayRule::Intersect)),
+        to_shapes(boolean(&raw, &cut, OverlayRule::Difference)),
+    )
+}
+
 /// Whether `p` lies in `shapes` (even-odd over all their contours).
 pub fn inside(shapes: &Shapes, p: DVec2) -> bool {
     let mut odd = false;

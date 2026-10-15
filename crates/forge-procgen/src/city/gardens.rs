@@ -127,10 +127,14 @@ const PLAZA: f64 = 7.0;
 /// the hub instead of joining, degrees.
 const JOIN_ANGLE: f64 = 75.0;
 
-/// The court of block `b` when it is a green one: a built block's, outside a taxi depot.
+/// The court of block `b` when it is a green one: a built block's, outside a taxi or a tram
+/// depot.
 fn green_court(plan: &CityPlan, b: u32) -> Option<&[DVec2]> {
     let block = &plan.blocks[b as usize];
-    if block.use_ != BlockUse::Built || plan.depots.iter().any(|d| d.block == b) {
+    if block.use_ != BlockUse::Built
+        || plan.depots.iter().any(|d| d.block == b)
+        || plan.tram_depots.iter().any(|d| d.block == b)
+    {
         return None;
     }
     block.courtyard.as_deref()
@@ -192,30 +196,6 @@ fn path(line: &[DVec2], half: f64) -> Option<Vec<DVec2>> {
     let mut outline = offset(&line, half);
     outline.extend(offset(&line, -half).into_iter().rev());
     Some(outline)
-}
-
-/// Whether two simple polygons overlap: an edge of one crosses one of the other's, or one holds
-/// a corner of the other.
-fn overlap(a: &[DVec2], b: &[DVec2]) -> bool {
-    let bounds = |p: &[DVec2]| {
-        p.iter().fold(
-            (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)),
-            |(lo, hi), &q| (lo.min(q), hi.max(q)),
-        )
-    };
-    let ((alo, ahi), (blo, bhi)) = (bounds(a), bounds(b));
-    if alo.x > bhi.x || blo.x > ahi.x || alo.y > bhi.y || blo.y > ahi.y {
-        return false;
-    }
-    let (na, nb) = (a.len(), b.len());
-    for i in 0..na {
-        for j in 0..nb {
-            if geom::segment_intersection(a[i], a[(i + 1) % na], b[j], b[(j + 1) % nb]).is_some() {
-                return true;
-            }
-        }
-    }
-    a.iter().any(|&p| geom::contains(b, p)) || b.iter().any(|&p| geom::contains(a, p))
 }
 
 /// Where a path comes into a court: its mouth (a gap's on the street's middle, a door's or a
@@ -587,7 +567,7 @@ fn flats_beside(
                     .iter()
                     .flat_map(|&s| [at(s, 0.05), at(s, GARDEN * 0.5), at(s, GARDEN)])
                     .all(|p| !built(p));
-                    let clear = paths.iter().all(|p| !overlap(&ground, &p.outline));
+                    let clear = paths.iter().all(|p| !geom::overlaps(&ground, &p.outline));
                     if !(open && free && clear) {
                         continue;
                     }
@@ -871,7 +851,7 @@ fn planters(plan: &CityPlan, masses: &[Mass], structures: &[Structure], out: &mu
                     let outline = rect(wall, t, n, (from, a), (0.05, deep));
                     let clear = paths
                         .get(&block)
-                        .is_none_or(|ps| ps.iter().all(|p| !overlap(&outline, p)));
+                        .is_none_or(|ps| ps.iter().all(|p| !geom::overlaps(&outline, p)));
                     if a - from >= 2.0 && clear {
                         planted.push(Piece {
                             kind: Kind::Planter,

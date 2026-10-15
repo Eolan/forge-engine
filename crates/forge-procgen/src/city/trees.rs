@@ -321,11 +321,15 @@ pub fn trees(site: &Site, plan: &CityPlan, seed: u64) -> Vec<Tree> {
         lamps.insert(l.pos, 0);
     }
     out.retain(|t| !lamps.any_within(t.pos, 3.0, |_| false));
-    // None on a taxi depot's deck or by its driveway.
+    // None on a taxi depot's deck or by its driveway, nor in a tram depot's yard or by its link.
     out.retain(|t| {
         plan.depots
             .iter()
             .all(|d| !d.on_driveway(t.pos, 4.0) && !d.on_deck(t.pos, 3.0))
+            && plan
+                .tram_depots
+                .iter()
+                .all(|d| !d.on_link(t.pos, 3.0) && !d.on_yard(t.pos, 3.0))
     });
     out
 }

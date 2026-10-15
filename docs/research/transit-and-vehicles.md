@@ -1556,9 +1556,15 @@ Neither covers the geometry.
   leaves by and turns where it stands, the two platforms facing each other.
 - A crossover pair about every 3 km, on straight track on land, clear of the junctions and the
   stops.
+- Depots (`city::tram_depot`): about one for three lines, near a line's end, industrial land
+  first, 1.5 km apart.
+  - Stabling places of a tram and 5 m, tracks 4.6 m apart.
+  - Curves of 20 m in the yard and 25 m on the link.
+  - A 45° ladder for the deeper tracks, and a 50 m hall over the three deepest.
+  - A single-track link, as small depots have, rising up the verge so the footway stays level.
 - *Next:*
-  - depots of about 1 ha for 10 trams on industrial land near line ends, 2–4 for a network,
-    joined by double track;
+  - trams going in and out of the depots at the service's ends;
+  - a double-track link for the larger depots;
   - tail tracks past busy termini;
   - trams taking the crossover pairs round a broken-down tram.
 

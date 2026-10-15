@@ -264,6 +264,30 @@ pub fn contains(polygon: &[DVec2], p: DVec2) -> bool {
     inside
 }
 
+/// Whether two simple polygons overlap: an edge of one crosses one of the other's, or one holds
+/// a corner of the other.
+pub fn overlaps(a: &[DVec2], b: &[DVec2]) -> bool {
+    let bounds = |p: &[DVec2]| {
+        p.iter().fold(
+            (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)),
+            |(lo, hi), &q| (lo.min(q), hi.max(q)),
+        )
+    };
+    let ((alo, ahi), (blo, bhi)) = (bounds(a), bounds(b));
+    if alo.x > bhi.x || blo.x > ahi.x || alo.y > bhi.y || blo.y > ahi.y {
+        return false;
+    }
+    let (na, nb) = (a.len(), b.len());
+    for i in 0..na {
+        for j in 0..nb {
+            if segment_intersection(a[i], a[(i + 1) % na], b[j], b[(j + 1) % nb]).is_some() {
+                return true;
+            }
+        }
+    }
+    a.iter().any(|&p| contains(b, p)) || b.iter().any(|&p| contains(a, p))
+}
+
 /// The part of a polygon on the side of the line through `origin` along `direction` where
 /// `cross(direction, p − origin) ≥ 0` (Sutherland–Hodgman against one half-plane). Exact for
 /// convex polygons; a concave one may come back with a degenerate bridge, harmless for lots.

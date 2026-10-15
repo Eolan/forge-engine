@@ -38,6 +38,7 @@ pub mod streets;
 pub mod structure;
 pub mod taxi;
 pub mod tensor;
+pub mod tram_depot;
 pub mod transit;
 pub mod trees;
 pub mod units;
@@ -699,6 +700,8 @@ pub struct CityPlan {
     pub taxi_stands: Vec<taxi::Stand>,
     /// The taxi depots (D-061): parking decks where the cabs no stand holds wait and charge.
     pub depots: Vec<taxi::Depot>,
+    /// The tram depots: yards where the trams are stabled and kept, near the lines' ends.
+    pub tram_depots: Vec<tram_depot::TramDepot>,
     /// The boat crossings.
     pub crossings: Vec<BoatCrossing>,
     /// The landmarks.
@@ -1136,7 +1139,7 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
         &junctions,
         &anchors,
     );
-    let driveways: Vec<ground::Ramp> = depots
+    let mut driveways: Vec<ground::Ramp> = depots
         .iter()
         .flat_map(|d| {
             let verge = roads.edges[d.edge as usize]
@@ -1148,6 +1151,31 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
             d.ramps(verge)
         })
         .collect();
+    // The tram depots near the lines' ends, clear of the stops, the junctions, the taxi stands
+    // and the taxi depots; their links' ramps up the verges.
+    let tram_depots = {
+        let stops: Vec<DVec2> = tram_lines.iter().flat_map(|l| l.stops.clone()).collect();
+        let stands: Vec<DVec2> = taxi_stands
+            .iter()
+            .map(|s| s.kerb)
+            .chain(depots.iter().flat_map(|d| [d.kerb, d.exit_kerb()]))
+            .collect();
+        let taken: Vec<u32> = depots.iter().map(|d| d.block).collect();
+        tram_depot::depots(
+            &roads,
+            site,
+            &blocks,
+            &industrial,
+            &tram_lines,
+            &tram_depot::Avoid {
+                stops: &stops,
+                junctions: &junctions,
+                stands: &stands,
+                blocks: &taken,
+            },
+        )
+    };
+    driveways.extend(tram_depots.iter().map(tram_depot::TramDepot::ramp));
     let tracks: Vec<Vec<DVec2>> = tram_lines.iter().map(|l| l.points.clone()).collect();
     let walks = streets::promenades(site, ground::PROMENADE);
     let rivers: Vec<(Vec<DVec2>, f64)> = site
@@ -1198,6 +1226,7 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
         ground,
         taxi_stands,
         depots,
+        tram_depots,
         crossings,
         landmarks,
         stats: PlanStats::default(),
