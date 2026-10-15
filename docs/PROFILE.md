@@ -1383,7 +1383,9 @@ something stands out). Two things to watch:
     - the morning's figures, with the rooms behind the windows already in, were 2.19 and
       4.77 ms;
     - the court benches, the bike racks, the markets and the shops' rooms cost nothing
-      measurable.
+      measurable;
+    - the street at 21:00 with the probes (#254's fix, the lamps lighting through them): 2.21 ms,
+      as by day.
 
 ## `planet` — a planet from orbit to its ground (#220, D-056, 2026-10-10)
 
