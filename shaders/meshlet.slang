@@ -2872,6 +2872,7 @@ struct Surface
     float3 dpdy;
     float3x3 frame;         // the instance's rotation and scale: object-space directions to the camera-relative space
     uint instance_id;
+    uint instance_place;    // a hash of where the instance stands, the same whatever its index (`interior_room`)
     uint meshlet_index;
     uint lod_level;
     float3 shadow;          // 1 in the sun, 0 where a shadow ray met something (issue #45), the jelly's tint where it crossed jelly (#180)
@@ -3131,8 +3132,10 @@ float3 shade_standard(Frame* f, Material mat, Surface s)
             float3 d = normalize(mul(transpose(s.frame), -s.view));
             if (d.z > -1e-3)
                 return pane;
-            float3 room = interior_room(s.object_position, d, s.instance_id, max(length(s.dpdx), length(s.dpdy)));
-            float3 h = hash_color(s.instance_id);
+            // Each window's room by where it stands, so a city that gains or loses an instance
+            // keeps its rooms (by its index, every window after it changed room).
+            float3 room = interior_room(s.object_position, d, s.instance_place, max(length(s.dpdx), length(s.dpdy)));
+            float3 h = hash_color(s.instance_place);
             float curtain = h.x < ROOM_CURTAINS ? 0.35 + 0.5 * h.x / ROOM_CURTAINS : 0.0;
             // Lit by the daylight the window gets (a white wall's facing out), or the row's lamp.
             float ndl_white;
@@ -4674,6 +4677,8 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     float3 surface_scene = to_scene(f, surface_relative);
     s.frame = frame;
     s.instance_id = inst.id;
+    s.instance_place = asuint(inst.local.x) * 0x8da6b343u ^ asuint(inst.local.y) * 0xd8163841u
+        ^ asuint(inst.local.z) * 0xcb1ab31fu ^ asuint(inst.cell.x) * 0x9E3779B9u ^ asuint(inst.cell.z) * 0x85EBCA6Bu;
     s.meshlet_index = meshlet_index;
     s.lod_level = m.lod_level;
     s.shadow = 1.0;
