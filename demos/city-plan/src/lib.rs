@@ -1199,13 +1199,115 @@ impl PlanScenario {
                         || (0..n).any(|k| geom::distance_to_segment(p, m[k], m[(k + 1) % n]) < 1.5))
             })
         };
+        // A market on one square in two of 0.25 ha or more without a landmark or a water mirror
+        // (`research/ground-floors.md` §4.9: open-air markets on the boulevards and squares):
+        // two rows of stalls facing each other across a 3 m aisle along the square's long axis,
+        // 3.2 m apart, inside its benches, clear of the trunks, the fountain kept in a ring of
+        // 7.5 m. Its canvases in the kit's four awning colours. They take the chess tables' place.
+        let market_squares: Vec<usize> = plan
+            .blocks
+            .iter()
+            .enumerate()
+            .filter(|&(i, b)| {
+                b.use_ == BlockUse::Square
+                    && b.area >= 2500.0
+                    && !held.contains(&i)
+                    && !middles[i].as_ref().is_some_and(|(_, m)| *m)
+                    && mix(i as u64 ^ 0x3A2C_5E1D).is_multiple_of(2)
+            })
+            .map(|(i, _)| i)
+            .collect();
+        let mut stalls: Vec<(Mat4, u8)> = Vec::new();
+        let mut stall_walls: Vec<Vec<Vec3>> = Vec::new();
+        for &i in &market_squares {
+            let b = &plan.blocks[i];
+            let Some(inner) = geom::inset(&b.buildable, 7.5) else {
+                continue;
+            };
+            let middle = geom::centroid(&b.buildable);
+            let (u, _, _) = geom::oriented_extent(&b.buildable);
+            let v = DVec2::new(-u.y, u.x);
+            // Aisles down the middle and 11 m either side where the square is wide enough.
+            for (aisle, side) in [0.0, -11.0, 11.0]
+                .into_iter()
+                .flat_map(|a| [(a, -1.0), (a, 1.0)])
+            {
+                for k in -15..=15 {
+                    let at = middle + u * (f64::from(k) * 3.2) + v * (aisle + side * 2.5);
+                    let corners = [(-1.5, -1.0), (1.5, -1.0), (1.5, 1.0), (-1.5, 1.0)]
+                        .map(|(x, y)| at + u * x + v * (y * side));
+                    let w = world(size, at, 0.0);
+                    // A trunk keeps out of the stall: its half diagonal (1.8 m) and the trunk.
+                    let fits = at.distance(b.centre) > 7.5
+                        && corners.iter().all(|&c| geom::contains(&inner, c))
+                        && !trunks.any_within(at, 2.2, |_| false)
+                        && bench_spots.iter().all(|s| s.with_y(0.0).distance(w) > 3.0);
+                    if !fits {
+                        continue;
+                    }
+                    // Facing the aisle: +z turned onto it.
+                    let face = -v * side;
+                    let turn = glam::Quat::from_rotation_y((face.x as f32).atan2(face.y as f32));
+                    let colour =
+                        (mix(i as u64 ^ (k as u64) << 8 ^ side.to_bits() ^ aisle.to_bits()) % 4)
+                            as u8;
+                    stalls.push((
+                        Mat4::from_rotation_translation(turn, world(size, at, SQUARE_LEVEL)),
+                        colour * 2,
+                    ));
+                    stall_walls.push(
+                        corners
+                            .iter()
+                            .flat_map(|&c| {
+                                [
+                                    world(size, c, SQUARE_LEVEL),
+                                    world(size, c, SQUARE_LEVEL + 2.5),
+                                ]
+                            })
+                            .collect(),
+                    );
+                }
+            }
+        }
+        // The market nearest the kit's centre, from 8 m down its aisle.
+        if let Some(d) = detail {
+            let centre = world(size, d.centre, 0.0);
+            if let Some((at, _)) = stalls.iter().min_by(|a, b| {
+                let far = |m: &Mat4| m.w_axis.truncate().distance(centre);
+                far(&a.0).total_cmp(&far(&b.0))
+            }) {
+                let (pos, face, side) = (
+                    at.w_axis.truncate(),
+                    at.z_axis.truncate(),
+                    at.x_axis.truncate(),
+                );
+                let eye = pos + face * 1.5 + side * 8.0;
+                let to = (pos + face * 1.0 + Vec3::Y * 1.0 - (eye + Vec3::Y * 1.7)).normalize();
+                let yaw = (-to.x).atan2(-to.z).to_degrees();
+                let pitch = to.y.asin().to_degrees();
+                passage_note += &format!(
+                    "; {} market stalls on {} squares, one at --view={:.1},{:.1},{:.1},{yaw:.1},{pitch:.1}",
+                    stalls.len(),
+                    market_squares.len(),
+                    eye.x,
+                    eye.y + 1.7,
+                    eye.z
+                );
+            }
+        }
+        if !stalls.is_empty() {
+            kit_meshes.push(forge_geom::furniture::market_stall());
+            let id = (kit_meshes.len() - 1) as u32;
+            kit_instances.extend(stalls.iter().map(|&(at, colour)| (id, at, colour)));
+        }
         let mut chess = Vec::new();
         let mut games = Vec::new();
-        for (i, b) in
-            plan.blocks.iter().enumerate().filter(|(i, b)| {
-                b.use_ == BlockUse::Square && b.area >= 1500.0 && !held.contains(i)
-            })
-        {
+        for (i, b) in plan.blocks.iter().enumerate().filter(|(i, b)| {
+            b.use_ == BlockUse::Square
+                && b.area >= 1500.0
+                && !held.contains(i)
+                && !market_squares.contains(i)
+        }) {
             let middle = geom::centroid(&b.buildable);
             let (axis, _, _) = geom::oriented_extent(&b.buildable);
             let spots = (0..4)
@@ -1410,6 +1512,7 @@ impl PlanScenario {
                 .chain(parapet_pieces(size, plan, site, &shore))
                 .chain(garden_pieces(size, &gardens))
                 .chain(depot_walls)
+                .chain(stall_walls)
                 .collect(),
             passage_note,
             nets: nets.clone(),

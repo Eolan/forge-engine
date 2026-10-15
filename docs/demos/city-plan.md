@@ -716,6 +716,18 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
   and two stools. Its players sit as the terraces' guests do. Round a game being played, two to
   five people stand and watch, a step back on the players' sides (the owner: a few play, more
   watch, some pass by).
+- **markets** (`furniture::market_stall`, 2026-10-15; `research/ground-floors.md` §4.9: open-air
+  markets on the boulevards and squares; the owner's programme against monotony):
+  - **Where:** one square in two of 0.25 ha or more, without a landmark or a water mirror.
+  - **Layout:** rows of stalls facing each other across 3 m aisles along the square's long axis,
+    down its middle and 11 m either side where it is wide enough, 3.2 m apart.
+  - **Kept clear:** they stay inside the benches and clear of the trunks, and the fountain keeps
+    a ring of 7.5 m. Market squares have no chess tables.
+  - **A stall:** 3 × 2 m, a trestle table with crates along its front, four poles and a canvas
+    sloping from 2.5 to 2.3 m, in the kit's four awning colours. The walker walks round it.
+  - **The sandbox:** 147 stalls on 5 squares; the nearest is logged as a view.
+  - **Later:** market days and mornings only, with the week's rhythm; stallholders and
+    shoppers.
 - **fingerposts** (`signs.rs`; the owner got lost on their second walk): at each junction where
   two avenues meet, within the kit's reach, a dark pole by the kerb just past the dropped kerb,
   clear of the trunks. Up to three blue blades, each pointing the way to one of the nearest

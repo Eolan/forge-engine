@@ -270,6 +270,82 @@ pub fn street_workout() -> TriMesh {
     m
 }
 
+/// A market stall 3 m along `x` and 2 m deep, centred on the origin, its front to `+z`: a trestle
+/// table along the front with crates on it, four poles, and a canvas roof sloping down to the
+/// front from 2.5 m to 2.3 m (the walkers pass under its edge).
+pub fn market_stall() -> TriMesh {
+    let mut m = TriMesh::default();
+    let (hw, hd) = (1.5_f32, 1.0_f32);
+    // The table: a board on two trestles, 0.85 m high, 0.9 m deep at the front.
+    let (t0, t1) = (hd - 1.0, hd - 0.1);
+    cuboid(
+        &mut m,
+        Vec3::new(-hw + 0.1, 0.80, t0),
+        Vec3::new(hw - 0.1, 0.85, t1),
+        WOOD,
+        ALL,
+    );
+    for x in [-hw + 0.4, hw - 0.4] {
+        cuboid(
+            &mut m,
+            Vec3::new(x - 0.04, 0.0, t0 + 0.1),
+            Vec3::new(x + 0.04, 0.80, t1 - 0.1),
+            WOOD,
+            ALL & !NEG_Y,
+        );
+    }
+    // Crates along the table, tilted to the buyers by their height.
+    for k in 0..5 {
+        let x = -hw + 0.35 + k as f32 * 0.575;
+        cuboid(
+            &mut m,
+            Vec3::new(x - 0.25, 0.85, t0 + 0.15),
+            Vec3::new(x + 0.25, 0.85 + 0.12 + 0.02 * (k % 2) as f32, t1 - 0.1),
+            SHUTTER,
+            ALL & !NEG_Y,
+        );
+    }
+    // The poles and the canvas, its valance along the front.
+    for (x, z, h) in [
+        (-hw, -hd, 2.5),
+        (hw, -hd, 2.5),
+        (-hw, hd, 2.3),
+        (hw, hd, 2.3),
+    ] {
+        cuboid(
+            &mut m,
+            Vec3::new(x - 0.025, 0.0, z - 0.025),
+            Vec3::new(x + 0.025, h, z + 0.025),
+            METAL,
+            ALL & !NEG_Y,
+        );
+    }
+    let roof = [
+        Vec3::new(-hw - 0.05, 2.3, hd + 0.1),
+        Vec3::new(hw + 0.05, 2.3, hd + 0.1),
+        Vec3::new(hw + 0.05, 2.52, -hd - 0.05),
+        Vec3::new(-hw - 0.05, 2.52, -hd - 0.05),
+    ];
+    quad(&mut m, roof, FABRIC);
+    // Its underside 2 cm under it: the two faces on one plane folded into each other in the
+    // coarser levels, and half the canvas went missing from the air.
+    let under = roof.map(|p| p - Vec3::Y * 0.02);
+    quad(&mut m, [under[1], under[0], under[3], under[2]], FABRIC);
+    let valance = [
+        Vec3::new(-hw - 0.05, 2.12, hd + 0.1),
+        Vec3::new(hw + 0.05, 2.12, hd + 0.1),
+        Vec3::new(hw + 0.05, 2.3, hd + 0.1),
+        Vec3::new(-hw - 0.05, 2.3, hd + 0.1),
+    ];
+    quad(&mut m, valance, FABRIC);
+    quad(
+        &mut m,
+        [valance[1], valance[0], valance[3], valance[2]],
+        FABRIC,
+    );
+    m
+}
+
 /// A row of three bike stands 2.65 m long along `x`, centred on the origin: Sheffield stands, each
 /// an upturned U of steel 0.75 m tall and 0.7 m long in the row's line, every 0.95 m, a bike
 /// locked along each side.
@@ -616,6 +692,10 @@ mod tests {
             (
                 bike_rack(),
                 (Vec3::new(-1.35, 0.0, -0.15), Vec3::new(1.35, 0.8, 0.15)),
+            ),
+            (
+                market_stall(),
+                (Vec3::new(-1.6, 0.0, -1.1), Vec3::new(1.6, 2.6, 1.15)),
             ),
             (
                 terrace(4.0, 1),
