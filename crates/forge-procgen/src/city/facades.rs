@@ -169,24 +169,22 @@ pub fn edge_kinds(plan: &CityPlan, masses: &[Mass]) -> Vec<Vec<Option<FaceKind>>
                     .as_ref()
                     .is_some_and(|c| geom::contains(c, probe))
             };
-            // A neighbour's lot with a building on it: an empty lot is a garden.
-            let neighbour = || {
-                lots_of[lot.block as usize].iter().any(|&l| {
-                    l != m.lot
-                        && by_lot.contains_key(&l)
-                        && geom::contains(&plan.lots[l as usize].polygon, probe)
-                })
-            };
-            // A neighbour's building within 2.5 m, whatever lies between: a wall a metre from
-            // another is blank, not windows onto a slit (the owner's second walk).
-            let close = mid + out_dir * 2.5;
+            // A neighbour's building within 3 m straight out, whatever lot lies between: a wall
+            // a metre from another is blank, not windows onto a slit (the owner's second walk).
+            // Farther, the wall looks over the neighbour's garden and gets its windows: a wall
+            // onto a neighbour's lot was blank for the law's 1.9 m to a direct view, and the
+            // courts showed blank walls two sides out of four (the owner, 2026-10-15: "would
+            // not match if real apartments were inside").
             let crowded = || {
-                lots_of[lot.block as usize].iter().any(|&l| {
-                    l != m.lot
-                        && by_lot.get(&l).is_some_and(|ms| {
-                            ms.iter()
-                                .any(|&j| geom::contains(&masses[j as usize].footprint, close))
-                        })
+                [1.0, 2.0, 3.0].into_iter().any(|d| {
+                    let close = mid + out_dir * d;
+                    lots_of[lot.block as usize].iter().any(|&l| {
+                        l != m.lot
+                            && by_lot.get(&l).is_some_and(|ms| {
+                                ms.iter()
+                                    .any(|&j| geom::contains(&masses[j as usize].footprint, close))
+                            })
+                    })
                 })
             };
             let on_street = || {
@@ -203,8 +201,6 @@ pub fn edge_kinds(plan: &CityPlan, masses: &[Mass]) -> Vec<Vec<Option<FaceKind>>
                 Some(FaceKind::Party)
             } else if courtyard() {
                 Some(FaceKind::Court)
-            } else if neighbour() {
-                Some(FaceKind::Party)
             } else if on_street() {
                 Some(FaceKind::Street)
             } else {

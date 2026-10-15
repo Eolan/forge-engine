@@ -832,8 +832,19 @@ fn passages(plan: &CityPlan, masses: &[Mass], structures: &[Structure]) -> Vec<P
                         if slant > 0.0 && !geom::contains(&masses[i].footprint, (p + q) * 0.5) {
                             continue;
                         }
+                        // Onto the block's own court first: a wall onto a neighbour's garden
+                        // is a court wall too, for its windows, but a passage there reaches no
+                        // court (one went unreached when such walls got their windows).
+                        let out = {
+                            let t = (court.b - court.a).normalize_or_zero();
+                            DVec2::new(t.y, -t.x)
+                        };
+                        let into_court = plan.blocks[b as usize]
+                            .courtyard
+                            .as_ref()
+                            .is_some_and(|c| geom::contains(c, q + out));
                         // Straight ones first, then the longest street stretch.
-                        let score = hi - lo - 4.0 * slant;
+                        let score = hi - lo - 4.0 * slant + if into_court { 100.0 } else { 0.0 };
                         if best.is_none_or(|x| score > x.5) {
                             best = Some((i, sw, cw, mid, along, score));
                         }

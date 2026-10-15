@@ -220,14 +220,17 @@ Three stages, each generic:
   look onto:
   - the **street**: outside the wall is street, up to the building line;
   - the **courtyard**: the wall looks into its own lot or block;
-  - a **party wall**: a neighbour's lot lies against it.
+  - a **party wall**: another lot's building stands within 3 m of it.
 
   Walls between two pieces of one lot are inside the building and get no face, if the lot's
   other pieces cover them all along: each wall is probed at five points. A single probe at
   its middle dropped 816 of 2 627 walls covered only in part, and the courtyards saw into
   the buildings, their window frames floating (the owner's second walk). A wall with another
-  lot's building within 2.5 m is a party wall, blank, whatever lies between: a slit between two
-  buildings had windows facing a wall a metre away. A street face
+  lot's building within 3 m straight out is a party wall, blank, whatever lot lies between: a
+  slit between two buildings had windows facing a wall a metre away. Farther, the wall looks
+  over the neighbour's garden and gets its windows: a wall onto a neighbour's lot was blank
+  for the law's 1.9 m to a direct view, and the courts showed blank walls on two sides of four
+  (the owner, 2026-10-15: "would not match if real apartments were inside"). A street face
   knows the corners it turns, and each building's longest street face holds its entrance.
   `city-map` draws the split as `faces-centre.png`.
 - **`forge_procgen::grammar`, a split grammar** with CGA's operators (Müller et al. 2006):
@@ -312,7 +315,8 @@ No building is now under 4 m thick:
 - floors: 18.4 km² (was 18.3);
 - lots: 10 985 (was 11 048).
 
-An empty lot is a garden, not a neighbour: a wall onto one is a court face with windows.
+A neighbour's garden is a view, not a neighbour: a wall onto a lot whose building stands more
+than 3 m off is a court face with windows (2026-10-16; before, an empty lot only).
 
 **The trees, sized to their streets.** Trimmed street trees of 9–12 m line the avenues, 7–10 m trees
 the shared streets and 5–7 m trees the lanes. Each instance is scaled by its own crown
