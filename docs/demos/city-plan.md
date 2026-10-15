@@ -1192,7 +1192,7 @@ cargo run --release -p city-plan -- --street --walk-start --walk=1.0,-1.4   # a 
 ```
 
 Enter puts a Jolt character (1.8 m, the island's walker's) on the ground where the camera
-stands, and the camera at its eyes, 1.65 m up. WASD walks along the view, Shift runs, and the
+stands, and the camera at its eyes, 1.65 m up (Alt+Enter is the app's borderless fullscreen). WASD walks along the view, Shift runs, and the
 mouse turns the view. The masses round it are its walls: each footprint's convex hull raised to
 its parapet, kept within 80 m as it goes. The ground is one slab at the streets' level, and the
 pavements' 14 cm are stepped. A walk east into a lane's facade stops at its render.

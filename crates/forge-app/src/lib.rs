@@ -1449,6 +1449,19 @@ impl<D: Demo> ApplicationHandler for App<D> {
                         state.ctx.profile.cycle_mode();
                         return;
                     }
+                    // Alt+Enter: borderless fullscreen on the window's monitor, and back (the
+                    // owner). The demos never see that Enter.
+                    let alt = state.input.is_down(KeyCode::AltLeft)
+                        || state.input.is_down(KeyCode::AltRight);
+                    if alt && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter) {
+                        if pressed && !event.repeat {
+                            let full = state.ctx.window.fullscreen().is_none();
+                            state.ctx.window.set_fullscreen(
+                                full.then_some(winit::window::Fullscreen::Borderless(None)),
+                            );
+                        }
+                        return;
+                    }
                     // The HDR output (issue #94): on and off, the peak, the preview's false
                     // colours.
                     if pressed && code == KeyCode::F2 {

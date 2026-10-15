@@ -33,7 +33,8 @@ DLAA where it runs in an interactive run, D-045; TAA in a scripted one and elsew
 With Tracy: `cargo run --release -p asteroids --features profiling` and connect
 `tracy/tracy-profiler.exe`. DLSS is built in by default (the `dlss` feature; Windows, the
 Streamline SDK in `streamline-sdk/`, an RTX GPU; without them the ballad keeps TAA).
-Controls: **F1** profiling overlay (**1**–**9** fold a group), **P** pause the path and fly
+Controls: **F1** profiling overlay (**1**–**9** fold a group), **Alt+Enter** borderless
+fullscreen on the window's monitor and back (in every demo), **P** pause the path and fly
 freely (right mouse look, WASD/QE, Shift fast), **T** temporal anti-aliasing (sharpened,
 plain, off: `--rcas STOPS`, half a stop by default, `--no-rcas`; D-045), **O** occlusion
 culling, **C** cone culling, **L** cluster LOD, **K** LOD colours, **[** / **]** halve /
