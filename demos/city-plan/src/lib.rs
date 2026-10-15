@@ -450,6 +450,24 @@ impl PlanScenario {
             }
         }
         stagger_termini(&mut trams);
+        // Each terminus's crossover, the rails from the track the trams come in on to the one
+        // they leave by, 3 mm over the straight rails they cross.
+        for run in &trams {
+            let [(a0, a1), (b0, b1)] = run.crossovers();
+            for ((from, to), outbound) in [((a0, a1), false), ((b0, b1), true)] {
+                let steps = (to - from).ceil().max(1.0) as usize;
+                for rail in [-0.72, 0.72] {
+                    let points: Vec<DVec2> = (0..=steps)
+                        .map(|k| {
+                            let s = from + (to - from) * k as f64 / steps as f64;
+                            let (p, t) = run.track(s);
+                            p + DVec2::new(-t.y, t.x) * (run.side(s, outbound) + rail)
+                        })
+                        .collect();
+                    ribbon(&mut tiles, &points, 0.25, 0.223, TRACK);
+                }
+            }
+        }
         // What each wall looks onto: the kit's faces and where the roofs end in gables.
         let edges = facades::edge_kinds(plan, masses);
         let mut near = Vec::new();
@@ -565,6 +583,32 @@ impl PlanScenario {
                 / 2;
             passage_note += &format!(
                 "; {flats} garden flats, a court's gardens at --view={:.1},20.0,{:.1},0.0,-38.7",
+                eye.x, eye.z
+            );
+        }
+        // And the terminus nearest the kit's centre, from 12 m up over the line 25 m before its
+        // crossover, looking along it at the stop.
+        if let Some(d) = detail
+            && let Some((run, s)) = trams
+                .iter()
+                .flat_map(|r| {
+                    let stops = r.timetable.stops();
+                    [(r, stops[0]), (r, stops[stops.len() - 1])]
+                })
+                .min_by(|a, b| {
+                    let far = |(r, s): &(&TramRun, f64)| r.track(*s).0.distance(d.centre);
+                    far(a).total_cmp(&far(b))
+                })
+        {
+            let first = s == run.timetable.stops()[0];
+            let way = if first { -1.0 } else { 1.0 };
+            let (p, _) = run.track(s - way * (tram_length() * 0.5 + CROSSOVER + 25.0));
+            let eye = world(size, p, 12.0);
+            let to = (world(size, run.track(s).0, 0.0) - eye).normalize_or_zero();
+            let yaw = (-to.x).atan2(-to.z).to_degrees();
+            let pitch = to.y.asin().to_degrees();
+            passage_note += &format!(
+                "; a tram terminus at --view={:.1},12,{:.1},{yaw:.1},{pitch:.1}",
                 eye.x, eye.z
             );
         }
@@ -1270,6 +1314,18 @@ struct StopScreen {
 }
 /// The trams' sections: a cab, three passenger sections, a cab.
 const TRAM_SECTIONS: usize = 5;
+/// A crossover's length between a line's two tracks, metres: their 3.2 m over 30 m, about a
+/// tram turnout's 1 in 9.
+const CROSSOVER: f64 = 30.0;
+/// The room between a terminus crossover and the tram standing at its stop, metres.
+const CROSSOVER_CLEAR: f64 = 4.0;
+
+/// A tram's length, metres: its sections and the gaps between them.
+fn tram_length() -> f64 {
+    use forge_geom::vehicles::{SECTION_GAP, SECTION_LENGTH};
+    f64::from(SECTION_LENGTH) * TRAM_SECTIONS as f64
+        + f64::from(SECTION_GAP) * (TRAM_SECTIONS - 1) as f64
+}
 /// The trams' liveries: one group a line, the stripe in its colour.
 const TRAM_GROUPS: [&str; 8] = [
     "plan-tram-0",
@@ -1486,8 +1542,9 @@ impl TramRun {
             // The outbound track lies to the left of the line (+n), the inbound to the right.
             for (side, outbound) in [(1.0, true), (-1.0, false)] {
                 let (along, away) = (t * side, n * side);
-                // A tram stands with its front at the stop and its body behind.
-                let corner = p - along * (length - 2.0) + away * (TRACK_OFFSET + 1.35);
+                // A tram stands with its middle at the stop, both ways: the two platforms face
+                // each other, and a tram turning at an end stays where it stood.
+                let corner = p - along * (length * 0.5) + away * (TRACK_OFFSET + 1.35);
                 let axis = |d: DVec2| Vec3::new(d.x as f32, 0.0, d.y as f32);
                 let at = Mat4::from_cols(
                     axis(along).extend(0.0),
@@ -1501,24 +1558,51 @@ impl TramRun {
         out
     }
 
+    /// The terminus crossovers' spans along the route: past the first stop's standing tram on
+    /// the way in from the line, and before the last stop's. A tram coming in crosses to the
+    /// track it leaves by, and turns where it stands: it jumped a track's width and a tram's
+    /// length across and along as it turned.
+    fn crossovers(&self) -> [(f64, f64); 2] {
+        let stops = self.timetable.stops();
+        let reach = tram_length() * 0.5 + CROSSOVER_CLEAR;
+        let (first, last) = (stops[0], stops[stops.len() - 1]);
+        [
+            (first + reach, first + reach + CROSSOVER),
+            (last - reach - CROSSOVER, last - reach),
+        ]
+    }
+
+    /// How far left of the route a tram running `outbound` rides at `s`: on its own track, out
+    /// on the left one and back on the right, crossing over on an S-curve in the terminus
+    /// crossover it runs through on its way in.
+    fn side(&self, s: f64, outbound: bool) -> f64 {
+        let [(a0, a1), (b0, b1)] = self.crossovers();
+        let smooth = |u: f64| {
+            let u = u.clamp(0.0, 1.0);
+            u * u * (3.0 - 2.0 * u)
+        };
+        if outbound {
+            TRACK_OFFSET - 2.0 * TRACK_OFFSET * smooth((s - b0) / (b1 - b0))
+        } else {
+            -TRACK_OFFSET + 2.0 * TRACK_OFFSET * smooth((a1 - s) / (a1 - a0))
+        }
+    }
+
     /// The transforms of vehicle `k`'s sections at `time`, in a plan of side `size`: the
     /// front cab, the passenger sections, the rear cab (turned round), each set by its two
-    /// ends on the track of the way it runs.
+    /// ends on the track of the way it runs, the tram's middle at its place in the timetable.
     fn sections(&self, k: usize, time: f64, size: f64) -> [(Vec3, f32); TRAM_SECTIONS] {
         use forge_geom::vehicles::{SECTION_GAP, SECTION_LENGTH};
         let run = self.timetable.at(k, time);
-        let (dir, side) = if run.outbound {
-            (1.0, TRACK_OFFSET)
-        } else {
-            (-1.0, -TRACK_OFFSET)
-        };
+        let dir = if run.outbound { 1.0 } else { -1.0 };
         let on_track = |s: f64| {
             let (p, t) = self.track(s);
-            p + DVec2::new(-t.y, t.x) * side
+            p + DVec2::new(-t.y, t.x) * self.side(s, run.outbound)
         };
         let pitch = f64::from(SECTION_LENGTH + SECTION_GAP);
+        let nose = run.s + dir * tram_length() * 0.5;
         std::array::from_fn(|i| {
-            let front = run.s - dir * (pitch * i as f64 + f64::from(SECTION_GAP) * 0.5);
+            let front = nose - dir * pitch * i as f64;
             let rear = front - dir * f64::from(SECTION_LENGTH);
             let (a, b) = (on_track(front), on_track(rear));
             let heading = (a - b).normalize_or_zero();
@@ -4177,6 +4261,53 @@ fn lamp_model(double: bool) -> TriMesh {
 mod tests {
     use super::*;
     use forge_procgen::city::{example, plan};
+
+    #[test]
+    fn trams_turn_where_they_stand_having_crossed_over_on_the_way_in() {
+        let size = 4000.0;
+        let site = example::site(size, 10.0);
+        let city = plan(&site, &example::params(size));
+        let mut runs: Vec<TramRun> = Vec::new();
+        let mut taken: Vec<DVec2> = Vec::new();
+        for l in &city.tram_lines {
+            if let Some(run) = TramRun::new(l, &city, &site, &taken) {
+                taken.extend(run.timetable.stops().iter().map(|&s| run.track(s).0));
+                runs.push(run);
+            }
+        }
+        stagger_termini(&mut runs);
+        assert!(!runs.is_empty());
+        // Every quarter second of a whole cycle, each section's middle within a quarter second's
+        // run at the cruise of where a section was the moment before (the cabs swap ends as a
+        // tram turns, so the nearest), the outer track on the tightest curve running longer
+        // than the line: a tram turning at an end jumped 3.2 m across and a tram's length along.
+        let dt = 0.25;
+        let outer = 1.0 + (TRACK_OFFSET + 0.5) / forge_procgen::city::transit::TRAM_RADIUS;
+        let reach = (Service::default().cruise * dt * outer) as f32 + 0.1;
+        for (i, run) in runs.iter().enumerate() {
+            let (mut worst, mut prev): (f32, Option<Vec<Vec3>>) = (0.0, None);
+            let mut t = 0.0;
+            while t < run.timetable.cycle() {
+                let now: Vec<Vec3> = run.sections(0, t, size).iter().map(|s| s.0).collect();
+                if let Some(before) = &prev {
+                    for p in &now {
+                        let moved = before
+                            .iter()
+                            .map(|q| q.distance(*p))
+                            .fold(f32::MAX, f32::min);
+                        worst = worst.max(moved);
+                    }
+                }
+                prev = Some(now);
+                t += dt;
+            }
+            println!("line {i}: a section moved {worst:.2} m in {dt} s at most");
+            assert!(
+                worst <= reach,
+                "line {i}: a section moved {worst:.2} m in {dt} s"
+            );
+        }
+    }
 
     #[test]
     fn water_mirrors_lie_level_in_their_squares_clear_of_the_trees_and_benches() {

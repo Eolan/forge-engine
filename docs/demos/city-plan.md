@@ -488,6 +488,17 @@ the line's colour, articulated round the curve, on the right-hand track.*
 - **In the scene,** each line gets two tracks 3.2 m apart, one each way. Each section is a
   mover set every frame by its two ends on the track (the bogie points), so a tram bends
   through curves.
+- **Stops and turns** (2026-10-15). A tram stands with its middle at its stop both ways, so the
+  two platforms face each other. Before each end's platform, a crossover takes a tram coming in
+  across to the track it leaves by: an S-curve 30 m long, its rails drawn 3 mm over the straight
+  ones. The tram then turns where it stands.
+  - Before this, a tram turning at an end jumped 3.2 m across and a whole tram's length along:
+    its front stood at the stop, and the other way's platform lay beyond it.
+  - Test `trams_turn_where_they_stand_having_crossed_over_on_the_way_in`: over whole cycles, no
+    section moves more than a quarter second at the cruise allows (3.8 m on the outer track of
+    an 18 m curve).
+  - Depots, mid-line crossovers and tail tracks are next (`research/transit-and-vehicles.md`
+    §10).
 
 The example's two lines run 10 trams.
 

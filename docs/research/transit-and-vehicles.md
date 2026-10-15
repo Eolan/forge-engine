@@ -1490,6 +1490,76 @@ standards are paywalled, so only the published summaries were read.
 *Not read:* the standards' full texts and the Handbook (paywalled). Its numbers are taken from
 the summaries above, and are *(estimates)* for a spec.
 
+## 10. Tram depots, crossovers and termini (2026-10-15)
+
+The owner asked for one or more tram depots (maintenance, stabling), and for sidings or loops
+where a broken-down tram can wait without stopping its line, as real networks have. A research
+agent searched the web. Tags: [O] read on the page, [S] seen in a search result only, [D] the
+agent's arithmetic.
+
+**Depots.**
+- **Nice, Las Planas** [O]: 2.8 ha for 28 five-section trams, by line 1's terminus. It has pit
+  tracks under roof gantries, a wash, a paint booth and a short test track
+  ([Railway Gazette](https://railwaygazette.com/32375.article)).
+- **Luxembourg, Kirchberg** [O]: 32 trams on about 3.3 ha. It has 8 stabling tracks, 3
+  service tracks (wash, sanding, a pit wheel lathe), 4 pit tracks, a test track and about 4 km
+  of track
+  ([gouvernement.lu](https://gouvernement.lu/fr/actualites/toutes_actualites/articles/2015/09-septembre/21-tramsschapp-kirchberg.html)).
+- **Lyon, Saint-Fons (T10)** [O]: 2.6 ha for 30 trams of 43 m. Its four zones: stabling,
+  routine maintenance, service and wash, arrival and departure
+  ([Lyon Capitale](https://www.lyoncapitale.fr/?p=507366)).
+- **Lyon, Meyzieu** [O]: two new stabling tracks of 200 m hold four 43 m trams each. The
+  connecting curve has a 25 m radius
+  ([ETF](https://www.etf.fr/en/agences-grands-projets-transports-urbains-en/le-depot-de-tramway-de-meyzieu-vient-de-sagrandir-pour-accueillir-plus-de-rames)).
+- **Vitoria-Gasteiz, Betoño** [O]: 226 × 108 m for 22 trams of 45 m. It has 11 stabling tracks
+  of two places each and an outdoor wash; the main workshop is elsewhere
+  ([Euskotren](https://euskotren.eus/en/node/14273)).
+- **Per network** [O]: Bordeaux has 3 depots for 130 trams on about 82 km; Strasbourg 3 (shared
+  with buses) for 114 trams on 6 lines; Lyon 3 and a storage site. Montpellier placed its third
+  in the east to balance the two western ones, on land no housing could use.
+- **Where:** near line ends, on cheap or industrial land, joined by a double-track service line
+  (single for small depots) ([Montpellier's consultation](https://participer.montpellier.fr/sites/default/files/2022-06/CEMG%20-%20D%C3%A9lib%C3%A9ration%203M%20-%20Bilan%20de%20la%20concertation.pdf)).
+
+**Rules of thumb:**
+- about 0.9–1.1 ha for 10 trams [D];
+- 100–150 m of depot track per tram [D];
+- a stabling place the tram's length and 5–7 m [D];
+- curves of 18–25 m in a depot and 25 m or more on the line (Alstom Citadis; Polish rules:
+  50 m on the line, 25 m at junctions and termini, 20 m in depots
+  ([TechTrans](https://reference-global.com/download/article/10.37705/TechTrans/e2021015.pdf)));
+- an R50 tram turnout of 16.9 m overall ([Extrica](https://www.extrica.com/article/23203)).
+- Track spacing inside a depot: no source found; 4.5–5 m with walkways *(estimate)*.
+
+**Crossovers and termini.**
+- **Spacing:** the agent counted crossover tracks in OpenStreetMap [D, a minimum]: one every
+  1.2–2.0 km, a pair or a scissors every 2.5–4 km. Bordeaux has 52 on about 75 km, Strasbourg
+  43 on 52 km, Montpellier 32 on 64 km. No published spacing rule was found.
+- **Short turns:** Bordeaux had 11 partial termini on its 3 lines in 2015, and added switches
+  in 2024 so trams can turn back during incidents [O]
+  ([Bordeaux Métropole](https://www.bordeaux-metropole.fr/sites/MET-BXMETRO-DRUPAL/files/export/dp_terminus_partiels_21-01-2015.pdf)).
+- **Termini:**
+  - Paris T2's Porte de Versailles was rebuilt with side platforms and tail tracks that store 2
+    trams [O].
+  - van Oort and van Nes (2010) find a double crossover after the platforms the most reliable,
+    and a single tail track only fit for low frequencies [O]
+    ([World Transit Research](https://www.worldtransitresearch.info/research/3623)).
+
+**Patents.** None found on procedural depot or yard layout (Google Patents and the web only).
+The nearest:
+- Alstom's US8781803B2, a track plan from the network's topology for signalling, live until
+  about 2032;
+- KRRI's US12296875B2, a track-layout graph for interlocking.
+Neither covers the geometry.
+
+**What Forge took** (2026-10-15, `demos/city-plan`):
+- A crossover of 30 m before each end's platform: a tram coming in crosses to the track it
+  leaves by and turns where it stands, the two platforms facing each other.
+- *Next:*
+  - depots of about 1 ha for 10 trams on industrial land near line ends, 2–4 for a network,
+    joined by double track;
+  - a crossover pair every 3 km;
+  - tail tracks past busy termini.
+
 ## What professional engines do
 
 | Game or system | Transit model | Schedule or headway | Passengers | Capacity and crowding | Riding along | What users noticed |
