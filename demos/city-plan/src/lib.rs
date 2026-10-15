@@ -1279,6 +1279,13 @@ impl PlanScenario {
             })
             .map(|(i, _)| i)
             .collect();
+        // A morning market: packed away outside 6:30 to 14:00 when the run holds an hour, the
+        // chess tables back on its square.
+        let market_open = detail
+            .and_then(|d| d.lit_hour)
+            .is_none_or(|h| (6.5..14.0).contains(&h));
+        let market_squares: Vec<usize> =
+            market_squares.into_iter().filter(|_| market_open).collect();
         let mut stalls: Vec<(Mat4, u8)> = Vec::new();
         let mut stall_walls: Vec<Vec<Vec3>> = Vec::new();
         for &i in &market_squares {

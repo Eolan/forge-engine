@@ -760,7 +760,8 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
   - **The people** (with `--people`): within 220 m of the camera, each stall has its
     stallholder standing behind the table and nought to three shoppers in the aisle looking at
     the crates, as the chess games have their watchers.
-  - **Later:** market days and mornings only, with the week's rhythm.
+  - **Mornings:** with `--time-of-day` outside 6:30 to 14:00 the stalls are packed away and the
+    chess tables are back. Market days come with the week's rhythm.
 - **fingerposts** (`signs.rs`; the owner got lost on their second walk): at each junction where
   two avenues meet, within the kit's reach, a dark pole by the kerb just past the dropped kerb,
   clear of the trunks. Up to three blue blades, each pointing the way to one of the nearest
