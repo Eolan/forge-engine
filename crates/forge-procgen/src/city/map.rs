@@ -1002,3 +1002,38 @@ pub fn write_ground(
     }
     canvas.save(path)
 }
+
+/// A block's lots as [`super::parcels::strips`] cuts them, for a look: the court green, each lot
+/// in one of two sands with its street side red, the block's outline black, at
+/// `metres_per_pixel`.
+pub fn write_parcels(
+    block: &[DVec2],
+    lots: &[Vec<DVec2>],
+    court: &[DVec2],
+    path: &Path,
+    metres_per_pixel: f64,
+) -> image::ImageResult<()> {
+    let (lo, hi) = block.iter().fold(
+        (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)),
+        |(a, b), &p| (a.min(p), b.max(p)),
+    );
+    let size = (hi - lo).max_element() + 10.0;
+    let mut canvas = Canvas::window(lo - DVec2::splat(5.0), size, metres_per_pixel);
+    canvas.fill(court, [122, 172, 92]);
+    for (k, lot) in lots.iter().enumerate() {
+        let c = if k % 2 == 0 {
+            [226, 214, 190]
+        } else {
+            [206, 190, 160]
+        };
+        canvas.fill(lot, c);
+        let mut outline = lot.clone();
+        outline.push(lot[0]);
+        canvas.stroke(&outline, metres_per_pixel * 1.5, [90, 80, 60]);
+        canvas.stroke(&lot[..2], metres_per_pixel * 3.0, [214, 48, 40]);
+    }
+    let mut outline = block.to_vec();
+    outline.push(block[0]);
+    canvas.stroke(&outline, metres_per_pixel * 2.0, [20, 20, 20]);
+    canvas.save(path)
+}

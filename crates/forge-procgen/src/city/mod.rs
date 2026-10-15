@@ -33,6 +33,7 @@ pub mod ground;
 pub mod lamps;
 pub mod map;
 pub mod mass;
+pub mod parcels;
 pub mod shore;
 pub mod streets;
 pub mod structure;

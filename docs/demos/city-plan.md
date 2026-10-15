@@ -318,6 +318,20 @@ No building is now under 4 m thick:
 A neighbour's garden is a view, not a neighbour: a wall onto a lot whose building stands more
 than 3 m off is a court face with windows (2026-10-16; before, an empty lot only).
 
+**Parcels for the first map** (`city::parcels`, 2026-10-16; `research/parcels-and-rooms.md`):
+the lots above are cut across the piece's longer side, which on a tensor-field block gives
+wedges and slivers (the owner: "non-rectangle shaped buildings for no reason, spaces between
+them that don't make sense"). `parcels::strips` cuts a block the way a cadastre reads: each
+street side a strip of one depth (the block inset, mitred at the corners), the strip into lots
+by cuts square to its street at widths a type draws (a village house 5–8 m on 14 m; a
+perimeter block's building 12–25 m on 18 m), the corner lots taking the corners (an acute one
+gives a flatiron), a strip's end short of a lot's least width going to the last lot, a party
+side left to the court. The block's middle is the court. A block too thin or concave for the
+depth all round takes no strips, and the caller falls back on the cut above. Tested on a
+rectangle and a trapezoid (every lot's frontage on the outline, no lot under the least width,
+every inner party side square to the street); `PARCELS_PNG=path cargo test -p forge-procgen
+the_trapezoid` draws one. The first map's village takes it first; the city, block by block.
+
 **The trees, sized to their streets.** Trimmed street trees of 9–12 m line the avenues, 7–10 m trees
 the shared streets and 5–7 m trees the lanes. Each instance is scaled by its own crown
 across and its height up. The one model is a trunk forking into three limbs under a crown
