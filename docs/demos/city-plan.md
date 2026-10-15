@@ -350,8 +350,18 @@ upstairs). **On their lots** (`city::houses`): each strip's lot gets a household
 lot's width and the strip's depth less a 1.5 m yard; the footprint runs from the street to the
 plan's depth, cut to the lot where a corner lot narrows, the rest of the lot the garden.
 `HOUSES_PNG=path cargo test -p forge-procgen houses` draws the trapezoid block's houses, their
-footprints shaded by their storeys. Next: the structures (D-060) built from the plans, and the
-village on a small site.
+footprints shaded by their storeys.
+
+**The village** (`city::village`): a site a few hundred metres across planned as the city is
+(streets, blocks, parks: the example's site at 600 m gives 30 nodes, 44 edges, 15 blocks, 9
+built), each built block cut into strips of village lots and a house from its rooms put on each,
+the households drawn by the seed (one to five people; 15 % poor, 50 % modest, 30 % comfortable,
+5 % rich). The example village: 5 blocks with strips round their courts, 4 too thin or concave
+for the 14 m depth and so without houses yet, 191 houses, 586 people
+(`reports/2026-10-15/village-600m.png`; `VILLAGE_PNG=path cargo test -p forge-procgen village`
+draws it). Next: a shallower strip or the city's cut for the blocks without, the structures
+(D-060) built from the plans, the village's own site and street pattern (one main street, lanes
+off it), and the 3D.
 
 **The trees, sized to their streets.** Trimmed street trees of 9–12 m line the avenues, 7–10 m trees
 the shared streets and 5–7 m trees the lanes. Each instance is scaled by its own crown

@@ -1069,3 +1069,47 @@ pub fn write_houses(
     canvas.stroke(&outline, metres_per_pixel * 2.0, [20, 20, 20]);
     canvas.save(path)
 }
+
+/// The village as a map: the water, the parks and the built blocks' courts green, the streets
+/// in their widths, each lot pale with its street side red, each house's footprint a sand
+/// darker by its storeys, at `metres_per_pixel`.
+pub fn write_village(
+    village: &super::village::Village,
+    path: &Path,
+    metres_per_pixel: f64,
+) -> image::ImageResult<()> {
+    let plan = &village.plan;
+    let mut canvas = Canvas::new(plan.size, metres_per_pixel);
+    for block in &plan.blocks {
+        let c = match block.use_ {
+            BlockUse::Park => PARK,
+            _ => [214, 208, 196],
+        };
+        canvas.fill(&block.polygon, c);
+    }
+    for b in &village.blocks {
+        canvas.fill(&b.court, [122, 172, 92]);
+        for h in &b.houses {
+            canvas.fill(&h.lot, [226, 214, 190]);
+            let mut outline = h.lot.clone();
+            outline.push(h.lot[0]);
+            canvas.stroke(&outline, metres_per_pixel * 1.2, [120, 108, 90]);
+            canvas.stroke(&h.lot[..2], metres_per_pixel * 2.5, [214, 48, 40]);
+            let storeys = h.plan.storeys.len().min(4) as u8;
+            let shade = 190 - 30 * storeys;
+            canvas.fill(&h.footprint, [shade + 30, shade, shade - 40]);
+        }
+    }
+    for e in &plan.roads.edges {
+        canvas.stroke(&e.points, e.profile.width(), [236, 232, 224]);
+    }
+    for e in &plan.roads.edges {
+        let w = e.profile.width();
+        canvas.stroke(
+            &e.points,
+            (w - 2.0 * super::blocks::STREET_HALF.min(w * 0.25)).max(2.0),
+            [70, 70, 76],
+        );
+    }
+    canvas.save(path)
+}

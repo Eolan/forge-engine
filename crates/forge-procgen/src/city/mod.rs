@@ -45,6 +45,7 @@ pub mod tram_depot;
 pub mod transit;
 pub mod trees;
 pub mod units;
+pub mod village;
 
 use std::time::Instant;
 

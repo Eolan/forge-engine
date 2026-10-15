@@ -939,3 +939,26 @@ fn no_street_is_left_with_a_jog() {
         city.roads.edges.len()
     );
 }
+
+#[test]
+fn a_village_sized_site_plans() {
+    // The first map's scale (D-062): a site a few hundred metres across still plans, with its
+    // blocks and lots, so the village can start from the same machinery.
+    let size = 600.0;
+    let site = example::site(size, 10.0);
+    let city = plan(&site, &example::params(size));
+    let built = city
+        .blocks
+        .iter()
+        .filter(|b| b.use_ == BlockUse::Built)
+        .count();
+    println!(
+        "{} nodes, {} edges, {} blocks ({built} built), {} lots",
+        city.roads.nodes.len(),
+        city.roads.edges.len(),
+        city.blocks.len(),
+        city.lots.len()
+    );
+    assert!(built >= 4, "{built} built blocks");
+    assert!(city.lots.len() >= 20, "{} lots", city.lots.len());
+}
