@@ -27,8 +27,10 @@ pub const SECTIONS: u8 = 4;
 pub const SECTION_LENGTH: f32 = 6.4;
 /// The gap between two sections, metres, closed by the bellows.
 pub const SECTION_GAP: f32 = 0.3;
-/// The car's width, metres.
-pub const TRAM_WIDTH: f32 = 2.4;
+/// The car's width, metres: 2.55, between the common 2.4 and 2.65 (the owner: a little wider,
+/// more comfortable inside). The platforms' edges stand 1.35 m from the track's middle, so 7.5 cm
+/// from the car's side.
+pub const TRAM_WIDTH: f32 = 2.55;
 /// A section's floor over the rails, metres: a low floor, level with the stops' platforms
 /// (0.28 m over the 0.16 m pavement, the rails at 0.22).
 pub const FLOOR: f32 = 0.25;

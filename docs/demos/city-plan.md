@@ -542,7 +542,10 @@ the line's colour, articulated round the curve, on the right-hand track.*
     - the cabs' windscreens wrap round their sides;
     - the seats have deep cushions, tall backs and headrests.
 
-    Rounded windows wait for curved parts in the part programs.
+    Rounded windows wait for curved parts in the part programs. The cars are 2.55 m wide (were
+    2.4; the owner: a little wider, more comfortable inside). The platforms' edges stand 1.35 m
+    from the track's middle, 7.5 cm from the car. Two trams pass 0.65 m apart on the 3.2 m track
+    centres.
 - **Riding:** C boards the tram section nearest the camera (within 10 m), standing in its
   aisle and facing the way it runs; C again gets off on the platform's side, walking again if
   the rider walked. `--ride SECONDS` boards the nearest tram anywhere that far into a scripted
