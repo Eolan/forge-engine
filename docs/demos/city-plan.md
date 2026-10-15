@@ -588,11 +588,13 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
     1.4 m, with a path from the middle.
   - **The walker** walks round the planters, hedges and beds. No tree stands on a path, a
     terrace, a hedge or a bed.
-  - **Plants:** within 200 m past the kit, shrubs every metre in the planters and two rows of
-    vegetables every 0.8 m in the beds. They are small trees sunk in their boxes to their
-    crowns' middles. The boxes' flat green tops read as carpet; standing on them, the plants
-    showed their trunks like bonsais. The sandbox has 45 362, at 2.48 ms GPU for its street
-    view.
+  - **Plants:** within 400 m of the kit's centre, shrubs every metre in the planters and two
+    rows of vegetables every 0.8 m in the beds. They are small trees sunk in their boxes to their
+    crowns' middles.
+    - The boxes' flat green tops read as carpet; standing on them, the plants showed their
+      trunks like bonsais.
+    - Out to 1.2 km, a pixel or two each, they speckled the facades' feet from the air.
+    - The sandbox has 4 226; its planters' view takes 2.40 ms GPU.
   - **The example:**
     - 9 106 court-side flats, 4 579 with a garden, every one with its glazed bay;
     - 277 kitchen gardens of 1 864 beds;

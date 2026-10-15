@@ -789,10 +789,11 @@ impl PlanScenario {
                 )
             })
             .collect();
-        // Shrubs in the planters and vegetables in the kitchen gardens' beds near the kit, as
-        // small trees sunk in their boxes to the middle of their crowns (7 of a tree's height's
-        // tenths up), the trunks hidden: the boxes' flat green tops read as carpet, and standing
-        // on them the plants showed their trunks like bonsais.
+        // Shrubs in the planters and vegetables in the kitchen gardens' beds within
+        // [`PLANTS_REACH`] of the kit's centre, as small trees sunk in their boxes to the middle
+        // of their crowns (7 of a tree's height's tenths up), the trunks hidden: the boxes' flat
+        // green tops read as carpet, and standing on them the plants showed their trunks like
+        // bonsais. Further off, a pixel or two each, they speckled the facades' feet from the air.
         let mut plants = 0;
         for (k, g) in gardens.iter().enumerate() {
             let (spacing, crown, high, rows): (f64, f32, f32, &[f64]) = match g.kind {
@@ -801,7 +802,7 @@ impl PlanScenario {
                 _ => continue,
             };
             let c = geom::centroid(&g.outline);
-            if detail.is_none_or(|d| c.distance(d.centre) > d.radius + 200.0) {
+            if detail.is_none_or(|d| c.distance(d.centre) > PLANTS_REACH) {
                 continue;
             }
             let (e0, e1) = (g.outline[1] - g.outline[0], g.outline[2] - g.outline[1]);
@@ -1391,6 +1392,8 @@ struct StopScreen {
 }
 /// The trams' sections: a cab, three passenger sections, a cab.
 const TRAM_SECTIONS: usize = 5;
+/// How far from the kit's centre the planters and the beds carry plants, metres.
+const PLANTS_REACH: f64 = 400.0;
 /// A crossover's length between a line's two tracks, metres: their 3.2 m over 30 m, about a
 /// tram turnout's 1 in 9.
 const CROSSOVER: f64 = 30.0;
