@@ -2817,11 +2817,7 @@ const PARAPET: (f64, f64) = (1.0, 0.35);
 /// the banks exactly, and a quay street's edge over the water too. Run along the bridges' centre
 /// lines' sides, they went on past a bridge's end into the junction at its head, a wedge on the
 /// quay (the owner); cut by the site's cells, they first ran over the land and stopped short.
-fn parapet_lines(
-    plan: &CityPlan,
-    site: &Site,
-    shore: &Shore,
-) -> Vec<(Vec<DVec2>, Vec<DVec2>, f64)> {
+fn parapet_lines(plan: &CityPlan, site: &Site, shore: &Shore) -> Vec<Parapet> {
     let rivers: Vec<(DVec2, DVec2, f64)> = site
         .rivers
         .iter()
@@ -2839,7 +2835,7 @@ fn parapet_lines(
                 .iter()
                 .any(|&(a, b, h)| geom::distance_to_segment(p, a, b) < h)
     };
-    let mut out = Vec::new();
+    let mut segments = Vec::new();
     for t in &plan.ground.tiles {
         for &[a, b] in &t.outline {
             let d = b - a;
@@ -2852,15 +2848,57 @@ fn parapet_lines(
             if !wet((a + b) * 0.5 - inward * 0.6) {
                 continue;
             }
-            let inner = PARAPET.1;
-            out.push((
-                vec![a, b],
-                vec![a + inward * inner, b + inward * inner],
-                WALK_LEVEL,
-            ));
+            segments.push((a, b, inward));
         }
     }
+    // Each segment's inner line mitred against its neighbour's at a shared end, so a corner
+    // closes: each a box to its own end, they left a notch where the pavement wraps round the
+    // water, open ends showing (the owner), and overlapped where the water wraps round it.
+    let key = |p: DVec2| ((p.x * 100.0).round() as i64, (p.y * 100.0).round() as i64);
+    let mut starts = std::collections::HashMap::new();
+    let mut ends = std::collections::HashMap::new();
+    for (i, &(a, b, _)) in segments.iter().enumerate() {
+        starts.insert(key(a), i);
+        ends.insert(key(b), i);
+    }
+    let inner = PARAPET.1;
+    // Where the inner lines of `i` and `j` cross by their shared end `p`: `None` where they run on
+    // (the plain ends meet) or meet too sharply.
+    let mitre = |i: usize, j: usize, p: DVec2| -> Option<DVec2> {
+        let (ai, bi, ni) = segments[i];
+        let (aj, bj, nj) = segments[j];
+        let (di, dj) = ((bi - ai).normalize(), (bj - aj).normalize());
+        let turn = di.perp_dot(dj);
+        if turn.abs() < 1e-3 {
+            return None;
+        }
+        let (pi, pj) = (ai + ni * inner, aj + nj * inner);
+        let m = pi + di * ((pj - pi).perp_dot(dj) / turn);
+        (m.distance(p) < 4.0 * inner).then_some(m)
+    };
+    let mut out = Vec::new();
+    for (i, &(a, b, n)) in segments.iter().enumerate() {
+        let before = ends.get(&key(a)).copied().filter(|&j| j != i);
+        let after = starts.get(&key(b)).copied().filter(|&j| j != i);
+        let from = before.and_then(|j| mitre(j, i, a)).unwrap_or(a + n * inner);
+        let to = after.and_then(|j| mitre(i, j, b)).unwrap_or(b + n * inner);
+        out.push(Parapet {
+            outer: [a, b],
+            inner: [from, to],
+            base: WALK_LEVEL,
+            free: [before.is_none(), after.is_none()],
+        });
+    }
     out
+}
+
+/// A parapet's segment: its outer line over the water, its inner line over the pavement, the
+/// walking level it stands on, and whether each end is free (no parapet goes on from it).
+struct Parapet {
+    outer: [DVec2; 2],
+    inner: [DVec2; 2],
+    base: f64,
+    free: [bool; 2],
 }
 
 /// The bridges' stone parapets along both edges, a metre over the pavement, and the deck's side
@@ -2868,49 +2906,60 @@ fn parapet_lines(
 /// owner: the bridges' pavements looked broken).
 fn bridges(tiles: &mut Tiles, plan: &CityPlan, site: &Site, shore: &Shore) {
     let size = tiles.size;
-    for (outer, inner, base) in parapet_lines(plan, site, shore) {
+    for Parapet {
+        outer,
+        inner,
+        base,
+        free,
+    } in parapet_lines(plan, site, shore)
+    {
         let top = base + PARAPET.0;
         strip(tiles, &outer, &inner, top, QUAY);
-        for (line, other, bottom) in [(&outer, &inner, WATER_LEVEL), (&inner, &outer, base)] {
-            for (k, w) in line.windows(2).enumerate() {
-                let (a, b) = (w[0], w[1]);
-                // Facing away from the other line: out over the water, or in over the pavement.
-                let away = (a - other[k]).normalize_or_zero();
-                let normal = Vec3::new(away.x as f32, 0.0, away.y as f32);
-                let tile = tiles.at(a);
-                let centre = tile.centre;
-                let p = |q: DVec2, h: f64| world(size, q, h) - centre;
-                triangle(
-                    &mut tile.ground,
-                    [p(a, bottom), p(b, bottom), p(b, top)],
-                    normal,
-                    QUAY,
-                );
-                triangle(
-                    &mut tile.ground,
-                    [p(a, bottom), p(b, top), p(a, top)],
-                    normal,
-                    QUAY,
-                );
-            }
+        // A face from `a` to `b` facing `away`, from `bottom` to the top.
+        let mut face = |a: DVec2, b: DVec2, away: DVec2, bottom: f64| {
+            let away = away.normalize_or_zero();
+            let normal = Vec3::new(away.x as f32, 0.0, away.y as f32);
+            let tile = tiles.at(a);
+            let centre = tile.centre;
+            let p = |q: DVec2, h: f64| world(size, q, h) - centre;
+            triangle(
+                &mut tile.ground,
+                [p(a, bottom), p(b, bottom), p(b, top)],
+                normal,
+                QUAY,
+            );
+            triangle(
+                &mut tile.ground,
+                [p(a, bottom), p(b, top), p(a, top)],
+                normal,
+                QUAY,
+            );
+        };
+        // Out over the water, and in over the pavement: facing away from the other line.
+        face(outer[0], outer[1], outer[0] - inner[0], WATER_LEVEL);
+        face(inner[0], inner[1], inner[0] - outer[0], base);
+        // A free end closed: an open end showed the wall hollow.
+        let along = outer[1] - outer[0];
+        if free[0] {
+            face(inner[0], outer[0], -along, WATER_LEVEL);
+        }
+        if free[1] {
+            face(outer[1], inner[1], along, WATER_LEVEL);
         }
     }
 }
 
 /// The bridges' parapets as the walker's convex pieces, a segment each.
 fn parapet_pieces(size: f64, plan: &CityPlan, site: &Site, shore: &Shore) -> Vec<Vec<Vec3>> {
-    let mut out = Vec::new();
-    for (outer, inner, base) in parapet_lines(plan, site, shore) {
-        for k in 0..outer.len().min(inner.len()).saturating_sub(1) {
-            out.push(
-                [outer[k], outer[k + 1], inner[k + 1], inner[k]]
-                    .into_iter()
-                    .flat_map(|q| [world(size, q, 0.0), world(size, q, base + PARAPET.0)])
-                    .collect(),
-            );
-        }
-    }
-    out
+    parapet_lines(plan, site, shore)
+        .into_iter()
+        .map(|w| {
+            [w.outer[0], w.outer[1], w.inner[1], w.inner[0]]
+                .into_iter()
+                .flat_map(|q| [world(size, q, 0.0), world(size, q, w.base + PARAPET.0)])
+                .collect()
+        })
+        .collect()
 }
 
 /// The buildings' walls as the walker's convex pieces, the world's metres (D-060): each street,
@@ -3183,6 +3232,9 @@ fn ribbon(tiles: &mut Tiles, points: &[DVec2], width: f64, height: f64, section:
 
 /// A bay's width on the facades, metres: one repeat of the facade texture across.
 const BAY: f64 = 3.0;
+/// The far facades' texture coordinates in their levels of detail, metres of error per unit
+/// (`CookOptions::uv_weight`): a unit is the texture's [`textures::FACADE_CELLS`] bays, 12 m.
+const FACADE_UV_WEIGHT: f32 = textures::FACADE_CELLS as f32 * BAY as f32;
 /// A window bay's plain wall, left of its shutter, as a share of the bay across
 /// (`textures::facade`: the shutters from 0.17).
 const BAY_PLAIN: (f32, f32) = (0.02, 0.13);
@@ -3232,9 +3284,6 @@ fn wall_band(
     let flat = (plain.0 / repeat, plain.1 / repeat);
     let pieces = if bays < 1.0 {
         vec![(0.0, len, flat)]
-/// The far facades' texture coordinates in their levels of detail, metres of error per unit
-/// (`CookOptions::uv_weight`): a unit is the texture's [`textures::FACADE_CELLS`] bays, 12 m.
-const FACADE_UV_WEIGHT: f32 = textures::FACADE_CELLS as f32 * BAY as f32;
     } else {
         vec![
             (0.0, margin, flat),

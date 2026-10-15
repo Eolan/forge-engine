@@ -1165,7 +1165,11 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
   (a river's strip or the smooth shore's open water), so they follow the deck to the banks and
   a quay street's edge over the water too (D-061). Run along the bridges' centre lines' sides,
   they went on past a bridge's end into the junction at its head, a wedge on the quay (the
-  owner); cut by the site's cells, they first ran over the land, then stopped short.
+  owner); cut by the site's cells, they first ran over the land, then stopped short. Where two
+  walls met at a corner, each a box with square ends, they left a notch and showed an open end
+  (the owner, a quay's corner, 2026-10-15): each wall's inner line is now mitred against its
+  neighbour's at a shared end, and a free end is capped. View:
+  `reports/2026-10-15/parapet-corner-before-after.png`.
 - **street-workout parks:** one in each park of a hectare or more, 14 by 10 m on a rubber
   floor:
   - pull-up bars at three heights, monkey bars, parallel bars, a dip station;
