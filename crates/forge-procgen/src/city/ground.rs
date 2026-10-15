@@ -1177,6 +1177,54 @@ mod tests {
     }
 
     /// A crossroads of two avenues at (100, 100) in a 200 m frame, its arms 100 m long.
+    #[test]
+    fn every_ground_polygon_is_triangulated_whole() {
+        // Each tile's surfaces, cut into simple polygons and triangulated as the demos draw
+        // them: the triangles cover each polygon's area. A sliver left out shows the land
+        // through the pavement or a crossing (the owner, 2026-10-15: grass between a zebra's
+        // stripes).
+        let size = 4000.0;
+        let site = crate::city::example::site(size, 10.0);
+        let city = crate::city::plan(&site, &crate::city::example::params(size));
+        let (mut polygons, mut short, mut missing, mut worst) = (0usize, 0usize, 0.0f64, 0.0f64);
+        let mut at = DVec2::ZERO;
+        for t in &city.ground.tiles {
+            for shapes in [
+                &t.carriageway,
+                &t.crossings,
+                &t.stripes,
+                &t.raised,
+                &t.raised_stripes,
+                &t.walk,
+            ] {
+                for polygon in simple_polygons(shapes) {
+                    polygons += 1;
+                    let area = geom::signed_area(&polygon).abs();
+                    let covered: f64 = triangles(&polygon)
+                        .iter()
+                        .map(|t| geom::signed_area(t).abs())
+                        .sum();
+                    let gap = area - covered;
+                    if gap > 0.002 {
+                        short += 1;
+                        missing += gap;
+                        if gap > worst {
+                            worst = gap;
+                            at = polygon[0];
+                        }
+                    }
+                }
+            }
+        }
+        println!(
+            "{polygons} polygons, {short} short by over 0.002 m², {missing:.3} m² missing in \
+             all, the worst {worst:.3} m² at {:.0},{:.0}",
+            at.x, at.y
+        );
+        assert!(polygons > 10_000, "{polygons} polygons");
+        assert_eq!(short, 0, "{short} polygons short, {missing:.3} m² missing");
+    }
+
     fn crossroads(profile: Profile, side: Profile) -> RoadGraph {
         let node = |x: f64, y: f64| RoadNode {
             pos: DVec2::new(x, y),

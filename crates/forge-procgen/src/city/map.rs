@@ -914,3 +914,72 @@ pub fn write_faces(
     }
     canvas.save(path)
 }
+
+/// The street ground in `window`, as the demos lay it: the carriageways dark, the crossings
+/// lighter with their stripes white, the raised tables brown, the walks pale, and over them the
+/// blocks' ground off the streets in green (laid at the walk level, it hides any carriageway it
+/// overlaps), the blocks' outlines thin. For a sighting on the ground (grass between a zebra's
+/// stripes, a hole at a bridge's head), at a tenth of a metre a pixel or finer.
+pub fn write_ground(
+    plan: &CityPlan,
+    path: &Path,
+    window: (DVec2, f64),
+    metres_per_pixel: f64,
+) -> image::ImageResult<()> {
+    use super::ground;
+    let mut canvas = Canvas::window(window.0, window.1, metres_per_pixel);
+    let (lo, hi) = (window.0, window.0 + DVec2::splat(window.1));
+    // Each polygon as drawn, and a word on any the triangulation leaves short (the land shows
+    // through such a gap).
+    let mut fill = |shapes: &ground::Shapes, c: [u8; 3]| {
+        for polygon in ground::simple_polygons(shapes) {
+            let inside = polygon
+                .iter()
+                .any(|p| p.x >= lo.x && p.y >= lo.y && p.x <= hi.x && p.y <= hi.y);
+            if inside {
+                let area = geom::signed_area(&polygon).abs();
+                let covered: f64 = ground::triangles(&polygon)
+                    .iter()
+                    .map(|t| geom::signed_area(t).abs())
+                    .sum();
+                if area - covered > 1e-4 {
+                    eprintln!(
+                        "ground polygon short by {:.4} m² of {area:.2} at {:.1},{:.1} ({} points)",
+                        area - covered,
+                        polygon[0].x,
+                        polygon[0].y,
+                        polygon.len()
+                    );
+                }
+            }
+            canvas.fill(&polygon, c);
+        }
+    };
+    for t in &plan.ground.tiles {
+        if t.max.x < lo.x || t.max.y < lo.y || t.min.x > hi.x || t.min.y > hi.y {
+            continue;
+        }
+        fill(&t.carriageway, [70, 70, 76]);
+        fill(&t.crossings, [112, 112, 118]);
+        fill(&t.stripes, [232, 232, 232]);
+        fill(&t.raised, [126, 112, 100]);
+        fill(&t.raised_stripes, [236, 234, 228]);
+        fill(&t.walk, [206, 200, 190]);
+    }
+    for block in &plan.blocks {
+        let (blo, bhi) = block.polygon.iter().fold(
+            (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)),
+            |(a, b), &p| (a.min(p), b.max(p)),
+        );
+        if bhi.x < lo.x || bhi.y < lo.y || blo.x > hi.x || blo.y > hi.y {
+            continue;
+        }
+        for polygon in ground::simple_polygons(&plan.ground.off_streets(&block.polygon)) {
+            canvas.fill(&polygon, [122, 172, 92]);
+        }
+        let mut outline = block.polygon.clone();
+        outline.push(block.polygon[0]);
+        canvas.stroke(&outline, metres_per_pixel * 1.5, [30, 30, 30]);
+    }
+    canvas.save(path)
+}
