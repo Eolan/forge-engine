@@ -723,6 +723,9 @@ pub struct CityPlan {
     /// The walls round the gardens: the village's ([`walls::garden_walls`], #266); none in the
     /// city yet.
     pub walls: Vec<walls::Wall>,
+    /// The trees the plan's own generators planted: the village's gardens' olives (#266);
+    /// none in the city. `trees::trees` adds them to its own.
+    pub planted: Vec<trees::Tree>,
     /// Its numbers.
     pub stats: PlanStats,
     /// Each stage's time, milliseconds.
@@ -1250,6 +1253,7 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
         crossings,
         landmarks,
         walls: Vec::new(),
+        planted: Vec::new(),
         stats: PlanStats::default(),
         timings: Vec::new(),
     };

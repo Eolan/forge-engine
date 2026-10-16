@@ -21,6 +21,8 @@ pub enum Setting {
     Courtyard,
     /// In the countryside's forest beyond the districts' reach.
     Forest,
+    /// In a house's garden: the village's olives (#266).
+    Garden,
 }
 
 /// A tree.
@@ -414,6 +416,8 @@ pub fn trees(site: &Site, plan: &CityPlan, seed: u64) -> Vec<Tree> {
             });
         }
     }
+    // The trees the plan's own generators planted: the village's gardens' olives.
+    out.extend(plan.planted.iter().copied());
     out
 }
 

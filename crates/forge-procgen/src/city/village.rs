@@ -17,6 +17,7 @@ use super::mass::{Mass, Roof};
 use super::parcels::{self, ParcelType};
 use super::rooms::{self, Means};
 use super::structure::Era;
+use super::trees::{Setting, Tree};
 use super::units;
 use super::walls;
 use super::{
@@ -256,6 +257,11 @@ pub fn village(site: &Site, params: &CityParams, seed: u64) -> Village {
         let i = built.iter().position(|&x| x == b).unwrap_or(0);
         cuts[i] = cut_block(b, rich);
     }
+    // The olive, the gardens' tree, among the grower's species.
+    let olive = forge_flora::species::mediterranean()
+        .iter()
+        .position(|s| s.id == "olive")
+        .map(|i| i as u16);
     let mut blocks = Vec::new();
     let mut masses = Vec::new();
     let mut without = 0;
@@ -279,6 +285,52 @@ pub fn village(site: &Site, params: &CityParams, seed: u64) -> Village {
         };
         let garden = walls::garden_walls(&outline, &lots, &court, &footprints, front);
         city.walls.extend(garden.walls);
+        // The gardens' olives (`trees::Setting::Garden`): behind each house where 30 m² or more
+        // stay 1.5 m clear of it, one at the garden's middle, two along a garden of 150 m² or
+        // more; a lot without a house is all garden.
+        for (k, lot) in lots.iter().enumerate() {
+            let t = (lot[1] - lot[0]).normalize_or_zero();
+            let n = DVec2::new(-t.y, t.x);
+            let ground = match houses.iter().find(|h| h.lot == *lot) {
+                Some(h) => {
+                    let back = h
+                        .footprint
+                        .iter()
+                        .map(|&p| (p - lot[0]).dot(n))
+                        .fold(0.0, f64::max)
+                        + 1.5;
+                    geom::clean(
+                        &geom::clip_half_plane(lot, lot[0] + n * back, DVec2::new(n.y, -n.x)),
+                        1e-6,
+                    )
+                }
+                None => lot.clone(),
+            };
+            if ground.len() < 3 || geom::signed_area(&ground).abs() < 30.0 {
+                continue;
+            }
+            let area = geom::signed_area(&ground).abs();
+            let middle = geom::centroid(&ground);
+            let (axis, extent, _) = geom::oriented_extent(&ground);
+            let spots: Vec<DVec2> = if area >= 150.0 {
+                vec![
+                    middle - axis * extent.x * 0.25,
+                    middle + axis * extent.x * 0.25,
+                ]
+            } else {
+                vec![middle]
+            };
+            let mut rng = SplitMix64::new(seed ^ ((b as u64) << 20) ^ (k as u64) ^ 0x0717_7EE5);
+            for p in spots.into_iter().filter(|&p| geom::contains(&ground, p)) {
+                city.planted.push(Tree {
+                    pos: p,
+                    height: rng.range_f64(4.5, 7.0),
+                    crown: rng.range_f64(2.0, 3.2),
+                    setting: Setting::Garden,
+                    species: olive,
+                });
+            }
+        }
         blocks.push(VillageBlock {
             block: b,
             lots,
@@ -518,6 +570,10 @@ mod tests {
             along(false)
         );
         assert!(along(true) > 100.0 && along(false) > 100.0 && gates >= 5);
+        // The gardens' olives, behind the houses.
+        let olives = v.plan.planted.len();
+        println!("{olives} olives in the gardens");
+        assert!(olives >= 20, "{olives} olives");
         for (i, w) in v.plan.walls.iter().enumerate() {
             let mid = (w.a + w.b) * 0.5;
             assert!(

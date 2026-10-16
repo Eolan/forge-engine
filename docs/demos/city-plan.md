@@ -404,7 +404,12 @@ a shrub's of 20 triangles. A tree takes 8 000 to 33 000 triangles, a shrub about
 graphs' 2 000 to 250 000; the demo's test keeps them under 40 000 and 1 000). The map check's
 views take 2.2–2.6 ms of GPU where they took 1.6–1.9. The foliage is lumps until D-013's leaf
 cards, which need a leaf atlas (drawn procedurally, or a CC0 one downloaded on the owner's
-go). The road through the forest: `reports/2026-10-16/village-forest.png`. A village's whole network is under the 3 km a cut-off
+go). The road through the forest: `reports/2026-10-16/village-forest.png`. **The gardens' olives**
+(the same afternoon): behind each house where 30 m² or more of garden stay 1.5 m clear of it,
+an olive of 4.5–7 m at the garden's middle, two along a garden of 150 m² or more, a lot
+without a house all garden; the village plants them in the plan's own trees
+(`CityPlan::planted`, `trees::Setting::Garden`), grown and drawn as the forest's (72 in the
+village). A village's whole network is under the 3 km a cut-off
 network had to reach to be kept (`graph::MIN_NETWORK`), so the plan came out empty under
 twice the radius: a network is now kept over 3 km or over half of all the streets. The example
 site at 600 m on its own plan: 16 nodes, 22 edges, 7 blocks, 5 built and all with strips, 171
