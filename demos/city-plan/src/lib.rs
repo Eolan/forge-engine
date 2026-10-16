@@ -3094,6 +3094,38 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
                     cap(mesh, poly, st.level, Vec3::Y, KIT_INSIDE_FLOOR);
                     cap(mesh, poly, st.level - st.slab, -Vec3::Y, plaster);
                 }
+                // The opening's four edges through the slab, facing into it: with the slab's top
+                // and underside alone, the opening's rim was a slot one saw through from the hall
+                // (the owner, 2026-10-17: "a kind of black rectangle ... it looks like a gap in
+                // the geometry").
+                if let Some(h) = hole(k) {
+                    let middle = (h[0] + h[1] + h[2] + h[3]) * 0.25;
+                    for i in 0..4 {
+                        let (a, b) = (h[i], h[(i + 1) % 4]);
+                        let t = (b - a).normalize_or_zero();
+                        let mut n = DVec2::new(-t.y, t.x);
+                        if n.dot(middle - a) < 0.0 {
+                            n = -n;
+                        }
+                        let normal = Vec3::new(n.x as f32, 0.0, n.y as f32);
+                        let (y0, y1) = (st.level - st.slab, st.level);
+                        let (l, d) = ((a.distance(b) / 3.0) as f32, (st.slab / 3.0) as f32);
+                        triangle_uv(
+                            mesh,
+                            [at(a, y0), at(b, y0), at(b, y1)],
+                            [[0.0, 0.0], [l, 0.0], [l, -d]],
+                            normal,
+                            plaster,
+                        );
+                        triangle_uv(
+                            mesh,
+                            [at(a, y0), at(b, y1), at(a, y1)],
+                            [[0.0, 0.0], [l, -d], [0.0, -d]],
+                            normal,
+                            plaster,
+                        );
+                    }
+                }
             }
         }
         if let Some(last) = s.storeys.last() {
@@ -3168,10 +3200,13 @@ fn floor_level(s: &Structure, k: usize) -> f64 {
     }
 }
 
-/// Each flight's soffit (`interior_solids` draws its steps): a slab sloping with the flight under
-/// its steps, its underside through the steps' back lower corners, so the flight seen from below
-/// is one smooth slope and not every step's flat bottom in a sawtooth; from where that underside
-/// leaves the floor to the last step, plastered as the walls.
+/// Each flight's soffit and strings (`interior_solids` draws its steps), plastered as the walls:
+/// - under its steps, a slope through the steps' back lower corners, from where it leaves the
+///   floor to the last step: from below the flight read as every step's flat bottom, a sawtooth;
+/// - on each side one face, the steps' profile over that slope (a closed string), 5 mm outside
+///   the steps' sides: the steps' own sides met each other half along their edges, and the light
+///   showed through the seams (the owner, 2026-10-17: "the side of the stairs have strange
+///   patterns").
 fn soffits(
     mesh: &mut TriMesh,
     at: &dyn Fn(DVec2, f64) -> Vec3,
@@ -3179,6 +3214,8 @@ fn soffits(
     inner: &interior::Interior,
     section: u8,
 ) {
+    /// How far the strings stand out of the steps' sides, metres.
+    const OUT: f64 = 0.005;
     let Some(stair) = inner.stair else {
         return;
     };
@@ -3187,24 +3224,25 @@ fn soffits(
     let a = across / width.max(1e-6);
     let c = inner.climb.normalize_or_zero();
     let g = cores::GOING;
+    let side = Vec3::new(a.x as f32, 0.0, a.y as f32);
+    let along = Vec3::new(c.x as f32, 0.0, c.y as f32);
+    let (lo, hi) = (-OUT, width + OUT);
     for (k, &r) in inner.risers.iter().enumerate() {
         if k + 1 >= s.storeys.len() || r < 3 {
             break;
         }
         let base = floor_level(s, k);
         let rise = (s.storeys[k + 1].level - base) / f64::from(r);
-        // The steps' nosings' line, the underside 2 risers and 15 cm under it (through each
-        // step's back lower corner), the top a riser under it (inside the steps).
-        let nosing = |v: f64| base + rise + v * rise / g;
-        let under = |v: f64| nosing(v) - 2.0 * rise - 0.15;
-        let over = |v: f64| nosing(v) - rise;
+        // The underside: two risers and 15 cm under the nosings' line, through each step's
+        // back lower corner.
+        let under = |v: f64| base + (v / g - 1.0) * rise - 0.15;
         let (v0, v1) = (g * (1.0 + 0.15 / rise), f64::from(r - 1) * g);
         if v1 <= v0 + 0.05 {
             continue;
         }
+        let top = base + f64::from(r - 1) * rise;
         let p = |v: f64, u: f64, y: f64| at(stair[0] + c * v + a * u, y);
         let slope = Vec3::new(c.x as f32, (rise / g) as f32, c.y as f32).normalize();
-        let side = Vec3::new(a.x as f32, 0.0, a.y as f32);
         let mut down = slope.cross(side).normalize();
         if down.y > 0.0 {
             down = -down;
@@ -3213,42 +3251,44 @@ fn soffits(
             triangle_uv(mesh, [q[0], q[1], q[2]], [[0.0; 2]; 3], n, section);
             triangle_uv(mesh, [q[0], q[2], q[3]], [[0.0; 2]; 3], n, section);
         };
-        // The underside.
         quad(
             mesh,
             [
-                p(v0, 0.0, under(v0)),
-                p(v1, 0.0, under(v1)),
-                p(v1, width, under(v1)),
-                p(v0, width, under(v0)),
+                p(v0, lo, under(v0)),
+                p(v1, lo, under(v1)),
+                p(v1, hi, under(v1)),
+                p(v0, hi, under(v0)),
             ],
             down,
         );
-        // Its two sides and its two ends.
-        for (u, n) in [(0.0, -side), (width, side)] {
-            quad(
-                mesh,
-                [
-                    p(v0, u, under(v0)),
-                    p(v1, u, under(v1)),
-                    p(v1, u, over(v1)),
-                    p(v0, u, over(v0)),
-                ],
-                n,
-            );
+        // Its head, from the underside up to the last step's top.
+        quad(
+            mesh,
+            [
+                p(v1, lo, under(v1)),
+                p(v1, hi, under(v1)),
+                p(v1, hi, top),
+                p(v1, lo, top),
+            ],
+            along,
+        );
+        // The strings: the steps' profile, then down the head and back along the underside.
+        let mut ring: Vec<DVec2> = vec![DVec2::new(0.0, base)];
+        for i in 0..r - 1 {
+            let y = base + f64::from(i + 1) * rise;
+            ring.push(DVec2::new(f64::from(i) * g, y));
+            ring.push(DVec2::new(f64::from(i + 1) * g, y));
         }
-        let along = Vec3::new(c.x as f32, 0.0, c.y as f32);
-        for (v, n) in [(v0, -along), (v1, along)] {
-            quad(
-                mesh,
-                [
-                    p(v, 0.0, under(v)),
-                    p(v, width, under(v)),
-                    p(v, width, over(v)),
-                    p(v, 0.0, over(v)),
-                ],
-                n,
-            );
+        ring.push(DVec2::new(v1, under(v1)));
+        ring.push(DVec2::new(v0, base));
+        if geom::signed_area(&ring) < 0.0 {
+            ring.reverse();
+        }
+        for (u, n) in [(lo, -side), (hi, side)] {
+            for t in geom::triangulate(&ring) {
+                let q = t.map(|i| p(ring[i].x, u, ring[i].y));
+                triangle_uv(mesh, q, [[0.0; 2]; 3], n, section);
+            }
         }
     }
 }
