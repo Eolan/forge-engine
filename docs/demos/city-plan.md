@@ -744,7 +744,14 @@ inner faces and ceilings are whitewashed, the white render whatever the facade's
 2026-10-16): in the facade's sand, ochre or rose the daylight that bounces round a closed room
 took the colour at each bounce, and the village's halls read a saturated orange
 (`KIT_INSIDE`; the map check's hall, room and way-in views moved by ꟻLIP means of 0.14–0.23,
-the street views by 0.001–0.007).
+the street views by 0.001–0.007). **Cooked apart since** (the same evening, #273): a smooth
+plaster row of their own (the facades' grain read as squiggles a step away indoors) darkened a
+flat roof from the air in the sandbox, because the insides were merged into each tile's masses
+mesh: a section of their own changed how that mesh simplified, and the coarser cut the sun's
+shadow rays meet put a ceiling through a roof (the raster, even with `--no-lod`, never showed
+it). The insides are now a mesh a tile of their own, drawn with the masses' rows and added after
+every other static instance, so each tree keeps its id and its tone. The day check then moves by
+ꟻLIP means of 0.002–0.009 (facade windows and the light on a shaded facade, no patch).
 The windows show nothing from inside yet (the glass is drawn for the street), and the far
 masses beyond the kit's reach stay hollow; going inside builds the real rooms (step 3).
 

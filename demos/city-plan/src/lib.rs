@@ -72,10 +72,11 @@ const ROOF_SOLAR: u8 = 6;
 const ROOF_TERRACE: u8 = 7;
 /// The kit's merged sections on the masses: four render tints, stone, party walls.
 const KIT_PLASTER: u8 = 8;
-/// The insides' walls and ceilings: the white render, whitewash, whatever the facade's tint.
-/// In the facade's sand, ochre or rose, the daylight bouncing round a room took the colour at
-/// every bounce, and the halls read orange.
-const KIT_INSIDE: u8 = KIT_PLASTER + 3;
+/// The insides' walls and ceilings: whitewash whatever the facade's tint, the white render without
+/// its grain (the row after the tiled roof). In the facade's sand, ochre or rose, the daylight
+/// bouncing round a room took the colour at every bounce, and the halls read orange; with the
+/// facades' grain the walls a step away showed squiggles.
+const KIT_INSIDE: u8 = 15;
 const KIT_STONE: u8 = 12;
 const KIT_PARTY: u8 = 13;
 /// The tiled roofs' section on the masses.
@@ -101,6 +102,10 @@ struct Tile {
     masses: TriMesh,
     /// The kit's railings' bars, one card each, drawn as a grating (`take_cards`).
     railings: TriMesh,
+    /// The kit buildings' insides (`insides`), drawn with the masses' rows but cooked apart:
+    /// merged into the masses, their own section changed how the masses simplify, and the
+    /// coarser cut the sun's shadow rays meet put a ceiling through a roof (#273).
+    insides: TriMesh,
 }
 
 impl Tile {
@@ -110,6 +115,7 @@ impl Tile {
             ground: TriMesh::default(),
             masses: TriMesh::default(),
             railings: TriMesh::default(),
+            insides: TriMesh::default(),
         }
     }
 }
@@ -995,7 +1001,10 @@ impl PlanScenario {
             .tiles
             .iter()
             .map(|t| {
-                t.ground.triangle_count() + t.masses.triangle_count() + t.railings.triangle_count()
+                t.ground.triangle_count()
+                    + t.masses.triangle_count()
+                    + t.railings.triangle_count()
+                    + t.insides.triangle_count()
             })
             .sum();
         let st = &plan.stats;
@@ -2694,7 +2703,7 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
         let tile = tiles.at(m.footprint[0]);
         let centre = tile.centre;
         let at = |q: DVec2, h: f64| world(size, q, h) - centre;
-        let mesh = &mut tile.masses;
+        let mesh = &mut tile.insides;
         let before = mesh.indices.len();
         let plaster = KIT_INSIDE;
         let top = m.height;
@@ -4438,6 +4447,13 @@ impl Scenario for PlanScenario {
                 ("plan stone".into(), stone),
                 ("plan party wall".into(), render([0.78, 0.72, 0.64])),
                 ("plan tiled roof".into(), tiles_row),
+                // The insides' walls and ceilings (`KIT_INSIDE`): the white render, smooth; a
+                // step away indoors the facades' grain read as squiggles, and at a third of its
+                // strength as rims round pebbles.
+                (
+                    "plan inside plaster".into(),
+                    colour([0.95, 0.93, 0.88], 10.0, 0.03),
+                ),
             ],
         );
         // The kit's groups: shutters and fascias in sage, blue-grey, blue and warm white, with
@@ -4996,6 +5012,16 @@ impl Scenario for PlanScenario {
             let shuttle = builder.add_mesh(&MeshletMesh::build(&vehicles::taxi_shuttle()));
             builder.set_mesh_material(shuttle, materials_taxi);
             tram_movers.push((shuttle, t.shuttles() as u32));
+        }
+        // The kit buildings' insides, a mesh a tile cooked apart from the masses (#273), last
+        // among the static instances so every other keeps its id (each tree's tone is hashed
+        // from it); the movers follow.
+        for tile in &self.tiles {
+            if tile.insides.indices.is_empty() {
+                continue;
+            }
+            let id = builder.add_mesh(&MeshletMesh::build(&tile.insides));
+            builder.add_instance_with_material(id, Mat4::from_translation(tile.centre), mass_row);
         }
         if !tram_movers.is_empty() {
             builder.reserve_movers(&tram_movers);
