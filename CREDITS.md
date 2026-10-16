@@ -603,6 +603,22 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   - **The ground's fields:** the topographic wetness index of Beven and Kirkby (above, as
     `forge_procgen::layers::wetness` uses it) for the moisture; Andrew Weiss, "Topographic
     Position and Landforms Analysis", ESRI User Conference 2001, for the ridges and the valleys.
+- **The fauna** (`forge-fauna`, #269; `docs/research/fauna.md`):
+  - **Flocks and steering:** Craig W. Reynolds, "Flocks, Herds, and Schools: A Distributed
+    Behavioral Model", SIGGRAPH 1987, and "Steering Behaviors For Autonomous Characters", GDC
+    1999 (obstacle avoidance by looking ahead).
+  - **The zones:** Iain D. Couzin, Jens Krause, Richard James, Graeme D. Ruxton and Nigel R.
+    Franks, "Collective Memory and Spatial Sorting in Animal Groups", *Journal of Theoretical
+    Biology* 218, 2002: repulsion first, then alignment and attraction.
+  - **Seven neighbours:** Michele Ballerini and co-authors, "Interaction ruling animal collective
+    behavior depends on topological rather than metric distance", *PNAS* 105, 2008.
+  - **A constant cruise and a turn:** Charlotte K. Hemelrijk and Hanno Hildenbrandt, "Some
+    Causes of the Variable Shape of Flocks of Birds", *PLoS ONE*, 2011 (StarDisplay).
+  - **Flight distances and the animals' numbers:** Díaz et al. 2013 (urban and rural birds across
+    Europe), García-Arroyo et al. 2023 (house sparrows), Legagneux and Ducatez 2013 (birds and
+    speed limits), Henningsson, Johansson and Hedenström 2010 (swifts), Alerstam et al. 2007
+    (flight speeds), Kays et al. 2020 and Jensen et al. 2022 (pet cats), Chebli et al. 2022 and
+    the Filabres study (goats), as `docs/research/fauna.md` lists them.
 
 **Sound** (`forge-audio`, #267, D-011):
 - **The audio thread's rules.** Ross Bencina, "Real-time audio programming 101: time waits for

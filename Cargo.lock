@@ -947,6 +947,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "forge-fauna"
+version = "0.1.0"
+dependencies = [
+ "forge-core",
+ "forge-flora",
+ "glam",
+ "serde",
+ "toml",
+]
+
+[[package]]
 name = "forge-flora"
 version = "0.1.0"
 dependencies = [

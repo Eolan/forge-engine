@@ -1,0 +1,197 @@
+# The village's and the city's animals (#269, #266): their sizes, speeds, groups and how close
+# they let people, vehicles, dogs and cats come. Sources in docs/research/fauna.md; a number with
+# no source beside it is Forge's estimate, marked so there.
+#
+# The fields are documented on `forge_fauna::Species`. Lengths in metres, speeds in metres a
+# second, turns in degrees a second. Flee distances are for a village (rural birds); a plan marked
+# urban scales the birds' by 0.55, Díaz et al. 2013's urban mean over its rural one across Europe
+# (7.12 m against 13.34 m).
+
+[[species]]
+id = "house-sparrow"
+name = "House sparrow"
+latin = "Passer domesticus"
+behaviour = "sparrow"
+body = 0.15
+# Small flocks feeding together; colonies in hedges and trees by the houses.
+group = [6, 14]
+walk = 0.4
+cruise = 8.0
+flee_speed = 11.0
+turn = 540.0
+climb = 3.0
+# Six to seven neighbours, as Ballerini et al. 2008 measured in starlings.
+neighbours = 7
+separation = 0.4
+# 10.0 m: the mean over 26 Catalan settlements, 4.2 m in a town's old centre to 18 m in the
+# smallest villages (García-Arroyo et al. 2023).
+flee_person = 10.0
+# At a 50 km/h limit; birds flee cars by the road's limit, not the car's speed (Legagneux and
+# Ducatez 2013). The distance is an estimate.
+flee_vehicle = 6.0
+flee_dog = 12.0
+# Cats stalk: birds see them late (estimate).
+flee_cat = 8.0
+range = 150.0
+
+[[species]]
+id = "feral-pigeon"
+name = "Feral pigeon"
+latin = "Columba livia"
+behaviour = "pigeon"
+body = 0.32
+group = [12, 30]
+walk = 0.6
+# Pigeons fly at 15–20 m/s (Alerstam et al. 2007).
+cruise = 16.0
+flee_speed = 18.0
+turn = 300.0
+climb = 4.0
+neighbours = 7
+separation = 0.8
+# Rock doves walk away before they fly and let people closest of the doves (Gendall et al. 2015);
+# the distance is an estimate.
+flee_person = 3.0
+# They start to walk away at one and a half times it (estimate).
+walk_off = 1.5
+flee_vehicle = 3.0
+flee_dog = 6.0
+flee_cat = 5.0
+range = 400.0
+
+[[species]]
+id = "yellow-legged-gull"
+name = "Yellow-legged gull"
+latin = "Larus michahellis"
+behaviour = "gull"
+body = 0.6
+group = [3, 8]
+walk = 0.9
+# Gulls fly at the slow end of 8–23 m/s (Alerstam et al. 2007).
+cruise = 11.0
+flee_speed = 13.0
+turn = 150.0
+climb = 2.5
+neighbours = 4
+separation = 2.0
+# Urban gulls let people closer than rural ones (Goumas et al. 2020, herring gulls); estimates.
+flee_person = 9.0
+walk_off = 1.3
+flee_vehicle = 5.0
+flee_dog = 14.0
+flee_cat = 2.0
+range = 600.0
+
+[[species]]
+id = "common-swift"
+name = "Common swift"
+latin = "Apus apus"
+behaviour = "swift"
+body = 0.17
+# Screaming parties of 10–20 over the nests on summer evenings.
+group = [10, 20]
+walk = 0.0
+# About 10 m/s foraging, 20.9 m/s in screaming parties, climbing at 4.0 m/s (Henningsson et al.
+# 2010).
+cruise = 10.0
+flee_speed = 20.9
+turn = 400.0
+climb = 4.0
+neighbours = 7
+separation = 1.0
+# Aloft or in their nests: they never flee walkers.
+flee_person = 0.0
+flee_vehicle = 0.0
+flee_dog = 0.0
+flee_cat = 0.0
+range = 1500.0
+
+[[species]]
+id = "domestic-cat"
+name = "Domestic cat"
+latin = "Felis catus"
+behaviour = "cat"
+body = 0.46
+group = [1, 1]
+walk = 0.8
+cruise = 1.2
+flee_speed = 4.0
+turn = 360.0
+climb = 0.0
+neighbours = 0
+separation = 0.0
+# Pet cats let people close; they leave for a wall or home when a dog comes (estimates).
+flee_person = 2.5
+flee_vehicle = 4.0
+flee_dog = 12.0
+flee_cat = 0.0
+# 3.6 ha on average over 925 pet cats (Kays et al. 2020): a disc of about 107 m; most ranges
+# are smaller, so 80 m.
+range = 80.0
+
+[[species]]
+id = "domestic-dog"
+name = "Domestic dog"
+latin = "Canis familiaris"
+behaviour = "dog"
+body = 0.7
+group = [1, 1]
+# Its owner's pace; it trots to catch up.
+walk = 1.2
+cruise = 2.0
+flee_speed = 0.0
+turn = 360.0
+climb = 0.0
+neighbours = 0
+separation = 0.0
+flee_person = 0.0
+flee_vehicle = 0.0
+flee_dog = 0.0
+flee_cat = 0.0
+range = 600.0
+leash = 1.8
+
+[[species]]
+id = "goat"
+name = "Goat"
+latin = "Capra hircus"
+behaviour = "goat"
+body = 1.2
+group = [12, 24]
+# Grazing pace; 4.3–7.4 km a day on Mediterranean ranges (Almería; Morocco's woodland).
+walk = 0.25
+cruise = 1.0
+flee_speed = 3.0
+turn = 180.0
+climb = 0.0
+neighbours = 6
+separation = 1.0
+# A herd used to its herder; estimates.
+flee_person = 4.0
+flee_vehicle = 8.0
+flee_dog = 20.0
+flee_cat = 0.0
+range = 400.0
+
+[[species]]
+id = "thicklip-grey-mullet"
+name = "Thicklip grey mullet"
+latin = "Chelon labrosus"
+behaviour = "fish"
+body = 0.35
+# Schools along the quays, grazing the walls.
+group = [20, 50]
+walk = 0.0
+# About a body length a second cruising; a fright's dart (estimates).
+cruise = 0.4
+flee_speed = 2.5
+turn = 360.0
+climb = 0.5
+neighbours = 7
+separation = 0.35
+# A person at the quay's edge, horizontally (estimate).
+flee_person = 3.0
+flee_vehicle = 0.0
+flee_dog = 3.0
+flee_cat = 0.0
+range = 40.0

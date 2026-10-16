@@ -67,7 +67,7 @@ Where Forge uses them:
 - `crossbeam-channel`: forge-task
 - `crossbeam-deque`: forge-task
 - `crossbeam-utils`: forge-task
-- `glam`: asteroids, city-blocks, city-map, city-plan, forge-anim, forge-app, forge-audio, forge-core, forge-flora, forge-geom, forge-net, forge-physics, forge-procgen, forge-render, forge-sim, forge-terrain, forge-world, meshlets, physics-lab, planet
+- `glam`: asteroids, city-blocks, city-map, city-plan, forge-anim, forge-app, forge-audio, forge-core, forge-fauna, forge-flora, forge-geom, forge-net, forge-physics, forge-procgen, forge-render, forge-sim, forge-terrain, forge-world, meshlets, physics-lab, planet
 - `gltf`: forge-anim, forge-geom
 - `gpu-allocator`: forge-gpu
 - `i_overlay`: forge-procgen
@@ -88,11 +88,11 @@ Where Forge uses them:
 - `ring`: forge-net
 - `rtrb`: forge-audio
 - `rustls`: forge-net
-- `serde`: city-blocks, forge-core, forge-flora, forge-procgen, forge-terrain
+- `serde`: city-blocks, forge-core, forge-fauna, forge-flora, forge-procgen, forge-terrain
 - `serde_json`: credits, forge-geom
 - `thiserror`: forge-anim, forge-audio, forge-geom, forge-gpu, forge-net, forge-physics, forge-sim
 - `tokio`: forge-net
-- `toml`: city-blocks, forge-flora, forge-procgen, forge-terrain
+- `toml`: city-blocks, forge-fauna, forge-flora, forge-procgen, forge-terrain
 - `tracing`: asteroids, city-blocks, city-plan, forge-app, forge-core, forge-gpu, forge-render, forge-task, forge-terrain, meshlets, physics-lab, planet
 - `tracing-subscriber`: forge-app
 - `tracy-client`: forge-app, forge-task

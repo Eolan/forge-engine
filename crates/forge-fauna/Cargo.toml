@@ -1,0 +1,18 @@
+[package]
+name = "forge-fauna"
+description = "Forge fauna off the GPU: the village's and the city's animals as behaviour (birds in flocks, cats, dogs with their owners, goats, fish by the quays), stepped at a fixed rate and deterministic by seed, with a CPU map of their day (#269)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+forge-core = { workspace = true }
+forge-flora = { workspace = true }
+glam = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
