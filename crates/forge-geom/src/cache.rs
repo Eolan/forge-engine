@@ -44,6 +44,34 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
     })
 }
 
+/// A digest of the code that cooks a mesh and stores it (the DAG, the clusters and their pages,
+/// this file, `forge-core`'s packing), from the sources built in: a key text that holds it keeps
+/// a cooked copy only while that code is unchanged, where [`COOK_VERSION`] waits for a hand
+/// (#274). Its line endings are left out, so a checkout's CRLF does not change it.
+pub fn cook_code() -> u64 {
+    static CODE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *CODE.get_or_init(|| {
+        [
+            include_str!("lod.rs"),
+            include_str!("meshlet.rs"),
+            include_str!("page.rs"),
+            include_str!("cache.rs"),
+            include_str!("../../forge-core/src/pack.rs"),
+        ]
+        .iter()
+        .fold(0xcbf2_9ce4_8422_2325, |hash, text| {
+            fnv1a64_from(hash, text.as_bytes().iter().filter(|&&b| b != b'\r'))
+        })
+    })
+}
+
+/// FNV-1a over `bytes`, from `hash`.
+fn fnv1a64_from<'a>(hash: u64, bytes: impl Iterator<Item = &'a u8>) -> u64 {
+    bytes.fold(hash, |h, &b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
+}
+
 /// The cache key of a mesh whose generator's parameters print as `key_text`.
 pub fn key(key_text: &str) -> u64 {
     fnv1a64(format!("{key_text}#cook{COOK_VERSION}").as_bytes())

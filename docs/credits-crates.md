@@ -60,7 +60,7 @@ Where Forge uses them:
 - `ash`: forge-gpu
 - `ash-window`: forge-gpu
 - `audionimbus`: forge-audio
-- `bytemuck`: forge-app, forge-core, forge-geom, forge-gpu, forge-render, planet
+- `bytemuck`: city-plan, forge-app, forge-core, forge-geom, forge-gpu, forge-render, planet
 - `bytes`: forge-net
 - `cc`: forge-physics
 - `clap`: asteroids, city-blocks, city-map, city-plan, contact-sheet, credits, genesis, imgdiff, meshlets, physics-lab, planet, population-bench, sharpness, task-bench
@@ -100,7 +100,7 @@ Where Forge uses them:
 - `tracy-client`: forge-app, forge-task
 - `windows-sys`: forge-gpu
 - `winit`: asteroids, city-blocks, city-plan, forge-app, meshlets, physics-lab, planet
-- `xxhash-rust`: forge-core, forge-gpu, forge-physics, forge-terrain
+- `xxhash-rust`: city-plan, forge-core, forge-gpu, forge-physics, forge-terrain
 
 ## Their dependencies (303)
 

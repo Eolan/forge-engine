@@ -494,6 +494,7 @@ version = "0.1.0"
 dependencies = [
  "ab_glyph",
  "anyhow",
+ "bytemuck",
  "city-blocks",
  "clap",
  "forge-app",
@@ -507,6 +508,7 @@ dependencies = [
  "glam",
  "tracing",
  "winit",
+ "xxhash-rust",
 ]
 
 [[package]]

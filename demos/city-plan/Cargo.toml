@@ -19,6 +19,7 @@ nrd = ["city-blocks/nrd"]
 [dependencies]
 ab_glyph = { workspace = true }
 anyhow = { workspace = true }
+bytemuck = { workspace = true }
 city-blocks = { workspace = true }
 clap = { workspace = true }
 forge-app = { workspace = true }
@@ -32,3 +33,4 @@ forge-sim = { workspace = true }
 glam = { workspace = true }
 tracing = { workspace = true }
 winit = { workspace = true }
+xxhash-rust = { workspace = true }
