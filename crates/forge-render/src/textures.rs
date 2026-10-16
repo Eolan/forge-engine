@@ -78,34 +78,61 @@ fn to_byte(x: f32) -> u8 {
     (x.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
 }
 
-/// Samples `f(u, v)` at every texel centre of a `size × size` grid.
-fn grid<T>(size: u32, f: impl Fn(f32, f32) -> T) -> Vec<T> {
-    let mut out = Vec::with_capacity((size * size) as usize);
-    for y in 0..size {
-        for x in 0..size {
-            out.push(f(
-                (x as f32 + 0.5) / size as f32,
-                (y as f32 + 0.5) / size as f32,
-            ));
+/// The fewest rows of a generated level a thread takes (a thread costs tens of microseconds to
+/// start).
+const ROWS_PER_THREAD: usize = 16;
+/// Texels a chunk of [`encode`]'s parallel work.
+const ENCODE_CHUNK: usize = 1 << 15;
+
+/// `f(x, y)` for every texel of a level `width` texels wide and `count` texels in all, the rows
+/// spread over the threads: each texel's value depends on it alone, never on the threads (the
+/// generated textures took 1.4 s of one thread at the village's start).
+fn texels<T: Send + Default + Clone>(
+    width: usize,
+    count: usize,
+    f: impl Fn(usize, usize) -> T + Sync,
+) -> Vec<T> {
+    let mut out = vec![T::default(); count];
+    par_chunks_mut(&mut out, width.max(1), ROWS_PER_THREAD, |y, row| {
+        for (x, texel) in row.iter_mut().enumerate() {
+            *texel = f(x, y);
         }
-    }
+    });
     out
+}
+
+/// A level's RGBA8 bytes, `f` encoding each texel, in chunks the threads share.
+fn encode<T: Sync>(level: &[T], f: impl Fn(&T) -> [u8; 4] + Sync) -> Vec<u8> {
+    let mut out = vec![0u8; level.len() * 4];
+    par_chunks_mut(&mut out, 4 * ENCODE_CHUNK, 1, |i, chunk| {
+        for (k, texel) in chunk.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            *texel = f(&level[i * ENCODE_CHUNK + k]);
+        }
+    });
+    out
+}
+
+/// Samples `f(u, v)` at every texel centre of a `size × size` grid.
+fn grid<T: Send + Default + Clone>(size: u32, f: impl Fn(f32, f32) -> T + Sync) -> Vec<T> {
+    texels(size as usize, (size * size) as usize, |x, y| {
+        f(
+            (x as f32 + 0.5) / size as f32,
+            (y as f32 + 0.5) / size as f32,
+        )
+    })
 }
 
 /// An albedo texture from linear colours, with its mips averaged in linear light.
 fn albedo_texture(name: &'static str, size: u32, linear: Vec<[f32; 3]>) -> TextureData {
     let encode = |level: &[[f32; 3]]| {
-        level
-            .iter()
-            .flat_map(|c| {
-                [
-                    to_byte(linear_to_srgb(c[0])),
-                    to_byte(linear_to_srgb(c[1])),
-                    to_byte(linear_to_srgb(c[2])),
-                    255,
-                ]
-            })
-            .collect::<Vec<u8>>()
+        encode(level, |c| {
+            [
+                to_byte(linear_to_srgb(c[0])),
+                to_byte(linear_to_srgb(c[1])),
+                to_byte(linear_to_srgb(c[2])),
+                255,
+            ]
+        })
     };
     let mut levels = vec![encode(&linear)];
     let (mut current, mut side) = (linear, size);
@@ -133,28 +160,23 @@ fn normal_texture(name: &'static str, size: u32, heights: &[f32], strength: f32)
         let s = i64::from(size);
         heights[(y.rem_euclid(s) * s + x.rem_euclid(s)) as usize]
     };
-    let mut normals = Vec::with_capacity(heights.len());
-    for y in 0..i64::from(size) {
-        for x in 0..i64::from(size) {
-            // Tangent x runs along +u and y along +v (down the rows), the axes the triplanar
-            // projection maps to object space.
-            let dx = (at(x + 1, y) - at(x - 1, y)) * 0.5 * strength;
-            let dy = (at(x, y + 1) - at(x, y - 1)) * 0.5 * strength;
-            normals.push(normalize([-dx, -dy, 1.0]));
-        }
-    }
+    let normals = texels(size as usize, heights.len(), |x, y| {
+        let (x, y) = (x as i64, y as i64);
+        // Tangent x runs along +u and y along +v (down the rows), the axes the triplanar
+        // projection maps to object space.
+        let dx = (at(x + 1, y) - at(x - 1, y)) * 0.5 * strength;
+        let dy = (at(x, y + 1) - at(x, y - 1)) * 0.5 * strength;
+        normalize([-dx, -dy, 1.0])
+    });
     let encode = |level: &[[f32; 3]]| {
-        level
-            .iter()
-            .flat_map(|n| {
-                [
-                    to_byte(n[0] * 0.5 + 0.5),
-                    to_byte(n[1] * 0.5 + 0.5),
-                    to_byte(n[2] * 0.5 + 0.5),
-                    255,
-                ]
-            })
-            .collect::<Vec<u8>>()
+        encode(level, |n| {
+            [
+                to_byte(n[0] * 0.5 + 0.5),
+                to_byte(n[1] * 0.5 + 0.5),
+                to_byte(n[2] * 0.5 + 0.5),
+                255,
+            ]
+        })
     };
     let mut levels = vec![encode(&normals)];
     let (mut current, mut side) = (normals, size);
@@ -184,17 +206,17 @@ fn normalize(v: [f32; 3]) -> [f32; 3] {
 }
 
 /// Halves a `side × side` level, each texel from its 2 × 2 block.
-fn downsample<T: Copy>(level: &[T], side: u32, f: impl Fn(T, T, T, T) -> T) -> Vec<T> {
+fn downsample<T: Copy + Send + Sync + Default>(
+    level: &[T],
+    side: u32,
+    f: impl Fn(T, T, T, T) -> T + Sync,
+) -> Vec<T> {
     let half = side / 2;
     let s = side as usize;
-    let mut out = Vec::with_capacity((half * half) as usize);
-    for y in 0..half as usize {
-        for x in 0..half as usize {
-            let i = 2 * y * s + 2 * x;
-            out.push(f(level[i], level[i + 1], level[i + s], level[i + s + 1]));
-        }
-    }
-    out
+    texels(half as usize, (half * half) as usize, |x, y| {
+        let i = 2 * y * s + 2 * x;
+        f(level[i], level[i + 1], level[i + s], level[i + s + 1])
+    })
 }
 
 fn mix3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
@@ -1134,10 +1156,14 @@ fn spray_strokes(seed: u64, spray: LeafSpray) -> Vec<Stroke> {
 /// so the test keeps the share level 0 keeps (Castaño 2010).
 pub fn leaves(seed: u64, size: u32) -> TextureData {
     let side = size as usize;
-    let mut texels = vec![[0.0_f32; 4]; side * side];
     let half = size as f32 * 0.5;
-    for spray in LeafSpray::ALL {
+    // Each spray paints its own quarter, on a thread of its own: no stroke leaves its quarter,
+    // so the quarters come out as one thread painting them in turn would leave them.
+    let hs = side / 2;
+    let paint = |spray: LeafSpray| {
         let q = spray.quarter();
+        let (ox, oy) = ((q % 2) as usize * hs, (q / 2) as usize * hs);
+        let mut quarter = vec![[0.0_f32; 4]; hs * hs];
         let origin = [(q % 2) as f32 * half, (q / 2) as f32 * half];
         // A quarter's unit square is `half` texels, inside a margin of 2 %.
         let scale = half * 0.96;
@@ -1195,7 +1221,7 @@ pub fn leaves(seed: u64, size: u32) -> TextureData {
                     if cover <= 0.0 {
                         continue;
                     }
-                    let texel = &mut texels[y * side + x];
+                    let texel = &mut quarter[(y - oy) * hs + (x - ox)];
                     let a = cover + texel[3] * (1.0 - cover);
                     for k in 0..3 {
                         texel[k] =
@@ -1204,6 +1230,25 @@ pub fn leaves(seed: u64, size: u32) -> TextureData {
                     texel[3] = a;
                 }
             }
+        }
+        quarter
+    };
+    let quarters: Vec<Vec<[f32; 4]>> = std::thread::scope(|scope| {
+        let painting: Vec<_> = LeafSpray::ALL
+            .map(|spray| scope.spawn(move || paint(spray)))
+            .into_iter()
+            .collect();
+        painting
+            .into_iter()
+            .map(|p| p.join().expect("a leaf spray's painting"))
+            .collect()
+    });
+    let mut texels = vec![[0.0_f32; 4]; side * side];
+    for (spray, quarter) in LeafSpray::ALL.into_iter().zip(&quarters) {
+        let q = spray.quarter() as usize;
+        let (ox, oy) = ((q % 2) * hs, (q / 2) * hs);
+        for (r, row) in quarter.chunks_exact(hs).enumerate() {
+            texels[(oy + r) * side + ox..][..hs].copy_from_slice(row);
         }
     }
     // The empty texels take the covered ones' mean colour.
@@ -1222,17 +1267,14 @@ pub fn leaves(seed: u64, size: u32) -> TextureData {
         }
     }
     let encode = |level: &[[f32; 4]]| {
-        level
-            .iter()
-            .flat_map(|c| {
-                [
-                    to_byte(linear_to_srgb(c[0])),
-                    to_byte(linear_to_srgb(c[1])),
-                    to_byte(linear_to_srgb(c[2])),
-                    to_byte(c[3]),
-                ]
-            })
-            .collect::<Vec<u8>>()
+        encode(level, |c| {
+            [
+                to_byte(linear_to_srgb(c[0])),
+                to_byte(linear_to_srgb(c[1])),
+                to_byte(linear_to_srgb(c[2])),
+                to_byte(c[3]),
+            ]
+        })
     };
     // The share of quarter `q`'s texels an alpha test at a half keeps, the alpha times `scale`.
     let kept = |level: &[[f32; 4]], side: u32, q: u32, scale: f32| {
