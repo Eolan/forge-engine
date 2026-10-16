@@ -412,11 +412,29 @@ pub fn assign_profiles(
     }
     for (i, e) in graph.edges.iter_mut().enumerate() {
         let mid = geom::point_at(&e.points, e.length() * 0.5);
-        let kind = district_index(districts_field, mid).map(|d| districts[d].kind);
+        // Beyond every district's reach, a road takes the nearest district's kind: a village's
+        // main road stays a shared street through its forest.
+        let kind = district_index(districts_field, mid)
+            .map(|d| districts[d].kind)
+            .or_else(|| {
+                districts
+                    .iter()
+                    .filter(|d| d.radius > 0.0)
+                    .min_by(|a, b| {
+                        (mid.distance(a.anchor) / a.radius)
+                            .total_cmp(&(mid.distance(b.anchor) / b.radius))
+                    })
+                    .map(|d| d.kind)
+            });
         e.profile = match (e.class, tram[i], kind) {
             (_, true, _) => Profile::TramAvenue,
+            // A village's main road is a shared street, its lanes pedestrian (D-062's first
+            // map): no avenue with its kerbs, bike lanes and lamp rows through a village.
+            (RoadClass::Main, false, Some(DistrictKind::Village)) => Profile::Shared,
             (RoadClass::Main, false, _) => Profile::Avenue,
-            (RoadClass::Street, false, Some(DistrictKind::OldTown)) => Profile::Pedestrian,
+            (RoadClass::Street, false, Some(DistrictKind::OldTown | DistrictKind::Village)) => {
+                Profile::Pedestrian
+            }
             (RoadClass::Street, false, Some(k)) if k.is_green() => Profile::Path,
             (RoadClass::Street, false, _) => Profile::Shared,
         };

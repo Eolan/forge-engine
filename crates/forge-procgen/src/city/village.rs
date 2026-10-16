@@ -245,6 +245,15 @@ mod tests {
             .count();
         println!("{} trees, {forest} in the forest", trees.len());
         assert!(forest >= 500, "{forest} forest trees");
+        let mut by_profile = std::collections::BTreeMap::new();
+        for e in &v.plan.roads.edges {
+            *by_profile.entry(format!("{:?}", e.profile)).or_insert(0) += 1;
+        }
+        println!("edges by profile: {by_profile:?}");
+        assert!(
+            !by_profile.contains_key("Avenue"),
+            "an avenue through the village"
+        );
         assert!(v.plan.tram_lines.is_empty() && v.plan.landmarks.is_empty());
         assert!(built >= 4, "{built} built blocks");
         assert!(houses >= 40, "{houses} houses");

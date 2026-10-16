@@ -386,10 +386,14 @@ clear of the roads (`trees::Setting::Forest`; pines and oaks of 8–16 m from th
 until the grower's species, #257). A village's whole network is under the 3 km a cut-off
 network had to reach to be kept (`graph::MIN_NETWORK`), so the plan came out empty under
 twice the radius: a network is now kept over 3 km or over half of all the streets. The example
-site at 600 m on its own plan: 16 nodes, 22 edges, 7 blocks, 5 built and all with strips, 177
-houses, 540 people, 3 136 trees in the forest (`reports/2026-10-16/village-own-organic.png`;
+site at 600 m on its own plan: 16 nodes, 22 edges, 7 blocks, 5 built and all with strips, 187
+houses, 565 people, 3 118 trees in the forest (`reports/2026-10-16/village-own-organic.png`;
 `VILLAGE_OWN_PNG=path` draws it). The first cut on the whole site, without the forest, had
-559 houses on 13 blocks.
+559 houses on 13 blocks. **Its streets:** a village's main road is a shared street (10 m of
+paving, no kerbs, bike lanes nor lamp rows) and its lanes are pedestrian, as an old town's,
+through the forest too (a road beyond every district's reach takes the nearest district's
+kind, `transit::assign_profiles`); the city's avenues stay. The narrower streets gave the
+blocks ten more houses.
 **In 3D:** `cargo run --release -p city-plan -- --village 600` draws the village on its own
 plan in place of the city, every house from the kit (`reports/2026-10-16/village-air.png` from
 the air, `village-street.png` from the first house's street, which the log names for
