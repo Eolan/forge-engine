@@ -474,6 +474,22 @@ kit reading the walls, collision, interiors, destruction):
 - **Cost:** 0.62 s for the sandbox's 39 048 masses at step 1 (3.4 M openings); 2.25 s today for
   its 31 538 (3.1 M openings) with the reach check and the cores.
 
+### Inside the walls (D-060 step 1, in 3D)
+
+A camera through a wall saw the city beyond the culled walls, the neighbours' party walls lit
+as if outdoors with the sun's shadows blurred over them, and the block's grass for a floor (the
+owner, 2026-10-15: "many useless things rendered inside the empty buildings"; the second
+flight's item 21). Since 2026-10-16 the kit's buildings carry their insides (`insides`): each
+street, court and party wall's inner face at the wall's thickness, run the thickness past each
+end so two meet at a corner; a stone floor a storey (the ground floor a hand over the block's
+ground) and a plaster ceiling under each slab and under the roof, on the footprint inset by
+the thickest wall. Nothing of it shows from outside (the sandbox's day check is unchanged),
+and inside a building one sees a dark room (the sandbox's
+`reports/2026-10-15/owner-views/inside/`, before and after). The sandbox's 4 205 kit buildings
+take 143 k triangles for it, and the view inside one draws in 2.20 ms as before (2.21).
+The windows show nothing from inside yet (the glass is drawn for the street), and the far
+masses beyond the kit's reach stay hollow; going inside builds the real rooms (step 3).
+
 ### Stair cores (D-060, step 3)
 
 `city::cores` puts the stairs and lifts in, by the French rules (the research note's §1):

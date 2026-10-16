@@ -648,6 +648,12 @@ impl PlanScenario {
                 &plan.ground.bollards,
             )
         });
+        // Their insides, for a camera that goes through a wall.
+        let inside_triangles = if detail.is_some() {
+            insides(&mut tiles, masses, &structures, &near)
+        } else {
+            0
+        };
         // The passages into the courts (D-060), and where to look into one: 10 m out on the
         // street before the kit's first, for the log once the app logs.
         let passages_in = |list: &mut dyn Iterator<Item = usize>| {
@@ -1134,7 +1140,7 @@ impl PlanScenario {
                 let report = format!(
                     "the kit's buildings: {} buildings, {} faces, {} terminals, {} instances of \
                      {} unique modules ({} k instanced triangles), longest run of one opening \
-                     {}, derived and assembled in {:.0} ms",
+                     {}, derived and assembled in {:.0} ms; their insides {} k triangles",
                     near.len(),
                     k.faces,
                     k.terminals,
@@ -1142,7 +1148,8 @@ impl PlanScenario {
                     k.meshes.len(),
                     instanced / 1000,
                     k.longest_run,
-                    k.ms
+                    k.ms,
+                    inside_triangles / 1000
                 );
                 let report = match k.lights {
                     Some(lights) => format!("{report}; {lights}"),
@@ -2571,6 +2578,80 @@ fn kit(
 const HEAD_HOUSE: f64 = 2.7;
 /// How far a lift's overrun rises over the roof, or over the head house, metres.
 const OVERRUN: f64 = 1.2;
+
+/// The insides of the kit's buildings (D-060): each wall's inner face at the wall's thickness,
+/// a floor and a ceiling a storey, so a camera inside one sees a dark room and not, through
+/// its culled walls, the city beyond, the neighbours' party walls and the sun's blurred shadows
+/// on them (the owner, 2026-10-15: "many useless things rendered inside the empty buildings").
+/// Nothing of it shows from outside. The triangles it adds.
+fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &[usize]) -> usize {
+    let size = tiles.size;
+    let mut count = 0;
+    for &i in near {
+        let (m, s) = (&masses[i], &structures[i]);
+        let tile = tiles.at(m.footprint[0]);
+        let centre = tile.centre;
+        let at = |q: DVec2, h: f64| world(size, q, h) - centre;
+        let mesh = &mut tile.masses;
+        let before = mesh.indices.len();
+        let plaster = KIT_PLASTER + tint_of(m.lot);
+        let top = m.height;
+        let mut deepest: f64 = 0.2;
+        for wall in &s.walls {
+            if wall.role == WallRole::Inner || wall.length() < 0.05 {
+                continue;
+            }
+            let deep = wall.thickness.max(0.2);
+            deepest = deepest.max(deep);
+            let t = (wall.b - wall.a).normalize_or_zero();
+            let inward = DVec2::new(-t.y, t.x);
+            // The face runs the wall's thickness past each end, so two faces meeting at a
+            // corner cover it.
+            let (a, b) = (wall.a + (inward - t) * deep, wall.b + (inward + t) * deep);
+            let normal = Vec3::new(-t.y as f32, 0.0, t.x as f32);
+            let (l, h) = ((a.distance(b) / 3.0) as f32, (top / 3.0) as f32);
+            triangle_uv(
+                mesh,
+                [at(a, 0.0), at(b, 0.0), at(b, top)],
+                [[0.0, 0.0], [l, 0.0], [l, -h]],
+                normal,
+                plaster,
+            );
+            triangle_uv(
+                mesh,
+                [at(a, 0.0), at(b, top), at(a, top)],
+                [[0.0, 0.0], [l, -h], [0.0, -h]],
+                normal,
+                plaster,
+            );
+        }
+        // The floors and the ceilings: the footprint inside its walls, a slab a storey, the
+        // ground floor a hand over the block's ground, the top ceiling under the roof.
+        let Some(ring) = geom::inset(&m.footprint, deepest).filter(|r| r.len() >= 3) else {
+            count += (mesh.indices.len() - before) / 3;
+            continue;
+        };
+        let tris = geom::triangulate(&ring);
+        let cap = |mesh: &mut TriMesh, y: f64, normal: Vec3, section: u8| {
+            for t in &tris {
+                let p = t.map(|k| at(ring[k], y));
+                triangle_uv(mesh, p, [[0.0; 2]; 3], normal, section);
+            }
+        };
+        for (k, st) in s.storeys.iter().enumerate() {
+            cap(mesh, st.level.max(0.05), Vec3::Y, KIT_STONE);
+            if k > 0 {
+                cap(mesh, st.level - st.slab, -Vec3::Y, plaster);
+            }
+        }
+        if let Some(last) = s.storeys.last() {
+            let ceiling = (last.level + last.height - last.slab).min(top - 0.05);
+            cap(mesh, ceiling, -Vec3::Y, plaster);
+        }
+        count += (mesh.indices.len() - before) / 3;
+    }
+    count
+}
 
 /// The cores' tops (D-060, step 3). Over each core that climbs to a garden or a terrace, a head
 /// house the stair and the lift arrive in, its door out on to the roof from the hall; over each
