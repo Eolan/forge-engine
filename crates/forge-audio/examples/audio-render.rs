@@ -25,7 +25,7 @@ use forge_audio::spatial::{AcousticMaterial, Attenuation, Occlusion};
 use forge_audio::stream::streams;
 use forge_audio::zones::{ReverbZone, ReverbZones, ZoneShape};
 use forge_audio::{
-    AudioEngine, BLOCK, BusId, BusLayout, Control, Foley, Impact, Listener, MixerConfig,
+    AudioEngine, BLOCK, BusId, BusLayout, Control, Foley, Footwear, Impact, Listener, MixerConfig,
     MixerStats, OfflineRenderer, PlayParams, SampleBuffer, Step, Surface, WavFormat, create,
     decode, wav_bytes, write_wav,
 };
@@ -153,7 +153,7 @@ fn scenes(out: &Path, only: Option<&str>) -> Result<()> {
         },
         Scene {
             name: "footsteps",
-            what: "a walk over stone, gravel, grass, wood, metal and water, then a run back; a crate on wood, a stone on metal, a sack into water",
+            what: "a walk in leather shoes over stone, gravel, grass, wood, metal and water, a run back; a crate on wood, a stone on metal, a sack into water; stone in trainers, boots, bare feet, sandals",
             render: footsteps,
         },
         Scene {
@@ -509,33 +509,57 @@ fn footsteps() -> (Vec<f32>, MixerStats) {
     let mut params = PlayParams::default();
     params.sends[0] = Some((reverb, 0.25));
     let mut foley = Foley::new(RATE, 267, params);
-    // The walker hears its own feet: the listener 1.6 m above them, walking at 1.4 m/s (a
-    // step every 0.55 s) over each surface for 3.3 s, then running back at 4 m/s (a step
-    // every 0.33 s); then three things fall 3 m ahead.
+    // The walker hears its own feet (played without a place, a little to the side of each
+    // foot): walking at 1.4 m/s (a step every 0.55 s) in leather shoes over each surface for
+    // 3.3 s, then running back at 4 m/s (a step every 0.33 s); three things fall 3 m ahead;
+    // then on stone again, 3.3 s in each of the other shoes: trainers, boots, bare feet,
+    // sandals.
     let mut next_step = 0u64;
     let mut foot = 0.1;
     let mut x = 0.0f64;
     let mut dropped = 0;
-    let out = run(&mut engine, &mut renderer, 36.0, 480, |engine, frame| {
+    let shoes = [
+        Footwear::Sneakers,
+        Footwear::Boots,
+        Footwear::Barefoot,
+        Footwear::Sandals,
+    ];
+    let out = run(&mut engine, &mut renderer, 50.0, 480, |engine, frame| {
         let t = frame as f64 / RATE as f64;
-        let (speed, surface) = if t < 19.8 {
-            (1.4, Surface::ALL[((t / 3.3) as usize).min(5)])
+        let (speed, surface, footwear) = if t < 19.8 {
+            (
+                1.4,
+                Surface::ALL[((t / 3.3) as usize).min(5)],
+                Footwear::LeatherShoes,
+            )
+        } else if t < 36.0 {
+            (
+                4.0,
+                Surface::ALL[5 - ((t - 19.8) / 2.0).min(5.0) as usize],
+                Footwear::LeatherShoes,
+            )
         } else {
-            (4.0, Surface::ALL[5 - ((t - 19.8) / 2.0).min(5.0) as usize])
+            (
+                1.4,
+                Surface::Stone,
+                shoes[(((t - 36.0) / 3.3) as usize).min(3)],
+            )
         };
         engine.set_listener(Listener::at(DVec3::new(x, 1.6, 0.0)));
-        if t < 31.8 && frame >= next_step {
+        if (t < 31.8 || (36.5..49.5).contains(&t)) && frame >= next_step {
             foot = -foot;
-            foley.step(
+            foley.own_step(
                 engine,
                 &Step {
                     speed,
+                    footwear,
                     start: Some(frame),
                     ..Step::walk(surface, DVec3::new(x + foot, 0.0, -0.2))
                 },
+                foot.signum() as f32,
             );
             let period = if speed > 2.0 { 0.33 } else { 0.55 };
-            next_step += (period * RATE as f64) as u64;
+            next_step = frame + (period * RATE as f64) as u64;
         }
         x += speed as f64 * 480.0 / RATE as f64 * if t < 19.8 { 1.0 } else { -1.0 };
         let falls = [

@@ -22,10 +22,21 @@
 //! - **bubbles** (water): Minnaert resonances whose pitch rises as they reach the surface
 //!   ([`synth::Grain::bubble`]).
 //!
-//! A walking step is two contacts, the heel then the ball of the foot 85 ms later; running,
-//! the forefoot lands first and harder, 22 ms apart, and every contact is shorter (brighter).
-//! The level follows the step's energy: the amplitude is `√(weight × speed)` relative to
-//! 80 kg at 1.4 m/s, so doubling the weight adds 3 dB.
+//! A walking step is two contacts, the heel then the softer ball of the foot 85 ms later, and
+//! often a scuff as the toes push off; running, the forefoot lands first and harder, 22 ms
+//! apart, and every contact is shorter (brighter). The level follows the step's energy: the
+//! amplitude is `√(weight × speed)` relative to 80 kg at 1.4 m/s, so doubling the weight adds
+//! 3 dB.
+//!
+//! On hard ground (stone, wood, metal) the [`Footwear`] counts as much as the ground: the
+//! contact lasts as long as the softer of sole and ground lets it (0.3 ms for a leather heel on
+//! stone, 4 ms for a rubber sneaker, 10 ms for a bare foot), the slap takes the sole's band, a
+//! boot thuds, a sandal slaps the heel as the foot lifts. On soft ground the ground decides.
+//!
+//! No two steps are the same, and the difference is meant to be heard: each draws its own
+//! contact length (±25 %), click strength (±3 dB), modes (stone ±8 %), balance of heel and
+//! ball, gap between them, scuff or none, and level (±1.5 dB); [`Foley`] also plays each at its
+//! own pitch (±2.5 %).
 
 use std::sync::Arc;
 
@@ -153,9 +164,11 @@ pub struct Bubbles {
 pub struct SurfaceModel {
     /// Its name.
     pub name: &'static str,
-    /// The peak of a step of 80 kg at 1.4 m/s.
+    /// The peak of a step of 80 kg at 1.4 m/s in hard shoes.
     pub level: f32,
-    /// A walking heel's contact, seconds: shorter is harder and brighter.
+    /// Hard ground, where the sole matters as much as the ground.
+    pub hard: bool,
+    /// A hard heel's contact, seconds: shorter is harder and brighter.
     pub contact: f32,
     /// How long the foot presses in, seconds (what drives the grains and the body).
     pub press: f32,
@@ -180,22 +193,24 @@ pub struct SurfaceModel {
 pub const STONE: SurfaceModel = SurfaceModel {
     name: "stone",
     level: 0.5,
+    hard: true,
     contact: 0.00035,
     press: 0.03,
+    // A sett bedded in sand is damped within a millisecond: these colour the click, they do
+    // not ring.
     modes: &[
-        mode(870.0, 260.0, 0.45),
-        mode(1650.0, 320.0, 0.8),
-        mode(2900.0, 420.0, 0.6),
-        mode(4300.0, 520.0, 0.4),
-        mode(6100.0, 650.0, 0.25),
+        mode(650.0, 900.0, 0.25),
+        mode(1400.0, 1100.0, 0.35),
+        mode(2600.0, 1400.0, 0.35),
+        mode(4200.0, 1800.0, 0.25),
     ],
-    jitter: 0.05,
+    jitter: 0.08,
     thump: mode(95.0, 120.0, 0.12),
     click: Some(NoiseBand {
         low: 2000.0,
         high: 9000.0,
         decay: 350.0,
-        gain: 0.35,
+        gain: 0.5,
     }),
     body: None,
     grains: Some(Grains {
@@ -212,6 +227,7 @@ pub const STONE: SurfaceModel = SurfaceModel {
 pub const GRAVEL: SurfaceModel = SurfaceModel {
     name: "gravel",
     level: 0.45,
+    hard: false,
     contact: 0.012,
     press: 0.07,
     modes: &[],
@@ -238,6 +254,7 @@ pub const GRAVEL: SurfaceModel = SurfaceModel {
 pub const GRASS: SurfaceModel = SurfaceModel {
     name: "grass",
     level: 0.25,
+    hard: false,
     contact: 0.025,
     press: 0.09,
     modes: &[],
@@ -264,6 +281,7 @@ pub const GRASS: SurfaceModel = SurfaceModel {
 pub const WOOD: SurfaceModel = SurfaceModel {
     name: "wood",
     level: 0.5,
+    hard: true,
     contact: 0.0012,
     press: 0.03,
     modes: &[
@@ -291,6 +309,7 @@ pub const WOOD: SurfaceModel = SurfaceModel {
 pub const METAL: SurfaceModel = SurfaceModel {
     name: "metal",
     level: 0.45,
+    hard: true,
     contact: 0.00015,
     press: 0.03,
     modes: &[
@@ -319,6 +338,7 @@ pub const METAL: SurfaceModel = SurfaceModel {
 pub const WATER: SurfaceModel = SurfaceModel {
     name: "water",
     level: 0.4,
+    hard: false,
     contact: 0.03,
     press: 0.12,
     modes: &[],
@@ -345,6 +365,155 @@ pub const WATER: SurfaceModel = SurfaceModel {
     }),
 };
 
+/// What a walker wears on its feet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Footwear {
+    /// Bare feet: a soft, fleshy pat.
+    Barefoot,
+    /// Rubber-soled trainers: a dull pat and a scuff.
+    Sneakers,
+    /// Hard leather soles and heels: a sharp click.
+    LeatherShoes,
+    /// Heavy boots with thick soles: a thud.
+    Boots,
+    /// Flip-flops: a soft pat, then the sole slapping the heel.
+    Sandals,
+}
+
+impl Footwear {
+    /// Every kind.
+    pub const ALL: [Footwear; 5] = [
+        Footwear::Barefoot,
+        Footwear::Sneakers,
+        Footwear::LeatherShoes,
+        Footwear::Boots,
+        Footwear::Sandals,
+    ];
+
+    /// Its name.
+    pub fn name(self) -> &'static str {
+        self.model().name
+    }
+
+    /// The kind named `name`.
+    pub fn from_name(name: &str) -> Option<Footwear> {
+        Self::ALL.into_iter().find(|f| f.name() == name)
+    }
+
+    /// How it sounds.
+    pub fn model(self) -> &'static SoleModel {
+        match self {
+            Footwear::Barefoot => &BAREFOOT,
+            Footwear::Sneakers => &SNEAKERS,
+            Footwear::LeatherShoes => &LEATHER,
+            Footwear::Boots => &BOOTS,
+            Footwear::Sandals => &SANDALS,
+        }
+    }
+}
+
+/// How a sole changes a step on hard ground.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SoleModel {
+    /// Its name.
+    pub name: &'static str,
+    /// The sole's own contact, seconds: the step lasts the longer of it and the ground's.
+    pub contact: f32,
+    /// The band of the sole's slap, Hz (`None`: the ground's click as it is).
+    pub click: Option<(f32, f32)>,
+    /// The slap's gain against a hard heel's.
+    pub click_gain: f32,
+    /// The thud's gain against a hard heel's.
+    pub thump: f32,
+    /// The heel's strength, walking.
+    pub heel: f32,
+    /// The ball's strength, walking.
+    pub ball: f32,
+    /// The toes' scuff as they push off (0: none) and its band, Hz.
+    pub scuff: f32,
+    /// Hz.
+    pub scuff_band: (f32, f32),
+    /// The step's level against hard shoes'.
+    pub level: f32,
+    /// A sandal slapping the heel as the foot lifts (0: none).
+    pub slap: f32,
+}
+
+/// Bare feet.
+pub const BAREFOOT: SoleModel = SoleModel {
+    name: "barefoot",
+    contact: 0.010,
+    click: Some((150.0, 1500.0)),
+    click_gain: 0.8,
+    thump: 0.8,
+    heel: 0.8,
+    ball: 0.7,
+    scuff: 0.0,
+    scuff_band: (1000.0, 4000.0),
+    level: 0.55,
+    slap: 0.0,
+};
+
+/// Trainers.
+pub const SNEAKERS: SoleModel = SoleModel {
+    name: "sneakers",
+    contact: 0.004,
+    click: Some((300.0, 3000.0)),
+    click_gain: 0.7,
+    thump: 1.0,
+    heel: 0.9,
+    ball: 0.55,
+    scuff: 0.3,
+    scuff_band: (1500.0, 6000.0),
+    level: 0.75,
+    slap: 0.0,
+};
+
+/// Leather soles and heels.
+pub const LEATHER: SoleModel = SoleModel {
+    name: "leather",
+    contact: 0.0,
+    click: None,
+    click_gain: 1.0,
+    thump: 0.7,
+    heel: 1.0,
+    ball: 0.45,
+    scuff: 0.4,
+    scuff_band: (2500.0, 8000.0),
+    level: 1.0,
+    slap: 0.0,
+};
+
+/// Boots.
+pub const BOOTS: SoleModel = SoleModel {
+    name: "boots",
+    contact: 0.0018,
+    click: Some((400.0, 4500.0)),
+    click_gain: 1.0,
+    thump: 1.8,
+    heel: 1.0,
+    ball: 0.6,
+    scuff: 0.35,
+    scuff_band: (1500.0, 6000.0),
+    level: 1.15,
+    slap: 0.0,
+};
+
+/// Flip-flops.
+pub const SANDALS: SoleModel = SoleModel {
+    name: "sandals",
+    contact: 0.005,
+    click: Some((300.0, 3500.0)),
+    click_gain: 0.7,
+    thump: 0.6,
+    heel: 0.85,
+    ball: 0.5,
+    scuff: 0.15,
+    scuff_band: (1500.0, 6000.0),
+    level: 0.75,
+    slap: 1.2,
+};
+
 /// A foot landing.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Step {
@@ -356,18 +525,21 @@ pub struct Step {
     pub speed: f32,
     /// The walker's weight with what it carries, kg.
     pub weight: f32,
+    /// What it wears on its feet.
+    pub footwear: Footwear,
     /// The frame it lands on (`None`: the next block).
     pub start: Option<u64>,
 }
 
 impl Step {
-    /// A step of 80 kg walking at 1.4 m/s.
+    /// A step of 80 kg walking at 1.4 m/s in leather shoes.
     pub fn walk(surface: Surface, position: DVec3) -> Self {
         Self {
             surface,
             position,
             speed: 1.4,
             weight: 80.0,
+            footwear: Footwear::LeatherShoes,
             start: None,
         }
     }
@@ -404,36 +576,116 @@ struct Contact {
     brush: f32,
 }
 
+/// A short burst of noise beside the contacts: a scuff, a sandal's slap.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Burst {
+    at: f32,
+    length: f32,
+    band: NoiseBand,
+}
+
+/// What the sole does to the ground's click and thud.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Sole {
+    band: Option<(f32, f32)>,
+    click: f32,
+    thump: f32,
+}
+
+impl Sole {
+    const NONE: Sole = Sole {
+        band: None,
+        click: 1.0,
+        thump: 1.0,
+    };
+}
+
 /// A step's sound: mono, at `rate`, from `seed` (the same seed gives the same samples).
 pub fn step_sound(step: &Step, seed: u64, rate: u32) -> SampleBuffer {
     let model = step.surface.model();
+    let shoe = step.footwear.model();
     let mut rng = SplitMix64::new(seed);
     let speed = step.speed.max(0.3);
     let run = smoothstep(1.8, 3.6, speed);
-    let gap = lerp(0.085, 0.022, run) * rng.range_f32(0.9, 1.1);
+    let gap = lerp(0.085, 0.022, run) * rng.range_f32(0.85, 1.15);
     let shorter = lerp(1.0, 0.6, run);
     let press = model.press * lerp(1.0, 0.7, run);
     let brush = lerp(1.0, 1.8, run);
+    // On hard ground the softer of sole and ground sets the contact.
+    let contact = if model.hard {
+        model.contact.max(shoe.contact)
+    } else {
+        model.contact
+    } * rng.range_f32(0.75, 1.3);
+    let ball = lerp(shoe.ball, 1.0, run) * rng.range_f32(0.7, 1.2);
     let contacts = [
         Contact {
             at: 0.001,
-            width: model.contact * shorter,
+            width: contact * shorter,
             press,
-            amp: lerp(1.0, 0.35, run),
+            amp: lerp(shoe.heel, 0.35 * shoe.heel, run),
             brush,
         },
         Contact {
             at: 0.001 + gap,
-            width: model.contact * shorter * 1.5,
+            width: contact * shorter * 1.5,
             press,
-            amp: lerp(0.6, 1.0, run) * rng.range_f32(0.8, 1.1),
+            amp: ball,
             brush,
         },
     ];
+    let sole = if model.hard {
+        Sole {
+            band: shoe.click,
+            click: shoe.click_gain * db_to_gain(rng.range_f32(-3.0, 3.0)),
+            thump: shoe.thump,
+        }
+    } else {
+        Sole {
+            click: db_to_gain(rng.range_f32(-3.0, 3.0)),
+            ..Sole::NONE
+        }
+    };
+    // The toes' scuff on hard ground, two steps in three; a sandal's slap on any ground.
+    let mut bursts = Vec::with_capacity(2);
+    let scuffs = rng.next_f32() < 0.65;
+    let (scuff_at, scuff_length, scuff_gain) = (
+        rng.range_f32(0.04, 0.09),
+        rng.range_f32(0.03, 0.06),
+        rng.range_f32(0.4, 1.0),
+    );
+    if model.hard && scuffs && shoe.scuff > 0.0 {
+        let click = model.click.map_or(0.3, |c| c.gain);
+        bursts.push(Burst {
+            at: 0.001 + gap + scuff_at,
+            length: scuff_length,
+            band: NoiseBand {
+                low: shoe.scuff_band.0,
+                high: shoe.scuff_band.1,
+                decay: 60.0,
+                gain: shoe.scuff * click * scuff_gain,
+            },
+        });
+    }
+    let slap_at = rng.range_f32(0.12, 0.2);
+    let slap_gain = rng.range_f32(0.7, 1.1);
+    if shoe.slap > 0.0 {
+        bursts.push(Burst {
+            at: 0.001 + gap + slap_at,
+            length: 0.008,
+            band: NoiseBand {
+                low: 500.0,
+                high: 3500.0,
+                decay: 150.0,
+                gain: shoe.slap * slap_gain,
+            },
+        });
+    }
     let level = model.level
+        * shoe.level
         * (step.weight.max(1.0) / 80.0 * speed / 1.4).sqrt()
-        * db_to_gain(rng.range_f32(-1.0, 1.0));
-    synthesize(model, &contacts, level, &mut rng, rate)
+        * db_to_gain(rng.range_f32(-1.5, 1.5));
+    synthesize(model, &contacts, &bursts, sole, level, &mut rng, rate)
 }
 
 /// An impact's sound: mono, at `rate`, from `seed`. A heavier or faster body presses longer
@@ -454,7 +706,7 @@ pub fn impact_sound(impact: &Impact, seed: u64, rate: u32) -> SampleBuffer {
         brush: 1.0,
     }];
     let level = model.level * (mass.sqrt() * speed / 2.0).min(8.0);
-    synthesize(model, &contacts, level, &mut rng, rate)
+    synthesize(model, &contacts, &[], Sole::NONE, level, &mut rng, rate)
 }
 
 /// Seconds of fade at a sound's end: it ends on 0, whatever is still ringing.
@@ -464,6 +716,8 @@ const FADE_OUT: f32 = 0.005;
 fn synthesize(
     model: &SurfaceModel,
     contacts: &[Contact],
+    bursts: &[Burst],
+    sole: Sole,
     level: f32,
     rng: &mut SplitMix64,
     rate: u32,
@@ -474,6 +728,7 @@ fn synthesize(
     let end = contacts
         .iter()
         .map(|c| c.at + c.width.max(c.press))
+        .chain(bursts.iter().map(|b| b.at + b.length + 9.2 / b.band.decay))
         .fold(0.0f32, f32::max);
     let mut slowest = model.thump.decay;
     for m in model.modes {
@@ -515,9 +770,13 @@ fn synthesize(
 
     let mut out = vec![0.0f32; frames];
     // Modes and the thump.
-    for m in model.modes.iter().chain(std::iter::once(&model.thump)) {
+    let thump = Mode {
+        gain: model.thump.gain * sole.thump,
+        ..model.thump
+    };
+    for m in model.modes.iter().chain(std::iter::once(&thump)) {
         let jitter = 1.0 + model.jitter * rng.range_f32(-1.0, 1.0);
-        let gain = m.gain * rng.range_f32(0.8, 1.2);
+        let gain = m.gain * rng.range_f32(0.6, 1.4);
         let mut r = Resonator::new(m.frequency * jitter, m.decay, gain, rate);
         let end = until(m.decay);
         for (o, &x) in out[first..end].iter_mut().zip(&hit[first..end]) {
@@ -525,9 +784,30 @@ fn synthesize(
         }
     }
     // The click follows the contacts, the body the presses.
-    if let Some(band) = model.click {
+    if let Some(mut band) = model.click {
+        if let Some((low, high)) = sole.band {
+            // A soft sole slaps in its own band (air pressed out from under it).
+            band.low = low;
+            band.high = high;
+        } else {
+            // The ground's own click: a longer contact excites less of the top, so it stops
+            // near 6 / contact (a heavy body on stone is darker than a light one).
+            let width = contacts.iter().map(|c| c.width).fold(f32::MAX, f32::min);
+            band.high = band.high.min(6.0 / width.max(1e-5)).max(band.low * 1.5);
+        }
+        band.gain *= sole.click;
         let end = until(band.decay);
         add_noise_band(&mut out[first..end], &hit_peak[first..end], band, rng, rate);
+    }
+    // The scuff and the slap: noise driven by their own `sin²`.
+    for burst in bursts {
+        let from = ((burst.at * fs) as usize).min(frames);
+        let to = (((burst.at + burst.length) * fs) as usize).min(frames);
+        let end = (to + (9.2 / burst.band.decay * fs) as usize).min(frames);
+        let drive: Vec<f32> = (from..end)
+            .map(|i| force_pulse(i as f32 * dt - burst.at, burst.length))
+            .collect();
+        add_noise_band(&mut out[from..end], &drive, burst.band, rng, rate);
     }
     if let Some(band) = model.body {
         let end = until(band.decay);
@@ -593,13 +873,15 @@ fn add_noise_band(
 ) {
     let q = std::f32::consts::FRAC_1_SQRT_2;
     let mut low = Biquad::high_pass(band.low, q, rate);
-    let mut high = LowPass4::new(band.high, rate);
+    // Eighth order above the band: noise leaves the top octave empty.
+    let mut high = [LowPass4::new(band.high, rate); 2];
     let fall = (-band.decay / rate as f32).exp();
     let mut env = 0.0f32;
     for (o, &d) in out.iter_mut().zip(drive) {
         env = d.max(env * fall);
         let x = synth::white(rng) * env;
-        *o += band.gain * high.tick(low.tick(x));
+        let y = high[0].tick(low.tick(x));
+        *o += band.gain * high[1].tick(y);
     }
 }
 
@@ -656,6 +938,22 @@ impl Foley {
         params.spatial = Some(spatial);
         params.start = start;
         params.looping = false;
+        params.pitch *= self.rng.range_f32(0.975, 1.025);
+        engine.play(&Arc::new(sound), params)
+    }
+
+    /// The listener's own foot lands: played without a place (straight below the head an
+    /// HRTF has no measurements and a panner no direction), at the level of 1.6 m away and a
+    /// little to the side of the foot (`foot`: −1 left, 1 right).
+    pub fn own_step(&mut self, engine: &mut AudioEngine, step: &Step, foot: f32) -> VoiceId {
+        let sound = step_sound(step, self.rng.next_u64(), self.rate);
+        let mut params = self.params;
+        params.spatial = None;
+        params.gain *= 1.0 / 1.6;
+        params.pan = 0.12 * foot.clamp(-1.0, 1.0);
+        params.start = step.start;
+        params.looping = false;
+        params.pitch *= self.rng.range_f32(0.975, 1.025);
         engine.play(&Arc::new(sound), params)
     }
 

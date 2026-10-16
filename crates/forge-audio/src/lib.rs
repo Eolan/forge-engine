@@ -54,19 +54,21 @@ pub mod spatial;
 pub mod steam;
 pub mod stream;
 pub mod thread;
+pub mod variation;
 mod voice;
 pub mod zones;
 
 pub use bus::{BusId, BusLayout};
 pub use clock::{Clock, TickClock};
 pub use engine::{AudioEngine, Control, EndReason, Event, PlayParams, VoiceId, create};
-pub use foley::{Foley, Impact, Step, Surface};
+pub use foley::{Foley, Footwear, Impact, Step, Surface};
 pub use mixer::{Mixer, MixerConfig, MixerStats};
 pub use render::{OfflineRenderer, WavFormat, wav_bytes, write_wav};
 pub use sound::SampleBuffer;
 pub use spatial::{AcousticMaterial, Attenuation, Listener, Occlusion, Spatial};
 pub use stream::{Stream, StreamPump, Streams};
 pub use thread::{MixThread, OutputRing};
+pub use variation::{SoundSet, Variation};
 
 /// Frames in a mixer block: 5.3 ms at 48 kHz. Commands act at any frame inside a block;
 /// gains and positions change at block boundaries, ramped across the block.

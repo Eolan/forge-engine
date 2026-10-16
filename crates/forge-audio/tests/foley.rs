@@ -1,10 +1,11 @@
-//! Footsteps and impacts, measured on their samples: each surface its own spectrum, levels by
-//! weight and speed, no clicks, and steps landing where and when the game says.
+//! Footsteps and impacts, measured on their samples: each surface its own spectrum, each shoe
+//! its own sound on hard ground, steps that vary audibly, levels by weight and speed, no
+//! clicks, and steps landing where and when the game says.
 
 mod common;
 
 use common::*;
-use forge_audio::foley::{Impact, Step, Surface, impact_sound, step_sound};
+use forge_audio::foley::{Footwear, Impact, Step, Surface, impact_sound, step_sound};
 use forge_audio::{BusLayout, Foley, Listener, MixerConfig, OfflineRenderer, PlayParams, create};
 use glam::DVec3;
 
@@ -24,28 +25,30 @@ fn every_surface_has_its_own_spectrum() {
     let spectra: Vec<Vec<[f64; 9]>> = Surface::ALL
         .iter()
         .map(|&s| {
-            (0..4)
+            (0..6)
                 .map(|seed| octaves(step_sound(&walk(s), seed, RATE).samples(), RATE))
                 .collect()
         })
         .collect();
     let mut own = 0.0f64;
+    let mut apart = f64::MAX;
     for (i, a) in spectra.iter().enumerate() {
-        for k in 1..4 {
-            own = own.max(distance(&a[0], &a[k]));
+        for p in 0..6 {
+            for q in p + 1..6 {
+                own = own.max(distance(&a[p], &a[q]));
+            }
         }
-        for (j, b) in spectra.iter().enumerate().skip(i + 1) {
-            let d = distance(&a[0], &b[0]);
-            assert!(
-                d > 5.0,
-                "{} and {}: {d:.1} dB apart",
-                Surface::ALL[i].name(),
-                Surface::ALL[j].name()
-            );
+        for b in spectra.iter().skip(i + 1) {
+            apart = apart.min(distance(&a[0], &b[0]));
         }
     }
-    // Steps on one surface vary (no two the same) but keep their surface's spectrum.
-    assert!(own < 2.5, "{own:.2} dB between steps on one surface");
+    // Steps on one surface vary (up to 4.5 dB between two of them) but every surface stays
+    // further from every other than that.
+    assert!(own < 4.5, "{own:.2} dB between steps on one surface");
+    assert!(
+        apart > 5.0 && apart > 1.5 * own,
+        "surfaces {apart:.1} dB apart, steps {own:.2}"
+    );
     let a = step_sound(&walk(Surface::Stone), 1, RATE);
     assert_ne!(a, step_sound(&walk(Surface::Stone), 2, RATE));
     assert_eq!(a, step_sound(&walk(Surface::Stone), 1, RATE));
@@ -54,23 +57,27 @@ fn every_surface_has_its_own_spectrum() {
 #[test]
 fn each_surface_sounds_like_itself() {
     let sound = |s| step_sound(&walk(s), 3, RATE);
+    let bands = |s| octaves(sound(s).samples(), RATE);
     let loudest = |s| {
-        let b = octaves(sound(s).samples(), RATE);
+        let b = bands(s);
         let i = (0..9).max_by(|&i, &j| b[i].total_cmp(&b[j])).unwrap();
         OCTAVES[i]
     };
-    // Floorboards are low and hollow; water rings in its bubbles' band; stone clicks around
-    // 1 to 2 kHz; gravel crunches and metal rings higher; grass swishes highest.
+    // Floorboards are low and hollow; water rings in its bubbles' band; a hard heel on stone
+    // clicks across the spectrum, its 4 and 8 kHz octaves within 4 dB of its loudest; gravel
+    // crunches and metal rings higher; grass swishes highest.
     let wood = centroid(sound(Surface::Wood).samples(), RATE);
     assert!(wood < 400.0, "wood {wood:.0} Hz");
     assert!((500.0..=1000.0).contains(&loudest(Surface::Water)));
-    assert!((1000.0..=2000.0).contains(&loudest(Surface::Stone)));
+    let stone = bands(Surface::Stone);
+    let top = stone.iter().cloned().fold(f64::MIN, f64::max);
+    assert!(stone[6].max(stone[7]) > top - 4.0, "stone {stone:?}");
     for s in [Surface::Gravel, Surface::Metal] {
         let c = centroid(sound(s).samples(), RATE);
         assert!(c > 1500.0, "{} {c:.0} Hz", s.name());
     }
     assert!((4000.0..=8000.0).contains(&loudest(Surface::Grass)));
-    // Metal rings: 40 dB down after more than three times any other surface's time.
+    // Metal rings: 40 dB down after more than twice any other surface's time.
     let ring = decay_time(sound(Surface::Metal).samples(), RATE, 40.0);
     for s in Surface::ALL.into_iter().filter(|&s| s != Surface::Metal) {
         let other = decay_time(sound(s).samples(), RATE, 40.0);
@@ -80,6 +87,92 @@ fn each_surface_sounds_like_itself() {
             s.name()
         );
     }
+}
+
+#[test]
+fn shoes_change_a_step_on_hard_ground() {
+    let on = |surface, footwear| {
+        step_sound(
+            &Step {
+                footwear,
+                ..walk(surface)
+            },
+            3,
+            RATE,
+        )
+    };
+    let c = |surface, footwear| centroid(on(surface, footwear).samples(), RATE);
+    // On stone: a leather heel clicks, trainers and bare feet pat, boots thud.
+    let leather = c(Surface::Stone, Footwear::LeatherShoes);
+    assert!(
+        leather > 2.0 * c(Surface::Stone, Footwear::Sneakers),
+        "{leather:.0} Hz"
+    );
+    assert!(leather > 3.0 * c(Surface::Stone, Footwear::Barefoot));
+    let low = |f| band_db(on(Surface::Stone, f).samples(), 40.0, 250.0, RATE);
+    assert!(low(Footwear::Boots) > low(Footwear::LeatherShoes) + 6.0);
+    // Bare feet are the quietest.
+    let barefoot = peak(on(Surface::Stone, Footwear::Barefoot).samples());
+    for f in Footwear::ALL
+        .into_iter()
+        .filter(|&f| f != Footwear::Barefoot)
+    {
+        assert!(
+            barefoot < peak(on(Surface::Stone, f).samples()),
+            "{}",
+            f.name()
+        );
+    }
+    // A sandal slaps the heel 120 to 200 ms after the ball lands: more there than a trainer.
+    let late = |f| {
+        let x = on(Surface::Stone, f);
+        let from = (0.17 * 48_000.0) as usize;
+        let to = (0.31 * 48_000.0) as usize;
+        // The loudest 5 ms between 500 Hz and 3.5 kHz.
+        x.samples()[from..to]
+            .chunks(240)
+            .map(|w| band_db(w, 500.0, 3500.0, RATE))
+            .fold(f64::MIN, f64::max)
+    };
+    assert!(late(Footwear::Sandals) > late(Footwear::Sneakers) + 6.0);
+    // On grass the ground decides: the shoes (not the sandal's slap) move the centroid by
+    // under 15 %, where on stone they move it threefold.
+    let grass: Vec<f64> = [
+        Footwear::Barefoot,
+        Footwear::Sneakers,
+        Footwear::LeatherShoes,
+        Footwear::Boots,
+    ]
+    .map(|f| c(Surface::Grass, f))
+    .to_vec();
+    let (min, max) = grass
+        .iter()
+        .fold((f64::MAX, 0.0f64), |(a, b), &v| (a.min(v), b.max(v)));
+    assert!(max / min < 1.15, "grass {grass:?}");
+}
+
+#[test]
+fn repeated_steps_differ_audibly() {
+    // Twelve steps in a row on stone in leather: no two alike, their brightness, their level
+    // and the space between heel and ball each spread wide enough to hear.
+    let steps: Vec<_> = (0..12)
+        .map(|seed| step_sound(&walk(Surface::Stone), seed, RATE))
+        .collect();
+    for (i, a) in steps.iter().enumerate() {
+        for b in &steps[i + 1..] {
+            assert_ne!(a, b);
+        }
+    }
+    let centroids: Vec<f64> = steps.iter().map(|s| centroid(s.samples(), RATE)).collect();
+    let (lo, hi) = centroids
+        .iter()
+        .fold((f64::MAX, 0.0f64), |(a, b), &v| (a.min(v), b.max(v)));
+    assert!(hi / lo > 1.2, "centroids {lo:.0} to {hi:.0} Hz");
+    let levels: Vec<f64> = steps.iter().map(|s| db(rms(s.samples()))).collect();
+    let (lo, hi) = levels
+        .iter()
+        .fold((f64::MAX, f64::MIN), |(a, b), &v| (a.min(v), b.max(v)));
+    assert!(hi - lo > 2.0, "levels {lo:.1} to {hi:.1} dBFS");
 }
 
 #[test]
@@ -107,7 +200,8 @@ fn levels_follow_weight_and_speed() {
         let run = peak_at(80.0, 4.2);
         assert!((db(run / mid) - 4.77).abs() < 0.01, "{}", db(run / mid));
     }
-    // The heel and the ball: 85 ms apart walking, about 22 ms running.
+    // The heel and the ball: 85 ms apart walking (±15 %), about 22 ms running. A hard heel on
+    // wood rings briefly; the ball is where the level jumps most.
     let gap = |speed| {
         let x = step_sound(
             &Step {
@@ -118,16 +212,15 @@ fn levels_follow_weight_and_speed() {
             RATE,
         );
         let env = envelope(x.samples(), RATE as usize / 1000);
-        // The second contact: the loudest 1 ms window 10 ms or more after the first onset.
         let first = env.iter().position(|&e| e > 1e-3).unwrap();
-        let second = (first + 10..first + 120)
-            .max_by(|&i, &j| env[i].total_cmp(&env[j]))
+        let second = (first + 15..first + 120)
+            .max_by(|&i, &j| (env[i] - env[i - 1]).total_cmp(&(env[j] - env[j - 1])))
             .unwrap();
         second - first
     };
     let walking = gap(1.4);
     let running = gap(4.0);
-    assert!((70..=100).contains(&walking), "{walking} ms");
+    assert!((68..=102).contains(&walking), "{walking} ms");
     assert!((15..=30).contains(&running), "{running} ms");
 }
 
@@ -234,8 +327,9 @@ fn steps_land_where_and_when_the_game_says() {
         let from = start as usize + latency;
         let window = &left[from..from + 4800];
         let onset = onset(window, 1e-7).expect("a step") as f64 / RATE as f64;
-        // The first contact is 1 ms into the sound (a soft one rises over its first 0.3 ms).
-        assert!(onset < 0.0015, "step {i}: {onset} s late");
+        // The first contact is 1 ms into the sound (a soft one, water's 30 ms, rises over its
+        // first millisecond and a half).
+        assert!(onset < 0.0025, "step {i}: {onset} s late");
         assert!(left[from - 48..from].iter().all(|&v| v.abs() < 1e-6));
         if i >= 10 {
             let r = rms(&right[from..from + 4800]);

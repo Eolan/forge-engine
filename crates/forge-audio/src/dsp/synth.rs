@@ -112,9 +112,9 @@ pub struct Grain {
     pub pan: f32,
 }
 
-/// Frames a grain's attack ramps over (0.25 ms at 48 kHz): enough that it adds nothing above
+/// Frames a grain's attack ramps over (0.5 ms at 48 kHz): enough that it adds nothing above
 /// 16 kHz, short enough that a tick stays a tick.
-pub const GRAIN_ATTACK: usize = 12;
+pub const GRAIN_ATTACK: usize = 24;
 
 impl Grain {
     /// Frames until it has fallen 80 dB.
