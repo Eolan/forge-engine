@@ -13,8 +13,9 @@ use super::interior::{self, Interior};
 use super::mass::{Mass, Roof};
 use super::roofs;
 use super::rooms::RoomKind;
-use super::structure::{OpeningKind, Structure, WallRole};
+use super::structure::{self, OpeningKind, Structure, WallRole};
 use super::village::Village;
+use super::walk;
 use super::walls;
 use crate::sockets::{self, Extent, Kind as SocketKind, Need, Socket};
 
@@ -51,11 +52,31 @@ pub enum Kind {
     /// A tiled house whose footprint takes no pitched roof: the kit gives it a flat one, grey
     /// in a row of tiles, its neighbours' gables bare over it.
     FlatRoof,
+    /// A house's straight flight standing off the side wall it runs along (the owner,
+    /// 2026-10-16: "stairs should most likely stuck to the wall, no space between wall and
+    /// stair").
+    StairOffWall,
+    /// A storey of a house whose street wall has [`BLANK`] or more of open front and not one
+    /// opening on it (the owner, 2026-10-16: "an architect would arrange the inside of structure
+    /// so that windows are on the street side instead of showing a blank wall").
+    BlankStreetWall,
+    /// A room no walker reaches from the front door ([`walk`]; the owner, 2026-10-17: "using the
+    /// nav mesh to test navigations inside the houses, and check if there are no anomaly or
+    /// obstacles").
+    UnreachedRoom,
+    /// A flight whose foot no walker reaches on its storey.
+    UnreachedStair,
+    /// An outside door of the ground floor no walker reaches from the front door, or the front
+    /// door's inside blocked.
+    UnreachedDoor,
+    /// A door whose leaf swings into furniture or a flight (the owner, 2026-10-16: "stairs start
+    /// behind the door (the door prevents access to the stairs)").
+    DoorSwing,
 }
 
 impl Kind {
     /// Every kind, in order.
-    pub const ALL: [Kind; 11] = [
+    pub const ALL: [Kind; 17] = [
         Kind::RoomOutsideWalls,
         Kind::PartitionInOpening,
         Kind::UnlitRoom,
@@ -67,6 +88,12 @@ impl Kind {
         Kind::LonePartyWall,
         Kind::RidgeStep,
         Kind::FlatRoof,
+        Kind::StairOffWall,
+        Kind::BlankStreetWall,
+        Kind::UnreachedRoom,
+        Kind::UnreachedStair,
+        Kind::UnreachedDoor,
+        Kind::DoorSwing,
     ];
 }
 
@@ -90,6 +117,10 @@ pub struct Anomaly {
 pub const GAP: f64 = 3.0;
 /// The least step between two attached houses' eaves, metres: less reads as a modelling error.
 pub const EAVE_STEP: f64 = 0.8;
+/// The longest open street front a storey keeps without an opening, metres.
+pub const BLANK: f64 = 3.0;
+/// The farthest a house's flight stands off its side wall, metres.
+pub const STAIR_GAP: f64 = 0.05;
 
 /// The anomalies of village `v`, `structures` its masses' (in their order).
 pub fn village(v: &Village, structures: &[Structure]) -> Vec<Anomaly> {
@@ -104,7 +135,112 @@ pub fn village(v: &Village, structures: &[Structure]) -> Vec<Anomaly> {
     plants(v, &mut out);
     unmatched(v, structures, &mut out);
     flat_roofs(v, &mut out);
+    for (i, (m, s)) in v.masses.iter().zip(structures).enumerate() {
+        blank_fronts(i, m, s, &mut out);
+        walks(i, m, s, &mut out);
+    }
     out
+}
+
+/// What a walker through house `i` does not reach ([`walk::house`]), each seen from 3 m off
+/// inside, at its storey.
+fn walks(i: usize, m: &Mass, s: &Structure, out: &mut Vec<Anomaly>) {
+    let Some(w) = walk::house(m, s) else {
+        return;
+    };
+    let centre = geom::centroid(&m.footprint);
+    let level = |k: usize| s.storeys.get(k).map_or(0.0, |st| st.level);
+    let inside = |p: DVec2| p + (centre - p).normalize_or_zero() * 3.0;
+    for &(kind, k, p) in &w.rooms {
+        out.push(Anomaly {
+            kind: Kind::UnreachedRoom,
+            at: p,
+            height: level(k) + 1.5,
+            from: p,
+            note: format!("house {i}: its {kind:?} on storey {k} unreached from the front door"),
+        });
+    }
+    for &(k, p) in &w.stairs {
+        out.push(Anomaly {
+            kind: Kind::UnreachedStair,
+            at: p,
+            height: level(k) + 1.5,
+            from: inside(p),
+            note: format!("house {i}: the flight from storey {k} unreached at its foot"),
+        });
+    }
+    for &p in &w.doors {
+        out.push(Anomaly {
+            kind: Kind::UnreachedDoor,
+            at: p,
+            height: level(0) + 1.5,
+            from: inside(p),
+            note: format!("house {i}: a door unreached from the front door"),
+        });
+    }
+    for &p in &w.swings {
+        out.push(Anomaly {
+            kind: Kind::DoorSwing,
+            at: p,
+            height: level(0) + 1.5,
+            from: inside(p),
+            note: format!("house {i}: a door's leaf swings into furniture or a flight"),
+        });
+    }
+}
+
+/// Each storey of house `i` whose street wall has [`BLANK`] or more of open front and no opening
+/// on it.
+fn blank_fronts(i: usize, m: &Mass, s: &Structure, out: &mut Vec<Anomaly>) {
+    let inner = interior::house(m, s);
+    for (w, wall) in s.walls.iter().enumerate() {
+        if wall.role != WallRole::Street {
+            continue;
+        }
+        let t = (wall.b - wall.a).normalize_or_zero();
+        let outward = DVec2::new(t.y, -t.x);
+        // What stands behind it on storey `k`: the rooms with a corner on its inner face, the hall.
+        let on_face = |p: &DVec2| ((*p - wall.a).dot(-outward) - wall.thickness).abs() < 0.25;
+        let behind = |k: usize| -> String {
+            let Some(inner) = &inner else {
+                return String::new();
+            };
+            let mut names: Vec<String> = inner
+                .rooms
+                .iter()
+                .filter(|r| r.storey == k && r.outline.iter().filter(|p| on_face(p)).count() >= 2)
+                .map(|r| format!("{:?}", r.kind))
+                .collect();
+            if inner.hall.iter().filter(|p| on_face(p)).count() >= 2 {
+                names.push("hall".into());
+            }
+            format!(" behind: {}", names.join(", "))
+        };
+        for (k, stretches) in wall.open.iter().enumerate() {
+            let open: f64 = stretches.iter().map(|&(a, b)| b - a).sum();
+            let opened = s.openings.iter().any(|o| o.wall == w && o.storey == k);
+            if open < BLANK || opened {
+                continue;
+            }
+            let (a, b) = stretches
+                .iter()
+                .copied()
+                .max_by(|x, y| (x.1 - x.0).total_cmp(&(y.1 - y.0)))
+                .unwrap_or((0.0, 0.0));
+            let mid = wall.a + t * ((a + b) * 0.5);
+            out.push(Anomaly {
+                kind: Kind::BlankStreetWall,
+                at: mid,
+                height: s.storeys.get(k).map_or(0.0, |st| st.level) + 1.5,
+                from: mid + outward * 10.0,
+                note: format!(
+                    "house {i}: storey {k} of {}, {open:.1} m of street front without an opening{}",
+                    s.storeys.len(),
+                    behind(k)
+                ),
+            });
+        }
+    }
 }
 
 /// The village's pieces' sockets (D-066): each house's walls as faces (its party walls needing a
@@ -353,6 +489,31 @@ fn rooms(i: usize, m: &Mass, s: &Structure, inner: &Interior, out: &mut Vec<Anom
             note: format!("house {i}: a partition in an opening on storey {k}"),
         });
     }
+    // The flight's long sides: the nearer one to the floor's edge stands on it.
+    let thickness: Vec<f64> = s.walls.iter().map(|w| w.thickness).collect();
+    if let (Some(st), Some(floor)) = (inner.stair, structure::floor(m, &thickness)) {
+        let n = floor.len();
+        let gap = |p: DVec2| {
+            (0..n)
+                .map(|k| geom::distance_to_segment(p, floor[k], floor[(k + 1) % n]))
+                .fold(f64::MAX, f64::min)
+        };
+        let sides = [(st[0] + st[3]) * 0.5, (st[1] + st[2]) * 0.5];
+        let (d, p) = sides
+            .iter()
+            .map(|&p| (gap(p), p))
+            .min_by(|x, y| x.0.total_cmp(&y.0))
+            .unwrap_or((0.0, centre));
+        if d > STAIR_GAP {
+            out.push(Anomaly {
+                kind: Kind::StairOffWall,
+                at: p,
+                height: level(0) + 1.5,
+                from: p + (centre - p).normalize_or_zero() * 3.0,
+                note: format!("house {i}: its flight {d:.2} m off its side wall"),
+            });
+        }
+    }
     // Each window's middle on its wall's inner face, with its storey.
     let windows: Vec<(DVec2, usize)> = s
         .openings
@@ -535,18 +696,24 @@ mod tests {
         let v = village::village(&site, &village::params(size), 1);
         let structures = structure::structures(&v.plan, &v.masses);
         let all = village(&v, &structures);
-        let bounds: [(Kind, usize); 11] = [
+        let bounds: [(Kind, usize); 17] = [
             (Kind::RoomOutsideWalls, 0),
             (Kind::PartitionInOpening, 0),
-            (Kind::UnlitRoom, 33),
-            (Kind::Sliver, 9),
+            (Kind::UnlitRoom, 20),
+            (Kind::Sliver, 3),
             (Kind::EaveStep, 0),
             (Kind::CrookedWall, 0),
             (Kind::MisplacedPlant, 1),
-            (Kind::FreeWallEnd, 11),
-            (Kind::LonePartyWall, 17),
-            (Kind::RidgeStep, 6),
+            (Kind::FreeWallEnd, 5),
+            (Kind::LonePartyWall, 5),
+            (Kind::RidgeStep, 2),
             (Kind::FlatRoof, 0),
+            (Kind::StairOffWall, 8),
+            (Kind::BlankStreetWall, 14),
+            (Kind::UnreachedRoom, 0),
+            (Kind::UnreachedStair, 0),
+            (Kind::UnreachedDoor, 1),
+            (Kind::DoorSwing, 0),
         ];
         let mut over = Vec::new();
         for (kind, bound) in bounds {

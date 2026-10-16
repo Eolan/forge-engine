@@ -202,7 +202,7 @@ pub fn place(
         // it wins, whatever opening it takes.
         let house = m.home.is_some();
         let target = if house {
-            along_run(0.0)
+            party_end(walls, role).unwrap_or_else(|| along_run(0.0))
         } else {
             along_run(run * (i as f64 + 0.5) / n as f64)
         };
@@ -263,7 +263,19 @@ pub fn place(
                                 let c = layout(
                                     &walls[w], w, along, deep_house, false, flip, false, true,
                                 )?;
-                                fits(&c).then_some(c)
+                                if !fits(&c) {
+                                    return None;
+                                }
+                                // Slid against the side wall where the door keeps its margin.
+                                let snug = snug(&walls[w], inside, along, flip, c.deep)
+                                    .filter(|&a| door_fits(&walls[w], a))
+                                    .and_then(|a| {
+                                        layout(
+                                            &walls[w], w, a, deep_house, false, flip, false, true,
+                                        )
+                                    })
+                                    .filter(|c| fits(c));
+                                Some(snug.unwrap_or(c))
                             })
                         })
                     })
@@ -370,10 +382,11 @@ fn layout(
         (a.min(b), a.max(b))
     };
     if house {
-        // The corridor behind the door, the straight flight beside it along the party wall.
+        // The corridor behind the door, the straight flight beside it along the party wall: the
+        // wall its side, no core wall between ([`snug`] slides it there).
         let hall = (-HOUSE_HALL * 0.5, HOUSE_HALL * 0.5);
         let stair = (hall.0 - FLIGHT, hall.0);
-        let (lo, hi) = at((stair.0 - CORE_WALL, hall.1 + CORE_WALL));
+        let (lo, hi) = at((stair.0, hall.1 + CORE_WALL));
         if lo < 0.0 || hi > wall.length() {
             return None;
         }
@@ -432,6 +445,70 @@ fn layout(
         risers: Vec::new(),
         roof: false,
         house: false,
+    })
+}
+
+/// Where a house's door goes on `wall` so its straight flight (towards `a`, or `b` when `flip`)
+/// stands against the side wall it is nearest, `deep` into the floor `inside` (the owner,
+/// 2026-10-16: "stairs should most likely stuck to the wall, no space between wall and stair"):
+/// the floor's edge on the flight's side at the tightest of its depths, the flight's outer side
+/// there. `None` where no edge lies on that side of the door at `along`.
+pub fn snug(wall: &Wall, inside: &[DVec2], along: f64, flip: bool, deep: f64) -> Option<f64> {
+    let t = (wall.b - wall.a).normalize_or_zero();
+    let inward = DVec2::new(-t.y, t.x);
+    let sign = if flip { -1.0 } else { 1.0 };
+    let n = inside.len();
+    // Along the wall, signed so the flight's side is the lower: the floor's edge there at a depth
+    // `d` in from the wall's inner face.
+    let edge = |d: f64| {
+        let v = wall.thickness + d;
+        (0..n)
+            .filter_map(|i| {
+                let (p, q) = (inside[i], inside[(i + 1) % n]);
+                let (vp, vq) = ((p - wall.a).dot(inward), (q - wall.a).dot(inward));
+                ((vp - v) * (vq - v) <= 0.0 && (vp - vq).abs() > 1e-9)
+                    .then(|| ((p + (q - p) * ((v - vp) / (vq - vp))) - wall.a).dot(t) * sign)
+            })
+            .filter(|&x| x < along * sign)
+            .reduce(f64::max)
+    };
+    let mut tightest = f64::MIN;
+    for k in 0..=8 {
+        tightest = tightest.max(edge(0.02 + (deep - 0.04) * f64::from(k) / 8.0)?);
+    }
+    Some((tightest + FLIGHT + HOUSE_HALL * 0.5) * sign)
+}
+
+/// The end of a house's front (its first footprint edge's wall, of `role`) where its hall goes:
+/// the one beside a party wall, so the flight runs along the neighbour and the rooms take the
+/// walls with windows; the start where both or neither are. A corner house's hall ran along its
+/// side street, a blank wall the whole depth (the owner, 2026-10-16: "an architect would arrange
+/// the inside of structure so that windows are on the street side").
+fn party_end(walls: &[Wall], role: WallRole) -> Option<DVec2> {
+    let front = walls.iter().find(|w| w.edge == 0 && w.role == role)?;
+    let at = |p: DVec2, end: fn(&Wall) -> DVec2| {
+        walls
+            .iter()
+            .find(|w| end(w).distance(p) < 0.01)
+            .map(|w| w.role)
+    };
+    let before = at(front.a, |w| w.b);
+    let after = at(front.b, |w| w.a);
+    Some(
+        if before != Some(WallRole::Party) && after == Some(WallRole::Party) {
+            front.b
+        } else {
+            front.a
+        },
+    )
+}
+
+/// Whether a door at `along` on `wall` keeps [`MARGIN`] inside one of its open ground stretches.
+fn door_fits(wall: &Wall, along: f64) -> bool {
+    wall.open.first().is_some_and(|stretches| {
+        stretches.iter().any(|&(lo, hi)| {
+            lo + MARGIN + DOOR * 0.5 <= along + 1e-9 && along <= hi - MARGIN - DOOR * 0.5 + 1e-9
+        })
     })
 }
 

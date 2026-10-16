@@ -1443,7 +1443,7 @@ impl PlanScenario {
             let Some(inner) = interior::house(m, s) else {
                 continue;
             };
-            for p in furnish::furnish(s, &inner) {
+            for p in forge_procgen::city::walk::furnished(m, s, &inner) {
                 let turn = (p.facing.x as f32).atan2(p.facing.y as f32);
                 homes
                     .entry(home_name(p.piece).to_string())
@@ -2538,6 +2538,8 @@ fn kit(
     let mut instances = Vec::new();
     let mut seats = Vec::new();
     let (mut run, mut longest_run, mut last) = (0, 0, None);
+    // The cornices: each its mass, its wall, its foot and its height.
+    let mut cornices: Vec<(usize, usize, f64, f64)> = Vec::new();
     for piece in &dressed {
         let t = piece.terminal;
         let m = &masses[piece.mass as usize];
@@ -2698,6 +2700,14 @@ fn kit(
             let Some(mesh) = modules::module(name, w, h) else {
                 continue;
             };
+            if name == "cornice" {
+                cornices.push((
+                    piece.mass as usize,
+                    piece.wall as usize,
+                    o.y,
+                    t.scope.size.y,
+                ));
+            }
             let tint = tint_of(m.lot);
             let tile = tiles.at(m.footprint[0]);
             let at = pos - tile.centre;
@@ -2719,6 +2729,7 @@ fn kit(
                 }));
         }
     }
+    cornice_corners(tiles, masses, structures, &cornices);
     for &i in near {
         passages(tiles, &structures[i]);
         roof(tiles, &masses[i], &edges[i], &tall[i], KIT_PARTY);
@@ -2744,6 +2755,61 @@ fn kit(
                 r.seconds * 1e3
             )
         }),
+    }
+}
+
+/// The corners where two walls' cornices meet outside a building (the owner, 2026-10-16: "the
+/// places between the roof borders at where they meet at the house sides are not filled. it could
+/// be angular or rounded"): each step of the cornice ([`modules::CORNICE_STEPS`]) mitred round
+/// the corner, a prism from the corner out to where the two steps' faces meet. `cornices` holds
+/// each cornice's mass, wall, foot and height.
+fn cornice_corners(
+    tiles: &mut Tiles,
+    masses: &[Mass],
+    structures: &[Structure],
+    cornices: &[(usize, usize, f64, f64)],
+) {
+    let size = tiles.size;
+    for &(i, w, y, h) in cornices {
+        let s = &structures[i];
+        let wall = &s.walls[w];
+        // The wall starting where this one ends, its cornice as high.
+        let next = cornices.iter().find(|&&(j, v, y2, h2)| {
+            j == i
+                && v != w
+                && s.walls[v].a.distance(wall.b) < 0.01
+                && (y2 - y).abs() < 0.01
+                && (h2 - h).abs() < 0.01
+        });
+        let Some(&(_, v, _, _)) = next else {
+            continue;
+        };
+        let (d1, d2) = (
+            (wall.b - wall.a).normalize_or_zero(),
+            (s.walls[v].b - s.walls[v].a).normalize_or_zero(),
+        );
+        // Outside corners only: the outline turns left there (it winds anticlockwise). Inside
+        // ones the two cornices cross.
+        if d1.perp_dot(d2) <= 1e-6 {
+            continue;
+        }
+        let (n1, n2) = (DVec2::new(d1.y, -d1.x), DVec2::new(d2.y, -d2.x));
+        let cos = n1.dot(n2);
+        // Sharper than about 70°, the mitre would reach far out: left open.
+        if 1.0 + cos < 0.3 {
+            continue;
+        }
+        let c = wall.b;
+        let tile = tiles.at(masses[i].footprint[0]);
+        let centre = tile.centre;
+        let at = |q: DVec2, height: f64| world(size, q, height) - centre;
+        for (f0, f1, out) in modules::CORNICE_STEPS {
+            let out = f64::from(out);
+            let tip = c + (n1 + n2) * (out / (1.0 + cos));
+            let ring = [c, c + n1 * out, tip, c + n2 * out];
+            let (y0, y1) = (y + h * f64::from(f0), y + h * f64::from(f1));
+            solid(&mut tile.masses, &at, &ring, y0, y1, KIT_STONE);
+        }
     }
 }
 
@@ -2832,7 +2898,7 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
             // window two thirds into its wall, a door 0.35 m, a shopfront 0.3; a passage's
             // linings are its own (`passages`).
             let window_reveal = (wall.thickness * 0.65).clamp(0.12, 0.40);
-            let holes: Vec<(f64, f64, f64, f64, Option<f64>)> = s
+            let holes: Vec<(f64, f64, f64, f64, Option<f64>, f64)> = s
                 .openings
                 .iter()
                 .filter(|o| o.wall == w)
@@ -2846,7 +2912,15 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
                         OpeningKind::Passage => None,
                     };
                     let head = (level + o.head).min(top);
-                    (lo.max(0.0), hi.min(length), level + o.sill, head, lined)
+                    let floor = floor_level(s, o.storey);
+                    (
+                        lo.max(0.0),
+                        hi.min(length),
+                        level + o.sill,
+                        head,
+                        lined,
+                        floor,
+                    )
                 })
                 .filter(|h| h.1 > h.0 + 0.01 && h.3 > h.2 + 0.01)
                 .collect();
@@ -2883,7 +2957,7 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
             // jambs, the head and, over a window's sill, the sill. Without them a window seen
             // from inside showed the garden's lawn under its frame, through the hollow wall
             // (the owner, 2026-10-16: "windows issues", "door transitions are wrong no wall").
-            for &(lo, hi, y0, y1, lined) in &holes {
+            for &(lo, hi, y0, y1, lined, floor) in &holes {
                 let Some(from) = lined.filter(|r| deep > r + 0.005) else {
                     continue;
                 };
@@ -2911,17 +2985,19 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
                     );
                 }
                 let l = ((hi - lo) / 3.0) as f32;
-                let floor = s.storeys.first().map_or(0.0, |st| st.level);
-                // The head; a window's sill; a door's floor through the wall at the house's
-                // floor (2 cm over the sill the kit's threshold stone stands on), in the floor's
-                // stone: from the threshold's inner end to the inner face the street's paving
-                // showed through the doorway (the owner, 2026-10-16: "entry pavement leaks into
-                // the house floor").
+                // The head; a window's sill; a door's floor through the wall at its storey's
+                // floor (`floor_level`: the ground floor 2 cm over the sill the kit's threshold
+                // stone stands on), in the floor's stone: from the threshold's inner end to the
+                // inner face the street's paving showed through the doorway (the owner,
+                // 2026-10-16: "entry pavement leaks into the house floor"). A door's sill stands
+                // at the walking level, over the storey's level: compared with that, every door
+                // took a window's sill cap, at the paving's height, and the two fought in every
+                // doorway (the owner, 2026-10-17: "plenty of issue with z fighting on the floor").
                 let mut caps = vec![(y1, Vec3::NEG_Y, plaster)];
                 if y0 > floor + 0.05 {
                     caps.push((y0, Vec3::Y, plaster));
                 } else {
-                    caps.push((y0 + 0.02, Vec3::Y, KIT_INSIDE_FLOOR));
+                    caps.push((floor, Vec3::Y, KIT_INSIDE_FLOOR));
                 }
                 for (y, n, section) in caps {
                     let (a, b, c, d) = (p(lo, from), p(hi, from), p(hi, deep), p(lo, deep));
@@ -3025,10 +3101,14 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
             cap(mesh, &ring, ceiling, -Vec3::Y, plaster);
         }
         if let Some(inner) = &inner {
+            // The flights' steps in the floors' smooth limestone: in the facades' pitted stone,
+            // lit at a grazing angle through the door, their treads glittered (the owner,
+            // 2026-10-17: "Stairs lighting is still strange").
             for (ring, y0, y1, stone) in interior_solids(s, inner, top) {
-                let section = if stone { KIT_STONE } else { plaster };
+                let section = if stone { KIT_INSIDE_FLOOR } else { plaster };
                 solid(mesh, &at, &ring, y0, y1, section);
             }
+            soffits(mesh, &at, s, inner, plaster);
         }
         count += (mesh.indices.len() - before) / 3;
     }
@@ -3085,6 +3165,91 @@ fn floor_level(s: &Structure, k: usize) -> f64 {
         st.level.max(WALK_LEVEL + 0.02)
     } else {
         st.level
+    }
+}
+
+/// Each flight's soffit (`interior_solids` draws its steps): a slab sloping with the flight under
+/// its steps, its underside through the steps' back lower corners, so the flight seen from below
+/// is one smooth slope and not every step's flat bottom in a sawtooth; from where that underside
+/// leaves the floor to the last step, plastered as the walls.
+fn soffits(
+    mesh: &mut TriMesh,
+    at: &dyn Fn(DVec2, f64) -> Vec3,
+    s: &Structure,
+    inner: &interior::Interior,
+    section: u8,
+) {
+    let Some(stair) = inner.stair else {
+        return;
+    };
+    let across = stair[1] - stair[0];
+    let width = across.length();
+    let a = across / width.max(1e-6);
+    let c = inner.climb.normalize_or_zero();
+    let g = cores::GOING;
+    for (k, &r) in inner.risers.iter().enumerate() {
+        if k + 1 >= s.storeys.len() || r < 3 {
+            break;
+        }
+        let base = floor_level(s, k);
+        let rise = (s.storeys[k + 1].level - base) / f64::from(r);
+        // The steps' nosings' line, the underside 2 risers and 15 cm under it (through each
+        // step's back lower corner), the top a riser under it (inside the steps).
+        let nosing = |v: f64| base + rise + v * rise / g;
+        let under = |v: f64| nosing(v) - 2.0 * rise - 0.15;
+        let over = |v: f64| nosing(v) - rise;
+        let (v0, v1) = (g * (1.0 + 0.15 / rise), f64::from(r - 1) * g);
+        if v1 <= v0 + 0.05 {
+            continue;
+        }
+        let p = |v: f64, u: f64, y: f64| at(stair[0] + c * v + a * u, y);
+        let slope = Vec3::new(c.x as f32, (rise / g) as f32, c.y as f32).normalize();
+        let side = Vec3::new(a.x as f32, 0.0, a.y as f32);
+        let mut down = slope.cross(side).normalize();
+        if down.y > 0.0 {
+            down = -down;
+        }
+        let quad = |mesh: &mut TriMesh, q: [Vec3; 4], n: Vec3| {
+            triangle_uv(mesh, [q[0], q[1], q[2]], [[0.0; 2]; 3], n, section);
+            triangle_uv(mesh, [q[0], q[2], q[3]], [[0.0; 2]; 3], n, section);
+        };
+        // The underside.
+        quad(
+            mesh,
+            [
+                p(v0, 0.0, under(v0)),
+                p(v1, 0.0, under(v1)),
+                p(v1, width, under(v1)),
+                p(v0, width, under(v0)),
+            ],
+            down,
+        );
+        // Its two sides and its two ends.
+        for (u, n) in [(0.0, -side), (width, side)] {
+            quad(
+                mesh,
+                [
+                    p(v0, u, under(v0)),
+                    p(v1, u, under(v1)),
+                    p(v1, u, over(v1)),
+                    p(v0, u, over(v0)),
+                ],
+                n,
+            );
+        }
+        let along = Vec3::new(c.x as f32, 0.0, c.y as f32);
+        for (v, n) in [(v0, -along), (v1, along)] {
+            quad(
+                mesh,
+                [
+                    p(v, 0.0, under(v)),
+                    p(v, width, under(v)),
+                    p(v, width, over(v)),
+                    p(v, 0.0, over(v)),
+                ],
+                n,
+            );
+        }
     }
 }
 
@@ -3245,7 +3410,7 @@ fn interior_pieces(
             out.push(solid(&ring, y0, y1));
         }
         // The furniture but the chairs, which a walker brushes past.
-        for p in furnish::furnish(s, &inner) {
+        for p in forge_procgen::city::walk::furnished(m, s, &inner) {
             if p.piece != furnish::Piece::Chair {
                 let y0 = floor_level(s, p.storey);
                 out.push(solid(&p.outline(), y0, y0 + p.piece.height()));
@@ -4583,9 +4748,17 @@ impl Scenario for PlanScenario {
             // the stairs swung at 7.5 Hz (the owner saw the stairs shimmer, 2026-10-16: 3–7 % of
             // a still view's pixels between frames 10 apart; #272). With 256 rays, as the models
             // lab's rooms (#171), 0.004–0.015 % once settled; 0.8 ms more along the road
-            // (3.73 → 4.51 ms).
-            probes: (!self.flora.is_empty())
-                .then_some((256, forge_render::probes::ProbeParams::default().spacing)),
+            // (3.73 → 4.51 ms). And 2 m apart, in six cascades (the coarsest 64 m apart as the
+            // city's): 4 m apart, coarser than the rooms (3 × 4 m) and their walls, the sky's
+            // light leaked in blue, the shadows sat in odd places and swung with the jitter (the
+            // owner, 2026-10-17: "the shadow ... where shimmering a lot and are very strangely
+            // placed"; 15 000 pixels of a hall changed between frames 10 apart, 106 at 2 m;
+            // about 0.3 ms more). At 2 m the 7.5 Hz shimmer of #272 is gone at 128 rays as at 256
+            // (the loading session's measures, #274: the stairs 3–15 px against 4–12, the landing
+            // 204–253 against 205–262, the room 5–27 against 4–28; here 75 and 52 against 91 and
+            // 56), and the probes' rays cost 1.1–1.3 ms rather than 1.9–2.1 (the frame 4.50 →
+            // 3.70 ms): 128.
+            probes: (!self.flora.is_empty()).then_some((128, 2.0, 6)),
             // And metered: at the street's fixed exposure (EV 14) a hall lit through its door
             // and the ground under the holm oaks were black (the owner, 2026-10-16: "insides are
             // way too dark", "light below trees is too dark"); the light was there, the eye

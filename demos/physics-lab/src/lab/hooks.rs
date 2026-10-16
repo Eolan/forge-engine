@@ -200,8 +200,11 @@ impl Scenario for LabScenario {
             splashes: kind == LabScene::Yard,
             // The models lab's rooms, lit through a few openings and seen at an indoor
             // exposure: 256 rays, probes a metre apart (#171).
-            probes: (kind == LabScene::Models && models::room_shown())
-                .then_some((256, ROOM_PROBE_SPACING)),
+            probes: (kind == LabScene::Models && models::room_shown()).then_some((
+                256,
+                ROOM_PROBE_SPACING,
+                forge_render::probes::ProbeParams::default().cascades,
+            )),
             // The car is followed from the start (C lets it go); the aeroplane always is.
             chase: matches!(kind, LabScene::Drive | LabScene::Flyer),
             // Each lab scene at its own fixed exposure (its captures compared at one).

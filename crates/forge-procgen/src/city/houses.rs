@@ -192,7 +192,14 @@ pub fn houses(
             if width < MIN_FRONT {
                 return None;
             }
-            let mut plan = rooms::plan(&rooms::programme(people, means), width, plan_depth(ty));
+            // As deep as the lot lets it along its stretch at most: a plan deeper than its lot
+            // left the lot's lines for a rectangle, a sliver beside its neighbour.
+            let room = least_depth(lot, a, t, inward, s0, s1).min(plan_depth(ty));
+            let mut plan = rooms::plan(
+                &rooms::programme(people, means),
+                width,
+                room.max(rooms::DEPTH.0),
+            );
             if plan.storeys.len() > 1 {
                 plan.deepen(stair.min(plan_depth(ty)));
             }
@@ -201,7 +208,6 @@ pub fn houses(
             if plan.storeys.len() > 3 {
                 return None;
             }
-            let room = least_depth(lot, a, t, inward, s0, s1).min(plan_depth(ty));
             Some(Draft {
                 a,
                 t,

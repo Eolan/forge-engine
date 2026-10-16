@@ -695,6 +695,76 @@ The village has 77 houses (82 before the depth cap: wider lots), 241 people.
 | a lone party wall | — | 19 | 17 |
 | a flat roof on a tiled house | — | — | 0 |
 
+**The night of 2026-10-16 to 17** (the owner's walk: blank upper walls on the street, the flight
+a hand off its wall and starting behind the front door, z-fighting on the floors, shadows
+"shimmering a lot and very strangely placed", the cornices' corners open; and "using the nav
+mesh to test navigations inside the houses"):
+
+- *Rooms where an architect would put them* (`rooms::plan`). The day rooms come first, the
+  largest first. The night rooms keep the programme's order, so each bathroom follows the
+  bedrooms it serves (sorted by area, the bathrooms came last and a top storey held a bathroom
+  alone, its street front blank). The bedrooms go upstairs together, decided by the first of
+  them. A storey's bands are arranged with a room wanting a window at the front and at the back,
+  the bathrooms and stores between them where a row house has no outside wall. Small rooms
+  left past a storey's depth take the depth the bands spare (none under its least or its rooms
+  under 9 m²). Where they still need a storey, an office keeps them company at the front, or a
+  guest room where the household has an office (the owner: "it can be an office, a guest room,
+  or an utility room"). A plan is no deeper than its lot allows along its front
+  (`houses::houses`): deeper plans had left their lot's lines for a rectangle, a sliver beside
+  the neighbour. A first version inserted an office for a bathroom that never fitted behind it,
+  again and again, and took Windows down twice; the planner now places one only where both
+  fit, and asserts it ends.
+- *Windows on the street* (`windows::by_room`). A room on a street shows it a window whatever it
+  is, a bathroom's small and high. A room with one window adds one on its street stretch where
+  its longest is elsewhere, and a hall without a stair (a house of one storey) gets one on its
+  street.
+- *The flight* (`cores`). It stands at the end of the front beside a party wall (a corner
+  house's ran along its side street, a blank wall the whole depth) and is slid against its side
+  wall (`cores::snug`: the 0.2 m core wall and the door's half-metre places left a gap). It
+  climbs from the back of the hall towards the street, so the front door opens beside free
+  floor and not over the first steps (`Interior::climb`). Its steps are the floors' smooth
+  limestone (in the facades' pitted stone they glittered in the door's grazing light), and a
+  plastered soffit slopes under each flight (`soffits`): from below it read as every step's
+  flat bottom, a sawtooth.
+- *The walk* (`city::walk`, the first stage of the navigation `research/game-ai-ecosystems.md`
+  plans, Recast's voxel step). Each storey of a house with its insides is rasterised at 5 cm:
+  the floor inside the walls, the partitions open at their doorways, the furniture and the
+  flights blocked, the free cells eroded by 0.3 m, a walker's half-width. A flood starts inside
+  the front door and goes up each flight from its foot to its head. What it misses is an
+  anomaly: a room, a flight's foot, an outside door, and a door whose leaves swing into
+  furniture or a flight. The furnishing is vetted by it (`walk::furnished`): while a room is
+  missed, the piece nearest its doorways goes. The whole village walks in about 0.3 s, and
+  `walk::map` prints a storey's grid for looking into one.
+- *Doorways* (`insides`). A door's floor through its wall sat at the paving's height and
+  fought it in every doorway, the paving winning on half the jitter's cycle. The cap compared
+  the door's sill (at the walking level) with the storey's level and took a window sill's. It
+  now stands at its storey's floor (`floor_level`).
+- *The probes* (`PlanScenario::look`). 2 m apart in six cascades (the coarsest 64 m apart, as
+  the city's), at 128 rays. 4 m apart, coarser than the rooms (3 × 4 m) and their walls, the
+  sky's light leaked in blue and the shadows sat in odd places and swung with the jitter:
+  15 000 pixels of a hall changed between frames 10 apart, about 100 now. At 2 m the shimmer of
+  #272 is gone at 128 rays as at 256 (the loading session's measures, #274), and the frame
+  costs less than before (see `docs/PROFILE.md`).
+- *Cornices' corners* (`cornice_corners`). Where two walls' cornices meet at an outside corner,
+  each of the three steps (`modules::CORNICE_STEPS`) is mitred round it, a prism from the corner
+  out to where the two steps' faces meet.
+
+| Anomaly | Before the night | Now |
+|---|---|---|
+| a habitable room without a window | 33 | 20 |
+| a sliver | 9 | 3 |
+| a free garden wall end | 11 | 5 |
+| a lone party wall | 17 | 5 |
+| a ridge step | 6 | 2 |
+| a flight off its side wall (new) | — | 8 |
+| a storey's street front blank over 3 m (new) | 35 | 14 |
+| a room the walk misses (new) | 8 | 0 |
+| a flight whose foot it misses (new) | 0 | 0 |
+| an outside door it misses (new) | 1 | 1 |
+| a door's leaves swinging into something (new) | 0 | 0 |
+
+62 of the village's 65 houses get their insides (59 before).
+
 **Its insides** (`city::interior`, the same day; the owner: "a house or structure
 should be thought by thinking about the rooms"): a house's structure now follows its rooms'
 plan. Its core (`cores`, the straight flight of 1.1 m with handrails beside a corridor of

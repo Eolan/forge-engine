@@ -379,11 +379,12 @@ pub struct Args {
     /// 256, as many as with no probes at all).
     #[arg(long)]
     probe_rays: Option<u32>,
-    /// Probe cascades, 4 m apart for the finest and twice as far each after (1 to 6).
-    #[arg(long, default_value_t = ProbeParams::default().cascades)]
-    probe_cascades: u32,
-    /// The finest probe cascade's spacing in metres, the next ones twice as far each: 4, and
-    /// `ROOM_PROBE_SPACING` in the models lab's rooms.
+    /// Probe cascades, each twice as coarse as the one before (1 to 6): 5, and 6 in the
+    /// village (its finest 2 m apart).
+    #[arg(long)]
+    probe_cascades: Option<u32>,
+    /// The finest probe cascade's spacing in metres, the next ones twice as far each: 4,
+    /// `ROOM_PROBE_SPACING` in the models lab's rooms, 2 in the village.
     #[arg(long)]
     probe_spacing: Option<f32>,
     /// Draw the island without its water (issue #105, D-038): the stand-in sea's opaque plane,
@@ -1061,8 +1062,11 @@ impl Gallery {
             (64..=256).contains(&probe_rays),
             "--probe-rays takes 64 to 256"
         );
+        let probe_cascades = args
+            .probe_cascades
+            .unwrap_or(look.probes.map_or(ProbeParams::default().cascades, |p| p.2));
         anyhow::ensure!(
-            (1..=forge_render::probes::MAX_CASCADES as u32).contains(&args.probe_cascades),
+            (1..=forge_render::probes::MAX_CASCADES as u32).contains(&probe_cascades),
             "--probe-cascades takes 1 to {}",
             forge_render::probes::MAX_CASCADES
         );
@@ -1073,7 +1077,7 @@ impl Gallery {
         let probes = if ctx.device.features().ray_query && scene.rays().is_some() {
             let params = ProbeParams {
                 rays: probe_rays,
-                cascades: args.probe_cascades,
+                cascades: probe_cascades,
                 cadence: args.probe_cadence,
                 spacing: args
                     .probe_spacing

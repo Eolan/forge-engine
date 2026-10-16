@@ -1392,6 +1392,14 @@ something stands out). Two things to watch:
     The village's leaf cards (#266) gained most: `meshlet pass 1` 1.80 → 1.19 ms from the air
     and 1.11 → 0.53 ms along the road, the images unchanged to the pixel. The batch is
     unchanged too (240 captures, both paths), and its timings move by under 0.04 ms.
+  - *2026-10-17, the village's probes 2 m apart:* six cascades from 2 m, 128 rays. Inside a
+    house at the hall's door (`--view=80.47,2.22,-170.69,357.1,-40.7`, DLAA, frame 200):
+    - 4 m and 256 rays, 3.80 ms;
+    - 2 m and 256 rays, 4.50 ms;
+    - 2 m and 128 rays, 3.70 ms.
+
+    `gi/probe rays` is 1.1–1.3 ms at 128 rays against 1.9–2.1 at 256 (#274's measures). The
+    hall's pixels changing between frames 10 apart go from 15 000 to about 100.
   - *2026-10-16, the village's probes:* 256 rays a probe on the village's maps, where the
     houses are walked into: with 128, a hall lit through its door pulsed (#272). Along the road
     3.73 → 4.51 ms, `gi/probe rays` 1.43 → 2.07 ms (best of three); the map check's views

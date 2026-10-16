@@ -76,6 +76,12 @@ pub fn module(name: &str, w: f32, h: f32) -> Option<TriMesh> {
     module_deep(name, w, h, reveal)
 }
 
+/// The cornice's three steps out, the top one furthest: each its foot and its top as shares of
+/// its height and how far it stands out of the wall, metres. A building's corners join them
+/// (`city-plan`'s mitred corners).
+pub const CORNICE_STEPS: [(f32, f32, f32); 3] =
+    [(0.0, 0.3, 0.06), (0.3, 0.65, 0.18), (0.65, 1.0, 0.3)];
+
 /// A module `w` by `h` metres, its opening's reveal `reveal` metres deep: the window set back
 /// into a wall of its thickness (D-060: old stone's deep, modern walls' shallow).
 pub fn module_deep(name: &str, w: f32, h: f32, reveal: f32) -> Option<TriMesh> {
@@ -99,9 +105,7 @@ pub fn module_with(name: &str, w: f32, h: f32, reveal: f32, cards: bool) -> Opti
         "blank" => quad(&mut m, wall_quad(w, h, 0.0), PARTY),
         "band" => cuboid(&mut m, Vec3::ZERO, Vec3::new(w, h, 0.08), STONE, NO_BACK),
         "cornice" => {
-            // Three steps out, the top one furthest.
-            let steps = [(0.0, 0.3, 0.06), (0.3, 0.65, 0.18), (0.65, 1.0, 0.3)];
-            for (y0, y1, out) in steps {
+            for (y0, y1, out) in CORNICE_STEPS {
                 cuboid(
                     &mut m,
                     Vec3::new(0.0, h * y0, 0.0),

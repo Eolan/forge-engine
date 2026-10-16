@@ -206,37 +206,117 @@ pub fn plan(programme: &[Room], width: f64, max_depth: f64) -> Plan {
     let end = width - WALL;
     let inner = (end - HALL).max(2.4);
     let mut rooms: Vec<Room> = programme.to_vec();
+    // The day rooms first, the largest first; the night rooms in the programme's order, each
+    // bathroom after the bedrooms it serves (a suite's beside its bedroom): sorted by area, the
+    // bathrooms all came last and a storey of them went on top.
     rooms.sort_by(|a, b| {
         b.kind
             .by_day()
             .cmp(&a.kind.by_day())
-            .then(b.area.total_cmp(&a.area))
+            .then(if a.kind.by_day() {
+                b.area.total_cmp(&a.area)
+            } else {
+                std::cmp::Ordering::Equal
+            })
     });
-    // The bedrooms go upstairs once the day rooms take half the ground floor's depth; a small
-    // household keeps to one floor.
-    let upstairs =
-        |r: &Room, storeys: usize, y: f64| !r.kind.by_day() && storeys == 1 && y >= max_depth * 0.5;
+    // The bedrooms go upstairs together once the day rooms take half the ground floor's depth; a
+    // small household keeps to one floor. The first of them decides: a bathroom alone went up
+    // after a bedroom stayed down, a floor for 3 m².
+    let mut night = false;
+    let upstairs = |r: &Room, storeys: usize, y: f64, night: bool| {
+        !r.kind.by_day() && !night && storeys == 1 && y >= max_depth * 0.5
+    };
     let mut storeys: Vec<Vec<Placed>> = vec![Vec::new()];
+    // The asked areas of the current storey's rooms, in their order.
+    let mut asked: Vec<f64> = Vec::new();
+    // A band's depth from its first room's area: as deep as the room is square, or as its area
+    // across the width left asks, within [`DEPTH`] and the plan's depth.
+    let band = |area: f64| {
+        let d = area.sqrt().clamp(DEPTH.0, DEPTH.1);
+        let d = if area / d > inner {
+            (area / inner).clamp(DEPTH.0, DEPTH.1)
+        } else {
+            d
+        };
+        d.min(max_depth)
+    };
     let mut y = 0.0;
     let mut i = 0;
+    // Every pass places a band or moves one room (at most once a storey): far fewer than this.
+    let mut passes = 0usize;
     while i < rooms.len() {
+        passes += 1;
+        assert!(
+            passes <= 64 * (programme.len() + 2),
+            "rooms::plan does not end: {} rooms, {} storeys",
+            rooms.len(),
+            storeys.len()
+        );
         let first = rooms[i];
-        let mut d = first.area.sqrt().clamp(DEPTH.0, DEPTH.1);
-        if first.area / d > inner {
-            d = (first.area / inner).clamp(DEPTH.0, DEPTH.1);
+        let d = band(first.area);
+        let up = upstairs(&first, storeys.len(), y, night);
+        // Only small rooms left past the storey's depth (a bathroom, a store): the storey's bands
+        // give up the depth they spare for them rather than a floor holding a bathroom alone, its
+        // street front blank (the owner, 2026-10-16).
+        let small = rooms[i..]
+            .iter()
+            .all(|r| matches!(r.kind, RoomKind::Bathroom | RoomKind::Store));
+        let k = storeys.len() - 1;
+        if y > 0.0
+            && !up
+            && small
+            && y + d > max_depth + 1e-9
+            && squeeze(&mut storeys[k], &asked, y + d - max_depth)
+        {
+            y = max_depth - d;
         }
-        if y > 0.0 && (y + d > max_depth + 1e-9 || upstairs(&first, storeys.len(), y)) {
+        if y > 0.0 && (y + d > max_depth + 1e-9 || up) {
+            arrange(storeys.last_mut().expect("a storey"));
             storeys.push(Vec::new());
+            asked.clear();
             y = 0.0;
+            // Its band's depth, as the band will take it.
+            let company = band(ROOM_MIN);
+            if small && company + d <= max_depth + 1e-9 {
+                // Still a storey for them alone: a room with a window keeps them company at the
+                // front (the owner, 2026-10-16: "it can be an office, a guest room, or an utility
+                // room (although they tend to be downstairs)"), an office where the household has
+                // none, else a guest room. Only where both fit the depth, so the next band places
+                // the bathroom: on a shallow lot it never fitted behind the office, and an office
+                // went in again and again until the memory ran out (Windows down twice, 2026-10-16).
+                let kind = if rooms.iter().any(|r| r.kind == RoomKind::Study) {
+                    RoomKind::Bedroom
+                } else {
+                    RoomKind::Study
+                };
+                rooms.insert(
+                    i,
+                    Room {
+                        kind,
+                        area: ROOM_MIN,
+                    },
+                );
+                continue;
+            }
+            // A storey's front band holds a room with a window, not a store or a bathroom: the
+            // next room that is comes first.
+            if let Some(j) = rooms[i..]
+                .iter()
+                .position(|r| !matches!(r.kind, RoomKind::Bathroom | RoomKind::Store))
+                .filter(|&j| j > 0)
+            {
+                let r = rooms.remove(i + j);
+                rooms.insert(i, r);
+                continue;
+            }
         }
-        let d = d.min(max_depth);
         let storey = storeys.len() - 1;
         let start = storeys[storey].len();
         let mut x = HALL;
         while i < rooms.len() {
             let r = rooms[i];
             let w = (r.area / d).max(2.4);
-            if x > HALL && (x + w > end + 1e-9 || upstairs(&r, storeys.len(), y)) {
+            if x > HALL && (x + w > end + 1e-9 || upstairs(&r, storeys.len(), y, night)) {
                 break;
             }
             let w = w.min(end - x);
@@ -246,6 +326,8 @@ pub fn plan(programme: &[Room], width: f64, max_depth: f64) -> Plan {
                 x: (x, x + w),
                 y: (y, y + d),
             });
+            asked.push(r.area);
+            night |= !r.kind.by_day();
             x += w;
             i += 1;
         }
@@ -265,6 +347,7 @@ pub fn plan(programme: &[Room], width: f64, max_depth: f64) -> Plan {
         }
         y += d;
     }
+    arrange(storeys.last_mut().expect("a storey"));
     let depth = storeys
         .iter()
         .filter_map(|s| s.last().map(|r| r.y.1))
@@ -283,16 +366,97 @@ pub fn plan(programme: &[Room], width: f64, max_depth: f64) -> Plan {
     }
 }
 
+/// A storey's bands (`placed`) in their order from the front: a band with a room that wants a
+/// window first and another last, against the street and the back walls, the bands of bathrooms,
+/// stores and service rooms between them, where a row house's middle has no outside wall
+/// (`research/house-layouts.md` rule 14: a bedroom in the middle band had no window). The rooms
+/// then in that order, front to back.
+fn arrange(placed: &mut [Placed]) {
+    let dark = |k: RoomKind| matches!(k, RoomKind::Bathroom | RoomKind::Store | RoomKind::Service);
+    // Each band's start, end and whether a room of it wants a window, from the front.
+    let mut bands: Vec<(f64, f64, bool)> = Vec::new();
+    for r in placed.iter() {
+        match bands.iter_mut().find(|b| (b.0 - r.y.0).abs() < 1e-9) {
+            Some(b) => b.2 |= !dark(r.kind),
+            None => bands.push((r.y.0, r.y.1, !dark(r.kind))),
+        }
+    }
+    bands.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let lit: Vec<usize> = (0..bands.len()).filter(|&b| bands[b].2).collect();
+    let mut order: Vec<usize> = Vec::with_capacity(bands.len());
+    order.extend(lit.first());
+    order.extend((0..bands.len()).filter(|&b| !bands[b].2));
+    if lit.len() > 2 {
+        order.extend(&lit[1..lit.len() - 1]);
+    }
+    if lit.len() > 1 {
+        order.extend(lit.last());
+    }
+    let mut at = 0.0;
+    let moved: Vec<(f64, f64, f64)> = order
+        .iter()
+        .map(|&b| {
+            let (y0, y1, _) = bands[b];
+            at += y1 - y0;
+            (y0, at - (y1 - y0), at)
+        })
+        .collect();
+    for r in placed.iter_mut() {
+        if let Some(&(_, s, e)) = moved.iter().find(|m| (m.0 - r.y.0).abs() < 1e-9) {
+            r.y = (s, e);
+        }
+    }
+    placed.sort_by(|a, b| a.y.0.total_cmp(&b.y.0).then(a.x.0.total_cmp(&b.x.0)));
+}
+
+/// A storey's bands (`placed`, the rooms that asked `asked`) made `by` metres shallower in all,
+/// each giving up depth in proportion to what it spares: none under [`DEPTH`]'s least, none of
+/// its rooms under what it asked or [`ROOM_MIN`], whichever is less. Whether they could.
+fn squeeze(placed: &mut [Placed], asked: &[f64], by: f64) -> bool {
+    // The bands' starts, in order, and what each spares.
+    let mut bands: Vec<(f64, f64, f64)> = Vec::new();
+    for (r, &a) in placed.iter().zip(asked) {
+        let least = (a.min(ROOM_MIN) / (r.x.1 - r.x.0).max(1e-6)).max(DEPTH.0);
+        match bands.iter_mut().find(|b| (b.0 - r.y.0).abs() < 1e-9) {
+            Some(b) => b.2 = b.2.max(least),
+            None => bands.push((r.y.0, r.y.1, least)),
+        }
+    }
+    let spare: f64 = bands.iter().map(|b| (b.1 - b.0 - b.2).max(0.0)).sum();
+    if spare < by - 1e-9 || bands.is_empty() {
+        return false;
+    }
+    // Each band's new start and end, from the front.
+    let mut at = 0.0;
+    let new: Vec<(f64, f64, f64)> = bands
+        .iter()
+        .map(|b| {
+            let give = (b.1 - b.0 - b.2).max(0.0) / spare * by;
+            let start = at;
+            at += b.1 - b.0 - give;
+            (b.0, start, at)
+        })
+        .collect();
+    for r in placed.iter_mut() {
+        if let Some(&(_, s, e)) = new.iter().find(|n| (n.0 - r.y.0).abs() < 1e-9) {
+            r.y = (s, e);
+        }
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn check(plan: &Plan, programme: &[Room], max_depth: f64) {
         assert!(plan.depth <= max_depth + 1e-9, "depth {}", plan.depth);
-        assert_eq!(
-            plan.storeys.iter().map(Vec::len).sum::<usize>(),
-            programme.len(),
-            "every room placed"
+        // Every room placed, an office or a guest room more at most beside a storey's bathroom.
+        let placed = plan.storeys.iter().map(Vec::len).sum::<usize>();
+        assert!(
+            placed >= programme.len() && placed <= programme.len() + plan.storeys.len(),
+            "every room placed: {placed} of {}",
+            programme.len()
         );
         // Each storey's rooms tile it beside the hall, none over another.
         for (k, storey) in plan.storeys.iter().enumerate() {
@@ -356,6 +520,52 @@ mod tests {
         );
         assert!(plan.storeys[0].iter().all(|r| r.kind.by_day()));
         assert!(plan.rooms_area() >= 50.0, "{:.0} m²", plan.rooms_area());
+    }
+
+    /// No storey holds only bathrooms or stores (the owner, 2026-10-16: a floor for a bathroom
+    /// left its street front blank).
+    #[test]
+    fn no_storey_is_a_bathroom_alone() {
+        let mut alone = Vec::new();
+        for means in [Means::Poor, Means::Modest, Means::Comfortable, Means::Rich] {
+            for people in 1..=6 {
+                for width in [5.6, 6.0, 7.0, 8.5, 10.0, 12.0] {
+                    for max_depth in [8.0, 10.0, 12.0] {
+                        let p = programme(people, means);
+                        let plan = plan(&p, width, max_depth);
+                        check(&plan, &p, max_depth);
+                        let lone = plan.storeys.iter().any(|s| {
+                            s.iter()
+                                .all(|r| matches!(r.kind, RoomKind::Bathroom | RoomKind::Store))
+                        });
+                        if lone {
+                            alone.push(format!("{means:?} {people} on {width} × {max_depth}"));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(alone.is_empty(), "{} {alone:?}", alone.len());
+    }
+
+    /// Every plan ends with every room placed, on lots as shallow as a room (the houses' lots
+    /// cap the depth): an office added for a bathroom that never fitted behind it looped until
+    /// the memory ran out (2026-10-16).
+    #[test]
+    fn every_plan_ends_on_shallow_lots() {
+        for means in [Means::Poor, Means::Modest, Means::Comfortable, Means::Rich] {
+            for people in 1..=6 {
+                for width in [5.6, 6.0, 8.5, 12.0] {
+                    for max_depth in [2.6, 3.0, 4.0, 5.0, 5.5, 6.0, 7.0] {
+                        let p = programme(people, means);
+                        let plan = plan(&p, width, max_depth);
+                        let placed = plan.storeys.iter().map(Vec::len).sum::<usize>();
+                        assert!(placed >= p.len() && placed <= p.len() + plan.storeys.len());
+                        assert!(plan.depth <= max_depth + 1e-9);
+                    }
+                }
+            }
+        }
     }
 
     #[test]

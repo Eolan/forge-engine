@@ -50,6 +50,7 @@ pub mod transit;
 pub mod trees;
 pub mod units;
 pub mod village;
+pub mod walk;
 pub mod walls;
 pub mod windows;
 

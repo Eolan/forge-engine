@@ -4,7 +4,7 @@
 //! keeps at the start of the front ([`super::cores`] puts a house's core there): partitions
 //! between the bands and between the rooms of a band, a doorway from the hall into each band's
 //! first room and from each room into the next, so every room of a storey is reached from the
-//! hall, and the flight climbing from the street wall into the house.
+//! hall, and the flight climbing from the back of the hall towards the street wall.
 
 use glam::DVec2;
 
@@ -66,10 +66,12 @@ pub struct Interior {
     /// The hall on every storey, from the street wall to the back wall: the core's stair and
     /// corridor and, behind the core, the corridor on to the back.
     pub hall: [DVec2; 4],
-    /// The flight's box (the core's stair), the same on every storey but the top; `None` in a house
-    /// of one storey.
+    /// The flight's box (the core's stair), its foot's corners first, the same on every storey but
+    /// the top; `None` in a house of one storey.
     pub stair: Option<[DVec2; 4]>,
-    /// The way the flight climbs: from the street wall into the house.
+    /// The way the flight climbs: from the back of the hall towards the street wall, its landing
+    /// at the head by the front, so the front door opens beside free floor (the owner, 2026-10-16:
+    /// "stairs start behind the door (the door prevents access to the stairs)").
     pub climb: DVec2,
     /// The risers each storey's flight climbs, ground first.
     pub risers: Vec<u32>,
@@ -370,8 +372,8 @@ pub fn house(m: &Mass, s: &Structure) -> Option<Interior> {
                 at(u_at(vmax).0, vmax),
             ]
         },
-        stair: core.map(|c| c.stair),
-        climb: n,
+        stair: core.map(|c| [c.stair[2], c.stair[3], c.stair[0], c.stair[1]]),
+        climb: -n,
         risers: core.map_or_else(Vec::new, |c| c.risers.clone()),
     })
 }

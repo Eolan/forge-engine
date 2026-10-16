@@ -64,22 +64,34 @@ pub fn by_room(m: &Mass, s: &mut Structure, seed: u64) {
         .collect();
     let mut out = kept;
     let mut rng = SplitMix64::new(seed ^ 0x0057_1D05);
-    for room in &inner.rooms {
-        let k = room.storey;
+    // The rooms, and the hall on each storey where no stair rises in it (a house of one storey):
+    // its kind `None`.
+    let mut spaces: Vec<(Option<RoomKind>, usize, Vec<DVec2>)> = inner
+        .rooms
+        .iter()
+        .map(|r| (Some(r.kind), r.storey, r.outline.to_vec()))
+        .collect();
+    if inner.stair.is_none() {
+        spaces.extend((0..s.storeys.len()).map(|k| (None, k, inner.hall.to_vec())));
+    }
+    for (kind, k, outline) in &spaces {
+        let (kind, k) = (*kind, *k);
         let Some(storey) = s.storeys.get(k) else {
             continue;
         };
         let draw = rng.next_f64();
-        let small = match room.kind {
-            RoomKind::Store => continue,
-            RoomKind::Bathroom if draw >= BATHROOM => continue,
-            RoomKind::Service if draw >= SERVICE => continue,
-            RoomKind::Bathroom | RoomKind::Service => true,
-            _ => false,
+        if kind == Some(RoomKind::Store) {
+            continue;
+        }
+        let small = matches!(kind, Some(RoomKind::Bathroom | RoomKind::Service));
+        let chance = match kind {
+            Some(RoomKind::Bathroom) => BATHROOM,
+            Some(RoomKind::Service) => SERVICE,
+            _ => 1.0,
         };
         let many = matches!(
-            room.kind,
-            RoomKind::Living | RoomKind::Salon | RoomKind::Dining
+            kind,
+            Some(RoomKind::Living | RoomKind::Salon | RoomKind::Dining)
         );
         // The room's stretches of outside wall it may open: along each street or court wall it
         // stands against, where that wall faces open air on its storey.
@@ -90,8 +102,7 @@ pub fn by_room(m: &Mass, s: &mut Structure, seed: u64) {
             }
             let tw = (wall.b - wall.a).normalize_or_zero();
             let inward = DVec2::new(-tw.y, tw.x);
-            let along: Vec<f64> = room
-                .outline
+            let along: Vec<f64> = outline
                 .iter()
                 .filter(|p| ((**p - wall.a).dot(inward) - wall.thickness).abs() < 0.25)
                 .map(|p| (*p - wall.a).dot(tw))
@@ -112,13 +123,31 @@ pub fn by_room(m: &Mass, s: &mut Structure, seed: u64) {
                 }
             }
         }
-        if small {
-            // On its longest stretch only.
+        // A space on the street shows it a window whatever it is (the owner, 2026-10-16: "an
+        // architect would arrange the inside of structure so that windows are on the street side
+        // instead of showing a blank wall"): a bathroom's small and high; a hall's on the street
+        // only.
+        let on_street = |&(w, _, _): &(usize, f64, f64)| s.walls[w].role == WallRole::Street;
+        if kind.is_none() {
+            stretches.retain(on_street);
+        }
+        if !stretches.iter().any(on_street) && draw >= chance {
+            continue;
+        }
+        if small || !many {
+            // A small room on its street stretch, else its longest; another on its longest and its
+            // street stretch.
             stretches.sort_by(|x, y| (y.2 - y.1).total_cmp(&(x.2 - x.1)));
-            stretches.truncate(1);
-        } else if !many {
-            stretches.sort_by(|x, y| (y.2 - y.1).total_cmp(&(x.2 - x.1)));
-            stretches.truncate(1);
+            let longest = stretches.first().copied();
+            let street = stretches.iter().copied().find(on_street);
+            stretches = if small {
+                street.or(longest).into_iter().collect()
+            } else {
+                longest
+                    .into_iter()
+                    .chain(street.filter(|&st| Some(st) != longest))
+                    .collect()
+            };
         }
         for (w, a, b) in stretches {
             let length = b - a;

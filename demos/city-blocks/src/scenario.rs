@@ -47,9 +47,9 @@ pub struct Look {
     pub backdrop: Backdrop,
     /// The spray of the scene's own splashes ([`Running::splashes`]), with or without water.
     pub splashes: bool,
-    /// The probes' rays and their finest spacing, metres, when the scene sets them (unless the
-    /// flags do).
-    pub probes: Option<(u32, f32)>,
+    /// The probes' rays, their finest spacing (metres) and their cascades, when the scene sets
+    /// them (unless the flags do).
+    pub probes: Option<(u32, f32, u32)>,
     /// The camera follows the scene's vehicle from the start ([`Running::follow`]).
     pub chase: bool,
     /// The exposure follows the scene's metered light without `--day` or `--time-of-day` (unless
