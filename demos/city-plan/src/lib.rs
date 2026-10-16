@@ -2965,6 +2965,60 @@ fn interior_solids(
                 out.push((tread, (y1 - rise - 0.15).max(base), y1, true));
             }
         }
+        // A guard round each upper floor's opening over the flight: a whitewashed half wall a
+        // metre high along its long side away from the walls and across its head (over the
+        // flight's foot), 10 cm thick and 5 cm back from the edge; the arrival end stays open.
+        // Without it a walker stepped off the landing into the stairwell (seen 2026-10-16).
+        let across = stair[1] - stair[0];
+        let width = across.length();
+        let a = across / width.max(1e-6);
+        let c = inner.climb.normalize_or_zero();
+        // The long side away from the walls: the one whose middle lies farther from their lines.
+        let from_walls = |p: DVec2| {
+            s.walls
+                .iter()
+                .map(|w| geom::distance_to_segment(p, w.a, w.b))
+                .fold(f64::MAX, f64::min)
+        };
+        for (k, &r) in inner.risers.iter().enumerate() {
+            if k + 1 >= s.storeys.len() || r < 2 {
+                break;
+            }
+            let run = f64::from(r - 1) * cores::GOING;
+            let open_far =
+                from_walls(stair[1] + c * run * 0.5) > from_walls(stair[0] + c * run * 0.5);
+            // A box in the opening's frame: across from `a0` to `a1`, along the climb from `c0`
+            // to `c1`, from `stair[0]`.
+            let piece = |a0: f64, a1: f64, c0: f64, c1: f64| {
+                vec![
+                    stair[0] + a * a0 + c * c0,
+                    stair[0] + a * a1 + c * c0,
+                    stair[0] + a * a1 + c * c1,
+                    stair[0] + a * a0 + c * c1,
+                ]
+            };
+            let y0 = floor_level(s, k + 1);
+            let (side, head) = if open_far {
+                (
+                    piece(width + 0.05, width + 0.15, -0.05, run),
+                    piece(0.0, width + 0.15, -0.15, -0.05),
+                )
+            } else {
+                (
+                    piece(-0.15, -0.05, -0.05, run),
+                    piece(-0.15, width, -0.15, -0.05),
+                )
+            };
+            for ring in [side, head] {
+                // Wound anticlockwise, as the other solids.
+                let ring = if geom::signed_area(&ring) < 0.0 {
+                    ring.into_iter().rev().collect()
+                } else {
+                    ring
+                };
+                out.push((ring, y0, y0 + 1.0, false));
+            }
+        }
     }
     out
 }

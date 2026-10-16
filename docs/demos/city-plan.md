@@ -550,7 +550,10 @@ so every room of a storey is reached from the hall; where the core stood by the 
 plan runs mirrored. The kit draws them near the view: the partitions floor to ceiling with a
 lintel over each doorway, the flight a stone step a riser, each upper floor and the ceiling
 under it open over the treads below (`without` cuts the slab round the hole), the landing at
-the top kept; the ground floor now stands 2 cm over the walking level its door's sill is on (5
+the top kept, and round each upper floor's opening a whitewashed half wall a metre high along
+its open long side and across its head, the arrival end left open (added the evening of
+2026-10-16: from the landing a walker stepped into the stairwell;
+`reports/2026-10-16/village-stair-guard.png`); the ground floor now stands 2 cm over the walking level its door's sill is on (5
 cm up, a garden's lawn showed through it). 77 of the 82 houses get their insides, 419
 partitions and as many doorways, every room reached (the village test); the five left had their
 core in the middle of the front or none fitted. The map check's seventh view stands a metre
