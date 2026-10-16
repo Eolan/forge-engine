@@ -16,8 +16,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::error::{GpuError, Result};
 
-/// `sl::kSDKVersion` of Streamline 2.14.1.
-const SDK_VERSION: u64 = (2 << 48) | (14 << 32) | (1 << 16) | 0xfedc;
+/// `sl::kSDKVersion` of Streamline 2.14.16, whose structures keep the versions mirrored here.
+const SDK_VERSION: u64 = (2 << 48) | (14 << 32) | (16 << 16) | 0xfedc;
 pub(crate) const FEATURE_DLSS: u32 = 0;
 /// Identifies the project to NGX in place of an application id NVIDIA would give.
 const PROJECT_ID: &CStr = c"cbe477df-7d1e-4cce-9bfd-42c06a933d93";

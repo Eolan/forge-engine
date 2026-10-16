@@ -368,7 +368,10 @@ The baseline's tree needs the SDKs the current one has: the demos load `nrd-sdk/
 `streamline-sdk` from their own tree, and git ignores both. Without NRD the base draws the sun's
 shadows without SIGMA (D-049), and the city then seemed 0.05–0.07 ms slower in the new build
 (the Tier 2 of 2026-10-08, bisected to the trees, not to a commit). Copy them into the base's
-tree; `timings.sh` warns when the two trees differ.
+tree; `timings.sh` warns when the two trees differ. On the owner's machine every tree's
+`streamline-sdk` is a junction to one copy, `..\sdks\streamline-<version>` (2.14.16 since
+2026-10-17): a new version goes there once, and the trees follow when the junctions are pointed
+at it (`New-Item -ItemType Junction -Path <tree>\streamline-sdk -Target <copy>`).
 
 **Far from the origin (issue #93):** `tools/origins.sh OUT [BIN] [ORIGINS]` captures the
 city's south view and the ballad's frame 240 with the scene moved 10⁴, 10⁵, 10⁶ and 10⁷ m from
