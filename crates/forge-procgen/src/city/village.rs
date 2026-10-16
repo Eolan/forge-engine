@@ -131,7 +131,13 @@ pub fn village(site: &Site, params: &CityParams, seed: u64) -> Village {
         d.kind = DistrictKind::Village;
     }
     let streets = blocks::street_grid(&city.roads, city.size);
-    let ty = ParcelType::VILLAGE;
+    // The rings (`research/cadastre-villages-and-towns.md` §2): the core round the centre,
+    // the faubourgs about it, the lotissements beyond, by a block's distance from the centre
+    // against the village district's radius.
+    let radius = params
+        .districts
+        .first()
+        .map_or(params.centre.x.max(1.0), |d| d.radius);
     let mut blocks = Vec::new();
     let mut masses = Vec::new();
     let mut without = 0;
@@ -140,20 +146,32 @@ pub fn village(site: &Site, params: &CityParams, seed: u64) -> Village {
         if block.use_ != BlockUse::Built {
             continue;
         }
-        let n = block.buildable.len();
-        // The village's depth first; a thin block takes a shallower strip, down to a house with
-        // no yard; one too thin for that keeps no houses. Each lot as wide as its household's
-        // rooms need on two storeys at that depth (the owner's way round: the rooms first, the
-        // lot cut to the house), never narrower than the type's least.
-        let cut = [ty.depth, 11.0, 8.0].into_iter().find_map(|depth| {
+        // The traced lanes give the block short edges along their curves, and each edge took a
+        // strip of its own with one narrow lot: the outline simplified within 0.6 m first.
+        let outline = geom::simplify_closed(&block.buildable, 0.6);
+        let n = outline.len();
+        let away = block.centre.distance(params.centre) / radius;
+        let (ty, depths): (ParcelType, &[f64]) = if away < 0.9 {
+            (ParcelType::CORE, &[12.0, 10.0, 8.0])
+        } else if away < 1.35 {
+            (ParcelType::FAUBOURG, &[30.0, 22.0, 16.0, 12.0])
+        } else {
+            (ParcelType::LOTISSEMENT, &[35.0, 28.0, 22.0])
+        };
+        // The ring's depth first; a thin block takes a shallower strip; one too thin for the
+        // last keeps no houses. Each lot as wide as its household's rooms need on two storeys
+        // at that depth (the owner's way round: the rooms first, the lot cut to the house),
+        // never narrower than the type's least nor wider than its most.
+        let cut = depths.iter().find_map(|&depth| {
             let ty = ParcelType { depth, ..ty };
             let max_depth = houses::plan_depth(&ty);
             let width = |k: usize| {
                 let (people, means) = household(seed, b, k);
                 let area: f64 = rooms::programme(people, means).iter().map(|r| r.area).sum();
-                (rooms::HALL + area / (2.0 * max_depth)).clamp(ty.width.0, 16.0)
+                (rooms::HALL + area / (2.0 * max_depth) + 2.0 * ty.sides)
+                    .clamp(ty.width.0, ty.width.1.max(16.0))
             };
-            parcels::strips_with(&block.buildable, &vec![true; n], &ty, width)
+            parcels::strips_with(&outline, &vec![true; n], &ty, width)
                 .map(|(lots, court, keys)| (ty, lots, court, keys))
         });
         let Some((ty, lots, court, keys)) = cut else {
@@ -260,6 +278,19 @@ mod tests {
             !by_profile.contains_key("Avenue"),
             "an avenue through the village"
         );
+        let rings: Vec<String> = v
+            .blocks
+            .iter()
+            .map(|b| {
+                format!(
+                    "{:.0} m: {} lots, {} houses",
+                    b.houses.first().map_or(0.0, |h| h.plan.depth),
+                    b.lots.len(),
+                    b.houses.len()
+                )
+            })
+            .collect();
+        println!("blocks: {rings:?}");
         assert!(v.plan.tram_lines.is_empty() && v.plan.landmarks.is_empty());
         assert!(built >= 4, "{built} built blocks");
         assert!(houses >= 40, "{houses} houses");

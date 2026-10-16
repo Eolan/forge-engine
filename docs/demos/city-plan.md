@@ -395,7 +395,21 @@ twice the radius: a network is now kept over 3 km or over half of all the street
 site at 600 m on its own plan: 16 nodes, 22 edges, 7 blocks, 5 built and all with strips, 171
 houses, 517 people, 3 118 trees in the forest (`reports/2026-10-16/village-own-organic.png`;
 `VILLAGE_OWN_PNG=path` draws it). The first cut on the whole site, without the forest, had
-559 houses on 13 blocks. **Its streets:** a village's main road is a shared street (10 m of
+559 houses on 13 blocks. **Its rings** (`research/cadastre-villages-and-towns.md` §2, the
+same day): a block's lot type follows its distance from the centre against the district's
+radius. Within 0.9 of it the old core (`ParcelType::CORE`): lots 5–9 m wide on 12 m, the
+house the whole lot, a court only where the rooms leave one. Within 1.35 the faubourg
+(`FAUBOURG`): lanières 6–12 m wide on 30 m, the house on the street line, a garden of 12 m at
+least behind. Beyond, the lotissement (`LOTISSEMENT`): lots 15–25 m wide on 35 m (500 to
+900 m²), the house free on four sides, 5 m back from the street, 3 m off the sides, 8 m of
+garden behind; its front still counts as a street wall (`facades::SETBACK`), so it gets its
+door and windows. Each ring falls back on shallower strips where a block is thin. The traced
+lanes gave the blocks short edges along their curves, and each edge took a strip of its own
+with one narrow lot: the buildable outline is simplified within 0.6 m before the cut. A lot
+whose front is cut short (a corner's wedge) and whose household's rooms would pile over three
+storeys stays garden. The village at 600 m: 129 houses on 5 blocks (one core, three faubourg, one lotissement), 402 people (on the city's
+parameters 100 houses, 327 people, 68 of one storey, 28 of two, 4 of three; one in twenty
+vacant as the city's). **Its streets:** a village's main road is a shared street (10 m of
 paving, no kerbs, bike lanes nor lamp rows) and its lanes are pedestrian, as an old town's,
 through the forest too (a road beyond every district's reach takes the nearest district's
 kind, `transit::assign_profiles`); the city's avenues stay. The narrower streets gave the

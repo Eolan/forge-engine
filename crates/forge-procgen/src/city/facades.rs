@@ -187,12 +187,20 @@ pub fn edge_kinds(plan: &CityPlan, masses: &[Mass]) -> Vec<Vec<Option<FaceKind>>
                     })
                 })
             };
+            // On the street: within a pace of the building line, or facing the street from up
+            // to [`SETBACK`] behind it (a lotissement's house stands free in its front garden).
             let on_street = || {
                 let k = block.polygon.len();
                 (0..k).any(|e| {
                     let (p, q) = (block.polygon[e], block.polygon[(e + 1) % k]);
                     let half = edge_half_width(&streets, &plan.roads, p, q);
-                    geom::distance_to_segment(mid, p, q) < half + 1.5
+                    let away = geom::distance_to_segment(mid, p, q);
+                    if away < half + 1.5 {
+                        return true;
+                    }
+                    let edge = (q - p).normalize_or_zero();
+                    let outward = DVec2::new(edge.y, -edge.x);
+                    away < half + 1.5 + SETBACK && out_dir.dot(outward) > 0.7
                 })
             };
             let kind = if sibling {
@@ -401,6 +409,10 @@ pub fn dress(
     }
     (out, stats)
 }
+
+/// How far behind its street's building line a house may stand and its front still count as
+/// on the street, metres: a lotissement's front garden.
+pub const SETBACK: f64 = 5.5;
 
 /// The example style set of the engine's demos: a Mediterranean-European perimeter block
 /// (D-059's first style set), in the grammar's text form.

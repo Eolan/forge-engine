@@ -19,18 +19,59 @@ pub struct ParcelType {
     pub depth: f64,
     /// The lots' widths along the street, metres, drawn between these two.
     pub width: (f64, f64),
+    /// How far behind the street line the house stands, metres: none in a core, a front
+    /// garden in a lotissement.
+    pub setback: f64,
+    /// What the house leaves to each side of its lot, metres: none between party walls, a
+    /// passage round a free-standing house.
+    pub sides: f64,
+    /// What the house leaves at the back of its lot at least, metres: a yard, a garden.
+    pub yard: f64,
 }
 
 impl ParcelType {
-    /// A village house's lot: 5 to 8 m wide on a 14 m strip.
+    /// A village house's lot: 5 to 8 m wide on a 14 m strip, a yard behind.
     pub const VILLAGE: Self = Self {
         depth: 14.0,
         width: (5.0, 8.0),
+        setback: 0.0,
+        sides: 0.0,
+        yard: 1.5,
     };
     /// A perimeter block's building: 12 to 25 m wide on an 18 m strip.
     pub const BLOCK: Self = Self {
         depth: 18.0,
         width: (12.0, 25.0),
+        setback: 0.0,
+        sides: 0.0,
+        yard: 0.0,
+    };
+    /// An old core's lot (`research/cadastre-villages-and-towns.md` §2): 5 to 9 m wide on a
+    /// 12 m strip, the house the whole lot, a court only where the rooms leave one.
+    pub const CORE: Self = Self {
+        depth: 12.0,
+        width: (5.0, 9.0),
+        setback: 0.0,
+        sides: 0.0,
+        yard: 0.0,
+    };
+    /// A faubourg's lanière: 6 to 12 m wide on a 30 m strip, the house on the street line, a
+    /// garden of 12 m at least behind.
+    pub const FAUBOURG: Self = Self {
+        depth: 30.0,
+        width: (6.0, 12.0),
+        setback: 0.0,
+        sides: 0.0,
+        yard: 12.0,
+    };
+    /// A lotissement's lot: 15 to 25 m wide on a 35 m strip (500 to 900 m²), the house free on
+    /// four sides, 5 m back from the street, 3 m off the sides, a garden of 8 m behind.
+    pub const LOTISSEMENT: Self = Self {
+        depth: 35.0,
+        width: (15.0, 25.0),
+        setback: 5.0,
+        sides: 3.0,
+        yard: 8.0,
     };
 }
 

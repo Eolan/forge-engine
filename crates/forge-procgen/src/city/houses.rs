@@ -23,13 +23,10 @@ pub struct House {
     pub household: (u32, Means),
 }
 
-/// A margin the house keeps from the strip's back, metres: a yard behind at least.
-pub const YARD: f64 = 1.5;
-
-/// How deep a house's plan may go on a lot of type `ty`: the strip less the yard, a hall and
-/// one room's depth at least.
+/// How deep a house's plan may go on a lot of type `ty`: the strip less the setback and the
+/// yard, a hall and one room's depth at least.
 pub fn plan_depth(ty: &ParcelType) -> f64 {
-    (ty.depth - YARD).max(rooms::HALL + 2.6)
+    (ty.depth - ty.setback - ty.yard).max(rooms::HALL + 2.6)
 }
 
 /// A house on each of `lots`, the household of lot `k` from `household(k)`.
@@ -46,16 +43,24 @@ pub fn houses(
             let (a, b) = (lot[0], lot[1]);
             let t = (b - a).normalize_or_zero();
             let inward = DVec2::new(-t.y, t.x);
+            // The house's front line: the street line, or the type's setback behind it.
+            let a = a + inward * ty.setback;
             // The house takes the stretch of the front where the lot is at least a room deep:
             // a corner lot's bisector cuts the strip to a wedge, and a house across the whole
             // front had a window at its end with the roof right behind it and no room (the
-            // owner, 2026-10-16). The rest of the front stays garden.
+            // owner, 2026-10-16). The rest of the front stays garden, as do the type's sides.
             let (s0, s1) = front_stretch(lot, a, t, inward, rooms::DEPTH.0)?;
+            let (s0, s1) = (s0 + ty.sides, s1 - ty.sides);
             let width = s1 - s0;
             if width < rooms::HALL + 2.4 {
                 return None;
             }
             let plan = rooms::plan(&rooms::programme(people, means), width, plan_depth(ty));
+            // A front cut short (a corner's wedge) with a household's rooms piled over three
+            // storeys is no village house: the lot stays garden.
+            if plan.storeys.len() > 3 {
+                return None;
+            }
             let (a, b) = (a + t * s0, a + t * s1);
             let inward = inward * plan.depth;
             let mut footprint = vec![a, b, b + inward, a + inward];
@@ -156,7 +161,7 @@ mod tests {
                         .any(|i| geom::distance_to_segment(p, h.lot[i], h.lot[(i + 1) % n]) < 1e-6);
                 assert!(inside, "a footprint corner {p} off its lot");
             }
-            assert!(h.plan.depth <= ty.depth - YARD + 1e-9);
+            assert!(h.plan.depth <= ty.depth - ty.yard + 1e-9);
             assert!(!h.plan.storeys.is_empty());
         }
         assert!(geom::signed_area(&court).abs() > 1000.0);

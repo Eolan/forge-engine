@@ -122,6 +122,10 @@ front) [5][7].
 
 ## 4. What to do with it (for #266, then the city)
 
+*Point 1 is built (2026-10-16, `city::parcels::ParcelType::{CORE, FAUBOURG, LOTISSEMENT}`
+and `city::village`, by distance from the centre; `docs/demos/city-plan.md`, "Its rings").
+Points 2 to 4 are open.*
+
 1. **Three lot types by ring**, chosen by a block's distance from the village's centre (the
    square) and by its street (a road out of the core carries faubourg strips):
    - *core*: strips 10–15 m deep, lots 5–10 m wide, the house the whole lot (no yard), a
