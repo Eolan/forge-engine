@@ -4150,11 +4150,12 @@ impl Scenario for PlanScenario {
             // An afternoon sun from the south-west.
             sun: Some(Vec3::new(-0.45, 0.55, 0.7)),
             // The village's maps (a plan with a forest) are walked into: a hall lit through its
-            // door or a window took its light from probes whose 128 rays found the opening by
-            // turns, and the light on the stairs rose and fell every 200 frames or so (the
-            // owner saw the stairs shimmer, 2026-10-16: 3–7 % of a still view's pixels between
-            // frames 10 apart). With 256 rays, as the models lab's rooms (#171), 0.004–0.015 %
-            // once settled; 0.8 ms more along the road (3.73 → 4.51 ms).
+            // door took its light from probes whose eight rotations (TAA's jitter cycle, #48)
+            // each found the opening with a different few of their 128 rays, and the light on
+            // the stairs swung at 7.5 Hz (the owner saw the stairs shimmer, 2026-10-16: 3–7 % of
+            // a still view's pixels between frames 10 apart; #272). With 256 rays, as the models
+            // lab's rooms (#171), 0.004–0.015 % once settled; 0.8 ms more along the road
+            // (3.73 → 4.51 ms).
             probes: (!self.flora.is_empty())
                 .then_some((256, forge_render::probes::ProbeParams::default().spacing)),
             ..Look::default()
