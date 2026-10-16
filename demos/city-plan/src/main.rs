@@ -182,6 +182,19 @@ fn main() -> anyhow::Result<()> {
                 let inward = DVec2::new(-t.y, t.x);
                 let eye = w.a + t * door.along + inward * (w.thickness + 1.0);
                 eprintln!("the village's hall: {}", view(eye, 1.6, inner.climb, -5.0));
+                // On the first upper floor's landing, a step past the flight's arrival, looking
+                // back over the opening and its guard (no view looked upstairs, and the opening
+                // had none, 2026-10-16).
+                if let (Some(stair), Some(&r), Some(st)) =
+                    (inner.stair, inner.risers.first(), s.storeys.get(1))
+                {
+                    let run = f64::from(r.saturating_sub(1)) * city::cores::GOING;
+                    let arrive = (stair[0] + stair[1]) * 0.5 + inner.climb * (run + 0.8);
+                    eprintln!(
+                        "the village's landing: {}",
+                        view(arrive, st.level + 1.6, -inner.climb, -25.0)
+                    );
+                }
                 // Into the first room off the hall on the ground floor: from the hall, half a
                 // metre back from its doorway, looking at the room's middle.
                 if let Some((p, room)) = inner
