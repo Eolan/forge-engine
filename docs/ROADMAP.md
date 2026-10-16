@@ -622,7 +622,8 @@ The items below are the phase's original outline; the plan above orders them.
 1. `forge-audio`: real-time thread, mixer graph, streaming decode, voice management ✅
    (#267, 2026-10-16: built and tested headless, `docs/demos/audio.md`; the device next).
 2. Spatialisation and occlusion (D-011), material-driven footsteps and impacts, weather and
-   medium ambience, underwater.
+   medium ambience, underwater. Started (#267, 2026-10-16): panning, distance, air absorption,
+   occlusion through Steam Audio's material presets, Doppler and reverb zones, headless.
    **Demo:** `forest-to-cave` — walk from a forest into a cave in the rain; occlusion,
    reverb and material sounds change without any scripting.
 

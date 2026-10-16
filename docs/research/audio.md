@@ -853,7 +853,10 @@ an eighth-order option cascades four sections a shelf), after dividing the gains
 (which becomes an overall gain) and holding them above 0.0625 (−24 dB); when the gains change, the
 old and new filters both run over the frame and the output crossfades. `forge-audio` does the same
 in Rust (`dsp::ThreeBand`). A first try with two one-pole splits cut a −20 dB high band by only
-3.8 dB at 12 kHz.
+3.8 dB at 12 kHz. Its eleven acoustic material presets (`phonon.h`: absorption, scattering and
+transmission in the same bands) are `spatial::AcousticMaterial`; its direct effect applies the
+transmission to the occluded share of the direct sound, `clear + (1 − clear) t` a band with
+`clear` the share of the path left open (`direct_effect.cpp`), and so does `Occlusion::through`.
 
 **Release dates corrected.** The GitHub releases API gives 4.7.0 on 2025-08-11, 4.8.0 on 2025-11-26
 and 4.8.1 on 2026-02-11, and the last commit on 2026-03-25 (v0.1 had each release a year early and
@@ -879,6 +882,8 @@ and 4.8.1 on 2026-02-11, and the last commit on 2026-03-25 (v0.1 had each releas
 | Occlusion factor from a simplified occluder projected on a plane across the source's ray | US 11,438,708 B1 | HTC | active to about 2041-04-26 | `forge-audio` takes the occluded share from the game; the game should find it by rays (Steam Audio's volumetric occlusion: the share of rays to points on the source's sphere that are blocked), not by HTC's projection |
 | Mixing by masking: lowering lower-priority channels in the spectral regions a higher-priority channel masks | US 12,646,533 B2, EP 4 510 126 | Sony Interactive Entertainment | active to about 2044-07-26 | not built; D-011's HDR audio (DICE, 2008: a loudness window, a gain and culling policy in time) is older and different; ask the owner before any spectral, masking-driven attenuation |
 | Opus | US 7,353,168 and others; Xiph.Org's applications; Skype's | Broadcom, Xiph.Org, Microsoft | licensed royalty-free to implementations (IETF IPR 1524, 1526, 1914), ending for whoever sues over Opus patents | fine to ship; Qualcomm, Huawei, France Telecom and Ericsson filed disclosures with possible royalties that Xiph's counsel says Opus does not need |
+| Reverb chosen per position from the scene seen there (depth buffer and surface hardness, on cube faces) | US 8,249,264 B2 (Bailey, Brumitt), priority 2004 | Microsoft | lapsed (fees), 2025 | free; not used |
+| Reverb picked and blended from raycasts at the source and the listener (reverb metrics, a "possibility space" of reverbs) | US 11,878,246 B1, US 12,194,384 | Electronic Arts | active to about 2042-06-30 | not built: `forge_audio::zones` blends authored zones by the listener's distance to their shapes, as Unity's and FMOD's reverb zones have for 15 years; ask the owner before deriving the reverb from rays at both ends (D-011's ray-traced decay is near it) |
 | Virtual voices, stealing by priority and audibility | none found | — | — | the model of FMOD, Wwise, Unity and the Nintendo 64's audio library (1990s), documented openly |
 
 Equal-power panning, the inverse distance law, Doppler by resampling, Hermite interpolation and the

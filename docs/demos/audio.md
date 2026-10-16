@@ -1,13 +1,14 @@
 # Audio — the mixer, rendered headless (`forge-audio`)
 
-Phase 6's first step (issue #267, D-011, D-062): the sound system's real-time side, built and
-tested without a device, a window or the GPU. The game starts and steers voices through an
-`AudioEngine`; the `Mixer` renders them, wherever the output wants it: in a device's callback,
-on a mix thread of its own, or offline into a buffer that the tests measure and the owner can
-listen to as WAV files. Nothing in the crate opens an audio device.
+Phase 6's first step and the start of its second (issue #267, D-011, D-062): the sound system's
+real-time side and its first spatial layer, built and tested without a device, a window or the
+GPU. The game starts and steers voices through an `AudioEngine`; the `Mixer` renders them,
+wherever the output wants it: in a device's callback, on a mix thread of its own, or offline
+into a buffer that the tests measure and the owner can listen to as WAV files. Nothing in the
+crate opens an audio device.
 
 ```
-cargo test --release -p forge-audio                                      # 36 tests on rendered samples
+cargo test --release -p forge-audio                                      # 40 tests on rendered samples
 cargo run --release -p forge-audio --example audio-render -- scenes      # WAVs in captures/audio/
 cargo run --release -p forge-audio --example audio-render -- bench       # the mixer's cost
 ```
@@ -25,6 +26,8 @@ cargo run --release -p forge-audio --example audio-render -- bench       # the m
 | The limiter | On the master, after its fader: the gain that brings each frame's peak to the ceiling (−1 dBFS), through a release follower (80 ms), its minimum held over a 64-frame look-ahead, then averaged over the same 64 frames, the audio delayed 63 frames. The gain applied to a frame is never above that frame's own target, so the ceiling holds by construction; a final clamp catches rounding and counts what it touches (0 in every test and scene). The mixer's latency is those 63 frames | `dsp::limiter` |
 | Space | Positions in `f64` (D-004), taken relative to the listener. The direct path's direction, distance and gain go to a `Spatializer`: the default pans at equal power by the direction's lateral part (−3 dB a channel straight ahead, behind, above or below, like a centred mono sound), pulled to the centre inside the source's radius. The distance curve is OpenAL's clamped inverse model (−6 dB a doubling past the reference distance) or a line. Air absorption (Steam Audio's coefficients: −0.2, −1.5 and −15.8 dB at 100 m in the bands below 800 Hz, 800 Hz to 8 kHz and above) and occlusion (the share of the direct path a blocker covers, and the blocker's gain in each band) multiply into three band gains, applied as Steam Audio applies them: a low shelf, a peaking filter and a high shelf, the gains normalised, crossfaded when they change. Doppler from both velocities, eased over about 25 ms. A spatial voice's send falls with the square root of its distance curve, so a far voice is more of its room | `spatial`, `dsp::filter` |
 | Reverb | On aux buses: a feedback delay network after Jot and Chaigne, eight lines of 21 to 60 ms (scaled by the room's size) through an orthogonal Hadamard matrix, each line's gain from the decay time and a one-pole damping filter that makes the highs die sooner, a pre-delay. Presets for a room, a hall, a cave and the open; parameters change while it runs | `dsp::reverb` |
+| Materials | Steam Audio's eleven acoustic material presets from its `phonon.h` (`AcousticMaterial`: absorption, scattering and transmission in its three bands). `Occlusion::through(amount, layers)` multiplies the layers' transmissions, as Steam Audio does along a ray, and applies them to the occluded share of the direct sound. Through a wood door the bands fall by 23, 37 and 46 dB; through brick by 36 dB each; through concrete by 36, 54 and 60 dB. The world's material rows (D-007) are meant to carry these values; until they do, a game picks a preset per surface | `spatial` |
+| Reverb zones | Boxes and spheres in the world, each with its reverb and a fade outside its shape. Where the listener stands, the zone with the highest weight wins (a later zone wins a tie, so a room inside a hall is added after the hall), and its parameters are blended with the outdoor ones by that weight, decay times in the log domain. `ReverbZones::follow` sends the result to a reverb bus from the game thread when it changes by more than 1 %. Sources in another room than the listener's (heard through a door) wait for the world model's rooms and portals | `zones` |
 | Decoding | WAV in our own code (8, 16, 24 and 32-bit integers, 32 and 64-bit floats, plain or extensible, other chunks skipped); Ogg Vorbis through `lewton`, with the first page's padding trimmed by its granule position (FFmpeg's encoder leaves 704 frames that `lewton` keeps); Ogg Opus through `opus-rs`, a pure-Rust port of libopus, with the pre-skip and the end trimmed by the head and the last granule position. All pure Rust | `decode` |
 | Streaming | `Streams::open` makes a ring of a quarter of a second between a decoder and the voice that plays it, fills it at once, and hands the decoder to a `StreamPump`: on a decode thread of its own, or called before each block offline (so an offline render is the same to the bit on any machine). A ring that runs dry plays silence for what is missing, keeps the voice's time and counts an underrun. A looping stream rewinds its decoder | `stream` |
 | Output | `OfflineRenderer` renders seconds into a buffer as fast as it goes; `write_wav` writes 16-bit, 24-bit or float WAV. `MixThread` runs the mixer on a thread that fills an output ring ahead of the device, whose callback only copies out of it (`OutputRing::pull`, never waiting); the ring's length is the latency it adds | `render`, `thread` |
@@ -72,6 +75,10 @@ Decoding a second of stereo at 48 kHz on the decode thread: WAV (16-bit) 0.01 ms
 | Streams | A stereo 44.1 kHz WAV streamed and pitched plays the same samples to the bit as from memory; a looping stream matches a looping sound to 10⁻⁴; a starved ring plays its 0.1 s then silence and counts underruns |
 | Ogg Vorbis and Opus | The fixtures (a tone made here, encoded by Blender's FFmpeg with libvorbis at 128 kbit/s and libopus at 64 kbit/s): 48 000 frames exactly, each side's level to 2 %, crosstalk below 0.002, the waveform within 30 dB (Vorbis) and 20 dB (Opus) of the source; the same after a rewind; Vorbis streamed equals Vorbis in memory to the bit; Opus loops as a stream |
 | The DSP | The reverb's decay measured by Schroeder's backward integral within 15 % of 0.5, 1.2 and 2.5 s; the band filter keeps 150 Hz within 1 dB and cuts 12 kHz and 16 kHz by more than 12 and 20 dB for a high band of 0.05 |
+| A wall | Tones of 150 Hz, 2.5 kHz and 16 kHz 5 m ahead, behind a wood door: they fall by 23.6, 37.5 and 46.7 dB against the wood's 23.1, 37.1 and 46.0, each within 1 dB; half hidden behind brick, −5.9 dB in every band to 0.2 dB |
+| Air | The same tones at 100 m against 1 m, no distance curve: −0.21, −1.63 and −15.4 dB against Steam Audio's −0.17, −1.46 and −15.7 (within 0.1, 0.3 and 0.5 dB) |
+| Doppler | A 1 kHz tone 200 m ahead: 1111.11 Hz when it comes at 34.3 m/s, 909.09 Hz when it goes, 1100.00 Hz when the listener comes, each within 10⁻⁴ |
+| Reverb zones | A hall (a box 20 m across, 5 m of fade) in the open: the reverb's low-band decay measured on the rendered tail is 2.37 s inside (the hall's 2.4), 0.93 s half-way through the fade (0.92, the log-domain blend), 0.36 s outside (the open's 0.35), each within 5 % |
 
 ## The scenes (`audio-render scenes`)
 
@@ -85,6 +92,8 @@ listen to; each line prints the voices, steals and the limiter's work.
 | `doppler` | A buzz passing 4 m ahead at 30 m/s, left to right: up 10 % on the way in (343 / 313), down 8 % on the way out (343 / 373) |
 | `limiter` | Clicks and bursts 18 dB over full scale, held under −1 dBFS (15 dB of reduction at the deepest, nothing clamped) |
 | `stream` | A 2 s stereo WAV made in memory at 44.1 kHz, streamed and looped while a tone plays from memory |
+| `wall` | Rain and a buzz 6 m ahead: a wood door closes over a second at 1.5 s and opens at 4.5 s (the sound dulls and drops, the low end stays longest), then a concrete wall slides across at 7 s (almost nothing gets through) |
+| `zones` | The listener walks at 5 m/s from the open, through a stone hall, out again and into a cave, clapping every 0.6 s: the tail grows through the hall's 6 m of fade, falls back outside, and grows longer and brighter in the cave |
 
 ## Not yet
 
@@ -93,7 +102,8 @@ listen to; each line prints the voices, steals and the limiter's work.
 - **The data layer** D-011 names: events, RTPCs, states and switches, HDR loudness on the buses,
   banks, and the profiler's overlay (the counters exist: `MixerStats`).
 - **Steam Audio** as a `Spatializer` (HRTF), its occlusion and reflections; the ambisonic bus.
-- **Reverb zones and material occlusion** driven by the world (issue #267's second part), then
-  footsteps and impacts by material, weather and medium ambience, underwater.
+- **The rest of the second part** of #267: the acoustic values in the world's material rows
+  (D-007) and occlusion found by rays against the world, footsteps and impacts by material,
+  weather and medium ambience, underwater, sources heard from another room.
 - **Better resampling** for sounds far from the mixer's rate: the Hermite interpolator aliases
   when it reads faster than one frame a frame; `rubato` at load time is the research note's pick.
