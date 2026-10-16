@@ -6,7 +6,7 @@
 //! Each house is also one of the city's masses on its own lot, so the structures, the facades
 //! and the kit draw it as they draw the city's buildings.
 
-use forge_core::SplitMix64;
+use forge_core::{Seed, SplitMix64};
 use glam::DVec2;
 
 use super::blocks::{self, BlockUse, Lot};
@@ -16,7 +16,9 @@ use super::mass::{Mass, Roof};
 use super::parcels::{self, ParcelType};
 use super::rooms::{self, Means};
 use super::structure::Era;
-use super::{CityParams, CityPlan, DistrictKind, Site, plan};
+use super::{
+    BoundaryInfluence, CityParams, CityPlan, DistrictKind, DistrictSpec, Pattern, Site, plan,
+};
 
 /// A built block's lots, court and houses.
 #[derive(Clone, Debug, PartialEq)]
@@ -70,6 +72,51 @@ fn household(seed: u64, b: usize, k: usize) -> (u32, Means) {
         Means::Rich
     };
     (people, means)
+}
+
+/// The village's own parameters for a site `size` across (D-062, #266): one village district
+/// on the site's middle with lanes that wander, one main road, no trams, boats nor landmarks, a
+/// green within 200 m of every block, the land beyond the village left to the forest.
+pub fn params(size: f64) -> CityParams {
+    let at = |x: f64, y: f64| DVec2::new(x * size, y * size);
+    CityParams {
+        seed: Seed::new(20_261_016),
+        districts: vec![DistrictSpec {
+            name: "village".into(),
+            kind: DistrictKind::Village,
+            anchor: at(0.5, 0.5),
+            radius: 0.25 * size,
+            pattern: Pattern::Organic(1.2),
+            grid_angle: 0.3,
+            street_spacing: 80.0,
+            lot_area: 200.0,
+            floors: (1, 3),
+            depth: None,
+            tiled_roofs: Some(1.0),
+            gaps: None,
+            run: None,
+        }],
+        main_spacing: size,
+        boundary: BoundaryInfluence {
+            strength: 1.5,
+            reach: 0.03 * size,
+        },
+        max_bridge: 80.0,
+        centre: at(0.5, 0.5),
+        tram_lines: Vec::new(),
+        stop_spacing: 450.0,
+        stop_target: 0.0,
+        max_extra_lines: 0,
+        boat_gap: f64::INFINITY,
+        landmarks: Vec::new(),
+        park_reach: 200.0,
+        park_min_area: 2_000.0,
+        park_share_cap: 0.15,
+        forest_above: f32::MAX,
+        forest_slope: f32::MAX,
+        reach: None,
+        max_block: None,
+    }
 }
 
 /// The village on `site` by `params`: the plan, then each built block's strips and houses, and
@@ -167,6 +214,37 @@ mod tests {
     use super::super::example;
     use super::super::structure::{self, OpeningKind, WallRole};
     use super::*;
+
+    #[test]
+    fn the_villages_own_plan_has_lanes_houses_and_no_trams() {
+        let size = 600.0;
+        let site = example::site(size, 10.0);
+        let v = village(&site, &params(size), 1);
+        let built = v
+            .plan
+            .blocks
+            .iter()
+            .filter(|b| b.use_ == BlockUse::Built)
+            .count();
+        let houses = v.houses().count();
+        println!(
+            "the village's own plan: {} nodes, {} edges, {} blocks ({built} built), {} with \
+             strips, {} without, {houses} houses, {} people",
+            v.plan.roads.nodes.len(),
+            v.plan.roads.edges.len(),
+            v.plan.blocks.len(),
+            v.blocks.len(),
+            v.without,
+            v.houses().map(|h| h.household.0).sum::<u32>()
+        );
+        assert!(v.plan.tram_lines.is_empty() && v.plan.landmarks.is_empty());
+        assert!(built >= 4, "{built} built blocks");
+        assert!(houses >= 40, "{houses} houses");
+        if let Ok(path) = std::env::var("VILLAGE_OWN_PNG") {
+            super::super::map::write_village(&v, std::path::Path::new(&path), 0.25)
+                .expect("the drawing");
+        }
+    }
 
     #[test]
     fn the_example_village_has_its_houses_on_strips() {

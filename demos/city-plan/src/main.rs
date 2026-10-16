@@ -69,7 +69,12 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::from_arg_matches(&matches)?;
     let size = cli.village.unwrap_or(cli.size);
     let site = example::site(size, 10.0);
-    let params = example::params(size);
+    // The village on its own parameters: lanes, one main road, no trams nor landmarks.
+    let params = if cli.village.is_some() {
+        city::village::params(size)
+    } else {
+        example::params(size)
+    };
     let (plan, masses) = match cli.village {
         Some(_) => {
             let v = city::village::village(&site, &params, 1);

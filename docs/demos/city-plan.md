@@ -368,18 +368,26 @@ households after it), never under the type's 5 m; a thin block takes a shallower
 then 8 m, a house with no yard), one too thin for that keeps no houses. Each house is also one
 of the city's masses on its own lot, appended to the plan's (old stone, a tiled roof, homes
 only), so the structures, the facades and the kit draw it as they draw the city's buildings.
-The example village: 7 blocks with strips round their courts, 2 too thin or concave, 323
-houses of one to four storeys (26, 159, 103 and 35), 1 012 people, 314 houses with a door
-(`reports/2026-10-16/village-600m.png`; `VILLAGE_PNG=path cargo test -p forge-procgen
+The example village on the city's parameters: 8 blocks with strips round their courts, 1 too
+thin, 406 houses of one to four storeys (35, 225, 125 and 21), 1 273 people, 394 houses with
+a door (`reports/2026-10-16/village-600m.png`; `VILLAGE_PNG=path cargo test -p forge-procgen
 village` draws it). The first cut (2026-10-15) drew the widths at random: 191 houses, 586
 people, and once the houses were masses the rich households on 5 m lots stood nine storeys.
-**In 3D:** `cargo run --release -p city-plan -- --village 600` draws the village in place of
-the city, every house from the kit (`reports/2026-10-16/village-air.png` from the air,
-`village-street.png` from the first house's street, which the log names for `--view`). Next:
-the structures from the plans (the rooms as D-060's units and the stair where the hall is: only
-38 houses get a stair core now, the city's cores not fitting a 5 m house), the village's own
-site and street pattern (one main street, lanes off it, no trams nor market hall), the forest
-round it, the player on foot.
+**Its own plan** (`village::params`, the same day): one village district on the site's middle
+with lanes that wander (`Pattern::Organic`), one main road, no trams, boats nor landmarks, a
+green within 200 m of every block. The traced lanes make blocks of many short edges, which the
+strips refused (the inset by the depth lost corners): a strip is now the block within the
+depth of its street side between the bisectors at the side's two corners (a reflex corner's
+too), and the court is the inset that drops the edges it turns over
+(`geom::inset_by_collapsing`); every built block takes strips. The example site at 600 m on
+its own plan: 35 nodes, 50 edges, 16 blocks, 13 built and all with strips, 559 houses, 1 691
+people (`reports/2026-10-16/village-own-organic.png`; `VILLAGE_OWN_PNG=path` draws it).
+**In 3D:** `cargo run --release -p city-plan -- --village 600` draws the village on its own
+plan in place of the city, every house from the kit (`reports/2026-10-16/village-air.png` from
+the air, `village-street.png` from the first house's street, which the log names for
+`--view`). Next: the structures from the plans (the rooms as D-060's units and the stair where
+the hall is: only 38 houses get a stair core now, the city's cores not fitting a 5 m house), a
+square with the rich house, the forest round the village, the player on foot.
 
 **The trees, sized to their streets.** Trimmed street trees of 9–12 m line the avenues, 7–10 m trees
 the shared streets and 5–7 m trees the lanes. Each instance is scaled by its own crown
@@ -483,8 +491,12 @@ flight's item 21). Since 2026-10-16 the kit's buildings carry their insides (`in
 street, court and party wall's inner face at the wall's thickness, run the thickness past each
 end so two meet at a corner; a stone floor a storey (the ground floor a hand over the block's
 ground) and a plaster ceiling under each slab and under the roof, on the footprint inset by
-the thickest wall. Nothing of it shows from outside (the sandbox's day check is unchanged),
-and inside a building one sees a dark room (the sandbox's
+the thickest wall. Over a passage into the court the face starts at the passage's head and the
+ground floor keeps clear of the passage's width (whole, they closed every passage behind its
+mouth with a black wall: the sandbox's `inside/passage-before.png` and `-after.png`). Nothing
+else of it shows from outside (the sandbox's day check differs by a ꟻLIP mean of 0.015 at
+most, scattered over the far city: the probes inside the buildings no longer see the sky
+through their walls' backs), and inside a building one sees a dark room (the sandbox's
 `reports/2026-10-15/owner-views/inside/`, before and after). The sandbox's 4 205 kit buildings
 take 143 k triangles for it, and the view inside one draws in 2.20 ms as before (2.21).
 The windows show nothing from inside yet (the glass is drawn for the street), and the far

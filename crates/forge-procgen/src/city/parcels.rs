@@ -36,8 +36,8 @@ impl ParcelType {
 
 /// A block's lots and its court. The block is a polygon of positive area; `street[i]` says
 /// whether its edge `i` (from vertex `i` to `i + 1`) is a street side, the others party sides
-/// (a lot there reaches the court). `None` where the block is too thin or too concave for a
-/// strip of the type's depth all round: the caller falls back on another cut.
+/// (a lot there reaches the court). `None` where the block is too thin for a strip of the
+/// type's depth all round: the caller falls back on another cut.
 pub fn strips(
     block: &[DVec2],
     street: &[bool],
@@ -67,10 +67,25 @@ pub fn strips_with(
     if n < 3 || street.len() != n || geom::signed_area(block) <= 0.0 {
         return None;
     }
-    let court = geom::inset(block, ty.depth)?;
-    if court.len() != n || geom::signed_area(&court) <= 1.0 {
-        return None;
-    }
+    // The court: the block inset by the depth. A block too thin for it takes no strips; one
+    // whose inset loses a corner (a short edge gone, the straight skeleton's edge event) still
+    // takes them, each strip bounded by its depth line and its corners' bisectors.
+    let court = geom::inset_by_collapsing(block, &vec![ty.depth; n])
+        .filter(|c| c.len() >= 3 && geom::signed_area(c) > 1.0)?;
+    // Each edge's inward normal, and each corner's bisector (its two edges' normals' sum, which
+    // also halves a reflex corner's inner angle).
+    let normal = |i: usize| {
+        let t = (block[(i + 1) % n] - block[i]).normalize_or_zero();
+        DVec2::new(-t.y, t.x)
+    };
+    let bisector = |i: usize| {
+        let d = normal((i + n - 1) % n) + normal(i);
+        if d.length() < 1e-6 {
+            normal(i)
+        } else {
+            d.normalize()
+        }
+    };
     let mut lots: Vec<Vec<DVec2>> = Vec::new();
     let mut keys: Vec<usize> = Vec::new();
     for i in 0..n {
@@ -83,14 +98,20 @@ pub fn strips_with(
         if length < 0.5 {
             continue;
         }
-        // The strip: the street side, then back along the court; its ends on the corners'
-        // bisectors, so the first and last lots take the corners.
-        let strip = vec![a, b, court[j], court[i]];
-        if geom::signed_area(&strip) <= 1.0 {
-            continue;
-        }
         let t = (b - a) / length;
         let inward = DVec2::new(-t.y, t.x);
+        // The strip: the block within the depth of its street side, between the bisectors at
+        // the side's two corners, so the first and last lots take the corners.
+        let mut strip = geom::clip_half_plane(block, a + inward * ty.depth, -t);
+        for (corner, d, along) in [(a, bisector(i), t), (b, bisector(j), -t)] {
+            let keep = if d.perp_dot(along) >= 0.0 { d } else { -d };
+            strip = geom::clip_half_plane(&strip, corner, keep);
+        }
+        // The clips repeat a corner they pass through.
+        let strip = geom::clean(&strip, 1e-6);
+        if strip.len() < 3 || geom::signed_area(&strip) <= 1.0 {
+            continue;
+        }
         // The cuts along the street: a width drawn each time; the last lot takes what is left
         // when that is short of the least width, so no sliver is cut.
         let mut cuts = vec![0.0];
@@ -122,6 +143,7 @@ pub fn strips_with(
                     // Before the cut at s1: its left.
                     lot = geom::clip_half_plane(&lot, a + t * s1, inward);
                 }
+                let lot = geom::clean(&lot, 1e-6);
                 if lot.len() >= 3 && geom::signed_area(&lot).abs() > 1.0 {
                     out.push((ks[k], from_the_street(lot, a, b)));
                 }
