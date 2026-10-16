@@ -107,8 +107,10 @@ world's cells can be placed in parallel. It never follows the player (the patent
 
 ## Next
 
-- The hook for `forge-procgen::city::trees` (D-063, item 2): its forest from `place::place` over the
-  site's heights, its settings as rows and groves with species.
+- *Done 2026-10-16 (the coordinating session):* the hook for `forge-procgen::city::trees` (D-063,
+  item 2), its forest from `place::place` over the site's heights (`docs/demos/city-plan.md`, "In
+  its forest"); its street, park, quay and courtyard settings as rows and groves with species are
+  next.
 - A few individuals per species cooked into D-053's derived cache.
 - Point 3 of the issue: the fauna as behaviour (`forge-fauna`).
 - For the renderer's session: meshes from the graph (generalised cylinders along the segments,

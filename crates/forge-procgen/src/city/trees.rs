@@ -34,6 +34,9 @@ pub struct Tree {
     pub crown: f64,
     /// Where it stands.
     pub setting: Setting,
+    /// Its species, an index into `forge_flora::species::mediterranean()`, where the grower
+    /// placed it (the forest, D-063); `None` for the one model.
+    pub species: Option<u16>,
 }
 
 /// A street-workout park in each park of a hectare or more (the owner, 2026-10-11: workout
@@ -132,6 +135,7 @@ pub fn trees(site: &Site, plan: &CityPlan, seed: u64) -> Vec<Tree> {
                     height: rng.range_f64(height.0, height.1),
                     crown: rng.range_f64(crown.0, crown.1).min(room),
                     setting: Setting::Street,
+                    species: None,
                 });
             }
         }
@@ -217,6 +221,7 @@ pub fn trees(site: &Site, plan: &CityPlan, seed: u64) -> Vec<Tree> {
                 height: rng.range_f64(8.0, 16.0),
                 crown: rng.range_f64(3.0, 5.5),
                 setting: Setting::Park,
+                species: None,
             });
         }
         y += step;
@@ -270,6 +275,7 @@ pub fn trees(site: &Site, plan: &CityPlan, seed: u64) -> Vec<Tree> {
                     height: rng.range_f64(10.0, 14.0),
                     crown: rng.range_f64(3.2, 4.2),
                     setting: Setting::Street,
+                    species: None,
                 });
             }
         }
@@ -333,51 +339,122 @@ pub fn trees(site: &Site, plan: &CityPlan, seed: u64) -> Vec<Tree> {
                 .iter()
                 .all(|d| !d.on_link(t.pos, 3.0) && !d.on_yard(t.pos, 3.0))
     });
-    // The countryside's forest (D-062: the first map's village in a local forest): on the
-    // land beyond every district's reach, trees on a jittered grid of `forest` metres with
-    // clearings, 12 m clear of the roads' centrelines and off the blocks; pines and oaks of
-    // 8–16 m, the one model until the grower's species (#257).
-    if let Some(step) = plan.forest {
+    // The countryside's forest (D-062: the first map's village in a local forest; D-063): on the
+    // land beyond every district's reach, the Mediterranean canopy's wild species by their
+    // habitats on the site's ground (`forge_flora::place::place`: the Aleppo pines on the dry
+    // sunny slopes, the holm oaks in the valleys and the shade), placed once for the whole
+    // region, never round the player; 12 m clear of the roads' centrelines and off the blocks.
+    // `forest` stays the plan's switch; each tree keeps its species for the grower.
+    if plan.forest.is_some() {
         let mut roads = PointGrid::new(plan.size, 20.0);
         for e in &plan.roads.edges {
             for p in geom::resample(&e.points, 5.0) {
                 roads.insert(p, 0);
             }
         }
-        let n = (plan.size / step).ceil() as usize;
-        for j in 0..n {
-            for i in 0..n {
-                let p = DVec2::new(
-                    (i as f64 + 0.5 + rng.range_f64(-0.4, 0.4)) * step,
-                    (j as f64 + 0.5 + rng.range_f64(-0.4, 0.4)) * step,
+        let all = forge_flora::species::mediterranean();
+        let wild: Vec<forge_flora::species::Species> = all
+            .iter()
+            .filter(|s| s.habitat.as_ref().is_some())
+            .cloned()
+            .collect();
+        let ground = forge_flora::place::Ground::new(
+            site.ground.size as usize,
+            site.ground.spacing,
+            site.ground.data.clone(),
+        );
+        let mut fields = forge_flora::place::Fields::of(&ground);
+        // On flat ground the flow's wetness index reads every sample as a valley floor, deep
+        // and moist, and the holm oak took the whole forest. There moisture, soil and the sun's
+        // warmth follow the distance from the water instead, an assumption of this map: deep
+        // moist alluvium by the river, the thin dry soil of a limestone plateau 300 m from it,
+        // where the pines and the garrigue grow.
+        let far = water_distance(site);
+        let (wn, ws) = (site.water.size as usize, site.water.spacing);
+        for j in 0..fields.side {
+            for i in 0..fields.side {
+                let s = &mut fields.sites[j * fields.side + i];
+                if s.slope >= 3.0 {
+                    continue;
+                }
+                let (x, y) = (i as f64 * fields.cell, j as f64 * fields.cell);
+                let (wi, wj) = (
+                    ((x / ws).round() as usize).min(wn - 1),
+                    ((y / ws).round() as usize).min(wn - 1),
                 );
-                if p.x < 0.0 || p.y < 0.0 || p.x >= plan.size || p.y >= plan.size {
-                    continue;
-                }
-                if site.water_at(p) != LAND
-                    || super::district_index(&plan.district_field, p).is_some()
-                    || roads.nearest(p, 12.0).is_some()
-                    || rng.next_f64() < 0.15
-                {
-                    continue;
-                }
-                if plan
+                let t = (f64::from(far[wj * wn + wi]) / 300.0).clamp(0.0, 1.0);
+                s.moisture = 0.8 - 0.6 * t;
+                s.soil = 0.9 - 0.7 * t;
+                s.heat = 0.5 + 0.12 * t;
+            }
+        }
+        let keep_out = |p: DVec2| {
+            p.x < 0.0
+                || p.y < 0.0
+                || p.x >= plan.size
+                || p.y >= plan.size
+                || site.water_at(p) != LAND
+                || super::district_index(&plan.district_field, p).is_some()
+                || roads.nearest(p, 12.0).is_some()
+                || plan
                     .blocks
                     .iter()
                     .any(|b| b.centre.distance(p) < 400.0 && geom::contains(&b.polygon, p))
-                {
-                    continue;
-                }
-                out.push(Tree {
-                    pos: p,
-                    height: rng.range_f64(8.0, 16.0),
-                    crown: rng.range_f64(3.0, 5.5),
-                    setting: Setting::Forest,
-                });
-            }
+        };
+        let placed =
+            forge_flora::place::place(&ground, &fields, &wild, &[], rng.next_u64(), &keep_out);
+        for plant in placed.plants {
+            let id = &wild[usize::from(plant.species)].id;
+            out.push(Tree {
+                pos: plant.pos,
+                height: f64::from(plant.height),
+                crown: f64::from(plant.crown),
+                setting: Setting::Forest,
+                species: all.iter().position(|s| &s.id == id).map(|i| i as u16),
+            });
         }
     }
     out
+}
+
+/// Each cell of the site's water field's distance from the nearest water, metres (a two-pass
+/// chamfer: 1 along a row, √2 across a corner).
+fn water_distance(site: &Site) -> Vec<f32> {
+    let n = site.water.size as usize;
+    let s = site.water.spacing as f32;
+    let mut d: Vec<f32> = (0..n * n)
+        .map(|k| {
+            if site.water.data[k] != LAND {
+                0.0
+            } else {
+                f32::MAX
+            }
+        })
+        .collect();
+    let diag = s * std::f32::consts::SQRT_2;
+    let steps = [(-1i64, 0i64, s), (0, -1, s), (-1, -1, diag), (1, -1, diag)];
+    for pass in 0..2 {
+        let order: Vec<usize> = if pass == 0 {
+            (0..n * n).collect()
+        } else {
+            (0..n * n).rev().collect()
+        };
+        let sign = if pass == 0 { 1 } else { -1 };
+        for k in order {
+            let (i, j) = ((k % n) as i64, (k / n) as i64);
+            for &(di, dj, cost) in &steps {
+                let (a, b) = (i + di * sign, j + dj * sign);
+                if a < 0 || b < 0 || a >= n as i64 || b >= n as i64 {
+                    continue;
+                }
+                let other = d[(b as usize) * n + a as usize];
+                if other + cost < d[k] {
+                    d[k] = other + cost;
+                }
+            }
+        }
+    }
+    d
 }
 
 /// Trees on a jittered grid of `step` metres inside a polygon, each cell filled with probability
@@ -424,6 +501,7 @@ fn scatter(
                 height,
                 crown,
                 setting,
+                species: None,
             });
         }
         y += step;

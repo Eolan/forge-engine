@@ -24,6 +24,7 @@ forge-world = { path = "crates/forge-world" }
 forge-physics = { path = "crates/forge-physics" }
 forge-sim = { path = "crates/forge-sim" }
 forge-anim = { path = "crates/forge-anim" }
+forge-flora = { path = "crates/forge-flora" }
 # The demos the island demo builds on
 city-blocks = { path = "demos/city-blocks" }
 

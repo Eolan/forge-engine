@@ -23,6 +23,7 @@ city-blocks = { workspace = true }
 clap = { workspace = true }
 forge-app = { workspace = true }
 forge-core = { workspace = true }
+forge-flora = { workspace = true }
 forge-geom = { workspace = true }
 forge-physics = { workspace = true }
 forge-procgen = { workspace = true }

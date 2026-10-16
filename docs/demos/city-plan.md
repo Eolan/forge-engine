@@ -387,13 +387,28 @@ depth of its street side between the bisectors at the side's two corners (a refl
 too), and the court is the inset that drops the edges it turns over
 (`geom::inset_by_collapsing`); every built block takes strips. **In its forest** (the same
 day): the district reaches 1.6 times its radius of 120 m and the land beyond is countryside,
-which `CityParams::forest` plants with trees on a jittered grid of 7 m with clearings, 12 m
-clear of the roads (`trees::Setting::Forest`; pines and oaks of 8–16 m from the one model
-until the grower's species, #257). A village's whole network is under the 3 km a cut-off
+which `CityParams::forest` plants, 12 m clear of the roads (`trees::Setting::Forest`). Since
+D-063 (the same afternoon) the forest is `forge_flora`'s: the Mediterranean wild species placed
+by their habitats on the site's ground, once for the whole map, never round the player
+(`place::place`), each tree keeping its species (`Tree::species`). On flat ground the flow's
+wetness index read every sample as a valley floor and the holm oak took the whole forest, so
+there moisture, soil and warmth follow the distance from the water, an assumption of this map:
+deep moist alluvium by the river, the thin dry soil of a limestone plateau 300 m from it. At
+600 m: 278 Aleppo pines, 870 holm oaks, and 21 002 garrigue shrubs (2 291 rosemary, 7 999
+cistus, 10 712 kermes oaks). The demo grows three individuals of each species once
+(`forge_flora::grow`) and instances them, each scaled to its plant's height and crown, in its
+species' bark and foliage (`grown_mesh`): a tree's wood 5 cm thick or more as tapered limbs,
+its leaf clusters gathered on a grid of a sixth of its crown (an eighth of a broadleaf's, a third
+of a shrub's, a tenth of its height at least) into lumps sized by how many clusters they hold,
+a shrub's of 20 triangles. A tree takes 8 000 to 33 000 triangles, a shrub about 600 (the full
+graphs' 2 000 to 250 000; the demo's test keeps them under 40 000 and 1 000). The map check's
+views take 2.2–2.6 ms of GPU where they took 1.6–1.9. The foliage is lumps until D-013's leaf
+cards, which need a leaf atlas (drawn procedurally, or a CC0 one downloaded on the owner's
+go). The road through the forest: `reports/2026-10-16/village-forest.png`. A village's whole network is under the 3 km a cut-off
 network had to reach to be kept (`graph::MIN_NETWORK`), so the plan came out empty under
 twice the radius: a network is now kept over 3 km or over half of all the streets. The example
 site at 600 m on its own plan: 16 nodes, 22 edges, 7 blocks, 5 built and all with strips, 171
-houses, 517 people, 3 118 trees in the forest (`reports/2026-10-16/village-own-organic.png`;
+houses, 517 people, 3 118 trees in the forest at the time (`reports/2026-10-16/village-own-organic.png`;
 `VILLAGE_OWN_PNG=path` draws it). The first cut on the whole site, without the forest, had
 559 houses on 13 blocks. **Its rings** (`research/cadastre-villages-and-towns.md` §2, the
 same day): a block's lot type follows its distance from the centre against the district's

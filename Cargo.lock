@@ -417,6 +417,7 @@ dependencies = [
  "clap",
  "forge-app",
  "forge-core",
+ "forge-flora",
  "forge-geom",
  "forge-physics",
  "forge-procgen",
@@ -928,6 +929,7 @@ version = "0.1.0"
 dependencies = [
  "ab_glyph",
  "forge-core",
+ "forge-flora",
  "forge-task",
  "glam",
  "i_overlay",

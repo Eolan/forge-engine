@@ -265,6 +265,10 @@ pub struct PlanScenario {
     /// Each tree's place in the world, its scale (its crown over the model's 4.2 m radius, its
     /// height over the model's 10 m up), its turn and which of the two leaf colours it uses.
     trees: Vec<(Vec3, Vec3, f32, usize)>,
+    /// The forest's plants by species (D-063): each one's place, its height and crown radius,
+    /// its turn, its species (an index into `forge_flora::species::mediterranean()`) and which
+    /// of that species' grown individuals it is.
+    flora: Vec<(Vec3, f32, f32, f32, u16, u8)>,
     /// Each lamp's place, scale (its height over the model's 8 m) and turn.
     lamps: Vec<(Vec3, f32, f32, bool)>,
     /// The style kit's instanced modules and their instances (module, transform, group).
@@ -1053,8 +1057,25 @@ impl PlanScenario {
         for (_, t) in &trees {
             trunks.insert(t.pos, 0);
         }
+        // The forest's plants by species, each one of its species' three grown individuals.
+        let flora: Vec<(Vec3, f32, f32, f32, u16, u8)> = trees
+            .iter()
+            .filter_map(|&(i, t)| {
+                let species = t.species?;
+                let turn = (i >> 8 & 0xFFFF) as f32 / 65535.0 * std::f32::consts::TAU;
+                Some((
+                    world(size, t.pos, 0.0),
+                    t.height as f32,
+                    t.crown as f32,
+                    turn,
+                    species,
+                    (i >> 24 & 0xFF) as u8 % FLORA_INDIVIDUALS,
+                ))
+            })
+            .collect();
         let mut trees: Vec<(Vec3, Vec3, f32, usize)> = trees
             .iter()
+            .filter(|(_, t)| t.species.is_none())
             .map(|&(i, t)| {
                 let turn = (i >> 8 & 0xFFFF) as f32 / 65535.0 * std::f32::consts::TAU;
                 (
@@ -1667,6 +1688,7 @@ impl PlanScenario {
         Self {
             tiles: tiles.tiles,
             trees,
+            flora,
             lamps,
             kit_meshes,
             kit_instances,
@@ -4608,6 +4630,22 @@ impl Scenario for PlanScenario {
             ],
         );
         let tree_rows = [materials.of("plan-tree-a"), materials.of("plan-tree-b")];
+        // The forest's species (D-063): each its bark and its foliage, in two tones.
+        let species = forge_flora::species::mediterranean();
+        let flora_rows: Vec<_> = species
+            .iter()
+            .map(|s| {
+                let (group, bark, leaves) = flora_tones(&s.id);
+                materials.add_rows(
+                    group,
+                    vec![
+                        (format!("{} bark", s.id), tones(bark.0, bark.1, 8.0)),
+                        (format!("{} leaves", s.id), tones(leaves.0, leaves.1, 6.0)),
+                    ],
+                );
+                materials.of(group)
+            })
+            .collect();
         // Lamp heads of about 1 000 cd/m²: shielded LEDs at 2 700 K behind a frosted diffuser (the
         // style bible's lighting). At 3 000 their halos read too strong (the owner).
         let head = 1000.0;
@@ -4660,6 +4698,44 @@ impl Scenario for PlanScenario {
                 ));
                 builder.add_instance_with_material(id, at, row);
                 meshes += 1;
+            }
+        }
+        // The forest by species (D-063): a few individuals of each grown once (`forge_flora`),
+        // their meshes instanced, each plant scaled to its height and crown.
+        if !self.flora.is_empty() {
+            let mut models: std::collections::HashMap<(u16, u8), (forge_render::MeshId, f32, f32)> =
+                Default::default();
+            for &(at, height, crown, turn, sp, k) in &self.flora {
+                let Some(s) = species.get(usize::from(sp)) else {
+                    continue;
+                };
+                let &mut (id, h, w) = models.entry((sp, k)).or_insert_with(|| {
+                    let graph = forge_flora::grow::grow(
+                        s,
+                        &forge_flora::grow::Conditions {
+                            age: s.maturity * [0.7, 0.9, 1.1][usize::from(k) % 3],
+                            seed: 1000 + u64::from(sp) * 10 + u64::from(k),
+                            site: 1.0,
+                            pruning: Default::default(),
+                            wind: DVec2::ZERO,
+                        },
+                    );
+                    let shrub = s.habit == forge_flora::species::Habit::Shrub;
+                    let broad = s.foliage == forge_flora::species::Foliage::Broad;
+                    let mesh = grown_mesh(&graph, shrub, broad);
+                    (
+                        builder.add_mesh(&MeshletMesh::build(&mesh)),
+                        graph.height().max(0.1),
+                        graph.crown_width().max(0.1),
+                    )
+                });
+                let across = crown * 2.0 / w;
+                let transform = Mat4::from_scale_rotation_translation(
+                    Vec3::new(across, height / h, across),
+                    glam::Quat::from_rotation_y(turn),
+                    at,
+                );
+                builder.add_instance_with_material(id, transform, flora_rows[usize::from(sp)]);
             }
         }
         if !self.trees.is_empty() {
@@ -5365,6 +5441,108 @@ fn tree_model() -> TriMesh {
     mesh
 }
 
+/// How many individuals of each species are grown for the forest (D-063).
+const FLORA_INDIVIDUALS: u8 = 3;
+
+/// A species' material group and its bark's and foliage's two tones (`forge_flora`'s ids):
+/// the Aleppo pine's reddish bark and light needles, the holm oak's dark leaves, the olive's
+/// silver, the cypress's near black, the garrigue's greys.
+#[allow(clippy::type_complexity)]
+fn flora_tones(id: &str) -> (&'static str, ([f32; 3], [f32; 3]), ([f32; 3], [f32; 3])) {
+    let bark = ([0.20, 0.15, 0.11], [0.36, 0.30, 0.24]);
+    match id {
+        "aleppo-pine" => (
+            "flora-aleppo-pine",
+            ([0.26, 0.17, 0.12], [0.40, 0.31, 0.24]),
+            ([0.10, 0.18, 0.07], [0.17, 0.25, 0.09]),
+        ),
+        "holm-oak" => (
+            "flora-holm-oak",
+            ([0.16, 0.14, 0.12], [0.28, 0.25, 0.22]),
+            ([0.05, 0.11, 0.04], [0.10, 0.16, 0.06]),
+        ),
+        "olive" => (
+            "flora-olive",
+            ([0.26, 0.24, 0.20], [0.40, 0.37, 0.31]),
+            ([0.22, 0.26, 0.18], [0.32, 0.35, 0.26]),
+        ),
+        "italian-cypress" => (
+            "flora-italian-cypress",
+            bark,
+            ([0.04, 0.09, 0.04], [0.08, 0.13, 0.06]),
+        ),
+        "rosemary" => (
+            "flora-rosemary",
+            bark,
+            ([0.16, 0.22, 0.13], [0.24, 0.29, 0.19]),
+        ),
+        "cistus" => (
+            "flora-cistus",
+            bark,
+            ([0.24, 0.28, 0.20], [0.33, 0.36, 0.27]),
+        ),
+        "kermes-oak" => (
+            "flora-kermes-oak",
+            bark,
+            ([0.07, 0.14, 0.05], [0.13, 0.20, 0.08]),
+        ),
+        _ => (
+            "flora-other",
+            bark,
+            ([0.08, 0.19, 0.06], [0.16, 0.27, 0.07]),
+        ),
+    }
+}
+
+/// A grown plant's mesh (`forge_flora`, D-063), a tree's about 8 000 triangles and a shrub's a
+/// few hundred, the full graph's being 2 000 to 250 000: a tree's wood 5 cm thick or more as
+/// tapered limbs (section 0; a shrub's twigs hide in its leaves), its leaf clusters gathered
+/// on a grid of a sixth of its crown's width (a third of a shrub's) or a tenth of its height,
+/// whichever is larger (a cypress's narrow column took 50 000 triangles), each cell's into one lump
+/// at their middle (section 1; a shrub's of 20 triangles). The cells are keyed in order, so a
+/// plant's mesh is the same from run to run.
+fn grown_mesh(g: &forge_flora::graph::TreeGraph, shrub: bool, broad: bool) -> TriMesh {
+    let mut mesh = TriMesh::default();
+    let width = g.crown_width();
+    let cell = (width
+        / if shrub {
+            3.0
+        } else if broad {
+            8.0
+        } else {
+            6.0
+        })
+    .max(g.height() / 10.0)
+    .max(0.3);
+    if !shrub {
+        for s in g.segments() {
+            let node = &g.nodes[s.node as usize];
+            let parent = g.nodes[node.parent as usize].radius.max(s.radius);
+            if s.radius >= 0.05 && s.a.distance(s.b) > 1e-3 {
+                limb(&mut mesh, s.a, s.b, parent, s.radius);
+            }
+        }
+    }
+    let mut cells: std::collections::BTreeMap<(i32, i32, i32), (Vec3, u32, f32)> =
+        Default::default();
+    for l in &g.leaves {
+        let k = (l.pos / cell).floor();
+        let e = cells
+            .entry((k.x as i32, k.y as i32, k.z as i32))
+            .or_insert((Vec3::ZERO, 0, 0.0));
+        e.0 += l.pos;
+        e.1 += 1;
+        e.2 = e.2.max(l.size);
+    }
+    let faces = if shrub { icosahedron() } else { icosphere() };
+    let mean = g.leaves.len() as f32 / cells.len().max(1) as f32;
+    for (i, (sum, n, size)) in cells.into_values().enumerate() {
+        let radius = cell * (0.45 + 0.35 * (n as f32 / mean).sqrt().min(1.6)) + size * 0.3;
+        lump_of(&mut mesh, sum / n as f32, radius, i as u32 % 8, &faces);
+    }
+    mesh
+}
+
 /// A triangle with a normal per corner, turned so it faces along their sum.
 fn smooth_triangle(mesh: &mut TriMesh, mut p: [Vec3; 3], mut n: [Vec3; 3], section: u8) {
     if (p[1] - p[0]).cross(p[2] - p[0]).dot(n[0] + n[1] + n[2]) < 0.0 {
@@ -5402,6 +5580,11 @@ fn limb(mesh: &mut TriMesh, a: Vec3, b: Vec3, ra: f32, rb: f32) {
 /// A crown's lump round `centre`, about `radius` across, a little flattened, its surface
 /// rippled by `seed`; section 1.
 fn lump(mesh: &mut TriMesh, centre: Vec3, radius: f32, seed: u32) {
+    lump_of(mesh, centre, radius, seed, &icosphere());
+}
+
+/// [`lump`] on the faces `faces` (unit directions): an [`icosahedron`]'s 20 for a shrub's.
+fn lump_of(mesh: &mut TriMesh, centre: Vec3, radius: f32, seed: u32, faces: &[[Vec3; 3]]) {
     let s = seed as f32 * 1.7;
     let place = |d: Vec3| {
         let d = d.normalize();
@@ -5413,14 +5596,14 @@ fn lump(mesh: &mut TriMesh, centre: Vec3, radius: f32, seed: u32) {
             Vec3::new(d.x, d.y / 0.85, d.z).normalize(),
         )
     };
-    for tri in icosphere() {
+    for &tri in faces {
         let p = tri.map(place);
         smooth_triangle(mesh, p.map(|q| q.0), p.map(|q| q.1), 1);
     }
 }
 
-/// An icosahedron's faces, each cut in four: 80 triangles of unit directions.
-fn icosphere() -> Vec<[Vec3; 3]> {
+/// An icosahedron's 20 faces, their corners as directions (not of unit length).
+fn icosahedron() -> Vec<[Vec3; 3]> {
     let t = (1.0 + 5.0_f32.sqrt()) * 0.5;
     let v: [Vec3; 12] = [
         Vec3::new(-1.0, t, 0.0),
@@ -5458,9 +5641,13 @@ fn icosphere() -> Vec<[Vec3; 3]> {
         [8, 6, 7],
         [9, 8, 1],
     ];
+    faces.iter().map(|f| [v[f[0]], v[f[1]], v[f[2]]]).collect()
+}
+
+/// An icosahedron's faces, each cut in four: 80 triangles of unit directions.
+fn icosphere() -> Vec<[Vec3; 3]> {
     let mut out = Vec::with_capacity(80);
-    for f in faces {
-        let (a, b, c) = (v[f[0]], v[f[1]], v[f[2]]);
+    for [a, b, c] in icosahedron() {
         let (ab, bc, ca) = ((a + b) * 0.5, (b + c) * 0.5, (c + a) * 0.5);
         out.extend([[a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]]);
     }
@@ -5771,6 +5958,37 @@ fn lamp_model(double: bool) -> TriMesh {
 mod tests {
     use super::*;
     use forge_procgen::city::{example, plan};
+
+    /// The forest's grown plants keep to their budgets: a tree 40 000 triangles at most, a
+    /// shrub 1 000 (the full graphs' run to 250 000).
+    #[test]
+    fn the_grown_plants_keep_their_budgets() {
+        for (sp, s) in forge_flora::species::mediterranean().iter().enumerate() {
+            let shrub = s.habit == forge_flora::species::Habit::Shrub;
+            let broad = s.foliage == forge_flora::species::Foliage::Broad;
+            for k in 0..FLORA_INDIVIDUALS {
+                let g = forge_flora::grow::grow(
+                    s,
+                    &forge_flora::grow::Conditions {
+                        age: s.maturity * [0.7, 0.9, 1.1][usize::from(k) % 3],
+                        seed: 1000 + sp as u64 * 10 + u64::from(k),
+                        site: 1.0,
+                        pruning: Default::default(),
+                        wind: DVec2::ZERO,
+                    },
+                );
+                let m = grown_mesh(&g, shrub, broad);
+                let budget = if shrub { 1_000 } else { 40_000 };
+                println!("{} {k}: {} triangles", s.id, m.triangle_count());
+                assert!(
+                    m.triangle_count() > 0 && m.triangle_count() <= budget,
+                    "{} {k}: {} triangles",
+                    s.id,
+                    m.triangle_count()
+                );
+            }
+        }
+    }
 
     #[test]
     fn a_depot_s_trams_stand_on_its_tracks_in_their_places() {
