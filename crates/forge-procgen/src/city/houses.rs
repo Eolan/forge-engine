@@ -24,7 +24,13 @@ pub struct House {
 }
 
 /// A margin the house keeps from the strip's back, metres: a yard behind at least.
-const YARD: f64 = 1.5;
+pub const YARD: f64 = 1.5;
+
+/// How deep a house's plan may go on a lot of type `ty`: the strip less the yard, a hall and
+/// one room's depth at least.
+pub fn plan_depth(ty: &ParcelType) -> f64 {
+    (ty.depth - YARD).max(rooms::HALL + 2.6)
+}
 
 /// A house on each of `lots`, the household of lot `k` from `household(k)`.
 pub fn houses(
@@ -38,11 +44,7 @@ pub fn houses(
         .filter_map(|(k, lot)| {
             let (people, means) = household(k);
             let width = parcels::frontage(lot);
-            let plan = rooms::plan(
-                &rooms::programme(people, means),
-                width,
-                (ty.depth - YARD).max(rooms::HALL + 2.6),
-            );
+            let plan = rooms::plan(&rooms::programme(people, means), width, plan_depth(ty));
             let (a, b) = (lot[0], lot[1]);
             let t = (b - a).normalize_or_zero();
             let inward = DVec2::new(-t.y, t.x) * plan.depth;

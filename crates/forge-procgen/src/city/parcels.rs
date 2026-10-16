@@ -44,6 +44,25 @@ pub fn strips(
     ty: &ParcelType,
     seed: u64,
 ) -> Option<(Vec<Vec<DVec2>>, Vec<DVec2>)> {
+    let mut rng = SplitMix64::new(seed);
+    strips_with(block, street, ty, |_| rng.range_f64(ty.width.0, ty.width.1))
+        .map(|(lots, court, _)| (lots, court))
+}
+
+/// A block cut into strips: its lots (each its street side first), its court, and each lot's
+/// key, the cut it was planned as ([`strips_with`]).
+pub type Cut = (Vec<Vec<DVec2>>, Vec<DVec2>, Vec<usize>);
+
+/// [`strips`] with each lot's width asked of `width` by a key counting the cuts along the
+/// block's street sides: the lots cut to fit their houses, the owner's way round (the rooms
+/// first). The keys come back with the lots: a lot that took a strip's remainder or swallowed
+/// a corner sliver keeps the key of its planned part, so the keys skip where lots merged.
+pub fn strips_with(
+    block: &[DVec2],
+    street: &[bool],
+    ty: &ParcelType,
+    mut width: impl FnMut(usize) -> f64,
+) -> Option<Cut> {
     let n = block.len();
     if n < 3 || street.len() != n || geom::signed_area(block) <= 0.0 {
         return None;
@@ -52,8 +71,8 @@ pub fn strips(
     if court.len() != n || geom::signed_area(&court) <= 1.0 {
         return None;
     }
-    let mut rng = SplitMix64::new(seed);
-    let mut lots = Vec::new();
+    let mut lots: Vec<Vec<DVec2>> = Vec::new();
+    let mut keys: Vec<usize> = Vec::new();
     for i in 0..n {
         if !street[i] {
             continue;
@@ -76,16 +95,21 @@ pub fn strips(
         // when that is short of the least width, so no sliver is cut.
         let mut cuts = vec![0.0];
         let mut s = 0.0;
+        let mut k = lots.len();
         loop {
-            let w = rng.range_f64(ty.width.0, ty.width.1);
+            let w = width(k).max(0.5);
             if s + w + ty.width.0 > length {
                 break;
             }
             s += w;
             cuts.push(s);
+            k += 1;
         }
         cuts.push(length);
-        let cut = |cuts: &[f64]| -> Vec<Vec<DVec2>> {
+        // The keys the lots were cut for, one a cut.
+        let first = lots.len();
+        let mut ks: Vec<usize> = (first..first + cuts.len() - 1).collect();
+        let cut = |cuts: &[f64], ks: &[usize]| -> Vec<(usize, Vec<DVec2>)> {
             let mut out = Vec::new();
             for k in 0..cuts.len() - 1 {
                 let (s0, s1) = (cuts[k], cuts[k + 1]);
@@ -99,32 +123,39 @@ pub fn strips(
                     lot = geom::clip_half_plane(&lot, a + t * s1, inward);
                 }
                 if lot.len() >= 3 && geom::signed_area(&lot).abs() > 1.0 {
-                    out.push(from_the_street(lot, a, b));
+                    out.push((ks[k], from_the_street(lot, a, b)));
                 }
             }
             out
         };
-        let mut here = cut(&cuts);
+        let mut here = cut(&cuts, &ks);
         // A corner lot cut to a sliver by an acute corner's bisector joins its neighbour: the
-        // cut between them goes (a lot under half the least lot's area is a sliver).
+        // cut between them goes (a lot under half the least lot's area is a sliver), and the
+        // merged lot keeps the key of the part that was planned (the first's, or the last but
+        // one's: the last took the remainder).
         let sliver = ty.width.0 * ty.depth * 0.5;
         for _ in 0..2 {
             let m = here.len();
             if m < 2 || cuts.len() < 3 {
                 break;
             }
-            if geom::signed_area(&here[0]).abs() < sliver {
+            if geom::signed_area(&here[0].1).abs() < sliver {
                 cuts.remove(1);
-            } else if geom::signed_area(&here[m - 1]).abs() < sliver {
+                ks.remove(1);
+            } else if geom::signed_area(&here[m - 1].1).abs() < sliver {
                 cuts.remove(cuts.len() - 2);
+                ks.pop();
             } else {
                 break;
             }
-            here = cut(&cuts);
+            here = cut(&cuts, &ks);
         }
-        lots.extend(here);
+        for (key, lot) in here {
+            keys.push(key);
+            lots.push(lot);
+        }
     }
-    Some((lots, court))
+    Some((lots, court, keys))
 }
 
 /// `lot` turned to start with its street side (its edge along `a b`), so its first two vertices

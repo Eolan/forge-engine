@@ -135,6 +135,7 @@ roofs lost big triangles (the owner saw them). Tests: `no_building_comes_to_a_po
 
 ```
 cargo run --release -p city-plan
+cargo run --release -p city-plan -- --village 600   # the first map's village (D-062, #266)
 ```
 
 ![The example city in 3D](images/city-plan-3d.png)
@@ -339,14 +340,18 @@ living room; modest: a living room, a kitchen, a bedroom a couple and one a chil
 comfortable: a bedroom a person, a dining room, a study, two bathrooms; rich: a salon, suites
 with their bathrooms, service rooms), each with its area; `rooms::plan` lays them on a lot of
 a given width, a hall with the stair 2.2 m wide along one party wall the whole depth, the rooms
-in a column beside it from the front to the back at the depth their area asks (2.6 to 6.5 m),
-the day rooms on the ground floor, the bedrooms upstairs once the day rooms take half the
-depth, a new storey when one is full; every storey's last room stretches to the house's depth
-so the storeys stack, and no room goes under what it asked nor under the 9 m² the decency
-decree wants for a main room. The footprint's depth and the storeys come out of the rooms.
-Tested on a modest family of four on a 6 m lot (two storeys, the ground floor the day's), a
-poor household of three (the minimums kept), a rich house of five on 14 m (its suites
-upstairs). **On their lots** (`city::houses`): each strip's lot gets a household's plan at the
+beside it in bands from the front to the back: a band as deep as its first room is square
+(2.6 to 6.5 m), its rooms side by side across the width, the largest first and the small ones
+filling the bands' ends; the day rooms on the ground floor, the bedrooms upstairs once the day
+rooms take half the depth, a new storey when one is full. A band's rooms share its width and
+every storey's last band stretches to the house's depth, so the bands tile each storey and the
+storeys stack; no room goes under what it asked nor under the 9 m² the decency decree wants
+for a main room. The footprint's depth and the storeys come out of the rooms. (The first
+solver, the same day, stacked every room across the whole width at 2.6 m deep at least: a
+rich house on a wide lot wasted its width and climbed to nine storeys.) Tested on a modest
+family of four on a 6 m lot (two storeys, the ground floor the day's), a poor household of
+three (the minimums kept), a rich house of five on 14 m (its suites upstairs), each storey's
+rooms tiling it with none over another. **On their lots** (`city::houses`): each strip's lot gets a household's plan at the
 lot's width and the strip's depth less a 1.5 m yard; the footprint runs from the street to the
 plan's depth, cut to the lot where a corner lot narrows, the rest of the lot the garden.
 `HOUSES_PNG=path cargo test -p forge-procgen houses` draws the trapezoid block's houses, their
@@ -356,12 +361,25 @@ footprints shaded by their storeys.
 (streets, blocks, parks: the example's site at 600 m gives 30 nodes, 44 edges, 15 blocks, 9
 built), each built block cut into strips of village lots and a house from its rooms put on each,
 the households drawn by the seed (one to five people; 15 % poor, 50 % modest, 30 % comfortable,
-5 % rich). The example village: 5 blocks with strips round their courts, 4 too thin or concave
-for the 14 m depth and so without houses yet, 191 houses, 586 people
-(`reports/2026-10-15/village-600m.png`; `VILLAGE_PNG=path cargo test -p forge-procgen village`
-draws it). Next: a shallower strip or the city's cut for the blocks without, the structures
-(D-060) built from the plans, the village's own site and street pattern (one main street, lanes
-off it), and the 3D.
+5 % rich). The lots are cut to the houses, the owner's way round: each lot as wide as its
+household's rooms need on two storeys at the strip's depth (`parcels::strips_with`, which
+hands back each lot's key, so a corner sliver merged into its neighbour does not shift the
+households after it), never under the type's 5 m; a thin block takes a shallower strip (11 m,
+then 8 m, a house with no yard), one too thin for that keeps no houses. Each house is also one
+of the city's masses on its own lot, appended to the plan's (old stone, a tiled roof, homes
+only), so the structures, the facades and the kit draw it as they draw the city's buildings.
+The example village: 7 blocks with strips round their courts, 2 too thin or concave, 323
+houses of one to four storeys (26, 159, 103 and 35), 1 012 people, 314 houses with a door
+(`reports/2026-10-16/village-600m.png`; `VILLAGE_PNG=path cargo test -p forge-procgen
+village` draws it). The first cut (2026-10-15) drew the widths at random: 191 houses, 586
+people, and once the houses were masses the rich households on 5 m lots stood nine storeys.
+**In 3D:** `cargo run --release -p city-plan -- --village 600` draws the village in place of
+the city, every house from the kit (`reports/2026-10-16/village-air.png` from the air,
+`village-street.png` from the first house's street, which the log names for `--view`). Next:
+the structures from the plans (the rooms as D-060's units and the stair where the hall is: only
+38 houses get a stair core now, the city's cores not fitting a 5 m house), the village's own
+site and street pattern (one main street, lanes off it, no trams nor market hall), the forest
+round it, the player on foot.
 
 **The trees, sized to their streets.** Trimmed street trees of 9–12 m line the avenues, 7–10 m trees
 the shared streets and 5–7 m trees the lanes. Each instance is scaled by its own crown

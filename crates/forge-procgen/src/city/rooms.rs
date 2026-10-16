@@ -139,7 +139,8 @@ pub struct Placed {
     pub kind: RoomKind,
     /// Its storey, 0 the ground floor.
     pub storey: usize,
-    /// Its extent along the street, metres from the lot's left corner.
+    /// Its extent along the street, metres from the lot's left corner (the hall takes the first
+    /// [`HALL`]).
     pub x: (f64, f64),
     /// Its extent into the depth, metres from the street.
     pub y: (f64, f64),
@@ -153,7 +154,8 @@ pub struct Plan {
     pub width: f64,
     /// The depth its rooms took, metres.
     pub depth: f64,
-    /// Its rooms by storey, each storey's from the front to the back.
+    /// Its rooms by storey, each storey's in bands from the front to the back, side by side
+    /// across each band.
     pub storeys: Vec<Vec<Placed>>,
 }
 
@@ -169,46 +171,85 @@ impl Plan {
 }
 
 /// The rooms of `programme` laid on a lot `width` wide (at least [`HALL`] plus a room's least
-/// width) and at most `max_depth` deep: beside the hall, each room takes the full width left
-/// and the depth its area asks (within [`DEPTH`]), from the front to the back; when a storey is
-/// full the next begins, the day rooms first on the ground floor, the bedrooms and bathrooms
-/// above. Every storey's last room stretches to the house's depth, so the storeys stack. A
-/// room's area may grow for it, never shrink under what was asked.
+/// width) and at most `max_depth` deep: beside the hall, in bands from the front to the back,
+/// each band as deep as its first room is square (within [`DEPTH`]) and its rooms side by side
+/// across the width left, the largest first and the small ones filling the bands' ends; when a
+/// storey is full the next begins, the day rooms first on the ground floor, the bedrooms and
+/// bathrooms above. A band's rooms share its width and every storey's last band stretches to
+/// the house's depth, so the bands tile each storey and the storeys stack. A room's area may
+/// grow for it, never shrink under what was asked (but a room wider than the house, which
+/// takes the whole width at the deepest a room goes).
 pub fn plan(programme: &[Room], width: f64, max_depth: f64) -> Plan {
     let inner = (width - HALL).max(2.4);
     let mut rooms: Vec<Room> = programme.to_vec();
-    // The day rooms first, in their order; then the rest.
-    rooms.sort_by_key(|r| !r.kind.by_day());
+    rooms.sort_by(|a, b| {
+        b.kind
+            .by_day()
+            .cmp(&a.kind.by_day())
+            .then(b.area.total_cmp(&a.area))
+    });
+    // The bedrooms go upstairs once the day rooms take half the ground floor's depth; a small
+    // household keeps to one floor.
+    let upstairs =
+        |r: &Room, storeys: usize, y: f64| !r.kind.by_day() && storeys == 1 && y >= max_depth * 0.5;
     let mut storeys: Vec<Vec<Placed>> = vec![Vec::new()];
     let mut y = 0.0;
-    let mut night = false;
-    for r in rooms {
-        let wanted = (r.area / inner).clamp(DEPTH.0, DEPTH.1);
-        // The bedrooms go upstairs once the day rooms take half the ground floor's depth; a
-        // small household keeps to one floor.
-        let upstairs = !night && !r.kind.by_day() && storeys.len() == 1 && y >= max_depth * 0.5;
-        night |= !r.kind.by_day();
-        if (y + wanted > max_depth + 1e-9 || upstairs) && y > 0.0 {
+    let mut i = 0;
+    while i < rooms.len() {
+        let first = rooms[i];
+        let mut d = first.area.sqrt().clamp(DEPTH.0, DEPTH.1);
+        if first.area / d > inner {
+            d = (first.area / inner).clamp(DEPTH.0, DEPTH.1);
+        }
+        if y > 0.0 && (y + d > max_depth + 1e-9 || upstairs(&first, storeys.len(), y)) {
             storeys.push(Vec::new());
             y = 0.0;
         }
-        let depth = wanted.min(max_depth);
+        let d = d.min(max_depth);
         let storey = storeys.len() - 1;
-        storeys[storey].push(Placed {
-            kind: r.kind,
-            storey,
-            x: (HALL, width),
-            y: (y, y + depth),
-        });
-        y += depth;
+        let start = storeys[storey].len();
+        let mut x = HALL;
+        while i < rooms.len() {
+            let r = rooms[i];
+            let w = (r.area / d).max(2.4);
+            if x > HALL && (x + w > width + 1e-9 || upstairs(&r, storeys.len(), y)) {
+                break;
+            }
+            let w = w.min(width - x);
+            storeys[storey].push(Placed {
+                kind: r.kind,
+                storey,
+                x: (x, x + w),
+                y: (y, y + d),
+            });
+            x += w;
+            i += 1;
+        }
+        // The band's rooms share what is left of its width, in proportion.
+        let used = x - HALL;
+        if used < inner - 1e-9 {
+            let scale = inner / used;
+            let mut at = HALL;
+            for r in &mut storeys[storey][start..] {
+                let w = (r.x.1 - r.x.0) * scale;
+                r.x = (at, at + w);
+                at += w;
+            }
+        }
+        if let Some(last) = storeys[storey].last_mut() {
+            last.x.1 = width;
+        }
+        y += d;
     }
     let depth = storeys
         .iter()
         .filter_map(|s| s.last().map(|r| r.y.1))
         .fold(0.0, f64::max);
     for s in &mut storeys {
-        if let Some(last) = s.last_mut() {
-            last.y.1 = depth;
+        if let Some(end) = s.last().map(|r| r.y.1) {
+            for r in s.iter_mut().filter(|r| (r.y.1 - end).abs() < 1e-9) {
+                r.y.1 = depth;
+            }
         }
     }
     Plan {
@@ -229,15 +270,32 @@ mod tests {
             programme.len(),
             "every room placed"
         );
+        // Each storey's rooms tile it beside the hall, none over another.
         for (k, storey) in plan.storeys.iter().enumerate() {
-            let mut y = 0.0;
-            for r in storey {
+            let mut area = 0.0;
+            for (a, r) in storey.iter().enumerate() {
                 assert_eq!(r.storey, k);
-                assert!((r.y.0 - y).abs() < 1e-9, "rooms in a column, no gap");
-                assert!(r.x.0 >= HALL - 1e-9 && r.x.1 <= plan.width + 1e-9);
-                y = r.y.1;
+                assert!(
+                    r.x.0 >= HALL - 1e-9
+                        && r.x.1 <= plan.width + 1e-9
+                        && r.y.0 >= -1e-9
+                        && r.y.1 <= plan.depth + 1e-9,
+                    "a room off the house: {r:?}"
+                );
+                area += (r.x.1 - r.x.0) * (r.y.1 - r.y.0);
+                for o in &storey[..a] {
+                    let apart = r.x.1 <= o.x.0 + 1e-9
+                        || o.x.1 <= r.x.0 + 1e-9
+                        || r.y.1 <= o.y.0 + 1e-9
+                        || o.y.1 <= r.y.0 + 1e-9;
+                    assert!(apart, "rooms over each other: {r:?} {o:?}");
+                }
             }
-            assert!((y - plan.depth).abs() < 1e-9, "the storey stacks");
+            let floor = (plan.width - HALL) * plan.depth;
+            assert!(
+                (area - floor).abs() < 1e-6,
+                "storey {k} tiled: {area:.2} of {floor:.2} m²"
+            );
         }
         // No room under the minimum, none under what it asked.
         let mut asked: Vec<f64> = programme.iter().map(|r| r.area).collect();

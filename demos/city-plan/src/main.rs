@@ -17,6 +17,11 @@ struct Cli {
     /// The example's side, metres.
     #[arg(long, default_value_t = 4000.0)]
     size: f64,
+    /// The first map's village (D-062, #266) in place of the city: the example site at this
+    /// size, metres (600 for the first map), each house from its rooms on its strip lot, old
+    /// stone and tiled, the kit dressing them all.
+    #[arg(long)]
+    village: Option<f64>,
     /// Start on the pavement of the avenue nearest the centre, at eye height.
     #[arg(long)]
     street: bool,
@@ -62,22 +67,56 @@ fn main() -> anyhow::Result<()> {
         .about("A city's plan in 3D: the example city's masses, streets, parks and trams")
         .get_matches();
     let cli = Cli::from_arg_matches(&matches)?;
-    let site = example::site(cli.size, 10.0);
-    let params = example::params(cli.size);
-    let plan = city::plan(&site, &params);
-    let masses = mass::masses(&plan, &city::bible::StyleBible::default(), 11);
+    let size = cli.village.unwrap_or(cli.size);
+    let site = example::site(size, 10.0);
+    let params = example::params(size);
+    let (plan, masses) = match cli.village {
+        Some(_) => {
+            let v = city::village::village(&site, &params, 1);
+            eprintln!(
+                "the village: {} houses on {} blocks, {} built blocks without",
+                v.masses.len(),
+                v.blocks.len(),
+                v.without
+            );
+            // The first house from its street, 7 m out, for `--view`.
+            if let Some(h) = v.houses().next() {
+                let (a, b) = (h.lot[0], h.lot[1]);
+                let t = (b - a).normalize_or_zero();
+                let eye = (a + b) * 0.5 + DVec2::new(t.y, -t.x) * 7.0;
+                let look = DVec2::new(-t.y, t.x);
+                eprintln!(
+                    "the first house from its street: --view={:.1},1.7,{:.1},{:.1},0",
+                    eye.x - size * 0.5,
+                    eye.y - size * 0.5,
+                    (-look.x).atan2(-look.y).to_degrees()
+                );
+            }
+            (v.plan, v.masses)
+        }
+        None => {
+            let plan = city::plan(&site, &params);
+            let masses = mass::masses(&plan, &city::bible::StyleBible::default(), 11);
+            (plan, masses)
+        }
+    };
     let trees = city::trees::trees(&site, &plan, 5);
     let lamps = city::lamps::lamps(&site, &plan);
-    // Over the river south of the centre, looking north across it.
+    // Over the river south of the centre, looking north across it; the village from closer.
     let centre = params.centre;
+    let (up, back, pitch) = if cli.village.is_some() {
+        (110.0, 240.0, -0.42)
+    } else {
+        (180.0, 700.0, -0.32)
+    };
     let camera = FlyCamera {
         position: Vec3::new(
-            (centre.x - cli.size * 0.5) as f32,
-            180.0,
-            (centre.y - cli.size * 0.5) as f32 + 700.0,
+            (centre.x - size * 0.5) as f32,
+            up,
+            (centre.y - size * 0.5) as f32 + back,
         ),
         yaw: 0.0,
-        pitch: -0.32,
+        pitch,
         speed: 40.0,
         ..FlyCamera::default()
     };
@@ -95,7 +134,7 @@ fn main() -> anyhow::Result<()> {
         None => city::facades::MEDITERRANEAN.to_owned(),
     };
     let grammar = forge_procgen::grammar::Grammar::parse(&text)?;
-    let half = cli.size * 0.5;
+    let half = size * 0.5;
     let detail = city_plan::Detail {
         grammar: &grammar,
         top: 0.9,
@@ -107,7 +146,12 @@ fn main() -> anyhow::Result<()> {
         } else {
             centre
         },
-        radius: cli.detail,
+        // The whole village from the kit.
+        radius: if cli.village.is_some() {
+            size
+        } else {
+            cli.detail
+        },
         seed: 12,
         railing_cards: cli.railing_cards,
         lit_hour: cli.app.time_of_day.map(city_plan::hour_of_day),
@@ -120,7 +164,11 @@ fn main() -> anyhow::Result<()> {
         &trees,
         &lamps,
         camera,
-        "city plan",
+        if cli.village.is_some() {
+            "the village"
+        } else {
+            "city plan"
+        },
         (cli.detail > 0.0).then_some(&detail),
     );
     let scenario = match cli.clock {
