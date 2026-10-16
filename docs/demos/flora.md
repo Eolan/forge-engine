@@ -111,7 +111,10 @@ world's cells can be placed in parallel. It never follows the player (the patent
   item 2), its forest from `place::place` over the site's heights (`docs/demos/city-plan.md`, "In
   its forest"); its street, park, quay and courtyard settings as rows and groves with species are
   next.
-- A few individuals per species cooked into D-053's derived cache.
+- *Done 2026-10-16 (#274):* a few individuals per species cooked into D-053's derived cache:
+  `city-plan` keeps each grown individual's cooked mesh under its content's digest and the
+  cooking code's; the growing and meshing still run at each start, on all cores (a quarter of
+  their time, the cooking the rest: the village's 81 in 0.11 s, 2.1 s before).
 - *Done 2026-10-16:* point 3 of the issue, the fauna as behaviour (`forge-fauna`,
   `docs/demos/fauna.md`): its animals rest in and browse this placement.
 - For the renderer's session: meshes from the graph (generalised cylinders along the segments,
