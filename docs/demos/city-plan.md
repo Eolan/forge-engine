@@ -417,12 +417,21 @@ half and all of its maturity and gives each plant the one nearest its height (a 
 was the mature tree shrunk, a ball on a stem), the planted ones with their crowns lifted to 38 %
 of their height (half an umbrella pine's, 15 % an olive's) and their leaves' lumps kept above
 it. The one model is left only to the planters' shrubs (rosemary since the leaf cards, below); the map check's views take 2.2–2.8 ms. Only plans with a forest (the village's maps) get them: the 4 km city's thousands of street and park trees grown took 23–34 ms of GPU in the sandbox's day check where the one model takes 4.4–4.9, so the city keeps its one model until D-013's far tiers
-(`reports/2026-10-16/village-street-trees.png`, the walk under a plane's crown).
+(`reports/2026-10-16/village-street-trees.png`, the walk under a plane's crown). **Three of each
+age** (the owner, the same evening: "trees are too much identical, they need variations"): one
+individual an age made every mature holm oak of the wood's edge the same tree. Each age is now
+grown three times, from its own seed, the second in a breeze of 0.3 from one side on a site of
+0.8, the third in one of 0.27 from another on 0.9 (`FLORA_SEEDS`), and a plant's hash picks one
+of the three at the age nearest its height and stretches its crown by up to 8 % along its turn.
+No tree stands within 2 m of any water, the sea's and the lakes' too (on a quay's edge a trunk
+stood over the water in its reflection: "tree above water").
 
 **Leaf cards** (D-013, the same afternoon). Each lump is now a core and the cards round it.
-- **The core:** 20 triangles at two fifths of the lump's radius, in half the leaves' colour, the
-  shade inside a crown. At 0.6 of the radius in the leaves' own colour its smooth faces showed,
-  and at half with 12 cards at most a lump the near holm oaks still showed it as dark balls.
+- **The core:** 20 triangles at three tenths of the lump's radius, in three tenths of the
+  leaves' colour, the shade inside a crown. At 0.6 of the radius in the leaves' own colour its
+  smooth faces showed, and at half with 12 cards at most a lump the near holm oaks still showed it
+  as dark balls; at two fifths in half the colour, once the metered exposure lit the wood, as
+  faceted green stones among the leaves.
 - **The cards:** 6 to 16 squares round each lump (a shrub's 4), cut from a leaf atlas drawn at
   start-up (`forge_render::textures::leaves`, 1024 × 1024). Its four sprays are small oval
   leaves for the oaks, broad ones for planes and limes, needle tufts for the pines, the cypress
@@ -534,7 +543,17 @@ join up to 0.75 m apart; where a junction of four lots still leaves a slot betwe
 (each stopped at another wall's face), a piece of wall fills it, a centimetre lower where it
 shares a corner's sliver with a crossing wall. The village's test finds no slot or step
 between walls within a thickness of each other's line (four steps and three slots before;
-`reports/2026-10-16/village-wall-joint.png`, before and after). **Its insides** (`city::interior`, the same day; the owner: "a house or structure
+`reports/2026-10-16/village-wall-joint.png`, before and after). **Hedges, open lots and common
+courts** (the owner's walk of the same evening: "why is this place full of surrounding walls?",
+"the middle area should not exist or be common, sometimes it's better to have plants (hedges)
+separating the gardens"). The courts, the blocks' middles behind the strips, were walled all
+round, a yard of walls with a gate and nothing in it, and so were the lots that kept no house.
+A court is now the block's common ground, open to the lanes, an olive grove of a tree every 8 m
+3 m in from its edges, and the gardens' backs onto it are hedges; a lot without a house is open
+ground with its olives; between two gardens two stretches in five are hedges, by a hash of
+where they lie (`walls::HEDGE_SHARE`). A hedge is a row of kermes oaks 0.9 m apart, 1.4 to
+1.8 m high. The village now has 234 m of wall along its streets and lanes, 801 m between gardens
+and 19 gates. **Its insides** (`city::interior`, the same day; the owner: "a house or structure
 should be thought by thinking about the rooms"): a house's structure now follows its rooms'
 plan. Its core (`cores`, the straight flight of 1.1 m with handrails beside a corridor of
 1.2 m a wheelchair passes, walls of 0.2 m) stands at the start of its front where the plan
@@ -756,6 +775,28 @@ indoor floors then took a smooth row of their own too (`KIT_INSIDE_FLOOR`, the s
 pits read as squiggles a step away; the day check moved by noise (0.16 % of the harbour's pixels).
 The windows show nothing from inside yet (the glass is drawn for the street), and the far
 masses beyond the kit's reach stay hollow; going inside builds the real rooms (step 3).
+
+**Open at every opening, and metered** (the owner's walk of 2026-10-16 evening: "insides are way
+too dark", "inside I don't even see outside light", "the door is opened outside but inside it's
+a wall", "light below trees is too dark"). The inner faces were cut only at the passages and
+closed every door, window and shopfront from inside: the rooms had no daylight but what leaked
+round the frames. Each wall is now cut into bands between its openings' edges, each band's face
+filled from the floor to the top round the openings that cross it, and each opening gets the
+reveals the kit's module leaves out: the jambs, the head and, over a window's sill, the sill,
+from where the module stops (a window two thirds into its wall, a door 0.35 m, a shopfront 0.3)
+to the inner face; without them a window showed the lawn under its frame through the hollow
+wall. Then the exposure: the village kept the street's fixed EV 14, at which a hall lit through
+its door and the ground under the holm oaks were black. The light was there: a look may now meter
+its exposure without `--day` (`Look::metered`), and the village's does (the eye's adaptation
+walking in): the hall meters at EV 9.4, the wood at 11.0, a garden at 13.4. Finer probes did not
+help (the finest cascade at 2 m or 1 m left the hall as dark, the frames 1–2 ms slower). With the
+light in, the cream whitewash and the warm stone floor reddened at each bounce, and they are now a
+lime white (0.92, 0.915, 0.90) and a grey limestone (0.74, 0.73, 0.70); a hall lit by a garden
+door keeps a green cast from the lawn. The map check's inside views moved by ꟻLIP means of
+0.23–0.45 (hall, room, landing, way in), the street views by 0.0003–0.008. The street doors'
+leaves stand 2.15 m high where the opening allows, the transom light over them
+(`modules::door`): at 0.7 m under the head a 2.6 m door's leaves stood 1.9 m, at a walker's eyes
+("doors heights are a bit too low for people").
 
 ### Stair cores (D-060, step 3)
 

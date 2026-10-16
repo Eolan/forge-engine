@@ -707,6 +707,8 @@ struct Gallery {
     night_now: Option<(forge_render::night::SkyAt, forge_render::night::NightLights)>,
     meter: LuminanceMeter,
     auto_exposure: AutoExposure,
+    /// The scene's look meters the exposure ([`Look::metered`]).
+    look_metered: bool,
     /// Seconds the last update advanced.
     step: f32,
     tonemap: Tonemap,
@@ -1360,6 +1362,7 @@ impl Gallery {
             night_now: None,
             meter,
             auto_exposure,
+            look_metered: look.metered,
             step: 1.0 / 60.0,
             scene,
             camera,
@@ -1387,10 +1390,11 @@ impl Gallery {
         Ok(gallery)
     }
 
-    /// Whether the exposure follows the scene's metered light (`--day`, `--time-of-day`) rather
-    /// than `--ev100`.
+    /// Whether the exposure follows the scene's metered light (`--day`, `--time-of-day`, a look
+    /// that asks for it) rather than `--ev100`.
     fn metered(&self) -> bool {
-        (self.args.day.is_some() || self.args.time_of_day.is_some()) && !self.args.fixed_exposure
+        (self.args.day.is_some() || self.args.time_of_day.is_some() || self.look_metered)
+            && !self.args.fixed_exposure
     }
 
     /// `--day` (issue #57): the sun at `t` of the cycle (0 sunrise, 0.5 noon, 1 sunset, 1.5

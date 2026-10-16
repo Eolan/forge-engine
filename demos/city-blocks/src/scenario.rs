@@ -52,6 +52,10 @@ pub struct Look {
     pub probes: Option<(u32, f32)>,
     /// The camera follows the scene's vehicle from the start ([`Running::follow`]).
     pub chase: bool,
+    /// The exposure follows the scene's metered light without `--day` or `--time-of-day` (unless
+    /// `--fixed-exposure`): a map walked into from the street, whose rooms, lit through their
+    /// doors and windows, are a few stops under the street, as the eye adapts to them.
+    pub metered: bool,
 }
 
 impl Default for Look {
@@ -63,6 +67,7 @@ impl Default for Look {
             splashes: false,
             probes: None,
             chase: false,
+            metered: false,
         }
     }
 }

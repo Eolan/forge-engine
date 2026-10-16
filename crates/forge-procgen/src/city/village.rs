@@ -262,6 +262,11 @@ pub fn village(site: &Site, params: &CityParams, seed: u64) -> Village {
         .iter()
         .position(|s| s.id == "olive")
         .map(|i| i as u16);
+    // The kermes oak, the hedges' shrub.
+    let kermes = forge_flora::species::mediterranean()
+        .iter()
+        .position(|s| s.id == "kermes-oak")
+        .map(|i| i as u16);
     let mut blocks = Vec::new();
     let mut masses = Vec::new();
     let mut without = 0;
@@ -283,8 +288,63 @@ pub fn village(site: &Site, params: &CityParams, seed: u64) -> Village {
         } else {
             walls::STREET
         };
-        let garden = walls::garden_walls(&outline, &lots, &court, &footprints, front);
+        let housed: Vec<bool> = lots
+            .iter()
+            .map(|lot| houses.iter().any(|h| h.lot == *lot))
+            .collect();
+        let garden = walls::garden_walls(&outline, &lots, &court, &footprints, &housed, front);
         city.walls.extend(garden.walls);
+        // The hedges: kermes oaks clipped to a row, 0.9 m apart, 1.4 to 1.8 m high.
+        for (h, &(p, q)) in garden
+            .hedges
+            .iter()
+            .enumerate()
+            .filter(|_| kermes.is_some())
+        {
+            let count = (p.distance(q) / 0.9).round().max(1.0) as usize;
+            let mut rng =
+                SplitMix64::new(seed ^ ((b as u64) << 20) ^ ((h as u64) << 8) ^ 0x004E_D6E5);
+            for i in 0..count {
+                let pos = p + (q - p) * ((i as f64 + 0.5) / count as f64);
+                city.planted.push(Tree {
+                    pos,
+                    height: rng.range_f64(1.4, 1.8),
+                    crown: rng.range_f64(0.55, 0.7),
+                    setting: Setting::Garden,
+                    species: kermes,
+                });
+            }
+        }
+        // The court, the block's common ground: an olive grove, a tree every 8 m on a grid 3 m
+        // in from its edges (the owner, 2026-10-16: the middle "should not exist or be common").
+        if court.len() >= 3 && geom::signed_area(&court).abs() > 60.0 {
+            let (axis, extent, middle) = geom::oriented_extent(&court);
+            let side = DVec2::new(-axis.y, axis.x);
+            let mut rng = SplitMix64::new(seed ^ ((b as u64) << 24) ^ 0x000C_07A7);
+            let (nx, ny) = (
+                (extent.x * 2.0 / 8.0).floor() as i32,
+                (extent.y * 2.0 / 8.0).floor() as i32,
+            );
+            for i in -nx / 2..=nx / 2 {
+                for j in -ny / 2..=ny / 2 {
+                    let p = middle + axis * (f64::from(i) * 8.0) + side * (f64::from(j) * 8.0);
+                    let inside = geom::contains(&court, p)
+                        && (0..court.len()).all(|k| {
+                            geom::distance_to_segment(p, court[k], court[(k + 1) % court.len()])
+                                > 3.0
+                        });
+                    if inside {
+                        city.planted.push(Tree {
+                            pos: p,
+                            height: rng.range_f64(4.5, 7.0),
+                            crown: rng.range_f64(2.0, 3.2),
+                            setting: Setting::Garden,
+                            species: olive,
+                        });
+                    }
+                }
+            }
+        }
         // The gardens' olives (`trees::Setting::Garden`): behind each house where 30 m² or more
         // stay 1.5 m clear of it, one at the garden's middle, two along a garden of 150 m² or
         // more; a lot without a house is all garden.

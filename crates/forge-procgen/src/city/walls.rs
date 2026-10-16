@@ -4,6 +4,7 @@
 //! neighbours, low on a lotissement's front, over which the house is seen. Each garden keeps a
 //! gate on its street side, level with the street (the owner's rule: no step where people walk).
 
+use forge_core::SplitMix64;
 use glam::DVec2;
 
 use super::geom;
@@ -29,8 +30,6 @@ const JOIN: f64 = THICKNESS;
 /// How far apart the ends of two walls nearly in line may stand to be joined, metres: a slot
 /// narrower than a gate is no way through, and showed as a dark strip in the wall.
 const IN_LINE_JOIN: f64 = 0.75;
-/// The shortest stretch of a court's wall along the street that takes a gate, metres.
-const COURT_GATE: f64 = 6.0;
 
 /// A garden wall: its line on the plan, its height and the side its thickness takes.
 #[derive(Clone, Debug, PartialEq)]
@@ -97,53 +96,71 @@ impl Wall {
     }
 }
 
-/// A block's garden walls and the gates left in them.
+/// A block's garden walls, the gates left in them and the hedges between its gardens.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GardenWalls {
     /// The walls.
     pub walls: Vec<Wall>,
     /// Each gate's middle, metres on the plan.
     pub gates: Vec<DVec2>,
+    /// The hedges: each line on the plan, from one end to the other.
+    pub hedges: Vec<(DVec2, DVec2)>,
 }
 
-/// A stretch of a lot's or the court's outline where a wall stands.
+/// A stretch of a lot's outline where a wall or a hedge stands.
 struct Stretch {
     a: DVec2,
     b: DVec2,
-    /// The lot it closes, `None` for the court.
-    owner: Option<usize>,
+    /// The lot it closes.
+    owner: usize,
     /// On its lot's front, the street side.
     front: bool,
     /// On the block's outline: along a street or a lane.
     street: bool,
+    /// A hedge, not a wall.
+    hedge: bool,
 }
 
-/// The walls of a block cut into `lots` round `court` within its `outline`, the houses'
-/// `footprints` standing on the lots: each stretch of a lot's or the court's outline that no
-/// house stands on, once. Along the block's outline a wall is [`STREET`] high (on a lot's front
-/// `front` high: [`FRONT`] for a lotissement's), between gardens [`PARTY`]. Each lot with a
-/// stretch along the street keeps a gate in its longest one, before its house when that stretch
-/// is its front, and each of the court's stretches along the street of 6 m or more one in its
-/// middle. The lots and the court wind anticlockwise, as [`super::parcels::strips_by`] cuts them.
+/// Of the stretches between two gardens, how many in [`HEDGE_SHARE`]'s denominator are walls;
+/// the others hedges (the owner, 2026-10-16: "sometimes it's better to have plants (hedges)
+/// separating the gardens").
+const HEDGE_SHARE: (u64, u64) = (2, 5);
+
+/// The walls and hedges of a block cut into `lots` round `court` within its `outline`, the
+/// houses' `footprints` standing on the lots and `housed[k]` saying whether lot `k` has its
+/// house: each stretch of a housed lot's outline that no house stands on, once. Along the block's
+/// outline a wall [`STREET`] high (on a lot's front `front` high: [`FRONT`] for a lotissement's);
+/// between two gardens a wall [`PARTY`] high or, for [`HEDGE_SHARE`] of them, a hedge; a garden's
+/// side on the court a hedge. The court is the block's common ground, open to the lanes and to
+/// the lots without a house, which stay open ground too: walled all round, the courts and the
+/// empty lots were yards of walls with nothing in them (the owner, 2026-10-16: "why is this place
+/// full of surrounding walls?", "the middle area should not exist or be common"). Each lot with
+/// a wall along the street keeps a gate in its longest one, before its house when that wall is
+/// on its front. The lots and the court wind anticlockwise, as [`super::parcels::strips_by`] cuts
+/// them.
 pub fn garden_walls(
     outline: &[DVec2],
     lots: &[Vec<DVec2>],
     court: &[DVec2],
     footprints: &[Vec<DVec2>],
+    housed: &[bool],
     front: f64,
 ) -> GardenWalls {
-    let mut edges: Vec<(DVec2, DVec2, Option<usize>, bool)> = Vec::new();
+    let mut edges: Vec<(DVec2, DVec2, usize, bool)> = Vec::new();
     for (k, lot) in lots.iter().enumerate() {
+        if !housed.get(k).copied().unwrap_or(true) {
+            continue;
+        }
         let n = lot.len();
         for i in 0..n {
-            edges.push((lot[i], lot[(i + 1) % n], Some(k), i == 0));
+            edges.push((lot[i], lot[(i + 1) % n], k, i == 0));
         }
     }
-    let n = court.len();
-    for i in 0..n {
-        edges.push((court[i], court[(i + 1) % n], None, false));
-    }
     let on_outline = |p: DVec2| boundary_distance(outline, p) < 2.0 * ON;
+    // Whether the ground just right of a stretch (outside its lot) is the court's.
+    let on_court = |p: DVec2, along: DVec2| {
+        court.len() >= 3 && geom::contains(court, p + DVec2::new(along.y, -along.x) * 0.3)
+    };
     let mut kept: Vec<(DVec2, DVec2)> = Vec::new();
     let mut stretches: Vec<Stretch> = Vec::new();
     for (p, q, owner, is_front) in edges {
@@ -209,24 +226,33 @@ pub fn garden_walls(
             }
             let (a, b) = (p + (q - p) * t0, p + (q - p) * t1);
             kept.push((a, b));
-            let street = on_outline(a) && on_outline(b) && on_outline((a + b) * 0.5);
+            let mid = (a + b) * 0.5;
+            let street = on_outline(a) && on_outline(b) && on_outline(mid);
+            // Between two gardens a wall or a hedge, by a hash of where the stretch lies (the
+            // same whichever of the two lots meets it first).
+            let cell = (mid * 4.0).floor();
+            let hash = SplitMix64::new(
+                (cell.x as i64 as u64) << 32 ^ (cell.y as i64 as u64 & 0xFFFF_FFFF),
+            )
+            .next_u64();
+            let hedge = !street && (on_court(mid, along) || hash % HEDGE_SHARE.1 < HEDGE_SHARE.0);
             stretches.push(Stretch {
                 a,
                 b,
                 owner,
                 front: is_front,
                 street,
+                hedge,
             });
         }
     }
-    // The gates: each lot's in its longest stretch along the street, its front's first; the
-    // court's in each long stretch along it.
+    // The gates: each lot's in its longest wall along the street, its front's first.
     let mut gate_at: Vec<Option<f64>> = vec![None; stretches.len()];
     for k in 0..lots.len() {
         let best = stretches
             .iter()
             .enumerate()
-            .filter(|(_, s)| s.owner == Some(k) && s.street)
+            .filter(|(_, s)| s.owner == k && s.street && !s.hedge)
             .filter(|(_, s)| s.a.distance(s.b) >= GATE + 2.0 * (JOIN + SHORTEST))
             .max_by(|(_, x), (_, y)| {
                 (x.front, x.a.distance(x.b))
@@ -252,13 +278,12 @@ pub fn garden_walls(
             gate_at[i] = Some(at.clamp(half, length - half));
         }
     }
-    for (i, s) in stretches.iter().enumerate() {
-        if s.owner.is_none() && s.street && s.a.distance(s.b) >= COURT_GATE {
-            gate_at[i] = Some(s.a.distance(s.b) * 0.5);
-        }
-    }
     let mut out = GardenWalls::default();
     for (s, gate) in stretches.iter().zip(gate_at) {
+        if s.hedge {
+            out.hedges.push((s.a, s.b));
+            continue;
+        }
         let height = match (s.street, s.front) {
             (true, true) => front,
             (true, false) => STREET,
@@ -652,7 +677,14 @@ mod tests {
             parcels::strips_by(&block, &street, &[40.0, 0.0, 0.0, 0.0], &ty, |_| 9.0)
                 .expect("lanières");
         let footprints: Vec<Vec<DVec2>> = lots.iter().map(|l| house(l, 10.0)).collect();
-        let g = garden_walls(&block, &lots, &court, &footprints, STREET);
+        let g = garden_walls(
+            &block,
+            &lots,
+            &court,
+            &footprints,
+            &vec![true; lots.len()],
+            STREET,
+        );
         // No wall along a house nor through one.
         for w in &g.walls {
             let mid = (w.a + w.b) * 0.5;
@@ -663,22 +695,37 @@ mod tests {
                 "a wall on a house at {mid}"
             );
         }
-        // Between the gardens: each party line from the house's back to the court, 30 m, once.
+        // Between the gardens: each party line from the house's back to the court, 30 m, once,
+        // a wall or a hedge; the gardens' backs on the court, 90 m, a hedge.
         let party: f64 = g
             .walls
             .iter()
             .filter(|w| w.inside.is_none())
             .map(Wall::length)
             .sum();
-        // Less what the joints take: each line stops at the back wall's face, the back wall at
-        // the lanes' walls.
+        let hedges: f64 = g.hedges.iter().map(|(a, b)| a.distance(*b)).sum();
+        let back: f64 = g
+            .hedges
+            .iter()
+            .filter(|(a, b)| (a.y - 40.0).abs() < 0.1 && (b.y - 40.0).abs() < 0.1)
+            .map(|(a, b)| a.distance(*b))
+            .sum();
+        assert!(
+            (back - 90.0).abs() < 1.0,
+            "{back:.1} m of hedge on the court"
+        );
+        // Less what the joints take from the walls: each stops at the lanes' walls.
         let lines = (lots.len() - 1) as f64 * 30.0 + 90.0;
         assert!(
-            (party - lines).abs() < 3.0,
-            "{party:.1} m between gardens, {lines:.1} expected"
+            (party + hedges - lines).abs() < 3.0,
+            "{party:.1} m of wall and {hedges:.1} of hedge between gardens, {lines:.1} expected"
         );
-        // Along the lanes: the two corner gardens' sides (30 m each) and the court's three sides,
-        // less the gates; a gate in each corner garden and in each of the court's sides.
+        assert!(
+            party > 0.0 && hedges > back,
+            "walls and hedges between the gardens"
+        );
+        // Along the lanes: the two corner gardens' sides (30 m each), less their gates; the
+        // court, the block's common ground, open to the lanes.
         let street: f64 = g
             .walls
             .iter()
@@ -686,8 +733,8 @@ mod tests {
             .map(Wall::length)
             .sum();
         let gates = g.gates.len() as f64;
-        assert_eq!(g.gates.len(), 5, "gates at {:?}", g.gates);
-        let expected = 2.0 * 30.0 + 2.0 * 30.0 + 90.0 - gates * GATE;
+        assert_eq!(g.gates.len(), 2, "gates at {:?}", g.gates);
+        let expected = 2.0 * 30.0 - gates * GATE;
         assert!(
             (street - expected).abs() < 2.0,
             "{street:.1} m along the lanes, {expected:.1} expected"
@@ -716,7 +763,7 @@ mod tests {
             DVec2::new(13.0, 15.0),
             DVec2::new(3.0, 15.0),
         ];
-        let g = garden_walls(&lot, std::slice::from_ref(&lot), &[], &[fp], FRONT);
+        let g = garden_walls(&lot, std::slice::from_ref(&lot), &[], &[fp], &[true], FRONT);
         let front: Vec<&Wall> = g
             .walls
             .iter()

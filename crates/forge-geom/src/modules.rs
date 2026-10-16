@@ -685,7 +685,10 @@ fn balcony(m: &mut TriMesh, w: f32, railing: impl Fn(&mut TriMesh, Vec3, Vec3, f
 /// (a house whose insides are drawn, entered from the street).
 fn door(m: &mut TriMesh, w: f32, h: f32, open: bool) {
     let d = -0.35;
-    let transom = h - 0.7;
+    // The leaves 2.15 m high where the opening allows, the transom light over them: at 0.7 m
+    // under the head, a 2.6 m door's leaves stood 1.9 m, at a walker's eyes (the owner,
+    // 2026-10-16: "doors heights are a bit too low for people").
+    let transom = (h - 0.7).max((h - 0.25).min(2.15));
     // Reveals, as an opening's, without its glass and frame.
     quad(
         m,

@@ -323,7 +323,13 @@ pub fn trees(site: &Site, plan: &CityPlan, seed: u64) -> Vec<Tree> {
                 .iter()
                 .any(|(reach, grid)| grid.any_within(t.pos, reach + extra, |_| false))
         };
-        !(t.setting != Setting::Street && near(&ways, 1.5)) && !near(&banks, 0.0)
+        // And 2 m from any water, the sea's and the lakes' too: on a quay's edge a trunk stood
+        // over the water in its reflection (the owner, 2026-10-16: "tree above water").
+        let dry = (0..8).all(|k| {
+            let a = f64::from(k) * std::f64::consts::FRAC_PI_4;
+            site.water_at(t.pos + DVec2::new(a.cos(), a.sin()) * 2.0) == LAND
+        });
+        !(t.setting != Setting::Street && near(&ways, 1.5)) && !near(&banks, 0.0) && dry
     });
     // And none where a lamp stands, whichever street's it is: the lamps take precedence.
     let mut lamps = PointGrid::new(plan.size, 20.0);

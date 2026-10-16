@@ -278,8 +278,8 @@ pub struct PlanScenario {
     /// height over the model's 10 m up), its turn and which of the two leaf colours it uses.
     trees: Vec<(Vec3, Vec3, f32, usize)>,
     /// The forest's plants by species (D-063): each one's place, its height and crown radius,
-    /// its turn, its species (an index into `forge_flora::species::mediterranean()`) and which
-    /// of that species' grown individuals it is.
+    /// its turn, its species (an index into `forge_flora::species::mediterranean()`) and a hash
+    /// byte that picks which of that species' grown individuals it is and stretches its crown.
     flora: Vec<(Vec3, f32, f32, f32, u16, u8)>,
     /// Each lamp's place, scale (its height over the model's 8 m) and turn.
     lamps: Vec<(Vec3, f32, f32, bool)>,
@@ -1072,7 +1072,8 @@ impl PlanScenario {
         for (_, t) in &trees {
             trunks.insert(t.pos, 0);
         }
-        // The forest's plants by species, each one of its species' three grown individuals.
+        // The forest's plants by species, each one of its species' grown individuals: its hash
+        // picks which of those at its height's age.
         let mut flora: Vec<(Vec3, f32, f32, f32, u16, u8)> = trees
             .iter()
             .filter_map(|&(i, t)| {
@@ -1084,7 +1085,7 @@ impl PlanScenario {
                     t.crown as f32,
                     turn,
                     species,
-                    (i >> 24 & 0xFF) as u8 % FLORA_INDIVIDUALS,
+                    (i >> 24 & 0xFF) as u8,
                 ))
             })
             .collect();
@@ -1161,7 +1162,7 @@ impl PlanScenario {
                             0.4 * vary,
                             turn,
                             sp,
-                            ((h >> 24) & 0xFF) as u8 % FLORA_INDIVIDUALS,
+                            ((h >> 24) & 0xFF) as u8,
                         ));
                         plants += 1;
                         continue;
@@ -2760,25 +2761,119 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
                     plaster,
                 );
             };
-            // Over a passage into the court the face starts at the passage's head: whole, it
-            // closed the passage behind its mouth.
-            let mut cuts: Vec<(f64, f64, f64)> = s
+            // The face is open at every opening of its wall, from the opening's sill to its head
+            // on its storey: doors, windows, shopfronts and passages. Cut only at the passages
+            // (whole, it closed them behind their mouths), it covered every door and window from
+            // inside, and the rooms got no daylight through them (the owner, 2026-10-16: "inside
+            // I don't even see outside light", a door open outside and a wall behind it).
+            // The wall in bands between the openings' edges, each band's face filled from the
+            // floor to the top round the openings that cross it.
+            let length = wall.length();
+            // Each hole with how deep the kit's module lines it from the facade (`kit`): a
+            // window two thirds into its wall, a door 0.35 m, a shopfront 0.3; a passage's
+            // linings are its own (`passages`).
+            let window_reveal = (wall.thickness * 0.65).clamp(0.12, 0.40);
+            let holes: Vec<(f64, f64, f64, f64, Option<f64>)> = s
                 .openings
                 .iter()
-                .filter(|o| o.wall == w && o.kind == OpeningKind::Passage)
-                .map(|o| (o.span().0, o.span().1, o.head))
+                .filter(|o| o.wall == w)
+                .map(|o| {
+                    let level = s.storeys.get(o.storey).map_or(0.0, |st| st.level);
+                    let (lo, hi) = o.span();
+                    let lined = match o.kind {
+                        OpeningKind::Window => Some(window_reveal),
+                        OpeningKind::Door => Some(0.35),
+                        OpeningKind::Shopfront => Some(0.3),
+                        OpeningKind::Passage => None,
+                    };
+                    let head = (level + o.head).min(top);
+                    (lo.max(0.0), hi.min(length), level + o.sill, head, lined)
+                })
+                .filter(|h| h.1 > h.0 + 0.01 && h.3 > h.2 + 0.01)
                 .collect();
-            cuts.sort_by(|x, y| x.0.total_cmp(&y.0));
-            let mut from = 0.0;
-            for &(lo, hi, head) in &cuts {
-                if lo > from + 0.01 {
-                    face(from, lo, 0.0, top);
-                }
-                face(lo, hi, head, top);
-                from = hi;
+            let mut edges: Vec<f64> = vec![0.0, length];
+            for h in &holes {
+                edges.extend([h.0, h.1]);
             }
-            if wall.length() > from + 0.01 {
-                face(from, wall.length(), 0.0, top);
+            edges.sort_by(f64::total_cmp);
+            edges.dedup_by(|x, y| (*x - *y).abs() < 0.005);
+            for pair in edges.windows(2) {
+                let (x0, x1) = (pair[0], pair[1]);
+                if x1 - x0 < 0.005 {
+                    continue;
+                }
+                let mid = (x0 + x1) * 0.5;
+                let mut over: Vec<(f64, f64)> = holes
+                    .iter()
+                    .filter(|h| h.0 <= mid && mid <= h.1)
+                    .map(|h| (h.2.max(0.0), h.3.min(top)))
+                    .collect();
+                over.sort_by(|p, q| p.0.total_cmp(&q.0));
+                let mut y = 0.0;
+                for (c0, c1) in over {
+                    if c0 > y + 0.005 {
+                        face(x0, x1, y, c0);
+                    }
+                    y = y.max(c1);
+                }
+                if top > y + 0.005 {
+                    face(x0, x1, y, top);
+                }
+            }
+            // Each hole's reveals from where the kit's module stops to the inner face: the
+            // jambs, the head and, over a window's sill, the sill. Without them a window seen
+            // from inside showed the garden's lawn under its frame, through the hollow wall
+            // (the owner, 2026-10-16: "windows issues", "door transitions are wrong no wall").
+            for &(lo, hi, y0, y1, lined) in &holes {
+                let Some(from) = lined.filter(|r| deep > r + 0.005) else {
+                    continue;
+                };
+                let p = |x: f64, d: f64| wall.a + t * x + inward * d;
+                let (tx, h) = (
+                    Vec3::new(t.x as f32, 0.0, t.y as f32),
+                    ((y1 - y0) / 3.0) as f32,
+                );
+                let r = ((deep - from) / 3.0) as f32;
+                for (x, n) in [(lo, tx), (hi, -tx)] {
+                    let (a, b) = (p(x, from), p(x, deep));
+                    triangle_uv(
+                        mesh,
+                        [at(a, y0), at(b, y0), at(b, y1)],
+                        [[0.0, 0.0], [r, 0.0], [r, -h]],
+                        n,
+                        plaster,
+                    );
+                    triangle_uv(
+                        mesh,
+                        [at(a, y0), at(b, y1), at(a, y1)],
+                        [[0.0, 0.0], [r, -h], [0.0, -h]],
+                        n,
+                        plaster,
+                    );
+                }
+                let l = ((hi - lo) / 3.0) as f32;
+                let floor = s.storeys.first().map_or(0.0, |st| st.level);
+                let mut caps = vec![(y1, Vec3::NEG_Y)];
+                if y0 > floor + 0.05 {
+                    caps.push((y0, Vec3::Y));
+                }
+                for (y, n) in caps {
+                    let (a, b, c, d) = (p(lo, from), p(hi, from), p(hi, deep), p(lo, deep));
+                    triangle_uv(
+                        mesh,
+                        [at(a, y), at(b, y), at(c, y)],
+                        [[0.0, 0.0], [l, 0.0], [l, r]],
+                        n,
+                        plaster,
+                    );
+                    triangle_uv(
+                        mesh,
+                        [at(a, y), at(c, y), at(d, y)],
+                        [[0.0, 0.0], [l, r], [0.0, r]],
+                        n,
+                        plaster,
+                    );
+                }
             }
         }
         // The floors and the ceilings: the footprint inside its walls, a slab a storey, the
@@ -4223,6 +4318,11 @@ impl Scenario for PlanScenario {
             // (3.73 → 4.51 ms).
             probes: (!self.flora.is_empty())
                 .then_some((256, forge_render::probes::ProbeParams::default().spacing)),
+            // And metered: at the street's fixed exposure (EV 14) a hall lit through its door
+            // and the ground under the holm oaks were black (the owner, 2026-10-16: "insides are
+            // way too dark", "light below trees is too dark"); the light was there, the eye
+            // adapts to it (the hall metered at EV 9.4, the wood at 11.0, a garden at 13.4).
+            metered: !self.flora.is_empty(),
             ..Look::default()
         }
     }
@@ -4451,15 +4551,17 @@ impl Scenario for PlanScenario {
                 ("plan tiled roof".into(), tiles_row),
                 // The insides' walls and ceilings (`KIT_INSIDE`): the white render, smooth; a
                 // step away indoors the facades' grain read as squiggles, and at a third of its
-                // strength as rims round pebbles.
+                // strength as rims round pebbles. A lime whitewash, nearly grey: a room lit by
+                // its door bounces the light many times, and a cream (0.95, 0.93, 0.88) turned
+                // ochre once the metered exposure showed it.
                 (
                     "plan inside plaster".into(),
-                    colour([0.95, 0.93, 0.88], 10.0, 0.03),
+                    colour([0.92, 0.915, 0.90], 10.0, 0.03),
                 ),
-                // The insides' floors (`KIT_INSIDE_FLOOR`): the stone's colour, smooth.
+                // The insides' floors (`KIT_INSIDE_FLOOR`): a pale grey limestone, smooth.
                 (
                     "plan inside floor".into(),
-                    colour([0.82, 0.78, 0.70], 10.0, 0.03),
+                    colour([0.74, 0.73, 0.70], 10.0, 0.03),
                 ),
             ],
         );
@@ -4782,8 +4884,10 @@ impl Scenario for PlanScenario {
             .map(|s| {
                 let (group, bark, leaves) = flora_tones(&s.id);
                 let foliage = tones(leaves.0, leaves.1, 6.0);
-                // The crowns' cores at half the leaves' colour: the shade inside a crown.
-                let shade = |c: [f32; 3]| c.map(|k| k * 0.5);
+                // The crowns' cores at three tenths of the leaves' colour: the shade inside a
+                // crown (at half, once the metered exposure lit the wood, their sunlit facets
+                // read paler than the cards round them).
+                let shade = |c: [f32; 3]| c.map(|k| k * 0.3);
                 materials.add_rows(
                     group,
                     vec![
@@ -4867,11 +4971,13 @@ impl Scenario for PlanScenario {
         // their meshes instanced, each plant scaled to its height and crown.
         if !self.flora.is_empty() {
             // Each species' individuals, grown at a quarter, half and all of its maturity on its
-            // first use; a plant takes the one nearest its height, so a young street tree is a
-            // young tree, not a mature one shrunk (a 10 m plane was a ball on a stem).
+            // first use, three of each; a plant takes the age nearest its height, so a young
+            // street tree is a young tree, not a mature one shrunk (a 10 m plane was a ball on a
+            // stem), and of that age the individual its hash picks, its crown stretched by up to
+            // 8 % along its turn.
             let mut models: std::collections::HashMap<u16, Vec<(forge_render::MeshId, f32, f32)>> =
                 Default::default();
-            for &(at, height, crown, turn, sp, _) in &self.flora {
+            for &(at, height, crown, turn, sp, pick) in &self.flora {
                 let Some(s) = species.get(usize::from(sp)) else {
                     continue;
                 };
@@ -4897,17 +5003,24 @@ impl Scenario for PlanScenario {
                         })
                         .collect()
                 });
-                let Some(&(id, h, w)) = grown.iter().min_by(|a, b| {
-                    (a.1 / height)
+                let ages = usize::from(FLORA_AGES);
+                let Some(age) = (0..ages.min(grown.len())).min_by(|&a, &b| {
+                    (grown[a].1 / height)
                         .ln()
                         .abs()
-                        .total_cmp(&(b.1 / height).ln().abs())
+                        .total_cmp(&(grown[b].1 / height).ln().abs())
                 }) else {
                     continue;
                 };
+                let seeds = grown.len().div_ceil(ages);
+                let k = age + ages * (usize::from(pick) % seeds);
+                let Some(&(id, h, w)) = grown.get(k).or(grown.get(age)) else {
+                    continue;
+                };
                 let across = crown * 2.0 / w;
+                let stretch = 0.92 + f32::from(pick >> 2) / 63.0 * 0.16;
                 let transform = Mat4::from_scale_rotation_translation(
-                    Vec3::new(across, height / h, across),
+                    Vec3::new(across * stretch, height / h, across / stretch),
                     glam::Quat::from_rotation_y(turn),
                     at,
                 );
@@ -5627,20 +5740,30 @@ fn tree_model() -> TriMesh {
     mesh
 }
 
-/// How many individuals of each species are grown for the forest (D-063).
-const FLORA_INDIVIDUALS: u8 = 3;
+/// The ages each species is grown at for the forest (D-063): a quarter, half and all of its
+/// maturity.
+const FLORA_AGES: u8 = 3;
+/// The individuals grown at each age, each from its own seed, in its own breeze and on its own
+/// site: one an age made every holm oak of the wood's edge the same tree (the owner, 2026-10-16:
+/// "trees are too much identical, they need variations").
+const FLORA_SEEDS: u8 = 3;
+/// How many individuals of each species are grown: individual `k` is age `k % FLORA_AGES`, seed
+/// `k / FLORA_AGES`.
+const FLORA_INDIVIDUALS: u8 = FLORA_AGES * FLORA_SEEDS;
 
 /// The growing conditions of species `s`'s (its index `sp`) individual `k`: a quarter, half and
-/// all of its maturity, on a good site, in still air; the planted trees' crowns lifted as a
-/// street's and a square's are, clear of the passers-by (a young plane was a bush on a stick):
-/// planes and limes on 38 % of their height, umbrella pines on half their long bole, olives 15 %.
+/// all of its maturity, the first seed on a good site in still air, the others leaning in a breeze
+/// each its own way on a poorer site; the planted trees' crowns lifted as a street's and a
+/// square's are, clear of the passers-by (a young plane was a bush on a stick): planes and limes
+/// on 38 % of their height, umbrella pines on half their long bole, olives 15 %.
 fn flora_conditions(
     s: &forge_flora::species::Species,
     sp: u16,
     k: u8,
 ) -> forge_flora::grow::Conditions {
-    let k = usize::from(k) % 3;
-    let age = s.maturity * [0.25, 0.5, 1.0][k];
+    let variant = usize::from(k / FLORA_AGES) % usize::from(FLORA_SEEDS);
+    let k = usize::from(k);
+    let age = s.maturity * [0.25, 0.5, 1.0][k % usize::from(FLORA_AGES)];
     // A share of the height it grows to by then, so a tree scaled to a street's height keeps
     // its clear trunk in proportion (lifted in metres, a 9 m plane's crown hung at the eyes).
     let tall =
@@ -5655,12 +5778,12 @@ fn flora_conditions(
     forge_flora::grow::Conditions {
         age,
         seed: 1000 + u64::from(sp) * 10 + k as u64,
-        site: 1.0,
+        site: [1.0, 0.8, 0.9][variant],
         pruning: forge_flora::grow::Pruning {
             lift,
             ..Default::default()
         },
-        wind: DVec2::ZERO,
+        wind: [DVec2::ZERO, DVec2::new(0.3, 0.0), DVec2::new(-0.1, -0.25)][variant],
     }
 }
 
@@ -5814,10 +5937,11 @@ fn grown_mesh(
     mesh
 }
 
-/// A crown lump's core, as a share of the lump's radius ([`grown_mesh`]): two fifths, drawn
+/// A crown lump's core, as a share of the lump's radius ([`grown_mesh`]): three tenths, drawn
 /// darker, the shade between the cards (at 0.6 in the leaves' colour, then at half with 12 cards
-/// at most a lump, the near holm oaks showed it as balls).
-const CROWN_CORE: f32 = 0.4;
+/// at most a lump, the near holm oaks showed it as balls; at two fifths, once the metered
+/// exposure lit the wood, as faceted green stones among the leaves).
+const CROWN_CORE: f32 = 0.3;
 
 /// Leaf cards round a crown's lump at `centre`, `radius` across (D-013), section 2, cut from
 /// `spray`'s quarter of the leaf atlas (`textures::leaves`): 6 to 16 squares (a shrub's 4),

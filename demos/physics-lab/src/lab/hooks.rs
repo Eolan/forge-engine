@@ -204,6 +204,8 @@ impl Scenario for LabScenario {
                 .then_some((256, ROOM_PROBE_SPACING)),
             // The car is followed from the start (C lets it go); the aeroplane always is.
             chase: matches!(kind, LabScene::Drive | LabScene::Flyer),
+            // Each lab scene at its own fixed exposure (its captures compared at one).
+            metered: false,
         }
     }
 
