@@ -5818,6 +5818,10 @@ pub fn run_making(
     TEXTURES
         .set(args.textures)
         .expect("the textures' mode, set once");
+    // The generated textures kept between starts, with the worlds' products (#274).
+    forge_render::textures::keep_in(forge_core::derived::DerivedCache::new(
+        forge_core::derived::cache_dir(forge_core::derived::CacheKind::World),
+    ));
     let config = AppConfig {
         title: title.into(),
         vsync: args.vsync,
