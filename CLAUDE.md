@@ -52,7 +52,10 @@ cargo run --release -q -p credits -- --check
 
 For a while (D-059, 10), the city sandbox's checks and its "day in the city" flight are the
 regression check. The gate stays on every push, and the demos' captures run when a change
-touches what they draw.
+touches what they draw. The first map (D-062, #266) has its own check, `tools/map-check.sh`:
+the village at 600 m, five fixed views and a walked path against `captures/map/accepted`, about
+two minutes; run it after a change to the village, the kit or the structures, and accept the
+run when the change is meant.
 
 What must hold:
 - The culling A/B harness (`--no-occlusion`, `--no-cone`), streamed against resident, and the

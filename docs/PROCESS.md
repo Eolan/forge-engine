@@ -71,6 +71,14 @@ runs it:
 | 1 | A path is not mapped: `forge-gpu`, `forge-app`, the render graph, a shared pass or shader, `Cargo.lock`, the toolchain, the scripts. Or no accepted set yet | The full batch on both paths, validation, and the timings with `--timings BASE_BIN` |
 | 2 | A milestone: every ~5 commits, before a showcase, when a system closes (`--tier 2`) | Tier 1, the batch again with `FORGE_ASYNC=0` (it must match), `tools/origins.sh`, and the real-time tour for the owner to watch |
 
+**The first map's check** (D-062, #266; 2026-10-16): `tools/map-check.sh` shoots the village
+on its own plan at 600 m (`city-plan --village 600`), one seed, from the air and from the views
+the demo's log names (the first house's street, the green, the main road, the busiest
+junction) and a walked path along the first house's street, 240 frames each at a fixed step,
+and compares each with `captures/map/accepted` by LDR-ꟻLIP; `--accept` makes the run the
+accepted set. About two minutes: the check per commit for the map, where the tiers run at
+milestones on the owner's word. The runs stay in `captures/map/<time>/` with a contact sheet.
+
 - **The sentinels** are ten captures on the mesh path, about a minute: meshlets (`static60`,
   `orbit120`, `noocc120`), the ballad without TAA (`ast-notaa600`, `ast240`, `ast240-noocc`)
   and its HDR output (`ast-hdr600`), the resident city (`city60`, `city60-noocc`) and the

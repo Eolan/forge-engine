@@ -84,17 +84,81 @@ fn main() -> anyhow::Result<()> {
                 v.blocks.len(),
                 v.without
             );
-            // The first house from its street, 7 m out, for `--view`.
+            // The views the map check shoots (tools/map-check.sh), each for `--view`: the first
+            // house from its street 7 m out, and a walk along that street; the green nearest
+            // the centre; the main road's middle, along it; the busiest junction, from above.
+            let half = size * 0.5;
+            let view = |p: DVec2, y: f64, look: DVec2, pitch: f64| {
+                format!(
+                    "--view={:.1},{y},{:.1},{:.1},{pitch}",
+                    p.x - half,
+                    p.y - half,
+                    (-look.x).atan2(-look.y).to_degrees()
+                )
+            };
             if let Some(h) = v.houses().next() {
                 let (a, b) = (h.lot[0], h.lot[1]);
                 let t = (b - a).normalize_or_zero();
                 let eye = (a + b) * 0.5 + DVec2::new(t.y, -t.x) * 7.0;
-                let look = DVec2::new(-t.y, t.x);
                 eprintln!(
-                    "the first house from its street: --view={:.1},1.7,{:.1},{:.1},0",
-                    eye.x - size * 0.5,
-                    eye.y - size * 0.5,
-                    (-look.x).atan2(-look.y).to_degrees()
+                    "the village's house: {}; the village's walk: {} --walk={:.2},{:.2}",
+                    view(eye, 1.7, DVec2::new(-t.y, t.x), 0.0),
+                    view(eye, 1.7, t, 0.0),
+                    t.x * 1.4,
+                    t.y * 1.4
+                );
+            }
+            let centre = DVec2::splat(half);
+            if let Some(green) = v
+                .plan
+                .blocks
+                .iter()
+                .filter(|b| b.use_ == forge_procgen::city::BlockUse::Park)
+                .min_by(|a, b| {
+                    a.centre
+                        .distance(centre)
+                        .total_cmp(&b.centre.distance(centre))
+                })
+            {
+                let p = green.polygon.first().copied().unwrap_or(green.centre);
+                let eye = p + (green.centre - p).normalize_or_zero() * 3.0;
+                eprintln!(
+                    "the village's green: {}",
+                    view(eye, 1.7, green.centre - eye, -5.0)
+                );
+            }
+            if let Some(e) = v
+                .plan
+                .roads
+                .edges
+                .iter()
+                .filter(|e| e.class == forge_procgen::city::RoadClass::Main && e.points.len() >= 2)
+                .max_by(|a, b| a.length().total_cmp(&b.length()))
+            {
+                let mid = forge_procgen::city::geom::point_at(&e.points, e.length() * 0.5);
+                let ahead = forge_procgen::city::geom::point_at(&e.points, e.length() * 0.5 + 10.0);
+                eprintln!("the village's main: {}", view(mid, 1.7, ahead - mid, 0.0));
+            }
+            let mut degree = vec![0usize; v.plan.roads.nodes.len()];
+            for e in &v.plan.roads.edges {
+                degree[e.a as usize] += 1;
+                degree[e.b as usize] += 1;
+            }
+            if let Some((k, _)) =
+                degree
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, d)| **d >= 3)
+                    .min_by(|(a, _), (b, _)| {
+                        let at = |i: usize| v.plan.roads.nodes[i].pos.distance(centre);
+                        at(*a).total_cmp(&at(*b))
+                    })
+            {
+                let p = v.plan.roads.nodes[k].pos;
+                let eye = p + DVec2::new(0.0, 18.0);
+                eprintln!(
+                    "the village's junction: {}",
+                    view(eye, 12.0, p - eye, -30.0)
                 );
             }
             (v.plan, v.masses)

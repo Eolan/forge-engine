@@ -385,9 +385,13 @@ people (`reports/2026-10-16/village-own-organic.png`; `VILLAGE_OWN_PNG=path` dra
 **In 3D:** `cargo run --release -p city-plan -- --village 600` draws the village on its own
 plan in place of the city, every house from the kit (`reports/2026-10-16/village-air.png` from
 the air, `village-street.png` from the first house's street, which the log names for
-`--view`). Next: the structures from the plans (the rooms as D-060's units and the stair where
-the hall is: only 38 houses get a stair core now, the city's cores not fitting a 5 m house), a
-square with the rich house, the forest round the village, the player on foot.
+`--view`). **The map check** (`tools/map-check.sh`, D-062's check per commit): the village
+from the air and from the views the log names (the first house's street, the green, the main
+road, the busiest junction) and a walked path along the first house's street, each compared
+with `captures/map/accepted` by LDR-ꟻLIP, about two minutes; `--accept` keeps a run
+(`docs/PROCESS.md`). Next: the rooms as D-060's units (a house is one home over its storeys,
+not a flat a storey), a square with the rich house, the forest round the village, the player
+on foot.
 
 **The trees, sized to their streets.** Trimmed street trees of 9–12 m line the avenues, 7–10 m trees
 the shared streets and 5–7 m trees the lanes. Each instance is scaled by its own crown
