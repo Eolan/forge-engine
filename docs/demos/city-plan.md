@@ -379,9 +379,17 @@ green within 200 m of every block. The traced lanes make blocks of many short ed
 strips refused (the inset by the depth lost corners): a strip is now the block within the
 depth of its street side between the bisectors at the side's two corners (a reflex corner's
 too), and the court is the inset that drops the edges it turns over
-(`geom::inset_by_collapsing`); every built block takes strips. The example site at 600 m on
-its own plan: 35 nodes, 50 edges, 16 blocks, 13 built and all with strips, 559 houses, 1 691
-people (`reports/2026-10-16/village-own-organic.png`; `VILLAGE_OWN_PNG=path` draws it).
+(`geom::inset_by_collapsing`); every built block takes strips. **In its forest** (the same
+day): the district reaches 1.6 times its radius of 120 m and the land beyond is countryside,
+which `CityParams::forest` plants with trees on a jittered grid of 7 m with clearings, 12 m
+clear of the roads (`trees::Setting::Forest`; pines and oaks of 8–16 m from the one model
+until the grower's species, #257). A village's whole network is under the 3 km a cut-off
+network had to reach to be kept (`graph::MIN_NETWORK`), so the plan came out empty under
+twice the radius: a network is now kept over 3 km or over half of all the streets. The example
+site at 600 m on its own plan: 16 nodes, 22 edges, 7 blocks, 5 built and all with strips, 177
+houses, 540 people, 3 136 trees in the forest (`reports/2026-10-16/village-own-organic.png`;
+`VILLAGE_OWN_PNG=path` draws it). The first cut on the whole site, without the forest, had
+559 houses on 13 blocks.
 **In 3D:** `cargo run --release -p city-plan -- --village 600` draws the village on its own
 plan in place of the city, every house from the kit (`reports/2026-10-16/village-air.png` from
 the air, `village-street.png` from the first house's street, which the log names for

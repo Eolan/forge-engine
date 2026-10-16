@@ -719,7 +719,10 @@ pub fn tidy(graph: &mut RoadGraph, site: &Site) -> (usize, usize) {
     let edges_before = graph.edges.len();
 
     drop_dead_ends(graph, site.size);
-    keep_connected(graph, MIN_NETWORK);
+    // A village's whole network is under [`MIN_NETWORK`]: a cut-off network goes when it is
+    // under that or under half of all the streets, whichever is less.
+    let total: f64 = graph.edges.iter().map(|e| e.length()).sum();
+    keep_connected(graph, MIN_NETWORK.min(total * 0.5));
     prune_dead_ends(graph, 0.0);
     dropped += edges_before - graph.edges.len();
     (merged, dropped)

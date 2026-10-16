@@ -85,7 +85,7 @@ pub fn params(size: f64) -> CityParams {
             name: "village".into(),
             kind: DistrictKind::Village,
             anchor: at(0.5, 0.5),
-            radius: 0.25 * size,
+            radius: 0.2 * size,
             pattern: Pattern::Organic(1.2),
             grid_angle: 0.3,
             street_spacing: 80.0,
@@ -114,8 +114,9 @@ pub fn params(size: f64) -> CityParams {
         park_share_cap: 0.15,
         forest_above: f32::MAX,
         forest_slope: f32::MAX,
-        reach: None,
+        reach: Some(1.6),
         max_block: None,
+        forest: Some(7.0),
     }
 }
 
@@ -237,6 +238,13 @@ mod tests {
             v.without,
             v.houses().map(|h| h.household.0).sum::<u32>()
         );
+        let trees = super::super::trees::trees(&site, &v.plan, 1);
+        let forest = trees
+            .iter()
+            .filter(|t| t.setting == super::super::trees::Setting::Forest)
+            .count();
+        println!("{} trees, {forest} in the forest", trees.len());
+        assert!(forest >= 500, "{forest} forest trees");
         assert!(v.plan.tram_lines.is_empty() && v.plan.landmarks.is_empty());
         assert!(built >= 4, "{built} built blocks");
         assert!(houses >= 40, "{houses} houses");

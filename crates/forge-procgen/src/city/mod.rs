@@ -636,6 +636,10 @@ pub struct CityParams {
     /// street spacing gets a shared street across its middle, again until none is. `None` keeps
     /// the traced streets alone.
     pub max_block: Option<f64>,
+    /// The countryside's forest: trees on a jittered grid of this many metres over the land
+    /// beyond every district's reach, clear of the roads (D-062, the first map's village in
+    /// a local forest). `None`: the countryside bare.
+    pub forest: Option<f64>,
 }
 
 /// The plan's numbers, the table judged beside the map.
@@ -690,6 +694,9 @@ pub struct CityPlan {
     pub districts: Vec<DistrictSpec>,
     /// The district of each cell (255: water).
     pub district_field: Field2<u8>,
+    /// The countryside's trees' spacing, metres, or `None` for a bare countryside
+    /// ([`CityParams::forest`]).
+    pub forest: Option<f64>,
     /// The roads.
     pub roads: RoadGraph,
     /// The blocks.
@@ -1225,6 +1232,7 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
         size: site.size,
         districts: params.districts.clone(),
         district_field: districts_field,
+        forest: params.forest,
         roads,
         blocks,
         lots,

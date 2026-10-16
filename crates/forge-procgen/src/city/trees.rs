@@ -19,6 +19,8 @@ pub enum Setting {
     Park,
     /// In a courtyard.
     Courtyard,
+    /// In the countryside's forest beyond the districts' reach.
+    Forest,
 }
 
 /// A tree.
@@ -331,6 +333,50 @@ pub fn trees(site: &Site, plan: &CityPlan, seed: u64) -> Vec<Tree> {
                 .iter()
                 .all(|d| !d.on_link(t.pos, 3.0) && !d.on_yard(t.pos, 3.0))
     });
+    // The countryside's forest (D-062: the first map's village in a local forest): on the
+    // land beyond every district's reach, trees on a jittered grid of `forest` metres with
+    // clearings, 12 m clear of the roads' centrelines and off the blocks; pines and oaks of
+    // 8–16 m, the one model until the grower's species (#257).
+    if let Some(step) = plan.forest {
+        let mut roads = PointGrid::new(plan.size, 20.0);
+        for e in &plan.roads.edges {
+            for p in geom::resample(&e.points, 5.0) {
+                roads.insert(p, 0);
+            }
+        }
+        let n = (plan.size / step).ceil() as usize;
+        for j in 0..n {
+            for i in 0..n {
+                let p = DVec2::new(
+                    (i as f64 + 0.5 + rng.range_f64(-0.4, 0.4)) * step,
+                    (j as f64 + 0.5 + rng.range_f64(-0.4, 0.4)) * step,
+                );
+                if p.x < 0.0 || p.y < 0.0 || p.x >= plan.size || p.y >= plan.size {
+                    continue;
+                }
+                if site.water_at(p) != LAND
+                    || super::district_index(&plan.district_field, p).is_some()
+                    || roads.nearest(p, 12.0).is_some()
+                    || rng.next_f64() < 0.15
+                {
+                    continue;
+                }
+                if plan
+                    .blocks
+                    .iter()
+                    .any(|b| b.centre.distance(p) < 400.0 && geom::contains(&b.polygon, p))
+                {
+                    continue;
+                }
+                out.push(Tree {
+                    pos: p,
+                    height: rng.range_f64(8.0, 16.0),
+                    crown: rng.range_f64(3.0, 5.5),
+                    setting: Setting::Forest,
+                });
+            }
+        }
+    }
     out
 }
 

@@ -199,5 +199,6 @@ pub fn params(size: f64) -> CityParams {
         forest_slope: f32::MAX,
         reach: None,
         max_block: None,
+        forest: None,
     }
 }
