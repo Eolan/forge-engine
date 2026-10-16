@@ -25,6 +25,9 @@ pub const WELL: f64 = 0.1;
 pub const CORE_WALL: f64 = 0.2;
 /// The hall's width, the landing on every storey: Ø 1.50 m to turn a wheelchair, metres.
 pub const HALL: f64 = 1.5;
+/// A house's corridor beside its straight flight, metres: a wheelchair's passage, the landing at
+/// the flight's head as wide.
+pub const HOUSE_HALL: f64 = 1.2;
 /// A lift's shaft inside, along the wall and inwards, metres: a type 2 car (EN 81-70, 1.10 ×
 /// 1.40 m) with its clearances.
 pub const SHAFT: (f64, f64) = (1.6, 1.9);
@@ -73,6 +76,10 @@ pub struct Core {
     pub risers: Vec<u32>,
     /// Whether it climbs on to the roof: a garden or a terrace there, a head house over it.
     pub roof: bool,
+    /// A house's core: one straight flight along the party wall beside its corridor, the hall
+    /// the whole depth, no lift, serving one home a storey. Taken where no dog-leg fits (a 5 m
+    /// house holds no hall of 1.5 m beside two flights).
+    pub house: bool,
 }
 
 impl Core {
@@ -92,6 +99,12 @@ pub fn risers(height: f64) -> u32 {
 pub fn stair_length(height: f64) -> f64 {
     let flight = risers(height).div_ceil(2);
     f64::from(flight.saturating_sub(1)) * GOING + 2.0 * LANDING
+}
+
+/// The length a house's straight flight needs inside its walls for a storey `height` high,
+/// metres: all its goings and the landing at its head (the hall below is its foot).
+pub fn flight_length(height: f64) -> f64 {
+    f64::from(risers(height).saturating_sub(1)) * GOING + LANDING
 }
 
 /// Whether a mass needs cores of its own: two storeys or more, and not a small wing reached
@@ -141,6 +154,10 @@ pub fn place(
     let deep = storeys
         .iter()
         .map(|s| stair_length(s.height))
+        .fold(0.0, f64::max);
+    let deep_house = storeys
+        .iter()
+        .map(|s| flight_length(s.height))
         .fold(0.0, f64::max);
     let lift = storeys.len() >= LIFT_FROM;
     let roof = matches!(m.roof, Roof::Green | Roof::Terrace);
@@ -199,19 +216,38 @@ pub fn place(
             (true, true) => &[(false, true), (true, true), (false, false), (true, false)],
             (false, _) => &[(false, false), (true, false)],
         };
-        let found = ranked.iter().find_map(|&(w, along, _)| {
-            shapes.iter().find_map(|&(flip, compact)| {
-                let c = layout(&walls[w], w, along, deep, lift, flip, compact)?;
-                let fits = probes(&c.outline)
+        let fits = |c: &Core| {
+            probes(&c.outline)
+                .iter()
+                .all(|&p| geom::contains(inside, p))
+                && cores.iter().all(|d| apart(c, d))
+                && avoid
                     .iter()
-                    .all(|&p| geom::contains(inside, p))
-                    && cores.iter().all(|d| apart(&c, d))
-                    && avoid
-                        .iter()
-                        .all(|&(w, lo, hi)| c.wall != w || c.span.1 <= lo || c.span.0 >= hi);
-                fits.then_some(c)
+                    .all(|&(w, lo, hi)| c.wall != w || c.span.1 <= lo || c.span.0 >= hi)
+        };
+        let found = ranked
+            .iter()
+            .find_map(|&(w, along, _)| {
+                shapes.iter().find_map(|&(flip, compact)| {
+                    let c = layout(&walls[w], w, along, deep, lift, flip, compact, false)?;
+                    fits(&c).then_some(c)
+                })
             })
-        });
+            .or_else(|| {
+                // No dog-leg anywhere: a house's straight flight, where no lift is due.
+                (!lift)
+                    .then(|| {
+                        ranked.iter().find_map(|&(w, along, _)| {
+                            [false, true].into_iter().find_map(|flip| {
+                                let c = layout(
+                                    &walls[w], w, along, deep_house, false, flip, false, true,
+                                )?;
+                                fits(&c).then_some(c)
+                            })
+                        })
+                    })
+                    .flatten()
+            });
         if let Some(mut c) = found {
             c.risers = climb.clone();
             c.roof = roof;
@@ -290,6 +326,7 @@ pub fn door(m: &Mass, storeys: &[Storey], walls: &[Wall], o: &Opening) -> Openin
 /// `a` the stair, the hall round the door, the lift (or, `flip`, the other way round). Wide, the
 /// lift's shaft beside the hall; `compact`, behind it at the hall's end, the landing in front of
 /// it (4.4 m along the wall instead of 6.0). `None` where it runs off the wall.
+#[allow(clippy::too_many_arguments)]
 fn layout(
     wall: &Wall,
     w: usize,
@@ -298,6 +335,7 @@ fn layout(
     lift: bool,
     flip: bool,
     compact: bool,
+    house: bool,
 ) -> Option<Core> {
     let t = (wall.b - wall.a).normalize_or_zero();
     let inward = DVec2::new(-t.y, t.x);
@@ -306,16 +344,40 @@ fn layout(
     let rect = |lo: f64, hi: f64, d0: f64, d1: f64| [p(lo, d0), p(hi, d0), p(hi, d1), p(lo, d1)];
     let sign = if flip { -1.0 } else { 1.0 };
     // Offsets from the door's middle, towards `a` first (or `b` when flipped).
+    let at = |x: (f64, f64)| {
+        let (a, b) = (along + sign * x.0, along + sign * x.1);
+        (a.min(b), a.max(b))
+    };
+    if house {
+        // The corridor behind the door, the straight flight beside it along the party wall.
+        let hall = (-HOUSE_HALL * 0.5, HOUSE_HALL * 0.5);
+        let stair = (hall.0 - FLIGHT, hall.0);
+        let (lo, hi) = at((stair.0 - CORE_WALL, hall.1 + CORE_WALL));
+        if lo < 0.0 || hi > wall.length() {
+            return None;
+        }
+        let (s, h) = (at(stair), at(hall));
+        return Some(Core {
+            wall: w,
+            door: usize::MAX,
+            door_at: (along - DOOR * 0.5, along + DOOR * 0.5),
+            span: (lo, hi),
+            deep: deep + CORE_WALL,
+            outline: rect(lo, hi, 0.0, deep + CORE_WALL),
+            stair: rect(s.0, s.1, 0.0, deep),
+            hall: rect(h.0, h.1, 0.0, deep + CORE_WALL),
+            lift: None,
+            risers: Vec::new(),
+            roof: false,
+            house: true,
+        });
+    }
     let width = if lift && compact { SHAFT.0 } else { HALL };
     let hall = (-width * 0.5, width * 0.5);
     let stair = (hall.0 - 2.0 * FLIGHT - WELL, hall.0);
     let shaft = (lift && !compact).then_some((hall.1 + CORE_WALL, hall.1 + CORE_WALL + SHAFT.0));
     let end = shaft.map_or(hall.1, |s| s.1) + CORE_WALL;
     let begin = stair.0 - CORE_WALL;
-    let at = |x: (f64, f64)| {
-        let (a, b) = (along + sign * x.0, along + sign * x.1);
-        (a.min(b), a.max(b))
-    };
     let (lo, hi) = at((begin, end));
     if lo < 0.0 || hi > wall.length() {
         return None;
@@ -348,6 +410,7 @@ fn layout(
         lift: lift_rect,
         risers: Vec::new(),
         roof: false,
+        house: false,
     })
 }
 

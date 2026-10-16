@@ -273,7 +273,7 @@ mod tests {
         }
         let structures = structure::structures(&v.plan, &v.masses);
         assert_eq!(structures.len(), houses);
-        let (mut doors, mut cores, mut storeyed) = (0, 0, 0);
+        let (mut doors, mut cores, mut storeyed, mut straight) = (0, 0, 0, 0);
         for s in &structures {
             assert_eq!(s.era, Era::OldStone);
             assert!(
@@ -283,6 +283,7 @@ mod tests {
             );
             doors += usize::from(s.openings.iter().any(|o| o.kind == OpeningKind::Door));
             cores += usize::from(!s.cores.is_empty());
+            straight += usize::from(s.cores.iter().any(|c| c.house));
             storeyed += usize::from(s.storeys.len() >= 2);
         }
         let mut by_storeys = std::collections::BTreeMap::new();
@@ -290,7 +291,14 @@ mod tests {
             *by_storeys.entry(h.plan.storeys.len()).or_insert(0) += 1;
         }
         println!("houses by storeys: {by_storeys:?}");
-        println!("{doors} houses with a door, {cores} with a stair core, {storeyed} storeyed");
+        println!(
+            "{doors} houses with a door, {cores} with a stair core ({straight} with a house's \
+             straight flight), {storeyed} storeyed"
+        );
+        assert!(
+            cores * 10 >= storeyed * 9,
+            "{cores} of {storeyed} storeyed houses have a stair"
+        );
         assert!(
             doors * 10 >= houses * 9,
             "{doors} of {houses} houses have a door"

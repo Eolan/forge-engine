@@ -59,6 +59,9 @@ pub fn houses(
             }
             // A corner wedge too narrow for a house (its footprint cut to nothing) stays a
             // garden.
+            // The clips repeat a corner they pass through: a repeated corner made a wall of no
+            // length, an inner one, and the house got no stair.
+            let footprint = geom::clean(&footprint, 1e-6);
             if footprint.len() < 3 || geom::signed_area(&footprint).abs() < 4.0 {
                 return None;
             }

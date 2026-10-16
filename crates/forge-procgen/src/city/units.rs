@@ -215,7 +215,7 @@ pub fn units(
             let (lo, hi) = (-FAR, FAR);
             let (u0, u1) = c.span;
             let behind = c.deep;
-            let compact = c.hall[0].distance(c.hall[3]) < c.deep - 0.1;
+            let compact = c.house || c.hall[0].distance(c.hall[3]) < c.deep - 0.1;
             let hall = (c.hall[0] + c.hall[1] + c.hall[2] + c.hall[3]) * 0.25;
             let sides = [
                 local.slice(floor, (lo, u0), (-FAR, FAR)),

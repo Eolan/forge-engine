@@ -541,6 +541,17 @@ masses beyond the kit's reach stay hollow; going inside builds the real rooms (s
     before);
   - the structure in 2.25 s (2.08 s before).
 
+- **A house's stair** (2026-10-16, for the first map's village): where no dog-leg fits anywhere
+  along the walls (a 5 m house holds no hall of 1.5 m beside two flights), a house's core: one
+  straight flight of 1.1 m along the party wall beside a corridor of 1.2 m, the hall the whole
+  depth, no lift (`Core::house`, `cores::flight_length` for its depth); the units take it as a
+  compact core, one home a storey. The dog-legs keep the first choice everywhere, so the
+  city's cores stay as they were. (Of the village's 371 storeyed houses, 38 had a stair before:
+  the clips that cut a footprint to its lot repeated the corner they passed through, the
+  repeated corner made a wall of no length classed inner, and a small mass with an inner wall
+  counts as a wing served from its neighbour. Cleaned, 342 have one, one of them the straight
+  flight.)
+
 ### Flats and shops (D-060, step 3)
 
 `city::units` cuts each storey into units round its cores, the French way, two to four homes a
