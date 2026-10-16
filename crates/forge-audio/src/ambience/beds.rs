@@ -8,6 +8,7 @@
 //! working; waking, it fades in over 50 ms. Everything a bed makes passes an eighth-order
 //! low-pass at 10.5 kHz, so its top octave stays empty.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
@@ -22,6 +23,7 @@ use crate::dsp::synth::{
 use crate::dsp::{Biquad, OnePole};
 use crate::foley::smoothstep;
 use crate::spatial::pan_gains;
+use crate::variation::pick_avoiding;
 
 /// Frames a bed renders with one intensity.
 const SUB: usize = 64;
@@ -463,7 +465,12 @@ impl Cicadas {
         let singers = (0..count)
             .map(|k| {
                 let carrier = (4820.0 + 490.0 * gauss(&mut rng)).clamp(3900.0, 6500.0);
-                let level = log_uniform(&mut rng, 0.15, 1.0);
+                // The first three to sing are near, their rhythm clear over the far chorus.
+                let level = if k < 3 {
+                    rng.range_f32(0.6, 1.0)
+                } else {
+                    log_uniform(&mut rng, 0.05, 0.3)
+                };
                 let echeme = rng.range_f32(0.06, 0.1);
                 let gap = rng.range_f32(0.1, 0.2);
                 Singer {
@@ -472,7 +479,7 @@ impl Cicadas {
                     pulse_rate: rng.range_f32(180.0, 240.0),
                     phase: rng.next_f32(),
                     resonators: [
-                        Resonator::new(carrier, 6000.0, level, rate),
+                        Resonator::new(carrier, 4500.0, level, rate),
                         Resonator::new((1.6 * carrier).min(9000.0), 9000.0, 0.35 * level, rate),
                     ],
                     echeme,
@@ -521,8 +528,8 @@ impl Texture for Cicadas {
                     s.length = s.echeme * self.rng.range_f32(0.85, 1.15);
                     s.gap = (s.gap_mean * self.rng.range_f32(0.75, 1.3)).clamp(0.06, 0.36);
                 }
-                // The echeme's envelope: 10 ms raised-cosine edges.
-                let edge = 0.01f32;
+                // The echeme's envelope: 5 ms raised-cosine edges.
+                let edge = 0.005f32;
                 let env = if s.t >= s.length {
                     0.0
                 } else {
@@ -530,9 +537,12 @@ impl Texture for Cicadas {
                     0.5 - 0.5 * (std::f32::consts::PI * e).cos()
                 };
                 s.phase += s.pulse_rate * dt;
+                // Each tymbal click a little early or late and of its own strength: a rasp, not
+                // a tone.
                 let pulse = if s.phase >= 1.0 {
-                    s.phase -= 1.0;
+                    s.phase -= 1.0 + self.rng.range_f32(-0.12, 0.12);
                     env * (from + (s.presence - from) * (i + 1) as f32 / n as f32)
+                        * self.rng.range_f32(0.5, 1.0)
                 } else {
                     0.0
                 };
@@ -591,6 +601,8 @@ pub struct Birds {
     calls: Vec<Call>,
     recorded: Option<Arc<BirdCalls>>,
     played: Vec<Played>,
+    /// Each species' last calls, not to be sung again soon.
+    recent: [VecDeque<usize>; 3],
     chorus_at: usize,
     chorus_gain: f32,
 }
@@ -608,6 +620,7 @@ impl Birds {
             calls: Vec::with_capacity(16),
             recorded: None,
             played: Vec::with_capacity(16),
+            recent: Default::default(),
             chorus_at: 0,
             chorus_gain: 0.0,
         }
@@ -636,7 +649,9 @@ impl Birds {
         if let (Some(species), Some(recorded)) = (species, &self.recorded) {
             let count = recorded.of(species).count();
             if count > 0 {
-                let pick = self.rng.below(count as u64) as usize;
+                // Not one of the species' last three calls.
+                let recent = &mut self.recent[species as usize];
+                let pick = pick_avoiding(&mut self.rng, count, recent, 3);
                 let call = recorded.of(species).nth(pick).expect("a call");
                 let distance = log_uniform(&mut self.rng, 0.1, 1.0);
                 let pitch = self.rng.range_f32(0.97, 1.03) as f64;

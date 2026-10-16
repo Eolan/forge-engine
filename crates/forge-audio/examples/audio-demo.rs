@@ -36,13 +36,13 @@ mod device {
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     use cpal::{FromSample, SizedSample};
     use forge_audio::ambience::{
-        Ambience, AmbienceAssets, AmbienceBuses, AmbienceState, Medium, Shore,
+        Ambience, AmbienceAssets, AmbienceBuses, AmbienceState, BedKind, Medium, Shore,
     };
     use forge_audio::dsp::ReverbParams;
     use forge_audio::stream::streams;
     use forge_audio::{
-        AudioEngine, BusId, BusLayout, Control, Foley, Impact, Listener, MixThread, MixerConfig,
-        OutputRing, PlayParams, Step, Surface, create, db_to_gain,
+        AudioEngine, BusId, BusLayout, Control, Foley, Footwear, Impact, Listener, MixThread,
+        MixerConfig, OutputRing, PlayParams, Step, Surface, create, db_to_gain,
     };
     use glam::{DVec3, Vec3};
 
@@ -70,20 +70,22 @@ mod device {
     }
 
     const HELP: &str = "\
-commands (one a line):
-  time <h>               the hour, 0 to 24 (cicadas in the heat of the day, birds at dawn)
+commands (one a line); a line `now:` names each sound as it comes or goes:
+  time <h>               the hour, 0 to 24: birds sing at dawn (about 5 to 8), call a little
+                         through the day, again at dusk; cicadas sing from mid-morning to sunset
   lapse <h>              hours that pass a minute (0: the clock stands)
-  temp <C>               the temperature (cicadas sing above 22 C)
-  wind <m/s>             the wind
-  rain <mm/h>            the rain
+  temp <C>               the temperature: cicadas sing only when it is warm (above 22 C)
+  wind <m/s>             the wind (cicadas give way to it from 5 m/s)
+  rain <mm/h>            the rain (cicadas stop at once, and wait until the place dries)
   sea <m> | sea off      the distance to the quay, on the right
   walk <surface>         walk (stone, gravel, grass, wood, metal, water)
   run <surface>          run
+  shoes <kind>           barefoot, sneakers, leather, boots, sandals
   stop                   stand still
   drop <surface> <kg> <m/s>   something falls 3 m ahead
   dive | up              the head under water, or out
   volume <dB>            the master's level
-  tour                   the tour (about 150 s)
+  tour                   the tour (about 160 s)
   status                 the state and the mixer's counters
   help | quit";
 
@@ -93,33 +95,40 @@ commands (one a line):
         (0.0, "temp 26"),
         (0.0, "lapse 0"),
         (4.0, "time 6.3"),
+        (16.0, "shoes leather"),
         (16.0, "walk stone"),
-        (21.0, "walk gravel"),
-        (26.0, "walk grass"),
-        (31.0, "walk wood"),
-        (36.0, "walk metal"),
-        (41.0, "run stone"),
-        (45.0, "stop"),
-        (46.0, "time 13"),
-        (46.0, "temp 31"),
-        (58.0, "wind 9"),
-        (66.0, "rain 6"),
-        (78.0, "rain 0"),
-        (78.0, "wind 3"),
-        (82.0, "sea 60"),
-        (88.0, "sea 20"),
-        (94.0, "sea 4"),
-        (100.0, "walk water"),
-        (105.0, "stop"),
-        (107.0, "dive"),
-        (117.0, "up"),
-        (121.0, "drop wood 20 3"),
-        (123.0, "drop metal 1 5"),
-        (125.0, "drop water 30 4"),
-        (128.0, "time 20.3"),
-        (128.0, "temp 24"),
-        (142.0, "time 22.5"),
-        (150.0, "sea off"),
+        (20.0, "walk gravel"),
+        (24.0, "walk grass"),
+        (28.0, "walk wood"),
+        (32.0, "walk metal"),
+        (36.0, "walk stone"),
+        (36.0, "shoes sneakers"),
+        (40.0, "shoes boots"),
+        (44.0, "shoes barefoot"),
+        (48.0, "shoes sandals"),
+        (52.0, "shoes leather"),
+        (52.0, "run stone"),
+        (56.0, "stop"),
+        (57.0, "time 13"),
+        (57.0, "temp 31"),
+        (69.0, "wind 9"),
+        (77.0, "rain 6"),
+        (89.0, "rain 0"),
+        (89.0, "wind 3"),
+        (93.0, "sea 60"),
+        (99.0, "sea 20"),
+        (105.0, "sea 4"),
+        (111.0, "walk water"),
+        (116.0, "stop"),
+        (118.0, "dive"),
+        (128.0, "up"),
+        (132.0, "drop wood 20 3"),
+        (134.0, "drop metal 1 5"),
+        (136.0, "drop water 30 4"),
+        (139.0, "time 20.3"),
+        (139.0, "temp 24"),
+        (153.0, "time 22.5"),
+        (161.0, "sea off"),
     ];
 
     /// The world the sounds come from, as the terminal sets it.
@@ -127,6 +136,7 @@ commands (one a line):
         state: AmbienceState,
         lapse: f32,
         gait: Option<(Surface, f32)>,
+        footwear: Footwear,
         next_step: f64,
         foot: f64,
         position: DVec3,
@@ -162,6 +172,10 @@ commands (one a line):
                     None => println!("which surface? stone, gravel, grass, wood, metal, water"),
                 },
                 (Some("stop"), _) => self.gait = None,
+                (Some("shoes"), _) => match words.get(1).and_then(|w| Footwear::from_name(w)) {
+                    Some(f) => self.footwear = f,
+                    None => println!("which shoes? barefoot, sneakers, leather, boots, sandals"),
+                },
                 (Some("drop"), _) => match (surface(1), number(2), number(3)) {
                     (Some(s), Some(mass), Some(speed)) => {
                         foley.impact(
@@ -214,9 +228,10 @@ commands (one a line):
                 },
                 self.gait.map_or("standing".to_owned(), |(surface, speed)| {
                     format!(
-                        "{} on {}",
+                        "{} on {} in {}",
                         if speed > 2.0 { "running" } else { "walking" },
-                        surface.name()
+                        surface.name(),
+                        self.footwear.name()
                     )
                 }),
             );
@@ -237,15 +252,19 @@ commands (one a line):
                 self.position.z -= speed as f64 * dt;
                 if now >= self.next_step {
                     self.foot = -self.foot;
-                    foley.step(
+                    // The walker's own feet: without a place (straight below the head an HRTF
+                    // has nothing measured), a little to the side of the foot.
+                    foley.own_step(
                         engine,
                         &Step {
                             surface,
                             position: self.position + DVec3::new(self.foot, -1.6, -0.2),
                             speed,
                             weight: 80.0,
+                            footwear: self.footwear,
                             start: None,
                         },
+                        self.foot.signum() as f32,
                     );
                     self.next_step = now + if speed > 2.0 { 0.33 } else { 0.55 };
                 }
@@ -358,6 +377,7 @@ commands (one a line):
             gait: None,
             next_step: 0.0,
             foot: 0.1,
+            footwear: Footwear::Sneakers,
             position: DVec3::new(0.0, 1.6, 0.0),
             tour: None,
             master: 1.0,
@@ -409,6 +429,7 @@ commands (one a line):
         let tick = Duration::from_secs_f64(1.0 / 60.0);
         let mut next = Instant::now();
         let mut last = 0.0f64;
+        let mut heard = [false; 6];
         while !world.quit {
             let now = started.elapsed().as_secs_f64();
             let dt = now - last;
@@ -429,6 +450,18 @@ commands (one a line):
             }
             world.tick(dt, now, &mut engine, &mut foley);
             ambience.update(&mut engine, &world.state, dt as f32);
+            // Name each bed as it comes or goes.
+            for (i, kind) in BedKind::ALL.into_iter().enumerate() {
+                let on = ambience.gain(kind) > 0.05;
+                if on != heard[i] {
+                    heard[i] = on;
+                    println!(
+                        "now: {} {}",
+                        kind.name(),
+                        if on { "starts" } else { "stops" }
+                    );
+                }
+            }
             engine.update();
             if args.seconds > 0.0 && now >= args.seconds {
                 break;

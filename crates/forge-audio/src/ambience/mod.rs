@@ -7,7 +7,9 @@
 //! temperature, the wind, the rain, the nearest shore, the medium), and the rules
 //! ([`targets`]) turn it into each bed's gain, intensity and pan:
 //! - **cicadas** sing in the heat of the day: from 2.5 to 4.5 hours after sunrise until
-//!   sunset, above 22 °C (all of them by 27 °C), never in rain or strong wind;
+//!   sunset, above 22 °C (all of them by 27 °C); they stop within two seconds of rain, stay
+//!   quiet while the place is wet (two minutes after the rain, or what the simulation says),
+//!   and give way to the wind from 5 m/s (silent by 10 m/s);
 //! - **birds** sing the dawn chorus from an hour before sunrise to 2.5 hours after, call a
 //!   little through the day and again at dusk, and are quiet at night, in rain and in wind;
 //! - **wind** and **rain** follow their speed and rate;
@@ -17,8 +19,9 @@
 //!   ([`crate::dsp::BusFilter::UNDERWATER`]: low-passed at 600 Hz, 29 dB down, a fifth of
 //!   its width) and the underwater bed plays through its own reverb.
 //!
-//! The gains move toward their targets with a time constant per bed (a second for the wind,
-//! three for the singers, 60 ms for the medium), so a change in the simulation crossfades;
+//! The gains move toward their targets with time constants per bed, one rising and one
+//! falling (the wind 1 s; the cicadas rise over 3 s and fall over 0.8 s; the medium 60 ms), so
+//! a change in the simulation crossfades;
 //! a bed whose gain has rested at 0 for a second sleeps and costs nothing.
 
 pub mod beds;
@@ -87,6 +90,9 @@ pub struct AmbienceState {
     pub medium: Medium,
     /// The listener (its orientation pans the sea).
     pub listener: Listener,
+    /// How wet the place still is after rain, 0 (dry) to 1. [`Ambience`] also remembers the
+    /// rain itself (two minutes to dry); the wetter of the two counts.
+    pub wet: f32,
 }
 
 impl Default for AmbienceState {
@@ -103,6 +109,7 @@ impl Default for AmbienceState {
             shore: None,
             medium: Medium::Air,
             listener: Listener::default(),
+            wet: 0.0,
         }
     }
 }
@@ -123,8 +130,15 @@ pub struct BedTarget {
 /// the dawn chorus −30 (`tests/ambience.rs` measures them).
 pub const LEVELS: [f32; 6] = [0.375, 1.33, 1.0, 0.33, 1.8, 1.0];
 
-/// Seconds each bed's gain takes to move by `e` toward its target.
-pub const SETTLE: [f32; 6] = [1.0, 2.0, 3.0, 3.0, 0.5, 0.06];
+/// Seconds each bed's gain takes to rise by `e` toward its target.
+pub const RISE: [f32; 6] = [1.0, 2.0, 3.0, 3.0, 0.5, 0.06];
+
+/// Seconds each bed's gain takes to fall by `e` toward its target: singers stop sooner than
+/// they start.
+pub const FALL: [f32; 6] = [1.0, 2.0, 0.8, 1.5, 0.5, 0.06];
+
+/// Seconds the place takes to dry by `e` after the rain (in [`Ambience`]'s memory).
+pub const DRYING: f32 = 120.0;
 
 /// The rules: what each bed should do in `state` (in [`BedKind::ALL`]'s order).
 pub fn targets(state: &AmbienceState) -> [BedTarget; 6] {
@@ -137,7 +151,8 @@ pub fn targets(state: &AmbienceState) -> [BedTarget; 6] {
     let cicadas = window(rise + 2.5, rise + 4.5, set - 1.5, set)
         * smoothstep(22.0, 27.0, state.temperature)
         * (1.0 - smoothstep(0.2, 1.0, rain))
-        * (1.0 - smoothstep(8.0, 14.0, wind));
+        * (1.0 - smoothstep(0.1, 0.5, state.wet))
+        * (1.0 - smoothstep(5.0, 10.0, wind));
     let dawn = window(rise - 1.0, rise, rise + 0.5, rise + 2.5);
     let day = 0.15 * window(rise + 1.0, rise + 2.5, set - 1.0, set);
     let dusk = 0.4 * window(set - 1.5, set - 0.5, set, set + 0.75);
@@ -257,6 +272,8 @@ pub struct Ambience {
     beds: Vec<Playing>,
     buses: AmbienceBuses,
     medium: Medium,
+    /// How wet the rain has left the place, 0 to 1.
+    wet: f32,
 }
 
 impl Ambience {
@@ -332,13 +349,30 @@ impl Ambience {
             beds,
             buses,
             medium: state.medium,
+            wet: state.wet,
         })
     }
 
     /// Moves every bed toward what `state` wants, `dt` seconds after the last call.
     pub fn update(&mut self, engine: &mut AudioEngine, state: &AmbienceState, dt: f32) {
+        // Rain wets the place within seconds; it dries over minutes.
+        let dt = dt.max(0.0);
+        if state.rain > 0.2 {
+            self.wet += (1.0 - self.wet) * (1.0 - (-dt / 3.0).exp());
+        } else {
+            self.wet *= (-dt / DRYING).exp();
+        }
+        let state = &AmbienceState {
+            wet: state.wet.max(self.wet),
+            ..*state
+        };
         for (i, (bed, target)) in self.beds.iter_mut().zip(targets(state)).enumerate() {
-            let k = 1.0 - (-dt.max(0.0) / SETTLE[i]).exp();
+            let tau = if target.gain < bed.gain {
+                FALL[i]
+            } else {
+                RISE[i]
+            };
+            let k = 1.0 - (-dt / tau).exp();
             bed.gain += (target.gain - bed.gain) * k;
             if (bed.gain - target.gain).abs() < 1e-4 {
                 bed.gain = target.gain;
@@ -390,6 +424,11 @@ impl Ambience {
             .iter()
             .find(|b| b.kind == kind)
             .is_some_and(|b| b.control.awake())
+    }
+
+    /// How wet the place is, as the ambience remembers the rain (0 to 1).
+    pub fn wet(&self) -> f32 {
+        self.wet
     }
 
     /// Its buses.

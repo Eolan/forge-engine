@@ -329,7 +329,9 @@ fn the_water_has_its_own_reverb() {
 #[test]
 fn a_day_in_time_lapse_crossfades_without_clicks() {
     // Thirty seconds for a morning: the hour from 4:00 to 14:00, a wind rising to 12 m/s and
-    // falling, a shower, the walk down to the quay, a dive at 20 s and up at 25 s.
+    // falling, a dive from 19 to 23 s, the walk down to the quay, and a shower from 24 s that
+    // silences the cicadas (it falls once their hours have begun: the wet place keeps them
+    // quiet after).
     let state = |t: f64| {
         let t = t as f32;
         let bump = |from: f32, to: f32| {
@@ -339,12 +341,12 @@ fn a_day_in_time_lapse_crossfades_without_clicks() {
         AmbienceState {
             hour: 4.0 + t / 3.0,
             wind: 2.0 + 10.0 * bump(5.0, 15.0),
-            rain: 8.0 * bump(8.0, 16.0),
+            rain: 8.0 * bump(24.0, 30.0),
             shore: Some(Shore {
                 distance: 100.0 - 95.0 * (t / 18.0).min(1.0),
                 direction: Vec3::NEG_Z,
             }),
-            medium: if (20.0..25.0).contains(&t) {
+            medium: if (19.0..23.0).contains(&t) {
                 Medium::Water
             } else {
                 Medium::Air
@@ -480,4 +482,34 @@ fn recorded_birds_sing_the_dawn() {
         assert!(worst < -25.0, "{worst:.1} dB");
     }
     assert_eq!(render(1.0, 5), render(1.0, 5));
+}
+
+#[test]
+fn cicadas_stop_in_rain_and_stay_quiet_while_it_is_wet() {
+    let noon = AmbienceState {
+        hour: 13.0,
+        temperature: 30.0,
+        ..AmbienceState::default()
+    };
+    let rain = AmbienceState { rain: 6.0, ..noon };
+    let mut scene = Scene::new(&noon, 11);
+    scene.run(8.0, |_| noon);
+    assert!(scene.ambience.gain(BedKind::Cicadas) > 0.9);
+    // Two seconds into the rain they have stopped (the gain falls over 0.8 s).
+    scene.run(2.0, |_| rain);
+    let stopped = scene.ambience.gain(BedKind::Cicadas);
+    assert!(stopped < 0.1, "{stopped:.3}");
+    scene.run(8.0, |_| rain);
+    // A minute after the rain the place is still wet: still quiet.
+    scene.run(60.0, |_| noon);
+    assert!(scene.ambience.wet() > 0.5, "{:.2}", scene.ambience.wet());
+    assert!(scene.ambience.gain(BedKind::Cicadas) < 0.01);
+    // Five more minutes and it has dried: they sing again.
+    scene.run(300.0, |_| noon);
+    assert!(scene.ambience.gain(BedKind::Cicadas) > 0.9);
+    // Wind: they give way from 5 m/s and are silent by 10.
+    let cicadas = |wind: f32| targets(&AmbienceState { wind, ..noon })[2].intensity;
+    assert_eq!(cicadas(4.0), 1.0);
+    assert!(cicadas(9.0) < 0.15, "{}", cicadas(9.0));
+    assert_eq!(cicadas(10.0), 0.0);
 }
