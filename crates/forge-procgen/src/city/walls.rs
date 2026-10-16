@@ -1,0 +1,621 @@
+//! The walls round a village's gardens (#266). The villages of the cadastre research
+//! (`docs/research/cadastre-villages-and-towns.md`) close every garden and court with a stone
+//! wall wherever no house stands on its outline: high along the streets and lanes, lower between
+//! neighbours, low on a lotissement's front, over which the house is seen. Each garden keeps a
+//! gate on its street side, level with the street (the owner's rule: no step where people walk).
+
+use glam::DVec2;
+
+use super::geom;
+
+/// A garden wall's thickness, metres: rubble stone under a lime render.
+pub const THICKNESS: f64 = 0.4;
+/// A garden wall's height along a street or a lane, metres: over a walker's eyes.
+pub const STREET: f64 = 1.8;
+/// A wall's height between two neighbours' gardens or courts, metres.
+pub const PARTY: f64 = 1.5;
+/// A lotissement's front wall, metres: low, the house seen over it from the street.
+pub const FRONT: f64 = 1.0;
+/// A gate's width, metres: a wheelchair's passage.
+pub const GATE: f64 = 1.2;
+/// How close a stretch lies to a house's outline or to a wall already kept to count as on it,
+/// metres (the court stands 5 cm in from the lanes, `parcels::strips_by`).
+const ON: f64 = 0.08;
+/// The shortest stretch of wall kept, metres.
+const SHORTEST: f64 = 0.3;
+/// How near a wall's end must come to another wall for the two to be joined, metres: a
+/// wall's thickness, the lots' corners from two strips falling a little apart.
+const JOIN: f64 = THICKNESS;
+/// The shortest stretch of a court's wall along the street that takes a gate, metres.
+const COURT_GATE: f64 = 6.0;
+
+/// A garden wall: its line on the plan, its height and the side its thickness takes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Wall {
+    /// Its line's start, metres on the plan.
+    pub a: DVec2,
+    /// Its line's end.
+    pub b: DVec2,
+    /// Its height over the street, metres.
+    pub height: f64,
+    /// A point on the side its thickness takes: the garden's, so a wall along the street stays
+    /// off it; `None` between two gardens, the wall centred on their line.
+    pub inside: Option<DVec2>,
+    /// The way its end faces run at `a` and at `b`, unit vectors to its left: square to it, or
+    /// mitred where it meets a wall nearly in line with it (where a lane bends).
+    pub ends: [DVec2; 2],
+}
+
+impl Wall {
+    /// A wall from `a` to `b`, its ends square.
+    pub fn new(a: DVec2, b: DVec2, height: f64, inside: Option<DVec2>) -> Self {
+        let t = (b - a).normalize_or_zero();
+        let square = DVec2::new(-t.y, t.x);
+        Wall {
+            a,
+            b,
+            height,
+            inside,
+            ends: [square, square],
+        }
+    }
+
+    /// Its length, metres.
+    pub fn length(&self) -> f64 {
+        self.a.distance(self.b)
+    }
+
+    /// How far its thickness reaches to the right and to the left of its line from `a` to `b`,
+    /// metres: all of it on the garden's side, or half each side between two gardens.
+    pub fn band(&self) -> (f64, f64) {
+        let t = (self.b - self.a).normalize_or_zero();
+        let left = DVec2::new(-t.y, t.x);
+        match self.inside {
+            Some(p) if left.dot(p - self.a) >= 0.0 => (0.0, THICKNESS),
+            Some(_) => (THICKNESS, 0.0),
+            None => (THICKNESS * 0.5, THICKNESS * 0.5),
+        }
+    }
+
+    /// Its ground plan: its line widened by its band between its end faces, anticlockwise.
+    pub fn ring(&self) -> Vec<DVec2> {
+        let t = (self.b - self.a).normalize_or_zero();
+        let left = DVec2::new(-t.y, t.x);
+        let (r, l) = self.band();
+        // Where the band's edge `offset` to the left crosses the end face through `p`.
+        let at = |p: DVec2, end: DVec2, offset: f64| p + end * (offset / end.dot(left).max(0.3));
+        let [ea, eb] = self.ends;
+        vec![
+            at(self.a, ea, -r),
+            at(self.b, eb, -r),
+            at(self.b, eb, l),
+            at(self.a, ea, l),
+        ]
+    }
+}
+
+/// A block's garden walls and the gates left in them.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GardenWalls {
+    /// The walls.
+    pub walls: Vec<Wall>,
+    /// Each gate's middle, metres on the plan.
+    pub gates: Vec<DVec2>,
+}
+
+/// A stretch of a lot's or the court's outline where a wall stands.
+struct Stretch {
+    a: DVec2,
+    b: DVec2,
+    /// The lot it closes, `None` for the court.
+    owner: Option<usize>,
+    /// On its lot's front, the street side.
+    front: bool,
+    /// On the block's outline: along a street or a lane.
+    street: bool,
+}
+
+/// The walls of a block cut into `lots` round `court` within its `outline`, the houses'
+/// `footprints` standing on the lots: each stretch of a lot's or the court's outline that no
+/// house stands on, once. Along the block's outline a wall is [`STREET`] high (on a lot's front
+/// `front` high: [`FRONT`] for a lotissement's), between gardens [`PARTY`]. Each lot with a
+/// stretch along the street keeps a gate in its longest one, before its house when that stretch
+/// is its front, and each of the court's stretches along the street of 6 m or more one in its
+/// middle. The lots and the court wind anticlockwise, as [`super::parcels::strips_by`] cuts them.
+pub fn garden_walls(
+    outline: &[DVec2],
+    lots: &[Vec<DVec2>],
+    court: &[DVec2],
+    footprints: &[Vec<DVec2>],
+    front: f64,
+) -> GardenWalls {
+    let mut edges: Vec<(DVec2, DVec2, Option<usize>, bool)> = Vec::new();
+    for (k, lot) in lots.iter().enumerate() {
+        let n = lot.len();
+        for i in 0..n {
+            edges.push((lot[i], lot[(i + 1) % n], Some(k), i == 0));
+        }
+    }
+    let n = court.len();
+    for i in 0..n {
+        edges.push((court[i], court[(i + 1) % n], None, false));
+    }
+    let on_outline = |p: DVec2| boundary_distance(outline, p) < 2.0 * ON;
+    let mut kept: Vec<(DVec2, DVec2)> = Vec::new();
+    let mut stretches: Vec<Stretch> = Vec::new();
+    for (p, q, owner, is_front) in edges {
+        let length = p.distance(q);
+        if length < SHORTEST {
+            continue;
+        }
+        let along = (q - p) / length;
+        // Where a stretch may begin or end along p q: where a house's outline crosses it or
+        // touches it, and where a wall kept before ends on it.
+        let mut ts = vec![0.0, 1.0];
+        for fp in footprints {
+            let m = fp.len();
+            for i in 0..m {
+                let (u, v) = (fp[i], fp[(i + 1) % m]);
+                if let Some((t, _)) = geom::segment_intersection(p, q, u, v) {
+                    ts.push(t);
+                }
+                for w in [u, v] {
+                    if geom::distance_to_segment(w, p, q) < ON {
+                        ts.push(geom::closest_on_segment(w, p, q));
+                    }
+                }
+            }
+        }
+        for &(u, v) in &kept {
+            for w in [u, v] {
+                if geom::distance_to_segment(w, p, q) < THICKNESS {
+                    ts.push(geom::closest_on_segment(w, p, q));
+                }
+            }
+        }
+        ts.sort_by(f64::total_cmp);
+        ts.dedup_by(|x, y| (*x - *y).abs() < 1e-9);
+        // The pieces between them no house stands on and no kept wall runs along (within its
+        // thickness and within 10°: two lots back to back across a sliver of court keep one
+        // wall), joined.
+        let mut runs: Vec<(f64, f64)> = Vec::new();
+        for w in ts.windows(2) {
+            let (t0, t1) = (w[0], w[1]);
+            if (t1 - t0) * length < 1e-3 {
+                continue;
+            }
+            let mid = p + (q - p) * ((t0 + t1) * 0.5);
+            let housed = footprints
+                .iter()
+                .any(|fp| geom::contains(fp, mid) || boundary_distance(fp, mid) < ON);
+            let walled = kept.iter().any(|&(u, v)| {
+                let d = (v - u).normalize_or_zero();
+                d.perp_dot(along).abs() < 0.17 && geom::distance_to_segment(mid, u, v) < THICKNESS
+            });
+            if housed || walled {
+                continue;
+            }
+            match runs.last_mut() {
+                Some(run) if (run.1 - t0).abs() < 1e-9 => run.1 = t1,
+                _ => runs.push((t0, t1)),
+            }
+        }
+        for (t0, t1) in runs {
+            if (t1 - t0) * length < SHORTEST {
+                continue;
+            }
+            let (a, b) = (p + (q - p) * t0, p + (q - p) * t1);
+            kept.push((a, b));
+            let street = on_outline(a) && on_outline(b) && on_outline((a + b) * 0.5);
+            stretches.push(Stretch {
+                a,
+                b,
+                owner,
+                front: is_front,
+                street,
+            });
+        }
+    }
+    // The gates: each lot's in its longest stretch along the street, its front's first; the
+    // court's in each long stretch along it.
+    let mut gate_at: Vec<Option<f64>> = vec![None; stretches.len()];
+    for k in 0..lots.len() {
+        let best = stretches
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.owner == Some(k) && s.street)
+            .filter(|(_, s)| s.a.distance(s.b) >= GATE + 2.0 * (JOIN + SHORTEST))
+            .max_by(|(_, x), (_, y)| {
+                (x.front, x.a.distance(x.b))
+                    .partial_cmp(&(y.front, y.a.distance(y.b)))
+                    .unwrap()
+            });
+        if let Some((i, s)) = best {
+            let length = s.a.distance(s.b);
+            let half = GATE * 0.5 + JOIN + SHORTEST;
+            // Before the house on a front: the nearest footprint's middle, along the stretch.
+            let mid = (s.a + s.b) * 0.5;
+            let at = if s.front {
+                footprints
+                    .iter()
+                    .map(|fp| geom::centroid(fp))
+                    .min_by(|x, y| x.distance(mid).total_cmp(&y.distance(mid)))
+                    .map_or(length * 0.5, |c| {
+                        geom::closest_on_segment(c, s.a, s.b) * length
+                    })
+            } else {
+                length * 0.5
+            };
+            gate_at[i] = Some(at.clamp(half, length - half));
+        }
+    }
+    for (i, s) in stretches.iter().enumerate() {
+        if s.owner.is_none() && s.street && s.a.distance(s.b) >= COURT_GATE {
+            gate_at[i] = Some(s.a.distance(s.b) * 0.5);
+        }
+    }
+    let mut out = GardenWalls::default();
+    for (s, gate) in stretches.iter().zip(gate_at) {
+        let height = match (s.street, s.front) {
+            (true, true) => front,
+            (true, false) => STREET,
+            (false, _) => PARTY,
+        };
+        let along = (s.b - s.a).normalize_or_zero();
+        // The lots and the court wind anticlockwise: their inside is to the left.
+        let inside = s
+            .street
+            .then(|| (s.a + s.b) * 0.5 + DVec2::new(-along.y, along.x));
+        let mut push = |a: DVec2, b: DVec2| {
+            if a.distance(b) >= SHORTEST {
+                out.walls.push(Wall::new(a, b, height, inside));
+            }
+        };
+        match gate {
+            Some(at) => {
+                push(s.a, s.a + along * (at - GATE * 0.5));
+                push(s.a + along * (at + GATE * 0.5), s.b);
+                out.gates.push(s.a + along * at);
+            }
+            None => push(s.a, s.b),
+        }
+    }
+    joints(&mut out.walls);
+    out
+}
+
+/// A wall's direction from `a` to `b`.
+fn dir(w: &Wall) -> DVec2 {
+    (w.b - w.a).normalize_or_zero()
+}
+
+/// How far along `u` from `c`, a point by `w`'s line, `w`'s thickness reaches, metres.
+fn reach(w: &Wall, c: DVec2, u: DVec2) -> f64 {
+    let t = dir(w);
+    let normal = DVec2::new(-t.y, t.x);
+    let (s, at) = (normal.dot(u), normal.dot(c - w.a));
+    let (right, left) = w.band();
+    let r = if s > 1e-6 {
+        (left - at) / s
+    } else if s < -1e-6 {
+        (at + right) / -s
+    } else {
+        0.0
+    };
+    r.max(0.0)
+}
+
+/// How far `w` steps back from its end `c`, going `into` it, for both its faces (and its line)
+/// to clear `other`'s thickness.
+fn clearing(w: &Wall, c: DVec2, into: DVec2, other: &Wall) -> f64 {
+    let t = dir(w);
+    let normal = DVec2::new(-t.y, t.x);
+    let (right, left) = w.band();
+    [c + normal * left, c - normal * right, c]
+        .iter()
+        .map(|&p| reach(other, p, into))
+        .fold(0.0, f64::max)
+}
+
+/// Where walls meet, one butts against the other so that none overlaps another: two walls of a
+/// height overlapping would put their tops on one plane, the flicker the owner sees
+/// (`forge-geometry-pitfalls`). A wall ending within a wall's thickness of another: stops at the
+/// face of one passing through; meets one in line (within 17°) halfway between their ends,
+/// their end faces mitred on the bisector; stops past the farthest face of walls in line with
+/// each other crossing there; at a corner, clears the walls ranking above it (higher, then
+/// longer, then first), or runs on past their far faces when it ranks above them all. Then
+/// [`settle`] clears what is left.
+fn joints(walls: &mut Vec<Wall>) {
+    let n = walls.len();
+    // Within about 17° of each other: a bend, not a corner.
+    let in_line = |x: &Wall, y: &Wall| dir(x).perp_dot(dir(y)).abs() <= 0.3;
+    // Each wall's move at `a` and at `b`: shorter by so much, or longer when negative; and its
+    // mitred end faces.
+    let mut moves = vec![(0.0, 0.0); n];
+    let mut mitres: Vec<[Option<DVec2>; 2]> = vec![[None, None]; n];
+    for i in 0..n {
+        for end in [false, true] {
+            let w = &walls[i];
+            // The end, and the way from it into the wall.
+            let (c, into) = if end { (w.b, -dir(w)) } else { (w.a, dir(w)) };
+            let touching =
+                |j: usize| j != i && geom::distance_to_segment(c, walls[j].a, walls[j].b) < JOIN;
+            let crossing: Vec<usize> = (0..n)
+                .filter(|&j| touching(j) && dir(&walls[j]).perp_dot(into).abs() > 0.3)
+                .collect();
+            let interior =
+                |j: usize| walls[j].a.distance(c) > JOIN && walls[j].b.distance(c) > JOIN;
+            // A stop clears the other wall with both its faces, not only its line: at a corner
+            // off the square one face reaches further in.
+            let t = dir(w);
+            let farthest = |js: &[usize]| {
+                js.iter()
+                    .map(|&j| clearing(w, c, into, &walls[j]))
+                    .fold(0.0, f64::max)
+            };
+            // In order: a wall passing through the end, which this one stops at even when a wall
+            // in line with it ends there too (the two stop on either side); a wall in line ending
+            // here, the two then meeting on their bisector, mitred; walls in line with each
+            // other crossing here, this one stopping past the farthest of their faces; at a
+            // corner, the walls ranking above this one (higher, then longer, then first), which
+            // it clears, or, ranking above them all, it runs on past their far faces.
+            let passing: Vec<usize> = crossing.iter().copied().filter(|&j| interior(j)).collect();
+            let mv = if !passing.is_empty() {
+                farthest(&passing)
+            } else if let Some(j) = (0..n).find(|&j| touching(j) && in_line(w, &walls[j])) {
+                let p = &walls[j];
+                let near = if p.a.distance(c) < p.b.distance(c) {
+                    p.a
+                } else {
+                    p.b
+                };
+                if near.distance(c) >= JOIN {
+                    continue;
+                }
+                let d = if dir(p).dot(t) < 0.0 { -dir(p) } else { dir(p) };
+                let mean = (t + d).normalize_or_zero();
+                mitres[i][end as usize] = Some(DVec2::new(-mean.y, mean.x));
+                // The two ends meet halfway between them.
+                (near - c).dot(into) * 0.5
+            } else if crossing.is_empty() {
+                continue;
+            } else {
+                let through: Vec<usize> = crossing
+                    .iter()
+                    .copied()
+                    .filter(|&j| {
+                        crossing
+                            .iter()
+                            .any(|&k| k != j && in_line(&walls[j], &walls[k]))
+                    })
+                    .collect();
+                let rank = |k: usize| (walls[k].height, walls[k].length());
+                let above: Vec<usize> = crossing
+                    .iter()
+                    .copied()
+                    .filter(|&j| rank(j) > rank(i) || (rank(j) == rank(i) && j < i))
+                    .collect();
+                if !through.is_empty() {
+                    farthest(&through)
+                } else if !above.is_empty() {
+                    farthest(&above)
+                } else {
+                    -crossing
+                        .iter()
+                        .map(|&j| reach(&walls[j], c, -into))
+                        .fold(0.0, f64::max)
+                }
+            };
+            if end {
+                moves[i].1 = mv;
+            } else {
+                moves[i].0 = mv;
+            }
+        }
+    }
+    let mut kept = Vec::with_capacity(n);
+    for ((w, (at_a, at_b)), [ma, mb]) in walls.drain(..).zip(moves).zip(mitres) {
+        if w.length() - at_a - at_b < SHORTEST {
+            continue;
+        }
+        let t = dir(&w);
+        kept.push(Wall {
+            a: w.a + t * at_a,
+            b: w.b - t * at_b,
+            ends: [ma.unwrap_or(w.ends[0]), mb.unwrap_or(w.ends[1])],
+            ..w
+        });
+    }
+    *walls = kept;
+    settle(walls);
+}
+
+/// What the joints leave sharing ground (two corners a little apart, each joined on its own):
+/// of two walls, the one ranking lower (lower, then shorter, then later) steps back from its end
+/// nearer the other until both its faces clear it, and goes when too little of it is left.
+fn settle(walls: &mut Vec<Wall>) {
+    let rank = |w: &Wall| (w.height, w.length());
+    let near = |x: &Wall, y: &Wall| {
+        let lo = |w: &Wall| w.a.min(w.b) - DVec2::splat(THICKNESS);
+        let hi = |w: &Wall| w.a.max(w.b) + DVec2::splat(THICKNESS);
+        lo(x).cmple(hi(y)).all() && lo(y).cmple(hi(x)).all()
+    };
+    for _ in 0..4 {
+        let mut moved = false;
+        let n = walls.len();
+        for i in 0..n {
+            for j in 0..n {
+                let (w, o) = (&walls[i], &walls[j]);
+                let below = rank(w) < rank(o) || (rank(w) == rank(o) && i > j);
+                if i == j || !below || !near(w, o) || overlap(&w.ring(), &o.ring()) < 1e-4 {
+                    continue;
+                }
+                let at_b = geom::distance_to_segment(w.b, o.a, o.b)
+                    < geom::distance_to_segment(w.a, o.a, o.b);
+                let (c, into) = if at_b { (w.b, -dir(w)) } else { (w.a, dir(w)) };
+                let back = clearing(w, c, into, o);
+                if back < 1e-9 {
+                    continue;
+                }
+                let t = dir(w);
+                let w = &mut walls[i];
+                if at_b {
+                    w.b -= t * back.min(w.length());
+                } else {
+                    w.a += t * back.min(w.length());
+                }
+                moved = true;
+            }
+        }
+        walls.retain(|w| w.length() >= SHORTEST);
+        if !moved {
+            break;
+        }
+    }
+}
+
+/// The area two convex rings share, square metres (the walls' rings are).
+pub(crate) fn overlap(x: &[DVec2], y: &[DVec2]) -> f64 {
+    let mut part = x.to_vec();
+    let n = y.len();
+    for i in 0..n {
+        if part.len() < 3 {
+            return 0.0;
+        }
+        part = geom::clip_half_plane(&part, y[i], y[(i + 1) % n] - y[i]);
+    }
+    if part.len() < 3 {
+        0.0
+    } else {
+        geom::signed_area(&part).abs()
+    }
+}
+
+/// The distance from `p` to `polygon`'s outline, metres.
+fn boundary_distance(polygon: &[DVec2], p: DVec2) -> f64 {
+    let n = polygon.len();
+    (0..n)
+        .map(|i| geom::distance_to_segment(p, polygon[i], polygon[(i + 1) % n]))
+        .fold(f64::MAX, f64::min)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::city::parcels::{self, ParcelType};
+
+    fn rectangle(w: f64, h: f64) -> Vec<DVec2> {
+        vec![
+            DVec2::ZERO,
+            DVec2::new(w, 0.0),
+            DVec2::new(w, h),
+            DVec2::new(0.0, h),
+        ]
+    }
+
+    /// The part of `lot` within `depth` of its street side: a house the lot's width.
+    fn house(lot: &[DVec2], depth: f64) -> Vec<DVec2> {
+        let (a, b) = (lot[0], lot[1]);
+        let t = (b - a).normalize();
+        let inward = DVec2::new(-t.y, t.x);
+        geom::clean(&geom::clip_half_plane(lot, a + inward * depth, -t), 1e-6)
+    }
+
+    #[test]
+    fn lanieres_are_walled_where_no_house_stands_with_a_gate_on_the_lane() {
+        // Lanières along the bottom, 40 m deep on a block 90 by 70; the houses 10 m deep.
+        let block = rectangle(90.0, 70.0);
+        let ty = ParcelType {
+            depth: 40.0,
+            ..ParcelType::FAUBOURG
+        };
+        let street = [true, false, false, false];
+        let (lots, court, _) =
+            parcels::strips_by(&block, &street, &[40.0, 0.0, 0.0, 0.0], &ty, |_| 9.0)
+                .expect("lanières");
+        let footprints: Vec<Vec<DVec2>> = lots.iter().map(|l| house(l, 10.0)).collect();
+        let g = garden_walls(&block, &lots, &court, &footprints, STREET);
+        // No wall along a house nor through one.
+        for w in &g.walls {
+            let mid = (w.a + w.b) * 0.5;
+            assert!(
+                footprints
+                    .iter()
+                    .all(|fp| !geom::contains(fp, mid) && boundary_distance(fp, mid) > ON),
+                "a wall on a house at {mid}"
+            );
+        }
+        // Between the gardens: each party line from the house's back to the court, 30 m, once.
+        let party: f64 = g
+            .walls
+            .iter()
+            .filter(|w| w.inside.is_none())
+            .map(Wall::length)
+            .sum();
+        // Less what the joints take: each line stops at the back wall's face, the back wall at
+        // the lanes' walls.
+        let lines = (lots.len() - 1) as f64 * 30.0 + 90.0;
+        assert!(
+            (party - lines).abs() < 3.0,
+            "{party:.1} m between gardens, {lines:.1} expected"
+        );
+        // Along the lanes: the two corner gardens' sides (30 m each) and the court's three sides,
+        // less the gates; a gate in each corner garden and in each of the court's sides.
+        let street: f64 = g
+            .walls
+            .iter()
+            .filter(|w| w.inside.is_some())
+            .map(Wall::length)
+            .sum();
+        let gates = g.gates.len() as f64;
+        assert_eq!(g.gates.len(), 5, "gates at {:?}", g.gates);
+        let expected = 2.0 * 30.0 + 2.0 * 30.0 + 90.0 - gates * GATE;
+        assert!(
+            (street - expected).abs() < 2.0,
+            "{street:.1} m along the lanes, {expected:.1} expected"
+        );
+        // No two walls share ground: their tops would lie on one plane.
+        for (i, x) in g.walls.iter().enumerate() {
+            for y in &g.walls[i + 1..] {
+                let shared = overlap(&x.ring(), &y.ring());
+                assert!(shared < 1e-3, "walls share {shared:.4} m²: {x:?} {y:?}");
+            }
+        }
+        assert!(
+            g.walls
+                .iter()
+                .all(|w| w.inside.is_none() || w.height == STREET)
+        );
+    }
+
+    #[test]
+    fn a_lotissements_front_is_low_with_a_gate_before_the_house() {
+        // One lot 20 by 35, its house 10 m wide set 5 m back and 3 m off the sides.
+        let lot = rectangle(20.0, 35.0);
+        let fp = vec![
+            DVec2::new(3.0, 5.0),
+            DVec2::new(13.0, 5.0),
+            DVec2::new(13.0, 15.0),
+            DVec2::new(3.0, 15.0),
+        ];
+        let g = garden_walls(&lot, std::slice::from_ref(&lot), &[], &[fp], FRONT);
+        let front: Vec<&Wall> = g
+            .walls
+            .iter()
+            .filter(|w| w.a.y.abs() < 1e-9 && w.b.y.abs() < 1e-9)
+            .collect();
+        assert!(front.iter().all(|w| w.height == FRONT));
+        let length: f64 = front.iter().map(|w| w.length()).sum();
+        // Less the side walls' thickness at each corner: they are higher and run on.
+        assert!(
+            (length - (20.0 - GATE - 2.0 * THICKNESS)).abs() < 1e-6,
+            "{length}"
+        );
+        assert_eq!(g.gates.len(), 1);
+        assert!(
+            (g.gates[0] - DVec2::new(8.0, 0.0)).length() < 1e-6,
+            "{}",
+            g.gates[0]
+        );
+    }
+}

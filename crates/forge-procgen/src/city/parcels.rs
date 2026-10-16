@@ -152,29 +152,54 @@ pub fn strips_by(
         let d = n0 + n1;
         if d.length() < 1e-6 { n1 } else { d.normalize() }
     };
-    let mut lots: Vec<Vec<DVec2>> = Vec::new();
-    let mut keys: Vec<usize> = Vec::new();
-    for i in 0..n {
+    // Each street side's strip: the block within the depth of its side, between the dividers
+    // at the side's two corners, so the first and last lots take the corners.
+    let strip_of = |i: usize| -> Option<Vec<DVec2>> {
         let depth = depths[i];
-        if !street[i] || depth < 0.5 {
-            continue;
+        let (a, b) = (block[i], block[(i + 1) % n]);
+        if !street[i] || depth < 0.5 || a.distance(b) < 0.5 {
+            return None;
         }
-        let j = (i + 1) % n;
-        let (a, b) = (block[i], block[j]);
-        let length = a.distance(b);
-        if length < 0.5 {
-            continue;
-        }
-        let t = (b - a) / length;
+        let t = (b - a).normalize();
         let inward = DVec2::new(-t.y, t.x);
-        // The strip: the block within the depth of its street side, between the dividers at
-        // the side's two corners, so the first and last lots take the corners.
         let mut strip = geom::clip_half_plane(block, a + inward * depth, -t);
-        for (corner, d, along) in [(a, divider(i), t), (b, divider(j), -t)] {
+        for (corner, d, along) in [(a, divider(i), t), (b, divider((i + 1) % n), -t)] {
             let keep = if d.perp_dot(along) >= 0.0 { d } else { -d };
             strip = geom::clip_half_plane(&strip, corner, keep);
         }
         // The clips repeat a corner they pass through.
+        let strip = geom::clean(&strip, 1e-6);
+        (strip.len() >= 3 && geom::signed_area(&strip) > 1.0).then_some(strip)
+    };
+    let raw: Vec<Option<Vec<DVec2>>> = (0..n).map(strip_of).collect();
+    let mut lots: Vec<Vec<DVec2>> = Vec::new();
+    let mut keys: Vec<usize> = Vec::new();
+    for i in 0..n {
+        let Some(mut strip) = raw[i].clone() else {
+            continue;
+        };
+        let depth = depths[i];
+        let j = (i + 1) % n;
+        let (a, b) = (block[i], block[j]);
+        let length = a.distance(b);
+        let t = (b - a) / length;
+        let inward = DVec2::new(-t.y, t.x);
+        // Where a short edge between two collapses (the straight skeleton's edge event), or the
+        // block narrows under two depths, two strips overlap: each then keeps to its side of the
+        // line where its depth and the other's stand in proportion, {p : g·p ≤ k}. Strips that
+        // only meet are left as they are.
+        for o in 0..n {
+            let Some(other) = raw[o].as_ref().filter(|_| o != i) else {
+                continue;
+            };
+            let g = inward / depth - normal(o) / depths[o];
+            if g.length() < 1e-6 || !overlapping(&strip, other) {
+                continue;
+            }
+            let k = inward.dot(a) / depth - normal(o).dot(block[o]) / depths[o];
+            strip =
+                geom::clip_half_plane(&strip, g * (k / g.length_squared()), DVec2::new(-g.y, g.x));
+        }
         let strip = geom::clean(&strip, 1e-6);
         if strip.len() < 3 || geom::signed_area(&strip) <= 1.0 {
             continue;
@@ -245,6 +270,23 @@ pub fn strips_by(
         }
     }
     Some((lots, court, keys))
+}
+
+/// Whether two polygons share more than their outlines: an edge of one crosses an edge of the
+/// other, or a corner of one lies within the other.
+fn overlapping(p: &[DVec2], q: &[DVec2]) -> bool {
+    let within = |poly: &[DVec2], v: DVec2| {
+        let m = poly.len();
+        geom::contains(poly, v)
+            && (0..m).all(|i| geom::distance_to_segment(v, poly[i], poly[(i + 1) % m]) > 1e-3)
+    };
+    let crossing = (0..p.len()).any(|i| {
+        (0..q.len()).any(|j| {
+            geom::segment_intersection(p[i], p[(i + 1) % p.len()], q[j], q[(j + 1) % q.len()])
+                .is_some_and(|(t, u)| t > 1e-6 && t < 1.0 - 1e-6 && u > 1e-6 && u < 1.0 - 1e-6)
+        })
+    });
+    crossing || p.iter().any(|&v| within(q, v)) || q.iter().any(|&v| within(p, v))
 }
 
 /// `lot` turned to start with its street side (its edge along `a b`), so its first two vertices

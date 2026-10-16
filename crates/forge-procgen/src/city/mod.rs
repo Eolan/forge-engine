@@ -46,6 +46,7 @@ pub mod transit;
 pub mod trees;
 pub mod units;
 pub mod village;
+pub mod walls;
 
 use std::time::Instant;
 
@@ -717,6 +718,9 @@ pub struct CityPlan {
     pub crossings: Vec<BoatCrossing>,
     /// The landmarks.
     pub landmarks: Vec<Landmark>,
+    /// The walls round the gardens: the village's ([`walls::garden_walls`], #266); none in the
+    /// city yet.
+    pub walls: Vec<walls::Wall>,
     /// Its numbers.
     pub stats: PlanStats,
     /// Each stage's time, milliseconds.
@@ -1243,6 +1247,7 @@ pub fn plan(site: &Site, params: &CityParams) -> CityPlan {
         tram_depots,
         crossings,
         landmarks,
+        walls: Vec::new(),
         stats: PlanStats::default(),
         timings: Vec::new(),
     };

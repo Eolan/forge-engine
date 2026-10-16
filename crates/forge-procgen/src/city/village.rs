@@ -17,6 +17,7 @@ use super::parcels::{self, ParcelType};
 use super::rooms::{self, Means};
 use super::structure::Era;
 use super::units;
+use super::walls;
 use super::{
     BoundaryInfluence, CityParams, CityPlan, DistrictKind, DistrictSpec, Pattern, RoadClass, Site,
     plan,
@@ -35,6 +36,8 @@ pub struct VillageBlock {
     pub houses: Vec<House>,
     /// Its lots' type: its ring's, at the depth the block took.
     pub ty: ParcelType,
+    /// The gates in its garden walls (their walls are the plan's, [`CityPlan::walls`]).
+    pub gates: Vec<DVec2>,
 }
 
 /// The village: its plan and its blocks' houses.
@@ -257,12 +260,24 @@ pub fn village(site: &Site, params: &CityParams, seed: u64) -> Village {
         for h in &houses {
             masses.push(mass(&mut city, b, h, &streets));
         }
+        // The walls round its gardens and its court wherever no house stands, a lotissement's
+        // front low: on the outline the strips were cut from.
+        let outline = geom::simplify_closed(&city.blocks[b].buildable, 0.6);
+        let footprints: Vec<Vec<DVec2>> = houses.iter().map(|h| h.footprint.clone()).collect();
+        let front = if ty.setback > 0.0 {
+            walls::FRONT
+        } else {
+            walls::STREET
+        };
+        let garden = walls::garden_walls(&outline, &lots, &court, &footprints, front);
+        city.walls.extend(garden.walls);
         blocks.push(VillageBlock {
             block: b,
             lots,
             court,
             houses,
             ty,
+            gates: garden.gates,
         });
     }
     Village {
@@ -418,6 +433,40 @@ mod tests {
         assert!(v.plan.tram_lines.is_empty() && v.plan.landmarks.is_empty());
         assert!(built >= 4, "{built} built blocks");
         assert!(houses >= 40, "{houses} houses");
+        // The garden walls: along the streets and between the gardens, none on a house.
+        let along = |street: bool| -> f64 {
+            v.plan
+                .walls
+                .iter()
+                .filter(|w| w.inside.is_some() == street)
+                .map(walls::Wall::length)
+                .sum()
+        };
+        let gates: usize = v.blocks.iter().map(|b| b.gates.len()).sum();
+        println!(
+            "garden walls: {:.0} m along the streets and lanes, {:.0} m between gardens, {gates} gates",
+            along(true),
+            along(false)
+        );
+        assert!(along(true) > 100.0 && along(false) > 100.0 && gates >= 5);
+        for (i, w) in v.plan.walls.iter().enumerate() {
+            let mid = (w.a + w.b) * 0.5;
+            assert!(
+                v.houses().all(|h| !geom::contains(&h.footprint, mid)),
+                "a garden wall through a house at {mid}"
+            );
+            // No two walls share ground (their tops would lie on one plane).
+            for x in &v.plan.walls[i + 1..] {
+                if x.a.distance(w.a) > w.length() + x.length() + 1.0 {
+                    continue;
+                }
+                let shared = walls::overlap(&w.ring(), &x.ring());
+                assert!(
+                    shared < 1e-3,
+                    "garden walls share {shared:.4} m²: {w:?} {x:?}"
+                );
+            }
+        }
         if let Ok(path) = std::env::var("VILLAGE_OWN_PNG") {
             super::super::map::write_village(&v, std::path::Path::new(&path), 0.25)
                 .expect("the drawing");

@@ -161,6 +161,26 @@ fn main() -> anyhow::Result<()> {
                     view(eye, 12.0, p - eye, -30.0)
                 );
             }
+            // The longest garden wall along a street or lane (`city::walls`), from 2.5 m out on
+            // the street a little before its start, along it.
+            if let Some(w) = v
+                .plan
+                .walls
+                .iter()
+                .filter(|w| w.inside.is_some())
+                .max_by(|a, b| a.length().total_cmp(&b.length()))
+            {
+                let t = (w.b - w.a).normalize_or_zero();
+                let mut out = DVec2::new(-t.y, t.x);
+                if w.inside.is_some_and(|p| out.dot(p - w.a) > 0.0) {
+                    out = -out;
+                }
+                let eye = w.a + out * 2.5 - t * 3.0;
+                eprintln!(
+                    "the village's garden: {}",
+                    view(eye, 1.7, t - out * 0.15, 0.0)
+                );
+            }
             (v.plan, v.masses)
         }
         None => {

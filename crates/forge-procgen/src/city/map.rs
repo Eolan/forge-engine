@@ -1103,6 +1103,12 @@ pub fn write_village(
     for e in &plan.roads.edges {
         canvas.stroke(&e.points, e.profile.width(), [236, 232, 224]);
     }
+    // The garden walls over the streets' edges (they stand on the building line), their gates
+    // the gaps (`city::walls`).
+    let wall = super::walls::THICKNESS.max(2.0 * metres_per_pixel);
+    for w in &plan.walls {
+        canvas.stroke(&[w.a, w.b], wall, [70, 62, 52]);
+    }
     for e in &plan.roads.edges {
         let w = e.profile.width();
         canvas.stroke(

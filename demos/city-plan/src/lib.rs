@@ -535,6 +535,7 @@ impl PlanScenario {
             }
         }
         let depot_walls = tram_depots(&mut tiles, plan);
+        let garden_walls = garden_walls(&mut tiles, plan);
         // Line by line, each taking the stops the lines before it placed on its track.
         let mut trams: Vec<TramRun> = Vec::new();
         let mut taken: Vec<DVec2> = Vec::new();
@@ -1653,6 +1654,7 @@ impl PlanScenario {
                 .chain(parapet_pieces(size, plan, site, &shore))
                 .chain(garden_pieces(size, &gardens))
                 .chain(depot_walls)
+                .chain(garden_walls)
                 .chain(stall_walls)
                 .collect(),
             passage_note,
@@ -2917,6 +2919,27 @@ fn tram_depots(tiles: &mut Tiles, plan: &CityPlan) -> Vec<Vec<Vec3>> {
                 KIT_STONE,
             );
         }
+    }
+    pieces
+}
+
+/// The village's garden walls (`city::walls`, #266): stone from the walking level to each
+/// wall's height on its ground plan, its top stone too; drawn, and kept for the walker.
+fn garden_walls(tiles: &mut Tiles, plan: &CityPlan) -> Vec<Vec<Vec3>> {
+    let size = tiles.size;
+    let mut pieces = Vec::new();
+    for w in &plan.walls {
+        let ring = w.ring();
+        if geom::signed_area(&ring) <= 0.0 {
+            continue;
+        }
+        let (y0, y1) = (WALK_LEVEL, WALK_LEVEL + w.height);
+        prism_topped(tiles, &ring, y0, y1, KIT_STONE, KIT_STONE);
+        pieces.push(
+            ring.iter()
+                .flat_map(|&p| [world(size, p, y0), world(size, p, y1)])
+                .collect(),
+        );
     }
     pieces
 }

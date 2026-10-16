@@ -419,12 +419,27 @@ three storeys on the square's block, the village's tallest. **Its distribution**
 question, the test prints it): the core block's 28 houses on lots of 73 m², two in five of
 them with land left beside the house (a court of 16 m² on average); the two faubourg blocks
 on the road out, 11 and 6 houses on lanières of 249 and 336 m², each with a garden (163 and
-244 m² on average); the faubourg block off it, 35 houses on lots of 174 m², nine in ten with a
-garden of 98 m²; the lotissement block's 8 houses on lots of 448 m², 363 m² of garden each.
-The village at 600 m: 88 houses
-on 5 blocks (one core, three faubourg, one lotissement), 281 people (on the city's
-parameters 100 houses, 327 people, 68 of one storey, 28 of two, 4 of three; one in twenty
-vacant as the city's). **Its streets:** a village's main road is a shared street (10 m of
+244 m² on average); the faubourg block off it, 34 houses on lots of 161 m², nine in ten with a
+garden of 85 m²; the lotissement block's 8 houses on lots of 406 m², 324 m² of garden each.
+The village at 600 m: 87 houses
+on 5 blocks (one core, three faubourg, one lotissement), 278 people (on the city's
+parameters 100 houses, 329 people, 68 of one storey, 28 of two, 4 of three; one in twenty
+vacant as the city's). Two strips could overlap where a short edge between them collapsed or
+a block narrowed under two depths (a lotissement's lots crossed on its acute corner): each
+now keeps to its side of the line where the two depths stand in proportion, and strips that
+only meet are left alone. **Its garden walls** (`city::walls`, the same day): wherever no
+house stands on a lot's or a court's outline, a stone wall 0.4 m thick closes it, 1.8 m high
+along the streets and lanes, 1.5 m between neighbours, 1 m on a lotissement's front; each
+garden with a side on the street keeps a gate 1.2 m wide, level with the street (before the
+house on a lotissement's front), and each stretch of a court along a lane 6 m or more one in
+its middle. Where walls meet one butts against the other, never overlapping, since two tops
+on one plane would flicker: a wall stops at the face of one passing through, two walls in line
+meet halfway, mitred, and at a corner the lower (then the shorter) stops at the higher's face;
+walls left sharing ground step back, and two lots back to back across a sliver of court keep
+one wall. The village has 640 m of wall along its streets and lanes, 1 810 m between gardens
+and 42 gates; the kit draws them in stone and the walker meets them
+(`reports/2026-10-16/village-garden-walls.png`, the map check's garden view along the longest
+of them). **Its streets:** a village's main road is a shared street (10 m of
 paving, no kerbs, bike lanes nor lamp rows) and its lanes are pedestrian, as an old town's,
 through the forest too (a road beyond every district's reach takes the nearest district's
 kind, `transit::assign_profiles`); the city's avenues stay. The narrower streets gave the
@@ -434,7 +449,7 @@ plan in place of the city, every house from the kit (`reports/2026-10-16/village
 the air, `village-street.png` from the first house's street, which the log names for
 `--view`). **The map check** (`tools/map-check.sh`, D-062's check per commit): the village
 from the air and from the views the log names (the first house's street, the green, the main
-road, the busiest junction) and a walked path along the first house's street, each compared
+road, the busiest junction, the longest garden wall along a lane) and a walked path along the first house's street, each compared
 with `captures/map/accepted` by LDR-ꟻLIP, about two minutes; `--accept` keeps a run
 (`docs/PROCESS.md`). **One home a house** (`Mass::home`, the same day): a village house is
 one unit over all its storeys, entered from the street, with its household's main rooms (1.5
