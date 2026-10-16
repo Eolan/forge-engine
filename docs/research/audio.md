@@ -1047,8 +1047,11 @@ stop at once when it rains and wait for the sun to dry things. The rules now sil
 them quiet while the place is wet (the ambience remembers the rain and dries over two minutes;
 a weather simulation can pass its own wetness). The demo now names each bed as it starts and
 stops. A synthesised chorus is still not a recording: Wikimedia Commons has one of our species,
-"Cicada orni.ogg" (DavidDelon, Hérault, 2006, public domain, 63 s, 1.7 MB), which would replace
-it with the owner's go, as the birds were.
+"Cicada orni.ogg" (DavidDelon, by the Hérault river, 2006, public domain, 63 s, 1.7 MB). With the
+owner's go it now makes the chorus: mono at 32 kHz, its centroid 4.78 kHz against the species'
+measured peak of 4.82 kHz, an envelope repeating every 145 ms (the species: 130 to 450 ms), the
+river 18 dB under the song. Up to six singers read it from their own places, pitches, places and
+distances, so no two sing in step.
 
 **"Walking sounds are a bit strange; it depends on what the walker wears."** Three causes,
 found by listening to what the model did. Stone's modes rang as tones (a setts' street sounded

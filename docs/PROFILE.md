@@ -1667,8 +1667,8 @@ world's bus (two state-variable sections a channel, a width and a gain) is skipp
 **Steam Audio's HRTF** (the `steam-audio` feature, the bench's voices through a binaural effect
 each, bilinear): 32 voices 32.2 ms a second of sound (3.2 % of a core, blocks of 171 µs, 308 µs
 at the longest), 64 voices 79.7 ms (8.0 %, 424 and 576 µs), 128 voices 147.8 ms (14.8 %, 788 µs
-and 1.27 ms): about 4.4 µs a voice a block over the panner. The recorded birds cost the game
-thread 0.8 s once, at start (decoding and cutting four minutes of Vorbis); playing them costs
+and 1.27 ms): about 4.4 µs a voice a block over the panner. The recorded birds and cicadas cost the
+game thread 1.0 s once, at start (decoding and cutting five minutes of Vorbis); playing them costs
 the birds bed less than making them did.
 
 The page with the tests and the scenes is `docs/demos/audio.md`.

@@ -10,9 +10,9 @@ library opens an audio device; the `audio-demo` example, which the owner starts,
 (below).
 
 ```
-cargo test --release -p forge-audio                                      # 65 tests on rendered samples
+cargo test --release -p forge-audio                                      # 66 tests on rendered samples
 cargo test --release -p forge-audio --features steam-audio --test steam  # 5 more with the HRTF (the SDK, below)
-tools/fetch-sounds.sh                                                    # the bird recordings, into assets/sounds/
+tools/fetch-sounds.sh                                                    # the recordings, into assets/sounds/
 cargo run --release -p forge-audio --example audio-render -- scenes      # WAVs in captures/audio/
 cargo run --release -p forge-audio --example audio-render -- bench       # the mixer's cost
 ```
@@ -41,7 +41,7 @@ cargo run --release -p forge-audio --example audio-render -- bench       # the m
 | The rules | Each tick `Ambience::update` takes the world's state where the listener is (the hour, sunrise and sunset, the temperature, the wind, the rain, how wet the place is, the nearest shore, the medium) and moves each bed's gain toward its target, rising and falling at their own pace (the wind 1 s both ways; rain 2 s; cicadas rise over 3 s and fall over 0.8 s, birds 3 s and 1.5 s; the sea 0.5 s; the medium 60 ms): cicadas from 2.5 to 4.5 hours after sunrise until sunset, above 22 °C; they stop within two seconds of rain and stay quiet while the place is wet (the ambience remembers the rain and dries over two minutes, or takes the simulation's `wet`), and give way to the wind from 5 m/s (silent by 10); the dawn chorus from an hour before sunrise to 2.5 hours after, 15 % of it through the day, 40 % at dusk; the sea −3 dB a doubling of the distance past 4 m (a quay is a line source), panned toward the water, its swell rising with the wind. A bed whose gain has rested at 0 for a second sleeps | `ambience` |
 | Under water | The ambience's layout puts everything heard above the water under a `world` bus with a filter (`Control::BusFilter`): under water it low-passes at 600 Hz (fourth order), drops 29 dB (the surface's cost, research note §2.4) and narrows the image to a fifth. The cutoff glides a quarter of an octave a block (20 kHz to 600 Hz in 21 blocks, 112 ms), the gain (in decibels) and the width with a 30 ms time constant, through two state-variable sections that can be retuned while they run; clear, the filter is skipped. The underwater bed plays on a `water` bus that sends to its own reverb, sized for sound 4.3 times faster (`ReverbParams::UNDERWATER`: 1.4 s, dense, dark) | `dsp::medium`, `ambience` |
 | The HRTF | With the `steam-audio` feature (Windows), `SteamSpatializer` replaces the panner: each voice slot has its own Steam Audio 4.8.1 binaural effect with the default HRTF and bilinear interpolation between its measured directions, through `audionimbus`. The voice's gain ramps across the block before the effect; inside the source's radius it blends toward the centre (`spatial_blend`); a voice that starts inside a block sits at its frame in a block-long buffer. A source behind sounds behind, one above above, which panning cannot do | `steam` |
-| Recorded birds | When `tools/fetch-sounds.sh` has fetched the recordings, `BirdCalls::load` folds each to mono, resamples it to the mixer's rate, high-passes it above the species' song (1.2, 2 and 2.5 kHz) and cuts it where it stands 12 dB over its floor (gaps under 120 ms closed, calls under 60 ms dropped, over 3 s split at their quietest window, 15 ms edges, a peak of 0.5): 24 blackbird phrases, 10 sparrow calls, 22 serin passages. The birds bed sings them at their own place, distance (far ones dulled to 4 kHz) and pitch (±3 %), and plays the morning chorus far away while the dawn chorus is full, looped with a 2 s equal-power seam. The collared dove stays made in code (Commons has no free recording of it); without the files every bird is | `ambience::recordings` |
+| Recorded birds | When `tools/fetch-sounds.sh` has fetched the recordings, `BirdCalls::load` folds each to mono, resamples it to the mixer's rate, high-passes it above the species' song (1.2, 2 and 2.5 kHz) and cuts it where it stands 12 dB over its floor (gaps under 120 ms closed, calls under 60 ms dropped, over 3 s split at their quietest window, 15 ms edges, a peak of 0.5): 24 blackbird phrases, 10 sparrow calls, 22 serin passages. The birds bed sings them at their own place, distance (far ones dulled to 4 kHz) and pitch (±3 %), and plays the morning chorus far away while the dawn chorus is full, looped with a 2 s equal-power seam. The collared dove stays made in code (Commons has no free recording of it); without the files every bird is. The cicadas come from a public-domain recording of *Cicada orni* by the Hérault river (63 s), high-passed at 1.5 kHz: up to six singers each read it from their own place, at their own pitch (±4 %), place and distance (two in the middle distance first, the near one third, three far and dulled), in bouts of 15 to 60 s; the intensity sets how many sing, the loop's seam is a 2 s equal-power crossfade. Without it the cicadas are made in code | `ambience::recordings`, `ambience::beds` |
 
 ## Numbers (release build, Ryzen 7 9800X3D, one thread, 2026-10-16)
 
@@ -79,8 +79,8 @@ Steam Audio's HRTF, the same voices as above (the bench with `--features steam-a
 | 64 | 79.7 | 8.0 % | 424 µs | 576 µs |
 | 128 | 147.8 | 14.8 % | 788 µs | 1268 µs |
 
-About 4.4 µs a voice a block more than the panner. Loading and cutting the four recordings takes
-0.8 s on the game thread at start (decoding 4 min of Vorbis, the chorus most of it).
+About 4.4 µs a voice a block more than the panner. Loading and cutting the five recordings takes
+1.0 s on the game thread at start (decoding 5 min of Vorbis, the birds' chorus most of it).
 
 ## What the tests check (on rendered samples)
 
@@ -121,6 +121,7 @@ About 4.4 µs a voice a block more than the panner. Loading and cutting the four
 | A day in time-lapse | 30 s: the hour from 4:00 to 14:00, a wind to 12 m/s, a shower, the walk down to the quay, a dive from 20 to 25 s: every bed rises above half its level, no millisecond above −25 dB over 16 kHz (the worst −35.5; −16.8 before the filter became a state-variable one), the peak under the limiter's ceiling, the same samples twice |
 | Sleeping beds | The rain stops: its bed sleeps once its gain has rested at 0 for a second and writes silence; the rain comes back: it wakes and fades in, no click |
 | Recorded calls | With the recordings: at least 15 blackbird, 5 sparrow and 10 serin calls (24, 10, 22), each 0.06 to 3.05 s, starting and ending on 0, a peak of 0.5, centroids in their species' band (blackbird 1.5 to 4.5 kHz, sparrow 3 to 4.5, serin 3.5 to 8); the morning chorus over 170 s; an empty folder gives no recordings and no error. Skipped, with a note, without the files (CI) |
+| The recorded cicadas | With the recording: over 60 s of song centred at 5.2 kHz (the species' peak 4.82 ± 0.49 kHz); one singer's envelope repeating every 140 ms (the species: 130 to 450 ms); the full chorus 5.8 dB above one singer (−24.7 against −30.5 dBFS) and less alike between the ears; no millisecond over −25 dB above 16 kHz; the same samples twice. Skipped without the file |
 | The recorded dawn | The birds bed with the recordings: the 1 to 8 kHz band at the dawn chorus (−23.2 dBFS) 17.7 dB above the day (−40.9), no millisecond over −25 dB above 16 kHz, the same samples twice |
 | The HRTF (feature `steam-audio`) | A source 3 m to the left: the near ear 16.9 dB louder between 2 and 8 kHz, the far ear 0.73 ms later (the lows' cross-correlation); ahead and behind 3.2 dB apart over the third octaves of 1 to 20 kHz (7.8 dB at most), ahead and above 3.8 dB, where the panner gives the same samples for ahead and behind; −6.02 dB a doubling of the distance to 0.01 dB; straight ahead 1.4 dB over the panner; a source circling at 4 m no worse above 16 kHz than one held still (−21.5 against −21.1 dB: the HRTF itself lifts the top octave in front and behind), the same samples twice; a click on its frame, then the HRTF's own 65 samples |
 
@@ -187,8 +188,9 @@ mixer's counters and how often the device found the ring short.
 - **LLVM** (for `steam-audio`): `audionimbus-sys` generates its bindings with `bindgen`, which
   needs `libclang`; LLVM's Windows installer (`winget install LLVM.LLVM`) puts it where `bindgen`
   looks. CI's Windows runner has it.
-- **The recordings**: `tools/fetch-sounds.sh` fetches the four into `assets/sounds/birds/` and
-  checks their sizes and SHA-1 (`assets/sounds.tsv`).
+- **The recordings**: `tools/fetch-sounds.sh` fetches the four birds' into `assets/sounds/birds/`
+  and the cicadas' into `assets/sounds/cicadas/`, and checks their sizes and SHA-1
+  (`assets/sounds.tsv`).
 
 ## Not yet
 
