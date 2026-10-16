@@ -5795,6 +5795,17 @@ pub fn main_island() -> Result<()> {
 /// Runs the shared app over `args`, its window titled `title`: the city, the gallery or the
 /// island, or `scenario`, a demo's own scene (`physics-lab`'s, #216).
 pub fn run(args: Args, title: &'static str, scenario: Option<Box<dyn Scenario>>) -> Result<()> {
+    run_making(args, title, move || scenario)
+}
+
+/// [`run`], its scenario made by `make` on the loading thread: the window and its loading screen
+/// show while it is made, beside a fresh cache's shaders compiled ahead (#274: the city's plan
+/// took 4 s before its window opened).
+pub fn run_making(
+    args: Args,
+    title: &'static str,
+    make: impl FnOnce() -> Option<Box<dyn Scenario>> + Send + 'static,
+) -> Result<()> {
     // The island's world (#211, D-053): its file, then the flags over it.
     let path = world::path(&args);
     let mut described = world::IslandWorld::load(&path)?;
@@ -5828,6 +5839,10 @@ pub fn run(args: Args, title: &'static str, scenario: Option<Box<dyn Scenario>>)
     };
     // The props cook (or load from the cache) behind the loading screen (issue #25).
     forge_app::run_loading(config, move || {
+        let mut scenario = make();
+        if let Some(scenario) = scenario.as_mut() {
+            scenario.prepare();
+        }
         let cooked = cook(&args, scenario.as_deref());
         if args.island.is_some() {
             tracing::info!(file = %path.display(), ?overrides, "the island's world");

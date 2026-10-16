@@ -116,6 +116,10 @@ pub trait Scenario: Send {
     fn liquid(&self) -> Option<LiquidSetup>;
     /// Where the camera starts (the app applies `--view` and `--fov` over it).
     fn camera(&self) -> FlyCamera;
+    /// Its CPU work before the build (its meshes cooked or read from the cache), on the loading
+    /// thread: beside a fresh cache's shaders compiled ahead, where the build waits for them
+    /// (#274). Nothing by default.
+    fn prepare(&mut self) {}
     /// Builds it on the device from the cooked props.
     fn build(
         self: Box<Self>,

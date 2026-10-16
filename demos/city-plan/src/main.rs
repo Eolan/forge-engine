@@ -327,69 +327,79 @@ fn main() -> anyhow::Result<()> {
     };
     let grammar = forge_procgen::grammar::Grammar::parse(&text)?;
     let half = size * 0.5;
-    let detail = city_plan::Detail {
-        grammar: &grammar,
-        top: 0.9,
-        centre: if cli.street {
-            DVec2::new(
-                f64::from(camera.position.x) + half,
-                f64::from(camera.position.z) + half,
-            )
-        } else {
-            centre
-        },
-        // The whole village from the kit.
-        radius: if cli.village.is_some() {
-            size
-        } else {
-            cli.detail
-        },
-        seed: 12,
-        railing_cards: cli.railing_cards,
-        lit_hour: cli.app.time_of_day.map(city_plan::hour_of_day),
-        mix: forge_sim::population::Mix::default(),
-    };
-    let scenario = city_plan::PlanScenario::detailed(
-        &site,
-        &plan,
-        &masses,
-        &trees,
-        &lamps,
-        camera,
-        if cli.village.is_some() {
-            "the village"
-        } else {
-            "city plan"
-        },
-        (cli.detail > 0.0).then_some(&detail),
-    );
-    let scenario = match cli.clock {
-        Some(clock) => scenario.with_clock(clock),
-        None => scenario,
-    };
-    let scenario = match cli.tram.as_deref() {
-        Some(&[x, z, lead]) => {
-            let at = DVec2::new(x + half, z + half);
-            match scenario.tram_near(at, lead) {
-                Some(clock) => scenario.with_clock(clock),
-                None => scenario,
-            }
-        }
-        Some(_) => anyhow::bail!("--tram takes x,z,lead"),
-        None => scenario,
-    };
-    let scenario = match cli.people {
-        Some(hour) => scenario.with_people(&plan, &masses, hour),
-        None => scenario,
-    };
-    let scenario = if cli.walk_start {
-        scenario.walking()
+    let detail_centre = if cli.street {
+        DVec2::new(
+            f64::from(camera.position.x) + half,
+            f64::from(camera.position.z) + half,
+        )
     } else {
-        scenario
+        centre
     };
-    let scenario = match cli.ride {
-        Some(after) => scenario.riding(after),
-        None => scenario,
+    let lit_hour = cli.app.time_of_day.map(city_plan::hour_of_day);
+    if cli.tram.as_deref().is_some_and(|t| t.len() != 3) {
+        anyhow::bail!("--tram takes x,z,lead");
+    }
+    let title = if cli.village.is_some() {
+        "the village"
+    } else {
+        "city plan"
     };
-    city_blocks::run(cli.app, "forge city-plan", Some(Box::new(scenario)))
+    // The scene made on the loading thread, the window open (#274: the city's took 4 s before
+    // its window showed).
+    city_blocks::run_making(cli.app, "forge city-plan", move || {
+        let detail = city_plan::Detail {
+            grammar: &grammar,
+            top: 0.9,
+            centre: detail_centre,
+            // The whole village from the kit.
+            radius: if cli.village.is_some() {
+                size
+            } else {
+                cli.detail
+            },
+            seed: 12,
+            railing_cards: cli.railing_cards,
+            lit_hour,
+            mix: forge_sim::population::Mix::default(),
+        };
+        let scenario = city_plan::PlanScenario::detailed(
+            &site,
+            &plan,
+            &masses,
+            &trees,
+            &lamps,
+            camera,
+            title,
+            (cli.detail > 0.0).then_some(&detail),
+        );
+        let scenario = match cli.clock {
+            Some(clock) => scenario.with_clock(clock),
+            None => scenario,
+        };
+        let scenario = match cli.tram.as_deref() {
+            Some(&[x, z, lead]) => {
+                let at = DVec2::new(x + half, z + half);
+                match scenario.tram_near(at, lead) {
+                    Some(clock) => scenario.with_clock(clock),
+                    None => scenario,
+                }
+            }
+            _ => scenario,
+        };
+        let scenario = match cli.people {
+            Some(hour) => scenario.with_people(&plan, &masses, hour),
+            None => scenario,
+        };
+        let scenario = if cli.walk_start {
+            scenario.walking()
+        } else {
+            scenario
+        };
+        let scenario = match cli.ride {
+            Some(after) => scenario.riding(after),
+            None => scenario,
+        };
+        let scenario: Box<dyn city_blocks::scenario::Scenario> = Box::new(scenario);
+        Some(scenario)
+    })
 }

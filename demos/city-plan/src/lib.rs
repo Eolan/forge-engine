@@ -19,7 +19,7 @@ use anyhow::Result;
 use city_blocks::scenario::{Look, Running, Scenario};
 use city_blocks::{Args, CityMaterials, Cooked, scene_origin};
 use forge_app::{FlyCamera, Input, Setup};
-use forge_core::material::{MaterialId, RenderLayer, TextureId, UvMapping};
+use forge_core::material::{RenderLayer, TextureId, UvMapping};
 use forge_geom::MeshletMesh;
 use forge_geom::city::PropSpec;
 use forge_geom::meshlet::CookOptions;
@@ -345,6 +345,11 @@ pub struct PlanScenario {
     camera: FlyCamera,
     title: String,
     triangles: usize,
+    /// The scene's name in the mesh cache: its size and short title (#274).
+    scene: String,
+    /// Its meshes, cooked or read from the cache on the loading thread ([`Scenario::prepare`]),
+    /// in the order the build adds them, each plant's with its height and crown.
+    cooked: Option<Vec<(MeshletMesh, f32, f32)>>,
 }
 
 /// Buildings drawn from a style set's grammar and kit (D-039's modules) within `radius` of
@@ -1777,7 +1782,7 @@ impl PlanScenario {
         }
         laps.mark("the rest");
         eprintln!(
-            "the plan's scene, its steps before the window (ms): {}",
+            "the plan laid out in its tiles, its steps (ms): {}",
             laps.report()
         );
         Self {
@@ -1826,6 +1831,11 @@ impl PlanScenario {
                 st.stops
             ),
             triangles,
+            scene: format!("plan{}-{title}", size as u32)
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+                .collect(),
+            cooked: None,
         }
     }
 
@@ -4382,6 +4392,174 @@ fn mesh_digest(mesh: &TriMesh) -> u64 {
     hash.digest()
 }
 
+/// A tile's meshes that hold triangles: its ground, masses and railings, each with its kind (0,
+/// 1, 2: its material row in the build), the weight its texture coordinates take in the LOD
+/// and its name. Cooked with the normals weighed in the LOD too: a pavement's kerb and back
+/// faces folded into its top at the coarser levels, long tilted triangles where the paving
+/// streaked (the owner saw two patterns blend on the pavements). The far facades' texture
+/// coordinates too: across their jumps the windows smeared into streaks.
+fn tile_meshes(tile: &Tile) -> impl Iterator<Item = (&TriMesh, usize, f32, &'static str)> {
+    [
+        (&tile.ground, 0, 0.0, "ground"),
+        (&tile.masses, 1, FACADE_UV_WEIGHT, "masses"),
+        (&tile.railings, 2, 0.0, "railings"),
+    ]
+    .into_iter()
+    .filter(|(mesh, ..)| !mesh.indices.is_empty())
+}
+
+/// The forest's species in the order their first plants come (D-063): each grows
+/// `FLORA_INDIVIDUALS` individuals, at a quarter, half and all of its maturity, three of each.
+fn planted(
+    flora: &[(Vec3, f32, f32, f32, u16, u8)],
+    species: &[forge_flora::species::Species],
+) -> Vec<u16> {
+    let mut planted: Vec<u16> = Vec::new();
+    for &(.., sp, _) in flora {
+        if species.get(usize::from(sp)).is_some() && !planted.contains(&sp) {
+            planted.push(sp);
+        }
+    }
+    planted
+}
+
+impl PlanScenario {
+    /// Every mesh of the scene in the order the build adds them (the tiles', the plants', the
+    /// kit's modules, the tiles' insides), each plant's with its height and crown. Each is kept
+    /// in the derived cache (D-053) under its name (its place in the scene, so a changed tile
+    /// replaces its old copy) and a key: its content's digest, its cook's options and the
+    /// cooking code's digest (`cook_code`).
+    fn cook_meshes(
+        &self,
+        species: &[forge_flora::species::Species],
+    ) -> Vec<(MeshletMesh, f32, f32)> {
+        enum Cook<'a> {
+            Mesh(&'a TriMesh, CookOptions, String),
+            Plant(u16, u8),
+        }
+        let scene = &self.scene;
+        let jobs: Vec<Cook> = self
+            .tiles
+            .iter()
+            .enumerate()
+            .flat_map(|(t, tile)| {
+                tile_meshes(tile).map(move |(mesh, _, uv_weight, kind)| {
+                    let options = CookOptions {
+                        normal_weight: 2.0,
+                        uv_weight,
+                    };
+                    Cook::Mesh(mesh, options, format!("{scene}-tile{t}-{kind}"))
+                })
+            })
+            .chain(
+                planted(&self.flora, species)
+                    .into_iter()
+                    .flat_map(|sp| (0..FLORA_INDIVIDUALS).map(move |k| Cook::Plant(sp, k))),
+            )
+            .chain(self.kit_meshes.iter().enumerate().map(|(m, mesh)| {
+                Cook::Mesh(mesh, CookOptions::default(), format!("{scene}-kit{m}"))
+            }))
+            .chain(
+                self.tiles
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, tile)| !tile.insides.indices.is_empty())
+                    .map(|(t, tile)| {
+                        let name = format!("{scene}-tile{t}-insides");
+                        Cook::Mesh(&tile.insides, CookOptions::default(), name)
+                    }),
+            )
+            .collect();
+        // What each cooks, on all the threads: a plant grown and meshed first (a quarter of its
+        // time, its cook the rest), with its height and crown.
+        struct Made<'a> {
+            mesh: Cow<'a, TriMesh>,
+            options: CookOptions,
+            name: String,
+            key: String,
+            height: f32,
+            crown: f32,
+        }
+        let code = forge_geom::cache::cook_code();
+        let made: Vec<Made> = par_map(jobs.len(), cores(), None, |i| {
+            let (mesh, options, name, height, crown) = match &jobs[i] {
+                Cook::Mesh(mesh, options, name) => {
+                    (Cow::Borrowed(*mesh), *options, name.clone(), 0.0, 0.0)
+                }
+                &Cook::Plant(sp, k) => {
+                    let s = &species[usize::from(sp)];
+                    let shrub = s.habit == forge_flora::species::Habit::Shrub;
+                    let broad = s.foliage == forge_flora::species::Foliage::Broad;
+                    let conditions = flora_conditions(s, sp, k);
+                    let graph = forge_flora::grow::grow(s, &conditions);
+                    let mesh = grown_mesh(
+                        &graph,
+                        shrub,
+                        broad,
+                        conditions.pruning.lift as f32,
+                        leaf_spray(&s.id),
+                    );
+                    let (height, crown) = (graph.height().max(0.1), graph.crown_width().max(0.1));
+                    let name = format!("plant-{}-{k}", s.id);
+                    let options = CookOptions::default();
+                    (Cow::Owned(mesh), options, name, height, crown)
+                }
+            };
+            let key = format!(
+                "plan mesh {:016x} {options:?} code {code:016x}",
+                mesh_digest(&mesh)
+            );
+            Made {
+                mesh,
+                options,
+                name,
+                key,
+                height,
+                crown,
+            }
+        });
+        drop(jobs);
+        let dir = forge_core::derived::cache_dir(forge_core::derived::CacheKind::Meshes);
+        let take = |m: &Made| {
+            let (done, stored) =
+                forge_geom::cache::cook_cached_with(&dir, &m.name, &m.key, true, || {
+                    MeshletMesh::build_with(&m.mesh, m.options)
+                });
+            if let Err(error) = stored {
+                tracing::warn!(mesh = %m.name, %error, "cooked mesh not cached");
+            }
+            done.mesh
+        };
+        let (hits, misses): (Vec<usize>, Vec<usize>) = (0..made.len()).partition(|&i| {
+            let key = forge_geom::cache::key(&made[i].key);
+            forge_geom::cache::path(&dir, &made[i].name, key).exists()
+        });
+        // The cached ones read on all the threads; the others cooked a third of the threads at a
+        // time, the largest first: a large mesh's DAG spreads its groups over threads of its own,
+        // and the city's 783 meshes cooked fastest 4–6 at a time (2.8–3.2 s; 9.9 s one by one,
+        // 7.6 s sixteen at a time).
+        let loaded = par_map(hits.len(), cores(), None, |j| take(&made[hits[j]]));
+        let order = largest_first(misses.iter().map(|&i| made[i].mesh.indices.len()));
+        let cooked_now = par_map(misses.len(), (cores() / 3).max(2), Some(&order), |j| {
+            take(&made[misses[j]])
+        });
+        tracing::info!(
+            from_cache = hits.len(),
+            cooked = misses.len(),
+            "the plan's meshes"
+        );
+        let mut taken: Vec<Option<MeshletMesh>> = (0..made.len()).map(|_| None).collect();
+        for (&i, mesh) in hits.iter().zip(loaded).chain(misses.iter().zip(cooked_now)) {
+            taken[i] = Some(mesh);
+        }
+        taken
+            .into_iter()
+            .zip(&made)
+            .map(|(mesh, m)| (mesh.expect("every mesh taken"), m.height, m.crown))
+            .collect()
+    }
+}
+
 /// The order of `sizes`' indices, the largest first.
 fn largest_first(sizes: impl IntoIterator<Item = usize>) -> Vec<usize> {
     let sizes: Vec<usize> = sizes.into_iter().collect();
@@ -4423,6 +4601,15 @@ impl Scenario for PlanScenario {
 
     fn camera(&self) -> FlyCamera {
         self.camera.clone()
+    }
+
+    fn prepare(&mut self) {
+        let start = std::time::Instant::now();
+        self.cooked = Some(self.cook_meshes(&forge_flora::species::mediterranean()));
+        tracing::info!(
+            ms = start.elapsed().as_millis(),
+            "the plan's meshes, on the loading thread"
+        );
     }
 
     fn build(
@@ -5038,179 +5225,22 @@ impl Scenario for PlanScenario {
         laps.mark("materials applied");
         builder.set_ray_traced(!args.no_shadows);
         builder.set_origin(scene_origin(args));
-        // The tiles' ground, masses and railings, cooked with the normals weighed in the LOD: a
-        // pavement's kerb and back faces folded into its top at the coarser levels, long tilted
-        // triangles where the paving streaked (the owner saw two patterns blend on the
-        // pavements). The far facades' texture coordinates too: across their jumps the windows
-        // smeared into streaks.
-        fn tile_meshes(
-            tile: &Tile,
-            [ground, masses, railings]: [MaterialId; 3],
-        ) -> impl Iterator<Item = (&TriMesh, MaterialId, f32, &'static str)> {
-            [
-                (&tile.ground, ground, 0.0, "ground"),
-                (&tile.masses, masses, FACADE_UV_WEIGHT, "masses"),
-                (&tile.railings, railings, 0.0, "railings"),
-            ]
-            .into_iter()
-            .filter(|(mesh, ..)| !mesh.indices.is_empty())
-        }
         let rows = [ground_row, mass_row, grille_row];
-        // The forest's species in the order their first plants come (D-063): each grows
-        // `FLORA_INDIVIDUALS` individuals, at a quarter, half and all of its maturity, three of
-        // each.
-        let mut planted: Vec<u16> = Vec::new();
-        for &(.., sp, _) in &self.flora {
-            if species.get(usize::from(sp)).is_some() && !planted.contains(&sp) {
-                planted.push(sp);
-            }
-        }
-        // Every mesh of the scene, then added in the order it always was, so every id stays the
-        // same. Each is kept in the derived cache (D-053) under its name (its place in the
-        // scene, so a changed tile replaces its old copy) and a key: its content's digest, its
-        // cook's options and the cooking code's digest (`cook_code`).
-        enum Cook<'a> {
-            Mesh(&'a TriMesh, CookOptions, String),
-            Plant(u16, u8),
-        }
-        let scene: String = format!("plan{}-{}", self.size as u32, self.title)
-            .chars()
-            .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
-            .collect();
-        let jobs: Vec<Cook> = self
-            .tiles
-            .iter()
-            .enumerate()
-            .flat_map(|(t, tile)| {
-                let scene = &scene;
-                tile_meshes(tile, rows).map(move |(mesh, _, uv_weight, kind)| {
-                    let options = CookOptions {
-                        normal_weight: 2.0,
-                        uv_weight,
-                    };
-                    Cook::Mesh(mesh, options, format!("{scene}-tile{t}-{kind}"))
-                })
-            })
-            .chain(
-                planted
-                    .iter()
-                    .flat_map(|&sp| (0..FLORA_INDIVIDUALS).map(move |k| Cook::Plant(sp, k))),
-            )
-            .chain(self.kit_meshes.iter().enumerate().map(|(m, mesh)| {
-                Cook::Mesh(mesh, CookOptions::default(), format!("{scene}-kit{m}"))
-            }))
-            .chain(
-                self.tiles
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, tile)| !tile.insides.indices.is_empty())
-                    .map(|(t, tile)| {
-                        let name = format!("{scene}-tile{t}-insides");
-                        Cook::Mesh(&tile.insides, CookOptions::default(), name)
-                    }),
-            )
-            .collect();
-        // What each cooks, on all the threads: a plant grown and meshed first (a quarter of its
-        // time, its cook the rest), with its height and crown.
-        struct Made<'a> {
-            mesh: std::borrow::Cow<'a, TriMesh>,
-            options: CookOptions,
-            name: String,
-            key: String,
-            height: f32,
-            crown: f32,
-        }
-        let code = forge_geom::cache::cook_code();
-        let made: Vec<Made> = par_map(jobs.len(), cores(), None, |i| {
-            let (mesh, options, name, height, crown) = match &jobs[i] {
-                Cook::Mesh(mesh, options, name) => {
-                    (Cow::Borrowed(*mesh), *options, name.clone(), 0.0, 0.0)
-                }
-                &Cook::Plant(sp, k) => {
-                    let s = &species[usize::from(sp)];
-                    let shrub = s.habit == forge_flora::species::Habit::Shrub;
-                    let broad = s.foliage == forge_flora::species::Foliage::Broad;
-                    let conditions = flora_conditions(s, sp, k);
-                    let graph = forge_flora::grow::grow(s, &conditions);
-                    let mesh = grown_mesh(
-                        &graph,
-                        shrub,
-                        broad,
-                        conditions.pruning.lift as f32,
-                        leaf_spray(&s.id),
-                    );
-                    let (height, crown) = (graph.height().max(0.1), graph.crown_width().max(0.1));
-                    let name = format!("plant-{}-{k}", s.id);
-                    (
-                        Cow::Owned(mesh),
-                        CookOptions::default(),
-                        name,
-                        height,
-                        crown,
-                    )
-                }
-            };
-            let key = format!(
-                "plan mesh {:016x} {options:?} code {code:016x}",
-                mesh_digest(&mesh)
-            );
-            Made {
-                mesh,
-                options,
-                name,
-                key,
-                height,
-                crown,
-            }
-        });
-        drop(jobs);
-        let dir = forge_core::derived::cache_dir(forge_core::derived::CacheKind::Meshes);
-        let take = |m: &Made| {
-            let (done, stored) =
-                forge_geom::cache::cook_cached_with(&dir, &m.name, &m.key, true, || {
-                    MeshletMesh::build_with(&m.mesh, m.options)
-                });
-            if let Err(error) = stored {
-                tracing::warn!(mesh = %m.name, %error, "cooked mesh not cached");
-            }
-            done.mesh
+        let planted = planted(&self.flora, &species);
+        // The meshes the loading thread cooked or read from the cache (`prepare`), or now.
+        let cooked = match self.cooked.take() {
+            Some(cooked) => cooked,
+            None => self.cook_meshes(&species),
         };
-        let (hits, misses): (Vec<usize>, Vec<usize>) = (0..made.len()).partition(|&i| {
-            let key = forge_geom::cache::key(&made[i].key);
-            forge_geom::cache::path(&dir, &made[i].name, key).exists()
-        });
-        // The cached ones read on all the threads; the others cooked a third of the threads at a
-        // time, the largest first: a large mesh's DAG spreads its groups over threads of its own,
-        // and the city's 783 meshes cooked fastest 4–6 at a time (2.8–3.2 s; 9.9 s one by one,
-        // 7.6 s sixteen at a time).
-        let loaded = par_map(hits.len(), cores(), None, |j| take(&made[hits[j]]));
-        let order = largest_first(misses.iter().map(|&i| made[i].mesh.indices.len()));
-        let cooked_now = par_map(misses.len(), (cores() / 3).max(2), Some(&order), |j| {
-            take(&made[misses[j]])
-        });
-        tracing::info!(
-            from_cache = hits.len(),
-            cooked = misses.len(),
-            "the plan's meshes"
-        );
-        let mut taken: Vec<Option<MeshletMesh>> = (0..made.len()).map(|_| None).collect();
-        for (&i, mesh) in hits.iter().zip(loaded).chain(misses.iter().zip(cooked_now)) {
-            taken[i] = Some(mesh);
-        }
-        let sizes: Vec<(f32, f32)> = made.iter().map(|m| (m.height, m.crown)).collect();
-        drop(made);
-        let mut cooked = taken
-            .into_iter()
-            .zip(sizes)
-            .map(|(mesh, (height, crown))| (mesh.expect("every mesh taken"), height, crown));
+        let mut cooked = cooked.into_iter();
         laps.mark("cooked");
         let mut meshes = 0;
         for tile in &self.tiles {
             let at = Mat4::from_translation(tile.centre);
-            for (_, row, ..) in tile_meshes(tile, rows) {
+            for (_, kind, ..) in tile_meshes(tile) {
                 let (mesh, _, _) = cooked.next().expect("a tile's mesh cooked");
                 let id = builder.add_mesh(&mesh);
-                builder.add_instance_with_material(id, at, row);
+                builder.add_instance_with_material(id, at, rows[kind]);
                 meshes += 1;
             }
         }
