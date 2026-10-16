@@ -30,8 +30,14 @@ pub type Finish<D> = Box<dyn FnOnce(&Setup) -> Result<D> + Send>;
 /// animation needs a high frame rate.
 const LOADING_FRAME: Duration = Duration::from_millis(8);
 
-/// Threads compiling shaders ahead: `slangc` is a process per entry point.
-const SHADER_THREADS: usize = 4;
+/// Threads compiling shaders ahead, `slangc` being a process per entry point: all the cores but
+/// two, four at least. Four left a fresh cache's 150 entries a quarter of the machine.
+fn shader_threads() -> usize {
+    std::thread::available_parallelism()
+        .map_or(4, std::num::NonZero::get)
+        .saturating_sub(2)
+        .max(4)
+}
 
 /// The loading screen, then the demo.
 pub(crate) enum Stage<D> {
@@ -117,7 +123,17 @@ impl<D: Demo + Send> Stage<D> {
         let counted = progress.clone();
         let warm_up = std::thread::Builder::new()
             .name("shader warm-up".to_owned())
-            .spawn(move || compiler.warm_counted(&listed, SHADER_THREADS, &counted))?;
+            .spawn(move || {
+                // A program's first start on this cache has no list: every entry the shaders
+                // declare, rather than its own one by one as it asks for them (26 s of the
+                // village's 34 on a fresh cache).
+                let listed = if listed.is_empty() {
+                    compiler.declared_entries()
+                } else {
+                    listed
+                };
+                compiler.warm_counted(&listed, shader_threads(), &counted)
+            })?;
         ctx.loading = true;
         Ok(Self::Loading {
             pipeline,

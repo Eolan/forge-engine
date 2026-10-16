@@ -86,6 +86,49 @@ fn parse_entries(text: &str) -> Vec<ShaderEntry> {
         .collect()
 }
 
+/// The entry points `text` (the file `file`) declares: each `[shader("stage")]` attribute and
+/// the function after it, past its other attributes and comments. A declaration it cannot read
+/// is left out: the program then compiles it when it asks for it.
+fn declared(file: &str, text: &str) -> Vec<ShaderEntry> {
+    const MARK: &str = "[shader(\"";
+    let mut found = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find(MARK) {
+        rest = &rest[at + MARK.len()..];
+        let Some((stage, after)) = rest.split_once("\")]") else {
+            break;
+        };
+        let mut tail = after;
+        // Past the other attributes and the comments to the declaration.
+        loop {
+            tail = tail.trim_start();
+            if tail.starts_with('[') {
+                let Some(end) = tail.find(']') else { break };
+                tail = &tail[end + 1..];
+            } else if tail.starts_with("//") {
+                tail = tail.split_once('\n').map_or("", |(_, next)| next);
+            } else {
+                break;
+            }
+        }
+        let head = tail.split('(').next().unwrap_or_default();
+        let name = head
+            .rsplit(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .find(|word| !word.is_empty());
+        if let (Some(stage), Some(name)) = (ShaderStage::from_slang_name(stage), name)
+            && !head.contains(['{', ';'])
+        {
+            found.push(ShaderEntry {
+                file: file.to_owned(),
+                entry: name.to_owned(),
+                stage,
+            });
+        }
+        rest = after;
+    }
+    found
+}
+
 /// One entry point a program compiles: what [`ShaderCompiler::warm`] compiles ahead.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShaderEntry {
@@ -258,6 +301,30 @@ impl ShaderCompiler {
         parse_entries(&fs::read_to_string(path).unwrap_or_default())
     }
 
+    /// Every entry point the shader directory's files declare (`[shader("stage")]` before a
+    /// function), file by file: what to compile ahead for a program with no list yet. On a fresh
+    /// cache the village's first start compiled its 57 entries one after another as it asked
+    /// for them, 26 s of its 34; compiled ahead on every core, all of them take a few seconds.
+    pub fn declared_entries(&self) -> Vec<ShaderEntry> {
+        let Ok(listing) = fs::read_dir(&self.shader_dir) else {
+            return Vec::new();
+        };
+        let mut files: Vec<String> = listing
+            .filter_map(|e| e.ok()?.file_name().into_string().ok())
+            .filter(|name| name.ends_with(".slang"))
+            .collect();
+        files.sort();
+        files
+            .iter()
+            .flat_map(|file| {
+                declared(
+                    file,
+                    &fs::read_to_string(self.shader_dir.join(file)).unwrap_or_default(),
+                )
+            })
+            .collect()
+    }
+
     /// Compiles `entries` into the cache on `threads` threads, so that the program's own
     /// requests find them there: after a shader change, a loading screen compiles them while
     /// it shows (issue #25). Returns how many were compiled, not found in the cache.
@@ -292,30 +359,39 @@ impl ShaderCompiler {
         }
         progress.missing.store(missing.len(), Ordering::Relaxed);
         let next = std::sync::atomic::AtomicUsize::new(0);
+        // The first failure, returned once the others are compiled: one entry that fails no
+        // longer leaves its thread's share uncompiled.
+        let failed: Mutex<Option<GpuError>> = Mutex::new(None);
         std::thread::scope(|scope| {
             let workers: Vec<_> = (0..threads.max(1))
                 .map(|_| {
-                    scope.spawn(|| -> Result<()> {
+                    scope.spawn(|| {
                         loop {
                             let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             let Some(e) = missing.get(i) else {
-                                return Ok(());
+                                return;
                             };
                             // Not listed as asked for: an entry the program no longer asks
                             // for leaves the list at its next save.
-                            self.compile_unlisted(&e.file, &e.entry, e.stage)?;
+                            if let Err(error) = self.compile_unlisted(&e.file, &e.entry, e.stage)
+                                && let Ok(mut first) = failed.lock()
+                            {
+                                first.get_or_insert(error);
+                            }
                             progress.compiled.fetch_add(1, Ordering::Relaxed);
                         }
                     })
                 })
                 .collect();
             workers.into_iter().try_for_each(|w| {
-                w.join().unwrap_or_else(|_| {
-                    Err(GpuError::Shader("a shader warm-up thread panicked".into()))
-                })
+                w.join()
+                    .map_err(|_| GpuError::Shader("a shader warm-up thread panicked".into()))
             })
         })?;
-        Ok(missing.len())
+        match failed.into_inner().ok().flatten() {
+            Some(error) => Err(error),
+            None => Ok(missing.len()),
+        }
     }
 
     /// The options in the cached file's name, so that optimised and debug builds, or a
@@ -553,6 +629,31 @@ mod tests {
         // A line with an unknown stage or missing words is skipped; the rest are kept.
         let text = format!("{text}bad.slang main geometry\nhalf.slang\n");
         assert_eq!(parse_entries(&text), entries);
+    }
+
+    #[test]
+    fn declared_entries_are_read_past_attributes_and_comments() {
+        let text = "import bindless;\n\
+                    [shader(\"compute\")]\n[numthreads(64, 1, 1)]\n\
+                    void cull_main(uint3 id : SV_DispatchThreadID) {}\n\
+                    // [shader(\"vertex\")] in a comment: a name follows it on its line\n\
+                    struct VertexOut { float4 position; };\n\
+                    [shader(\"vertex\")]\n// the full-screen triangle\nVertexOut vert_main(uint id : SV_VertexID) {}\n\
+                    [shader(\"mesh\")] [outputtopology(\"triangle\")] [numthreads(32, 1, 1)]\n\
+                    void mesh_main(out indices uint3 tris[124]) {}\n\
+                    [shader(\"geometry\")] void old_main() {}\n";
+        let found = declared("cull.slang", text);
+        let names: Vec<(&str, ShaderStage)> =
+            found.iter().map(|e| (e.entry.as_str(), e.stage)).collect();
+        assert_eq!(
+            names,
+            [
+                ("cull_main", ShaderStage::Compute),
+                ("vert_main", ShaderStage::Vertex),
+                ("mesh_main", ShaderStage::Mesh),
+            ]
+        );
+        assert!(found.iter().all(|e| e.file == "cull.slang"));
     }
 
     /// A shader directory of its own under the temporary directory, with these files.
