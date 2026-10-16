@@ -412,8 +412,9 @@ pub fn assign_profiles(
     }
     for (i, e) in graph.edges.iter_mut().enumerate() {
         let mid = geom::point_at(&e.points, e.length() * 0.5);
-        // Beyond every district's reach, a road takes the nearest district's kind: a village's
-        // main road stays a shared street through its forest.
+        // Beyond every district's reach (or over water, which the field marks the same), a road
+        // nearest a village takes the village's kind: its main road stays a shared street
+        // through its forest. The city's roads off the field keep the class's profile.
         let kind = district_index(districts_field, mid)
             .map(|d| districts[d].kind)
             .or_else(|| {
@@ -425,6 +426,7 @@ pub fn assign_profiles(
                             .total_cmp(&(mid.distance(b.anchor) / b.radius))
                     })
                     .map(|d| d.kind)
+                    .filter(|k| *k == DistrictKind::Village)
             });
         e.profile = match (e.class, tram[i], kind) {
             (_, true, _) => Profile::TramAvenue,

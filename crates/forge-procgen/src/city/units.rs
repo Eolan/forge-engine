@@ -6,7 +6,9 @@
 //! - behind the lobby, where the building is deep enough, a smaller flat looks onto the court;
 //! - a side too big for one flat (over [`MAX_THROUGH`]) has a corridor continuing the lobby, with
 //!   single-aspect flats either side of it, sized by the French mix of new homes;
-//! - a narrow house's compact core (the lift behind the hall) serves one flat a storey.
+//! - a narrow house's compact core (the lift behind the hall) serves one flat a storey;
+//! - a house from its rooms (D-062's village, [`Mass::home`]) is one home over all its
+//!   storeys, entered from the street.
 //!
 //! A lively ground storey holds shops instead, entered from the street, and the storeys its mass
 //! keeps for work hold offices ([`Mass::works`]): the same cut, to let. A unit with no window
@@ -158,6 +160,27 @@ pub fn units(
             .sum::<f64>()
             * (1.0 - partitions)
     };
+    // A house from its rooms (D-062's village): one home over all its storeys, its door the
+    // street's, no landings of its own (`Mass::home`).
+    if let Some(rooms) = m.home {
+        let pieces = vec![floor.to_vec()];
+        let door = s
+            .openings
+            .iter()
+            .find(|o| o.storey == 0 && o.kind == OpeningKind::Door)
+            .map_or_else(|| geom::centroid(floor), |o| point(s, o.wall, o.along));
+        units.push(Unit {
+            storey: 0,
+            core: None,
+            net: area(&pieces) * s.storeys.len() as f64,
+            pieces,
+            door,
+            use_: Use::Home(rooms),
+            windows: 0,
+            through: true,
+        });
+        return (units, landings);
+    }
     for k in 0..s.storeys.len() {
         let shops = k == 0 && m.lively();
         let work = !shops && m.works(k);

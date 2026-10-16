@@ -54,6 +54,10 @@ pub struct Mass {
     /// (`office_chance`): offices, practices and services. All of them make an office building,
     /// whose ground floor is its reception where it has no shops.
     pub offices: u8,
+    /// A house from its rooms (D-062's village): one home over all its storeys with this many
+    /// main rooms ([`super::units::ROOMS_A_PERSON`] a person), its door the street's. `None`: flats
+    /// cut round the cores, a storey at a time.
+    pub home: Option<u8>,
 }
 
 impl Mass {
@@ -414,6 +418,7 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
                 open,
                 active,
                 offices,
+                home: None,
             });
         }
     }

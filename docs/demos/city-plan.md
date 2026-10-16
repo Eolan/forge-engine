@@ -401,9 +401,13 @@ the air, `village-street.png` from the first house's street, which the log names
 from the air and from the views the log names (the first house's street, the green, the main
 road, the busiest junction) and a walked path along the first house's street, each compared
 with `captures/map/accepted` by LDR-ꟻLIP, about two minutes; `--accept` keeps a run
-(`docs/PROCESS.md`). Next: the rooms as D-060's units (a house is one home over its storeys,
-not a flat a storey), a square with the rich house, the forest round the village, the player
-on foot.
+(`docs/PROCESS.md`). **One home a house** (`Mass::home`, the same day): a village house is
+one unit over all its storeys, entered from the street, with its household's main rooms (1.5
+a person, so the structures' residents match the village's): on the city's parameters, 388
+households and 1 295 residents by the structures for 406 houses and 1 273 people by the
+village (one home in twenty vacant, as the city's). Before, the units cut each storey into a
+flat. Next: the rooms themselves as the units' plan, a square with the rich house, species
+for the trees (#257), the player's objective.
 
 **The trees, sized to their streets.** Trimmed street trees of 9–12 m line the avenues, 7–10 m trees
 the shared streets and 5–7 m trees the lanes. Each instance is scaled by its own crown

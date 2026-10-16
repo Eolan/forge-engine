@@ -16,6 +16,7 @@ use super::mass::{Mass, Roof};
 use super::parcels::{self, ParcelType};
 use super::rooms::{self, Means};
 use super::structure::Era;
+use super::units;
 use super::{
     BoundaryInfluence, CityParams, CityPlan, DistrictKind, DistrictSpec, Pattern, Site, plan,
 };
@@ -207,6 +208,11 @@ fn mass(city: &mut CityPlan, b: usize, h: &House, streets: &PointGrid) -> Mass {
         open: false,
         active: false,
         offices: 0,
+        home: Some(
+            (f64::from(h.household.0) * units::ROOMS_A_PERSON)
+                .ceil()
+                .min(255.0) as u8,
+        ),
     }
 }
 
@@ -311,6 +317,19 @@ mod tests {
         println!(
             "{doors} houses with a door, {cores} with a stair core ({straight} with a house's \
              straight flight), {storeyed} storeyed"
+        );
+        let (mut households, mut residents) = (0, 0);
+        for s in &structures {
+            let o = units::occupancy(s);
+            households += o.households;
+            residents += o.residents;
+        }
+        println!(
+            "{households} households and {residents} residents by the structures, {people} by the village"
+        );
+        assert!(
+            households as usize <= houses && households as usize * 10 >= houses * 9,
+            "{households} households in {houses} houses"
         );
         assert!(
             cores * 10 >= storeyed * 9,
