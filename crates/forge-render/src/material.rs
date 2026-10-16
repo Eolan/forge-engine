@@ -123,6 +123,11 @@ pub const MATERIAL_SHOP: u32 = 256;
 /// illuminance ([`forge_core::material::RenderLayer::emissive_absolute`], #254).
 pub const MATERIAL_EMISSIVE_ABSOLUTE: u32 = 512;
 
+/// [`GpuMaterial`] flag: leaf cards ([`forge_core::material::RenderLayer::foliage`]), with
+/// [`MATERIAL_MASKED`] and [`MATERIAL_DOUBLE_SIDED`]: their normals never turned towards the
+/// viewer, a mix of the two colours per instance.
+pub const MATERIAL_FOLIAGE: u32 = 1024;
+
 /// The textures a world's materials sample, uploaded with their mips and visible to every
 /// shader through the bindless set. Released when dropped.
 pub struct TextureSet {
@@ -477,6 +482,11 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
                     }
                     | if r.grating.is_some() {
                         MATERIAL_GRATING | MATERIAL_MASKED | MATERIAL_DOUBLE_SIDED
+                    } else {
+                        0
+                    }
+                    | if r.foliage && uv.alpha_cutoff.is_some() {
+                        MATERIAL_FOLIAGE | MATERIAL_DOUBLE_SIDED
                     } else {
                         0
                     },

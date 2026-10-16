@@ -146,6 +146,7 @@ static const uint MATERIAL_FLAG_INTERIOR = 64;   // a window's glass with a room
 static const uint MATERIAL_FLAG_GRATING = 128;   // with MASKED: upright bars on one card, `alpha` their share of the mesh's u (`grating_coverage`)
 static const uint MATERIAL_FLAG_SHOP = 256;      // with INTERIOR: a shop behind the glass (`interior_room`)
 static const uint MATERIAL_FLAG_EMISSIVE_ABSOLUTE = 512; // `emissive` in cd/m², converted by the frame's reference illuminance (`emission`, #254)
+static const uint MATERIAL_FLAG_FOLIAGE = 1024; // with MASKED and DOUBLE_SIDED: leaf cards, their normals never turned, a mix of the two colours per instance (D-013)
 static const uint CUTOUT_GROUND_WINDOW = 1u << 31; // `cluster_cutouts`: windowed ground reaching into the ground window (#197)
 static const uint MESH_WINDOWED_GROUND = 1;     // Mesh::flags: its fragments in the frame's ground window go (#197)
 static const uint MESH_SCENE_SHADED = 2;        // Mesh::flags: a ground window's mesh, shaded where it stands in the scene (#197)
@@ -2977,6 +2978,9 @@ float3 shade_uv_mapped(Frame* f, Material mat, Surface s)
     float2 gx = float2(dot(mat.uv_u.xy, s.duvdx), dot(mat.uv_v.xy, s.duvdx));
     float2 gy = float2(dot(mat.uv_u.xy, s.duvdy), dot(mat.uv_v.xy, s.duvdy));
     float3 base = mat.color_a;
+    // Leaf cards: each instance its own mix of the two colours, as projected rows.
+    if ((mat.flags & MATERIAL_FLAG_FOLIAGE) != 0)
+        base = lerp(mat.color_a, mat.color_b, hash_color(s.instance_id).x);
     if (mat.albedo_texture != TEXTURE_NONE)
         base *= sample_image_grad(mat.albedo_texture, mat.sampler, uv, gx, gy).rgb;
     float roughness = mat.roughness;
@@ -4746,8 +4750,9 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
         : -1.0;
     s.view = normalize(-surface_relative);
     // A double-sided row seen from behind (#171): its normals turn to the viewer, and a normal
-    // map's frame with them (`shade_uv_mapped` builds it about `object_normal`).
-    if ((mat.flags & MATERIAL_FLAG_DOUBLE_SIDED) != 0
+    // map's frame with them (`shade_uv_mapped` builds it about `object_normal`). Not leaf cards':
+    // they bend out from the crown's middle on both sides.
+    if ((mat.flags & (MATERIAL_FLAG_DOUBLE_SIDED | MATERIAL_FLAG_FOLIAGE)) == MATERIAL_FLAG_DOUBLE_SIDED
         && dot(cross(mul(frame, v1.position - v0.position), mul(frame, v2.position - v0.position)), s.view) < 0.0)
     {
         s.n = -s.n;
@@ -5160,8 +5165,8 @@ void sun_shadow_trace_main(uint3 id : SV_DispatchThreadID)
         + b.lambda.z * normalize(mul(frame, decode_normal(v2.normal))));
     float3 object_position = b.lambda.x * v0.position + b.lambda.y * v1.position + b.lambda.z * v2.position;
     float3 surface_relative = mul(frame, object_position) + relative;
-    // A double-sided row seen from behind turns its normal to the viewer (#171).
-    if ((mat.flags & MATERIAL_FLAG_DOUBLE_SIDED) != 0
+    // A double-sided row seen from behind turns its normal to the viewer (#171), but leaf cards.
+    if ((mat.flags & (MATERIAL_FLAG_DOUBLE_SIDED | MATERIAL_FLAG_FOLIAGE)) == MATERIAL_FLAG_DOUBLE_SIDED
         && dot(cross(mul(frame, v1.position - v0.position), mul(frame, v2.position - v0.position)), -surface_relative) < 0.0)
         n = -n;
     if ((mat.flags & MATERIAL_FLAG_GRATING) != 0)

@@ -233,6 +233,12 @@ pub struct RenderLayer {
     /// Seen from both sides (glTF's `doubleSided`, #171): its back faces are drawn, with the
     /// normal turned towards the viewer, and rays meet them as fronts.
     pub double_sided: bool,
+    /// Standard with `uv` and its `alpha_cutoff`: leaf cards (D-013). Drawn double-sided, but
+    /// their normals are not turned towards the viewer: a crown's normals bend out from its
+    /// middle on both sides of a card. Each instance takes its own mix of `color_a` and
+    /// `color_b`, as projected rows do. Their map's mips should keep the share of texels the
+    /// cut-off keeps (`forge_render::textures::leaves`), or the far crowns thin out.
+    pub foliage: bool,
     /// [`ShadingClass::Layered`] only: the layers are weighed by the height over the sea, the
     /// slope and the latitude on the frame's planet (#220), not read from a layer map: the
     /// standard rows after this one are the sea, sand, grass, rock and snow.
@@ -315,6 +321,7 @@ impl Default for RenderLayer {
             contour: None,
             uv: None,
             double_sided: false,
+            foliage: false,
             planet_layers: false,
         }
     }

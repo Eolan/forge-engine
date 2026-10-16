@@ -247,6 +247,9 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
 - **Measuring sharpness.** Peter D. Burns, "Slanted-Edge MTF for Digital Camera and Scanner
   Analysis", IS&T PICS 2000, pp. 135–138, the method of ISO 12233's e-SFR: `tools/sharpness`
   and the physics lab's sharpness room (#159).
+- **Leaf cards' mips** (`forge_render::textures::leaves`, D-013). Ignacio Castaño, "Computing
+  Alpha Mipmaps", his blog, written for The Witness, 2010: each mip's alpha scaled so an alpha
+  test keeps the share of texels level 0 keeps.
 
 **The render graph** (`forge-gpu::graph`, D-020):
 - **The frame graph.** Yuriy O'Donnell, "FrameGraph: Extensible Rendering Architecture in

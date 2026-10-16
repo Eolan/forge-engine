@@ -402,9 +402,8 @@ its leaf clusters gathered on a grid of a sixth of its crown (an eighth of a bro
 of a shrub's, a tenth of its height at least) into lumps sized by how many clusters they hold,
 a shrub's of 20 triangles. A tree takes 8 000 to 33 000 triangles, a shrub about 600 (the full
 graphs' 2 000 to 250 000; the demo's test keeps them under 40 000 and 1 000). The map check's
-views take 2.2–2.6 ms of GPU where they took 1.6–1.9. The foliage is lumps until D-013's leaf
-cards, which need a leaf atlas (drawn procedurally, or a CC0 one downloaded on the owner's
-go). The road through the forest: `reports/2026-10-16/village-forest.png`. **The gardens' olives**
+views take 2.2–2.6 ms of GPU where they took 1.6–1.9. The lumps became leaf cards the same
+afternoon (below). The road through the forest: `reports/2026-10-16/village-forest.png`. **The gardens' olives**
 (the same afternoon): behind each house where 30 m² or more of garden stay 1.5 m clear of it,
 an olive of 4.5–7 m at the garden's middle, two along a garden of 150 m² or more, a lot
 without a house all garden; the village plants them in the plan's own trees
@@ -418,7 +417,41 @@ half and all of its maturity and gives each plant the one nearest its height (a 
 was the mature tree shrunk, a ball on a stem), the planted ones with their crowns lifted to 38 %
 of their height (half an umbrella pine's, 15 % an olive's) and their leaves' lumps kept above
 it. The one model is left only to the planters' shrubs; the map check's views take 2.2–2.8 ms. Only plans with a forest (the village's maps) get them: the 4 km city's thousands of street and park trees grown took 23–34 ms of GPU in the sandbox's day check where the one model takes 4.4–4.9, so the city keeps its one model until D-013's far tiers
-(`reports/2026-10-16/village-street-trees.png`, the walk under a plane's crown). A village's whole network is under the 3 km a cut-off
+(`reports/2026-10-16/village-street-trees.png`, the walk under a plane's crown).
+
+**Leaf cards** (D-013, the same afternoon). Each lump is now a core and the cards round it.
+- **The core:** 20 triangles at half the lump's radius, in half the leaves' colour, the shade
+  inside a crown. At 0.6 of the radius in the leaves' own colour its smooth faces showed.
+- **The cards:** 6 to 12 squares round each lump (a shrub's 4), cut from a leaf atlas drawn at
+  start-up (`forge_render::textures::leaves`, 1024 × 1024). Its four sprays are small oval
+  leaves for the oaks, broad ones for planes and limes, needle tufts for the pines, the cypress
+  and rosemary, and narrow ones for olives and cistus. A card's side is 1.5 lump radii, at most
+  1.2 m for broad leaves and 0.8 m for small ones: at 1.5 radii alone a plane's leaves were
+  drawn 40–60 cm wide.
+- **Their row** (`RenderLayer::foliage`): double-sided, with normals bent out from the crown's
+  middle and the lump's and never turned towards the viewer, and a mix of two tones per tree.
+- **Their mips** keep the share of texels the alpha test keeps (Castaño 2010). A dither of the
+  mips' alpha against the frame's noise, tried first, flickered on 0.5 % of a still view's
+  pixels under DLAA.
+- **Size:** a tree takes 900 to 21 000 triangles, a shrub 200 to 1 000 (the test's budget for a
+  shrub is now 1 500).
+
+| at 600 m | lumps | leaf cards |
+|---|---|---|
+| GPU, outdoor views | 1.9–2.8 ms | 2.2–4.3 ms |
+| GPU, inside a house | 2.2–2.3 ms | 2.4–2.5 ms |
+| still camera under DLAA, pixels changing frame to frame (main view, junction) | 0.03–0.05 %, 0.04–0.05 % | 0.13–0.15 %, 0.04–0.07 % |
+| the main view without the sun's shadows | 0.01–0.02 % | 0.04 % |
+| 1.4 m/s dolly, pixels changing unlike the 2 × 2 supersampled run | 17.1–17.8 % | 20.5–20.8 % |
+
+The still camera's remainder is in the sun's shadow on the leaves: it goes with the shadows. The
+cards' shadow rays tested on a coarser mip, or started on the card's sunward side, did not
+change it, so the shadow denoiser at the leaves' edges is the next lead. The dolly's measure
+flags every edge, and the paving and the grass make most of it in both builds. Captures:
+`reports/2026-10-16/village-leaf-cards.png` (the plane over the junction) and
+`village-leaf-cards-road.png`.
+
+A village's whole network is under the 3 km a cut-off
 network had to reach to be kept (`graph::MIN_NETWORK`), so the plan came out empty under
 twice the radius: a network is now kept over 3 km or over half of all the streets. The example
 site at 600 m on its own plan: 16 nodes, 22 edges, 7 blocks, 5 built and all with strips, 171

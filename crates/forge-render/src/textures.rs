@@ -937,6 +937,370 @@ pub fn black_and_white(size: u32) -> [TextureData; 2] {
     ]
 }
 
+/// The quarters of the [`leaves`] atlas, in the order [`LeafSpray::quarter`] counts them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum LeafSpray {
+    /// Small oval leaves on a branching twig: holm and kermes oaks, the garrigue's broad shrubs.
+    Small,
+    /// Broad leaves on long stalks, few to a twig: planes and limes.
+    Broad,
+    /// Needles in tufts along a shoot: the pines, rosemary.
+    Needles,
+    /// Narrow pointed leaves in opposite pairs: olives, cistus.
+    Narrow,
+}
+
+impl LeafSpray {
+    /// The four sprays, in their quarters' order.
+    pub const ALL: [LeafSpray; 4] = [Self::Small, Self::Broad, Self::Needles, Self::Narrow];
+
+    /// Its quarter of the atlas: 0 top left, 1 top right, 2 bottom left, 3 bottom right.
+    pub fn quarter(self) -> u32 {
+        match self {
+            Self::Small => 0,
+            Self::Broad => 1,
+            Self::Needles => 2,
+            Self::Narrow => 3,
+        }
+    }
+
+    /// The texture coordinates of its quarter's corners `(u0, v0)` and `(u1, v1)`, a margin of
+    /// a hundredth of the atlas inside, the spray's stem at the middle of the `v1` edge.
+    pub fn uv_box(self) -> ([f32; 2], [f32; 2]) {
+        let q = self.quarter();
+        let (u0, v0) = ((q % 2) as f32 * 0.5, (q / 2) as f32 * 0.5);
+        ([u0 + 0.01, v0 + 0.01], [u0 + 0.49, v0 + 0.49])
+    }
+}
+
+/// A leaf or a twig of a spray, in its quarter's unit square (`v` down, the stem at the bottom).
+struct Stroke {
+    /// Where it starts (a leaf's stalk end, a twig's base).
+    from: [f32; 2],
+    /// Unit direction it grows.
+    dir: [f32; 2],
+    /// Its length.
+    length: f32,
+    /// Its half width at the widest (a twig's: all along).
+    width: f32,
+    /// A leaf's outline: half width `width · sin(π s)^shape` at `s` of its length; a twig's: 0.
+    shape: f32,
+    /// Lobes along a broad leaf's edge (0: smooth).
+    lobes: f32,
+    /// Linear colour (before the row's tint).
+    colour: [f32; 3],
+}
+
+/// One spray's strokes, the twigs first.
+fn spray_strokes(seed: u64, spray: LeafSpray) -> Vec<Stroke> {
+    let mut strokes = Vec::new();
+    let mut n = 0_i32;
+    let mut random = || {
+        n += 1;
+        unit_f32(hash_cell2(seed ^ ((spray.quarter() as u64) << 40), n, 7))
+    };
+    let rotate = |d: [f32; 2], a: f32| {
+        let (s, c) = a.sin_cos();
+        [d[0] * c - d[1] * s, d[0] * s + d[1] * c]
+    };
+    let twig = [0.42, 0.36, 0.28];
+    // (leaf length, half width, outline, lobes, spacing along a twig, angle off the twig,
+    // side twigs, their length, pairs (both sides at once), needles to a tuft)
+    let (length, width, shape, lobes, spacing, angle, sides, side_length, pairs, tuft) = match spray
+    {
+        LeafSpray::Small => (0.13, 0.046, 0.6, 0.0, 0.045, 0.75, 9, 0.46, false, 0),
+        LeafSpray::Broad => (0.24, 0.11, 0.5, 5.0, 0.11, 0.8, 5, 0.44, false, 0),
+        LeafSpray::Needles => (0.18, 0.005, 0.25, 0.0, 0.055, 0.0, 8, 0.44, false, 13),
+        LeafSpray::Narrow => (0.15, 0.025, 0.85, 0.0, 0.042, 0.62, 8, 0.44, true, 0),
+    };
+    let stem_from = [0.5, 0.98];
+    let up = [0.0, -1.0];
+    let stem_length = 0.86;
+    // The twigs: the stem from just under the first side twig (a longer bare stem hung under
+    // the cards as a thread), then side twigs left and right by turns, shorter towards the tip.
+    let bare = 0.12;
+    let mut twigs: Vec<([f32; 2], [f32; 2], f32)> = vec![(
+        [stem_from[0], stem_from[1] - stem_length * bare],
+        up,
+        stem_length * (1.0 - bare),
+    )];
+    for k in 0..sides {
+        let t = 0.18 + 0.62 * (k as f32 + 0.5) / sides as f32;
+        let side = if k % 2 == 0 { 1.0 } else { -1.0 };
+        let at = [stem_from[0], stem_from[1] - stem_length * t];
+        let dir = rotate(up, side * (0.75 + 0.35 * random()));
+        let reach = side_length * (1.15 - 0.6 * t) * (0.85 + 0.3 * random());
+        twigs.push((at, dir, reach));
+    }
+    for &(from, dir, reach) in &twigs {
+        strokes.push(Stroke {
+            from,
+            dir,
+            length: reach,
+            width: if reach > 0.5 { 0.007 } else { 0.0045 },
+            shape: 0.0,
+            lobes: 0.0,
+            colour: twig,
+        });
+    }
+    let mut leaf = |at: [f32; 2], dir: [f32; 2], scale: f32, r: f32| {
+        let shade = 0.74 + 0.26 * r;
+        strokes.push(Stroke {
+            from: at,
+            dir,
+            length: length * scale,
+            width: width * scale,
+            shape,
+            lobes,
+            colour: [shade * 0.97, shade, shade * 0.9],
+        });
+    };
+    for &(from, dir, reach) in &twigs {
+        // Leaves from a sixth of the way along, alternating, or paired, or in tufts.
+        let mut s = reach * 0.16 + spacing * random();
+        let mut side = 1.0;
+        while s < reach {
+            let at = [from[0] + dir[0] * s, from[1] + dir[1] * s];
+            let scale = 0.8 + 0.3 * random();
+            if tuft > 0 {
+                // A fan of needles round the shoot, forward-leaning.
+                for k in 0..tuft {
+                    let a = (k as f32 / (tuft - 1) as f32 - 0.5) * 2.4 + 0.15 * (random() - 0.5);
+                    leaf(at, rotate(dir, a), scale, random());
+                }
+            } else if pairs {
+                leaf(at, rotate(dir, angle), scale, random());
+                leaf(at, rotate(dir, -angle), scale, random());
+            } else {
+                let a = side * (angle + 0.3 * (random() - 0.5));
+                leaf(at, rotate(dir, a), scale, random());
+                side = -side;
+            }
+            s += spacing * (0.85 + 0.3 * random());
+        }
+        // A leaf (or a tuft) at the tip.
+        let tip = [from[0] + dir[0] * reach, from[1] + dir[1] * reach];
+        if tuft > 0 {
+            for k in 0..tuft {
+                let a = (k as f32 / (tuft - 1) as f32 - 0.5) * 1.6;
+                leaf(tip, rotate(dir, a), 1.0, random());
+            }
+        } else {
+            leaf(tip, dir, 1.0, random());
+        }
+    }
+    // Stretched about the stem's foot, across and up apart, to fill the square to its margins.
+    let (mut wide, mut tall) = (1e-3_f32, 1e-3_f32);
+    for s in &strokes {
+        for p in [
+            s.from,
+            [
+                s.from[0] + s.dir[0] * s.length,
+                s.from[1] + s.dir[1] * s.length,
+            ],
+        ] {
+            wide = wide.max((p[0] - stem_from[0]).abs() + s.width);
+            tall = tall.max(stem_from[1] - p[1] + s.width);
+        }
+    }
+    let (fx, fy) = (0.47 / wide, (stem_from[1] - 0.03) / tall);
+    let place = |p: [f32; 2]| {
+        [
+            stem_from[0] + (p[0] - stem_from[0]) * fx,
+            stem_from[1] + (p[1] - stem_from[1]) * fy,
+        ]
+    };
+    for s in &mut strokes {
+        let a = place(s.from);
+        let b = place([
+            s.from[0] + s.dir[0] * s.length,
+            s.from[1] + s.dir[1] * s.length,
+        ]);
+        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+        let length = (dx * dx + dy * dy).sqrt().max(1e-6);
+        s.from = a;
+        s.dir = [dx / length, dy / length];
+        s.length = length;
+        s.width *= fx.min(fy);
+    }
+    strokes
+}
+
+/// The leaf cards' atlas (D-013): a spray of leaves in each quarter ([`LeafSpray`]), drawn
+/// light grey to be tinted by its row, the alpha the share of a texel the leaves and twigs
+/// cover (their edges anti-aliased over a texel), for an alpha test at a half. The empty texels
+/// take the leaves' mean colour and the mips average the colour weighted by the alpha, so a far
+/// card does not darken at its edges. Each mip's alpha is its texels' mean scaled per quarter
+/// so the test keeps the share level 0 keeps (Castaño 2010).
+pub fn leaves(seed: u64, size: u32) -> TextureData {
+    let side = size as usize;
+    let mut texels = vec![[0.0_f32; 4]; side * side];
+    let half = size as f32 * 0.5;
+    for spray in LeafSpray::ALL {
+        let q = spray.quarter();
+        let origin = [(q % 2) as f32 * half, (q / 2) as f32 * half];
+        // A quarter's unit square is `half` texels, inside a margin of 2 %.
+        let scale = half * 0.96;
+        let offset = [origin[0] + half * 0.02, origin[1] + half * 0.02];
+        for stroke in spray_strokes(seed, spray) {
+            let from = [
+                offset[0] + stroke.from[0] * scale,
+                offset[1] + stroke.from[1] * scale,
+            ];
+            let (length, width) = (stroke.length * scale, stroke.width * scale);
+            let to = [
+                from[0] + stroke.dir[0] * length,
+                from[1] + stroke.dir[1] * length,
+            ];
+            let reach = width + 1.5;
+            let lo = [
+                (from[0].min(to[0]) - reach).floor().max(origin[0]) as usize,
+                (from[1].min(to[1]) - reach).floor().max(origin[1]) as usize,
+            ];
+            let hi = [
+                ((from[0].max(to[0]) + reach).ceil() as usize).min((origin[0] + half) as usize),
+                ((from[1].max(to[1]) + reach).ceil() as usize).min((origin[1] + half) as usize),
+            ];
+            for y in lo[1]..hi[1] {
+                for x in lo[0]..hi[0] {
+                    let p = [x as f32 + 0.5 - from[0], y as f32 + 0.5 - from[1]];
+                    // Along and across the stroke, in texels.
+                    let s = p[0] * stroke.dir[0] + p[1] * stroke.dir[1];
+                    let t = -p[0] * stroke.dir[1] + p[1] * stroke.dir[0];
+                    let (distance, colour) = if stroke.shape == 0.0 {
+                        // A twig: a capsule.
+                        let along = s.clamp(0.0, length);
+                        let d = ((s - along).powi(2) + t * t).sqrt() - width;
+                        (d, stroke.colour)
+                    } else {
+                        let u = s / length;
+                        if !(0.0..=1.0).contains(&u) {
+                            continue;
+                        }
+                        let lobe = 1.0 + 0.14 * (stroke.lobes * std::f32::consts::PI * u).sin();
+                        let w = width * (std::f32::consts::PI * u).sin().powf(stroke.shape) * lobe;
+                        let across = t.abs() / width.max(1e-3);
+                        // A lighter midrib, one half a shade darker (the leaf's fold).
+                        let rib = if t.abs() < (width * 0.1).max(0.6) {
+                            1.12
+                        } else if t > 0.0 {
+                            0.9
+                        } else {
+                            1.0
+                        };
+                        let edge = 1.0 - 0.12 * smoothstep(0.6, 1.0, across);
+                        (t.abs() - w, stroke.colour.map(|c| c * rib * edge))
+                    };
+                    let cover = (0.5 - distance).clamp(0.0, 1.0);
+                    if cover <= 0.0 {
+                        continue;
+                    }
+                    let texel = &mut texels[y * side + x];
+                    let a = cover + texel[3] * (1.0 - cover);
+                    for k in 0..3 {
+                        texel[k] =
+                            (colour[k] * cover + texel[k] * texel[3] * (1.0 - cover)) / a.max(1e-6);
+                    }
+                    texel[3] = a;
+                }
+            }
+        }
+    }
+    // The empty texels take the covered ones' mean colour.
+    let (mut sum, mut weight) = ([0.0_f32; 3], 0.0_f32);
+    for t in &texels {
+        for k in 0..3 {
+            sum[k] += t[k] * t[3];
+        }
+        weight += t[3];
+    }
+    let mean = sum.map(|c| c / weight.max(1e-6));
+    for t in &mut texels {
+        let w = t[3];
+        for k in 0..3 {
+            t[k] = t[k] * w + mean[k] * (1.0 - w);
+        }
+    }
+    let encode = |level: &[[f32; 4]]| {
+        level
+            .iter()
+            .flat_map(|c| {
+                [
+                    to_byte(linear_to_srgb(c[0])),
+                    to_byte(linear_to_srgb(c[1])),
+                    to_byte(linear_to_srgb(c[2])),
+                    to_byte(c[3]),
+                ]
+            })
+            .collect::<Vec<u8>>()
+    };
+    // The share of quarter `q`'s texels an alpha test at a half keeps, the alpha times `scale`.
+    let kept = |level: &[[f32; 4]], side: u32, q: u32, scale: f32| {
+        let half = side / 2;
+        let (x0, y0) = ((q % 2) * half, (q / 2) * half);
+        let mut n = 0;
+        for y in y0..y0 + half {
+            for x in x0..x0 + half {
+                if level[(y * side + x) as usize][3] * scale >= 0.5 {
+                    n += 1;
+                }
+            }
+        }
+        n as f32 / (half * half) as f32
+    };
+    let cover: [f32; 4] = std::array::from_fn(|q| kept(&texels, size, q as u32, 1.0));
+    let mut levels = vec![encode(&texels)];
+    let (mut current, mut side) = (texels, size);
+    while side > 1 {
+        current = downsample(&current, side, |a, b, c, d| {
+            let alpha = a[3] + b[3] + c[3] + d[3];
+            let colour = [0, 1, 2].map(|k| {
+                if alpha > 1e-6 {
+                    (a[k] * a[3] + b[k] * b[3] + c[k] * c[3] + d[k] * d[3]) / alpha
+                } else {
+                    (a[k] + b[k] + c[k] + d[k]) * 0.25
+                }
+            });
+            [colour[0], colour[1], colour[2], alpha * 0.25]
+        });
+        side /= 2;
+        // Each quarter's alpha scaled so the cards' alpha test keeps the share of it level 0
+        // keeps (Castaño 2010's coverage-preserving mips): the plain means fall under the
+        // cut-off as the leaves blur, and the far crowns thinned to their cores. The means stay
+        // unscaled for the next level.
+        let mut scaled = current.clone();
+        if side >= 2 {
+            for q in 0..4 {
+                let (mut lo, mut hi) = (0.25_f32, 16.0_f32);
+                for _ in 0..24 {
+                    let mid = (lo * hi).sqrt();
+                    if kept(&current, side, q, mid) < cover[q as usize] {
+                        lo = mid;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                let half = side / 2;
+                let (x0, y0) = ((q % 2) * half, (q / 2) * half);
+                for y in y0..y0 + half {
+                    for x in x0..x0 + half {
+                        let t = &mut scaled[(y * side + x) as usize];
+                        t[3] = (t[3] * hi).min(1.0);
+                    }
+                }
+            }
+        }
+        levels.push(encode(&scaled));
+    }
+    TextureData {
+        name: "leaves".into(),
+        size,
+        height: size,
+        srgb: true,
+        levels,
+    }
+}
+
 /// What a model's image holds, which decides how its mips are made (#166, D-047).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ImageUse {
@@ -1125,6 +1489,64 @@ mod tests {
             for (k, level) in texture.levels.iter().enumerate() {
                 let side = 64 >> k;
                 assert_eq!(level.len(), side * side * 4, "{} level {k}", texture.name);
+            }
+        }
+    }
+
+    /// Each quarter of the leaf atlas is a spray covering a third to two thirds of it, nothing
+    /// on its edges (the cards' margins), and an alpha test at a half keeps the same share of
+    /// it at every mip down to 4 × 4 texels a quarter. `FORGE_LEAVES_PNG=path` writes level 0.
+    #[test]
+    fn the_leaf_atlas_s_sprays_cover_their_quarters_and_keep_it_in_the_mips() {
+        let size = 256;
+        let atlas = leaves(3, size);
+        assert_eq!(atlas.levels.len(), 9);
+        if let Ok(path) = std::env::var("FORGE_LEAVES_PNG") {
+            image::save_buffer(&path, &atlas.levels[0], size, size, image::ColorType::Rgba8)
+                .expect("written");
+        }
+        let alpha = |level: usize, x: u32, y: u32| {
+            let side = size >> level;
+            f32::from(atlas.levels[level][((y * side + x) * 4 + 3) as usize]) / 255.0
+        };
+        let half = size / 2;
+        for spray in LeafSpray::ALL {
+            let q = spray.quarter();
+            let (x0, y0) = ((q % 2) * half, (q / 2) * half);
+            let mut cover = 0.0;
+            for y in y0..y0 + half {
+                for x in x0..x0 + half {
+                    cover += alpha(0, x, y);
+                }
+            }
+            cover /= (half * half) as f32;
+            assert!((0.3..0.7).contains(&cover), "{spray:?}: {cover:.2}");
+            for k in 0..half {
+                for (x, y) in [(x0 + k, y0), (x0, y0 + k), (x0 + k, y0 + half - 1)] {
+                    assert_eq!(alpha(0, x, y), 0.0, "{spray:?} at {x}, {y}");
+                }
+            }
+            // The share the test keeps at each level, against level 0's.
+            let kept = |level: usize| {
+                let quarter = half >> level;
+                let mut n = 0;
+                for y in 0..quarter {
+                    for x in 0..quarter {
+                        if alpha(level, (x0 >> level) + x, (y0 >> level) + y) >= 0.5 {
+                            n += 1;
+                        }
+                    }
+                }
+                n as f32 / (quarter * quarter) as f32
+            };
+            let base = kept(0);
+            for level in 1..=5 {
+                let share = kept(level);
+                // A quarter of 4 × 4 texels keeps whole sixteenths.
+                assert!(
+                    (share - base).abs() <= 0.04_f32.max(1.0 / (half >> level).pow(2) as f32),
+                    "{spray:?} at level {level}: {share:.3} of it kept, {base:.3} at level 0"
+                );
             }
         }
     }

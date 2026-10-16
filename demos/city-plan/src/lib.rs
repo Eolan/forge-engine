@@ -4630,17 +4630,41 @@ impl Scenario for PlanScenario {
             ],
         );
         let tree_rows = [materials.of("plan-tree-a"), materials.of("plan-tree-b")];
-        // The forest's species (D-063): each its bark and its foliage, in two tones.
+        // The forest's species (D-063): each its bark, its crowns' cores and its leaf cards
+        // (D-013), in two tones; the cards cut out of the leaf atlas.
         let species = forge_flora::species::mediterranean();
+        let leaf_atlas = if self.flora.is_empty() {
+            None
+        } else {
+            Some(materials.textures.add(&textures::leaves(41, 1024))?)
+        };
         let flora_rows: Vec<_> = species
             .iter()
             .map(|s| {
                 let (group, bark, leaves) = flora_tones(&s.id);
+                let foliage = tones(leaves.0, leaves.1, 6.0);
+                // The crowns' cores at half the leaves' colour: the shade inside a crown.
+                let shade = |c: [f32; 3]| c.map(|k| k * 0.5);
                 materials.add_rows(
                     group,
                     vec![
                         (format!("{} bark", s.id), tones(bark.0, bark.1, 8.0)),
-                        (format!("{} leaves", s.id), tones(leaves.0, leaves.1, 6.0)),
+                        (
+                            format!("{} leaves", s.id),
+                            tones(shade(leaves.0), shade(leaves.1), 6.0),
+                        ),
+                        (
+                            format!("{} leaf cards", s.id),
+                            RenderLayer {
+                                albedo_texture: leaf_atlas,
+                                uv: Some(UvMapping {
+                                    alpha_cutoff: Some(0.5),
+                                    ..UvMapping::default()
+                                }),
+                                foliage: true,
+                                ..foliage
+                            },
+                        ),
                     ],
                 );
                 materials.of(group)
@@ -4719,8 +4743,13 @@ impl Scenario for PlanScenario {
                         .map(|k| {
                             let conditions = flora_conditions(s, sp, k);
                             let graph = forge_flora::grow::grow(s, &conditions);
-                            let mesh =
-                                grown_mesh(&graph, shrub, broad, conditions.pruning.lift as f32);
+                            let mesh = grown_mesh(
+                                &graph,
+                                shrub,
+                                broad,
+                                conditions.pruning.lift as f32,
+                                leaf_spray(&s.id),
+                            );
                             (
                                 builder.add_mesh(&MeshletMesh::build(&mesh)),
                                 graph.height().max(0.1),
@@ -5551,14 +5580,34 @@ fn flora_tones(id: &str) -> (&'static str, ([f32; 3], [f32; 3]), ([f32; 3], [f32
     }
 }
 
-/// A grown plant's mesh (`forge_flora`, D-063), a tree's about 8 000 triangles and a shrub's a
+/// The leaf atlas's spray a species' cards are cut from (`textures::leaves`): broad leaves for
+/// planes and limes, needles for the pines, the cypress and rosemary, narrow leaves for olives
+/// and cistus, small oval ones for the oaks.
+fn leaf_spray(id: &str) -> textures::LeafSpray {
+    use textures::LeafSpray;
+    match id {
+        "london-plane" | "common-lime" => LeafSpray::Broad,
+        "aleppo-pine" | "umbrella-pine" | "italian-cypress" | "rosemary" => LeafSpray::Needles,
+        "olive" | "cistus" => LeafSpray::Narrow,
+        _ => LeafSpray::Small,
+    }
+}
+
+/// A grown plant's mesh (`forge_flora`, D-063), a tree's few thousand triangles and a shrub's a
 /// few hundred, the full graph's being 2 000 to 250 000: a tree's wood 5 cm thick or more as
 /// tapered limbs (section 0; a shrub's twigs hide in its leaves), its leaf clusters gathered
-/// on a grid of a sixth of its crown's width (a third of a shrub's) or a tenth of its height,
-/// whichever is larger (a cypress's narrow column took 50 000 triangles), each cell's into one lump
-/// at their middle (section 1; a shrub's of 20 triangles). The cells are keyed in order, so a
+/// on a grid of a sixth of its crown's width (an eighth of a broad-leaved tree's, a third of a
+/// shrub's) or a tenth of its height, whichever is larger (a cypress's narrow column took 50 000
+/// triangles), each cell's into one lump at their middle: a core of 20 triangles (section 1) in
+/// leaf cards cut from `spray` (section 2, [`leaf_cards`]). The cells are keyed in order, so a
 /// plant's mesh is the same from run to run.
-fn grown_mesh(g: &forge_flora::graph::TreeGraph, shrub: bool, broad: bool, lift: f32) -> TriMesh {
+fn grown_mesh(
+    g: &forge_flora::graph::TreeGraph,
+    shrub: bool,
+    broad: bool,
+    lift: f32,
+    spray: textures::LeafSpray,
+) -> TriMesh {
     let mut mesh = TriMesh::default();
     let width = g.crown_width();
     let cell = (width
@@ -5591,16 +5640,116 @@ fn grown_mesh(g: &forge_flora::graph::TreeGraph, shrub: bool, broad: bool, lift:
         e.1 += 1;
         e.2 = e.2.max(l.size);
     }
-    let faces = if shrub { icosahedron() } else { icosphere() };
+    let faces = icosahedron();
     let mean = g.leaves.len() as f32 / cells.len().max(1) as f32;
-    for (i, (sum, n, size)) in cells.into_values().enumerate() {
-        let radius = cell * (0.45 + 0.35 * (n as f32 / mean).sqrt().min(1.6)) + size * 0.3;
-        // Kept over a lifted crown's clear trunk: a lump round a low cluster hung below it.
-        let mut centre = sum / n as f32;
-        centre.y = centre.y.max(lift + radius * 0.7);
-        lump_of(&mut mesh, centre, radius, i as u32 % 8, &faces);
+    let lumps: Vec<(Vec3, f32)> = cells
+        .into_values()
+        .map(|(sum, n, size)| {
+            let radius = cell * (0.45 + 0.35 * (n as f32 / mean).sqrt().min(1.6)) + size * 0.3;
+            // Kept over a lifted crown's clear trunk: a lump round a low cluster hung below it.
+            let mut centre = sum / n as f32;
+            centre.y = centre.y.max(lift + radius * 0.7);
+            (centre, radius)
+        })
+        .collect();
+    // The crown's middle, which the cards' normals bend away from with their lump's.
+    let middle = lumps.iter().fold(Vec3::ZERO, |s, l| s + l.0) / lumps.len().max(1) as f32;
+    for (i, &(centre, radius)) in lumps.iter().enumerate() {
+        // A core of half the lump, the shade the cards hide and the far crown keeps
+        // (it simplifies as a closed mesh; the cards cannot), then the cards round it.
+        lump_of(&mut mesh, centre, radius * CROWN_CORE, i as u32 % 8, &faces);
+        leaf_cards(&mut mesh, centre, radius, middle, spray, shrub, i as u32);
     }
+    let missing = mesh.positions.len() - mesh.uvs.len();
+    mesh.uvs.extend(std::iter::repeat_n([0.0, 0.0], missing));
     mesh
+}
+
+/// A crown lump's core, as a share of the lump's radius ([`grown_mesh`]): half, drawn darker,
+/// the shade between the cards (at 0.6 in the leaves' colour its smooth faces showed through).
+const CROWN_CORE: f32 = 0.5;
+
+/// Leaf cards round a crown's lump at `centre`, `radius` across (D-013), section 2, cut from
+/// `spray`'s quarter of the leaf atlas (`textures::leaves`): 6 to 12 squares (a shrub's 4),
+/// their middles 0.4 to 0.7 radii out along directions spread over the sphere and turned by
+/// `seed`, facing out with a tilt, their sprays growing upwards. Their normals bend out from the
+/// crown's `middle` and the lump's, so the crown is lit as a rounded mass of leaves.
+fn leaf_cards(
+    mesh: &mut TriMesh,
+    centre: Vec3,
+    radius: f32,
+    middle: Vec3,
+    spray: textures::LeafSpray,
+    shrub: bool,
+    seed: u32,
+) {
+    let ([u0, v0], [u1, v1]) = spray.uv_box();
+    // Leaves near their own size: a card's half side at most 0.6 m for broad leaves (a plane's
+    // 20–25 cm), 0.4 m for small and narrow ones, 0.5 m for needles; a card of 0.75 lump radii
+    // drew a plane's leaves 40–60 cm wide by the eye. More cards where they are smaller, so the
+    // lump keeps its cover.
+    let cap = match spray {
+        textures::LeafSpray::Broad => 0.6,
+        textures::LeafSpray::Needles => 0.5,
+        textures::LeafSpray::Small | textures::LeafSpray::Narrow => 0.4,
+    };
+    let half = (radius * 0.75).min(cap);
+    let count = if shrub {
+        4
+    } else {
+        (6.0 * (radius * 0.75 / half).powi(2))
+            .round()
+            .clamp(6.0, 12.0) as u32
+    };
+    let random = |k: u32, salt: u32| {
+        let h = (seed.wrapping_mul(0x9E37_79B9) ^ k.wrapping_mul(0x85EB_CA6B) ^ salt)
+            .wrapping_mul(0xC2B2_AE35);
+        ((h ^ (h >> 15)) & 0xFFFF) as f32 / 65535.0
+    };
+    let golden = std::f32::consts::PI * (3.0 - 5.0_f32.sqrt());
+    let spin = random(0, 1) * std::f32::consts::TAU;
+    for k in 0..count {
+        // A Fibonacci spiral over the sphere.
+        let y = 1.0 - 2.0 * (k as f32 + 0.5) / count as f32;
+        let ring = (1.0 - y * y).max(0.0).sqrt();
+        let a = spin + golden * k as f32;
+        let out = Vec3::new(ring * a.cos(), y, ring * a.sin());
+        let tilt = out.any_orthonormal_vector();
+        let tilt = (tilt * (random(k, 2) - 0.5) + out.cross(tilt) * (random(k, 3) - 0.5)) * 1.2;
+        let normal = (out + tilt).normalize();
+        // The spray grows upwards, turned a little about the card's normal.
+        let level = Vec3::Y - normal * normal.dot(Vec3::Y);
+        let up = if level.length_squared() > 1e-4 {
+            level.normalize()
+        } else {
+            normal.any_orthonormal_vector()
+        };
+        let turn = (random(k, 4) - 0.5) * 1.4;
+        let up = glam::Quat::from_axis_angle(normal, turn) * up;
+        let side = up.cross(normal);
+        let at =
+            centre + Vec3::new(out.x, out.y * 0.85, out.z) * radius * (0.4 + 0.3 * random(k, 5));
+        let corners = [
+            (at - up * half - side * half, [u0, v1]),
+            (at - up * half + side * half, [u1, v1]),
+            (at + up * half + side * half, [u1, v0]),
+            (at + up * half - side * half, [u0, v0]),
+        ];
+        let missing = mesh.positions.len() - mesh.uvs.len();
+        mesh.uvs.extend(std::iter::repeat_n([0.0, 0.0], missing));
+        let base = mesh.positions.len() as u32;
+        for (p, uv) in corners {
+            let bent = ((p - middle).normalize_or_zero() + (p - centre).normalize_or_zero())
+                .normalize_or(normal);
+            mesh.positions.push(p.to_array());
+            mesh.normals.push(bent.to_array());
+            mesh.uvs.push(uv);
+        }
+        // Counter-clockwise seen from the normal's side.
+        mesh.indices
+            .extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+        mesh.sections.extend([2, 2]);
+    }
 }
 
 /// A triangle with a normal per corner, turned so it faces along their sum.
@@ -6020,7 +6169,7 @@ mod tests {
     use forge_procgen::city::{example, plan};
 
     /// The forest's grown plants keep to their budgets: a tree 40 000 triangles at most, a
-    /// shrub 1 000 (the full graphs' run to 250 000).
+    /// shrub 1 500 (the full graphs' run to 250 000).
     #[test]
     fn the_grown_plants_keep_their_budgets() {
         for (sp, s) in forge_flora::species::mediterranean().iter().enumerate() {
@@ -6029,8 +6178,14 @@ mod tests {
             for k in 0..FLORA_INDIVIDUALS {
                 let conditions = flora_conditions(s, sp as u16, k);
                 let g = forge_flora::grow::grow(s, &conditions);
-                let m = grown_mesh(&g, shrub, broad, conditions.pruning.lift as f32);
-                let budget = if shrub { 1_000 } else { 40_000 };
+                let m = grown_mesh(
+                    &g,
+                    shrub,
+                    broad,
+                    conditions.pruning.lift as f32,
+                    leaf_spray(&s.id),
+                );
+                let budget = if shrub { 1_500 } else { 40_000 };
                 println!("{} {k}: {} triangles", s.id, m.triangle_count());
                 assert!(
                     m.triangle_count() > 0 && m.triangle_count() <= budget,
