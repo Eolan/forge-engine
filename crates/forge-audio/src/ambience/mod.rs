@@ -32,7 +32,7 @@ use std::sync::Arc;
 use glam::Vec3;
 
 pub use beds::{Bed, BedControl, BedKind, Texture};
-pub use recordings::{BirdCalls, Species};
+pub use recordings::{BirdCalls, CicadaSong, Species};
 
 use crate::decode::DecodeError;
 use crate::dsp::{BusFilter, ReverbParams};
@@ -209,6 +209,8 @@ pub fn targets(state: &AmbienceState) -> [BedTarget; 6] {
 pub struct AmbienceAssets {
     /// Recorded birds ([`BirdCalls::load`]): the birds bed sings them when they are here.
     pub birds: Option<Arc<BirdCalls>>,
+    /// Recorded cicadas ([`CicadaSong::load`]): the cicada bed layers them into its chorus.
+    pub cicadas: Option<Arc<CicadaSong>>,
 }
 
 impl AmbienceAssets {
@@ -216,8 +218,10 @@ impl AmbienceAssets {
     /// mixer at `rate`: what is there, nothing when nothing is.
     pub fn load(dir: impl AsRef<std::path::Path>, rate: u32) -> Result<Self, DecodeError> {
         let birds = BirdCalls::load(dir.as_ref().join("birds"), rate)?;
+        let cicadas = CicadaSong::load(dir.as_ref().join("cicadas"), rate)?;
         Ok(Self {
             birds: birds.map(Arc::new),
+            cicadas: cicadas.map(Arc::new),
         })
     }
 }

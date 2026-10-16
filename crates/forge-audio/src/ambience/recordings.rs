@@ -1,7 +1,9 @@
-//! Recorded birds: calls cut out of field recordings, for the birds bed to play.
+//! Recorded birds and cicadas: calls cut out of field recordings for the birds bed, and a
+//! cicada song for the cicada bed to layer into a chorus ([`CicadaSong`]).
 //!
 //! The recordings are not in the repository: `tools/fetch-sounds.sh` fetches them into
-//! `assets/sounds/birds/` (CC0 and CC BY from Wikimedia Commons, `assets/sounds.tsv`). When
+//! `assets/sounds/birds/` and `assets/sounds/cicadas/` (public domain, CC0 and CC BY from
+//! Wikimedia Commons, `assets/sounds.tsv`). When
 //! they are there, [`BirdCalls::load`] decodes each, folds it to mono, resamples it to the
 //! mixer's rate, high-passes it above the species' song (the wind and the traffic of the
 //! recording go), and cuts it into calls where its level stands 12 dB over the recording's
@@ -171,6 +173,44 @@ pub fn resample(x: &[f32], from: u32, to: u32) -> Vec<f32> {
             ((w * t + v) * t + c) * t + x0
         })
         .collect()
+}
+
+/// The cicadas' recording's file in `assets/sounds/cicadas/`.
+pub const CICADA_FILE: &str = "orni.ogg";
+
+/// A recording of cicadas singing, for the cicada bed to layer into a chorus: mono at the
+/// mixer's rate, high-passed at 1.5 kHz (the river and the wind of the recording go; *Cicada
+/// orni* sings from 2.2 kHz), its level brought to −23 dBFS RMS.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CicadaSong {
+    /// The mixer's rate, frames a second.
+    pub rate: u32,
+    /// The samples.
+    pub samples: Arc<[f32]>,
+}
+
+impl CicadaSong {
+    /// The recording in `dir` (`assets/sounds/cicadas/`) for a mixer at `rate`; `Ok(None)`
+    /// when it is not there.
+    pub fn load(dir: impl AsRef<Path>, rate: u32) -> Result<Option<CicadaSong>, DecodeError> {
+        let path = dir.as_ref().join(CICADA_FILE);
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let sound = decode::load(&path)?;
+        let mut mono = resample(&fold(sound.samples(), sound.channels()), sound.rate(), rate);
+        high_pass(&mut mono, 1500.0, rate);
+        let energy: f64 =
+            mono.iter().map(|&v| v as f64 * v as f64).sum::<f64>() / mono.len().max(1) as f64;
+        let scale = (0.07 / energy.sqrt().max(1e-9)) as f32;
+        for v in &mut mono {
+            *v *= scale;
+        }
+        Ok(Some(CicadaSong {
+            rate,
+            samples: mono.into(),
+        }))
+    }
 }
 
 /// A fourth-order Butterworth high-pass at `cutoff`, in place.

@@ -387,9 +387,14 @@ commands (one a line); a line `now:` names each sound as it comes or goes:
         // otherwise.
         let assets = AmbienceAssets::load("assets/sounds", rate).unwrap_or_default();
         println!(
-            "birds: {}",
+            "birds: {}; cicadas: {}",
             if assets.birds.is_some() {
-                "recorded (assets/sounds/)"
+                "recorded"
+            } else {
+                "made in code"
+            },
+            if assets.cicadas.is_some() {
+                "recorded"
             } else {
                 "made in code (tools/fetch-sounds.sh fetches the recordings)"
             }

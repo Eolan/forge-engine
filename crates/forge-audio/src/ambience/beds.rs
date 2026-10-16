@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use forge_core::SplitMix64;
 
 use super::AmbienceAssets;
-use super::recordings::{BirdCalls, Species};
+use super::recordings::{BirdCalls, CicadaSong, Species};
 use crate::decode::{DecodeError, Decoder};
 use crate::dsp::synth::{
     Grain, LowPass4, Oscillator, PinkNoise, Resonator, log_uniform, poisson_wait, white,
@@ -128,6 +128,9 @@ impl BedKind {
     pub fn texture_with(self, seed: u64, rate: u32, assets: &AmbienceAssets) -> Box<dyn Texture> {
         if let (BedKind::Birds, Some(recorded)) = (self, &assets.birds) {
             return Box::new(Birds::with_recordings(seed, rate, recorded.clone()));
+        }
+        if let (BedKind::Cicadas, Some(song)) = (self, &assets.cicadas) {
+            return Box::new(RecordedCicadas::new(seed, rate, song.clone()));
         }
         match self {
             BedKind::Wind => Box::new(Wind::new(seed, rate)),
@@ -549,6 +552,123 @@ impl Texture for Cicadas {
                 let y = s.resonators[0].tick(pulse) + s.resonators[1].tick(pulse);
                 left[i] += y * s.gains[0];
                 right[i] += y * s.gains[1];
+            }
+        }
+    }
+}
+
+/// One singer of the recorded chorus: the recording read from its own place, at its own
+/// pitch, place and distance, in its own bouts.
+struct Layer {
+    threshold: f32,
+    pos: f64,
+    step: f64,
+    gains: [f32; 2],
+    dull: [OnePole; 2],
+    presence: f32,
+    bout: f32,
+    pause: f32,
+}
+
+/// The cicadas from a recording: up to six singers, each the recording read from its own
+/// place (so no two are in step), at its own pitch (±4 %), place and distance (two in the
+/// middle distance first, the near one third, then three far and dulled), singing in bouts of 15 to 60 s with pauses
+/// of 2 to 10 s. The intensity (0 to 1) sets how many sing, as for the cicadas made in code;
+/// the recording loops with an equal-power seam of two seconds.
+pub struct RecordedCicadas {
+    rng: SplitMix64,
+    rate: u32,
+    song: Arc<[f32]>,
+    seam: usize,
+    layers: Vec<Layer>,
+}
+
+impl RecordedCicadas {
+    /// From `seed`, singing `song` (made for this `rate`).
+    pub fn new(seed: u64, rate: u32, song: Arc<CicadaSong>) -> Self {
+        let mut rng = SplitMix64::new(seed);
+        let samples = song.samples.clone();
+        let len = samples.len().max(2);
+        let ratio = song.rate as f64 / rate as f64;
+        let near = [0.55, 0.45, 1.0, 0.3, 0.25, 0.2];
+        let thresholds = [0.0, 0.15, 0.3, 0.5, 0.65, 0.8];
+        let layers = (0..6)
+            .map(|k| {
+                let distance = near[k];
+                let cutoff = 5000.0 + 7000.0 * distance;
+                Layer {
+                    threshold: thresholds[k],
+                    pos: rng.range_f64(0.0, len as f64 * 0.9),
+                    step: ratio * rng.range_f64(0.96, 1.04),
+                    gains: pan_gains(rng.range_f32(-0.8, 0.8)).map(|g| g * distance),
+                    dull: [OnePole::new(cutoff, rate); 2],
+                    presence: 0.0,
+                    bout: rng.range_f32(15.0, 60.0),
+                    pause: 0.0,
+                }
+            })
+            .collect();
+        Self {
+            rng,
+            rate,
+            seam: ((2 * rate) as usize).min(len / 3),
+            song: samples,
+            layers,
+        }
+    }
+}
+
+impl Texture for RecordedCicadas {
+    fn render(&mut self, activity: f32, left: &mut [f32], right: &mut [f32]) {
+        let n = left.len();
+        let block = n as f32 / self.rate as f32;
+        let song = &self.song;
+        let len = song.len();
+        let seam = self.seam;
+        if len < 2 * seam.max(2) {
+            return;
+        }
+        let read = |p: f64| -> f32 {
+            let k = (p as usize).min(len - 2);
+            let t = (p - k as f64) as f32;
+            song[k] + (song[k + 1] - song[k]) * t
+        };
+        for layer in &mut self.layers {
+            if layer.pause > 0.0 {
+                layer.pause -= block;
+            } else {
+                layer.bout -= block;
+                if layer.bout <= 0.0 {
+                    layer.pause = self.rng.range_f32(2.0, 10.0);
+                    layer.bout = self.rng.range_f32(15.0, 60.0);
+                }
+            }
+            let goal = if activity > layer.threshold && layer.pause <= 0.0 {
+                1.0
+            } else {
+                0.0
+            };
+            let from = layer.presence;
+            layer.presence += (goal - layer.presence).clamp(-block, block);
+            if from == 0.0 && layer.presence == 0.0 {
+                continue;
+            }
+            let tail = (len - seam) as f64;
+            for i in 0..n {
+                let g = from + (layer.presence - from) * (i + 1) as f32 / n as f32;
+                let p = layer.pos;
+                let mut x = read(p);
+                // The loop's seam: the end fades out as the start fades in.
+                if p >= tail {
+                    let u = ((p - tail) / seam as f64) as f32 * std::f32::consts::FRAC_PI_2;
+                    x = x * u.cos() + read(p - tail) * u.sin();
+                }
+                left[i] += g * layer.gains[0] * layer.dull[0].tick(x);
+                right[i] += g * layer.gains[1] * layer.dull[1].tick(x);
+                layer.pos += layer.step;
+                if layer.pos >= (len - 1) as f64 {
+                    layer.pos -= tail;
+                }
             }
         }
     }

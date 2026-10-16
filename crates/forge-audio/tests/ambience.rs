@@ -513,3 +513,53 @@ fn cicadas_stop_in_rain_and_stay_quiet_while_it_is_wet() {
     assert!(cicadas(9.0) < 0.15, "{}", cicadas(9.0));
     assert_eq!(cicadas(10.0), 0.0);
 }
+
+#[test]
+fn recorded_cicadas_sing_as_a_chorus() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/sounds");
+    let assets = forge_audio::ambience::AmbienceAssets::load(dir, RATE).expect("it decodes");
+    let Some(song) = assets.cicadas.clone() else {
+        eprintln!("no cicada recording in assets/sounds/ (tools/fetch-sounds.sh): skipped");
+        return;
+    };
+    // Cicada orni's song: over a minute of it, centred near its measured peak (4.82 kHz).
+    assert!(song.samples.len() > 60 * RATE as usize);
+    let c = centroid(&song.samples, RATE);
+    assert!((4000.0..6500.0).contains(&c), "{c:.0} Hz");
+    let render = |activity: f32| {
+        let (mut bed, _control) = Bed::new_with(BedKind::Cicadas, 5, RATE, activity, &assets);
+        let mut out = vec![0.0f32; RATE as usize * 2 * 12];
+        bed.read(&mut out).unwrap();
+        // After the singers' first second of coming in.
+        out[RATE as usize * 4..].to_vec()
+    };
+    let one = render(0.05);
+    let all = render(1.0);
+    let (l1, r1) = (channel(&one, 0), channel(&one, 1));
+    let (la, ra) = (channel(&all, 0), channel(&all, 1));
+    // One singer's echemes repeat within the species' range (130 to 450 ms).
+    let env = envelope(&l1, RATE as usize / 200);
+    let mean = env.iter().sum::<f64>() / env.len() as f64;
+    let centred: Vec<f64> = env.iter().map(|e| e - mean).collect();
+    let lags: Vec<f64> = (0..100)
+        .map(|k| centred.iter().zip(&centred[k..]).map(|(a, b)| a * b).sum())
+        .collect();
+    let cross = lags.iter().position(|&a| a < 0.0).unwrap();
+    let period = (cross..100)
+        .max_by(|&i, &j| lags[i].total_cmp(&lags[j]))
+        .unwrap() as f64
+        * 0.005;
+    assert!((0.13..=0.45).contains(&period), "{period} s");
+    // The full chorus: louder than one singer by over 4 dB, and spread between the ears.
+    assert!(
+        db(rms(&la) / rms(&l1)) > 4.0,
+        "{:.1} dB",
+        db(rms(&la) / rms(&l1))
+    );
+    assert!(correlation(&la, &ra) < correlation(&l1, &r1));
+    for x in [&l1, &la] {
+        let worst = worst_window_above_db(x, 16_000.0, RATE);
+        assert!(worst < -25.0, "{worst:.1} dB");
+    }
+    assert_eq!(render(1.0), all);
+}
