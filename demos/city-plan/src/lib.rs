@@ -72,6 +72,10 @@ const ROOF_SOLAR: u8 = 6;
 const ROOF_TERRACE: u8 = 7;
 /// The kit's merged sections on the masses: four render tints, stone, party walls.
 const KIT_PLASTER: u8 = 8;
+/// The insides' walls and ceilings: the white render, whitewash, whatever the facade's tint.
+/// In the facade's sand, ochre or rose, the daylight bouncing round a room took the colour at
+/// every bounce, and the halls read orange.
+const KIT_INSIDE: u8 = KIT_PLASTER + 3;
 const KIT_STONE: u8 = 12;
 const KIT_PARTY: u8 = 13;
 /// The tiled roofs' section on the masses.
@@ -2662,7 +2666,7 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
         let at = |q: DVec2, h: f64| world(size, q, h) - centre;
         let mesh = &mut tile.masses;
         let before = mesh.indices.len();
-        let plaster = KIT_PLASTER + tint_of(m.lot);
+        let plaster = KIT_INSIDE;
         let top = m.height;
         let mut deepest: f64 = 0.2;
         for (w, wall) in s.walls.iter().enumerate() {

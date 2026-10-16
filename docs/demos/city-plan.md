@@ -709,7 +709,12 @@ else of it shows from outside (the sandbox's day check differs by a ꟻLIP mean 
 most, scattered over the far city: the probes inside the buildings no longer see the sky
 through their walls' backs), and inside a building one sees a dark room (the sandbox's
 `reports/2026-10-15/owner-views/inside/`, before and after). The sandbox's 4 205 kit buildings
-take 143 k triangles for it, and the view inside one draws in 2.20 ms as before (2.21).
+take 143 k triangles for it, and the view inside one draws in 2.20 ms as before (2.21). The
+inner faces and ceilings are whitewashed, the white render whatever the facade's tint (also
+2026-10-16): in the facade's sand, ochre or rose the daylight that bounces round a closed room
+took the colour at each bounce, and the village's halls read a saturated orange
+(`KIT_INSIDE`; the map check's hall, room and way-in views moved by ꟻLIP means of 0.14–0.23,
+the street views by 0.001–0.007).
 The windows show nothing from inside yet (the glass is drawn for the street), and the far
 masses beyond the kit's reach stay hollow; going inside builds the real rooms (step 3).
 
