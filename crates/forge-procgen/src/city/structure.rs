@@ -353,10 +353,16 @@ pub fn storeys(era: Era, heights: &[f64]) -> Vec<Storey> {
 pub fn structures(plan: &CityPlan, masses: &[Mass]) -> Vec<Structure> {
     let kinds = edge_kinds(plan, masses);
     let index = MassIndex::new(masses);
-    let mut out: Vec<Structure> = masses
-        .iter()
-        .enumerate()
-        .map(|(i, m)| structure(plan, masses, &index, &kinds[i], i, era_of(plan, m), &[]))
+    // Each mass's structure on the machine's threads, in the masses' order: the city's 11 837
+    // took 0.8 s of one thread before its window opened (#274).
+    let mut made: Vec<Option<Structure>> = (0..masses.len()).map(|_| None).collect();
+    forge_task::TaskPool::client().par_map_into(&mut made, 16, |i| {
+        let era = era_of(plan, &masses[i]);
+        Some(structure(plan, masses, &index, &kinds[i], i, era, &[]))
+    });
+    let mut out: Vec<Structure> = made
+        .into_iter()
+        .map(|s| s.expect("every mass's structure"))
         .collect();
     // The passages into the courts: a core standing in a passage's way moves aside (it took the
     // only place for one, and a court went unreached).
@@ -420,18 +426,22 @@ pub fn structures(plan: &CityPlan, masses: &[Mass]) -> Vec<Structure> {
     let flats = super::gardens::flats(plan, masses, &out);
     super::gardens::glaze(&mut out, &flats);
     // The flats round the cores, once the doors and the passages are settled, and the net area
-    // again (a dropped core gave its floor back).
-    for (i, s) in out.iter_mut().enumerate() {
-        let m = &masses[i];
-        let thickness: Vec<f64> = s.walls.iter().map(|w| w.thickness).collect();
-        let inside = floor(m, &thickness);
-        (s.gross, s.net) = areas(m, s.era, &s.walls, inside.as_deref(), &s.cores);
-        if let Some(f) = &inside {
-            let seed = (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
-            let (u, l) = units::units(m, s, f, s.era.table().partitions, seed);
-            (s.units, s.landings) = (u, l);
+    // again (a dropped core gave its floor back): each mass's on the machine's threads (#274).
+    const PER_CHUNK: usize = 16;
+    forge_task::TaskPool::client().par_chunks_mut(&mut out, PER_CHUNK, |chunk, structures| {
+        for (k, s) in structures.iter_mut().enumerate() {
+            let i = chunk * PER_CHUNK + k;
+            let m = &masses[i];
+            let thickness: Vec<f64> = s.walls.iter().map(|w| w.thickness).collect();
+            let inside = floor(m, &thickness);
+            (s.gross, s.net) = areas(m, s.era, &s.walls, inside.as_deref(), &s.cores);
+            if let Some(f) = &inside {
+                let seed = (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+                let (u, l) = units::units(m, s, f, s.era.table().partitions, seed);
+                (s.units, s.landings) = (u, l);
+            }
         }
-    }
+    });
     out
 }
 
@@ -1107,6 +1117,9 @@ pub fn court_access(plan: &CityPlan, masses: &[Mass], structures: &[Structure]) 
     (courts.len(), reached)
 }
 
+/// A block's doors no one reaches, as (mass, opening), and the block if its court is out of reach.
+type BlockUnreached = (Vec<(u32, usize)>, Option<u32>);
+
 /// What someone on foot cannot reach from the streets (the owner: emulate people's routines and
 /// see what blocks them): each door whose step outside is shut off, as (mass, opening), and each
 /// block whose court no one can walk into. Block by block, the ground on a grid of
@@ -1127,9 +1140,13 @@ pub fn unreached(
     }
     let mut blocks: Vec<u32> = by_block.keys().copied().collect();
     blocks.sort_unstable();
-    let (mut doors, mut courts) = (Vec::new(), Vec::new());
     let c = REACH_CELL;
-    for b in blocks {
+    // A block's doors no one reaches, and itself if its court is out of reach. Each on the
+    // machine's threads, the results in the blocks' order: the city's took 0.28 s of one thread
+    // (#274).
+    let block_unreached = |b: u32| {
+        let mut doors = Vec::new();
+        let mut closed = None;
         let block = &plan.blocks[b as usize];
         let list = &by_block[&b];
         // The block and a street's width round it.
@@ -1270,9 +1287,17 @@ pub fn unreached(
                 }
             });
             if open > 0 && reached == 0 {
-                courts.push(b);
+                closed = Some(b);
             }
         }
+        (doors, closed)
+    };
+    let mut found: Vec<BlockUnreached> = vec![Default::default(); blocks.len()];
+    forge_task::TaskPool::client().par_map_into(&mut found, 1, |j| block_unreached(blocks[j]));
+    let (mut doors, mut courts) = (Vec::new(), Vec::new());
+    for (block_doors, closed) in found {
+        doors.extend(block_doors);
+        courts.extend(closed);
     }
     (doors, courts)
 }
