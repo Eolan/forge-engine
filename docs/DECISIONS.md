@@ -4483,3 +4483,34 @@ recommended; or EmberGen; or downloads).
 particle); a shadow ray per pixel (one a particle suits sprites); per-pixel linked lists or
 moment-based OIT (memory and bandwidth the village's few emitters do not need); smoke simulated
 at run time (a hero effect later).
+
+## D-065 — Lighting the insides: lamps by clustered lists until ReSTIR's patents are settled 🟡 (proposed 2026-10-16, #270)
+
+**The question:** how the village's entered houses are lit (#270): lamps, the rooms' bounce
+light, windows seen from inside. Research: `research/interior-lighting.md`.
+
+**The patent question first.** D-008 (✅ 2026-09-24) chose ReSTIR for direct light in the
+ray-traced tiers, before the owner's rule of 2026-10-10. NVIDIA holds US 11,315,310 B2 on reservoir
+resampling with a global-illumination structure (active to about 2041, with later filings in its
+family); whether a patent covers ReSTIR's direct-light method alone was not settled. Building on
+ReSTIR waits on the owner's word.
+
+**Proposed:**
+1. **Lamps by clustered light lists** (Olsson et al. 2012, no patent found): each pixel picks one of
+   its cluster's lights by its unshadowed contribution and traces one shadow ray; accumulated in
+   time and denoised (NRD's diffuse denoiser, to integrate). A village's room has one to four
+   lamps, so a pixel has a handful of candidates.
+2. **Lamps as data:** a ceiling lamp a room and one by each bed and sofa (`city::furnish`), in
+   candelas and kelvin, lit from the households' routines as the faked windows are.
+3. **Probes for rooms:** a finer finest cascade on walked-in maps (2 m, or 1 m round the walker, as
+   the models lab's rooms), measured against today's 4 m; the probes' hits lit by the lamps.
+4. **Glass both ways** for the near houses with drawn insides; the far ones keep their faked rooms.
+5. **Checks:** a night time in the map check's inside views, the shimmer scripts, the F1 overlay
+   and `PROFILE.md`.
+
+**For the owner to decide:** whether to take ReSTIR (D-008) despite NVIDIA's patents, or the
+clustered lists proposed here; and the order of the four parts.
+
+*Not chosen for now:* a light tree sampled stochastically (Moreau et al. 2019: thousands of lights
+are more than a village needs, its patents not searched); lamps as emissive surfaces only (no
+shadows, no light on the walls).
