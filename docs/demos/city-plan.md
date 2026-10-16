@@ -711,8 +711,11 @@ A camera through a wall saw the city beyond the culled walls, the neighbours' pa
 as if outdoors with the sun's shadows blurred over them, and the block's grass for a floor (the
 owner, 2026-10-15: "many useless things rendered inside the empty buildings"; the second
 flight's item 21). Since 2026-10-16 the kit's buildings carry their insides (`insides`): each
-street, court and party wall's inner face at the wall's thickness, run the thickness past each
-end so two meet at a corner; a stone floor a storey (the ground floor a hand over the block's
+street, court and party wall's inner face at the wall's thickness, run past an end only at a
+concave corner, by the thickness of the wall it meets there (run past every end by its own
+thickness, a side wall's face stood out of the facade into the street, the pale upright strip
+beside a door the owner asked about, 2026-10-16: `reports/2026-10-16/village-inner-corners.png`);
+a stone floor a storey (the ground floor a hand over the block's
 ground) and a plaster ceiling under each slab and under the roof, on the footprint inset by
 the thickest wall. Over a passage into the court the face starts at the passage's head and the
 ground floor keeps clear of the passage's width (whole, they closed every passage behind its

@@ -2708,12 +2708,31 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
             let t = (wall.b - wall.a).normalize_or_zero();
             let inward = DVec2::new(-t.y, t.x);
             let normal = Vec3::new(-t.y as f32, 0.0, t.x as f32);
-            // The face from `from` to `to` along the wall, `y0` to `y1`: it runs the wall's
-            // thickness past the wall's ends, so two faces meeting at a corner cover it.
+            // How far the face runs past an end: at a concave corner (the footprint turns right
+            // there, it winds anticlockwise), the thickness of the wall it meets, so the two
+            // faces reach each other; at a convex corner not at all, its end then on that wall's
+            // outer face. Run past its ends at every corner by its own thickness, a side wall's
+            // face stood out of the facade into the street, a pale upright strip beside the
+            // doors (the owner, 2026-10-16).
+            let n = s.walls.len();
+            let along = |k: usize| (s.walls[k].b - s.walls[k].a).normalize_or_zero();
+            let (prev, next) = ((w + n - 1) % n, (w + 1) % n);
+            let run_a = if along(prev).perp_dot(t) < -1e-6 {
+                s.walls[prev].thickness.max(0.2)
+            } else {
+                0.0
+            };
+            let run_b = if t.perp_dot(along(next)) < -1e-6 {
+                s.walls[next].thickness.max(0.2)
+            } else {
+                0.0
+            };
+            // The face from `from` to `to` along the wall, `y0` to `y1`.
             let mut face = |from: f64, to: f64, y0: f64, y1: f64| {
-                let past = |end: bool| if end { t * deep } else { DVec2::ZERO };
-                let p = wall.a + t * from + inward * deep - past(from <= 0.0);
-                let q = wall.a + t * to + inward * deep + past(to >= wall.length());
+                let start = if from <= 0.0 { run_a } else { 0.0 };
+                let end = if to >= wall.length() { run_b } else { 0.0 };
+                let p = wall.a + t * (from - start) + inward * deep;
+                let q = wall.a + t * (to + end) + inward * deep;
                 let (l, h) = ((p.distance(q) / 3.0) as f32, ((y1 - y0) / 3.0) as f32);
                 triangle_uv(
                     mesh,
