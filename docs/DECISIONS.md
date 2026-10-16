@@ -4444,3 +4444,42 @@ village's trees and shrubs (#266) are grown, where they stand, and how the city'
 *Not chosen:* L-systems (a fixed topology that neither the light nor the neighbours shape);
 Weber–Penn's recursive levels as the generator (kept only as the idea of a flat species file);
 shadow propagation within one plant (the markers stand for both space and light at this scale).
+
+## D-064 — Particles: the splashes grown into emitters as data, lit per particle, textures baked by our own solver 🟡 (proposed 2026-10-16, D-062's next core step after the flora)
+
+**The question:** how the mission maps' effects are made (a chimney's smoke, dust under the
+steps, falling leaves; later sparks, fire and rain). Research: `research/particles.md`.
+
+**Proposed:**
+1. **Emitters as data** in `forge-render`, grown from the splashes (#107): a TOML record each
+   (spawn, life, size and colour over life, forces: gravity, drag, wind, curl noise; collision;
+   how it is drawn), simulated on the async compute queue from deterministic streams (each
+   particle's birth time and random numbers from its emitter's seed and index), so captures stay
+   exact.
+2. **Collisions** against the depth buffer, D-034's depth from above, and the TLAS for sparks and
+   debris.
+3. **Drawing:** soft sprites, velocity streaks, flipbooks blended by motion vectors, six-way lit
+   smoke; additive effects unsorted, alpha-blended ones sorted per emitter (weighted blended OIT
+   where emitters overlap heavily); smoke and dust also written into the dust's froxel volume
+   (D-032), which casts their shadows.
+4. **Lighting per particle:** one sun ray a particle a frame against the TLAS, the GI probes at its
+   centre. Particles are not put in the TLAS.
+5. **Upscalers:** the particles' pixels in the reactive mask TAA reads, passed to DLSS as its
+   transparency mask.
+6. **Textures baked by our own offline solver:** a small stable-fluids smoke solver (Stam 1999;
+   US 6,266,071 expired in 2018), rendered from six light directions with its velocities as the
+   motion vectors. EmberGen (a purchase) or downloaded sets only on the owner's go.
+7. **First effects:** chimney smoke at dusk, footstep dust (D-012's foot-down events), falling
+   leaves; each in the F1 overlay and `PROFILE.md`, with the still-camera and dolly shimmer checks.
+
+**Patents:** none found on GPU particle simulation or sorting, six-way lighting or weighted blended
+OIT. Pixelworks' US 11,941,744 B2 (motion vectors for frame interpolation, active to 2042) does not
+cover flipbooks, and nothing proposed uses it.
+
+**For the owner to decide:** the scope above, and where the textures come from (our own solver,
+recommended; or EmberGen; or downloads).
+
+*Not chosen:* particles in the TLAS (their reflections are rarely seen, their cost grows with each
+particle); a shadow ray per pixel (one a particle suits sprites); per-pixel linked lists or
+moment-based OIT (memory and bandwidth the village's few emitters do not need); smoke simulated
+at run time (a hero effect later).
