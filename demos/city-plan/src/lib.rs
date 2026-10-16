@@ -1062,7 +1062,7 @@ impl PlanScenario {
             trunks.insert(t.pos, 0);
         }
         // The forest's plants by species, each one of its species' three grown individuals.
-        let flora: Vec<(Vec3, f32, f32, f32, u16, u8)> = trees
+        let mut flora: Vec<(Vec3, f32, f32, f32, u16, u8)> = trees
             .iter()
             .filter_map(|&(i, t)| {
                 let species = t.species?;
@@ -1098,7 +1098,17 @@ impl PlanScenario {
         // [`PLANTS_REACH`] of the kit's centre, as small trees sunk in their boxes to the middle
         // of their crowns (7 of a tree's height's tenths up), the trunks hidden: the boxes' flat
         // green tops read as carpet, and standing on them the plants showed their trunks like
-        // bonsais. Further off, a pixel or two each, they speckled the facades' feet from the air.
+        // bonsais. Further off, a pixel or two each, they speckled the facades' feet from the
+        // air. The planters grow rosemary where the forest's species are drawn (D-063): the one
+        // model's smooth balls stood out beside the leaf cards.
+        let rosemary = (!flora.is_empty())
+            .then(|| {
+                forge_flora::species::mediterranean()
+                    .iter()
+                    .position(|s| s.id == "rosemary")
+                    .map(|i| i as u16)
+            })
+            .flatten();
         let mut plants = 0;
         for g in &gardens {
             let (spacing, crown, high, rows): (f64, f32, f32, &[f64]) = match g.kind {
@@ -1119,17 +1129,37 @@ impl PlanScenario {
             } else {
                 (e1, e0)
             };
+            // Rosemary closer, so the box reads full (a metre apart they stood as two clumps).
+            let spacing = if g.kind == gardens::Kind::Planter && rosemary.is_some() {
+                0.7
+            } else {
+                spacing
+            };
             let n = (long.length() / spacing).floor().max(1.0) as usize;
             for (r, &row) in rows.iter().enumerate() {
                 for j in 0..n {
                     let h = mix(k ^ (r as u64) << 16 ^ (j as u64) << 40);
                     let vary = 0.85 + 0.3 * (h & 0xFF) as f32 / 255.0;
                     let p = c + long * ((j as f64 + 0.5) / n as f64 - 0.5) + short * row;
+                    let turn = ((h >> 8) & 0xFFFF) as f32 / 65535.0 * std::f32::consts::TAU;
+                    if let (gardens::Kind::Planter, Some(sp)) = (g.kind, rosemary) {
+                        // A rosemary 0.9 m over the box's soil, 0.8 m across, its foot 10 cm in.
+                        flora.push((
+                            world(size, p, WALK_LEVEL + g.height - 0.1),
+                            1.0 * vary,
+                            0.4 * vary,
+                            turn,
+                            sp,
+                            ((h >> 24) & 0xFF) as u8 % FLORA_INDIVIDUALS,
+                        ));
+                        plants += 1;
+                        continue;
+                    }
                     let base = WALK_LEVEL + g.height - f64::from(6.6 * high * vary);
                     trees.push((
                         world(size, p, base),
                         Vec3::new(crown * vary, high * vary, crown * vary),
-                        ((h >> 8) & 0xFFFF) as f32 / 65535.0 * std::f32::consts::TAU,
+                        turn,
                         ((h >> 24) & 1) as usize,
                     ));
                     plants += 1;

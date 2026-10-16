@@ -416,7 +416,7 @@ limes, umbrella pines and holm oaks. The demo grows each species' individuals at
 half and all of its maturity and gives each plant the one nearest its height (a 10 m plane
 was the mature tree shrunk, a ball on a stem), the planted ones with their crowns lifted to 38 %
 of their height (half an umbrella pine's, 15 % an olive's) and their leaves' lumps kept above
-it. The one model is left only to the planters' shrubs; the map check's views take 2.2–2.8 ms. Only plans with a forest (the village's maps) get them: the 4 km city's thousands of street and park trees grown took 23–34 ms of GPU in the sandbox's day check where the one model takes 4.4–4.9, so the city keeps its one model until D-013's far tiers
+it. The one model is left only to the planters' shrubs (rosemary since the leaf cards, below); the map check's views take 2.2–2.8 ms. Only plans with a forest (the village's maps) get them: the 4 km city's thousands of street and park trees grown took 23–34 ms of GPU in the sandbox's day check where the one model takes 4.4–4.9, so the city keeps its one model until D-013's far tiers
 (`reports/2026-10-16/village-street-trees.png`, the walk under a plane's crown).
 
 **Leaf cards** (D-013, the same afternoon). Each lump is now a core and the cards round it.
@@ -436,6 +436,10 @@ it. The one model is left only to the planters' shrubs; the map check's views ta
   pixels under DLAA.
 - **Size:** a tree takes 900 to 23 000 triangles, a shrub 200 to 1 000 (the test's budget for a
   shrub is now 1 500).
+- **The planters** grow rosemary, 0.9 m over the soil and 0.8 m across, 0.7 m apart, where the
+  plan draws the forest's species: the one model's smooth balls stood out beside the cards
+  (`reports/2026-10-16/village-planter-rosemary.png`, before and after). The city's planters
+  keep the one model with the city's trees.
 
 | at 600 m | lumps | leaf cards |
 |---|---|---|
