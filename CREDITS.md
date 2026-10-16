@@ -73,6 +73,12 @@ This is a promise of intent, not a licence term.
 | [gltf](https://github.com/gltf-rs/gltf) | David Harvey-Macaulay and the gltf-rs contributors | reading glTF 2.0 models (`forge_geom::model`, #138) | MIT OR Apache-2.0 |
 | [zune-jpeg](https://github.com/etemesi254/zune-image) | Caleb Etemesi | the JPEG decoder under `image`, for the JPEG images models embed (D-047) | MIT OR Apache-2.0 OR Zlib |
 | [i_overlay](https://github.com/iShape-Rust/iOverlay) | Nail Sharipov and the iShape contributors | polygon booleans and strokes for the city's street ground (`forge_procgen::city::ground`, D-061): the streets' union, carriageways, crossings and blocks, in its integer mode | MIT OR Apache-2.0 |
+| [quinn](https://github.com/quinn-rs/quinn) | Benjamin Saunders, Dirkjan Ochtman and the quinn contributors | QUIC with its streams and datagrams (`forge-net`, D-010, #268); the link conditioner sits under its socket trait | MIT OR Apache-2.0 |
+| [rustls](https://github.com/rustls/rustls) | Joseph Birr-Pixton, Dirkjan Ochtman, Daniel McCarney, Josh Aas and the rustls contributors | TLS 1.3 under QUIC (`forge-net`) | Apache-2.0 OR ISC OR MIT |
+| [ring](https://github.com/briansmith/ring) | Brian Smith; parts from BoringSSL (Google) and OpenSSL | the TLS cryptography, and Ed25519 for the connection tokens (`forge_net::token`) | Apache-2.0 AND ISC |
+| [rcgen](https://github.com/rustls/rcgen) | est31 and the rustls contributors | self-signed server certificates made at run time (`forge_net::ServerIdentity`) | MIT OR Apache-2.0 |
+| [tokio](https://github.com/tokio-rs/tokio) | Carl Lerche and the tokio contributors | the network's I/O runtime (`forge-net`) | MIT |
+| [bytes](https://github.com/tokio-rs/bytes) | Carl Lerche, Sean McArthur and the tokio contributors | messages' buffers (`forge-net`) | MIT |
 | [Blender](https://www.blender.org/) | the Blender Foundation and its contributors | a tool, not in the build: `assets/blender/boat.py`, `car.py`, `plane.py` and `ship.py` model the lab's boat, car, aeroplane and spaceship in it and export them as glTF (#138, #140, #141, #150); `skinned_creatures.py` the mannequin and the dog as skinned bodies with their armatures, bone-heat weights and clips (#143, #165), unwrapped by its smart UV projection and their textures baked by Cycles (#166) | GPL-2.0-or-later (the tool; what it makes is ours) |
 
 ## Assets
@@ -425,6 +431,17 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   and Netcode", GDC 2017, and Jared Cone, "It IS Rocket Science! The Physics of Rocket League
   Detailed", GDC 2018: the predicted state taken back to the server's and run forward again
   (#137); Forge skips the replay when the snapshot's digest is the one predicted.
+- **QUIC.** Jana Iyengar, Martin Thomson (eds.), RFC 9000, 2021; Martin Thomson, Sean Turner,
+  RFC 9001; Tommy Pauly, Eric Kinnear, David Schinazi, RFC 9221 (unreliable datagrams), 2022:
+  the transport under `forge-net` (#268).
+- **Connection tokens.** Glenn Fiedler, the netcode 1.02 standard (`mas-bandwidth/netcode`): a
+  short-lived token naming the client, its servers and their times, issued by a web login and
+  checked by the game server offline (`forge_net::token`, #268), signed here with Ed25519
+  (Daniel J. Bernstein, Niels Duif, Tanja Lange, Peter Schwabe, Bo-Yin Yang, "High-speed
+  high-security signatures", 2011; RFC 8032).
+- **Fragments.** Glenn Fiedler, "Packet Fragmentation and Reassembly", Gaffer On Games, 2016:
+  a message's number, a fragment's index and the count in each fragment, the message lost whole
+  with any fragment (`forge_net::fragment`, #268).
 - **Networked physics.** Glenn Fiedler, "Introduction to Networked Physics" and the series
   after it, Gaffer On Games, 2014–2015: the link conditioner and the commands sent again until
   acknowledged (#137).

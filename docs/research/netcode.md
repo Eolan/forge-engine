@@ -44,9 +44,10 @@ threshold bug, not a network condition.
 6. [Server architecture for a living world](#6-server-architecture-for-a-living-world)
 7. [Security and crypto](#7-security-and-crypto)
 8. [Voice](#8-voice)
-9. [Recommendation for Forge](#recommendation-for-forge)
-10. [Checked and left out](#checked-and-left-out)
-11. [Verification notes](#verification-notes)
+9. [Patents met](#9-patents-met)
+10. [Recommendation for Forge](#recommendation-for-forge)
+11. [Checked and left out](#checked-and-left-out)
+12. [Verification notes](#verification-notes)
 
 ---
 
@@ -319,6 +320,24 @@ can drive from a simulator. `s2n-quic` is the alternative with CUBIC, pacing, GS
 Windows supported with `rustls`.
 *Bearing:* keep `quinn`; `quinn-proto` is how to unit-test the protocol under scripted loss without
 sockets.
+*Built (#268, 2026-10-16):* `forge-net` on `quinn` 0.11.12 (`quinn-proto` 0.11.19, `quinn-udp`
+0.5.16), `rustls` 0.23.46 and `tokio` 1.53.3, resolved that day. The crypto provider is `ring`
+0.17.14 rather than rustls's default `aws-lc-rs`: it is quinn's own default (`rustls-ring`), it
+gives Ed25519 for the connection tokens, and it builds without CMake or NASM (its Windows assembly
+ships as objects and `cc` finds MSVC through the registry; the dependencies built cold in 18 s on the
+dev machine). The tests do not drive `quinn-proto` from a simulator after all: quinn's
+`AsyncUdpSocket` trait takes a socket of ours, so the seeded conditioner sits under the real
+endpoint and the tests run the whole stack on loopback (`docs/demos/net.md`).
+
+**Glenn Fiedler. "Packet Fragmentation and Reassembly." Gaffer On Games, 6 Sep 2016.** [web]
+[foundational]
+<https://gafferongames.com/post/packet_fragmentation_and_reassembly/>
+
+A packet larger than the MTU sent as fragments, each with the packet's 16-bit sequence, its index
+and the count; fire and forget, so one lost fragment loses the packet; incomplete entries cleaned up
+from a sequence buffer.
+*Bearing:* RFC 9221's datagrams are never fragmented, so an unreliable message over ~1200 bytes needs
+exactly this; `forge_net::fragment` follows it with a 5-byte header and a one-second timeout.
 
 **Lucas Poffo. `renet` / `renetcode`. MIT/Apache, 2.0.0 (Jan 2026).** [code] [still-current]
 <https://github.com/lucaspoffo/renet>
@@ -682,6 +701,29 @@ positional mixing on the client; otherwise EOS Voice (§2) or Steam's voice API.
 
 ---
 
+## 9. Patents met
+
+Searched on 16 October 2026 for #268 (the owner's rule: number, holder, jurisdiction, status,
+expiry, an alternative). Each was read on its Google Patents page; the statuses and expiries are
+Google's estimates, not legal conclusions, and claim readings here are an engineer's, not a lawyer's.
+The web search tool found few patents by technique; the pages below were reached by number or by a
+search hit. Lag compensation by server-side rewind turned up no patent at all in these searches,
+which is not evidence that none exists: search again before step 3 builds it.
+
+| Patent | Holder | What it claims, roughly | Status | Bearing |
+|---|---|---|---|---|
+| **US 11,810,245 B2**, "Methods and systems for prioritized replication of a virtual world" (filed 2021-08-25, granted 2023-11-07) | Verizon Patent and Licensing | on a client's request to join a virtual world, priorities for assets from the avatar's location; the first asset's initial data, then its update data, and only after that the second asset's initial data (claims 1, 14, 20 all start from the join request) | active, US, anticipated expiry 2041-12-31 | **Live, on step 2's path.** A priority accumulator that, after a join, sends updates of near entities before the first state of far ones reads on the claimed order. Prior art is older (Tribes 1999, Quake III's snapshots, Unreal's actor priority, Fiedler 2015), but a granted patent is presumed valid. The alternative: every entity entering a client's interest gets its first full state before any update is sent to that client (a join's whole state first, as Quake III sends its gamestate on connect), so no update ever precedes another entity's initial data. Ask the owner before building the accumulator either way |
+| **US 10,579,434 B2**, "Simulation systems and methods using query-based interest" (priority 2016-08-24, granted 2020-03-03), and its family: US 10,025,892, US 10,643,010, US 11,533,367, US 11,936,734, application US 2024/0314206 | Improbable Worlds | an entity carries an interest component: a query subscription to the entity database and the frequency of its updates, changeable at run time | active, US, '434 to 2036-11-28 | Already flagged in #250. The alternative, D-010's and #250's: interest held by the replication layer per client as grid cells, never a query component on the entity |
+| **US 12,194,388 B2**, "Method and apparatus for providing a computer implemented game" (priority 2022-06-30, granted 2025-01-14) | King.com | the server receives a client's input and its own simulation of an entity, simulates it itself, and when the two differ applies a bias toward the client's result (a blend within a threshold) | active, US, anticipated expiry 2042-09-16 | Not on Forge's path: the server never takes a client-authored state (D-010, §4); reconciliation happens on the client. Keep it so |
+| **US 7,627,632 B2**, "Reducing bandwidth requirements for peer-to-peer gaming based on importance of remote objects to a local player" (priority 2006-11-13) | Microsoft | the most important remote players get continuous state updates, the others periodic ones simulated in between | expired (fees not paid; it would have run to 2028-05-20) | Free to use: importance-scaled update rates |
+| **US 6,628,287 B1**, "Method and apparatus for consistent, responsive, and secure distributed simulation in a computer network environment" (priority 2000-01-12) | There, Inc. (now Leidos) | an authoritative server; each client shows its own avatar ahead of global virtual time from the same timestamped inputs, the others behind it, and the server repairs divergence | expired 2020-01-12 | Free to use: client prediction ahead of an authoritative server, others interpolated behind |
+| **US 2014/0365412 A1**, "Method and system for improving prediction in online gaming" (priority 2012-02-01) | Yosef Mizrachi | predicting a player's command from sensor patterns before it is entered | abandoned 2017 | None |
+
+Nothing was met on QUIC itself (an IETF standard whose participants file IPR disclosures with the
+IETF; not checked here), on connect tokens, fragmentation or a link conditioner.
+
+---
+
 ## Recommendation for Forge
 
 **Transport.** Stay on QUIC via `quinn` with `rustls`: unreliable datagrams for inputs and snapshots,
@@ -693,6 +735,11 @@ Keep a raw-UDP `renetcode` backend as a documented option if QUIC's per-packet o
 profiles; do not build it now. Certificates: TOFU pinning for LAN and dev, CA certificates for public
 servers; the first message on the control stream is a netcode-style token (client id, expiry, server
 allow-list, user data) signed by the web login service, verified offline by the server.
+*Built (#268):* the transport as recommended, with one change: no in-process `Transport`
+implementation, because the link conditioner went under quinn's socket instead, so tests run the
+real QUIC stack; the token is signed with Ed25519, so servers hold only a public key; a hello on the
+first stream carries the version, the channels and the token, and a refusal is a QUIC application
+close with a code and a reason (`docs/demos/net.md`).
 
 **Replication model.** Simulation at 60 Hz on workers; the RL sends each client snapshots at 30 Hz near
 the player and lets the priority accumulator starve distant entities to 5–10 Hz naturally. Per client:

@@ -31,6 +31,8 @@
 "demos/city-plan/**" = []
 "crates/forge-sim/src/population.rs" = []
 "tools/population-bench/**" = []
+# The networking (#268): headless, on loopback, judged by its tests and `net-loopback`.
+"crates/forge-net/**" = []
 # Claude's settings and its agents' worktrees: never built, never committed (#220).
 ".claude/**" = []
 

@@ -608,7 +608,8 @@ The items below are the phase's original outline; the plan above orders them.
 
 ## Phase 5 — Netcode
 
-1. `forge-net`: transport (D-010), versioned protocol, connection tokens, link conditioner.
+1. `forge-net`: transport (D-010), versioned protocol, connection tokens, link conditioner ✅
+   (#268, 2026-10-16: QUIC on loopback through a seeded conditioner, headless, `docs/demos/net.md`).
 2. Replication: snapshots, delta compression, quantisation, priority accumulator,
    cell-based interest management, authority handoff between workers.
 3. Prediction and reconciliation (input queues that wait rather than repeat), lag

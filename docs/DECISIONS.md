@@ -295,6 +295,14 @@ only when they differ, which a deterministic simulation makes the rare case (96 
 99 predicted to the bit over 100 ms and 2 % loss, the misses the other player's throws). The
 link is in-process; the snapshots are whole states (280 KB in the lab), so the baselines,
 quantisation and interest management above remain Phase 5's.
+*The transport built* (#268, 2026-10-16, `forge-net`, `docs/demos/net.md`): QUIC through `quinn`,
+TLS 1.3 from `rustls` on `ring`, certificates pinned by the client; the login tokens signed with
+Ed25519 now rather than later, checked offline by the server from the issuer's public key; a hello
+carrying the version, the channels and the token, refused with a code and a reason; reliable
+ordered, reliable unordered and unreliable channels, unreliable messages fragmented past 1200
+bytes. The link conditioner sits under quinn's socket rather than behind a `Transport` trait, so
+the tests run the real stack on loopback. Measured: QUIC adds about 8 % to an 800-byte snapshot
+at 30 Hz, so D-010's 24 KB/s a client takes snapshots of about 720 bytes with IPv4's headers.
 
 ## D-011 — Audio: own data layer and mixer, Steam Audio spatialiser ✅ (2026-09-24)
 
