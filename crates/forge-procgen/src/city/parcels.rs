@@ -102,35 +102,61 @@ pub fn strips_with(
     block: &[DVec2],
     street: &[bool],
     ty: &ParcelType,
+    width: impl FnMut(usize) -> f64,
+) -> Option<Cut> {
+    strips_by(block, street, &vec![ty.depth; block.len()], ty, width)
+}
+
+/// [`strips_with`] with a depth for each edge: a faubourg's deep strips along the road out and
+/// none along its lanes, whose side stays the gardens' ends (#266). Between two edges of
+/// different depths the corner is split along the line from the corner to where the two depth
+/// lines meet, so a deep strip's corner lot keeps its depth beside a shallow one; beside an edge
+/// of depth 0 it runs to that edge. An edge of depth under 0.5 m takes no strip.
+pub fn strips_by(
+    block: &[DVec2],
+    street: &[bool],
+    depths: &[f64],
+    ty: &ParcelType,
     mut width: impl FnMut(usize) -> f64,
 ) -> Option<Cut> {
     let n = block.len();
-    if n < 3 || street.len() != n || geom::signed_area(block) <= 0.0 {
+    if n < 3 || street.len() != n || depths.len() != n || geom::signed_area(block) <= 0.0 {
         return None;
     }
-    // The court: the block inset by the depth. A block too thin for it takes no strips; one
+    // The court: the block inset by the depths. A block too thin for it takes no strips; one
     // whose inset loses a corner (a short edge gone, the straight skeleton's edge event) still
-    // takes them, each strip bounded by its depth line and its corners' bisectors.
-    let court = geom::inset_by_collapsing(block, &vec![ty.depth; n])
+    // takes them, each strip bounded by its depth line and its corners' dividers. An edge
+    // without a strip moves in by 5 cm: the inset's check wants each corner inside the outline.
+    let inset: Vec<f64> = depths.iter().map(|d| d.max(0.05)).collect();
+    let court = geom::inset_by_collapsing(block, &inset)
         .filter(|c| c.len() >= 3 && geom::signed_area(c) > 1.0)?;
-    // Each edge's inward normal, and each corner's bisector (its two edges' normals' sum, which
-    // also halves a reflex corner's inner angle).
+    // Each edge's inward normal, and each corner's divider: toward where its two edges' depth
+    // lines meet; the normals' sum (the bisector, which also halves a reflex corner's inner
+    // angle) where the depths are equal or the edges nearly in line.
     let normal = |i: usize| {
         let t = (block[(i + 1) % n] - block[i]).normalize_or_zero();
         DVec2::new(-t.y, t.x)
     };
-    let bisector = |i: usize| {
-        let d = normal((i + n - 1) % n) + normal(i);
-        if d.length() < 1e-6 {
-            normal(i)
-        } else {
-            d.normalize()
+    let divider = |i: usize| {
+        let h = (i + n - 1) % n;
+        let (n0, n1) = (normal(h), normal(i));
+        let (d0, d1) = (depths[h], depths[i]);
+        let det = n0.perp_dot(n1);
+        if (d0 - d1).abs() > 1e-6 && det.abs() > 0.1 {
+            // x · n0 = d0 and x · n1 = d1.
+            let x = DVec2::new(d0 * n1.y - d1 * n0.y, n0.x * d1 - n1.x * d0) / det;
+            if x.length() > 1e-6 {
+                return x.normalize();
+            }
         }
+        let d = n0 + n1;
+        if d.length() < 1e-6 { n1 } else { d.normalize() }
     };
     let mut lots: Vec<Vec<DVec2>> = Vec::new();
     let mut keys: Vec<usize> = Vec::new();
     for i in 0..n {
-        if !street[i] {
+        let depth = depths[i];
+        if !street[i] || depth < 0.5 {
             continue;
         }
         let j = (i + 1) % n;
@@ -141,10 +167,10 @@ pub fn strips_with(
         }
         let t = (b - a) / length;
         let inward = DVec2::new(-t.y, t.x);
-        // The strip: the block within the depth of its street side, between the bisectors at
+        // The strip: the block within the depth of its street side, between the dividers at
         // the side's two corners, so the first and last lots take the corners.
-        let mut strip = geom::clip_half_plane(block, a + inward * ty.depth, -t);
-        for (corner, d, along) in [(a, bisector(i), t), (b, bisector(j), -t)] {
+        let mut strip = geom::clip_half_plane(block, a + inward * depth, -t);
+        for (corner, d, along) in [(a, divider(i), t), (b, divider(j), -t)] {
             let keep = if d.perp_dot(along) >= 0.0 { d } else { -d };
             strip = geom::clip_half_plane(&strip, corner, keep);
         }
@@ -196,7 +222,7 @@ pub fn strips_with(
         // cut between them goes (a lot under half the least lot's area is a sliver), and the
         // merged lot keeps the key of the part that was planned (the first's, or the last but
         // one's: the last took the remainder).
-        let sliver = ty.width.0 * ty.depth * 0.5;
+        let sliver = ty.width.0 * depth * 0.5;
         for _ in 0..2 {
             let m = here.len();
             if m < 2 || cuts.len() < 3 {
@@ -377,5 +403,46 @@ mod tests {
     #[test]
     fn a_block_too_thin_for_the_depth_takes_no_strips() {
         assert!(strips(&rectangle(100.0, 20.0), &[true; 4], &ParcelType::VILLAGE, 1).is_none());
+    }
+
+    #[test]
+    fn lanieres_take_the_road_outs_side_to_their_full_depth() {
+        let block = rectangle(90.0, 70.0);
+        let ty = ParcelType {
+            depth: 40.0,
+            ..ParcelType::FAUBOURG
+        };
+        // The road out along the bottom only: every lot 40 m deep, the corner ones too.
+        let only_bottom = [true, false, false, false];
+        let (lots, court, _) =
+            strips_by(&block, &only_bottom, &[40.0, 0.0, 0.0, 0.0], &ty, |_| 8.0)
+                .expect("lanières");
+        let area: f64 = lots.iter().map(|l| geom::signed_area(l).abs()).sum();
+        assert!((area - 90.0 * 40.0).abs() < 1.0, "{area:.0} m² of lots");
+        for lot in &lots {
+            let full = frontage(lot) * 40.0;
+            assert!((geom::signed_area(lot).abs() - full).abs() < 1.0);
+        }
+        assert!((geom::signed_area(&court) - 90.0 * 30.0).abs() < 20.0);
+        // Shallow strips on the sides too: each corner splits where its depth lines meet, and
+        // the lots and the court still tile the block without overlapping.
+        let street = [true, true, false, true];
+        let (lots, court, _) = strips_by(&block, &street, &[40.0, 12.0, 0.0, 12.0], &ty, |_| 8.0)
+            .expect("lanières and side lots");
+        let covered: f64 = lots.iter().map(|l| geom::signed_area(l).abs()).sum::<f64>()
+            + geom::signed_area(&court).abs();
+        assert!(
+            (covered - 90.0 * 70.0).abs() < 20.0,
+            "{covered:.0} of 6300 m²"
+        );
+        let bottom: f64 = lots
+            .iter()
+            .filter(|l| l[0].y.abs() < 1e-9 && l[1].y.abs() < 1e-9)
+            .map(|l| geom::signed_area(l).abs())
+            .sum();
+        assert!(
+            (bottom - 3120.0).abs() < 2.0,
+            "{bottom:.0} m² on the road out"
+        );
     }
 }

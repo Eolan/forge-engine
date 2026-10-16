@@ -98,12 +98,15 @@ houses by ring, to be measured (§6); the sizes are the sources'.
 | the scattered | beyond, along the lanes | over 1 000 m² | free-standing | land all round | a few |
 
 *The generated village at 600 m (2026-10-16, `city::village` on its own plan): the core
-block's 30 houses on lots of 68 m², a third with land left (a court of 14 m²); the faubourgs'
-89 houses on lots of 135–174 m², nine in ten with a garden of 72–98 m²; the lotissement's 8
-houses on 448 m² lots with 363 m² of garden. The core's share without land is at the table's
-upper bound, the faubourg's gardens are short of a real lanière's because the blocks are
-60 m across and the 30 m strips fell back to 12–22 m: the village's blocks should be cut
-longer across for the faubourgs, or its lanes spaced 90 m there.*
+block's 28 houses on lots of 73 m², two in five with land left (a court of 16 m²); the two
+faubourg blocks on the road out, 11 and 6 houses on lanières of 249 and 336 m² (40 m deep,
+gardens of 163 and 244 m²); the faubourg block off it, 35 houses on 174 m² lots, nine in ten
+with a garden of 98 m²; the lotissement's 8 houses on 448 m² lots with 363 m² of garden. The
+core's share without land is within the table's range. The first cut gave the faubourgs
+strips of 12–22 m on blocks 60 m across, short of a lanière: their blocks on the road out now
+take strips on that side only, as deep as the block allows, and leave the lanes the gardens'
+ends; wider lane spacing towards the rim was tried first and broke the street tracer's
+network.*
 
 In a small town the core and the faubourgs are the same tissues on more streets, with flats over
 the shops in the core; a medium town adds the 19th-century ring of closed blocks round courts
@@ -131,7 +134,8 @@ front) [5][7].
 ## 4. What to do with it (for #266, then the city)
 
 *Point 1 is built (2026-10-16, `city::parcels::ParcelType::{CORE, FAUBOURG, LOTISSEMENT}`
-and `city::village`, by distance from the centre; `docs/demos/city-plan.md`, "Its rings").
+and `city::village`, by distance from the centre; `docs/demos/city-plan.md`, "Its rings"),
+with the faubourg's strips along the road out (`city::parcels::strips_by`, a depth per edge).
 Points 2 to 4 are open.*
 
 1. **Three lot types by ring**, chosen by a block's distance from the village's centre (the

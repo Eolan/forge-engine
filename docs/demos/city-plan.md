@@ -399,8 +399,13 @@ houses, 517 people, 3 118 trees in the forest (`reports/2026-10-16/village-own-o
 same day): a block's lot type follows its distance from the centre against the district's
 radius. Within 0.9 of it the old core (`ParcelType::CORE`): lots 5–9 m wide on 12 m, the
 house the whole lot, a court only where the rooms leave one. Within 1.35 the faubourg
-(`FAUBOURG`): lanières 6–12 m wide on 30 m, the house on the street line, a garden of 12 m at
-least behind. Beyond, the lotissement (`LOTISSEMENT`): lots 15–25 m wide on 35 m (500 to
+(`FAUBOURG`): a block on the road out takes its lanières on that side only, 6–12 m wide and
+40 m deep (32, 25 or 18 where the block is thinner), the house on the street line and the
+garden behind it; its lane sides take no lots and are the gardens' ends (`parcels::strips_by`
+cuts with a depth per edge and splits a corner where its two depth lines meet, so the corner
+lot keeps its depth). A faubourg block off the road out is cut on all its sides, 30 m deep, a
+garden of 12 m at least behind each house. Spacing the lanes wider towards the rim was tried
+first: the tracer then kept 8 junctions of 16 and the village two blocks. Beyond, the lotissement (`LOTISSEMENT`): lots 15–25 m wide on 35 m (500 to
 900 m²), the house free on four sides, 5 m back from the street, 3 m off the sides, 8 m of
 garden behind; its front still counts as a street wall (`facades::SETBACK`), so it gets its
 door and windows. Each ring falls back on shallower strips where a block is thin. The traced
@@ -411,12 +416,13 @@ storeys stays garden. **The rich house on the square** (the research's §5): the
 rich household (five people, rich) takes the lot whose front lies nearest the square, and its
 block is cut again for that household's width; on the example site it stands 9 m wide and
 three storeys on the square's block, the village's tallest. **Its distribution** (the owner's
-question, the test prints it): the core block's 30 houses on lots of 68 m², a third of them
-with land left beside the house (a court of 14 m² on average); the three faubourg blocks' 89
-houses on lots of 135–174 m², nine in ten with a garden of 72–98 m² (the 30 m strip fell
-back to 12–22 m on blocks 60 m across); the lotissement block's 8 houses on lots of 448 m²,
-363 m² of garden each. The village at 600 m: 127 houses
-on 5 blocks (one core, three faubourg, one lotissement), 394 people (on the city's
+question, the test prints it): the core block's 28 houses on lots of 73 m², two in five of
+them with land left beside the house (a court of 16 m² on average); the two faubourg blocks
+on the road out, 11 and 6 houses on lanières of 249 and 336 m², each with a garden (163 and
+244 m² on average); the faubourg block off it, 35 houses on lots of 174 m², nine in ten with a
+garden of 98 m²; the lotissement block's 8 houses on lots of 448 m², 363 m² of garden each.
+The village at 600 m: 88 houses
+on 5 blocks (one core, three faubourg, one lotissement), 281 people (on the city's
 parameters 100 houses, 327 people, 68 of one storey, 28 of two, 4 of three; one in twenty
 vacant as the city's). **Its streets:** a village's main road is a shared street (10 m of
 paving, no kerbs, bike lanes nor lamp rows) and its lanes are pedestrian, as an old town's,

@@ -18,7 +18,8 @@ use super::rooms::{self, Means};
 use super::structure::Era;
 use super::units;
 use super::{
-    BoundaryInfluence, CityParams, CityPlan, DistrictKind, DistrictSpec, Pattern, Site, plan,
+    BoundaryInfluence, CityParams, CityPlan, DistrictKind, DistrictSpec, Pattern, RoadClass, Site,
+    plan,
 };
 
 /// A built block's lots, court and houses.
@@ -165,13 +166,28 @@ pub fn village(site: &Site, params: &CityParams, seed: u64) -> Village {
         let outline = geom::simplify_closed(&block.buildable, 0.6);
         let n = outline.len();
         let away = block.centre.distance(params.centre) / radius;
+        // A faubourg's block along the road out takes its strips on that side only, deep, and
+        // leaves its lanes the gardens' ends: the lanières of the research's §2, 6–12 m wide and
+        // 25–45 m deep. One with no side on the road out is cut on all its sides.
+        let on_main: Vec<bool> = (0..n)
+            .map(|i| {
+                let mid = (outline[i] + outline[(i + 1) % n]) * 0.5;
+                streets
+                    .nearest(mid, 30.0)
+                    .is_some_and(|(_, e)| city.roads.edges[e as usize].class == RoadClass::Main)
+            })
+            .collect();
+        let lanieres = (0.9..1.35).contains(&away) && on_main.iter().any(|&m| m);
         let (ty, depths): (ParcelType, &[f64]) = if away < 0.9 {
             (ParcelType::CORE, &[12.0, 10.0, 8.0])
+        } else if lanieres {
+            (ParcelType::FAUBOURG, &[40.0, 32.0, 25.0, 18.0])
         } else if away < 1.35 {
             (ParcelType::FAUBOURG, &[30.0, 22.0, 16.0, 12.0])
         } else {
             (ParcelType::LOTISSEMENT, &[35.0, 28.0, 22.0])
         };
+        let street = if lanieres { on_main } else { vec![true; n] };
         depths.iter().find_map(|&depth| {
             let ty = ParcelType { depth, ..ty };
             let max_depth = houses::plan_depth(&ty);
@@ -181,7 +197,11 @@ pub fn village(site: &Site, params: &CityParams, seed: u64) -> Village {
                 (rooms::HALL + area / (2.0 * max_depth) + 2.0 * ty.sides)
                     .clamp(ty.width.0, ty.width.1.max(16.0))
             };
-            parcels::strips_with(&outline, &vec![true; n], &ty, width)
+            let per_edge: Vec<f64> = street
+                .iter()
+                .map(|&s| if s { depth } else { 0.0 })
+                .collect();
+            parcels::strips_by(&outline, &street, &per_edge, &ty, width)
                 .map(|(lots, court, keys)| (ty, lots, court, keys))
         })
     };
