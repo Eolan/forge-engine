@@ -13,7 +13,7 @@ use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::bus::{BusId, BusLayout};
 use crate::clock::Clock;
-use crate::dsp::ReverbParams;
+use crate::dsp::{BusFilter, ReverbParams};
 use crate::mixer::{Mixer, MixerConfig, MixerStats, SharedStats};
 use crate::sound::SampleBuffer;
 use crate::spatial::{Listener, Occlusion, Spatial};
@@ -161,6 +161,13 @@ pub enum Control {
         bus: BusId,
         /// The new parameters.
         params: ReverbParams,
+    },
+    /// Where the filter of a bus that has one ([`BusLayout::set_filter`]) moves to.
+    BusFilter {
+        /// Which.
+        bus: BusId,
+        /// The new filter.
+        filter: BusFilter,
     },
 }
 

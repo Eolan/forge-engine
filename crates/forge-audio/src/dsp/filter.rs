@@ -214,6 +214,51 @@ impl Biquad {
     }
 }
 
+/// A low-pass that can be retuned every block without a transient: Andrew Simper's
+/// state-variable filter integrated by the trapezoidal rule ("Linear Trap Integrated SVF",
+/// Cytomic, 2013). A direct-form biquad keeps state that belongs to its old coefficients;
+/// near the Nyquist frequency a retune then rings, which this form does not.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SvfLowPass {
+    a1: f32,
+    a2: f32,
+    a3: f32,
+    ic1: f32,
+    ic2: f32,
+}
+
+impl SvfLowPass {
+    /// A low-pass at `cutoff` Hz with resonance `q` (0.707: Butterworth).
+    pub fn new(cutoff: f32, q: f32, rate: u32) -> Self {
+        let mut f = Self::default();
+        f.retune(cutoff, q, rate);
+        f
+    }
+
+    /// Moves the cutoff, keeping the state.
+    pub fn retune(&mut self, cutoff: f32, q: f32, rate: u32) {
+        let nyquist = rate as f64 / 2.0;
+        let f = (cutoff as f64).clamp(1.0, 0.98 * nyquist);
+        let g = (std::f64::consts::PI * f / rate as f64).tan();
+        let k = 1.0 / q.max(0.05) as f64;
+        let a1 = 1.0 / (1.0 + g * (g + k));
+        self.a1 = a1 as f32;
+        self.a2 = (g * a1) as f32;
+        self.a3 = (g * g * a1) as f32;
+    }
+
+    /// One sample through.
+    #[inline]
+    pub fn tick(&mut self, x: f32) -> f32 {
+        let v3 = x - self.ic2;
+        let v1 = self.a1 * self.ic1 + self.a2 * v3;
+        let v2 = self.ic2 + self.a2 * self.ic1 + self.a3 * v3;
+        self.ic1 = 2.0 * v1 - self.ic1;
+        self.ic2 = 2.0 * v2 - self.ic2;
+        v2
+    }
+}
+
 fn pass_terms(cutoff: f32, q: f32, rate: u32) -> (f64, f64) {
     let nyquist = rate as f64 / 2.0;
     let w0 = std::f64::consts::TAU * (cutoff as f64).clamp(1.0, 0.98 * nyquist) / rate as f64;

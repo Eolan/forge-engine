@@ -25,6 +25,13 @@
 //! - **Decoders** ([`decode`]): WAV (integer and float PCM) in our own code, Ogg Vorbis
 //!   through `lewton`, Ogg Opus through `opus-rs`, all pure Rust; each streams from a reader
 //!   on a decode thread or inline.
+//! - **Footsteps and impacts** ([`foley`]): synthesised for the surface they land on (stone,
+//!   gravel, grass, wood, metal, water) from the walker's speed and weight or the body's
+//!   speed and mass, and played as spatial voices.
+//! - **Ambience** ([`ambience`]): beds made in code (wind, rain, cicadas, birds, the sea,
+//!   under water) streamed from the decode thread and crossfaded by rules over the hour,
+//!   the weather and the medium; under water the world's bus is low-passed, quieter and
+//!   narrower ([`dsp::BusFilter`]).
 //!
 //! The output is interleaved stereo `f32` at the mixer's rate (48 kHz by default) in blocks
 //! of [`BLOCK`] frames. Rendering is deterministic: the same commands give the same samples,
@@ -32,6 +39,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod ambience;
 pub mod bus;
 pub mod clock;
 pub mod decode;

@@ -152,3 +152,25 @@ pub fn worst_window_above_db(x: &[f32], cutoff: f32, rate: u32) -> f64 {
         .map(|(a, t)| db(t / a))
         .fold(f64::NEG_INFINITY, f64::max)
 }
+
+/// The level between `low` and `high` Hz (fourth-order high- and low-passes), dBFS RMS.
+pub fn band_db(x: &[f32], low: f32, high: f32, rate: u32) -> f64 {
+    use forge_audio::dsp::Biquad;
+    let mut f = [
+        Biquad::high_pass(low, 0.541_196_1, rate),
+        Biquad::high_pass(low, 1.306_563, rate),
+        Biquad::low_pass(high, 0.541_196_1, rate),
+        Biquad::low_pass(high, 1.306_563, rate),
+    ];
+    let y: Vec<f32> = x
+        .iter()
+        .map(|&v| f.iter_mut().fold(v, |s, b| b.tick(s)))
+        .collect();
+    db(rms(&y).max(1e-12))
+}
+
+/// The correlation of two signals (1: the same, 0: unrelated).
+pub fn correlation(a: &[f32], b: &[f32]) -> f64 {
+    let ab: f64 = a.iter().zip(b).map(|(&x, &y)| x as f64 * y as f64).sum();
+    ab / (rms(a) * rms(b) * a.len() as f64).max(1e-30)
+}

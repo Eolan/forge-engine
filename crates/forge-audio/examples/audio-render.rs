@@ -15,6 +15,8 @@ use std::time::Instant;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use forge_audio::ambience::{Ambience, AmbienceBuses, AmbienceState, Bed, BedKind, Medium, Shore};
+use forge_audio::decode::Decoder;
 use forge_audio::dsp::ReverbParams;
 use forge_audio::sound::{noise, sine, sine_loop, stereo};
 use forge_audio::spatial::{AcousticMaterial, Attenuation, Occlusion};
@@ -150,6 +152,11 @@ fn scenes(out: &Path, only: Option<&str>) -> Result<()> {
             name: "footsteps",
             what: "a walk over stone, gravel, grass, wood, metal and water, then a run back; a crate on wood, a stone on metal, a sack into water",
             render: footsteps,
+        },
+        Scene {
+            name: "village",
+            what: "a day in a minute: night, the dawn chorus, cicadas from mid-morning, wind and a shower in the afternoon, a walk to the quay, a dive at 45 s",
+            render: village,
         },
     ];
     for scene in all.iter().filter(|s| only.is_none_or(|o| o == s.name)) {
@@ -521,6 +528,46 @@ fn footsteps() -> (Vec<f32>, MixerStats) {
     (out, engine.stats())
 }
 
+/// The village's day in a minute (3 s an hour from 3:00), the listener walking down to
+/// the quay from 30 s and diving from 45 to 50 s.
+fn village_state(t: f64) -> AmbienceState {
+    let t = t as f32;
+    let bump = |from: f32, to: f32| {
+        let u = ((t - from) / (to - from)).clamp(0.0, 1.0);
+        (std::f32::consts::PI * u).sin()
+    };
+    AmbienceState {
+        hour: 3.0 + t / 3.0,
+        wind: 1.0 + 9.0 * bump(26.0, 44.0),
+        rain: 6.0 * bump(31.0, 40.0),
+        shore: Some(Shore {
+            distance: (300.0 - 10.0 * (t - 30.0).max(0.0)).max(3.0),
+            direction: Vec3::X,
+        }),
+        medium: if (45.0..50.0).contains(&t) {
+            Medium::Water
+        } else {
+            Medium::Air
+        },
+        ..AmbienceState::default()
+    }
+}
+
+fn village() -> (Vec<f32>, MixerStats) {
+    let mut layout = BusLayout::new();
+    let buses = AmbienceBuses::add(&mut layout);
+    let (mut engine, mixer) = create(MixerConfig::default(), &layout);
+    let (opener, pump) = streams(0.25);
+    let mut ambience = Ambience::start(&mut engine, &opener, buses, 266, &village_state(0.0))
+        .expect("the beds start");
+    let mut renderer = OfflineRenderer::with_streams(mixer, pump);
+    let out = run(&mut engine, &mut renderer, 60.0, 800, |engine, frame| {
+        let t = frame as f64 / RATE as f64;
+        ambience.update(engine, &village_state(t), 800.0 / RATE as f32);
+    });
+    (out, engine.stats())
+}
+
 /// One run: `voices` spatial voices for `seconds`, moving every 10 ms. Returns the
 /// mixer's seconds of work and its counters.
 fn bench_run(voices: usize, seconds: f64) -> (f64, MixerStats) {
@@ -632,6 +679,36 @@ fn bench(seconds: f64, runs: usize) {
             "  {:8} {us:6.0} µs a step ({:.2} s of sound)",
             surface.name(),
             seconds / 200.0
+        );
+    }
+    // The decode thread's side: ten seconds of each bed.
+    println!(
+        "the beds on the decode thread, ten seconds each (the best of {} runs):",
+        runs.max(1)
+    );
+    for (kind, intensity) in [
+        (BedKind::Wind, 10.0),
+        (BedKind::Rain, 2.0),
+        (BedKind::Rain, 20.0),
+        (BedKind::Cicadas, 1.0),
+        (BedKind::Birds, 0.15),
+        (BedKind::Birds, 1.0),
+        (BedKind::Sea, 0.5),
+        (BedKind::Underwater, 1.0),
+    ] {
+        let mut best = f64::MAX;
+        for _ in 0..runs.max(1) {
+            let (mut bed, _control) = Bed::new(kind, 5, RATE, intensity);
+            let mut out = vec![0.0f32; RATE as usize * 20];
+            let started = Instant::now();
+            bed.read(&mut out).expect("a bed never fails");
+            best = best.min(started.elapsed().as_secs_f64() / 10.0);
+        }
+        println!(
+            "  {:10} at {intensity:5.2}: {:5.2} ms a second ({:.2} % of a core)",
+            kind.name(),
+            best * 1000.0,
+            best * 100.0
         );
     }
     // The decode thread's side: a second of stereo 48 kHz from each codec.

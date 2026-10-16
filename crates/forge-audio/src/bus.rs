@@ -10,8 +10,7 @@
 //! runs, and the master ([`BusId::MASTER`]) runs last. Sends are post-fader: they carry the
 //! bus's output after its gain.
 
-use crate::dsp::Reverb;
-use crate::dsp::ReverbParams;
+use crate::dsp::{BusFilter, MediumFilter, Reverb, ReverbParams};
 
 /// A bus of the mixer's layout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -40,6 +39,9 @@ pub struct BusSpec {
     pub sends: Vec<(BusId, f32)>,
     /// A reverb inserted on it (an aux bus), if any.
     pub reverb: Option<ReverbParams>,
+    /// A filter after the reverb, before the fader: the medium the bus is heard through
+    /// (under water), if any.
+    pub filter: Option<BusFilter>,
 }
 
 /// The buses of a mix, before the mixer is made.
@@ -64,6 +66,7 @@ impl BusLayout {
                 gain: 1.0,
                 sends: Vec::new(),
                 reverb: None,
+                filter: None,
             }],
         }
     }
@@ -78,6 +81,7 @@ impl BusLayout {
             gain: 1.0,
             sends: Vec::new(),
             reverb: None,
+            filter: None,
         });
         BusId(self.buses.len() as u16 - 1)
     }
@@ -97,6 +101,16 @@ impl BusLayout {
         let sends = &mut self.buses[from.index()].sends;
         sends.push((to, level));
         sends.len() - 1
+    }
+
+    /// Gives a bus (not the master) a filter, set at run time by
+    /// [`crate::Control::BusFilter`].
+    pub fn set_filter(&mut self, bus: BusId, filter: BusFilter) {
+        assert!(
+            bus != BusId::MASTER,
+            "the master has the limiter, not a filter"
+        );
+        self.buses[bus.index()].filter = Some(filter);
     }
 
     /// Sets a bus's fader.
@@ -136,6 +150,7 @@ pub(crate) struct Bus {
     /// Target, level, level at the last block.
     pub sends: Vec<(u16, f32, f32)>,
     pub reverb: Option<Box<Reverb>>,
+    pub filter: Option<Box<MediumFilter>>,
     pub left: Box<[f32]>,
     pub right: Box<[f32]>,
     /// Whether anything played into it this block (a silent bus is skipped).
@@ -156,6 +171,7 @@ impl Bus {
                 .map(|&(to, level)| (to.0, level, level))
                 .collect(),
             reverb: spec.reverb.map(|p| Box::new(Reverb::new(p, rate))),
+            filter: spec.filter.map(|f| Box::new(MediumFilter::new(f, rate))),
             left: vec![0.0; block].into_boxed_slice(),
             right: vec![0.0; block].into_boxed_slice(),
             active: false,

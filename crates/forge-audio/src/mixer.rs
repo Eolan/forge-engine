@@ -370,6 +370,13 @@ impl Mixer {
                     bus.active = true;
                 }
             }
+            if let Some(filter) = &mut bus.filter {
+                if bus.active {
+                    filter.process(&mut bus.left, &mut bus.right);
+                } else {
+                    filter.skip(BLOCK);
+                }
+            }
             if !bus.active {
                 bus.gain_prev = bus.gain;
                 for send in &mut bus.sends {
@@ -703,6 +710,15 @@ impl Mixer {
                     .and_then(|b| b.reverb.as_mut())
                 {
                     reverb.set_params(params);
+                }
+            }
+            Control::BusFilter { bus, filter } => {
+                if let Some(f) = self
+                    .buses
+                    .get_mut(bus.index())
+                    .and_then(|b| b.filter.as_mut())
+                {
+                    f.set(filter);
                 }
             }
             Control::Stop { voice, fade } => self.stop(voice, fade, at),

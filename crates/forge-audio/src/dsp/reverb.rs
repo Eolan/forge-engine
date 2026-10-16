@@ -70,6 +70,16 @@ impl ReverbParams {
         predelay: 0.03,
         wet: 1.0,
     };
+    /// Under water in a harbour: sound travels 4.3 times faster, so the space sounds 4.3
+    /// times smaller (dense, quick echoes between the surface, the bottom and the quay),
+    /// and its highs die soon.
+    pub const UNDERWATER: ReverbParams = ReverbParams {
+        rt60: 1.4,
+        hf_ratio: 0.35,
+        size: 0.3,
+        predelay: 0.003,
+        wet: 0.7,
+    };
     /// Outdoors: a short, dark trace of what the ground and the trees return.
     pub const OPEN: ReverbParams = ReverbParams {
         rt60: 0.35,
