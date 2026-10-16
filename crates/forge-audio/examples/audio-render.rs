@@ -15,7 +15,9 @@ use std::time::Instant;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use forge_audio::ambience::{Ambience, AmbienceBuses, AmbienceState, Bed, BedKind, Medium, Shore};
+use forge_audio::ambience::{
+    Ambience, AmbienceAssets, AmbienceBuses, AmbienceState, Bed, BedKind, Medium, Shore,
+};
 use forge_audio::decode::Decoder;
 use forge_audio::dsp::ReverbParams;
 use forge_audio::sound::{noise, sine, sine_loop, stereo};
@@ -589,8 +591,17 @@ fn village() -> (Vec<f32>, MixerStats) {
     let buses = AmbienceBuses::add(&mut layout);
     let (mut engine, mixer) = create(MixerConfig::default(), &layout);
     let (opener, pump) = streams(0.25);
-    let mut ambience = Ambience::start(&mut engine, &opener, buses, 266, &village_state(0.0))
-        .expect("the beds start");
+    // The recorded birds when tools/fetch-sounds.sh has fetched them.
+    let assets = AmbienceAssets::load("assets/sounds", RATE).unwrap_or_default();
+    let mut ambience = Ambience::start_with(
+        &mut engine,
+        &opener,
+        buses,
+        266,
+        &village_state(0.0),
+        &assets,
+    )
+    .expect("the beds start");
     let mut renderer = OfflineRenderer::with_streams(mixer, pump);
     let out = run(&mut engine, &mut renderer, 60.0, 800, |engine, frame| {
         let t = frame as f64 / RATE as f64;

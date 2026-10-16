@@ -35,7 +35,9 @@ mod device {
     use clap::Parser;
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     use cpal::{FromSample, SizedSample};
-    use forge_audio::ambience::{Ambience, AmbienceBuses, AmbienceState, Medium, Shore};
+    use forge_audio::ambience::{
+        Ambience, AmbienceAssets, AmbienceBuses, AmbienceState, Medium, Shore,
+    };
     use forge_audio::dsp::ReverbParams;
     use forge_audio::stream::streams;
     use forge_audio::{
@@ -361,7 +363,19 @@ commands (one a line):
             master: 1.0,
             quit: false,
         };
-        let mut ambience = Ambience::start(&mut engine, &opener, buses, 266, &world.state)?;
+        // The recorded birds when tools/fetch-sounds.sh has fetched them; birds made in code
+        // otherwise.
+        let assets = AmbienceAssets::load("assets/sounds", rate).unwrap_or_default();
+        println!(
+            "birds: {}",
+            if assets.birds.is_some() {
+                "recorded (assets/sounds/)"
+            } else {
+                "made in code (tools/fetch-sounds.sh fetches the recordings)"
+            }
+        );
+        let mut ambience =
+            Ambience::start_with(&mut engine, &opener, buses, 266, &world.state, &assets)?;
         let mut params = PlayParams {
             bus: foley_bus,
             ..PlayParams::default()

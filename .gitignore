@@ -12,6 +12,8 @@
 # The planets' maps (#220): fetched and converted by tools/fetch-planets.sh, hundreds of MB, never
 # committed.
 /assets/planets/
+# The ambience's bird recordings (#267): fetched by tools/fetch-sounds.sh, never committed.
+/assets/sounds/
 
 # Vendored third-party binaries and SDKs (Tracy profiler, NVIDIA Streamline): kept locally,
 # never committed (126 MB and 486 MB).

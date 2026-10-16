@@ -13,11 +13,13 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use forge_core::SplitMix64;
 
+use super::AmbienceAssets;
+use super::recordings::{BirdCalls, Species};
 use crate::decode::{DecodeError, Decoder};
-use crate::dsp::Biquad;
 use crate::dsp::synth::{
     Grain, LowPass4, Oscillator, PinkNoise, Resonator, log_uniform, poisson_wait, white,
 };
+use crate::dsp::{Biquad, OnePole};
 use crate::foley::smoothstep;
 use crate::spatial::pan_gains;
 
@@ -117,6 +119,14 @@ impl BedKind {
 
     /// Its texture, from `seed`.
     pub fn texture(self, seed: u64, rate: u32) -> Box<dyn Texture> {
+        self.texture_with(seed, rate, &AmbienceAssets::default())
+    }
+
+    /// Its texture, from `seed`, using `assets` when they have what it plays.
+    pub fn texture_with(self, seed: u64, rate: u32, assets: &AmbienceAssets) -> Box<dyn Texture> {
+        if let (BedKind::Birds, Some(recorded)) = (self, &assets.birds) {
+            return Box::new(Birds::with_recordings(seed, rate, recorded.clone()));
+        }
         match self {
             BedKind::Wind => Box::new(Wind::new(seed, rate)),
             BedKind::Rain => Box::new(Rain::new(seed, rate)),
@@ -143,9 +153,20 @@ pub struct Bed {
 impl Bed {
     /// The bed `kind` from `seed` at `intensity`, and the control the game keeps.
     pub fn new(kind: BedKind, seed: u64, rate: u32, intensity: f32) -> (Bed, Arc<BedControl>) {
+        Self::new_with(kind, seed, rate, intensity, &AmbienceAssets::default())
+    }
+
+    /// The bed `kind`, using `assets` when they have what it plays.
+    pub fn new_with(
+        kind: BedKind,
+        seed: u64,
+        rate: u32,
+        intensity: f32,
+        assets: &AmbienceAssets,
+    ) -> (Bed, Arc<BedControl>) {
         let control = Arc::new(BedControl::new(intensity));
         let bed = Bed {
-            texture: kind.texture(seed, rate),
+            texture: kind.texture_with(seed, rate, assets),
             control: control.clone(),
             rate,
             intensity: None,
@@ -547,34 +568,98 @@ struct Call {
     gains: [f32; 2],
 }
 
+/// A recorded call playing: read at its own pitch (±3 %), dulled with distance.
+struct Played {
+    samples: Arc<[f32]>,
+    pos: f64,
+    step: f64,
+    gains: [f32; 2],
+    dull: OnePole,
+}
+
 /// Birds: calls arriving as a Poisson process of up to 5 a second, each from a bird at its
 /// own place and distance. Four voices of a Mediterranean village: a blackbird's warble
 /// (1.5 to 3.2 kHz glides), a house sparrow's chirps (4.6 falling to 3.1 kHz), a serin's
 /// jingling trill (24 notes a second sweeping down from 6 kHz), a collared dove's three coos
-/// near 500 Hz.
+/// near 500 Hz. With recordings ([`BirdCalls`]) the blackbird, the sparrow and the serin sing
+/// their recorded calls instead, and the morning chorus plays far away while the dawn chorus
+/// is at its fullest; the dove stays made in code.
 pub struct Birds {
     rng: SplitMix64,
     rate: u32,
     until: f32,
     calls: Vec<Call>,
+    recorded: Option<Arc<BirdCalls>>,
+    played: Vec<Played>,
+    chorus_at: usize,
+    chorus_gain: f32,
 }
 
+/// The morning chorus's crossfade where it loops, seconds.
+const CHORUS_SEAM: f32 = 2.0;
+
 impl Birds {
-    /// From `seed`.
+    /// From `seed`, every call made in code.
     pub fn new(seed: u64, rate: u32) -> Self {
         Self {
             rng: SplitMix64::new(seed),
             rate,
             until: 0.0,
             calls: Vec::with_capacity(16),
+            recorded: None,
+            played: Vec::with_capacity(16),
+            chorus_at: 0,
+            chorus_gain: 0.0,
         }
     }
 
-    fn call(&mut self) -> Call {
+    /// From `seed`, singing the recorded calls of `recorded` (cut for this `rate`).
+    pub fn with_recordings(seed: u64, rate: u32, recorded: Arc<BirdCalls>) -> Self {
+        let mut birds = Self::new(seed, rate);
+        if let Some(chorus) = &recorded.chorus {
+            birds.chorus_at = birds.rng.below((chorus.len() / 2).max(1) as u64) as usize;
+        }
+        birds.recorded = Some(recorded);
+        birds
+    }
+
+    /// Starts a call: the species by `kind` (blackbird, sparrow, serin, dove), recorded when
+    /// there is a recording of it.
+    fn spawn(&mut self) {
+        let kind = self.rng.next_f32();
+        let species = match kind {
+            k if k < 0.3 => Some(Species::Blackbird),
+            k if k < 0.6 => Some(Species::Sparrow),
+            k if k < 0.85 => Some(Species::Serin),
+            _ => None,
+        };
+        if let (Some(species), Some(recorded)) = (species, &self.recorded) {
+            let count = recorded.of(species).count();
+            if count > 0 {
+                let pick = self.rng.below(count as u64) as usize;
+                let call = recorded.of(species).nth(pick).expect("a call");
+                let distance = log_uniform(&mut self.rng, 0.1, 1.0);
+                let pitch = self.rng.range_f32(0.97, 1.03) as f64;
+                // Far birds lose their highs: 4 kHz at the farthest, 12 kHz near.
+                let cutoff = 4000.0 + 8000.0 * distance;
+                self.played.push(Played {
+                    samples: call.samples.clone(),
+                    pos: 0.0,
+                    step: pitch * recorded.rate as f64 / self.rate as f64,
+                    gains: pan_gains(self.rng.range_f32(-0.9, 0.9)).map(|g| g * distance),
+                    dull: OnePole::new(cutoff, self.rate),
+                });
+                return;
+            }
+        }
+        let call = self.call(kind);
+        self.calls.push(call);
+    }
+
+    fn call(&mut self, kind: f32) -> Call {
         let r = &mut self.rng;
         let mut notes = Vec::new();
         let mut t = 0.0;
-        let kind = r.next_f32();
         if kind < 0.3 {
             // Blackbird.
             for k in 0..5 + r.below(5) {
@@ -654,9 +739,8 @@ impl Texture for Birds {
         self.until -= left.len() as f32 * dt;
         while self.until <= 0.0 && calls > 0.0 {
             self.until += poisson_wait(&mut self.rng, calls);
-            if self.calls.len() < 16 {
-                let call = self.call();
-                self.calls.push(call);
+            if self.calls.len() + self.played.len() < 16 {
+                self.spawn();
             }
         }
         if calls <= 0.0 {
@@ -707,6 +791,60 @@ impl Texture for Birds {
             }
         }
         self.calls.retain(|c| c.next < c.notes.len());
+
+        // The recorded calls, read by linear interpolation.
+        for p in &mut self.played {
+            let len = p.samples.len();
+            for i in 0..left.len() {
+                let k = p.pos as usize;
+                if k + 1 >= len {
+                    p.pos = len as f64;
+                    break;
+                }
+                let t = (p.pos - k as f64) as f32;
+                let x = p.samples[k] + (p.samples[k + 1] - p.samples[k]) * t;
+                let y = 1.2 * p.dull.tick(x);
+                left[i] += y * p.gains[0];
+                right[i] += y * p.gains[1];
+                p.pos += p.step;
+            }
+        }
+        self.played
+            .retain(|p| (p.pos as usize) + 1 < p.samples.len());
+
+        // The morning chorus, far away, while the dawn chorus is at its fullest; looped with
+        // an equal-power crossfade of two seconds.
+        if let Some(chorus) = self.recorded.as_ref().and_then(|r| r.chorus.clone()) {
+            let frames = chorus.len() / 2;
+            let seam = ((CHORUS_SEAM * self.rate as f32) as usize).min(frames / 2);
+            let goal = smoothstep(0.35, 1.0, activity);
+            let from = self.chorus_gain;
+            self.chorus_gain = goal;
+            if (from > 0.0 || goal > 0.0) && frames > 2 * seam {
+                let n = left.len() as f32;
+                for i in 0..left.len() {
+                    let g = from + (goal - from) * (i + 1) as f32 / n;
+                    let at = self.chorus_at;
+                    let (mut l, mut r) = (chorus[2 * at], chorus[2 * at + 1]);
+                    if at >= frames - seam {
+                        let u = (at - (frames - seam)) as f32 / seam as f32;
+                        let (fade, rise) = (
+                            (u * std::f32::consts::FRAC_PI_2).cos(),
+                            (u * std::f32::consts::FRAC_PI_2).sin(),
+                        );
+                        let b = at - (frames - seam);
+                        l = l * fade + chorus[2 * b] * rise;
+                        r = r * fade + chorus[2 * b + 1] * rise;
+                    }
+                    left[i] += g * l;
+                    right[i] += g * r;
+                    self.chorus_at += 1;
+                    if self.chorus_at >= frames {
+                        self.chorus_at = seam;
+                    }
+                }
+            }
+        }
     }
 }
 

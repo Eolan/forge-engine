@@ -403,3 +403,81 @@ fn a_quiet_bed_sleeps_and_wakes() {
     // The filter the medium sets is the world's.
     assert_eq!(BusFilter::UNDERWATER.width, 0.2);
 }
+
+/// The recordings `tools/fetch-sounds.sh` fetches, if they are there.
+fn recordings() -> Option<forge_audio::ambience::AmbienceAssets> {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/sounds");
+    let assets = forge_audio::ambience::AmbienceAssets::load(dir, RATE).expect("they decode");
+    if assets.birds.is_none() {
+        eprintln!("no recordings in assets/sounds/ (tools/fetch-sounds.sh): skipped");
+        return None;
+    }
+    Some(assets)
+}
+
+#[test]
+fn recorded_birds_are_cut_into_calls() {
+    use forge_audio::ambience::Species;
+    let Some(assets) = recordings() else {
+        return;
+    };
+    let birds = assets.birds.expect("birds");
+    for (species, least, band) in [
+        (Species::Blackbird, 15, 1500.0..4500.0),
+        (Species::Sparrow, 5, 3000.0..4500.0),
+        (Species::Serin, 10, 3500.0..8000.0),
+    ] {
+        let calls: Vec<_> = birds.of(species).collect();
+        assert!(calls.len() >= least, "{species:?}: {} calls", calls.len());
+        for call in calls {
+            let x = &call.samples;
+            let seconds = x.len() as f64 / RATE as f64;
+            assert!(
+                (0.06..=3.05).contains(&seconds),
+                "{species:?}: {seconds:.2} s"
+            );
+            assert_eq!((x[0], x[x.len() - 1]), (0.0, 0.0));
+            assert!((peak(x) - 0.5).abs() < 1e-6);
+            let c = centroid(x, RATE);
+            assert!(band.contains(&c), "{species:?}: centroid {c:.0} Hz");
+        }
+    }
+    let chorus = birds.chorus.as_ref().expect("the morning chorus");
+    assert!(chorus.len() / 2 > 170 * RATE as usize);
+    // Without the files, no recordings and no error: the birds are made in code.
+    let empty = std::env::temp_dir().join("forge-audio-no-recordings");
+    std::fs::create_dir_all(&empty).unwrap();
+    assert!(
+        forge_audio::ambience::AmbienceAssets::load(&empty, RATE)
+            .unwrap()
+            .birds
+            .is_none()
+    );
+}
+
+#[test]
+fn recorded_birds_sing_the_dawn() {
+    let Some(assets) = recordings() else {
+        return;
+    };
+    let render = |activity: f32, seed: u64| {
+        let (mut bed, _control) = Bed::new_with(BedKind::Birds, seed, RATE, activity, &assets);
+        let mut out = vec![0.0f32; RATE as usize * 2 * 20];
+        bed.read(&mut out).unwrap();
+        out
+    };
+    let dawn = channel(&render(1.0, 5), 0);
+    let day = channel(&render(0.15, 5), 0);
+    let (d, n) = (
+        band_db(&dawn, 1000.0, 8000.0, RATE),
+        band_db(&day, 1000.0, 8000.0, RATE),
+    );
+    // The dawn chorus, with the morning chorus far behind it, above the day's few calls.
+    assert!(d > n + 6.0, "dawn {d:.1}, day {n:.1} dBFS");
+    assert!((-28.0..-18.0).contains(&d), "dawn {d:.1} dBFS");
+    for x in [&dawn, &day] {
+        let worst = worst_window_above_db(x, 16_000.0, RATE);
+        assert!(worst < -25.0, "{worst:.1} dB");
+    }
+    assert_eq!(render(1.0, 5), render(1.0, 5));
+}

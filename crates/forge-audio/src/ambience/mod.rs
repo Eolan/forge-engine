@@ -22,12 +22,14 @@
 //! a bed whose gain has rested at 0 for a second sleeps and costs nothing.
 
 pub mod beds;
+pub mod recordings;
 
 use std::sync::Arc;
 
 use glam::Vec3;
 
 pub use beds::{Bed, BedControl, BedKind, Texture};
+pub use recordings::{BirdCalls, Species};
 
 use crate::decode::DecodeError;
 use crate::dsp::{BusFilter, ReverbParams};
@@ -187,6 +189,24 @@ pub fn targets(state: &AmbienceState) -> [BedTarget; 6] {
     ]
 }
 
+/// What the beds can play besides what they make in code.
+#[derive(Clone, Debug, Default)]
+pub struct AmbienceAssets {
+    /// Recorded birds ([`BirdCalls::load`]): the birds bed sings them when they are here.
+    pub birds: Option<Arc<BirdCalls>>,
+}
+
+impl AmbienceAssets {
+    /// The recordings `tools/fetch-sounds.sh` fetched into `dir` (`assets/sounds/`), for a
+    /// mixer at `rate`: what is there, nothing when nothing is.
+    pub fn load(dir: impl AsRef<std::path::Path>, rate: u32) -> Result<Self, DecodeError> {
+        let birds = BirdCalls::load(dir.as_ref().join("birds"), rate)?;
+        Ok(Self {
+            birds: birds.map(Arc::new),
+        })
+    }
+}
+
 /// The buses the ambience plays through.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AmbienceBuses {
@@ -240,7 +260,8 @@ pub struct Ambience {
 }
 
 impl Ambience {
-    /// Starts the beds for `state`, varied from `seed`, streamed through `streams`.
+    /// Starts the beds for `state`, varied from `seed`, streamed through `streams`, every
+    /// sound made in code.
     pub fn start(
         engine: &mut AudioEngine,
         streams: &Streams,
@@ -248,14 +269,34 @@ impl Ambience {
         seed: u64,
         state: &AmbienceState,
     ) -> Result<Self, DecodeError> {
+        Self::start_with(
+            engine,
+            streams,
+            buses,
+            seed,
+            state,
+            &AmbienceAssets::default(),
+        )
+    }
+
+    /// Starts the beds, playing `assets` where they have something.
+    pub fn start_with(
+        engine: &mut AudioEngine,
+        streams: &Streams,
+        buses: AmbienceBuses,
+        seed: u64,
+        state: &AmbienceState,
+        assets: &AmbienceAssets,
+    ) -> Result<Self, DecodeError> {
         let rate = engine.sample_rate();
         let mut beds = Vec::with_capacity(BedKind::ALL.len());
         for (i, (kind, target)) in BedKind::ALL.into_iter().zip(targets(state)).enumerate() {
-            let (bed, control) = Bed::new(
+            let (bed, control) = Bed::new_with(
                 kind,
                 seed ^ (0x9E37_79B9_7F4A_7C15u64.wrapping_mul(i as u64 + 1)),
                 rate,
                 target.intensity,
+                assets,
             );
             control.set_awake(target.gain > 0.0);
             let stream = streams.open(Box::new(bed), false)?;
