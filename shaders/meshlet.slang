@@ -336,7 +336,7 @@ public struct Frame
     public Mesh* meshes;
     public Instance* instances;
     public uint* stats;
-    public uint64_t* cluster_lookback; // status words of the cluster culls' ordered appends: `cluster_groups` per pass, then as many for pass 1's rejects (issue #92)
+    public uint64_t* cluster_lookback; // status words of the cluster culls' ordered appends: `cluster_groups` per pass, then as many per pass for (pass 1's rejects, issue #92; the cut-out clusters, #265)
     public uint cluster_groups;     // cluster-cull workgroups the fullest lists need: `work_capacity` items, then `work_capacity` roots at 32 an item
     public uint prev_hzb_image;     // sampled image index of the previous frame's pyramid
     public uint2* work;             // (instance, local group) per work item, built by `cull_main`
@@ -346,10 +346,10 @@ public struct Frame
     public float exposure;          // pre-exposure of the frame (crates/forge-render/src/exposure.rs)
     public float sun_illuminance;   // lux; the rocks return albedo × E / π
     public float sun_angular_radius; // the sun disc's angular radius, radians; 0: hard shadows (issue #54)
-    public uint* clusters;          // per pass (pass 1 or the single pass at 0, pass 2 at 12): the hardware draw grid (x, y, 1) and its cluster count, the software raster grid and its count, the merge's VkDrawIndirectCommand; then the culls' tickets (24, 25)
-    public uint* draws;             // fallback: a VkDrawIndexedIndirectCommand per hardware-drawn cluster of the pass; null on the mesh path
+    public uint* clusters;          // per pass (pass 1 or the single pass at 0, pass 2 at 16): the hardware draw grid (x, y, 1) and its cluster count, the software raster grid and its count, the merge's VkDrawIndirectCommand, the cut-outs' raster grid and its count (#265); then the culls' tickets (32, 33)
+    public uint* draws;             // fallback: a VkDrawIndexedIndirectCommand per hardware-drawn cluster of the pass, the cut-out ones after `visible_capacity` (#265); null on the mesh path
     public uint64_t* lookback;      // status words of the instance cull's ordered appends
-    public uint* raster;            // per pass, the list slots of its clusters: hardware-drawn from the front, software-rasterised from the back
+    public uint* raster;            // per pass, the list slots of its clusters: hardware-drawn from the front, software-rasterised from the back, then from `visible_capacity` the cut-out ones (#265)
     public uint target_width;       // pixels
     public uint target_height;
     public float sw_raster_area;    // a cluster whose bounding rectangle holds fewer pixels than this per triangle is dense (rasterised in compute with FLAG_SW_RASTER)
@@ -898,10 +898,10 @@ uint pass2_segment1_items(Frame* f)
     return rejects == REJECTS_OVERFLOW ? f[0].indirect[3] : (rejects + TASK_GROUP_SIZE - 1) / TASK_GROUP_SIZE;
 }
 
-// Clusters pass 1 listed (hardware and software), final once pass 2 culls.
+// Clusters pass 1 listed (hardware, software and cut out), final once pass 2 culls.
 uint pass1_listed(Frame* f)
 {
-    return f[0].clusters[3] + f[0].clusters[7];
+    return f[0].clusters[3] + f[0].clusters[7] + f[0].clusters[15];
 }
 
 // The slot of the `index`-th cluster of this pass in the visible-cluster list: pass 2 follows
@@ -911,11 +911,16 @@ uint visible_slot(Frame* f, uint index)
     return f[0].pass == PASS_REMAINDER ? pass1_listed(f) + index : index;
 }
 
+// Words of one pass's arguments in `Frame::clusters`, and where the culls' tickets follow both.
+static const uint CLUSTER_PASS_WORDS = 16;
+static const uint CLUSTER_TICKETS = 2 * CLUSTER_PASS_WORDS;
+
 // This pass's hardware draw arguments (x, y, 1, count) in `Frame::clusters`; its software
-// raster arguments follow (`pass_args(f) + 4`), then the merge's draw (`+ 8`).
+// raster arguments follow (`pass_args(f) + 4`), then the merge's draw (`+ 8`), then the
+// cut-outs' raster's (`+ 12`, #265). forge_render::meshlet::CLUSTER_ARGS_START.
 uint* pass_args(Frame* f)
 {
-    return f[0].clusters + (f[0].pass == PASS_REMAINDER ? 12 : 0);
+    return f[0].clusters + (f[0].pass == PASS_REMAINDER ? CLUSTER_PASS_WORDS : 0);
 }
 
 // What one thread decided about its cluster.
@@ -1249,16 +1254,19 @@ groupshared uint s_dense_triangles;
 groupshared uint s_levels;
 groupshared uint s_occluded;
 groupshared uint s_rejected[CULL_ITEMS]; // pass 1: per work item, a bit per lane: the cluster is left to pass 2
+groupshared uint s_cutout[CULL_ITEMS];   // per work item, a bit per lane: drawn by the cut-outs' raster (#265)
 groupshared uint s_kept_software;      // where the list ends: software clusters still kept
+groupshared uint s_kept_cutouts;       // where the list ends: cut-out clusters still kept
 
 // One workgroup per CULL_ITEMS work items: cull their clusters and append the survivors to
 // this pass's range of the visible-cluster list in item order, then lane order, and their
 // slots to the pass's raster lists (hardware-drawn from the front, software-rasterised from
-// the back, each in the same order); on the fallback path also one indexed draw per
-// hardware-drawn survivor. The mesh shader and the software rasteriser read the raster
-// lists, the fallback's draws carry the slots. The grids are written by the last workgroup,
-// or, when the list is full, by the one it ends in. A full list drops what does not fit and
-// counts it, so no draw reads past the end.
+// the back, the cut-out clusters in a list of their own after them, #265; each in the same
+// order); on the fallback path also one indexed draw per hardware-drawn survivor, the cut-out
+// ones' after the others' capacity. The mesh shaders and the software rasteriser read the
+// raster lists, the fallback's draws carry the slots. The grids are written by the last
+// workgroup, or, when the list is full, by the one it ends in. A full list drops what does not
+// fit and counts it, so no draw reads past the end.
 // `streamed`: the scene streams its pages (`lod_selected`), a constant per entry point.
 void cluster_cull(uint thread, bool streamed)
 {
@@ -1266,19 +1274,21 @@ void cluster_cull(uint thread, bool streamed)
     bool second = f[0].pass == PASS_REMAINDER;
     if (thread == 0)
     {
-        InterlockedAdd(f[0].clusters[24 + (second ? 1 : 0)], 1, s_ticket);
+        InterlockedAdd(f[0].clusters[CLUSTER_TICKETS + (second ? 1 : 0)], 1, s_ticket);
         s_triangles = 0;
         s_sw_triangles = 0;
         s_dense_triangles = 0;
         s_levels = 0;
         s_occluded = 0;
         s_kept_software = 0;
+        s_kept_cutouts = 0;
     }
     if (thread < CULL_ITEMS)
     {
         s_drawn[thread] = 0;
         s_software[thread] = 0;
         s_rejected[thread] = 0;
+        s_cutout[thread] = 0;
     }
     GroupMemoryBarrierWithGroupSync();
     uint ticket = s_ticket;
@@ -1303,6 +1313,8 @@ void cluster_cull(uint thread, bool streamed)
             InterlockedOr(s_software[local], 1u << lane);
             InterlockedAdd(s_sw_triangles, v.triangle_count);
         }
+        else if (v.cutouts != 0)
+            InterlockedOr(s_cutout[local], 1u << lane);
     }
     if (v.occluded)
         InterlockedAdd(s_occluded, 1);
@@ -1325,25 +1337,39 @@ void cluster_cull(uint thread, bool streamed)
     uint index = first.x + before.x + countbits(s_drawn[local] & below);
     uint sw_index = first.y + before.y + countbits(s_software[local] & below); // software clusters before this one
     uint hw_index = index - sw_index; // for a hardware-drawn cluster, the hardware-drawn ones before it
-    // Pass 1 lists the clusters it leaves to pass 2 in the same order, through a run of status
-    // words of its own after the two passes' (issue #92). Without a previous pyramid it draws
-    // nothing and leaves everything: pass 2 then walks the work items again, as it would.
+    // Pass 1 lists the clusters it leaves to pass 2 in the same order (issue #92), and both
+    // passes list their cut-out clusters apart (#265), through a run of status words of each
+    // pass's own after the two passes' first runs: (rejected, cut out). Without a previous
+    // pyramid pass 1 draws nothing and leaves everything: pass 2 then walks the work items
+    // again, as it would.
     bool lists = f[0].pass == PASS_PREVIOUSLY_VISIBLE && (f[0].flags & FLAG_PREV_PYRAMID) != 0;
+    bool cut = (f[0].flags & FLAG_CUTOUTS) != 0;
     uint rejected = 0;     // this workgroup's
     uint rejects_first = 0; // the workgroups' before it
     uint reject_index = 0; // this thread's slot in `Frame::rejects`
-    if (lists)
+    uint cutouts = 0;      // this workgroup's cut-out clusters
+    uint cut_first = 0;    // the workgroups' before it
+    uint cut_index = 0;    // the cut-out clusters before this thread's
+    if (lists || cut)
     {
         uint rejected_before = 0;
+        uint cut_before = 0;
         for (uint k = 0; k < CULL_ITEMS; k++)
         {
-            uint n = countbits(s_rejected[k]);
+            uint n = lists ? countbits(s_rejected[k]) : 0u;
+            uint c = countbits(s_cutout[k]);
             rejected_before += k < local ? n : 0u;
             rejected += n;
+            cut_before += k < local ? c : 0u;
+            cutouts += c;
         }
         GroupMemoryBarrierWithGroupSync(); // every thread is done with the first look-back's shared words
-        rejects_first = lookback_exclusive(f[0].cluster_lookback + 2 * f[0].cluster_groups, ticket, uint2(rejected, 0), thread).x;
+        uint64_t* run = f[0].cluster_lookback + (second ? 3 : 2) * f[0].cluster_groups;
+        uint2 firsts = lookback_exclusive(run, ticket, uint2(rejected, cutouts), thread);
+        rejects_first = firsts.x;
+        cut_first = firsts.y;
         reject_index = rejects_first + rejected_before + countbits(s_rejected[local] & below);
+        cut_index = cut_first + cut_before + countbits(s_cutout[local] & below);
     }
     // The list ends in this workgroup (at most one does); every thread agrees on both.
     bool past_end = first.x + drawn.x > capacity;
@@ -1371,6 +1397,8 @@ void cluster_cull(uint thread, bool streamed)
                 InterlockedAdd(s_sw_triangles, v.triangle_count);
                 InterlockedAdd(s_kept_software, 1);
             }
+            else if (cut && v.cutouts != 0)
+                InterlockedAdd(s_kept_cutouts, 1);
         }
         GroupMemoryBarrierWithGroupSync();
     }
@@ -1388,10 +1416,12 @@ void cluster_cull(uint thread, bool streamed)
         if (rejected > 0)
             InterlockedAdd(f[0].stats[STAT_REJECTED], rejected);
         uint2 listed = 0; // the pass's kept clusters and software ones, when known here
+        uint listed_cut = 0; // and the cut-out ones among the hardware-drawn
         bool knows = false;
         if (ends_here)
         {
             listed = uint2(capacity, first.y + s_kept_software);
+            listed_cut = cut_first + s_kept_cutouts;
             knows = true;
         }
         if (ticket == (items - 1) / CULL_ITEMS)
@@ -1405,6 +1435,7 @@ void cluster_cull(uint thread, bool streamed)
             else
             {
                 listed = first + drawn;
+                listed_cut = cut_first + cutouts;
                 knows = true;
             }
             if (f[0].pass == PASS_PREVIOUSLY_VISIBLE)
@@ -1421,9 +1452,10 @@ void cluster_cull(uint thread, bool streamed)
         }
         if (knows)
         {
-            uint hardware = listed.x - listed.y;
+            uint hardware = listed.x - listed.y - listed_cut;
             write_grid(args, hardware, hardware);
             write_grid(args + 4, listed.y, listed.y);
+            write_grid(args + 12, listed_cut, listed_cut);
             // The merge: nothing, a rectangle per software cluster, or a full-screen triangle.
             bool rects = listed.y * MERGE_RECT_PIXELS <= f[0].target_width * f[0].target_height;
             args[8] = listed.y == 0 ? 0u : (rects ? 6u : 3u);
@@ -1444,13 +1476,17 @@ void cluster_cull(uint thread, bool streamed)
         f[0].raster[f[0].visible_capacity - 1 - sw_index] = slot;
         return;
     }
-    f[0].raster[hw_index] = slot;
+    // A cut-out cluster in the cut-outs' list after the capacity, the others among the
+    // hardware-drawn ones less the cut-out ones before them (#265).
+    bool cut_out = cut && v.cutouts != 0;
+    uint raster_index = cut_out ? f[0].visible_capacity + cut_index : hw_index - cut_index;
+    f[0].raster[raster_index] = slot;
     if (f[0].draws != nullptr)
     {
         // VkDrawIndexedIndirectCommand: the cluster's triangles straight from its page (the
         // pool is the index buffer, one-byte indices), its first vertex in the pool as the
         // vertex offset, one instance, and its list slot as the first instance.
-        uint* draw = f[0].draws + hw_index * 5;
+        uint* draw = f[0].draws + raster_index * 5;
         draw[0] = v.triangle_count * 3;
         draw[1] = 1;
         // The header read here only: a cluster the cull describes may have no page resident.
@@ -2058,20 +2094,17 @@ void mesh_main(
     uint base = 0;
     Meshlet m = {};
     Instance inst = {};
-    // Nothing for the partial last row of the grid, nor for the clusters `mesh_cutout_main`
-    // draws (#171).
+    // Nothing for the partial last row of the grid. The clusters `mesh_cutout_main` draws have
+    // a list of their own (#171, #265).
     if (index < pass_args(f)[3])
     {
         slot = f[0].raster[index];
         uint2 record = f[0].visible[slot];
         m = f[0].meshlets[record.y & MESHLET_INDEX_MASK];
         inst = f[0].instances[record.x];
-        if (cluster_cutouts(f, inst, m) == 0)
-        {
-            vertex_count = m.vertex_count;
-            triangle_count = m.triangle_count;
-            base = payload_base(f, m);
-        }
+        vertex_count = m.vertex_count;
+        triangle_count = m.triangle_count;
+        base = payload_base(f, m);
     }
     // One call, at the top level, whatever the cluster: AMD's RDNA 2 driver hangs the GPU
     // when the call sits in several branches with early returns (#28).
@@ -2092,7 +2125,7 @@ void mesh_main(
 }
 
 // The cut-outs' raster (#171): the clusters whose rows are cut out or double-sided, drawn by a
-// second pipeline over the same list with no face culling, its fragments tested by
+// second pipeline over a list of their own (#265) with no face culling, its fragments tested by
 // `cutout_kept`. Kept apart so that the other clusters' fragment shader has no discard, which
 // would cost them the early depth test.
 struct CutoutVertexOut
@@ -2140,19 +2173,17 @@ void mesh_cutout_main(
     uint base = 0;
     Meshlet m = {};
     Instance inst = {};
-    // Nothing for the partial last row of the grid, nor for the clusters `mesh_main` draws.
-    if (index < pass_args(f)[3])
+    // Nothing for the partial last row of the grid: the cut-out clusters' own list, after the
+    // capacity (#265).
+    if (index < (pass_args(f) + 12)[3])
     {
-        slot = f[0].raster[index];
+        slot = f[0].raster[f[0].visible_capacity + index];
         uint2 record = f[0].visible[slot];
         m = f[0].meshlets[record.y & MESHLET_INDEX_MASK];
         inst = f[0].instances[record.x];
-        if (cluster_cutouts(f, inst, m) != 0)
-        {
-            vertex_count = m.vertex_count;
-            triangle_count = m.triangle_count;
-            base = payload_base(f, m);
-        }
+        vertex_count = m.vertex_count;
+        triangle_count = m.triangle_count;
+        base = payload_base(f, m);
     }
     // One call at the top level, as in `mesh_main` (#28).
     SetMeshOutputCounts(vertex_count, triangle_count);
@@ -2203,9 +2234,7 @@ FallbackVertex vertex_main(uint vertex_index : SV_VulkanVertexID, uint slot : SV
     FallbackVertex o;
     o.position = mul(f[0].view_proj, float4(relative, 1));
     o.id_base = slot << VISIBILITY_TRIANGLE_BITS;
-    // A cut-out cluster is drawn by `vertex_cutout_main` (#171): its triangles collapse here.
-    if ((f[0].flags & FLAG_CUTOUTS) != 0 && cluster_cutouts(f, inst, m) != 0)
-        o.position = float4(0.0, 0.0, 0.0, 1.0);
+    // The cut-out clusters are `vertex_cutout_main`'s, from draws of their own (#171, #265).
     return o;
 }
 
@@ -2218,7 +2247,7 @@ struct FallbackCutoutVertex
     float slant : TEXCOORD2;   // `card_slant`
 };
 
-// `mesh_cutout_main` on the fallback path: the cut-out clusters' triangles, the others' collapsed.
+// `mesh_cutout_main` on the fallback path: the cut-out clusters' draws, after the others'.
 [shader("vertex")]
 FallbackCutoutVertex vertex_cutout_main(uint vertex_index : SV_VulkanVertexID, uint slot : SV_VulkanInstanceID)
 {
@@ -2238,8 +2267,6 @@ FallbackCutoutVertex vertex_cutout_main(uint vertex_index : SV_VulkanVertexID, u
     o.slant = card_slant(normalize(instance_vector(inst, decode_normal(v.normal))), relative);
     if (f[0].meshes[inst.mesh].uvs != 0)
         o.uv = paged_uv(f, uv_stream(f, base, m), local);
-    if (cluster_cutouts(f, inst, m) == 0)
-        o.position = float4(0.0, 0.0, 0.0, 1.0);
     return o;
 }
 

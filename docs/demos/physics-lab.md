@@ -1883,10 +1883,12 @@ and SHA-256. The script checks each file and keeps those already there. The mode
 - **Double-sided materials and alpha cut-outs, drawn since #171.**
   - TextureSettingsTest's double-sided row now shows its check, and Sponza's foliage and
     chains are cut out.
-  - **Raster:** a cluster with a cut-out or double-sided row takes a second hardware pipeline
-    over the same list. It culls no face, and its fragments are tested: a single-sided row's
-    back faces and a cut-out row's texels under its `alphaCutoff` are discarded. The other
-    clusters keep a fragment shader without `discard`, and with it the early depth test.
+  - **Raster:** a cluster with a cut-out or double-sided row takes a second hardware pipeline.
+    It culls no face, and its fragments are tested: a single-sided row's back faces and a
+    cut-out row's texels under its `alphaCutoff` are discarded. The other clusters keep a
+    fragment shader without `discard`, and with it the early depth test. Since #265 the cull
+    lists the cut-out clusters apart, in the same order, and each pipeline runs over its own
+    list: before, both ran over every visible cluster, each skipping the other's.
   - **Rays:** the shadow, probe and reflection rays test the same texels, as an any-hit
     shader would. A double-sided row has no inside for the probes.
   - **Our own models:** Blender exports every material double-sided, and our models are

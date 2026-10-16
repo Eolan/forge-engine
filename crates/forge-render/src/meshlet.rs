@@ -796,15 +796,18 @@ fn software_worth_it(on: bool, dense_triangles: u32) -> bool {
 const DRAW_COMMAND_BYTES: u32 = 20;
 
 /// The cluster arguments at the start of a frame (`Frame::clusters`): per pass, the hardware
-/// draw grid and its count, the software raster grid and its count and the merge's draw
-/// (vertex and instance counts written by the cull), all empty; then the culls' tickets.
-const CLUSTER_ARGS_START: [u32; 26] = [
-    0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, // pass 1 (or the single pass)
-    0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, // pass 2
+/// draw grid and its count, the software raster grid and its count, the merge's draw
+/// (vertex and instance counts written by the cull) and the cut-outs' raster grid and its
+/// count (#265), all empty; then the culls' tickets.
+const CLUSTER_ARGS_START: [u32; 34] = [
+    0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, // pass 1 (or the single pass)
+    0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, // pass 2
     0, 0, // tickets
 ];
-/// Bytes of one pass's cluster arguments.
-const CLUSTER_ARGS_PASS_BYTES: u64 = 48;
+/// Bytes of one pass's cluster arguments (`CLUSTER_PASS_WORDS` in the shader).
+const CLUSTER_ARGS_PASS_BYTES: u64 = 64;
+/// Where the cut-outs' raster grid lies in a pass's cluster arguments (#265).
+const CLUSTER_ARGS_CUTOUT_BYTES: u64 = 48;
 
 /// `Frame::indirect` at the start of a frame: the cluster cull's grid (x, y, 1, items), the
 /// instance cull's ticket, its work items and roots, a spare word; then pass 2's grid over
@@ -2595,10 +2598,11 @@ fn cull_groups(capacity: u32) -> u32 {
 }
 
 /// Bytes of the cluster culls' status words (a transient, #78): one per workgroup of
-/// `CULL_ITEMS` items and pass, and one more run for pass 1's list of what it leaves to pass 2
-/// (issue #92), cleared before the instance cull.
+/// `CULL_ITEMS` items and pass, and one more run per pass for pass 1's list of what it leaves
+/// to pass 2 (issue #92) and the cut-out clusters' list (#265), cleared before the instance
+/// cull.
 fn cull_lookback_bytes(capacity: u32) -> u64 {
-    3 * u64::from(cull_groups(capacity)) * 8
+    4 * u64::from(cull_groups(capacity)) * 8
 }
 
 /// Bytes of the software rasteriser's samples for `extent`: 8 per pixel
@@ -3721,11 +3725,11 @@ impl MeshletRenderer {
                 usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
             }),
             // On the fallback path, one `VkDrawIndexedIndirectCommand` per hardware-drawn
-            // cluster of the pass being drawn.
+            // cluster of the pass being drawn, the cut-out ones' in a second half (#265).
             draws: (self.path == GeometryPath::IndirectCount).then(|| {
                 graph.transient_buffer(TransientBufferDesc {
                     name: "cluster draws",
-                    size: u64::from(self.visible_target) * u64::from(DRAW_COMMAND_BYTES),
+                    size: 2 * u64::from(self.visible_target) * u64::from(DRAW_COMMAND_BYTES),
                     usage: vk::BufferUsageFlags::STORAGE_BUFFER
                         | vk::BufferUsageFlags::INDIRECT_BUFFER,
                 })
@@ -3738,10 +3742,10 @@ impl MeshletRenderer {
                 usage: vk::BufferUsageFlags::STORAGE_BUFFER,
             }),
             // The pass being drawn's raster lists: list slots, hardware-drawn from the front,
-            // software-rasterised from the back.
+            // software-rasterised from the back, and in a second half the cut-out ones (#265).
             raster: graph.transient_buffer(TransientBufferDesc {
                 name: "raster lists",
-                size: u64::from(self.visible_target) * 4,
+                size: 2 * u64::from(self.visible_target) * 4,
                 usage: vk::BufferUsageFlags::STORAGE_BUFFER,
             }),
             // The clusters pass 1 leaves to pass 2 (issue #92): (instance, meshlet | flags)
@@ -4929,21 +4933,23 @@ impl MeshletRenderer {
                 commands.begin_rendering(&info);
                 commands.set_viewport_full(extent);
                 let mut result = Ok(());
-                // The clusters, then over the same list the cut-out ones (each pipeline's
-                // shaders skip the other's clusters).
-                for pipeline in std::iter::once(pipeline).chain(cutouts) {
+                // The clusters, then the cut-out ones from their own list (#265): its grid
+                // after the merge's draw, its fallback draws after the others' capacity.
+                let lists = std::iter::once((pipeline, 0)).chain(cutouts.map(|p| (p, 1)));
+                for (pipeline, list) in lists {
                     commands.bind_pipeline(pipeline);
                     commands.push_constants(pipeline, &push);
+                    let grid = args_offset + list * CLUSTER_ARGS_CUTOUT_BYTES;
                     result = result.and(match io.draws {
-                        None => commands.draw_mesh_tasks_indirect(clusters, args_offset),
+                        None => commands.draw_mesh_tasks_indirect(clusters, grid),
                         Some(draws) => {
                             let draws = resources.buffer(draws);
                             commands.bind_index_buffer(triangles, 0, vk::IndexType::UINT8_KHR);
                             commands.draw_indexed_indirect_count(
                                 draws,
-                                0,
+                                list * u64::from(capacity) * u64::from(DRAW_COMMAND_BYTES),
                                 clusters,
-                                args_offset + 12,
+                                grid + 12,
                                 capacity,
                                 DRAW_COMMAND_BYTES,
                             );
