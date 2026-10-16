@@ -417,7 +417,7 @@ limes, umbrella pines and holm oaks. The demo grows each species' individuals at
 half and all of its maturity and gives each plant the one nearest its height (a 10 m plane
 was the mature tree shrunk, a ball on a stem), the planted ones with their crowns lifted to 38 %
 of their height (half an umbrella pine's, 15 % an olive's) and their leaves' lumps kept above
-it. The one model is left only to the planters' shrubs; the map check's views take 2.2–2.8 ms
+it. The one model is left only to the planters' shrubs; the map check's views take 2.2–2.8 ms. Only plans with a forest (the village's maps) get them: the 4 km city's thousands of street and park trees grown took 23–34 ms of GPU in the sandbox's day check where the one model takes 4.4–4.9, so the city keeps its one model until D-013's far tiers
 (`reports/2026-10-16/village-street-trees.png`, the walk under a plane's crown). A village's whole network is under the 3 km a cut-off
 network had to reach to be kept (`graph::MIN_NETWORK`), so the plan came out empty under
 twice the radius: a network is now kept over 3 km or over half of all the streets. The example

@@ -185,6 +185,8 @@ squares, limes along the lanes and, with olives, in the courts, umbrella pines w
 the water, the parks a mix of planes, limes, umbrella pines and holm oaks. Street trees are
 pruned with their crowns lifted clear of the passers-by: the demo grows its planted individuals
 with the crown lifted to 38 % of their height (half for the umbrella pine, 15 % for the olive).
+For now only plans with a forest get species: the 4 km city's thousands of planted trees grown
+took 23–34 ms of GPU against the one model's 4.4–4.9, and wait for D-013's far tiers.
 
 [vdb-plane]: https://www.vdberk.co.uk/trees/platanus-hispanica/
 [vdb-lime]: https://www.vdberk.co.uk/trees/tilia-europaea/

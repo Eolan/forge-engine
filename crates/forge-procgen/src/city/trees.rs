@@ -419,6 +419,10 @@ pub fn trees(site: &Site, plan: &CityPlan, seed: u64) -> Vec<Tree> {
     // The planted trees' species (#257, D-063): planes along the avenues and the shared streets
     // and round the squares, limes along the lanes and in the courts with olives, umbrella pines
     // within 30 m of the water, the parks a mix of planes, limes, umbrella pines and holm oaks.
+    // Only where the plan grows a forest (the village's maps): the 4 km city's thousands of
+    // street and park trees as grown meshes took 23–34 ms of GPU where the one model took 4.4–4.9
+    // (the sandbox's day check); the city keeps its one model until D-013's far tiers.
+    let species_here = plan.forest.is_some();
     let all = forge_flora::species::mediterranean();
     let id = |name: &str| all.iter().position(|s| s.id == name).map(|i| i as u16);
     let (plane, lime, pine, oak, olive) = (
@@ -443,7 +447,10 @@ pub fn trees(site: &Site, plan: &CityPlan, seed: u64) -> Vec<Tree> {
             roads.insert(p, i as u32);
         }
     }
-    for t in out.iter_mut().filter(|t| t.species.is_none()) {
+    for t in out
+        .iter_mut()
+        .filter(|t| species_here && t.species.is_none())
+    {
         let hash = (t.pos.x.to_bits() ^ t.pos.y.to_bits().rotate_left(23))
             .wrapping_mul(0x9E37_79B9_7F4A_7C15)
             >> 60;
