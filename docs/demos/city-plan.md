@@ -353,7 +353,12 @@ family of four on a 6 m lot (two storeys, the ground floor the day's), a poor ho
 three (the minimums kept), a rich house of five on 14 m (its suites upstairs), each storey's
 rooms tiling it with none over another. **On their lots** (`city::houses`): each strip's lot gets a household's plan at the
 lot's width and the strip's depth less a 1.5 m yard; the footprint runs from the street to the
-plan's depth, cut to the lot where a corner lot narrows, the rest of the lot the garden.
+plan's depth, cut to the lot where a corner lot narrows, the rest of the lot the garden. The
+house takes only the stretch of the front where the lot is at least a room deep (2.6 m,
+sampled every quarter metre): a corner lot's bisector cuts the strip to a wedge, and a house
+across the whole front had a window at its end with the roof right behind it and no room (the
+owner, 2026-10-16, the sandbox's item 26); the wedge stays garden, and a front left under a
+hall and a room wide keeps no house.
 `HOUSES_PNG=path cargo test -p forge-procgen houses` draws the trapezoid block's houses, their
 footprints shaded by their storeys.
 
@@ -369,9 +374,10 @@ then 8 m, a house with no yard), one too thin for that keeps no houses. Each hou
 of the city's masses on its own lot, appended to the plan's (old stone, a tiled roof, homes
 only), so the structures, the facades and the kit draw it as they draw the city's buildings.
 The example village on the city's parameters: 8 blocks with strips round their courts, 1 too
-thin, 406 houses of one to four storeys (35, 225, 125 and 21), 1 273 people, 394 houses with
-a door (`reports/2026-10-16/village-600m.png`; `VILLAGE_PNG=path cargo test -p forge-procgen
-village` draws it). The first cut (2026-10-15) drew the widths at random: 191 houses, 586
+thin, 384 houses of one to four storeys (7, 209, 146 and 22), 1 200 people, every house with
+a door and 346 with a stair (`reports/2026-10-16/village-600m.png`; `VILLAGE_PNG=path cargo
+test -p forge-procgen village` draws it; 406 houses before the corner wedges lost their
+slivers). The first cut (2026-10-15) drew the widths at random: 191 houses, 586
 people, and once the houses were masses the rich households on 5 m lots stood nine storeys.
 **Its own plan** (`village::params`, the same day): one village district on the site's middle
 with lanes that wander (`Pattern::Organic`), one main road, no trams, boats nor landmarks, a
@@ -386,8 +392,8 @@ clear of the roads (`trees::Setting::Forest`; pines and oaks of 8–16 m from th
 until the grower's species, #257). A village's whole network is under the 3 km a cut-off
 network had to reach to be kept (`graph::MIN_NETWORK`), so the plan came out empty under
 twice the radius: a network is now kept over 3 km or over half of all the streets. The example
-site at 600 m on its own plan: 16 nodes, 22 edges, 7 blocks, 5 built and all with strips, 187
-houses, 565 people, 3 118 trees in the forest (`reports/2026-10-16/village-own-organic.png`;
+site at 600 m on its own plan: 16 nodes, 22 edges, 7 blocks, 5 built and all with strips, 171
+houses, 517 people, 3 118 trees in the forest (`reports/2026-10-16/village-own-organic.png`;
 `VILLAGE_OWN_PNG=path` draws it). The first cut on the whole site, without the forest, had
 559 houses on 13 blocks. **Its streets:** a village's main road is a shared street (10 m of
 paving, no kerbs, bike lanes nor lamp rows) and its lanes are pedestrian, as an old town's,
@@ -403,8 +409,8 @@ road, the busiest junction) and a walked path along the first house's street, ea
 with `captures/map/accepted` by LDR-ꟻLIP, about two minutes; `--accept` keeps a run
 (`docs/PROCESS.md`). **One home a house** (`Mass::home`, the same day): a village house is
 one unit over all its storeys, entered from the street, with its household's main rooms (1.5
-a person, so the structures' residents match the village's): on the city's parameters, 388
-households and 1 295 residents by the structures for 406 houses and 1 273 people by the
+a person, so the structures' residents match the village's): on the city's parameters, 368
+households and 1 232 residents by the structures for 384 houses and 1 200 people by the
 village (one home in twenty vacant, as the city's). Before, the units cut each storey into a
 flat. Next: the rooms themselves as the units' plan, a square with the rich house, species
 for the trees (#257), the player's objective.

@@ -43,11 +43,21 @@ pub fn houses(
         .filter(|(_, lot)| lot.len() >= 3)
         .filter_map(|(k, lot)| {
             let (people, means) = household(k);
-            let width = parcels::frontage(lot);
-            let plan = rooms::plan(&rooms::programme(people, means), width, plan_depth(ty));
             let (a, b) = (lot[0], lot[1]);
             let t = (b - a).normalize_or_zero();
-            let inward = DVec2::new(-t.y, t.x) * plan.depth;
+            let inward = DVec2::new(-t.y, t.x);
+            // The house takes the stretch of the front where the lot is at least a room deep:
+            // a corner lot's bisector cuts the strip to a wedge, and a house across the whole
+            // front had a window at its end with the roof right behind it and no room (the
+            // owner, 2026-10-16). The rest of the front stays garden.
+            let (s0, s1) = front_stretch(lot, a, t, inward, rooms::DEPTH.0)?;
+            let width = s1 - s0;
+            if width < rooms::HALL + 2.4 {
+                return None;
+            }
+            let plan = rooms::plan(&rooms::programme(people, means), width, plan_depth(ty));
+            let (a, b) = (a + t * s0, a + t * s1);
+            let inward = inward * plan.depth;
             let mut footprint = vec![a, b, b + inward, a + inward];
             // Within the lot: a corner lot narrows towards the back.
             let n = lot.len();
@@ -75,6 +85,44 @@ pub fn houses(
         .collect()
 }
 
+/// The stretch `(from, to)` along the front `a + t s` of `lot` where the lot reaches at least
+/// `depth` metres in along `inward`, sampled every quarter metre (one stretch: along a convex
+/// lot's front the depth rises then falls); `None` where it never does.
+fn front_stretch(
+    lot: &[DVec2],
+    a: DVec2,
+    t: DVec2,
+    inward: DVec2,
+    depth: f64,
+) -> Option<(f64, f64)> {
+    let width = parcels::frontage(lot);
+    let n = lot.len();
+    let deep_at = |s: f64| {
+        let p = a + t * s;
+        if !geom::contains(lot, p + inward * 0.3) {
+            return 0.0;
+        }
+        let far = p + inward * 200.0;
+        (0..n)
+            .filter_map(|i| geom::segment_intersection(p, far, lot[i], lot[(i + 1) % n]))
+            .map(|(u, _)| u * 200.0)
+            .filter(|&d| d > 0.05)
+            .fold(f64::MAX, f64::min)
+    };
+    let steps = (width / 0.25).ceil().max(1.0) as usize;
+    let (mut from, mut to) = (None, None);
+    for k in 0..=steps {
+        let s = (k as f64 * 0.25).min(width);
+        if deep_at(s) >= depth {
+            from.get_or_insert(s);
+            to = Some(s);
+        } else if from.is_some() {
+            break;
+        }
+    }
+    Some((from?, to?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -90,7 +138,8 @@ mod tests {
         let ty = ParcelType::VILLAGE;
         let (lots, court) = parcels::strips(&block, &[true; 4], &ty, 5).expect("strips");
         let houses = houses(&lots, &ty, |k| (2 + (k % 3) as u32, Means::Modest));
-        assert_eq!(houses.len(), lots.len());
+        // A corner wedge may keep no house.
+        assert!(houses.len() + 2 >= lots.len() && houses.len() <= lots.len());
         for h in &houses {
             assert!(h.footprint.len() >= 3, "a footprint");
             let area = geom::signed_area(&h.footprint).abs();

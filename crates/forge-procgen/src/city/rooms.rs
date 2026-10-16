@@ -69,7 +69,7 @@ pub const ROOM_MIN: f64 = 9.0;
 pub const HALL: f64 = 2.2;
 /// A room's depth at least and at most, metres: a room is wider than a corridor and no deeper
 /// than daylight reaches from its window.
-const DEPTH: (f64, f64) = (2.6, 6.5);
+pub const DEPTH: (f64, f64) = (2.6, 6.5);
 
 /// The rooms a household of `people` needs by its `means`: the day rooms first, then the
 /// bedrooms and bathrooms, each with its area (the research's table by means).
