@@ -4504,6 +4504,9 @@ ReSTIR waits on the owner's word.
    candelas and kelvin, lit from the households' routines as the faked windows are.
 3. **Probes for rooms:** a finer finest cascade on walked-in maps (2 m, or 1 m round the walker, as
    the models lab's rooms), measured against today's 4 m; the probes' hits lit by the lamps.
+   *Measured the same evening:* at 2 m and 1 m a hall lit through its door stayed as dark; the
+   cause was the street's fixed exposure, and the village now meters (`Look::metered`,
+   `demos/city-plan.md`, "Open at every opening, and metered").
 4. **Glass both ways** for the near houses with drawn insides; the far ones keep their faked rooms.
 5. **Checks:** a night time in the map check's inside views, the shimmer scripts, the F1 overlay
    and `PROFILE.md`.
@@ -4514,3 +4517,64 @@ clustered lists proposed here; and the order of the four parts.
 *Not chosen for now:* a light tree sampled stochastically (Moreau et al. 2019: thousands of lights
 are more than a village needs, its patents not searched); lamps as emissive surfaces only (no
 shadows, no light on the walls).
+
+## D-066 — Pieces with sockets: one connector schema for generation, the anomaly check and player building 🟡 (proposed 2026-10-16 on the owner's walk of #266)
+
+**The question:** the owner, walking the village: "would using some kind of snap system with the
+module parts help, if it does not snap everywhere, it means something is wrong, we need a way to
+detect anomalies for building and probably roads, walls and other things"; "if one day we allow
+players to build structures we would need a snap system anyway"; "the shape of the module piece
+and its type in itself would authorize or reject what's possible to join it to"; "apply it to
+sidewalks and roads as well". Research: `research/building-sockets.md` (how shipped games join
+pieces, connector models, stability, checking, patents) and `research/house-layouts.md` (the
+rules the village's houses, lots and walls should keep).
+
+**What exists:** the kit's modules fill scopes the facade grammar cuts (`forge_geom::modules`,
+`forge_procgen::grammar`); the structures, interiors, garden walls and the road graph are each
+built by their own code; `city::anomalies` (the same evening) counts seven kinds of breach
+without sockets (rooms past their walls, partitions in openings, unlit rooms, slivers, eave steps,
+crooked walls, misplaced plants), and its test fails when a count rises.
+
+**Proposed:**
+1. **A piece schema with sockets** (`research/building-sockets.md` §6): each piece its family,
+   sizing (fixed, or a scope's range), material, solids, faces and keep-out volumes, and its
+   sockets: a kind, a profile (a cross-section: "wall 0.40 rubble", "eave 30° tile"), a frame on
+   the scope's boundary, an extent (a point, a span, a rectangle: Space Engineers' mount points),
+   a fit, a polarity, the turns allowed, a need (required, optional, an end cap), a bearing and
+   veto masks. One `compatible(a, b)` for every user: a static matrix of kinds (Tessera's), equal
+   profiles or a listed transition piece, opposite normals within 1° and positions within 1 cm.
+2. **Sockets on what exists, in order:** the 16 kit modules (wall seams, foot and head, holes and
+   their fills with thresholds), the structural walls and slabs, the roofs (eaves, ridges, hips,
+   valleys, verges onto party walls), the garden walls (ends, gates), then the road graph and the
+   pavements (road ends, kerbs, path ends with their slope).
+3. **The checker on sockets:** every required socket matched exactly once by a compatible one,
+   no mismatched pair, no double match, no overlap or coplanar faces of two pieces, nothing
+   floating (connectivity from the ground anchors), openings against rooms (a door between two
+   floors at one level, a window onto open air), networks matched; its counts by kind in the map
+   check, an overlay colouring the sockets; `city::anomalies`' seven kinds kept beside it.
+4. **Generation through it:** the grammar stays; its terminals make pieces with sockets, and a
+   join pass places corners, end caps and transitions to meet the required ones, so a lot's
+   corners, a row's party walls and roofs, and a garden wall's ends are made by matching, not by
+   case-by-case geometry. WFC, through the same `compatible`, only for small discrete problems
+   (roofscape clutter, chimneys, light wells).
+5. **Player building later, on the same data:** free sockets in a spatial hash, candidate pairs
+   within about 0.5 m filtered by `compatible` and cycled by hand (Valheim's), the ghost coloured
+   by support, the same checker on each placement.
+6. **Support:** connectivity first (floating pieces); support decaying a joint or a metre as a
+   widest path from the anchors (Valheim's model in one pass) for the ghost; capacity flows later;
+   stress only offline.
+
+**Patents** (`research/building-sockets.md` §5): none found on typed sockets for building pieces
+or on Valheim-like support. Live and to avoid: Nintendo's US 12,440,766 B2 (bonding free objects
+at marked positions while one moves: no carry-and-glue builder, no vehicle or contraption
+builder without the owner's word) and US 12,667,784 B2 (detaching an assembly's members);
+Sony's US 8,152,613 B2 (stress nodes breaking over a threshold, to about 2030: no stress-and-break
+pass without the owner's word); NCSOFT's KR 10-2310107 B1 (WFC on generated node graphs, Korea:
+WFC only on lattices or grammar slots).
+
+**Enshrouded,** which the owner pointed at: voxels with prefab shapes and terraforming, no
+structural integrity or building physics found (its 1.0 changelog of 2026-10-15 included): its
+lesson is freedom on a voxel base, for the terrain and the gardens, not the checker.
+
+**For the owner to decide:** the schema and its order (1–3 first, then 4; 5 and 6 later); and the
+two live Nintendo patents' reach before any free-form builder.
