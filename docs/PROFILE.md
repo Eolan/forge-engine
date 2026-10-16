@@ -1414,33 +1414,40 @@ on a fresh cache (the shaders compile, the meshes cook), the tree's own cache se
 back. Ryzen 7 9800X3D (8 cores, 16 threads), RTX 5070 Ti, NVMe. The machine was shared (a game,
 another session's builds): best of three, the base build's runs taken in turn with the change's.
 
-| | Base (a705dd3) | After (5aed640) |
+| | Base (a705dd3) | After |
 |---|---|---|
-| The village (`--village 600`), warm | 4.53 s | **1.57 s** |
+| The village (`--village 600`), warm | 4.53 s | **1.15 s** |
 | The village, fresh cache | 32.9 s | **9.4 s** |
-| The city (4 km), warm | 23.6 s, the window at 11.0 s | **5.4 s**, the window at 0.7 s |
-| The city, fresh cache | 52.0 s | **15.4 s** |
+| The city (4 km), warm | 23.6 s, the window at 11.0 s | **4.44 s**, the window at 0.7 s |
+| The city, fresh cache | 52.0 s | **15.1 s** |
 
 Where it went, and what changed:
 - **Shaders on a fresh cache.** A program's first start has no list of its shaders to compile
   ahead: the village compiled its 57 entries one after another as it asked for them, 26 s of
   its 34. The warm-up now compiles every entry the shader files declare when there is no list,
   on all the cores but two (four threads before): 149 entries in 7–13 s, the cost of a fresh
-  village start now. One entry that fails no longer stops its thread's share.
+  village start now. One entry that fails no longer stops its thread's share. (`slangc` cannot
+  write a file's entries to their own SPIR-V in one run: it wants one module for them all.)
 - **The procedural textures** (grass, paving, asphalt, facades, shopfronts, concrete, tiles,
-  the leaf atlas): 1.4 s of one thread at both maps' starts, now 0.45 s, their texels, encoding
-  and mips in rows on all cores, the leaf atlas's four sprays painted at once. Every texture's
-  bytes are unchanged (the 40 generators' outputs hashed before and after).
+  the leaf atlas): 1.4 s of one thread at both maps' starts, 0.45 s with their texels, encoding
+  and mips in rows on all cores and the leaf atlas's four sprays painted at once (every
+  texture's bytes unchanged: the 40 generators' outputs hashed before and after). Then kept in
+  the derived cache (`textures::keep_in`, which `city_blocks::run` sets): each under its
+  generator, its inputs and a digest of the generators' code, read back in about 0.1 s.
 - **The city's ground, block by block** (each block's forecourt cut from the street map by
   i_overlay's booleans, then triangulated): 13.5 s of one thread before the window opened, now
   1.0 s, the blocks on all cores and laid in the tiles in their order. The triangulation was
-  most of it: with the booleans alone in parallel it still took 9–13 s.
+  most of it: with the booleans alone in parallel it still took 9–13 s. Taking the largest
+  blocks first changed nothing.
+- **The buildings' structures** (`city::structure::structures`): 1.05 s, now 0.40 s, each
+  mass's structure, its flats and each block's unreached doors on all cores.
 - **The meshes' cluster DAGs** (the city's 783: its tiles, its kit's 270 modules, the insides;
   the village's 147, with 9 species' 81 grown plants): 9.9 s of one thread for the city, 2.3 s
-  for the village. Cooked side by side a third of the cores at a time (2.8–5.4 s for the city): the DAG
-  builder spreads a large mesh's groups over threads of its own, and sixteen meshes at once took
-  7.6 s, starting threads and filling their tables of all the mesh's vertices. Its parallel map
-  now gives each thread 16 groups at least (two groups made two threads).
+  for the village. Cooked side by side a third of the cores at a time (2.8–5.4 s for the
+  city): the DAG builder spreads a large mesh's groups over threads of its own, and sixteen
+  meshes at once took 7.6 s, starting threads and filling their tables of all the mesh's
+  vertices. Its parallel map now gives each thread 16 groups at least (two groups made two
+  threads).
 - **The derived cache** keeps each cooked mesh under its place in the scene and a key: its
   content's digest, its cook's options and a digest of the cooking code
   (`forge_geom::cache::cook_code`). The city's 783 read back in 60–70 ms (207 MB on disk), the
@@ -1461,16 +1468,16 @@ meshes, on the loading thread`, `the plan's scene's steps`):
 | | The village | The city |
 |---|---|---|
 | Before the window: the plan, its masses, trees and lamps | 0.17 s | 0.7 s |
-| The plan laid out in its tiles: structures and gardens, the blocks' ground, the quays, the streets | 0.02 s | 2.9 s (1.05, 0.98, 0.23, 0.19) |
+| The plan laid out in its tiles: structures and gardens, the blocks' ground, the quays, the streets | 0.02 s | 2.2 s (0.40, 0.99, 0.22, 0.19) |
 | The meshes read from the cache (the plants grown) | 0.11 s | 0.07 s |
 | The device, the renderer, NRD | ~0.5 s | ~0.5 s |
-| The textures | 0.42 s | 0.37 s |
+| The textures read back | 0.1 s | 0.1 s |
 | The tiles, the kit and the insides added | 0.04 s | 0.32 s |
 | The upload and the acceleration structures | 0.20 s | 0.42 s |
 
 Left: a fresh cache's 149 shaders (a program could compile only its own if a list came with the
-sources), the city's structures and ground (2 s, on all cores already; the cache could keep
-them), the textures (the cache could keep them too), the upload.
+sources); the city's ground (1 s on all cores; the cache could keep it), its quays and streets
+(0.4 s, triangulated on one thread) and its plan before the window (0.7 s); the upload.
 
 ## `planet` — a planet from orbit to its ground (#220, D-056, 2026-10-10)
 

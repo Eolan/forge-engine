@@ -148,16 +148,17 @@ solar, terrace). The rivers are smooth strips along their centrelines; the sea a
 from the site's cells. A private sandbox hands its own plan to `PlanScenario::new`.
 
 It loads behind the loading screen (#274): `city_blocks::run_making` lays the plan out in its
-tiles on the loading thread, the blocks' ground cut on all cores, and `Scenario::prepare` cooks
-the scene's meshes there or reads them from the derived cache (each under its place in the
-scene, its content's digest and the cooking code's), beside a fresh cache's shaders compiled
-ahead. The log names each step's milliseconds; `tools/load-time.sh city-plan --village 600`
+tiles on the loading thread, the blocks' ground and the buildings' structures made on all
+cores, and `Scenario::prepare` cooks the scene's meshes there or reads them from the derived
+cache (each under its place in the scene, its content's digest and the cooking code's), beside
+a fresh cache's shaders compiled ahead; the generated textures are read back from the cache
+too. The log names each step's milliseconds; `tools/load-time.sh city-plan --village 600`
 times the loads.
 
 | | |
 |---|---|
 | Meshes / triangles / trees | 484 / 720 k (309 k before the afternoon of 2026-10-11: dropped kerbs, paved corners, quay walls, the rivers' banks) / 27 379 instances of one tree (36 717 before the avenues' trees alternated with lamps) |
-| Built and cooked | 1.3 s then; 2026-10-16 (#274, `docs/PROFILE.md`, "Loading `city-plan`"), to the loading screen's end: the city 5.4 s warm and 15.4 s on a fresh cache (23.6 and 52.0 s before), the village 1.57 and 9.4 s (4.53 and 32.9 s) |
+| Built and cooked | 1.3 s then; 2026-10-16 (#274, `docs/PROFILE.md`, "Loading `city-plan`"), to the loading screen's end: the city 4.44 s warm and 15.1 s on a fresh cache (23.6 and 52.0 s before), the village 1.15 and 9.4 s (4.53 and 32.9 s) |
 | GPU frame at 2800 × 1575, this view | 3.84 ms (3.33 without trees or facade textures) |
 | p50 / p99 frame | 3.67 / 7.28 ms |
 
