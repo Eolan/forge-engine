@@ -1650,8 +1650,9 @@ The decode thread's side, a second of stereo at 48 kHz decoded whole (the best o
 costs its decode thread under 0.2 % of a core. Not measured yet: the wake-ups of a real device.
 
 **Footsteps and impacts** are synthesised on the game thread when they happen (`foley`; the
-mean of 200 walking steps of 80 kg, the same bench): stone 208 µs, wood 270 µs, grass 353 µs,
-gravel 490 µs, water 625 µs, metal 701 µs (its 1.27 s of ringing). Ten walkers, two steps a
+mean of 200 walking steps of 80 kg in leather shoes, the same bench): stone 311 µs, grass
+421 µs, wood 495 µs, gravel 513 µs, water 611 µs, metal 853 µs (its 1.41 s of ringing; the
+toes' scuff and the variation added about 100 µs a step). Ten walkers, two steps a
 second each, cost the game thread about 0.9 % of a core; a step's sound could move to a worker
 if that ever shows in the frame.
 

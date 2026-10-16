@@ -664,6 +664,9 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   2005).
 - **Voices.** The real and virtual voices of FMOD and Wwise as their documentation describes
   them: a budget kept by priority and then audibility, virtual voices that keep their time.
+- **Variation.** Wwise's random container and FMOD's multi instrument as their documentation
+  describes them: a take not among the last few played, its pitch and volume drawn within a range
+  (`forge_audio::variation`).
 - **Ogg Vorbis and Opus.** The Xiph.Org Foundation's Vorbis I specification (granule positions
   and the trimming they imply, A.2); RFC 7845 (Ogg Opus: the head, the pre-skip, the granule
   positions) and RFC 6716 (Opus).

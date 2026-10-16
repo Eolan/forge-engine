@@ -1,10 +1,11 @@
 # Research — Game audio engine architecture and spatial audio
 
-> Status: v0.4, 2026-10-16: §14 adds Steam Audio's HRTF as built and measured, and the recorded
-> birds. v0.3, 2026-10-16: §13 adds what footsteps, impacts and the ambience beds (#267) are made
-> from, the cicadas' song as measured, and the patents met. v0.2, 2026-10-16: §12 adds what the
-> first build (#267) chose and checked: the decoders, Steam Audio's bands and filters read in its
-> source, its release dates corrected, the patents met. v0.1,
+> Status: v0.5, 2026-10-16: §15 records the owner's first listen and what it changed (shoes,
+> variation, cicadas in rain). v0.4, 2026-10-16: §14 adds Steam Audio's HRTF as built and
+> measured, and the recorded birds. v0.3, 2026-10-16: §13 adds what footsteps, impacts and the
+> ambience beds (#267) are made from, the cicadas' song as measured, and the patents met. v0.2,
+> 2026-10-16: §12 adds what the first build (#267) chose and checked: the decoders, Steam Audio's
+> bands and filters read in its source, its release dates corrected, the patents met. v0.1,
 > 2026-09-23. Sources checked the same day (crates.io API, GitHub, publisher and author
 > pages, vendor docs). Builds on the prior project's
 > [`world/docs/research/audio.md`](../../../world/docs/research/audio.md) (v0.1, 2026-09-14), which is
@@ -59,6 +60,7 @@ reference today), **recent** (2019 or later).
 12. [The first build: crates, Steam Audio's filters, patents (2026-10-16)](#12-the-first-build-crates-steam-audios-filters-patents-2026-10-16)
 13. [Footsteps, impacts and ambience made in code (2026-10-16)](#13-footsteps-impacts-and-ambience-made-in-code-2026-10-16)
 14. [Steam Audio's HRTF and recorded birds (2026-10-16)](#14-steam-audios-hrtf-and-recorded-birds-2026-10-16)
+15. [The owner's first listen (2026-10-16)](#15-the-owners-first-listen-2026-10-16)
 
 ---
 
@@ -1030,3 +1032,44 @@ whole); a high-pass at 2.5 kHz leaves the song. The calls are cut by level (12 d
 quietest fifth of the windows): 24 blackbird phrases, 10 sparrow calls, 22 serin passages.
 Recorded birds at noon come out sparser than the made ones (−40.9 dBFS in the 1 to 8 kHz band
 against about −30), as real birds are; the dawn with the far chorus plays where the made one did.
+
+## 15. The owner's first listen (2026-10-16)
+
+The owner played the live demo's tour and reported three things. What they were and what
+changed.
+
+**"Time and temp, I don't know what that is, but it stays when the wind and rain run."** The
+sound that the tour's noon at 31 °C started was the cicada chorus, which did not read as cicadas,
+and the rules kept it: at 9 m/s of wind it stayed at 99 %, rain took six seconds to bring it to
+an eighth, and it was back two seconds after the rain. Cicadas do sing in a breeze, but they
+stop at once when it rains and wait for the sun to dry things. The rules now silence them from
+5 to 10 m/s of wind, stop them within two seconds of rain (gains fall at their own pace), and keep
+them quiet while the place is wet (the ambience remembers the rain and dries over two minutes;
+a weather simulation can pass its own wetness). The demo now names each bed as it starts and
+stops. A synthesised chorus is still not a recording: Wikimedia Commons has one of our species,
+"Cicada orni.ogg" (DavidDelon, Hérault, 2006, public domain, 63 s, 1.7 MB), which would replace
+it with the owner's go, as the birds were.
+
+**"Walking sounds are a bit strange; it depends on what the walker wears."** Three causes,
+found by listening to what the model did. Stone's modes rang as tones (a setts' street sounded
+like a wood block); a stone bedded in sand is damped within a millisecond, so its modes now only
+colour the click. The ball of the foot landed nearly as hard as the heel (a double knock); it
+is now softer, and the toes often scuff as they push off. And the sole was missing: on hard
+ground the shoe sets the contact as much as the ground does. Five kinds now (bare feet,
+trainers, leather, boots, sandals), each with its contact length, slap band, thud and, for a
+sandal, the slap of the sole against the heel. The values are estimates chosen by measuring the
+result (a leather heel's 0.3 ms against a trainer's 4 ms, a bare foot's 10 ms), not taken from
+a study; Turchet's footstep synthesis (§13) and Farnell's are the models to compare with. On
+soft ground the ground decides, as the tests check. In the HRTF build a third cause: the
+walker's own steps were placed 1.6 m straight below the head, where the default HRTF (built
+from measurements that stop at −45° of elevation) has nothing measured; the listener's own
+feet now play without a place.
+
+**"Small variations, so it is not always the exact same sound."** Every step was already made
+anew, but the differences (±5 % in the modes, ±1 dB) were too small to hear. Now each step
+draws its contact (±25 %), click (±3 dB), modes (±8 % on stone), heel and ball balance, gap,
+scuff or none, and level (±1.5 dB), and plays at its own pitch (±2.5 %): twelve steps spread
+over 2 dB in level and 20 % in brightness, and two steps on one surface still stay closer than
+any two surfaces. For recorded sounds, `SoundSet` is the random container of Wwise and FMOD (a
+take not among the last few, its own pitch and level), and the recorded birds avoid their
+species' last three calls.
