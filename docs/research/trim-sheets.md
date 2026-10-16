@@ -289,6 +289,11 @@ sharpening, or relaxed clamping on a thin-feature mask like Unreal's [23].
     pair (2.3 % of the frame), the railing cards 32 834. No difference.
   - So at this view the railings no longer flicker more than the reference's own bars, and the
     cards buy nothing on DLAA. They stay off (with #265's cost besides).
+- **The cost after #265** (2026-10-16, 27dc59e: the cut-out raster's own cluster list; the
+  sandbox, 600 frames, best of three): from the overview 5.05 ms without the cards, 4.97 with
+  them; at street level 2.43 and 2.54 ms, the rays' loop over the railings' instances. The
+  cards are now about free from afar. They still buy nothing on DLAA, so they stay off; for TAA
+  or a lower resolution they are an option that costs 0.1 ms at street level.
 - **Next:** this reference measure on the views the owner walks (the old town's lanes at
   night, the harbour); far forms only where it shows a part flickering.
 

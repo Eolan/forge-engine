@@ -250,8 +250,8 @@ Three stages, each generic:
   cornices change size with every scope and are merged into
   the tiles; openings repeat at a few sizes and are instanced. With `--railing-cards` a
   railing's bars are one card between its rails, a grating the cut-out raster draws by the
-  share of each pixel the bars cover, so they cannot flicker; off by default, it costs 0.09 ms
-  at street level and 0.43 ms from the air until #265 (`research/trim-sheets.md` §2.9).
+  share of each pixel the bars cover, so they cannot flicker; off by default (no gain on DLAA),
+  it costs about 0.1 ms at street level and nothing from the air since #265 (`research/trim-sheets.md` §2.9).
 - **Thin sheets** (2026-10-15, the owner's sightings in a running test). The awnings, the stalls'
   valances, the Market Hall's glass roof, the terraced hall's canopies, the belvedere's dome and
   the trams' roof lights are drawn from both sides as `modules::sheet`, their back face 2 cm
@@ -438,15 +438,23 @@ it. The one model is left only to the planters' shrubs; the map check's views ta
 
 | at 600 m | lumps | leaf cards |
 |---|---|---|
-| GPU, outdoor views | 1.9–2.8 ms | 2.2–4.3 ms |
+| GPU, outdoor views | 1.9–2.8 ms | 2.2–4.3 ms, 2.2–3.4 ms since the cut-outs' own list (#265) |
 | GPU, inside a house | 2.2–2.3 ms | 2.4–2.5 ms |
 | still camera under DLAA, pixels changing frame to frame (main view, junction) | 0.03–0.05 %, 0.04–0.05 % | 0.13–0.15 %, 0.04–0.07 % |
 | the main view without the sun's shadows | 0.01–0.02 % | 0.04 % |
 | 1.4 m/s dolly, pixels changing unlike the 2 × 2 supersampled run | 17.1–17.8 % | 20.5–20.8 % |
 
-The still camera's remainder is in the sun's shadow on the leaves: it goes with the shadows. The
-cards' shadow rays tested on a coarser mip, or started on the card's sunward side, did not
-change it, so the shadow denoiser at the leaves' edges is the next lead. The dolly's measure
+Much of the cards' cost was #265's: both rasters ran over every visible cluster, each skipping
+the other's. Since the cull lists the cut-out clusters apart (27dc59e), `meshlet pass 1` takes
+1.19 ms from the air (1.80 before) and 0.53 ms along the road (1.11), the images unchanged to the
+pixel.
+
+The still camera's remainder comes with the ray tracing (`--no-shadows` turns it all off: 0.04 %).
+Without the GI probes it is 0.08–0.10 %, and without the shadow denoiser 0.41–0.56 % (the lumps
+0.10–0.12 %), so the probes and the denoised sun shadow share it; the ambient occlusion has no
+part. None of these changed it: the cards' shadow rays aimed at the sun's middle, tested on a
+coarser mip or started on the card's sunward side, the cut-out tested one mip coarser, 256 probe
+rays. The denoiser's history at the leaves' edges, which move with the jitter, is the next lead. The dolly's measure
 flags every edge, and the paving and the grass make most of it in both builds. Captures:
 `reports/2026-10-16/village-leaf-cards.png` (the plane over the junction) and
 `village-leaf-cards-road.png`.

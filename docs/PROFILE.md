@@ -1382,6 +1382,16 @@ something stands out). Two things to watch:
     The rays now loop only over the instances with cut-out or jelly rows (#265): with the
     cards, 2.28 ms at street level and 5.19 ms from the overview. The raster's cost remains,
     so the cards stay off by default (`research/trim-sheets.md` §2.9).
+  - *2026-10-16, the raster half (#265, 27dc59e):* the cull lists the cut-out clusters apart,
+    and each raster runs over its own list. The sandbox, 600 frames, best of three, without
+    and with the cards:
+    - from the overview, 5.05 → 4.97 ms (`meshlet pass 1` 0.43 → 0.47);
+    - at street level, 2.43 → 2.54 ms (`meshlet pass 1` 0.09 → 0.12): what is left is the
+      rays' loop over the railings' instances.
+
+    The village's leaf cards (#266) gained most: `meshlet pass 1` 1.80 → 1.19 ms from the air
+    and 1.11 → 0.53 ms along the road, the images unchanged to the pixel. The batch is
+    unchanged too (240 captures, both paths), and its timings move by under 0.04 ms.
   - *2026-10-15, end of day* (the sandbox at 15:00, TAA, 600 frames, best of three):
     - the street start, 2.21 ms; the default overview, 4.76 ms;
     - the morning's figures, with the rooms behind the windows already in, were 2.19 and
