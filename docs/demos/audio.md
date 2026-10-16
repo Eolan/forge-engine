@@ -6,7 +6,8 @@ hour, the weather and the medium, all made in code, built and tested without a d
 or the GPU. The game starts and steers voices through an `AudioEngine`; the `Mixer` renders them,
 wherever the output wants it: in a device's callback, on a mix thread of its own, or offline
 into a buffer that the tests measure and the owner can listen to as WAV files. Nothing in the
-crate opens an audio device.
+library opens an audio device; the `audio-demo` example, which the owner starts, plays it live
+(below).
 
 ```
 cargo test --release -p forge-audio                                      # 57 tests on rendered samples
@@ -118,10 +119,43 @@ listen to; each line prints the voices, steals and the limiter's work.
 | `footsteps` | The walker's own feet, the listener 1.6 m above them: 3.3 s walking on each of stone, gravel, grass, wood, metal and water, then running back over them; then a 20 kg crate onto boards, a stone onto a steel plate and a sack into water, 3 m ahead |
 | `village` | A day in a minute, 3 s an hour from 3:00: night, the dawn chorus, cicadas from mid-morning, wind and a shower in the afternoon, a walk down to the quay from 30 s (the sea grows on the right), a dive from 45 to 50 s (the world goes low, quiet and narrow, the rumble and bubbles come up), and the evening |
 
+## Hearing it live: `audio-demo` (the owner starts it)
+
+The one program that opens the audio device. It is an example behind the `device` feature, which
+brings `cpal` (WASAPI) on Windows only; nothing else in the crate, its tests or the scripts opens
+a device, and no session runs it.
+
+```
+cargo run --release -p forge-audio --features device --example audio-demo -- --tour
+cargo run --release -p forge-audio --features device --example audio-demo             # commands only
+cargo run --release -p forge-audio --features device --example audio-demo -- --list  # the devices
+```
+
+It plays on the default output device at the device's own rate and sample format (f32, i16 or
+i32), stereo into the first two channels. The mixer runs on its mix thread ahead of a ring of
+1024 frames (21 ms at 48 kHz, `--ring` to change it), the beds on the decode thread, and the
+device's callback only copies out of the ring. The terminal drives the village of #266:
+
+| Command | What it does |
+|---|---|
+| `time <h>`, `lapse <h>` | the hour; hours that pass a minute |
+| `temp <C>`, `wind <m/s>`, `rain <mm/h>` | the weather |
+| `sea <m>`, `sea off` | the distance to the quay, on the right |
+| `walk <surface>`, `run <surface>`, `stop` | the walker on stone, gravel, grass, wood, metal or water |
+| `drop <surface> <kg> <m/s>` | something falls 3 m ahead |
+| `dive`, `up` | the head under water, or out |
+| `volume <dB>`, `status`, `tour`, `help`, `quit` | the master's level, the state and the mixer's counters, the tour |
+
+`--tour` (or `tour`) plays 150 s: night at 3:00, the dawn chorus, a walk over each surface and a
+run, noon at 31 °C with the cicadas, wind, a shower, the walk to the quay, wading, a dive, three
+falls, dusk and night. `--seconds <s>` stops it after that long. On quitting it prints the
+mixer's counters and how often the device found the ring short.
+
 ## Not yet
 
-- **A device.** `cpal` behind a cargo feature, in a binary the owner starts; the mix thread's
-  priority (MMCSS "Pro Audio" on Windows needs a call the crate's `forbid(unsafe_code)` keeps out).
+- **The device, further.** The mix thread's priority (MMCSS "Pro Audio" on Windows needs a call
+  the crate's `forbid(unsafe_code)` keeps out); the device's wake-ups measured; ALSA and CoreAudio
+  (cpal has them; the Linux CI lacks ALSA's headers).
 - **The data layer** D-011 names: events, RTPCs, states and switches, HDR loudness on the buses,
   banks, and the profiler's overlay (the counters exist: `MixerStats`).
 - **Steam Audio** as a `Spatializer` (HRTF), its occlusion and reflections; the ambisonic bus.

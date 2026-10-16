@@ -27,3 +27,16 @@ thiserror = { workspace = true }
 [dev-dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
+
+[features]
+# The audio device for the `audio-demo` example, which only the owner starts: `cpal` (WASAPI),
+# on Windows only for now (ALSA needs system headers the Linux CI does not install). Nothing
+# else in the crate opens a device.
+device = ["dep:cpal"]
+
+[target.'cfg(windows)'.dependencies]
+cpal = { version = "0.18", optional = true }
+
+[[example]]
+name = "audio-demo"
+required-features = ["device"]

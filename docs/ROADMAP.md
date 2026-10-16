@@ -622,7 +622,8 @@ The items below are the phase's original outline; the plan above orders them.
 ## Phase 6 — Audio
 
 1. `forge-audio`: real-time thread, mixer graph, streaming decode, voice management ✅
-   (#267, 2026-10-16: built and tested headless, `docs/demos/audio.md`; the device next).
+   (#267, 2026-10-16: built and tested headless, `docs/demos/audio.md`; the device in
+   `audio-demo`, which the owner starts).
 2. Spatialisation and occlusion (D-011), material-driven footsteps and impacts, weather and
    medium ambience, underwater. Started (#267, 2026-10-16): panning, distance, air absorption,
    occlusion through Steam Audio's material presets, Doppler and reverb zones, headless;
