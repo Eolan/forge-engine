@@ -751,7 +751,9 @@ mesh: a section of their own changed how that mesh simplified, and the coarser c
 shadow rays meet put a ceiling through a roof (the raster, even with `--no-lod`, never showed
 it). The insides are now a mesh a tile of their own, drawn with the masses' rows and added after
 every other static instance, so each tree keeps its id and its tone. The day check then moves by
-ꟻLIP means of 0.002–0.009 (facade windows and the light on a shaded facade, no patch).
+ꟻLIP means of 0.002–0.009 (facade windows and the light on a shaded facade, no patch). The
+indoor floors then took a smooth row of their own too (`KIT_INSIDE_FLOOR`, the stone's colour): its
+pits read as squiggles a step away; the day check moved by noise (0.16 % of the harbour's pixels).
 The windows show nothing from inside yet (the glass is drawn for the street), and the far
 masses beyond the kit's reach stay hollow; going inside builds the real rooms (step 3).
 

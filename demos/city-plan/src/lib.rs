@@ -77,6 +77,8 @@ const KIT_PLASTER: u8 = 8;
 /// bouncing round a room took the colour at every bounce, and the halls read orange; with the
 /// facades' grain the walls a step away showed squiggles.
 const KIT_INSIDE: u8 = 15;
+/// The insides' floors: the stone's colour, smooth (its pits read as squiggles a step away).
+const KIT_INSIDE_FLOOR: u8 = 16;
 const KIT_STONE: u8 = 12;
 const KIT_PARTY: u8 = 13;
 /// The tiled roofs' section on the masses.
@@ -2846,13 +2848,13 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
                         poly,
                         st.level.max(WALK_LEVEL + 0.02),
                         Vec3::Y,
-                        KIT_STONE,
+                        KIT_INSIDE_FLOOR,
                     );
                 }
             } else {
                 let pieces = hole(k).map_or_else(|| vec![ring.clone()], |h| without(&ring, &h));
                 for poly in &pieces {
-                    cap(mesh, poly, st.level, Vec3::Y, KIT_STONE);
+                    cap(mesh, poly, st.level, Vec3::Y, KIT_INSIDE_FLOOR);
                     cap(mesh, poly, st.level - st.slab, -Vec3::Y, plaster);
                 }
             }
@@ -4453,6 +4455,11 @@ impl Scenario for PlanScenario {
                 (
                     "plan inside plaster".into(),
                     colour([0.95, 0.93, 0.88], 10.0, 0.03),
+                ),
+                // The insides' floors (`KIT_INSIDE_FLOOR`): the stone's colour, smooth.
+                (
+                    "plan inside floor".into(),
+                    colour([0.82, 0.78, 0.70], 10.0, 0.03),
                 ),
             ],
         );
