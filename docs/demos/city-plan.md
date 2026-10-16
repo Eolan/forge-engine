@@ -407,7 +407,11 @@ door and windows. Each ring falls back on shallower strips where a block is thin
 lanes gave the blocks short edges along their curves, and each edge took a strip of its own
 with one narrow lot: the buildable outline is simplified within 0.6 m before the cut. A lot
 whose front is cut short (a corner's wedge) and whose household's rooms would pile over three
-storeys stays garden. The village at 600 m: 129 houses on 5 blocks (one core, three faubourg, one lotissement), 402 people (on the city's
+storeys stays garden. **The rich house on the square** (the research's §5): the village's
+rich household (five people, rich) takes the lot whose front lies nearest the square, and its
+block is cut again for that household's width; on the example site it stands 9 m wide and
+three storeys on the square's block, the village's tallest. The village at 600 m: 127 houses
+on 5 blocks (one core, three faubourg, one lotissement), 394 people (on the city's
 parameters 100 houses, 327 people, 68 of one storey, 28 of two, 4 of three; one in twenty
 vacant as the city's). **Its streets:** a village's main road is a shared street (10 m of
 paving, no kerbs, bike lanes nor lamp rows) and its lanes are pedestrian, as an old town's,

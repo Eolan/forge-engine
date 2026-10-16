@@ -75,6 +75,19 @@ fn household(seed: u64, b: usize, k: usize) -> (u32, Means) {
     (people, means)
 }
 
+/// A block's cut, as [`parcels::strips_with`] returns it, with its type.
+type Cut = (ParcelType, Vec<Vec<DVec2>>, Vec<DVec2>, Vec<usize>);
+
+/// The household of lot `key` of block `b`: the village's rich one (five people, rich) where
+/// `rich` names that lot, else the seed's draw.
+fn household_of(seed: u64, b: usize, key: usize, rich: Option<(usize, usize)>) -> (u32, Means) {
+    if rich == Some((b, key)) {
+        (5, Means::Rich)
+    } else {
+        household(seed, b, key)
+    }
+}
+
 /// The village's own parameters for a site `size` across (D-062, #266): one village district
 /// on the site's middle with lanes that wander, one main road, no trams, boats nor landmarks, a
 /// green within 200 m of every block, the land beyond the village left to the forest.
@@ -138,14 +151,13 @@ pub fn village(site: &Site, params: &CityParams, seed: u64) -> Village {
         .districts
         .first()
         .map_or(params.centre.x.max(1.0), |d| d.radius);
-    let mut blocks = Vec::new();
-    let mut masses = Vec::new();
-    let mut without = 0;
-    for b in 0..city.blocks.len() {
+    // A block's cut: its ring's type and depth (a thin block takes a shallower strip; one too
+    // thin for the last keeps no houses), each lot as wide as its household's rooms need on
+    // two storeys at that depth (the owner's way round: the rooms first, the lot cut to the
+    // house), never narrower than the type's least nor wider than its most. `rich` names the
+    // lot (block, key) whose household is the village's rich one.
+    let cut_block = |b: usize, rich: Option<(usize, usize)>| {
         let block = &city.blocks[b];
-        if block.use_ != BlockUse::Built {
-            continue;
-        }
         // The traced lanes give the block short edges along their curves, and each edge took a
         // strip of its own with one narrow lot: the outline simplified within 0.6 m first.
         let outline = geom::simplify_closed(&block.buildable, 0.6);
@@ -158,27 +170,68 @@ pub fn village(site: &Site, params: &CityParams, seed: u64) -> Village {
         } else {
             (ParcelType::LOTISSEMENT, &[35.0, 28.0, 22.0])
         };
-        // The ring's depth first; a thin block takes a shallower strip; one too thin for the
-        // last keeps no houses. Each lot as wide as its household's rooms need on two storeys
-        // at that depth (the owner's way round: the rooms first, the lot cut to the house),
-        // never narrower than the type's least nor wider than its most.
-        let cut = depths.iter().find_map(|&depth| {
+        depths.iter().find_map(|&depth| {
             let ty = ParcelType { depth, ..ty };
             let max_depth = houses::plan_depth(&ty);
             let width = |k: usize| {
-                let (people, means) = household(seed, b, k);
+                let (people, means) = household_of(seed, b, k, rich);
                 let area: f64 = rooms::programme(people, means).iter().map(|r| r.area).sum();
                 (rooms::HALL + area / (2.0 * max_depth) + 2.0 * ty.sides)
                     .clamp(ty.width.0, ty.width.1.max(16.0))
             };
             parcels::strips_with(&outline, &vec![true; n], &ty, width)
                 .map(|(lots, court, keys)| (ty, lots, court, keys))
-        });
+        })
+    };
+    let built: Vec<usize> = (0..city.blocks.len())
+        .filter(|&b| city.blocks[b].use_ == BlockUse::Built)
+        .collect();
+    let mut cuts: Vec<Option<Cut>> = built.iter().map(|&b| cut_block(b, None)).collect();
+    // The rich house on the square (the research's §5): the lot whose front lies nearest the
+    // square takes the village's rich household, and its block is cut again for its width.
+    let square = city
+        .blocks
+        .iter()
+        .filter(|b| b.use_ == BlockUse::Square)
+        .min_by(|a, b| {
+            a.centre
+                .distance(params.centre)
+                .total_cmp(&b.centre.distance(params.centre))
+        })
+        .map(|b| b.polygon.clone());
+    let rich = square.and_then(|square| {
+        let m = square.len();
+        let to_square = |p: DVec2| {
+            (0..m)
+                .map(|i| geom::distance_to_segment(p, square[i], square[(i + 1) % m]))
+                .fold(f64::MAX, f64::min)
+        };
+        built
+            .iter()
+            .zip(&cuts)
+            .filter_map(|(&b, cut)| cut.as_ref().map(|c| (b, c)))
+            .flat_map(|(b, (_, lots, _, keys))| {
+                lots.iter()
+                    .zip(keys)
+                    .map(move |(lot, &key)| ((b, key), to_square((lot[0] + lot[1]) * 0.5)))
+            })
+            .filter(|&(_, d)| d < 25.0)
+            .min_by(|x, y| x.1.total_cmp(&y.1))
+            .map(|(at, _)| at)
+    });
+    if let Some((b, _)) = rich {
+        let i = built.iter().position(|&x| x == b).unwrap_or(0);
+        cuts[i] = cut_block(b, rich);
+    }
+    let mut blocks = Vec::new();
+    let mut masses = Vec::new();
+    let mut without = 0;
+    for (&b, cut) in built.iter().zip(cuts) {
         let Some((ty, lots, court, keys)) = cut else {
             without += 1;
             continue;
         };
-        let houses = houses::houses(&lots, &ty, |k| household(seed, b, keys[k]));
+        let houses = houses::houses(&lots, &ty, |k| household_of(seed, b, keys[k], rich));
         for h in &houses {
             masses.push(mass(&mut city, b, h, &streets));
         }
@@ -291,6 +344,23 @@ mod tests {
             })
             .collect();
         println!("blocks: {rings:?}");
+        let rich: Vec<String> = v
+            .houses()
+            .filter(|h| h.household.1 == Means::Rich)
+            .map(|h| {
+                format!(
+                    "{} people, {:.1} m wide, {} storeys",
+                    h.household.0,
+                    h.plan.width,
+                    h.plan.storeys.len()
+                )
+            })
+            .collect();
+        println!("rich houses: {rich:?}");
+        assert!(
+            v.houses().any(|h| h.household == (5, Means::Rich)),
+            "the rich house on the square"
+        );
         assert!(v.plan.tram_lines.is_empty() && v.plan.landmarks.is_empty());
         assert!(built >= 4, "{built} built blocks");
         assert!(houses >= 40, "{houses} houses");
