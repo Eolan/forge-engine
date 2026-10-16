@@ -152,6 +152,56 @@ pub fn house(m: &Mass, s: &Structure) -> Option<Interior> {
     } else {
         hi - CORE_WALL * 0.5
     };
+    // The openings of the outside walls on the plan's axes: each its storey, its span along the
+    // front and where its wall stands into the depth, so a partition keeps off them.
+    let openings: Vec<(usize, f64, f64, f64)> = s
+        .openings
+        .iter()
+        .filter_map(|op| {
+            let wl = &s.walls[op.wall];
+            if !matches!(
+                wl.role,
+                structure::WallRole::Street | structure::WallRole::Court
+            ) {
+                return None;
+            }
+            let wt = (wl.b - wl.a).normalize_or_zero();
+            let (p0, p1) = (wl.a + wt * op.span().0, wl.a + wt * op.span().1);
+            let (u0, u1) = ((p0 - o).dot(t), (p1 - o).dot(t));
+            Some((
+                op.storey,
+                u0.min(u1),
+                u0.max(u1),
+                ((p0 + p1) * 0.5 - o).dot(n),
+            ))
+        })
+        .collect();
+    // A partition at `u` meeting the wall that stands about `v` on storey `k`, moved off an
+    // opening it would stand in (a wall behind a window, the owner's item 26 the other way
+    // round): to the nearer side of the opening, half a partition and 15 cm clear, or the other
+    // side, keeping a metre from its neighbours `lo` and `hi`.
+    let clear = |k: usize, u: f64, v: f64, lo: f64, hi: f64| -> f64 {
+        let margin = PARTITION * 0.5 + 0.15;
+        let fits = |c: f64| c > lo + 1.0 && c < hi - 1.0;
+        let mut u = u;
+        for &(sk, a, b, wv) in &openings {
+            if sk != k || (wv - v).abs() > 1.0 || u <= a - margin || u >= b + margin {
+                continue;
+            }
+            let (left, right) = (a - margin, b + margin);
+            let (near, far) = if u - left <= right - u {
+                (left, right)
+            } else {
+                (right, left)
+            };
+            if fits(near) {
+                u = near;
+            } else if fits(far) {
+                u = far;
+            }
+        }
+        u
+    };
     for (k, storey) in plan.storeys.iter().enumerate() {
         // The storey's bands, front to back, each its rooms left to right.
         let mut bands: Vec<(f64, f64, Vec<usize>)> = Vec::new();
@@ -163,11 +213,6 @@ pub fn house(m: &Mass, s: &Structure) -> Option<Interior> {
                 Some(b) => b.2.push(i),
                 None => bands.push((r.y.0, r.y.1, vec![i])),
             }
-            rooms.push(InRoom {
-                kind: r.kind,
-                storey: k,
-                outline: rect(x(r.x.0), x(r.x.1), y(r.y.0), y(r.y.1)),
-            });
         }
         bands.sort_by(|p, q| p.0.total_cmp(&q.0));
         for b in &mut bands {
@@ -199,12 +244,30 @@ pub fn house(m: &Mass, s: &Structure) -> Option<Interior> {
                 doors: Vec::new(),
             });
         }
-        // Between the rooms of a band, a doorway in its middle.
+        // Each band's rooms between their boundaries, those on the front or the back wall moved
+        // off its openings; between two rooms a doorway in the middle.
         for (y0, y1, ids) in &bands {
-            for pair in ids.windows(2) {
-                let u = x(storey[pair[0]].x.1);
-                let (v0, v1) = (y(*y0), y(*y1));
-                let len = v1 - v0;
+            let mut us: Vec<f64> = vec![x(storey[ids[0]].x.0)];
+            us.extend(ids.iter().map(|&i| x(storey[i].x.1)));
+            for j in 1..us.len() - 1 {
+                let (lo, hi) = (us[j - 1].min(us[j + 1]), us[j - 1].max(us[j + 1]));
+                if *y0 < 1e-9 {
+                    us[j] = clear(k, us[j], 0.0, lo, hi);
+                }
+                if (*y1 - plan.depth).abs() < 1e-9 {
+                    us[j] = clear(k, us[j], vmax, lo, hi);
+                }
+            }
+            let (v0, v1) = (y(*y0), y(*y1));
+            for (j, &i) in ids.iter().enumerate() {
+                rooms.push(InRoom {
+                    kind: storey[i].kind,
+                    storey: k,
+                    outline: rect(us[j], us[j + 1], v0, v1),
+                });
+            }
+            let len = v1 - v0;
+            for &u in &us[1..us.len() - 1] {
                 partitions.push(Partition {
                     a: at(u, v0),
                     b: at(u, v1),
@@ -227,6 +290,36 @@ pub fn house(m: &Mass, s: &Structure) -> Option<Interior> {
         climb: n,
         risers: core.map_or_else(Vec::new, |c| c.risers.clone()),
     })
+}
+
+/// How many of the partitions' ends meet an outside wall of `s` within one of its openings: a
+/// wall behind a window or a door (one flush with a jamb, within a centimetre, is not).
+pub fn at_openings(s: &Structure, interior: &Interior) -> usize {
+    let mut count = 0;
+    for p in &interior.partitions {
+        for end in [p.a, p.b] {
+            let hit = s.openings.iter().any(|op| {
+                let w = &s.walls[op.wall];
+                if op.storey != p.storey
+                    || !matches!(
+                        w.role,
+                        structure::WallRole::Street | structure::WallRole::Court
+                    )
+                {
+                    return false;
+                }
+                let t = (w.b - w.a).normalize_or_zero();
+                let n = DVec2::new(-t.y, t.x);
+                let (along, depth) = ((end - w.a).dot(t), (end - w.a).dot(n));
+                let half = p.thickness * 0.5;
+                (depth - w.thickness).abs() < 0.1
+                    && along > op.span().0 - half + 0.01
+                    && along < op.span().1 + half - 0.01
+            });
+            count += usize::from(hit);
+        }
+    }
+    count
 }
 
 /// Whether every room of each storey of `interior` is reached from its hall through doorways.

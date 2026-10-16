@@ -492,6 +492,9 @@ fn structure(
     if m.rooms.is_none() || !garden_door(&storeys, m, &walls, &cores, &mut openings) {
         add_door(m, &storeys, &walls, &mut openings, WallRole::Court);
     }
+    if m.rooms.is_some() {
+        clear_hall(&walls, &cores, &mut openings);
+    }
     let (gross, net) = areas(m, era, &walls, inside.as_deref(), &cores);
     Structure {
         mass: i as u32,
@@ -738,6 +741,80 @@ fn hall_door(m: &Mass, storeys: &[Storey], walls: &[Wall], out: &mut Vec<Opening
         kind: OpeningKind::Door,
     };
     out.push(cores::door(m, storeys, walls, &template));
+}
+
+/// A house from its rooms keeps its windows off its hall's wall (`interior`: the wall between the
+/// hall and the rooms, front to back): a window standing across it moves along its wall to the
+/// rooms' side, on every storey alike, or goes where its stretch has no room; from inside, the
+/// wall stood in the middle of a window. The doors stay: they open into the hall.
+fn clear_hall(walls: &[Wall], cores: &[Core], openings: &mut Vec<Opening>) {
+    let Some(front) = walls.iter().position(|w| w.edge == 0) else {
+        return;
+    };
+    // The hall's wall on the plan, and which side of it the hall lies.
+    let (wall, line, hall) = match cores.iter().find(|c| c.house) {
+        Some(c) => {
+            let w = &walls[c.wall];
+            let t = (w.b - w.a).normalize_or_zero();
+            let hall = geom::centroid(&c.hall);
+            let toward_a = (hall - w.a).dot(t) < (c.span.0 + c.span.1) * 0.5;
+            let along = if toward_a {
+                c.span.0 + cores::CORE_WALL * 0.5
+            } else {
+                c.span.1 - cores::CORE_WALL * 0.5
+            };
+            (w, w.a + t * along, hall)
+        }
+        None => {
+            let w = &walls[front];
+            let t = (w.b - w.a).normalize_or_zero();
+            let along = super::rooms::HALL - cores::CORE_WALL * 0.5;
+            (w, w.a + t * along, w.a + t * (super::rooms::HALL * 0.5))
+        }
+    };
+    let t = (wall.b - wall.a).normalize_or_zero();
+    let into = DVec2::new(-t.y, t.x);
+    let (from, to) = (line - into * 1.0, line + into * 200.0);
+    // Half the hall's wall and a hand of pier each side.
+    let keep = cores::CORE_WALL * 0.5 + 0.15;
+    for i in 0..openings.len() {
+        let o = openings[i];
+        let w = &walls[o.wall];
+        if o.kind == OpeningKind::Door || !matches!(w.role, WallRole::Street | WallRole::Court) {
+            continue;
+        }
+        let Some((_, u)) = geom::segment_intersection(from, to, w.a, w.b) else {
+            continue;
+        };
+        let at = u * w.length();
+        let (lo, hi) = o.span();
+        if hi <= at - keep || lo >= at + keep {
+            continue;
+        }
+        // The rooms' side along this wall: away from the hall.
+        let wt = (w.b - w.a).normalize_or_zero();
+        let away = if (hall - w.a).dot(wt) < at { 1.0 } else { -1.0 };
+        let along = at + away * (keep + o.width * 0.5);
+        let (s0, s1) = (along - o.width * 0.5, along + o.width * 0.5);
+        let room = w.open.get(o.storey).is_some_and(|stretches| {
+            stretches
+                .iter()
+                .any(|&(a, b)| a + MARGIN * 0.5 <= s0 && s1 <= b - MARGIN * 0.5)
+        });
+        let clear = openings.iter().enumerate().all(|(j, q)| {
+            j == i
+                || q.wall != o.wall
+                || q.storey != o.storey
+                || q.span().1 <= s0 - 0.3
+                || q.span().0 >= s1 + 0.3
+        });
+        if room && clear {
+            openings[i].along = along;
+        } else {
+            openings[i].width = 0.0;
+        }
+    }
+    openings.retain(|o| o.width > 0.0);
 }
 
 /// The garden door of a house from its rooms: in the outside wall at the back of its hall (the

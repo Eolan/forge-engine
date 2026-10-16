@@ -472,7 +472,15 @@ door at the back's middle): 73 of the 77 houses with their insides, the others' 
 party wall. The floors and ceilings are inset by each wall's own thickness (`inner_ring`; the
 thickest wall all round left a strip of the garden's lawn showing by the party walls). The
 map check's second walk starts 3 m out before that house's door and walks through it into the
-hall (`reports/2026-10-16/village-way-in.png`). **Its streets:** a village's main road is a shared street (10 m of
+hall (`reports/2026-10-16/village-way-in.png`). **No wall behind a window** (the owner's item 26
+the other way round): the facade's windows stand by its bays, the rooms by the plan, and 169
+ends of the hall's wall met the front or the back wall in the middle of a window. A house from
+its rooms now keeps its windows off the hall's wall (`structure::clear_hall`): a window standing
+across it moves along its wall to the rooms' side, every storey alike, or goes where its
+stretch has no room; and a partition between two rooms of a band that meets the front or the
+back wall within an opening moves to the nearer pier (`interior::house`). Four ends are left,
+walls between bands meeting a corner house's side windows (`interior::at_openings`, the
+village test). **Its streets:** a village's main road is a shared street (10 m of
 paving, no kerbs, bike lanes nor lamp rows) and its lanes are pedestrian, as an old town's,
 through the forest too (a road beyond every district's reach takes the nearest district's
 kind, `transit::assign_profiles`); the city's avenues stay. The narrower streets gave the

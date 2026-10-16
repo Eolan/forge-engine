@@ -487,6 +487,17 @@ mod tests {
             })
             .count();
         println!("{garden_doors} of them with a garden door");
+        let against: usize = v
+            .masses
+            .iter()
+            .zip(&structures)
+            .filter_map(|(m, s)| {
+                super::super::interior::house(m, s)
+                    .map(|i| super::super::interior::at_openings(s, &i))
+            })
+            .sum();
+        println!("{against} partition ends against a window or a door");
+        assert!(against <= 8, "{against} partition ends against an opening");
         assert!(
             garden_doors * 2 >= insides.len(),
             "{garden_doors} garden doors"
