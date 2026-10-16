@@ -276,6 +276,8 @@ pub mod opening {
     pub const DOOR: f64 = 3.0;
     /// A passage into the court.
     pub const PASSAGE: f64 = 4.0;
+    /// A window whose glass is obscured (a bathroom's, [`super::structure::Opening::frosted`]).
+    pub const FROSTED: f64 = 5.0;
 }
 
 /// A terminal of a building's dressing: its mass, its wall (an index into its structure's
@@ -379,6 +381,7 @@ pub fn dress(
                         from: length - o.span().1,
                         to: length - o.span().0,
                         kind: match o.kind {
+                            OpeningKind::Window if o.frosted => opening::FROSTED,
                             OpeningKind::Window => opening::WINDOW,
                             OpeningKind::Shopfront => opening::SHOPFRONT,
                             OpeningKind::Door => opening::DOOR,

@@ -44,6 +44,10 @@ Passage -> nil
 # the floor inside, the owner's sightings of 2026-10-16).
 Opening [opening.kind == 3] -> split(y) { sill: Wall | glass: Entrance | ~1: Wall }
 Entrance -> insert(door)
+# A bathroom's window, its glass obscured (the owner, 2026-10-16: "the glass should obfuscate
+# what's inside the room as it is a very private area").
+Opening [opening.kind == 5] -> split(y) { sill: Wall | glass: Frosted | ~1: Wall }
+Frosted -> insert(window_frosted)
 # Shops, cafés and bars: an open front or one under an awning.
 Opening [opening.kind == 2] -> split(y) { sill: Wall | glass: Shopfront | ~1: Wall }
 Shopfront -> choose(index) { 1: ShopOpen | 1: ShopAwning }

@@ -684,7 +684,9 @@ The village has 77 houses (82 before the depth cap: wider lots), 241 people.
   sill at 1.4 m or more) in 6 houses in 10, a service room in 4; a store none; the hall none (the
   stair rises there). Each stands on the facade's old bay axis nearest where it would centre when
   that axis falls in the room, so windows stand over each other storey to storey where the rooms
-  allow (rule 6). Obscured glass for the bathrooms is still to come.
+  allow (rule 6). A bathroom's glass is obscured (`Opening::frosted`, the grammar's `opening.kind
+  == 5`, the kit's `window_frosted` with its own section, a milky rough glass that glows softly
+  when the room is lit; 2026-10-17; the log names `the village's frosted window`).
 
 | Anomaly | When the check came in | After the sockets | Now |
 |---|---|---|---|

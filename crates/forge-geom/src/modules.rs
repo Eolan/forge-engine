@@ -38,14 +38,16 @@ pub const PARTY: u8 = 8;
 pub const GRILLE: u8 = 9;
 /// A shopfront's glass, a shop behind it.
 pub const SHOP_GLASS: u8 = 10;
+/// Obscured glass: a bathroom's window (`window_frosted`).
+pub const FROSTED: u8 = 11;
 /// The number of sections.
-pub const SECTIONS: u8 = 11;
+pub const SECTIONS: u8 = 12;
 
 /// A railing's square bars: their width, a share of their spacing (3 cm every 12 cm).
 pub const BAR_SHARE: f32 = 0.25;
 
 /// The modules the kit builds.
-pub const NAMES: [&str; 16] = [
+pub const NAMES: [&str; 17] = [
     "wall",
     "blank",
     "band",
@@ -56,6 +58,7 @@ pub const NAMES: [&str; 16] = [
     "window_closed",
     "window_low",
     "window_court",
+    "window_frosted",
     "bay",
     "balcony",
     "door",
@@ -167,6 +170,16 @@ pub fn module_with(name: &str, w: f32, h: f32, reveal: f32, cards: bool) -> Opti
         "window_court" => {
             window(&mut m, w, h, reveal, false);
             sill(&mut m, w, reveal, 0.05);
+        }
+        // A bathroom's small window: the courtyard's, its glass obscured.
+        "window_frosted" => {
+            window(&mut m, w, h, reveal, false);
+            sill(&mut m, w, reveal, 0.05);
+            for s in &mut m.sections {
+                if *s == GLASS {
+                    *s = FROSTED;
+                }
+            }
         }
         // A glazed sliding bay to the floor, onto a terrace: two leaves, no sill, its threshold
         // flush with the floor.

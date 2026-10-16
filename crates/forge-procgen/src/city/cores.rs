@@ -321,6 +321,7 @@ pub fn place(
             sill: 0.0,
             head: 2.2,
             kind: OpeningKind::Door,
+            frosted: false,
         };
         openings.push(door(m, storeys, walls, &template));
     }

@@ -204,6 +204,8 @@ pub fn by_room(m: &Mass, s: &mut Structure, seed: u64) {
                     sill,
                     head,
                     kind: OpeningKind::Window,
+                    // A bathroom's glass obscured, its privacy kept.
+                    frosted: kind == Some(RoomKind::Bathroom),
                 });
             }
         }

@@ -250,6 +250,9 @@ pub struct Opening {
     pub head: f64,
     /// What it is.
     pub kind: OpeningKind,
+    /// Whether its glass is obscured: a bathroom's window (the owner, 2026-10-16: "the glass
+    /// should obfuscate what's inside the room as it is a very private area").
+    pub frosted: bool,
 }
 
 impl Opening {
@@ -667,6 +670,7 @@ fn openings(m: &Mass, era: Era, storeys: &[Storey], walls: &[Wall]) -> Vec<Openi
                         sill,
                         head,
                         kind,
+                        frosted: false,
                     });
                 }
             }
@@ -760,6 +764,7 @@ fn hall_door(m: &Mass, storeys: &[Storey], walls: &[Wall], out: &mut Vec<Opening
         sill: 0.0,
         head: 2.2,
         kind: OpeningKind::Door,
+        frosted: false,
     };
     out.push(cores::door(m, storeys, walls, &template));
 }
@@ -906,6 +911,7 @@ fn garden_door(
         sill: 0.0,
         head: 2.2,
         kind: OpeningKind::Door,
+        frosted: false,
     };
     out.push(cores::door(m, storeys, walls, &template));
     true
@@ -1089,6 +1095,7 @@ fn open_passage(s: &mut Structure, mouths: [(usize, f64); 2]) {
             sill: 0.0,
             head,
             kind: OpeningKind::Passage,
+            frosted: false,
         });
     }
     for (c, door) in s.cores.iter_mut().zip(doors) {

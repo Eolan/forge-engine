@@ -5204,6 +5204,18 @@ impl Scenario for PlanScenario {
                             ..glass((k % 2 == 1).then_some(LIT[k / 2]))
                         },
                     ),
+                    // A bathroom's obscured glass (`modules::FROSTED`): milky and rough, no room
+                    // seen behind it, glowing softly when the room is lit.
+                    (
+                        format!("{group} frosted glass"),
+                        RenderLayer {
+                            emissive: (k % 2 == 1)
+                                .then_some(LIT[k / 2])
+                                .map_or([0.0; 3], |(l, c)| c.map(|v| v * l * 0.6)),
+                            emissive_absolute: true,
+                            ..colour([0.80, 0.82, 0.82], 20.0, 0.04)
+                        },
+                    ),
                 ],
             );
         }

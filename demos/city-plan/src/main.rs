@@ -266,6 +266,32 @@ fn main() -> anyhow::Result<()> {
                     inward.y * 1.4
                 );
             }
+            // The lowest bathroom's window on a street, its glass obscured, from 6 m out at eye
+            // height, looking up at it.
+            if let Some((s, o)) = structures
+                .iter()
+                .flat_map(|s| {
+                    s.openings
+                        .iter()
+                        .filter(|o| {
+                            o.frosted && s.walls[o.wall].role == city::structure::WallRole::Street
+                        })
+                        .map(move |o| (s, o))
+                })
+                .min_by_key(|(_, o)| o.storey)
+            {
+                let w = &s.walls[o.wall];
+                let t = (w.b - w.a).normalize_or_zero();
+                let out = DVec2::new(t.y, -t.x);
+                let at = w.a + t * o.along;
+                let level = s.storeys.get(o.storey).map_or(0.0, |st| st.level);
+                let rise = (level + o.sill + 0.35 - 1.7).max(0.0);
+                let pitch = (rise.atan2(6.0).to_degrees() * 10.0).round() / 10.0;
+                eprintln!(
+                    "the village's frosted window: {}",
+                    view(at + out * 6.0, 1.7, -out, pitch)
+                );
+            }
             // The longest garden wall along a street or lane (`city::walls`), from 2.5 m out on
             // the street a little before its start, along it.
             if let Some(w) = v
