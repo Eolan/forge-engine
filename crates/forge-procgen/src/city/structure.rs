@@ -66,14 +66,15 @@ pub struct EraTable {
 pub const LIFT_FROM: usize = 4;
 /// Keep an opening this far from either end of its open stretch, metres.
 pub const MARGIN: f64 = 0.6;
-/// A window's surround, which its shutters fold back beyond, metres
-/// (`forge_geom::modules`: each leaf half the window's width).
-pub const SHUTTER_BESIDE: f64 = 0.15;
 /// The wall left between a window's folded shutter and a corner or a stretch's end, metres:
-/// there is always some (the owner, a shutter wrapped round a building's corner).
+/// there is always some (the owner, a shutter wrapped round a building's corner). A window's
+/// shutters hang on its edges and fold back over its surround, each leaf half its width
+/// (`forge_geom::modules`; the owner, 2026-10-16), so a window reaches its own width either side
+/// of its middle.
 pub const PIER: f64 = 0.4;
-/// The wall left between two neighbouring windows' folded shutters, metres.
-const SHUTTER_GAP: f64 = 0.1;
+/// The wall left between two neighbouring windows' folded shutters, metres: their balconies,
+/// 0.1 m wider than the shutters each side, stay 0.1 m apart.
+const SHUTTER_GAP: f64 = 0.3;
 /// A passage into an inner court: its width and its height, metres (a carriage entrance).
 pub const PASSAGE: (f64, f64) = (3.0, 3.6);
 /// A door from the street: its width (0.90 m clear at least, #263), metres.
@@ -613,9 +614,9 @@ fn openings(m: &Mass, era: Era, storeys: &[Storey], walls: &[Wall]) -> Vec<Openi
                     // stretch's ends, a gap to its neighbours' (they reached round corners and
                     // over each other).
                     let width = if kind == OpeningKind::Window {
-                        let ends = (along - lo).min(hi - along) - PIER - SHUTTER_BESIDE;
+                        let ends = (along - lo).min(hi - along) - PIER;
                         let between = if bays > 1 {
-                            (bay - 2.0 * SHUTTER_BESIDE - SHUTTER_GAP) * 0.5
+                            (bay - SHUTTER_GAP) * 0.5
                         } else {
                             f64::INFINITY
                         };
@@ -660,7 +661,7 @@ fn fit_shutters(s: &mut Structure) {
     // How far an opening reaches either side of its middle.
     let reach = |o: &Opening| {
         if o.kind == OpeningKind::Window {
-            o.width + SHUTTER_BESIDE
+            o.width
         } else {
             o.width * 0.5
         }
@@ -690,13 +691,13 @@ fn fit_shutters(s: &mut Structure) {
             let q = &s.openings[order[n + 1]];
             // The next window shares the wall between them.
             let theirs = if q.kind == OpeningKind::Window {
-                SHUTTER_BESIDE + (q.along - o.along - 2.0 * SHUTTER_BESIDE - SHUTTER_GAP) * 0.5
+                (q.along - o.along - SHUTTER_GAP) * 0.5
             } else {
                 q.width * 0.5 + SHUTTER_GAP
             };
             right = right.min(q.along - theirs);
         }
-        let fit = (o.along - left).min(right - o.along) - SHUTTER_BESIDE;
+        let fit = (o.along - left).min(right - o.along);
         let fit = ((fit.min(o.width) * 10.0).floor() / 10.0).max(0.6);
         s.openings[i].width = fit;
     }

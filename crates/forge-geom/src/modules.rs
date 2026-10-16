@@ -134,12 +134,12 @@ pub fn module_with(name: &str, w: f32, h: f32, reveal: f32, cards: bool) -> Opti
             sill(&mut m, w, reveal, 0.07);
             railing(
                 &mut m,
-                Vec3::new(0.0, 0.0, 0.0),
-                Vec3::new(w, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, GUARD_Z),
+                Vec3::new(w, 0.0, GUARD_Z),
                 1.0,
             );
             if name == "window" {
-                shutters(&mut m, w, h, 0.15);
+                shutters(&mut m, w, h);
             }
         }
         "window_closed" => {
@@ -149,8 +149,8 @@ pub fn module_with(name: &str, w: f32, h: f32, reveal: f32, cards: bool) -> Opti
             closed_shutters(&mut m, w, h);
             railing(
                 &mut m,
-                Vec3::new(0.0, 0.0, 0.0),
-                Vec3::new(w, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, GUARD_Z),
+                Vec3::new(w, 0.0, GUARD_Z),
                 1.0,
             );
         }
@@ -169,7 +169,7 @@ pub fn module_with(name: &str, w: f32, h: f32, reveal: f32, cards: bool) -> Opti
         "balcony" => {
             window(&mut m, w, h, reveal, true);
             surround(&mut m, w, h, 0.15, 0.22);
-            shutters(&mut m, w, h, 0.15);
+            shutters(&mut m, w, h);
             balcony(&mut m, w, railing);
         }
         "door" => door(&mut m, w, h),
@@ -428,12 +428,54 @@ fn sill(m: &mut TriMesh, w: f32, depth: f32, out: f32) {
     );
 }
 
-/// Two louvred shutters folded back against the wall either side of an opening, beyond a
-/// surround `beside` metres wide.
-fn shutters(m: &mut TriMesh, w: f32, h: f32, beside: f32) {
+/// A French window's guard rail, in the reveal between the closed shutters and the frame: on
+/// the wall's face it stood where a leaf swings shut (the owner, 2026-10-16).
+const GUARD_Z: f32 = -0.115;
+
+/// Where an open shutter's back stands, metres out of the wall: 2 cm off the surround's face, so
+/// no two faces share a plane.
+const OPEN_Z: f32 = 0.045;
+
+/// Two louvred shutters open: each leaf half the opening's width, hung on the opening's outer
+/// edge and folded back flat against the facade over the surround, so it swings shut over the
+/// opening from outside (the owner, 2026-10-16). Each hangs by two iron straps across its face
+/// on pins sealed in the masonry at the opening's edge (`pentures` on `gonds`), a sixth of its
+/// height from its top and its bottom.
+fn shutters(m: &mut TriMesh, w: f32, h: f32) {
     let leaf = w * 0.5;
-    for x0 in [-beside - leaf, w + beside] {
-        shutter_leaf(m, x0, x0 + leaf, h, 0.02);
+    // Each leaf's span and its hinge edge.
+    for (x0, x1, hinge) in [(-leaf, 0.0, 0.0), (w, w + leaf, w)] {
+        shutter_leaf(m, x0, x1, h, OPEN_Z);
+        let front = OPEN_Z + 0.04;
+        let reach = (x1 - x0) * 0.7;
+        let (s0, s1) = if hinge == x1 {
+            (x1 - reach, x1)
+        } else {
+            (x0, x0 + reach)
+        };
+        for y in [h / 6.0, h * 5.0 / 6.0] {
+            // The strap on the leaf's face.
+            cuboid(
+                m,
+                Vec3::new(s0, y - 0.02, front),
+                Vec3::new(s1, y + 0.02, front + 0.006),
+                METAL,
+                NO_BACK,
+            );
+            // The pin it turns on, from the surround to the leaf, just beside the opening.
+            let (p0, p1) = if hinge == x1 {
+                (hinge - 0.04, hinge - 0.01)
+            } else {
+                (hinge + 0.01, hinge + 0.04)
+            };
+            cuboid(
+                m,
+                Vec3::new(p0, y - 0.025, 0.025),
+                Vec3::new(p1, y + 0.025, OPEN_Z),
+                METAL,
+                NO_BACK,
+            );
+        }
     }
 }
 
@@ -609,9 +651,12 @@ fn railing_card(m: &mut TriMesh, a: Vec3, b: Vec3, height: f32) {
 }
 
 /// A stone balcony on two consoles before an opening `w` wide, railed on three sides by
-/// `railing`.
+/// `railing`. It spans the opening and both its open shutters with 0.1 m to spare, and stands
+/// out further than a leaf is wide, so a leaf swings shut inside its railing (the owner,
+/// 2026-10-16: a balcony narrower than its shutters kept them from closing).
 fn balcony(m: &mut TriMesh, w: f32, railing: impl Fn(&mut TriMesh, Vec3, Vec3, f32)) {
-    let (x0, x1, deep) = (-0.45, w + 0.45, 0.8);
+    let leaf = w * 0.5;
+    let (x0, x1, deep) = (-leaf - 0.1, w + leaf + 0.1, (leaf + 0.2).max(0.8));
     cuboid(
         m,
         Vec3::new(x0, -0.14, 0.0),

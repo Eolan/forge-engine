@@ -332,7 +332,7 @@ fn taxis_wait_within_a_short_walk_of_every_block() {
 
 #[test]
 fn shutters_fold_back_clear_of_corners_and_of_each_other() {
-    use super::structure::{OpeningKind, PIER, SHUTTER_BESIDE};
+    use super::structure::{OpeningKind, PIER};
     let (_, city) = example_plan();
     let masses = super::mass::masses(&city, &super::bible::StyleBible::default(), 7);
     let structures = super::structure::structures(&city, &masses);
@@ -352,7 +352,7 @@ fn shutters_fold_back_clear_of_corners_and_of_each_other() {
                             && o.sill > 0.0
                     })
                     .map(|o| {
-                        let reach = o.width + SHUTTER_BESIDE;
+                        let reach = o.width;
                         (o.along - reach, o.along + reach)
                     })
                     .collect();

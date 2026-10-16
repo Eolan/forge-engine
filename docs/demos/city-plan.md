@@ -526,15 +526,30 @@ kit reading the walls, collision, interiors, destruction):
   ground floors, windows elsewhere, the doors (1.2 m, step-free) where the stair cores stand
   (below), or in the middle of the longest street stretch.
   - **Room for the shutters.** Each window keeps room either side for its shutters folded back,
-    half its width beyond a 0.15 m surround.
+    each leaf half its width.
+    - **How they hang** (the owner, 2026-10-16: "the shutters should be on the border exterior
+      so it can rotate", "there are supposed to be hinges"). A leaf turns on pins sealed in
+      the masonry at the opening's outer edge, by iron straps across its face, and folds back
+      flat against the facade over the surround (the makers' fitting notes: straps on the
+      leaf, pins screwed or sealed into the masonry, a stop to hold it open [Ehret][PROVOBAT]).
+      The kit hung them beyond the 0.15 m surround, where they could not swing shut: they now
+      stand at the opening's edges, 2 cm off the surround, two straps and their pins a sixth
+      of the leaf from its top and bottom (`modules::shutters`). Closed, they sit in the
+      reveal; a French window's guard rail moved into the reveal behind them (11.5 cm in),
+      out of the leaves' swing.
+    - **Balconies** span the opening and both open leaves with 0.1 m to spare, and stand out
+      further than a leaf is wide (0.8 m, more past 1.2 m windows), so a leaf swings shut
+      inside the railing (the owner, item 27 of the sandbox's list: the balcony was 0.45 m
+      wider than the window each side, the leaf hung past its end;
+      `reports/2026-10-16/village-balconies.png`).
     - A pier of 0.4 m of wall remains between a shutter and a corner or a stretch's end; the
       bays keep half a window and the pier off the ends.
-    - 0.1 m remains between two neighbours' shutters.
+    - 0.3 m remains between two neighbours' shutters, so their balconies stay 0.1 m apart.
     - Windows narrow (by the 10 cm) to fit, those the doors and the cores gave back too
       (`structure::fit_shutters`).
     - Before, a shutter wrapped round a building's corner (the owner), and the 2.7 m bays'
       1.4 m windows had their shutters over each other.
-    - Test `shutters_fold_back_clear_of_corners_and_of_each_other`: 815 267 windows in the
+    - Test `shutters_fold_back_clear_of_corners_and_of_each_other`: 795 190 windows in the
       example, none within the pier, none over a neighbour (3 and 161 before).
 - **Courts.** A passage of 3.0 by 3.6 m runs through one building of each block whose court no
   gap reaches, on its street and court walls (the owner: a door into every inner court). The
@@ -1555,3 +1570,6 @@ first floor's balconies.*
   - roofs from the straight skeleton;
   - trims and materials of release quality (#249).
 - Trees by species (vegetation-materials.md §1, the grower) in place of the one lumpy model.
+
+[Ehret]: https://www.ehret.com/sites/default/files/content/downloads/bon_de_commande_volets_battants_-_suisse_romande.pdf
+[PROVOBAT]: https://www.d-c.fr/wp-content/uploads/2024/04/PROVOBAT_Notice-de-montage_Volets-battants-standards-PVC-ALU_-2024.pdf
