@@ -409,7 +409,16 @@ go). The road through the forest: `reports/2026-10-16/village-forest.png`. **The
 an olive of 4.5–7 m at the garden's middle, two along a garden of 150 m² or more, a lot
 without a house all garden; the village plants them in the plan's own trees
 (`CityPlan::planted`, `trees::Setting::Garden`), grown and drawn as the forest's (72 in the
-village). A village's whole network is under the 3 km a cut-off
+village). **Every tree a species** (#257, the same afternoon): `city::trees` gives the planted
+trees theirs by setting, three new to the grower's data (`research/flora.md` §2.1): planes along
+the avenues and the shared streets and round the squares, limes along the lanes and, with
+olives, in the courts, umbrella pines within 30 m of the water, the parks a mix of planes,
+limes, umbrella pines and holm oaks. The demo grows each species' individuals at a quarter,
+half and all of its maturity and gives each plant the one nearest its height (a 10 m plane
+was the mature tree shrunk, a ball on a stem), the planted ones with their crowns lifted to 38 %
+of their height (half an umbrella pine's, 15 % an olive's) and their leaves' lumps kept above
+it. The one model is left only to the planters' shrubs; the map check's views take 2.2–2.8 ms
+(`reports/2026-10-16/village-street-trees.png`, the walk under a plane's crown). A village's whole network is under the 3 km a cut-off
 network had to reach to be kept (`graph::MIN_NETWORK`), so the plan came out empty under
 twice the radius: a network is now kept over 3 km or over half of all the streets. The example
 site at 600 m on its own plan: 16 nodes, 22 edges, 7 blocks, 5 built and all with strips, 171

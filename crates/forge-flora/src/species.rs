@@ -250,7 +250,10 @@ mod tests {
                 "italian-cypress",
                 "rosemary",
                 "cistus",
-                "kermes-oak"
+                "kermes-oak",
+                "london-plane",
+                "common-lime",
+                "umbrella-pine"
             ]
         );
         for s in &all {

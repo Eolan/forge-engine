@@ -137,7 +137,11 @@ fn main() -> anyhow::Result<()> {
             {
                 let mid = forge_procgen::city::geom::point_at(&e.points, e.length() * 0.5);
                 let ahead = forge_procgen::city::geom::point_at(&e.points, e.length() * 0.5 + 10.0);
-                eprintln!("the village's main: {}", view(mid, 1.7, ahead - mid, 0.0));
+                // 2.5 m off the centre line, where a shared street's trees stand (one stood
+                // 15 cm from the camera).
+                let along = (ahead - mid).normalize_or_zero();
+                let eye = mid + DVec2::new(-along.y, along.x) * 2.5;
+                eprintln!("the village's main: {}", view(eye, 1.7, ahead - mid, 0.0));
             }
             let mut degree = vec![0usize; v.plan.roads.nodes.len()];
             for e in &v.plan.roads.edges {

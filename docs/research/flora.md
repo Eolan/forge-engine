@@ -167,6 +167,32 @@ traits placement uses: the Aleppo pine fast-growing, drought-resistant, on all s
 fire-prone places; the holm oak shade-tolerant, germinating and resprouting in woodland
 understoreys.
 
+### 2.1 The city's planted trees (#257; the coordinating session, 2026-10-16)
+
+Three species for the streets, squares and parks, planted only (rows and groves), their sizes
+from the nurseries and references below; their growth parameters are estimates after the holm
+oak's (the broadleaves) and the Aleppo pine's (the pine), checked by the same tests (published
+size over four seeds, taper, branch count by age).
+
+| species | height | crown | form | sources |
+|---|---|---|---|---|
+| London plane, *Platanus × hispanica* | 20–30 (35) m | 18–25 m | round, half-open, on a tall clear trunk | Van den Berk [vdb-plane] |
+| Common lime, *Tilia × europaea* | 18–30 m | 12–20 m | broad pyramidal, half-open | Van den Berk (30–40 by 15–20 m) [vdb-lime]; the ACT's urban standard (18 by 12 m) [act-lime] |
+| Umbrella pine, *Pinus pinea* | 12–20 m | 8–15 m | broadly conical young, a flat-topped umbrella on a long bole later | Wikipedia (12–20 m typically, over 8 m across) [wiki-pinea]; Van den Berk (15–25 by 8–10 m) [vdb-pinea]; worldplants (12–25 by 10–20 m) [wp-pinea] |
+
+`city::trees` gives them by setting: planes along the avenues and shared streets and round the
+squares, limes along the lanes and, with olives, in the courts, umbrella pines within 30 m of
+the water, the parks a mix of planes, limes, umbrella pines and holm oaks. Street trees are
+pruned with their crowns lifted clear of the passers-by: the demo grows its planted individuals
+with the crown lifted to 38 % of their height (half for the umbrella pine, 15 % for the olive).
+
+[vdb-plane]: https://www.vdberk.co.uk/trees/platanus-hispanica/
+[vdb-lime]: https://www.vdberk.co.uk/trees/tilia-europaea/
+[act-lime]: https://www.cityservices.act.gov.au/__data/assets/pdf_file/0010/1502938/Tilia-x-europaea.pdf
+[wiki-pinea]: https://en.wikipedia.org/wiki/Stone_pine
+[vdb-pinea]: https://www.vdberk.co.uk/trees/pinus-pinea/
+[wp-pinea]: https://worldplants.ca/display0.php?id=1897
+
 ---
 
 ## 3. Where they grow: a Mediterranean hillside

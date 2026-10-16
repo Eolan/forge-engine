@@ -285,3 +285,129 @@ light = 0.4
 spacing = 0.75
 abundance = 1.0
 opacity = 0.7
+
+# The city's planted street, square and park trees (#257; the coordinating session, 2026-10-16),
+# planted only: rows and groves set by `forge-procgen::city::trees`. Sizes as the others', their
+# sources in docs/research/flora.md; the growth parameters estimates after the holm oak's and the
+# Aleppo pine's, marked so there.
+
+[[species]]
+id = "london-plane"
+name = "London plane"
+latin = "Platanus × hispanica"
+habit = "tree"
+# 20–30 (35) m, crowns 18–25 m, round and half-open (Van den Berk).
+height = [20.0, 30.0]
+crown_width = [18.0, 25.0]
+maturity = 60.0
+foliage = "broad"
+# A tall clear trunk under a broad round crown of heavy limbs.
+young_crown = { widest = 0.45, fullness = 0.6, base = 0.15 }
+crown = { widest = 0.5, fullness = 0.5, base = 0.3 }
+internode = 0.4
+branch_angle = 42.0
+apical_control = 0.55
+tropism = 0.15
+wander = 0.15
+pipe_exponent = 2.1
+tip_radius = 0.016
+leaf_cluster = 0.4
+foliage_tips = 4
+shed_after = 4
+max_shoot = 4
+limb_nodes = 40
+
+[species.habitat]
+# Planted: avenues and squares (rows and groves only).
+layer = "canopy"
+wild = false
+soil = [0.3, 1.0]
+moisture = [0.2, 1.0]
+heat = [0.2, 0.9]
+slope = [0.0, 20.0]
+light = 0.3
+spacing = 1.0
+abundance = 1.0
+opacity = 0.8
+
+[[species]]
+id = "common-lime"
+name = "Common lime"
+latin = "Tilia × europaea"
+habit = "tree"
+# 30–40 m and 15–20 m in the nursery (Van den Berk), 18 by 12 m as a street tree (the ACT's
+# urban standard): the street's figures, the nursery's top as the crown's.
+height = [18.0, 30.0]
+crown_width = [12.0, 20.0]
+maturity = 60.0
+foliage = "broad"
+# A broad pyramidal, half-open crown (Van den Berk).
+young_crown = { widest = 0.3, fullness = 0.7, base = 0.1 }
+crown = { widest = 0.35, fullness = 0.6, base = 0.2 }
+internode = 0.34
+branch_angle = 52.0
+apical_control = 0.68
+tropism = 0.12
+wander = 0.12
+pipe_exponent = 2.1
+tip_radius = 0.014
+leaf_cluster = 0.35
+foliage_tips = 4
+shed_after = 4
+max_shoot = 4
+limb_nodes = 40
+
+[species.habitat]
+# Planted: squares and streets (rows and groves only).
+layer = "canopy"
+wild = false
+soil = [0.3, 1.0]
+moisture = [0.3, 1.0]
+heat = [0.1, 0.8]
+slope = [0.0, 20.0]
+light = 0.25
+spacing = 0.9
+abundance = 1.0
+opacity = 0.85
+
+[[species]]
+id = "umbrella-pine"
+name = "Umbrella pine"
+latin = "Pinus pinea"
+habit = "tree"
+# 12–20 m typically, over 25 m at most (Wikipedia); crowns over 8 m (Wikipedia), 8–10 m (Van den
+# Berk) to 10–20 m (worldplants).
+height = [12.0, 20.0]
+crown_width = [8.0, 15.0]
+maturity = 80.0
+foliage = "needles"
+# Broadly conical when young, a spherical crown flattened on top later on (Van den Berk): the
+# umbrella on a long clear bole.
+young_crown = { widest = 0.15, fullness = 0.9, base = 0.05 }
+crown = { widest = 0.72, fullness = 0.28, base = 0.55 }
+density = 0.75
+internode = 0.3
+branch_angle = 60.0
+apical_control = 0.6
+tropism = 0.25
+wander = 0.18
+pipe_exponent = 2.1
+tip_radius = 0.013
+leaf_cluster = 0.38
+foliage_tips = 2
+shed_after = 3
+max_shoot = 4
+limb_nodes = 150
+
+[species.habitat]
+# Planted: by the sea, parks and avenues (rows and groves only).
+layer = "canopy"
+wild = false
+soil = [0.0, 0.7]
+moisture = [0.0, 0.6]
+heat = [0.4, 1.0]
+slope = [0.0, 30.0]
+light = 0.5
+spacing = 1.2
+abundance = 1.0
+opacity = 0.55

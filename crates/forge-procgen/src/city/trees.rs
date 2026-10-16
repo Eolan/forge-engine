@@ -416,6 +416,51 @@ pub fn trees(site: &Site, plan: &CityPlan, seed: u64) -> Vec<Tree> {
             });
         }
     }
+    // The planted trees' species (#257, D-063): planes along the avenues and the shared streets
+    // and round the squares, limes along the lanes and in the courts with olives, umbrella pines
+    // within 30 m of the water, the parks a mix of planes, limes, umbrella pines and holm oaks.
+    let all = forge_flora::species::mediterranean();
+    let id = |name: &str| all.iter().position(|s| s.id == name).map(|i| i as u16);
+    let (plane, lime, pine, oak, olive) = (
+        id("london-plane"),
+        id("common-lime"),
+        id("umbrella-pine"),
+        id("holm-oak"),
+        id("olive"),
+    );
+    let far = water_distance(site);
+    let (wn, ws) = (site.water.size as usize, site.water.spacing);
+    let by_water = |p: DVec2| {
+        let (i, j) = (
+            ((p.x / ws).round().max(0.0) as usize).min(wn - 1),
+            ((p.y / ws).round().max(0.0) as usize).min(wn - 1),
+        );
+        far[j * wn + i] < 30.0
+    };
+    let mut roads = PointGrid::new(plan.size, 30.0);
+    for (i, e) in plan.roads.edges.iter().enumerate() {
+        for p in geom::resample(&e.points, 8.0) {
+            roads.insert(p, i as u32);
+        }
+    }
+    for t in out.iter_mut().filter(|t| t.species.is_none()) {
+        let hash = (t.pos.x.to_bits() ^ t.pos.y.to_bits().rotate_left(23))
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            >> 60;
+        t.species = match t.setting {
+            Setting::Street if by_water(t.pos) => pine,
+            Setting::Street => match roads
+                .nearest(t.pos, 30.0)
+                .map(|(_, e)| plan.roads.edges[e as usize].profile)
+            {
+                Some(Profile::Pedestrian) => lime,
+                _ => plane,
+            },
+            Setting::Park => [plane, lime, pine, oak][(hash % 4) as usize],
+            Setting::Courtyard => [lime, olive][(hash % 2) as usize],
+            Setting::Forest | Setting::Garden => t.species,
+        };
+    }
     // The trees the plan's own generators planted: the village's gardens' olives.
     out.extend(plan.planted.iter().copied());
     out

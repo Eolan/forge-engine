@@ -4703,32 +4703,40 @@ impl Scenario for PlanScenario {
         // The forest by species (D-063): a few individuals of each grown once (`forge_flora`),
         // their meshes instanced, each plant scaled to its height and crown.
         if !self.flora.is_empty() {
-            let mut models: std::collections::HashMap<(u16, u8), (forge_render::MeshId, f32, f32)> =
+            // Each species' individuals, grown at a quarter, half and all of its maturity on its
+            // first use; a plant takes the one nearest its height, so a young street tree is a
+            // young tree, not a mature one shrunk (a 10 m plane was a ball on a stem).
+            let mut models: std::collections::HashMap<u16, Vec<(forge_render::MeshId, f32, f32)>> =
                 Default::default();
-            for &(at, height, crown, turn, sp, k) in &self.flora {
+            for &(at, height, crown, turn, sp, _) in &self.flora {
                 let Some(s) = species.get(usize::from(sp)) else {
                     continue;
                 };
-                let &mut (id, h, w) = models.entry((sp, k)).or_insert_with(|| {
-                    let graph = forge_flora::grow::grow(
-                        s,
-                        &forge_flora::grow::Conditions {
-                            age: s.maturity * [0.7, 0.9, 1.1][usize::from(k) % 3],
-                            seed: 1000 + u64::from(sp) * 10 + u64::from(k),
-                            site: 1.0,
-                            pruning: Default::default(),
-                            wind: DVec2::ZERO,
-                        },
-                    );
+                let grown = models.entry(sp).or_insert_with(|| {
                     let shrub = s.habit == forge_flora::species::Habit::Shrub;
                     let broad = s.foliage == forge_flora::species::Foliage::Broad;
-                    let mesh = grown_mesh(&graph, shrub, broad);
-                    (
-                        builder.add_mesh(&MeshletMesh::build(&mesh)),
-                        graph.height().max(0.1),
-                        graph.crown_width().max(0.1),
-                    )
+                    (0..FLORA_INDIVIDUALS)
+                        .map(|k| {
+                            let conditions = flora_conditions(s, sp, k);
+                            let graph = forge_flora::grow::grow(s, &conditions);
+                            let mesh =
+                                grown_mesh(&graph, shrub, broad, conditions.pruning.lift as f32);
+                            (
+                                builder.add_mesh(&MeshletMesh::build(&mesh)),
+                                graph.height().max(0.1),
+                                graph.crown_width().max(0.1),
+                            )
+                        })
+                        .collect()
                 });
+                let Some(&(id, h, w)) = grown.iter().min_by(|a, b| {
+                    (a.1 / height)
+                        .ln()
+                        .abs()
+                        .total_cmp(&(b.1 / height).ln().abs())
+                }) else {
+                    continue;
+                };
                 let across = crown * 2.0 / w;
                 let transform = Mat4::from_scale_rotation_translation(
                     Vec3::new(across, height / h, across),
@@ -5444,6 +5452,40 @@ fn tree_model() -> TriMesh {
 /// How many individuals of each species are grown for the forest (D-063).
 const FLORA_INDIVIDUALS: u8 = 3;
 
+/// The growing conditions of species `s`'s (its index `sp`) individual `k`: a quarter, half and
+/// all of its maturity, on a good site, in still air; the planted trees' crowns lifted as a
+/// street's and a square's are, clear of the passers-by (a young plane was a bush on a stick):
+/// planes and limes on 38 % of their height, umbrella pines on half their long bole, olives 15 %.
+fn flora_conditions(
+    s: &forge_flora::species::Species,
+    sp: u16,
+    k: u8,
+) -> forge_flora::grow::Conditions {
+    let k = usize::from(k) % 3;
+    let age = s.maturity * [0.25, 0.5, 1.0][k];
+    // A share of the height it grows to by then, so a tree scaled to a street's height keeps
+    // its clear trunk in proportion (lifted in metres, a 9 m plane's crown hung at the eyes).
+    let tall =
+        (s.height[0] + s.height[1]) * 0.5 * forge_flora::species::growth_share(age, s.maturity);
+    let lift = tall
+        * match s.id.as_str() {
+            "london-plane" | "common-lime" => 0.38,
+            "umbrella-pine" => 0.5,
+            "olive" => 0.15,
+            _ => 0.0,
+        };
+    forge_flora::grow::Conditions {
+        age,
+        seed: 1000 + u64::from(sp) * 10 + k as u64,
+        site: 1.0,
+        pruning: forge_flora::grow::Pruning {
+            lift,
+            ..Default::default()
+        },
+        wind: DVec2::ZERO,
+    }
+}
+
 /// A species' material group and its bark's and foliage's two tones (`forge_flora`'s ids):
 /// the Aleppo pine's reddish bark and light needles, the holm oak's dark leaves, the olive's
 /// silver, the cypress's near black, the garrigue's greys.
@@ -5486,6 +5528,21 @@ fn flora_tones(id: &str) -> (&'static str, ([f32; 3], [f32; 3]), ([f32; 3], [f32
             bark,
             ([0.07, 0.14, 0.05], [0.13, 0.20, 0.08]),
         ),
+        "london-plane" => (
+            "flora-london-plane",
+            ([0.38, 0.36, 0.29], [0.55, 0.53, 0.44]),
+            ([0.10, 0.20, 0.06], [0.18, 0.28, 0.09]),
+        ),
+        "common-lime" => (
+            "flora-common-lime",
+            ([0.22, 0.19, 0.16], [0.34, 0.30, 0.25]),
+            ([0.12, 0.24, 0.06], [0.20, 0.32, 0.09]),
+        ),
+        "umbrella-pine" => (
+            "flora-umbrella-pine",
+            ([0.28, 0.18, 0.12], [0.44, 0.33, 0.25]),
+            ([0.09, 0.17, 0.06], [0.15, 0.24, 0.08]),
+        ),
         _ => (
             "flora-other",
             bark,
@@ -5501,7 +5558,7 @@ fn flora_tones(id: &str) -> (&'static str, ([f32; 3], [f32; 3]), ([f32; 3], [f32
 /// whichever is larger (a cypress's narrow column took 50 000 triangles), each cell's into one lump
 /// at their middle (section 1; a shrub's of 20 triangles). The cells are keyed in order, so a
 /// plant's mesh is the same from run to run.
-fn grown_mesh(g: &forge_flora::graph::TreeGraph, shrub: bool, broad: bool) -> TriMesh {
+fn grown_mesh(g: &forge_flora::graph::TreeGraph, shrub: bool, broad: bool, lift: f32) -> TriMesh {
     let mut mesh = TriMesh::default();
     let width = g.crown_width();
     let cell = (width
@@ -5538,7 +5595,10 @@ fn grown_mesh(g: &forge_flora::graph::TreeGraph, shrub: bool, broad: bool) -> Tr
     let mean = g.leaves.len() as f32 / cells.len().max(1) as f32;
     for (i, (sum, n, size)) in cells.into_values().enumerate() {
         let radius = cell * (0.45 + 0.35 * (n as f32 / mean).sqrt().min(1.6)) + size * 0.3;
-        lump_of(&mut mesh, sum / n as f32, radius, i as u32 % 8, &faces);
+        // Kept over a lifted crown's clear trunk: a lump round a low cluster hung below it.
+        let mut centre = sum / n as f32;
+        centre.y = centre.y.max(lift + radius * 0.7);
+        lump_of(&mut mesh, centre, radius, i as u32 % 8, &faces);
     }
     mesh
 }
@@ -5967,17 +6027,9 @@ mod tests {
             let shrub = s.habit == forge_flora::species::Habit::Shrub;
             let broad = s.foliage == forge_flora::species::Foliage::Broad;
             for k in 0..FLORA_INDIVIDUALS {
-                let g = forge_flora::grow::grow(
-                    s,
-                    &forge_flora::grow::Conditions {
-                        age: s.maturity * [0.7, 0.9, 1.1][usize::from(k) % 3],
-                        seed: 1000 + sp as u64 * 10 + u64::from(k),
-                        site: 1.0,
-                        pruning: Default::default(),
-                        wind: DVec2::ZERO,
-                    },
-                );
-                let m = grown_mesh(&g, shrub, broad);
+                let conditions = flora_conditions(s, sp as u16, k);
+                let g = forge_flora::grow::grow(s, &conditions);
+                let m = grown_mesh(&g, shrub, broad, conditions.pruning.lift as f32);
                 let budget = if shrub { 1_000 } else { 40_000 };
                 println!("{} {k}: {} triangles", s.id, m.triangle_count());
                 assert!(
