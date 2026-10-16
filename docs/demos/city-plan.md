@@ -410,7 +410,12 @@ whose front is cut short (a corner's wedge) and whose household's rooms would pi
 storeys stays garden. **The rich house on the square** (the research's §5): the village's
 rich household (five people, rich) takes the lot whose front lies nearest the square, and its
 block is cut again for that household's width; on the example site it stands 9 m wide and
-three storeys on the square's block, the village's tallest. The village at 600 m: 127 houses
+three storeys on the square's block, the village's tallest. **Its distribution** (the owner's
+question, the test prints it): the core block's 30 houses on lots of 68 m², a third of them
+with land left beside the house (a court of 14 m² on average); the three faubourg blocks' 89
+houses on lots of 135–174 m², nine in ten with a garden of 72–98 m² (the 30 m strip fell
+back to 12–22 m on blocks 60 m across); the lotissement block's 8 houses on lots of 448 m²,
+363 m² of garden each. The village at 600 m: 127 houses
 on 5 blocks (one core, three faubourg, one lotissement), 394 people (on the city's
 parameters 100 houses, 327 people, 68 of one storey, 28 of two, 4 of three; one in twenty
 vacant as the city's). **Its streets:** a village's main road is a shared street (10 m of

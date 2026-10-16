@@ -32,6 +32,8 @@ pub struct VillageBlock {
     pub court: Vec<DVec2>,
     /// Its houses, one a lot.
     pub houses: Vec<House>,
+    /// Its lots' type: its ring's, at the depth the block took.
+    pub ty: ParcelType,
 }
 
 /// The village: its plan and its blocks' houses.
@@ -240,6 +242,7 @@ pub fn village(site: &Site, params: &CityParams, seed: u64) -> Village {
             lots,
             court,
             houses,
+            ty,
         });
     }
     Village {
@@ -344,6 +347,37 @@ mod tests {
             })
             .collect();
         println!("blocks: {rings:?}");
+        // The distribution across the area (the owner's question, the cadastre research §2):
+        // per block its ring (by the strip's depth), its lots' mean area, the share of lots
+        // with land left beside their house (15 m² or more), and the mean land left.
+        for b in &v.blocks {
+            let ring = if b.ty.setback > 0.0 {
+                "lotissement"
+            } else if b.ty.yard >= 12.0 {
+                "faubourg"
+            } else {
+                "core"
+            };
+            let areas: Vec<(f64, f64)> = b
+                .houses
+                .iter()
+                .map(|h| {
+                    (
+                        geom::signed_area(&h.lot).abs(),
+                        geom::signed_area(&h.footprint).abs(),
+                    )
+                })
+                .collect();
+            let n = areas.len().max(1) as f64;
+            let lot = areas.iter().map(|a| a.0).sum::<f64>() / n;
+            let land: Vec<f64> = areas.iter().map(|a| a.0 - a.1).collect();
+            let with = land.iter().filter(|&&l| l >= 15.0).count();
+            println!(
+                "{ring}: {} houses, lots of {lot:.0} m², {with} with land ({:.0} m² left on average)",
+                areas.len(),
+                land.iter().sum::<f64>() / n
+            );
+        }
         let rich: Vec<String> = v
             .houses()
             .filter(|h| h.household.1 == Means::Rich)

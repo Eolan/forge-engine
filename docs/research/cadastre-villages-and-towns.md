@@ -97,6 +97,14 @@ houses by ring, to be measured (§6); the sizes are the sources'.
 | the lotissements | the fields taken since the 1960s, off a loop road | 400–1 000 m², 15–25 m wide, 25–40 m deep | one storey or R+1, free on four sides, 5 m back | a garden all round, the house in its middle | 15–30 % |
 | the scattered | beyond, along the lanes | over 1 000 m² | free-standing | land all round | a few |
 
+*The generated village at 600 m (2026-10-16, `city::village` on its own plan): the core
+block's 30 houses on lots of 68 m², a third with land left (a court of 14 m²); the faubourgs'
+89 houses on lots of 135–174 m², nine in ten with a garden of 72–98 m²; the lotissement's 8
+houses on 448 m² lots with 363 m² of garden. The core's share without land is at the table's
+upper bound, the faubourg's gardens are short of a real lanière's because the blocks are
+60 m across and the 30 m strips fell back to 12–22 m: the village's blocks should be cut
+longer across for the faubourgs, or its lanes spaced 90 m there.*
+
 In a small town the core and the faubourgs are the same tissues on more streets, with flats over
 the shops in the core; a medium town adds the 19th-century ring of closed blocks round courts
 (the city's perimeter blocks, D-060) between the core and the faubourgs; a large town's medium
