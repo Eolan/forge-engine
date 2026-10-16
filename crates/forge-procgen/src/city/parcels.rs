@@ -154,8 +154,65 @@ pub fn strips_by(
         let d = n0 + n1;
         if d.length() < 1e-6 { n1 } else { d.normalize() }
     };
+    // Each corner between two strips that turns by 30° or more: a corner lot of its own, from
+    // the corner along both streets to the feet of the court's corner on them, its two inner
+    // sides square to their streets, so every party line stands square to its street. Split on
+    // the bisector, the corner lots were wedges with party lines on the diagonal and houses
+    // turned against each other (the owner, 2026-10-16: "diagonal layouts like in your
+    // picture: no"). `(x, on the previous edge, on the next edge)`; `None` at a bend, at a
+    // reflex corner, beside a side without a strip, or where the corner lot would take most of
+    // an edge, or leave the edge too little between it and the next corner's lot (the larger of
+    // the two goes).
+    let edge_dir = |i: usize| (block[(i + 1) % n] - block[i]).normalize_or_zero();
+    let mut square: Vec<Option<(DVec2, DVec2, DVec2)>> = (0..n)
+        .map(|i| {
+            let h = (i + n - 1) % n;
+            let has_strip = |e: usize| {
+                street[e] && depths[e] >= 0.5 && block[e].distance(block[(e + 1) % n]) >= 0.5
+            };
+            let (th, ti) = (edge_dir(h), edge_dir(i));
+            if !has_strip(h) || !has_strip(i) || th.perp_dot(ti) <= 0.0 || th.dot(ti) > 0.866 {
+                return None;
+            }
+            let (n0, n1) = (normal(h), normal(i));
+            let det = n0.perp_dot(n1);
+            if det.abs() < 1e-6 {
+                return None;
+            }
+            // r · n0 = depth of h and r · n1 = depth of i, r from the corner.
+            let (d0, d1) = (depths[h], depths[i]);
+            let r = DVec2::new(d0 * n1.y - d1 * n0.y, n0.x * d1 - n1.x * d0) / det;
+            let corner = block[i];
+            let (along_i, back_h) = (r.dot(ti), -r.dot(th));
+            let (len_i, len_h) = (
+                corner.distance(block[(i + 1) % n]),
+                corner.distance(block[h]),
+            );
+            let fits =
+                (0.5..0.8 * len_i).contains(&along_i) && (0.5..0.8 * len_h).contains(&back_h);
+            fits.then(|| (corner + r, corner - th * back_h, corner + ti * along_i))
+        })
+        .collect();
+    // Two corner lots on one edge leave a lot's least width between them at least.
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let (Some((_, _, f0)), Some((_, f1, _))) = (square[i], square[j]) else {
+            continue;
+        };
+        let (a, b) = (block[i], block[j]);
+        let t = (b - a).normalize_or_zero();
+        if (f1 - a).dot(t) - (f0 - a).dot(t) < ty.width.0 {
+            let (take_i, take_j) = ((f0 - a).length(), (b - f1).length());
+            if take_i >= take_j {
+                square[i] = None;
+            } else {
+                square[j] = None;
+            }
+        }
+    }
     // Each street side's strip: the block within the depth of its side, between the dividers
-    // at the side's two corners, so the first and last lots take the corners.
+    // at the side's two corners, so the first and last lots take the corners; at a square
+    // corner, from the corner lot's inner side on.
     let strip_of = |i: usize| -> Option<Vec<DVec2>> {
         let depth = depths[i];
         let (a, b) = (block[i], block[(i + 1) % n]);
@@ -165,9 +222,18 @@ pub fn strips_by(
         let t = (b - a).normalize();
         let inward = DVec2::new(-t.y, t.x);
         let mut strip = geom::clip_half_plane(block, a + inward * depth, -t);
-        for (corner, d, along) in [(a, divider(i), t), (b, divider((i + 1) % n), -t)] {
-            let keep = if d.perp_dot(along) >= 0.0 { d } else { -d };
-            strip = geom::clip_half_plane(&strip, corner, keep);
+        let j = (i + 1) % n;
+        for (corner, d, along, sq) in [
+            (a, divider(i), t, square[i].map(|(_, _, f)| (f, -inward))),
+            (b, divider(j), -t, square[j].map(|(_, f, _)| (f, inward))),
+        ] {
+            strip = match sq {
+                Some((foot, keep)) => geom::clip_half_plane(&strip, foot, keep),
+                None => {
+                    let keep = if d.perp_dot(along) >= 0.0 { d } else { -d };
+                    geom::clip_half_plane(&strip, corner, keep)
+                }
+            };
         }
         // The clips repeat a corner they pass through.
         let strip = geom::clean(&strip, 1e-6);
@@ -206,21 +272,24 @@ pub fn strips_by(
         if strip.len() < 3 || geom::signed_area(&strip) <= 1.0 {
             continue;
         }
-        // The cuts along the street: a width drawn each time; the last lot takes what is left
-        // when that is short of the least width, so no sliver is cut.
-        let mut cuts = vec![0.0];
-        let mut s = 0.0;
+        // The cuts along the street, from a square corner's lot on and up to the next: a width
+        // drawn each time; the last lot takes what is left when that is short of the least
+        // width, so no sliver is cut.
+        let start = square[i].map_or(0.0, |(_, _, f)| (f - a).dot(t));
+        let end = square[j].map_or(length, |(_, f, _)| (f - a).dot(t));
+        let mut cuts = vec![start];
+        let mut s = start;
         let mut k = lots.len();
         loop {
             let w = width(k).max(0.5);
-            if s + w + ty.width.0 > length {
+            if s + w + ty.width.0 > end {
                 break;
             }
             s += w;
             cuts.push(s);
             k += 1;
         }
-        cuts.push(length);
+        cuts.push(end);
         // The keys the lots were cut for, one a cut.
         let first = lots.len();
         let mut ks: Vec<usize> = (first..first + cuts.len() - 1).collect();
@@ -269,6 +338,19 @@ pub fn strips_by(
         for (key, lot) in here {
             keys.push(key);
             lots.push(lot);
+        }
+    }
+    // The square corners' lots, each its front on the corner's next street first, keyed past
+    // every strip's lots.
+    let mut key = keys.iter().max().map_or(0, |k| k + 1);
+    for (i, sq) in square.iter().enumerate() {
+        if let Some((x, on_h, on_i)) = *sq {
+            let lot = vec![block[i], on_i, x, on_h];
+            if geom::signed_area(&lot) > 1.0 {
+                keys.push(key);
+                lots.push(lot);
+                key += 1;
+            }
         }
     }
     Some((lots, court, keys))
@@ -377,8 +459,8 @@ mod tests {
     fn a_rectangle_cuts_into_strips_of_village_lots() {
         let block = rectangle(100.0, 60.0);
         let n = check(&block, &[true; 4], &ParcelType::VILLAGE, 7);
-        // About 290 m of street once the corners' strips are cut, at 7 m a lot.
-        assert!((34..=52).contains(&n), "{n} lots");
+        // Four corner lots of 14 by 14 m, then about 208 m of street between them at 7 m a lot.
+        assert!((28..=40).contains(&n), "{n} lots");
     }
 
     #[test]

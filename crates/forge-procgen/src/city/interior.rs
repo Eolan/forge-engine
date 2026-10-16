@@ -295,7 +295,13 @@ pub fn house(m: &Mass, s: &Structure) -> Option<Interior> {
 /// How many of the partitions' ends meet an outside wall of `s` within one of its openings: a
 /// wall behind a window or a door (one flush with a jamb, within a centimetre, is not).
 pub fn at_openings(s: &Structure, interior: &Interior) -> usize {
-    let mut count = 0;
+    openings_hit(s, interior).len()
+}
+
+/// The partitions' ends that meet an outside wall of `s` within one of its openings, each with
+/// its storey ([`at_openings`] counts them).
+pub fn openings_hit(s: &Structure, interior: &Interior) -> Vec<(DVec2, usize)> {
+    let mut out = Vec::new();
     for p in &interior.partitions {
         for end in [p.a, p.b] {
             let hit = s.openings.iter().any(|op| {
@@ -316,10 +322,12 @@ pub fn at_openings(s: &Structure, interior: &Interior) -> usize {
                     && along > op.span().0 - half + 0.01
                     && along < op.span().1 + half - 0.01
             });
-            count += usize::from(hit);
+            if hit {
+                out.push((end, p.storey));
+            }
         }
     }
-    count
+    out
 }
 
 /// Whether every room of each storey of `interior` is reached from its hall through doorways.

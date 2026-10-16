@@ -144,6 +144,7 @@ pub fn garden_walls(
     court: &[DVec2],
     footprints: &[Vec<DVec2>],
     housed: &[bool],
+    gardens: &[Vec<DVec2>],
     front: f64,
 ) -> GardenWalls {
     let mut edges: Vec<(DVec2, DVec2, usize, bool)> = Vec::new();
@@ -235,7 +236,15 @@ pub fn garden_walls(
                 (cell.x as i64 as u64) << 32 ^ (cell.y as i64 as u64 & 0xFFFF_FFFF),
             )
             .next_u64();
-            let hedge = !street && (on_court(mid, along) || hash % HEDGE_SHARE.1 < HEDGE_SHARE.0);
+            // Only between two gardens (a garden and the court): across a corner lot's paved
+            // front a hedge crossed the paving (the owner, 2026-10-16: "positions of the hedges
+            // don't make sense").
+            let left = DVec2::new(-along.y, along.x) * 0.3;
+            let green = |p: DVec2| gardens.iter().any(|g| g.len() >= 3 && geom::contains(g, p));
+            let between = green(mid + left) && (green(mid - left) || on_court(mid, along));
+            let hedge = !street
+                && between
+                && (on_court(mid, along) || hash % HEDGE_SHARE.1 < HEDGE_SHARE.0);
             stretches.push(Stretch {
                 a,
                 b,
@@ -677,12 +686,22 @@ mod tests {
             parcels::strips_by(&block, &street, &[40.0, 0.0, 0.0, 0.0], &ty, |_| 9.0)
                 .expect("lanières");
         let footprints: Vec<Vec<DVec2>> = lots.iter().map(|l| house(l, 10.0)).collect();
+        // The gardens behind the houses.
+        let gardens: Vec<Vec<DVec2>> = lots
+            .iter()
+            .map(|l| {
+                let t = (l[1] - l[0]).normalize();
+                let inward = DVec2::new(-t.y, t.x);
+                geom::clean(&geom::clip_half_plane(l, l[0] + inward * 10.0, t), 1e-6)
+            })
+            .collect();
         let g = garden_walls(
             &block,
             &lots,
             &court,
             &footprints,
             &vec![true; lots.len()],
+            &gardens,
             STREET,
         );
         // No wall along a house nor through one.
@@ -763,7 +782,8 @@ mod tests {
             DVec2::new(13.0, 15.0),
             DVec2::new(3.0, 15.0),
         ];
-        let g = garden_walls(&lot, std::slice::from_ref(&lot), &[], &[fp], &[true], FRONT);
+        let lots = std::slice::from_ref(&lot);
+        let g = garden_walls(&lot, lots, &[], &[fp], &[true], lots, FRONT);
         let front: Vec<&Wall> = g
             .walls
             .iter()

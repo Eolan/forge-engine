@@ -56,6 +56,10 @@ struct Cli {
     /// round the camera drawn as figures.
     #[arg(long)]
     people: Option<f64>,
+    /// With `--village`: print the village's anomalies (`city::anomalies`), each with a view to
+    /// look at it from, and stop.
+    #[arg(long)]
+    anomalies: bool,
     /// The trams' and boats' service clock at the start, seconds (3600 by default).
     #[arg(long)]
     clock: Option<f64>,
@@ -168,6 +172,33 @@ fn main() -> anyhow::Result<()> {
             // Inside the first house with its rooms and a stair (`city::interior`): a metre behind
             // its street door, in the hall, looking into the house.
             let structures = city::structure::structures(&v.plan, &v.masses);
+            // The anomalies, each from its point of view: 4 m up and looking down on what stands
+            // outside, at eye height on what stands inside a house.
+            if cli.anomalies {
+                let all = city::anomalies::village(&v, &structures);
+                for a in &all {
+                    let inside = matches!(
+                        a.kind,
+                        city::anomalies::Kind::PartitionInOpening
+                            | city::anomalies::Kind::UnlitRoom
+                    );
+                    let (y, pitch) = if inside {
+                        (a.height.max(1.6), 0.0)
+                    } else {
+                        (a.height + 4.0, -25.0)
+                    };
+                    let look = if a.from.distance(a.at) < 0.1 {
+                        DVec2::X
+                    } else {
+                        a.at - a.from
+                    };
+                    println!("{:?}: {}: {}", a.kind, a.note, view(a.from, y, look, pitch));
+                }
+                for kind in city::anomalies::Kind::ALL {
+                    println!("{kind:?}: {}", city::anomalies::count(&all, kind));
+                }
+                return Ok(());
+            }
             if let Some((s, inner)) = v.masses.iter().zip(&structures).find_map(|(m, s)| {
                 city::interior::house(m, s)
                     .filter(|inner| inner.stair.is_some())

@@ -12,7 +12,8 @@
 # - `Storey`: one storey of a street or courtyard wall, its openings as gaps that
 #   `openings { Wall | Opening }` cuts at; an opening's shape has `opening.kind` (1 a window,
 #   2 a shopfront, 3 the door, 4 a passage into the court), `sill`, `glass` and `lintel`;
-# - `PartyWall`: a wall against a neighbour, from the ground to 0.9 m over the roof line;
+# - `PartyWall`: a wall against a neighbour, from the ground to the roof line (to 0.9 m over
+#   it round a flat roof);
 # - `Roofline`: the 0.9 m over a street or courtyard wall's roof line.
 
 let balconies = 0 | 1 | 1 | 2

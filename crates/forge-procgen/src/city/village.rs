@@ -292,7 +292,38 @@ pub fn village(site: &Site, params: &CityParams, seed: u64) -> Village {
             .iter()
             .map(|lot| houses.iter().any(|h| h.lot == *lot))
             .collect();
-        let garden = walls::garden_walls(&outline, &lots, &court, &footprints, &housed, front);
+        // Each lot's garden: behind its house's back, or all of a lot without a house; hedges
+        // stand only between two of them.
+        let gardens: Vec<Vec<DVec2>> = lots
+            .iter()
+            .map(|lot| {
+                let t = (lot[1] - lot[0]).normalize_or_zero();
+                let n = DVec2::new(-t.y, t.x);
+                match houses.iter().find(|h| h.lot == *lot) {
+                    Some(h) => {
+                        let back = h
+                            .footprint
+                            .iter()
+                            .map(|&p| (p - lot[0]).dot(n))
+                            .fold(0.0, f64::max);
+                        geom::clean(
+                            &geom::clip_half_plane(lot, lot[0] + n * back, DVec2::new(n.y, -n.x)),
+                            1e-6,
+                        )
+                    }
+                    None => lot.clone(),
+                }
+            })
+            .collect();
+        let garden = walls::garden_walls(
+            &outline,
+            &lots,
+            &court,
+            &footprints,
+            &housed,
+            &gardens,
+            front,
+        );
         city.walls.extend(garden.walls);
         // The hedges: kermes oaks clipped to a row, 0.9 m apart, 1.4 to 1.8 m high.
         for (h, &(p, q)) in garden

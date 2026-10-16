@@ -124,7 +124,10 @@ fn front_stretch(
     let (mut from, mut to) = (None, None);
     for k in 0..=steps {
         let s = (k as f64 * 0.25).min(width);
-        if deep_at(s) >= depth {
+        // Probed 2 cm in from the lot's corners: on a corner the probe fell on the side line,
+        // outside, and every house of a row started a quarter metre in from its lot's side, a
+        // sliver between each two with a garden wall in it (the anomaly check's first find).
+        if deep_at(s.clamp(0.02, (width - 0.02).max(0.02))) >= depth {
             from.get_or_insert(s);
             to = Some(s);
         } else if from.is_some() {

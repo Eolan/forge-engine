@@ -21,6 +21,7 @@
 //! 7. **Landmarks**, the street profiles that follow from the transit, and the
 //!    [`PlanStats`] the map is judged with ([`map`] draws it).
 
+pub mod anomalies;
 pub mod bible;
 pub mod blocks;
 pub mod cores;

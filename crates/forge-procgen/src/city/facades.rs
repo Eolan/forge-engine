@@ -347,10 +347,20 @@ pub fn dress(
                 }));
             };
             if wall.role == WallRole::Party {
+                // Up to the roof line under a tiled roof, whose slope or gable goes on from it
+                // (the tiles run across the party walls in Provence and Italy,
+                // `research/house-layouts.md` §2); `top` over it round a flat roof, a parapet. A
+                // parapet over a hipped roof stood as a wall above the eaves (the owner,
+                // 2026-10-16: "wall exceeds roof height").
+                let over = if m.roof == mass::Roof::Tiled {
+                    0.0
+                } else {
+                    top
+                };
                 terminals.clear();
                 stats += grammar.derive(
                     "PartyWall",
-                    wall_scope(wall, 0.0, m.height + top),
+                    wall_scope(wall, 0.0, m.height + over),
                     &grammar.attrs(&base),
                     building,
                     &mut terminals,
@@ -576,7 +586,15 @@ mod tests {
                     .filter(|o| o.wall == w && o.kind == OpeningKind::Passage)
                     .map(|o| o.width * o.head)
                     .sum();
-                let full = wall.length() * (m.height + if tiled { 0.4 } else { 0.9 }) - holes;
+                // A party wall under a tiled roof stops at the roof line (no parapet).
+                let over = if tiled {
+                    0.4
+                } else if m.roof == mass::Roof::Tiled {
+                    0.0
+                } else {
+                    0.9
+                };
+                let full = wall.length() * (m.height + over) - holes;
                 let a = area.get(&(i as u32, w as u32)).copied().unwrap_or(0.0);
                 assert!((a - full).abs() < 1e-6 * full.max(1.0), "{a} of {full}");
             }

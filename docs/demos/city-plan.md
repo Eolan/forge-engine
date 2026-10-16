@@ -553,7 +553,45 @@ A court is now the block's common ground, open to the lanes, an olive grove of a
 ground with its olives; between two gardens two stretches in five are hedges, by a hash of
 where they lie (`walls::HEDGE_SHARE`). A hedge is a row of kermes oaks 0.9 m apart, 1.4 to
 1.8 m high. The village now has 234 m of wall along its streets and lanes, 801 m between gardens
-and 19 gates. **Its insides** (`city::interior`, the same day; the owner: "a house or structure
+and 19 gates. A hedge stands only where both its sides are garden (behind the houses' backs, a
+lot without a house, the court): across a corner lot's paved front one crossed the paving ("positions
+of the hedges don't make sense"). **Square corners** (the same evening; the owner: "diagonal layouts
+like in your picture: no"): where two strips met at a block's corner they were split on the
+bisector, and the corner lots were wedges with diagonal party lines and houses turned against
+each other. A corner that turns by 30° or more between two strips is now a lot of its own, from the
+corner along both streets to the feet of the court's corner on them, its two inner sides square to
+their streets (`parcels::strips_by`); it may take up to 80 % of an edge, and of two corner lots
+leaving less than a lot between them the larger goes. A lane's rounded corner, cut into short edges
+that each turn less, still splits on the bisector. **Rows that touch**: every house of a row
+started a quarter metre in from its lot's side (the front was sampled every 25 cm, and on the lot's
+corner the probe fell on the side line, outside), a sliver between each two with a garden wall's
+piers in it; probed 2 cm in, the rows' houses share their party walls. **No parapet over a tiled
+roof**: a party wall rose 0.9 m over the roof line, a wall standing above the eaves where the
+neighbour was lower or apart ("wall exceeds roof height"); under a tiled roof it now stops at the
+roof line, the tiles running across as in Provence and Italy (`research/house-layouts.md` §2).
+
+**The anomaly check** (`city::anomalies`, the same evening; the owner: "if it does not snap
+everywhere, it means something is wrong, we need a way to detect anomalies"): the village checked
+against the rules of `research/house-layouts.md` §8, each breach with its place and a point to look
+at it from. `city-plan --village 600 --anomalies` prints them with a `--view` each and stops; the
+test `the_villages_anomalies_never_grow` fails when a kind's count rises over its bound, and each
+fix lowers the bound.
+
+| Anomaly | Rule | When the check came in | After the fixes above |
+|---|---|---|---|
+| a room past its house's walls (its plan's rectangle on a footprint the lot cut) | — | 66 | 45 |
+| a partition meeting the facade within a window or a door | 13 | 4 | 7 |
+| a bedroom, living room, dining room, kitchen, study or salon without a window | 14 | 189 | 183 |
+| two houses of a block facing each other under 3 m apart without touching | 1 | 64 | 19 |
+| attached houses' eaves under 0.8 m apart but not equal | 3 | 0 | 0 |
+| a garden wall off every lot line near it | — | 0 | 0 |
+| a planted tree or shrub in a house or a wall | — | 5 | 1 |
+
+What is left is the next work: the slivers and the rooms past their walls where a lane bends (the
+lots fan out and a house's rectangle leaves a wedge behind its front), the windows placed for the
+facade and not for the rooms behind them, and the rounded corners; the owner asked to wait for the
+research on building systems and their connectors ("snap"), to apply one system to the buildings,
+the walls, the pavements and the roads. **Its insides** (`city::interior`, the same day; the owner: "a house or structure
 should be thought by thinking about the rooms"): a house's structure now follows its rooms'
 plan. Its core (`cores`, the straight flight of 1.1 m with handrails beside a corridor of
 1.2 m a wheelchair passes, walls of 0.2 m) stands at the start of its front where the plan
