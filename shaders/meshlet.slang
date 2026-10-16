@@ -4067,7 +4067,25 @@ struct ClosestHit
     bool mover;      // met in the movers' structure (#79)
 };
 
-ClosestHit trace_closest(Frame* f, RayDesc ray, bool shadow = false)
+// Whether a probe's ray keeps a cut-out it met (leaves, railings): half the time, by a hash of the
+// ray and the triangle, so a crown lets through some of the light round it as real crowns do.
+// Kept every time, a crown darkened every probe about it, and the wall beside a tree took a dark
+// blot (the owner, 2026-10-16: "strange shadows or lighting artifact on the wall"); kept never,
+// the rays crossed whole crowns and forests (0.7-0.9 ms more on the village's green). The sun's
+// shadows keep every leaf.
+static const float PROBE_LEAF_KEPT = 0.25;
+bool probe_leaf_kept(Frame* f, uint instance, uint primitive, uint seed)
+{
+    RtScene* rs = f[0].rt_scene;
+    Instance inst = f[0].instances[instance];
+    uint tri = rs[0].meshes[inst.mesh].first_triangle + primitive;
+    if ((f[0].materials[inst.material + rs[0].sections[tri]].flags & MATERIAL_FLAG_MASKED) == 0)
+        return true;
+    return hash_color(seed ^ instance * 0x9E3779B9u ^ primitive * 0x85EBCA6Bu).x < PROBE_LEAF_KEPT;
+}
+
+// `probe`: a probe's ray, its `seed` its probe's and ray's (`probe_leaf_kept`).
+ClosestHit trace_closest(Frame* f, RayDesc ray, bool shadow = false, bool probe = false, uint seed = 0u)
 {
     ClosestHit o;
     o.hit = false;
@@ -4080,8 +4098,9 @@ ClosestHit trace_closest(Frame* f, RayDesc ray, bool shadow = false)
     q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), ray_opacity(f), 0xFF, ray);
     while (q.Proceed())
     {
-        if (shadow ? shadow_candidate_kept(f, q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics())
-            : ray_candidate_kept(f, q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics()))
+        if ((!probe || probe_leaf_kept(f, q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), seed)) && (shadow
+            ? shadow_candidate_kept(f, q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics())
+            : ray_candidate_kept(f, q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics())))
             q.CommitNonOpaqueTriangleHit();
     }
     if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
@@ -4100,8 +4119,9 @@ ClosestHit trace_closest(Frame* f, RayDesc ray, bool shadow = false)
         m.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas_movers), ray_opacity(f), 0xFF, ray);
         while (m.Proceed())
         {
-            if (shadow ? shadow_candidate_kept(f, m.CandidateInstanceID(), m.CandidatePrimitiveIndex(), m.CandidateTriangleBarycentrics())
-                : ray_candidate_kept(f, m.CandidateInstanceID(), m.CandidatePrimitiveIndex(), m.CandidateTriangleBarycentrics()))
+            if ((!probe || probe_leaf_kept(f, m.CandidateInstanceID(), m.CandidatePrimitiveIndex(), seed)) && (shadow
+                ? shadow_candidate_kept(f, m.CandidateInstanceID(), m.CandidatePrimitiveIndex(), m.CandidateTriangleBarycentrics())
+                : ray_candidate_kept(f, m.CandidateInstanceID(), m.CandidatePrimitiveIndex(), m.CandidateTriangleBarycentrics())))
                 m.CommitNonOpaqueTriangleHit();
         }
         if (m.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
@@ -5358,7 +5378,7 @@ void probe_trace_main(uint3 group : SV_GroupID, uint thread : SV_GroupThreadID)
     desc.Direction = direction;
     desc.TMin = 0.0;
     desc.TMax = fixed ? PROBE_FIXED_REACH * slot.spacing : PROBE_MISS_DISTANCE;
-    ClosestHit c = trace_closest(f, desc);
+    ClosestHit c = trace_closest(f, desc, false, true, probe * 0x27D4EB2Fu ^ ray);
     float3 radiance = float3(0.0);
     float distance = PROBE_MISS_DISTANCE;
     if (c.hit)

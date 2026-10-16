@@ -753,7 +753,11 @@ mesh to test navigations inside the houses"):
   sky's light leaked in blue and the shadows sat in odd places and swung with the jitter:
   15 000 pixels of a hall changed between frames 10 apart, about 100 now. At 2 m the shimmer of
   #272 is gone at 128 rays as at 256 (the loading session's measures, #274), and the frame
-  costs less than before (see `docs/PROFILE.md`).
+  costs less than before (see `docs/PROFILE.md`). The probes' rays keep a leaf card or a
+  railing a quarter of the time (`PROBE_LEAF_KEPT` in `meshlet.slang`), as a crown lets light
+  through: kept every time, a crown darkened every probe about it and left a dark blot on the
+  wall beside the tree (the owner: "strange shadows or lighting artifact on the wall"). The
+  sun's shadows keep every leaf.
 - *Cornices' corners* (`cornice_corners`). Where two walls' cornices meet at an outside corner,
   each of the three steps (`modules::CORNICE_STEPS`) is mitred round it, a prism from the corner
   out to where the two steps' faces meet.
