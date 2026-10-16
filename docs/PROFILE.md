@@ -1608,6 +1608,34 @@ The transient buffers cost no CPU time that shows. Recording is 0.12 ms against 
 of pass bodies `docs/research/render-graph-next.md` sets as the gate for parallel recording,
 so that stays unbuilt.
 
+## `forge-audio` — the mixer (#267, 2026-10-16)
+
+The sound system's audio-thread work, measured headless (`cargo run --release -p forge-audio
+--example audio-render -- bench`): the time the mixer takes to render one second of sound, on one
+thread of the Ryzen 7 9800X3D, the best of three runs of 10 s while three other sessions shared
+the CPU. Each voice is a looping mono sound at a pitch between 0.8 and 1.25, placed 2 to 40 m away
+and moving every 10 ms (distance curve, air absorption, the three band filters, Doppler, the
+equal-power pan), into a bus; every voice sends 0.3 to a hall reverb (an 8-line feedback delay
+network) on an aux bus; the master ends in the look-ahead limiter. Blocks are 256 frames, 5.33 ms
+at 48 kHz.
+
+| Voices | ms a second of sound | Share of a core | Mean block | Longest block |
+|---|---|---|---|---|
+| 0 (the limiter and the buses) | 0.27 | 0.03 % | 1.3 µs | 4 µs |
+| 32 | 12.1 | 1.2 % | 64.5 µs | 137 µs |
+| 64 | 24.6 | 2.5 % | 131 µs | 264 µs |
+| 128 | 45.2 | 4.5 % | 241 µs | 418 µs |
+
+About 1.9 µs a voice a block (7.4 ns a voice a frame): the Hermite interpolator, the band filters
+(three biquads, six while their gains crossfade), the pan's ramp and the bus and send sums. The
+default budget of 64 voices takes 2.5 % of a core, so a mix thread at 128 voices still leaves 95 % of
+each block's 5.33 ms. Runs while the other sessions build come out up to 25 % slower.
+
+The decode thread's side, a second of stereo at 48 kHz decoded whole (the best of 30): WAV
+(16-bit) 0.01 ms, Ogg Vorbis at 128 kbit/s 1.7 ms, Ogg Opus at 64 kbit/s 1.7 ms, so a stream
+costs its decode thread under 0.2 % of a core. Not measured yet: the wake-ups of a real device.
+The page with the tests and the scenes is `docs/demos/audio.md`.
+
 ## Not measured yet
 
 - **Streaming**: residency pools, request queue depth, drive and decompression throughput.

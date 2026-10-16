@@ -619,7 +619,8 @@ The items below are the phase's original outline; the plan above orders them.
 
 ## Phase 6 — Audio
 
-1. `forge-audio`: real-time thread, mixer graph, streaming decode, voice management.
+1. `forge-audio`: real-time thread, mixer graph, streaming decode, voice management ✅
+   (#267, 2026-10-16: built and tested headless, `docs/demos/audio.md`; the device next).
 2. Spatialisation and occlusion (D-011), material-driven footsteps and impacts, weather and
    medium ambience, underwater.
    **Demo:** `forest-to-cave` — walk from a forest into a cave in the rain; occlusion,
