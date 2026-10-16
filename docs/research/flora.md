@@ -234,6 +234,21 @@ from a pine and less from a shrub.
 *Bearing:* spacing by species: each pair keeps the sum of its two radii, the canopy's from the
 canopy, the understorey's from the trunks.
 
+**Keith J. Beven, Michael J. Kirkby. "A physically based, variable contributing area model of basin
+hydrology." *Hydrological Sciences Bulletin* 24(1), 1979, 43–69.** [paper] [foundational]
+(search-recorded; already in `CREDITS.md` for `forge_procgen::layers::wetness`)
+**Andrew Weiss. "Topographic Position and Landforms Analysis." Poster, ESRI User Conference, San
+Diego, 9–13 July 2001.** [web] [foundational] (search-recorded, through ESRI's documentation of its
+Topographic Position Index tool)
+
+The wetness index `ln(a / tan β)` (`a` the area drained per unit of contour, `β` the slope) says
+where water gathers; the topographic position index (a cell's height against the mean of its
+neighbourhood) says ridge above zero, valley below.
+*Bearing:* the placement's fields: moisture from the wetness index spread over 6 m, with a
+hollow's and a shaded slope's bonus; soil depth thinner on the ridges (the position index over
+40 m), the steep and the sun-baked ground, deeper where the water gathers. The weights are Forge's
+estimates, tuned until the example hillside reads as the sources above describe it.
+
 The procedural.md §4 entries (Deussen et al. 1998's distribution → plant → rendering pipeline, Lane
 and Prusinkiewicz 2002's global-to-local direction) and the SideFX Labs biome entry of
 planet-environment.md §2 (viability per species from tolerances, then competition) are the
@@ -316,6 +331,7 @@ bands from the graph and the leaf clusters.
   and the Polish pine study), Richards 1959, Bridson 2007's venue, the RHS Stricta Group page, Beth
   Chatto, the Calanques national park (a certificate error), the AFS 1965 article (403), the CIHEAM
   PDF (unreadable without a PDF tool), techno-science.net, the ZNIEFF record, the Spanish recruitment
-  study.
+  study, Wei 2010, Beven and Kirkby 1979, Weiss 2001.
 - **Not read:** Pałubicki 2009's full text and its parameter values (the PDF could not be extracted
-  here); the numbers in `data/mediterranean.toml` are Forge's.
+  here); the numbers in `data/mediterranean.toml` (growth parameters and habitats) and the fields'
+  weights in `place.rs` are Forge's.

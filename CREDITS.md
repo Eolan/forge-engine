@@ -585,6 +585,13 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   - **The species' sizes:** Van den Berk Nurseries' tree pages, the Royal Horticultural Society's
     plant pages, the American Conifer Society, the Sacramento Tree Foundation, EUFORGEN and
     Wikipedia, as `docs/research/flora.md` §2 lists them.
+  - **Darts for the placement:** Robert Bridson, "Fast Poisson Disk Sampling in Arbitrary
+    Dimensions", SIGGRAPH 2007 Sketches (one candidate per cell of a grid); Li-Yi Wei,
+    "Multi-Class Blue Noise Sampling", SIGGRAPH 2010 (a spacing per pair of species; Microsoft's
+    patent on it, US 8,219,517 B2, has lapsed).
+  - **The ground's fields:** the topographic wetness index of Beven and Kirkby (above, as
+    `forge_procgen::layers::wetness` uses it) for the moisture; Andrew Weiss, "Topographic
+    Position and Landforms Analysis", ESRI User Conference 2001, for the ridges and the valleys.
 
 **Sound** (`forge-audio`, #267, D-011):
 - **The audio thread's rules.** Ross Bencina, "Real-time audio programming 101: time waits for

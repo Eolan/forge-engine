@@ -20,7 +20,7 @@ pub struct Canvas {
 }
 
 /// The paper's colour.
-pub const PAPER: [u8; 3] = [246, 243, 236];
+pub const PAPER: [u8; 3] = [248, 248, 240];
 /// The ink's colour, for rulers and text.
 pub const INK: [u8; 3] = [60, 58, 54];
 
@@ -129,14 +129,32 @@ impl Canvas {
         }
     }
 
-    /// Writes the canvas as a PNG.
+    /// Rounds every channel to a multiple of `step`: fewer distinct colours, a PNG a third the
+    /// size for a busy map.
+    pub fn posterize(&mut self, step: f32) {
+        for p in &mut self.pixels {
+            for v in p.iter_mut() {
+                *v = ((*v / step).round() * step).min(255.0);
+            }
+        }
+    }
+
+    /// Writes the canvas as a PNG, compressed hard (the owner's reports stay small).
     pub fn save(&self, path: &Path) -> image::ImageResult<()> {
+        use image::ImageEncoder;
+        use image::codecs::png::{CompressionType, FilterType, PngEncoder};
         let w = self.width;
-        ImageBuffer::from_fn(self.width, self.height, |x, y| {
+        let buffer = ImageBuffer::from_fn(self.width, self.height, |x, y| {
             let p = self.pixels[(y * w + x) as usize];
             Rgb(p.map(|v| v.round().clamp(0.0, 255.0) as u8))
-        })
-        .save(path)
+        });
+        let file = std::io::BufWriter::new(std::fs::File::create(path)?);
+        PngEncoder::new_with_quality(file, CompressionType::Best, FilterType::Adaptive).write_image(
+            buffer.as_raw(),
+            self.width,
+            self.height,
+            image::ExtendedColorType::Rgb8,
+        )
     }
 }
 
@@ -158,7 +176,7 @@ pub fn colours(id: &str, foliage: Foliage) -> Colours {
         "italian-cypress" => ([104, 82, 64], [34, 66, 44]),
         "rosemary" => ([104, 90, 74], [88, 120, 98]),
         "cistus" => ([110, 96, 82], [154, 168, 142]),
-        "kermes-oak" => ([96, 84, 70], [78, 108, 58]),
+        "kermes-oak" => ([96, 84, 70], [118, 122, 58]),
         _ => match foliage {
             Foliage::Needles => ([110, 86, 66], [80, 116, 72]),
             Foliage::Broad => ([100, 88, 76], [72, 110, 64]),

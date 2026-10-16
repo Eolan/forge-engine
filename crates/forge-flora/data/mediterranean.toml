@@ -36,6 +36,18 @@ shed_after = 3
 max_shoot = 4
 limb_nodes = 150
 
+[species.habitat]
+# A pioneer of the dry, shallow, warm limestone, light-loving (docs/research/flora.md §3).
+layer = "canopy"
+soil = [0.0, 0.45]
+moisture = [0.0, 0.45]
+heat = [0.45, 1.0]
+slope = [0.0, 35.0]
+light = 0.55
+spacing = 1.25
+abundance = 0.7
+opacity = 0.55
+
 [[species]]
 id = "holm-oak"
 name = "Holm oak"
@@ -63,6 +75,18 @@ shed_after = 4
 max_shoot = 4
 limb_nodes = 30
 
+[species.habitat]
+# The forest of the deeper, wetter soils; shade-tolerant: it grows up under the pines.
+layer = "canopy"
+soil = [0.35, 1.0]
+moisture = [0.25, 1.0]
+heat = [0.0, 0.65]
+slope = [0.0, 32.0]
+light = 0.15
+spacing = 0.7
+abundance = 1.0
+opacity = 0.85
+
 [[species]]
 id = "olive"
 name = "Olive"
@@ -89,6 +113,19 @@ foliage_tips = 4
 shed_after = 4
 max_shoot = 3
 limb_nodes = 12
+
+[species.habitat]
+# Planted: groves on warm, well-drained slopes (rows and groves only).
+layer = "canopy"
+wild = false
+soil = [0.3, 0.8]
+moisture = [0.0, 0.6]
+heat = [0.5, 1.0]
+slope = [0.0, 20.0]
+light = 0.6
+spacing = 0.8
+abundance = 1.0
+opacity = 0.6
 
 [[species]]
 id = "italian-cypress"
@@ -118,6 +155,19 @@ shed_after = 6
 max_shoot = 4
 occupancy = 1.6
 
+[species.habitat]
+# Planted: alleys, windbreaks, by the houses (rows only).
+layer = "canopy"
+wild = false
+soil = [0.2, 1.0]
+moisture = [0.0, 0.8]
+heat = [0.3, 1.0]
+slope = [0.0, 25.0]
+light = 0.5
+spacing = 0.8
+abundance = 1.0
+opacity = 0.9
+
 [[species]]
 id = "rosemary"
 name = "Rosemary"
@@ -144,6 +194,18 @@ shed_after = 4
 max_shoot = 4
 stems = [5, 9]
 stem_spread = 28.0
+
+[species.habitat]
+# The garrigue's open, dry, sun-baked ground; south or west facing (RHS).
+layer = "understorey"
+soil = [0.0, 0.35]
+moisture = [0.0, 0.4]
+heat = [0.55, 1.0]
+slope = [0.0, 40.0]
+light = 0.7
+spacing = 0.9
+abundance = 1.0
+opacity = 0.5
 
 [[species]]
 id = "cistus"
@@ -172,6 +234,18 @@ max_shoot = 4
 stems = [4, 7]
 stem_spread = 32.0
 
+[species.habitat]
+# The garrigue's open ground; south or west facing (RHS); first back after a fire.
+layer = "understorey"
+soil = [0.0, 0.45]
+moisture = [0.0, 0.5]
+heat = [0.45, 1.0]
+slope = [0.0, 40.0]
+light = 0.65
+spacing = 0.85
+abundance = 1.2
+opacity = 0.4
+
 [[species]]
 id = "kermes-oak"
 name = "Kermes oak"
@@ -199,3 +273,15 @@ shed_after = 5
 max_shoot = 4
 stems = [6, 11]
 stem_spread = 40.0
+
+[species.habitat]
+# The garrigue's thickets, on the poorest and the stoniest ground, under open pines too.
+layer = "understorey"
+soil = [0.0, 0.55]
+moisture = [0.0, 0.55]
+heat = [0.3, 1.0]
+slope = [0.0, 45.0]
+light = 0.4
+spacing = 0.75
+abundance = 1.0
+opacity = 0.7

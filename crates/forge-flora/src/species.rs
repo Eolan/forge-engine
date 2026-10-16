@@ -5,6 +5,8 @@
 use forge_core::dmath;
 use serde::Deserialize;
 
+use crate::place::Habitat;
+
 /// A tree or a shrub.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -154,6 +156,10 @@ pub struct Species {
     /// The deepest branch order grown (the trunk is 0).
     #[serde(default = "default_max_order")]
     pub max_order: u8,
+    /// Where it grows on its own, for the placement ([`crate::place`]); none for a species only
+    /// ever planted by hand.
+    #[serde(default)]
+    pub habitat: Option<Habitat>,
 }
 
 fn default_divergence() -> f64 {

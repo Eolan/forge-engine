@@ -9,6 +9,8 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use forge_flora::draw::{self, Canvas, INK, PAPER, View};
+use forge_flora::map::{self, HillsideMap};
+use forge_flora::place::{self, Fields, Ground};
 use forge_flora::{Conditions, Pruning, Species, TreeGraph, grow, mediterranean};
 use glam::{DVec2, Vec2};
 
@@ -69,6 +71,8 @@ fn main() {
         .save(&path)
         .expect("writing the inputs sheet");
     println!("{}", path.display());
+    hillside(&all, &out, font.as_deref());
+    per_square_kilometre(&all);
 }
 
 /// One plant's cell on a sheet.
@@ -299,4 +303,84 @@ fn inputs_sheet(all: &[Species], font: Option<&[u8]>) -> Canvas {
         false,
     );
     canvas
+}
+
+/// The example hillside, placed and drawn (`flora-hillside.png`), with its numbers.
+fn hillside(all: &[Species], out: &std::path::Path, font: Option<&[u8]>) {
+    let size = 600.0;
+    let ground = Ground::example(size, 2.0, 7);
+    let fields = Fields::of(&ground);
+    let example = place::example_rules(all, size);
+    let placed = forge_flora::place(&ground, &fields, all, &example.rules, 3, &|_| false);
+    println!("hillside: {size:.0} m, {} plants", placed.plants.len());
+    for (k, sp) in all.iter().enumerate() {
+        let n = placed
+            .plants
+            .iter()
+            .filter(|p| usize::from(p.species) == k)
+            .count();
+        println!("  {:<16} {n:>6}", sp.id);
+    }
+    // A few grown individuals per species for the section.
+    let grown: Vec<Vec<TreeGraph>> = all
+        .iter()
+        .map(|sp| {
+            (0..3)
+                .map(|k| grow(sp, &Conditions::new(sp.maturity, 100 + k)))
+                .collect()
+        })
+        .collect();
+    let x = size * 0.3;
+    let v = place::example_valley(x, size);
+    let labels = [
+        ("north ridge: Aleppo pines", 6.0),
+        (
+            "the sunny slope, facing south: garrigue and pines",
+            v - 150.0,
+        ),
+        ("the valley: holm oaks by the stream", v + 8.0),
+        ("the shaded slope, facing north: holm oaks", v + 120.0),
+        ("south ridge", size - 24.0),
+    ]
+    .map(|(t, y)| (t.to_string(), DVec2::new(14.0, y)));
+    let section_x = size * 0.62;
+    let canvas = map::hillside(&HillsideMap {
+        ground: &ground,
+        fields: &fields,
+        species: all,
+        placement: &placed,
+        water: std::slice::from_ref(&example.stream),
+        tracks: std::slice::from_ref(&example.track),
+        grown: &grown,
+        section_x,
+        labels: &labels,
+        font,
+    });
+    let path = out.join("flora-hillside.png");
+    canvas.save(&path).expect("writing the hillside");
+    println!("{}", path.display());
+}
+
+/// Placement's time over a square kilometre of the example ground at 2 m (the best of three).
+fn per_square_kilometre(all: &[Species]) {
+    let size = 1000.0;
+    let mut best = [f64::MAX; 3];
+    let mut count = 0;
+    for _ in 0..3 {
+        let t = Instant::now();
+        let ground = Ground::example(size, 2.0, 7);
+        best[0] = best[0].min(t.elapsed().as_secs_f64() * 1e3);
+        let t = Instant::now();
+        let fields = Fields::of(&ground);
+        best[1] = best[1].min(t.elapsed().as_secs_f64() * 1e3);
+        let example = place::example_rules(all, size);
+        let t = Instant::now();
+        let placed = forge_flora::place(&ground, &fields, all, &example.rules, 3, &|_| false);
+        best[2] = best[2].min(t.elapsed().as_secs_f64() * 1e3);
+        count = placed.plants.len();
+    }
+    println!(
+        "a square kilometre at 2 m: ground {:.0} ms, fields {:.0} ms, placement {:.0} ms, {count} plants",
+        best[0], best[1], best[2]
+    );
 }

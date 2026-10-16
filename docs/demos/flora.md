@@ -1,9 +1,10 @@
-# Flora — plants grown as branch graphs (`forge-flora`)
+# Flora — plants grown as branch graphs and placed on the hills (`forge-flora`)
 
 The flora's simulation side (#269, a parallel session of D-062 off the GPU): the Mediterranean
 village's trees and shrubs (#266) grown from a species record and a seed into branch graphs with
-radii and leaf clusters, tested headless and drawn on the CPU. Their rendering (D-013's ladder,
-wind) stays with the renderer's session. The research is `docs/research/flora.md`.
+radii and leaf clusters, then placed on a heightfield by their habitats, tested headless and drawn
+on the CPU. Their rendering (D-013's ladder, wind) stays with the renderer's session. The research
+is `docs/research/flora.md`; the proposal for the owner is D-063.
 
 ```
 cargo run --release -p forge-flora --bin flora-sheet -- --out reports/2026-10-16
@@ -53,24 +54,62 @@ The times were taken while three other sessions built on the same 8-core CPU; th
 third between runs. A village's few individuals per species and age (say eight each) grow in
 under a second.
 
+## Placement on a hillside
+
+![A placed hillside](../../reports/2026-10-16/flora-hillside.png)
+
+*`reports/2026-10-16/flora-hillside.png`: the example ground, 600 m square, an east–west valley
+with its stream, the sunny (south-facing) slope to the north, the shaded one to the south. Each
+plant's crown from above by species, then the section along the dashed line from north to south,
+whole and closer, with the plants within 10 m of it drawn from grown individuals at their placed
+size.* Aleppo pines and the garrigue (kermes oak, grey-leaved cistus, rosemary) hold the dry,
+shallow, sunny ground; holm oaks the valley and the shaded slope; an olive grove (planted) on the
+lower sunny slope; a cypress alley (planted) along the track.
+
+| Part | How | Module |
+|---|---|---|
+| Ground | a square heightfield, `x` east and `y` south (north up on the maps); the example: a valley along a sine, slopes rising to the north faster than to the south, value noise for spurs and roughness | `place::Ground` |
+| Fields | per sample: the slope; the heat, 0.5 on the flat, up to 1 on a steep south face and down to 0 on a steep north face; the moisture from the wetness index `ln(a / tan β)` (D8 drained areas) spread over 6 m, wetter in hollows and on shaded slopes; the soil's depth, thinner on ridges (the height above the mean within 40 m), steep and sun-baked ground, deeper where water gathers; all weights Forge's estimates | `place::Fields` |
+| Habitats | per species in its TOML record: its layer (canopy or understorey), bands of soil, moisture, heat and slope where it does best (falling to nothing over a soft edge), the least light it stands, its spacing in summed crown radii, its abundance, its crown's opacity; the olive and the cypress only planted | `species`, `place::Habitat` |
+| Planted rules | rows along a line every so many metres, offset to a side (the city's street trees, a cypress alley); groves on a jittered grid inside a polygon (parks, courtyards, an olive grove); lines kept clear (a stream, a track); a `keep_out` test from the caller (water, roads, buildings) | `place::Rule` |
+| Wild layers | the canopy, then the understorey: one dart per cell (2.5 m, then 0.75 m) at a hashed place, taken in hashed priority order; kept by a coin weighted by the layer's best suitability there; its species drawn by suitability times abundance; its age 0.3–1.4 times the species' maturity, its size from the growth curve and the site's quality; refused where its own layer stands closer than the summed crowns times the closer-standing species' spacing, too close to the other layer's trunks, or in less light than it needs | `place::place` |
+| Light | each canopy crown's shade a disc of 1.1 times its radius cast north by 0.4 of its height, stopping its opacity of the light (pine 0.55, holm oak 0.85): the holm oak (0.15) grows up under the pines, the garrigue's shrubs (0.65–0.7) and the pine (0.55) need open ground | `place` |
+| Map | hillshade with the soil's tint, contours every 5 m, crowns by species, a legend, two sections | `map` |
+
+**Numbers** (release build, one thread, the best of three):
+
+| | |
+|---|---|
+| The 600 m example (0.36 km²) | 73 729 plants: 900 Aleppo pines, 996 holm oaks, 201 olives and 29 cypresses planted, 8 616 rosemary, 26 180 cistus, 36 807 kermes oaks |
+| A square kilometre at 2 m (the example at 1 000 m) | the ground 39 ms, its fields 21 ms, the placement 1.1 s (1.1–1.9 s between runs while other sessions build), 266 143 plants, 160 000 and 1 776 889 darts |
+
+The placement runs over a region at once and in one thread; regions are independent, so the
+world's cells can be placed in parallel. It never follows the player (the patent noted in D-063).
+
 ## Tests
 
-`cargo test --release -p forge-flora` (11 tests, about a second):
-- the branch count grows with age, each species at 20 %, 45 % and 100 % of its maturity;
-- a child is never thicker than its parent, and the trunk is thicker than four tips (two seeds);
-- no branch passes through another: no segment's axis inside another's wood, away from forks
-  (four steps along the graph), two seeds;
-- the same seed grows the same plant to the bit, another seed another;
-- each species' height and spread fall in its published range, four seeds each;
-- a wind of 0.8 moves the crown's centre downwind by over 8 % of the height (pine and oak);
-- pruning: an olive lifted to 1 m, topped at 4.5 m and opened has no branch from below 1 m, nothing
-  above 4.5 m but its leaves, and no wood in its open centre.
+`cargo test --release -p forge-flora` (17 tests, about a second):
+- growth: the branch count grows with age, each species at 20 %, 45 % and 100 % of its maturity;
+  a child is never thicker than its parent, and the trunk is thicker than four tips (two seeds);
+  no branch passes through another: no segment's axis inside another's wood, away from forks
+  (four steps along the graph), two seeds; the same seed grows the same plant to the bit, another
+  seed another; each species' height and spread fall in its published range, four seeds each; a
+  wind of 0.8 moves the crown's centre downwind by over 8 % of the height (pine and oak); an olive
+  lifted to 1 m, topped at 4.5 m and opened has no branch from below 1 m, nothing above 4.5 m but
+  its leaves, and no wood in its open centre;
+- placement, on a 400 m example: the fields read the ground (the north side faces south and the
+  south side north, the valley's floor wetter and deeper-soiled than the ridge); the same seed
+  places the same plants, another seed others; every pair keeps its spacing and nothing grows on
+  the stream or the track; the garrigue's rosemary and cistus stand on hot ground (mean heat above
+  0.6), the holm oaks on cool ground (below 0.5) and deeper soil than the pines (by 0.2), the pines
+  higher in the relief, and by the stream oaks outnumber pines three to one; every shrub has the
+  light it needs; the cypress row has a tree every 7 m and the olives stay in their grove.
 
 ## Next
 
-- Placement on a heightfield by biome rules (slope, aspect, soil, water, light under a canopy,
-  spacing by species), a map of a placed hillside: the issue's second point.
-- A few individuals per species cooked into D-053's derived cache, and the hook for
-  `forge-procgen::city::trees` to choose species and individuals by setting.
+- The hook for `forge-procgen::city::trees` (D-063, item 2): its forest from `place::place` over the
+  site's heights, its settings as rows and groves with species.
+- A few individuals per species cooked into D-053's derived cache.
+- Point 3 of the issue: the fauna as behaviour (`forge-fauna`).
 - For the renderer's session: meshes from the graph (generalised cylinders along the segments,
   leaf cards on the clusters), D-013's far bands from the same graph.
