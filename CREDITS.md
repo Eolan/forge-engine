@@ -609,7 +609,12 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   (800 Hz, 8 kHz), the default air absorption per metre, and the band EQ as a low shelf, a
   peaking filter and a high shelf with the gains normalised and crossfaded when they change
   (`core/src/core/eq_effect.cpp`, `iir.cpp`, `air_absorption.cpp`), written again in Rust
-  (`forge_audio::dsp::ThreeBand`, `spatial::AIR_ABSORPTION`).
+  (`forge_audio::dsp::ThreeBand`, `spatial::AIR_ABSORPTION`); its eleven acoustic material
+  presets and the way it applies their transmission to the occluded share of the direct sound
+  (`phonon.h`, `direct_effect.cpp`; `spatial::AcousticMaterial`, `Occlusion::through`).
+- **Reverb zones.** The listener-driven zones of the engines: Unity's Audio Reverb Zone and FMOD's
+  3D reverb (a shape where the reverb is whole and a distance over which it fades), blended here
+  in the log domain of the decay time (`forge_audio::zones`).
 - **The filters.** Robert Bristow-Johnson, "Cookbook formulae for audio EQ biquad filter
   coefficients" (the shelves and the peaking filter).
 - **Resampling.** The four-point, third-order Hermite (Catmull–Rom) interpolator: Edwin Catmull

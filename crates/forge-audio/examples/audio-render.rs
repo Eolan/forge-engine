@@ -17,8 +17,9 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use forge_audio::dsp::ReverbParams;
 use forge_audio::sound::{noise, sine, sine_loop, stereo};
-use forge_audio::spatial::Attenuation;
+use forge_audio::spatial::{AcousticMaterial, Attenuation, Occlusion};
 use forge_audio::stream::streams;
+use forge_audio::zones::{ReverbZone, ReverbZones, ZoneShape};
 use forge_audio::{
     AudioEngine, BLOCK, BusId, BusLayout, Control, Listener, MixerConfig, MixerStats,
     OfflineRenderer, PlayParams, SampleBuffer, WavFormat, create, decode, wav_bytes, write_wav,
@@ -133,6 +134,16 @@ fn scenes(out: &Path, only: Option<&str>) -> Result<()> {
             name: "stream",
             what: "a WAV made in memory, streamed and looped while a tone plays from memory",
             render: stream,
+        },
+        Scene {
+            name: "wall",
+            what: "rain and a buzz 6 m ahead; a wood door closes at 1.5 s and opens at 4.5 s, a concrete wall slides across at 7 s",
+            render: wall,
+        },
+        Scene {
+            name: "zones",
+            what: "walking at 5 m/s from the open through a stone hall, out, and into a cave, clapping",
+            render: zones,
         },
     ];
     for scene in all.iter().filter(|s| only.is_none_or(|o| o == s.name)) {
@@ -368,6 +379,79 @@ fn stream() -> (Vec<f32>, MixerStats) {
     );
     let mut renderer = OfflineRenderer::with_streams(mixer, pump);
     let out = run(&mut engine, &mut renderer, 6.0, 480, |_, _| {});
+    (out, engine.stats())
+}
+
+fn wall() -> (Vec<f32>, MixerStats) {
+    let (mut engine, mixer) = create(MixerConfig::default(), &BusLayout::new());
+    let mut renderer = OfflineRenderer::new(mixer);
+    // Rain and a tone 6 m ahead; a wood door closes between at 1.5 s and opens at 4.5 s, then a
+    // concrete wall slides across at 7 s.
+    let hiss = rain(3, 2.0);
+    let tone = buzz(220.0, 1.0);
+    let mut voices = Vec::new();
+    for (sound, gain) in [(&hiss, 3.0), (&tone, 1.0)] {
+        let mut params = PlayParams::at(DVec3::new(0.0, 0.0, -6.0));
+        params.looping = true;
+        params.gain = gain;
+        voices.push(engine.play(sound, params));
+    }
+    let out = run(&mut engine, &mut renderer, 10.0, 480, |engine, frame| {
+        let t = frame as f64 / RATE as f64;
+        let ramp = |from: f64| ((t - from) / 1.0).clamp(0.0, 1.0) as f32;
+        let (amount, material) = if t < 7.0 {
+            (ramp(1.5) - ramp(4.5), AcousticMaterial::WOOD)
+        } else {
+            (ramp(7.0), AcousticMaterial::CONCRETE)
+        };
+        for &voice in &voices {
+            engine.control(Control::Occlusion {
+                voice,
+                occlusion: Occlusion::through(amount, &[material]),
+            });
+        }
+    });
+    (out, engine.stats())
+}
+
+fn zones() -> (Vec<f32>, MixerStats) {
+    let mut layout = BusLayout::new();
+    let reverb = layout.add_reverb("reverb", BusId::MASTER, ReverbParams::OPEN);
+    let (mut engine, mixer) = create(MixerConfig::default(), &layout);
+    let mut renderer = OfflineRenderer::new(mixer);
+    // Out in the open, through a stone hall (20 m across, 6 m of fade), out again and into a
+    // cave (a sphere of 15 m): the listener walks at 5 m/s, clapping every 0.6 s.
+    let mut zones = ReverbZones::new(ReverbParams::OPEN);
+    zones.add(ReverbZone {
+        shape: ZoneShape::Box {
+            min: DVec3::new(-10.0, -5.0, -10.0),
+            max: DVec3::new(10.0, 15.0, 10.0),
+        },
+        fade: 6.0,
+        params: ReverbParams::HALL,
+    });
+    zones.add(ReverbZone {
+        shape: ZoneShape::Sphere {
+            centre: DVec3::new(45.0, 0.0, 0.0),
+            radius: 15.0,
+        },
+        fade: 4.0,
+        params: ReverbParams::CAVE,
+    });
+    let clap = rain(9, 0.06);
+    let mut next_clap = 0u64;
+    let out = run(&mut engine, &mut renderer, 14.0, 480, |engine, frame| {
+        let t = frame as f64 / RATE as f64;
+        let position = DVec3::new(-25.0 + 5.0 * t, 0.0, 0.0);
+        engine.set_listener(Listener::at(position));
+        zones.follow(engine, reverb, position);
+        if frame >= next_clap {
+            let mut params = PlayParams::at(position + DVec3::new(0.0, 0.0, -0.5));
+            params.sends[0] = Some((reverb, 0.6));
+            engine.play(&clap, params);
+            next_clap += RATE as u64 * 6 / 10;
+        }
+    });
     (out, engine.stats())
 }
 

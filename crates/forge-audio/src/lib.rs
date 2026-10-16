@@ -17,8 +17,11 @@
 //! - **Buses** form a tree with gains and post-fader sends ([`BusLayout`]); the master bus
 //!   ends in a look-ahead limiter that holds a ceiling ([`dsp::Limiter`]).
 //! - **Space** ([`spatial`]): equal-power panning by the listener, distance curves, air
-//!   absorption and occlusion as three-band gains, Doppler. Steam Audio's binaural effect is
-//!   the slot D-011 names for later ([`spatial::Spatializer`]).
+//!   absorption and occlusion through Steam Audio's acoustic materials as three-band gains,
+//!   Doppler. Steam Audio's binaural effect is the slot D-011 names for later
+//!   ([`spatial::Spatializer`]).
+//! - **Reverb zones** ([`zones`]): boxes and spheres with their reverb; the one the listener
+//!   stands in sets the reverb bus, blended across its fade.
 //! - **Decoders** ([`decode`]): WAV (integer and float PCM) in our own code, Ogg Vorbis
 //!   through `lewton`, Ogg Opus through `opus-rs`, all pure Rust; each streams from a reader
 //!   on a decode thread or inline.
@@ -41,6 +44,7 @@ pub mod spatial;
 pub mod stream;
 pub mod thread;
 mod voice;
+pub mod zones;
 
 pub use bus::{BusId, BusLayout};
 pub use clock::{Clock, TickClock};
@@ -48,7 +52,7 @@ pub use engine::{AudioEngine, Control, EndReason, Event, PlayParams, VoiceId, cr
 pub use mixer::{Mixer, MixerConfig, MixerStats};
 pub use render::{OfflineRenderer, WavFormat, wav_bytes, write_wav};
 pub use sound::SampleBuffer;
-pub use spatial::{Attenuation, Listener, Occlusion, Spatial};
+pub use spatial::{AcousticMaterial, Attenuation, Listener, Occlusion, Spatial};
 pub use stream::{Stream, StreamPump, Streams};
 pub use thread::{MixThread, OutputRing};
 

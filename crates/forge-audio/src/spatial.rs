@@ -162,6 +162,18 @@ impl Occlusion {
         }
     }
 
+    /// `amount` of the path blocked by the surfaces `layers` (a wall, or several in a row):
+    /// their transmissions multiply, as Steam Audio's do along a ray.
+    pub fn through(amount: f32, layers: &[AcousticMaterial]) -> Self {
+        let mut transmission = [1.0f32; 3];
+        for layer in layers {
+            for (t, l) in transmission.iter_mut().zip(layer.transmission) {
+                *t *= l;
+            }
+        }
+        Self::new(amount, transmission)
+    }
+
     /// The direct sound's gain in each band.
     pub fn bands(&self) -> [f32; 3] {
         let a = self.amount;
@@ -172,6 +184,80 @@ impl Occlusion {
 impl Default for Occlusion {
     fn default() -> Self {
         Self::NONE
+    }
+}
+
+/// A surface's acoustics in the three bands, as Steam Audio's `IPLMaterial` gives them: what it
+/// absorbs when sound reflects off it, how much it scatters, what passes through it.
+///
+/// The presets are Steam Audio's (`core/src/core/phonon.h`, Apache-2.0), measured for bands
+/// centred on 400 Hz, 2.5 kHz and 15 kHz. Steam Audio applies `transmission` as the band EQ's
+/// gains on the occluded share of the direct sound, and so does [`Occlusion::through`]. The
+/// world's material rows (D-007) are meant to carry these three arrays; until they do, a game
+/// picks a preset per surface.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AcousticMaterial {
+    /// Share of the energy absorbed on reflection in each band, 0 to 1.
+    pub absorption: [f32; 3],
+    /// Share scattered in a random direction on reflection (0: a mirror, 1: fully diffuse).
+    pub scattering: f32,
+    /// What passes through, a gain in each band.
+    pub transmission: [f32; 3],
+}
+
+impl AcousticMaterial {
+    const fn new(absorption: [f32; 3], scattering: f32, transmission: [f32; 3]) -> Self {
+        Self {
+            absorption,
+            scattering,
+            transmission,
+        }
+    }
+
+    /// Steam Audio's default.
+    pub const GENERIC: Self = Self::new([0.10, 0.20, 0.30], 0.05, [0.100, 0.050, 0.030]);
+    /// Brick.
+    pub const BRICK: Self = Self::new([0.03, 0.04, 0.07], 0.05, [0.015, 0.015, 0.015]);
+    /// Concrete.
+    pub const CONCRETE: Self = Self::new([0.05, 0.07, 0.08], 0.05, [0.015, 0.002, 0.001]);
+    /// Ceramic tiles.
+    pub const CERAMIC: Self = Self::new([0.01, 0.02, 0.02], 0.05, [0.060, 0.044, 0.011]);
+    /// Gravel.
+    pub const GRAVEL: Self = Self::new([0.60, 0.70, 0.80], 0.05, [0.031, 0.012, 0.008]);
+    /// Carpet.
+    pub const CARPET: Self = Self::new([0.24, 0.69, 0.73], 0.05, [0.020, 0.005, 0.003]);
+    /// Glass.
+    pub const GLASS: Self = Self::new([0.06, 0.03, 0.02], 0.05, [0.060, 0.044, 0.011]);
+    /// Plaster.
+    pub const PLASTER: Self = Self::new([0.12, 0.06, 0.04], 0.05, [0.056, 0.056, 0.004]);
+    /// Wood.
+    pub const WOOD: Self = Self::new([0.11, 0.07, 0.06], 0.05, [0.070, 0.014, 0.005]);
+    /// Metal.
+    pub const METAL: Self = Self::new([0.20, 0.07, 0.06], 0.05, [0.200, 0.025, 0.010]);
+    /// Rock.
+    pub const ROCK: Self = Self::new([0.13, 0.20, 0.24], 0.05, [0.015, 0.002, 0.001]);
+
+    /// The presets by name, as Steam Audio names them.
+    pub const PRESETS: [(&'static str, AcousticMaterial); 11] = [
+        ("generic", Self::GENERIC),
+        ("brick", Self::BRICK),
+        ("concrete", Self::CONCRETE),
+        ("ceramic", Self::CERAMIC),
+        ("gravel", Self::GRAVEL),
+        ("carpet", Self::CARPET),
+        ("glass", Self::GLASS),
+        ("plaster", Self::PLASTER),
+        ("wood", Self::WOOD),
+        ("metal", Self::METAL),
+        ("rock", Self::ROCK),
+    ];
+
+    /// The preset named `name`.
+    pub fn preset(name: &str) -> Option<AcousticMaterial> {
+        Self::PRESETS
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|&(_, m)| m)
     }
 }
 
