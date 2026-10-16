@@ -1,6 +1,7 @@
 # Research — Game audio engine architecture and spatial audio
 
-> Status: v0.3, 2026-10-16: §13 adds what footsteps, impacts and the ambience beds (#267) are made
+> Status: v0.4, 2026-10-16: §14 adds Steam Audio's HRTF as built and measured, and the recorded
+> birds. v0.3, 2026-10-16: §13 adds what footsteps, impacts and the ambience beds (#267) are made
 > from, the cicadas' song as measured, and the patents met. v0.2, 2026-10-16: §12 adds what the
 > first build (#267) chose and checked: the decoders, Steam Audio's bands and filters read in its
 > source, its release dates corrected, the patents met. v0.1,
@@ -57,6 +58,7 @@ reference today), **recent** (2019 or later).
 11. [Verification notes](#11-verification-notes)
 12. [The first build: crates, Steam Audio's filters, patents (2026-10-16)](#12-the-first-build-crates-steam-audios-filters-patents-2026-10-16)
 13. [Footsteps, impacts and ambience made in code (2026-10-16)](#13-footsteps-impacts-and-ambience-made-in-code-2026-10-16)
+14. [Steam Audio's HRTF and recorded birds (2026-10-16)](#14-steam-audios-hrtf-and-recorded-birds-2026-10-16)
 
 ---
 
@@ -978,3 +980,53 @@ water's speed of sound, sources under water heard from above, the surface's own 
 
 Nothing here needed a download. Recordings would make the banks better (one hit per material,
 Ren et al.'s fit) and would need the owner's go.
+
+## 14. Steam Audio's HRTF and recorded birds (2026-10-16)
+
+The owner's go the same day: the Steam Audio SDK, recordings for the birds, and the
+underwater level kept at §2.4's 29 dB. What was built, what was met on the way.
+
+**Steam Audio through `audionimbus`.** `audionimbus` 0.16.0 (Maxence Maire, MIT OR Apache-2.0)
+wraps Steam Audio safely; its `audionimbus-sys` 4.8.2-rc.3 is a pre-release ahead of Steam
+Audio's own numbering and pins the C API to 4.8.1 in its build script. It generates the bindings
+from the `phonon.h` it carries with `bindgen` at build time, so wherever the feature builds,
+LLVM's `libclang` must be there (CI's Windows runner has LLVM 20.1.8; this machine now has
+23.1.3), and it links `phonon` from `STEAMAUDIO_LIB_DIR`. Its `auto-install` feature would
+download the SDK during the build; it is left off, and the SDK was fetched once by hand
+(`steamaudio_4.8.1.zip`, 181 171 027 bytes, SHA-256 `4a0aa5ec…5449`). Cargo puts on `PATH`
+only the search paths inside the target directory, so forge-audio's build script copies
+`phonon.dll` into its output directory. The buffers `audionimbus` hands to Steam Audio wrap
+slices in a `SmallVec` of channel pointers: nothing is allocated per block. The binaural
+effect works on whole frames, so the frame size is the mixer's block (256).
+
+**What the HRTF measures** (Steam Audio's default HRTF, bilinear, `tests/steam.rs`): from 3 m to
+the left, the near ear 16.9 dB louder between 2 and 8 kHz and 4.0 dB below 1 kHz, the far ear
+0.73 ms later (a head about 25 cm wide gives 0.6 to 0.7 ms); ahead against behind 3.2 dB RMS
+over the third octaves of 1 to 20 kHz, 7.8 dB at most (1.26 kHz), and ahead against above
+3.8 dB; the impulse responses start 65 samples (1.35 ms) late. The HRTF lifts the top octave in
+front and behind by up to about 20 dB over the sides (a still source's loudest millisecond above
+16 kHz is −22.4 dB of the window ahead, −41.1 dB to the side), which the click tests had to
+allow for. Cost: 79.7 ms a second of sound for 64 voices against 23.8 ms panned, 4.4 µs more a
+voice a block. Not done: SADIE II's HRTF (D-011's pick; a SOFA file, a download of its own),
+Steam Audio's occlusion, reflections and pathing, an ambisonic bus. Binaural rendering by HRTF
+convolution is decades old; no patent was met on it.
+
+**The SDK's third parties** (its `THIRDPARTY.md`): Intel IPP under the Intel Simplified Software
+License (binary only, redistributed unmodified with its notice, no reverse engineering), FFTS
+and PFFFT (BSD), MySOFA (BSD), Intel Embree (Apache-2.0), AMD Radeon Rays (MIT), AMD TrueAudio
+Next, the CIPIC HRTF database and Google's spherical harmonics library. All free to ship with
+their notices; `CREDITS.md` says so under "When a build ships".
+
+**Recorded birds.** Searched on Wikimedia Commons through its API (which states each file's
+licence) for the village's birds, keeping CC0, public domain and CC BY: CC BY-SA would bind the
+cut calls to its terms, and xeno-canto's own files are mostly CC BY-NC-SA, not free to sell.
+Found and fetched: a blackbird's song (Diana Tudor, 2022, CC BY 4.0, from xeno-canto
+XC1059970), a house sparrow's call and a morning chorus of sparrows and pigeons (Joseph Sardin,
+CC0), a serin's song (Jonn Leffmann, 2012, CC BY 3.0). No freely licensed collared dove (one hit
+was a pronunciation of the words): the dove stays made in code. Freesound, the other large
+source, needs an account to download. All four are Ogg Vorbis at 44.1 kHz and decode with
+`lewton`. The serin's recording carries strong rumble (its 63 Hz octave only 8 dB under its
+whole); a high-pass at 2.5 kHz leaves the song. The calls are cut by level (12 dB over the
+quietest fifth of the windows): 24 blackbird phrases, 10 sparrow calls, 22 serin passages.
+Recorded birds at noon come out sparser than the made ones (−40.9 dBFS in the 1 to 8 kHz band
+against about −30), as real birds are; the dawn with the far chorus plays where the made one did.

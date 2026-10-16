@@ -629,7 +629,8 @@ The items below are the phase's original outline; the plan above orders them.
    occlusion through Steam Audio's material presets, Doppler and reverb zones, headless;
    then footsteps and impacts synthesised for six surfaces, and ambience beds (wind, rain,
    cicadas, birds, the sea, under water) the hour, the weather and the medium drive, the world
-   muffled under water by a filter on its bus.
+   muffled under water by a filter on its bus; Steam Audio's HRTF (feature `steam-audio`) and
+   recorded birds.
    **Demo:** `forest-to-cave` — walk from a forest into a cave in the rain; occlusion,
    reverb and material sounds change without any scripting.
 

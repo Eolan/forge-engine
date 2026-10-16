@@ -22,7 +22,7 @@ the system you are about to touch.
 | [research/night-sky.md](research/night-sky.md) | a night sky over the ground: the Moon and its light, stars (catalogue or procedural), airglow, measured light levels, low-light tone mapping (Purkinje) | 8 | short, D-046 ✅ (2026-10-04) |
 | [research/shadow-denoising.md](research/shadow-denoising.md) | denoising the sun's ray-traced soft shadows: why one ray and TAA fail 8 stops under the sun, NVIDIA's SIGMA, AMD's FidelityFX denoiser, penumbra filters, licences and a patent | 15 | short, D-049 ✅ (2026-10-04), built in #172 and #173 |
 | [research/netcode.md](research/netcode.md) | transport, replication, prediction, server topology; packet fragmentation; patents met (Verizon's prioritized replication, live to 2041; Improbable's query-based interest, live to 2036; King's server-side bias, live to 2042; Microsoft's and There's, expired) | 55 | done (refreshed 2026-10-16 for #268: the crates as built, the patents) |
-| [research/audio.md](research/audio.md) | mixer, spatialisation, propagation, synthesis, middleware; the first build's crates, Steam Audio's band filters and materials, patents; footsteps, impacts and ambience made in code | 46 + 19 + 12 | done; refreshed 2026-10-16 (#267, §12, §13) |
+| [research/audio.md](research/audio.md) | mixer, spatialisation, propagation, synthesis, middleware; the first build's crates, Steam Audio's band filters and materials, patents; footsteps, impacts and ambience made in code; Steam Audio's HRTF measured, recorded birds | 46 + 19 + 12 + 8 | done; refreshed 2026-10-16 (#267, §12 to §14) |
 | [research/vegetation-materials.md](research/vegetation-materials.md) | trees, impostors, grass, trim sheets, unified materials, deformation | 50 | done |
 | [research/animation.md](research/animation.md) | clips, motion matching, IK, physical characters, generated creatures | 42 | done |
 | [research/memory-streaming.md](research/memory-streaming.md) | allocators, Resizable BAR, SSD streaming, residency | 40 | done |
@@ -122,7 +122,8 @@ built, one to avoid for occlusion (HTC's projection) and one for masking-driven 
 Footsteps, impacts and ambience (§13): modal banks, Cook's grains and Minnaert bubbles from a
 contact pulse; rain as drops and bubbles; *Cicada orni*'s echemes as measured (80 ms every
 230 ms, 4.8 kHz); under water the world's bus filtered; Magic Leap's footsteps from the real
-floor (US 11,636,843) met and not used.
+floor (US 11,636,843) met and not used. Steam Audio's HRTF (§14) through `audionimbus`, whose
+bindings need LLVM to build; recorded birds from Wikimedia Commons under CC0 and CC BY.
 
 **Vegetation and materials.** Grow trees, don't model them: Weber–Penn parameters, space
 colonisation plus competition, scanned bark and leaf atlases. Ladder: geometry to 40 m,

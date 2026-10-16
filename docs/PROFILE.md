@@ -1663,6 +1663,13 @@ six at once at their busiest come to about 10 ms a second, 1 % of a core; a bed 
 nothing. The mixer plays each as a stream, a voice like any other. The medium filter on the
 world's bus (two state-variable sections a channel, a width and a gain) is skipped while clear.
 
+**Steam Audio's HRTF** (the `steam-audio` feature, the bench's voices through a binaural effect
+each, bilinear): 32 voices 32.2 ms a second of sound (3.2 % of a core, blocks of 171 µs, 308 µs
+at the longest), 64 voices 79.7 ms (8.0 %, 424 and 576 µs), 128 voices 147.8 ms (14.8 %, 788 µs
+and 1.27 ms): about 4.4 µs a voice a block over the panner. The recorded birds cost the game
+thread 0.8 s once, at start (decoding and cutting four minutes of Vorbis); playing them costs
+the birds bed less than making them did.
+
 The page with the tests and the scenes is `docs/demos/audio.md`.
 
 ## `forge-net` — the replication server's tick (#268, 2026-10-16)
