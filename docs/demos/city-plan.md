@@ -760,7 +760,7 @@ mesh to test navigations inside the houses"):
 | a storey's street front blank over 3 m (new) | 35 | 14 |
 | a room the walk misses (new) | 8 | 0 |
 | a flight whose foot it misses (new) | 0 | 0 |
-| an outside door it misses (new) | 1 | 1 |
+| an outside door it misses (new) | 1 | 0 (the house's front door, its index gone stale, `cores::reindex`) |
 | a door's leaves swinging into something (new) | 0 | 0 |
 
 62 of the village's 65 houses get their insides (59 before).

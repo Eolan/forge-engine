@@ -712,7 +712,7 @@ mod tests {
             (Kind::BlankStreetWall, 14),
             (Kind::UnreachedRoom, 0),
             (Kind::UnreachedStair, 0),
-            (Kind::UnreachedDoor, 1),
+            (Kind::UnreachedDoor, 0),
             (Kind::DoorSwing, 0),
         ];
         let mut over = Vec::new();

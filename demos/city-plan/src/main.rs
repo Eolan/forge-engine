@@ -203,16 +203,21 @@ fn main() -> anyhow::Result<()> {
                 city::interior::house(m, s)
                     .filter(|inner| inner.stair.is_some())
                     .map(|inner| (s, inner))
-            }) && let Some(door) = s.openings.iter().find(|o| {
-                o.storey == 0
-                    && o.kind == city::structure::OpeningKind::Door
-                    && s.walls[o.wall].role == city::structure::WallRole::Street
-            }) {
+            }) && let Some(door) = s
+                .cores
+                .iter()
+                .find(|c| c.house)
+                .and_then(|c| s.openings.get(c.door))
+            {
+                // Its front door, the core's: the first door on a street-facing wall was, in
+                // some houses, the garden door onto a lane at the back.
                 let w = &s.walls[door.wall];
                 let t = (w.b - w.a).normalize_or_zero();
                 let inward = DVec2::new(-t.y, t.x);
                 let eye = w.a + t * door.along + inward * (w.thickness + 1.0);
-                eprintln!("the village's hall: {}", view(eye, 1.6, inner.climb, -5.0));
+                // A metre inside it, looking down the hall, the flight climbing towards the
+                // camera from its foot at the back.
+                eprintln!("the village's hall: {}", view(eye, 1.6, inward, -5.0));
                 // On the first upper floor's landing, a step past the flight's arrival, looking
                 // back over the opening and its guard (no view looked upstairs, and the opening
                 // had none, 2026-10-16).

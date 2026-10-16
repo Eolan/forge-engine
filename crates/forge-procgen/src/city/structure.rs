@@ -415,6 +415,7 @@ pub fn structures(plan: &CityPlan, masses: &[Mass]) -> Vec<Structure> {
             s,
             (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
         );
+        cores::reindex(&mut s.cores, &s.openings);
     }
     // The windows the doors and the cores gave back, at their era's width, fitted to the room
     // their shutters have like the others.
@@ -513,6 +514,8 @@ fn structure(
     if m.rooms.is_some() {
         clear_hall(&walls, &cores, &mut openings);
     }
+    let mut cores = cores;
+    cores::reindex(&mut cores, &openings);
     let (gross, net) = areas(m, era, &walls, inside.as_deref(), &cores);
     Structure {
         mass: i as u32,

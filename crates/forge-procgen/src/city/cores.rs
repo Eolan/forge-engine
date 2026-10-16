@@ -325,7 +325,15 @@ pub fn place(
         openings.push(door(m, storeys, walls, &template));
     }
     // The doors' indices, once every core's has gone in.
-    for c in &mut cores {
+    reindex(&mut cores, openings);
+    cores
+}
+
+/// Each core's [`Core::door`] found again in `openings`, after a pass that rebuilt or thinned
+/// them (`windows::by_room`, the hall's windows moved off its wall): a stale index named a
+/// window as the house's front door. `usize::MAX` where its door is gone.
+pub fn reindex(cores: &mut [Core], openings: &[Opening]) {
+    for c in cores {
         let along = (c.door_at.0 + c.door_at.1) * 0.5;
         c.door = openings
             .iter()
@@ -337,7 +345,6 @@ pub fn place(
             })
             .unwrap_or(usize::MAX);
     }
-    cores
 }
 
 /// A ground opening `o` made a door: the step-free width, its sill on the ground outside.
