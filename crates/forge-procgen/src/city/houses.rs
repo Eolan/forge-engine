@@ -29,11 +29,14 @@ pub fn plan_depth(ty: &ParcelType) -> f64 {
     (ty.depth - ty.setback - ty.yard).max(rooms::HALL + 2.6)
 }
 
-/// A house on each of `lots`, the household of lot `k` from `household(k)`.
+/// A house on each of `lots`, the household of lot `k` from `household(k)`. A house of two storeys
+/// or more is made `stair` deep at least where its type allows: its straight flight's depth
+/// (`cores::flight_length` of its ground storey, the core's back wall, the front and back walls).
 pub fn houses(
     lots: &[Vec<DVec2>],
     ty: &ParcelType,
     household: impl Fn(usize) -> (u32, Means),
+    stair: f64,
 ) -> Vec<House> {
     lots.iter()
         .enumerate()
@@ -52,10 +55,13 @@ pub fn houses(
             let (s0, s1) = front_stretch(lot, a, t, inward, rooms::DEPTH.0)?;
             let (s0, s1) = (s0 + ty.sides, s1 - ty.sides);
             let width = s1 - s0;
-            if width < rooms::HALL + 2.4 {
+            if width < rooms::HALL + 2.4 + rooms::WALL {
                 return None;
             }
-            let plan = rooms::plan(&rooms::programme(people, means), width, plan_depth(ty));
+            let mut plan = rooms::plan(&rooms::programme(people, means), width, plan_depth(ty));
+            if plan.storeys.len() > 1 {
+                plan.deepen(stair.min(plan_depth(ty)));
+            }
             // A front cut short (a corner's wedge) with a household's rooms piled over three
             // storeys is no village house: the lot stays garden.
             if plan.storeys.len() > 3 {
@@ -142,7 +148,7 @@ mod tests {
         ];
         let ty = ParcelType::VILLAGE;
         let (lots, court) = parcels::strips(&block, &[true; 4], &ty, 5).expect("strips");
-        let houses = houses(&lots, &ty, |k| (2 + (k % 3) as u32, Means::Modest));
+        let houses = houses(&lots, &ty, |k| (2 + (k % 3) as u32, Means::Modest), 8.3);
         // A corner wedge may keep no house.
         assert!(houses.len() + 2 >= lots.len() && houses.len() <= lots.len());
         for h in &houses {

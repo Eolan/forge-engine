@@ -339,7 +339,7 @@ rooms from its size and its means (poor: one or two rooms at the minimums, the k
 living room; modest: a living room, a kitchen, a bedroom a couple and one a child or two;
 comfortable: a bedroom a person, a dining room, a study, two bathrooms; rich: a salon, suites
 with their bathrooms, service rooms), each with its area; `rooms::plan` lays them on a lot of
-a given width, a hall with the stair 2.2 m wide along one party wall the whole depth, the rooms
+a given width, a hall with the stair 2.95 m wide from the party wall's middle the whole depth, the rooms
 beside it in bands from the front to the back: a band as deep as its first room is square
 (2.6 to 6.5 m), its rooms side by side across the width, the largest first and the small ones
 filling the bands' ends; the day rooms on the ground floor, the bedrooms upstairs once the day
@@ -397,7 +397,7 @@ houses, 517 people, 3 118 trees in the forest (`reports/2026-10-16/village-own-o
 `VILLAGE_OWN_PNG=path` draws it). The first cut on the whole site, without the forest, had
 559 houses on 13 blocks. **Its rings** (`research/cadastre-villages-and-towns.md` §2, the
 same day): a block's lot type follows its distance from the centre against the district's
-radius. Within 0.9 of it the old core (`ParcelType::CORE`): lots 5–9 m wide on 12 m, the
+radius. Within 0.9 of it the old core (`ParcelType::CORE`): lots 6–9 m wide on 12 m, the
 house the whole lot, a court only where the rooms leave one. Within 1.35 the faubourg
 (`FAUBOURG`): a block on the road out takes its lanières on that side only, 6–12 m wide and
 40 m deep (32, 25 or 18 where the block is thinner), the house on the street line and the
@@ -416,15 +416,16 @@ storeys stays garden. **The rich house on the square** (the research's §5): the
 rich household (five people, rich) takes the lot whose front lies nearest the square, and its
 block is cut again for that household's width; on the example site it stands 9 m wide and
 three storeys on the square's block, the village's tallest. **Its distribution** (the owner's
-question, the test prints it): the core block's 28 houses on lots of 73 m², two in five of
-them with land left beside the house (a court of 16 m² on average); the two faubourg blocks
-on the road out, 11 and 6 houses on lanières of 249 and 336 m², each with a garden (163 and
-244 m² on average); the faubourg block off it, 34 houses on lots of 161 m², nine in ten with a
-garden of 85 m²; the lotissement block's 8 houses on lots of 406 m², 324 m² of garden each.
-The village at 600 m: 87 houses
-on 5 blocks (one core, three faubourg, one lotissement), 278 people (on the city's
-parameters 100 houses, 329 people, 68 of one storey, 28 of two, 4 of three; one in twenty
-vacant as the city's). Two strips could overlap where a short edge between them collapsed or
+question, the test prints it): the core block's 25 houses on lots of 82 m², more than half
+of them with land left beside the house (a court of 17 m² on average); the two faubourg blocks
+on the road out, 10 and 5 houses on lanières of 252 and 372 m², each with a garden (159 and
+249 m² on average); the faubourg block off it, 34 houses on lots of 161 m², nine in ten with a
+garden of 81 m²; the lotissement block's 8 houses on lots of 406 m², 309 m² of garden each.
+The village at 600 m: 82 houses
+on 5 blocks (one core, three faubourg, one lotissement), 255 people (on the city's
+parameters 97 houses, 325 people, 55 of one storey, 33 of two, 9 of three; one in twenty
+vacant as the city's). The lots grew wider when the houses' halls took their cores' width
+(below, "Its insides"). Two strips could overlap where a short edge between them collapsed or
 a block narrowed under two depths (a lotissement's lots crossed on its acute corner): each
 now keeps to its side of the line where the two depths stand in proportion, and strips that
 only meet are left alone. **Its garden walls** (`city::walls`, the same day): wherever no
@@ -436,10 +437,31 @@ its middle. Where walls meet one butts against the other, never overlapping, sin
 on one plane would flicker: a wall stops at the face of one passing through, two walls in line
 meet halfway, mitred, and at a corner the lower (then the shorter) stops at the higher's face;
 walls left sharing ground step back, and two lots back to back across a sliver of court keep
-one wall. The village has 640 m of wall along its streets and lanes, 1 810 m between gardens
+one wall. The village has 662 m of wall along its streets and lanes, 1 779 m between gardens
 and 42 gates; the kit draws them in stone and the walker meets them
 (`reports/2026-10-16/village-garden-walls.png`, the map check's garden view along the longest
-of them). **Its streets:** a village's main road is a shared street (10 m of
+of them). **Its insides** (`city::interior`, the same day; the owner: "a house or structure
+should be thought by thinking about the rooms"): a house's structure now follows its rooms'
+plan. Its core (`cores`, the straight flight of 1.1 m with handrails beside a corridor of
+1.2 m a wheelchair passes, walls of 0.2 m) stands at the start of its front where the plan
+keeps the hall, the flight on the party wall's side and the corridor on the rooms' side; a
+house of one storey gets its street door in the same hall (`structure::hall_door`). The plan
+counts the party walls' halves and the core's full width (`rooms::HALL` 2.95 m from the party
+wall's middle), so village and core lots start at 6 m, and a house of two storeys or more is
+made deep enough for its flight (8.3 m outside for old stone, `Plan::deepen`). Inside the
+walls, `interior::house` stretches the plan's bands between the hall and the far wall, front to
+back: the hall's wall with a doorway (0.90 m clear, 2.10 m high) into each band's first room,
+plastered partitions between the bands, and between the rooms of a band with a doorway each,
+so every room of a storey is reached from the hall; where the core stood by the far corner the
+plan runs mirrored. The kit draws them near the view: the partitions floor to ceiling with a
+lintel over each doorway, the flight a stone step a riser, each upper floor and the ceiling
+under it open over the treads below (`without` cuts the slab round the hole), the landing at
+the top kept; the ground floor now stands 2 cm over the walking level its door's sill is on (5
+cm up, a garden's lawn showed through it). 77 of the 82 houses get their insides, 419
+partitions and as many doorways, every room reached (the village test); the five left had their
+core in the middle of the front or none fitted. The map check's seventh view stands a metre
+behind the first storeyed house's door, in its hall, the flight beside it
+(`reports/2026-10-16/village-hall.png`). **Its streets:** a village's main road is a shared street (10 m of
 paving, no kerbs, bike lanes nor lamp rows) and its lanes are pedestrian, as an old town's,
 through the forest too (a road beyond every district's reach takes the nearest district's
 kind, `transit::assign_profiles`); the city's avenues stay. The narrower streets gave the
@@ -449,7 +471,7 @@ plan in place of the city, every house from the kit (`reports/2026-10-16/village
 the air, `village-street.png` from the first house's street, which the log names for
 `--view`). **The map check** (`tools/map-check.sh`, D-062's check per commit): the village
 from the air and from the views the log names (the first house's street, the green, the main
-road, the busiest junction, the longest garden wall along a lane) and a walked path along the first house's street, each compared
+road, the busiest junction, the longest garden wall along a lane, the first storeyed house's hall inside) and a walked path along the first house's street, each compared
 with `captures/map/accepted` by LDR-ꟻLIP, about two minutes; `--accept` keeps a run
 (`docs/PROCESS.md`). **One home a house** (`Mass::home`, the same day): a village house is
 one unit over all its storeys, entered from the street, with its household's main rooms (1.5

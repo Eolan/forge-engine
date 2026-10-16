@@ -58,6 +58,9 @@ pub struct Mass {
     /// main rooms ([`super::units::ROOMS_A_PERSON`] a person), its door the street's. `None`: flats
     /// cut round the cores, a storey at a time.
     pub home: Option<u8>,
+    /// A house's rooms by storey (`rooms::plan`), its hall from the footprint's first corner along
+    /// its first edge, the street's: what `interior::house` lays inside the walls.
+    pub rooms: Option<super::rooms::Plan>,
 }
 
 impl Mass {
@@ -419,6 +422,7 @@ pub fn masses(plan: &CityPlan, bible: &StyleBible, seed: u64) -> Vec<Mass> {
                 active,
                 offices,
                 home: None,
+                rooms: None,
             });
         }
     }

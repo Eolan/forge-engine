@@ -30,7 +30,7 @@ use forge_procgen::city::shore::Shore;
 use forge_procgen::city::structure::{self, OpeningKind, Structure, WallRole};
 use forge_procgen::city::trees::Tree;
 use forge_procgen::city::units::{self, Occupancy};
-use forge_procgen::city::{BlockUse, CityPlan, Site, geom, ground};
+use forge_procgen::city::{BlockUse, CityPlan, Site, cores, geom, ground, interior};
 use forge_procgen::grammar::Grammar;
 use forge_render::MeshletSceneBuilder;
 use forge_render::textures;
@@ -2652,7 +2652,8 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
             }
         }
         // The floors and the ceilings: the footprint inside its walls, a slab a storey, the
-        // ground floor a hand over the block's ground, the top ceiling under the roof.
+        // ground floor 2 cm over the walking level its door's sill stands on (5 cm up, a garden's
+        // lawn showed through it), the top ceiling under the roof.
         let Some(ring) = geom::inset(&m.footprint, deepest).filter(|r| r.len() >= 3) else {
             count += (mesh.indices.len() - before) / 3;
             continue;
@@ -2698,23 +2699,178 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
             }
             ground = next;
         }
+        // A house's insides from its rooms (`city::interior`): each upper floor open over the
+        // treads of the flight below, its landing at the top kept.
+        let inner = interior::house(m, s);
+        let hole = |k: usize| -> Option<[DVec2; 4]> {
+            let inner = inner.as_ref()?;
+            let stair = inner.stair?;
+            let r = *inner.risers.get(k.checked_sub(1)?)?;
+            let run = f64::from(r.saturating_sub(1)) * cores::GOING;
+            let up = inner.climb * run;
+            Some([stair[0], stair[1], stair[1] + up, stair[0] + up])
+        };
         for (k, st) in s.storeys.iter().enumerate() {
             if k == 0 {
                 for poly in &ground {
-                    cap(mesh, poly, st.level.max(0.05), Vec3::Y, KIT_STONE);
+                    cap(
+                        mesh,
+                        poly,
+                        st.level.max(WALK_LEVEL + 0.02),
+                        Vec3::Y,
+                        KIT_STONE,
+                    );
                 }
             } else {
-                cap(mesh, &ring, st.level, Vec3::Y, KIT_STONE);
-                cap(mesh, &ring, st.level - st.slab, -Vec3::Y, plaster);
+                let pieces = hole(k).map_or_else(|| vec![ring.clone()], |h| without(&ring, &h));
+                for poly in &pieces {
+                    cap(mesh, poly, st.level, Vec3::Y, KIT_STONE);
+                    cap(mesh, poly, st.level - st.slab, -Vec3::Y, plaster);
+                }
             }
         }
         if let Some(last) = s.storeys.last() {
             let ceiling = (last.level + last.height - last.slab).min(top - 0.05);
             cap(mesh, &ring, ceiling, -Vec3::Y, plaster);
         }
+        if let Some(inner) = &inner {
+            let floor = |k: usize| {
+                let st = &s.storeys[k];
+                if k == 0 {
+                    st.level.max(WALK_LEVEL + 0.02)
+                } else {
+                    st.level
+                }
+            };
+            // The partitions, floor to ceiling, a lintel over each doorway.
+            for p in &inner.partitions {
+                let st = &s.storeys[p.storey];
+                let (y0, y1) = (
+                    floor(p.storey),
+                    (st.level + st.height - st.slab).min(top - 0.05),
+                );
+                let t = (p.b - p.a).normalize_or_zero();
+                let side = DVec2::new(-t.y, t.x) * (p.thickness * 0.5);
+                let piece = |from: f64, to: f64| {
+                    let (a, b) = (p.a + t * from, p.a + t * to);
+                    [a - side, b - side, b + side, a + side]
+                };
+                let mut from = 0.0;
+                for &(d0, d1) in &p.doors {
+                    if d0 > from + 0.01 {
+                        solid(mesh, &at, &piece(from, d0), y0, y1, plaster);
+                    }
+                    solid(
+                        mesh,
+                        &at,
+                        &piece(d0, d1),
+                        y0 + interior::DOORWAY_HEAD,
+                        y1,
+                        plaster,
+                    );
+                    from = d1;
+                }
+                if p.length() > from + 0.01 {
+                    solid(mesh, &at, &piece(from, p.length()), y0, y1, plaster);
+                }
+            }
+            // The flights: a stone step a riser, a hand of stone under it, from the street wall
+            // into the house; the last riser climbs on to the floor above.
+            if let Some(stair) = inner.stair {
+                for (k, &r) in inner.risers.iter().enumerate() {
+                    if k + 1 >= s.storeys.len() || r == 0 {
+                        break;
+                    }
+                    let base = floor(k);
+                    let rise = (s.storeys[k + 1].level - base) / f64::from(r);
+                    for i in 0..r - 1 {
+                        let (v0, v1) =
+                            (f64::from(i) * cores::GOING, f64::from(i + 1) * cores::GOING);
+                        let (p0, p1) = (inner.climb * v0, inner.climb * v1);
+                        let tread = [stair[0] + p0, stair[1] + p0, stair[1] + p1, stair[0] + p1];
+                        let y1 = base + f64::from(i + 1) * rise;
+                        solid(
+                            mesh,
+                            &at,
+                            &tread,
+                            (y1 - rise - 0.15).max(base),
+                            y1,
+                            KIT_STONE,
+                        );
+                    }
+                }
+            }
+        }
         count += (mesh.indices.len() - before) / 3;
     }
     count
+}
+
+/// A box over `ring` (anticlockwise, the plan's metres) from `y0` to `y1` into `mesh`, its points
+/// placed by `at`: its sides, its top and its underside (a lintel's shows).
+fn solid(
+    mesh: &mut TriMesh,
+    at: &dyn Fn(DVec2, f64) -> Vec3,
+    ring: &[DVec2],
+    y0: f64,
+    y1: f64,
+    section: u8,
+) {
+    if y1 <= y0 + 1e-3 || ring.len() < 3 {
+        return;
+    }
+    let n = ring.len();
+    for i in 0..n {
+        let (a, b) = (ring[i], ring[(i + 1) % n]);
+        let t = (b - a).normalize_or_zero();
+        let out = Vec3::new(t.y as f32, 0.0, -t.x as f32);
+        let (l, h) = ((a.distance(b) / 3.0) as f32, ((y1 - y0) / 3.0) as f32);
+        triangle_uv(
+            mesh,
+            [at(a, y0), at(b, y0), at(b, y1)],
+            [[0.0, 0.0], [l, 0.0], [l, -h]],
+            out,
+            section,
+        );
+        triangle_uv(
+            mesh,
+            [at(a, y0), at(b, y1), at(a, y1)],
+            [[0.0, 0.0], [l, -h], [0.0, -h]],
+            out,
+            section,
+        );
+    }
+    for t in geom::triangulate(ring) {
+        triangle_uv(
+            mesh,
+            t.map(|i| at(ring[i], y1)),
+            [[0.0; 2]; 3],
+            Vec3::Y,
+            section,
+        );
+        let [p, q, r] = t.map(|i| at(ring[i], y0));
+        triangle_uv(mesh, [p, r, q], [[0.0; 2]; 3], -Vec3::Y, section);
+    }
+}
+
+/// `ring` (convex, anticlockwise) without the rectangle `hole` (anticlockwise): the parts beyond
+/// its back edge, then beside it, then before it, each clipped clear of the ones before.
+fn without(ring: &[DVec2], hole: &[DVec2; 4]) -> Vec<Vec<DVec2>> {
+    let mut out = Vec::new();
+    let mut rest = ring.to_vec();
+    // The hole's edges, back first: the part of `rest` outside each is kept, the inside goes on.
+    for e in [2, 1, 3, 0] {
+        let (a, b) = (hole[e], hole[(e + 1) % 4]);
+        let outside = geom::clean(&geom::clip_half_plane(&rest, b, a - b), 1e-6);
+        if outside.len() >= 3 && geom::signed_area(&outside).abs() > 0.01 {
+            out.push(outside);
+        }
+        rest = geom::clean(&geom::clip_half_plane(&rest, a, b - a), 1e-6);
+        if rest.len() < 3 {
+            break;
+        }
+    }
+    out
 }
 
 /// The cores' tops (D-060, step 3). Over each core that climbs to a garden or a terrace, a head

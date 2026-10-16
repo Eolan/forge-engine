@@ -7,6 +7,8 @@
 //! the day rooms on the ground floor and the bedrooms above. The footprint's depth and the
 //! storeys come out of the rooms, not the rooms out of a footprint.
 
+use super::cores::{CORE_WALL, FLIGHT, HOUSE_HALL};
+
 /// How well off a household is: it grows the programme in rooms before it grows them in size.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Means {
@@ -65,8 +67,13 @@ pub struct Room {
 /// France's decency minimum for the main room, m² (decree 2002-120), and for a room let on its
 /// own: the floor under every room here.
 pub const ROOM_MIN: f64 = 9.0;
-/// The hall's width, metres: the stair (1.0 m) and a corridor beside it a wheelchair turns in.
-pub const HALL: f64 = 2.2;
+/// The hall's width from the party wall's middle, metres: half the party wall ([`WALL`]) and the
+/// house's core (`cores`), its straight flight with handrails (1.1 m) and the corridor beside it a
+/// wheelchair passes (1.2 m) between walls of 0.2 m, from the front to the back on every storey.
+pub const HALL: f64 = WALL + 2.0 * CORE_WALL + FLIGHT + HOUSE_HALL;
+/// Half a party wall, metres (an old stone house's, 0.5 m, `structure`): the plan's width runs
+/// between the party walls' middles, so the hall starts and the rooms end this far in.
+pub const WALL: f64 = 0.25;
 /// A room's depth at least and at most, metres: a room is wider than a corridor and no deeper
 /// than daylight reaches from its window.
 pub const DEPTH: (f64, f64) = (2.6, 6.5);
@@ -160,6 +167,21 @@ pub struct Plan {
 }
 
 impl Plan {
+    /// The plan made `depth` deep where it is shallower: every storey's last band stretched to
+    /// it, its rooms the larger (a house deep enough for its straight flight, [`super::houses`]).
+    pub fn deepen(&mut self, depth: f64) {
+        if depth <= self.depth {
+            return;
+        }
+        let old = self.depth;
+        for r in self.storeys.iter_mut().flatten() {
+            if (r.y.1 - old).abs() < 1e-9 {
+                r.y.1 = depth;
+            }
+        }
+        self.depth = depth;
+    }
+
     /// The rooms' floor area over all the storeys, m² (the hall left out).
     pub fn rooms_area(&self) -> f64 {
         self.storeys
@@ -180,7 +202,9 @@ impl Plan {
 /// grow for it, never shrink under what was asked (but a room wider than the house, which
 /// takes the whole width at the deepest a room goes).
 pub fn plan(programme: &[Room], width: f64, max_depth: f64) -> Plan {
-    let inner = (width - HALL).max(2.4);
+    // The rooms end at the far party wall's half.
+    let end = width - WALL;
+    let inner = (end - HALL).max(2.4);
     let mut rooms: Vec<Room> = programme.to_vec();
     rooms.sort_by(|a, b| {
         b.kind
@@ -212,10 +236,10 @@ pub fn plan(programme: &[Room], width: f64, max_depth: f64) -> Plan {
         while i < rooms.len() {
             let r = rooms[i];
             let w = (r.area / d).max(2.4);
-            if x > HALL && (x + w > width + 1e-9 || upstairs(&r, storeys.len(), y)) {
+            if x > HALL && (x + w > end + 1e-9 || upstairs(&r, storeys.len(), y)) {
                 break;
             }
-            let w = w.min(width - x);
+            let w = w.min(end - x);
             storeys[storey].push(Placed {
                 kind: r.kind,
                 storey,
@@ -237,7 +261,7 @@ pub fn plan(programme: &[Room], width: f64, max_depth: f64) -> Plan {
             }
         }
         if let Some(last) = storeys[storey].last_mut() {
-            last.x.1 = width;
+            last.x.1 = end;
         }
         y += d;
     }
@@ -277,7 +301,7 @@ mod tests {
                 assert_eq!(r.storey, k);
                 assert!(
                     r.x.0 >= HALL - 1e-9
-                        && r.x.1 <= plan.width + 1e-9
+                        && r.x.1 <= plan.width - WALL + 1e-9
                         && r.y.0 >= -1e-9
                         && r.y.1 <= plan.depth + 1e-9,
                     "a room off the house: {r:?}"
@@ -291,7 +315,7 @@ mod tests {
                     assert!(apart, "rooms over each other: {r:?} {o:?}");
                 }
             }
-            let floor = (plan.width - HALL) * plan.depth;
+            let floor = (plan.width - WALL - HALL) * plan.depth;
             assert!(
                 (area - floor).abs() < 1e-6,
                 "storey {k} tiled: {area:.2} of {floor:.2} m²"
@@ -337,7 +361,7 @@ mod tests {
     #[test]
     fn a_poor_household_keeps_the_minimums() {
         let p = programme(3, Means::Poor);
-        let plan = plan(&p, 5.0, 10.0);
+        let plan = plan(&p, 6.0, 10.0);
         check(&plan, &p, 10.0);
         for r in plan.storeys.iter().flatten() {
             let area = (r.x.1 - r.x.0) * (r.y.1 - r.y.0);

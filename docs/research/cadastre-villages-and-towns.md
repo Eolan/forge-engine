@@ -98,10 +98,10 @@ houses by ring, to be measured (§6); the sizes are the sources'.
 | the scattered | beyond, along the lanes | over 1 000 m² | free-standing | land all round | a few |
 
 *The generated village at 600 m (2026-10-16, `city::village` on its own plan): the core
-block's 28 houses on lots of 73 m², two in five with land left (a court of 16 m²); the two
-faubourg blocks on the road out, 11 and 6 houses on lanières of 249 and 336 m² (40 m deep,
-gardens of 163 and 244 m²); the faubourg block off it, 34 houses on 161 m² lots, nine in ten
-with a garden of 85 m²; the lotissement's 8 houses on 406 m² lots with 324 m² of garden. The
+block's 25 houses on lots of 82 m², more than half with land left (a court of 17 m²); the two
+faubourg blocks on the road out, 10 and 5 houses on lanières of 252 and 372 m² (40 m deep,
+gardens of 159 and 249 m²); the faubourg block off it, 34 houses on 161 m² lots, nine in ten
+with a garden of 81 m²; the lotissement's 8 houses on 406 m² lots with 309 m² of garden. The
 core's share without land is within the table's range. The first cut gave the faubourgs
 strips of 12–22 m on blocks 60 m across, short of a lanière: their blocks on the road out now
 take strips on that side only, as deep as the block allows, and leave the lanes the gardens'

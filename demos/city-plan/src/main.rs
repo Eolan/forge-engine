@@ -161,6 +161,24 @@ fn main() -> anyhow::Result<()> {
                     view(eye, 12.0, p - eye, -30.0)
                 );
             }
+            // Inside the first house with its rooms and a stair (`city::interior`): a metre behind
+            // its street door, in the hall, looking into the house.
+            let structures = city::structure::structures(&v.plan, &v.masses);
+            if let Some((s, inner)) = v.masses.iter().zip(&structures).find_map(|(m, s)| {
+                city::interior::house(m, s)
+                    .filter(|inner| inner.stair.is_some())
+                    .map(|inner| (s, inner))
+            }) && let Some(door) = s.openings.iter().find(|o| {
+                o.storey == 0
+                    && o.kind == city::structure::OpeningKind::Door
+                    && s.walls[o.wall].role == city::structure::WallRole::Street
+            }) {
+                let w = &s.walls[door.wall];
+                let t = (w.b - w.a).normalize_or_zero();
+                let inward = DVec2::new(-t.y, t.x);
+                let eye = w.a + t * door.along + inward * (w.thickness + 1.0);
+                eprintln!("the village's hall: {}", view(eye, 1.6, inner.climb, -5.0));
+            }
             // The longest garden wall along a street or lane (`city::walls`), from 2.5 m out on
             // the street a little before its start, along it.
             if let Some(w) = v

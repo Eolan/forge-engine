@@ -30,10 +30,11 @@ pub struct ParcelType {
 }
 
 impl ParcelType {
-    /// A village house's lot: 5 to 8 m wide on a 14 m strip, a yard behind.
+    /// A village house's lot: 6 to 8 m wide on a 14 m strip, a yard behind (6 m: the hall with
+    /// its stair, `rooms::HALL`, and a room beside it).
     pub const VILLAGE: Self = Self {
         depth: 14.0,
-        width: (5.0, 8.0),
+        width: (6.0, 8.0),
         setback: 0.0,
         sides: 0.0,
         yard: 1.5,
@@ -46,11 +47,12 @@ impl ParcelType {
         sides: 0.0,
         yard: 0.0,
     };
-    /// An old core's lot (`research/cadastre-villages-and-towns.md` §2): 5 to 9 m wide on a
-    /// 12 m strip, the house the whole lot, a court only where the rooms leave one.
+    /// An old core's lot (`research/cadastre-villages-and-towns.md` §2): 6 to 9 m wide on a
+    /// 12 m strip (the research's 5 to 10 m; 6 m holds the hall and a room), the house the
+    /// whole lot, a court only where the rooms leave one.
     pub const CORE: Self = Self {
         depth: 12.0,
-        width: (5.0, 9.0),
+        width: (6.0, 9.0),
         setback: 0.0,
         sides: 0.0,
         yard: 0.0,
@@ -375,8 +377,8 @@ mod tests {
     fn a_rectangle_cuts_into_strips_of_village_lots() {
         let block = rectangle(100.0, 60.0);
         let n = check(&block, &[true; 4], &ParcelType::VILLAGE, 7);
-        // About 320 m of street at 6.5 m a lot.
-        assert!((40..=60).contains(&n), "{n} lots");
+        // About 290 m of street once the corners' strips are cut, at 7 m a lot.
+        assert!((34..=52).contains(&n), "{n} lots");
     }
 
     #[test]

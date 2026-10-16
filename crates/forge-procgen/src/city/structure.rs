@@ -484,7 +484,10 @@ fn structure(
     };
     // The street door where no core took one (a shop, a house, a wing), and the court's.
     if cores.is_empty() {
-        add_door(m, &storeys, &walls, &mut openings, WallRole::Street);
+        match m.rooms {
+            Some(_) => hall_door(m, &storeys, &walls, &mut openings),
+            None => add_door(m, &storeys, &walls, &mut openings, WallRole::Street),
+        }
     }
     add_door(m, &storeys, &walls, &mut openings, WallRole::Court);
     let (gross, net) = areas(m, era, &walls, inside.as_deref(), &cores);
@@ -701,6 +704,38 @@ fn fit_shutters(s: &mut Structure) {
         let fit = ((fit.min(o.width) * 10.0).floor() / 10.0).max(0.6);
         s.openings[i].width = fit;
     }
+}
+
+/// The street door of a house from its rooms with no stair core (one storey): in the hall its
+/// plan keeps at the start of the front (`rooms::HALL` from its first corner), in the middle of the
+/// hall between the side wall and the hall's wall, the ground openings it covers gone. Without a
+/// street wall on its first edge, the street's longest stretch as for any building.
+fn hall_door(m: &Mass, storeys: &[Storey], walls: &[Wall], out: &mut Vec<Opening>) {
+    let Some(w) = walls
+        .iter()
+        .position(|w| w.edge == 0 && w.role == WallRole::Street)
+    else {
+        add_door(m, storeys, walls, out, WallRole::Street);
+        return;
+    };
+    let side = walls[(w + walls.len() - 1) % walls.len()].thickness;
+    let along = (side + super::rooms::HALL - cores::CORE_WALL) * 0.5;
+    out.retain(|o| {
+        !(o.wall == w
+            && o.storey == 0
+            && o.span().1 > along - DOOR * 0.5 - 0.3
+            && o.span().0 < along + DOOR * 0.5 + 0.3)
+    });
+    let template = Opening {
+        wall: w,
+        storey: 0,
+        along,
+        width: DOOR,
+        sill: 0.0,
+        head: 2.2,
+        kind: OpeningKind::Door,
+    };
+    out.push(cores::door(m, storeys, walls, &template));
 }
 
 /// A door on a wall of `role`: the ground window or shopfront nearest the middle of that side's

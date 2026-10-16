@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The first map's check (D-062, #266): the village on its own plan at 600 m, one seed, six
+# The first map's check (D-062, #266): the village on its own plan at 600 m, one seed, seven
 # fixed views and one walked path, shot under the GPU lock, laid out on a contact sheet and
 # each compared with the last accepted set by LDR-ꟻLIP (imgdiff). About two minutes: the
 # check per commit for the map, where the tiers run at milestones on the owner's word; the
@@ -56,7 +56,7 @@ shoot air
 named() {
   sed 's/\x1b\[[0-9;]*m//g' "$out/air.log" | grep -oE "the village's $1: [^;]*" | head -1 | sed "s/the village's $1: //"
 }
-for name in house green main junction garden; do
+for name in house green main junction garden hall; do
   view=$(named "$name")
   if [ -z "$view" ]; then
     echo "$name: the demo's log names no such view"

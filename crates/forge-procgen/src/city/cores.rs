@@ -197,13 +197,22 @@ pub fn place(
     places.retain(|&(w, _, _)| matches!(walls[w].role, WallRole::Street | WallRole::Court));
     let mut cores: Vec<Core> = Vec::new();
     for i in 0..n {
-        let target = along_run(run * (i as f64 + 0.5) / n as f64);
+        // A house's core stands where its rooms' plan keeps the hall, at the start of its street
+        // front by its first corner (`rooms::plan`, the hall from x = 0): the nearest place to
+        // it wins, whatever opening it takes.
+        let house = m.home.is_some();
+        let target = if house {
+            along_run(0.0)
+        } else {
+            along_run(run * (i as f64 + 0.5) / n as f64)
+        };
         let mut ranked: Vec<(usize, f64, f64)> = places
             .iter()
             .map(|&(w, along, cost)| {
                 let wall = &walls[w];
                 let p = wall.a + (wall.b - wall.a).normalize_or_zero() * along;
                 let other = if wall.role == role { 0.0 } else { 6.0 };
+                let cost = if house { 0.0 } else { cost };
                 (w, along, p.distance(target) + cost + other)
             })
             .collect();
@@ -225,8 +234,11 @@ pub fn place(
                     .iter()
                     .all(|&(w, lo, hi)| c.wall != w || c.span.1 <= lo || c.span.0 >= hi)
         };
+        // A house from its rooms takes its straight flight in the hall its plan keeps; others a
+        // dog-leg where one fits.
         let found = ranked
             .iter()
+            .filter(|_| m.rooms.is_none())
             .find_map(|&(w, along, _)| {
                 shapes.iter().find_map(|&(flip, compact)| {
                     let c = layout(&walls[w], w, along, deep, lift, flip, compact, false)?;
@@ -238,7 +250,16 @@ pub fn place(
                 (!lift)
                     .then(|| {
                         ranked.iter().find_map(|&(w, along, _)| {
-                            [false, true].into_iter().find_map(|flip| {
+                            // A house from its rooms keeps its flight on the party wall's side,
+                            // towards the nearer end of its front, its corridor on the rooms'
+                            // side with their doorways.
+                            let near_b = along > walls[w].length() * 0.5;
+                            let flips: &[bool] = if m.rooms.is_some() {
+                                if near_b { &[true] } else { &[false] }
+                            } else {
+                                &[false, true]
+                            };
+                            flips.iter().copied().find_map(|flip| {
                                 let c = layout(
                                     &walls[w], w, along, deep_house, false, flip, false, true,
                                 )?;

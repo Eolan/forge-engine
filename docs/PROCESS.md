@@ -74,7 +74,7 @@ runs it:
 **The first map's check** (D-062, #266; 2026-10-16): `tools/map-check.sh` shoots the village
 on its own plan at 600 m (`city-plan --village 600`), one seed, from the air and from the views
 the demo's log names (the first house's street, the green, the main road, the busiest
-junction, the longest garden wall along a lane) and a walked path along the first house's street, 240 frames each at a fixed step,
+junction, the longest garden wall along a lane, the first storeyed house's hall inside) and a walked path along the first house's street, 240 frames each at a fixed step,
 and compares each with `captures/map/accepted` by LDR-ꟻLIP; `--accept` makes the run the
 accepted set. About two minutes: the check per commit for the map, where the tiers run at
 milestones on the owner's word. The runs stay in `captures/map/<time>/` with a contact sheet.

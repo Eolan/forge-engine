@@ -10,6 +10,7 @@ use forge_core::{Seed, SplitMix64};
 use glam::DVec2;
 
 use super::blocks::{self, BlockUse, Lot};
+use super::cores;
 use super::geom::{self, PointGrid};
 use super::houses::{self, House};
 use super::mass::{Mass, Roof};
@@ -150,6 +151,13 @@ pub fn village(site: &Site, params: &CityParams, seed: u64) -> Village {
         d.kind = DistrictKind::Village;
     }
     let streets = blocks::street_grid(&city.roads, city.size);
+    // A house of two storeys or more is deep enough for its straight flight (`cores`): the
+    // ground storey's flight and the core's back wall inside the front and back walls.
+    let era = Era::OldStone.table();
+    let stair = cores::flight_length(Era::OldStone.storeys(2, false)[0])
+        + cores::CORE_WALL
+        + era.facade
+        + era.rear;
     // The rings (`research/cadastre-villages-and-towns.md` §2): the core round the centre,
     // the faubourgs about it, the lotissements beyond, by a block's distance from the centre
     // against the village district's radius.
@@ -197,7 +205,7 @@ pub fn village(site: &Site, params: &CityParams, seed: u64) -> Village {
             let width = |k: usize| {
                 let (people, means) = household_of(seed, b, k, rich);
                 let area: f64 = rooms::programme(people, means).iter().map(|r| r.area).sum();
-                (rooms::HALL + area / (2.0 * max_depth) + 2.0 * ty.sides)
+                (rooms::HALL + rooms::WALL + area / (2.0 * max_depth) + 2.0 * ty.sides)
                     .clamp(ty.width.0, ty.width.1.max(16.0))
             };
             let per_edge: Vec<f64> = street
@@ -256,7 +264,7 @@ pub fn village(site: &Site, params: &CityParams, seed: u64) -> Village {
             without += 1;
             continue;
         };
-        let houses = houses::houses(&lots, &ty, |k| household_of(seed, b, keys[k], rich));
+        let houses = houses::houses(&lots, &ty, |k| household_of(seed, b, keys[k], rich), stair);
         for h in &houses {
             masses.push(mass(&mut city, b, h, &streets));
         }
@@ -322,6 +330,7 @@ fn mass(city: &mut CityPlan, b: usize, h: &House, streets: &PointGrid) -> Mass {
                 .ceil()
                 .min(255.0) as u8,
         ),
+        rooms: Some(h.plan.clone()),
     }
 }
 
@@ -433,6 +442,36 @@ mod tests {
         assert!(v.plan.tram_lines.is_empty() && v.plan.landmarks.is_empty());
         assert!(built >= 4, "{built} built blocks");
         assert!(houses >= 40, "{houses} houses");
+        // The houses' insides: their rooms laid beside the hall where the core stands, every
+        // room reached from the hall through doorways.
+        let structures = structure::structures(&v.plan, &v.masses);
+        let insides: Vec<_> = v
+            .masses
+            .iter()
+            .zip(&structures)
+            .filter_map(|(m, s)| super::super::interior::house(m, s))
+            .collect();
+        let partitions: usize = insides.iter().map(|i| i.partitions.len()).sum();
+        let doorways: usize = insides
+            .iter()
+            .flat_map(|i| &i.partitions)
+            .map(|p| p.doors.len())
+            .sum();
+        println!(
+            "interiors: {} of {houses} houses, {partitions} partitions, {doorways} doorways",
+            insides.len()
+        );
+        assert!(
+            insides.len() * 10 >= houses * 9,
+            "{} interiors of {houses}",
+            insides.len()
+        );
+        for (k, i) in insides.iter().enumerate() {
+            assert!(
+                super::super::interior::reachable(i),
+                "house {k}: a room not reached"
+            );
+        }
         // The garden walls: along the streets and between the gardens, none on a house.
         let along = |street: bool| -> f64 {
             v.plan
