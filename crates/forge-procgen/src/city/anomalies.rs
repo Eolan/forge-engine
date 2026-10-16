@@ -498,10 +498,19 @@ fn rooms(i: usize, m: &Mass, s: &Structure, inner: &Interior, out: &mut Vec<Anom
                 .map(|k| geom::distance_to_segment(p, floor[k], floor[(k + 1) % n]))
                 .fold(f64::MAX, f64::min)
         };
-        let sides = [(st[0] + st[3]) * 0.5, (st[1] + st[2]) * 0.5];
-        let (d, p) = sides
-            .iter()
-            .map(|&p| (gap(p), p))
+        // Each long side's nearest approach to the floor's edge, from nine points along it: a
+        // flight against a slanted side wall touches it at one end, the wedge beside it unavoidable.
+        let side = |a: DVec2, b: DVec2| {
+            (0..=8)
+                .map(|k| {
+                    let p = a + (b - a) * (f64::from(k) / 8.0);
+                    (gap(p), p)
+                })
+                .min_by(|x, y| x.0.total_cmp(&y.0))
+                .unwrap_or((f64::MAX, a))
+        };
+        let (d, p) = [side(st[0], st[3]), side(st[1], st[2])]
+            .into_iter()
             .min_by(|x, y| x.0.total_cmp(&y.0))
             .unwrap_or((0.0, centre));
         if d > STAIR_GAP {
@@ -708,7 +717,7 @@ mod tests {
             (Kind::LonePartyWall, 5),
             (Kind::RidgeStep, 2),
             (Kind::FlatRoof, 0),
-            (Kind::StairOffWall, 8),
+            (Kind::StairOffWall, 0),
             (Kind::BlankStreetWall, 12),
             (Kind::UnreachedRoom, 0),
             (Kind::UnreachedStair, 0),
