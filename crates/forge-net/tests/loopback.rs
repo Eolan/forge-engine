@@ -9,11 +9,14 @@ use std::future::Future;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
+use forge_net::crowd::Crowd;
 use forge_net::{
-    ChannelId, Channels, Client, ClientConfig, ConditionerConfig, ConnectError, ConnectionError,
-    Delivery, PROTOCOL_VERSION, Refusal, Server, ServerConfig, ServerEvent, ServerIdentity,
-    Session, TokenClaims, TokenError, TokenIssuer, TokenVerifier, TransportSettings,
+    Ack, ChannelId, Channels, Client, ClientConfig, ConditionerConfig, ConnectError,
+    ConnectionError, Delivery, PROTOCOL_VERSION, Refusal, ReplicationConfig, Replicator, Server,
+    ServerConfig, ServerEvent, ServerIdentity, Session, SnapshotReceiver, TokenClaims, TokenError,
+    TokenIssuer, TokenVerifier, TransportSettings,
 };
+use glam::DVec3;
 
 const ORDERED: ChannelId = ChannelId(0);
 const UNORDERED: ChannelId = ChannelId(1);
@@ -420,6 +423,65 @@ async fn a_client_that_does_not_trust_the_certificate_never_reaches_the_handshak
         // The server saw no hello: nothing to accept or refuse.
         let next = tokio::time::timeout(Duration::from_millis(500), rig.server.next_event()).await;
         assert!(next.is_err(), "{next:?}");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn snapshots_over_quic_bring_a_client_to_the_servers_state() {
+    within(60, async {
+        let mut rig = Rig::new(Some(bad_link(61)), TransportSettings::default());
+        let mut config = rig.client_config();
+        config.conditioner = Some(bad_link(62));
+        let (mut client, mut server) = rig.connect(config, 1).await;
+        let replication = ReplicationConfig::default();
+        let q = replication.quantization;
+        let mut crowd = Crowd::new(400, 300.0, 63);
+        let mut replicator = Replicator::new(replication);
+        replicator.add_client(1, DVec3::ZERO);
+        let mut receiver = SnapshotReceiver::new(q);
+        let mut tick = tokio::time::interval(Duration::from_millis(33));
+        let start = Instant::now();
+        let (mut n, mut frozen) = (0u32, false);
+        loop {
+            tokio::select! {
+                _ = tick.tick() => {
+                    let elapsed = start.elapsed();
+                    if elapsed > Duration::from_secs(7) {
+                        break;
+                    }
+                    if !frozen && elapsed > Duration::from_secs(4) {
+                        crowd.freeze();
+                        frozen = true;
+                    }
+                    if !frozen {
+                        crowd.step(1.0 / 30.0);
+                    }
+                    while let Some(m) = server.try_recv() {
+                        replicator.acknowledge(1, Ack::decode(&m.payload).expect("an ack"));
+                    }
+                    replicator.set_world(crowd.states().iter().map(|(id, s)| (*id, s, 1.0)));
+                    n += 1;
+                    let (bytes, _) = replicator.snapshot(1, n).expect("a known client");
+                    server.send(UNRELIABLE, bytes).unwrap();
+                    if let Some(ack) = receiver.ack() {
+                        client.send(UNRELIABLE, ack.encode().to_vec()).unwrap();
+                    }
+                }
+                m = client.recv() => {
+                    receiver.receive(&m.expect("open").payload).expect("a snapshot that decodes");
+                }
+            }
+        }
+        let view = receiver.view();
+        let mut inside = 0;
+        for (id, s) in crowd.states() {
+            if s.position.length() <= replication.radius {
+                inside += 1;
+                assert_eq!(view.get(id), Some(&q.quantize(s)), "entity {id}");
+            }
+        }
+        assert!(inside > 200, "{inside} in interest");
     })
     .await;
 }

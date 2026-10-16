@@ -1636,6 +1636,25 @@ The decode thread's side, a second of stereo at 48 kHz decoded whole (the best o
 costs its decode thread under 0.2 % of a core. Not measured yet: the wake-ups of a real device.
 The page with the tests and the scenes is `docs/demos/audio.md`.
 
+## `forge-net` — the replication server's tick (#268, 2026-10-16)
+
+No frame and no GPU: the server's CPU a snapshot tick, measured by `net-replicate` (release, one
+thread, wall clock around each call, on the dev machine with other sessions' builds running).
+3000 people of the stand-in crowd in a 600 m square, about 490 in each client's 150 m, snapshots
+at 30 Hz under 720 bytes, 50 ms and 2 % loss each way (`docs/demos/net.md`, "Replication").
+
+| Part | Time | Verdict |
+|---|---|---|
+| the world: 3000 states quantised, bucketed into 32 m cells | 0.14–0.15 ms a snapshot tick | Once a tick for every client. |
+| a client's snapshot: interest merged, priorities, the budget filled, the packet written | 37–43 µs | 52 µs measured inside the QUIC run, the transport's work in the same thread. |
+| an acknowledgement | 1.4–1.6 µs | 60 a second a client. |
+| **100 clients** | **4.2 ms a snapshot tick**, 13 % of a core at 30 Hz | The clients' snapshots are independent: they can go to the job system's workers when the server needs the time. |
+| a client decoding a snapshot | 19–22 µs | The client's side, 30 times a second. |
+
+It was 0.25 ms for the world and 118 µs a client before the interest set became a sorted vector
+merged with the grid's (it was a tree map) and the blocks' bodies one buffer of bits (they were a
+buffer each, copied bit by bit).
+
 ## Not measured yet
 
 - **Streaming**: residency pools, request queue depth, drive and decompression throughput.

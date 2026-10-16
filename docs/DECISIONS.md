@@ -303,6 +303,14 @@ ordered, reliable unordered and unreliable channels, unreliable messages fragmen
 bytes. The link conditioner sits under quinn's socket rather than behind a `Transport` trait, so
 the tests run the real stack on loopback. Measured: QUIC adds about 8 % to an 800-byte snapshot
 at 30 Hz, so D-010's 24 KB/s a client takes snapshots of about 720 bytes with IPv4's headers.
+*Replication built* (#268, the same day): the bit writer, cell-relative 1 cm positions,
+29-bit smallest-three orientations, deltas against each entity's acknowledged state up to 31
+packets back, interest by 32 m cells, the per-client priority accumulator under a 720-byte
+budget. Two additions: entities are named by a per-client slot (a few bits a block), and a
+client gets every entity's first state before any delta, which keeps clear of Verizon's
+US 11,810,245 (`research/netcode.md`, §9; the owner to confirm). 100 clients over QUIC at
+100 ms and 2 % loss took 23.6 kB/s each for 10 minutes on loopback, under the second proof
+stage's 24 KB/s; authority handoff remains.
 
 ## D-011 — Audio: own data layer and mixer, Steam Audio spatialiser ✅ (2026-09-24)
 

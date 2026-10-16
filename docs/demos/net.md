@@ -1,13 +1,16 @@
-# Net — the transport, its protocol and the link conditioner (`forge-net`)
+# Net — the transport, its protocol, the link conditioner and replication (`forge-net`)
 
-Phase 5's first step (#268, D-010, D-062's parallel sessions): the networking, built and tested
-headless on loopback, never touching the GPU or a window. A server and its clients talk QUIC
-through a link conditioner that loses, delays, duplicates and reorders their packets from a seed.
-Everything binds 127.0.0.1.
+Phase 5's first two steps (#268, D-010, D-062's parallel sessions): the networking, built and
+tested headless on loopback, never touching the GPU or a window. A server and its clients talk
+QUIC through a link conditioner that loses, delays, duplicates and reorders their packets from a
+seed; the server replicates a crowd to them in snapshots under a byte budget ("Replication"
+below). Everything binds 127.0.0.1.
 
 ```
 cargo test --release -p forge-net
 cargo run --release -p forge-net --bin net-loopback -- --clients 8 --seconds 10
+cargo run --release -p forge-net --bin net-replicate -- --entities 3000 --clients 100
+cargo run --release -p forge-net --bin net-loopback -- --clients 100 --replicate 3000
 ```
 
 ## How it works
@@ -26,8 +29,10 @@ cargo run --release -p forge-net --bin net-loopback -- --clients 8 --seconds 10
 
 ## What the tests show
 
-`cargo test --release -p forge-net`: 14 unit tests (the conditioner's rates, order and
-queue; fragments in any order; tokens; the handshake's bytes) and 10 on loopback, 12 s in all.
+`cargo test --release -p forge-net`: 23 unit tests (the conditioner's rates, order and
+queue; fragments in any order; tokens; the handshake's bytes; bits, quantisation, deltas, the
+interest grid), 11 on loopback (the last one replication's) and 5 of replication on a virtual
+clock, 15 s in all. The transport's:
 
 | Test | Link | What holds |
 |---|---|---|
@@ -74,10 +79,86 @@ What the numbers say:
   The conditioner's delays end on the runtime's timer, which on Windows wakes on the system
   timer's 15.6 ms tick; the fates do not depend on it.
 
+## Replication
+
+Step 2: the server sends each client a snapshot, one unreliable datagram, at the snapshot rate;
+the client acknowledges what it took in each of its inputs.
+
+| Part | How | Module |
+|---|---|---|
+| Bits | a hand-written bit writer and reader (D-010): values of any width least significant first, zigzag for signs, groups with a continuation bit for counts and gaps; reading past the end fails rather than panics | `bits` |
+| Quantisation | positions in 1 cm steps of the f64 world position (D-004), sent whole as a 64 m cell (from the client's) and a 13-bit offset; orientations as smallest three, 2 + 3 × 9 = 29 bits, under 0.5° of error; velocities in steps of 1/32 m/s; two 16-bit words (what the entity is, what it does). Both ends hold the same integers, and only IEEE's correctly rounded operations make them (D-016) | `quantize` |
+| Deltas | against the last state of the entity the client acknowledged, up to 31 packets back (a 5-bit field; older means a full state): five bits for what changed, then a position's three differences in 2-bit size classes (0, 6, 12, 24 bits) and a velocity's likewise. A walker going straight costs about 4.6 bytes, its full state about 21 | `snapshot` |
+| Slots | a block names its entity by a slot the server gives it for this client (the lowest free one), so the blocks, sorted by slot, cost a few bits each for their gap where a city's ids would cost 20 or more; a full state carries the entity's id. Removals name ids, so one sent again after the slot went to another entity removes the right one | `snapshot`, `replicate` |
+| Interest | cells of 32 m on the ground, rebuilt each tick; a client hears of the entities within 150 m of its focus, and lets go of one 10 m further out. The cells are the server's: no entity carries a query (Improbable's patents, research note §9) | `interest` |
+| Priority | each entity in a client's interest adds its importance over `1 + (d / 20 m)²` every snapshot; the highest go first under the budget (720 bytes: D-010's 24 kB/s at 30 Hz once QUIC's and IPv4's headers are paid); one sent drops to zero, one the client already holds costs nothing | `replicate` |
+| Initial states first | while an entity in a client's interest has never had its full state sent, or its last one went unacknowledged for 8 packets, a packet carries full states only. So no update to one entity goes out before another's first state: the order Verizon's US 11,810,245 claims never occurs (research note §9; the owner to confirm) | `replicate` |
+| The client | decodes all or nothing, drops a packet older than the newest it took (so a removal and a return cannot swap), keeps its last 32 packets for baselines, and acknowledges the newest with a 32-bit field of the ones before it (6 bytes) | `snapshot::SnapshotReceiver` |
+| A crowd | the stand-in the tests and the measures replicate: people in a square, half walking at 1.2–1.6 m/s, a quarter strolling, a quarter standing, turning every 8 s or so, ids spread out (97 apart on average) | `crowd` |
+
+### What the tests show
+
+`tests/replication.rs` runs the replicator and a receiver over two seeded conditioners on a
+virtual clock (50 ms, 10 ms of jitter, 5 % lost, 2 % duplicated, 5 % held back, both ways);
+`tests/loopback.rs` adds one over QUIC.
+
+| Test | What holds |
+|---|---|
+| a client converges over a bad link | 3000 people, 20 s moving then 4 s still: the client holds exactly the server's integers for everyone within 150 m and nobody beyond 160 m; no snapshot over 720 bytes; the join is full states only, and no packet carries a delta while a first state waits |
+| the same bytes | two runs of the same world and link send the same 150 snapshots, byte for byte |
+| near before far | under 300 bytes a snapshot, people within 30 m are updated 8.8 times a second, those at 100–135 m 1.0 |
+| leaving and returning | 100 of 200 people go 1 km away and come back: the client forgets them and holds them again, their slots reused meanwhile |
+| a lost removal | a person leaves as another takes its slot, that packet is lost, and the first comes back under a new slot: the client still holds all three with their states (a receiver that trusted the old slot forgot the first) |
+| over QUIC | 400 people over the bad link both ways for 7 s, the acks riding the client's datagrams: every snapshot decodes and the client ends with the server's state |
+
+### Numbers
+
+`net-replicate`, release, one thread, 3000 people in a 600 m square, the clients' focuses spread
+over it, 50 ms and 2 % loss each way, 20 s (the first 2 s, the join, counted apart). About 490
+people are in a client's interest.
+
+| Snapshots | Budget | Bytes a snapshot (mean / p99) | Per client, payload / with QUIC and IPv4 | Updates a second within 30 m / 30–75 m / 75–150 m |
+|---|---|---|---|---|
+| 20 Hz | 720 B | 706 / 713 | 14.1 / 15.3 kB/s | 15.3 / 9.9 / 2.8 |
+| 30 Hz | 720 B | 706 / 713 | 21.2 / 23.0 kB/s | 22.8 / 15.1 / 4.3 |
+| 60 Hz | 720 B | 706 / 713 | 42.4 / 46.0 kB/s | 45.3 / 30.4 / 8.6 |
+| 20 Hz | 1140 B | 1126 / 1133 | 22.5 / 23.7 kB/s | 15.3 / 15.4 / 5.6 |
+| 60 Hz | 340 B | 327 / 333 | 19.6 / 23.2 kB/s | 34.3 / 12.4 / 3.2 |
+
+- **A snapshot carries about 153 deltas** of 4.6 bytes; about 210 people who moved wait their
+  turn each time, which is the accumulator doing its work: near people every packet or two,
+  far ones a few times a second.
+- **At the same 23–24 kB/s on the wire,** 30 Hz serves the near and middle bands best; 60 Hz
+  pays a third more in headers for the nearest and starves the rest, 20 Hz the reverse.
+- **The join** takes 13–18 snapshots of full states (0.5 s at 30 Hz) before the first delta.
+- **Everyone in every snapshot** (`--everyone`, no budget, no radius): the first snapshot takes
+  2.0 kB for 100 people, 20.6 kB for 1000, 212 kB for 10 000 (about 21 bytes each); after it
+  0.34, 3.4 and 33.7 kB at 30 Hz, the quarter standing still costing nothing.
+- **CPU, one thread** (the dev machine, other sessions running): the world, 3000 people
+  quantised and bucketed, 0.14–0.15 ms a snapshot tick; a client's snapshot 37–43 µs to
+  encode, 19–22 µs to decode; an ack 1.4–1.6 µs. For 100 clients the server spends 4.2 ms a
+  snapshot tick, 13 % of a core at 30 Hz (`docs/PROFILE.md`).
+
+Over QUIC (`net-loopback --clients 100 --replicate 3000`, one thread for the server, its
+transport and the 100 clients, 50 ms and 2 % loss each way):
+
+| Run | Down per client | Up per client | Delivered | Decoded |
+|---|---|---|---|---|
+| 20 s | 22.5 kB/s UDP payload, **23.8 kB/s with IPv4**, 48 datagrams/s | 5.9 kB/s, 7.5 with IPv4 | 98.0 % | all; 479 people held a client |
+| 10 min | 22.4 kB/s UDP payload, **23.6 kB/s with IPv4**, 44 datagrams/s | 5.8 kB/s, 7.2 with IPv4 | 98.0 % (1 763 864 of 1 800 000) | all; 480 people held a client |
+
+D-010's second proof stage was 100 bots at 24 kB/s or less over 100 ms and 2 % loss for
+10 minutes; the 10-minute run meets it on loopback, on one machine, with the crowd standing in
+for the population of #250. Its round trip read 155–188 ms (124 ms in the 20 s run): one thread
+carried the server, 100 clients' QUIC and 6 ms of replication a tick (0.47 ms for the crowd and
+its world, 57 µs a client), beside other sessions' builds on the same machine, so packets waited
+for it. The server PC with the clients on other machines is the real test.
+
 ## Next
 
-- Replication on these channels (step 2): snapshots with deltas against an acknowledged
-  baseline, quantisation, a priority accumulator under a byte budget, interest by cells.
+- Authority handoff between workers (the rest of step 2), then prediction, reconciliation, lag
+  compensation and replays (step 3), and the `hundred-bots` demo on the server PC.
+- The population of #250 as the replicated world: its near tiers' records in place of the crowd.
 - A handle for the simulation's thread (the engine's network thread runs the tokio runtime;
   the simulation hands messages over and never waits on I/O).
 - The server PC and the Raspberry Pi come later, on the owner's word: nothing here binds

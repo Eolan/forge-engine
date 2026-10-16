@@ -65,14 +65,14 @@ Where Forge uses them:
 - `crossbeam-channel`: forge-task
 - `crossbeam-deque`: forge-task
 - `crossbeam-utils`: forge-task
-- `glam`: asteroids, city-blocks, city-map, city-plan, forge-anim, forge-app, forge-audio, forge-core, forge-flora, forge-geom, forge-physics, forge-procgen, forge-render, forge-sim, forge-terrain, forge-world, meshlets, physics-lab, planet
+- `glam`: asteroids, city-blocks, city-map, city-plan, forge-anim, forge-app, forge-audio, forge-core, forge-flora, forge-geom, forge-net, forge-physics, forge-procgen, forge-render, forge-sim, forge-terrain, forge-world, meshlets, physics-lab, planet
 - `gltf`: forge-anim, forge-geom
 - `gpu-allocator`: forge-gpu
 - `i_overlay`: forge-procgen
 - `image`: contact-sheet, forge-app, forge-flora, forge-procgen, forge-render, imgdiff, sharpness
 - `lewton`: forge-audio
 - `libloading`: forge-gpu
-- `libm`: forge-core
+- `libm`: forge-core, forge-net
 - `lz4_flex`: forge-core
 - `meshopt`: forge-geom
 - `num_cpus`: forge-task, task-bench

@@ -19,16 +19,28 @@
 //! its channels. Everything runs on a tokio runtime, which in the engine is the network thread's
 //! (ARCHITECTURE.md, "Threads"); the simulation hands messages over and never waits on I/O.
 //!
-//! Replication (snapshots, deltas, priorities, interest) comes next on top of these channels.
+//! On the channels, **replication** (no I/O of its own, so it is tested on a virtual clock):
+//! - [`quantize`]: an entity's state in integers both ends share; [`bits`]: the bit writer;
+//! - [`snapshot`]: the packet, deltas against what the client acknowledged, and the client's
+//!   [`SnapshotReceiver`];
+//! - [`interest`] and [`replicate`]: the server's [`Replicator`], interest by cells and a
+//!   priority accumulator under each client's byte budget;
+//! - [`crowd`]: a stand-in crowd for the tests and the measures.
 
 #![forbid(unsafe_code)]
 
+pub mod bits;
 pub mod channel;
 pub mod conditioner;
+pub mod crowd;
 pub mod endpoint;
 pub mod fragment;
+pub mod interest;
 pub mod protocol;
+pub mod quantize;
+pub mod replicate;
 pub mod session;
+pub mod snapshot;
 pub mod socket;
 pub mod token;
 pub mod wire;
@@ -39,8 +51,12 @@ pub use endpoint::{
     Client, ClientConfig, ConnectError, Server, ServerConfig, ServerEvent, ServerIdentity,
     SetupError, TransportSettings, loopback,
 };
+pub use interest::InterestGrid;
 pub use protocol::{ALPN, PROTOCOL_VERSION, Refusal};
+pub use quantize::{EntityState, QState, Quantization};
 pub use quinn::ConnectionError;
+pub use replicate::{ReplicationConfig, Replicator, SnapshotStats};
 pub use session::{Message, SendError, Session, SessionStats};
+pub use snapshot::{Ack, EntityId, SnapshotReceiver, Taken};
 pub use socket::Conditioner;
 pub use token::{TokenClaims, TokenError, TokenIssuer, TokenVerifier};

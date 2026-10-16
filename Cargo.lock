@@ -902,6 +902,8 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "forge-core",
+ "glam",
+ "libm",
  "quinn",
  "rcgen",
  "ring",

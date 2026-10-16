@@ -3,23 +3,31 @@
 //!
 //! The server sends each client a message of `--payload` bytes `--rate` times a second on the
 //! unreliable channel (a snapshot's stand-in); each client sends `--input` bytes `--input-rate`
-//! times a second (its inputs). Both directions go through a conditioner of `--latency` ms one
-//! way, a tenth of it as jitter, and `--loss` of the packets lost. At the end it prints, per
-//! client, the bytes on the wire each way (QUIC's headers, acks and encryption included), the
-//! messages delivered and the round trip QUIC measured.
+//! times a second (its inputs). With `--replicate N`, the messages are real snapshots of a
+//! crowd of N people (`forge_net::crowd`) under the replicator's byte budget, and each input
+//! starts with the client's acknowledgement. Both directions go through a conditioner of
+//! `--latency` ms one way, a tenth of it as jitter, and `--loss` of the packets lost. At the end
+//! it prints, per client, the bytes on the wire each way (QUIC's headers, acks and encryption
+//! included), the messages delivered and the round trip QUIC measured.
 //!
 //! ```text
 //! cargo run --release -p forge-net --bin net-loopback -- --clients 8 --seconds 10 \
 //!     --rate 30 --payload 800 --latency 50 --loss 0.02
+//! cargo run --release -p forge-net --bin net-loopback -- --clients 100 --replicate 3000
 //! ```
 //!
 //! It binds 127.0.0.1 only.
 
 use std::time::{Duration, Instant};
 
+use glam::DVec3;
+
+use forge_core::SplitMix64;
+use forge_net::crowd::Crowd;
 use forge_net::{
-    ChannelId, Client, ClientConfig, ConditionerConfig, Server, ServerConfig, ServerIdentity,
-    Session, TokenClaims, TokenIssuer, TokenVerifier,
+    Ack, ChannelId, Client, ClientConfig, ConditionerConfig, ReplicationConfig, Replicator, Server,
+    ServerConfig, ServerIdentity, Session, SnapshotReceiver, TokenClaims, TokenIssuer,
+    TokenVerifier,
 };
 use tokio::time::MissedTickBehavior;
 
@@ -37,6 +45,12 @@ struct Options {
     latency: u64,
     loss: f64,
     seed: u64,
+    /// People in the replicated crowd; 0 for fixed payloads.
+    replicate: usize,
+    /// The crowd's square, metres.
+    side: f64,
+    /// A snapshot's budget, bytes.
+    budget: usize,
 }
 
 fn num<T: std::str::FromStr>(flag: &str, value: &str) -> Result<T, String> {
@@ -57,6 +71,9 @@ impl Options {
             latency: 50,
             loss: 0.02,
             seed: 1,
+            replicate: 0,
+            side: 600.0,
+            budget: ReplicationConfig::default().packet_budget,
         };
         let args: Vec<String> = std::env::args().skip(1).collect();
         let mut k = 0;
@@ -64,16 +81,20 @@ impl Options {
             let value = args
                 .get(k + 1)
                 .ok_or_else(|| format!("{} needs a value", args[k]))?;
-            match args[k].as_str() {
-                "--clients" => o.clients = num(&args[k], value)?,
-                "--seconds" => o.seconds = num(&args[k], value)?,
-                "--rate" => o.rate = num(&args[k], value)?,
-                "--payload" => o.payload = num(&args[k], value)?,
-                "--input-rate" => o.input_rate = num(&args[k], value)?,
-                "--input" => o.input = num(&args[k], value)?,
-                "--latency" => o.latency = num(&args[k], value)?,
-                "--loss" => o.loss = num(&args[k], value)?,
-                "--seed" => o.seed = num(&args[k], value)?,
+            let flag = args[k].as_str();
+            match flag {
+                "--clients" => o.clients = num(flag, value)?,
+                "--seconds" => o.seconds = num(flag, value)?,
+                "--rate" => o.rate = num(flag, value)?,
+                "--payload" => o.payload = num(flag, value)?,
+                "--input-rate" => o.input_rate = num(flag, value)?,
+                "--input" => o.input = num(flag, value)?,
+                "--latency" => o.latency = num(flag, value)?,
+                "--loss" => o.loss = num(flag, value)?,
+                "--seed" => o.seed = num(flag, value)?,
+                "--replicate" => o.replicate = num(flag, value)?,
+                "--side" => o.side = num(flag, value)?,
+                "--budget" => o.budget = num(flag, value)?,
                 other => return Err(format!("unknown option {other}")),
             }
             k += 2;
@@ -95,6 +116,10 @@ struct Report {
     datagrams_out: u64,
     payload_in: u64,
     payload_out: u64,
+    /// Snapshots that did not decode (none expected).
+    bad: u64,
+    /// Entities the client held at the end.
+    held: usize,
 }
 
 async fn run_client(
@@ -116,12 +141,13 @@ async fn run_client(
         .expect("the client could not connect");
     let mut tick = tokio::time::interval(Duration::from_secs_f64(1.0 / o.input_rate));
     tick.set_missed_tick_behavior(MissedTickBehavior::Burst);
-    let input = vec![0x5Au8; o.input];
+    let mut input = vec![0x5Au8; o.input.max(6)];
+    let mut receiver = SnapshotReceiver::new(ReplicationConfig::default().quantization);
     let end = start + Duration::from_secs_f64(o.seconds);
     // The bytes are counted from `start` to `end`; the messages the server sent before `end`
     // are counted until they have had time to arrive.
     let tail = end + Duration::from_millis(3 * o.latency + 200);
-    let (mut received, mut first, mut last) = (0, None, None);
+    let (mut received, mut bad, mut first, mut last) = (0, 0, None, None);
     loop {
         let now = Instant::now();
         if first.is_none() && now >= start {
@@ -136,11 +162,19 @@ async fn run_client(
         tokio::select! {
             _ = tick.tick() => {
                 if now < end {
+                    if o.replicate > 0 && let Some(ack) = receiver.ack() {
+                        input[..6].copy_from_slice(&ack.encode());
+                    }
                     let _ = session.send(UNRELIABLE, input.clone());
                 }
             }
             m = session.recv() => match m {
-                Some(_) => received += 1,
+                Some(m) => {
+                    received += 1;
+                    if o.replicate > 0 && receiver.receive(&m.payload).is_err() {
+                        bad += 1;
+                    }
+                }
                 None => break,
             },
             _ = tokio::time::sleep_until(tail.into()) => {}
@@ -156,13 +190,50 @@ async fn run_client(
         datagrams_out: b.udp_sent.0 - a.udp_sent.0,
         payload_in: b.messages_received.1 - a.messages_received.1,
         payload_out: b.messages_sent.1 - a.messages_sent.1,
+        bad,
+        held: receiver.view().len(),
     }
 }
 
-async fn serve(o: Options, mut server: Server, start: Instant) -> u64 {
+/// The server's crowd and replicator, in `--replicate` mode.
+struct Replication {
+    crowd: Crowd,
+    replicator: Replicator,
+    random: SplitMix64,
+    half: f64,
+    /// Encoding time and snapshots, for the CPU line.
+    encode: Duration,
+    world: Duration,
+    snapshots: u64,
+    ticks: u64,
+}
+
+async fn serve(o: Options, mut server: Server, start: Instant) -> (u64, Option<Replication>) {
     let mut sessions: Vec<Session> = Vec::with_capacity(o.clients);
+    let mut replication = (o.replicate > 0).then(|| Replication {
+        crowd: Crowd::new(o.replicate, o.side, o.seed),
+        replicator: Replicator::new(ReplicationConfig {
+            packet_budget: o.budget,
+            ..ReplicationConfig::default()
+        }),
+        random: SplitMix64::new(o.seed ^ 0x5EED),
+        half: o.side / 2.0,
+        encode: Duration::ZERO,
+        world: Duration::ZERO,
+        snapshots: 0,
+        ticks: 0,
+    });
     while sessions.len() < o.clients {
-        sessions.push(server.accept().await.expect("the server closed"));
+        let s = server.accept().await.expect("the server closed");
+        if let Some(r) = &mut replication {
+            let focus = DVec3::new(
+                r.random.range_f64(-r.half, r.half),
+                0.0,
+                r.random.range_f64(-r.half, r.half),
+            );
+            r.replicator.add_client(s.client_id(), focus);
+        }
+        sessions.push(s);
     }
     let period = Duration::from_secs_f64(1.0 / o.rate);
     let mut tick = tokio::time::interval_at(start.into(), period);
@@ -170,21 +241,50 @@ async fn serve(o: Options, mut server: Server, start: Instant) -> u64 {
     let payload = vec![0xA5u8; o.payload];
     let end = start + Duration::from_secs_f64(o.seconds);
     let mut sent = 0;
+    let mut server_tick = 0u32;
     loop {
         tick.tick().await;
         if Instant::now() >= end {
             break;
         }
+        server_tick += 1;
+        if let Some(r) = &mut replication {
+            let t = Instant::now();
+            r.crowd.step(1.0 / o.rate);
+            r.replicator
+                .set_world(r.crowd.states().iter().map(|(id, s)| (*id, s, 1.0)));
+            r.world += t.elapsed();
+            r.ticks += 1;
+        }
         for s in &mut sessions {
-            while s.try_recv().is_some() {}
-            if s.send(UNRELIABLE, payload.clone()).is_ok() {
+            while let Some(m) = s.try_recv() {
+                if let Some(r) = &mut replication
+                    && let Some(ack) = Ack::decode(&m.payload)
+                {
+                    r.replicator.acknowledge(s.client_id(), ack);
+                }
+            }
+            let message = match &mut replication {
+                Some(r) => {
+                    let t = Instant::now();
+                    let (bytes, _) = r
+                        .replicator
+                        .snapshot(s.client_id(), server_tick)
+                        .expect("a known client");
+                    r.encode += t.elapsed();
+                    r.snapshots += 1;
+                    bytes
+                }
+                None => payload.clone(),
+            };
+            if s.send(UNRELIABLE, message).is_ok() {
                 sent += 1;
             }
         }
     }
     // Keep the sessions until the clients have stopped counting.
     tokio::time::sleep(Duration::from_millis(3 * o.latency + 700)).await;
-    sent
+    (sent, replication)
 }
 
 fn main() {
@@ -216,16 +316,16 @@ fn main() {
                 tokio::spawn(run_client(o, k, certificate.clone(), token, address, start))
             })
             .collect();
-        let sent = serve(o, server, start).await;
+        let (sent, replication) = serve(o, server, start).await;
         let mut reports = Vec::new();
         for c in clients {
             reports.push(c.await.expect("a client failed"));
         }
-        print(&o, sent, &reports);
+        print(&o, sent, &reports, replication.as_ref());
     });
 }
 
-fn print(o: &Options, sent: u64, reports: &[Report]) {
+fn print(o: &Options, sent: u64, reports: &[Report], replication: Option<&Replication>) {
     let n = reports.len() as f64;
     let mean = |f: &dyn Fn(&Report) -> f64| reports.iter().map(f).sum::<f64>() / n;
     let per_second = |bytes: u64| bytes as f64 / o.seconds / 1000.0;
@@ -241,13 +341,20 @@ fn print(o: &Options, sent: u64, reports: &[Report]) {
     let received: u64 = reports.iter().map(|r| r.received).sum();
     let mut rtts: Vec<f64> = reports.iter().map(|r| r.rtt.as_secs_f64() * 1e3).collect();
     rtts.sort_by(f64::total_cmp);
+    let what = if o.replicate > 0 {
+        format!(
+            "snapshots of {} people in {:.0} m (budget {} B)",
+            o.replicate, o.side, o.budget
+        )
+    } else {
+        format!("{} B", o.payload)
+    };
     println!(
-        "{} clients, {:.0} s; down {} B at {:.0} Hz, up {} B at {:.0} Hz; {} ms one way, {:.1} % lost each way",
+        "{} clients, {:.0} s; down {what} at {:.0} Hz, up {} B at {:.0} Hz; {} ms one way, {:.1} % lost each way",
         o.clients,
         o.seconds,
-        o.payload,
         o.rate,
-        o.input,
+        o.input.max(6),
         o.input_rate,
         o.latency,
         o.loss * 100.0
@@ -270,4 +377,13 @@ fn print(o: &Options, sent: u64, reports: &[Report]) {
         rtts[rtts.len() / 2],
         rtts[rtts.len() - 1]
     );
+    if let Some(r) = replication {
+        let bad: u64 = reports.iter().map(|r| r.bad).sum();
+        let held = mean(&|r| r.held as f64);
+        println!(
+            "replication: {bad} snapshots failed to decode; a client held {held:.0} people at the end; the server spent {:.0} us a tick on the crowd and its world, {:.1} us a client on its snapshot",
+            r.world.as_secs_f64() * 1e6 / r.ticks.max(1) as f64,
+            r.encode.as_secs_f64() * 1e6 / r.snapshots.max(1) as f64
+        );
+    }
 }

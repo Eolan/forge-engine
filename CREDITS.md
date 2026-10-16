@@ -445,6 +445,13 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
 - **Fragments.** Glenn Fiedler, "Packet Fragmentation and Reassembly", Gaffer On Games, 2016:
   a message's number, a fragment's index and the count in each fragment, the message lost whole
   with any fragment (`forge_net::fragment`, #268).
+- **Snapshots.** Glenn Fiedler, "Snapshot Compression" and "State Synchronization", Gaffer On
+  Games, 2015: smallest-three quaternions, bounded quantised positions, deltas against the
+  state the receiver acknowledged, quantising on both sides, and the priority accumulator;
+  the Quake III network model (id Software, 1999; Fabien Sanglard's review, 2012): deltas
+  against the client's last acknowledged snapshot; Mark Frohnmayer and Tim Gift, "The TRIBES
+  Engine Networking Model", 1999: scoped, prioritised partial updates (`forge_net::snapshot`,
+  `forge_net::replicate`, #268).
 - **Networked physics.** Glenn Fiedler, "Introduction to Networked Physics" and the series
   after it, Gaffer On Games, 2014–2015: the link conditioner and the commands sent again until
   acknowledged (#137).
