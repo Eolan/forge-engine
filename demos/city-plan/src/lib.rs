@@ -72,11 +72,10 @@ const ROOF_SOLAR: u8 = 6;
 const ROOF_TERRACE: u8 = 7;
 /// The kit's merged sections on the masses: four render tints, stone, party walls.
 const KIT_PLASTER: u8 = 8;
-/// The insides' walls and ceilings: whitewash whatever the facade's tint, the white render without
-/// its grain (the row after the tiled roof). In the facade's sand, ochre or rose, the
-/// daylight bouncing round a room took the colour at every bounce, and the halls read orange;
-/// with the facades' grain the walls a step away showed squiggles.
-const KIT_INSIDE: u8 = 15;
+/// The insides' walls and ceilings: the white render, whitewash, whatever the facade's tint.
+/// In the facade's sand, ochre or rose, the daylight bouncing round a room took the colour at
+/// every bounce, and the halls read orange.
+const KIT_INSIDE: u8 = KIT_PLASTER + 3;
 const KIT_STONE: u8 = 12;
 const KIT_PARTY: u8 = 13;
 /// The tiled roofs' section on the masses.
@@ -4439,13 +4438,6 @@ impl Scenario for PlanScenario {
                 ("plan stone".into(), stone),
                 ("plan party wall".into(), render([0.78, 0.72, 0.64])),
                 ("plan tiled roof".into(), tiles_row),
-                // The insides' walls and ceilings (`KIT_INSIDE`): the white render, smooth; a
-                // step away indoors the facades' grain read as squiggles, and at a third of its
-                // strength as rims round pebbles.
-                (
-                    "plan inside plaster".into(),
-                    colour([0.95, 0.93, 0.88], 10.0, 0.03),
-                ),
             ],
         );
         // The kit's groups: shutters and fascias in sage, blue-grey, blue and warm white, with

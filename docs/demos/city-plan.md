@@ -744,9 +744,7 @@ inner faces and ceilings are whitewashed, the white render whatever the facade's
 2026-10-16): in the facade's sand, ochre or rose the daylight that bounces round a closed room
 took the colour at each bounce, and the village's halls read a saturated orange
 (`KIT_INSIDE`; the map check's hall, room and way-in views moved by ꟻLIP means of 0.14–0.23,
-the street views by 0.001–0.007). Later the same evening the insides took a smooth plaster row of
-their own: a step away indoors the facades' grain read as squiggles, and at a third of its
-strength as rims round pebbles (`reports/2026-10-16/village-upstairs-plaster.png`).
+the street views by 0.001–0.007).
 The windows show nothing from inside yet (the glass is drawn for the street), and the far
 masses beyond the kit's reach stay hollow; going inside builds the real rooms (step 3).
 
