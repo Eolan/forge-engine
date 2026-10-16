@@ -1,6 +1,8 @@
 # Research — Game audio engine architecture and spatial audio
 
-> Status: v0.1, 2026-09-23. Sources checked the same day (crates.io API, GitHub, publisher and author
+> Status: v0.2, 2026-10-16: §12 adds what the first build (#267) chose and checked: the decoders, Steam
+> Audio's bands and filters read in its source, its release dates corrected, the patents met. v0.1,
+> 2026-09-23. Sources checked the same day (crates.io API, GitHub, publisher and author
 > pages, vendor docs). Builds on the prior project's
 > [`world/docs/research/audio.md`](../../../world/docs/research/audio.md) (v0.1, 2026-09-14), which is
 > read here as an input, not repeated.
@@ -12,8 +14,8 @@ worth carrying over whole. What it never wrote down is the layer a sound designe
 events, buses, real-time parameters, states, loudness-based mixing, voice limits, streaming banks and a
 live profiler. That layer is what "pro" means in this industry, it is what Wwise and FMOD sell, and it
 is independent of the physics. The prior survey also under-read Steam Audio (its *pathing* is baked but
-its direct occlusion and reflections are real-time), got its release date wrong (4.8.1 is February 2025,
-not 2026), left HRTF-dataset licensing as an open question when the three canonical datasets are all
+its direct occlusion and reflections are real-time), left HRTF-dataset licensing as an open question
+when the three canonical datasets are all
 shippable, and said nothing about music, voice chat or output formats. This file fills those gaps for
 Forge — Rust, Vulkan with hardware ray tracing, procedural open worlds with forests, water, caves,
 weather and vehicles, co-op multiplayer, small team — and ends with a recommendation and the demo that
@@ -50,7 +52,7 @@ reference today), **recent** (2019 or later).
 8. [Comparison](#8-comparison)
 9. [Recommendation for Forge](#9-recommendation-for-forge)
 10. [Checked and left out](#10-checked-and-left-out)
-11. [Verification notes](#11-verification-notes)
+. [The first build: crates, Steam Audio's filters, patents (2026-10-16)](#12-the-first-build-crates-steam-audios-filters-patents-2026-10-16)
 
 ---
 
@@ -121,9 +123,9 @@ later productised it as "HDR" buses; Forge should implement it natively on the b
 <https://github.com/ValveSoftware/steam-audio/releases> ·
 <https://valvesoftware.github.io/steam-audio/doc/capi/guide.html>
 
-Apache-2.0 since February 2024 (4.5.2); 4.7.0 (August 2024) added impulse-response and energy-field API
-objects and experimental octave bands; 4.8.1 (11 February 2025) is the latest, so the project has been
-quiet for nineteen months. The C API covers: HRTF with the built-in set or a custom SOFA file
+Apache-2.0 since February 2024 (4.5.2); 4.7.0 (August 2025) added impulse-response and energy-field API
+objects and experimental octave bands; 4.8.1 (11 February 2026) is the latest release, and the last commit
+is of March 2026 (dates corrected in v0.2, §12). The C API covers: HRTF with the built-in set or a custom SOFA file
 (`SimpleFreeFieldHRIR` convention); a *direct* effect with distance attenuation, frequency-dependent air
 absorption, source directivity, partial occlusion by ray count and transmission as an EQ on the occluded
 part; *reflections* by real-time ray tracing (built-in tracer, Intel Embree, or AMD Radeon Rays on the
@@ -131,8 +133,8 @@ GPU on 64-bit Windows) or baked into probe batches; *pathing* (diffraction aroun
 probe graph; and ambisonics encode, rotate and decode to binaural or speakers. Simulation is designed to
 run on its own thread and hand results to the audio thread.
 *Bearing:* the open stack's spatialiser. Real-time reflections and direct occlusion work on dynamic
-geometry; only pathing needs probes, which Forge can bake per streamed chunk. The 2025 stall is the risk
-to weigh against the Apache licence: you may end up maintaining a fork.
+geometry; only pathing needs probes, which Forge can bake per streamed chunk. Seven quiet months (to October
+2026) are the risk to weigh against the Apache licence: you may end up maintaining a fork.
 
 **Maxence Maire. `audionimbus` 0.16.0 (Steam Audio in Rust).** [code] [recent]
 <https://github.com/MaxenceMaire/audionimbus> · <https://crates.io/crates/audionimbus>
@@ -692,7 +694,7 @@ the open substitute for the middleware profilers.
 |---|---|---|---|---|---|---|
 | **Wwise** | Free under US$250K budget, no source; paid tiers above (per title) | HRTF plugins, ambisonics, Spatial Audio rooms/portals | Rooms, portals, diffraction, transmission, geometric early reflections (Reflect) | Best in class: authoring app, profiler, live connect | `rrise` 0.2.3 (2022), raw FFI, needs licensed install | Proprietary, per-title licence, binding stale; designer lock-in |
 | **FMOD Studio** | Free under US$200K revenue/yr and US$500–600K budget, attribution required; paid tiers above | Built-in panner + plugins (Steam Audio, Resonance, Meta) | Via plugins; no native geometry | DAW-style authoring, Live Update, profiler | `libfmod` 2.222.6 (2024), `fmod-oxide` 0.2.2 (2026) | Proprietary libs distributed outside the crate; licence is per title |
-| **Steam Audio + own mixer** | Apache-2.0 (SDK) + MIT/Apache (`audionimbus`), own code | HRTF (built-in or SOFA), ambisonics, directivity, air absorption | Real-time direct occlusion/transmission; real-time or baked reflections; baked pathing | None: events, buses, RTPC, profiler all to be written | `audionimbus` 0.16.0 (Aug 2026), Bevy example exists | Steam Audio quiet since Feb 2025; tooling is a year of work |
+| **Steam Audio + own mixer** | Apache-2.0 (SDK) + MIT/Apache (`audionimbus`), own code | HRTF (built-in or SOFA), ambisonics, directivity, air absorption | Real-time direct occlusion/transmission; real-time or baked reflections; baked pathing | None: events, buses, RTPC, profiler all to be written | `audionimbus` 0.16.0 (Aug 2026), Bevy example exists | Steam Audio quiet since Feb 2026 (last commit March 2026); tooling is a year of work |
 | **kira** | MIT OR Apache-2.0 | Distance attenuation + pan; no HRTF | None | None (code-driven) | Native | Would be replaced within months; no acoustics path |
 | **Fully custom** | Own code | Whatever you build (structural HRTF exists from the prior project) | Own ray tracer against terrain SDF and BVH; own diffraction | None | Native | Largest scope; spatialiser quality below Steam Audio for a long time |
 
@@ -794,8 +796,8 @@ arrival directions against tolerances.
   (2026-03-28), `tracy-client` 0.19.0 (2026-08-25), `fmod-oxide` 0.2.2 (2026-07-14), `libfmod` 2.222.6
   (2024-10-15), `glicol` 0.13.5 (2024-04-23), `oddio` 0.7.4 (2023-10-15), `rrise` 0.2.3 (2022-11-17),
   `dasp` 0.11.0 (2020-05-29), `audiopus` 0.3.0-rc.0 (2021, not cited).
-- Steam Audio release dates from the GitHub releases page (4.8.1 on 2025-02-11, 4.8.0 on 2024-11-26,
-  4.7.0 on 2024-08-11); Tracy 0.14.1 from the GitHub releases API (2026-08-22); Project Acoustics and
+- Steam Audio release dates from the GitHub releases page, as v0.2 corrected them (4.8.1 on 2026-02-11,
+  4.8.0 on 2025-11-26, 4.7.0 on 2025-08-11; v0.1 had each a year early); Tracy 0.14.1 from the GitHub releases API (2026-08-22); Project Acoustics and
   Resonance Audio archive dates from their repository banners.
 - Papers were confirmed on the ACM DL, Microsoft Research, Inria (Basilic), arXiv, SIGGRAPH History
   Archive, AES e-library, CCRMA and author pages; Dobashi 2003 and Liu 2019 authorship via the Crossref
@@ -809,5 +811,75 @@ arrival directions against tolerances.
 - No browser pane and no YouTube page was used for any citation. Talks were confirmed from GDC Vault
   (God of War, 2019), the *Game Developer* GDC coverage (Ghost of Tsushima wind, 2021; Phillips, 2021),
   SlideShare decks (DICE, 2008–2010) and the Guerrilla and Sucker Punch pages named in each entry.
-- Prior-project corrections: Steam Audio 4.8.1 is February **2025** (the earlier file said 2026); HRTF
-  dataset licensing (Q-30) is settled — all three canonical datasets are shippable with attribution.
+- Prior-project corrections: HRTF dataset licensing (Q-30) is settled — all three canonical datasets are shippable with attribution.
+
+## 12. The first build: crates, Steam Audio's filters, patents (2026-10-16)
+
+Issue #267 built `forge-audio`'s real-time side headless (`docs/demos/audio.md`). What it chose
+beyond §7, what it read, and the patents it met on the way. Crate facts from the crates.io API and
+the crates' sources on 2026-10-16; patents from Google Patents, whose status and expiry lines are
+its own estimates, not legal conclusions.
+
+**The crates taken.**
+- **`rtrb` 0.4.0** (Matthias Geier, MIT OR Apache-2.0, August 2026): a wait-free single-producer,
+  single-consumer ring with no dependencies, slices pushed and popped whole. The game-to-mixer
+  commands, the mixer's returns, each stream's samples and the output ring are all `rtrb` rings.
+  `crossbeam-channel` (already in the build) would also never lock as long as no side blocks,
+  but only by reading its waker code; `rtrb` says so in its contract.
+- **`lewton` 0.10.2** (est31, MIT OR Apache-2.0, January 2021) for Vorbis, over **`ogg` 0.8.0**
+  (BSD-3-Clause): pure Rust, stable, five years without a release. Taken over Symphonia 0.6.1
+  (August 2026), which decodes more formats (FLAC, MP3, AAC) but under MPL-2.0; Symphonia stays the
+  choice when those formats are wanted. One gap found and filled: `lewton` trims a stream's end
+  by the last page's granule position only from the second page on, so a file written as one
+  page (FFmpeg writes a second of sound so) decodes 704 frames too long; `forge-audio` decodes the
+  first page ahead and trims it, at the end when it is also the last page, at the start otherwise
+  (the Vorbis I specification, A.2).
+- **Opus in pure Rust** now exists, which §3's "Opus decoding is still not implemented" (in
+  Symphonia) no longer settles: **`opus-rs` 0.1.37** (restsend, BSD-3-Clause, February to October
+  2026, 137 000 downloads in 90 days), a port of libopus 1.6 that calls itself production-ready;
+  **`rusty-opus` 1.0.1** (a fork tuned with SIMD, BSD-3-Clause, July 2026, which reports the decoder
+  bit-exact on the 12 test vectors of RFC 6716 and RFC 8251); **`ruopus` 0.1.2** (MIT, June 2026,
+  which reports passing the conformance vectors). `opus-rs` is taken: plain `std`, the most used,
+  no SIMD code of its own to trust. Ogg Opus around it (RFC 7845: `OpusHead`, the pre-skip, the
+  output gain, the end trimmed by the last granule position) is `forge-audio`'s own code. The
+  conformance vectors would be the stronger check; they are a download (owner's go).
+
+**Steam Audio, read in its source** (`core/src/core/`, Apache-2.0, for the three-band values D-011's
+spatialiser will hand the mixer): the bands are 0–800 Hz, 800 Hz–8 kHz and 8–22 kHz (`bands.cpp`);
+the default air absorption is `exp(−k d)` with `k` = 0.0002, 0.0017 and 0.0182 a metre
+(`air_absorption.cpp`); the band gains are applied (`eq_effect.cpp`) as a low shelf at 800 Hz, a
+peaking filter over 800 Hz–8 kHz and a high shelf at 8 kHz, cookbook biquads at Q 0.707 (`iir.cpp`;
+an eighth-order option cascades four sections a shelf), after dividing the gains by the largest
+(which becomes an overall gain) and holding them above 0.0625 (−24 dB); when the gains change, the
+old and new filters both run over the frame and the output crossfades. `forge-audio` does the same
+in Rust (`dsp::ThreeBand`). A first try with two one-pole splits cut a −20 dB high band by only
+3.8 dB at 12 kHz.
+
+**Release dates corrected.** The GitHub releases API gives 4.7.0 on 2025-08-11, 4.8.0 on 2025-11-26
+and 4.8.1 on 2026-02-11, and the last commit on 2026-03-25 (v0.1 had each release a year early and
+"corrected" the prior file's right date). The SDK is quieter for seven months, not twenty.
+
+**Downloads the next steps would ask for** (none made):
+- Steam Audio SDK 4.8.1, `steamaudio_4.8.1.zip` from `github.com/ValveSoftware/steam-audio/releases`,
+  Apache-2.0, 181 MB (the C library for Windows, Linux, macOS, Android, iOS), behind `audionimbus`.
+- SADIE II HRTFs (University of York, Apache-2.0), one subject's HRIRs as AES69 SOFA at 48 kHz (the
+  KU100 or KEMAR dummy head), from `york.ac.uk/sadie-project/database.html` or Zenodo; the page
+  gives no sizes.
+- The Opus test vectors of RFC 6716 and RFC 8251 (`opus-codec.org`), to check the decoder bit for
+  bit.
+
+**Patents met** (searched on Google Patents and the web on 2026-10-16; none found on the voices):
+
+| Technique | Patent | Holder | Status (Google's estimate) | Bearing |
+|---|---|---|---|---|
+| Feedback delay network reverb, absorption per line, unitary feedback | US 5,491,754 (Jot, Chaigne), filed 1993 | France Telecom (now Orange) | expired 2013-02-19 | free: `dsp::Reverb` follows the 1991 paper |
+| A reverberator of N−1 filter-and-delay lines fed back through one summing amplifier, plus a separate output line with no input | US 8,204,240 B2 | Brian C. Neunaber (individual) | active to about 2031-04-06 | not our structure (a Hadamard matrix, input into every line, outputs from the lines); do not adopt that topology |
+| Look-ahead limiter: target gain = threshold / peak, ramped over the look-ahead on both channels | US 9,661,438 B1 | Amazon Technologies | lapsed (fees unpaid) | free; ours is the published peak-hold-and-average design (Signalsmith, 2022) |
+| Look-ahead limiter with a gain smoother interpolating toward the new gain, per-band energy detector | US 7,242,783 B1 | Plantronics | expired 2022-01-11 | free |
+| Occlusion factor from a simplified occluder projected on a plane across the source's ray | US 11,438,708 B1 | HTC | active to about 2041-04-26 | `forge-audio` takes the occluded share from the game; the game should find it by rays (Steam Audio's volumetric occlusion: the share of rays to points on the source's sphere that are blocked), not by HTC's projection |
+| Mixing by masking: lowering lower-priority channels in the spectral regions a higher-priority channel masks | US 12,646,533 B2, EP 4 510 126 | Sony Interactive Entertainment | active to about 2044-07-26 | not built; D-011's HDR audio (DICE, 2008: a loudness window, a gain and culling policy in time) is older and different; ask the owner before any spectral, masking-driven attenuation |
+| Opus | US 7,353,168 and others; Xiph.Org's applications; Skype's | Broadcom, Xiph.Org, Microsoft | licensed royalty-free to implementations (IETF IPR 1524, 1526, 1914), ending for whoever sues over Opus patents | fine to ship; Qualcomm, Huawei, France Telecom and Ericsson filed disclosures with possible royalties that Xiph's counsel says Opus does not need |
+| Virtual voices, stealing by priority and audibility | none found | — | — | the model of FMOD, Wwise, Unity and the Nintendo 64's audio library (1990s), documented openly |
+
+Equal-power panning, the inverse distance law, Doppler by resampling, Hermite interpolation and the
+cookbook biquads are decades old textbook methods; nothing to flag.

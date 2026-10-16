@@ -22,7 +22,7 @@ the system you are about to touch.
 | [research/night-sky.md](research/night-sky.md) | a night sky over the ground: the Moon and its light, stars (catalogue or procedural), airglow, measured light levels, low-light tone mapping (Purkinje) | 8 | short, D-046 ✅ (2026-10-04) |
 | [research/shadow-denoising.md](research/shadow-denoising.md) | denoising the sun's ray-traced soft shadows: why one ray and TAA fail 8 stops under the sun, NVIDIA's SIGMA, AMD's FidelityFX denoiser, penumbra filters, licences and a patent | 15 | short, D-049 ✅ (2026-10-04), built in #172 and #173 |
 | [research/netcode.md](research/netcode.md) | transport, replication, prediction, server topology; packet fragmentation; patents met (Verizon's prioritized replication, live to 2041; Improbable's query-based interest, live to 2036; King's server-side bias, live to 2042; Microsoft's and There's, expired) | 55 | done (refreshed 2026-10-16 for #268: the crates as built, the patents) |
-| [research/audio.md](research/audio.md) | mixer, spatialisation, propagation, synthesis, middleware | 46 | done |
+| [research/audio.md](research/audio.md) | mixer, spatialisation, propagation, synthesis, middleware; the first build's crates, Steam Audio's band filters, patents | 46 + 17 | done; refreshed 2026-10-16 (#267, §12) |
 | [research/vegetation-materials.md](research/vegetation-materials.md) | trees, impostors, grass, trim sheets, unified materials, deformation | 50 | done |
 | [research/animation.md](research/animation.md) | clips, motion matching, IK, physical characters, generated creatures | 42 | done |
 | [research/memory-streaming.md](research/memory-streaming.md) | allocators, Resizable BAR, SSD streaming, residency | 40 | done |
@@ -112,7 +112,10 @@ Steam Audio (Apache-2.0, via `audionimbus`) is the only open spatialiser at the 
 bar; wave-based acoustics are all archived. SADIE II HRTFs ship by default. Big games rely
 on data-driven ambience rules and a wind field shared with vegetation, not physical
 acoustics. Impacts from modal banks fitted per material; rain and wind from the weather
-fields. Three-tier acoustic LOD.
+fields. Three-tier acoustic LOD. The first build (#267, §12): pure-Rust decoders (`lewton` for Vorbis,
+`opus-rs` for Opus, WAV our own), Steam Audio's three band filters written again from its source, Steam
+Audio's releases a year later than v0.1 said (4.8.1 is February 2026); no live patent on what is
+built, one to avoid for occlusion (HTC's projection) and one for masking-driven mixing (Sony).
 
 **Vegetation and materials.** Grow trees, don't model them: Weber–Penn parameters, space
 colonisation plus competition, scanned bark and leaf atlases. Ladder: geometry to 40 m,
