@@ -50,6 +50,8 @@ pub mod mixer;
 pub mod render;
 pub mod sound;
 pub mod spatial;
+#[cfg(all(windows, feature = "steam-audio"))]
+pub mod steam;
 pub mod stream;
 pub mod thread;
 mod voice;

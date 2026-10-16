@@ -1,0 +1,5 @@
+# Where audionimbus-sys finds Steam Audio's library for forge-audio's `steam-audio` feature
+# (#267): the SDK unpacked into steam-audio-sdk/, which git ignores (docs/demos/audio.md says
+# how). A variable already set in the environment wins.
+[env]
+STEAMAUDIO_LIB_DIR = { value = "steam-audio-sdk/steamaudio/lib/windows-x64", relative = true }

@@ -61,6 +61,10 @@ mod device {
         /// Frames in the ring between the mix thread and the device (the latency it adds).
         #[arg(long, default_value_t = 1024)]
         ring: usize,
+        /// Places the sounds through Steam Audio's HRTF (headphones; needs the `steam-audio`
+        /// feature and the SDK in steam-audio-sdk/).
+        #[arg(long)]
+        hrtf: bool,
     }
 
     const HELP: &str = "\
@@ -324,13 +328,23 @@ commands (one a line):
         let buses = AmbienceBuses::add(&mut layout);
         let reverb = layout.add_reverb("reverb", buses.world, ReverbParams::OPEN);
         let foley_bus = layout.add("foley", buses.world);
-        let (mut engine, mixer) = create(
-            MixerConfig {
-                sample_rate: rate,
-                ..MixerConfig::default()
-            },
-            &layout,
-        );
+        let mix_config = MixerConfig {
+            sample_rate: rate,
+            ..MixerConfig::default()
+        };
+        #[allow(unused_mut)]
+        let (mut engine, mut mixer) = create(mix_config, &layout);
+        if args.hrtf {
+            #[cfg(feature = "steam-audio")]
+            {
+                let steam = forge_audio::steam::SteamSpatializer::for_mixer(&mix_config)
+                    .context("Steam Audio (steam-audio-sdk/, docs/demos/audio.md)")?;
+                mixer.set_spatializer(Box::new(steam));
+                println!("placing the sounds through Steam Audio's HRTF: listen on headphones");
+            }
+            #[cfg(not(feature = "steam-audio"))]
+            println!("--hrtf needs the steam-audio feature; panning instead");
+        }
         let (opener, pump) = streams(0.25);
         let _decode = pump.spawn(Duration::from_millis(5));
         let mut world = World {

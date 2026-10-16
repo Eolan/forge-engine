@@ -112,7 +112,8 @@ struct Scene {
 }
 
 fn scenes(out: &Path, only: Option<&str>) -> Result<()> {
-    let all = [
+    #[allow(unused_mut)]
+    let mut all = vec![
         Scene {
             name: "orbit",
             what: "a hiss of rain on a tin roof circling at 4 m every 4 s, a tone straight ahead",
@@ -159,6 +160,12 @@ fn scenes(out: &Path, only: Option<&str>) -> Result<()> {
             render: village,
         },
     ];
+    #[cfg(all(windows, feature = "steam-audio"))]
+    all.push(Scene {
+        name: "orbit-hrtf",
+        what: "the orbit through Steam Audio's HRTF (headphones): the rain behind now sounds behind",
+        render: orbit_hrtf,
+    });
     for scene in all.iter().filter(|s| only.is_none_or(|o| o == s.name)) {
         let started = Instant::now();
         let (samples, stats) = (scene.render)();
@@ -246,7 +253,31 @@ fn buzz(frequency: f64, seconds: f64) -> Arc<SampleBuffer> {
 }
 
 fn orbit() -> (Vec<f32>, MixerStats) {
-    let (mut engine, mixer) = create(MixerConfig::default(), &BusLayout::new());
+    orbit_with(false)
+}
+
+/// The orbit through Steam Audio's HRTF: listen on headphones; behind now sounds behind.
+#[cfg(all(windows, feature = "steam-audio"))]
+fn orbit_hrtf() -> (Vec<f32>, MixerStats) {
+    orbit_with(true)
+}
+
+/// Gives `mixer` Steam Audio's HRTF when `hrtf` (and the feature) says so.
+fn spatialize(mixer: &mut forge_audio::Mixer, config: &MixerConfig, hrtf: bool) {
+    #[cfg(all(windows, feature = "steam-audio"))]
+    if hrtf {
+        let steam = forge_audio::steam::SteamSpatializer::for_mixer(config)
+            .expect("Steam Audio starts (steam-audio-sdk/, docs/demos/audio.md)");
+        mixer.set_spatializer(Box::new(steam));
+    }
+    #[cfg(not(all(windows, feature = "steam-audio")))]
+    let _ = (mixer, config, hrtf);
+}
+
+fn orbit_with(hrtf: bool) -> (Vec<f32>, MixerStats) {
+    let config = MixerConfig::default();
+    let (mut engine, mut mixer) = create(config, &BusLayout::new());
+    spatialize(&mut mixer, &config, hrtf);
     let mut renderer = OfflineRenderer::new(mixer);
     let hiss = rain(1, 2.0);
     let tone = sine_loop(220.0, 0.15, 1.0, RATE).shared();
@@ -570,7 +601,7 @@ fn village() -> (Vec<f32>, MixerStats) {
 
 /// One run: `voices` spatial voices for `seconds`, moving every 10 ms. Returns the
 /// mixer's seconds of work and its counters.
-fn bench_run(voices: usize, seconds: f64) -> (f64, MixerStats) {
+fn bench_run(voices: usize, seconds: f64, hrtf: bool) -> (f64, MixerStats) {
     let mut layout = BusLayout::new();
     let reverb = layout.add_reverb("reverb", BusId::MASTER, ReverbParams::HALL);
     let sfx = layout.add("sfx", BusId::MASTER);
@@ -578,7 +609,8 @@ fn bench_run(voices: usize, seconds: f64) -> (f64, MixerStats) {
         max_voices: voices.max(1),
         ..MixerConfig::default()
     };
-    let (mut engine, mixer) = create(config, &layout);
+    let (mut engine, mut mixer) = create(config, &layout);
+    spatialize(&mut mixer, &config, hrtf);
     let mut renderer = OfflineRenderer::new(mixer);
     let sounds: Vec<_> = (0..8)
         .map(|i| {
@@ -650,7 +682,7 @@ fn bench(seconds: f64, runs: usize) {
         let mut best = f64::MAX;
         let mut stats = MixerStats::default();
         for _ in 0..runs.max(1) {
-            let (cost, s) = bench_run(voices, seconds);
+            let (cost, s) = bench_run(voices, seconds, false);
             if cost < best {
                 best = cost;
                 stats = s;
@@ -663,6 +695,30 @@ fn bench(seconds: f64, runs: usize) {
             stats.block_ns_mean as f64 / 1000.0,
             stats.block_ns_max as f64 / 1000.0
         );
+    }
+    #[cfg(all(windows, feature = "steam-audio"))]
+    {
+        println!(
+            "the same voices through Steam Audio's HRTF (a binaural effect a voice, bilinear):"
+        );
+        for voices in [32usize, 64, 128] {
+            let mut best = f64::MAX;
+            let mut stats = MixerStats::default();
+            for _ in 0..runs.max(1) {
+                let (cost, s) = bench_run(voices, seconds, true);
+                if cost < best {
+                    best = cost;
+                    stats = s;
+                }
+            }
+            println!(
+                "{voices:>7} {:>16.2} {:>12.2} {:>14.1} {:>14.1}",
+                best * 1000.0,
+                best * 100.0,
+                stats.block_ns_mean as f64 / 1000.0,
+                stats.block_ns_max as f64 / 1000.0
+            );
+        }
     }
     // The game thread's side: a step synthesised on each surface.
     println!("synthesising a walking step of 80 kg on each surface (the mean of 200):");
