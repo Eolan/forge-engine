@@ -277,6 +277,8 @@ pub fn village(site: &Site, params: &CityParams, seed: u64) -> Village {
             without += 1;
             continue;
         };
+        // A lot too narrow for a house of its own joins its neighbour along the street.
+        let (lots, keys) = houses::merge_small(&lots, &keys, &ty);
         let houses = houses::houses(&lots, &ty, |k| household_of(seed, b, keys[k], rich), stair);
         for h in &houses {
             masses.push(mass(&mut city, b, h, &streets));

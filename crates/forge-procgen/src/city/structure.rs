@@ -402,6 +402,14 @@ pub fn structures(plan: &CityPlan, masses: &[Mass]) -> Vec<Structure> {
             s.cores.retain(|c| c.door != k);
         }
     }
+    // A house with its rooms' plan takes its windows from its rooms (`windows::by_room`).
+    for (i, s) in out.iter_mut().enumerate() {
+        super::windows::by_room(
+            &masses[i],
+            s,
+            (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
+        );
+    }
     // The windows the doors and the cores gave back, at their era's width, fitted to the room
     // their shutters have like the others.
     for s in &mut out {

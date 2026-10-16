@@ -26,11 +26,14 @@ use forge_procgen::city::facades::{self, FaceKind};
 use forge_procgen::city::gardens;
 use forge_procgen::city::lamps::Lamp;
 use forge_procgen::city::mass::{Mass, Roof};
+use forge_procgen::city::roofs::{RUN_MAX, ridge};
 use forge_procgen::city::shore::Shore;
 use forge_procgen::city::structure::{self, OpeningKind, Structure, WallRole};
 use forge_procgen::city::trees::Tree;
 use forge_procgen::city::units::{self, Occupancy};
-use forge_procgen::city::{BlockUse, CityPlan, Site, cores, furnish, geom, ground, interior};
+use forge_procgen::city::{
+    BlockUse, CityPlan, Site, cores, furnish, geom, ground, interior, roofs,
+};
 use forge_procgen::grammar::Grammar;
 use forge_render::MeshletSceneBuilder;
 use forge_render::textures;
@@ -616,11 +619,7 @@ impl PlanScenario {
         // What each wall looks onto: the kit's faces and where the roofs end in gables, which
         // want a neighbour as tall across the party wall (else the roof hips).
         let edges = facades::edge_kinds(plan, masses);
-        let tall: Vec<Vec<bool>> = facades::neighbour_heights(plan, masses)
-            .iter()
-            .zip(masses)
-            .map(|(h, m)| h.iter().map(|&n| n >= m.height - 0.5).collect())
-            .collect();
+        let tall = roofs::tall(plan, masses);
         let mut near = Vec::new();
         for (i, m) in masses.iter().enumerate() {
             match detail {
@@ -4150,78 +4149,6 @@ fn roof(tiles: &mut Tiles, m: &Mass, edges: &[Option<FaceKind>], tall: &[bool], 
     }
 }
 
-/// The longest wall a gable stands on, metres: about a building's depth. Longer walls slope.
-const GABLE_MAX: f64 = 18.0;
-/// The longest run of a pitched roof from its eaves, metres (a rise of 4.4 m); a roof that
-/// would rise further stops in a terrace.
-const RUN_MAX: f64 = 8.0;
-
-/// Which edges of a footprint slope (1) and which end in a gable (0): a wall onto a neighbour
-/// as `tall` (whose roof hides the gable's wall) or within the building, across the main front
-/// (its longest street wall, else its longest court wall) and at most [`GABLE_MAX`] long,
-/// carries a gable, so the houses of a row share one ridge along the street. The rest slope,
-/// a wall above a lower neighbour too (the owner, 2026-10-15: the gable stood as a wedge over
-/// its roof); with no gable the roof is hipped. `None` with no front.
-fn pitches(fp: &[DVec2], edges: &[Option<FaceKind>], tall: &[bool]) -> Option<Vec<f64>> {
-    let n = fp.len();
-    let edge = |i: usize| fp[(i + 1) % n] - fp[i];
-    let open = |i: usize| matches!(edges[i], Some(FaceKind::Street | FaceKind::Court));
-    let longest = |kind: FaceKind| {
-        (0..n)
-            .filter(|&i| edges[i] == Some(kind))
-            .max_by(|&a, &b| edge(a).length().total_cmp(&edge(b).length()))
-    };
-    let front = longest(FaceKind::Street).or_else(|| longest(FaceKind::Court))?;
-    let along = edge(front).normalize_or_zero();
-    Some(
-        (0..n)
-            .map(|i| {
-                let across = edge(i).normalize_or_zero().dot(along).abs() < 0.5;
-                let length = edge(i).length();
-                if !open(i) && tall[i] && (0.5..=GABLE_MAX).contains(&length) && across {
-                    0.0
-                } else {
-                    1.0
-                }
-            })
-            .collect(),
-    )
-}
-
-/// The outline `fp` with each edge `i` moved in by `w[i] * d`: a pitched roof's top at the run
-/// `d`. `None` once an edge turns over or two cross (past the ridge).
-fn ridge(fp: &[DVec2], w: &[f64], d: f64) -> Option<Vec<DVec2>> {
-    let n = fp.len();
-    let line = |i: usize| {
-        let t = (fp[(i + 1) % n] - fp[i]).normalize_or_zero();
-        (fp[i] + DVec2::new(-t.y, t.x) * (w[i] * d), t)
-    };
-    let mut out = Vec::with_capacity(n);
-    for i in 0..n {
-        let prev = (i + n - 1) % n;
-        let ((p, t), (q, u)) = (line(prev), line(i));
-        let denom = geom::cross(t, u);
-        if denom.abs() < 1e-9 {
-            // Edges in line meet only where they move alike.
-            if w[i] != w[prev] {
-                return None;
-            }
-            out.push(q);
-            continue;
-        }
-        out.push(p + t * (geom::cross(q - p, u) / denom));
-    }
-    let turned = (0..n).any(|i| (out[(i + 1) % n] - out[i]).dot(line(i).1) <= 1e-6);
-    let crossing = (0..n).any(|i| {
-        ((i + 2)..n).any(|j| {
-            (j + 1) % n != i
-                && geom::segment_intersection(out[i], out[(i + 1) % n], out[j], out[(j + 1) % n])
-                    .is_some()
-        })
-    });
-    (!turned && !crossing).then_some(out)
-}
-
 /// A pitched roof over a mass at about 29°: the sloping edges ([`pitches`]) moved in as far as
 /// they go to the ridge (the straight skeleton's roof for a convex footprint, nearly) or
 /// [`RUN_MAX`], the gable ends standing up from their walls in `gable`. False where the
@@ -4235,11 +4162,12 @@ fn pitched(
     size: f64,
     centre: Vec3,
 ) -> bool {
-    let fp = &m.footprint;
-    let n = fp.len();
-    let Some(w) = pitches(fp, edges, tall) else {
+    // The footprint, or one corner less where a short side would turn over (`roofs::fit`).
+    let Some((outline, w)) = roofs::fit(&m.footprint, edges, tall) else {
         return false;
     };
+    let fp = &outline;
+    let n = fp.len();
     let fits = |d: f64| ridge(fp, &w, d);
     if fits(0.5).is_none() {
         return false;

@@ -7,9 +7,11 @@
 
 use glam::DVec2;
 
+use super::facades;
 use super::geom;
 use super::interior::{self, Interior};
-use super::mass::Mass;
+use super::mass::{Mass, Roof};
+use super::roofs;
 use super::rooms::RoomKind;
 use super::structure::{OpeningKind, Structure, WallRole};
 use super::village::Village;
@@ -46,11 +48,14 @@ pub enum Kind {
     /// one height shares one roof (rule 2; the owner, 2026-10-16: "they would probably share their
     /// roof structure in the middle").
     RidgeStep,
+    /// A tiled house whose footprint takes no pitched roof: the kit gives it a flat one, grey
+    /// in a row of tiles, its neighbours' gables bare over it.
+    FlatRoof,
 }
 
 impl Kind {
     /// Every kind, in order.
-    pub const ALL: [Kind; 10] = [
+    pub const ALL: [Kind; 11] = [
         Kind::RoomOutsideWalls,
         Kind::PartitionInOpening,
         Kind::UnlitRoom,
@@ -61,6 +66,7 @@ impl Kind {
         Kind::FreeWallEnd,
         Kind::LonePartyWall,
         Kind::RidgeStep,
+        Kind::FlatRoof,
     ];
 }
 
@@ -97,6 +103,7 @@ pub fn village(v: &Village, structures: &[Structure]) -> Vec<Anomaly> {
     garden_walls(v, &mut out);
     plants(v, &mut out);
     unmatched(v, structures, &mut out);
+    flat_roofs(v, &mut out);
     out
 }
 
@@ -274,6 +281,27 @@ fn unmatched(v: &Village, structures: &[Structure], out: &mut Vec<Anomaly>) {
                     ),
                 });
             }
+        }
+    }
+}
+
+/// The tiled houses whose footprint takes no pitched roof (`roofs::takes_pitched`).
+fn flat_roofs(v: &Village, out: &mut Vec<Anomaly>) {
+    let edges = facades::edge_kinds(&v.plan, &v.masses);
+    let tall = roofs::tall(&v.plan, &v.masses);
+    for (i, m) in v.masses.iter().enumerate() {
+        if m.roof == Roof::Tiled && !roofs::takes_pitched(&m.footprint, &edges[i], &tall[i]) {
+            let c = geom::centroid(&m.footprint);
+            out.push(Anomaly {
+                kind: Kind::FlatRoof,
+                at: c,
+                height: m.height,
+                from: c + DVec2::new(8.0, 8.0),
+                note: format!(
+                    "house {i}: a footprint of {} corners takes no pitched roof",
+                    m.footprint.len()
+                ),
+            });
         }
     }
 }
@@ -507,17 +535,18 @@ mod tests {
         let v = village::village(&site, &village::params(size), 1);
         let structures = structure::structures(&v.plan, &v.masses);
         let all = village(&v, &structures);
-        let bounds: [(Kind, usize); 10] = [
+        let bounds: [(Kind, usize); 11] = [
             (Kind::RoomOutsideWalls, 0),
-            (Kind::PartitionInOpening, 1),
-            (Kind::UnlitRoom, 123),
-            (Kind::Sliver, 11),
+            (Kind::PartitionInOpening, 0),
+            (Kind::UnlitRoom, 33),
+            (Kind::Sliver, 9),
             (Kind::EaveStep, 0),
             (Kind::CrookedWall, 0),
             (Kind::MisplacedPlant, 1),
             (Kind::FreeWallEnd, 11),
-            (Kind::LonePartyWall, 19),
+            (Kind::LonePartyWall, 17),
             (Kind::RidgeStep, 6),
+            (Kind::FlatRoof, 0),
         ];
         let mut over = Vec::new();
         for (kind, bound) in bounds {

@@ -35,6 +35,130 @@ pub fn plan_depth(ty: &ParcelType) -> f64 {
     (ty.depth - ty.setback - ty.yard).clamp(rooms::HALL + 2.6, MAX_DEPTH)
 }
 
+/// The least stretch of a lot's front a room deep that makes a house of its own, metres: the hall
+/// with its stair, one room and a party wall (about 5.6 m); less,
+/// the lot (a corner's wedge, a strip's remainder) joins its neighbour along the street.
+pub const MIN_FRONT: f64 = rooms::HALL + 2.4 + rooms::WALL;
+
+/// `lots` (each its street side first, `keys` the households they were cut for) with each lot
+/// whose front is a room deep along under [`MIN_FRONT`] joined to its neighbour along the same
+/// street, the two sharing a side and their fronts in line: the neighbour's household builds on
+/// both (the owner, 2026-10-16: "house on top right looks too small … I would have make the
+/// house it is stuck to bigger and remove this one"). A small lot with no such neighbour stays.
+pub fn merge_small(
+    lots: &[Vec<DVec2>],
+    keys: &[usize],
+    ty: &ParcelType,
+) -> (Vec<Vec<DVec2>>, Vec<usize>) {
+    let mut lots: Vec<Option<Vec<DVec2>>> = lots.iter().cloned().map(Some).collect();
+    let small = |lot: &[DVec2]| {
+        if lot.len() < 3 {
+            return false;
+        }
+        let (a, b) = (lot[0], lot[1]);
+        let t = (b - a).normalize_or_zero();
+        let inward = DVec2::new(-t.y, t.x);
+        let a = a + inward * ty.setback;
+        front_stretch(lot, a, t, inward, rooms::DEPTH.0)
+            .is_none_or(|(s0, s1)| s1 - s0 - 2.0 * ty.sides < MIN_FRONT)
+    };
+    let front = |lot: &[DVec2]| (lot[1] - lot[0]).normalize_or_zero();
+    for k in 0..lots.len() {
+        let Some(lot) = lots[k].clone().filter(|l| small(l)) else {
+            continue;
+        };
+        // The neighbour beside it on the street: sharing its front's end or start, the two fronts
+        // within 15° (a small lot is mostly a strip's end at a lane's bend, the front bending
+        // there by 6–9°). The merged lot keeps the neighbour's front first, so its house is laid
+        // along it and takes the small lot's ground behind its bent front.
+        let found = (0..lots.len()).find_map(|j| {
+            let other = lots[j].as_ref().filter(|_| j != k)?;
+            if other.len() < 3 || front(other).dot(front(&lot)) < 0.966 {
+                return None;
+            }
+            let merged = if other[1].distance(lot[0]) < 0.01 {
+                merge_adjacent(other, &lot)?
+            } else if other[0].distance(lot[1]) < 0.01 {
+                merge_adjacent(&lot, other)?
+            } else {
+                return None;
+            };
+            let start = merged.iter().position(|p| p.distance(other[0]) < 0.01)?;
+            let mut merged = merged;
+            merged.rotate_left(start);
+            Some((j, merged))
+        });
+        if let Some((j, merged)) = found {
+            lots[j] = Some(merged);
+            lots[k] = None;
+        }
+    }
+    lots.into_iter()
+        .zip(keys.iter().copied())
+        .filter_map(|(lot, key)| lot.map(|l| (l, key)))
+        .unzip()
+}
+
+/// `fp` without its corners that turn by under 3° or close an edge under 15 cm: a footprint cut
+/// from a lot keeps the lot's points along its sides, and a roof whose edges nearly line up, or
+/// one turns over at once, will not pitch (the kit then flattens it, grey in a row of tiles).
+pub fn tidy(fp: &[DVec2]) -> Vec<DVec2> {
+    let mut out = fp.to_vec();
+    let mut changed = true;
+    while changed && out.len() > 3 {
+        changed = false;
+        let n = out.len();
+        for i in 0..n {
+            let (p, c, q) = (out[(i + n - 1) % n], out[i], out[(i + 1) % n]);
+            let (u, v) = (c - p, q - c);
+            let turn = u.normalize_or_zero().perp_dot(v.normalize_or_zero()).abs();
+            if u.length() < 0.15 || turn < 0.052 && u.dot(v) > 0.0 {
+                out.remove(i);
+                changed = true;
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// Two lots side by side along one street, `left`'s front ending where `right`'s starts and the
+/// two sharing that side: one lot, its front from `left`'s start to `right`'s end first. `None`
+/// where they do not share the side.
+fn merge_adjacent(left: &[DVec2], right: &[DVec2]) -> Option<Vec<DVec2>> {
+    let (n, m) = (left.len(), right.len());
+    // `left`'s side from its front's end, `right`'s from its front's start, back along it.
+    let near = |p: DVec2, q: DVec2| p.distance(q) < 0.01;
+    let li = (0..n).find(|&i| near(left[i], right[0]))?;
+    let rj = (0..m).find(|&j| near(right[j], left[(li + 1) % n]))?;
+    // From left's start round to the shared front corner, then right's front and on round to
+    // the shared side's far end, then left's on from there.
+    let mut out: Vec<DVec2> = Vec::new();
+    out.extend((0..=li).map(|i| left[i]));
+    let mut j = 1;
+    while j != rj {
+        out.push(right[j % m]);
+        j = (j + 1) % m;
+    }
+    out.extend(((li + 1)..n).map(|i| left[i]));
+    // The shared corners in line with their neighbours go (the front's join first).
+    let mut i = 0;
+    while i < out.len() && out.len() > 3 {
+        let (p, c, q) = (
+            out[(i + out.len() - 1) % out.len()],
+            out[i],
+            out[(i + 1) % out.len()],
+        );
+        if (c - p).perp_dot(q - c).abs() < 1e-4 * (c - p).length() * (q - c).length() {
+            out.remove(i);
+        } else {
+            i += 1;
+        }
+    }
+    let out = geom::clean(&out, 1e-6);
+    (out.len() >= 3 && geom::signed_area(&out) > 1.0).then_some(out)
+}
+
 /// A house on each of `lots`, the household of lot `k` from `household(k)`. A house of two storeys
 /// or more is made `stair` deep at least where its type allows: its straight flight's depth
 /// (`cores::flight_length` of its ground storey, the core's back wall, the front and back walls).
@@ -65,7 +189,7 @@ pub fn houses(
             let (s0, s1) = front_stretch(lot, a, t, inward, rooms::DEPTH.0)?;
             let (s0, s1) = (s0 + ty.sides, s1 - ty.sides);
             let width = s1 - s0;
-            if width < rooms::HALL + 2.4 + rooms::WALL {
+            if width < MIN_FRONT {
                 return None;
             }
             let mut plan = rooms::plan(&rooms::programme(people, means), width, plan_depth(ty));
@@ -144,67 +268,134 @@ pub fn houses(
             d.plan.deepen(depth);
         }
     }
+    // The backs: a house whose back faces another house under [`BACK_GAP`] away is made
+    // shallower, both when the two backs face each other, until the gap is a light court of that
+    // width (Italy's Civil Code: buildings "united or adjoining", or 3 m apart; the owner,
+    // 2026-10-16: "there are either adjoining properties or there should be a legal distance
+    // between structures"). Its rooms are laid again on the shallower depth; a house that would
+    // then lose its stair's depth or take a fourth storey stays as it was.
+    let mut prints: Vec<Option<Vec<DVec2>>> = lots
+        .iter()
+        .zip(&drafts)
+        .map(|(lot, d)| d.as_ref().and_then(|d| footprint_of(lot, d)))
+        .collect();
+    let mut shrink = vec![0.0f64; lots.len()];
+    for i in 0..lots.len() {
+        let (Some(d), Some(_)) = (&drafts[i], &prints[i]) else {
+            continue;
+        };
+        let back = DVec2::new(-d.t.y, d.t.x);
+        let gap = (0..lots.len())
+            .filter(|&j| j != i)
+            .filter_map(|j| prints[j].as_ref().map(|p| (j, p)))
+            .filter_map(|(j, p)| {
+                let g = (1..8)
+                    .map(|k| {
+                        let s = d.s0 + (d.s1 - d.s0) * f64::from(k) / 8.0;
+                        let from = d.a + d.t * s + back * d.plan.depth;
+                        ray_to(p, from, back, BACK_GAP)
+                    })
+                    .fold(f64::MAX, f64::min);
+                (g > 0.05 && g < BACK_GAP).then_some((j, g))
+            })
+            .min_by(|x, y| x.1.total_cmp(&y.1));
+        if let Some((j, g)) = gap {
+            // Halved when the other's back faces this one's.
+            let facing = drafts[j].as_ref().is_some_and(|o| {
+                let other_back = DVec2::new(-o.t.y, o.t.x);
+                other_back.dot(back) < -0.9
+            });
+            let want = (BACK_GAP - g) * if facing { 0.5 } else { 1.0 };
+            shrink[i] = shrink[i].max(want);
+        }
+    }
+    for (k, (lot, d)) in lots.iter().zip(drafts.iter_mut()).enumerate() {
+        let Some(d) = d.as_mut().filter(|_| shrink[k] > 0.0) else {
+            continue;
+        };
+        let depth = d.plan.depth - shrink[k];
+        let mut plan = rooms::plan(
+            &rooms::programme(d.people, d.means),
+            d.s1 - d.s0,
+            depth.min(plan_depth(ty)),
+        );
+        if plan.storeys.len() > 1 {
+            if depth < stair {
+                continue;
+            }
+            plan.deepen(stair.min(depth));
+        }
+        if plan.storeys.len() > 3 || plan.depth > depth + 1e-6 {
+            continue;
+        }
+        d.plan = plan;
+        prints[k] = footprint_of(lot, d);
+    }
     lots.iter()
         .zip(drafts)
-        .filter_map(|(lot, draft)| {
-            let Draft {
-                a,
-                t,
-                s0,
-                s1,
-                plan,
-                room,
-                people,
-                means,
-            } = draft?;
-            // A house across its lot's whole front keeps to the lot's side lines: its party walls
-            // on them, so the houses of a row share their walls where a lane bends and the lots
-            // fan (square to its front, two houses met at the street and parted behind it, a
-            // sliver with a garden wall in it; the owner, 2026-10-16: "there are either adjoining
-            // properties or there should be a legal distance between structures"). Its rooms stay
-            // the plan's rectangle within it.
-            let unit_in = DVec2::new(-t.y, t.x);
-            let width = parcels::frontage(lot);
-            if s0 < 0.05 && s1 > width - 0.05 && plan.depth <= room + 0.05 {
-                let band = geom::clip_half_plane(lot, a + unit_in * plan.depth, -t);
-                let band = geom::clip_half_plane(&band, a, t);
-                let footprint = geom::clean(&band, 1e-6);
-                if footprint.len() >= 3 && geom::signed_area(&footprint).abs() >= 4.0 {
-                    return Some(House {
-                        lot: lot.clone(),
-                        plan,
-                        footprint,
-                        household: (people, means),
-                    });
-                }
-            }
-            let (a, b) = (a + t * s0, a + t * s1);
-            let inward = unit_in * plan.depth;
-            let mut footprint = vec![a, b, b + inward, a + inward];
-            // Within the lot: a corner lot narrows towards the back.
-            let n = lot.len();
-            for i in 0..n {
-                footprint = geom::clip_half_plane(&footprint, lot[i], lot[(i + 1) % n] - lot[i]);
-                if footprint.len() < 3 {
-                    break;
-                }
-            }
-            // A corner wedge too narrow for a house (its footprint cut to nothing) stays a
-            // garden.
-            // The clips repeat a corner they pass through: a repeated corner made a wall of no
-            // length, an inner one, and the house got no stair.
-            let footprint = geom::clean(&footprint, 1e-6);
-            if footprint.len() < 3 || geom::signed_area(&footprint).abs() < 4.0 {
-                return None;
-            }
+        .zip(prints)
+        .filter_map(|((lot, draft), footprint)| {
+            let d = draft?;
             Some(House {
                 lot: lot.clone(),
-                plan,
-                footprint,
-                household: (people, means),
+                plan: d.plan,
+                footprint: footprint?,
+                household: (d.people, d.means),
             })
         })
         .collect()
+}
+
+/// The gap a house's back keeps from the next house straight behind it, metres: a light court
+/// under which two houses must touch instead (`research/house-layouts.md` rule 1).
+pub const BACK_GAP: f64 = 3.0;
+
+/// How far from `from` along `dir` the ray first meets `polygon`'s outline, up to `reach`;
+/// `f64::MAX` past it.
+fn ray_to(polygon: &[DVec2], from: DVec2, dir: DVec2, reach: f64) -> f64 {
+    let n = polygon.len();
+    let far = from + dir * reach;
+    (0..n)
+        .filter_map(|i| geom::segment_intersection(from, far, polygon[i], polygon[(i + 1) % n]))
+        .map(|(u, _)| u * reach)
+        .fold(f64::MAX, f64::min)
+}
+
+/// House `d`'s footprint on `lot`. A house across its lot's whole front keeps to the lot's side
+/// lines: its party walls on them, so the houses of a row share their walls where a lane bends and
+/// the lots fan (square to its front, two houses met at the street and parted behind it, a sliver
+/// with a garden wall in it; the owner, 2026-10-16: "there are either adjoining properties or
+/// there should be a legal distance between structures"). Its rooms stay the plan's rectangle
+/// within it. Otherwise the plan's rectangle, cut where a corner lot narrows; `None` where nothing
+/// is left of it.
+fn footprint_of(lot: &[DVec2], d: &Draft) -> Option<Vec<DVec2>> {
+    let (a, t, s0, s1) = (d.a, d.t, d.s0, d.s1);
+    let unit_in = DVec2::new(-t.y, t.x);
+    let width = parcels::frontage(lot);
+    if s0 < 0.05 && s1 > width - 0.05 && d.plan.depth <= d.room + 0.05 {
+        let band = geom::clip_half_plane(lot, a + unit_in * d.plan.depth, -t);
+        let band = geom::clip_half_plane(&band, a, t);
+        let footprint = tidy(&geom::clean(&band, 1e-6));
+        if footprint.len() >= 3 && geom::signed_area(&footprint).abs() >= 4.0 {
+            return Some(footprint);
+        }
+    }
+    let (a, b) = (a + t * s0, a + t * s1);
+    let inward = unit_in * d.plan.depth;
+    let mut footprint = vec![a, b, b + inward, a + inward];
+    // Within the lot: a corner lot narrows towards the back.
+    let n = lot.len();
+    for i in 0..n {
+        footprint = geom::clip_half_plane(&footprint, lot[i], lot[(i + 1) % n] - lot[i]);
+        if footprint.len() < 3 {
+            break;
+        }
+    }
+    // A corner wedge too narrow for a house (its footprint cut to nothing) stays a garden. The
+    // clips repeat a corner they pass through: a repeated corner made a wall of no length, an
+    // inner one, and the house got no stair.
+    let footprint = tidy(&geom::clean(&footprint, 1e-6));
+    (footprint.len() >= 3 && geom::signed_area(&footprint).abs() >= 4.0).then_some(footprint)
 }
 
 /// A lot's house before its row is known: its front line from `a` along `t`, the stretch

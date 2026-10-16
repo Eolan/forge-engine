@@ -648,7 +648,46 @@ the owner: "make the camera slower for when I want to test without walking").
 | a party wall with no neighbour against it | — | 19 |
 | one eave height, two ridges | — | 6 |
 
-The village has 77 houses (82 before the depth cap: wider lots), 241 people. **Its insides** (`city::interior`, the same day; the owner: "a house or structure
+The village has 77 houses (82 before the depth cap: wider lots), 241 people.
+
+**The night's next steps** (the owner's sightings and asks of the same night):
+- **Small lots join their neighbours** (`houses::merge_small`): a lot whose front is a room deep
+  along less than a house needs (the hall with its stair, one room and a party wall, about 5.6 m:
+  a strip's end at a lane's bend, a corner's wedge) joins its neighbour along the street, fronts
+  within 15°, and the neighbour's household builds on both ("house on top right looks too small
+  … I would have make the house it is stuck to bigger and remove this one").
+- **Backs 3 m apart or none** (`houses::BACK_GAP`): a house whose back faces another house under
+  3 m away is made shallower, both when the backs face each other, its rooms laid again, so the
+  core's back-to-back rows keep a light court of 3 m (the rule's other way, touching, would close
+  their back rooms' windows).
+- **Every tiled house pitched** (`city::roofs`, the kit's roof geometry moved into the engine so
+  the check can count it): a footprint whose short side turned over at once took a flat roof,
+  grey in a row of tiles with its neighbours' gables bare over it; its roof now leaves out the one
+  corner whose loss changes its area least (`roofs::fit`), and the footprints lose their corners
+  that turn under 3° or close an edge under 15 cm (`houses::tidy`). A new kind counts flat roofs:
+  3, then 0.
+- **Windows by room** (`city::windows`; the owner: "the living spaces like the bedrooms very likely
+  have at least a window …", "windows should match a corridor, a room, but not have a wall right
+  of their edge"): a house with its rooms' plan takes its windows from its rooms, not from the
+  facade's bays. Its rooms are laid without windows first; then each living room, salon, dining
+  room, kitchen, bedroom and study gets a window on each stretch of outside wall it stands
+  against (one for a bedroom, kitchen or study: its longest; two on a living room's stretch of
+  3.6 m or more), a pier inside the stretch; a bathroom a small high window (0.6 by 0.7 m, its
+  sill at 1.4 m or more) in 6 houses in 10, a service room in 4; a store none; the hall none (the
+  stair rises there). Each stands on the facade's old bay axis nearest where it would centre when
+  that axis falls in the room, so windows stand over each other storey to storey where the rooms
+  allow (rule 6). Obscured glass for the bathrooms is still to come.
+
+| Anomaly | When the check came in | After the sockets | Now |
+|---|---|---|---|
+| a room past its walls | 66 | 0 | 0 |
+| a partition in an opening | 4 | 1 | 0 |
+| a habitable room without a window | 189 | 123 | 33 (rooms with no outside wall: a deep plan's middle band) |
+| a sliver | 64 | 11 | 9 |
+| a lone party wall | — | 19 | 17 |
+| a flat roof on a tiled house | — | — | 0 |
+
+**Its insides** (`city::interior`, the same day; the owner: "a house or structure
 should be thought by thinking about the rooms"): a house's structure now follows its rooms'
 plan. Its core (`cores`, the straight flight of 1.1 m with handrails beside a corridor of
 1.2 m a wheelchair passes, walls of 0.2 m) stands at the start of its front where the plan
