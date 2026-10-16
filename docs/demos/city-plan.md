@@ -464,6 +464,15 @@ flags every edge, and the paving and the grass make most of it in both builds. C
 `reports/2026-10-16/village-leaf-cards.png` (the plane over the junction) and
 `village-leaf-cards-road.png`.
 
+**The stairs' shimmer** (the owner, the same evening). In a hall lit only through its door, the
+light on the flight rose and fell: a still camera's frames 10 apart differed on 3–7 % of their
+pixels, all of it gone without the GI probes. Over 1 000 frames the light built up for about 200
+frames and dropped back, again and again: the probes' 128 rays found the opening by turns. With
+256 rays a probe, as the models lab's rooms took for the same reason (#171), the hall settles to
+0.004–0.015 %. The village's maps (a plan with a forest) now take 256 rays (`Look::probes`), the
+city 128: along the road 3.73 → 4.51 ms (`gi/probe rays` 1.43 → 2.07 ms), the map check's views
+3.0–4.5 ms. Why 128 rays pulse rather than merely jitter is #272.
+
 A village's whole network is under the 3 km a cut-off
 network had to reach to be kept (`graph::MIN_NETWORK`), so the plan came out empty under
 twice the radius: a network is now kept over 3 km or over half of all the streets. The example

@@ -1392,6 +1392,10 @@ something stands out). Two things to watch:
     The village's leaf cards (#266) gained most: `meshlet pass 1` 1.80 → 1.19 ms from the air
     and 1.11 → 0.53 ms along the road, the images unchanged to the pixel. The batch is
     unchanged too (240 captures, both paths), and its timings move by under 0.04 ms.
+  - *2026-10-16, the village's probes:* 256 rays a probe on the village's maps, where the
+    houses are walked into: with 128, a hall lit through its door pulsed (#272). Along the road
+    3.73 → 4.51 ms, `gi/probe rays` 1.43 → 2.07 ms (best of three); the map check's views
+    3.0–4.5 ms. The city keeps 128.
   - *2026-10-15, end of day* (the sandbox at 15:00, TAA, 600 frames, best of three):
     - the street start, 2.21 ms; the default overview, 4.76 ms;
     - the morning's figures, with the rooms behind the windows already in, were 2.19 and
