@@ -420,9 +420,10 @@ it. The one model is left only to the planters' shrubs; the map check's views ta
 (`reports/2026-10-16/village-street-trees.png`, the walk under a plane's crown).
 
 **Leaf cards** (D-013, the same afternoon). Each lump is now a core and the cards round it.
-- **The core:** 20 triangles at half the lump's radius, in half the leaves' colour, the shade
-  inside a crown. At 0.6 of the radius in the leaves' own colour its smooth faces showed.
-- **The cards:** 6 to 12 squares round each lump (a shrub's 4), cut from a leaf atlas drawn at
+- **The core:** 20 triangles at two fifths of the lump's radius, in half the leaves' colour, the
+  shade inside a crown. At 0.6 of the radius in the leaves' own colour its smooth faces showed,
+  and at half with 12 cards at most a lump the near holm oaks still showed it as dark balls.
+- **The cards:** 6 to 16 squares round each lump (a shrub's 4), cut from a leaf atlas drawn at
   start-up (`forge_render::textures::leaves`, 1024 × 1024). Its four sprays are small oval
   leaves for the oaks, broad ones for planes and limes, needle tufts for the pines, the cypress
   and rosemary, and narrow ones for olives and cistus. A card's side is 1.5 lump radii, at most
@@ -433,14 +434,14 @@ it. The one model is left only to the planters' shrubs; the map check's views ta
 - **Their mips** keep the share of texels the alpha test keeps (Castaño 2010). A dither of the
   mips' alpha against the frame's noise, tried first, flickered on 0.5 % of a still view's
   pixels under DLAA.
-- **Size:** a tree takes 900 to 21 000 triangles, a shrub 200 to 1 000 (the test's budget for a
+- **Size:** a tree takes 900 to 23 000 triangles, a shrub 200 to 1 000 (the test's budget for a
   shrub is now 1 500).
 
 | at 600 m | lumps | leaf cards |
 |---|---|---|
-| GPU, outdoor views | 1.9–2.8 ms | 2.2–4.3 ms, 2.2–3.4 ms since the cut-outs' own list (#265) |
+| GPU, outdoor views | 1.9–2.8 ms | 2.2–4.3 ms; 2.2–3.4 ms since the cut-outs' own list (#265); 2.4–3.7 ms with the smaller cores and up to 16 cards |
 | GPU, inside a house | 2.2–2.3 ms | 2.4–2.5 ms |
-| still camera under DLAA, pixels changing frame to frame (main view, junction) | 0.03–0.05 %, 0.04–0.05 % | 0.13–0.15 %, 0.04–0.07 % |
+| still camera under DLAA, pixels changing frame to frame (main view, junction) | 0.03–0.05 %, 0.04–0.05 % | 0.13–0.15 %, 0.04–0.07 %; the main view 0.17–0.20 % with up to 16 cards |
 | the main view without the sun's shadows | 0.01–0.02 % | 0.04 % |
 | 1.4 m/s dolly, pixels changing unlike the 2 × 2 supersampled run | 17.1–17.8 % | 20.5–20.8 % |
 

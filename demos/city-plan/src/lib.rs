@@ -5659,7 +5659,7 @@ fn grown_mesh(
     // The crown's middle, which the cards' normals bend away from with their lump's.
     let middle = lumps.iter().fold(Vec3::ZERO, |s, l| s + l.0) / lumps.len().max(1) as f32;
     for (i, &(centre, radius)) in lumps.iter().enumerate() {
-        // A core of half the lump, the shade the cards hide and the far crown keeps
+        // A core of two fifths of the lump, the shade the cards hide and the far crown keeps
         // (it simplifies as a closed mesh; the cards cannot), then the cards round it.
         lump_of(&mut mesh, centre, radius * CROWN_CORE, i as u32 % 8, &faces);
         leaf_cards(&mut mesh, centre, radius, middle, spray, shrub, i as u32);
@@ -5669,12 +5669,13 @@ fn grown_mesh(
     mesh
 }
 
-/// A crown lump's core, as a share of the lump's radius ([`grown_mesh`]): half, drawn darker,
-/// the shade between the cards (at 0.6 in the leaves' colour its smooth faces showed through).
-const CROWN_CORE: f32 = 0.5;
+/// A crown lump's core, as a share of the lump's radius ([`grown_mesh`]): two fifths, drawn
+/// darker, the shade between the cards (at 0.6 in the leaves' colour, then at half with 12 cards
+/// at most a lump, the near holm oaks showed it as balls).
+const CROWN_CORE: f32 = 0.4;
 
 /// Leaf cards round a crown's lump at `centre`, `radius` across (D-013), section 2, cut from
-/// `spray`'s quarter of the leaf atlas (`textures::leaves`): 6 to 12 squares (a shrub's 4),
+/// `spray`'s quarter of the leaf atlas (`textures::leaves`): 6 to 16 squares (a shrub's 4),
 /// their middles 0.4 to 0.7 radii out along directions spread over the sphere and turned by
 /// `seed`, facing out with a tilt, their sprays growing upwards. Their normals bend out from the
 /// crown's `middle` and the lump's, so the crown is lit as a rounded mass of leaves.
@@ -5703,7 +5704,7 @@ fn leaf_cards(
     } else {
         (6.0 * (radius * 0.75 / half).powi(2))
             .round()
-            .clamp(6.0, 12.0) as u32
+            .clamp(6.0, 16.0) as u32
     };
     let random = |k: u32, salt: u32| {
         let h = (seed.wrapping_mul(0x9E37_79B9) ^ k.wrapping_mul(0x85EB_CA6B) ^ salt)
