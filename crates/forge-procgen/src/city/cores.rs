@@ -500,15 +500,20 @@ fn party_end(walls: &[Wall], role: WallRole) -> Option<DVec2> {
             .find(|w| end(w).distance(p) < 0.01)
             .map(|w| w.role)
     };
-    let before = at(front.a, |w| w.b);
-    let after = at(front.b, |w| w.a);
-    Some(
-        if before != Some(WallRole::Party) && after == Some(WallRole::Party) {
-            front.b
-        } else {
-            front.a
-        },
-    )
+    // A party wall first, a garden's next, a street's last: on a street the hall's side is blank
+    // the whole depth (a corner house's on the square, 12 m on three storeys).
+    let rank = |role: Option<WallRole>| match role {
+        Some(WallRole::Party) => 3,
+        Some(WallRole::Inner) => 2,
+        Some(WallRole::Court) => 1,
+        _ => 0,
+    };
+    let (before, after) = (at(front.a, |w| w.b), at(front.b, |w| w.a));
+    Some(if rank(after) > rank(before) {
+        front.b
+    } else {
+        front.a
+    })
 }
 
 /// Whether a door at `along` on `wall` keeps [`MARGIN`] inside one of its open ground stretches.

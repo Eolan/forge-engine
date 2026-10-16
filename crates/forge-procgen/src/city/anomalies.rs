@@ -709,7 +709,7 @@ mod tests {
             (Kind::RidgeStep, 2),
             (Kind::FlatRoof, 0),
             (Kind::StairOffWall, 8),
-            (Kind::BlankStreetWall, 14),
+            (Kind::BlankStreetWall, 12),
             (Kind::UnreachedRoom, 0),
             (Kind::UnreachedStair, 0),
             (Kind::UnreachedDoor, 0),
