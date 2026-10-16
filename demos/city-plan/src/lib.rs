@@ -17,7 +17,7 @@ use anyhow::Result;
 use city_blocks::scenario::{Look, Running, Scenario};
 use city_blocks::{Args, CityMaterials, Cooked, scene_origin};
 use forge_app::{FlyCamera, Input, Setup};
-use forge_core::material::{RenderLayer, TextureId, UvMapping};
+use forge_core::material::{MaterialId, RenderLayer, TextureId, UvMapping};
 use forge_geom::MeshletMesh;
 use forge_geom::city::PropSpec;
 use forge_geom::procedural::TriMesh;
@@ -171,16 +171,35 @@ impl Tiles {
         if polygon.len() < 3 {
             return;
         }
+        // Whole: ear clipping alone gave up on some of the booleans' outlines, gaps in the ground.
+        self.flat_triangles(
+            polygon[0],
+            &ground::triangles(polygon),
+            height,
+            section,
+            mass,
+        );
+    }
+
+    /// A flat polygon's `triangles` ([`ground::triangles`]) at `height`, facing up, in the tile
+    /// of its point `first`.
+    fn flat_triangles(
+        &mut self,
+        first: DVec2,
+        triangles: &[[DVec2; 3]],
+        height: f64,
+        section: u8,
+        mass: bool,
+    ) {
         let size = self.size;
-        let tile = self.at(polygon[0]);
+        let tile = self.at(first);
         let mesh = if mass {
             &mut tile.masses
         } else {
             &mut tile.ground
         };
         let centre = tile.centre;
-        // Whole: ear clipping alone gave up on some of the booleans' outlines, gaps in the ground.
-        for t in ground::triangles(polygon) {
+        for t in triangles {
             let p = t.map(|q| world(size, q, height) - centre);
             triangle(mesh, p, Vec3::Y, section);
         }
@@ -429,17 +448,20 @@ impl PlanScenario {
         title: &str,
         detail: Option<&Detail>,
     ) -> Self {
+        let mut laps = Laps::new();
         let size = plan.size;
         let mut tiles = Tiles::new(size);
         let shore = ground_shore(site);
         // The reserves' land as scrub and grass, the rest as the open ground's gravel.
         ground_and_water(&mut tiles, &shore);
+        laps.mark("ground and water");
         // The buildings' structure (D-060): the kit dresses it, the walker walks against it, the
         // gardens and the paths round the courts start from its doors.
         let structures = structure::structures(plan, masses);
         // Who each building holds, counted by home and workplace (D-060 step 3).
         let holds: Vec<Occupancy> = structures.iter().map(units::occupancy).collect();
         let gardens = gardens::gardens(plan, masses, &structures);
+        laps.mark("structures and gardens");
         // Each block's paved ground off its forecourt: the paths across its court, the flats'
         // terraces, its kitchen garden's. Paved with the forecourt, one surface: drawn over the
         // paving, a path began down the street's middle, lay across the carriageway, and showed
@@ -451,14 +473,25 @@ impl PlanScenario {
         // The large squares' middles: lawns and water mirrors.
         let middles = square_middles(plan);
         // The blocks off the streets, at the walking level as the pavements round them (D-061):
-        // one level wherever people walk, no step at a gap between the buildings.
-        for (b, block) in plan.blocks.iter().enumerate() {
+        // one level wherever people walk, no step at a gap between the buildings. Each block's
+        // pieces cut and triangulated on the machine's threads, then laid in the tiles in the
+        // blocks' order: one thread took 13 s over the city's.
+        let pieces = par_map(plan.blocks.len(), cores(), None, |b| {
+            let block = &plan.blocks[b];
+            let mut pieces: Vec<(DVec2, Vec<[DVec2; 3]>, f64, u8)> = Vec::new();
+            let mut lay = |shapes: &ground::Shapes, level: f64, section: u8| {
+                for polygon in ground::simple_polygons(shapes) {
+                    if polygon.len() >= 3 {
+                        pieces.push((polygon[0], ground::triangles(&polygon), level, section));
+                    }
+                }
+            };
             let section = match block.use_ {
                 BlockUse::Built => GARDEN,
                 BlockUse::Park => PARK,
                 BlockUse::Square => PAVING,
                 // A quay's face holds its river: the land under it is the ground's paving.
-                BlockUse::Quay => continue,
+                BlockUse::Quay => return pieces,
             };
             if block.use_ == BlockUse::Built {
                 // A paved forecourt along its streets, as the pavement it meets, its gardens
@@ -476,40 +509,38 @@ impl PlanScenario {
                 let front = match &yard {
                     Some(yard) => {
                         let (inside, outside) = ground::split(&front, yard);
-                        for polygon in ground::simple_polygons(&inside) {
-                            tiles.flat(&polygon, WALK_LEVEL, STREET, false);
-                        }
+                        lay(&inside, WALK_LEVEL, STREET);
                         outside
                     }
                     None => front,
                 };
-                for polygon in ground::simple_polygons(&front) {
-                    tiles.flat(&polygon, WALK_LEVEL, PAVING, false);
-                }
-                for polygon in ground::simple_polygons(&rest) {
-                    tiles.flat(&polygon, WALK_LEVEL, section, false);
-                }
+                lay(&front, WALK_LEVEL, PAVING);
+                lay(&rest, WALK_LEVEL, section);
             } else if let Some((middle, mirror)) = &middles[b] {
                 // A large square's lawn or water mirror, cut out of its paving at its level: one
                 // laid over the other would fight it, and the water is level with the stone.
                 let (inside, outside) = plan.ground.off_streets_split(&block.polygon, middle);
                 let within = if *mirror { MIRROR } else { PARK };
-                for polygon in ground::simple_polygons(&inside) {
-                    tiles.flat(&polygon, SQUARE_LEVEL, within, false);
-                }
-                for polygon in ground::simple_polygons(&outside) {
-                    tiles.flat(&polygon, SQUARE_LEVEL, section, false);
-                }
+                lay(&inside, SQUARE_LEVEL, within);
+                lay(&outside, SQUARE_LEVEL, section);
             } else {
-                for polygon in ground::simple_polygons(&plan.ground.off_streets(&block.polygon)) {
-                    tiles.flat(&polygon, WALK_LEVEL, section, false);
-                }
+                lay(
+                    &plan.ground.off_streets(&block.polygon),
+                    WALK_LEVEL,
+                    section,
+                );
             }
+            pieces
+        });
+        for (first, triangles, level, section) in pieces.iter().flatten() {
+            tiles.flat_triangles(*first, triangles, *level, *section, false);
         }
+        laps.mark("blocks");
         // The quays' land as lawns, cell by cell (their faces hold water), under the trees.
         for block in plan.blocks.iter().filter(|b| b.use_ == BlockUse::Quay) {
             lawn(&mut tiles, &shore, &plan.ground, &block.polygon);
         }
+        laps.mark("quays");
         // The rivers as smooth strips at the water's level, the sea's: the cells' staircase
         // would show along the quays. Their promenades are walking ground in the street map
         // (D-061), the banks' walls and balustrades along its edge over the water ([`bridges`]).
@@ -518,8 +549,11 @@ impl PlanScenario {
                 tiles.flat(&polygon, WATER_LEVEL, WATER, false);
             }
         }
+        laps.mark("rivers");
         street_ground(&mut tiles, &plan.ground, site);
+        laps.mark("street ground");
         bridges(&mut tiles, plan, site, &shore);
+        laps.mark("bridges");
         // Two tracks a line, one each way, on the right of the way they run; where lines share a
         // track (`transit::share_tracks`) only the first draws it: two lines' rails one over the
         // other would fight.
@@ -553,8 +587,10 @@ impl PlanScenario {
                 }
             }
         }
+        laps.mark("tracks");
         let depot_walls = tram_depots(&mut tiles, plan);
         let garden_walls = garden_walls(&mut tiles, plan);
+        laps.mark("depots and walls");
         // Line by line, each taking the stops the lines before it placed on its track.
         let mut trams: Vec<TramRun> = Vec::new();
         let mut taken: Vec<DVec2> = Vec::new();
@@ -616,10 +652,12 @@ impl PlanScenario {
                 }
             }
         }
+        laps.mark("trams");
         // What each wall looks onto: the kit's faces and where the roofs end in gables, which
         // want a neighbour as tall across the party wall (else the roof hips).
         let edges = facades::edge_kinds(plan, masses);
         let tall = roofs::tall(plan, masses);
+        laps.mark("faces");
         let mut near = Vec::new();
         for (i, m) in masses.iter().enumerate() {
             match detail {
@@ -647,6 +685,7 @@ impl PlanScenario {
                 ROOF_GREEN,
             );
         }
+        laps.mark("masses");
         let kit = detail.map(|d| {
             // The residents at home and awake at the hour light their own windows.
             let residents = d.lit_hour.map(|h| {
@@ -664,12 +703,14 @@ impl PlanScenario {
                 &plan.ground.bollards,
             )
         });
+        laps.mark("kit");
         // Their insides, for a camera that goes through a wall.
         let inside_triangles = if detail.is_some() {
             insides(&mut tiles, masses, &structures, &near)
         } else {
             0
         };
+        laps.mark("insides");
         // The passages into the courts (D-060), and where to look into one: 10 m out on the
         // street before the kit's first, for the log once the app logs.
         let passages_in = |list: &mut dyn Iterator<Item = usize>| {
@@ -1071,6 +1112,7 @@ impl PlanScenario {
         for (_, t) in &trees {
             trunks.insert(t.pos, 0);
         }
+        laps.mark("views, trams and trees");
         // The forest's plants by species, each one of its species' grown individuals: its hash
         // picks which of those at its height's age.
         let mut flora: Vec<(Vec3, f32, f32, f32, u16, u8)> = trees
@@ -1730,6 +1772,11 @@ impl PlanScenario {
                 }
             }
         }
+        laps.mark("the rest");
+        eprintln!(
+            "the plan's scene, its steps before the window (ms): {}",
+            laps.report()
+        );
         Self {
             tiles: tiles.tiles,
             trees,
@@ -4235,6 +4282,94 @@ fn pitched(
     true
 }
 
+/// Where a load's time goes, step by step: the milliseconds since the last mark, logged once.
+struct Laps {
+    last: std::time::Instant,
+    steps: Vec<(&'static str, u128)>,
+}
+
+impl Laps {
+    fn new() -> Self {
+        Self {
+            last: std::time::Instant::now(),
+            steps: Vec::new(),
+        }
+    }
+
+    /// Ends the step `name`.
+    fn mark(&mut self, name: &'static str) {
+        let now = std::time::Instant::now();
+        self.steps.push((name, (now - self.last).as_millis()));
+        self.last = now;
+    }
+
+    /// The steps, `name ms` each.
+    fn report(&self) -> String {
+        self.steps
+            .iter()
+            .map(|(name, ms)| format!("{name} {ms}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+/// The machine's threads.
+fn cores() -> usize {
+    std::thread::available_parallelism().map_or(1, std::num::NonZero::get)
+}
+
+/// `f(i)` for every `i` below `n`, on `threads` threads, the results in order: each depends on
+/// its `i` alone, never on the threads. The items are taken in `order` (a permutation of `0..n`,
+/// the longest first so no thread is left with a long one at the end), or `0..n`.
+fn par_map<T: Send>(
+    n: usize,
+    threads: usize,
+    order: Option<&[usize]>,
+    f: impl Fn(usize) -> T + Sync,
+) -> Vec<T> {
+    let threads = threads.min(n);
+    if threads <= 1 {
+        return (0..n).map(f).collect();
+    }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let done: Vec<Vec<(usize, T)>> = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..threads)
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut made = Vec::new();
+                    loop {
+                        let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if k >= n {
+                            return made;
+                        }
+                        let i = order.map_or(k, |o| o[k]);
+                        made.push((i, f(i)));
+                    }
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .map(|w| w.join().unwrap_or_else(|p| std::panic::resume_unwind(p)))
+            .collect()
+    });
+    let mut out: Vec<Option<T>> = (0..n).map(|_| None).collect();
+    for (i, t) in done.into_iter().flatten() {
+        out[i] = Some(t);
+    }
+    out.into_iter()
+        .map(|t| t.expect("every item made"))
+        .collect()
+}
+
+/// The order of `sizes`' indices, the largest first.
+fn largest_first(sizes: impl IntoIterator<Item = usize>) -> Vec<usize> {
+    let sizes: Vec<usize> = sizes.into_iter().collect();
+    let mut order: Vec<usize> = (0..sizes.len()).collect();
+    order.sort_by_key(|&i| std::cmp::Reverse(sizes[i]));
+    order
+}
+
 impl Scenario for PlanScenario {
     fn props(&self) -> Vec<PropSpec> {
         Vec::new()
@@ -4277,7 +4412,9 @@ impl Scenario for PlanScenario {
         _cooked: Cooked,
     ) -> Result<(MeshletScene, Box<dyn Running>)> {
         let start = std::time::Instant::now();
+        let mut laps = Laps::new();
         let mut materials = CityMaterials::new(&ctx.device)?;
+        laps.mark("materials");
         // The ground's textures, projected from above, their repeats dividing a tile's 250 m so
         // the tiles meet without a seam: pale gravel on the quays, grass, limestone paving,
         // asphalt.
@@ -4290,6 +4427,7 @@ impl Scenario for PlanScenario {
         let grass = ground(textures::grass(32, 512))?;
         let paving = ground(textures::paving(33, 1024))?;
         let asphalt = ground(textures::asphalt(34, 1024))?;
+        laps.mark("ground textures");
         let textured = |layer: RenderLayer,
                         (albedo, normal): (TextureId, TextureId),
                         scale: f32,
@@ -4360,6 +4498,7 @@ impl Scenario for PlanScenario {
             textures::facade(21, 1024, far_share as f32);
         let [shop_albedo, shop_normal] = textures::shopfront(22, 512);
         let shop_lights = textures::shopfront_lights(512);
+        laps.mark("facade textures");
         let facade = (
             materials.textures.add(&facade_albedo)?,
             materials.textures.add(&facade_normal)?,
@@ -4420,6 +4559,7 @@ impl Scenario for PlanScenario {
         };
         // Terracotta tiles: the brick courses, tinted, read as rows of tiles from the street.
         let [tile_albedo, tile_normal] = textures::brick(35, 512);
+        laps.mark("grain and tiles");
         // Read by the roofs' texture coordinates, which run along the eaves.
         let tiles_row = RenderLayer {
             albedo_texture: Some(materials.textures.add(&tile_albedo)?),
@@ -4872,72 +5012,144 @@ impl Scenario for PlanScenario {
         let ground_row = materials.of("plan-ground");
         let mass_row = materials.of("plan-mass");
         let grille_row = materials.of("plan-grille");
+        laps.mark("rows and leaves");
         let mut builder = MeshletSceneBuilder::new();
         materials.apply(&mut builder, &[], &[]);
+        laps.mark("materials applied");
         builder.set_ray_traced(!args.no_shadows);
         builder.set_origin(scene_origin(args));
+        // The tiles' ground, masses and railings, cooked with the normals weighed in the LOD: a
+        // pavement's kerb and back faces folded into its top at the coarser levels, long tilted
+        // triangles where the paving streaked (the owner saw two patterns blend on the
+        // pavements). The far facades' texture coordinates too: across their jumps the windows
+        // smeared into streaks.
+        fn tile_meshes(
+            tile: &Tile,
+            [ground, masses, railings]: [MaterialId; 3],
+        ) -> impl Iterator<Item = (&TriMesh, MaterialId, f32)> {
+            [
+                (&tile.ground, ground, 0.0),
+                (&tile.masses, masses, FACADE_UV_WEIGHT),
+                (&tile.railings, railings, 0.0),
+            ]
+            .into_iter()
+            .filter(|(mesh, _, _)| !mesh.indices.is_empty())
+        }
+        let rows = [ground_row, mass_row, grille_row];
+        // The forest's species in the order their first plants come (D-063): each grows
+        // `FLORA_INDIVIDUALS` individuals, at a quarter, half and all of its maturity, three of
+        // each.
+        let mut planted: Vec<u16> = Vec::new();
+        for &(.., sp, _) in &self.flora {
+            if species.get(usize::from(sp)).is_some() && !planted.contains(&sp) {
+                planted.push(sp);
+            }
+        }
+        // Every mesh's cluster DAG cooked at once on the machine's threads, then added in the
+        // order it always was, so every id stays the same: one thread took 9–10 s over the
+        // city's tiles and 2 s over the village's plants.
+        enum Cook<'a> {
+            Mesh(&'a TriMesh, forge_geom::meshlet::CookOptions),
+            Plant(u16, u8),
+        }
+        let by_default = forge_geom::meshlet::CookOptions::default;
+        let jobs: Vec<Cook> = self
+            .tiles
+            .iter()
+            .flat_map(|tile| {
+                tile_meshes(tile, rows).map(|(mesh, _, uv_weight)| {
+                    let options = forge_geom::meshlet::CookOptions {
+                        normal_weight: 2.0,
+                        uv_weight,
+                    };
+                    Cook::Mesh(mesh, options)
+                })
+            })
+            .chain(
+                planted
+                    .iter()
+                    .flat_map(|&sp| (0..FLORA_INDIVIDUALS).map(move |k| Cook::Plant(sp, k))),
+            )
+            .chain(self.kit_meshes.iter().map(|m| Cook::Mesh(m, by_default())))
+            .chain(
+                self.tiles
+                    .iter()
+                    .filter(|tile| !tile.insides.indices.is_empty())
+                    .map(|tile| Cook::Mesh(&tile.insides, by_default())),
+            )
+            .collect();
+        // A plant's mesh weighed as a tile of about that many indices, for the order.
+        let order = largest_first(jobs.iter().map(|job| match job {
+            Cook::Mesh(mesh, _) => mesh.indices.len(),
+            Cook::Plant(..) => 150_000,
+        }));
+        // A third of the threads: a large mesh's DAG spreads its groups over threads of its own,
+        // and the city's 783 meshes cooked fastest 4–6 at a time (2.8–3.2 s; 9.9 s one by one,
+        // 7.6 s sixteen at a time).
+        let cooked = par_map(
+            jobs.len(),
+            (cores() / 3).max(2),
+            Some(&order),
+            |i| match jobs[i] {
+                Cook::Mesh(mesh, options) => (MeshletMesh::build_with(mesh, options), 0.0, 0.0),
+                Cook::Plant(sp, k) => {
+                    let s = &species[usize::from(sp)];
+                    let shrub = s.habit == forge_flora::species::Habit::Shrub;
+                    let broad = s.foliage == forge_flora::species::Foliage::Broad;
+                    let conditions = flora_conditions(s, sp, k);
+                    let graph = forge_flora::grow::grow(s, &conditions);
+                    let mesh = grown_mesh(
+                        &graph,
+                        shrub,
+                        broad,
+                        conditions.pruning.lift as f32,
+                        leaf_spray(&s.id),
+                    );
+                    (
+                        MeshletMesh::build(&mesh),
+                        graph.height().max(0.1),
+                        graph.crown_width().max(0.1),
+                    )
+                }
+            },
+        );
+        drop(jobs);
+        let mut cooked = cooked.into_iter();
+        laps.mark("cooked");
         let mut meshes = 0;
         for tile in &self.tiles {
             let at = Mat4::from_translation(tile.centre);
-            for (mesh, row, uv_weight) in [
-                (&tile.ground, ground_row, 0.0),
-                (&tile.masses, mass_row, FACADE_UV_WEIGHT),
-                (&tile.railings, grille_row, 0.0),
-            ] {
-                if mesh.indices.is_empty() {
-                    continue;
-                }
-                // Normals weighed in the LOD: a pavement's kerb and back faces folded into its
-                // top at the coarser levels, long tilted triangles where the paving streaked (the
-                // owner saw two patterns blend on the pavements). The far facades' texture
-                // coordinates too: across their jumps the windows smeared into streaks.
-                let id = builder.add_mesh(&MeshletMesh::build_with(
-                    mesh,
-                    forge_geom::meshlet::CookOptions {
-                        normal_weight: 2.0,
-                        uv_weight,
-                    },
-                ));
+            for (_, row, _) in tile_meshes(tile, rows) {
+                let (mesh, _, _) = cooked.next().expect("a tile's mesh cooked");
+                let id = builder.add_mesh(&mesh);
                 builder.add_instance_with_material(id, at, row);
                 meshes += 1;
             }
         }
+        laps.mark("tiles");
         // The forest by species (D-063): a few individuals of each grown once (`forge_flora`),
         // their meshes instanced, each plant scaled to its height and crown.
         if !self.flora.is_empty() {
-            // Each species' individuals, grown at a quarter, half and all of its maturity on its
-            // first use, three of each; a plant takes the age nearest its height, so a young
-            // street tree is a young tree, not a mature one shrunk (a 10 m plane was a ball on a
-            // stem), and of that age the individual its hash picks, its crown stretched by up to
-            // 8 % along its turn.
+            // Each species' individuals, grown at a quarter, half and all of its maturity, three
+            // of each; a plant takes the age nearest its height, so a young street tree is a
+            // young tree, not a mature one shrunk (a 10 m plane was a ball on a stem), and of
+            // that age the individual its hash picks, its crown stretched by up to 8 % along its
+            // turn.
             let mut models: std::collections::HashMap<u16, Vec<(forge_render::MeshId, f32, f32)>> =
                 Default::default();
+            for &sp in &planted {
+                let grown = (0..FLORA_INDIVIDUALS)
+                    .map(|_| {
+                        let (mesh, height, crown) = cooked.next().expect("a plant cooked");
+                        (builder.add_mesh(&mesh), height, crown)
+                    })
+                    .collect();
+                models.insert(sp, grown);
+            }
             for &(at, height, crown, turn, sp, pick) in &self.flora {
-                let Some(s) = species.get(usize::from(sp)) else {
+                let Some(grown) = models.get(&sp) else {
                     continue;
                 };
-                let grown = models.entry(sp).or_insert_with(|| {
-                    let shrub = s.habit == forge_flora::species::Habit::Shrub;
-                    let broad = s.foliage == forge_flora::species::Foliage::Broad;
-                    (0..FLORA_INDIVIDUALS)
-                        .map(|k| {
-                            let conditions = flora_conditions(s, sp, k);
-                            let graph = forge_flora::grow::grow(s, &conditions);
-                            let mesh = grown_mesh(
-                                &graph,
-                                shrub,
-                                broad,
-                                conditions.pruning.lift as f32,
-                                leaf_spray(&s.id),
-                            );
-                            (
-                                builder.add_mesh(&MeshletMesh::build(&mesh)),
-                                graph.height().max(0.1),
-                                graph.crown_width().max(0.1),
-                            )
-                        })
-                        .collect()
-                });
                 let ages = usize::from(FLORA_AGES);
                 let Some(age) = (0..ages.min(grown.len())).min_by(|&a, &b| {
                     (grown[a].1 / height)
@@ -4962,6 +5174,7 @@ impl Scenario for PlanScenario {
                 builder.add_instance_with_material(id, transform, flora_rows[usize::from(sp)]);
             }
         }
+        laps.mark("flora");
         if !self.trees.is_empty() {
             let model = builder.add_mesh(&MeshletMesh::build(&tree_model()));
             for &(at, scale, turn, kind) in &self.trees {
@@ -4989,10 +5202,11 @@ impl Scenario for PlanScenario {
                 );
             }
         }
+        laps.mark("trees and lamps");
         let kit_ids: Vec<_> = self
             .kit_meshes
             .iter()
-            .map(|m| builder.add_mesh(&MeshletMesh::build(m)))
+            .map(|_| builder.add_mesh(&cooked.next().expect("a kit module cooked").0))
             .collect();
         for &(module, transform, group) in &self.kit_instances {
             builder.add_instance_with_material(
@@ -5004,6 +5218,7 @@ impl Scenario for PlanScenario {
         if let Some(report) = &self.kit_report {
             tracing::info!("{report}");
         }
+        laps.mark("kit");
         // The trams: a cab and a passenger section's meshes a line, in its livery; their
         // instances are movers, the table's last.
         let mut tram_movers = Vec::new();
@@ -5068,6 +5283,7 @@ impl Scenario for PlanScenario {
             builder.set_mesh_material(shuttle, materials_taxi);
             tram_movers.push((shuttle, t.shuttles() as u32));
         }
+        laps.mark("movers");
         // The kit buildings' insides, a mesh a tile cooked apart from the masses (#273), last
         // among the static instances so every other keeps its id (each tree's tone is hashed
         // from it); the movers follow.
@@ -5075,14 +5291,19 @@ impl Scenario for PlanScenario {
             if tile.insides.indices.is_empty() {
                 continue;
             }
-            let id = builder.add_mesh(&MeshletMesh::build(&tile.insides));
+            let id = builder.add_mesh(&cooked.next().expect("a tile's insides cooked").0);
             builder.add_instance_with_material(id, Mat4::from_translation(tile.centre), mass_row);
         }
+        debug_assert!(cooked.next().is_none(), "every cooked mesh added");
         if !tram_movers.is_empty() {
             builder.reserve_movers(&tram_movers);
         }
+        laps.mark("insides");
         let mut scene = builder.build(&ctx.device)?;
+        laps.mark("scene upload");
         scene.build_tlas(&ctx.device, &ctx.shaders)?;
+        laps.mark("tlas");
+        tracing::info!("the plan's scene's steps (ms): {}", laps.report());
         tracing::info!(
             meshes,
             trees = self.trees.len(),

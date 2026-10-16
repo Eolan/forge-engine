@@ -702,16 +702,22 @@ fn append(
     records.len() - 1
 }
 
+/// The fewest items a thread of [`par_map`] takes. A thread costs tens of microseconds to start
+/// and its scratch (a table of all the mesh's vertices) more to fill, more than a few groups'
+/// work: two items made two threads, and 783 meshes cooked side by side (the city's tiles) spent
+/// longer starting threads and zeroing tables than simplifying.
+const ITEMS_PER_THREAD: usize = 16;
+
 /// `f(scratch, i)` for every `i` in `0..n`, spread over the machine's threads in runs of
-/// consecutive `i`, each thread with the scratch `init` makes; the results in order, the same
-/// whatever the threads.
+/// consecutive `i` ([`ITEMS_PER_THREAD`] at least), each thread with the scratch `init` makes;
+/// the results in order, the same whatever the threads.
 fn par_map<S, T: Send>(
     n: usize,
     init: impl Fn() -> S + Sync,
     f: impl Fn(&mut S, usize) -> T + Sync,
 ) -> Vec<T> {
     let mut made: Vec<Option<T>> = (0..n).map(|_| None).collect();
-    let per = n.div_ceil(threads()).max(1);
+    let per = n.div_ceil(threads()).max(ITEMS_PER_THREAD);
     par_chunks_mut(&mut made, per, 1, |chunk, slots| {
         let mut scratch = init();
         for (k, slot) in slots.iter_mut().enumerate() {
