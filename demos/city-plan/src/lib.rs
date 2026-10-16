@@ -2597,7 +2597,7 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
         let plaster = KIT_PLASTER + tint_of(m.lot);
         let top = m.height;
         let mut deepest: f64 = 0.2;
-        for wall in &s.walls {
+        for (w, wall) in s.walls.iter().enumerate() {
             if wall.role == WallRole::Inner || wall.length() < 0.05 {
                 continue;
             }
@@ -2605,25 +2605,49 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
             deepest = deepest.max(deep);
             let t = (wall.b - wall.a).normalize_or_zero();
             let inward = DVec2::new(-t.y, t.x);
-            // The face runs the wall's thickness past each end, so two faces meeting at a
-            // corner cover it.
-            let (a, b) = (wall.a + (inward - t) * deep, wall.b + (inward + t) * deep);
             let normal = Vec3::new(-t.y as f32, 0.0, t.x as f32);
-            let (l, h) = ((a.distance(b) / 3.0) as f32, (top / 3.0) as f32);
-            triangle_uv(
-                mesh,
-                [at(a, 0.0), at(b, 0.0), at(b, top)],
-                [[0.0, 0.0], [l, 0.0], [l, -h]],
-                normal,
-                plaster,
-            );
-            triangle_uv(
-                mesh,
-                [at(a, 0.0), at(b, top), at(a, top)],
-                [[0.0, 0.0], [l, -h], [0.0, -h]],
-                normal,
-                plaster,
-            );
+            // The face from `from` to `to` along the wall, `y0` to `y1`: it runs the wall's
+            // thickness past the wall's ends, so two faces meeting at a corner cover it.
+            let mut face = |from: f64, to: f64, y0: f64, y1: f64| {
+                let past = |end: bool| if end { t * deep } else { DVec2::ZERO };
+                let p = wall.a + t * from + inward * deep - past(from <= 0.0);
+                let q = wall.a + t * to + inward * deep + past(to >= wall.length());
+                let (l, h) = ((p.distance(q) / 3.0) as f32, ((y1 - y0) / 3.0) as f32);
+                triangle_uv(
+                    mesh,
+                    [at(p, y0), at(q, y0), at(q, y1)],
+                    [[0.0, 0.0], [l, 0.0], [l, -h]],
+                    normal,
+                    plaster,
+                );
+                triangle_uv(
+                    mesh,
+                    [at(p, y0), at(q, y1), at(p, y1)],
+                    [[0.0, 0.0], [l, -h], [0.0, -h]],
+                    normal,
+                    plaster,
+                );
+            };
+            // Over a passage into the court the face starts at the passage's head: whole, it
+            // closed the passage behind its mouth.
+            let mut cuts: Vec<(f64, f64, f64)> = s
+                .openings
+                .iter()
+                .filter(|o| o.wall == w && o.kind == OpeningKind::Passage)
+                .map(|o| (o.span().0, o.span().1, o.head))
+                .collect();
+            cuts.sort_by(|x, y| x.0.total_cmp(&y.0));
+            let mut from = 0.0;
+            for &(lo, hi, head) in &cuts {
+                if lo > from + 0.01 {
+                    face(from, lo, 0.0, top);
+                }
+                face(lo, hi, head, top);
+                from = hi;
+            }
+            if wall.length() > from + 0.01 {
+                face(from, wall.length(), 0.0, top);
+            }
         }
         // The floors and the ceilings: the footprint inside its walls, a slab a storey, the
         // ground floor a hand over the block's ground, the top ceiling under the roof.
@@ -2631,22 +2655,60 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
             count += (mesh.indices.len() - before) / 3;
             continue;
         };
-        let tris = geom::triangulate(&ring);
-        let cap = |mesh: &mut TriMesh, y: f64, normal: Vec3, section: u8| {
-            for t in &tris {
+        let cap = |mesh: &mut TriMesh, ring: &[DVec2], y: f64, normal: Vec3, section: u8| {
+            for t in geom::triangulate(ring) {
                 let p = t.map(|k| at(ring[k], y));
                 triangle_uv(mesh, p, [[0.0; 2]; 3], normal, section);
             }
         };
+        // The ground floor keeps clear of the passages (their paving is the street's): the
+        // ring cut on either side of each, from its street end to its court end.
+        let ends: Vec<(DVec2, DVec2)> = s
+            .openings
+            .iter()
+            .filter(|o| o.kind == OpeningKind::Passage)
+            .map(|o| {
+                let w = &s.walls[o.wall];
+                let t = (w.b - w.a).normalize_or_zero();
+                (w.a + t * o.span().0, w.a + t * o.span().1)
+            })
+            .collect();
+        let mut ground = vec![ring.clone()];
+        for pair in ends.as_chunks::<2>().0 {
+            let ((p0, q0), (p1, q1)) = (pair[0], pair[1]);
+            let (p1, q1) = if p0.distance(p1) + q0.distance(q1) <= p0.distance(q1) + q0.distance(p1)
+            {
+                (p1, q1)
+            } else {
+                (q1, p1)
+            };
+            let middle = (p0 + q0 + p1 + q1) * 0.25;
+            let mut next = Vec::new();
+            for poly in &ground {
+                for (o, d) in [(p0, p1 - p0), (q0, q1 - q0)] {
+                    // The side of the passage's wall away from its middle.
+                    let dir = if d.perp_dot(middle - o) > 0.0 { -d } else { d };
+                    let part = geom::clean(&geom::clip_half_plane(poly, o, dir), 1e-6);
+                    if part.len() >= 3 && geom::signed_area(&part).abs() > 0.5 {
+                        next.push(part);
+                    }
+                }
+            }
+            ground = next;
+        }
         for (k, st) in s.storeys.iter().enumerate() {
-            cap(mesh, st.level.max(0.05), Vec3::Y, KIT_STONE);
-            if k > 0 {
-                cap(mesh, st.level - st.slab, -Vec3::Y, plaster);
+            if k == 0 {
+                for poly in &ground {
+                    cap(mesh, poly, st.level.max(0.05), Vec3::Y, KIT_STONE);
+                }
+            } else {
+                cap(mesh, &ring, st.level, Vec3::Y, KIT_STONE);
+                cap(mesh, &ring, st.level - st.slab, -Vec3::Y, plaster);
             }
         }
         if let Some(last) = s.storeys.last() {
             let ceiling = (last.level + last.height - last.slab).min(top - 0.05);
-            cap(mesh, ceiling, -Vec3::Y, plaster);
+            cap(mesh, &ring, ceiling, -Vec3::Y, plaster);
         }
         count += (mesh.indices.len() - before) / 3;
     }
