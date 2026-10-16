@@ -725,7 +725,14 @@ mesh to test navigations inside the houses"):
   floor and not over the first steps (`Interior::climb`). Its steps are the floors' smooth
   limestone (in the facades' pitted stone they glittered in the door's grazing light), and a
   plastered soffit slopes under each flight (`soffits`): from below it read as every step's
-  flat bottom, a sawtooth.
+  flat bottom, a sawtooth. Each side of the flight is one plastered face, a closed string with
+  the steps' profile over the slope: the steps' own sides met half along their edges and the
+  light showed through the seams. The stairwell's rim through each upper floor's slab is drawn;
+  with only the slab's top and underside it was a slot one saw through ("a kind of black
+  rectangle"). Under the flight a cupboard (the owner: "Below the stairs there can be
+  different type of cupboard"): its side to the corridor closed under the slope, its end under
+  the head, an oak door with its knob by the head where it stands 1.2 m or more (a coat
+  cupboard by the front door), and a metre of it in the walker's pieces.
 - *The walk* (`city::walk`, the first stage of the navigation `research/game-ai-ecosystems.md`
   plans, Recast's voxel step). Each storey of a house with its insides is rasterised at 5 cm:
   the floor inside the walls, the partitions open at their doorways, the furniture and the

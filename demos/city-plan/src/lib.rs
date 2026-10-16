@@ -85,6 +85,8 @@ const KIT_PLASTER: u8 = 8;
 const KIT_INSIDE: u8 = 15;
 /// The insides' floors: the stone's colour, smooth (its pits read as squiggles a step away).
 const KIT_INSIDE_FLOOR: u8 = 16;
+/// The insides' joinery: the cupboards' doors under the flights, a waxed oak.
+const KIT_INSIDE_WOOD: u8 = 17;
 const KIT_STONE: u8 = 12;
 const KIT_PARTY: u8 = 13;
 /// The tiled roofs' section on the masses.
@@ -3290,6 +3292,62 @@ fn soffits(
                 triangle_uv(mesh, q, [[0.0; 2]; 3], n, section);
             }
         }
+        // The cupboard under the flight (the owner, 2026-10-17: "Below the stairs there can be
+        // different type of cupboard or things to fill up the space"): its side to the corridor
+        // closed under the slope, its end under the head, and an oak door in the side where it
+        // stands 1.2 m or more, by the head (a coat cupboard by the front door).
+        let from_walls = |q: DVec2| {
+            s.walls
+                .iter()
+                .map(|w| geom::distance_to_segment(q, w.a, w.b))
+                .fold(f64::MAX, f64::min)
+        };
+        let middle = (v0 + v1) * 0.5;
+        let (u, n, out) = if from_walls(stair[0] + c * middle + a * hi)
+            > from_walls(stair[0] + c * middle + a * lo)
+        {
+            (hi, side, 1.0)
+        } else {
+            (lo, -side, -1.0)
+        };
+        triangle_uv(
+            mesh,
+            [p(v0, u, base), p(v1, u, base), p(v1, u, under(v1))],
+            [[0.0; 2]; 3],
+            n,
+            section,
+        );
+        quad(
+            mesh,
+            [
+                p(v1, lo, base),
+                p(v1, hi, base),
+                p(v1, hi, under(v1)),
+                p(v1, lo, under(v1)),
+            ],
+            along,
+        );
+        let (d1, d0) = (v1 - 0.15, v1 - 0.75);
+        let head = (under(d0) - 0.1).min(base + 2.0);
+        if d0 > v0 && head - base >= 1.2 {
+            let q = |v: f64, w: f64| stair[0] + c * v + a * (u + out * w);
+            let mut leaf = vec![q(d0, 0.0), q(d1, 0.0), q(d1, 0.02), q(d0, 0.02)];
+            if geom::signed_area(&leaf) < 0.0 {
+                leaf.reverse();
+            }
+            solid(mesh, at, &leaf, base + 0.02, head, KIT_INSIDE_WOOD);
+            // Its knob at a hand's height, 8 cm in from its edge away from the head.
+            let mut knob = vec![
+                q(d0 + 0.06, 0.02),
+                q(d0 + 0.10, 0.02),
+                q(d0 + 0.10, 0.05),
+                q(d0 + 0.06, 0.05),
+            ];
+            if geom::signed_area(&knob) < 0.0 {
+                knob.reverse();
+            }
+            solid(mesh, at, &knob, base + 0.98, base + 1.02, KIT_INSIDE_WOOD);
+        }
     }
 }
 
@@ -3340,6 +3398,17 @@ fn interior_solids(
                 let tread = vec![stair[0] + p0, stair[1] + p0, stair[1] + p1, stair[0] + p1];
                 let y1 = base + f64::from(i + 1) * rise;
                 out.push((tread, (y1 - rise - 0.15).max(base), y1, true));
+            }
+            // The cupboard under the flight (`soffits` closes it): a metre of it a walker meets,
+            // where the slope stands over that, so no one walks in under the steps.
+            let (vc, v1) = (
+                cores::GOING * (1.0 + 1.15 / rise),
+                f64::from(r.saturating_sub(1)) * cores::GOING,
+            );
+            if v1 > vc + 0.1 {
+                let (p0, p1) = (inner.climb * vc, inner.climb * v1);
+                let under = vec![stair[0] + p0, stair[1] + p0, stair[1] + p1, stair[0] + p1];
+                out.push((under, base, base + 1.0, false));
             }
         }
         // A guard round each upper floor's opening over the flight: a whitewashed half wall a
@@ -5057,6 +5126,11 @@ impl Scenario for PlanScenario {
                 (
                     "plan inside floor".into(),
                     colour([0.74, 0.73, 0.70], 10.0, 0.03),
+                ),
+                // The insides' joinery (`KIT_INSIDE_WOOD`): a waxed oak.
+                (
+                    "plan inside wood".into(),
+                    colour([0.42, 0.28, 0.16], 30.0, 0.08),
                 ),
             ],
         );
