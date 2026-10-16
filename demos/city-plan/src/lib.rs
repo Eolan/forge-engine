@@ -1651,6 +1651,7 @@ impl PlanScenario {
             clock: 3600.0,
             walls: wall_pieces(size, masses, &structures)
                 .into_iter()
+                .chain(interior_pieces(size, masses, &structures, &near))
                 .chain(parapet_pieces(size, plan, site, &shore))
                 .chain(garden_pieces(size, &gardens))
                 .chain(depot_walls)
@@ -2365,6 +2366,12 @@ fn kit(
     let mut offices_lit = (0, 0);
     let size = tiles.size;
     let (dressed, _stats) = facades::dress(d.grammar, structures, masses, near, d.top, d.seed);
+    // The houses whose insides are drawn (`city::interior`): their doors stand open, the way in.
+    let entered: Vec<bool> = masses
+        .iter()
+        .zip(structures)
+        .map(|(m, s)| m.rooms.is_some() && interior::house(m, s).is_some())
+        .collect();
     let mut keys: std::collections::HashMap<(u16, i32, i32, i32), u32> =
         std::collections::HashMap::new();
     let mut meshes = Vec::new();
@@ -2378,7 +2385,12 @@ fn kit(
         let m = &masses[piece.mass as usize];
         let wall = &structures[piece.mass as usize].walls[piece.wall as usize];
         let street = wall.role == WallRole::Street;
-        let name = d.grammar.name(t.module);
+        let open = entered[piece.mass as usize] && d.grammar.name(t.module) == "door";
+        let name = if open {
+            "door_open"
+        } else {
+            d.grammar.name(t.module)
+        };
         let (w, h) = (t.scope.size.x as f32, t.scope.size.y as f32);
         let o = t.scope.origin;
         let pos = Vec3::new(
@@ -2396,7 +2408,8 @@ fn kit(
             // shallow ones.
             let reveal = (wall.thickness * 0.65).clamp(0.12, 0.40) as f32;
             let key = (
-                t.module,
+                // An open door is its own mesh.
+                t.module | if open { 0x8000 } else { 0 },
                 (w * 100.0).round() as i32,
                 (h * 100.0).round() as i32,
                 (reveal * 100.0).round() as i32,
@@ -2654,7 +2667,7 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
         // The floors and the ceilings: the footprint inside its walls, a slab a storey, the
         // ground floor 2 cm over the walking level its door's sill stands on (5 cm up, a garden's
         // lawn showed through it), the top ceiling under the roof.
-        let Some(ring) = geom::inset(&m.footprint, deepest).filter(|r| r.len() >= 3) else {
+        let Some(ring) = inner_ring(m, s) else {
             count += (mesh.indices.len() - before) / 3;
             continue;
         };
@@ -2734,76 +2747,155 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
             cap(mesh, &ring, ceiling, -Vec3::Y, plaster);
         }
         if let Some(inner) = &inner {
-            let floor = |k: usize| {
-                let st = &s.storeys[k];
-                if k == 0 {
-                    st.level.max(WALK_LEVEL + 0.02)
-                } else {
-                    st.level
-                }
-            };
-            // The partitions, floor to ceiling, a lintel over each doorway.
-            for p in &inner.partitions {
-                let st = &s.storeys[p.storey];
-                let (y0, y1) = (
-                    floor(p.storey),
-                    (st.level + st.height - st.slab).min(top - 0.05),
-                );
-                let t = (p.b - p.a).normalize_or_zero();
-                let side = DVec2::new(-t.y, t.x) * (p.thickness * 0.5);
-                let piece = |from: f64, to: f64| {
-                    let (a, b) = (p.a + t * from, p.a + t * to);
-                    [a - side, b - side, b + side, a + side]
-                };
-                let mut from = 0.0;
-                for &(d0, d1) in &p.doors {
-                    if d0 > from + 0.01 {
-                        solid(mesh, &at, &piece(from, d0), y0, y1, plaster);
-                    }
-                    solid(
-                        mesh,
-                        &at,
-                        &piece(d0, d1),
-                        y0 + interior::DOORWAY_HEAD,
-                        y1,
-                        plaster,
-                    );
-                    from = d1;
-                }
-                if p.length() > from + 0.01 {
-                    solid(mesh, &at, &piece(from, p.length()), y0, y1, plaster);
-                }
-            }
-            // The flights: a stone step a riser, a hand of stone under it, from the street wall
-            // into the house; the last riser climbs on to the floor above.
-            if let Some(stair) = inner.stair {
-                for (k, &r) in inner.risers.iter().enumerate() {
-                    if k + 1 >= s.storeys.len() || r == 0 {
-                        break;
-                    }
-                    let base = floor(k);
-                    let rise = (s.storeys[k + 1].level - base) / f64::from(r);
-                    for i in 0..r - 1 {
-                        let (v0, v1) =
-                            (f64::from(i) * cores::GOING, f64::from(i + 1) * cores::GOING);
-                        let (p0, p1) = (inner.climb * v0, inner.climb * v1);
-                        let tread = [stair[0] + p0, stair[1] + p0, stair[1] + p1, stair[0] + p1];
-                        let y1 = base + f64::from(i + 1) * rise;
-                        solid(
-                            mesh,
-                            &at,
-                            &tread,
-                            (y1 - rise - 0.15).max(base),
-                            y1,
-                            KIT_STONE,
-                        );
-                    }
-                }
+            for (ring, y0, y1, stone) in interior_solids(s, inner, top) {
+                let section = if stone { KIT_STONE } else { plaster };
+                solid(mesh, &at, &ring, y0, y1, section);
             }
         }
         count += (mesh.indices.len() - before) / 3;
     }
     count
+}
+
+/// A mass's floor inside its walls: the footprint moved in by each wall's drawn thickness (its/// inner face's, 0.2 m at least; 5 cm between a building's masses), or by the thickest where/// that fails. A uniform inset by the thickest left a strip of the ground showing by the thinner/// party walls.fn inner_ring(m: &Mass, s: &Structure) -> Option<Vec<DVec2>> {    let d: Vec<f64> = s        .walls        .iter()        .map(|w| if w.role == WallRole::Inner { 0.05 } else { w.thickness.max(0.2) })        .collect();    let deepest = d.iter().copied().fold(0.2, f64::max);    geom::inset_by(&m.footprint, &d)        .or_else(|| geom::inset_by_collapsing(&m.footprint, &d))        .or_else(|| geom::inset(&m.footprint, deepest))        .filter(|r| r.len() >= 3)}
+/// A mass's floor inside its walls: the footprint moved in by each wall's drawn thickness (its
+/// inner face's, 0.2 m at least; 5 cm between a building's masses), or by the thickest where that
+/// fails. A uniform inset by the thickest left a strip of the ground showing by the thinner party
+/// walls.
+fn inner_ring(m: &Mass, s: &Structure) -> Option<Vec<DVec2>> {
+    let d: Vec<f64> = s
+        .walls
+        .iter()
+        .map(|w| {
+            if w.role == WallRole::Inner {
+                0.05
+            } else {
+                w.thickness.max(0.2)
+            }
+        })
+        .collect();
+    let deepest = d.iter().copied().fold(0.2, f64::max);
+    geom::inset_by(&m.footprint, &d)
+        .or_else(|| geom::inset_by_collapsing(&m.footprint, &d))
+        .or_else(|| geom::inset(&m.footprint, deepest))
+        .filter(|r| r.len() >= 3)
+}
+
+/// A storey's floor inside a house, metres: the ground floor 2 cm over the walking level its
+/// door's sill stands on.
+fn floor_level(s: &Structure, k: usize) -> f64 {
+    let st = &s.storeys[k];
+    if k == 0 {
+        st.level.max(WALK_LEVEL + 0.02)
+    } else {
+        st.level
+    }
+}
+
+/// A house's insides as solids (`city::interior`): its partitions floor to ceiling with a lintel
+/// over each doorway, and its flights a stone step a riser with a hand of stone under it, from
+/// the street wall into the house (the last riser climbs on to the floor above). Each a ring
+/// (anticlockwise, the plan's metres), its bottom and its top, and whether it is stone.
+fn interior_solids(
+    s: &Structure,
+    inner: &interior::Interior,
+    top: f64,
+) -> Vec<(Vec<DVec2>, f64, f64, bool)> {
+    let mut out = Vec::new();
+    for p in &inner.partitions {
+        let st = &s.storeys[p.storey];
+        let (y0, y1) = (
+            floor_level(s, p.storey),
+            (st.level + st.height - st.slab).min(top - 0.05),
+        );
+        let t = (p.b - p.a).normalize_or_zero();
+        let side = DVec2::new(-t.y, t.x) * (p.thickness * 0.5);
+        let piece = |from: f64, to: f64| {
+            let (a, b) = (p.a + t * from, p.a + t * to);
+            vec![a - side, b - side, b + side, a + side]
+        };
+        let mut from = 0.0;
+        for &(d0, d1) in &p.doors {
+            if d0 > from + 0.01 {
+                out.push((piece(from, d0), y0, y1, false));
+            }
+            out.push((piece(d0, d1), y0 + interior::DOORWAY_HEAD, y1, false));
+            from = d1;
+        }
+        if p.length() > from + 0.01 {
+            out.push((piece(from, p.length()), y0, y1, false));
+        }
+    }
+    if let Some(stair) = inner.stair {
+        for (k, &r) in inner.risers.iter().enumerate() {
+            if k + 1 >= s.storeys.len() || r == 0 {
+                break;
+            }
+            let base = floor_level(s, k);
+            let rise = (s.storeys[k + 1].level - base) / f64::from(r);
+            for i in 0..r - 1 {
+                let (v0, v1) = (f64::from(i) * cores::GOING, f64::from(i + 1) * cores::GOING);
+                let (p0, p1) = (inner.climb * v0, inner.climb * v1);
+                let tread = vec![stair[0] + p0, stair[1] + p0, stair[1] + p1, stair[0] + p1];
+                let y1 = base + f64::from(i + 1) * rise;
+                out.push((tread, (y1 - rise - 0.15).max(base), y1, true));
+            }
+        }
+    }
+    out
+}
+
+/// The upper floors of a house whose insides are drawn, as slabs round the treads of the flight
+/// below (`without`), each a ring and its underside and top.
+fn interior_floors(
+    m: &Mass,
+    s: &Structure,
+    inner: &interior::Interior,
+) -> Vec<(Vec<DVec2>, f64, f64)> {
+    let Some(ring) = inner_ring(m, s) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (k, st) in s.storeys.iter().enumerate().skip(1) {
+        let hole = inner.stair.zip(inner.risers.get(k - 1)).map(|(stair, &r)| {
+            let up = inner.climb * (f64::from(r.saturating_sub(1)) * cores::GOING);
+            [stair[0], stair[1], stair[1] + up, stair[0] + up]
+        });
+        let pieces = hole.map_or_else(|| vec![ring.clone()], |h| without(&ring, &h));
+        for p in pieces {
+            out.push((p, st.level - st.slab, st.level));
+        }
+    }
+    out
+}
+
+/// The insides of the houses near the view as the walker's convex pieces, the world's metres:
+/// their partitions, their flights' steps and their upper floors.
+fn interior_pieces(
+    size: f64,
+    masses: &[Mass],
+    structures: &[Structure],
+    near: &[usize],
+) -> Vec<Vec<Vec3>> {
+    let mut out = Vec::new();
+    let solid = |ring: &[DVec2], y0: f64, y1: f64| -> Vec<Vec3> {
+        ring.iter()
+            .flat_map(|&p| [world(size, p, y0), world(size, p, y1)])
+            .collect()
+    };
+    for &i in near {
+        let (m, s) = (&masses[i], &structures[i]);
+        let Some(inner) = interior::house(m, s) else {
+            continue;
+        };
+        for (ring, y0, y1, _) in interior_solids(s, &inner, m.height) {
+            out.push(solid(&ring, y0, y1));
+        }
+        for (ring, y0, y1) in interior_floors(m, s, &inner) {
+            out.push(solid(&ring, y0, y1));
+        }
+    }
+    out
 }
 
 /// A box over `ring` (anticlockwise, the plan's metres) from `y0` to `y1` into `mesh`, its points
@@ -3324,6 +3416,8 @@ fn wall_pieces(size: f64, masses: &[Mass], structures: &[Structure]) -> Vec<Vec<
     };
     for (s, m) in structures.iter().zip(masses) {
         let top = m.height + 0.9;
+        // A house whose insides are drawn is open at its ground doors: the walker goes in.
+        let entered = m.rooms.is_some() && interior::house(m, s).is_some();
         for (w, wall) in s.walls.iter().enumerate() {
             if wall.role == WallRole::Inner || wall.length() < 0.05 {
                 continue;
@@ -3334,7 +3428,11 @@ fn wall_pieces(size: f64, masses: &[Mass], structures: &[Structure]) -> Vec<Vec<
             let mut cuts: Vec<(f64, f64, f64)> = s
                 .openings
                 .iter()
-                .filter(|o| o.wall == w && o.kind == OpeningKind::Passage)
+                .filter(|o| {
+                    o.wall == w
+                        && (o.kind == OpeningKind::Passage
+                            || (entered && o.kind == OpeningKind::Door && o.storey == 0))
+                })
                 .map(|o| (o.span().0, o.span().1, o.head))
                 .collect();
             cuts.sort_by(|x, y| x.0.total_cmp(&y.0));

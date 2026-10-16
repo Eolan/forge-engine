@@ -45,7 +45,7 @@ pub const SECTIONS: u8 = 11;
 pub const BAR_SHARE: f32 = 0.25;
 
 /// The modules the kit builds.
-pub const NAMES: [&str; 15] = [
+pub const NAMES: [&str; 16] = [
     "wall",
     "blank",
     "band",
@@ -59,6 +59,7 @@ pub const NAMES: [&str; 15] = [
     "bay",
     "balcony",
     "door",
+    "door_open",
     "shop",
     "shop_awning",
 ];
@@ -172,7 +173,7 @@ pub fn module_with(name: &str, w: f32, h: f32, reveal: f32, cards: bool) -> Opti
             shutters(&mut m, w, h);
             balcony(&mut m, w, railing);
         }
-        "door" => door(&mut m, w, h),
+        "door" | "door_open" => door(&mut m, w, h, name == "door_open"),
         "shop" | "shop_awning" => shop(&mut m, w, h, name == "shop_awning"),
         _ => return None,
     }
@@ -680,8 +681,9 @@ fn balcony(m: &mut TriMesh, w: f32, railing: impl Fn(&mut TriMesh, Vec3, Vec3, f
 }
 
 /// A building's entrance: a deep stone reveal, two panelled doors under a glazed transom, a
-/// surround with a hood over it and a step.
-fn door(m: &mut TriMesh, w: f32, h: f32) {
+/// surround with a hood over it and a threshold. `open`: its leaves swung in against the reveal
+/// (a house whose insides are drawn, entered from the street).
+fn door(m: &mut TriMesh, w: f32, h: f32, open: bool) {
     let d = -0.35;
     let transom = h - 0.7;
     // Reveals, as an opening's, without its glass and frame.
@@ -717,24 +719,48 @@ fn door(m: &mut TriMesh, w: f32, h: f32) {
     );
     // The leaves, their raised panels, and the transom light.
     let z = d + 0.05;
-    cuboid(
-        m,
-        Vec3::new(0.0, 0.0, z - 0.05),
-        Vec3::new(w, transom, z),
-        WOOD,
-        POS_Z,
-    );
     let leaf = w * 0.5;
-    for k in 0..2 {
-        let x = k as f32 * leaf;
-        for (y0, y1) in [(0.25, transom * 0.45), (transom * 0.5, transom - 0.2)] {
+    if open {
+        // Swung in against the reveal's inner ends, square to the wall, their panels facing
+        // the way through.
+        for (x0, x1, face) in [(0.0, 0.05, 0.05), (w - 0.05, w, -0.025)] {
             cuboid(
                 m,
-                Vec3::new(x + 0.12, y0, z),
-                Vec3::new(x + leaf - 0.12, y1, z + 0.025),
+                Vec3::new(x0, 0.0, d - leaf),
+                Vec3::new(x1, transom, d),
                 WOOD,
-                NO_BACK,
+                ALL,
             );
+            let px = if face > 0.0 { x1 } else { x0 + face };
+            for (y0, y1) in [(0.25, transom * 0.45), (transom * 0.5, transom - 0.2)] {
+                cuboid(
+                    m,
+                    Vec3::new(px, y0, d - leaf + 0.12),
+                    Vec3::new(px + 0.025, y1, d - 0.12),
+                    WOOD,
+                    ALL,
+                );
+            }
+        }
+    } else {
+        cuboid(
+            m,
+            Vec3::new(0.0, 0.0, z - 0.05),
+            Vec3::new(w, transom, z),
+            WOOD,
+            POS_Z,
+        );
+        for k in 0..2 {
+            let x = k as f32 * leaf;
+            for (y0, y1) in [(0.25, transom * 0.45), (transom * 0.5, transom - 0.2)] {
+                cuboid(
+                    m,
+                    Vec3::new(x + 0.12, y0, z),
+                    Vec3::new(x + leaf - 0.12, y1, z + 0.025),
+                    WOOD,
+                    NO_BACK,
+                );
+            }
         }
     }
     cuboid(
@@ -761,7 +787,8 @@ fn door(m: &mut TriMesh, w: f32, h: f32) {
             NO_BACK,
         );
     }
-    // Surround, hood and step.
+    // Surround, hood and threshold: a stone 2 cm proud, level with the floor inside (the owner:
+    // no step where people walk; it was a 12 cm step).
     surround(m, w, h, 0.25, 0.3);
     cuboid(
         m,
@@ -773,7 +800,7 @@ fn door(m: &mut TriMesh, w: f32, h: f32) {
     cuboid(
         m,
         Vec3::new(-0.1, 0.0, d),
-        Vec3::new(w + 0.1, 0.12, 0.3),
+        Vec3::new(w + 0.1, 0.02, 0.3),
         STONE,
         NO_BACK,
     );
@@ -962,7 +989,9 @@ mod tests {
                     p.x > -1.0 && p.x < 2.2 && p.y > -0.5 && p.y < 3.5,
                     "{name} {p}"
                 );
-                assert!(p.z > -0.5 && p.z < 1.6, "{name} {p}");
+                // An open door's leaves reach in by half its width behind its reveal.
+                let inside = if name == "door_open" { 1.2 } else { 0.5 };
+                assert!(p.z > -inside && p.z < 1.6, "{name} {p}");
             }
         }
         assert!(module("spire", 1.0, 1.0).is_none());

@@ -178,6 +178,14 @@ fn main() -> anyhow::Result<()> {
                 let inward = DVec2::new(-t.y, t.x);
                 let eye = w.a + t * door.along + inward * (w.thickness + 1.0);
                 eprintln!("the village's hall: {}", view(eye, 1.6, inner.climb, -5.0));
+                // The way in: 3 m out on the street before the door, walking through it.
+                let out = w.a + t * door.along - inward * 3.0;
+                eprintln!(
+                    "the village's way in: {} --walk={:.2},{:.2}",
+                    view(out, 1.7, inward, -5.0),
+                    inward.x * 1.4,
+                    inward.y * 1.4
+                );
             }
             // The longest garden wall along a street or lane (`city::walls`), from 2.5 m out on
             // the street a little before its start, along it.

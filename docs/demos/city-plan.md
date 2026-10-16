@@ -461,7 +461,18 @@ cm up, a garden's lawn showed through it). 77 of the 82 houses get their insides
 partitions and as many doorways, every room reached (the village test); the five left had their
 core in the middle of the front or none fitted. The map check's seventh view stands a metre
 behind the first storeyed house's door, in its hall, the flight beside it
-(`reports/2026-10-16/village-hall.png`). **Its streets:** a village's main road is a shared street (10 m of
+(`reports/2026-10-16/village-hall.png`). **Walking in** (the same day): a house whose insides are
+drawn opens its street door, the kit's `door_open` with both leaves swung in against the reveal,
+and the walker's wall pieces are cut at its ground doors; its partitions, its flights' steps
+(the character steps up 0.4 m) and its upper floors round the stairwell are the walker's pieces
+too. Every kit door now has a stone threshold 2 cm proud, level with the floor inside, where it
+had a 12 cm step (the owner: no step where people walk). A house from its rooms gets a garden
+door in its back wall at the end of its hall (`structure::garden_door`, in place of the court
+door at the back's middle): 73 of the 77 houses with their insides, the others' backs on a
+party wall. The floors and ceilings are inset by each wall's own thickness (`inner_ring`; the
+thickest wall all round left a strip of the garden's lawn showing by the party walls). The
+map check's second walk starts 3 m out before that house's door and walks through it into the
+hall (`reports/2026-10-16/village-way-in.png`). **Its streets:** a village's main road is a shared street (10 m of
 paving, no kerbs, bike lanes nor lamp rows) and its lanes are pedestrian, as an old town's,
 through the forest too (a road beyond every district's reach takes the nearest district's
 kind, `transit::assign_profiles`); the city's avenues stay. The narrower streets gave the
@@ -471,7 +482,7 @@ plan in place of the city, every house from the kit (`reports/2026-10-16/village
 the air, `village-street.png` from the first house's street, which the log names for
 `--view`). **The map check** (`tools/map-check.sh`, D-062's check per commit): the village
 from the air and from the views the log names (the first house's street, the green, the main
-road, the busiest junction, the longest garden wall along a lane, the first storeyed house's hall inside) and a walked path along the first house's street, each compared
+road, the busiest junction, the longest garden wall along a lane, the first storeyed house's hall inside) and two walked paths, along the first house's street and through the first storeyed house's open door into its hall, each compared
 with `captures/map/accepted` by LDR-ꟻLIP, about two minutes; `--accept` keeps a run
 (`docs/PROCESS.md`). **One home a house** (`Mass::home`, the same day): a village house is
 one unit over all its storeys, entered from the street, with its household's main rooms (1.5

@@ -489,7 +489,9 @@ fn structure(
             None => add_door(m, &storeys, &walls, &mut openings, WallRole::Street),
         }
     }
-    add_door(m, &storeys, &walls, &mut openings, WallRole::Court);
+    if m.rooms.is_none() || !garden_door(&storeys, m, &walls, &cores, &mut openings) {
+        add_door(m, &storeys, &walls, &mut openings, WallRole::Court);
+    }
     let (gross, net) = areas(m, era, &walls, inside.as_deref(), &cores);
     Structure {
         mass: i as u32,
@@ -736,6 +738,79 @@ fn hall_door(m: &Mass, storeys: &[Storey], walls: &[Wall], out: &mut Vec<Opening
         kind: OpeningKind::Door,
     };
     out.push(cores::door(m, storeys, walls, &template));
+}
+
+/// The garden door of a house from its rooms: in the outside wall at the back of its hall (the
+/// plan keeps the hall the whole depth), so the house opens on to its garden, or on to the lane
+/// behind, from the hall. Whether one went in: none where no outside wall stands behind the hall
+/// with room for a door.
+fn garden_door(
+    storeys: &[Storey],
+    m: &Mass,
+    walls: &[Wall],
+    cores: &[Core],
+    out: &mut Vec<Opening>,
+) -> bool {
+    let Some(front) = walls.iter().position(|w| w.edge == 0) else {
+        return false;
+    };
+    // The hall's middle and the way into the house: the house core's hall, or the plan's hall
+    // at the start of the front.
+    let (wall, middle) = match cores.iter().find(|c| c.house) {
+        Some(c) => (&walls[c.wall], geom::centroid(&c.hall)),
+        None => {
+            let f = &walls[front];
+            let t = (f.b - f.a).normalize_or_zero();
+            let n = DVec2::new(-t.y, t.x);
+            (
+                f,
+                f.a + t * (super::rooms::HALL * 0.5) + n * (f.thickness + 1.0),
+            )
+        }
+    };
+    let t = (wall.b - wall.a).normalize_or_zero();
+    let into = DVec2::new(-t.y, t.x);
+    // The nearest outside wall the hall runs into behind it.
+    let far = middle + into * 200.0;
+    let Some((w, along)) = walls
+        .iter()
+        .enumerate()
+        .filter(|(_, w)| matches!(w.role, WallRole::Court | WallRole::Street))
+        .filter(|(_, w)| !std::ptr::eq(*w, wall))
+        .filter_map(|(i, w)| {
+            geom::segment_intersection(middle, far, w.a, w.b).map(|(s, u)| (s, i, u * w.length()))
+        })
+        .min_by(|x, y| x.0.total_cmp(&y.0))
+        .map(|(_, i, along)| (i, along))
+    else {
+        return false;
+    };
+    // Within a stretch open on the ground storey, clear of its ends.
+    let half = DOOR * 0.5 + 0.1;
+    let Some(&(lo, hi)) = walls[w].open.first().and_then(|o| {
+        o.iter()
+            .find(|&&(lo, hi)| lo + half <= along && along <= hi - half)
+    }) else {
+        return false;
+    };
+    let along = along.clamp(lo + half, hi - half);
+    out.retain(|o| {
+        !(o.wall == w
+            && o.storey == 0
+            && o.span().1 > along - DOOR * 0.5 - 0.3
+            && o.span().0 < along + DOOR * 0.5 + 0.3)
+    });
+    let template = Opening {
+        wall: w,
+        storey: 0,
+        along,
+        width: DOOR,
+        sill: 0.0,
+        head: 2.2,
+        kind: OpeningKind::Door,
+    };
+    out.push(cores::door(m, storeys, walls, &template));
+    true
 }
 
 /// A door on a wall of `role`: the ground window or shopfront nearest the middle of that side's

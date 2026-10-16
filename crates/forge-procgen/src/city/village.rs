@@ -472,6 +472,25 @@ mod tests {
                 "house {k}: a room not reached"
             );
         }
+        // A garden door at the back of the hall, besides the street's.
+        let garden_doors = v
+            .masses
+            .iter()
+            .zip(&structures)
+            .filter(|(m, s)| {
+                super::super::interior::house(m, s).is_some()
+                    && s.openings
+                        .iter()
+                        .filter(|o| o.storey == 0 && o.kind == OpeningKind::Door)
+                        .count()
+                        >= 2
+            })
+            .count();
+        println!("{garden_doors} of them with a garden door");
+        assert!(
+            garden_doors * 2 >= insides.len(),
+            "{garden_doors} garden doors"
+        );
         // The garden walls: along the streets and between the gardens, none on a house.
         let along = |street: bool| -> f64 {
             v.plan

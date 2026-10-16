@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # The first map's check (D-062, #266): the village on its own plan at 600 m, one seed, seven
-# fixed views and one walked path, shot under the GPU lock, laid out on a contact sheet and
-# each compared with the last accepted set by LDR-ꟻLIP (imgdiff). About two minutes: the
-# check per commit for the map, where the tiers run at milestones on the owner's word; the
-# gate (tools/verify.sh --tier gate) still runs on every push.
+# fixed views and two walked paths (along a street, into a house), shot under the GPU lock, laid
+# out on a contact sheet and each compared with the last accepted set by LDR-ꟻLIP (imgdiff). About
+# two minutes: the check per commit for the map, where the tiers run at milestones on the owner's
+# word; the gate (tools/verify.sh --tier gate) still runs on every push.
 #
 #   tools/map-check.sh            shoot, compare with captures/map/accepted, keep the run
 #   tools/map-check.sh --accept   the same, then make this run the accepted set
@@ -69,6 +69,12 @@ walk=$(named walk)
 if [ -n "$walk" ]; then
   # shellcheck disable=SC2086
   frames=300 frame=290 shoot walk $walk --walk-start
+fi
+# Into the first storeyed house: through its open street door into the hall.
+enter=$(named "way in")
+if [ -n "$enter" ]; then
+  # shellcheck disable=SC2086
+  frames=300 frame=290 shoot enter $enter --walk-start
 fi
 rm -f "$lock/owner"; rmdir "$lock" 2> /dev/null; trap - EXIT
 
