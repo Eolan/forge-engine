@@ -55,6 +55,7 @@ the system you are about to touch.
 | [research/flora.md](research/flora.md) | flora (#269): growing trees and shrubs as branch graphs (space colonisation, Borchert and Honda's vigour as Pałubicki et al. use it, the pipe model, a Chapman–Richards growth curve), the Mediterranean village's seven species with their published heights and spreads (Aleppo pine, holm oak, olive, Italian cypress, rosemary, grey-leaved cistus, kermes oak), where they grow on a limestone hillside (garrigue and Aleppo pine on the dry shallow ground, holm oak on the deeper soils and under the pines), spacing by multi-class Poisson discs, the wetness and topographic position indices; patents (Sony Online's flora around an avatar live to 2028; Microsoft's multi-class Poisson disk lapsed; none found on space colonisation) | 32 | done (2026-10-16; nurseries' and floras' pages read, the French ecology sources search-recorded, the growth parameters marked as estimates) |
 | [research/particles.md](research/particles.md) | particles (D-062's step after the flora, D-064 🟡): what Forge has (the splashes' deterministic GPU streams and reactive mask, the dust's froxel volume, D-034's rain), GPU simulation as Niagara and AMD's sample do it (fixed bounds, indirect draws, depth-buffer collisions, GPU sorts), soft sprites, streaks, flipbooks blended by motion vectors, six-way lit smoke, particles written into a froxel volume, weighted blended OIT, lighting per particle (one sun ray, the GI probes), upscalers' reactive and transparency masks, baking the textures with our own stable-fluids solver; patents (none found on the methods; Stam's stable fluids expired 2018; Pixelworks' motion vectors for frame interpolation, not flipbooks) | 14 | done (2026-10-16; Unity's six-way article and two patent pages read, the rest search-recorded) |
 | [research/interior-lighting.md](research/interior-lighting.md) | lighting the entered houses (#270, D-065 🟡): what a lit interior needs (lamps, room-scale bounce light, windows seen from inside), three ways to lamps (ReSTIR DI, a light tree sampled stochastically, clustered light lists with one shadow ray a pixel), probes for rooms (the models lab's 1 m and 256 rays), glass both ways; patents (NVIDIA's US 11,315,310 B2 on reservoir resampling with a GI structure, active to about 2041; none found on clustered shading) | 7 | done (2026-10-16; the patent page read, the rest search-recorded) |
+| [research/fauna.md](research/fauna.md) | fauna (#269): flocks, herds and schools (Couzin's zones over a topological neighbourhood of six or seven, a constant cruise with a turn limit, look-ahead obstacle avoidance), flight initiation distances (13.3 m rural and 7.1 m urban across Europe, 10 m for a village's house sparrows, cars by the road's limit), the village's eight species by the hour (house sparrow, feral pigeon, yellow-legged gull, common swift, cats, dogs with their owners, goats, thicklip grey mullet) with their speeds, ranges and days; patents (none found on flocking or fleeing at a distance; an aerial-vehicle patent that mentions flocking; Sony Online's flora around an avatar, the fauna run region by region) | 18 | done (2026-10-16; papers read or search-recorded, the distances but the sparrow's and most times marked as estimates) |
 
 ## Verdicts
 
@@ -491,6 +492,15 @@ species measure what nurseries and floras publish (the tests hold them to it). O
 hill the garrigue and the Aleppo pine take the dry, shallow, sunny ground and the holm oak the deep
 soils and the shade under the pines. Place region by region as a pure function of the ground:
 Sony Online's patent on flora generated around an avatar runs to 2028.
+
+**Fauna.** A flock follows its seven nearest (Ballerini et al.) in Couzin's zones, at a nearly
+constant cruise with a turn it cannot exceed (Hemelrijk and Hildenbrandt), looking ahead for walls
+within its own climb and turn (Reynolds). Animals flee at species distances: 13.3 m for rural
+birds and 7.1 m for urban ones across Europe, 10 m for a village's house sparrows; birds flee cars
+by the road's limit. Pet cats keep to about 3.6 ha and are out five hours a day; goats on
+Mediterranean ranges walk 4–7 km; swifts fly at 10 m/s and twice that in their screaming parties.
+No patent found on flocking or on fleeing at a distance; the fauna runs region by region, as the
+flora.
 
 ## Still to research
 

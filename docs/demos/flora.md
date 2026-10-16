@@ -112,7 +112,8 @@ world's cells can be placed in parallel. It never follows the player (the patent
   its forest"); its street, park, quay and courtyard settings as rows and groves with species are
   next.
 - A few individuals per species cooked into D-053's derived cache.
-- Point 3 of the issue: the fauna as behaviour (`forge-fauna`).
+- *Done 2026-10-16:* point 3 of the issue, the fauna as behaviour (`forge-fauna`,
+  `docs/demos/fauna.md`): its animals rest in and browse this placement.
 - For the renderer's session: meshes from the graph (generalised cylinders along the segments,
   leaf cards on the clusters), D-013's far bands from the same graph. *Started 2026-10-16:* the
   village draws its plants as tapered limbs and, on each cluster's lump, a dark core in leaf
