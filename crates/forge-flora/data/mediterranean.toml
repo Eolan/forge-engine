@@ -1,0 +1,201 @@
+# The Mediterranean village's species (#266, #269): its local forest's trees and the garrigue's
+# shrubs. Heights and crown widths are the published ranges for grown plants, with their sources
+# in docs/research/flora.md; the growth parameters (internode, angles, apical control, the
+# crown's shape) are estimates fitted to the published descriptions, marked so there.
+#
+# The fields are documented on `forge_flora::Species`. Lengths in metres, angles in degrees,
+# ages in years.
+
+[[species]]
+id = "aleppo-pine"
+name = "Aleppo pine"
+latin = "Pinus halepensis"
+habit = "tree"
+# 15–25 m (Wikipedia, the Conifer Society); crowns 7.6–15 m (Sacramento Tree Foundation's
+# 25–60 ft at its low end, Van den Berk's 10–15 m at its high end).
+height = [15.0, 25.0]
+crown_width = [7.6, 15.0]
+# 1.5–3 m after 10 years (the Conifer Society): 95 % of the height at about 80.
+maturity = 80.0
+foliage = "needles"
+# Conical when young, a rounded to flat-topped crown on a long clear bole when old.
+young_crown = { widest = 0.15, fullness = 0.9, base = 0.05 }
+crown = { widest = 0.68, fullness = 0.32, base = 0.55 }
+density = 0.7
+internode = 0.3
+# "Slender, irregular horizontal, upturned branches" (the Conifer Society).
+branch_angle = 62.0
+apical_control = 0.6
+tropism = 0.22
+wander = 0.22
+pipe_exponent = 2.1
+tip_radius = 0.013
+leaf_cluster = 0.35
+foliage_tips = 2
+shed_after = 3
+max_shoot = 4
+limb_nodes = 150
+
+[[species]]
+id = "holm-oak"
+name = "Holm oak"
+latin = "Quercus ilex"
+habit = "tree"
+# 20–25 m (Van den Berk), 21–28 m in favourable places (Wikipedia); crowns 12–15 m (Van den
+# Berk) to "as much across" as the height in the open (Wikipedia).
+height = [20.0, 28.0]
+crown_width = [12.0, 28.0]
+maturity = 150.0
+foliage = "broad"
+# A broad, dense, rounded crown on a short trunk; low branches at about 45° (Van den Berk).
+young_crown = { widest = 0.4, fullness = 0.6, base = 0.05 }
+crown = { widest = 0.45, fullness = 0.5, base = 0.18 }
+internode = 0.36
+branch_angle = 45.0
+apical_control = 0.5
+tropism = 0.12
+wander = 0.15
+pipe_exponent = 2.1
+tip_radius = 0.015
+leaf_cluster = 0.35
+foliage_tips = 4
+shed_after = 4
+max_shoot = 4
+limb_nodes = 30
+
+[[species]]
+id = "olive"
+name = "Olive"
+latin = "Olea europaea"
+habit = "tree"
+# 5–10 m (Van den Berk), "some 10 m" (Wikipedia); crowns 8–12 m, round to fan-shaped (Van den
+# Berk).
+height = [5.0, 10.0]
+crown_width = [8.0, 12.0]
+maturity = 60.0
+foliage = "broad"
+# A short gnarled and twisted trunk (Wikipedia), tangled dense branching (Van den Berk).
+young_crown = { widest = 0.45, fullness = 0.55, base = 0.25 }
+crown = { widest = 0.45, fullness = 0.4, base = 0.22 }
+internode = 0.22
+branch_angle = 50.0
+apical_control = 0.45
+tropism = 0.1
+wander = 0.35
+pipe_exponent = 2.0
+tip_radius = 0.013
+leaf_cluster = 0.26
+foliage_tips = 4
+shed_after = 4
+max_shoot = 3
+limb_nodes = 12
+
+[[species]]
+id = "italian-cypress"
+name = "Italian cypress"
+latin = "Cupressus sempervirens 'Stricta'"
+habit = "tree"
+# Over 12 m (RHS, Stricta Group), 20–30 m (Van den Berk's text), to 35 m for the species
+# (Wikipedia); spread 1.5–2 m (Van den Berk) to 2.5–4 m (RHS).
+height = [12.0, 30.0]
+crown_width = [1.5, 4.0]
+# 10–20 years to its ultimate height in the RHS's terms, more for the tall trees.
+maturity = 45.0
+foliage = "scale"
+# The fastigiate "exclamation mark": branches erect and close to the trunk.
+young_crown = { widest = 0.35, fullness = 0.35, base = 0.0 }
+crown = { widest = 0.42, fullness = 0.3, base = 0.03 }
+internode = 0.22
+branch_angle = 32.0
+apical_control = 0.7
+tropism = 0.35
+wander = 0.05
+pipe_exponent = 2.2
+tip_radius = 0.012
+leaf_cluster = 0.24
+foliage_tips = 8
+shed_after = 6
+max_shoot = 4
+occupancy = 1.6
+
+[[species]]
+id = "rosemary"
+name = "Rosemary"
+latin = "Salvia rosmarinus"
+habit = "shrub"
+# Upright forms 1.2–1.8 m (Wikipedia), 1.5–2.5 m in gardens (RHS); spread 1.5–2.5 m (RHS).
+height = [1.2, 2.5]
+crown_width = [1.5, 2.5]
+# 5–10 years to its ultimate size (RHS).
+maturity = 8.0
+foliage = "needles"
+young_crown = { widest = 0.45, fullness = 0.5, base = 0.0 }
+crown = { widest = 0.42, fullness = 0.45, base = 0.0 }
+internode = 0.05
+branch_angle = 35.0
+apical_control = 0.5
+tropism = 0.35
+wander = 0.2
+pipe_exponent = 2.1
+tip_radius = 0.0012
+leaf_cluster = 0.05
+foliage_tips = 3
+shed_after = 4
+max_shoot = 4
+stems = [5, 9]
+stem_spread = 28.0
+
+[[species]]
+id = "cistus"
+name = "Grey-leaved cistus"
+latin = "Cistus albidus"
+habit = "shrub"
+# Up to 1 m (Wikipedia), 0.5–1 m with a spread of 0.5–1 m (RHS); 1.5 m across in a nursery's
+# garden (Beth Chatto).
+height = [0.5, 1.0]
+crown_width = [0.5, 1.5]
+maturity = 8.0
+foliage = "broad"
+young_crown = { widest = 0.5, fullness = 0.5, base = 0.0 }
+crown = { widest = 0.5, fullness = 0.45, base = 0.0 }
+internode = 0.035
+branch_angle = 40.0
+apical_control = 0.45
+tropism = 0.25
+wander = 0.2
+pipe_exponent = 2.1
+tip_radius = 0.0012
+leaf_cluster = 0.045
+foliage_tips = 3
+shed_after = 4
+max_shoot = 4
+stems = [4, 7]
+stem_spread = 32.0
+
+[[species]]
+id = "kermes-oak"
+name = "Kermes oak"
+latin = "Quercus coccifera"
+habit = "shrub"
+# Usually a shrub under 2 m, rarely a small tree (Wikipedia; a low, dense shrub, the Calanques
+# national park). The spread is an estimate: no published figure was found; it suckers into
+# thickets.
+height = [1.0, 2.0]
+crown_width = [1.0, 3.0]
+maturity = 30.0
+foliage = "broad"
+young_crown = { widest = 0.5, fullness = 0.4, base = 0.0 }
+crown = { widest = 0.5, fullness = 0.35, base = 0.0 }
+internode = 0.06
+branch_angle = 50.0
+apical_control = 0.42
+tropism = 0.15
+wander = 0.25
+pipe_exponent = 2.1
+tip_radius = 0.0016
+leaf_cluster = 0.06
+foliage_tips = 3
+shed_after = 5
+max_shoot = 4
+stems = [6, 11]
+stem_spread = 40.0

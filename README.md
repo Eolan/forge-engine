@@ -31,6 +31,7 @@ crates/forge-world    world frames (phase 2): f64 reference frames in an integer
                       the flat grid and the cube sphere cut into u64-named cells, cell streaming plans with hysteresis
 crates/forge-physics  rigid bodies (phase 3): Jolt Physics 5.6 behind a C layer of Forge's own, deterministic across platforms (third_party/jolt)
 crates/forge-sim      the simulation's clock (phase 3): the fixed tick, stamped commands, recordings and replays, a server and predicting clients
+crates/forge-flora    the flora off the GPU (#269): species as data, trees and shrubs grown into branch graphs, CPU drawings
 crates/forge-procgen  procedural generation on the CPU (phase 2): fields, lattice noise, the island's terrain genesis, its rivers, lakes, coast distance and sea spectrum
                       (mask, uplift, priority flood, drainage, stream-power erosion), PNG previews
 shaders/              Slang sources (bindless, meshlet, barycentrics, vis64, hzb, starfield, atmosphere, atmosphere_luts, sky, skyview, sh, bloom, gtao, noise, dust, taa, exposure, aces2, tonemap, display, overlay, mipcheck, tonecheck)

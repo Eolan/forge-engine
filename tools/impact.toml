@@ -33,6 +33,8 @@
 "tools/population-bench/**" = []
 # The networking (#268): headless, on loopback, judged by its tests and `net-loopback`.
 "crates/forge-net/**" = []
+# The flora off the GPU (#269): a crate of its own, judged by its tests and its CPU drawings.
+"crates/forge-flora/**" = []
 # Claude's settings and its agents' worktrees: never built, never committed (#220).
 ".claude/**" = []
 

@@ -839,6 +839,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "forge-flora"
+version = "0.1.0"
+dependencies = [
+ "ab_glyph",
+ "forge-core",
+ "glam",
+ "image",
+ "serde",
+ "toml",
+]
+
+[[package]]
 name = "forge-geom"
 version = "0.1.0"
 dependencies = [

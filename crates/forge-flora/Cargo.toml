@@ -1,0 +1,19 @@
+[package]
+name = "forge-flora"
+description = "Forge flora off the GPU: trees and shrubs grown by space colonisation with self-organising vigour into branch graphs per species, their placement on a heightfield by biome rules, and CPU-drawn maps (#269)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+forge-core = { workspace = true }
+glam = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["png"] }
+ab_glyph = { workspace = true }

@@ -562,3 +562,23 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
     the CORDIC, Jack E. Volder, "The CORDIC Trigonometric Computing Technique", IRE
     Transactions on Electronic Computers, 1959, for the sines, cosines and angles in shifts and
     adds.
+- **The flora** (`forge-flora`, #269; `docs/research/flora.md`):
+  - **Space colonisation:** Adam Runions, Brendan Lane and Przemyslaw Prusinkiewicz, "Modeling
+    Trees with a Space Colonization Algorithm", Eurographics Workshop on Natural Phenomena 2007:
+    markers in the crown's envelope claimed by the buds that see them.
+  - **Self-organising trees:** Wojciech Pałubicki, Kipp Horel, Steven Longay, Adam Runions,
+    Brendan Lane, Radomír Měch and Przemyslaw Prusinkiewicz, "Self-organizing tree models for
+    image synthesis", SIGGRAPH 2009: the light summed down, the vigour handed up, shoots of
+    ⌊vigour⌋ metamers, shedding and pruning.
+  - **The vigour's split at a fork:** Rolf Borchert and Hisao Honda, "Control of Development in
+    the Bifurcating Branch System of *Tabebuia rosea*: A Computer Simulation", *Botanical
+    Gazette* 145, 1984.
+  - **The pipe model:** K. Shinozaki, K. Yoda, K. Hozumi and T. Kira, "A quantitative analysis
+    of plant form — the pipe model theory", *Japanese Journal of Ecology* 14, 1964: the radii.
+  - **The growth curve:** F. J. Richards, "A Flexible Growth Function for Empirical Use",
+    *Journal of Experimental Botany* 10, 1959 (the Chapman–Richards form foresters fit).
+  - **Closest points of two segments:** Christer Ericson, *Real-Time Collision Detection*, 2005,
+    §5.1.9.
+  - **The species' sizes:** Van den Berk Nurseries' tree pages, the Royal Horticultural Society's
+    plant pages, the American Conifer Society, the Sacramento Tree Foundation, EUFORGEN and
+    Wikipedia, as `docs/research/flora.md` §2 lists them.
