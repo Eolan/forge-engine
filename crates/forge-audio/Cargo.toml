@@ -1,0 +1,29 @@
+[package]
+name = "forge-audio"
+description = "Forge sound: a real-time mixer fed by a lock-free command queue, buses and a master limiter, voices with a budget, streaming decode, spatialisation, rendered headless (D-011, issue #267)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+forge-core = { workspace = true }
+glam = { workspace = true }
+# The wait-free single-producer, single-consumer ring buffers between the game, decode and
+# audio threads.
+rtrb = "0.4"
+# Ogg Vorbis, pure Rust.
+lewton = { version = "0.10", default-features = false, features = ["ogg"] }
+# Ogg pages for Opus (the version lewton reads with).
+ogg = "0.8"
+# Opus, pure Rust: a port of libopus 1.6.
+opus-rs = "0.1"
+thiserror = { workspace = true }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }

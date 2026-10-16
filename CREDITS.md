@@ -79,7 +79,10 @@ This is a promise of intent, not a licence term.
 | [rcgen](https://github.com/rustls/rcgen) | est31 and the rustls contributors | self-signed server certificates made at run time (`forge_net::ServerIdentity`) | MIT OR Apache-2.0 |
 | [tokio](https://github.com/tokio-rs/tokio) | Carl Lerche and the tokio contributors | the network's I/O runtime (`forge-net`) | MIT |
 | [bytes](https://github.com/tokio-rs/bytes) | Carl Lerche, Sean McArthur and the tokio contributors | messages' buffers (`forge-net`) | MIT |
-| [Blender](https://www.blender.org/) | the Blender Foundation and its contributors | a tool, not in the build: `assets/blender/boat.py`, `car.py`, `plane.py` and `ship.py` model the lab's boat, car, aeroplane and spaceship in it and export them as glTF (#138, #140, #141, #150); `skinned_creatures.py` the mannequin and the dog as skinned bodies with their armatures, bone-heat weights and clips (#143, #165), unwrapped by its smart UV projection and their textures baked by Cycles (#166) | GPL-2.0-or-later (the tool; what it makes is ours) |
+| [rtrb](https://github.com/mgeier/rtrb) | Matthias Geier and Stjepan Glavina | the wait-free single-producer, single-consumer rings between the game, decode and audio threads (`forge-audio`, #267) | MIT OR Apache-2.0 |
+| [lewton](https://github.com/RustAudio/lewton) and [ogg](https://github.com/RustAudio/ogg) | est31 and the RustAudio contributors | Ogg Vorbis decoding, and the Ogg pages under the Opus decoder (`forge_audio::decode`, #267) | lewton: MIT OR Apache-2.0; ogg: BSD-3-Clause |
+| [opus-rs](https://github.com/restsend/opus-rs) | jinti (restsend), porting libopus 1.6 by the Xiph.Org Foundation, Skype, Octasic, Jean-Marc Valin, Timothy B. Terriberry and the other Opus authors | Opus decoding in pure Rust (`forge_audio::decode::OggOpusDecoder`, #267); the Opus patents of Xiph.Org, Broadcom and Microsoft are licensed royalty-free (`docs/research/audio.md` §12) | BSD-3-Clause |
+| [Blender](https://www.blender.org/) | the Blender Foundation and its contributors | a tool, not in the build: `assets/blender/boat.py`, `car.py`, `plane.py` and `ship.py` model the lab's boat, car, aeroplane and spaceship in it and export them as glTF (#138, #140, #141, #150); `skinned_creatures.py` the mannequin and the dog as skinned bodies with their armatures, bone-heat weights and clips (#143, #165), unwrapped by its smart UV projection and their textures baked by Cycles (#166); its audaspace and FFmpeg (libvorbis, libopus) encoded the tone `forge-audio` made into the Ogg Vorbis and Ogg Opus test files in `crates/forge-audio/tests/data/` (#267) | GPL-2.0-or-later (the tool; what it makes is ours) |
 
 ## Assets
 
@@ -582,3 +585,34 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   - **The species' sizes:** Van den Berk Nurseries' tree pages, the Royal Horticultural Society's
     plant pages, the American Conifer Society, the Sacramento Tree Foundation, EUFORGEN and
     Wikipedia, as `docs/research/flora.md` §2 lists them.
+
+**Sound** (`forge-audio`, #267, D-011):
+- **The audio thread's rules.** Ross Bencina, "Real-time audio programming 101: time waits for
+  nothing", 2011: no lock, allocation, file or unbounded call on the audio thread; what it is
+  done with goes back to be freed elsewhere.
+- **The limiter.** Geraint Luff, "Designing a straightforward limiter", Signalsmith Audio, 2022:
+  the gain's minimum held over the look-ahead, then averaged over the same length, the audio
+  delayed to match (`forge_audio::dsp::Limiter`).
+- **The reverb.** Jean-Marc Jot and Antoine Chaigne, "Digital Delay Networks for Designing
+  Artificial Reverberators", AES 90th Convention, 1991: a feedback delay network through an
+  orthogonal matrix, each line's gain set from the decay time and damped by a one-pole filter;
+  the feedback delay network itself after John Stautner and Miller Puckette, "Designing
+  Multi-Channel Reverberators", *Computer Music Journal* 6(1), 1982 (`forge_audio::dsp::Reverb`).
+- **Band gains and air.** Valve's Steam Audio (Apache-2.0), read in its source: the three bands
+  (800 Hz, 8 kHz), the default air absorption per metre, and the band EQ as a low shelf, a
+  peaking filter and a high shelf with the gains normalised and crossfaded when they change
+  (`core/src/core/eq_effect.cpp`, `iir.cpp`, `air_absorption.cpp`), written again in Rust
+  (`forge_audio::dsp::ThreeBand`, `spatial::AIR_ABSORPTION`).
+- **The filters.** Robert Bristow-Johnson, "Cookbook formulae for audio EQ biquad filter
+  coefficients" (the shelves and the peaking filter).
+- **Resampling.** The four-point, third-order Hermite (Catmull–Rom) interpolator: Edwin Catmull
+  and Raphael Rom, "A Class of Local Interpolating Splines", 1974, as Olli Niemitalo sets it out
+  for audio in "Polynomial Interpolators for High-Quality Resampling of Oversampled Audio",
+  2001.
+- **Distance.** The OpenAL 1.1 specification's clamped inverse distance model (Creative Labs,
+  2005).
+- **Voices.** The real and virtual voices of FMOD and Wwise as their documentation describes
+  them: a budget kept by priority and then audibility, virtual voices that keep their time.
+- **Ogg Vorbis and Opus.** The Xiph.Org Foundation's Vorbis I specification (granule positions
+  and the trimming they imply, A.2); RFC 7845 (Ogg Opus: the head, the pre-skip, the granule
+  positions) and RFC 6716 (Opus).

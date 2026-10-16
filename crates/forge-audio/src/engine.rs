@@ -1,0 +1,393 @@
+//! The game thread's side: starting sounds, steering them, reading what ended.
+//!
+//! [`create`] makes an [`AudioEngine`] and its [`crate::Mixer`] joined by two rings: commands
+//! go one way, finished voices (their sounds, to be dropped here) and their reasons come
+//! back. The engine never waits on the mixer: when the command ring is full it keeps the
+//! commands, in order, and sends them at the next call.
+
+use std::collections::VecDeque;
+use std::sync::Arc;
+
+use glam::{DVec3, Vec3};
+use rtrb::{Consumer, Producer, RingBuffer};
+
+use crate::bus::{BusId, BusLayout};
+use crate::clock::Clock;
+use crate::dsp::ReverbParams;
+use crate::mixer::{Mixer, MixerConfig, MixerStats, SharedStats};
+use crate::sound::SampleBuffer;
+use crate::spatial::{Listener, Occlusion, Spatial};
+use crate::stream::Stream;
+use crate::voice::{MAX_SENDS, Source, StreamReader};
+
+/// A voice, named by the engine when it starts it; never reused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct VoiceId(pub u64);
+
+/// How a voice starts.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlayParams {
+    /// The bus it plays into.
+    pub bus: BusId,
+    /// A linear gain.
+    pub gain: f32,
+    /// A playback rate factor (2: an octave up).
+    pub pitch: f32,
+    /// For a non-spatial voice: −1 left to 1 right (equal-power for mono, balance for
+    /// stereo).
+    pub pan: f32,
+    /// What it keeps its place by when the budget is full: higher keeps.
+    pub priority: u8,
+    /// Plays again from the start at its end.
+    pub looping: bool,
+    /// When stolen or refused a place, keeps running silently and comes back when it is
+    /// loud enough (sounds in memory only).
+    pub virtualize: bool,
+    /// Where it is, if it is placed in the world.
+    pub spatial: Option<Spatial>,
+    /// The frame it starts on (`None`: the next block).
+    pub start: Option<u64>,
+    /// Frames of fade-in (0: it starts on its first sample).
+    pub fade_in: u32,
+    /// Sends to other buses (an aux reverb): a bus and a linear level each.
+    pub sends: [Option<(BusId, f32)>; MAX_SENDS],
+}
+
+impl Default for PlayParams {
+    fn default() -> Self {
+        Self {
+            bus: BusId::MASTER,
+            gain: 1.0,
+            pitch: 1.0,
+            pan: 0.0,
+            priority: 128,
+            looping: false,
+            virtualize: false,
+            spatial: None,
+            start: None,
+            fade_in: 0,
+            sends: [None; MAX_SENDS],
+        }
+    }
+}
+
+impl PlayParams {
+    /// A spatial voice at `position`.
+    pub fn at(position: DVec3) -> Self {
+        Self {
+            spatial: Some(Spatial::at(position)),
+            ..Self::default()
+        }
+    }
+}
+
+/// A change to a voice, a bus or the listener.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Control {
+    /// Stops a voice, fading out over `fade` frames from the command's frame.
+    Stop {
+        /// Which.
+        voice: VoiceId,
+        /// Frames of fade-out (0: silent from that frame).
+        fade: u32,
+    },
+    /// A voice's gain.
+    Gain {
+        /// Which.
+        voice: VoiceId,
+        /// Linear.
+        gain: f32,
+    },
+    /// A voice's playback rate factor.
+    Pitch {
+        /// Which.
+        voice: VoiceId,
+        /// 2: an octave up.
+        pitch: f32,
+    },
+    /// A non-spatial voice's pan.
+    Pan {
+        /// Which.
+        voice: VoiceId,
+        /// −1 to 1.
+        pan: f32,
+    },
+    /// A spatial voice's place and velocity.
+    Position {
+        /// Which.
+        voice: VoiceId,
+        /// Where.
+        position: DVec3,
+        /// Metres a second.
+        velocity: Vec3,
+    },
+    /// What blocks a spatial voice's direct path.
+    Occlusion {
+        /// Which.
+        voice: VoiceId,
+        /// How much and through what.
+        occlusion: Occlusion,
+    },
+    /// A voice's send level.
+    VoiceSend {
+        /// Which.
+        voice: VoiceId,
+        /// The send's slot in [`PlayParams::sends`].
+        slot: usize,
+        /// Linear.
+        level: f32,
+    },
+    /// A bus's fader.
+    BusGain {
+        /// Which.
+        bus: BusId,
+        /// Linear.
+        gain: f32,
+    },
+    /// A bus's send level.
+    BusSend {
+        /// Which.
+        bus: BusId,
+        /// The slot [`BusLayout::send`] returned.
+        slot: usize,
+        /// Linear.
+        level: f32,
+    },
+    /// The listener.
+    Listener(Listener),
+    /// The parameters of the reverb on an aux bus.
+    Reverb {
+        /// Which.
+        bus: BusId,
+        /// The new parameters.
+        params: ReverbParams,
+    },
+}
+
+impl Control {
+    /// The voice it acts on, if it acts on one.
+    pub fn voice(&self) -> Option<VoiceId> {
+        match *self {
+            Control::Stop { voice, .. }
+            | Control::Gain { voice, .. }
+            | Control::Pitch { voice, .. }
+            | Control::Pan { voice, .. }
+            | Control::Position { voice, .. }
+            | Control::Occlusion { voice, .. }
+            | Control::VoiceSend { voice, .. } => Some(voice),
+            _ => None,
+        }
+    }
+}
+
+/// Why a voice ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum EndReason {
+    /// It played to its end.
+    Finished,
+    /// It was stopped.
+    Stopped,
+    /// A stronger voice took its place.
+    Stolen,
+    /// The budget was full of stronger voices when it started.
+    Rejected,
+}
+
+/// What the mixer reports back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Event {
+    /// A voice ended.
+    Ended {
+        /// Which.
+        voice: VoiceId,
+        /// Why.
+        reason: EndReason,
+    },
+}
+
+pub(crate) struct PlayCommand {
+    pub id: VoiceId,
+    pub source: Source,
+    pub params: PlayParams,
+}
+
+pub(crate) enum Command {
+    Play(PlayCommand),
+    Control(Control),
+}
+
+/// A command and the frame it acts on (`None`: the next block).
+pub(crate) struct Timed {
+    pub at: Option<u64>,
+    pub cmd: Command,
+}
+
+/// A voice the mixer is done with: its sound, to be dropped on the game thread, and why it
+/// ended (`None`: no event, the voice lives on elsewhere).
+pub(crate) struct Returned {
+    pub voice: VoiceId,
+    pub reason: Option<EndReason>,
+    pub source: Option<Source>,
+}
+
+/// The game thread's handle on the mixer.
+pub struct AudioEngine {
+    commands: Producer<Timed>,
+    returns: Consumer<Returned>,
+    backlog: VecDeque<Timed>,
+    next_id: u64,
+    clock: Clock,
+    stats: Arc<SharedStats>,
+    rate: u32,
+    events: Vec<Event>,
+}
+
+/// Makes a mixer for `layout` and the engine that drives it.
+pub fn create(config: MixerConfig, layout: &BusLayout) -> (AudioEngine, Mixer) {
+    let (command_tx, command_rx) = RingBuffer::new(config.command_capacity.max(1));
+    let return_capacity = config.command_capacity
+        + config.pending_capacity
+        + config.max_voices
+        + config.tail_voices
+        + config.max_virtual;
+    let (return_tx, return_rx) = RingBuffer::new(return_capacity);
+    let clock = Clock::new();
+    let stats = Arc::new(SharedStats::default());
+    let mixer = Mixer::new(
+        config,
+        layout,
+        command_rx,
+        return_tx,
+        clock.clone(),
+        stats.clone(),
+    );
+    let engine = AudioEngine {
+        commands: command_tx,
+        returns: return_rx,
+        backlog: VecDeque::new(),
+        next_id: 1,
+        clock,
+        stats,
+        rate: config.sample_rate,
+        events: Vec::new(),
+    };
+    (engine, mixer)
+}
+
+impl AudioEngine {
+    /// Plays a sound held in memory.
+    pub fn play(&mut self, sound: &Arc<SampleBuffer>, params: PlayParams) -> VoiceId {
+        self.start(Source::Memory(sound.clone()), params)
+    }
+
+    /// Plays a stream ([`crate::Streams::open`]). Streams are never virtual: a stream that
+    /// loses its place fades out and ends.
+    pub fn play_stream(&mut self, stream: Stream, params: PlayParams) -> VoiceId {
+        self.start(Source::Stream(Box::new(StreamReader::new(stream))), params)
+    }
+
+    fn start(&mut self, source: Source, params: PlayParams) -> VoiceId {
+        let id = VoiceId(self.next_id);
+        self.next_id += 1;
+        self.send(Timed {
+            at: params.start,
+            cmd: Command::Play(PlayCommand { id, source, params }),
+        });
+        id
+    }
+
+    /// Applies a change at the next block.
+    pub fn control(&mut self, control: Control) {
+        self.send(Timed {
+            at: None,
+            cmd: Command::Control(control),
+        });
+    }
+
+    /// Applies a change at `frame`: a stop on that very frame, any other change at the start
+    /// of the block holding it (gains and positions are ramped across a block).
+    pub fn control_at(&mut self, frame: u64, control: Control) {
+        self.send(Timed {
+            at: Some(frame),
+            cmd: Command::Control(control),
+        });
+    }
+
+    /// Stops a voice with a fade of `fade` frames.
+    pub fn stop(&mut self, voice: VoiceId, fade: u32) {
+        self.control(Control::Stop { voice, fade });
+    }
+
+    /// Moves the listener.
+    pub fn set_listener(&mut self, listener: Listener) {
+        self.control(Control::Listener(listener));
+    }
+
+    fn send(&mut self, timed: Timed) {
+        self.flush();
+        if !self.backlog.is_empty() {
+            self.backlog.push_back(timed);
+            return;
+        }
+        if let Err(rtrb::PushError::Full(timed)) = self.commands.push(timed) {
+            self.backlog.push_back(timed);
+        }
+    }
+
+    fn flush(&mut self) {
+        while let Some(timed) = self.backlog.pop_front() {
+            if let Err(rtrb::PushError::Full(timed)) = self.commands.push(timed) {
+                self.backlog.push_front(timed);
+                break;
+            }
+        }
+    }
+
+    /// Sends what waited, drops what the mixer returned, and gives the events since the
+    /// last call.
+    pub fn update(&mut self) -> &[Event] {
+        self.flush();
+        self.events.clear();
+        while let Ok(returned) = self.returns.pop() {
+            if let Some(reason) = returned.reason {
+                self.events.push(Event::Ended {
+                    voice: returned.voice,
+                    reason,
+                });
+            }
+            // The sound or the stream's reader is dropped here, off the audio thread.
+            drop(returned.source);
+        }
+        &self.events
+    }
+
+    /// Commands kept because the ring was full.
+    pub fn backlog(&self) -> usize {
+        self.backlog.len()
+    }
+
+    /// The mixer's clock.
+    pub fn clock(&self) -> &Clock {
+        &self.clock
+    }
+
+    /// The first frame the mixer has not rendered: the earliest a command can act on time.
+    pub fn now(&self) -> u64 {
+        self.clock.now()
+    }
+
+    /// Frames a second.
+    pub fn sample_rate(&self) -> u32 {
+        self.rate
+    }
+
+    /// Frames in `seconds`.
+    pub fn frames(&self, seconds: f64) -> u64 {
+        (seconds * self.rate as f64).round() as u64
+    }
+
+    /// The mixer's counters.
+    pub fn stats(&self) -> MixerStats {
+        self.stats.snapshot()
+    }
+}

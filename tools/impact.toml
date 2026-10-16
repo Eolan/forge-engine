@@ -35,6 +35,8 @@
 "crates/forge-net/**" = []
 # The flora off the GPU (#269): a crate of its own, judged by its tests and its CPU drawings.
 "crates/forge-flora/**" = []
+# The sound system (#267, D-062): a CPU crate tested headless; no demo draws it.
+"crates/forge-audio/**" = []
 # Claude's settings and its agents' worktrees: never built, never committed (#220).
 ".claude/**" = []
 
