@@ -592,6 +592,57 @@ mod tests {
                 );
             }
         }
+        // Walls in line meet without a slot or a step (the owner's sighting of 2026-10-16: a
+        // dark upright strip where two garden walls met). For each two walls nearly in line,
+        // their facing ends within 0.75 m and within a wall's thickness of each other's line
+        // (a jog of a whole thickness is a corner): either their corners meet, or a third wall
+        // stands between them.
+        let mut slots = Vec::new();
+        for (i, w) in v.plan.walls.iter().enumerate() {
+            let t = (w.b - w.a).normalize_or_zero();
+            for x in &v.plan.walls[i + 1..] {
+                let u = (x.b - x.a).normalize_or_zero();
+                if t.perp_dot(u).abs() > 0.3 {
+                    continue;
+                }
+                let (gap, e, f) = [(0, 0), (0, 1), (1, 0), (1, 1)]
+                    .map(|(e, f)| {
+                        let p = if e == 0 { w.a } else { w.b };
+                        let q = if f == 0 { x.a } else { x.b };
+                        (p.distance(q), e, f)
+                    })
+                    .into_iter()
+                    .min_by(|a, b| a.0.total_cmp(&b.0))
+                    .expect("four pairs");
+                let (p, q) = (
+                    if e == 0 { w.a } else { w.b },
+                    if f == 0 { x.a } else { x.b },
+                );
+                if gap >= 0.75 || (q - p).perp_dot(t).abs() >= 0.35 {
+                    continue;
+                }
+                // Each wall's two corners at the joint (ring 0 and 3 at `a`, 1 and 2 at `b`).
+                let corners = |r: Vec<DVec2>, at_a: bool| {
+                    if at_a { [r[0], r[3]] } else { [r[1], r[2]] }
+                };
+                let (cw, cx) = (corners(w.ring(), e == 0), corners(x.ring(), f == 0));
+                let apart = cw
+                    .iter()
+                    .map(|p| cx.iter().map(|q| p.distance(*q)).fold(f64::MAX, f64::min))
+                    .fold(0.0, f64::max);
+                let mid = (cw[0] + cw[1] + cx[0] + cx[1]) * 0.25;
+                let filled = v.plan.walls.iter().any(|o| {
+                    !std::ptr::eq(o, w) && !std::ptr::eq(o, x) && geom::contains(&o.ring(), mid)
+                });
+                if apart > 0.02 && !filled {
+                    slots.push((apart, mid));
+                }
+            }
+        }
+        assert!(
+            slots.is_empty(),
+            "walls in line with a slot or a step between them: {slots:?}"
+        );
         if let Ok(path) = std::env::var("VILLAGE_OWN_PNG") {
             super::super::map::write_village(&v, std::path::Path::new(&path), 0.25)
                 .expect("the drawing");

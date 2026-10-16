@@ -26,6 +26,9 @@ const SHORTEST: f64 = 0.3;
 /// How near a wall's end must come to another wall for the two to be joined, metres: a
 /// wall's thickness, the lots' corners from two strips falling a little apart.
 const JOIN: f64 = THICKNESS;
+/// How far apart the ends of two walls nearly in line may stand to be joined, metres: a slot
+/// narrower than a gate is no way through, and showed as a dark strip in the wall.
+const IN_LINE_JOIN: f64 = 0.75;
 /// The shortest stretch of a court's wall along the street that takes a gate, metres.
 const COURT_GATE: f64 = 6.0;
 
@@ -320,9 +323,9 @@ fn clearing(w: &Wall, c: DVec2, into: DVec2, other: &Wall) -> f64 {
 /// Where walls meet, one butts against the other so that none overlaps another: two walls of a
 /// height overlapping would put their tops on one plane, the flicker the owner sees
 /// (`forge-geometry-pitfalls`). A wall ending within a wall's thickness of another: stops at the
-/// face of one passing through; meets one in line (within 17°) halfway between their ends,
-/// their end faces mitred on the bisector; stops past the farthest face of walls in line with
-/// each other crossing there; at a corner, clears the walls ranking above it (higher, then
+/// face of one passing through; meets one in line (within 17°, its end within `IN_LINE_JOIN`) at
+/// the middle of their two ends, their end faces mitred on the bisector; stops past the farthest
+/// face of walls in line with each other crossing there; at a corner, clears the walls ranking above it (higher, then
 /// longer, then first), or runs on past their far faces when it ranks above them all. Then
 /// [`settle`] clears what is left.
 fn joints(walls: &mut Vec<Wall>) {
@@ -333,6 +336,18 @@ fn joints(walls: &mut Vec<Wall>) {
     // mitred end faces.
     let mut moves = vec![(0.0, 0.0); n];
     let mut mitres: Vec<[Option<DVec2>; 2]> = vec![[None, None]; n];
+    // Where an end moves to meet a wall in line with it: the middle of the two ends.
+    let mut snaps: Vec<[Option<DVec2>; 2]> = vec![[None, None]; n];
+    // The wall in line each end meets, whose direction its mitre takes once both have moved.
+    let mut partners: Vec<[Option<usize>; 2]> = vec![[None, None]; n];
+    // The end of `p` nearer `c`.
+    let nearer = |p: &Wall, c: DVec2| {
+        if p.a.distance(c) < p.b.distance(c) {
+            p.a
+        } else {
+            p.b
+        }
+    };
     for i in 0..n {
         for end in [false, true] {
             let w = &walls[i];
@@ -360,23 +375,29 @@ fn joints(walls: &mut Vec<Wall>) {
             // corner, the walls ranking above this one (higher, then longer, then first), which
             // it clears, or, ranking above them all, it runs on past their far faces.
             let passing: Vec<usize> = crossing.iter().copied().filter(|&j| interior(j)).collect();
+            // A wall in line whose nearer end stands within `IN_LINE_JOIN` of this one, and
+            // within a wall's thickness of its line.
+            let meets = |j: usize| {
+                let near = nearer(&walls[j], c);
+                j != i
+                    && in_line(w, &walls[j])
+                    && near.distance(c) < IN_LINE_JOIN
+                    && (near - c).perp_dot(t).abs() < THICKNESS
+            };
             let mv = if !passing.is_empty() {
                 farthest(&passing)
-            } else if let Some(j) = (0..n).find(|&j| touching(j) && in_line(w, &walls[j])) {
-                let p = &walls[j];
-                let near = if p.a.distance(c) < p.b.distance(c) {
-                    p.a
-                } else {
-                    p.b
-                };
-                if near.distance(c) >= JOIN {
-                    continue;
-                }
-                let d = if dir(p).dot(t) < 0.0 { -dir(p) } else { dir(p) };
-                let mean = (t + d).normalize_or_zero();
-                mitres[i][end as usize] = Some(DVec2::new(-mean.y, mean.x));
-                // The two ends meet halfway between them.
-                (near - c).dot(into) * 0.5
+            } else if let Some(j) = (0..n).find(|&j| meets(j)) {
+                // The two ends meet at the middle of them, on one line: each moved along its own
+                // line halfway, two walls 5 cm off each other's line (a court 5 cm in from the
+                // lane) kept a 5 cm step, a dark upright strip in the wall (the owner,
+                // 2026-10-16), and ends more than a thickness apart a slot. Mitred below, on
+                // the walls' directions once moved.
+                snaps[i][end as usize] = Some((c + nearer(&walls[j], c)) * 0.5);
+                partners[i][end as usize] = Some(j);
+                0.0
+            } else if (0..n).any(|j| touching(j) && in_line(w, &walls[j])) {
+                // In line, but its nearer end too far to meet: it stays as it is.
+                continue;
             } else if crossing.is_empty() {
                 continue;
             } else {
@@ -413,21 +434,118 @@ fn joints(walls: &mut Vec<Wall>) {
             }
         }
     }
-    let mut kept = Vec::with_capacity(n);
-    for ((w, (at_a, at_b)), [ma, mb]) in walls.drain(..).zip(moves).zip(mitres) {
-        if w.length() - at_a - at_b < SHORTEST {
-            continue;
+    // Each wall's ends once moved; a wall reversed or too short goes.
+    let placed: Vec<Option<(DVec2, DVec2)>> = walls
+        .iter()
+        .zip(&moves)
+        .zip(&snaps)
+        .map(|((w, &(at_a, at_b)), &[sa, sb])| {
+            let t = dir(w);
+            let (a, b) = (sa.unwrap_or(w.a + t * at_a), sb.unwrap_or(w.b - t * at_b));
+            (a.distance(b) >= SHORTEST && (b - a).dot(t) > 0.0).then_some((a, b))
+        })
+        .collect();
+    // An end that met a wall in line, mitred on the bisector of the two as they now run (on
+    // their directions before the move, the two overlapped a hair, and `settle` opened the slot
+    // again).
+    for i in 0..n {
+        for end in 0..2 {
+            let Some(j) = partners[i][end] else {
+                continue;
+            };
+            let (Some((a, b)), Some((pa, pb))) = (placed[i], placed[j]) else {
+                continue;
+            };
+            let (t, d) = ((b - a).normalize_or_zero(), (pb - pa).normalize_or_zero());
+            let d = if d.dot(t) < 0.0 { -d } else { d };
+            let mean = (t + d).normalize_or_zero();
+            mitres[i][end] = Some(DVec2::new(-mean.y, mean.x));
         }
-        let t = dir(&w);
+    }
+    let mut kept = Vec::with_capacity(n);
+    for ((w, [ma, mb]), place) in walls.drain(..).zip(mitres).zip(placed) {
+        let Some((a, b)) = place else {
+            continue;
+        };
         kept.push(Wall {
-            a: w.a + t * at_a,
-            b: w.b - t * at_b,
+            a,
+            b,
             ends: [ma.unwrap_or(w.ends[0]), mb.unwrap_or(w.ends[1])],
             ..w
         });
     }
     *walls = kept;
     settle(walls);
+    fill_slots(walls);
+}
+
+/// Where two walls nearly in line still end apart (a junction of four lots' walls, one stopping
+/// at a third wall's face and its partner at another's), a piece of wall along their line fills
+/// the slot between them, its end faces theirs: a slot showed as a dark upright strip (the
+/// owner, 2026-10-16). Only where nothing else stands in the slot, and only when the piece
+/// shares no ground with another wall.
+fn fill_slots(walls: &mut Vec<Wall>) {
+    let n = walls.len();
+    let mut pieces = Vec::new();
+    for i in 0..n {
+        for j in i + 1..n {
+            let (w, x) = (&walls[i], &walls[j]);
+            if dir(w).perp_dot(dir(x)).abs() > 0.3 || w.height != x.height {
+                continue;
+            }
+            // The facing ends: the pair of ends nearest each other.
+            let ends = [(0, 0), (0, 1), (1, 0), (1, 1)].map(|(e, f)| {
+                let p = if e == 0 { w.a } else { w.b };
+                let q = if f == 0 { x.a } else { x.b };
+                (p.distance(q), e, f, p, q)
+            });
+            let &(gap, e, f, p, q) = ends
+                .iter()
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+                .expect("four pairs");
+            let t = dir(w);
+            if !(0.005..IN_LINE_JOIN).contains(&gap) || (q - p).perp_dot(t).abs() >= THICKNESS {
+                continue;
+            }
+            // The slot runs from `w`'s end on, away from `w`.
+            let out = if e == 0 { -t } else { t };
+            if (q - p).dot(out) <= 0.0 {
+                continue;
+            }
+            let mid = (p + q) * 0.5;
+            if walls
+                .iter()
+                .any(|o| geom::contains(&o.ring(), mid) || o.a.distance(mid) < 1e-3)
+            {
+                continue;
+            }
+            // The piece from `p` to `q`, its end faces `w`'s at `p` and `x`'s at `q`, each
+            // turned to the piece's left.
+            let mut piece = Wall::new(p, q, w.height, w.inside.or(x.inside));
+            let left = {
+                let u = (q - p).normalize_or_zero();
+                DVec2::new(-u.y, u.x)
+            };
+            let facing = |v: DVec2| if v.dot(left) < 0.0 { -v } else { v };
+            piece.ends = [facing(w.ends[e]), facing(x.ends[f])];
+            let ring = piece.ring();
+            let shared = walls
+                .iter()
+                .chain(&pieces)
+                .map(|o| overlap(&ring, &o.ring()))
+                .fold(0.0, f64::max);
+            if shared > 1e-3 {
+                continue;
+            }
+            // A corner's sliver shared with a wall crossing there (a few square centimetres):
+            // the piece a centimetre lower, so the two tops never lie on one plane.
+            if shared > 1e-6 {
+                piece.height -= 0.01;
+            }
+            pieces.push(piece);
+        }
+    }
+    walls.extend(pieces);
 }
 
 /// What the joints leave sharing ground (two corners a little apart, each joined on its own):

@@ -515,7 +515,14 @@ walls left sharing ground step back, and two lots back to back across a sliver o
 one wall. The village has 662 m of wall along its streets and lanes, 1 779 m between gardens
 and 42 gates; the kit draws them in stone and the walker meets them
 (`reports/2026-10-16/village-garden-walls.png`, the map check's garden view along the longest
-of them). **Its insides** (`city::interior`, the same day; the owner: "a house or structure
+of them). **The owner's sighting the same evening**, a dark upright strip in a wall: two walls
+in line each moved halfway along its own line, and a court 5 cm in from the lane left a 5 cm
+step whose face stood in shade. Walls in line now meet at the middle of their two ends, and
+join up to 0.75 m apart; where a junction of four lots still leaves a slot between two of them
+(each stopped at another wall's face), a piece of wall fills it, a centimetre lower where it
+shares a corner's sliver with a crossing wall. The village's test finds no slot or step
+between walls within a thickness of each other's line (four steps and three slots before;
+`reports/2026-10-16/village-wall-joint.png`, before and after). **Its insides** (`city::interior`, the same day; the owner: "a house or structure
 should be thought by thinking about the rooms"): a house's structure now follows its rooms'
 plan. Its core (`cores`, the straight flight of 1.1 m with handrails beside a corridor of
 1.2 m a wheelchair passes, walls of 0.2 m) stands at the start of its front where the plan
