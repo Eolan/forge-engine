@@ -30,7 +30,7 @@ use forge_procgen::city::shore::Shore;
 use forge_procgen::city::structure::{self, OpeningKind, Structure, WallRole};
 use forge_procgen::city::trees::Tree;
 use forge_procgen::city::units::{self, Occupancy};
-use forge_procgen::city::{BlockUse, CityPlan, Site, cores, geom, ground, interior};
+use forge_procgen::city::{BlockUse, CityPlan, Site, cores, furnish, geom, ground, interior};
 use forge_procgen::grammar::Grammar;
 use forge_render::MeshletSceneBuilder;
 use forge_render::textures;
@@ -1318,6 +1318,37 @@ impl PlanScenario {
             kit_meshes.push(forge_geom::furniture::bike_rack());
             let id = (kit_meshes.len() - 1) as u32;
             kit_instances.extend(racks.into_iter().map(|at| (id, at, 0)));
+        }
+        // The furniture of the houses whose insides are drawn (`city::furnish`), near the view:
+        // a mesh a piece, each placed on its storey's floor turned to face its way.
+        let mut homes: std::collections::BTreeMap<String, Vec<Mat4>> = Default::default();
+        for &i in &near {
+            let (m, s) = (&masses[i], &structures[i]);
+            let Some(inner) = interior::house(m, s) else {
+                continue;
+            };
+            for p in furnish::furnish(s, &inner) {
+                let turn = (p.facing.x as f32).atan2(p.facing.y as f32);
+                homes
+                    .entry(home_name(p.piece).to_string())
+                    .or_default()
+                    .push(Mat4::from_rotation_translation(
+                        glam::Quat::from_rotation_y(turn),
+                        world(size, p.centre, floor_level(s, p.storey)),
+                    ));
+            }
+        }
+        for (name, at) in homes {
+            let piece = furnish::Piece::ALL
+                .into_iter()
+                .find(|&p| home_name(p) == name)
+                .unwrap_or(furnish::Piece::Shelves);
+            let (w, d) = piece.size();
+            if let Some(mesh) = forge_geom::furniture::home(&name, w as f32, d as f32) {
+                kit_meshes.push(mesh);
+                let id = (kit_meshes.len() - 1) as u32;
+                kit_instances.extend(at.into_iter().map(|at| (id, at, 0)));
+            }
         }
         // Chess tables round the fountain of each square of 0.15 ha or more without a landmark,
         // four 9 m from its middle on the diagonals, where they stand clear of the trunks and the
@@ -2757,7 +2788,25 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
     count
 }
 
-/// A mass's floor inside its walls: the footprint moved in by each wall's drawn thickness (its/// inner face's, 0.2 m at least; 5 cm between a building's masses), or by the thickest where/// that fails. A uniform inset by the thickest left a strip of the ground showing by the thinner/// party walls.fn inner_ring(m: &Mass, s: &Structure) -> Option<Vec<DVec2>> {    let d: Vec<f64> = s        .walls        .iter()        .map(|w| if w.role == WallRole::Inner { 0.05 } else { w.thickness.max(0.2) })        .collect();    let deepest = d.iter().copied().fold(0.2, f64::max);    geom::inset_by(&m.footprint, &d)        .or_else(|| geom::inset_by_collapsing(&m.footprint, &d))        .or_else(|| geom::inset(&m.footprint, deepest))        .filter(|r| r.len() >= 3)}
+/// The kit's mesh for a piece of a home's furniture (`forge_geom::furniture::home`).
+fn home_name(piece: furnish::Piece) -> &'static str {
+    match piece {
+        furnish::Piece::Bed => "bed",
+        furnish::Piece::SingleBed => "single_bed",
+        furnish::Piece::Wardrobe => "wardrobe",
+        furnish::Piece::Sofa => "sofa",
+        furnish::Piece::LowTable => "low_table",
+        furnish::Piece::Counter => "counter",
+        furnish::Piece::Table => "table",
+        furnish::Piece::Chair => "chair",
+        furnish::Piece::Bath => "bath",
+        furnish::Piece::Basin => "basin",
+        furnish::Piece::Toilet => "toilet",
+        furnish::Piece::Desk => "desk",
+        furnish::Piece::Shelves => "shelves",
+    }
+}
+
 /// A mass's floor inside its walls: the footprint moved in by each wall's drawn thickness (its
 /// inner face's, 0.2 m at least; 5 cm between a building's masses), or by the thickest where that
 /// fails. A uniform inset by the thickest left a strip of the ground showing by the thinner party
@@ -2870,7 +2919,7 @@ fn interior_floors(
 }
 
 /// The insides of the houses near the view as the walker's convex pieces, the world's metres:
-/// their partitions, their flights' steps and their upper floors.
+/// their partitions, their flights' steps, their upper floors and their furniture.
 fn interior_pieces(
     size: f64,
     masses: &[Mass],
@@ -2893,6 +2942,13 @@ fn interior_pieces(
         }
         for (ring, y0, y1) in interior_floors(m, s, &inner) {
             out.push(solid(&ring, y0, y1));
+        }
+        // The furniture but the chairs, which a walker brushes past.
+        for p in furnish::furnish(s, &inner) {
+            if p.piece != furnish::Piece::Chair {
+                let y0 = floor_level(s, p.storey);
+                out.push(solid(&p.outline(), y0, y0 + p.piece.height()));
+            }
         }
     }
     out

@@ -1,4 +1,4 @@
-//! Street furniture as part programs: café terraces and tram stops. Each piece uses the kit's
+//! Street furniture as part programs: café terraces and tram stops, and a home's furniture. Each
 //! section layout ([`crate::modules`]: stone, frame, glass, paint, iron, fabric, wood), so the
 //! kit's material groups dress it, and stands in the kit's frame: `x` along the facade or the
 //! track, `y` up from the ground, `+z` away from the wall or the track.
@@ -6,8 +6,8 @@
 use glam::Vec3;
 
 use crate::modules::{
-    ALL, FABRIC, GLASS, METAL, NEG_Y, NO_BACK, POS_Y, SHUTTER, STONE, WOOD, cuboid, quad, sheet,
-    triangle,
+    ALL, FABRIC, GLASS, METAL, NEG_X, NEG_Y, NEG_Z, NO_BACK, POS_X, POS_Y, POS_Z, SHUTTER, STONE,
+    WOOD, cuboid, quad, sheet, triangle,
 };
 use crate::procedural::TriMesh;
 
@@ -677,10 +677,274 @@ pub fn tram_stop(length: f32, deep: f32, back: bool) -> TriMesh {
     m
 }
 
+/// A home's furniture (the village's houses, D-062, #266), each `w` wide and `d` deep round the
+/// origin on the floor, facing +z (its back at −z): the footprints that `forge-procgen`'s
+/// `city::furnish` places. Stacked parts leave out the faces they rest on, so no two faces share
+/// a plane.
+pub fn home(name: &str, w: f32, d: f32) -> Option<TriMesh> {
+    let mut m = TriMesh::default();
+    let (x0, x1, z0, z1) = (-w * 0.5, w * 0.5, -d * 0.5, d * 0.5);
+    let leg = |m: &mut TriMesh, x: f32, z: f32, top: f32, s: f32, section: u8| {
+        cuboid(
+            m,
+            Vec3::new(x - s, 0.0, z - s),
+            Vec3::new(x + s, top, z + s),
+            section,
+            ALL & !NEG_Y & !POS_Y,
+        );
+    };
+    let sides = ALL & !NEG_Y;
+    let corners = |inset: f32| {
+        [
+            (x0 + inset, z0 + inset),
+            (x1 - inset, z0 + inset),
+            (x0 + inset, z1 - inset),
+            (x1 - inset, z1 - inset),
+        ]
+    };
+    match name {
+        "bed" | "single_bed" => {
+            // The frame on four legs, the mattress, the headboard at the back, the pillows.
+            for (x, z) in corners(0.06) {
+                leg(&mut m, x, z, 0.12, 0.03, WOOD);
+            }
+            let (lo, hi) = (Vec3::new(x0, 0.12, z0 + 0.06), Vec3::new(x1, 0.32, z1));
+            cuboid(&mut m, lo, hi, WOOD, ALL & !POS_Y);
+            let (lo, hi) = (
+                Vec3::new(x0 + 0.02, 0.32, z0 + 0.08),
+                Vec3::new(x1 - 0.02, 0.52, z1 - 0.02),
+            );
+            cuboid(&mut m, lo, hi, FABRIC, ALL & !NEG_Y);
+            let (lo, hi) = (Vec3::new(x0, 0.0, z0), Vec3::new(x1, 0.95, z0 + 0.06));
+            cuboid(&mut m, lo, hi, WOOD, sides);
+            let pillows = if name == "bed" { 2 } else { 1 };
+            let pw = (w - 0.12) / pillows as f32;
+            for k in 0..pillows {
+                let px = x0 + 0.06 + k as f32 * pw;
+                let (lo, hi) = (
+                    Vec3::new(px + 0.03, 0.52, z0 + 0.12),
+                    Vec3::new(px + pw - 0.03, 0.62, z0 + 0.5),
+                );
+                cuboid(&mut m, lo, hi, FABRIC, ALL & !NEG_Y);
+            }
+        }
+        "wardrobe" => {
+            let (lo, hi) = (Vec3::new(x0, 0.0, z0), Vec3::new(x1, 2.0, z1));
+            cuboid(&mut m, lo, hi, WOOD, sides);
+            // Two doors' panels and their handles.
+            for k in 0..2 {
+                let a = x0 + k as f32 * w * 0.5 + 0.06;
+                let b = x0 + (k + 1) as f32 * w * 0.5 - 0.06;
+                let (lo, hi) = (Vec3::new(a, 0.12, z1), Vec3::new(b, 1.88, z1 + 0.015));
+                cuboid(&mut m, lo, hi, WOOD, ALL & !NEG_Z);
+                let hx = if k == 0 { b - 0.06 } else { a + 0.06 };
+                let (lo, hi) = (
+                    Vec3::new(hx - 0.01, 0.95, z1 + 0.015),
+                    Vec3::new(hx + 0.01, 1.15, z1 + 0.035),
+                );
+                cuboid(&mut m, lo, hi, METAL, ALL & !NEG_Z);
+            }
+        }
+        "sofa" => {
+            for (x, z) in corners(0.08) {
+                leg(&mut m, x, z, 0.1, 0.025, WOOD);
+            }
+            let (lo, hi) = (Vec3::new(x0, 0.1, z0), Vec3::new(x1, 0.42, z1));
+            cuboid(&mut m, lo, hi, FABRIC, ALL & !POS_Y);
+            let (lo, hi) = (Vec3::new(x0, 0.42, z0), Vec3::new(x1, 0.85, z0 + 0.22));
+            cuboid(&mut m, lo, hi, FABRIC, ALL & !NEG_Y);
+            for x in [x0, x1 - 0.18] {
+                let (lo, hi) = (Vec3::new(x, 0.42, z0 + 0.22), Vec3::new(x + 0.18, 0.64, z1));
+                cuboid(&mut m, lo, hi, FABRIC, ALL & !NEG_Y & !NEG_Z);
+            }
+            let seat = (w - 0.36) / 3.0;
+            for k in 0..3 {
+                let a = x0 + 0.18 + k as f32 * seat;
+                let (lo, hi) = (
+                    Vec3::new(a + 0.01, 0.42, z0 + 0.24),
+                    Vec3::new(a + seat - 0.01, 0.5, z1 - 0.02),
+                );
+                cuboid(&mut m, lo, hi, FABRIC, ALL & !NEG_Y);
+            }
+        }
+        "low_table" | "table" | "desk" => {
+            let top = if name == "low_table" { 0.42 } else { 0.75 };
+            let (lo, hi) = (Vec3::new(x0, top - 0.04, z0), Vec3::new(x1, top, z1));
+            cuboid(&mut m, lo, hi, WOOD, ALL);
+            for (x, z) in corners(0.06) {
+                leg(&mut m, x, z, top - 0.04, 0.025, WOOD);
+            }
+            if name == "desk" {
+                // A block of drawers under one end.
+                let (lo, hi) = (
+                    Vec3::new(x1 - 0.42, 0.0, z0 + 0.02),
+                    Vec3::new(x1 - 0.1, top - 0.04, z1 - 0.04),
+                );
+                cuboid(&mut m, lo, hi, WOOD, sides & !POS_Y);
+            }
+        }
+        "chair" => {
+            for (x, z) in corners(0.04) {
+                leg(&mut m, x, z, 0.43, 0.018, WOOD);
+            }
+            let (lo, hi) = (Vec3::new(x0, 0.43, z0), Vec3::new(x1, 0.46, z1));
+            cuboid(&mut m, lo, hi, WOOD, ALL);
+            let (lo, hi) = (Vec3::new(x0, 0.46, z0), Vec3::new(x1, 0.9, z0 + 0.03));
+            cuboid(&mut m, lo, hi, WOOD, ALL & !NEG_Y);
+        }
+        "counter" => {
+            // The cupboards on a plinth, the stone worktop, a sink and a hob.
+            let (lo, hi) = (Vec3::new(x0, 0.0, z0), Vec3::new(x1, 0.1, z1 - 0.06));
+            cuboid(&mut m, lo, hi, STONE, sides & !POS_Y);
+            let (lo, hi) = (Vec3::new(x0, 0.1, z0), Vec3::new(x1, 0.86, z1 - 0.02));
+            cuboid(&mut m, lo, hi, WOOD, ALL & !NEG_Y & !POS_Y);
+            let (lo, hi) = (Vec3::new(x0, 0.86, z0), Vec3::new(x1, 0.9, z1));
+            cuboid(&mut m, lo, hi, STONE, ALL & !NEG_Y);
+            let doors = (w / 0.6).round().max(1.0) as i32;
+            let dw = w / doors as f32;
+            for k in 0..doors {
+                let a = x0 + k as f32 * dw;
+                let (lo, hi) = (
+                    Vec3::new(a + 0.02, 0.14, z1 - 0.02),
+                    Vec3::new(a + dw - 0.02, 0.82, z1 - 0.005),
+                );
+                cuboid(&mut m, lo, hi, WOOD, ALL & !NEG_Z);
+            }
+            for (a, b) in [(x0 + 0.3, x0 + 0.8), (x1 - 0.8, x1 - 0.2)] {
+                let (lo, hi) = (Vec3::new(a, 0.9, z0 + 0.1), Vec3::new(b, 0.92, z1 - 0.12));
+                cuboid(&mut m, lo, hi, METAL, ALL & !NEG_Y);
+            }
+        }
+        "bath" => {
+            // A rim round a well whose floor stands 20 cm up, and a tap.
+            let r = 0.07;
+            for (lo, hi, faces) in [
+                (Vec3::new(x0, 0.0, z0), Vec3::new(x1, 0.58, z0 + r), sides),
+                (Vec3::new(x0, 0.0, z1 - r), Vec3::new(x1, 0.58, z1), sides),
+                (
+                    Vec3::new(x0, 0.0, z0 + r),
+                    Vec3::new(x0 + r, 0.58, z1 - r),
+                    sides & !NEG_Z & !POS_Z,
+                ),
+                (
+                    Vec3::new(x1 - r, 0.0, z0 + r),
+                    Vec3::new(x1, 0.58, z1 - r),
+                    sides & !NEG_Z & !POS_Z,
+                ),
+                (
+                    Vec3::new(x0 + r, 0.0, z0 + r),
+                    Vec3::new(x1 - r, 0.2, z1 - r),
+                    POS_Y,
+                ),
+            ] {
+                cuboid(&mut m, lo, hi, STONE, faces);
+            }
+            let (lo, hi) = (
+                Vec3::new(x0 + 0.15, 0.58, z0 + 0.02),
+                Vec3::new(x0 + 0.19, 0.78, z0 + 0.06),
+            );
+            cuboid(&mut m, lo, hi, METAL, ALL & !NEG_Y);
+        }
+        "basin" => {
+            let (lo, hi) = (
+                Vec3::new(-0.09, 0.0, z0 + 0.06),
+                Vec3::new(0.09, 0.7, z0 + 0.24),
+            );
+            cuboid(&mut m, lo, hi, STONE, sides & !POS_Y);
+            let (lo, hi) = (Vec3::new(x0, 0.7, z0), Vec3::new(x1, 0.85, z1));
+            cuboid(&mut m, lo, hi, STONE, ALL & !NEG_Y);
+            let (lo, hi) = (
+                Vec3::new(-0.02, 0.85, z0 + 0.02),
+                Vec3::new(0.02, 1.0, z0 + 0.12),
+            );
+            cuboid(&mut m, lo, hi, METAL, ALL & !NEG_Y);
+        }
+        "toilet" => {
+            let (lo, hi) = (
+                Vec3::new(x0 + 0.03, 0.0, z0 + 0.18),
+                Vec3::new(x1 - 0.03, 0.4, z1),
+            );
+            cuboid(&mut m, lo, hi, STONE, sides & !POS_Y);
+            let (lo, hi) = (Vec3::new(x0, 0.4, z0 + 0.18), Vec3::new(x1, 0.43, z1));
+            cuboid(&mut m, lo, hi, WOOD, ALL & !NEG_Y);
+            let (lo, hi) = (Vec3::new(x0, 0.0, z0), Vec3::new(x1, 0.78, z0 + 0.18));
+            cuboid(&mut m, lo, hi, STONE, sides);
+        }
+        "shelves" => {
+            for x in [x0, x1 - 0.03] {
+                let (lo, hi) = (Vec3::new(x, 0.0, z0), Vec3::new(x + 0.03, 1.8, z1));
+                cuboid(&mut m, lo, hi, WOOD, sides);
+            }
+            for k in 0..5 {
+                let y = 0.08 + k as f32 * 0.42;
+                let (lo, hi) = (
+                    Vec3::new(x0 + 0.03, y - 0.02, z0),
+                    Vec3::new(x1 - 0.03, y, z1),
+                );
+                cuboid(&mut m, lo, hi, WOOD, ALL & !NEG_X & !POS_X);
+                // A row of books on all but the top board.
+                if k == 4 {
+                    continue;
+                }
+                let mut x = x0 + 0.05;
+                let mut i = 0;
+                while x + 0.05 < x1 - 0.05 {
+                    let bw = 0.03 + (i * 7 % 5) as f32 * 0.008;
+                    let bh = 0.22 + (i * 3 % 4) as f32 * 0.025;
+                    let (lo, hi) = (
+                        Vec3::new(x, y, z0 + 0.04),
+                        Vec3::new(x + bw, y + bh, z1 - 0.03),
+                    );
+                    cuboid(&mut m, lo, hi, FABRIC, ALL & !NEG_Y);
+                    x += bw + 0.004;
+                    i += 1;
+                }
+            }
+        }
+        _ => return None,
+    }
+    Some(m)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::modules::SECTIONS;
+
+    #[test]
+    fn a_homes_furniture_stays_within_its_footprint() {
+        // The footprints `forge-procgen`'s `city::furnish` places them by, and their heights.
+        for (name, w, d, h) in [
+            ("bed", 1.6, 2.05, 0.95),
+            ("single_bed", 0.95, 2.05, 0.95),
+            ("wardrobe", 1.2, 0.62, 2.0),
+            ("sofa", 2.0, 0.9, 0.85),
+            ("low_table", 1.0, 0.55, 0.42),
+            ("counter", 2.4, 0.62, 0.92),
+            ("table", 1.4, 0.85, 0.75),
+            ("chair", 0.45, 0.5, 0.9),
+            ("bath", 1.7, 0.72, 0.78),
+            ("basin", 0.6, 0.48, 1.0),
+            ("toilet", 0.4, 0.68, 0.78),
+            ("desk", 1.2, 0.62, 0.75),
+            ("shelves", 1.0, 0.36, 1.8),
+        ] {
+            let m = home(name, w, d).expect(name);
+            assert!(m.triangle_count() > 0, "{name}");
+            for p in &m.positions {
+                let p = Vec3::from(*p);
+                assert!(
+                    p.x.abs() <= w * 0.5 + 1e-4
+                        && p.z >= -d * 0.5 - 1e-4
+                        && p.z <= d * 0.5 + 0.04
+                        && p.y >= -1e-4
+                        && p.y <= h + 1e-4,
+                    "{name} {p}"
+                );
+            }
+        }
+        assert!(home("piano", 1.0, 1.0).is_none());
+    }
 
     #[test]
     fn furniture_stays_in_its_place() {

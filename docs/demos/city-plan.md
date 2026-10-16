@@ -480,7 +480,22 @@ across it moves along its wall to the rooms' side, every storey alike, or goes w
 stretch has no room; and a partition between two rooms of a band that meets the front or the
 back wall within an opening moves to the nearer pier (`interior::house`). Four ends are left,
 walls between bands meeting a corner house's side windows (`interior::at_openings`, the
-village test). **Its streets:** a village's main road is a shared street (10 m of
+village test). **Its furniture** (`city::furnish`, the first map's props): each room takes its
+pieces by what it is for, in order: a bedroom its bed (a double 1.60 by 2.05 m in a room of 11
+m² or more, else a single; head to the wall, else along it, else the single), a wardrobe and a
+desk; a living room its sofa with a low table before it, shelves and a table with two chairs,
+and the kitchen's counter where the house has no kitchen; a kitchen its counter (a worktop
+0.62 m deep with its sink and hob) and its table; a bathroom its bath, basin and toilet; a
+study its desk with its chair and shelves; a salon two sofas. Each stands against a wall
+facing into the room, from the middle of the longest wall outwards, clear of the doorways
+and the openings to the floor (1.1 m before them), the tall ones (over 0.95 m) clear of the
+windows, none over another and 0.6 m kept before each; a piece with no place is left out. The
+kit draws them near the view (`forge_geom::furniture::home`, a mesh a piece in the kit's
+sections) and the walker meets all but the chairs. In the village: 137 of 151 bedrooms with a
+bed, 89 of 94 bathrooms with a toilet, 71 sofas, 137 tables and 302 chairs (the test checks
+none overlaps another or stands in a doorway). The map check's eighth view looks into the first
+room off the hall (`reports/2026-10-16/village-room.png`); without lamps inside, the rooms are
+lit by their windows and the hall's doors only. **Its streets:** a village's main road is a shared street (10 m of
 paving, no kerbs, bike lanes nor lamp rows) and its lanes are pedestrian, as an old town's,
 through the forest too (a road beyond every district's reach takes the nearest district's
 kind, `transit::assign_profiles`); the city's avenues stay. The narrower streets gave the
@@ -490,7 +505,7 @@ plan in place of the city, every house from the kit (`reports/2026-10-16/village
 the air, `village-street.png` from the first house's street, which the log names for
 `--view`). **The map check** (`tools/map-check.sh`, D-062's check per commit): the village
 from the air and from the views the log names (the first house's street, the green, the main
-road, the busiest junction, the longest garden wall along a lane, the first storeyed house's hall inside) and two walked paths, along the first house's street and through the first storeyed house's open door into its hall, each compared
+road, the busiest junction, the longest garden wall along a lane, the first storeyed house's hall and a room off it inside) and two walked paths, along the first house's street and through the first storeyed house's open door into its hall, each compared
 with `captures/map/accepted` by LDR-ꟻLIP, about two minutes; `--accept` keeps a run
 (`docs/PROCESS.md`). **One home a house** (`Mass::home`, the same day): a village house is
 one unit over all its storeys, entered from the street, with its household's main rooms (1.5

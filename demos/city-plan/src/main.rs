@@ -178,6 +178,32 @@ fn main() -> anyhow::Result<()> {
                 let inward = DVec2::new(-t.y, t.x);
                 let eye = w.a + t * door.along + inward * (w.thickness + 1.0);
                 eprintln!("the village's hall: {}", view(eye, 1.6, inner.climb, -5.0));
+                // Into the first room off the hall on the ground floor: from the hall, half a
+                // metre back from its doorway, looking at the room's middle.
+                if let Some((p, room)) = inner
+                    .partitions
+                    .iter()
+                    .filter(|p| p.storey == 0 && !p.doors.is_empty())
+                    .find_map(|p| {
+                        let t = (p.b - p.a).normalize_or_zero();
+                        let (d0, d1) = p.doors[0];
+                        let mid = p.a + t * ((d0 + d1) * 0.5);
+                        inner
+                            .rooms
+                            .iter()
+                            .filter(|r| r.storey == 0)
+                            .find(|r| {
+                                let c = city::geom::centroid(&r.outline);
+                                (c - mid).length() < 6.0
+                                    && city::geom::contains(&inner.hall, mid * 2.0 - c)
+                            })
+                            .map(|r| (mid, r))
+                    })
+                {
+                    let c = city::geom::centroid(&room.outline);
+                    let eye = p - (c - p).normalize_or_zero() * 0.5;
+                    eprintln!("the village's room: {}", view(eye, 1.6, c - eye, -12.0));
+                }
                 // The way in: 3 m out on the street before the door, walking through it.
                 let out = w.a + t * door.along - inward * 3.0;
                 eprintln!(

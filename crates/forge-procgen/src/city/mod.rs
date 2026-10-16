@@ -26,6 +26,7 @@ pub mod blocks;
 pub mod cores;
 pub mod example;
 pub mod facades;
+pub mod furnish;
 pub mod gardens;
 pub mod geom;
 pub mod graph;
