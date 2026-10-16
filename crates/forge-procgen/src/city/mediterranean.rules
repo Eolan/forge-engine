@@ -39,8 +39,10 @@ Openings -> openings { Wall | Opening }
 # The passage into the court: open to its head, the wall over it.
 Opening [opening.kind == 4] -> split(y) { glass: Passage | ~1: Wall }
 Passage -> nil
-# The door, step-free from the pavement.
-Opening [opening.kind == 3] -> split(y) { glass: Entrance | ~1: Wall }
+# The door, step-free from the pavement: on its sill, the walking level (without the sill's
+# wall under it the door stood 30 cm low, its threshold under the paving and its leaves through
+# the floor inside, the owner's sightings of 2026-10-16).
+Opening [opening.kind == 3] -> split(y) { sill: Wall | glass: Entrance | ~1: Wall }
 Entrance -> insert(door)
 # Shops, cafés and bars: an open front or one under an awning.
 Opening [opening.kind == 2] -> split(y) { sill: Wall | glass: Shopfront | ~1: Wall }

@@ -11,8 +11,10 @@ use super::geom;
 use super::interior::{self, Interior};
 use super::mass::Mass;
 use super::rooms::RoomKind;
-use super::structure::{OpeningKind, Structure};
+use super::structure::{OpeningKind, Structure, WallRole};
 use super::village::Village;
+use super::walls;
+use crate::sockets::{self, Extent, Kind as SocketKind, Need, Socket};
 
 /// What is wrong.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -33,11 +35,22 @@ pub enum Kind {
     CrookedWall,
     /// A planted tree or shrub inside a house or a garden wall.
     MisplacedPlant,
+    /// A garden wall's end meeting nothing (D-066's sockets): not another wall, a house, a gate's
+    /// jamb nor a hedge; it stands free, a pier in a garden.
+    FreeWallEnd,
+    /// A house's party wall with no neighbour's back to back against it anywhere along it (D-066's
+    /// sockets): a blank wall facing a gap.
+    LonePartyWall,
+    /// Two houses back to back on a party wall, their eaves at one height but their walls along
+    /// it of different lengths (their depths): their ridges stand at two heights where a row of
+    /// one height shares one roof (rule 2; the owner, 2026-10-16: "they would probably share their
+    /// roof structure in the middle").
+    RidgeStep,
 }
 
 impl Kind {
     /// Every kind, in order.
-    pub const ALL: [Kind; 7] = [
+    pub const ALL: [Kind; 10] = [
         Kind::RoomOutsideWalls,
         Kind::PartitionInOpening,
         Kind::UnlitRoom,
@@ -45,6 +58,9 @@ impl Kind {
         Kind::EaveStep,
         Kind::CrookedWall,
         Kind::MisplacedPlant,
+        Kind::FreeWallEnd,
+        Kind::LonePartyWall,
+        Kind::RidgeStep,
     ];
 }
 
@@ -80,7 +96,186 @@ pub fn village(v: &Village, structures: &[Structure]) -> Vec<Anomaly> {
     neighbours(v, &mut out);
     garden_walls(v, &mut out);
     plants(v, &mut out);
+    unmatched(v, structures, &mut out);
     out
+}
+
+/// The village's pieces' sockets (D-066): each house's walls as faces (its party walls needing a
+/// neighbour's, the others anchors), each garden wall's two ends (needing a match) and two faces,
+/// each gate's jambs and each hedge's ends. Pieces are numbered houses first, then garden walls,
+/// gates and hedges.
+pub fn village_sockets(v: &Village, structures: &[Structure]) -> Vec<Socket> {
+    let mut out = Vec::new();
+    let mut piece = 0u32;
+    for (m, s) in v.masses.iter().zip(structures) {
+        for w in &s.walls {
+            let kind = match w.role {
+                WallRole::Party => SocketKind::PartyFace,
+                WallRole::Street | WallRole::Court => SocketKind::HouseFace,
+                WallRole::Inner => continue,
+            };
+            if w.length() < 0.5 {
+                continue;
+            }
+            let t = (w.b - w.a).normalize_or_zero();
+            out.push(Socket {
+                kind,
+                piece,
+                at: (w.a + w.b) * 0.5,
+                level: 0.0,
+                normal: DVec2::new(t.y, -t.x),
+                extent: Extent::Rect {
+                    width: w.length(),
+                    height: m.height,
+                },
+                thickness: w.thickness,
+                need: if kind == SocketKind::PartyFace {
+                    Need::Required
+                } else {
+                    Need::Optional
+                },
+            });
+        }
+        piece += 1;
+    }
+    for w in &v.plan.walls {
+        let r = w.ring();
+        let t = (w.b - w.a).normalize_or_zero();
+        for (at, normal) in [((r[0] + r[3]) * 0.5, -t), ((r[1] + r[2]) * 0.5, t)] {
+            out.push(Socket {
+                kind: SocketKind::GardenEnd,
+                piece,
+                at,
+                level: 0.0,
+                normal,
+                extent: Extent::Point,
+                thickness: walls::THICKNESS,
+                need: Need::Required,
+            });
+        }
+        for (p, q, normal) in [
+            (r[0], r[1], DVec2::new(t.y, -t.x)),
+            (r[3], r[2], DVec2::new(-t.y, t.x)),
+        ] {
+            out.push(Socket {
+                kind: SocketKind::GardenFace,
+                piece,
+                at: (p + q) * 0.5,
+                level: 0.0,
+                normal,
+                extent: Extent::Rect {
+                    width: p.distance(q),
+                    height: w.height,
+                },
+                thickness: walls::THICKNESS,
+                need: Need::Optional,
+            });
+        }
+        piece += 1;
+    }
+    for block in &v.blocks {
+        // A gate's jambs: the walls' ends half a gate either side of its middle.
+        for &g in &block.gates {
+            out.push(Socket {
+                kind: SocketKind::GateJamb,
+                piece,
+                at: g,
+                level: 0.0,
+                normal: DVec2::X,
+                extent: Extent::Point,
+                thickness: walls::GATE + 0.3,
+                need: Need::Optional,
+            });
+            piece += 1;
+        }
+        for &(p, q) in &block.hedges {
+            for (at, normal) in [
+                (p, (p - q).normalize_or_zero()),
+                (q, (q - p).normalize_or_zero()),
+            ] {
+                out.push(Socket {
+                    kind: SocketKind::HedgeEnd,
+                    piece,
+                    at,
+                    level: 0.0,
+                    normal,
+                    extent: Extent::Point,
+                    thickness: 0.8,
+                    need: Need::Optional,
+                });
+            }
+            piece += 1;
+        }
+    }
+    out
+}
+
+/// The village's required sockets that meet nothing: garden walls' free ends, and party walls
+/// with no neighbour's back to back anywhere along them (one covered in part is a deeper house's
+/// beside a shallower one's, blank over the garden as it should be).
+fn unmatched(v: &Village, structures: &[Structure], out: &mut Vec<Anomaly>) {
+    let sockets = village_sockets(v, structures);
+    for u in sockets::match_all(&sockets, 10.0) {
+        let s = u.socket;
+        match s.kind {
+            SocketKind::GardenEnd => out.push(Anomaly {
+                kind: Kind::FreeWallEnd,
+                at: s.at,
+                height: 1.0,
+                from: s.at + s.normal * 5.0 + s.across() * 2.0,
+                note: "a garden wall's end meeting nothing".into(),
+            }),
+            SocketKind::PartyFace if u.covered < 0.05 => out.push(Anomaly {
+                kind: Kind::LonePartyWall,
+                at: s.at,
+                height: 2.0,
+                from: s.at + s.normal * 8.0,
+                note: format!(
+                    "house {}: a party wall with no neighbour against it",
+                    s.piece
+                ),
+            }),
+            _ => {}
+        }
+    }
+    // Each pair of party walls back to back, once: one eave height, walls of different lengths.
+    let party: Vec<&Socket> = sockets
+        .iter()
+        .filter(|s| s.kind == SocketKind::PartyFace)
+        .collect();
+    for (i, a) in party.iter().enumerate() {
+        for b in &party[i + 1..] {
+            if a.at.distance(b.at) > 30.0 || !sockets::compatible(a, b) {
+                continue;
+            }
+            let (
+                Extent::Rect {
+                    width: la,
+                    height: ha,
+                },
+                Extent::Rect {
+                    width: lb,
+                    height: hb,
+                },
+            ) = (a.extent, b.extent)
+            else {
+                continue;
+            };
+            if (ha - hb).abs() < 0.05 && (la - lb).abs() > 0.3 {
+                let at = (a.at + b.at) * 0.5;
+                out.push(Anomaly {
+                    kind: Kind::RidgeStep,
+                    at,
+                    height: ha,
+                    from: at + a.normal * 6.0 + a.across() * 6.0,
+                    note: format!(
+                        "houses {} and {}: one eave height, {la:.1} and {lb:.1} m deep",
+                        a.piece, b.piece
+                    ),
+                });
+            }
+        }
+    }
 }
 
 /// The anomalies of `kind` in `all`.
@@ -312,14 +507,17 @@ mod tests {
         let v = village::village(&site, &village::params(size), 1);
         let structures = structure::structures(&v.plan, &v.masses);
         let all = village(&v, &structures);
-        let bounds: [(Kind, usize); 7] = [
-            (Kind::RoomOutsideWalls, 45),
-            (Kind::PartitionInOpening, 7),
-            (Kind::UnlitRoom, 183),
-            (Kind::Sliver, 19),
+        let bounds: [(Kind, usize); 10] = [
+            (Kind::RoomOutsideWalls, 0),
+            (Kind::PartitionInOpening, 1),
+            (Kind::UnlitRoom, 123),
+            (Kind::Sliver, 11),
             (Kind::EaveStep, 0),
             (Kind::CrookedWall, 0),
             (Kind::MisplacedPlant, 1),
+            (Kind::FreeWallEnd, 11),
+            (Kind::LonePartyWall, 19),
+            (Kind::RidgeStep, 6),
         ];
         let mut over = Vec::new();
         for (kind, bound) in bounds {

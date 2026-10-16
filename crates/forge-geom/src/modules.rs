@@ -720,16 +720,20 @@ fn door(m: &mut TriMesh, w: f32, h: f32, open: bool) {
         ],
         STONE,
     );
-    // The leaves, their raised panels, and the transom light.
+    // The leaves, their raised panels, and the transom light; the leaves 2.5 cm over the sill,
+    // clear of the threshold's stone and the floor inside (2 cm up): from the sill, the floor
+    // cut through their feet (the owner, 2026-10-16: "the door bottom intersect the house
+    // floor").
     let z = d + 0.05;
     let leaf = w * 0.5;
+    let foot = 0.025;
     if open {
         // Swung in against the reveal's inner ends, square to the wall, their panels facing
         // the way through.
         for (x0, x1, face) in [(0.0, 0.05, 0.05), (w - 0.05, w, -0.025)] {
             cuboid(
                 m,
-                Vec3::new(x0, 0.0, d - leaf),
+                Vec3::new(x0, foot, d - leaf),
                 Vec3::new(x1, transom, d),
                 WOOD,
                 ALL,
@@ -748,7 +752,7 @@ fn door(m: &mut TriMesh, w: f32, h: f32, open: bool) {
     } else {
         cuboid(
             m,
-            Vec3::new(0.0, 0.0, z - 0.05),
+            Vec3::new(0.0, foot, z - 0.05),
             Vec3::new(w, transom, z),
             WOOD,
             POS_Z,

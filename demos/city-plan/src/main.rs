@@ -298,6 +298,9 @@ fn main() -> anyhow::Result<()> {
     } else {
         (180.0, 700.0, -0.32)
     };
+    // The city's camera crosses its 4 km at 40 m/s; the village's flies at a stroll's 4 (Shift 20,
+    // Ctrl 100, Alt a quarter), to look the houses over without walking (the owner, 2026-10-16:
+    // "make the camera slower for when I want to test without walking").
     let camera = FlyCamera {
         position: Vec3::new(
             (centre.x - size * 0.5) as f32,
@@ -306,7 +309,7 @@ fn main() -> anyhow::Result<()> {
         ),
         yaw: 0.0,
         pitch,
-        speed: 40.0,
+        speed: if cli.village.is_some() { 4.0 } else { 40.0 },
         ..FlyCamera::default()
     };
     let camera = if cli.street {

@@ -2853,25 +2853,32 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
                 }
                 let l = ((hi - lo) / 3.0) as f32;
                 let floor = s.storeys.first().map_or(0.0, |st| st.level);
-                let mut caps = vec![(y1, Vec3::NEG_Y)];
+                // The head; a window's sill; a door's floor through the wall at the house's
+                // floor (2 cm over the sill the kit's threshold stone stands on), in the floor's
+                // stone: from the threshold's inner end to the inner face the street's paving
+                // showed through the doorway (the owner, 2026-10-16: "entry pavement leaks into
+                // the house floor").
+                let mut caps = vec![(y1, Vec3::NEG_Y, plaster)];
                 if y0 > floor + 0.05 {
-                    caps.push((y0, Vec3::Y));
+                    caps.push((y0, Vec3::Y, plaster));
+                } else {
+                    caps.push((y0 + 0.02, Vec3::Y, KIT_INSIDE_FLOOR));
                 }
-                for (y, n) in caps {
+                for (y, n, section) in caps {
                     let (a, b, c, d) = (p(lo, from), p(hi, from), p(hi, deep), p(lo, deep));
                     triangle_uv(
                         mesh,
                         [at(a, y), at(b, y), at(c, y)],
                         [[0.0, 0.0], [l, 0.0], [l, r]],
                         n,
-                        plaster,
+                        section,
                     );
                     triangle_uv(
                         mesh,
                         [at(a, y), at(c, y), at(d, y)],
                         [[0.0, 0.0], [l, r], [0.0, r]],
                         n,
-                        plaster,
+                        section,
                     );
                 }
             }

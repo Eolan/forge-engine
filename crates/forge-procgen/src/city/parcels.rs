@@ -188,9 +188,21 @@ pub fn strips_by(
                 corner.distance(block[(i + 1) % n]),
                 corner.distance(block[h]),
             );
+            // A sharp corner's (under 60°) region is the tip, left open as a green rather than a
+            // corner lot (`tips`), and may take more of its edges.
+            let most = if th.dot(ti) < -0.5 { 0.95 } else { 0.8 };
             let fits =
-                (0.5..0.8 * len_i).contains(&along_i) && (0.5..0.8 * len_h).contains(&back_h);
+                (0.5..most * len_i).contains(&along_i) && (0.5..most * len_h).contains(&back_h);
             fits.then(|| (corner + r, corner - th * back_h, corner + ti * along_i))
+        })
+        .collect();
+    // The sharp corners (under 60°), whose regions stay open: a triangular block's tip split
+    // into two wedges on the bisector made long diagonal party lines (the owner, 2026-10-16:
+    // "still the diagonal issues"); villages leave the tip a small green or a square.
+    let tips: Vec<bool> = (0..n)
+        .map(|i| {
+            let h = (i + n - 1) % n;
+            square[i].is_some() && edge_dir(h).dot(edge_dir(i)) < -0.5
         })
         .collect();
     // Two corner lots on one edge leave a lot's least width between them at least.
@@ -344,7 +356,7 @@ pub fn strips_by(
     // every strip's lots.
     let mut key = keys.iter().max().map_or(0, |k| k + 1);
     for (i, sq) in square.iter().enumerate() {
-        if let Some((x, on_h, on_i)) = *sq {
+        if let Some((x, on_h, on_i)) = sq.filter(|_| !tips[i]) {
             let lot = vec![block[i], on_i, x, on_h];
             if geom::signed_area(&lot) > 1.0 {
                 keys.push(key);

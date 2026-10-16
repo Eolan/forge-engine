@@ -23,10 +23,16 @@ pub struct House {
     pub household: (u32, Means),
 }
 
+/// The deepest a house goes, metres: two rooms deep with windows front and back
+/// (`research/house-layouts.md` §1.2, rule 16: a room lit from one side works to about 6 m).
+/// Deeper, the faubourg's houses ran 18 m back on 6 m fronts, the "stretched out rectangles" the
+/// owner saw (2026-10-16), each hipped front to back instead of a row under one ridge.
+pub const MAX_DEPTH: f64 = 12.0;
+
 /// How deep a house's plan may go on a lot of type `ty`: the strip less the setback and the
-/// yard, a hall and one room's depth at least.
+/// yard, [`MAX_DEPTH`] at most, a hall and one room's depth at least.
 pub fn plan_depth(ty: &ParcelType) -> f64 {
-    (ty.depth - ty.setback - ty.yard).max(rooms::HALL + 2.6)
+    (ty.depth - ty.setback - ty.yard).clamp(rooms::HALL + 2.6, MAX_DEPTH)
 }
 
 /// A house on each of `lots`, the household of lot `k` from `household(k)`. A house of two storeys
@@ -38,10 +44,14 @@ pub fn houses(
     household: impl Fn(usize) -> (u32, Means),
     stair: f64,
 ) -> Vec<House> {
-    lots.iter()
+    // Each lot's house drafted: its front's stretch and its plan.
+    let mut drafts: Vec<Option<Draft>> = lots
+        .iter()
         .enumerate()
-        .filter(|(_, lot)| lot.len() >= 3)
-        .filter_map(|(k, lot)| {
+        .map(|(k, lot)| {
+            if lot.len() < 3 {
+                return None;
+            }
             let (people, means) = household(k);
             let (a, b) = (lot[0], lot[1]);
             let t = (b - a).normalize_or_zero();
@@ -67,8 +77,109 @@ pub fn houses(
             if plan.storeys.len() > 3 {
                 return None;
             }
+            let room = least_depth(lot, a, t, inward, s0, s1).min(plan_depth(ty));
+            Some(Draft {
+                a,
+                t,
+                s0,
+                s1,
+                plan,
+                room,
+                people,
+                means,
+            })
+        })
+        .collect();
+    // The rows (D-066: a house's party walls meet its neighbours'): a lot whose house runs to its
+    // front's end and the lot beside it, sharing that corner, whose house starts at its front's
+    // start. Each row takes the depth of its deepest house where each lot allows it, so their
+    // backs line up and houses of a height share one ridge: each its own depth, the backs stepped
+    // and the ridges with them (the owner, 2026-10-16: "house should be stuck together and
+    // probably share their roof structures").
+    let reaches = |k: usize, start: bool| {
+        drafts[k].as_ref().is_some_and(|d| {
+            let width = parcels::frontage(&lots[k]);
+            if start {
+                d.s0 < 0.05
+            } else {
+                d.s1 > width - 0.05
+            }
+        })
+    };
+    let mut row: Vec<usize> = (0..lots.len()).collect();
+    fn root(row: &mut [usize], k: usize) -> usize {
+        let mut r = k;
+        while row[r] != r {
+            r = row[r];
+        }
+        row[k] = r;
+        r
+    }
+    for i in 0..lots.len() {
+        for j in 0..lots.len() {
+            if i != j
+                && lots[i].len() >= 3
+                && lots[j].len() >= 3
+                && lots[i][1].distance(lots[j][0]) < 0.01
+                && reaches(i, false)
+                && reaches(j, true)
+            {
+                let (ri, rj) = (root(&mut row, i), root(&mut row, j));
+                row[ri] = rj;
+            }
+        }
+    }
+    let mut deepest: std::collections::HashMap<usize, f64> = Default::default();
+    for (k, d) in drafts.iter().enumerate() {
+        if let Some(d) = d {
+            let r = root(&mut row, k);
+            let e = deepest.entry(r).or_insert(0.0);
+            *e = e.max(d.plan.depth);
+        }
+    }
+    for (k, d) in drafts.iter_mut().enumerate() {
+        let r = root(&mut row, k);
+        if let Some(d) = d {
+            let depth = deepest[&r].min(d.room);
+            d.plan.deepen(depth);
+        }
+    }
+    lots.iter()
+        .zip(drafts)
+        .filter_map(|(lot, draft)| {
+            let Draft {
+                a,
+                t,
+                s0,
+                s1,
+                plan,
+                room,
+                people,
+                means,
+            } = draft?;
+            // A house across its lot's whole front keeps to the lot's side lines: its party walls
+            // on them, so the houses of a row share their walls where a lane bends and the lots
+            // fan (square to its front, two houses met at the street and parted behind it, a
+            // sliver with a garden wall in it; the owner, 2026-10-16: "there are either adjoining
+            // properties or there should be a legal distance between structures"). Its rooms stay
+            // the plan's rectangle within it.
+            let unit_in = DVec2::new(-t.y, t.x);
+            let width = parcels::frontage(lot);
+            if s0 < 0.05 && s1 > width - 0.05 && plan.depth <= room + 0.05 {
+                let band = geom::clip_half_plane(lot, a + unit_in * plan.depth, -t);
+                let band = geom::clip_half_plane(&band, a, t);
+                let footprint = geom::clean(&band, 1e-6);
+                if footprint.len() >= 3 && geom::signed_area(&footprint).abs() >= 4.0 {
+                    return Some(House {
+                        lot: lot.clone(),
+                        plan,
+                        footprint,
+                        household: (people, means),
+                    });
+                }
+            }
             let (a, b) = (a + t * s0, a + t * s1);
-            let inward = inward * plan.depth;
+            let inward = unit_in * plan.depth;
             let mut footprint = vec![a, b, b + inward, a + inward];
             // Within the lot: a corner lot narrows towards the back.
             let n = lot.len();
@@ -96,6 +207,46 @@ pub fn houses(
         .collect()
 }
 
+/// A lot's house before its row is known: its front line from `a` along `t`, the stretch
+/// `s0..s1` of it the house takes, its plan, how deep the lot lets it go along that stretch, and
+/// its household.
+struct Draft {
+    a: DVec2,
+    t: DVec2,
+    s0: f64,
+    s1: f64,
+    plan: rooms::Plan,
+    room: f64,
+    people: u32,
+    means: Means,
+}
+
+/// How deep `lot` reaches in along `inward` from the front point `a + t s`, metres: 0 where that
+/// point is not on the lot's front.
+fn deep_at(lot: &[DVec2], a: DVec2, t: DVec2, inward: DVec2, s: f64) -> f64 {
+    let n = lot.len();
+    let p = a + t * s;
+    if !geom::contains(lot, p + inward * 0.3) {
+        return 0.0;
+    }
+    let far = p + inward * 200.0;
+    (0..n)
+        .filter_map(|i| geom::segment_intersection(p, far, lot[i], lot[(i + 1) % n]))
+        .map(|(u, _)| u * 200.0)
+        .filter(|&d| d > 0.05)
+        .fold(f64::MAX, f64::min)
+}
+
+/// The least depth of `lot` along its front from `s0` to `s1`, sampled every quarter metre and
+/// 2 cm in from both ends.
+fn least_depth(lot: &[DVec2], a: DVec2, t: DVec2, inward: DVec2, s0: f64, s1: f64) -> f64 {
+    let (s0, s1) = (s0 + 0.02, (s1 - 0.02).max(s0 + 0.02));
+    let steps = ((s1 - s0) / 0.25).ceil().max(1.0) as usize;
+    (0..=steps)
+        .map(|k| deep_at(lot, a, t, inward, s0 + (s1 - s0) * k as f64 / steps as f64))
+        .fold(f64::MAX, f64::min)
+}
+
 /// The stretch `(from, to)` along the front `a + t s` of `lot` where the lot reaches at least
 /// `depth` metres in along `inward`, sampled every quarter metre (one stretch: along a convex
 /// lot's front the depth rises then falls); `None` where it never does.
@@ -107,19 +258,7 @@ fn front_stretch(
     depth: f64,
 ) -> Option<(f64, f64)> {
     let width = parcels::frontage(lot);
-    let n = lot.len();
-    let deep_at = |s: f64| {
-        let p = a + t * s;
-        if !geom::contains(lot, p + inward * 0.3) {
-            return 0.0;
-        }
-        let far = p + inward * 200.0;
-        (0..n)
-            .filter_map(|i| geom::segment_intersection(p, far, lot[i], lot[(i + 1) % n]))
-            .map(|(u, _)| u * 200.0)
-            .filter(|&d| d > 0.05)
-            .fold(f64::MAX, f64::min)
-    };
+    let deep_at = |s: f64| deep_at(lot, a, t, inward, s);
     let steps = (width / 0.25).ceil().max(1.0) as usize;
     let (mut from, mut to) = (None, None);
     for k in 0..=steps {

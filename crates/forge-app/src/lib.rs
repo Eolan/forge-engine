@@ -1516,6 +1516,13 @@ impl<D: Demo> ApplicationHandler for App<D> {
                 });
                 state.ctx.window.set_cursor_visible(!looking);
             }
+            // The wheel's notches (a touchpad's pixels at 40 a notch): the fly camera's speed.
+            WindowEvent::MouseWheel { delta, .. } => {
+                state.input.wheel += match delta {
+                    winit::event::MouseScrollDelta::LineDelta(_, y) => y,
+                    winit::event::MouseScrollDelta::PixelDelta(p) => p.y as f32 / 40.0,
+                };
+            }
             WindowEvent::RedrawRequested => self.redraw(event_loop),
             _ => {}
         }

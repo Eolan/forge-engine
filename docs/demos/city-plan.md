@@ -591,7 +591,64 @@ What is left is the next work: the slivers and the rooms past their walls where 
 lots fan out and a house's rectangle leaves a wedge behind its front), the windows placed for the
 facade and not for the rooms behind them, and the rounded corners; the owner asked to wait for the
 research on building systems and their connectors ("snap"), to apply one system to the buildings,
-the walls, the pavements and the roads. **Its insides** (`city::interior`, the same day; the owner: "a house or structure
+the walls, the pavements and the roads.
+
+**Sockets and rows** (D-066 ✅, the same night). The pieces' sockets (`forge_procgen::sockets`,
+`research/building-sockets.md`): a socket's kind, its place, its outward normal, its extent (a
+point or a face) and its thickness, one `compatible` rule and a matcher (`match_all`) that reports
+the required sockets meeting nothing and the faces covered on under 95 % of their width. The
+village gives its pieces theirs (`anomalies::village_sockets`): each house's party walls as faces
+needing a neighbour's back to back, its other walls as anchors; each garden wall's two ends
+(needing a wall's end or face, a house's wall, a gate's jamb or a hedge's end) and two faces; each
+gate's jambs and each hedge's ends. Three kinds join the check: a garden wall's free end, a party
+wall with no neighbour against it, and two houses back to back at one eave height but of different
+depths, whose ridges cannot meet. Through them, the houses:
+- **Rows of one depth:** houses whose fronts run end to end, sharing a corner, are a row, and
+  each takes the row's deepest house's depth where its lot allows (`houses`), so their backs line
+  up and houses of a height share one ridge ("they would probably share their roof structure in
+  the middle").
+- **No long houses:** a house is 12 m deep at most (`houses::MAX_DEPTH`: two rooms, lit front and
+  back, `research/house-layouts.md` rule 16); the faubourg's ran 18 m back on 6 m fronts, hipped
+  front to back ("I'm not sure long houses like that are viable"), and the lots widen instead.
+- **Party walls on the lot lines:** a house across its lot's whole front, on a lot deep enough
+  along it, stands on the lot's side lines, so a row's houses share their walls where a lane bends
+  (square to its front, two houses met at the street and parted behind it: "there are either
+  adjoining properties or there should be a legal distance"). Its rooms keep the plan's
+  rectangles, a band's within the width every depth of it shares, and only the room against a
+  slanted side wall takes the slant (`interior`), its furniture within its square part
+  (`furnish`). A house whose hall or band a slanted wall narrows under a metre (a lot closing to
+  a wedge behind the core) stays closed: 67 of 77 houses have their insides.
+- **A door's floor:** the reveals' floor from the kit's threshold stone (0.35 m in) to the inner
+  face, in the floor's stone: the street's paving showed through the doorway ("entry pavement
+  leaks into the house floor").
+- **The door on its sill:** the facade grammar split a door's opening `{ glass: Entrance | ~1:
+  Wall }`, with no `sill:` part under it as a window's has, so every door module stood on its
+  storey's floor, 30 cm under its sill at the walking level: its threshold stone under the
+  paving (the paving through the doorway, the two fighting), its leaves through the floor inside
+  ("the door bottom intersect the house floor"; z-fighting at the doorway's foot) and its head
+  30 cm under the opening's. The rule now reads `{ sill: Wall | glass: Entrance | ~1: Wall }` (in
+  the sandbox's copy too), and the leaves stand 2.5 cm over the sill, clear of the floor.
+- **Sharp tips left open:** a block's corner under 60° (a triangle between two roads) ends its
+  strips square at the feet of the court's corner, as a square corner does, and its region stays
+  open ground, a small green, rather than a corner lot or two wedges split on the bisector ("still
+  the diagonal issues").
+
+**The camera** flies the village at 4 m/s (the city's 40), and the mouse wheel sets the speed
+for good, a quarter more or less a notch, 0.25 to 400 m/s, for every demo (`forge_app::FlyCamera`;
+the owner: "make the camera slower for when I want to test without walking").
+
+| Anomaly | When the check came in | Now |
+|---|---|---|
+| a room past its house's walls | 66 | 0 |
+| a partition in an opening | 4 | 1 |
+| a habitable room without a window | 189 | 123 |
+| a sliver between two houses | 64 | 11 |
+| a plant in a wall | 5 | 1 |
+| a garden wall's free end | — | 11 |
+| a party wall with no neighbour against it | — | 19 |
+| one eave height, two ridges | — | 6 |
+
+The village has 77 houses (82 before the depth cap: wider lots), 241 people. **Its insides** (`city::interior`, the same day; the owner: "a house or structure
 should be thought by thinking about the rooms"): a house's structure now follows its rooms'
 plan. Its core (`cores`, the straight flight of 1.1 m with handrails beside a corridor of
 1.2 m a wheelchair passes, walls of 0.2 m) stands at the start of its front where the plan

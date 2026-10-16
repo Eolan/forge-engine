@@ -175,17 +175,22 @@ pub fn furnish(s: &Structure, interior: &Interior) -> Vec<Placed> {
     let kitchen = interior.rooms.iter().any(|r| r.kind == RoomKind::Kitchen);
     let mut out = Vec::new();
     for room in &interior.rooms {
-        let o = room.outline;
-        let (ex, ey) = (
-            (o[1] - o[0]).normalize_or_zero(),
-            (o[3] - o[0]).normalize_or_zero(),
-        );
-        let (w, d) = (o[0].distance(o[1]), o[0].distance(o[3]));
+        // The room's rectangle every depth of it shares: a room against a slanted side wall
+        // (`interior`: a house on its lot's side lines) is a trapezoid, and its pieces keep to
+        // the part square to the front.
+        let r = room.outline;
+        let ex = (r[1] - r[0]).normalize_or_zero();
+        let ey = DVec2::new(-ex.y, ex.x);
+        let u = |p: DVec2| (p - r[0]).dot(ex);
+        let (u0, u1) = (u(r[0]).max(u(r[3])), u(r[1]).min(u(r[2])));
+        let d = (r[3] - r[0]).dot(ey);
+        let o0 = r[0] + ex * u0;
+        let (w, d) = ((u1 - u0).max(0.0), d.max(0.0));
         if w < 1.2 || d < 1.2 {
             continue;
         }
-        let local = |p: DVec2| ((p - o[0]).dot(ex), (p - o[0]).dot(ey));
-        let world = |x: f64, y: f64| o[0] + ex * x + ey * y;
+        let local = |p: DVec2| ((p - o0).dot(ex), (p - o0).dot(ey));
+        let world = |x: f64, y: f64| o0 + ex * x + ey * y;
         // What must stay clear: before each doorway into the room and each opening to the floor,
         // 1.1 m deep; the windows along the walls, for the tall pieces.
         let mut keep: Vec<Rect> = Vec::new();

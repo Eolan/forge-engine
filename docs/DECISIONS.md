@@ -4518,7 +4518,7 @@ clustered lists proposed here; and the order of the four parts.
 are more than a village needs, its patents not searched); lamps as emissive surfaces only (no
 shadows, no light on the walls).
 
-## D-066 — Pieces with sockets: one connector schema for generation, the anomaly check and player building 🟡 (proposed 2026-10-16 on the owner's walk of #266)
+## D-066 — Pieces with sockets: one connector schema for generation, the anomaly check and player building ✅ (proposed 2026-10-16 on the owner's walk of #266; the owner's go the same evening)
 
 **The question:** the owner, walking the village: "would using some kind of snap system with the
 module parts help, if it does not snap everywhere, it means something is wrong, we need a way to
@@ -4578,3 +4578,17 @@ lesson is freedom on a voxel base, for the terrain and the gardens, not the chec
 
 **For the owner to decide:** the schema and its order (1–3 first, then 4; 5 and 6 later); and the
 two live Nintendo patents' reach before any free-form builder.
+
+**Decided** (the owner, 2026-10-16): "D-066 ok let's see what it would look like, we still wish to
+keep a bit of organic feeling but let's see the result of what you propose, we may adapt things
+later. so yes." The lanes keep their curves; the sockets decide how the pieces meet. The same
+answer set two rules for the dwellings: no lifts in houses (their stairs stay; some houses are
+single-storey ones suited to disabled people; stair lifts out of scope), and living quarters no
+higher than medium density, the smaller courtyard blocks two storeys at most.
+
+**Built** (the same night): the schema's first slice (`forge_procgen::sockets`: kinds, points and
+faces, `compatible`, `match_all`) on the village's houses, garden walls, gates and hedges, its
+unmatched sockets as three new kinds in `city::anomalies`; generation through it for the houses
+(rows of one depth, a 12 m depth cap, party walls on the lot lines, the interiors fitting slanted
+walls). `demos/city-plan.md`, "Sockets and rows", has the numbers. Next: the kit's modules' and
+the roofs' sockets, the garden walls' join pass, the pavements and roads.

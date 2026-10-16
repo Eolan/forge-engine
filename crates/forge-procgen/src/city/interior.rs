@@ -108,16 +108,60 @@ pub fn house(m: &Mass, s: &Structure) -> Option<Interior> {
     };
     let (umin, umax) = span(&|p| (p - o).dot(t));
     let (vmin, vmax) = span(&|p| (p - o).dot(n));
+    // The floor's extent along the front at a depth `v`: where a line square to the front there
+    // crosses the floor's outline. A house on its lot's side lines (`houses`: a row where a lane
+    // bends) stands on a trapezoid, its side walls slanted.
+    let n_in = inside.len();
+    let u_at = |v: f64| -> (f64, f64) {
+        let v = v.clamp(vmin + 0.01, vmax - 0.01);
+        let mut ext = (f64::MAX, f64::MIN);
+        for i in 0..n_in {
+            let (p, q) = (inside[i], inside[(i + 1) % n_in]);
+            let (vp, vq) = ((p - o).dot(n), (q - o).dot(n));
+            if (vp - v) * (vq - v) <= 0.0 && (vp - vq).abs() > 1e-9 {
+                let u = ((p + (q - p) * ((v - vp) / (vq - vp))) - o).dot(t);
+                ext = (ext.0.min(u), ext.1.max(u));
+            }
+        }
+        if ext.0 > ext.1 { (umin, umax) } else { ext }
+    };
+    // Its extent every depth from `v0` to `v1` shares: a band's rooms keep within it, square to
+    // the front, and only the room against a slanted side wall takes the slant.
+    let shared = |v0: f64, v1: f64| {
+        (0..=8).map(|k| v0 + (v1 - v0) * f64::from(k) / 8.0).fold(
+            (f64::MIN, f64::MAX),
+            |(l, r), v| {
+                let (a, b) = u_at(v);
+                (l.max(a), r.min(b))
+            },
+        )
+    };
     let (lo, hi) = core.map_or((umin, HALL), |c| c.span);
     // The hall at the start of the wall, as the plan keeps it, or at its end where the core stood
     // by the far corner: the plan's rooms then run the other way. A core in the middle of the
     // front leaves no plan to follow.
     let mirrored = lo - umin > 1.0 && umax - hi <= 1.0;
-    let (room0, room1) = if mirrored { (umin, lo) } else { (hi, umax) };
+    // The rooms' span along the front over the depths `v0..v1`: from the hall's wall to the far
+    // side wall where every one of those depths reaches.
+    let span_over = |v0: f64, v1: f64| {
+        let (l, r) = shared(v0, v1);
+        if mirrored { (l, lo) } else { (hi, r) }
+    };
+    // The far side wall at a depth: where the band's partitions and its last room reach.
+    let far = |v: f64| if mirrored { u_at(v).0 } else { u_at(v).1 };
+    let (room0, room1) = span_over(vmin, vmin + (vmax - vmin) * 0.25);
+    // The hall a metre wide at least at the front and the back: a side wall slanted across it (a
+    // lot closing in behind the core) twisted its outline.
+    let hall_width = |v: f64| {
+        let (l, r) = u_at(v);
+        if mirrored { r - lo } else { hi - l }
+    };
     if (!mirrored && lo - umin > 1.0)
         || room1 - room0 < 1.8
         || vmax - vmin < 2.6
         || plan.width <= HALL + WALL
+        || hall_width(vmin) < 1.0
+        || hall_width(vmax) < 1.0
     {
         return None;
     }
@@ -126,14 +170,14 @@ pub fn house(m: &Mass, s: &Structure) -> Option<Interior> {
         let (a, b) = (u0.min(u1), u0.max(u1));
         [at(a, v0), at(b, v0), at(b, v1), at(a, v1)]
     };
-    // The plan's metres to the floor's: its rooms beside the hall stretched to the far wall, its
-    // depth to the back wall.
-    let x = |px: f64| {
+    // The plan's metres to the floor's within the span `(r0, r1)` of the band: its rooms beside the
+    // hall stretched to the far wall, its depth to the back wall.
+    let x = |px: f64, (r0, r1): (f64, f64)| {
         let f = (px - HALL) / (plan.width - WALL - HALL);
         if mirrored {
-            room1 - f * (room1 - room0)
+            r1 - f * (r1 - r0)
         } else {
-            room0 + f * (room1 - room0)
+            r0 + f * (r1 - r0)
         }
     };
     let y = |py: f64| vmin + py / plan.depth.max(1e-6) * (vmax - vmin);
@@ -233,12 +277,18 @@ pub fn house(m: &Mass, s: &Structure) -> Option<Interior> {
             storey: k,
             doors,
         });
-        // Between the bands, wall to wall.
+        // Between the bands, wall to wall: from the hall's wall to the far side wall where it
+        // stands at that depth.
         for pair in bands.windows(2) {
             let v = y(pair[0].1);
+            let (u0, u1) = if mirrored {
+                (far(v), room1)
+            } else {
+                (room0, far(v))
+            };
             partitions.push(Partition {
-                a: at(room0, v),
-                b: at(room1, v),
+                a: at(u0, v),
+                b: at(u1, v),
                 thickness: PARTITION,
                 storey: k,
                 doors: Vec::new(),
@@ -247,8 +297,13 @@ pub fn house(m: &Mass, s: &Structure) -> Option<Interior> {
         // Each band's rooms between their boundaries, those on the front or the back wall moved
         // off its openings; between two rooms a doorway in the middle.
         for (y0, y1, ids) in &bands {
-            let mut us: Vec<f64> = vec![x(storey[ids[0]].x.0)];
-            us.extend(ids.iter().map(|&i| x(storey[i].x.1)));
+            let sp = span_over(y(*y0), y(*y1));
+            // A wedge whose side walls close in behind the hall leaves a band no room: no insides.
+            if sp.1 - sp.0 < 1.2 {
+                return None;
+            }
+            let mut us: Vec<f64> = vec![x(storey[ids[0]].x.0, sp)];
+            us.extend(ids.iter().map(|&i| x(storey[i].x.1, sp)));
             for j in 1..us.len() - 1 {
                 let (lo, hi) = (us[j - 1].min(us[j + 1]), us[j - 1].max(us[j + 1]));
                 if *y0 < 1e-9 {
@@ -260,10 +315,28 @@ pub fn house(m: &Mass, s: &Structure) -> Option<Interior> {
             }
             let (v0, v1) = (y(*y0), y(*y1));
             for (j, &i) in ids.iter().enumerate() {
+                // The last room reaches the far side wall where it stands at either end.
+                let outline = if j + 2 < us.len() {
+                    rect(us[j], us[j + 1], v0, v1)
+                } else if mirrored {
+                    [
+                        at(far(v0), v0),
+                        at(us[j], v0),
+                        at(us[j], v1),
+                        at(far(v1), v1),
+                    ]
+                } else {
+                    [
+                        at(us[j], v0),
+                        at(far(v0), v0),
+                        at(far(v1), v1),
+                        at(us[j], v1),
+                    ]
+                };
                 rooms.push(InRoom {
                     kind: storey[i].kind,
                     storey: k,
-                    outline: rect(us[j], us[j + 1], v0, v1),
+                    outline,
                 });
             }
             let len = v1 - v0;
@@ -281,10 +354,21 @@ pub fn house(m: &Mass, s: &Structure) -> Option<Interior> {
     Some(Interior {
         rooms,
         partitions,
+        // To its side wall where it stands at the front and at the back.
         hall: if mirrored {
-            rect(lo, umax, vmin, vmax)
+            [
+                at(lo, vmin),
+                at(u_at(vmin).1, vmin),
+                at(u_at(vmax).1, vmax),
+                at(lo, vmax),
+            ]
         } else {
-            rect(umin, hi, vmin, vmax)
+            [
+                at(u_at(vmin).0, vmin),
+                at(hi, vmin),
+                at(hi, vmax),
+                at(u_at(vmax).0, vmax),
+            ]
         },
         stair: core.map(|c| c.stair),
         climb: n,

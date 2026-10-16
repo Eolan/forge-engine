@@ -68,6 +68,7 @@ pub mod preview;
 pub mod river;
 pub mod shore;
 pub mod sites;
+pub mod sockets;
 pub mod valley;
 
 pub use amplify::{AmplifyParams, amplify};

@@ -8,6 +8,8 @@ pub struct Input {
     keys: HashSet<KeyCode>,
     /// Accumulated raw mouse motion since the last frame.
     pub mouse_delta: (f32, f32),
+    /// The wheel's notches since the last frame, up positive.
+    pub wheel: f32,
     /// Right mouse button held (cursor grabbed).
     pub looking: bool,
 }
@@ -28,5 +30,6 @@ impl Input {
 
     pub(crate) fn end_frame(&mut self) {
         self.mouse_delta = (0.0, 0.0);
+        self.wheel = 0.0;
     }
 }

@@ -3,7 +3,8 @@ use winit::keyboard::KeyCode;
 
 use crate::input::Input;
 
-/// A free-flying camera: WASD/QE move, Shift fast, right mouse drag to look.
+/// A free-flying camera: WASD/QE move, Shift fast, the wheel sets the speed, right mouse drag to
+/// look.
 ///
 /// Right-handed, +Y up, −Z forward; reversed-Z infinite projection with Vulkan depth range.
 #[derive(Clone, Debug)]
@@ -18,7 +19,8 @@ pub struct FlyCamera {
     pub fov_y: f32,
     /// Near plane (metres).
     pub near: f32,
-    /// Base speed (m/s); Shift multiplies by 5, Ctrl by 25.
+    /// Base speed (m/s), a quarter more or less a notch of the wheel; Shift multiplies by 5,
+    /// Ctrl by 25.
     pub speed: f32,
     /// Radians per pixel of mouse motion.
     pub sensitivity: f32,
@@ -95,8 +97,12 @@ impl FlyCamera {
         if input.is_down(KeyCode::KeyQ) {
             motion -= Vec3::Y;
         }
-        // Shift for five times the speed, Ctrl for twenty-five (across a city or a planet's
-        // ground), both for both.
+        // The wheel sets the speed for good, a quarter faster or slower a notch (from a crawl to
+        // look a doorway over to a flight across a planet's ground); Shift for five times the
+        // speed, Ctrl for twenty-five, both for both.
+        if input.wheel != 0.0 {
+            self.speed = (self.speed * 1.25_f32.powf(input.wheel)).clamp(0.25, 400.0);
+        }
         let mut speed = self.speed;
         if input.is_down(KeyCode::ShiftLeft) {
             speed *= 5.0;
