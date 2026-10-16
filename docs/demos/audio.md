@@ -1,14 +1,15 @@
 # Audio — the mixer, rendered headless (`forge-audio`)
 
-Phase 6's first step and the start of its second (issue #267, D-011, D-062): the sound system's
-real-time side and its first spatial layer, built and tested without a device, a window or the
-GPU. The game starts and steers voices through an `AudioEngine`; the `Mixer` renders them,
+Phase 6's first step and most of its second (issue #267, D-011, D-062): the sound system's
+real-time side, its first spatial layer, footsteps and impacts by surface, and ambience by the
+hour, the weather and the medium, all made in code, built and tested without a device, a window
+or the GPU. The game starts and steers voices through an `AudioEngine`; the `Mixer` renders them,
 wherever the output wants it: in a device's callback, on a mix thread of its own, or offline
 into a buffer that the tests measure and the owner can listen to as WAV files. Nothing in the
 crate opens an audio device.
 
 ```
-cargo test --release -p forge-audio                                      # 40 tests on rendered samples
+cargo test --release -p forge-audio                                      # 57 tests on rendered samples
 cargo run --release -p forge-audio --example audio-render -- scenes      # WAVs in captures/audio/
 cargo run --release -p forge-audio --example audio-render -- bench       # the mixer's cost
 ```
@@ -31,6 +32,10 @@ cargo run --release -p forge-audio --example audio-render -- bench       # the m
 | Decoding | WAV in our own code (8, 16, 24 and 32-bit integers, 32 and 64-bit floats, plain or extensible, other chunks skipped); Ogg Vorbis through `lewton`, with the first page's padding trimmed by its granule position (FFmpeg's encoder leaves 704 frames that `lewton` keeps); Ogg Opus through `opus-rs`, a pure-Rust port of libopus, with the pre-skip and the end trimmed by the head and the last granule position. All pure Rust | `decode` |
 | Streaming | `Streams::open` makes a ring of a quarter of a second between a decoder and the voice that plays it, fills it at once, and hands the decoder to a `StreamPump`: on a decode thread of its own, or called before each block offline (so an offline render is the same to the bit on any machine). A ring that runs dry plays silence for what is missing, keeps the voice's time and counts an underrun. A looping stream rewinds its decoder | `stream` |
 | Output | `OfflineRenderer` renders seconds into a buffer as fast as it goes; `write_wav` writes 16-bit, 24-bit or float WAV. `MixThread` runs the mixer on a thread that fills an output ring ahead of the device, whose callback only copies out of it (`OutputRing::pull`, never waiting); the ring's length is the latency it adds | `render`, `thread` |
+| Footsteps and impacts | `Foley::step` (a surface, a place, the walker's speed and weight) and `Foley::impact` (a surface, a place, a body's speed and mass) synthesise the sound on the game thread and play it as a spatial voice. A contact is a `sin²` force pulse, short on hard ground (0.15 ms on metal, 0.35 ms on stone), long on soft (12 ms on gravel, 25 ms on grass); it drives the surface's modes (stone setts ringing high and briefly, floorboards low, a steel plate for a second), a click of noise, grains while the foot presses in (gravel's pebbles, grass's stalks), noise (grass brushing, water sloshing) and Minnaert bubbles (water). A step is the heel then the ball, 85 ms apart walking, 22 ms running, where contacts are shorter and the press stirs more. The amplitude is `√(weight × speed)` relative to 80 kg at 1.4 m/s; an impact's is `√mass × speed`, its contact widening with the mass. Each sound starts on 0, ends on 0 after a 5 ms fade, and keeps its top octave empty | `foley`, `dsp::synth` |
+| Ambience beds | Six textures made in code, each a decoder that never ends, streamed from the decode thread: wind (pink noise through a band that follows two wandering gusts, one per ear; leaves; a whistle past 6 m/s), rain (40 drops a second each mm/h: ticks on stone and bubbles in puddles; a wash), cicadas (up to 14 *Cicada orni*, each singing echemes of 80 ms every 230 ms near 4.8 kHz, in bouts), birds (a blackbird, a house sparrow, a serin, a collared dove), the sea against the quays (waves every 2 to 5.5 s, their gurgle, a splash above the biggest, a low wash), under water (a rumble, the diver's breath, far bubbles). Each reads one intensity the game writes through an atomic and eases to it over half a second; an eighth-order low-pass at 10.5 kHz keeps its top octave empty; asleep, it writes silence without working | `ambience::beds` |
+| The rules | Each tick `Ambience::update` takes the world's state where the listener is (the hour, sunrise and sunset, the temperature, the wind, the rain, the nearest shore, the medium) and moves each bed's gain toward its target with its own time constant (wind 1 s, rain 2 s, cicadas and birds 3 s, the sea 0.5 s, the medium 60 ms): cicadas from 2.5 to 4.5 hours after sunrise until sunset, above 22 °C, not in rain or strong wind; the dawn chorus from an hour before sunrise to 2.5 hours after, 15 % of it through the day, 40 % at dusk; the sea −3 dB a doubling of the distance past 4 m (a quay is a line source), panned toward the water, its swell rising with the wind. A bed whose gain has rested at 0 for a second sleeps | `ambience` |
+| Under water | The ambience's layout puts everything heard above the water under a `world` bus with a filter (`Control::BusFilter`): under water it low-passes at 600 Hz (fourth order), drops 29 dB (the surface's cost, research note §2.4) and narrows the image to a fifth. The cutoff glides a quarter of an octave a block (20 kHz to 600 Hz in 21 blocks, 112 ms), the gain (in decibels) and the width with a 30 ms time constant, through two state-variable sections that can be retuned while they run; clear, the filter is skipped. The underwater bed plays on a `water` bus that sends to its own reverb, sized for sound 4.3 times faster (`ReverbParams::UNDERWATER`: 1.4 s, dense, dark) | `dsp::medium`, `ambience` |
 
 ## Numbers (release build, Ryzen 7 9800X3D, one thread, 2026-10-16)
 
@@ -53,6 +58,12 @@ voices is the limiter and the buses alone (a reverb nothing feeds is skipped). 1
 
 Decoding a second of stereo at 48 kHz on the decode thread: WAV (16-bit) 0.01 ms, Ogg Vorbis at
 128 kbit/s 1.7 ms, Ogg Opus at 64 kbit/s 1.7 ms: a stream costs under 0.2 % of a core.
+
+A walking step synthesised on the game thread (the mean of 200): stone 208 µs, wood 270 µs, grass
+353 µs, gravel 490 µs, water 625 µs, metal 701 µs. The beds on the decode thread, for a second of
+sound: wind at 10 m/s 1.03 ms, rain at 20 mm/h 1.55 ms, the full cicada chorus 3.19 ms, the dawn
+chorus 2.06 ms, the sea 1.24 ms, under water 0.85 ms: about 1 % of a core for all six at their
+busiest (`docs/PROFILE.md`).
 
 ## What the tests check (on rendered samples)
 
@@ -79,6 +90,16 @@ Decoding a second of stereo at 48 kHz on the decode thread: WAV (16-bit) 0.01 ms
 | Air | The same tones at 100 m against 1 m, no distance curve: −0.21, −1.63 and −15.4 dB against Steam Audio's −0.17, −1.46 and −15.7 (within 0.1, 0.3 and 0.5 dB) |
 | Doppler | A 1 kHz tone 200 m ahead: 1111.11 Hz when it comes at 34.3 m/s, 909.09 Hz when it goes, 1100.00 Hz when the listener comes, each within 10⁻⁴ |
 | Reverb zones | A hall (a box 20 m across, 5 m of fade) in the open: the reverb's low-band decay measured on the rendered tail is 2.37 s inside (the hall's 2.4), 0.93 s half-way through the fade (0.92, the log-domain blend), 0.36 s outside (the open's 0.35), each within 5 % |
+| Surfaces | A walking step on each of the six surfaces, four seeds each: every pair of surfaces' octave spectra at least 5 dB apart (RMS over nine octaves; the closest pair 6.4 dB), two steps on one surface within 2.5 dB (at most 2.1); wood's centroid under 400 Hz, water loudest in the 500 Hz to 1 kHz octave, stone in 1 to 2 kHz, gravel and metal above 1.5 kHz, grass in 4 to 8 kHz; metal 40 dB down after more than twice any other surface's time |
+| Weight and speed | 40, 80 and 160 kg: +3.01 dB a doubling to 0.01 dB; 4.2 m/s against 1.4: +4.77 dB; the heel and the ball 70 to 100 ms apart walking, 15 to 30 ms running; impacts +6.02 dB for four times the mass or twice the speed, a 20 kg body on stone, wood or metal darker than a 1 kg one (its centroid under 0.8 times) |
+| No clicks (footsteps) | Each sound starts and ends on exactly 0; under −38 dB of its energy above 16 kHz and no millisecond above −25 dB there, walking and running; the same sound cut at its peak without a fade scores at least 10 dB worse, so the measure sees a click. Twelve steps through the mixer, each on its frame (the first contact within 1.5 ms), a step 3 m to the right louder on the right by more than 6 dB, the same samples twice |
+| Cicadas by the hour | At 13:00 the 3 to 8 kHz band at 30 °C (−23.2 dBFS) is 31 dB above the same hour at 18 °C (birds alone); at 3:00 and 21:30 nothing plays; a lone cicada's envelope repeats every 275 ms (its species: 130 to 450 ms), its loudest octave 4 kHz |
+| The dawn chorus | The 1 to 8 kHz band at 6:30 (−34.2 dBFS) above 20:18 (−39.1) above 13:00 (−43.9), each by more than 2 dB; the rules give the birds nothing in 5 mm/h of rain, in 12 m/s of wind, at 2:00 |
+| Wind and rain | Wind at 3, 8 and 15 m/s: −30.9, −18.2 and −10.3 dBFS, its centroid 297, 551 and 892 Hz, its level in 100 ms windows wandering by 5 dB, the ears correlated under 0.01. Rain at 20 mm/h against 2 mm/h: +10.03 dB |
+| The sea | The shore at 4, 16 and 64 m: −6.02 dB every four times the distance to 0.05 dB (−27.6 dBFS in the near ear at 4 m), the water's side 10.3 dB louder, nothing past 400 m |
+| Under water | A 400 Hz tone in the world's bus falls 33.6 dB (29 for the surface, 4.4 as the width narrows, 0.17 for the low-pass) to 0.3 dB; a 3 kHz tone falls 81.5 dB, and by more than 40 dB within 150 ms of the dive; a tone hard left reaches the right ear at 0.674 of the left (0.667 for a fifth of the width); the rumble under 150 Hz rises 19.8 dB; the water bus's reverb decays in 1.4 s within 15 % |
+| A day in time-lapse | 30 s: the hour from 4:00 to 14:00, a wind to 12 m/s, a shower, the walk down to the quay, a dive from 20 to 25 s: every bed rises above half its level, no millisecond above −25 dB over 16 kHz (the worst −35.5; −16.8 before the filter became a state-variable one), the peak under the limiter's ceiling, the same samples twice |
+| Sleeping beds | The rain stops: its bed sleeps once its gain has rested at 0 for a second and writes silence; the rain comes back: it wakes and fades in, no click |
 
 ## The scenes (`audio-render scenes`)
 
@@ -94,6 +115,8 @@ listen to; each line prints the voices, steals and the limiter's work.
 | `stream` | A 2 s stereo WAV made in memory at 44.1 kHz, streamed and looped while a tone plays from memory |
 | `wall` | Rain and a buzz 6 m ahead: a wood door closes over a second at 1.5 s and opens at 4.5 s (the sound dulls and drops, the low end stays longest), then a concrete wall slides across at 7 s (almost nothing gets through) |
 | `zones` | The listener walks at 5 m/s from the open, through a stone hall, out again and into a cave, clapping every 0.6 s: the tail grows through the hall's 6 m of fade, falls back outside, and grows longer and brighter in the cave |
+| `footsteps` | The walker's own feet, the listener 1.6 m above them: 3.3 s walking on each of stone, gravel, grass, wood, metal and water, then running back over them; then a 20 kg crate onto boards, a stone onto a steel plate and a sack into water, 3 m ahead |
+| `village` | A day in a minute, 3 s an hour from 3:00: night, the dawn chorus, cicadas from mid-morning, wind and a shower in the afternoon, a walk down to the quay from 30 s (the sea grows on the right), a dive from 45 to 50 s (the world goes low, quiet and narrow, the rumble and bubbles come up), and the evening |
 
 ## Not yet
 
@@ -102,8 +125,11 @@ listen to; each line prints the voices, steals and the limiter's work.
 - **The data layer** D-011 names: events, RTPCs, states and switches, HDR loudness on the buses,
   banks, and the profiler's overlay (the counters exist: `MixerStats`).
 - **Steam Audio** as a `Spatializer` (HRTF), its occlusion and reflections; the ambisonic bus.
-- **The rest of the second part** of #267: the acoustic values in the world's material rows
-  (D-007) and occlusion found by rays against the world, footsteps and impacts by material,
-  weather and medium ambience, underwater, sources heard from another room.
+- **The rest of the second part** of #267: the acoustic values and the footstep surface in the
+  world's material rows (D-007) and occlusion found by rays against the world, sources heard from
+  another room, the struck object's own modes, rolling and sliding, the wind sampled from the
+  vegetation's wind field, recordings to fit the modal banks (Ren et al.; a download).
+- **The ambience's sources.** The beds are textures around the listener; birds and cicadas
+  placed in the map's trees, and the sea along its actual quays, wait for the map's data.
 - **Better resampling** for sounds far from the mixer's rate: the Hermite interpolator aliases
   when it reads faster than one frame a frame; `rubato` at load time is the research note's pick.

@@ -638,3 +638,25 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
 - **Ogg Vorbis and Opus.** The Xiph.Org Foundation's Vorbis I specification (granule positions
   and the trimming they imply, A.2); RFC 7845 (Ogg Opus: the head, the pre-skip, the granule
   positions) and RFC 6716 (Opus).
+- **Footsteps and impacts.** Kees van den Doel, Paul G. Kry and Dinesh K. Pai,
+  "FoleyAutomatic: Physically-Based Sound Effects for Interactive Simulation and Animation",
+  SIGGRAPH 2001 (a bank of modal resonators driven by the contact force); Perry R. Cook,
+  "Physically Informed Sonic Modeling (PhISM): Synthesis of Percussive Sounds", *Computer Music
+  Journal* 21(3), 1997 (stochastic grains: gravel, shakers); Andy Farnell, *Designing Sound*, MIT
+  Press, 2010 (a step as a heel and a ball contact) (`forge_audio::foley`).
+- **Bubbles and rain.** Marcel Minnaert, "On musical air-bubbles and the sounds of running
+  water", *Philosophical Magazine* 16, 1933 (a bubble's pitch from its radius); Kees van den
+  Doel, "Physically Based Models for Liquid Sounds", *ACM Transactions on Applied Perception*
+  2(4), 2005 (its damping and rising pitch); Charles Verron and George Drettakis, "Procedural
+  Audio Modeling for Particle-Based Environmental Effects", AES 133rd Convention, 2012, and
+  Shiguang Liu, Haonan Cheng and Yiying Tong, "Physically-Based Statistical Simulation of Rain
+  Sound", SIGGRAPH 2019 (rain as drops and bubbles in numbers set by the rate)
+  (`dsp::synth::Grain`, `ambience::beds::Rain`).
+- **Cicadas.** Pinto-Juma, Simões, Seabra and Quartau, "Calling song structure and
+  geographical variation in *Cicada orni* Linnaeus (Hemiptera: Cicadidae)", *Zoological Studies*
+  44(1), 2005: the echeme of 80 ms every 230 ms and the peak near 4.8 kHz the cicadas are made from
+  (`ambience::beds::Cicadas`).
+- **Pink noise.** Paul Kellet's three-pole filter (the music-dsp mailing list, 1999, public
+  domain) (`dsp::synth::PinkNoise`).
+- **The medium filter.** Andrew Simper, "Linear Trap Integrated SVF", Cytomic, 2013: a
+  state-variable filter that can be retuned every block (`dsp::SvfLowPass`, `dsp::BusFilter`).

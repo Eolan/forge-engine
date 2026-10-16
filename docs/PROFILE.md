@@ -1644,6 +1644,21 @@ each block's 5.33 ms. Runs while the other sessions build come out up to 25 % sl
 The decode thread's side, a second of stereo at 48 kHz decoded whole (the best of 30): WAV
 (16-bit) 0.01 ms, Ogg Vorbis at 128 kbit/s 1.7 ms, Ogg Opus at 64 kbit/s 1.7 ms, so a stream
 costs its decode thread under 0.2 % of a core. Not measured yet: the wake-ups of a real device.
+
+**Footsteps and impacts** are synthesised on the game thread when they happen (`foley`; the
+mean of 200 walking steps of 80 kg, the same bench): stone 208 µs, wood 270 µs, grass 353 µs,
+gravel 490 µs, water 625 µs, metal 701 µs (its 1.27 s of ringing). Ten walkers, two steps a
+second each, cost the game thread about 0.9 % of a core; a step's sound could move to a worker
+if that ever shows in the frame.
+
+**The ambience beds** run on the decode thread (`ambience`; ten seconds of each, the best of
+three): wind at 10 m/s 1.03 ms a second of sound, rain at 2 mm/h 0.87 ms and at 20 mm/h 1.55 ms,
+the full cicada chorus 3.19 ms, birds through the day 0.77 ms and at the dawn chorus 2.06 ms
+(7.9 ms before their sines became a turning phasor), the sea 1.24 ms, under water 0.85 ms. All
+six at once at their busiest come to about 10 ms a second, 1 % of a core; a bed asleep costs
+nothing. The mixer plays each as a stream, a voice like any other. The medium filter on the
+world's bus (two state-variable sections a channel, a width and a gain) is skipped while clear.
+
 The page with the tests and the scenes is `docs/demos/audio.md`.
 
 ## `forge-net` — the replication server's tick (#268, 2026-10-16)

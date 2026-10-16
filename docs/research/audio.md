@@ -1,7 +1,9 @@
 # Research — Game audio engine architecture and spatial audio
 
-> Status: v0.2, 2026-10-16: §12 adds what the first build (#267) chose and checked: the decoders, Steam
-> Audio's bands and filters read in its source, its release dates corrected, the patents met. v0.1,
+> Status: v0.3, 2026-10-16: §13 adds what footsteps, impacts and the ambience beds (#267) are made
+> from, the cicadas' song as measured, and the patents met. v0.2, 2026-10-16: §12 adds what the
+> first build (#267) chose and checked: the decoders, Steam Audio's bands and filters read in its
+> source, its release dates corrected, the patents met. v0.1,
 > 2026-09-23. Sources checked the same day (crates.io API, GitHub, publisher and author
 > pages, vendor docs). Builds on the prior project's
 > [`world/docs/research/audio.md`](../../../world/docs/research/audio.md) (v0.1, 2026-09-14), which is
@@ -52,7 +54,9 @@ reference today), **recent** (2019 or later).
 8. [Comparison](#8-comparison)
 9. [Recommendation for Forge](#9-recommendation-for-forge)
 10. [Checked and left out](#10-checked-and-left-out)
-. [The first build: crates, Steam Audio's filters, patents (2026-10-16)](#12-the-first-build-crates-steam-audios-filters-patents-2026-10-16)
+11. [Verification notes](#11-verification-notes)
+12. [The first build: crates, Steam Audio's filters, patents (2026-10-16)](#12-the-first-build-crates-steam-audios-filters-patents-2026-10-16)
+13. [Footsteps, impacts and ambience made in code (2026-10-16)](#13-footsteps-impacts-and-ambience-made-in-code-2026-10-16)
 
 ---
 
@@ -888,3 +892,89 @@ and 4.8.1 on 2026-02-11, and the last commit on 2026-03-25 (v0.1 had each releas
 
 Equal-power panning, the inverse distance law, Doppler by resampling, Hermite interpolation and the
 cookbook biquads are decades old textbook methods; nothing to flag.
+
+## 13. Footsteps, impacts and ambience made in code (2026-10-16)
+
+Issue #267's second part, built headless (`docs/demos/audio.md`): every sound below is
+synthesised, none recorded or downloaded. What each model is, where it comes from, and the
+patents met. Searched on Google Patents and the web on 2026-10-16; the status and expiry lines
+are Google's estimates, not legal conclusions.
+
+**Footsteps and impacts** (`forge_audio::foley`). D-011 names "modal banks fitted per material";
+the fitting (Ren, Yeh and Lin, §4: one recorded hit per material) needs recordings, so the banks
+are set by hand for now and checked by what the tests measure: each surface's octave spectrum at
+least 5 dB from every other's, two steps on one surface within 2.5 dB of each other. A contact
+is a force pulse, `sin²` over its width, which starts and ends with a zero slope and whose
+spectrum falls past `2 / width`: 0.15 ms on metal, 0.35 ms on stone, 12 ms on gravel, 25 ms on
+grass. The pulse drives a bank of two-pole resonators (van den Doel, Kry and Pai, FoleyAutomatic,
+2001), a band of noise (the sole's slap), and, while the foot presses in, Cook's stochastic grains
+(PhISM, *Computer Music Journal*, 1997: his shaker model, which he also applies to gravel) or a
+band of noise (grass, water). Water adds Minnaert bubbles. A step is two contacts, the heel and
+then the ball 85 ms later walking, 22 ms running (Farnell's footsteps; Turchet's 2016
+synthesiser sorts grounds into solid, aggregate and liquid the same way). Impacts use the same
+banks with one contact whose width grows as `mass^0.4 / speed^0.2`, the exponents of a Hertzian
+contact. Not done: the struck object's own modes (a dropped can rings, not only the floor),
+rolling and sliding (FoleyAutomatic's other two inputs), the deformable layer's depth (D-007's
+footprints) as an input.
+
+**Bubbles** (`dsp::synth::Grain::bubble`): Minnaert's resonance, `f₀ ≈ 3.26 / r` Hz for air in
+water near the surface (Minnaert, 1933), decaying at `d = 0.13 f₀ + 0.0072 f₀^1.5` a second and
+rising by `0.1 d` of its pitch a second as it nears the surface: van den Doel's model of liquid
+sounds (*ACM Transactions on Applied Perception*, 2005). Its PDF could not be read here (the
+DAFx archive's copy came back as compressed bytes); the coefficients are the model as it is
+commonly quoted, and the tests check only Minnaert's pitch and the damping formula's value.
+
+**Rain** (`ambience::beds::Rain`): Verron and Drettakis' atoms (AES, 2012: impacts and bubbles
+in numbers the weather sets) with Liu, Cheng and Tong's split of a drop into an impact and a
+bubble (SIGGRAPH 2019). 40 drops a second each mm/h, seven in ten ticks on hard ground (2 to
+8 kHz, a quarter of a millisecond), three in ten bubbles of 0.8 to 2.5 mm in puddles; the far
+drops as a wash of pink noise. The level then follows the square root of the rate by
+construction: +10.0 dB for ten times the rate, measured.
+
+**Wind** (`ambience::beds::Wind`): Farnell's wind (*Designing Sound*): noise through a band whose
+centre and level follow the gusts, here two Ornstein–Uhlenbeck wanders (3 s, and 0.5 s for each
+ear, so the two ears hear different air), leaves above 1.5 m/s, and a Strouhal whistle
+(`0.2 v / d`, a 5 mm wire) past 6 m/s. §2.5's lesson from Ghost of Tsushima stands: the wind the
+vegetation already simulates should drive it; for now the game passes one speed.
+
+**Cicadas** (`ambience::beds::Cicadas`). *Cicada orni* is the cicada of the Mediterranean
+villages from Portugal to Greece. Pinto-Juma, Simões, Seabra and Quartau measured 176 males
+across its range (*Zoological Studies* 44(1), 2005, Table 3): echemes of 80 ± 30 ms (30 to
+210 ms), 150 ± 70 ms apart, a period of 230 ± 70 ms (4.7 a second); a peak at 4.82 ± 0.49 kHz,
+the song between 2.2 and 9.4 kHz. They did not count the pulses in an echeme (choruses blurred
+them); 180 to 240 tymbal pulses a second is our choice. The test measures a lone singer's
+envelope repeating every 275 ms and its loudest octave at 4 kHz. When they sing (the warm hours,
+above about 22 °C) is a rule written from common knowledge of the species, not from a
+measurement: a source for the temperature threshold is still wanted.
+
+**Birds** (`ambience::beds::Birds`): four voices of a Mediterranean village, written as
+frequency glides with raised-cosine edges, not copied from recordings: a blackbird's warble, a
+house sparrow's chirps, a serin's trill, a collared dove's coos. The dawn chorus peaks from
+sunrise to half an hour after; the day keeps 15 % of it and dusk 40 %. Real song is far richer
+(repertoires of syllables, neighbours answering); the bed is a placeholder that a designer's
+recordings or a richer model will replace.
+
+**Under water** (`dsp::BusFilter::UNDERWATER`, `ambience::beds::Underwater`): §2.4's rule,
+applied to the world's bus: the surface costs 29 dB, the highs go (a fourth-order low-pass at
+600 Hz), and the stereo image narrows to a fifth (divers place a 700 Hz source only within about
+50°). The underwater bed is a rumble under 160 Hz, nearly the same in both ears, and bubbles;
+its reverb (`ReverbParams::UNDERWATER`) is sized as a space 4.3 times smaller than it is, since
+sound travels 4.3 times faster. The filter glides through two state-variable sections (Andrew
+Simper, "Linear Trap Integrated SVF", Cytomic, 2013): the first try, direct-form biquads retuned
+each block, rang near the Nyquist frequency on the way back up (a millisecond of the time-lapse
+test at −16.8 dB above 16 kHz; −35.5 dB with the state-variable form). Not done: Doppler at
+water's speed of sound, sources under water heard from above, the surface's own sounds.
+
+**Patents met:**
+
+| Technique | Patent | Holder | Status (Google's estimate) | Bearing |
+|---|---|---|---|---|
+| Footstep and collision sounds from the real surface: a head-worn device records a footstep, derives the surface's acoustic properties and makes a virtual object's collision on it sound like that | US 11,636,843 B2 ("Surface appropriate collisions"), priority 2020-05-29; continuation US 12,347,415 | Magic Leap | active to about 2041-05-27 | not our method: `foley` synthesises from a preset the world's material row names, nothing is recorded or analysed; keep it so (an XR mode that listens to the real floor would meet it) |
+| Procedural footsteps by kind of ground (solid, aggregate, liquid) | none found; Turchet 2016 and Nordahl, Turchet and Serafin 2011 (IEEE TVCG) are published | — | — | free |
+| Modal synthesis driven by contact forces | none found live; FoleyAutomatic and O'Brien et al. (both 2001) are published | — | — | free |
+| Stochastic grains (gravel, shakers) | none found; Cook 1996 and 1997 are published | — | — | free |
+| Rain from drops and bubbles | none found; van den Doel 2005, Verron 2012 and Liu 2019 are published | — | — | free |
+| Ambience layers crossfaded by the time of day and the weather | none found; common middleware practice (CRIWARE ADX's tutorials, 2021 and 2025, fade four time-of-day layers by one parameter; Wwise and FMOD do it with RTPCs) | — | — | free |
+
+Nothing here needed a download. Recordings would make the banks better (one hit per material,
+Ren et al.'s fit) and would need the owner's go.

@@ -625,7 +625,10 @@ The items below are the phase's original outline; the plan above orders them.
    (#267, 2026-10-16: built and tested headless, `docs/demos/audio.md`; the device next).
 2. Spatialisation and occlusion (D-011), material-driven footsteps and impacts, weather and
    medium ambience, underwater. Started (#267, 2026-10-16): panning, distance, air absorption,
-   occlusion through Steam Audio's material presets, Doppler and reverb zones, headless.
+   occlusion through Steam Audio's material presets, Doppler and reverb zones, headless;
+   then footsteps and impacts synthesised for six surfaces, and ambience beds (wind, rain,
+   cicadas, birds, the sea, under water) the hour, the weather and the medium drive, the world
+   muffled under water by a filter on its bus.
    **Demo:** `forest-to-cave` — walk from a forest into a cave in the rain; occlusion,
    reverb and material sounds change without any scripting.
 
