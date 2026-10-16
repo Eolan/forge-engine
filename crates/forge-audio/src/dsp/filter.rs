@@ -159,6 +159,39 @@ impl Biquad {
         )
     }
 
+    /// A low-pass at `cutoff` Hz (Q 0.707: Butterworth, −3 dB at the cutoff).
+    pub fn low_pass(cutoff: f32, q: f32, rate: u32) -> Self {
+        let (cw, alpha) = pass_terms(cutoff, q, rate);
+        Self::from_coefficients(
+            [(1.0 - cw) / 2.0, 1.0 - cw, (1.0 - cw) / 2.0],
+            [1.0 + alpha, -2.0 * cw, 1.0 - alpha],
+        )
+    }
+
+    /// A high-pass at `cutoff` Hz.
+    pub fn high_pass(cutoff: f32, q: f32, rate: u32) -> Self {
+        let (cw, alpha) = pass_terms(cutoff, q, rate);
+        Self::from_coefficients(
+            [(1.0 + cw) / 2.0, -(1.0 + cw), (1.0 + cw) / 2.0],
+            [1.0 + alpha, -2.0 * cw, 1.0 - alpha],
+        )
+    }
+
+    /// A band-pass centred on `centre` Hz with a peak gain of 1 (the cookbook's constant
+    /// 0 dB peak form); `q` is the centre over the bandwidth.
+    pub fn band_pass(centre: f32, q: f32, rate: u32) -> Self {
+        let (cw, alpha) = pass_terms(centre, q, rate);
+        Self::from_coefficients([alpha, 0.0, -alpha], [1.0 + alpha, -2.0 * cw, 1.0 - alpha])
+    }
+
+    /// Takes `other`'s coefficients and keeps its own state: a filter retuned while it runs.
+    pub fn retune(&mut self, other: &Biquad) {
+        let (z1, z2) = (self.z1, self.z2);
+        *self = *other;
+        self.z1 = z1;
+        self.z2 = z2;
+    }
+
     /// One sample through.
     #[inline]
     pub fn tick(&mut self, x: f32) -> f32 {
@@ -179,6 +212,12 @@ impl Biquad {
         self.z1 = 0.0;
         self.z2 = 0.0;
     }
+}
+
+fn pass_terms(cutoff: f32, q: f32, rate: u32) -> (f64, f64) {
+    let nyquist = rate as f64 / 2.0;
+    let w0 = std::f64::consts::TAU * (cutoff as f64).clamp(1.0, 0.98 * nyquist) / rate as f64;
+    (w0.cos(), w0.sin() / (2.0 * q.max(0.05) as f64))
 }
 
 fn shelf_terms(cutoff: f32, q: f32, gain: f32, rate: u32) -> (f64, f64, f64) {

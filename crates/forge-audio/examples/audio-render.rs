@@ -21,8 +21,9 @@ use forge_audio::spatial::{AcousticMaterial, Attenuation, Occlusion};
 use forge_audio::stream::streams;
 use forge_audio::zones::{ReverbZone, ReverbZones, ZoneShape};
 use forge_audio::{
-    AudioEngine, BLOCK, BusId, BusLayout, Control, Listener, MixerConfig, MixerStats,
-    OfflineRenderer, PlayParams, SampleBuffer, WavFormat, create, decode, wav_bytes, write_wav,
+    AudioEngine, BLOCK, BusId, BusLayout, Control, Foley, Impact, Listener, MixerConfig,
+    MixerStats, OfflineRenderer, PlayParams, SampleBuffer, Step, Surface, WavFormat, create,
+    decode, wav_bytes, write_wav,
 };
 use forge_core::SplitMix64;
 use glam::{DVec3, Vec3};
@@ -144,6 +145,11 @@ fn scenes(out: &Path, only: Option<&str>) -> Result<()> {
             name: "zones",
             what: "walking at 5 m/s from the open through a stone hall, out, and into a cave, clapping",
             render: zones,
+        },
+        Scene {
+            name: "footsteps",
+            what: "a walk over stone, gravel, grass, wood, metal and water, then a run back; a crate on wood, a stone on metal, a sack into water",
+            render: footsteps,
         },
     ];
     for scene in all.iter().filter(|s| only.is_none_or(|o| o == s.name)) {
@@ -455,6 +461,66 @@ fn zones() -> (Vec<f32>, MixerStats) {
     (out, engine.stats())
 }
 
+fn footsteps() -> (Vec<f32>, MixerStats) {
+    let mut layout = BusLayout::new();
+    let reverb = layout.add_reverb("reverb", BusId::MASTER, ReverbParams::OPEN);
+    let (mut engine, mixer) = create(MixerConfig::default(), &layout);
+    let mut renderer = OfflineRenderer::new(mixer);
+    let mut params = PlayParams::default();
+    params.sends[0] = Some((reverb, 0.25));
+    let mut foley = Foley::new(RATE, 267, params);
+    // The walker hears its own feet: the listener 1.6 m above them, walking at 1.4 m/s (a
+    // step every 0.55 s) over each surface for 3.3 s, then running back at 4 m/s (a step
+    // every 0.33 s); then three things fall 3 m ahead.
+    let mut next_step = 0u64;
+    let mut foot = 0.1;
+    let mut x = 0.0f64;
+    let mut dropped = 0;
+    let out = run(&mut engine, &mut renderer, 36.0, 480, |engine, frame| {
+        let t = frame as f64 / RATE as f64;
+        let (speed, surface) = if t < 19.8 {
+            (1.4, Surface::ALL[((t / 3.3) as usize).min(5)])
+        } else {
+            (4.0, Surface::ALL[5 - ((t - 19.8) / 2.0).min(5.0) as usize])
+        };
+        engine.set_listener(Listener::at(DVec3::new(x, 1.6, 0.0)));
+        if t < 31.8 && frame >= next_step {
+            foot = -foot;
+            foley.step(
+                engine,
+                &Step {
+                    speed,
+                    start: Some(frame),
+                    ..Step::walk(surface, DVec3::new(x + foot, 0.0, -0.2))
+                },
+            );
+            let period = if speed > 2.0 { 0.33 } else { 0.55 };
+            next_step += (period * RATE as f64) as u64;
+        }
+        x += speed as f64 * 480.0 / RATE as f64 * if t < 19.8 { 1.0 } else { -1.0 };
+        let falls = [
+            (32.5, Surface::Wood, 20.0, 3.0),
+            (33.7, Surface::Metal, 1.0, 5.0),
+            (34.9, Surface::Water, 30.0, 4.0),
+        ];
+        if dropped < falls.len() && t >= falls[dropped].0 {
+            let (_, surface, mass, speed) = falls[dropped];
+            foley.impact(
+                engine,
+                &Impact {
+                    surface,
+                    position: DVec3::new(x, 0.0, -3.0),
+                    speed,
+                    mass,
+                    start: Some(frame),
+                },
+            );
+            dropped += 1;
+        }
+    });
+    (out, engine.stats())
+}
+
 /// One run: `voices` spatial voices for `seconds`, moving every 10 ms. Returns the
 /// mixer's seconds of work and its counters.
 fn bench_run(voices: usize, seconds: f64) -> (f64, MixerStats) {
@@ -549,6 +615,23 @@ fn bench(seconds: f64, runs: usize) {
             best * 100.0,
             stats.block_ns_mean as f64 / 1000.0,
             stats.block_ns_max as f64 / 1000.0
+        );
+    }
+    // The game thread's side: a step synthesised on each surface.
+    println!("synthesising a walking step of 80 kg on each surface (the mean of 200):");
+    for surface in Surface::ALL {
+        let started = Instant::now();
+        let mut seconds = 0.0;
+        for seed in 0..200 {
+            let sound =
+                forge_audio::foley::step_sound(&Step::walk(surface, DVec3::ZERO), seed, RATE);
+            seconds += sound.seconds();
+        }
+        let us = started.elapsed().as_secs_f64() / 200.0 * 1e6;
+        println!(
+            "  {:8} {us:6.0} µs a step ({:.2} s of sound)",
+            surface.name(),
+            seconds / 200.0
         );
     }
     // The decode thread's side: a second of stereo 48 kHz from each codec.
