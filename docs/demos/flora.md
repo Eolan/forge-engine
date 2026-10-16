@@ -4,7 +4,7 @@ The flora's simulation side (#269, a parallel session of D-062 off the GPU): the
 village's trees and shrubs (#266) grown from a species record and a seed into branch graphs with
 radii and leaf clusters, then placed on a heightfield by their habitats, tested headless and drawn
 on the CPU. Their rendering (D-013's ladder, wind) stays with the renderer's session. The research
-is `docs/research/flora.md`; the proposal for the owner is D-063.
+is `docs/research/flora.md`; the decision is D-063, accepted by the owner on 2026-10-16.
 
 ```
 cargo run --release -p forge-flora --bin flora-sheet -- --out reports/2026-10-16
