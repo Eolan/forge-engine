@@ -796,7 +796,12 @@ mesh to test navigations inside the houses"):
   fronts meet across a short convex run of the block's outline (8 m at most, 30° to 150° in
   all) and whose backs meet within 3 m now make one, the arc and the sliver between their
   diagonals in it: 65 m less garden wall between gardens, a walled lawn at the corner, a house
-  fewer. Free garden wall ends 4 → 2.
+  fewer. Free garden wall ends 4 → 2. The last two were two blocks' walls meeting at a bend
+  (134°), their ends 0.35 m apart: each block's walls are joined among themselves only, and
+  `walls::joints` on the pair ran the longer one on past the other's far face, its end still
+  free. Such ends (`village`, bends under 80°, within a wall's thickness, the crossing within
+  a metre of both) now meet where the two walls' lines cross, their end faces mitred on the
+  bisector as `joints` mitres two walls in line. Free garden wall ends 0.
 - *Pinholes in the walls* (`insides`). Single bright pixels ran in lines up the plastered walls
   and the windows' reveals, the light behind them showing through: each band of an inner face
   was cut at its own hole's sill and head beside a neighbour of the wall's whole height
@@ -846,7 +851,7 @@ mesh to test navigations inside the houses"):
 |---|---|---|
 | a habitable room without a window | 33 | 1 (a comfortable household's third storey, its depth all taken) |
 | a sliver | 9 | 0 |
-| a free garden wall end | 11 | 2 |
+| a free garden wall end | 11 | 0 |
 | a lone party wall | 17 | 0 |
 | a ridge step | 6 | 0 |
 | a flight off its side wall (new) | — | 0 (at its nearest point: the 8 counted at the side's middle touched a slanted side wall at one end) |

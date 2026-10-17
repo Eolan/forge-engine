@@ -444,6 +444,64 @@ pub fn village(site: &Site, params: &CityParams, seed: u64) -> Village {
             || (0..poly.len())
                 .any(|i| geom::distance_to_segment(p, poly[i], poly[(i + 1) % poly.len()]) < tol)
     };
+    // Two blocks' walls whose ends nearly meet at a bend (each block's walls are joined among
+    // themselves only: two free ends 0.35 m apart where two blocks' gardens met at 134°) meet
+    // where their lines cross, their end faces mitred on the bisector as `walls::joints` mitres
+    // two walls in line. Bends under 80° only, the two ends within a wall's thickness and the
+    // crossing within a metre of both.
+    let end_at = |w: &walls::Wall, e: usize| if e == 0 { w.a } else { w.b };
+    let far_of = |w: &walls::Wall, e: usize| if e == 0 { w.b } else { w.a };
+    for k in 0..city.walls.len() {
+        for ek in 0..2 {
+            let p = end_at(&city.walls[k], ek);
+            let met_by = |j: usize| j != k && near(&city.walls[j].ring(), p, 0.05);
+            if masses.iter().any(|m| near(&m.footprint, p, 0.05))
+                || (0..city.walls.len()).any(met_by)
+            {
+                continue;
+            }
+            let pair = (0..city.walls.len()).filter(|&j| j != k).find_map(|j| {
+                let ej =
+                    (0..2).find(|&e| end_at(&city.walls[j], e).distance(p) < walls::THICKNESS)?;
+                let (wk, wj) = (&city.walls[k], &city.walls[j]);
+                let q = end_at(wj, ej);
+                // The way along the two through the bend: into it along `k`, out along `j`.
+                let (into, out) = (
+                    (p - far_of(wk, ek)).normalize_or_zero(),
+                    (far_of(wj, ej) - q).normalize_or_zero(),
+                );
+                if into.dot(out) < 80f64.to_radians().cos() || into.perp_dot(out).abs() < 0.3 {
+                    return None;
+                }
+                let (u, _) = geom::segment_intersection(
+                    far_of(wk, ek),
+                    far_of(wk, ek) + into * 1e3,
+                    far_of(wj, ej) - out * 1e3,
+                    far_of(wj, ej),
+                )?;
+                let x = far_of(wk, ek) + into * (u * 1e3);
+                (x.distance(p) < 1.0 && x.distance(q) < 1.0).then_some((j, ej, x))
+            });
+            let Some((j, ej, x)) = pair else {
+                continue;
+            };
+            for (w, e) in [(k, ek), (j, ej)] {
+                if e == 0 {
+                    city.walls[w].a = x;
+                } else {
+                    city.walls[w].b = x;
+                }
+            }
+            // `walls::joints`' mitre: each wall's direction and the other's, turned its way.
+            let dir = |w: &walls::Wall| (w.b - w.a).normalize_or_zero();
+            let (dk, dj) = (dir(&city.walls[k]), dir(&city.walls[j]));
+            for (w, e, t, d) in [(k, ek, dk, dj), (j, ej, dj, dk)] {
+                let d = if d.dot(t) < 0.0 { -d } else { d };
+                let mean = (t + d).normalize_or_zero();
+                city.walls[w].ends[e] = DVec2::new(-mean.y, mean.x);
+            }
+        }
+    }
     for k in 0..city.walls.len() {
         for end in 0..2 {
             let w = &city.walls[k];
