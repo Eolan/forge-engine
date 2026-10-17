@@ -4255,11 +4255,12 @@ float3 hit_sunlight(Frame* f, RayHit hit)
 // The light `hit` sends back along the ray that met it (travelling along `direction`), in the
 // resolve's units: the sun through a shadow ray, and the sky's irradiance or, with probes,
 // what they measured there (issue #53: the light bounces again, one bounce a frame).
-float3 hit_radiance(Frame* f, float4* sky, ProbeField* probes, RayHit hit, float3 direction)
+// `outside`: the hit is the outside's (`probe_irradiance`).
+float3 hit_radiance(Frame* f, float4* sky, ProbeField* probes, RayHit hit, float3 direction, bool outside = false)
 {
     float3 ambient = sh_irradiance(sky, hit.n);
     if (probes != nullptr)
-        ambient = probe_irradiance(probes, hit.position, hit.n, hit.n, -direction, ambient);
+        ambient = probe_irradiance_hit(probes, hit.position, hit.n, -direction, ambient, outside);
     return hit_sunlight(f, hit) + hit.albedo * ambient;
 }
 
@@ -4528,7 +4529,7 @@ float3 hit_radiance_skipping(Frame* f, float4* sky, ProbeField* probes, RayHit h
     }
     float3 ambient = sh_irradiance(sky, hit.n);
     if (probes != nullptr)
-        ambient = probe_irradiance(probes, hit.position, hit.n, hit.n, -direction, ambient);
+        ambient = probe_irradiance_hit(probes, hit.position, hit.n, -direction, ambient, false);
     return hit.albedo * (ndl * lit * f[0].sun_color.rgb + ambient) + hit.emissive;
 }
 
@@ -5384,21 +5385,21 @@ void probe_trace_main(uint3 group : SV_GroupID, uint thread : SV_GroupThreadID)
     desc.TMin = 0.0;
     desc.TMax = fixed ? PROBE_FIXED_REACH * slot.spacing : PROBE_MISS_DISTANCE;
     ClosestHit c = trace_closest(f, desc, false, true, probe * 0x27D4EB2Fu ^ ray);
-    // A probe in a room (D-068) sees out through its windows. Their glass is drawn from outside
-    // only, as the view from the room passes it, and met from behind it ended the ray as a back
-    // face: a room took its light from its doors alone, and with regions an upstairs room
-    // through a doorway went black. Only from a room's probe: a window's back seen from inside a
-    // house without insides (a hollow shell) still ends the ray, as it did.
-    if (c.hit && !slot.fresh && field[0].region_count > 0u)
+    // The region the probe stands in (D-068), once it has one.
+    uint region = REGION_NONE;
+    if (!slot.fresh && field[0].region_count > 0u)
+        region = field[0].probe_region[probe];
+    // A probe in a room sees out through its windows. Their glass is drawn from outside only, as
+    // the view from the room passes it, and met from behind it ended the ray as a back face: a
+    // room took its light from its doors alone, and with regions an upstairs room through a
+    // doorway went black. Only from a room's probe: a window's back seen from inside a house
+    // without insides (a hollow shell) still ends the ray, as it did.
+    if (c.hit && region != REGION_NONE && region != REGION_OUTSIDE
+        && (candidate_row(f, c.instance, c.primitive).flags & MATERIAL_FLAG_GLAZED) != 0
+        && ray_back_face(f, c.instance, c.primitive, direction))
     {
-        uint region = field[0].probe_region[probe];
-        if (region != REGION_NONE && region != REGION_OUTSIDE
-            && (candidate_row(f, c.instance, c.primitive).flags & MATERIAL_FLAG_GLAZED) != 0
-            && ray_back_face(f, c.instance, c.primitive, direction))
-        {
-            desc.TMin = c.t + 0.002;
-            c = trace_closest(f, desc, false, true, probe * 0x27D4EB2Fu ^ ray);
-        }
+        desc.TMin = c.t + 0.002;
+        c = trace_closest(f, desc, false, true, probe * 0x27D4EB2Fu ^ ray);
     }
     float3 radiance = float3(0.0);
     float distance = PROBE_MISS_DISTANCE;
@@ -5416,9 +5417,12 @@ void probe_trace_main(uint3 group : SV_GroupID, uint thread : SV_GroupThreadID)
             // On the first update after a reset no probe has measured anything, and a hit's
             // light would fall back to the open sky's, too bright indoors: the probes started
             // in a white flash that took five frames to fade (#171). The sun alone instead:
-            // they start a little dark, and the next updates add the bounces.
+            // they start a little dark, and the next updates add the bounces. A probe outside
+            // every house (most of them) lights what its rays meet as the outside's without
+            // finding its region (D-068): what it sees through an open door is a little brighter,
+            // and the lookup cost the rays 0.14 ms.
             if (!hit.back)
-                radiance = probe_push.first_update != 0 ? hit_sunlight(f, hit) : hit_radiance(f, sky, field, hit, direction);
+                radiance = probe_push.first_update != 0 ? hit_sunlight(f, hit) : hit_radiance(f, sky, field, hit, direction, region == REGION_OUTSIDE);
         }
     }
     else if (!fixed)

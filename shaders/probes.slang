@@ -526,6 +526,10 @@ float3 probe_lookup<let MIRROR : int>(ProbeField* field, float3 p, float3 n, flo
 {
     RegionHit mask = region_at(field, p + g * 0.02);
     bool masked = field[0].region_count > 0u && mask.kind != REGION_SOLID;
+    // The region's probes, then every probe where they found none. Not as one lookup in a loop's
+    // two turns: with `region_at` before it, the loop made the frame differ from run to run on
+    // the RTX 5070 Ti (the physics lab's dominoes, scattered pixels a few levels off; the loop
+    // alone or `region_at` alone did not).
     float4 e = cascades_lookup<MIRROR>(field, p, n, g, v, d, mask, masked, toward_d);
     if (masked && e.w <= 0.0)
         e = cascades_lookup<MIRROR>(field, p, n, g, v, d, mask, false, toward_d);
@@ -540,6 +544,29 @@ public float3 probe_irradiance(ProbeField* field, float3 p, float3 n, float3 g, 
 {
     float3 unused;
     return probe_lookup<0>(field, p, n, g, v, open_sky, n, open_sky, unused);
+}
+
+// `probe_irradiance` at a ray's hit (the probes' own rays, a mirror ray's), `n` its normal: the
+// hit's region's probes alone, without the fallback to every probe, so the probes' rays carry one
+// copy of the lookup (a second cost them 0.11 ms in a room). Where none of the region's probes
+// stands among the eight, a hit in a house takes no bounce, rather than the sky's, and the
+// outside's the open sky. `outside`: the caller knows the hit is the outside's (a probe's ray
+// from a probe outside every house), and the lookup skips finding its region.
+public float3 probe_irradiance_hit(ProbeField* field, float3 p, float3 n, float3 v, float3 open_sky, bool outside)
+{
+    RegionHit mask;
+    mask.region = REGION_OUTSIDE;
+    mask.other = REGION_OUTSIDE;
+    mask.ramp = 0.0;
+    mask.kind = REGION_ROOM;
+    if (!outside)
+        mask = region_at(field, p + n * 0.02);
+    bool masked = field[0].region_count > 0u && mask.kind != REGION_SOLID;
+    float3 unused;
+    float4 e = cascades_lookup<0>(field, p, n, n, v, n, mask, masked, unused);
+    if (masked && e.w <= 0.0 && mask.region != REGION_OUTSIDE)
+        return float3(0.0);
+    return e.rgb + (1.0 - e.w) * open_sky;
 }
 
 // `probe_irradiance`, and the irradiance the probes find for a normal along the mirror
