@@ -4640,3 +4640,61 @@ doorway in view sets it and the hall falls stops under middle grey. Research:
 - whether STMicroelectronics' patent's reach is acceptable with the grid kept within one frame;
 - whether to build it now or after the lamps of D-065, which change how bright the halls are by
   themselves.
+
+## D-068 — Probe regions from the generator: a room's probes light only its own surfaces 🟡 (proposed 2026-10-17, #266)
+
+**The question:** after the village's probes moved to 1 m (ef27049) and the lookup kept the
+probes in front of a surface (22beb20), light still leaks indoors in two ways: a soft tinted
+blotch on a partition from the sunlit room behind it, and a small bright cap in a window head's
+reveal. Both stem from the owner's "lighting still seems a bit strange to me in corridor with the
+stairs" and "a lot of lighting issues a bit everywhere inside the house". Research:
+`research/probe-leaks-indoors.md`.
+
+**What exists:** DDGI-style probes (D-036, `probes.slang`), with relocation, classification, the
+Chebyshev visibility test and the 2021 paper's bias, as RTXGI does. The 2022 paper and RTXGI's own
+docs name thin walls as DDGI's open case. The village's generator knows every room's outline,
+every opening and every stair hole.
+
+**Proposed:**
+1. **Regions from the plan.**
+   - Each house gives its rooms (an outline with floor and ceiling heights, one region number
+     each) and its openings (a box through the wall or slab, the two regions it joins, glazed or
+     not).
+   - `region_at(p)` finds the room, else an opening's recess, else the walls' solid, else the
+     outside.
+   - A probe takes the region of its relocated position while young; a probe in a wall or a
+     recess takes none.
+   - A surface takes the region in front of it (`p + 2 cm · n`).
+   - In the lookup, a probe weighs 0 on another region's surfaces. Open doorways, stair holes
+     and unglazed windows ramp each side's probes across their depth, so the jambs shade into
+     both rooms.
+   - Where no probe of the region is among the eight, the next cascade is tried, then the
+     unmasked lookup; the fallbacks are counted in the F1 overlay.
+   - Estimated 0.02–0.06 ms and 166 KB; no subgroups, no groupshared memory.
+2. **Two near-free fixes with it:**
+   - back-face hits stored at a fifth of their distance (RTXGI; the NVIDIA application on DDGI was
+     abandoned in 2023);
+   - the interpolated normal for the bias and the back-face weight, keeping the bent normal for
+     the irradiance's direction (#70).
+3. **Checked by** unit tests of `region_at` on the kit's walls, reveals, jambs and stair holes,
+   the map check, three new views (a partition with the sun behind it, a window head from inside,
+   a doorway), the leak's mean log luminance with regions off and on, the still-camera measure
+   (0.05 % under `--dlaa`), F1 timings and `tools/amd-check.sh`.
+
+**Patents** (`research/probe-leaks-indoors.md` §4; both records checked again on 2026-10-17):
+- **Square Enix, US 10,137,372 B2** (EP 3306569 B1, JP, CA), active to 2037-02-01. It claims
+  culling probes by zones made of occlusion planes predefined for each probe, a per-probe mask
+  and a bitwise test. Forge's regions would come from the plan, one number per probe and per
+  surface compared for equality, with no per-probe planes or masks. It is the nearest live patent
+  to the proposal, so the owner decides.
+- **Imagination Technologies, US 10,008,032 B2** and its continuations (GB 2571656 B), active to
+  2036-08-26. Claim 1 describes probes whose directional lighting is updated each frame by
+  tracing rays from them and then used to shade. That reads on Forge's probes as they are
+  (D-036, built before this was found), not on the regions. A professional opinion would settle
+  its reach.
+
+**For the owner to decide:**
+- whether to build the regions, given Square Enix's patent;
+- what to do about Imagination's patent on the probes already in the engine (an opinion, or
+  living with it until a sold product);
+- whether the two near-free fixes can go in first on their own.
