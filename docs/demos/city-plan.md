@@ -757,6 +757,10 @@ mesh to test navigations inside the houses"):
   across the stair below it, three risers over its steps, in every house of three storeys (the
   owner, from the landing: "is there enough space for people to pass in this stair case?"). A
   test now finds 2 m clear over every tread of the village's flights, across their width.
+  Along its open side, away from the walls, each flight has a plastered balustrade 0.9 m over the
+  steps' nosings and 7.5 cm thick (`balustrade`), on the string's plane, a box over each tread in
+  the walker's pieces. Before, the steps' edges stood open to the corridor, a fall of up to
+  3.7 m at the head, and from the hall the flight's side read as a sawtooth.
 - *The walk* (`city::walk`, the first stage of the navigation `research/game-ai-ecosystems.md`
   plans, Recast's voxel step). Each storey of a house with its insides is rasterised at 5 cm:
   the floor inside the walls, the partitions open at their doorways, the furniture and the

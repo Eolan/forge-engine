@@ -3440,6 +3440,43 @@ fn floor_level(s: &Structure, k: usize) -> f64 {
     }
 }
 
+/// How thick a flight's balustrade is, metres.
+const RAIL: f64 = 0.075;
+/// How high a flight's balustrade stands over the steps' nosings, metres.
+const RAIL_HEIGHT: f64 = 0.9;
+
+/// The balustrade along a flight's open side: a plastered half wall [`RAIL`] thick and
+/// [`RAIL_HEIGHT`] over the steps' nosings, on the side away from the walls, its outer face `out`
+/// outside the steps' side (the string's plane). Open, a walker fell off the flight's side into
+/// the corridor, up to 3.7 m at its head (2026-10-17). Across the flight from `stair[0]`, its
+/// outer face, its inner face and the outer face's side (1 towards `stair[1]`, −1 away); none
+/// where that side stands within 0.3 m of a wall. `r`: the flight's risers.
+fn balustrade(
+    s: &Structure,
+    stair: [DVec2; 4],
+    climb: DVec2,
+    r: u32,
+    out: f64,
+) -> Option<(f64, f64, f64)> {
+    let across = stair[1] - stair[0];
+    let width = across.length();
+    let a = across / width.max(1e-6);
+    let to_walls = |q: DVec2| {
+        s.walls
+            .iter()
+            .map(|w| geom::distance_to_segment(q, w.a, w.b))
+            .fold(f64::MAX, f64::min)
+    };
+    let mid = stair[0]
+        + climb.normalize_or_zero() * (f64::from(r.saturating_sub(1)) * cores::GOING * 0.5);
+    let (outer, inner, sign) = if to_walls(mid + a * width) > to_walls(mid) {
+        (width + out, width + out - RAIL, 1.0)
+    } else {
+        (-out, RAIL - out, -1.0)
+    };
+    (to_walls(mid + a * (outer + sign * 0.3)) > 0.3).then_some((outer, inner, sign))
+}
+
 /// Each flight's soffit and strings (`interior_solids` draws its steps), plastered as the walls:
 /// - under its steps, a slope through the steps' back lower corners, from where it leaves the
 ///   floor to the last step: from below the flight read as every step's flat bottom, a sawtooth;
@@ -3529,6 +3566,61 @@ fn soffits(
                 let q = t.map(|i| p(ring[i].x, u, ring[i].y));
                 triangle_uv(mesh, q, [[0.0; 2]; 3], n, section);
             }
+        }
+        // The balustrade on its open side (`balustrade`): its faces over the steps' profile up
+        // to its sloped top, on the string's plane outside, and its top and ends.
+        if let Some((outer, inner_u, sign)) = balustrade(s, stair, inner.climb, r, OUT) {
+            let over = |v: f64| base + rise + v / g * rise + RAIL_HEIGHT;
+            let last = f64::from(r - 1) * g;
+            let mut wall: Vec<DVec2> = Vec::new();
+            for i in 0..r - 1 {
+                let y = base + f64::from(i + 1) * rise;
+                wall.push(DVec2::new(f64::from(i) * g, y));
+                wall.push(DVec2::new(f64::from(i + 1) * g, y));
+            }
+            wall.push(DVec2::new(last, over(last)));
+            wall.push(DVec2::new(0.0, over(0.0)));
+            if geom::signed_area(&wall) < 0.0 {
+                wall.reverse();
+            }
+            let n = side * sign as f32;
+            for (u, face) in [(outer, n), (inner_u, -n)] {
+                for t in geom::triangulate(&wall) {
+                    let q = t.map(|i| p(wall[i].x, u, wall[i].y));
+                    triangle_uv(mesh, q, [[0.0; 2]; 3], face, section);
+                }
+            }
+            quad(
+                mesh,
+                [
+                    p(0.0, inner_u, over(0.0)),
+                    p(0.0, outer, over(0.0)),
+                    p(last, outer, over(last)),
+                    p(last, inner_u, over(last)),
+                ],
+                -down,
+            );
+            quad(
+                mesh,
+                [
+                    p(0.0, inner_u, base + rise),
+                    p(0.0, outer, base + rise),
+                    p(0.0, outer, over(0.0)),
+                    p(0.0, inner_u, over(0.0)),
+                ],
+                -along,
+            );
+            let foot = base + f64::from(r - 1) * rise;
+            quad(
+                mesh,
+                [
+                    p(last, inner_u, foot),
+                    p(last, outer, foot),
+                    p(last, outer, over(last)),
+                    p(last, inner_u, over(last)),
+                ],
+                along,
+            );
         }
         // The cupboard under the flight (the owner, 2026-10-17: "Below the stairs there can be
         // different type of cupboard or things to fill up the space"): its side to the corridor
@@ -3770,6 +3862,33 @@ fn interior_pieces(
         }
         for (ring, y0, y1) in interior_floors(m, s, &inner) {
             out.push(solid(&ring, y0, y1));
+        }
+        // The flights' balustrades (`soffits` draws them), a box over each tread.
+        if let Some(stair) = inner.stair {
+            let across = (stair[1] - stair[0]).normalize_or_zero();
+            for (k, &r) in inner.risers.iter().enumerate() {
+                if k + 1 >= s.storeys.len() || r < 3 {
+                    break;
+                }
+                let Some((outer, inside, _)) = balustrade(s, stair, inner.climb, r, 0.005) else {
+                    continue;
+                };
+                let base = floor_level(s, k);
+                let rise = (s.storeys[k + 1].level - base) / f64::from(r);
+                let (u0, u1) = (outer.min(inside), outer.max(inside));
+                for t in 0..r - 1 {
+                    let (v0, v1) = (f64::from(t) * cores::GOING, f64::from(t + 1) * cores::GOING);
+                    let ring = [(v0, u0), (v0, u1), (v1, u1), (v1, u0)]
+                        .map(|(v, u)| stair[0] + inner.climb * v + across * u);
+                    let ring = if geom::signed_area(&ring) < 0.0 {
+                        ring.into_iter().rev().collect::<Vec<_>>()
+                    } else {
+                        ring.to_vec()
+                    };
+                    let y = base + f64::from(t + 1) * rise;
+                    out.push(solid(&ring, y, y + rise + RAIL_HEIGHT));
+                }
+            }
         }
         // The furniture but the chairs, which a walker brushes past.
         for p in forge_procgen::city::walk::furnished(m, s, &inner) {
