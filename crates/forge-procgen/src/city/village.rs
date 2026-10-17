@@ -436,6 +436,69 @@ pub fn village(site: &Site, params: &CityParams, seed: u64) -> Village {
             hedges: garden.hedges,
         });
     }
+    // The garden walls' ends meeting nothing (D-066's join pass, `anomalies`' free wall ends):
+    // each carried on along its line, 2 m at most, to the first house or garden wall it meets.
+    // A free end stood as a pier in a garden, a step short of the house beside it.
+    let near = |poly: &[DVec2], p: DVec2, tol: f64| {
+        geom::contains(poly, p)
+            || (0..poly.len())
+                .any(|i| geom::distance_to_segment(p, poly[i], poly[(i + 1) % poly.len()]) < tol)
+    };
+    for k in 0..city.walls.len() {
+        for end in 0..2 {
+            let w = &city.walls[k];
+            let (p, from) = if end == 0 { (w.a, w.b) } else { (w.b, w.a) };
+            let dir = (p - from).normalize_or_zero();
+            let met = masses.iter().any(|m| near(&m.footprint, p, 0.05))
+                || city
+                    .walls
+                    .iter()
+                    .enumerate()
+                    .any(|(j, o)| j != k && near(&o.ring(), p, 0.05));
+            if met {
+                continue;
+            }
+            let far = p + dir * 2.0;
+            // The first thing the line meets, and whether the end may stop on it: a house, or
+            // another garden wall standing square to this one (met at a slant, the square end's
+            // corner ran into it; along one in line, the end ran over it).
+            let mut hit: Option<(f64, bool)> = None;
+            let mut try_poly = |poly: &[DVec2], ok: bool| {
+                for i in 0..poly.len() {
+                    if let Some((t, _)) =
+                        geom::segment_intersection(p, far, poly[i], poly[(i + 1) % poly.len()])
+                        && t > 1e-6
+                        && hit.is_none_or(|(h, _)| t < h)
+                    {
+                        hit = Some((t, ok));
+                    }
+                }
+            };
+            for m in &masses {
+                try_poly(&m.footprint, true);
+            }
+            for (j, o) in city.walls.iter().enumerate() {
+                if j != k {
+                    let square = (o.b - o.a).normalize_or_zero().dot(dir).abs() < 0.2;
+                    try_poly(&o.ring(), square);
+                }
+            }
+            if let Some((t, true)) = hit {
+                let q = p + (far - p) * t;
+                let w = &mut city.walls[k];
+                if end == 0 {
+                    w.a = q;
+                } else {
+                    w.b = q;
+                }
+            }
+        }
+    }
+    // No plant stands in a garden wall: a hedge's shrub planted where a neighbour's wall ran
+    // stood through it.
+    let rings: Vec<Vec<DVec2>> = city.walls.iter().map(|w| w.ring()).collect();
+    city.planted
+        .retain(|t| !rings.iter().any(|r| geom::contains(r, t.pos)));
     Village {
         plan: city,
         blocks,

@@ -773,6 +773,11 @@ mesh to test navigations inside the houses"):
   sides open in a V (a row where the street bends, each square to its own front: touching at
   the front, a metre apart at the back) have the first's side swung onto the other's. The
   last sliver and the last two lone party walls were such a pair.
+- *The garden walls' join pass* (`village`, D-066's next step). A garden wall's end meeting
+  nothing is carried on along its line, 2 m at most, to the first house or the first garden wall
+  standing square to it; any other wall on the way stops it (a slanting one's corner ran into
+  it, one in line was run over). No plant stands in a garden wall any more (a hedge's shrub
+  stood where a neighbour's wall ran).
 - *Squarer houses* (`houses::houses`; the owner: "house surfaces are most likely to have
   something closer to a square shape than stretched out rectangle"). A plan over 1.6 times as
   wide as deep is laid again narrower, half a metre at a time from 3 m less: the one nearest 1.2
@@ -787,7 +792,7 @@ mesh to test navigations inside the houses"):
 |---|---|---|
 | a habitable room without a window | 33 | 20 |
 | a sliver | 9 | 0 |
-| a free garden wall end | 11 | 5 |
+| a free garden wall end | 11 | 4 |
 | a lone party wall | 17 | 0 |
 | a ridge step | 6 | 0 |
 | a flight off its side wall (new) | — | 0 (at its nearest point: the 8 counted at the side's middle touched a slanted side wall at one end) |
