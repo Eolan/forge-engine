@@ -760,9 +760,9 @@ mesh to test navigations inside the houses"):
   more even, the halls lose the last of the sky's blue; a still camera's changing pixels are
   as few or fewer (a hall 95–240 of 1.44 million against 98–172, a room 381–585 against
   440–801, the room with the patch 958–1553 against 1418–2564), for 0.1–0.45 ms a frame. The
-  probes' rays keep a leaf card or a
-  railing a quarter of the time (`PROBE_LEAF_KEPT` in `meshlet.slang`), as a crown lets light
-  through: kept every time, a crown darkened every probe about it and left a dark blot on the
+  probes' rays keep a leaf card or a railing a quarter of the time (`PROBE_LEAF_KEPT` in
+  `meshlet.slang`), as a crown lets light through: kept every time, a crown darkened every
+  probe about it and left a dark blot on the
   wall beside the tree (the owner: "strange shadows or lighting artifact on the wall"). The
   sun's shadows keep every leaf. The lookup (`cascade_irradiance` in `probes.slang`) skips a
   probe in front of the surface only under 1 % of trilinear weight, not 5 % (#70's), in
