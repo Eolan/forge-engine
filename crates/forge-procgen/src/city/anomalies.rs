@@ -72,11 +72,16 @@ pub enum Kind {
     /// A door whose leaf swings into furniture or a flight (the owner, 2026-10-16: "stairs start
     /// behind the door (the door prevents access to the stairs)").
     DoorSwing,
+    /// An opening its module does not fill (D-066's holes and fills): its stretch, its sill or its
+    /// head 2 cm off the structure's, or no module in it but at a passage. The insides open the
+    /// wall round the structure's opening and the probes' regions take its reveal, so a misfit
+    /// shows (a balcony's door was walled up to its window's sill from inside).
+    OpeningMisfit,
 }
 
 impl Kind {
     /// Every kind, in order.
-    pub const ALL: [Kind; 17] = [
+    pub const ALL: [Kind; 18] = [
         Kind::RoomOutsideWalls,
         Kind::PartitionInOpening,
         Kind::UnlitRoom,
@@ -94,6 +99,7 @@ impl Kind {
         Kind::UnreachedStair,
         Kind::UnreachedDoor,
         Kind::DoorSwing,
+        Kind::OpeningMisfit,
     ];
 }
 
@@ -138,6 +144,52 @@ pub fn village(v: &Village, structures: &[Structure]) -> Vec<Anomaly> {
     for (i, (m, s)) in v.masses.iter().zip(structures).enumerate() {
         blank_fronts(i, m, s, &mut out);
         walks(i, m, s, &mut out);
+    }
+    out
+}
+
+/// The openings of `structures` their modules do not fill ([`Kind::OpeningMisfit`]), `fills`
+/// what [`facades::fills`] found in each (after [`facades::fit_windows`]); each seen from 4 m
+/// out, at its storey.
+pub fn openings(structures: &[Structure], fills: &[Vec<Option<facades::Fill>>]) -> Vec<Anomaly> {
+    let mut out = Vec::new();
+    for (i, (s, f)) in structures.iter().zip(fills).enumerate() {
+        for (o, fill) in s.openings.iter().zip(f) {
+            let (lo, hi) = o.span();
+            let wrong = match fill {
+                None => o.kind != OpeningKind::Passage,
+                Some(x) => {
+                    (x.from - lo).abs() > 0.02
+                        || (x.to - hi).abs() > 0.02
+                        || (x.bottom - o.sill).abs() > 0.02
+                        || (x.top - o.head).abs() > 0.02
+                }
+            };
+            if !wrong {
+                continue;
+            }
+            let w = &s.walls[o.wall];
+            let t = (w.b - w.a).normalize_or_zero();
+            let at = w.a + t * o.along;
+            let level = s.storeys.get(o.storey).map_or(0.0, |st| st.level);
+            out.push(Anomaly {
+                kind: Kind::OpeningMisfit,
+                at,
+                height: level + (o.sill + o.head) * 0.5,
+                from: at + DVec2::new(t.y, -t.x) * 4.0,
+                note: format!(
+                    "house {i}: its {:?} on storey {} from {lo:.2} to {hi:.2}, sill {:.2}, head {:.2}, filled {}",
+                    o.kind,
+                    o.storey,
+                    o.sill,
+                    o.head,
+                    fill.map_or("by nothing".to_owned(), |x| format!(
+                        "from {:.2} to {:.2}, {:.2} to {:.2}",
+                        x.from, x.to, x.bottom, x.top
+                    ))
+                ),
+            });
+        }
     }
     out
 }
@@ -703,9 +755,22 @@ mod tests {
         let size = 600.0;
         let site = example::site(size, 10.0);
         let v = village::village(&site, &village::params(size), 1);
-        let structures = structure::structures(&v.plan, &v.masses);
-        let all = village(&v, &structures);
-        let bounds: [(Kind, usize); 17] = [
+        let mut structures = structure::structures(&v.plan, &v.masses);
+        // Dressed as `city-plan` dresses it (the Mediterranean rules, 0.9 m over the roofs, seed
+        // 12), its windows fitted to their modules, then its openings checked against them.
+        let grammar = crate::grammar::Grammar::parse(facades::MEDITERRANEAN).expect("the rules");
+        let every: Vec<usize> = (0..v.masses.len()).collect();
+        let dress = |s: &[Structure]| facades::dress(&grammar, s, &v.masses, &every, 0.9, 12).0;
+        let fills = facades::fills(&grammar, &structures, &dress(&structures));
+        let before = openings(&structures, &fills);
+        let fitted = facades::fit_windows(&mut structures, &fills);
+        println!("{} openings misfit, {fitted} windows fitted", before.len());
+        let mut all = village(&v, &structures);
+        all.extend(openings(
+            &structures,
+            &facades::fills(&grammar, &structures, &dress(&structures)),
+        ));
+        let bounds: [(Kind, usize); 18] = [
             (Kind::RoomOutsideWalls, 0),
             (Kind::PartitionInOpening, 0),
             (Kind::UnlitRoom, 0),
@@ -723,6 +788,7 @@ mod tests {
             (Kind::UnreachedStair, 0),
             (Kind::UnreachedDoor, 0),
             (Kind::DoorSwing, 0),
+            (Kind::OpeningMisfit, 0),
         ];
         let mut over = Vec::new();
         for (kind, bound) in bounds {

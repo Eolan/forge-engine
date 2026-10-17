@@ -640,6 +640,15 @@ depths, whose ridges cannot meet. Through them, the houses:
   strips square at the feet of the court's corner, as a square corner does, and its region stays
   open ground, a small green, rather than a corner lot or two wedges split on the bisector ("still
   the diagonal issues").
+- **Holes and fills** (D-066's next slice, 2026-10-17). Each opening of a structure is a hole,
+  and the kit's module the facade rules put in it its fill (`facades::fills`). The balconies'
+  rule draws a French window from 0.1 m over the floor whatever the window's sill, so 92 of the
+  village's windows had a door drawn outside and a wall inside up to their 0.9 m sill: the
+  insides open each wall round the structure's opening, and the probes' regions take its reveal.
+  The windows the rules shape themselves are now fitted to their modules before the kit, the
+  insides and the regions read them (`facades::fit_windows`), and a new kind of anomaly,
+  `OpeningMisfit`, counts any opening its module does not fill to 2 cm (0 in the village; a door
+  or a shopfront off its opening is the rules' error, never fitted).
 
 **The camera** flies the village at 4 m/s (the city's 40), and the mouse wheel sets the speed
 for good, a quarter more or less a notch, 0.25 to 400 m/s, for every demo (`forge_app::FlyCamera`;

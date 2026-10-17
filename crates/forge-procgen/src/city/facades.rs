@@ -423,6 +423,100 @@ pub fn dress(
     (out, stats)
 }
 
+/// The modules that dress a wall rather than fill an opening.
+const WALL_MODULES: [&str; 5] = ["wall", "blank", "band", "cornice", "parapet"];
+
+/// The module that fills an opening (D-066's holes and fills: the structure's opening is the
+/// hole, the grammar's module its fill).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Fill {
+    /// Its module ([`Grammar::name`] names it).
+    pub module: crate::grammar::Symbol,
+    /// Its stretch along the opening's wall, metres from the wall's start (as
+    /// [`super::structure::Opening::span`]).
+    pub from: f64,
+    /// See `from`.
+    pub to: f64,
+    /// Its foot over the opening's storey's level, metres (as the opening's `sill`).
+    pub bottom: f64,
+    /// Its head over that level (as the opening's `head`).
+    pub top: f64,
+}
+
+/// What fills each opening of the masses in `dressed` ([`dress`]'s): for each structure of
+/// `structures`, each opening's module, the one the grammar put in its stretch on its wall and
+/// storey; `None` where none did (a passage, open to its head, or a mass not dressed).
+pub fn fills(
+    grammar: &Grammar,
+    structures: &[Structure],
+    dressed: &[Dressed],
+) -> Vec<Vec<Option<Fill>>> {
+    let mut out: Vec<Vec<Option<Fill>>> = structures
+        .iter()
+        .map(|s| vec![None; s.openings.len()])
+        .collect();
+    for d in dressed {
+        let Some(k) = d.storey else {
+            continue;
+        };
+        if WALL_MODULES.contains(&grammar.name(d.terminal.module)) {
+            continue;
+        }
+        let s = &structures[d.mass as usize];
+        let wall = &s.walls[d.wall as usize];
+        let length = wall.length();
+        let scope = d.terminal.scope;
+        // The scope runs from the wall's end `b` (`wall_scope`); the openings from its start.
+        let along = (wall.a - wall.b).normalize_or_zero();
+        let u0 = (DVec2::new(scope.origin.x, scope.origin.z) - wall.b).dot(along);
+        let (from, to) = (length - (u0 + scope.size.x), length - u0);
+        let level = s.storeys[usize::from(k)].level;
+        for (j, o) in s.openings.iter().enumerate() {
+            let (lo, hi) = o.span();
+            if o.wall == d.wall as usize
+                && o.storey == usize::from(k)
+                && from < hi - 0.01
+                && to > lo + 0.01
+            {
+                out[d.mass as usize][j] = Some(Fill {
+                    module: d.terminal.module,
+                    from,
+                    to,
+                    bottom: scope.origin.y - level,
+                    top: scope.origin.y + scope.size.y - level,
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Fits each window to the module that fills it where the rules shape it themselves (D-066's
+/// holes and fills): a balcony's French window from 0.1 m over the floor, an attic's small window
+/// high under the cornice. The structure's sill and head become the drawing's, so the insides
+/// open round the whole of it (a balcony's door was walled up to its window's sill from inside)
+/// and the probes' regions take its reveal. Doors and shopfronts are not fitted: a module off
+/// their opening is the rules' error ([`super::anomalies::Kind::OpeningMisfit`]). How many it
+/// fitted.
+pub fn fit_windows(structures: &mut [Structure], fills: &[Vec<Option<Fill>>]) -> usize {
+    let mut fitted = 0;
+    for (s, f) in structures.iter_mut().zip(fills) {
+        for (o, fill) in s.openings.iter_mut().zip(f) {
+            let Some(fill) = fill else {
+                continue;
+            };
+            if o.kind == OpeningKind::Window
+                && ((fill.bottom - o.sill).abs() > 0.01 || (fill.top - o.head).abs() > 0.01)
+            {
+                o.sill = fill.bottom;
+                o.head = fill.top;
+                fitted += 1;
+            }
+        }
+    }
+    fitted
+}
+
 /// How far behind its street's building line a house may stand and its front still count as
 /// on the street, metres: a lotissement's front garden.
 pub const SETBACK: f64 = 5.5;

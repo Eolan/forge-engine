@@ -4593,6 +4593,12 @@ unmatched sockets as three new kinds in `city::anomalies`; generation through it
 walls). `demos/city-plan.md`, "Sockets and rows", has the numbers. Next: the kit's modules' and
 the roofs' sockets, the garden walls' join pass, the pavements and roads.
 
+The kit's openings, the second slice (2026-10-17): each structure's opening a hole, the module
+the facade rules put in it its fill (`facades::fills`). 92 windows misfit their modules: the
+balconies' French windows, drawn from 0.1 m over the floor on windows with a 0.9 m sill, walled
+up inside. The windows the rules shape are fitted to their modules (`facades::fit_windows`),
+and `OpeningMisfit` counts the rest (0). Next: the modules' seams and the roofs' sockets.
+
 ## D-067 — Local exposure: a bilateral grid of log luminance, built and used in one frame ✅ (proposed 2026-10-17, #275; the owner's go the same day)
 
 **The question:** the owner, walking into a village house: "light outside is very strong, I would

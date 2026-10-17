@@ -65,6 +65,11 @@ struct Cli {
     clock: Option<f64>,
 }
 
+/// What the kit's style puts over the roof line, metres (`Detail::top`).
+const KIT_TOP: f64 = 0.9;
+/// The kit's seed for its buildings' choices (`Detail::seed`).
+const KIT_SEED: u64 = 12;
+
 fn main() -> anyhow::Result<()> {
     let matches = Cli::command()
         .name("city-plan")
@@ -175,7 +180,23 @@ fn main() -> anyhow::Result<()> {
             // The anomalies, each from its point of view: 4 m up and looking down on what stands
             // outside, at eye height on what stands inside a house.
             if cli.anomalies {
-                let all = city::anomalies::village(&v, &structures);
+                // Dressed as the kit dresses it, its windows fitted to their modules, then its
+                // openings checked against them (D-066's holes and fills).
+                let text = match &cli.rules {
+                    Some(path) => std::fs::read_to_string(path)?,
+                    None => city::facades::MEDITERRANEAN.to_owned(),
+                };
+                let grammar = forge_procgen::grammar::Grammar::parse(&text)?;
+                let every: Vec<usize> = (0..v.masses.len()).collect();
+                let dress = |s: &[city::structure::Structure]| {
+                    city::facades::dress(&grammar, s, &v.masses, &every, KIT_TOP, KIT_SEED).0
+                };
+                let mut structures = structures.clone();
+                let fills = city::facades::fills(&grammar, &structures, &dress(&structures));
+                city::facades::fit_windows(&mut structures, &fills);
+                let mut all = city::anomalies::village(&v, &structures);
+                let fills = city::facades::fills(&grammar, &structures, &dress(&structures));
+                all.extend(city::anomalies::openings(&structures, &fills));
                 for a in &all {
                     let inside = matches!(
                         a.kind,
@@ -391,7 +412,7 @@ fn main() -> anyhow::Result<()> {
     city_blocks::run_making(cli.app, "forge city-plan", move || {
         let detail = city_plan::Detail {
             grammar: &grammar,
-            top: 0.9,
+            top: KIT_TOP,
             centre: detail_centre,
             // The whole village from the kit.
             radius: if cli.village.is_some() {
@@ -399,7 +420,7 @@ fn main() -> anyhow::Result<()> {
             } else {
                 cli.detail
             },
-            seed: 12,
+            seed: KIT_SEED,
             railing_cards: cli.railing_cards,
             lit_hour,
             mix: forge_sim::population::Mix::default(),

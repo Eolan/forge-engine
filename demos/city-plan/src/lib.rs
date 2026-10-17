@@ -469,7 +469,20 @@ impl PlanScenario {
         laps.mark("ground and water");
         // The buildings' structure (D-060): the kit dresses it, the walker walks against it, the
         // gardens and the paths round the courts start from its doors.
-        let structures = structure::structures(plan, masses);
+        let mut structures = structure::structures(plan, masses);
+        // The windows the rules shape themselves fitted to their modules (D-066's holes and
+        // fills): a balcony's French window to the floor, an attic's window under the cornice,
+        // so the insides open round them and the probes' regions take their reveals.
+        if let Some(d) = detail {
+            let wanted: Vec<usize> = (0..masses.len())
+                .filter(|&i| geom::centroid(&masses[i].footprint).distance(d.centre) < d.radius)
+                .collect();
+            let (dressed, _) =
+                facades::dress(d.grammar, &structures, masses, &wanted, d.top, d.seed);
+            let fills = facades::fills(d.grammar, &structures, &dressed);
+            facades::fit_windows(&mut structures, &fills);
+        }
+        let structures = structures;
         // Who each building holds, counted by home and workplace (D-060 step 3).
         let holds: Vec<Occupancy> = structures.iter().map(units::occupancy).collect();
         let gardens = gardens::gardens(plan, masses, &structures);
