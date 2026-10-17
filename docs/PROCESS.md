@@ -458,8 +458,8 @@ reach the GPU, and in Tier 2, and put its lines in the report.
   frames of the yard take two minutes.
 - **Two runs that part (#161):** city-blocks' `FORGE_HASH_IMAGES=1` logs, each frame, hashes of
   the probes' irradiance atlas and the ambient occlusion (#207), the shadow rays' three images
-  and the denoised shadow (#204), the clouds, the scene colour,
-  the depth, the motion vectors (before and after the movers') and TAA's history
+  and the denoised shadow (#204), the clouds, the scene colour (before and after the sky's
+  compose, #277), the depth, the motion vectors (before and after the movers') and TAA's history
   (`crates/forge-render/src/debug_hash.rs`). Images that hash alike are alike: three images
   with one hash are empty. A frame's hashes are logged when its slot comes back, two frames
   later. Diff the logs of two runs to find
@@ -469,6 +469,21 @@ reach the GPU, and in Tier 2, and put its lines in the report.
   unrepeatable or one of its inputs is. The syncval layer sees nothing that goes through a
   buffer's device address, and little through bindless indices: its silence does not clear a
   hazard here.
+- **The shading's own inputs (#277):** `FORGE_HASH_RESOLVE=1` logs ("resolve hashes"), each
+  frame, hashes of what the resolve reads besides those images: the visible list, the pages and
+  their table, the sky's light and its table, the probes' data and regions, the instance table
+  and the clouds' shadow; then of the scene colour after each shading pass. With
+  `FORGE_HASH_TILES=PATH` it also appends to PATH a hash per 8×8 tile of the standard pass's
+  colour, frame after frame (a frame is width/8 × height/8 words): `cmp -l` of two runs' files
+  gives the first frame and the tiles that differ. Buffers hash whole, unused tails too: the
+  visible list's tail shares its memory with the bloom and differs once the frames do.
+- **A transient sampled through a sampler can part (#277).** The resolve sampling the clouds'
+  shadow as a render-graph transient made the standard pass's colour differ from inputs that
+  hashed alike, even alone on the GPU (no async queue, wait-idle, full barriers around it): from
+  a random frame on, the same 90 frames each time, TAA on or off. With the shadow in an image
+  of its own, every run agreed. The transient's memory (aliased, own or dedicated), its layout
+  and its values (a constant) did not matter; why it parts is not known. If another pass parts
+  so, give its sampled transients images of their own first.
 - **A pass whose output feeds a history is a compute pass (#161).** As fullscreen draws, TAA's
   motion vectors and resolve came out one of two ways on the serial frame, from the same inputs
   (an fp16 step on up to a fifth of the pixels), whichever way the timing fell; the history kept

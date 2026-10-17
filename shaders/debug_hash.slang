@@ -7,11 +7,12 @@ struct HashPush
 {
     uint* out;   // two words per image: the hash sum, then the count of NaN, infinite or (kind 4) differing texels
     uint image;  // sampled-image index
-    uint kind;   // 0: float4, 1: float (depth), 2: uint, 4: float4 compared with `other`
+    uint kind;   // 0: float4, 1: float (depth), 2: uint, 4: float4 compared with `other`, 10: a buffer, 12: per tile
     uint width;
     uint height;
     uint index;  // this image's pair in `out`
     uint other;  // kind 4: the image it should equal
+    uint* words; // kind 10: the buffer, `width` words, `height` threads a row; kind 12: a word per 8×8 tile, `height` tiles a row (`other`: the image's height)
 };
 
 [[vk::push_constant]]
@@ -31,6 +32,39 @@ void hash_main(uint3 id : SV_DispatchThreadID)
 {
     uint h = 0;
     uint bad = 0;
+    if (hash_push.kind == 12)
+    {
+        // A hash per 8×8 tile (#277) into `words`, one word a tile, rows of `height` tiles.
+        uint h12 = 0;
+        if (id.x < hash_push.width && id.y < uint(hash_push.other))
+        {
+            float4 v = g_sampled_images[NonUniformResourceIndex(hash_push.image)].Load(int3(id.xy, 0));
+            uint4 b = asuint(v);
+            uint seed = mix(id.y * 65536u + id.x);
+            h12 = mix(b.x ^ seed) + mix(b.y ^ (seed + 1u)) + mix(b.z ^ (seed + 2u)) + mix(b.w ^ (seed + 3u));
+        }
+        uint wave = WaveActiveSum(h12);
+        if (WaveIsFirstLane())
+        {
+            uint ignored;
+            InterlockedAdd(hash_push.words[(id.y / 8u) * hash_push.height + id.x / 8u], wave, ignored);
+        }
+        return;
+    }
+    if (hash_push.kind == 10)
+    {
+        // A buffer's words (#277), each hashed with its index.
+        uint i = id.y * hash_push.height + id.x;
+        if (i < hash_push.width)
+            h = mix(hash_push.words[i] ^ mix(i));
+        uint wave = WaveActiveSum(h);
+        if (WaveIsFirstLane())
+        {
+            uint ignored;
+            InterlockedAdd(hash_push.out[hash_push.index * 2], wave, ignored);
+        }
+        return;
+    }
     if (hash_push.kind == 7 || hash_push.kind == 8)
     {
         // The range of x over the texels that differ from `other`: the largest of each image's

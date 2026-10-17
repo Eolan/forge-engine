@@ -2323,6 +2323,11 @@ impl Demo for Gallery {
                 reflection_history,
             },
         );
+        // The scene colour as the resolve left it, before the sky's compose (#277).
+        if let Some(h) = hasher {
+            use forge_render::debug_hash::HashKind;
+            h.add(&mut frame.graph, taa_frame.color, HashKind::Float4, extent);
+        }
         if let Some(space) = self.space.as_mut() {
             // Space's sky where nothing was drawn: the stars, the sun's disc, the planet and its
             // air seen from orbit; no haze over the ship.

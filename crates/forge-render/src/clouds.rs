@@ -16,8 +16,7 @@ use bytemuck::{Pod, Zeroable};
 use forge_gpu::{
     Buffer, BufferAccess, BufferDesc, ComputePipelineDesc, Device, FRAMES_IN_FLIGHT, FrameGraph,
     FrameSlot, GraphImage, Image, ImageAccess, ImageDesc, ImageHandle, MemoryCategory,
-    MemoryLocation, Pipeline, QueueKind, Result, SampledImageId, ShaderCompiler, ShaderStage,
-    TransientDesc, vk,
+    MemoryLocation, Pipeline, QueueKind, Result, SampledImageId, ShaderCompiler, ShaderStage, vk,
 };
 use glam::Mat4;
 
@@ -98,7 +97,7 @@ pub struct CloudShadow {
 }
 
 /// The shadow map: texels a side, metres it spans round the camera.
-const SHADOW_TEXELS: u32 = 384;
+pub(crate) const SHADOW_TEXELS: u32 = 384;
 const SHADOW_SPAN: f32 = 30_000.0;
 
 /// The cloud layer's noises, its pass and its two images, this frame's and last.
@@ -114,6 +113,10 @@ pub struct Clouds {
     /// The sky-view table with the clouds laid over it (#163), and its pass.
     table: GraphImage,
     table_pipeline: Pipeline,
+    /// The shadow map ([`Clouds::shadow`]). An image of its own, not a render-graph transient
+    /// (#277): sampled by the resolve as a transient, the physics lab's dominoes came out one
+    /// of two ways from run to run, from inputs that hashed alike.
+    shadow: GraphImage,
     frame: Cell<u32>,
     blocks: Vec<Buffer>,
 }
@@ -231,6 +234,18 @@ impl Clouds {
             history: [a?, b?],
             table,
             table_pipeline: table_pipeline?,
+            shadow: GraphImage::new(
+                device,
+                ImageDesc {
+                    width: SHADOW_TEXELS,
+                    height: SHADOW_TEXELS,
+                    format: vk::Format::R32_SFLOAT,
+                    usage: vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED,
+                    aspect: vk::ImageAspectFlags::COLOR,
+                    mip_levels: 1,
+                    name: "cloud shadow",
+                },
+            )?,
             size,
             frame: Cell::new(0),
             blocks,
@@ -248,15 +263,7 @@ impl Clouds {
         params: CloudParams,
     ) -> CloudShadow {
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
-        let image = graph.transient(TransientDesc {
-            name: "cloud shadow",
-            width: SHADOW_TEXELS,
-            height: SHADOW_TEXELS,
-            format: vk::Format::R32_SFLOAT,
-            usage: vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED,
-            aspect: vk::ImageAspectFlags::COLOR,
-            mip_levels: 1,
-        });
+        let image = graph.import(&self.shadow);
         let texel = SHADOW_SPAN / SHADOW_TEXELS as f32;
         let corner = params
             .camera

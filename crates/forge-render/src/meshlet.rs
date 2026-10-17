@@ -2671,6 +2671,10 @@ pub struct MeshletRenderer {
     pipeline_requested: Option<Pipeline>,
     /// Per class, the tiles that show it, and every class's dispatch ([`create_shading_tiles`]).
     shading_tiles: [GraphBuffer; 2],
+    /// `FORGE_HASH_RESOLVE=1` (#277): hashes of what the shading reads and of the colour after
+    /// each shading pass, in the log ("resolve hashes"); with `FORGE_HASH_TILES=PATH` too, a
+    /// hash per 8×8 tile of the standard pass's colour, frame after frame, appended to PATH.
+    resolve_hasher: Option<crate::debug_hash::ImageHasher>,
     /// The two depth pyramids ([`create_pyramids`]).
     hzb: [GraphImage; 2],
     /// The previous frame's culling view and pyramid, when pass 1 can test against them (not
@@ -3197,6 +3201,10 @@ impl MeshletRenderer {
             pipeline_sun_shadow,
             pipeline_requested,
             shading_tiles: create_shading_tiles(device, extent)?,
+            resolve_hasher: std::env::var_os("FORGE_HASH_RESOLVE")
+                .is_some_and(|v| v != "0")
+                .then(|| crate::debug_hash::ImageHasher::new(device, shaders))
+                .transpose()?,
             hzb,
             prev: Cell::new(None),
             work_target: WORK_INITIAL_CAPACITY,
@@ -4393,6 +4401,9 @@ impl MeshletRenderer {
         ambient: AmbientLight,
     ) {
         debug_assert!(tile_count(extent) <= tile_count(self.extent));
+        if let Some(h) = &self.resolve_hasher {
+            self.hash_resolve_inputs(h, graph, slot, &targets, &ambient);
+        }
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
         let [tiles_buffer, args_buffer]: &'f [GraphBuffer; 2] = &self.shading_tiles;
         let tiles = graph.import_buffer(tiles_buffer);
@@ -4502,6 +4513,15 @@ impl MeshletRenderer {
             commands.dispatch(extent.width.div_ceil(8), extent.height.div_ceil(8), 1);
             Ok(())
         });
+        let hash = |graph: &mut FrameGraph<'f>| {
+            if let Some(h) = &self.resolve_hasher {
+                h.add(graph, color, crate::debug_hash::HashKind::Float4, extent);
+            }
+        };
+        hash(graph);
+        if let Some(h) = &self.resolve_hasher {
+            h.add_tiles(graph, color, extent);
+        }
         for class in &ShadingClass::ALL[1..] {
             let pipeline = &self.pipeline_resolve[class.index() as usize];
             let offset = u64::from(class.index()) * 16;
@@ -4560,6 +4580,7 @@ impl MeshletRenderer {
                 commands.dispatch_indirect(args_buffer, offset);
                 Ok(())
             });
+            hash(graph);
         }
         // The mirror rays over the tiles holding smooth rows (issue #52).
         if let (Some(pipeline), Some(request), Some(sky)) = (reflections, request, ambient.sky) {
@@ -4597,12 +4618,86 @@ impl MeshletRenderer {
                     .image(p.irradiance, ImageAccess::Sampled(compute))
                     .image(p.distance, ImageAccess::Sampled(compute));
             }
+            // The rays' history (#176): `steadied_reflection` reads the last frame's and writes
+            // this frame's, and `carry_reflection` carries a texel over (undeclared until #277).
+            if let Some(h) = ambient.reflection_history {
+                builder = builder
+                    .image(h.previous, ImageAccess::Sampled(compute))
+                    .image(h.next, ImageAccess::StorageWrite(compute));
+            }
             builder.run(move |resources, commands| {
                 commands.bind_pipeline(pipeline);
                 commands.push_constants(pipeline, &push(resources));
                 commands.dispatch_indirect(args_buffer, REFLECTION_LIST * 16);
                 Ok(())
             });
+        }
+        hash(graph);
+        if let Some(h) = &self.resolve_hasher {
+            h.finish(graph);
+        }
+    }
+
+    /// `FORGE_HASH_RESOLVE` (#277): starts the frame's resolve hashes and hashes what the shading
+    /// reads besides the images the demos hash (`FORGE_HASH_IMAGES`): the visible list, the pages
+    /// and their table, the sky's light and its table, the probes' data and regions, the instance
+    /// table and the clouds' shadow; logs the hashes of the frame that last used `slot`, and
+    /// appends its tile hashes to `FORGE_HASH_TILES`.
+    fn hash_resolve_inputs<'f>(
+        &'f self,
+        h: &'f crate::debug_hash::ImageHasher,
+        graph: &mut FrameGraph<'f>,
+        slot: FrameSlot,
+        targets: &DrawTargets,
+        ambient: &AmbientLight,
+    ) {
+        use crate::debug_hash::HashKind;
+        let hashes = h.take(slot);
+        if !hashes.is_empty() {
+            tracing::info!(?hashes, "resolve hashes");
+        }
+        let tiles = h.take_tiles(slot);
+        if let Some(path) = std::env::var_os("FORGE_HASH_TILES")
+            && !tiles.is_empty()
+        {
+            use std::io::Write;
+            let written = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .and_then(|mut file| file.write_all(bytemuck::cast_slice(&tiles)));
+            if let Err(e) = written {
+                tracing::warn!("FORGE_HASH_TILES: {e}");
+            }
+        }
+        h.begin(graph, slot);
+        h.add_buffer(graph, targets.visible_list, None);
+        h.add_buffer(graph, targets.pages, None);
+        h.add_buffer(graph, targets.page_table, None);
+        if let Some(sky) = ambient.sky {
+            let [width, height] = crate::sky::SKY_VIEW_SIZE;
+            h.add_buffer(graph, sky.buffer, None);
+            h.add(
+                graph,
+                sky.table,
+                HashKind::Float4,
+                vk::Extent2D { width, height },
+            );
+        }
+        if let Some(p) = ambient.probes {
+            h.add_buffer(graph, p.data, None);
+            h.add_buffer(graph, p.region, None);
+        }
+        if let Some(m) = targets.movers {
+            h.add_buffer(graph, m.instances, None);
+        }
+        if let Some(c) = ambient.clouds {
+            let texels = crate::clouds::SHADOW_TEXELS;
+            let size = vk::Extent2D {
+                width: texels,
+                height: texels,
+            };
+            h.add(graph, c.image, HashKind::Depth, size);
         }
     }
 
