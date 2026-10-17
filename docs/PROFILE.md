@@ -1392,6 +1392,18 @@ something stands out). Two things to watch:
     The village's leaf cards (#266) gained most: `meshlet pass 1` 1.80 → 1.19 ms from the air
     and 1.11 → 0.53 ms along the road, the images unchanged to the pixel. The batch is
     unchanged too (240 captures, both paths), and its timings move by under 0.04 ms.
+  - *2026-10-17, the lookup keeps the probes in front in room-sized cascades:* in a cascade of
+    cells 1.5 m or finer, a probe in front of the surface is skipped only under 1 % of trilinear
+    weight (#70's 5 % elsewhere). DLAA, 600 frames, best of three, the old lookup against the new
+    on the same build:
+    - the room with the corner leak, 3.63 → 3.77 ms;
+    - the hall's door, 4.09 → 4.32 ms;
+    - the green, 4.65 → 4.81 ms.
+
+    The city (`tools/timings.sh`, cascades from 4 m): 2.910 → 2.922 ms, the meshlets unchanged.
+    Lowered in every cascade, the same rule cost the city 2.86 → 3.08 ms (`shading/standard`
+    0.377 → 0.474 ms, `gi/probe rays` 0.749 → 0.833: the rays' hits read the same lookup) and the
+    meshlets' `shading/standard` 0.086 → 0.101.
   - *2026-10-17, the village's probes 1 m apart:* six cascades from 1 m (the coarsest 32 m
     apart), 128 rays: a probe's sunlight no longer comes through a room's wall. DLAA, 600
     frames, best of three:

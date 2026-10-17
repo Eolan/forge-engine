@@ -59,6 +59,13 @@ public static const float PROBE_MISS_DISTANCE = 60000.0;
 // The trilinear weight under which a probe is left out of a lookup (#70), fading in up to twice
 // it: its fetches cost as much as a heavy probe's for a share of the light under 5 %.
 static const float PROBE_LEAST_WEIGHT = 0.05;
+// The same in front of the surface, in a cascade whose probes are at most PROBE_ROOM_SPACING
+// apart, room-sized (the village's 1 m, the models lab's rooms; 2026-10-17, the lookup's
+// comment): 0.14–0.23 ms in the village. Coarser cascades keep #70's: there the probes in front
+// cost 0.1 ms of the city's shading and 0.09 of its probes' rays, for light no room's corner
+// shows.
+static const float PROBE_LEAST_FRONT = 0.01;
+static const float PROBE_ROOM_SPACING = 1.5;
 
 // Mirrors `GpuCascade` in crates/forge-render/src/probes.rs.
 public struct ProbeCascade
@@ -301,17 +308,18 @@ public float4 cascade_irradiance<let MIRROR : int>(ProbeField* field, uint c, fl
     {
         int3 corner = int3(int(k & 1u), int((k >> 1) & 1u), int(k >> 2));
         // A probe whose trilinear weight is negligible is skipped before its fetches (#70), and one
-        // just over it fades in, so its light does not switch on along a line. Only behind the
-        // surface: in a room's corner the probes in front of a wall may be the room's only ones
-        // to see it, and without them the light of those behind it, outside, came in round a
-        // window's head (2026-10-17). The leeway grows smoothly with how far in front the
-        // probe's cell lies, so no line shows where it crosses the surface's plane.
+        // just over it fades in, so its light does not switch on along a line. In front of the
+        // surface the threshold falls to PROBE_LEAST_FRONT: in a room's corner the probes in front
+        // of a wall may be the room's only ones to see it, at a few percent each, and without
+        // them the light of those behind it, outside, came in round a window's head
+        // (2026-10-17). The threshold falls smoothly over a quarter of a cell in front of the
+        // surface's plane, so no line shows where a probe's cell crosses it.
         float3 tri = max(lerp(1.0 - alpha, alpha, float3(corner)), 0.001);
         float trilinear = tri.x * tri.y * tri.z;
         int3 cell = base + corner;
-        float3 to_cell = (float3(cell) + 0.5) * s - p;
-        float in_front = dot(to_cell, n) * rsqrt(max(dot(to_cell, to_cell), 1e-8));
-        float keep = saturate(trilinear / PROBE_LEAST_WEIGHT - 1.0 + 8.0 * max(in_front, 0.0));
+        float ahead = s <= PROBE_ROOM_SPACING ? saturate(4.0 * dot((float3(cell) + 0.5) * s - p, n) / s) : 0.0;
+        float least = lerp(PROBE_LEAST_WEIGHT, PROBE_LEAST_FRONT, ahead);
+        float keep = saturate(trilinear / least - 1.0);
         if (keep <= 0.0)
             continue;
         int3 slot = base_slot + corner;

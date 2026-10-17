@@ -764,12 +764,17 @@ mesh to test navigations inside the houses"):
   railing a quarter of the time (`PROBE_LEAF_KEPT` in `meshlet.slang`), as a crown lets light
   through: kept every time, a crown darkened every probe about it and left a dark blot on the
   wall beside the tree (the owner: "strange shadows or lighting artifact on the wall"). The
-  sun's shadows keep every leaf. The lookup (`cascade_irradiance` in `probes.slang`) no longer
-  skips a probe in front of the surface for its small trilinear weight (#70's saving, kept
-  behind it): in a room's corner by a window those were the room's only probes to see the wall,
-  and without them the sunlit probes outside came in round the window's head, a bright tooth
-  with a torn edge up to the ceiling and a band down the corner (the probes' weights alone,
-  tinted: all of it from probes behind the wall).
+  sun's shadows keep every leaf. The lookup (`cascade_irradiance` in `probes.slang`) skips a
+  probe in front of the surface only under 1 % of trilinear weight, not 5 % (#70's), in
+  cascades of room-sized cells (1.5 m or finer): in a room's corner by a window those were
+  the room's only probes to see the wall, and without them the sunlit probes outside came in
+  round the window's head, a bright tooth with a torn edge up to the ceiling and a band down the
+  corner (the probes' weights alone, tinted: all of it from probes behind the wall). It costs
+  the village 0.14–0.23 ms (the room 3.63 → 3.77 ms, the hall's door 4.09 → 4.32, the green
+  4.65 → 4.81) and the city nothing; for every cascade it cost the city 0.2 ms. A threshold
+  lowered only where the kept probes were mostly behind the surface cost as much and missed the
+  band down a corner. The leaks left (a partition's tinted blotch, a lit cap in a window head's
+  reveal) are D-068's question (`research/probe-leaks-indoors.md`).
 - *Rooms on the outside walls* (`rooms::rebalance`). The anomalies' 20 unlit rooms were the
   middles of row houses one room wide (6 m lots, 12 m deep): a storey of three bedrooms one
   behind the other under a storey of an office and a bathroom 8.8 m deep. A middle band of
