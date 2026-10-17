@@ -301,12 +301,19 @@ public float4 cascade_irradiance<let MIRROR : int>(ProbeField* field, uint c, fl
     {
         int3 corner = int3(int(k & 1u), int((k >> 1) & 1u), int(k >> 2));
         // A probe whose trilinear weight is negligible is skipped before its fetches (#70), and one
-        // just over it fades in, so its light does not switch on along a line.
+        // just over it fades in, so its light does not switch on along a line. Only behind the
+        // surface: in a room's corner the probes in front of a wall may be the room's only ones
+        // to see it, and without them the light of those behind it, outside, came in round a
+        // window's head (2026-10-17). The leeway grows smoothly with how far in front the
+        // probe's cell lies, so no line shows where it crosses the surface's plane.
         float3 tri = max(lerp(1.0 - alpha, alpha, float3(corner)), 0.001);
         float trilinear = tri.x * tri.y * tri.z;
-        if (trilinear < PROBE_LEAST_WEIGHT)
-            continue;
         int3 cell = base + corner;
+        float3 to_cell = (float3(cell) + 0.5) * s - p;
+        float in_front = dot(to_cell, n) * rsqrt(max(dot(to_cell, to_cell), 1e-8));
+        float keep = saturate(trilinear / PROBE_LEAST_WEIGHT - 1.0 + 8.0 * max(in_front, 0.0));
+        if (keep <= 0.0)
+            continue;
         int3 slot = base_slot + corner;
         slot = select(slot >= counts, slot - counts, slot);
         uint2 tile = uint2(uint(slot.y * counts.x + slot.x), c * uint(counts.z) + uint(slot.z));
@@ -338,7 +345,7 @@ public float4 cascade_irradiance<let MIRROR : int>(ProbeField* field, uint c, fl
         // Weights that are already small shrink further: a faint leak reads as light in the dark.
         if (w < 0.2)
             w *= w * w / (0.2 * 0.2);
-        w *= trilinear * saturate(trilinear / PROBE_LEAST_WEIGHT - 1.0);
+        w *= trilinear * keep;
         float2 corner_texel = float2(tile * IRRADIANCE_TILE);
         float3 e = sample_image_level(field[0].irradiance_image, SAMPLER_LINEAR_CLAMP,
             (corner_texel + 1.0 + texel_n) * field[0].irradiance_texel, 0.0).rgb;

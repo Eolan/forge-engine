@@ -764,7 +764,12 @@ mesh to test navigations inside the houses"):
   railing a quarter of the time (`PROBE_LEAF_KEPT` in `meshlet.slang`), as a crown lets light
   through: kept every time, a crown darkened every probe about it and left a dark blot on the
   wall beside the tree (the owner: "strange shadows or lighting artifact on the wall"). The
-  sun's shadows keep every leaf.
+  sun's shadows keep every leaf. The lookup (`cascade_irradiance` in `probes.slang`) no longer
+  skips a probe in front of the surface for its small trilinear weight (#70's saving, kept
+  behind it): in a room's corner by a window those were the room's only probes to see the wall,
+  and without them the sunlit probes outside came in round the window's head, a bright tooth
+  with a torn edge up to the ceiling and a band down the corner (the probes' weights alone,
+  tinted: all of it from probes behind the wall).
 - *Corners without a square lot* (`parcels::strips_by`, the owner's "still the diagonal
   issues"). At a corner of 30° or more whose square corner lot does not fit its edges, the two
   strips' end lots met on the corner's divider, a diagonal wall from the corner into the block.
