@@ -4959,6 +4959,18 @@ development settings and the code that would help a player compiled out rather t
 - `shipping` (a forge-app feature) keeps only the release settings.
 - Tests: 35 in forge-app (parsing, ranges, the order of the sources, completion and cycling,
   the file). Captures unchanged (Tier 0: every image as accepted but #277's dominoes).
-- **Next:** the demos' shared settings into the registry, with one name and one default each,
-  which the systems register themselves (the registry moves to `forge-core` so that
-  `forge-render` can), then the backports.
+
+**Built so far (step 2, 2026-10-17):**
+- The registry lives in `forge-core::settings`; `forge_render::settings` names the renderer's
+  shared settings once (`r.aa`, `r.dlss.mode`, `r.taa.sharpen`, `r.tonemap`, `r.bloom`,
+  `r.exposure.*`, `r.ao`, `r.probes`, `r.sky_light`, `r.shadows`, `r.reflections.*`,
+  `r.sun.disc`, `r.translucency`, `r.cull.*`, `r.lod`, `r.sw_raster`, `r.show.*`).
+- Every demo registers those it has: the galleries (city-blocks, the island, the physics lab,
+  the city plan), the asteroids, the planet, the meshlets bench. Each registers with its own
+  default where its scene wants another look. Its flags set the settings as from the command
+  line. Its keys set the settings, and the settings that changed are applied each update.
+- A flag and its `--set` give the same image to the pixel in every demo checked (`--no-ao`,
+  `--tonemap`, `--soft-shadows`).
+- **Left for the owner:** the keys still differ between demos (P, X, V, Y, U, F;
+  `docs/demos/console.md`): one key map for all of them is the owner's call.
+- **Next:** the backports (step 4): what each demo lacks of what the others have.

@@ -6,17 +6,21 @@
 
 use forge_core::settings::Spec;
 
+use forge_gpu::DlssMode;
+
 use crate::display::Tonemap;
 use crate::meshlet::SwRaster;
 
 /// [`aa`]'s choices.
-pub const AA: &[&str] = &["off", "taa", "dlaa"];
+pub const AA: &[&str] = &["off", "taa", "dlaa", "dlss"];
 /// [`aa`]: none.
 pub const AA_OFF: usize = 0;
 /// [`aa`]: temporal anti-aliasing.
 pub const AA_TAA: usize = 1;
 /// [`aa`]: NVIDIA's DLAA.
 pub const AA_DLAA: usize = 2;
+/// [`aa`]: NVIDIA's DLSS, rendering smaller ([`dlss_mode`]).
+pub const AA_DLSS: usize = 3;
 
 /// Anti-aliasing.
 pub fn aa(default: usize) -> Spec<usize> {
@@ -24,9 +28,40 @@ pub fn aa(default: usize) -> Spec<usize> {
         "r.aa",
         AA,
         default,
-        "Anti-aliasing: off, taa, or dlaa (NVIDIA's DLAA, where the Streamline SDK and an RTX GPU \
-         are; else TAA). T steps through them.",
+        "Anti-aliasing: off, taa, dlaa (NVIDIA's DLAA at the window's size), or dlss (rendering \
+         smaller, r.dlss.mode). DLAA and DLSS need the Streamline SDK and an RTX GPU; without \
+         them, TAA. A demo that does not upscale shows dlss as dlaa.",
     )
+}
+
+/// [`dlss_mode`]'s choices: DLSS's upscaling modes, after DLAA in [`DlssMode::ALL`].
+pub const DLSS_MODES: &[&str] = &["quality", "balanced", "performance", "ultra-performance"];
+
+/// How much smaller DLSS renders, with [`aa`] at `dlss`.
+pub fn dlss_mode(default: DlssMode) -> Spec<usize> {
+    Spec::choice(
+        "r.dlss.mode",
+        DLSS_MODES,
+        dlss_mode_index(default),
+        "How much smaller DLSS renders with r.aa dlss: quality, balanced, performance, \
+         ultra-performance.",
+    )
+}
+
+/// [`dlss_mode`]'s choice for `mode` (DLAA: quality's).
+pub fn dlss_mode_index(mode: DlssMode) -> usize {
+    DlssMode::ALL[1..]
+        .iter()
+        .position(|&m| m == mode)
+        .unwrap_or(0)
+}
+
+/// The mode of [`dlss_mode`]'s choice `index`.
+pub fn dlss_mode_of(index: usize) -> DlssMode {
+    DlssMode::ALL[1..]
+        .get(index)
+        .copied()
+        .unwrap_or(DlssMode::Quality)
 }
 
 /// TAA's image sharpened (FidelityFX RCAS, D-045).
@@ -98,6 +133,17 @@ pub fn bloom_strength(default: f64) -> Spec<f64> {
         default,
         0.0..=1.0,
         "Bloom's share of the shown image.",
+    )
+}
+
+/// The metered exposure's compensation.
+pub fn exposure_compensation(default: f64) -> Spec<f64> {
+    Spec::float(
+        "r.exposure.compensation",
+        default,
+        -8.0..=8.0,
+        "The metered exposure's compensation in stops: positive brighter (- and = step it by \
+         half a stop).",
     )
 }
 
@@ -198,6 +244,24 @@ pub fn occlusion(default: bool) -> Spec<bool> {
     )
 }
 
+/// Normal-cone culling.
+pub fn cone(default: bool) -> Spec<bool> {
+    Spec::bool(
+        "r.cull.cone",
+        default,
+        "Back-facing clusters culled by their normal cones (C toggles it); off, the same pixels.",
+    )
+}
+
+/// Translucent surfaces' light through them.
+pub fn translucency(default: bool) -> Spec<bool> {
+    Spec::bool(
+        "r.translucency",
+        default,
+        "Light through thin translucent surfaces (Y toggles it in the asteroids).",
+    )
+}
+
 /// Level of detail.
 pub fn lod(default: bool) -> Spec<bool> {
     Spec::bool(
@@ -252,7 +316,22 @@ pub fn sw_raster_of(index: usize) -> SwRaster {
 
 /// A debug view: `r.show.NAME`, off by default.
 pub fn show(name: &'static str, help: &str) -> Spec<bool> {
-    Spec::bool(&format!("r.show.{name}"), false, help)
+    show_default(name, false, help)
+}
+
+/// A debug view on by default: the meshlets bench shows its meshlets' colours.
+pub fn show_default(name: &'static str, default: bool, help: &str) -> Spec<bool> {
+    Spec::bool(&format!("r.show.{name}"), default, help)
+}
+
+/// Frustum culling.
+pub fn frustum(default: bool) -> Spec<bool> {
+    Spec::bool(
+        "r.cull.frustum",
+        default,
+        "Instances and clusters outside the view culled (V toggles it in the meshlets bench); \
+         off, the same pixels.",
+    )
 }
 
 #[cfg(test)]
@@ -267,6 +346,10 @@ mod tests {
         for mode in [SwRaster::Off, SwRaster::Auto, SwRaster::On] {
             assert_eq!(sw_raster_of(sw_raster_index(mode)), mode);
         }
+        for mode in &DlssMode::ALL[1..] {
+            assert_eq!(dlss_mode_of(dlss_mode_index(*mode)), *mode);
+        }
+        assert_eq!(DLSS_MODES.len(), DlssMode::ALL.len() - 1);
     }
 
     #[test]

@@ -494,6 +494,33 @@ impl Settings {
         }
     }
 
+    /// Registers `spec` for a program whose flags already set its state (a demo's `--no-ao`):
+    /// where they made the value `now` other than the shared `default`, it is set so, as from
+    /// the command line. A value from `forge.cfg` or `--set` stays otherwise, and the program
+    /// applies it as a change.
+    pub fn add_from<T: VarType + PartialEq>(
+        &mut self,
+        spec: Spec<T>,
+        default: T,
+        now: T,
+    ) -> Var<T> {
+        let var = self.add(spec);
+        if now != default {
+            self.set_by(var, now, Source::CommandLine);
+        }
+        var
+    }
+
+    /// [`Settings::add_from`] for a value the program keeps in `f32`, compared there: a default
+    /// written in decimal (0.04) is the flag's own.
+    pub fn add_from_f32(&mut self, spec: Spec<f64>, default: f64, now: f32) -> Var<f64> {
+        let var = self.add(spec);
+        if default as f32 != now {
+            self.set_by(var, f64::from(now), Source::CommandLine);
+        }
+        var
+    }
+
     /// Registers a console command the shell or the demo runs.
     pub fn add_command(&mut self, name: &str, usage: &str, help: &str, release: bool) {
         assert!(

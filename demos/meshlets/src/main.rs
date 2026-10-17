@@ -29,6 +29,8 @@ use forge_render::{
 use glam::{Mat4, Quat, Vec3};
 use winit::keyboard::KeyCode;
 
+mod vars;
+
 #[derive(Parser, Debug, Clone)]
 #[command(about = "GPU-driven meshlet culling test bench")]
 struct Args {
@@ -141,6 +143,10 @@ struct Bench {
     flags: CullFlags,
     frozen: Option<CullCamera>,
     wireframe: bool,
+    /// The settings (D-069, `vars`), registered once the bench is ready, and the settings'
+    /// change count they were last applied at.
+    vars: Option<vars::BenchVars>,
+    vars_seen: u64,
     stats: Vec<FrameStats>,
     gpu_ms: Vec<f64>,
     cpu_ms: Vec<f64>,
@@ -186,6 +192,8 @@ impl Bench {
             flags,
             frozen: None,
             wireframe: false,
+            vars: None,
+            vars_seen: 0,
             stats: Vec::new(),
             gpu_ms: Vec::new(),
             cpu_ms: Vec::new(),
@@ -285,23 +293,20 @@ impl Demo for Bench {
                     self.frozen = Some(self.cull_camera(ctx.aspect()));
                 }
             }
-            KeyCode::KeyC => self.flags.toggle(CullFlags::CONE),
-            KeyCode::KeyV => self.flags.toggle(CullFlags::FRUSTUM),
-            KeyCode::KeyO => self.flags.toggle(CullFlags::OCCLUSION),
-            KeyCode::KeyM => self.flags.toggle(CullFlags::MESHLET_COLORS),
-            KeyCode::KeyL => self.flags.toggle(CullFlags::LOD),
-            KeyCode::KeyK => self.flags.toggle(CullFlags::LOD_COLORS),
-            KeyCode::KeyR => self.args.sw_raster = self.args.sw_raster.next(),
-            KeyCode::KeyH => self.flags.toggle(CullFlags::SHOW_RASTER),
-            KeyCode::BracketLeft => self.args.lod_error = (self.args.lod_error * 0.5).max(0.125),
-            KeyCode::BracketRight => self.args.lod_error = (self.args.lod_error * 2.0).min(16.0),
-            KeyCode::Tab => self.wireframe = !self.wireframe,
-            KeyCode::KeyG => self.tonemap = self.tonemap.next(),
-            _ => {}
+            // The other keys set settings (D-069, `vars`): C, V, O, M, L, K, R, H, [ and ], Tab, G.
+            _ => {
+                self.vars_key(ctx, code);
+            }
         }
     }
 
-    fn update(&mut self, _ctx: &mut Context, input: &Input, dt: f32) {
+    fn register(&mut self, ctx: &mut Context) {
+        self.register_vars(&mut ctx.settings);
+    }
+
+    fn update(&mut self, ctx: &mut Context, input: &Input, dt: f32) {
+        // The settings changed since the last frame (D-069).
+        self.apply_vars(&ctx.settings);
         self.camera.update(input, dt);
         if self.args.orbit {
             // Deterministic per frame (not per second) so captures at a frame index match.

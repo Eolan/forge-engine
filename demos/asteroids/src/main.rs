@@ -38,6 +38,8 @@ use forge_task::TaskPool;
 use glam::{Mat4, Quat, Vec3};
 use winit::keyboard::KeyCode;
 
+mod vars;
+
 #[derive(Parser, Debug, Clone)]
 #[command(about = "The asteroid ballad")]
 struct Args {
@@ -492,6 +494,10 @@ struct Ballad {
     camera: FlyCamera,
     flags: CullFlags,
     wireframe: bool,
+    /// The settings (D-069, `vars`), registered once the ballad is ready, and the settings'
+    /// change count they were last applied at.
+    vars: Option<vars::BalladVars>,
+    vars_seen: u64,
     stats: Vec<FrameStats>,
     gpu_ms: Vec<f64>,
     cpu_ms: Vec<f64>,
@@ -675,6 +681,8 @@ impl Ballad {
             camera,
             flags,
             wireframe: false,
+            vars: None,
+            vars_seen: 0,
             stats: Vec::new(),
             gpu_ms: Vec::new(),
             cpu_ms: Vec::new(),
@@ -707,41 +715,6 @@ impl Ballad {
         Ok(())
     }
 
-    /// TAA → DLAA → Quality → Balanced → Performance → Ultra Performance → TAA (the U key).
-    fn cycle_upscaler(&mut self, ctx: &Context) {
-        let Some(dlss) = &mut self.dlss else {
-            tracing::warn!(
-                "DLSS is not available (--features dlss, the Streamline SDK, an RTX GPU)"
-            );
-            return;
-        };
-        let next = if self.dlss_on {
-            let index = DlssMode::ALL.iter().position(|&m| m == dlss.mode());
-            index.and_then(|i| DlssMode::ALL.get(i + 1).copied())
-        } else {
-            Some(DlssMode::ALL[0])
-        };
-        ctx.device.wait_idle();
-        let applied: Result<()> = match next {
-            Some(mode) => {
-                self.dlss_on = true;
-                dlss.configure(mode, ctx.extent()).map_err(Into::into)
-            }
-            None => {
-                self.dlss_on = false;
-                Ok(())
-            }
-        };
-        match applied.and_then(|()| self.apply_upscaler(ctx.extent())) {
-            Ok(()) => tracing::info!(
-                upscaler = self.upscaler_label(),
-                render = ?self.render_extent,
-                "anti-aliasing switched"
-            ),
-            Err(error) => tracing::error!(%error, "cannot switch the anti-aliasing"),
-        }
-    }
-
     /// The anti-aliasing on screen, for the overlay and the title.
     fn upscaler_label(&self) -> &'static str {
         match &self.dlss {
@@ -769,46 +742,13 @@ impl Demo for Ballad {
     }
 
     fn key_pressed(&mut self, ctx: &mut Context, code: KeyCode) {
-        match code {
-            KeyCode::KeyU => self.cycle_upscaler(ctx),
-            KeyCode::KeyP => self.paused = !self.paused,
-            // TAA sharpened (D-045), plain, off.
-            KeyCode::KeyT => {
-                (self.taa_enabled, self.taa.sharpen) = match (self.taa_enabled, self.taa.sharpen) {
-                    (true, Some(_)) => (true, None),
-                    (true, None) => (false, None),
-                    (false, _) => (true, Some(self.args.rcas)),
-                };
-                self.taa.reset_history();
-            }
-            KeyCode::KeyM => self.flags.toggle(CullFlags::MESHLET_COLORS),
-            KeyCode::KeyO => self.flags.toggle(CullFlags::OCCLUSION),
-            KeyCode::KeyC => self.flags.toggle(CullFlags::CONE),
-            KeyCode::KeyX => self.flags.toggle(CullFlags::SHOW_CULLED),
-            KeyCode::KeyL => self.flags.toggle(CullFlags::LOD),
-            KeyCode::KeyK => self.flags.toggle(CullFlags::LOD_COLORS),
-            KeyCode::KeyR => self.args.sw_raster = self.args.sw_raster.next(),
-            KeyCode::KeyH => self.flags.toggle(CullFlags::SHOW_RASTER),
-            KeyCode::BracketLeft => self.args.lod_error = (self.args.lod_error * 0.5).max(0.125),
-            KeyCode::BracketRight => self.args.lod_error = (self.args.lod_error * 2.0).min(16.0),
-            KeyCode::Tab => self.wireframe = !self.wireframe,
-            KeyCode::KeyG => self.tonemap = self.tonemap.next(),
-            KeyCode::KeyB => self.bloom_on = !self.bloom_on,
-            KeyCode::KeyN => self.ao_on = !self.ao_on,
-            KeyCode::KeyV => self.dust_on = !self.dust_on,
-            KeyCode::KeyY => self.flags.toggle(CullFlags::TRANSLUCENCY),
-            KeyCode::KeyZ => {
-                self.renderer.sun_angular_radius = if self.renderer.sun_angular_radius > 0.0 {
-                    0.0
-                } else {
-                    forge_render::starfield::SUN_ANGULAR_RADIUS_1AU
-                };
-            }
-            KeyCode::KeyJ => self.flags.toggle(CullFlags::SHADOWS),
-            KeyCode::Minus => self.exposure.compensation -= 0.5,
-            KeyCode::Equal => self.exposure.compensation += 0.5,
-            _ => {}
-        }
+        // Every key of the ballad sets a setting (D-069, `vars`): U, P, T, M, O, C, X, L, K, R,
+        // H, [ and ], Tab, G, B, N, V, Y, Z, J, - and =.
+        self.vars_key(ctx, code);
+    }
+
+    fn register(&mut self, ctx: &mut Context) {
+        self.register_vars(&mut ctx.settings);
     }
 
     fn update(&mut self, ctx: &mut Context, input: &Input, dt: f32) {
@@ -818,6 +758,8 @@ impl Demo for Ballad {
         {
             self.cycle_upscaler(ctx);
         }
+        // The settings changed since the last frame (D-069).
+        self.apply_vars(ctx);
         let now = Instant::now();
         self.frame_ms
             .push((now - self.last_frame).as_secs_f64() * 1e3);

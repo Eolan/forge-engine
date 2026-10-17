@@ -89,8 +89,28 @@ image to the pixel.
 | `r.sw_raster` | the software rasteriser (R) | off, auto, on | auto |
 | `r.show.*` | debug views: `meshlets` (M), `lod` (K), `raster` (H), `ao` (V), `gi` (U), `culled`, `regions`, `wireframe` (Tab) | 0, 1 | 0 |
 
-The asteroids, the planet and the meshlets bench take the same names next, with their own
-defaults where their scenes want another look (ACES for the asteroids' black space).
+The asteroids, the planet and the meshlets bench take the same names for what they have, with
+their own defaults where their scenes want another look, and add:
+
+| Demo | Its own defaults | Added |
+|---|---|---|
+| asteroids | `r.tonemap aces` (its toe keeps space black), `r.sun.disc 0` (hard shadows), `r.ao.radius 2` | `r.dlss.mode` (U steps TAA, DLAA, then DLSS's modes), `r.exposure.compensation` (- and =), `r.translucency` (Y), `r.cull.cone` (C), `asteroids.dust` (V), `asteroids.paused` (P) |
+| planet | `r.aa taa` (no DLAA yet) | `r.exposure.compensation`, `r.cull.cone`, `planet.paused` (P) |
+| meshlets | `r.show.meshlets 1` | `r.cull.cone`, `r.cull.frustum` (V); F (freeze the culling camera) stays a key |
+
+**The keys still differ between demos**, and the settings make it plain:
+
+| Key | Galleries | Asteroids | Planet | Meshlets |
+|---|---|---|---|---|
+| P | `r.probes` | `asteroids.paused` | `planet.paused` | |
+| X | `r.exposure.local` | `r.show.culled` | `r.show.culled` | |
+| V | `r.show.ao` | `asteroids.dust` | | `r.cull.frustum` |
+| Y | `r.reflections.rays` | `r.translucency` | | |
+| U | `r.show.gi` | DLSS's modes | | |
+| F | `r.reflections.sky` | | | freeze |
+
+T, G, B, N, Z, J, O, L, K, M, H, R, Tab, `[` and `]` set the same setting wherever they are. One
+key map for every demo is the owner's call (#278).
 
 ## Shipped games
 

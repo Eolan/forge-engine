@@ -4,9 +4,9 @@
 //! and the city plan are galleries: one place for all four.
 
 use forge_app::Context;
-use forge_app::settings::{Settings, Source, Spec, Var, VarType};
+use forge_app::settings::{Settings, Var};
 use forge_render::CullFlags;
-use forge_render::settings::{self as rs, AA_DLAA, AA_OFF, AA_TAA};
+use forge_render::settings::{self as rs, AA_DLAA, AA_DLSS, AA_OFF, AA_TAA};
 use winit::keyboard::KeyCode;
 
 use crate::Gallery;
@@ -31,27 +31,6 @@ pub(crate) struct RenderVars {
     /// The settings that are a bit of the culling flags: shadows, reflections, culling, LOD and
     /// the debug views.
     bits: Vec<(Var<bool>, u32)>,
-}
-
-/// Registers `spec` and, where the flags (or the scene) made its value another than the shared
-/// default, sets it so, as a flag on the command line: a value from `forge.cfg` or `--set`
-/// stays otherwise, and reaches the gallery at the first apply.
-fn add<T: VarType + PartialEq>(s: &mut Settings, spec: Spec<T>, default: T, now: T) -> Var<T> {
-    let var = s.add(spec);
-    if now != default {
-        s.set_by(var, now, Source::CommandLine);
-    }
-    var
-}
-
-/// [`add`] for a value the gallery keeps in `f32`, compared there: a default written in decimal
-/// (0.04) is the flag's own.
-fn add_f32(s: &mut Settings, spec: Spec<f64>, default: f64, now: f32) -> Var<f64> {
-    let var = s.add(spec);
-    if default as f32 != now {
-        s.set_by(var, f64::from(now), Source::CommandLine);
-    }
-    var
 }
 
 impl Gallery {
@@ -122,45 +101,40 @@ impl Gallery {
             ),
         ]
         .into_iter()
-        .map(|(spec, b, default)| (add(s, spec, default, bit(b)), b))
+        .map(|(spec, b, default)| (s.add_from(spec, default, bit(b)), b))
         .collect();
         self.vars = Some(RenderVars {
-            aa: add(s, rs::aa(aa_default), aa_default, aa_now),
-            sharpen: add(s, rs::sharpen(true), true, self.taa.sharpen.is_some()),
-            sharpen_stops: add_f32(
-                s,
+            aa: s.add_from(rs::aa(aa_default), aa_default, aa_now),
+            sharpen: s.add_from(rs::sharpen(true), true, self.taa.sharpen.is_some()),
+            sharpen_stops: s.add_from_f32(
                 rs::sharpen_stops(0.5),
                 0.5,
                 self.taa.sharpen.unwrap_or(self.args.rcas),
             ),
-            tonemap: add(
-                s,
+            tonemap: s.add_from(
                 rs::tonemap(Tonemap::AgXPunchy),
                 rs::tonemap_index(Tonemap::AgXPunchy),
                 rs::tonemap_index(self.tonemap),
             ),
-            bloom: add(s, rs::bloom(true), true, self.bloom_on),
-            bloom_strength: add_f32(s, rs::bloom_strength(0.04), 0.04, self.taa.bloom_strength),
-            local: add(s, rs::local_exposure(0), 0, local_now),
-            ao: add(s, rs::ao(true), true, self.ao_on),
-            ao_radius: add_f32(s, rs::ao_radius(1.5), 1.5, self.args.ao_radius),
-            probes: add(s, rs::probes(true), true, self.probes_on),
-            sky_light: add(s, rs::sky_light(true), true, self.sky_light),
-            sun_disc: add(
-                s,
+            bloom: s.add_from(rs::bloom(true), true, self.bloom_on),
+            bloom_strength: s.add_from_f32(rs::bloom_strength(0.04), 0.04, self.taa.bloom_strength),
+            local: s.add_from(rs::local_exposure(0), 0, local_now),
+            ao: s.add_from(rs::ao(true), true, self.ao_on),
+            ao_radius: s.add_from_f32(rs::ao_radius(1.5), 1.5, self.args.ao_radius),
+            probes: s.add_from(rs::probes(true), true, self.probes_on),
+            sky_light: s.add_from(rs::sky_light(true), true, self.sky_light),
+            sun_disc: s.add_from(
                 rs::sun_disc(true),
                 true,
                 self.renderer.sun_angular_radius > 0.0,
             ),
-            lod_error: add_f32(s, rs::lod_error(1.0), 1.0, self.args.lod_error),
-            sw_raster: add(
-                s,
+            lod_error: s.add_from_f32(rs::lod_error(1.0), 1.0, self.args.lod_error),
+            sw_raster: s.add_from(
                 rs::sw_raster(SwRaster::Auto),
                 rs::sw_raster_index(SwRaster::Auto),
                 rs::sw_raster_index(self.args.sw_raster),
             ),
-            wireframe: add(
-                s,
+            wireframe: s.add_from(
                 rs::show("wireframe", "The triangles' edges over the frame (Tab)."),
                 false,
                 self.wireframe,
@@ -186,11 +160,11 @@ impl Gallery {
             || s.changed_since(v.sharpen_stops, seen)
         {
             let aa = s.get(v.aa);
-            self.dlaa_on = aa == AA_DLAA && self.dlaa.is_some();
+            self.dlaa_on = matches!(aa, AA_DLAA | AA_DLSS) && self.dlaa.is_some();
             self.taa.enabled = aa != AA_OFF;
             self.taa.sharpen = s.get(v.sharpen).then_some(s.get(v.sharpen_stops) as f32);
             self.taa.reset_history();
-            if aa == AA_DLAA && self.dlaa.is_none() {
+            if matches!(aa, AA_DLAA | AA_DLSS) && self.dlaa.is_none() {
                 tracing::info!(
                     "r.aa dlaa: DLAA does not run here (the Streamline SDK and an RTX GPU), TAA instead"
                 );
@@ -297,7 +271,7 @@ impl Gallery {
             // DLAA where it runs, TAA sharpened, plain, off (D-045).
             KeyCode::KeyT => {
                 let next = match (s.get(v.aa), s.get(v.sharpen)) {
-                    (AA_DLAA, _) => (AA_TAA, true),
+                    (AA_DLAA | AA_DLSS, _) => (AA_TAA, true),
                     (AA_TAA, true) => (AA_TAA, false),
                     (AA_TAA, false) => (AA_OFF, true),
                     _ if self.dlaa.is_some() => (AA_DLAA, true),
