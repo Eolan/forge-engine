@@ -784,8 +784,11 @@ mesh to test navigations inside the houses"):
   bathroom 3.3 m deep in the middle, the bedroom at the back. Where no storey is free, a
   bedroom comes down to the ground floor's back, the kitchen opening into the living room
   (its counter there, `furnish`): a bedroom on the level by the garden. A study with nowhere
-  to go becomes a utility room. One bedroom is left in a middle, a comfortable household's on a
-  third storey with no depth to spare.
+  to go becomes a utility room. A kitchen upstairs over a dining room comes down into it, a
+  kitchen-diner on the ground floor, its counter there (five comfortable houses cooked on
+  their first floor, the dining room a storey below); and a bedroom still in a middle takes
+  the place of a study on an outside wall, the study a utility room in the middle. No room
+  that wants a window is left without one.
 - *Rounded corners as one lot* (`parcels::strips_by`). At a faubourg corner rounded into an
   arc, the turn spread over short edges each under 30°, the corner merge never ran: the two
   strips' end lots stopped at the arc's ends, two triangles on two diagonals from the corner
@@ -838,7 +841,7 @@ mesh to test navigations inside the houses"):
 - *Cornices' corners* (`cornice_corners`). Where two walls' cornices meet at an outside corner,
   each of the three steps (`modules::CORNICE_STEPS`) is mitred round it, a prism from the corner
   out to where the two steps' faces meet.
-
+| a habitable room without a window | 33 | 0 |
 | Anomaly | Before the night | Now |
 |---|---|---|
 | a habitable room without a window | 33 | 1 (a comfortable household's third storey, its depth all taken) |

@@ -480,6 +480,38 @@ fn relayout(placed: &mut [Placed], depth: f64) {
 fn rebalance(storeys: &mut [Vec<Placed>], depth: f64) {
     let n = storeys.len();
     let same = |r: &Placed, y0: f64| (r.y.0 - y0).abs() < 1e-9;
+    // A kitchen upstairs over a dining room comes down into it, a kitchen-diner on the ground
+    // floor (five comfortable houses of the village cooked on their first floor, the dining room
+    // a storey below), where its band was its own and the ground floor's depth keeps every
+    // room at what it asked.
+    if let Some(d) = storeys
+        .first()
+        .and_then(|g| g.iter().position(|r| r.kind == RoomKind::Dining))
+        && let Some((s, k)) = (1..n).find_map(|s| {
+            storeys[s]
+                .iter()
+                .position(|r| r.kind == RoomKind::Kitchen)
+                .map(|k| (s, k))
+        })
+    {
+        let kitchen = storeys[s][k];
+        let alone = storeys[s].iter().filter(|r| same(r, kitchen.y.0)).count() == 1;
+        let mut ground = storeys[0].clone();
+        ground[d].area += kitchen.area;
+        let fits = bands(&ground)
+            .iter()
+            .map(|b| least(&ground, b.0))
+            .sum::<f64>()
+            <= depth + 1e-9;
+        if alone && fits {
+            storeys[0] = ground;
+            storeys[s].remove(k);
+            for t in [0, s] {
+                relayout(&mut storeys[t], depth);
+                arrange(&mut storeys[t]);
+            }
+        }
+    }
     // The middle bands that stay, by storey and start.
     let mut stay: Vec<(usize, f64)> = Vec::new();
     // Each pass moves, turns or keeps a band: far fewer passes than this.
@@ -541,6 +573,58 @@ fn rebalance(storeys: &mut [Vec<Placed>], depth: f64) {
                 }
             }
             arrange(&mut storeys[k]);
+        } else if let Some((s, study)) = band
+            .iter()
+            .all(|r| r.kind == RoomKind::Bedroom || dark(r.kind))
+            .then(|| {
+                // A study on an outside wall gives its place to the bedroom and becomes a utility
+                // room in the middle: a bedroom needs the window more.
+                (0..n).filter(|&s| s != k).find_map(|s| {
+                    let b = bands(&storeys[s]);
+                    let ends = [b.first(), b.last()];
+                    storeys[s]
+                        .iter()
+                        .position(|r| {
+                            r.kind == RoomKind::Study
+                                && storeys[s].iter().filter(|o| same(o, r.y.0)).count() == 1
+                                && ends.iter().flatten().any(|e| (e.0 - r.y.0).abs() < 1e-9)
+                        })
+                        .map(|i| (s, i))
+                })
+            })
+            .flatten()
+        {
+            // The two storeys as they would be, kept only where both keep their rooms' areas.
+            let mut there: Vec<Placed> = storeys[s].clone();
+            let moved = there.remove(study);
+            there.extend(band.iter().map(|r| Placed {
+                storey: s,
+                y: (depth, depth + r.y.1 - r.y.0),
+                ..*r
+            }));
+            let mut here: Vec<Placed> = storeys[k]
+                .iter()
+                .copied()
+                .filter(|r| !same(r, y0))
+                .collect();
+            here.push(Placed {
+                kind: RoomKind::Service,
+                storey: k,
+                y: (depth, depth + moved.y.1 - moved.y.0),
+                ..moved
+            });
+            let fit =
+                |p: &[Placed]| bands(p).iter().map(|b| least(p, b.0)).sum::<f64>() <= depth + 1e-9;
+            if fit(&there) && fit(&here) {
+                storeys[s] = there;
+                storeys[k] = here;
+                for t in [s, k] {
+                    relayout(&mut storeys[t], depth);
+                    arrange(&mut storeys[t]);
+                }
+            } else {
+                stay.push((k, y0));
+            }
         } else {
             stay.push((k, y0));
         }
@@ -608,8 +692,8 @@ fn squeeze(placed: &mut [Placed], by: f64) -> bool {
 mod tests {
     use super::*;
 
-    /// The programme as `plan` laid it: a kitchen opened into the living room (`open_kitchen`)
-    /// is the living room's area.
+    /// The programme as `plan` laid it: a kitchen opened into the dining room (`rebalance`'s
+    /// kitchen-diner) or the living room (`open_kitchen`) is that room's area.
     fn as_laid(plan: &Plan, programme: &[Room]) -> Vec<Room> {
         let kitchens = plan
             .storeys
@@ -622,8 +706,13 @@ mod tests {
             && let Some(k) = out.iter().position(|r| r.kind == RoomKind::Kitchen)
         {
             let kitchen = out.remove(k);
-            if let Some(living) = out.iter_mut().find(|r| r.kind == RoomKind::Living) {
-                living.area += kitchen.area;
+            let into = if out.iter().any(|r| r.kind == RoomKind::Dining) {
+                RoomKind::Dining
+            } else {
+                RoomKind::Living
+            };
+            if let Some(room) = out.iter_mut().find(|r| r.kind == into) {
+                room.area += kitchen.area;
             }
         }
         out

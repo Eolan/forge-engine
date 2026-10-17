@@ -149,15 +149,16 @@ impl Rect {
     }
 }
 
-/// The pieces a room of `kind` (`area` m²) wants, in order; the living room keeps the kitchen's
-/// where the house has no kitchen of its own.
-fn wants(kind: RoomKind, area: f64, kitchen: bool) -> Vec<Piece> {
+/// The pieces a room of `kind` (`area` m²) wants, in order; with `cooks`, the room that keeps the
+/// kitchen's where the house has no kitchen of its own, its counter first.
+fn wants(kind: RoomKind, area: f64, cooks: bool) -> Vec<Piece> {
     match kind {
         RoomKind::Bedroom if area >= 11.0 => vec![Piece::Bed, Piece::Wardrobe, Piece::Desk],
         RoomKind::Bedroom => vec![Piece::SingleBed, Piece::Wardrobe],
-        RoomKind::Living if !kitchen => {
+        RoomKind::Living if cooks => {
             vec![Piece::Counter, Piece::Sofa, Piece::Table, Piece::Shelves]
         }
+        RoomKind::Dining if cooks => vec![Piece::Counter, Piece::Table, Piece::Shelves],
         RoomKind::Living => vec![Piece::Sofa, Piece::Shelves, Piece::Table],
         RoomKind::Kitchen => vec![Piece::Counter, Piece::Table],
         RoomKind::Dining => vec![Piece::Table, Piece::Shelves],
@@ -172,7 +173,18 @@ fn wants(kind: RoomKind, area: f64, kitchen: bool) -> Vec<Piece> {
 /// ([`wants`]) against its walls, with the chairs at the tables and desks and a low table before
 /// each sofa.
 pub fn furnish(s: &Structure, interior: &Interior) -> Vec<Placed> {
-    let kitchen = interior.rooms.iter().any(|r| r.kind == RoomKind::Kitchen);
+    // Where the house has no kitchen of its own, the room that keeps the kitchen's counter: the
+    // dining room (a kitchen-diner, `rooms::rebalance`), else the living room.
+    let has = |kind: RoomKind| interior.rooms.iter().any(|r| r.kind == kind);
+    let (kitchen, dining) = (has(RoomKind::Kitchen), has(RoomKind::Dining));
+    let cooks = |kind: RoomKind| {
+        !kitchen
+            && match kind {
+                RoomKind::Dining => true,
+                RoomKind::Living => !dining,
+                _ => false,
+            }
+    };
     let mut out = Vec::new();
     for room in &interior.rooms {
         // The room's rectangle every depth of it shares: a room against a slanted side wall
@@ -355,7 +367,7 @@ pub fn furnish(s: &Structure, interior: &Interior) -> Vec<Placed> {
                 y: (cy - hd, cy + hd),
             }
         };
-        for wanted in wants(room.kind, w * d, kitchen) {
+        for wanted in wants(room.kind, w * d, cooks(room.kind)) {
             // A double bed head to the wall, then along it, then a single bed.
             let variants: Vec<(Piece, bool)> = match wanted {
                 Piece::Bed => vec![
