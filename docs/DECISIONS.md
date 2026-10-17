@@ -4844,3 +4844,98 @@ application of their patents just in case."
 - **Not done:** `tools/amd-check.sh` (it draws no probe regions).
 - **Its effect:** the rooms are lit by their windows, brighter than before (the owner asked for
   it: "I would expect the inside to be a bit brighter").
+
+## D-069 — One set of engine settings for every demo, defaults at the best look, and a console on ² 🟡 (proposed 2026-10-17, #278, the owner's request)
+
+**The question:** the owner asked, on 2026-10-17:
+
+> "Could we backport the changes over the demos and make it overall consistent? And make a in
+> engine dev console activable with the key ² and with autocompletion like most of the game
+> engines do. And use the flags only when we do something outside of base behaviour for now?"
+
+**What exists:**
+- Each demo parses its own flags with clap. Asteroids has about 40, planet about 30, meshlets a
+  few, and city-blocks the most; physics-lab, island and city-plan are built on city-blocks.
+- The same setting is spelled or defaulted differently from demo to demo. `--dlaa` exists only in
+  city-blocks, `--no-taa` in three demos. Some of the best settings are flags rather than
+  defaults.
+- Runtime switches are single keys per demo (F1–F6, N, Y, …), with no names and no list.
+- Scripts depend on today's flags and defaults: `tools/captures.sh`, `tools/map-check.sh`, the
+  timings and the sandbox's day check.
+
+**How engines do it** (from what is known; the research note below will check it):
+- **id Tech (Quake, 1996):**
+  - a console on the key under Esc;
+  - console variables with a name, a value and flags (saved, cheat);
+  - commands, Tab completion, `+set` on the command line and `autoexec.cfg`.
+- **Source:**
+  - `ConVar` and `ConCommand`, registered where they are used;
+  - flags for cheats, saved values and development-only variables;
+  - `find`, `help`, candidates listed while typing, and history.
+- **Unreal:**
+  - console variables named by system (`r.`, `sg.`), with `-ExecCmds` and ini files;
+  - a priority for who set a value (code, ini, the console);
+  - completion with the help text beside each candidate.
+
+**Proposed:**
+1. **A settings registry in `forge-app`:**
+   - Each setting is a console variable: a typed value (bool, integer, float, one of a list, or
+     text). It has a dotted name (`r.aa`, `r.probes`, `r.ao.radius`, `app.fixed_step`), a default,
+     a range, a line of help, and flags: debug only, needs a restart, saved.
+   - The engine's systems and each demo register their own.
+   - Systems read them every frame, so a change applies at once unless it is flagged for a
+     restart.
+2. **Flags only to step away from the defaults:**
+   - Defaults are the best look: what the showcases use today.
+   - Any variable can be set from the command line (`--set r.aa=taa`) or from a `forge.cfg`.
+   - Today's flag spellings stay as aliases of the variables during the move, so scripts and
+     the accepted captures keep working. They are removed once the scripts use the new names.
+3. **The same settings in every demo:**
+   - The shared ones move into the registry with one name and one default each: anti-aliasing,
+     tone map and HDR, exposure (with local exposure), shadows and their denoiser, probes, AO,
+     reflections, clouds, fixed step, frames and captures, the monitor, and the debug views.
+   - Each demo keeps only its own scene's options.
+   - Then the village's gains go to the other demos where they apply: DLAA by default, local
+     exposure, glass the probes' rays pass, and the probe settings. Probe regions only where a
+     scene has rooms.
+4. **The console:**
+   - **Opening:** the physical key under Esc (² on AZERTY, ` on QWERTY, winit's
+     `KeyCode::Backquote`).
+   - **Drawing:** with the F1 overlay's text over the top third of the window. While it is open,
+     keys go to it and not to the camera.
+   - **Completion:** Tab completes the longest common prefix and lists the candidates: names,
+     then a value's choices. Each candidate shows its help and current value.
+   - **History:** Up and Down recall it, and it is kept between runs.
+   - **Built-in commands:** `help NAME`, `find WORD`, `list`, `reset NAME`, plus commands
+     registered like variables (a capture, a view to jump to, the debug views).
+   - **Feedback and safety:** each change prints what it did. Debug-only variables are marked,
+     so a shipped game can hide them.
+5. **Order:**
+   1. the registry;
+   2. the shared settings moved across the demos, with the scripts and one re-accepted capture
+      set;
+   3. the console;
+   4. the backports.
+
+   About four sessions in all.
+
+**Checks:**
+- Unit tests of the registry: parsing, ranges, aliases and completion.
+- Each demo's captures before and after the move:
+  - unchanged where only a name changed;
+  - named with `--expect` where a default changed, with their ꟻLIP numbers.
+- The console's cost in the F1 overlay: nothing while closed.
+
+**Open for the owner:**
+- Dotted names (`r.aa`) or today's style (`--no-taa`)?
+- Should console changes be saved to `forge.cfg` between runs?
+- Should the console exist in release builds of a game, or in development builds only?
+
+**Patents:** consoles, variables and Tab completion are 1990s practice: Quake's console (1996)
+and Unix shells' completion before it. None has been searched yet; the research note will check.
+
+**Research to do:** `research/dev-console.md`, covering:
+- id Tech, Source, Unreal, CryEngine, O3DE and Bevy's console crates: variables, persistence,
+  completion and cheats;
+- text input with winit: ² is a plain key on AZERTY, while `^` is a dead key, and IME;
+- the overlay's text drawing for a scrolling log.
