@@ -4488,6 +4488,21 @@ at run time (a hero effect later).
 seven points above) and the textures baked by our own stable-fluids solver; EmberGen or
 downloaded sets stay out unless the owner says otherwise.
 
+**Built so far (step 1, 2026-10-18, #271):** `forge_render::particles` and
+`shaders/particles.slang`, shown by the physics lab's `--lab smoke` (`docs/demos/physics-lab.md`).
+- **Point 1:** emitters as data (`data/particles.toml`: chimney smoke, footstep dust, embers),
+  streams and bursts, deterministic births and random numbers. They are simulated on the async
+  compute queue: gravity or buoyancy, a drag towards the wind, a curl-noise swirl.
+- **Point 3, in part:** soft puffs, eroded by noise and shaded as lumpy balls against the sun.
+  Smoke and glow share one premultiplied blend, so `VertexPipelineDesc` gained `premultiplied`.
+- **Point 4, in part:** one sun ray a particle a frame, and the sky's light.
+- **Point 5, in part:** TAA's reactive mask.
+- **Point 7, in part:** the three first effects, in the lab.
+- **Numbers:** 492 particles at most, the draw 0.022 ms, 0.006 ms of simulation. Two runs are
+  identical to the pixel.
+- **Next:** the probes, collisions, sorting, the baked flipbooks and six-way smoke, the dust
+  volume, DLSS's mask, and the village's chimneys and steps.
+
 ## D-065 — Lighting the insides: lamps by clustered lists until ReSTIR's patents are settled ✅ (proposed 2026-10-16, #270; the owner's go 2026-10-17: both, compared)
 
 **The question:** how the village's entered houses are lit (#270): lamps, the rooms' bounce

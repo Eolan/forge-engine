@@ -97,6 +97,9 @@
 "shaders/shore.slang" = ["island"]
 "shaders/wakes.slang" = ["island"]
 "shaders/splashes.slang" = ["island", "lab"]
+"shaders/particles.slang" = ["lab"]
+"crates/forge-render/src/particles.rs" = ["lab"]
+"crates/forge-render/data/particles.toml" = ["lab"]
 "shaders/splash_foam.slang" = ["island", "lab"]
 # The lab's liquid (#156).
 # The skinned creatures (#165): only the lab draws skinned meshes.

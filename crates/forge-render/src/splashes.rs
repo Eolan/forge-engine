@@ -376,6 +376,7 @@ impl WaterSplashes {
             wireframe: false,
             depth_test: false,
             alpha_blend: true,
+            premultiplied: false,
             name: "splashes draw",
         });
         device.destroy_shader_module(vertex);

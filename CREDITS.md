@@ -414,6 +414,16 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   - **Each drop's random numbers:** the `pcg3d` hash of Mark Jarzynski and Marc Olano, "Hash
     Functions for GPU Rendering", *Journal of Computer Graphics Techniques* 9(3), 2020.
 
+**Particles** (`forge_render::particles`, D-064, #271), grown from the splashes and taking their
+soft edges, their pixel-wide minimum, their reactive mask and their hash:
+- **A swirl without sources or sinks:** the curl of a potential, after Robert Bridson, Jim
+  Hourihan and Marcus Nordenstam, "Curl-Noise for Procedural Fluid Flow", *ACM Transactions on
+  Graphics* 26(3), SIGGRAPH 2007; here the potential is three sums of sines, not their noise.
+- **One blend for smoke and embers:** premultiplied alpha, after Thomas Porter and Tom Duff,
+  "Compositing Digital Images", SIGGRAPH 1984: a particle with no opacity adds its light.
+- **Smoke's scattering:** Henyey and Greenstein's phase function (above), with an even part for
+  the light scattered more than once.
+
 **City plans** (`forge_procgen::city`, D-059):
 - **Streets from a tensor field.** Guoning Chen, Gregory Esch, Peter Wonka, Pascal Müller,
   Eugene Zhang, "Interactive Procedural Street Modeling", *ACM Transactions on Graphics* 27(3),

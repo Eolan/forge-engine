@@ -47,6 +47,8 @@ pub struct Look {
     pub backdrop: Backdrop,
     /// The spray of the scene's own splashes ([`Running::splashes`]), with or without water.
     pub splashes: bool,
+    /// The scene's particles ([`Running::particles`], D-064): smoke, dust, embers.
+    pub particles: bool,
     /// The probes' rays, their finest spacing (metres) and their cascades, when the scene sets
     /// them (unless the flags do).
     pub probes: Option<(u32, f32, u32)>,
@@ -65,6 +67,7 @@ impl Default for Look {
             white_sun: false,
             backdrop: Backdrop::Sky,
             splashes: false,
+            particles: false,
             probes: None,
             chase: false,
             metered: false,
@@ -175,6 +178,16 @@ pub trait Running: Send {
     }
     /// Its splashes' sources this frame.
     fn splashes(&mut self, _out: &mut Vec<SplashSource>) {}
+    /// Its particles' emitters and bursts at `time` (the splashes' clock, seconds), in the
+    /// scene's frame (D-064): the effects by name through `particles`.
+    fn particles(
+        &mut self,
+        _time: f32,
+        _particles: &forge_render::Particles,
+        _emitters: &mut Vec<forge_render::Emitter>,
+        _bursts: &mut Vec<forge_render::Burst>,
+    ) {
+    }
     /// What the window's title adds.
     fn title(&mut self) -> String;
 }

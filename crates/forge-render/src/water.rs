@@ -1500,6 +1500,7 @@ impl WaterSurface {
             wireframe: false,
             depth_test: true,
             alpha_blend: false,
+            premultiplied: false,
             name,
         };
         let surface = device.create_vertex_pipeline(&surface_desc(
@@ -1557,6 +1558,7 @@ impl WaterSurface {
                         wireframe: false,
                         depth_test: true,
                         alpha_blend: true,
+                        premultiplied: false,
                         name: &pipeline_name,
                     }));
                     device.destroy_shader_module(fragment);

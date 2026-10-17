@@ -143,6 +143,8 @@ for path in $paths; do
   [ -f "$bin/physics-lab$exe" ] && validate "lab-tank-hole$tag" "$bin/physics-lab$exe" --lab tank-hole --fixed-step --release 31 --frames 120 $path
   [ -f "$bin/physics-lab$exe" ] && validate "lab-tank-blocks$tag" "$bin/physics-lab$exe" --lab tank-blocks --fixed-step --release 31 --frames 120 $path
   [ -f "$bin/physics-lab$exe" ] && validate "lab-room$tag" "$bin/physics-lab$exe" --lab room --fixed-step --pan 2 --frames 120 $path
+  # The smoke yard's particles (D-064).
+  [ -f "$bin/physics-lab$exe" ] && validate "lab-smoke$tag" "$bin/physics-lab$exe" --lab smoke --fixed-step --frames 120 $path
   # And ships through the belt, the camera chasing the first (#79's demo).
   validate "ships$tag" "$bin/asteroids$exe" --frames 60 --ships 24 --chase 0 $path
   # The HDR output drawn off-screen and previewed (#94), through ACES 2.0: from the TAA resolve

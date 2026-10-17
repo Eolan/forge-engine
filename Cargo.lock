@@ -1117,6 +1117,8 @@ dependencies = [
  "forge-world",
  "glam",
  "image",
+ "serde",
+ "toml",
  "tracing",
 ]
 

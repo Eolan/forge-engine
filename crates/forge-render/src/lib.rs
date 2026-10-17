@@ -26,6 +26,7 @@ pub mod material;
 pub mod meshlet;
 pub mod mipcheck;
 pub mod night;
+pub mod particles;
 pub mod placement;
 pub mod precision;
 pub mod probes;
@@ -71,6 +72,7 @@ pub use meshlet::{
     MoverTransform, MoversFrame, PlanetView, RayRequests, SceneEdit, SceneEditor, SunShadowRays,
     SwRaster,
 };
+pub use particles::{Burst, DrawKind, Effect, Emitter, ParticleParams, ParticleStats, Particles};
 pub use probes::{ProbeLight, ProbeParams, Probes, RegionHit, RegionKind, RegionVolume, region_at};
 pub use reflection_history::{ReflectionHistory, ReflectionHistoryFrame};
 pub use shallow::{

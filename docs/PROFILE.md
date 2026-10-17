@@ -1350,6 +1350,19 @@ A room's probes 1 m apart instead of 4 (#175), the same number of probes, Sponza
 view at noon, 1600 × 900, 616 frames: the frame 2.24 → 2.41 ms, `gi/probe rays` 0.90 → 1.02,
 `gi/probe blend` 0.26 → 0.31.
 
+The particles (D-064, #271) in the smoke yard (`--lab smoke --fixed-step`), 1600 × 900, the first
+360 frames, at most 492 particles alive (three chimneys' plumes, the fire's smoke and embers, a
+walker's dust):
+
+| Zone | ms |
+|---|---|
+| `particles/draw` | 0.022 |
+| `particles/advance [compute]` (a sun ray a particle) | 0.005 |
+| `particles/emit [compute]` | 0.001 |
+
+The frame was 1.59 ms. The puffs are fill-bound: the plumes' overlapping sprites cost the draw.
+It has no sorting yet.
+
 ## `city-plan` — a city's plan in 3D, measured on the private sandbox's city (D-059, 2026-10-11)
 
 RTX 5070 Ti, 1600 × 900, TAA, 600 frames, a city of 37 506 masses (1 257 of them in the kit

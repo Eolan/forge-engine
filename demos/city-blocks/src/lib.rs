@@ -457,6 +457,9 @@ pub struct Args {
     /// towed barrel's bow (#107's A/B for the splashes).
     #[arg(long)]
     no_splashes: bool,
+    /// No particles (D-064): the scene's smoke, dust and embers.
+    #[arg(long)]
+    no_particles: bool,
     /// Draw the spray without the reactive mask, so TAA keeps its history there (the mask's
     /// A/B, #107).
     #[arg(long, hide = true)]
@@ -723,6 +726,11 @@ struct Gallery {
     /// The most drops alive at once, and those born, over the run.
     splash_peak: u32,
     splash_born: u64,
+    /// The scene's particles (D-064), when its look asks for them; the most alive at once, and
+    /// those born, over the run.
+    particles: Option<forge_render::Particles>,
+    particle_peak: u32,
+    particle_born: u64,
     /// `--day`: seconds into the day, the metered scene and the automatic exposure (issue #57).
     day_time: f32,
     /// The night (D-046, issue #164) with `--day` and `--time-of-day`: where the Moon and the
@@ -1387,6 +1395,16 @@ impl Gallery {
                 "splashes"
             );
         }
+        // The scene's particles (D-064), with its look.
+        let particles = (look.particles && !args.no_particles)
+            .then(|| {
+                forge_render::Particles::new(
+                    &ctx.device,
+                    &ctx.shaders,
+                    forge_render::particles::effects(),
+                )
+            })
+            .transpose()?;
         let mut gallery = Self {
             barrels,
             walker,
@@ -1401,6 +1419,9 @@ impl Gallery {
             wind,
             splash_peak: 0,
             splash_born: 0,
+            particles,
+            particle_peak: 0,
+            particle_born: 0,
             tonemap: args.tonemap,
             args,
             renderer,
@@ -2572,6 +2593,44 @@ impl Demo for Gallery {
             self.splash_peak = self.splash_peak.max(stats.live);
             self.splash_born += u64::from(stats.fresh);
         }
+        // The scene's particles (D-064): smoke, dust and embers, over the spray, their reactive
+        // mask over its.
+        if let (Some(particles), Some(running)) = (&self.particles, self.running.as_mut()) {
+            let time = self.sea_time as f32;
+            let mut emitters = Vec::new();
+            let mut bursts = Vec::new();
+            running.particles(time, particles, &mut emitters, &mut bursts);
+            let projection = taa_frame.jittered_projection;
+            reactive = particles.update(
+                &mut frame.graph,
+                frame.slot,
+                &emitters,
+                &bursts,
+                &sky,
+                forge_render::ParticleParams {
+                    view_proj: projection * self.camera.view_rotation(),
+                    camera: camera_in_scene,
+                    near: projection.w_axis.z,
+                    focal: 0.5 * projection.y_axis.y * extent.height as f32,
+                    sun_dir: self.renderer.sun_dir,
+                    sun_radiance: self.renderer.sun_color
+                        * (self.renderer.sun_illuminance * exposure),
+                    sky_scale: self.renderer.sun_illuminance * exposure,
+                    exposure,
+                    wind: self.wind,
+                    time,
+                    tlas: self.scene.rays().map_or(0, |r| r.tlas_address()),
+                },
+                taa_frame.color,
+                targets.depth,
+                reactive,
+                extent,
+            );
+            let stats = particles.stats();
+            ctx.profile.counter(stats.line());
+            self.particle_peak = self.particle_peak.max(stats.live);
+            self.particle_born += u64::from(stats.fresh);
+        }
         // The motion vectors, before the tank's water, whose scene behind them a TAA takes. They
         // need only the depth and the cameras. Before the resolve when SIGMA denoised the sun's
         // shadow, which reprojects through them (#172).
@@ -2833,6 +2892,14 @@ impl Drop for Gallery {
                 born = self.splash_born,
                 dropped = splashes.stats().dropped,
                 "splashes' drops over the run (live at most, born, no room)"
+            );
+        }
+        if let Some(particles) = &self.particles {
+            tracing::info!(
+                peak = self.particle_peak,
+                born = self.particle_born,
+                dropped = particles.stats().dropped,
+                "particles over the run (live at most, born, no room)"
             );
         }
     }

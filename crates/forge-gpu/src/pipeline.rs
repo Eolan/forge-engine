@@ -92,6 +92,10 @@ pub struct VertexPipelineDesc<'a> {
     /// Blend each output over its attachment by the output's own alpha, which then replaces
     /// the attachment's alpha (as [`FullscreenPipelineDesc::alpha_blend`]); opaque otherwise.
     pub alpha_blend: bool,
+    /// With `alpha_blend`, the output's colour is already multiplied by its alpha: what is
+    /// behind keeps `1 − alpha` and the colour is added whole, so an alpha of 0 adds (a glow)
+    /// and one blends over (smoke) in the same draw (D-064's particles).
+    pub premultiplied: bool,
     /// Debug name.
     pub name: &'a str,
 }
@@ -340,6 +344,7 @@ impl Device {
                 wireframe: desc.wireframe,
                 depth_test: desc.depth_test,
                 alpha_blend: false,
+                premultiplied: false,
                 name: desc.name,
             },
         )
@@ -374,6 +379,7 @@ impl Device {
                 wireframe: desc.wireframe,
                 depth_test: desc.depth_test,
                 alpha_blend: desc.alpha_blend,
+                premultiplied: desc.premultiplied,
                 name: desc.name,
             },
         )
@@ -415,7 +421,11 @@ impl Device {
                 vk::PipelineColorBlendAttachmentState::default()
                     .color_write_mask(vk::ColorComponentFlags::RGBA)
                     .blend_enable(state.alpha_blend)
-                    .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+                    .src_color_blend_factor(if state.premultiplied {
+                        vk::BlendFactor::ONE
+                    } else {
+                        vk::BlendFactor::SRC_ALPHA
+                    })
                     .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
                     .color_blend_op(vk::BlendOp::ADD)
                     .src_alpha_blend_factor(vk::BlendFactor::ONE)
@@ -484,5 +494,6 @@ struct RasterState<'a> {
     wireframe: bool,
     depth_test: bool,
     alpha_blend: bool,
+    premultiplied: bool,
     name: &'a str,
 }

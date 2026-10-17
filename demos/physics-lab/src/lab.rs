@@ -55,6 +55,7 @@ pub(crate) mod room;
 mod sea;
 mod ship;
 mod slime;
+mod smoke;
 pub(crate) use city_blocks::SLIME_FLAVOURS;
 mod space;
 pub(crate) mod tank;
@@ -124,6 +125,9 @@ pub(crate) enum LabScene {
     /// Models made by others, the Khronos glTF sample assets fetched by `tools/fetch-assets.sh`
     /// (#170, D-048): each on a plinth, or one alone with `--model`.
     Models,
+    /// The particles' first effects (D-064, #271): three chimneys smoking, a fire's embers and
+    /// smoke in a ring of rocks, a walker's footsteps raising dust.
+    Smoke,
 }
 
 /// The floor's half side, metres.
@@ -624,6 +628,7 @@ impl LabWorld {
             | LabScene::TankBlocks
             | LabScene::Room
             | LabScene::Materials
+            | LabScene::Smoke
             | LabScene::Models => 0.0,
         };
         // The flight's is a field of grass, wide enough to fly over for a while.
@@ -1137,6 +1142,7 @@ impl LabWorld {
                 tank = Some(built.tank);
             }
             LabScene::Room => statics.extend(room::build(ROOM)),
+            LabScene::Smoke => statics.extend(smoke::build()),
             LabScene::Models => statics.extend(models::build(MODELS)),
         }
         // The balls to throw, asleep out of sight until thrown, after the scene's.

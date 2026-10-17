@@ -1957,6 +1957,61 @@ and SHA-256. The script checks each file and keeps those already there. The mode
 
 ![Sponza: at the lab's fixed exposure with the probes and without, and metered at noon](images/physics-lab-models-sponza.png)
 
+## `smoke`: the particles' first effects (issue #271, D-064)
+
+```
+cargo run --release -p physics-lab -- --lab smoke
+```
+
+![The smoke yard at 15 s: three chimneys and a fire smoking, a step's dust](images/lab-smoke.png)
+
+*Frame 900 of `--lab smoke --fixed-step`: three chimneys of stacked blocks smoking, a fire's
+smoke in a ring of rocks, and two puffs of dust from the walker's last steps, at the lower right.
+The fire's embers are there too, a few pixels each and lost in the daylight.*
+
+Step 1 of D-064, grown from the splashes (#107).
+- **Emitters as data:** the effects are records of `crates/forge-render/data/particles.toml`.
+  Each gives a rate, lives, radii and colours at birth and at death, a launch cone and speeds,
+  gravity or buoyancy, a drag towards the air, the wind's share and a curl-noise swirl, and how
+  the particles are drawn: lit smoke or added glow.
+  - A scene places streams (`Emitter`: chimneys, the fire) and bursts (`Burst`: a footstep's dust)
+    through `Running::particles`.
+  - The first three effects are chimney smoke, footstep dust and embers.
+- **Deterministic streams:** a stream's `k`-th particle is born at `start + (k + ½) / rate`, with
+  random numbers from its emitter's seed and `k`.
+  - A unit test runs the same two seconds in frames of 1/60 s and of 1/7 s and gets the same
+    particles, once each.
+  - Two runs at once are identical to the pixel: at frame 360 on both paths, and at frame 900 on
+    the mesh path. So are the occlusion A/B and mesh against fallback.
+- **Simulation:** `particles/emit` and `particles/advance` run on the async compute queue.
+  - Forces are integrated in steps of at most 1/30 s: gravity or buoyancy, then the drag as a
+    relaxation towards the air, which is the wind plus a divergence-free swirl (the curl of three
+    sums of sines).
+  - Each particle is lit once a frame (D-064's point 4): one ray towards the sun against the
+    scene's structure, and the sky's light from above and below. The probes come next.
+- **Drawing:** `particles/draw` draws soft puffs facing the camera, after the sky's compose and
+  the splashes.
+  - Each puff is turned by its own angle, and three octaves of noise erode it from the edge and
+    churn over its life.
+  - Each is shaded as a lumpy ball against the sun's way on the screen, with a wrap, so a plume
+    shows its billows' lit and shaded sides. This holds until D-064's six-way smoke textures.
+  - A puff is faded where it meets the scene, and hazed by the aerial perspective.
+  - Smoke and glow share one premultiplied blend: a particle with no opacity adds its light.
+  - The draw writes TAA's reactive mask over the splashes' (premultiplied too, under 0.9).
+  - Its shaders compile without fused multiply-adds (#277).
+
+**Numbers** (1600 × 900, RTX 5070 Ti, frame 360): 492 particles alive at most, none dropped.
+`particles/draw` takes 0.022 ms, `particles/advance` 0.005 ms and `particles/emit` 0.001 ms.
+
+**Left for the next steps of D-064:**
+- the probes' light at each particle's centre;
+- collisions;
+- sorting alpha-blended effects per emitter;
+- flipbooks and six-way smoke baked by our own stable-fluids solver;
+- the dust volume;
+- DLSS's transparency mask;
+- the village's chimneys at dusk and the walker's steps (#266).
+
 ## Captures
 
 The batch (`tools/captures.sh`, set `lab`) takes `lab-drop90` (the rain in mid-air), its A/B
@@ -1990,4 +2045,6 @@ wall) with its twin and `lab-tank-bench300` (the bench, the water settling), `la
 and the sharpness room (#159), `lab-room60` (still) and
 `lab-room-pan60` (slid sideways at 2 m/s into the same view); and the materials' patches (#203),
 `lab-materials60` (the crates sliding off the snow's and the ice's ramps, the balls bouncing)
-with its twin and `lab-materials800` (the walker at rest where it slid on the ice).
+with its twin and `lab-materials800` (the walker at rest where it slid on the ice); and the
+smoke yard (#271), `lab-smoke360` (the plumes risen, a step's dust) with its twin and
+`lab-smoke900`.

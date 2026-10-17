@@ -100,6 +100,7 @@ impl MipCheck {
             wireframe: false,
             depth_test: false,
             alpha_blend: false,
+            premultiplied: false,
             name: "mip check reference",
         });
         device.destroy_shader_module(vertex);

@@ -158,6 +158,10 @@ const PRECISE_ENTRIES: &[(&str, &str)] = &[
     ("taa.slang", "motion_main"),
     ("taa.slang", "resolve_history_main"),
     ("taa.slang", "sharpen_main"),
+    // D-064's particles: drawn into what TAA's history keeps.
+    ("particles.slang", "advance_main"),
+    ("particles.slang", "vert_main"),
+    ("particles.slang", "frag_main"),
 ];
 
 /// Whether `file`'s `entry` compiles precise: one of [`PRECISE_ENTRIES`], or `FORGE_FP_PRECISE`

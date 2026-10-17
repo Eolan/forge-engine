@@ -2926,6 +2926,7 @@ impl MeshletRenderer {
                     wireframe,
                     depth_test: true,
                     alpha_blend: false,
+                    premultiplied: false,
                     name,
                 }),
             }

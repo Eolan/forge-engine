@@ -198,6 +198,8 @@ impl Scenario for LabScenario {
             },
             // The yard's spray (#192).
             splashes: kind == LabScene::Yard,
+            // The smoke yard's chimneys, fire and footsteps (D-064).
+            particles: kind == LabScene::Smoke,
             // The models lab's rooms, lit through a few openings and seen at an indoor
             // exposure: 256 rays, probes a metre apart (#171).
             probes: (kind == LabScene::Models && models::room_shown()).then_some((
@@ -298,6 +300,15 @@ impl Scenario for LabScenario {
                 yaw: 0.0,
                 pitch: -0.55,
                 speed: 6.0,
+                ..FlyCamera::default()
+            }
+        } else if self.kind == LabScene::Smoke {
+            // At a walker's height behind the footsteps, the fire and the chimneys ahead.
+            FlyCamera {
+                position: Vec3::new(0.0, 2.2, 7.5),
+                yaw: 0.0,
+                pitch: 0.05,
+                speed: 4.0,
                 ..FlyCamera::default()
             }
         } else if self.kind == LabScene::Models {
@@ -770,6 +781,19 @@ impl Running for LabRunning {
         // The flood's front and its water striking the walls (#162), the yard's slipping
         // wheels' spray (#192).
         self.lab.splashes(out);
+    }
+
+    fn particles(
+        &mut self,
+        time: f32,
+        particles: &forge_render::Particles,
+        emitters: &mut Vec<forge_render::Emitter>,
+        bursts: &mut Vec<forge_render::Burst>,
+    ) {
+        // The smoke yard's chimneys, fire and footsteps (D-064).
+        if self.kind == LabScene::Smoke {
+            super::smoke::particles(time, particles, emitters, bursts);
+        }
     }
 
     fn title(&mut self) -> String {

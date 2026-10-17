@@ -699,8 +699,9 @@ game (scenarios, missions, licensed assets) is a private repository, as the city
    accepted set, two minutes. The tiers run at milestones on the owner's word.
 3. **The core, in order:** geometry and LOD correctness; materials (trim sheets, decals,
    layering); structures with interiors; flora; the particle system (smoke, dust, fire, rain,
-   sparks); characters' animation; sound, fauna and networking, the last three in parallel
-   sessions off the GPU: #267 sound, #268 networking, #269 flora and fauna.
+   sparks; D-064's step 1 built 2026-10-18, #271: emitters as data, the lab's smoke yard);
+   characters' animation; sound, fauna and networking, the last three in parallel sessions off
+   the GPU: #267 sound, #268 networking, #269 flora and fauna.
 4. **Then the first scenario:** zombies (melee); later a base to infiltrate, a solo fight.
 5. **Rendering:** RT-first; DLSS 4's features, a neural radiance cache, path tracing when the
    quality asks; no non-RT fallbacks for new work.

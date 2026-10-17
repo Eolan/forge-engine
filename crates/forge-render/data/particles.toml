@@ -1,0 +1,61 @@
+# The particle effects (D-064, #271), read by `forge_render::particles::effects`. One table an
+# effect, named by its key. Units: metres, seconds, m/s; colours are linear albedo (rgb) and
+# opacity (a), at birth and at death, mixed by age. Every particle's numbers come from its
+# emitter's seed and its index in the emitter's stream, so an effect is the same at any frame rate.
+#
+#   rate     particles a second (a burst's count when `burst` is set)
+#   life     a particle's life, the shortest and the longest
+#   radius   its drawn radius at birth and at death
+#   speed    its launch speed, the slowest and the fastest
+#   cone     degrees from the emitter's direction it is launched within
+#   spread   metres from the emitter's point it is born within (a disc across the direction)
+#   gravity  times g, downwards; negative rises (warm smoke)
+#   drag     1/s: how fast it takes the air's velocity
+#   wind     the share of the scene's wind the air it rides has
+#   curl     m/s and metres: turbulence, a divergence-free swirl of that speed and size
+#   colour   rgba at birth and at death
+#   draw     "smoke" (lit, alpha-blended puffs) or "glow" (unlit, added: embers, sparks)
+#   burst    a burst of `rate` particles when the emitter is triggered, not a stream
+
+[chimney-smoke]
+rate = 14.0
+life = [5.0, 7.5]
+radius = [0.25, 1.4]
+speed = [0.5, 0.9]
+cone = 12.0
+spread = 0.12
+gravity = -0.03
+drag = 0.8
+wind = 1.0
+curl = [0.25, 1.5]
+colour = [[0.32, 0.31, 0.30, 0.55], [0.55, 0.55, 0.56, 0.0]]
+draw = "smoke"
+
+[footstep-dust]
+rate = 16.0
+life = [0.9, 1.6]
+radius = [0.08, 0.45]
+speed = [0.3, 0.9]
+cone = 70.0
+spread = 0.1
+gravity = 0.05
+drag = 2.5
+wind = 1.0
+curl = [0.15, 0.4]
+colour = [[0.62, 0.55, 0.45, 0.7], [0.66, 0.6, 0.5, 0.0]]
+draw = "smoke"
+burst = true
+
+[embers]
+rate = 6.0
+life = [1.5, 3.0]
+radius = [0.03, 0.012]
+speed = [0.8, 1.8]
+cone = 20.0
+spread = 0.25
+gravity = -0.08
+drag = 0.6
+wind = 1.0
+curl = [0.4, 0.6]
+colour = [[6.0, 2.2, 0.5, 1.0], [2.4, 0.5, 0.1, 0.0]]
+draw = "glow"
