@@ -4795,10 +4795,13 @@ application of their patents just in case."
   0.14 ms in a room.
 - **A ray's hit takes its region's probes alone** (`probe_irradiance_hit`): no fallback to every
   probe, but no bounce in a house where none of them stands near, and the open sky outside; only
-  the shading keeps the fallback's second copy of the lookup. Run as a loop's second turn rather
-  than a second copy, the lookup was 0.06 ms cheaper but made the frame differ from run to run
-  with `region_at` before it (the physics lab's dominoes at frame 900, Tier 1's mesh-against-
-  fallback rule; either alone did not).
+  the shading keeps the fallback's second copy of the lookup.
+- **The lookup's cell is clamped into its grid before its read** (f7145b1), and a scene without
+  regions names a buffer of zeros: unclamped, the physics lab's dominoes at frame 900 differed
+  from run to run by 20–40 scattered pixels (Tier 2 caught it on both paths, async and serial),
+  though the lab has no regions and the lookup returns before its read there. The GPU read ahead
+  of the return, far outside the grid. A loop form of the fallback made it more frequent, and
+  was set aside for it at first.
 - **No count in the F1 overlay:** `--show-regions` shows where the lookup fell back (red), with
   each region's colour, the reveals green, the houses' bodies white and the outside black.
 - **The checks:**

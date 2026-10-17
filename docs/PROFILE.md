@@ -1409,9 +1409,7 @@ something stands out). Two things to watch:
       takes its hits for the outside's;
     - a second copy of the lookup, every probe's where the region's found none, about 0.1 ms
       in the rays: a ray's hit now takes its region's probes alone (no bounce in a house where
-      none stands near), and only the shading keeps the second copy. Run as a loop's second
-      turn instead, it was 0.06 ms cheaper still, but with `region_at` before it the frame
-      differed from run to run (the physics lab's dominoes, scattered pixels a few levels off);
+      none stands near), and only the shading keeps the second copy;
     - the room probes' rays through the windows' glass, 0.03 ms.
   - *2026-10-17, the lookup keeps the probes in front in room-sized cascades:* in a cascade of
     cells 1.5 m or finer, a probe in front of the surface is skipped only under 1 % of trilinear

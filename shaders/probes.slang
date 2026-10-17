@@ -159,6 +159,11 @@ public RegionHit region_at(ProbeField* field, float3 p)
     int2 dims = int2(field[0].region_dims);
     if (field[0].region_count == 0u || any(c < 0) || any(c >= dims))
         return hit;
+    // The cell clamped into the grid before the read. Unclamped, the lookup made the physics
+    // lab's frames differ from run to run (scattered pixels a few levels off), though with no
+    // regions it returns above: the GPU read ahead of the return, far outside the grid. A scene
+    // without regions names a buffer of zeros, one empty cell (`Probes::no_regions`), not null.
+    c = clamp(c, int2(0), max(dims - 1, int2(0)));
     uint2 range = field[0].region_cells[c.y * dims.x + c.x];
     for (uint i = 0u; i < range.y; i++)
     {
@@ -526,10 +531,7 @@ float3 probe_lookup<let MIRROR : int>(ProbeField* field, float3 p, float3 n, flo
 {
     RegionHit mask = region_at(field, p + g * 0.02);
     bool masked = field[0].region_count > 0u && mask.kind != REGION_SOLID;
-    // The region's probes, then every probe where they found none. Not as one lookup in a loop's
-    // two turns: with `region_at` before it, the loop made the frame differ from run to run on
-    // the RTX 5070 Ti (the physics lab's dominoes, scattered pixels a few levels off; the loop
-    // alone or `region_at` alone did not).
+    // The region's probes, then every probe where they found none.
     float4 e = cascades_lookup<MIRROR>(field, p, n, g, v, d, mask, masked, toward_d);
     if (masked && e.w <= 0.0)
         e = cascades_lookup<MIRROR>(field, p, n, g, v, d, mask, false, toward_d);

@@ -481,6 +481,10 @@ pub struct Probes {
     region: GraphBuffer,
     /// The scene's region volumes and the grid that finds them, when it knows its rooms.
     regions: Option<Regions>,
+    /// Zeros, what the field's region pointers name in a scene without regions: one empty cell, a
+    /// volume and an index, so the region lookup's reads stay in a buffer where the GPU reads
+    /// ahead of its early return (`region_at` in `probes.slang`).
+    no_regions: Buffer,
     fields: Vec<Buffer>,
     /// Per cascade, the origin of the last update.
     origins: [IVec3; MAX_CASCADES],
@@ -566,6 +570,14 @@ impl Probes {
             0,
             bytemuck::cast_slice(&vec![REGION_NONE; probes as usize]),
         )?;
+        let no_regions = device.create_buffer(BufferDesc {
+            size: 256,
+            usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+            location: MemoryLocation::GpuOnly,
+            category: MemoryCategory::Work,
+            name: "no probe regions",
+        })?;
+        device.write_buffer_staged(&no_regions, 0, &[0_u8; 256])?;
         let fields = (0..FRAMES_IN_FLIGHT)
             .map(|i| {
                 device.create_buffer(BufferDesc {
@@ -613,6 +625,7 @@ impl Probes {
             data: GraphBuffer::new(data),
             region: GraphBuffer::new(region),
             regions: None,
+            no_regions,
             fields,
             origins: [IVec3::ZERO; MAX_CASCADES],
             reset: true,
@@ -676,6 +689,7 @@ impl Probes {
             + self.rays.size()
             + self.data.size()
             + self.region.size()
+            + self.no_regions.size()
             + self
                 .regions
                 .as_ref()
@@ -756,6 +770,7 @@ impl Probes {
             let [w, h] = p.atlas_size(tile);
             [1.0 / w as f32, 1.0 / h as f32]
         };
+        let empty = self.no_regions.address();
         let field = GpuProbeField {
             rotation: [row(0), row(1), row(2)],
             cascades,
@@ -776,13 +791,13 @@ impl Probes {
             cadence: p.cadence,
             phase: (noise_frame % u64::from(p.cadence)) as u32,
             probe_region: self.region.address(),
-            region_volumes: self.regions.as_ref().map_or(0, |r| r.volumes.address()),
-            region_cells: self.regions.as_ref().map_or(0, |r| r.cells.address()),
-            region_indices: self.regions.as_ref().map_or(0, |r| r.indices.address()),
+            region_volumes: self.regions.as_ref().map_or(empty, |r| r.volumes.address()),
+            region_cells: self.regions.as_ref().map_or(empty, |r| r.cells.address()),
+            region_indices: self.regions.as_ref().map_or(empty, |r| r.indices.address()),
             region_origin: self.regions.as_ref().map_or([0.0; 2], |r| r.origin),
             region_cell: REGION_CELL,
             region_count: self.regions.as_ref().map_or(0, |r| r.count),
-            region_dims: self.regions.as_ref().map_or([0; 2], |r| r.dims),
+            region_dims: self.regions.as_ref().map_or([1; 2], |r| r.dims),
             region_pad: [0; 2],
         };
         self.fields[slot.index].write(0, &[field]);
