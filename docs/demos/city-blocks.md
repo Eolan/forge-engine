@@ -69,7 +69,9 @@ Options:
   (**P** toggles them), `--show-gi` shows that light alone on white surfaces (**U**),
   `--probe-rays N` sets the rays per probe (128), `--probe-cascades N` the cascades (5) and
   `--probe-cadence N` how many frames a settled probe waits between updates (1 since
-  2026-10-16; 2 from #103 until then, see below).
+  2026-10-16; 2 from #103 until then, see below). In a scene that knows its rooms (the
+  village's houses, D-068), `--show-regions` tints each surface by the region whose probes
+  light it, red where it fell back to every probe.
 - `--no-reflections` draws without the sky's reflection (**F** toggles it).
 - `--no-ray-reflections` reflects only the sky in the glass and the water (**Y** toggles the mirror rays).
 - `--no-reflection-history` leaves the glass's mirror rays to TAA alone, without their history (#176).

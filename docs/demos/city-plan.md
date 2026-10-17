@@ -775,6 +775,30 @@ mesh to test navigations inside the houses"):
   lowered only where the kept probes were mostly behind the surface cost as much and missed the
   band down a corner. The leaks left (a partition's tinted blotch, a lit cap in a window head's
   reveal) are D-068's question (`research/probe-leaks-indoors.md`).
+- *Probe regions* (D-068, `probe_regions`). The houses whose insides are drawn give the probes
+  their rooms, about 1 350 volumes:
+  - each room and the hall (its stair well included) a region of its own;
+  - each doorway, along which one side's probes give way to the other's;
+  - each window's inner reveal, from just behind the glass to the room, its room's;
+  - each house's body round them, lit by every probe as before.
+
+  A probe takes the region it stands in while young; a surface the region 2 cm in front of it,
+  and only that region's probes light it, every probe where none of them stands among the eight.
+  The partition's blotch and the window head's cap are gone (rooms 33-0 and 0-1, 0-0).
+
+  With regions, an upstairs room seen through the landing's doorway went black. Its probes saw
+  nothing through its window: the glass is drawn from outside only, and a probe's ray that met it
+  from behind ended there, so the rooms had only ever taken their daylight from their doors and
+  from the light that leaked in. A room's probe's ray now passes a window's glass met from
+  behind (`glazed` rows: a home's, a shop's, a bathroom's frosted glass), and the rooms are
+  lit by their windows, brighter than before (the owner: "I would expect the inside to be a bit
+  brighter").
+
+  A probe outside every house lights what its rays meet as the outside's, without the lookup
+  (most probes, the coarse cascades' too). `--show-regions` tints each surface by the region
+  that lights it: green in a reveal, white in a house's body, black outside, red where it fell
+  back to every probe. It costs 0.17–0.21 ms a frame (the room 3.67 → 3.85 ms, the hall 4.05 →
+  4.26, the green 4.40 → 4.57, the landing 4.19 → 4.39), the city 0.04 (`docs/PROFILE.md`).
 - *Rooms on the outside walls* (`rooms::rebalance`). The anomalies' 20 unlit rooms were the
   middles of row houses one room wide (6 m lots, 12 m deep): a storey of three bedrooms one
   behind the other under a storey of an office and a bathroom 8.8 m deep. A middle band of

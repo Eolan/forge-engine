@@ -4763,3 +4763,54 @@ application of their patents just in case."
     per surface compared for equality, with no per-probe zones, masks or bitwise test.
   - STMicroelectronics' claims all reuse one image's mini-image on a second image; D-067's grid
     is built and read within one frame.
+
+**Built** (2026-10-17, #266). As proposed, with the changes found on the way below.
+- **Code:** `probe_regions` in `demos/city-plan/src/lib.rs` (the volumes, from the houses whose
+  insides are drawn), `Probes::set_regions` and `region_at` in `crates/forge-render/src/probes.rs`
+  (the GPU's lists and the lookup's CPU mirror), `region_at`, `cascade_irradiance` and
+  `probe_lookup` in `shaders/probes.slang`, the region's write in `probe_update.slang`.
+- **The volumes:** a room and the hall (its stair well included) per region; a doorway from one
+  side's region to the other's, its ramp across the partition's thickness; a window's inner
+  reveal, from 6 cm before the glass (its outer face stays outside's) to the room, its room's; a
+  house's footprint, last, lit by every probe as before. About 1 350 in the village, in a grid
+  of 2 m cells (6 a cell on average, 17 at most).
+- **Windows let the daylight in.** With regions, an upstairs room seen through the landing's
+  doorway went black. A window's glass is drawn from outside only, and a probe's ray that met it
+  from behind ended there: the rooms had only ever had their doors' light and what leaked in. A
+  room's probe's ray now passes the glass of a glazed row (`RenderLayer::glazed`, implied by
+  `interior`: a home's, a shop's, a bathroom's frosted glass) met from behind. Only a room's
+  probe: in a house without insides (a hollow shell) the ray still ends there.
+- **A probe outside every house** (most probes, the coarse cascades' too) lights what its rays
+  meet as the outside's, without the lookup. The lookup at every ray's hit cost the rays
+  0.14 ms in a room.
+- **A ray's hit takes its region's probes alone** (`probe_irradiance_hit`): no fallback to every
+  probe, but no bounce in a house where none of them stands near, and the open sky outside; only
+  the shading keeps the fallback's second copy of the lookup. Run as a loop's second turn rather
+  than a second copy, the lookup was 0.06 ms cheaper but made the frame differ from run to run
+  with `region_at` before it (the physics lab's dominoes at frame 900, Tier 1's mesh-against-
+  fallback rule; either alone did not).
+- **No count in the F1 overlay:** `--show-regions` shows where the lookup fell back (red), with
+  each region's colour, the reveals green, the houses' bodies white and the outside black.
+- **The checks:**
+  - unit tests of `region_at` (rooms, a doorway's ramp either way round, a reveal, the body,
+    outside), of the grid against the plain lookup, and on the village (every room's middle, every
+    reveal and doorway: 408 rooms and halls, 472 reveals, 466 doorways);
+  - the leaks gone in the rooms that showed them (33-0's blotch, 0-1's band, 0-0's cap), the map
+    check's room (a window head from inside) and landing (a doorway) standing for the three new
+    views;
+  - timings (the map check's views at its hour, 240 frames, best of three, c963e68 against D-068):
+    the room 3.67 → 3.85 ms, the hall 4.05 → 4.26, the green 4.40 → 4.57, the landing 4.19 →
+    4.39, nearly all in `gi/probe rays` (+0.14 to +0.18) and `shading/standard` (0 to +0.03);
+    the city (no regions) 3.02 → 3.07 ms. The first build cost the room 0.28 ms: 0.14 ms the
+    lookup at every ray's hit (skipped now for a probe outside), 0.03 ms the rays through the
+    glass, about 0.1 ms a second copy of the lookup for the fallback, which a ray's hit now does
+    without;
+  - a still camera under `--dlaa` (frames 10 apart from 200): the room 398–674 changed pixels
+    of 1.44 million (341–642 before), the hall 113–253 (125–248), the landing 11–26 (3 000–41 000:
+    it had not settled), room 33-0 967–1 545 (745–1 029), all of them in the trees seen through
+    its window;
+  - the map check, re-accepted: the rooms and the landing lit by their windows (ꟻLIP mean 0.31 and
+    0.28 against the old set), the streets within 0.023.
+- **Not done:** `tools/amd-check.sh` (it draws no probe regions).
+- **Its effect:** the rooms are lit by their windows, brighter than before (the owner asked for
+  it: "I would expect the inside to be a bit brighter").

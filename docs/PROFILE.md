@@ -1392,6 +1392,27 @@ something stands out). Two things to watch:
     The village's leaf cards (#266) gained most: `meshlet pass 1` 1.80 → 1.19 ms from the air
     and 1.11 → 0.53 ms along the road, the images unchanged to the pixel. The batch is
     unchanged too (240 captures, both paths), and its timings move by under 0.04 ms.
+  - *2026-10-17, the probes' regions (D-068):* a surface in a house is lit by its room's probes
+    only, and a room's probes see out through its windows. The map check's views at its hour,
+    240 frames, best of three, c963e68 against D-068:
+
+    | View | Before | After | `gi/probe rays` | `shading/standard` |
+    |---|---|---|---|---|
+    | the room | 3.67 ms | 3.85 ms | 1.83 → 2.00 | 0.36 → 0.38 |
+    | the hall | 4.05 ms | 4.26 ms | 2.02 → 2.18 | 0.37 → 0.38 |
+    | the green | 4.40 ms | 4.57 ms | 2.39 → 2.53 | 0.50 → 0.53 |
+    | the landing | 4.19 ms | 4.39 ms | 2.31 → 2.49 | 0.37 → 0.37 |
+
+    The city has no regions: its default view 3.02 → 3.07 ms (`gi/probe rays` 0.80 → 0.81,
+    `shading/standard` 0.45 → 0.42), best of three. The first build cost the room 0.28 ms:
+    - the region's lookup at every probe ray's hit, 0.14 ms: a probe outside every house now
+      takes its hits for the outside's;
+    - a second copy of the lookup, every probe's where the region's found none, about 0.1 ms
+      in the rays: a ray's hit now takes its region's probes alone (no bounce in a house where
+      none stands near), and only the shading keeps the second copy. Run as a loop's second
+      turn instead, it was 0.06 ms cheaper still, but with `region_at` before it the frame
+      differed from run to run (the physics lab's dominoes, scattered pixels a few levels off);
+    - the room probes' rays through the windows' glass, 0.03 ms.
   - *2026-10-17, the lookup keeps the probes in front in room-sized cascades:* in a cascade of
     cells 1.5 m or finer, a probe in front of the surface is skipped only under 1 % of trilinear
     weight (#70's 5 % elsewhere). DLAA, 600 frames, best of three, the old lookup against the new
