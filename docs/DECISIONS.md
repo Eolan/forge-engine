@@ -4592,3 +4592,51 @@ unmatched sockets as three new kinds in `city::anomalies`; generation through it
 (rows of one depth, a 12 m depth cap, party walls on the lot lines, the interiors fitting slanted
 walls). `demos/city-plan.md`, "Sockets and rows", has the numbers. Next: the kit's modules' and
 the roofs' sockets, the garden walls' join pass, the pavements and roads.
+
+## D-067 — Local exposure: a bilateral grid of log luminance, built and used in one frame 🟡 (proposed 2026-10-17, #275)
+
+**The question:** the owner, walking into a village house: "light outside is very strong, I would
+expect the inside to be a bit brighter, maybe it's a fix in your roadmap later ?". D-022 meters
+one exposure for the frame, keyed on the log-average of its 50th to 98th percentiles, so a sunlit
+doorway in view sets it and the hall falls stops under middle grey. Research:
+`research/local-exposure.md`.
+
+**Proposed** (`research/local-exposure.md`, "Recommendation for Forge"):
+1. **A local exposure before the display transform.** The resolved HDR image (TAA's or DLAA's)
+   is splatted into a 64 × 36 × 64 bilateral grid of log luminance, blurred, and blended 60/40
+   with a wide Gaussian of the cells' means (Ghost of Tsushima's, Patry 2021). Each pixel reads
+   its base luminance B at its own luminance and takes the gain
+   `2^((c − 1)(B − M))`: c = 0.7 under middle grey M, 0.85 over it, clamped to +3 EV and −2 EV,
+   and none in near-black.
+2. **Passes:** `post/local exposure grid` and `post/local exposure blur` (compute), and the read in
+   the display pass. The histogram, TAA, DLSS and bloom stay as they are. Estimated 0.04–0.08 ms
+   at 1600 × 900 and 2.4 MB, to be measured (budget 0.1 ms).
+3. **Off by default until the owner has seen it**, then on in the village and the city.
+   - Controls: `--local-exposure`, `--local-exposure-contrast S,H`, a key, a line in the F1
+     overlay, and a false-colour view of the gain.
+4. **Checks:**
+   - CPU unit tests of the read and the gain;
+   - the map check's hall views, plus a new view looking at the open front door from the hall;
+   - halos with ꟻLIP against the global-exposure frame in bands along the door's edge;
+   - gradient reversal on a sky view;
+   - flicker on a still camera under DLAA and on the way-in walk;
+   - the cost in the F1 zones;
+   - one AMD check.
+5. **Left for later:** exposure fusion (the alternative if the grid rings), detail strength other
+   than 1, contrast by EV100, any temporal filtering of the grid.
+
+**Patents** (`research/local-exposure.md` §6; not a professional search):
+- **Expired:** the foundational patents. MIT's US 7,146,059 B1 (Durand and Dorsey) and the
+  NXP-line bilateral-grid family lapsed for fees.
+- **Nearest live one:** STMicroelectronics' US 11,756,172 B2 (active to 2041), which claims
+  modifying a later frame with a low-resolution log-luminance image of an earlier one. Forge
+  builds and uses its grid in the same frame and keeps no grid history.
+- **Other live ones:** camera pipelines with per-region tone curves (Apple, Texas Instruments),
+  GoPro's sensor chain, Irystec's analytic contrast-distortion curve and Dolby's multiscale ratios.
+  None of them is the proposed method.
+
+**For the owner to decide:**
+- the method and its defaults;
+- whether STMicroelectronics' patent's reach is acceptable with the grid kept within one frame;
+- whether to build it now or after the lamps of D-065, which change how bright the halls are by
+  themselves.
