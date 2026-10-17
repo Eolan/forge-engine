@@ -11,6 +11,8 @@
 # is removed): the shaders compile and the meshes cook as on a first start, and the island's
 # products wait where they were. The machine is shared: compare the best of three, and a base
 # build's runs taken in turn with the change's. The runs' logs stay in captures/load-time/<time>/.
+# The owner's settings file (forge.cfg, D-069) never changes a scripted run.
+export FORGE_CFG=none
 set -uo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 runs=3

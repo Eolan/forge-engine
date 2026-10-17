@@ -75,6 +75,8 @@ use world::world;
 #[derive(Parser, Debug, Clone)]
 #[command(about = "City blocks: the prop gallery")]
 pub struct Args {
+    #[command(flatten)]
+    settings: forge_app::SettingsArgs,
     /// Vertical sync.
     #[arg(long)]
     vsync: bool,
@@ -5978,6 +5980,7 @@ pub fn run_making(
     ));
     let config = AppConfig {
         title: title.into(),
+        settings: args.settings.clone(),
         vsync: args.vsync,
         validate: args.validate,
         frame_limit: args.frames,

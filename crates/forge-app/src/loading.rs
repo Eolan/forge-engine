@@ -262,6 +262,8 @@ impl<D: Demo + Send> Stage<D> {
                     *self = Self::Failed(Some(error));
                     return;
                 }
+                // Its console variables, on the main thread now that it exists (D-069).
+                demo.register(ctx);
                 Self::Running(demo)
             }
             Err(error) => Self::Failed(Some(error)),
@@ -346,6 +348,18 @@ impl<D: Demo + Send> Demo for Stage<D> {
     fn title(&mut self, ctx: &Context) -> Option<String> {
         match self {
             Self::Running(demo) => demo.title(ctx),
+            _ => None,
+        }
+    }
+
+    fn command(
+        &mut self,
+        ctx: &mut Context,
+        name: &str,
+        args: &[String],
+    ) -> Option<std::result::Result<String, String>> {
+        match self {
+            Self::Running(demo) => demo.command(ctx, name, args),
             _ => None,
         }
     }

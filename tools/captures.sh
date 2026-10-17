@@ -26,6 +26,8 @@
 #                follow their code, #208). The first run of each scene that cooks (the city, the
 #                gallery, the island on its 2 m and 8 m grounds) gets `--recook`.
 # OUT/batch.txt records the commit, the sets, the paths, the driver and the binaries' hashes.
+# The owner's settings file (forge.cfg, D-069) never changes a scripted run.
+export FORGE_CFG=none
 set -uo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 out=${1:?usage: tools/captures.sh OUT [BIN]}

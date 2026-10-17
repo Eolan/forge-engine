@@ -41,6 +41,8 @@ use winit::keyboard::KeyCode;
 #[derive(Parser, Debug, Clone)]
 #[command(about = "The asteroid ballad")]
 struct Args {
+    #[command(flatten)]
+    settings: forge_app::SettingsArgs,
     /// Draw without the sun's ray-traced shadows between the rocks (J toggles them).
     #[arg(long)]
     no_shadows: bool,
@@ -1666,6 +1668,7 @@ fn main() -> Result<()> {
     let args = Args::parse();
     let config = AppConfig {
         title: "forge asteroids".into(),
+        settings: args.settings.clone(),
         vsync: args.vsync,
         validate: args.validate,
         frame_limit: args.frames,

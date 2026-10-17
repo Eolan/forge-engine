@@ -4845,7 +4845,7 @@ application of their patents just in case."
 - **Its effect:** the rooms are lit by their windows, brighter than before (the owner asked for
   it: "I would expect the inside to be a bit brighter").
 
-## D-069 — One set of engine settings for every demo, defaults at the best look, and a console on ² 🟡 (proposed 2026-10-17, #278, the owner's request)
+## D-069 — One set of engine settings for every demo, defaults at the best look, and a console on ² ✅ (proposed 2026-10-17, #278, the owner's request; the owner's go the same day)
 
 **The question:** the owner asked, on 2026-10-17:
 
@@ -4926,16 +4926,39 @@ application of their patents just in case."
   - named with `--expect` where a default changed, with their ꟻLIP numbers.
 - The console's cost in the F1 overlay: nothing while closed.
 
-**Open for the owner:**
-- Dotted names (`r.aa`) or today's style (`--no-taa`)?
-- Should console changes be saved to `forge.cfg` between runs?
-- Should the console exist in release builds of a game, or in development builds only?
+**The owner's answers (2026-10-17), with the go:**
+- **Names:** dotted, "so that it's easier to use auto completion and find instruction by
+  hierarchy".
+- **Persistence:** console changes are temporary: "don't persist changes for now". `forge.cfg`
+  is a file the owner or Claude edits by hand. Some commands may become saved later.
+- **Release builds:** the console stays, "in a very limited scope to prevent cheating".
+  - It may show information only: frame time and stats, as Star Citizen's `r_displayInfo` does
+    (0 off, 1 on, 2 verbose), and the build's version in the console itself.
+  - Nothing that gives an advantage. Every other variable and command is for development builds
+    only.
+- **Patents:** none to search for this.
 
-**Patents:** consoles, variables and Tab completion are 1990s practice: Quake's console (1996)
-and Unix shells' completion before it. None has been searched yet; the research note will check.
+**Research:** `research/dev-console.md` (2026-10-17, done): id Tech, Source, Unreal, CryEngine,
+O3DE and the Rust crates; completion and history; release builds; winit's text input. What it
+changed in the build: Tab steps through the candidates once their common part cannot grow; the
+scripts never read the owner's `forge.cfg`; a misspelled `--set` fails a scripted run; names are
+case-insensitive; `changed`, `toggle` and `NAME ?`. What it advises for a shipped game, later:
+development settings and the code that would help a player compiled out rather than hidden, and
+"information" kept to the machine, the build and the session (`docs/demos/console.md`).
 
-**Research to do:** `research/dev-console.md`, covering:
-- id Tech, Source, Unreal, CryEngine, O3DE and Bevy's console crates: variables, persistence,
-  completion and cheats;
-- text input with winit: ² is a plain key on AZERTY, while `^` is a dead key, and IME;
-- the overlay's text drawing for a scrolling log.
+**Built so far (step 1 and the console, 2026-10-17):**
+- `forge_app::settings`: the registry (typed variables with dotted names, ranges, help, the
+  release, restart and read-only flags, commands), `forge.cfg`, `--set`, `--cfg`, `--no-cfg`
+  and `--exec` in every demo (`SettingsArgs`, flattened into each demo's arguments).
+- `forge_app::console`: the console on the key under Esc, drawn with the overlay's text: Tab
+  completion and cycling, the live list of what fits, the history kept between runs, `help`,
+  `find`, `list`, `changed`, `reset`, `toggle`, `version`, `clear`.
+- The shell's own: `r.display_info` (0, 1, 2) drives the F1 overlay, `app.console` shows the
+  console, `app.capture` and `app.quit`; demos register theirs in `Demo::register` and run their
+  commands in `Demo::command`.
+- `shipping` (a forge-app feature) keeps only the release settings.
+- Tests: 35 in forge-app (parsing, ranges, the order of the sources, completion and cycling,
+  the file). Captures unchanged (Tier 0: every image as accepted but #277's dominoes).
+- **Next:** the demos' shared settings into the registry, with one name and one default each,
+  which the systems register themselves (the registry moves to `forge-core` so that
+  `forge-render` can), then the backports.

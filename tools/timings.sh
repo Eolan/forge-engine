@@ -14,6 +14,8 @@
 #
 # FORGE_SETS (issue #134): the views to time, separated by spaces or commas (default all):
 # city, island, meshlets, ballad, sentinels (the city, meshlets and the ballad at 900p), all.
+# The owner's settings file (forge.cfg, D-069) never changes a scripted run.
+export FORGE_CFG=none
 set -uo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 base=${1:?usage: tools/timings.sh BASE_BIN [NEW_BIN] [ZONES]}

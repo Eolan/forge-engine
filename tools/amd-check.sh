@@ -12,6 +12,8 @@
 # iGPU. Look at that run's log before running anything else on the iGPU. It prints, per demo:
 # whether reruns are identical and the mesh path matches the fallback (0 pixels both), and the
 # validation messages.
+# The owner's settings file (forge.cfg, D-069) never changes a scripted run.
+export FORGE_CFG=none
 set -uo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"

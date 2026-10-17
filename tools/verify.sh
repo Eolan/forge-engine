@@ -41,6 +41,8 @@
 # The GPU is shared: every demo run waits for the lock directory FORGE_GPU_LOCK (default
 # %TEMP%/forge-gpu.lock), holds it and removes it when done. The runs and their logs stay in
 # captures/verify/<time>-<sha>/.
+# The owner's settings file (forge.cfg, D-069) never changes a scripted run.
+export FORGE_CFG=none
 set -uo pipefail
 here=$PWD
 root=$(cd "$(dirname "$0")/.." && pwd)

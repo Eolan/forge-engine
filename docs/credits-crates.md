@@ -63,7 +63,7 @@ Where Forge uses them:
 - `bytemuck`: city-plan, forge-app, forge-core, forge-geom, forge-gpu, forge-render, planet
 - `bytes`: forge-net
 - `cc`: forge-physics
-- `clap`: asteroids, city-blocks, city-map, city-plan, contact-sheet, credits, genesis, imgdiff, meshlets, physics-lab, planet, population-bench, sharpness, task-bench
+- `clap`: asteroids, city-blocks, city-map, city-plan, contact-sheet, credits, forge-app, genesis, imgdiff, meshlets, physics-lab, planet, population-bench, sharpness, task-bench
 - `core_affinity`: forge-task
 - `cpal`: forge-audio
 - `crossbeam-channel`: forge-task

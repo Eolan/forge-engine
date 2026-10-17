@@ -968,6 +968,7 @@ dependencies = [
  "ab_glyph",
  "anyhow",
  "bytemuck",
+ "clap",
  "forge-core",
  "forge-gpu",
  "forge-task",

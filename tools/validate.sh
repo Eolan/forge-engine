@@ -16,6 +16,8 @@
 # and the island demo), lab (the physics lab), sentinels (the ballad, meshlets and the city's
 # first run), all.
 # FORGE_PATHS: mesh and fb (default both).
+# The owner's settings file (forge.cfg, D-069) never changes a scripted run.
+export FORGE_CFG=none
 set -uo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 bin=${1:-$root/target/release}

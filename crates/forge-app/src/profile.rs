@@ -191,6 +191,19 @@ impl Profile {
         self.mode != OverlayMode::Off
     }
 
+    /// What the overlay shows.
+    pub fn mode(&self) -> OverlayMode {
+        self.mode
+    }
+
+    /// Shows `mode` (`r.display_info`: 0 off, 1 compact, 2 full), its groups as they start.
+    pub fn set_mode(&mut self, mode: OverlayMode) {
+        if mode != self.mode {
+            self.mode = mode;
+            self.toggled.clear();
+        }
+    }
+
     /// Off → compact → full → off.
     pub fn cycle_mode(&mut self) {
         self.mode = match self.mode {

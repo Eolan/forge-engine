@@ -40,3 +40,6 @@ config/server-identity/
 *.swp
 .DS_Store
 Thumbs.db
+
+# The owner's settings file (D-069): edited by hand, read at start, never committed.
+/forge.cfg

@@ -93,6 +93,16 @@ impl Canvas {
         self.rows
     }
 
+    /// Empties a rectangle (clipped to the canvas): no glyph, no background, as what was drawn
+    /// under it is covered (the console over the profile).
+    pub fn clear(&mut self, col: usize, row: usize, width: usize, height: usize) {
+        for r in row..(row + height).min(self.rows) {
+            for c in col..(col + width).min(self.cols) {
+                self.cells[r * self.cols + c] = 0;
+            }
+        }
+    }
+
     /// Sets the background of a rectangle (clipped to the canvas).
     pub fn panel(&mut self, col: usize, row: usize, width: usize, height: usize, bg: Color) {
         for r in row..(row + height).min(self.rows) {

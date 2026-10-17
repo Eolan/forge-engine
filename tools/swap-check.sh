@@ -11,6 +11,8 @@
 # too (swap-NNN-next.png, in the same phase of TAA's jitter as the frame before), the line adds
 # how far that frame jumps from the one before: what the eye sees pop, where the settled
 # difference may have come in over many frames.
+# The owner's settings file (forge.cfg, D-069) never changes a scripted run.
+export FORGE_CFG=none
 set -euo pipefail
 dir=${1:?usage: tools/swap-check.sh DIR}
 root=$(cd "$(dirname "$0")/.." && pwd)

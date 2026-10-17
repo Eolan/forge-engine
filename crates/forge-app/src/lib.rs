@@ -11,12 +11,14 @@
 
 mod calibration;
 mod camera;
+pub mod console;
 mod content_light;
 mod hdr;
 mod input;
 mod loading;
 mod overlay;
 mod profile;
+pub mod settings;
 mod ssaa;
 
 use std::path::PathBuf;
@@ -49,6 +51,7 @@ pub use loading::Finish;
 pub use overlay::{Canvas, Color, Overlay};
 pub use profile::{MemorySample, OverlayMode, Profile};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+pub use settings::{Settings, SettingsArgs, Spec, Var};
 use winit::application::ApplicationHandler;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent};
@@ -103,6 +106,9 @@ pub struct AppConfig {
     /// and height ([`Context::extent`]) and the shell filters the frame down. Not with the
     /// off-screen HDR mode.
     pub ssaa: bool,
+    /// The settings given at start (D-069): `--set NAME=VALUE` and the settings file, applied
+    /// to [`Context::settings`] as each variable registers.
+    pub settings: SettingsArgs,
 }
 
 impl Default for AppConfig {
@@ -124,6 +130,7 @@ impl Default for AppConfig {
             hdr_stops: 0.0,
             hdr_ui_white: None,
             ssaa: false,
+            settings: SettingsArgs::default(),
         }
     }
 }
@@ -157,6 +164,9 @@ pub struct Context {
     /// screen shows, and its frames do not count (`frames_rendered`, captures, the frame limit,
     /// the profile, the memory counters).
     pub loading: bool,
+    /// The console variables and commands (D-069): the shell's (`r.display_info`, `app.`), the
+    /// renderer's and the demo's, registered in [`Demo::register`] and read every frame.
+    pub settings: Settings,
     /// The frame's size over the window's, each way: 1, or [`ssaa::FACTOR`] when supersampling.
     ssaa: u32,
     /// The first frame (in the frame slots' numbering) the demo recorded after the loading
@@ -259,6 +269,22 @@ pub trait Demo: Sized + 'static {
 
     /// Statistics line for the window title, polled four times per second.
     fn title(&mut self, _ctx: &Context) -> Option<String> {
+        None
+    }
+
+    /// Registers the demo's console variables and commands into [`Context::settings`]
+    /// (D-069), once, on the main thread before its first frame (after the loading screen for
+    /// [`run_loading`]).
+    fn register(&mut self, _ctx: &mut Context) {}
+
+    /// Runs a console command the demo registered: what to print, or why it failed. `None`
+    /// when the command is not the demo's.
+    fn command(
+        &mut self,
+        _ctx: &mut Context,
+        _name: &str,
+        _args: &[String],
+    ) -> Option<std::result::Result<String, String>> {
         None
     }
 }
@@ -505,6 +531,15 @@ struct State<D: Demo> {
     /// The first sample (the first frame, after the demo's start-up uploads): the exit log
     /// averages the traffic over the run from it.
     memory_start: Option<MemoryMark>,
+    /// The developer console (D-069) and the modifier keys it reads (Ctrl).
+    console: console::Console,
+    modifiers: winit::keyboard::ModifiersState,
+    /// `r.display_info`: what the profiling overlay shows (0 off, 1 compact, 2 full; F1).
+    display_info: Var<i64>,
+    /// `app.console`: whether the console shows (the key under Esc).
+    console_shown: Var<bool>,
+    /// The overrides naming no variable were reported (once, after the demo registered its).
+    unmatched_reported: bool,
     #[cfg(feature = "profiling")]
     tracy_gpu: Option<tracy_client::GpuContext>,
 }
@@ -623,6 +658,29 @@ impl<D: Demo> State<D> {
     }
 
     /// A key on the open calibration pages (`fine`: Shift is down).
+    /// Runs a console command (D-069): the shell's own (`app.`), else the demo's. Returns
+    /// whether the window should close.
+    fn run_command(&mut self, name: &str, args: &[String]) -> bool {
+        match name {
+            "app.quit" => return true,
+            "app.capture" => {
+                let path = PathBuf::from(args.first().map_or("capture.png", String::as_str));
+                self.console.print(
+                    format!("saving the next frame to {}", path.display()),
+                    Color::Green,
+                );
+                self.ctx.capture_request = Some(path);
+            }
+            _ => match self.demo.command(&mut self.ctx, name, args) {
+                Some(result) => self.console.report(result),
+                None => self
+                    .console
+                    .print(format!("{name}: nothing runs it in this demo"), Color::Red),
+            },
+        }
+        false
+    }
+
     fn calibration_key(&mut self, code: KeyCode, fine: bool) -> Result<()> {
         let peak = self.ctx.output.peak;
         let action = self.hdr.calibration.key(code, fine, &mut self.ctx.output);
@@ -770,6 +828,54 @@ impl<D: Demo> State<D> {
             _ => OverlayMode::Off,
         };
         let graph = RenderGraph::new(&device);
+        // The settings (D-069): the file, then the command line, applied as each variable
+        // registers; the shell's own first.
+        let mut settings = Settings::new();
+        if let Some(cfg) = config.settings.cfg_path() {
+            match settings.load_file(&cfg) {
+                Ok(0) => {}
+                Ok(n) => tracing::info!(path = %cfg.display(), lines = n, "settings file read"),
+                Err(e) => tracing::warn!("settings file: {e}"),
+            }
+        }
+        for assignment in &config.settings.set {
+            match settings::split_assignment(assignment) {
+                Some((name, value)) => {
+                    if let Err(e) = settings.set_text(name, value, settings::Source::CommandLine) {
+                        tracing::warn!("--set {assignment}: {e}");
+                    }
+                }
+                None => tracing::warn!("--set {assignment}: not NAME=VALUE"),
+            }
+        }
+        let display_info = settings.add(
+            Spec::int(
+                "r.display_info",
+                match overlay_mode {
+                    OverlayMode::Off => 0,
+                    OverlayMode::Compact => 1,
+                    OverlayMode::Full => 2,
+                },
+                0..=2,
+                "Frame times and statistics: 0 off, 1 on, 2 on (verbose). F1 steps through them.",
+            )
+            .release(),
+        );
+        let console_shown = settings.add(
+            Spec::bool(
+                "app.console",
+                false,
+                "The console, over the top of the window; the key under Esc toggles it.",
+            )
+            .release(),
+        );
+        settings.add_command(
+            "app.capture",
+            "[PATH]",
+            "Saves the next frame as a PNG (capture.png by default).",
+            false,
+        );
+        settings.add_command("app.quit", "", "Closes the window, as Escape does.", true);
         let mut ctx = Context {
             device,
             swapchain,
@@ -782,6 +888,7 @@ impl<D: Demo> State<D> {
             graph,
             capture_request: None,
             loading: false,
+            settings,
             ssaa: 1,
             counted_from: 0,
             _surface: surface,
@@ -825,8 +932,22 @@ impl<D: Demo> State<D> {
                 None => tracing::warn!("FORGE_HDR_CALIBRATION: peak, black or white"),
             }
         }
-        let demo = init(&mut ctx)?;
+        let mut demo = init(&mut ctx)?;
+        demo.register(&mut ctx);
+        // The history is kept between interactive runs only: scripted ones never open it.
+        let console = console::Console::new(
+            config
+                .frame_limit
+                .is_none()
+                .then(console::history_path)
+                .flatten(),
+        );
         Ok(Self {
+            console,
+            modifiers: winit::keyboard::ModifiersState::default(),
+            display_info,
+            console_shown,
+            unmatched_reported: false,
             demo,
             ctx,
             hdr,
@@ -947,6 +1068,56 @@ impl<D: Demo> State<D> {
             g.heap_rebuilds,
             g.pending_destructions
         ));
+        // `r.display_info` (D-069) is what the overlay shows; F1 and the console both set it.
+        let wanted = match self.ctx.settings.get(self.display_info) {
+            0 => OverlayMode::Off,
+            1 => OverlayMode::Compact,
+            _ => OverlayMode::Full,
+        };
+        self.ctx.profile.set_mode(wanted);
+        if !self.unmatched_reported && !self.ctx.loading {
+            self.unmatched_reported = true;
+            let unmatched: Vec<(String, settings::Source)> = self
+                .ctx
+                .settings
+                .unmatched()
+                .map(|(name, source)| (name.to_owned(), source))
+                .collect();
+            for (name, source) in &unmatched {
+                let text = format!(
+                    "{name} ({}): no such setting (the console's `find` lists them)",
+                    source.describe()
+                );
+                tracing::warn!("{text}");
+                self.console.print(text, Color::Red);
+            }
+            // A scripted run fails on a misspelled `--set`, rather than capture the wrong thing.
+            if self.config.frame_limit.is_some()
+                && let Some((name, _)) = unmatched
+                    .iter()
+                    .find(|(_, s)| *s == settings::Source::CommandLine)
+            {
+                anyhow::bail!("--set {name}: no such setting in this demo");
+            }
+            // `--exec`: console lines run once the demo is ready, as if typed.
+            for line in self.config.settings.exec.clone() {
+                self.console.print(format!("> {line}"), Color::Dim);
+                if let Some(console::Request::Command { name, args }) =
+                    self.console.run(&line, &mut self.ctx.settings)
+                    && self.run_command(&name, &args)
+                {
+                    // `app.quit`: this frame is the last.
+                    self.config.frame_limit = Some(self.ctx.frames_rendered);
+                }
+            }
+        }
+        let shown = self.ctx.settings.get(self.console_shown) && !self.ctx.loading;
+        if shown != self.console.is_open() {
+            self.console.set_open(shown);
+            if shown {
+                self.input.release_all();
+            }
+        }
         let was_loading = self.ctx.loading;
         let update_start = Instant::now();
         {
@@ -1208,7 +1379,9 @@ impl<D: Demo> State<D> {
                     &self.ctx.output,
                 );
             }
-            if calibrating || (self.ctx.profile.is_visible() && !self.ctx.loading) {
+            let profiling = self.ctx.profile.is_visible() && !self.ctx.loading;
+            let console = self.console.is_open() && !self.ctx.loading;
+            if calibrating || profiling || console {
                 if !calibrating && self.ctx.output.is_hdr() {
                     self.ctx.profile.counter(self.ctx.output.describe());
                 }
@@ -1217,7 +1390,13 @@ impl<D: Demo> State<D> {
                 if calibrating {
                     self.hdr.calibration.layout(canvas, &self.ctx.output);
                 } else {
-                    self.ctx.profile.layout(canvas, &title, extent);
+                    if profiling {
+                        self.ctx.profile.layout(canvas, &title, extent);
+                    }
+                    // The console over the profile's top (D-069).
+                    if console {
+                        self.console.layout(canvas, &self.ctx.settings);
+                    }
                 }
                 self.overlay
                     .draw(&mut frame.graph, slot.index, swapchain_image, extent);
@@ -1450,12 +1629,53 @@ impl<D: Demo> ApplicationHandler for App<D> {
                         }
                         return;
                     }
+                    // The console (D-069): the key under Esc (² on AZERTY, ` on QWERTY) opens
+                    // and closes it; open, it takes every key, and the demo sees only releases.
+                    if pressed && code == KeyCode::Backquote && !state.ctx.loading {
+                        let open = !state.console.is_open();
+                        state.ctx.settings.set(state.console_shown, open);
+                        state.console.set_open(open);
+                        if open {
+                            state.input.release_all();
+                        }
+                        return;
+                    }
+                    if state.console.is_open() {
+                        if !pressed {
+                            state.input.set_key(code, false);
+                            return;
+                        }
+                        // Ctrl without Alt: AltGr (Ctrl+Alt on Windows) types `~ # { [ | \ @ ]`
+                        // on AZERTY.
+                        let ctrl = state.modifiers.control_key() && !state.modifiers.alt_key();
+                        let request = state.console.key(
+                            code,
+                            event.text.as_deref(),
+                            ctrl,
+                            state.modifiers.shift_key(),
+                            &mut state.ctx.settings,
+                        );
+                        match request {
+                            Some(console::Request::Close) => {
+                                state.ctx.settings.set(state.console_shown, false);
+                                state.console.set_open(false);
+                            }
+                            Some(console::Request::Command { name, args })
+                                if state.run_command(&name, &args) =>
+                            {
+                                event_loop.exit();
+                            }
+                            Some(console::Request::Command { .. }) | None => {}
+                        }
+                        return;
+                    }
                     if pressed && code == KeyCode::Escape {
                         event_loop.exit();
                         return;
                     }
                     if pressed && code == KeyCode::F1 {
-                        state.ctx.profile.cycle_mode();
+                        let next = (state.ctx.settings.get(state.display_info) + 1) % 3;
+                        state.ctx.settings.set(state.display_info, next);
                         return;
                     }
                     // Alt+Enter: borderless fullscreen on the window's monitor, and back (the
@@ -1511,6 +1731,7 @@ impl<D: Demo> ApplicationHandler for App<D> {
                     }
                 }
             }
+            WindowEvent::ModifiersChanged(modifiers) => state.modifiers = modifiers.state(),
             WindowEvent::MouseInput {
                 button: MouseButton::Right,
                 state: pressed,

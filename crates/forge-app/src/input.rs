@@ -28,6 +28,11 @@ impl Input {
         }
     }
 
+    /// Lets every key go: a key held when the console opened must not stay down for the demo.
+    pub(crate) fn release_all(&mut self) {
+        self.keys.clear();
+    }
+
     pub(crate) fn end_frame(&mut self) {
         self.mouse_delta = (0.0, 0.0);
         self.wheel = 0.0;

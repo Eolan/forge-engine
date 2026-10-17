@@ -32,6 +32,8 @@ use winit::keyboard::KeyCode;
 #[derive(Parser, Debug, Clone)]
 #[command(about = "GPU-driven meshlet culling test bench")]
 struct Args {
+    #[command(flatten)]
+    settings: forge_app::SettingsArgs,
     /// Also run the mip check each frame: textures sampled with the resolve's reconstructed
     /// derivatives against a fragment shader's (issue #20); the result is logged at exit.
     #[arg(long)]
@@ -552,6 +554,7 @@ fn build_scene(ctx: &Context, args: &Args) -> Result<MeshletScene> {
 fn main() -> Result<()> {
     let args = Args::parse();
     let config = AppConfig {
+        settings: args.settings.clone(),
         title: "forge meshlets".into(),
         vsync: args.vsync,
         validate: args.validate,

@@ -10,6 +10,8 @@
 #
 # The views come from the demo's own log (`city-plan --village` names them for `--view`), so
 # they follow the seed. Run from anywhere; the runs and their logs stay in captures/map/<time>/.
+# The owner's settings file (forge.cfg, D-069) never changes a scripted run.
+export FORGE_CFG=none
 set -uo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 accept=0

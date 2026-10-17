@@ -15,6 +15,9 @@ workspace = true
 profiling = ["dep:tracy-client"]
 # DLSS through NVIDIA Streamline (`AppConfig::streamline`; Windows, SDK in `streamline-sdk/`).
 dlss = ["forge-gpu/dlss"]
+# A shipped game's build (D-069): the console keeps only the settings that show information
+# (`Flags::RELEASE`), none that gives an advantage.
+shipping = []
 # NVIDIA NRD's SIGMA for the sun's soft shadows (D-049; the library in `nrd-sdk/bin`).
 nrd = ["forge-gpu/nrd"]
 
@@ -22,6 +25,7 @@ nrd = ["forge-gpu/nrd"]
 anyhow = { workspace = true }
 bytemuck = { workspace = true }
 ab_glyph = { workspace = true }
+clap = { workspace = true }
 forge-core = { workspace = true }
 forge-gpu = { workspace = true }
 forge-task = { workspace = true }

@@ -16,6 +16,8 @@
 # prints the f32 spacing of a position at its scene's far edge. With FORGE_KEEP_LOGS=1 each
 # run's full log is kept in OUT/logs/ and the lines printed in OUT/summary.txt, for a cloud
 # session to read (tools/report.sh gathers them).
+# The owner's settings file (forge.cfg, D-069) never changes a scripted run.
+export FORGE_CFG=none
 set -uo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 out=${1:?usage: tools/origins.sh OUT [BIN] [ORIGINS]}

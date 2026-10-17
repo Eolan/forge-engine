@@ -48,6 +48,8 @@ use winit::keyboard::KeyCode;
 #[derive(Parser, Debug, Clone)]
 #[command(about = "A planet from orbit to its ground (D-056)")]
 struct Args {
+    #[command(flatten)]
+    settings: forge_app::SettingsArgs,
     /// The world file (`assets/worlds/earth.toml` by default; `assets/worlds/moon.toml` the Moon).
     #[arg(long)]
     world: Option<PathBuf>,
@@ -1837,6 +1839,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
     let config = AppConfig {
+        settings: args.settings.clone(),
         title: "forge planet".into(),
         vsync: args.vsync,
         validate: args.validate,
