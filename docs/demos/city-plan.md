@@ -758,6 +758,16 @@ mesh to test navigations inside the houses"):
   through: kept every time, a crown darkened every probe about it and left a dark blot on the
   wall beside the tree (the owner: "strange shadows or lighting artifact on the wall"). The
   sun's shadows keep every leaf.
+- *Corners without a square lot* (`parcels::strips_by`, the owner's "still the diagonal
+  issues"). At a corner of 30° or more whose square corner lot does not fit its edges, the two
+  strips' end lots met on the corner's divider, a diagonal wall from the corner into the block.
+  They now make one lot (`joined`), its front the larger lot's. A front far wider than the
+  household wants keeps a house as wide as it wants against its row neighbour, the rest a
+  garden round the corner (`houses::houses`). A house of storeys whose flight is deeper than
+  its lot along its front leaves the lot a garden: on such a lot, an L, the house's rectangle
+  ran past the lot and was cut to a sliver 0.9 m deep under a flat roof. A footprint already
+  inside its lot is no longer cut by each side's half plane. A sharp tip whose region reaches
+  past most of an edge is left open up to the edge's end.
 - *Cornices' corners* (`cornice_corners`). Where two walls' cornices meet at an outside corner,
   each of the three steps (`modules::CORNICE_STEPS`) is mitred round it, a prism from the corner
   out to where the two steps' faces meet.
@@ -765,12 +775,12 @@ mesh to test navigations inside the houses"):
 | Anomaly | Before the night | Now |
 |---|---|---|
 | a habitable room without a window | 33 | 20 |
-| a sliver | 9 | 3 |
+| a sliver | 9 | 1 |
 | a free garden wall end | 11 | 5 |
-| a lone party wall | 17 | 5 |
-| a ridge step | 6 | 2 |
+| a lone party wall | 17 | 2 |
+| a ridge step | 6 | 0 |
 | a flight off its side wall (new) | — | 0 (at its nearest point: the 8 counted at the side's middle touched a slanted side wall at one end) |
-| a storey's street front blank over 3 m (new) | 35 | 12 (the hall at the front's end by a party wall, else a garden's, a street's last) |
+| a storey's street front blank over 3 m (new) | 35 | 8 (the hall at the front's end by a party wall, else a garden's, a street's last) |
 | a room the walk misses (new) | 8 | 0 |
 | a flight whose foot it misses (new) | 0 | 0 |
 | an outside door it misses (new) | 1 | 0 (the house's front door, its index gone stale, `cores::reindex`) |

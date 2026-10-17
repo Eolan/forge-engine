@@ -187,11 +187,30 @@ pub fn houses(
             // front had a window at its end with the roof right behind it and no room (the
             // owner, 2026-10-16). The rest of the front stays garden, as do the type's sides.
             let (s0, s1) = front_stretch(lot, a, t, inward, rooms::DEPTH.0)?;
-            let (s0, s1) = (s0 + ty.sides, s1 - ty.sides);
-            let width = s1 - s0;
-            if width < MIN_FRONT {
+            let (mut s0, mut s1) = (s0 + ty.sides, s1 - ty.sides);
+            if s1 - s0 < MIN_FRONT {
                 return None;
             }
+            // A front far wider than the household's rooms want (a corner's two lots made one,
+            // `parcels::strips_by`): the house as wide as they want, against its row neighbour,
+            // the rest a garden round the corner. Across the whole front, it was a long thin house
+            // (the owner, 2026-10-16: "not sure long houses like that are viable").
+            let area: f64 = rooms::programme(people, means).iter().map(|r| r.area).sum();
+            let wanted = (rooms::HALL + rooms::WALL + area / (2.0 * plan_depth(ty)))
+                .clamp(ty.width.0, ty.width.1.max(16.0));
+            if s1 - s0 > wanted * 1.5 {
+                // The neighbour whose front starts where this one's ends.
+                let joined_at_end = lots
+                    .iter()
+                    .enumerate()
+                    .any(|(j, o)| j != k && o.len() >= 2 && o[0].distance(lot[1]) < 0.01);
+                if joined_at_end {
+                    s0 = s1 - wanted;
+                } else {
+                    s1 = s0 + wanted;
+                }
+            }
+            let width = s1 - s0;
             // As deep as the lot lets it along its stretch at most: a plan deeper than its lot
             // left the lot's lines for a rectangle, a sliver beside its neighbour.
             let room = least_depth(lot, a, t, inward, s0, s1).min(plan_depth(ty));
@@ -201,6 +220,12 @@ pub fn houses(
                 room.max(rooms::DEPTH.0),
             );
             if plan.storeys.len() > 1 {
+                // A house of storeys needs its flight's depth on its lot: deeper than the lot
+                // along its front, its footprint ran past the lot, and an L-shaped corner lot's
+                // inner side cut it to a sliver 0.9 m deep. The lot stays a garden.
+                if stair.min(plan_depth(ty)) > room.max(rooms::DEPTH.0) + 0.05 {
+                    return None;
+                }
                 plan.deepen(stair.min(plan_depth(ty)));
             }
             // A front cut short (a corner's wedge) with a household's rooms piled over three
@@ -389,8 +414,16 @@ fn footprint_of(lot: &[DVec2], d: &Draft) -> Option<Vec<DVec2>> {
     let (a, b) = (a + t * s0, a + t * s1);
     let inward = unit_in * d.plan.depth;
     let mut footprint = vec![a, b, b + inward, a + inward];
-    // Within the lot: a corner lot narrows towards the back.
-    let n = lot.len();
+    // Within the lot: a corner lot narrows towards the back. The cut is by each side's half
+    // plane, as for a convex lot; a footprint already inside the lot keeps whole (a corner's two
+    // lots made one, `parcels::strips_by`, are an L, and its inner corner's side cut the house
+    // to 0.9 m).
+    let inside = footprint.iter().all(|&p| {
+        geom::contains(lot, p)
+            || (0..lot.len())
+                .any(|i| geom::distance_to_segment(p, lot[i], lot[(i + 1) % lot.len()]) < 1e-6)
+    });
+    let n = if inside { 0 } else { lot.len() };
     for i in 0..n {
         footprint = geom::clip_half_plane(&footprint, lot[i], lot[(i + 1) % n] - lot[i]);
         if footprint.len() < 3 {

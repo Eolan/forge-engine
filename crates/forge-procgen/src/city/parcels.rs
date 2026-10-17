@@ -190,10 +190,22 @@ pub fn strips_by(
             );
             // A sharp corner's (under 60°) region is the tip, left open as a green rather than a
             // corner lot (`tips`), and may take more of its edges.
-            let most = if th.dot(ti) < -0.5 { 0.95 } else { 0.8 };
+            let sharp = th.dot(ti) < -0.5;
+            let most = if sharp { 0.95 } else { 0.8 };
             let fits =
                 (0.5..most * len_i).contains(&along_i) && (0.5..most * len_h).contains(&back_h);
-            fits.then(|| (corner + r, corner - th * back_h, corner + ti * along_i))
+            if fits {
+                Some((corner + r, corner - th * back_h, corner + ti * along_i))
+            } else if sharp && along_i > 0.5 && back_h > 0.5 {
+                // A long thin tip, its region past most of an edge: open all the same, up to the
+                // edges' ends. Split on the bisector instead, its two lots met on a diagonal wall
+                // from the tip into the block (the owner, 2026-10-16: "still the diagonal
+                // issues", the faubourg's triangle).
+                let (along_i, back_h) = (along_i.min(len_i), back_h.min(len_h));
+                Some((corner + r, corner - th * back_h, corner + ti * along_i))
+            } else {
+                None
+            }
         })
         .collect();
     // The sharp corners (under 60°), whose regions stay open: a triangular block's tip split
@@ -214,8 +226,19 @@ pub fn strips_by(
         let (a, b) = (block[i], block[j]);
         let t = (b - a).normalize_or_zero();
         if (f1 - a).dot(t) - (f0 - a).dot(t) < ty.width.0 {
+            // A tip stays open: the other corner's lot goes (two tips on one edge leave it to
+            // their greens).
+            if tips[i] && tips[j] {
+                continue;
+            }
             let (take_i, take_j) = ((f0 - a).length(), (b - f1).length());
-            if take_i >= take_j {
+            if tips[i] != tips[j] {
+                if tips[i] {
+                    square[j] = None;
+                } else {
+                    square[i] = None;
+                }
+            } else if take_i >= take_j {
                 square[i] = None;
             } else {
                 square[j] = None;
@@ -253,6 +276,8 @@ pub fn strips_by(
     };
     let raw: Vec<Option<Vec<DVec2>>> = (0..n).map(strip_of).collect();
     let mut lots: Vec<Vec<DVec2>> = Vec::new();
+    // The street side each lot was cut along.
+    let mut sides: Vec<usize> = Vec::new();
     let mut keys: Vec<usize> = Vec::new();
     for i in 0..n {
         let Some(mut strip) = raw[i].clone() else {
@@ -349,8 +374,53 @@ pub fn strips_by(
         }
         for (key, lot) in here {
             keys.push(key);
+            sides.push(i);
             lots.push(lot);
         }
+    }
+    // A corner of 30° or more with no square lot (it did not fit its edges): its two strips' end
+    // lots met on its divider, a diagonal party line from the corner into the block, a garden
+    // wall on it (the owner, 2026-10-16: "diagonal layouts ... no", "still the diagonal
+    // issues"). They make one corner lot, its front the longer street's, the other's key gone.
+    for i in 0..n {
+        let h = (i + n - 1) % n;
+        let (th, ti) = (edge_dir(h), edge_dir(i));
+        if square[i].is_some() || th.perp_dot(ti) <= 0.0 || th.dot(ti) > 0.866 {
+            continue;
+        }
+        let corner = block[i];
+        let at = |side: usize| {
+            (0..lots.len())
+                .find(|&k| sides[k] == side && lots[k].iter().any(|p| p.distance(corner) < 0.01))
+        };
+        let (Some(kh), Some(ki)) = (at(h), at(i)) else {
+            continue;
+        };
+        let Some(one) = joined(&lots[kh], &lots[ki]) else {
+            continue;
+        };
+        // The larger lot's front stays the front: along the longer street, a corner lot thin
+        // there took a house a metre and a half deep.
+        let (area_h, area_i) = (
+            geom::signed_area(&lots[kh]).abs(),
+            geom::signed_area(&lots[ki]).abs(),
+        );
+        let (keep, gone, a, b) = if area_h >= area_i {
+            (kh, ki, block[h], corner)
+        } else {
+            (ki, kh, corner, block[(i + 1) % n])
+        };
+        // Only where its front is found on that street: turned from some other side, a house
+        // stood on a side of the lot 0.9 m deep.
+        let one = from_the_street(one, a, b);
+        let on = |p: DVec2| geom::distance_to_segment(p, a, b) < 1e-3;
+        if !(on(one[0]) && on(one[1])) {
+            continue;
+        }
+        lots[keep] = one;
+        lots.remove(gone);
+        keys.remove(gone);
+        sides.remove(gone);
     }
     // The square corners' lots, each its front on the corner's next street first, keyed past
     // every strip's lots.
@@ -383,6 +453,36 @@ fn overlapping(p: &[DVec2], q: &[DVec2]) -> bool {
         })
     });
     crossing || p.iter().any(|&v| within(q, v)) || q.iter().any(|&v| within(p, v))
+}
+
+/// Two lots sharing a side (`a`'s `p → q`, `b`'s `q → p`, both anticlockwise) as one, the side
+/// gone and the corners left in line dropped. `None` where they share none.
+fn joined(a: &[DVec2], b: &[DVec2]) -> Option<Vec<DVec2>> {
+    let near = |x: DVec2, y: DVec2| x.distance(y) < 0.01;
+    let (n, m) = (a.len(), b.len());
+    let (i, j) = (0..n).find_map(|i| {
+        let (p, q) = (a[i], a[(i + 1) % n]);
+        (0..m)
+            .find(|&j| near(b[j], q) && near(b[(j + 1) % m], p))
+            .map(|j| (i, j))
+    })?;
+    // `a` from `q` round to `p`, then `b` on from after `p` round to before `q`.
+    let mut out: Vec<DVec2> = (0..n).map(|k| a[(i + 1 + k) % n]).collect();
+    out.extend((2..m).map(|k| b[(j + k) % m]));
+    let mut k = 0;
+    while k < out.len() && out.len() > 3 {
+        let len = out.len();
+        let (p, c, q) = (out[(k + len - 1) % len], out[k], out[(k + 1) % len]);
+        if (c - p).perp_dot(q - c).abs() < 1e-4 * (c - p).length() * (q - c).length()
+            || p.distance(c) < 1e-6
+        {
+            out.remove(k);
+        } else {
+            k += 1;
+        }
+    }
+    let out = geom::clean(&out, 1e-6);
+    (out.len() >= 3 && geom::signed_area(&out) > 1.0).then_some(out)
 }
 
 /// `lot` turned to start with its street side (its edge along `a b`), so its first two vertices
