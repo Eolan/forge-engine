@@ -1,12 +1,11 @@
 //! The bench's settings (D-069): the renderer's shared ones (`forge_render::settings`) it has,
 //! with its meshlets in their colours by default. Registered from the state its flags gave it,
-//! applied when they change, and set by its keys (F, freezing the culling camera, stays a key).
+//! applied when they change, and set from the console (no key sets them since D-069's key map),
+//! `meshlets.freeze` (F before it) among them.
 
-use forge_app::Context;
-use forge_app::settings::{Settings, Var};
+use forge_app::settings::{Settings, Spec, Var};
 use forge_render::settings as rs;
 use forge_render::{CullFlags, SwRaster, Tonemap};
-use winit::keyboard::KeyCode;
 
 use crate::Bench;
 
@@ -16,6 +15,8 @@ pub(crate) struct BenchVars {
     lod_error: Var<f64>,
     sw_raster: Var<usize>,
     wireframe: Var<bool>,
+    /// The culling camera held where it stands (F before D-069).
+    freeze: Var<bool>,
     /// The settings that are a bit of the culling flags.
     bits: Vec<(Var<bool>, u32)>,
 }
@@ -30,17 +31,17 @@ impl Bench {
             (rs::occlusion(true), CullFlags::OCCLUSION, true),
             (rs::lod(true), CullFlags::LOD, true),
             (
-                rs::show_default("meshlets", true, "Each meshlet in a colour of its own (M)."),
+                rs::show_default("meshlets", true, "Each meshlet in a colour of its own."),
                 CullFlags::MESHLET_COLORS,
                 true,
             ),
             (
-                rs::show("lod", "Each cluster coloured by its level of detail (K)."),
+                rs::show("lod", "Each cluster coloured by its level of detail."),
                 CullFlags::LOD_COLORS,
                 false,
             ),
             (
-                rs::show("raster", "The software rasteriser's pixels in green (H)."),
+                rs::show("raster", "The software rasteriser's pixels in green."),
                 CullFlags::SHOW_RASTER,
                 false,
             ),
@@ -61,10 +62,15 @@ impl Bench {
                 rs::sw_raster_index(self.args.sw_raster),
             ),
             wireframe: s.add_from(
-                rs::show("wireframe", "The triangles' edges over the frame (Tab)."),
+                rs::show("wireframe", "The triangles' edges over the frame."),
                 false,
                 self.wireframe,
             ),
+            freeze: s.add(Spec::bool(
+                "meshlets.freeze",
+                false,
+                "The culling camera held where it stands: fly out and see what it culled; a \n                 resize ends it.",
+            )),
             bits,
         });
         // Values from forge.cfg and --set reach the bench at the first apply.
@@ -92,6 +98,11 @@ impl Bench {
         if s.changed_since(v.wireframe, seen) {
             self.wireframe = s.get(v.wireframe);
         }
+        if s.changed_since(v.freeze, seen) && self.flags.has(CullFlags::FREEZE) != s.get(v.freeze) {
+            // The camera is taken at the next update.
+            self.flags.toggle(CullFlags::FREEZE);
+            self.frozen = None;
+        }
         for &(var, bit) in &v.bits {
             if s.changed_since(var, seen) && self.flags.has(bit) != s.get(var) {
                 self.flags.toggle(bit);
@@ -99,45 +110,13 @@ impl Bench {
         }
         self.vars_seen = s.changes();
     }
+}
 
-    /// The keys bound to settings: they set them, and [`Bench::apply_vars`] does the rest.
-    /// Returns whether the key was one of them.
-    pub(crate) fn vars_key(&mut self, ctx: &mut Context, code: KeyCode) -> bool {
-        let Some(v) = &self.vars else {
-            return false;
-        };
-        let s = &mut ctx.settings;
-        let bit_var = |b: u32| {
-            v.bits
-                .iter()
-                .find(|(_, bit)| *bit == b)
-                .map(|&(var, _)| var)
-        };
-        let toggle = |s: &mut Settings, var: Option<Var<bool>>| {
-            if let Some(var) = var {
-                let _ = s.toggle_var(var);
-            }
-        };
-        match code {
-            KeyCode::KeyC => toggle(s, bit_var(CullFlags::CONE)),
-            KeyCode::KeyV => toggle(s, bit_var(CullFlags::FRUSTUM)),
-            KeyCode::KeyO => toggle(s, bit_var(CullFlags::OCCLUSION)),
-            KeyCode::KeyL => toggle(s, bit_var(CullFlags::LOD)),
-            KeyCode::KeyM => toggle(s, bit_var(CullFlags::MESHLET_COLORS)),
-            KeyCode::KeyK => toggle(s, bit_var(CullFlags::LOD_COLORS)),
-            KeyCode::KeyH => toggle(s, bit_var(CullFlags::SHOW_RASTER)),
-            KeyCode::Tab => toggle(s, Some(v.wireframe)),
-            KeyCode::KeyR => {
-                let _ = s.toggle_var(v.sw_raster);
-            }
-            KeyCode::KeyG => {
-                let next = rs::tonemap_of(s.get(v.tonemap)).next();
-                s.set(v.tonemap, rs::tonemap_index(next));
-            }
-            KeyCode::BracketLeft => s.set(v.lod_error, s.get(v.lod_error) * 0.5),
-            KeyCode::BracketRight => s.set(v.lod_error, s.get(v.lod_error) * 2.0),
-            _ => return false,
+impl Bench {
+    /// `meshlets.freeze` off, as a resize ends the freeze.
+    pub(crate) fn unfreeze_var(&self, s: &mut Settings) {
+        if let Some(v) = &self.vars {
+            s.set(v.freeze, false);
         }
-        true
     }
 }

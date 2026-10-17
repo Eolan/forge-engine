@@ -1,12 +1,11 @@
 //! The planet's settings (D-069): the renderer's shared ones (`forge_render::settings`) with the
 //! planet's defaults (DLAA where it runs, else TAA; AgX's punchy look), and `planet.paused`.
-//! Registered from the state its flags gave it, applied when they change, and set by its keys.
+//! Registered from the state its flags gave it, applied when they change, and set from the
+//! console (no key sets them since D-069's key map).
 
-use forge_app::Context;
 use forge_app::settings::{Settings, Spec, Var};
 use forge_render::settings::{self as rs, AA_DLAA, AA_DLSS, AA_OFF, AA_TAA};
 use forge_render::{CullFlags, Tonemap};
-use winit::keyboard::KeyCode;
 
 use crate::PlanetDemo;
 
@@ -36,20 +35,17 @@ impl PlanetDemo {
             (rs::occlusion(true), CullFlags::OCCLUSION, true),
             (rs::cone(true), CullFlags::CONE, true),
             (
-                rs::show("meshlets", "Each meshlet in a colour of its own (M)."),
+                rs::show("meshlets", "Each meshlet in a colour of its own."),
                 CullFlags::MESHLET_COLORS,
                 false,
             ),
             (
-                rs::show("lod", "Each cluster coloured by its level of detail (K)."),
+                rs::show("lod", "Each cluster coloured by its level of detail."),
                 CullFlags::LOD_COLORS,
                 false,
             ),
             (
-                rs::show(
-                    "culled",
-                    "What occlusion or cone culling rejected, in red (X).",
-                ),
+                rs::show("culled", "What occlusion or cone culling rejected, in red."),
                 CullFlags::SHOW_CULLED,
                 false,
             ),
@@ -88,14 +84,14 @@ impl PlanetDemo {
             ao: s.add_from(rs::ao(true), true, self.ao_on),
             lod_error: s.add_from_f32(rs::lod_error(1.0), 1.0, self.args.lod_error),
             wireframe: s.add_from(
-                rs::show("wireframe", "The triangles' edges over the frame (Tab)."),
+                rs::show("wireframe", "The triangles' edges over the frame."),
                 false,
                 self.wireframe,
             ),
             paused: s.add(Spec::bool(
                 "planet.paused",
                 false,
-                "The scripted flight stopped where it is (P toggles it).",
+                "The scripted flight stopped where it is.",
             )),
             bits,
         });
@@ -160,56 +156,5 @@ impl PlanetDemo {
             }
         }
         self.vars_seen = s.changes();
-    }
-
-    /// The keys bound to settings: they set them, and [`PlanetDemo::apply_vars`] does the
-    /// rest. Returns whether the key was one of them.
-    pub(crate) fn vars_key(&mut self, ctx: &mut Context, code: KeyCode) -> bool {
-        let Some(v) = &self.vars else {
-            return false;
-        };
-        let s = &mut ctx.settings;
-        let bit_var = |b: u32| {
-            v.bits
-                .iter()
-                .find(|(_, bit)| *bit == b)
-                .map(|&(var, _)| var)
-        };
-        let toggle = |s: &mut Settings, var: Option<Var<bool>>| {
-            if let Some(var) = var {
-                let _ = s.toggle_var(var);
-            }
-        };
-        match code {
-            KeyCode::KeyP => toggle(s, Some(v.paused)),
-            KeyCode::KeyN => toggle(s, Some(v.ao)),
-            KeyCode::Tab => toggle(s, Some(v.wireframe)),
-            KeyCode::KeyJ => toggle(s, bit_var(CullFlags::SHADOWS)),
-            KeyCode::KeyO => toggle(s, bit_var(CullFlags::OCCLUSION)),
-            KeyCode::KeyC => toggle(s, bit_var(CullFlags::CONE)),
-            KeyCode::KeyM => toggle(s, bit_var(CullFlags::MESHLET_COLORS)),
-            KeyCode::KeyK => toggle(s, bit_var(CullFlags::LOD_COLORS)),
-            KeyCode::KeyX => toggle(s, bit_var(CullFlags::SHOW_CULLED)),
-            KeyCode::KeyG => {
-                let next = rs::tonemap_of(s.get(v.tonemap)).next();
-                s.set(v.tonemap, rs::tonemap_index(next));
-            }
-            KeyCode::BracketLeft => s.set(v.lod_error, s.get(v.lod_error) * 0.5),
-            KeyCode::BracketRight => s.set(v.lod_error, s.get(v.lod_error) * 2.0),
-            KeyCode::Minus => s.set(v.compensation, s.get(v.compensation) - 0.5),
-            KeyCode::Equal => s.set(v.compensation, s.get(v.compensation) + 0.5),
-            // DLAA where it runs, TAA, off (D-045).
-            KeyCode::KeyT => {
-                let aa = match s.get(v.aa) {
-                    AA_DLAA | AA_DLSS => AA_TAA,
-                    AA_TAA => AA_OFF,
-                    _ if self.dlaa.is_some() => AA_DLAA,
-                    _ => AA_TAA,
-                };
-                s.set(v.aa, aa);
-            }
-            _ => return false,
-        }
-        true
     }
 }

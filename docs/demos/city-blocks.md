@@ -39,10 +39,21 @@ everything on, its p99 frame 3.8 ms (2.6 ms without the probes); the south view 
 cargo run --release -p city-blocks
 ```
 
-Keys: WASD/QE move, Shift fast, right mouse look, **L** cluster LOD, **K** LOD colours,
-**M** cluster colours, **O** occlusion, **R** software rasteriser (auto → on → off), **H**
-what it drew, **[** / **]** LOD threshold, **T** anti-aliasing (DLAA where it runs, the default of an interactive run; TAA sharpened, plain, off: `--no-dlaa`, `--dlaa` in a scripted run, `--rcas STOPS`, half a stop by default, `--no-rcas`, `--taa-catmull-rom` for the history filter before Lanczos-3; D-045), **B** bloom (`--bloom S`, 0.04), **J** shadows, **I** sky light, **N** ambient occlusion, **V** its view, **F** sky reflections, **Y** mirror rays in the glass and the water, **Z** soft or hard shadows, **P** the probes' light, **U** that
-light alone, **Tab** wireframe, **G** tone curve, **.** the real night sky (`--real-sky`, D-046), **F9** logs the view as `--view` takes it (to start a run where something was seen).
+Keys: the camera moves with the keys at W, A, S, D (Z, Q, S, D on AZERTY), Q and E down and up
+(A and E on AZERTY), Shift and Ctrl faster, the right mouse to look. The rest is set from the
+console (the key under Esc; [console.md](console.md) lists the settings and the keys they had
+before D-069's key map, 2026-10-17): `r.lod` cluster LOD, `r.show.lod` LOD colours,
+`r.show.meshlets` cluster colours, `r.cull.occlusion` occlusion, `r.sw_raster` the software
+rasteriser (auto, on, off), `r.show.raster` what it drew, `r.lod.error` the LOD threshold,
+`r.aa` anti-aliasing (DLAA where it runs, the default of an interactive run; TAA sharpened, plain,
+off: `--no-dlaa`, `--dlaa` in a scripted run, `--rcas STOPS`, half a stop by default,
+`--no-rcas`, `--taa-catmull-rom` for the history filter before Lanczos-3; D-045), `r.bloom`
+bloom (`--bloom S`, 0.04), `r.shadows` shadows, `r.sky_light` sky light, `r.ao` ambient
+occlusion, `r.show.ao` its view, `r.reflections.sky` sky reflections, `r.reflections.rays`
+mirror rays in the glass and the water, `r.sun.disc` soft or hard shadows, `r.probes` the
+probes' light, `r.show.gi` that light alone, `r.show.wireframe` wireframe, `r.tonemap` tone
+curve, `r.sky.real` the real night sky (`--real-sky`, D-046); `camera.where` logs the view as
+`--view` takes it (to start a run where something was seen).
 
 Options:
 - `--gallery` shows the twenty props side by side instead of the city.
@@ -60,22 +71,22 @@ Options:
   their size (2; 0 by their geometry alone, #131).
 - `--stream-pool MIB` sets the pool the cluster pages stream through (512; 0 keeps every
   page resident, read once at start), `--stream-upload MIB` the most uploaded per frame (8).
-- `--no-shadows` draws without the sun's ray-traced shadows (**J** toggles them).
+- `--no-shadows` draws without the sun's ray-traced shadows (`r.shadows`).
 - `--no-sky-light` lights the shaded sides with the ballad's constant fill instead of the sky
-  (**I** toggles it).
-- `--no-ao` leaves the sky's light unoccluded (**N** toggles the occlusion), `--ao-radius M`
-  sets how far an occluder reaches (1.5 m), `--show-ao` shows the occlusion in grey (**V**).
+  (`r.sky_light`).
+- `--no-ao` leaves the sky's light unoccluded (`r.ao`), `--ao-radius M`
+  sets how far an occluder reaches (1.5 m), `--show-ao` shows the occlusion in grey (`r.show.ao`).
 - `--no-probes` lights the shaded sides with the open sky's light instead of the probes'
-  (**P** toggles them), `--show-gi` shows that light alone on white surfaces (**U**),
+  (`r.probes`), `--show-gi` shows that light alone on white surfaces (`r.show.gi`),
   `--probe-rays N` sets the rays per probe (128), `--probe-cascades N` the cascades (5) and
   `--probe-cadence N` how many frames a settled probe waits between updates (1 since
   2026-10-16; 2 from #103 until then, see below). In a scene that knows its rooms (the
   village's houses, D-068), `--show-regions` tints each surface by the region whose probes
   light it, red where it fell back to every probe.
-- `--no-reflections` draws without the sky's reflection (**F** toggles it).
-- `--no-ray-reflections` reflects only the sky in the glass and the water (**Y** toggles the mirror rays).
+- `--no-reflections` draws without the sky's reflection (`r.reflections.sky`).
+- `--no-ray-reflections` reflects only the sky in the glass and the water (`r.reflections.rays`).
 - `--no-reflection-history` leaves the glass's mirror rays to TAA alone, without their history (#176).
-- `--hard-shadows` aims every shadow ray at the sun's centre (**Z** toggles soft and hard).
+- `--hard-shadows` aims every shadow ray at the sun's centre (`r.sun.disc`).
 - `--day S` runs a day in S seconds, sunrise to sunset and again, with automatic exposure.
 - `--view x,y,z,yaw,pitch` starts the camera there (metres, then degrees; yaw 0 looks north,
   along −z), e.g. `--view=-8,1.7,1135,-50,10` in a street.
@@ -387,7 +398,7 @@ through `--day`.
 city-blocks --view=-8,1.7,1135,-50,10
 ```
 
-**P** turns the probes off and on (`--no-probes`), and **U** shows their light alone
+`r.probes` turns the probes off and on (`--no-probes`), and `r.show.gi` shows their light alone
 (`--show-gi`). `--probe-rays N` and `--probe-cascades N` change the defaults, and
 `--view x,y,z,yaw,pitch` starts the camera anywhere, e.g. in a street.
 
@@ -477,7 +488,7 @@ under the Moon and the stars; `--time-of-day` takes 0–2 (1.5 midnight). The ni
 `--moon-age` (lunations, 0.4), `--moon-fill` (the Moon's light as a soft fill instead of a key
 light with traced shadows), `--night-stops` (how far under the eye's adaptation the night is
 shown, 2), `--star-gain` (16), `--no-purkinje`, and `--real-sky` (the catalogue's stars and the
-real Moon; **.** switches it) with `--fov` for a telephoto. `docs/demos/island.md`, "The night", has the
+real Moon; `r.sky.real` switches it) with `--fov` for a telephoto. `docs/demos/island.md`, "The night", has the
 details and the images.
 
 ## Coated glass (issue #56, 2026-09-25)
@@ -554,7 +565,7 @@ pixel is the whole reflection: no noise and no denoiser (but aliasing under TAA'
 - **The start:** a hit counts from 1.5 m on. The traced cut may stand up to a metre in front
   of the drawn surface, and a window would otherwise reflect its own facade.
 
-`--no-ray-reflections` / **Y** keeps the sky alone. Devices without ray queries have only the
+`--no-ray-reflections` / `r.reflections.rays` keeps the sky alone. Devices without ray queries have only the
 sky.
 
 ![The dark towers without the mirror rays and with them: the lower half reflects the neighbouring tower and the buildings below instead of the sky](images/city-blocks-ray-reflections.png)
@@ -644,7 +655,7 @@ sky-light buffer after the nine coefficients.
 
 The effect is where it should be. The windows take the sky's colour. The dark glass towers turn
 towards the sky along their grazing edges. The street far ahead gets a faint sheen.
-`--no-reflections` / **F** draws without.
+`--no-reflections` / `r.reflections.sky` draws without.
 
 ![The dark glass tower and the skyline without the sky's reflection and with it](images/city-blocks-reflections.png)
 
@@ -756,7 +767,7 @@ the lamp posts on the sidewalks, the rocks on each other.
   on the GPU. The BLASes take 58 ms, the TLAS 12 ms, 278 MiB in all.
 - **The rays:** the resolve traces one shadow ray per sun-facing pixel (a ray query, the first
   hit ends it).
-- **Options:** `--no-shadows` or **J** draws without. Devices without ray queries have none.
+- **Options:** `--no-shadows` or `r.shadows` draws without. Devices without ray queries have none.
 
 ![The south edge at a sun of 20°, without shadows and with them](images/city-blocks-shadows.png)
 
@@ -787,7 +798,7 @@ city-blocks --stream-pool 0 --orbit --frames 241 --capture sky.png --capture-fra
 - at 1600×900 the three passes cost 0.014 + 0.011 + 0.024 ms (the south view 1.491 → 1.541 ms);
 - at 1440p the compose takes 0.055 ms (the flight 1.868 → 1.938 ms).
 
-The sun's disc is clamped below fp16's range once pre-exposed. Bloom (issue #44, 4 %, **B**) spreads it
+The sun's disc is clamped below fp16's range once pre-exposed. Bloom (issue #44, 4 %, `r.bloom`) spreads it
 into its surroundings: 0.043 ms at 1600×900, 0.078 ms at 1440p (the flight 1.938 → 2.023 ms).
 
 ## Materials (issue #20, 2026-09-25)
@@ -885,7 +896,7 @@ cargo run --release -p city-blocks -- --width 2560 --height 1440 --fly
 - **The flight streams little.** 540–720 pages are resident, 0–1.6 are uploaded a frame in
   real time, and nothing waits (the counters under "Streaming" above).
 - **TAA** costs 0.15 ms at 1440p (motion vectors 0.02, resolve 0.13). It is on by default:
-  at 300 m/s the window grids and rock fields shimmer without it (**T**, `--no-taa`).
+  at 300 m/s the window grids and rock fields shimmer without it (`r.aa`, `--no-taa`).
 - **Where the time goes** in the flight (F1 overlay below):
   - the culls 0.72 ms (instance 0.32, clusters 0.19 + 0.20);
   - hardware and software raster 0.57;

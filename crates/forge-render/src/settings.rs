@@ -1,7 +1,7 @@
 //! The renderer's shared settings (D-069): one name, one range and one line of help for each,
 //! whichever demo registers it, in the `r.` group. A demo registers those its frame has, with
 //! its own default (the best look for its scene: ACES for the asteroids' black space, AgX's
-//! punchy look elsewhere), reads them every frame, and its keys set them; a flag given on the
+//! punchy look elsewhere), reads them every frame, and the console sets them; a flag given on the
 //! command line sets one as `--set` does.
 
 use forge_core::settings::Spec;
@@ -99,8 +99,8 @@ pub fn tonemap(default: Tonemap) -> Spec<usize> {
         "r.tonemap",
         TONEMAPS,
         tonemap_index(default),
-        "The tone curve: agx, agx-punchy, aces, neutral, aces2 (aces2-analytic, the reference). G \
-         steps through them.",
+        "The tone curve: agx, agx-punchy, aces, neutral, aces2 (aces2-analytic, the reference); \
+         toggle steps through them.",
     )
 }
 
@@ -119,11 +119,7 @@ pub fn tonemap_of(index: usize) -> Tonemap {
 
 /// Bloom.
 pub fn bloom(default: bool) -> Spec<bool> {
-    Spec::bool(
-        "r.bloom",
-        default,
-        "Bloom (B toggles it); r.bloom.strength sets how much.",
-    )
+    Spec::bool("r.bloom", default, "Bloom; r.bloom.strength sets how much.")
 }
 
 /// Bloom's share of the shown image (`--bloom`).
@@ -142,8 +138,7 @@ pub fn exposure_compensation(default: f64) -> Spec<f64> {
         "r.exposure.compensation",
         default,
         -8.0..=8.0,
-        "The metered exposure's compensation in stops: positive brighter (- and = step it by \
-         half a stop).",
+        "The metered exposure's compensation in stops: positive brighter.",
     )
 }
 
@@ -157,7 +152,7 @@ pub fn local_exposure(default: usize) -> Spec<usize> {
         LOCAL_EXPOSURE,
         default,
         "Local exposure (D-067): a dark room beside a sunlit doorway lifted; view shows its gain \
-         in false colours. X steps through them.",
+         in false colours.",
     )
 }
 
@@ -166,7 +161,7 @@ pub fn ao(default: bool) -> Spec<bool> {
     Spec::bool(
         "r.ao",
         default,
-        "Ambient occlusion of the sky's light (GTAO; N toggles it).",
+        "Ambient occlusion of the sky's light (GTAO).",
     )
 }
 
@@ -185,7 +180,7 @@ pub fn probes(default: bool) -> Spec<bool> {
     Spec::bool(
         "r.probes",
         default,
-        "The light probes' diffuse light, bounces included (P toggles them).",
+        "The light probes' diffuse light, bounces included.",
     )
 }
 
@@ -194,17 +189,13 @@ pub fn sky_light(default: bool) -> Spec<bool> {
     Spec::bool(
         "r.sky_light",
         default,
-        "The sky's light on the surfaces, besides the sun's (I toggles it).",
+        "The sky's light on the surfaces, besides the sun's.",
     )
 }
 
 /// The sun's ray-traced shadows.
 pub fn shadows(default: bool) -> Spec<bool> {
-    Spec::bool(
-        "r.shadows",
-        default,
-        "The sun's ray-traced shadows (J toggles them).",
-    )
+    Spec::bool("r.shadows", default, "The sun's ray-traced shadows.")
 }
 
 /// The sky's reflection in glass and at grazing angles.
@@ -212,7 +203,7 @@ pub fn sky_reflections(default: bool) -> Spec<bool> {
     Spec::bool(
         "r.reflections.sky",
         default,
-        "The sky's reflection in glass, water and at grazing angles (F toggles it).",
+        "The sky's reflection in glass, water and at grazing angles.",
     )
 }
 
@@ -221,7 +212,7 @@ pub fn ray_reflections(default: bool) -> Spec<bool> {
     Spec::bool(
         "r.reflections.rays",
         default,
-        "Mirror rays against the scene in the smooth surfaces (Y toggles them).",
+        "Mirror rays against the scene in the smooth surfaces.",
     )
 }
 
@@ -230,7 +221,7 @@ pub fn sun_disc(default: bool) -> Spec<bool> {
     Spec::bool(
         "r.sun.disc",
         default,
-        "The sun as a disc of its true size (soft shadows); off, a point (Z toggles it).",
+        "The sun as a disc of its true size (soft shadows); off, a point.",
     )
 }
 
@@ -239,7 +230,7 @@ pub fn occlusion(default: bool) -> Spec<bool> {
     Spec::bool(
         "r.cull.occlusion",
         default,
-        "Two-pass occlusion culling against the depth pyramid (O toggles it); off, the same \
+        "Two-pass occlusion culling against the depth pyramid; off, the same \
          pixels.",
     )
 }
@@ -249,7 +240,7 @@ pub fn cone(default: bool) -> Spec<bool> {
     Spec::bool(
         "r.cull.cone",
         default,
-        "Back-facing clusters culled by their normal cones (C toggles it); off, the same pixels.",
+        "Back-facing clusters culled by their normal cones; off, the same pixels.",
     )
 }
 
@@ -258,7 +249,7 @@ pub fn translucency(default: bool) -> Spec<bool> {
     Spec::bool(
         "r.translucency",
         default,
-        "Light through thin translucent surfaces (Y toggles it in the asteroids).",
+        "Light through thin translucent surfaces.",
     )
 }
 
@@ -267,7 +258,7 @@ pub fn lod(default: bool) -> Spec<bool> {
     Spec::bool(
         "r.lod",
         default,
-        "Level of detail by the clusters' projected error (L toggles it); off, the finest.",
+        "Level of detail by the clusters' projected error; off, the finest.",
     )
 }
 
@@ -277,8 +268,7 @@ pub fn lod_error(default: f64) -> Spec<f64> {
         "r.lod.error",
         default,
         0.125..=16.0,
-        "The error in pixels a cluster may show before a finer one is drawn ([ and ] halve and \
-         double it).",
+        "The error in pixels a cluster may show before a finer one is drawn.",
     )
 }
 
@@ -292,7 +282,7 @@ pub fn sw_raster(default: SwRaster) -> Spec<usize> {
         SW_RASTER,
         sw_raster_index(default),
         "Small triangles rasterised in compute: off, auto (when enough dense triangles repay \
-         it), on. R steps through them.",
+         it), on.",
     )
 }
 
@@ -329,7 +319,7 @@ pub fn frustum(default: bool) -> Spec<bool> {
     Spec::bool(
         "r.cull.frustum",
         default,
-        "Instances and clusters outside the view culled (V toggles it in the meshlets bench); \
+        "Instances and clusters outside the view culled; \
          off, the same pixels.",
     )
 }

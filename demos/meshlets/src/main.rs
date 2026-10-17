@@ -27,7 +27,6 @@ use forge_render::{
     MeshletRenderer, MeshletScene, MeshletSceneBuilder, Tonemap, exposure_from_ev100,
 };
 use glam::{Mat4, Quat, Vec3};
-use winit::keyboard::KeyCode;
 
 mod vars;
 
@@ -280,24 +279,11 @@ impl Drop for Bench {
 impl Demo for Bench {
     fn resized(&mut self, ctx: &mut Context) -> Result<()> {
         self.renderer.resize(ctx.extent())?;
+        // A frozen culling camera was the old aspect's: the freeze ends.
         self.frozen = None;
         self.flags.0 &= !CullFlags::FREEZE;
+        self.unfreeze_var(&mut ctx.settings);
         Ok(())
-    }
-
-    fn key_pressed(&mut self, ctx: &mut Context, code: KeyCode) {
-        match code {
-            KeyCode::KeyF => {
-                self.flags.toggle(CullFlags::FREEZE);
-                if self.flags.has(CullFlags::FREEZE) {
-                    self.frozen = Some(self.cull_camera(ctx.aspect()));
-                }
-            }
-            // The other keys set settings (D-069, `vars`): C, V, O, M, L, K, R, H, [ and ], Tab, G.
-            _ => {
-                self.vars_key(ctx, code);
-            }
-        }
     }
 
     fn register(&mut self, ctx: &mut Context) {
@@ -305,8 +291,12 @@ impl Demo for Bench {
     }
 
     fn update(&mut self, ctx: &mut Context, input: &Input, dt: f32) {
-        // The settings changed since the last frame (D-069).
+        // The settings changed since the last frame (D-069); `meshlets.freeze` holds the culling
+        // camera where it stands.
         self.apply_vars(&ctx.settings);
+        if self.flags.has(CullFlags::FREEZE) && self.frozen.is_none() {
+            self.frozen = Some(self.cull_camera(ctx.aspect()));
+        }
         self.camera.update(input, dt);
         if self.args.orbit {
             // Deterministic per frame (not per second) so captures at a frame index match.

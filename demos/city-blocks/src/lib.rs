@@ -171,10 +171,10 @@ pub struct Args {
     /// default, a stop brighter: the owner's pick (2026-10-10).
     #[arg(long, default_value = "agx-punchy")]
     tonemap: Tonemap,
-    /// HDR output: off, hdr10, scrgb or offscreen (F2 switches it at run time, F3 steps the
-    /// peak, F5 opens the calibration pages). HDR10 and scRGB need the OS to show the display in
-    /// HDR; offscreen previews an HDR10 image on any monitor. ACES 2.0 (G) is the curve made for
-    /// it.
+    /// HDR output: off, hdr10, scrgb or offscreen (the console's app.hdr switches it at run time,
+    /// app.hdr.peak steps the peak, app.calibrate opens the calibration pages). HDR10 and scRGB
+    /// need the OS to show the display in HDR; offscreen previews an HDR10 image on any monitor.
+    /// ACES 2.0 (r.tonemap aces2) is the curve made for it.
     #[arg(long, default_value = "off")]
     hdr: HdrMode,
     /// The paper-white offset in HDR: stops added to the scene before ACES 2.0 (0, the
@@ -505,8 +505,8 @@ pub struct Args {
     #[arg(long)]
     sun_size: Option<f32>,
     /// The denoiser of the sun's soft shadows (D-049): NVIDIA's SIGMA, where NRD is in
-    /// `nrd-sdk/bin` (#172), else AMD's FidelityFX (#173), the default without NRD. F6 steps
-    /// through SIGMA, FFX and none at run time.
+    /// `nrd-sdk/bin` (#172), else AMD's FidelityFX (#173), the default without NRD. The console's
+    /// r.shadows.denoiser sets SIGMA, FFX or none at run time.
     #[arg(long, value_enum)]
     shadow_denoiser: Option<ShadowDenoiserArg>,
     /// Keep the resolve's own shadow ray, no denoiser (#172): the soft shadows as before, at the
@@ -584,7 +584,7 @@ pub struct Args {
     #[arg(long)]
     no_taa: bool,
     /// How strongly TAA's image is sharpened (FidelityFX RCAS, D-045): this many stops below
-    /// its strongest, each stop half as strong. T cycles TAA sharpened, plain and off.
+    /// its strongest, each stop half as strong (r.taa.sharpen_stops; r.taa.sharpen and r.aa switch it off).
     #[arg(long, default_value_t = 0.5)]
     rcas: f32,
     /// Show TAA's image unsharpened.
@@ -669,11 +669,11 @@ struct Gallery {
     /// What the liquid's drawing shows: as it looks (1), its speed view (2), its landing view (3).
     liquid_mode: forge_render::LiquidMode,
     /// DLAA where it runs (D-045): DLSS at the output's size and the display pass it hands its
-    /// HDR image to, in place of TAA while `dlaa_on` (T cycles it with TAA).
+    /// HDR image to, in place of TAA while `dlaa_on` (`r.aa`).
     dlaa: Option<(forge_render::DlssUpscaler, forge_render::Display)>,
     dlaa_on: bool,
     /// The denoisers of the sun's soft shadows (D-049): NVIDIA's SIGMA where NRD's library is in
-    /// `nrd-sdk/bin` (#172), then AMD's FidelityFX (#173); `sun_shadow_on` the one on (F6), or
+    /// `nrd-sdk/bin` (#172), then AMD's FidelityFX (#173); `sun_shadow_on` the one on (`r.shadows.denoiser`), or
     /// none.
     sun_shadows: Vec<forge_render::SunShadowDenoiser>,
     sun_shadow_on: Option<usize>,
@@ -920,7 +920,7 @@ impl Gallery {
         };
         if let Some(index) = sun_shadow_on {
             let denoiser = &sun_shadows[index];
-            tracing::info!(denoiser = denoiser.kind().name(), version = %denoiser.version(), "the sun's shadows denoised (F6 steps through SIGMA, FFX and none)");
+            tracing::info!(denoiser = denoiser.kind().name(), version = %denoiser.version(), "the sun's shadows denoised (r.shadows.denoiser sets SIGMA, FFX or none)");
         }
         // The shadows' sun: the real one, or softer where a denoiser smooths them (D-049).
         let real = forge_render::starfield::SUN_ANGULAR_RADIUS_1AU;
@@ -1568,10 +1568,11 @@ impl Demo for Gallery {
         Ok(())
     }
 
-    fn key_pressed(&mut self, ctx: &mut Context, code: KeyCode) {
-        // The scene's keys first (#216): Space, X, Enter and C in the physics lab. An Enter it
-        // takes starts it over, the tank's water too: seeded again, the tick that puts the gate
-        // back skipped.
+    fn key_pressed(&mut self, _ctx: &mut Context, code: KeyCode) {
+        // The game's keys only (D-069's key map): the developer's switches are settings and
+        // commands the console sets, on the keys the owner binds. The scene's first (#216):
+        // Space, X, Enter and C in the physics lab. An Enter it takes starts it over, the tank's
+        // water too: seeded again, the tick that puts the gate back skipped.
         if let Some(running) = &mut self.running
             && running.key_pressed(code, &self.camera)
         {
@@ -1580,86 +1581,68 @@ impl Demo for Gallery {
             }
             return;
         }
-        // The keys bound to the renderer's settings (D-069: T, G, B, X, N, P, I, Z, J, F, Y, O,
-        // L, R, [ and ], Tab, and the debug views M, K, H, V, U) set them; the next update
-        // applies them.
-        if self.vars_key(ctx, code) {
-            return;
-        }
         match code {
-            // Where the camera is, as `--view` takes it: to start a run where something was seen.
-            KeyCode::F9 => {
-                let (p, c) = (self.camera.position, &self.camera);
-                tracing::info!(
-                    "the view: --view={:.2},{:.2},{:.2},{:.1},{:.1}",
-                    p.x,
-                    p.y,
-                    p.z,
-                    c.yaw.to_degrees(),
-                    c.pitch.to_degrees()
-                );
-            }
-            // The real sky (D-046): the catalogue's stars and the Moon's albedo, or not.
-            KeyCode::Period => {
-                if let Some(night) = self.night.as_mut().filter(|n| n.has_real()) {
-                    night.show_real = !night.show_real;
-                    tracing::info!(real = night.show_real, "the real sky");
-                }
-            }
-            // NVIDIA's SIGMA over the sun's shadows, or the resolve's own ray (#172).
-            // The sun's shadows' denoiser: SIGMA, FFX, none, then again (#172, #173).
-            KeyCode::F6 if !self.sun_shadows.is_empty() => {
-                self.sun_shadow_on = match self.sun_shadow_on {
-                    None => Some(0),
-                    Some(index) if index + 1 < self.sun_shadows.len() => Some(index + 1),
-                    Some(_) => None,
-                };
-                let name = match self.sun_shadow_on {
-                    Some(index) => {
-                        let denoiser = &mut self.sun_shadows[index];
-                        denoiser.reset_history();
-                        denoiser.kind().name()
-                    }
-                    None => "none",
-                };
-                tracing::info!(denoiser = name, "the sun's shadows' denoiser");
-            }
             // Space: on the island, the walker jumps (#196).
             KeyCode::Space => {
                 if let Some(walker) = &mut self.walker {
                     walker.jump();
                 }
             }
-            KeyCode::Enter => {
-                if self.args.island.is_some() {
-                    // The island's walker (#196): on the ground under the camera, or gone and the
-                    // camera free again where it is.
-                    self.walker = match self.walker.take() {
-                        Some(_) => None,
-                        None => {
-                            let layers = self.sand.as_ref().map(island_sand::SandWindow::layers);
-                            island_walk::Walker::new(island_drawn(), self.camera.position, layers)
-                                .inspect_err(|e| tracing::warn!("the walker: {e}"))
-                                .ok()
-                        }
-                    };
-                }
+            // The island's walker (#196): on the ground under the camera, or gone and the camera
+            // free again where it is.
+            KeyCode::Enter if self.args.island.is_some() => {
+                self.walker = match self.walker.take() {
+                    Some(_) => None,
+                    None => {
+                        let layers = self.sand.as_ref().map(island_sand::SandWindow::layers);
+                        island_walk::Walker::new(island_drawn(), self.camera.position, layers)
+                            .inspect_err(|e| tracing::warn!("the walker: {e}"))
+                            .ok()
+                    }
+                };
             }
-            // The tank's water as it looks, coloured by its speed, or by where its rays land (#156).
-            KeyCode::Digit1 => self.liquid_mode = forge_render::LiquidMode::Look,
-            KeyCode::Digit2 => self.liquid_mode = forge_render::LiquidMode::Speed,
-            KeyCode::Digit3 => self.liquid_mode = forge_render::LiquidMode::Landing,
             _ => {}
         }
     }
 
     fn register(&mut self, ctx: &mut Context) {
         self.register_vars(&mut ctx.settings);
+        ctx.settings.add_command(
+            "camera.where",
+            "",
+            "Where the camera is, as --view takes it: to start a run where something was seen \
+             (F9 before D-069).",
+            false,
+        );
+    }
+
+    fn command(
+        &mut self,
+        _ctx: &mut Context,
+        name: &str,
+        _args: &[String],
+    ) -> Option<std::result::Result<String, String>> {
+        match name {
+            "camera.where" => {
+                let (p, c) = (self.camera.position, &self.camera);
+                let view = format!(
+                    "--view={:.2},{:.2},{:.2},{:.1},{:.1}",
+                    p.x,
+                    p.y,
+                    p.z,
+                    c.yaw.to_degrees(),
+                    c.pitch.to_degrees()
+                );
+                tracing::info!("the view: {view}");
+                Some(Ok(view))
+            }
+            _ => None,
+        }
     }
 
     fn update(&mut self, ctx: &mut Context, input: &Input, dt: f32) {
-        // The settings changed since the last frame: the console's, the keys', and at the first
-        // frame those forge.cfg and --set gave (D-069).
+        // The settings changed since the last frame: the console's, the bound keys', and at the
+        // first frame those forge.cfg and --set gave (D-069).
         self.apply_vars(&ctx.settings);
         let now = Instant::now();
         let ms = (now - self.last_frame).as_secs_f64() * 1e3;

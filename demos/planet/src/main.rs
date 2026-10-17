@@ -44,7 +44,6 @@ use forge_world::CellId;
 use glam::{DQuat, DVec3, Vec3};
 use normal_maps::NormalMaps;
 use stream::{Built, Change, SceneParts, Tile, TileStream};
-use winit::keyboard::KeyCode;
 
 #[derive(Parser, Debug, Clone)]
 #[command(about = "A planet from orbit to its ground (D-056)")]
@@ -1461,12 +1460,6 @@ impl Demo for PlanetDemo {
             dlss.configure(forge_render::DlssMode::Dlaa, ctx.extent())?;
         }
         Ok(())
-    }
-
-    fn key_pressed(&mut self, ctx: &mut Context, code: KeyCode) {
-        // Every key of the planet sets a setting (D-069, `vars`): P, T, M, O, C, X, K, J, N, G,
-        // Tab, [ and ], - and =.
-        self.vars_key(ctx, code);
     }
 
     fn register(&mut self, ctx: &mut Context) {

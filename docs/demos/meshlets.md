@@ -6,10 +6,14 @@ Run: `cargo run --release -p meshlets` (options `--side N`, `--detail N`, `--rou
 `--tonemap agx|agx-punchy|aces|neutral|aces2|aces2-analytic`, `--ssaa` (2 × 2 supersampling for screenshots, D-045), `--force-fallback`, `--mip-check` (see
 "Textures and the mip check" below), `--tone-check` (ACES 2.0's GPU paths against the CPU,
 issue #76: see [asteroids.md](asteroids.md), "ACES 2.0")).
-Controls: WASD/QE move, Shift fast, right mouse drag to look, **F1** profiler, **F** freeze
-culling (move the camera to see what was culled), **C** cone culling, **V** frustum culling,
-**O** occlusion culling, **L** cluster LOD, **K** LOD colours, **[** / **]** LOD threshold,
-**M** meshlet colours (on by default here), **Tab** wireframe, **G** tone curve. The bench
+Controls: the keys at W, A, S, D, Q, E move (Z, Q, S, D, A, E on AZERTY), Shift faster, right
+mouse drag to look, **F1** profiler. The rest is set from the console (the key under Esc;
+[console.md](console.md) lists the settings and the keys they had before D-069's key map,
+2026-10-17): `meshlets.freeze` freezes the culling camera (move the camera to see what was
+culled), `r.cull.cone` cone culling, `r.cull.frustum` frustum culling, `r.cull.occlusion`
+occlusion culling, `r.lod` cluster LOD, `r.show.lod` LOD colours, `r.lod.error` the LOD
+threshold, `r.show.meshlets` meshlet colours (on by default here), `r.show.wireframe`
+wireframe, `r.tonemap` tone curve. The bench
 draws without anti-aliasing or a sky on purpose: it measures culling, not looks; since
 2026-09-24 it shades through the visibility buffer like the ballad (a compute resolve into
 a pre-exposed HDR image at a fixed EV100 of 15, then the display transform into the
@@ -231,7 +235,7 @@ and TAA see one image. Pass 2 stayed in hardware until issue #30; it now rasteri
 clusters the same way, so a cluster is drawn alike whichever pass draws it.
 
 **When it runs.** The cull counts the triangles of the dense clusters every frame, running
-or not, and `--sw-raster auto` (the default; **R** cycles auto → on → off, **H** tints its
+or not, and `--sw-raster auto` (the default; `r.sw_raster` cycles auto → on → off, `r.show.raster` tints its
 pixels) turns it on from 1.5 M dense triangles and off below 0.75 M. At the 1 px LOD both
 demos hold 0.01–0.08 M, at full detail 29–70 M. Break-even measured near 1 M (`--lod-error`
 0.5: 0.43–0.54 M dense, forced on 0.01 ms slower; 0.25: 1.8–4.7 M, 0.05–0.10 ms faster).
@@ -506,7 +510,7 @@ the default row at 1 049 k clusters; since #27 it draws all 1 140 k again, in 6.
   the depth buffer). Occlusion on vs off while orbiting: still 0 pixels.
 - Since issue #7 (same day) the rocks are lit in physical units (the sun at 128 klux) and
   drawn at a fixed EV100 of 14 (`--ev100`; 15 before 2026-10-10), and the display pass (AgX's
-  punchy look by default since then, **G** cycles the curves) replaces the blit: 17 passes,
+  punchy look by default since then, `r.tonemap` cycles the curves) replaces the blit: 17 passes,
   32 image + 3 memory barriers, GPU 0.18 ms unchanged. Occlusion on vs off while orbiting: 0 pixels.
 
 ## Textures and the mip check (issue #20, 2026-09-25)
@@ -537,7 +541,7 @@ The bench's rocks are two rows of the material table, rock and ice (a fifth of t
 instances, by the rule the shader used before). The standard pass shades the rock and lists
 the tiles that hold ice; the ice pass shades those. The bench costs 0.197 ms instead of
 0.177 (`shading/standard` 0.040 and `shading/ice` 0.009, against one 0.029 resolve). Its
-default view colours the clusters (**M**). There, ice instances now keep the ice's highlight
+default view colours the clusters (`r.show.meshlets`). There, ice instances now keep the ice's highlight
 and rim, so 1.4 % of the pixels moved against the old captures. With the colours off, the
 ballad's captures are identical to the single resolve's (`docs/demos/asteroids.md`).
 

@@ -584,7 +584,7 @@ glass's ray tracing answers (#50, #52).
   It rebuilds the water's point from the depth the surface wrote, traces the ray against the
   TLAS, and on a hit adds weight × (hit − sky). The hit is lit as the glass's are: the sun
   through a shadow ray, and the probes' light.
-- **The keys:** **Y** (`--no-ray-reflections`) and **F** turn the rays off, as for the glass. A
+- **The settings:** `r.reflections.rays` (`--no-ray-reflections`) and `r.reflections.sky` turn the rays off, as for the glass. A
   GPU without ray queries keeps the sky.
 
 ![The coast view and the view from the sea: the stand-in, the water with the sky alone, the water with the island traced](../../reports/2026-09-30-105/reflection-sheet.png)
@@ -615,7 +615,7 @@ and the same pass traces it.
   the eight points into a penumbra. A blocked ray takes the share away. It starts 2 m off the
   water, the terrain's own start (`TERRAIN_SHADOW_START`): the sea floor's traced surface may
   stand a metre above the drawn one, above the water in the shallows.
-- **The key:** **J** (the shadows), as for everything else.
+- **The setting:** `r.shadows`, as for everything else.
 
 ![The island from the north-west against a 10° sun: without the water's shadow and with it](../../reports/2026-09-30-105/shadow-sheet.png)
 
@@ -3532,7 +3532,7 @@ brightness.
 
 ## The real sky (D-046's second step, #164, 2026-10-04)
 
-`--real-sky`, or **.** while it runs, swaps the procedural stars and the plain Moon for the real
+`--real-sky`, or `r.sky.real` while it runs, swaps the procedural stars and the plain Moon for the real
 ones, together (the owner's answer).
 - **The stars:** the Yale Bright Star Catalogue's 9 096 stars with a position, to magnitude 6.5
   (`assets/sky/bsc5p.txt`), binned and drawn as the procedural ones are. The catalogue is NASA

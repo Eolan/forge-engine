@@ -36,7 +36,6 @@ use forge_render::{
 };
 use forge_task::TaskPool;
 use glam::{Mat4, Quat, Vec3};
-use winit::keyboard::KeyCode;
 
 mod vars;
 
@@ -739,12 +738,6 @@ impl Demo for Ballad {
     fn resized(&mut self, ctx: &mut Context) -> Result<()> {
         self.apply_upscaler(ctx.extent())?;
         Ok(())
-    }
-
-    fn key_pressed(&mut self, ctx: &mut Context, code: KeyCode) {
-        // Every key of the ballad sets a setting (D-069, `vars`): U, P, T, M, O, C, X, L, K, R,
-        // H, [ and ], Tab, G, B, N, V, Y, Z, J, - and =.
-        self.vars_key(ctx, code);
     }
 
     fn register(&mut self, ctx: &mut Context) {

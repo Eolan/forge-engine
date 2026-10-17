@@ -1,13 +1,12 @@
 //! The gallery's settings (D-069): the renderer's shared ones (`forge_render::settings`), each
 //! registered with the default every demo shares and set to what the flags made of it, applied
-//! to the gallery when they change, and set by its keys. The city, the island, the physics lab
-//! and the city plan are galleries: one place for all four.
+//! to the gallery when they change, set from the console (no key sets them since D-069's key
+//! map). The city, the island, the physics lab and the city plan are galleries: one place for
+//! all four.
 
-use forge_app::Context;
-use forge_app::settings::{Settings, Var};
+use forge_app::settings::{Settings, Spec, Var};
 use forge_render::CullFlags;
 use forge_render::settings::{self as rs, AA_DLAA, AA_DLSS, AA_OFF, AA_TAA};
-use winit::keyboard::KeyCode;
 
 use crate::Gallery;
 
@@ -31,6 +30,13 @@ pub(crate) struct RenderVars {
     /// The settings that are a bit of the culling flags: shadows, reflections, culling, LOD and
     /// the debug views.
     bits: Vec<(Var<bool>, u32)>,
+    /// The sun's shadows' denoiser (`r.shadows.denoiser`, F6 before D-069), where there is one.
+    denoiser: Option<Var<usize>>,
+    /// The catalogue's stars and the Moon's albedo at night (`r.sky.real`, the period key
+    /// before D-069), where the night has them.
+    sky_real: Option<Var<bool>>,
+    /// The tank's water view (`r.show.liquid`, 1 to 3 before D-069), where there is a tank.
+    liquid: Option<Var<usize>>,
 }
 
 impl Gallery {
@@ -59,29 +65,29 @@ impl Gallery {
             (rs::occlusion(true), CullFlags::OCCLUSION, true),
             (rs::lod(true), CullFlags::LOD, true),
             (
-                rs::show("meshlets", "Each meshlet in a colour of its own (M)."),
+                rs::show("meshlets", "Each meshlet in a colour of its own."),
                 CullFlags::MESHLET_COLORS,
                 false,
             ),
             (
-                rs::show("lod", "Each cluster coloured by its level of detail (K)."),
+                rs::show("lod", "Each cluster coloured by its level of detail."),
                 CullFlags::LOD_COLORS,
                 false,
             ),
             (
-                rs::show("raster", "The software rasteriser's pixels in green (H)."),
+                rs::show("raster", "The software rasteriser's pixels in green."),
                 CullFlags::SHOW_RASTER,
                 false,
             ),
             (
-                rs::show("ao", "The ambient occlusion alone, as a grey surface (V)."),
+                rs::show("ao", "The ambient occlusion alone, as a grey surface."),
                 CullFlags::SHOW_AO,
                 false,
             ),
             (
                 rs::show(
                     "gi",
-                    "The light the sky and the probes send a white surface (U).",
+                    "The light the sky and the probes send a white surface.",
                 ),
                 CullFlags::SHOW_GI,
                 false,
@@ -103,6 +109,59 @@ impl Gallery {
         .into_iter()
         .map(|(spec, b, default)| (s.add_from(spec, default, bit(b)), b))
         .collect();
+        // What only some galleries have: the shadows' denoisers, the real night sky, the tank.
+        let denoiser = (!self.sun_shadows.is_empty()).then(|| {
+            let now = match self.sun_shadow_on {
+                Some(index) => {
+                    let name = self.sun_shadows[index].kind().name();
+                    DENOISERS
+                        .iter()
+                        .position(|d| d.eq_ignore_ascii_case(name))
+                        .unwrap_or(0)
+                }
+                None => DENOISERS.len() - 1,
+            };
+            s.add_from(
+                Spec::choice(
+                    "r.shadows.denoiser",
+                    DENOISERS,
+                    0,
+                    "The sun's soft shadows' denoiser: NVIDIA's SIGMA where NRD's library is, \
+                     AMD's FidelityFX, or none (one ray a frame and TAA's average).",
+                ),
+                0,
+                now,
+            )
+        });
+        let sky_real = self.night.as_ref().filter(|n| n.has_real()).map(|night| {
+            s.add_from(
+                Spec::bool(
+                    "r.sky.real",
+                    false,
+                    "At night, the catalogue's stars and the Moon's albedo (D-046).",
+                ),
+                false,
+                night.show_real,
+            )
+        });
+        let liquid = self.liquid.is_some().then(|| {
+            let now = match self.liquid_mode {
+                forge_render::LiquidMode::Look => 0,
+                forge_render::LiquidMode::Speed => 1,
+                forge_render::LiquidMode::Landing => 2,
+            };
+            s.add_from(
+                Spec::choice(
+                    "r.show.liquid",
+                    LIQUID_VIEWS,
+                    0,
+                    "The tank's water as it looks, coloured by its speed, or by where its rays \
+                     land (#156).",
+                ),
+                0,
+                now,
+            )
+        });
         self.vars = Some(RenderVars {
             aa: s.add_from(rs::aa(aa_default), aa_default, aa_now),
             sharpen: s.add_from(rs::sharpen(true), true, self.taa.sharpen.is_some()),
@@ -135,11 +194,14 @@ impl Gallery {
                 rs::sw_raster_index(self.args.sw_raster),
             ),
             wireframe: s.add_from(
-                rs::show("wireframe", "The triangles' edges over the frame (Tab)."),
+                rs::show("wireframe", "The triangles' edges over the frame."),
                 false,
                 self.wireframe,
             ),
             bits,
+            denoiser,
+            sky_real,
+            liquid,
         });
         // Values from forge.cfg and --set reach the gallery at the first apply.
         self.vars_seen = 0;
@@ -218,80 +280,47 @@ impl Gallery {
                 self.flags.toggle(bit);
             }
         }
+        if let Some(var) = v.denoiser
+            && s.changed_since(var, seen)
+        {
+            let wanted = DENOISERS[s.get(var)];
+            let index = self
+                .sun_shadows
+                .iter()
+                .position(|d| d.kind().name().eq_ignore_ascii_case(wanted));
+            match index {
+                Some(index) => {
+                    self.sun_shadows[index].reset_history();
+                    self.sun_shadow_on = Some(index);
+                }
+                None if wanted == "none" => self.sun_shadow_on = None,
+                None => tracing::info!("r.shadows.denoiser {wanted}: not here (no NRD?)"),
+            }
+        }
+        if let Some(var) = v.sky_real
+            && changed(var)
+            && let Some(night) = self.night.as_mut()
+        {
+            night.show_real = s.get(var);
+        }
+        if let Some(var) = v.liquid
+            && s.changed_since(var, seen)
+        {
+            self.liquid_mode = match s.get(var) {
+                0 => forge_render::LiquidMode::Look,
+                1 => forge_render::LiquidMode::Speed,
+                _ => forge_render::LiquidMode::Landing,
+            };
+        }
         self.vars_seen = s.changes();
     }
-
-    /// The keys bound to settings: they set them, and [`Gallery::apply_vars`] does the rest.
-    /// Returns whether the key was one of them.
-    pub(crate) fn vars_key(&mut self, ctx: &mut Context, code: KeyCode) -> bool {
-        let Some(v) = &self.vars else {
-            return false;
-        };
-        let s = &mut ctx.settings;
-        let bit_var = |b: u32| {
-            v.bits
-                .iter()
-                .find(|(_, bit)| *bit == b)
-                .map(|&(var, _)| var)
-        };
-        let toggled = match code {
-            KeyCode::KeyN => Some(s.toggle_var(v.ao)),
-            KeyCode::KeyP => Some(s.toggle_var(v.probes)),
-            KeyCode::KeyI => Some(s.toggle_var(v.sky_light)),
-            KeyCode::KeyB => Some(s.toggle_var(v.bloom)),
-            KeyCode::KeyX => Some(s.toggle_var(v.local)),
-            KeyCode::KeyZ => Some(s.toggle_var(v.sun_disc)),
-            KeyCode::KeyR => Some(s.toggle_var(v.sw_raster)),
-            KeyCode::Tab => Some(s.toggle_var(v.wireframe)),
-            KeyCode::KeyJ => bit_var(CullFlags::SHADOWS).map(|x| s.toggle_var(x)),
-            KeyCode::KeyF => bit_var(CullFlags::SKY_REFLECTIONS).map(|x| s.toggle_var(x)),
-            KeyCode::KeyY => bit_var(CullFlags::RAY_REFLECTIONS).map(|x| s.toggle_var(x)),
-            KeyCode::KeyO => bit_var(CullFlags::OCCLUSION).map(|x| s.toggle_var(x)),
-            KeyCode::KeyL => bit_var(CullFlags::LOD).map(|x| s.toggle_var(x)),
-            KeyCode::KeyM => bit_var(CullFlags::MESHLET_COLORS).map(|x| s.toggle_var(x)),
-            KeyCode::KeyK => bit_var(CullFlags::LOD_COLORS).map(|x| s.toggle_var(x)),
-            KeyCode::KeyH => bit_var(CullFlags::SHOW_RASTER).map(|x| s.toggle_var(x)),
-            KeyCode::KeyV => bit_var(CullFlags::SHOW_AO).map(|x| s.toggle_var(x)),
-            KeyCode::KeyU => bit_var(CullFlags::SHOW_GI).map(|x| s.toggle_var(x)),
-            KeyCode::KeyG => {
-                let next = rs::tonemap_of(s.get(v.tonemap)).next();
-                s.set(v.tonemap, rs::tonemap_index(next));
-                Some(Ok(String::new()))
-            }
-            KeyCode::BracketLeft | KeyCode::BracketRight => {
-                let e = s.get(v.lod_error);
-                let e = if code == KeyCode::BracketLeft {
-                    e * 0.5
-                } else {
-                    e * 2.0
-                };
-                s.set(v.lod_error, e);
-                Some(Ok(String::new()))
-            }
-            // DLAA where it runs, TAA sharpened, plain, off (D-045).
-            KeyCode::KeyT => {
-                let next = match (s.get(v.aa), s.get(v.sharpen)) {
-                    (AA_DLAA | AA_DLSS, _) => (AA_TAA, true),
-                    (AA_TAA, true) => (AA_TAA, false),
-                    (AA_TAA, false) => (AA_OFF, true),
-                    _ if self.dlaa.is_some() => (AA_DLAA, true),
-                    _ => (AA_TAA, true),
-                };
-                s.set(v.aa, next.0);
-                s.set(v.sharpen, next.1);
-                let name = match next {
-                    (AA_DLAA, _) => "DLAA",
-                    (AA_TAA, true) => "TAA, sharpened",
-                    (AA_TAA, false) => "TAA",
-                    _ => "none",
-                };
-                tracing::info!(anti_aliasing = name);
-                Some(Ok(String::new()))
-            }
-            _ => None,
-        };
-        toggled.is_some()
-    }
 }
+
+/// `r.shadows.denoiser`'s choices: NVIDIA's SIGMA (where NRD's library is), AMD's FidelityFX,
+/// none (the resolve's own ray a frame).
+const DENOISERS: &[&str] = &["sigma", "ffx", "none"];
+/// `r.show.liquid`'s choices: the tank's water as it looks, coloured by its speed, or by where
+/// its rays land (#156).
+const LIQUID_VIEWS: &[&str] = &["look", "speed", "landing"];
 
 use forge_render::{SwRaster, Tonemap};

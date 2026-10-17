@@ -76,19 +76,23 @@ cargo run --release -p asteroids
 A 90-second scripted flight through 10 000 asteroids (rock chunks and ice blocks) in 42
 procedural shapes (531 M source triangles) over a procedural sky with the sun and an Earth-like planet under a
 physical atmosphere, with temporal anti-aliasing. Keys: **F1** profiling overlay (off →
-compact → full: GPU time per pass and CPU time per zone, grouped by subject; **1**–**9**
-open or fold a group; the same zones go to Tracy with `--features profiling`), **P** pause
-the path and fly freely, **T** TAA (sharpened → plain → off; `--rcas STOPS`, `--no-rcas`),
-**O** occlusion culling, **C** cone culling, **L** cluster LOD, **K** LOD colours, **[** /
-**]** LOD threshold, **X** culling-error view (culled meshlets drawn in red: any red pixel
-is a bug), **M** meshlet colours, **R** software rasteriser (auto → on → off), **H** tint
-what it drew, **Tab** wireframe, **B** bloom, **J** the sun's ray-traced shadows, **Z** soft shadows, **N** ambient occlusion, **V** the belt's dust, **Y** translucent ice, **G** tone curve (AgX punchy → ACES → PBR Neutral →
-ACES 2.0 → AgX), **-** / **=** exposure compensation (half an EV per press), **U** TAA or a DLSS mode
-(Windows, the Streamline SDK in `streamline-sdk/`, an RTX GPU; DLAA by default there, D-045),
-**F2** HDR on or off, **F3** the HDR peak (500 → 1000 → 2000 → 4000 nits), **F4** the HDR
-preview's false colours, **F5** the HDR calibration pages (peak, black, paper white; Up/Down,
-Shift for single codes, Backspace for the OS's value, F5 next and save, Esc cancel; saved per
-monitor in `settings/display.txt`; issue #125) (F2–F5 in every demo).
+compact → full: GPU time per pass and CPU time per zone, grouped by subject; the same zones go
+to Tracy with `--features profiling`), **Alt+Enter** fullscreen, **Esc** quit, and the key under
+Esc (² on AZERTY, ` on QWERTY) for the console: the rest is set from there, or from a key the
+console's `bind` gives it (D-069's key map, 2026-10-17;
+[docs/demos/console.md](docs/demos/console.md) lists the settings and the keys they had before).
+In this demo: `asteroids.paused` stops the path to fly freely, `r.aa` TAA (sharpened or plain;
+`--rcas STOPS`, `--no-rcas`), DLAA or DLSS at `r.dlss.mode` (Windows, the Streamline SDK in
+`streamline-sdk/`, an RTX GPU; DLAA by default there, D-045), `r.cull.occlusion`,
+`r.cull.cone`, `r.lod`, `r.show.lod`, `r.lod.error`, `r.show.culled` (culled meshlets drawn in
+red: any red pixel is a bug), `r.show.meshlets`, `r.sw_raster` (auto, on, off),
+`r.show.raster`, `r.show.wireframe`, `r.bloom`, `r.shadows` (the sun's ray-traced shadows),
+`r.sun.disc` (soft shadows), `r.ao`, `asteroids.dust`, `r.translucency` (ice), `r.tonemap`
+(AgX punchy, ACES, PBR Neutral, ACES 2.0, AgX), `r.exposure.compensation` (stops), and in every
+demo `app.hdr` (HDR on or off), `app.hdr.peak` (500, 1000, 2000, 4000 nits),
+`app.hdr.false_colours` (the HDR preview's), `app.calibrate` (the HDR calibration pages: peak,
+black, paper white; Up/Down, Shift for single codes, Backspace for the OS's value, F5 next and
+save, Esc cancel; saved per monitor in `settings/display.txt`; issue #125).
 Options: `--count N` asteroids, `--length M` belt length, `--duration S` seconds per pass,
 `--origin M` (the field moved M metres from the world's origin along every axis, the camera
 with it: the far-origin check, issue #93), `--sun-dir x,y,z`, `--planet-dir x,y,z`, `--planet-angle DEG`, `--planet-march [STEPS]` (the planet by a march per pixel, 16 segments, instead
@@ -361,7 +365,7 @@ What each script does and how to build a baseline from an older commit:
 |---|---|
 | `FORGE_MONITOR` | `secondary` (default: the first non-primary monitor), `primary`, or a monitor index. Scripted runs (`--frames`) never take keyboard focus. |
 | `FORGE_OVERLAY` | `off`, `compact` or `full`: the profiling overlay's start mode (default: compact when interactive, off in scripted runs; F1 cycles at run time). |
-| `FORGE_HDR` | `off`, `hdr10`, `scrgb` or `offscreen`: the HDR output, over the demo's `--hdr` (issue #94; F2 switches at run time). |
+| `FORGE_HDR` | `off`, `hdr10`, `scrgb` or `offscreen`: the HDR output, over the demo's `--hdr` (issue #94; the console's `app.hdr` switches at run time). |
 | `FORGE_HDR_CYCLE=N` | press F2 every N frames: the HDR switch in scripted runs (`tools/validate.sh`). |
 | `FORGE_HDR_FALSE_COLOURS=1` | the off-screen HDR preview starts in false colours (F4): yellow above paper white, red at the peak, blue outside Rec.709. |
 | `FORGE_HDR_CALIBRATION` | `peak`, `black` or `white`: opens that HDR calibration page at start, in an HDR mode (scripted captures of the pages, issue #125). |

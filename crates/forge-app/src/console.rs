@@ -6,8 +6,14 @@
 //! `list`, `reset`, `version`, `clear`), else the shell's or the demo's. Tab completes a name, then
 //! a choice's value; the names that fit show under the line as it is typed. Up and Down walk the
 //! history, which is kept between runs; the values set are not (the owner, 2026-10-17).
+//!
+//! `bind KEY LINE` runs a line when a key is pressed with the console closed (the developer
+//! keys left the demos for the console, the owner, 2026-10-17); what it printed shows for a few
+//! seconds at the bottom of the window.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use winit::keyboard::KeyCode;
 
@@ -20,6 +26,11 @@ const HISTORY_KEPT: usize = 200;
 const LOG_KEPT: usize = 500;
 /// The names listed under the line as it is typed.
 const SUGGESTIONS: usize = 10;
+/// How long a bound key's outcome shows with the console closed, and how many lines.
+const NOTICE_TIME: Duration = Duration::from_secs(3);
+const NOTICES: usize = 4;
+/// The keys the shell keeps: the console's own, Escape, F1 (`r.display_info`).
+const RESERVED_KEYS: &[&str] = &["²", "`", "escape", "f1"];
 
 /// What the console asks the shell to do after a key.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -52,6 +63,12 @@ pub struct Console {
     history_path: Option<PathBuf>,
     /// Tab's walk through the candidates once their common prefix cannot grow.
     cycle: Option<Cycle>,
+    /// The keys bound to console lines (`bind`), by name.
+    binds: BTreeMap<String, String>,
+    /// What the bound keys printed, and when, shown a while with the console closed.
+    notices: Vec<(String, Color, Instant)>,
+    /// The lines printed since the start.
+    printed: usize,
 }
 
 /// The candidates Tab steps through, and the one shown.
@@ -91,6 +108,9 @@ impl Console {
             scroll: 0,
             history_path,
             cycle: None,
+            binds: BTreeMap::new(),
+            notices: Vec::new(),
+            printed: 0,
         };
         console.print(settings::version(), Color::Dim);
         console.print(
@@ -116,6 +136,7 @@ impl Console {
     pub fn print(&mut self, text: String, color: Color) {
         for line in text.lines() {
             self.log.push((line.to_owned(), color));
+            self.printed += 1;
         }
         if self.log.len() > LOG_KEPT {
             let extra = self.log.len() - LOG_KEPT;
@@ -302,6 +323,33 @@ impl Console {
         match name {
             "clear" => self.log.clear(),
             "version" => self.print(settings::version(), Color::White),
+            "bind" => self.bind(rest),
+            "unbind" => match args.first() {
+                Some(key) => {
+                    let key = key.to_lowercase();
+                    match self.binds.remove(&key) {
+                        Some(line) => self.print(format!("{key} freed (was {line})"), Color::Green),
+                        None => self.print(format!("{key} is not bound"), Color::Grey),
+                    }
+                }
+                None => self.print("unbind KEY".to_owned(), Color::Red),
+            },
+            "binds" => {
+                if self.binds.is_empty() {
+                    self.print(
+                        "no key is bound (bind KEY LINE; forge.cfg keeps them)".to_owned(),
+                        Color::Grey,
+                    );
+                }
+                let lines: Vec<String> = self
+                    .binds
+                    .iter()
+                    .map(|(key, line)| format!("  {key}  {line}"))
+                    .collect();
+                for line in lines {
+                    self.print(line, Color::Grey);
+                }
+            }
             "changed" => {
                 let lines = settings.changed();
                 if lines.is_empty() {
@@ -369,6 +417,99 @@ impl Console {
             ),
         }
         None
+    }
+
+    /// `bind KEY [LINE]`: binds KEY to LINE (quotes round it are dropped), or shows its line.
+    fn bind(&mut self, rest: &str) {
+        let (key, line) = match rest.split_once(char::is_whitespace) {
+            Some((key, line)) => (key, line.trim()),
+            None => (rest, ""),
+        };
+        let key = key.trim().to_lowercase();
+        let line = line
+            .strip_prefix('"')
+            .and_then(|l| l.strip_suffix('"'))
+            .unwrap_or(line)
+            .trim();
+        if key.is_empty() {
+            self.print("bind KEY [LINE]".to_owned(), Color::Red);
+        } else if RESERVED_KEYS.contains(&key.as_str()) {
+            self.print(
+                format!("{key} is the shell's (the console, Escape and F1 stay)"),
+                Color::Red,
+            );
+        } else if line.is_empty() {
+            let text = match self.binds.get(&key) {
+                Some(line) => format!("{key}  {line}"),
+                None => format!("{key} is not bound"),
+            };
+            self.print(text, Color::White);
+        } else {
+            self.print(format!("{key} runs {line}"), Color::Green);
+            self.binds.insert(key, line.to_owned());
+        }
+    }
+
+    /// The line bound to the key named `key` ([`key_name`]), if any.
+    pub fn bound(&self, key: &str) -> Option<&str> {
+        self.binds.get(key).map(String::as_str)
+    }
+
+    /// Runs `line`, its commands split at `;`: what the console asks the shell, in order.
+    pub fn run_lines(&mut self, line: &str, settings: &mut Settings) -> Vec<Request> {
+        line.split(';')
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .filter_map(|l| self.run(l, settings))
+            .collect()
+    }
+
+    /// Runs the line bound to `key` with the console closed, if any; what it printed shows a
+    /// while ([`Console::layout_notices`]).
+    pub fn run_bound(&mut self, key: &str, settings: &mut Settings) -> Option<Vec<Request>> {
+        let line = self.binds.get(key)?.clone();
+        let from = self.printed;
+        let requests = self.run_lines(&line, settings);
+        let now = Instant::now();
+        // What it printed is at the log's end (which may have dropped its oldest lines).
+        let new = (self.printed - from).min(self.log.len());
+        let lines: Vec<(String, Color)> = self.log[self.log.len() - new..].to_vec();
+        self.notices
+            .retain(|(_, _, at)| now.duration_since(*at) < NOTICE_TIME);
+        self.notices
+            .extend(lines.into_iter().map(|(t, c)| (t, c, now)));
+        let excess = self.notices.len().saturating_sub(NOTICES);
+        self.notices.drain(..excess);
+        Some(requests)
+    }
+
+    /// Whether a bound key's outcome is still to show at `now`.
+    pub fn has_notices(&self, now: Instant) -> bool {
+        self.notices
+            .iter()
+            .any(|(_, _, at)| now.duration_since(*at) < NOTICE_TIME)
+    }
+
+    /// Draws the bound keys' recent outcomes at the bottom left of `canvas` (the console
+    /// closed).
+    pub fn layout_notices(&self, canvas: &mut Canvas, now: Instant) {
+        let shown: Vec<&(String, Color, Instant)> = self
+            .notices
+            .iter()
+            .filter(|(_, _, at)| now.duration_since(*at) < NOTICE_TIME)
+            .collect();
+        let rows = canvas.rows();
+        if shown.is_empty() || rows < shown.len() + 1 {
+            return;
+        }
+        let width = shown.iter().map(|(t, ..)| t.len()).max().unwrap_or(0) + 2;
+        let width = width.min(canvas.cols());
+        let top = rows - shown.len() - 1;
+        canvas.clear(0, top, width, shown.len());
+        canvas.panel(0, top, width, shown.len(), Color::PanelDark);
+        for (i, (text, color, _)) in shown.iter().enumerate() {
+            canvas.text(1, top + i, text, *color);
+        }
     }
 
     /// Prints a command's or a change's outcome.
@@ -481,6 +622,96 @@ pub fn history_path() -> Option<PathBuf> {
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
     }?;
     Some(base.join("forge").join("console_history.txt"))
+}
+
+/// A key's name for `bind`: what it types in the keyboard's layout, without the modifiers (`t`,
+/// `z`, `²`, `&` on AZERTY's 1), or its name when it types no text (`f5`, `tab`, `space`,
+/// `pageup`, `up`, `numpad1`).
+pub fn key_name(event: &winit::event::KeyEvent) -> Option<String> {
+    let winit::keyboard::PhysicalKey::Code(code) = event.physical_key else {
+        return None;
+    };
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+    let key = {
+        use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
+        event.key_without_modifiers()
+    };
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+    let key = event.logical_key.clone();
+    let label = match &key {
+        winit::keyboard::Key::Character(text) => Some(text.as_str()),
+        _ => None,
+    };
+    Some(name_of(code, label))
+}
+
+/// The name of the key at `code` that types `label` ([`key_name`]).
+fn name_of(code: KeyCode, label: Option<&str>) -> String {
+    use KeyCode as K;
+    // The main block's keys that type text are named by it: the layout's letters.
+    let types_text = matches!(
+        code,
+        K::KeyA
+            | K::KeyB
+            | K::KeyC
+            | K::KeyD
+            | K::KeyE
+            | K::KeyF
+            | K::KeyG
+            | K::KeyH
+            | K::KeyI
+            | K::KeyJ
+            | K::KeyK
+            | K::KeyL
+            | K::KeyM
+            | K::KeyN
+            | K::KeyO
+            | K::KeyP
+            | K::KeyQ
+            | K::KeyR
+            | K::KeyS
+            | K::KeyT
+            | K::KeyU
+            | K::KeyV
+            | K::KeyW
+            | K::KeyX
+            | K::KeyY
+            | K::KeyZ
+            | K::Digit0
+            | K::Digit1
+            | K::Digit2
+            | K::Digit3
+            | K::Digit4
+            | K::Digit5
+            | K::Digit6
+            | K::Digit7
+            | K::Digit8
+            | K::Digit9
+            | K::Backquote
+            | K::Minus
+            | K::Equal
+            | K::BracketLeft
+            | K::BracketRight
+            | K::Backslash
+            | K::Semicolon
+            | K::Quote
+            | K::Comma
+            | K::Period
+            | K::Slash
+            | K::IntlBackslash
+            | K::IntlRo
+            | K::IntlYen
+    );
+    if types_text && let Some(label) = label.filter(|l| !l.trim().is_empty()) {
+        return label.to_lowercase();
+    }
+    match code {
+        K::ArrowUp => "up".to_owned(),
+        K::ArrowDown => "down".to_owned(),
+        K::ArrowLeft => "left".to_owned(),
+        K::ArrowRight => "right".to_owned(),
+        _ => format!("{code:?}").to_lowercase(),
+    }
 }
 
 #[cfg(test)]
@@ -631,5 +862,60 @@ mod tests {
                 .last()
                 .is_some_and(|(t, _)| t.starts_with("r.ao = 0"))
         );
+    }
+
+    #[test]
+    fn keys_bind_to_lines() {
+        let mut settings = Settings::new();
+        let ao = settings.add(Spec::bool("r.ao", true, "ambient occlusion"));
+        settings.add_command("app.capture", "[PATH]", "saves a frame", false);
+        let mut console = Console::new(None);
+        typed(&mut console, &mut settings, "bind F5 \"toggle r.ao\"");
+        assert_eq!(console.bound("f5"), Some("toggle r.ao"));
+        // A bound key runs its line, and what it printed shows a while.
+        let start = Instant::now();
+        assert_eq!(console.run_bound("f5", &mut settings), Some(Vec::new()));
+        assert!(!settings.get(ao));
+        assert!(console.has_notices(start));
+        assert!(!console.has_notices(start + NOTICE_TIME + NOTICE_TIME));
+        assert_eq!(console.run_bound("f6", &mut settings), None);
+        // `;` between commands; a command goes to the shell.
+        typed(
+            &mut console,
+            &mut settings,
+            "bind g toggle r.ao; app.capture shot.png",
+        );
+        let requests = console.run_bound("g", &mut settings).unwrap();
+        assert!(settings.get(ao));
+        assert_eq!(
+            requests,
+            [Request::Command {
+                name: "app.capture".to_owned(),
+                args: vec!["shot.png".to_owned()],
+            }]
+        );
+        // The shell's keys stay its own; unbind frees one; binds lists them.
+        typed(&mut console, &mut settings, "bind f1 toggle r.ao");
+        assert_eq!(console.bound("f1"), None);
+        typed(&mut console, &mut settings, "unbind f5");
+        assert_eq!(console.bound("f5"), None);
+        typed(&mut console, &mut settings, "binds");
+        assert_eq!(
+            console.log.last().map(|(t, _)| t.as_str()),
+            Some("  g  toggle r.ao; app.capture shot.png")
+        );
+    }
+
+    #[test]
+    fn keys_are_named_by_what_they_type() {
+        // AZERTY: the key at QWERTY's W types z, the one at 1 types &.
+        assert_eq!(name_of(KeyCode::KeyW, Some("z")), "z");
+        assert_eq!(name_of(KeyCode::Digit1, Some("&")), "&");
+        assert_eq!(name_of(KeyCode::KeyT, Some("T")), "t");
+        assert_eq!(name_of(KeyCode::F5, None), "f5");
+        assert_eq!(name_of(KeyCode::Space, Some(" ")), "space");
+        assert_eq!(name_of(KeyCode::Numpad1, Some("1")), "numpad1");
+        assert_eq!(name_of(KeyCode::ArrowUp, None), "up");
+        assert_eq!(name_of(KeyCode::PageDown, None), "pagedown");
     }
 }

@@ -7,7 +7,7 @@
 //! - Black: a mark on black, at the darkest value it still shows (MinTML), for the metadata.
 //! - Paper white: half the screen at the peak, half black, the mark at the UI's white.
 //!
-//! F5 opens them in an HDR mode and steps through them. Up and Down move the value by 4 PQ
+//! `app.calibrate` (the console) opens them in an HDR mode; F5 steps through them. Up and Down move the value by 4 PQ
 //! codes (1 with Shift), Backspace goes back to the OS's value, Escape leaves with the values
 //! of before. Each value applies at once. Leaving the last page with F5 saves them per monitor
 //! in `settings/display.txt` (interactive runs only: scripted runs neither read nor write it,
@@ -389,7 +389,7 @@ impl SettingsFile {
     }
 }
 
-const HEADER: &str = "# Forge's HDR calibration (F5 in a demo, issue #125): a line per monitor, the peak, the\n# black and the UI's white in nits; a value left out follows the OS. Delete a line to forget it.\n";
+const HEADER: &str = "# Forge's HDR calibration (app.calibrate in the console, issue #125): a line per monitor, the peak, the\n# black and the UI's white in nits; a value left out follows the OS. Delete a line to forget it.\n";
 
 /// A monitor's name and settings from a line of the file.
 fn parse_line(line: &str) -> Option<(&str, DisplaySettings)> {

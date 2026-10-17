@@ -407,6 +407,8 @@ pub struct Settings {
     commands: Vec<CommandInfo>,
     pending: Vec<Pending>,
     changes: u64,
+    /// `forge.cfg`'s console lines (`bind`, `unbind`), run once the demo is ready.
+    startup: Vec<String>,
 }
 
 /// The completion of a console line ([`Settings::complete`]).
@@ -683,7 +685,9 @@ impl Settings {
     }
 
     /// Reads `forge.cfg`'s overrides: one `name value` (or `name = value`) a line, `#` or `//`
-    /// starting a comment. A missing file is no error.
+    /// starting a comment. A line starting with one of [`STARTUP_COMMANDS`] (`bind f5 toggle
+    /// r.aa`) is kept for the console to run once the demo is ready ([`Settings::take_startup`]).
+    /// A missing file is no error.
     pub fn load_file(&mut self, path: &Path) -> Result<usize, String> {
         let text = match std::fs::read_to_string(path) {
             Ok(text) => text,
@@ -695,6 +699,12 @@ impl Settings {
             let line = line.split('#').next().unwrap_or("");
             let line = line.split("//").next().unwrap_or("").trim();
             if line.is_empty() {
+                continue;
+            }
+            let first = line.split_whitespace().next().unwrap_or("");
+            if STARTUP_COMMANDS.contains(&first.to_ascii_lowercase().as_str()) {
+                self.startup.push(line.to_owned());
+                count += 1;
                 continue;
             }
             let Some((name, value)) = split_assignment(line) else {
@@ -710,6 +720,11 @@ impl Settings {
             count += 1;
         }
         Ok(count)
+    }
+
+    /// The console lines `forge.cfg` gave ([`Settings::load_file`]), in their order, once.
+    pub fn take_startup(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.startup)
     }
 
     /// Completes a console line: a name (a variable's or a command's) by its prefix, then a
@@ -936,6 +951,14 @@ impl Settings {
 /// The console's own commands: name, usage, help.
 pub const BUILTIN: &[(&str, &str, &str)] = &[
     (
+        "bind",
+        "KEY [LINE]",
+        "Runs LINE when KEY is pressed with the console closed (`bind f5 toggle r.aa`; `;` \
+         between several); KEY alone shows its line. KEY is what the key types (t, z, ²) or \
+         its name (f5, tab, space, pageup, numpad1). For the run; in forge.cfg, every run.",
+    ),
+    ("binds", "", "Lists the keys bound to console lines."),
+    (
         "changed",
         "",
         "Lists the settings not at their default, and where their values came from.",
@@ -962,8 +985,12 @@ pub const BUILTIN: &[(&str, &str, &str)] = &[
         "NAME",
         "Flips an on/off setting, or steps a choice or a small number to its next value.",
     ),
+    ("unbind", "KEY", "Frees a key bound to a console line."),
     ("version", "", "The build's version."),
 ];
+
+/// The console's commands `forge.cfg` may hold beside its settings: run once the demo is ready.
+pub const STARTUP_COMMANDS: &[&str] = &["bind", "unbind"];
 
 /// The build's version: the crate's, and the commit when the build was given one
 /// (`FORGE_BUILD_COMMIT` at compile time, as a game's release build sets it).
@@ -1174,13 +1201,17 @@ mod tests {
         let path = dir.join("forge.cfg");
         std::fs::write(
             &path,
-            "# the owner's\nr.display_info 2\nr.aa = dlaa // the look\n\n",
+            "# the owner's\nr.display_info 2\nbind f5 toggle r.aa\nr.aa = dlaa // the look\n\
+             Unbind t\n",
         )
         .unwrap();
         let (mut s, info, _, aa, _) = registry();
-        assert_eq!(s.load_file(&path), Ok(2));
+        assert_eq!(s.load_file(&path), Ok(4));
         assert_eq!(s.get(info), 2);
         assert_eq!(s.get(aa), 2);
+        // The console's lines wait for the console, in their order, once.
+        assert_eq!(s.take_startup(), ["bind f5 toggle r.aa", "Unbind t"]);
+        assert!(s.take_startup().is_empty());
         assert_eq!(s.load_file(&dir.join("missing.cfg")), Ok(0));
         std::fs::write(&path, "r.display_info\n").unwrap();
         assert!(s.load_file(&path).is_err());

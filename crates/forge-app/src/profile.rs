@@ -23,9 +23,9 @@ const GIB: f64 = (1 << 30) as f64;
 pub enum OverlayMode {
     /// Nothing drawn.
     Off,
-    /// The header and one line per group; a digit key unfolds that group.
+    /// The header and one line per group; `app.profile.group N` unfolds that group.
     Compact,
-    /// Every zone and the counters; a digit key folds that group.
+    /// Every zone and the counters; `app.profile.group N` folds that group.
     Full,
 }
 
@@ -95,7 +95,7 @@ pub struct Profile {
     cpu: Vec<Zone>,
     counters: Vec<String>,
     memory: Option<MemorySample>,
-    /// Groups whose fold state the digit keys flipped from the mode's default.
+    /// Groups whose fold state `app.profile.group` flipped from the mode's default.
     toggled: Vec<String>,
     /// GPU milliseconds per zone summed over the run (unsmoothed), for the exit log.
     run_gpu: Vec<(String, f64)>,
@@ -296,7 +296,7 @@ impl Profile {
         self.gpu.retain(|z| z.seen);
     }
 
-    /// Folds or unfolds the `index`-th group of the display (the digit keys).
+    /// Folds or unfolds the `index`-th group of the display (`app.profile.group`).
     pub(crate) fn toggle_group(&mut self, index: usize) {
         let groups = self.groups();
         if let Some(name) = groups.get(index) {
@@ -381,8 +381,8 @@ impl Profile {
         );
         canvas.text(1, 1, &clip(&totals, width - 2), Color::Grey);
         let keys = match self.mode {
-            OverlayMode::Compact => "F1 more  1-9 open",
-            _ => "F1 hide  1-9 fold",
+            OverlayMode::Compact => "F1 more",
+            _ => "F1 hide",
         };
         canvas.text(width.saturating_sub(keys.len() + 1), 1, keys, Color::Blue);
 

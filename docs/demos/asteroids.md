@@ -33,15 +33,21 @@ DLAA where it runs in an interactive run, D-045; TAA in a scripted one and elsew
 With Tracy: `cargo run --release -p asteroids --features profiling` and connect
 `tracy/tracy-profiler.exe`. DLSS is built in by default (the `dlss` feature; Windows, the
 Streamline SDK in `streamline-sdk/`, an RTX GPU; without them the ballad keeps TAA).
-Controls: **F1** profiling overlay (**1**–**9** fold a group), **Alt+Enter** borderless
-fullscreen on the window's monitor and back (in every demo), **P** pause the path and fly
-freely (right mouse look, WASD/QE, Shift fast), **T** temporal anti-aliasing (sharpened,
-plain, off: `--rcas STOPS`, half a stop by default, `--no-rcas`; D-045), **O** occlusion
-culling, **C** cone culling, **L** cluster LOD, **K** LOD colours, **[** / **]** halve /
-double the LOD error threshold, **X** culling-error view (what culling rejected is drawn in
-red; any red pixel is a bug), **M** meshlet colours, **Tab** wireframe, **B** bloom (`--bloom S`, 0.04), **J** sun shadows (`--no-shadows`), **Z** soft shadows (`--soft-shadows`), **N** ambient occlusion (`--no-ao`), **V** the belt's dust (`--no-dust`), **Y** translucent ice (`--no-translucency`), **G** tone curve,
-**-** / **=** exposure compensation (half an EV), **U** anti-aliasing (TAA → DLAA → DLSS
-Quality → Balanced → Performance → Ultra Performance, where DLSS runs), **Esc** quit.
+Controls: **F1** the profiling overlay (`app.profile.group N` folds a group), **Alt+Enter**
+borderless fullscreen on the window's monitor and back (in every demo), **Esc** quit; with
+`asteroids.paused 1` the path stops and the camera flies freely (right mouse look, the keys at
+W, A, S, D, Q, E: Z, Q, S, D, A, E on AZERTY; Shift faster). The rest is set from the console
+(the key under Esc; [console.md](console.md) lists the settings and the keys they had before
+D-069's key map, 2026-10-17): `r.aa` anti-aliasing (TAA, DLAA, or DLSS at `r.dlss.mode`'s
+quality, balanced, performance or ultra performance, where DLSS runs; TAA sharpened or plain:
+`--rcas STOPS`, half a stop by default, `--no-rcas`; D-045), `r.cull.occlusion` and
+`r.cull.cone` culling, `r.lod` cluster LOD, `r.show.lod` LOD colours, `r.lod.error` the LOD
+error threshold, `r.show.culled` the culling-error view (what culling rejected is drawn in red;
+any red pixel is a bug), `r.show.meshlets` meshlet colours, `r.show.wireframe` wireframe,
+`r.bloom` bloom (`--bloom S`, 0.04), `r.shadows` sun shadows (`--no-shadows`), `r.sun.disc`
+soft shadows (`--soft-shadows`), `r.ao` ambient occlusion (`--no-ao`), `asteroids.dust` the
+belt's dust (`--no-dust`), `r.translucency` translucent ice (`--no-translucency`), `r.tonemap`
+tone curve, `r.exposure.compensation` exposure compensation (stops).
 Machine: RTX 5070 Ti, driver 617.14, Vulkan 1.4, Slang 2026.13, 1600×900, 2026-09-24.
 
 ![The ballad, phase 0](images/asteroids-ballad.png)
@@ -277,12 +283,12 @@ Validation and synchronization validation are silent. One capability detail: a f
 shader reading `SV_PrimitiveID` declares the SPIR-V `Geometry` capability, which needs the
 `geometryShader` device feature although no geometry shader runs; the device enables it.
 Material classification and the material table came with #20 (below). The software
-rasteriser (#3) later merged its 64-bit depth|id samples into this buffer (keys **R** and
-**H**; `docs/demos/meshlets.md`).
+rasteriser (#3) later merged its 64-bit depth|id samples into this buffer (`r.sw_raster` and
+`r.show.raster`; `docs/demos/meshlets.md`).
 
 ## HDR output (2026-10-02, issue #94)
 
-`--hdr hdr10|scrgb|offscreen` (or **F2**, in every demo) shows the frame in HDR, through
+`--hdr hdr10|scrgb|offscreen` (or `app.hdr`, in every demo) shows the frame in HDR, through
 ACES 2.0's HDR presets (D-022; research: `docs/research/hdr-output.md`):
 - **HDR10** (Rec.2100 PQ over Rec.2020, 10 bits) or **scRGB** (linear half floats) on the
   display. The demo enters it only when Windows shows the display in HDR ("Use HDR"); otherwise
@@ -292,14 +298,14 @@ ACES 2.0's HDR presets (D-022; research: `docs/research/hdr-output.md`):
   codes as a 16-bit `-pq.png`.
 
 **What it does:**
-- **The curve:** ACES 2.0 (**G**) runs through the preset's own table of PQ codes. The other
+- **The curve:** ACES 2.0 (`r.tonemap`) runs through the preset's own table of PQ codes. The other
   curves show their SDR image at the UI's white, so pressing G never breaks the picture.
 - **The peak:** the panel's peak from Windows (DXGI), rounded down to the Academy's presets
-  (500, 1000, 2000, 4000 nits); 1000 when unknown. **F3** steps through them.
+  (500, 1000, 2000, 4000 nits); 1000 when unknown. `app.hdr.peak` steps through them.
 - **Paper white** (the owner's pick): the Academy's look. At 1000 nits a scene's grey lands at
   14.5 nits and its white at 107. The overlay is drawn at Windows' SDR white level for the
   display (203 nits when unknown).
-- **F4** switches the preview to false colours: yellow above paper white, red at the peak,
+- `app.hdr.false_colours` switches the preview to false colours: yellow above paper white, red at the peak,
   blue outside Rec.709.
 
 ![SDR, the HDR preview at a 203-nit white, false colours (frame 600)](../../reports/2026-10-02-94/hdr.png)
@@ -321,7 +327,7 @@ SDR preview clips and what the dark space hides: GTAO off against on peaks at 0.
 0.135 in SDR. Its measurements and proposed thresholds are in `docs/PROCESS.md` ("The
 perceptual check", "HDR captures") and `reports/2026-10-02-126/`.
 
-**Calibrating the display** (#125): **F5** opens three pages over the frame, in HGiG's and
+**Calibrating the display** (#125): `app.calibrate` opens three pages over the frame, in HGiG's and
 Unity's form (D-022, "Calibration"):
 - **Peak:** raise the mark (Up) until it disappears into the white square, which sits at the
   signal's top on a tenth of the screen. That is the brightest the display shows, and it picks
@@ -923,7 +929,7 @@ chunk shapes remain for the destruction work (#12).
 
 Looking towards the sun, the backlit ice rocks light up blue, the thinnest brightest; ice
 with the sun behind the camera is unchanged. The rays are deterministic per pixel, with no noise
-to shimmer. `--no-translucency` / **Y** turns it off, and devices without ray queries have
+to shimmer. `--no-translucency` / `r.translucency` turns it off, and devices without ray queries have
 none.
 
 ![Towards the sun at frame 300 (dust off): opaque ice, then translucent ice glowing where the sun is behind it](images/asteroids-translucent-ice.png)
@@ -955,7 +961,7 @@ perspective does (`forge_render::dust`):
 The densest dust takes 1e-4 of the light per metre (`--dust`), a few per cent over the belt.
 That is enough for depth: the far rocks recede into a sunlit haze, and a glow grows around the
 sun. The rocks between the camera and the sun leave darker dust in front of them, faint
-shafts. `--no-dust` / **V** removes it; devices without ray queries have none.
+shafts. `--no-dust` / `asteroids.dust` removes it; devices without ray queries have none.
 
 ![Frame 600 and the view towards the sun at frame 900, each without dust and with it](images/asteroids-dust.png)
 
@@ -976,12 +982,12 @@ rocks' moving edges, with no froxel blocks.
 The rocks' shaded sides are lit by the space fill alone: a wrap term and a bluish fill from
 the nebula's side. Nothing occluded it, so the craters of the textured rock read flat in the
 shade. The ballad now computes GTAO (D-030, as in the city) and scales both terms by it,
-through the multi-bounce fit. The effect radius is 2 m (`--ao-radius`); **N** / `--no-ao`
+through the multi-bounce fit. The effect radius is 2 m (`--ao-radius`); `r.ao` / `--no-ao`
 turns it off.
 
 ![Frame 600: the fill unoccluded, then occluded by GTAO: the craters and the contacts between rocks read in the shade](images/asteroids-ao.png)
 
-**Soft shadows** (#54) are opt-in here: `--soft-shadows`, **Z**. The ballad's camera never
+**Soft shadows** (#54) are opt-in here: `--soft-shadows`, `r.sun.disc`. The ballad's camera never
 stops, and its penumbrae are wide, since the rocks shadow each other from tens of metres. TAA
 smears the per-pixel sampling along the motion into streaks. #54's first sampling was
 independent points per frame, and it streaked in still frames as well. The shipped one is a
@@ -1007,7 +1013,7 @@ The rocks now shade each other. The ballad builds the ray-traced sun shadows the
 - a top-level structure over the 3000 asteroids, built in 1 ms; 16 MiB in all.
 
 The field stays still until Phase 3, so both are built once at start. The resolve traces one
-ray per sun-facing pixel, and a rock in another's shadow is lit by the fill alone. **J**
+ray per sun-facing pixel, and a rock in another's shadow is lit by the fill alone. `r.shadows`
 toggles the shadows; `--no-shadows` starts without them.
 
 The rock row takes the procedural rock texture and its relief (albedo and normal, triplanar,
@@ -1034,7 +1040,7 @@ The sun now spreads into the rocks in front of it, as it would through a lens. B
   fireflies);
 - back up with a 3×3 tent, each level adding the one below;
 - blended into the shown image before the tone curve by the TAA resolve: 4 % of the image
-  by default (`--bloom S`, **B**). The history stays unbloomed.
+  by default (`--bloom S`, `r.bloom`). The history stays unbloomed.
 
 ![Frame 600 without bloom and with it: the sun's glow spills over the silhouettes in front of it](images/asteroids-bloom.png)
 
@@ -1099,8 +1105,8 @@ into 256 log2 bins (shared-memory atomics, then device-local memory), copies the
 result into a cached readback buffer of the frame slot and declares a `HostRead`; the CPU
 reads it two frames later, ignores the black bin, takes the log-average of the samples
 between the 50th and 98th percentiles and moves EV100 towards the value that meters that
-key as middle grey (1.5 per second towards darker, 0.8 towards brighter; **-** / **=**
-shift it by half an EV). The TAA rescales its history by the ratio of exposures, so
+key as middle grey (1.5 per second towards darker, 0.8 towards brighter; `r.exposure.compensation`
+shifts it, in stops). The TAA rescales its history by the ratio of exposures, so
 adaptation never ghosts. Along the whole 90-second path (`--fixed-step --exposure-log`):
 
 | EV100 over the path | largest change | reversals larger than 0.1 EV | largest swing |
@@ -1116,7 +1122,7 @@ every nine seconds, never faster than half a stop per second.
 
 ![The capture sequence behind the curve: one frame every 7.5 s of the path, ACES](images/asteroids-exposure-sequence.png)
 
-**Tone curves.** **G** cycles AgX punchy → ACES → Khronos PBR Neutral → ACES 2.0 → AgX
+**Tone curves.** `r.tonemap` cycles AgX punchy → ACES → Khronos PBR Neutral → ACES 2.0 → AgX
 (`--tonemap`).
 The curve is applied in the TAA resolve, which writes the HDR history and the display image
 in one pass; the bench uses the stand-alone display pass. The same frame 600
@@ -1304,7 +1310,7 @@ segments and `--planet-march [STEPS]` the reference's.
 ## DLSS (2026-09-24, issue #8)
 
 With `--features dlss` the Vulkan API comes through NVIDIA Streamline's interposer, and
-**U** (or `--upscaler`) replaces the TAA resolve with DLSS: the scene is drawn jittered at
+`r.aa` (or `--upscaler`) replaces the TAA resolve with DLSS: the scene is drawn jittered at
 DLSS's input size, DLSS upscales the pre-exposed HDR colour with the depth and the TAA's
 motion vectors into an HDR image at the window's size, and the display pass takes it
 through the tone curve (D-024). Without the feature, the SDK or an RTX GPU, U says so and

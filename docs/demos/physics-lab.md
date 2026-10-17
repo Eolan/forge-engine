@@ -1320,7 +1320,8 @@ to the rim, falls back, sloshes and settles. `tank-bench` is the same tank as a 
 - a plain violet background and the sun alone;
 - the water tinted teal (`LiquidLook::tinted`) so its depth and motion show.
 
-The keys **1**, **2** and **3** switch between the water as it looks, its **speed view** and its
+`r.show.liquid` (look, speed, landing; the keys 1, 2 and 3 before D-069's key map) switches between
+the water as it looks, its **speed view** and its
 **landing view** (`--liquid-view speed` or `landing` to start in one):
 - **The speed view:** the surface matte, coloured by how fast the water flows, blue when still,
   through cyan and white, to orange at 3 m/s, as Lague colours his particles.

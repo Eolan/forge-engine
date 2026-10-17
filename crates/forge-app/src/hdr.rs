@@ -7,8 +7,9 @@
 //!   (`shaders/hdr_preview.slang`): everything but the present, on any monitor. Captures write
 //!   the image's PQ codes as a 16-bit PNG beside the preview's.
 //!
-//! F2 turns HDR on and off, F3 steps the peak through ACES 2.0's presets, F4 switches the
-//! preview to false colours, F5 opens the calibration pages (`calibration.rs`, issue #125).
+//! The console's `app.hdr` turns HDR on and off, `app.hdr.peak` steps the peak through ACES 2.0's
+//! presets, `app.hdr.false_colours` switches the preview to false colours, `app.calibrate` opens
+//! the calibration pages (`calibration.rs`, issue #125); F2 to F5 until D-069.
 //! The display's metadata takes MaxCLL and MaxFALL from the frames shown (`content_light.rs`).
 
 use std::str::FromStr;
@@ -65,7 +66,7 @@ impl FromStr for HdrMode {
 /// The format of the off-screen HDR10 image.
 pub const OFFSCREEN_FORMAT: vk::Format = vk::Format::A2B10G10R10_UNORM_PACK32;
 
-/// The ACES 2.0 peaks the HDR output steps through (F3), in nits: the Academy's presets.
+/// The ACES 2.0 peaks the HDR output steps through (`app.hdr.peak`), in nits: the Academy's presets.
 pub const PEAKS: [f32; 4] = [500.0, 1000.0, 2000.0, 4000.0];
 
 /// What the calibration pages set of the display (issue #125), in nits; `None` takes what the
@@ -223,7 +224,7 @@ impl DisplayOutput {
             format!(", MaxCLL {:.0} MaxFALL {:.0} nits", c.max_cll, c.max_fall)
         });
         format!(
-            "hdr: {} ({:?}), ACES 2.0 at {:.0} nits, paper white {:+.1} stops, UI {:.0} nits, peak {:.0} black {:.4} nits{calibrated}{light}; {os}; F2 HDR, F3 peak, F4 false colours, F5 calibrate",
+            "hdr: {} ({:?}), ACES 2.0 at {:.0} nits, paper white {:+.1} stops, UI {:.0} nits, peak {:.0} black {:.4} nits{calibrated}{light}; {os}; the console: app.hdr, app.hdr.peak, app.hdr.false_colours, app.calibrate",
             self.mode.name(),
             self.format,
             self.peak,
@@ -288,7 +289,7 @@ struct PreviewPush {
 /// The off-screen mode's preview pass.
 pub(crate) struct Preview {
     pipeline: Pipeline,
-    /// False colours (F4).
+    /// False colours (`app.hdr.false_colours`).
     pub false_colours: bool,
 }
 

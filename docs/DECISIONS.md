@@ -4994,3 +4994,40 @@ development settings and the code that would help a player compiled out rather t
 
   Local exposure in the asteroids and the planet waits for the owner's look at it (it is off by
   default in the galleries, D-067); the meshlets bench is a test of the culling, not of the look.
+
+**The keys (the owner's answer, 2026-10-17):** "Unify the key map […] I would transform those
+keys in console commands maybe. And let the keys free to be used for the user in game
+interaction like F for interacting with doors. Z to go forward, S backward and so on." Keyboard
+layouts other than the owner's AZERTY and QWERTY, with their own default maps, are low priority.
+- **Developer toggles leave the keys.** What a key switched is a setting (most already are) or
+  a command, set from the console. No key is bound to one by default.
+- **`bind KEY LINE`** runs a console line when a key is pressed, as id Tech and Source do;
+  `unbind KEY` and `binds` list and remove them. Binds typed in the console last for the run;
+  `bind` lines in `forge.cfg` give the owner's own keys at every start. A key is named by what it
+  types in the keyboard's layout (`t`, `z`, `²`) or by its name (`f5`, `tab`, `pageup`). In a
+  shipped game a bind reaches only the release settings, as the console does.
+- **The shell keeps** the key under Esc (the console), Esc, F1 (`r.display_info`) and Alt+Enter.
+- **The game's keys stay the demos'**: the camera's movement reads the keys' places, not their
+  letters (Z, Q, S, D on AZERTY are W, A, S, D on QWERTY), and the lab's, the island's and the
+  city plan's walking, jumping and throwing keys stay. Named actions a player rebinds
+  (`move.forward`, `interact`) come with the first game.
+
+**The key map, built (2026-10-17):**
+- **No developer keys:** the galleries', the asteroids', the planet's and the meshlets bench's keys
+  are gone. What they switched is a setting, except F9 (`camera.where`).
+  - New settings for what had a key and no setting: `r.shadows.denoiser` (F6), `r.sky.real` (the
+    period key), `r.show.liquid` (1 to 3) and `meshlets.freeze` (F).
+  - The shell's F2 to F5 are `app.hdr`, `app.hdr.peak`, `app.hdr.false_colours` and
+    `app.calibrate`; the overlay's 1 to 9 are `app.profile.group N`.
+- **`bind`, `unbind` and `binds`:**
+  - a bound line may hold several commands, split at `;`;
+  - its output shows for three seconds at the bottom left;
+  - `forge.cfg`'s `bind` lines run once the demo is ready, before `--exec`;
+  - keys are named by what they type in the layout (winit's `key_without_modifiers`), or by
+    their name;
+  - the shell's keys refuse a bind.
+- **Checks:**
+  - unit tests of the binds, their key names and the file's console lines;
+  - a run with a test `forge.cfg`, the console listing its binds and the new settings;
+  - `docs/demos/console.md` maps each old key to its setting, with a `forge.cfg` that puts them
+    back on the function keys.

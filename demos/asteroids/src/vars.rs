@@ -1,13 +1,12 @@
 //! The ballad's settings (D-069): the renderer's shared ones (`forge_render::settings`) with the
 //! ballad's own defaults (ACES, whose toe keeps space black; hard shadows; a 2 m occlusion), and
 //! its own `asteroids.` ones. Registered from the state its flags gave it, applied when they
-//! change, and set by its keys.
+//! change, and set from the console (no key sets them since D-069's key map).
 
 use forge_app::Context;
 use forge_app::settings::{Settings, Spec, Var};
 use forge_render::settings::{self as rs, AA_DLAA, AA_DLSS, AA_OFF, AA_TAA};
 use forge_render::{CullFlags, DlssMode, SwRaster, Tonemap};
-use winit::keyboard::KeyCode;
 
 use crate::Ballad;
 
@@ -59,25 +58,22 @@ impl Ballad {
             (rs::cone(true), CullFlags::CONE, true),
             (rs::lod(true), CullFlags::LOD, true),
             (
-                rs::show("meshlets", "Each meshlet in a colour of its own (M)."),
+                rs::show("meshlets", "Each meshlet in a colour of its own."),
                 CullFlags::MESHLET_COLORS,
                 false,
             ),
             (
-                rs::show("lod", "Each cluster coloured by its level of detail (K)."),
+                rs::show("lod", "Each cluster coloured by its level of detail."),
                 CullFlags::LOD_COLORS,
                 false,
             ),
             (
-                rs::show("raster", "The software rasteriser's pixels in green (H)."),
+                rs::show("raster", "The software rasteriser's pixels in green."),
                 CullFlags::SHOW_RASTER,
                 false,
             ),
             (
-                rs::show(
-                    "culled",
-                    "What occlusion or cone culling rejected, in red (X).",
-                ),
+                rs::show("culled", "What occlusion or cone culling rejected, in red."),
                 CullFlags::SHOW_CULLED,
                 false,
             ),
@@ -124,7 +120,7 @@ impl Ballad {
                 rs::sw_raster_index(self.args.sw_raster),
             ),
             wireframe: s.add_from(
-                rs::show("wireframe", "The triangles' edges over the frame (Tab)."),
+                rs::show("wireframe", "The triangles' edges over the frame."),
                 false,
                 self.wireframe,
             ),
@@ -132,7 +128,7 @@ impl Ballad {
                 Spec::bool(
                     "asteroids.dust",
                     true,
-                    "Sunlit dust between the rocks, on devices with ray queries (V toggles it).",
+                    "Sunlit dust between the rocks, on devices with ray queries.",
                 ),
                 true,
                 self.dust_on,
@@ -140,7 +136,7 @@ impl Ballad {
             paused: s.add(Spec::bool(
                 "asteroids.paused",
                 false,
-                "The flight along the belt stopped (P toggles it).",
+                "The flight along the belt stopped.",
             )),
             bits,
         });
@@ -275,69 +271,5 @@ impl Ballad {
         };
         s.set(v.aa, next.0);
         s.set(v.dlss_mode, rs::dlss_mode_index(next.1));
-    }
-
-    /// The keys bound to settings: they set them, and [`Ballad::apply_vars`] does the rest.
-    /// Returns whether the key was one of them.
-    pub(crate) fn vars_key(&mut self, ctx: &mut Context, code: KeyCode) -> bool {
-        if code == KeyCode::KeyU {
-            self.cycle_upscaler(ctx);
-            return true;
-        }
-        let Some(v) = &self.vars else {
-            return false;
-        };
-        let s = &mut ctx.settings;
-        let bit_var = |b: u32| {
-            v.bits
-                .iter()
-                .find(|(_, bit)| *bit == b)
-                .map(|&(var, _)| var)
-        };
-        let toggle = |s: &mut Settings, var: Option<Var<bool>>| {
-            if let Some(var) = var {
-                let _ = s.toggle_var(var);
-            }
-        };
-        match code {
-            KeyCode::KeyP => toggle(s, Some(v.paused)),
-            KeyCode::KeyN => toggle(s, Some(v.ao)),
-            KeyCode::KeyB => toggle(s, Some(v.bloom)),
-            KeyCode::KeyV => toggle(s, Some(v.dust)),
-            KeyCode::KeyZ => toggle(s, Some(v.sun_disc)),
-            KeyCode::Tab => toggle(s, Some(v.wireframe)),
-            KeyCode::KeyJ => toggle(s, bit_var(CullFlags::SHADOWS)),
-            KeyCode::KeyY => toggle(s, bit_var(CullFlags::TRANSLUCENCY)),
-            KeyCode::KeyO => toggle(s, bit_var(CullFlags::OCCLUSION)),
-            KeyCode::KeyC => toggle(s, bit_var(CullFlags::CONE)),
-            KeyCode::KeyL => toggle(s, bit_var(CullFlags::LOD)),
-            KeyCode::KeyM => toggle(s, bit_var(CullFlags::MESHLET_COLORS)),
-            KeyCode::KeyK => toggle(s, bit_var(CullFlags::LOD_COLORS)),
-            KeyCode::KeyH => toggle(s, bit_var(CullFlags::SHOW_RASTER)),
-            KeyCode::KeyX => toggle(s, bit_var(CullFlags::SHOW_CULLED)),
-            KeyCode::KeyR => {
-                let _ = s.toggle_var(v.sw_raster);
-            }
-            KeyCode::KeyG => {
-                let next = rs::tonemap_of(s.get(v.tonemap)).next();
-                s.set(v.tonemap, rs::tonemap_index(next));
-            }
-            KeyCode::BracketLeft => s.set(v.lod_error, s.get(v.lod_error) * 0.5),
-            KeyCode::BracketRight => s.set(v.lod_error, s.get(v.lod_error) * 2.0),
-            KeyCode::Minus => s.set(v.compensation, s.get(v.compensation) - 0.5),
-            KeyCode::Equal => s.set(v.compensation, s.get(v.compensation) + 0.5),
-            // TAA sharpened (D-045), plain, off; from DLSS, TAA sharpened.
-            KeyCode::KeyT => {
-                let next = match (s.get(v.aa), s.get(v.sharpen)) {
-                    (AA_TAA, true) => (AA_TAA, false),
-                    (AA_TAA, false) => (AA_OFF, false),
-                    _ => (AA_TAA, true),
-                };
-                s.set(v.aa, next.0);
-                s.set(v.sharpen, next.1);
-            }
-            _ => return false,
-        }
-        true
     }
 }

@@ -94,7 +94,7 @@ pub struct AppConfig {
     /// renderers take their fallback paths (`--force-fallback`).
     pub force_fallback: bool,
     /// The HDR output asked for (issue #94; `FORGE_HDR=off|hdr10|scrgb|offscreen` overrides
-    /// it). On the display it needs the OS to show the display in HDR; F2 switches at run
+    /// it). On the display it needs the OS to show the display in HDR; `app.hdr` switches at run
     /// time.
     pub hdr: HdrMode,
     /// The paper-white offset: stops added to the scene before ACES 2.0's HDR presets (0, the
@@ -367,22 +367,6 @@ fn ms_since(start: Instant) -> f64 {
     start.elapsed().as_secs_f64() * 1e3
 }
 
-/// `Digit1`..`Digit9` → 0..8 (the overlay's group fold keys).
-fn digit_key(code: KeyCode) -> Option<usize> {
-    Some(match code {
-        KeyCode::Digit1 => 0,
-        KeyCode::Digit2 => 1,
-        KeyCode::Digit3 => 2,
-        KeyCode::Digit4 => 3,
-        KeyCode::Digit5 => 4,
-        KeyCode::Digit6 => 5,
-        KeyCode::Digit7 => 6,
-        KeyCode::Digit8 => 7,
-        KeyCode::Digit9 => 8,
-        _ => return None,
-    })
-}
-
 /// The workspace root (two levels above a crate manifest in `crates/` or `demos/`).
 pub fn workspace_root_from(manifest_dir: &str) -> PathBuf {
     let manifest = PathBuf::from(manifest_dir);
@@ -413,7 +397,7 @@ struct HdrPasses {
     preview: Option<hdr::Preview>,
     /// MaxCLL and MaxFALL from the frames shown, made when HDR is first used.
     meter: Option<ContentLightMeter>,
-    /// The calibration pages (F5).
+    /// The calibration pages (`app.calibrate`).
     calibration: Calibration,
     /// Supersampling's last pass ([`AppConfig::ssaa`]), on the window's format.
     ssaa: Option<ssaa::Ssaa>,
@@ -511,14 +495,14 @@ struct State<D: Demo> {
     debug_no_title: bool,
     /// `FORGE_STALL_MS=N`: sleep N ms after every frame (debugging).
     debug_stall_ms: u64,
-    /// `FORGE_HDR_CYCLE=N`: press F2 every N frames (the HDR switch in scripted runs).
+    /// `FORGE_HDR_CYCLE=N`: `app.hdr` every N frames (the HDR switch in scripted runs).
     debug_hdr_cycle: u64,
     /// The frame of the last scripted switch (a frame can start twice, after a resize).
     last_hdr_cycle: u64,
     overlay: Overlay,
     /// The preview, the content-light meter and the calibration pages.
     hdr: HdrPasses,
-    /// The HDR mode asked for at start (`--hdr`, `FORGE_HDR`): the one F2 turns on.
+    /// The HDR mode asked for at start (`--hdr`, `FORGE_HDR`): the one `app.hdr` turns on.
     hdr_requested: HdrMode,
     /// Where the calibration is saved, in interactive runs (#125), and the monitor it is the
     /// calibration of: the one the window opened on.
@@ -602,7 +586,7 @@ impl<D: Demo> State<D> {
         self.sample_memory_since(self.memory_start);
     }
 
-    /// F2: HDR on or off. On, it is the mode asked for at start, else HDR10 when the OS shows
+    /// `app.hdr`: HDR on or off. On, it is the mode asked for at start, else HDR10 when the OS shows
     /// the display in HDR, else off-screen; the display is read again first (the window may
     /// have moved, or HDR been turned on).
     fn toggle_hdr(&mut self) -> Result<()> {
@@ -623,7 +607,7 @@ impl<D: Demo> State<D> {
         Ok(())
     }
 
-    /// F3: the next of ACES 2.0's peaks.
+    /// `app.hdr.peak`: the next of ACES 2.0's peaks.
     fn next_peak(&mut self) {
         let peak = self.ctx.output.peak;
         self.ctx.output.peak = hdr::next_peak(peak);
@@ -645,10 +629,10 @@ impl<D: Demo> State<D> {
             .set_hdr_metadata(self.ctx.output.metadata());
     }
 
-    /// F5: the calibration pages, from the first, in an HDR mode (#125).
+    /// `app.calibrate`: the calibration pages, from the first, in an HDR mode (#125).
     fn open_calibration(&mut self, page: Page) -> Result<()> {
         if !self.ctx.output.is_hdr() {
-            tracing::warn!("the HDR calibration needs an HDR mode: F2 first");
+            tracing::warn!("the HDR calibration needs an HDR mode: app.hdr first");
             return Ok(());
         }
         self.hdr
@@ -660,9 +644,9 @@ impl<D: Demo> State<D> {
     /// A key on the open calibration pages (`fine`: Shift is down).
     /// Runs a console command (D-069): the shell's own (`app.`), else the demo's. Returns
     /// whether the window should close.
-    fn run_command(&mut self, name: &str, args: &[String]) -> bool {
+    fn run_command(&mut self, name: &str, args: &[String]) -> Result<bool> {
         match name {
-            "app.quit" => return true,
+            "app.quit" => return Ok(true),
             "app.capture" => {
                 let path = PathBuf::from(args.first().map_or("capture.png", String::as_str));
                 self.console.print(
@@ -671,6 +655,55 @@ impl<D: Demo> State<D> {
                 );
                 self.ctx.capture_request = Some(path);
             }
+            // The HDR output (issue #94): on and off, the peak, the preview's false colours, the
+            // calibration pages (#125). Keys F2 to F5 until D-069.
+            "app.hdr" => {
+                self.toggle_hdr()?;
+                let text = self.ctx.output.describe();
+                self.console.print(text, Color::Green);
+            }
+            "app.hdr.peak" => {
+                self.next_peak();
+                let text = self.ctx.output.describe();
+                self.console.print(text, Color::Green);
+            }
+            "app.hdr.false_colours" => match &mut self.hdr.preview {
+                Some(preview) => {
+                    preview.false_colours = !preview.false_colours;
+                    let state = if preview.false_colours { "on" } else { "off" };
+                    self.console
+                        .print(format!("the preview's false colours {state}"), Color::Green);
+                }
+                None => self.console.print(
+                    "no HDR preview (off-screen HDR only)".to_owned(),
+                    Color::Red,
+                ),
+            },
+            "app.calibrate" => {
+                if self.ctx.output.is_hdr() {
+                    self.open_calibration(Page::Peak)?;
+                    self.console.set_open(false);
+                    self.ctx.settings.set(self.console_shown, false);
+                } else {
+                    self.console.print(
+                        "the calibration needs HDR: app.hdr first".to_owned(),
+                        Color::Red,
+                    );
+                }
+            }
+            // The overlay's groups of zones, folded or shown (keys 1 to 9 until D-069).
+            "app.profile.group" => match args.first().and_then(|a| a.parse::<usize>().ok()) {
+                Some(group @ 1..=9) => {
+                    self.ctx.profile.toggle_group(group - 1);
+                    self.console.print(
+                        format!("the overlay's group {group} folded or shown"),
+                        Color::Green,
+                    );
+                }
+                _ => self
+                    .console
+                    .print("app.profile.group N (1 to 9)".to_owned(), Color::Red),
+            },
             _ => match self.demo.command(&mut self.ctx, name, args) {
                 Some(result) => self.console.report(result),
                 None => self
@@ -678,7 +711,7 @@ impl<D: Demo> State<D> {
                     .print(format!("{name}: nothing runs it in this demo"), Color::Red),
             },
         }
-        false
+        Ok(false)
     }
 
     fn calibration_key(&mut self, code: KeyCode, fine: bool) -> Result<()> {
@@ -876,6 +909,32 @@ impl<D: Demo> State<D> {
             false,
         );
         settings.add_command("app.quit", "", "Closes the window, as Escape does.", true);
+        settings.add_command(
+            "app.hdr",
+            "",
+            "The HDR output on or off: the mode asked for at start, else HDR10 when the OS shows \
+             the display in HDR, else off-screen.",
+            false,
+        );
+        settings.add_command("app.hdr.peak", "", "The next of ACES 2.0's peaks.", false);
+        settings.add_command(
+            "app.hdr.false_colours",
+            "",
+            "The off-screen HDR preview's false colours on or off.",
+            false,
+        );
+        settings.add_command(
+            "app.calibrate",
+            "",
+            "The HDR calibration pages (in an HDR mode).",
+            false,
+        );
+        settings.add_command(
+            "app.profile.group",
+            "N",
+            "Folds or shows the overlay's group N of zones (1 to 9, in r.display_info 2).",
+            false,
+        );
         let mut ctx = Context {
             device,
             swapchain,
@@ -1099,12 +1158,15 @@ impl<D: Demo> State<D> {
             {
                 anyhow::bail!("--set {name}: no such setting in this demo");
             }
-            // `--exec`: console lines run once the demo is ready, as if typed.
-            for line in self.config.settings.exec.clone() {
+            // `forge.cfg`'s binds, then `--exec`: console lines run once the demo is ready, as
+            // if typed.
+            let mut lines = self.ctx.settings.take_startup();
+            lines.extend(self.config.settings.exec.clone());
+            for line in lines {
                 self.console.print(format!("> {line}"), Color::Dim);
                 if let Some(console::Request::Command { name, args }) =
                     self.console.run(&line, &mut self.ctx.settings)
-                    && self.run_command(&name, &args)
+                    && self.run_command(&name, &args)?
                 {
                     // `app.quit`: this frame is the last.
                     self.config.frame_limit = Some(self.ctx.frames_rendered);
@@ -1266,7 +1328,7 @@ impl<D: Demo> State<D> {
             })
             .transpose()?;
 
-        // The window's format changes with HDR (F2): supersampling's pass follows it.
+        // The window's format changes with HDR (`app.hdr`): supersampling's pass follows it.
         if let Some(pass) = &self.hdr.ssaa
             && pass.format() != self.ctx.swapchain.format()
         {
@@ -1381,7 +1443,10 @@ impl<D: Demo> State<D> {
             }
             let profiling = self.ctx.profile.is_visible() && !self.ctx.loading;
             let console = self.console.is_open() && !self.ctx.loading;
-            if calibrating || profiling || console {
+            // What a bound key did, a few seconds at the bottom (D-069).
+            let now = Instant::now();
+            let notices = !console && !self.ctx.loading && self.console.has_notices(now);
+            if calibrating || profiling || console || notices {
                 if !calibrating && self.ctx.output.is_hdr() {
                     self.ctx.profile.counter(self.ctx.output.describe());
                 }
@@ -1396,6 +1461,8 @@ impl<D: Demo> State<D> {
                     // The console over the profile's top (D-069).
                     if console {
                         self.console.layout(canvas, &self.ctx.settings);
+                    } else if notices {
+                        self.console.layout_notices(canvas, now);
                     }
                 }
                 self.overlay
@@ -1660,12 +1727,17 @@ impl<D: Demo> ApplicationHandler for App<D> {
                                 state.ctx.settings.set(state.console_shown, false);
                                 state.console.set_open(false);
                             }
-                            Some(console::Request::Command { name, args })
-                                if state.run_command(&name, &args) =>
-                            {
-                                event_loop.exit();
+                            Some(console::Request::Command { name, args }) => {
+                                match state.run_command(&name, &args) {
+                                    Ok(false) => {}
+                                    Ok(true) => event_loop.exit(),
+                                    Err(e) => {
+                                        self.error = Some(e);
+                                        event_loop.exit();
+                                    }
+                                }
                             }
-                            Some(console::Request::Command { .. }) | None => {}
+                            None => {}
                         }
                         return;
                     }
@@ -1691,37 +1763,29 @@ impl<D: Demo> ApplicationHandler for App<D> {
                         }
                         return;
                     }
-                    // The HDR output (issue #94): on and off, the peak, the preview's false
-                    // colours.
-                    if pressed && code == KeyCode::F2 {
-                        if let Err(e) = state.toggle_hdr() {
-                            self.error = Some(e);
-                            event_loop.exit();
-                        }
-                        return;
-                    }
-                    if pressed && code == KeyCode::F3 {
-                        state.next_peak();
-                        return;
-                    }
-                    if pressed && code == KeyCode::F4 {
-                        if let Some(preview) = &mut state.hdr.preview {
-                            preview.false_colours = !preview.false_colours;
-                        }
-                        return;
-                    }
-                    if pressed && code == KeyCode::F5 {
-                        if let Err(e) = state.open_calibration(Page::Peak) {
-                            self.error = Some(e);
-                            event_loop.exit();
-                        }
-                        return;
-                    }
+                    // A key bound to a console line (`bind`, D-069): the developer's switches are
+                    // settings and commands, on the keys the owner binds; the others are the
+                    // game's.
                     if pressed
-                        && state.ctx.profile.is_visible()
-                        && let Some(group) = digit_key(code)
+                        && !event.repeat
+                        && !state.ctx.loading
+                        && let Some(key) = console::key_name(&event)
+                        && let Some(requests) =
+                            state.console.run_bound(&key, &mut state.ctx.settings)
                     {
-                        state.ctx.profile.toggle_group(group);
+                        for request in requests {
+                            let console::Request::Command { name, args } = request else {
+                                continue;
+                            };
+                            match state.run_command(&name, &args) {
+                                Ok(false) => {}
+                                Ok(true) => event_loop.exit(),
+                                Err(e) => {
+                                    self.error = Some(e);
+                                    event_loop.exit();
+                                }
+                            }
+                        }
                         return;
                     }
                     let was_down = state.input.is_down(code);

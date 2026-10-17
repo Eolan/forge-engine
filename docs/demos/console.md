@@ -52,7 +52,89 @@ either.
 The console's own commands: `help [NAME]` (or `NAME ?`), `find WORD` (names and help holding the
 word), `list [PREFIX]`, `changed` (the settings not at their default, and where their values
 came from), `reset NAME`, `toggle NAME` (flips an on/off setting, steps a choice or a small
-number), `version`, `clear`. A change says what the value was: `r.display_info = 2 (was 1)`.
+number), `bind`, `unbind`, `binds` (below), `version`, `clear`. A change says what the value
+was: `r.display_info = 2 (was 1)`.
+
+## Keys
+
+The keys are the game's (the owner, 2026-10-17: "let the keys free to be used for the user in game
+interaction like F for interacting with doors"). The developer's switches are settings and
+commands, set from the console; `bind` puts one on a key.
+
+**The shell keeps four:**
+- the key under Esc: the console;
+- Esc: closes the console, else the window;
+- F1: steps `r.display_info` (off, on, verbose);
+- Alt+Enter: fullscreen and back.
+
+**The game's keys** are the demos' own:
+- **Moving the camera:** right mouse to look; the wheel sets the speed, Shift moves five times faster, Ctrl twenty-five.
+  - The keys are read by their place on the keyboard, not by their letters.
+  - On AZERTY: Z forward, S back, Q and D sideways, A down, E up.
+  - On QWERTY the same places: W, S, A, D, Q, E.
+- **Walking and acting:**
+  - the island: Enter walks, Space jumps;
+  - the physics lab: Space jumps, throws or lets go, X throws, Enter starts the scene over, C chases, the arrows drive and fly;
+  - the city plan: Enter walks the streets, C boards a tram.
+
+**`bind KEY LINE`** runs a console line when the key is pressed with the console closed. Use `;` between several commands; quotes round the line are dropped.
+- **Feedback:** what the line prints shows for three seconds at the bottom left.
+- **`bind KEY` alone** shows the key's line; `unbind KEY` frees it; `binds` lists them.
+- **Naming a key:**
+  - a key that types a character is named by what it types in the keyboard's layout: `t`, `z`, `²`, `&` (AZERTY's 1);
+  - any other key by its name: `f5`, `tab`, `space`, `enter`, `pageup`, `up`, `numpad1`.
+  - The key under Esc, Esc and F1 stay the shell's.
+- **How long binds last:**
+  - typed in the console, for the run, as every console change;
+  - as lines in `forge.cfg`, every run, run once the demo is ready.
+- **A bound key wins:** its press does not reach the demo.
+- **Shipped games:** a bind reaches only what the console reaches (below).
+
+The owner's file could hold the old keys, on keys of their choice, for example:
+
+```
+# forge.cfg: the keys of before D-069's key map, on the function keys
+bind f5 toggle r.aa
+bind f6 toggle r.tonemap
+bind f7 toggle r.exposure.local
+bind f8 toggle r.ao
+bind f9 camera.where
+bind f10 toggle r.show.gi
+bind f11 toggle r.show.ao
+bind f12 app.capture
+```
+
+**What the keys did before, and what sets it now:**
+
+| Key | Galleries | Asteroids | Planet | Meshlets |
+|---|---|---|---|---|
+| T | `r.aa`, `r.taa.sharpen` | `r.aa` | `r.aa` | |
+| U | `r.show.gi` | `r.aa`, `r.dlss.mode` | | |
+| G | `r.tonemap` | `r.tonemap` | `r.tonemap` | `r.tonemap` |
+| B | `r.bloom` | `r.bloom` | | |
+| X | `r.exposure.local` | `r.show.culled` | `r.show.culled` | |
+| N | `r.ao` | `r.ao` | `r.ao` | |
+| P | `r.probes` | `asteroids.paused` | `planet.paused` | |
+| I | `r.sky_light` | | | |
+| Z | `r.sun.disc` | `r.sun.disc` | | |
+| J | `r.shadows` | `r.shadows` | `r.shadows` | |
+| F | `r.reflections.sky` | | | `meshlets.freeze` |
+| Y | `r.reflections.rays` | `r.translucency` | | |
+| O | `r.cull.occlusion` | `r.cull.occlusion` | `r.cull.occlusion` | `r.cull.occlusion` |
+| C | | `r.cull.cone` | `r.cull.cone` | `r.cull.cone` |
+| V | `r.show.ao` | `asteroids.dust` | | `r.cull.frustum` |
+| L | `r.lod` | `r.lod` | | `r.lod` |
+| M, K, H | `r.show.meshlets`, `r.show.lod`, `r.show.raster` | the same | M, K | the same |
+| R | `r.sw_raster` | `r.sw_raster` | | `r.sw_raster` |
+| Tab | `r.show.wireframe` | `r.show.wireframe` | `r.show.wireframe` | `r.show.wireframe` |
+| `[`, `]` | `r.lod.error` (half, double) | `r.lod.error` | `r.lod.error` | `r.lod.error` |
+| `-`, `=` | | `r.exposure.compensation` | `r.exposure.compensation` | |
+| 1, 2, 3 | `r.show.liquid` (the tank) | | | |
+| `.` | `r.sky.real` (at night) | | | |
+| F6 | `r.shadows.denoiser` | | | |
+| F9 | `camera.where` | | | |
+| F2 to F5 | `app.hdr`, `app.hdr.peak`, `app.hdr.false_colours`, `app.calibrate` (every demo) | | | |
+| 1 to 9 (overlay) | `app.profile.group N` (every demo) | | | |
 
 ## What is registered so far
 
@@ -64,53 +146,45 @@ The shell's, in every demo:
 | `app.console` | the console shown | 0, 1 | yes |
 | `app.capture [PATH]` | command: saves the next frame as a PNG | | no |
 | `app.quit` | command: closes the window | | yes |
+| `app.hdr`, `app.hdr.peak`, `app.hdr.false_colours` | commands: the HDR output on or off, the next peak, the preview's false colours | | no |
+| `app.calibrate` | command: the HDR calibration pages, in an HDR mode | | no |
+| `app.profile.group N` | command: folds or shows the overlay's group N | 1 to 9 | no |
 
 The renderer's (`forge_render::settings`: one name, range and help whichever demo registers
-them). The galleries (city-blocks, the island, the physics lab, the city plan) have them all; the
-key that sets each is in its help. A flag the demo still takes (`--no-ao`, `--tonemap aces`)
-sets the same setting, shown as "from command line": `--no-ao` and `--set r.ao=0` give the same
-image to the pixel.
+them). The galleries (city-blocks, the island, the physics lab, the city plan) have them all. A
+flag the demo still takes (`--no-ao`, `--tonemap aces`) sets the same setting, shown as "from
+command line": `--no-ao` and `--set r.ao=0` give the same image to the pixel.
 
 | Name | What | Values | Gallery default |
 |---|---|---|---|
-| `r.aa` | anti-aliasing (T steps through DLAA, TAA sharpened, TAA, off) | off, taa, dlaa | dlaa where it runs, else taa |
+| `r.aa` | anti-aliasing | off, taa, dlaa | dlaa where it runs, else taa |
 | `r.taa.sharpen`, `r.taa.sharpen_stops` | RCAS over TAA's image, and how strong | 0, 1; 0..8 stops | 1; 0.5 |
-| `r.tonemap` | the tone curve (G) | agx, agx-punchy, aces, neutral, aces2, aces2-analytic | agx-punchy |
-| `r.bloom`, `r.bloom.strength` | bloom (B), its share of the image | 0, 1; 0..1 | 1; 0.04 |
-| `r.exposure.local` | local exposure, D-067 (X) | off, on, view | off |
-| `r.ao`, `r.ao.radius` | ambient occlusion (N), its reach | 0, 1; 0.05..16 m | 1; 1.5 m |
-| `r.probes` | the probes' diffuse light (P) | 0, 1 | 1 |
-| `r.sky_light` | the sky's light (I) | 0, 1 | 1 |
-| `r.shadows` | the sun's ray-traced shadows (J) | 0, 1 | 1 |
-| `r.reflections.sky`, `r.reflections.rays` | the sky's reflection (F), mirror rays (Y) | 0, 1 | 1, 1 |
-| `r.sun.disc` | the sun's disc at its true size (Z) | 0, 1 | 1 |
-| `r.cull.occlusion` | occlusion culling (O) | 0, 1 | 1 |
-| `r.lod`, `r.lod.error` | level of detail (L), its error in pixels ([ and ]) | 0, 1; 0.125..16 | 1; 1 |
-| `r.sw_raster` | the software rasteriser (R) | off, auto, on | auto |
-| `r.show.*` | debug views: `meshlets` (M), `lod` (K), `raster` (H), `ao` (V), `gi` (U), `culled`, `regions`, `wireframe` (Tab) | 0, 1 | 0 |
+| `r.tonemap` | the tone curve | agx, agx-punchy, aces, neutral, aces2, aces2-analytic | agx-punchy |
+| `r.bloom`, `r.bloom.strength` | bloom, its share of the image | 0, 1; 0..1 | 1; 0.04 |
+| `r.exposure.local` | local exposure, D-067 | off, on, view | off |
+| `r.ao`, `r.ao.radius` | ambient occlusion, its reach | 0, 1; 0.05..16 m | 1; 1.5 m |
+| `r.probes` | the probes' diffuse light | 0, 1 | 1 |
+| `r.sky_light` | the sky's light | 0, 1 | 1 |
+| `r.shadows` | the sun's ray-traced shadows | 0, 1 | 1 |
+| `r.shadows.denoiser` | their denoiser, where there is one | sigma, ffx, none | sigma where NRD is, else ffx |
+| `r.reflections.sky`, `r.reflections.rays` | the sky's reflection, mirror rays | 0, 1 | 1, 1 |
+| `r.sun.disc` | the sun's disc at its true size | 0, 1 | 1 |
+| `r.sky.real` | at night, the catalogue's stars and the Moon's albedo (D-046), where the night has them | 0, 1 | 0 |
+| `r.cull.occlusion` | occlusion culling | 0, 1 | 1 |
+| `r.lod`, `r.lod.error` | level of detail, its error in pixels | 0, 1; 0.125..16 | 1; 1 |
+| `r.sw_raster` | the software rasteriser | off, auto, on | auto |
+| `r.show.*` | debug views: `meshlets`, `lod`, `raster`, `ao`, `gi`, `culled`, `regions`, `wireframe` | 0, 1 | 0 |
+| `r.show.liquid` | the tank's water, where there is one (#156) | look, speed, landing | look |
+| `camera.where` | command: where the camera is, as `--view` takes it | | |
 
 The asteroids, the planet and the meshlets bench take the same names for what they have, with
 their own defaults where their scenes want another look, and add:
 
 | Demo | Its own defaults | Added |
 |---|---|---|
-| asteroids | `r.tonemap aces` (its toe keeps space black), `r.sun.disc 0` (hard shadows), `r.ao.radius 2` | `r.dlss.mode` (U steps TAA, DLAA, then DLSS's modes), `r.exposure.compensation` (- and =), `r.translucency` (Y), `r.cull.cone` (C), `asteroids.dust` (V), `asteroids.paused` (P) |
-| planet | `r.aa dlaa` where it runs, as the galleries (since 2026-10-17; T steps DLAA, TAA, off) | `r.exposure.compensation`, `r.cull.cone`, `planet.paused` (P) |
-| meshlets | `r.show.meshlets 1` | `r.cull.cone`, `r.cull.frustum` (V); F (freeze the culling camera) stays a key |
-
-**The keys still differ between demos**, and the settings make it plain:
-
-| Key | Galleries | Asteroids | Planet | Meshlets |
-|---|---|---|---|---|
-| P | `r.probes` | `asteroids.paused` | `planet.paused` | |
-| X | `r.exposure.local` | `r.show.culled` | `r.show.culled` | |
-| V | `r.show.ao` | `asteroids.dust` | | `r.cull.frustum` |
-| Y | `r.reflections.rays` | `r.translucency` | | |
-| U | `r.show.gi` | DLSS's modes | | |
-| F | `r.reflections.sky` | | | freeze |
-
-T, G, B, N, Z, J, O, L, K, M, H, R, Tab, `[` and `]` set the same setting wherever they are. One
-key map for every demo is the owner's call (#278).
+| asteroids | `r.tonemap aces` (its toe keeps space black), `r.sun.disc 0` (hard shadows), `r.ao.radius 2` | `r.dlss.mode`, `r.exposure.compensation`, `r.translucency`, `r.cull.cone`, `asteroids.dust`, `asteroids.paused` |
+| planet | `r.aa dlaa` where it runs, as the galleries (since 2026-10-17) | `r.exposure.compensation`, `r.cull.cone`, `planet.paused` |
+| meshlets | `r.show.meshlets 1` | `r.cull.cone`, `r.cull.frustum`, `meshlets.freeze` (the culling camera held where it stands) |
 
 ## Shipped games
 
