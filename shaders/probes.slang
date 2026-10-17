@@ -317,10 +317,11 @@ public float4 cascade_irradiance<let MIRROR : int>(ProbeField* field, uint c, fl
         float3 tri = max(lerp(1.0 - alpha, alpha, float3(corner)), 0.001);
         float trilinear = tri.x * tri.y * tri.z;
         int3 cell = base + corner;
-        float ahead = s <= PROBE_ROOM_SPACING ? saturate(4.0 * dot((float3(cell) + 0.5) * s - p, n) / s) : 0.0;
-        float least = lerp(PROBE_LEAST_WEIGHT, PROBE_LEAST_FRONT, ahead);
-        float keep = saturate(trilinear / least - 1.0);
-        if (keep <= 0.0)
+        // Coarser cascades compute #70's own expression, so their light stays the same to the bit.
+        bool room = s <= PROBE_ROOM_SPACING;
+        float least = lerp(PROBE_LEAST_WEIGHT, PROBE_LEAST_FRONT, saturate(4.0 * dot((float3(cell) + 0.5) * s - p, n) / s));
+        float keep = room ? saturate(trilinear / least - 1.0) : saturate(trilinear / PROBE_LEAST_WEIGHT - 1.0);
+        if (room ? keep <= 0.0 : trilinear < PROBE_LEAST_WEIGHT)
             continue;
         int3 slot = base_slot + corner;
         slot = select(slot >= counts, slot - counts, slot);
