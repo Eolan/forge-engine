@@ -453,7 +453,11 @@ fn relayout(placed: &mut [Placed], depth: f64) {
         .enumerate()
         .map(|(i, (b, size))| {
             let start = at;
-            at = if i + 1 == bands.len() { depth } else { at + size };
+            at = if i + 1 == bands.len() {
+                depth
+            } else {
+                at + size
+            };
             (b.0, start, at)
         })
         .collect();
@@ -492,7 +496,8 @@ fn rebalance(storeys: &mut [Vec<Placed>], depth: f64) {
         };
         let band: Vec<Placed> = storeys[k].iter().filter(|r| same(r, y0)).copied().collect();
         // Only the night's rooms move: a kitchen upstairs is no answer.
-        let night = |r: &Placed| dark(r.kind) || matches!(r.kind, RoomKind::Bedroom | RoomKind::Study);
+        let night =
+            |r: &Placed| dark(r.kind) || matches!(r.kind, RoomKind::Bedroom | RoomKind::Study);
         if !band.iter().all(night) {
             stay.push((k, y0));
             continue;
@@ -506,11 +511,13 @@ fn rebalance(storeys: &mut [Vec<Placed>], depth: f64) {
         let mut target = (k + 1..n).chain((1..k).rev()).find(|&j| free(&storeys[j]));
         // Else a bedroom comes down to the ground floor's back, the kitchen opening into the
         // living room to make way: a bedroom on the level, near the garden.
-        if target.is_none() && k > 0 && band.iter().any(|r| r.kind == RoomKind::Bedroom) {
-            if let Some(ground) = open_kitchen(&storeys[0]).filter(|g| free(g)) {
-                storeys[0] = ground;
-                target = Some(0);
-            }
+        if target.is_none()
+            && k > 0
+            && band.iter().any(|r| r.kind == RoomKind::Bedroom)
+            && let Some(ground) = open_kitchen(&storeys[0]).filter(|g| free(g))
+        {
+            storeys[0] = ground;
+            target = Some(0);
         }
         if let Some(j) = target {
             storeys[k].retain(|r| !same(r, y0));
@@ -524,7 +531,10 @@ fn rebalance(storeys: &mut [Vec<Placed>], depth: f64) {
                 relayout(&mut storeys[s], depth);
                 arrange(&mut storeys[s]);
             }
-        } else if band.iter().all(|r| dark(r.kind) || r.kind == RoomKind::Study) {
+        } else if band
+            .iter()
+            .all(|r| dark(r.kind) || r.kind == RoomKind::Study)
+        {
             for r in storeys[k].iter_mut().filter(|r| same(r, y0)) {
                 if r.kind == RoomKind::Study {
                     r.kind = RoomKind::Service;
