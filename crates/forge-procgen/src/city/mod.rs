@@ -43,6 +43,7 @@ pub mod rooms;
 pub mod shore;
 pub mod streets;
 pub mod structure;
+pub mod sweep;
 pub mod taxi;
 pub mod tensor;
 pub mod tram_depot;

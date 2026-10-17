@@ -7675,6 +7675,151 @@ mod tests {
         );
     }
 
+    /// A walker's capsule climbs every flight of the village's houses without meeting a solid
+    /// (#276: the owner's "test with the shape the navigation places are supposed to be
+    /// navigated by"): up the flight's middle from 0.6 m before its first riser to 0.7 m onto the
+    /// landing above, on the floor, each tread and the landing in turn, against the insides'
+    /// solids (the flight's own steps are what it climbs) and the upper floors round their
+    /// stairwells. The point tests above stay the fast first pass.
+    #[test]
+    fn the_village_flights_pass_a_walkers_capsule() {
+        use forge_procgen::city::sweep::{self, Prism};
+        let size = 600.0;
+        let site = example::site(size, 10.0);
+        let v = forge_procgen::city::village::village(
+            &site,
+            &forge_procgen::city::village::params(size),
+            1,
+        );
+        let structures = structure::structures(&v.plan, &v.masses);
+        let going = cores::GOING;
+        let (mut flights, mut met) = (0, Vec::new());
+        for (m, s) in v.masses.iter().zip(&structures) {
+            let Some(inner) = interior::house(m, s) else {
+                continue;
+            };
+            let Some(stair) = inner.stair else {
+                continue;
+            };
+            let solids = interior_solids(s, &inner, m.height);
+            let floors = interior_floors(m, s, &inner);
+            let prisms: Vec<Prism<'_>> = solids
+                .iter()
+                .filter(|(_, _, _, step)| !step)
+                .map(|(ring, y0, y1, _)| Prism {
+                    ring,
+                    y0: *y0,
+                    y1: *y1,
+                })
+                .chain(floors.iter().map(|(ring, y0, y1)| Prism {
+                    ring,
+                    y0: *y0,
+                    y1: *y1,
+                }))
+                .collect();
+            let middle = 0.5 * (stair[0] + stair[1]);
+            let climb = inner.climb.normalize_or_zero();
+            for (k, &r) in inner.risers.iter().enumerate() {
+                if k + 1 >= s.storeys.len() || r == 0 {
+                    break;
+                }
+                flights += 1;
+                let base = floor_level(s, k);
+                let top = floor_level(s, k + 1);
+                let rise = (s.storeys[k + 1].level - base) / f64::from(r);
+                let run = f64::from(r - 1) * going;
+                let (before, after) = (0.6, 0.7);
+                let path = [middle - climb * before, middle + climb * (run + after)];
+                // The ground under the walker: the floor, the tread it stands on, the landing.
+                let ground = |along: f64, _: DVec2| {
+                    let v = along - before;
+                    if v < 0.0 {
+                        base
+                    } else if v >= run {
+                        top
+                    } else {
+                        base + ((v / going).floor() + 1.0) * rise
+                    }
+                };
+                for hit in sweep::sweep(&sweep::WALKER, &path, 0.05, ground, &prisms) {
+                    met.push((m.lot, k, (hit.along * 100.0).round() / 100.0, hit.solid));
+                }
+            }
+        }
+        println!("{flights} flights climbed by a walker's capsule");
+        assert!(flights > 50, "{flights}");
+        assert!(
+            met.is_empty(),
+            "{} capsule samples meet a solid on {flights} flights (lot, storey, metres along, \
+             solid): {:?}",
+            met.len(),
+            &met[..met.len().min(12)]
+        );
+    }
+
+    /// A walker's capsule passes every doorway of the village's houses' insides (#276): through
+    /// the doorway's middle, 0.4 m either side of its partition, against the partitions (their
+    /// heads over the doorways included), the furniture as drawn ([`walk::furnished`]) and the
+    /// upper floors.
+    #[test]
+    fn the_village_doorways_pass_a_walkers_capsule() {
+        use forge_procgen::city::sweep::{self, Prism};
+        use forge_procgen::city::walk;
+        let size = 600.0;
+        let site = example::site(size, 10.0);
+        let v = forge_procgen::city::village::village(
+            &site,
+            &forge_procgen::city::village::params(size),
+            1,
+        );
+        let structures = structure::structures(&v.plan, &v.masses);
+        let (mut doorways, mut met) = (0, Vec::new());
+        for (m, s) in v.masses.iter().zip(&structures) {
+            let Some(inner) = interior::house(m, s) else {
+                continue;
+            };
+            let solids = interior_solids(s, &inner, m.height);
+            let floors = interior_floors(m, s, &inner);
+            let furniture: Vec<(Vec<DVec2>, f64, f64)> = walk::furnished(m, s, &inner)
+                .iter()
+                .map(|p| {
+                    let y = floor_level(s, p.storey);
+                    (p.outline().to_vec(), y, y + p.piece.height())
+                })
+                .collect();
+            let prisms: Vec<Prism<'_>> = solids
+                .iter()
+                .filter(|(_, _, _, step)| !step)
+                .map(|(ring, y0, y1, _)| (ring, *y0, *y1))
+                .chain(floors.iter().map(|(ring, y0, y1)| (ring, *y0, *y1)))
+                .chain(furniture.iter().map(|(ring, y0, y1)| (ring, *y0, *y1)))
+                .map(|(ring, y0, y1)| Prism { ring, y0, y1 })
+                .collect();
+            for p in &inner.partitions {
+                let t = (p.b - p.a).normalize_or_zero();
+                let n = DVec2::new(-t.y, t.x);
+                let ground = floor_level(s, p.storey);
+                for &(d0, d1) in &p.doors {
+                    doorways += 1;
+                    let middle = p.a + t * ((d0 + d1) * 0.5);
+                    let path = [middle - n * 0.4, middle + n * 0.4];
+                    let hits = sweep::sweep(&sweep::WALKER, &path, 0.05, |_, _| ground, &prisms);
+                    if let Some(hit) = hits.first() {
+                        met.push((m.lot, p.storey, d1 - d0, hit.solid));
+                    }
+                }
+            }
+        }
+        println!("{doorways} doorways passed by a walker's capsule");
+        assert!(doorways > 200, "{doorways}");
+        assert!(
+            met.is_empty(),
+            "{} of {doorways} doorways meet a walker's capsule (lot, storey, width, solid): {:?}",
+            met.len(),
+            &met[..met.len().min(12)]
+        );
+    }
+
     /// The village houses' probe regions (D-068), as the lookup finds them: each room's middle
     /// its own room, each window's reveal a room's (not the outside's), each doorway two
     /// different regions with its ramp half way across at its middle.

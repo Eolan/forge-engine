@@ -757,6 +757,19 @@ mesh to test navigations inside the houses"):
   across the stair below it, three risers over its steps, in every house of three storeys (the
   owner, from the landing: "is there enough space for people to pass in this stair case?"). A
   test now finds 2 m clear over every tread of the village's flights, across their width.
+  That point test is the fast first pass. On top of it, the practical test sweeps a walker's
+  shape through what was built (#276; the owner: "use the 'capsule' hit box ... not just
+  rays"):
+  - **The shape:** `city::sweep::WALKER` is an upright capsule 0.3 m in radius, from 0.35 m over
+    the ground (what a walker steps over: a riser, a sill) to 1.95 m.
+  - **How it moves:** in steps of 5 cm, against the drawn solids as prisms.
+  - **The flights:** it climbs the middle of every flight, from 0.6 m before its foot to 0.7 m
+    onto the landing above. It stands on the floor, each tread and the landing, and is swept
+    against the partitions, the cupboard, the guards and the upper floors round their
+    stairwells. All 76 flights of seed 1 are clear.
+  - **The doorways:** it passes through every doorway of the insides, 0.4 m either side of the
+    partition, against the partitions and their heads, the drawn furniture and the floors. All
+    350 doorways are clear.
   Along its open side, away from the walls, each flight has a plastered balustrade 0.9 m over the
   steps' nosings and 7.5 cm thick (`balustrade`), on the string's plane, a box over each tread in
   the walker's pieces. Before, the steps' edges stood open to the corridor, a fall of up to
