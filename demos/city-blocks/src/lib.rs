@@ -2179,6 +2179,7 @@ impl Demo for Gallery {
         // The probes' light in place of the open sky's (issue #53): after the sky's tables,
         // which light their rays' misses, before the resolve.
         let probe_extent = self.probes.as_ref().map(|p| p.irradiance_extent());
+        let probe_distance_extent = self.probes.as_ref().map(|p| p.distance_extent());
         let probes = match &mut self.probes {
             Some(probes) if self.probes_on && self.sky_light && !in_space => {
                 if !self.probes_live {
@@ -2391,6 +2392,14 @@ impl Demo for Gallery {
             }
             h.add(&mut frame.graph, taa_frame.color, HashKind::Float4, extent);
             h.add(&mut frame.graph, targets.depth, HashKind::Depth, extent);
+            h.add(&mut frame.graph, targets.visibility, HashKind::Uint, extent);
+            if let (Some(light), Some([w, hgt])) = (probes.as_ref(), probe_distance_extent) {
+                let atlas = forge_gpu::vk::Extent2D {
+                    width: w,
+                    height: hgt,
+                };
+                h.add(&mut frame.graph, light.distance(), HashKind::Float4, atlas);
+            }
         }
         // The splashes' reactive mask for TAA (#107), when spray is alive.
         let mut reactive = None;

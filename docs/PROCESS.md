@@ -411,6 +411,13 @@ reach the GPU, and in Tier 2, and put its lines in the report.
   a missing barrier between passes.
 - `FORGE_FRAME_BARRIER=1` puts a full barrier at the start of each queue's first batch,
   which serialises frames on the GPU.
+- `FORGE_GRAPH_NO_ASYNC=1` keeps every pass on the graphics queue while the device keeps its
+  other queues (`CONCURRENT` sharing, the transfer queue, no serial barriers); a list of words
+  (`=probe,sky`) keeps only the passes whose name contains one of them. It tells a race between
+  the queues from one on the graphics queue.
+- **A flake too rare to bisect: run two captures at once.** Two demos on the GPU together make
+  timing races show far more often: the lab's dominoes, 1 in 3 Tier 2 batches, parted in half
+  of the runs so (#277).
 - The transients (#204):
   - `FORGE_GRAPH_NO_ALIAS=1` gives every transient its own memory. A list of words
     (`=taa,sun`) gives it only to the transients whose name contains one of them.

@@ -75,7 +75,9 @@
 //! one); `FORGE_GRAPH_ZERO=1` clears every
 //! transient image to zero before its first pass (`FORGE_GRAPH_ZERO=ao,taa` only those whose
 //! name contains one of the words), so a pass that reads texels nothing wrote this frame
-//! shows by changing the image (#204).
+//! shows by changing the image (#204); `FORGE_GRAPH_NO_ASYNC=1` keeps every pass on the
+//! graphics queue while the frame keeps its other queues (`FORGE_GRAPH_NO_ASYNC=probe,sky`
+//! only the passes whose name contains one of the words), to find the pass of an async race.
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -1841,6 +1843,9 @@ pub struct RenderGraph {
     /// `FORGE_GRAPH_ZERO` (#204): the transient images cleared to zero before their first
     /// pass, all of them (no words) or those whose name contains one of the words.
     zero: Option<Vec<String>>,
+    /// `FORGE_GRAPH_NO_ASYNC`: the passes that asked for another queue kept on the graphics
+    /// queue, all of them (no words) or those whose name contains one of the words.
+    no_async: Option<Vec<String>>,
     /// `FORGE_FRAME_BARRIER=1`: a full barrier at the start of each queue's first batch, which
     /// serialises frames on the GPU (a debugging aid).
     frame_barrier: bool,
@@ -1894,6 +1899,7 @@ impl RenderGraph {
             alone: words("FORGE_GRAPH_NO_ALIAS").unwrap_or_default(),
             poison: flag("FORGE_GRAPH_POISON"),
             zero: words("FORGE_GRAPH_ZERO"),
+            no_async: words("FORGE_GRAPH_NO_ASYNC"),
             frame_barrier: flag("FORGE_FRAME_BARRIER"),
             relayout_at: std::env::var("FORGE_GRAPH_RELAYOUT")
                 .ok()
@@ -1933,7 +1939,11 @@ impl RenderGraph {
         // Queues as the device has them, then the order they run in.
         let mut passes = passes;
         for pass in &mut passes {
-            pass.decl.queue = self.device.resolve_queue(pass.decl.queue);
+            pass.decl.queue = if selects(&self.no_async, pass.decl.label) {
+                QueueKind::Graphics
+            } else {
+                self.device.resolve_queue(pass.decl.queue)
+            };
         }
         let order = {
             let decls: Vec<PassDecl> = passes.iter().map(|p| p.decl.clone()).collect();

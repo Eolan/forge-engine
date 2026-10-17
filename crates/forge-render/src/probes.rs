@@ -332,6 +332,11 @@ impl ProbeLight {
     pub fn irradiance(&self) -> ImageHandle {
         self.irradiance
     }
+
+    /// The distance atlas, [`DiffuseProbes::distance_extent`] texels (for the image hashes).
+    pub fn distance(&self) -> ImageHandle {
+        self.distance
+    }
 }
 
 /// The world cell of a cascade's first probe: the camera rounded to the cascade's cells, less
@@ -676,6 +681,11 @@ impl Probes {
     /// The irradiance atlas's size, texels ([`ProbeLight::irradiance`]).
     pub fn irradiance_extent(&self) -> [u32; 2] {
         self.params.atlas_size(IRRADIANCE_TILE)
+    }
+
+    /// The distance atlas's size, texels ([`ProbeLight::distance`]).
+    pub fn distance_extent(&self) -> [u32; 2] {
+        self.params.atlas_size(DISTANCE_TILE)
     }
 
     /// Bytes of the atlases, the rays and the probes' state.
