@@ -140,6 +140,39 @@ pub struct ShaderEntry {
     pub stage: ShaderStage,
 }
 
+/// The entry points compiled with `-fp-mode precise`: `NoContraction` on every operation, so no
+/// multiply and add is fused unless the source says so (D-016: Vulkan lets a driver fuse them
+/// otherwise). Without it NVIDIA's driver shaded the same inputs one of two ways from run to
+/// run, and even from one dispatch to the next in a frame (#277): the scene's shading, then
+/// TAA's passes, whose history keeps a difference. About 3 % on the shading's time.
+const PRECISE_ENTRIES: &[(&str, &str)] = &[
+    ("meshlet.slang", "resolve_standard_main"),
+    ("meshlet.slang", "resolve_standard_rt_main"),
+    ("meshlet.slang", "resolve_ice_main"),
+    ("meshlet.slang", "resolve_ice_rt_main"),
+    ("meshlet.slang", "resolve_layered_main"),
+    ("meshlet.slang", "resolve_layered_rt_main"),
+    ("meshlet.slang", "resolve_jelly_main"),
+    ("meshlet.slang", "resolve_jelly_rt_main"),
+    ("meshlet.slang", "reflections_main"),
+    ("taa.slang", "motion_main"),
+    ("taa.slang", "resolve_history_main"),
+    ("taa.slang", "sharpen_main"),
+];
+
+/// Whether `file`'s `entry` compiles precise: one of [`PRECISE_ENTRIES`], or `FORGE_FP_PRECISE`
+/// (`1` every entry, or comma-separated words: the entries whose name holds one).
+fn precise(file: &str, entry: &str) -> bool {
+    if PRECISE_ENTRIES.contains(&(file, entry)) {
+        return true;
+    }
+    match std::env::var("FORGE_FP_PRECISE") {
+        Ok(v) if v == "1" => true,
+        Ok(v) if v != "0" => v.split(',').any(|w| !w.is_empty() && entry.contains(w)),
+        _ => false,
+    }
+}
+
 /// The files a shader's text imports or includes, relative to the shader directory: `import
 /// a.b_c;` is `a/b_c.slang` (or `a/b-c.slang`, which Slang also tries), `#include "x"` and
 /// `__include "x"` are `x` beside the importing file. Over-matching (a line inside a block
@@ -395,12 +428,9 @@ impl ShaderCompiler {
     }
 
     /// The options in the cached file's name, so that optimised and debug builds, or a
-    /// `FORGE_FP_PRECISE` run, keep their own SPIR-V side by side.
-    fn variant(&self) -> &'static str {
-        match (
-            self.optimize,
-            std::env::var_os("FORGE_FP_PRECISE").is_some(),
-        ) {
+    /// precise entry ([`precise`]), keep their own SPIR-V side by side.
+    fn variant(&self, file: &str, entry: &str) -> &'static str {
+        match (self.optimize, precise(file, entry)) {
             (true, false) => "O2",
             (true, true) => "O2p",
             (false, false) => "O0",
@@ -412,7 +442,7 @@ impl ShaderCompiler {
         self.cache_dir.join(format!(
             "{}@{entry}@{}@{hash:016x}.spv",
             file.trim_end_matches(".slang"),
-            self.variant()
+            self.variant(file, entry)
         ))
     }
 
@@ -422,7 +452,7 @@ impl ShaderCompiler {
         let prefix = format!(
             "{}@{entry}@{}@",
             file.trim_end_matches(".slang"),
-            self.variant()
+            self.variant(file, entry)
         );
         let Some(dir) = keep.parent() else {
             return;
@@ -481,7 +511,6 @@ impl ShaderCompiler {
         }
         hasher.update(self.version.as_bytes());
         hasher.update(&[u8::from(self.optimize)]);
-        hasher.update(&[u8::from(std::env::var_os("FORGE_FP_PRECISE").is_some())]);
         Ok(hasher.digest())
     }
 
@@ -528,9 +557,7 @@ impl ShaderCompiler {
         if !self.optimize {
             cmd.arg("-g2");
         }
-        if std::env::var_os("FORGE_FP_PRECISE").is_some() {
-            // Debugging aid (issue #71): no contraction into FMAs, which the driver may otherwise
-            // do differently from one draw to the next.
+        if precise(file, entry) {
             cmd.args(["-fp-mode", "precise"]);
         }
         let output = cmd
@@ -609,6 +636,18 @@ impl WarmProgress {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_shading_and_taa_compile_precise() {
+        if std::env::var_os("FORGE_FP_PRECISE").is_some() {
+            return; // the debugging switch makes more entries precise
+        }
+        assert!(precise("meshlet.slang", "resolve_standard_rt_main"));
+        assert!(precise("taa.slang", "resolve_history_main"));
+        // By file and entry: another file's entry of the same name keeps its contractions.
+        assert!(!precise("water.slang", "resolve_history_main"));
+        assert!(!precise("meshlet.slang", "cull_main"));
+    }
 
     #[test]
     fn entry_lists_read_back_and_skip_what_they_cannot_read() {

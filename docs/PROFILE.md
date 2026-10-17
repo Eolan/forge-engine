@@ -21,6 +21,15 @@ and the CPU zones (`cpu:`) averaged over the whole run, unsmoothed, and the memo
 
 Machine: RTX 5070 Ti, driver 617.14, 1600×900, 2026-09-24 (shading rows updated 2026-09-25, #20).
 
+Since 2026-10-18 (#277), the shading's and TAA's passes compile with `-fp-mode precise`, so a run
+repeats to the bit. They have no fused multiply-adds, which NVIDIA's driver used one way or the
+other from run to run. Best of three:
+- the dominoes' `shading/standard`: 0.373 → 0.383 ms;
+- their frame: 1.94 → 2.06 ms;
+- the island's frame: 2.27 → 2.31 ms.
+
+The times quoted from before this were with fused multiply-adds.
+
 ## `asteroids` — the ballad with the planet's atmosphere (frame 400, LOD 1 px, TAA on, ACES, overlay in full mode)
 
 Frame **0.36 ms** (2 746 fps), p50 0.35, p99 0.64; over a 20 000-frame scripted run without

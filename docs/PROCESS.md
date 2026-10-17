@@ -408,7 +408,8 @@ reach the GPU, and in Tier 2, and put its lines in the report.
   hashed alike), and since 2026-10-17 before every command in a pass too (the lab's dominoes
   still parted, the shading's output from inputs that hashed alike); `FORGE_SERIAL_BARRIERS=0`
   leaves them out, to study that, and the AMD iGPU's serial frame (`FORGE_GPU=amd`) still shows
-  a missing barrier between passes.
+  a missing barrier between passes. The dominoes' parting turned out to be fused multiply-adds
+  (#277, below); whether #207's yard was too is yet to be tested without these barriers.
 - `FORGE_FRAME_BARRIER=1` puts a full barrier at the start of each queue's first batch,
   which serialises frames on the GPU.
 - `FORGE_GRAPH_NO_ASYNC=1` keeps every pass on the graphics queue while the device keeps its
@@ -477,13 +478,37 @@ reach the GPU, and in Tier 2, and put its lines in the report.
   colour, frame after frame (a frame is width/8 × height/8 words): `cmp -l` of two runs' files
   gives the first frame and the tiles that differ. Buffers hash whole, unused tails too: the
   visible list's tail shares its memory with the bloom and differs once the frames do.
-- **A transient sampled through a sampler can part (#277).** The resolve sampling the clouds'
-  shadow as a render-graph transient made the standard pass's colour differ from inputs that
-  hashed alike, even alone on the GPU (no async queue, wait-idle, full barriers around it): from
-  a random frame on, the same 90 frames each time, TAA on or off. With the shadow in an image
-  of its own, every run agreed. The transient's memory (aliased, own or dedicated), its layout
-  and its values (a constant) did not matter; why it parts is not known. If another pass parts
-  so, give its sampled transients images of their own first.
+- **A pass can shade the same inputs two ways: the multiply-adds (#277).**
+  - **What it looked like** (NVIDIA 617.42, RTX 5070 Ti):
+    - From a random frame on, one run's `shading/standard` gave another colour on some pixels,
+      with every input hashing alike before and after the pass.
+    - The same pass dispatched twice in one frame could give two different outputs, even alone
+      between full barriers on one queue.
+    - The same images came back each time (the dominoes' 33 px at frame 900, the same on
+      different days): two fixed ways, not noise.
+  - **Why:** Vulkan lets a driver fuse a multiply and an add into one rounding unless the
+    operation is decorated `NoContraction` (D-016).
+    - The driver keeps two variants of a pipeline, and timing picks which one runs.
+    - #71 found the same in the ballad's motion pass (`docs/demos/asteroids.md`). There, the
+      starfield's exponentials keep two results even when precise, so #71 stays.
+  - **The fix:** the shading's entries and TAA's three compile with `-fp-mode precise`
+    (`PRECISE_ENTRIES` in `crates/forge-gpu/src/shader.rs`), which decorates every operation.
+    - Every run then agrees: 22 pairs on both paths, with and without occlusion, and three runs
+      at once over 449 frames.
+    - It costs about 3 % of the shading's time.
+    - `FORGE_FP_PRECISE=1` compiles every entry precise; a list of words, only the entries whose
+      name holds one.
+  - **What looked like causes and wasn't:** each of these hid it for a while by changing the
+    compiled code or the timing, never the arithmetic:
+    - giving the clouds' shadow an image of its own (f7099e9);
+    - skipping one of the shading's reads;
+    - reading through another descriptor array;
+    - the serial frame's barriers.
+  - **What found it:**
+    - three runs at once, where the odd run per frame shows when each turns;
+    - the pass run twice per frame;
+    - `FORGE_FP_PRECISE` with a list of entries, to find which passes need it.
+  - **When a pass parts so again,** try `FORGE_FP_PRECISE=1`, then narrow it with words.
 - **A pass whose output feeds a history is a compute pass (#161).** As fullscreen draws, TAA's
   motion vectors and resolve came out one of two ways on the serial frame, from the same inputs
   (an fp16 step on up to a fifth of the pixels), whichever way the timing fell; the history kept

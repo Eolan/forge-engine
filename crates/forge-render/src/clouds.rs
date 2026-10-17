@@ -113,9 +113,9 @@ pub struct Clouds {
     /// The sky-view table with the clouds laid over it (#163), and its pass.
     table: GraphImage,
     table_pipeline: Pipeline,
-    /// The shadow map ([`Clouds::shadow`]). An image of its own, not a render-graph transient
-    /// (#277): sampled by the resolve as a transient, the physics lab's dominoes came out one
-    /// of two ways from run to run, from inputs that hashed alike.
+    /// The shadow map ([`Clouds::shadow`]), an image of its own. The first fix tried for #277,
+    /// where the lab's dominoes came out one of two ways; the cause was the shading's fused
+    /// multiply-adds (`PRECISE_ENTRIES` in `forge_gpu::shader`).
     shadow: GraphImage,
     frame: Cell<u32>,
     blocks: Vec<Buffer>,
