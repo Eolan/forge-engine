@@ -30,6 +30,10 @@ const JOIN: f64 = THICKNESS;
 /// How far apart the ends of two walls nearly in line may stand to be joined, metres: a slot
 /// narrower than a gate is no way through, and showed as a dark strip in the wall.
 const IN_LINE_JOIN: f64 = 0.75;
+/// How near a stretch running along a house's wall may come to it and still be walled, metres:
+/// nearer, the house's own wall bounds the garden. A lot line half a metre behind a row's backs
+/// stood a garden wall in a slot before their court doors, the paths to them ending at it.
+const NEAR: f64 = GATE;
 
 /// A garden wall: its line on the plan, its height and the side its thickness takes.
 #[derive(Clone, Debug, PartialEq)]
@@ -180,8 +184,10 @@ pub fn garden_walls(
                 if let Some((t, _)) = geom::segment_intersection(p, q, u, v) {
                     ts.push(t);
                 }
+                // Its corners on the stretch, and those near it, where a stretch along the
+                // house's wall begins and ends (`hugs`).
                 for w in [u, v] {
-                    if geom::distance_to_segment(w, p, q) < ON {
+                    if geom::distance_to_segment(w, p, q) < NEAR {
                         ts.push(geom::closest_on_segment(w, p, q));
                     }
                 }
@@ -213,7 +219,8 @@ pub fn garden_walls(
                 let d = (v - u).normalize_or_zero();
                 d.perp_dot(along).abs() < 0.17 && geom::distance_to_segment(mid, u, v) < THICKNESS
             });
-            if housed || walled {
+            let hugging = footprints.iter().any(|fp| hugs(fp, mid, along));
+            if housed || walled || hugging {
                 continue;
             }
             match runs.last_mut() {
@@ -255,6 +262,9 @@ pub fn garden_walls(
             });
         }
     }
+    // The ends a stretch along a house's wall left free, joined to the house.
+    let joined = stubs(&stretches, footprints);
+    stretches.extend(joined);
     // The gates: each lot's in its longest wall along the street, its front's first.
     let mut gate_at: Vec<Option<f64>> = vec![None; stretches.len()];
     for k in 0..lots.len() {
@@ -318,6 +328,67 @@ pub fn garden_walls(
         }
     }
     joints(&mut out.walls);
+    out
+}
+
+/// Whether point `mid` of a stretch along `along` stands before a wall of house `fp` parallel to
+/// it (within 10°), nearer than [`NEAR`].
+fn hugs(fp: &[DVec2], mid: DVec2, along: DVec2) -> bool {
+    let m = fp.len();
+    (0..m).any(|i| {
+        let (u, v) = (fp[i], fp[(i + 1) % m]);
+        let length = u.distance(v);
+        if length < 1e-6 {
+            return false;
+        }
+        let e = (v - u) / length;
+        let s = (mid - u).dot(e);
+        e.perp_dot(along).abs() < 0.17
+            && s > 0.0
+            && s < length
+            && (mid - u).perp_dot(e).abs() < NEAR
+    })
+}
+
+/// The stubs joining to a house the stretches' ends a stretch along its wall left free
+/// ([`hugs`]): each end that meets no other stretch and stands within [`NEAR`] of a house, from
+/// the end to the house's nearest wall, square to it.
+fn stubs(stretches: &[Stretch], footprints: &[Vec<DVec2>]) -> Vec<Stretch> {
+    let mut out = Vec::new();
+    for (i, s) in stretches.iter().enumerate() {
+        for end in [s.a, s.b] {
+            let met = stretches
+                .iter()
+                .enumerate()
+                .any(|(j, o)| j != i && geom::distance_to_segment(end, o.a, o.b) < JOIN)
+                || footprints
+                    .iter()
+                    .any(|fp| boundary_distance(fp, end) < THICKNESS);
+            if met {
+                continue;
+            }
+            let foot = footprints
+                .iter()
+                .flat_map(|fp| {
+                    let m = fp.len();
+                    (0..m).map(move |k| {
+                        let (u, v) = (fp[k], fp[(k + 1) % m]);
+                        u + (v - u) * geom::closest_on_segment(end, u, v)
+                    })
+                })
+                .min_by(|x, y| x.distance(end).total_cmp(&y.distance(end)));
+            if let Some(foot) = foot.filter(|f| f.distance(end) < NEAR + JOIN) {
+                out.push(Stretch {
+                    a: end,
+                    b: foot,
+                    owner: s.owner,
+                    front: false,
+                    street: false,
+                    hedge: s.hedge,
+                });
+            }
+        }
+    }
     out
 }
 

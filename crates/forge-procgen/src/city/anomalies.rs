@@ -77,11 +77,16 @@ pub enum Kind {
     /// wall round the structure's opening and the probes' regions take its reveal, so a misfit
     /// shows (a balcony's door was walled up to its window's sill from inside).
     OpeningMisfit,
+    /// An outside door whose threshold, the metre before it across its width, meets a garden
+    /// wall, a standing piece of the gardens (a hedge, a planter, a bed, a bench, a bike rack)
+    /// or another house (D-066's threshold socket: a door meets walkable ground outside). A
+    /// garden wall ran half a metre before a court door, the path to it ending at the wall.
+    DoorBlocked,
 }
 
 impl Kind {
     /// Every kind, in order.
-    pub const ALL: [Kind; 18] = [
+    pub const ALL: [Kind; 19] = [
         Kind::RoomOutsideWalls,
         Kind::PartitionInOpening,
         Kind::UnlitRoom,
@@ -100,6 +105,7 @@ impl Kind {
         Kind::UnreachedDoor,
         Kind::DoorSwing,
         Kind::OpeningMisfit,
+        Kind::DoorBlocked,
     ];
 }
 
@@ -141,11 +147,64 @@ pub fn village(v: &Village, structures: &[Structure]) -> Vec<Anomaly> {
     plants(v, &mut out);
     unmatched(v, structures, &mut out);
     flat_roofs(v, &mut out);
+    doors(v, structures, &mut out);
     for (i, (m, s)) in v.masses.iter().zip(structures).enumerate() {
         blank_fronts(i, m, s, &mut out);
         walks(i, m, s, &mut out);
     }
     out
+}
+
+/// The outside doors of the village's houses whose threshold meets something standing
+/// ([`Kind::DoorBlocked`]): points 0.3, 0.6 and 1 m before the door, at its middle and 15 cm in
+/// from its jambs, inside a garden wall, a standing piece of the gardens or another house.
+fn doors(v: &Village, structures: &[Structure], out: &mut Vec<Anomaly>) {
+    let pieces = super::gardens::gardens(&v.plan, &v.masses, structures);
+    let walls: Vec<Vec<DVec2>> = v.plan.walls.iter().map(|w| w.ring()).collect();
+    for (i, s) in structures.iter().enumerate() {
+        for o in s.openings.iter().filter(|o| {
+            o.storey == 0 && matches!(o.kind, OpeningKind::Door | OpeningKind::Shopfront)
+        }) {
+            let w = &s.walls[o.wall];
+            let t = (w.b - w.a).normalize_or_zero();
+            let outward = DVec2::new(t.y, -t.x);
+            let (lo, hi) = o.span();
+            let mut blocked = None;
+            for along in [lo + 0.15, (lo + hi) * 0.5, hi - 0.15] {
+                for off in [0.3, 0.6, 1.0] {
+                    let p = w.a + t * along + outward * off;
+                    if walls.iter().any(|r| geom::contains(r, p)) {
+                        blocked = Some("a garden wall");
+                    } else if pieces
+                        .iter()
+                        .any(|g| g.kind.standing() && geom::contains(&g.outline, p))
+                    {
+                        blocked = Some("a piece of the gardens");
+                    } else if v
+                        .masses
+                        .iter()
+                        .enumerate()
+                        .any(|(j, m)| j != i && geom::contains(&m.footprint, p))
+                    {
+                        blocked = Some("another house");
+                    }
+                }
+            }
+            if let Some(what) = blocked {
+                let at = w.a + t * o.along;
+                out.push(Anomaly {
+                    kind: Kind::DoorBlocked,
+                    at,
+                    height: 1.0,
+                    from: at + outward * 4.0,
+                    note: format!(
+                        "house {i}: its {:?} on its {:?} wall opens onto {what}",
+                        o.kind, w.role
+                    ),
+                });
+            }
+        }
+    }
 }
 
 /// The openings of `structures` their modules do not fill ([`Kind::OpeningMisfit`]), `fills`
@@ -770,7 +829,7 @@ mod tests {
             &structures,
             &facades::fills(&grammar, &structures, &dress(&structures)),
         ));
-        let bounds: [(Kind, usize); 18] = [
+        let bounds: [(Kind, usize); 19] = [
             (Kind::RoomOutsideWalls, 0),
             (Kind::PartitionInOpening, 0),
             (Kind::UnlitRoom, 0),
@@ -789,6 +848,7 @@ mod tests {
             (Kind::UnreachedDoor, 0),
             (Kind::DoorSwing, 0),
             (Kind::OpeningMisfit, 0),
+            (Kind::DoorBlocked, 0),
         ];
         let mut over = Vec::new();
         for (kind, bound) in bounds {

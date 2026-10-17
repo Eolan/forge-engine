@@ -4597,7 +4597,11 @@ The kit's openings, the second slice (2026-10-17): each structure's opening a ho
 the facade rules put in it its fill (`facades::fills`). 92 windows misfit their modules: the
 balconies' French windows, drawn from 0.1 m over the floor on windows with a 0.9 m sill, walled
 up inside. The windows the rules shape are fitted to their modules (`facades::fit_windows`),
-and `OpeningMisfit` counts the rest (0). Next: the modules' seams and the roofs' sockets.
+and `OpeningMisfit` counts the rest (0). The doors' thresholds the same day: 11 doors opened onto
+a garden wall (`DoorBlocked`); stretches along a house's wall nearer than 1.2 m are no longer
+walled, their freed ends joined to the house, and a door a wall ends against goes back to a
+window (0 left). The facade modules already tile their walls (369 storeys, no gap, no overlap).
+Next: the roofs' sockets, the pavements and roads.
 
 ## D-067 — Local exposure: a bilateral grid of log luminance, built and used in one frame ✅ (proposed 2026-10-17, #275; the owner's go the same day)
 

@@ -649,6 +649,15 @@ depths, whose ridges cannot meet. Through them, the houses:
   insides and the regions read them (`facades::fit_windows`), and a new kind of anomaly,
   `OpeningMisfit`, counts any opening its module does not fill to 2 cm (0 in the village; a door
   or a shopfront off its opening is the rules' error, never fitted).
+- **Thresholds** (D-066, 2026-10-17). A door opens onto walkable ground: the metre before each
+  ground-floor door, across its width, meets no garden wall, no standing piece of the gardens
+  and no other house (`DoorBlocked`). It found 11. Nine were court doors behind a garden wall
+  standing in a slot half a metre off the house: a lot line ran just behind the row's backs,
+  and the paths to the doors ended at the wall. A stretch along a house's wall nearer than a
+  gate's width (1.2 m) is no longer walled, the house's own wall bounding the garden, and the
+  ends it frees turn square to meet the house (`walls::stubs`). The last was a court door a
+  garden wall ended against: it goes back to a window, as a door onto ground no one reaches.
+  Now 0.
 
 **The camera** flies the village at 4 m/s (the city's 40), and the mouse wheel sets the speed
 for good, a quarter more or less a notch, 0.25 to 400 m/s, for every demo (`forge_app::FlyCamera`;

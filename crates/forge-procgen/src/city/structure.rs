@@ -387,7 +387,12 @@ pub fn structures(plan: &CityPlan, masses: &[Mass]) -> Vec<Structure> {
     }
     // A court door that opens onto a spot no one can walk to (a light well between the
     // building's wings, a garden closed by its neighbours) goes back to a window.
-    let (doors, _) = unreached(plan, masses, &out);
+    let (mut doors, _) = unreached(plan, masses, &out);
+    // And a door a garden wall stands before (its end against the door's jamb), as a door onto
+    // nowhere (D-066's threshold; `anomalies::Kind::DoorBlocked` counts what is left).
+    doors.extend(walled(plan, &out));
+    doors.sort_unstable();
+    doors.dedup();
     for (m, k) in doors {
         let s = &mut out[m as usize];
         let o = s.openings[k];
@@ -1079,6 +1084,53 @@ const PASSAGE_CLEAR: f64 = PASSAGE.0 * 0.5 + 0.3;
 
 /// Opens a passage's mouths in its mass: the ground openings they meet taken out, its cores'
 /// doors found again after.
+/// The ground-floor doors of `structures` a garden wall of `plan` stands before: inside the metre
+/// before the door, at its middle or 15 cm in from its jambs.
+fn walled(plan: &CityPlan, structures: &[Structure]) -> Vec<(u32, usize)> {
+    // The walls' outlines by the cells of a grid they reach.
+    const CELL: f64 = 20.0;
+    let key = |p: DVec2| ((p.x / CELL).floor() as i64, (p.y / CELL).floor() as i64);
+    let rings: Vec<Vec<DVec2>> = plan.walls.iter().map(|w| w.ring()).collect();
+    let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (i, r) in rings.iter().enumerate() {
+        let (lo, hi) = r.iter().fold(
+            (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)),
+            |(lo, hi), &p| (lo.min(p), hi.max(p)),
+        );
+        let (a, b) = (key(lo), key(hi));
+        for x in a.0..=b.0 {
+            for y in a.1..=b.1 {
+                grid.entry((x, y)).or_default().push(i);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for (m, s) in structures.iter().enumerate() {
+        for (k, o) in s.openings.iter().enumerate() {
+            if o.storey != 0 || o.kind != OpeningKind::Door {
+                continue;
+            }
+            let w = &s.walls[o.wall];
+            let t = (w.b - w.a).normalize_or_zero();
+            let outward = DVec2::new(t.y, -t.x);
+            let (lo, hi) = o.span();
+            let blocked = [lo + 0.15, (lo + hi) * 0.5, hi - 0.15]
+                .iter()
+                .any(|&along| {
+                    [0.3, 0.6, 1.0].iter().any(|&off| {
+                        let p = w.a + t * along + outward * off;
+                        grid.get(&key(p))
+                            .is_some_and(|list| list.iter().any(|&i| geom::contains(&rings[i], p)))
+                    })
+                });
+            if blocked {
+                out.push((m as u32, k));
+            }
+        }
+    }
+    out
+}
+
 fn open_passage(s: &mut Structure, mouths: [(usize, f64); 2]) {
     let doors: Vec<Opening> = s.cores.iter().map(|c| s.openings[c.door]).collect();
     // Under its storey's ceiling with a lintel, as the other openings: no higher than 3.6 m.
