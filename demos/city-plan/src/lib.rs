@@ -3704,7 +3704,11 @@ fn interior_solids(
                     piece(-0.15, width, -0.15, -0.05),
                 )
             };
-            for ring in [side, head] {
+            // No guard across the head where the next flight starts there: the flights stack in
+            // one box, and across the foot of the one above it walled that flight off.
+            let next = k + 2 < s.storeys.len() && inner.risers.get(k + 1).is_some_and(|&r| r >= 2);
+            let guards = if next { vec![side] } else { vec![side, head] };
+            for ring in guards {
                 // Wound anticlockwise, as the other solids.
                 let ring = if geom::signed_area(&ring) < 0.0 {
                     ring.into_iter().rev().collect()
@@ -7499,6 +7503,56 @@ mod tests {
             "{} of {treads} tread points under 2 m: {:?}",
             low.len(),
             &low[..low.len().min(8)]
+        );
+    }
+
+    /// Every flight of the village's houses can be stepped on: the 0.6 m of floor before its
+    /// first riser, across its width, is clear 2 m up. The guard across an upper floor's
+    /// stairwell walled off the flight that starts there in the houses of three storeys.
+    #[test]
+    fn the_village_flights_feet_are_clear() {
+        let size = 600.0;
+        let site = example::site(size, 10.0);
+        let v = forge_procgen::city::village::village(
+            &site,
+            &forge_procgen::city::village::params(size),
+            1,
+        );
+        let structures = structure::structures(&v.plan, &v.masses);
+        let (mut feet, mut blocked) = (0, Vec::new());
+        for (m, s) in v.masses.iter().zip(&structures) {
+            let Some(inner) = interior::house(m, s) else {
+                continue;
+            };
+            let Some(stair) = inner.stair else {
+                continue;
+            };
+            let solids = interior_solids(s, &inner, m.height);
+            let across = stair[1] - stair[0];
+            for (k, &r) in inner.risers.iter().enumerate() {
+                if k + 1 >= s.storeys.len() || r == 0 {
+                    break;
+                }
+                feet += 1;
+                let y = floor_level(s, k);
+                let clear = [0.1, 0.35, 0.6].iter().all(|&back| {
+                    [0.2, 0.5, 0.8].iter().all(|&u| {
+                        let p = stair[0] - inner.climb * back + across * u;
+                        !solids.iter().any(|(ring, y0, y1, _)| {
+                            *y0 < y + 2.0 && *y1 > y + 0.05 && geom::contains(ring, p)
+                        })
+                    })
+                });
+                if !clear {
+                    blocked.push((m.lot, k));
+                }
+            }
+        }
+        assert!(feet > 50, "{feet}");
+        assert!(
+            blocked.is_empty(),
+            "{} of {feet} flights walled at their foot: {blocked:?}",
+            blocked.len()
         );
     }
 
