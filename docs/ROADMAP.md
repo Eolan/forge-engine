@@ -225,7 +225,7 @@ Then #39 (the RTX 3080 run, which can also retry #95's double buffer).
   - modular buildings (#86, to decide early);
   - streets and vehicles (#87);
   - seamless interiors (#88);
-  - destruction (#89);
+  - destruction (#89; the Maelstrom-like goal, #279, 2026-10-17);
   - city life (#90);
 - a more organic town (#91).
 
@@ -515,7 +515,9 @@ hash (`docs/demos/physics-lab.md`); the island is where they come together.
 6. **Destruction:** a brick wall of bonded bricks with breakable joints ✅ (#142, `--lab break`:
    mortar that breaks on load or strain, a wrecking ball, a column shattered into Voronoi pieces
    cut ahead of time); left: rocks and asteroids fractured on impact (#24, #12), a ship's hull
-   breaking open on its decks (#89).
+   breaking open on its decks (#89). The goal beyond, for later (the owner, 2026-10-17): one
+   destruction model, as Star Citizen's Maelstrom, for the environment, the entities and the
+   armour actors wear, by material, thickness and force (#279).
 7. **Creatures:** powered ragdolls ✅ (#143, `--lab creatures`: a mannequin and a dog modelled
    in Blender, Jolt ragdolls whose motors drive moving poses); skinned ✅ (#165, Phase 7's
    start: glTF skins and clips read by `forge-anim`, GPU skinning, the bodies' BLASes refitted,
