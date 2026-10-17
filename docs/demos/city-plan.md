@@ -786,6 +786,14 @@ mesh to test navigations inside the houses"):
   (its counter there, `furnish`): a bedroom on the level by the garden. A study with nowhere
   to go becomes a utility room. One bedroom is left in a middle, a comfortable household's on a
   third storey with no depth to spare.
+- *Pinholes in the walls* (`insides`). Single bright pixels ran in lines up the plastered walls
+  and the windows' reveals, the light behind them showing through: each band of an inner face
+  was cut at its own hole's sill and head beside a neighbour of the wall's whole height
+  (T-junctions on their common edge), and the kit's window lining and the reveals are two
+  meshes whose common edge never quite closes. Every band is now cut at every height a band of
+  its wall stops at, and a strip 5 mm into the wall backs each lining's joint round the hole.
+  The plaster is mapped by the place along the wall and the height, so it runs on from band to
+  band.
 - *A front past a bend* (`houses::footprint_of`). A house across its whole lot followed the lot's
   front round a bend in the street, 4.4 m past its frontage on the square's corner, but its
   plan's rooms stop at the frontage: that wall had nothing behind it, blank on three storeys

@@ -2866,24 +2866,28 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
             } else {
                 0.0
             };
-            // The face from `from` to `to` along the wall, `y0` to `y1`.
+            // The face from `from` to `to` along the wall, `y0` to `y1`, its plaster mapped by
+            // the place along the wall and the height, so it runs on from face to face (each face
+            // began its own at its corner).
             let mut face = |from: f64, to: f64, y0: f64, y1: f64| {
                 let start = if from <= 0.0 { run_a } else { 0.0 };
                 let end = if to >= wall.length() { run_b } else { 0.0 };
-                let p = wall.a + t * (from - start) + inward * deep;
-                let q = wall.a + t * (to + end) + inward * deep;
-                let (l, h) = ((p.distance(q) / 3.0) as f32, ((y1 - y0) / 3.0) as f32);
+                let (s0, s1) = (from - start, to + end);
+                let p = wall.a + t * s0 + inward * deep;
+                let q = wall.a + t * s1 + inward * deep;
+                let (u0, u1) = ((s0 / 3.0) as f32, (s1 / 3.0) as f32);
+                let (v0, v1) = ((-y0 / 3.0) as f32, (-y1 / 3.0) as f32);
                 triangle_uv(
                     mesh,
                     [at(p, y0), at(q, y0), at(q, y1)],
-                    [[0.0, 0.0], [l, 0.0], [l, -h]],
+                    [[u0, v0], [u1, v0], [u1, v1]],
                     normal,
                     plaster,
                 );
                 triangle_uv(
                     mesh,
                     [at(p, y0), at(q, y1), at(p, y1)],
-                    [[0.0, 0.0], [l, -h], [0.0, -h]],
+                    [[u0, v0], [u1, v1], [u0, v1]],
                     normal,
                     plaster,
                 );
@@ -2932,6 +2936,24 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
             }
             edges.sort_by(f64::total_cmp);
             edges.dedup_by(|x, y| (*x - *y).abs() < 0.005);
+            // Every band's face is cut at every height a band of the wall stops at (the holes'
+            // sills and heads), so two bands side by side share their corners: a band cut round a
+            // window beside one face the wall's height left T-junctions on their common edge,
+            // pinholes in a line up the wall that showed the light behind it (2026-10-17).
+            let mut cuts: Vec<f64> = holes
+                .iter()
+                .flat_map(|h| [h.2.max(0.0), h.3.min(top)])
+                .collect();
+            cuts.sort_by(f64::total_cmp);
+            cuts.dedup_by(|x, y| (*x - *y).abs() < 0.005);
+            let mut face = |x0: f64, x1: f64, y0: f64, y1: f64| {
+                let mut lo = y0;
+                for &c in cuts.iter().filter(|&&c| c > y0 + 0.005 && c < y1 - 0.005) {
+                    face(x0, x1, lo, c);
+                    lo = c;
+                }
+                face(x0, x1, lo, y1);
+            };
             for pair in edges.windows(2) {
                 let (x0, x1) = (pair[0], pair[1]);
                 if x1 - x0 < 0.005 {
@@ -3001,7 +3023,8 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
                 } else {
                     caps.push((floor, Vec3::Y, KIT_INSIDE_FLOOR));
                 }
-                for (y, n, section) in caps {
+                let bottom = caps[1].0;
+                for &(y, n, section) in &caps {
                     let (a, b, c, d) = (p(lo, from), p(hi, from), p(hi, deep), p(lo, deep));
                     triangle_uv(
                         mesh,
@@ -3014,6 +3037,51 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
                         mesh,
                         [at(a, y), at(c, y), at(d, y)],
                         [[0.0, 0.0], [l, r], [0.0, r]],
+                        n,
+                        section,
+                    );
+                }
+                // Behind the joint with the kit's lining (at `from`), a strip 5 mm into the wall
+                // round the hole: the lining and these reveals are two meshes whose common edge
+                // never quite closes, and pinholes in a line up the reveal showed the sky
+                // (2026-10-17). Hidden but through those pinholes.
+                let (j0, j1) = ((from - 0.03).max(0.0), (from + 0.03).min(deep));
+                let (b0, b1) = (bottom - 0.005, y1 + 0.005);
+                for (x, n) in [(lo - 0.005, tx), (hi + 0.005, -tx)] {
+                    let (a, b) = (p(x, j0), p(x, j1));
+                    triangle_uv(
+                        mesh,
+                        [at(a, b0), at(b, b0), at(b, b1)],
+                        [[0.0; 2]; 3],
+                        n,
+                        plaster,
+                    );
+                    triangle_uv(
+                        mesh,
+                        [at(a, b0), at(b, b1), at(a, b1)],
+                        [[0.0; 2]; 3],
+                        n,
+                        plaster,
+                    );
+                }
+                for &(y, n, section) in &[(b1, Vec3::NEG_Y, plaster), (b0, Vec3::Y, caps[1].2)] {
+                    let (a, b, c, d) = (
+                        p(lo - 0.005, j0),
+                        p(hi + 0.005, j0),
+                        p(hi + 0.005, j1),
+                        p(lo - 0.005, j1),
+                    );
+                    triangle_uv(
+                        mesh,
+                        [at(a, y), at(b, y), at(c, y)],
+                        [[0.0; 2]; 3],
+                        n,
+                        section,
+                    );
+                    triangle_uv(
+                        mesh,
+                        [at(a, y), at(c, y), at(d, y)],
+                        [[0.0; 2]; 3],
                         n,
                         section,
                     );
