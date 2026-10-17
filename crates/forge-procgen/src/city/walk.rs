@@ -492,3 +492,74 @@ mod tests {
         );
     }
 }
+
+/// Views for walking the village by eye, as the owner does (`--view=` arguments for `city-plan
+/// --village 600`): `cargo test --release -p forge-procgen survey -- --ignored --nocapture`.
+#[cfg(test)]
+mod survey {
+    use super::super::{example, geom, interior, structure, village};
+    use glam::DVec2;
+
+    /// The village's size, metres (`--village 600`); the demo's views are about its middle.
+    const SIZE: f64 = 600.0;
+
+    /// The yaw, degrees, that looks along `look` (the demo's: 0 along −z, turning towards −x).
+    fn yaw(look: DVec2) -> f64 {
+        (-look.x).atan2(-look.y).to_degrees()
+    }
+
+    /// A street-level view of every tenth house, from 9 m out in front of its first side.
+    #[test]
+    #[ignore]
+    fn survey_views() {
+        let site = example::site(SIZE, 10.0);
+        let v = village::village(&site, &village::params(SIZE), 1);
+        for (i, m) in v.masses.iter().enumerate().step_by(10) {
+            let (a, b) = (m.footprint[0], m.footprint[1]);
+            let t = (b - a).normalize_or_zero();
+            let mid = (a + b) * 0.5;
+            let eye = mid + DVec2::new(t.y, -t.x) * 9.0 - t * 4.0;
+            let half = SIZE * 0.5;
+            println!(
+                "survey {i}: --view={:.1},1.7,{:.1},{:.1},5",
+                eye.x - half,
+                eye.y - half,
+                yaw((mid - eye).normalize_or_zero())
+            );
+        }
+    }
+
+    /// A view from the middle of a ground and an upper room of every eighth house with its
+    /// insides, looking at the room's first side (its street side).
+    #[test]
+    #[ignore]
+    fn survey_rooms() {
+        let site = example::site(SIZE, 10.0);
+        let v = village::village(&site, &village::params(SIZE), 1);
+        let structures = structure::structures(&v.plan, &v.masses);
+        let houses = v
+            .masses
+            .iter()
+            .zip(&structures)
+            .enumerate()
+            .filter_map(|(i, (m, s))| interior::house(m, s).map(|inner| (i, s, inner)));
+        for (i, s, inner) in houses.step_by(8) {
+            for k in [0, 1] {
+                let Some(r) = inner.rooms.iter().find(|r| r.storey == k) else {
+                    continue;
+                };
+                let c = geom::centroid(&r.outline);
+                let front = (r.outline[0] + r.outline[1]) * 0.5;
+                let half = SIZE * 0.5;
+                println!(
+                    "room {i}-{k} {:?}: --view={:.1},{:.1},{:.1},{:.1},-5",
+                    r.kind,
+                    c.x - half,
+                    s.storeys[k].level.max(0.32) + 1.6,
+                    c.y - half,
+                    yaw((front - c).normalize_or_zero())
+                );
+            }
+        }
+    }
+}

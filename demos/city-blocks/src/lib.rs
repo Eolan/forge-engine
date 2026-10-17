@@ -380,11 +380,11 @@ pub struct Args {
     #[arg(long)]
     probe_rays: Option<u32>,
     /// Probe cascades, each twice as coarse as the one before (1 to 6): 5, and 6 in the
-    /// village (its finest 2 m apart).
+    /// village (its finest 1 m apart).
     #[arg(long)]
     probe_cascades: Option<u32>,
     /// The finest probe cascade's spacing in metres, the next ones twice as far each: 4,
-    /// `ROOM_PROBE_SPACING` in the models lab's rooms, 2 in the village.
+    /// `ROOM_PROBE_SPACING` in the models lab's rooms, 1 in the village.
     #[arg(long)]
     probe_spacing: Option<f32>,
     /// Draw the island without its water (issue #105, D-038): the stand-in sea's opaque plane,

@@ -753,7 +753,14 @@ mesh to test navigations inside the houses"):
   sky's light leaked in blue and the shadows sat in odd places and swung with the jitter:
   15 000 pixels of a hall changed between frames 10 apart, about 100 now. At 2 m the shimmer of
   #272 is gone at 128 rays as at 256 (the loading session's measures, #274), and the frame
-  costs less than before (see `docs/PROFILE.md`). The probes' rays keep a leaf card or a
+  costs less than before (see `docs/PROFILE.md`). Then 1 m apart (the coarsest cascade 32 m
+  apart), as the models lab's rooms: at 2 m a room 3 m wide had a probe or two across, and a
+  probe's sunlight came through a room's wall, a bright patch with a hard edge on the wall and
+  the floor by its doorway, gone with `--no-probes` and at 1 m. The rooms are lighter and
+  more even, the halls lose the last of the sky's blue; a still camera's changing pixels are
+  as few or fewer (a hall 95–240 of 1.44 million against 98–172, a room 381–585 against
+  440–801, the room with the patch 958–1553 against 1418–2564), for 0.1–0.45 ms a frame. The
+  probes' rays keep a leaf card or a
   railing a quarter of the time (`PROBE_LEAF_KEPT` in `meshlet.slang`), as a crown lets light
   through: kept every time, a crown darkened every probe about it and left a dark blot on the
   wall beside the tree (the owner: "strange shadows or lighting artifact on the wall"). The

@@ -4866,8 +4866,12 @@ impl Scenario for PlanScenario {
             // (the loading session's measures, #274: the stairs 3–15 px against 4–12, the landing
             // 204–253 against 205–262, the room 5–27 against 4–28; here 75 and 52 against 91 and
             // 56), and the probes' rays cost 1.1–1.3 ms rather than 1.9–2.1 (the frame 4.50 →
-            // 3.70 ms): 128.
-            probes: (!self.flora.is_empty()).then_some((128, 2.0, 6)),
+            // 3.70 ms): 128. And 1 m apart since, as the models lab's rooms: at 2 m a room
+            // 3 m wide had a probe or two across, and a probe's sunlight came through its wall:
+            // a bright patch with a hard edge on the wall and the floor by its doorway (gone with
+            // `--no-probes`); 1 m apart it is gone, for 0.2–0.4 ms indoors (the coarsest cascade
+            // 32 m apart).
+            probes: (!self.flora.is_empty()).then_some((128, 1.0, 6)),
             // And metered: at the street's fixed exposure (EV 14) a hall lit through its door
             // and the ground under the holm oaks were black (the owner, 2026-10-16: "insides are
             // way too dark", "light below trees is too dark"); the light was there, the eye

@@ -1392,6 +1392,15 @@ something stands out). Two things to watch:
     The village's leaf cards (#266) gained most: `meshlet pass 1` 1.80 → 1.19 ms from the air
     and 1.11 → 0.53 ms along the road, the images unchanged to the pixel. The batch is
     unchanged too (240 captures, both paths), and its timings move by under 0.04 ms.
+  - *2026-10-17, the village's probes 1 m apart:* six cascades from 1 m (the coarsest 32 m
+    apart), 128 rays: a probe's sunlight no longer comes through a room's wall. DLAA, 600
+    frames, best of three:
+    - the room with the leak (`--view=-20.9,1.9,-64.5,-177.0,-5`), 3.41 → 3.63 ms;
+    - the hall's door (`--view=80.47,2.22,-170.69,357.1,-40.7`), 3.71 → 4.10 ms;
+    - the green, 4.63 → 4.65 ms.
+
+    The map check's views, one run each: +0.1 to +0.45 ms indoors and along the streets (the
+    landing 3.26 → 3.72, the room 3.03 → 3.33), the air and the green unchanged.
   - *2026-10-17, the probes' rays through the leaves:* a probe's ray keeps a cut-out it meets (a
     leaf card, a railing) a quarter of the time (`PROBE_LEAF_KEPT`), so a crown no longer leaves
     a dark blot on the wall beside it. The village, 600 frames, best of three:
