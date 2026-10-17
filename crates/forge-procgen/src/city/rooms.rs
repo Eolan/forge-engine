@@ -151,6 +151,8 @@ pub struct Placed {
     pub x: (f64, f64),
     /// Its extent into the depth, metres from the street.
     pub y: (f64, f64),
+    /// The floor area it asked, m² (the programme's).
+    pub area: f64,
 }
 
 /// A house's plan: its width along the street, the depth its rooms took, and its rooms by
@@ -227,8 +229,6 @@ pub fn plan(programme: &[Room], width: f64, max_depth: f64) -> Plan {
         !r.kind.by_day() && !night && storeys == 1 && y >= max_depth * 0.5
     };
     let mut storeys: Vec<Vec<Placed>> = vec![Vec::new()];
-    // The asked areas of the current storey's rooms, in their order.
-    let mut asked: Vec<f64> = Vec::new();
     // A band's depth from its first room's area: as deep as the room is square, or as its area
     // across the width left asks, within [`DEPTH`] and the plan's depth.
     let band = |area: f64| {
@@ -266,14 +266,13 @@ pub fn plan(programme: &[Room], width: f64, max_depth: f64) -> Plan {
             && !up
             && small
             && y + d > max_depth + 1e-9
-            && squeeze(&mut storeys[k], &asked, y + d - max_depth)
+            && squeeze(&mut storeys[k], y + d - max_depth)
         {
             y = max_depth - d;
         }
         if y > 0.0 && (y + d > max_depth + 1e-9 || up) {
             arrange(storeys.last_mut().expect("a storey"));
             storeys.push(Vec::new());
-            asked.clear();
             y = 0.0;
             // Its band's depth, as the band will take it.
             let company = band(ROOM_MIN);
@@ -325,8 +324,8 @@ pub fn plan(programme: &[Room], width: f64, max_depth: f64) -> Plan {
                 storey,
                 x: (x, x + w),
                 y: (y, y + d),
+                area: r.area,
             });
-            asked.push(r.area);
             night |= !r.kind.by_day();
             x += w;
             i += 1;
@@ -359,6 +358,7 @@ pub fn plan(programme: &[Room], width: f64, max_depth: f64) -> Plan {
             }
         }
     }
+    rebalance(&mut storeys, depth);
     Plan {
         width,
         depth,
@@ -372,16 +372,7 @@ pub fn plan(programme: &[Room], width: f64, max_depth: f64) -> Plan {
 /// (`research/house-layouts.md` rule 14: a bedroom in the middle band had no window). The rooms
 /// then in that order, front to back.
 fn arrange(placed: &mut [Placed]) {
-    let dark = |k: RoomKind| matches!(k, RoomKind::Bathroom | RoomKind::Store | RoomKind::Service);
-    // Each band's start, end and whether a room of it wants a window, from the front.
-    let mut bands: Vec<(f64, f64, bool)> = Vec::new();
-    for r in placed.iter() {
-        match bands.iter_mut().find(|b| (b.0 - r.y.0).abs() < 1e-9) {
-            Some(b) => b.2 |= !dark(r.kind),
-            None => bands.push((r.y.0, r.y.1, !dark(r.kind))),
-        }
-    }
-    bands.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let bands = bands(placed);
     let lit: Vec<usize> = (0..bands.len()).filter(|&b| bands[b].2).collect();
     let mut order: Vec<usize> = Vec::with_capacity(bands.len());
     order.extend(lit.first());
@@ -409,14 +400,172 @@ fn arrange(placed: &mut [Placed]) {
     placed.sort_by(|a, b| a.y.0.total_cmp(&b.y.0).then(a.x.0.total_cmp(&b.x.0)));
 }
 
-/// A storey's bands (`placed`, the rooms that asked `asked`) made `by` metres shallower in all,
-/// each giving up depth in proportion to what it spares: none under [`DEPTH`]'s least, none of
-/// its rooms under what it asked or [`ROOM_MIN`], whichever is less. Whether they could.
-fn squeeze(placed: &mut [Placed], asked: &[f64], by: f64) -> bool {
+/// Whether a room does without a window: a bathroom, a store, a service room.
+fn dark(kind: RoomKind) -> bool {
+    matches!(
+        kind,
+        RoomKind::Bathroom | RoomKind::Store | RoomKind::Service
+    )
+}
+
+/// A storey's bands from the front: each one's start, end, and whether a room of it wants a
+/// window.
+fn bands(placed: &[Placed]) -> Vec<(f64, f64, bool)> {
+    let mut bands: Vec<(f64, f64, bool)> = Vec::new();
+    for r in placed {
+        match bands.iter_mut().find(|b| (b.0 - r.y.0).abs() < 1e-9) {
+            Some(b) => b.2 |= !dark(r.kind),
+            None => bands.push((r.y.0, r.y.1, !dark(r.kind))),
+        }
+    }
+    bands.sort_by(|a, b| a.0.total_cmp(&b.0));
+    bands
+}
+
+/// The depth the band of `placed` starting at `y0` needs for each of its rooms to keep the area
+/// it asked, and at least [`DEPTH`]'s least.
+fn least(placed: &[Placed], y0: f64) -> f64 {
+    placed
+        .iter()
+        .filter(|r| (r.y.0 - y0).abs() < 1e-9)
+        .map(|r| r.area / (r.x.1 - r.x.0).max(1e-6))
+        .fold(DEPTH.0, f64::max)
+}
+
+/// A storey's bands laid again over `depth` in their order: each as deep as it needs
+/// ([`least`]), and the rest shared in proportion to that; where they do not all fit, each its
+/// present depth, in proportion.
+fn relayout(placed: &mut [Placed], depth: f64) {
+    let bands = bands(placed);
+    let leasts: Vec<f64> = bands.iter().map(|b| least(placed, b.0)).collect();
+    let needed: f64 = leasts.iter().sum();
+    let sizes: Vec<f64> = if needed <= depth + 1e-9 {
+        leasts.iter().map(|l| l * depth / needed).collect()
+    } else {
+        let now: f64 = bands.iter().map(|b| b.1 - b.0).sum();
+        bands.iter().map(|b| (b.1 - b.0) * depth / now).collect()
+    };
+    // Each band's old start, new start and new end.
+    let mut at = 0.0;
+    let moved: Vec<(f64, f64, f64)> = bands
+        .iter()
+        .zip(&sizes)
+        .enumerate()
+        .map(|(i, (b, size))| {
+            let start = at;
+            at = if i + 1 == bands.len() { depth } else { at + size };
+            (b.0, start, at)
+        })
+        .collect();
+    for r in placed.iter_mut() {
+        if let Some(&(_, s, e)) = moved.iter().find(|m| (m.0 - r.y.0).abs() < 1e-9) {
+            r.y = (s, e);
+        }
+    }
+}
+
+/// A row house's rooms that want a window out of a storey's middle, where it has no outside wall
+/// (2026-10-17: the village's 20 unlit rooms, most of them a storey of three bedrooms one behind
+/// the other under a storey of an office and a bathroom 8.8 m deep). A middle band of bedrooms
+/// or a study moves to the nearest storey above, else below but never to the ground floor, whose
+/// front or back is free of such a room and whose depth lets every room keep what it asked; both
+/// storeys' bands then share their depth by what they need ([`relayout`]) and are arranged again.
+/// A bedroom that finds no such storey comes down to the ground floor's back where opening the
+/// kitchen into the living room ([`open_kitchen`]) frees it; a study becomes a utility room
+/// (`Service`); else it stays.
+fn rebalance(storeys: &mut [Vec<Placed>], depth: f64) {
+    let n = storeys.len();
+    let same = |r: &Placed, y0: f64| (r.y.0 - y0).abs() < 1e-9;
+    // The middle bands that stay, by storey and start.
+    let mut stay: Vec<(usize, f64)> = Vec::new();
+    // Each pass moves, turns or keeps a band: far fewer passes than this.
+    let rooms: usize = storeys.iter().map(Vec::len).sum();
+    for _ in 0..4 * rooms + 1 {
+        let found = (0..n).find_map(|k| {
+            let b = bands(&storeys[k]);
+            (1..b.len().saturating_sub(1))
+                .find(|&i| b[i].2 && !stay.iter().any(|s| s.0 == k && (s.1 - b[i].0).abs() < 1e-9))
+                .map(|i| (k, b[i].0))
+        });
+        let Some((k, y0)) = found else {
+            return;
+        };
+        let band: Vec<Placed> = storeys[k].iter().filter(|r| same(r, y0)).copied().collect();
+        // Only the night's rooms move: a kitchen upstairs is no answer.
+        let night = |r: &Placed| dark(r.kind) || matches!(r.kind, RoomKind::Bedroom | RoomKind::Study);
+        if !band.iter().all(night) {
+            stay.push((k, y0));
+            continue;
+        }
+        let need = least(&band, y0);
+        let free = |s: &[Placed]| {
+            let b = bands(s);
+            b.iter().filter(|b| b.2).count() < 2
+                && b.iter().map(|b| least(s, b.0)).sum::<f64>() + need <= depth + 1e-9
+        };
+        let mut target = (k + 1..n).chain((1..k).rev()).find(|&j| free(&storeys[j]));
+        // Else a bedroom comes down to the ground floor's back, the kitchen opening into the
+        // living room to make way: a bedroom on the level, near the garden.
+        if target.is_none() && k > 0 && band.iter().any(|r| r.kind == RoomKind::Bedroom) {
+            if let Some(ground) = open_kitchen(&storeys[0]).filter(|g| free(g)) {
+                storeys[0] = ground;
+                target = Some(0);
+            }
+        }
+        if let Some(j) = target {
+            storeys[k].retain(|r| !same(r, y0));
+            // Behind storey j's bands, then laid with them.
+            storeys[j].extend(band.iter().map(|r| Placed {
+                storey: j,
+                y: (depth, depth + r.y.1 - r.y.0),
+                ..*r
+            }));
+            for s in [j, k] {
+                relayout(&mut storeys[s], depth);
+                arrange(&mut storeys[s]);
+            }
+        } else if band.iter().all(|r| dark(r.kind) || r.kind == RoomKind::Study) {
+            for r in storeys[k].iter_mut().filter(|r| same(r, y0)) {
+                if r.kind == RoomKind::Study {
+                    r.kind = RoomKind::Service;
+                }
+            }
+            arrange(&mut storeys[k]);
+        } else {
+            stay.push((k, y0));
+        }
+    }
+}
+
+/// The storey `placed` with its kitchen opened into its living room, the kitchen's area the
+/// living room's (a living room keeps the kitchen's counter where the house has no kitchen,
+/// `furnish`), its band given up: when the kitchen has a band of its own and there is a living
+/// room.
+fn open_kitchen(placed: &[Placed]) -> Option<Vec<Placed>> {
+    let kitchen = *placed.iter().find(|r| r.kind == RoomKind::Kitchen)?;
+    let alone = placed
+        .iter()
+        .filter(|r| (r.y.0 - kitchen.y.0).abs() < 1e-9)
+        .count()
+        == 1;
+    let mut out: Vec<Placed> = placed
+        .iter()
+        .filter(|r| r.kind != RoomKind::Kitchen)
+        .copied()
+        .collect();
+    let living = out.iter_mut().find(|r| r.kind == RoomKind::Living)?;
+    living.area += kitchen.area;
+    alone.then_some(out)
+}
+
+/// A storey's bands (`placed`) made `by` metres shallower in all, each giving up depth in
+/// proportion to what it spares: none under [`DEPTH`]'s least, none of its rooms under what it
+/// asked or [`ROOM_MIN`], whichever is less. Whether they could.
+fn squeeze(placed: &mut [Placed], by: f64) -> bool {
     // The bands' starts, in order, and what each spares.
     let mut bands: Vec<(f64, f64, f64)> = Vec::new();
-    for (r, &a) in placed.iter().zip(asked) {
-        let least = (a.min(ROOM_MIN) / (r.x.1 - r.x.0).max(1e-6)).max(DEPTH.0);
+    for r in placed.iter() {
+        let least = (r.area.min(ROOM_MIN) / (r.x.1 - r.x.0).max(1e-6)).max(DEPTH.0);
         match bands.iter_mut().find(|b| (b.0 - r.y.0).abs() < 1e-9) {
             Some(b) => b.2 = b.2.max(least),
             None => bands.push((r.y.0, r.y.1, least)),
@@ -449,15 +598,43 @@ fn squeeze(placed: &mut [Placed], asked: &[f64], by: f64) -> bool {
 mod tests {
     use super::*;
 
-    fn check(plan: &Plan, programme: &[Room], max_depth: f64) {
-        assert!(plan.depth <= max_depth + 1e-9, "depth {}", plan.depth);
-        // Every room placed, an office or a guest room more at most beside a storey's bathroom.
+    /// The programme as `plan` laid it: a kitchen opened into the living room (`open_kitchen`)
+    /// is the living room's area.
+    fn as_laid(plan: &Plan, programme: &[Room]) -> Vec<Room> {
+        let kitchens = plan
+            .storeys
+            .iter()
+            .flatten()
+            .filter(|r| r.kind == RoomKind::Kitchen)
+            .count();
+        let mut out = programme.to_vec();
+        if kitchens == 0
+            && let Some(k) = out.iter().position(|r| r.kind == RoomKind::Kitchen)
+        {
+            let kitchen = out.remove(k);
+            if let Some(living) = out.iter_mut().find(|r| r.kind == RoomKind::Living) {
+                living.area += kitchen.area;
+            }
+        }
+        out
+    }
+
+    /// Every room of `programme` placed, an office or a guest room more at most beside a
+    /// storey's bathroom.
+    fn every_room_placed(plan: &Plan, programme: &[Room]) {
+        let programme = as_laid(plan, programme);
         let placed = plan.storeys.iter().map(Vec::len).sum::<usize>();
         assert!(
             placed >= programme.len() && placed <= programme.len() + plan.storeys.len(),
             "every room placed: {placed} of {}",
             programme.len()
         );
+    }
+
+    fn check(plan: &Plan, programme: &[Room], max_depth: f64) {
+        assert!(plan.depth <= max_depth + 1e-9, "depth {}", plan.depth);
+        every_room_placed(plan, programme);
+        let programme = &as_laid(plan, programme)[..];
         // Each storey's rooms tile it beside the hall, none over another.
         for (k, storey) in plan.storeys.iter().enumerate() {
             let mut area = 0.0;
@@ -559,9 +736,45 @@ mod tests {
                     for max_depth in [2.6, 3.0, 4.0, 5.0, 5.5, 6.0, 7.0] {
                         let p = programme(people, means);
                         let plan = plan(&p, width, max_depth);
-                        let placed = plan.storeys.iter().map(Vec::len).sum::<usize>();
-                        assert!(placed >= p.len() && placed <= p.len() + plan.storeys.len());
+                        every_room_placed(&plan, &p);
                         assert!(plan.depth <= max_depth + 1e-9);
+                    }
+                }
+            }
+        }
+    }
+
+    /// A row house one room wide and 12 m deep (the village's core, 6 m lots): a storey of three
+    /// bedrooms one behind the other kept its middle one dark under a storey of an office and a
+    /// bathroom 8.8 m deep. The village's poor and modest households in houses of two storeys or
+    /// more keep every bedroom and study on an outside wall now, and every plan still tiles and
+    /// keeps its rooms' areas.
+    #[test]
+    fn a_row_house_keeps_its_bedrooms_on_its_outside_walls() {
+        for means in [Means::Poor, Means::Modest] {
+            for people in 1..=6 {
+                for width in [6.0, 6.3, 7.0] {
+                    let p = programme(people, means);
+                    let plan = plan(&p, width, 12.0);
+                    check(&plan, &p, 12.0);
+                    // A house of one storey has nowhere else to put it.
+                    if plan.storeys.len() == 1 {
+                        continue;
+                    }
+                    for (k, s) in plan.storeys.iter().enumerate() {
+                        let b = bands(s);
+                        for (i, band) in b.iter().enumerate().take(b.len() - 1).skip(1) {
+                            let night = s.iter().any(|r| {
+                                (r.y.0 - band.0).abs() < 1e-9
+                                    && matches!(r.kind, RoomKind::Bedroom | RoomKind::Study)
+                            });
+                            assert!(
+                                !night,
+                                "{means:?}, {people} people, {width} m: storey {k}'s band {i} in \
+                                 the middle: {:?}",
+                                plan.storeys
+                            );
+                        }
                     }
                 }
             }

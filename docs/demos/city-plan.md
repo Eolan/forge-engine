@@ -770,6 +770,17 @@ mesh to test navigations inside the houses"):
   and without them the sunlit probes outside came in round the window's head, a bright tooth
   with a torn edge up to the ceiling and a band down the corner (the probes' weights alone,
   tinted: all of it from probes behind the wall).
+- *Rooms on the outside walls* (`rooms::rebalance`). The anomalies' 20 unlit rooms were the
+  middles of row houses one room wide (6 m lots, 12 m deep): a storey of three bedrooms one
+  behind the other under a storey of an office and a bathroom 8.8 m deep. A middle band of
+  bedrooms or a study now moves to the nearest storey above (else below, never to the ground
+  floor) whose front or back is free and whose depth keeps every room at what it asked, and
+  both storeys' bands share their depth by what they need: the office at the front, the
+  bathroom 3.3 m deep in the middle, the bedroom at the back. Where no storey is free, a
+  bedroom comes down to the ground floor's back, the kitchen opening into the living room
+  (its counter there, `furnish`): a bedroom on the level by the garden. A study with nowhere
+  to go becomes a utility room. One bedroom is left in a middle, a comfortable household's on a
+  third storey with no depth to spare.
 - *Corners without a square lot* (`parcels::strips_by`, the owner's "still the diagonal
   issues"). At a corner of 30° or more whose square corner lot does not fit its edges, the two
   strips' end lots met on the corner's divider, a diagonal wall from the corner into the block.
@@ -802,7 +813,7 @@ mesh to test navigations inside the houses"):
 
 | Anomaly | Before the night | Now |
 |---|---|---|
-| a habitable room without a window | 33 | 20 |
+| a habitable room without a window | 33 | 1 (a comfortable household's third storey, its depth all taken) |
 | a sliver | 9 | 0 |
 | a free garden wall end | 11 | 4 |
 | a lone party wall | 17 | 0 |

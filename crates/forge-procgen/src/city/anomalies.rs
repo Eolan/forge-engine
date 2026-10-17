@@ -708,7 +708,7 @@ mod tests {
         let bounds: [(Kind, usize); 17] = [
             (Kind::RoomOutsideWalls, 0),
             (Kind::PartitionInOpening, 0),
-            (Kind::UnlitRoom, 20),
+            (Kind::UnlitRoom, 1),
             (Kind::Sliver, 0),
             (Kind::EaveStep, 0),
             (Kind::CrookedWall, 0),
