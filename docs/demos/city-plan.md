@@ -768,6 +768,12 @@ mesh to test navigations inside the houses"):
   ran past the lot and was cut to a sliver 0.9 m deep under a flat roof. A footprint already
   inside its lot is no longer cut by each side's half plane. A sharp tip whose region reaches
   past most of an edge is left open up to the edge's end.
+- *Squarer houses* (`houses::houses`; the owner: "house surfaces are most likely to have
+  something closer to a square shape than stretched out rectangle"). A plan over 1.6 times as
+  wide as deep is laid again narrower, half a metre at a time from 3 m less: the one nearest 1.2
+  wide to 1 deep that keeps its storeys and the lot's depth, against its row neighbour, a garden
+  of 3 m or more beside it (houses touch or stand 3 m apart). A single-storey house 20 m by 5 m
+  on a lotissement's wide lot became nearly square.
 - *Cornices' corners* (`cornice_corners`). Where two walls' cornices meet at an outside corner,
   each of the three steps (`modules::CORNICE_STEPS`) is mitred round it, a prism from the corner
   out to where the two steps' faces meet.

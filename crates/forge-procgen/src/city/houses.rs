@@ -198,17 +198,21 @@ pub fn houses(
             let area: f64 = rooms::programme(people, means).iter().map(|r| r.area).sum();
             let wanted = (rooms::HALL + rooms::WALL + area / (2.0 * plan_depth(ty)))
                 .clamp(ty.width.0, ty.width.1.max(16.0));
-            if s1 - s0 > wanted * 1.5 {
-                // The neighbour whose front starts where this one's ends.
-                let joined_at_end = lots
-                    .iter()
-                    .enumerate()
-                    .any(|(j, o)| j != k && o.len() >= 2 && o[0].distance(lot[1]) < 0.01);
+            // The neighbour whose front starts where this one's ends: a narrower house keeps to
+            // that end, against it.
+            let joined_at_end = lots
+                .iter()
+                .enumerate()
+                .any(|(j, o)| j != k && o.len() >= 2 && o[0].distance(lot[1]) < 0.01);
+            let narrow = |s0: &mut f64, s1: &mut f64, w: f64| {
                 if joined_at_end {
-                    s0 = s1 - wanted;
+                    *s0 = *s1 - w;
                 } else {
-                    s1 = s0 + wanted;
+                    *s1 = *s0 + w;
                 }
+            };
+            if s1 - s0 > wanted * 1.5 {
+                narrow(&mut s0, &mut s1, wanted);
             }
             let width = s1 - s0;
             // As deep as the lot lets it along its stretch at most: a plan deeper than its lot
@@ -219,6 +223,37 @@ pub fn houses(
                 width,
                 room.max(rooms::DEPTH.0),
             );
+            // Closer to a square than a stretched rectangle (the owner, 2026-10-16: "house
+            // surfaces are most likely to have something closer to a square shape than
+            // stretched out rectangle"): a plan over 1.6 times as wide as deep is laid again
+            // narrower, where its storeys stay as they were, it keeps within the lot's depth and
+            // leaves a garden of 3 m at least beside it (houses touch or stand 3 m apart).
+            if plan.width > 1.6 * plan.depth {
+                // From 3 m narrower down to the least front, half a metre at a time: the plan
+                // nearest 1.2 wide to 1 deep among those that keep its storeys and the lot's depth.
+                let mut best: Option<(f64, rooms::Plan)> = None;
+                let mut w = width - 3.0;
+                while w >= MIN_FRONT {
+                    let again = rooms::plan(
+                        &rooms::programme(people, means),
+                        w,
+                        room.max(rooms::DEPTH.0),
+                    );
+                    if again.storeys.len() == plan.storeys.len() && again.depth <= room + 1e-6 {
+                        let off = (w / again.depth.max(1e-6) - 1.2).abs();
+                        if best.as_ref().is_none_or(|(o, _)| off < *o) {
+                            best = Some((off, again));
+                        }
+                    }
+                    w -= 0.5;
+                }
+                if let Some((off, again)) = best
+                    && off < (plan.width / plan.depth.max(1e-6) - 1.2).abs()
+                {
+                    narrow(&mut s0, &mut s1, again.width);
+                    plan = again;
+                }
+            }
             if plan.storeys.len() > 1 {
                 // A house of storeys needs its flight's depth on its lot: deeper than the lot
                 // along its front, its footprint ran past the lot, and an L-shaped corner lot's
