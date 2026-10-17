@@ -95,7 +95,7 @@ their own defaults where their scenes want another look, and add:
 | Demo | Its own defaults | Added |
 |---|---|---|
 | asteroids | `r.tonemap aces` (its toe keeps space black), `r.sun.disc 0` (hard shadows), `r.ao.radius 2` | `r.dlss.mode` (U steps TAA, DLAA, then DLSS's modes), `r.exposure.compensation` (- and =), `r.translucency` (Y), `r.cull.cone` (C), `asteroids.dust` (V), `asteroids.paused` (P) |
-| planet | `r.aa taa` (no DLAA yet) | `r.exposure.compensation`, `r.cull.cone`, `planet.paused` (P) |
+| planet | `r.aa dlaa` where it runs, as the galleries (since 2026-10-17; T steps DLAA, TAA, off) | `r.exposure.compensation`, `r.cull.cone`, `planet.paused` (P) |
 | meshlets | `r.show.meshlets 1` | `r.cull.cone`, `r.cull.frustum` (V); F (freeze the culling camera) stays a key |
 
 **The keys still differ between demos**, and the settings make it plain:

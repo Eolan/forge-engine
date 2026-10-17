@@ -13,6 +13,9 @@ workspace = true
 [features]
 # Tracy zones, frame marks and GPU-time plots (connect tracy/tracy-profiler.exe).
 profiling = ["forge-app/profiling"]
+# DLAA through NVIDIA Streamline (D-045, D-069): the default of an interactive run where it runs.
+default = ["dlss"]
+dlss = ["forge-app/dlss"]
 
 [dependencies]
 bytemuck = { workspace = true }

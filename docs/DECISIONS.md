@@ -4974,3 +4974,23 @@ development settings and the code that would help a player compiled out rather t
 - **Left for the owner:** the keys still differ between demos (P, X, V, Y, U, F;
   `docs/demos/console.md`): one key map for all of them is the owner's call.
 - **Next:** the backports (step 4): what each demo lacks of what the others have.
+
+**Step 4, the backports (2026-10-17, started):**
+- **The planet anti-aliases with DLAA where it runs**, as the galleries have since D-045: the
+  default of an interactive run; scripted runs keep TAA unless `--set r.aa=dlaa`, so the
+  captures are unchanged. T steps DLAA, TAA, off.
+- **The planet follows the window's size** (Alt+Enter): it had no resize, and kept its first
+  targets.
+- **The galleries' DLAA display follows the HDR output** each frame, as the asteroids' did: F2's
+  switch reached only TAA's pass.
+- What each demo has and lacks of the shared look, now that the settings name it:
+
+  | | DLAA | DLSS modes | local exposure | probes, regions, glass | metered exposure | bloom key |
+  |---|---|---|---|---|---|---|
+  | galleries | yes | no | yes | yes | city plan, by day | B |
+  | asteroids | yes | yes | no | no | yes | B |
+  | planet | yes (new) | no | no | no | `--auto-exposure` | no |
+  | meshlets | no | no | no | no | no | no |
+
+  Local exposure in the asteroids and the planet waits for the owner's look at it (it is off by
+  default in the galleries, D-067); the meshlets bench is a test of the culling, not of the look.

@@ -574,6 +574,10 @@ struct PlanetDemo {
     sky_from_world: glam::Mat3,
     taa: Taa,
     taa_enabled: bool,
+    /// NVIDIA's DLAA (D-045, the galleries' since D-069), where it runs: used instead of the
+    /// TAA resolve while `dlaa_on`, its image shown through its own display pass.
+    dlaa: Option<(forge_render::DlssUpscaler, forge_render::Display)>,
+    dlaa_on: bool,
     bloom: Bloom,
     gtao: Gtao,
     ao_on: bool,
@@ -870,7 +874,25 @@ impl PlanetDemo {
             AutoExposure::fixed(args.ev100)
         };
         exposure.compensation = args.exposure_compensation;
+        // DLAA where it runs (D-045): the default of an interactive run, as in the galleries.
+        let dlaa = if wants_dlaa(&args) {
+            forge_render::DlssUpscaler::new(
+                &ctx.device,
+                forge_render::DlssMode::Dlaa,
+                ctx.extent(),
+            )?
+            .map(|dlss| -> Result<_> {
+                let display =
+                    forge_render::Display::new(&ctx.device, &ctx.shaders, ctx.output.format)?;
+                Ok((dlss, display))
+            })
+            .transpose()?
+        } else {
+            None
+        };
         let mut demo = Self {
+            dlaa_on: dlaa.is_some(),
+            dlaa,
             taa_enabled: !args.no_taa,
             ao_on: !args.no_ao,
             tonemap: args.tonemap,
@@ -1430,6 +1452,17 @@ fn place(
 }
 
 impl Demo for PlanetDemo {
+    /// A new window size (Alt+Enter, a resize): the targets follow it, as the other demos'.
+    fn resized(&mut self, ctx: &mut Context) -> Result<()> {
+        self.renderer.resize(ctx.extent())?;
+        self.taa.resize(ctx.extent())?;
+        self.taa.reset_history();
+        if let Some((dlss, _)) = &mut self.dlaa {
+            dlss.configure(forge_render::DlssMode::Dlaa, ctx.extent())?;
+        }
+        Ok(())
+    }
+
     fn key_pressed(&mut self, ctx: &mut Context, code: KeyCode) {
         // Every key of the planet sets a setting (D-069, `vars`): P, T, M, O, C, X, K, J, N, G,
         // Tab, [ and ], - and =.
@@ -1466,6 +1499,9 @@ impl Demo for PlanetDemo {
     fn render<'f>(&'f mut self, ctx: &mut Context, frame: &mut FrameInfo<'f>) -> Result<()> {
         let hdr = HdrOutput::new(ctx.output.peak, ctx.output.scene_stops, ctx.output.ui_white);
         self.taa.set_output(&ctx.shaders, ctx.output.format, hdr)?;
+        if let Some((_, display)) = self.dlaa.as_mut() {
+            display.set_output(&ctx.shaders, ctx.output.format, hdr)?;
+        }
         self.stream_tiles(ctx);
         if let Some(stats) = self.renderer.begin_frame(frame.slot, &mut self.scene)? {
             self.stats.push(stats);
@@ -1525,7 +1561,8 @@ impl Demo for PlanetDemo {
             sea_mask: self.sea_mask,
         });
         let extent = ctx.extent();
-        self.taa.enabled = self.taa_enabled;
+        // DLAA takes the jittered frame too.
+        self.taa.enabled = self.taa_enabled || self.dlaa_on;
         self.renderer.noise_frame =
             (self.taa.frame_index() % u64::from(self.taa.jitter_phases)) as u32;
         // The new tiles' normal maps, made before the scene's passes sample them (D-058).
@@ -1755,6 +1792,36 @@ impl Demo for PlanetDemo {
         let motion = self
             .taa
             .motion_vectors(&mut frame.graph, &taa_frame, targets.depth);
+        let dlaa_on = self.dlaa_on;
+        if let Some((dlss, display)) = self.dlaa.as_mut().filter(|_| dlaa_on) {
+            // DLAA (D-045), as the galleries draw it: the jittered frame, its depth and motion
+            // to DLSS, its image through the tone curve with bloom drawn from it.
+            let upscaled = dlss.upscale(
+                &mut frame.graph,
+                ctx.frames_rendered,
+                &taa_frame,
+                forge_render::UpscaleCamera {
+                    projection: self.camera.projection(aspect),
+                    near: self.camera.near,
+                    vertical_fov: self.camera.fov_y,
+                },
+                targets.depth,
+                motion,
+                exposure,
+            )?;
+            let bloom = (self.args.bloom > 0.0)
+                .then(|| self.bloom.draw(&mut frame.graph, upscaled, extent));
+            display.draw(
+                &mut frame.graph,
+                upscaled,
+                frame.target,
+                extent,
+                self.tonemap,
+                bloom.map(|b| (b, self.taa.bloom_strength)),
+                None,
+            );
+            return Ok(());
+        }
         let bloom = (self.args.bloom > 0.0).then(|| {
             self.bloom
                 .draw(&mut frame.graph, taa_frame.color, taa_frame.extent)
@@ -1798,6 +1865,18 @@ impl Demo for PlanetDemo {
         self.gpu_ms.clear();
         Some(title)
     }
+}
+
+/// Whether DLAA is wanted (D-045, D-069): in an interactive run unless TAA is off, or when the
+/// command line asks for it (`--set r.aa=dlaa`) in a scripted one. Scripted runs keep TAA by
+/// default, so the captures stay comparable.
+fn wants_dlaa(args: &Args) -> bool {
+    let asked = args.settings.set.iter().any(|s| {
+        forge_app::settings::split_assignment(s).is_some_and(|(name, value)| {
+            name.eq_ignore_ascii_case("r.aa") && matches!(value, "dlaa" | "dlss")
+        })
+    });
+    !args.no_taa && (args.frames.is_none() || asked)
 }
 
 fn main() -> Result<()> {
@@ -1852,6 +1931,8 @@ fn main() -> Result<()> {
         hdr: HdrMode::Off,
         width: args.width,
         height: args.height,
+        // The Vulkan loader through Streamline only where DLAA may run, in a `dlss` build.
+        streamline: cfg!(feature = "dlss") && wants_dlaa(&args),
         ..AppConfig::default()
     };
     // The body's name in the cache: the world file's (`earth`, `moon`).

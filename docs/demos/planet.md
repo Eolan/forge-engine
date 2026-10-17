@@ -16,9 +16,15 @@ cargo run --release -p planet -- --world assets/worlds/moon.toml
 ```
 
 **P** stops the descent and flies: right mouse to look, WASD, Shift faster. The speed grows with
-the height. The other keys are the ballad's: **T** TAA, **O** occlusion, **C** cone culling,
-**X** show culled, **K** LOD colours, **J** shadows, **N** ambient occlusion, **G** tone curve,
-**-** / **=** exposure, **[** / **]** LOD error.
+the height. The other keys are the ballad's: **T** steps the anti-aliasing (DLAA where it runs,
+TAA, off), **O** occlusion, **C** cone culling, **X** show culled, **K** LOD colours, **J**
+shadows, **N** ambient occlusion, **G** tone curve, **-** / **=** exposure, **[** / **]** LOD
+error. Each sets a console setting (D-069; the key under Esc, `list r.`), as `--set` does.
+
+An interactive run anti-aliases with NVIDIA's DLAA where it runs (the `dlss` feature, the
+Streamline SDK, an RTX GPU), as the galleries do since D-045; a scripted run keeps TAA, so the
+captures stay comparable, unless `--set r.aa=dlaa`. The window can change size (Alt+Enter): the
+targets follow it (2026-10-17; before, the planet kept the first size's).
 
 | Flag | What it does |
 |---|---|

@@ -1770,6 +1770,11 @@ impl Demo for Gallery {
         // The target's format and the HDR settings (issue #94).
         let hdr = HdrOutput::new(ctx.output.peak, ctx.output.scene_stops, ctx.output.ui_white);
         self.taa.set_output(&ctx.shaders, ctx.output.format, hdr)?;
+        // DLAA's display pass follows the output too: F2's HDR switch reaches it (the asteroids'
+        // did; the galleries' kept the start's).
+        if let Some((_, display)) = self.dlaa.as_mut() {
+            display.set_output(&ctx.shaders, ctx.output.format, hdr)?;
+        }
         // `FORGE_HASH_IMAGES=1` (#161): hashes of the clouds, the scene and TAA's history each
         // frame, logged when their slot comes back, to find where two runs part without the
         // waits that hide a race.

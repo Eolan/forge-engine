@@ -1,10 +1,10 @@
 //! The planet's settings (D-069): the renderer's shared ones (`forge_render::settings`) with the
-//! planet's defaults (TAA, AgX's punchy look), and `planet.paused`. Registered from the state
-//! its flags gave it, applied when they change, and set by its keys.
+//! planet's defaults (DLAA where it runs, else TAA; AgX's punchy look), and `planet.paused`.
+//! Registered from the state its flags gave it, applied when they change, and set by its keys.
 
 use forge_app::Context;
 use forge_app::settings::{Settings, Spec, Var};
-use forge_render::settings::{self as rs, AA_OFF, AA_TAA};
+use forge_render::settings::{self as rs, AA_DLAA, AA_DLSS, AA_OFF, AA_TAA};
 use forge_render::{CullFlags, Tonemap};
 use winit::keyboard::KeyCode;
 
@@ -57,9 +57,16 @@ impl PlanetDemo {
         .into_iter()
         .map(|(spec, b, default)| (s.add_from(spec, default, flags.has(b)), b))
         .collect();
-        let aa_now = if self.taa_enabled { AA_TAA } else { AA_OFF };
+        let aa_default = if self.dlaa.is_some() { AA_DLAA } else { AA_TAA };
+        let aa_now = if !self.taa_enabled {
+            AA_OFF
+        } else if self.dlaa_on {
+            AA_DLAA
+        } else {
+            AA_TAA
+        };
         self.vars = Some(PlanetVars {
-            aa: s.add_from(rs::aa(AA_TAA), AA_TAA, aa_now),
+            aa: s.add_from(rs::aa(aa_default), aa_default, aa_now),
             sharpen: s.add_from(rs::sharpen(true), true, self.taa.sharpen.is_some()),
             sharpen_stops: s.add_from_f32(
                 rs::sharpen_stops(0.5),
@@ -111,9 +118,15 @@ impl PlanetDemo {
             || s.changed_since(v.sharpen_stops, seen)
         {
             let aa = s.get(v.aa);
-            if aa > AA_TAA {
-                tracing::info!("r.aa: the planet has no DLAA or DLSS yet, TAA instead");
+            let wanted = matches!(aa, AA_DLAA | AA_DLSS);
+            if wanted && self.dlaa.is_none() {
+                tracing::info!(
+                    "r.aa: DLAA does not run here (the Streamline SDK and an RTX GPU, or a \
+                     scripted run without --set r.aa=dlaa): TAA instead"
+                );
             }
+            // DLSS's smaller modes are the asteroids' alone: the planet shows dlss as DLAA.
+            self.dlaa_on = wanted && self.dlaa.is_some();
             self.taa_enabled = aa != AA_OFF;
             self.taa.sharpen = s.get(v.sharpen).then_some(s.get(v.sharpen_stops) as f32);
             self.taa.reset_history();
@@ -185,12 +198,13 @@ impl PlanetDemo {
             KeyCode::BracketRight => s.set(v.lod_error, s.get(v.lod_error) * 2.0),
             KeyCode::Minus => s.set(v.compensation, s.get(v.compensation) - 0.5),
             KeyCode::Equal => s.set(v.compensation, s.get(v.compensation) + 0.5),
-            // TAA on and off.
+            // DLAA where it runs, TAA, off (D-045).
             KeyCode::KeyT => {
-                let aa = if s.get(v.aa) == AA_OFF {
-                    AA_TAA
-                } else {
-                    AA_OFF
+                let aa = match s.get(v.aa) {
+                    AA_DLAA | AA_DLSS => AA_TAA,
+                    AA_TAA => AA_OFF,
+                    _ if self.dlaa.is_some() => AA_DLAA,
+                    _ => AA_TAA,
                 };
                 s.set(v.aa, aa);
             }
