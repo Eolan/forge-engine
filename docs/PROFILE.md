@@ -1517,6 +1517,34 @@ Left: a fresh cache's 149 shaders (a program could compile only its own if a lis
 sources); the city's ground (1 s on all cores; the cache could keep it), its quays and streets
 (0.4 s, triangulated on one thread) and its plan before the window (0.7 s); the upload.
 
+## Local exposure (`--local-exposure`, #275, D-067, 2026-10-17)
+
+RTX 5070 Ti, `city-plan --village 600` at 18:00, the map check's door view (`--view=70.3,1.6,-172.9,-33.2,-3`),
+240 frames, the run's averages, best of three. Local exposure is off by default.
+
+| | 1600 × 900, TAA | 2560 × 1440, TAA | 1600 × 900, DLAA |
+|---|---|---|---|
+| `post/local exposure grid` | 0.016 ms | 0.029 ms | 0.017 ms |
+| `post/local exposure blur` | 0.015 ms | 0.015 ms | 0.015 ms |
+| The read in the display pass | +0.031 ms (`temporal/sharpen` 0.102 → 0.133) | +0.082 ms (0.242 → 0.324) | +0.010 ms (`post/display transform` 0.021 → 0.031) |
+| **In all** | **0.062 ms** | **0.126 ms** | **0.042 ms** |
+
+- **The budget** was 0.1 ms at 1600 × 900, estimated at 0.04–0.08 ms; the measured costs are
+  0.062 under TAA and 0.042 under DLAA.
+- **The grid** reads the resolved image once, so its cost follows the pixels. The blur works on
+  the fixed 64 × 36 × 64 grid and costs the same at every size.
+- **Under TAA**, RCAS reads its four neighbours as shown, so the grid is read at five pixels
+  rather than one: two bilinear taps a pixel, at its own luminance. The Gaussian's B-spline is
+  read once, at the centre.
+  - At 1440p that read is two thirds of the cost.
+  - A 3D image would halve its taps: one trilinear tap in place of two, if 1440p under TAA ever
+    matters. A stored gain map is excluded (D-067's patent rules).
+- **Memory:** about 1.2 MB of transients, the grid's two RG16F 512 × 288 atlases and two
+  64 × 36 images of the cells' means. Nothing of it outlives the frame.
+- **On the dev machine's RDNA 2 iGPU** (the physics lab's yard, 1600 × 900): the grid takes
+  2.19 ms and the blur 0.28 ms, in a 120 ms frame. That is 1.8 % of the frame, against 0.4 % on
+  the 5070 Ti: the grid's shared-memory atomics weigh more there. Watch it on an RX 9070 XT.
+
 ## `planet` — a planet from orbit to its ground (#220, D-056, 2026-10-10)
 
 RTX 5070 Ti, 1600 × 900, TAA, the descent held at its golden shots (`--shot`), sunny 16, 118

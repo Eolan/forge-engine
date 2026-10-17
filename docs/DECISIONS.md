@@ -4646,6 +4646,47 @@ proposed, built now, off by default until the owner has seen it; the grid built 
 one frame, keeping clear of STMicroelectronics' claims. Its patents' details and conditions of
 application are to be looked into further (D-068's note).
 
+**Built** (2026-10-17, #275). As proposed, off by default.
+- **Code:** `crates/forge-render/src/local_exposure.rs`, `shaders/local_exposure_grid.slang`
+  (the passes) and `shaders/local_exposure.slang` (the read).
+- **Where it is read:** in TAA's show pass and in the display transform, after bloom is mixed
+  in. The night's Purkinje shift stays on the scene's own luminance.
+- **Middle grey M:** where D-022 keys the scene, `log2(2^compensation / 9.6)`, less the stops
+  the night is shown darker by.
+- **The layout:** the grid's 64 slices lie in a 512 × 288 RG16F atlas, so a trilinear read is
+  two bilinear taps.
+- **The patent rules**, from the village session's reading of the US claims and EP 3872750 B1:
+  - no grid history;
+  - no strength as a mix of the gain: the near-black fade scales the gain's EV;
+  - no stored gain map: each pixel computes its own gain in the display pass.
+- **Controls:** `--local-exposure`, `--local-exposure-contrast S,H`, `--local-exposure-view`,
+  the X key (off, on, the gain view) and a line in the F1 overlay. A hidden
+  `--local-exposure-blend` exists for measuring.
+- **The map check** gains a `door` view: from the back of the hall, looking at the open front
+  door.
+
+**Measured** (RTX 5070 Ti, 1600 × 900; `docs/demos/city-plan.md`, `PROFILE.md`):
+- **Cost:** 0.062 ms under TAA, of which the read is 0.031 because RCAS reads five pixels;
+  0.042 ms under DLAA; 0.126 ms at 1440p under TAA. About 1.2 MB of transients.
+- **The walk in:** at its darkest frame, the frame's mean display luminance is 2.0 EV higher.
+  It adds no frame-to-frame step over 0.05 EV.
+- **Once the exposure has adapted:** the door and hall views move by a few tenths of an EV.
+- **Halos:** ꟻLIP bands beside the door read 0.86 near/far, against 0.83 for the grid alone.
+- **Gradient reversal on a low-sun sky:** as many pairs turn over as with a uniform +0.5 EV
+  change of the global exposure (7 847 against 7 662). Contrasts of 1,1 give the same image to
+  the pixel.
+- **Still-camera flicker under DLAA:** 0.031 % against 0.038 % without (door), 0.011 % against
+  0.012 % (hall).
+- **Unit tests:** the CPU mirror.
+- **Validation:** clean under synchronisation validation with local exposure on: TAA, DLAA, the
+  gain view and the fallback path.
+- **AMD:** one run of the physics lab's yard with local exposure on, on the dev machine's
+  RDNA 2 iGPU. It ran clean: the grid took 2.19 ms and the blur 0.28 ms, in a 120 ms frame.
+- **With it off** (the default): Tier 1 matched the accepted set (only #71's flake), and the
+  map check's views matched to the pixel.
+- **Left for the owner:** the look. Then on by default in the village and the city
+  (`map-check --accept`).
+
 ## D-068 — Probe regions from the generator: a room's probes light only its own surfaces ✅ (proposed 2026-10-17, #266; the owner's go the same day)
 
 **The question:** after the village's probes moved to 1 m (ef27049) and the lookup kept the

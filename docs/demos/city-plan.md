@@ -931,7 +931,7 @@ plan in place of the city, every house from the kit (`reports/2026-10-16/village
 the air, `village-street.png` from the first house's street, which the log names for
 `--view`). **The map check** (`tools/map-check.sh`, D-062's check per commit): the village
 from the air and from the views the log names (the first house's street, the green, the main
-road, the busiest junction, the longest garden wall along a lane, the first storeyed house's hall and a room off it inside) and two walked paths, along the first house's street and through the first storeyed house's open door into its hall, each compared
+road, the busiest junction, the longest garden wall along a lane, the first storeyed house's hall, its open front door from the back of the hall and a room off it inside) and two walked paths, along the first house's street and through the first storeyed house's open door into its hall, each compared
 with `captures/map/accepted` by LDR-ꟻLIP, about two minutes; `--accept` keeps a run
 (`docs/PROCESS.md`). **One home a house** (`Mass::home`, the same day): a village house is
 one unit over all its storeys, entered from the street, with its household's main rooms (1.5
@@ -1107,6 +1107,55 @@ door keeps a green cast from the lawn. The map check's inside views moved by ꟻ
 leaves stand 2.15 m high where the opening allows, the transom light over them
 (`modules::door`): at 0.7 m under the head a 2.6 m door's leaves stood 1.9 m, at a walker's eyes
 ("doors heights are a bit too low for people").
+
+### Local exposure (D-067, #275)
+
+The owner, walking into a house: "light outside is very strong, I would expect the inside to be
+a bit brighter". The global exposure (D-022) keys on the brighter half of the frame, so on the
+way in the street sets it, and the hall falls stops under middle grey until the eye's adaptation
+catches up. Local exposure lifts the hall and lowers the doorway a little.
+- **How it works.** A per-pixel exposure gain is read from a bilateral grid of the frame's log
+  luminance, blended with a wide Gaussian (`crates/forge-render/src/local_exposure.rs`).
+- **Within one frame.** The grid is built and read in the same frame, with no grid history and
+  no stored gain map.
+- **Off by default** until the owner has seen it.
+
+```
+cargo run --release -p city-plan -- --village 600 --local-exposure
+cargo run --release -p city-plan -- --village 600 --local-exposure-contrast 0.6,0.8
+cargo run --release -p city-plan -- --village 600 --local-exposure-view   # the gain in false colours
+```
+
+**Controls.**
+- X cycles off, on, and on with the gain in false colours: blue where it lifts, red where it
+  darkens, full at 2 EV.
+- The F1 overlay's full mode has a line with the settings and the middle grey.
+- The contrasts are 0.7 under middle grey and 0.85 over it: a hall 5 EV under is lifted 1.5 EV,
+  a doorway 3 EV over is lowered 0.45 EV.
+
+**The door view.** The map check's `door` view stands at the back of the first storeyed house's
+hall, looking back at its open front door.
+
+![Local exposure off and on](../../reports/2026-10-17-275/local-exposure.png)
+
+*Left off, right on. From the top:*
+- *the walk in through the front door, frame 120 (the exposure still the street's);*
+- *the room off the hall;*
+- *the door view, then its gain in false colours.*
+
+**Measured.** RTX 5070 Ti, 1600 × 900, 18:00.
+
+| Check | Result |
+|---|---|
+| The walk in, at its darkest (frame 120) | The frame's mean display luminance is 2.0 EV higher (log2 −6.45 against −8.45). Its frame-to-frame steps are smaller (largest 0.30 EV every 2 frames, against 0.49), and none over 0.05 EV appears that the run without it lacks. |
+| Once the eye has adapted (the door and hall views at frame 200) | The hall is already near middle grey, and the gain is a few tenths of an EV. |
+| Halos | ꟻLIP against the global frame, in bands on the hall's side wall beside the far door at frame 150: 0–32 px from the door against 64–256 px. The ratio is 0.86 with the default blend, against 0.83 for the grid alone and 0.88 for the Gaussian alone. No band follows the frame. The error map shows the Gaussian's soft fall-off round the doorway, wide as designed. |
+| Gradient reversal | A low sun over the river (`--time-of-day 0.95`): 7 847 neighbour pairs over 0.05 EV turn over. A uniform +0.5 EV change of the global exposure turns 7 662, from the tone curve and 8-bit steps. Contrasts of 1,1 give the same image to the pixel. |
+| Flicker | A still camera under DLAA, frames 10 apart from 200 to 280: the door view changes 0.031 % of its pixels with local exposure, 0.038 % without; the hall view 0.011 % and 0.012 %. |
+| Cost | 0.062 ms under TAA and 0.042 ms under DLAA (`docs/PROFILE.md`). |
+| Validation | Clean under synchronisation validation with local exposure on: TAA, DLAA, the gain view and the fallback path. |
+| AMD | The physics lab's yard with local exposure on runs clean on the dev machine's RDNA 2 iGPU. |
+| Off, the default | Tier 1 and the map check match their accepted sets. |
 
 ### Stair cores (D-060, step 3)
 

@@ -10,6 +10,10 @@
 > - `demos/city-blocks/src/lib.rs` and `demos/city-plan/src/main.rs`;
 > - `tools/map-check.sh`, D-022 and `docs/PROFILE.md`.
 
+> **Built** the same day as recommended (D-067, off by default). What was measured (cost, the
+> walk in, halos, gradient reversal, flicker) is in D-067's entry and in `docs/demos/city-plan.md`,
+> "Local exposure".
+
 The question is how to make a dark room next to a sunlit opening read brighter in real time without blowing out the opening. It must work on NVIDIA and AMD, with no halos and no flicker, and without building on a live patent.
 
 The short answer is a **local exposure in the display pass**:
