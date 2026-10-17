@@ -4644,7 +4644,7 @@ doorway in view sets it and the hall falls stops under middle grey. Research:
 **Decided** (the owner, 2026-10-17): "D-067 go with recommendations". The method and defaults as
 proposed, built now, off by default until the owner has seen it; the grid built and used within
 one frame, keeping clear of STMicroelectronics' claims. Its patents' details and conditions of
-application are to be looked into further (D-068's note).
+application are to be looked into further (D-068's note; done in `research/lighting-patents.md`).
 
 **Built** (2026-10-17, #275). As proposed, off by default.
 - **Code:** `crates/forge-render/src/local_exposure.rs`, `shaders/local_exposure_grid.slang`
@@ -4755,4 +4755,11 @@ application of their patents just in case."
 - **To look into** (the owner's note): more details on these patents and the conditions under
   which they apply (the claims' exact elements, the jurisdictions they hold in, which acts
   infringe there, their status, fees and expiry, any licensing), Square Enix's, Imagination's
-  and STMicroelectronics' (D-067) first, in a research note before any sold product.
+  and STMicroelectronics' (D-067) first, in a research note before any sold product. Done the
+  same day: `research/lighting-patents.md` (not legal advice).
+  - Imagination's independent claims read on Forge's probes as built.
+  - Square Enix's US claim 37 (zones and "a grid of regions", no occlusion planes) is the claim
+    nearest the regions, a question for counsel. The regions keep to one number per probe and
+    per surface compared for equality, with no per-probe zones, masks or bitwise test.
+  - STMicroelectronics' claims all reuse one image's mini-image on a second image; D-067's grid
+    is built and read within one frame.
