@@ -786,6 +786,14 @@ mesh to test navigations inside the houses"):
   (its counter there, `furnish`): a bedroom on the level by the garden. A study with nowhere
   to go becomes a utility room. One bedroom is left in a middle, a comfortable household's on a
   third storey with no depth to spare.
+- *Rounded corners as one lot* (`parcels::strips_by`). At a faubourg corner rounded into an
+  arc, the turn spread over short edges each under 30°, the corner merge never ran: the two
+  strips' end lots stopped at the arc's ends, two triangles on two diagonals from the corner
+  into the block, a garden wall on each (the free wall ends and the tangle there). Two lots whose
+  fronts meet across a short convex run of the block's outline (8 m at most, 30° to 150° in
+  all) and whose backs meet within 3 m now make one, the arc and the sliver between their
+  diagonals in it: 65 m less garden wall between gardens, a walled lawn at the corner, a house
+  fewer. Free garden wall ends 4 → 2.
 - *Pinholes in the walls* (`insides`). Single bright pixels ran in lines up the plastered walls
   and the windows' reveals, the light behind them showing through: each band of an inner face
   was cut at its own hole's sill and head beside a neighbour of the wall's whole height
@@ -835,7 +843,7 @@ mesh to test navigations inside the houses"):
 |---|---|---|
 | a habitable room without a window | 33 | 1 (a comfortable household's third storey, its depth all taken) |
 | a sliver | 9 | 0 |
-| a free garden wall end | 11 | 4 |
+| a free garden wall end | 11 | 2 |
 | a lone party wall | 17 | 0 |
 | a ridge step | 6 | 0 |
 | a flight off its side wall (new) | — | 0 (at its nearest point: the 8 counted at the side's middle touched a slanted side wall at one end) |

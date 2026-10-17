@@ -713,7 +713,7 @@ mod tests {
             (Kind::EaveStep, 0),
             (Kind::CrookedWall, 0),
             (Kind::MisplacedPlant, 0),
-            (Kind::FreeWallEnd, 4),
+            (Kind::FreeWallEnd, 2),
             (Kind::LonePartyWall, 0),
             (Kind::RidgeStep, 0),
             (Kind::FlatRoof, 0),

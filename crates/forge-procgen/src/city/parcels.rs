@@ -422,6 +422,80 @@ pub fn strips_by(
         keys.remove(gone);
         sides.remove(gone);
     }
+    // The same at a rounded corner, its turn spread over the arc's short edges (each under 30°):
+    // the two strips' end lots stopped at the arc's ends, two triangles on two diagonals from
+    // the corner into the block, a garden wall on each (the village's faubourg corner,
+    // 2026-10-17). Two lots whose fronts meet across a short convex run of the block's outline
+    // (8 m at most, 30° to 150° in all) and whose backs meet within 3 m make one, the arc and
+    // the sliver between their diagonals in it.
+    let on_edge = |p: DVec2| {
+        (0..n).find(|&e| geom::distance_to_segment(p, block[e], block[(e + 1) % n]) < 1e-3)
+    };
+    let mut k = 0;
+    while k < lots.len() {
+        let a = lots[k].clone();
+        let partner = (0..lots.len())
+            .filter(|&j| j != k && sides[j] != sides[k])
+            .find_map(|j| {
+                let b = &lots[j];
+                let (Some(e), Some(f)) = (on_edge(a[1]), on_edge(b[0])) else {
+                    return None;
+                };
+                if e == f || a.len() < 3 || b.len() < 3 {
+                    return None;
+                }
+                let (th, ti) = (
+                    (a[1] - a[0]).normalize_or_zero(),
+                    (b[1] - b[0]).normalize_or_zero(),
+                );
+                if th.perp_dot(ti) <= 0.0 || th.dot(ti) > 0.866 || th.dot(ti) < -0.866 {
+                    return None;
+                }
+                // The outline's corners from `a`'s front's end on to `b`'s front's start.
+                let mut run = Vec::new();
+                let mut v = (e + 1) % n;
+                let mut length = a[1].distance(block[v]);
+                while v != (f + 1) % n && run.len() < n {
+                    if square[v].is_some() {
+                        return None;
+                    }
+                    run.push(block[v]);
+                    if v == f {
+                        break;
+                    }
+                    length += block[v].distance(block[(v + 1) % n]);
+                    v = (v + 1) % n;
+                }
+                length += run.last().map_or(0.0, |&l| l.distance(b[0]));
+                if length > 8.0 || a[2].distance(b[b.len() - 1]) > 3.0 {
+                    return None;
+                }
+                let mut one: Vec<DVec2> = vec![a[0], a[1]];
+                one.extend(&run);
+                one.extend(b.iter().copied());
+                one.extend(a[2..].iter().copied());
+                let one = geom::clean(&one, 1e-6);
+                let clear = (0..lots.len())
+                    .filter(|&o| o != k && o != j)
+                    .all(|o| !overlapping(&one, &lots[o]));
+                (geom::signed_area(&one) > 1.0 && clear).then_some((j, one))
+            });
+        let Some((j, one)) = partner else {
+            k += 1;
+            continue;
+        };
+        let (keep, gone, front) =
+            if geom::signed_area(&a).abs() >= geom::signed_area(&lots[j]).abs() {
+                (k, j, (a[0], a[1]))
+            } else {
+                (j, k, (lots[j][0], lots[j][1]))
+            };
+        lots[keep] = from_the_street(one, front.0, front.1);
+        lots.remove(gone);
+        keys.remove(gone);
+        sides.remove(gone);
+        k = 0;
+    }
     // The square corners' lots, each its front on the corner's next street first, keyed past
     // every strip's lots.
     let mut key = keys.iter().max().map_or(0, |k| k + 1);
