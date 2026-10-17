@@ -5025,7 +5025,9 @@ layouts other than the owner's AZERTY and QWERTY, with their own default maps, a
   - `forge.cfg`'s `bind` lines run once the demo is ready, before `--exec`;
   - keys are named by what they type in the layout (winit's `key_without_modifiers`), or by
     their name;
-  - the shell's keys refuse a bind.
+  - the shell's keys refuse a bind;
+  - `cycle NAME VALUE VALUE...` steps a setting through the values listed, so one key goes
+    through `dlaa`, `taa` and `off` without `toggle`'s `dlss` (the owner's ask, the same day).
 - **Checks:**
   - unit tests of the binds, their key names and the file's console lines;
   - a run with a test `forge.cfg`, the console listing its binds and the new settings;

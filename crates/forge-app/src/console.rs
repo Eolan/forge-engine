@@ -341,8 +341,14 @@ impl Console {
                         Color::Grey,
                     );
                 }
-                let lines: Vec<String> = self
-                    .binds
+                // F5 before F10: a key's number counts as a number.
+                let mut binds: Vec<(&String, &String)> = self.binds.iter().collect();
+                binds.sort_by_key(|(key, _)| {
+                    let digits = key.trim_start_matches(|c: char| !c.is_ascii_digit());
+                    let name = &key[..key.len() - digits.len()];
+                    (name.to_owned(), digits.parse::<u32>().ok(), (*key).clone())
+                });
+                let lines: Vec<String> = binds
                     .iter()
                     .map(|(key, line)| format!("  {key}  {line}"))
                     .collect();
@@ -365,6 +371,14 @@ impl Console {
                     self.report(result);
                 }
                 None => self.print("toggle NAME".to_owned(), Color::Red),
+            },
+            "cycle" => match args.split_first() {
+                Some((n, values)) if !values.is_empty() => {
+                    let values: Vec<&str> = values.iter().map(String::as_str).collect();
+                    let result = settings.cycle(&n.to_ascii_lowercase(), &values, Source::Console);
+                    self.report(result);
+                }
+                _ => self.print("cycle NAME VALUE VALUE...".to_owned(), Color::Red),
             },
             "help" if args.is_empty() => self.help(settings),
             "help" => match settings.describe(&args[0].to_ascii_lowercase()) {
@@ -894,15 +908,46 @@ mod tests {
                 args: vec!["shot.png".to_owned()],
             }]
         );
+        // A bound cycle steps through its values, one a press.
+        let aa = settings.add(Spec::choice(
+            "r.aa",
+            &["off", "taa", "dlaa"],
+            1,
+            "anti-aliasing",
+        ));
+        typed(
+            &mut console,
+            &mut settings,
+            "bind f7 cycle r.aa dlaa taa off",
+        );
+        console.run_bound("f7", &mut settings).unwrap();
+        assert_eq!(settings.get(aa), 0);
+        console.run_bound("f7", &mut settings).unwrap();
+        assert_eq!(settings.get(aa), 2);
+        typed(&mut console, &mut settings, "cycle r.aa");
+        assert_eq!(
+            console.log.last().map(|(t, _)| t.as_str()),
+            Some("cycle NAME VALUE VALUE...")
+        );
         // The shell's keys stay its own; unbind frees one; binds lists them.
         typed(&mut console, &mut settings, "bind f1 toggle r.ao");
         assert_eq!(console.bound("f1"), None);
         typed(&mut console, &mut settings, "unbind f5");
         assert_eq!(console.bound("f5"), None);
+        typed(&mut console, &mut settings, "bind f10 toggle r.ao");
         typed(&mut console, &mut settings, "binds");
+        let listed: Vec<&str> = console.log[console.log.len() - 3..]
+            .iter()
+            .map(|(t, _)| t.as_str())
+            .collect();
+        // F7 before F10, by number.
         assert_eq!(
-            console.log.last().map(|(t, _)| t.as_str()),
-            Some("  g  toggle r.ao; app.capture shot.png")
+            listed,
+            [
+                "  f7  cycle r.aa dlaa taa off",
+                "  f10  toggle r.ao",
+                "  g  toggle r.ao; app.capture shot.png"
+            ]
         );
     }
 

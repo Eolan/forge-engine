@@ -52,8 +52,9 @@ either.
 The console's own commands: `help [NAME]` (or `NAME ?`), `find WORD` (names and help holding the
 word), `list [PREFIX]`, `changed` (the settings not at their default, and where their values
 came from), `reset NAME`, `toggle NAME` (flips an on/off setting, steps a choice or a small
-number), `bind`, `unbind`, `binds` (below), `version`, `clear`. A change says what the value
-was: `r.display_info = 2 (was 1)`.
+number), `cycle NAME VALUE VALUE...` (steps through the values given, back to the first after the
+last: `cycle r.aa dlaa taa off`), `bind`, `unbind`, `binds` (below), `version`, `clear`. A
+change says what the value was: `r.display_info = 2 (was 1)`.
 
 ## Keys
 
@@ -94,15 +95,17 @@ The owner's file could hold the old keys, on keys of their choice, for example:
 
 ```
 # forge.cfg: the keys of before D-069's key map, on the function keys
-bind f5 toggle r.aa
-bind f6 toggle r.tonemap
-bind f7 toggle r.exposure.local
-bind f8 toggle r.ao
+bind f5 cycle r.aa dlaa taa off
+bind f7 toggle r.tonemap
+bind f8 toggle r.exposure.local
 bind f9 camera.where
-bind f10 toggle r.show.gi
-bind f11 toggle r.show.ao
+bind f10 toggle r.ao
+bind f11 toggle r.show.gi
 bind f12 app.capture
 ```
+
+`cycle` keeps a key to the values listed: `toggle r.aa` also steps through `dlss`, which a demo
+that does not upscale shows as `dlaa`, so one press of four would change nothing.
 
 **What the keys did before, and what sets it now:**
 

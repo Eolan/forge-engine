@@ -656,6 +656,29 @@ impl Settings {
         self.set_from(index, &text, source)
     }
 
+    /// Steps a setting through `values`, back to the first after the last (`cycle r.aa dlaa taa
+    /// off`): the value after the current one in the list, or the first when the current one is
+    /// not in it. Each value is checked as `NAME VALUE` checks it.
+    pub fn cycle(&mut self, name: &str, values: &[&str], source: Source) -> Result<String, String> {
+        let index = self.visible_index(name)?;
+        let info = &self.vars[index];
+        if values.is_empty() {
+            return Err(format!(
+                "cycle {name} VALUE VALUE...: {}",
+                info.range_text()
+            ));
+        }
+        let parsed = values
+            .iter()
+            .map(|v| parse_value(&info.kind, v))
+            .collect::<Result<Vec<_>, _>>()?;
+        let next = parsed
+            .iter()
+            .position(|&v| v == info.value)
+            .map_or(0, |i| (i + 1) % parsed.len());
+        self.set_from(index, values[next], source)
+    }
+
     /// [`Settings::toggle`] from the program, by its handle: a key bound to it.
     pub fn toggle_var<T>(&mut self, var: Var<T>) -> Result<String, String> {
         let name = self.vars[var.index].name.clone();
@@ -766,7 +789,9 @@ impl Settings {
                 }
             }
             Some(tail) => {
-                if matches!(head, "help" | "reset" | "list" | "toggle") {
+                if matches!(head, "help" | "reset" | "list" | "toggle")
+                    || (head == "cycle" && !tail.contains(' '))
+                {
                     let tail = tail.to_ascii_lowercase();
                     let names = self.names_with_prefix(&tail);
                     let common = common_prefix(&names);
@@ -964,6 +989,12 @@ pub const BUILTIN: &[(&str, &str, &str)] = &[
         "Lists the settings not at their default, and where their values came from.",
     ),
     ("clear", "", "Empties the console."),
+    (
+        "cycle",
+        "NAME VALUE VALUE...",
+        "Steps a setting through the values given, back to the first after the last (`cycle \
+         r.aa dlaa taa off`); from a value not in the list, to the first.",
+    ),
     (
         "find",
         "WORD",
@@ -1192,6 +1223,36 @@ mod tests {
                 "r.display_info = 0  (default 1, from console)",
             ]
         );
+    }
+
+    #[test]
+    fn cycle_steps_through_the_values_given() {
+        let (mut s, _, _, aa, _) = registry();
+        // From taa (the default) to the next listed, back to the first after the last.
+        assert_eq!(
+            s.cycle("r.aa", &["dlaa", "taa", "off"], Source::Console),
+            Ok("r.aa = off (was taa)".to_owned())
+        );
+        s.cycle("r.aa", &["dlaa", "taa", "off"], Source::Console)
+            .unwrap();
+        assert_eq!(s.get(aa), 2);
+        // A value not in the list goes to the first; a list of one sets it.
+        s.cycle("r.aa", &["taa", "off"], Source::Console).unwrap();
+        assert_eq!(s.get(aa), 1);
+        s.cycle("r.aa", &["taa"], Source::Console).unwrap();
+        assert_eq!(s.get(aa), 1);
+        // Numbers compare by value, not by their text.
+        s.cycle("r.ao.radius", &["0.5", "1.50", "3"], Source::Console)
+            .unwrap();
+        assert_eq!(
+            s.info("r.ao.radius").map(VarInfo::value_text),
+            Some("3".to_owned())
+        );
+        // Each value is checked, and the setting must exist.
+        assert!(s.cycle("r.aa", &["dlaa", "fxaa"], Source::Console).is_err());
+        assert_eq!(s.get(aa), 1);
+        assert!(s.cycle("r.aa", &[], Source::Console).is_err());
+        assert!(s.cycle("r.nothing", &["1"], Source::Console).is_err());
     }
 
     #[test]
