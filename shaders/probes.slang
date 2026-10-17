@@ -76,6 +76,44 @@ public struct ProbeCascade
     public uint pad;
 };
 
+// ------------------------------------------------------------------- regions ---
+//
+// D-068 (research/probe-leaks-indoors.md): a scene that knows its rooms (the village, from its
+// generator) gives each a region number, and a probe lights only the surfaces of its own
+// region. A thin partition passed the visibility test against a sunlit room behind it (a tinted
+// blotch), and a sunlit probe outside saw a window's head through the opening (a lit cap):
+// neither is a failure of the test, so a second test decides. Every surface outside every
+// volume is outside (REGION_OUTSIDE), as are the probes there.
+
+// Mirrors `GpuRegionVolume` in crates/forge-render/src/probes.rs.
+public struct RegionVolume
+{
+    public float2 corners[4]; // its outline on the ground, x and z in the scene frame, anticlockwise from above (x right, z down)
+    public float floor;       // its extent up, metres in the scene frame
+    public float ceiling;
+    public uint region;       // the room it belongs to: on a doorway, the side of corners 0–1
+    public uint other;        // a doorway's other side, at corners 3–2; else `region`
+    public uint kind;         // REGION_ROOM, REGION_RECESS (a window's inner reveal: its room's), REGION_DOORWAY or REGION_SOLID
+    public uint pad;
+};
+
+public static const uint REGION_OUTSIDE = 0u;
+public static const uint REGION_NONE = 0xFFFFFFFFu; // a probe in a recess or a doorway: no region's
+public static const uint REGION_ROOM = 0u;
+public static const uint REGION_RECESS = 1u;
+public static const uint REGION_DOORWAY = 2u;
+public static const uint REGION_SOLID = 3u; // a house's body outside its rooms: its walls, its slabs; no probe's, lit by all
+
+// What `region_at` found: a region, a doorway's other side and how far across it the point
+// stands (0 at `region`'s face, 1 at `other`'s), and the volume's kind.
+public struct RegionHit
+{
+    public uint region;
+    public uint other;
+    public float ramp;
+    public uint kind;
+};
+
 // Mirrors `GpuProbeField` in crates/forge-render/src/probes.rs: one per frame.
 public struct ProbeField
 {
@@ -97,7 +135,61 @@ public struct ProbeField
     public float settled_hysteresis; // the same for a settled probe's update: hysteresis^cadence
     public uint cadence;          // a settled probe updates every `cadence` frames (issue #103)
     public uint phase;            // this frame's turn, 0..cadence-1
+    public uint* probe_region;    // per probe: the region of where it stands (D-068), REGION_NONE in a recess or a doorway
+    public RegionVolume* region_volumes; // the rooms, recesses and doorways, recesses and doorways first
+    public uint2* region_cells;   // per cell of a grid over them: the first of its volumes' indices and their count
+    public uint* region_indices;  // the volumes' indices, cell after cell
+    public float2 region_origin;  // the grid's corner, x and z in the scene frame
+    public float region_cell;     // its cells' side, metres
+    public uint region_count;     // volumes: 0, no regions (every probe lights every surface)
+    public uint2 region_dims;     // cells along x and z
+    public uint2 region_pad;
 };
+
+// The region at `p` (scene frame): the first volume holding it, in their order; outside them all,
+// REGION_OUTSIDE.
+public RegionHit region_at(ProbeField* field, float3 p)
+{
+    RegionHit hit;
+    hit.region = REGION_OUTSIDE;
+    hit.other = REGION_OUTSIDE;
+    hit.ramp = 0.0;
+    hit.kind = REGION_ROOM;
+    int2 c = int2(floor((p.xz - field[0].region_origin) / field[0].region_cell));
+    int2 dims = int2(field[0].region_dims);
+    if (field[0].region_count == 0u || any(c < 0) || any(c >= dims))
+        return hit;
+    uint2 range = field[0].region_cells[c.y * dims.x + c.x];
+    for (uint i = 0u; i < range.y; i++)
+    {
+        RegionVolume v = field[0].region_volumes[field[0].region_indices[range.x + i]];
+        if (p.y < v.floor || p.y > v.ceiling)
+            continue;
+        bool inside = true;
+        for (uint k = 0u; k < 4u; k++)
+        {
+            float2 a = v.corners[k];
+            float2 e = v.corners[(k + 1u) & 3u] - a;
+            float2 d = p.xz - a;
+            inside = inside && e.x * d.y - e.y * d.x >= 0.0;
+        }
+        if (!inside)
+            continue;
+        hit.region = v.region;
+        hit.other = v.other;
+        hit.kind = v.kind;
+        if (v.kind == REGION_DOORWAY)
+        {
+            // Across the doorway from corners 0–1 to corners 3–2.
+            float2 e = v.corners[1] - v.corners[0];
+            float2 across = normalize(float2(-e.y, e.x));
+            float depth = dot(v.corners[3] - v.corners[0], across);
+            hit.ramp = saturate(dot(p.xz - v.corners[0], across) / max(depth, 1e-4));
+        }
+        return hit;
+    }
+    return hit;
+}
 
 static const float PI = 3.14159265;
 
@@ -273,20 +365,25 @@ public float cascade_weight(ProbeField* field, uint c, float3 p)
     return w.x * w.y * w.z;
 }
 
-// Irradiance at `p` (unit normal `n`, `v` towards the viewer) from cascade `c`'s eight probes
-// around it, in the resolve's units (the cosine-weighted mean of the radiance the rays met, as
-// the shading multiplies it by the albedo); w is 1 when at least one of them is active, else 0.
-// With MIRROR, also the irradiance for a normal along `d` (`toward_d`), from the same probes
-// with the same weights: one more fetch each (issue #68).
-public float4 cascade_irradiance<let MIRROR : int>(ProbeField* field, uint c, float3 p, float3 n, float3 v, float3 d, out float3 toward_d)
+// Irradiance at `p` (unit normal `n` for the light's direction, `g` the surface's own,
+// interpolated normal, `v` towards the viewer) from cascade `c`'s eight probes around it, in the
+// resolve's units (the cosine-weighted mean of the radiance the rays met, as the shading
+// multiplies it by the albedo); w is 1 when at least one of them counts, else 0. With MIRROR,
+// also the irradiance for a normal along `d` (`toward_d`), from the same probes with the same
+// weights: one more fetch each (issue #68). With `masked`, only the probes of `mask`'s region
+// count (D-068): across a doorway, those of its two sides, each as far as the point stands
+// towards it.
+public float4 cascade_irradiance<let MIRROR : int>(ProbeField* field, uint c, float3 p, float3 n, float3 g, float3 v, float3 d, RegionHit mask, bool masked, out float3 toward_d)
 {
     toward_d = float3(0.0);
     ProbeCascade cascade = field[0].cascades[c];
     float s = cascade.spacing;
     int3 counts = int3(field[0].counts);
     // The 2021 paper's bias: off the surface, mostly towards the viewer, in proportion to the
-    // spacing, so the visibility test does not sit on the surface's own shadow boundary.
-    float3 q = p + (n * 0.2 + v * 0.8) * (0.75 * 0.3 * s);
+    // spacing, so the visibility test does not sit on the surface's own shadow boundary. Along
+    // the surface's interpolated normal, not the bent one of its normal map (D-068; EA's GIBS
+    // takes the vertices' normal): a bump's normal leaned the point into the wall.
+    float3 q = p + (g * 0.2 + v * 0.8) * (0.75 * 0.3 * s);
     float3 grid = q / s - 0.5;
     int3 base = int3(floor(grid));
     float3 alpha = grid - float3(base);
@@ -313,20 +410,34 @@ public float4 cascade_irradiance<let MIRROR : int>(ProbeField* field, uint c, fl
         // of a wall may be the room's only ones to see it, at a few percent each, and without
         // them the light of those behind it, outside, came in round a window's head
         // (2026-10-17). The threshold falls smoothly over a quarter of a cell in front of the
-        // surface's plane, so no line shows where a probe's cell crosses it.
+        // surface's plane, so no line shows where a probe's cell crosses it. Masked by region,
+        // the region's probes count down to PROBE_LEAST_FRONT, the others not at all.
         float3 tri = max(lerp(1.0 - alpha, alpha, float3(corner)), 0.001);
         float trilinear = tri.x * tri.y * tri.z;
         int3 cell = base + corner;
-        // Coarser cascades compute #70's own expression, so their light stays the same to the bit.
-        bool room = s <= PROBE_ROOM_SPACING;
-        float least = lerp(PROBE_LEAST_WEIGHT, PROBE_LEAST_FRONT, saturate(4.0 * dot((float3(cell) + 0.5) * s - p, n) / s));
-        float keep = room ? saturate(trilinear / least - 1.0) : saturate(trilinear / PROBE_LEAST_WEIGHT - 1.0);
-        if (room ? keep <= 0.0 : trilinear < PROBE_LEAST_WEIGHT)
-            continue;
         int3 slot = base_slot + corner;
         slot = select(slot >= counts, slot - counts, slot);
         uint2 tile = uint2(uint(slot.y * counts.x + slot.x), c * uint(counts.z) + uint(slot.z));
         uint probe = tile.y * row + tile.x;
+        float share = 1.0;
+        float keep;
+        if (masked)
+        {
+            uint region = field[0].probe_region[probe];
+            share = region == mask.region ? 1.0 - mask.ramp : (region == mask.other ? mask.ramp : 0.0);
+            keep = saturate(trilinear / PROBE_LEAST_FRONT - 1.0);
+            if (share <= 0.0 || keep <= 0.0)
+                continue;
+        }
+        else
+        {
+            // Coarser cascades compute #70's own expression, so their light stays the same to the bit.
+            bool room = s <= PROBE_ROOM_SPACING;
+            float least = lerp(PROBE_LEAST_WEIGHT, PROBE_LEAST_FRONT, saturate(4.0 * dot((float3(cell) + 0.5) * s - p, n) / s));
+            keep = room ? saturate(trilinear / least - 1.0) : saturate(trilinear / PROBE_LEAST_WEIGHT - 1.0);
+            if (room ? keep <= 0.0 : trilinear < PROBE_LEAST_WEIGHT)
+                continue;
+        }
         float4 data = field[0].probe_data[probe];
         if (probe_state(data.w) == PROBE_INACTIVE)
             continue;
@@ -334,7 +445,7 @@ public float4 cascade_irradiance<let MIRROR : int>(ProbeField* field, uint c, fl
         float3 position = (float3(cell) + 0.5) * s + data.xyz;
         // Probes behind the surface count less, smoothly.
         float3 to_probe = normalize(position - p);
-        float facing = (dot(to_probe, n) + 1.0) * 0.5;
+        float facing = (dot(to_probe, g) + 1.0) * 0.5;
         float w = facing * facing + 0.2;
         // Visibility: does the probe see q? Its distances towards q give a mean and a
         // variance; Chebyshev's inequality bounds the chance that q is nearer than what the
@@ -354,7 +465,7 @@ public float4 cascade_irradiance<let MIRROR : int>(ProbeField* field, uint c, fl
         // Weights that are already small shrink further: a faint leak reads as light in the dark.
         if (w < 0.2)
             w *= w * w / (0.2 * 0.2);
-        w *= trilinear * keep;
+        w *= trilinear * keep * share;
         float2 corner_texel = float2(tile * IRRADIANCE_TILE);
         float3 e = sample_image_level(field[0].irradiance_image, SAMPLER_LINEAR_CLAMP,
             (corner_texel + 1.0 + texel_n) * field[0].irradiance_texel, 0.0).rgb;
@@ -379,9 +490,9 @@ public float4 cascade_irradiance<let MIRROR : int>(ProbeField* field, uint c, fl
     return float4(root * root, 1.0);
 }
 
-// `probe_irradiance`, and with MIRROR the same for a normal along `d` (`toward_d`, over
-// `open_sky_d`).
-float3 probe_lookup<let MIRROR : int>(ProbeField* field, float3 p, float3 n, float3 v, float3 open_sky, float3 d, float3 open_sky_d, out float3 toward_d)
+// The cascades' light at `p`, finer first, each over what the finer ones left, and how much of
+// it they covered (w).
+float4 cascades_lookup<let MIRROR : int>(ProbeField* field, float3 p, float3 n, float3 g, float3 v, float3 d, RegionHit mask, bool masked, out float3 toward_d)
 {
     float3 e = float3(0.0);
     float3 e_d = float3(0.0);
@@ -392,7 +503,7 @@ float3 probe_lookup<let MIRROR : int>(ProbeField* field, float3 p, float3 n, flo
         if (w <= 0.0)
             continue;
         float3 ce_d;
-        float4 ce = cascade_irradiance<MIRROR>(field, c, p, n, v, d, ce_d);
+        float4 ce = cascade_irradiance<MIRROR>(field, c, p, n, g, v, d, mask, masked, ce_d);
         if (ce.w <= 0.0)
             continue;
         float share = (1.0 - covered) * w;
@@ -400,22 +511,75 @@ float3 probe_lookup<let MIRROR : int>(ProbeField* field, float3 p, float3 n, flo
         e_d += share * ce_d;
         covered += share;
     }
-    toward_d = e_d + (1.0 - covered) * open_sky_d;
-    return e + (1.0 - covered) * open_sky;
+    toward_d = e_d;
+    return float4(e, covered);
+}
+
+// `probe_irradiance`, and with MIRROR the same for a normal along `d` (`toward_d`, over
+// `open_sky_d`). With regions (D-068), the surface's is where it faces, 2 cm off it along `g`;
+// where no cascade has a probe of it among the eight around the point, every probe counts, as
+// without regions (Unity's rendering layers fall back so). A surface in a house's body but in
+// none of its rooms (a face whose point 2 cm off it missed its room's outline: a corner, the
+// edge of a ceiling) is lit by every probe, as without regions: taken for the outside's, such
+// pixels inside took the sunlit probes' light, white specks down a corner.
+float3 probe_lookup<let MIRROR : int>(ProbeField* field, float3 p, float3 n, float3 g, float3 v, float3 open_sky, float3 d, float3 open_sky_d, out float3 toward_d)
+{
+    RegionHit mask = region_at(field, p + g * 0.02);
+    bool masked = field[0].region_count > 0u && mask.kind != REGION_SOLID;
+    float4 e = cascades_lookup<MIRROR>(field, p, n, g, v, d, mask, masked, toward_d);
+    if (masked && e.w <= 0.0)
+        e = cascades_lookup<MIRROR>(field, p, n, g, v, d, mask, false, toward_d);
+    toward_d += (1.0 - e.w) * open_sky_d;
+    return e.rgb + (1.0 - e.w) * open_sky;
 }
 
 // Irradiance at `p` from the finest cascades that cover it, finer first, each over what the
-// finer ones left; `open_sky` (the sky's irradiance at `n`, unoccluded) beyond them all.
-public float3 probe_irradiance(ProbeField* field, float3 p, float3 n, float3 v, float3 open_sky)
+// finer ones left; `open_sky` (the sky's irradiance at `n`, unoccluded) beyond them all. `n` is
+// the normal the light is gathered for (a normal map's), `g` the surface's interpolated one.
+public float3 probe_irradiance(ProbeField* field, float3 p, float3 n, float3 g, float3 v, float3 open_sky)
 {
     float3 unused;
-    return probe_lookup<0>(field, p, n, v, open_sky, n, open_sky, unused);
+    return probe_lookup<0>(field, p, n, g, v, open_sky, n, open_sky, unused);
 }
 
 // `probe_irradiance`, and the irradiance the probes find for a normal along the mirror
 // direction `r` (`toward_r`, over the sky's unoccluded `open_sky_r` there), from the same
 // probes: what dims the sky's reflection in a street (issue #68).
-public float3 probe_irradiance_mirror(ProbeField* field, float3 p, float3 n, float3 v, float3 open_sky, float3 r, float3 open_sky_r, out float3 toward_r)
+public float3 probe_irradiance_mirror(ProbeField* field, float3 p, float3 n, float3 g, float3 v, float3 open_sky, float3 r, float3 open_sky_r, out float3 toward_r)
 {
-    return probe_lookup<1>(field, p, n, v, open_sky, r, open_sky_r, toward_r);
+    return probe_lookup<1>(field, p, n, g, v, open_sky, r, open_sky_r, toward_r);
+}
+
+// A region's colour in `probe_region_tint`: black outside, else one of its own.
+float3 region_colour(uint region)
+{
+    if (region == REGION_OUTSIDE)
+        return float3(0.0);
+    uint h = region * 0x9E3779B9u;
+    h ^= h >> 15;
+    h *= 0x85EBCA6Bu;
+    h ^= h >> 13;
+    return 0.2 + 0.6 * float3(float(h & 255u), float((h >> 8) & 255u), float((h >> 16) & 255u)) / 255.0;
+}
+
+// The `--show-regions` view (D-068): the region whose probes light the surface at `p` (its
+// interpolated normal `g`, `v` towards the viewer), as `probe_lookup` decides it. A room's own
+// colour, a doorway's from one side's to the other's, green in a window's reveal, white in a
+// house's body (every probe), black outside, red where no probe of the region stood among any
+// cascade's eight and every probe lit it (the fallback); grey without regions.
+public float3 probe_region_tint(ProbeField* field, float3 p, float3 g, float3 v)
+{
+    if (field[0].region_count == 0u)
+        return float3(0.5);
+    RegionHit mask = region_at(field, p + g * 0.02);
+    if (mask.kind == REGION_SOLID)
+        return float3(1.0);
+    float3 unused;
+    if (cascades_lookup<0>(field, p, g, g, v, g, mask, true, unused).w <= 0.0)
+        return float3(1.0, 0.0, 0.0);
+    if (mask.kind == REGION_RECESS)
+        return float3(0.0, 1.0, 0.0);
+    if (mask.kind == REGION_DOORWAY)
+        return lerp(region_colour(mask.region), region_colour(mask.other), mask.ramp);
+    return region_colour(mask.region);
 }

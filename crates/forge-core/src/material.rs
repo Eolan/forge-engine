@@ -206,6 +206,10 @@ pub struct RenderLayer {
     /// glass's foot, 6 m deep, shelves of goods on its walls, no curtain, and its lights
     /// brighter than a home's.
     pub shop: bool,
+    /// A window's glass that lets the daylight into its room (implied by `interior`): a
+    /// probe's ray from a room passes it when it meets its back, as the view from the room does
+    /// (D-068). For obscured glass, which shows no room.
+    pub glazed: bool,
     /// Standard: a grating of upright bars drawn on one card, its bars this share of their
     /// spacing wide and as deep (a railing's square bars): the mesh's `u` counts the bars, one a
     /// unit, the first at 1. Drawn double-sided as a cut-out: the share of each pixel the bars
@@ -315,6 +319,7 @@ impl Default for RenderLayer {
             world_projected: false,
             interior: false,
             shop: false,
+            glazed: false,
             grating: None,
             reflectance: 0.04,
             bubbles: 0.0,

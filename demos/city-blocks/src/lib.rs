@@ -475,6 +475,10 @@ pub struct Args {
     /// (the open sky's with `--no-probes`); U toggles it.
     #[arg(long)]
     show_gi: bool,
+    /// With the probes' regions (the village's houses, D-068): tint each surface by the region
+    /// whose probes light it, red where none of its region's probes stood near.
+    #[arg(long)]
+    show_regions: bool,
     /// Show the ambient occlusion in grey instead of the shading (V toggles it).
     #[arg(long)]
     show_ao: bool,
@@ -1078,6 +1082,9 @@ impl Gallery {
         if args.show_gi {
             flags.0 |= CullFlags::SHOW_GI;
         }
+        if args.show_regions {
+            flags.0 |= CullFlags::SHOW_REGIONS;
+        }
         if !args.no_reflections {
             flags.0 |= CullFlags::SKY_REFLECTIONS;
         }
@@ -1121,7 +1128,36 @@ impl Gallery {
                     .unwrap_or(look.probes.map_or(ProbeParams::default().spacing, |p| p.1)),
                 ..ProbeParams::default()
             };
-            let probes = Probes::new(&ctx.device, &ctx.shaders, params)?;
+            let mut probes = Probes::new(&ctx.device, &ctx.shaders, params)?;
+            // The scene's rooms (D-068), from the world frame to the scene's.
+            if let Some(running) = running.as_ref() {
+                let origin = scene.origin();
+                let to_scene = |x: f32, y: f32, z: f32| {
+                    forge_render::CellPos::from_f64(glam::DVec3::new(
+                        f64::from(x),
+                        f64::from(y),
+                        f64::from(z),
+                    ))
+                    .relative_to(origin)
+                };
+                let volumes: Vec<forge_render::RegionVolume> = running
+                    .probe_regions()
+                    .into_iter()
+                    .map(|v| forge_render::RegionVolume {
+                        corners: v.corners.map(|c| {
+                            let p = to_scene(c.x, 0.0, c.y);
+                            glam::Vec2::new(p.x, p.z)
+                        }),
+                        floor: to_scene(0.0, v.floor, 0.0).y,
+                        ceiling: to_scene(0.0, v.ceiling, 0.0).y,
+                        ..v
+                    })
+                    .collect();
+                if !volumes.is_empty() {
+                    tracing::info!(volumes = volumes.len(), "probe regions");
+                }
+                probes.set_regions(&ctx.device, &volumes)?;
+            }
             let p = probes.params();
             tracing::info!(
                 probes = p.probe_count(),

@@ -96,6 +96,13 @@ void probe_state_main(uint3 id : SV_DispatchThreadID)
     if (state == PROBE_ACTIVE && state_before == PROBE_INACTIVE)
         state = PROBE_RESET;
     field[0].probe_data[probe] = float4(offset, state + 4.0 * (age + 1.0));
+    // Its region (D-068), where it now stands; kept once it settles. In a window's recess or a
+    // doorway it has none: pushed into a reveal, half in the sun, it lit the window's head.
+    if (field[0].region_count > 0u)
+    {
+        RegionHit hit = region_at(field, slot.position + offset);
+        field[0].probe_region[probe] = hit.kind == REGION_ROOM ? hit.region : REGION_NONE;
+    }
 }
 
 // ------------------------------------------------------------------- blend ---
@@ -184,7 +191,13 @@ void probe_blend_main(uint3 group : SV_GroupID, uint thread : SV_GroupIndex)
         for (uint i = 0; i < random; i++)
         {
             float w = pow(max(0.0, dot(dir, s_dir[i])), DISTANCE_SHARPNESS);
-            float d = min(abs(s_ray[i].w), farthest);
+            // A back face's hit at a fifth of its distance (the 2021 paper's "shortened by 80%",
+            // RTXGI's): what the probe meets the back of is the inside of something, and points
+            // past it fail the visibility test sooner (D-068). Not to 0, which would fail every
+            // point that way in a probe that sees a few back faces. The relocation (above) keeps
+            // the full distance.
+            float t = s_ray[i].w;
+            float d = min(t < 0.0 ? -0.2 * t : t, farthest);
             sum += w * float2(d, d * d);
             total += w;
         }

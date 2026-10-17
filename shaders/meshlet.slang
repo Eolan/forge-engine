@@ -147,6 +147,7 @@ static const uint MATERIAL_FLAG_GRATING = 128;   // with MASKED: upright bars on
 static const uint MATERIAL_FLAG_SHOP = 256;      // with INTERIOR: a shop behind the glass (`interior_room`)
 static const uint MATERIAL_FLAG_EMISSIVE_ABSOLUTE = 512; // `emissive` in cd/m², converted by the frame's reference illuminance (`emission`, #254)
 static const uint MATERIAL_FLAG_FOLIAGE = 1024; // with MASKED and DOUBLE_SIDED: leaf cards, their normals never turned, a mix of the two colours per instance (D-013)
+static const uint MATERIAL_FLAG_GLAZED = 2048;  // a window's glass a probe's ray from its room passes (D-068)
 static const uint CUTOUT_GROUND_WINDOW = 1u << 31; // `cluster_cutouts`: windowed ground reaching into the ground window (#197)
 static const uint MESH_WINDOWED_GROUND = 1;     // Mesh::flags: its fragments in the frame's ground window go (#197)
 static const uint MESH_SCENE_SHADED = 2;        // Mesh::flags: a ground window's mesh, shaded where it stands in the scene (#197)
@@ -242,6 +243,8 @@ public static const uint FLAG_CUTOUTS = 4194304;
 public static const uint FLAG_SHADOW_REFERENCE = 8388608;
 // The scene has jelly rows: the sun's shadow rays see through them, tinted (#180).
 public static const uint FLAG_JELLY = 16777216;
+// Tint each surface by the probes' region that lights it (D-068).
+public static const uint FLAG_SHOW_REGIONS = 33554432;
 
 static const uint PAGE_NONE = 0xFFFFFFFF;           // an absent page in `page_table`, no page in `child_page`
 static const uint MESHLET_INDEX_MASK = 0x3FFFFFFFu;
@@ -2620,7 +2623,7 @@ float3 sky_reflection(float4* sky, float3 irradiance, float3 n, float3 view, flo
     return fresnel * occlusion * environment;
 }
 
-float3 sun_light(Frame* f, float3 albedo, float3 n, float specular_power, float specular_weight, float3 shadow, float4* sky, float ao, float3 view, float reflectance, float3 world, ProbeField* probes, bool traced, out float ndl)
+float3 sun_light(Frame* f, float3 albedo, float3 n, float3 geometric, float specular_power, float specular_weight, float3 shadow, float4* sky, float ao, float3 view, float reflectance, float3 world, ProbeField* probes, bool traced, out float ndl)
 {
     float3 light = normalize(f[0].sun_dir);
     ndl = dot(n, light);
@@ -2647,11 +2650,11 @@ float3 sun_light(Frame* f, float3 albedo, float3 n, float specular_power, float 
             // sky above it. A mirror ray sees for itself.
             float3 open_r = sh_irradiance(sky, r);
             float3 toward_r;
-            irradiance = probe_irradiance_mirror(probes, world, n, view, irradiance, r, open_r, toward_r);
+            irradiance = probe_irradiance_mirror(probes, world, n, geometric, view, irradiance, r, open_r, toward_r);
             sky_share = saturate(toward_r / max(open_r, 1e-4));
         }
         else if (probes != nullptr)
-            irradiance = probe_irradiance(probes, world, n, view, irradiance);
+            irradiance = probe_irradiance(probes, world, n, geometric, view, irradiance);
         float3 ambient = ao >= 0.0 ? irradiance * occlusion_bounce(ao, albedo) : irradiance;
         if (!reflects)
             return albedo * (diffuse * sun + ambient) + specular * sun;
@@ -3053,7 +3056,7 @@ float3 shade_uv_mapped(Frame* f, Material mat, Surface s)
     float reflectance = lerp(mat.reflectance, max(base.r, max(base.g, base.b)), metal);
     float specular = mat.specular + METAL_SPECULAR * metal;
     float ndl;
-    return sun_light(f, diffuse, n, power, specular, s.shadow, s.sky, ao, s.view, reflectance, s.world, s.probes, s.traced, ndl) + emissive;
+    return sun_light(f, diffuse, n, s.n, power, specular, s.shadow, s.sky, ao, s.view, reflectance, s.world, s.probes, s.traced, ndl) + emissive;
 }
 
 // The room behind a window's glass (interior mapping, D-060's step 3; Van Dongen, "Interior
@@ -3205,7 +3208,7 @@ float3 shade_standard(Frame* f, Material mat, Surface s)
         {
             // The pane: its reflection over dark glass.
             float ndl;
-            float3 pane = sun_light(f, mat.color_a, n, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, s.world, s.probes, s.traced, ndl);
+            float3 pane = sun_light(f, mat.color_a, n, s.n, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, s.world, s.probes, s.traced, ndl);
             // The room behind, seen along the view into the mesh's space.
             float3 d = normalize(mul(transpose(s.frame), -s.view));
             if (d.z > -1e-3)
@@ -3219,7 +3222,7 @@ float3 shade_standard(Frame* f, Material mat, Surface s)
             float curtain = !shop && h.x < ROOM_CURTAINS ? 0.35 + 0.5 * h.x / ROOM_CURTAINS : 0.0;
             // Lit by the daylight the window gets (a white wall's facing out), or the row's lamp.
             float ndl_white;
-            float3 daylight = sun_light(f, float3(1.0, 1.0, 1.0), n, 1.0, 0.0, s.shadow, s.sky, s.ao, s.view, 0.0, s.world, s.probes, false, ndl_white);
+            float3 daylight = sun_light(f, float3(1.0, 1.0, 1.0), n, s.n, 1.0, 0.0, s.shadow, s.sky, s.ao, s.view, 0.0, s.world, s.probes, false, ndl_white);
             float3 lamp = emission(f, mat) * (shop ? ROOM_SHOP_LAMP : ROOM_LAMP);
             float3 seen = lerp(room * (daylight * ROOM_DAYLIGHT + lamp), mat.color_b * (daylight + lamp), curtain);
             // Through the glass, less what it reflects (Schlick).
@@ -3229,7 +3232,7 @@ float3 shade_standard(Frame* f, Material mat, Surface s)
         standard_surface(mat, s, albedo, n);
     }
     float ndl;
-    return sun_light(f, albedo, n, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, s.world, s.probes, s.traced, ndl) + emission(f, mat);
+    return sun_light(f, albedo, n, s.n, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, s.world, s.probes, s.traced, ndl) + emission(f, mat);
 }
 
 // The wet sand (issue #105). The swash's sheet is a function of position and time
@@ -3488,7 +3491,7 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
             shadow *= shore_caustics(s.shore, s.world, max(length(s.dpdx), length(s.dpdy)));
     }
     float ndl;
-    return sun_light(f, albedo, n, specular_power, specular, shadow, s.sky, s.ao, s.view, reflectance, s.world, s.probes, s.traced, ndl) + emissive;
+    return sun_light(f, albedo, n, s.n, specular_power, specular, shadow, s.sky, s.ao, s.view, reflectance, s.world, s.probes, s.traced, ndl) + emissive;
 }
 
 // A planet's layers (#220): the standard rows after its layered row are the sea, sand, grass,
@@ -3756,7 +3759,7 @@ float3 shade_ice(Frame* f, Material mat, Surface s)
         albedo = lerp(albedo, ICE_WHITE, 1.0 - exp(-mat.scattering * ICE_WHITENING_DEPTH));
     }
     float ndl;
-    float3 color = sun_light(f, albedo, s.n, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, s.world, s.probes, s.traced, ndl);
+    float3 color = sun_light(f, albedo, s.n, s.n, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, s.world, s.probes, s.traced, ndl);
     if (any(s.transmitted > 0.0))
     {
         // The sunlight that crossed the ice (issues #59, #61), tinted by it: the sun glows
@@ -4256,7 +4259,7 @@ float3 hit_radiance(Frame* f, float4* sky, ProbeField* probes, RayHit hit, float
 {
     float3 ambient = sh_irradiance(sky, hit.n);
     if (probes != nullptr)
-        ambient = probe_irradiance(probes, hit.position, hit.n, -direction, ambient);
+        ambient = probe_irradiance(probes, hit.position, hit.n, hit.n, -direction, ambient);
     return hit_sunlight(f, hit) + hit.albedo * ambient;
 }
 
@@ -4525,7 +4528,7 @@ float3 hit_radiance_skipping(Frame* f, float4* sky, ProbeField* probes, RayHit h
     }
     float3 ambient = sh_irradiance(sky, hit.n);
     if (probes != nullptr)
-        ambient = probe_irradiance(probes, hit.position, hit.n, -direction, ambient);
+        ambient = probe_irradiance(probes, hit.position, hit.n, hit.n, -direction, ambient);
     return hit.albedo * (ndl * lit * f[0].sun_color.rgb + ambient) + hit.emissive;
 }
 
@@ -4630,7 +4633,7 @@ float3 shade_jelly(Frame* f, Material mat, Surface s, uint instance, bool traced
         albedo = mat.color_b * s.cloud;
     float ndl;
     g_reflection_request = float4(0.0);
-    float3 color = sun_light(f, albedo, s.n, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, s.world, s.probes, traced, ndl);
+    float3 color = sun_light(f, albedo, s.n, s.n, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, s.world, s.probes, traced, ndl);
     float4 mirror = g_reflection_request;
     if (traced && mirror.w > 0.0)
     {
@@ -4897,8 +4900,10 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
         // occlusion: the probes' where they reach, the open sky's elsewhere.
         color = sh_irradiance(s.sky, s.n);
         if (s.probes != nullptr)
-            color = probe_irradiance(s.probes, s.world, s.n, s.view, color);
+            color = probe_irradiance(s.probes, s.world, s.n, s.n, s.view, color);
     }
+    if ((f[0].flags & FLAG_SHOW_REGIONS) != 0 && s.probes != nullptr)
+        color = probe_region_tint(s.probes, s.world, s.n, s.view);
     color *= f[0].sun_illuminance * f[0].exposure / 3.14159265;
     g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.color_image)][pixel] = float4(color, 1.0);
     if (s.traced)
@@ -5379,6 +5384,22 @@ void probe_trace_main(uint3 group : SV_GroupID, uint thread : SV_GroupThreadID)
     desc.TMin = 0.0;
     desc.TMax = fixed ? PROBE_FIXED_REACH * slot.spacing : PROBE_MISS_DISTANCE;
     ClosestHit c = trace_closest(f, desc, false, true, probe * 0x27D4EB2Fu ^ ray);
+    // A probe in a room (D-068) sees out through its windows. Their glass is drawn from outside
+    // only, as the view from the room passes it, and met from behind it ended the ray as a back
+    // face: a room took its light from its doors alone, and with regions an upstairs room
+    // through a doorway went black. Only from a room's probe: a window's back seen from inside a
+    // house without insides (a hollow shell) still ends the ray, as it did.
+    if (c.hit && !slot.fresh && field[0].region_count > 0u)
+    {
+        uint region = field[0].probe_region[probe];
+        if (region != REGION_NONE && region != REGION_OUTSIDE
+            && (candidate_row(f, c.instance, c.primitive).flags & MATERIAL_FLAG_GLAZED) != 0
+            && ray_back_face(f, c.instance, c.primitive, direction))
+        {
+            desc.TMin = c.t + 0.002;
+            c = trace_closest(f, desc, false, true, probe * 0x27D4EB2Fu ^ ray);
+        }
+    }
     float3 radiance = float3(0.0);
     float distance = PROBE_MISS_DISTANCE;
     if (c.hit)

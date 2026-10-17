@@ -70,7 +70,7 @@ pub use meshlet::{
     MoverTransform, MoversFrame, PlanetView, RayRequests, SceneEdit, SceneEditor, SunShadowRays,
     SwRaster,
 };
-pub use probes::{ProbeLight, ProbeParams, Probes};
+pub use probes::{ProbeLight, ProbeParams, Probes, RegionHit, RegionKind, RegionVolume, region_at};
 pub use reflection_history::{ReflectionHistory, ReflectionHistoryFrame};
 pub use shallow::{
     ShallowColumns, ShallowGrid, ShallowLayer, ShallowParams, ShallowState, ShallowStats,

@@ -352,6 +352,8 @@ pub struct PlanScenario {
     /// Its meshes, cooked or read from the cache on the loading thread ([`Scenario::prepare`]),
     /// in the order the build adds them, each plant's with its height and crown.
     cooked: Option<Vec<(MeshletMesh, f32, f32)>>,
+    /// The houses' rooms for the probes (D-068, [`probe_regions`]), in the world frame.
+    regions: Vec<forge_render::RegionVolume>,
 }
 
 /// Buildings drawn from a style set's grammar and kit (D-039's modules) within `radius` of
@@ -719,6 +721,12 @@ impl PlanScenario {
             insides(&mut tiles, masses, &structures, &near)
         } else {
             0
+        };
+        // And the probes' regions (D-068), where the insides are drawn.
+        let regions = if detail.is_some() {
+            probe_regions(size, masses, &structures, &near)
+        } else {
+            Vec::new()
         };
         laps.mark("insides");
         // The passages into the courts (D-060), and where to look into one: 10 m out on the
@@ -1788,6 +1796,7 @@ impl PlanScenario {
             laps.report()
         );
         Self {
+            regions,
             tiles: tiles.tiles,
             trees,
             flora,
@@ -2825,6 +2834,147 @@ const OVERRUN: f64 = 1.2;
 /// its culled walls, the city beyond, the neighbours' party walls and the sun's blurred shadows
 /// on them (the owner, 2026-10-15: "many useless things rendered inside the empty buildings").
 /// Nothing of it shows from outside. The triangles it adds.
+/// The houses' insides as the probes' regions (D-068, `research/probe-leaks-indoors.md`), in
+/// the world frame: each room of each storey a region of its own, the hall one through every
+/// storey (its flight rises through them), each doorway in a partition or an outer wall a ramp
+/// from one side's region to the other's (outside, 0), and each window's inner reveal, from the
+/// glass to the room, its room's. A probe then lights only its own region's surfaces: a thin
+/// partition passed a sunlit room's light, and a sunlit probe outside lit a window's head.
+fn probe_regions(
+    size: f64,
+    masses: &[Mass],
+    structures: &[Structure],
+    near: &[usize],
+) -> Vec<forge_render::RegionVolume> {
+    use forge_render::{RegionKind, RegionVolume};
+    let mut out = Vec::new();
+    let mut next = 1u32;
+    for &i in near {
+        let (m, s) = (&masses[i], &structures[i]);
+        let Some(inner) = interior::house(m, s) else {
+            continue;
+        };
+        let n = s.storeys.len();
+        if n == 0 {
+            continue;
+        }
+        let corner = |p: DVec2| {
+            let w = world(size, p, 0.0);
+            glam::Vec2::new(w.x, w.z)
+        };
+        let floor = |k: usize| floor_level(s, k) as f32;
+        let top = (s.storeys[n - 1].level + s.storeys[n - 1].height) as f32;
+        // A storey's rooms reach up to 3 cm under the next floor, inside its slab: the ceiling
+        // under it lower, the floor over it the next storey's.
+        let ceiling = |k: usize| if k + 1 < n { floor(k + 1) - 0.03 } else { top };
+        // The house's body round its rooms, last: a face whose point 2 cm off it missed its
+        // room's outline (a corner, a ceiling's edge) is lit by every probe, not taken for the
+        // outside's (white specks down a corner). Its footprint's triangles, each a quad with a
+        // corner twice.
+        for t in geom::triangulate(&m.footprint) {
+            let [a, b, c] = t.map(|k| m.footprint[k]);
+            out.push(RegionVolume {
+                corners: [a, b, c, c].map(corner),
+                floor: floor(0) - 0.5,
+                ceiling: top + 0.3,
+                region: 0,
+                other: 0,
+                kind: RegionKind::Solid,
+            });
+        }
+        let hall = next;
+        next += 1;
+        out.push(RegionVolume {
+            corners: inner.hall.map(corner),
+            floor: floor(0) - 0.15,
+            ceiling: top,
+            region: hall,
+            other: hall,
+            kind: RegionKind::Room,
+        });
+        let mut rooms: Vec<(usize, [DVec2; 4], u32)> = Vec::new();
+        for r in &inner.rooms {
+            rooms.push((r.storey, r.outline, next));
+            out.push(RegionVolume {
+                corners: r.outline.map(corner),
+                floor: floor(r.storey) - 0.15,
+                ceiling: ceiling(r.storey),
+                region: next,
+                other: next,
+                kind: RegionKind::Room,
+            });
+            next += 1;
+        }
+        // The region holding a point of storey `k`: a room of it, else the hall, else outside.
+        let region_of = |p: DVec2, k: usize| -> u32 {
+            rooms
+                .iter()
+                .find(|(rk, o, _)| *rk == k && geom::contains(o, p))
+                .map(|r| r.2)
+                .or_else(|| geom::contains(&inner.hall, p).then_some(hall))
+                .unwrap_or(0)
+        };
+        for part in &inner.partitions {
+            let t = (part.b - part.a).normalize_or_zero();
+            let left = DVec2::new(-t.y, t.x);
+            let h = part.thickness * 0.5 + 0.01;
+            let at = |along: f64, across: f64| part.a + t * along + left * across;
+            for &(lo, hi) in &part.doors {
+                let mid = (lo + hi) * 0.5;
+                out.push(RegionVolume {
+                    corners: [at(lo, -h), at(hi, -h), at(hi, h), at(lo, h)].map(corner),
+                    floor: floor(part.storey) - 0.1,
+                    ceiling: floor(part.storey) + interior::DOORWAY_HEAD as f32 + 0.05,
+                    region: region_of(at(mid, -h - 0.15), part.storey),
+                    other: region_of(at(mid, h + 0.15), part.storey),
+                    kind: RegionKind::Doorway,
+                });
+            }
+        }
+        for o in &s.openings {
+            let wall = &s.walls[o.wall];
+            let t = (wall.b - wall.a).normalize_or_zero();
+            let inward = DVec2::new(-t.y, t.x);
+            let at = |along: f64, depth: f64| wall.a + t * along + inward * depth;
+            let (lo, hi) = o.span();
+            let deep = wall.thickness + 0.01;
+            let inside = region_of(at((lo + hi) * 0.5, wall.thickness + 0.15), o.storey);
+            let level = s.storeys[o.storey].level;
+            let head = (level + o.head) as f32 + 0.05;
+            match o.kind {
+                OpeningKind::Window => {
+                    // From the window's glass to the inner face. The module stands two thirds
+                    // into the wall (`kit`), its glass 5 cm before its back (`modules::window`):
+                    // the box starts 6 cm before it, so the glass's outer face, 2 cm off it, stays
+                    // outside's, its sky's reflection lit by the street's probes. What stands
+                    // before the glass (the frame's outer bars) is outside the room, lit by
+                    // every probe as the walls are.
+                    let from = (wall.thickness * 0.65).clamp(0.12, 0.40) - 0.06;
+                    out.push(RegionVolume {
+                        corners: [at(lo, from), at(hi, from), at(hi, deep), at(lo, deep)]
+                            .map(corner),
+                        floor: (level + o.sill) as f32 - 0.05,
+                        ceiling: head,
+                        region: inside,
+                        other: inside,
+                        kind: RegionKind::Recess,
+                    });
+                }
+                OpeningKind::Door | OpeningKind::Shopfront => out.push(RegionVolume {
+                    corners: [at(lo, -0.01), at(hi, -0.01), at(hi, deep), at(lo, deep)].map(corner),
+                    floor: floor(o.storey) - 0.1,
+                    ceiling: head,
+                    region: 0,
+                    other: inside,
+                    kind: RegionKind::Doorway,
+                }),
+                OpeningKind::Passage => {}
+            }
+        }
+    }
+    out
+}
+
 fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &[usize]) -> usize {
     let size = tiles.size;
     let mut count = 0;
@@ -3091,7 +3241,7 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
         // The floors and the ceilings: the footprint inside its walls, a slab a storey, the
         // ground floor 2 cm over the walking level its door's sill stands on (5 cm up, a garden's
         // lawn showed through it), the top ceiling under the roof.
-        let Some(ring) = inner_ring(m, s) else {
+        let Some(ring) = inner_ring_into(m, s, 0.01) else {
             count += (mesh.indices.len() - before) / 3;
             continue;
         };
@@ -3241,14 +3391,21 @@ fn home_name(piece: furnish::Piece) -> &'static str {
 /// fails. A uniform inset by the thickest left a strip of the ground showing by the thinner party
 /// walls.
 fn inner_ring(m: &Mass, s: &Structure) -> Option<Vec<DVec2>> {
+    inner_ring_into(m, s, 0.0)
+}
+
+/// [`inner_ring`] reaching `into` metres into the walls: the floors and the ceilings 1 cm into
+/// them, so their edges hide inside the walls (on the walls' faces, pinholes along every edge
+/// showed the light behind them).
+fn inner_ring_into(m: &Mass, s: &Structure, into: f64) -> Option<Vec<DVec2>> {
     let d: Vec<f64> = s
         .walls
         .iter()
         .map(|w| {
             if w.role == WallRole::Inner {
-                0.05
+                0.05 - into
             } else {
-                w.thickness.max(0.2)
+                w.thickness.max(0.2) - into
             }
         })
         .collect();
@@ -3429,11 +3586,14 @@ fn interior_solids(
     top: f64,
 ) -> Vec<(Vec<DVec2>, f64, f64, bool)> {
     let mut out = Vec::new();
+    // Each partition 1 cm into the walls it meets, the floor and the ceiling: ending on their
+    // faces, pinholes along every corner showed the light behind them (2026-10-17).
+    const INTO: f64 = 0.01;
     for p in &inner.partitions {
         let st = &s.storeys[p.storey];
         let (y0, y1) = (
-            floor_level(s, p.storey),
-            (st.level + st.height - st.slab).min(top - 0.05),
+            floor_level(s, p.storey) - INTO,
+            (st.level + st.height - st.slab).min(top - 0.05) + INTO,
         );
         let t = (p.b - p.a).normalize_or_zero();
         let side = DVec2::new(-t.y, t.x) * (p.thickness * 0.5);
@@ -3441,16 +3601,16 @@ fn interior_solids(
             let (a, b) = (p.a + t * from, p.a + t * to);
             vec![a - side, b - side, b + side, a + side]
         };
-        let mut from = 0.0;
+        let mut from = -INTO;
         for &(d0, d1) in &p.doors {
             if d0 > from + 0.01 {
                 out.push((piece(from, d0), y0, y1, false));
             }
-            out.push((piece(d0, d1), y0 + interior::DOORWAY_HEAD, y1, false));
+            out.push((piece(d0, d1), y0 + INTO + interior::DOORWAY_HEAD, y1, false));
             from = d1;
         }
         if p.length() > from + 0.01 {
-            out.push((piece(from, p.length()), y0, y1, false));
+            out.push((piece(from, p.length() + INTO), y0, y1, false));
         }
     }
     if let Some(stair) = inner.stair {
@@ -5285,6 +5445,8 @@ impl Scenario for PlanScenario {
                                 .then_some(LIT[k / 2])
                                 .map_or([0.0; 3], |(l, c)| c.map(|v| v * l * 0.6)),
                             emissive_absolute: true,
+                            // The daylight comes in through it (D-068).
+                            glazed: true,
                             ..colour([0.80, 0.82, 0.82], 20.0, 0.04)
                         },
                     ),
@@ -5862,6 +6024,7 @@ impl Scenario for PlanScenario {
                 camera: glam::Vec2::ZERO,
                 size: self.size,
                 origin: scene_origin(args).to_f64().as_vec3(),
+                regions: std::mem::take(&mut self.regions),
             }),
         ))
     }
@@ -5895,6 +6058,8 @@ struct PlanRunning {
     riding: Option<Ride>,
     /// Each stop's screen, on its totem (none without trams).
     screens: Vec<StopScreen>,
+    /// The houses' rooms for the probes (D-068), in the world frame.
+    regions: Vec<forge_render::RegionVolume>,
 }
 
 /// A ride aboard a tram ([`PlanRunning::toggle_ride`]).
@@ -5980,6 +6145,10 @@ impl PlanRunning {
 }
 
 impl Running for PlanRunning {
+    fn probe_regions(&self) -> Vec<forge_render::RegionVolume> {
+        self.regions.clone()
+    }
+
     fn key_pressed(&mut self, code: KeyCode, camera: &FlyCamera) -> bool {
         // Enter: walk the streets in first person, or fly again. C: board the nearest tram,
         // or get off it.
@@ -7248,6 +7417,60 @@ mod tests {
         assert!(
             pairs as f64 >= km / 3.0 * 0.5,
             "{pairs} pairs on {km:.1} km"
+        );
+    }
+
+    /// The village houses' probe regions (D-068), as the lookup finds them: each room's middle
+    /// its own room, each window's reveal a room's (not the outside's), each doorway two
+    /// different regions with its ramp half way across at its middle.
+    #[test]
+    fn the_village_houses_rooms_reveals_and_doorways_find_their_regions() {
+        use forge_render::{RegionKind, region_at};
+        let size = 600.0;
+        let site = example::site(size, 10.0);
+        let v = forge_procgen::city::village::village(
+            &site,
+            &forge_procgen::city::village::params(size),
+            1,
+        );
+        let structures = structure::structures(&v.plan, &v.masses);
+        let near: Vec<usize> = (0..v.masses.len()).collect();
+        let volumes = probe_regions(size, &v.masses, &structures, &near);
+        let middle = |r: &forge_render::RegionVolume, y: f32| {
+            let c = r.corners.iter().fold(glam::Vec2::ZERO, |s, &c| s + c) * 0.25;
+            glam::Vec3::new(c.x, y, c.y)
+        };
+        let (mut rooms, mut reveals, mut doorways) = (0, 0, 0);
+        for r in &volumes {
+            match r.kind {
+                RegionKind::Room => {
+                    let p = middle(r, r.floor + 1.2);
+                    let hit = region_at(&volumes, p);
+                    assert_eq!((hit.kind, hit.region), (RegionKind::Room, r.region), "{p}");
+                    rooms += 1;
+                }
+                RegionKind::Recess => {
+                    let p = middle(r, (r.floor + r.ceiling) * 0.5);
+                    let hit = region_at(&volumes, p);
+                    assert_eq!(hit.kind, RegionKind::Recess, "{p}");
+                    assert_ne!(hit.region, 0, "a window into no room at {p}");
+                    reveals += 1;
+                }
+                RegionKind::Doorway => {
+                    assert_ne!(r.region, r.other, "{r:?}");
+                    let p = middle(r, r.floor + 1.0);
+                    let hit = region_at(&volumes, p);
+                    assert_eq!(hit.kind, RegionKind::Doorway, "{p}");
+                    assert!((hit.share(r.region) - 0.5).abs() < 0.05, "{p}: {hit:?}");
+                    assert!((hit.share(r.other) - 0.5).abs() < 0.05, "{p}: {hit:?}");
+                    doorways += 1;
+                }
+                RegionKind::Solid => {}
+            }
+        }
+        assert!(
+            rooms > 200 && reveals > 200 && doorways > 100,
+            "{rooms} {reveals} {doorways}"
         );
     }
 

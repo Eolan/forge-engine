@@ -82,9 +82,152 @@ struct GpuProbeField {
     settled_hysteresis: f32,
     cadence: u32,
     phase: u32,
+    probe_region: u64,
+    region_volumes: u64,
+    region_cells: u64,
+    region_indices: u64,
+    region_origin: [f32; 2],
+    region_cell: f32,
+    region_count: u32,
+    region_dims: [u32; 2],
+    region_pad: [u32; 2],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuProbeField>() == 336);
+const _: () = assert!(std::mem::size_of::<GpuProbeField>() == 400);
+
+/// Mirrors `RegionVolume` in `probes.slang`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GpuRegionVolume {
+    corners: [[f32; 2]; 4],
+    floor: f32,
+    ceiling: f32,
+    region: u32,
+    other: u32,
+    kind: u32,
+    pad: u32,
+}
+
+const _: () = assert!(std::mem::size_of::<GpuRegionVolume>() == 56);
+
+/// `REGION_NONE` in `probes.slang`: a probe in a recess or a doorway, no region's.
+const REGION_NONE: u32 = u32::MAX;
+
+/// The side of the cells of the grid that finds a point's region volumes, metres.
+const REGION_CELL: f32 = 2.0;
+
+/// What a region volume is (D-068, `RegionVolume` in `probes.slang`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RegionKind {
+    /// A room, a hall: its probes light its surfaces.
+    Room,
+    /// A window's inner reveal, from the glass to the room: its room's surfaces, and no probe of
+    /// any region stands in it.
+    Recess,
+    /// A doorway between two regions: across it, the light goes from one side's probes to the
+    /// other's; no probe of any region stands in it.
+    Doorway,
+    /// A house's body outside its rooms (its walls, its slabs), last of all: a surface there is
+    /// lit by every probe, as without regions (a face whose point 2 cm off it missed its room's
+    /// outline: a corner, a ceiling's edge), and no probe of any region stands in it.
+    Solid,
+}
+
+/// A volume of a scene that knows its rooms (D-068): a prism over a convex quadrilateral, in the
+/// scene frame (the probes', [`Probes::update`]'s `camera`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RegionVolume {
+    /// Its outline, x and z in the scene frame, either way round; a doorway's first two corners
+    /// on `region`'s side, its last two on `other`'s.
+    pub corners: [glam::Vec2; 4],
+    /// Its floor and its ceiling, metres in the scene frame.
+    pub floor: f32,
+    /// See `floor`.
+    pub ceiling: f32,
+    /// Its region, 1 and up (0 is outside): a doorway's side of its first two corners.
+    pub region: u32,
+    /// A doorway's other side (0: outside); else `region`.
+    pub other: u32,
+    /// What it is.
+    pub kind: RegionKind,
+}
+
+/// What [`region_at`] finds at a point (`RegionHit` in `probes.slang`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RegionHit {
+    /// The volume's kind; outside every volume, a room's.
+    pub kind: RegionKind,
+    /// Its region (0 outside): on a doorway, the side its ramp starts from.
+    pub region: u32,
+    /// A doorway's other side; else `region`.
+    pub other: u32,
+    /// How far across a doorway the point stands, 0 on `region`'s side to 1 on `other`'s;
+    /// else 0.
+    pub ramp: f32,
+}
+
+impl RegionHit {
+    /// How much region `region`'s probes count at the point (the lookup's `share`): fully in
+    /// their own room, across a doorway as far as the point stands towards their side, else
+    /// not at all.
+    pub fn share(&self, region: u32) -> f32 {
+        if region == self.region {
+            1.0 - self.ramp
+        } else if region == self.other {
+            self.ramp
+        } else {
+            0.0
+        }
+    }
+}
+
+/// The region at `p` (scene frame) among `volumes`, as the probes' lookup finds it
+/// (`region_at` in `probes.slang`, for tests and tools): the first volume holding it in the
+/// lookup's order, recesses and doorways, then rooms, then the houses' bodies; outside them
+/// all, region 0.
+pub fn region_at(volumes: &[RegionVolume], p: Vec3) -> RegionHit {
+    let xz = glam::Vec2::new(p.x, p.z);
+    for v in ordered(volumes) {
+        if p.y < v.floor || p.y > v.ceiling {
+            continue;
+        }
+        let c = v.corners.map(glam::Vec2::from);
+        let inside = (0..4).all(|k| {
+            let e = c[(k + 1) % 4] - c[k];
+            let d = xz - c[k];
+            e.x * d.y - e.y * d.x >= 0.0
+        });
+        if !inside {
+            continue;
+        }
+        let kind = match v.kind {
+            0 => RegionKind::Room,
+            1 => RegionKind::Recess,
+            2 => RegionKind::Doorway,
+            _ => RegionKind::Solid,
+        };
+        let ramp = if kind == RegionKind::Doorway {
+            let e = c[1] - c[0];
+            let across = glam::Vec2::new(-e.y, e.x).normalize();
+            let depth = (c[3] - c[0]).dot(across);
+            ((xz - c[0]).dot(across) / depth.max(1e-4)).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        return RegionHit {
+            kind,
+            region: v.region,
+            other: v.other,
+            ramp,
+        };
+    }
+    RegionHit {
+        kind: RegionKind::Room,
+        region: 0,
+        other: 0,
+        ramp: 0.0,
+    }
+}
 
 /// Mirrors `ProbeTracePush` in `meshlet.slang`.
 #[repr(C)]
@@ -177,6 +320,8 @@ pub struct ProbeLight {
     /// The frame's `ProbeField` (`probes.slang`).
     pub(crate) address: u64,
     pub(crate) data: BufferHandle,
+    /// Each probe's region (D-068).
+    pub(crate) region: BufferHandle,
     pub(crate) irradiance: ImageHandle,
     pub(crate) distance: ImageHandle,
 }
@@ -225,6 +370,101 @@ fn frame_rotation(index: u64) -> Mat3 {
     )
 }
 
+/// A scene's region volumes on the GPU (D-068) and the grid over them.
+struct Regions {
+    volumes: Buffer,
+    cells: Buffer,
+    indices: Buffer,
+    origin: [f32; 2],
+    dims: [u32; 2],
+    count: u32,
+}
+
+/// The volumes in the order the lookup tries them, recesses and doorways first (they overlap
+/// their rooms' edges), the houses' bodies last (round their rooms), each anticlockwise in x and z
+/// (a doorway turned round swaps its sides).
+fn ordered(volumes: &[RegionVolume]) -> Vec<GpuRegionVolume> {
+    let mut out: Vec<GpuRegionVolume> = volumes
+        .iter()
+        .map(|v| {
+            let c = v.corners;
+            let area: f32 = (0..4)
+                .map(|i| {
+                    let (a, b) = (c[i], c[(i + 1) % 4]);
+                    a.x * b.y - b.x * a.y
+                })
+                .sum();
+            let (corners, region, other) = if area >= 0.0 {
+                (c, v.region, v.other)
+            } else {
+                ([c[3], c[2], c[1], c[0]], v.other, v.region)
+            };
+            GpuRegionVolume {
+                corners: corners.map(|p| p.to_array()),
+                floor: v.floor,
+                ceiling: v.ceiling,
+                region,
+                other,
+                kind: match v.kind {
+                    RegionKind::Room => 0,
+                    RegionKind::Recess => 1,
+                    RegionKind::Doorway => 2,
+                    RegionKind::Solid => 3,
+                },
+                pad: 0,
+            }
+        })
+        .collect();
+    // Recesses and doorways, then the rooms, then the houses' bodies.
+    out.sort_by_key(|v| match v.kind {
+        1 | 2 => 0,
+        0 => 1,
+        _ => 2,
+    });
+    out
+}
+
+/// The grid over `volumes` ([`REGION_CELL`] cells): its corner, its size in cells, and per cell
+/// the first of its volumes' indices and their count, then the indices.
+fn region_grid(volumes: &[GpuRegionVolume]) -> ([f32; 2], [u32; 2], Vec<[u32; 2]>, Vec<u32>) {
+    let (mut lo, mut hi) = (glam::Vec2::splat(f32::MAX), glam::Vec2::splat(f32::MIN));
+    for v in volumes {
+        for c in v.corners {
+            lo = lo.min(glam::Vec2::from(c));
+            hi = hi.max(glam::Vec2::from(c));
+        }
+    }
+    let origin = lo - glam::Vec2::splat(REGION_CELL);
+    let dims = ((hi - origin) / REGION_CELL).ceil().as_uvec2() + glam::UVec2::ONE;
+    let mut lists: Vec<Vec<u32>> = vec![Vec::new(); (dims.x * dims.y) as usize];
+    for (i, v) in volumes.iter().enumerate() {
+        let (mut a, mut b) = (glam::Vec2::splat(f32::MAX), glam::Vec2::splat(f32::MIN));
+        for c in v.corners {
+            a = a.min(glam::Vec2::from(c));
+            b = b.max(glam::Vec2::from(c));
+        }
+        let (c0, c1) = (
+            ((a - origin) / REGION_CELL).floor().as_uvec2(),
+            ((b - origin) / REGION_CELL)
+                .floor()
+                .as_uvec2()
+                .min(dims - 1),
+        );
+        for z in c0.y..=c1.y {
+            for x in c0.x..=c1.x {
+                lists[(z * dims.x + x) as usize].push(i as u32);
+            }
+        }
+    }
+    let mut cells = Vec::with_capacity(lists.len());
+    let mut indices = Vec::new();
+    for list in lists {
+        cells.push([indices.len() as u32, list.len() as u32]);
+        indices.extend(list);
+    }
+    (origin.to_array(), dims.to_array(), cells, indices)
+}
+
 /// The probes: their maps, their rays and state, and the passes that update them.
 pub struct Probes {
     params: ProbeParams,
@@ -237,6 +477,10 @@ pub struct Probes {
     distance: GraphImage,
     rays: GraphBuffer,
     data: GraphBuffer,
+    /// Each probe's region (D-068), `REGION_NONE` until its first update with regions.
+    region: GraphBuffer,
+    /// The scene's region volumes and the grid that finds them, when it knows its rooms.
+    regions: Option<Regions>,
     fields: Vec<Buffer>,
     /// Per cascade, the origin of the last update.
     origins: [IVec3; MAX_CASCADES],
@@ -310,6 +554,18 @@ impl Probes {
         })?;
         let inactive = vec![[0.0, 0.0, 0.0, PROBE_INACTIVE]; probes as usize];
         device.write_buffer_staged(&data, 0, bytemuck::cast_slice(&inactive))?;
+        let region = device.create_buffer(BufferDesc {
+            size: probes * 4,
+            usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+            location: MemoryLocation::GpuOnly,
+            category: MemoryCategory::Work,
+            name: "probe regions",
+        })?;
+        device.write_buffer_staged(
+            &region,
+            0,
+            bytemuck::cast_slice(&vec![REGION_NONE; probes as usize]),
+        )?;
         let fields = (0..FRAMES_IN_FLIGHT)
             .map(|i| {
                 device.create_buffer(BufferDesc {
@@ -355,10 +611,48 @@ impl Probes {
             distance: atlas(DISTANCE_TILE, vk::Format::R16G16_SFLOAT, "probe distance")?,
             rays,
             data: GraphBuffer::new(data),
+            region: GraphBuffer::new(region),
+            regions: None,
             fields,
             origins: [IVec3::ZERO; MAX_CASCADES],
             reset: true,
         })
+    }
+
+    /// The scene's rooms (D-068, `research/probe-leaks-indoors.md`): a probe then lights only
+    /// the surfaces of its own region, across a doorway both sides' in proportion, and outside
+    /// every volume the outside's. None: every probe lights every surface, as before. Every
+    /// probe starts over at the next update.
+    pub fn set_regions(&mut self, device: &Arc<Device>, volumes: &[RegionVolume]) -> Result<()> {
+        self.reset = true;
+        if volumes.is_empty() {
+            self.regions = None;
+            return Ok(());
+        }
+        let ordered = ordered(volumes);
+        let (origin, dims, cells, indices) = region_grid(&ordered);
+        let buffer = |bytes: &[u8], name: &str| -> Result<Buffer> {
+            let buffer = device.create_buffer(BufferDesc {
+                size: bytes.len().max(4) as u64,
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+                location: MemoryLocation::GpuOnly,
+                category: MemoryCategory::Work,
+                name,
+            })?;
+            if !bytes.is_empty() {
+                device.write_buffer_staged(&buffer, 0, bytes)?;
+            }
+            Ok(buffer)
+        };
+        self.regions = Some(Regions {
+            volumes: buffer(bytemuck::cast_slice(&ordered), "probe region volumes")?,
+            cells: buffer(bytemuck::cast_slice(&cells), "probe region cells")?,
+            indices: buffer(bytemuck::cast_slice(&indices), "probe region indices")?,
+            origin,
+            dims,
+            count: ordered.len() as u32,
+        });
+        Ok(())
     }
 
     /// The layout and update this was made with.
@@ -381,6 +675,11 @@ impl Probes {
             + texels(DISTANCE_TILE) * 4
             + self.rays.size()
             + self.data.size()
+            + self.region.size()
+            + self
+                .regions
+                .as_ref()
+                .map_or(0, |r| r.volumes.size() + r.cells.size() + r.indices.size())
     }
 
     /// Every probe's offset from its cell's centre (xyz, metres) and state and age (w: the
@@ -476,6 +775,15 @@ impl Probes {
             settled_hysteresis: p.hysteresis.powi(p.cadence as i32),
             cadence: p.cadence,
             phase: (noise_frame % u64::from(p.cadence)) as u32,
+            probe_region: self.region.address(),
+            region_volumes: self.regions.as_ref().map_or(0, |r| r.volumes.address()),
+            region_cells: self.regions.as_ref().map_or(0, |r| r.cells.address()),
+            region_indices: self.regions.as_ref().map_or(0, |r| r.indices.address()),
+            region_origin: self.regions.as_ref().map_or([0.0; 2], |r| r.origin),
+            region_cell: REGION_CELL,
+            region_count: self.regions.as_ref().map_or(0, |r| r.count),
+            region_dims: self.regions.as_ref().map_or([0; 2], |r| r.dims),
+            region_pad: [0; 2],
         };
         self.fields[slot.index].write(0, &[field]);
 
@@ -484,6 +792,7 @@ impl Probes {
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
         let rays = graph.import_buffer(&this.rays);
         let data = graph.import_buffer(&this.data);
+        let region = graph.import_buffer(&this.region);
         let irradiance = graph.import(&this.irradiance);
         let distance = graph.import(&this.distance);
         let count = p.probe_count();
@@ -522,6 +831,7 @@ impl Probes {
             .image(irradiance, ImageAccess::Sampled(compute))
             .image(distance, ImageAccess::Sampled(compute))
             .buffer(data, BufferAccess::ShaderRead(compute))
+            .buffer(region, BufferAccess::ShaderRead(compute))
             .buffer(rays, BufferAccess::ShaderWrite(compute))
             .with(|b| MoversFrame::declare(movers, b, compute, true))
             .run(move |_, commands| {
@@ -550,6 +860,7 @@ impl Probes {
             .queue(QueueKind::Compute)
             .buffer(rays, BufferAccess::ShaderRead(compute))
             .buffer(data, BufferAccess::ShaderReadWrite(compute))
+            .buffer(region, BufferAccess::ShaderReadWrite(compute))
             .run(move |_, commands| {
                 commands.bind_pipeline(state);
                 commands.push_constants(state, &push);
@@ -573,6 +884,7 @@ impl Probes {
         ProbeLight {
             address,
             data,
+            region,
             irradiance,
             distance,
         }
@@ -582,6 +894,140 @@ impl Probes {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use glam::Vec2;
+
+    /// A box's outline from (x0, z0) to (x1, z1).
+    fn outline(x0: f32, z0: f32, x1: f32, z1: f32) -> [Vec2; 4] {
+        [
+            Vec2::new(x0, z0),
+            Vec2::new(x1, z0),
+            Vec2::new(x1, z1),
+            Vec2::new(x0, z1),
+        ]
+    }
+
+    /// Two rooms 4 m wide, a partition between them at x = 4 with a doorway, a window's reveal
+    /// in the first room's outer wall at z = 0, and the house's body round them, given first.
+    fn little_house() -> Vec<RegionVolume> {
+        let room = |region, x0, x1| RegionVolume {
+            corners: outline(x0, 0.0, x1, 4.0),
+            floor: 0.0,
+            ceiling: 3.0,
+            region,
+            other: region,
+            kind: RegionKind::Room,
+        };
+        vec![
+            RegionVolume {
+                corners: outline(-0.3, -0.3, 8.3, 4.3),
+                floor: -0.5,
+                ceiling: 3.3,
+                region: 0,
+                other: 0,
+                kind: RegionKind::Solid,
+            },
+            room(1, 0.0, 3.9),
+            room(2, 4.1, 8.0),
+            // Corners 0–1 on room 1's side, 3–2 on room 2's, clockwise: the lookup turns it
+            // round and swaps its sides.
+            RegionVolume {
+                corners: [
+                    Vec2::new(3.89, 1.0),
+                    Vec2::new(3.89, 2.0),
+                    Vec2::new(4.11, 2.0),
+                    Vec2::new(4.11, 1.0),
+                ],
+                floor: 0.0,
+                ceiling: 2.1,
+                region: 1,
+                other: 2,
+                kind: RegionKind::Doorway,
+            },
+            RegionVolume {
+                corners: outline(1.0, -0.3, 2.0, 0.01),
+                floor: 0.9,
+                ceiling: 2.1,
+                region: 1,
+                other: 1,
+                kind: RegionKind::Recess,
+            },
+        ]
+    }
+
+    /// D-068's lookup: rooms, a doorway's ramp either way round, a reveal, the body, outside.
+    #[test]
+    fn region_at_finds_rooms_doorways_reveals_and_the_body() {
+        let v = little_house();
+        let at = |x, y, z| region_at(&v, Vec3::new(x, y, z));
+        assert_eq!(at(2.0, 1.5, 2.0).kind, RegionKind::Room);
+        assert_eq!(at(2.0, 1.5, 2.0).region, 1);
+        assert_eq!(at(6.0, 1.5, 2.0).region, 2);
+        // Across the doorway, room 1's probes give way to room 2's.
+        let near = at(3.9, 1.0, 1.5);
+        assert_eq!(near.kind, RegionKind::Doorway);
+        assert!(near.share(1) > 0.9 && near.share(2) < 0.1, "{near:?}");
+        let middle = at(4.0, 1.0, 1.5);
+        assert!((middle.share(1) - 0.5).abs() < 0.01, "{middle:?}");
+        assert!((middle.share(2) - 0.5).abs() < 0.01, "{middle:?}");
+        assert!(at(4.1, 1.0, 1.5).share(2) > 0.9);
+        assert_eq!(at(4.0, 1.0, 1.5).share(3), 0.0);
+        // Over the doorway's head and beside it, the partition: the body's.
+        assert_eq!(at(4.0, 2.5, 1.5).kind, RegionKind::Solid);
+        assert_eq!(at(4.0, 1.0, 3.0).kind, RegionKind::Solid);
+        // The window's reveal is its room's, before the room's own outline.
+        let reveal = at(1.5, 1.5, -0.15);
+        assert_eq!((reveal.kind, reveal.region), (RegionKind::Recess, 1));
+        assert_eq!(at(1.5, 1.5, 0.005).kind, RegionKind::Recess);
+        assert_eq!(at(3.0, 1.5, 0.02).kind, RegionKind::Room);
+        // Outside the house and over its roof.
+        for p in [Vec3::new(10.0, 1.5, 2.0), Vec3::new(2.0, 3.5, 2.0)] {
+            let o = region_at(&v, p);
+            assert_eq!((o.kind, o.region), (RegionKind::Room, 0), "{p}");
+        }
+    }
+
+    /// The grid the shader walks finds what the plain lookup finds: each volume listed in every
+    /// cell it covers.
+    #[test]
+    fn region_grid_lists_every_volume_where_it_stands() {
+        let v = little_house();
+        let gpu = ordered(&v);
+        let (origin, dims, cells, indices) = region_grid(&gpu);
+        for i in 0..400 {
+            let p = Vec3::new(
+                -1.0 + 10.0 * ((i % 20) as f32 + 0.37) / 20.0,
+                1.2,
+                -1.0 + 6.0 * ((i / 20) as f32 + 0.61) / 20.0,
+            );
+            let c = ((Vec2::new(p.x, p.z) - Vec2::from(origin)) / REGION_CELL).floor();
+            let listed: Vec<RegionVolume> =
+                if c.x < 0.0 || c.y < 0.0 || c.x >= dims[0] as f32 || c.y >= dims[1] as f32 {
+                    Vec::new()
+                } else {
+                    let [first, count] = cells[(c.y as u32 * dims[0] + c.x as u32) as usize];
+                    indices[first as usize..(first + count) as usize]
+                        .iter()
+                        .map(|&k| {
+                            let g = gpu[k as usize];
+                            RegionVolume {
+                                corners: g.corners.map(Vec2::from),
+                                floor: g.floor,
+                                ceiling: g.ceiling,
+                                region: g.region,
+                                other: g.other,
+                                kind: [
+                                    RegionKind::Room,
+                                    RegionKind::Recess,
+                                    RegionKind::Doorway,
+                                    RegionKind::Solid,
+                                ][g.kind as usize],
+                            }
+                        })
+                        .collect()
+                };
+            assert_eq!(region_at(&listed, p), region_at(&v, p), "{p}");
+        }
+    }
 
     /// `oct_encode` in `probes.slang`.
     fn oct_encode(d: Vec3) -> [f32; 2] {

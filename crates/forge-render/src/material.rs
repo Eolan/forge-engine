@@ -128,6 +128,10 @@ pub const MATERIAL_EMISSIVE_ABSOLUTE: u32 = 512;
 /// viewer, a mix of the two colours per instance.
 pub const MATERIAL_FOLIAGE: u32 = 1024;
 
+/// [`GpuMaterial`] flag: a window's glass a probe's ray from its room passes
+/// ([`forge_core::material::RenderLayer::glazed`], or `interior`; D-068).
+pub const MATERIAL_GLAZED: u32 = 2048;
+
 /// The textures a world's materials sample, uploaded with their mips and visible to every
 /// shader through the bindless set. Released when dropped.
 pub struct TextureSet {
@@ -472,6 +476,11 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
                     | if r.interior { MATERIAL_INTERIOR } else { 0 }
                     | if r.interior && r.shop {
                         MATERIAL_SHOP
+                    } else {
+                        0
+                    }
+                    | if r.interior || r.glazed {
+                        MATERIAL_GLAZED
                     } else {
                         0
                     }

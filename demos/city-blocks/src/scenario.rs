@@ -135,6 +135,12 @@ pub trait Running: Send {
     fn water(&mut self, _ctx: &Setup, _args: &Args) -> Result<Option<Water>> {
         Ok(None)
     }
+    /// Its rooms for the probes (D-068, [`forge_render::Probes::set_regions`]), in the world
+    /// frame: x, y up and z in metres from the world's origin. None by default: every probe
+    /// lights every surface.
+    fn probe_regions(&self) -> Vec<forge_render::RegionVolume> {
+        Vec::new()
+    }
     /// A key pressed: whether the scene took it. An Enter it takes starts the app's liquid over
     /// too.
     fn key_pressed(&mut self, code: KeyCode, camera: &FlyCamera) -> bool;

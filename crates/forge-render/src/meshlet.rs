@@ -84,6 +84,11 @@ impl CullFlags {
     /// The sun's shadow from 256 rays a pixel and frame, without the denoiser: the reference
     /// it is judged by (#172; a development view, `--shadow-reference`).
     pub const SHADOW_REFERENCE: u32 = 1 << 23;
+    /// With probe regions (D-068), tint each surface by the region whose probes light it: a
+    /// colour per room, green in a window's reveal, a doorway from its sides' colours, white in
+    /// a house's body, black outside, and red where none of the region's probes stood near and
+    /// every probe lit it (debug view).
+    pub const SHOW_REGIONS: u32 = 1 << 25;
     /// Everything on except the debug views.
     pub const DEFAULT: Self = Self(Self::CONE | Self::FRUSTUM | Self::OCCLUSION | Self::LOD);
 
@@ -4487,6 +4492,7 @@ impl MeshletRenderer {
         if let Some(p) = ambient.sky.and(ambient.probes) {
             builder = builder
                 .buffer(p.data, BufferAccess::ShaderRead(compute))
+                .buffer(p.region, BufferAccess::ShaderRead(compute))
                 .image(p.irradiance, ImageAccess::Sampled(compute))
                 .image(p.distance, ImageAccess::Sampled(compute));
         }
@@ -4544,6 +4550,7 @@ impl MeshletRenderer {
             if let Some(p) = ambient.sky.and(ambient.probes) {
                 builder = builder
                     .buffer(p.data, BufferAccess::ShaderRead(compute))
+                    .buffer(p.region, BufferAccess::ShaderRead(compute))
                     .image(p.irradiance, ImageAccess::Sampled(compute))
                     .image(p.distance, ImageAccess::Sampled(compute));
             }
@@ -4586,6 +4593,7 @@ impl MeshletRenderer {
             if let Some(p) = ambient.sky.and(ambient.probes) {
                 builder = builder
                     .buffer(p.data, BufferAccess::ShaderRead(compute))
+                    .buffer(p.region, BufferAccess::ShaderRead(compute))
                     .image(p.irradiance, ImageAccess::Sampled(compute))
                     .image(p.distance, ImageAccess::Sampled(compute));
             }
@@ -4638,6 +4646,7 @@ impl MeshletRenderer {
         if let Some(p) = probes {
             builder = builder
                 .buffer(p.data, BufferAccess::ShaderRead(compute))
+                .buffer(p.region, BufferAccess::ShaderRead(compute))
                 .image(p.irradiance, ImageAccess::Sampled(compute))
                 .image(p.distance, ImageAccess::Sampled(compute));
         }
