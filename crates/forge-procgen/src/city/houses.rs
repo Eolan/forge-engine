@@ -397,6 +397,8 @@ pub fn houses(
         d.plan = plan;
         prints[k] = footprint_of(lot, d);
     }
+    // Walls closer than a metre brought together (`snap`).
+    snap(&mut prints);
     lots.iter()
         .zip(drafts)
         .zip(prints)
@@ -410,6 +412,69 @@ pub fn houses(
             })
         })
         .collect()
+}
+
+/// Two houses' walls facing each other closer than a metre without touching: the first's wall
+/// brought onto the other's, so the two adjoin (houses are "united or adjoining", or 3 m apart,
+/// `research/house-layouts.md` rule 1). Two houses 10 cm apart each kept a party wall facing the
+/// gap. Walls facing each other along half a metre at least, within 0.5°.
+fn snap(prints: &mut [Option<Vec<DVec2>>]) {
+    let n = prints.len();
+    for i in 0..n {
+        for j in i + 1..n {
+            let (Some(p), Some(q)) = (prints[i].clone(), prints[j].clone()) else {
+                continue;
+            };
+            let (pn, qn) = (p.len(), q.len());
+            for e in 0..pn {
+                let (a0, a1) = (p[e], p[(e + 1) % pn]);
+                let ta = (a1 - a0).normalize_or_zero();
+                let out = DVec2::new(ta.y, -ta.x);
+                let length = a0.distance(a1);
+                let moved = (0..qn).find_map(|f| {
+                    let (b0, b1) = (q[f], q[(f + 1) % qn]);
+                    let tb = (b1 - b0).normalize_or_zero();
+                    let d = (b0 - a0).dot(out);
+                    let (u0, u1) = ((b0 - a0).dot(ta), (b1 - a0).dot(ta));
+                    let overlap = u0.max(u1).min(length) - u0.min(u1).max(0.0);
+                    (ta.dot(tb) < -0.99996 && d > 0.005 && d < 1.0 && overlap > 0.5).then_some(d)
+                });
+                if let Some(d) = moved {
+                    let mut p = p.clone();
+                    p[e] += out * d;
+                    p[(e + 1) % pn] += out * d;
+                    prints[i] = Some(p);
+                    break;
+                }
+                // Sharing a corner, their sides from it opening in a V (a row where the street
+                // bends, each house square to its own front: two houses touching at the front and
+                // a metre apart at the back): the first's side swung onto the other's, its far
+                // corner slid along its own back wall.
+                let Some(f) = (0..qn).find(|&f| q[(f + 1) % qn].distance(a0) < 0.01) else {
+                    continue;
+                };
+                let b = q[f];
+                let (u, w) = ((a1 - a0).normalize_or_zero(), (b - a0).normalize_or_zero());
+                let angle = u.angle_to(w).abs();
+                if !(0.003..0.26).contains(&angle) {
+                    continue;
+                }
+                // Where the back wall's line (a1 → next) meets the other's side (a0 → b).
+                let next = p[(e + 2) % pn];
+                let (d1, d2) = (next - a1, b - a0);
+                let denom = geom::cross(d1, d2);
+                if denom.abs() > 1e-9 {
+                    let s = geom::cross(a0 - a1, d2) / denom;
+                    if s.abs() < 1.0 {
+                        let mut p = p.clone();
+                        p[(e + 1) % pn] = a1 + d1 * s;
+                        prints[i] = Some(p);
+                        break;
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// The gap a house's back keeps from the next house straight behind it, metres: a light court

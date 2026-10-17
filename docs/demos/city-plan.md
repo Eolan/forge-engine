@@ -768,6 +768,11 @@ mesh to test navigations inside the houses"):
   ran past the lot and was cut to a sliver 0.9 m deep under a flat roof. A footprint already
   inside its lot is no longer cut by each side's half plane. A sharp tip whose region reaches
   past most of an edge is left open up to the edge's end.
+- *Walls brought together* (`houses::snap`, D-066's spirit). Two houses' walls facing each
+  other closer than a metre are brought to touch. Two houses sharing a front corner whose
+  sides open in a V (a row where the street bends, each square to its own front: touching at
+  the front, a metre apart at the back) have the first's side swung onto the other's. The
+  last sliver and the last two lone party walls were such a pair.
 - *Squarer houses* (`houses::houses`; the owner: "house surfaces are most likely to have
   something closer to a square shape than stretched out rectangle"). A plan over 1.6 times as
   wide as deep is laid again narrower, half a metre at a time from 3 m less: the one nearest 1.2
@@ -781,9 +786,9 @@ mesh to test navigations inside the houses"):
 | Anomaly | Before the night | Now |
 |---|---|---|
 | a habitable room without a window | 33 | 20 |
-| a sliver | 9 | 1 |
+| a sliver | 9 | 0 |
 | a free garden wall end | 11 | 5 |
-| a lone party wall | 17 | 2 |
+| a lone party wall | 17 | 0 |
 | a ridge step | 6 | 0 |
 | a flight off its side wall (new) | — | 0 (at its nearest point: the 8 counted at the side's middle touched a slanted side wall at one end) |
 | a storey's street front blank over 3 m (new) | 35 | 8 (the hall at the front's end by a party wall, else a garden's, a street's last) |
