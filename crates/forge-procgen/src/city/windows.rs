@@ -71,9 +71,17 @@ pub fn by_room(m: &Mass, s: &mut Structure, seed: u64) {
         .iter()
         .map(|r| (Some(r.kind), r.storey, r.outline.to_vec()))
         .collect();
-    if inner.stair.is_none() {
-        spaces.extend((0..s.storeys.len()).map(|k| (None, k, inner.hall.to_vec())));
-    }
+    // The hall on every storey without a stair, and on the upper storeys of a house with one: a
+    // landing along a side street showed it a blank wall the whole depth.
+    let first = usize::from(inner.stair.is_some());
+    spaces.extend((first..s.storeys.len()).map(|k| (None, k, inner.hall.to_vec())));
+    // The flights' feet, where no window stands within 1.5 m (the owner, 2026-10-16: "window too
+    // close to the stair bottom, should not happen").
+    let feet: Vec<DVec2> = inner
+        .stair
+        .map(|st| (st[0] + st[1]) * 0.5)
+        .into_iter()
+        .collect();
     for (kind, k, outline) in &spaces {
         let (kind, k) = (*kind, *k);
         let Some(storey) = s.storeys.get(k) else {
@@ -188,11 +196,15 @@ pub fn by_room(m: &Mass, s: &mut Structure, seed: u64) {
                 })
                 .collect();
             for along in centres {
-                // Clear of the doors and the shopfronts on that wall and storey.
+                // Clear of the doors and the shopfronts on that wall and storey, and of a
+                // flight's foot.
                 let (lo, hi) = (along - width * 0.5 - PIER, along + width * 0.5 + PIER);
+                let wall = &s.walls[w];
+                let at = wall.a + (wall.b - wall.a).normalize_or_zero() * along;
                 let blocked = out
                     .iter()
-                    .any(|o| o.wall == w && o.storey == k && o.span().0 < hi && o.span().1 > lo);
+                    .any(|o| o.wall == w && o.storey == k && o.span().0 < hi && o.span().1 > lo)
+                    || feet.iter().any(|f| f.distance(at) < 1.5 + width * 0.5);
                 if blocked {
                     continue;
                 }

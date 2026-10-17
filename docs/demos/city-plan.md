@@ -796,7 +796,7 @@ mesh to test navigations inside the houses"):
 | a lone party wall | 17 | 0 |
 | a ridge step | 6 | 0 |
 | a flight off its side wall (new) | — | 0 (at its nearest point: the 8 counted at the side's middle touched a slanted side wall at one end) |
-| a storey's street front blank over 3 m (new) | 35 | 8 (the hall at the front's end by a party wall, else a garden's, a street's last) |
+| a storey's street front blank over 3 m (new) | 35 | 3 (the hall at the front's end by a party wall, else a garden's, a street's last; landings on a street take a window, 1.5 m clear of a flight's foot) |
 | a room the walk misses (new) | 8 | 0 |
 | a flight whose foot it misses (new) | 0 | 0 |
 | an outside door it misses (new) | 1 | 0 (the house's front door, its index gone stale, `cores::reindex`) |
