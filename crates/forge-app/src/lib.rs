@@ -468,6 +468,11 @@ struct State<D: Demo> {
     ctx: Context,
     input: Input,
     needs_resize: Option<PhysicalSize<u32>>,
+    /// The last acquire found the swapchain out of date: the next frame recreates it even at the
+    /// window's size. A window as big as its monitor, which Windows moved off the monitor's
+    /// bounds, kept its size while every acquire failed: no frame, a core spinning (the timings'
+    /// 1440p asteroids, 2026-10-17).
+    stale_swapchain: bool,
     last_frame: Instant,
     last_title: Instant,
     config: AppConfig,
@@ -830,6 +835,7 @@ impl<D: Demo> State<D> {
             monitor,
             input: Input::default(),
             needs_resize: None,
+            stale_swapchain: false,
             last_frame: Instant::now(),
             last_title: Instant::now(),
             config,
@@ -904,7 +910,9 @@ impl<D: Demo> State<D> {
                 return Ok(());
             }
             let current = self.ctx.swapchain.extent();
-            if size.width != current.width || size.height != current.height {
+            if self.stale_swapchain || size.width != current.width || size.height != current.height
+            {
+                self.stale_swapchain = false;
                 self.ctx.swapchain.recreate(size.width, size.height)?;
                 self.ctx
                     .frames
@@ -1004,6 +1012,7 @@ impl<D: Demo> State<D> {
             .acquire(self.ctx.frames.image_available(slot))?
         else {
             self.needs_resize = Some(self.ctx.window.inner_size());
+            self.stale_swapchain = true;
             return Ok(());
         };
         self.ctx
