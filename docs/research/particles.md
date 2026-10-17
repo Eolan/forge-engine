@@ -137,6 +137,13 @@ motion vectors describe what lies behind them. Upscalers ask for them to be mark
 Forge's TAA already reads the splashes' reactive mask (#107). A particle pass writes the same mask,
 and the DLSS path passes it on as the transparency mask.
 
+*Measured 2026-10-18 (D-064, step 1):*
+- Streamline 2.14.16's DLSS ignores the mask as the bias-current-colour hint (29), the
+  reactive-mask hint (36) and the transparency hint (27): the output was bit-identical with and
+  without each.
+- It also refused the mask in `R8_UNORM`, so it was given a copy as `R32_SFLOAT`.
+- The DLSS half is left out until a DLSS version reads one of them.
+
 ## 6. Where the textures come from
 
 Smoke, fire and dust flipbooks, with their motion vectors and six-way responses, are baked from

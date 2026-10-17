@@ -2009,8 +2009,10 @@ Step 1 of D-064, grown from the splashes (#107).
 - sorting alpha-blended effects per emitter;
 - flipbooks and six-way smoke baked by our own stable-fluids solver;
 - the dust volume;
-- DLSS's transparency mask;
 - the village's chimneys at dusk and the walker's steps (#266).
+
+DLSS's own mask was tried and left out: this Streamline's DLSS reads none of the hints the
+reactive mask was tagged as, and the output stayed bit-identical (D-064).
 
 ## Captures
 

@@ -4501,7 +4501,14 @@ downloaded sets stay out unless the owner says otherwise.
 - **Numbers:** 492 particles at most, the draw 0.022 ms, 0.006 ms of simulation. Two runs are
   identical to the pixel.
 - **Next:** the probes, collisions, sorting, the baked flipbooks and six-way smoke, the dust
-  volume, DLSS's mask, and the village's chimneys and steps.
+  volume, and the village's chimneys and steps.
+- **Point 5's DLSS half, tried and left out (2026-10-18):** Streamline 2.14.16's DLSS reads none
+  of the hints.
+  - The reactive mask was tagged in turn as the bias-current-colour hint (type 29), the
+    reactive-mask hint (36) and the transparency hint (27), copied to `R32_SFLOAT` (Streamline
+    refused TAA's `R8_UNORM`: "Cannot have undefined format").
+  - The smoke yard under `--dlaa` came out bit-identical with and without each one.
+  - DLAA keeps its own handling of the particles. The attempt is not in the tree.
 
 ## D-065 — Lighting the insides: lamps by clustered lists until ReSTIR's patents are settled ✅ (proposed 2026-10-16, #270; the owner's go 2026-10-17: both, compared)
 
