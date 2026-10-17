@@ -4593,7 +4593,7 @@ unmatched sockets as three new kinds in `city::anomalies`; generation through it
 walls). `demos/city-plan.md`, "Sockets and rows", has the numbers. Next: the kit's modules' and
 the roofs' sockets, the garden walls' join pass, the pavements and roads.
 
-## D-067 — Local exposure: a bilateral grid of log luminance, built and used in one frame 🟡 (proposed 2026-10-17, #275)
+## D-067 — Local exposure: a bilateral grid of log luminance, built and used in one frame ✅ (proposed 2026-10-17, #275; the owner's go the same day)
 
 **The question:** the owner, walking into a village house: "light outside is very strong, I would
 expect the inside to be a bit brighter, maybe it's a fix in your roadmap later ?". D-022 meters
@@ -4641,7 +4641,12 @@ doorway in view sets it and the hall falls stops under middle grey. Research:
 - whether to build it now or after the lamps of D-065, which change how bright the halls are by
   themselves.
 
-## D-068 — Probe regions from the generator: a room's probes light only its own surfaces 🟡 (proposed 2026-10-17, #266)
+**Decided** (the owner, 2026-10-17): "D-067 go with recommendations". The method and defaults as
+proposed, built now, off by default until the owner has seen it; the grid built and used within
+one frame, keeping clear of STMicroelectronics' claims. Its patents' details and conditions of
+application are to be looked into further (D-068's note).
+
+## D-068 — Probe regions from the generator: a room's probes light only its own surfaces ✅ (proposed 2026-10-17, #266; the owner's go the same day)
 
 **The question:** after the village's probes moved to 1 m (ef27049) and the lookup kept the
 probes in front of a surface (22beb20), light still leaks indoors in two ways: a soft tinted
@@ -4698,3 +4703,15 @@ every opening and every stair hole.
 - what to do about Imagination's patent on the probes already in the engine (an opinion, or
   living with it until a sold product);
 - whether the two near-free fixes can go in first on their own.
+
+**Decided** (the owner, 2026-10-17): "D-068 go with recommendations, Square enix patent does not
+seems to concern us, so build the regions. The imagination one seems too broad and would
+appropriate the ray tracing technology itself. so let's live with it for now. And use the free
+fixes. Add a note to try to get more details on those patents. And what are the conditions of
+application of their patents just in case."
+- The regions are built as proposed, with the two near-free fixes.
+- Imagination's US 10,008,032 B2 family: lived with for now.
+- **To look into** (the owner's note): more details on these patents and the conditions under
+  which they apply (the claims' exact elements, the jurisdictions they hold in, which acts
+  infringe there, their status, fees and expiry, any licensing), Square Enix's, Imagination's
+  and STMicroelectronics' (D-067) first, in a research note before any sold product.
