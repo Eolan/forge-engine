@@ -786,6 +786,13 @@ mesh to test navigations inside the houses"):
   (its counter there, `furnish`): a bedroom on the level by the garden. A study with nowhere
   to go becomes a utility room. One bedroom is left in a middle, a comfortable household's on a
   third storey with no depth to spare.
+- *A front past a bend* (`houses::footprint_of`). A house across its whole lot followed the lot's
+  front round a bend in the street, 4.4 m past its frontage on the square's corner, but its
+  plan's rooms stop at the frontage: that wall had nothing behind it, blank on three storeys
+  (the last three blank street storeys). Where the lot's next edge goes on within 30° of the
+  front for 3 m or more, the house now keeps to its frontage and the rest is a garden, walled
+  along the street with a gate (shorter, the house keeps it, so no gap under 3 m opens to a
+  neighbour).
 - *Corners without a square lot* (`parcels::strips_by`, the owner's "still the diagonal
   issues"). At a corner of 30° or more whose square corner lot does not fit its edges, the two
   strips' end lots met on the corner's divider, a diagonal wall from the corner into the block.
@@ -824,7 +831,7 @@ mesh to test navigations inside the houses"):
 | a lone party wall | 17 | 0 |
 | a ridge step | 6 | 0 |
 | a flight off its side wall (new) | — | 0 (at its nearest point: the 8 counted at the side's middle touched a slanted side wall at one end) |
-| a storey's street front blank over 3 m (new) | 35 | 3 (the hall at the front's end by a party wall, else a garden's, a street's last; landings on a street take a window, 1.5 m clear of a flight's foot) |
+| a storey's street front blank over 3 m (new) | 35 | 0 (the hall at the front's end by a party wall, else a garden's, a street's last; landings on a street take a window, 1.5 m clear of a flight's foot; a house keeps to its frontage where the street bends) |
 | a room the walk misses (new) | 8 | 0 |
 | a flight whose foot it misses (new) | 0 | 0 |
 | an outside door it misses (new) | 1 | 0 (the house's front door, its index gone stale, `cores::reindex`) |

@@ -505,7 +505,22 @@ fn footprint_of(lot: &[DVec2], d: &Draft) -> Option<Vec<DVec2>> {
     let width = parcels::frontage(lot);
     if s0 < 0.05 && s1 > width - 0.05 && d.plan.depth <= d.room + 0.05 {
         let band = geom::clip_half_plane(lot, a + unit_in * d.plan.depth, -t);
-        let band = geom::clip_half_plane(&band, a, t);
+        let mut band = geom::clip_half_plane(&band, a, t);
+        // Where the street bends and the lot's front goes on past its frontage (the next edge
+        // within 30° of it and 3 m or more), the house keeps to its frontage, the rest a garden:
+        // its plan's rooms stop at the frontage, and the wall past the bend had nothing behind it,
+        // blank on every storey (the village's house 23, 4.4 m on three). Shorter, it keeps it,
+        // so no gap under 3 m opens to a neighbour.
+        let n = lot.len();
+        let goes_on = |p: DVec2, q: DVec2, dir: DVec2| {
+            p.distance(q) >= 3.0 && (q - p).normalize_or_zero().dot(dir) > 30f64.to_radians().cos()
+        };
+        if n > 3 && goes_on(lot[1], lot[2], t) {
+            band = geom::clip_half_plane(&band, a + t * s1, unit_in);
+        }
+        if n > 3 && goes_on(lot[0], lot[n - 1], -t) {
+            band = geom::clip_half_plane(&band, a + t * s0, -unit_in);
+        }
         let footprint = tidy(&geom::clean(&band, 1e-6));
         if footprint.len() >= 3 && geom::signed_area(&footprint).abs() >= 4.0 {
             return Some(footprint);
