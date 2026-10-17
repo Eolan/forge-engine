@@ -17,7 +17,7 @@ profiling = ["dep:tracy-client"]
 dlss = ["forge-gpu/dlss"]
 # A shipped game's build (D-069): the console keeps only the settings that show information
 # (`Flags::RELEASE`), none that gives an advantage.
-shipping = []
+shipping = ["forge-core/shipping"]
 # NVIDIA NRD's SIGMA for the sun's soft shadows (D-049; the library in `nrd-sdk/bin`).
 nrd = ["forge-gpu/nrd"]
 

@@ -64,6 +64,7 @@ pub mod island_sand;
 pub mod island_walk;
 pub mod scenario;
 pub mod traction;
+mod vars;
 mod world;
 
 use afloat::Barrels;
@@ -744,6 +745,10 @@ struct Gallery {
     camera: FlyCamera,
     flags: CullFlags,
     wireframe: bool,
+    /// The renderer's settings (D-069, `vars`), registered once the gallery is ready, and the
+    /// settings' change count they were last applied at.
+    vars: Option<vars::RenderVars>,
+    vars_seen: u64,
     frame: u64,
     stats: Vec<FrameStats>,
     gpu_ms: Vec<f64>,
@@ -1449,6 +1454,8 @@ impl Gallery {
             camera,
             flags,
             wireframe: false,
+            vars: None,
+            vars_seen: 0,
             frame: 0,
             stats: Vec::new(),
             gpu_ms: Vec::new(),
@@ -1561,7 +1568,7 @@ impl Demo for Gallery {
         Ok(())
     }
 
-    fn key_pressed(&mut self, _ctx: &mut Context, code: KeyCode) {
+    fn key_pressed(&mut self, ctx: &mut Context, code: KeyCode) {
         // The scene's keys first (#216): Space, X, Enter and C in the physics lab. An Enter it
         // takes starts it over, the tank's water too: seeded again, the tick that puts the gate
         // back skipped.
@@ -1573,30 +1580,13 @@ impl Demo for Gallery {
             }
             return;
         }
+        // The keys bound to the renderer's settings (D-069: T, G, B, X, N, P, I, Z, J, F, Y, O,
+        // L, R, [ and ], Tab, and the debug views M, K, H, V, U) set them; the next update
+        // applies them.
+        if self.vars_key(ctx, code) {
+            return;
+        }
         match code {
-            KeyCode::KeyO => self.flags.toggle(CullFlags::OCCLUSION),
-            KeyCode::KeyM => self.flags.toggle(CullFlags::MESHLET_COLORS),
-            KeyCode::KeyL => self.flags.toggle(CullFlags::LOD),
-            KeyCode::KeyK => self.flags.toggle(CullFlags::LOD_COLORS),
-            KeyCode::KeyR => self.args.sw_raster = self.args.sw_raster.next(),
-            KeyCode::KeyH => self.flags.toggle(CullFlags::SHOW_RASTER),
-            KeyCode::BracketLeft => self.args.lod_error = (self.args.lod_error * 0.5).max(0.125),
-            KeyCode::BracketRight => self.args.lod_error = (self.args.lod_error * 2.0).min(16.0),
-            KeyCode::Tab => self.wireframe = !self.wireframe,
-            KeyCode::KeyG => self.tonemap = self.tonemap.next(),
-            KeyCode::KeyB => self.bloom_on = !self.bloom_on,
-            KeyCode::KeyX => {
-                // Local exposure (D-067): off, on, on with its gain in false colours.
-                let s = &mut self.local_settings;
-                (s.enabled, s.view) = match (s.enabled, s.view) {
-                    (false, _) => (true, false),
-                    (true, false) => (true, true),
-                    (true, true) => (false, false),
-                };
-                let line = self.local_settings.line(self.local_middle());
-                tracing::info!(%line, "X: local exposure");
-            }
-            KeyCode::KeyI => self.sky_light = !self.sky_light,
             // Where the camera is, as `--view` takes it: to start a run where something was seen.
             KeyCode::F9 => {
                 let (p, c) = (self.camera.position, &self.camera);
@@ -1616,20 +1606,6 @@ impl Demo for Gallery {
                     tracing::info!(real = night.show_real, "the real sky");
                 }
             }
-            KeyCode::KeyN => self.ao_on = !self.ao_on,
-            KeyCode::KeyP => self.probes_on = !self.probes_on,
-            KeyCode::KeyV => self.flags.toggle(CullFlags::SHOW_AO),
-            KeyCode::KeyU => self.flags.toggle(CullFlags::SHOW_GI),
-            KeyCode::KeyF => self.flags.toggle(CullFlags::SKY_REFLECTIONS),
-            KeyCode::KeyY => self.flags.toggle(CullFlags::RAY_REFLECTIONS),
-            KeyCode::KeyZ => {
-                self.renderer.sun_angular_radius = if self.renderer.sun_angular_radius > 0.0 {
-                    0.0
-                } else {
-                    forge_render::starfield::SUN_ANGULAR_RADIUS_1AU * self.sun_scale
-                };
-            }
-            KeyCode::KeyJ => self.flags.toggle(CullFlags::SHADOWS),
             // NVIDIA's SIGMA over the sun's shadows, or the resolve's own ray (#172).
             // The sun's shadows' denoiser: SIGMA, FFX, none, then again (#172, #173).
             KeyCode::F6 if !self.sun_shadows.is_empty() => {
@@ -1647,30 +1623,6 @@ impl Demo for Gallery {
                     None => "none",
                 };
                 tracing::info!(denoiser = name, "the sun's shadows' denoiser");
-            }
-            // DLAA where it runs, TAA sharpened, plain, off (D-045).
-            KeyCode::KeyT => {
-                let dlaa = self.dlaa.is_some();
-                (self.dlaa_on, self.taa.enabled, self.taa.sharpen) =
-                    match (self.dlaa_on, self.taa.enabled, self.taa.sharpen) {
-                        (true, ..) => (false, true, Some(self.args.rcas)),
-                        (false, true, Some(_)) => (false, true, None),
-                        (false, true, None) => (false, false, None),
-                        (false, false, _) if dlaa => (true, true, Some(self.args.rcas)),
-                        (false, false, _) => (false, true, Some(self.args.rcas)),
-                    };
-                tracing::info!(
-                    anti_aliasing = if self.dlaa_on {
-                        "DLAA"
-                    } else if !self.taa.enabled {
-                        "none"
-                    } else if self.taa.sharpen.is_some() {
-                        "TAA, sharpened"
-                    } else {
-                        "TAA"
-                    }
-                );
-                self.taa.reset_history();
             }
             // Space: on the island, the walker jumps (#196).
             KeyCode::Space => {
@@ -1701,7 +1653,14 @@ impl Demo for Gallery {
         }
     }
 
-    fn update(&mut self, _ctx: &mut Context, input: &Input, dt: f32) {
+    fn register(&mut self, ctx: &mut Context) {
+        self.register_vars(&mut ctx.settings);
+    }
+
+    fn update(&mut self, ctx: &mut Context, input: &Input, dt: f32) {
+        // The settings changed since the last frame: the console's, the keys', and at the first
+        // frame those forge.cfg and --set gave (D-069).
+        self.apply_vars(&ctx.settings);
         let now = Instant::now();
         let ms = (now - self.last_frame).as_secs_f64() * 1e3;
         self.last_frame = now;

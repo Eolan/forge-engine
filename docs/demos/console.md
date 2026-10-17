@@ -56,6 +56,8 @@ number), `version`, `clear`. A change says what the value was: `r.display_info =
 
 ## What is registered so far
 
+The shell's, in every demo:
+
 | Name | What | Values | In a shipped game |
 |---|---|---|---|
 | `r.display_info` | the profile overlay (F1 steps through it) | 0 off, 1 on, 2 on (verbose) | yes |
@@ -63,9 +65,32 @@ number), `version`, `clear`. A change says what the value was: `r.display_info =
 | `app.capture [PATH]` | command: saves the next frame as a PNG | | no |
 | `app.quit` | command: closes the window | | yes |
 
-The demos' shared settings (anti-aliasing, exposure, shadows, probes, AO, reflections and the
-rest) move into the registry next, with one name and one default in every demo (D-069's second
-step).
+The renderer's (`forge_render::settings`: one name, range and help whichever demo registers
+them). The galleries (city-blocks, the island, the physics lab, the city plan) have them all; the
+key that sets each is in its help. A flag the demo still takes (`--no-ao`, `--tonemap aces`)
+sets the same setting, shown as "from command line": `--no-ao` and `--set r.ao=0` give the same
+image to the pixel.
+
+| Name | What | Values | Gallery default |
+|---|---|---|---|
+| `r.aa` | anti-aliasing (T steps through DLAA, TAA sharpened, TAA, off) | off, taa, dlaa | dlaa where it runs, else taa |
+| `r.taa.sharpen`, `r.taa.sharpen_stops` | RCAS over TAA's image, and how strong | 0, 1; 0..8 stops | 1; 0.5 |
+| `r.tonemap` | the tone curve (G) | agx, agx-punchy, aces, neutral, aces2, aces2-analytic | agx-punchy |
+| `r.bloom`, `r.bloom.strength` | bloom (B), its share of the image | 0, 1; 0..1 | 1; 0.04 |
+| `r.exposure.local` | local exposure, D-067 (X) | off, on, view | off |
+| `r.ao`, `r.ao.radius` | ambient occlusion (N), its reach | 0, 1; 0.05..16 m | 1; 1.5 m |
+| `r.probes` | the probes' diffuse light (P) | 0, 1 | 1 |
+| `r.sky_light` | the sky's light (I) | 0, 1 | 1 |
+| `r.shadows` | the sun's ray-traced shadows (J) | 0, 1 | 1 |
+| `r.reflections.sky`, `r.reflections.rays` | the sky's reflection (F), mirror rays (Y) | 0, 1 | 1, 1 |
+| `r.sun.disc` | the sun's disc at its true size (Z) | 0, 1 | 1 |
+| `r.cull.occlusion` | occlusion culling (O) | 0, 1 | 1 |
+| `r.lod`, `r.lod.error` | level of detail (L), its error in pixels ([ and ]) | 0, 1; 0.125..16 | 1; 1 |
+| `r.sw_raster` | the software rasteriser (R) | off, auto, on | auto |
+| `r.show.*` | debug views: `meshlets` (M), `lod` (K), `raster` (H), `ao` (V), `gi` (U), `culled`, `regions`, `wireframe` (Tab) | 0, 1 | 0 |
+
+The asteroids, the planet and the meshlets bench take the same names next, with their own
+defaults where their scenes want another look (ACES for the asteroids' black space).
 
 ## Shipped games
 

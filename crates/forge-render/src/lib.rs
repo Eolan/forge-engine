@@ -31,6 +31,7 @@ pub mod precision;
 pub mod probes;
 pub mod raytrace;
 pub mod reflection_history;
+pub mod settings;
 pub mod shallow;
 pub mod skin;
 pub mod sky;

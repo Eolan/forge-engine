@@ -10,6 +10,11 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# A shipped game's build (D-069): the settings registry keeps only the settings marked for
+# release, which show information and give no advantage.
+shipping = []
+
 [dependencies]
 glam = { workspace = true }
 libm = { workspace = true }

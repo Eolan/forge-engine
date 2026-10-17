@@ -15,6 +15,7 @@ pub mod id;
 pub mod material;
 pub mod pack;
 pub mod seed;
+pub mod settings;
 pub mod switch;
 
 pub use id::Handle;
