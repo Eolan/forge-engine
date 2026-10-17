@@ -3520,7 +3520,14 @@ fn soffits(
         // The cupboard under the flight (the owner, 2026-10-17: "Below the stairs there can be
         // different type of cupboard or things to fill up the space"): its side to the corridor
         // closed under the slope, its end under the head, and an oak door in the side where it
-        // stands 1.2 m or more, by the head (a coat cupboard by the front door).
+        // stands 1.2 m or more, by the head (a coat cupboard by the front door). Under the
+        // ground floor's flight only: the flights stack in one box, and under an upper one is the
+        // stairwell over the flight below. Its cupboard hung from that floor's level across the
+        // lower flight's head, three risers over its steps (the owner, 2026-10-17: "is there
+        // enough space for people to pass in this stair case?").
+        if k > 0 {
+            continue;
+        }
         let from_walls = |q: DVec2| {
             s.walls
                 .iter()
@@ -3627,13 +3634,14 @@ fn interior_solids(
                 let y1 = base + f64::from(i + 1) * rise;
                 out.push((tread, (y1 - rise - 0.15).max(base), y1, true));
             }
-            // The cupboard under the flight (`soffits` closes it): a metre of it a walker meets,
-            // where the slope stands over that, so no one walks in under the steps.
+            // The cupboard under the ground floor's flight (`soffits` closes it): a metre of it a
+            // walker meets, where the slope stands over that, so no one walks in under the steps.
+            // An upper flight stands over the stairwell (`soffits`).
             let (vc, v1) = (
                 cores::GOING * (1.0 + 1.15 / rise),
                 f64::from(r.saturating_sub(1)) * cores::GOING,
             );
-            if v1 > vc + 0.1 {
+            if k == 0 && v1 > vc + 0.1 {
                 let (p0, p1) = (inner.climb * vc, inner.climb * v1);
                 let under = vec![stair[0] + p0, stair[1] + p0, stair[1] + p1, stair[0] + p1];
                 out.push((under, base, base + 1.0, false));
@@ -7417,6 +7425,67 @@ mod tests {
         assert!(
             pairs as f64 >= km / 3.0 * 0.5,
             "{pairs} pairs on {km:.1} km"
+        );
+    }
+
+    /// Every flight of the village's houses keeps 2 m clear over each tread, across its width:
+    /// no solid of the insides (the flight above, a cupboard, a partition) nor an upper floor in
+    /// that height. Under the flight above, the cupboard closed under it hung across a lower
+    /// flight's head in the houses of three storeys (the owner, 2026-10-17: "is there enough space
+    /// for people to pass in this stair case?").
+    #[test]
+    fn the_village_flights_keep_two_metres_over_their_treads() {
+        let size = 600.0;
+        let site = example::site(size, 10.0);
+        let v = forge_procgen::city::village::village(
+            &site,
+            &forge_procgen::city::village::params(size),
+            1,
+        );
+        let structures = structure::structures(&v.plan, &v.masses);
+        let going = cores::GOING;
+        let (mut treads, mut low) = (0, Vec::new());
+        for (m, s) in v.masses.iter().zip(&structures) {
+            let Some(inner) = interior::house(m, s) else {
+                continue;
+            };
+            let Some(stair) = inner.stair else {
+                continue;
+            };
+            let solids = interior_solids(s, &inner, m.height);
+            let floors = interior_floors(m, s, &inner);
+            let across = stair[1] - stair[0];
+            for (k, &r) in inner.risers.iter().enumerate() {
+                if k + 1 >= s.storeys.len() || r == 0 {
+                    break;
+                }
+                let base = floor_level(s, k);
+                let rise = (s.storeys[k + 1].level - base) / f64::from(r);
+                for i in 0..r - 1 {
+                    let y = base + f64::from(i + 1) * rise;
+                    for u in [0.2, 0.5, 0.8] {
+                        let p =
+                            stair[0] + inner.climb * ((f64::from(i) + 0.5) * going) + across * u;
+                        treads += 1;
+                        let (from, to) = (y + 0.05, y + 2.0);
+                        let blocked = solids
+                            .iter()
+                            .map(|(ring, y0, y1, _)| (ring, *y0, *y1))
+                            .chain(floors.iter().map(|(ring, y0, y1)| (ring, *y0, *y1)))
+                            .any(|(ring, y0, y1)| y0 < to && y1 > from && geom::contains(ring, p));
+                        if blocked {
+                            low.push((m.lot, k, i));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(treads > 1000, "{treads}");
+        assert!(
+            low.is_empty(),
+            "{} of {treads} tread points under 2 m: {:?}",
+            low.len(),
+            &low[..low.len().min(8)]
         );
     }
 

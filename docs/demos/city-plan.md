@@ -734,7 +734,11 @@ mesh to test navigations inside the houses"):
   rectangle"). Under the flight a cupboard (the owner: "Below the stairs there can be
   different type of cupboard"): its side to the corridor closed under the slope, its end under
   the head, an oak door with its knob by the head where it stands 1.2 m or more (a coat
-  cupboard by the front door), and a metre of it in the walker's pieces.
+  cupboard by the front door), and a metre of it in the walker's pieces. Under the ground
+  floor's flight only: the flights stack in one box, and the cupboard under an upper one hung
+  across the stair below it, three risers over its steps, in every house of three storeys (the
+  owner, from the landing: "is there enough space for people to pass in this stair case?"). A
+  test now finds 2 m clear over every tread of the village's flights, across their width.
 - *The walk* (`city::walk`, the first stage of the navigation `research/game-ai-ecosystems.md`
   plans, Recast's voxel step). Each storey of a house with its insides is rasterised at 5 cm:
   the floor inside the walls, the partitions open at their doorways, the furniture and the
