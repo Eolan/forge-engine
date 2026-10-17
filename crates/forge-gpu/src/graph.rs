@@ -59,7 +59,10 @@
 //! ambient occlusion first, then SIGMA) came out one of two ways in some frames from inputs
 //! that hashed alike, though no barrier is missing that validation, the hashes or the AMD iGPU
 //! show; the frame then parted from the async one. It costs the serial frame 0.18 ms (1.96 →
-//! 2.13–2.15 ms in the yard) and the async frame nothing. `FORGE_SERIAL_BARRIERS=0` leaves them out.
+//! 2.13–2.15 ms in the yard) and the async frame nothing. Since 2026-10-17 it also stands before
+//! every dispatch, rendering, blit and acceleration-structure build in a pass: with one before
+//! each pass alone, the physics lab's dominoes still parted in the serial batch, the shading's
+//! output from inputs that hashed alike. `FORGE_SERIAL_BARRIERS=0` leaves them all out.
 //!
 //! Debugging: `FORGE_GRAPH_LOG=1` logs the compiled plan (passes, barriers, transient
 //! placement) whenever it changes; `FORGE_GRAPH_NO_ALIAS=1` gives every transient its own
@@ -1847,8 +1850,8 @@ pub struct RenderGraph {
     relayout_at: Option<u32>,
     /// The frames with transients this graph executed.
     executed: u32,
-    /// A full barrier before every pass (#207): on NVIDIA's serial frame (no async compute
-    /// queue), unless `FORGE_SERIAL_BARRIERS=0`.
+    /// A full barrier before every pass and every command in it (#207): on NVIDIA's serial
+    /// frame (no async compute queue), unless `FORGE_SERIAL_BARRIERS=0`.
     serial_barriers: bool,
     /// What each queue's batches waited for on the other queues, from frame to frame (#104).
     waited: Waited,
@@ -2252,6 +2255,10 @@ impl RenderGraph {
                 );
             }
             started[batch.queue.index()] = true;
+            // And before every command in it (2026-10-17): with a barrier before each pass
+            // alone, the physics lab's dominoes still came out one of two ways in the serial
+            // batch, the shading's output from inputs that hashed alike.
+            commands.set_barrier_every_command(self.serial_barriers);
             while let Some((pass, plan)) = work.next_if(|(_, plan)| plan.batch == index) {
                 if self.serial_barriers || (laid_out && plan.first_transient) {
                     // The transients are new this frame (#204): in the serial frame on the

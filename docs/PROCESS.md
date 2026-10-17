@@ -405,8 +405,10 @@ reach the GPU, and in Tier 2, and put its lines in the report.
   queue, `EXCLUSIVE` sharing): the serial reference to compare an async frame with (issue
   #77). Captures must match in both modes. On NVIDIA the serial frame puts a full barrier
   before every pass (#207: without, the yard's frame came out one of two ways from inputs that
-  hashed alike); `FORGE_SERIAL_BARRIERS=0` leaves them out, to study that, and the AMD iGPU's
-  serial frame (`FORGE_GPU=amd`) still shows a missing barrier between passes.
+  hashed alike), and since 2026-10-17 before every command in a pass too (the lab's dominoes
+  still parted, the shading's output from inputs that hashed alike); `FORGE_SERIAL_BARRIERS=0`
+  leaves them out, to study that, and the AMD iGPU's serial frame (`FORGE_GPU=amd`) still shows
+  a missing barrier between passes.
 - `FORGE_FRAME_BARRIER=1` puts a full barrier at the start of each queue's first batch,
   which serialises frames on the GPU.
 - The transients (#204):

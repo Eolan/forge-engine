@@ -16,6 +16,9 @@ pub struct Commands<'a> {
     timers: Option<&'a GpuTimerSlot>,
     /// The label of the render-graph pass being recorded (the debugging barrier's filter).
     pass: std::cell::Cell<&'static str>,
+    /// A full barrier before every dispatch, draw and blit: NVIDIA's serial frame (#207,
+    /// [`crate::graph`]).
+    every_command: std::cell::Cell<bool>,
 }
 
 impl<'a> Commands<'a> {
@@ -38,9 +41,16 @@ impl<'a> Commands<'a> {
         self.pass.set(label);
     }
 
-    /// `FORGE_PARANOID_BARRIERS=1`: a full memory barrier before every dispatch, draw and blit
-    /// (debugging aid to tell an intra-frame ordering bug from anything else). A comma-separated
-    /// list of pass-label prefixes (`ao/,dust/`) limits it to those passes.
+    /// Puts a full barrier before every dispatch, draw and blit recorded from now on, or stops
+    /// (NVIDIA's serial frame, #207: the render graph sets it).
+    pub(crate) fn set_barrier_every_command(&self, on: bool) {
+        self.every_command.set(on);
+    }
+
+    /// A full memory barrier before every dispatch, draw and blit: in NVIDIA's serial frame
+    /// ([`Commands::set_barrier_every_command`]), or with `FORGE_PARANOID_BARRIERS=1` (debugging
+    /// aid to tell an intra-frame ordering bug from anything else; a comma-separated list of
+    /// pass-label prefixes, `ao/,dust/`, limits it to those passes).
     fn paranoid_barrier(&self) {
         static PARANOID: std::sync::OnceLock<Option<Vec<String>>> = std::sync::OnceLock::new();
         let filter = PARANOID.get_or_init(|| {
@@ -52,9 +62,10 @@ impl<'a> Commands<'a> {
             }
         });
         let pass = self.pass.get();
-        if let Some(filter) = filter
-            && (filter.is_empty() || filter.iter().any(|p| pass.starts_with(p.as_str())))
-        {
+        let asked = filter
+            .as_ref()
+            .is_some_and(|f| f.is_empty() || f.iter().any(|p| pass.starts_with(p.as_str())));
+        if self.every_command.get() || asked {
             self.memory_barrier(
                 vk::PipelineStageFlags2::ALL_COMMANDS,
                 vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
@@ -71,6 +82,7 @@ impl<'a> Commands<'a> {
             cb,
             timers: None,
             pass: std::cell::Cell::new(""),
+            every_command: std::cell::Cell::new(false),
         }
     }
 
