@@ -4445,7 +4445,7 @@ village's trees and shrubs (#266) are grown, where they stand, and how the city'
 Weber–Penn's recursive levels as the generator (kept only as the idea of a flat species file);
 shadow propagation within one plant (the markers stand for both space and light at this scale).
 
-## D-064 — Particles: the splashes grown into emitters as data, lit per particle, textures baked by our own solver 🟡 (proposed 2026-10-16, D-062's next core step after the flora)
+## D-064 — Particles: the splashes grown into emitters as data, lit per particle, textures baked by our own solver ✅ (proposed 2026-10-16, D-062's next core step after the flora; the owner's go 2026-10-17)
 
 **The question:** how the mission maps' effects are made (a chimney's smoke, dust under the
 steps, falling leaves; later sparks, fire and rain). Research: `research/particles.md`.
@@ -4484,7 +4484,11 @@ particle); a shadow ray per pixel (one a particle suits sprites); per-pixel link
 moment-based OIT (memory and bandwidth the village's few emitters do not need); smoke simulated
 at run time (a hero effect later).
 
-## D-065 — Lighting the insides: lamps by clustered lists until ReSTIR's patents are settled 🟡 (proposed 2026-10-16, #270)
+**Decided** (the owner, 2026-10-17): "For D-064 go with recommended". The scope as proposed (the
+seven points above) and the textures baked by our own stable-fluids solver; EmberGen or
+downloaded sets stay out unless the owner says otherwise.
+
+## D-065 — Lighting the insides: lamps by clustered lists until ReSTIR's patents are settled ✅ (proposed 2026-10-16, #270; the owner's go 2026-10-17: both, compared)
 
 **The question:** how the village's entered houses are lit (#270): lamps, the rooms' bounce
 light, windows seen from inside. Research: `research/interior-lighting.md`.
@@ -4517,6 +4521,19 @@ clustered lists proposed here; and the order of the four parts.
 *Not chosen for now:* a light tree sampled stochastically (Moreau et al. 2019: thousands of lights
 are more than a village needs, its patents not searched); lamps as emissive surfaces only (no
 shadows, no light on the walls).
+
+**Decided** (the owner, 2026-10-17), after the patent question was set out (a patent covers the
+method whoever writes the code; RTXDI's licence, the NVIDIA RTX SDKs licence of 2025-01-31, has
+no express patent grant, requires applications to work with NVIDIA GPUs, not only, and forbids
+making the SDK subject to an open-source licence). The owner: "if we use the sdk or available
+libraries as long as the license allows it we can use them. But we should absolutely not copy
+the code made by them that is patented", then "for D-065 I don't know which of 1 or 2 is better,
+maybe try both ? And compare results with me ?"
+- Both are built and compared with the owner: (1) the clustered light lists proposed here, and
+  (2) NVIDIA's RTXDI (ReSTIR DI) used as the SDK, under its licence, fetched into an ignored
+  directory as the NRD and Streamline SDKs are, never copied into Forge's code.
+- The other parts (lamps as data, probes lit by the lamps, glass both ways, the checks) serve
+  both.
 
 ## D-066 — Pieces with sockets: one connector schema for generation, the anomaly check and player building ✅ (proposed 2026-10-16 on the owner's walk of #266; the owner's go the same evening)
 
