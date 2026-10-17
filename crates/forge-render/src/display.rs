@@ -21,6 +21,7 @@ use forge_gpu::{
 use glam::Vec3;
 
 use crate::aces2::{self, Preset};
+use crate::local_exposure::{self, LocalExposurePush, LocalExposureRead};
 
 /// A tone curve (index as in `tonemap.slang`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -507,6 +508,7 @@ struct DisplayPush {
     bloom_strength: f32,
     output: OutputPush,
     tables: ToneTablesPush,
+    local: LocalExposurePush,
 }
 
 /// The stand-alone display pass.
@@ -594,7 +596,9 @@ impl Display {
 
     /// Declares the pass "post/display transform": `src` (pre-exposed HDR) through `curve`
     /// into every pixel of `dst`, with `bloom` (a bloom chain's top level and its share of the
-    /// image, as [`crate::Taa`]'s resolve mixes it) when given.
+    /// image, as [`crate::Taa`]'s resolve mixes it) when given, and `local`'s gain after it (local
+    /// exposure, D-067).
+    #[allow(clippy::too_many_arguments)]
     pub fn draw<'f>(
         &'f self,
         graph: &mut FrameGraph<'f>,
@@ -603,6 +607,7 @@ impl Display {
         extent: vk::Extent2D,
         curve: Tonemap,
         bloom: Option<(ImageHandle, f32)>,
+        local: Option<LocalExposureRead>,
     ) {
         let pipeline = &self.pipeline;
         let frame = self.frame.get();
@@ -621,6 +626,9 @@ impl Display {
             .image(dst, ImageAccess::ColorAttachment);
         if let Some((image, _)) = bloom {
             pass = pass.image(image, sampled);
+        }
+        if let Some(read) = &local {
+            pass = read.declare(pass);
         }
         pass.run(move |resources, commands| {
             let attachments = [vk::RenderingAttachmentInfo::default()
@@ -647,6 +655,7 @@ impl Display {
                     bloom_strength: bloom.map_or(0.0, |(_, s)| s),
                     output,
                     tables,
+                    local: local_exposure::push_of(local, resources),
                 },
             );
             commands.draw(3, 1);
@@ -771,7 +780,7 @@ mod tests {
         // The blocks the shaders mirror.
         assert_eq!(std::mem::size_of::<OutputPush>(), 32);
         assert_eq!(std::mem::size_of::<ToneTablesPush>(), 32);
-        assert_eq!(std::mem::size_of::<DisplayPush>(), 80);
+        assert_eq!(std::mem::size_of::<DisplayPush>(), 112);
     }
 
     #[test]

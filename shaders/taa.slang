@@ -14,6 +14,7 @@
 // one of two ways from one run to the next (an fp16 step on up to a fifth of the pixels), and the
 // history kept the difference. Dispatched, they repeat to the bit.
 import bindless;
+import local_exposure;
 import tonemap;
 
 struct Varyings
@@ -301,19 +302,41 @@ struct SharpenPush
     uint pad;
     Output output;
     ToneTables tables;
+    LocalExposure local;  // local exposure's read (D-067): its grid 0xFFFFFFFF for none
 };
 
 [[vk::push_constant]]
 SharpenPush sharpen_push;
 
-// What the display shows at `pixel`, as a signal in [0, 1] (tonemap.slang, `display_signal`),
-// with `bloom` (the centre's: it changes slowly) mixed in as the resolve mixes it.
-float3 signal_at(int2 pixel, float3 bloom)
+// The colour shown at `pixel`, pre-exposed: the history with `bloom` (the centre's: it changes
+// slowly) mixed in as the resolve mixes it, then local exposure's gain at the pixel's own
+// luminance, the Gaussian's base `blurred` the centre's (D-067). `ev` is that gain, and `output`
+// the output block with the night's Purkinje shift kept on the scene's own luminance.
+float3 shown_at(int2 pixel, float3 bloom, float blurred, out float ev, out Output output)
 {
     int2 last = int2(sharpen_push.width, sharpen_push.height) - 1;
-    float3 color = g_sampled_images[NonUniformResourceIndex(sharpen_push.resolved)].Load(int3(clamp(pixel, int2(0), last), 0)).rgb;
+    int2 at = clamp(pixel, int2(0), last);
+    float3 color = g_sampled_images[NonUniformResourceIndex(sharpen_push.resolved)].Load(int3(at, 0)).rgb;
     float3 shown = sharpen_push.bloom != 0xFFFFFFFFu ? lerp(color, bloom, sharpen_push.bloom_strength) : color;
-    return display_signal(shown, sharpen_push.curve, sharpen_push.output, sharpen_push.tables);
+    float2 uv = (float2(at) + 0.5) / float2(float(sharpen_push.width), float(sharpen_push.height));
+    ev = local_exposure_ev(sharpen_push.local, shown, uv, blurred);
+    output = sharpen_push.output;
+    if (ev != 0.0)
+    {
+        float gain = exp2(ev);
+        shown *= gain;
+        output.scotopic /= gain;
+    }
+    return shown;
+}
+
+// What the display shows at `pixel`, as a signal in [0, 1] (tonemap.slang, `display_signal`).
+float3 signal_at(int2 pixel, float3 bloom, float blurred)
+{
+    float ev;
+    Output output;
+    float3 shown = shown_at(pixel, bloom, blurred, ev, output);
+    return display_signal(shown, sharpen_push.curve, output, sharpen_push.tables);
 }
 
 // FidelityFX RCAS (FSR 1's `FsrRcasF`, MIT, without its noise detection), as tools/sharpness
@@ -325,20 +348,30 @@ float3 signal_at(int2 pixel, float3 bloom)
 float4 sharpen_main(Varyings input) : SV_Target
 {
     int2 pixel = int2(input.position.xy);
+    float2 uv = input.position.xy / float2(float(sharpen_push.width), float(sharpen_push.height));
     float3 bloom = 0.0;
     if (sharpen_push.bloom != 0xFFFFFFFFu)
-    {
-        float2 uv = input.position.xy / float2(float(sharpen_push.width), float(sharpen_push.height));
         bloom = sample_image_level(sharpen_push.bloom, SAMPLER_LINEAR_CLAMP, uv, 0.0).rgb / BLOOM_LEVELS;
+    bool local = sharpen_push.local.grid != 0xFFFFFFFFu;
+    float blurred = local ? local_blurred(sharpen_push.local, uv) : 0.0;
+    if (local && sharpen_push.local.view != 0)
+    {
+        // Local exposure's gain in false colours, unsharpened.
+        float ev;
+        Output output;
+        float3 shown = shown_at(pixel, bloom, blurred, ev, output);
+        float3 display = saturate(tonemap(shown, sharpen_push.curve, sharpen_push.tables));
+        float3 view = local_exposure_view(display, ev);
+        return float4(display_from_signal(sdr_signal(view, output), output, uint2(pixel)), 1.0);
     }
-    float3 e = signal_at(pixel, bloom);
+    float3 e = signal_at(pixel, bloom, blurred);
     // Unsharpened, the pass only shows the history.
     if (sharpen_push.sharpness <= 0.0)
         return float4(display_from_signal(saturate(e), sharpen_push.output, uint2(pixel)), 1.0);
-    float3 b = signal_at(pixel + int2(0, -1), bloom);
-    float3 d = signal_at(pixel + int2(-1, 0), bloom);
-    float3 f = signal_at(pixel + int2(1, 0), bloom);
-    float3 h = signal_at(pixel + int2(0, 1), bloom);
+    float3 b = signal_at(pixel + int2(0, -1), bloom, blurred);
+    float3 d = signal_at(pixel + int2(-1, 0), bloom, blurred);
+    float3 f = signal_at(pixel + int2(1, 0), bloom, blurred);
+    float3 h = signal_at(pixel + int2(0, 1), bloom, blurred);
     const float LIMIT = 0.25 - 1.0 / 16.0;
     float3 lo = min(min(b, d), min(f, h));
     float3 hi = max(max(b, d), max(f, h));

@@ -12,6 +12,12 @@
 //! LDR-ꟻLIP ([`flip`], issue #75) prints its mean, weighted quartiles, percentiles and
 //! largest value, `a` taken as the reference. `--flip-map` writes its error map. With
 //! `--max-flip` or `--max-flip-mean`, the exit code judges ꟻLIP instead of the pixel count.
+//! `--flip-in` prints its mean inside regions of the whole map (local exposure's halo bands,
+//! D-067).
+//!
+//! For a change of tone (D-067): `--reversal EV` counts the neighbouring pixels whose
+//! difference in log luminance turns over from `a` to `b`, and `--mean-log` prints both
+//! images' mean log luminance.
 //!
 //! Two 16-bit images are HDR10 captures' PQ codes (issue #94): their pixels are counted at 16
 //! bits, and ꟻLIP is HDR-ꟻLIP on their light ([`pq`], [`flip::hdr_error_map`], issue #126).
@@ -103,6 +109,20 @@ struct Args {
     /// where a turn moves every depth alike.
     #[arg(long, value_parser = parse_rect)]
     region: Option<[u32; 4]>,
+    /// The mean ꟻLIP error inside this region, "x,y,width,height", of the whole image's error
+    /// map (repeatable): bands along an edge, where a halo shows as more error than further
+    /// away (local exposure's check, D-067).
+    #[arg(long, value_parser = parse_rect)]
+    flip_in: Vec<[u32; 4]>,
+    /// Gradient reversal (D-067): count the neighbouring pixels (across and down) whose
+    /// difference in log2 luminance is over this many EV in `a` and of the other sign in `b`, as
+    /// an edge-aware filter can turn a gradient over. Those over it in `b` too are counted apart.
+    #[arg(long)]
+    reversal: Option<f32>,
+    /// Print the mean log2 luminance of `a` and `b` and its change: a walk's frames one after
+    /// another show the steps of the exposure (D-067: local exposure adds none).
+    #[arg(long)]
+    mean_log: bool,
 }
 
 fn parse_offset(text: &str) -> std::result::Result<[f64; 2], String> {
@@ -155,6 +175,52 @@ fn aligned(
         b = crop_imm(&b, x, y, w, h).to_image();
     }
     (a, b)
+}
+
+/// Each pixel's log2 luminance, its sRGB decoded (at least 1e-4, 2^-13.3).
+fn log_luminance(image: &image::RgbaImage) -> Vec<f32> {
+    let decode = |v: u8| {
+        let v = f32::from(v) / 255.0;
+        if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    image
+        .pixels()
+        .map(|p| {
+            let l = 0.2126 * decode(p[0]) + 0.7152 * decode(p[1]) + 0.0722 * decode(p[2]);
+            l.max(1e-4).log2()
+        })
+        .collect()
+}
+
+/// Neighbour pairs (across and down) whose difference in log2 luminance is over `threshold` in
+/// `a` and of the other sign in `b`, and those of them over it in `b` too.
+fn reversals(a: &image::RgbaImage, b: &image::RgbaImage, threshold: f32) -> (u64, u64) {
+    let (la, lb) = (log_luminance(a), log_luminance(b));
+    let (width, height) = (a.width() as usize, a.height() as usize);
+    let (mut reversed, mut both) = (0, 0);
+    for y in 0..height {
+        for x in 0..width {
+            let i = y * width + x;
+            for j in [
+                (x + 1 < width).then_some(i + 1),
+                (y + 1 < height).then_some(i + width),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                let (da, db) = (la[j] - la[i], lb[j] - lb[i]);
+                if da.abs() > threshold && da * db < 0.0 {
+                    reversed += 1;
+                    both += u64::from(db.abs() > threshold);
+                }
+            }
+        }
+    }
+    (reversed, both)
 }
 
 fn parse_point(text: &str) -> std::result::Result<[u32; 2], String> {
@@ -385,6 +451,39 @@ fn main() -> Result<ExitCode> {
                 .save(path)
                 .with_context(|| format!("write {}", path.display()))?;
         }
+        for &[x, y, w, h] in &args.flip_in {
+            let (x1, y1) = ((x + w).min(width), (y + h).min(height));
+            let mut sum = 0.0_f64;
+            for row in y.min(y1)..y1 {
+                let at = (row * width) as usize;
+                sum += errors[at + x.min(x1) as usize..at + x1 as usize]
+                    .iter()
+                    .map(|&e| f64::from(e))
+                    .sum::<f64>();
+            }
+            let pixels = u64::from(x1.saturating_sub(x)) * u64::from(y1.saturating_sub(y));
+            println!(
+                "FLIP in {x},{y},{w},{h}: mean {:.6} over {pixels} pixels",
+                sum / pixels.max(1) as f64
+            );
+        }
+    }
+    if args.mean_log {
+        let mean = |image: &image::RgbaImage| {
+            let l = log_luminance(image);
+            l.iter().map(|&v| f64::from(v)).sum::<f64>() / l.len().max(1) as f64
+        };
+        let (ma, mb) = (mean(&a), mean(&b));
+        println!(
+            "mean log2 luminance: a {ma:.4}, b {mb:.4}, change {:+.4} EV",
+            mb - ma
+        );
+    }
+    if let Some(threshold) = args.reversal {
+        let (reversed, both) = reversals(&a, &b, threshold);
+        println!(
+            "gradient reversal over {threshold} EV: {reversed} neighbour pairs ({both} over it in b too)"
+        );
     }
     if let Some([x, y]) = args.background_at {
         let background = *a.get_pixel(x.min(width - 1), y.min(height - 1));

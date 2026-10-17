@@ -149,6 +149,9 @@ pub struct AutoExposure {
     pub night_stops: f32,
     /// The metered EV100s where the night's darkening starts and where it is full.
     pub night_ev: (f32, f32),
+    /// The stops the night darkened the last metered target by: 0 by day (local exposure's
+    /// middle grey follows it, D-067).
+    pub night_offset: f32,
     /// Metered frames so far: the first [`START_READINGS`] snap to their target.
     readings: u32,
 }
@@ -168,6 +171,7 @@ impl AutoExposure {
             speed_brighten: 0.8,
             night_stops: 0.0,
             night_ev: (8.0, -2.0),
+            night_offset: 0.0,
             readings: 0,
         }
     }
@@ -205,8 +209,8 @@ impl AutoExposure {
             let metered = ev100_from_luminance(luminance) - self.compensation;
             let (from, full) = self.night_ev;
             let night = ((from - metered) / (from - full)).clamp(0.0, 1.0);
-            self.target_ev100 =
-                (metered + night * self.night_stops).clamp(self.range.0, self.range.1);
+            self.night_offset = night * self.night_stops;
+            self.target_ev100 = (metered + self.night_offset).clamp(self.range.0, self.range.1);
             if self.readings < START_READINGS {
                 self.ev100 = self.target_ev100;
             }

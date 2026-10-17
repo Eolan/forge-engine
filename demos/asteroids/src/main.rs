@@ -1167,6 +1167,7 @@ impl Demo for Ballad {
                     ctx.extent(),
                     self.tonemap,
                     bloom.map(|b| (b, self.taa.bloom_strength)),
+                    None,
                 );
                 (None, bloom)
             }

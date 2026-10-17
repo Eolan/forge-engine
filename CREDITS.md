@@ -166,6 +166,17 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
 - **Physical light units and pre-exposure.** Sébastien Lagarde, Charles de Rousiers, "Moving
   Frostbite to Physically Based Rendering", SIGGRAPH 2014.
 - **Automatic exposure.** Krzysztof Narkowicz, "Automatic Exposure", 2016.
+- **Local exposure** (`shaders/local_exposure*.slang`, D-067, #275):
+  - Frédo Durand, Julie Dorsey, "Fast Bilateral Filtering for the Display of High-Dynamic-Range
+    Images", SIGGRAPH 2002: the base and detail layers, only the base's contrast reduced.
+  - Jiawen Chen, Sylvain Paris, Frédo Durand, "Real-time Edge-Aware Image Processing with the
+    Bilateral Grid", SIGGRAPH 2007: the grid of log luminance, splatted, blurred and read per
+    pixel at its own luminance.
+  - Jasmin Patry, "Real-Time Samurai Cinema: Lighting, Atmosphere, and Tonemapping in Ghost of
+    Tsushima", SIGGRAPH 2021 Advances: the grid blended with a wide Gaussian of the cells' means,
+    upsampled by a cubic B-spline, and the contrast around a midpoint.
+  - Christian Sigg, Markus Hadwiger, "Fast Third-Order Texture Filtering", GPU Gems 2, 2005: the
+    B-spline from four bilinear taps.
 - **Sky light.** Ravi Ramamoorthi, Pat Hanrahan, "An Efficient Representation for Irradiance
   Environment Maps", SIGGRAPH 2001: the sky's irradiance as nine spherical-harmonic
   coefficients.

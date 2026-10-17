@@ -1,8 +1,10 @@
 // The display pass, driven by crates/forge-render/src/display.rs: a pre-exposed HDR image in,
 // the display image out through the chosen tone curve and the output's encoding
 // (`tonemap.slang`). The ballad does the same inside its TAA resolve; this pass serves the
-// paths without temporal filtering, and DLSS's output (D-045), with bloom as the resolve mixes it.
+// paths without temporal filtering, and DLSS's output (D-045), with bloom as the resolve mixes it
+// and local exposure's gain after it (D-067, `local_exposure.slang`).
 import bindless;
+import local_exposure;
 import tonemap;
 
 struct DisplayPush
@@ -13,6 +15,7 @@ struct DisplayPush
     float bloom_strength; // how much of the shown image is bloom
     Output output;
     ToneTables tables;
+    LocalExposure local;  // local exposure's read: its grid 0xFFFFFFFF for none
 };
 
 // Levels the bloom chain's top level sums (crates/forge-render/src/bloom.rs, LEVELS).
@@ -39,14 +42,29 @@ float4 frag_main(Varyings input) : SV_Target
 {
     uint2 pixel = uint2(input.position.xy);
     float3 hdr = g_sampled_images[NonUniformResourceIndex(display_push.image)].Load(int3(int2(pixel), 0)).rgb;
+    uint width;
+    uint height;
+    g_sampled_images[NonUniformResourceIndex(display_push.image)].GetDimensions(width, height);
+    float2 uv = input.position.xy / float2(float(width), float(height));
     if (display_push.bloom != 0xFFFFFFFFu)
     {
-        uint width;
-        uint height;
-        g_sampled_images[NonUniformResourceIndex(display_push.image)].GetDimensions(width, height);
-        float2 uv = input.position.xy / float2(float(width), float(height));
         float3 bloom = sample_image_level(display_push.bloom, SAMPLER_LINEAR_CLAMP, uv, 0.0).rgb / BLOOM_LEVELS;
         hdr = lerp(hdr, bloom, display_push.bloom_strength);
     }
-    return float4(display_output(hdr, display_push.curve, display_push.output, display_push.tables, pixel), 1.0);
+    Output output = display_push.output;
+    LocalExposure local = display_push.local;
+    if (local.grid != 0xFFFFFFFFu)
+    {
+        // The gain on the shown colour; the night's Purkinje shift kept on the scene's luminance.
+        float ev = local_exposure_ev(local, hdr, uv, local_blurred(local, uv));
+        float gain = exp2(ev);
+        hdr *= gain;
+        output.scotopic /= gain;
+        if (local.view != 0)
+        {
+            float3 view = local_exposure_view(saturate(tonemap(hdr, display_push.curve, display_push.tables)), ev);
+            return float4(display_from_signal(sdr_signal(view, output), output, pixel), 1.0);
+        }
+    }
+    return float4(display_output(hdr, display_push.curve, output, display_push.tables, pixel), 1.0);
 }

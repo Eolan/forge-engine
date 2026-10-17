@@ -41,12 +41,12 @@ use forge_render::textures::{self, TextureData};
 use forge_render::{
     AmbientLight, Atmosphere, AtmosphereParams, AutoExposure, Bloom, CloudParams, Clouds,
     CullCamera, CullFlags, FrameStats, GroundSky, Gtao, GtaoParams, HdrOutput, LiquidDrawParams,
-    LiquidStats, LiquidTank, LuminanceMeter, MeshletRenderer, MeshletScene, MeshletSceneBuilder,
-    ProbeParams, Probes, Residency, SkyParams, SplashParams, SplashSource, Starfield, StartView,
-    StreamingConfig, StreamingStats, SwRaster, Taa, Tonemap, WaterCascadeDesc, WaterCascades,
-    WaterCaustics, WaterLake, WaterMouth, WaterPool, WaterRiverPoint, WaterShore, WaterShoreTrain,
-    WaterSplashes, WaterStone, WaterSurface, WaterSurfaceParams, WaterWakes, exposure_from_ev100,
-    sh_irradiance,
+    LiquidStats, LiquidTank, LocalExposure, LocalExposureSettings, LuminanceMeter, MeshletRenderer,
+    MeshletScene, MeshletSceneBuilder, ProbeParams, Probes, Residency, SkyParams, SplashParams,
+    SplashSource, Starfield, StartView, StreamingConfig, StreamingStats, SwRaster, Taa, Tonemap,
+    WaterCascadeDesc, WaterCascades, WaterCaustics, WaterLake, WaterMouth, WaterPool,
+    WaterRiverPoint, WaterShore, WaterShoreTrain, WaterSplashes, WaterStone, WaterSurface,
+    WaterSurfaceParams, WaterWakes, exposure_from_ev100, sh_irradiance,
 };
 use forge_task::TaskPool;
 use forge_terrain::{
@@ -146,6 +146,24 @@ pub struct Args {
     /// compared at one exposure).
     #[arg(long)]
     fixed_exposure: bool,
+    /// Local exposure (D-067, #275): a dark hall beside a sunlit doorway lifted, the doorway
+    /// lowered a little, by a gain read per pixel from a bilateral grid of this frame's log
+    /// luminance (X cycles it off, on, and on with the gain in false colours). Off by default
+    /// until the owner has seen it.
+    #[arg(long)]
+    local_exposure: bool,
+    /// Local exposure's contrasts `SHADOWS,HIGHLIGHTS` around middle grey (0.7,0.85 by default;
+    /// 1 leaves that side as it is). Turns local exposure on.
+    #[arg(long, value_parser = parse_contrasts)]
+    local_exposure_contrast: Option<(f32, f32)>,
+    /// Show local exposure's gain in false colours, blue where it lifts and red where it
+    /// darkens, full at 2 EV. Turns local exposure on.
+    #[arg(long)]
+    local_exposure_view: bool,
+    /// Local exposure's share of the wide Gaussian in the base, the grid's the rest (0.6): 0 the
+    /// grid alone, 1 the Gaussian alone, for measuring halos (D-067). Turns local exposure on.
+    #[arg(long, hide = true)]
+    local_exposure_blend: Option<f32>,
     /// Tone curve: agx, agx-punchy, aces, aces2 or neutral (G cycles them). AgX's punchy look by
     /// default, a stop brighter: the owner's pick (2026-10-10).
     #[arg(long, default_value = "agx-punchy")]
@@ -708,6 +726,9 @@ struct Gallery {
     night_now: Option<(forge_render::night::SkyAt, forge_render::night::NightLights)>,
     meter: LuminanceMeter,
     auto_exposure: AutoExposure,
+    /// Local exposure (D-067, #275): the grid's passes and their settings (X cycles them).
+    local_exposure: LocalExposure,
+    local_settings: LocalExposureSettings,
     /// The scene's look meters the exposure ([`Look::metered`]).
     look_metered: bool,
     /// Seconds the last update advanced.
@@ -816,6 +837,22 @@ impl Gallery {
         let sky_light = !args.no_sky_light;
         let gtao = Gtao::new(&ctx.device, &ctx.shaders)?;
         let meter = LuminanceMeter::new(&ctx.device, &ctx.shaders)?;
+        let local_exposure = LocalExposure::new(&ctx.device, &ctx.shaders)?;
+        let mut local_settings = LocalExposureSettings {
+            enabled: args.local_exposure
+                || args.local_exposure_contrast.is_some()
+                || args.local_exposure_blend.is_some()
+                || args.local_exposure_view,
+            view: args.local_exposure_view,
+            ..Default::default()
+        };
+        if let Some((shadows, highlights)) = args.local_exposure_contrast {
+            local_settings.shadow_contrast = shadows;
+            local_settings.highlight_contrast = highlights;
+        }
+        if let Some(blend) = args.local_exposure_blend {
+            local_settings.blend = blend.clamp(0.0, 1.0);
+        }
         let mut auto_exposure = AutoExposure::new(args.ev100);
         auto_exposure.compensation = args.exposure_compensation;
         if let Some(band) = args.meter_band {
@@ -1366,6 +1403,8 @@ impl Gallery {
             night_now: None,
             meter,
             auto_exposure,
+            local_exposure,
+            local_settings,
             look_metered: look.metered,
             step: 1.0 / 60.0,
             scene,
@@ -1399,6 +1438,17 @@ impl Gallery {
     fn metered(&self) -> bool {
         (self.args.day.is_some() || self.args.time_of_day.is_some() || self.look_metered)
             && !self.args.fixed_exposure
+    }
+
+    /// Local exposure's middle grey (D-067): where the automatic exposure keys the scene, the
+    /// night's darkening taken off.
+    fn local_middle(&self) -> f32 {
+        let night = if self.metered() {
+            self.auto_exposure.night_offset
+        } else {
+            0.0
+        };
+        forge_render::local_exposure::middle_grey(self.auto_exposure.compensation, night)
     }
 
     /// `--day` (issue #57): the sun at `t` of the cycle (0 sunrise, 0.5 noon, 1 sunset, 1.5
@@ -1497,6 +1547,17 @@ impl Demo for Gallery {
             KeyCode::Tab => self.wireframe = !self.wireframe,
             KeyCode::KeyG => self.tonemap = self.tonemap.next(),
             KeyCode::KeyB => self.bloom_on = !self.bloom_on,
+            KeyCode::KeyX => {
+                // Local exposure (D-067): off, on, on with its gain in false colours.
+                let s = &mut self.local_settings;
+                (s.enabled, s.view) = match (s.enabled, s.view) {
+                    (false, _) => (true, false),
+                    (true, false) => (true, true),
+                    (true, true) => (false, false),
+                };
+                let line = self.local_settings.line(self.local_middle());
+                tracing::info!(%line, "X: local exposure");
+            }
             KeyCode::KeyI => self.sky_light = !self.sky_light,
             // Where the camera is, as `--view` takes it: to start a run where something was seen.
             KeyCode::F9 => {
@@ -1760,6 +1821,8 @@ impl Demo for Gallery {
             ));
             ctx.profile.counter(last.software_line(self.args.sw_raster));
         }
+        ctx.profile
+            .counter(self.local_settings.line(self.local_middle()));
         if self.frame == 30 {
             // The sky's light once it has been computed, per unit of the sun's illuminance
             // above the air (issue #47): what a roof, a floor and the walls facing towards and
@@ -1856,6 +1919,9 @@ impl Demo for Gallery {
         } else {
             exposure_from_ev100(self.args.ev100)
         };
+        // Local exposure (D-067), from the image the display pass shows: built and read this frame.
+        let local_middle = self.local_middle();
+        let local_settings = self.local_settings;
         // The night's Purkinje shift (D-046) in whichever pass shows the image.
         let night_on = self.night.is_some() && !self.args.no_purkinje;
         self.taa.purkinje = night_on;
@@ -2617,6 +2683,15 @@ impl Demo for Gallery {
             let bloom = self
                 .bloom_on
                 .then(|| self.bloom.draw(&mut frame.graph, upscaled, extent));
+            let local = local_settings.enabled.then(|| {
+                self.local_exposure.build(
+                    &mut frame.graph,
+                    upscaled,
+                    extent,
+                    local_settings,
+                    local_middle,
+                )
+            });
             display.draw(
                 &mut frame.graph,
                 upscaled,
@@ -2624,6 +2699,7 @@ impl Demo for Gallery {
                 ctx.extent(),
                 self.tonemap,
                 bloom.map(|b| (b, self.taa.bloom_strength)),
+                local,
             );
             return Ok(());
         }
@@ -2639,6 +2715,15 @@ impl Demo for Gallery {
         let bloom = self
             .bloom_on
             .then(|| self.bloom.draw(&mut frame.graph, history, extent));
+        let local = local_settings.enabled.then(|| {
+            self.local_exposure.build(
+                &mut frame.graph,
+                history,
+                extent,
+                local_settings,
+                local_middle,
+            )
+        });
         self.taa.show(
             &mut frame.graph,
             history,
@@ -2646,6 +2731,7 @@ impl Demo for Gallery {
             frame.target,
             self.tonemap,
             bloom,
+            local,
         );
         if let Some(h) = hasher {
             use forge_render::debug_hash::HashKind;
@@ -4921,6 +5007,25 @@ fn parse_pair(text: &str) -> std::result::Result<(f32, f32), String> {
         [low, high] if (0.0..high).contains(&low) && high <= 1.0 => Ok((low, high)),
         _ => Err(format!(
             "`{text}`: two fractions LOW,HIGH with 0 <= LOW < HIGH <= 1"
+        )),
+    }
+}
+
+/// `--local-exposure-contrast`: two contrasts `SHADOWS,HIGHLIGHTS`, each in [0, 1] (1 leaves that side
+/// as it is).
+fn parse_contrasts(text: &str) -> std::result::Result<(f32, f32), String> {
+    let parts: Vec<f32> = text
+        .split(',')
+        .map(|p| p.trim().parse::<f32>().map_err(|e| e.to_string()))
+        .collect::<std::result::Result<_, _>>()?;
+    match parts[..] {
+        [shadows, highlights]
+            if (0.0..=1.0).contains(&shadows) && (0.0..=1.0).contains(&highlights) =>
+        {
+            Ok((shadows, highlights))
+        }
+        _ => Err(format!(
+            "`{text}`: two contrasts SHADOWS,HIGHLIGHTS, each between 0 and 1"
         )),
     }
 }

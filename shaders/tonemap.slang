@@ -283,6 +283,16 @@ public float3 display_signal(float3 color, uint curve, Output output, ToneTables
     return hdr_signal(color, curve, output, tables);
 }
 
+// The signal of an SDR display colour (linear, in [0, 1]) on any output: sRGB-encoded, or in HDR
+// the PQ signal at the UI's white, as an SDR curve's image. Debug views pass through it (local
+// exposure's false colours, D-067).
+public float3 sdr_signal(float3 display, Output output)
+{
+    if (output.encoding < OUTPUT_PQ)
+        return encode_srgb(saturate(display));
+    return pq_encode(rec709_to_rec2020(saturate(display)) * output.sdr_white);
+}
+
 public float3 display_from_signal(float3 signal, Output output, uint2 pixel)
 {
     if (output.encoding == OUTPUT_SRGB)

@@ -32,6 +32,7 @@ use glam::{DMat4, Mat4, Vec2};
 
 use crate::cells::CellPos;
 use crate::display::{HdrOutput, OutputEncoding, OutputPush, ToneTables, ToneTablesPush, Tonemap};
+use crate::local_exposure::{self, LocalExposurePush, LocalExposureRead};
 
 /// Colour format of the offscreen scene target and the history.
 pub const HDR_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
@@ -123,6 +124,7 @@ struct SharpenPush {
     pad: u32,
     output: OutputPush,
     tables: ToneTablesPush,
+    local: LocalExposurePush,
 }
 
 /// A fullscreen pass of `taa.slang`: its `entry` writing `color_formats`.
@@ -599,7 +601,7 @@ impl Taa {
         reactive: Option<ImageHandle>,
     ) -> ImageHandle {
         let history = self.resolve_history(graph, frame, depth, motion, reactive);
-        self.show(graph, history, frame.extent, output, curve, bloom);
+        self.show(graph, history, frame.extent, output, curve, bloom, None);
         history
     }
 
@@ -626,7 +628,9 @@ impl Taa {
     }
 
     /// The second half of [`Taa::resolve`]: `history` (of `extent`) shown in `output` through
-    /// `curve`, sharpened with [`Taa::sharpen`], `bloom` blended in.
+    /// `curve`, sharpened with [`Taa::sharpen`], `bloom` blended in, and `local`'s gain after it
+    /// (local exposure, D-067).
+    #[allow(clippy::too_many_arguments)]
     pub fn show<'f>(
         &'f self,
         graph: &mut FrameGraph<'f>,
@@ -635,6 +639,7 @@ impl Taa {
         output: ImageHandle,
         curve: Tonemap,
         bloom: Option<ImageHandle>,
+        local: Option<LocalExposureRead>,
     ) {
         use vk::PipelineStageFlags2 as S;
         let encoding = OutputPush::new(
@@ -664,6 +669,9 @@ impl Taa {
         if let Some(bloom) = bloom {
             pass = pass.image(bloom, ImageAccess::Sampled(S::FRAGMENT_SHADER));
         }
+        if let Some(read) = &local {
+            pass = read.declare(pass);
+        }
         pass.run(move |resources, commands| {
             fullscreen_pass(
                 commands,
@@ -681,6 +689,7 @@ impl Taa {
                     pad: 0,
                     output: encoding,
                     tables,
+                    local: local_exposure::push_of(local, resources),
                 },
             );
             Ok(())
@@ -772,7 +781,8 @@ mod tests {
     fn the_sharpening_push_matches_the_shader() {
         // `SharpenPush` in taa.slang: eight words, `Output`, then `ToneTables` (its pointers on
         // 8 bytes).
-        assert_eq!(std::mem::size_of::<SharpenPush>(), 32 + 32 + 32);
+        assert_eq!(std::mem::size_of::<SharpenPush>(), 32 + 32 + 32 + 32);
+        assert_eq!(std::mem::offset_of!(SharpenPush, local), 96);
         assert_eq!(std::mem::offset_of!(SharpenPush, tables), 64);
         // `ResolvePush`: fourteen words, the history written (a storage index) the last but one.
         assert_eq!(std::mem::offset_of!(ResolvePush, written), 48);

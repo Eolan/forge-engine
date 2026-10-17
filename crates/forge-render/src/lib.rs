@@ -21,6 +21,7 @@ pub mod exposure;
 pub mod ffx_shadows;
 pub mod gtao;
 pub mod liquid;
+pub mod local_exposure;
 pub mod material;
 pub mod meshlet;
 pub mod mipcheck;
@@ -62,6 +63,7 @@ pub use liquid::{
     LiquidHole, LiquidLook, LiquidMode, LiquidObstacle, LiquidSolver, LiquidState, LiquidStats,
     LiquidStep, LiquidTank,
 };
+pub use local_exposure::{LocalExposure, LocalExposureRead, LocalExposureSettings};
 pub use meshlet::{
     AmbientLight, CullCamera, CullFlags, DrawTargets, DynamicCapacity, FrameStats, GeometryPath,
     InstanceOcclusion, MeshId, MeshRays, MeshletRenderer, MeshletScene, MeshletSceneBuilder,

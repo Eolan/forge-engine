@@ -218,6 +218,17 @@ fn main() -> anyhow::Result<()> {
                 // A metre inside it, looking down the hall, the flight climbing towards the
                 // camera from its foot at the back.
                 eprintln!("the village's hall: {}", view(eye, 1.6, inward, -5.0));
+                // From the back of the hall (6 m in at most), looking back at the open front
+                // door: the sunlit street through the doorway beside the dim hall, local
+                // exposure's case (#275, D-067).
+                let at = w.a + t * door.along;
+                let depth = inner
+                    .hall
+                    .iter()
+                    .map(|&c| (c - at).dot(inward))
+                    .fold(0.0, f64::max);
+                let back = at + inward * (depth - 0.8).clamp(w.thickness + 1.0, 6.0);
+                eprintln!("the village's door: {}", view(back, 1.6, -inward, -3.0));
                 // On the first upper floor's landing, a step past the flight's arrival, looking
                 // back over the opening and its guard (no view looked upstairs, and the opening
                 // had none, 2026-10-16).
