@@ -178,6 +178,10 @@ pub trait Running: Send {
     }
     /// Its splashes' sources this frame.
     fn splashes(&mut self, _out: &mut Vec<SplashSource>) {}
+    /// Its lamps this frame (D-065), in the scene's frame. None by default.
+    fn lamps(&mut self) -> Vec<forge_render::lamps::Lamp> {
+        Vec::new()
+    }
     /// Its particles' emitters and bursts at `time` (the splashes' clock, seconds), in the
     /// scene's frame (D-064): the effects by name through `particles`.
     fn particles(

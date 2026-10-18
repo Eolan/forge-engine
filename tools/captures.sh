@@ -337,6 +337,9 @@ for path in $paths; do
     capture "$path-lab-smoke360" 360 "$lab" --lab smoke --fixed-step "${flag[@]}"
     capture "$path-lab-smoke360-noocc" 360 "$lab" --lab smoke --fixed-step --no-occlusion "${flag[@]}"
     capture "$path-lab-smoke900" 900 "$lab" --lab smoke --fixed-step "${flag[@]}"
+    # The sharpness room at midnight lit by three lamps (D-065 step 1, #270), and its A/B twin.
+    capture "$path-lab-lamps60" 60 "$lab" --lab lamps --fixed-step --time-of-day 1.5 "${flag[@]}"
+    capture "$path-lab-lamps60-noocc" 60 "$lab" --lab lamps --fixed-step --time-of-day 1.5 --no-occlusion "${flag[@]}"
     # The bridge (#147), the convoy let go at tick 31: the deck falling with two cars at tick
     # 360 and its A/B twin, and in the gap at tick 600.
     capture "$path-lab-bridge360" 360 "$lab" --lab bridge --fixed-step --release 31 "${flag[@]}"

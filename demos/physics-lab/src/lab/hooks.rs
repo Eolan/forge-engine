@@ -321,7 +321,7 @@ impl Scenario for LabScenario {
                 speed: 2.0,
                 ..FlyCamera::default()
             }
-        } else if self.kind == LabScene::Room {
+        } else if matches!(self.kind, LabScene::Room | LabScene::Lamps) {
             // In the sharpness room's middle at eye height, looking level at the back wall's targets
             // 8 m away; the board's, 2.5 m away, below them.
             FlyCamera {
@@ -793,6 +793,15 @@ impl Running for LabRunning {
         // The smoke yard's chimneys, fire and footsteps (D-064).
         if self.kind == LabScene::Smoke {
             super::smoke::particles(time, particles, emitters, bursts);
+        }
+    }
+
+    fn lamps(&mut self) -> Vec<forge_render::lamps::Lamp> {
+        // The room at night's three lamps (D-065).
+        if self.kind == LabScene::Lamps {
+            super::room::lamps()
+        } else {
+            Vec::new()
         }
     }
 

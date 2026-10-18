@@ -2037,6 +2037,43 @@ The frame was 1.65 ms.
 DLSS's own mask was tried and left out: this Streamline's DLSS reads none of the hints the
 reactive mask was tagged as, and the output stayed bit-identical (D-064).
 
+## `lamps`: the sharpness room at night, lit by lamps (issue #270, D-065)
+
+```
+cargo run --release -p physics-lab -- --lab lamps --time-of-day 1.5
+```
+
+![The sharpness room at midnight lit by three warm lamps](images/lab-lamps.png)
+
+*Frame 60 of `--lab lamps --fixed-step --time-of-day 1.5`: the room of `room` at midnight, open to
+the night sky, lit by three lamps.*
+- *A hanging bulb in the middle: 2700 K, 100 cd.*
+- *A lamp in the back left corner, its hot spot where the walls meet: 3000 K, 60 cd.*
+- *A dim one by the board, which lights its right edge: 2200 K, 25 cd.*
+
+*The bulbs themselves are not drawn yet. Without white balance, 2700 K reads orange.*
+
+Step 1 of D-065 (`forge_render::lamps`, `lamps_at` in `meshlet.slang`).
+- **The lamps:** a scene gives its lamps each frame through `Running::lamps`: small spheres in
+  candelas and kelvin. The 64 nearest whose light reaches the camera are kept, a lamp reaching
+  where its light falls to 0.05 lux.
+- **The shading:** every pixel takes every lamp in reach.
+  - The light is its candelas over the distance squared, by the cosine.
+  - One shadow ray goes towards a point of its sphere that moves with the frame's noise, so TAA or
+    DLAA averages the penumbra.
+  - The lamps give highlights as the sun does. Every class takes them where it takes the sun's
+    light.
+- **Not yet:** no bounce, since the probes do not see the lamps: a face turned away from every
+  lamp is black.
+
+**Checks:**
+- **Determinism:** two runs at once are identical, and the mesh path matches the fallback.
+- **Shimmer, a still camera's frames 10 apart:**
+  - under TAA, 0.21 % of the pixels differ by more than 2 codes;
+  - under DLAA, 0.0094 % (the room unlit: 0.0102 %).
+- **Cost:** three lamps over the whole view, three rays a pixel, take `shading/standard` from 0.16
+  to 0.48 ms (the frame 0.84 → 1.58 ms).
+
 ## Captures
 
 The batch (`tools/captures.sh`, set `lab`) takes `lab-drop90` (the rain in mid-air), its A/B
@@ -2072,4 +2109,4 @@ and the sharpness room (#159), `lab-room60` (still) and
 `lab-materials60` (the crates sliding off the snow's and the ice's ramps, the balls bouncing)
 with its twin and `lab-materials800` (the walker at rest where it slid on the ice); and the
 smoke yard (#271), `lab-smoke360` (the plumes risen, a step's dust) with its twin and
-`lab-smoke900`.
+`lab-smoke900`; and the lamp room at midnight (#270), `lab-lamps60` with its twin.

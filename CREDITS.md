@@ -435,6 +435,14 @@ soft edges, their pixel-wide minimum, their reactive mask and their hash:
   Technologies' "Realistic smoke lighting with 6-way lighting in VFX Graph", January 2023, and
   is used in games under several names. The frames and the code are our own.
 
+**Lamps** (`forge_render::lamps`, D-065 step 1, #270):
+- **A bulb's colour from its temperature:** Tanner Helland's fit of the blackbody locus in sRGB,
+  "How to Convert Temperature (K) to RGB", 2012
+  (<https://tannerhelland.com/2012/09/18/convert-temperature-rgb-algorithm-code.html>),
+  decoded to linear and scaled to luminance 1.
+- **Soft shadows from one ray a frame**, a point of the light's disc that moves with the frame's
+  noise and TAA's average, as the sun's (#54).
+
 **City plans** (`forge_procgen::city`, D-059):
 - **Streets from a tensor field.** Guoning Chen, Gregory Esch, Peter Wonka, Pascal Müller,
   Eugene Zhang, "Interactive Procedural Street Modeling", *ACM Transactions on Graphics* 27(3),

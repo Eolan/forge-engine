@@ -382,6 +382,16 @@ public struct Frame
     public float4 planet_axis;      // its north (xyz) and its radius at the sea's level (w, metres; 0: none)
     public float4 planet_meridian;  // its latitude 0, longitude 0 (xyz)
     public uint4 planet_map;        // x: the sampled index of its colour map (~0: none); y: 1 when it has a sea; z: 1 when the map is its albedo from afar, 0 a tint; w: its sea mask (~0: none)
+    public Lamp* lamps;             // the lamps the frame lights with (D-065, lamps.rs), the nearest first
+    public uint lamp_count;
+    public uint lamp_pad;
+};
+
+// Mirrors `GpuLamp` in crates/forge-render/src/lamps.rs (D-065): a small sphere light.
+public struct Lamp
+{
+    public float4 position_radius; // xyz: its middle in the scene's frame; w: its radius, metres
+    public float4 colour_reach;    // rgb: its intensity per channel, candelas; w: its reach, metres
 };
 
 // Mirrors `SkinVertex` in crates/forge-geom/src/skin.rs (32 bytes): a skinned cluster vertex
@@ -2597,6 +2607,71 @@ float3 occlusion_bounce(float visibility, float3 albedo)
 // the smooth rows, and `reflections_main` traces it.
 static float4 g_reflection_request;
 
+// Set by `lamps_at` for the pixel being shaded (D-065): the lamps' light on it in the resolve's
+// units (a white Lambertian surface facing the sun is 1), and their highlights; `sun_light` adds
+// both, as it does the sun's.
+static float3 g_lamp_diffuse = float3(0.0);
+static float3 g_lamp_specular = float3(0.0);
+
+// The lamps' light on a surface at `world` (the scene's frame) facing `n`, seen from `view`
+// (D-065 step 1, crates/forge-render/src/lamps.rs): every lamp whose reach it is in, its
+// illuminance (candelas over the distance squared, by the cosine), let go smoothly at its reach,
+// and with SHADOWS one shadow ray towards a point of its sphere that moves with the frame's noise,
+// so TAA averages the penumbra as it did the sun's single ray (#54). Highlights as the sun's.
+void lamps_at<let SHADOWS : int>(Frame* f, float3 world, float3 n, float3 view, float specular_power, float specular_weight, float bias, uint2 pixel)
+{
+    g_lamp_diffuse = float3(0.0);
+    g_lamp_specular = float3(0.0);
+    uint count = f[0].lamp_count;
+    if (count == 0u || f[0].lamps == nullptr)
+        return;
+    float to_units = 1.0 / max(f[0].sun_illuminance, 1e-9);
+    float2 u = spatio_temporal_noise(pixel, f[0].noise_frame);
+    for (uint i = 0u; i < count; i++)
+    {
+        Lamp lamp = f[0].lamps[i];
+        float3 d = lamp.position_radius.xyz - world;
+        float dist2 = dot(d, d);
+        float reach = lamp.colour_reach.w;
+        if (dist2 >= reach * reach)
+            continue;
+        float dist = sqrt(dist2);
+        float3 dir = d / max(dist, 1e-6);
+        float ndl = dot(n, dir);
+        if (ndl <= 0.0)
+            continue;
+        float radius = lamp.position_radius.w;
+        float visible = 1.0;
+        if (SHADOWS != 0 && f[0].tlas != 0)
+        {
+            // A point of the sphere's disc facing the surface, uniform in area, its angle
+            // turned for each lamp so two lamps' samples do not move together.
+            float3 t = normalize(cross(abs(dir.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0), dir));
+            float3 b = cross(dir, t);
+            float r = radius * sqrt(u.x);
+            float a = 6.28318530718 * frac(u.y + 0.618034 * float(i));
+            float3 target = lamp.position_radius.xyz + (t * cos(a) + b * sin(a)) * r;
+            RayDesc ray;
+            ray.Origin = world + n * bias;
+            float3 to = target - ray.Origin;
+            float length_to = length(to);
+            ray.Direction = to / max(length_to, 1e-6);
+            ray.TMin = 0.0;
+            // Short of the bulb: a lamp's own shade or fitting is not in its way.
+            ray.TMax = max(length_to - radius - 0.02, 0.0);
+            visible = ray_blocked(f, ray) ? 0.0 : 1.0;
+        }
+        if (visible <= 0.0)
+            continue;
+        // Let go between 80 % and all of its reach, so its edge does not show.
+        float window = saturate(1.0 - pow(dist / reach, 4.0));
+        float3 illuminance = lamp.colour_reach.rgb / max(dist2, radius * radius) * (ndl * visible * window * window * to_units);
+        g_lamp_diffuse += illuminance;
+        float3 half_vector = normalize(dir + view);
+        g_lamp_specular += pow(max(dot(n, half_vector), 0.0), specular_power) * specular_weight * illuminance;
+    }
+}
+
 // The sky reflected by a dielectric (issue #49), in the resolve's units (a white Lambertian
 // surface facing the sun): the sky-view table in the mirror direction on a smooth surface,
 // fading into the sky's irradiance `irradiance` as it gets rough (the table has no blurred
@@ -2657,18 +2732,18 @@ float3 sun_light(Frame* f, float3 albedo, float3 n, float3 geometric, float spec
             irradiance = probe_irradiance(probes, world, n, geometric, view, irradiance);
         float3 ambient = ao >= 0.0 ? irradiance * occlusion_bounce(ao, albedo) : irradiance;
         if (!reflects)
-            return albedo * (diffuse * sun + ambient) + specular * sun;
+            return albedo * (diffuse * sun + ambient + g_lamp_diffuse) + specular * sun + g_lamp_specular;
         float fresnel;
         float3 reflection = sky_reflection(sky, irradiance, n, view, r, sky_share, specular_power, ao, reflectance, fresnel);
-        return albedo * (diffuse * sun + ambient) * (1.0 - fresnel) + specular * sun + reflection;
+        return albedo * (diffuse * sun + ambient + g_lamp_diffuse) * (1.0 - fresnel) + specular * sun + g_lamp_specular + reflection;
     }
     // Space: hard sun, faint fill from the nebula side, a little wrap so shadows are not black.
     float wrap = saturate((ndl + 0.3) / 1.3) * 0.08;
     float3 fill = float3(0.10, 0.12, 0.18) * 0.25 * (0.5 + 0.5 * n.y);
     // Both stand for light from around the surface: the occlusion takes its share (issue #55).
     if (ao >= 0.0)
-        return albedo * (diffuse * sun + (wrap + fill) * occlusion_bounce(ao, albedo)) + specular * sun;
-    return albedo * (diffuse * sun + wrap + fill) + specular * sun;
+        return albedo * (diffuse * sun + (wrap + fill) * occlusion_bounce(ao, albedo) + g_lamp_diffuse) + specular * sun + g_lamp_specular;
+    return albedo * (diffuse * sun + wrap + fill + g_lamp_diffuse) + specular * sun + g_lamp_specular;
 }
 
 // The debug colourings (M, L) replace the material's albedo.
@@ -4874,6 +4949,9 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     // Under the clouds (#145).
     if (resolve_push.cloud_shadow != 0xFFFFFFFFu)
         s.shadow *= cloud_light(surface_scene, normalize(f[0].sun_dir));
+    // The lamps (D-065): every one whose reach the surface is in, a shadow ray each; the classes
+    // take them where they take the sun (`sun_light`).
+    lamps_at<SHADOWS>(f, surface_scene, s.n, s.view, mat.specular_power, mat.specular, shadow_bias(f, inst, m), pixel);
     s.transmitted = float3(0.0);
     s.cloud = 1.0;
     if (SHADOWS != 0 && class_index == MATERIAL_CLASS_ICE && f[0].tlas != 0 && (f[0].flags & FLAG_TRANSLUCENCY) != 0)

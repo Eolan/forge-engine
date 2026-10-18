@@ -128,6 +128,8 @@ pub(crate) enum LabScene {
     /// The particles' first effects (D-064, #271): three chimneys smoking, a fire's embers and
     /// smoke in a ring of rocks, a walker's footsteps raising dust.
     Smoke,
+    /// The sharpness room at night lit by three lamps (D-065 step 1, #270): `--time-of-day 1.5`.
+    Lamps,
 }
 
 /// The floor's half side, metres.
@@ -629,6 +631,7 @@ impl LabWorld {
             | LabScene::Room
             | LabScene::Materials
             | LabScene::Smoke
+            | LabScene::Lamps
             | LabScene::Models => 0.0,
         };
         // The flight's is a field of grass, wide enough to fly over for a while.
@@ -640,7 +643,10 @@ impl LabWorld {
         // None in space: the ship flies over a planet far below; none on the tank's bench nor in the
         // sharpness room, whose floors are their own.
         let mut statics = Vec::new();
-        if !matches!(kind, LabScene::Space | LabScene::TankBench | LabScene::Room) {
+        if !matches!(
+            kind,
+            LabScene::Space | LabScene::TankBench | LabScene::Room | LabScene::Lamps
+        ) {
             let floor_shape = Shape::cuboid(Vec3::new(floor_half, 0.5, floor_half), 0.05, 0.0)?;
             world.add_body(&BodyDesc::fixed(&floor_shape, floor_at.as_dvec3()))?;
             statics.push((
@@ -1143,6 +1149,7 @@ impl LabWorld {
             }
             LabScene::Room => statics.extend(room::build(ROOM)),
             LabScene::Smoke => statics.extend(smoke::build()),
+            LabScene::Lamps => statics.extend(room::build(ROOM)),
             LabScene::Models => statics.extend(models::build(MODELS)),
         }
         // The balls to throw, asleep out of sight until thrown, after the scene's.

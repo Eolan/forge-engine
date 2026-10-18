@@ -20,6 +20,7 @@ pub mod dust;
 pub mod exposure;
 pub mod ffx_shadows;
 pub mod gtao;
+pub mod lamps;
 pub mod liquid;
 pub mod local_exposure;
 pub mod material;

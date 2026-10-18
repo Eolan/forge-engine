@@ -1365,6 +1365,18 @@ cost the draw, and the flipbook's are larger with four reads each (the procedura
 0.022 ms, the frame 1.59). It has no sorting yet. The flipbook bakes once in about 2 s and loads
 from the derived cache in 1 ms.
 
+The lamps (D-065 step 1, #270) in the sharpness room at midnight (`--lab lamps --time-of-day
+1.5`), 1600 × 900, 400 frames, best of three, against the same room unlit:
+
+| | `shading/standard` | frame |
+|---|---|---|
+| unlit (`--lab room`) | 0.162 ms | 0.84 ms |
+| three lamps, three shadow rays a pixel | 0.480 ms | 1.58 ms |
+
+About 0.1 ms a lamp over the whole view at this size. Every pixel in a lamp's reach traces its
+ray. The clustered lists and one ray a pixel to a lamp picked by its contribution are what bound
+that cost in a view of many lamps (D-065).
+
 ## `city-plan` — a city's plan in 3D, measured on the private sandbox's city (D-059, 2026-10-11)
 
 RTX 5070 Ti, 1600 × 900, TAA, 600 frames, a city of 37 506 masses (1 257 of them in the kit

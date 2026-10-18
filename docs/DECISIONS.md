@@ -4565,6 +4565,29 @@ maybe try both ? And compare results with me ?"
 - The other parts (lamps as data, probes lit by the lamps, glass both ways, the checks) serve
   both.
 
+**Built so far (step 1, 2026-10-18):** `forge_render::lamps` and `lamps_at` in `meshlet.slang`,
+shown by the physics lab's `--lab lamps` (the sharpness room at midnight, three lamps).
+- **The lamps:** small sphere lights in candelas and kelvin (Tanner Helland's blackbody fit,
+  scaled to luminance 1).
+  - `MeshletScene::set_lamps` keeps, each frame, the 64 nearest whose light reaches the camera's
+    surroundings.
+  - A lamp's reach is where its light falls to 0.05 lux.
+- **The shading:** every pixel takes every lamp whose reach it is in.
+  - Its illuminance is the candelas over the distance squared, by the cosine, let go smoothly at
+    the reach.
+  - One shadow ray goes towards a point of its sphere that moves with the frame's noise, so TAA
+    (or DLAA) averages the penumbra.
+  - It gets highlights as the sun's. `sun_light` adds both, so every class takes them.
+- **Not the clustered lists yet:** a pixel loops over the frame's few lamps. Olsson's clusters,
+  one ray a pixel to a lamp picked by its contribution with the denoising, RTXDI to compare, and
+  the probes lit by the lamps come next.
+- **Checks:**
+  - two runs at once identical, the mesh path matching the fallback;
+  - a still camera's frames 10 apart differ on 0.21 % of the pixels by more than 2 codes under
+    TAA and 0.0094 % under DLAA (the room unlit: 0.0102 %);
+  - the cost: three lamps over the whole view, three rays a pixel, take `shading/standard` from
+    0.16 ms to 0.48 ms.
+
 ## D-066 — Pieces with sockets: one connector schema for generation, the anomaly check and player building ✅ (proposed 2026-10-16 on the owner's walk of #266; the owner's go the same evening)
 
 **The question:** the owner, walking the village: "would using some kind of snap system with the

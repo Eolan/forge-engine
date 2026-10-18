@@ -2002,6 +2002,9 @@ impl Demo for Gallery {
             }
             self.scene.set_movers_still(&movers, |k| Some(k) == still);
         }
+        // The scene's lamps (D-065), the nearest that reach the camera, for this frame.
+        let lamps = self.running.as_mut().map(|r| r.lamps()).unwrap_or_default();
+        self.scene.set_lamps(frame.slot, &lamps, camera_in_scene);
         // The scene's movers (#216): the lab's bodies between their last two ticks (#136).
         if let Some(running) = &mut self.running {
             running.movers(&mut self.scene);

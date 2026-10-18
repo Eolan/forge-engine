@@ -526,6 +526,10 @@ struct GpuFrame {
     /// The sampled index of its colour map (x; `u32::MAX`: none), 1 when it has a sea (y), 1 when
     /// the map is its albedo from afar (z), its sea mask's index (w; `u32::MAX`: none).
     planet_map: [u32; 4],
+    /// The lamps (D-065, [`MeshletScene::set_lamps`]) and how many (0: none).
+    lamps: u64,
+    lamp_count: u32,
+    lamp_pad: u32,
 }
 
 const _: () = assert!(std::mem::offset_of!(GpuFrame, ground_window) % 16 == 0);
@@ -1801,6 +1805,20 @@ impl MeshletSceneBuilder {
             ground_window: Cell::new(NO_GROUND_WINDOW),
             _kept: std::mem::take(&mut self.kept),
             planet: Cell::new(GpuPlanet::default()),
+            lamp_buffers: (0..FRAMES_IN_FLIGHT)
+                .map(|i| {
+                    device.create_buffer(BufferDesc {
+                        size: (crate::lamps::MAX_LAMPS
+                            * std::mem::size_of::<crate::lamps::GpuLamp>())
+                            as u64,
+                        usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+                        location: MemoryLocation::CpuToGpu,
+                        category: MemoryCategory::Frame,
+                        name: &format!("lamps {i}"),
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?,
+            lamp_counts: std::array::from_fn(|_| Cell::new(0)),
             textures: self.textures.take(),
             instance_count: self.instances.len() as u32,
             origin: self.origin,
@@ -2007,6 +2025,9 @@ pub struct MeshletScene {
     ground_window: Cell<[f32; 4]>,
     /// The planet ([`Self::set_planet`]), as the frame block holds it.
     planet: Cell<GpuPlanet>,
+    /// Per frame slot, the lamps it lights with ([`Self::set_lamps`], D-065), and how many.
+    lamp_buffers: Vec<Buffer>,
+    lamp_counts: [Cell<u32>; FRAMES_IN_FLIGHT],
     textures: Option<TextureSet>,
     /// What it keeps alive for its instances ([`MeshletSceneBuilder::keep`]).
     _kept: Vec<Box<dyn std::any::Any + Send>>,
@@ -2194,6 +2215,17 @@ impl MeshletScene {
     /// `None` for none. The ground's clusters that reach into it take the cut-outs' raster.
     pub fn set_ground_window(&self, window: Option<[f32; 4]>) {
         self.ground_window.set(window.unwrap_or(NO_GROUND_WINDOW));
+    }
+
+    /// The lamps frame `slot` lights with (D-065 step 1, [`crate::lamps`]): of `lamps` (the
+    /// scene's frame), the nearest [`crate::lamps::MAX_LAMPS`] whose light reaches `camera`. Call
+    /// it each frame before the draw; none by default.
+    pub fn set_lamps(&self, slot: FrameSlot, lamps: &[crate::lamps::Lamp], camera: Vec3) {
+        let kept = crate::lamps::nearest(lamps, camera);
+        if !kept.is_empty() {
+            self.lamp_buffers[slot.index].write(0, &kept);
+        }
+        self.lamp_counts[slot.index].set(kept.len() as u32);
     }
 
     /// The planet the frames drawn from now on stand on (#220), for the layered rows that take
@@ -3634,6 +3666,9 @@ impl MeshletRenderer {
             planet_axis: scene.planet.get().axis,
             planet_meridian: scene.planet.get().meridian,
             planet_map: scene.planet.get().map,
+            lamps: scene.lamp_buffers[slot.index].address(),
+            lamp_count: scene.lamp_counts[slot.index].get(),
+            lamp_pad: 0,
         }
     }
 
