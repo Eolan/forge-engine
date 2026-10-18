@@ -29,7 +29,8 @@
 #
 # --sets SETS: the sets the change reaches (for example `island`), Tier 0 on them and the
 # sentinels whatever the paths map to: a change to a shared file whose code only one demo runs
-# (#199), which the full batch would check for 20 minutes. Say why in the report.
+# (#199), which the full batch would check for 20 minutes. Say why in the report. A Tier 0
+# captures the mesh path, both with GPU code changed or FORGE_PATHS="mesh fb".
 # --base COMMIT: the change since COMMIT, compared with COMMIT's accepted set (default: the
 # newest commit of HEAD's history with one). --committed: only BASE..HEAD's paths, not the
 # working tree's (to check a commit again). --expect PATTERNS: the images the change is meant to
@@ -405,6 +406,9 @@ case $tier in
     ;;
   *) sets=all paths="mesh fb" ;;
 esac
+# FORGE_PATHS: the paths a Tier 0 captures, `mesh fb` for both (images both paths draw: D-070's
+# lab models, first captured under DLAA where the assets were).
+[ "$tier" = 0 ] && [ -n "${FORGE_PATHS:-}" ] && paths=$FORGE_PATHS
 validate_sets=""
 if [ "$tier" = 0 ] && [ $gpu = 1 ]; then
   validate_sets=$selected
