@@ -5739,7 +5739,7 @@ the night finds it. The night narrows it to the day's commits.
 must leave nothing behind (DLSS's history, probes, exposure, counters, pools), proved by 0 px
 against fresh runs.
 
-## D-072 — Scripting in Luau through `mlua`, outside the predicted step 🟡 (2026-10-18; Luau the owner's choice, the rest proposed)
+## D-072 — Scripting in Luau through `mlua`, outside the predicted step ✅ (proposed 2026-10-18 on the owner's question; Luau the owner's choice, the rest the owner's go the same day)
 
 The owner asked on 2026-10-18 what the industry uses for scripting and which language Forge
 should take. The research is `docs/research/scripting.md`. Asked which language to use without the
@@ -5750,7 +5750,7 @@ so that missions and mods are designed for it. Nothing is built until a mission 
 **Chosen (the owner):** Luau, Roblox's typed descendant of Lua 5.1 (MIT), embedded through the
 `mlua` crate (MIT) in a new crate, `forge-script`.
 
-**Proposed, for the owner's yes:**
+**Decided (the owner's yes to the four questions below, missions as data first):**
 1. **Missions as data first.** A `Mission` record in `forge-data` packages:
    - objectives;
    - triggers: a volume entered, an item picked up, an entity killed, a timer, all-of, any-of;
@@ -5845,9 +5845,8 @@ so that missions and mods are designed for it. Nothing is built until a mission 
   stage.
 - **The numbers:** a script's time per tick, its memory, and its reload time.
 
-**For the owner to decide:**
-1. Missions as data first (point 1)?
-2. Scripts never inside the predicted step (point 2)?
-3. Mods server-first, the client running only interface scripts (point 7), or full access on
-   client and server as in Project Zomboid?
-4. No visual scripting until the editor (point 9)?
+**Decided (the owner, 2026-10-18): yes to all four, missions as data first.**
+1. Missions are data first (point 1). The first mission record is the next step (#287).
+2. Scripts never run inside the predicted step (point 2).
+3. Mods are server-first; the client runs only interface and presentation scripts (point 7).
+4. No visual scripting until the editor (point 9).
