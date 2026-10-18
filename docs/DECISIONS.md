@@ -4748,7 +4748,7 @@ again (`demos/physics-lab.md`).
     The lab's lamp room, three lamps over the whole view: +0.18 ms (1.84 → 2.02 ms). The smoke
     yard's fire: +0.08 ms in its zones. A frame without lamps runs neither pass.
 - **Next:**
-  - RTXDI to compare (the SDK's download waits on the owner's word).
+  - RTXDI to compare (fetched on the owner's word; the plan is below, after the glass).
   - If wide penumbrae still crawl under TAA (the fire's floor), the note's upgrades: an à-trous
     pass on the windows that mix lit and shadowed pixels, or SIGMA's translucency route fed with
     the same ratio (it needs closest-hit rays and the owner's word, given §3's patents).
@@ -4811,8 +4811,49 @@ again (`demos/physics-lab.md`).
       bridge (`RAB_*`) and include its headers from `rtxdi-sdk/Include` at compile time. The
       host side's parameters get Forge's own Rust, written from the headers' documented
       meaning, not ported.
-    - It comes after the penumbra denoiser lands (both touch `lamps_at`), and it is to be
-      compared with the light lists with the owner.
+    - It is to be compared with the light lists with the owner, now that the penumbra filter has
+      landed (both touch `lamps_at`).
+  - **How RTXDI plugs in** (planned from the headers, 2026-10-18):
+    - **Only ReSTIR DI over local lights:** `Rtxdi/DI` and `Rtxdi/LightSampling`. No ReGIR, GI
+      or PT, and no environment map.
+    - **Forge's bridge** (`RAB_*`, 29 functions, a few of them stubs):
+      - the surfaces come from the visibility buffer, this frame's and the last one's (a
+        depth and an octahedral normal kept a frame);
+      - the lights are the `GpuLamp` spheres, sampled by solid angle;
+      - the target is the unshadowed light weighted by the surface's BRDF. It is zero where the
+        lamp does not light the surface's region (D-068's lists as a prior);
+      - the visibility is one shadow ray.
+    - **Its three buffers** are named by macros (`RTXDI_LIGHT_RESERVOIR_BUFFER`,
+      `RTXDI_RIS_BUFFER`, `RTXDI_NEIGHBOR_OFFSETS_BUFFER`). Each is defined as a `T*` field of
+      the pass's frame block, so buffers stay by device address.
+    - **Forge's own Rust for the C++ contexts:**
+      - the reservoirs' pitch, in blocks of 16 pixels;
+      - the parameter blocks of each pass;
+      - the lights' power texture, with its mips;
+      - the spatial neighbours' offsets;
+      - the map of each lamp's index from one frame to the next, since the kept lamps change
+        as the camera moves.
+    - **Passes:**
+      - presample the lamps by power into tiles of 1 024;
+      - initial samples, 8 a pixel;
+      - one spatiotemporal resampling;
+      - shading, with one shadow ray.
+    - **The comparison:** the same frames under `--lamps restir` and under the light lists, as
+      images, shimmer (DLAA, a still camera and a turn) and cost. ReSTIR can take all 325
+      lamps lit at 22:00, not only the 64 nearest that the far rooms' glow stands in for.
+    - **Compiling:** `slangc` gets `rtxdi-sdk/Include` on its include path when the directory is
+      there. Without it (CI, other machines) the switch is absent.
+    - **Checked before any code:**
+      - The setup: Forge's slangc flags, a stub bridge and the buffers as frame-block
+        pointers.
+      - It compiled `RTXDI_SampleLocalLights` (power RIS),
+        `RTXDI_DISpatioTemporalResampling` and `RTXDI_StoreDIReservoir` to 72 KB of SPIR-V that
+        `spirv-val` passes for Vulkan 1.3.
+      - The bridge includes `Rtxdi/Utils/RandomSamplerState.hlsli` first.
+      - Slang warns 11 times about a uint tested as a bool inside the library. That file is
+        compiled with `-warnings-disable 30081`.
+      - The parameter structs live in the library's `.h` files. Forge's Rust mirrors them,
+        with a size check against slangc's reflection.
 
 ## D-066 — Pieces with sockets: one connector schema for generation, the anomaly check and player building ✅ (proposed 2026-10-16 on the owner's walk of #266; the owner's go the same evening)
 
