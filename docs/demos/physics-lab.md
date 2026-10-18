@@ -1965,9 +1965,10 @@ cargo run --release -p physics-lab -- --lab smoke
 
 ![The smoke yard at 15 s: three chimneys and a fire smoking, a step's dust](images/lab-smoke.png)
 
-*Frame 900 of `--lab smoke --fixed-step`: three chimneys of stacked blocks smoking, a fire's
-smoke in a ring of rocks, and two puffs of dust from the walker's last steps, at the lower right.
-The fire's embers are there too, a few pixels each and lost in the daylight.*
+*Frame 900 of `--lab smoke --fixed-step`: three chimneys of stacked blocks smoking and a fire's
+smoke in a ring of rocks, drawn from the baked six-way flipbook (lit lobes, shaded undersides),
+and two puffs of dust from the walker's last steps, at the lower right. The fire's embers are
+there too, a few pixels each and lost in the daylight.*
 
 Step 1 of D-064, grown from the splashes (#107).
 - **Emitters as data:** the effects are records of `crates/forge-render/data/particles.toml`.
@@ -1991,23 +1992,43 @@ Step 1 of D-064, grown from the splashes (#107).
     scene's structure, and the sky's light from above and below. The probes come next.
 - **Drawing:** `particles/draw` draws soft puffs facing the camera, after the sky's compose and
   the splashes.
-  - Each puff is turned by its own angle, and three octaves of noise erode it from the edge and
-    churn over its life.
-  - Each is shaded as a lumpy ball against the sun's way on the screen, with a wrap, so a plume
-    shows its billows' lit and shaded sides. This holds until D-064's six-way smoke textures.
+  - **The chimneys' and the fire's smoke** is drawn from a flipbook our own solver bakes (D-064's
+    point 6, `forge_render::smoke_bake`).
+    - **The puff:** simulated on a 64³ grid with Stam's stable fluids. It is fed as a cauliflower
+      of seven spinning balls and grown by its heat's expansion, a divergence source in the
+      pressure solve. Vorticity confinement keeps its curls.
+    - **The frames:** 32 over its life, each ray-marched lit from the six axis directions (the
+      light's transmittance a running sum along the grid's lines), packed in Unity's six-way
+      layout in two 576² atlases.
+    - **The draw:** a particle cross-fades the two frames about its age, turned by its spin and
+      mirrored for half of them. It weights the six lights by the sun's direction in the
+      flipbook's frame and darkens the sky's light in the core.
+    - **The cost:** the bake takes about 2 s once and is then read from the derived cache, in
+      1 ms.
+  - **The other effects' puffs** (dust) are procedural:
+    - turned by their own angle, three octaves of noise eroding them from the edge and churning
+      over their life;
+    - shaded as lumpy balls against the sun's way on the screen, with a wrap.
   - A puff is faded where it meets the scene, and hazed by the aerial perspective.
   - Smoke and glow share one premultiplied blend: a particle with no opacity adds its light.
   - The draw writes TAA's reactive mask over the splashes' (premultiplied too, under 0.9).
   - Its shaders compile without fused multiply-adds (#277).
 
-**Numbers** (1600 × 900, RTX 5070 Ti, frame 360): 492 particles alive at most, none dropped.
-`particles/draw` takes 0.022 ms, `particles/advance` 0.005 ms and `particles/emit` 0.001 ms.
+**Numbers** (1600 × 900, RTX 5070 Ti, frame 360, best of three): 492 particles alive at most,
+none dropped.
+- `particles/draw`: 0.085 ms with the flipbook's larger puffs and their four reads (0.022 ms
+  with the procedural puffs).
+- `particles/advance`: 0.005 ms.
+- `particles/emit`: 0.001 ms.
+
+The frame was 1.65 ms.
 
 **Left for the next steps of D-064:**
 - the probes' light at each particle's centre;
 - collisions;
 - sorting alpha-blended effects per emitter;
-- flipbooks and six-way smoke baked by our own stable-fluids solver;
+- the flipbook's frames blended by motion vectors (now cross-faded), and more flipbooks (dust,
+  fire);
 - the dust volume;
 - the village's chimneys at dusk and the walker's steps (#266).
 

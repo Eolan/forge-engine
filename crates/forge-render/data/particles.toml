@@ -16,11 +16,12 @@
 #   colour   rgba at birth and at death
 #   draw     "smoke" (lit, alpha-blended puffs) or "glow" (unlit, added: embers, sparks)
 #   burst    a burst of `rate` particles when the emitter is triggered, not a stream
+#   texture  "smoke": drawn from the puff our own solver bakes (six-way lit); else a procedural puff
 
 [chimney-smoke]
 rate = 14.0
 life = [5.0, 7.5]
-radius = [0.25, 1.4]
+radius = [0.7, 2.0]
 speed = [0.5, 0.9]
 cone = 12.0
 spread = 0.12
@@ -30,6 +31,7 @@ wind = 1.0
 curl = [0.25, 1.5]
 colour = [[0.32, 0.31, 0.30, 0.55], [0.55, 0.55, 0.56, 0.0]]
 draw = "smoke"
+texture = "smoke"
 
 [footstep-dust]
 rate = 16.0

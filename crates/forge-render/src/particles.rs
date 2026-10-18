@@ -91,6 +91,10 @@ pub struct Effect {
     /// A burst of `rate` particles when triggered, not a stream.
     #[serde(default)]
     pub burst: bool,
+    /// The flipbook its smoke is drawn from: `"smoke"`, the puff our own solver bakes
+    /// ([`crate::smoke_bake`], six-way lit); none, a procedural puff.
+    #[serde(default)]
+    pub texture: Option<String>,
 }
 
 /// Reads effects in the form of `data/particles.toml`, in the file's order.
@@ -108,10 +112,11 @@ pub fn parse(text: &str) -> std::result::Result<Vec<Effect>, String> {
             && effect.speed[1] >= effect.speed[0]
             && effect.radius.iter().all(|r| *r > 0.0)
             && effect.drag >= 0.0
-            && (0.0..=180.0).contains(&effect.cone);
+            && (0.0..=180.0).contains(&effect.cone)
+            && effect.texture.as_deref().is_none_or(|t| t == "smoke");
         if !positive {
             return Err(format!(
-                "{name}: a rate, lives, radii and a drag of 0 or more, ranges in order, a cone of 0–180°"
+                "{name}: a rate, lives, radii and a drag of 0 or more, ranges in order, a cone of 0–180°, no texture but \"smoke\""
             ));
         }
         effects.push(effect);
@@ -244,10 +249,11 @@ impl GpuEffect {
             wind: e.wind,
             curl: e.curl[0],
             curl_size: e.curl[1],
+            // The way it is drawn, and its flipbook in bits 8 on (1: the baked smoke).
             draw: match e.draw {
                 DrawKind::Smoke => 0,
                 DrawKind::Glow => 1,
-            },
+            } | (u32::from(e.texture.is_some()) << 8),
         }
     }
 }
@@ -293,6 +299,8 @@ struct GpuFrame {
     block_count: u32,
     capacity: u32,
     pad: u32,
+    /// The flipbook: its positive and negative atlases (sampled), its frames and columns.
+    flip: [u32; 4],
     tlas: u64,
     sky: u64,
     ring: u64,
@@ -300,7 +308,7 @@ struct GpuFrame {
     effects: u64,
 }
 
-const _: () = assert!(std::mem::size_of::<GpuFrame>() == 216);
+const _: () = assert!(std::mem::size_of::<GpuFrame>() == 232);
 
 /// The ring's bookkeeping on the CPU: slots counted from the start, so a block's are
 /// `first % PARTICLE_CAPACITY` onwards.
@@ -347,6 +355,8 @@ pub struct Particles {
     blocks: Vec<Buffer>,
     state: RefCell<Ring>,
     stats: Cell<ParticleStats>,
+    /// The baked smoke's atlases, when an effect draws from them, and their sampled indices.
+    flipbook: Option<(crate::material::TextureSet, [u32; 2])>,
 }
 
 impl Particles {
@@ -415,6 +425,21 @@ impl Particles {
         if !gpu.is_empty() {
             table.write(0, &gpu);
         }
+        // The smoke's flipbook (D-064's point 6), when an effect draws from it.
+        let flipbook = if effects.iter().any(|e| e.texture.is_some()) {
+            let mut set = crate::material::TextureSet::new(device);
+            let started = std::time::Instant::now();
+            let data = crate::smoke_bake::flipbook();
+            tracing::info!(
+                ms = started.elapsed().as_millis(),
+                "particles: the smoke's flipbook ready (baked once, then from the cache)"
+            );
+            let ids = [set.add(&data[0])?, set.add(&data[1])?];
+            let sampled = ids.map(|id| set.sampled(id));
+            Some((set, sampled))
+        } else {
+            None
+        };
         let per_slot = |size: usize, name: &str| -> Result<Vec<Buffer>> {
             (0..FRAMES_IN_FLIGHT)
                 .map(|i| {
@@ -442,6 +467,7 @@ impl Particles {
             )?,
             state: RefCell::new(Ring::default()),
             stats: Cell::new(ParticleStats::default()),
+            flipbook,
         })
     }
 
@@ -629,6 +655,14 @@ impl Particles {
                 block_count: gpu.len() as u32,
                 capacity: PARTICLE_CAPACITY,
                 pad: 0,
+                flip: self.flipbook.as_ref().map_or([0; 4], |(_, [p, n])| {
+                    [
+                        *p,
+                        *n,
+                        crate::smoke_bake::FRAMES as u32,
+                        crate::smoke_bake::COLUMNS as u32,
+                    ]
+                }),
                 tlas: params.tlas,
                 sky: sky.address(),
                 ring: self.ring.address(),

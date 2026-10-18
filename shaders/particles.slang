@@ -104,6 +104,8 @@ struct ParticleFrame
     uint block_count;
     uint capacity;
     uint pad;
+    uint4 flip;          // the smoke's flipbook: its positive and negative atlases (sampled),
+                         // its frames and its columns (smoke_bake.rs)
     uint64_t tlas;       // the scene's structure, for the sun's shadow (0: none)
     Sky* sky;
     Particle* ring;
@@ -278,7 +280,7 @@ void advance_main(uint3 id : SV_DispatchThreadID)
     }
     // Its light, once a particle a frame: the sun's, scattered towards the camera, and the
     // sky's from above and below. A glow makes its own.
-    if (e.draw == DRAW_SMOKE)
+    if ((e.draw & 0xFFu) == DRAW_SMOKE)
     {
         float3 view = normalize(q.position - f[0].camera.xyz);
         float cos_theta = dot(f[0].sun.xyz, view);
@@ -304,6 +306,7 @@ struct ParticleVaryings
                                        // shading
     nointerpolation float3 towards_sun : TEXCOORD2; // the sun in the puff's frame: x right, y
                                                     // down the screen, z towards the camera
+    nointerpolation uint flipbook : TEXCOORD3; // 1: drawn from the baked smoke's flipbook
     float3 corner : TEXCOORD0;         // xy: where in its puff, -1..1 each way; z: its age over
                                        // its life
     nointerpolation float4 fade : TEXCOORD1; // x: its distance, metres; y: over how far it fades
@@ -335,6 +338,7 @@ ParticleVaryings vert_main(uint vertex : SV_VertexID)
     o.color = float4(0.0);
     o.sun = float3(0.0);
     o.towards_sun = float3(0.0, 0.0, 1.0);
+    o.flipbook = 0u;
     o.corner = float3(0.0);
     o.fade = float4(0.0);
     uint i = vertex / 6u;
@@ -363,6 +367,7 @@ ParticleVaryings vert_main(uint vertex : SV_VertexID)
     float2 middle = clip.xy / clip.w * half_size;
     o.position = float4((middle + c * drawn_px) / half_size * clip.w, clip.z, clip.w);
     o.corner = float3(c, s);
+    o.flipbook = e.draw >> 8u;
     o.fade = float4(clip.w, max(radius, 0.05), float(q.seed & 1023u), q.spin);
 
     float4 colour = lerp(e.colour0, e.colour1, s);
@@ -373,7 +378,7 @@ ParticleVaryings vert_main(uint vertex : SV_VertexID)
     float2 ndc = clip.xy / clip.w;
     float2 uv = float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
     float4 air = aerial_at(sky, saturate(uv), clip.w * 0.001);
-    if (e.draw == DRAW_GLOW)
+    if ((e.draw & 0xFFu) == DRAW_GLOW)
     {
         // Added: its own light, thinned by the air, over what is behind it.
         float3 glow = colour.rgb * GLOW_UNIT * f[0].sun.w * alpha;
@@ -433,6 +438,42 @@ ParticleTargets frag_main(ParticleVaryings input)
     float wrap = saturate((dot(normal, input.towards_sun) + 0.5) / 1.5);
     float shade = 0.35 + 1.1 * wrap;
     float4 color = float4(input.color.rgb + input.sun * shade, input.color.a) * k;
+    if (input.flipbook == 1u)
+    {
+        // The baked smoke (D-064's point 6, smoke_bake.rs): the two frames about its age
+        // cross-faded, each the puff turned by the particle's spin (and mirrored for half of
+        // them, so a plume's puffs differ), lit from the six ways by the sun's direction in the
+        // flipbook's frame: x right, y down its rows, z towards the camera.
+        uint4 fb = f[0].flip;
+        float frame = age * float(fb.z - 1u);
+        uint f0 = min(uint(frame), fb.z - 1u);
+        uint f1 = min(f0 + 1u, fb.z - 1u);
+        float t = frame - float(f0);
+        bool mirrored = (seed & 1u) != 0u;
+        float2 within = turned * float2(mirrored ? -1.0 : 1.0, 1.0) * 0.5 + 0.5;
+        float texels = 96.0;
+        within = clamp(within, 0.5 / texels, 1.0 - 0.5 / texels);
+        float columns = float(fb.w);
+        float2 uv0 = (float2(f0 % fb.w, f0 / fb.w) + within) / columns;
+        float2 uv1 = (float2(f1 % fb.w, f1 / fb.w) + within) / columns;
+        float4 pos = lerp(sample_image(fb.x, SAMPLER_LINEAR_CLAMP, uv0), sample_image(fb.x, SAMPLER_LINEAR_CLAMP, uv1), t);
+        float4 neg = lerp(sample_image(fb.y, SAMPLER_LINEAR_CLAMP, uv0), sample_image(fb.y, SAMPLER_LINEAR_CLAMP, uv1), t);
+        float3 lit_pos = pos.rgb * pos.rgb;
+        float3 lit_neg = neg.rgb * neg.rgb;
+        // The sun's way turned as the texture was, mirrored with it.
+        float3 l = input.towards_sun;
+        float2 lt = float2(l.x * cos(spin) - l.y * sin(spin), l.x * sin(spin) + l.y * cos(spin));
+        lt.x *= mirrored ? -1.0 : 1.0;
+        float3 w2 = float3(lt, l.z) * float3(lt, l.z);
+        float lit = (lt.x > 0.0 ? w2.x * lit_pos.r : w2.x * lit_neg.r)
+            + (lt.y < 0.0 ? w2.y * lit_pos.g : w2.y * lit_neg.g)
+            + (l.z < 0.0 ? w2.z * lit_pos.b : w2.z * lit_neg.b);
+        // The sky's light darkened in the puff's core, as the six ways on average are.
+        float around = (lit_pos.r + lit_pos.g + lit_pos.b + lit_neg.r + lit_neg.g + lit_neg.b) / 6.0;
+        float coverage = pos.a * soft;
+        color = float4(input.color.rgb * (0.55 + 0.45 * around) + input.sun * (1.3 * lit), input.color.a) * coverage;
+        k = coverage;
+    }
     if (max(color.a, max(color.r, max(color.g, color.b))) < 1.0 / 4096.0)
         discard;
     ParticleTargets o;

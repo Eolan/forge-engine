@@ -423,6 +423,17 @@ soft edges, their pixel-wide minimum, their reactive mask and their hash:
   "Compositing Digital Images", SIGGRAPH 1984: a particle with no opacity adds its light.
 - **Smoke's scattering:** Henyey and Greenstein's phase function (above), with an even part for
   the light scattered more than once.
+- **The baked smoke's simulation** (`forge_render::smoke_bake`):
+  - **Stable fluids:** Jos Stam, "Stable Fluids", SIGGRAPH 1999. The semi-Lagrangian advection
+    and the pressure projection; US 6,266,071 B1 expired in 2018.
+  - **Vorticity confinement**, as in Ronald Fedkiw, Jos Stam and Henrik Wann Jensen, "Visual
+    Simulation of Smoke", SIGGRAPH 2001.
+  - **Growth from the heat:** a divergence source in the pressure solve, after Bryan E. Feldman,
+    James F. O'Brien and Okan Arikan, "Animating Suspended Particle Explosions", SIGGRAPH 2003.
+- **Six-way lighting:** the layout of Unity's six-way smoke lighting: right, top and back with
+  the alpha in one map; left, bottom and front in the other. It is described in Unity
+  Technologies' "Realistic smoke lighting with 6-way lighting in VFX Graph", January 2023, and
+  is used in games under several names. The frames and the code are our own.
 
 **City plans** (`forge_procgen::city`, D-059):
 - **Streets from a tensor field.** Guoning Chen, Gregory Esch, Peter Wonka, Pascal Müller,

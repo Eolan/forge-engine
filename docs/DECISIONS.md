@@ -4498,10 +4498,17 @@ downloaded sets stay out unless the owner says otherwise.
 - **Point 4, in part:** one sun ray a particle a frame, and the sky's light.
 - **Point 5, in part:** TAA's reactive mask.
 - **Point 7, in part:** the three first effects, in the lab.
-- **Numbers:** 492 particles at most, the draw 0.022 ms, 0.006 ms of simulation. Two runs are
-  identical to the pixel.
-- **Next:** the probes, collisions, sorting, the baked flipbooks and six-way smoke, the dust
-  volume, and the village's chimneys and steps.
+- **Point 6 and point 3's six-way smoke, the same night:** `forge_render::smoke_bake`.
+  - A puff on a 64³ grid by Stam's stable fluids, grown by its heat's expansion (a divergence
+    source), its curls kept by vorticity confinement.
+  - 32 frames, each lit from the six axis directions, in Unity's six-way layout.
+  - About 2 s once, then the derived cache's (1 ms).
+  - The chimney smoke draws from it: frames cross-faded by age, turned and mirrored per
+    particle, the six lights weighted by the sun's direction. The dust keeps procedural puffs.
+- **Numbers:** 492 particles at most, the draw 0.085 ms with the flipbook (0.022 ms
+  procedural), 0.006 ms of simulation. Two runs are identical to the pixel.
+- **Next:** the probes, collisions, sorting, frames blended by motion vectors, flipbooks for
+  dust and fire, the dust volume, and the village's chimneys and steps.
 - **Point 5's DLSS half, tried and left out (2026-10-18):** Streamline 2.14.16's DLSS reads none
   of the hints.
   - The reactive mask was tagged in turn as the bias-current-colour hint (type 29), the

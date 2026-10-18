@@ -38,6 +38,7 @@ pub mod skin;
 pub mod sky;
 pub mod skybody;
 pub mod skybox;
+pub mod smoke_bake;
 pub mod splashes;
 pub mod starfield;
 pub mod streaming;

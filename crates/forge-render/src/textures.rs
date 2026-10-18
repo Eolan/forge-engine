@@ -25,6 +25,23 @@ pub fn keep_in(cache: DerivedCache) {
     let _ = KEPT.set(cache);
 }
 
+/// `make`'s product made by other code than this file's (`code`, a digest of its source): from
+/// the cache [`keep_in`] set when it is in it, else made and stored (the smoke's flipbook,
+/// [`crate::smoke_bake::flipbook`]).
+pub(crate) fn kept_by<T: Stored>(
+    product: &str,
+    inputs: &impl Debug,
+    code: u64,
+    make: impl FnOnce() -> T,
+) -> T {
+    let Some(cache) = KEPT.get() else {
+        return make();
+    };
+    cache
+        .get_or_make(product, KeyHasher::new().debug(inputs).key(code), make)
+        .value
+}
+
 /// `make`'s textures, from the cache [`keep_in`] set when they are in it, else made and stored.
 fn kept<T: Stored>(product: &str, inputs: &impl Debug, make: impl FnOnce() -> T) -> T {
     let Some(cache) = KEPT.get() else {

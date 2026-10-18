@@ -1356,12 +1356,14 @@ walker's dust):
 
 | Zone | ms |
 |---|---|
-| `particles/draw` | 0.022 |
+| `particles/draw` (the smoke from the baked flipbook) | 0.085 |
 | `particles/advance [compute]` (a sun ray a particle) | 0.005 |
 | `particles/emit [compute]` | 0.001 |
 
-The frame was 1.59 ms. The puffs are fill-bound: the plumes' overlapping sprites cost the draw.
-It has no sorting yet.
+The frame was 1.65 ms (best of three). The puffs are fill-bound: the plumes' overlapping sprites
+cost the draw, and the flipbook's are larger with four reads each (the procedural puffs drew in
+0.022 ms, the frame 1.59). It has no sorting yet. The flipbook bakes once in about 2 s and loads
+from the derived cache in 1 ms.
 
 ## `city-plan` — a city's plan in 3D, measured on the private sandbox's city (D-059, 2026-10-11)
 
