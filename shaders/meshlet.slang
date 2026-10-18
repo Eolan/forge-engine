@@ -4274,6 +4274,28 @@ float shadow_bias(Frame* f, Instance inst, Meshlet m)
     return max(SHADOW_BIAS, start * inst.scale);
 }
 
+// The least start of a lamp's shadow ray off a surface, metres (#293).
+static const float LAMP_SHADOW_START = 0.02;
+
+// How far a lamp's shadow ray from a drawn surface of `inst` starts (#293): twice the gap the
+// traced cut may leave in front of it (the cut's error, and the drawn cluster's own where a
+// coarser level is drawn), at least LAMP_SHADOW_START and at most SHADOW_BIAS; a terrain's as its
+// sun rays' (`shadow_bias`). From SHADOW_BIAS, nothing within 15 cm of a lit surface shadowed it:
+// a fitting's housing 7 cm deep let its bulb light the ceiling round it in a halo, and a sofa
+// against a lit wall cast nothing on it. The meshes cut at full detail (all but those over the
+// cut's budget) stand where they are drawn near the camera.
+float lamp_shadow_start(Frame* f, Instance inst, Meshlet m)
+{
+    RtScene* rs = f[0].rt_scene;
+    if (rs == nullptr)
+        return SHADOW_BIAS;
+    RtMesh mesh = rs[0].meshes[inst.mesh];
+    if (mesh.shadow_start > 0.0)
+        return shadow_bias(f, inst, m);
+    float gap = 2.0 * (mesh.cut_error + m.self_error) * inst.scale;
+    return clamp(gap, LAMP_SHADOW_START, SHADOW_BIAS);
+}
+
 // 0 when something lies between `world` and the sun, else 1: one ray, the first hit ends it.
 // With a sun disc (`Frame::sun_angular_radius`, issue #54) the ray aims at a point of it,
 // uniform over the disc from `jitter` (two values in [0, 1): `noise.slang`'s, which repeat with
@@ -5362,7 +5384,7 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     // The lamps (D-065): every one whose reach the surface is in and that lights its room, times
     // the filtered share of their light that reaches it (`lamp_filter_main`), or with a shadow ray
     // each; the classes take them where they take the sun (`sun_light`).
-    lamps_at<SHADOWS>(f, s.probes, surface_scene, s.n, s.view, mat.specular_power, mat.specular, shadow_bias(f, inst, m), pixel, resolve_push.lamp_share);
+    lamps_at<SHADOWS>(f, s.probes, surface_scene, s.n, s.view, mat.specular_power, mat.specular, lamp_shadow_start(f, inst, m), pixel, resolve_push.lamp_share);
     s.transmitted = float3(0.0);
     s.cloud = 1.0;
     if (SHADOWS != 0 && class_index == MATERIAL_CLASS_ICE && f[0].tlas != 0 && (f[0].flags & FLAG_TRANSLUCENCY) != 0)
@@ -5901,7 +5923,7 @@ void lamp_rays_main(uint3 id : SV_DispatchThreadID)
     normal[pixel] = oct_encode(s.n);
     LampPicks picks = lamp_picks(f, place, world, s.n, pixel, p.skip_outside != 0u);
     uint count = f[0].lamp_count;
-    float bias = shadow_bias(f, s.inst, s.m);
+    float bias = lamp_shadow_start(f, s.inst, s.m);
     float3 unshadowed = float3(0.0);
     float3 shadowed = float3(0.0);
     for (uint j = 0u; j < 4u; j++)

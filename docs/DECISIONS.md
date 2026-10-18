@@ -4962,6 +4962,25 @@ again (`demos/physics-lab.md`).
       - another test keeps 24 street lamps 60–89 m away against 100 house lamps within 10 m;
       - the village at 21:00: the hall unchanged (0 px), the junction 102 px, and the main
         street 974 px, where a lamp 80 m away is fading out towards the end of its reach.
+  - **Lamp shadow rays start where the traced cut allows** (#293, 2026-10-18; seen in the same
+    town). They started 15 cm off the surface (`SHADOW_BIAS`, the sun's), so nothing within
+    15 cm of a lit surface shadowed it. A fitting's housing 7 cm deep let its bulb light the
+    ceiling round it in a halo, and a sofa against a lit wall cast nothing on it.
+    - **The start** (`lamp_shadow_start`) is twice the gap the traced cut may leave in front of
+      the drawn surface: the cut's error, and the drawn cluster's own where a coarser level is
+      drawn, scaled with the instance. It is at least 2 cm and at most the old 15 cm, and a
+      terrain keeps its sun rays' start. Meshes under the cut's budget are cut at full detail, so
+      near the camera they start at 2 cm.
+    - **Where:** the resolve's lamp rays and the penumbra filter's (`lamp_rays_main`). The
+      probes' and mirror rays' hits keep 15 cm for now. A 2 cm start there made the village's
+      halls 0.19 EV lighter in their indirect light, and why is part of #294 (the probes' hits by
+      a lamp).
+    - **Checked** (old start against new, 21:00, DLAA):
+      - the village's room and window recess: 5 500 and 4 400 px gain shadow (the window frame
+        against its reveal, the table's legs under its top), 0.0007 EV or less;
+      - the hall: 0.0016 EV darker;
+      - the lab's lamp room: the floor before the board is lit again under the board, which
+        floats 15 cm over it. A ray from 15 cm up started at its lower edge and missed the gap.
     - **The probes leave the street lamps out** (`hit_lamp_weight`, and the lenses tagged
       `RenderLayer::lamp`). Their bounce came back in sharp blocks of the probe grid on the
       grass (#254).
