@@ -66,6 +66,7 @@ pub mod island_walk;
 pub mod scenario;
 pub mod traction;
 mod vars;
+pub mod walker;
 mod world;
 
 use afloat::Barrels;

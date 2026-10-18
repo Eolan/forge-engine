@@ -1,177 +1,54 @@
-//! The player walking the plan's streets in first person (D-059's step 4). Enter puts a Jolt
-//! character on the ground under the camera and the camera at its eyes; WASD walks along the
-//! view and Shift runs (`city_blocks::wished_walk`, as on the island); Enter again frees the
-//! camera. The buildings' walls round it are its walls (D-060: each wall a slab of its
-//! thickness to its roof, open where a passage runs into a court), kept within [`REACH`] as it
-//! goes; the ground is one flat slab at the streets' level.
-
-use std::collections::HashMap;
+//! The player walking the plan's streets in first person (D-059's step 4), on the shared walker
+//! (`city_blocks::walker`, #290). Enter puts it on the ground under the camera and the camera
+//! at its eyes; WASD walks along the view and Shift runs (`city_blocks::wished_walk`, as on the
+//! island); Enter again frees the camera. Its pieces are the buildings' walls round it (D-060:
+//! each wall a slab of its thickness to its roof, open where a passage runs into a court) and
+//! the insides of the houses that have them (floors, flights, partitions, furniture); the ground
+//! is one slab at the streets' level.
 
 use anyhow::Result;
-use city_blocks::character::Player;
-use forge_physics::{BodyDesc, BodyId, CharacterDesc, CharacterId, Shape, World, WorldDesc};
-use forge_sim::TICK;
-use glam::{DVec3, Vec2, Vec3};
+use city_blocks::walker::{Ground, Pieces, WalkSettings};
+use glam::Vec3;
 
-/// How far round the walker its walls are kept, metres.
-const REACH: f32 = 80.0;
-/// Its eyes over its feet, metres.
-pub const EYES: f32 = 1.65;
+pub use city_blocks::walker::EYES;
+
 /// The streets' level, metres: what the walker stands on.
 const LEVEL: f32 = 0.16;
-/// The walls' cells, metres a side.
-const CELL: f32 = 50.0;
-/// Ticks run at most in a frame; a longer frame's rest is dropped.
-const CATCH_UP: u32 = 4;
+/// The ground's thickness, metres.
+const GROUND_THICKNESS: f32 = 2.0;
 
-/// The walls to walk against: each a convex piece (its corners, the world's metres), found by
-/// cells.
-pub struct Walls {
-    walls: Vec<Vec<Vec3>>,
-    cells: HashMap<(i32, i32), Vec<u32>>,
-}
-
-/// A piece's centre on the ground (the world's x and z).
-fn centre(piece: &[Vec3]) -> Vec2 {
-    let sum = piece
-        .iter()
-        .fold(Vec2::ZERO, |s, p| s + Vec2::new(p.x, p.z));
-    sum / piece.len().max(1) as f32
-}
+/// The pieces to walk against.
+pub struct Walls(Pieces);
 
 impl Walls {
-    /// The walls: convex pieces, their corners in the world's metres.
+    /// The pieces: convex, their corners in the world's metres.
     pub fn new(pieces: Vec<Vec<Vec3>>) -> Self {
-        let mut cells: HashMap<(i32, i32), Vec<u32>> = HashMap::new();
-        for (i, piece) in pieces.iter().enumerate() {
-            cells.entry(cell(centre(piece))).or_default().push(i as u32);
-        }
-        Self {
-            walls: pieces,
-            cells,
-        }
-    }
-
-    /// The walls whose centres lie within `r` of `p`.
-    fn near(&self, p: Vec2, r: f32) -> Vec<u32> {
-        let (lo, hi) = (cell(p - Vec2::splat(r)), cell(p + Vec2::splat(r)));
-        let mut out = Vec::new();
-        for x in lo.0..=hi.0 {
-            for z in lo.1..=hi.1 {
-                if let Some(list) = self.cells.get(&(x, z)) {
-                    out.extend(
-                        list.iter()
-                            .copied()
-                            .filter(|&i| centre(&self.walls[i as usize]).distance(p) <= r),
-                    );
-                }
-            }
-        }
-        out
+        Self(Pieces::new(pieces, &WalkSettings::default()))
     }
 }
 
-/// The cell of a point.
-fn cell(p: Vec2) -> (i32, i32) {
-    ((p.x / CELL).floor() as i32, (p.y / CELL).floor() as i32)
-}
-
-/// The walker, its world and the walls it keeps.
-pub struct Walker {
-    world: World,
-    player: Player,
-    character: CharacterId,
-    kept: HashMap<u32, BodyId>,
-    /// Seconds not yet ticked.
-    owed: f64,
-}
+/// The walker.
+pub struct Walker(city_blocks::walker::Walker);
 
 impl Walker {
     /// A walker on the ground under `at` (the world's x and z).
     pub fn new(walls: &Walls, at: Vec3) -> Result<Self> {
-        let mut world = World::new(&WorldDesc::default());
-        let slab = Shape::cuboid(Vec3::new(20_000.0, 1.0, 20_000.0), 0.05, 1000.0)?;
-        world.add_body(&BodyDesc::fixed(
-            &slab,
-            DVec3::new(0.0, f64::from(LEVEL) - 1.0, 0.0),
-        ))?;
-        let feet = DVec3::new(f64::from(at.x), f64::from(LEVEL) + 0.01, f64::from(at.z));
-        let character = world.add_character(&CharacterDesc {
-            position: feet,
-            ..CharacterDesc::default()
-        });
-        let mut walker = Self {
-            world,
-            player: Player {
-                character: Some(character),
-                ..Player::default()
-            },
-            character,
-            kept: HashMap::new(),
-            owed: 0.0,
-        };
-        walker.keep(walls)?;
-        tracing::info!(
-            at = %format_args!("{:.1},{:.1}", at.x, at.z),
-            walls = walker.kept.len(),
-            "the walker in the streets (D-059's step 4)"
-        );
-        Ok(walker)
+        city_blocks::walker::Walker::new(
+            &walls.0,
+            &Ground::slab(LEVEL, GROUND_THICKNESS),
+            Vec3::new(at.x, LEVEL + 0.01, at.z),
+            WalkSettings::default(),
+        )
+        .map(Self)
     }
 
     /// Its feet, the world's metres.
     pub fn feet(&self) -> Vec3 {
-        self.world.character(self.character).position.as_vec3()
+        self.0.feet()
     }
 
     /// Walks `walk` (m/s along the ground, the world's x and z) for the ticks `dt` seconds owe.
     pub fn advance(&mut self, walls: &Walls, walk: [f32; 2], dt: f64) {
-        self.player.walk = walk;
-        self.owed += dt;
-        let tick = f64::from(TICK);
-        let due = (self.owed / tick).floor();
-        self.owed -= due * tick;
-        for _ in 0..(due as u32).min(CATCH_UP) {
-            self.player.tick(&mut self.world, None, 0, TICK, |_| None);
-        }
-        if let Err(e) = self.keep(walls) {
-            tracing::warn!("the walker's walls: {e}");
-        }
-    }
-
-    /// The walls within reach as bodies, the others dropped.
-    fn keep(&mut self, walls: &Walls) -> Result<()> {
-        let feet = self.feet();
-        let p = Vec2::new(feet.x, feet.z);
-        let wanted = walls.near(p, REACH);
-        let mut changed = false;
-        for &i in &wanted {
-            if self.kept.contains_key(&i) {
-                continue;
-            }
-            let points = &walls.walls[i as usize];
-            let Ok(shape) = Shape::convex_hull(points, 0.05, 1000.0) else {
-                continue;
-            };
-            let body = self.world.add_body(&BodyDesc::fixed(&shape, DVec3::ZERO))?;
-            self.kept.insert(i, body);
-            changed = true;
-        }
-        let far: Vec<u32> = self
-            .kept
-            .keys()
-            .copied()
-            .filter(|i| centre(&walls.walls[*i as usize]).distance(p) > REACH * 1.3)
-            .collect();
-        for i in far {
-            if let Some(body) = self.kept.remove(&i) {
-                self.world.remove_body(body);
-                changed = true;
-            }
-        }
-        if changed {
-            self.world.optimize_broad_phase();
-        }
-        Ok(())
+        self.0.advance(&walls.0, walk, dt);
     }
 }

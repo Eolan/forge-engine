@@ -2318,6 +2318,16 @@ mouse turns the view. The masses round it are its walls: each footprint's convex
 its parapet, kept within 80 m as it goes. The ground is one slab at the streets' level, and the
 pavements' 14 cm are stepped. A walk east into a lane's facade stops at its render.
 
+The walker is the shared one, `city_blocks::walker` (#290), which other scenes use too:
+- **Pieces of any kind:** walls, floors, flights' steps, partitions and furniture.
+- **Kept by outline:** a piece stays while its footprint is within reach, so a long wall stays
+  while its end is near.
+- **A ground with holes:** cut where flights go below it.
+- **A start at any height**, a cellar's included.
+
+The village keeps its settings: cells of 50 m, 80 m of reach and a 2 m ground. The map check's
+two walks moved by 6 and 0 pixels, and its fixed views by none.
+
 ![A walk up a lane](images/city-plan-walk.png)
 
 *Three seconds up a lane at eye height, walked by the script: café terraces, a street tree, the
