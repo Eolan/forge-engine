@@ -5684,6 +5684,13 @@ sharpening, and the lamp filter's flicker under TAA. The last two run-to-run fla
     against 7.45 % and 0.0144;
   - AMD's image is 0.36 % of pixels from the 5070 Ti's (ꟻLIP 0.0060), against 0.27 % (0.0057)
     unsharpened.
+- **The city on the same iGPU** (`city60-fsr`'s view, frame 60, the default FSR with RCAS):
+  - no error in 60 frames;
+  - a 305 ms frame, of which the probes' rays take 115 ms and FSR 18.8 ms (the sharpening
+    1.31);
+  - the image looks the same as the 5070 Ti's. It is 5.1 % of pixels and ꟻLIP 0.0149 from it,
+    on the windows' edges, the rocks and the clouds' rims: texture filtering and ray-traced
+    light, which differ between vendors, not FSR's passes (an AA-off pair would confirm it).
 
 **Next:** FSR 4, once there is an RDNA 4 card to test on and its SDK has a Vulkan path.
 
