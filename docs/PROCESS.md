@@ -80,6 +80,10 @@ change used to wait for one.
     paths. Those sets now wait for the night (the owner asked for fewer needless checks).
   - A change whose images the session has already compared itself (targeted captures against
     the accepted set) is pushed after `tools/verify.sh --tier gate`. The night checks the rest.
+    - **Capture just those images:** `FORGE_SETS=... FORGE_ONLY='ast240* lab-tank*'
+      tools/captures.sh DIR`, then `tools/compare.sh` against the accepted set.
+    - **When they changed on purpose,** accept them for the night with
+      `tools/verify.sh --accept DIR COMMIT`. Otherwise the night fails on them.
 - **At night,** a Windows scheduled task, "Forge night check", starts `tools/night.sh` at
   00:30. It also runs when the machine wakes up after missing that time. It:
   - checks out `origin/main` in a worktree of its own (`../forge-night`), whose ignored SDK and

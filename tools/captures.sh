@@ -21,6 +21,9 @@
 #                ballad, city, island (the city's island and the island demo's shots), lab (the
 #                physics lab's scenes), all. The images keep their names.
 #   FORGE_PATHS  the paths, mesh and fb (default both).
+#   FORGE_ONLY   within those sets, only the captures whose name (without the path) matches one
+#                of these globs, e.g. 'ast240* lab-tank*': a change's own images, captured to
+#                compare or to accept by hand (`tools/verify.sh --accept DIR COMMIT`).
 #   FORGE_RECOOK 1: make the cached meshes again. The props are cached in BIN's tree
 #                (cache/meshes/) by their parameters' text, not the code that makes them: a
 #                change to forge-procgen or forge-geom needs it (the island's products and tiles
@@ -50,6 +53,7 @@ sets=${sets//,/ }
 paths=${FORGE_PATHS:-mesh fb}
 paths=${paths//,/ }
 recook=${FORGE_RECOOK:-0}
+only=${FORGE_ONLY:-}
 for set in $sets; do
   case $set in
     all | sentinels | meshlets | ballad | city | island | lab | planet) ;;
@@ -124,6 +128,15 @@ sets_of() {
 }
 # wanted NAME: true when FORGE_SETS asks for the capture NAME.
 wanted() {
+  if [ -n "$only" ]; then
+    local glob globs hit=0
+    read -ra globs <<< "$only"
+    for glob in "${globs[@]}"; do
+      # shellcheck disable=SC2053 # a glob on purpose
+      [[ ${1#*-} == $glob ]] && hit=1
+    done
+    [ $hit = 1 ] || return 1
+  fi
   [[ $sets == *" all "* ]] && return 0
   local set
   for set in $(sets_of "${1#*-}"); do

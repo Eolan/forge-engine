@@ -51,6 +51,9 @@ cargo run --release -q -p credits -- --check
 - **Already compared:** when the session's own targeted captures have compared the changed
   images against the accepted set, push after `tools/verify.sh --tier gate`. Don't chain a
   full check after each step of one piece of work (the owner, 2026-10-18).
+  - **The captures:** `FORGE_ONLY='name globs'` with `tools/captures.sh`.
+  - **Images meant to change:** accept them with `tools/verify.sh --accept DIR COMMIT`, or
+    the night fails on them.
 - **Tier 1, at night** (`tools/night.sh`, a scheduled task at 00:30): the full batch on both
   paths and validation, on what was pushed that day. `--tier 1` runs it by hand.
 - **Tier 2, a milestone** (every ~5 commits, the night check runs it when due; before a
