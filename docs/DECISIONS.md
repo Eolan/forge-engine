@@ -5617,9 +5617,16 @@ chose the first: "Nights + short day check".
   - the gate;
   - the sentinels, now one or more captures of every demo (D-043's ten, and since D-071 the
     island's `shot-island`, the lab's `lab-materials60` and the planet's `planet-ground`);
-  - the sets the mapped paths select;
+  - the sets the mapped paths select (until the same day: see below);
   - all on both paths, with the sentinels' validation.
   It takes a few minutes, and the change is pushed when it passes.
+- **Trimmed the same day (the owner):**
+  - **What happened:** with a demo's sets on both paths, the day check took 24 minutes (FSR's
+    commits, D-070). The owner: "we have to reduce the number of unnecessary tests".
+  - **The day check is now the sentinels alone,** on both paths with their validation. The sets
+    the mapped paths select wait for the night's batch.
+  - **A change whose images the session has already compared** with targeted captures against
+    the accepted set is pushed after the gate (`--tier gate`).
 - **At night,** a Windows scheduled task ("Forge night check", 00:30, run when missed) starts
   `tools/night.sh`, which:
   - checks out `origin/main` in its own worktree (`../forge-night`), whose ignored SDK and

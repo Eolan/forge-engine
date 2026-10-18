@@ -409,6 +409,10 @@ case $tier in
     sets="sentinels${selected:+ $selected}"
     paths=mesh
     [ $gpu = 1 ] || [ $shared = 1 ] && paths="mesh fb"
+    # The day check (D-071): the sentinels alone, a few minutes; the sets the mapped paths
+    # select wait for the night's full batch with the rest (the owner, 2026-10-18: a day check
+    # had grown to 24 minutes with a demo's sets on both paths).
+    [ $shared = 1 ] && sets=sentinels
     ;;
   *) sets=all paths="mesh fb" ;;
 esac
@@ -417,7 +421,7 @@ esac
 [ "$tier" = 0 ] && [ -n "${FORGE_PATHS:-}" ] && paths=$FORGE_PATHS
 validate_sets=""
 if [ "$tier" = 0 ] && [ $shared = 1 ]; then
-  validate_sets="sentinels${selected:+ $selected}"
+  validate_sets=sentinels
 elif [ "$tier" = 0 ] && [ $gpu = 1 ]; then
   validate_sets=$selected
 elif [ "$tier" = 1 ] || [ "$tier" = 2 ]; then

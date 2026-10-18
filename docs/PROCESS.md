@@ -68,7 +68,7 @@ runs it:
 |---|---|---|
 | gate | Every changed path maps to no capture: `docs/`, `reports/`, Markdown, `tools/credits/` | fmt, clippy `-D warnings`, the tests, the credits check |
 | 0 | Every changed path is mapped in `tools/impact.toml` | The gate, the sentinels and the sets the paths select, on the mesh path. `--recook` when `forge-procgen` or `forge-geom` changed. With GPU code or shaders (`forge-render`, `shaders/`), also the fallback and the validation of those sets |
-| 0, the day check (D-071) | A path is not mapped: `forge-gpu`, `forge-app`, the render graph, a shared pass or shader, `Cargo.lock`, the toolchain, the scripts | The gate, the sentinels and the sets the mapped paths select, on both paths, with the sentinels' validation. The full batch runs that night |
+| 0, the day check (D-071) | A path is not mapped: `forge-gpu`, `forge-app`, the render graph, a shared pass or shader, `Cargo.lock`, the toolchain, the scripts | The gate and the sentinels on both paths, with their validation: a few minutes. The sets the mapped paths select, and the rest of the batch, run that night |
 | 1 | The night check (`tools/night.sh`), `--tier 1`, or no accepted set yet | The full batch on both paths, validation, and the timings with `--timings BASE_BIN` |
 | 2 | A milestone: every ~5 commits (the night check runs it when due), before a showcase, when a system closes (`--tier 2`) | Tier 1, the batch again with `FORGE_ASYNC=0` (it must match), `tools/origins.sh`, and the real-time tour for the owner to watch |
 
@@ -76,6 +76,10 @@ runs it:
 the day. Under DLAA (D-070) a Tier 1 takes about 25 minutes, and every push of a shared
 change used to wait for one.
 - **By day,** a shared change gets the day check above, a few minutes.
+  - On 2026-10-18 it had grown to 24 minutes: a demo's changed source added its sets on both
+    paths. Those sets now wait for the night (the owner asked for fewer needless checks).
+  - A change whose images the session has already compared itself (targeted captures against
+    the accepted set) is pushed after `tools/verify.sh --tier gate`. The night checks the rest.
 - **At night,** a Windows scheduled task, "Forge night check", starts `tools/night.sh` at
   00:30. It also runs when the machine wakes up after missing that time. It:
   - checks out `origin/main` in a worktree of its own (`../forge-night`), whose ignored SDK and

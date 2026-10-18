@@ -46,8 +46,11 @@ cargo run --release -q -p credits -- --check
 - **Tier 0, every other change whose paths `tools/impact.toml` maps:** the sentinels and the
   captures those paths select, compared with the last accepted set (`captures/accepted/`).
 - **The day check, shared rendering or any unmapped path** (D-071): the sentinels (every
-  demo) and the sets the mapped paths select, on both paths, with the sentinels' validation.
-  Push when it passes.
+  demo) on both paths, with their validation, a few minutes. Push when it passes. The sets
+  the mapped paths select wait for the night.
+- **Already compared:** when the session's own targeted captures have compared the changed
+  images against the accepted set, push after `tools/verify.sh --tier gate`. Don't chain a
+  full check after each step of one piece of work (the owner, 2026-10-18).
 - **Tier 1, at night** (`tools/night.sh`, a scheduled task at 00:30): the full batch on both
   paths and validation, on what was pushed that day. `--tier 1` runs it by hand.
 - **Tier 2, a milestone** (every ~5 commits, the night check runs it when due; before a
