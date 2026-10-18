@@ -4945,6 +4945,23 @@ again (`demos/physics-lab.md`).
         pool and the walls' arch alike under the light lists and ReSTIR.
     - **Left for later:** a lampshade (dim sideways, open up and down), and a fitting radius
       inside which the probes' hits ignore the lamp (#294).
+  - **Shares and fades in the light lists' choice** (#295, 2026-10-18; seen in a town of a few
+    hundred house lamps built outside the repository). The 64 nearest lamps were kept whatever
+    their kind, so the nearest rooms crowded the street lamps out, and a lamp went on or off at
+    once at the cut.
+    - **Shares:** the street lamps (`Lamp::outside`) keep up to 24 of the 64
+      (`STREET_SHARE`), the others the rest. The slots one kind leaves go to the other's nearest.
+    - **Fades:** a kept lamp's light fades out over the last fifth of the distance to its cut, at
+      least 2 m. The cut is the distance of its kind's nearest lamp not kept, or where its light
+      stops counting (its reach and the 50 m margin). The cut moves with the camera without
+      jumps, and two lamps that change places at it are both faded out.
+    - **Checked:**
+      - a unit test walks a camera 40 m in 1 cm steps across 200 lamps. Lamps enter and leave the
+        kept 64 dozens of times, and no lamp's light changes by 1 % of it in a step. Without the
+        fade, the same test sees jumps of all of it;
+      - another test keeps 24 street lamps 60–89 m away against 100 house lamps within 10 m;
+      - the village at 21:00: the hall unchanged (0 px), the junction 102 px, and the main
+        street 974 px, where a lamp 80 m away is fading out towards the end of its reach.
     - **The probes leave the street lamps out** (`hit_lamp_weight`, and the lenses tagged
       `RenderLayer::lamp`). Their bounce came back in sharp blocks of the probe grid on the
       grass (#254).

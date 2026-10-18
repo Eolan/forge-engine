@@ -217,33 +217,76 @@ pub fn lamp_rgb(kelvin: f32) -> Vec3 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LampChoice {
     /// Those whose light reaches within 50 m of the camera, the nearest first, [`MAX_LAMPS`] at
-    /// most: the light lists' share of them.
+    /// most: the light lists' share of them. The street lamps ([`Lamp::outside`]) keep up to
+    /// [`STREET_SHARE`] of them, the others the rest, and the slots one kind leaves go to the
+    /// other (#295).
     Nearest,
-    /// As `Nearest` for every lamp but the street lamps ([`Lamp::outside`]), and every street
-    /// lamp, however far: ReSTIR DI lights those (D-065, the owner's choice of 2026-10-18), so a
-    /// far street keeps its light.
+    /// As `Nearest` for every lamp but the street lamps, and every street lamp, however far:
+    /// ReSTIR DI lights those (D-065, the owner's choice of 2026-10-18), so a far street keeps
+    /// its light.
     Streets,
     /// Every lamp that is on, however far, [`LAMP_CAPACITY`] at most: D-065's comparison of
     /// ReSTIR DI with the light lists, which takes them all.
     Every,
 }
 
-/// The lamps a frame lights with, of `lamps`, seen from `camera` (scene frame), by `choice`.
+/// The street lamps' share of [`MAX_LAMPS`] in [`LampChoice::Nearest`] (#295): a few hundred
+/// house lamps nearer the camera crowded them out, and a lit street went dark.
+pub const STREET_SHARE: usize = 24;
+
+/// How far before its cut a kept lamp fades out, as a share of the cut's distance, at least
+/// [`LEAST_FADE`] metres (#295). The cut is the distance of the nearest lamp of its kind not kept,
+/// or where its light stops counting (its reach and the margin). Kept or not changed at once
+/// before, and lamps popped on and off as the camera moved; the cut moves with the camera
+/// without jumps, and two lamps changing places at it are both faded out.
+const FADE: f32 = 0.2;
+/// The least fade, metres.
+const LEAST_FADE: f32 = 2.0;
+
+/// The lamps a frame lights with, of `lamps`, seen from `camera` (scene frame), by `choice`: the
+/// nearest first within each kind, each faded towards its cut ([`FADE`]).
 pub fn choose(lamps: &[Lamp], camera: Vec3, choice: LampChoice) -> Vec<GpuLamp> {
     match choice {
-        LampChoice::Nearest => kept(lamps, camera, MAX_LAMPS, 50.0, |_| true),
-        LampChoice::Every => kept(lamps, camera, LAMP_CAPACITY, f32::INFINITY, |_| true),
+        LampChoice::Nearest => {
+            let streets = candidates(lamps, camera, 50.0, Lamp::outside);
+            let houses = candidates(lamps, camera, 50.0, |l| !l.outside());
+            let mut s = streets.len().min(STREET_SHARE);
+            let mut h = houses.len().min(MAX_LAMPS - STREET_SHARE);
+            // The slots one kind leaves, to the other's nearest.
+            while s + h < MAX_LAMPS {
+                match (streets.get(s), houses.get(h)) {
+                    (Some(a), Some(b)) if a.0 <= b.0 => s += 1,
+                    (_, Some(_)) => h += 1,
+                    (Some(_), None) => s += 1,
+                    (None, None) => break,
+                }
+            }
+            let mut out: Vec<(f32, GpuLamp)> = faded(&streets, s, 50.0)
+                .chain(faded(&houses, h, 50.0))
+                .collect();
+            out.sort_by(|a, b| a.0.total_cmp(&b.0));
+            out.into_iter().map(|(_, l)| l).collect()
+        }
+        LampChoice::Every => {
+            let all = candidates(lamps, camera, f32::INFINITY, |_| true);
+            let n = all.len().min(LAMP_CAPACITY);
+            faded(&all, n, f32::INFINITY).map(|(_, l)| l).collect()
+        }
         LampChoice::Streets => {
-            let mut out = kept(lamps, camera, MAX_LAMPS, 50.0, |l| !l.outside());
-            let room = LAMP_CAPACITY - out.len();
-            out.extend(kept(lamps, camera, room, f32::INFINITY, Lamp::outside));
-            out
+            let houses = candidates(lamps, camera, 50.0, |l| !l.outside());
+            let h = houses.len().min(MAX_LAMPS);
+            let streets = candidates(lamps, camera, f32::INFINITY, Lamp::outside);
+            let s = streets.len().min(LAMP_CAPACITY - h);
+            faded(&houses, h, 50.0)
+                .chain(faded(&streets, s, f32::INFINITY))
+                .map(|(_, l)| l)
+                .collect()
         }
     }
 }
 
 /// The lamps a frame lights with: those whose light reaches within 50 m of the camera at
-/// `camera` (scene frame), the nearest first, [`MAX_LAMPS`] at most.
+/// `camera` (scene frame), [`MAX_LAMPS`] at most ([`LampChoice::Nearest`]).
 pub fn nearest(lamps: &[Lamp], camera: Vec3) -> Vec<GpuLamp> {
     choose(lamps, camera, LampChoice::Nearest)
 }
@@ -255,14 +298,13 @@ pub fn every(lamps: &[Lamp], camera: Vec3) -> Vec<GpuLamp> {
 }
 
 /// The lamps of `lamps` that `pick` takes, are on and whose light reaches within `margin` metres
-/// of `camera`, the nearest first, `limit` at most.
-fn kept(
+/// of `camera`, with their distances, the nearest first.
+fn candidates(
     lamps: &[Lamp],
     camera: Vec3,
-    limit: usize,
     margin: f32,
     pick: impl Fn(&Lamp) -> bool,
-) -> Vec<GpuLamp> {
+) -> Vec<(f32, &Lamp)> {
     let mut near: Vec<(f32, &Lamp)> = lamps
         .iter()
         .filter(|l| l.candela > 0.0 && pick(l))
@@ -270,25 +312,41 @@ fn kept(
         .filter(|(d, l)| *d < reach(l.candela) + margin)
         .collect();
     near.sort_by(|a, b| a.0.total_cmp(&b.0));
-    near.into_iter()
-        .take(limit)
-        .map(|(_, l)| {
-            let c = lamp_rgb(l.kelvin) * l.candela;
-            let (beam, beam_edge) = l.emission.gpu();
-            GpuLamp {
-                position_radius: [
-                    l.position.x,
-                    l.position.y,
-                    l.position.z,
-                    l.radius.max(0.005),
-                ],
-                colour_reach: [c.x, c.y, c.z, reach(l.candela)],
-                regions: l.regions,
-                beam,
-                beam_edge,
-            }
-        })
-        .collect()
+    near
+}
+
+/// The first `kept` of `near` as the GPU takes them, with their distances, each faded towards
+/// its cut: the next candidate's distance, and its own reach and `margin`.
+fn faded<'a>(
+    near: &'a [(f32, &'a Lamp)],
+    kept: usize,
+    margin: f32,
+) -> impl Iterator<Item = (f32, GpuLamp)> + 'a {
+    let next = near.get(kept).map(|c| c.0);
+    near[..kept].iter().map(move |&(d, l)| {
+        let out = |cut: f32| ((cut - d) / (FADE * cut).max(LEAST_FADE)).clamp(0.0, 1.0);
+        let edge = reach(l.candela) + margin;
+        let share = next.map_or(1.0, out) * if edge.is_finite() { out(edge) } else { 1.0 };
+        (d, gpu_lamp(l, share))
+    })
+}
+
+/// `l` as the GPU takes it, its light times `share`.
+fn gpu_lamp(l: &Lamp, share: f32) -> GpuLamp {
+    let c = lamp_rgb(l.kelvin) * (l.candela * share);
+    let (beam, beam_edge) = l.emission.gpu();
+    GpuLamp {
+        position_radius: [
+            l.position.x,
+            l.position.y,
+            l.position.z,
+            l.radius.max(0.005),
+        ],
+        colour_reach: [c.x, c.y, c.z, reach(l.candela)],
+        regions: l.regions,
+        beam,
+        beam_edge,
+    }
 }
 
 /// The frame's light lists (D-065): for each region its `kept` lamps light, the lamps' indices, as
@@ -386,6 +444,91 @@ mod tests {
         let all = every(&lamps, Vec3::ZERO);
         assert_eq!(all.len(), 101);
         assert_eq!(all[100].position_radius[0], 5000.0);
+    }
+
+    #[test]
+    fn street_lamps_keep_their_share_against_nearer_house_lamps() {
+        let lamp = |at: Vec3, candela: f32, outside: bool| {
+            let mut regions = EVERY_REGION;
+            regions[0] = if outside { REGION_OUTSIDE } else { 7 };
+            Lamp {
+                position: at,
+                radius: 0.05,
+                candela,
+                kelvin: 2700.0,
+                regions,
+                emission: Emission::Every,
+            }
+        };
+        // A hundred house lamps within 10 m, thirty street lamps 60 to 89 m away (109 cd reach
+        // 47 m, so they count to 97 m).
+        let lamps: Vec<Lamp> = (0..100)
+            .map(|i| {
+                lamp(
+                    Vec3::new((i % 10) as f32, 2.0, (i / 10) as f32),
+                    20.0,
+                    false,
+                )
+            })
+            .chain((0..30).map(|i| lamp(Vec3::new(0.0, 7.5, 60.0 + i as f32), 109.0, true)))
+            .collect();
+        let kept = nearest(&lamps, Vec3::ZERO);
+        let streets = kept
+            .iter()
+            .filter(|l| l.regions[0] == REGION_OUTSIDE)
+            .count();
+        assert_eq!(kept.len(), MAX_LAMPS);
+        assert_eq!(streets, STREET_SHARE);
+        // Without the houses, the streets take every slot they need.
+        let alone: Vec<Lamp> = lamps[100..].to_vec();
+        assert_eq!(nearest(&alone, Vec3::ZERO).len(), 30);
+    }
+
+    #[test]
+    fn no_lamp_switches_on_or_off_at_once_as_the_camera_moves() {
+        // Two hundred lamps on a 2 m grid; the camera walks 40 m across it in 1 cm steps. Each
+        // lamp's light (its red intensity) may change little from step to step, though dozens
+        // enter and leave the 64 kept.
+        let lamps: Vec<Lamp> = (0..200)
+            .map(|i| Lamp {
+                position: Vec3::new((i % 20) as f32 * 2.0, 2.5, (i / 20) as f32 * 2.0),
+                radius: 0.05,
+                candela: 50.0,
+                kelvin: 2700.0,
+                regions: EVERY_REGION,
+                emission: Emission::Every,
+            })
+            .collect();
+        let light = |camera: Vec3| {
+            let mut out = vec![0.0_f32; lamps.len()];
+            for l in nearest(&lamps, camera) {
+                let i = lamps
+                    .iter()
+                    .position(|x| {
+                        x.position.x == l.position_radius[0] && x.position.z == l.position_radius[2]
+                    })
+                    .unwrap();
+                out[i] = l.colour_reach[0];
+            }
+            out
+        };
+        let full = lamp_rgb(2700.0).x * 50.0;
+        let mut before = light(Vec3::new(-10.0, 1.7, 9.0));
+        let (mut changes, mut worst) = (0, 0.0_f32);
+        for step in 1..=4000 {
+            let now = light(Vec3::new(-10.0 + step as f32 * 0.01, 1.7, 9.0));
+            for (a, b) in before.iter().zip(&now) {
+                let jump = (a - b).abs() / full;
+                worst = worst.max(jump);
+                changes += usize::from((a > &0.0) != (b > &0.0));
+            }
+            before = now;
+        }
+        assert!(changes > 20, "{changes} lamps entered or left");
+        assert!(
+            worst < 0.01,
+            "a lamp's light jumped by {worst} of its full light in 1 cm"
+        );
     }
 
     #[test]
