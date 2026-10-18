@@ -141,7 +141,7 @@ exposure (EV100, target, compensation, curve) the last.
     1.46 ms under DLSS from Quality down (DLAA 2.22).
   - The textures' mip bias costs nothing measurable (a multiply in the resolve).
 - RCAS after FSR (D-070, on by default): `temporal/FSR sharpen` 0.015–0.023 ms at 1600 × 900
-  in the city.
+  in the city. On the AMD iGPU (RDNA 2), the ballad: 1.31 ms, FSR 19.4 ms in all of 135 ms.
 - TAA's history through Lanczos-3 (D-045), the same room: `temporal/TAA resolve` 0.047 →
   0.077 ms, 36 texel loads in place of 5 bilinear fetches.
 - TAA's motion vectors and resolve as compute passes (#161, so the serial frame repeats), the

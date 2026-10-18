@@ -5677,6 +5677,13 @@ sharpening, and the lamp filter's flicker under TAA. The last two run-to-run fla
   `ast-fsrq600`), changed as meant (ꟻLIP mean 0.013–0.019). Mesh against fallback stays 0 px.
 - **Patents:** none found that reads on RCAS (`docs/research/fsr-3-1.md`: US 12,020,408 B2
   needs a blur circuit before the sharpener).
+- **On this machine's AMD iGPU** (RDNA 2, the ballad's frame 600, the default FSR):
+  - no error or device loss in 600 frames;
+  - `temporal/FSR sharpen` takes 1.31 ms, FSR 19.4 ms in all of a 135 ms frame;
+  - the sharpening changes the image as on the 5070 Ti: 7.47 % of pixels, ꟻLIP mean 0.0144,
+    against 7.45 % and 0.0144;
+  - AMD's image is 0.36 % of pixels from the 5070 Ti's (ꟻLIP 0.0060), against 0.27 % (0.0057)
+    unsharpened.
 
 **Next:** FSR 4, once there is an RDNA 4 card to test on and its SDK has a Vulkan path.
 
