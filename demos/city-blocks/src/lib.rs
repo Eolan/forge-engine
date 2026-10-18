@@ -399,7 +399,7 @@ pub struct Args {
     /// The probes without the scene's rooms (D-068): every probe lights every surface, as before
     /// the regions (their A/B; #291).
     #[arg(long)]
-    no_regions: bool,
+    pub no_regions: bool,
     /// Rays per probe and frame (64 to 256): 128, and 256 in the models lab's rooms,
     /// whose probes, lit through a few openings and seen at an indoor exposure, shimmered with
     /// 128 (#171: 7.5 % of a still view's pixels changed over the jitter's cycle, 2.6 % with
