@@ -3,8 +3,9 @@
 //! Registered from the state its flags gave it, applied when they change, and set from the
 //! console (no key sets them since D-069's key map).
 
+use forge_app::Context;
 use forge_app::settings::{Settings, Spec, Var};
-use forge_render::settings::{self as rs, AA_DLAA, AA_DLSS, AA_FSR, AA_OFF, AA_TAA};
+use forge_render::settings::{self as rs, AA_DLAA, AA_DLSS, AA_FSR, AA_OFF};
 use forge_render::{CullFlags, Tonemap};
 
 use crate::PlanetDemo;
@@ -12,8 +13,6 @@ use crate::PlanetDemo;
 /// The handles of the planet's settings.
 pub(crate) struct PlanetVars {
     aa: Var<usize>,
-    sharpen: Var<bool>,
-    sharpen_stops: Var<f64>,
     tonemap: Var<usize>,
     bloom: Var<bool>,
     bloom_strength: Var<f64>,
@@ -53,30 +52,17 @@ impl PlanetDemo {
         .into_iter()
         .map(|(spec, b, default)| (s.add_from(spec, default, flags.has(b)), b))
         .collect();
-        let aa_default = if self.dlaa.is_some() {
+        // DLAA where it runs, else FSR (D-070).
+        let aa_default = if self.dlaa.is_some() { AA_DLAA } else { AA_FSR };
+        let aa_now = if self.dlaa_on {
             AA_DLAA
-        } else if self.fsr.is_some() {
-            AA_FSR
-        } else {
-            AA_TAA
-        };
-        let aa_now = if !self.taa_enabled {
-            AA_OFF
         } else if self.fsr_on {
             AA_FSR
-        } else if self.dlaa_on {
-            AA_DLAA
         } else {
-            AA_TAA
+            AA_OFF
         };
         self.vars = Some(PlanetVars {
             aa: s.add_from(rs::aa(aa_default), aa_default, aa_now),
-            sharpen: s.add_from(rs::sharpen(true), true, self.taa.sharpen.is_some()),
-            sharpen_stops: s.add_from_f32(
-                rs::sharpen_stops(0.5),
-                0.5,
-                self.taa.sharpen.unwrap_or(self.args.rcas),
-            ),
             tonemap: s.add_from(
                 rs::tonemap(Tonemap::AgXPunchy),
                 rs::tonemap_index(Tonemap::AgXPunchy),
@@ -108,7 +94,8 @@ impl PlanetDemo {
     }
 
     /// Applies the settings that changed since the last call.
-    pub(crate) fn apply_vars(&mut self, s: &Settings) {
+    pub(crate) fn apply_vars(&mut self, ctx: &Context) {
+        let s = &ctx.settings;
         let seen = self.vars_seen;
         if seen == s.changes() {
             return;
@@ -117,33 +104,34 @@ impl PlanetDemo {
             return;
         };
         let changed = |var: Var<bool>| s.changed_since(var, seen);
-        if s.changed_since(v.aa, seen)
-            || changed(v.sharpen)
-            || s.changed_since(v.sharpen_stops, seen)
-        {
+        if s.changed_since(v.aa, seen) {
             let aa = s.get(v.aa);
             let wanted = matches!(aa, AA_DLAA | AA_DLSS);
             // DLSS's smaller modes are the asteroids' alone: the planet shows dlss as DLAA.
             self.dlaa_on = wanted && self.dlaa.is_some();
-            // FSR where it is asked for, and in DLAA's place where the device has no DLSS (D-070).
-            let fsr_on = (aa == AA_FSR || wanted && self.dlaa.is_none()) && self.fsr.is_some();
-            self.fsr_on = fsr_on;
-            if wanted && self.dlaa.is_none() {
-                let instead = if fsr_on { "FSR" } else { "TAA" };
-                tracing::info!(
-                    "r.aa: DLAA does not run here (the Streamline SDK and an RTX GPU): {instead} instead"
-                );
+            // FSR where it is asked for, and in DLAA's place where the device has no DLSS (D-070):
+            // made the first time it is wanted.
+            let fsr_wanted = aa == AA_FSR || wanted && self.dlaa.is_none();
+            if fsr_wanted && self.fsr.is_none() {
+                match forge_render::FsrUpscaler::new(
+                    &ctx.device,
+                    &ctx.shaders,
+                    forge_render::FsrMode::NativeAa,
+                    ctx.extent(),
+                ) {
+                    Ok(fsr) => self.fsr = Some(fsr),
+                    Err(error) => tracing::error!(%error, "r.aa: no FSR, no anti-aliasing"),
+                }
             }
-            if let Some((fsr, _)) = self.fsr.as_mut().filter(|_| fsr_on) {
+            self.fsr_on = fsr_wanted && self.fsr.is_some();
+            if let Some(fsr) = self.fsr.as_mut().filter(|_| fsr_wanted) {
                 fsr.reset_history();
             }
-            if aa == AA_FSR && self.fsr.is_none() {
+            if wanted && self.dlaa.is_none() {
                 tracing::info!(
-                    "r.aa fsr: FSR is made when a run starts with it (--set r.aa=fsr, or no DLSS); TAA instead"
+                    "r.aa: DLAA does not run here (the Streamline SDK and an RTX GPU): FSR instead"
                 );
             }
-            self.taa_enabled = aa != AA_OFF;
-            self.taa.sharpen = s.get(v.sharpen).then_some(s.get(v.sharpen_stops) as f32);
             self.taa.reset_history();
         }
         if s.changed_since(v.tonemap, seen) {

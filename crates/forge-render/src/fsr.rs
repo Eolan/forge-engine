@@ -1,7 +1,7 @@
-//! AMD's FSR 3.1 upscaler in the frame (D-070): the anti-aliasing and the upscaler on every GPU,
-//! in place of TAA, where DLSS is not used. The jittered HDR frame, its depth, its motion and the
-//! reactive mask go in; an HDR image at the output size comes out, which the display pass then
-//! takes through the tone curve, as it takes DLSS's ([`crate::DlssUpscaler`]).
+//! AMD's FSR 3.1 upscaler in the frame (D-070): the anti-aliasing and the upscaler on every GPU
+//! where DLSS is not used; it replaced Forge's TAA. The jittered HDR frame, its depth, its
+//! motion and the reactive mask go in; an HDR image at the output size comes out, which the
+//! display pass then takes through the tone curve, as it takes DLSS's ([`crate::DlssUpscaler`]).
 //!
 //! AMD's shaders, compiled by Forge: the eight passes of FSR 3.1.4 (FidelityFX SDK v1.1.4, MIT)
 //! are AMD's headers in `shaders/third-party/fidelityfx/`, reached through Forge's bridge
@@ -22,6 +22,9 @@
 //!   "temporal/FSR luma instability";
 //! - "temporal/FSR accumulate": the upsampled colour into the history, and the output;
 //! - "temporal/FSR sharpen" (RCAS), with [`FsrUpscaler::sharpness`].
+//!
+//! A second upscaler's passes take another group ([`FsrUpscaler::group`]): the scene behind the
+//! tank's water is "liquid/scene FSR …".
 
 use std::sync::Arc;
 
@@ -57,6 +60,47 @@ impl FsrMode {
             Self::Quality => 1.5,
             Self::Balanced => 1.7,
             Self::Performance => 2.0,
+        }
+    }
+}
+
+/// Where an upscaler's passes show in the graph and the profiler.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FsrGroup {
+    /// "temporal/FSR …": the frame's anti-aliasing.
+    #[default]
+    Temporal,
+    /// "liquid/scene FSR …": the scene behind the tank's water (#156), anti-aliased before the
+    /// water bends it.
+    Liquid,
+}
+
+impl FsrGroup {
+    /// The passes' names, in the order the frame runs them (the module's list).
+    fn labels(self) -> &'static [&'static str; 9] {
+        match self {
+            Self::Temporal => &[
+                "temporal/FSR clear",
+                "temporal/FSR inputs",
+                "temporal/FSR luma pyramid",
+                "temporal/FSR shading pyramid",
+                "temporal/FSR shading change",
+                "temporal/FSR reactivity",
+                "temporal/FSR luma instability",
+                "temporal/FSR accumulate",
+                "temporal/FSR sharpen",
+            ],
+            Self::Liquid => &[
+                "liquid/scene FSR clear",
+                "liquid/scene FSR inputs",
+                "liquid/scene FSR luma pyramid",
+                "liquid/scene FSR shading pyramid",
+                "liquid/scene FSR shading change",
+                "liquid/scene FSR reactivity",
+                "liquid/scene FSR luma instability",
+                "liquid/scene FSR accumulate",
+                "liquid/scene FSR sharpen",
+            ],
         }
     }
 }
@@ -201,6 +245,8 @@ pub struct FsrUpscaler {
     mode: FsrMode,
     /// RCAS after the accumulation, 0 (none) to 1 (AMD's strongest), or none at all.
     pub sharpness: Option<f32>,
+    /// Where its passes show (the frame's anti-aliasing by default).
+    pub group: FsrGroup,
     /// The constants kept from the last frame (sizes, jitter, the jitter's length, the index).
     last: FsrFrame,
     /// Which of each pair this frame writes.
@@ -293,6 +339,7 @@ impl FsrUpscaler {
             frames,
             mode,
             sharpness: None,
+            group: FsrGroup::Temporal,
             last: FsrFrame::default(),
             parity: 0,
             reset: true,
@@ -355,6 +402,7 @@ impl FsrUpscaler {
         let parity = self.parity;
         self.parity ^= 1;
         let sharpness = self.sharpness;
+        let labels = self.group.labels();
 
         let this: &'f Self = self;
         let images = &this.images;
@@ -441,7 +489,7 @@ impl FsrUpscaler {
         // kept between frames: AMD leaves them uninitialized, and on Vulkan their memory holds
         // anything (its new locks are read everywhere and written only on thin features).
         let mut clear = graph
-            .pass("temporal/FSR clear")
+            .pass(labels[0])
             .image(previous_depth, write)
             .image(spd_atomic, write)
             .image(spd_mips, write);
@@ -530,7 +578,7 @@ impl FsrUpscaler {
         };
 
         graph
-            .pass("temporal/FSR inputs")
+            .pass(labels[1])
             .image(motion, sampled)
             .image(depth, sampled)
             .image(color, sampled)
@@ -570,7 +618,7 @@ impl FsrUpscaler {
             }
         };
         graph
-            .pass("temporal/FSR luma pyramid")
+            .pass(labels[2])
             .image(luma_current, sampled)
             .image(farthest_depth, sampled)
             .image(spd_atomic, read_write)
@@ -594,7 +642,7 @@ impl FsrUpscaler {
             });
 
         graph
-            .pass("temporal/FSR shading pyramid")
+            .pass(labels[3])
             .image(luma_current, sampled)
             .image(luma_previous, sampled)
             .image(dilated_motion, sampled)
@@ -625,7 +673,7 @@ impl FsrUpscaler {
             });
 
         graph
-            .pass("temporal/FSR shading change")
+            .pass(labels[4])
             .image(spd_mips, sampled)
             .image(shading_change, write)
             .run(move |resources, commands| {
@@ -643,7 +691,7 @@ impl FsrUpscaler {
             });
 
         let mut reactivity = graph
-            .pass("temporal/FSR reactivity")
+            .pass(labels[5])
             .image(previous_depth, sampled)
             .image(dilated_motion, sampled)
             .image(dilated_depth, sampled)
@@ -686,7 +734,7 @@ impl FsrUpscaler {
         });
 
         graph
-            .pass("temporal/FSR luma instability")
+            .pass(labels[6])
             .image(exposure_image, sampled)
             .image(reactive_masks, sampled)
             .image(dilated_motion, sampled)
@@ -722,7 +770,7 @@ impl FsrUpscaler {
             });
 
         graph
-            .pass("temporal/FSR accumulate")
+            .pass(labels[7])
             .image(exposure_image, sampled)
             .image(reactive_masks, sampled)
             .image(dilated_motion, sampled)
@@ -768,7 +816,7 @@ impl FsrUpscaler {
 
         if sharpness.is_some() {
             graph
-                .pass("temporal/FSR sharpen")
+                .pass(labels[8])
                 .image(exposure_image, sampled)
                 .image(upscaled_write, sampled)
                 .image(output_image, write)

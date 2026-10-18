@@ -25,7 +25,7 @@ lists them and the keys they had before D-069's key map, 2026-10-17): `r.aa` ant
 
 An interactive run anti-aliases with NVIDIA's DLAA where it runs (the `dlss` feature, the
 Streamline SDK, an RTX GPU), as the galleries do since D-045, and since D-070 a scripted run and
-its captures too (`--set r.aa=taa` or `--no-taa` otherwise). The window can change size (Alt+Enter): the
+its captures too (FSR elsewhere, D-070; `--no-taa` for none). The window can change size (Alt+Enter): the
 targets follow it (2026-10-17; before, the planet kept the first size's).
 
 | Flag | What it does |

@@ -507,9 +507,10 @@ reach the GPU, and in Tier 2, and put its lines in the report.
 - **Two runs that part (#161):** city-blocks' `FORGE_HASH_IMAGES=1` logs, each frame, hashes of
   the probes' irradiance atlas and the ambient occlusion (#207), the shadow rays' three images
   and the denoised shadow (#204), the clouds, the scene colour (before and after the sky's
-  compose, #277), the depth, the motion vectors (before and after the movers'), TAA's history
-  and the bloom's first level (#281) (`crates/forge-render/src/debug_hash.rs`). With
-  `FORGE_HASH_SHARPEN=1` too, TAA's display pass draws a second time into a float image, hashed
+  compose, #277), the depth, the motion vectors (before and after the movers'), the resolved image
+  (DLAA's, FSR's or the frame as drawn; TAA's history until D-070) and the bloom's first level
+  (#281) (`crates/forge-render/src/debug_hash.rs`). Until D-070 removed TAA, with
+  `FORGE_HASH_SHARPEN=1` too, TAA's display pass drew a second time into a float image, hashed
   last: what the pass computes before the output's 8 bits round it (#281: it parted in 7 of 12
   pairs where the 8-bit image parted on one pixel in 5). Images that hash alike are alike: three images
   with one hash are empty. A frame's hashes are logged when its slot comes back, two frames

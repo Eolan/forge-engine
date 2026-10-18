@@ -142,6 +142,11 @@ exposure (EV100, target, compensation, curve) the last.
   the history is `temporal/show`.
 - The scene behind the tank's water through a TAA of its own (#156): `liquid/scene TAA`
   0.079 ms and `liquid/scene copy` 0.013 ms at 1600 × 900.
+- TAA's resolve and sharpening removed (D-070, 2026-10-18): the `temporal/TAA resolve`,
+  `temporal/sharpen`, `temporal/show` and `liquid/scene TAA` above are history. The tank's scene
+  now goes through an FSR of its own, `liquid/scene FSR …` 0.30 ms in all at 1600 × 900
+  (`accumulate` 0.129, `shading pyramid` 0.047, `reactivity` 0.040). With the anti-aliasing off,
+  the display pass shows the frame (`post/display transform`).
 - SSAA 2 × 2 for screenshots (D-045, `--ssaa`): the city's frame 2.363 → 5.134 ms at
   1600 × 900 (the frame drawn at 3200 × 1800), `post/ssaa` 0.021 ms.
 - MaxCLL and MaxFALL from the frame shown (#125), in every HDR mode: `post/hdr metadata

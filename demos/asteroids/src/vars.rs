@@ -5,8 +5,8 @@
 
 use forge_app::Context;
 use forge_app::settings::{Settings, Spec, Var};
-use forge_render::settings::{self as rs, AA_DLAA, AA_DLSS, AA_FSR, AA_OFF, AA_TAA};
-use forge_render::{CullFlags, DlssMode, SwRaster, Tonemap};
+use forge_render::settings::{self as rs, AA_DLAA, AA_DLSS, AA_FSR, AA_OFF};
+use forge_render::{CullFlags, DlssMode, FsrMode, FsrUpscaler, SwRaster, Tonemap};
 
 use crate::Ballad;
 
@@ -15,8 +15,6 @@ use crate::Ballad;
 pub(crate) struct BalladVars {
     aa: Var<usize>,
     dlss_mode: Var<usize>,
-    sharpen: Var<bool>,
-    sharpen_stops: Var<f64>,
     tonemap: Var<usize>,
     bloom: Var<bool>,
     bloom_strength: Var<f64>,
@@ -42,20 +40,14 @@ impl Ballad {
             }
             Some(dlss) if self.dlss_on => (AA_DLSS, dlss.mode()),
             _ if self.fsr_on => (AA_FSR, DlssMode::Quality),
-            _ if !self.taa_enabled => (AA_OFF, DlssMode::Quality),
-            _ => (AA_TAA, DlssMode::Quality),
+            _ => (AA_OFF, DlssMode::Quality),
         }
     }
 
     /// Registers the ballad's settings, from the state its flags gave it.
     pub(crate) fn register_vars(&mut self, s: &mut Settings) {
-        let aa_default = if self.dlss.is_some() {
-            AA_DLAA
-        } else if self.fsr.is_some() {
-            AA_FSR
-        } else {
-            AA_TAA
-        };
+        // DLAA where it runs, else FSR (D-070).
+        let aa_default = if self.dlss.is_some() { AA_DLAA } else { AA_FSR };
         let (aa_now, mode_now) = self.aa_now();
         let flags = self.flags;
         let bits = [
@@ -94,12 +86,6 @@ impl Ballad {
                 rs::dlss_mode(DlssMode::Quality),
                 rs::dlss_mode_index(DlssMode::Quality),
                 rs::dlss_mode_index(mode_now),
-            ),
-            sharpen: s.add_from(rs::sharpen(true), true, self.taa.sharpen.is_some()),
-            sharpen_stops: s.add_from_f32(
-                rs::sharpen_stops(0.5),
-                0.5,
-                self.taa.sharpen.unwrap_or(self.args.rcas),
             ),
             tonemap: s.add_from(
                 rs::tonemap(Tonemap::Aces),
@@ -162,31 +148,27 @@ impl Ballad {
             return;
         };
         let changed = |var: Var<bool>| s.changed_since(var, seen);
-        if s.changed_since(v.aa, seen)
-            || s.changed_since(v.dlss_mode, seen)
-            || changed(v.sharpen)
-            || s.changed_since(v.sharpen_stops, seen)
-        {
+        if s.changed_since(v.aa, seen) || s.changed_since(v.dlss_mode, seen) {
             let aa = s.get(v.aa);
             let mode = if aa == AA_DLSS {
                 rs::dlss_mode_of(s.get(v.dlss_mode))
             } else {
                 DlssMode::Dlaa
             };
-            self.taa_enabled = aa != AA_OFF;
-            self.taa.sharpen = s.get(v.sharpen).then_some(s.get(v.sharpen_stops) as f32);
             let wanted = matches!(aa, AA_DLAA | AA_DLSS);
-            // FSR where it is asked for, and in DLSS's place where the device has none (D-070).
-            self.fsr_on = (aa == AA_FSR || wanted && self.dlss.is_none()) && self.fsr.is_some();
-            if wanted && self.dlss.is_none() {
-                let instead = if self.fsr_on { "FSR" } else { "TAA" };
-                tracing::warn!(
-                    "DLSS is not available (--features dlss, the Streamline SDK, an RTX GPU): {instead}"
-                );
+            // FSR where it is asked for, and in DLSS's place where the device has none (D-070):
+            // made the first time it is wanted.
+            let fsr_wanted = aa == AA_FSR || wanted && self.dlss.is_none();
+            if fsr_wanted && self.fsr.is_none() {
+                match FsrUpscaler::new(&ctx.device, &ctx.shaders, FsrMode::NativeAa, ctx.extent()) {
+                    Ok(fsr) => self.fsr = Some(fsr),
+                    Err(error) => tracing::error!(%error, "r.aa: no FSR, no anti-aliasing"),
+                }
             }
-            if aa == AA_FSR && self.fsr.is_none() {
-                tracing::info!(
-                    "r.aa fsr: FSR is made when a run starts with it (--upscaler fsr, --set r.aa=fsr, or no DLSS); TAA instead"
+            self.fsr_on = fsr_wanted && self.fsr.is_some();
+            if wanted && self.dlss.is_none() {
+                tracing::warn!(
+                    "DLSS is not available (--features dlss, the Streamline SDK, an RTX GPU): FSR"
                 );
             }
             let before = self.aa_now();
@@ -260,7 +242,7 @@ impl Ballad {
         self.vars_seen = s.changes();
     }
 
-    /// TAA → DLAA → Quality → Balanced → Performance → Ultra Performance → TAA (the U key and
+    /// FSR → DLAA → Quality → Balanced → Performance → Ultra Performance → FSR (the U key and
     /// `--cycle-upscaler`), through the settings.
     pub(crate) fn cycle_upscaler(&mut self, ctx: &mut Context) {
         let Some(v) = &self.vars else {
@@ -279,7 +261,7 @@ impl Ballad {
                 let i = DlssMode::ALL.iter().position(|&m| m == mode).unwrap_or(0);
                 match DlssMode::ALL.get(i + 1) {
                     Some(&m) => (AA_DLSS, m),
-                    None => (AA_TAA, DlssMode::Quality),
+                    None => (AA_FSR, DlssMode::Quality),
                 }
             }
             _ => (AA_DLAA, DlssMode::Quality),

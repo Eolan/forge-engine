@@ -1457,7 +1457,8 @@ round the obstacles", where the column model of `flood` stuck above the level an
     (`liquid/scene TAA`, 0.079 ms at 1600 × 900), with the frame's jitter and motion vectors
     and its own history, so the water bends an anti-aliased scene. Through moving water, the
     posts' sides and the shadows' edges were hatched and jagged; they are now smooth.
-    `--no-behind-taa` shows the old way.
+    `--no-behind-taa` shows the old way. Since D-070 (2026-10-18) that TAA is an FSR of its own
+    (`liquid/scene FSR …`), and the flag is `--no-behind-aa`.
   - **The fine comb left after that** on the gate's shadow through the water (frame 90 of
     `lab-tank90`) is gone since the sun's shadows are denoised (D-049): the edge is now a smooth
     penumbra in each frame, not eight points of the sun's disc for TAA to average. At four
@@ -1658,7 +1659,8 @@ squares' level is the same under both). Panning at 2 m/s, its MTF50 is 0.43–0.
 sharpened TAA's 0.37–0.40, and at 0.25 c/px 0.79–0.82 against 0.83–0.87. It costs 0.46 ms
 for the DLSS pass at 1600 × 900, and 0.02 for the display pass.
 
-**TAA sharpened** (`--rcas STOPS`, half a stop by default; `--no-rcas`). A pass after the resolve sharpens the display's signal (sRGB-encoded, or PQ)
+**TAA sharpened** (`--rcas STOPS`, half a stop by default; `--no-rcas`; removed with TAA by D-070,
+2026-10-18). A pass after the resolve sharpens the display's signal (sRGB-encoded, or PQ)
 with FidelityFX RCAS. The MTF at 0.25 c/px, the three edges (over 1 is an overshoot, a halo):
 
 | RCAS | Still | Panning 0.5 m/s | Panning 2 m/s |
@@ -1682,7 +1684,7 @@ with FidelityFX RCAS. The MTF at 0.25 c/px, the three edges (over 1 is an oversh
   the captures.
 
 **A Lanczos-3 history** (by default; `--taa-catmull-rom` for the five bilinear fetches before
-it). TAA's history is resampled through 36 texels. Still, nothing changes (a still camera
+it; removed with TAA by D-070). TAA's history is resampled through 36 texels. Still, nothing changes (a still camera
 samples it at the pixels' centres). Moving, with the sharpening:
 
 | History | Panning 0.5 m/s, MTF50 (at 0.25 c/px) | Panning 2 m/s |

@@ -144,9 +144,10 @@ pub struct ShaderEntry {
 /// multiply and add is fused unless the source says so (D-016: Vulkan lets a driver fuse them
 /// otherwise). Without it NVIDIA's driver shaded the same inputs one of two ways from run to
 /// run, and even from one dispatch to the next in a frame (#277): the scene's shading, then
-/// TAA's passes, whose history keeps a difference. About 3 % on the shading's time. The decoration
-/// does not reach `lerp`, which compiles to `FMix`: TAA's display pass still parted on one until
-/// its path took `lerp_exact` (`shaders/exact.slang`, #281; the other entries' are #282).
+/// TAA's passes (D-070 removed its resolve), whose history kept a difference. About 3 % on the
+/// shading's time. The decoration does not reach `lerp`, which compiles to `FMix`: TAA's display
+/// pass still parted on one until its path took `lerp_exact` (`shaders/exact.slang`, #281; the
+/// other entries' are #282).
 const PRECISE_ENTRIES: &[(&str, &str)] = &[
     ("meshlet.slang", "resolve_standard_main"),
     ("meshlet.slang", "resolve_standard_rt_main"),
@@ -162,8 +163,6 @@ const PRECISE_ENTRIES: &[(&str, &str)] = &[
     ("meshlet.slang", "lamp_filter_main"),
     ("restir.slang", "lamp_restir_main"),
     ("taa.slang", "motion_main"),
-    ("taa.slang", "resolve_history_main"),
-    ("taa.slang", "sharpen_main"),
     // FSR 3.1 (D-070), whose history keeps a difference as TAA's did. Its `ffxLerp` is AMD's
     // `lerp`: an `FMix` the decoration does not reach.
     ("fsr_prepare_inputs.slang", "prepare_inputs_main"),
@@ -178,7 +177,7 @@ const PRECISE_ENTRIES: &[(&str, &str)] = &[
     ("fsr_accumulate.slang", "accumulate_main"),
     ("fsr_accumulate_sharpen.slang", "accumulate_main"),
     ("fsr_rcas.slang", "rcas_main"),
-    // D-064's particles: drawn into what TAA's history keeps.
+    // D-064's particles: drawn into what DLSS's or FSR's history keeps.
     ("particles.slang", "advance_main"),
     ("particles.slang", "vert_main"),
     ("particles.slang", "frag_main"),
@@ -715,9 +714,9 @@ mod tests {
             return; // the debugging switch makes more entries precise
         }
         assert!(precise("meshlet.slang", "resolve_standard_rt_main"));
-        assert!(precise("taa.slang", "resolve_history_main"));
+        assert!(precise("taa.slang", "motion_main"));
         // By file and entry: another file's entry of the same name keeps its contractions.
-        assert!(!precise("water.slang", "resolve_history_main"));
+        assert!(!precise("water.slang", "motion_main"));
         assert!(!precise("meshlet.slang", "cull_main"));
     }
 

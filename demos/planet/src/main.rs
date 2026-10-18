@@ -159,13 +159,9 @@ struct Args {
     /// Also capture every N-th frame (`<capture stem>-NNNNN.png`).
     #[arg(long)]
     capture_every: Option<u64>,
-    /// Start with TAA off (T toggles it).
+    /// Start with the anti-aliasing off (as `--set r.aa=off`).
     #[arg(long)]
     no_taa: bool,
-    /// How strongly TAA's image is sharpened (FidelityFX RCAS, D-045), in stops below its
-    /// strongest.
-    #[arg(long, default_value_t = 0.5)]
-    rcas: f32,
     /// Start with occlusion culling off (O toggles it).
     #[arg(long)]
     no_occlusion: bool,
@@ -572,15 +568,16 @@ struct PlanetDemo {
     haze: f32,
     sky_from_world: glam::Mat3,
     taa: Taa,
-    taa_enabled: bool,
-    /// NVIDIA's DLAA (D-045, the galleries' since D-069), where it runs: used instead of the
-    /// TAA resolve while `dlaa_on`, its image shown through its own display pass.
-    dlaa: Option<(forge_render::DlssUpscaler, forge_render::Display)>,
+    /// NVIDIA's DLAA (D-045, the galleries' since D-069), where it runs, while `dlaa_on`.
+    dlaa: Option<forge_render::DlssUpscaler>,
     dlaa_on: bool,
-    /// AMD's FSR 3.1 (D-070) when the run asks for it: used instead of the TAA resolve while
-    /// `fsr_on`, its image shown through its own display pass.
-    fsr: Option<(forge_render::FsrUpscaler, forge_render::Display)>,
+    /// AMD's FSR 3.1 (D-070) wherever DLAA does not run, while `fsr_on`: made at the start, or
+    /// when the console first asks for it.
+    fsr: Option<forge_render::FsrUpscaler>,
     fsr_on: bool,
+    /// The display pass: DLAA's or FSR's image, or the frame as drawn with the anti-aliasing
+    /// off, through the tone curve with bloom.
+    display: forge_render::Display,
     bloom: Bloom,
     gtao: Gtao,
     ao_on: bool,
@@ -868,9 +865,8 @@ impl PlanetDemo {
                 flags.toggle(flag);
             }
         }
-        let mut taa = Taa::new(&ctx.device, &ctx.shaders, ctx.extent(), ctx.output.format)?;
+        let mut taa = Taa::new(&ctx.device, &ctx.shaders, ctx.extent())?;
         taa.bloom_strength = args.bloom;
-        taa.sharpen = Some(args.rcas);
         let mut exposure = if args.auto_exposure {
             AutoExposure::new(args.ev100)
         } else {
@@ -884,37 +880,26 @@ impl PlanetDemo {
                 forge_render::DlssMode::Dlaa,
                 ctx.extent(),
             )?
-            .map(|dlss| -> Result<_> {
-                let display =
-                    forge_render::Display::new(&ctx.device, &ctx.shaders, ctx.output.format)?;
-                Ok((dlss, display))
+        } else {
+            None
+        };
+        // FSR 3.1 (D-070) wherever DLAA does not run, unless the anti-aliasing is off.
+        let fsr = (!args.no_taa && args.settings.asked_aa() != Some("off") && dlaa.is_none())
+            .then(|| {
+                forge_render::FsrUpscaler::new(
+                    &ctx.device,
+                    &ctx.shaders,
+                    forge_render::FsrMode::NativeAa,
+                    ctx.extent(),
+                )
             })
-            .transpose()?
-        } else {
-            None
-        };
-        // FSR 3.1 in place of TAA (D-070): where the run asks for it (`--set r.aa=fsr`), and in
-        // DLAA's place where the device has no DLSS.
-        let fsr = if args.settings.asked_aa() == Some("fsr") && !args.no_taa
-            || wants_dlaa(&args) && dlaa.is_none()
-        {
-            let fsr = forge_render::FsrUpscaler::new(
-                &ctx.device,
-                &ctx.shaders,
-                forge_render::FsrMode::NativeAa,
-                ctx.extent(),
-            )?;
-            let display = forge_render::Display::new(&ctx.device, &ctx.shaders, ctx.output.format)?;
-            Some((fsr, display))
-        } else {
-            None
-        };
+            .transpose()?;
         let mut demo = Self {
-            dlaa_on: dlaa.is_some() && fsr.is_none(),
+            dlaa_on: dlaa.is_some(),
             dlaa,
             fsr_on: fsr.is_some(),
             fsr,
-            taa_enabled: !args.no_taa,
+            display: forge_render::Display::new(&ctx.device, &ctx.shaders, ctx.output.format)?,
             ao_on: !args.no_ao,
             tonemap: args.tonemap,
             planet,
@@ -1478,10 +1463,10 @@ impl Demo for PlanetDemo {
         self.renderer.resize(ctx.extent())?;
         self.taa.resize(ctx.extent())?;
         self.taa.reset_history();
-        if let Some((dlss, _)) = &mut self.dlaa {
+        if let Some(dlss) = &mut self.dlaa {
             dlss.configure(forge_render::DlssMode::Dlaa, ctx.extent())?;
         }
-        if let Some((fsr, _)) = &mut self.fsr {
+        if let Some(fsr) = &mut self.fsr {
             fsr.configure(forge_render::FsrMode::NativeAa, ctx.extent())?;
         }
         Ok(())
@@ -1493,7 +1478,7 @@ impl Demo for PlanetDemo {
 
     fn update(&mut self, ctx: &mut Context, input: &Input, dt: f32) {
         // The settings changed since the last frame (D-069).
-        self.apply_vars(&ctx.settings);
+        self.apply_vars(ctx);
         self.longest_frame = self.longest_frame.max(dt);
         self.step = if self.args.fixed_step {
             1.0 / 120.0
@@ -1516,10 +1501,8 @@ impl Demo for PlanetDemo {
 
     fn render<'f>(&'f mut self, ctx: &mut Context, frame: &mut FrameInfo<'f>) -> Result<()> {
         let hdr = HdrOutput::new(ctx.output.peak, ctx.output.scene_stops, ctx.output.ui_white);
-        self.taa.set_output(&ctx.shaders, ctx.output.format, hdr)?;
-        if let Some((_, display)) = self.dlaa.as_mut() {
-            display.set_output(&ctx.shaders, ctx.output.format, hdr)?;
-        }
+        self.display
+            .set_output(&ctx.shaders, ctx.output.format, hdr)?;
         self.stream_tiles(ctx);
         if let Some(stats) = self.renderer.begin_frame(frame.slot, &mut self.scene)? {
             self.stats.push(stats);
@@ -1580,7 +1563,8 @@ impl Demo for PlanetDemo {
         });
         let extent = ctx.extent();
         // DLAA takes the jittered frame too.
-        self.taa.enabled = self.taa_enabled || self.dlaa_on || self.fsr_on;
+        // The jitter only where DLAA or FSR resolves it.
+        self.taa.enabled = self.dlaa_on || self.fsr_on;
         self.renderer.noise_frame =
             (self.taa.frame_index() % u64::from(self.taa.jitter_phases)) as u32;
         // The new tiles' normal maps, made before the scene's passes sample them (D-058).
@@ -1592,7 +1576,6 @@ impl Demo for PlanetDemo {
             self.camera.projection(aspect),
             cull.view_proj,
             cull.position,
-            exposure,
         );
         let draw_view_proj = taa_frame.jittered_projection * self.camera.view_rotation();
         let targets = self.renderer.draw(
@@ -1817,10 +1800,10 @@ impl Demo for PlanetDemo {
             near: self.camera.near,
             vertical_fov: self.camera.fov_y,
         };
-        let upscaled = if let Some((dlss, display)) = self.dlaa.as_mut().filter(|_| dlaa_on) {
+        let shown = if let Some(dlss) = self.dlaa.as_mut().filter(|_| dlaa_on) {
             // DLAA (D-045), as the galleries draw it: the jittered frame, its depth and motion
-            // to DLSS, its image through the tone curve with bloom drawn from it.
-            let upscaled = dlss.upscale(
+            // to DLSS.
+            dlss.upscale(
                 &mut frame.graph,
                 ctx.frames_rendered,
                 &taa_frame,
@@ -1828,11 +1811,10 @@ impl Demo for PlanetDemo {
                 targets.depth,
                 motion,
                 exposure,
-            )?;
-            Some((upscaled, display))
-        } else if let Some((fsr, display)) = self.fsr.as_mut().filter(|_| fsr_on) {
-            // FSR 3.1 (D-070), drawn as DLAA's image is, on the run's step.
-            let upscaled = fsr.upscale(
+            )?
+        } else if let Some(fsr) = self.fsr.as_mut().filter(|_| fsr_on) {
+            // FSR 3.1 (D-070), on the run's step.
+            fsr.upscale(
                 &mut frame.graph,
                 frame.slot,
                 &taa_frame,
@@ -1842,37 +1824,21 @@ impl Demo for PlanetDemo {
                 None,
                 exposure,
                 self.step,
-            );
-            Some((upscaled, display))
+            )
         } else {
-            None
+            // The anti-aliasing off: the frame as drawn, without jitter.
+            taa_frame.color
         };
-        if let Some((upscaled, display)) = upscaled {
-            let bloom = (self.args.bloom > 0.0)
-                .then(|| self.bloom.draw(&mut frame.graph, upscaled, extent));
-            display.draw(
-                &mut frame.graph,
-                upscaled,
-                frame.target,
-                extent,
-                self.tonemap,
-                bloom.map(|b| (b, self.taa.bloom_strength)),
-                None,
-            );
-            return Ok(());
-        }
-        let bloom = (self.args.bloom > 0.0).then(|| {
-            self.bloom
-                .draw(&mut frame.graph, taa_frame.color, taa_frame.extent)
-        });
-        self.taa.resolve(
+        // Through the tone curve, with bloom drawn from the resolved image.
+        let bloom =
+            (self.args.bloom > 0.0).then(|| self.bloom.draw(&mut frame.graph, shown, extent));
+        self.display.draw(
             &mut frame.graph,
-            &taa_frame,
-            targets.depth,
-            motion,
+            shown,
             frame.target,
+            extent,
             self.tonemap,
-            bloom,
+            bloom.map(|b| (b, self.taa.bloom_strength)),
             None,
         );
         Ok(())
@@ -1907,7 +1873,7 @@ impl Demo for PlanetDemo {
 }
 
 /// Whether DLAA is wanted (D-070): in every run, scripted ones and their captures too, unless
-/// `--no-taa` or `--set r.aa=taa|off` ([`forge_app::SettingsArgs::wants_dlss`]).
+/// `--no-taa` or `--set r.aa=fsr|off` ([`forge_app::SettingsArgs::wants_dlss`]).
 fn wants_dlaa(args: &Args) -> bool {
     args.settings.wants_dlss(args.no_taa)
 }

@@ -1,40 +1,31 @@
-//! Temporal anti-aliasing (`shaders/taa.slang`).
+//! The temporal frame (`shaders/taa.slang`): what DLSS and FSR resolve.
 //!
-//! The scene is drawn into an HDR colour target with a Halton-jittered projection. A motion
-//! pass reprojects every pixel into the previous frame from depth and the two cameras; the
-//! resolve blends this frame's samples with the history fetched there, clipped to the
-//! neighbourhood, into the next history (HDR); a last pass shows it through the tone curve
-//! ([`crate::display`]).
-//! Ported from the previous project's `temporal.rs` (Karis 2014, Jimenez 2016, Playdead 2016).
+//! The scene is drawn into an HDR colour target with a Halton-jittered projection, and a motion
+//! pass reprojects every pixel into the previous frame from depth and the two cameras. DLSS
+//! ([`crate::DlssUpscaler`]) or FSR 3.1 ([`crate::FsrUpscaler`]) resolve the frame with its
+//! history; with the anti-aliasing off, nothing is jittered and the display pass shows the frame
+//! as drawn. Forge's own TAA resolve and its RCAS sharpening were removed when FSR replaced them
+//! (D-070); the history's clip, the Lanczos-3 resampling and the sharpening are in the git history
+//! before that commit.
 //!
-//! With [`Taa::sharpen`] (D-045), that last pass sharpens the history with AMD's FidelityFX
-//! RCAS on the display's signal: TAA's history, resampled every frame, softens what moves.
+//! The motion is a compute pass (#161): as a fullscreen draw, on the serial frame
+//! (`FORGE_ASYNC=0`), the same draw from the same inputs came out one of two ways from one run to
+//! the next.
 //!
-//! The motion and the resolve are compute passes (#161): as fullscreen draws, on the serial
-//! frame (`FORGE_ASYNC=0`), the same draw from the same inputs came out one of two ways from one
-//! run to the next, and the history kept the difference.
-//!
-//! The scene is pre-exposed ([`crate::exposure`]): when the exposure changes between frames
-//! the history, stored at the previous exposure, is rescaled by the ratio before blending.
-//!
-//! The colour and motion targets are transients of the render graph; the two histories are
-//! persistent [`GraphImage`]s whose state the graph carries from frame to frame.
+//! The colour and motion targets are transients of the render graph.
 
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 use forge_gpu::{
-    Commands, ComputePipelineDesc, Device, FrameGraph, FullscreenPipelineDesc, GraphImage,
-    ImageAccess, ImageDesc, ImageHandle, Pipeline, Result, ShaderCompiler, ShaderStage,
-    TransientDesc, vk,
+    ComputePipelineDesc, Device, FrameGraph, ImageAccess, ImageHandle, Pipeline, Result,
+    ShaderCompiler, ShaderStage, TransientDesc, vk,
 };
 use glam::{DMat4, Mat4, Vec2};
 
 use crate::cells::CellPos;
-use crate::display::{HdrOutput, OutputEncoding, OutputPush, ToneTables, ToneTablesPush, Tonemap};
-use crate::local_exposure::{self, LocalExposurePush, LocalExposureRead};
 
-/// Colour format of the offscreen scene target and the history.
+/// Colour format of the offscreen scene target.
 pub const HDR_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 const MOTION_FORMAT: vk::Format = vk::Format::R16G16_SFLOAT;
 /// Jitter phases before the sequence repeats, at native resolution. An upscaler wants
@@ -89,135 +80,6 @@ struct MotionPush {
     motion: u32,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct ResolvePush {
-    color: u32,
-    motion: u32,
-    depth: u32,
-    history: u32,
-    width: u32,
-    height: u32,
-    jitter: [f32; 2],
-    blend: f32,
-    history_scale: f32,
-    /// The reactive mask (sampled index), or `u32::MAX` for none (#107).
-    reactive: u32,
-    /// 1: the history through Lanczos-3, else Catmull-Rom (D-045).
-    lanczos: u32,
-    /// The history written (storage index).
-    written: u32,
-    pad: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct SharpenPush {
-    resolved: u32,
-    width: u32,
-    height: u32,
-    /// RCAS's scale, 2^-stops.
-    sharpness: f32,
-    curve: u32,
-    bloom: u32,
-    bloom_strength: f32,
-    pad: u32,
-    output: OutputPush,
-    tables: ToneTablesPush,
-    local: LocalExposurePush,
-}
-
-/// A fullscreen pass of `taa.slang`: its `entry` writing `color_formats`.
-fn taa_pipeline<P>(
-    device: &Arc<Device>,
-    shaders: &ShaderCompiler,
-    entry: &str,
-    color_formats: &[vk::Format],
-    name: &str,
-) -> Result<Pipeline> {
-    let vertex = device.create_shader_module(
-        &shaders.compile("taa.slang", "vert_main", ShaderStage::Vertex)?,
-        "taa vs",
-    )?;
-    let fragment = device.create_shader_module(
-        &shaders.compile("taa.slang", entry, ShaderStage::Fragment)?,
-        name,
-    )?;
-    let pipeline = device.create_fullscreen_pipeline(&FullscreenPipelineDesc {
-        vertex: (vertex, "vert_main"),
-        fragment: (fragment, entry),
-        color_formats,
-        push_constant_bytes: std::mem::size_of::<P>() as u32,
-        alpha_blend: false,
-        depth_test: None,
-        depth_write: false,
-        name,
-    });
-    for module in [vertex, fragment] {
-        device.destroy_shader_module(module);
-    }
-    pipeline
-}
-
-/// The float image `FORGE_HASH_SHARPEN` draws the shown image into (#281).
-const SHARPEN_FLOAT_FORMAT: vk::Format = vk::Format::R32G32B32A32_SFLOAT;
-
-/// The sharpening pass's pipeline, writing an output image of `output_format`.
-fn sharpen_pipeline(
-    device: &Arc<Device>,
-    shaders: &ShaderCompiler,
-    output_format: vk::Format,
-) -> Result<Pipeline> {
-    taa_pipeline::<SharpenPush>(
-        device,
-        shaders,
-        "sharpen_main",
-        &[output_format],
-        "taa sharpen",
-    )
-}
-
-/// A compute pass of `taa.slang`: its `entry`, with push constants `P`.
-fn taa_compute<P>(
-    device: &Arc<Device>,
-    shaders: &ShaderCompiler,
-    entry: &str,
-    name: &str,
-) -> Result<Pipeline> {
-    let module = device.create_shader_module(
-        &shaders.compile("taa.slang", entry, ShaderStage::Compute)?,
-        name,
-    )?;
-    let pipeline = device.create_compute_pipeline(&ComputePipelineDesc {
-        shader: (module, entry),
-        push_constant_bytes: std::mem::size_of::<P>() as u32,
-        name,
-    });
-    device.destroy_shader_module(module);
-    pipeline
-}
-
-fn create_history(device: &Arc<Device>, extent: vk::Extent2D) -> Result<[GraphImage; 2]> {
-    let make = |name: &str| {
-        GraphImage::new(
-            device,
-            ImageDesc {
-                width: extent.width,
-                height: extent.height,
-                format: HDR_FORMAT,
-                // Storage: the resolve is a compute pass (#161).
-                usage: vk::ImageUsageFlags::STORAGE
-                    | vk::ImageUsageFlags::SAMPLED
-                    | vk::ImageUsageFlags::TRANSFER_SRC,
-                aspect: vk::ImageAspectFlags::COLOR,
-                mip_levels: 1,
-                name,
-            },
-        )
-    };
-    Ok([make("taa history 0")?, make("taa history 1")?])
-}
-
 /// What the current frame draws with, from [`Taa::begin`].
 #[derive(Clone, Copy, Debug)]
 pub struct TaaFrame {
@@ -233,133 +95,58 @@ pub struct TaaFrame {
     pub previous_from_current: Mat4,
     /// Nothing on screen matches the frames before (first frame, a cut, a new size).
     pub reset: bool,
-    blend: f32,
-    /// This frame's exposure over the one the history was stored with.
-    history_scale: f32,
-    written: usize,
 }
 
-/// The temporal anti-aliasing passes and their histories.
+/// The temporal frame: the jitter, the reprojection and the motion vectors pass.
 pub struct Taa {
-    device: Arc<Device>,
     pipeline_motion: Pipeline,
-    /// The resolve, writing the next history, and the pass that shows it (sharpened or not).
-    pipeline_history: Pipeline,
-    pipeline_sharpen: Pipeline,
-    /// `FORGE_HASH_SHARPEN=1` (#281): the same pass again into a float image, so the hashes see
-    /// what it computes before the output's 8 bits round it.
-    pipeline_sharpen_float: Option<Pipeline>,
-    history: [GraphImage; 2],
     extent: vk::Extent2D,
     frame_index: u64,
     previous_view_proj: Option<DMat4>,
     /// Where the camera stood for `previous_view_proj` (issue #93).
     previous_camera: Option<CellPos>,
-    previous_exposure: f32,
     reset: bool,
-    output_format: vk::Format,
-    hdr: HdrOutput,
-    tables: ToneTables,
-    /// Steady-state share of the current frame (0.1 is a typical TAA; 1 disables the history).
-    pub blend: f32,
-    /// When false, frames are drawn without jitter and resolved without history: the passes
-    /// still run (so the output path is identical) but the image is the plain scene.
+    /// When false (the anti-aliasing off), frames are drawn without jitter.
     pub enabled: bool,
-    /// How much of the shown image is bloom when a bloom chain is passed to
-    /// [`Taa::resolve`] (0.04 by default).
+    /// How much of the shown image is bloom, for the display pass (0.04 by default).
     pub bloom_strength: f32,
     /// Length of the jitter sequence ([`JITTER_PHASES`] at native resolution, more when an
     /// upscaler draws below it: [`jitter_phases`]).
     pub jitter_phases: u32,
-    /// The display image sharpened by RCAS this many stops below its strongest (D-045), while
-    /// TAA is on; `None` shows the resolve as it is.
-    pub sharpen: Option<f32>,
-    /// The night's Purkinje shift in the display pass (D-046): on when true, from this frame's
-    /// exposure.
-    pub purkinje: bool,
-    /// The history resampled through Lanczos-3 (36 texels) rather than Catmull-Rom (5 bilinear
-    /// fetches), D-045: on by default.
-    pub lanczos: bool,
 }
 
 impl Taa {
-    /// Compiles the passes and creates the histories for `extent`. The pass that shows the
-    /// resolve writes an output image of `output_format` (the swapchain's).
+    /// Compiles the motion pass for frames of `extent`.
     pub fn new(
         device: &Arc<Device>,
         shaders: &ShaderCompiler,
         extent: vk::Extent2D,
-        output_format: vk::Format,
     ) -> Result<Self> {
-        let pipeline_motion =
-            taa_compute::<MotionPush>(device, shaders, "motion_main", "taa motion")?;
-        let pipeline_history = taa_compute::<ResolvePush>(
-            device,
-            shaders,
-            "resolve_history_main",
-            "taa resolve history",
+        let module = device.create_shader_module(
+            &shaders.compile("taa.slang", "motion_main", ShaderStage::Compute)?,
+            "taa motion",
         )?;
-        let pipeline_sharpen = sharpen_pipeline(device, shaders, output_format)?;
-        let pipeline_sharpen_float = std::env::var_os("FORGE_HASH_SHARPEN")
-            .is_some_and(|v| v != "0")
-            .then(|| sharpen_pipeline(device, shaders, SHARPEN_FLOAT_FORMAT))
-            .transpose()?;
-        let history = create_history(device, extent)?;
-        let mut tables = ToneTables::new(device)?;
-        let hdr = HdrOutput::default();
-        if OutputEncoding::for_format(output_format).is_hdr() {
-            tables.set_hdr(hdr.preset)?;
-        }
+        let pipeline_motion = device.create_compute_pipeline(&ComputePipelineDesc {
+            shader: (module, "motion_main"),
+            push_constant_bytes: std::mem::size_of::<MotionPush>() as u32,
+            name: "taa motion",
+        });
+        device.destroy_shader_module(module);
         Ok(Self {
-            device: Arc::clone(device),
-            pipeline_motion,
-            pipeline_history,
-            pipeline_sharpen,
-            pipeline_sharpen_float,
-            history,
+            pipeline_motion: pipeline_motion?,
             extent,
             frame_index: 0,
             previous_view_proj: None,
             previous_camera: None,
-            previous_exposure: 0.0,
             reset: true,
-            output_format,
-            hdr,
-            tables,
-            blend: 0.1,
             enabled: true,
             bloom_strength: 0.04,
             jitter_phases: JITTER_PHASES,
-            sharpen: None,
-            lanczos: true,
-            purkinje: false,
         })
     }
 
-    /// Follows the output (issue #94): a new target format recompiles the pass that shows the
-    /// history (call it
-    /// while no frame uses the old one, as after a swapchain's recreation), an HDR one bakes
-    /// its preset's table.
-    pub fn set_output(
-        &mut self,
-        shaders: &ShaderCompiler,
-        format: vk::Format,
-        hdr: HdrOutput,
-    ) -> Result<()> {
-        if format != self.output_format {
-            self.pipeline_sharpen = sharpen_pipeline(&self.device, shaders, format)?;
-            self.output_format = format;
-        }
-        if OutputEncoding::for_format(format).is_hdr() {
-            self.tables.set_hdr(hdr.preset)?;
-        }
-        self.hdr = hdr;
-        Ok(())
-    }
-
-    /// Recreates the histories (device idle) and restarts the history.
+    /// Follows a new size: the frames after it start a new history.
     pub fn resize(&mut self, extent: vk::Extent2D) -> Result<()> {
-        self.history = create_history(&self.device, extent)?;
         self.extent = extent;
         self.reset = true;
         Ok(())
@@ -375,12 +162,12 @@ impl Taa {
         self.reset = true;
     }
 
-    /// Frames resolved so far (the jitter phase is derived from it).
+    /// Frames begun so far (the jitter phase is derived from it).
     pub fn frame_index(&self) -> u64 {
         self.frame_index
     }
 
-    /// The unjittered world-to-clip of the previous resolved frame, if any.
+    /// The unjittered world-to-clip of the previous frame, if any.
     pub fn previous_view_proj(&self) -> Option<DMat4> {
         self.previous_view_proj
     }
@@ -389,22 +176,14 @@ impl Taa {
     /// draw with. `view_proj` is the *unjittered* camera-relative-to-clip of this frame and
     /// `camera` where the camera stands (the reprojection into the previous frame is derived
     /// from them and the previous frame's: the previous clip of a point is its clip in the
-    /// previous camera's frame, which sits `camera − previous camera` away, issue #93);
-    /// `exposure` is the frame's pre-exposure (the history is rescaled when it changes).
+    /// previous camera's frame, which sits `camera − previous camera` away, issue #93).
     pub fn begin<'f>(
         &mut self,
         graph: &mut FrameGraph<'f>,
         projection: Mat4,
         view_proj: Mat4,
         camera: CellPos,
-        exposure: f32,
     ) -> TaaFrame {
-        let history_scale = if self.reset || self.previous_exposure <= 0.0 {
-            1.0
-        } else {
-            exposure / self.previous_exposure
-        };
-        self.previous_exposure = exposure;
         let jitter = if self.enabled {
             jitter(self.frame_index, self.jitter_phases)
         } else {
@@ -423,12 +202,6 @@ impl Taa {
         };
         self.previous_camera = Some(camera);
         let reset = self.reset;
-        let blend = if self.reset || !self.enabled {
-            1.0
-        } else {
-            self.blend
-        };
-        let written = (self.frame_index % 2) as usize;
         self.previous_view_proj = Some(current);
         self.reset = false;
         self.frame_index += 1;
@@ -438,7 +211,7 @@ impl Taa {
             height: extent.height,
             format: HDR_FORMAT,
             // Written by the visibility resolve (storage) and the sky (attachment), sampled
-            // by the resolve passes.
+            // by the upscalers and the display pass.
             usage: vk::ImageUsageFlags::COLOR_ATTACHMENT
                 | vk::ImageUsageFlags::SAMPLED
                 | vk::ImageUsageFlags::STORAGE,
@@ -452,105 +225,13 @@ impl Taa {
             extent,
             previous_from_current: previous_from_current.as_mat4(),
             reset,
-            blend,
-            history_scale,
-            written,
         }
-    }
-
-    /// A frame of this TAA's own history that follows `main`, another TAA's frame of this
-    /// frame: its jitter, reprojection, exposure and blend, resolving `color` with
-    /// [`Taa::resolve_hdr`]. For the scene behind the tank's water (#156), anti-aliased before
-    /// the water bends it: bent differently every frame, an aliased scene cannot be averaged
-    /// after.
-    pub fn follow(&mut self, main: &TaaFrame, color: ImageHandle) -> TaaFrame {
-        let reset = self.reset || main.reset;
-        let written = (self.frame_index % 2) as usize;
-        self.frame_index += 1;
-        self.reset = false;
-        TaaFrame {
-            color,
-            reset,
-            blend: if reset { 1.0 } else { main.blend },
-            history_scale: if reset { 1.0 } else { main.history_scale },
-            written,
-            ..*main
-        }
-    }
-    /// Declares `label`, the resolve of `frame` into its history alone, and returns it: the
-    /// frame anti-aliased, pre-exposed HDR, no tone curve.
-    pub fn resolve_hdr<'f>(
-        &'f self,
-        graph: &mut FrameGraph<'f>,
-        label: &'static str,
-        frame: &TaaFrame,
-        depth: ImageHandle,
-        motion: ImageHandle,
-    ) -> ImageHandle {
-        self.resolve_pass(graph, label, frame, depth, motion, None)
-    }
-
-    /// The resolve of `frame` into the next history, a compute pass (#161): drawn, the same
-    /// resolve sometimes rounded differently on the serial frame, and the history kept it.
-    fn resolve_pass<'f>(
-        &'f self,
-        graph: &mut FrameGraph<'f>,
-        label: &'static str,
-        frame: &TaaFrame,
-        depth: ImageHandle,
-        motion: ImageHandle,
-        reactive: Option<ImageHandle>,
-    ) -> ImageHandle {
-        use vk::PipelineStageFlags2 as S;
-        let frame = *frame;
-        let extent = frame.extent;
-        let history_written = graph.import(&self.history[frame.written]);
-        let history_read = graph.import(&self.history[1 - frame.written]);
-        let pipeline = &self.pipeline_history;
-        let lanczos = self.lanczos;
-        let mut pass = graph
-            .pass(label)
-            .image(frame.color, ImageAccess::Sampled(S::COMPUTE_SHADER))
-            .image(motion, ImageAccess::Sampled(S::COMPUTE_SHADER))
-            .image(depth, ImageAccess::Sampled(S::COMPUTE_SHADER))
-            .image(history_read, ImageAccess::Sampled(S::COMPUTE_SHADER))
-            .image(
-                history_written,
-                ImageAccess::StorageWrite(S::COMPUTE_SHADER),
-            );
-        if let Some(reactive) = reactive {
-            pass = pass.image(reactive, ImageAccess::Sampled(S::COMPUTE_SHADER));
-        }
-        pass.run(move |resources, commands| {
-            commands.bind_pipeline(pipeline);
-            commands.push_constants(
-                pipeline,
-                &ResolvePush {
-                    color: resources.sampled(frame.color).0,
-                    motion: resources.sampled(motion).0,
-                    depth: resources.sampled(depth).0,
-                    history: resources.sampled(history_read).0,
-                    width: extent.width,
-                    height: extent.height,
-                    jitter: frame.jitter.to_array(),
-                    blend: frame.blend,
-                    history_scale: frame.history_scale,
-                    reactive: reactive.map_or(u32::MAX, |r| resources.sampled(r).0),
-                    lanczos: u32::from(lanczos),
-                    written: resources.storage(history_written, 0).0,
-                    pad: 0,
-                },
-            );
-            commands.dispatch(extent.width.div_ceil(8), extent.height.div_ceil(8), 1);
-            Ok(())
-        });
-        history_written
     }
 
     /// Declares the pass "temporal/motion vectors": for every pixel of the frame drawn with
     /// `depth` (the depth buffer the scene was drawn with), the offset in UV to where it was in
-    /// the previous frame, without jitter (camera motion; nothing in the scene moves yet). The
-    /// TAA resolve and DLSS read it.
+    /// the previous frame, without jitter (the camera's motion; the movers add theirs, #79).
+    /// DLSS and FSR read it.
     pub fn motion_vectors<'f>(
         &'f self,
         graph: &mut FrameGraph<'f>,
@@ -593,169 +274,6 @@ impl Taa {
             });
         motion
     }
-
-    /// Declares the passes that resolve the frame drawn into `frame.color` with `depth` and
-    /// `motion` (from [`Taa::motion_vectors`]) into the next history, then show it in `output`
-    /// through `curve`, sharpened with [`Taa::sharpen`]. Where `reactive` (an R8 mask, #107:
-    /// the splashes' coverage) is set, a pixel takes at least that share of this frame, so
-    /// what moves without motion vectors is not smeared. Returns the history it wrote.
-    #[allow(clippy::too_many_arguments)]
-    pub fn resolve<'f>(
-        &'f self,
-        graph: &mut FrameGraph<'f>,
-        frame: &TaaFrame,
-        depth: ImageHandle,
-        motion: ImageHandle,
-        output: ImageHandle,
-        curve: Tonemap,
-        bloom: Option<ImageHandle>,
-        reactive: Option<ImageHandle>,
-    ) -> ImageHandle {
-        let history = self.resolve_history(graph, frame, depth, motion, reactive);
-        self.show(graph, history, frame.extent, output, curve, bloom, None);
-        history
-    }
-
-    /// The first half of [`Taa::resolve`]: this frame into the next history, returned. A bloom
-    /// chain drawn from that history (rather than from the jittered frame) holds still: from
-    /// the frame, a light smaller than a pixel covered a different share of it each frame, and
-    /// its halo pulsed (the owner saw the lamps shimmer at night).
-    pub fn resolve_history<'f>(
-        &'f self,
-        graph: &mut FrameGraph<'f>,
-        frame: &TaaFrame,
-        depth: ImageHandle,
-        motion: ImageHandle,
-        reactive: Option<ImageHandle>,
-    ) -> ImageHandle {
-        self.resolve_pass(
-            graph,
-            "temporal/TAA resolve",
-            frame,
-            depth,
-            motion,
-            reactive,
-        )
-    }
-
-    /// The second half of [`Taa::resolve`]: `history` (of `extent`) shown in `output` through
-    /// `curve`, sharpened with [`Taa::sharpen`], `bloom` blended in, and `local`'s gain after it
-    /// (local exposure, D-067). With `FORGE_HASH_SHARPEN=1` (#281), returns the same image drawn
-    /// again into a float image, for the hashes.
-    #[allow(clippy::too_many_arguments)]
-    pub fn show<'f>(
-        &'f self,
-        graph: &mut FrameGraph<'f>,
-        history_written: ImageHandle,
-        extent: vk::Extent2D,
-        output: ImageHandle,
-        curve: Tonemap,
-        bloom: Option<ImageHandle>,
-        local: Option<LocalExposureRead>,
-    ) -> Option<ImageHandle> {
-        use vk::PipelineStageFlags2 as S;
-        let encoding = OutputPush::new(
-            OutputEncoding::for_format(self.output_format),
-            &self.hdr,
-            self.frame_index as u32,
-            if self.purkinje {
-                1.0 / self.previous_exposure.max(1e-30)
-            } else {
-                0.0
-            },
-        );
-        let bloom_strength = self.bloom_strength;
-        let tables = self.tables.push();
-        // Unsharpened (or with TAA off), the same pass shows the history as it is.
-        let sharpen = self.sharpen.filter(|_| self.enabled);
-        let sharpness = sharpen.map_or(0.0, |stops| (-stops).exp2());
-        let float = self.pipeline_sharpen_float.as_ref().map(|pipeline| {
-            let image = graph.transient(TransientDesc {
-                name: "taa sharpen float",
-                width: extent.width,
-                height: extent.height,
-                format: SHARPEN_FLOAT_FORMAT,
-                usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
-                aspect: vk::ImageAspectFlags::COLOR,
-                mip_levels: 1,
-            });
-            (image, pipeline, "debug/sharpen float")
-        });
-        let name = if sharpen.is_some() {
-            "temporal/sharpen"
-        } else {
-            "temporal/show"
-        };
-        for (target, pipeline, name) in
-            std::iter::once((output, &self.pipeline_sharpen, name)).chain(float)
-        {
-            let mut pass = graph
-                .pass(name)
-                .image(history_written, ImageAccess::Sampled(S::FRAGMENT_SHADER))
-                .image(target, ImageAccess::ColorAttachment);
-            if let Some(bloom) = bloom {
-                pass = pass.image(bloom, ImageAccess::Sampled(S::FRAGMENT_SHADER));
-            }
-            if let Some(read) = &local {
-                pass = read.declare(pass);
-            }
-            pass.run(move |resources, commands| {
-                fullscreen_pass(
-                    commands,
-                    &[resources.view(target)],
-                    extent,
-                    pipeline,
-                    &SharpenPush {
-                        resolved: resources.sampled(history_written).0,
-                        width: extent.width,
-                        height: extent.height,
-                        sharpness,
-                        curve: curve.index(),
-                        bloom: bloom.map_or(u32::MAX, |b| resources.sampled(b).0),
-                        bloom_strength,
-                        pad: 0,
-                        output: encoding,
-                        tables,
-                        local: local_exposure::push_of(local, resources),
-                    },
-                );
-                Ok(())
-            });
-        }
-        float.map(|(image, ..)| image)
-    }
-}
-
-fn fullscreen_pass<P: Pod>(
-    commands: &Commands<'_>,
-    targets: &[vk::ImageView],
-    extent: vk::Extent2D,
-    pipeline: &Pipeline,
-    push: &P,
-) {
-    let color: Vec<_> = targets
-        .iter()
-        .map(|&target| {
-            vk::RenderingAttachmentInfo::default()
-                .image_view(target)
-                .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                .load_op(vk::AttachmentLoadOp::DONT_CARE)
-                .store_op(vk::AttachmentStoreOp::STORE)
-        })
-        .collect();
-    let info = vk::RenderingInfo::default()
-        .render_area(vk::Rect2D {
-            offset: vk::Offset2D::default(),
-            extent,
-        })
-        .layer_count(1)
-        .color_attachments(&color);
-    commands.begin_rendering(&info);
-    commands.bind_pipeline(pipeline);
-    commands.set_viewport_full(extent);
-    commands.push_constants(pipeline, push);
-    commands.draw(3, 1);
-    commands.end_rendering();
 }
 
 #[cfg(test)]
@@ -804,17 +322,5 @@ mod tests {
         };
         let moved = to_pixels(shifted * point) - to_pixels(projection * point);
         assert!(moved.abs_diff_eq(Vec2::new(0.25, -0.5), 1e-3), "{moved}");
-    }
-
-    #[test]
-    fn the_sharpening_push_matches_the_shader() {
-        // `SharpenPush` in taa.slang: eight words, `Output`, then `ToneTables` (its pointers on
-        // 8 bytes).
-        assert_eq!(std::mem::size_of::<SharpenPush>(), 32 + 32 + 32 + 32);
-        assert_eq!(std::mem::offset_of!(SharpenPush, local), 96);
-        assert_eq!(std::mem::offset_of!(SharpenPush, tables), 64);
-        // `ResolvePush`: fourteen words, the history written (a storage index) the last but one.
-        assert_eq!(std::mem::offset_of!(ResolvePush, written), 48);
-        assert_eq!(std::mem::size_of::<ResolvePush>(), 56);
     }
 }

@@ -44,9 +44,10 @@ use forge_render::{
     LiquidDrawParams, LiquidStats, LiquidTank, LocalExposure, LocalExposureSettings,
     LuminanceMeter, MeshletRenderer, MeshletScene, MeshletSceneBuilder, ProbeParams, Probes,
     Residency, SkyParams, SplashParams, SplashSource, Starfield, StartView, StreamingConfig,
-    StreamingStats, SwRaster, Taa, Tonemap, WaterCascadeDesc, WaterCascades, WaterCaustics,
-    WaterLake, WaterMouth, WaterPool, WaterRiverPoint, WaterShore, WaterShoreTrain, WaterSplashes,
-    WaterStone, WaterSurface, WaterSurfaceParams, WaterWakes, exposure_from_ev100, sh_irradiance,
+    StreamingStats, SwRaster, Taa, TaaFrame, Tonemap, WaterCascadeDesc, WaterCascades,
+    WaterCaustics, WaterLake, WaterMouth, WaterPool, WaterRiverPoint, WaterShore, WaterShoreTrain,
+    WaterSplashes, WaterStone, WaterSurface, WaterSurfaceParams, WaterWakes, exposure_from_ev100,
+    sh_irradiance,
 };
 use forge_task::TaskPool;
 use forge_terrain::{
@@ -609,34 +610,24 @@ pub struct Args {
     /// Bloom strength, the share of the shown image that is bloom (0 for none; B toggles it).
     #[arg(long, default_value_t = 0.04)]
     bloom: f32,
-    /// Draw without TAA (no jitter, no history): the raw frame, aliased.
+    /// Draw without anti-aliasing (no jitter, no DLAA or FSR): the raw frame, aliased (as
+    /// `--set r.aa=off`).
     #[arg(long)]
     no_taa: bool,
-    /// How strongly TAA's image is sharpened (FidelityFX RCAS, D-045): this many stops below
-    /// its strongest, each stop half as strong (r.taa.sharpen_stops; r.taa.sharpen and r.aa switch it off).
-    #[arg(long, default_value_t = 0.5)]
-    rcas: f32,
-    /// Show TAA's image unsharpened.
-    #[arg(long)]
-    no_rcas: bool,
     /// What the props' textures keep: full (colour and relief), flat (colour alone) or none
     /// (plain colours), to compare.
     #[arg(long, value_enum, default_value_t = TextureMode::Full)]
     textures: TextureMode,
-    /// Let the tank's water bend the scene as drawn, aliased, rather than anti-aliased by a TAA
-    /// of its own (#156: the A/B of that TAA).
+    /// Let the tank's water bend the scene as drawn, aliased, rather than anti-aliased by an FSR
+    /// of its own (#156: the A/B of that anti-aliasing).
     #[arg(long)]
-    no_behind_taa: bool,
-    /// Resample TAA's history through Catmull-Rom (5 bilinear fetches), as before D-045, rather
-    /// than Lanczos-3 (36 texels).
-    #[arg(long)]
-    taa_catmull_rom: bool,
+    no_behind_aa: bool,
     /// Anti-alias with NVIDIA's DLAA (DLSS at the window's own resolution), the default of every
     /// run where it runs, scripted ones included (D-070: the Streamline SDK in `streamline-sdk/`
     /// and an RTX GPU). Kept for the scripts that still name it.
     #[arg(long, conflicts_with_all = ["no_taa", "no_dlaa"])]
     dlaa: bool,
-    /// Anti-alias with TAA even where DLAA runs (as `--set r.aa=taa`).
+    /// Anti-alias with FSR even where DLAA runs (as `--set r.aa=fsr`).
     #[arg(long)]
     no_dlaa: bool,
     /// Window width in pixels (the render size).
@@ -681,8 +672,8 @@ struct Gallery {
     /// In `--lab tank`, the GPU liquid (#156), and per frame slot the lab's tick its statistics
     /// were asked at.
     liquid: Option<forge_render::Liquid>,
-    /// The TAA of the scene behind the tank's water (#156), its own history.
-    behind_taa: Option<Taa>,
+    /// The FSR of the scene behind the tank's water (#156, D-070), its own history.
+    behind_aa: Option<forge_render::FsrUpscaler>,
     /// `FORGE_HASH_IMAGES=1`: per-frame image hashes in the log (#161).
     hasher: Option<forge_render::debug_hash::ImageHasher>,
     /// The GPU's finer layer over the flood's columns (#162), made at the first frame that has
@@ -696,14 +687,16 @@ struct Gallery {
     liquid_reset: bool,
     /// What the liquid's drawing shows: as it looks (1), its speed view (2), its landing view (3).
     liquid_mode: forge_render::LiquidMode,
-    /// DLAA where it runs (D-045): DLSS at the output's size and the display pass it hands its
-    /// HDR image to, in place of TAA while `dlaa_on` (`r.aa`).
-    dlaa: Option<(forge_render::DlssUpscaler, forge_render::Display)>,
+    /// DLAA where it runs (D-045): DLSS at the output's size, while `dlaa_on` (`r.aa`).
+    dlaa: Option<forge_render::DlssUpscaler>,
     dlaa_on: bool,
-    /// AMD's FSR 3.1 at the output's size (D-070) when the run asks for it, and its display
-    /// pass, in place of TAA while `fsr_on` (`r.aa fsr`).
-    fsr: Option<(forge_render::FsrUpscaler, forge_render::Display)>,
+    /// AMD's FSR 3.1 at the output's size (D-070) wherever DLAA does not run, while `fsr_on`
+    /// (`r.aa fsr`): made at the start, or when the console first asks for it.
+    fsr: Option<forge_render::FsrUpscaler>,
     fsr_on: bool,
+    /// The display pass: DLAA's or FSR's image, or the frame as drawn with the anti-aliasing
+    /// off, through the tone curve with bloom.
+    display: forge_render::Display,
     /// The denoisers of the sun's soft shadows (D-049): NVIDIA's SIGMA where NRD's library is in
     /// `nrd-sdk/bin` (#172), then AMD's FidelityFX (#173); `sun_shadow_on` the one on (`r.shadows.denoiser`), or
     /// none.
@@ -881,11 +874,9 @@ impl Gallery {
     ) -> Result<Self> {
         let args = island_demo::with_shot(args)?;
         let mut renderer = MeshletRenderer::new(&ctx.device, &ctx.shaders, ctx.extent())?;
-        let mut taa = Taa::new(&ctx.device, &ctx.shaders, ctx.extent(), ctx.output.format)?;
+        let mut taa = Taa::new(&ctx.device, &ctx.shaders, ctx.extent())?;
         taa.enabled = !args.no_taa;
         taa.bloom_strength = args.bloom;
-        taa.sharpen = (!args.no_rcas).then_some(args.rcas);
-        taa.lanczos = !args.taa_catmull_rom;
         let bloom = Bloom::new(&ctx.device, &ctx.shaders)?;
         let bloom_on = args.bloom > 0.0;
         let sky_light = !args.no_sky_light;
@@ -1030,14 +1021,18 @@ impl Gallery {
             .as_ref()
             .map(|l| forge_render::Liquid::new(&ctx.device, &ctx.shaders, l.tank, l.solver, l.look))
             .transpose()?;
-        // The scene behind the tank's water, anti-aliased by a TAA of its own before the water
-        // bends it (#156): bent differently every frame, an aliased scene's edges cannot be
-        // averaged after.
-        let behind_taa = (liquid.is_some() && !args.no_behind_taa)
-            .then(|| -> Result<Taa> {
-                let mut behind =
-                    Taa::new(&ctx.device, &ctx.shaders, ctx.extent(), ctx.output.format)?;
-                behind.lanczos = taa.lanczos;
+        // The scene behind the tank's water, anti-aliased by an FSR of its own before the water
+        // bends it (#156, D-070): bent differently every frame, an aliased scene's edges cannot
+        // be averaged after.
+        let behind_aa = (liquid.is_some() && !args.no_behind_aa)
+            .then(|| -> Result<forge_render::FsrUpscaler> {
+                let mut behind = forge_render::FsrUpscaler::new(
+                    &ctx.device,
+                    &ctx.shaders,
+                    forge_render::FsrMode::NativeAa,
+                    ctx.extent(),
+                )?;
+                behind.group = forge_render::FsrGroup::Liquid;
                 Ok(behind)
             })
             .transpose()?;
@@ -1046,7 +1041,7 @@ impl Gallery {
         let clouds = (args.clouds > 0.0 && open_sky)
             .then(|| Clouds::new(&ctx.device, &ctx.shaders, ctx.extent()))
             .transpose()?;
-        // DLAA in place of TAA (D-045) where the device has DLSS.
+        // DLAA (D-045) where the device has DLSS.
         let dlaa = if wants_dlaa(&args) {
             let dlss = forge_render::DlssUpscaler::new(
                 &ctx.device,
@@ -1058,31 +1053,22 @@ impl Gallery {
                     "DLAA is not available (it needs --features dlss, the Streamline SDK in streamline-sdk/ and an RTX GPU): FSR instead"
                 );
             }
-            dlss.map(|dlss| -> Result<_> {
-                let display =
-                    forge_render::Display::new(&ctx.device, &ctx.shaders, ctx.output.format)?;
-                Ok((dlss, display))
+            dlss
+        } else {
+            None
+        };
+        // FSR 3.1 (D-070) wherever DLAA does not run, unless the anti-aliasing is off.
+        let fsr = (!args.no_taa && args.settings.asked_aa() != Some("off") && dlaa.is_none())
+            .then(|| {
+                forge_render::FsrUpscaler::new(
+                    &ctx.device,
+                    &ctx.shaders,
+                    forge_render::FsrMode::NativeAa,
+                    ctx.extent(),
+                )
             })
-            .transpose()?
-        } else {
-            None
-        };
-        // FSR 3.1 in place of TAA (D-070): where the run asks for it (`--set r.aa=fsr`), and in
-        // DLAA's place where the device has no DLSS.
-        let fsr = if args.settings.asked_aa() == Some("fsr") && !args.no_taa
-            || wants_dlaa(&args) && dlaa.is_none()
-        {
-            let fsr = forge_render::FsrUpscaler::new(
-                &ctx.device,
-                &ctx.shaders,
-                forge_render::FsrMode::NativeAa,
-                ctx.extent(),
-            )?;
-            let display = forge_render::Display::new(&ctx.device, &ctx.shaders, ctx.output.format)?;
-            Some((fsr, display))
-        } else {
-            None
-        };
+            .transpose()?;
+        let display = forge_render::Display::new(&ctx.device, &ctx.shaders, ctx.output.format)?;
         // Known before the scene, whose streamed pages it loads first (#121).
         let mut camera = start_camera(&args, scenario.as_ref().map(|s| s.camera()))?;
         if let Some(fov) = args.fov {
@@ -1530,7 +1516,7 @@ impl Gallery {
             clouds_previous: Mat4::IDENTITY,
             space,
             liquid,
-            behind_taa,
+            behind_aa,
             shallow: None,
             shallow_tick: None,
             hasher: std::env::var_os("FORGE_HASH_IMAGES")
@@ -1541,10 +1527,11 @@ impl Gallery {
             liquid_next_log: 0,
             liquid_reset: false,
             liquid_mode,
-            dlaa_on: dlaa.is_some() && fsr.is_none(),
+            dlaa_on: dlaa.is_some(),
             dlaa,
             fsr_on: fsr.is_some(),
             fsr,
+            display,
             sun_shadow_on,
             sun_shadows,
             reflection_history,
@@ -1678,13 +1665,10 @@ impl Demo for Gallery {
             denoiser.resize(ctx.extent())?;
         }
         self.reflection_history.resize(ctx.extent())?;
-        if let Some(behind) = &mut self.behind_taa {
-            behind.resize(ctx.extent())?;
-        }
-        if let Some((dlss, _)) = &mut self.dlaa {
+        if let Some(dlss) = &mut self.dlaa {
             dlss.configure(forge_render::DlssMode::Dlaa, ctx.extent())?;
         }
-        if let Some((fsr, _)) = &mut self.fsr {
+        for fsr in [&mut self.fsr, &mut self.behind_aa].into_iter().flatten() {
             fsr.configure(forge_render::FsrMode::NativeAa, ctx.extent())?;
         }
         Ok(())
@@ -1765,7 +1749,7 @@ impl Demo for Gallery {
     fn update(&mut self, ctx: &mut Context, input: &Input, dt: f32) {
         // The settings changed since the last frame: the console's, the bound keys', and at the
         // first frame those forge.cfg and --set gave (D-069).
-        self.apply_vars(&ctx.settings);
+        self.apply_vars(ctx);
         let now = Instant::now();
         let ms = (now - self.last_frame).as_secs_f64() * 1e3;
         self.last_frame = now;
@@ -1874,13 +1858,10 @@ impl Demo for Gallery {
         };
         // The target's format and the HDR settings (issue #94).
         let hdr = HdrOutput::new(ctx.output.peak, ctx.output.scene_stops, ctx.output.ui_white);
-        self.taa.set_output(&ctx.shaders, ctx.output.format, hdr)?;
-        // DLAA's display pass follows the output too: F2's HDR switch reaches it (the asteroids'
-        // did; the galleries' kept the start's).
-        if let Some((_, display)) = self.dlaa.as_mut() {
-            display.set_output(&ctx.shaders, ctx.output.format, hdr)?;
-        }
-        // `FORGE_HASH_IMAGES=1` (#161): hashes of the clouds, the scene and TAA's history each
+        // The display pass follows the output: F2's HDR switch reaches it.
+        self.display
+            .set_output(&ctx.shaders, ctx.output.format, hdr)?;
+        // `FORGE_HASH_IMAGES=1` (#161): hashes of the clouds, the scene and the resolved image each
         // frame, logged when their slot comes back, to find where two runs part without the
         // waits that hide a race.
         let hasher = self.hasher.as_ref();
@@ -2029,20 +2010,16 @@ impl Demo for Gallery {
         // Local exposure (D-067), from the image the display pass shows: built and read this frame.
         let local_middle = self.local_middle();
         let local_settings = self.local_settings;
-        // The night's Purkinje shift (D-046) in whichever pass shows the image.
+        // The night's Purkinje shift (D-046) in the display pass.
         let night_on = self.night.is_some() && !self.args.no_purkinje;
-        self.taa.purkinje = night_on;
-        if let Some((_, display)) = self.dlaa.as_mut() {
-            display.scotopic = if night_on { 1.0 / exposure } else { 0.0 };
-        }
-        // Draw jittered into TAA's HDR target, cull with the unjittered camera, resolve
-        // through the history and the tone curve into the swapchain.
+        self.display.scotopic = if night_on { 1.0 / exposure } else { 0.0 };
+        // Draw jittered into the HDR target, cull with the unjittered camera; DLAA or FSR
+        // resolve it with their history, the display pass shows it through the tone curve.
         let taa_frame = self.taa.begin(
             &mut frame.graph,
             self.camera.projection(ctx.aspect()),
             camera.view_proj,
             camera.position,
-            exposure,
         );
         if hasher.is_some() {
             // What the motion vectors take from the CPU (#161), bit for bit.
@@ -2864,7 +2841,7 @@ impl Demo for Gallery {
             self.particle_peak = self.particle_peak.max(stats.live);
             self.particle_born += u64::from(stats.fresh);
         }
-        // The motion vectors, before the tank's water, whose scene behind them a TAA takes. They
+        // The motion vectors, before the tank's water, whose scene behind them an FSR takes. They
         // need only the depth and the cameras. Before the resolve when SIGMA denoised the sun's
         // shadow, which reprojects through them (#172).
         let motion = match early_motion {
@@ -2894,6 +2871,11 @@ impl Demo for Gallery {
                 taa_frame.jitter,
             );
         }
+        let upscale_camera = forge_render::UpscaleCamera {
+            projection: self.camera.projection(ctx.aspect()),
+            near: self.camera.near,
+            vertical_fov: self.camera.fov_y,
+        };
         // The glass tank and its water (#156), over the scene and the sky; its reactive mask for TAA
         // (the spray's, where there is spray, comes first: the tank has none).
         if let (Some(liquid), Some(state)) = (&self.liquid, liquid_state) {
@@ -2907,14 +2889,21 @@ impl Demo for Gallery {
                 targets.depth,
                 extent,
             );
-            if let Some(behind) = &mut self.behind_taa {
-                let behind_frame = behind.follow(&taa_frame, scene);
-                scene = self.behind_taa.as_ref().expect("just used").resolve_hdr(
+            if let Some(behind) = self.behind_aa.as_mut().filter(|_| self.taa.enabled) {
+                // The same jitter, depth and motion as the frame's, its own history.
+                scene = behind.upscale(
                     &mut frame.graph,
-                    "liquid/scene TAA",
-                    &behind_frame,
+                    frame.slot,
+                    &TaaFrame {
+                        color: scene,
+                        ..taa_frame
+                    },
+                    upscale_camera,
                     targets.depth,
                     motion,
+                    None,
+                    exposure,
+                    self.step,
                 );
             }
             let mask = liquid.draw(
@@ -2954,16 +2943,9 @@ impl Demo for Gallery {
             );
         }
         let (dlaa_on, fsr_on) = (self.dlaa_on, self.fsr_on);
-        let upscale_camera = forge_render::UpscaleCamera {
-            projection: self.camera.projection(ctx.aspect()),
-            near: self.camera.near,
-            vertical_fov: self.camera.fov_y,
-        };
-        let upscaled = if let Some((dlss, display)) = self.dlaa.as_mut().filter(|_| dlaa_on) {
-            // DLAA (D-045): the jittered frame, its depth and motion to DLSS, its HDR image through
-            // the tone curve with bloom, drawn from DLAA's resolved image: from the jittered frame a
-            // light smaller than a pixel made its halo pulse (the owner saw the lamps shimmer).
-            let upscaled = dlss.upscale(
+        let shown = if let Some(dlss) = self.dlaa.as_mut().filter(|_| dlaa_on) {
+            // DLAA (D-045): the jittered frame, its depth and motion to DLSS.
+            dlss.upscale(
                 &mut frame.graph,
                 ctx.frames_rendered,
                 &taa_frame,
@@ -2971,12 +2953,11 @@ impl Demo for Gallery {
                 targets.depth,
                 motion,
                 exposure,
-            )?;
-            Some((upscaled, display))
-        } else if let Some((fsr, display)) = self.fsr.as_mut().filter(|_| fsr_on) {
-            // FSR 3.1 (D-070): the same frame and the reactive mask to AMD's upscaler, drawn as
-            // DLAA's image is. Its clock is the run's step, fixed in scripted runs.
-            let upscaled = fsr.upscale(
+            )?
+        } else if let Some(fsr) = self.fsr.as_mut().filter(|_| fsr_on) {
+            // FSR 3.1 (D-070): the same frame and the reactive mask to AMD's upscaler. Its clock
+            // is the run's step, fixed in scripted runs.
+            fsr.upscale(
                 &mut frame.graph,
                 frame.slot,
                 &taa_frame,
@@ -2986,80 +2967,46 @@ impl Demo for Gallery {
                 reactive.filter(|_| !self.args.no_reactive),
                 exposure,
                 self.step,
-            );
-            Some((upscaled, display))
+            )
         } else {
-            None
+            // The anti-aliasing off: the frame as drawn, without jitter.
+            taa_frame.color
         };
-        if let Some((upscaled, display)) = upscaled {
-            let bloom = self
-                .bloom_on
-                .then(|| self.bloom.draw(&mut frame.graph, upscaled, extent));
-            let local = local_settings.enabled.then(|| {
-                self.local_exposure.build(
-                    &mut frame.graph,
-                    upscaled,
-                    extent,
-                    local_settings,
-                    local_middle,
-                )
-            });
-            display.draw(
-                &mut frame.graph,
-                upscaled,
-                frame.target,
-                ctx.extent(),
-                self.tonemap,
-                bloom.map(|b| (b, self.taa.bloom_strength)),
-                local,
-            );
-            return Ok(());
-        }
-        // The bloom from the resolved history, not the jittered frame (a light smaller than a
-        // pixel made its halo pulse: the owner saw the lamps shimmer at night).
-        let history = self.taa.resolve_history(
-            &mut frame.graph,
-            &taa_frame,
-            targets.depth,
-            motion,
-            reactive.filter(|_| !self.args.no_reactive),
-        );
+        // The image through the tone curve, with bloom drawn from the resolved image: from the
+        // jittered frame a light smaller than a pixel made its halo pulse (the owner saw the
+        // lamps shimmer at night).
         let bloom = self
             .bloom_on
-            .then(|| self.bloom.draw(&mut frame.graph, history, extent));
+            .then(|| self.bloom.draw(&mut frame.graph, shown, extent));
         let local = local_settings.enabled.then(|| {
             self.local_exposure.build(
                 &mut frame.graph,
-                history,
+                shown,
                 extent,
                 local_settings,
                 local_middle,
             )
         });
-        let shown = self.taa.show(
+        self.display.draw(
             &mut frame.graph,
-            history,
-            extent,
+            shown,
             frame.target,
+            ctx.extent(),
             self.tonemap,
-            bloom,
+            bloom.map(|b| (b, self.taa.bloom_strength)),
             local,
         );
         if let Some(h) = hasher {
             use forge_render::debug_hash::HashKind;
             h.add(&mut frame.graph, motion, HashKind::Float4, extent);
-            h.add(&mut frame.graph, history, HashKind::Float4, extent);
-            // The bloom's first level, what the sharpen samples (#281).
+            h.add(&mut frame.graph, shown, HashKind::Float4, extent);
+            // The bloom's first level, what the display pass samples (#281).
             if let Some(bloom) = bloom {
                 let half = forge_gpu::vk::Extent2D {
                     width: (extent.width / 2).max(1),
                     height: (extent.height / 2).max(1),
                 };
                 h.add(&mut frame.graph, bloom, HashKind::Float4, half);
-            }
-            // The shown image before its 8 bits (`FORGE_HASH_SHARPEN=1`, #281).
-            if let Some(shown) = shown {
-                h.add(&mut frame.graph, shown, HashKind::Float4, extent);
             }
             h.finish(&mut frame.graph);
         }
@@ -6202,7 +6149,7 @@ fn build_gallery(ctx: &Setup, args: &Args, cooked: Cooked) -> Result<(MeshletSce
 }
 
 /// Whether the run anti-aliases with DLAA where the device has it (D-070): every run, scripted
-/// ones and their captures too, unless `--no-dlaa`, `--no-taa` or `--set r.aa=taa|off`
+/// ones and their captures too, unless `--no-dlaa`, `--no-taa` or `--set r.aa=fsr|off`
 /// ([`forge_app::SettingsArgs::wants_dlss`]).
 fn wants_dlaa(args: &Args) -> bool {
     !args.no_dlaa && args.settings.wants_dlss(args.no_taa)

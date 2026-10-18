@@ -18,7 +18,7 @@ repeating as before #66), `--no-ao`, `--ao-radius M` (2),
 belt D metres away from the sun, negative for sunward; 0), `--round-rocks` (Phase 0's round
 rocks), `--no-crust` (no weathered crust on the chunks), `--rock-shaped-ice` (the ice in the
 rock's shapes), `--no-occlusion`, `--no-cone`,
-`--show-culled`, `--taa-blend F` (1 = jitter without history), `--lod-error PX` (projected
+`--show-culled`, `--lod-error PX` (projected
 error a drawn cluster may have, 1.0), `--lod-normals W` (the weight of the normals when
 the chunks are cooked, 0.5; 0 before #65), `--no-lod` (full detail only), `--lod-colors`,
 `--no-group-window` (A/B: must not change the image), `--tonemap aces|agx|neutral` (ACES),
@@ -38,9 +38,9 @@ borderless fullscreen on the window's monitor and back (in every demo), **Esc** 
 `asteroids.paused 1` the path stops and the camera flies freely (right mouse look, the keys at
 W, A, S, D, Q, E: Z, Q, S, D, A, E on AZERTY; Shift faster). The rest is set from the console
 (the key under Esc; [console.md](console.md) lists the settings and the keys they had before
-D-069's key map, 2026-10-17): `r.aa` anti-aliasing (TAA, DLAA, or DLSS at `r.dlss.mode`'s
-quality, balanced, performance or ultra performance, where DLSS runs; TAA sharpened or plain:
-`--rcas STOPS`, half a stop by default, `--no-rcas`; D-045), `r.cull.occlusion` and
+D-069's key map, 2026-10-17): `r.aa` anti-aliasing (FSR, DLAA, or DLSS at `r.dlss.mode`'s
+quality, balanced, performance or ultra performance, where DLSS runs; TAA, with its
+`--rcas` sharpening and `--taa-blend`, was removed by D-070), `r.cull.occlusion` and
 `r.cull.cone` culling, `r.lod` cluster LOD, `r.show.lod` LOD colours, `r.lod.error` the LOD
 error threshold, `r.show.culled` the culling-error view (what culling rejected is drawn in red;
 any red pixel is a bug), `r.show.meshlets` meshlet colours, `r.show.wireframe` wireframe,
@@ -1320,8 +1320,8 @@ Since D-045 (2026-10-03) the feature is on by default and DLAA is the default wh
 an interactive run (`--upscaler auto`). A scripted run (`--frames`) kept to TAA unless
 `--upscaler` named a DLSS mode: DLAA's images differed by a code or two from run to run. Since
 D-070 (2026-10-18) `auto` is DLAA in scripted runs too: the difference was Forge's shading,
-deterministic since #277 and #281. `--no-taa` turns anti-aliasing off, and `--upscaler taa`
-keeps TAA. The display pass mixes in bloom as the TAA resolve does.
+deterministic since #277 and #281. `--no-taa` turns anti-aliasing off, and `--upscaler fsr`
+takes FSR (`--upscaler taa` until D-070 removed TAA). The display pass mixes in bloom.
 
 ![Frame 600, zoomed ×2: TAA, DLAA, DLSS Quality (1067×600), DLSS Performance (800×450)](images/asteroids-dlss.png)
 

@@ -172,21 +172,14 @@ struct Args {
     /// Also capture every N-th frame (`<capture stem>-NNNNN.png`).
     #[arg(long)]
     capture_every: Option<u64>,
-    /// Start with temporal anti-aliasing off (T cycles it sharpened, plain and off).
+    /// Start with the anti-aliasing off (as `--set r.aa=off`).
     #[arg(long)]
     no_taa: bool,
-    /// How strongly TAA's image is sharpened (FidelityFX RCAS, D-045): this many stops below
-    /// its strongest, each stop half as strong.
-    #[arg(long, default_value_t = 0.5)]
-    rcas: f32,
-    /// Show TAA's image unsharpened.
-    #[arg(long)]
-    no_rcas: bool,
-    /// Anti-aliasing and upscaling: auto, taa, fsr (AMD's FSR 3.1 at the window's size, any GPU,
+    /// Anti-aliasing and upscaling: auto, fsr (AMD's FSR 3.1 at the window's size, any GPU,
     /// D-070), or a DLSS mode (dlaa, quality, balanced, performance, ultra-performance; needs the
     /// Streamline SDK in `streamline-sdk/` and an RTX GPU). Auto is DLAA where it runs, else FSR,
     /// in every run, scripted ones and their captures too (D-070), unless `--no-taa` or
-    /// `--set r.aa=taa|off|fsr`. U cycles them at run time.
+    /// `--set r.aa=off|fsr`. U cycles them at run time.
     #[arg(long, default_value = "auto")]
     upscaler: String,
     /// Switch the anti-aliasing as U does every N frames (tests the switch in scripted runs).
@@ -216,10 +209,6 @@ struct Args {
     /// Disable the per-group LOD window (A/B harness: must not change the image).
     #[arg(long)]
     no_group_window: bool,
-    /// Share of the current frame in the temporal blend (0.1 default; 1 keeps the jitter but
-    /// no history).
-    #[arg(long, default_value_t = 0.1)]
-    taa_blend: f32,
     /// Start with the culling-error view on (X toggles it): culled meshlets drawn in red.
     #[arg(long)]
     show_culled: bool,
@@ -468,15 +457,15 @@ struct Ballad {
     /// Ambient occlusion of the fill light (issue #55), on while `ao_on`.
     gtao: Gtao,
     ao_on: bool,
-    taa_enabled: bool,
-    /// DLSS, when the device has it; used instead of the TAA resolve while `dlss_on`.
+    /// DLSS, when the device has it, while `dlss_on`.
     dlss: Option<DlssUpscaler>,
     dlss_on: bool,
-    /// AMD's FSR 3.1 (D-070) when the run asks for it; used instead of the TAA resolve while
-    /// `fsr_on`.
+    /// AMD's FSR 3.1 (D-070) wherever DLSS does not run, while `fsr_on`: made at the start, or
+    /// when the console first asks for it.
     fsr: Option<FsrUpscaler>,
     fsr_on: bool,
-    /// Takes DLSS's HDR output through the tone curve to the swapchain.
+    /// Takes DLSS's or FSR's HDR output, or the frame as drawn with the anti-aliasing off,
+    /// through the tone curve to the swapchain.
     display: Display,
     /// The size the scene is drawn at (the window's, or DLSS's input size).
     render_extent: vk::Extent2D,
@@ -554,20 +543,20 @@ impl Ballad {
             .as_ref()
             .map(|path| std::fs::File::create(path).map(std::io::BufWriter::new))
             .transpose()?;
-        let taa = Taa::new(&ctx.device, &ctx.shaders, ctx.extent(), ctx.output.format)?;
-        // DLSS takes over from the TAA resolve when asked for and available; its HDR output goes
-        // to the swapchain through the stand-alone display pass.
+        let taa = Taa::new(&ctx.device, &ctx.shaders, ctx.extent())?;
+        // DLSS or FSR resolve the frame; their HDR output, or the frame as drawn with the
+        // anti-aliasing off, goes to the swapchain through the display pass.
         let display = Display::new(&ctx.device, &ctx.shaders, ctx.output.format)?;
         let auto = args.upscaler == "auto";
         let requested = match args.upscaler.as_str() {
-            "taa" | "fsr" => None,
+            "fsr" => None,
             "auto" => args
                 .settings
                 .wants_dlss(args.no_taa)
                 .then_some(DlssMode::Dlaa),
             name => Some(DlssMode::from_name(name).ok_or_else(|| {
                 anyhow::anyhow!(
-                    "unknown upscaler '{name}': taa, dlaa, quality, balanced, performance or ultra-performance"
+                    "unknown upscaler '{name}': auto, fsr, dlaa, quality, balanced, performance or ultra-performance"
                 )
             })?),
         };
@@ -582,13 +571,11 @@ impl Ballad {
             );
         }
         let dlss_on = requested.is_some() && dlss.is_some();
-        // FSR 3.1 (D-070) in place of TAA: when asked for (`--upscaler fsr`, `--set r.aa=fsr`), and
-        // in DLSS's place where the device has none (at native size until FSR's own modes).
-        let fsr = (args.upscaler == "fsr"
-            || auto && args.settings.asked_aa() == Some("fsr")
-            || requested.is_some() && dlss.is_none())
-        .then(|| FsrUpscaler::new(&ctx.device, &ctx.shaders, FsrMode::NativeAa, ctx.extent()))
-        .transpose()?;
+        // FSR 3.1 (D-070) wherever DLSS does not run, unless the anti-aliasing is off (at native
+        // size until FSR's own modes).
+        let fsr = (!args.no_taa && args.settings.asked_aa() != Some("off") && !dlss_on)
+            .then(|| FsrUpscaler::new(&ctx.device, &ctx.shaders, FsrMode::NativeAa, ctx.extent()))
+            .transpose()?;
         let fsr_on = fsr.is_some();
         let (scene, path) = build_field(ctx, &args, field)?;
         let ships = (args.ships > 0).then(|| Ships {
@@ -607,7 +594,6 @@ impl Ballad {
             speed: 40.0,
             ..FlyCamera::default()
         };
-        let taa_enabled = !args.no_taa;
         let mut flags = CullFlags::DEFAULT;
         if !args.no_shadows {
             flags.0 |= CullFlags::SHADOWS;
@@ -646,9 +632,7 @@ impl Ballad {
             flags.toggle(CullFlags::SHOW_RASTER);
         }
         let mut taa = taa;
-        taa.blend = args.taa_blend;
         taa.bloom_strength = args.bloom;
-        taa.sharpen = (!args.no_rcas).then_some(args.rcas);
         let bloom = Bloom::new(&ctx.device, &ctx.shaders)?;
         let bloom_on = args.bloom > 0.0;
         let gtao = Gtao::new(&ctx.device, &ctx.shaders)?;
@@ -676,7 +660,6 @@ impl Ballad {
             dust_on,
             gtao,
             ao_on,
-            taa_enabled,
             dlss,
             dlss_on,
             fsr,
@@ -712,8 +695,8 @@ impl Ballad {
     }
 
     /// Draws at the size the anti-aliasing wants for an `output` of that many pixels: the
-    /// window's with TAA, DLSS's input size with DLSS, with the jitter sequence to match. The
-    /// device must be idle.
+    /// window's with FSR or none, DLSS's input size with DLSS, with the jitter sequence to match.
+    /// The device must be idle.
     fn apply_upscaler(&mut self, output: vk::Extent2D) -> Result<()> {
         let render = match &mut self.dlss {
             Some(dlss) if self.dlss_on => {
@@ -743,7 +726,7 @@ impl Ballad {
         match &self.dlss {
             Some(dlss) if self.dlss_on => dlss.mode().label(),
             _ if self.fsr_on => "FSR",
-            _ => "TAA",
+            _ => "no anti-aliasing",
         }
     }
 
@@ -820,7 +803,6 @@ impl Demo for Ballad {
         let cpu_start = Instant::now();
         // The target's format and the HDR settings (issue #94).
         let hdr = HdrOutput::new(ctx.output.peak, ctx.output.scene_stops, ctx.output.ui_white);
-        self.taa.set_output(&ctx.shaders, ctx.output.format, hdr)?;
         self.display
             .set_output(&ctx.shaders, ctx.output.format, hdr)?;
         let frame_stats = self.renderer.begin_frame(frame.slot, &mut self.scene)?;
@@ -865,13 +847,7 @@ impl Demo for Ballad {
             ));
             ctx.profile.counter(format!(
                 "{} (U) at {}x{}   occlusion {}   cone {}   {}",
-                if self.dlss_on || self.fsr_on {
-                    self.upscaler_label().to_owned()
-                } else if self.taa_enabled {
-                    "TAA on (T)".to_owned()
-                } else {
-                    "TAA off (T)".to_owned()
-                },
+                self.upscaler_label(),
                 self.render_extent.width,
                 self.render_extent.height,
                 if self.flags.has(CullFlags::OCCLUSION) {
@@ -944,9 +920,9 @@ impl Demo for Ballad {
             }
         }
         // Draw jittered into the HDR target; cull with the unjittered camera. The rocks go
-        // first, then the sky fills the pixels they left (depth-tested), then the resolve.
-        // DLSS and FSR need the jitter whatever T says.
-        self.taa.enabled = self.taa_enabled || self.dlss_on || self.fsr_on;
+        // first, then the sky fills the pixels they left (depth-tested), then the resolve. The
+        // jitter only where DLSS or FSR resolves it.
+        self.taa.enabled = self.dlss_on || self.fsr_on;
         // The soft shadows' noise repeats with the jitter (issue #54).
         self.renderer.noise_frame =
             (self.taa.frame_index() % u64::from(self.taa.jitter_phases)) as u32;
@@ -955,7 +931,6 @@ impl Demo for Ballad {
             self.camera.projection(ctx.aspect()),
             cull.view_proj,
             cull.position,
-            exposure,
         );
         let draw_view_proj = taa_frame.jittered_projection * self.camera.view_rotation();
         // The camera in the scene frame, where the rays and the dust live (issue #93).
@@ -1132,42 +1107,22 @@ impl Demo for Ballad {
             )),
             _ => None,
         };
-        let (history, bloom_image) = match upscaled {
-            Some(upscaled) => {
-                // Bloom from the frame drawn, at its size: it is blurred to the bone anyway.
-                let bloom = self.bloom_on.then(|| {
-                    self.bloom
-                        .draw(&mut frame.graph, taa_frame.color, taa_frame.extent)
-                });
-                self.display.draw(
-                    &mut frame.graph,
-                    upscaled,
-                    frame.target,
-                    ctx.extent(),
-                    self.tonemap,
-                    bloom.map(|b| (b, self.taa.bloom_strength)),
-                    None,
-                );
-                (None, bloom)
-            }
-            _ => {
-                let bloom = self.bloom_on.then(|| {
-                    self.bloom
-                        .draw(&mut frame.graph, taa_frame.color, taa_frame.extent)
-                });
-                let history = self.taa.resolve(
-                    &mut frame.graph,
-                    &taa_frame,
-                    targets.depth,
-                    motion,
-                    frame.target,
-                    self.tonemap,
-                    bloom,
-                    None,
-                );
-                (Some(history), bloom)
-            }
-        };
+        // The anti-aliasing off: the frame as drawn, without jitter.
+        let shown = upscaled.unwrap_or(taa_frame.color);
+        // Bloom from the frame drawn, at its size: it is blurred to the bone anyway.
+        let bloom_image = self.bloom_on.then(|| {
+            self.bloom
+                .draw(&mut frame.graph, taa_frame.color, taa_frame.extent)
+        });
+        self.display.draw(
+            &mut frame.graph,
+            shown,
+            frame.target,
+            ctx.extent(),
+            self.tonemap,
+            bloom_image.map(|b| (b, self.taa.bloom_strength)),
+            None,
+        );
         if let Some(h) = hasher {
             let half = vk::Extent2D {
                 width: (extent.width >> 1).max(1),
@@ -1179,7 +1134,7 @@ impl Demo for Ballad {
                 Some((motion, HashKind::Float4, extent)),
                 occlusion.map(|ao| (ao, HashKind::Float4, extent)),
                 bloom_image.map(|b| (b, HashKind::Float4, half)),
-                history.map(|h| (h, HashKind::Float4, extent)),
+                Some((shown, HashKind::Float4, ctx.extent())),
             ];
             for (image, kind, size) in images.into_iter().flatten() {
                 h.add(&mut frame.graph, image, kind, size);
@@ -1231,8 +1186,6 @@ impl Demo for Ballad {
             if self.paused { "[P paused] " } else { "" },
             if self.dlss_on || self.fsr_on {
                 format!("[U {}] ", self.upscaler_label())
-            } else if self.taa_enabled {
-                "[T taa] ".to_owned()
             } else {
                 String::new()
             },
@@ -1659,12 +1612,12 @@ fn main() -> Result<()> {
             None
         },
         // Built with `--features dlss` (the default): the Vulkan API comes through Streamline so
-        // U can switch to DLSS at run time, except in a scripted run on TAA or without
+        // U can switch to DLSS at run time, except in a scripted run on FSR or without
         // anti-aliasing (D-070: `auto` is DLAA in scripted runs too).
         streamline: cfg!(feature = "dlss")
             && (args.frames.is_none()
                 || match args.upscaler.as_str() {
-                    "taa" => false,
+                    "fsr" => false,
                     "auto" => args.settings.wants_dlss(args.no_taa),
                     _ => true,
                 }),

@@ -45,9 +45,9 @@ console (the key under Esc; [console.md](console.md) lists the settings and the 
 before D-069's key map, 2026-10-17): `r.lod` cluster LOD, `r.show.lod` LOD colours,
 `r.show.meshlets` cluster colours, `r.cull.occlusion` occlusion, `r.sw_raster` the software
 rasteriser (auto, on, off), `r.show.raster` what it drew, `r.lod.error` the LOD threshold,
-`r.aa` anti-aliasing (DLAA where it runs, the default of an interactive run; TAA sharpened, plain,
-off: `--no-dlaa`, `--dlaa` in a scripted run, `--rcas STOPS`, half a stop by default,
-`--no-rcas`, `--taa-catmull-rom` for the history filter before Lanczos-3; D-045), `r.bloom`
+`r.aa` anti-aliasing (DLAA where it runs, else AMD's FSR 3.1 (D-070), or off:
+`--no-dlaa` for FSR where DLAA runs, `--no-taa` for none; TAA and its sharpening, `--rcas`,
+`--no-rcas` and `--taa-catmull-rom`, were removed by D-070), `r.bloom`
 bloom (`--bloom S`, 0.04), `r.shadows` shadows, `r.sky_light` sky light, `r.ao` ambient
 occlusion, `r.show.ao` its view, `r.reflections.sky` sky reflections, `r.reflections.rays`
 mirror rays in the glass and the water, `r.sun.disc` soft or hard shadows, `r.probes` the

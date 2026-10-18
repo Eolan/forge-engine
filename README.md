@@ -81,8 +81,8 @@ to Tracy with `--features profiling`), **Alt+Enter** fullscreen, **Esc** quit, a
 Esc (² on AZERTY, ` on QWERTY) for the console: the rest is set from there, or from a key the
 console's `bind` gives it (D-069's key map, 2026-10-17;
 [docs/demos/console.md](docs/demos/console.md) lists the settings and the keys they had before).
-In this demo: `asteroids.paused` stops the path to fly freely, `r.aa` TAA (sharpened or plain;
-`--rcas STOPS`, `--no-rcas`), DLAA or DLSS at `r.dlss.mode` (Windows, the Streamline SDK in
+In this demo: `asteroids.paused` stops the path to fly freely, `r.aa` FSR (AMD's FSR 3.1, any GPU,
+D-070), DLAA or DLSS at `r.dlss.mode` (Windows, the Streamline SDK in
 `streamline-sdk/`, an RTX GPU; DLAA by default there, D-045), `r.cull.occlusion`,
 `r.cull.cone`, `r.lod`, `r.show.lod`, `r.lod.error`, `r.show.culled` (culled meshlets drawn in
 red: any red pixel is a bug), `r.show.meshlets`, `r.sw_raster` (auto, on, off),
@@ -99,7 +99,7 @@ with it: the far-origin check, issue #93), `--sun-dir x,y,z`, `--planet-dir x,y,
 of its planet-view table: the reference), `--planet-view-steps N` (the table's segments, 64), `--fixed-step` (path advances
 per frame, for deterministic captures), `--no-taa`, `--no-shadows`, `--no-textures` (the
 untextured Phase 0 rock), `--no-ao`, `--ao-radius M`, `--soft-shadows`, `--no-dust`, `--dust E`, `--no-translucency`, `--round-rocks`, `--no-occlusion`, `--no-cone`,
-`--show-culled`, `--taa-blend F` (1 = jitter without history), `--capture-every N` (a
+`--show-culled`, `--capture-every N` (a
 sequence of PNGs), `--overlay` / `--no-overlay` (the profiling overlay is on by default in
 interactive runs and off in scripted ones), `--lod-error PX` (1.0), `--no-lod`,
 `--lod-colors`, `--no-group-window`, `--tonemap aces|agx|neutral|aces2|aces2-analytic`,

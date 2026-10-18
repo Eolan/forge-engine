@@ -53,7 +53,7 @@ The console's own commands: `help [NAME]` (or `NAME ?`), `find WORD` (names and 
 word), `list [PREFIX]`, `changed` (the settings not at their default, and where their values
 came from), `reset NAME`, `toggle NAME` (flips an on/off setting, steps a choice or a small
 number), `cycle NAME VALUE VALUE...` (steps through the values given, back to the first after the
-last: `cycle r.aa dlaa taa off`), `bind`, `unbind`, `binds` (below), `version`, `clear`. A
+last: `cycle r.aa dlaa fsr off`), `bind`, `unbind`, `binds` (below), `version`, `clear`. A
 change says what the value was: `r.display_info = 2 (was 1)`.
 
 ## Keys
@@ -95,7 +95,7 @@ The owner's file could hold the old keys, on keys of their choice, for example:
 
 ```
 # forge.cfg: the keys of before D-069's key map, on the function keys
-bind f5 cycle r.aa dlaa taa off
+bind f5 cycle r.aa dlaa fsr off
 bind f7 toggle r.tonemap
 bind f8 toggle r.exposure.local
 bind f9 camera.where
@@ -111,7 +111,7 @@ that does not upscale shows as `dlaa`, so one press of four would change nothing
 
 | Key | Galleries | Asteroids | Planet | Meshlets |
 |---|---|---|---|---|
-| T | `r.aa`, `r.taa.sharpen` | `r.aa` | `r.aa` | |
+| T | `r.aa` (`r.taa.sharpen` until D-070 removed TAA) | `r.aa` | `r.aa` | |
 | U | `r.show.gi` | `r.aa`, `r.dlss.mode` | | |
 | G | `r.tonemap` | `r.tonemap` | `r.tonemap` | `r.tonemap` |
 | B | `r.bloom` | `r.bloom` | | |
@@ -160,8 +160,7 @@ command line": `--no-ao` and `--set r.ao=0` give the same image to the pixel.
 
 | Name | What | Values | Gallery default |
 |---|---|---|---|
-| `r.aa` | anti-aliasing | off, taa, dlaa | dlaa where it runs, else taa |
-| `r.taa.sharpen`, `r.taa.sharpen_stops` | RCAS over TAA's image, and how strong | 0, 1; 0..8 stops | 1; 0.5 |
+| `r.aa` | anti-aliasing | off, dlaa, dlss, fsr | dlaa where it runs, else fsr |
 | `r.tonemap` | the tone curve | agx, agx-punchy, aces, neutral, aces2, aces2-analytic | agx-punchy |
 | `r.bloom`, `r.bloom.strength` | bloom, its share of the image | 0, 1; 0..1 | 1; 0.04 |
 | `r.exposure.local` | local exposure, D-067 | off, on, view | off |

@@ -12,17 +12,15 @@ use crate::display::Tonemap;
 use crate::meshlet::SwRaster;
 
 /// [`aa`]'s choices.
-pub const AA: &[&str] = &["off", "taa", "dlaa", "dlss", "fsr"];
+pub const AA: &[&str] = &["off", "dlaa", "dlss", "fsr"];
 /// [`aa`]: none.
 pub const AA_OFF: usize = 0;
-/// [`aa`]: temporal anti-aliasing.
-pub const AA_TAA: usize = 1;
 /// [`aa`]: NVIDIA's DLAA.
-pub const AA_DLAA: usize = 2;
+pub const AA_DLAA: usize = 1;
 /// [`aa`]: NVIDIA's DLSS, rendering smaller ([`dlss_mode`]).
-pub const AA_DLSS: usize = 3;
+pub const AA_DLSS: usize = 2;
 /// [`aa`]: AMD's FSR 3.1 at the window's size (D-070), on any GPU.
-pub const AA_FSR: usize = 4;
+pub const AA_FSR: usize = 3;
 
 /// Anti-aliasing.
 pub fn aa(default: usize) -> Spec<usize> {
@@ -30,10 +28,10 @@ pub fn aa(default: usize) -> Spec<usize> {
         "r.aa",
         AA,
         default,
-        "Anti-aliasing: off, taa, dlaa (NVIDIA's DLAA at the window's size), dlss (rendering \
-         smaller, r.dlss.mode), or fsr (AMD's FSR 3.1 at the window's size, any GPU; a run that \
-         starts with --set r.aa=fsr). DLAA and DLSS need the Streamline SDK and an RTX GPU; \
-         without them, TAA. A demo that does not upscale shows dlss as dlaa.",
+        "Anti-aliasing: off, dlaa (NVIDIA's DLAA at the window's size), dlss (rendering smaller, \
+         r.dlss.mode), or fsr (AMD's FSR 3.1 at the window's size, any GPU). DLAA and DLSS need \
+         the Streamline SDK and an RTX GPU; without them, FSR. A demo that does not upscale shows \
+         dlss as dlaa.",
     )
 }
 
@@ -65,25 +63,6 @@ pub fn dlss_mode_of(index: usize) -> DlssMode {
         .get(index)
         .copied()
         .unwrap_or(DlssMode::Quality)
-}
-
-/// TAA's image sharpened (FidelityFX RCAS, D-045).
-pub fn sharpen(default: bool) -> Spec<bool> {
-    Spec::bool(
-        "r.taa.sharpen",
-        default,
-        "TAA's image sharpened by FidelityFX RCAS (D-045); r.taa.sharpen_stops sets how much.",
-    )
-}
-
-/// How strongly: stops below the strongest (`--rcas`).
-pub fn sharpen_stops(default: f64) -> Spec<f64> {
-    Spec::float(
-        "r.taa.sharpen_stops",
-        default,
-        0.0..=8.0,
-        "How strongly TAA's image is sharpened: stops below RCAS's strongest, each half as strong.",
-    )
 }
 
 /// [`tonemap`]'s choices, in [`Tonemap::ALL`]'s order, then the analytic reference.
@@ -348,7 +327,7 @@ mod tests {
     #[test]
     fn the_names_register() {
         let mut s = forge_core::settings::Settings::new();
-        s.add(aa(AA_TAA));
+        s.add(aa(AA_FSR));
         s.add(tonemap(Tonemap::AgXPunchy));
         s.add(show("ao", "the occlusion"));
         assert_eq!(

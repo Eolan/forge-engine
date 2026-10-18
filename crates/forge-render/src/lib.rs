@@ -64,7 +64,7 @@ pub use display::{Display, HdrOutput, OutputEncoding, ToneTables, Tonemap};
 pub use dust::{DustParams, DustVolume};
 pub use exposure::{AutoExposure, LuminanceHistogram, LuminanceMeter, exposure_from_ev100};
 pub use forge_gpu::DlssMode;
-pub use fsr::{FsrMode, FsrUpscaler};
+pub use fsr::{FsrGroup, FsrMode, FsrUpscaler};
 pub use glass::{Glass, GlassLook, GlassPanes, GlassParams};
 pub use gtao::{Gtao, GtaoParams};
 pub use liquid::{

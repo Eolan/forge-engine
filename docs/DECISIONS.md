@@ -5575,9 +5575,32 @@ sharpening, and the lamp filter's flicker under TAA. The last two run-to-run fla
   - It is 0.27 % of pixels and ꟻLIP mean 0.0057 from the 5070 Ti's FSR image.
   - FSR's passes take 18.4 ms of the iGPU's 128 ms frame, the accumulation 8.3 ms of them.
 
+**TAA's resolve and sharpening removed (2026-10-18, the owner's go):**
+- **What went:**
+  - the resolve (`resolve_history_main`), its Lanczos-3 history and the pass that showed it
+    sharpened by RCAS (`sharpen_main`);
+  - their settings and flags: `r.aa taa`, `r.taa.sharpen`, `r.taa.sharpen_stops`, `--rcas`,
+    `--no-rcas`, `--taa-catmull-rom`, the ballad's `--taa-blend` and `--upscaler taa`;
+  - `FORGE_HASH_SHARPEN`.
+- **What stays:** `Taa` keeps the jitter, the reprojection and the motion vectors pass, and
+  `TaaFrame` is what DLSS and FSR take. The reactive mask and the exposure go to FSR as before.
+- **The anti-aliasing is DLAA, FSR or off.**
+  - FSR is made at the start wherever DLAA does not run, or the first time the console asks for
+    it (`r.aa fsr` on NVIDIA).
+  - With it off, nothing is jittered, and the display pass shows the frame as drawn.
+  - One display pass per demo now serves all three. That fixed two slips of the FSR commit:
+    FSR's image missed the night's Purkinje shift and F2's HDR switch.
+- **The tank's water** bends a scene anti-aliased by an FSR of its own (#156), in place of the
+  second TAA:
+  - its passes are "liquid/scene FSR …", 0.30 ms at 1600 × 900 against TAA's 0.079;
+  - `--no-behind-aa` (was `--no-behind-taa`) shows the scene aliased.
+- **Images:** DLAA's and FSR's are unchanged (the city under each: 0 px). Two kinds changed:
+  - with the anti-aliasing off (the ballad's `--no-taa` captures), TAA's resolve still blurred
+    each pixel with its neighbours' 1 % weights, and the frame is now shown as drawn: frame 240,
+    0.79 % of pixels, ꟻLIP mean 0.0042;
+  - the tank's scene through FSR rather than TAA: `lab-tank90`, 0.76 %, ꟻLIP mean 0.0035.
+
 **Next:**
-- TAA's resolve and sharpening removed. The jitter, the motion vectors, the reactive mask and the
-  exposure stay.
 - FSR's upscaling modes (`FsrMode::Quality` and the others, for the asteroids' `--upscaler`).
 - RCAS after FSR: `FsrUpscaler::sharpness`, off for now as DLAA's image is.
 
