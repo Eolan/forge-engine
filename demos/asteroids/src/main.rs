@@ -1000,7 +1000,7 @@ impl Demo for Ballad {
                 clouds: None,
                 sun_shadow: None,
                 reflection_history: None,
-                lamp_share: None,
+                lamp_shadows: forge_render::LampShadows::default(),
             },
         );
         if let Some(h) = hasher {

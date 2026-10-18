@@ -28,6 +28,11 @@ in. CI checks the crate list.
   object code only, under terms at least as protective of NVIDIA as the NVIDIA RTX SDKs License
   (`nrd-sdk/src/LICENSE.txt`), and never under an open-source licence. NRD never enters this
   repository; `tools/fetch-nrd.sh` builds it. This is not a legal reading.
+- **NVIDIA RTXDI** (`--lamp-restir`, `--street-restir`, D-065): its shader code is compiled
+  into `restir.slang`'s SPIR-V. A build that ships it ships it as object code, under the NVIDIA
+  RTX SDKs License (`rtxdi-sdk/LICENSE.txt`). It is never under an open-source licence, and
+  modified files keep NVIDIA's notice. RTXDI never enters this repository. This is not a legal
+  reading.
 - **Steam Audio** (the `steam-audio` feature, #267): `phonon.dll` is Valve's (Apache-2.0) and
   carries other people's code under their terms, listed in the SDK's `THIRDPARTY.md`: Intel IPP
   (the Intel Simplified Software License: redistributed unmodified with its notice, no reverse
@@ -66,6 +71,7 @@ This is a promise of intent, not a licence term.
 | [Streamline](https://github.com/NVIDIA-RTX/Streamline) and DLSS | NVIDIA | DLSS as an option next to TAA (`dlss` feature, D-024) | Streamline: MIT, parts under NVIDIA's Nsight SDK licences; DLSS: NVIDIA RTX SDKs licence |
 | [FidelityFX Denoiser](https://github.com/GPUOpen-Effects/FidelityFX-Denoiser), its shadow denoiser (commit d7dfecb) | Advanced Micro Devices | the sun's soft shadows denoised where NRD is absent: `shaders/ffx_shadows.slang`, ported to Slang with AMD's notice (D-049, #173) | MIT |
 | [NRD](https://github.com/NVIDIA-RTX/NRD) (Real-time Denoisers) v4.18.0 (master at d3df343, #210) | NVIDIA | SIGMA, the sun's soft shadows denoised (`nrd` feature, D-049, #172); fetched and built outside git by `tools/fetch-nrd.sh`, loaded at run time | NVIDIA RTX SDKs License |
+| [RTXDI](https://github.com/NVIDIA-RTX/RTXDI-Library) (RTXDI-Library 3.1, commit f12037f) | NVIDIA | ReSTIR DI over the lamps (D-065): the comparison with the light lists (`--lamp-restir`) and the street lamps, however far (`--street-restir`); `shaders/restir.slang` includes its headers from `rtxdi-sdk/`, kept outside git, through Forge's own bridge | NVIDIA RTX SDKs License |
 | [ab_glyph](https://github.com/alexheretic/ab-glyph) | Alex Butler | the overlay's font rasteriser | Apache-2.0 |
 | [image](https://github.com/image-rs/image) | the image-rs developers | PNG captures and `imgdiff`; decoding the PNG and JPEG images inside glTF models (`forge_render::textures::decode_image`, D-047) | MIT OR Apache-2.0 |
 | [OpenColorIO](https://github.com/AcademySoftwareFoundation/OpenColorIO) | Contributors to the OpenColorIO Project (Academy Software Foundation) | ACES 2.0's output transform, ported from its ACES2 code, v2.5.2, with its notice kept (`crates/forge-render/src/aces2.rs`, `shaders/aces2.slang`, issue #76) | BSD-3-Clause |

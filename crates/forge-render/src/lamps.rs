@@ -14,6 +14,9 @@ use glam::Vec3;
 
 /// The most lamps a frame lights with.
 pub const MAX_LAMPS: usize = 64;
+/// The most lamps a frame's buffers hold: all those [`every`] keeps, for D-065's comparison of
+/// ReSTIR DI with the light lists (the village lights 325 at 22:00).
+pub const LAMP_CAPACITY: usize = 512;
 /// The illuminance a lamp's light is let go below, lux: its reach. A candle's at about 1 m.
 pub const LEAST_LUX: f32 = 0.05;
 /// The most regions a lamp lights ([`Lamp::regions`]).
@@ -25,8 +28,11 @@ pub const EVERY_REGION: [u32; LAMP_REGIONS] = [NO_REGION; LAMP_REGIONS];
 /// The key the lamps of [`EVERY_REGION`] are listed under in [`lists`] (`REGION_ANY` in
 /// `meshlet.slang`).
 pub const REGION_ANY: u32 = u32::MAX - 1;
+/// The probes' region outside every house (`REGION_OUTSIDE` in `probes.slang`, D-068): a street
+/// lamp's ([`Lamp::outside`]).
+pub const REGION_OUTSIDE: u32 = 0;
 /// The most entries of [`lists`]: every lamp in every region it lights.
-pub const MAX_LIST: usize = MAX_LAMPS * LAMP_REGIONS;
+pub const MAX_LIST: usize = LAMP_CAPACITY * LAMP_REGIONS;
 
 /// A lamp, in the frame [`crate::MeshletScene::set_lamps`] is given.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -44,6 +50,15 @@ pub struct Lamp {
     /// surface elsewhere takes nothing of it, without a shadow ray: the house's rooms are its
     /// light lists. All slots empty ([`EVERY_REGION`]): every surface.
     pub regions: [u32; LAMP_REGIONS],
+}
+
+impl Lamp {
+    /// Whether it is a street lamp: [`REGION_OUTSIDE`] its first region. It lights the street
+    /// and not the rooms, downward only (`lamp_beam` in `meshlet.slang`), and ReSTIR DI lights
+    /// it ([`LampChoice::Streets`]).
+    pub fn outside(&self) -> bool {
+        self.regions[0] == REGION_OUTSIDE
+    }
 }
 
 /// Mirrors `Lamp` in `meshlet.slang`.
@@ -112,18 +127,65 @@ pub fn lamp_rgb(kelvin: f32) -> Vec3 {
     c / c.dot(Vec3::new(0.2126, 0.7152, 0.0722)).max(1e-6)
 }
 
-/// The lamps a frame lights with: those whose light reaches within [`reach`] of the camera at
+/// Which of the scene's lamps a frame lights with ([`choose`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LampChoice {
+    /// Those whose light reaches within 50 m of the camera, the nearest first, [`MAX_LAMPS`] at
+    /// most: the light lists' share of them.
+    Nearest,
+    /// As `Nearest` for every lamp but the street lamps ([`Lamp::outside`]), and every street
+    /// lamp, however far: ReSTIR DI lights those (D-065, the owner's choice of 2026-10-18), so a
+    /// far street keeps its light.
+    Streets,
+    /// Every lamp that is on, however far, [`LAMP_CAPACITY`] at most: D-065's comparison of
+    /// ReSTIR DI with the light lists, which takes them all.
+    Every,
+}
+
+/// The lamps a frame lights with, of `lamps`, seen from `camera` (scene frame), by `choice`.
+pub fn choose(lamps: &[Lamp], camera: Vec3, choice: LampChoice) -> Vec<GpuLamp> {
+    match choice {
+        LampChoice::Nearest => kept(lamps, camera, MAX_LAMPS, 50.0, |_| true),
+        LampChoice::Every => kept(lamps, camera, LAMP_CAPACITY, f32::INFINITY, |_| true),
+        LampChoice::Streets => {
+            let mut out = kept(lamps, camera, MAX_LAMPS, 50.0, |l| !l.outside());
+            let room = LAMP_CAPACITY - out.len();
+            out.extend(kept(lamps, camera, room, f32::INFINITY, Lamp::outside));
+            out
+        }
+    }
+}
+
+/// The lamps a frame lights with: those whose light reaches within 50 m of the camera at
 /// `camera` (scene frame), the nearest first, [`MAX_LAMPS`] at most.
 pub fn nearest(lamps: &[Lamp], camera: Vec3) -> Vec<GpuLamp> {
+    choose(lamps, camera, LampChoice::Nearest)
+}
+
+/// Every lamp that is on, however far, the nearest to `camera` first, [`LAMP_CAPACITY`] at
+/// most ([`LampChoice::Every`]).
+pub fn every(lamps: &[Lamp], camera: Vec3) -> Vec<GpuLamp> {
+    choose(lamps, camera, LampChoice::Every)
+}
+
+/// The lamps of `lamps` that `pick` takes, are on and whose light reaches within `margin` metres
+/// of `camera`, the nearest first, `limit` at most.
+fn kept(
+    lamps: &[Lamp],
+    camera: Vec3,
+    limit: usize,
+    margin: f32,
+    pick: impl Fn(&Lamp) -> bool,
+) -> Vec<GpuLamp> {
     let mut near: Vec<(f32, &Lamp)> = lamps
         .iter()
-        .filter(|l| l.candela > 0.0)
+        .filter(|l| l.candela > 0.0 && pick(l))
         .map(|l| (l.position.distance(camera), l))
-        .filter(|(d, l)| *d < reach(l.candela) + 50.0)
+        .filter(|(d, l)| *d < reach(l.candela) + margin)
         .collect();
     near.sort_by(|a, b| a.0.total_cmp(&b.0));
     near.into_iter()
-        .take(MAX_LAMPS)
+        .take(limit)
         .map(|(_, l)| {
             let c = lamp_rgb(l.kelvin) * l.candela;
             GpuLamp {
@@ -230,5 +292,9 @@ mod tests {
             kept.windows(2)
                 .all(|w| w[0].position_radius[0] <= w[1].position_radius[0])
         );
+        // Every lamp that is on, the far one too, the nearest first.
+        let all = every(&lamps, Vec3::ZERO);
+        assert_eq!(all.len(), 101);
+        assert_eq!(all[100].position_radius[0], 5000.0);
     }
 }

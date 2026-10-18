@@ -160,6 +160,7 @@ const PRECISE_ENTRIES: &[(&str, &str)] = &[
     // D-065's lamps: their rays and the filter of what they found feed the resolve.
     ("meshlet.slang", "lamp_rays_main"),
     ("meshlet.slang", "lamp_filter_main"),
+    ("restir.slang", "lamp_restir_main"),
     ("taa.slang", "motion_main"),
     ("taa.slang", "resolve_history_main"),
     ("taa.slang", "sharpen_main"),
@@ -168,6 +169,17 @@ const PRECISE_ENTRIES: &[(&str, &str)] = &[
     ("particles.slang", "vert_main"),
     ("particles.slang", "frag_main"),
 ];
+
+/// The shader files that include a vendor SDK's headers, and the SDK's include directory beside
+/// the shader directory: such a file compiles only where the directory is
+/// ([`ShaderCompiler::sdk_present`]). NVIDIA's RTXDI (D-065) is used under the NVIDIA RTX SDKs
+/// licence and never copied in: `rtxdi-sdk/` is ignored by git. The cache key does not follow
+/// the SDK's headers, so a new RTXDI release needs the shader cache cleared.
+const SDK_INCLUDES: &[(&str, &str)] = &[("restir.slang", "rtxdi-sdk/Include")];
+
+/// Slang's warnings an SDK's headers raise, turned off for the files that include them: E30081,
+/// a `uint` tested as a `bool` (eleven times in RTXDI's).
+const SDK_WARNINGS: &str = "30081";
 
 /// Whether `file`'s `entry` compiles precise: one of [`PRECISE_ENTRIES`], or `FORGE_FP_PRECISE`
 /// (`1` every entry, or comma-separated words: the entries whose name holds one).
@@ -395,7 +407,8 @@ impl ShaderCompiler {
                     *hashes.entry(e.file.clone()).or_insert(hash)
                 }
             };
-            if !self.cached_path(&e.file, &e.entry, hash).exists() {
+            // A vendor SDK's file where the SDK is not: never asked for, so not warmed.
+            if !self.cached_path(&e.file, &e.entry, hash).exists() && self.sdk_present(&e.file) {
                 missing.push(e);
             }
         }
@@ -523,6 +536,23 @@ impl ShaderCompiler {
         Ok(hasher.digest())
     }
 
+    /// The vendor SDK's include directory `file` needs ([`SDK_INCLUDES`]), if any.
+    fn sdk_include(&self, file: &str) -> Option<PathBuf> {
+        let (_, dir) = SDK_INCLUDES.iter().find(|(f, _)| *f == file)?;
+        Some(
+            self.shader_dir
+                .parent()
+                .unwrap_or(&self.shader_dir)
+                .join(dir),
+        )
+    }
+
+    /// Whether `file` can compile here: it needs no vendor SDK, or its SDK's headers are on this
+    /// machine (RTXDI's `rtxdi-sdk/Include` for `restir.slang`).
+    pub fn sdk_present(&self, file: &str) -> bool {
+        self.sdk_include(file).is_none_or(|dir| dir.is_dir())
+    }
+
     /// Compiles `entry` of `file` (relative to the shader directory) into SPIR-V words.
     pub fn compile(&self, file: &str, entry: &str, stage: ShaderStage) -> Result<Vec<u32>> {
         let request = ShaderEntry {
@@ -563,6 +593,11 @@ impl ShaderCompiler {
             .arg(&self.shader_dir)
             .arg("-o")
             .arg(&cached);
+        if let Some(dir) = self.sdk_include(file) {
+            cmd.arg("-I")
+                .arg(dir)
+                .args(["-warnings-disable", SDK_WARNINGS]);
+        }
         if !self.optimize {
             cmd.arg("-g2");
         }

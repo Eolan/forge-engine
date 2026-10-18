@@ -1557,6 +1557,20 @@ something stands out). Two things to watch:
     - `glass/reflections` takes 0.035–0.141 ms. The most is in the street view of a house's
       front, from its windows' mirror rays. It is a full-screen dispatch whose other pixels
       return at once.
+  - *2026-10-18, ReSTIR DI and the street lamps (D-065):* the village at 22:00 under DLAA, the
+    serial frame (`FORGE_ASYNC=0`), best of three.
+    - **`--lamp-restir`, every lamp by ReSTIR, in the hall:** `shadow/lamp restir` takes
+      0.50 ms where `shadow/lamp rays` and `shadow/lamp filter` took 0.64 + 0.17 ms, and
+      `shading/standard` falls from 0.61 to 0.48 ms. The frame is 5.51 ms against 5.96.
+    - **With `--all-lamps` (325 house lamps and 98 street lamp heads):** ReSTIR +0.12 ms in the
+      hall and +0.18 ms on a house front; the light lists +0.54 ms on the house front.
+    - **`--street-restir`, the street lamps by ReSTIR beside the light lists:**
+      - a lamp-lit street costs 8.55 ms against 7.27 (`shadow/lamp restir` 1.10 ms,
+        `shading/standard` 1.19 against 0.86);
+      - the hall 6.65 against 6.24 ms (the pass 0.21 ms, most of its pixels returning at
+        once).
+    - The street lamps as lamps by default (in the light lists, their glow left out of the
+      probes) cost nothing measurable beside the lists' other lamps.
 
 ## Loading `city-plan`: the village and the city (#274, 2026-10-16)
 

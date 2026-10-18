@@ -40,13 +40,13 @@ use forge_render::placement::{self, CityLayout, CityMeshes, Ground};
 use forge_render::textures::{self, TextureData};
 use forge_render::{
     AmbientLight, Atmosphere, AtmosphereParams, AutoExposure, Bloom, CloudParams, Clouds,
-    CullCamera, CullFlags, FrameStats, GroundSky, Gtao, GtaoParams, HdrOutput, LiquidDrawParams,
-    LiquidStats, LiquidTank, LocalExposure, LocalExposureSettings, LuminanceMeter, MeshletRenderer,
-    MeshletScene, MeshletSceneBuilder, ProbeParams, Probes, Residency, SkyParams, SplashParams,
-    SplashSource, Starfield, StartView, StreamingConfig, StreamingStats, SwRaster, Taa, Tonemap,
-    WaterCascadeDesc, WaterCascades, WaterCaustics, WaterLake, WaterMouth, WaterPool,
-    WaterRiverPoint, WaterShore, WaterShoreTrain, WaterSplashes, WaterStone, WaterSurface,
-    WaterSurfaceParams, WaterWakes, exposure_from_ev100, sh_irradiance,
+    CullCamera, CullFlags, FrameStats, GroundSky, Gtao, GtaoParams, HdrOutput, LampShadows,
+    LiquidDrawParams, LiquidStats, LiquidTank, LocalExposure, LocalExposureSettings,
+    LuminanceMeter, MeshletRenderer, MeshletScene, MeshletSceneBuilder, ProbeParams, Probes,
+    Residency, SkyParams, SplashParams, SplashSource, Starfield, StartView, StreamingConfig,
+    StreamingStats, SwRaster, Taa, Tonemap, WaterCascadeDesc, WaterCascades, WaterCaustics,
+    WaterLake, WaterMouth, WaterPool, WaterRiverPoint, WaterShore, WaterShoreTrain, WaterSplashes,
+    WaterStone, WaterSurface, WaterSurfaceParams, WaterWakes, exposure_from_ev100, sh_irradiance,
 };
 use forge_task::TaskPool;
 use forge_terrain::{
@@ -472,6 +472,20 @@ pub struct Args {
     /// filter (D-065: the filter's A/B).
     #[arg(long)]
     no_lamp_filter: bool,
+    /// Every lamp by ReSTIR DI, NVIDIA's RTXDI, in place of the light lists' filtered shadows
+    /// (D-065's comparison). Needs RTXDI's headers in `rtxdi-sdk/` and ray queries.
+    #[arg(long)]
+    lamp_restir: bool,
+    /// The street lamps by ReSTIR DI, every one however far, beside the light lists' houses' lamps
+    /// (D-065, the owner's option 2 of 2026-10-18). Not yet the default: without a denoiser its
+    /// light sparkles (a still camera's frames 10 apart differ on 1 % of a lit street's pixels
+    /// under DLAA, the light lists' on 0.003 %). Needs RTXDI's headers in `rtxdi-sdk/`.
+    #[arg(long)]
+    street_restir: bool,
+    /// Every lamp that is on, however far, in place of the 64 nearest (D-065's comparison:
+    /// ReSTIR DI takes them all; the light lists too, for the A/B).
+    #[arg(long)]
+    all_lamps: bool,
     /// Draw the spray without the reactive mask, so TAA keeps its history there (the mask's
     /// A/B, #107).
     #[arg(long, hide = true)]
@@ -745,6 +759,10 @@ struct Gallery {
     particle_born: u64,
     /// The scene's clear glass over its built rooms (D-065's part 4), when it has any.
     glass: Option<forge_render::Glass>,
+    /// `--lamp-restir`: the lamps by ReSTIR DI (D-065's comparison), and the lamps the frame
+    /// lights with, in its order.
+    restir: Option<forge_render::LampRestir>,
+    kept_lamps: Vec<forge_render::lamps::GpuLamp>,
     /// `--day`: seconds into the day, the metered scene and the automatic exposure (issue #57).
     day_time: f32,
     /// The night (D-046, issue #164) with `--day` and `--time-of-day`: where the Moon and the
@@ -1437,6 +1455,30 @@ impl Gallery {
                 glass = Some(made);
             }
         }
+        // The lamps by ReSTIR DI (D-065), where RTXDI's headers are (`rtxdi-sdk/`) and the device
+        // traces rays: with `--street-restir` the street lamps of a scene that has them, every one
+        // however far (the owner's option 2 of 2026-10-18, behind a switch until its light has a
+        // denoiser), or with `--lamp-restir` every lamp (the comparison with the light lists).
+        let streets = args.street_restir
+            && running
+                .as_mut()
+                .is_some_and(|r| r.lamps(0.0).iter().any(forge_render::lamps::Lamp::outside));
+        let restir = if !args.lamp_restir && !streets {
+            None
+        } else if forge_render::LampRestir::available(&ctx.device, &ctx.shaders) {
+            let made = forge_render::LampRestir::new(&ctx.device, &ctx.shaders, ctx.extent())?;
+            tracing::info!(
+                mib = made.bytes() >> 20,
+                every = args.lamp_restir,
+                "lamps by ReSTIR DI (RTXDI)"
+            );
+            Some(made)
+        } else {
+            tracing::warn!(
+                "ReSTIR DI needs ray queries and RTXDI's headers in rtxdi-sdk/: the light lists light every lamp"
+            );
+            None
+        };
         let mut gallery = Self {
             barrels,
             walker,
@@ -1455,6 +1497,8 @@ impl Gallery {
             particle_peak: 0,
             particle_born: 0,
             glass,
+            restir,
+            kept_lamps: Vec::new(),
             tonemap: args.tonemap,
             args,
             renderer,
@@ -2052,7 +2096,17 @@ impl Demo for Gallery {
                 ..l
             })
             .collect();
-        self.scene.set_lamps(frame.slot, &lamps, camera_in_scene);
+        // ReSTIR DI's street lamps all, however far; the light lists' lamps the nearest.
+        let choice = if self.args.all_lamps {
+            forge_render::lamps::LampChoice::Every
+        } else if self.restir.is_some() && !self.args.lamp_restir {
+            forge_render::lamps::LampChoice::Streets
+        } else {
+            forge_render::lamps::LampChoice::Nearest
+        };
+        self.kept_lamps = self
+            .scene
+            .set_lamps(frame.slot, &lamps, camera_in_scene, choice);
         // The scene's movers (#216): the lab's bodies between their last two ticks (#136).
         if let Some(running) = &mut self.running {
             running.movers(&mut self.scene);
@@ -2360,10 +2414,38 @@ impl Demo for Gallery {
         } else {
             self.reflection_history.reset_history();
         }
-        // The lamps' shadow rays before the resolve, and the share of their light that reaches
-        // each pixel filtered over its neighbours (D-065); without (`--no-lamp-filter`), the
-        // resolve's own rays.
-        let lamp_share = if self.args.no_lamp_filter {
+        // The lamps' light before the resolve (D-065): ReSTIR DI's of the street lamps (or with
+        // `--lamp-restir` of every lamp), and for the rest their shadow rays and the share of
+        // their light that reaches each pixel, filtered over its neighbours; without
+        // (`--no-lamp-filter`), the resolve's own rays.
+        let restir_all = self.args.lamp_restir;
+        if let Some(restir) = self.restir.as_mut() {
+            restir.prepare(
+                frame.slot,
+                &self.kept_lamps,
+                forge_render::RestirParams {
+                    clip_from_relative: self.camera.projection(ctx.aspect())
+                        * self.camera.view_rotation(),
+                    previous_from_current: taa_frame.previous_from_current,
+                    reset: taa_frame.reset,
+                    outside_only: !restir_all,
+                    extent,
+                },
+            );
+        }
+        let restir = self.restir.as_ref().and_then(|restir| {
+            let restir: &'f forge_render::LampRestir = restir;
+            restir.draw(
+                &mut frame.graph,
+                frame.slot,
+                &self.renderer,
+                &self.scene,
+                targets,
+                extent,
+                probes,
+            )
+        });
+        let share = if (restir_all && restir.is_some()) || self.args.no_lamp_filter {
             None
         } else {
             self.renderer.lamp_shadows(
@@ -2373,15 +2455,23 @@ impl Demo for Gallery {
                 targets,
                 extent,
                 probes,
+                restir.is_some(),
             )
         };
-        if let (Some(h), Some(share)) = (hasher, lamp_share) {
-            h.add(
-                &mut frame.graph,
-                share,
-                forge_render::debug_hash::HashKind::Float4,
-                extent,
-            );
+        let lamp_shadows = LampShadows {
+            share,
+            restir,
+            restir_all: restir_all && restir.is_some(),
+        };
+        if let Some(h) = hasher {
+            for image in lamp_shadows.images() {
+                h.add(
+                    &mut frame.graph,
+                    image,
+                    forge_render::debug_hash::HashKind::Float4,
+                    extent,
+                );
+            }
         }
         self.renderer.resolve(
             &mut frame.graph,
@@ -2399,7 +2489,7 @@ impl Demo for Gallery {
                 clouds: cloud_shadow,
                 sun_shadow,
                 reflection_history,
-                lamp_share,
+                lamp_shadows,
             },
         );
         // The scene colour as the resolve left it, before the sky's compose (#277).
@@ -2619,7 +2709,7 @@ impl Demo for Gallery {
                         clouds: None,
                         sun_shadow: None,
                         reflection_history: None,
-                        lamp_share: None,
+                        lamp_shadows: LampShadows::default(),
                     },
                 );
             }
@@ -2661,7 +2751,7 @@ impl Demo for Gallery {
                         clouds: None,
                         sun_shadow: None,
                         reflection_history: None,
-                        lamp_share: None,
+                        lamp_shadows: LampShadows::default(),
                     },
                 );
             }

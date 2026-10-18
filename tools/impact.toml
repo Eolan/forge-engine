@@ -20,6 +20,9 @@
 "tools/sharpness/**" = []
 # What git ignores: a new SDK's directory (D-065's RTXDI sent a gate to Tier 1).
 ".gitignore" = []
+# ReSTIR DI (D-065): only `--lamp-restir` and `--street-restir` runs, which no capture makes.
+"shaders/restir.slang" = []
+"crates/forge-render/src/restir.rs" = []
 # The city plan (D-059): a generator no demo draws yet, judged by its map and its tests.
 "crates/forge-procgen/src/city/**" = []
 "crates/forge-procgen/src/grammar.rs" = []

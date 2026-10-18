@@ -1687,7 +1687,7 @@ impl Demo for PlanetDemo {
                 clouds: None,
                 sun_shadow: None,
                 reflection_history: None,
-                lamp_share: None,
+                lamp_shadows: forge_render::LampShadows::default(),
             },
         );
         match (&sky, &self.sky_box) {

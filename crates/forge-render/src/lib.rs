@@ -34,6 +34,7 @@ pub mod precision;
 pub mod probes;
 pub mod raytrace;
 pub mod reflection_history;
+pub mod restir;
 pub mod settings;
 pub mod shallow;
 pub mod skin;
@@ -72,13 +73,14 @@ pub use liquid::{
 pub use local_exposure::{LocalExposure, LocalExposureRead, LocalExposureSettings};
 pub use meshlet::{
     AmbientLight, CullCamera, CullFlags, DrawTargets, DynamicCapacity, FrameStats, GeometryPath,
-    InstanceOcclusion, MeshId, MeshRays, MeshletRenderer, MeshletScene, MeshletSceneBuilder,
-    MoverTransform, MoversFrame, PlanetView, RayRequests, SceneEdit, SceneEditor, SunShadowRays,
-    SwRaster,
+    InstanceOcclusion, LampShadows, MeshId, MeshRays, MeshletRenderer, MeshletScene,
+    MeshletSceneBuilder, MoverTransform, MoversFrame, PlanetView, RayRequests, SceneEdit,
+    SceneEditor, SunShadowRays, SwRaster,
 };
 pub use particles::{Burst, DrawKind, Effect, Emitter, ParticleParams, ParticleStats, Particles};
 pub use probes::{ProbeLight, ProbeParams, Probes, RegionHit, RegionKind, RegionVolume, region_at};
 pub use reflection_history::{ReflectionHistory, ReflectionHistoryFrame};
+pub use restir::{LampRestir, RestirParams, RestirSettings};
 pub use shallow::{
     ShallowColumns, ShallowGrid, ShallowLayer, ShallowParams, ShallowState, ShallowStats,
 };

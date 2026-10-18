@@ -4750,13 +4750,14 @@ again (`demos/physics-lab.md`).
     The lab's lamp room, three lamps over the whole view: +0.18 ms (1.84 → 2.02 ms). The smoke
     yard's fire: +0.08 ms in its zones. A frame without lamps runs neither pass.
 - **Next:**
-  - RTXDI to compare (fetched on the owner's word; the plan is below, after the glass).
+  - RTXDI: compared, and the street lamps by it behind `--street-restir` (below, after the glass).
   - If wide penumbrae still crawl under TAA (the fire's floor), the note's upgrades: an à-trous
     pass on the windows that mix lit and shadowed pixels, or SIGMA's translucency route fed with
     the same ratio (it needs closest-hit rays and the owner's word, given §3's patents).
   - The light through windows onto the street.
-  - The streets' lamps (Olsson's clusters, after a look at AMD's Forward+ patents, US 10,803,655
-    B2).
+  - The streets' lamps: lit since 2026-10-18 (below, after the glass). The far ones are lit by
+    ReSTIR behind `--street-restir` until a denoiser; Olsson's clusters stay the other way, after
+    a look at AMD's Forward+ patents (US 10,803,655 B2).
   - Glass both ways (part 4). From the street, the near houses' windows still show the faked
     rooms, though their real rooms are lit. Two ways, for the owner to choose (2026-10-18):
     - **(a) Traced through the glass in the resolve.** The near houses' glass rows get a flag,
@@ -4854,8 +4855,77 @@ again (`demos/physics-lab.md`).
       - The bridge includes `Rtxdi/Utils/RandomSamplerState.hlsli` first.
       - Slang warns 11 times about a uint tested as a bool inside the library. That file is
         compiled with `-warnings-disable 30081`.
-      - The parameter structs live in the library's `.h` files. Forge's Rust mirrors them,
-        with a size check against slangc's reflection.
+      - The parameter structs live in the library's `.h` files. Forge's Rust mirrors them
+        (`forge_render::restir`, the frame block checked at 288 bytes).
+  - **Built the same day (`--lamp-restir`, `forge_render::LampRestir`, `shaders/restir.slang`).**
+    - **One pass before the resolve, "shadow/lamp restir":**
+      - the pixel's surface, stored for the next frame's reuse;
+      - its initial reservoir: up to 8 of its place's lamps (the light lists) picked uniformly,
+        or all of them when there are no more, each at a point of its sphere sampled by solid
+        angle; one kept by its light, and its shadow ray;
+      - RTXDI's spatiotemporal resampling against the last frame's reservoirs, through TAA's
+        reprojection, with `Basic` bias correction;
+      - the kept sample's shadow ray, and its light times the reservoir's weight. The resolve
+        adds it, with its highlight towards the lamp (`lamps_at`).
+    - **The bridge:**
+      - surfaces in the scene's frame, an octahedral normal and the place;
+      - lamp indices mapped from one frame to the next by each lamp's middle;
+      - a lamp gives no light where it doesn't light the place, with the storey band as the
+        lists have it.
+    - **The comparison, the village at 22:00 under DLAA, against the light lists and their
+      penumbra filter:**
+      - **Images** (mean ꟻLIP): hall 0.038, room 0.076, landing 0.014, door 0.019, house
+        front 0.006, main street 0.000. ReSTIR's room is brighter on two walls; why is still
+        open.
+      - **Shimmer**, a still camera's frames 10 apart: indoors 0.20–0.51 % of pixels change
+        against 0.000–0.005 % (TAA: 1.6–2.5 % against 0.14–0.17 %). A house front at night
+        stays even: 0.04–0.10 % both ways.
+      - **Cost**, the serial frame, best of three: hall 5.51 against 5.96 ms. The pass takes
+        0.50 ms, against 0.81 for the rays and the filter, and the resolve no longer sums the
+        room's lamps.
+    - **Every lamp** (`--all-lamps`: all 325 lamps on at 22:00, and the 49 street lamps'
+      98 heads):
+      - ReSTIR costs +0.12 ms indoors and +0.18 on a house front; the light lists +0.54 on the
+        house front.
+      - At one fixed exposure the street changes by 0.0004. It first looked darker because
+        more lit windows lowered the automatic exposure.
+  - **The street lamps lit (the owner, 2026-10-18).** The 49 street lamps had been glowing
+    heads only. The pools on the ground came from the probes, which saw the lenses' glow and
+    spread it in blocks of their grid, away from the lamps. The moon's shadow of each pole
+    crossed its "pool".
+    - **Now a lamp under each head** (city-plan's `street_lamps`):
+      - its intensity is the lens's luminance times its area: 109 cd, so 1.9 lux under an 8 m
+        lamp, at 2 700 K;
+      - on from 17:00 to 7:00;
+      - it lights the outside's region only, not the rooms behind the windows
+        (`Lamp::outside`);
+      - the owner tried 7.5 and 12 lux, LED street lighting's range, and kept 1.9.
+    - **Its head is full cut-off** (`lamp_beam`): all its light down to 60° off the vertical,
+      none from 85°. A bulb lit every way had left a dark funnel on the facade over each lamp,
+      from its own housing's shadow.
+    - **The probes leave the street lamps out** (`hit_lamp_weight`, and the lenses tagged
+      `RenderLayer::lamp`). Their bounce came back in sharp blocks of the probe grid on the
+      grass (#254).
+    - **The kit's window frames are closed on every side.** Through the clear glass a room saw
+      the frames' missing backs, which read as gaps between the frame and the walls.
+  - **Option 2 (the owner's choice, 2026-10-18), behind `--street-restir`.** Each frame keeps
+    only the 64 nearest lamps within 50 m, so from 100 m away a street went dark. Three ways
+    were put to the owner: Olsson's clusters (AMD's Forward+ patents to check first), ReSTIR
+    for the street lamps alone, or every street lamp in the light lists (too costly). The
+    owner took the second.
+    - **How it works:**
+      - every street lamp is kept, however far (`LampChoice::Streets`);
+      - ReSTIR takes them alone (its candidates from the outside's light list); the light lists
+        and their filter take the houses' lamps;
+      - the resolve adds both (`LampShadows`, two sampled indices in `lamp_share`'s halves).
+    - **Measured:**
+      - far streets keep their light;
+      - but on a lit street a still camera's frames differ on 0.9–1.6 % of pixels, against
+        0.002–0.005 %: one sample a pixel, with no denoiser;
+      - +1.3 ms on a street view (8.55 against 7.27 ms).
+    - **So it waits behind its switch until ReSTIR's street light has a denoiser** (NRD's
+      ReLAX or REBLUR, or the lamps' own filter on its ratio; patents to check). The default
+      keeps the street lamps in the light lists, the 64 nearest.
 
 ## D-066 — Pieces with sockets: one connector schema for generation, the anomaly check and player building ✅ (proposed 2026-10-16 on the owner's walk of #266; the owner's go the same evening)
 

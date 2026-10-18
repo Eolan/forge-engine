@@ -1295,7 +1295,7 @@ impl PlanScenario {
         // 3 000 cd/m² is far smaller than a pixel, and thousands of them flickered into a band
         // of light along the horizon at night (the owner, 2026-10-11). The far streets' light
         // comes with step 5's clustered lights (#254).
-        let lamps = lamps
+        let lamps: Vec<(Vec3, f32, f32, bool)> = lamps
             .iter()
             .filter(|l| detail.is_none_or(|d| l.pos.distance(d.centre) < d.radius + 500.0))
             .map(|l| {
@@ -1567,10 +1567,16 @@ impl PlanScenario {
                 );
             }
         }
-        let home_lamps: Vec<forge_render::lamps::Lamp> =
+        let mut home_lamps: Vec<forge_render::lamps::Lamp> =
             home_lamps.iter().filter(|l| l.on).map(|l| l.lamp).collect();
         if !home_lamps.is_empty() {
             eprintln!("the houses' lamps: {} on", home_lamps.len());
+        }
+        // And the street lamps' after dark, as the residents' lamps go on (D-065).
+        if detail.and_then(|d| d.lit_hour).is_some_and(street_lamps_on) {
+            let street = street_lamps(&lamps);
+            eprintln!("the street lamps: {} on", street.len());
+            home_lamps.extend(street);
         }
         // Chess tables round the fountain of each square of 0.15 ha or more without a landmark,
         // four 9 m from its middle on the diagonals, where they stand clear of the trunks and the
@@ -6179,8 +6185,9 @@ impl Scenario for PlanScenario {
             })
             .collect();
         // Lamp heads of about 1 000 cd/m²: shielded LEDs at 2 700 K behind a frosted diffuser (the
-        // style bible's lighting). At 3 000 their halos read too strong (the owner).
-        let head = 1000.0;
+        // style bible's lighting). At 3 000 their halos read too strong (the owner). Their light
+        // is a lamp's (`street_lamps`), so the probes leave their glow out, as a house's globes.
+        let head = STREET_LENS;
         materials.add_rows(
             "plan-lamp",
             vec![
@@ -6193,6 +6200,7 @@ impl Scenario for PlanScenario {
                     RenderLayer {
                         emissive: [head, head * 0.78, head * 0.55],
                         emissive_absolute: true,
+                        lamp: true,
                         ..colour([0.8, 0.8, 0.78], 40.0, 0.2)
                     },
                 ),
@@ -7585,6 +7593,51 @@ fn street_ground(tiles: &mut Tiles, map: &ground::GroundMap, site: &Site) {
             face(tiles, a, b, [0.0; 2], [level; 2], out);
         }
     }
+}
+
+/// A street lamp head's lens luminance, cd/m², in its red channel (its colour 1, 0.78, 0.55;
+/// `lamp_model`'s section 1).
+const STREET_LENS: f32 = 1000.0;
+
+/// Whether the street lamps are on at `hour` (0 to 24): from 17:00 to 7:00, the middle of the
+/// residents' lamps' ramps at dusk and dawn ([`residents::lamps`]).
+fn street_lamps_on(hour: f64) -> bool {
+    !(7.0..17.0).contains(&hour.rem_euclid(24.0))
+}
+
+/// The street lamps' lights (D-065): one under each arm's lens (`lamp_model`), its intensity the
+/// lens's luminance times its area, so the light on the road matches the glow seen (about
+/// 1.9 lux under an 8 m lamp, eight times a full moon's). They light the outside's region only
+/// (D-068), the street and not the rooms behind the windows, where they took the house lamps'
+/// places. Before, only the probes lit the street from the lenses' glow, in blocks of their grid,
+/// off the lamps, and the moon's shadow of the pole crossed the pool (the owner, 2026-10-18).
+/// `lamps`: each lamp's place, scale and turn.
+fn street_lamps(lamps: &[(Vec3, f32, f32, bool)]) -> Vec<forge_render::lamps::Lamp> {
+    use forge_render::lamps::{LAMP_REGIONS, Lamp, NO_REGION};
+    let mut regions = [NO_REGION; LAMP_REGIONS];
+    // The outside's region (`REGION_OUTSIDE` in `probes.slang`).
+    regions[0] = 0;
+    // The lens: 0.24 by 0.56 m, its luminance by its colour (1, 0.78, 0.55).
+    // At 4 and 6 times it (7.5 and 12 lux under a lamp, LED street lighting's range) the owner
+    // preferred this (2026-10-18).
+    let lens = 0.24 * 0.56 * STREET_LENS * (0.2126 + 0.7152 * 0.78 + 0.0722 * 0.55);
+    // A bulb of 12 cm just under the lens (7.69 m on the 8 m model).
+    let (radius, under) = (0.12, 7.56);
+    let mut out = Vec::new();
+    for &(at, scale, turn, double) in lamps {
+        let arms: &[f32] = if double { &[-1.40, 1.00] } else { &[-1.40] };
+        for &z in arms {
+            out.push(Lamp {
+                position: at
+                    + glam::Quat::from_rotation_y(turn) * (Vec3::new(0.0, under, z) * scale),
+                radius: radius * scale,
+                candela: lens * scale * scale,
+                kelvin: 2700.0,
+                regions,
+            });
+        }
+    }
+    out
 }
 
 /// A street lamp 8 m tall: a hexagonal pole and an arm reaching 1.4 m along −z over the road, and

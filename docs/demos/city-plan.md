@@ -863,6 +863,28 @@ mesh to test navigations inside the houses"):
     by day (as without the glass) and on 0.040 % at night (0.038 % without).
   - **Cost:** 0.05–0.16 ms in the map check's views (`docs/PROFILE.md`).
   - `--no-glass` shows the rooms without their panes.
+- *Street lamps lit* (D-065, #270: `street_lamps`).
+
+  ![The junction at 22:00 from above: each street lamp's pool under its head](images/village-street-lamps.png)
+
+  *The junction at 22:00 (`--time-of-day 1.33 --view=21.6,12,-36.5,-0.0,-30`): the pools under
+  the heads, the facade beside the corner lamp lit to its height and no higher.*
+
+  The 49 street lamps' 98 heads are lamps after dark (17:00 to 7:00), no longer glow alone:
+  - **Matched to the lens:** 109 cd at 2 700 K, the lens's luminance times its area, so 1.9 lux
+    under a lamp. The owner tried 7.5 and 12 lux and kept 1.9.
+  - **Full cut-off:** all the light down to 60° off the vertical, none from 85°. Lit every way,
+    a bulb left a dark funnel on the facade over each lamp, its own housing's shadow.
+  - **On the street only:** they light the outside's region (`Lamp::outside`), not the rooms
+    behind the windows.
+  - **Out of the probes:** the probes leave out the lenses' glow and the lamps' bounce, which
+    had come back as sharp blocks of light on the grass under the trees, away from any lamp.
+  - **The far ones:** each frame lights the 64 nearest lamps, so a street 100 m off goes dark.
+    `--street-restir` lights every street lamp by ReSTIR DI, however far, and the far streets
+    keep their light. It isn't the default yet: on a lit street a still camera's frames differ on
+    0.9–1.6 % of the pixels (the light lists 0.002–0.005 %), and it costs 1.3 ms more.
+  - `--lamp-restir` lights every lamp by ReSTIR, and `--all-lamps` takes every lamp that is on:
+    D-065's comparison of RTXDI with the light lists.
 - *Lamps* (D-065 steps 2 and 3, #270: `furnish::lamps`, `home_lamps`).
 
   ![A house's open street door at night: the hall lit by its lamp, a room's light on its window](images/village-lamps.png)

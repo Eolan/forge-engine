@@ -536,7 +536,7 @@ struct GpuFrame {
 
 /// Where a frame slot's light lists start in its lamps' buffer, bytes: after the lamps.
 const LAMP_LISTS_OFFSET: u64 =
-    (crate::lamps::MAX_LAMPS * std::mem::size_of::<crate::lamps::GpuLamp>()) as u64;
+    (crate::lamps::LAMP_CAPACITY * std::mem::size_of::<crate::lamps::GpuLamp>()) as u64;
 
 const _: () = assert!(std::mem::offset_of!(GpuFrame, ground_window) % 16 == 0);
 
@@ -608,8 +608,9 @@ struct ResolvePush {
     color_image: u32,
     width: u32,
     height: u32,
-    /// Sampled index of the lamps' filtered share of their light (D-065,
-    /// [`MeshletRenderer::lamp_shadows`]), or `u32::MAX`: the resolve traces their rays.
+    /// What the resolve takes the lamps' shadows from (D-065, [`LampShadows::code`]): the sampled
+    /// index of their filtered share of their light, the same with the top bit set for ReSTIR's
+    /// light, or `u32::MAX`: the resolve traces their rays.
     lamp_share: u32,
     tile_capacity: u32,
     /// Written to the empty pixels where its alpha is ≥ 0; else they are left for the sky.
@@ -677,7 +678,8 @@ struct LampShadowPush {
     share_image: u32,
     width: u32,
     height: u32,
-    pad: u32,
+    /// 1: ReSTIR DI lights the street lamps; the rays leave them out.
+    skip_outside: u32,
 }
 
 const _: () = assert!(std::mem::size_of::<LampShadowPush>() == 48);
@@ -752,10 +754,50 @@ pub struct AmbientLight {
     /// The mirror rays' history (#176, D-050, [`crate::ReflectionHistory::frame`]): the rays'
     /// light settled over the frames; `None`: each frame's ray alone, as before.
     pub reflection_history: Option<crate::ReflectionHistoryFrame>,
+    /// Where the lamps' shadows come from (D-065). The default: the resolve traces the lamps'
+    /// rays itself, as before their filter.
+    pub lamp_shadows: LampShadows,
+}
+
+/// What the resolve lights a pixel's lamps with (D-065, [`AmbientLight::lamp_shadows`]).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LampShadows {
     /// The share of the lamps' light that reaches each pixel, filtered over its neighbours
-    /// (D-065, [`MeshletRenderer::lamp_shadows`]): the resolve lights with every lamp unshadowed,
-    /// times it. `None`: the resolve traces the lamps' rays itself, as before.
-    pub lamp_share: Option<ImageHandle>,
+    /// ([`MeshletRenderer::lamp_shadows`]): every lamp of the pixel's place unshadowed, times it.
+    /// `None`: the resolve traces their rays.
+    pub share: Option<ImageHandle>,
+    /// The lamps' light on each pixel by ReSTIR DI ([`crate::LampRestir`]): one sample's light in
+    /// lux and the lamp it came from, whose highlight the resolve adds. Of the street lamps alone
+    /// (the others the share's or their rays'), or with `restir_all` of every lamp (D-065's
+    /// comparison).
+    pub restir: Option<ImageHandle>,
+    /// ReSTIR lights every lamp, not only the street lamps.
+    pub restir_all: bool,
+}
+
+impl LampShadows {
+    /// The images the resolve samples.
+    pub fn images(self) -> impl Iterator<Item = ImageHandle> {
+        self.share.into_iter().chain(self.restir)
+    }
+
+    /// How the resolve's push names them (`lamps_at`): the share's sampled index in the low half
+    /// (0xFFFF: the lamps' own rays; 0xFFFE: ReSTIR lights every lamp), ReSTIR's in the high half
+    /// (0xFFFF: none).
+    fn code(self, sampled: impl Fn(ImageHandle) -> u32) -> u32 {
+        let index = |image| {
+            let i = sampled(image);
+            debug_assert!(i < 0xFFFE, "a sampled index past 16 bits");
+            i
+        };
+        let low = if self.restir_all {
+            0xFFFE
+        } else {
+            self.share.map_or(0xFFFF, index)
+        };
+        let high = self.restir.map_or(0xFFFF, index);
+        high << 16 | low
+    }
 }
 
 /// Width of a shading class's dispatch in workgroups (`TILE_GROUPS_X` in `meshlet.slang`):
@@ -2253,10 +2295,17 @@ impl MeshletScene {
     }
 
     /// The lamps frame `slot` lights with (D-065 step 1, [`crate::lamps`]): of `lamps` (the
-    /// scene's frame), the nearest [`crate::lamps::MAX_LAMPS`] whose light reaches `camera`. Call
-    /// it each frame before the draw; none by default.
-    pub fn set_lamps(&self, slot: FrameSlot, lamps: &[crate::lamps::Lamp], camera: Vec3) {
-        let kept = crate::lamps::nearest(lamps, camera);
+    /// scene's frame), those `choice` keeps seen from `camera` ([`crate::lamps::choose`]). Call it
+    /// each frame before the draw; none by default. Returns the lamps kept, in the frame's order
+    /// (for [`crate::LampRestir::prepare`]).
+    pub fn set_lamps(
+        &self,
+        slot: FrameSlot,
+        lamps: &[crate::lamps::Lamp],
+        camera: Vec3,
+        choice: crate::lamps::LampChoice,
+    ) -> Vec<crate::lamps::GpuLamp> {
+        let kept = crate::lamps::choose(lamps, camera, choice);
         let lists = crate::lamps::lists(&kept);
         if !kept.is_empty() {
             let buffer = &self.lamp_buffers[slot.index];
@@ -2264,6 +2313,12 @@ impl MeshletScene {
             buffer.write(LAMP_LISTS_OFFSET, &lists);
         }
         self.lamp_counts[slot.index].set([kept.len() as u32, lists.len() as u32]);
+        kept
+    }
+
+    /// The lamps frame `slot` lights with ([`Self::set_lamps`]).
+    pub(crate) fn lamp_count(&self, slot: FrameSlot) -> u32 {
+        self.lamp_counts[slot.index].get()[0]
     }
 
     /// The planet the frames drawn from now on stand on (#220), for the layered rows that take
@@ -4480,7 +4535,7 @@ impl MeshletRenderer {
     }
 
     /// Declares the lamps' penumbra filter (D-065, `research/lamp-penumbra-denoising.md` §7), for
-    /// the resolve's [`AmbientLight::lamp_share`]:
+    /// the resolve's [`AmbientLight::lamp_shadows`] ([`LampShadows::share`]):
     /// - "shadow/lamp rays": per pixel of the visibility buffer, the shadow rays the resolve traced
     ///   to the lamps it picks, aimed at a table of stratified disc points interleaved over 4 × 4
     ///   pixels and TAA's cycle; it writes the share of their light that reaches the pixel.
@@ -4488,8 +4543,9 @@ impl MeshletRenderer {
     ///   neighbours on its surface, weighted by their unshadowed light.
     ///
     /// `probes`: the probes the resolve lights with (their regions are the lamps' places).
-    /// `None`, and nothing declared, when `scene` lights no lamp in this frame or the device has
-    /// no ray queries: no other image changes.
+    /// `street_restir`: ReSTIR DI lights the street lamps ([`LampShadows::restir`]), so neither
+    /// pass takes them. `None`, and nothing declared, when `scene` lights no lamp in this frame or
+    /// the device has no ray queries: no other image changes.
     #[allow(clippy::too_many_arguments)]
     pub fn lamp_shadows<'f>(
         &'f self,
@@ -4499,6 +4555,7 @@ impl MeshletRenderer {
         targets: DrawTargets,
         extent: vk::Extent2D,
         probes: Option<ProbeLight>,
+        street_restir: bool,
     ) -> Option<ImageHandle> {
         let [rays, filter] = self.pipeline_lamp_shadows.as_ref()?;
         if scene.lamp_counts[slot.index].get()[0] == 0 {
@@ -4533,7 +4590,7 @@ impl MeshletRenderer {
                 share_image,
                 width: extent.width,
                 height: extent.height,
-                pad: 0,
+                skip_outside: u32::from(street_restir),
             }
         };
         let groups = (extent.width.div_ceil(8), extent.height.div_ceil(8));
@@ -4639,8 +4696,8 @@ impl MeshletRenderer {
             width: extent.width,
             height: extent.height,
             lamp_share: ambient
-                .lamp_share
-                .map_or(u32::MAX, |s| resources.sampled(s).0),
+                .lamp_shadows
+                .code(|image| resources.sampled(image).0),
             tile_capacity: tile_count(self.extent),
             background: background.unwrap_or([0.0, 0.0, 0.0, -1.0]),
             sky: ambient.sky.map_or(0, |s| s.address),
@@ -4701,8 +4758,8 @@ impl MeshletRenderer {
         if let Some(shadow) = ambient.sun_shadow {
             builder = builder.image(shadow, ImageAccess::Sampled(compute));
         }
-        if let Some(share) = ambient.lamp_share {
-            builder = builder.image(share, ImageAccess::Sampled(compute));
+        for image in ambient.lamp_shadows.images() {
+            builder = builder.image(image, ImageAccess::Sampled(compute));
         }
         if let Some(g) = ambient.wet_ground {
             builder = g.images().fold(builder, |b, image| {
@@ -4766,8 +4823,8 @@ impl MeshletRenderer {
             if let Some(shadow) = ambient.sun_shadow {
                 builder = builder.image(shadow, ImageAccess::Sampled(compute));
             }
-            if let Some(share) = ambient.lamp_share {
-                builder = builder.image(share, ImageAccess::Sampled(compute));
+            for image in ambient.lamp_shadows.images() {
+                builder = builder.image(image, ImageAccess::Sampled(compute));
             }
             if let Some(h) = ambient.reflection_history {
                 builder = builder
@@ -4818,8 +4875,8 @@ impl MeshletRenderer {
             if let Some(shadow) = ambient.sun_shadow {
                 builder = builder.image(shadow, ImageAccess::Sampled(compute));
             }
-            if let Some(share) = ambient.lamp_share {
-                builder = builder.image(share, ImageAccess::Sampled(compute));
+            for image in ambient.lamp_shadows.images() {
+                builder = builder.image(image, ImageAccess::Sampled(compute));
             }
             if let Some(g) = ambient.wet_ground {
                 builder = g.images().fold(builder, |b, image| {
