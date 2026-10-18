@@ -520,6 +520,69 @@ unsafe extern "C" fn log_message(kind: u32, message: *const c_char) {
     }
 }
 
+/// What Streamline needs to offer DLSS alone: the interposer, the common plugin, the PC latency
+/// plugin it always maps and the Reflex library it opens with the device, the DLSS plugin, and
+/// NGX's DLSS. Streamline checks the signature of every plugin in its folder and asks NGX for each
+/// one's requirements, and NGX starts every `nvngx_*.dll` it finds there (frame generation, ray
+/// reconstruction): in the SDK's own folder that was 1.5 s of each run's 3 s for DLSS (#286).
+const DLSS_FILES: [&str; 6] = [
+    "sl.interposer.dll",
+    "sl.common.dll",
+    "sl.pcl.dll",
+    "sl.dlss.dll",
+    "nvngx_dlss.dll",
+    "NvLowLatencyVk.dll",
+];
+
+/// A folder beside `bin` holding only [`DLSS_FILES`], hard-linked from it (copied where links
+/// fail): `forge-dlss/<key>`, the key hashing the files' sizes and times. An SDK update makes a new
+/// folder, so a running demo never sees its files change; the old ones stay, at no cost as links.
+/// Made under a temporary name and renamed, so runs starting together (sessions share the SDK
+/// through junctions) end with one.
+fn dlss_only(bin: &Path) -> std::io::Result<PathBuf> {
+    // FNV-1a: a name that does not change with the Rust version.
+    let mut key: u64 = 0xcbf2_9ce4_8422_2325;
+    for name in DLSS_FILES {
+        let meta = std::fs::metadata(bin.join(name))?;
+        let time = meta
+            .modified()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        let fields = [meta.len(), time.as_secs(), u64::from(time.subsec_nanos())];
+        for byte in name
+            .bytes()
+            .chain(fields.iter().flat_map(|field| field.to_le_bytes()))
+        {
+            key = (key ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+    let parent = bin.parent().unwrap_or(bin).join("forge-dlss");
+    let folder = parent.join(format!("{key:016x}"));
+    if DLSS_FILES.iter().all(|name| folder.join(name).is_file()) {
+        return Ok(folder);
+    }
+    let temporary = parent.join(format!("{key:016x}.{}", std::process::id()));
+    std::fs::create_dir_all(&temporary)?;
+    for name in DLSS_FILES {
+        let (from, to) = (bin.join(name), temporary.join(name));
+        if std::fs::hard_link(&from, &to).is_err() {
+            std::fs::copy(&from, &to)?;
+        }
+    }
+    match std::fs::rename(&temporary, &folder) {
+        Ok(()) => Ok(folder),
+        Err(error) => {
+            // Another run's folder took the name first; this one's files are only links.
+            let _ = std::fs::remove_dir_all(&temporary);
+            if DLSS_FILES.iter().all(|name| folder.join(name).is_file()) {
+                Ok(folder)
+            } else {
+                Err(error)
+            }
+        }
+    }
+}
+
 /// The loaded Streamline library, initialized for DLSS on Vulkan.
 pub(crate) struct Streamline {
     interposer: PathBuf,
@@ -544,7 +607,13 @@ unsafe impl Sync for Streamline {}
 impl Streamline {
     /// Loads `sl.interposer.dll` from `bin` (the SDK's `bin/x64`), where its plugins and DLSS
     /// live too, and initializes it for DLSS on Vulkan. Call before creating the Vulkan instance.
+    /// Both come from a folder of DLSS's files alone made beside `bin` ([`DLSS_FILES`]), or from
+    /// `bin` itself when that folder cannot be made.
     pub(crate) fn load(bin: &Path) -> Result<Self> {
+        let bin = dlss_only(bin).unwrap_or_else(|error| {
+            tracing::warn!(%error, "Streamline loads every plugin of {}", bin.display());
+            bin.to_path_buf()
+        });
         let interposer = bin.join("sl.interposer.dll");
         // SAFETY: loading the NVIDIA-signed interposer runs its initialization code, trusted like
         // the Vulkan loader it stands in for.
@@ -743,5 +812,51 @@ impl Streamline {
         if let Err(error) = check("slShutdown", unsafe { (self.shutdown)() }) {
             tracing::warn!("{error}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dlss_only_links_its_files_once() {
+        let root = std::env::temp_dir().join(format!("forge-dlss-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let bin = root.join("bin").join("x64");
+        std::fs::create_dir_all(&bin).unwrap();
+        for name in DLSS_FILES
+            .iter()
+            .chain(&["sl.dlss_g.dll", "nvngx_dlssd.dll"])
+        {
+            std::fs::write(bin.join(name), name).unwrap();
+        }
+        let folder = dlss_only(&bin).unwrap();
+        assert_eq!(
+            folder.parent().unwrap(),
+            root.join("bin").join("forge-dlss")
+        );
+        let mut names: Vec<String> = std::fs::read_dir(&folder)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        let mut wanted: Vec<String> = DLSS_FILES.iter().map(|name| name.to_string()).collect();
+        wanted.sort();
+        assert_eq!(names, wanted);
+        assert_eq!(
+            std::fs::read(folder.join("sl.dlss.dll")).unwrap(),
+            b"sl.dlss.dll"
+        );
+        // Found again, not made again; and nothing left beside it.
+        assert_eq!(dlss_only(&bin).unwrap(), folder);
+        assert_eq!(
+            std::fs::read_dir(folder.parent().unwrap()).unwrap().count(),
+            1
+        );
+        // A missing file is an error, for the caller to load from `bin`.
+        std::fs::remove_file(bin.join("sl.pcl.dll")).unwrap();
+        assert!(dlss_only(&bin).is_err());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

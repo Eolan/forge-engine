@@ -5485,5 +5485,23 @@ sharpening, and the lamp filter's flicker under TAA. The last two run-to-run fla
 - **D-045's "a code or two from run to run" (2026-10-03) was Forge's,** not DLSS's. The shading
   and TAA compiled two ways until #277 and #281.
 
+**What DLSS costs a run (2026-10-18):**
+- **Where the time went:** under DLAA, Tier 1 took 50 minutes instead of about 18. Every capture
+  is its own run, and DLSS added 3.0 s to each one (lab 1.4 → 4.3 s, city 2.4 → 5.4 s, planet
+  4.3 → 7.4 s). Streamline's own log shows two causes:
+  - when it starts, it checks the signature of every plugin in its folder and asks NGX for each
+    one's requirements; the first request alone took 1.0 s;
+  - when the device is created, NGX finds every `nvngx_*.dll` in that folder (DLSS, frame
+    generation, ray reconstruction, DeepDVC) and starts each one, 1.1 s for the lot.
+- **Fixed:** Streamline now loads from a folder holding only what DLSS needs. Forge makes it
+  itself beside the SDK's folder (`streamline-sdk/bin/forge-dlss/<key>`), from hard links to
+  six of the SDK's files.
+  - DLSS now costs 1.4 s a run (lab 2.7 s, city 3.8 s, planet 5.7 s).
+  - The images are the same to the byte.
+- **Left:**
+  - Streamline's first request to NGX, 0.46 s;
+  - NGX loading DLSS at device creation, 0.56 s.
+  Both happen in every process, so the remaining cost is per run.
+
 **Next:** every demo's captures and defaults under DLAA, with one way to ask for it (`r.aa`,
 D-069); the re-baseline guard; FSR 3.1.
