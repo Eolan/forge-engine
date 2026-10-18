@@ -13,6 +13,8 @@ use crate::PlanetDemo;
 /// The handles of the planet's settings.
 pub(crate) struct PlanetVars {
     aa: Var<usize>,
+    fsr_sharpen: Var<bool>,
+    fsr_sharpness: Var<f64>,
     tonemap: Var<usize>,
     bloom: Var<bool>,
     bloom_strength: Var<f64>,
@@ -63,6 +65,8 @@ impl PlanetDemo {
         };
         self.vars = Some(PlanetVars {
             aa: s.add_from(rs::aa(aa_default), aa_default, aa_now),
+            fsr_sharpen: s.add(rs::fsr_sharpen(rs::FSR_SHARPEN)),
+            fsr_sharpness: s.add(rs::fsr_sharpness(rs::FSR_SHARPNESS)),
             tonemap: s.add_from(
                 rs::tonemap(Tonemap::AgXPunchy),
                 rs::tonemap_index(Tonemap::AgXPunchy),
@@ -89,6 +93,11 @@ impl PlanetDemo {
             )),
             bits,
         });
+        // FSR sharpened as registered (D-070): the first apply only runs for what forge.cfg and
+        // --set changed.
+        if let Some(fsr) = self.fsr.as_mut() {
+            fsr.sharpness = rs::FSR_SHARPEN.then_some(rs::FSR_SHARPNESS as f32);
+        }
         // Values from forge.cfg and --set reach the planet at the first apply.
         self.vars_seen = 0;
     }
@@ -133,6 +142,18 @@ impl PlanetDemo {
                 );
             }
             self.taa.reset_history();
+        }
+        if s.changed_since(v.aa, seen)
+            || changed(v.fsr_sharpen)
+            || s.changed_since(v.fsr_sharpness, seen)
+        {
+            // RCAS after FSR (D-070), on whichever FSR the anti-aliasing made.
+            let sharpness = s
+                .get(v.fsr_sharpen)
+                .then_some(s.get(v.fsr_sharpness) as f32);
+            if let Some(fsr) = self.fsr.as_mut() {
+                fsr.sharpness = sharpness;
+            }
         }
         if s.changed_since(v.tonemap, seen) {
             self.tonemap = rs::tonemap_of(s.get(v.tonemap));

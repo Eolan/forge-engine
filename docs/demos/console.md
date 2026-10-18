@@ -161,6 +161,7 @@ command line": `--no-ao` and `--set r.ao=0` give the same image to the pixel.
 | Name | What | Values | Gallery default |
 |---|---|---|---|
 | `r.aa` | anti-aliasing | off, dlaa, dlss, fsr | dlaa where it runs, else fsr |
+| `r.fsr.sharpen`, `r.fsr.sharpness` | RCAS over FSR's image (D-070), and how strong on AMD's scale | 0, 1; 0..1 | 1; 0.5 |
 | `r.tonemap` | the tone curve | agx, agx-punchy, aces, neutral, aces2, aces2-analytic | agx-punchy |
 | `r.bloom`, `r.bloom.strength` | bloom, its share of the image | 0, 1; 0..1 | 1; 0.04 |
 | `r.exposure.local` | local exposure, D-067 | off, on, view | off |

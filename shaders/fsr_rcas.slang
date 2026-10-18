@@ -4,6 +4,8 @@
 #define FSR3UPSCALER_BIND_SRV_INPUT_EXPOSURE 0
 #define FSR3UPSCALER_BIND_SRV_RCAS_INPUT 1
 #define FSR3UPSCALER_BIND_UAV_UPSCALED_OUTPUT 0
+// Sharpened in [0, 1] through AMD's reversible tone map (the bridge's `fsr_rcas_tonemap`).
+#define FSR_RCAS_TONEMAPPED 1
 
 #include "fsr_bridge.slang"
 #include "fsr3upscaler/ffx_fsr3upscaler_common.h"

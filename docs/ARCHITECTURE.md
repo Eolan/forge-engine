@@ -325,6 +325,9 @@ bloom; with the anti-aliasing off it shows the frame as drawn, without jitter.
     (#156), its passes under "liquid/scene FSR".
   - **Its upscaling modes** (`FsrMode`, `r.fsr.mode`) draw 1.5 to 3 times smaller, in the
     ballad as DLSS's do.
+  - **AMD's RCAS sharpens its image** (`r.fsr.sharpen`, on at 0.5). Forge's bridge runs RCAS
+    in [0, 1] through AMD's reversible tone map and a square root, as RCAS expects a display
+    signal.
 - **Drawn smaller for either upscaler,** the resolve keeps the textures' detail at the output's
   size: `MeshletRenderer::texture_lod_bias`, log2(render / output), scales the UV derivatives.
 

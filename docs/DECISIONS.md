@@ -5639,8 +5639,46 @@ sharpening, and the lamp filter's flicker under TAA. The last two run-to-run fla
   - FSR Quality's mesh path and fallback are 0 px apart. `ast-fsrq600` captures it on both
     paths.
 
-**Next:** (`FsrMode::Quality` and the others, for the asteroids' `--upscaler`).
-- RCAS after FSR: `FsrUpscaler::sharpness`, off for now as DLAA's image is.
+**RCAS after FSR, on by default at 0.5 (2026-10-18, the owner's ask):**
+- **The settings:** `r.fsr.sharpen` and `r.fsr.sharpness` (AMD's scale: 0 is two stops below
+  RCAS's strongest, 1 its strongest), in the galleries, the planet and the ballad. AMD's RCAS
+  pass runs after the accumulation, 0.02 ms at 1600 × 900. The tank's own FSR stays unsharpened.
+- **Where it sharpens:** RCAS's limiter assumes colours in [0, 1], as FSR 1 runs it on the
+  display's signal. FSR 3.1 hands it the history, pre-exposed HDR. Three ways were measured:
+  - **as AMD ships it, on linear HDR:** the room's edges barely moved (MTF50 still 0.52, panning
+    0.33 → 0.34), but the city shimmered up to six times more. Bright edges over 1 were left
+    alone while the darker detail was sharpened;
+  - **through AMD's reversible tone map, x / (1 + its largest channel):** panning 0.33 → 0.36 at
+    0.75, still unchanged;
+  - **through that tone map and a square root (gamma 2, Forge's bridge):** the even sharpening
+    RCAS is meant for, kept. The RCAS pass reads the history through it and writes back through
+    the inverse (`FSR_RCAS_TONEMAPPED` in `shaders/fsr_bridge.slang`). AMD's headers are
+    unchanged.
+- **The measures:**
+  - the sharpness room's MTF50 (the board's two edges and the wall square's), still and
+    panning at 2 m/s;
+  - the city's still shimmer (pixels changing between frames 10 apart);
+  - the city's turn at 3° a second against SSAA 2 × 2.
+
+  | | Still MTF50 | Panning MTF50 | City still | City turn |
+  |---|---|---|---|---|
+  | An ideal pixel | 0.60 | 0.60 | | |
+  | DLAA | 0.59–0.61 | 0.43–0.47 | 0.249 % | 36.9 % |
+  | FSR unsharpened | 0.51–0.52 | 0.32–0.33 | 0.074 % | 34.0 % |
+  | FSR, RCAS 0.25 | 0.55–0.57 | 0.35–0.36 | 0.140 % | 35.1 % |
+  | **FSR, RCAS 0.5** | **0.57–0.58** | **0.36–0.38** | **0.195 %** | **36.3 %** |
+  | FSR, RCAS 0.75 | 0.58–0.60 | 0.38–0.40 | 0.340 % | 39.2 % |
+  | FSR, RCAS 1 | 0.61–0.62 | 0.41–0.43 | 0.946 % | 47.3 % |
+
+- **The default, 0.5:** a still edge nearly an ideal pixel's, and panning as sharp as TAA's
+  RCAS was. The city still shimmers less than under DLAA on both measures. From 0.75 it shimmers
+  more than DLAA.
+- **The captures:** FSR's four, on both paths (`city60-fsr`, `lab-drop90-fsr`, `ast-fsr600`,
+  `ast-fsrq600`), changed as meant (ꟻLIP mean 0.013–0.019). Mesh against fallback stays 0 px.
+- **Patents:** none found that reads on RCAS (`docs/research/fsr-3-1.md`: US 12,020,408 B2
+  needs a blur circuit before the sharpener).
+
+**Next:** FSR 4, once there is an RDNA 4 card to test on and its SDK has a Vulkan path.
 
 ## D-071 — The day check and the night's full batch ✅ (2026-10-18, #286, the owner's choice)
 

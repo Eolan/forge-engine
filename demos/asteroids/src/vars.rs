@@ -14,6 +14,8 @@ use crate::Ballad;
 #[derive(Clone)]
 pub(crate) struct BalladVars {
     aa: Var<usize>,
+    fsr_sharpen: Var<bool>,
+    fsr_sharpness: Var<f64>,
     dlss_mode: Var<usize>,
     fsr_mode: Var<usize>,
     tonemap: Var<usize>,
@@ -83,6 +85,8 @@ impl Ballad {
         .collect();
         self.vars = Some(BalladVars {
             aa: s.add_from(rs::aa(aa_default), aa_default, aa_now),
+            fsr_sharpen: s.add(rs::fsr_sharpen(rs::FSR_SHARPEN)),
+            fsr_sharpness: s.add(rs::fsr_sharpness(rs::FSR_SHARPNESS)),
             dlss_mode: s.add_from(
                 rs::dlss_mode(DlssMode::Quality),
                 rs::dlss_mode_index(DlssMode::Quality),
@@ -139,6 +143,11 @@ impl Ballad {
             )),
             bits,
         });
+        // FSR sharpened as registered (D-070): the first apply only runs for what forge.cfg and
+        // --set changed.
+        if let Some(fsr) = self.fsr.as_mut() {
+            fsr.sharpness = rs::FSR_SHARPEN.then_some(rs::FSR_SHARPNESS as f32);
+        }
         // Values from forge.cfg and --set reach the ballad at the first apply.
         self.vars_seen = 0;
     }
@@ -212,6 +221,18 @@ impl Ballad {
                 ),
                 Ok(()) => {}
                 Err(error) => tracing::error!(%error, "cannot switch the anti-aliasing"),
+            }
+        }
+        if s.changed_since(v.aa, seen)
+            || changed(v.fsr_sharpen)
+            || s.changed_since(v.fsr_sharpness, seen)
+        {
+            // RCAS after FSR (D-070), on whichever FSR the anti-aliasing made.
+            let sharpness = s
+                .get(v.fsr_sharpen)
+                .then_some(s.get(v.fsr_sharpness) as f32);
+            if let Some(fsr) = self.fsr.as_mut() {
+                fsr.sharpness = sharpness;
             }
         }
         if s.changed_since(v.tonemap, seen) {

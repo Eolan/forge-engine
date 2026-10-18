@@ -97,6 +97,33 @@ pub fn fsr_mode_of(index: usize) -> FsrMode {
     FsrMode::ALL.get(index).copied().unwrap_or_default()
 }
 
+/// [`fsr_sharpen`]'s default in every demo: on (D-070).
+pub const FSR_SHARPEN: bool = true;
+/// [`fsr_sharpness`]'s default in every demo. At 0.5 a still edge is nearly an ideal pixel's
+/// (MTF50 0.58 against 0.52 unsharpened) and the city shimmers less than under DLAA; at 0.75 it
+/// shimmers more (D-070).
+pub const FSR_SHARPNESS: f64 = 0.5;
+
+/// FSR's image sharpened by AMD's RCAS after the accumulation (D-070).
+pub fn fsr_sharpen(default: bool) -> Spec<bool> {
+    Spec::bool(
+        "r.fsr.sharpen",
+        default,
+        "FSR's image sharpened by AMD's RCAS (D-070); r.fsr.sharpness sets how much.",
+    )
+}
+
+/// How strongly RCAS sharpens FSR's image, on AMD's scale.
+pub fn fsr_sharpness(default: f64) -> Spec<f64> {
+    Spec::float(
+        "r.fsr.sharpness",
+        default,
+        0.0..=1.0,
+        "How strongly RCAS sharpens FSR's image, AMD's scale: 0 is two stops below its strongest, \
+         1 its strongest.",
+    )
+}
+
 /// [`tonemap`]'s choices, in [`Tonemap::ALL`]'s order, then the analytic reference.
 pub const TONEMAPS: &[&str] = &[
     "agx",

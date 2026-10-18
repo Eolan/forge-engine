@@ -239,10 +239,29 @@ FfxFloat32x4 SampleLumaHistory(FfxFloat32x2 fUV)
 }
 #endif
 
+// RCAS in [0, 1] (Forge's, D-070): its limiter assumes colours there, but FSR's history is
+// pre-exposed HDR. Read as it is, a bright edge over 1 (a white wall in the sun) was left
+// unsharpened while the darker detail was sharpened, which only added shimmer. The RCAS pass
+// (FSR_RCAS_TONEMAPPED) reads the history through AMD's own reversible tone map, x / (1 + its
+// largest channel), and writes back through the inverse.
+FfxFloat32x3 fsr_rcas_tonemap(FfxFloat32x3 c)
+{
+    return sqrt(max(c, 0.0) / (max(max(0.0, c.r), max(c.g, c.b)) + 1.0));
+}
+FfxFloat32x3 fsr_rcas_inverse_tonemap(FfxFloat32x3 c)
+{
+    c *= c;
+    return c / max(FFX_TONEMAP_EPSILON, 1.0 - max(c.r, max(c.g, c.b)));
+}
+
 #if defined(FSR3UPSCALER_BIND_SRV_RCAS_INPUT)
 FfxFloat32x4 LoadRCAS_Input(FfxInt32x2 iPxPos)
 {
-    return g_sampled_images[FSR_SRV(FSR3UPSCALER_BIND_SRV_RCAS_INPUT)].Load(int3(iPxPos, 0));
+    FfxFloat32x4 c = g_sampled_images[FSR_SRV(FSR3UPSCALER_BIND_SRV_RCAS_INPUT)].Load(int3(iPxPos, 0));
+#if defined(FSR_RCAS_TONEMAPPED)
+    c.rgb = fsr_rcas_tonemap(c.rgb);
+#endif
+    return c;
 }
 FfxFloat32x3 SampleRCAS_Input(FfxFloat32x2 fUV)
 {
@@ -264,6 +283,9 @@ void StoreInternalColorAndWeight(FfxUInt32x2 iPxPos, FfxFloat32x4 fColorAndWeigh
 #if defined(FSR3UPSCALER_BIND_UAV_UPSCALED_OUTPUT)
 void StoreUpscaledOutput(FfxUInt32x2 iPxPos, FfxFloat32x3 fColor)
 {
+#if defined(FSR_RCAS_TONEMAPPED)
+    fColor = fsr_rcas_inverse_tonemap(fColor);
+#endif
     g_storage_images_rgba16f[FSR_UAV(FSR3UPSCALER_BIND_UAV_UPSCALED_OUTPUT)][iPxPos] = FfxFloat32x4(fColor, 1.0);
 }
 #endif
