@@ -450,7 +450,7 @@ bool lamp_counted(Frame* f, LampRuns r, uint run, uint i)
 // storey: its ground floor took the bedrooms' lamps and the hall's lights upstairs, their rays
 // all blocked by the floors, and they took the three places from the lamp at hand, which fell to
 // the picked rest in streaks. A street lamp (the outside's region first) lights the whole street.
-float lamp_weight_in(Lamp lamp, float3 world, float3 n, uint region, uint other)
+float lamp_weight_in(Lamp lamp, float3 world, float3 n, uint region, uint other, float near = 0.0)
 {
     if (lamp_storeyed(lamp) && region != REGION_NONE)
     {
@@ -458,7 +458,7 @@ float lamp_weight_in(Lamp lamp, float3 world, float3 n, uint region, uint other)
         if (dy < -2.7 || dy > 0.8)
             return 0.0;
     }
-    return lamp_weight(lamp, world, n);
+    return lamp_weight(lamp, world, n, near);
 }
 
 // Whether `lamp` lights its storey only (`lamp_weight_in`): a house's, with rooms for regions; not
@@ -486,15 +486,21 @@ float lamp_beam(Lamp lamp, float3 to_lamp)
     return smoothstep(lamp.beam_edge.x, lamp.beam.w, dot(-to_lamp, lamp.beam.xyz));
 }
 
-// `hit_lamps`' weight of `lamp` at `hit`: `lamp_weight_in`, or for a probe's ray none of a street
-// lamp's. The probes' blend spread a street lamp's bounce over the grass and the path in sharp
-// blocks of their grid, away from the lamp (the owner, 2026-10-18; #254); its direct light and
-// its shadows are the resolve's.
+// The least distance a probe ray's hit takes a lamp's light from, metres (#294). The surfaces inside
+// a fitting and right by its bulb (a housing's inside, the ceiling over a globe) are lit by
+// tens of thousands of lux, and the probes spread that over the ceiling round the fitting in a
+// halo; the resolve lights them directly, each pixel its own.
+static const float PROBE_LAMP_NEAR = 0.25;
+
+// `hit_lamps`' weight of `lamp` at `hit`: `lamp_weight_in`; for a probe's ray none of a street
+// lamp's, and none nearer than PROBE_LAMP_NEAR. The probes' blend spread a street lamp's bounce
+// over the grass and the path in sharp blocks of their grid, away from the lamp (the owner,
+// 2026-10-18; #254); its direct light and its shadows are the resolve's.
 float hit_lamp_weight(Lamp lamp, RayHit hit, uint region, bool probe)
 {
     if (probe && lamp_outside(lamp))
         return 0.0;
-    return lamp_weight_in(lamp, hit.position, hit.n, region, region);
+    return lamp_weight_in(lamp, hit.position, hit.n, region, region, probe ? PROBE_LAMP_NEAR : 0.0);
 }
 
 // Mirrors `GpuLamp` in crates/forge-render/src/lamps.rs (D-065): a small sphere light.
@@ -4676,8 +4682,9 @@ float3 hit_sunlight(Frame* f, RayHit hit)
 }
 
 // A lamp's unshadowed illuminance on a surface at `world` facing `n`, lux (its luminance), let go
-// at its reach as `lamps_at` lets it go; 0 beyond its reach or behind the surface.
-float lamp_weight(Lamp lamp, float3 world, float3 n)
+// at its reach as `lamps_at` lets it go; 0 beyond its reach or behind the surface. Taken from
+// no nearer than its bulb's radius, or `near` where that is further (a probe's hit, #294).
+float lamp_weight(Lamp lamp, float3 world, float3 n, float near = 0.0)
 {
     float3 d = lamp.position_radius.xyz - world;
     float dist2 = dot(d, d);
@@ -4691,7 +4698,8 @@ float lamp_weight(Lamp lamp, float3 world, float3 n)
     float radius = lamp.position_radius.w;
     float window = saturate(1.0 - pow(dist / reach, 4.0));
     float luminance = dot(lamp.colour_reach.rgb, float3(0.2126, 0.7152, 0.0722));
-    return luminance / max(dist2, radius * radius) * ndl * window * window * lamp_beam(lamp, d / max(dist, 1e-6));
+    float least = max(radius, near);
+    return luminance / max(dist2, least * least) * ndl * window * window * lamp_beam(lamp, d / max(dist, 1e-6));
 }
 
 // The lamps' light on a ray's hit (D-065: the probes lit by the lamps, and the mirror rays' hits),

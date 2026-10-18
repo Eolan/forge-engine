@@ -4972,15 +4972,27 @@ again (`demos/physics-lab.md`).
       terrain keeps its sun rays' start. Meshes under the cut's budget are cut at full detail, so
       near the camera they start at 2 cm.
     - **Where:** the resolve's lamp rays and the penumbra filter's (`lamp_rays_main`). The
-      probes' and mirror rays' hits keep 15 cm for now. A 2 cm start there made the village's
-      halls 0.19 EV lighter in their indirect light, and why is part of #294 (the probes' hits by
-      a lamp).
+      probes' and mirror rays' hits keep 15 cm for now. There the start changes the rooms'
+      indirect light by up to 1 EV, and not steadily: 8 cm halves a hall's, and 2 cm adds half a
+      stop. That is #298, to be understood before their start is chosen.
     - **Checked** (old start against new, 21:00, DLAA):
       - the village's room and window recess: 5 500 and 4 400 px gain shadow (the window frame
         against its reveal, the table's legs under its top), 0.0007 EV or less;
       - the hall: 0.0016 EV darker;
       - the lab's lamp room: the floor before the board is lit again under the board, which
         floats 15 cm over it. A ray from 15 cm up started at its lower edge and missed the gap.
+  - **A probe's hit takes a lamp's light from no nearer than 25 cm** (#294, 2026-10-18).
+    - **Before:** the surfaces inside a fitting and right by its bulb (a housing's inside, the
+      ceiling over a globe) were lit at tens of thousands of lux in the probes' rays. The probes
+      spread that over the ceiling round the fitting in a halo; a scene built outside the
+      repository lined its fittings with black to hide it.
+    - **Now:** `lamp_weight` takes the distance from no nearer than the bulb's radius or a given
+      least distance. `hit_lamp_weight` gives a probe's hit `PROBE_LAMP_NEAR`, 25 cm, both for
+      its pick and its light. The resolve lights those surfaces directly, each pixel its own, as
+      before. A mirror ray's hit keeps the bulb's radius: a mirror shows the fitting as it is lit.
+    - **Checked** (21:00, a fixed EV, the probes' light alone): the village's hall −0.05 EV and
+      room −0.03 EV, from the hot spots by the bulbs. The light lists' picks are unchanged to the
+      bit (they pass no least distance).
     - **The probes leave the street lamps out** (`hit_lamp_weight`, and the lenses tagged
       `RenderLayer::lamp`). Their bounce came back in sharp blocks of the probe grid on the
       grass (#254).
