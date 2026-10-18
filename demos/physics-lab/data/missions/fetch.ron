@@ -1,0 +1,29 @@
+// The playground's test mission (#287, D-072): climb the stairs, find the barrel that appears
+// on the floor behind the crates, then be back at the start within half a minute.
+// `physics-lab --lab walk --mission demos/physics-lab/data/missions/fetch.ron`
+// (`--mission-autopilot` walks it).
+Mission(
+    id: "lab:fetch",
+    version: 1,
+    objectives: [
+        (id: "climb", text: "Climb the stairs"),
+        (id: "find", text: "Find the barrel"),
+        (id: "return", text: "Back to the start within 30 s"),
+    ],
+    places: [
+        // The stairs' top step, 1.2 m up.
+        (id: "top", shape: Box(min: (6.0, 1.0, -1.5), max: (6.6, 3.0, 1.5))),
+        // Where the player started.
+        (id: "start", shape: Sphere(centre: (0.0, 0.0, 1.0), radius: 0.75)),
+    ],
+    items: [(id: "barrel", at: (-4.0, 0.0, -1.5))],
+    steps: Sequence([
+        Objective("climb", Wait(Entered("top"))),
+        Spawn("barrel"),
+        Objective("find", Wait(PickedUp("barrel"))),
+        Race([
+            Objective("return", Wait(Entered("start"))),
+            Sequence([Wait(After(30.0)), Fail]),
+        ]),
+    ]),
+)

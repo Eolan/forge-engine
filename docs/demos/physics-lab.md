@@ -240,6 +240,42 @@ platform moving at 1 m/s for a second, and the same second again from a saved wo
 and the playground replays a walk up the stairs, a jump and a turn to the same digests. A tick
 of the playground (72 bodies, the character, the platform): **0.08 ms** on average, p99 0.22 ms.
 
+### A mission on the playground (issue #287, D-072, D-073)
+
+```
+cargo run --release -p physics-lab -- --lab walk --mission demos/physics-lab/data/missions/fetch.ron
+```
+
+`--mission` runs a mission record (RON) on the playground through `forge-mission`.
+- **What it shows:** the window's title shows the objectives under way, or "mission won" or
+  "mission lost". Each change is logged.
+- **The items** are drawn as barrels where the mission spawns them, gone once picked up.
+- **Determinism:** the mission's state is the world's, saved, restored and digested with it, so
+  a session with a mission records and replays to the same digests.
+- **`--mission-autopilot`** walks the player to each target in turn; its walks are commands like
+  the keys'.
+- **Hot reload:** the record's file is read again when it changes, the mission keeping what is
+  done (its stage).
+
+The test mission, `fetch.ron`, has three objectives:
+1. Climb the stairs.
+2. Find the barrel that appears on the floor past the crates.
+3. Be back at the start within 30 s, or fail.
+
+Walked by the autopilot:
+- **The run:** the climb ends at tick 261, the barrel is picked up at 627, the mission is won at
+  751.
+- **Replay:** its recording replays with its 40 digests matched.
+- **Captures:** at frames 550 (the barrel there) and 700 (picked up), 0 px run to run and
+  between the mesh path and the fallback (`lab-mission550`, `lab-mission700`).
+- **Hot reload:** the file edited after the pickup (the return's text and its time) reloaded with
+  climb and find done and the barrel kept. The return began again with its new text, and the
+  mission was won.
+- **Cost:** the evaluator takes 1.2–1.6 µs a tick (6 µs at most), logged at exit as "the
+  mission's ticks (µs) over the run".
+
+![The fetch mission at frame 550: the barrel it spawned after the climb, the player heading for it](images/physics-lab-mission.png)
+
 ## `drive`: a car (issue #140)
 
 ```

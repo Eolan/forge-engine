@@ -25,6 +25,7 @@ forge-physics = { path = "crates/forge-physics" }
 forge-sim = { path = "crates/forge-sim" }
 forge-anim = { path = "crates/forge-anim" }
 forge-flora = { path = "crates/forge-flora" }
+forge-mission = { path = "crates/forge-mission" }
 # The demos the island demo builds on
 city-blocks = { path = "demos/city-blocks" }
 
@@ -57,6 +58,8 @@ lz4_flex = { version = "0.14", default-features = false, features = ["std", "saf
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = { version = "1", features = ["preserve_order"] }
+# Content records (D-035: RON + serde), first for the missions (D-072, #287).
+ron = "0.12"
 bytemuck = { version = "1", features = ["derive"] }
 
 # Diagnostics

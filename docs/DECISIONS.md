@@ -5850,3 +5850,85 @@ so that missions and mods are designed for it. Nothing is built until a mission 
 2. Scripts never run inside the predicted step (point 2).
 3. Mods are server-first; the client runs only interface and presentation scripts (point 7).
 4. No visual scripting until the editor (point 9).
+
+## D-073 — Missions as data: the record, its evaluator and its two saves ✅ (2026-10-18, #287, D-072's first point)
+
+D-072 put missions as data first. This is the first version, built in a crate of its own,
+`forge-mission`, and proved on the physics lab's playground (`--lab walk --mission`), whose
+world is the one fully digested simulation (`forge_sim::Simulation`). The village follows when
+its walker becomes one (#290).
+
+**The record** (RON, D-035's format; `forge_mission::schema`):
+- **An id** namespaced as content ids are (`lab:fetch`), and the schema's version.
+- **Objectives:** an id and the text the player reads.
+- **Places:** boxes and balls in the world, metres.
+- **Items:** where each lies and how near the player must come to pick it up. An item is absent
+  until a step spawns it.
+- **One tree of steps:**
+  - `Wait(trigger)`;
+  - `Sequence`, `All` (Verse's `sync`), `Race` (the first done wins, the others are cancelled),
+    `Branch` (in the background until the step holding it ends);
+  - `Objective(id, step)`: shown while its step runs, completed when it is done;
+  - `Spawn(item)`, `Succeed`, `Fail`.
+- **Triggers:** `Entered(place)`, `PickedUp(item)`, `After(seconds)`, `Event(name)` (what the
+  game sends: a kill or a door opened, until those systems exist), `AllOf` and `AnyOf`. Each
+  part latches once it fires during its wait, so `AllOf` means each happened, not all at once.
+- **Checked when read:** the version, unique ids, every id named defined, an objective named by
+  one step only, finite numbers and positive sizes. Unknown fields are refused.
+
+**The evaluator** (`forge_mission::Runtime`), at the fixed tick with the player's position:
+- the steps compiled into a flat tree in their written order;
+- each tick: the events the game sent are dated, the items in reach are picked up, then the tree
+  is updated from its root, a step's children in their order;
+- a step that ends at once lets the next begin in the same tick;
+- out come the tick's changes (objectives started, completed or cancelled; items spawned or
+  picked; won or lost) and where the waits under way point (`targets`), for an interface and a
+  walker.
+
+It is integer and `f64` comparisons in a fixed order, with no clock and no hashing by address, so
+the same ticks and positions give the same state to the bit (D-016).
+
+**Two saves:**
+- **A snapshot,** exact: every step's phase, its start and a sequence's place, the latches, the
+  items, the objectives, the events' ticks. It is for rollback, replays and digests. It loads only
+  into the record it was taken from (the record's hash leads it).
+- **A stage,** by id: the objectives completed, the items picked up, the outcome. It is for save
+  games and hot reload, and loads into a changed record. The objectives done are skipped, the
+  items stay picked, and the step in progress starts over, its timers too.
+
+**In the lab:**
+- **The mission joins the world's state:** saved, restored and digested with the rest.
+- **Its items are drawn** as the lab's barrels, parked under the floor until spawned and once
+  picked up.
+- **The title** shows the objectives under way, or the outcome. Each change is logged.
+- **`--mission-autopilot`** walks the player to the first target. Its walks are commands, so they
+  are recorded and replayed.
+- **The file is looked at every 30 frames** and read again when it changes, the mission keeping
+  its stage. A record that does not read is reported and left aside. No watcher crate was added.
+
+**Proved** (`demos/physics-lab/data/missions/fetch.ron`: climb the stairs, find the barrel that
+appears, back at the start within 30 s, or fail):
+- **The mission end to end:** climbed at tick 261, the barrel picked up at 627, won at 751.
+- **Replay:** a recording of that run replays with its 40 digests matched and the same final
+  digest.
+- **Captures:** the barrel spawned (`lab-mission550`) and picked up (`lab-mission700`) are 0 px
+  run to run and between the mesh path and the fallback.
+- **Hot reload:** the file edited after the pickup (the return's text and its time): the mission
+  reloaded with its stage (climb and find done, the barrel kept), the return started again with
+  its new text, and the mission was won.
+- **Cost:** 1.2–1.6 µs a tick on average, 6 µs at most, on the frame thread.
+- **Unit tests:** 16, among them the race lost to its timer, a branch cancelled with its scope,
+  `AllOf` remembering each part, an event counting only after its wait began, a snapshot
+  restoring to the bit, a snapshot of another record refused, and a stage loading into an edited
+  record.
+
+**Not yet:**
+- **Content packages:** D-035's `forge-data` is not built, so a mission is read from its file.
+  The record is already RON with a namespaced id.
+- **Kills and interactions:** no trigger of their own until those systems exist; they arrive as
+  `Event`s.
+- **Missions over `--net`:** refused for now.
+- **An F1 zone:** the app's CPU zones are its own, so the evaluator's time is logged at exit
+  instead.
+- **Aliases** binding a record's places and items to what a generator placed. The research
+  (`docs/research/missions.md`) weighs them.

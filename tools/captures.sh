@@ -311,6 +311,10 @@ for path in $paths; do
     capture "$path-lab-walk150" 150 "$lab" --lab walk --fixed-step --walk 2,0 "${flag[@]}"
     capture "$path-lab-walk150-noocc" 150 "$lab" --lab walk --fixed-step --walk 2,0 --no-occlusion "${flag[@]}"
     capture "$path-lab-walk-crates240" 240 "$lab" --lab walk --fixed-step --walk 0,2 "${flag[@]}"
+    # The playground's test mission (#287, D-072), walked by its autopilot: the barrel it spawned,
+    # then picked up.
+    capture "$path-lab-mission550" 550 "$lab" --lab walk --fixed-step --mission demos/physics-lab/data/missions/fetch.ron --mission-autopilot "${flag[@]}"
+    capture "$path-lab-mission700" 700 "$lab" --lab walk --fixed-step --mission demos/physics-lab/data/missions/fetch.ron --mission-autopilot "${flag[@]}"
     # The track (#140): the car down it at tick 300 and its A/B twin, and turning into the
     # slalom at tick 600.
     capture "$path-lab-drive300" 300 "$lab" --lab drive --fixed-step --steer 1,0 "${flag[@]}"

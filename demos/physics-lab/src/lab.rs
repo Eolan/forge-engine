@@ -536,6 +536,12 @@ pub(crate) struct LabWorld {
     boat: Option<sea::Boat>,
     /// The playground's: the player's input and character, and the shuttling platform.
     player: walk::Player,
+    /// `--mission` (D-072, #287): the mission run on the playground, its state part of the
+    /// world's (saved, restored, digested).
+    mission: Option<Box<forge_mission::Runtime>>,
+    /// The mission's ticks: their count, and their time and the longest in microseconds (not
+    /// part of the state).
+    mission_cost: (u64, f64, f64),
     /// The track's: the car and its driver's controls.
     driver: drive::Driver,
     /// The field's: the aeroplane and its pilot's controls.
@@ -1271,6 +1277,8 @@ impl LabWorld {
                 hulls,
                 boat,
                 player,
+                mission: None,
+                mission_cost: (0, 0.0, 0.0),
                 platform,
                 driver,
                 pilot,
@@ -1333,6 +1341,50 @@ impl LabWorld {
         if self.herd.is_some() {
             creatures::prints(&self.feet, &yard::SOFT, DVec3::new(0.0, PARKED_Y, 0.0), out);
         }
+        // The mission's items after everything (#287): where they lie once spawned, parked
+        // under the floor before and after.
+        if let Some(mission) = &self.mission {
+            for (item, state) in mission.items() {
+                let position = match state {
+                    forge_mission::ItemState::Present => DVec3::from(item.at),
+                    _ => DVec3::new(0.0, PARKED_Y, 0.0),
+                };
+                out.push(Transform {
+                    position,
+                    rotation: Quat::IDENTITY,
+                });
+            }
+        }
+    }
+
+    /// Puts `mission` on the playground (`--mission`, #287), and its items' movers into
+    /// `layout`, drawn as barrels after everything.
+    pub(crate) fn set_mission(&mut self, mission: forge_mission::Runtime, layout: &mut Layout) {
+        layout.groups.push(Group {
+            prop: BARREL,
+            count: mission.items().count() as u32,
+        });
+        self.mission = Some(Box::new(mission));
+    }
+
+    /// Replaces the mission's record, keeping its stage (the file changed, #287).
+    pub(crate) fn reload_mission(&mut self, record: forge_mission::Mission) {
+        let Some(mission) = &mut self.mission else {
+            return;
+        };
+        if record.items.len() != mission.mission().items.len() {
+            tracing::warn!("the mission's items changed in number: restart to draw them");
+            return;
+        }
+        match mission.reload(record) {
+            Ok(()) => tracing::info!(stage = ?mission.stage(), "mission reloaded"),
+            Err(e) => tracing::warn!("the mission did not reload: {e}"),
+        }
+    }
+
+    /// The mission, when the playground runs one.
+    pub(crate) fn mission(&self) -> Option<&forge_mission::Runtime> {
+        self.mission.as_deref()
     }
 
     /// The slimes' points in the world after the last step into `out`, one slime's after the
@@ -1684,6 +1736,17 @@ impl Simulation for LabWorld {
         if let Some(yard) = &mut self.materials {
             yard.watch(&self.world, self.tick + 1);
         }
+        // The mission (D-072, #287), once everything moved: the player's feet where they stand.
+        if let (Some(mission), Some(c)) = (&mut self.mission, self.player.character) {
+            let start = Instant::now();
+            mission.tick(self.tick, self.world.character(c).position);
+            let us = start.elapsed().as_secs_f64() * 1e6;
+            let cost = &mut self.mission_cost;
+            *cost = (cost.0 + 1, cost.1 + us, cost.2.max(us));
+            for event in mission.events() {
+                tracing::info!(tick = self.tick, ?event, "mission");
+            }
+        }
         self.tick += 1;
     }
 
@@ -1724,6 +1787,10 @@ impl Simulation for LabWorld {
         }
         for word in self.words() {
             out.extend_from_slice(&word.to_bits().to_le_bytes());
+        }
+        // The mission's state, its length first (#287).
+        if let Some(mission) = &self.mission {
+            mission.save(&mut out);
         }
         // The flood's water, before the world's state (whose length Jolt knows).
         if let Some(water) = &self.water {
@@ -1809,6 +1876,16 @@ impl Simulation for LabWorld {
         self.pilot.rudder = w[13];
         self.limp = w[14] != 0.0;
         self.pulls = [w[15], w[16]];
+        let world = match &mut self.mission {
+            Some(mission) => match mission.restore(world) {
+                Ok(read) => &world[read..],
+                Err(e) => {
+                    tracing::warn!("a lab state: {e}");
+                    return;
+                }
+            },
+            None => world,
+        };
         let world = match &mut self.water {
             Some(water) => &world[water.restore(world)..],
             None => world,
@@ -1835,6 +1912,10 @@ impl Simulation for LabWorld {
             for (k, v) in s.velocity.to_array().into_iter().enumerate() {
                 d ^= u64::from(v.to_bits()).rotate_left(13 * k as u32 + 1);
             }
+        }
+        // The mission's state (#287).
+        if let Some(mission) = &self.mission {
+            d ^= mission.digest().rotate_left(37);
         }
         // The flood's water, every column and pipe to the bit.
         if let Some(water) = &self.water {
@@ -2042,6 +2123,41 @@ pub(crate) struct Lab {
     skinned: Option<Skinned>,
     /// The slime's points in the world at the last two ticks, when there is one.
     slime_points: [Vec<Vec3>; 2],
+    /// `--mission`: its record's file, read again when it changes (#287).
+    mission_file: Option<MissionFile>,
+}
+
+/// A mission's record on disk (`--mission`, #287), watched for changes.
+struct MissionFile {
+    path: PathBuf,
+    /// When it was last read.
+    modified: Option<std::time::SystemTime>,
+    /// Frames since its time was last looked at.
+    polled: u32,
+}
+
+/// Frames between two looks at the mission's file.
+const MISSION_POLL: u32 = 30;
+
+/// The mission as the title shows it: the objectives shown, or how it ended.
+fn mission_line(mission: &forge_mission::Runtime) -> String {
+    match mission.outcome() {
+        forge_mission::Outcome::Succeeded => "mission won".to_owned(),
+        forge_mission::Outcome::Failed => "mission lost".to_owned(),
+        forge_mission::Outcome::Running => {
+            let shown: Vec<&str> = mission
+                .objectives()
+                .filter(|(_, s)| *s == forge_mission::Status::Active)
+                .map(|(o, _)| o.text.as_str())
+                .collect();
+            format!("mission: {}", shown.join("; "))
+        }
+    }
+}
+
+/// When the file at `path` last changed, if the system says.
+fn modified(path: &std::path::Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
 /// Where the skinned creatures' bodies lie in the movers' transforms (from `start`, each
@@ -2191,7 +2307,35 @@ pub(crate) fn build(
     builder.set_ray_traced(!args.no_shadows);
     builder.set_origin(scene_origin(args));
     let pool = Arc::new(TaskPool::client());
-    let (world, layout) = LabWorld::new(kind, Arc::clone(&pool))?;
+    let (mut world, mut layout) = LabWorld::new(kind, Arc::clone(&pool))?;
+    // `--mission` (D-072, #287): a mission on the playground, read from its record.
+    let mission_file = flags
+        .mission
+        .as_ref()
+        .map(|path| -> Result<MissionFile> {
+            anyhow::ensure!(kind == LabScene::Walk, "--mission runs on --lab walk");
+            anyhow::ensure!(flags.net.is_none(), "--mission runs without --net for now");
+            let text = std::fs::read_to_string(path)
+                .with_context(|| format!("reading the mission {}", path.display()))?;
+            let record = forge_mission::parse(&text)?;
+            tracing::info!(
+                id = %record.id,
+                objectives = record.objectives.len(),
+                items = record.items.len(),
+                "mission {}",
+                path.display()
+            );
+            world.set_mission(
+                forge_mission::Runtime::new(record, forge_sim::TICK_RATE)?,
+                &mut layout,
+            );
+            Ok(MissionFile {
+                path: path.clone(),
+                modified: modified(path),
+                polled: 0,
+            })
+        })
+        .transpose()?;
     for &(prop, at) in &layout.statics {
         builder.add_instance(ids[prop], at);
     }
@@ -2399,6 +2543,7 @@ pub(crate) fn build(
             tank_steps: Vec::new(),
             skinned,
             slime_points: [points.clone(), points],
+            mission_file,
         },
     ))
 }
@@ -2754,6 +2899,46 @@ impl Lab {
         self.queued.push(LabCommand::Jump);
     }
 
+    /// Where the player stands and where the mission's first wait points, when the playground
+    /// runs a mission (`--mission-autopilot`, #287).
+    pub(crate) fn mission_target(&mut self) -> Option<(DVec3, DVec3)> {
+        let shown = self.shown();
+        let target = *shown.mission()?.targets().first()?;
+        Some((shown.player()?.position, target))
+    }
+
+    /// Looks at the mission's file every [`MISSION_POLL`] frames and reads it again when it
+    /// changed: the mission keeps its stage (hot reload, #287). A record that does not read is
+    /// reported and left aside.
+    pub(crate) fn poll_mission(&mut self) {
+        let Some(file) = &mut self.mission_file else {
+            return;
+        };
+        file.polled += 1;
+        if file.polled < MISSION_POLL {
+            return;
+        }
+        file.polled = 0;
+        let now = modified(&file.path);
+        if now == file.modified {
+            return;
+        }
+        file.modified = now;
+        let read = std::fs::read_to_string(&file.path)
+            .map_err(anyhow::Error::from)
+            .and_then(|text| Ok(forge_mission::parse(&text)?));
+        let record = match read {
+            Ok(record) => record,
+            Err(e) => {
+                tracing::warn!("the mission {}: {e:#}", file.path.display());
+                return;
+            }
+        };
+        if let Mode::Local { world, .. } = &mut self.mode {
+            world.reload_mission(record);
+        }
+    }
+
     /// Whether the scene has a player to walk.
     pub(crate) fn has_player(&mut self) -> bool {
         self.shown().player().is_some()
@@ -2930,14 +3115,21 @@ impl Lab {
         let mean = self.tick_ms.iter().sum::<f64>() / n;
         let max = self.tick_ms.iter().copied().fold(0.0, f64::max);
         self.tick_ms.clear();
-        let (bodies, now) = {
+        let (bodies, now, mission) = {
             let shown = self.shown();
-            (shown.bodies(), shown.now())
+            (
+                shown.bodies(),
+                shown.now(),
+                shown.mission().map(mission_line),
+            )
         };
-        let title = format!(
+        let mut title = format!(
             "physics {mean:.2} ms a tick (max {max:.2}), {} of {bodies} awake, tick {now}",
             self.awake
         );
+        if let Some(line) = mission {
+            title = format!("{title} | {line}");
+        }
         match &mut self.mode {
             Mode::Net(net) => format!("{title} | {}", net.title()),
             Mode::Local {
@@ -2972,6 +3164,20 @@ impl Drop for Lab {
             awake = self.awake,
             "physics ticks (ms) over the run"
         );
+        if let Some((ticks, total, max)) = self
+            .shown()
+            .mission()
+            .is_some()
+            .then(|| self.shown().mission_cost)
+            .filter(|c| c.0 > 0)
+        {
+            tracing::info!(
+                ticks,
+                mean = format!("{:.2}", total / ticks as f64),
+                max = format!("{max:.2}"),
+                "the mission's ticks (µs) over the run"
+            );
+        }
         match &self.mode {
             Mode::Local {
                 recording, replay, ..

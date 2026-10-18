@@ -1983,6 +1983,16 @@ It was 0.25 ms for the world and 118 µs a client before the interest set became
 merged with the grid's (it was a tree map) and the blocks' bodies one buffer of bits (they were a
 buffer each, copied bit by bit).
 
+## `forge-mission` — a mission's tick (#287, D-073, 2026-10-18)
+
+- **What was measured:** the physics lab's test mission (`fetch.ron`: three objectives, two
+  places, one item, a race with a 30 s timer), evaluated once a tick on the frame thread after the
+  lab's world, wall clock around the call.
+- **Result:** 1.18 µs a tick on average over 1272 ticks of a real-time run, 6.1 µs at most; 1.57
+  µs over a shorter run.
+- **Where it shows:** logged at exit ("the mission's ticks (µs) over the run"). The app's CPU
+  zones are its own, so it has no F1 zone yet.
+
 ## Not measured yet
 
 - **Streaming**: residency pools, request queue depth, drive and decompression throughput.

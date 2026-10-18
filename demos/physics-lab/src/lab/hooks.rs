@@ -124,11 +124,38 @@ pub(crate) struct LabArgs {
     /// each bends: the linear blend's bent elbow keeps its thickness (#169; on request only).
     #[arg(long)]
     pub(crate) elbow_correctives: bool,
+    /// `--lab walk`: run this mission on the playground (a RON record, D-072, #287): its
+    /// objectives in the title and the log, its items drawn as barrels, its state in the lab's
+    /// saves, digests and recordings. The file is read again when it changes, the mission
+    /// keeping its stage.
+    #[arg(long)]
+    pub(crate) mission: Option<PathBuf>,
+    /// With `--mission`, the player walks to the mission's first target in turn, as a scripted
+    /// run's player (its walks are commands, recorded and replayed).
+    #[arg(long)]
+    pub(crate) mission_autopilot: bool,
     /// Skin the lab's slimes on the eight soft-body points nearest each vertex, smoothly
     /// weighted, not on the three of the soft body's triangle under it: their surface bends
     /// smoothly across the soft body's edges (#169's eight joints a vertex; on request only).
     #[arg(long)]
     pub(crate) slime_eight: bool,
+}
+
+/// `--mission-autopilot`'s walking speed, m/s.
+const AUTOPILOT_SPEED: f64 = 1.5;
+
+/// The walk from the player's feet towards the mission's target (`--mission-autopilot`, #287):
+/// along the ground at a walk, none within 20 cm of it or without a target.
+fn autopilot(target: Option<(glam::DVec3, glam::DVec3)>) -> [f32; 2] {
+    let Some((at, to)) = target else {
+        return [0.0; 2];
+    };
+    let way = glam::DVec2::new(to.x - at.x, to.z - at.z);
+    if way.length() < 0.2 {
+        return [0.0; 2];
+    }
+    let v = way.normalize() * AUTOPILOT_SPEED;
+    [v.x as f32, v.y as f32]
 }
 
 /// `--liquid-view`: what the tank's drawing shows (#156).
@@ -671,9 +698,15 @@ impl Running for LabRunning {
                     lab.pull(pulling);
                 }
             }
+            // The mission's record read again when its file changes (#287).
+            lab.poll_mission();
             // The playground's player (#139): a command when the walk changes.
             if lab.has_player() {
-                let walk = city_blocks::wished_walk(args, camera.yaw, input);
+                let walk = if self.flags.mission_autopilot {
+                    autopilot(lab.mission_target())
+                } else {
+                    city_blocks::wished_walk(args, camera.yaw, input)
+                };
                 if walk != self.walking {
                     self.walking = walk;
                     lab.walk(walk);
