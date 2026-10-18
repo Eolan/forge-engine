@@ -76,7 +76,8 @@ for dir in streamline-sdk nrd-sdk rtxdi-sdk steam-audio-sdk fidelityfx-sdk tracy
   # Only an ignored folder: git clean above must never walk into an SDK through its junction.
   git -C "$tree" check-ignore -q "$dir/" || { say "note: $dir is not ignored, no junction"; continue; }
   rm -f "$tree/$dir" 2> /dev/null
-  cmd //c mklink /J "$(cygpath -w "$tree/$dir")" "$(cygpath -w "$main/$dir")" > /dev/null ||
+  # MSYS would read mklink's /J as a path.
+  MSYS_NO_PATHCONV=1 cmd /c mklink /J "$(cygpath -w "$tree/$dir")" "$(cygpath -w "$main/$dir")" > /dev/null ||
     say "note: no junction for $dir"
 done
 head=$(git -C "$tree" rev-parse HEAD)
