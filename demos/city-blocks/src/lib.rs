@@ -1183,6 +1183,7 @@ impl Gallery {
                 spacing: args
                     .probe_spacing
                     .unwrap_or(look.probes.map_or(ProbeParams::default().spacing, |p| p.1)),
+                movers: look.probes_see_movers,
                 ..ProbeParams::default()
             };
             let mut probes = Probes::new(&ctx.device, &ctx.shaders, params)?;

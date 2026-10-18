@@ -234,6 +234,8 @@ impl Scenario for LabScenario {
                 ROOM_PROBE_SPACING,
                 forge_render::probes::ProbeParams::default().cascades,
             )),
+            // The lab's bodies are what it shows: the probes see them (#299).
+            probes_see_movers: true,
             // The car is followed from the start (C lets it go); the aeroplane always is.
             chase: matches!(kind, LabScene::Drive | LabScene::Flyer),
             // Each lab scene at its own fixed exposure (its captures compared at one).

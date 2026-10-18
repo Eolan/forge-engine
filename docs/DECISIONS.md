@@ -1645,7 +1645,10 @@ positive numbers only (`wrap_cells`).
   - **Now:** off by default, the probes neither declare the movers nor wake on them, and their
     rays skip the movers' structure (`g_trace_movers`, set by `probe_trace_main`). The movers
     keep their sun and lamp shadows, their reflections and the other passes' rays; only the
-    probes' diffuse light does not see them. A scene with large, slow movers can turn it on.
+    probes' diffuse light does not see them. A scene whose movers are what it shows turns it on
+    (`Look::probes_see_movers`): the physics lab's scenes do. Without its bodies, 40 of the
+    lab's captures changed by up to 5 % of their pixels, light leaking round the crates, the
+    dominoes and the drop's blocks. The city's and the island's captures did not change.
   - **Measured** (best of three, 240 frames): with the walkers 6.51–6.53 ms, without them
     6.49–6.50 ms; `gi/probe rays` 3.28–3.30 ms with them.
 

@@ -52,6 +52,10 @@ pub struct Look {
     /// The probes' rays, their finest spacing (metres) and their cascades, when the scene sets
     /// them (unless the flags do).
     pub probes: Option<(u32, f32, u32)>,
+    /// The probes' rays meet the scene's movers (`ProbeParams::movers`, #299): a scene whose
+    /// movers are what it shows (the physics lab's bodies). Off: walkers and vehicles stay out of
+    /// the probes' light, and the probes do not wait for their upload.
+    pub probes_see_movers: bool,
     /// The camera follows the scene's vehicle from the start ([`Running::follow`]).
     pub chase: bool,
     /// The exposure follows the scene's metered light without `--day` or `--time-of-day` (unless
@@ -69,6 +73,7 @@ impl Default for Look {
             splashes: false,
             particles: false,
             probes: None,
+            probes_see_movers: false,
             chase: false,
             metered: false,
         }
