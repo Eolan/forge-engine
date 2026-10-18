@@ -82,7 +82,8 @@ Options:
   `--probe-cadence N` how many frames a settled probe waits between updates (1 since
   2026-10-16; 2 from #103 until then, see below). In a scene that knows its rooms (the
   village's houses, D-068), `--show-regions` tints each surface by the region whose probes
-  light it, red where it fell back to every probe.
+  light it, red where it fell back to every probe, and `--no-regions` leaves the rooms out:
+  every probe lights every surface, as before the regions (their A/B, #291).
 - `--no-reflections` draws without the sky's reflection (`r.reflections.sky`).
 - `--no-ray-reflections` reflects only the sky in the glass and the water (`r.reflections.rays`).
 - `--no-reflection-history` leaves the glass's mirror rays to TAA alone, without their history (#176).

@@ -395,6 +395,10 @@ pub struct Args {
     /// devices without ray queries have none).
     #[arg(long)]
     no_probes: bool,
+    /// The probes without the scene's rooms (D-068): every probe lights every surface, as before
+    /// the regions (their A/B; #291).
+    #[arg(long)]
+    no_regions: bool,
     /// Rays per probe and frame (64 to 256): 128, and 256 in the models lab's rooms,
     /// whose probes, lit through a few openings and seen at an indoor exposure, shimmered with
     /// 128 (#171: 7.5 % of a still view's pixels changed over the jitter's cycle, 2.6 % with
@@ -1182,7 +1186,7 @@ impl Gallery {
             };
             let mut probes = Probes::new(&ctx.device, &ctx.shaders, params)?;
             // The scene's rooms (D-068), from the world frame to the scene's.
-            if let Some(running) = running.as_ref() {
+            if let Some(running) = running.as_ref().filter(|_| !args.no_regions) {
                 let origin = scene.origin();
                 let to_scene = |x: f32, y: f32, z: f32| {
                     forge_render::CellPos::from_f64(glam::DVec3::new(
