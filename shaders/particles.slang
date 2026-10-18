@@ -38,8 +38,19 @@ static const float FORWARD_SHARE = 0.6;
 // The ways an effect is drawn (`DrawKind` in particles.rs).
 static const uint DRAW_SMOKE = 0u;
 static const uint DRAW_GLOW = 1u;
+// Effect::draw's flags over its kind (bits 0–7) and flipbook (8–15): it meets the scene, its
+// bounce in bits 16–23 (of 255); it is drawn as a streak along its flight.
+static const uint DRAW_COLLIDE = 1u << 24;
+static const uint DRAW_STREAK = 1u << 25;
 // A glow's colour is in thousands of candelas a square metre.
 static const float GLOW_UNIT = 1000.0;
+// How far off a surface a particle that meets it stops, metres; the share of its speed along
+// the surface a bounce takes away; the side rays' offset that finds the surface's normal.
+static const float SKIN = 0.01;
+static const float FRICTION = 0.3;
+static const float NORMAL_PROBE = 0.02;
+// A streak's length, in seconds of its flight: a camera's shutter at about 1/50 s.
+static const float STREAK_TIME = 0.02;
 
 struct Particle
 {
@@ -248,6 +259,45 @@ float sun_visibility(ParticleFrame* f, float3 p)
     return q.CommittedStatus() == COMMITTED_NOTHING ? 1.0 : 0.0;
 }
 
+// How far the scene's nearest surface lies along `ray` (the static structure, every surface
+// opaque); -1 where it meets none.
+float scene_distance(ParticleFrame* f, RayDesc ray)
+{
+    RayQuery<RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_FORCE_OPAQUE> q;
+    q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), RAY_FLAG_NONE, 0xFF, ray);
+    while (q.Proceed())
+    {
+    }
+    return q.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? q.CommittedRayT() : -1.0;
+}
+
+// The normal of the surface a ray from `origin` along `dir` met at `t`: two more rays beside it,
+// NORMAL_PROBE off, and the plane through the three hits, turned against the ray. A ray query
+// gives no triangle's normal without the vertices; the ray's reverse where a side ray misses (an
+// edge).
+float3 hit_normal(ParticleFrame* f, float3 origin, float3 dir, float t)
+{
+    float3 a = normalize(cross(abs(dir.y) < 0.9 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0), dir));
+    float3 b = cross(dir, a);
+    RayDesc ray;
+    ray.Direction = dir;
+    ray.TMin = 0.0;
+    ray.TMax = t + 0.5;
+    ray.Origin = origin + a * NORMAL_PROBE;
+    float ta = scene_distance(f, ray);
+    ray.Origin = origin + b * NORMAL_PROBE;
+    float tb = scene_distance(f, ray);
+    if (ta < 0.0 || tb < 0.0)
+        return -dir;
+    float3 p = origin + dir * t;
+    float3 n = cross(origin + a * NORMAL_PROBE + dir * ta - p, origin + b * NORMAL_PROBE + dir * tb - p);
+    float len = length(n);
+    if (len < 1e-8)
+        return -dir;
+    n /= len;
+    return dot(n, dir) > 0.0 ? -n : n;
+}
+
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void advance_main(uint3 id : SV_DispatchThreadID)
@@ -278,6 +328,33 @@ void advance_main(uint3 id : SV_DispatchThreadID)
             // any step.
             float3 v = q.velocity + float3(0.0, -GRAVITY * e.gravity * h, 0.0);
             q.velocity = air + (v - air) * exp(-e.drag * h);
+            // Into the scene (D-064's point 2, the TLAS for sparks and debris): stopped at the
+            // surface its step meets, its velocity bounced off it, the share along it slowed.
+            // The static structure only: the movers are not met.
+            if ((e.draw & DRAW_COLLIDE) != 0u && f[0].tlas != 0)
+            {
+                float3 move = q.velocity * h;
+                float len = length(move);
+                if (len > 1e-6)
+                {
+                    float3 dir = move / len;
+                    RayDesc ray;
+                    ray.Origin = q.position;
+                    ray.Direction = dir;
+                    ray.TMin = 0.0;
+                    ray.TMax = len + SKIN;
+                    float t = scene_distance(f, ray);
+                    if (t >= 0.0)
+                    {
+                        float3 n = hit_normal(f, q.position, dir, t);
+                        float bounce = float((e.draw >> 16) & 0xFFu) / 255.0;
+                        float3 normal_part = dot(q.velocity, n) * n;
+                        q.velocity = (q.velocity - normal_part) * (1.0 - FRICTION) - normal_part * bounce;
+                        q.position += dir * max(t - SKIN, 0.0);
+                        continue;
+                    }
+                }
+            }
             q.position += q.velocity * h;
         }
     }
@@ -319,7 +396,7 @@ struct ParticleVaryings
                                        // shading
     nointerpolation float3 towards_sun : TEXCOORD2; // the sun in the puff's frame: x right, y
                                                     // down the screen, z towards the camera
-    nointerpolation uint flipbook : TEXCOORD3; // 1: drawn from the baked smoke's flipbook
+    nointerpolation uint flipbook : TEXCOORD3; // 1: drawn from the baked smoke's flipbook; 2: a streak
     float3 corner : TEXCOORD0;         // xy: where in its puff, -1..1 each way; z: its age over
                                        // its life
     nointerpolation float4 fade : TEXCOORD1; // x: its distance, metres; y: over how far it fades
@@ -380,8 +457,32 @@ ParticleVaryings vert_main(uint vertex : SV_VertexID)
     float2 middle = clip.xy / clip.w * half_size;
     o.position = float4((middle + c * drawn_px) / half_size * clip.w, clip.z, clip.w);
     o.corner = float3(c, s);
-    o.flipbook = e.draw >> 8u;
+    o.flipbook = (e.draw >> 8u) & 0xFFu;
     o.fade = float4(clip.w, max(radius, 0.05), float(q.seed & 1023u), q.spin);
+    // A streak (sparks): from where it was STREAK_TIME ago to where it is, as a shutter sees it,
+    // a pixel wide at least, its light spread along it. The fragment draws a capsule (mode 2),
+    // its ends' share of its length in `fade.w`.
+    if ((e.draw & DRAW_STREAK) != 0u)
+    {
+        float4 tail_clip = mul(f[0].view_proj, float4(rel - q.velocity * STREAK_TIME, 1.0));
+        if (tail_clip.w > near)
+        {
+            float2 tail = tail_clip.xy / tail_clip.w * half_size;
+            float2 axis = middle - tail;
+            float length_px = length(axis);
+            if (length_px > 0.5)
+            {
+                float2 along = axis / length_px;
+                float2 across = float2(-along.y, along.x);
+                float half_length = 0.5 * length_px + drawn_px;
+                float2 at = (middle + tail) * 0.5 + along * (c.x * half_length) + across * (c.y * drawn_px);
+                o.position = float4(at / half_size * clip.w, clip.z, clip.w);
+                coverage *= drawn_px / half_length;
+                o.flipbook = 2u;
+                o.fade.w = drawn_px / half_length;
+            }
+        }
+    }
 
     float4 colour = lerp(e.colour0, e.colour1, s);
     float fade_in = saturate(s / FADE_IN);
@@ -439,6 +540,13 @@ ParticleTargets frag_main(ParticleVaryings input)
         + 0.15 * value_noise(turned * 9.0 + 11.0 + 2.0 * churn, seed + 2u);
     float d2 = dot(p, p);
     float shape = saturate(1.0 - d2) * smoothstep(0.0, 0.45, n + 0.35 - 0.9 * d2);
+    if (input.flipbook == 2u)
+    {
+        // A streak: even along its length, round across it and at its ends (their share of
+        // its half-length in `fade.w`).
+        float tip = max(input.fade.w, 1e-3);
+        shape = saturate(1.0 - p.y * p.y) * saturate((1.0 - abs(p.x)) / tip);
+    }
     // Faded where it meets the scene: the ground, a wall.
     float depth = g_sampled_images[NonUniformResourceIndex(f[0].depth)].Load(int3(int2(input.position.xy), 0)).r;
     float scene = depth > 0.0 ? f[0].camera.w / depth : 1e30;

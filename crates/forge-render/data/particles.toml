@@ -17,6 +17,9 @@
 #   draw     "smoke" (lit, alpha-blended puffs) or "glow" (unlit, added: embers, sparks)
 #   burst    a burst of `rate` particles when the emitter is triggered, not a stream
 #   texture  "smoke": drawn from the puff our own solver bakes (six-way lit); else a procedural puff
+#   bounce   it meets the scene (a ray a step against the static structure): the share of its
+#            speed into a surface it keeps, bounced back (0 to 1); unset, it passes through
+#   streak   drawn as a streak along its flight, as a shutter of 1/50 s sees it (sparks)
 
 [chimney-smoke]
 rate = 14.0
@@ -61,3 +64,19 @@ wind = 1.0
 curl = [0.4, 0.6]
 colour = [[6.0, 2.2, 0.5, 1.0], [2.4, 0.5, 0.1, 0.0]]
 draw = "glow"
+
+[sparks]
+rate = 45.0
+life = [0.7, 1.5]
+radius = [0.012, 0.006]
+speed = [3.0, 5.5]
+cone = 18.0
+spread = 0.02
+gravity = 1.0
+drag = 0.2
+wind = 0.0
+curl = [0.0, 1.0]
+colour = [[40.0, 13.0, 2.5, 1.0], [12.0, 2.0, 0.2, 0.0]]
+draw = "glow"
+bounce = 0.35
+streak = true

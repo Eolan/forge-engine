@@ -2026,8 +2026,29 @@ none dropped.
 
 The frame was 1.65 ms.
 
+**Sparks that meet the scene** (D-064's point 2, the TLAS part; and point 3's streaks):
+
+![A grinder's sparks at midnight, streaking onto the floor and bouncing off it and a chimney's foot](images/lab-sparks.png)
+
+*Frame 360 of `--lab smoke --fixed-step --time-of-day 1.5`, the right chimney's foot.*
+
+A grinder before the right chimney throws 45 sparks a second down onto the floor. They bounce
+off it and off the chimney's foot.
+- **Meeting the scene:** an effect with a `bounce` sends a ray along each step against the
+  static structure. Where the ray hits, the particle stops 1 cm short. The part of its velocity
+  into the surface comes back times the bounce (0.35 for the sparks), and the part along it
+  is slowed by 30 %.
+  - **The normal:** the ray query gives none, so two more rays 2 cm beside the first find the
+    surface's plane, only on a hit.
+  - The movers are not met yet.
+- **Streaks:** an effect with `streak` is drawn from where it was 1/50 s ago to where it is, a
+  pixel wide at least, its light spread along it.
+- **Visibility:** by day they barely show, as real sparks in the sun.
+- **Cost:** `particles/advance` 0.005 → 0.018 ms with 832 particles alive at most; the frame
+  1.65 → 1.72 ms.
+
 **Left for the next steps of D-064:**
-- collisions;
+- the depth buffer's collisions (smoke, dust) and the movers;
 - sorting alpha-blended effects per emitter;
 - the flipbook's frames blended by motion vectors (now cross-faded), and more flipbooks (dust,
   fire);

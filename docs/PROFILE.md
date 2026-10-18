@@ -1365,6 +1365,11 @@ cost the draw, and the flipbook's are larger with four reads each (the procedura
 0.022 ms, the frame 1.59). It has no sorting yet. The flipbook bakes once in about 2 s and loads
 from the derived cache in 1 ms.
 
+With a grinder's sparks added (2026-10-18: 45 a second that meet the scene, drawn as streaks;
+832 particles alive at most), `particles/advance` takes 0.018 ms. Each spark traces a ray a
+step, and two more for the normal where it meets a surface. `particles/draw` stays at 0.085 ms
+and the frame goes to 1.72 ms.
+
 The lamps (D-065 step 1, #270) in the sharpness room at midnight (`--lab lamps --time-of-day
 1.5`), 1600 × 900, 400 frames, best of three, against the same room unlit:
 

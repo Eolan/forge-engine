@@ -4,6 +4,8 @@
 //! - A ring of rocks round a fire: its embers rising, and its smoke.
 //! - A walker's footsteps along the near side: a puff of dust a step, the walk starting over
 //!   every eight seconds.
+//! - A grinder's sparks, streaking down onto the floor and bouncing off it and a chimney's foot
+//!   (the particles that meet the scene).
 
 use forge_render::{Burst, Emitter, Particles};
 use glam::{Mat4, Vec3};
@@ -28,6 +30,8 @@ const FOOT: f32 = 0.12;
 const STEPS: u32 = 16;
 /// The dust's longest life, seconds: a step's burst is passed on that long.
 const DUST_LIFE: f32 = 2.0;
+/// Where a grinder's sparks fly from.
+const GRINDER: Vec3 = Vec3::new(3.2, 1.1, -2.6);
 
 /// The yard's statics: the chimneys' blocks and the fire's rocks.
 pub(super) fn build() -> Vec<(usize, Mat4)> {
@@ -60,13 +64,23 @@ pub(super) fn particles(
     emitters: &mut Vec<Emitter>,
     bursts: &mut Vec<Burst>,
 ) {
-    let (Some(smoke), Some(dust), Some(embers)) = (
+    let (Some(smoke), Some(dust), Some(embers), Some(sparks)) = (
         particles.effect("chimney-smoke"),
         particles.effect("footstep-dust"),
         particles.effect("embers"),
+        particles.effect("sparks"),
     ) else {
         return;
     };
+    // A grinder's sparks, down onto the floor before the right chimney: they bounce off the
+    // floor and the chimney's foot.
+    emitters.push(Emitter {
+        effect: sparks,
+        position: GRINDER,
+        direction: Vec3::new(1.0, -1.1, -1.6).normalize(),
+        seed: 300,
+        start: 0.0,
+    });
     for (i, (x, z, high)) in CHIMNEYS.into_iter().enumerate() {
         emitters.push(Emitter {
             effect: smoke,

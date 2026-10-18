@@ -4508,8 +4508,21 @@ downloaded sets stay out unless the owner says otherwise.
     particle, the six lights weighted by the sun's direction. The dust keeps procedural puffs.
 - **Numbers:** 492 particles at most, the draw 0.085 ms with the flipbook (0.022 ms
   procedural), 0.006 ms of simulation. Two runs are identical to the pixel.
-- **Next:** collisions, sorting, frames blended by motion vectors, flipbooks for
-  dust and fire, the dust volume, and the village's chimneys and steps.
+- **Point 2's TLAS part and point 3's streaks, the same night:** an effect with a `bounce` meets
+  the scene, and one with `streak` is drawn along its flight. The lab's grinder sparks have both.
+  - **The step:** each step of a particle that meets the scene is a ray against the static
+    structure. Where it hits, the particle stops 1 cm short and its velocity bounces off the
+    surface: its speed into it times the bounce, the share along it slowed by 30 %.
+  - **The normal:** a ray query gives no triangle's normal without its vertices, so two more
+    rays 2 cm beside the first find the surface's plane, only where it hits.
+  - **What it does not meet yet:** the movers; and it takes every surface as opaque.
+  - **The streak:** from where it was 1/50 s ago to where it is, a pixel wide at least, its light
+    spread along it.
+  - **Cost:** 832 particles at most, `particles/advance` 0.005 → 0.018 ms.
+  - The depth buffer's collisions (for smoke and dust) and D-034's depth from above are still
+    to come.
+- **Next:** the depth buffer's collisions, sorting, frames blended by motion vectors, flipbooks
+  for dust and fire, the dust volume, and the village's chimneys and steps.
 - **Point 5's DLSS half, tried and left out (2026-10-18):** Streamline 2.14.16's DLSS reads none
   of the hints.
   - The reactive mask was tagged in turn as the bias-current-colour hint (type 29), the

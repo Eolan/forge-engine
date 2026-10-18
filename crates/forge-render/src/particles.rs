@@ -96,6 +96,13 @@ pub struct Effect {
     /// ([`crate::smoke_bake`], six-way lit); none, a procedural puff.
     #[serde(default)]
     pub texture: Option<String>,
+    /// It meets the scene (D-064's point 2, the TLAS for sparks and debris): the share of its
+    /// speed into a surface it keeps, bounced back (0 to 1). None: it passes through.
+    #[serde(default)]
+    pub bounce: Option<f32>,
+    /// It is drawn as a streak along its flight, as a shutter sees it.
+    #[serde(default)]
+    pub streak: bool,
 }
 
 /// Reads effects in the form of `data/particles.toml`, in the file's order.
@@ -114,10 +121,11 @@ pub fn parse(text: &str) -> std::result::Result<Vec<Effect>, String> {
             && effect.radius.iter().all(|r| *r > 0.0)
             && effect.drag >= 0.0
             && (0.0..=180.0).contains(&effect.cone)
-            && effect.texture.as_deref().is_none_or(|t| t == "smoke");
+            && effect.texture.as_deref().is_none_or(|t| t == "smoke")
+            && effect.bounce.is_none_or(|b| (0.0..=1.0).contains(&b));
         if !positive {
             return Err(format!(
-                "{name}: a rate, lives, radii and a drag of 0 or more, ranges in order, a cone of 0–180°, no texture but \"smoke\""
+                "{name}: a rate, lives, radii and a drag of 0 or more, ranges in order, a cone of 0–180°, no texture but \"smoke\", a bounce of 0–1"
             ));
         }
         effects.push(effect);
@@ -253,11 +261,17 @@ impl GpuEffect {
             wind: e.wind,
             curl: e.curl[0],
             curl_size: e.curl[1],
-            // The way it is drawn, and its flipbook in bits 8 on (1: the baked smoke).
+            // The way it is drawn, its flipbook in bits 8 to 15 (1: the baked smoke), its bounce
+            // in 16 to 23 with bit 24 set when it meets the scene, and bit 25 for a streak
+            // (`DRAW_COLLIDE`, `DRAW_STREAK` in `particles.slang`).
             draw: match e.draw {
                 DrawKind::Smoke => 0,
                 DrawKind::Glow => 1,
-            } | (u32::from(e.texture.is_some()) << 8),
+            } | (u32::from(e.texture.is_some()) << 8)
+                | e.bounce.map_or(0, |b| {
+                    (1 << 24) | (((b.clamp(0.0, 1.0) * 255.0).round() as u32) << 16)
+                })
+                | (u32::from(e.streak) << 25),
         }
     }
 }
@@ -822,9 +836,17 @@ mod tests {
     fn the_built_in_effects_parse() {
         let effects = effects();
         let names: Vec<&str> = effects.iter().map(|e| e.name.as_str()).collect();
-        assert_eq!(names, ["chimney-smoke", "footstep-dust", "embers"]);
+        assert_eq!(
+            names,
+            ["chimney-smoke", "footstep-dust", "embers", "sparks"]
+        );
         assert!(effects[1].burst);
         assert_eq!(effects[2].draw, DrawKind::Glow);
+        // The sparks meet the scene and streak: a glow (1), a bounce of 0.35 (89 of 255), both
+        // flags.
+        let sparks = GpuEffect::of(&effects[3]);
+        assert_eq!(sparks.draw, 1 | (89 << 16) | (1 << 24) | (1 << 25));
+        assert_eq!(GpuEffect::of(&effects[2]).draw, 1);
     }
 
     #[test]
