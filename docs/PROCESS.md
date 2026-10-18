@@ -496,6 +496,10 @@ reach the GPU, and in Tier 2, and put its lines in the report.
   robustness); the yard's frame repeats to the bit, serial and async (#207), and the mesh path
   matches the fallback to the pixel (#28). **Never loop runs that may lose its device:** one
   loss at a time, then look; repeated losses disabled both GPUs once.
+- **`FORGE_CACHE_DIR` and `FORGE_SETTINGS_DIR`** (#289) move the derived caches (shaders'
+  SPIR-V, meshes, world products) and the app's settings files out of the workspace. They are
+  for a tool outside the repository that builds on the engine's crates by path. The shaders'
+  sources and the assets are still read from the engine's tree. Unset, nothing changes.
 - **A lost device on AMD: Radeon GPU Detective** (in the Radeon Developer Tool Suite). Start
   `RadeonDeveloperPanelCLI -m crash -p <process> --rgd-enhanced --rgd-text-summary
   --rgd-expand-markers -o X.rgd`, wait for "initialized successfully", run the demo with

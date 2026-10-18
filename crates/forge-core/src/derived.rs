@@ -722,9 +722,14 @@ impl CacheKind {
     }
 }
 
-/// The directory of `kind` under [`ROOT`] in this workspace. The first call in a process moves
-/// the caches of before #213 there ([`move_old_caches`]).
+/// The directory of `kind` under [`ROOT`] in this workspace, or under `FORGE_CACHE_DIR` when it
+/// is set: a tool outside the repository that builds on the engine's crates keeps its derived
+/// data in its own tree (#289). The first call in a process moves the workspace's caches of
+/// before #213 under [`ROOT`] ([`move_old_caches`]).
 pub fn cache_dir(kind: CacheKind) -> PathBuf {
+    if let Some(root) = std::env::var_os("FORGE_CACHE_DIR").filter(|v| !v.is_empty()) {
+        return PathBuf::from(root).join(kind.name());
+    }
     static MOVED: std::sync::Once = std::sync::Once::new();
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

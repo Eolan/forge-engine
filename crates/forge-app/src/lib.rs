@@ -377,6 +377,15 @@ pub fn workspace_root_from(manifest_dir: &str) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+/// Where the app keeps its settings files (`display.txt`): `FORGE_SETTINGS_DIR` when it is set,
+/// for a tool outside the repository that builds on the engine's crates (#289), else
+/// `settings/` in the workspace at `root`.
+pub fn settings_dir(root: &std::path::Path) -> PathBuf {
+    std::env::var_os("FORGE_SETTINGS_DIR")
+        .filter(|v| !v.is_empty())
+        .map_or_else(|| root.join("settings"), PathBuf::from)
+}
+
 /// The OS's name of the window's monitor (Windows' `\\.\DISPLAYn`), for [`DisplayCaps`].
 fn monitor_name(window: &Window) -> Option<String> {
     #[cfg(windows)]
@@ -822,7 +831,7 @@ impl<D: Demo> State<D> {
         let settings_file = config
             .frame_limit
             .is_none()
-            .then(|| SettingsFile::new(root.join("settings/display.txt")));
+            .then(|| SettingsFile::new(settings_dir(&root).join("display.txt")));
         let mut output = DisplayOutput::new(swapchain.format(), caps);
         if let Some(file) = &settings_file {
             output.settings = file.load(&monitor);
