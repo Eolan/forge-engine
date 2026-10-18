@@ -838,6 +838,31 @@ mesh to test navigations inside the houses"):
   that lights it: green in a reveal, white in a house's body, black outside, red where it fell
   back to every probe. It costs 0.17–0.21 ms a frame (the room 3.67 → 3.85 ms, the hall 4.05 →
   4.26, the green 4.40 → 4.57, the landing 4.19 → 4.39), the city 0.04 (`docs/PROFILE.md`).
+- *Clear glass over the rooms* (D-065's part 4, #270: `module_panes`, `KIT_OPEN_GROUPS`,
+  `forge_render::Glass`).
+
+  ![A house's front at night: the lit room behind its window seen through the glass](images/village-glass.png)
+
+  *The way in at 22:00 (`--time-of-day 1.333 --view=75.2,1.7,-180.4,146.8,-5`): the room behind
+  the right window is the house's own, lit by its lamp and drawn through the pane, where a faked
+  room was drawn on the glass before.*
+
+  The houses whose insides are drawn show their rooms through their windows, from the street
+  and from inside:
+  - **Their windows take the kit's groups again** (`plan-kit-open-*`), with the glass row left
+    out of the visibility pass (`RenderLayer::drawn_after`). The resolve shades the room behind
+    it. The rays still meet the faked glass, so the probes light the rooms as before. Without
+    it in the rays' scene, the rooms went 2.7 EV darker (#280).
+  - **The panes are drawn after the resolve** (`forge_render::Glass`), copied from the modules'
+    glass: 1 116 triangles in the village.
+    - Each pane shows the room through what Fresnel lets pass, and reflects by its mirror ray:
+      the street from outside, the room from inside.
+    - Past the frame's lamps, a lit room's glow fades in on its panes from 30 to 60 m, at half
+      the faked rooms' light: the houses across the green stay lit at night.
+  - **Shimmer:** with a still camera under DLAA, frames 10 apart differ on 0.06 % of the pixels
+    by day (as without the glass) and on 0.040 % at night (0.038 % without).
+  - **Cost:** 0.05–0.16 ms in the map check's views (`docs/PROFILE.md`).
+  - `--no-glass` shows the rooms without their panes.
 - *Lamps* (D-065 steps 2 and 3, #270: `furnish::lamps`, `home_lamps`).
 
   ![A house's open street door at night: the hall lit by its lamp, a room's light on its window](images/village-lamps.png)

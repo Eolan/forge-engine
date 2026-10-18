@@ -183,6 +183,11 @@ pub trait Running: Send {
     fn lamps(&mut self, _time: f32) -> Vec<forge_render::lamps::Lamp> {
         Vec::new()
     }
+    /// Its clear glass over the rooms it builds (D-065's part 4), taken once after the build, in
+    /// the world frame (as `probe_regions`): panes its meshes leave out. None by default.
+    fn glass(&self) -> forge_render::GlassPanes {
+        forge_render::GlassPanes::default()
+    }
     /// Its particles' emitters and bursts at `time` (the splashes' clock, seconds), in the
     /// scene's frame (D-064): the effects by name through `particles`.
     fn particles(

@@ -4772,6 +4772,33 @@ again (`demos/physics-lab.md`).
         on rows of their own. Several sessions.
     - Recommended: (b) for the look; (a) only as a stopgap with its own history.
     - **The owner chose (b), the glass pass (2026-10-18).**
+    - **Built the same day** (`forge_render::Glass`, `shaders/glass.slang`):
+      - **The visibility pass leaves the glass out.** The houses whose insides are drawn take
+        the kit's groups again (`plan-kit-open-*`), with their glass row
+        `RenderLayer::drawn_after`. Its clusters go to the cut-outs' raster, which drops every
+        fragment of it, so the resolve shades the real room behind the window.
+      - **The rays still meet the faked glass** (`interior`, glazed). Taking it out of the rays'
+        scene as well darkened a bedroom by 2.7 EV at a fixed exposure, because D-068's probes
+        were tuned with the glass there.
+        - Letting the probes' rays pass the glass from every side brought back 1.4 EV of it. The
+          rest is still to be found (#280).
+        - "The light through windows" (below) has to look at this again.
+      - **The panes are drawn after the sky's compose and the water,** in two passes. They are
+        copied from the modules' glass: 1 116 triangles in the village.
+        - `glass/requests`: the nearest pane at each pixel asks for its mirror ray, which is
+          traced as the water's are (`trace_requested`, `glass/reflections`). From outside it
+          shows the street in the windows; from inside, the room.
+        - `glass/draw`: every pane is blended over what is behind it, premultiplied. The room
+          shows through 92 % of what Fresnel lets pass (Schlick, F0 0.04). The sky's reflection
+          and the haze are added.
+        - The glass writes no depth, so TAA reprojects the room by its own depth.
+      - **The far rooms' glow.** Beyond the frame's lamps (the 64 nearest), a lit room's glow
+        fades in on its panes from 30 to 60 m, at half the faked rooms' light, so the far houses
+        stay lit at night.
+      - **Cost** in the map check's views: `glass/requests` 0.011–0.018 ms, `glass/draw`
+        0.004–0.006 ms, `glass/reflections` 0.035–0.141 ms (the street view with the most
+        windows).
+      - `--no-glass` shows the rooms without their panes.
   - **RTXDI fetched (the owner's go, 2026-10-18):**
     - NVIDIA's `RTXDI-Library` 3.1 (commit f12037f, 2026-09-03) is in `rtxdi-sdk/`, ignored by git
       as `nrd-sdk/` is. It holds 68 files: HLSL includes for ReSTIR DI, GI and PT, ReGIR and the

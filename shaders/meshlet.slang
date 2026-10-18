@@ -149,6 +149,7 @@ static const uint MATERIAL_FLAG_EMISSIVE_ABSOLUTE = 512; // `emissive` in cd/m²
 static const uint MATERIAL_FLAG_FOLIAGE = 1024; // with MASKED and DOUBLE_SIDED: leaf cards, their normals never turned, a mix of the two colours per instance (D-013)
 static const uint MATERIAL_FLAG_GLAZED = 2048;  // a window's glass a probe's ray from its room passes (D-068)
 static const uint MATERIAL_FLAG_LAMP = 4096;    // a lamp's glowing part: the probes' rays take none of its glow (D-065)
+static const uint MATERIAL_FLAG_DRAWN_AFTER = 8192; // left out of the visibility pass, drawn after the resolve; the rays meet it (D-065's glass)
 static const uint CUTOUT_GROUND_WINDOW = 1u << 31; // `cluster_cutouts`: windowed ground reaching into the ground window (#197)
 static const uint MESH_WINDOWED_GROUND = 1;     // Mesh::flags: its fragments in the frame's ground window go (#197)
 static const uint MESH_SCENE_SHADED = 2;        // Mesh::flags: a ground window's mesh, shaded where it stands in the scene (#197)
@@ -621,14 +622,15 @@ uint triangle_section(Meshlet m, uint t)
     return t < ((m.section >> 16) & 0xFFu) ? (m.section & 0xFFu) : ((m.section >> 8) & 0xFFu);
 }
 
-// What of MATERIAL_FLAG_MASKED and MATERIAL_FLAG_DOUBLE_SIDED the rows of cluster `m` of
-// instance `inst` set (#171): its two sections' (the second only when some triangle takes it).
-// Such a cluster takes the cut-outs' raster, never the software one, and is not cone-culled.
+// What of MATERIAL_FLAG_MASKED, MATERIAL_FLAG_DOUBLE_SIDED and MATERIAL_FLAG_DRAWN_AFTER the rows
+// of cluster `m` of instance `inst` set (#171): its two sections' (the second only when some
+// triangle takes it). Such a cluster takes the cut-outs' raster, never the software one, and is
+// not cone-culled.
 uint cluster_cutouts(Frame* f, Instance inst, Meshlet m)
 {
     if ((f[0].flags & FLAG_CUTOUTS) == 0)
         return 0u;
-    const uint cut = MATERIAL_FLAG_MASKED | MATERIAL_FLAG_DOUBLE_SIDED;
+    const uint cut = MATERIAL_FLAG_MASKED | MATERIAL_FLAG_DOUBLE_SIDED | MATERIAL_FLAG_DRAWN_AFTER;
     uint flags = f[0].materials[inst.material + (m.section & 0xFFu)].flags & cut;
     if (((m.section >> 16) & 0xFFu) < m.triangle_count)
         flags |= f[0].materials[inst.material + ((m.section >> 8) & 0xFFu)].flags & cut;
@@ -2402,6 +2404,9 @@ bool cutout_kept(Frame* f, uint id, float2 uv, bool front, float2 ground, float2
     if (in_ground_window(f, inst.mesh, ground))
         return false;
     Material mat = f[0].materials[inst.material + triangle_section(m, id & ((1u << VISIBILITY_TRIANGLE_BITS) - 1u))];
+    // Drawn after the resolve, over what this pass finds behind it (D-065's glass).
+    if ((mat.flags & MATERIAL_FLAG_DRAWN_AFTER) != 0)
+        return false;
     if (!front && (mat.flags & MATERIAL_FLAG_DOUBLE_SIDED) == 0)
         return false;
     if ((mat.flags & MATERIAL_FLAG_MASKED) == 0)

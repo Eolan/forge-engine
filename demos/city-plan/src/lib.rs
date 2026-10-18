@@ -104,6 +104,31 @@ const KIT_GROUPS: [&str; 8] = [
     "plan-kit-6",
     "plan-kit-7",
 ];
+/// [`KIT_GROUPS`] for the houses whose insides are drawn ([`OPEN_GROUP`] onwards): the same rows,
+/// their glass drawn after the resolve (D-065's part 4).
+const KIT_OPEN_GROUPS: [&str; 8] = [
+    "plan-kit-open-0",
+    "plan-kit-open-1",
+    "plan-kit-open-2",
+    "plan-kit-open-3",
+    "plan-kit-open-4",
+    "plan-kit-open-5",
+    "plan-kit-open-6",
+    "plan-kit-open-7",
+];
+/// Each lit building's light, by the group's colour: its luminance (cd/m²) and colour. People
+/// choose dim, diffuse light of different colours (the owner): a dim warm lamp, a brighter warm
+/// room, a neutral one, a television's blue. Until the residents light their own windows by
+/// what they do (D-060's step 3).
+const LIT: [(f32, [f32; 3]); 4] = [
+    (3.0, [1.0, 0.68, 0.40]),
+    (8.0, [1.0, 0.80, 0.55]),
+    (6.0, [1.0, 0.92, 0.80]),
+    (2.5, [0.70, 0.82, 1.0]),
+];
+/// The share of a lit room's light ([`LIT`]) its window's clear glass glows with past the frame's
+/// lamps (D-065's part 4, `forge_render::GlassPanes::glow`): about what the faked rooms showed.
+const GLASS_GLOW: f32 = 0.5;
 
 /// One tile's two meshes, positions relative to its centre.
 struct Tile {
@@ -356,6 +381,9 @@ pub struct PlanScenario {
     regions: Vec<forge_render::RegionVolume>,
     /// The houses' lamps that are on (D-065, [`home_lamps`]), in the world frame.
     home_lamps: Vec<forge_render::lamps::Lamp>,
+    /// The clear glass of the houses whose insides are drawn (D-065's part 4), in the world
+    /// frame: left out of their windows' modules.
+    glass: forge_render::GlassPanes,
 }
 
 /// Buildings drawn from a style set's grammar and kit (D-039's modules) within `radius` of
@@ -1282,8 +1310,8 @@ impl PlanScenario {
             .collect();
         let mut seats = Vec::new();
         let far_lit = kit.as_ref().and_then(|k| k.homes_share);
-        let (mut kit_meshes, mut kit_instances, kit_report) =
-            kit.map_or((Vec::new(), Vec::new(), None), |k| {
+        let (mut kit_meshes, mut kit_instances, kit_report, glass) =
+            kit.map_or((Vec::new(), Vec::new(), None, Default::default()), |k| {
                 let instanced: usize = k
                     .instances
                     .iter()
@@ -1307,8 +1335,12 @@ impl PlanScenario {
                     Some(lights) => format!("{report}; {lights}"),
                     None => report,
                 };
+                let report = format!(
+                    "{report}; the clear glass over their insides: {} triangles",
+                    k.glass.triangle_count()
+                );
                 seats = k.seats;
-                (k.meshes, k.instances, Some(report))
+                (k.meshes, k.instances, Some(report), k.glass)
             });
         // The landmarks with a model on their squares, inside the squares' tree rows, along their
         // longest side: the terraced hall and the crane facing the nearest water with their low
@@ -1862,6 +1894,7 @@ impl PlanScenario {
         Self {
             regions,
             home_lamps,
+            glass,
             tiles: tiles.tiles,
             trees,
             flora,
@@ -2029,6 +2062,10 @@ const SIGN_GROUP: u8 = 10;
 /// The houses' lamps' groups (D-065): their globes lit, and unlit.
 const LAMP_GROUP: u8 = 11;
 const LAMP_OFF_GROUP: u8 = 12;
+/// The kit's groups again ([`KIT_OPEN_GROUPS`]) for the houses whose insides are drawn: their
+/// windows' glass left out of the visibility pass, drawn over the rooms after the resolve
+/// (D-065's part 4).
+const OPEN_GROUP: u8 = 13;
 /// The kit's key for a terrace's mesh (no grammar symbol is this high).
 const TERRACE: u16 = u16::MAX;
 /// How far each of a line's two tracks lies from its centreline, metres.
@@ -2537,6 +2574,9 @@ struct Kit {
     homes_share: Option<f64>,
     /// Who lit the homes' windows, for the log.
     lights: Option<String>,
+    /// The clear glass of the houses whose insides are drawn, left out of their modules (D-065's
+    /// part 4), in the world frame.
+    glass: forge_render::GlassPanes,
 }
 
 /// Moves a module's railings' cards (its [`modules::GRILLE`] triangles) out into a mesh of their
@@ -2565,6 +2605,23 @@ fn take_cards(mesh: &mut TriMesh) -> TriMesh {
     mesh.sections = sections;
     mesh.uvs.clear();
     cards
+}
+
+/// A module's clear glass (its [`modules::GLASS`] triangles) as a mesh of its own, for the houses
+/// whose insides are drawn (D-065's part 4): drawn over the room behind it after the resolve
+/// (`forge_render::Glass`). The module keeps them: their row leaves them out of the visibility
+/// pass ([`OPEN_GROUP`]), and the rays still meet them.
+fn module_panes(mesh: &TriMesh) -> TriMesh {
+    let mut panes = TriMesh::default();
+    for t in (0..mesh.triangle_count()).filter(|&t| mesh.section(t) == modules::GLASS) {
+        let base = panes.positions.len() as u32;
+        for &i in &mesh.indices[t * 3..t * 3 + 3] {
+            panes.positions.push(mesh.positions[i as usize]);
+            panes.normals.push(mesh.normals[i as usize]);
+        }
+        panes.indices.extend([base, base + 1, base + 2]);
+    }
+    panes
 }
 
 /// A 64-bit mix (SplitMix64's finaliser).
@@ -2614,6 +2671,10 @@ fn kit(
     let mut meshes = Vec::new();
     // Each instanced module's railings' cards, by its mesh.
     let mut cards: std::collections::HashMap<u32, TriMesh> = std::collections::HashMap::new();
+    // Each instanced module's clear glass, by its mesh, for the houses whose insides are drawn
+    // (D-065's part 4): drawn over their rooms, not in the module.
+    let mut panes_of: std::collections::HashMap<u32, TriMesh> = std::collections::HashMap::new();
+    let mut glass = forge_render::GlassPanes::default();
     let mut instances = Vec::new();
     let mut seats = Vec::new();
     let (mut run, mut longest_run, mut last) = (0, 0, None);
@@ -2661,10 +2722,12 @@ fn kit(
                         continue;
                     };
                     let railing = take_cards(&mut mesh);
+                    let panes = module_panes(&mesh);
                     meshes.push(mesh);
                     let id = (meshes.len() - 1) as u32;
                     keys.insert(key, id);
                     cards.insert(id, railing);
+                    panes_of.insert(id, panes);
                     id
                 }
             };
@@ -2712,7 +2775,35 @@ fn kit(
             }
             let transform =
                 Mat4::from_cols(x.extend(0.0), y.extend(0.0), z.extend(0.0), pos.extend(1.0));
-            instances.push((id, transform, colour * 2 + u8::from(lit)));
+            // A house whose insides are drawn: its windows' glass drawn over its rooms after the
+            // resolve (D-065's part 4), not in the visibility pass, and the panes laid out for it.
+            let clear = entered[piece.mass as usize];
+            let group = colour * 2 + u8::from(lit);
+            instances.push((
+                id,
+                transform,
+                if clear { OPEN_GROUP + group } else { group },
+            ));
+            // Its clear glass, glowing as its lit room past the frame's lamps.
+            if let Some(p) = panes_of.get(&id).filter(|p| clear && !p.indices.is_empty()) {
+                let glow = if lit {
+                    let (l, c) = LIT[usize::from(colour)];
+                    c.map(|v| v * l * GLASS_GLOW)
+                } else {
+                    [0.0; 3]
+                };
+                for &i in &p.indices {
+                    let (q, n) = (
+                        Vec3::from(p.positions[i as usize]),
+                        Vec3::from(p.normals[i as usize]),
+                    );
+                    glass.positions.push(transform.transform_point3(q));
+                    glass
+                        .normals
+                        .push(transform.transform_vector3(n).normalize_or(z));
+                    glass.glow.push(glow);
+                }
+            }
             // Its railings' cards into its tile's railings.
             if let Some(c) = cards.get(&id).filter(|c| !c.indices.is_empty()) {
                 let tile = tiles.at(m.footprint[0]);
@@ -2816,6 +2907,7 @@ fn kit(
     Kit {
         meshes,
         instances,
+        glass,
         faces: dressed.len(),
         terminals: dressed.len(),
         longest_run,
@@ -5685,16 +5777,6 @@ impl Scenario for PlanScenario {
             ([0.22, 0.38, 0.52], [0.14, 0.19, 0.32], [0.20, 0.20, 0.21]),
             ([0.76, 0.73, 0.66], [0.78, 0.70, 0.55], [0.20, 0.20, 0.21]),
         ];
-        // Each lit building's light: its luminance (cd/m²) and colour. People choose dim, diffuse
-        // light of different colours (the owner): a dim warm lamp, a brighter warm room, a
-        // neutral one, a television's blue. Until the residents light their own windows by
-        // what they do (D-060's step 3).
-        const LIT: [(f32, [f32; 3]); 4] = [
-            (3.0, [1.0, 0.68, 0.40]),
-            (8.0, [1.0, 0.80, 0.55]),
-            (6.0, [1.0, 0.92, 0.80]),
-            (2.5, [0.70, 0.82, 1.0]),
-        ];
         let glass = |light: Option<(f32, [f32; 3])>| RenderLayer {
             emissive: light.map_or([0.0; 3], |(l, c)| c.map(|v| v * l)),
             emissive_absolute: true,
@@ -5707,62 +5789,77 @@ impl Scenario for PlanScenario {
         };
         for (k, &group) in KIT_GROUPS.iter().enumerate() {
             let (shutter, fabric, frame) = palettes[k / 2];
-            materials.add_rows(
-                group,
-                vec![
-                    (format!("{group} render"), render([0.94, 0.88, 0.76])),
-                    (format!("{group} stone"), stone),
-                    (format!("{group} frame"), colour(frame, 40.0, 0.1)),
-                    // A room behind each window (D-060's step 3): the windows read dark.
-                    (
-                        format!("{group} glass"),
-                        RenderLayer {
-                            interior: true,
-                            ..glass((k % 2 == 1).then_some(LIT[k / 2]))
-                        },
-                    ),
-                    (format!("{group} shutter"), colour(shutter, 14.0, 0.05)),
-                    (
-                        format!("{group} iron"),
-                        colour([0.05, 0.05, 0.05], 30.0, 0.15),
-                    ),
-                    (format!("{group} awning"), colour(fabric, 6.0, 0.02)),
-                    (
-                        format!("{group} door"),
-                        colour([0.28, 0.17, 0.10], 30.0, 0.1),
-                    ),
-                    (format!("{group} party"), render([0.78, 0.72, 0.64])),
-                    // The railings' cards are drawn by the tiles' own row (`take_cards`).
-                    (
-                        format!("{group} grille"),
-                        colour([0.05, 0.05, 0.05], 30.0, 0.15),
-                    ),
-                    // A shop behind the shopfronts' glass: no curtains, nor a living room
-                    // with a sofa as the homes had.
-                    (
-                        format!("{group} shop glass"),
-                        RenderLayer {
-                            interior: true,
-                            shop: true,
-                            ..glass((k % 2 == 1).then_some(LIT[k / 2]))
-                        },
-                    ),
-                    // A bathroom's obscured glass (`modules::FROSTED`): milky and rough, no room
-                    // seen behind it, glowing softly when the room is lit.
-                    (
-                        format!("{group} frosted glass"),
-                        RenderLayer {
-                            emissive: (k % 2 == 1)
-                                .then_some(LIT[k / 2])
-                                .map_or([0.0; 3], |(l, c)| c.map(|v| v * l * 0.6)),
-                            emissive_absolute: true,
-                            // The daylight comes in through it (D-068).
-                            glazed: true,
-                            ..colour([0.80, 0.82, 0.82], 20.0, 0.04)
-                        },
-                    ),
-                ],
-            );
+            // By the modules' sections (`modules::PLASTER` to `modules::FROSTED`).
+            let rows: Vec<(String, RenderLayer)> = vec![
+                (format!("{group} render"), render([0.94, 0.88, 0.76])),
+                (format!("{group} stone"), stone),
+                (format!("{group} frame"), colour(frame, 40.0, 0.1)),
+                // A room behind each window (D-060's step 3): the windows read dark.
+                (
+                    format!("{group} glass"),
+                    RenderLayer {
+                        interior: true,
+                        ..glass((k % 2 == 1).then_some(LIT[k / 2]))
+                    },
+                ),
+                (format!("{group} shutter"), colour(shutter, 14.0, 0.05)),
+                (
+                    format!("{group} iron"),
+                    colour([0.05, 0.05, 0.05], 30.0, 0.15),
+                ),
+                (format!("{group} awning"), colour(fabric, 6.0, 0.02)),
+                (
+                    format!("{group} door"),
+                    colour([0.28, 0.17, 0.10], 30.0, 0.1),
+                ),
+                (format!("{group} party"), render([0.78, 0.72, 0.64])),
+                // The railings' cards are drawn by the tiles' own row (`take_cards`).
+                (
+                    format!("{group} grille"),
+                    colour([0.05, 0.05, 0.05], 30.0, 0.15),
+                ),
+                // A shop behind the shopfronts' glass: no curtains, nor a living room
+                // with a sofa as the homes had.
+                (
+                    format!("{group} shop glass"),
+                    RenderLayer {
+                        interior: true,
+                        shop: true,
+                        ..glass((k % 2 == 1).then_some(LIT[k / 2]))
+                    },
+                ),
+                // A bathroom's obscured glass (`modules::FROSTED`): milky and rough, no room
+                // seen behind it, glowing softly when the room is lit.
+                (
+                    format!("{group} frosted glass"),
+                    RenderLayer {
+                        emissive: (k % 2 == 1)
+                            .then_some(LIT[k / 2])
+                            .map_or([0.0; 3], |(l, c)| c.map(|v| v * l * 0.6)),
+                        emissive_absolute: true,
+                        // The daylight comes in through it (D-068).
+                        glazed: true,
+                        ..colour([0.80, 0.82, 0.82], 20.0, 0.04)
+                    },
+                ),
+            ];
+            // The same for the houses whose insides are drawn: their clear glass drawn over the
+            // rooms after the resolve (D-065's part 4), the rays meeting the faked room as before.
+            let open = KIT_OPEN_GROUPS[k];
+            let open_rows = rows
+                .iter()
+                .enumerate()
+                .map(|(s, (name, layer))| {
+                    let glass = s == usize::from(modules::GLASS);
+                    let layer = RenderLayer {
+                        drawn_after: glass,
+                        ..*layer
+                    };
+                    (name.replacen(group, open, 1), layer)
+                })
+                .collect();
+            materials.add_rows(group, rows);
+            materials.add_rows(open, open_rows);
         }
         // The market halls' group: pale glazing that catches the sky, iron painted dark green
         // (as Baltard's halls were), striped canvas over the stalls.
@@ -5898,6 +5995,9 @@ impl Scenario for PlanScenario {
             );
             kit_rows.push(materials.of(group));
         }
+        // The open groups, from OPEN_GROUP on.
+        debug_assert_eq!(kit_rows.len(), usize::from(OPEN_GROUP));
+        kit_rows.extend(KIT_OPEN_GROUPS.iter().map(|g| materials.of(g)));
         // The trams' liveries: white bodies, dark glass, the line's colour as the stripe.
         let linear = |c: u8| (f32::from(c) / 255.0).powf(2.2);
         for (k, &group) in TRAM_GROUPS.iter().enumerate() {
@@ -6376,6 +6476,7 @@ impl Scenario for PlanScenario {
                 origin: scene_origin(args).to_f64().as_vec3(),
                 regions: std::mem::take(&mut self.regions),
                 home_lamps: std::mem::take(&mut self.home_lamps),
+                glass: std::mem::take(&mut self.glass),
             }),
         ))
     }
@@ -6413,6 +6514,8 @@ struct PlanRunning {
     regions: Vec<forge_render::RegionVolume>,
     /// The houses' lamps that are on (D-065), in the world frame.
     home_lamps: Vec<forge_render::lamps::Lamp>,
+    /// The houses' clear glass (D-065's part 4), in the world frame, handed over once.
+    glass: forge_render::GlassPanes,
 }
 
 /// A ride aboard a tram ([`PlanRunning::toggle_ride`]).
@@ -6504,6 +6607,10 @@ impl Running for PlanRunning {
 
     fn lamps(&mut self, _time: f32) -> Vec<forge_render::lamps::Lamp> {
         self.home_lamps.clone()
+    }
+
+    fn glass(&self) -> forge_render::GlassPanes {
+        self.glass.clone()
     }
 
     fn key_pressed(&mut self, code: KeyCode, camera: &FlyCamera) -> bool {

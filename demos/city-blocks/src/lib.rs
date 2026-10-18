@@ -460,6 +460,10 @@ pub struct Args {
     /// No particles (D-064): the scene's smoke, dust and embers.
     #[arg(long)]
     no_particles: bool,
+    /// No clear glass over the rooms (D-065's part 4): the windows whose rooms are built show
+    /// those rooms without a pane, its reflection or a far room's glow.
+    #[arg(long)]
+    no_glass: bool,
     /// No lamps (D-065): the scene's lamps light nothing, their globes still glow (the A/B for
     /// their light).
     #[arg(long)]
@@ -739,6 +743,8 @@ struct Gallery {
     particles: Option<forge_render::Particles>,
     particle_peak: u32,
     particle_born: u64,
+    /// The scene's clear glass over its built rooms (D-065's part 4), when it has any.
+    glass: Option<forge_render::Glass>,
     /// `--day`: seconds into the day, the metered scene and the automatic exposure (issue #57).
     day_time: f32,
     /// The night (D-046, issue #164) with `--day` and `--time-of-day`: where the Moon and the
@@ -1413,6 +1419,24 @@ impl Gallery {
                 )
             })
             .transpose()?;
+        // The scene's clear glass (D-065's part 4), from the world frame to the scene's.
+        let mut glass = None;
+        if let Some(running) = running.as_ref().filter(|_| !args.no_glass) {
+            let mut panes = running.glass();
+            if !panes.is_empty() {
+                let origin = scene.origin();
+                for p in &mut panes.positions {
+                    *p = forge_render::CellPos::from_f64(p.as_dvec3()).relative_to(origin);
+                }
+                let made = forge_render::Glass::new(&ctx.device, &ctx.shaders, &panes)?;
+                tracing::info!(
+                    triangles = made.triangle_count(),
+                    kib = made.bytes() / 1024,
+                    "clear glass"
+                );
+                glass = Some(made);
+            }
+        }
         let mut gallery = Self {
             barrels,
             walker,
@@ -1430,6 +1454,7 @@ impl Gallery {
             particles,
             particle_peak: 0,
             particle_born: 0,
+            glass,
             tonemap: args.tonemap,
             args,
             renderer,
@@ -2587,6 +2612,48 @@ impl Demo for Gallery {
                         // there (the clear table under the screen's clouds), which this
                         // subtracts; the clouded table's brighter sky took more than was there.
                         sky: (self.sky_light && !in_space).then_some(sky.light),
+                        occlusion: None,
+                        probes,
+                        wet_ground: None,
+                        movers: targets.movers,
+                        clouds: None,
+                        sun_shadow: None,
+                        reflection_history: None,
+                        lamp_share: None,
+                    },
+                );
+            }
+        }
+        // The clear glass over the built rooms (D-065's part 4), over the water seen through a
+        // window: its mirror rays traced as the water's (F, Y).
+        if let Some(glass) = self.glass.as_ref().filter(|_| self.sky_light && !in_space) {
+            let projection = taa_frame.jittered_projection;
+            let requests = glass.draw(
+                &mut frame.graph,
+                frame.slot,
+                &sky,
+                forge_render::GlassParams {
+                    view_proj: projection * self.camera.view_rotation(),
+                    camera: camera_in_scene,
+                    sky_scale: self.renderer.sun_illuminance * exposure,
+                    exposure,
+                },
+                taa_frame.color,
+                targets.depth,
+                extent,
+            );
+            if self.flags.has(CullFlags::SKY_REFLECTIONS)
+                && self.flags.has(CullFlags::RAY_REFLECTIONS)
+            {
+                self.renderer.trace_requested(
+                    &mut frame.graph,
+                    "glass/reflections",
+                    frame.slot,
+                    requests,
+                    taa_frame.color,
+                    extent,
+                    AmbientLight {
+                        sky: Some(sky.light),
                         occlusion: None,
                         probes,
                         wet_ground: None,

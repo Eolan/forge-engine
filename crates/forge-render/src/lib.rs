@@ -19,6 +19,7 @@ pub mod display;
 pub mod dust;
 pub mod exposure;
 pub mod ffx_shadows;
+pub mod glass;
 pub mod gtao;
 pub mod lamps;
 pub mod liquid;
@@ -61,6 +62,7 @@ pub use display::{Display, HdrOutput, OutputEncoding, ToneTables, Tonemap};
 pub use dust::{DustParams, DustVolume};
 pub use exposure::{AutoExposure, LuminanceHistogram, LuminanceMeter, exposure_from_ev100};
 pub use forge_gpu::DlssMode;
+pub use glass::{Glass, GlassLook, GlassPanes, GlassParams};
 pub use gtao::{Gtao, GtaoParams};
 pub use liquid::{
     FRESH_FOAM_LIFE, LIQUID_MAX_OBSTACLES, LIQUID_MAX_SUBSTEPS, Liquid, LiquidDrawParams,

@@ -72,9 +72,10 @@ pub struct GpuMaterial {
 const _: () = assert!(std::mem::size_of::<GpuMaterial>() == 176);
 
 impl GpuMaterial {
-    /// Whether its clusters take the cut-outs' raster (#171): cut out or double-sided.
+    /// Whether its clusters take the cut-outs' raster (#171): cut out or double-sided, or drawn
+    /// after the resolve (its fragments all go there).
     pub fn cut_out(&self) -> bool {
-        self.flags & (MATERIAL_MASKED | MATERIAL_DOUBLE_SIDED) != 0
+        self.flags & (MATERIAL_MASKED | MATERIAL_DOUBLE_SIDED | MATERIAL_DRAWN_AFTER) != 0
     }
 
     /// Whether it is jelly, which the sun's shadow rays see through (#180, D-051).
@@ -135,6 +136,11 @@ pub const MATERIAL_GLAZED: u32 = 2048;
 /// [`GpuMaterial`] flag: a lamp's glowing part ([`forge_core::material::RenderLayer::lamp`],
 /// D-065): the probes' rays take none of its glow.
 pub const MATERIAL_LAMP: u32 = 4096;
+
+/// [`GpuMaterial`] flag: left out of the visibility pass, drawn after the resolve
+/// ([`forge_core::material::RenderLayer::drawn_after`], D-065's part 4): its clusters take the
+/// cut-outs' raster, which drops every fragment of it.
+pub const MATERIAL_DRAWN_AFTER: u32 = 8192;
 
 /// The textures a world's materials sample, uploaded with their mips and visible to every
 /// shader through the bindless set. Released when dropped.
@@ -494,6 +500,11 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
                         0
                     }
                     | if r.lamp { MATERIAL_LAMP } else { 0 }
+                    | if r.drawn_after {
+                        MATERIAL_DRAWN_AFTER
+                    } else {
+                        0
+                    }
                     | if r.grating.is_some() {
                         MATERIAL_GRATING | MATERIAL_MASKED | MATERIAL_DOUBLE_SIDED
                     } else {

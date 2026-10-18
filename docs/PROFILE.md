@@ -1551,6 +1551,12 @@ something stands out). Two things to watch:
       measurable;
     - the street at 21:00 with the probes (#254's fix, the lamps lighting through them): 2.21 ms,
       as by day.
+  - *2026-10-18, the clear glass over the houses' rooms (D-065's part 4):* the map check's views
+    at 15:00 (one run each):
+    - `glass/requests` takes 0.011–0.018 ms and `glass/draw` 0.004–0.006 ms.
+    - `glass/reflections` takes 0.035–0.141 ms. The most is in the street view of a house's
+      front, from its windows' mirror rays. It is a full-screen dispatch whose other pixels
+      return at once.
 
 ## Loading `city-plan`: the village and the city (#274, 2026-10-16)
 

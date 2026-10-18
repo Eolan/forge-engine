@@ -214,6 +214,11 @@ pub struct RenderLayer {
     /// (`forge_render::lamps`), so a probe's ray that meets it takes none of its glow, which
     /// would count the light twice and, met by one ray in hundreds, flicker.
     pub lamp: bool,
+    /// Left out of the visibility pass, drawn after the resolve by a pass of its own: the clear
+    /// glass over a room whose insides are built (D-065's part 4, `forge_render::Glass`), which
+    /// shows the room behind it. The rays still meet the row as it is (a window's `interior`
+    /// glass to the probes, as D-068's rooms were tuned).
+    pub drawn_after: bool,
     /// Standard: a grating of upright bars drawn on one card, its bars this share of their
     /// spacing wide and as deep (a railing's square bars): the mesh's `u` counts the bars, one a
     /// unit, the first at 1. Drawn double-sided as a cut-out: the share of each pixel the bars
@@ -325,6 +330,7 @@ impl Default for RenderLayer {
             shop: false,
             glazed: false,
             lamp: false,
+            drawn_after: false,
             grating: None,
             reflectance: 0.04,
             bubbles: 0.0,
