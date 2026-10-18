@@ -130,7 +130,9 @@ exposure (EV100, target, compensation, curve) the last.
   passes 0.31 ms against `temporal/DLSS`'s 0.63 ms. They are `temporal/FSR accumulate` 0.131,
   `shading pyramid` 0.045, `reactivity` 0.041, `luma instability` 0.029, `inputs` 0.025,
   `clear` 0.018, `luma pyramid` 0.011 and `shading change` 0.006. In the ballad, the planet,
-  the lab and the island they total 0.31–0.35 ms.
+  the lab and the island they total 0.31–0.35 ms. On this machine's AMD iGPU (RDNA 2), where
+  FSR is the default, the ballad's eight passes take 18.4 ms of a 128 ms frame: `accumulate`
+  8.3, `shading pyramid` 3.4, `reactivity` 3.0 and `inputs` 2.0.
 - TAA's history through Lanczos-3 (D-045), the same room: `temporal/TAA resolve` 0.047 →
   0.077 ms, 36 texel loads in place of 5 bilinear fetches.
 - TAA's motion vectors and resolve as compute passes (#161, so the serial frame repeats), the

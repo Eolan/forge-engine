@@ -1055,7 +1055,7 @@ impl Gallery {
             )?;
             if dlss.is_none() && args.dlaa {
                 tracing::warn!(
-                    "DLAA is not available (it needs --features dlss, the Streamline SDK in streamline-sdk/ and an RTX GPU): TAA instead"
+                    "DLAA is not available (it needs --features dlss, the Streamline SDK in streamline-sdk/ and an RTX GPU): FSR instead"
                 );
             }
             dlss.map(|dlss| -> Result<_> {
@@ -1067,8 +1067,11 @@ impl Gallery {
         } else {
             None
         };
-        // FSR 3.1 in place of TAA (D-070) when the run asks for it (`--set r.aa=fsr`).
-        let fsr = if args.settings.asked_aa() == Some("fsr") && !args.no_taa {
+        // FSR 3.1 in place of TAA (D-070): where the run asks for it (`--set r.aa=fsr`), and in
+        // DLAA's place where the device has no DLSS.
+        let fsr = if args.settings.asked_aa() == Some("fsr") && !args.no_taa
+            || wants_dlaa(&args) && dlaa.is_none()
+        {
             let fsr = forge_render::FsrUpscaler::new(
                 &ctx.device,
                 &ctx.shaders,

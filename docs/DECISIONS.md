@@ -5565,9 +5565,19 @@ sharpening, and the lamp filter's flicker under TAA. The last two run-to-run fla
 - **The captures:** `ast-fsr600`, `city60-fsr` (a sentinel) and `lab-drop90-fsr` on both paths,
   plus a validation run of the city under FSR.
 
+**FSR where DLSS is not (2026-10-18):**
+- FSR is the default anti-aliasing of the city's galleries, the planet and the ballad wherever
+  DLSS does not run: an AMD or Intel GPU, or a build without Streamline. On NVIDIA nothing
+  changes.
+- `r.aa dlaa` at the console on such a machine shows FSR.
+- **The ballad on this machine's AMD iGPU** (RDNA 2, frame 600, `--fixed-step`):
+  - FSR came on by itself, with no error or device loss in 600 frames.
+  - It is 0.27 % of pixels and ꟻLIP mean 0.0057 from the 5070 Ti's FSR image.
+  - FSR's passes take 18.4 ms of the iGPU's 128 ms frame, the accumulation 8.3 ms of them.
+
 **Next:**
-- FSR as the anti-aliasing where DLSS is not (the default off NVIDIA), then TAA's resolve and
-  sharpening removed. The jitter, the motion vectors, the reactive mask and the exposure stay.
+- TAA's resolve and sharpening removed. The jitter, the motion vectors, the reactive mask and the
+  exposure stay.
 - FSR's upscaling modes (`FsrMode::Quality` and the others, for the asteroids' `--upscaler`).
 - RCAS after FSR: `FsrUpscaler::sharpness`, off for now as DLAA's image is.
 

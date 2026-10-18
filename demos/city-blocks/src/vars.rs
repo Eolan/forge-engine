@@ -43,7 +43,13 @@ impl Gallery {
     /// Registers the gallery's settings, from the state its flags gave it.
     pub(crate) fn register_vars(&mut self, s: &mut Settings) {
         let dlaa = self.dlaa.is_some();
-        let aa_default = if dlaa { AA_DLAA } else { AA_TAA };
+        let aa_default = if dlaa {
+            AA_DLAA
+        } else if self.fsr.is_some() {
+            AA_FSR
+        } else {
+            AA_TAA
+        };
         let aa_now = if !self.taa.enabled {
             AA_OFF
         } else if self.fsr_on {
@@ -224,22 +230,26 @@ impl Gallery {
             || s.changed_since(v.sharpen_stops, seen)
         {
             let aa = s.get(v.aa);
-            self.dlaa_on = matches!(aa, AA_DLAA | AA_DLSS) && self.dlaa.is_some();
-            self.fsr_on = aa == AA_FSR && self.fsr.is_some();
-            if let Some((fsr, _)) = self.fsr.as_mut().filter(|_| aa == AA_FSR) {
+            let dlaa_asked = matches!(aa, AA_DLAA | AA_DLSS);
+            self.dlaa_on = dlaa_asked && self.dlaa.is_some();
+            // FSR where it is asked for, and in DLAA's place where the device has no DLSS (D-070).
+            let fsr_on = (aa == AA_FSR || dlaa_asked && self.dlaa.is_none()) && self.fsr.is_some();
+            self.fsr_on = fsr_on;
+            if let Some((fsr, _)) = self.fsr.as_mut().filter(|_| fsr_on) {
                 fsr.reset_history();
             }
             if aa == AA_FSR && self.fsr.is_none() {
                 tracing::info!(
-                    "r.aa fsr: FSR is made when a run starts with --set r.aa=fsr; TAA instead"
+                    "r.aa fsr: FSR is made when a run starts with it (--set r.aa=fsr, or no DLSS); TAA instead"
                 );
             }
             self.taa.enabled = aa != AA_OFF;
             self.taa.sharpen = s.get(v.sharpen).then_some(s.get(v.sharpen_stops) as f32);
             self.taa.reset_history();
-            if matches!(aa, AA_DLAA | AA_DLSS) && self.dlaa.is_none() {
+            if dlaa_asked && self.dlaa.is_none() {
+                let instead = if fsr_on { "FSR" } else { "TAA" };
                 tracing::info!(
-                    "r.aa dlaa: DLAA does not run here (the Streamline SDK and an RTX GPU), TAA instead"
+                    "r.aa dlaa: DLAA does not run here (the Streamline SDK and an RTX GPU), {instead} instead"
                 );
             }
         }

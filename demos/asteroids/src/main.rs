@@ -184,8 +184,8 @@ struct Args {
     no_rcas: bool,
     /// Anti-aliasing and upscaling: auto, taa, fsr (AMD's FSR 3.1 at the window's size, any GPU,
     /// D-070), or a DLSS mode (dlaa, quality, balanced, performance, ultra-performance; needs the
-    /// Streamline SDK in `streamline-sdk/` and an RTX GPU). Auto is DLAA where it runs, in every
-    /// run, scripted ones and their captures too (D-070), unless `--no-taa` or
+    /// Streamline SDK in `streamline-sdk/` and an RTX GPU). Auto is DLAA where it runs, else FSR,
+    /// in every run, scripted ones and their captures too (D-070), unless `--no-taa` or
     /// `--set r.aa=taa|off|fsr`. U cycles them at run time.
     #[arg(long, default_value = "auto")]
     upscaler: String,
@@ -578,14 +578,17 @@ impl Ballad {
         )?;
         if requested.is_some() && dlss.is_none() && !auto {
             tracing::warn!(
-                "DLSS is not available (it needs --features dlss, the Streamline SDK in streamline-sdk/ and an RTX GPU): TAA instead"
+                "DLSS is not available (it needs --features dlss, the Streamline SDK in streamline-sdk/ and an RTX GPU): FSR instead"
             );
         }
         let dlss_on = requested.is_some() && dlss.is_some();
-        // FSR 3.1 (D-070) in place of TAA when asked for: `--upscaler fsr`, or `--set r.aa=fsr`.
-        let fsr = (args.upscaler == "fsr" || (auto && args.settings.asked_aa() == Some("fsr")))
-            .then(|| FsrUpscaler::new(&ctx.device, &ctx.shaders, FsrMode::NativeAa, ctx.extent()))
-            .transpose()?;
+        // FSR 3.1 (D-070) in place of TAA: when asked for (`--upscaler fsr`, `--set r.aa=fsr`), and
+        // in DLSS's place where the device has none (at native size until FSR's own modes).
+        let fsr = (args.upscaler == "fsr"
+            || auto && args.settings.asked_aa() == Some("fsr")
+            || requested.is_some() && dlss.is_none())
+        .then(|| FsrUpscaler::new(&ctx.device, &ctx.shaders, FsrMode::NativeAa, ctx.extent()))
+        .transpose()?;
         let fsr_on = fsr.is_some();
         let (scene, path) = build_field(ctx, &args, field)?;
         let ships = (args.ships > 0).then(|| Ships {

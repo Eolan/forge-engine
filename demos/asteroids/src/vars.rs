@@ -49,7 +49,13 @@ impl Ballad {
 
     /// Registers the ballad's settings, from the state its flags gave it.
     pub(crate) fn register_vars(&mut self, s: &mut Settings) {
-        let aa_default = if self.dlss.is_some() { AA_DLAA } else { AA_TAA };
+        let aa_default = if self.dlss.is_some() {
+            AA_DLAA
+        } else if self.fsr.is_some() {
+            AA_FSR
+        } else {
+            AA_TAA
+        };
         let (aa_now, mode_now) = self.aa_now();
         let flags = self.flags;
         let bits = [
@@ -170,15 +176,17 @@ impl Ballad {
             self.taa_enabled = aa != AA_OFF;
             self.taa.sharpen = s.get(v.sharpen).then_some(s.get(v.sharpen_stops) as f32);
             let wanted = matches!(aa, AA_DLAA | AA_DLSS);
+            // FSR where it is asked for, and in DLSS's place where the device has none (D-070).
+            self.fsr_on = (aa == AA_FSR || wanted && self.dlss.is_none()) && self.fsr.is_some();
             if wanted && self.dlss.is_none() {
+                let instead = if self.fsr_on { "FSR" } else { "TAA" };
                 tracing::warn!(
-                    "DLSS is not available (--features dlss, the Streamline SDK, an RTX GPU): TAA"
+                    "DLSS is not available (--features dlss, the Streamline SDK, an RTX GPU): {instead}"
                 );
             }
-            self.fsr_on = aa == AA_FSR && self.fsr.is_some();
             if aa == AA_FSR && self.fsr.is_none() {
                 tracing::info!(
-                    "r.aa fsr: FSR is made when a run starts with --set r.aa=fsr; TAA instead"
+                    "r.aa fsr: FSR is made when a run starts with it (--upscaler fsr, --set r.aa=fsr, or no DLSS); TAA instead"
                 );
             }
             let before = self.aa_now();

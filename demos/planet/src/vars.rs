@@ -1,5 +1,5 @@
 //! The planet's settings (D-069): the renderer's shared ones (`forge_render::settings`) with the
-//! planet's defaults (DLAA where it runs, else TAA; AgX's punchy look), and `planet.paused`.
+//! planet's defaults (DLAA where it runs, else FSR; AgX's punchy look), and `planet.paused`.
 //! Registered from the state its flags gave it, applied when they change, and set from the
 //! console (no key sets them since D-069's key map).
 
@@ -53,7 +53,13 @@ impl PlanetDemo {
         .into_iter()
         .map(|(spec, b, default)| (s.add_from(spec, default, flags.has(b)), b))
         .collect();
-        let aa_default = if self.dlaa.is_some() { AA_DLAA } else { AA_TAA };
+        let aa_default = if self.dlaa.is_some() {
+            AA_DLAA
+        } else if self.fsr.is_some() {
+            AA_FSR
+        } else {
+            AA_TAA
+        };
         let aa_now = if !self.taa_enabled {
             AA_OFF
         } else if self.fsr_on {
@@ -117,21 +123,23 @@ impl PlanetDemo {
         {
             let aa = s.get(v.aa);
             let wanted = matches!(aa, AA_DLAA | AA_DLSS);
-            if wanted && self.dlaa.is_none() {
-                tracing::info!(
-                    "r.aa: DLAA does not run here (the Streamline SDK and an RTX GPU, or a \
-                     scripted run without --set r.aa=dlaa): TAA instead"
-                );
-            }
             // DLSS's smaller modes are the asteroids' alone: the planet shows dlss as DLAA.
             self.dlaa_on = wanted && self.dlaa.is_some();
-            self.fsr_on = aa == AA_FSR && self.fsr.is_some();
-            if let Some((fsr, _)) = self.fsr.as_mut().filter(|_| aa == AA_FSR) {
+            // FSR where it is asked for, and in DLAA's place where the device has no DLSS (D-070).
+            let fsr_on = (aa == AA_FSR || wanted && self.dlaa.is_none()) && self.fsr.is_some();
+            self.fsr_on = fsr_on;
+            if wanted && self.dlaa.is_none() {
+                let instead = if fsr_on { "FSR" } else { "TAA" };
+                tracing::info!(
+                    "r.aa: DLAA does not run here (the Streamline SDK and an RTX GPU): {instead} instead"
+                );
+            }
+            if let Some((fsr, _)) = self.fsr.as_mut().filter(|_| fsr_on) {
                 fsr.reset_history();
             }
             if aa == AA_FSR && self.fsr.is_none() {
                 tracing::info!(
-                    "r.aa fsr: FSR is made when a run starts with --set r.aa=fsr; TAA instead"
+                    "r.aa fsr: FSR is made when a run starts with it (--set r.aa=fsr, or no DLSS); TAA instead"
                 );
             }
             self.taa_enabled = aa != AA_OFF;

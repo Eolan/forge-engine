@@ -315,7 +315,7 @@ display pass applies the curve and bloom. DLAA is the default of every run where
 scripted runs and their captures included (D-070): its images repeat to the bit since #277 and
 #281, and a new driver or DLSS DLL is a re-baseline (`tools/verify.sh --rebaseline`).
 - **FSR 3.1** (`forge_render::FsrUpscaler`, `--set r.aa=fsr`) is AMD's upscaler on any GPU, in
-  place of TAA.
+  place of TAA. It is the default wherever DLSS does not run.
   - **Shaders:** AMD's own headers (FidelityFX SDK v1.1.4, MIT) in `shaders/third-party/fidelityfx/`,
     reached through Forge's bridge (`shaders/fsr_bridge.slang`). Its eight passes are graph
     passes like any other.
