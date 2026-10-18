@@ -4684,7 +4684,22 @@ night (`--time-of-day 1.333`, 22:00), and in the lab's room.
   - The light through windows onto the street.
   - The streets' lamps (Olsson's clusters, after a look at AMD's Forward+ patents, US 10,803,655
     B2).
-  - Glass both ways (part 4).
+  - Glass both ways (part 4). From the street, the near houses' windows still show the faked
+    rooms, though their real rooms are lit. Two ways, for the owner to choose (2026-10-18):
+    - **(a) Traced through the glass in the resolve.** The near houses' glass rows get a flag,
+      and a glass pixel traces one ray into the room behind and shades the hit as a mirror ray's
+      (sun, probes, one picked lamp), blended with the glass's own reflection by Fresnel.
+      - Cheap: one or two rays a window pixel.
+      - The room is shaded flat (its rows' average colour, no AO).
+      - TAA reprojects it with the glass's motion: it smears as the camera moves past, unless
+        it gets a history of its own as the mirror rays have.
+    - **(b) The glass drawn after the resolve.** The near houses' glass leaves the visibility
+      pass and is drawn over the resolved room behind it, blended as the particles are, with its
+      reflection and tint.
+      - The room is drawn at full quality and has its own motion vectors.
+      - It needs a pass for transparent meshes (their cull and draw), and the kit's near windows
+        on rows of their own. Several sessions.
+    - Recommended: (b) for the look; (a) only as a stopgap with its own history.
 
 ## D-066 — Pieces with sockets: one connector schema for generation, the anomaly check and player building ✅ (proposed 2026-10-16 on the owner's walk of #266; the owner's go the same evening)
 
