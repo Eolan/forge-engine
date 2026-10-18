@@ -29,6 +29,25 @@ pub struct SettingsArgs {
 }
 
 impl SettingsArgs {
+    /// The anti-aliasing the command line asks for (`--set r.aa=VALUE`, the last one), if any.
+    pub fn asked_aa(&self) -> Option<&str> {
+        self.set
+            .iter()
+            .filter_map(|s| split_assignment(s))
+            .filter(|(name, _)| name.eq_ignore_ascii_case("r.aa"))
+            .map(|(_, value)| value)
+            .next_back()
+    }
+
+    /// Whether a run anti-aliases with DLSS where the device runs it (D-070): DLSS is the
+    /// reference image, so scripted runs and their captures too, unless the run turns
+    /// anti-aliasing off (`no_aa`, a demo's `--no-taa`) or asks for TAA or none
+    /// (`--set r.aa=taa`, `--set r.aa=off`). DLAA's images are equal run to run since #277 and
+    /// #281 (D-070's check), so the captures keep their 0 px.
+    pub fn wants_dlss(&self, no_aa: bool) -> bool {
+        !no_aa && !matches!(self.asked_aa(), Some("off" | "taa"))
+    }
+
     /// The settings file to read: `--cfg`, else `FORGE_CFG`, else `forge.cfg`; none with
     /// `--no-cfg` or `FORGE_CFG=none`.
     pub fn cfg_path(&self) -> Option<PathBuf> {
@@ -42,5 +61,32 @@ impl SettingsArgs {
                 .or_else(|| env.map(PathBuf::from))
                 .unwrap_or_else(|| PathBuf::from("forge.cfg")),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(set: &[&str]) -> SettingsArgs {
+        SettingsArgs {
+            set: set.iter().map(|s| (*s).to_owned()).collect(),
+            ..SettingsArgs::default()
+        }
+    }
+
+    #[test]
+    fn dlss_unless_asked_otherwise() {
+        // D-070: DLSS by default, scripted runs too.
+        assert!(args(&[]).wants_dlss(false));
+        assert!(args(&["r.aa=dlaa"]).wants_dlss(false));
+        assert!(args(&["r.aa=dlss", "r.exposure=1"]).wants_dlss(false));
+        // A demo's `--no-taa`, or the command line asking for TAA or none.
+        assert!(!args(&[]).wants_dlss(true));
+        assert!(!args(&["r.aa=taa"]).wants_dlss(false));
+        assert!(!args(&["r.aa = off"]).wants_dlss(false));
+        // The last `r.aa` counts, whatever its case.
+        assert!(args(&["r.aa=taa", "R.AA=dlaa"]).wants_dlss(false));
+        assert_eq!(args(&["r.aa=off", "r.aa=taa"]).asked_aa(), Some("taa"));
     }
 }

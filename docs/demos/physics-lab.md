@@ -1650,9 +1650,10 @@ square's left; frame 60, TAA's history full):
 What to do about it: D-045, accepted. The first two steps are done.
 
 **DLAA by default where it runs**, in an interactive run (`--no-dlaa` for TAA; T cycles DLAA,
-TAA sharpened, TAA plain and off). A scripted run (`--frames`) keeps to TAA unless `--dlaa`:
-two runs of the city under DLAA differ by up to 3 codes, and the captures' checks want the
-images to the bit. DLAA's display pass now mixes in bloom as TAA's resolve does (the black
+TAA sharpened, TAA plain and off). A scripted run (`--frames`) kept to TAA unless `--dlaa`:
+two runs of the city under DLAA differed by up to 3 codes. Since D-070 (2026-10-18) every run
+draws with DLAA, the captures included. The difference was Forge's shading, deterministic since
+#277 and #281. DLAA's display pass now mixes in bloom as TAA's resolve does (the black
 squares' level is the same under both). Panning at 2 m/s, its MTF50 is 0.43–0.48 against
 sharpened TAA's 0.37–0.40, and at 0.25 c/px 0.79–0.82 against 0.83–0.87. It costs 0.46 ms
 for the DLSS pass at 1600 × 900, and 0.02 for the display pass.

@@ -6,8 +6,15 @@
 # passes.
 #
 #   tools/verify.sh [--tier gate|0|1|2] [--base COMMIT] [--committed] [--expect PATTERNS]
-#                   [--sets SETS] [--timings BASE_BIN] [--no-accept] [--dry-run]
+#                   [--sets SETS] [--timings BASE_BIN] [--no-accept] [--dry-run] [--rebaseline]
 #   tools/verify.sh --accept DIR [COMMIT]
+#
+# The captures draw with DLAA where it runs (D-070), so a new driver or DLSS DLL moves every
+# image. When the base's accepted set was captured with another driver or DLSS than this
+# machine's (its manifest's `driver:` and `dlss:` lines), the script stops before running and
+# asks for a new baseline: --rebaseline, on a HEAD that has an accepted set and nothing changed
+# since it, captures the full batch and makes it HEAD's set without comparing. With changes in
+# hand, check out the base first (a worktree), re-baseline it there, then verify the change.
 #
 # The tiers:
 #   gate  every changed path maps to no capture (docs, reports): fmt, clippy, the tests and the
@@ -60,11 +67,21 @@ usage() {
   sed -n '8,9p' "$0" | sed 's/^# //' >&2
   exit 2
 }
+# dlss_dll: the DLSS DLL the demos load (tools/captures.sh's `dlss:` line): its file version and
+# the start of its hash, or "none".
+dlss_dll() {
+  local dll=$root/streamline-sdk/bin/x64/nvngx_dlss.dll version
+  [ -f "$dll" ] || { echo none; return; }
+  version=$(powershell.exe -NoProfile -Command "(Get-Item '$(cygpath -w "$dll")').VersionInfo.FileVersion" 2> /dev/null | tr -d '\r')
+  echo "${version:-unknown} $(sha256sum "$dll" | cut -c1-16)"
+}
 
 forced="" base_arg="" only_sets="" committed=0 expect="" timings_bin="" no_accept=0 dry=0 accept_dir="" accept_commit=""
+rebaseline=0
 while [ $# -gt 0 ]; do
   case $1 in
     --tier) forced=${2:?--tier gate, 0, 1 or 2}; shift 2 ;;
+    --rebaseline) rebaseline=1; shift ;;
     --sets) only_sets=${2:?--sets SETS}; shift 2 ;;
     --base) base_arg=${2:?--base COMMIT}; shift 2 ;;
     --committed) committed=1; shift ;;
@@ -248,7 +265,7 @@ accept() {
     [ -f "$run/state.txt" ] && grep -E "^(tier|sets|paths|recook|expect):" "$run/state.txt"
     echo "base: ${base_sha:-none}"
     echo "build: $(rustc -V 2> /dev/null), release, $(grep '^commit:' "$run/batch.txt" 2> /dev/null | cut -c9-)"
-    grep -E "^(driver|binary):" "$run/batch.txt" 2> /dev/null
+    grep -E "^(driver|dlss|binary):" "$run/batch.txt" 2> /dev/null
     echo "run: $run"
     echo "images (sha-256, name, the commit it was captured at):"
     while read -r name origin rest; do
@@ -366,6 +383,17 @@ fi
   tier=1
   why="$(git rev-parse --short "$base") has no accepted set to compare with"
 }
+# --rebaseline (D-070): the base's images again, with this machine's driver and DLSS, accepted
+# as HEAD's set without a comparison. Only where nothing that draws changed since the base.
+if [ $rebaseline = 1 ]; then
+  if [ -z "$base_set" ] || ! gate_only "${changed[@]}"; then
+    echo "--rebaseline needs an accepted set in HEAD's history and nothing but gate-only paths changed since it: check out the base (a worktree) and re-baseline there" >&2
+    exit 2
+  fi
+  tier=1
+  why="--rebaseline: a new baseline with this machine's driver and DLSS (D-070)"
+  base_set=""
+fi
 
 # What runs.
 case $tier in
@@ -415,6 +443,25 @@ elif [ $since -ge 5 ]; then
 fi
 if [ $committed = 1 ] && ! gate_only "${dirty[@]}"; then
   echo "note: the build includes uncommitted changes that can move pixels; the run will not be accepted"
+fi
+# The base's set and this machine (D-070): another driver or DLSS DLL moves every image, which
+# would fail the whole batch. The manifests before D-070 name no DLSS.
+stale=""
+if [ -n "$base_set" ] && [ "$tier" != gate ]; then
+  set_driver=$(sed -n 's/^driver: //p' "$base_set/manifest.txt" | head -n 1)
+  set_dlss=$(sed -n 's/^dlss: //p' "$base_set/manifest.txt" | head -n 1)
+  machine_driver=$(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2> /dev/null | head -n 1)
+  machine_dlss=$(dlss_dll)
+  [ -n "$set_driver" ] && [ "$set_driver" != "$machine_driver" ] &&
+    stale="the driver was $set_driver, now $machine_driver"
+  [ -n "$set_dlss" ] && [ "$set_dlss" != "$machine_dlss" ] &&
+    stale="${stale:+$stale; }DLSS was $set_dlss, now $machine_dlss"
+fi
+if [ -n "$stale" ]; then
+  echo "the accepted set at $(git rev-parse --short "$base") was captured otherwise: $stale"
+  echo "re-baseline first (D-070): tools/verify.sh --rebaseline at $(git rev-parse --short "$base") (in a worktree when changes are in hand), then verify again"
+  [ $dry = 1 ] && exit 0
+  exit 3
 fi
 [ $dry = 1 ] && exit 0
 

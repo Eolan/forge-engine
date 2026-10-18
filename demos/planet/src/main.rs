@@ -1861,16 +1861,10 @@ impl Demo for PlanetDemo {
     }
 }
 
-/// Whether DLAA is wanted (D-045, D-069): in an interactive run unless TAA is off, or when the
-/// command line asks for it (`--set r.aa=dlaa`) in a scripted one. Scripted runs keep TAA by
-/// default, so the captures stay comparable.
+/// Whether DLAA is wanted (D-070): in every run, scripted ones and their captures too, unless
+/// `--no-taa` or `--set r.aa=taa|off` ([`forge_app::SettingsArgs::wants_dlss`]).
 fn wants_dlaa(args: &Args) -> bool {
-    let asked = args.settings.set.iter().any(|s| {
-        forge_app::settings::split_assignment(s).is_some_and(|(name, value)| {
-            name.eq_ignore_ascii_case("r.aa") && matches!(value, "dlaa" | "dlss")
-        })
-    });
-    !args.no_taa && (args.frames.is_none() || asked)
+    args.settings.wants_dlss(args.no_taa)
 }
 
 fn main() -> Result<()> {

@@ -631,13 +631,12 @@ pub struct Args {
     /// than Lanczos-3 (36 texels).
     #[arg(long)]
     taa_catmull_rom: bool,
-    /// Anti-alias with NVIDIA's DLAA (DLSS at the window's own resolution) in place of TAA in a
-    /// scripted run too (`--frames`). DLAA is the default of an interactive run where it runs
-    /// (D-045: the Streamline SDK in `streamline-sdk/` and an RTX GPU); a scripted run keeps to
-    /// TAA, whose images repeat to the bit.
+    /// Anti-alias with NVIDIA's DLAA (DLSS at the window's own resolution), the default of every
+    /// run where it runs, scripted ones included (D-070: the Streamline SDK in `streamline-sdk/`
+    /// and an RTX GPU). Kept for the scripts that still name it.
     #[arg(long, conflicts_with_all = ["no_taa", "no_dlaa"])]
     dlaa: bool,
-    /// Anti-alias with TAA even where DLAA runs.
+    /// Anti-alias with TAA even where DLAA runs (as `--set r.aa=taa`).
     #[arg(long)]
     no_dlaa: bool,
     /// Window width in pixels (the render size).
@@ -6156,11 +6155,11 @@ fn build_gallery(ctx: &Setup, args: &Args, cooked: Cooked) -> Result<(MeshletSce
     Ok((scene, placed))
 }
 
-/// Whether the run anti-aliases with DLAA where the device has it (D-045): an interactive run
-/// unless `--no-dlaa` or `--no-taa`, a scripted one (`--frames`) only with `--dlaa`. DLAA's
-/// images differ by a code or two from run to run, and the captures' checks want them to the bit.
+/// Whether the run anti-aliases with DLAA where the device has it (D-070): every run, scripted
+/// ones and their captures too, unless `--no-dlaa`, `--no-taa` or `--set r.aa=taa|off`
+/// ([`forge_app::SettingsArgs::wants_dlss`]).
 fn wants_dlaa(args: &Args) -> bool {
-    !args.no_dlaa && !args.no_taa && (args.dlaa || args.frames.is_none())
+    !args.no_dlaa && args.settings.wants_dlss(args.no_taa)
 }
 
 /// The `city-blocks` binary: the city, `--gallery` or `--island SEED`.

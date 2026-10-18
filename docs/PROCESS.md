@@ -181,6 +181,19 @@ Tier 1 runs the whole batch; Tier 0 a part of it. It runs on the owner's machine
 need the RTX 5070 Ti and open on the secondary monitor without taking focus. It writes under
 `captures/`, which git ignores. `tools/verify.sh` runs these steps; this is what each does.
 
+**The captures draw with DLAA (D-070, 2026-10-18).** DLSS is the reference image, so the batch,
+the map check and the timings run as the owner sees the demos. Shots that pass `--no-taa` stay
+unanti-aliased: the ballad's culling A/B and HDR shots. Meshlets and the island demo have no
+temporal anti-aliasing. DLAA's images are equal run to run and mesh against fallback; eight
+scenes of every demo were checked bit for bit before the switch. A new driver or DLSS DLL moves
+every image:
+- the batch records both (`driver:` and `dlss:` in `batch.txt` and in each accepted manifest);
+- `tools/verify.sh` stops when the base's set was captured otherwise and asks for
+  `tools/verify.sh --rebaseline`;
+- that option, on a commit with an accepted set and nothing drawn changed since it, captures the
+  full batch and accepts it without comparing.
+With changes in hand, re-baseline the base in a worktree, then verify the change.
+
 1. **Build the whole workspace first:** `cargo build --release`. Rebuilding only the demo you
    changed leaves the other demos stale. A stale binary writes an older frame block, and every
    capture then "differs" for the wrong reason.
@@ -238,13 +251,14 @@ need the RTX 5070 Ti and open on the secondary monitor without taking focus. It 
    short: a minute or two in all); `origins.sh` shows the same image at every offset since the
    cells record (issue #93), and showed the drift before it.
 
-**Known flake (#71):** the ballad's TAA frame 600 (`fb-ast-taa600`, `mesh-ast-taa600`) can
+**Known flake (#71):** the ballad's TAA frame 600 (`fb-ast-taa600`, `mesh-ast-taa600`; since
+D-070 the shot is `*-ast-aa600`, drawn with DLAA, and whether the flake stays is to be seen) can
 differ from the same build by a few hundred pixels, each at most 22 levels off. How often
 depends on the GPU's timing: on 2026-09-25 the mesh path's differed in nearly every run
 (340–392 px), so a rerun proves nothing. Judge it by its signature instead: a few hundred
 single pixels scattered on edges over the whole frame, ꟻLIP mean ≤ 0.0015 and largest
 0.06–0.13 in seventeen flakes. A difference that does not look like that is real.
-`compare.sh` judges it so (#134): a difference of `*-ast-taa600` against its base with at most
+`compare.sh` judges it so (#134): a difference of `*-ast-aa600` against its base with at most
 500 pixels, a ꟻLIP mean at most 0.0015 and a largest value at most 0.15 prints `FLAKE #71`
 and does not fail. The largest value tells scattered pixels from a shape: a line of one pixel
 20 levels off reaches 0.169 and a 3 × 3 block 0.261 (the table below). The HDR output's frame

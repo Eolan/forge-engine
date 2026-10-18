@@ -184,8 +184,8 @@ struct Args {
     no_rcas: bool,
     /// Anti-aliasing and upscaling: auto, taa, or a DLSS mode (dlaa, quality, balanced,
     /// performance, ultra-performance; needs the Streamline SDK in `streamline-sdk/` and an RTX
-    /// GPU). Auto is DLAA where it runs (D-045), in an interactive run: a scripted one
-    /// (`--frames`) keeps to TAA, whose images repeat to the bit. U cycles them at run time.
+    /// GPU). Auto is DLAA where it runs, in every run, scripted ones and their captures too
+    /// (D-070), unless `--no-taa` or `--set r.aa=taa|off`. U cycles them at run time.
     #[arg(long, default_value = "auto")]
     upscaler: String,
     /// Switch the anti-aliasing as U does every N frames (tests the switch in scripted runs).
@@ -556,7 +556,10 @@ impl Ballad {
         let auto = args.upscaler == "auto";
         let requested = match args.upscaler.as_str() {
             "taa" => None,
-            "auto" => args.frames.is_none().then_some(DlssMode::Dlaa),
+            "auto" => args
+                .settings
+                .wants_dlss(args.no_taa)
+                .then_some(DlssMode::Dlaa),
             name => Some(DlssMode::from_name(name).ok_or_else(|| {
                 anyhow::anyhow!(
                     "unknown upscaler '{name}': taa, dlaa, quality, balanced, performance or ultra-performance"
@@ -1618,9 +1621,15 @@ fn main() -> Result<()> {
             None
         },
         // Built with `--features dlss` (the default): the Vulkan API comes through Streamline so
-        // U can switch to DLSS at run time, except in a scripted run on TAA.
+        // U can switch to DLSS at run time, except in a scripted run on TAA or without
+        // anti-aliasing (D-070: `auto` is DLAA in scripted runs too).
         streamline: cfg!(feature = "dlss")
-            && (args.frames.is_none() || !matches!(args.upscaler.as_str(), "auto" | "taa")),
+            && (args.frames.is_none()
+                || match args.upscaler.as_str() {
+                    "taa" => false,
+                    "auto" => args.settings.wants_dlss(args.no_taa),
+                    _ => true,
+                }),
         force_fallback: args.force_fallback,
         hdr: args.hdr,
         hdr_stops: args.hdr_stops,

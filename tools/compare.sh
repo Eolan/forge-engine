@@ -16,7 +16,8 @@
 # FORGE_KEEP_LOGS=1 the same lines go to NEW/compare.txt, for a cloud session to read
 # (tools/report.sh gathers it).
 #
-# Known flake (#71): the ballad's TAA frame 600 on either path (fb-ast-taa600, mesh-ast-taa600)
+# Known flake (#71): the ballad's anti-aliased frame 600 on either path (fb-ast-aa600, mesh-ast-aa600;
+# seen under TAA, whether it stays under DLAA (D-070) is to be seen)
 # can differ by a few hundred scattered edge pixels from the same build, FLIP mean <= 0.0015;
 # some days on nearly every run (docs/PROCESS.md, "Known flake"). A difference of those images
 # with its signature (at most 500 px, FLIP mean at most 0.0015 and largest at most 0.15: no line,
@@ -72,7 +73,7 @@ missing=""
 # signature.
 flake() {
   case $1 in
-    *-ast-taa600 | *-ast-hdr600)
+    *-ast-aa600 | *-ast-hdr600)
       awk -v n="$2" -v mean="$3" -v peak="$4" \
         'BEGIN { exit !(n != "" && mean != "" && peak != "" && n <= 1500 && mean <= 0.003 && peak <= 0.15) }'
       ;;

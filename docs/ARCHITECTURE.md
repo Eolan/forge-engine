@@ -311,8 +311,10 @@ cameras) are their own pass. TAA resolves at the output size and writes the disp
 through the tone curve in the same pass, or a sharpening pass does (RCAS, D-045). DLSS (the
 `dlss` feature, on by default, on an RTX GPU, the Vulkan API through Streamline's interposer)
 draws the scene at its input size, upscales into an HDR image at the output size, and the
-display pass applies the curve and bloom. DLAA is the default of interactive runs where it runs
-(D-045); scripted runs keep to TAA, whose images repeat to the bit. The DLSS pass
+display pass applies the curve and bloom. DLAA is the default of every run where it runs,
+scripted runs and their captures included (D-070): its images repeat to the bit since #277 and
+#281, and a new driver or DLSS DLL is a re-baseline (`tools/verify.sh --rebaseline`). FSR 3.1
+is to replace TAA on other GPUs. The DLSS pass
 is a graph pass like any other: it declares every image it hands to Streamline, and its
 output with a `Custom` access, because NGX clears it at the transfer stage before writing it.
 

@@ -1317,9 +1317,11 @@ through the tone curve (D-024). Without the feature, the SDK or an RTX GPU, U sa
 nothing changes.
 
 Since D-045 (2026-10-03) the feature is on by default and DLAA is the default where it runs, in
-an interactive run (`--upscaler auto`). A scripted run (`--frames`) keeps to TAA unless
-`--upscaler` names a DLSS mode: DLAA's images differ by a code or two from run to run, and the
-captures' checks want them to the bit. The display pass mixes in bloom as the TAA resolve does.
+an interactive run (`--upscaler auto`). A scripted run (`--frames`) kept to TAA unless
+`--upscaler` named a DLSS mode: DLAA's images differed by a code or two from run to run. Since
+D-070 (2026-10-18) `auto` is DLAA in scripted runs too: the difference was Forge's shading,
+deterministic since #277 and #281. `--no-taa` turns anti-aliasing off, and `--upscaler taa`
+keeps TAA. The display pass mixes in bloom as the TAA resolve does.
 
 ![Frame 600, zoomed ×2: TAA, DLAA, DLSS Quality (1067×600), DLSS Performance (800×450)](images/asteroids-dlss.png)
 

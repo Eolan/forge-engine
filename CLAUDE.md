@@ -105,7 +105,8 @@ this file.
 - **The look comes first.**
   - The owner sees shimmer, LOD pops and repeating textures at once. Fix them before new
     features.
-  - TAA stays on in showcases.
+  - DLSS (DLAA) is the image, in showcases and in the captures (D-070). FSR 3.1 is to replace
+    TAA on other GPUs; no more work on TAA's own image.
   - Weather is low priority.
 - **GPUs.**
   - The RTX 5070 Ti is the target, and the RTX 3080 a bonus (#39 waits for it).

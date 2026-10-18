@@ -25,10 +25,21 @@
 #                change to forge-procgen or forge-geom needs it (the island's products and tiles
 #                follow their code, #208). The first run of each scene that cooks (the city, the
 #                gallery, the island on its 2 m and 8 m grounds) gets `--recook`.
-# OUT/batch.txt records the commit, the sets, the paths, the driver and the binaries' hashes.
+# OUT/batch.txt records the commit, the sets, the paths, the driver, the DLSS DLL and the
+# binaries' hashes. The demos draw with DLAA where it runs (D-070), so a driver or DLSS change
+# moves the images: tools/verify.sh asks for a new baseline then.
 # The owner's settings file (forge.cfg, D-069) never changes a scripted run.
 export FORGE_CFG=none
 set -uo pipefail
+
+# dlss_dll ROOT: the DLSS DLL the demos load (Streamline's, `streamline-sdk/bin/x64`): its file
+# version and the start of its hash, or "none".
+dlss_dll() {
+  local dll=$1/streamline-sdk/bin/x64/nvngx_dlss.dll version
+  [ -f "$dll" ] || { echo none; return; }
+  version=$(powershell.exe -NoProfile -Command "(Get-Item '$(cygpath -w "$dll")').VersionInfo.FileVersion" 2> /dev/null | tr -d '\r')
+  echo "${version:-unknown} $(sha256sum "$dll" | cut -c1-16)"
+}
 root=$(cd "$(dirname "$0")/.." && pwd)
 out=${1:?usage: tools/captures.sh OUT [BIN]}
 bin=${2:-$root/target/release}
@@ -87,6 +98,7 @@ fi
   echo "sets:$sets"
   echo "paths: $paths"
   echo "driver: $(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null | head -n 1)"
+  echo "dlss: $(dlss_dll "$root")"
   for demo in "$meshlets" "$asteroids" "$city" "$island_demo" "$lab" "$planet"; do
     [ -f "$demo" ] && echo "binary: $(sha256sum "$demo" | cut -c1-16) $(basename "$demo") $(date -u -r "$demo" +%FT%TZ)"
   done
@@ -172,9 +184,10 @@ for path in $paths; do
   capture "$path-orbit120" 120 "$meshlets" --orbit "${flag[@]}"
   capture "$path-nolod120" 120 "$meshlets" --orbit --no-lod "${flag[@]}"
   capture "$path-noocc120" 120 "$meshlets" --orbit --no-occlusion "${flag[@]}"
-  # The ballad at fixed steps: frame 600 with and without TAA, frame 240 for the A/B harness.
+  # The ballad at fixed steps: frame 600 with and without anti-aliasing (DLAA where it runs,
+  # D-070), frame 240 for the A/B harness.
   capture "$path-ast-notaa600" 600 "$asteroids" --fixed-step --no-taa "${flag[@]}"
-  capture "$path-ast-taa600" 600 "$asteroids" --fixed-step "${flag[@]}"
+  capture "$path-ast-aa600" 600 "$asteroids" --fixed-step "${flag[@]}"
   capture "$path-ast240" 240 "$asteroids" --fixed-step --no-taa "${flag[@]}"
   capture "$path-ast240-noocc" 240 "$asteroids" --fixed-step --no-taa --no-occlusion "${flag[@]}"
   capture "$path-ast240-nocone" 240 "$asteroids" --fixed-step --no-taa --no-cone "${flag[@]}"
