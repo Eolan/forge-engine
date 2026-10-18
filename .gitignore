@@ -20,6 +20,9 @@
 /tracy/
 /streamline-sdk/
 /nrd-sdk/
+# NVIDIA's RTXDI library (D-065's comparison, the NVIDIA RTX SDKs licence): kept locally, never
+# copied into Forge's code.
+/rtxdi-sdk/
 # Steam Audio's SDK (forge-audio's `steam-audio` feature, #267): 181 MB, kept locally.
 /steam-audio-sdk/
 

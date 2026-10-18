@@ -4700,6 +4700,21 @@ night (`--time-of-day 1.333`, 22:00), and in the lab's room.
       - It needs a pass for transparent meshes (their cull and draw), and the kit's near windows
         on rows of their own. Several sessions.
     - Recommended: (b) for the look; (a) only as a stopgap with its own history.
+    - **The owner chose (b), the glass pass (2026-10-18).**
+  - **RTXDI fetched (the owner's go, 2026-10-18):**
+    - NVIDIA's `RTXDI-Library` 3.1 (commit f12037f, 2026-09-03) is in `rtxdi-sdk/`, ignored by git
+      as `nrd-sdk/` is. It holds 68 files: HLSL includes for ReSTIR DI, GI and PT, ReGIR and the
+      light presampling, and a small C++ host side. The samples, Donut and the assets were not
+      fetched.
+    - The licence is the NVIDIA RTX SDKs licence of 2025-01-31. Use inside an application is
+      allowed, and there is no express patent grant. The SDK must not be made subject to an
+      open-source licence, and modified source needs NVIDIA's notice.
+    - So it stays outside Forge's code. Forge's own Slang shaders define RTXDI's application
+      bridge (`RAB_*`) and include its headers from `rtxdi-sdk/Include` at compile time. The
+      host side's parameters get Forge's own Rust, written from the headers' documented
+      meaning, not ported.
+    - It comes after the penumbra denoiser lands (both touch `lamps_at`), and it is to be
+      compared with the light lists with the owner.
 
 ## D-066 — Pieces with sockets: one connector schema for generation, the anomaly check and player building ✅ (proposed 2026-10-16 on the owner's walk of #266; the owner's go the same evening)
 
