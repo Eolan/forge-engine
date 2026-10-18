@@ -1000,6 +1000,7 @@ impl Demo for Ballad {
                 clouds: None,
                 sun_shadow: None,
                 reflection_history: None,
+                lamp_share: None,
             },
         );
         if let Some(h) = hasher {

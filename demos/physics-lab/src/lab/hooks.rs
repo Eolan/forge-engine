@@ -796,12 +796,12 @@ impl Running for LabRunning {
         }
     }
 
-    fn lamps(&mut self) -> Vec<forge_render::lamps::Lamp> {
-        // The room at night's three lamps (D-065).
-        if self.kind == LabScene::Lamps {
-            super::room::lamps()
-        } else {
-            Vec::new()
+    fn lamps(&mut self, time: f32) -> Vec<forge_render::lamps::Lamp> {
+        // The room at night's three lamps and the smoke yard's fire (D-065).
+        match self.kind {
+            LabScene::Lamps => super::room::lamps(),
+            LabScene::Smoke => super::smoke::lamps(time),
+            _ => Vec::new(),
         }
     }
 

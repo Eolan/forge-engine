@@ -464,6 +464,10 @@ pub struct Args {
     /// their light).
     #[arg(long)]
     no_lamps: bool,
+    /// The lamps' shadow rays traced in the resolve, each pixel's own, as before their penumbra
+    /// filter (D-065: the filter's A/B).
+    #[arg(long)]
+    no_lamp_filter: bool,
     /// Draw the spray without the reactive mask, so TAA keeps its history there (the mask's
     /// A/B, #107).
     #[arg(long, hide = true)]
@@ -2006,13 +2010,15 @@ impl Demo for Gallery {
             }
             self.scene.set_movers_still(&movers, |k| Some(k) == still);
         }
-        // The scene's lamps (D-065), the nearest that reach the camera, for this frame.
+        // The scene's lamps (D-065) at the particles' clock, the nearest that reach the camera, for
+        // this frame.
+        let time = self.sea_time as f32;
         let origin = self.scene.origin();
         let lamps: Vec<_> = self
             .running
             .as_mut()
             .filter(|_| !self.args.no_lamps)
-            .map(|r| r.lamps())
+            .map(|r| r.lamps(time))
             .unwrap_or_default()
             .into_iter()
             .map(|l| forge_render::lamps::Lamp {
@@ -2329,6 +2335,29 @@ impl Demo for Gallery {
         } else {
             self.reflection_history.reset_history();
         }
+        // The lamps' shadow rays before the resolve, and the share of their light that reaches
+        // each pixel filtered over its neighbours (D-065); without (`--no-lamp-filter`), the
+        // resolve's own rays.
+        let lamp_share = if self.args.no_lamp_filter {
+            None
+        } else {
+            self.renderer.lamp_shadows(
+                &mut frame.graph,
+                frame.slot,
+                &self.scene,
+                targets,
+                extent,
+                probes,
+            )
+        };
+        if let (Some(h), Some(share)) = (hasher, lamp_share) {
+            h.add(
+                &mut frame.graph,
+                share,
+                forge_render::debug_hash::HashKind::Float4,
+                extent,
+            );
+        }
         self.renderer.resolve(
             &mut frame.graph,
             frame.slot,
@@ -2345,6 +2374,7 @@ impl Demo for Gallery {
                 clouds: cloud_shadow,
                 sun_shadow,
                 reflection_history,
+                lamp_share,
             },
         );
         // The scene colour as the resolve left it, before the sky's compose (#277).
@@ -2564,6 +2594,7 @@ impl Demo for Gallery {
                         clouds: None,
                         sun_shadow: None,
                         reflection_history: None,
+                        lamp_share: None,
                     },
                 );
             }

@@ -6502,7 +6502,7 @@ impl Running for PlanRunning {
         self.regions.clone()
     }
 
-    fn lamps(&mut self) -> Vec<forge_render::lamps::Lamp> {
+    fn lamps(&mut self, _time: f32) -> Vec<forge_render::lamps::Lamp> {
         self.home_lamps.clone()
     }
 

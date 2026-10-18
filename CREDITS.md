@@ -453,6 +453,22 @@ soft edges, their pixel-wide minimum, their reactive mask and their hash:
 - **Lights listed per region of space:** after Ola Olsson, Markus Billeter, Ulf Assarsson,
   "Clustered Deferred and Forward Shading", HPG 2012. Here a house's rooms (the probes' regions,
   D-068) are the clusters.
+- **The penumbra filter** (`lamp_rays_main`, `lamp_filter_main`, `research/lamp-penumbra-denoising.md`):
+  - *The ratio estimator:* Eric Heitz, Stephen Hill, Morgan McGuire, "Combining Analytic Direct
+    Illumination and Stochastic Shadows", I3D 2018. The shadowed and unshadowed light of the same
+    rays, their ratio filtered and multiplied into the exact, unshadowed light.
+  - *Interleaved sampling:* Alexander Keller, Wolfgang Heidrich, "Interleaved Sampling",
+    Eurographics Workshop on Rendering 2001. A run of the lamps' disc points spread over 4 × 4
+    pixels, in the order of Bryce E. Bayer's ordered-dither matrix ("An Optimum Method for
+    Two-Level Rendition of Continuous-Tone Pictures", IEEE International Conference on
+    Communications, 1973).
+  - *The disc points:* the first 128 points of the two-dimensional sequence of I. M. Sobol', "On
+    the Distribution of Points in a Cube and the Approximate Evaluation of Integrals", *USSR
+    Computational Mathematics and Mathematical Physics* 7(4), 1967, mapped onto the disc by Peter
+    Shirley and Kenneth Chiu's concentric map, "A Low Distortion Map Between Disk and Square",
+    *Journal of Graphics Tools* 2(3), 1997.
+  - The tent (the 4 × 4 box twice over), the strongest lamp's paired runs and the filter's edge
+    weights are our own.
 
 **City plans** (`forge_procgen::city`, D-059):
 - **Streets from a tensor field.** Guoning Chen, Gregory Esch, Peter Wonka, Pascal Müller,

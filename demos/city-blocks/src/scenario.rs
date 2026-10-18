@@ -178,8 +178,9 @@ pub trait Running: Send {
     }
     /// Its splashes' sources this frame.
     fn splashes(&mut self, _out: &mut Vec<SplashSource>) {}
-    /// Its lamps this frame (D-065), in the world frame (as `probe_regions`). None by default.
-    fn lamps(&mut self) -> Vec<forge_render::lamps::Lamp> {
+    /// Its lamps at `time` (the particles' clock, seconds; D-065), in the world frame (as
+    /// `probe_regions`). None by default.
+    fn lamps(&mut self, _time: f32) -> Vec<forge_render::lamps::Lamp> {
         Vec::new()
     }
     /// Its particles' emitters and bursts at `time` (the splashes' clock, seconds), in the

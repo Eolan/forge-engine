@@ -1,9 +1,9 @@
 //! The smoke yard (D-064, #271): the particles' first effects in the lab, from the effects of
 //! `crates/forge-render/data/particles.toml`.
 //! - Three chimneys of stacked blocks, smoking.
-//! - A ring of rocks round a fire: its flames (the baked fire), its embers rising, and its smoke.
-//!   It does not light the yard yet: as a lamp (D-065) of the flames' size, the rocks' shadows
-//!   on the floor came out dithered at their wide penumbrae, which wait for the lamps' denoiser.
+//! - A ring of rocks round a fire: its flames (the baked fire), its embers rising, its smoke, and
+//!   its light, a lamp (D-065) of the flames' size whose rocks cast wide penumbrae on the floor
+//!   (the lamps' penumbra filter's test).
 //! - A walker's footsteps along the near side: a puff of dust a step, the walk starting over
 //!   every eight seconds.
 //! - A grinder's sparks, streaking down onto the floor and bouncing off it and a chimney's foot
@@ -57,6 +57,24 @@ pub(super) fn build() -> Vec<(usize, Mat4)> {
         ));
     }
     statics
+}
+
+/// The fire's light at `time` (the scene's seconds), in the world frame (D-065): a lamp in the
+/// flames, 0.8 m over the floor, as large as they are (12 cm), at 1 900 K (a wood fire) and about
+/// 150 cd, rising and falling by up to an eighth a few times a second. Its rocks' shadows on the
+/// floor have penumbrae half a metre wide.
+pub(super) fn lamps(time: f32) -> Vec<forge_render::lamps::Lamp> {
+    use std::f32::consts::TAU;
+    let flicker = 0.6 * (TAU * 0.7 * time).sin()
+        + 0.3 * (TAU * 1.7 * time + 1.3).sin()
+        + 0.1 * (TAU * 3.1 * time + 2.1).sin();
+    vec![forge_render::lamps::Lamp {
+        position: FIRE + Vec3::Y * 0.8,
+        radius: 0.12,
+        candela: 150.0 * (1.0 + 0.12 * flicker),
+        kelvin: 1900.0,
+        regions: forge_render::lamps::EVERY_REGION,
+    }]
 }
 
 /// The yard's emitters and the bursts alive at `time` (the scene's seconds).

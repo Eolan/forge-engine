@@ -859,12 +859,28 @@ mesh to test navigations inside the houses"):
     rooms are the light lists.
   - **Its rays:** the three strongest get a shadow ray each (the strongest two), and one of the
     others is picked by its light.
+  - **Its penumbrae** (D-065's penumbra filter, 2026-10-18): the rays go before the resolve, to
+    128 stratified points of each lamp's sphere spread over 4 × 4 pixels and TAA's 8 frames. The
+    share of the lamps' light that reaches a pixel is averaged over a 7 × 7 tent of its
+    neighbours on its surface and in its room, and the resolve lights with every lamp of the
+    room unshadowed, times that share. The light through the hall's doorway onto its wall no
+    longer comes out stair-stepped and streaked.
+    - A still camera in the hall, frames 10 apart: 0.16 % of the pixels change by more than 2
+      codes under TAA (0.63 % before, 0.12 % without the lamps' light), 0.0024 % under DLAA
+      (0.0027 % before, 0.0030 % without).
+    - Turning 4° a second under DLAA, each 10-frame step against a 2 × 2 supersampled run:
+      1.34 % of the pixels change otherwise than the reference's (3.80 % before, 1.29 % without
+      the lamps' light).
+    - `--no-lamp-filter` keeps each pixel's own rays in the resolve, as before.
   - **The bounce:** the probes take the lamps' light.
   - **Its colours:** balanced as a tungsten camera sees them, so a white room is warm, not
     orange.
 
   **Cost:** in the hall at night, best of three, 0.57 ms a frame (4.29 → 4.86 ms): the shading
-  0.49 ms and the probes' rays 0.08 ms on the async queue. `--no-lamps` turns their light off.
+  0.49 ms and the probes' rays 0.08 ms on the async queue. The penumbra filter adds 0.45 ms
+  there (4.88 → 5.33 ms; serial 5.03 → 5.49 ms): "shadow/lamp rays" 0.64 ms and "shadow/lamp
+  filter" 0.16 ms, `shading/standard` 0.95 → 0.65 ms. `--no-lamps` turns their light
+  off.
 - *Rooms on the outside walls* (`rooms::rebalance`). The anomalies' 20 unlit rooms were the
   middles of row houses one room wide (6 m lots, 12 m deep): a storey of three bedrooms one
   behind the other under a storey of an office and a bathroom 8.8 m deep. A middle band of

@@ -263,6 +263,11 @@ The expiry dates are Google's estimates, not legal conclusions. Nothing here is 
 
 ## 7. Recommendation for Forge
 
+> **Built on 2026-10-18** (D-065, "The penumbra filter"), with the rays before the resolve as
+> proposed and two changes, each measured: the filter is a 7 × 7 tent (the 4 × 4 box twice over;
+> the box left 4-pixel steps on the penumbrae that TAA's clamp kept), and the strongest lamp's
+> second ray goes to the run paired with the frame's, not frame + 4.
+
 **Build the interleaved ratio filter.** It uses only the ratio estimator, interleaved sampling and
 a geometry-aware box: no NRD, no new rays, no patent found. Keep SIGMA's translucency route (§1) as
 the upgrade, behind the same images.

@@ -608,8 +608,11 @@ struct ResolvePush {
     color_image: u32,
     width: u32,
     height: u32,
-    use_background: u32,
+    /// Sampled index of the lamps' filtered share of their light (D-065,
+    /// [`MeshletRenderer::lamp_shadows`]), or `u32::MAX`: the resolve traces their rays.
+    lamp_share: u32,
     tile_capacity: u32,
+    /// Written to the empty pixels where its alpha is ≥ 0; else they are left for the sky.
     background: [f32; 4],
     /// The sky's irradiance coefficients (`sh.slang`, issue #47), or 0: space's constant fill.
     sky: u64,
@@ -655,6 +658,29 @@ struct SunShadowPush {
 }
 
 const _: () = assert!(std::mem::size_of::<SunShadowPush>() == 64);
+
+/// Mirrors `LampShadowPush` in `meshlet.slang` (D-065): the lamps' rays and their filter.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct LampShadowPush {
+    frame: u64,
+    /// The probes' `ProbeField`, as the resolve has it (its regions are the lamps' places), or 0.
+    probes: u64,
+    vis_image: u32,
+    /// Storage for the rays, sampled for the filter: the share per channel and the luminance.
+    ratio_image: u32,
+    /// Likewise: the surface relative to the camera and its region's tag.
+    surface_image: u32,
+    /// Likewise: its normal, octahedral.
+    normal_image: u32,
+    /// Storage: the filtered share, which the resolve reads.
+    share_image: u32,
+    width: u32,
+    height: u32,
+    pad: u32,
+}
+
+const _: () = assert!(std::mem::size_of::<LampShadowPush>() == 48);
 
 /// SIGMA's inputs, which [`MeshletRenderer::trace_sun_shadow`] writes (#172): transients of the
 /// frame in the formats `forge_gpu::nrd` names.
@@ -726,6 +752,10 @@ pub struct AmbientLight {
     /// The mirror rays' history (#176, D-050, [`crate::ReflectionHistory::frame`]): the rays'
     /// light settled over the frames; `None`: each frame's ray alone, as before.
     pub reflection_history: Option<crate::ReflectionHistoryFrame>,
+    /// The share of the lamps' light that reaches each pixel, filtered over its neighbours
+    /// (D-065, [`MeshletRenderer::lamp_shadows`]): the resolve lights with every lamp unshadowed,
+    /// times it. `None`: the resolve traces the lamps' rays itself, as before.
+    pub lamp_share: Option<ImageHandle>,
 }
 
 /// Width of a shading class's dispatch in workgroups (`TILE_GROUPS_X` in `meshlet.slang`):
@@ -2706,6 +2736,9 @@ pub struct MeshletRenderer {
     pipeline_reflections: Option<Pipeline>,
     /// The sun's shadow rays for SIGMA (#172): devices with ray queries only.
     pipeline_sun_shadow: Option<Pipeline>,
+    /// The lamps' shadow rays and the filter of their share (D-065): devices with ray queries
+    /// only.
+    pipeline_lamp_shadows: Option<[Pipeline; 2]>,
     /// The mirror and shadow rays another pass asks for (issue #105): devices with ray queries
     /// only.
     pipeline_requested: Option<Pipeline>,
@@ -3082,6 +3115,27 @@ impl MeshletRenderer {
         } else {
             None
         };
+        let lamp_pipeline = |entry: &'static str, name: &'static str| -> Result<Pipeline> {
+            let module = device.create_shader_module(
+                &shaders.compile("meshlet.slang", entry, ShaderStage::Compute)?,
+                name,
+            )?;
+            let pipeline = device.create_compute_pipeline(&ComputePipelineDesc {
+                shader: (module, entry),
+                push_constant_bytes: std::mem::size_of::<LampShadowPush>() as u32,
+                name,
+            });
+            device.destroy_shader_module(module);
+            pipeline
+        };
+        let pipeline_lamp_shadows = if rt {
+            Some([
+                lamp_pipeline("lamp_rays_main", "lamp shadow rays")?,
+                lamp_pipeline("lamp_filter_main", "lamp shadow filter")?,
+            ])
+        } else {
+            None
+        };
         let pipeline_requested = if rt {
             let entry = "requested_rays_main";
             let module = device.create_shader_module(
@@ -3240,6 +3294,7 @@ impl MeshletRenderer {
             pipeline_resolve,
             pipeline_reflections,
             pipeline_sun_shadow,
+            pipeline_lamp_shadows,
             pipeline_requested,
             shading_tiles: create_shading_tiles(device, extent)?,
             resolve_hasher: std::env::var_os("FORGE_HASH_RESOLVE")
@@ -4424,13 +4479,113 @@ impl MeshletRenderer {
         Some(rays)
     }
 
+    /// Declares the lamps' penumbra filter (D-065, `research/lamp-penumbra-denoising.md` §7), for
+    /// the resolve's [`AmbientLight::lamp_share`]:
+    /// - "shadow/lamp rays": per pixel of the visibility buffer, the shadow rays the resolve traced
+    ///   to the lamps it picks, aimed at a table of stratified disc points interleaved over 4 × 4
+    ///   pixels and TAA's cycle; it writes the share of their light that reaches the pixel.
+    /// - "shadow/lamp filter": that share averaged over a fixed 7 × 7 tent of the pixel's
+    ///   neighbours on its surface, weighted by their unshadowed light.
+    ///
+    /// `probes`: the probes the resolve lights with (their regions are the lamps' places).
+    /// `None`, and nothing declared, when `scene` lights no lamp in this frame or the device has
+    /// no ray queries: no other image changes.
+    #[allow(clippy::too_many_arguments)]
+    pub fn lamp_shadows<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        slot: FrameSlot,
+        scene: &MeshletScene,
+        targets: DrawTargets,
+        extent: vk::Extent2D,
+        probes: Option<ProbeLight>,
+    ) -> Option<ImageHandle> {
+        let [rays, filter] = self.pipeline_lamp_shadows.as_ref()?;
+        if scene.lamp_counts[slot.index].get()[0] == 0 {
+            return None;
+        }
+        let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+        let image = |name: &'static str, format: vk::Format| TransientDesc {
+            name,
+            width: extent.width,
+            height: extent.height,
+            format,
+            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE,
+            aspect: vk::ImageAspectFlags::COLOR,
+            mip_levels: 1,
+        };
+        let half4 = vk::Format::R16G16B16A16_SFLOAT;
+        let ratio = graph.transient(image("lamp shadow ratio", half4));
+        let surface = graph.transient(image("lamp shadow surface", half4));
+        let normal = graph.transient(image("lamp shadow normal", vk::Format::R16G16_SFLOAT));
+        let share = graph.transient(image("lamp share", half4));
+        let frame = self.frame_buffers[slot.index].address();
+        let push = move |vis_image: u32,
+                         [ratio_image, surface_image, normal_image]: [u32; 3],
+                         share_image: u32| {
+            LampShadowPush {
+                frame,
+                probes: probes.map_or(0, |p| p.address),
+                vis_image,
+                ratio_image,
+                surface_image,
+                normal_image,
+                share_image,
+                width: extent.width,
+                height: extent.height,
+                pad: 0,
+            }
+        };
+        let groups = (extent.width.div_ceil(8), extent.height.div_ceil(8));
+        let mut builder = graph
+            .pass("shadow/lamp rays")
+            .image(targets.visibility, ImageAccess::Sampled(compute))
+            .image(ratio, ImageAccess::StorageWrite(compute))
+            .image(surface, ImageAccess::StorageWrite(compute))
+            .image(normal, ImageAccess::StorageWrite(compute))
+            .buffer(targets.visible_list, BufferAccess::ShaderRead(compute))
+            .buffer(targets.pages, BufferAccess::ShaderRead(compute))
+            .buffer(targets.page_table, BufferAccess::ShaderRead(compute))
+            .with(|b| MoversFrame::declare(targets.movers, b, compute, true));
+        if let Some(p) = probes {
+            builder = builder
+                .buffer(p.data, BufferAccess::ShaderRead(compute))
+                .buffer(p.region, BufferAccess::ShaderRead(compute));
+        }
+        builder.run(move |resources, commands| {
+            let written = [ratio, surface, normal].map(|i| resources.storage(i, 0).0);
+            commands.bind_pipeline(rays);
+            commands.push_constants(
+                rays,
+                &push(resources.sampled(targets.visibility).0, written, u32::MAX),
+            );
+            commands.dispatch(groups.0, groups.1, 1);
+            Ok(())
+        });
+        graph
+            .pass("shadow/lamp filter")
+            .image(ratio, ImageAccess::Sampled(compute))
+            .image(surface, ImageAccess::Sampled(compute))
+            .image(normal, ImageAccess::Sampled(compute))
+            .image(share, ImageAccess::StorageWrite(compute))
+            .run(move |resources, commands| {
+                let read = [ratio, surface, normal].map(|i| resources.sampled(i).0);
+                commands.bind_pipeline(filter);
+                commands
+                    .push_constants(filter, &push(u32::MAX, read, resources.storage(share, 0).0));
+                commands.dispatch(groups.0, groups.1, 1);
+                Ok(())
+            });
+        Some(share)
+    }
+
     /// Declares the passes that shade the visibility buffer once per pixel into `color` (a
     /// storage-capable colour image of `extent`, at most the renderer's size), one per
     /// material class. The standard pass covers the target: it shades the standard pixels,
-    /// writes `background` into empty ones (or leaves them for a later pass, the sky, when
-    /// `None`) and lists the 8×8 tiles that show each other class; each other class then
-    /// shades its pixels in its tiles. A pixel's triangle is fetched, its attributes
-    /// reconstructed at the pixel centre from analytic barycentrics, and lit with the
+    /// writes `background` (its alpha at least 0) into empty ones (or leaves them for a later
+    /// pass, the sky, when `None`) and lists the 8×8 tiles that show each other class; each
+    /// other class then shades its pixels in its tiles. A pixel's triangle is fetched, its
+    /// attributes reconstructed at the pixel centre from analytic barycentrics, and lit with the
     /// instance's row of the material table. Under `ambient.sky` (issue #47), a surface takes
     /// the sky's irradiance for its normal besides the sun, scaled by `ambient.occlusion`
     /// (issue #48); without a sky, space's constant fill.
@@ -4446,6 +4601,10 @@ impl MeshletRenderer {
         ambient: AmbientLight,
     ) {
         debug_assert!(tile_count(extent) <= tile_count(self.extent));
+        debug_assert!(
+            background.is_none_or(|b| b[3] >= 0.0),
+            "a background's alpha is ≥ 0"
+        );
         if let Some(h) = &self.resolve_hasher {
             self.hash_resolve_inputs(h, graph, slot, &targets, &ambient);
         }
@@ -4479,9 +4638,11 @@ impl MeshletRenderer {
             color_image: resources.storage(color, 0).0,
             width: extent.width,
             height: extent.height,
-            use_background: u32::from(background.is_some()),
+            lamp_share: ambient
+                .lamp_share
+                .map_or(u32::MAX, |s| resources.sampled(s).0),
             tile_capacity: tile_count(self.extent),
-            background: background.unwrap_or([0.0; 4]),
+            background: background.unwrap_or([0.0, 0.0, 0.0, -1.0]),
             sky: ambient.sky.map_or(0, |s| s.address),
             ao_image: ambient
                 .occlusion
@@ -4539,6 +4700,9 @@ impl MeshletRenderer {
         }
         if let Some(shadow) = ambient.sun_shadow {
             builder = builder.image(shadow, ImageAccess::Sampled(compute));
+        }
+        if let Some(share) = ambient.lamp_share {
+            builder = builder.image(share, ImageAccess::Sampled(compute));
         }
         if let Some(g) = ambient.wet_ground {
             builder = g.images().fold(builder, |b, image| {
@@ -4602,6 +4766,9 @@ impl MeshletRenderer {
             if let Some(shadow) = ambient.sun_shadow {
                 builder = builder.image(shadow, ImageAccess::Sampled(compute));
             }
+            if let Some(share) = ambient.lamp_share {
+                builder = builder.image(share, ImageAccess::Sampled(compute));
+            }
             if let Some(h) = ambient.reflection_history {
                 builder = builder
                     .image(h.previous, ImageAccess::Sampled(compute))
@@ -4650,6 +4817,9 @@ impl MeshletRenderer {
             }
             if let Some(shadow) = ambient.sun_shadow {
                 builder = builder.image(shadow, ImageAccess::Sampled(compute));
+            }
+            if let Some(share) = ambient.lamp_share {
+                builder = builder.image(share, ImageAccess::Sampled(compute));
             }
             if let Some(g) = ambient.wet_ground {
                 builder = g.images().fold(builder, |b, image| {

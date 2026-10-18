@@ -155,6 +155,9 @@ const PRECISE_ENTRIES: &[(&str, &str)] = &[
     ("meshlet.slang", "resolve_jelly_main"),
     ("meshlet.slang", "resolve_jelly_rt_main"),
     ("meshlet.slang", "reflections_main"),
+    // D-065's lamps: their rays and the filter of what they found feed the resolve.
+    ("meshlet.slang", "lamp_rays_main"),
+    ("meshlet.slang", "lamp_filter_main"),
     ("taa.slang", "motion_main"),
     ("taa.slang", "resolve_history_main"),
     ("taa.slang", "sharpen_main"),

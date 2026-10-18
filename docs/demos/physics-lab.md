@@ -2064,10 +2064,33 @@ off it and off the chimney's foot.
   colour times the flame's light.
 - **Visibility:** at night the flames burn orange with a white-hot base. By day they are lost
   under the smoke.
-- **No light yet:** the fire does not light the yard. As a lamp of the flames' size, the
-  rocks' shadows on the floor came out dithered at their wide penumbrae, which wait for the
-  lamps' denoiser (D-065).
 - **Cost:** `particles/draw` stays at 0.085 ms (927 particles at most), the frame at 1.72 ms.
+
+**The fire's light** (D-065's penumbra filter, #270, `smoke::lamps`):
+
+![The fire at midnight lighting the yard: the rocks' soft shadows on the floor](images/lab-fire-light.png)
+
+*Frame 360 of `--lab smoke --fixed-step --time-of-day 1.5`: the fire lights the floor, the
+chimneys and the plumes' undersides, and its ring of rocks casts soft shadows outwards.*
+
+![The rocks' shadows before and after the filter](images/lab-fire-penumbrae.png)
+
+*The rocks' shadows under TAA, frame 360: each pixel's own rays (`--no-lamp-filter`, left) and
+the filter (right).*
+
+- **The lamp:** in the flames, 0.8 m over the floor and as large as they are (12 cm), at 1 900 K
+  and about 150 cd. It rises and falls by up to an eighth a few times a second, from the scene's
+  clock, so `--sea-time` holds it still. By day it barely shows.
+- **Its shadows:** a 12 cm light 0.8 m up gives the rocks penumbrae about half a metre wide on the
+  floor. With each pixel's own rays they came out dithered in streaks, and the lamp waited for
+  D-065's denoiser. The filter keeps them smooth.
+- **A still camera, frames 10 apart** (the clock held, `--sea-time 6`), the pixels that change by
+  more than 2 codes:
+  - under DLAA, 1.44 % before and 0.034 % with the filter;
+  - under TAA, 10.9 % and 3.9 %, against 0.73 % without the fire's light. Hard shadows
+    (every ray to the fire's middle) leave 0.56 %, so TAA's remainder is the soft shadows'
+    change from frame to frame.
+- **Cost:** +0.08 ms in the zones, the frame 2.04 → 2.12 ms (`docs/PROFILE.md`).
 
 **Left for the next steps of D-064:**
 - the depth buffer's collisions (smoke, dust) and the movers;
@@ -2075,7 +2098,6 @@ off it and off the chimney's foot.
   the fire's oldest, largest puffs covered the young detailed ones in a dark blur (D-064);
 - a dust flipbook (the frames blended by motion vectors were tried and left out: with 32 frames
   a frame's content moves about a texel to the next, and the warp changed 37 pixels, D-064);
-- the fire's light, once the lamps' penumbrae are denoised;
 - the dust volume;
 - the village's chimneys at dusk and the walker's steps (#266).
 
@@ -2106,10 +2128,17 @@ Steps 1 and 3 of D-065 (`forge_render::lamps`, `lamps_at` and `hit_lamps` in `me
 - **The shading:** a pixel takes the three lamps with the most light there, and one of the
   others picked by its light (here there are only three).
   - The light is its candelas over the distance squared, by the cosine.
-  - Shadow rays go towards points of its sphere, the sun's eight Vogel points one a frame (two
-    half a cycle apart for the strongest lamp), so TAA or DLAA averages the penumbra.
   - The lamps give highlights as the sun does. Every class takes them where it takes the sun's
     light.
+- **The shadows** (D-065's penumbra filter, 2026-10-18), before the resolve:
+  - "shadow/lamp rays" traces those lamps' shadow rays (two for the strongest) to a table of 128
+    stratified points of their spheres, 16 a frame spread over every 4 × 4 pixels, all 128 over
+    TAA's 8 frames. It writes the share of their light that reaches the pixel.
+  - "shadow/lamp filter" averages that share over a 7 × 7 tent of the pixel's neighbours on its
+    surface.
+  - The resolve lights with every lamp unshadowed, times that share.
+  - `--no-lamp-filter` keeps the rays in the resolve, to the sun's eight Vogel points a frame, as
+    before.
 - **The bounce:** each probe ray's hit takes one lamp, picked by its light, with a shadow ray. The
   walls send the lamps' light back, and a face turned away from every lamp is no longer black.
 
@@ -2119,8 +2148,12 @@ Steps 1 and 3 of D-065 (`forge_render::lamps`, `lamps_at` and `hit_lamps` in `me
   - under TAA, 0.05 to 0.10 % of the pixels differ by more than 2 codes (0.21 % with step 1's
     independent sphere points);
   - under DLAA, 0.0003 to 0.011 % (the room unlit: 0.0102 %).
+  - With the penumbra filter, frames 200 to 280: 0.081 % under TAA (0.078 % before) and
+    0.0040 % under DLAA (0.0041 % before). The room's bulbs are small, its penumbrae narrow.
 - **Cost:** three lamps over the whole view, four rays a pixel, take `shading/standard` from 0.16
-  to 0.64 ms with the strongest lamp's second ray (the frame 0.84 → 1.74 ms).
+  to 0.64 ms with the strongest lamp's second ray (the frame 0.84 → 1.74 ms). With the penumbra
+  filter, best of three: "shadow/lamp rays" 0.30 ms, "shadow/lamp filter" 0.15 ms and
+  `shading/standard` 0.66 → 0.39 ms, the frame 1.84 → 2.02 ms.
 
 ## Captures
 

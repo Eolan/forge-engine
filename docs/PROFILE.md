@@ -1404,6 +1404,33 @@ three, the lamps cost the hall 0.57 ms. The strongest lamp's second ray halves t
 penumbrae under TAA (below); in the lab's room, where three lamps cover the whole view, it costs
 0.12 ms (`shading/standard` 0.52 → 0.64 ms).
 
+The lamps' penumbra filter (D-065, 2026-10-18): their shadow rays move out of the resolve into
+"shadow/lamp rays", and "shadow/lamp filter" averages the share of their light that reaches each
+pixel. 1600 × 900, TAA, 300 frames, best of three:
+
+| | `shadow/lamp rays` | `shadow/lamp filter` | `shading/standard` | frame |
+|---|---|---|---|---|
+| the hall at 22:00, the resolve's rays (before) | | | 0.95 ms | 4.88 ms (serial 5.03) |
+| the hall at 22:00, the filter | 0.64 ms | 0.16 ms | 0.65 ms | 5.33 ms (serial 5.49) |
+| the lab's lamp room, before | | | 0.66 ms | 1.84 ms |
+| the lab's lamp room, the filter | 0.30 ms | 0.15 ms | 0.39 ms | 2.02 ms |
+| the smoke yard's fire at midnight, `--no-lamp-filter` | | | 0.43 ms | 2.04 ms |
+| the smoke yard's fire at midnight, the filter | 0.13 ms | 0.11 ms | 0.28 ms | 2.12 ms |
+
+- **The hall:** +0.45 ms with the async queue, +0.46 ms serial (`FORGE_ASYNC=0`), where the
+  passes simply add up.
+- **The rays pass** spends 0.19 ms before its first ray: the surface rebuilt from the visibility
+  buffer, its region, the picks. Its rays take 0.45 ms. The Vogel points in their place cost the
+  same, so the stratified table's points are not less coherent.
+- **The resolve** keeps 0.14 ms of its lamps: the region again and the exact, unshadowed sum.
+- **The filter** (8 × 8 groups, a 14 × 14 tile in groupshared memory):
+  - a 4 × 4 box, 0.08 ms, left 4-pixel steps on the penumbrae;
+  - the 7 × 7 tent took 0.23 ms as first written, 0.055 ms of it the taps without their edge
+    weights. With the weighted shares in the tile, the plane test as one dot product and no
+    branch, 0.16 ms.
+  - Packing the normal and region into one word made it slower (0.18 ms): the filter is bound by
+    its arithmetic, not by its tile's reads.
+
 ## `city-plan` — a city's plan in 3D, measured on the private sandbox's city (D-059, 2026-10-11)
 
 RTX 5070 Ti, 1600 × 900, TAA, 600 frames, a city of 37 506 masses (1 257 of them in the kit

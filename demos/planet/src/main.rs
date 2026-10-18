@@ -1687,6 +1687,7 @@ impl Demo for PlanetDemo {
                 clouds: None,
                 sun_shadow: None,
                 reflection_history: None,
+                lamp_share: None,
             },
         );
         match (&sky, &self.sky_box) {

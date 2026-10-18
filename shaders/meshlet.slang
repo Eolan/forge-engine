@@ -2700,23 +2700,22 @@ static float4 g_reflection_request;
 static float3 g_lamp_diffuse = float3(0.0);
 static float3 g_lamp_specular = float3(0.0);
 
-// The lamps' light on a surface at `world` (the scene's frame) facing `n`, seen from `view`
-// (D-065, crates/forge-render/src/lamps.rs): of the lamps whose reach it is in, the three
-// strongest there and one of the others picked by its light (`lamp_add`): each one's illuminance
-// (candelas over the distance squared, by the cosine), let go smoothly at its reach, and with
-// SHADOWS one shadow ray towards a point of its sphere that moves with the frame's noise, so TAA
-// averages the penumbra as it did the sun's single ray (#54). Highlights as the sun's. With
-// `probes` and their regions (D-068), only the lamps that light the surface's region
-// (`lamp_lights`): a house's rooms are its light lists.
-void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, float3 n, float3 view, float specular_power, float specular_weight, float bias, uint2 pixel)
+// Where a surface at `world` (the scene's frame) facing `n` takes its lamps from (D-065): with
+// `probes` and their regions (D-068), its region and the one across a doorway, whose lamps light
+// it (`lamp_lights`: a house's rooms are its light lists); the runs of the light lists they name
+// (`lamp_runs`).
+struct LampPlace
 {
-    g_lamp_diffuse = float3(0.0);
-    g_lamp_specular = float3(0.0);
-    uint count = f[0].lamp_count;
-    if (count == 0u || f[0].lamps == nullptr)
-        return;
-    uint region = REGION_NONE;
-    uint other = REGION_NONE;
+    uint region;
+    uint other;
+    LampRuns runs;
+};
+
+LampPlace lamp_place(Frame* f, ProbeField* probes, float3 world, float3 n)
+{
+    LampPlace place;
+    place.region = REGION_NONE;
+    place.other = REGION_NONE;
     if (probes != nullptr && probes[0].region_count > 0u)
     {
         // A face whose point 2 cm off it misses its room's outline (the house's body: a wall's
@@ -2727,24 +2726,44 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
             at = region_at(probes, world + n * 0.15);
         if (at.kind != REGION_SOLID)
         {
-            region = at.region;
-            other = at.other;
+            place.region = at.region;
+            place.other = at.other;
         }
     }
-    // The three strongest lamps here, unshadowed (`lamp_weight`), and the others' sum, over the
-    // light lists of the surface's region (`lamp_runs`).
-    LampRuns runs = lamp_runs(f, region, other);
-    uint top[3] = { count, count, count };
+    place.runs = lamp_runs(f, place.region, place.other);
+    return place;
+}
+
+// The lamps a pixel traces (`lamps_at`, `lamp_rays_main`): of its place's, the three strongest
+// there, unshadowed (`lamp_weight`), and one of the others picked by its weight (Shirley, Wang and
+// Zimmerman 1996), counted as its light times `scale`, the others' sum over its weight. The
+// frame's lamp count where there is none.
+struct LampPicks
+{
+    uint top[3];
+    uint chosen;
+    float scale;
+};
+
+LampPicks lamp_picks(Frame* f, LampPlace place, float3 world, float3 n, uint2 pixel)
+{
+    uint count = f[0].lamp_count;
+    LampPicks picks;
+    picks.top[0] = count;
+    picks.top[1] = count;
+    picks.top[2] = count;
+    picks.chosen = count;
+    picks.scale = 0.0;
     float top_w[3] = { 0.0, 0.0, 0.0 };
     float rest = 0.0;
     for (uint r = 0u; r < 3u; r++)
     {
-        for (uint e = runs.run[r].x; e < runs.run[r].y; e++)
+        for (uint e = place.runs.run[r].x; e < place.runs.run[r].y; e++)
         {
-            uint i = lamp_at(f, runs, e);
-            if (!lamp_counted(f, runs, r, i))
+            uint i = lamp_at(f, place.runs, e);
+            if (!lamp_counted(f, place.runs, r, i))
                 continue;
-            float w = lamp_weight_in(f[0].lamps[i], world, n, region, other);
+            float w = lamp_weight_in(f[0].lamps[i], world, n, place.region, place.other);
             if (w <= 0.0)
                 continue;
             // Into the three, the weakest of them out to the rest.
@@ -2754,9 +2773,9 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
                 if (w > top_w[j])
                 {
                     float held_w = top_w[j];
-                    uint held = top[j];
+                    uint held = picks.top[j];
                     top_w[j] = w;
-                    top[j] = k;
+                    picks.top[j] = k;
                     w = held_w;
                     k = held;
                 }
@@ -2764,50 +2783,89 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
             rest += w;
         }
     }
-    // Where on each lamp's disc: the sun's eight Vogel points, one a frame of TAA's cycle, turned
-    // per pixel (`sun_disc_point`, #54); independent points a frame left streaks in the penumbrae.
-    float2 u = sun_disc_point(pixel, f[0].noise_frame);
-    // The strongest lamp takes two rays, at points half the cycle apart, so TAA sees the eight in
-    // four frames where its penumbrae show most; the next two take one each.
-    if (top[0] < count)
-    {
-        float2 u_half = sun_disc_point(pixel, f[0].noise_frame + SUN_DISC_POINTS / 2u);
-        lamp_add<SHADOWS>(f, f[0].lamps[top[0]], top[0], 0.5, world, n, view, specular_power, specular_weight, bias, u);
-        lamp_add<SHADOWS>(f, f[0].lamps[top[0]], top[0], 0.5, world, n, view, specular_power, specular_weight, bias, u_half);
-    }
-    for (uint j = 1u; j < 3u; j++)
-    {
-        if (top[j] < count)
-            lamp_add<SHADOWS>(f, f[0].lamps[top[j]], top[j], 1.0, world, n, view, specular_power, specular_weight, bias, u);
-    }
     if (rest <= 0.0)
-        return;
+        return picks;
     // One of the others, picked by its weight, its light over its chance (w / rest): every
-    // lamp counts, at most four shadow rays a pixel, the others' noise TAA's to average.
+    // lamp counts, at most five shadow rays a pixel.
     float pick = interleaved_gradient_noise(pixel, f[0].noise_frame, float2(0.0)) * rest;
-    uint chosen = count;
     float chosen_w = 0.0;
     for (uint r = 0u; r < 3u; r++)
     {
-        if (chosen < count && pick <= 0.0)
+        if (picks.chosen < count && pick <= 0.0)
             break;
-        for (uint e = runs.run[r].x; e < runs.run[r].y; e++)
+        for (uint e = place.runs.run[r].x; e < place.runs.run[r].y; e++)
         {
-            uint i = lamp_at(f, runs, e);
-            if (i == top[0] || i == top[1] || i == top[2] || !lamp_counted(f, runs, r, i))
+            uint i = lamp_at(f, place.runs, e);
+            if (i == picks.top[0] || i == picks.top[1] || i == picks.top[2] || !lamp_counted(f, place.runs, r, i))
                 continue;
-            float w = lamp_weight_in(f[0].lamps[i], world, n, region, other);
+            float w = lamp_weight_in(f[0].lamps[i], world, n, place.region, place.other);
             if (w <= 0.0)
                 continue;
-            chosen = i;
+            picks.chosen = i;
             chosen_w = w;
             pick -= w;
             if (pick <= 0.0)
                 break;
         }
     }
-    if (chosen < count)
-        lamp_add<SHADOWS>(f, f[0].lamps[chosen], chosen, rest / chosen_w, world, n, view, specular_power, specular_weight, bias, u);
+    if (picks.chosen < count)
+        picks.scale = rest / chosen_w;
+    return picks;
+}
+
+// The lamps' light on a surface at `world` (the scene's frame) facing `n`, seen from `view`
+// (D-065, crates/forge-render/src/lamps.rs), of the lamps of its place (`lamp_place`) whose reach
+// it is in: each one's illuminance (candelas over the distance squared, by the cosine), let go
+// smoothly at its reach, and highlights as the sun's (`lamp_add`).
+// - With the penumbra filter (`share`, the sampled index of `lamp_filter_main`'s output): every
+//   one of them unshadowed, without a ray, times the share of their light that reaches the pixel,
+//   which the filter took from `lamp_rays_main`'s rays over its neighbours (Heitz et al. 2018).
+// - Without (`share` 0xFFFFFFFF, `--no-lamp-filter`): with SHADOWS, the picked lamps'
+//   (`lamp_picks`) own shadow rays towards points of their spheres that move with the frame's
+//   noise, so TAA averages the penumbra as it did the sun's single ray (#54).
+void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, float3 n, float3 view, float specular_power, float specular_weight, float bias, uint2 pixel, uint share)
+{
+    g_lamp_diffuse = float3(0.0);
+    g_lamp_specular = float3(0.0);
+    uint count = f[0].lamp_count;
+    if (count == 0u || f[0].lamps == nullptr)
+        return;
+    LampPlace place = lamp_place(f, probes, world, n);
+    if (share != 0xFFFFFFFFu)
+    {
+        for (uint r = 0u; r < 3u; r++)
+        {
+            for (uint e = place.runs.run[r].x; e < place.runs.run[r].y; e++)
+            {
+                uint i = lamp_at(f, place.runs, e);
+                if (lamp_counted(f, place.runs, r, i) && lamp_weight_in(f[0].lamps[i], world, n, place.region, place.other) > 0.0)
+                    lamp_add<0>(f, f[0].lamps[i], i, 1.0, world, n, view, specular_power, specular_weight, bias, float2(0.0));
+            }
+        }
+        float3 reaching = g_sampled_images[NonUniformResourceIndex(share)].Load(int3(pixel, 0)).rgb;
+        g_lamp_diffuse *= reaching;
+        g_lamp_specular *= reaching;
+        return;
+    }
+    LampPicks picks = lamp_picks(f, place, world, n, pixel);
+    // Where on each lamp's disc: the sun's eight Vogel points, one a frame of TAA's cycle, turned
+    // per pixel (`sun_disc_point`, #54); independent points a frame left streaks in the penumbrae.
+    float2 u = sun_disc_point(pixel, f[0].noise_frame);
+    // The strongest lamp takes two rays, at points half the cycle apart, so TAA sees the eight in
+    // four frames where its penumbrae show most; the next two take one each.
+    if (picks.top[0] < count)
+    {
+        float2 u_half = sun_disc_point(pixel, f[0].noise_frame + SUN_DISC_POINTS / 2u);
+        lamp_add<SHADOWS>(f, f[0].lamps[picks.top[0]], picks.top[0], 0.5, world, n, view, specular_power, specular_weight, bias, u);
+        lamp_add<SHADOWS>(f, f[0].lamps[picks.top[0]], picks.top[0], 0.5, world, n, view, specular_power, specular_weight, bias, u_half);
+    }
+    for (uint j = 1u; j < 3u; j++)
+    {
+        if (picks.top[j] < count)
+            lamp_add<SHADOWS>(f, f[0].lamps[picks.top[j]], picks.top[j], 1.0, world, n, view, specular_power, specular_weight, bias, u);
+    }
+    if (picks.chosen < count)
+        lamp_add<SHADOWS>(f, f[0].lamps[picks.chosen], picks.chosen, picks.scale, world, n, view, specular_power, specular_weight, bias, u);
 }
 
 // Adds lamp `lamp` (the frame's `i`-th) to `g_lamp_diffuse` and `g_lamp_specular`, times `scale`
@@ -2826,20 +2884,12 @@ void lamp_add<let SHADOWS : int>(Frame* f, Lamp lamp, uint i, float scale, float
     {
         // A point of the sphere's disc facing the surface, uniform in area, its angle turned for
         // each lamp so two lamps' samples do not move together.
-        float3 t = normalize(cross(abs(dir.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0), dir));
-        float3 b = cross(dir, t);
+        float3 t;
+        float3 b;
+        lamp_disc_axes(dir, t, b);
         float r = radius * sqrt(u.x);
         float a = 6.28318530718 * frac(u.y + 0.618034 * float(i));
-        float3 target = lamp.position_radius.xyz + (t * cos(a) + b * sin(a)) * r;
-        RayDesc ray;
-        ray.Origin = world + n * bias;
-        float3 to = target - ray.Origin;
-        float length_to = length(to);
-        ray.Direction = to / max(length_to, 1e-6);
-        ray.TMin = 0.0;
-        // Short of the bulb: a lamp's own globe or fitting is not in its way.
-        ray.TMax = max(length_to - radius - 0.02, 0.0);
-        if (ray_blocked(f, ray))
+        if (ray_blocked(f, lamp_ray(lamp, world, n, bias, (t * cos(a) + b * sin(a)) * r)))
             return;
     }
     // Let go between 80 % and all of its reach, so its edge does not show.
@@ -2849,6 +2899,30 @@ void lamp_add<let SHADOWS : int>(Frame* f, Lamp lamp, uint i, float scale, float
     g_lamp_diffuse += illuminance;
     float3 half_vector = normalize(dir + view);
     g_lamp_specular += pow(max(dot(n, half_vector), 0.0), specular_power) * specular_weight * illuminance;
+}
+
+// Two axes across `dir`, the direction from a surface to a lamp: they span the disc of the lamp's
+// sphere that faces the surface.
+void lamp_disc_axes(float3 dir, out float3 t, out float3 b)
+{
+    t = normalize(cross(abs(dir.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0), dir));
+    b = cross(dir, t);
+}
+
+// The shadow ray from a surface at `world` facing `n`, starting `bias` off it, to the point
+// `offset` from lamp `lamp`'s middle. It ends short of the bulb: a lamp's own globe or fitting is
+// not in its way.
+RayDesc lamp_ray(Lamp lamp, float3 world, float3 n, float bias, float3 offset)
+{
+    float3 target = lamp.position_radius.xyz + offset;
+    RayDesc ray;
+    ray.Origin = world + n * bias;
+    float3 to = target - ray.Origin;
+    float length_to = length(to);
+    ray.Direction = to / max(length_to, 1e-6);
+    ray.TMin = 0.0;
+    ray.TMax = max(length_to - lamp.position_radius.w - 0.02, 0.0);
+    return ray;
 }
 
 // The sky reflected by a dielectric (issue #49), in the resolve's units (a white Lambertian
@@ -4034,9 +4108,9 @@ struct ResolvePush
     uint color_image;    // storage-image index of the colour target (RGBA16F)
     uint width;
     uint height;
-    uint use_background; // write `background` to empty pixels (else leave them for the sky)
+    uint lamp_share;     // sampled index of the lamps' filtered share of their light (rgba16f, `lamp_filter_main`), or 0xFFFFFFFF: their own rays here
     uint tile_capacity;
-    float4 background;
+    float4 background;   // written to empty pixels where its w ≥ 0 (else they are left for the sky)
     float4* sky;         // the sky's irradiance (sh.slang), or null: space's constant fill (issue #47)
     uint ao_image;       // sampled index of the ambient occlusion (gtao.slang, issue #48), or 0xFFFFFFFF
     uint request_image;  // storage index of the mirror rays' requests (issue #52), or 0xFFFFFFFF
@@ -5208,9 +5282,10 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     // Under the clouds (#145).
     if (resolve_push.cloud_shadow != 0xFFFFFFFFu)
         s.shadow *= cloud_light(surface_scene, normalize(f[0].sun_dir));
-    // The lamps (D-065): every one whose reach the surface is in and that lights its room, a
-    // shadow ray each; the classes take them where they take the sun (`sun_light`).
-    lamps_at<SHADOWS>(f, s.probes, surface_scene, s.n, s.view, mat.specular_power, mat.specular, shadow_bias(f, inst, m), pixel);
+    // The lamps (D-065): every one whose reach the surface is in and that lights its room, times
+    // the filtered share of their light that reaches it (`lamp_filter_main`), or with a shadow ray
+    // each; the classes take them where they take the sun (`sun_light`).
+    lamps_at<SHADOWS>(f, s.probes, surface_scene, s.n, s.view, mat.specular_power, mat.specular, shadow_bias(f, inst, m), pixel, resolve_push.lamp_share);
     s.transmitted = float3(0.0);
     s.cloud = 1.0;
     if (SHADOWS != 0 && class_index == MATERIAL_CLASS_ICE && f[0].tlas != 0 && (f[0].flags & FLAG_TRANSLUCENCY) != 0)
@@ -5272,7 +5347,7 @@ void resolve_standard<let SHADOWS : int>(uint3 group, uint3 thread, uint index)
             if ((shaded & REFLECT_BIT) != 0)
                 others |= 1u << REFLECTION_LIST;
         }
-        else if (resolve_push.use_background != 0)
+        else if (resolve_push.background.w >= 0.0)
         {
             g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.color_image)][pixel] = resolve_push.background;
         }
@@ -5478,6 +5553,56 @@ float3 steadied_reflection(ReflectionHistory* h, Frame* f, uint2 pixel, float2 s
     return result;
 }
 
+// ------------------------------------------- the surface of a pixel, before the resolve ---
+
+// The surface the visibility buffer's (non-empty) id `vis` shows at `pixel` of a `width` ×
+// `height` target, rebuilt at the pixel's centre as `shade_pixel` rebuilds it, for the passes
+// that trace from it before the resolve (the sun's for SIGMA, the lamps'): its normal, turned to
+// the viewer on a double-sided row seen from behind (#171, but leaf cards) and a grating's; where
+// it stands relative to the camera; its instance and cluster, for where its rays start
+// (`shadow_bias`).
+struct PixelSurface
+{
+    float3 n;
+    float3 relative;
+    Instance inst;
+    Meshlet m;
+};
+
+PixelSurface pixel_surface(Frame* f, uint vis, uint2 pixel, uint width, uint height)
+{
+    uint slot = vis >> VISIBILITY_TRIANGLE_BITS;
+    uint tri = vis & ((1u << VISIBILITY_TRIANGLE_BITS) - 1u);
+    uint2 record = f[0].visible[slot];
+    PixelSurface s;
+    s.inst = f[0].instances[record.x];
+    s.m = f[0].meshlets[record.y & MESHLET_INDEX_MASK];
+    Material mat = f[0].materials[s.inst.material + triangle_section(s.m, tri)];
+    uint base = payload_base(f, s.m);
+    PagedVertex v0 = paged_vertex(f, base, s.m, paged_index(f, base, s.m, tri, 0));
+    PagedVertex v1 = paged_vertex(f, base, s.m, paged_index(f, base, s.m, tri, 1));
+    PagedVertex v2 = paged_vertex(f, base, s.m, paged_index(f, base, s.m, tri, 2));
+    float3x3 frame = instance_frame(s.inst);
+    float3 relative = instance_relative(f, s.inst);
+    float4 c0 = mul(f[0].view_proj, float4(mul(frame, v0.position) + relative, 1));
+    float4 c1 = mul(f[0].view_proj, float4(mul(frame, v1.position) + relative, 1));
+    float4 c2 = mul(f[0].view_proj, float4(mul(frame, v2.position) + relative, 1));
+    float2 size = float2(float(width), float(height));
+    float2 ndc = float2((float(pixel.x) + 0.5) / size.x * 2.0 - 1.0, 1.0 - (float(pixel.y) + 0.5) / size.y * 2.0);
+    Barycentrics b = barycentrics(c0, c1, c2, ndc, size);
+    s.n = normalize(b.lambda.x * normalize(mul(frame, decode_normal(v0.normal)))
+        + b.lambda.y * normalize(mul(frame, decode_normal(v1.normal)))
+        + b.lambda.z * normalize(mul(frame, decode_normal(v2.normal))));
+    float3 object_position = b.lambda.x * v0.position + b.lambda.y * v1.position + b.lambda.z * v2.position;
+    s.relative = mul(frame, object_position) + relative;
+    if ((mat.flags & (MATERIAL_FLAG_DOUBLE_SIDED | MATERIAL_FLAG_FOLIAGE)) == MATERIAL_FLAG_DOUBLE_SIDED
+        && dot(cross(mul(frame, v1.position - v0.position), mul(frame, v2.position - v0.position)), -s.relative) < 0.0)
+        s.n = -s.n;
+    if ((mat.flags & MATERIAL_FLAG_GRATING) != 0)
+        s.n = grating_normal(normalize(-s.relative));
+    return s;
+}
+
 // ------------------------------------------------------- the sun's shadow for SIGMA ---
 
 // The sun's shadow ray for NVIDIA's SIGMA denoiser (#172, D-049), before the resolve: per pixel,
@@ -5531,36 +5656,9 @@ void sun_shadow_trace_main(uint3 id : SV_DispatchThreadID)
         return;
     }
     Frame* f = p.frame;
-    uint slot = vis >> VISIBILITY_TRIANGLE_BITS;
-    uint tri = vis & ((1u << VISIBILITY_TRIANGLE_BITS) - 1u);
-    uint2 record = f[0].visible[slot];
-    Instance inst = f[0].instances[record.x];
-    Meshlet m = f[0].meshlets[record.y & MESHLET_INDEX_MASK];
-    Material mat = f[0].materials[inst.material + triangle_section(m, tri)];
-    // The surface at the pixel centre, as `shade_pixel` rebuilds it.
-    uint base = payload_base(f, m);
-    PagedVertex v0 = paged_vertex(f, base, m, paged_index(f, base, m, tri, 0));
-    PagedVertex v1 = paged_vertex(f, base, m, paged_index(f, base, m, tri, 1));
-    PagedVertex v2 = paged_vertex(f, base, m, paged_index(f, base, m, tri, 2));
-    float3x3 frame = instance_frame(inst);
-    float3 relative = instance_relative(f, inst);
-    float4 c0 = mul(f[0].view_proj, float4(mul(frame, v0.position) + relative, 1));
-    float4 c1 = mul(f[0].view_proj, float4(mul(frame, v1.position) + relative, 1));
-    float4 c2 = mul(f[0].view_proj, float4(mul(frame, v2.position) + relative, 1));
-    float2 size = float2(float(p.width), float(p.height));
-    float2 ndc = float2((float(pixel.x) + 0.5) / size.x * 2.0 - 1.0, 1.0 - (float(pixel.y) + 0.5) / size.y * 2.0);
-    Barycentrics b = barycentrics(c0, c1, c2, ndc, size);
-    float3 n = normalize(b.lambda.x * normalize(mul(frame, decode_normal(v0.normal)))
-        + b.lambda.y * normalize(mul(frame, decode_normal(v1.normal)))
-        + b.lambda.z * normalize(mul(frame, decode_normal(v2.normal))));
-    float3 object_position = b.lambda.x * v0.position + b.lambda.y * v1.position + b.lambda.z * v2.position;
-    float3 surface_relative = mul(frame, object_position) + relative;
-    // A double-sided row seen from behind turns its normal to the viewer (#171), but leaf cards.
-    if ((mat.flags & (MATERIAL_FLAG_DOUBLE_SIDED | MATERIAL_FLAG_FOLIAGE)) == MATERIAL_FLAG_DOUBLE_SIDED
-        && dot(cross(mul(frame, v1.position - v0.position), mul(frame, v2.position - v0.position)), -surface_relative) < 0.0)
-        n = -n;
-    if ((mat.flags & MATERIAL_FLAG_GRATING) != 0)
-        n = grating_normal(normalize(-surface_relative));
+    PixelSurface s = pixel_surface(f, vis, pixel, p.width, p.height);
+    float3 n = s.n;
+    float3 surface_relative = s.relative;
     normal[pixel] = float4(n, 1.0);
     view_z[pixel] = dot(p.view_z.xyz, surface_relative) + p.view_z.w;
     float3 sun = normalize(f[0].sun_dir);
@@ -5578,7 +5676,7 @@ void sun_shadow_trace_main(uint3 id : SV_DispatchThreadID)
     float r = p.tan_radius * sqrt(u.x);
     float phi = 6.2831853 * u.y;
     RayDesc ray;
-    ray.Origin = to_scene(f, surface_relative) + (n + sun) * shadow_bias(f, inst, m);
+    ray.Origin = to_scene(f, surface_relative) + (n + sun) * shadow_bias(f, s.inst, s.m);
     ray.Direction = normalize(sun + (t * cos(phi) + bt * sin(phi)) * r);
     ray.TMin = 0.0;
     ray.TMax = 50000.0;
@@ -5591,6 +5689,243 @@ void sun_shadow_trace_main(uint3 id : SV_DispatchThreadID)
     }
     ClosestHit hit = trace_closest(f, ray, true);
     penumbra[pixel] = hit.hit ? min(0.5 * hit.t * p.tan_radius, 32768.0) : NRD_MISS;
+}
+
+// --------------------------------------------------------- the lamps' penumbrae ---
+
+// The lamps' shadow rays before the resolve and the filter of what they found (D-065,
+// research/lamp-penumbra-denoising.md §7): the interleaved ratio filter.
+// - `lamp_rays_main` traces, per pixel, the rays `lamps_at` traced (`lamp_picks`: the three
+//   strongest lamps, the strongest with two rays, and one picked by its light), each to a point of
+//   a table of 128 stratified disc points spread over 4 × 4 pixels and the 8 frames of TAA's cycle
+//   (`lamp_disc_point`; Keller and Heidrich's interleaved sampling, 2001). It writes the share of
+//   their light that reaches the pixel, Ŝ / Û per channel, the same rays' shadowed over unshadowed
+//   irradiance (Heitz, Hill and McGuire's ratio estimator, 2018), with luminance(Û).
+// - `lamp_filter_main` averages that share over a fixed 7 × 7 tent of the pixel's neighbours on
+//   its surface (a 4 × 4 box twice over), each weighted by its luminance(Û): every point of a
+//   frame's run weighs the same in it.
+// - The resolve multiplies the exact, unshadowed light of every lamp of the pixel's place by it
+//   (`lamps_at`), and TAA averages the 8 runs: all 128 points.
+// No width from the occluders' distance (NVIDIA's US 10,740,954, claims 10 and 15), no variance,
+// no history and no wave intrinsics (the research note's §3 and §6).
+struct LampShadowPush
+{
+    Frame* frame;
+    ProbeField* probes;  // the probes' regions (D-068), as the resolve has them, or null: no places
+    uint vis_image;      // sampled (u32): the visibility buffer
+    uint ratio_image;    // storage for the rays, sampled for the filter (rgba16f): Ŝ / Û per channel, luminance(Û) in lux (a); (1, 1, 1, 0) without lamp light
+    uint surface_image;  // likewise (rgba16f): the surface relative to the camera (rgb, metres), its region's tag (a: 0 none, else 1 + region mod 2047, exact in half precision)
+    uint normal_image;   // likewise (rg16f): its normal, octahedral (`oct_encode`)
+    uint share_image;    // storage (rgba16f): the filtered share (rgb), the resolve's `lamp_share`
+    uint width;
+    uint height;
+    uint pad;
+};
+
+[[vk::push_constant]]
+LampShadowPush lamp_shadow_push;
+
+// A 4 × 4 Bayer matrix, row by row: the order a 4 × 4 block of pixels takes a run's 16 points in.
+static const uint LAMP_BAYER[16] = { 0u, 8u, 2u, 10u, 12u, 4u, 14u, 6u, 3u, 11u, 1u, 9u, 15u, 7u, 13u, 5u };
+
+// Point `index` (< 128) of the lamps' disc table, in the unit disc: the first 128 points of the
+// two-dimensional Sobol sequence (Sobol 1967: the radical inverse in base 2 and the second
+// dimension's Pascal matrix), a (0,2)-sequence whose aligned runs of 16 are each stratified, and
+// all 128 too; at their cells' middles, through Shirley and Chiu's concentric map (1997), which
+// keeps the strata's areas.
+float2 lamp_disc_table(uint index)
+{
+    uint y = 0u;
+    uint v = 0x80000000u;
+    for (uint k = 0u; k < 7u; k++)
+    {
+        if (((index >> k) & 1u) != 0u)
+            y ^= v;
+        v ^= v >> 1;
+    }
+    float2 o = (float2(float(reversebits(index) >> 25), float(y >> 25)) + 0.5) / 64.0 - 1.0;
+    // The cells' middles are never on the square's axes, so neither division is by 0.
+    float r;
+    float phi;
+    if (abs(o.x) > abs(o.y))
+    {
+        r = o.x;
+        phi = 0.785398163 * (o.y / o.x);
+    }
+    else
+    {
+        r = o.y;
+        phi = 1.570796327 - 0.785398163 * (o.x / o.y);
+    }
+    return r * float2(cos(phi), sin(phi));
+}
+
+// Where on its disc lamp `i` (the frame's) is traced from `pixel` in frame `frame` of TAA's
+// cycle: point 16 (frame mod 8) + B[x mod 4, y mod 4] of the table (B the Bayer matrix), so every
+// 4 × 4 window of pixels holds a whole stratified run each frame and the cycle's 8 frames hold
+// all 128; turned by the lamp's golden angle, so two lamps' points do not move together.
+float2 lamp_disc_point(uint2 pixel, uint frame, uint i)
+{
+    float2 p = lamp_disc_table(16u * (frame % 8u) + LAMP_BAYER[(pixel.y & 3u) * 4u + (pixel.x & 3u)]);
+    float a = 6.28318530718 * frac(0.618034 * float(i));
+    float c = cos(a);
+    float s = sin(a);
+    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
+}
+
+// Whether lamp `lamp`'s light reaches a surface at `world` facing `n` from the point `disc` of
+// its sphere's disc (the unit disc, `lamp_disc_point`), its ray starting `bias` off the surface.
+bool lamp_seen(Frame* f, Lamp lamp, float3 world, float3 n, float bias, float2 disc)
+{
+    float3 d = lamp.position_radius.xyz - world;
+    float3 t;
+    float3 b;
+    lamp_disc_axes(d / max(length(d), 1e-6), t, b);
+    return !ray_blocked(f, lamp_ray(lamp, world, n, bias, (t * disc.x + b * disc.y) * lamp.position_radius.w));
+}
+
+// A lamp's unshadowed illuminance on a surface at `world` facing `n`, lux per channel, let go at
+// its reach as `lamp_add` lets it go.
+float3 lamp_lux(Lamp lamp, float3 world, float3 n)
+{
+    float3 d = lamp.position_radius.xyz - world;
+    float dist2 = dot(d, d);
+    float dist = sqrt(dist2);
+    float ndl = dot(n, d / max(dist, 1e-6));
+    float radius = lamp.position_radius.w;
+    float window = saturate(1.0 - pow(dist / lamp.colour_reach.w, 4.0));
+    return lamp.colour_reach.rgb / max(dist2, radius * radius) * (max(ndl, 0.0) * window * window);
+}
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void lamp_rays_main(uint3 id : SV_DispatchThreadID)
+{
+    LampShadowPush p = lamp_shadow_push;
+    if (id.x >= p.width || id.y >= p.height)
+        return;
+    uint2 pixel = id.xy;
+    RWTexture2D<float4> ratio = g_storage_images_rgba16f[NonUniformResourceIndex(p.ratio_image)];
+    RWTexture2D<float4> surface = g_storage_images_rgba16f[NonUniformResourceIndex(p.surface_image)];
+    RWTexture2D<float2> normal = g_storage_images_rg16f[NonUniformResourceIndex(p.normal_image)];
+    Frame* f = p.frame;
+    uint vis = g_sampled_images_u32[NonUniformResourceIndex(p.vis_image)].Load(int3(pixel, 0));
+    if (vis == VISIBILITY_EMPTY)
+    {
+        ratio[pixel] = float4(1.0, 1.0, 1.0, 0.0);
+        surface[pixel] = float4(0.0);
+        normal[pixel] = float2(0.0);
+        return;
+    }
+    PixelSurface s = pixel_surface(f, vis, pixel, p.width, p.height);
+    float3 world = to_scene(f, s.relative);
+    LampPlace place = lamp_place(f, p.probes, world, s.n);
+    surface[pixel] = float4(s.relative, place.region == REGION_NONE ? 0.0 : float(1u + place.region % 2047u));
+    normal[pixel] = oct_encode(s.n);
+    LampPicks picks = lamp_picks(f, place, world, s.n, pixel);
+    uint count = f[0].lamp_count;
+    float bias = shadow_bias(f, s.inst, s.m);
+    float3 unshadowed = float3(0.0);
+    float3 shadowed = float3(0.0);
+    for (uint j = 0u; j < 4u; j++)
+    {
+        uint i = j < 3u ? picks.top[j] : picks.chosen;
+        if (i >= count)
+            continue;
+        Lamp lamp = f[0].lamps[i];
+        float3 e = lamp_lux(lamp, world, s.n) * (j < 3u ? 1.0 : picks.scale);
+        float seen = 1.0;
+        if (f[0].tlas != 0)
+        {
+            // The strongest takes two rays, to the frame's run and its pair's (runs 2m and 2m + 1):
+            // its 32 points a frame are an aligned run of the sequence, stratified as a whole.
+            // Two runs half the cycle apart are not, and their estimate changed more from frame to
+            // frame: a still camera's frames 10 apart changed on 6.1 % of the smoke yard's pixels
+            // under TAA, 3.9 % with the pair (the hall 0.31 and 0.16 %).
+            seen = lamp_seen(f, lamp, world, s.n, bias, lamp_disc_point(pixel, f[0].noise_frame, i)) ? 1.0 : 0.0;
+            if (j == 0u)
+                seen = 0.5 * seen + (lamp_seen(f, lamp, world, s.n, bias, lamp_disc_point(pixel, f[0].noise_frame ^ 1u, i)) ? 0.5 : 0.0);
+        }
+        unshadowed += e;
+        shadowed += e * seen;
+    }
+    float y = dot(unshadowed, float3(0.2126, 0.7152, 0.0722));
+    float3 share = float3(unshadowed.x > 0.0 ? shadowed.x / unshadowed.x : 1.0,
+                          unshadowed.y > 0.0 ? shadowed.y / unshadowed.y : 1.0,
+                          unshadowed.z > 0.0 ? shadowed.z / unshadowed.z : 1.0);
+    // Half precision's largest value bounds the weight: a pixel by a bulb is lit by thousands of
+    // lux, so it outweighs its neighbours all the same.
+    ratio[pixel] = y > 0.0 ? float4(share, min(y, 65000.0)) : float4(1.0, 1.0, 1.0, 0.0);
+}
+
+// The filter's tile: its 8 × 8 pixels and the 3 more each way that their windows reach. Per
+// pixel, its luminance-weighted share (rgb: luminance × share, a: luminance), its normal and its
+// region's tag (`LampShadowPush::surface_image`), and where it stands.
+static const uint LAMP_TILE = 14u;
+groupshared float4 g_lamp_weighted[LAMP_TILE * LAMP_TILE];
+groupshared float4 g_lamp_facing[LAMP_TILE * LAMP_TILE];
+groupshared float3 g_lamp_position[LAMP_TILE * LAMP_TILE];
+// The window's weights along each axis: the 4-pixel box twice over, a tent 7 pixels wide. Each
+// of the four columns (and rows) of a 4 × 4 block takes a quarter of them, so every point of the
+// frame's run weighs the same. One box left each point's shadow edge on its own 4-pixel grid,
+// and the penumbrae's edges came out in 4-pixel steps that TAA's clamp kept.
+static const float LAMP_TENT[7] = { 1.0, 2.0, 3.0, 4.0, 3.0, 2.0, 1.0 };
+
+// The share of the lamps' light that reaches each pixel, from `lamp_rays_main`'s: the shares of
+// the 7 × 7 pixels around it, weighted by the tent (`LAMP_TENT`) and by their unshadowed light's
+// luminance (the ratio of the sums, Heitz et al.), and kept only on the pixel's surface: in its
+// region (a room holds its own lamps), facing within 25° of its normal (n·n′ > 0.9), and within
+// 0.5 % of its distance (and 1 cm) of its plane, falling to 0 there. Summed in a fixed order.
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void lamp_filter_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
+{
+    LampShadowPush p = lamp_shadow_push;
+    int2 corner = int2(group.xy * 8u) - 3;
+    for (uint k = thread.y * 8u + thread.x; k < LAMP_TILE * LAMP_TILE; k += 64u)
+    {
+        int2 q = corner + int2(int(k % LAMP_TILE), int(k / LAMP_TILE));
+        float4 ratio = float4(1.0, 1.0, 1.0, 0.0);
+        float4 surface = float4(0.0);
+        float3 normal = float3(0.0);
+        if (q.x >= 0 && q.y >= 0 && q.x < int(p.width) && q.y < int(p.height))
+        {
+            ratio = g_sampled_images[NonUniformResourceIndex(p.ratio_image)].Load(int3(q, 0));
+            surface = g_sampled_images[NonUniformResourceIndex(p.surface_image)].Load(int3(q, 0));
+            normal = ratio.a > 0.0 ? oct_decode(g_sampled_images[NonUniformResourceIndex(p.normal_image)].Load(int3(q, 0)).xy) : float3(0.0);
+        }
+        g_lamp_weighted[k] = float4(ratio.rgb * ratio.a, ratio.a);
+        g_lamp_facing[k] = float4(normal, surface.w);
+        g_lamp_position[k] = surface.xyz;
+    }
+    GroupMemoryBarrierWithGroupSync();
+    uint2 pixel = group.xy * 8u + thread.xy;
+    if (pixel.x >= p.width || pixel.y >= p.height)
+        return;
+    uint centre = (thread.y + 3u) * LAMP_TILE + thread.x + 3u;
+    float3 share = float3(1.0);
+    if (g_lamp_weighted[centre].a > 0.0)
+    {
+        float4 facing = g_lamp_facing[centre];
+        float3 x = g_lamp_position[centre];
+        // The plane test as 1 − |n·x′ − n·x| / tolerance.
+        float per_metre = 1.0 / (0.005 * length(x) + 0.01);
+        float offset = dot(facing.xyz, x) * per_metre;
+        float4 sum = float4(0.0);
+        for (uint dy = 0u; dy < 7u; dy++)
+        {
+            for (uint dx = 0u; dx < 7u; dx++)
+            {
+                uint k = (thread.y + dy) * LAMP_TILE + thread.x + dx;
+                float4 other = g_lamp_facing[k];
+                float kept = other.w == facing.w && dot(facing.xyz, other.xyz) > 0.9 ? LAMP_TENT[dx] * LAMP_TENT[dy] : 0.0;
+                sum += g_lamp_weighted[k] * (kept * saturate(1.0 - abs(dot(facing.xyz, g_lamp_position[k]) * per_metre - offset)));
+            }
+        }
+        // The pixel itself weighs its own luminance, so `sum.a` is not 0.
+        share = sum.rgb / sum.a;
+    }
+    g_storage_images_rgba16f[NonUniformResourceIndex(p.share_image)][pixel] = float4(share, 1.0);
 }
 
 // The rays a pass drawn after the resolve asks for (the sea's surface, issue #105): per pixel,

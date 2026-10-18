@@ -4671,16 +4671,87 @@ night (`--time-of-day 1.333`, 22:00), and in the lab's room.
     the pixels change otherwise than the reference's, against 2.36 % without the lamps' light;
   - the cost in that hall, best of three: `shading/standard` 0.47 → 0.96 ms and `gi/probe rays`
     2.17 → 2.25 ms; the frame 4.29 → 4.86 ms.
+
+**The penumbra filter (2026-10-18):** the interleaved ratio filter that
+`research/lamp-penumbra-denoising.md` §7 recommends (no patent found), in `meshlet.slang`'s
+`lamp_rays_main` and `lamp_filter_main`. A filter whose width comes from the occluder's distance
+is in NVIDIA's US 10,740,954 claims 10 and 15, to about 2039: the filter's size is fixed. Wide
+penumbrae no longer come out dithered and stair-stepped, and the smoke yard's fire lights the yard
+again (`demos/physics-lab.md`).
+- **The structure: the rays before the resolve.** Two graph passes after the visibility buffer,
+  only when the frame has lamps (no other capture changes):
+  - **"shadow/lamp rays"** rebuilds each pixel's surface as the sun's SIGMA pass does
+    (`pixel_surface`, shared with it). It takes the lamps the resolve took (`lamp_picks`: the
+    three strongest, the strongest with two rays, and one picked by its light) and traces their
+    rays. It writes Ŝ / Û per channel, the same rays' shadowed over unshadowed irradiance
+    (Heitz, Hill and McGuire 2018), with luminance(Û), and the surface's position, normal and
+    region.
+  - **"shadow/lamp filter"** averages that share over its neighbours.
+  - **The resolve** lights every lamp of the pixel's place exactly, unshadowed and without a
+    ray, diffuse and highlights, times the filtered share. The other way, keeping the rays in the
+    resolve and correcting the colour before TAA, needed the lamps' share of each class's colour,
+    which the classes mix differently.
+- **The disc points:** a table of 128, the first 128 points of the 2D Sobol sequence (1967)
+  through Shirley and Chiu's concentric map (1997). Point 16 (frame mod 8) + B[x mod 4, y mod 4],
+  B a Bayer matrix (Keller and Heidrich's interleaved sampling, 2001), so every 4 × 4 window
+  holds a whole stratified run of 16 each frame, and TAA's 8 frames all 128. Each lamp keeps its
+  golden-angle turn; the per-pixel turn is gone.
+- **Two changes to the recipe, each measured:**
+  - **A 7 × 7 tent, not a 4 × 4 box.** The box left each disc point's shadow edge on its own
+    4-pixel grid. The rocks' penumbrae showed 4-pixel steps, and TAA's and DLAA's clamps kept them
+    (the frame-to-frame changes are smooth in space, so the clamp's box is narrow). The tent is
+    the box twice over (weights 1 2 3 4 3 2 1 each way), so each column and row of a 4 × 4 block
+    still weighs a quarter: every point of the run counts the same. Its edge weights: the same
+    region (a room holds its own lamps), n·n′ > 0.9, and within 0.5 % of the distance (and 1 cm)
+    of the pixel's plane.
+  - **The strongest lamp's second ray goes to the run paired with the frame's** (runs 2m and
+    2m + 1), not half the cycle away: its 32 points a frame are an aligned run of the sequence,
+    stratified as a whole. A still camera's frames 10 apart changed on 6.1 % of the smoke yard's
+    pixels under TAA with frame + 4, 3.9 % with the pair (the hall 0.31 % and 0.16 %).
+  - *Tried and left out:* the Bayer index xored with the frame's run (a pixel's points cross the
+    disc over the cycle): no better on any check once the tent was in.
+- **Checks** (1600 × 900; a still camera's frames 10 apart from 200 to 280, the pixels that
+  change by more than 2 codes):
+
+  | | before (the resolve's rays) | the filter | without the lamps' light |
+  |---|---|---|---|
+  | the hall at 22:00, TAA | 0.63 % | 0.16 % | 0.12 % |
+  | the hall at 22:00, DLAA | 0.0027 % | 0.0024 % | 0.0030 % |
+  | the smoke yard's fire at midnight, TAA | 10.9 % | 3.9 % | 0.73 % |
+  | the smoke yard's fire at midnight, DLAA | 1.44 % | 0.034 % | |
+  | the lab's lamp room (bulbs of 4–6 cm), TAA | 0.078 % | 0.081 % | |
+  | the lab's lamp room, DLAA | 0.0041 % | 0.0040 % | |
+
+  - The smoke yard's clock is held (`--sea-time 6`), so the fire's flicker and the particles
+    stand still. What still changes under TAA is the soft shadows from frame to frame: with every
+    ray aimed at the fire's middle, 0.56 %.
+  - **In motion** (the hall turning 4° a second, DLAA; each 10-frame step against the same run
+    supersampled 2 × 2, `imgdiff --then`): 3.80 % of the pixels change otherwise than the
+    reference's before, 1.34 % with the filter, 1.29 % without the lamps' light.
+  - **Determinism:** two runs one after the other, the mesh path against the fallback and the
+    serial frame (`FORGE_ASYNC=0`) give the same pixels, in the hall and the smoke yard, and two
+    runs at once in the hall. Two runs at once in the smoke yard part on one pixel by one code in
+    about half the pairs. With every entry compiled precise (`FORGE_FP_PRECISE=1`) they never do,
+    and the lamps' passes are precise already: an older entry still has #277's two variants, and
+    the filter's light puts that pixel on a rounding edge (#281).
+  - `--no-lamp-filter` keeps the resolve's rays: its images are the base's to the pixel.
+  - **Cost** (best of three, `docs/PROFILE.md`): in the hall, where every pixel takes up to four
+    lamps, "shadow/lamp rays" 0.64 ms and "shadow/lamp filter" 0.16 ms, and `shading/standard`
+    falls from 0.95 to 0.65 ms. The frame goes 4.88 → 5.33 ms (serial, `FORGE_ASYNC=0`: 5.03 →
+    5.49 ms), +0.45 ms, more than the note's 0.1–0.2 ms:
+    - the rays pass spends 0.19 ms before its first ray (the surface again, its region, the
+      picks);
+    - the rays take 0.45 ms in a pass of their own, where the resolve's other work no longer hides
+      them;
+    - the tent costs twice the box (0.16 against 0.08 ms).
+
+    The lab's lamp room, three lamps over the whole view: +0.18 ms (1.84 → 2.02 ms). The smoke
+    yard's fire: +0.08 ms in its zones. A frame without lamps runs neither pass.
 - **Next:**
   - RTXDI to compare (the SDK's download waits on the owner's word).
-  - A denoiser for the lamps' penumbrae. `research/lamp-penumbra-denoising.md` (2026-10-18)
-    recommends the interleaved ratio filter, with no patent found:
-    - 128 stratified disc points interleaved over 4×4 pixels and the 8-frame cycle;
-    - the ratio of shadowed to unshadowed lamp light filtered by a fixed geometry-aware 4×4 box;
-    - that ratio times the exact unshadowed sum, about 0.1–0.2 ms.
-
-    SIGMA's translucency route is the upgrade. A filter whose width comes from the occluder's
-    distance is in NVIDIA's US 10,740,954 claims 10 and 15, to about 2039.
+  - If wide penumbrae still crawl under TAA (the fire's floor), the note's upgrades: an à-trous
+    pass on the windows that mix lit and shadowed pixels, or SIGMA's translucency route fed with
+    the same ratio (it needs closest-hit rays and the owner's word, given §3's patents).
   - The light through windows onto the street.
   - The streets' lamps (Olsson's clusters, after a look at AMD's Forward+ patents, US 10,803,655
     B2).
