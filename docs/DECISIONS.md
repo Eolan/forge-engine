@@ -4538,8 +4538,18 @@ downloaded sets stay out unless the owner says otherwise.
     (±0.012 of the frame). At frame 360 of the smoke yard the warp changed 37 pixels of 1.44 M
     (over 2 codes), so it is not in the tree.
   - It is worth again for a flipbook with few frames for its motion.
-- **Next:** the depth buffer's collisions, sorting, a dust flipbook, the dust volume, and the
-  village's chimneys and steps.
+- **Point 3's sorting, tried and set aside (2026-10-18):**
+  - The method: a bitonic sort of the live particles far to near on the async queue, keyed by
+    distance. A workgroup sorts 1 024 pairs in shared memory, and global steps take the larger
+    stages.
+  - It ran deterministic: two runs and both paths identical.
+  - It changed 4.1 % of the smoke yard's pixels, for the worse. The fire's oldest puffs (2 m
+    across, their late frames diffuse) drift towards the camera and now cover the young
+    detailed ones, which birth order drew on top: a dark blur in front.
+  - The smoke's sizes and fades were tuned under birth order. Sorting waits for a re-tune of
+    them, judged by the owner's eye: smaller old puffs, an opacity that falls faster with age.
+- **Next:** the depth buffer's collisions, sorting with the smoke re-tuned, a dust flipbook, the
+  dust volume, and the village's chimneys and steps.
 - **Point 5's DLSS half, tried and left out (2026-10-18):** Streamline 2.14.16's DLSS reads none
   of the hints.
   - The reactive mask was tagged in turn as the bias-current-colour hint (type 29), the
