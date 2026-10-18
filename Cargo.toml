@@ -26,6 +26,7 @@ forge-sim = { path = "crates/forge-sim" }
 forge-anim = { path = "crates/forge-anim" }
 forge-flora = { path = "crates/forge-flora" }
 forge-mission = { path = "crates/forge-mission" }
+forge-script = { path = "crates/forge-script" }
 # The demos the island demo builds on
 city-blocks = { path = "demos/city-blocks" }
 
@@ -60,6 +61,8 @@ serde_json = "1"
 toml = { version = "1", features = ["preserve_order"] }
 # Content records (D-035: RON + serde), first for the missions (D-072, #287).
 ron = "0.12"
+# Scripts in Luau (D-072, #292): mlua over Luau, built from its sources (luau0-src).
+mlua = { version = "0.12", features = ["luau"] }
 bytemuck = { version = "1", features = ["derive"] }
 
 # Diagnostics

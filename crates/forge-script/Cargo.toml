@@ -1,0 +1,15 @@
+[package]
+name = "forge-script"
+description = "Forge scripts in Luau (D-072, #292): a sandboxed host that runs a chunk with no io, os or debug, under an instruction budget and a memory cap, and returns its values as plain Rust data."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+mlua = { workspace = true }
+thiserror = { workspace = true }

@@ -2000,6 +2000,15 @@ buffer each, copied bit by bit).
 - **Where it shows:** logged at exit ("the mission's ticks (µs) over the run"). The app's CPU
   zones are its own, so it has no F1 zone yet.
 
+## `forge-script` — a data file read in Luau (#292, D-072, 2026-10-18)
+
+- **What was measured:** a synthetic 1 MB data file (12 264 records of four fields, two of them
+  tables), compiled, run and converted to `Data` in the sandbox, wall clock, release build, one
+  thread (`a_megabyte_of_data_table_reads_in_well_under_a_second`).
+- **Result:** 92.6 ms; the state held 8.2 MB after it.
+- **Where it shows:** the test prints it. The host has no F1 zone: it does not run in the
+  frame yet.
+
 ## Not measured yet
 
 - **Streaming**: residency pools, request queue depth, drive and decompression throughput.

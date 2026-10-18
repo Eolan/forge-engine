@@ -5951,6 +5951,60 @@ so that missions and mods are designed for it. Nothing is built until a mission 
 3. Mods are server-first; the client runs only interface and presentation scripts (point 7).
 4. No visual scripting until the editor (point 9).
 
+**The first host: `forge-script`, sandboxed Luau for data (#292, 2026-10-18).** A scene built
+outside the repository asked to read third-party Lua 5.1 files offline: pure data tables, and
+rules that build their tables in loops. The owner approved `mlua`'s download.
+- **The crate:** `mlua` 0.12 with Luau, built from its sources (`luau0-src`, Luau 0.740) by
+  the MSVC toolchain Jolt already needs. No `unsafe` in Forge's code.
+- **The sandbox** (`Script::new(Limits)`):
+  - Luau's sandbox mode: the standard libraries and their metatables are read-only, and a
+    chunk's globals go to an environment of their own;
+  - libraries loaded: coroutine, table, string, utf8, bit32, math, buffer. There is no `io`, `os`,
+    `debug` or `package`;
+  - removed: `load`, `loadstring`, `dofile`, `loadfile`, `require`, `getfenv`, `setfenv`,
+    `collectgarbage`, `newproxy`;
+  - `load` and `loadstring` come back only with `Limits::allow_load`, compiling into the same
+    sandbox;
+  - `require` reads only from `Limits::require_root`: `a.b` or `a/b` as `a/b.luau` or
+    `a/b.lua`, a name that would leave the folder refused, each module loaded once.
+- **The caps:**
+  - a budget of Luau's interrupts, which come at calls and loops' back edges: a measure of work,
+    the same from run to run;
+  - a wall-clock deadline, read every 1 024 interrupts;
+  - a memory cap on the whole state.
+
+  Over any of them the chunk ends with an error (`Error::Budget`, `Error::Memory`), and the
+  state runs the next chunk.
+- **Stubs:** `Script::set` (a global from `Data`) and `Script::function` (a Rust function of
+  `Data` arguments returning `Data` or an error message), so code written against another
+  engine's interface can partly run. The globals a caller set are left out of
+  `Script::globals`.
+- **Results as Rust values** (`Data`): nil, booleans, integers (numbers with no fraction),
+  numbers, strings, lists (tables keyed exactly 1 to n), maps (by integer, string or other key),
+  and opaque values by type name. A table that holds itself, or nests deeper than 64, is an
+  error, not a loop.
+- **Errors name the chunk and the line** (`rules.lua:2: …`), as syntax or runtime errors.
+- **Lua 5.1 in Luau.** Closures, varargs and `select("#")`, metatables and `__add`, string
+  patterns, `pcall` and `error`, `unpack`, `string.format` and `table.concat` run as written.
+  Missing: `setfenv`, `getfenv`, `module`, `table.getn`, and the loaders above. The corpus will
+  show which matter.
+- **Checked:** 13 unit tests on a synthetic corpus (nothing from any game):
+  - a returned table and globals built in a loop, both as data;
+  - a 1 MB data table (12 264 records) read in 93 ms, the state holding 8 MB;
+  - the sandbox's missing names, and the read-only libraries;
+  - an endless loop stopped by the budget and by the deadline, the state running the next
+    chunk;
+  - a memory bomb stopped at a 16 MB cap;
+  - endless recursion an error, not a crash;
+  - errors with their chunk and line;
+  - stubs from Rust;
+  - `require` kept to its folder (`..`, absolute paths and drive letters refused);
+  - `load` only when allowed;
+  - Lua 5.1 idioms;
+  - a table that holds itself refused.
+- **Not yet:** scripts in the game's tick, mods, missions calling Luau, the F1 zone, hot reload
+  of scripts. D-072's demo, the same objective as a record and as a script, comes with those.
+
 ## D-073 — Missions as data: the record, its evaluator and its two saves ✅ (2026-10-18, #287, D-072's first point)
 
 D-072 put missions as data first. This is the first version, built in a crate of its own,
