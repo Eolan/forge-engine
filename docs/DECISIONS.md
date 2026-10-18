@@ -5818,7 +5818,7 @@ chose the first: "Nights + short day check".
     the mapped paths select wait for the night's batch.
   - **A change whose images the session has already compared** with targeted captures against
     the accepted set is pushed after the gate (`--tier gate`).
-- **At night,** a Windows scheduled task ("Forge night check", 00:30, run when missed) starts
+- **At night,** a Windows scheduled task ("Forge night check", 00:30, run when missed; 01:30 from 2026-10-18, the owner) starts
   `tools/night.sh`, which:
   - checks out `origin/main` in its own worktree (`../forge-night`), whose ignored SDK and
     asset folders are junctions to the main checkout's;

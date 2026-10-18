@@ -85,7 +85,7 @@ change used to wait for one.
     - **When they changed on purpose,** accept them for the night with
       `tools/verify.sh --accept DIR COMMIT`. Otherwise the night fails on them.
 - **At night,** a Windows scheduled task, "Forge night check", starts `tools/night.sh` at
-  00:30. It also runs when the machine wakes up after missing that time. It:
+  01:30 (00:30 until 2026-10-18; the owner moved it). It also runs when the machine wakes up after missing that time. It:
   - checks out `origin/main` in a worktree of its own (`../forge-night`), whose ignored SDK and
     asset folders are junctions to this checkout's;
   - runs Tier 1 there, or Tier 2 when a milestone is due, against `captures/accepted/`;

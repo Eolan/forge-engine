@@ -54,7 +54,7 @@ cargo run --release -q -p credits -- --check
   - **The captures:** `FORGE_ONLY='name globs'` with `tools/captures.sh`.
   - **Images meant to change:** accept them with `tools/verify.sh --accept DIR COMMIT`, or
     the night fails on them.
-- **Tier 1, at night** (`tools/night.sh`, a scheduled task at 00:30): the full batch on both
+- **Tier 1, at night** (`tools/night.sh`, a scheduled task at 01:30): the full batch on both
   paths and validation, on what was pushed that day. `--tier 1` runs it by hand.
 - **Tier 2, a milestone** (every ~5 commits, the night check runs it when due; before a
   showcase; `--tier 2`): Tier 1, the batch with `FORGE_ASYNC=0`, `tools/origins.sh`, and the

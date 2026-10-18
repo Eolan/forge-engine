@@ -7,7 +7,7 @@
 #
 # --dry-run: make or update the worktree, say which tier would run, and stop.
 #
-# A Windows scheduled task starts it at 00:30 (docs/PROCESS.md, "The night check"). It writes
+# A Windows scheduled task starts it at 01:30 (docs/PROCESS.md, "The night check"). It writes
 # captures/night/<time>/ (the verify log and summary.txt) and copies the summary to
 # captures/night/latest.txt in this checkout: the first thing a morning session reads. A failed
 # night is fixed before new work: find the commit with tools/verify.sh --base, then rerun
