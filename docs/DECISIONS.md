@@ -6025,6 +6025,32 @@ rules that build their tables in loops. The owner approved `mlua`'s download.
   - a table that holds itself refused.
 - **Not yet:** scripts in the game's tick, mods, missions calling Luau, the F1 zone, hot reload
   of scripts. D-072's demo, the same objective as a record and as a script, comes with those.
+- **A first corpus** (2026-10-19, run by a session outside the repository on 29 files of Lua 5.1
+  data tables and rule scripts, with 50 one-feature probes against PUC Lua 5.1.5):
+  - **What it found:** all 29 parsed, and 16 ran as they were. All 13 failures came from
+    `require`:
+    - cycles (a module requiring its parent, which requires it) ended in "error in error
+      handling", with no chunk or line;
+    - names taken from a folder's listing kept their `.lua`.
+  - **The probes:**
+    - the removed names failed with "attempt to call a nil value", which names nothing;
+    - `math.mod` and `string.gfind` were missing;
+    - `_G` was the frozen base table;
+    - library writes were refused.
+  - **What changed, the same day:**
+    - `require` marks a module loaded before running it, so a cycle gets `true`;
+    - it drops a trailing `.lua` or `.luau`, and `a/b` and `a.b` are one module;
+    - the removed names raise "… is not available in this sandbox";
+    - `collectgarbage("count")` and `gcinfo` answer;
+    - `math.mod` and `string.gfind` are shims;
+    - `_G` is the chunks' environment;
+    - `Limits::lua51` gives writable libraries and one table of globals.
+  - **Left as Luau has it:**
+    - numbers written in their shortest exact form rather than 5.1's `%.14g`. That changes
+      `tostring` and `..`; the corpus had no table key built that way;
+    - no `arg` table in vararg functions.
+  - **Speed:** a 1.1 MB table ran in 25 ms, and the whole corpus in 1.2 s.
+  - **Tests:** 16.
 
 ## D-073 — Missions as data: the record, its evaluator and its two saves ✅ (2026-10-18, #287, D-072's first point)
 

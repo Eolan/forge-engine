@@ -5,9 +5,18 @@
 //! or the globals it set, as plain Rust values ([`Data`]): a record of data tables written as
 //! code, the rules a hand-made map's files build in loops.
 //! - **The sandbox:** Luau's (`luaL_sandbox`). The standard libraries and their metatables are
-//!   read-only, a chunk's globals go to an environment of its own, and there is no `io`, `os`,
-//!   `debug`, `package`, `load`, `loadstring`, `dofile`, `loadfile`, `getfenv` or `setfenv`.
-//!   `require` reads only from one folder the caller names ([`Limits::require_root`]).
+//!   read-only, a chunk's globals go to an environment of its own (`_G` is that environment),
+//!   and there is no `io`, `os`, `debug` or `package`. `load`, `loadstring`, `dofile`,
+//!   `loadfile`, `getfenv`, `setfenv`, `module` and `newproxy` raise "… is not available in this
+//!   sandbox". `collectgarbage("count")` and `gcinfo` answer, and `math.mod` and `string.gfind`
+//!   are 5.1's names for `math.fmod` and `string.gmatch`. `require` reads only from one folder
+//!   the caller names ([`Limits::require_root`]): `a.b`, `a/b` and `a/b.lua` are one module,
+//!   and a module is loaded before it runs, so a cycle gets `true` rather than a loop.
+//! - **Lua 5.1's mode** ([`Limits::lua51`]): no Luau sandbox, the libraries writable (a function
+//!   added to `string` is every string's method), `_G` the one table of globals.
+//! - **What a host cannot change:** Luau writes numbers in their shortest exact form (`0.1 + 0.2`
+//!   is `0.30000000000000004`, where 5.1's `%.14g` gave `0.3`), in `tostring` and `..` alike;
+//!   and a vararg function has no `arg` table.
 //! - **The caps:** a budget of Luau's interrupts (it interrupts at calls and loops' back edges), a
 //!   wall-clock deadline and a memory cap. Over any, the chunk ends with an error, and the host
 //!   goes on.
@@ -107,6 +116,11 @@ pub struct Limits {
     pub require_root: Option<PathBuf>,
     /// Whether `load` and `loadstring` compile new code (in the sandbox, under the same caps).
     pub allow_load: bool,
+    /// Lua 5.1's ways, for code written for it: the libraries writable (a field added to `string`
+    /// is a method of every string), the globals one writable table that `_G` is. Off: Luau's
+    /// sandbox, the libraries read-only and the chunks' globals in an environment of their own
+    /// (`_G` that environment too).
+    pub lua51: bool,
 }
 
 impl Default for Limits {
@@ -118,6 +132,7 @@ impl Default for Limits {
             memory: 256 << 20,
             require_root: None,
             allow_load: false,
+            lua51: false,
         }
     }
 }
@@ -132,7 +147,8 @@ pub struct Script {
     /// The interrupts the running chunk has taken, and when it began.
     spent: Rc<Cell<u64>>,
     began: Rc<Cell<Instant>>,
-    /// The names the caller set, left out of [`Script::globals`].
+    /// The names the caller set, and those the state had before any chunk ran, left out of
+    /// [`Script::globals`].
     injected: HashSet<String>,
 }
 
@@ -150,6 +166,8 @@ impl Script {
         let lua = Lua::new_with(libs, LuaOptions::default()).map_err(host)?;
         lua.set_memory_limit(limits.memory).map_err(host)?;
         let globals = lua.globals();
+        // What the sandbox leaves out raises a clear error rather than "attempt to call a nil
+        // value", which names nothing.
         for name in [
             "load",
             "loadstring",
@@ -158,12 +176,41 @@ impl Script {
             "require",
             "getfenv",
             "setfenv",
-            "collectgarbage",
+            "module",
             "newproxy",
-            "gcinfo",
         ] {
-            globals.raw_set(name, Value::Nil).map_err(host)?;
+            let stub = lua
+                .create_function(move |_, _: mlua::MultiValue| -> mlua::Result<()> {
+                    Err(mlua::Error::runtime(format!(
+                        "{name} is not available in this sandbox"
+                    )))
+                })
+                .map_err(host)?;
+            globals.raw_set(name, stub).map_err(host)?;
         }
+        // The memory in use, in kilobytes, as Lua 5.1 counts it; collecting is the host's.
+        let collect = lua
+            .create_function(|lua, what: Option<String>| match what.as_deref() {
+                Some("count") => Ok(Value::Number(lua.used_memory() as f64 / 1024.0)),
+                None | Some("collect" | "step" | "stop" | "restart") => Ok(Value::Integer(0)),
+                Some(other) => Err(mlua::Error::runtime(format!(
+                    "collectgarbage(\"{other}\") is not available in this sandbox"
+                ))),
+            })
+            .map_err(host)?;
+        globals.raw_set("collectgarbage", collect).map_err(host)?;
+        let gcinfo = lua
+            .create_function(|lua, _: mlua::MultiValue| Ok((lua.used_memory() / 1024) as i64))
+            .map_err(host)?;
+        globals.raw_set("gcinfo", gcinfo).map_err(host)?;
+        // Lua 5.1's compatibility names, as 5.1 has them.
+        let shim = |lib: &str, name: &str, to: &str| -> mlua::Result<()> {
+            let table: mlua::Table = globals.raw_get(lib)?;
+            let f: Value = table.raw_get(to)?;
+            table.raw_set(name, f)
+        };
+        shim("math", "mod", "fmod").map_err(host)?;
+        shim("string", "gfind", "gmatch").map_err(host)?;
         if limits.allow_load {
             let load = lua
                 .create_function(|lua, (text, name): (mlua::LuaString, Option<String>)| {
@@ -181,6 +228,13 @@ impl Script {
             let loaded = lua.create_table().map_err(host)?;
             let require = lua
                 .create_function(move |lua, name: String| {
+                    // A name from a folder's listing keeps its extension: `a.lua` is `a`; `a/b` and
+                    // `a.b` are one module.
+                    let name = name
+                        .strip_suffix(".luau")
+                        .or_else(|| name.strip_suffix(".lua"))
+                        .unwrap_or(&name)
+                        .replace('/', ".");
                     if let Some(v) = loaded.raw_get::<Option<Value>>(name.as_str())? {
                         return Ok(v);
                     }
@@ -189,7 +243,17 @@ impl Script {
                     })?;
                     let text = std::fs::read(&path)
                         .map_err(|e| mlua::Error::runtime(format!("require {name}: {e}")))?;
-                    let value: Value = lua.load(text).set_name(format!("={name}")).eval()?;
+                    // Marked loaded before it runs: a module that requires its parent, which
+                    // requires it, gets `true` back rather than a loop (as the hosts such code was
+                    // written for do; Lua 5.1 would stop with an error).
+                    loaded.raw_set(name.as_str(), true)?;
+                    let value: Value = match lua.load(text).set_name(format!("={name}")).eval() {
+                        Ok(v) => v,
+                        Err(e) => {
+                            loaded.raw_set(name.as_str(), Value::Nil)?;
+                            return Err(mlua::Error::runtime(format!("require {name}: {e}")));
+                        }
+                    };
                     let value = if value.is_nil() {
                         Value::Boolean(true)
                     } else {
@@ -201,7 +265,20 @@ impl Script {
                 .map_err(host)?;
             globals.raw_set("require", require).map_err(host)?;
         }
-        lua.sandbox(true).map_err(host)?;
+        if !limits.lua51 {
+            lua.sandbox(true).map_err(host)?;
+            // `_G` is the chunks' environment, not the frozen base table: `_G.x = 1`, `_G["f"]`
+            // and `pairs(_G)` see their globals.
+            let env = lua.globals();
+            env.raw_set("_G", env.clone()).map_err(host)?;
+        }
+        // What the state holds before any chunk: left out of `globals`.
+        let mut injected = HashSet::from(["_G".to_owned()]);
+        for pair in lua.globals().pairs::<Value, Value>() {
+            if let Ok((Value::String(k), _)) = pair {
+                injected.insert(k.to_string_lossy());
+            }
+        }
         let spent = Rc::new(Cell::new(0_u64));
         let began = Rc::new(Cell::new(Instant::now()));
         let (budget, deadline) = (limits.interrupts, limits.deadline);
@@ -222,7 +299,7 @@ impl Script {
             limits,
             spent,
             began,
-            injected: HashSet::new(),
+            injected,
         })
     }
 

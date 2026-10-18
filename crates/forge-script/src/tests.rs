@@ -108,8 +108,7 @@ fn the_sandbox_has_no_io_os_debug_or_loaders() {
         .run(
             "probe.lua",
             r#"
-            local names = { "io", "os", "debug", "package", "load", "loadstring", "dofile",
-                            "loadfile", "require", "getfenv", "setfenv", "collectgarbage" }
+            local names = { "io", "os", "debug", "package" }
             local out = {}
             for _, n in ipairs(names) do out[n] = type(_G[n]) end
             return out
@@ -120,7 +119,27 @@ fn the_sandbox_has_no_io_os_debug_or_loaders() {
     for (k, v) in &found {
         assert_eq!(*v, Data::String("nil".into()), "{k:?}");
     }
-    assert_eq!(found.len(), 12);
+    assert_eq!(found.len(), 4);
+    // The loaders and 5.1's environment functions say what they are.
+    for name in [
+        "load",
+        "loadstring",
+        "dofile",
+        "loadfile",
+        "require",
+        "getfenv",
+        "setfenv",
+        "module",
+    ] {
+        let e = script()
+            .run("probe.lua", &format!("return {name}(1)"))
+            .unwrap_err();
+        assert!(
+            e.to_string()
+                .contains(&format!("{name} is not available in this sandbox")),
+            "{name}: {e}"
+        );
+    }
     // The libraries are read-only.
     let e = script().run("poke.lua", "string.upper = nil").unwrap_err();
     assert!(matches!(e, Error::Runtime(_)), "{e}");
@@ -329,4 +348,92 @@ fn a_table_that_holds_itself_is_refused_not_looped() {
         .run("cycle.lua", "local t = {} t.me = t return t")
         .unwrap_err();
     assert!(matches!(e, Error::Data(_)), "{e}");
+}
+
+#[test]
+fn require_cycles_return_and_extensions_are_dropped() {
+    let root = std::env::temp_dir().join(format!("forge-script-cycle-{}", std::process::id()));
+    std::fs::create_dir_all(root.join("lib")).unwrap();
+    // A module that requires its parent, which requires it back.
+    std::fs::write(
+        root.join("lib/parent.lua"),
+        "local child = require('lib.child') return { name = 'parent', child = child.name }",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("lib/child.lua"),
+        "local p = require('lib.parent') return { name = 'child', saw = type(p) }",
+    )
+    .unwrap();
+    let mut s = Script::new(Limits {
+        require_root: Some(root.clone()),
+        ..Limits::default()
+    })
+    .unwrap();
+    let out = s
+        .run(
+            "main.lua",
+            "local p = require('lib/parent.lua') return p.name .. '/' .. p.child .. '/' .. require('lib.child').saw",
+        )
+        .unwrap();
+    assert_eq!(out, Data::String("parent/child/boolean".into()));
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn lua_5_1_names_and_globals_through_g() {
+    let out = script()
+        .run(
+            "compat.lua",
+            r#"
+            local words = {}
+            for w in string.gfind("a bb", "%a+") do words[#words + 1] = w end
+            x = 6
+            _G.y = 7
+            local seen = 0
+            for k in pairs(_G) do if k == "x" or k == "y" then seen = seen + 1 end end
+            return { math.mod(7, 3), #words, _G.x, y, seen, type(_G.print), collectgarbage("count") > 0 }
+            "#,
+        )
+        .unwrap();
+    assert_eq!(
+        out,
+        Data::List(vec![
+            Data::Integer(1),
+            Data::Integer(2),
+            Data::Integer(6),
+            Data::Integer(7),
+            Data::Integer(2),
+            Data::String("function".into()),
+            Data::Bool(true),
+        ])
+    );
+}
+
+#[test]
+fn the_lua_5_1_mode_has_writable_libraries() {
+    let mut s = Script::new(Limits {
+        lua51: true,
+        ..Limits::default()
+    })
+    .unwrap();
+    s.run(
+        "util.lua",
+        r#"
+        function string.trim(s) return (string.gsub(s, "^%s*(.-)%s*$", "%1")) end
+        Trimmed = ("  hello  "):trim()
+        _G.Count = 3
+        "#,
+    )
+    .unwrap();
+    let globals = s.globals().unwrap();
+    assert_eq!(globals["Trimmed"], Data::String("hello".into()));
+    assert_eq!(globals["Count"], Data::Integer(3));
+    // The base libraries are not the chunk's globals.
+    assert!(!globals.contains_key("string") && !globals.contains_key("_G"));
+    // Still no io or os, and the caps hold.
+    assert_eq!(
+        s.run("p.lua", "return type(io) .. type(os)").unwrap(),
+        Data::String("nilnil".into())
+    );
 }
