@@ -9,7 +9,8 @@
 // - `particles/advance` (compute queue): gravity or buoyancy, a drag towards the air (the
 //   scene's wind plus a curl-noise swirl, divergence-free), to this frame's time. Then its
 //   light, once a particle (D-064's point 4): one ray towards the sun against the scene's
-//   structure, and the sky's light from above and below.
+//   structure, and the light from above and below: the probes' where they reach, the sky's
+//   beyond.
 // - `particles/draw`: each live particle a soft puff facing the camera, turned by its own
 //   angle, its edge broken by noise; lit smoke alpha-blended, glowing embers added (one
 //   premultiplied blend does both), faded where it meets the scene, hazed by the aerial
@@ -19,6 +20,7 @@
 import bindless;
 import skyframe;
 import sh;
+import probes;
 
 static const float PI = 3.14159265358979;
 static const float GRAVITY = 9.81;
@@ -111,6 +113,7 @@ struct ParticleFrame
     Particle* ring;
     Block* blocks;
     Effect* effects;
+    ProbeField* probes;  // this frame's light probes (D-036), or null: the open sky's light
 };
 
 struct ParticlePush
@@ -286,9 +289,19 @@ void advance_main(uint3 id : SV_DispatchThreadID)
         float cos_theta = dot(f[0].sun.xyz, view);
         float phase = FORWARD_SHARE * henyey_greenstein(cos_theta, FORWARD) + (1.0 - FORWARD_SHARE) / (4.0 * PI);
         Sky* sky = f[0].sky;
-        float3 sky_light = 0.5 * (sh_irradiance(sky[0].irradiance, float3(0.0, 1.0, 0.0)) +
-                                  sh_irradiance(sky[0].irradiance, float3(0.0, -1.0, 0.0))) * f[0].sun_radiance.w / PI;
-        q.light = sky_light;
+        // The light from above and below: the probes' where they reach (a puff in a street's
+        // shade takes the bounce off its walls, not the open sky's), the open sky's beyond.
+        float3 up = float3(0.0, 1.0, 0.0);
+        float3 sky_up = sh_irradiance(sky[0].irradiance, up);
+        float3 sky_down = sh_irradiance(sky[0].irradiance, -up);
+        float3 from_up = sky_up;
+        float3 from_down = sky_down;
+        if (f[0].probes != nullptr)
+        {
+            from_up = probe_irradiance(f[0].probes, q.position, up, up, -view, sky_up);
+            from_down = probe_irradiance(f[0].probes, q.position, -up, -up, -view, sky_down);
+        }
+        q.light = 0.5 * (from_up + from_down) * f[0].sun_radiance.w / PI;
         q.sun = 4.0 * phase * sun_visibility(f, q.position);
     }
     f[0].ring[slot] = q;

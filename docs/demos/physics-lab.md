@@ -1989,7 +1989,10 @@ Step 1 of D-064, grown from the splashes (#107).
     relaxation towards the air, which is the wind plus a divergence-free swirl (the curl of three
     sums of sines).
   - Each particle is lit once a frame (D-064's point 4): one ray towards the sun against the
-    scene's structure, and the sky's light from above and below. The probes come next.
+    scene's structure, and the light from above and below: the GI probes' at its centre where they
+    reach (a puff takes the bounce off the floor and the walls round it), the open sky's beyond.
+    In the smoke yard the white floor's bounce brightens the plumes' undersides (12 % of the
+    pixels, up to 20 codes).
 - **Drawing:** `particles/draw` draws soft puffs facing the camera, after the sky's compose and
   the splashes.
   - **The chimneys' and the fire's smoke** is drawn from a flipbook our own solver bakes (D-064's
@@ -2024,7 +2027,6 @@ none dropped.
 The frame was 1.65 ms.
 
 **Left for the next steps of D-064:**
-- the probes' light at each particle's centre;
 - collisions;
 - sorting alpha-blended effects per emitter;
 - the flipbook's frames blended by motion vectors (now cross-faded), and more flipbooks (dust,

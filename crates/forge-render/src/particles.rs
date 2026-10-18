@@ -12,7 +12,8 @@
 //! frame rate and the map check's captures stay exact. Every frame:
 //! - `particles/emit` and `particles/advance` on the async compute queue: the new particles,
 //!   then every live one moved to the frame's time and lit once (D-064's point 4: one ray
-//!   towards the sun against the scene's structure, the sky's light from above and below);
+//!   towards the sun against the scene's structure, the probes' light from above and below, the
+//!   open sky's beyond them);
 //! - `particles/draw` after the sky's compose: soft puffs facing the camera, smoke
 //!   alpha-blended and embers added in one premultiplied blend, writing the reactive mask TAA
 //!   reads ([`crate::Taa::resolve`]), over the splashes' when they drew this frame.
@@ -192,6 +193,9 @@ pub struct ParticleParams {
     /// The scene's top-level structure for the sun's shadow (0 for none): one built before the
     /// frame (the static one).
     pub tlas: u64,
+    /// This frame's light probes (D-036): the ambient light at each particle where they reach,
+    /// the open sky's beyond. None: the sky's everywhere.
+    pub probes: Option<crate::probes::ProbeLight>,
 }
 
 /// The particles' counters, for the log and the overlay.
@@ -306,9 +310,11 @@ struct GpuFrame {
     ring: u64,
     blocks: u64,
     effects: u64,
+    /// The frame's `ProbeField`, 0 for none.
+    probes: u64,
 }
 
-const _: () = assert!(std::mem::size_of::<GpuFrame>() == 232);
+const _: () = assert!(std::mem::size_of::<GpuFrame>() == 240);
 
 /// The ring's bookkeeping on the CPU: slots counted from the start, so a block's are
 /// `first % PARTICLE_CAPACITY` onwards.
@@ -668,6 +674,7 @@ impl Particles {
                 ring: self.ring.address(),
                 blocks: blocks_buffer.address(),
                 effects: self.table.address(),
+                probes: params.probes.map_or(0, |p| p.address),
             }],
         );
         let address = frame_buffer.address();
@@ -687,17 +694,24 @@ impl Particles {
                 });
         }
         let advance = &self.advance;
-        graph
+        let mut pass = graph
             .pass("particles/advance")
             .queue(QueueKind::Compute)
             .buffer(ring_handle, BufferAccess::ShaderReadWrite(compute))
-            .buffer(sky.light.buffer, BufferAccess::ShaderRead(compute))
-            .run(move |_, commands| {
-                commands.bind_pipeline(advance);
-                commands.push_constants(advance, &address);
-                commands.dispatch(live.div_ceil(64), 1, 1);
-                Ok(())
-            });
+            .buffer(sky.light.buffer, BufferAccess::ShaderRead(compute));
+        if let Some(p) = params.probes {
+            pass = pass
+                .buffer(p.data, BufferAccess::ShaderRead(compute))
+                .buffer(p.region, BufferAccess::ShaderRead(compute))
+                .image(p.irradiance, ImageAccess::Sampled(compute))
+                .image(p.distance, ImageAccess::Sampled(compute));
+        }
+        pass.run(move |_, commands| {
+            commands.bind_pipeline(advance);
+            commands.push_constants(advance, &address);
+            commands.dispatch(live.div_ceil(64), 1, 1);
+            Ok(())
+        });
         let (mask, load) = match reactive {
             Some(mask) => (mask, vk::AttachmentLoadOp::LOAD),
             None => (

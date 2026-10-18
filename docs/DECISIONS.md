@@ -4495,7 +4495,8 @@ downloaded sets stay out unless the owner says otherwise.
   compute queue: gravity or buoyancy, a drag towards the wind, a curl-noise swirl.
 - **Point 3, in part:** soft puffs, eroded by noise and shaded as lumpy balls against the sun.
   Smoke and glow share one premultiplied blend, so `VertexPipelineDesc` gained `premultiplied`.
-- **Point 4, in part:** one sun ray a particle a frame, and the sky's light.
+- **Point 4:** one sun ray a particle a frame, and the GI probes' light at its centre from above
+  and below (the open sky's beyond them; the probes added the same night).
 - **Point 5, in part:** TAA's reactive mask.
 - **Point 7, in part:** the three first effects, in the lab.
 - **Point 6 and point 3's six-way smoke, the same night:** `forge_render::smoke_bake`.
@@ -4507,7 +4508,7 @@ downloaded sets stay out unless the owner says otherwise.
     particle, the six lights weighted by the sun's direction. The dust keeps procedural puffs.
 - **Numbers:** 492 particles at most, the draw 0.085 ms with the flipbook (0.022 ms
   procedural), 0.006 ms of simulation. Two runs are identical to the pixel.
-- **Next:** the probes, collisions, sorting, frames blended by motion vectors, flipbooks for
+- **Next:** collisions, sorting, frames blended by motion vectors, flipbooks for
   dust and fire, the dust volume, and the village's chimneys and steps.
 - **Point 5's DLSS half, tried and left out (2026-10-18):** Streamline 2.14.16's DLSS reads none
   of the hints.

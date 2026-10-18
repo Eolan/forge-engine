@@ -2620,6 +2620,7 @@ impl Demo for Gallery {
                     wind: self.wind,
                     time,
                     tlas: self.scene.rays().map_or(0, |r| r.tlas_address()),
+                    probes,
                 },
                 taa_frame.color,
                 targets.depth,
