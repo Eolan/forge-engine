@@ -857,14 +857,14 @@ mesh to test navigations inside the houses"):
   - **Which surfaces a lamp lights:** each lamp lights its room's region and those across its
     storey's doorways, within its storey's height. A pixel takes its region's lamps only: the
     rooms are the light lists.
-  - **Its rays:** the three strongest get a shadow ray each, and one of the others is picked by
-    its light.
+  - **Its rays:** the three strongest get a shadow ray each (the strongest two), and one of the
+    others is picked by its light.
   - **The bounce:** the probes take the lamps' light.
   - **Its colours:** balanced as a tungsten camera sees them, so a white room is warm, not
     orange.
 
-  **Cost:** in the hall at night, 0.47 ms a frame (4.25 → 4.72 ms): the shading 0.53 ms and the
-  probes' rays 0.2 ms on the async queue. `--no-lamps` turns their light off for an A/B.
+  **Cost:** in the hall at night, best of three, 0.57 ms a frame (4.29 → 4.86 ms): the shading
+  0.49 ms and the probes' rays 0.08 ms on the async queue. `--no-lamps` turns their light off.
 - *Rooms on the outside walls* (`rooms::rebalance`). The anomalies' 20 unlit rooms were the
   middles of row houses one room wide (6 m lots, 12 m deep): a storey of three bedrooms one
   behind the other under a storey of an office and a bathroom 8.8 m deep. A middle band of

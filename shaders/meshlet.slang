@@ -2767,7 +2767,15 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
     // Where on each lamp's disc: the sun's eight Vogel points, one a frame of TAA's cycle, turned
     // per pixel (`sun_disc_point`, #54); independent points a frame left streaks in the penumbrae.
     float2 u = sun_disc_point(pixel, f[0].noise_frame);
-    for (uint j = 0u; j < 3u; j++)
+    // The strongest lamp takes two rays, at points half the cycle apart, so TAA sees the eight in
+    // four frames where its penumbrae show most; the next two take one each.
+    if (top[0] < count)
+    {
+        float2 u_half = sun_disc_point(pixel, f[0].noise_frame + SUN_DISC_POINTS / 2u);
+        lamp_add<SHADOWS>(f, f[0].lamps[top[0]], top[0], 0.5, world, n, view, specular_power, specular_weight, bias, u);
+        lamp_add<SHADOWS>(f, f[0].lamps[top[0]], top[0], 0.5, world, n, view, specular_power, specular_weight, bias, u_half);
+    }
+    for (uint j = 1u; j < 3u; j++)
     {
         if (top[j] < count)
             lamp_add<SHADOWS>(f, f[0].lamps[top[j]], top[j], 1.0, world, n, view, specular_power, specular_weight, bias, u);

@@ -4632,12 +4632,14 @@ night (`--time-of-day 1.333`, 22:00), and in the lab's room.
     floor's places.
   - Looping over the frame's 64 lamps cost 0.5 ms in a hall. Olsson's clusters stay for lamps
     outside the houses (the streets' lamps).
-- **At most four rays a pixel:** the three lamps with the most unshadowed light there get a
-  shadow ray each, and one of the others is picked by its light (Shirley, Wang and Zimmerman
-  1996) and counts as its light over its chance. Every lamp counts, and TAA averages the
-  others' noise.
+- **At most five rays a pixel:** the three lamps with the most unshadowed light there get a
+  shadow ray each, the strongest two, and one of the others is picked by its light (Shirley,
+  Wang and Zimmerman 1996) and counts as its light over its chance. Every lamp counts, and TAA
+  averages the others' noise.
   - The lamps' sphere points are the sun's eight Vogel points (#54). Independent points each
     frame left streaks across a doorway's penumbra.
+  - The strongest lamp's two rays go to points half the cycle apart, so TAA sees all eight in
+    four frames. That took the hall's flicker under TAA from 1.0 % to 0.65 %.
 - **The probes lit by the lamps** (part 3): each probe ray's hit takes one lamp of the probe's
   region, picked by its light, with one shadow ray. A room's walls send its lamps' light back,
   one bounce a frame. The mirror rays' hits take them too.
@@ -4645,10 +4647,12 @@ night (`--time-of-day 1.333`, 22:00), and in the lab's room.
   (`lamps::WHITE_BALANCE`). At the sun's white point a 2 700 K bulb turned the white rooms deep
   orange; now it stays warm. The sun and the sky keep their colours.
 - **Checks:**
-  - the hall at 22:00 with a still camera: frames 10 apart differ on 0.008 % of the pixels under
-    DLAA (0.0035 % without the lamps' light, `--no-lamps`) and 1.0 % under TAA (0.12 %);
-  - the cost in that hall: `shading/standard` 0.46 → 0.99 ms and `gi/probe rays` 2.16 →
-    2.36 ms; the frame 4.25 → 4.72 ms.
+  - the hall at 22:00 with a still camera: frames 10 apart differ on 0.004 % of the pixels under
+    DLAA (0.0035 % without the lamps' light, `--no-lamps`) and 0.65 % under TAA (0.12 %);
+  - in motion (the room turning 4° a second, DLAA against a 2 × 2 supersampled run), 1.65 % of
+    the pixels change otherwise than the reference's, against 2.36 % without the lamps' light;
+  - the cost in that hall, best of three: `shading/standard` 0.47 → 0.96 ms and `gi/probe rays`
+    2.17 → 2.25 ms; the frame 4.29 → 4.86 ms.
 - **Next:** RTXDI to compare (the SDK's download waits on the owner's word), a denoiser for
   the lamps' penumbrae (SIGMA takes one light a pass), the light through windows onto the
   street, the streets' lamps (Olsson's clusters), and glass both ways (part 4).

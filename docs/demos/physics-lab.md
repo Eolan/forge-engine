@@ -2104,8 +2104,8 @@ Steps 1 and 3 of D-065 (`forge_render::lamps`, `lamps_at` and `hit_lamps` in `me
 - **The shading:** a pixel takes the three lamps with the most light there, and one of the
   others picked by its light (here there are only three).
   - The light is its candelas over the distance squared, by the cosine.
-  - One shadow ray goes towards a point of its sphere, one of the sun's eight Vogel points a
-    frame, so TAA or DLAA averages the penumbra.
+  - Shadow rays go towards points of its sphere, the sun's eight Vogel points one a frame (two
+    half a cycle apart for the strongest lamp), so TAA or DLAA averages the penumbra.
   - The lamps give highlights as the sun does. Every class takes them where it takes the sun's
     light.
 - **The bounce:** each probe ray's hit takes one lamp, picked by its light, with a shadow ray. The
@@ -2117,8 +2117,8 @@ Steps 1 and 3 of D-065 (`forge_render::lamps`, `lamps_at` and `hit_lamps` in `me
   - under TAA, 0.05 to 0.10 % of the pixels differ by more than 2 codes (0.21 % with step 1's
     independent sphere points);
   - under DLAA, 0.0003 to 0.011 % (the room unlit: 0.0102 %).
-- **Cost:** three lamps over the whole view, three rays a pixel, take `shading/standard` from 0.16
-  to 0.52 ms (the frame 0.84 → 1.61 ms).
+- **Cost:** three lamps over the whole view, four rays a pixel, take `shading/standard` from 0.16
+  to 0.64 ms with the strongest lamp's second ray (the frame 0.84 → 1.74 ms).
 
 ## Captures
 
