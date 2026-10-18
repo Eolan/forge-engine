@@ -390,6 +390,16 @@ public struct Frame
     public uint2* lamp_lists;       // (region, lamp) sorted by region, the lamps of every region under REGION_ANY
 };
 
+// Whether this thread's rays meet the movers: every pass's but the probes' unless their scene asks
+// (`ProbeParams::movers`, #299), which `probe_trace_main` sets.
+static bool g_trace_movers = true;
+
+// The movers' structure the rays meet, 0 for none (`g_trace_movers`).
+uint64_t movers_tlas(Frame* f)
+{
+    return g_trace_movers ? f[0].tlas_movers : 0;
+}
+
 static const uint REGION_ANY = 0xFFFFFFFEu; // `lamps::REGION_ANY`: the lamps that light every region
 
 // The run of the light lists' entries under `key` (`lamps::lists`): [x, y).
@@ -4440,10 +4450,10 @@ bool ray_blocked(Frame* f, RayDesc ray)
     }
     if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
         return true;
-    if (f[0].tlas_movers == 0)
+    if (movers_tlas(f) == 0)
         return false;
     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER> m;
-    m.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas_movers), ray_opacity(f), 0xFF, ray);
+    m.TraceRayInline(RaytracingAccelerationStructure(movers_tlas(f)), ray_opacity(f), 0xFF, ray);
     while (m.Proceed())
     {
         if (shadow_candidate_kept(f, m.CandidateInstanceID(), m.CandidatePrimitiveIndex(), m.CandidateTriangleBarycentrics()))
@@ -4464,7 +4474,7 @@ float3 jelly_transmittance(Frame* f, RayDesc ray)
         return float3(1.0);
     float3 depth = float3(0.0);
     jelly_depth_in(f, f[0].tlas, ray, depth);
-    jelly_depth_in(f, f[0].tlas_movers, ray, depth);
+    jelly_depth_in(f, movers_tlas(f), ray, depth);
     return exp(-abs(depth));
 }
 
@@ -4543,12 +4553,12 @@ ClosestHit trace_closest(Frame* f, RayDesc ray, bool shadow = false, bool probe 
         o.barycentrics = q.CommittedTriangleBarycentrics();
         o.t = q.CommittedRayT();
     }
-    if (f[0].tlas_movers != 0)
+    if (movers_tlas(f) != 0)
     {
         // Only what stands nearer than the static hit.
         ray.TMax = o.t;
         RayQuery<RAY_FLAG_NONE> m;
-        m.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas_movers), ray_opacity(f), 0xFF, ray);
+        m.TraceRayInline(RaytracingAccelerationStructure(movers_tlas(f)), ray_opacity(f), 0xFF, ray);
         while (m.Proceed())
         {
             if ((!probe || probe_leaf_kept(f, m.CandidateInstanceID(), m.CandidatePrimitiveIndex(), seed)) && (shadow
@@ -4958,7 +4968,7 @@ Crossings own_crossings(Frame* f, uint instance, RayDesc ray)
     c.barycentrics = float2(0.0);
     c.farthest = -1.0;
     gather_crossings(f[0].tlas, instance, ray, c);
-    gather_crossings(f[0].tlas_movers, instance, ray, c);
+    gather_crossings(movers_tlas(f), instance, ray, c);
     return c;
 }
 
@@ -4980,7 +4990,7 @@ bool blocked_in(Frame* f, uint64_t tlas, RayDesc ray, uint skip)
 
 bool ray_blocked_except(Frame* f, RayDesc ray, uint skip)
 {
-    return blocked_in(f, f[0].tlas, ray, skip) || blocked_in(f, f[0].tlas_movers, ray, skip);
+    return blocked_in(f, f[0].tlas, ray, skip) || blocked_in(f, movers_tlas(f), ray, skip);
 }
 
 // `trace_closest` that sees through instance `skip`: from inside the jelly, where it sits on the
@@ -5019,7 +5029,7 @@ ClosestHit trace_closest_except(Frame* f, RayDesc ray, uint skip)
     o.t = ray.TMax;
     o.mover = false;
     closest_in(f, f[0].tlas, ray, skip, false, o);
-    closest_in(f, f[0].tlas_movers, ray, skip, true, o);
+    closest_in(f, movers_tlas(f), ray, skip, true, o);
     return o;
 }
 
@@ -5398,7 +5408,7 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     if (SHADOWS != 0 && class_index == MATERIAL_CLASS_ICE && f[0].tlas != 0 && (f[0].flags & FLAG_TRANSLUCENCY) != 0)
         s.transmitted = ice_transmission(f, record.x, surface_scene, mat.scattering);
     // The jelly's see-through (#180): under a sky, with the rays' scene.
-    bool jelly_traced = SHADOWS != 0 && class_index == MATERIAL_CLASS_JELLY && (f[0].tlas != 0 || f[0].tlas_movers != 0)
+    bool jelly_traced = SHADOWS != 0 && class_index == MATERIAL_CLASS_JELLY && (f[0].tlas != 0 || movers_tlas(f) != 0)
         && f[0].rt_scene != nullptr && resolve_push.sky != nullptr;
     if (jelly_traced)
         s.transmitted = jelly_through(f, mat, record.x, surface_scene, s.n, s.view, s.cloud);
@@ -6132,6 +6142,8 @@ struct ProbeTracePush
     float4* sky;      // the sky's irradiance and its table (sky.slang)
     uint probe_count; // probes of every cascade
     uint first_update; // 1 on the first update after a reset (`Probes::update`)
+    uint movers;       // 1: the rays meet the movers (`ProbeParams::movers`, #299)
+    uint pad;
 };
 
 [[vk::push_constant]]
@@ -6141,6 +6153,7 @@ ProbeTracePush probe_push;
 [numthreads(PROBE_TRACE_GROUP, 1, 1)]
 void probe_trace_main(uint3 group : SV_GroupID, uint thread : SV_GroupThreadID)
 {
+    g_trace_movers = probe_push.movers != 0u;
     ProbeField* field = probe_push.field;
     uint probe = group.z * 65535u + group.y;
     uint ray = group.x * PROBE_TRACE_GROUP + thread;

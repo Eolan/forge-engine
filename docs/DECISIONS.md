@@ -1631,6 +1631,24 @@ positive numbers only (`wrap_cells`).
 
 *(research: lighting-gi.md, Majercik et al. and the implementation notes on the probes; D-008, D-029, D-030; issue #53; demo: city-blocks)*
 
+- **The probes do not see the movers by default** (#299, 2026-10-18; `ProbeParams::movers`).
+  - **Before:** the probes' rays met the movers (#79), and the probes the movers entered
+    settled again (#69). The probes' passes, on the async compute queue, read this frame's
+    movers and so waited for their upload on the graphics queue, which itself waited for the
+    previous frame's probes (#198 chose that wait: on the island it kept the probes off the
+    culls).
+  - **What it cost:** the village's main street with 23 walkers took 7.18 ms against 6.53 ms
+    without them, `gi/probe rays` 5.08 against 3.32 ms. The serial frame was the same with or
+    without them (6.6 ms), and the probes skipping the movers' ray query alone changed nothing:
+    the cost was the wait, not the rays. A scene built outside the repository saw the same
+    doubling with 150 or 17 000 movers, near or far.
+  - **Now:** off by default, the probes neither declare the movers nor wake on them, and their
+    rays skip the movers' structure (`g_trace_movers`, set by `probe_trace_main`). The movers
+    keep their sun and lamp shadows, their reflections and the other passes' rays; only the
+    probes' diffuse light does not see them. A scene with large, slow movers can turn it on.
+  - **Measured** (best of three, 240 frames): with the walkers 6.51–6.53 ms, without them
+    6.49–6.50 ms; `gi/probe rays` 3.28–3.30 ms with them.
+
 ## D-037 — World partition: sectors of 2⁴⁰ m, cells of 1 km, `u64` cell ids, a clipmap of cells ✅ (2026-09-30)
 
 `forge-world` (the cloud branch, `docs/HANDOVER.md`) fixes four numbers that D-004 left open;

@@ -828,6 +828,19 @@ same build, two rounds, 1 500 frames each, 2560 × 1440.
   its cost the pixels', not the movers'.
 - The rounds' frame times vary by up to 0.09 ms with 10 000 movers (3.759 and 3.666 ms).
 
+**The probes and the movers** (#299, 2026-10-18): the village's main street at 15:00
+(`--view=-79.8,1.7,-272.0,-98.3,0`), 240 frames, best of three, with `--people 15` (21–28
+walkers, movers) and without.
+
+| | without walkers | with walkers | `gi/probe rays` with walkers |
+|---|---|---|---|
+| before (the probes read the movers) | 6.53 ms | 7.18 ms | 5.08 ms |
+| serial frame (`FORGE_ASYNC=0`), before | 6.60 ms | 6.59 ms | |
+| the probes' ray query of the movers skipped alone | | 7.16 ms | 5.08 ms |
+| after (`ProbeParams::movers` off) | 6.50 ms | 6.52 ms | 3.29 ms |
+
+The cost was the probes' wait for the movers' upload on the other queue, not their rays.
+
 With the movers' acceleration structure (the second step), the same views and rounds:
 
 | View | frame: 0 → 1 000 → 10 000 | `movers/tlas` | `water/reflections` | `gi/probe rays` | `shading/layered` |

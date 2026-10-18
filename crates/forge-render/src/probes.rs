@@ -239,6 +239,9 @@ struct TracePush {
     probe_count: u32,
     /// 1 on the first update after a reset: no probe has measured anything yet.
     first_update: u32,
+    /// 1: the rays meet the movers ([`ProbeParams::movers`]).
+    movers: u32,
+    pad: u32,
 }
 
 /// Mirrors `WakePush` in `probe_update.slang` (#79).
@@ -281,6 +284,13 @@ pub struct ProbeParams {
     /// in the same time (issue #103). New and young probes update every frame. 1: every probe
     /// every frame.
     pub cadence: u32,
+    /// Whether the probes' rays meet the movers (#79), and the probes they enter settle again.
+    /// Off by default (#299): reading this frame's movers made the probes, on the compute queue,
+    /// wait for their upload on the graphics queue, and the village with 23 walkers took
+    /// 0.65 ms more a frame (6.58 against 7.18 ms; the serial frame the same with or without
+    /// them). The movers keep their sun and lamp shadows and their reflections; only the
+    /// probes' diffuse light does not see them.
+    pub movers: bool,
 }
 
 impl Default for ProbeParams {
@@ -295,6 +305,7 @@ impl Default for ProbeParams {
             rays: 128,
             hysteresis: 0.97,
             cadence: 2,
+            movers: false,
         }
     }
 }
@@ -824,6 +835,7 @@ impl Probes {
         let spread = [count.min(MAX_GROUPS), count.div_ceil(MAX_GROUPS)];
         // The settled probes whose cells the movers entered or left settle again (#79, #69),
         // before this frame's rays: as young probes, they take them.
+        let movers = movers.filter(|_| p.movers);
         if let Some(m) = movers.filter(|m| m.count > 0) {
             let wake = &this.wake;
             let push = WakePush {
@@ -869,6 +881,8 @@ impl Probes {
                         sky: sky.address,
                         probe_count: count,
                         first_update: u32::from(first_update),
+                        movers: u32::from(movers.is_some()),
+                        pad: 0,
                     },
                 );
                 commands.dispatch(p.rays.div_ceil(TRACE_GROUP), spread[0], spread[1]);
