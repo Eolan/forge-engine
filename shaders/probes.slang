@@ -66,6 +66,9 @@ static const float PROBE_LEAST_WEIGHT = 0.05;
 // shows.
 static const float PROBE_LEAST_FRONT = 0.01;
 public static const float PROBE_ROOM_SPACING = 1.5;
+// In a room (D-068), the share of the trilinear weight its own probes must hold among the eight
+// for a cascade to claim all of a point's light; with less, the next cascade fills the rest.
+static const float PROBE_ROOM_COVER = 0.25;
 
 // Mirrors `GpuCascade` in crates/forge-render/src/probes.rs.
 public struct ProbeCascade
@@ -405,6 +408,10 @@ public float4 cascade_irradiance<let MIRROR : int>(ProbeField* field, uint c, fl
     float3 sum_d = float3(0.0);
     float total = 0.0;
     bool found = false;
+    // A room's lookup (masked, not the outside's): how much of the trilinear weight its own probes
+    // hold, before visibility (`PROBE_ROOM_COVER`).
+    bool room_mask = masked && mask.region != REGION_OUTSIDE;
+    float coverage = 0.0;
     [unroll]
     for (uint k = 0; k < 8; k++)
     {
@@ -447,6 +454,7 @@ public float4 cascade_irradiance<let MIRROR : int>(ProbeField* field, uint c, fl
         if (probe_state(data.w) == PROBE_INACTIVE)
             continue;
         found = true;
+        coverage += trilinear * keep * share;
         float3 position = (float3(cell) + 0.5) * s + data.xyz;
         // Probes behind the surface count less, smoothly.
         float3 to_probe = normalize(position - p);
@@ -492,7 +500,7 @@ public float4 cascade_irradiance<let MIRROR : int>(ProbeField* field, uint c, fl
         float3 root_d = sum_d / total;
         toward_d = root_d * root_d;
     }
-    return float4(root * root, 1.0);
+    return float4(root * root, room_mask ? saturate(coverage / PROBE_ROOM_COVER) : 1.0);
 }
 
 // The cascades' light at `p`, finer first, each over what the finer ones left, and how much of
@@ -511,7 +519,7 @@ float4 cascades_lookup<let MIRROR : int>(ProbeField* field, float3 p, float3 n, 
         float4 ce = cascade_irradiance<MIRROR>(field, c, p, n, g, v, d, mask, masked, ce_d);
         if (ce.w <= 0.0)
             continue;
-        float share = (1.0 - covered) * w;
+        float share = (1.0 - covered) * w * ce.w;
         e += share * ce.rgb;
         e_d += share * ce_d;
         covered += share;
@@ -535,6 +543,12 @@ float3 probe_lookup<let MIRROR : int>(ProbeField* field, float3 p, float3 n, flo
     float4 e = cascades_lookup<MIRROR>(field, p, n, g, v, d, mask, masked, toward_d);
     if (masked && e.w <= 0.0)
         e = cascades_lookup<MIRROR>(field, p, n, g, v, d, mask, false, toward_d);
+    else if (masked && mask.region != REGION_OUTSIDE && e.w < 1.0)
+    {
+        // A room's cascades covered part of it: theirs is all its light, not the open sky's.
+        toward_d /= e.w;
+        e = float4(e.rgb / e.w, 1.0);
+    }
     toward_d += (1.0 - e.w) * open_sky_d;
     return e.rgb + (1.0 - e.w) * open_sky;
 }
@@ -566,8 +580,8 @@ public float3 probe_irradiance_hit(ProbeField* field, float3 p, float3 n, float3
     bool masked = field[0].region_count > 0u && mask.kind != REGION_SOLID;
     float3 unused;
     float4 e = cascades_lookup<0>(field, p, n, n, v, n, mask, masked, unused);
-    if (masked && e.w <= 0.0 && mask.region != REGION_OUTSIDE)
-        return float3(0.0);
+    if (masked && mask.region != REGION_OUTSIDE)
+        return e.w > 0.0 ? e.rgb / e.w : float3(0.0);
     return e.rgb + (1.0 - e.w) * open_sky;
 }
 

@@ -5223,6 +5223,20 @@ application of their patents just in case."
 - **A ray's hit takes its region's probes alone** (`probe_irradiance_hit`): no fallback to every
   probe, but no bounce in a house where none of them stands near, and the open sky outside; only
   the shading keeps the fallback's second copy of the lookup.
+- **A room's cascade claims only what its probes cover** (#283, 2026-10-18).
+  - **What was wrong:** a window's head showed a dark trapezoid with a hard diagonal edge, by day
+    and at night. Few of the room's probes stand near a recess. Where a cell boundary crossed the
+    head (the house at an angle to the grid), the one room probe among the eight changed, and
+    each alone was all the light.
+  - **The rule:** a room's cascade covers a point by its own probes' share of the trilinear
+    weight, up to `PROBE_ROOM_COVER` (0.25), and the next cascade fills the rest. What the room's
+    cascades leave is shared among them, never taken from the open sky, so the outside's light
+    still stays out.
+  - **Where it applies:** not outside, nor in a scene without regions; there nothing changes.
+  - **Cost and result:** the window's head is even. The map check's views moved by at most
+    0.010 mean ꟻLIP (the room's window frame) and 0.0015 EV. The resolve costs about 0.09 ms
+    more in a room (`shading/standard` 0.83 → 0.92 ms at the recess's view at night), from
+    evaluating the next cascade near walls.
 - **The lookup's cell is clamped into its grid before its read** (f7145b1), and a scene without
   regions names a buffer of zeros: unclamped, the physics lab's dominoes at frame 900 differed
   from run to run by 20–40 scattered pixels (Tier 2 caught it on both paths, async and serial),

@@ -1504,6 +1504,12 @@ something stands out). Two things to watch:
     The village's leaf cards (#266) gained most: `meshlet pass 1` 1.80 → 1.19 ms from the air
     and 1.11 → 0.53 ms along the road, the images unchanged to the pixel. The batch is
     unchanged too (240 captures, both paths), and its timings move by under 0.04 ms.
+  - *2026-10-18, a room's cascade claims only what its probes cover (D-068, #283):* where few of
+    a room's probes stand among the eight (a window's recess, by a wall), the next cascade fills
+    the rest. The map check's views at its hour, 240 frames, best of three, d75f4c70 against
+    the change: `shading/standard` the room 0.613 → 0.625 ms, the hall 0.646 → 0.743, the
+    landing 0.575 → 0.583. The frames' totals moved with `gi/probe rays`, which varies by
+    0.3–0.7 ms from run to run here.
   - *2026-10-17, the probes' regions (D-068):* a surface in a house is lit by its room's probes
     only, and a room's probes see out through its windows. The map check's views at its hour,
     240 frames, best of three, c963e68 against D-068:
