@@ -65,7 +65,7 @@ static const float PROBE_LEAST_WEIGHT = 0.05;
 // cost 0.1 ms of the city's shading and 0.09 of its probes' rays, for light no room's corner
 // shows.
 static const float PROBE_LEAST_FRONT = 0.01;
-static const float PROBE_ROOM_SPACING = 1.5;
+public static const float PROBE_ROOM_SPACING = 1.5;
 
 // Mirrors `GpuCascade` in crates/forge-render/src/probes.rs.
 public struct ProbeCascade

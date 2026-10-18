@@ -1578,6 +1578,20 @@ NVIDIA's notice and terms, unlike the workspace's MIT/Apache.
   restarted their maps.
 - **The blend.** Each probe's maps keep 97 % of what they held; a new or re-activated probe
   starts from its first rays.
+  - **The distance map** weighs the rays by the cosine to the power 50 around each texel's
+    direction, so it keeps the shape of what surrounds the probe.
+  - **In room-sized cascades** (1.5 m apart at most: the village's 1 m, the models lab's rooms)
+    the power is 10 (#283, 2026-10-18). There a probe stands a few tens of centimetres from a
+    ceiling, a reveal or a stair's opening and sees its edge at a grazing angle. The test's
+    boundary then took the map's 14-texel grid: a sawtooth shadow on the village hall's ceiling,
+    by day and at night.
+  - **What the wider lobe does:** the boundary becomes a soft gradient. The village's views
+    changed by at most 0.012 EV, except the landing above the stair, 0.21 EV lighter and more even.
+    Coarser cascades keep 50, to the bit.
+  - **Tried and left aside:** probes kept farther from surfaces or a larger bias (the teeth
+    shrank), 30-texel maps (finer teeth), and four taps at the lookup. Averaging the taps'
+    visibility drew a kinked shadow on an open window leaf. Averaging their distances left
+    faint teeth, at four times the fetches.
 
 **The lookup** (resolve and mirror-ray hits):
 - **The eight probes** around the point, found after the 2021 paper's bias (towards the

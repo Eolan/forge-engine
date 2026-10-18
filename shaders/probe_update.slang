@@ -114,8 +114,17 @@ void probe_state_main(uint3 id : SV_DispatchThreadID)
 // the weights (back faces left out: their light is inside something). Distance: the rays'
 // distances and their squares weighted by the cosine to the power 50, a narrow lobe, so the
 // map keeps the shape of what surrounds the probe.
+//
+// In a room-sized cascade (PROBE_ROOM_SPACING) the lobe is the cosine to the power 10 (#283).
+// There probes stand a few tens of centimetres from ceilings, reveals and a stair's opening, and
+// see them at grazing angles. Seen so, an edge's distances change from one texel to the next by
+// more than the bilinear lookup can follow: the test's boundary took the map's 14-texel grid,
+// and a sawtooth shadow lay on the village hall's ceiling and along a window's recess. The wider
+// lobe smooths the map across its texels, so the boundary is a soft gradient. Coarser cascades
+// keep 50: their light stays the same to the bit.
 static const uint BLEND_GROUP = DISTANCE_TILE * DISTANCE_TILE; // 256 threads
 static const float DISTANCE_SHARPNESS = 50.0;
+static const float DISTANCE_SHARPNESS_ROOM = 10.0;
 // The share of its maps a young probe's update keeps: after its eight young updates, its first
 // keeps 0.5^8, 0.4 %.
 static const float YOUNG_HYSTERESIS = 0.25;
@@ -186,11 +195,12 @@ void probe_blend_main(uint3 group : SV_GroupID, uint thread : SV_GroupIndex)
         uint2 t = uint2(thread % DISTANCE_TEXELS, thread / DISTANCE_TEXELS);
         float3 dir = texel_direction(t, DISTANCE_TEXELS);
         float farthest = 1.5 * sqrt(3.0) * slot.spacing; // a miss counts as this far
+        float sharpness = slot.spacing <= PROBE_ROOM_SPACING ? DISTANCE_SHARPNESS_ROOM : DISTANCE_SHARPNESS;
         float2 sum = float2(0.0);
         float total = 0.0;
         for (uint i = 0; i < random; i++)
         {
-            float w = pow(max(0.0, dot(dir, s_dir[i])), DISTANCE_SHARPNESS);
+            float w = pow(max(0.0, dot(dir, s_dir[i])), sharpness);
             // A back face's hit at a fifth of its distance (the 2021 paper's "shortened by 80%",
             // RTXGI's): what the probe meets the back of is the inside of something, and points
             // past it fail the visibility test sooner (D-068). Not to 0, which would fail every
