@@ -4671,9 +4671,20 @@ night (`--time-of-day 1.333`, 22:00), and in the lab's room.
     the pixels change otherwise than the reference's, against 2.36 % without the lamps' light;
   - the cost in that hall, best of three: `shading/standard` 0.47 → 0.96 ms and `gi/probe rays`
     2.17 → 2.25 ms; the frame 4.29 → 4.86 ms.
-- **Next:** RTXDI to compare (the SDK's download waits on the owner's word), a denoiser for
-  the lamps' penumbrae (SIGMA takes one light a pass), the light through windows onto the
-  street, the streets' lamps (Olsson's clusters), and glass both ways (part 4).
+- **Next:**
+  - RTXDI to compare (the SDK's download waits on the owner's word).
+  - A denoiser for the lamps' penumbrae. `research/lamp-penumbra-denoising.md` (2026-10-18)
+    recommends the interleaved ratio filter, with no patent found:
+    - 128 stratified disc points interleaved over 4×4 pixels and the 8-frame cycle;
+    - the ratio of shadowed to unshadowed lamp light filtered by a fixed geometry-aware 4×4 box;
+    - that ratio times the exact unshadowed sum, about 0.1–0.2 ms.
+
+    SIGMA's translucency route is the upgrade. A filter whose width comes from the occluder's
+    distance is in NVIDIA's US 10,740,954 claims 10 and 15, to about 2039.
+  - The light through windows onto the street.
+  - The streets' lamps (Olsson's clusters, after a look at AMD's Forward+ patents, US 10,803,655
+    B2).
+  - Glass both ways (part 4).
 
 ## D-066 — Pieces with sockets: one connector schema for generation, the anomaly check and player building ✅ (proposed 2026-10-16 on the owner's walk of #266; the owner's go the same evening)
 

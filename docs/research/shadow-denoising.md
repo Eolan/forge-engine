@@ -280,6 +280,12 @@ host refused the fetch, so its content here is from search summaries).
 - Variation-driven filters (§2, §3.1) do not use the occluder's distance at all.
 - SIGMA's screen-space mode is isotropic: its `SIGMA_USE_SCREEN_SPACE_SAMPLING` note says it
   does not elongate the shadow. That narrows the resemblance to the claim; it does not settle it.
+- **Corrected 2026-10-18** (`research/lamp-penumbra-denoising.md` §3, the claims read on Google
+  Patents): claims 10 and 15 do **not** require an anisotropic kernel. They need only a footprint
+  from a shape projected from the light and the point-to-occluder distance, and a filter
+  dimension taken from it. Any filter whose width comes from the occluder's distance is in the
+  claims' territory, isotropic or not, until about 2039. The point above does not narrow it.
+  Continuations: US 11,367,240 B2, US 12,026,822 B2, US 2024/0338884 A1.
 
 ### 3.3 The ratio estimator: denoise the shadow, not the light
 

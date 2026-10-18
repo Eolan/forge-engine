@@ -91,6 +91,8 @@ lists hold a handful of lights a pixel: one ray a pixel, picked well, converges 
 | ReSTIR's direct-light method alone | none found in this search; NVIDIA's later filings in the same family may reach it | to check before building on it |
 | Light trees sampled stochastically (Moreau et al. 2019) | not searched | — |
 | Clustered shading (Olsson et al. 2012) | none found | — |
+| Forward+ tiled light culling (AMD), met in passing on 2026-10-18 (`lamp-penumbra-denoising.md` §6) | US 10,803,655 B2, US 12,136,165 B2 | active, to about 2036-01-11; claims not read. To check before Olsson's clusters for the streets' lamps (the houses' rooms as light lists are another method) |
+| Shadow denoising and sampling (NVIDIA) | see `lamp-penumbra-denoising.md` §6 | — |
 
 Per the owner's rule, building D-008's ReSTIR waits on the owner's word with this table, or on a
 professional search.
