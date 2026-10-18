@@ -5932,3 +5932,28 @@ appears, back at the start within 30 s, or fail):
   instead.
 - **Aliases** binding a record's places and items to what a generator placed. The research
   (`docs/research/missions.md`) weighs them.
+
+**The research** (`docs/research/missions.md`, a cloud agent's note read after the build):
+- **What it confirms:** the tree with Verse's operators (CD Projekt RED's *And* is `sync`, and
+  its *Cut Control* cancels), objectives tied to steps rather than set by scripts, a definition
+  kept apart from its state, and one total order inside a tick.
+- **What it proposes next:**
+  - **roles bound once when a mission starts,** as Bethesda's aliases and Hitman's ids. The
+    generator names what it placed, and the record refers to those names;
+  - **a stable id on every step,** with renames kept as tombstones, so that one *reconcile* rule
+    serves hot reload and old saves at the step level. Today's stage works at the objectives'
+    level;
+  - **optional steps and a `fail_if` per wait,** with *cancelled* shown as *missed*, not failed;
+  - **integer counters and the conditions `Near`, `Holds`, `Dead`, `CountOf`,** level-triggered,
+    as the engine gets inventories and deaths;
+  - **one-off interface cues keyed by mission, step and tick,** confirmed under prediction as
+    Photon Quantum does.
+- **Its patents:** nothing found reads on a record and its evaluator.
+  - **Zynga's US 9,463,386 B1 and US 9,821,230 B2** (a state machine definition received from a
+    server, setting graphical objects' states): read their claims before a server ever sends
+    mission records to clients at run time.
+  - **Kabam's US 9,463,376 B1** (objectives generated at random by task type, amount or time):
+    read its claims before the generator picks those at random.
+- **Its nine questions** (§7.12) wait for the owner, among them: whether event conditions stay
+  (D-073 has `Event` for what has no trigger yet), whether failure wins a tie with success in a
+  tick, and whether generated missions are made on every machine from the seed.
