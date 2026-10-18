@@ -4530,8 +4530,16 @@ downloaded sets stay out unless the owner says otherwise.
     is. The lab's fire has flames.
   - The fire does not light the yard: as a lamp of the flames' size, the rocks' shadows came
     out dithered at their wide penumbrae, which wait for the lamps' denoiser (D-065).
-- **Next:** the depth buffer's collisions, sorting, frames blended by motion vectors, a dust
-  flipbook, the dust volume, and the village's chimneys and steps.
+- **Point 3's frames blended by motion vectors, tried and left out (2026-10-18):**
+  - The bake wrote each frame's motion to the next: the velocity along each column, weighted
+    as the render weighs the smoke, in a third atlas.
+  - The draw pulled both frames along it.
+  - With 32 frames over the puff's life, a frame's content moves about a texel to the next
+    (±0.012 of the frame). At frame 360 of the smoke yard the warp changed 37 pixels of 1.44 M
+    (over 2 codes), so it is not in the tree.
+  - It is worth again for a flipbook with few frames for its motion.
+- **Next:** the depth buffer's collisions, sorting, a dust flipbook, the dust volume, and the
+  village's chimneys and steps.
 - **Point 5's DLSS half, tried and left out (2026-10-18):** Streamline 2.14.16's DLSS reads none
   of the hints.
   - The reactive mask was tagged in turn as the bias-current-colour hint (type 29), the

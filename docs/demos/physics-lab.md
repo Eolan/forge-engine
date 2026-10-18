@@ -2072,7 +2072,8 @@ off it and off the chimney's foot.
 **Left for the next steps of D-064:**
 - the depth buffer's collisions (smoke, dust) and the movers;
 - sorting alpha-blended effects per emitter;
-- the flipbooks' frames blended by motion vectors (now cross-faded), and a dust flipbook;
+- a dust flipbook (the frames blended by motion vectors were tried and left out: with 32 frames
+  a frame's content moves about a texel to the next, and the warp changed 37 pixels, D-064);
 - the fire's light, once the lamps' penumbrae are denoised;
 - the dust volume;
 - the village's chimneys at dusk and the walker's steps (#266).
