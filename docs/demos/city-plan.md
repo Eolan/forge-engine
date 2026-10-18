@@ -1722,7 +1722,16 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
     fills a reflex gap, and dead ends are round. The union is the street ground.
   - **Corners:** between two driven arms the kerb turns on 6 m, shorter where an arm is short.
     Where a tram turns, the carriageway takes in its swept path (the outer track, half a car and
-    0.5 m: `transit::SWEPT`), so the kerb keeps clear of it.
+    0.5 m: `transit::SWEPT`), so the kerb keeps clear of it. That rule is the point test. The
+    practical test sweeps the tram itself (#276, `city::sweep::Cuboid`):
+    - **The tram:** each section is a box set by its two ends on the track, so its middle swings
+      in on a curve and its ends out. It is 2.55 m wide, from 0.2 m to 3.7 m over the street.
+    - **The sweep:** the tram slides along every line's whole route both ways in steps of 0.5 m,
+      crossovers included.
+    - **The obstacles:** the street trees' trunks and crowns (the model's, from 43 % of a tree's
+      height up) and the lamps' posts.
+    - **The result:** 18.4 km of track, nothing met. A control post on a track is met 66 times,
+      so the sweep looks.
   - **Crossings:** a zebra 4 m wide on each driven arm of every junction, a metre past its corner
     or past a pedestrian way's mouth. A dropped kerb at each end slopes 1.6 m (1 in 12, #263) down
     to a 1 cm lip, its sides flared at 1 in 12 too, so there is no edge to step or roll over (the

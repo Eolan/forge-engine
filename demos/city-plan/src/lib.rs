@@ -7501,6 +7501,122 @@ mod tests {
         }
     }
 
+    /// Every tram runs its line both ways clear of the street trees and the lamps (#276: a
+    /// vehicle's box swept along its track). Each section is a box set by its two ends on the
+    /// track (the middle of a section swings in on a curve, its ends out), 2.55 m wide, from
+    /// 0.2 m to 3.7 m over the street, slid along every line's whole route in steps of 0.5 m.
+    /// The obstacles are the street tree model's trunk (0.3 m at its foot for a crown of 4.2 m,
+    /// to 44 % of its height) and its crown (its radius, from 43 % of its height up), and each
+    /// lamp's post. The point tests (the kerbs keep `SWEPT` from a line) stay the first pass.
+    #[test]
+    fn trams_run_their_lines_clear_of_the_trees_and_lamps() {
+        use forge_geom::vehicles::{SECTION_GAP, SECTION_LENGTH, TRAM_WIDTH};
+        use forge_procgen::city::sweep::{self, Cuboid};
+        use std::collections::HashMap;
+        let size = 4000.0;
+        let site = example::site(size, 10.0);
+        let city = plan(&site, &example::params(size));
+        let trees = forge_procgen::city::trees::trees(&site, &city, 5);
+        let lamps = forge_procgen::city::lamps::lamps(&site, &city);
+        // Upright discs: where, radius, from, to, and what (0 a trunk, 1 a crown, 2 a lamp).
+        let mut discs: Vec<(DVec2, f64, f64, f64, u8)> = Vec::new();
+        for t in trees.iter().filter(|t| t.species.is_none()) {
+            discs.push((t.pos, 0.3 * t.crown / 4.2, 0.0, 0.44 * t.height, 0));
+            discs.push((t.pos, t.crown, 0.43 * t.height, t.height, 1));
+        }
+        for l in &lamps {
+            discs.push((l.pos, 0.1, 0.0, l.height, 2));
+        }
+        // The control: a post on the first line's outbound track halfway, which every tram
+        // passing meets, so a sweep that finds nothing has looked.
+        let control = city.tram_lines.first().and_then(|l| {
+            let run = TramRun::new(l, &city, &site, &[])?;
+            let s = run.along[run.along.len() - 1] * 0.5;
+            let (p, t) = run.track(s);
+            Some(p + DVec2::new(-t.y, t.x) * run.side(s, true))
+        });
+        if let Some(at) = control {
+            discs.push((at, 0.1, 0.0, 3.0, 3));
+        }
+        const CELL: f64 = 10.0;
+        let key = |p: DVec2| ((p.x / CELL).floor() as i32, (p.y / CELL).floor() as i32);
+        let mut cells: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
+        for (i, d) in discs.iter().enumerate() {
+            cells.entry(key(d.0)).or_default().push(i);
+        }
+        let body = Cuboid {
+            half_length: f64::from(SECTION_LENGTH) * 0.5,
+            half_width: f64::from(TRAM_WIDTH) * 0.5,
+            bottom: 0.2,
+            top: 3.7,
+        };
+        let pitch = f64::from(SECTION_LENGTH + SECTION_GAP);
+        let (mut km, mut met) = (0.0, [0_usize; 4]);
+        let mut first: Vec<(usize, f64, u8)> = Vec::new();
+        let mut taken: Vec<DVec2> = Vec::new();
+        for (line, l) in city.tram_lines.iter().enumerate() {
+            let Some(run) = TramRun::new(l, &city, &site, &taken) else {
+                continue;
+            };
+            taken.extend(run.timetable.stops().iter().map(|&s| run.track(s).0));
+            let length = run.along[run.along.len() - 1];
+            km += 2.0 * length / 1000.0;
+            for outbound in [true, false] {
+                let dir = if outbound { 1.0 } else { -1.0 };
+                let on_track = |s: f64| {
+                    let (p, t) = run.track(s);
+                    p + DVec2::new(-t.y, t.x) * run.side(s, outbound)
+                };
+                let mut s = tram_length() * 0.5;
+                while s <= length - tram_length() * 0.5 {
+                    let nose = s + dir * tram_length() * 0.5;
+                    for i in 0..TRAM_SECTIONS {
+                        let front = nose - dir * pitch * i as f64;
+                        let (a, b) = (
+                            on_track(front),
+                            on_track(front - dir * f64::from(SECTION_LENGTH)),
+                        );
+                        let (centre, heading) = ((a + b) * 0.5, (a - b).normalize_or_zero());
+                        let (cx, cz) = key(centre);
+                        for dx in -1..=1 {
+                            for dz in -1..=1 {
+                                let Some(near) = cells.get(&(cx + dx, cz + dz)) else {
+                                    continue;
+                                };
+                                for &k in near {
+                                    let (at, r, y0, y1, what) = discs[k];
+                                    if sweep::cuboid_meets_disc(
+                                        &body, centre, heading, 0.0, at, r, y0, y1,
+                                    ) {
+                                        met[what as usize] += 1;
+                                        if what < 3 && first.len() < 12 {
+                                            first.push((line, (s * 10.0).round() / 10.0, what));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    s += 0.5;
+                }
+            }
+        }
+        println!(
+            "{km:.1} km of track both ways: {} trunks, {} crowns, {} lamps met; the control {} times",
+            met[0], met[1], met[2], met[3]
+        );
+        assert!(km > 10.0, "{km}");
+        assert!(met[3] > 0, "the control post on the track was never met");
+        assert!(
+            met[..3].iter().all(|&n| n == 0),
+            "trams meet {} trunks, {} crowns and {} lamps (line, metres along, 0 trunk 1 crown 2 \
+             lamp): {first:?}",
+            met[0],
+            met[1],
+            met[2]
+        );
+    }
+
     #[test]
     fn crossover_pairs_stand_every_few_kilometres_clear_of_stops_and_junctions() {
         let size = 4000.0;

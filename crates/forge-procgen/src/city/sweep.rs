@@ -130,9 +130,93 @@ pub fn sweep(
     hits
 }
 
+/// A vehicle's body as an upright box: a tram's section, a taxi.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Cuboid {
+    /// Half its length along its heading, metres.
+    pub half_length: f64,
+    /// Half its width, metres.
+    pub half_width: f64,
+    /// Its underside over the ground, metres.
+    pub bottom: f64,
+    /// Its roof over the ground, metres.
+    pub top: f64,
+}
+
+/// Whether `body`, its middle at `centre` heading along `heading` (unit) on ground at height
+/// `ground`, meets the upright disc of `radius` round `at` from `y0` to `y1` (a trunk, a
+/// crown, a post).
+#[allow(clippy::too_many_arguments)]
+pub fn cuboid_meets_disc(
+    body: &Cuboid,
+    centre: DVec2,
+    heading: DVec2,
+    ground: f64,
+    at: DVec2,
+    radius: f64,
+    y0: f64,
+    y1: f64,
+) -> bool {
+    if y0 >= ground + body.top || y1 <= ground + body.bottom {
+        return false;
+    }
+    let d = at - centre;
+    let across = DVec2::new(-heading.y, heading.x);
+    let outside = DVec2::new(
+        d.dot(heading).abs() - body.half_length,
+        d.dot(across).abs() - body.half_width,
+    )
+    .max(DVec2::ZERO);
+    outside.length() < radius
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_body_meets_a_disc_by_its_sides_and_its_corners() {
+        let body = Cuboid {
+            half_length: 3.0,
+            half_width: 1.0,
+            bottom: 0.2,
+            top: 3.5,
+        };
+        let meets = |at: DVec2, r: f64, y0: f64, y1: f64| {
+            cuboid_meets_disc(&body, DVec2::ZERO, DVec2::X, 0.0, at, r, y0, y1)
+        };
+        // Beside its long side, 0.3 m off: a post of 0.25 misses, one of 0.35 meets.
+        assert!(!meets(DVec2::new(0.0, 1.3), 0.25, 0.0, 5.0));
+        assert!(meets(DVec2::new(0.0, 1.3), 0.35, 0.0, 5.0));
+        // Past a corner, 0.3 m off each way: 0.42 m away.
+        assert!(!meets(DVec2::new(3.3, 1.3), 0.4, 0.0, 5.0));
+        assert!(meets(DVec2::new(3.3, 1.3), 0.45, 0.0, 5.0));
+        // A crown over the roof, a kerb under the skirt.
+        assert!(!meets(DVec2::ZERO, 2.0, 3.6, 8.0));
+        assert!(!meets(DVec2::ZERO, 2.0, 0.0, 0.15));
+        // Turned: the same post across a body heading north-east.
+        let ne = DVec2::new(1.0, 1.0).normalize();
+        assert!(cuboid_meets_disc(
+            &body,
+            DVec2::ZERO,
+            ne,
+            0.0,
+            ne * 2.5,
+            0.1,
+            0.0,
+            5.0
+        ));
+        assert!(!cuboid_meets_disc(
+            &body,
+            DVec2::ZERO,
+            ne,
+            0.0,
+            DVec2::new(-ne.y, ne.x) * 1.3,
+            0.2,
+            0.0,
+            5.0
+        ));
+    }
 
     fn square(x: f64, z: f64, half: f64) -> Vec<DVec2> {
         vec![
