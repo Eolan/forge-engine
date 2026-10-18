@@ -1,10 +1,12 @@
 // Display transforms: scene-referred, pre-exposed linear colour in, display-referred linear
 // colour in [0, 1] out (an sRGB swapchain encodes on write; `display_output` encodes when the
 // target is UNORM). Chosen at run time by index, never baked into lighting. CPU mirrors with
-// tests: crates/forge-render/src/display.rs (keep the two in step).
+// tests: crates/forge-render/src/display.rs (keep the two in step). Mixes are `lerp_exact`, not
+// `lerp`: TAA's display pass compiles precise and must come out one way (#281, exact.slang).
 module tonemap;
 
 import aces2;
+import exact;
 import noise;
 
 public static const uint TONEMAP_AGX = 0;
@@ -75,7 +77,7 @@ float3 purkinje(float3 color, float rods)
     float y = dot(c, float3(0.2126, 0.7152, 0.0722));
     float z = dot(c, float3(0.0193, 0.1192, 0.9505));
     float v = max(y * (1.33 * (1.0 + (y + z) / max(x, 1e-9)) - 1.68), 0.0) / 2.573;
-    return lerp(color, float3(v, v, v), rods * 0.85);
+    return lerp_exact(color, float3(v, v, v), rods * 0.85);
 }
 
 // The second half: the tint a linear display colour takes, a blue of unit luminance at full
@@ -83,7 +85,7 @@ float3 purkinje(float3 color, float rods)
 float3 night_tint(float rods)
 {
     const float3 BLUE = float3(0.63, 1.0, 2.1);
-    return lerp(float3(1.0, 1.0, 1.0), BLUE, rods * 0.9);
+    return lerp_exact(float3(1.0, 1.0, 1.0), BLUE, rods * 0.9);
 }
 
 // AgX (Sobotka; Blender 4.0's default view), in the minimal real-time form of Wrensch 2023:
@@ -159,7 +161,7 @@ float3 pbr_neutral(float3 color)
     float new_peak = 1.0 - d * d / (peak + d - start_compression);
     c *= new_peak / peak;
     float g = 1.0 - 1.0 / (desaturation * (peak - new_peak) + 1.0);
-    return lerp(c, float3(new_peak, new_peak, new_peak), g);
+    return lerp_exact(c, float3(new_peak, new_peak, new_peak), g);
 }
 
 public float3 tonemap(float3 color, uint curve, ToneTables tables)

@@ -462,8 +462,11 @@ reach the GPU, and in Tier 2, and put its lines in the report.
 - **Two runs that part (#161):** city-blocks' `FORGE_HASH_IMAGES=1` logs, each frame, hashes of
   the probes' irradiance atlas and the ambient occlusion (#207), the shadow rays' three images
   and the denoised shadow (#204), the clouds, the scene colour (before and after the sky's
-  compose, #277), the depth, the motion vectors (before and after the movers') and TAA's history
-  (`crates/forge-render/src/debug_hash.rs`). Images that hash alike are alike: three images
+  compose, #277), the depth, the motion vectors (before and after the movers'), TAA's history
+  and the bloom's first level (#281) (`crates/forge-render/src/debug_hash.rs`). With
+  `FORGE_HASH_SHARPEN=1` too, TAA's display pass draws a second time into a float image, hashed
+  last: what the pass computes before the output's 8 bits round it (#281: it parted in 7 of 12
+  pairs where the 8-bit image parted on one pixel in 5). Images that hash alike are alike: three images
   with one hash are empty. A frame's hashes are logged when its slot comes back, two frames
   later. Diff the logs of two runs to find
   the first image and the first frame that differ. `HashKind::Compare` counts the texels where
@@ -511,6 +514,23 @@ reach the GPU, and in Tier 2, and put its lines in the report.
     - the pass run twice per frame;
     - `FORGE_FP_PRECISE` with a list of entries, to find which passes need it.
   - **When a pass parts so again,** try `FORGE_FP_PRECISE=1`, then narrow it with words.
+- **`lerp` escapes precise mode (#281).** Slang compiles `lerp` to GLSL.std.450's `FMix`, which
+  `NoContraction` does not reach, and the driver's two variants evaluate it two ways.
+  - **What it looked like:** in the lab's smoke yard at night (`--time-of-day 1.5`, the lamps'
+    filter on), two runs at once parted on one pixel, (388, 591), by one code in 23 of 68 pairs.
+    Every hashed image was alike, TAA's history and the bloom included: the display pass
+    (`temporal/sharpen`, precise since #277) made two outputs from one input.
+  - **Why `FORGE_FP_PRECISE` misled:** with the post passes precise it still parted (2 of 6);
+    with every entry precise it stopped (#270: 0 of 6), because the whole image moved and the
+    pixel left its rounding edge. A switch that changes every pass's rounding proves nothing.
+  - **What found it:** `FORGE_HASH_SHARPEN=1`, then the display pass cut down to each part in
+    turn (shaders compile at run time): the history alone and the bloom alone hashed alike in
+    every pair, their `lerp` parted in 6 of 10, the same mix written out in none of 12.
+  - **The fix:** the display path mixes with `lerp_exact` (`shaders/exact.slang`,
+    `(b − a) t + a`): taa.slang's `shown_at`, tonemap.slang, aces2.slang's tables and
+    local_exposure.slang. The pass's SPIR-V holds no `FMix`; 16 hashed pairs and 30 plain ones
+    then agree. The other precise entries still hold some (#282).
+  - **Check an entry:** `spirv-dis cache/shaders/<file>@<entry>@O2p@*.spv | grep -c FMix`.
 - **A pass whose output feeds a history is a compute pass (#161).** As fullscreen draws, TAA's
   motion vectors and resolve came out one of two ways on the serial frame, from the same inputs
   (an fp16 step on up to a fifth of the pixels), whichever way the timing fell; the history kept

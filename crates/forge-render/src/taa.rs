@@ -159,6 +159,9 @@ fn taa_pipeline<P>(
     pipeline
 }
 
+/// The float image `FORGE_HASH_SHARPEN` draws the shown image into (#281).
+const SHARPEN_FLOAT_FORMAT: vk::Format = vk::Format::R32G32B32A32_SFLOAT;
+
 /// The sharpening pass's pipeline, writing an output image of `output_format`.
 fn sharpen_pipeline(
     device: &Arc<Device>,
@@ -243,6 +246,9 @@ pub struct Taa {
     /// The resolve, writing the next history, and the pass that shows it (sharpened or not).
     pipeline_history: Pipeline,
     pipeline_sharpen: Pipeline,
+    /// `FORGE_HASH_SHARPEN=1` (#281): the same pass again into a float image, so the hashes see
+    /// what it computes before the output's 8 bits round it.
+    pipeline_sharpen_float: Option<Pipeline>,
     history: [GraphImage; 2],
     extent: vk::Extent2D,
     frame_index: u64,
@@ -294,6 +300,10 @@ impl Taa {
             "taa resolve history",
         )?;
         let pipeline_sharpen = sharpen_pipeline(device, shaders, output_format)?;
+        let pipeline_sharpen_float = std::env::var_os("FORGE_HASH_SHARPEN")
+            .is_some_and(|v| v != "0")
+            .then(|| sharpen_pipeline(device, shaders, SHARPEN_FLOAT_FORMAT))
+            .transpose()?;
         let history = create_history(device, extent)?;
         let mut tables = ToneTables::new(device)?;
         let hdr = HdrOutput::default();
@@ -305,6 +315,7 @@ impl Taa {
             pipeline_motion,
             pipeline_history,
             pipeline_sharpen,
+            pipeline_sharpen_float,
             history,
             extent,
             frame_index: 0,
@@ -629,7 +640,8 @@ impl Taa {
 
     /// The second half of [`Taa::resolve`]: `history` (of `extent`) shown in `output` through
     /// `curve`, sharpened with [`Taa::sharpen`], `bloom` blended in, and `local`'s gain after it
-    /// (local exposure, D-067).
+    /// (local exposure, D-067). With `FORGE_HASH_SHARPEN=1` (#281), returns the same image drawn
+    /// again into a float image, for the hashes.
     #[allow(clippy::too_many_arguments)]
     pub fn show<'f>(
         &'f self,
@@ -640,7 +652,7 @@ impl Taa {
         curve: Tonemap,
         bloom: Option<ImageHandle>,
         local: Option<LocalExposureRead>,
-    ) {
+    ) -> Option<ImageHandle> {
         use vk::PipelineStageFlags2 as S;
         let encoding = OutputPush::new(
             OutputEncoding::for_format(self.output_format),
@@ -657,43 +669,60 @@ impl Taa {
         // Unsharpened (or with TAA off), the same pass shows the history as it is.
         let sharpen = self.sharpen.filter(|_| self.enabled);
         let sharpness = sharpen.map_or(0.0, |stops| (-stops).exp2());
-        let pipeline_sharpen = &self.pipeline_sharpen;
-        let mut pass = graph
-            .pass(if sharpen.is_some() {
-                "temporal/sharpen"
-            } else {
-                "temporal/show"
-            })
-            .image(history_written, ImageAccess::Sampled(S::FRAGMENT_SHADER))
-            .image(output, ImageAccess::ColorAttachment);
-        if let Some(bloom) = bloom {
-            pass = pass.image(bloom, ImageAccess::Sampled(S::FRAGMENT_SHADER));
-        }
-        if let Some(read) = &local {
-            pass = read.declare(pass);
-        }
-        pass.run(move |resources, commands| {
-            fullscreen_pass(
-                commands,
-                &[resources.view(output)],
-                extent,
-                pipeline_sharpen,
-                &SharpenPush {
-                    resolved: resources.sampled(history_written).0,
-                    width: extent.width,
-                    height: extent.height,
-                    sharpness,
-                    curve: curve.index(),
-                    bloom: bloom.map_or(u32::MAX, |b| resources.sampled(b).0),
-                    bloom_strength,
-                    pad: 0,
-                    output: encoding,
-                    tables,
-                    local: local_exposure::push_of(local, resources),
-                },
-            );
-            Ok(())
+        let float = self.pipeline_sharpen_float.as_ref().map(|pipeline| {
+            let image = graph.transient(TransientDesc {
+                name: "taa sharpen float",
+                width: extent.width,
+                height: extent.height,
+                format: SHARPEN_FLOAT_FORMAT,
+                usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+                aspect: vk::ImageAspectFlags::COLOR,
+                mip_levels: 1,
+            });
+            (image, pipeline, "debug/sharpen float")
         });
+        let name = if sharpen.is_some() {
+            "temporal/sharpen"
+        } else {
+            "temporal/show"
+        };
+        for (target, pipeline, name) in
+            std::iter::once((output, &self.pipeline_sharpen, name)).chain(float)
+        {
+            let mut pass = graph
+                .pass(name)
+                .image(history_written, ImageAccess::Sampled(S::FRAGMENT_SHADER))
+                .image(target, ImageAccess::ColorAttachment);
+            if let Some(bloom) = bloom {
+                pass = pass.image(bloom, ImageAccess::Sampled(S::FRAGMENT_SHADER));
+            }
+            if let Some(read) = &local {
+                pass = read.declare(pass);
+            }
+            pass.run(move |resources, commands| {
+                fullscreen_pass(
+                    commands,
+                    &[resources.view(target)],
+                    extent,
+                    pipeline,
+                    &SharpenPush {
+                        resolved: resources.sampled(history_written).0,
+                        width: extent.width,
+                        height: extent.height,
+                        sharpness,
+                        curve: curve.index(),
+                        bloom: bloom.map_or(u32::MAX, |b| resources.sampled(b).0),
+                        bloom_strength,
+                        pad: 0,
+                        output: encoding,
+                        tables,
+                        local: local_exposure::push_of(local, resources),
+                    },
+                );
+                Ok(())
+            });
+        }
+        float.map(|(image, ..)| image)
     }
 }
 

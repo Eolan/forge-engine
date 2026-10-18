@@ -14,6 +14,7 @@
 // one of two ways from one run to the next (an fp16 step on up to a fifth of the pixels), and the
 // history kept the difference. Dispatched, they repeat to the bit.
 import bindless;
+import exact;
 import local_exposure;
 import tonemap;
 
@@ -317,7 +318,8 @@ float3 shown_at(int2 pixel, float3 bloom, float blurred, out float ev, out Outpu
     int2 last = int2(sharpen_push.width, sharpen_push.height) - 1;
     int2 at = clamp(pixel, int2(0), last);
     float3 color = g_sampled_images[NonUniformResourceIndex(sharpen_push.resolved)].Load(int3(at, 0)).rgb;
-    float3 shown = sharpen_push.bloom != 0xFFFFFFFFu ? lerp(color, bloom, sharpen_push.bloom_strength) : color;
+    // Not `lerp`: its FMix came out two ways in this draw (#281, exact.slang).
+    float3 shown = sharpen_push.bloom != 0xFFFFFFFFu ? lerp_exact(color, bloom, sharpen_push.bloom_strength) : color;
     float2 uv = (float2(at) + 0.5) / float2(float(sharpen_push.width), float(sharpen_push.height));
     ev = local_exposure_ev(sharpen_push.local, shown, uv, blurred);
     output = sharpen_push.output;

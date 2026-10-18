@@ -9,6 +9,7 @@
 module local_exposure;
 
 import bindless;
+import exact;
 
 // The grid: 64 × 36 cells over the image, 64 slices of log2 pre-exposed luminance over
 // [-16, 8] (the histogram's range, 0.375 EV a slice). Its slices lie 8 × 8 in a 512 × 288 atlas,
@@ -105,9 +106,10 @@ public float local_base(LocalExposure le, float2 uv, float l, float blurred)
     float z = local_slice(l);
     uint z0 = uint(z);
     uint z1 = min(z0 + 1, LE_SLICES - 1);
-    float2 g = lerp(grid_tap(le.grid, uv, z0), grid_tap(le.grid, uv, z1), z - float(z0));
-    float bilateral = lerp(blurred, g.x / max(g.y, 1e-6), saturate(g.y / LE_MIN_WEIGHT));
-    return lerp(bilateral, blurred, le.blend);
+    // `lerp_exact`: TAA's display pass reads this and compiles precise (#281, exact.slang).
+    float2 g = lerp_exact(grid_tap(le.grid, uv, z0), grid_tap(le.grid, uv, z1), z - float(z0));
+    float bilateral = lerp_exact(blurred, g.x / max(g.y, 1e-6), saturate(g.y / LE_MIN_WEIGHT));
+    return lerp_exact(bilateral, blurred, le.blend);
 }
 
 // The Gaussian's base at `uv` (it varies over cells, so a pass reading neighbours takes it once).
@@ -140,5 +142,5 @@ public float3 local_exposure_view(float3 display, float ev)
     float grey = 0.08 + 0.6 * dot(saturate(display), LUMA);
     float amount = saturate(abs(ev) / 2.0);
     float3 tint = ev > 0.0 ? float3(0.15, 0.4, 1.0) : float3(1.0, 0.18, 0.1);
-    return lerp(float3(grey, grey, grey), tint, amount);
+    return lerp_exact(float3(grey, grey, grey), tint, amount);
 }

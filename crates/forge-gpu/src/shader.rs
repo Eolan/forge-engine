@@ -144,7 +144,9 @@ pub struct ShaderEntry {
 /// multiply and add is fused unless the source says so (D-016: Vulkan lets a driver fuse them
 /// otherwise). Without it NVIDIA's driver shaded the same inputs one of two ways from run to
 /// run, and even from one dispatch to the next in a frame (#277): the scene's shading, then
-/// TAA's passes, whose history keeps a difference. About 3 % on the shading's time.
+/// TAA's passes, whose history keeps a difference. About 3 % on the shading's time. The decoration
+/// does not reach `lerp`, which compiles to `FMix`: TAA's display pass still parted on one until
+/// its path took `lerp_exact` (`shaders/exact.slang`, #281; the other entries' are #282).
 const PRECISE_ENTRIES: &[(&str, &str)] = &[
     ("meshlet.slang", "resolve_standard_main"),
     ("meshlet.slang", "resolve_standard_rt_main"),

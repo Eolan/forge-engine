@@ -37,6 +37,7 @@
 module aces2;
 
 import bindless;
+import exact;
 
 // The table's grid and shaper (aces2.rs: LUT_SIZE, LUT_EPSILON, LUT_MAX).
 static const float LUT_SIZE = 65.0;
@@ -378,7 +379,7 @@ public float3 aces2_lut(float3 rec709, uint lut)
     float2 uv = float2((u.x + 0.5 + slice * LUT_SIZE) / width, (u.y + 0.5) / LUT_SIZE);
     float3 c0 = sample_image_level(lut, SAMPLER_LINEAR_CLAMP, uv, 0.0).rgb;
     float3 c1 = sample_image_level(lut, SAMPLER_LINEAR_CLAMP, uv + float2(LUT_SIZE / width, 0.0), 0.0).rgb;
-    return decode_srgb(lerp(c0, c1, f));
+    return decode_srgb(lerp_exact(c0, c1, f));
 }
 
 // An HDR preset's table (issue #94, aces2.rs `bake_hdr`): laid out as the SDR one, its grid's
@@ -395,5 +396,5 @@ public float3 aces2_hdr_lut(float3 rec709, uint lut, float lut_max)
     float2 uv = float2((u.x + 0.5 + slice * LUT_SIZE) / width, (u.y + 0.5) / LUT_SIZE);
     float3 c0 = sample_image_level(lut, SAMPLER_LINEAR_CLAMP, uv, 0.0).rgb;
     float3 c1 = sample_image_level(lut, SAMPLER_LINEAR_CLAMP, uv + float2(LUT_SIZE / width, 0.0), 0.0).rgb;
-    return lerp(c0, c1, f);
+    return lerp_exact(c0, c1, f);
 }

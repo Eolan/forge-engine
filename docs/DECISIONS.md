@@ -453,7 +453,8 @@ authoritative, in integers.**
     mode unless the entry point declares `RoundingModeRTE`;
   - denormals "may be flushed to zero" unless `DenormPreserve` is declared, which not every device
     supports;
-  - a multiply and an add may fuse unless decorated `NoContraction`;
+  - a multiply and an add may fuse unless decorated `NoContraction`, and the decoration does not
+    reach an extended instruction such as `FMix` (Slang's `lerp`: #281, `shaders/exact.slang`);
   - for doubles, "the precision of double-precision instructions is at least that of single
     precision", and nothing more.
 - **One definition:** the CPU runs the same integer code, as the reference, the fallback and the
@@ -4731,9 +4732,10 @@ again (`demos/physics-lab.md`).
   - **Determinism:** two runs one after the other, the mesh path against the fallback and the
     serial frame (`FORGE_ASYNC=0`) give the same pixels, in the hall and the smoke yard, and two
     runs at once in the hall. Two runs at once in the smoke yard part on one pixel by one code in
-    about half the pairs. With every entry compiled precise (`FORGE_FP_PRECISE=1`) they never do,
-    and the lamps' passes are precise already: an older entry still has #277's two variants, and
-    the filter's light puts that pixel on a rounding edge (#281).
+    about half the pairs: the filter's light puts that pixel on a rounding edge. It was TAA's
+    display pass, precise already, evaluating its `lerp` (`FMix`, which precise mode does not
+    reach) two ways; since #281 the display path mixes with `lerp_exact`, and 30 pairs at once
+    agree (`docs/PROCESS.md`, "`lerp` escapes precise mode").
   - `--no-lamp-filter` keeps the resolve's rays: its images are the base's to the pixel.
   - **Cost** (best of three, `docs/PROFILE.md`): in the hall, where every pixel takes up to four
     lamps, "shadow/lamp rays" 0.64 ms and "shadow/lamp filter" 0.16 ms, and `shading/standard`

@@ -2901,7 +2901,7 @@ impl Demo for Gallery {
                 local_middle,
             )
         });
-        self.taa.show(
+        let shown = self.taa.show(
             &mut frame.graph,
             history,
             extent,
@@ -2914,6 +2914,18 @@ impl Demo for Gallery {
             use forge_render::debug_hash::HashKind;
             h.add(&mut frame.graph, motion, HashKind::Float4, extent);
             h.add(&mut frame.graph, history, HashKind::Float4, extent);
+            // The bloom's first level, what the sharpen samples (#281).
+            if let Some(bloom) = bloom {
+                let half = forge_gpu::vk::Extent2D {
+                    width: (extent.width / 2).max(1),
+                    height: (extent.height / 2).max(1),
+                };
+                h.add(&mut frame.graph, bloom, HashKind::Float4, half);
+            }
+            // The shown image before its 8 bits (`FORGE_HASH_SHARPEN=1`, #281).
+            if let Some(shown) = shown {
+                h.add(&mut frame.graph, shown, HashKind::Float4, extent);
+            }
             h.finish(&mut frame.graph);
         }
         Ok(())
