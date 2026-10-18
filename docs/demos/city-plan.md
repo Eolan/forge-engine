@@ -1783,6 +1783,13 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
     - **What is left** (122.7 km of lanes, no lane over a kerb; 1 366 turns): two acute
       junctions where no curve is wide enough, so a turn there takes three points. The test holds
       the count and prints a `--view` over each.
+  - **Delivery vans on the shared streets** (#276, `delivery_vans_pass_the_shared_streets_…`):
+    - **The van:** a box 5.5 by 2.1 m, from 0.2 to 2.6 m. It passes every shared street 2 m
+      either side of the middle row of trees, between the trunks and the lamps 1.6 m in from
+      the building lines.
+    - **The obstacles:** the trunks, crowns and lamps' posts, and the street ground's edge.
+    - **The result:** over 121.5 km, no crown and never off the street. It meets trunks at 7
+      places and lamps' posts at 6, where its path cuts a bend; the test holds those counts.
   - **Crossings:** a zebra 4 m wide on each driven arm of every junction, a metre past its corner
     or past a pedestrian way's mouth. A dropped kerb at each end slopes 1.6 m (1 in 12, #263) down
     to a 1 cm lip, its sides flared at 1 in 12 too, so there is no edge to step or roll over (the

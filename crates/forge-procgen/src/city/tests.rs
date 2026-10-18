@@ -1256,3 +1256,136 @@ fn taxis_drive_and_turn_clear_of_the_kerbs_bollards_trees_and_lamps() {
         views(&blocked[1])
     );
 }
+
+/// The delivery vans (D-061: the shared streets take deliveries at set hours, through their
+/// mouths' bollards) pass along every shared street, 2 m either side of its middle row of trees,
+/// swept as a box 5.5 by 2.1 m, from 0.2 to 2.6 m (a panel van), against the street trees'
+/// trunks and crowns, the lamps' posts and the street ground's edge, where it meets the blocks or
+/// the water (#276). Every 0.5 m, from 8 m after one end to 8 m before the other; met places are
+/// counted by 5 m cells and may not grow.
+#[test]
+fn delivery_vans_pass_the_shared_streets_clear_of_trees_lamps_and_walls() {
+    use super::sweep::{self, Cuboid};
+    use std::collections::{BTreeSet, HashMap};
+    const CELL: f64 = 10.0;
+    // A van's middle from the street's, metres.
+    const VAN_LANE: f64 = 2.0;
+    let (site, city) = example_plan();
+    let trees = super::trees::trees(&site, &city, 5);
+    let lamps = super::lamps::lamps(&site, &city);
+    let van = Cuboid {
+        half_length: 2.75,
+        half_width: 1.05,
+        bottom: 0.2,
+        top: 2.6,
+    };
+    let key = |p: DVec2| ((p.x / CELL).floor() as i32, (p.y / CELL).floor() as i32);
+    let edges: Vec<[DVec2; 2]> = city
+        .ground
+        .tiles
+        .iter()
+        .flat_map(|t| t.outline.iter().copied())
+        .collect();
+    let mut edge_cells: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
+    for (i, [a, b]) in edges.iter().enumerate() {
+        let (lo, hi) = (key(a.min(*b)), key(a.max(*b)));
+        for x in lo.0..=hi.0 {
+            for y in lo.1..=hi.1 {
+                edge_cells.entry((x, y)).or_default().push(i);
+            }
+        }
+    }
+    // Upright discs: where, radius, from, to, what (0 a trunk, 1 a crown, 2 a lamp's post).
+    let mut discs: Vec<(DVec2, f64, f64, f64, usize)> = Vec::new();
+    for t in trees.iter().filter(|t| t.species.is_none()) {
+        discs.push((t.pos, 0.3 * t.crown / 4.2, 0.0, 0.44 * t.height, 0));
+        discs.push((t.pos, t.crown, 0.43 * t.height, t.height, 1));
+    }
+    for l in &lamps {
+        discs.push((l.pos, 0.1, 0.0, l.height, 2));
+    }
+    let mut disc_cells: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
+    for (i, d) in discs.iter().enumerate() {
+        disc_cells.entry(key(d.0)).or_default().push(i);
+    }
+    let place = |p: DVec2| ((p.x / 5.0).floor() as i32, (p.y / 5.0).floor() as i32);
+    // Met places: trunks, crowns, lamps, the street's edge.
+    let mut met: [BTreeSet<(i32, i32)>; 4] = Default::default();
+    let mut km = 0.0;
+    for e in city
+        .roads
+        .edges
+        .iter()
+        .filter(|e| e.profile == super::Profile::Shared)
+    {
+        let length = e.length();
+        km += length / 1000.0;
+        let mut s = 8.0;
+        // Either side of the street's middle row of trees, 2 m out: between the trunks and the
+        // lamps 1.6 m in from the building lines.
+        while s <= length - 8.0 {
+            for side in [-VAN_LANE, VAN_LANE] {
+                let end = |d: f64| geom::point_at(&e.points, (s + d).clamp(0.0, length));
+                let (front, back) = (end(van.half_length), end(-van.half_length));
+                let t = (front - back).normalize_or_zero();
+                let p = (front + back) * 0.5 + DVec2::new(-t.y, t.x) * side;
+                let (cx, cy) = key(p);
+                for dx in -1..=1 {
+                    for dy in -1..=1 {
+                        if let Some(near) = edge_cells.get(&(cx + dx, cy + dy))
+                            && near.iter().any(|&k| {
+                                let [a, b] = edges[k];
+                                sweep::cuboid_meets_segment(&van, p, t, a, b)
+                            })
+                        {
+                            met[3].insert(place(p));
+                        }
+                        if let Some(near) = disc_cells.get(&(cx + dx, cy + dy)) {
+                            for &k in near {
+                                let (at, r, y0, y1, what) = discs[k];
+                                if sweep::cuboid_meets_disc(&van, p, t, 0.0, at, r, y0, y1) {
+                                    met[what].insert(place(p));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            s += 0.5;
+        }
+    }
+    let views = |s: &BTreeSet<(i32, i32)>| -> Vec<String> {
+        s.iter()
+            .take(8)
+            .map(|&(x, y)| {
+                let (vx, vz) = (
+                    f64::from(x) * 5.0 + 2.5 - 2000.0,
+                    f64::from(y) * 5.0 + 2.5 - 2000.0,
+                );
+                format!("--view={vx:.0},30,{vz:.0},0,-89")
+            })
+            .collect()
+    };
+    println!(
+        "{km:.1} km of shared streets: a van meets trunks at {} places, crowns at {}, lamps at {}, \
+         the street's edge at {}",
+        met[0].len(),
+        met[1].len(),
+        met[2].len(),
+        met[3].len()
+    );
+    for (what, s) in ["trunks", "crowns", "lamps", "edge"].iter().zip(&met) {
+        println!("  {what}: {:?}", views(s));
+    }
+    assert!(km > 5.0, "{km}");
+    // No crown over a van, nor a van off its street. What is left may not grow: a few trunks of
+    // the middle row and lamps' posts met where the van's path cuts a bend (2026-10-18).
+    assert!(
+        met[1].is_empty() && met[3].is_empty(),
+        "crowns {:?}, the edge {:?}",
+        views(&met[1]),
+        views(&met[3])
+    );
+    assert!(met[0].len() <= 7, "trunks at {:?}", views(&met[0]));
+    assert!(met[2].len() <= 6, "lamps at {:?}", views(&met[2]));
+}
