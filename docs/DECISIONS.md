@@ -860,7 +860,8 @@ the device selection prefers is NVIDIA's (issue #67: a plain instance asks first
 `Device::preferred_vendor`); any failure through Streamline falls back to the plain loader.
 The device offers `Device::dlss()` when its GPU runs it. Without the feature `Dlss` is an
 uninhabited type, so renderers and demos compile without feature gates. **TAA stays the
-default and the fallback**; U switches TAA → DLAA → Quality → Balanced → Performance →
+default and the fallback** (until D-070, 2026-10-18: DLSS is the default and the captures'
+image, and FSR 3.1 replaces TAA); U switches TAA → DLAA → Quality → Balanced → Performance →
 Ultra Performance at run time (`--upscaler` at start), and the profiler zones are
 `temporal/TAA resolve` or `temporal/DLSS` + `post/display transform`.
 
@@ -2235,7 +2236,9 @@ together'."
   the white wall at 0.55 (AgX: 0.20–0.23 and 0.67). AgX stays the default.
 - **DLAA by default where it runs** (the `dlss` feature on by default; an RTX GPU and the
   Streamline SDK), in interactive runs. Scripted runs keep to TAA unless `--dlaa`: DLAA's images
-  differ by up to 3 codes from run to run, and the captures' checks want them to the bit. Its
+  differ by up to 3 codes from run to run, and the captures' checks want them to the bit.
+  (D-070, 2026-10-18: that difference was Forge's shading, made deterministic by #277 and
+  #281; DLAA's images are now equal run to run, and the captures move to DLAA.) Its
   display pass mixes in bloom now. T cycles DLAA, TAA sharpened, TAA plain and off.
 - **The Lanczos-3 history** by default (`--taa-catmull-rom` for the old filter): panning at
   2 m/s, sharpened TAA's MTF50 goes 0.37–0.40 → 0.42–0.44 (DLAA: 0.43–0.48), for 0.03 ms.
@@ -5425,3 +5428,62 @@ layouts other than the owner's AZERTY and QWERTY, with their own default maps, a
   - a run with a test `forge.cfg`, the console listing its binds and the new settings;
   - `docs/demos/console.md` maps each old key to its setting, with a `forge.cfg` that puts them
     back on the function keys.
+
+## D-070 — DLSS is the reference image, FSR replaces TAA everywhere else ✅ (2026-10-18, #286, the owner's decision)
+
+The owner, 2026-10-18: "DLSS 5 is coming, I would prefer we work with the best possible. With FSR
+as well. Running tests once in a while when drivers change seems less tedious than testing DLAA
+all the time." Until now TAA was the default of every scripted run and the fallback (D-024).
+The captures and their checks ran under TAA, while the owner looked at the demos under DLAA
+(D-045). Two paths were tested and judged, and time went into TAA's own image: its shimmer, its
+sharpening, and the lamp filter's flicker under TAA. The last two run-to-run flakes (#277 and
+#281) were TAA's passes compiling two ways.
+
+**Decided:**
+- **DLSS is the image on NVIDIA,** in interactive runs and in the captures:
+  - every demo draws with DLAA by default, scripted runs included;
+  - the capture batch (`tools/captures.sh`), the map check and `tools/verify.sh` capture under
+    DLAA, and the looks and the shimmer are judged under it alone.
+- **A driver or DLSS change is a re-baseline, not a failure:**
+  - each accepted set's manifest records the driver's version and the DLSS DLL's;
+  - when either differs, `tools/verify.sh` asks for a baseline at the base commit first.
+  - The DLL ships with the build, from the Streamline SDK the repository pins. It changes when
+    Forge upgrades it. The NVIDIA app's overrides stay off in test runs, and the preset is set.
+- **FSR is the path off NVIDIA:**
+  - FSR 3.1 first: AMD's FidelityFX, MIT, with a Vulkan backend, on every vendor, so it is tested
+    on the RTX 5070 Ti;
+  - FSR 4 (AMD's ML upscaler, RDNA 4) when there is a card to test it on and a Vulkan path.
+- **FSR replaces TAA.** FSR 3.1 is open shader code that runs on any vendor's GPU, older ones
+  included, so it takes over everything TAA did:
+  - the anti-aliasing at native size, as DLAA does;
+  - the sharpening (RCAS, which D-045 added after TAA);
+  - the averaging of the noisy effects over frames: the soft shadows, the lamps' penumbrae,
+    GTAO.
+  - The owner first kept TAA for older hardware, then dropped it (2026-10-18): "FSR is MIT and
+    open source, it can replace TAA everywhere."
+  - TAA's resolve and sharpening passes go once FSR 3.1 is in and checked. Until then TAA is
+    frozen: no more work on its image and no more checks of it.
+  - The jitter, the motion vectors, the reactive mask and the exposure stay, since DLSS and FSR
+    read them.
+- **Kept as tools:**
+  - an "AA off" run, to tell a change in Forge's shading from one in DLSS's reconstruction;
+  - SSAA (2 × 2), the yardstick of the shimmer measurements.
+- **DLSS 5** comes through Streamline like DLSS 4, as an upgrade of the SDK, when NVIDIA publishes
+  it.
+
+**Determinism (checked before the switch, 2026-10-18, at 4c6efbf6, driver 617.42):**
+- **What ran:** eight scenes, one or more from every demo, each under DLAA (`temporal/DLSS` in every
+  log, 0.46–0.52 ms), twice on the mesh path and once on the fallback:
+  - the city;
+  - the island's water;
+  - the lab's smoke yard and its drop at frame 600;
+  - the village's hall by day and its street at 22:00;
+  - the ballad at frame 600;
+  - the planet's ground.
+- **The result:** every capture's bytes were equal, run to run and mesh against fallback, so the
+  checks keep their 0 px.
+- **D-045's "a code or two from run to run" (2026-10-03) was Forge's,** not DLSS's. The shading
+  and TAA compiled two ways until #277 and #281.
+
+**Next:** every demo's captures and defaults under DLAA, with one way to ask for it (`r.aa`,
+D-069); the re-baseline guard; FSR 3.1.
