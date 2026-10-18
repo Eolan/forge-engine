@@ -206,6 +206,7 @@ for path in $paths; do
   capture "$path-ast-notaa600" 600 "$asteroids" --fixed-step --no-taa "${flag[@]}"
   capture "$path-ast-aa600" 600 "$asteroids" --fixed-step "${flag[@]}"
   capture "$path-ast-fsr600" 600 "$asteroids" --fixed-step --upscaler fsr "${flag[@]}"
+  capture "$path-ast-fsrq600" 600 "$asteroids" --fixed-step --upscaler fsr-quality "${flag[@]}"
   capture "$path-ast240" 240 "$asteroids" --fixed-step --no-taa "${flag[@]}"
   capture "$path-ast240-noocc" 240 "$asteroids" --fixed-step --no-taa --no-occlusion "${flag[@]}"
   capture "$path-ast240-nocone" 240 "$asteroids" --fixed-step --no-taa --no-cone "${flag[@]}"

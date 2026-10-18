@@ -50,9 +50,20 @@ pub enum FsrMode {
     Balanced,
     /// 2 times smaller.
     Performance,
+    /// 3 times smaller.
+    UltraPerformance,
 }
 
 impl FsrMode {
+    /// Every mode, from the largest render down.
+    pub const ALL: [Self; 5] = [
+        Self::NativeAa,
+        Self::Quality,
+        Self::Balanced,
+        Self::Performance,
+        Self::UltraPerformance,
+    ];
+
     /// The output's size over the render's (AMD's `ffxFsr3UpscalerGetUpscaleRatioFromQualityMode`).
     pub fn ratio(self) -> f32 {
         match self {
@@ -60,7 +71,35 @@ impl FsrMode {
             Self::Quality => 1.5,
             Self::Balanced => 1.7,
             Self::Performance => 2.0,
+            Self::UltraPerformance => 3.0,
         }
+    }
+
+    /// Short name (`r.fsr.mode`'s value; the asteroids' `--upscaler fsr-NAME`).
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::NativeAa => "native",
+            Self::Quality => "quality",
+            Self::Balanced => "balanced",
+            Self::Performance => "performance",
+            Self::UltraPerformance => "ultra-performance",
+        }
+    }
+
+    /// Name for the screen.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::NativeAa => "FSR",
+            Self::Quality => "FSR Quality",
+            Self::Balanced => "FSR Balanced",
+            Self::Performance => "FSR Performance",
+            Self::UltraPerformance => "FSR Ultra Performance",
+        }
+    }
+
+    /// The mode with `name`.
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|mode| mode.name() == name)
     }
 }
 
@@ -1034,6 +1073,17 @@ mod tests {
         assert_eq!(jitter_phase_count(output, output), 8);
         let half = render_extent(FsrMode::Performance, output);
         assert_eq!(jitter_phase_count(half, output), 32);
+        assert_eq!(
+            render_extent(FsrMode::UltraPerformance, output),
+            vk::Extent2D {
+                width: 640,
+                height: 360
+            }
+        );
+        for mode in FsrMode::ALL {
+            assert_eq!(FsrMode::from_name(mode.name()), Some(mode));
+        }
+        assert_eq!(FsrMode::from_name("fsr"), None);
     }
 
     #[test]

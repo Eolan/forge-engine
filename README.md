@@ -82,7 +82,7 @@ Esc (² on AZERTY, ` on QWERTY) for the console: the rest is set from there, or 
 console's `bind` gives it (D-069's key map, 2026-10-17;
 [docs/demos/console.md](docs/demos/console.md) lists the settings and the keys they had before).
 In this demo: `asteroids.paused` stops the path to fly freely, `r.aa` FSR (AMD's FSR 3.1, any GPU,
-D-070), DLAA or DLSS at `r.dlss.mode` (Windows, the Streamline SDK in
+D-070, smaller at `r.fsr.mode`), DLAA or DLSS at `r.dlss.mode` (Windows, the Streamline SDK in
 `streamline-sdk/`, an RTX GPU; DLAA by default there, D-045), `r.cull.occlusion`,
 `r.cull.cone`, `r.lod`, `r.show.lod`, `r.lod.error`, `r.show.culled` (culled meshlets drawn in
 red: any red pixel is a bug), `r.show.meshlets`, `r.sw_raster` (auto, on, off),

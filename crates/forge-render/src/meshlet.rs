@@ -502,7 +502,9 @@ struct GpuFrame {
     rejects: u64,
     /// Slots in `rejects`.
     rejects_capacity: u32,
-    rejects_pad: u32,
+    /// The textures' footprint scale, 2^`MeshletRenderer::texture_lod_bias` (1 at the output's
+    /// size).
+    texture_lod_scale: f32,
     /// The movers' top-level acceleration structure, rebuilt every frame (0: none; #79).
     tlas_movers: u64,
     /// With skinned meshes (#165, #166): the skin pass's clusters and their vertices in the bind
@@ -2845,6 +2847,10 @@ pub struct MeshletRenderer {
     /// The frame index the noise of soft shadows uses: TAA's frame modulo its jitter's period,
     /// so the pattern repeats with the jitter (set by the demo every frame).
     pub noise_frame: u32,
+    /// The textures' mip bias in stops (0 by default): log2(render / output) when an upscaler
+    /// draws smaller than it shows, so the textures keep the output's detail, as DLSS and FSR ask
+    /// (D-070). 0 leaves every image as it was.
+    pub texture_lod_bias: f32,
 }
 
 /// What to draw this frame.
@@ -3374,6 +3380,7 @@ impl MeshletRenderer {
             sun_color: Vec3::new(1.0, 0.96, 0.9),
             sun_angular_radius: 0.0,
             noise_frame: 0,
+            texture_lod_bias: 0.0,
         })
     }
 
@@ -3773,7 +3780,7 @@ impl MeshletRenderer {
             cell_list: scene.cell_lists[slot.index].address(),
             rejects: 0,
             rejects_capacity: self.rejects_target,
-            rejects_pad: 0,
+            texture_lod_scale: self.texture_lod_bias.exp2(),
             tlas_movers: scene.rays.as_ref().map_or(0, SceneRays::movers_address),
             skin_clusters: scene.skins.as_ref().map_or(0, SceneSkins::clusters_address),
             skin_vertices: scene.skins.as_ref().map_or(0, SceneSkins::vertices_address),

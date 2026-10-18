@@ -204,7 +204,7 @@ main() {
     pair "$new/$path-planet-ground.png" "$new/$path-planet-ground-resident.png" "$path planet over Èze, streamed against resident"
     pair "$new/$path-planet-ground.png" "$new/$path-planet-ground-edited.png" "$path planet over Èze, edited in place against built whole"
   done
-  for name in static60 orbit120 nolod120 ast240 ast-notaa600 ast-hdr240 ast-hdr240-pq city60 cityorbit120 gallery60 island60 water60 clouds60 \
+  for name in static60 orbit120 nolod120 ast240 ast-notaa600 ast-hdr240 ast-hdr240-pq ast-fsr600 ast-fsrq600 city60 cityorbit120 gallery60 island60 water60 clouds60 \
     shot-mouth shot-lake shot-island shot-valley lab-drop90 lab-drop600 lab-net300 lab-sea300 lab-sea-steer600 lab-walk150 lab-walk-crates240 \
     lab-drive300 lab-drive-turn600 lab-fly1200 lab-break85 lab-break300 lab-creatures120 \
     lab-creatures-throw240 lab-creatures-limp240 lab-creatures-dq60 lab-creatures-corrective60 lab-creatures-slime8-60 lab-course600 lab-course1200 lab-flyer300 lab-flyer600 lab-yard240 lab-yard600 lab-yard1200 lab-flood150 lab-flood300 \

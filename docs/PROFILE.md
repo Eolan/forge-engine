@@ -133,6 +133,13 @@ exposure (EV100, target, compensation, curve) the last.
   the lab and the island they total 0.31–0.35 ms. On this machine's AMD iGPU (RDNA 2), where
   FSR is the default, the ballad's eight passes take 18.4 ms of a 128 ms frame: `accumulate`
   8.3, `shading pyramid` 3.4, `reactivity` 3.0 and `inputs` 2.0.
+- FSR's upscaling modes (D-070), the ballad's frame 600 at 1600 × 900:
+  - FSR's passes total 0.37 ms native, 0.25 at Quality, 0.23 at Balanced and Performance, and
+    0.21 at Ultra Performance.
+  - DLSS's cost 0.51–0.52 ms in every mode.
+  - The frame takes 1.96 → 1.40 → 1.39 → 1.29 → 1.16 ms under FSR, and 1.79 → 1.70 → 1.62 →
+    1.46 ms under DLSS from Quality down (DLAA 2.22).
+  - The textures' mip bias costs nothing measurable (a multiply in the resolve).
 - TAA's history through Lanczos-3 (D-045), the same room: `temporal/TAA resolve` 0.047 →
   0.077 ms, 36 texel loads in place of 5 bilinear fetches.
 - TAA's motion vectors and resolve as compute passes (#161, so the serial frame repeats), the

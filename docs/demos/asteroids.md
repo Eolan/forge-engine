@@ -1307,6 +1307,37 @@ checked, so storing Rayleigh and Mie apart without their phases (Bruneton's way 
 Mie's forward peak out of a table) is not needed. `--planet-view-steps N` sets the table's
 segments and `--planet-march [STEPS]` the reference's.
 
+## FSR 3.1's upscaling modes (2026-10-18, D-070)
+
+AMD's FSR 3.1 draws smaller as DLSS does: `--upscaler fsr-quality`, `fsr-balanced`,
+`fsr-performance` or `fsr-ultra-performance` (1.5, 1.7, 2 and 3 times smaller), or `r.aa fsr`
+with `r.fsr.mode` at the console. A DLSS mode asked for where DLSS cannot run gives FSR's mode
+of the same name. U cycles DLAA, DLSS's four modes, then FSR's five.
+
+Drawn smaller, the textures keep the output's detail: the resolve takes a pixel's footprint
+as the output's, a mip bias of log2(render / output) (`--no-texture-bias` for the A/B). It
+brings each mode about 1 % closer to DLAA.
+
+Frame 600 at 1600 × 900, one run each (`--fixed-step`), against DLAA's image:
+
+| Mode | Drawn at | GPU frame | The upscaler's passes | ꟻLIP vs DLAA |
+|---|---|---|---|---|
+| DLAA | 1600 × 900 | 2.22 ms | 0.55 ms | — |
+| FSR (native) | 1600 × 900 | 1.96 ms | 0.37 ms | 0.023 |
+| FSR Quality | 1066 × 600 | 1.40 ms | 0.25 ms | 0.044 |
+| DLSS Quality | 1067 × 600 | 1.79 ms | 0.51 ms | 0.031 |
+| FSR Balanced | 941 × 529 | 1.39 ms | 0.23 ms | 0.052 |
+| DLSS Balanced | 928 × 522 | 1.70 ms | 0.52 ms | 0.038 |
+| FSR Performance | 800 × 450 | 1.29 ms | 0.23 ms | 0.061 |
+| DLSS Performance | 800 × 450 | 1.62 ms | 0.52 ms | 0.049 |
+| FSR Ultra Performance | 533 × 300 | 1.16 ms | 0.21 ms | 0.085 |
+| DLSS Ultra Performance | 533 × 300 | 1.46 ms | 0.52 ms | 0.074 |
+
+- **Cost:** FSR's passes shrink with the render; DLSS's cost what the output costs.
+- **Quality:** DLSS's modes are closer to DLAA, whose image is also the reference here.
+- **Determinism:** FSR Quality's mesh path and fallback are 0 px apart.
+- **Capture:** `ast-fsrq600` captures FSR Quality on both paths.
+
 ## DLSS (2026-09-24, issue #8)
 
 With `--features dlss` the Vulkan API comes through NVIDIA Streamline's interposer, and

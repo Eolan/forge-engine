@@ -15,6 +15,7 @@ use crate::Ballad;
 pub(crate) struct BalladVars {
     aa: Var<usize>,
     dlss_mode: Var<usize>,
+    fsr_mode: Var<usize>,
     tonemap: Var<usize>,
     bloom: Var<bool>,
     bloom_strength: Var<f64>,
@@ -87,6 +88,11 @@ impl Ballad {
                 rs::dlss_mode_index(DlssMode::Quality),
                 rs::dlss_mode_index(mode_now),
             ),
+            fsr_mode: s.add_from(
+                rs::fsr_mode(FsrMode::NativeAa),
+                rs::fsr_mode_index(FsrMode::NativeAa),
+                rs::fsr_mode_index(self.fsr.as_ref().map_or(FsrMode::NativeAa, |f| f.mode())),
+            ),
             tonemap: s.add_from(
                 rs::tonemap(Tonemap::Aces),
                 rs::tonemap_index(Tonemap::Aces),
@@ -148,7 +154,10 @@ impl Ballad {
             return;
         };
         let changed = |var: Var<bool>| s.changed_since(var, seen);
-        if s.changed_since(v.aa, seen) || s.changed_since(v.dlss_mode, seen) {
+        if s.changed_since(v.aa, seen)
+            || s.changed_since(v.dlss_mode, seen)
+            || s.changed_since(v.fsr_mode, seen)
+        {
             let aa = s.get(v.aa);
             let mode = if aa == AA_DLSS {
                 rs::dlss_mode_of(s.get(v.dlss_mode))
@@ -156,11 +165,16 @@ impl Ballad {
                 DlssMode::Dlaa
             };
             let wanted = matches!(aa, AA_DLAA | AA_DLSS);
-            // FSR where it is asked for, and in DLSS's place where the device has none (D-070):
-            // made the first time it is wanted.
+            // FSR where it is asked for, in `r.fsr.mode`, and in DLSS's place where the device
+            // has none, in the DLSS mode's own (D-070): made the first time it is wanted.
             let fsr_wanted = aa == AA_FSR || wanted && self.dlss.is_none();
+            let fsr_mode = if aa == AA_FSR {
+                rs::fsr_mode_of(s.get(v.fsr_mode))
+            } else {
+                crate::fsr_mode_for(mode)
+            };
             if fsr_wanted && self.fsr.is_none() {
-                match FsrUpscaler::new(&ctx.device, &ctx.shaders, FsrMode::NativeAa, ctx.extent()) {
+                match FsrUpscaler::new(&ctx.device, &ctx.shaders, fsr_mode, ctx.extent()) {
                     Ok(fsr) => self.fsr = Some(fsr),
                     Err(error) => tracing::error!(%error, "r.aa: no FSR, no anti-aliasing"),
                 }
@@ -171,7 +185,7 @@ impl Ballad {
                     "DLSS is not available (--features dlss, the Streamline SDK, an RTX GPU): FSR"
                 );
             }
-            let before = self.aa_now();
+            let before = self.upscaler_label();
             ctx.device.wait_idle();
             let configured: anyhow::Result<()> = match &mut self.dlss {
                 Some(dlss) if wanted => {
@@ -180,13 +194,18 @@ impl Ballad {
                 }
                 _ => {
                     self.dlss_on = false;
-                    Ok(())
+                    match &mut self.fsr {
+                        Some(fsr) if self.fsr_on => {
+                            fsr.configure(fsr_mode, ctx.extent()).map_err(Into::into)
+                        }
+                        _ => Ok(()),
+                    }
                 }
             };
             let applied: anyhow::Result<()> =
                 configured.and_then(|()| self.apply_upscaler(ctx.extent()));
             match applied {
-                Ok(()) if self.aa_now() != before => tracing::info!(
+                Ok(()) if self.upscaler_label() != before => tracing::info!(
                     upscaler = self.upscaler_label(),
                     render = ?self.render_extent,
                     "anti-aliasing switched"
@@ -242,31 +261,40 @@ impl Ballad {
         self.vars_seen = s.changes();
     }
 
-    /// FSR → DLAA → Quality → Balanced → Performance → Ultra Performance → FSR (the U key and
-    /// `--cycle-upscaler`), through the settings.
+    /// DLAA → DLSS Quality → … → DLSS Ultra Performance → FSR → FSR Quality → … → FSR Ultra
+    /// Performance → DLAA (the U key and `--cycle-upscaler`), through the settings; FSR's alone
+    /// where DLSS does not run.
     pub(crate) fn cycle_upscaler(&mut self, ctx: &mut Context) {
         let Some(v) = &self.vars else {
             return;
         };
-        if self.dlss.is_none() {
-            tracing::warn!(
-                "DLSS is not available (--features dlss, the Streamline SDK, an RTX GPU)"
-            );
-            return;
-        }
         let s = &mut ctx.settings;
-        let next = match (s.get(v.aa), rs::dlss_mode_of(s.get(v.dlss_mode))) {
-            (AA_DLAA, _) => (AA_DLSS, DlssMode::Quality),
-            (AA_DLSS, mode) => {
-                let i = DlssMode::ALL.iter().position(|&m| m == mode).unwrap_or(0);
-                match DlssMode::ALL.get(i + 1) {
-                    Some(&m) => (AA_DLSS, m),
-                    None => (AA_FSR, DlssMode::Quality),
-                }
+        let dlss = self.dlss.is_some();
+        // (r.aa, r.dlss.mode, r.fsr.mode) in the cycle's order.
+        let mut states = Vec::new();
+        if dlss {
+            states.push((AA_DLAA, DlssMode::Quality, FsrMode::NativeAa));
+            for &mode in &DlssMode::ALL[1..] {
+                states.push((AA_DLSS, mode, FsrMode::NativeAa));
             }
-            _ => (AA_DLAA, DlssMode::Quality),
-        };
+        }
+        for mode in FsrMode::ALL {
+            states.push((AA_FSR, DlssMode::Quality, mode));
+        }
+        let mut aa = s.get(v.aa);
+        if !dlss && matches!(aa, AA_DLAA | AA_DLSS) {
+            aa = AA_FSR; // shown as FSR here
+        }
+        let (dlss_mode, fsr_mode) = (
+            rs::dlss_mode_of(s.get(v.dlss_mode)),
+            rs::fsr_mode_of(s.get(v.fsr_mode)),
+        );
+        let now = states.iter().position(|&(a, d, f)| {
+            a == aa && (a != AA_DLSS || d == dlss_mode) && (a != AA_FSR || f == fsr_mode)
+        });
+        let next = states[now.map_or(0, |i| (i + 1) % states.len())];
         s.set(v.aa, next.0);
         s.set(v.dlss_mode, rs::dlss_mode_index(next.1));
+        s.set(v.fsr_mode, rs::fsr_mode_index(next.2));
     }
 }

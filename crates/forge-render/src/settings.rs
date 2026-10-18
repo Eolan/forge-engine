@@ -9,6 +9,7 @@ use forge_core::settings::Spec;
 use forge_gpu::DlssMode;
 
 use crate::display::Tonemap;
+use crate::fsr::FsrMode;
 use crate::meshlet::SwRaster;
 
 /// [`aa`]'s choices.
@@ -63,6 +64,37 @@ pub fn dlss_mode_of(index: usize) -> DlssMode {
         .get(index)
         .copied()
         .unwrap_or(DlssMode::Quality)
+}
+
+/// [`fsr_mode`]'s choices: [`FsrMode::ALL`]'s names.
+pub const FSR_MODES: &[&str] = &[
+    "native",
+    "quality",
+    "balanced",
+    "performance",
+    "ultra-performance",
+];
+
+/// How much smaller FSR renders, with [`aa`] at `fsr` (D-070).
+pub fn fsr_mode(default: FsrMode) -> Spec<usize> {
+    Spec::choice(
+        "r.fsr.mode",
+        FSR_MODES,
+        fsr_mode_index(default),
+        "How much smaller FSR renders with r.aa fsr: native (its anti-aliasing at the window's \
+         size), quality (1.5 times smaller), balanced (1.7), performance (2), ultra-performance \
+         (3).",
+    )
+}
+
+/// [`fsr_mode`]'s choice for `mode`.
+pub fn fsr_mode_index(mode: FsrMode) -> usize {
+    FsrMode::ALL.iter().position(|&m| m == mode).unwrap_or(0)
+}
+
+/// The mode of [`fsr_mode`]'s choice `index`.
+pub fn fsr_mode_of(index: usize) -> FsrMode {
+    FsrMode::ALL.get(index).copied().unwrap_or_default()
 }
 
 /// [`tonemap`]'s choices, in [`Tonemap::ALL`]'s order, then the analytic reference.
@@ -322,6 +354,10 @@ mod tests {
             assert_eq!(dlss_mode_of(dlss_mode_index(*mode)), *mode);
         }
         assert_eq!(DLSS_MODES.len(), DlssMode::ALL.len() - 1);
+        for (index, mode) in FsrMode::ALL.into_iter().enumerate() {
+            assert_eq!(FSR_MODES[index], mode.name());
+            assert_eq!(fsr_mode_of(fsr_mode_index(mode)), mode);
+        }
     }
 
     #[test]

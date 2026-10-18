@@ -176,12 +176,18 @@ struct Args {
     #[arg(long)]
     no_taa: bool,
     /// Anti-aliasing and upscaling: auto, fsr (AMD's FSR 3.1 at the window's size, any GPU,
-    /// D-070), or a DLSS mode (dlaa, quality, balanced, performance, ultra-performance; needs the
-    /// Streamline SDK in `streamline-sdk/` and an RTX GPU). Auto is DLAA where it runs, else FSR,
-    /// in every run, scripted ones and their captures too (D-070), unless `--no-taa` or
-    /// `--set r.aa=off|fsr`. U cycles them at run time.
+    /// D-070) or an FSR mode (fsr-quality, fsr-balanced, fsr-performance, fsr-ultra-performance:
+    /// drawn 1.5, 1.7, 2 or 3 times smaller), or a DLSS mode (dlaa, quality, balanced,
+    /// performance, ultra-performance; needs the Streamline SDK in `streamline-sdk/` and an RTX
+    /// GPU, else FSR's mode of the same name). Auto is DLAA where it runs, else FSR, in every run,
+    /// scripted ones and their captures too (D-070), unless `--no-taa` or `--set r.aa=off|fsr`.
+    /// U cycles them at run time.
     #[arg(long, default_value = "auto")]
     upscaler: String,
+    /// Keep the textures' mip bias at 0 when an upscaler draws smaller than it shows (the A/B of
+    /// D-070's bias, log2(render / output)).
+    #[arg(long)]
+    no_texture_bias: bool,
     /// Switch the anti-aliasing as U does every N frames (tests the switch in scripted runs).
     #[arg(long)]
     cycle_upscaler: Option<u64>,
@@ -275,6 +281,33 @@ struct Args {
     /// Start with the software rasteriser's pixels tinted green (H toggles it).
     #[arg(long)]
     show_raster: bool,
+}
+
+/// The FSR mode `--upscaler` asks for: `fsr` (at the window's size) or `fsr-MODE`, else none.
+fn fsr_upscaler(name: &str) -> Result<Option<FsrMode>> {
+    if name == "fsr" {
+        return Ok(Some(FsrMode::NativeAa));
+    }
+    let Some(mode) = name.strip_prefix("fsr-") else {
+        return Ok(None);
+    };
+    match FsrMode::from_name(mode) {
+        Some(mode) => Ok(Some(mode)),
+        None => anyhow::bail!(
+            "unknown FSR mode '{mode}': fsr-quality, fsr-balanced, fsr-performance or fsr-ultra-performance"
+        ),
+    }
+}
+
+/// FSR's mode in DLSS `mode`'s place, where DLSS was asked for and cannot run.
+fn fsr_mode_for(mode: DlssMode) -> FsrMode {
+    match mode {
+        DlssMode::Dlaa => FsrMode::NativeAa,
+        DlssMode::Quality => FsrMode::Quality,
+        DlssMode::Balanced => FsrMode::Balanced,
+        DlssMode::Performance => FsrMode::Performance,
+        DlssMode::UltraPerformance => FsrMode::UltraPerformance,
+    }
 }
 
 fn parse_vec3(text: &str) -> std::result::Result<Vec3, String> {
@@ -548,15 +581,17 @@ impl Ballad {
         // anti-aliasing off, goes to the swapchain through the display pass.
         let display = Display::new(&ctx.device, &ctx.shaders, ctx.output.format)?;
         let auto = args.upscaler == "auto";
+        // `fsr` and `fsr-MODE` ask for FSR (D-070); the DLSS modes keep their bare names.
+        let fsr_asked = fsr_upscaler(&args.upscaler)?;
         let requested = match args.upscaler.as_str() {
-            "fsr" => None,
+            _ if fsr_asked.is_some() => None,
             "auto" => args
                 .settings
                 .wants_dlss(args.no_taa)
                 .then_some(DlssMode::Dlaa),
             name => Some(DlssMode::from_name(name).ok_or_else(|| {
                 anyhow::anyhow!(
-                    "unknown upscaler '{name}': auto, fsr, dlaa, quality, balanced, performance or ultra-performance"
+                    "unknown upscaler '{name}': auto, fsr, fsr-quality, fsr-balanced, fsr-performance, fsr-ultra-performance, dlaa, quality, balanced, performance or ultra-performance"
                 )
             })?),
         };
@@ -571,10 +606,12 @@ impl Ballad {
             );
         }
         let dlss_on = requested.is_some() && dlss.is_some();
-        // FSR 3.1 (D-070) wherever DLSS does not run, unless the anti-aliasing is off (at native
-        // size until FSR's own modes).
+        // FSR 3.1 (D-070) wherever DLSS does not run, unless the anti-aliasing is off: in the mode
+        // asked for, or in the DLSS mode's place where DLSS was asked for and cannot run.
+        let fsr_mode =
+            fsr_asked.unwrap_or_else(|| fsr_mode_for(requested.unwrap_or(DlssMode::Dlaa)));
         let fsr = (!args.no_taa && args.settings.asked_aa() != Some("off") && !dlss_on)
-            .then(|| FsrUpscaler::new(&ctx.device, &ctx.shaders, FsrMode::NativeAa, ctx.extent()))
+            .then(|| FsrUpscaler::new(&ctx.device, &ctx.shaders, fsr_mode, ctx.extent()))
             .transpose()?;
         let fsr_on = fsr.is_some();
         let (scene, path) = build_field(ctx, &args, field)?;
@@ -691,6 +728,11 @@ impl Ballad {
             title_updates: 0,
         };
         ballad.apply_upscaler(ctx.extent())?;
+        tracing::info!(
+            upscaler = ballad.upscaler_label(),
+            render = ?ballad.render_extent,
+            "anti-aliasing"
+        );
         Ok(ballad)
     }
 
@@ -705,7 +747,7 @@ impl Ballad {
             }
             _ => match &mut self.fsr {
                 Some(fsr) if self.fsr_on => {
-                    fsr.configure(FsrMode::NativeAa, output)?;
+                    fsr.configure(fsr.mode(), output)?;
                     fsr.render_extent()
                 }
                 _ => output,
@@ -717,6 +759,14 @@ impl Ballad {
             self.render_extent = render;
         }
         self.taa.jitter_phases = forge_render::taa::jitter_phases(render, output);
+        // Drawn smaller, the textures keep the output's detail (D-070): DLSS and FSR ask for
+        // log2(render / output); 0 at the output's size.
+        self.renderer.texture_lod_bias =
+            if render.width < output.width && !self.args.no_texture_bias {
+                (render.width as f32 / output.width as f32).log2()
+            } else {
+                0.0
+            };
         self.taa.reset_history();
         Ok(())
     }
@@ -725,8 +775,10 @@ impl Ballad {
     fn upscaler_label(&self) -> &'static str {
         match &self.dlss {
             Some(dlss) if self.dlss_on => dlss.mode().label(),
-            _ if self.fsr_on => "FSR",
-            _ => "no anti-aliasing",
+            _ => match &self.fsr {
+                Some(fsr) if self.fsr_on => fsr.mode().label(),
+                _ => "no anti-aliasing",
+            },
         }
     }
 
@@ -1617,7 +1669,7 @@ fn main() -> Result<()> {
         streamline: cfg!(feature = "dlss")
             && (args.frames.is_none()
                 || match args.upscaler.as_str() {
-                    "fsr" => false,
+                    name if name.starts_with("fsr") => false,
                     "auto" => args.settings.wants_dlss(args.no_taa),
                     _ => true,
                 }),

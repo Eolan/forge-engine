@@ -112,7 +112,7 @@ that does not upscale shows as `dlaa`, so one press of four would change nothing
 | Key | Galleries | Asteroids | Planet | Meshlets |
 |---|---|---|---|---|
 | T | `r.aa` (`r.taa.sharpen` until D-070 removed TAA) | `r.aa` | `r.aa` | |
-| U | `r.show.gi` | `r.aa`, `r.dlss.mode` | | |
+| U | `r.show.gi` | `r.aa`, `r.dlss.mode`, `r.fsr.mode` | | |
 | G | `r.tonemap` | `r.tonemap` | `r.tonemap` | `r.tonemap` |
 | B | `r.bloom` | `r.bloom` | | |
 | X | `r.exposure.local` | `r.show.culled` | `r.show.culled` | |
@@ -184,7 +184,7 @@ their own defaults where their scenes want another look, and add:
 
 | Demo | Its own defaults | Added |
 |---|---|---|
-| asteroids | `r.tonemap aces` (its toe keeps space black), `r.sun.disc 0` (hard shadows), `r.ao.radius 2` | `r.dlss.mode`, `r.exposure.compensation`, `r.translucency`, `r.cull.cone`, `asteroids.dust`, `asteroids.paused` |
+| asteroids | `r.tonemap aces` (its toe keeps space black), `r.sun.disc 0` (hard shadows), `r.ao.radius 2` | `r.dlss.mode`, `r.fsr.mode` (native, quality, balanced, performance, ultra-performance: FSR's sizes with `r.aa fsr`), `r.exposure.compensation`, `r.translucency`, `r.cull.cone`, `asteroids.dust`, `asteroids.paused` |
 | planet | `r.aa dlaa` where it runs, as the galleries (since 2026-10-17) | `r.exposure.compensation`, `r.cull.cone`, `planet.paused` |
 | meshlets | `r.show.meshlets 1` | `r.cull.cone`, `r.cull.frustum`, `meshlets.freeze` (the culling camera held where it stands) |
 

@@ -5600,8 +5600,46 @@ sharpening, and the lamp filter's flicker under TAA. The last two run-to-run fla
     0.79 % of pixels, ꟻLIP mean 0.0042;
   - the tank's scene through FSR rather than TAA: `lab-tank90`, 0.76 %, ꟻLIP mean 0.0035.
 
-**Next:**
-- FSR's upscaling modes (`FsrMode::Quality` and the others, for the asteroids' `--upscaler`).
+**FSR's upscaling modes (2026-10-18):**
+- **The modes** are AMD's: native (its anti-aliasing), quality, balanced, performance and ultra
+  performance, drawn 1, 1.5, 1.7, 2 and 3 times smaller (`FsrMode`).
+- **Where:** in the ballad, the demo that upscales.
+  - `--upscaler fsr-quality` and the others choose one; `r.aa fsr` with `r.fsr.mode` at the
+    console.
+  - A DLSS mode asked for where DLSS cannot run gives FSR's mode of the same name.
+  - U cycles DLAA, DLSS's four modes, then FSR's five (FSR's alone without DLSS).
+- **The host code** already followed AMD's for any size (the render size, the jitter sequence's
+  length, the constants), so the modes needed no change to FSR itself.
+- **The textures' mip bias,** which both upscalers ask for when they draw smaller:
+  - `MeshletRenderer::texture_lod_bias`, log2(render / output), scales the UV derivatives in
+    the resolve, in the frame block's spare word;
+  - at the output's size it is ×1, so no other image changes;
+  - AMD's extra −1 stop is left out: it would sharpen the textures at native size too and move
+    DLAA's reference image;
+  - in the ballad it brings each mode about 1 % closer to DLAA (ꟻLIP 0.0442 against 0.0444 at
+    FSR Quality, 0.0312 against 0.0317 at DLSS Quality); `--no-texture-bias` is the A/B.
+- **The ballad's frame 600 at 1600 × 900,** against DLAA. The ꟻLIP is against DLAA's own image,
+  which favours DLSS's modes.
+
+  | Mode | Drawn at | GPU frame | The upscaler's passes | ꟻLIP vs DLAA |
+  |---|---|---|---|---|
+  | DLAA | 1600 × 900 | 2.22 ms | 0.55 ms | — |
+  | FSR (native) | 1600 × 900 | 1.96 ms | 0.37 ms | 0.023 |
+  | FSR Quality | 1066 × 600 | 1.40 ms | 0.25 ms | 0.044 |
+  | DLSS Quality | 1067 × 600 | 1.79 ms | 0.51 ms | 0.031 |
+  | FSR Balanced | 941 × 529 | 1.39 ms | 0.23 ms | 0.052 |
+  | DLSS Balanced | 928 × 522 | 1.70 ms | 0.52 ms | 0.038 |
+  | FSR Performance | 800 × 450 | 1.29 ms | 0.23 ms | 0.061 |
+  | DLSS Performance | 800 × 450 | 1.62 ms | 0.52 ms | 0.049 |
+  | FSR Ultra Performance | 533 × 300 | 1.16 ms | 0.21 ms | 0.085 |
+  | DLSS Ultra Performance | 533 × 300 | 1.46 ms | 0.52 ms | 0.074 |
+
+  - FSR Quality draws its image 0.4 ms faster than DLSS Quality here, and DLSS's passes cost
+    about the same at every size.
+  - FSR Quality's mesh path and fallback are 0 px apart. `ast-fsrq600` captures it on both
+    paths.
+
+**Next:** (`FsrMode::Quality` and the others, for the asteroids' `--upscaler`).
 - RCAS after FSR: `FsrUpscaler::sharpness`, off for now as DLAA's image is.
 
 ## D-071 — The day check and the night's full batch ✅ (2026-10-18, #286, the owner's choice)

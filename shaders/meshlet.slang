@@ -373,7 +373,7 @@ public struct Frame
     public uint* cell_list;         // with FLAG_INSTANCE_CELLS: instance cull 1's grid (x, y, 1, listed cells), cell cull 2's grid over the deferred cells (4), the cell culls' tickets (8, 9), then from CELL_LIST the listed cells and after them the deferred ones
     public uint2* rejects;          // with occlusion: (instance, meshlet | CULLED_BIT) per cluster pass 1 selected in view but the previous pyramid hid, in cull order: pass 2's to test (issue #92)
     public uint rejects_capacity;   // slots in `rejects`
-    public uint rejects_pad;
+    public float texture_lod_scale; // the UVs' change per pixel scaled by 2^bias (1, or below when an upscaler draws smaller: the textures as sharp as at the output's size)
     public uint64_t tlas_movers;    // the movers' top-level structure, rebuilt every frame (0: none; issue #79)
     public SkinCluster* skin_clusters; // with skinned meshes (#165): the skin pass's clusters (skin.slang), else null
     public SkinVertex* skin_vertices;  // their vertices in the bind pose, from which their textures are projected (#166)
@@ -5250,6 +5250,10 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     float2 size = float2(float(resolve_push.width), float(resolve_push.height));
     float2 ndc = float2((float(pixel.x) + 0.5) / size.x * 2.0 - 1.0, 1.0 - (float(pixel.y) + 0.5) / size.y * 2.0);
     Barycentrics b = barycentrics(c0, c1, c2, ndc, size);
+    // The textures' mip bias (D-070): drawn smaller for an upscaler, a pixel's footprint is taken
+    // as the output's, so the textures keep its detail. ×1 at the output's size: nothing changes.
+    b.ddx *= f[0].texture_lod_scale;
+    b.ddy *= f[0].texture_lod_scale;
     float3 o0 = decode_normal(v0.normal);
     float3 o1 = decode_normal(v1.normal);
     float3 o2 = decode_normal(v2.normal);

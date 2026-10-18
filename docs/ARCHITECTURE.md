@@ -323,6 +323,10 @@ bloom; with the anti-aliasing off it shows the frame as drawn, without jitter.
   - **Forge's one change:** the history is clamped to a min/max box (`docs/research/fsr-3-1.md`).
   - **A second FSR** anti-aliases the scene behind the tank's water before the water bends it
     (#156), its passes under "liquid/scene FSR".
+  - **Its upscaling modes** (`FsrMode`, `r.fsr.mode`) draw 1.5 to 3 times smaller, in the
+    ballad as DLSS's do.
+- **Drawn smaller for either upscaler,** the resolve keeps the textures' detail at the output's
+  size: `MeshletRenderer::texture_lod_bias`, log2(render / output), scales the UV derivatives.
 
 The DLSS pass
 is a graph pass like any other: it declares every image it hands to Streamline, and its
