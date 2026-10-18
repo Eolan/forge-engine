@@ -1,7 +1,9 @@
 //! The smoke yard (D-064, #271): the particles' first effects in the lab, from the effects of
 //! `crates/forge-render/data/particles.toml`.
 //! - Three chimneys of stacked blocks, smoking.
-//! - A ring of rocks round a fire: its embers rising, and its smoke.
+//! - A ring of rocks round a fire: its flames (the baked fire), its embers rising, and its smoke.
+//!   It does not light the yard yet: as a lamp (D-065) of the flames' size, the rocks' shadows
+//!   on the floor came out dithered at their wide penumbrae, which wait for the lamps' denoiser.
 //! - A walker's footsteps along the near side: a puff of dust a step, the walk starting over
 //!   every eight seconds.
 //! - A grinder's sparks, streaking down onto the floor and bouncing off it and a chimney's foot
@@ -64,14 +66,23 @@ pub(super) fn particles(
     emitters: &mut Vec<Emitter>,
     bursts: &mut Vec<Burst>,
 ) {
-    let (Some(smoke), Some(dust), Some(embers), Some(sparks)) = (
+    let (Some(smoke), Some(dust), Some(embers), Some(sparks), Some(fire)) = (
         particles.effect("chimney-smoke"),
         particles.effect("footstep-dust"),
         particles.effect("embers"),
         particles.effect("sparks"),
+        particles.effect("fire"),
     ) else {
         return;
     };
+    // The fire's flames in its ring, under its smoke and embers.
+    emitters.push(Emitter {
+        effect: fire,
+        position: FIRE + Vec3::Y * 0.1,
+        direction: Vec3::Y,
+        seed: 202,
+        start: 0.0,
+    });
     // A grinder's sparks, down onto the floor before the right chimney: they bounce off the
     // floor and the chimney's foot.
     emitters.push(Emitter {

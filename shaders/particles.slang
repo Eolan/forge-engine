@@ -116,7 +116,7 @@ struct ParticleFrame
     uint fresh;          // particles new this frame
     uint block_count;
     uint capacity;
-    uint pad;
+    uint fire;           // the fire's flipbook (sampled; smoke_bake.rs), its frames and columns `flip`'s
     uint4 flip;          // the smoke's flipbook: its positive and negative atlases (sampled),
                          // its frames and its columns (smoke_bake.rs)
     uint64_t tlas;       // the scene's structure, for the sun's shadow (0: none)
@@ -396,7 +396,7 @@ struct ParticleVaryings
                                        // shading
     nointerpolation float3 towards_sun : TEXCOORD2; // the sun in the puff's frame: x right, y
                                                     // down the screen, z towards the camera
-    nointerpolation uint flipbook : TEXCOORD3; // 1: drawn from the baked smoke's flipbook; 2: a streak
+    nointerpolation uint flipbook : TEXCOORD3; // 1: the baked smoke's flipbook; 2: the fire's; 3: a streak
     float3 corner : TEXCOORD0;         // xy: where in its puff, -1..1 each way; z: its age over
                                        // its life
     nointerpolation float4 fade : TEXCOORD1; // x: its distance, metres; y: over how far it fades
@@ -460,7 +460,7 @@ ParticleVaryings vert_main(uint vertex : SV_VertexID)
     o.flipbook = (e.draw >> 8u) & 0xFFu;
     o.fade = float4(clip.w, max(radius, 0.05), float(q.seed & 1023u), q.spin);
     // A streak (sparks): from where it was STREAK_TIME ago to where it is, as a shutter sees it,
-    // a pixel wide at least, its light spread along it. The fragment draws a capsule (mode 2),
+    // a pixel wide at least, its light spread along it. The fragment draws a capsule (mode 3),
     // its ends' share of its length in `fade.w`.
     if ((e.draw & DRAW_STREAK) != 0u)
     {
@@ -478,7 +478,7 @@ ParticleVaryings vert_main(uint vertex : SV_VertexID)
                 float2 at = (middle + tail) * 0.5 + along * (c.x * half_length) + across * (c.y * drawn_px);
                 o.position = float4(at / half_size * clip.w, clip.z, clip.w);
                 coverage *= drawn_px / half_length;
-                o.flipbook = 2u;
+                o.flipbook = 3u;
                 o.fade.w = drawn_px / half_length;
             }
         }
@@ -540,7 +540,7 @@ ParticleTargets frag_main(ParticleVaryings input)
         + 0.15 * value_noise(turned * 9.0 + 11.0 + 2.0 * churn, seed + 2u);
     float d2 = dot(p, p);
     float shape = saturate(1.0 - d2) * smoothstep(0.0, 0.45, n + 0.35 - 0.9 * d2);
-    if (input.flipbook == 2u)
+    if (input.flipbook == 3u)
     {
         // A streak: even along its length, round across it and at its ends (their share of
         // its half-length in `fade.w`).
@@ -594,6 +594,27 @@ ParticleTargets frag_main(ParticleVaryings input)
         float coverage = pos.a * soft;
         color = float4(input.color.rgb * (0.55 + 0.45 * around) + input.sun * (1.3 * lit), input.color.a) * coverage;
         k = coverage;
+    }
+    else if (input.flipbook == 2u)
+    {
+        // The baked fire (smoke_bake.rs, `bake_fire`): the flame's glow, its light stored as
+        // its square root, the two frames about its age cross-faded, turned and mirrored per
+        // particle as the smoke is. A glow: it adds its light, the effect's colour times the
+        // flame's.
+        uint4 fb = f[0].flip;
+        float frame = age * float(fb.z - 1u);
+        uint f0 = min(uint(frame), fb.z - 1u);
+        uint f1 = min(f0 + 1u, fb.z - 1u);
+        float t = frame - float(f0);
+        float2 within = turned * float2((seed & 1u) != 0u ? -1.0 : 1.0, 1.0) * 0.5 + 0.5;
+        within = clamp(within, 0.5 / 96.0, 1.0 - 0.5 / 96.0);
+        float columns = float(fb.w);
+        float2 uv0 = (float2(f0 % fb.w, f0 / fb.w) + within) / columns;
+        float2 uv1 = (float2(f1 % fb.w, f1 / fb.w) + within) / columns;
+        float3 s = lerp(sample_image(f[0].fire, SAMPLER_LINEAR_CLAMP, uv0).rgb, sample_image(f[0].fire, SAMPLER_LINEAR_CLAMP, uv1).rgb, t);
+        float3 flame = s * s;
+        color = float4(input.color.rgb * flame * soft, 0.0);
+        k = saturate(max(flame.r, max(flame.g, flame.b))) * soft;
     }
     if (max(color.a, max(color.r, max(color.g, color.b))) < 1.0 / 4096.0)
         discard;

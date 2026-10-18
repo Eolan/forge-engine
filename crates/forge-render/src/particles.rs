@@ -92,8 +92,9 @@ pub struct Effect {
     /// A burst of `rate` particles when triggered, not a stream.
     #[serde(default)]
     pub burst: bool,
-    /// The flipbook its smoke is drawn from: `"smoke"`, the puff our own solver bakes
-    /// ([`crate::smoke_bake`], six-way lit); none, a procedural puff.
+    /// The flipbook it is drawn from: `"smoke"`, the puff our own solver bakes
+    /// ([`crate::smoke_bake`], six-way lit); `"fire"`, the same puff's heat as a flame's glow
+    /// (for a glow); none, a procedural puff.
     #[serde(default)]
     pub texture: Option<String>,
     /// It meets the scene (D-064's point 2, the TLAS for sparks and debris): the share of its
@@ -121,11 +122,14 @@ pub fn parse(text: &str) -> std::result::Result<Vec<Effect>, String> {
             && effect.radius.iter().all(|r| *r > 0.0)
             && effect.drag >= 0.0
             && (0.0..=180.0).contains(&effect.cone)
-            && effect.texture.as_deref().is_none_or(|t| t == "smoke")
+            && effect
+                .texture
+                .as_deref()
+                .is_none_or(|t| t == "smoke" || t == "fire")
             && effect.bounce.is_none_or(|b| (0.0..=1.0).contains(&b));
         if !positive {
             return Err(format!(
-                "{name}: a rate, lives, radii and a drag of 0 or more, ranges in order, a cone of 0–180°, no texture but \"smoke\", a bounce of 0–1"
+                "{name}: a rate, lives, radii and a drag of 0 or more, ranges in order, a cone of 0–180°, no texture but \"smoke\" or \"fire\", a bounce of 0–1"
             ));
         }
         effects.push(effect);
@@ -250,6 +254,16 @@ struct GpuEffect {
 
 const _: () = assert!(std::mem::size_of::<GpuEffect>() == 64);
 
+/// An effect's flipbook as `particles.slang` numbers it: 0 none (a procedural puff), 1 the baked
+/// smoke, 2 the baked fire.
+fn texture_id(texture: Option<&str>) -> u32 {
+    match texture {
+        Some("smoke") => 1,
+        Some("fire") => 2,
+        _ => 0,
+    }
+}
+
 impl GpuEffect {
     fn of(e: &Effect) -> Self {
         Self {
@@ -267,7 +281,7 @@ impl GpuEffect {
             draw: match e.draw {
                 DrawKind::Smoke => 0,
                 DrawKind::Glow => 1,
-            } | (u32::from(e.texture.is_some()) << 8)
+            } | (texture_id(e.texture.as_deref()) << 8)
                 | e.bounce.map_or(0, |b| {
                     (1 << 24) | (((b.clamp(0.0, 1.0) * 255.0).round() as u32) << 16)
                 })
@@ -316,7 +330,8 @@ struct GpuFrame {
     fresh: u32,
     block_count: u32,
     capacity: u32,
-    pad: u32,
+    /// The fire's atlas (sampled; `smoke_bake::bake_fire`), its frames and columns the smoke's.
+    fire: u32,
     /// The flipbook: its positive and negative atlases (sampled), its frames and columns.
     flip: [u32; 4],
     tlas: u64,
@@ -375,8 +390,9 @@ pub struct Particles {
     blocks: Vec<Buffer>,
     state: RefCell<Ring>,
     stats: Cell<ParticleStats>,
-    /// The baked smoke's atlases, when an effect draws from them, and their sampled indices.
-    flipbook: Option<(crate::material::TextureSet, [u32; 2])>,
+    /// The baked smoke's atlases and the fire's, when an effect draws from them, and their
+    /// sampled indices (the smoke's positive and negative, the fire's).
+    flipbook: Option<(crate::material::TextureSet, [u32; 3])>,
 }
 
 impl Particles {
@@ -450,11 +466,12 @@ impl Particles {
             let mut set = crate::material::TextureSet::new(device);
             let started = std::time::Instant::now();
             let data = crate::smoke_bake::flipbook();
+            let fire = crate::smoke_bake::fire_flipbook();
             tracing::info!(
                 ms = started.elapsed().as_millis(),
-                "particles: the smoke's flipbook ready (baked once, then from the cache)"
+                "particles: the smoke's and the fire's flipbooks ready (baked once, then from the cache)"
             );
-            let ids = [set.add(&data[0])?, set.add(&data[1])?];
+            let ids = [set.add(&data[0])?, set.add(&data[1])?, set.add(&fire)?];
             let sampled = ids.map(|id| set.sampled(id));
             Some((set, sampled))
         } else {
@@ -674,8 +691,8 @@ impl Particles {
                 fresh,
                 block_count: gpu.len() as u32,
                 capacity: PARTICLE_CAPACITY,
-                pad: 0,
-                flip: self.flipbook.as_ref().map_or([0; 4], |(_, [p, n])| {
+                fire: self.flipbook.as_ref().map_or(0, |(_, [_, _, fire])| *fire),
+                flip: self.flipbook.as_ref().map_or([0; 4], |(_, [p, n, _])| {
                     [
                         *p,
                         *n,
@@ -838,7 +855,7 @@ mod tests {
         let names: Vec<&str> = effects.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(
             names,
-            ["chimney-smoke", "footstep-dust", "embers", "sparks"]
+            ["chimney-smoke", "footstep-dust", "embers", "sparks", "fire"]
         );
         assert!(effects[1].burst);
         assert_eq!(effects[2].draw, DrawKind::Glow);
@@ -847,6 +864,8 @@ mod tests {
         let sparks = GpuEffect::of(&effects[3]);
         assert_eq!(sparks.draw, 1 | (89 << 16) | (1 << 24) | (1 << 25));
         assert_eq!(GpuEffect::of(&effects[2]).draw, 1);
+        // The fire: a glow drawn from the baked fire (flipbook 2).
+        assert_eq!(GpuEffect::of(&effects[4]).draw, 1 | (2 << 8));
     }
 
     #[test]

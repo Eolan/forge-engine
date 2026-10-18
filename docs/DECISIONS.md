@@ -4521,8 +4521,17 @@ downloaded sets stay out unless the owner says otherwise.
   - **Cost:** 832 particles at most, `particles/advance` 0.005 → 0.018 ms.
   - The depth buffer's collisions (for smoke and dust) and D-034's depth from above are still
     to come.
-- **Next:** the depth buffer's collisions, sorting, frames blended by motion vectors, flipbooks
-  for dust and fire, the dust volume, and the village's chimneys and steps.
+- **The fire's flipbook (point 6), the same night:** `smoke_bake::bake_fire`. The smoke's puff,
+  its heat drawn as a flame's glow.
+  - The colour runs from deep red to orange to yellow-white with the heat, and the brightness
+    with its fourth power. The soot is thinner than the smoke's.
+  - It is one atlas of the same 32 frames, light stored as its square root.
+  - An effect with `texture = "fire"` draws a glow from it, cross-faded and turned as the smoke
+    is. The lab's fire has flames.
+  - The fire does not light the yard: as a lamp of the flames' size, the rocks' shadows came
+    out dithered at their wide penumbrae, which wait for the lamps' denoiser (D-065).
+- **Next:** the depth buffer's collisions, sorting, frames blended by motion vectors, a dust
+  flipbook, the dust volume, and the village's chimneys and steps.
 - **Point 5's DLSS half, tried and left out (2026-10-18):** Streamline 2.14.16's DLSS reads none
   of the hints.
   - The reactive mask was tagged in turn as the bias-current-colour hint (type 29), the

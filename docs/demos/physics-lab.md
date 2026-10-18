@@ -2047,11 +2047,33 @@ off it and off the chimney's foot.
 - **Cost:** `particles/advance` 0.005 → 0.018 ms with 832 particles alive at most; the frame
   1.65 → 1.72 ms.
 
+**The fire's flames** (D-064's point 6, `smoke_bake::bake_fire`):
+
+![The fire at midnight: flames in the ring of rocks under their smoke, embers rising](images/lab-fire.png)
+
+*Frame 360 of `--lab smoke --fixed-step --time-of-day 1.5`, the fire.*
+
+- **The bake:** the smoke's puff again, its heat drawn as a flame's glow.
+  - Each texel marches towards the camera, adding the glow of the heat it crosses (deep red,
+    orange, then yellow-white, brighter with the heat's fourth power) through a soot thinner
+    than the smoke's.
+  - 32 frames in one atlas, the light stored as its square root. It bakes once with the smoke
+    and is read from the derived cache after.
+- **The draw:** the `fire` effect (16 a second, rising) is a glow drawn from it. A particle
+  cross-fades its frames by age, turned and mirrored as the smoke's are, and adds the effect's
+  colour times the flame's light.
+- **Visibility:** at night the flames burn orange with a white-hot base. By day they are lost
+  under the smoke.
+- **No light yet:** the fire does not light the yard. As a lamp of the flames' size, the
+  rocks' shadows on the floor came out dithered at their wide penumbrae, which wait for the
+  lamps' denoiser (D-065).
+- **Cost:** `particles/draw` stays at 0.085 ms (927 particles at most), the frame at 1.72 ms.
+
 **Left for the next steps of D-064:**
 - the depth buffer's collisions (smoke, dust) and the movers;
 - sorting alpha-blended effects per emitter;
-- the flipbook's frames blended by motion vectors (now cross-faded), and more flipbooks (dust,
-  fire);
+- the flipbooks' frames blended by motion vectors (now cross-faded), and a dust flipbook;
+- the fire's light, once the lamps' penumbrae are denoised;
 - the dust volume;
 - the village's chimneys at dusk and the walker's steps (#266).
 

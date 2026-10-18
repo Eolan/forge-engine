@@ -434,6 +434,9 @@ soft edges, their pixel-wide minimum, their reactive mask and their hash:
   the alpha in one map; left, bottom and front in the other. It is described in Unity
   Technologies' "Realistic smoke lighting with 6-way lighting in VFX Graph", January 2023, and
   is used in games under several names. The frames and the code are our own.
+- **The baked fire:** the same simulation's heat drawn as an emission. Its glow grows with the
+  fourth power of the heat, after the Stefan–Boltzmann law's power of temperature. The colour
+  ramp from red to yellow-white is our own.
 
 **Lamps** (`forge_render::lamps`, D-065 steps 1–3, #270):
 - **A bulb's colour from its temperature:** Tanner Helland's fit of the blackbody locus in sRGB,

@@ -1,7 +1,8 @@
-//! The particles' smoke flipbook (D-064's point 6, #271), baked by our own solver: a puff of
-//! smoke simulated on a small grid with Jos Stam's "Stable Fluids" (SIGGRAPH 1999; US 6,266,071
-//! B1 expired in 2018), then each of its frames ray-marched towards the camera lit from six
-//! directions, as Unity's six-way smoke lighting stores them (`docs/research/particles.md` §3).
+//! The particles' smoke and fire flipbooks (D-064's point 6, #271), baked by our own solver: a
+//! puff of smoke simulated on a small grid with Jos Stam's "Stable Fluids" (SIGGRAPH 1999;
+//! US 6,266,071 B1 expired in 2018), then each of its frames ray-marched towards the camera lit
+//! from six directions, as Unity's six-way smoke lighting stores them
+//! (`docs/research/particles.md` §3); and the same puff's heat as a flame's glow ([`bake_fire`]).
 //!
 //! - **The simulation:** velocity, density and heat at the cells' middles of a [`GRID`]³ box.
 //!   For the first part of its life the puff's foot is fed smoke and heat. Each step adds
@@ -420,6 +421,144 @@ pub fn flipbook() -> Vec<TextureData> {
     )
 }
 
+/// The heat a flame is at its hottest, in the simulation's units: the fed core's.
+const FIRE_HOT: f32 = 2.0;
+/// The soot's extinction per unit of density in a flame, per cell crossed: thinner than the
+/// smoke's, so the glow behind shows through.
+const FIRE_EXTINCTION: f32 = 0.15;
+
+/// A flame's light at heat `t` (over [`FIRE_HOT`]), linear: deep red where it is cool, orange,
+/// then yellow-white at its core, and brighter with the fourth power of the heat, as a glowing
+/// body's light rises with its temperature.
+fn flame(t: f32) -> [f32; 3] {
+    let t = t.clamp(0.0, 1.0);
+    const RAMP: [(f32, [f32; 3]); 4] = [
+        (0.0, [0.5, 0.04, 0.0]),
+        (0.35, [1.0, 0.25, 0.02]),
+        (0.7, [1.0, 0.6, 0.15]),
+        (1.0, [1.0, 0.92, 0.7]),
+    ];
+    let k = RAMP
+        .iter()
+        .rposition(|(at, _)| *at <= t)
+        .unwrap_or(0)
+        .min(2);
+    let (a, b) = (RAMP[k], RAMP[k + 1]);
+    let s = (t - a.0) / (b.0 - a.0);
+    let bright = t * t * t * t;
+    [0, 1, 2].map(|c| (a.1[c] + (b.1[c] - a.1[c]) * s) * bright)
+}
+
+/// A frame of the fire: each texel's light towards the camera, marched from the camera's side
+/// through the flame's glow ([`flame`]) and its soot.
+fn render_fire(density: &Field, heat: &Field) -> Vec<[f32; 3]> {
+    let mut out = Vec::with_capacity(TEXELS * TEXELS);
+    let scale = GRID as f32 / TEXELS as f32;
+    for py in 0..TEXELS {
+        for px in 0..TEXELS {
+            let x = (px as f32 + 0.5) * scale - 0.5;
+            let y = (TEXELS - 1 - py) as f32 * scale + 0.5 * scale - 0.5;
+            let mut through = 1.0_f32;
+            let mut light = [0.0_f32; 3];
+            for zi in (0..GRID).rev() {
+                let p = [x, y, zi as f32];
+                let glow = flame(sample(heat, p) / FIRE_HOT);
+                for (l, g) in light.iter_mut().zip(glow) {
+                    *l += through * g;
+                }
+                through *= (-FIRE_EXTINCTION * sample(density, p)).exp();
+            }
+            out.push(light);
+        }
+    }
+    out
+}
+
+/// The fire's flipbook (D-064's fire, #271), from the derived cache when there, else baked:
+/// keyed by this file's code and the sizes.
+pub fn fire_flipbook() -> TextureData {
+    let code = include_str!("smoke_bake.rs")
+        .bytes()
+        .filter(|&b| b != b'\r')
+        .fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+            (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
+        });
+    crate::textures::kept_by(
+        "texture-fire-flipbook",
+        &(GRID, FRAMES, COLUMNS, TEXELS),
+        code,
+        || vec![bake_fire()],
+    )
+    .into_iter()
+    .next()
+    .expect("the fire's atlas")
+}
+
+/// The fire's atlas: the same puff as the smoke's, its heat drawn as a flame's glow seen from the
+/// camera, [`FRAMES`] over its life. Its light is stored as its square root (rgb, over the
+/// brightest texel of every frame), level 0 then each half to [`TEXELS`] / 8.
+pub fn bake_fire() -> TextureData {
+    let mut smoke = Smoke::new();
+    let side = COLUMNS * TEXELS;
+    let mut frames = Vec::with_capacity(FRAMES);
+    for _ in 0..FRAMES {
+        for _ in 0..STEPS_PER_FRAME {
+            smoke.advance();
+        }
+        frames.push(render_fire(&smoke.density, &smoke.heat));
+    }
+    let brightest = frames
+        .iter()
+        .flatten()
+        .flat_map(|l| *l)
+        .fold(1e-6_f32, f32::max);
+    let unorm = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+    let mut atlas = vec![0_u8; side * side * 4];
+    for (frame, texels) in frames.iter().enumerate() {
+        let (cx, cy) = (frame % COLUMNS, frame / COLUMNS);
+        for py in 0..TEXELS {
+            for px in 0..TEXELS {
+                let l = texels[py * TEXELS + px].map(|v| (v / brightest).sqrt());
+                let at = 4 * ((cy * TEXELS + py) * side + cx * TEXELS + px);
+                atlas[at..at + 4].copy_from_slice(&[unorm(l[0]), unorm(l[1]), unorm(l[2]), 255]);
+            }
+        }
+    }
+    TextureData {
+        name: "fire flipbook".into(),
+        size: side as u32,
+        height: side as u32,
+        srgb: false,
+        levels: levels(atlas, side),
+    }
+}
+
+/// An atlas's levels: `base` (`side` texels a side, RGBA8), then each half by a 2 × 2 box to
+/// `side` / 8.
+fn levels(base: Vec<u8>, side: usize) -> Vec<Vec<u8>> {
+    let mut levels = vec![base];
+    let mut size = side;
+    while size > side / 8 {
+        let half = size / 2;
+        let up = levels.last().expect("a level");
+        let mut down = vec![0_u8; half * half * 4];
+        for y in 0..half {
+            for x in 0..half {
+                for c in 0..4 {
+                    let s: u32 = [(0, 0), (1, 0), (0, 1), (1, 1)]
+                        .iter()
+                        .map(|(dx, dy)| u32::from(up[4 * ((2 * y + dy) * size + 2 * x + dx) + c]))
+                        .sum();
+                    down[4 * (y * half + x) + c] = ((s + 2) / 4) as u8;
+                }
+            }
+        }
+        levels.push(down);
+        size = half;
+    }
+    levels
+}
+
 /// The flipbook's two atlases (positive, negative), level 0 then each half to [`TEXELS`] / 8.
 pub fn bake() -> [TextureData; 2] {
     let mut smoke = Smoke::new();
@@ -452,37 +591,12 @@ pub fn bake() -> [TextureData; 2] {
             }
         }
     }
-    let levels = |base: Vec<u8>| {
-        let mut levels = vec![base];
-        let mut size = side;
-        while size > side / 8 {
-            let half = size / 2;
-            let up = levels.last().expect("a level");
-            let mut down = vec![0_u8; half * half * 4];
-            for y in 0..half {
-                for x in 0..half {
-                    for c in 0..4 {
-                        let s: u32 = [(0, 0), (1, 0), (0, 1), (1, 1)]
-                            .iter()
-                            .map(|(dx, dy)| {
-                                u32::from(up[4 * ((2 * y + dy) * size + 2 * x + dx) + c])
-                            })
-                            .sum();
-                        down[4 * (y * half + x) + c] = ((s + 2) / 4) as u8;
-                    }
-                }
-            }
-            levels.push(down);
-            size = half;
-        }
-        levels
-    };
     let texture = |name: &'static str, data: Vec<u8>| TextureData {
         name: name.into(),
         size: side as u32,
         height: side as u32,
         srgb: false,
-        levels: levels(data),
+        levels: levels(data, side),
     };
     [
         texture("smoke flipbook +", positive),
@@ -557,10 +671,12 @@ mod tests {
             image::ExtendedColorType::Rgba8,
         )
         .expect("written");
-        for (texture, name) in baked
-            .iter()
-            .zip(["smoke-positive.png", "smoke-negative.png"])
-        {
+        let fire = bake_fire();
+        for (texture, name) in baked.iter().chain([&fire]).zip([
+            "smoke-positive.png",
+            "smoke-negative.png",
+            "fire.png",
+        ]) {
             image::save_buffer(
                 std::path::Path::new(&dir).join(name),
                 &texture.levels[0],
@@ -570,6 +686,43 @@ mod tests {
             )
             .expect("written");
         }
+    }
+
+    #[test]
+    fn the_fire_glows_at_its_core_and_dims_as_it_cools() {
+        let fire = bake_fire();
+        let side = COLUMNS * TEXELS;
+        let atlas = &fire.levels[0];
+        // A frame's light summed, its brightest texel (where in the atlas, and its light) and its
+        // corner's.
+        let frame = |k: usize| {
+            let (cx, cy) = (k % COLUMNS, k / COLUMNS);
+            let mut sum = 0;
+            let mut brightest = (0, 0);
+            for py in 0..TEXELS {
+                for px in 0..TEXELS {
+                    let i = 4 * ((cy * TEXELS + py) * side + cx * TEXELS + px);
+                    let v = u32::from(atlas[i]) + u32::from(atlas[i + 1]) + u32::from(atlas[i + 2]);
+                    sum += v;
+                    if v > brightest.1 {
+                        brightest = (i, v);
+                    }
+                }
+            }
+            (
+                sum,
+                brightest,
+                u32::from(atlas[4 * (cy * TEXELS * side + cx * TEXELS)]),
+            )
+        };
+        let (early, (i, peak), corner) = frame(2);
+        let (late, _, _) = frame(FRAMES - 1);
+        assert!(peak > 500 && corner == 0, "{peak} {corner}");
+        assert!(late * 4 < early, "{late} {early}");
+        // Red over green over blue where it glows hottest: a flame, not white.
+        let rgb = &atlas[i..i + 3];
+        assert!(rgb[0] >= rgb[1] && rgb[1] > rgb[2], "{rgb:?}");
+        assert_eq!(bake_fire().levels, fire.levels);
     }
 
     #[test]

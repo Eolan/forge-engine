@@ -16,7 +16,8 @@
 #   colour   rgba at birth and at death
 #   draw     "smoke" (lit, alpha-blended puffs) or "glow" (unlit, added: embers, sparks)
 #   burst    a burst of `rate` particles when the emitter is triggered, not a stream
-#   texture  "smoke": drawn from the puff our own solver bakes (six-way lit); else a procedural puff
+#   texture  "smoke": drawn from the puff our own solver bakes (six-way lit); "fire": its heat as a
+#            flame's glow (a glow's colour then scales it); else a procedural puff
 #   bounce   it meets the scene (a ray a step against the static structure): the share of its
 #            speed into a surface it keeps, bounced back (0 to 1); unset, it passes through
 #   streak   drawn as a streak along its flight, as a shutter of 1/50 s sees it (sparks)
@@ -80,3 +81,18 @@ colour = [[40.0, 13.0, 2.5, 1.0], [12.0, 2.0, 0.2, 0.0]]
 draw = "glow"
 bounce = 0.35
 streak = true
+
+[fire]
+rate = 16.0
+life = [0.6, 1.0]
+radius = [0.3, 0.55]
+speed = [0.4, 0.8]
+cone = 10.0
+spread = 0.25
+gravity = -0.3
+drag = 1.2
+wind = 0.5
+curl = [0.4, 0.5]
+colour = [[5.0, 5.0, 5.0, 1.0], [2.5, 2.5, 2.5, 0.0]]
+draw = "glow"
+texture = "fire"
