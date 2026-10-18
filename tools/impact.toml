@@ -18,6 +18,8 @@
 "**/*.md" = []
 "tools/credits/**" = []
 "tools/sharpness/**" = []
+# What git ignores: a new SDK's directory (D-065's RTXDI sent a gate to Tier 1).
+".gitignore" = []
 # The city plan (D-059): a generator no demo draws yet, judged by its map and its tests.
 "crates/forge-procgen/src/city/**" = []
 "crates/forge-procgen/src/grammar.rs" = []
