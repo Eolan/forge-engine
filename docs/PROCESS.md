@@ -308,7 +308,10 @@ pixels on one rock's edge, the preview's own 0.078), so theirs is 0.30. The phys
 3 px (3 levels, ꟻLIP mean 0.00001), and two more runs of the same build were 1–3 px from each
 and from both, the physics' digest the same to the bit each time. `compare.sh` judges it by the
 same signature, and it is left out of the mesh-against-fallback pairs, as the ballad's frame
-600 is.
+600 is. Under DLAA (D-070) its frame 900 flakes the same way: on 2026-10-18 a day check's
+fallback image with occlusion off was 2 px off (3 levels, ꟻLIP mean 0.0002), and three reruns of
+that build gave 0, 0 and 4 px. `compare.sh` judges `*-lab-dominoes900`, its occlusion-off twin
+and the pair of them by the same signature.
 
 **The perceptual check (issue #75).** For each differing pair, `imgdiff` prints LDR-ꟻLIP:
 the error a person would see when flipping between the two images, from 0 (none) to 1. It is

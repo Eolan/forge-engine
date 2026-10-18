@@ -32,7 +32,10 @@
 # largest 0.013-0.016): at most 100 px of one code, largest below 0.02, is the flake too. The
 # physics lab's dominoes at frame 3000 (*-lab-dominoes3000, #146) flake the same way, judged by
 # the same signature: on 2026-10-03 two runs of one build gave 1 to 3 px apart (max 4 levels,
-# FLIP mean 0.00001) with the physics' digest the same to the bit.
+# FLIP mean 0.00001) with the physics' digest the same to the bit. Under DLAA (D-070) its frame
+# 900 does too (*-lab-dominoes900, its occlusion-off twin and the pair of them): on 2026-10-18
+# a day check gave 2 px (max 3 levels, FLIP mean 0.0002), and three reruns of that build 0, 0
+# and 4 px (max 3, FLIP mean 0.0003, largest 0.023).
 # Since TAA's image is sharpened and its history goes through Lanczos-3 (D-045), the ballad's
 # frame 600 flakes larger: three runs of one build on 2026-10-03 were 1063-1121 px apart, FLIP
 # mean 0.0023-0.0024, largest 0.08-0.09, and the PQ codes' HDR-FLIP mean 0.0063. So for the
@@ -77,7 +80,7 @@ flake() {
       awk -v n="$2" -v mean="$3" -v peak="$4" \
         'BEGIN { exit !(n != "" && mean != "" && peak != "" && n <= 1500 && mean <= 0.003 && peak <= 0.15) }'
       ;;
-    *-lab-dominoes3000)
+    *-lab-dominoes3000 | *-lab-dominoes900 | *-lab-dominoes900-noocc)
       awk -v n="$2" -v mean="$3" -v peak="$4" \
         'BEGIN { exit !(n != "" && mean != "" && peak != "" && n <= 500 && mean <= 0.0015 && peak <= 0.15) }'
       ;;
@@ -144,7 +147,7 @@ pair() {
     status=1
   elif [ "$count" != 0 ]; then
     line="$3: $count px differ (max $max), $label mean $mean, max $peak"
-    if [ "${4:-}" = same ] && flake "$3" "$count" "$mean" "$peak" "$max"; then
+    if [[ ${4:-} == same || ${4:-} == flaky ]] && flake "$(basename "$2" .png)" "$count" "$mean" "$peak" "$max"; then
       echo "$line: FLAKE #71"
       flakes=$((flakes + 1))
     elif [ "${4:-}" = same ] && is_expected "$3"; then
@@ -189,7 +192,7 @@ main() {
     pair "$new/$path-lab-break85.png" "$new/$path-lab-break85-noocc.png" "$path lab's wall, occlusion off"
     pair "$new/$path-lab-creatures120.png" "$new/$path-lab-creatures120-noocc.png" "$path lab's creatures, occlusion off"
     pair "$new/$path-lab-flood150.png" "$new/$path-lab-flood150-noocc.png" "$path lab's flood, occlusion off"
-    pair "$new/$path-lab-dominoes900.png" "$new/$path-lab-dominoes900-noocc.png" "$path lab's dominoes, occlusion off"
+    pair "$new/$path-lab-dominoes900.png" "$new/$path-lab-dominoes900-noocc.png" "$path lab's dominoes, occlusion off" flaky
     pair "$new/$path-lab-smoke360.png" "$new/$path-lab-smoke360-noocc.png" "$path lab's smoke yard, occlusion off"
     pair "$new/$path-lab-lamps60.png" "$new/$path-lab-lamps60-noocc.png" "$path lab's lamps, occlusion off"
     pair "$new/$path-lab-bridge360.png" "$new/$path-lab-bridge360-noocc.png" "$path lab's bridge, occlusion off"
