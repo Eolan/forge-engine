@@ -16,8 +16,19 @@ use glam::Vec3;
 pub const MAX_LAMPS: usize = 64;
 /// The illuminance a lamp's light is let go below, lux: its reach. A candle's at about 1 m.
 pub const LEAST_LUX: f32 = 0.05;
+/// The most regions a lamp lights ([`Lamp::regions`]).
+pub const LAMP_REGIONS: usize = 8;
+/// An empty slot of [`Lamp::regions`] (`REGION_NONE` in `probes.slang`).
+pub const NO_REGION: u32 = u32::MAX;
+/// The regions of a lamp that lights every surface its rays reach: a scene without regions.
+pub const EVERY_REGION: [u32; LAMP_REGIONS] = [NO_REGION; LAMP_REGIONS];
+/// The key the lamps of [`EVERY_REGION`] are listed under in [`lists`] (`REGION_ANY` in
+/// `meshlet.slang`).
+pub const REGION_ANY: u32 = u32::MAX - 1;
+/// The most entries of [`lists`]: every lamp in every region it lights.
+pub const MAX_LIST: usize = MAX_LAMPS * LAMP_REGIONS;
 
-/// A lamp, in the scene's frame.
+/// A lamp, in the frame [`crate::MeshletScene::set_lamps`] is given.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Lamp {
     /// Its bulb's middle, metres.
@@ -28,6 +39,11 @@ pub struct Lamp {
     pub candela: f32,
     /// Its colour temperature, kelvin (a warm bulb 2700, daylight 6500).
     pub kelvin: f32,
+    /// The probes' regions (D-068, [`crate::RegionVolume`]) whose surfaces it lights: its room's
+    /// and those it shines into through a doorway, [`NO_REGION`] in the slots left over. A
+    /// surface elsewhere takes nothing of it, without a shadow ray: the house's rooms are its
+    /// light lists. All slots empty ([`EVERY_REGION`]): every surface.
+    pub regions: [u32; LAMP_REGIONS],
 }
 
 /// Mirrors `Lamp` in `meshlet.slang`.
@@ -39,9 +55,11 @@ pub struct GpuLamp {
     /// rgb: its intensity per channel, candelas (its colour of luminance 1 times its candelas);
     /// w: its reach, metres.
     pub colour_reach: [f32; 4],
+    /// [`Lamp::regions`].
+    pub regions: [u32; LAMP_REGIONS],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuLamp>() == 32);
+const _: () = assert!(std::mem::size_of::<GpuLamp>() == 64);
 
 /// How far a lamp's light counts, metres: where it falls to [`LEAST_LUX`].
 pub fn reach(candela: f32) -> f32 {
@@ -81,6 +99,19 @@ pub fn kelvin_rgb(kelvin: f32) -> Vec3 {
     rgb / rgb.dot(Vec3::new(0.2126, 0.7152, 0.0722)).max(1e-6)
 }
 
+/// The colour temperature the lamps' colours are balanced for, kelvin: as a camera set for
+/// tungsten light sees them, and the eye adapted to a lit room. At the sun's white point a 2 700 K
+/// bulb turned a white room deep orange (2026-10-18); balanced, it stays warm. The sun and the
+/// sky keep their colours.
+pub const WHITE_BALANCE: f32 = 3200.0;
+
+/// A lamp's colour at `kelvin` as [`WHITE_BALANCE`] sees it ([`kelvin_rgb`] over the balance's),
+/// linear Rec. 709 of luminance 1.
+pub fn lamp_rgb(kelvin: f32) -> Vec3 {
+    let c = kelvin_rgb(kelvin) / kelvin_rgb(WHITE_BALANCE);
+    c / c.dot(Vec3::new(0.2126, 0.7152, 0.0722)).max(1e-6)
+}
+
 /// The lamps a frame lights with: those whose light reaches within [`reach`] of the camera at
 /// `camera` (scene frame), the nearest first, [`MAX_LAMPS`] at most.
 pub fn nearest(lamps: &[Lamp], camera: Vec3) -> Vec<GpuLamp> {
@@ -94,7 +125,7 @@ pub fn nearest(lamps: &[Lamp], camera: Vec3) -> Vec<GpuLamp> {
     near.into_iter()
         .take(MAX_LAMPS)
         .map(|(_, l)| {
-            let c = kelvin_rgb(l.kelvin) * l.candela;
+            let c = lamp_rgb(l.kelvin) * l.candela;
             GpuLamp {
                 position_radius: [
                     l.position.x,
@@ -103,14 +134,55 @@ pub fn nearest(lamps: &[Lamp], camera: Vec3) -> Vec<GpuLamp> {
                     l.radius.max(0.005),
                 ],
                 colour_reach: [c.x, c.y, c.z, reach(l.candela)],
+                regions: l.regions,
             }
         })
         .collect()
 }
 
+/// The frame's light lists (D-065): for each region its `kept` lamps light, the lamps' indices, as
+/// pairs (region, lamp) sorted by region, then lamp; the lamps of [`EVERY_REGION`] under
+/// [`REGION_ANY`]. A pixel finds its region's run by a binary search (`lamp_run` in
+/// `meshlet.slang`) and loops over its few lamps, not over the frame's 64 (0.5 ms in a hall).
+pub fn lists(kept: &[GpuLamp]) -> Vec<[u32; 2]> {
+    let mut out = Vec::new();
+    for (i, l) in kept.iter().enumerate() {
+        let i = i as u32;
+        if l.regions.iter().all(|&r| r == NO_REGION) {
+            out.push([REGION_ANY, i]);
+        } else {
+            out.extend(
+                l.regions
+                    .iter()
+                    .filter(|&&r| r != NO_REGION)
+                    .map(|&r| [r, i]),
+            );
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_light_lists_hold_each_lamp_under_each_of_its_regions() {
+        let lamp = |regions: [u32; LAMP_REGIONS]| GpuLamp {
+            regions,
+            ..GpuLamp::default()
+        };
+        let mut two = EVERY_REGION;
+        two[0] = 7;
+        two[1] = 3;
+        two[2] = 7;
+        let mut one = EVERY_REGION;
+        one[0] = 3;
+        let pairs = lists(&[lamp(two), lamp(EVERY_REGION), lamp(one)]);
+        assert_eq!(pairs, vec![[3, 0], [3, 2], [7, 0], [REGION_ANY, 1]]);
+    }
 
     #[test]
     fn a_warm_bulb_is_orange_and_daylight_white_both_of_luminance_one() {
@@ -122,6 +194,16 @@ mod tests {
         assert!(warm.x > warm.y && warm.y > warm.z, "{warm}");
         // Daylight within a few percent of white.
         assert!((day.x - day.z).abs() < 0.1, "{day}");
+        // Balanced for tungsten: its own temperature white, a warm bulb warm but its blue kept
+        // (half its red, where the sun's white point leaves a tenth).
+        let balanced = lamp_rgb(WHITE_BALANCE);
+        assert!(
+            (balanced - Vec3::ONE).abs().max_element() < 1e-4,
+            "{balanced}"
+        );
+        let warm = lamp_rgb(2700.0);
+        assert!((luminance(warm) - 1.0).abs() < 1e-4);
+        assert!(warm.z / warm.x > 0.4 && kelvin_rgb(2700.0).z / kelvin_rgb(2700.0).x < 0.12);
     }
 
     #[test]
@@ -131,6 +213,7 @@ mod tests {
             radius: 0.05,
             candela,
             kelvin: 2700.0,
+            regions: EVERY_REGION,
         };
         // 100 cd reaches about 45 m.
         assert!((reach(100.0) - 44.72).abs() < 0.01);

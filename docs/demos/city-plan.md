@@ -838,6 +838,33 @@ mesh to test navigations inside the houses"):
   that lights it: green in a reveal, white in a house's body, black outside, red where it fell
   back to every probe. It costs 0.17–0.21 ms a frame (the room 3.67 → 3.85 ms, the hall 4.05 →
   4.26, the green 4.40 → 4.57, the landing 4.19 → 4.39), the city 0.04 (`docs/PROFILE.md`).
+- *Lamps* (D-065 steps 2 and 3, #270: `furnish::lamps`, `home_lamps`).
+
+  ![A house's open street door at night: the hall lit by its lamp, a room's light on its window](images/village-lamps.png)
+
+  *The way in at 22:00 (`--time-of-day 1.333 --view=75.2,1.7,-180.4,146.8,-5`): the hall's
+  light through the open street door, falling on the threshold, and a lit room's light on its
+  window's reveal and the open shutter beside it.*
+
+  The houses whose insides are drawn get their lamps, 646 in the village:
+  - a frosted globe over each room's middle, at 70 lm a square metre (450 to 1 600 lm; kitchens
+    and bathrooms a third more and whiter);
+  - a light on the hall's ceiling on each storey, clear of the flight;
+  - a sconce over each bed's head and each sofa's back against a wall.
+
+  The households light them by the faked windows' rule (`Residents::lit`): 325 are on at 22:00,
+  121 at 15:00 (the map check's hour, where they barely show), and their globes glow.
+  - **Which surfaces a lamp lights:** each lamp lights its room's region and those across its
+    storey's doorways, within its storey's height. A pixel takes its region's lamps only: the
+    rooms are the light lists.
+  - **Its rays:** the three strongest get a shadow ray each, and one of the others is picked by
+    its light.
+  - **The bounce:** the probes take the lamps' light.
+  - **Its colours:** balanced as a tungsten camera sees them, so a white room is warm, not
+    orange.
+
+  **Cost:** in the hall at night, 0.47 ms a frame (4.25 → 4.72 ms): the shading 0.53 ms and the
+  probes' rays 0.2 ms on the async queue. `--no-lamps` turns their light off for an A/B.
 - *Rooms on the outside walls* (`rooms::rebalance`). The anomalies' 20 unlit rooms were the
   middles of row houses one room wide (6 m lots, 12 m deep): a storey of three bedrooms one
   behind the other under a storey of an office and a bathroom 8.8 m deep. A middle band of

@@ -906,10 +906,115 @@ pub fn home(name: &str, w: f32, d: f32) -> Option<TriMesh> {
     Some(m)
 }
 
+/// A home's lamp (D-065 step 2, #270) round its bulb's middle at the origin: a frosted globe
+/// ([`GLASS`], the part that glows) of `globe` metres' radius and what holds it ([`METAL`]):
+/// - `"pendant"`: a cord from the globe's top up to the ceiling `reach` metres over the middle,
+///   and a canopy there;
+/// - `"ceiling"`: the same with a short stem, the globe hugging the ceiling;
+/// - `"sconce"`: an arm back `reach` metres to a plate on the wall (towards −z).
+///
+/// The globe is the lamp's own sphere: its shadow rays stop 2 cm short of it (`lamps_at` in
+/// `meshlet.slang`), so it casts no shadow of its own light. `None` for another kind.
+pub fn lamp(kind: &str, globe: f32, reach: f32) -> Option<TriMesh> {
+    let mut m = TriMesh::default();
+    // The globe: 12 meridians, 8 bands, fans at the poles.
+    let (sides, bands) = (12, 8);
+    let at = |i: u32, j: u32| {
+        let lon = i as f32 / sides as f32 * std::f32::consts::TAU;
+        let lat = (j as f32 / bands as f32 - 0.5) * std::f32::consts::PI;
+        Vec3::new(lat.cos() * lon.cos(), lat.sin(), lat.cos() * lon.sin()) * globe
+    };
+    for i in 0..sides {
+        for j in 0..bands {
+            let (a, b, c, d) = (at(i, j), at(i, j + 1), at(i + 1, j + 1), at(i + 1, j));
+            if j == 0 {
+                triangle(&mut m, [a, b, c], GLASS);
+            } else if j + 1 == bands {
+                triangle(&mut m, [a, b, d], GLASS);
+            } else {
+                quad(&mut m, [a, b, c, d], GLASS);
+            }
+        }
+    }
+    match kind {
+        "pendant" | "ceiling" => {
+            // The cord or stem up from the globe's top, and the canopy against the ceiling.
+            let r = if kind == "pendant" { 0.004 } else { 0.012 };
+            cuboid(
+                &mut m,
+                Vec3::new(-r, globe * 0.9, -r),
+                Vec3::new(r, reach - 0.02, r),
+                METAL,
+                ALL & !NEG_Y & !POS_Y,
+            );
+            cuboid(
+                &mut m,
+                Vec3::new(-0.05, reach - 0.02, -0.05),
+                Vec3::new(0.05, reach, 0.05),
+                METAL,
+                ALL & !POS_Y,
+            );
+        }
+        "sconce" => {
+            // The arm into the globe's back, and the plate on the wall.
+            cuboid(
+                &mut m,
+                Vec3::new(-0.008, -0.008, -reach + 0.015),
+                Vec3::new(0.008, 0.008, -globe * 0.9),
+                METAL,
+                ALL & !NEG_Z & !POS_Z,
+            );
+            cuboid(
+                &mut m,
+                Vec3::new(-0.05, -0.07, -reach),
+                Vec3::new(0.05, 0.07, -reach + 0.015),
+                METAL,
+                ALL & !NEG_Z,
+            );
+        }
+        _ => return None,
+    }
+    Some(m)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::modules::SECTIONS;
+
+    #[test]
+    fn a_homes_lamps_glow_round_their_bulb_and_reach_their_ceiling_or_wall() {
+        for (kind, reach) in [("pendant", 0.5), ("ceiling", 0.14), ("sconce", 0.1)] {
+            let m = lamp(kind, 0.08, reach).expect(kind);
+            assert_eq!(m.sections.len(), m.triangle_count());
+            let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+            for p in &m.positions {
+                lo = lo.min(Vec3::from(*p));
+                hi = hi.max(Vec3::from(*p));
+            }
+            if kind == "sconce" {
+                assert!(
+                    (lo.z + reach).abs() < 1e-5 && hi.y < 0.081,
+                    "{kind} {lo} {hi}"
+                );
+            } else {
+                assert!(
+                    (hi.y - reach).abs() < 1e-5 && lo.y > -0.081,
+                    "{kind} {lo} {hi}"
+                );
+            }
+            // The glowing part within the lamp's sphere, 2 cm to spare.
+            for (t, &s) in m.sections.iter().enumerate() {
+                if s == GLASS {
+                    for k in 0..3 {
+                        let p = Vec3::from(m.positions[m.indices[t * 3 + k] as usize]);
+                        assert!(p.length() < 0.08 + 1e-4, "{kind} {p}");
+                    }
+                }
+            }
+        }
+        assert!(lamp("chandelier", 0.08, 0.5).is_none());
+    }
 
     #[test]
     fn a_homes_furniture_stays_within_its_footprint() {

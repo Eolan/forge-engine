@@ -120,7 +120,7 @@ pub(super) fn build(first: usize) -> Vec<(usize, Mat4)> {
     statics
 }
 
-/// The lamps of the room at night (`--lab lamps`, D-065 step 1, #270), in the scene's frame: a
+/// The lamps of the room at night (`--lab lamps`, D-065 step 1, #270), in the world frame: a
 /// hanging bulb in the middle (2700 K, 100 cd: about 1 250 lm), a lamp in the back left corner
 /// (3000 K, 60 cd) and a dim one by the board (2200 K, 25 cd), each a bulb of 4 to 6 cm.
 pub(super) fn lamps() -> Vec<forge_render::lamps::Lamp> {
@@ -136,6 +136,7 @@ pub(super) fn lamps() -> Vec<forge_render::lamps::Lamp> {
         radius,
         candela,
         kelvin,
+        regions: forge_render::lamps::EVERY_REGION,
     })
     .collect()
 }

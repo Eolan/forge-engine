@@ -1371,11 +1371,26 @@ The lamps (D-065 step 1, #270) in the sharpness room at midnight (`--lab lamps -
 | | `shading/standard` | frame |
 |---|---|---|
 | unlit (`--lab room`) | 0.162 ms | 0.84 ms |
-| three lamps, three shadow rays a pixel | 0.480 ms | 1.58 ms |
+| three lamps, three shadow rays a pixel (step 1) | 0.480 ms | 1.58 ms |
+| the same with the probes lit and the picks (steps 2 and 3) | 0.521 ms | 1.61 ms |
 
 About 0.1 ms a lamp over the whole view at this size. Every pixel in a lamp's reach traces its
 ray. The clustered lists and one ray a pixel to a lamp picked by its contribution are what bound
 that cost in a view of many lamps (D-065).
+
+The village's lamps (D-065 steps 2 and 3), in the hall view of `tools/map-check.sh` at 22:00
+(`city-plan --village 600 --time-of-day 1.333`), 1600 × 900, TAA, 240 frames. 325 lamps are on and
+the frame keeps the 64 nearest. A pixel takes its room's light list: the three strongest lamps
+and one picked from the others, four shadow rays at most.
+
+| | `shading/standard` | `gi/probe rays` | frame |
+|---|---|---|---|
+| the lamps' light off (`--no-lamps`) | 0.46 ms | 2.16 ms | 4.25 ms |
+| looping over the frame's 64 lamps, every ray | 1.40 ms | 2.42 ms | 5.46 ms |
+| the rooms' light lists, four rays at most | 0.99 ms | 2.36 ms | 4.72 ms |
+
+The loop over all 64 lamps cost 0.5 ms before a ray was traced. A pixel's region lookup costs
+0.05 ms. Each probe ray's hit takes one lamp and one shadow ray: 0.2 ms.
 
 ## `city-plan` — a city's plan in 3D, measured on the private sandbox's city (D-059, 2026-10-11)
 

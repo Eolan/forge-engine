@@ -526,11 +526,17 @@ struct GpuFrame {
     /// The sampled index of its colour map (x; `u32::MAX`: none), 1 when it has a sea (y), 1 when
     /// the map is its albedo from afar (z), its sea mask's index (w; `u32::MAX`: none).
     planet_map: [u32; 4],
-    /// The lamps (D-065, [`MeshletScene::set_lamps`]) and how many (0: none).
+    /// The lamps (D-065, [`MeshletScene::set_lamps`]) and how many (0: none), and the entries of
+    /// their light lists ([`crate::lamps::lists`]), at [`LAMP_LISTS_OFFSET`] in their buffer.
     lamps: u64,
     lamp_count: u32,
-    lamp_pad: u32,
+    lamp_list_count: u32,
+    lamp_lists: u64,
 }
+
+/// Where a frame slot's light lists start in its lamps' buffer, bytes: after the lamps.
+const LAMP_LISTS_OFFSET: u64 =
+    (crate::lamps::MAX_LAMPS * std::mem::size_of::<crate::lamps::GpuLamp>()) as u64;
 
 const _: () = assert!(std::mem::offset_of!(GpuFrame, ground_window) % 16 == 0);
 
@@ -1808,9 +1814,7 @@ impl MeshletSceneBuilder {
             lamp_buffers: (0..FRAMES_IN_FLIGHT)
                 .map(|i| {
                     device.create_buffer(BufferDesc {
-                        size: (crate::lamps::MAX_LAMPS
-                            * std::mem::size_of::<crate::lamps::GpuLamp>())
-                            as u64,
+                        size: LAMP_LISTS_OFFSET + (crate::lamps::MAX_LIST * 8) as u64,
                         usage: vk::BufferUsageFlags::STORAGE_BUFFER,
                         location: MemoryLocation::CpuToGpu,
                         category: MemoryCategory::Frame,
@@ -1818,7 +1822,7 @@ impl MeshletSceneBuilder {
                     })
                 })
                 .collect::<Result<Vec<_>>>()?,
-            lamp_counts: std::array::from_fn(|_| Cell::new(0)),
+            lamp_counts: std::array::from_fn(|_| Cell::new([0; 2])),
             textures: self.textures.take(),
             instance_count: self.instances.len() as u32,
             origin: self.origin,
@@ -2025,9 +2029,10 @@ pub struct MeshletScene {
     ground_window: Cell<[f32; 4]>,
     /// The planet ([`Self::set_planet`]), as the frame block holds it.
     planet: Cell<GpuPlanet>,
-    /// Per frame slot, the lamps it lights with ([`Self::set_lamps`], D-065), and how many.
+    /// Per frame slot, the lamps it lights with ([`Self::set_lamps`], D-065) and their light lists,
+    /// and how many of each.
     lamp_buffers: Vec<Buffer>,
-    lamp_counts: [Cell<u32>; FRAMES_IN_FLIGHT],
+    lamp_counts: [Cell<[u32; 2]>; FRAMES_IN_FLIGHT],
     textures: Option<TextureSet>,
     /// What it keeps alive for its instances ([`MeshletSceneBuilder::keep`]).
     _kept: Vec<Box<dyn std::any::Any + Send>>,
@@ -2222,10 +2227,13 @@ impl MeshletScene {
     /// it each frame before the draw; none by default.
     pub fn set_lamps(&self, slot: FrameSlot, lamps: &[crate::lamps::Lamp], camera: Vec3) {
         let kept = crate::lamps::nearest(lamps, camera);
+        let lists = crate::lamps::lists(&kept);
         if !kept.is_empty() {
-            self.lamp_buffers[slot.index].write(0, &kept);
+            let buffer = &self.lamp_buffers[slot.index];
+            buffer.write(0, &kept);
+            buffer.write(LAMP_LISTS_OFFSET, &lists);
         }
-        self.lamp_counts[slot.index].set(kept.len() as u32);
+        self.lamp_counts[slot.index].set([kept.len() as u32, lists.len() as u32]);
     }
 
     /// The planet the frames drawn from now on stand on (#220), for the layered rows that take
@@ -3667,8 +3675,9 @@ impl MeshletRenderer {
             planet_meridian: scene.planet.get().meridian,
             planet_map: scene.planet.get().map,
             lamps: scene.lamp_buffers[slot.index].address(),
-            lamp_count: scene.lamp_counts[slot.index].get(),
-            lamp_pad: 0,
+            lamp_count: scene.lamp_counts[slot.index].get()[0],
+            lamp_list_count: scene.lamp_counts[slot.index].get()[1],
+            lamp_lists: scene.lamp_buffers[slot.index].address() + LAMP_LISTS_OFFSET,
         }
     }
 

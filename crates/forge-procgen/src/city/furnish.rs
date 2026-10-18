@@ -8,6 +8,7 @@
 
 use glam::DVec2;
 
+use super::geom;
 use super::interior::{DOORWAY, Interior};
 use super::rooms::RoomKind;
 use super::structure::{Structure, WallRole};
@@ -495,6 +496,152 @@ pub fn furnish(s: &Structure, interior: &Interior) -> Vec<Placed> {
     out
 }
 
+/// What a home's lamp is (D-065 step 2, #270).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum LampKind {
+    /// A shade hanging from a room's ceiling over its middle.
+    Pendant,
+    /// A light flush with the hall's ceiling, one a storey, clear of the flight.
+    Ceiling,
+    /// A shade on the wall over a bed's head or a sofa's back, to read by.
+    Sconce,
+}
+
+/// A home's lamp: what it is, where its bulb is, how bright and how warm.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HomeLamp {
+    /// What it is.
+    pub kind: LampKind,
+    /// Its storey, 0 the ground floor.
+    pub storey: usize,
+    /// Its bulb's middle, metres on the plan.
+    pub at: DVec2,
+    /// Its bulb's height over its storey's floor, metres.
+    pub height: f64,
+    /// Its globe's radius, metres: the frosted glass round its bulb that glows.
+    pub radius: f64,
+    /// A sconce's way out from its wall, a unit vector; zero for the others.
+    pub facing: DVec2,
+    /// Its room, an index into the interior's rooms; `None` for the hall.
+    pub room: Option<usize>,
+    /// Its luminous intensity, candelas, the same every way (its lumens over 4π).
+    pub candela: f64,
+    /// Its colour temperature, kelvin.
+    pub kelvin: f64,
+}
+
+/// A pendant's drop from the ceiling to its bulb, metres, at most.
+const PENDANT_DROP: f64 = 0.5;
+/// The lowest a pendant's bulb hangs, metres: its globe over a doorway's head (2.1 m).
+const PENDANT_LOWEST: f64 = 2.25;
+/// A pendant's and the hall's light's globe, metres in radius; the hall's hugs its ceiling.
+pub const GLOBE: f64 = 0.09;
+/// A sconce's globe, metres in radius, its middle 10 cm out from its wall.
+pub const SCONCE_GLOBE: f64 = 0.06;
+
+/// The lamps of the house `interior` in the structure `s` among its furniture `pieces` (as
+/// `walk::furnished` leaves them):
+/// - a pendant over each room's middle, as bright as the room is large (70 lm a square metre,
+///   from 450 to 1 600 lm, a third more and whiter in a kitchen or a bathroom);
+/// - a light on the hall's ceiling on each storey with rooms, clear of the flight;
+/// - a sconce over each bed's head and each sofa's back that stands against a wall.
+pub fn lamps(s: &Structure, interior: &Interior, pieces: &[Placed]) -> Vec<HomeLamp> {
+    let candela = |lumens: f64| lumens / (4.0 * std::f64::consts::PI);
+    let clear = |k: usize| s.storeys.get(k).map_or(2.6, |st| st.clear());
+    let room_of = |k: usize, p: DVec2| {
+        interior
+            .rooms
+            .iter()
+            .position(|r| r.storey == k && geom::contains(&r.outline, p))
+    };
+    let mut out = Vec::new();
+    for (i, r) in interior.rooms.iter().enumerate() {
+        let area = geom::signed_area(&r.outline).abs();
+        let (lumens, kelvin) = match r.kind {
+            RoomKind::Kitchen | RoomKind::Bathroom => ((93.0 * area).clamp(600.0, 2100.0), 3000.0),
+            _ => ((70.0 * area).clamp(450.0, 1600.0), 2700.0),
+        };
+        let c = clear(r.storey);
+        out.push(HomeLamp {
+            kind: LampKind::Pendant,
+            storey: r.storey,
+            at: geom::centroid(&r.outline),
+            height: (c - PENDANT_DROP).max(PENDANT_LOWEST).min(c - GLOBE - 0.03),
+            radius: GLOBE,
+            facing: DVec2::ZERO,
+            room: Some(i),
+            candela: candela(lumens),
+            kelvin,
+        });
+    }
+    // The hall's light on each storey with rooms: along the hall from its first edge's middle to
+    // its third's, where it stands farthest from the flight's box.
+    let hall = interior.hall;
+    let (front, back) = ((hall[0] + hall[1]) * 0.5, (hall[2] + hall[3]) * 0.5);
+    let clearance = |p: DVec2| match interior.stair {
+        Some(b) if geom::contains(&b, p) => -1.0,
+        Some(b) => (0..4)
+            .map(|k| geom::distance_to_segment(p, b[k], b[(k + 1) % 4]))
+            .fold(f64::MAX, f64::min),
+        None => (p - (front + back) * 0.5).length() * -1e-3,
+    };
+    let at = (3..=17)
+        .map(|t| front.lerp(back, t as f64 * 0.05))
+        .fold((DVec2::ZERO, f64::MIN), |best, p| {
+            let c = clearance(p);
+            if c > best.1 { (p, c) } else { best }
+        })
+        .0;
+    let mut storeys: Vec<usize> = interior.rooms.iter().map(|r| r.storey).collect();
+    storeys.sort_unstable();
+    storeys.dedup();
+    for k in storeys {
+        out.push(HomeLamp {
+            kind: LampKind::Ceiling,
+            storey: k,
+            at,
+            height: clear(k) - GLOBE - 0.03,
+            radius: GLOBE,
+            facing: DVec2::ZERO,
+            room: None,
+            candela: candela(500.0),
+            kelvin: 3000.0,
+        });
+    }
+    // The sconces: on the wall the piece's back stands against (2 cm off its room's outline),
+    // 10 cm out from it, over its middle.
+    for p in pieces {
+        let (lumens, kelvin, height) = match p.piece {
+            Piece::Bed | Piece::SingleBed => (250.0, 2400.0, 1.15),
+            Piece::Sofa => (400.0, 2700.0, 1.45),
+            _ => continue,
+        };
+        let Some(i) = room_of(p.storey, p.centre) else {
+            continue;
+        };
+        let outline = &interior.rooms[i].outline;
+        let back = p.centre - p.facing * (p.piece.size().1 * 0.5);
+        let to_wall = (0..4)
+            .map(|k| geom::distance_to_segment(back, outline[k], outline[(k + 1) % 4]))
+            .fold(f64::MAX, f64::min);
+        if to_wall > 0.08 {
+            continue;
+        }
+        out.push(HomeLamp {
+            kind: LampKind::Sconce,
+            storey: p.storey,
+            at: back + p.facing * 0.1,
+            height,
+            radius: SCONCE_GLOBE,
+            facing: p.facing,
+            room: Some(i),
+            candela: candela(lumens),
+            kelvin,
+        });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -580,5 +727,73 @@ mod tests {
             toilets * 10 >= baths * 9,
             "{toilets} toilets for {baths} bathrooms"
         );
+    }
+
+    #[test]
+    fn the_village_homes_lamps_hang_in_their_rooms_over_heads_and_clear_of_the_flight() {
+        let v = village::village(&example::site(600.0, 10.0), &village::params(600.0), 1);
+        let structures = structure::structures(&v.plan, &v.masses);
+        let (mut rooms, mut pendants, mut halls, mut sconces, mut beds) = (0, 0, 0, 0, 0);
+        for (m, s) in v.masses.iter().zip(&structures) {
+            let Some(inner) = interior::house(m, s) else {
+                continue;
+            };
+            let pieces = crate::city::walk::furnished(m, s, &inner);
+            beds += pieces
+                .iter()
+                .filter(|p| matches!(p.piece, Piece::Bed | Piece::SingleBed))
+                .count();
+            rooms += inner.rooms.len();
+            for l in lamps(s, &inner, &pieces) {
+                let clear = s.storeys[l.storey].clear();
+                assert!(
+                    l.height + l.radius < clear - 0.02,
+                    "a {:?} in the ceiling",
+                    l.kind
+                );
+                assert!(
+                    l.candela > 15.0 && l.candela < 200.0,
+                    "a {:?} of {} cd",
+                    l.kind,
+                    l.candela
+                );
+                match l.room {
+                    Some(i) => {
+                        let r = &inner.rooms[i];
+                        assert_eq!(r.storey, l.storey);
+                        assert!(
+                            geom::contains(&r.outline, l.at),
+                            "a {:?} out of its room",
+                            l.kind
+                        );
+                    }
+                    None => {
+                        assert!(
+                            geom::contains(&inner.hall, l.at),
+                            "the hall's light out of it"
+                        );
+                        if let Some(b) = inner.stair {
+                            assert!(
+                                !geom::contains(&b, l.at),
+                                "the hall's light over the flight"
+                            );
+                        }
+                    }
+                }
+                match l.kind {
+                    LampKind::Pendant => {
+                        pendants += 1;
+                        // Over a walker's head and a doorway's, unless the ceiling is lower.
+                        assert!(l.height >= PENDANT_LOWEST.min(clear - 0.1) - 1e-9);
+                    }
+                    LampKind::Ceiling => halls += 1,
+                    LampKind::Sconce => sconces += 1,
+                }
+            }
+        }
+        println!("{pendants} pendants, {halls} hall lights, {sconces} sconces ({beds} beds)");
+        assert_eq!(pendants, rooms, "a pendant a room");
+        assert!(halls > 0);
+        assert!(sconces * 2 >= beds, "{sconces} sconces for {beds} beds");
     }
 }

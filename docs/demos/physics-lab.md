@@ -2051,28 +2051,31 @@ the night sky, lit by three lamps.*
 - *A lamp in the back left corner, its hot spot where the walls meet: 3000 K, 60 cd.*
 - *A dim one by the board, which lights its right edge: 2200 K, 25 cd.*
 
-*The bulbs themselves are not drawn yet. Without white balance, 2700 K reads orange.*
+*The bulbs themselves are not drawn here (the village's lamps have globes). The lamps' colours are
+balanced for 3 200 K, as a camera set for tungsten light sees them: warm, not orange.*
 
-Step 1 of D-065 (`forge_render::lamps`, `lamps_at` in `meshlet.slang`).
+Steps 1 and 3 of D-065 (`forge_render::lamps`, `lamps_at` and `hit_lamps` in `meshlet.slang`).
 - **The lamps:** a scene gives its lamps each frame through `Running::lamps`: small spheres in
-  candelas and kelvin. The 64 nearest whose light reaches the camera are kept, a lamp reaching
-  where its light falls to 0.05 lux.
-- **The shading:** every pixel takes every lamp in reach.
+  candelas and kelvin, in the world frame. The 64 nearest whose light reaches the camera are kept,
+  a lamp reaching where its light falls to 0.05 lux.
+- **The shading:** a pixel takes the three lamps with the most light there, and one of the
+  others picked by its light (here there are only three).
   - The light is its candelas over the distance squared, by the cosine.
-  - One shadow ray goes towards a point of its sphere that moves with the frame's noise, so TAA or
-    DLAA averages the penumbra.
+  - One shadow ray goes towards a point of its sphere, one of the sun's eight Vogel points a
+    frame, so TAA or DLAA averages the penumbra.
   - The lamps give highlights as the sun does. Every class takes them where it takes the sun's
     light.
-- **Not yet:** no bounce, since the probes do not see the lamps: a face turned away from every
-  lamp is black.
+- **The bounce:** each probe ray's hit takes one lamp, picked by its light, with a shadow ray. The
+  walls send the lamps' light back, and a face turned away from every lamp is no longer black.
 
 **Checks:**
 - **Determinism:** two runs at once are identical, and the mesh path matches the fallback.
 - **Shimmer, a still camera's frames 10 apart:**
-  - under TAA, 0.21 % of the pixels differ by more than 2 codes;
-  - under DLAA, 0.0094 % (the room unlit: 0.0102 %).
+  - under TAA, 0.05 to 0.10 % of the pixels differ by more than 2 codes (0.21 % with step 1's
+    independent sphere points);
+  - under DLAA, 0.0003 to 0.011 % (the room unlit: 0.0102 %).
 - **Cost:** three lamps over the whole view, three rays a pixel, take `shading/standard` from 0.16
-  to 0.48 ms (the frame 0.84 → 1.58 ms).
+  to 0.52 ms (the frame 0.84 → 1.61 ms).
 
 ## Captures
 

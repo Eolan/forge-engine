@@ -210,6 +210,10 @@ pub struct RenderLayer {
     /// probe's ray from a room passes it when it meets its back, as the view from the room does
     /// (D-068). For obscured glass, which shows no room.
     pub glazed: bool,
+    /// A lamp's glowing part (D-065): the lamp's light reaches the scene as a lamp
+    /// (`forge_render::lamps`), so a probe's ray that meets it takes none of its glow, which
+    /// would count the light twice and, met by one ray in hundreds, flicker.
+    pub lamp: bool,
     /// Standard: a grating of upright bars drawn on one card, its bars this share of their
     /// spacing wide and as deep (a railing's square bars): the mesh's `u` counts the bars, one a
     /// unit, the first at 1. Drawn double-sided as a cut-out: the share of each pixel the bars
@@ -320,6 +324,7 @@ impl Default for RenderLayer {
             interior: false,
             shop: false,
             glazed: false,
+            lamp: false,
             grating: None,
             reflectance: 0.04,
             bubbles: 0.0,

@@ -132,6 +132,10 @@ pub const MATERIAL_FOLIAGE: u32 = 1024;
 /// ([`forge_core::material::RenderLayer::glazed`], or `interior`; D-068).
 pub const MATERIAL_GLAZED: u32 = 2048;
 
+/// [`GpuMaterial`] flag: a lamp's glowing part ([`forge_core::material::RenderLayer::lamp`],
+/// D-065): the probes' rays take none of its glow.
+pub const MATERIAL_LAMP: u32 = 4096;
+
 /// The textures a world's materials sample, uploaded with their mips and visible to every
 /// shader through the bindless set. Released when dropped.
 pub struct TextureSet {
@@ -489,6 +493,7 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
                     } else {
                         0
                     }
+                    | if r.lamp { MATERIAL_LAMP } else { 0 }
                     | if r.grating.is_some() {
                         MATERIAL_GRATING | MATERIAL_MASKED | MATERIAL_DOUBLE_SIDED
                     } else {

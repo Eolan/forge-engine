@@ -460,6 +460,10 @@ pub struct Args {
     /// No particles (D-064): the scene's smoke, dust and embers.
     #[arg(long)]
     no_particles: bool,
+    /// No lamps (D-065): the scene's lamps light nothing, their globes still glow (the A/B for
+    /// their light).
+    #[arg(long)]
+    no_lamps: bool,
     /// Draw the spray without the reactive mask, so TAA keeps its history there (the mask's
     /// A/B, #107).
     #[arg(long, hide = true)]
@@ -2003,7 +2007,20 @@ impl Demo for Gallery {
             self.scene.set_movers_still(&movers, |k| Some(k) == still);
         }
         // The scene's lamps (D-065), the nearest that reach the camera, for this frame.
-        let lamps = self.running.as_mut().map(|r| r.lamps()).unwrap_or_default();
+        let origin = self.scene.origin();
+        let lamps: Vec<_> = self
+            .running
+            .as_mut()
+            .filter(|_| !self.args.no_lamps)
+            .map(|r| r.lamps())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|l| forge_render::lamps::Lamp {
+                position: forge_render::CellPos::from_f64(l.position.as_dvec3())
+                    .relative_to(origin),
+                ..l
+            })
+            .collect();
         self.scene.set_lamps(frame.slot, &lamps, camera_in_scene);
         // The scene's movers (#216): the lab's bodies between their last two ticks (#136).
         if let Some(running) = &mut self.running {

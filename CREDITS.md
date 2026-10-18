@@ -435,13 +435,21 @@ soft edges, their pixel-wide minimum, their reactive mask and their hash:
   Technologies' "Realistic smoke lighting with 6-way lighting in VFX Graph", January 2023, and
   is used in games under several names. The frames and the code are our own.
 
-**Lamps** (`forge_render::lamps`, D-065 step 1, #270):
+**Lamps** (`forge_render::lamps`, D-065 steps 1–3, #270):
 - **A bulb's colour from its temperature:** Tanner Helland's fit of the blackbody locus in sRGB,
   "How to Convert Temperature (K) to RGB", 2012
   (<https://tannerhelland.com/2012/09/18/convert-temperature-rgb-algorithm-code.html>),
-  decoded to linear and scaled to luminance 1.
+  decoded to linear and scaled to luminance 1. The colours are then balanced for 3 200 K by
+  dividing by that temperature's colour, a von Kries-style white balance.
 - **Soft shadows from one ray a frame**, a point of the light's disc that moves with the frame's
   noise and TAA's average, as the sun's (#54).
+- **One light picked by its unshadowed contribution**, its light divided by its chance: Peter
+  Shirley, Changyaw Wang, Kurt Zimmerman, "Monte Carlo Techniques for Direct Lighting
+  Calculations", *ACM Transactions on Graphics* 15(1), 1996. For the lamps beyond a pixel's
+  three strongest and for the probes' rays.
+- **Lights listed per region of space:** after Ola Olsson, Markus Billeter, Ulf Assarsson,
+  "Clustered Deferred and Forward Shading", HPG 2012. Here a house's rooms (the probes' regions,
+  D-068) are the clusters.
 
 **City plans** (`forge_procgen::city`, D-059):
 - **Streets from a tensor field.** Guoning Chen, Gregory Esch, Peter Wonka, Pascal Müller,

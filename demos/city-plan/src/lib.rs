@@ -354,6 +354,8 @@ pub struct PlanScenario {
     cooked: Option<Vec<(MeshletMesh, f32, f32)>>,
     /// The houses' rooms for the probes (D-068, [`probe_regions`]), in the world frame.
     regions: Vec<forge_render::RegionVolume>,
+    /// The houses' lamps that are on (D-065, [`home_lamps`]), in the world frame.
+    home_lamps: Vec<forge_render::lamps::Lamp>,
 }
 
 /// Buildings drawn from a style set's grammar and kit (D-039's modules) within `radius` of
@@ -711,11 +713,13 @@ impl PlanScenario {
             );
         }
         laps.mark("masses");
-        let kit = detail.map(|d| {
-            // The residents at home and awake at the hour light their own windows.
-            let residents = d.lit_hour.map(|h| {
+        // The residents at home and awake at the hour light their own windows, and their lamps.
+        let residents = detail.and_then(|d| {
+            d.lit_hour.map(|h| {
                 residents::Residents::new(plan, masses, &structures, &holds, &d.mix, h, &near)
-            });
+            })
+        });
+        let kit = detail.map(|d| {
             kit(
                 &mut tiles,
                 masses,
@@ -735,12 +739,20 @@ impl PlanScenario {
         } else {
             0
         };
-        // And the probes' regions (D-068), where the insides are drawn.
-        let regions = if detail.is_some() {
+        // And the probes' regions (D-068), where the insides are drawn, and their lamps (D-065).
+        let (regions, halls) = if detail.is_some() {
             probe_regions(size, masses, &structures, &near)
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new())
         };
+        let home_lamps = home_lamps(
+            size,
+            masses,
+            &structures,
+            &halls,
+            &regions,
+            residents.as_ref(),
+        );
         laps.mark("insides");
         // The passages into the courts (D-060), and where to look into one: 10 m out on the
         // street before the kit's first, for the log once the app logs.
@@ -1489,6 +1501,45 @@ impl PlanScenario {
                 kit_instances.extend(at.into_iter().map(|at| (id, at, 0)));
             }
         }
+        // Their lamps (D-065 step 2): a globe on its cord, stem or arm, a mesh for each kind and
+        // reach (to the millimetre), glowing where its household has it on.
+        // Per kind, globe and reach in millimetres: each one's place and whether it is on.
+        type Globes<'a> = std::collections::BTreeMap<(&'a str, u32, u32), Vec<(Mat4, bool)>>;
+        let mut globes = Globes::default();
+        for l in &home_lamps {
+            let name = match l.kind {
+                furnish::LampKind::Pendant => "pendant",
+                furnish::LampKind::Ceiling => "ceiling",
+                furnish::LampKind::Sconce => "sconce",
+            };
+            let mm = |v: f32| (v * 1000.0).round() as u32;
+            globes
+                .entry((name, mm(l.lamp.radius), mm(l.reach)))
+                .or_default()
+                .push((
+                    Mat4::from_rotation_translation(
+                        glam::Quat::from_rotation_y(l.turn),
+                        l.lamp.position,
+                    ),
+                    l.on,
+                ));
+        }
+        for ((name, radius, reach), at) in globes {
+            let (radius, reach) = (radius as f32 / 1000.0, reach as f32 / 1000.0);
+            if let Some(mesh) = forge_geom::furniture::lamp(name, radius, reach) {
+                kit_meshes.push(mesh);
+                let id = (kit_meshes.len() - 1) as u32;
+                kit_instances.extend(
+                    at.into_iter()
+                        .map(|(at, on)| (id, at, if on { LAMP_GROUP } else { LAMP_OFF_GROUP })),
+                );
+            }
+        }
+        let home_lamps: Vec<forge_render::lamps::Lamp> =
+            home_lamps.iter().filter(|l| l.on).map(|l| l.lamp).collect();
+        if !home_lamps.is_empty() {
+            eprintln!("the houses' lamps: {} on", home_lamps.len());
+        }
         // Chess tables round the fountain of each square of 0.15 ha or more without a landmark,
         // four 9 m from its middle on the diagonals, where they stand clear of the trunks and the
         // benches and inside the building lines; their players sit as the terraces' guests do,
@@ -1810,6 +1861,7 @@ impl PlanScenario {
         );
         Self {
             regions,
+            home_lamps,
             tiles: tiles.tiles,
             trees,
             flora,
@@ -1974,6 +2026,9 @@ const HALL_GROUP: u8 = 8;
 const CRANE_GROUP: u8 = 9;
 /// The fingerposts' material group.
 const SIGN_GROUP: u8 = 10;
+/// The houses' lamps' groups (D-065): their globes lit, and unlit.
+const LAMP_GROUP: u8 = 11;
+const LAMP_OFF_GROUP: u8 = 12;
 /// The kit's key for a terrace's mesh (no grammar symbol is this high).
 const TERRACE: u16 = u16::MAX;
 /// How far each of a line's two tracks lies from its centreline, metres.
@@ -2853,15 +2908,18 @@ const OVERRUN: f64 = 1.2;
 /// from one side's region to the other's (outside, 0), and each window's inner reveal, from the
 /// glass to the room, its room's. A probe then lights only its own region's surfaces: a thin
 /// partition passed a sunlit room's light, and a sunlit probe outside lit a window's head.
+/// With them, each house's (its index into `masses`) hall's region: its rooms' follow, in
+/// the interior's order.
 fn probe_regions(
     size: f64,
     masses: &[Mass],
     structures: &[Structure],
     near: &[usize],
-) -> Vec<forge_render::RegionVolume> {
+) -> (Vec<forge_render::RegionVolume>, Vec<(usize, u32)>) {
     use forge_render::{RegionKind, RegionVolume};
     let mut out = Vec::new();
     let mut next = 1u32;
+    let mut halls = Vec::new();
     for &i in near {
         let (m, s) = (&masses[i], &structures[i]);
         let Some(inner) = interior::house(m, s) else {
@@ -2896,6 +2954,7 @@ fn probe_regions(
             });
         }
         let hall = next;
+        halls.push((i, hall));
         next += 1;
         out.push(RegionVolume {
             corners: inner.hall.map(corner),
@@ -2983,6 +3042,114 @@ fn probe_regions(
                 }),
                 OpeningKind::Passage => {}
             }
+        }
+    }
+    (out, halls)
+}
+
+/// A house's lamp as the scene has it (D-065 step 2, #270): the renderer's lamp in the world
+/// frame, whether its household has it on, and what draws it.
+#[derive(Clone, Copy, Debug)]
+struct PlacedLamp {
+    lamp: forge_render::lamps::Lamp,
+    on: bool,
+    kind: furnish::LampKind,
+    /// A sconce's turn about y (its arm back towards −z); 0 for the others.
+    turn: f32,
+    /// How far its fitting reaches from the globe's middle: up to the ceiling, or back to the
+    /// wall.
+    reach: f32,
+}
+
+/// The lamps of the houses `halls` names ([`probe_regions`]: each house and its hall's region)
+/// among their furniture ([`furnish::lamps`]), each lighting its room's region and those its
+/// storey's doorways open into, the street's left out (`regions`'s doorways; D-068); on where
+/// the household is home and awake and has the room lit ([`residents::Residents::lit`], the
+/// faked windows' rule), its sconces in one room lit in two, the hall's light where a room of
+/// its storey is lit. All off without `residents`.
+fn home_lamps(
+    size: f64,
+    masses: &[Mass],
+    structures: &[Structure],
+    halls: &[(usize, u32)],
+    regions: &[forge_render::RegionVolume],
+    residents: Option<&residents::Residents>,
+) -> Vec<PlacedLamp> {
+    use forge_render::lamps::{LAMP_REGIONS, Lamp, NO_REGION};
+    let mut out = Vec::new();
+    for &(i, hall) in halls {
+        let (m, s) = (&masses[i], &structures[i]);
+        let Some(inner) = interior::house(m, s) else {
+            continue;
+        };
+        let pieces = forge_procgen::city::walk::furnished(m, s, &inner);
+        let region_of = |room: Option<usize>| room.map_or(hall, |r| hall + 1 + r as u32);
+        // Whether room `r` of the house is lit: its window's rule, its own draw.
+        let lit = |r: usize| {
+            let room = &inner.rooms[r];
+            let middle = geom::centroid(&room.outline);
+            let unit = residents::unit_at(s, room.storey, middle);
+            let spot = mix((i as u64) << 20 | r as u64);
+            residents
+                .and_then(|res| res.lit(s, unit, spot))
+                .unwrap_or(false)
+        };
+        let rooms_lit: Vec<bool> = (0..inner.rooms.len()).map(lit).collect();
+        for l in furnish::lamps(s, &inner, &pieces) {
+            let own = region_of(l.room);
+            // Its regions: its own, then those across its storey's doorways (not the street).
+            let level = floor_level(s, l.storey) as f32;
+            let mut lights = vec![own];
+            for v in regions {
+                if v.kind != forge_render::RegionKind::Doorway
+                    || (v.floor + 0.1 - level).abs() > 0.3
+                {
+                    continue;
+                }
+                let across = if v.region == own {
+                    v.other
+                } else if v.other == own {
+                    v.region
+                } else {
+                    continue;
+                };
+                if across != 0 && !lights.contains(&across) {
+                    lights.push(across);
+                }
+            }
+            let mut slots = [NO_REGION; LAMP_REGIONS];
+            for (slot, r) in slots.iter_mut().zip(&lights) {
+                *slot = *r;
+            }
+            let on = match (l.kind, l.room) {
+                (furnish::LampKind::Sconce, Some(r)) => {
+                    rooms_lit[r] && mix((i as u64) << 20 | r as u64 | 1 << 19).is_multiple_of(2)
+                }
+                (_, Some(r)) => rooms_lit[r],
+                (_, None) => inner
+                    .rooms
+                    .iter()
+                    .zip(&rooms_lit)
+                    .any(|(room, &on)| on && room.storey == l.storey),
+            };
+            let clear = s.storeys[l.storey].clear();
+            let (turn, reach) = match l.kind {
+                furnish::LampKind::Sconce => ((l.facing.x as f32).atan2(l.facing.y as f32), 0.1),
+                _ => (0.0, (clear - l.height) as f32),
+            };
+            out.push(PlacedLamp {
+                lamp: Lamp {
+                    position: world(size, l.at, f64::from(level) + l.height),
+                    radius: l.radius as f32,
+                    candela: l.candela as f32,
+                    kelvin: l.kelvin as f32,
+                    regions: slots,
+                },
+                on,
+                kind: l.kind,
+                turn,
+                reach,
+            });
         }
     }
     out
@@ -5692,6 +5859,45 @@ impl Scenario for PlanScenario {
             ],
         );
         kit_rows.push(materials.of("plan-kit-sign"));
+        // The houses' lamps (D-065): frosted globes of about 2 000 cd/m² at 2 700 K where lit (a
+        // 60 cd bulb behind a globe 9 cm in radius), and their brass fittings. A lamp's light
+        // reaches the rooms as a lamp, so the probes' rays take none of the globe's glow.
+        for (group, lit) in [("plan-kit-lamp", true), ("plan-kit-lamp-off", false)] {
+            let globe = 2000.0;
+            materials.add_rows(
+                group,
+                vec![
+                    (format!("{group} render"), render([0.94, 0.88, 0.76])),
+                    (format!("{group} stone"), stone),
+                    (
+                        format!("{group} frame"),
+                        colour([0.35, 0.26, 0.12], 60.0, 0.3),
+                    ),
+                    (
+                        format!("{group} globe"),
+                        RenderLayer {
+                            emissive: if lit {
+                                [globe, globe * 0.78, globe * 0.55]
+                            } else {
+                                [0.0; 3]
+                            },
+                            emissive_absolute: true,
+                            lamp: true,
+                            ..colour([0.86, 0.85, 0.82], 20.0, 0.05)
+                        },
+                    ),
+                    (
+                        format!("{group} paint"),
+                        colour([0.35, 0.26, 0.12], 60.0, 0.3),
+                    ),
+                    (
+                        format!("{group} brass"),
+                        colour([0.35, 0.26, 0.12], 60.0, 0.3),
+                    ),
+                ],
+            );
+            kit_rows.push(materials.of(group));
+        }
         // The trams' liveries: white bodies, dark glass, the line's colour as the stripe.
         let linear = |c: u8| (f32::from(c) / 255.0).powf(2.2);
         for (k, &group) in TRAM_GROUPS.iter().enumerate() {
@@ -6169,6 +6375,7 @@ impl Scenario for PlanScenario {
                 size: self.size,
                 origin: scene_origin(args).to_f64().as_vec3(),
                 regions: std::mem::take(&mut self.regions),
+                home_lamps: std::mem::take(&mut self.home_lamps),
             }),
         ))
     }
@@ -6204,6 +6411,8 @@ struct PlanRunning {
     screens: Vec<StopScreen>,
     /// The houses' rooms for the probes (D-068), in the world frame.
     regions: Vec<forge_render::RegionVolume>,
+    /// The houses' lamps that are on (D-065), in the world frame.
+    home_lamps: Vec<forge_render::lamps::Lamp>,
 }
 
 /// A ride aboard a tram ([`PlanRunning::toggle_ride`]).
@@ -6291,6 +6500,10 @@ impl PlanRunning {
 impl Running for PlanRunning {
     fn probe_regions(&self) -> Vec<forge_render::RegionVolume> {
         self.regions.clone()
+    }
+
+    fn lamps(&mut self) -> Vec<forge_render::lamps::Lamp> {
+        self.home_lamps.clone()
     }
 
     fn key_pressed(&mut self, code: KeyCode, camera: &FlyCamera) -> bool {
@@ -7951,7 +8164,7 @@ mod tests {
         );
         let structures = structure::structures(&v.plan, &v.masses);
         let near: Vec<usize> = (0..v.masses.len()).collect();
-        let volumes = probe_regions(size, &v.masses, &structures, &near);
+        let (volumes, _) = probe_regions(size, &v.masses, &structures, &near);
         let middle = |r: &forge_render::RegionVolume, y: f32| {
             let c = r.corners.iter().fold(glam::Vec2::ZERO, |s, &c| s + c) * 0.25;
             glam::Vec3::new(c.x, y, c.y)
