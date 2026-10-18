@@ -45,10 +45,16 @@ cargo run --release -q -p credits -- --check
 - **Gate only:** docs, reports and Markdown.
 - **Tier 0, every other change whose paths `tools/impact.toml` maps:** the sentinels and the
   captures those paths select, compared with the last accepted set (`captures/accepted/`).
-- **Tier 1, shared rendering or any unmapped path:** the full batch on both paths and
-  validation.
-- **Tier 2, a milestone** (every ~5 commits, before a showcase; `--tier 2`): Tier 1, the batch
-  with `FORGE_ASYNC=0`, `tools/origins.sh`, and the real-time tour for the owner.
+- **The day check, shared rendering or any unmapped path** (D-071): the sentinels (every
+  demo) and the sets the mapped paths select, on both paths, with the sentinels' validation.
+  Push when it passes.
+- **Tier 1, at night** (`tools/night.sh`, a scheduled task at 00:30): the full batch on both
+  paths and validation, on what was pushed that day. `--tier 1` runs it by hand.
+- **Tier 2, a milestone** (every ~5 commits, the night check runs it when due; before a
+  showcase; `--tier 2`): Tier 1, the batch with `FORGE_ASYNC=0`, `tools/origins.sh`, and the
+  real-time tour for the owner.
+- **Each morning,** read `captures/night/latest.txt` first. A failed night is fixed before new
+  work.
 
 For a while (D-059, 10), the city sandbox's checks and its "day in the city" flight are the
 regression check. The gate stays on every push, and the demos' captures run when a change

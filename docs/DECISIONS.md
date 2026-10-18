@@ -5502,6 +5502,66 @@ sharpening, and the lamp filter's flicker under TAA. The last two run-to-run fla
   - Streamline's first request to NGX, 0.46 s;
   - NGX loading DLSS at device creation, 0.56 s.
   Both happen in every process, so the remaining cost is per run.
+- **Tier 1 went from 50 minutes to 25** (5c74499c). The full batch then moved to the night
+  (D-071).
 
-**Next:** every demo's captures and defaults under DLAA, with one way to ask for it (`r.aa`,
-D-069); the re-baseline guard; FSR 3.1.
+**FSR 3.1: the patents, and the owner's choice (2026-10-18):**
+- **The version:** FSR 3.1.4, from AMD's FidelityFX SDK v1.1.4 (MIT), in the ignored
+  `fidelityfx-sdk/`. It is the last SDK with a Vulkan backend: the FSR SDK 2.x says Vulkan is not
+  supported.
+- **The patent check found two families that read on it:**
+  - **AMD:** US 12,293,485 B2 and US 12,493,990 B2, granted in 2025 and live until about 2043.
+    Their EP applications are pending, and the JP patents are granted. Their claim 1 covers the
+    thin-feature "locks", which FSR 3.1.4 still creates (`prepare_reactivity`) and uses
+    (`accumulate`).
+  - **NVIDIA:** US 10,116,916 B2 and US 10,362,289 B2, US only, live until about 2037. They
+    cover clipping the history to a box made from the neighbourhood's mean and standard
+    deviation, which FSR does. So does Forge's own TAA, until FSR replaces it.
+- **The licences:** the MIT licence never says "patent", and AMD has no pledge. French law
+  (CPI L613-8) wants a patent licence in writing. Godot ships FSR 2.2 as native AA.
+- **What was clear:** RCAS, the masks and luma instability have no patent of their own. Sony's
+  foveated temporal supersampling patents are still open: their granted claims were not read.
+- **The owner's choice:** AMD's shaders as published, locks included: AMD's own code is the
+  closest Forge can stay to its grant. Only the history's box changes, to a min/max
+  neighbourhood clamp (Karis 2014, older than NVIDIA's priority date). The swap is a small
+  patch of AMD's header, kept in Forge, and its effect on ghosting and shimmer is measured.
+
+**Next:** FSR 3.1, built on its shaders through a Forge bridge (as RTXDI is, D-065), then TAA's
+resolve and sharpening removed.
+
+## D-071 — The day check and the night's full batch ✅ (2026-10-18, #286, the owner's choice)
+
+Under DLAA (D-070) a Tier 1 took 50 minutes, and 25 after the Streamline fix. Every push of a
+shared change (`forge-gpu`, the render graph, a shared shader, `Cargo.lock`, the scripts) waited
+for it. The owner asked whether the tiers could run at night. Of three ways (nights with a short
+day check; nights plus a one-process capture mode; Tier 1 before every push, made faster), they
+chose the first: "Nights + short day check".
+
+**Decided:**
+- **By day,** a shared change gets the day check (`tools/verify.sh` picks it, Tier 0):
+  - the gate;
+  - the sentinels, now one or more captures of every demo (D-043's ten, and since D-071 the
+    island's `shot-island`, the lab's `lab-materials60` and the planet's `planet-ground`);
+  - the sets the mapped paths select;
+  - all on both paths, with the sentinels' validation.
+  It takes a few minutes, and the change is pushed when it passes.
+- **At night,** a Windows scheduled task ("Forge night check", 00:30, run when missed) starts
+  `tools/night.sh`, which:
+  - checks out `origin/main` in its own worktree (`../forge-night`), whose ignored SDK and
+    asset folders are junctions to the main checkout's;
+  - runs Tier 1 on what was pushed, or Tier 2 when a milestone is due;
+  - keeps the accepted sets in the main checkout's `captures/accepted/`.
+  `captures/night/latest.txt` holds the verdict.
+- **The morning's first session** reads `latest.txt`. A failed night is fixed before new work:
+  - find the commit with `--base`;
+  - fix it, or, when images moved on purpose, rerun `--tier 1 --expect ...`.
+- **Unchanged:** mapped changes keep their Tier 0, and the map check (D-062) runs by day after a
+  change to the village. `--tier 1` and `--tier 2` still run by hand, before a showcase.
+
+**The cost:** a regression that only the full batch sees reaches `main` for up to a day before
+the night finds it. The night narrows it to the day's commits.
+
+**Not done, kept for later:** one process making many captures, the scenes changed inside it
+(the lab first, 72 of 108 captures a path). It would save about 2 s a capture, but every reset
+must leave nothing behind (DLSS's history, probes, exposure, counters, pools), proved by 0 px
+against fresh runs.

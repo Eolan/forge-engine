@@ -16,9 +16,10 @@
 # Part of the batch (issue #134; tools/verify.sh picks them from tools/impact.toml):
 #   FORGE_SETS   the sets to capture, separated by spaces or commas (default all): sentinels
 #                (static60 orbit120 noocc120 ast-notaa600 ast240 ast240-noocc ast-hdr600 city60
-#                city60-noocc gallery60), meshlets, ballad, city, island (the city's island and
-#                the island demo's shots), lab (the physics lab's scenes), all. The images keep
-#                their names.
+#                city60-noocc gallery60 shot-island lab-materials60 planet-ground: every demo,
+#                the day check of a shared change, D-071), meshlets, ballad, city, island (the
+#                city's island and the island demo's shots), lab (the physics lab's scenes),
+#                all. The images keep their names.
 #   FORGE_PATHS  the paths, mesh and fb (default both).
 #   FORGE_RECOOK 1: make the cached meshes again. The props are cached in BIN's tree
 #                (cache/meshes/) by their parameters' text, not the code that makes them: a
@@ -113,8 +114,11 @@ sets_of() {
     ast*) echo ballad ;;
     city60 | city60-noocc | gallery60) echo city sentinels ;;
     city*) echo city ;;
+    shot-island) echo island sentinels ;;
     island* | water* | clouds* | shot-*) echo island ;;
+    lab-materials60) echo lab sentinels ;;
     lab-*) echo lab ;;
+    planet-ground) echo planet sentinels ;;
     planet-*) echo planet ;;
   esac
 }

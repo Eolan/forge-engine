@@ -21,9 +21,11 @@
 #         credits check only.
 #   0     every changed path is mapped: the gate, the sentinels and the sets the paths select, on
 #         the mesh path; with GPU code or shaders also the fallback and their validation.
-#   1     a path is not mapped (shared rendering, Cargo.lock, the toolchain, ...), or there is no
-#         accepted set: the full batch on both paths, validation, and the timings when
-#         --timings gives a baseline build.
+#         A path that is not mapped (shared rendering, Cargo.lock, the toolchain, ...) is the
+#         day check of D-071: the sentinels (one or more captures of every demo) on both paths,
+#         and their validation; tools/night.sh runs the full batch that night.
+#   1     asked for with --tier 1 (tools/night.sh), or there is no accepted set: the full batch
+#         on both paths, validation, and the timings when --timings gives a baseline build.
 #   2     a milestone, asked for with --tier 2: Tier 1, plus the batch again with FORGE_ASYNC=0
 #         (it must match), tools/origins.sh, and the real-time tour for the owner to watch.
 #
@@ -331,7 +333,7 @@ rm -f "${TMPDIR:-/tmp}/verify-paths.$$"
 # The working tree's own changes, which the build includes whatever --committed says.
 mapfile -t dirty < <({ git diff --name-only --no-renames HEAD; git ls-files --others --exclude-standard; } | sort -u)
 
-unmapped=() selected=" " recook=0 gpu=0 by_rule=()
+unmapped=() selected=" " recook=0 gpu=0 by_rule=() shared=0
 for path in "${changed[@]}"; do
   classify "$path"
   if [ "$rule" -lt 0 ]; then
@@ -367,9 +369,13 @@ elif [ -z "$base" ]; then
   tier=1
   why="no accepted set in HEAD's history ($accepted_dir): the full batch makes the first"
 elif [ ${#unmapped[@]} -gt 0 ]; then
-  tier=1
+  # D-071: by day a shared change gets the sentinels on both paths; tools/night.sh runs the
+  # full batch on everything pushed that day.
+  tier=0
+  shared=1
   why="${#unmapped[@]} changed paths are not in tools/impact.toml (shared): ${unmapped[*]:0:8}"
   [ ${#unmapped[@]} -gt 8 ] && why="$why ..."
+  why="$why; the sentinels on both paths now, the full batch tonight (D-071)"
 elif [ ${#changed[@]} -eq 0 ]; then
   tier=gate
   why="nothing changed since $(git rev-parse --short "$base")"
@@ -402,7 +408,7 @@ case $tier in
   0)
     sets="sentinels${selected:+ $selected}"
     paths=mesh
-    [ $gpu = 1 ] && paths="mesh fb"
+    [ $gpu = 1 ] || [ $shared = 1 ] && paths="mesh fb"
     ;;
   *) sets=all paths="mesh fb" ;;
 esac
@@ -410,7 +416,9 @@ esac
 # lab models, first captured under DLAA where the assets were).
 [ "$tier" = 0 ] && [ -n "${FORGE_PATHS:-}" ] && paths=$FORGE_PATHS
 validate_sets=""
-if [ "$tier" = 0 ] && [ $gpu = 1 ]; then
+if [ "$tier" = 0 ] && [ $shared = 1 ]; then
+  validate_sets="sentinels${selected:+ $selected}"
+elif [ "$tier" = 0 ] && [ $gpu = 1 ]; then
   validate_sets=$selected
 elif [ "$tier" = 1 ] || [ "$tier" = 2 ]; then
   validate_sets=all

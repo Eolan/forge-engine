@@ -68,8 +68,28 @@ runs it:
 |---|---|---|
 | gate | Every changed path maps to no capture: `docs/`, `reports/`, Markdown, `tools/credits/` | fmt, clippy `-D warnings`, the tests, the credits check |
 | 0 | Every changed path is mapped in `tools/impact.toml` | The gate, the sentinels and the sets the paths select, on the mesh path. `--recook` when `forge-procgen` or `forge-geom` changed. With GPU code or shaders (`forge-render`, `shaders/`), also the fallback and the validation of those sets |
-| 1 | A path is not mapped: `forge-gpu`, `forge-app`, the render graph, a shared pass or shader, `Cargo.lock`, the toolchain, the scripts. Or no accepted set yet | The full batch on both paths, validation, and the timings with `--timings BASE_BIN` |
-| 2 | A milestone: every ~5 commits, before a showcase, when a system closes (`--tier 2`) | Tier 1, the batch again with `FORGE_ASYNC=0` (it must match), `tools/origins.sh`, and the real-time tour for the owner to watch |
+| 0, the day check (D-071) | A path is not mapped: `forge-gpu`, `forge-app`, the render graph, a shared pass or shader, `Cargo.lock`, the toolchain, the scripts | The gate, the sentinels and the sets the mapped paths select, on both paths, with the sentinels' validation. The full batch runs that night |
+| 1 | The night check (`tools/night.sh`), `--tier 1`, or no accepted set yet | The full batch on both paths, validation, and the timings with `--timings BASE_BIN` |
+| 2 | A milestone: every ~5 commits (the night check runs it when due), before a showcase, when a system closes (`--tier 2`) | Tier 1, the batch again with `FORGE_ASYNC=0` (it must match), `tools/origins.sh`, and the real-time tour for the owner to watch |
+
+**The night check** (D-071, the owner's choice of 2026-10-18): the full batch moved out of
+the day. Under DLAA (D-070) a Tier 1 takes about 25 minutes, and every push of a shared
+change used to wait for one.
+- **By day,** a shared change gets the day check above, a few minutes.
+- **At night,** a Windows scheduled task, "Forge night check", starts `tools/night.sh` at
+  00:30. It also runs when the machine wakes up after missing that time. It:
+  - checks out `origin/main` in a worktree of its own (`../forge-night`), whose ignored SDK and
+    asset folders are junctions to this checkout's;
+  - runs Tier 1 there, or Tier 2 when a milestone is due, against `captures/accepted/`;
+  - does nothing when the head already has a full set.
+- **The result:** `captures/night/latest.txt` holds the verdict, the commit, the tier, and the
+  failing lines when there are any. Each night's logs stay in `captures/night/<time>/`.
+- **In the morning,** the first session reads `latest.txt`. A failed night is fixed before new
+  work:
+  - find the commit with `tools/verify.sh --base`;
+  - fix it, or, when the images moved on purpose, run `tools/verify.sh --tier 1 --expect ...`
+    and name the images in the report.
+- `tools/night.sh --dry-run` makes or updates the worktree, says which tier would run, and stops.
 
 **The first map's check** (D-062, #266; 2026-10-16): `tools/map-check.sh` shoots the village
 on its own plan at 600 m (`city-plan --village 600`), one seed, from the air and from the views
@@ -79,17 +99,24 @@ and compares each with `captures/map/accepted` by LDR-ꟻLIP; `--accept` makes t
 accepted set. About two minutes: the check per commit for the map, where the tiers run at
 milestones on the owner's word. The runs stay in `captures/map/<time>/` with a contact sheet.
 
-- **The sentinels** are ten captures on the mesh path, about a minute: meshlets (`static60`,
-  `orbit120`, `noocc120`), the ballad without TAA (`ast-notaa600`, `ast240`, `ast240-noocc`)
-  and its HDR output (`ast-hdr600`), the resident city (`city60`, `city60-noocc`) and the
-  gallery (`gallery60`). They catch a change that reaches further than its paths say.
+- **The sentinels** are thirteen captures, one or more from every demo:
+  - meshlets: `static60`, `orbit120`, `noocc120`;
+  - the ballad without AA: `ast-notaa600`, `ast240`, `ast240-noocc`, and its HDR output
+    `ast-hdr600`;
+  - the resident city: `city60`, `city60-noocc`, and the gallery `gallery60`;
+  - since D-071: the island's `shot-island`, the lab's `lab-materials60` and the planet's
+    `planet-ground`.
+
+  They catch a change that reaches further than its paths say. They are also the day check of a
+  shared change. Their validation runs the first run of the ballad, meshlets, the city, the island
+  and the lab.
 - **The sets** (`FORGE_SETS` of `captures.sh`, `validate.sh` and `timings.sh`): `meshlets`,
   `ballad`, `city`, `island` (the city's island and the island demo's shots), `sentinels`,
   `all`. `FORGE_PATHS` picks `mesh`, `fb` or both. The images keep their names.
 - **`tools/impact.toml`** maps path patterns to sets. The first pattern that matches a path
-  wins. A path no pattern matches sends the change to Tier 1: an unknown path counts as
-  shared until someone maps it. Its `[recook]` and `[gpu]` tables add `--recook`, and the
-  fallback with validation.
+  wins. A path no pattern matches makes the change shared: it gets the day check, and the
+  night's full batch, until someone maps the path. Its `[recook]` and `[gpu]` tables add
+  `--recook`, and the fallback with validation.
 - **`--recook`:** the props are cached in `cache/meshes/` by their parameters' text and
   `COOK_VERSION`, not by the code that makes them. After a change to that code,
   `FORGE_RECOOK=1` passes `--recook` to the first run of each scene that cooks (the city, the

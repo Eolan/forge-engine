@@ -13,8 +13,8 @@
 #
 # FORGE_SETS (issue #134): the runs to make, separated by spaces or commas (default all):
 # ballad (with its ships and HDR output), meshlets, city, island (the city's island, its water
-# and the island demo), lab (the physics lab), sentinels (the ballad, meshlets and the city's
-# first run), all.
+# and the island demo), lab (the physics lab), planet (no run yet), sentinels (the first run of
+# the ballad, meshlets, the city, the island and the lab: the day check of D-071), all.
 # FORGE_PATHS: mesh and fb (default both).
 # The owner's settings file (forge.cfg, D-069) never changes a scripted run.
 export FORGE_CFG=none
@@ -29,8 +29,8 @@ paths=${FORGE_PATHS:-mesh fb}
 paths=${paths//,/ }
 for set in $sets; do
   case $set in
-    all | sentinels | meshlets | ballad | city | island | lab) ;;
-    *) echo "unknown set $set: sentinels, meshlets, ballad, city, island, lab or all" >&2; exit 1 ;;
+    all | sentinels | meshlets | ballad | city | island | lab | planet) ;;
+    *) echo "unknown set $set: sentinels, meshlets, ballad, city, island, lab, planet or all" >&2; exit 1 ;;
   esac
 done
 # sets_of NAME: the sets a run belongs to, from its name without the path.
@@ -42,7 +42,9 @@ sets_of() {
     hdr-display) echo meshlets ;;
     city) echo city sentinels ;;
     city-* | gallery) echo city ;;
-    lab | lab-sea | lab-walk | lab-drive | lab-fly | lab-break | lab-creatures | lab-flood | lab-dominoes | lab-bridge | lab-rocket | lab-tug | lab-space | lab-tank | lab-tank-bench | lab-tank-hole | lab-tank-blocks | lab-room) echo lab ;;
+    lab) echo lab sentinels ;;
+    lab-sea | lab-walk | lab-drive | lab-fly | lab-break | lab-creatures | lab-flood | lab-dominoes | lab-bridge | lab-rocket | lab-tug | lab-space | lab-tank | lab-tank-bench | lab-tank-hole | lab-tank-blocks | lab-room) echo lab ;;
+    island-2m) echo island sentinels ;;
     *) echo island ;;
   esac
 }
