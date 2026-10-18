@@ -1745,8 +1745,9 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
   - **Sections:** a street's cross-section is data (`Profile::section`: footway, verge, cycle,
     drive, tracks, shared), so its width, carriageway and pavements are sums of its strips.
   - **Streets:** each street is its centreline stroked to its width, and its carriageway to the
-    carriageway's width (`i_overlay`, integer mode). Arms end flat at their junctions, a mitre
-    fills a reflex gap, and dead ends are round. The union is the street ground.
+    carriageway's width (`i_overlay`, integer mode). Arms end flat at their junctions (the
+    carriageways 0.3 m past them, so two arms in line overlap), a mitre fills a reflex gap, and
+    dead ends are round. The union is the street ground.
   - **Corners:** between two driven arms the kerb turns on 6 m, shorter where an arm is short.
     Where a tram turns, the carriageway takes in its swept path (the outer track, half a car and
     0.5 m: `transit::SWEPT`), so the kerb keeps clear of it. That rule is the point test. The
@@ -1759,6 +1760,27 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
       height up) and the lamps' posts.
     - **The result:** 18.4 km of track, nothing met. A control post on a track is met 66 times,
       so the sweep looks.
+  - **Taxis and shuttles, swept** (#276, `taxis_drive_and_turn_clear_of_…` in the plan's tests):
+    - **The bodies:** the cab is a box 3.6 by 1.8 m, from 0.15 to 1.65 m; the shuttle 5 by 2 m, to
+      2.2 m.
+    - **Along the lanes:** each body drives every lane both ways, 1.5 m right of the centreline
+      (the demo's lane), set by its two ends on the centreline every 0.5 m. It is swept against
+      the kerbs (the road outline's segments), the bollards, the street trees and the lamps'
+      posts.
+    - **The turns:** each body turns from every taxi road into every other at each junction. A
+      turn counts as possible when one of six curves, from 3 to 12 m before the junction, is clear
+      and no tighter than the body turns (4.5 m at its middle for the cab, 5.5 m for the shuttle).
+    - **Two bugs it found, fixed:**
+      - Where a walking way left a road at a sharp angle, the end bollards of its row stood in the
+        road's lane. Bollards on a driven arm's carriageway, or within 0.3 m of its kerb, are now
+        left out.
+      - Where two arms of a road met in a near straight line, their carriageways' flat ends met
+        edge to edge. The union kept a slit from the kerb to the node, and a kerb's face stood
+        across half the avenue. Each carriageway now runs 0.3 m past its junction ends.
+    - **What is left** (122.7 km of lanes, 1 366 turns; the test holds the counts and prints a
+      `--view` over each place):
+      - five sharp kinks of 35° to 68° in avenues' centrelines, whose inner kerb a body crosses;
+      - two acute junctions where no curve is wide enough, so a turn there takes three points.
   - **Crossings:** a zebra 4 m wide on each driven arm of every junction, a metre past its corner
     or past a pedestrian way's mouth. A dropped kerb at each end slopes 1.6 m (1 in 12, #263) down
     to a 1 cm lip, its sides flared at 1 in 12 too, so there is no edge to step or roll over (the

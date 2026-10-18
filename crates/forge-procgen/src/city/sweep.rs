@@ -170,6 +170,47 @@ pub fn cuboid_meets_disc(
     outside.length() < radius
 }
 
+/// Whether `body`'s footprint, its middle at `centre` heading along `heading` (unit), meets the
+/// segment from `a` to `b` (a kerb's edge, upright from the ground): the segment clipped to the
+/// footprint's rectangle in the body's frame (Liang and Barsky's line clipping).
+pub fn cuboid_meets_segment(
+    body: &Cuboid,
+    centre: DVec2,
+    heading: DVec2,
+    a: DVec2,
+    b: DVec2,
+) -> bool {
+    let across = DVec2::new(-heading.y, heading.x);
+    let local = |p: DVec2| {
+        let d = p - centre;
+        DVec2::new(d.dot(heading), d.dot(across))
+    };
+    let (p, q) = (local(a), local(b));
+    let d = q - p;
+    let (mut t0, mut t1) = (0.0_f64, 1.0_f64);
+    // Each side's half-plane as `k * t <= r` along the segment.
+    for (k, r) in [
+        (-d.x, p.x + body.half_length),
+        (d.x, body.half_length - p.x),
+        (-d.y, p.y + body.half_width),
+        (d.y, body.half_width - p.y),
+    ] {
+        if k == 0.0 {
+            if r < 0.0 {
+                return false;
+            }
+        } else if k < 0.0 {
+            t0 = t0.max(r / k);
+        } else {
+            t1 = t1.min(r / k);
+        }
+        if t0 > t1 {
+            return false;
+        }
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,6 +256,40 @@ mod tests {
             0.2,
             0.0,
             5.0
+        ));
+    }
+
+    #[test]
+    fn a_body_meets_a_kerb_it_crosses_or_holds_not_one_beside_it() {
+        let body = Cuboid {
+            half_length: 1.8,
+            half_width: 0.9,
+            bottom: 0.15,
+            top: 1.65,
+        };
+        let meets = |a: DVec2, b: DVec2| cuboid_meets_segment(&body, DVec2::ZERO, DVec2::X, a, b);
+        // A kerb along it 0.1 m off its side, and one 0.1 m into it.
+        assert!(!meets(DVec2::new(-5.0, 1.0), DVec2::new(5.0, 1.0)));
+        assert!(meets(DVec2::new(-5.0, 0.8), DVec2::new(5.0, 0.8)));
+        // A short piece wholly under it, and one across its corner.
+        assert!(meets(DVec2::new(-0.2, 0.1), DVec2::new(0.2, -0.1)));
+        assert!(meets(DVec2::new(1.4, 1.2), DVec2::new(2.2, 0.4)));
+        // One past its corner, its line through the corner's diagonal but short of it.
+        assert!(!meets(DVec2::new(2.0, 1.3), DVec2::new(2.6, 0.7)));
+        // Turned a quarter: the kerb along x now crosses its length.
+        assert!(cuboid_meets_segment(
+            &body,
+            DVec2::ZERO,
+            DVec2::Y,
+            DVec2::new(-5.0, 1.5),
+            DVec2::new(5.0, 1.5)
+        ));
+        assert!(!cuboid_meets_segment(
+            &body,
+            DVec2::ZERO,
+            DVec2::Y,
+            DVec2::new(-5.0, 1.9),
+            DVec2::new(5.0, 1.9)
         ));
     }
 

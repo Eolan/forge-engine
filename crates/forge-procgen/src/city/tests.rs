@@ -962,3 +962,296 @@ fn a_village_sized_site_plans() {
     assert!(built >= 4, "{built} built blocks");
     assert!(city.lots.len() >= 20, "{} lots", city.lots.len());
 }
+
+/// The taxis and shuttles (D-061) drive every lane of the taxi roads both ways and turn from each
+/// road into every other at each junction, swept as boxes against the kerbs, the bollards, the
+/// street trees and the lamps' posts (#276: the owner's "for roads ... rectangular cuboid").
+/// - **A lane** is the demo's: 1.5 m right of the centreline (`taxis::LANE`), swept every 0.5 m
+///   from 8 m after one end to 8 m before the other (the junctions are the turns').
+/// - **A turn** is possible when one of the paths a driver could take is clear: a curve from the
+///   lane in to the lane out (a quadratic Bézier through the two lanes' crossing), starting
+///   3 to 12 m before the junction, no tighter than the vehicle turns (4.5 m for the cab, 5.5 m
+///   for the shuttle, at its middle).
+///
+/// What is met is counted by place (5 m cells), and the count may not grow: a ratchet, as the
+/// village's anomalies.
+#[test]
+fn taxis_drive_and_turn_clear_of_the_kerbs_bollards_trees_and_lamps() {
+    use super::sweep::{self, Cuboid};
+    use std::collections::{BTreeSet, HashMap};
+    const LANE: f64 = 1.5;
+    const CELL: f64 = 10.0;
+    const KINDS: [&str; 6] = ["bollard", "trunk", "crown", "lamp", "control", "kerb"];
+    let (site, city) = example_plan();
+    let trees = super::trees::trees(&site, &city, 5);
+    let lamps = super::lamps::lamps(&site, &city);
+    // The cab and the shuttle (`forge_geom::vehicles`), their bodies from 0.15 m, and the
+    // tightest their middles turn.
+    let vehicles = [
+        (
+            "cab",
+            Cuboid {
+                half_length: 1.8,
+                half_width: 0.9,
+                bottom: 0.15,
+                top: 1.65,
+            },
+            4.5,
+        ),
+        (
+            "shuttle",
+            Cuboid {
+                half_length: 2.5,
+                half_width: 1.0,
+                bottom: 0.15,
+                top: 2.2,
+            },
+            5.5,
+        ),
+    ];
+    let key = |p: DVec2| ((p.x / CELL).floor() as i32, (p.y / CELL).floor() as i32);
+    // The kerbs' segments, in every cell their box covers.
+    let kerbs: Vec<[DVec2; 2]> = city
+        .ground
+        .tiles
+        .iter()
+        .flat_map(|t| t.kerbs.iter().copied())
+        .collect();
+    let mut kerb_cells: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
+    for (i, [a, b]) in kerbs.iter().enumerate() {
+        let (lo, hi) = (key(a.min(*b)), key(a.max(*b)));
+        for x in lo.0..=hi.0 {
+            for y in lo.1..=hi.1 {
+                kerb_cells.entry((x, y)).or_default().push(i);
+            }
+        }
+    }
+    // Upright discs: where, radius, from, to, and what (an index into KINDS).
+    let mut discs: Vec<(DVec2, f64, f64, f64, usize)> = Vec::new();
+    for &b in &city.ground.bollards {
+        discs.push((b, 0.1, 0.0, 1.0, 0));
+    }
+    for t in trees.iter().filter(|t| t.species.is_none()) {
+        discs.push((t.pos, 0.3 * t.crown / 4.2, 0.0, 0.44 * t.height, 1));
+        discs.push((t.pos, t.crown, 0.43 * t.height, t.height, 2));
+    }
+    for l in &lamps {
+        discs.push((l.pos, 0.1, 0.0, l.height, 3));
+    }
+    let driven: Vec<usize> = (0..city.roads.edges.len())
+        .filter(|&k| city.roads.edges[k].profile.driven())
+        .collect();
+    // The control: a post on the first long driven road's lane halfway, which the sweep must
+    // meet.
+    if let Some(&k) = driven
+        .iter()
+        .find(|&&k| city.roads.edges[k].length() > 30.0)
+    {
+        let e = &city.roads.edges[k];
+        let s = e.length() * 0.5;
+        let (p, t) = (geom::point_at(&e.points, s), geom::tangent_at(&e.points, s));
+        discs.push((p + DVec2::new(-t.y, t.x) * LANE, 0.1, 0.0, 1.0, 4));
+    }
+    let mut disc_cells: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
+    for (i, d) in discs.iter().enumerate() {
+        disc_cells.entry(key(d.0)).or_default().push(i);
+    }
+    // What a body at `centre` heading along `heading` meets, by kind.
+    let meets = |body: &Cuboid, centre: DVec2, heading: DVec2| -> [bool; 6] {
+        let (cx, cy) = key(centre);
+        let mut hit = [false; 6];
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                if let Some(near) = kerb_cells.get(&(cx + dx, cy + dy)) {
+                    hit[5] |= near.iter().any(|&k| {
+                        let [a, b] = kerbs[k];
+                        sweep::cuboid_meets_segment(body, centre, heading, a, b)
+                    });
+                }
+                if let Some(near) = disc_cells.get(&(cx + dx, cy + dy)) {
+                    for &k in near {
+                        let (at, r, y0, y1, kind) = discs[k];
+                        hit[kind] |=
+                            sweep::cuboid_meets_disc(body, centre, heading, 0.0, at, r, y0, y1);
+                    }
+                }
+            }
+        }
+        hit
+    };
+    let place = |p: DVec2| ((p.x / 5.0).floor() as i32, (p.y / 5.0).floor() as i32);
+    // Along every lane, both ways, every 0.5 m, clear of the junctions.
+    let mut lanes: [BTreeSet<(i32, i32)>; 6] = Default::default();
+    let mut km = 0.0;
+    for &k in &driven {
+        let e = &city.roads.edges[k];
+        let length = e.length();
+        km += 2.0 * length / 1000.0;
+        for forward in [true, false] {
+            let mut s = 8.0;
+            while s <= length - 8.0 {
+                let along = if forward { s } else { length - s };
+                let dir = if forward { 1.0 } else { -1.0 };
+                for (_, body, _) in &vehicles {
+                    // Set by its two ends on the centreline, as a vehicle sits on its path (at a
+                    // bend's corner its middle cuts in), then its lane's offset.
+                    let end = |d: f64| geom::point_at(&e.points, (along + d).clamp(0.0, length));
+                    let (front, back) = (end(dir * body.half_length), end(-dir * body.half_length));
+                    let t = (front - back).normalize_or_zero();
+                    let p = (front + back) * 0.5 + DVec2::new(-t.y, t.x) * LANE;
+                    for (kind, &h) in meets(body, p, t).iter().enumerate() {
+                        if h {
+                            lanes[kind].insert(place(p));
+                        }
+                    }
+                }
+                s += 0.5;
+            }
+        }
+    }
+    // Each turn at each node: from every driven road in to every other out.
+    let mut ends: HashMap<u32, Vec<(usize, bool)>> = HashMap::new();
+    for &k in &driven {
+        let e = &city.roads.edges[k];
+        ends.entry(e.a).or_default().push((k, true));
+        ends.entry(e.b).or_default().push((k, false));
+    }
+    // A lane's point and the way the vehicle drives `d` metres from road `k`'s end at the node,
+    // `out` of it or into it.
+    let lane = |k: usize, at_a: bool, d: f64, out: bool| {
+        let e = &city.roads.edges[k];
+        let length = e.length();
+        let d = d.min(length * 0.5);
+        let along = if at_a { d } else { length - d };
+        let away = if at_a { 1.0 } else { -1.0 };
+        let t = geom::tangent_at(&e.points, along) * if out { away } else { -away };
+        (
+            geom::point_at(&e.points, along) + DVec2::new(-t.y, t.x) * LANE,
+            t,
+        )
+    };
+    // Whether `body` turning no tighter than `radius` takes the turn from road `i` into road `o`
+    // by one of the paths, and what the last path tried met.
+    let turn = |body: &Cuboid, radius: f64, i: (usize, bool), o: (usize, bool)| {
+        let mut last = [false; 6];
+        for d in [3.0, 4.5, 6.0, 8.0, 10.0, 12.0] {
+            let (a, u) = lane(i.0, i.1, d, false);
+            let (b, v) = lane(o.0, o.1, d, true);
+            let cross = u.x * v.y - u.y * v.x;
+            let c = if cross.abs() > 0.05 {
+                let t = ((b - a).x * v.y - (b - a).y * v.x) / cross;
+                a + u * t.clamp(0.0, 30.0)
+            } else {
+                (a + b) * 0.5
+            };
+            let steps = ((a.distance(c) + c.distance(b)) / 0.25).ceil().max(1.0) as usize;
+            let mut tight = false;
+            let mut hit = [false; 6];
+            for j in 0..=steps {
+                let t = j as f64 / steps as f64;
+                let p = a * (1.0 - t) * (1.0 - t) + c * 2.0 * (1.0 - t) * t + b * t * t;
+                let d1 = (c - a) * 2.0 * (1.0 - t) + (b - c) * 2.0 * t;
+                let d2 = (a - c * 2.0 + b) * 2.0;
+                let speed = d1.length();
+                if speed < 1e-6 {
+                    tight = true;
+                    break;
+                }
+                if (d1.x * d2.y - d1.y * d2.x).abs() / speed.powi(3) > 1.0 / radius {
+                    tight = true;
+                    break;
+                }
+                for (kind, h) in meets(body, p, d1 / speed).iter().enumerate() {
+                    hit[kind] |= *h;
+                }
+            }
+            if !tight {
+                last = hit;
+                if hit.iter().all(|&h| !h) {
+                    return (true, hit);
+                }
+            }
+        }
+        (false, last)
+    };
+    let mut turns = 0;
+    let mut blocked: [BTreeSet<(i32, i32)>; 2] = Default::default();
+    let mut blocked_by = [0_usize; 6];
+    let mut first: Vec<(&str, DVec2, usize, usize)> = Vec::new();
+    let mut sorted: Vec<_> = ends.into_iter().collect();
+    sorted.sort_by_key(|(n, _)| *n);
+    for (node, roads) in sorted {
+        let at = city.roads.nodes[node as usize].pos;
+        for &i in &roads {
+            for &o in &roads {
+                if i.0 == o.0 {
+                    continue;
+                }
+                turns += 1;
+                for (v, (name, body, radius)) in vehicles.iter().enumerate() {
+                    let (clear, hit) = turn(body, *radius, i, o);
+                    if !clear {
+                        blocked[v].insert(place(at));
+                        for (kind, &h) in hit.iter().enumerate() {
+                            blocked_by[kind] += usize::from(h);
+                        }
+                        if first.len() < 12 {
+                            first.push((name, (at * 10.0).round() / 10.0, i.0, o.0));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let counts: Vec<String> = KINDS
+        .iter()
+        .zip(&lanes)
+        .map(|(k, s)| format!("{} {k}", s.len()))
+        .collect();
+    println!(
+        "{km:.1} km of lanes both ways: met at {}; {turns} turns: the cab cannot take them at {} \
+         places, the shuttle at {} (the last paths tried met {blocked_by:?} of {KINDS:?})",
+        counts.join(", "),
+        blocked[0].len(),
+        blocked[1].len()
+    );
+    println!("the first blocked turns (vehicle, node, road in, road out): {first:?}");
+    // Where to look from, over each place (`city-plan --view`, the plan's middle at the origin).
+    let views = |s: &BTreeSet<(i32, i32)>| -> Vec<String> {
+        s.iter()
+            .map(|&(x, y)| {
+                let (vx, vz) = (
+                    f64::from(x) * 5.0 + 2.5 - 2000.0,
+                    f64::from(y) * 5.0 + 2.5 - 2000.0,
+                );
+                format!("--view={vx:.0},30,{vz:.0},0,-89")
+            })
+            .collect()
+    };
+    println!("lanes over a kerb: {:?}", views(&lanes[5]));
+    println!("turns no vehicle takes: {:?}", views(&blocked[1]));
+    assert!(km > 10.0, "{km}");
+    assert!(
+        !lanes[4].is_empty(),
+        "the control post on a lane was never met"
+    );
+    // Nothing stands in a lane: no bollard, trunk, crown nor lamp.
+    assert!(
+        lanes[..4].iter().all(BTreeSet::is_empty),
+        "lanes meet bollards at {:?}",
+        views(&lanes[0])
+    );
+    // What is left may not grow: the five sharp kinks of driven roads' centrelines (35° to 68° at
+    // one point) where a body crosses the inside kerb, and the two acute junctions where no
+    // curve is wide enough to turn (a three-point turn there).
+    assert!(
+        lanes[5].len() <= 5,
+        "lanes over a kerb at {:?}",
+        views(&lanes[5])
+    );
+    assert!(
+        blocked.iter().all(|b| b.len() <= 2),
+        "turns no vehicle takes at {:?}",
+        views(&blocked[1])
+    );
+}

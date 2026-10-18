@@ -539,8 +539,23 @@ impl GroundMap {
                 degree(e.b) == 1,
             ));
             if e.profile.driven() {
+                // Past each junction end by OVERLAP, into the junction: two arms in a near
+                // straight line met edge to edge there, and their union kept a slit from the
+                // kerb to the node (#276: a taxi's box met its kerb mid-carriageway).
+                let mut line = e.points.clone();
+                let n = line.len();
+                if n >= 2 {
+                    if driven_degree(e.a) > 1 {
+                        let back = (line[1] - line[0]).normalize_or_zero() * OVERLAP;
+                        line[0] -= back;
+                    }
+                    if driven_degree(e.b) > 1 {
+                        let on = (line[n - 1] - line[n - 2]).normalize_or_zero() * OVERLAP;
+                        line[n - 1] += on;
+                    }
+                }
                 carriageways.push(stroke(
-                    &e.points,
+                    &line,
                     e.profile.carriageway(),
                     driven_degree(e.a) == 1,
                     driven_degree(e.b) == 1,
@@ -664,9 +679,22 @@ impl GroundMap {
                     let n = left(t);
                     let span = 2.0 * arm.half - 1.0;
                     let count = (span / BOLLARD_GAP).ceil() as usize + 1;
+                    // None on a driven arm's carriageway, nor within 0.3 m of its kerb: where a
+                    // walking way leaves a road at a sharp angle, its row's end reached the
+                    // road's lane (#276: a taxi's box met them).
+                    let on_road = |p: DVec2| {
+                        list.iter().filter(|a| a.kerb > 0.0).any(|a| {
+                            let line = &graph.edges[a.edge as usize].points;
+                            line.windows(2)
+                                .any(|w| geom::distance_to_segment(p, w[0], w[1]) < a.kerb + 0.3)
+                        })
+                    };
                     for k in 0..count {
                         let off = -span * 0.5 + span * k as f64 / (count - 1).max(1) as f64;
-                        bollards.push(at + n * off);
+                        let p = at + n * off;
+                        if !on_road(p) {
+                            bollards.push(p);
+                        }
                     }
                 }
             }
