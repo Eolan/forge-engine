@@ -4588,6 +4588,27 @@ static const float RAY_REFLECTION_POWER = 60.0;
 // most props much less), which would otherwise hide a window behind its own facade.
 static const float REFLECTION_START = 1.5;
 
+// The least distance a mirror ray from a drawn surface travels before a hit counts, metres
+// (#305): past the 5 cm the ray starts off the surface.
+static const float MIRROR_START = 0.02;
+
+// How far a mirror ray from a drawn surface of `inst` travels before a hit counts (#305): twice
+// the gap the traced cut may leave in front of it (the cut's error, and the drawn cluster's own),
+// at least MIRROR_START and at most REFLECTION_START; a terrain's REFLECTION_START. From
+// REFLECTION_START everywhere, a glossy floor or table indoors reflected what lay past the room's
+// walls (the street, a parked car), its own room's nearer walls skipped.
+float mirror_start(Frame* f, Instance inst, Meshlet m)
+{
+    RtScene* rs = f[0].rt_scene;
+    if (rs == nullptr)
+        return REFLECTION_START;
+    RtMesh mesh = rs[0].meshes[inst.mesh];
+    if (mesh.shadow_start > 0.0)
+        return REFLECTION_START;
+    float gap = 2.0 * (mesh.cut_error + m.self_error) * inst.scale;
+    return clamp(gap, MIRROR_START, REFLECTION_START);
+}
+
 // The surface a ray met (issues #50, #53), shaded plainly: the row's two colours mixed by the
 // instance (its texture's last mip, the texture's average, for the texture). Its normal faces
 // the ray; `back` says whether the ray met the triangle's back (the meshes wind
@@ -4788,12 +4809,12 @@ float3 hit_radiance(Frame* f, float4* sky, ProbeField* probes, RayHit hit, float
 // cut's triangle towards the ray, in the resolve's units, with w = 1; w = 0 on a miss. `distance`:
 // how far the ray went, metres (its TMax on a miss); `mover`: whether it met a mover (#79). The
 // lamps light the hit as they light a probe's (`hit_lamps`, `seed` the pixel's number).
-float4 trace_reflection(Frame* f, float4* sky, ProbeField* probes, float3 origin, float3 direction, uint seed, out float distance, out bool mover)
+float4 trace_reflection_from(Frame* f, float4* sky, ProbeField* probes, float3 origin, float3 direction, uint seed, float start, out float distance, out bool mover)
 {
     RayDesc ray;
     ray.Origin = origin;
     ray.Direction = direction;
-    ray.TMin = REFLECTION_START;
+    ray.TMin = start;
     ray.TMax = 50000.0;
     ClosestHit c = trace_closest(f, ray);
     distance = c.t;
@@ -4802,6 +4823,13 @@ float4 trace_reflection(Frame* f, float4* sky, ProbeField* probes, float3 origin
         return float4(0.0);
     RayHit hit = ray_hit(f, c.instance, c.primitive, c.barycentrics, origin, direction, c.t);
     return float4(hit_radiance(f, sky, probes, hit, direction) + hit_lamps(f, hit, REGION_NONE, seed, false), 1.0);
+}
+
+// `trace_reflection_from` with REFLECTION_START: the water's and the glass's rays, which start on a
+// surface that is not in the rays' scene, and the jelly's.
+float4 trace_reflection(Frame* f, float4* sky, ProbeField* probes, float3 origin, float3 direction, uint seed, out float distance, out bool mover)
+{
+    return trace_reflection_from(f, sky, probes, origin, direction, seed, REFLECTION_START, distance, mover);
 }
 
 float4 trace_reflection(Frame* f, float4* sky, ProbeField* probes, float3 origin, float3 direction, uint seed)
@@ -5560,7 +5588,7 @@ void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
     float4* sky = resolve_push.sky;
     float distance;
     bool mover;
-    float4 hit = trace_reflection(f, sky, resolve_push.probes, world + n * 0.05, request.xyz, uint(pixel.x) * 0x8DA6B343u ^ uint(pixel.y) * 0xD8163841u, distance, mover);
+    float4 hit = trace_reflection_from(f, sky, resolve_push.probes, world + n * 0.05, request.xyz, uint(pixel.x) * 0x8DA6B343u ^ uint(pixel.y) * 0xD8163841u, mirror_start(f, inst, m), distance, mover);
     ReflectionHistory* history = resolve_push.reflection_history;
     if (hit.w <= 0.0 && history == nullptr)
         return;

@@ -1296,7 +1296,14 @@ the captures are those of the previous build.
   triangle from the cut.
 - **The hit's light:** the row's colour times its texture's average, the sun through a
   shadow ray, the sky's SH.
-- **The start:** hits count from 1.5 m, past the cut's error.
+- **The start:** hits count from 1.5 m, past the cut's error. Since #305 (2026-10-19), a drawn
+  surface's mirror ray (`shading/reflections`) starts at twice the gap the traced cut may leave
+  in front of it: the cut's error and the drawn cluster's own, scaled, at least 2 cm and at most
+  1.5 m (`mirror_start`, as #293's lamp rays). From 1.5 m everywhere, glossy furniture and a
+  tiled floor indoors reflected the street past their room's walls, a parked car included
+  (seen in a scene built outside the repository). The water's, the glass's and the jelly's rays
+  keep 1.5 m: they start on surfaces the rays' scene does not hold. The city's towers, cut
+  coarsely, keep nearly the old start.
 
 The rays cost 0.09 ms, and their code 0.03–0.07 ms of registers across the resolve: 0.17 ms
 at 1440p in all. A pass of their own over the smooth rows' tiles would recover the
