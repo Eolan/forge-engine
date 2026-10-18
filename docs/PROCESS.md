@@ -164,8 +164,10 @@ batch. Accepted sets remove the "before" batch.
 
 ### The AMD check (#28)
 
-`tools/amd-check.sh` runs meshlets, asteroids and the physics lab's yard on the dev machine's
-AMD iGPU (RDNA 2): each on the mesh path and the fallback, twice, then under sync validation.
+`tools/amd-check.sh` runs meshlets, asteroids and the physics lab's yard, smoke yard (the
+particles' rays and flipbooks) and lamp room (the lamps' light lists) at midnight on the dev
+machine's AMD iGPU (RDNA 2): each on the mesh path and the fallback, twice, then under sync
+validation.
 It prints whether the reruns are identical, whether the mesh path matches the fallback (both
 0 pixels) and the validation messages. A second vendor's driver finds what NVIDIA's lets
 through: #28's mesh-shader hang, #207's barriers. It is neither a tier nor a gate: run it now

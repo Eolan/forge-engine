@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # The occasional AMD check (#28; docs/PROCESS.md, "The AMD check"): the dev machine's AMD iGPU
-# (RDNA 2, `FORGE_GPU=amd`) runs meshlets, asteroids and the physics lab's yard on the mesh path
-# and the fallback, each twice, then each under sync validation. A different vendor's driver
-# finds bugs NVIDIA's lets through (#28's hang, #207's barriers). Not a tier and not a gate:
+# (RDNA 2, `FORGE_GPU=amd`) runs meshlets, asteroids and the physics lab's yard, smoke yard and
+# lamp room on the mesh path and the fallback, each twice, then each under sync validation. A
+# different vendor's driver finds bugs NVIDIA's lets through (#28's hang, #207's barriers). Not a
+# tier and not a gate:
 # run it on a night with a Tier 2, after it, and report what it prints.
 #
 #   tools/amd-check.sh [OUT]
@@ -34,6 +35,10 @@ runs=(
   "meshlets|120|$bin/meshlets --orbit"
   "asteroids|600|$bin/asteroids --fixed-step"
   "yard|120|$bin/physics-lab --lab yard --fixed-step"
+  # The particles (D-064: the sparks' rays, the baked smoke and fire) and the lamps' light lists
+  # (D-065), at midnight.
+  "smoke|360|$bin/physics-lab --lab smoke --fixed-step --time-of-day 1.5"
+  "lamps|60|$bin/physics-lab --lab lamps --fixed-step --time-of-day 1.5"
 )
 
 for _ in $(seq 1 120); do
