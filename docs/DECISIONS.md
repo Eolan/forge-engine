@@ -4920,7 +4920,31 @@ again (`demos/physics-lab.md`).
       - the owner tried 7.5 and 12 lux, LED street lighting's range, and kept 1.9.
     - **Its head is full cut-off** (`lamp_beam`): all its light down to 60° off the vertical,
       none from 85°. A bulb lit every way had left a dark funnel on the facade over each lamp,
-      from its own housing's shadow.
+      from its own housing's shadow. Since #288 that cut-off is the lamp's own emission
+      (`Emission::STREET`), not its region's.
+  - **Each lamp's emission** (#288, 2026-10-18; asked by a scene built outside the repository
+    with downlights, porch lamps, floods and outdoor globes). Before, a street lamp's cut-off
+    followed from its region: an outdoor globe got the street's beam, and nothing else could
+    have one.
+    - **`Lamp::emission`:** `Emission::Every` (today's lamps) or `Emission::Cone { axis,
+      inner_cos, outer_cos }`, a smooth step from all of the light within the inner angle to none
+      beyond the outer. `candela` is the intensity along the axis. `Emission::flush(axis)` is a
+      dome or a diffuser on a ceiling or a wall: none behind its mount, a quarter of an omni
+      lamp's lumens at the same peak.
+    - **One function, every path:** `lamp_beam` reads it, and the resolve, the light lists'
+      picks, the probes' and the mirror rays' hits and ReSTIR DI's target all call it.
+    - **On the GPU:** `GpuLamp` grew from 64 to 96 bytes (the axis with the inner cosine, then
+      the outer cosine) and keeps its eight regions.
+    - **Checked:**
+      - the street's cut-off, now the cone down at 0.5 and 0.087, is the same arithmetic as
+        before. The village at 21:00 (the main street and the junction under the light lists,
+        the street under ReSTIR, the hall's house lamps) differs in 0 px, max channel error 0;
+      - unit tests: the cone's share against the old beam's expression to the bit, the dome's
+        half at 60° and its lumens (π against 4π);
+      - the lab's lamp room with a downlight and an uplighter (a test, not kept): the floor's
+        pool and the walls' arch alike under the light lists and ReSTIR.
+    - **Left for later:** a lampshade (dim sideways, open up and down), and a fitting radius
+      inside which the probes' hits ignore the lamp (#294).
     - **The probes leave the street lamps out** (`hit_lamp_weight`, and the lenses tagged
       `RenderLayer::lamp`). Their bounce came back in sharp blocks of the probe grid on the
       grass (#254).

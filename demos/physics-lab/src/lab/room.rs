@@ -137,6 +137,7 @@ pub(super) fn lamps() -> Vec<forge_render::lamps::Lamp> {
         candela,
         kelvin,
         regions: forge_render::lamps::EVERY_REGION,
+        emission: forge_render::lamps::Emission::Every,
     })
     .collect()
 }

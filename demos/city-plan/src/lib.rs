@@ -3242,6 +3242,7 @@ fn home_lamps(
                     candela: l.candela as f32,
                     kelvin: l.kelvin as f32,
                     regions: slots,
+                    emission: forge_render::lamps::Emission::Every,
                 },
                 on,
                 kind: l.kind,
@@ -7634,6 +7635,7 @@ fn street_lamps(lamps: &[(Vec3, f32, f32, bool)]) -> Vec<forge_render::lamps::La
                 candela: lens * scale * scale,
                 kelvin: 2700.0,
                 regions,
+                emission: forge_render::lamps::Emission::STREET,
             });
         }
     }

@@ -475,14 +475,15 @@ bool lamp_outside(Lamp lamp)
 }
 
 // The share of `lamp`'s light that goes towards a surface the unit direction `to_lamp` points from
-// to it. A street lamp's head is full cut-off: all of it down to 60° off the vertical, none from
-// 85° (cosines 0.5 and 0.087); lit every way, its bulb lit the facade over it round its housing's
-// shadow, a dark funnel over each lamp (the owner, 2026-10-18). A house's lamp lights every way.
+// to it: its emission (#288, `Emission` in lamps.rs). Every way (a zero axis): all of it. A cone:
+// all of it within the cosine `beam.w` of its axis, none beyond `beam_edge.x`, a smooth step
+// between; a street lamp's head is the cone down at 0.5 and 0.087, full cut-off (lit every way,
+// its bulb lit the facade over it round its housing's shadow, the owner, 2026-10-18).
 float lamp_beam(Lamp lamp, float3 to_lamp)
 {
-    if (!lamp_outside(lamp))
+    if (all(lamp.beam.xyz == 0.0))
         return 1.0;
-    return smoothstep(0.087, 0.5, to_lamp.y);
+    return smoothstep(lamp.beam_edge.x, lamp.beam.w, dot(-to_lamp, lamp.beam.xyz));
 }
 
 // `hit_lamps`' weight of `lamp` at `hit`: `lamp_weight_in`, or for a probe's ray none of a street
@@ -503,6 +504,9 @@ public struct Lamp
     public float4 colour_reach;    // rgb: its intensity per channel, candelas; w: its reach, metres
     public uint4 regions_a;        // the probes' regions it lights (D-068), REGION_NONE in the slots left;
     public uint4 regions_b;        // all REGION_NONE: every surface (`lamp_lights`)
+    public float4 beam;            // xyz: its cone's axis, the way its light goes (zero: every way); w:
+                                   // the cosine within which its light is whole (`lamp_beam`, #288)
+    public float4 beam_edge;       // x: the cosine beyond which a cone's light is none; yzw unused
 };
 
 // Whether `lamp` lights a surface in region `region` (or, across a doorway, `other`): a lamp

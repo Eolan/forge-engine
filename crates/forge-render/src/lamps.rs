@@ -50,14 +50,95 @@ pub struct Lamp {
     /// surface elsewhere takes nothing of it, without a shadow ray: the house's rooms are its
     /// light lists. All slots empty ([`EVERY_REGION`]): every surface.
     pub regions: [u32; LAMP_REGIONS],
+    /// Which way its light goes (#288): every way, or in a cone. [`Self::candela`] is the
+    /// intensity at its brightest, along a cone's axis.
+    pub emission: Emission,
 }
 
 impl Lamp {
     /// Whether it is a street lamp: [`REGION_OUTSIDE`] its first region. It lights the street
-    /// and not the rooms, downward only (`lamp_beam` in `meshlet.slang`), and ReSTIR DI lights
-    /// it ([`LampChoice::Streets`]).
+    /// and not the rooms, the probes leave it out, and ReSTIR DI lights it
+    /// ([`LampChoice::Streets`]). Which way its light goes is its [`Self::emission`].
     pub fn outside(&self) -> bool {
         self.regions[0] == REGION_OUTSIDE
+    }
+}
+
+/// Which way a lamp's light goes (#288): the share of its peak intensity ([`Lamp::candela`])
+/// in each direction, the same in every path that lights with it (the resolve, the light lists'
+/// picks, the probes' and the mirror rays' hits, ReSTIR DI's target), through `lamp_beam` in
+/// `meshlet.slang`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum Emission {
+    /// The same every way: a bare bulb, a glass globe, a pendant's open shade.
+    #[default]
+    Every,
+    /// About `axis` (unit, the way the light goes): all of it within the half-angle whose cosine is
+    /// `inner_cos`, none beyond the one whose cosine is `outer_cos`, a smooth step between. A
+    /// downlight, a flood, a spot, a street lamp's cut-off ([`Emission::STREET`]).
+    Cone {
+        /// The cone's axis, unit.
+        axis: Vec3,
+        /// The cosine of the half-angle within which the light is whole.
+        inner_cos: f32,
+        /// The cosine of the half-angle beyond which there is none (below `inner_cos`).
+        outer_cos: f32,
+    },
+}
+
+impl Emission {
+    /// A street lamp's head, full cut-off: all of its light down to 60° off the vertical, none from
+    /// 85°. Lit every way, its bulb lit the facade over it round its housing's shadow, a dark
+    /// funnel over each lamp (the owner, 2026-10-18).
+    pub const STREET: Emission = Emission::Cone {
+        axis: Vec3::NEG_Y,
+        inner_cos: 0.5,
+        outer_cos: 0.087,
+    };
+
+    /// A light flush with a ceiling or a wall facing `axis` (a dome, a diffuser): none behind its
+    /// mount, its intensity falling from the axis to nothing at 90°, near a diffuser's cosine
+    /// (the smooth step from 0 to 1 is 0.5 at 60°, where the cosine is too). It sends a quarter
+    /// of the light a lamp of the same peak sends every way: multiply the candela by 4 to keep
+    /// the lumens.
+    pub fn flush(axis: Vec3) -> Emission {
+        Emission::Cone {
+            axis: axis.normalize(),
+            inner_cos: 1.0,
+            outer_cos: 0.0,
+        }
+    }
+
+    /// The share of the peak intensity towards the unit direction `out` from the lamp (the CPU's
+    /// `lamp_beam`).
+    pub fn share(&self, out: Vec3) -> f32 {
+        match *self {
+            Emission::Every => 1.0,
+            Emission::Cone {
+                axis,
+                inner_cos,
+                outer_cos,
+            } => {
+                let t = ((out.dot(axis) - outer_cos) / (inner_cos - outer_cos)).clamp(0.0, 1.0);
+                t * t * (3.0 - 2.0 * t)
+            }
+        }
+    }
+
+    /// Its two vectors of [`GpuLamp`]: the axis and the full light's cosine, then the cut-off's.
+    /// Every way: a zero axis.
+    fn gpu(&self) -> ([f32; 4], [f32; 4]) {
+        match *self {
+            Emission::Every => ([0.0; 4], [0.0; 4]),
+            Emission::Cone {
+                axis,
+                inner_cos,
+                outer_cos,
+            } => (
+                [axis.x, axis.y, axis.z, inner_cos],
+                [outer_cos, 0.0, 0.0, 0.0],
+            ),
+        }
     }
 }
 
@@ -72,9 +153,14 @@ pub struct GpuLamp {
     pub colour_reach: [f32; 4],
     /// [`Lamp::regions`].
     pub regions: [u32; LAMP_REGIONS],
+    /// [`Lamp::emission`]: xyz its cone's axis (zero: every way), w the cosine within which its
+    /// light is whole.
+    pub beam: [f32; 4],
+    /// x: the cosine beyond which a cone's light is none; yzw unused.
+    pub beam_edge: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuLamp>() == 64);
+const _: () = assert!(std::mem::size_of::<GpuLamp>() == 96);
 
 /// How far a lamp's light counts, metres: where it falls to [`LEAST_LUX`].
 pub fn reach(candela: f32) -> f32 {
@@ -188,6 +274,7 @@ fn kept(
         .take(limit)
         .map(|(_, l)| {
             let c = lamp_rgb(l.kelvin) * l.candela;
+            let (beam, beam_edge) = l.emission.gpu();
             GpuLamp {
                 position_radius: [
                     l.position.x,
@@ -197,6 +284,8 @@ fn kept(
                 ],
                 colour_reach: [c.x, c.y, c.z, reach(l.candela)],
                 regions: l.regions,
+                beam,
+                beam_edge,
             }
         })
         .collect()
@@ -276,6 +365,7 @@ mod tests {
             candela,
             kelvin: 2700.0,
             regions: EVERY_REGION,
+            emission: Emission::Every,
         };
         // 100 cd reaches about 45 m.
         assert!((reach(100.0) - 44.72).abs() < 0.01);
@@ -296,5 +386,43 @@ mod tests {
         let all = every(&lamps, Vec3::ZERO);
         assert_eq!(all.len(), 101);
         assert_eq!(all[100].position_radius[0], 5000.0);
+    }
+
+    #[test]
+    fn a_cone_lights_within_its_angles_and_the_street_cut_off_is_the_old_beam() {
+        // Every way: all of it everywhere.
+        assert_eq!(Emission::Every.share(Vec3::Y), 1.0);
+        // The street lamp's cone is the beam it had by its region: smoothstep(0.087, 0.5, y) of the
+        // direction from the surface to the lamp, the bit-exact same expression.
+        for i in 0..=100 {
+            let a = i as f32 * std::f32::consts::PI / 100.0;
+            let to_lamp = Vec3::new(a.sin(), a.cos(), 0.0);
+            let t = ((to_lamp.y - 0.087) / (0.5 - 0.087)).clamp(0.0, 1.0);
+            let old = t * t * (3.0 - 2.0 * t);
+            assert_eq!(Emission::STREET.share(-to_lamp), old, "{a}");
+        }
+        // A flush dome facing down: none behind its mount, half at 60°, all along its axis; a
+        // quarter of an omni lamp's lumens at the same peak (∫ share dΩ = π against 4π).
+        let dome = Emission::flush(Vec3::NEG_Y);
+        assert_eq!(dome.share(Vec3::Y), 0.0);
+        assert_eq!(dome.share(Vec3::X), 0.0);
+        assert!((dome.share(Vec3::new(0.0, -0.5, 0.75_f32.sqrt())) - 0.5).abs() < 1e-6);
+        assert_eq!(dome.share(Vec3::NEG_Y), 1.0);
+        let n = 400;
+        let mut flux = 0.0;
+        for i in 0..n {
+            // Equal-area bands in the cosine.
+            let c = -1.0 + (i as f32 + 0.5) * 2.0 / n as f32;
+            flux +=
+                dome.share(Vec3::new((1.0 - c * c).sqrt(), -c, 0.0)) * 4.0 * std::f32::consts::PI
+                    / n as f32;
+        }
+        assert!((flux - std::f32::consts::PI).abs() < 0.01, "{flux}");
+        // On the GPU: a zero axis is every way.
+        assert_eq!(Emission::Every.gpu(), ([0.0; 4], [0.0; 4]));
+        assert_eq!(
+            Emission::STREET.gpu(),
+            ([0.0, -1.0, 0.0, 0.5], [0.087, 0.0, 0.0, 0.0])
+        );
     }
 }

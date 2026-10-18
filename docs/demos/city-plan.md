@@ -874,7 +874,8 @@ mesh to test navigations inside the houses"):
   - **Matched to the lens:** 109 cd at 2 700 K, the lens's luminance times its area, so 1.9 lux
     under a lamp. The owner tried 7.5 and 12 lux and kept 1.9.
   - **Full cut-off:** all the light down to 60° off the vertical, none from 85°. Lit every way,
-    a bulb left a dark funnel on the facade over each lamp, its own housing's shadow.
+    a bulb left a dark funnel on the facade over each lamp, its own housing's shadow. It is the
+    lamp's emission, `Emission::STREET` (#288).
   - **On the street only:** they light the outside's region (`Lamp::outside`), not the rooms
     behind the windows.
   - **Out of the probes:** the probes leave out the lenses' glow and the lamps' bounce, which
