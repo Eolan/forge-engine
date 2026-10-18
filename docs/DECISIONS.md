@@ -1509,7 +1509,8 @@ sides goes through engine evaluators on `dmath`.
 **Code:**
 - Engine and games are linked statically. No binary Rust plugins.
 - `subsecond` hot-patching of system bodies is an optional development feature.
-- Mod code, if wanted: Wasm components in wasmtime.
+- Mod code, if wanted: Wasm components in wasmtime. (D-072, 2026-10-18: Luau for mod code
+  outside the predicted step; Wasm for mod code inside it.)
   - A WIT API versioned per interface.
   - NaN canonicalisation, deterministic relaxed SIMD, fuel as the per-tick budget.
   - Server-side by default, client-side only for presentation.
@@ -5737,3 +5738,116 @@ the night finds it. The night narrows it to the day's commits.
 (the lab first, 72 of 108 captures a path). It would save about 2 s a capture, but every reset
 must leave nothing behind (DLSS's history, probes, exposure, counters, pools), proved by 0 px
 against fresh runs.
+
+## D-072 — Scripting in Luau through `mlua`, outside the predicted step 🟡 (2026-10-18; Luau the owner's choice, the rest proposed)
+
+The owner asked on 2026-10-18 what the industry uses for scripting and which language Forge
+should take. The research is `docs/research/scripting.md`. Asked which language to use without the
+engine's determinism constraints, Claude recommended Luau, and the owner asked for this entry.
+D-035 placed "the scripting and mod-code decision" at Phase 10. This entry takes the language now
+so that missions and mods are designed for it. Nothing is built until a mission needs code.
+
+**Chosen (the owner):** Luau, Roblox's typed descendant of Lua 5.1 (MIT), embedded through the
+`mlua` crate (MIT) in a new crate, `forge-script`.
+
+**Proposed, for the owner's yes:**
+1. **Missions as data first.** A `Mission` record in `forge-data` packages:
+   - objectives;
+   - triggers: a volume entered, an item picked up, an entity killed, a timer, all-of, any-of;
+   - steps combined in sequence, all together (`sync`), first wins (`race`) or in the background
+     (`branch`), as Verse's structured concurrency names them.
+
+   A Rust system evaluates it at the fixed tick, so it is digested, saved by stage and
+   hot-reloaded. The generator writes these records for generated maps (D-062). Luau is for
+   what the records cannot say.
+2. **Where scripts run:** on the server and in the client's interface. They never run inside the
+   predicted step (D-010, D-016).
+   - A script reads the world through a query API by stable ids.
+   - Its effects are commands stamped with a tick. They travel in the event stream as D-034's
+     director commands do, and Rust systems on every machine apply them.
+3. **State lives in records** (as Factorio's `storage`): saves, snapshots and hot reload then
+   work, and the VM's globals are caches. Coroutines are used only for what may restart from a
+   checkpoint, such as cinematics.
+4. **The sandbox:**
+   - `Lua::sandbox` (read-only libraries and globals, an environment per script), with Forge's
+     libraries only;
+   - a memory limit;
+   - a per-tick instruction budget through Luau's interrupt;
+   - one VM per mod or per trust tier;
+   - no loading of untrusted bytecode.
+5. **Reproducible for replays and captures:**
+   - `math.randomseed` from `Seed::derive`;
+   - `math` mapped to `dmath`;
+   - no clocks;
+   - ordered-iteration helpers, since tables keyed by objects hash by address;
+   - no weak tables in simulation scripts.
+6. **Tooling:**
+   - definition files generated from the Rust API for `luau-lsp`;
+   - `luau-lsp analyze` in the gate;
+   - an F1 zone per script;
+   - a changed module reloaded while the game runs.
+7. **Mods:** data packages first (D-035). Then Luau mods, server-first, with the client running
+   only interface and presentation scripts.
+8. **WebAssembly stays D-035's route** for mod code that must enter the predicted simulation or
+   comes in another language. Before it is built, the claims of Zynga's US 8,449,397 B2 family
+   (scripts run independently on client and server, to about 2031) are read.
+9. **No visual scripting for now.** A graph view of mission records can come with the editor.
+
+**Why Luau:**
+- **Its sandbox is built in,** where plain Lua needs one built by hand.
+- **Gradual types:** a script starts untyped and gains types. `luau-lsp` gives completion and
+  checks in an editor and in CI.
+- **A fast interpreter without a JIT:** consoles and iOS forbid JIT, and native code is opt-in
+  per module.
+- **Lua's simplicity,** readable by the modders of Factorio, Project Zomboid and WoW.
+- **Maintained and adopted:** Roblox maintains it under MIT. Remedy replaced its own language with it
+  for Alan Wake 2, and Warframe uses it.
+- **Live editing,** Remedy's reason for the switch.
+
+**Not chosen:**
+- **Lua 5.4/5.5:** the same culture and 64-bit integers, but the sandbox built by hand and types
+  only through annotations.
+- **TypeScript on QuickJS:** the largest talent pool, but a garbage collector and an engine that
+  changes fast.
+- **WebAssembly only:** the best sandbox and deterministic, but modders and designers must compile.
+- **Rhai, Rune:** easy to embed in Rust, but slow and with small communities.
+- **C# on CoreCLR:** no in-process sandbox exists in modern .NET.
+- **Verse:** promised as open source in 2022 and not released.
+- **Angelscript:** a C++ library whose strength is Unreal's integration.
+
+**What it costs:**
+- **No integer type:** ids travel as opaque handles.
+- **A C++ build inside `mlua`:** Forge's `unsafe` rule holds, since `forge-script` uses only the
+  crate's safe API.
+- **Credits:** Luau and `mlua` get their lines in `CREDITS.md`, and `cargo run -p credits` updates
+  the crate list.
+- **No standard debugger outside Roblox Studio:** logging and the F1 zones come first.
+- **Bindings and definition files to maintain.**
+
+**It amends D-035:**
+- D-035's "Mod code, if wanted: Wasm components" becomes Luau for mod code outside the
+  prediction, and WebAssembly for mod code inside it.
+- D-035's "Not chosen: Lua in the deterministic simulation" stands: scripts stay out of it.
+
+**Patents:**
+- **Nothing found** that points 1–7 build on.
+- **Zynga's family** is read before point 8.
+- **Visual-scripting editors to avoid:** one that draws a model's mesh in the graph (Amazon,
+  US 10,909,754 B1) and one of stacked code tiles (Epic, US 11,144,284 B1).
+
+**The demo that would prove it:**
+- **The same objective twice:** the village map's objective (reach a room, find an item), written
+  once as a mission record and once as a Luau script that sends the same commands.
+- **What must match:** both give the same digests and pixel-identical captures.
+- **The budget:** a script that loops forever is stopped by its budget and reported, with its F1
+  zone.
+- **Hot reload:** a script edited while the map runs takes effect without losing the mission's
+  stage.
+- **The numbers:** a script's time per tick, its memory, and its reload time.
+
+**For the owner to decide:**
+1. Missions as data first (point 1)?
+2. Scripts never inside the predicted step (point 2)?
+3. Mods server-first, the client running only interface scripts (point 7), or full access on
+   client and server as in Project Zomboid?
+4. No visual scripting until the editor (point 9)?
