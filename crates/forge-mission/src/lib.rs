@@ -1,15 +1,17 @@
-//! Missions as data (D-072, #287): what the player is asked, where, with what and in which
-//! order, written as a record (RON, D-035) and evaluated by Rust at the simulation's fixed tick.
+//! Missions as data (D-072, D-073, #287): what the player is asked, where, with what and in
+//! which order, written as a record (RON, D-035) and evaluated by Rust at the simulation's fixed
+//! tick.
 //!
 //! - [`schema`]: the record. Objectives with the text the player reads, places (boxes and balls),
-//!   items the steps spawn and the player picks up, and one tree of steps: waits on triggers
-//!   (a place entered, an item picked up, a time, an event the game sends, all of or any of them)
-//!   combined in sequence, all together, in a race or in the background, as Verse's structured
-//!   concurrency combines them.
+//!   items the steps spawn and the player picks up, integer counters, and one tree of steps:
+//!   waits on conditions (inside a place, near one or an item, holding an item, a time, a
+//!   counter, an event the game sends, all of, any of, not) that succeed or fail, combined in
+//!   sequence, all together, in a race or in the background, as Verse's structured concurrency
+//!   combines them, with actions (spawn, set and add, emit, end) and optional steps.
 //! - [`Runtime`]: the record compiled and its state, ticked with the player's position. It
 //!   tells what changed ([`MissionEvent`]), where the waits point ([`Runtime::targets`]), and
-//!   saves exactly (a snapshot for rollback and replays, with its digest) or by stage (what is
-//!   done by id, for save games and hot reload into a changed record).
+//!   saves exactly (a snapshot for rollback and replays, with its digest) or by stage (which
+//!   steps ended and how, by id, for save games and hot reload into a changed record).
 //!
 //! The evaluation is plain integer and `f64` comparisons in a fixed order, so a mission inside a
 //! deterministic simulation stays deterministic (D-016): the same ticks and positions, the same
@@ -20,9 +22,10 @@
 mod runtime;
 pub mod schema;
 
-pub use runtime::{ItemState, MissionEvent, Outcome, Runtime, Stage, Status};
+pub use runtime::{Ended, ItemState, MissionEvent, Outcome, Runtime, Stage, Status, StepStatus};
 pub use schema::{
-    Item, Mission, Objective, Place, SCHEMA_VERSION, Shape, Step, Trigger, parse, validate,
+    Action, Compare, Condition, End, Item, Mission, Objective, Place, SCHEMA_VERSION, Shape, Step,
+    parse, step_ids, validate,
 };
 
 /// What can go wrong with a mission.

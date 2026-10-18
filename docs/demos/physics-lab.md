@@ -262,10 +262,22 @@ The test mission, `fetch.ron`, has three objectives:
 2. Find the barrel that appears on the floor past the crates.
 3. Be back at the start within 30 s, or fail.
 
+In the record's second version (D-073), each objective is a step, and the last is one wait:
+
+```ron
+steps: (id: "main", seq: [
+    (id: "climb", objective: "climb", until: Inside("top")),
+    (id: "spawn", do: [Spawn("barrel")]),
+    (id: "find", objective: "find", until: Holds("barrel")),
+    (id: "back", objective: "return", until: Inside("start"), fail_if: After(30.0)),
+]),
+```
+
 Walked by the autopilot:
 - **The run:** the climb ends at tick 261, the barrel is picked up at 627, the mission is won at
-  751.
-- **Replay:** its recording replays with its 40 digests matched.
+  751, the same in both versions of the record.
+- **Replay:** its recording replays with its digests matched (40 in the first version's run, 15
+  in the second's, 900 frames).
 - **Captures:** at frames 550 (the barrel there) and 700 (picked up), 0 px run to run and
   between the mesh path and the fallback (`lab-mission550`, `lab-mission700`).
 - **Hot reload:** the file edited after the pickup (the return's text and its time) reloaded with

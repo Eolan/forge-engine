@@ -6032,3 +6032,48 @@ widened by the owner.
 9. **Patents:**
    - read the Zynga claims before a server sends records to clients at run time;
    - read Kabam's before the generator picks objective types, counts or time limits at random.
+
+**Version 2 of the record (2026-10-18, #287): the research's proposal with the owner's answers.**
+- **A step is one record with named fields**, exactly one of these kinds:
+  - a wait: `until`, and `fail_if`, tested first (a tie goes to failure); `fail_if` alone waits
+    on `Never`;
+  - `seq`, `all`, `race`, `branch`;
+  - `do`: actions.
+- **Any step may also have:**
+  - `id` (else its parent's id and its place, `main/2`, the root's `root`);
+  - `objective`, `optional`;
+  - `then`, `on_fail` and `on_cancel` actions.
+- **Optional fields are written without `Some`** (RON's implicit-some extension):
+  `(id: "back", objective: "return", until: Inside("start"), fail_if: After(30.0))`.
+- **Outcomes:** a step succeeds, fails or is cancelled.
+  - a `seq` fails with a required step;
+  - an `all` succeeds when its required steps have, and cancels its optional ones (*missed*);
+  - a `race` is decided by the first step to end, failed or not;
+  - a `branch` succeeds at once, its step running on until the step holding it ends;
+  - the mission ends with its root step or an `End` action.
+- **Conditions:** `Inside(place)`, `Near(place or item, metres)`, `Holds(item)`,
+  `After(seconds)`, `Var(name, AtLeast | AtMost | Equals)`, `Event(name)`, `AllOf`, `AnyOf`,
+  `Not` (tested as it is now, not latched) and `Never`.
+- **Actions,** applied in order and seen by later steps in the same tick: `Spawn(item)`,
+  `Set(var, value)`, `Add(var, delta)`, `Emit(tag)`, `End(Succeeded | Failed)`. The counters are
+  integers declared with their starting values (`vars`).
+- **Objectives are a view of their steps:** pending, active, completed, failed or missed. They are
+  never stored.
+- **The stage** keeps which steps ended and how, by id (followed through `renamed`, the record's
+  tombstones), with the counters by name and the items. Loaded into a changed record, the ended
+  steps stay ended without running their actions again, and the steps that were running start
+  again. A branch whose step was running starts it again. This is the research's reconcile rule
+  (`docs/research/missions.md` §7.8).
+- **Version 1's records are refused** with a message: the one record there was (`fetch.ron`)
+  was written again. Its race against a timer is now a wait with `fail_if: After(30.0)`.
+- **Checked:**
+  - 27 unit tests: v1's ported, plus the tie, the race decided by a failure, optional steps
+    missed and failing, counters seen in the same tick, `End` cancelling the rest with its
+    `on_cancel`, `Not`, `Near` an item only once it lies there, derived ids, renames in a stage,
+    and a reload that runs no ended step again;
+  - the lab's mission plays out as before: climbed at tick 261, the barrel picked at 627, won at
+    751. `lab-mission550` and `lab-mission700` are 0 px against the accepted set on both paths.
+    A recording replays with all its 15 digests matched;
+  - 1.0 µs a tick on average, 6.9 µs at most.
+- **Not yet:** roles bound to what a map or a generator placed (`Placed`, `Tagged`), `CountOf`
+  over a role's members, and `Dead` or `Killed`. They wait for placements and deaths.

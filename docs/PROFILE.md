@@ -1995,7 +1995,8 @@ buffer each, copied bit by bit).
   places, one item, a race with a 30 s timer), evaluated once a tick on the frame thread after the
   lab's world, wall clock around the call.
 - **Result:** 1.18 µs a tick on average over 1272 ticks of a real-time run, 6.1 µs at most; 1.57
-  µs over a shorter run.
+  µs over a shorter run. The record's second version (the race now a wait with `fail_if`):
+  1.01 µs on average over 900 fixed-step ticks, 6.9 µs at most.
 - **Where it shows:** logged at exit ("the mission's ticks (µs) over the run"). The app's CPU
   zones are its own, so it has no F1 zone yet.
 
