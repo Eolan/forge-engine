@@ -5954,6 +5954,29 @@ appears, back at the start within 30 s, or fail):
     mission records to clients at run time.
   - **Kabam's US 9,463,376 B1** (objectives generated at random by task type, amount or time):
     read its claims before the generator picks those at random.
-- **Its nine questions** (§7.12) wait for the owner, among them: whether event conditions stay
-  (D-073 has `Event` for what has no trigger yet), whether failure wins a tie with success in a
-  tick, and whether generated missions are made on every machine from the seed.
+**The owner's answers to its nine questions** (§7.12, 2026-10-18): the proposals, the eighth
+widened by the owner.
+1. **Conditions on the world's state are the rule.** `Event` stays for what has no state yet
+   (interactions, and kills until deaths are recorded), counted from its wait's start and kept in
+   the snapshot. Each moves to a state condition when its system exists (`Dead`, `Holds`).
+2. **A tie goes to failure:** when a wait's `fail_if` and its condition hold in the same tick, it
+   fails.
+3. **The first arm of a race to end decides it,** failed or not (Verse's rule). Arms ending in the
+   same tick go by their written order, as now.
+4. **The optional children of an `All`** are cancelled, shown as *missed*, when its required ones
+   are done.
+5. **Co-op:** a role standing for the players is inside when any player is. A per-player form
+   waits for a game that needs it.
+6. **Every tick,** measured (1.2–1.6 µs now).
+7. **A required role that cannot bind** when an old save loads in a release: the steps that use it
+   are cancelled (*missed*) and logged, and the mission goes on. An update never leaves a mission
+   stuck, nor fails it. (The note proposed nothing; this was Claude's recommendation.)
+8. **Two origins, one evaluator.**
+   - **Generated missions** are made again on every machine from the map's seed. Only the
+     generator and the seed travel.
+   - **Authored missions** ship as records and Luau scripts in packages (D-035, D-072). This
+     covers hand-made maps and games without a generator. The owner: some scripts make no sense
+     with seeds, and a hand-made project's scripts are what it needs.
+9. **Patents:**
+   - read the Zynga claims before a server sends records to clients at run time;
+   - read Kabam's before the generator picks objective types, counts or time limits at random.

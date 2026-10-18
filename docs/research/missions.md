@@ -685,6 +685,11 @@ This is what CD Projekt RED's deletion marker and Factorio's migrations do by ha
 8. **Generated records:** generated on every machine from the seed (proposed), or shipped as a package?
 9. **Patents:** read the Zynga state-machine claims (US 9,463,386, US 9,821,230) before records are ever sent by a server at run time? Read Kabam's US 9,463,376 claims before the generator picks objective types, counts or time limits at random?
 
+**Answered by the owner on 2026-10-18** (D-073): the proposals, with three additions.
+- **Q1:** `Event` stays for what has no state yet, kept in the snapshot.
+- **Q7:** the steps using the unbound role are cancelled and logged, and the mission goes on.
+- **Q8:** generated missions come from the seed; authored ones ship as records and Luau scripts.
+
 ---
 
 ## Sources
