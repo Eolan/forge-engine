@@ -385,14 +385,11 @@ fn window(m: &mut TriMesh, w: f32, h: f32, depth: f32, mullion: bool) {
     // The frame, standing a little in front of the glass.
     let (z0, z1) = (glass - 0.01, glass + 0.06);
     let f = 0.065;
+    // Closed on every side: a room whose insides are built sees its frames' backs through the
+    // clear glass (D-065's part 4); without them the bars were hollow from inside and read as
+    // gaps between the frame and the walls (the owner, 2026-10-18).
     let bar = |m: &mut TriMesh, x0: f32, y0: f32, x1: f32, y1: f32| {
-        cuboid(
-            m,
-            Vec3::new(x0, y0, z0),
-            Vec3::new(x1, y1, z1),
-            FRAME,
-            NO_BACK,
-        );
+        cuboid(m, Vec3::new(x0, y0, z0), Vec3::new(x1, y1, z1), FRAME, ALL);
     };
     bar(m, 0.0, 0.0, f, h);
     bar(m, w - f, 0.0, w, h);
