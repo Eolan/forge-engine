@@ -1241,11 +1241,12 @@ fn taxis_drive_and_turn_clear_of_the_kerbs_bollards_trees_and_lamps() {
         "lanes meet bollards at {:?}",
         views(&lanes[0])
     );
-    // What is left may not grow: the five sharp kinks of driven roads' centrelines (35° to 68° at
-    // one point) where a body crosses the inside kerb, and the two acute junctions where no
-    // curve is wide enough to turn (a three-point turn there).
+    // No lane crosses a kerb: the sharp bends of driven roads' centrelines (35° to 68° at one
+    // point) have their inside kerbs rounded as the junctions' corners are. What is left may not
+    // grow: the two acute junctions where no curve is wide enough to turn (a three-point turn
+    // there).
     assert!(
-        lanes[5].len() <= 5,
+        lanes[5].is_empty(),
         "lanes over a kerb at {:?}",
         views(&lanes[5])
     );

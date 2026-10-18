@@ -726,6 +726,38 @@ impl GroundMap {
                 });
             }
         }
+        // The inside of a driven road's own bend (a point of its centreline, not a junction):
+        // its kerb rounded on KERB_RADIUS as a corner between two arms is. The kerb met at a
+        // point, and a taxi's body crossed it at the avenues' sharp bends (#276).
+        for (k, e) in graph.edges.iter().enumerate() {
+            if !e.profile.driven() || e.points.len() < 3 {
+                continue;
+            }
+            let (half, kerb) = (e.profile.width() * 0.5, e.profile.carriageway() * 0.5);
+            for w in e.points.windows(3) {
+                let (back, on) = (w[0] - w[1], w[2] - w[1]);
+                let (u, v) = (back.normalize_or_zero(), on.normalize_or_zero());
+                // Straighter than 10°: no corner to round.
+                if u.dot(v) < -(10f64.to_radians().cos()) {
+                    continue;
+                }
+                let arm = |dir: DVec2, length: f64| Arm {
+                    edge: k as u32,
+                    dir,
+                    angle: 0.0,
+                    half,
+                    kerb,
+                    length,
+                };
+                let (i, j) = (arm(u, back.length()), arm(v, on.length()));
+                // The bend's inside: whichever way round it is a corner.
+                let wedge =
+                    fillet(w[1], &i, &j, KERB_RADIUS).or_else(|| fillet(w[1], &j, &i, KERB_RADIUS));
+                if let Some((wedge, _, _)) = wedge {
+                    wedges.push(Piece::from_points(&wedge));
+                }
+            }
+        }
         // A dropped kerb at each end of a crossing at the carriageway's level; a raised table's
         // two ramps up from the carriageway either side of one at the walking level (they stand
         // on the carriageway, the dropped kerbs on the pavement).

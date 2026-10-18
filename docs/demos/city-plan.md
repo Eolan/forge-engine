@@ -1770,17 +1770,19 @@ landing. `--clock SECONDS` sets the service's clock for a capture.
     - **The turns:** each body turns from every taxi road into every other at each junction. A
       turn counts as possible when one of six curves, from 3 to 12 m before the junction, is clear
       and no tighter than the body turns (4.5 m at its middle for the cab, 5.5 m for the shuttle).
-    - **Two bugs it found, fixed:**
+    - **Three things it found, fixed:**
       - Where a walking way left a road at a sharp angle, the end bollards of its row stood in the
         road's lane. Bollards on a driven arm's carriageway, or within 0.3 m of its kerb, are now
         left out.
       - Where two arms of a road met in a near straight line, their carriageways' flat ends met
         edge to edge. The union kept a slit from the kerb to the node, and a kerb's face stood
         across half the avenue. Each carriageway now runs 0.3 m past its junction ends.
-    - **What is left** (122.7 km of lanes, 1 366 turns; the test holds the counts and prints a
-      `--view` over each place):
-      - five sharp kinks of 35° to 68° in avenues' centrelines, whose inner kerb a body crosses;
-      - two acute junctions where no curve is wide enough, so a turn there takes three points.
+      - At the sharp bends of driven roads' centrelines (35° to 68° at one point), a body
+        crossed the inside kerb, which met at a point. The inside of every bend over 10° is now
+        rounded on 6 m, as a junction's corner between two driven arms is.
+    - **What is left** (122.7 km of lanes, no lane over a kerb; 1 366 turns): two acute
+      junctions where no curve is wide enough, so a turn there takes three points. The test holds
+      the count and prints a `--view` over each.
   - **Crossings:** a zebra 4 m wide on each driven arm of every junction, a metre past its corner
     or past a pedestrian way's mouth. A dropped kerb at each end slopes 1.6 m (1 in 12, #263) down
     to a 1 cm lip, its sides flared at 1 in 12 too, so there is no edge to step or roll over (the
