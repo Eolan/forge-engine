@@ -305,7 +305,7 @@ stars binned on a cube of cells round the sky (procedural, or a catalogue's), th
 airglow. The exposure is held a few stops under the eye's adaptation at night, and the display
 pass fades colours and tints them blue as the rods take over (the Purkinje shift).
 
-**The resolve is TAA or DLSS** (issue #8, D-024). The scene is drawn jittered into a
+**The resolve is TAA, DLSS or FSR** (issue #8, D-024, D-070). The scene is drawn jittered into a
 pre-exposed HDR target either way, and the motion vectors (UV offsets from depth and the two
 cameras) are their own pass. TAA resolves at the output size and writes the display image
 through the tone curve in the same pass, or a sharpening pass does (RCAS, D-045). DLSS (the
@@ -313,8 +313,16 @@ through the tone curve in the same pass, or a sharpening pass does (RCAS, D-045)
 draws the scene at its input size, upscales into an HDR image at the output size, and the
 display pass applies the curve and bloom. DLAA is the default of every run where it runs,
 scripted runs and their captures included (D-070): its images repeat to the bit since #277 and
-#281, and a new driver or DLSS DLL is a re-baseline (`tools/verify.sh --rebaseline`). FSR 3.1
-is to replace TAA on other GPUs. The DLSS pass
+#281, and a new driver or DLSS DLL is a re-baseline (`tools/verify.sh --rebaseline`).
+- **FSR 3.1** (`forge_render::FsrUpscaler`, `--set r.aa=fsr`) is AMD's upscaler on any GPU, in
+  place of TAA.
+  - **Shaders:** AMD's own headers (FidelityFX SDK v1.1.4, MIT) in `shaders/third-party/fidelityfx/`,
+    reached through Forge's bridge (`shaders/fsr_bridge.slang`). Its eight passes are graph
+    passes like any other.
+  - **Forge's one change:** the history is clamped to a min/max box (`docs/research/fsr-3-1.md`).
+  - **Next:** it is to replace TAA everywhere.
+
+The DLSS pass
 is a graph pass like any other: it declares every image it hands to Streamline, and its
 output with a `Custom` access, because NGX clears it at the transfer stage before writing it.
 

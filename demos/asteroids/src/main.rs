@@ -30,9 +30,9 @@ use forge_render::material::{TextureSet, stock};
 use forge_render::meshlet::DrawParams;
 use forge_render::{
     AmbientLight, Atmosphere, AtmosphereParams, AutoExposure, Bloom, CullCamera, CullFlags,
-    Display, DlssMode, DlssUpscaler, DustParams, DustVolume, FrameStats, Gtao, GtaoParams,
-    HDR_FORMAT, HdrOutput, LuminanceMeter, MeshletRenderer, MeshletScene, MeshletSceneBuilder,
-    MoverTransform, Starfield, Taa, Tonemap, UpscaleCamera,
+    Display, DlssMode, DlssUpscaler, DustParams, DustVolume, FrameStats, FsrMode, FsrUpscaler,
+    Gtao, GtaoParams, HDR_FORMAT, HdrOutput, LuminanceMeter, MeshletRenderer, MeshletScene,
+    MeshletSceneBuilder, MoverTransform, Starfield, Taa, Tonemap, UpscaleCamera,
 };
 use forge_task::TaskPool;
 use glam::{Mat4, Quat, Vec3};
@@ -182,10 +182,11 @@ struct Args {
     /// Show TAA's image unsharpened.
     #[arg(long)]
     no_rcas: bool,
-    /// Anti-aliasing and upscaling: auto, taa, or a DLSS mode (dlaa, quality, balanced,
-    /// performance, ultra-performance; needs the Streamline SDK in `streamline-sdk/` and an RTX
-    /// GPU). Auto is DLAA where it runs, in every run, scripted ones and their captures too
-    /// (D-070), unless `--no-taa` or `--set r.aa=taa|off`. U cycles them at run time.
+    /// Anti-aliasing and upscaling: auto, taa, fsr (AMD's FSR 3.1 at the window's size, any GPU,
+    /// D-070), or a DLSS mode (dlaa, quality, balanced, performance, ultra-performance; needs the
+    /// Streamline SDK in `streamline-sdk/` and an RTX GPU). Auto is DLAA where it runs, in every
+    /// run, scripted ones and their captures too (D-070), unless `--no-taa` or
+    /// `--set r.aa=taa|off|fsr`. U cycles them at run time.
     #[arg(long, default_value = "auto")]
     upscaler: String,
     /// Switch the anti-aliasing as U does every N frames (tests the switch in scripted runs).
@@ -471,6 +472,10 @@ struct Ballad {
     /// DLSS, when the device has it; used instead of the TAA resolve while `dlss_on`.
     dlss: Option<DlssUpscaler>,
     dlss_on: bool,
+    /// AMD's FSR 3.1 (D-070) when the run asks for it; used instead of the TAA resolve while
+    /// `fsr_on`.
+    fsr: Option<FsrUpscaler>,
+    fsr_on: bool,
     /// Takes DLSS's HDR output through the tone curve to the swapchain.
     display: Display,
     /// The size the scene is drawn at (the window's, or DLSS's input size).
@@ -555,7 +560,7 @@ impl Ballad {
         let display = Display::new(&ctx.device, &ctx.shaders, ctx.output.format)?;
         let auto = args.upscaler == "auto";
         let requested = match args.upscaler.as_str() {
-            "taa" => None,
+            "taa" | "fsr" => None,
             "auto" => args
                 .settings
                 .wants_dlss(args.no_taa)
@@ -577,6 +582,11 @@ impl Ballad {
             );
         }
         let dlss_on = requested.is_some() && dlss.is_some();
+        // FSR 3.1 (D-070) in place of TAA when asked for: `--upscaler fsr`, or `--set r.aa=fsr`.
+        let fsr = (args.upscaler == "fsr" || (auto && args.settings.asked_aa() == Some("fsr")))
+            .then(|| FsrUpscaler::new(&ctx.device, &ctx.shaders, FsrMode::NativeAa, ctx.extent()))
+            .transpose()?;
+        let fsr_on = fsr.is_some();
         let (scene, path) = build_field(ctx, &args, field)?;
         let ships = (args.ships > 0).then(|| Ships {
             path: path.clone(),
@@ -666,6 +676,8 @@ impl Ballad {
             taa_enabled,
             dlss,
             dlss_on,
+            fsr,
+            fsr_on,
             display,
             render_extent: ctx.extent(),
             meter,
@@ -705,7 +717,13 @@ impl Ballad {
                 dlss.configure(dlss.mode(), output)?;
                 dlss.render_extent()?
             }
-            _ => output,
+            _ => match &mut self.fsr {
+                Some(fsr) if self.fsr_on => {
+                    fsr.configure(FsrMode::NativeAa, output)?;
+                    fsr.render_extent()
+                }
+                _ => output,
+            },
         };
         if render != self.render_extent {
             self.renderer.resize(render)?;
@@ -721,6 +739,7 @@ impl Ballad {
     fn upscaler_label(&self) -> &'static str {
         match &self.dlss {
             Some(dlss) if self.dlss_on => dlss.mode().label(),
+            _ if self.fsr_on => "FSR",
             _ => "TAA",
         }
     }
@@ -843,7 +862,7 @@ impl Demo for Ballad {
             ));
             ctx.profile.counter(format!(
                 "{} (U) at {}x{}   occlusion {}   cone {}   {}",
-                if self.dlss_on {
+                if self.dlss_on || self.fsr_on {
                     self.upscaler_label().to_owned()
                 } else if self.taa_enabled {
                     "TAA on (T)".to_owned()
@@ -923,8 +942,8 @@ impl Demo for Ballad {
         }
         // Draw jittered into the HDR target; cull with the unjittered camera. The rocks go
         // first, then the sky fills the pixels they left (depth-tested), then the resolve.
-        // DLSS needs the jitter whatever T says.
-        self.taa.enabled = self.taa_enabled || self.dlss_on;
+        // DLSS and FSR need the jitter whatever T says.
+        self.taa.enabled = self.taa_enabled || self.dlss_on || self.fsr_on;
         // The soft shadows' noise repeats with the jitter (issue #54).
         self.renderer.noise_frame =
             (self.taa.frame_index() % u64::from(self.taa.jitter_phases)) as u32;
@@ -1081,21 +1100,37 @@ impl Demo for Ballad {
                 taa_frame.jitter,
             );
         }
-        let (history, bloom_image) = match self.dlss.as_mut() {
-            Some(dlss) if self.dlss_on => {
-                let upscaled = dlss.upscale(
-                    &mut frame.graph,
-                    ctx.frames_rendered,
-                    &taa_frame,
-                    UpscaleCamera {
-                        projection: self.camera.projection(ctx.aspect()),
-                        near: self.camera.near,
-                        vertical_fov: self.camera.fov_y,
-                    },
-                    targets.depth,
-                    motion,
-                    exposure,
-                )?;
+        let upscale_camera = UpscaleCamera {
+            projection: self.camera.projection(ctx.aspect()),
+            near: self.camera.near,
+            vertical_fov: self.camera.fov_y,
+        };
+        let upscaled = match (self.dlss.as_mut(), self.fsr.as_mut()) {
+            (Some(dlss), _) if self.dlss_on => Some(dlss.upscale(
+                &mut frame.graph,
+                ctx.frames_rendered,
+                &taa_frame,
+                upscale_camera,
+                targets.depth,
+                motion,
+                exposure,
+            )?),
+            // FSR 3.1 (D-070) on the run's step, fixed in scripted runs.
+            (_, Some(fsr)) if self.fsr_on => Some(fsr.upscale(
+                &mut frame.graph,
+                frame.slot,
+                &taa_frame,
+                upscale_camera,
+                targets.depth,
+                motion,
+                None,
+                exposure,
+                self.step,
+            )),
+            _ => None,
+        };
+        let (history, bloom_image) = match upscaled {
+            Some(upscaled) => {
                 // Bloom from the frame drawn, at its size: it is blurred to the bone anyway.
                 let bloom = self.bloom_on.then(|| {
                     self.bloom
@@ -1191,7 +1226,7 @@ impl Demo for Ballad {
             self.exposure.ev100,
             self.tonemap.name(),
             if self.paused { "[P paused] " } else { "" },
-            if self.dlss_on {
+            if self.dlss_on || self.fsr_on {
                 format!("[U {}] ", self.upscaler_label())
             } else if self.taa_enabled {
                 "[T taa] ".to_owned()

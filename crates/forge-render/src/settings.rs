@@ -12,7 +12,7 @@ use crate::display::Tonemap;
 use crate::meshlet::SwRaster;
 
 /// [`aa`]'s choices.
-pub const AA: &[&str] = &["off", "taa", "dlaa", "dlss"];
+pub const AA: &[&str] = &["off", "taa", "dlaa", "dlss", "fsr"];
 /// [`aa`]: none.
 pub const AA_OFF: usize = 0;
 /// [`aa`]: temporal anti-aliasing.
@@ -21,6 +21,8 @@ pub const AA_TAA: usize = 1;
 pub const AA_DLAA: usize = 2;
 /// [`aa`]: NVIDIA's DLSS, rendering smaller ([`dlss_mode`]).
 pub const AA_DLSS: usize = 3;
+/// [`aa`]: AMD's FSR 3.1 at the window's size (D-070), on any GPU.
+pub const AA_FSR: usize = 4;
 
 /// Anti-aliasing.
 pub fn aa(default: usize) -> Spec<usize> {
@@ -28,9 +30,10 @@ pub fn aa(default: usize) -> Spec<usize> {
         "r.aa",
         AA,
         default,
-        "Anti-aliasing: off, taa, dlaa (NVIDIA's DLAA at the window's size), or dlss (rendering \
-         smaller, r.dlss.mode). DLAA and DLSS need the Streamline SDK and an RTX GPU; without \
-         them, TAA. A demo that does not upscale shows dlss as dlaa.",
+        "Anti-aliasing: off, taa, dlaa (NVIDIA's DLAA at the window's size), dlss (rendering \
+         smaller, r.dlss.mode), or fsr (AMD's FSR 3.1 at the window's size, any GPU; a run that \
+         starts with --set r.aa=fsr). DLAA and DLSS need the Streamline SDK and an RTX GPU; \
+         without them, TAA. A demo that does not upscale shows dlss as dlaa.",
     )
 }
 

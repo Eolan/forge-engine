@@ -99,17 +99,18 @@ and compares each with `captures/map/accepted` by LDR-ꟻLIP; `--accept` makes t
 accepted set. About two minutes: the check per commit for the map, where the tiers run at
 milestones on the owner's word. The runs stay in `captures/map/<time>/` with a contact sheet.
 
-- **The sentinels** are thirteen captures, one or more from every demo:
+- **The sentinels** are fourteen captures, one or more from every demo:
   - meshlets: `static60`, `orbit120`, `noocc120`;
   - the ballad without AA: `ast-notaa600`, `ast240`, `ast240-noocc`, and its HDR output
     `ast-hdr600`;
   - the resident city: `city60`, `city60-noocc`, and the gallery `gallery60`;
   - since D-071: the island's `shot-island`, the lab's `lab-materials60` and the planet's
-    `planet-ground`.
+    `planet-ground`;
+  - since D-070's FSR: the city under FSR 3.1, `city60-fsr`.
 
   They catch a change that reaches further than its paths say. They are also the day check of a
-  shared change. Their validation runs the first run of the ballad, meshlets, the city, the island
-  and the lab.
+  shared change. Their validation runs the first run of the ballad, meshlets, the city (also
+  under FSR), the island and the lab.
 - **The sets** (`FORGE_SETS` of `captures.sh`, `validate.sh` and `timings.sh`): `meshlets`,
   `ballad`, `city`, `island` (the city's island and the island demo's shots), `sentinels`,
   `all`. `FORGE_PATHS` picks `mesh`, `fb` or both. The images keep their names.

@@ -5526,8 +5526,50 @@ sharpening, and the lamp filter's flicker under TAA. The last two run-to-run fla
   neighbourhood clamp (Karis 2014, older than NVIDIA's priority date). The swap is a small
   patch of AMD's header, kept in Forge, and its effect on ghosting and shimmer is measured.
 
-**Next:** FSR 3.1, built on its shaders through a Forge bridge (as RTXDI is, D-065), then TAA's
-resolve and sharpening removed.
+**FSR 3.1 built (2026-10-18), `--set r.aa=fsr` in every demo** (`forge_render::FsrUpscaler`):
+- **AMD's headers are kept in Forge,** in `shaders/third-party/fidelityfx/`. Their licence is MIT,
+  and FSR must be there on any machine, unlike RTXDI's SDK.
+  - Forge's bridge (`shaders/fsr_bridge.slang`) gives them their callbacks over the bindless images
+    and a frame block, with AMD's binding numbers as slots in each pass's push constants.
+  - One Slang file a pass: Slang compiles them as Slang, not HLSL, so AMD's loops build unchanged.
+  - The options are fixed: 32-bit floats, HDR input, motion at the render's size without jitter,
+    reversed infinite depth, and the downsampler without wave operations (no subgroup size
+    assumed).
+- **Its host code is in Rust:** the images, the constants each frame, and the eight passes in
+  the render graph (`temporal/FSR …`), plus a clear pass for what AMD clears. The motion and the
+  jitter are Forge's TAA's, the same conventions (motion in UV, scale 1).
+- **Found on the way:** AMD's new-locks image is read everywhere and written only on thin
+  features; its accumulation zeroes it for the next frame. As an aliased transient it read
+  garbage, so the island's water differed 15.7 % between the mesh path and the fallback. It is now
+  kept between frames, and every image kept is cleared on the first frame (Vulkan's memory is
+  not zero).
+- **Determinism:** run to run and mesh against fallback are 0 px. That was checked in the city,
+  the ballad at frame 600, the planet's ground, the lab's drop and smoke yard, and the island's
+  water. Its passes compile with `-fp-mode precise`, as TAA's do.
+- **The measures,** in the city at 1600 × 900:
+  - the still camera: the pixels changing between frames 10 apart;
+  - the turn: 3° a second, the pixels whose change from frame to frame differs from SSAA 2 × 2's;
+  - the error against SSAA at frame 70.
+
+  | | Still | Turn | ꟻLIP vs SSAA | Frame (GPU) |
+  |---|---|---|---|---|
+  | FSR, min/max box (Forge's) | 0.074 % | 34.0 % | 0.0414 | 3.75 ms |
+  | FSR, AMD's variance box | 0.487 % | 33.3 % | 0.0408 | 3.58 ms |
+  | DLAA | 0.249 % | 36.9 % | 0.0434 | 4.08 ms |
+  | TAA | 4.98 % | 40.6 % | 0.0457 | 3.50 ms |
+
+  - The min/max box steadies the still image six times over. It loses 0.7 points in the turn and
+    1.5 % of ꟻLIP.
+  - FSR beats DLAA here on all three measures.
+  - Its passes take 0.31–0.35 ms, against DLSS's 0.63 ms.
+- **The captures:** `ast-fsr600`, `city60-fsr` (a sentinel) and `lab-drop90-fsr` on both paths,
+  plus a validation run of the city under FSR.
+
+**Next:**
+- FSR as the anti-aliasing where DLSS is not (the default off NVIDIA), then TAA's resolve and
+  sharpening removed. The jitter, the motion vectors, the reactive mask and the exposure stay.
+- FSR's upscaling modes (`FsrMode::Quality` and the others, for the asteroids' `--upscaler`).
+- RCAS after FSR: `FsrUpscaler::sharpness`, off for now as DLAA's image is.
 
 ## D-071 — The day check and the night's full batch ✅ (2026-10-18, #286, the owner's choice)
 

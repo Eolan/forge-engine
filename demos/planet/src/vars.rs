@@ -4,7 +4,7 @@
 //! console (no key sets them since D-069's key map).
 
 use forge_app::settings::{Settings, Spec, Var};
-use forge_render::settings::{self as rs, AA_DLAA, AA_DLSS, AA_OFF, AA_TAA};
+use forge_render::settings::{self as rs, AA_DLAA, AA_DLSS, AA_FSR, AA_OFF, AA_TAA};
 use forge_render::{CullFlags, Tonemap};
 
 use crate::PlanetDemo;
@@ -56,6 +56,8 @@ impl PlanetDemo {
         let aa_default = if self.dlaa.is_some() { AA_DLAA } else { AA_TAA };
         let aa_now = if !self.taa_enabled {
             AA_OFF
+        } else if self.fsr_on {
+            AA_FSR
         } else if self.dlaa_on {
             AA_DLAA
         } else {
@@ -123,6 +125,15 @@ impl PlanetDemo {
             }
             // DLSS's smaller modes are the asteroids' alone: the planet shows dlss as DLAA.
             self.dlaa_on = wanted && self.dlaa.is_some();
+            self.fsr_on = aa == AA_FSR && self.fsr.is_some();
+            if let Some((fsr, _)) = self.fsr.as_mut().filter(|_| aa == AA_FSR) {
+                fsr.reset_history();
+            }
+            if aa == AA_FSR && self.fsr.is_none() {
+                tracing::info!(
+                    "r.aa fsr: FSR is made when a run starts with --set r.aa=fsr; TAA instead"
+                );
+            }
             self.taa_enabled = aa != AA_OFF;
             self.taa.sharpen = s.get(v.sharpen).then_some(s.get(v.sharpen_stops) as f32);
             self.taa.reset_history();

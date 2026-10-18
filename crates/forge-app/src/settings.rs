@@ -42,10 +42,10 @@ impl SettingsArgs {
     /// Whether a run anti-aliases with DLSS where the device runs it (D-070): DLSS is the
     /// reference image, so scripted runs and their captures too, unless the run turns
     /// anti-aliasing off (`no_aa`, a demo's `--no-taa`) or asks for TAA or none
-    /// (`--set r.aa=taa`, `--set r.aa=off`). DLAA's images are equal run to run since #277 and
-    /// #281 (D-070's check), so the captures keep their 0 px.
+    /// (`--set r.aa=taa`, `--set r.aa=off`) or FSR (`--set r.aa=fsr`). DLAA's images are equal
+    /// run to run since #277 and #281 (D-070's check), so the captures keep their 0 px.
     pub fn wants_dlss(&self, no_aa: bool) -> bool {
-        !no_aa && !matches!(self.asked_aa(), Some("off" | "taa"))
+        !no_aa && !matches!(self.asked_aa(), Some("off" | "taa" | "fsr"))
     }
 
     /// The settings file to read: `--cfg`, else `FORGE_CFG`, else `forge.cfg`; none with
@@ -85,6 +85,8 @@ mod tests {
         assert!(!args(&[]).wants_dlss(true));
         assert!(!args(&["r.aa=taa"]).wants_dlss(false));
         assert!(!args(&["r.aa = off"]).wants_dlss(false));
+        // FSR (D-070) in its place.
+        assert!(!args(&["r.aa=fsr"]).wants_dlss(false));
         // The last `r.aa` counts, whatever its case.
         assert!(args(&["r.aa=taa", "R.AA=dlaa"]).wants_dlss(false));
         assert_eq!(args(&["r.aa=off", "r.aa=taa"]).asked_aa(), Some("taa"));

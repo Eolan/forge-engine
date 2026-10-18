@@ -40,7 +40,7 @@ sets_of() {
     ships | hdr | hdr-calibration | hdr-switch) echo ballad ;;
     meshlets) echo meshlets sentinels ;;
     hdr-display) echo meshlets ;;
-    city) echo city sentinels ;;
+    city | city-fsr) echo city sentinels ;;
     city-* | gallery) echo city ;;
     lab) echo lab sentinels ;;
     lab-sea | lab-walk | lab-drive | lab-fly | lab-break | lab-creatures | lab-flood | lab-dominoes | lab-bridge | lab-rocket | lab-tug | lab-space | lab-tank | lab-tank-bench | lab-tank-hole | lab-tank-blocks | lab-room) echo lab ;;
@@ -103,6 +103,8 @@ for path in $paths; do
   validate "meshlets$tag" "$bin/meshlets$exe" --mip-check --tone-check --frames 60 $path
   validate "city$tag" "$bin/city-blocks$exe" --frames 90 $path
   validate "city-resident$tag" "$bin/city-blocks$exe" --stream-pool 0 --frames 60 $path
+  # FSR 3.1 (D-070), the path off NVIDIA.
+  validate "city-fsr$tag" "$bin/city-blocks$exe" --set r.aa=fsr --frames 60 $path
   # The flight streams pages on the transfer queue after the start, and the frames after a copy
   # leave out the waits their queue already made (#104).
   validate "city-fly$tag" "$bin/city-blocks$exe" --fly --frames 600 $path

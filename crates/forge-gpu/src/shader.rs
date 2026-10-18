@@ -164,6 +164,20 @@ const PRECISE_ENTRIES: &[(&str, &str)] = &[
     ("taa.slang", "motion_main"),
     ("taa.slang", "resolve_history_main"),
     ("taa.slang", "sharpen_main"),
+    // FSR 3.1 (D-070), whose history keeps a difference as TAA's did. Its `ffxLerp` is AMD's
+    // `lerp`: an `FMix` the decoration does not reach.
+    ("fsr_prepare_inputs.slang", "prepare_inputs_main"),
+    ("fsr_luma_pyramid.slang", "luma_pyramid_main"),
+    (
+        "fsr_shading_change_pyramid.slang",
+        "shading_change_pyramid_main",
+    ),
+    ("fsr_shading_change.slang", "shading_change_main"),
+    ("fsr_prepare_reactivity.slang", "prepare_reactivity_main"),
+    ("fsr_luma_instability.slang", "luma_instability_main"),
+    ("fsr_accumulate.slang", "accumulate_main"),
+    ("fsr_accumulate_sharpen.slang", "accumulate_main"),
+    ("fsr_rcas.slang", "rcas_main"),
     // D-064's particles: drawn into what TAA's history keeps.
     ("particles.slang", "advance_main"),
     ("particles.slang", "vert_main"),
@@ -176,6 +190,11 @@ const PRECISE_ENTRIES: &[(&str, &str)] = &[
 /// licence and never copied in: `rtxdi-sdk/` is ignored by git. The cache key does not follow
 /// the SDK's headers, so a new RTXDI release needs the shader cache cleared.
 const SDK_INCLUDES: &[(&str, &str)] = &[("restir.slang", "rtxdi-sdk/Include")];
+
+/// Include directories inside the shader directory, besides it: third-party code that includes
+/// its own files from its root. AMD's FidelityFX headers (FSR 3.1, D-070, MIT) include
+/// `ffx_core.h` and `spd/ffx_spd.h` from theirs.
+const INCLUDE_ROOTS: &[&str] = &["third-party/fidelityfx"];
 
 /// Slang's warnings an SDK's headers raise, turned off for the files that include them: E30081,
 /// a `uint` tested as a `bool` (eleven times in RTXDI's).
@@ -208,7 +227,13 @@ fn imports(shader_dir: &Path, importer: &str, text: &str) -> Vec<String> {
             .as_ref()
             .map(|dir| format!("{dir}/{name}"))
             .filter(|path| shader_dir.join(path).exists());
-        local.unwrap_or(name)
+        let rooted = || {
+            INCLUDE_ROOTS
+                .iter()
+                .map(|root| format!("{root}/{name}"))
+                .find(|path| shader_dir.join(path).exists())
+        };
+        local.or_else(rooted).unwrap_or(name)
     };
     let mut found = Vec::new();
     for line in text.lines().map(str::trim_start) {
@@ -593,6 +618,9 @@ impl ShaderCompiler {
             .arg(&self.shader_dir)
             .arg("-o")
             .arg(&cached);
+        for root in INCLUDE_ROOTS {
+            cmd.arg("-I").arg(self.shader_dir.join(root));
+        }
         if let Some(dir) = self.sdk_include(file) {
             cmd.arg("-I")
                 .arg(dir)

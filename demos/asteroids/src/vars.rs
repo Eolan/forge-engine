@@ -5,7 +5,7 @@
 
 use forge_app::Context;
 use forge_app::settings::{Settings, Spec, Var};
-use forge_render::settings::{self as rs, AA_DLAA, AA_DLSS, AA_OFF, AA_TAA};
+use forge_render::settings::{self as rs, AA_DLAA, AA_DLSS, AA_FSR, AA_OFF, AA_TAA};
 use forge_render::{CullFlags, DlssMode, SwRaster, Tonemap};
 
 use crate::Ballad;
@@ -41,6 +41,7 @@ impl Ballad {
                 (AA_DLAA, DlssMode::Quality)
             }
             Some(dlss) if self.dlss_on => (AA_DLSS, dlss.mode()),
+            _ if self.fsr_on => (AA_FSR, DlssMode::Quality),
             _ if !self.taa_enabled => (AA_OFF, DlssMode::Quality),
             _ => (AA_TAA, DlssMode::Quality),
         }
@@ -172,6 +173,12 @@ impl Ballad {
             if wanted && self.dlss.is_none() {
                 tracing::warn!(
                     "DLSS is not available (--features dlss, the Streamline SDK, an RTX GPU): TAA"
+                );
+            }
+            self.fsr_on = aa == AA_FSR && self.fsr.is_some();
+            if aa == AA_FSR && self.fsr.is_none() {
+                tracing::info!(
+                    "r.aa fsr: FSR is made when a run starts with --set r.aa=fsr; TAA instead"
                 );
             }
             let before = self.aa_now();

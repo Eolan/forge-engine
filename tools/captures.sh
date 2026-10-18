@@ -16,10 +16,10 @@
 # Part of the batch (issue #134; tools/verify.sh picks them from tools/impact.toml):
 #   FORGE_SETS   the sets to capture, separated by spaces or commas (default all): sentinels
 #                (static60 orbit120 noocc120 ast-notaa600 ast240 ast240-noocc ast-hdr600 city60
-#                city60-noocc gallery60 shot-island lab-materials60 planet-ground: every demo,
-#                the day check of a shared change, D-071), meshlets, ballad, city, island (the
-#                city's island and the island demo's shots), lab (the physics lab's scenes),
-#                all. The images keep their names.
+#                city60-noocc city60-fsr gallery60 shot-island lab-materials60 planet-ground:
+#                every demo, FSR's path, the day check of a shared change, D-071), meshlets,
+#                ballad, city, island (the city's island and the island demo's shots), lab (the
+#                physics lab's scenes), all. The images keep their names.
 #   FORGE_PATHS  the paths, mesh and fb (default both).
 #   FORGE_RECOOK 1: make the cached meshes again. The props are cached in BIN's tree
 #                (cache/meshes/) by their parameters' text, not the code that makes them: a
@@ -112,7 +112,7 @@ sets_of() {
     nolod120) echo meshlets ;;
     ast-notaa600 | ast240 | ast240-noocc | ast-hdr600) echo ballad sentinels ;;
     ast*) echo ballad ;;
-    city60 | city60-noocc | gallery60) echo city sentinels ;;
+    city60 | city60-noocc | city60-fsr | gallery60) echo city sentinels ;;
     city*) echo city ;;
     shot-island) echo island sentinels ;;
     island* | water* | clouds* | shot-*) echo island ;;
@@ -192,6 +192,7 @@ for path in $paths; do
   # D-070), frame 240 for the A/B harness.
   capture "$path-ast-notaa600" 600 "$asteroids" --fixed-step --no-taa "${flag[@]}"
   capture "$path-ast-aa600" 600 "$asteroids" --fixed-step "${flag[@]}"
+  capture "$path-ast-fsr600" 600 "$asteroids" --fixed-step --upscaler fsr "${flag[@]}"
   capture "$path-ast240" 240 "$asteroids" --fixed-step --no-taa "${flag[@]}"
   capture "$path-ast240-noocc" 240 "$asteroids" --fixed-step --no-taa --no-occlusion "${flag[@]}"
   capture "$path-ast240-nocone" 240 "$asteroids" --fixed-step --no-taa --no-cone "${flag[@]}"
@@ -205,6 +206,8 @@ for path in $paths; do
   # physics-lab is since the clouds are on by default (#145): they drift on the scene's clock,
   # which would otherwise run on the run's own timing.
   capture "$path-city60" 60 "$city" --fixed-step --stream-pool 0 "${flag[@]}"
+  # FSR 3.1 (D-070), the path off NVIDIA: a sentinel, so the day check sees it.
+  capture "$path-city60-fsr" 60 "$city" --fixed-step --stream-pool 0 --set r.aa=fsr "${flag[@]}"
   capture "$path-city60-noocc" 60 "$city" --fixed-step --stream-pool 0 --no-occlusion "${flag[@]}"
   capture "$path-city60-culled" 60 "$city" --fixed-step --stream-pool 0 --show-culled "${flag[@]}"
   capture "$path-cityorbit120" 120 "$city" --fixed-step --stream-pool 0 --orbit "${flag[@]}"
@@ -278,6 +281,7 @@ for path in $paths; do
   # 600.
   if [ -f "$lab" ]; then
     capture "$path-lab-drop90" 90 "$lab" --lab drop --fixed-step "${flag[@]}"
+    capture "$path-lab-drop90-fsr" 90 "$lab" --lab drop --fixed-step --set r.aa=fsr "${flag[@]}"
     capture "$path-lab-drop90-noocc" 90 "$lab" --lab drop --fixed-step --no-occlusion "${flag[@]}"
     capture "$path-lab-drop600" 600 "$lab" --lab drop --fixed-step "${flag[@]}"
     # Through a server and a client over 100 ms (#137), balls thrown from the camera and by the

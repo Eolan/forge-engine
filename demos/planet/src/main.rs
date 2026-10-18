@@ -577,6 +577,10 @@ struct PlanetDemo {
     /// TAA resolve while `dlaa_on`, its image shown through its own display pass.
     dlaa: Option<(forge_render::DlssUpscaler, forge_render::Display)>,
     dlaa_on: bool,
+    /// AMD's FSR 3.1 (D-070) when the run asks for it: used instead of the TAA resolve while
+    /// `fsr_on`, its image shown through its own display pass.
+    fsr: Option<(forge_render::FsrUpscaler, forge_render::Display)>,
+    fsr_on: bool,
     bloom: Bloom,
     gtao: Gtao,
     ao_on: bool,
@@ -889,9 +893,24 @@ impl PlanetDemo {
         } else {
             None
         };
+        // FSR 3.1 in place of TAA (D-070) when the run asks for it (`--set r.aa=fsr`).
+        let fsr = if args.settings.asked_aa() == Some("fsr") && !args.no_taa {
+            let fsr = forge_render::FsrUpscaler::new(
+                &ctx.device,
+                &ctx.shaders,
+                forge_render::FsrMode::NativeAa,
+                ctx.extent(),
+            )?;
+            let display = forge_render::Display::new(&ctx.device, &ctx.shaders, ctx.output.format)?;
+            Some((fsr, display))
+        } else {
+            None
+        };
         let mut demo = Self {
-            dlaa_on: dlaa.is_some(),
+            dlaa_on: dlaa.is_some() && fsr.is_none(),
             dlaa,
+            fsr_on: fsr.is_some(),
+            fsr,
             taa_enabled: !args.no_taa,
             ao_on: !args.no_ao,
             tonemap: args.tonemap,
@@ -1459,6 +1478,9 @@ impl Demo for PlanetDemo {
         if let Some((dlss, _)) = &mut self.dlaa {
             dlss.configure(forge_render::DlssMode::Dlaa, ctx.extent())?;
         }
+        if let Some((fsr, _)) = &mut self.fsr {
+            fsr.configure(forge_render::FsrMode::NativeAa, ctx.extent())?;
+        }
         Ok(())
     }
 
@@ -1555,7 +1577,7 @@ impl Demo for PlanetDemo {
         });
         let extent = ctx.extent();
         // DLAA takes the jittered frame too.
-        self.taa.enabled = self.taa_enabled || self.dlaa_on;
+        self.taa.enabled = self.taa_enabled || self.dlaa_on || self.fsr_on;
         self.renderer.noise_frame =
             (self.taa.frame_index() % u64::from(self.taa.jitter_phases)) as u32;
         // The new tiles' normal maps, made before the scene's passes sample them (D-058).
@@ -1786,23 +1808,43 @@ impl Demo for PlanetDemo {
         let motion = self
             .taa
             .motion_vectors(&mut frame.graph, &taa_frame, targets.depth);
-        let dlaa_on = self.dlaa_on;
-        if let Some((dlss, display)) = self.dlaa.as_mut().filter(|_| dlaa_on) {
+        let (dlaa_on, fsr_on) = (self.dlaa_on, self.fsr_on);
+        let upscale_camera = forge_render::UpscaleCamera {
+            projection: self.camera.projection(aspect),
+            near: self.camera.near,
+            vertical_fov: self.camera.fov_y,
+        };
+        let upscaled = if let Some((dlss, display)) = self.dlaa.as_mut().filter(|_| dlaa_on) {
             // DLAA (D-045), as the galleries draw it: the jittered frame, its depth and motion
             // to DLSS, its image through the tone curve with bloom drawn from it.
             let upscaled = dlss.upscale(
                 &mut frame.graph,
                 ctx.frames_rendered,
                 &taa_frame,
-                forge_render::UpscaleCamera {
-                    projection: self.camera.projection(aspect),
-                    near: self.camera.near,
-                    vertical_fov: self.camera.fov_y,
-                },
+                upscale_camera,
                 targets.depth,
                 motion,
                 exposure,
             )?;
+            Some((upscaled, display))
+        } else if let Some((fsr, display)) = self.fsr.as_mut().filter(|_| fsr_on) {
+            // FSR 3.1 (D-070), drawn as DLAA's image is, on the run's step.
+            let upscaled = fsr.upscale(
+                &mut frame.graph,
+                frame.slot,
+                &taa_frame,
+                upscale_camera,
+                targets.depth,
+                motion,
+                None,
+                exposure,
+                self.step,
+            );
+            Some((upscaled, display))
+        } else {
+            None
+        };
+        if let Some((upscaled, display)) = upscaled {
             let bloom = (self.args.bloom > 0.0)
                 .then(|| self.bloom.draw(&mut frame.graph, upscaled, extent));
             display.draw(

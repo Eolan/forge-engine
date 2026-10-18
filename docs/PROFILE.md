@@ -126,6 +126,11 @@ exposure (EV100, target, compensation, curve) the last.
   its cross. DLAA, for comparison, takes 0.48 ms.
 - DLAA by default where it runs (D-045), the same room: `temporal/DLSS` 0.463 ms, then
   `post/display transform` 0.020 with bloom mixed in (`post/bloom` 0.041, as under TAA).
+- FSR 3.1 at the output's size (D-070, `--set r.aa=fsr`), the city at 1600 × 900: its eight
+  passes 0.31 ms against `temporal/DLSS`'s 0.63 ms. They are `temporal/FSR accumulate` 0.131,
+  `shading pyramid` 0.045, `reactivity` 0.041, `luma instability` 0.029, `inputs` 0.025,
+  `clear` 0.018, `luma pyramid` 0.011 and `shading change` 0.006. In the ballad, the planet,
+  the lab and the island they total 0.31–0.35 ms.
 - TAA's history through Lanczos-3 (D-045), the same room: `temporal/TAA resolve` 0.047 →
   0.077 ms, 36 texel loads in place of 5 bilinear fetches.
 - TAA's motion vectors and resolve as compute passes (#161, so the serial frame repeats), the

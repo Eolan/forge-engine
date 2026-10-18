@@ -116,3 +116,12 @@ https://patents.google.com/patent/EP4494087A4/en.
 - **If the locks must go later:** zero new locks and their contribution. Neither AMD claim 1
   would then match. FSR 3.1's luma instability may take part of their job, to be tested on wires
   and fences.
+
+## Built (2026-10-18)
+
+D-070 has the results: the bridge, the passes, the determinism (0 px run to run and mesh against
+fallback) and the measures.
+- **Against AMD's variance box,** the min/max box steadies a still camera six times over (0.074 %
+  of pixels changing against 0.487 %). It loses a little in a turn: 34.0 % against 33.3 % of
+  pixels changing unlike SSAA's, and ꟻLIP 0.0414 against 0.0408.
+- **FSR beats DLAA** on all three in the city.
