@@ -487,6 +487,17 @@ fn apply_hdr_mode(
     Ok(recreated)
 }
 
+/// The window as it was before it went fullscreen, to go back to.
+#[derive(Clone, Copy, Debug)]
+struct Windowed {
+    /// Its outer corner on the desktop, where the platform says.
+    position: Option<winit::dpi::PhysicalPosition<i32>>,
+    /// Its inner size.
+    size: winit::dpi::PhysicalSize<u32>,
+    /// Whether it was maximised.
+    maximized: bool,
+}
+
 struct State<D: Demo> {
     demo: D,
     ctx: Context,
@@ -532,6 +543,9 @@ struct State<D: Demo> {
     /// The developer console (D-069) and the modifier keys it reads (Ctrl).
     console: console::Console,
     modifiers: winit::keyboard::ModifiersState,
+    /// The window as it was before Alt+Enter made it fullscreen: where it was, its size, and
+    /// whether it was maximised; None while windowed.
+    windowed: Option<Windowed>,
     /// `r.display_info`: what the profiling overlay shows (0 off, 1 compact, 2 full; F1).
     display_info: Var<i64>,
     /// `app.console`: whether the console shows (the key under Esc).
@@ -658,11 +672,42 @@ impl<D: Demo> State<D> {
     }
 
     /// A key on the open calibration pages (`fine`: Shift is down).
+    /// Borderless fullscreen on the window's monitor, or back to the window as it was before:
+    /// its place, its size, maximised or not (Alt+Enter and `app.fullscreen`, the owner).
+    fn toggle_fullscreen(&mut self) {
+        let window = &self.ctx.window;
+        if window.fullscreen().is_none() {
+            self.windowed = Some(Windowed {
+                position: window.outer_position().ok(),
+                size: window.inner_size(),
+                maximized: window.is_maximized(),
+            });
+            window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(
+                window.current_monitor(),
+            )));
+            tracing::info!("fullscreen (borderless)");
+            return;
+        }
+        window.set_fullscreen(None);
+        if let Some(w) = self.windowed.take() {
+            if w.maximized {
+                window.set_maximized(true);
+            } else {
+                let _ = window.request_inner_size(w.size);
+                if let Some(at) = w.position {
+                    window.set_outer_position(at);
+                }
+            }
+        }
+        tracing::info!("windowed again");
+    }
+
     /// Runs a console command (D-069): the shell's own (`app.`), else the demo's. Returns
     /// whether the window should close.
     fn run_command(&mut self, name: &str, args: &[String]) -> Result<bool> {
         match name {
             "app.quit" => return Ok(true),
+            "app.fullscreen" => self.toggle_fullscreen(),
             "app.capture" => {
                 let path = PathBuf::from(args.first().map_or("capture.png", String::as_str));
                 self.console.print(
@@ -935,6 +980,12 @@ impl<D: Demo> State<D> {
         );
         settings.add_command("app.quit", "", "Closes the window, as Escape does.", true);
         settings.add_command(
+            "app.fullscreen",
+            "",
+            "Borderless fullscreen on the window's monitor, or back to the window as it was \n             (Alt+Enter).",
+            true,
+        );
+        settings.add_command(
             "app.hdr",
             "",
             "The HDR output on or off: the mode asked for at start, else HDR10 when the OS shows \
@@ -1030,6 +1081,7 @@ impl<D: Demo> State<D> {
         Ok(Self {
             console,
             modifiers: winit::keyboard::ModifiersState::default(),
+            windowed: None,
             display_info,
             console_shown,
             mouse_look,
@@ -1721,6 +1773,18 @@ impl<D: Demo> ApplicationHandler for App<D> {
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key {
                     let pressed = event.state == ElementState::Pressed;
+                    // Alt+Enter, first of all (the console open or not): borderless fullscreen
+                    // on the window's monitor, and back to the window as it was (the owner).
+                    // AltGr (Ctrl+Alt on Windows) is not Alt. The demos never see that Enter.
+                    if state.modifiers.alt_key()
+                        && !state.modifiers.control_key()
+                        && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter)
+                    {
+                        if pressed && !event.repeat {
+                            state.toggle_fullscreen();
+                        }
+                        return;
+                    }
                     // The open calibration pages take the keys (#125); Escape leaves them.
                     if state.hdr.calibration.page().is_some() {
                         // Shift is tracked for the steps, and releases always (a key held
@@ -1798,19 +1862,6 @@ impl<D: Demo> ApplicationHandler for App<D> {
                     if pressed && code == KeyCode::F1 {
                         let next = (state.ctx.settings.get(state.display_info) + 1) % 3;
                         state.ctx.settings.set(state.display_info, next);
-                        return;
-                    }
-                    // Alt+Enter: borderless fullscreen on the window's monitor, and back (the
-                    // owner). The demos never see that Enter.
-                    let alt = state.input.is_down(KeyCode::AltLeft)
-                        || state.input.is_down(KeyCode::AltRight);
-                    if alt && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter) {
-                        if pressed && !event.repeat {
-                            let full = state.ctx.window.fullscreen().is_none();
-                            state.ctx.window.set_fullscreen(
-                                full.then_some(winit::window::Fullscreen::Borderless(None)),
-                            );
-                        }
                         return;
                     }
                     // A key bound to a console line (`bind`, D-069): the developer's switches are

@@ -66,7 +66,7 @@ commands, set from the console; `bind` puts one on a key.
 - the key under Esc: the console;
 - Esc: closes the console, else the window;
 - F1: steps `r.display_info` (off, on, verbose);
-- Alt+Enter: fullscreen and back.
+- Alt+Enter: borderless fullscreen on the window's monitor, and back to the window as it was (its place, its size, maximised or not), the console open or not (`app.fullscreen` too).
 
 **The game's keys** are the demos' own:
 - **Moving the camera:** right mouse to look; the wheel sets the speed, Shift moves five times faster, Ctrl twenty-five.
@@ -151,6 +151,7 @@ The shell's, in every demo:
 | `app.console` | the console shown | 0, 1 | yes |
 | `app.capture [PATH]` | command: saves the next frame as a PNG | | no |
 | `app.quit` | command: closes the window | | yes |
+| `app.fullscreen` | command: borderless fullscreen, and back to the window as it was (Alt+Enter) | | yes |
 | `app.hdr`, `app.hdr.peak`, `app.hdr.false_colours` | commands: the HDR output on or off, the next peak, the preview's false colours | | no |
 | `app.calibrate` | command: the HDR calibration pages, in an HDR mode | | no |
 | `app.profile.group N` | command: folds or shows the overlay's group N | 1 to 9 | no |
