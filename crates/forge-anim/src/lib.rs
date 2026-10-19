@@ -19,7 +19,10 @@
 //! inertialized ([`Inertializer`]); a [`PackedClip`] holds a clip on as few bits a track as keep
 //! the skeleton within a tolerance, a quarter to a third of its bytes. [`Clip::root_motion`] gives
 //! a clip's travel and turn for a character controller, and [`lock_root`] holds the pose in place
-//! while it applies them (#311).
+//! while it applies them (#311). Above the player, a data-driven state machine ([`machine`],
+//! #312): action states the game's variables and events move between, the animation node whose
+//! conditions hold most specifically playing in each, and events at a node's start, end or a
+//! share of it that set variables or tell the host.
 //!
 //! **Determinism** (D-016): nothing here calls a transcendental function. Keys are
 //! interpolated linearly (normalised for rotations, as ozz does between dense keys), by steps
@@ -33,6 +36,7 @@
 mod clip;
 mod ik;
 mod import;
+pub mod machine;
 mod pack;
 mod play;
 mod pose;
@@ -42,6 +46,7 @@ mod skeleton;
 pub use clip::{Clip, Interpolation, JointTracks, Track};
 pub use ik::{Chain, FootDown, Footfall, look_at, two_bone, two_bone_toward};
 pub use import::{AnimError, Rig, load_rig, load_rigs};
+pub use machine::{Animator, Machine, MachineDef, MachineError, Vars};
 pub use pack::PackedClip;
 pub use play::{BlendSpace, Inertializer, Player, Source, decay};
 pub use pose::{Pose, Transform};

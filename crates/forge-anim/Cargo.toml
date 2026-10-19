@@ -13,4 +13,6 @@ workspace = true
 [dependencies]
 glam = { workspace = true }
 gltf = { workspace = true }
+serde = { workspace = true }
 thiserror = { workspace = true }
+toml = { workspace = true }

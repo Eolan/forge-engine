@@ -422,6 +422,30 @@ the rotation's twist about +Y, a quaternion with `sqrt` only (D-016). **Layers**
 `Pose::mix_masked` mixes a clip over another on a joint mask (`Skeleton::mask_below`: a joint and
 what it carries), and `Pose::add` adds an additive layer's difference from its reference, its
 rotation in the joint's own frame as engines' additive layers do.
+**A state machine as data** (#312, 2026-10-19, in the shape an out-of-tree prototype settled on
+for a player of about 125 nodes and a pursuer of about 40, `forge_anim::machine`):
+- **Action states** with their ways out, opened by the game's variables and posted events. The
+  most specific way goes first, then the written order. Several steps run in an update, never
+  back to a state already passed in it: without that a variable the game sets and the host does
+  not bounced between two states every frame.
+- **Animation nodes** in each state: the one whose conditions hold with the most conditions
+  plays, then the highest priority, then the first (priority first let a three-condition sprint
+  vault lose to a one-condition start). A node may extend another (a state's or a base): the
+  parent's fields, then the child's, its lists appended, so a variant is a few lines.
+- **Switches** go through `Player::play` (inertialized). A transition names its blend and an
+  optional in-between clip played once first. A one-shot holds its end.
+- **Events** at a node's start, its end or a share of it go to the host. `SetVariable Name=value`
+  also sets the variable, which sequences a vault's start, its end and the way back.
+- **A looped node** can play at the character's speed over its clip's natural speed (0.5–1.8×).
+- **Variables** are named without case; a missing one reads false, 0 or "". Events the game posts
+  are seen by the next update, then cleared.
+- **Built** from TOML (`MachineDef::from_toml`) or in code, bound to a rig's clips by name
+  (`Machine::new`), run per character (`Animator`, with `describe` for a live view).
+- **Left:** typed event channels in place of strings, and the overlay's or the console's live view
+  (the prototype's asks).
+- **Patents:** none read on a machine loaded from local data. Zynga's US 9,463,386 B1 and
+  US 9,821,230 B2 (D-072) claim a definition received from a server: reread them before a server
+  sends a machine to clients.
 
 ## D-013 — Vegetation, impostor ladder, trim sheets ✅ (2026-09-24)
 
