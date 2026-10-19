@@ -6970,6 +6970,15 @@ best guess or data"):
     way;
   - two tiles built in 34 ms, the path in 8.5 ms over 76,420 places (dense arrays per tile,
     made when the search first reaches a tile; 25 ms with hash maps).
+- **Crowds on tiles, the same day:** `Crowd::step_tiled` moves each agent on the field of the
+  tile under its feet (`Tiles::field_at`, which `Follow::preferred` takes too). Two people
+  crossing a tile border past a wall's end, either way, arrive.
+- **A known case, left open:** rounding a wall's end tightly, one person passed two corners
+  within 0.25 m, cut the corner, and stood wedged against the end, every move along its next leg
+  refused. Two fixes were tried and taken back, because each broke the pursuers at the door
+  (2, then 1 of 4 in):
+  - reaching such a corner within 3–10 cm when the way on was not straight;
+  - heading for a leg's start while short of it.
 
 **The proof, the same day** (city-plan's `pursuers_get_into_a_house_by_its_door_or_through_its_windows`):
 - **The setup:** four pursuers on the street, 3 m before the first house with insides, go for

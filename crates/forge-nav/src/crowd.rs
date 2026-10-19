@@ -36,7 +36,7 @@ use std::collections::HashMap;
 
 use glam::{Vec2, Vec3};
 
-use crate::{Field, Path};
+use crate::{Field, Path, Tiles};
 
 /// How near a corner an agent passes it, metres.
 pub const CORNER_REACH: f32 = 0.25;
@@ -311,15 +311,29 @@ impl Crowd {
     /// One step of `dt` seconds: every agent's velocity chosen from the step's state, then the
     /// moves, kept to `field`'s walkable ground when it is given.
     pub fn step(&mut self, dt: f32, field: Option<&Field>) {
+        self.step_on(dt, |_| field);
+    }
+
+    /// [`Self::step`] on field tiles: each agent on the field of the tile under its feet
+    /// ([`Tiles::field_at`]); where no tile is built, moves are not kept to a field.
+    pub fn step_tiled(&mut self, dt: f32, tiles: &Tiles) {
+        self.step_on(dt, |p| tiles.field_at(p));
+    }
+
+    /// [`Self::step`], each agent on the field `field_at` gives at its feet.
+    fn step_on<'f>(&mut self, dt: f32, field_at: impl Fn(Vec3) -> Option<&'f Field>) {
         if dt <= 0.0 {
             return;
         }
         let grid = self.grid();
         let chosen: Vec<Vec2> = (0..self.agents.len())
-            .map(|i| self.avoid(i, dt, &grid, near_walls(field, self.agents[i].position)))
+            .map(|i| {
+                let at = self.agents[i].position;
+                self.avoid(i, dt, &grid, near_walls(field_at(at), at))
+            })
             .collect();
         for (agent, v) in self.agents.iter_mut().zip(chosen) {
-            let to = walk_on(field, agent.position, v * dt);
+            let to = walk_on(field_at(agent.position), agent.position, v * dt);
             agent.velocity = (plan(to) - plan(agent.position)) / dt;
             agent.position = to;
             agent.giving_way = (agent.giving_way - dt).max(0.0);

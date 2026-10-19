@@ -104,6 +104,12 @@ impl Tiles {
         self.fields.get(&t)
     }
 
+    /// The field of the tile under `p` (x and z), if built: where an agent there walks
+    /// ([`crate::Crowd::step_tiled`], [`crate::Follow::preferred`]).
+    pub fn field_at(&self, p: Vec3) -> Option<&Field> {
+        self.fields.get(&self.tile_of(p))
+    }
+
     /// The tiles built, in order.
     pub fn built(&self) -> impl Iterator<Item = (i32, i32)> + '_ {
         self.fields.keys().copied()
@@ -416,6 +422,46 @@ mod tests {
             path.expanded
         );
         assert!((tiled - single).abs() < 0.03 * single, "{tiled} {single}");
+    }
+
+    #[test]
+    fn a_crowd_walks_across_tiles_on_each_ones_field() {
+        // Two people crossing from the first tile into the second, and back, past the wall's end
+        // with room to spare. (Rounding the end tightly, one cut the corner and stood wedged
+        // against it: #317's known case.)
+        let t = ground();
+        let mut tiles = Tiles::new(PERSON, 0.1);
+        tiles.build((0, 0), &t);
+        tiles.build((1, 0), &t);
+        let (a, b) = (Vec3::new(20.0, 0.0, 23.0), Vec3::new(45.0, 0.0, 23.0));
+        let mut crowd = crate::Crowd::new(crate::CrowdSettings::default());
+        let mut follows = Vec::new();
+        for (from, to) in [(a, b), (b, a)] {
+            let path = tiles.path(from, to, &[], 1 << 22).unwrap();
+            assert!(path.complete);
+            crowd.add(crate::Agent::new(path.points[0], 0.3, 1.4));
+            follows.push(crate::Follow::new(&path));
+        }
+        for _ in 0..60 * 60 {
+            for (agent, f) in crowd.agents.iter_mut().zip(&mut follows) {
+                agent.preferred = f.preferred(
+                    agent.position,
+                    agent.max_speed,
+                    tiles.field_at(agent.position),
+                );
+            }
+            crowd.step_tiled(1.0 / 60.0, &tiles);
+            // Never through the wall: on its far side only past its end.
+            for agent in &crowd.agents {
+                let p = agent.position;
+                assert!(!(p.x > 37.6 && p.x < 38.4 && p.z < 20.0), "{p}");
+            }
+        }
+        assert!(
+            follows.iter().all(crate::Follow::arrived),
+            "{:?}",
+            crowd.agents
+        );
     }
 
     #[test]
