@@ -27,7 +27,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use calibration::{Action, Calibration, Page, SettingsFile};
-pub use camera::FlyCamera;
+pub use camera::{FlyCamera, SpringArm};
 use content_light::ContentLightMeter;
 /// Re-exported: what the OS says of the display, in [`DisplayOutput`].
 pub use forge_gpu::DisplayCaps;
