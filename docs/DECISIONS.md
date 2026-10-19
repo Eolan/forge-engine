@@ -6497,7 +6497,9 @@ ground), one stain to 40 m² and one crack to 150 m², each at a turn and a size
 wholly on the paving (its middle and its corners: none spills onto a lawn); they mark the faces
 that look up only. The village holds 1 210 decals with the grime. `shading/standard` without
 the decals (`--no-decals`) and with them: 0.816 → 0.863–0.869 ms on the house front, 0.905 →
-0.968–0.971 ms over the junction (two runs each way).
+0.968–0.971 ms over the junction (two runs each way). In motion they add no shimmer: the
+garden lane dollied at 1 m/s under DLAA, each frame's change against an `--ssaa` run's, differs
+on 6.47 % of the pixels with them and 6.45 % without (20 pairs, the lane's foliage the rest).
 
 **Row decals** (2026-10-19): a kind with a `row` (`DecalKind::row`) takes only its texture's alpha,
 a mask over that material row: where it masks, the surface takes the row's colour and normal
