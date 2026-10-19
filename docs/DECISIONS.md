@@ -5410,6 +5410,21 @@ application of their patents just in case."
   room's probe's ray now passes the glass of a glazed row (`RenderLayer::glazed`, implied by
   `interior`: a home's, a shop's, a bathroom's frosted glass) met from behind. Only a room's
   probe: in a house without insides (a hollow shell) the ray still ends there.
+  - **The clear glass of a house whose rooms are drawn** (drawn after the resolve, D-065) is
+    passed by every probe's ray, either way (#280, 2026-10-19).
+    - **Why:** met as a back face, a pane counted a probe by its window as inside something.
+      The probe was moved out through the glass and lit its room with the street. The probes
+      outside saw a lit pane where the room is.
+    - **What it changed:** a bedroom whose storey has no regions (lit by every probe) had been
+      2.7 EV darker without its glass than with it. Passing the glass in each kind of ray found
+      it: the probes' own rays alone (the fixed rays 0.76 EV, the light-gathering ones 0.40),
+      and from the probes without a region alone. The sun's, the lamps' and the mirror rays and
+      the probes' hits' shadow rays changed nothing.
+    - **Now:** that bedroom is 1.78 EV darker at a fixed exposure, the same with or without its
+      glass. The map check's landing (the same storey) is 0.28 EV darker at its metered
+      exposure, the other views within 0.03 EV. The lab's rooms and the city are unchanged (0 px).
+    - **Still to do:** the sun's patches through the windows (the shadow rays still stop at the
+      glass).
 - **A probe outside every house** (most probes, the coarse cascades' too) lights what its rays
   meet as the outside's, without the lookup. The lookup at every ray's hit cost the rays
   0.14 ms in a room.

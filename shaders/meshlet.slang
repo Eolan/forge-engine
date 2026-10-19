@@ -6232,15 +6232,25 @@ void probe_trace_main(uint3 group : SV_GroupID, uint thread : SV_GroupThreadID)
     uint region = REGION_NONE;
     if (!slot.fresh && field[0].region_count > 0u)
         region = field[0].probe_region[probe];
-    // A probe in a room sees out through its windows. Their glass is drawn from outside only, as
-    // the view from the room passes it, and met from behind it ended the ray as a back face: a
-    // room took its light from its doors alone, and with regions an upstairs room through a
-    // doorway went black. Only from a room's probe: a window's back seen from inside a house
-    // without insides (a hollow shell) still ends the ray, as it did.
-    if (c.hit && region != REGION_NONE && region != REGION_OUTSIDE
-        && (candidate_row(f, c.instance, c.primitive).flags & MATERIAL_FLAG_GLAZED) != 0
-        && ray_back_face(f, c.instance, c.primitive, direction))
+    // A probe sees through a window's glass. It is drawn from outside only, as the view from the
+    // room passes it, and met from behind it ended the ray as a back face: a room took its light
+    // from its doors alone, and with regions an upstairs room through a doorway went black.
+    // - The clear glass of a house whose rooms are drawn (drawn after the resolve, D-065): every
+    //   probe's ray passes it, either way (#280). Met as a back face, it counted a probe by a
+    //   window as inside something: the probe was moved out through the glass and lit its room
+    //   with the street (a regionless bedroom 1.8 EV brighter than its own light), and the
+    //   probes outside saw a lit pane where the room is.
+    // - A hollow shell's painted glass: only a room's probe passes its back; met from outside, a
+    //   ray would find the shell's inside.
+    for (uint pane = 0u; pane < 2u && c.hit; pane++)
     {
+        uint flags = candidate_row(f, c.instance, c.primitive).flags;
+        if ((flags & MATERIAL_FLAG_GLAZED) == 0)
+            break;
+        bool clear = (flags & MATERIAL_FLAG_DRAWN_AFTER) != 0;
+        bool room = region != REGION_NONE && region != REGION_OUTSIDE;
+        if (!clear && !(room && ray_back_face(f, c.instance, c.primitive, direction)))
+            break;
         desc.TMin = c.t + 0.002;
         c = trace_closest(f, desc, false, true, probe * 0x27D4EB2Fu ^ ray);
     }
