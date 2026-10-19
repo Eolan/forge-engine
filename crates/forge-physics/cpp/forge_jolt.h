@@ -256,6 +256,10 @@ uint32_t fj_character_add(FjWorld *world, const FjCharacterDesc *desc);
 // Moves it through a step of `dt` at `velocity` (the world's gravity presses it down).
 void fj_character_move(FjWorld *world, uint32_t character, float dt, const float velocity[3]);
 void fj_character_state(const FjWorld *world, uint32_t character, FjCharacterState *state);
+// Puts it at `position` at once, still, whatever is there (a crossing carries it so, #316).
+void fj_character_place(FjWorld *world, uint32_t character, const double position[3]);
+// 1 when its shape at `position` meets nothing, 0 when it touches or overlaps a body.
+int32_t fj_character_fits(const FjWorld *world, uint32_t character, const double position[3]);
 
 // Makes `chassis` a car; its index. Saved and restored with the world (a constraint of it).
 uint32_t fj_vehicle_add(FjWorld *world, uint32_t chassis, const FjVehicleDesc *desc);

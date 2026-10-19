@@ -548,6 +548,9 @@ pub struct PlanScenario {
     clock: f64,
     /// The buildings' walls as convex pieces (the world's metres), for the walker.
     walls: Vec<Vec<Vec3>>,
+    /// What the walker may cross (#316): the garden walls, and the openings of the houses with
+    /// insides.
+    crossings: Vec<forge_nav::Passage>,
     /// How many passages into courts, and where to look into one, for the log.
     passage_note: String,
     /// What each mass holds (D-060 step 3): its homes' households and residents, its jobs, its
@@ -2156,6 +2159,10 @@ impl PlanScenario {
                 .chain(depot_walls)
                 .chain(garden_walls)
                 .chain(stall_walls)
+                .collect(),
+            crossings: village_passages(size, plan, masses, &structures)
+                .into_iter()
+                .filter(|p| p.piece >= GARDEN_WALL_PIECE || near.contains(&(p.piece as usize)))
                 .collect(),
             passage_note,
             holds: holds.clone(),
@@ -6990,7 +6997,7 @@ impl Scenario for PlanScenario {
                 trams: self.trams.clone(),
                 boats: self.boats.clone(),
                 clock: self.clock,
-                walls: walk::Walls::new(self.walls.clone()),
+                walls: walk::Walls::new(self.walls.clone(), self.crossings.clone()),
                 walker: None,
                 walk_on_start: self.walk_on_start,
                 ride_at: self.ride_after.map(|s| self.clock + s),

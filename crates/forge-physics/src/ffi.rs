@@ -297,6 +297,8 @@ unsafe extern "C" {
     pub fn fj_character_add(world: *mut FjWorld, desc: *const FjCharacterDesc) -> u32;
     pub fn fj_character_move(world: *mut FjWorld, character: u32, dt: f32, velocity: *const f32);
     pub fn fj_character_state(world: *const FjWorld, character: u32, state: *mut FjCharacterState);
+    pub fn fj_character_place(world: *mut FjWorld, character: u32, position: *const f64);
+    pub fn fj_character_fits(world: *const FjWorld, character: u32, position: *const f64) -> i32;
 
     pub fn fj_vehicle_add(world: *mut FjWorld, chassis: u32, desc: *const FjVehicleDesc) -> u32;
     pub fn fj_vehicle_drive(

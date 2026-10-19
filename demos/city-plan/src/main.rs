@@ -344,6 +344,28 @@ fn main() -> anyhow::Result<()> {
                     view(eye, 1.7, t - out * 0.15, 0.0)
                 );
             }
+            // The longest low garden wall on a street (up to 1.1 m), from 2 m out on the street
+            // at its middle, walked into: the walker vaults it (#316).
+            if let Some(w) = v
+                .plan
+                .walls
+                .iter()
+                .filter(|w| w.inside.is_some() && w.height <= 1.1)
+                .max_by(|a, b| a.length().total_cmp(&b.length()))
+            {
+                let t = (w.b - w.a).normalize_or_zero();
+                let mut out = DVec2::new(-t.y, t.x);
+                if w.inside.is_some_and(|p| out.dot(p - w.a) > 0.0) {
+                    out = -out;
+                }
+                let eye = (w.a + w.b) * 0.5 + out * 2.0;
+                eprintln!(
+                    "the village's vault: {} --walk={:.2},{:.2}",
+                    view(eye, 1.7, -out, -10.0),
+                    -out.x * 1.4,
+                    -out.y * 1.4
+                );
+            }
             (v.plan, v.masses)
         }
         None => {

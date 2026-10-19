@@ -1122,7 +1122,7 @@ plan in place of the city, every house from the kit (`reports/2026-10-16/village
 the air, `village-street.png` from the first house's street, which the log names for
 `--view`). **The map check** (`tools/map-check.sh`, D-062's check per commit): the village
 from the air and from the views the log names (the first house's street, the green, the main
-road, the busiest junction, the longest garden wall along a lane, the first storeyed house's hall, its open front door from the back of the hall and a room off it inside) and two walked paths, along the first house's street and through the first storeyed house's open door into its hall, each compared
+road, the busiest junction, the longest garden wall along a lane, the first storeyed house's hall, its open front door from the back of the hall and a room off it inside) and three walked paths, along the first house's street, through the first storeyed house's open door into its hall and over the longest low garden wall on a street (shot at the vault's top, #316), each compared
 with `captures/map/accepted` by LDR-ꟻLIP, about two minutes; `--accept` keeps a run
 (`docs/PROCESS.md`). **One home a house** (`Mass::home`, the same day): a village house is
 one unit over all its storeys, entered from the street, with its household's main rooms (1.5
@@ -2393,6 +2393,17 @@ The walker is the shared one, `city_blocks::walker` (#290), which other scenes u
   A door's leaf toggled among 20,189 pieces within reach costs 0.35 ms, against 0.33 ms for a
   step without a toggle and 133 ms to rebuild the pieces and the walker. The navigation
   follows a door through its passage's state (`forge_nav::Passages::set_state`, #316).
+- **Crossings** (#316, D-076): walking into a low garden wall (up to 1.1 m) vaults it, and
+  walking into an open window of a house with insides climbs through it, with no key (the
+  owner's choice).
+  - **When it starts:** the passage is the one a line 0.7 m ahead of the feet meets, the walk
+    within about 45° of square to it, and only where the far side has room.
+  - **How the body goes:** carried kinematically over the sill (`forge_nav::CrossingMotion`: a
+    curve now, a clip's root path warped onto the same targets later), checked for room at the
+    exit, and put back at the entry if something filled it meanwhile.
+  - **Not crossed:** tall walls are left to climbers, and doors are walked.
+  - **The map check's third walk** goes from 2 m out on the street into the longest low garden
+    wall, shot at the vault's top (frame 54).
 
 The village keeps its settings: cells of 50 m, 80 m of reach and a 2 m ground. The map check's
 two walks moved by 6 and 0 pixels, and its fixed views by none.

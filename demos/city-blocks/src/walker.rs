@@ -20,6 +20,7 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
+use forge_nav::{CrossingMotion, CrossingSpec, Passage, Passages};
 use forge_physics::{BodyDesc, BodyId, CharacterDesc, CharacterId, Shape, World, WorldDesc};
 use forge_sim::TICK;
 use glam::{DVec3, Vec2, Vec3};
@@ -37,6 +38,21 @@ const MOST_CELLS: i64 = 400;
 /// The pieces' edits a walker follows in a step without optimizing its broad phase (Jolt adds
 /// the bodies to it either way; the optimization is for many at once).
 const EDITS_IN_PLACE: usize = 16;
+/// The walker's radius, metres (the character's).
+const RADIUS: f32 = 0.3;
+/// How high the floor the walker leaves may lie from its feet for a passage to be met, metres
+/// (the character's step).
+const STEP: f32 = 0.4;
+/// How far ahead of the feet along the walk a passage is met, metres: the walker's radius, half
+/// a thick wall and a margin.
+pub const MEET_AHEAD: f32 = 0.7;
+/// The least walk that crosses, m/s.
+pub const CROSS_WALK: f32 = 0.5;
+/// How square to a passage a walk must head to cross it: the least cosine of its angle to the
+/// passage's across (0.7, about 45°).
+const CROSS_SQUARE: f32 = 0.7;
+/// How far over the exit's floor the body is tested for room, metres (its feet touch the floor).
+const FIT_LIFT: f32 = 0.05;
 
 /// How a walker keeps its pieces.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -379,6 +395,10 @@ pub struct Walker {
     seen: u64,
     /// Seconds not yet ticked.
     owed: f64,
+    /// The crossing under way (#316) and the seconds into it.
+    crossing: Option<(CrossingMotion, f32)>,
+    /// How the last crossing ended.
+    crossed: Option<bool>,
 }
 
 impl Walker {
@@ -419,6 +439,8 @@ impl Walker {
             settings,
             seen: pieces.generation(),
             owed: 0.0,
+            crossing: None,
+            crossed: None,
         };
         walker.keep(pieces)?;
         tracing::info!(
@@ -440,7 +462,8 @@ impl Walker {
     }
 
     /// Walks `walk` (m/s along the ground, the world's x and z) for the ticks `dt` seconds owe,
-    /// at most four, then keeps the pieces round its feet.
+    /// at most four, then keeps the pieces round its feet. A crossing under way carries the body
+    /// instead of the walk.
     pub fn advance(&mut self, pieces: &Pieces, walk: [f32; 2], dt: f64) {
         self.player.walk = walk;
         self.owed += dt;
@@ -448,11 +471,102 @@ impl Walker {
         let due = (self.owed / tick).floor();
         self.owed -= due * tick;
         for _ in 0..(due as u32).min(CATCH_UP) {
-            self.player.tick(&mut self.world, None, 0, TICK, |_| None);
+            if self.crossing.is_some() {
+                self.carry();
+            } else {
+                self.player.tick(&mut self.world, None, 0, TICK, |_| None);
+            }
         }
         if let Err(e) = self.keep(pieces) {
             tracing::warn!("the walker's pieces: {e}");
         }
+    }
+
+    /// [`Walker::advance`], crossing on its own the passage its walk heads into (the owner,
+    /// 2026-10-19): when [`Walker::meets`] finds one and `rule` gives a crossing for it (by its
+    /// kind and state, never by the body's height: D-076), the body is carried over it.
+    pub fn advance_across(
+        &mut self,
+        pieces: &Pieces,
+        passages: &Passages,
+        walk: [f32; 2],
+        dt: f64,
+        rule: impl Fn(&Passage) -> Option<CrossingSpec>,
+    ) {
+        if self.crossing.is_none()
+            && let Some(k) = self.meets(passages, walk)
+        {
+            let passage = passages.get(k);
+            // Only where the body fits past it: walking into a fence with no room behind it does
+            // not start a crossing that would only go back.
+            if let Some(spec) = rule(passage)
+                && let Some(motion) = CrossingMotion::over(passage, self.feet(), RADIUS, spec)
+                && self.fits(motion.exit)
+            {
+                self.cross(motion);
+            }
+        }
+        self.advance(pieces, walk, dt);
+    }
+
+    /// The passage its walk heads into: the one the line from its feet along `walk`, [`MEET_AHEAD`]
+    /// metres long, meets (#316), the walk at least [`CROSS_WALK`] m/s and within about 45° of
+    /// square to it. None while it crosses.
+    pub fn meets(&self, passages: &Passages, walk: [f32; 2]) -> Option<usize> {
+        let d = Vec3::new(walk[0], 0.0, walk[1]);
+        let speed = d.length();
+        if speed < CROSS_WALK || self.crossing.is_some() {
+            return None;
+        }
+        let ahead = d / speed;
+        let feet = self.feet();
+        let (k, _) = passages.met_by(feet, feet + ahead * MEET_AHEAD, STEP)?;
+        (ahead.dot(passages.get(k).across).abs() >= CROSS_SQUARE).then_some(k)
+    }
+
+    /// Starts carrying the body along `motion` (#316): kinematically, through what it meets,
+    /// until its end, where it stays if it fits and goes back to the entry if not
+    /// ([`Walker::crossed`]). It faces the way it crosses.
+    pub fn cross(&mut self, motion: CrossingMotion) {
+        self.player.facing = [motion.ahead.x, motion.ahead.z];
+        self.crossing = Some((motion, 0.0));
+        self.crossed = None;
+    }
+
+    /// The crossing under way, and the seconds into it: the clip's time.
+    pub fn crossing(&self) -> Option<(&CrossingMotion, f32)> {
+        self.crossing.as_ref().map(|(m, t)| (m, *t))
+    }
+
+    /// How the last crossing ended: true when the body fitted at its exit, false when it went
+    /// back to its entry; None while one is under way or before the first.
+    pub fn crossed(&self) -> Option<bool> {
+        self.crossed
+    }
+
+    /// Whether the body has room with its feet at `feet`: tested a little over them.
+    fn fits(&self, feet: Vec3) -> bool {
+        let at = feet + Vec3::Y * FIT_LIFT;
+        self.world.character_fits(self.character, at.as_dvec3())
+    }
+
+    /// One tick of the crossing under way.
+    fn carry(&mut self) {
+        let Some((motion, t)) = &mut self.crossing else {
+            return;
+        };
+        *t += TICK;
+        if !motion.done(*t) {
+            let at = motion.at(*t);
+            self.world.place_character(self.character, at.as_dvec3());
+            return;
+        }
+        let (entry, exit) = (motion.entry, motion.exit);
+        let fits = self.fits(exit);
+        let to = if fits { exit } else { entry };
+        self.world.place_character(self.character, to.as_dvec3());
+        self.crossing = None;
+        self.crossed = Some(fits);
     }
 
     /// The pieces within reach as bodies, those past 1.3 times it dropped, after following the
@@ -524,6 +638,7 @@ impl Walker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use forge_nav::{PassageKind, PassageState};
 
     /// A box's eight corners.
     fn cuboid(lo: Vec3, hi: Vec3) -> Vec<Vec3> {
@@ -638,6 +753,100 @@ mod tests {
         let mut late = Walker::new(&pieces, &ground, start, settings).unwrap();
         let x = walk(&mut late, &pieces, 12.0);
         assert!(x > 19.0 && x < 20.0, "{x}");
+    }
+
+    /// A garden wall 1 m high and 0.2 m thick across the way at x = 5, from z = −2 to 2.
+    fn garden_wall() -> Vec<Vec3> {
+        cuboid(Vec3::new(5.0, 0.0, -2.0), Vec3::new(5.2, 1.0, 2.0))
+    }
+
+    /// The garden wall's passage on its middle line, of `kind` and in `state`.
+    fn garden_passage(kind: PassageKind, state: PassageState) -> Passages {
+        Passages::new(vec![Passage {
+            kind,
+            ends: [Vec3::new(5.1, 0.0, -2.0), Vec3::new(5.1, 0.0, 2.0)],
+            across: Vec3::X,
+            sill: 1.0,
+            head: None,
+            depth: 0.2,
+            drop: 0.0,
+            both_ways: true,
+            state,
+            piece: 0,
+        }])
+    }
+
+    /// A person's crossing of an open passage, none of a shut one.
+    fn open_ones(p: &Passage) -> Option<CrossingSpec> {
+        (p.state == PassageState::Open).then(|| CrossingSpec::person(p.crossing()))
+    }
+
+    /// Walks +x at 2 m/s for `seconds`, crossing what it may; its feet at each tick.
+    fn walk_across(
+        walker: &mut Walker,
+        pieces: &Pieces,
+        passages: &Passages,
+        seconds: f32,
+    ) -> Vec<Vec3> {
+        (0..(seconds / TICK) as u32)
+            .map(|_| {
+                walker.advance_across(pieces, passages, [2.0, 0.0], f64::from(TICK), open_ones);
+                walker.feet()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_walker_vaults_the_low_wall_it_walks_into_but_not_a_shut_window() {
+        let settings = WalkSettings::default();
+        let ground = Ground::slab(0.0, 1.0);
+        let start = Vec3::new(3.0, 0.01, 0.3);
+        let pieces = Pieces::new(vec![garden_wall()], &settings);
+        // Open: vaulted, over the wall's top across its thickness, and on past it.
+        let open = garden_passage(PassageKind::LowFence, PassageState::Open);
+        let mut walker = Walker::new(&pieces, &ground, start, settings).unwrap();
+        let feet = walk_across(&mut walker, &pieces, &open, 3.0);
+        assert_eq!(walker.crossed(), Some(true));
+        let over: Vec<&Vec3> = feet.iter().filter(|f| (f.x - 5.1).abs() <= 0.1).collect();
+        assert!(
+            !over.is_empty() && over.iter().all(|f| f.y > 1.0),
+            "{over:?}"
+        );
+        assert!(walker.feet().x > 6.5, "{}", walker.feet());
+        // Shut window: the rule gives no crossing, the wall stops it.
+        let shut = garden_passage(PassageKind::Window, PassageState::Shut);
+        let mut walker = Walker::new(&pieces, &ground, start, settings).unwrap();
+        walk_across(&mut walker, &pieces, &shut, 3.0);
+        assert!(walker.feet().x < 4.8, "{}", walker.feet());
+        assert_eq!(walker.crossed(), None);
+        // No room past it (a wall 0.25 m behind): not started.
+        let behind = cuboid(Vec3::new(5.45, 0.0, -2.0), Vec3::new(5.65, 2.5, 2.0));
+        let blocked = Pieces::new(vec![garden_wall(), behind.clone()], &settings);
+        let mut walker = Walker::new(&blocked, &ground, start, settings).unwrap();
+        walk_across(&mut walker, &blocked, &open, 3.0);
+        assert!(walker.feet().x < 4.8, "{}", walker.feet());
+        assert_eq!(walker.crossed(), None);
+    }
+
+    #[test]
+    fn a_crossing_whose_exit_fills_meanwhile_goes_back_to_its_entry() {
+        let settings = WalkSettings::default();
+        let ground = Ground::slab(0.0, 1.0);
+        let mut pieces = Pieces::new(vec![garden_wall()], &settings);
+        let open = garden_passage(PassageKind::LowFence, PassageState::Open);
+        let mut walker =
+            Walker::new(&pieces, &ground, Vec3::new(3.0, 0.01, 0.3), settings).unwrap();
+        while walker.crossing().is_none() {
+            walker.advance_across(&pieces, &open, [2.0, 0.0], f64::from(TICK), open_ones);
+        }
+        let entry = walker.crossing().map(|(m, _)| m.entry).unwrap();
+        // A crate dropped where it would land.
+        pieces.add(cuboid(Vec3::new(5.3, 0.0, -1.0), Vec3::new(6.3, 1.2, 1.0)));
+        while walker.crossing().is_some() {
+            walker.advance(&pieces, [2.0, 0.0], f64::from(TICK));
+        }
+        assert_eq!(walker.crossed(), Some(false));
+        assert!((walker.feet() - entry).length() < 1e-4, "{}", walker.feet());
     }
 
     #[test]

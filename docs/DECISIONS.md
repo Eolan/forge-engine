@@ -6828,5 +6828,40 @@ best guess or data"):
     a climber does, all 8 through a window's link;
   - walking straight at a window from the street meets that window.
 
+**Crossings built** (#316, the same day, `forge_nav::CrossingMotion`):
+- **The motion:** three targets in the passage's frame:
+  - the entry: where the feet are;
+  - the top: over the middle line at the sill plus a lift;
+  - the exit: past the far face by the body's radius and 5 cm, on the far floor.
+- **Without a clip:** a curve. Before the top it rises early and goes ahead late; after the top
+  it goes ahead early and comes down late. The top's time keeps the speed ahead even.
+- **With a clip:** its root path (`RootPath`, sampled from the clip's root motion) is warped onto
+  the targets. Each part is scaled per axis of the crossing's frame: Witkin and Popović's motion
+  warping (1995), which the live traversal patents do not claim.
+- **Spec:** `CrossingSpec` holds the seconds and the lift per kind. A person's defaults:
+  - climbing through, 1.4 s;
+  - a vault, 0.8 s with 15 cm;
+  - a climb, 1.8 s;
+  - a jump, 0.7 s with 40 cm.
+- **The walker** (`city_blocks::walker`):
+  - `cross` carries the body kinematically (Jolt's `place_character`).
+  - At the end it checks the room at the exit (`character_fits`, Jolt's `CheckCollision`). The
+    body stays there if it fits, and goes back to the entry if not.
+  - `advance_across` crosses automatically, as the owner chose:
+    - the passage is the one `meets` finds: the line 0.7 m ahead of the feet along the walk;
+    - the walk must be at least 0.5 m/s and within about 45° of square;
+    - the host's rule gives a crossing by kind and state, never by the body's height;
+    - the crossing starts only where the exit has room.
+- **The village:** its first-person walker vaults garden walls up to 1.1 m and climbs through
+  the open windows of the houses with insides. Tall walls and doors are left to climbers and to
+  walking.
+- **Checked:**
+  - forge-nav: both faces cleared, the way back over a drop, a clip warped onto a wall 0.25 m
+    higher than the one it was made for;
+  - the walker: a low wall vaulted, a shut window and a wall with no room behind it not
+    crossed, a crate dropped at the exit mid-crossing sending the body back;
+  - the map check's third walk, over the longest low garden wall on a street, shot at the
+    vault's top; the other twelve images are unchanged.
+
 *(research: navigation-traversal.md, game-ai-ecosystems.md §2 and §7, animation.md §5; D-012,
 D-016, D-062; issues #90, #276, #311, #316, #317)*

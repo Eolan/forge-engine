@@ -16,6 +16,8 @@
 #include <Jolt/Physics/Vehicle/VehicleConstraint.h>
 #include <Jolt/Physics/Vehicle/WheeledVehicleController.h>
 #include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/CollideShape.h>
+#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
@@ -674,6 +676,23 @@ void fj_character_state(const FjWorld *world, uint32_t character, FjCharacterSta
     c.GetGroundVelocity().StoreFloat3(reinterpret_cast<JPH::Float3 *>(state->ground_velocity));
     state->ground_body = c.GetGroundBodyID().GetIndexAndSequenceNumber();
     state->ground_state = static_cast<uint32_t>(c.GetGroundState());
+}
+
+void fj_character_place(FjWorld *world, uint32_t character, const double position[3]) {
+    JPH::CharacterVirtual &c = *world->characters[character];
+    c.SetPosition(rvec3(position));
+    c.SetLinearVelocity(JPH::Vec3::sZero());
+}
+
+int32_t fj_character_fits(const FjWorld *world, uint32_t character, const double position[3]) {
+    const JPH::CharacterVirtual &c = *world->characters[character];
+    JPH::AnyHitCollisionCollector<JPH::CollideShapeCollector> hit;
+    c.CheckCollision(rvec3(position), JPH::Quat::sIdentity(), JPH::Vec3::sZero(), 0.0f,
+                     c.GetShape(), JPH::RVec3::sZero(), hit,
+                     world->system.GetDefaultBroadPhaseLayerFilter(kMoving),
+                     world->system.GetDefaultLayerFilter(kMoving), JPH::BodyFilter(),
+                     JPH::ShapeFilter());
+    return hit.HadHit() ? 0 : 1;
 }
 
 uint32_t fj_vehicle_add(FjWorld *world, uint32_t chassis, const FjVehicleDesc *desc) {

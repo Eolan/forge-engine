@@ -4,10 +4,13 @@
 //! island); Enter again frees the camera. Its pieces are the buildings' walls round it (D-060:
 //! each wall a slab of its thickness to its roof, open where a passage runs into a court) and
 //! the insides of the houses that have them (floors, flights, partitions, furniture); the ground
-//! is one slab at the streets' level.
+//! is one slab at the streets' level. It crosses on its own what it walks into (#316, the owner
+//! on 2026-10-19): a low garden wall is vaulted, an open window of a house with insides climbed
+//! through.
 
 use anyhow::Result;
 use city_blocks::walker::{Ground, Pieces, WalkSettings};
+use forge_nav::{CrossingSpec, Passage, PassageKind, PassageState, Passages};
 use glam::Vec3;
 
 pub use city_blocks::walker::EYES;
@@ -17,13 +20,28 @@ const LEVEL: f32 = 0.16;
 /// The ground's thickness, metres.
 const GROUND_THICKNESS: f32 = 2.0;
 
-/// The pieces to walk against.
-pub struct Walls(Pieces);
+/// The pieces to walk against and the passages to cross.
+pub struct Walls(Pieces, Passages);
 
 impl Walls {
-    /// The pieces: convex, their corners in the world's metres.
-    pub fn new(pieces: Vec<Vec<Vec3>>) -> Self {
-        Self(Pieces::new(pieces, &WalkSettings::default()))
+    /// The pieces (convex, their corners in the world's metres) and the passages.
+    pub fn new(pieces: Vec<Vec<Vec3>>, passages: Vec<Passage>) -> Self {
+        Self(
+            Pieces::new(pieces, &WalkSettings::default()),
+            Passages::new(passages),
+        )
+    }
+}
+
+/// What the player crosses on its own (D-076's defaults): an open or broken window is climbed
+/// through and a low wall vaulted, a person's way; a tall wall is a climber's, a door is walked.
+fn crossing(p: &Passage) -> Option<CrossingSpec> {
+    let open = matches!(p.state, PassageState::Open | PassageState::Broken);
+    match p.kind {
+        PassageKind::Window | PassageKind::LowFence if open => {
+            Some(CrossingSpec::person(p.crossing()))
+        }
+        _ => None,
     }
 }
 
@@ -47,8 +65,10 @@ impl Walker {
         self.0.feet()
     }
 
-    /// Walks `walk` (m/s along the ground, the world's x and z) for the ticks `dt` seconds owe.
+    /// Walks `walk` (m/s along the ground, the world's x and z) for the ticks `dt` seconds owe,
+    /// crossing what it walks into.
     pub fn advance(&mut self, walls: &Walls, walk: [f32; 2], dt: f64) {
-        self.0.advance(&walls.0, walk, dt);
+        self.0
+            .advance_across(&walls.0, &walls.1, walk, dt, crossing);
     }
 }

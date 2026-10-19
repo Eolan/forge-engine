@@ -1054,6 +1054,22 @@ impl World {
         unsafe { ffi::fj_character_move(self.raw.as_ptr(), character.0, dt, v.as_ptr()) };
     }
 
+    /// Puts a character at `position` at once and stops it, whatever is there: a crossing
+    /// carries it so over a sill (#316). Its contacts follow at its next move.
+    pub fn place_character(&mut self, character: CharacterId, position: DVec3) {
+        let p = position.to_array();
+        // SAFETY: the world is live, the index one it gave, `p` read during the call.
+        unsafe { ffi::fj_character_place(self.raw.as_ptr(), character.0, p.as_ptr()) };
+    }
+
+    /// Whether a character's shape at `position` (its feet) meets no body: neither touches nor
+    /// overlaps one. Test it a little over a floor, which its feet touch.
+    pub fn character_fits(&self, character: CharacterId, position: DVec3) -> bool {
+        let p = position.to_array();
+        // SAFETY: the world is live, the index one it gave, `p` read during the call.
+        unsafe { ffi::fj_character_fits(self.raw.as_ptr(), character.0, p.as_ptr()) != 0 }
+    }
+
     /// Where a character is and what it stands on.
     pub fn character(&self, character: CharacterId) -> CharacterState {
         let mut s = ffi::FjCharacterState::default();

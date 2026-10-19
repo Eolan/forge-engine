@@ -20,6 +20,9 @@
 //!    leaps at what it cannot reach).
 //! 4. **Pulling it straight:** from each corner the path goes on to the farthest of its places in
 //!    a straight line over walkable ground the radius fits; a link's ends stay corners.
+//! 5. **Crossing** ([`CrossingMotion`], #316): the body carried over a passage from its entry by
+//!    the top to its exit, on a curve or along a clip's root path warped onto those targets
+//!    ([`RootPath`]); the controller carries it and checks that it fits at the exit.
 //!
 //! Space games ahead (the owner, 2026-10-19): the links and the path's shape do not depend on
 //! the field, so other representations can answer the same questions later (polygons outdoors,
@@ -29,8 +32,10 @@
 
 #![forbid(unsafe_code)]
 
+mod crossing;
 mod passage;
 
+pub use crossing::{CrossingMotion, CrossingSpec, RootPath};
 pub use passage::{CrossingKind, PASSAGE_CELL, Passage, PassageKind, PassageState, Passages};
 
 use std::cmp::Reverse;
