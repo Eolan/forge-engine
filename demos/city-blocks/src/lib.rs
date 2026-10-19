@@ -1202,6 +1202,7 @@ impl Gallery {
                 movers: look.probes_see_movers,
                 far_room_sky: args
                     .probe_far_sky
+                    .or(look.probe_far_room_sky)
                     .unwrap_or(ProbeParams::default().far_room_sky),
                 ..ProbeParams::default()
             };

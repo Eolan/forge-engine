@@ -236,6 +236,7 @@ impl Scenario for LabScenario {
             )),
             // The lab's bodies are what it shows: the probes see them (#299).
             probes_see_movers: true,
+            probe_far_room_sky: None,
             // The car is followed from the start (C lets it go); the aeroplane always is.
             chase: matches!(kind, LabScene::Drive | LabScene::Flyer),
             // Each lab scene at its own fixed exposure (its captures compared at one).

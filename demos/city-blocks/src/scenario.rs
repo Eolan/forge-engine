@@ -56,6 +56,10 @@ pub struct Look {
     /// movers are what it shows (the physics lab's bodies). Off: walkers and vehicles stay out of
     /// the probes' light, and the probes do not wait for their upload.
     pub probes_see_movers: bool,
+    /// The open sky's share a far room without its own probes takes (#321,
+    /// `ProbeParams::far_room_sky`), when the scene sets it (unless `--probe-far-sky` does): its
+    /// rooms' daylight factor (0.06 the village's; shallow rooms with wide windows about 0.27).
+    pub probe_far_room_sky: Option<f32>,
     /// The camera follows the scene's vehicle from the start ([`Running::follow`]).
     pub chase: bool,
     /// The exposure follows the scene's metered light without `--day` or `--time-of-day` (unless
@@ -74,6 +78,7 @@ impl Default for Look {
             particles: false,
             probes: None,
             probes_see_movers: false,
+            probe_far_room_sky: None,
             chase: false,
             metered: false,
         }

@@ -5572,7 +5572,8 @@ application of their patents just in case."
   the roof's and the street's probes behind walls and slabs, and such rooms came out black
   through their windows until the camera was within a few metres. Now a room that no room-sized
   cascade covers and whose region has no probe among the eight takes `ProbeParams::far_room_sky`
-  (0.06; `--probe-far-sky`) of the open sky's luminance, what its windows let in (a daylight
+  (0.06; `--probe-far-sky`, or the scene's `Look::probe_far_room_sky`: about 0.27 for shallow
+  rooms with wide windows, bracketed out of the repository) of the open sky's luminance, what its windows let in (a daylight
   factor, deep rooms behind small windows less, shallow ones with wide windows more), in a warm
   white (`far_from_rooms`; `--show-regions` tints it orange). A first version took 0.25 of the
   outside's probes around it: in a deep house under a pitched roof those include the roof
