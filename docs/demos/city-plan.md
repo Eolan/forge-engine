@@ -1295,12 +1295,13 @@ phase of its own. `--no-decals` leaves it out: `shading/standard` +0.026 ms on a
 +0.035 ms over the junction (`docs/PROFILE.md`). Capture: `reports/2026-10-19/village-wall-grime.png`
 (above without, below with).
 
-The paving carries stains and cracks the same way: stamps of a ragged damp patch and of a few
-cracks, one stain to 40 m² and one crack to 150 m² of the paved walking ground within the detail,
+The paving carries stains and cracks the same way: stamps of a faint, warm smudge of dirt broken
+into streaky patches (round, dark stains read as shadows: the owner, 2026-10-19) and of a few
+cracks, one stain to 90 m² and one crack to 150 m² of the paved walking ground within the detail,
 each at a turn and a size of its own and wholly on the paving, marking only the faces that look
-up. With the grime, the village holds 1 210 decals: `shading/standard` +0.05 ms on the house front
-and +0.065 ms over the junction. Capture: `reports/2026-10-19/village-paving-stains.png` (the
-garden lane, above without, below with).
+up. `shading/standard` with all the decals: +0.05 ms on the house front and +0.065 ms over the
+junction. Capture: `reports/2026-10-19/village-paving-stains.png` (the garden lane: the first,
+round stains above, the reworked ones below).
 
 ### Local exposure (D-067, #275)
 

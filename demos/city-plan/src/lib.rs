@@ -247,8 +247,8 @@ fn world(size: f64, p: DVec2, height: f64) -> Vec3 {
     )
 }
 
-/// Paved ground per stain on the paving (D-074), m².
-const STAIN_EVERY: f64 = 40.0;
+/// Paved ground per stain on the paving (D-074), m²: few, so that they read as wear here and there.
+const STAIN_EVERY: f64 = 90.0;
 /// Paved ground per crack on the paving (D-074), m².
 const CRACKS_EVERY: f64 = 150.0;
 
@@ -312,7 +312,7 @@ fn paving_marks(
                 }
                 let p = t[0] + (t[1] - t[0]) * a + (t[2] - t[0]) * b;
                 let (half_x, half_z) = if kind == 1 {
-                    (0.35 + 0.6 * h(3), 0.3 + 0.5 * h(4))
+                    (0.7 + 0.9 * h(3), 0.35 + 0.45 * h(4))
                 } else {
                     (0.4 + 0.4 * h(3), 0.4 + 0.4 * h(3))
                 };

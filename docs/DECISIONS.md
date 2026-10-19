@@ -6513,6 +6513,12 @@ the decals (`--no-decals`) and with them: 0.816 → 0.863–0.869 ms on the hous
 0.968–0.971 ms over the junction (two runs each way). In motion they add no shimmer: the
 garden lane dollied at 1 m/s under DLAA, each frame's change against an `--ssaa` run's, differs
 on 6.47 % of the pixels with them and 6.45 % without (20 pairs, the lane's foliage the rest).
+**The stains reworked** (the owner, the same day: "what are the round shadow spots on the
+ground?"): round, dark and even, the stains read as shadows. Now a stain is a faint, warm smudge
+of dirt broken into irregular patches and streaks along its length (`decal_stain`: alpha at most
+0.25, twice as long as wide, 1.4–3.2 m by 0.7–1.6 m), one to 90 m² of paving instead of 40. The
+garden lane's two spots are gone; the paving only varies a little. Capture:
+`reports/2026-10-19/village-paving-stains.png` (the old stains above, the new below).
 
 **Row decals** (2026-10-19): a kind with a `row` (`DecalKind::row`) takes only its texture's alpha,
 a mask over that material row: where it masks, the surface takes the row's colour and normal

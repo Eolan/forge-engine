@@ -1644,21 +1644,24 @@ pub fn decal_grime(seed: u64, size: u32) -> TextureData {
     })
 }
 
-/// A stain on a paving (D-074): a soft, ragged patch of grime where water stood and dried, its
-/// rim a little darker, faint and mottled; a stamp clamped at its edges, gone before them.
+/// Wear on a paving (D-074): a faint, warm smudge of dirt broken into irregular patches and
+/// streaks along `u` (where feet and water carried it), mottled finely, none of it round; a stamp
+/// clamped at its edges, gone before them. Round, dark, even patches read as shadows (the owner,
+/// 2026-10-19).
 pub fn decal_stain(seed: u64, size: u32) -> TextureData {
     kept("texture-decal-stain", &(seed, size), || {
         let texels = grid(size, |u, v| {
-            // 0 in the middle, 1 at the middle of an edge, ragged by broad noise.
-            let r = ((u - 0.5).powi(2) + (v - 0.5).powi(2)).sqrt() * 2.0;
-            let reach = r + 0.4 * (fbm(seed, u, v, 3, 4) - 0.5);
-            let patch = 1.0 - smoothstep(0.35, 0.75, reach);
-            let rim = smoothstep(0.45, 0.68, reach) * patch;
-            let mottle = fbm(seed ^ 0x57A, u, v, 12, 3);
-            let alpha = ((patch * (0.32 + 0.3 * mottle) + rim * 0.15)
-                * (1.0 - smoothstep(0.85, 1.0, r)))
-            .clamp(0.0, 0.7);
-            [0.09, 0.08, 0.065, alpha]
+            // An ellipse twice as long along u as across, 0 in the middle, 1 at its rim.
+            let r = ((u - 0.5).powi(2) + (2.0 * (v - 0.5)).powi(2)).sqrt() * 2.0;
+            // Patches: broad noise over a threshold that falls towards the rim, so the smudge
+            // breaks into islands with streaks along u rather than one blob.
+            let broad = fbm(seed, u, v * 0.5, 4, 4);
+            let streaks = fbm(seed ^ 0x37C, u * 0.25, v, 16, 2);
+            let patches = smoothstep(0.5, 0.7, 0.55 * broad + 0.25 * streaks + 0.45 * (1.0 - r));
+            let fine = fbm(seed ^ 0x57A, u, v, 32, 3);
+            let alpha =
+                (patches * (0.08 + 0.14 * fine) * (1.0 - smoothstep(0.8, 1.0, r))).clamp(0.0, 0.25);
+            [0.17, 0.125, 0.08, alpha]
         });
         premultiplied_texture("decal stain", size, texels)
     })
