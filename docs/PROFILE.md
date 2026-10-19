@@ -2087,6 +2087,22 @@ buffer each, copied bit by bit).
 - **Where it shows:** the test prints it. The host has no F1 zone: it does not run in the
   frame yet.
 
+## `forge-nav` — fields, paths, crowds and walker edits (D-076, #317, #324, 2026-10-19)
+
+- **What was measured:** release builds, one thread, wall clock, in the crates' tests.
+- **Results:**
+  - **A house's walk field:** 38 ms (a 0.10 m tile over the house and 4 m round it). A path
+    over it takes 0.9 ms.
+  - **Two 25.6 m tiles:** built in 34 ms. A 47 m path across them takes 8.5 ms, over 76,420
+    places (dense arrays per tile; 25 ms with hash maps).
+  - **A crowd step of 1,000 people (ORCA):** 0.83 ms.
+  - **A door's leaf toggled among 20,189 walker pieces within reach:** 0.35 ms, against 0.33 ms
+    for a step without it and 133 ms to rebuild the pieces and the walker.
+- **Where it shows:** the tests print it (`a_thousand_people_step_in_a_few_milliseconds`,
+  `a_path_crosses_from_tile_to_tile_as_on_one_field`,
+  `a_door_toggled_among_many_pieces_costs_a_step_not_a_rebuild`). Nothing runs in a frame
+  yet, except the walker and `--pursuers`, so there is no F1 zone.
+
 ## Not measured yet
 
 - **Streaming**: residency pools, request queue depth, drive and decompression throughput.
