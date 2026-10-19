@@ -93,6 +93,39 @@ pub fn grown_proxy(g: &TreeGraph, shrub: bool, broad: bool, lift: f32) -> TriMes
     mesh
 }
 
+/// [`grown_mesh`]'s plant at the middle of D-075's ladder (L1, #302): its wood, and each lump of
+/// its crown a closed shell of [`CROWN_SHELL`] of the lump's radius, a bumped icosahedron of 20
+/// triangles (section 3, the crown's row: a lump is a few pixels where it stands in for the cards,
+/// from about 30 m), fewer than the cards and their core:
+/// closed, the cluster LOD simplifies it, as it cannot simplify the cards. Not #297's proxy for
+/// the probes, which keeps to three fifths of the lumps and would shrink the crown in sight.
+pub fn grown_shells(g: &TreeGraph, shrub: bool, broad: bool, lift: f32) -> TriMesh {
+    let mut mesh = TriMesh::default();
+    if !shrub {
+        wood(&mut mesh, g);
+    }
+    let faces = icosahedron();
+    for (i, &(centre, radius)) in crown_lumps(g, shrub, broad, lift).iter().enumerate() {
+        let first = mesh.sections.len();
+        lump_of(
+            &mut mesh,
+            centre,
+            radius * CROWN_SHELL,
+            i as u32 % 8,
+            &faces,
+        );
+        mesh.sections[first..].fill(3);
+    }
+    mesh.uvs = vec![[0.0, 0.0]; mesh.positions.len()];
+    mesh
+}
+
+/// A crown's shell at the ladder's middle ([`grown_shells`]) as a share of its lump's radius: the
+/// cards reach from 0.4 to 0.7 radii out with their own half size beyond: the whole radius makes
+/// the trees' crowns 0.99–1.07 of the cards' width, the cypress's column 0.83 and the shrubs'
+/// 0.78–0.95 (to tune per species by the crossing's look).
+pub const CROWN_SHELL: f32 = 1.0;
+
 /// A tree's wood 5 cm thick or more as tapered limbs, section 0 ([`grown_mesh`]).
 fn wood(mesh: &mut TriMesh, g: &TreeGraph) {
     for s in g.segments() {
@@ -373,6 +406,49 @@ mod tests {
                     s.id
                 );
             }
+        }
+    }
+
+    /// The ladder's middle (D-075, #302): the shells hold the crown's outline where the cards
+    /// hand over (their crown's width 0.75 to 1.2 of the cards'), in fewer triangles than the
+    /// drawn plant, the wood and the crown's sections only.
+    #[test]
+    fn the_crown_shells_keep_the_crown_s_outline() {
+        let width = |mesh: &TriMesh, section: u8| {
+            let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+            for (t, &s) in mesh.sections.iter().enumerate() {
+                if s != section {
+                    continue;
+                }
+                for &i in &mesh.indices[3 * t..3 * t + 3] {
+                    let p = Vec3::from(mesh.positions[i as usize]);
+                    lo = lo.min(p);
+                    hi = hi.max(p);
+                }
+            }
+            (hi.x - lo.x).max(hi.z - lo.z)
+        };
+        for (sp, s) in forge_flora::species::mediterranean().iter().enumerate() {
+            let (shrub, broad) = (s.habit == Habit::Shrub, s.foliage == Foliage::Broad);
+            let conditions = forge_flora::grow::individual(s, sp as u16, 0);
+            let graph = forge_flora::grow(s, &conditions);
+            let lift = conditions.pruning.lift as f32;
+            let drawn = grown_mesh(&graph, shrub, broad, lift, s.look.spray);
+            let shells = grown_shells(&graph, shrub, broad, lift);
+            assert!(shells.sections.iter().all(|&s| s == 0 || s == 3));
+            assert!(
+                shells.triangle_count() < drawn.triangle_count(),
+                "{}: {} triangles against {}",
+                s.id,
+                shells.triangle_count(),
+                drawn.triangle_count()
+            );
+            let (cards, crown) = (width(&drawn, 2), width(&shells, 3));
+            assert!(
+                (0.75..1.2).contains(&(crown / cards)),
+                "{}: the shells {crown:.2} m across, the cards {cards:.2} m",
+                s.id
+            );
         }
     }
 }
