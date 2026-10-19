@@ -8,6 +8,9 @@
 //! - **They are kept by their outline:** each piece's footprint goes into every cell it
 //!   overlaps, and those whose footprint lies within [`WalkSettings::reach`] of the feet become
 //!   fixed bodies, dropped past 1.3 times it. A long wall is kept while any part of it is near.
+//! - **They change at run time** (#324): each keeps its id while it is enabled, disabled (a
+//!   door's leaf), replaced or removed, and pieces are added. Every walker follows at its next
+//!   step, a few bodies rather than a rebuild.
 //! - **The ground** ([`Ground`]) is a slab, whole or with rectangular holes where flights go
 //!   below it, kept whole from the start.
 //!
@@ -31,6 +34,9 @@ const CATCH_UP: u32 = 4;
 const GROUND_EXTENT: f32 = 20_000.0;
 /// A piece over more cells than this is kept from the start rather than by its cells.
 const MOST_CELLS: i64 = 400;
+/// The pieces' edits a walker follows in a step without optimizing its broad phase (Jolt adds
+/// the bodies to it either way; the optimization is for many at once).
+const EDITS_IN_PLACE: usize = 16;
 
 /// How a walker keeps its pieces.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -55,10 +61,26 @@ impl Default for WalkSettings {
 }
 
 /// The pieces to walk on and against, found by the cells their footprints overlap.
+///
+/// Each piece keeps its id (its index) for good. Pieces change at run time (#324): a door's leaf
+/// is disabled while the door is open, a piece is added, moved or removed. Every walker that
+/// advances among them follows at its next step: it drops the bodies of pieces disabled, removed
+/// or replaced, and builds those enabled or added within its reach.
 pub struct Pieces {
     pieces: Vec<Vec<Vec3>>,
     /// Each piece's footprint: its least and greatest x and z.
     bounds: Vec<[Vec2; 2]>,
+    /// Whether each piece is walked against: false while disabled, and once removed.
+    enabled: Vec<bool>,
+    /// Whether each piece was removed.
+    removed: Vec<bool>,
+    /// Each piece's shape's version, raised when it is replaced or removed: a walker drops a
+    /// body built from an older one.
+    shapes: Vec<u32>,
+    /// The edit each piece last had ([`Pieces::generation`] then), 0 if none since `new`.
+    edited: Vec<u64>,
+    /// The edits made since `new`.
+    generation: u64,
     cells: HashMap<(i32, i32), Vec<u32>>,
     /// The pieces over more than [`MOST_CELLS`] cells, kept from the start.
     always: Vec<u32>,
@@ -67,64 +89,178 @@ pub struct Pieces {
 
 impl Pieces {
     /// The pieces, each a convex piece given by its corners in the world's metres, found by cells
-    /// of `settings.cell`.
+    /// of `settings.cell`. Their ids are their places in `pieces`, all enabled.
     pub fn new(pieces: Vec<Vec<Vec3>>, settings: &WalkSettings) -> Self {
-        let cell = settings.cell;
-        let mut cells: HashMap<(i32, i32), Vec<u32>> = HashMap::new();
-        let mut always = Vec::new();
-        let mut bounds = Vec::with_capacity(pieces.len());
-        for (i, piece) in pieces.iter().enumerate() {
-            let b = footprint(piece);
-            let (lo, hi) = (cell_of(b[0], cell), cell_of(b[1], cell));
-            let count = i64::from(hi.0 - lo.0 + 1) * i64::from(hi.1 - lo.1 + 1);
-            if count > MOST_CELLS {
-                always.push(i as u32);
-            } else {
-                for x in lo.0..=hi.0 {
-                    for z in lo.1..=hi.1 {
-                        cells.entry((x, z)).or_default().push(i as u32);
-                    }
-                }
-            }
-            bounds.push(b);
-        }
-        Self {
+        let n = pieces.len();
+        let mut out = Self {
+            bounds: pieces.iter().map(|p| footprint(p)).collect(),
             pieces,
-            bounds,
-            cells,
-            always,
-            cell,
+            enabled: vec![true; n],
+            removed: vec![false; n],
+            shapes: vec![0; n],
+            edited: vec![0; n],
+            generation: 0,
+            cells: HashMap::new(),
+            always: Vec::new(),
+            cell: settings.cell,
+        };
+        for i in 0..n {
+            out.index(i as u32);
         }
+        out
     }
 
-    /// How many pieces.
+    /// How many ids were given, those of removed pieces included.
     pub fn len(&self) -> usize {
         self.pieces.len()
     }
 
-    /// Whether there are none.
+    /// Whether no id was given.
     pub fn is_empty(&self) -> bool {
         self.pieces.is_empty()
     }
 
-    /// The pieces whose footprints lie within `r` of `p` (the world's x and z), each once, in
-    /// order, the ones kept from the start included.
+    /// Piece `id`'s corners, the world's metres; none once removed.
+    pub fn corners(&self, id: u32) -> &[Vec3] {
+        &self.pieces[id as usize]
+    }
+
+    /// Whether piece `id` is walked against: enabled and not removed.
+    pub fn enabled(&self, id: u32) -> bool {
+        self.enabled[id as usize]
+    }
+
+    /// Enables or disables piece `id` (a door's leaf shut or open); its cells stay, so either is
+    /// a flag and the walkers' next step. A removed piece stays disabled.
+    pub fn set_enabled(&mut self, id: u32, on: bool) {
+        let i = id as usize;
+        if self.removed[i] || self.enabled[i] == on {
+            return;
+        }
+        self.enabled[i] = on;
+        self.edited_now(id);
+    }
+
+    /// Adds a piece, enabled, and gives its id: the next unused one.
+    pub fn add(&mut self, corners: Vec<Vec3>) -> u32 {
+        let id = self.pieces.len() as u32;
+        self.bounds.push(footprint(&corners));
+        self.pieces.push(corners);
+        self.enabled.push(true);
+        self.removed.push(false);
+        self.shapes.push(0);
+        self.edited.push(0);
+        self.index(id);
+        self.edited_now(id);
+        id
+    }
+
+    /// Gives piece `id` new corners (a piece moved or reshaped), keeping its id and whether it is
+    /// enabled. A removed piece stays removed.
+    pub fn replace(&mut self, id: u32, corners: Vec<Vec3>) {
+        let i = id as usize;
+        if self.removed[i] {
+            return;
+        }
+        self.unindex(id);
+        self.bounds[i] = footprint(&corners);
+        self.pieces[i] = corners;
+        self.shapes[i] = self.shapes[i].wrapping_add(1);
+        self.index(id);
+        self.edited_now(id);
+    }
+
+    /// Removes piece `id` for good; its id is not given again.
+    pub fn remove(&mut self, id: u32) {
+        let i = id as usize;
+        if self.removed[i] {
+            return;
+        }
+        self.unindex(id);
+        self.pieces[i] = Vec::new();
+        self.removed[i] = true;
+        self.enabled[i] = false;
+        self.shapes[i] = self.shapes[i].wrapping_add(1);
+        self.edited_now(id);
+    }
+
+    /// The edits made since `new`: a walker that saw this many has nothing to catch up.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// The pieces enabled whose footprints lie within `r` of `p` (the world's x and z), each
+    /// once, in order, the ones kept from the start included.
     pub fn near(&self, p: Vec2, r: f32) -> Vec<u32> {
         let (lo, hi) = (
             cell_of(p - Vec2::splat(r), self.cell),
             cell_of(p + Vec2::splat(r), self.cell),
         );
-        let mut out: Vec<u32> = self.always.clone();
+        let mut out: Vec<u32> = self
+            .always
+            .iter()
+            .copied()
+            .filter(|&i| self.enabled(i))
+            .collect();
         for x in lo.0..=hi.0 {
             for z in lo.1..=hi.1 {
                 if let Some(list) = self.cells.get(&(x, z)) {
-                    out.extend(list.iter().copied().filter(|&i| self.distance(i, p) <= r));
+                    out.extend(
+                        list.iter()
+                            .copied()
+                            .filter(|&i| self.enabled(i) && self.distance(i, p) <= r),
+                    );
                 }
             }
         }
         out.sort_unstable();
         out.dedup();
         out
+    }
+
+    /// Marks piece `id` edited now.
+    fn edited_now(&mut self, id: u32) {
+        self.generation += 1;
+        self.edited[id as usize] = self.generation;
+    }
+
+    /// Piece `id`'s cells, or None for one kept from the start.
+    fn cells_of(&self, id: u32) -> Option<((i32, i32), (i32, i32))> {
+        let b = self.bounds[id as usize];
+        let (lo, hi) = (cell_of(b[0], self.cell), cell_of(b[1], self.cell));
+        let count = i64::from(hi.0 - lo.0 + 1) * i64::from(hi.1 - lo.1 + 1);
+        (count <= MOST_CELLS).then_some((lo, hi))
+    }
+
+    /// Puts piece `id` in its cells, or in those kept from the start.
+    fn index(&mut self, id: u32) {
+        let Some((lo, hi)) = self.cells_of(id) else {
+            self.always.push(id);
+            return;
+        };
+        for x in lo.0..=hi.0 {
+            for z in lo.1..=hi.1 {
+                self.cells.entry((x, z)).or_default().push(id);
+            }
+        }
+    }
+
+    /// Takes piece `id` out of its cells, or out of those kept from the start.
+    fn unindex(&mut self, id: u32) {
+        let Some((lo, hi)) = self.cells_of(id) else {
+            self.always.retain(|&i| i != id);
+            return;
+        };
+        for x in lo.0..=hi.0 {
+            for z in lo.1..=hi.1 {
+                if let Some(list) = self.cells.get_mut(&(x, z)) {
+                    list.retain(|&i| i != id);
+                    if list.is_empty() {
+                        self.cells.remove(&(x, z));
+                    }
+                }
+            }
+        }
     }
 
     /// The distance from `p` to piece `i`'s footprint, metres (0 inside it).
@@ -236,8 +372,11 @@ pub struct Walker {
     world: World,
     player: Player,
     character: CharacterId,
-    kept: HashMap<u32, BodyId>,
+    /// The pieces it holds: each one's body and the version of the shape it was built from.
+    kept: HashMap<u32, (BodyId, u32)>,
     settings: WalkSettings,
+    /// The pieces' edits it has followed ([`Pieces::generation`]).
+    seen: u64,
     /// Seconds not yet ticked.
     owed: f64,
 }
@@ -278,6 +417,7 @@ impl Walker {
             character,
             kept: HashMap::new(),
             settings,
+            seen: pieces.generation(),
             owed: 0.0,
         };
         walker.keep(pieces)?;
@@ -315,24 +455,51 @@ impl Walker {
         }
     }
 
-    /// The pieces within reach as bodies, those past 1.3 times it dropped.
+    /// The pieces within reach as bodies, those past 1.3 times it dropped, after following the
+    /// pieces' edits since its last step: the bodies of pieces disabled, removed or replaced go
+    /// first.
     fn keep(&mut self, pieces: &Pieces) -> Result<()> {
         let feet = self.feet();
         let p = Vec2::new(feet.x, feet.z);
         let reach = self.settings.reach;
-        let mut changed = false;
+        // Bodies brought in or dropped as it walks: the broad phase is optimized after them.
+        // Edits alone (a door) leave it as it is unless there are many.
+        let mut moved = false;
+        let mut edits = 0;
+        if pieces.generation() != self.seen {
+            let mut stale: Vec<u32> = self
+                .kept
+                .iter()
+                .filter(|&(&i, &(_, shape))| {
+                    !pieces.enabled(i) || pieces.shapes[i as usize] != shape
+                })
+                .map(|(&i, _)| i)
+                .collect();
+            stale.sort_unstable();
+            for i in stale {
+                if let Some((body, _)) = self.kept.remove(&i) {
+                    self.world.remove_body(body);
+                    edits += 1;
+                }
+            }
+        }
         for i in pieces.near(p, reach) {
             if self.kept.contains_key(&i) {
                 continue;
             }
-            let points = &pieces.pieces[i as usize];
+            let points = pieces.corners(i);
             let Ok(shape) = Shape::convex_hull(points, self.settings.convex_radius, 1000.0) else {
                 continue;
             };
             let body = self.world.add_body(&BodyDesc::fixed(&shape, DVec3::ZERO))?;
-            self.kept.insert(i, body);
-            changed = true;
+            self.kept.insert(i, (body, pieces.shapes[i as usize]));
+            if pieces.edited[i as usize] > self.seen {
+                edits += 1;
+            } else {
+                moved = true;
+            }
         }
+        self.seen = pieces.generation();
         let always = &pieces.always;
         let mut far: Vec<u32> = self
             .kept
@@ -342,12 +509,12 @@ impl Walker {
             .collect();
         far.sort_unstable();
         for i in far {
-            if let Some(body) = self.kept.remove(&i) {
+            if let Some((body, _)) = self.kept.remove(&i) {
                 self.world.remove_body(body);
-                changed = true;
+                moved = true;
             }
         }
-        if changed {
+        if moved || edits > EDITS_IN_PLACE {
             self.world.optimize_broad_phase();
         }
         Ok(())
@@ -387,6 +554,133 @@ mod tests {
         );
         let pieces = Pieces::new(vec![huge], &WalkSettings::default());
         assert_eq!(pieces.near(Vec2::new(9000.0, 9000.0), 1.0), vec![0]);
+    }
+
+    #[test]
+    fn pieces_keep_their_ids_through_edits() {
+        let settings = WalkSettings::default();
+        let a = cuboid(Vec3::ZERO, Vec3::new(1.0, 3.0, 1.0));
+        let b = cuboid(Vec3::new(10.0, 0.0, 0.0), Vec3::new(11.0, 3.0, 1.0));
+        let mut pieces = Pieces::new(vec![a, b], &settings);
+        let near = |pieces: &Pieces| pieces.near(Vec2::ZERO, 20.0);
+        assert_eq!(near(&pieces), vec![0, 1]);
+        pieces.set_enabled(0, false);
+        assert_eq!(near(&pieces), vec![1]);
+        pieces.set_enabled(0, true);
+        let c = pieces.add(cuboid(Vec3::new(5.0, 0.0, 5.0), Vec3::new(6.0, 3.0, 6.0)));
+        assert_eq!(c, 2);
+        assert_eq!(near(&pieces), vec![0, 1, 2]);
+        // Moved 100 m off: out of the cells round the origin, found where it went.
+        pieces.replace(
+            1,
+            cuboid(Vec3::new(110.0, 0.0, 0.0), Vec3::new(111.0, 3.0, 1.0)),
+        );
+        assert_eq!(near(&pieces), vec![0, 2]);
+        assert_eq!(pieces.near(Vec2::new(110.0, 0.0), 5.0), vec![1]);
+        // Removed for good: its id stays taken.
+        pieces.remove(0);
+        pieces.set_enabled(0, true);
+        assert_eq!(near(&pieces), vec![2]);
+        assert!(!pieces.enabled(0) && pieces.corners(0).is_empty());
+        assert_eq!(pieces.add(cuboid(Vec3::ZERO, Vec3::ONE)), 3);
+        // A piece kept from the start (over more than MOST_CELLS cells) as well.
+        let huge = pieces.add(cuboid(
+            Vec3::new(-5000.0, 0.0, -5000.0),
+            Vec3::new(5000.0, 0.1, 5000.0),
+        ));
+        let far = Vec2::new(9000.0, 9000.0);
+        assert_eq!(pieces.near(far, 1.0), vec![huge]);
+        pieces.set_enabled(huge, false);
+        assert!(pieces.near(far, 1.0).is_empty());
+        pieces.remove(huge);
+        assert!(pieces.always.is_empty());
+        // Every edit counted once: those that changed nothing (enabling an enabled piece, a
+        // removed one) not at all.
+        assert_eq!(pieces.generation(), 9);
+    }
+
+    #[test]
+    fn walkers_follow_a_door_shut_opened_moved_and_removed() {
+        let settings = WalkSettings::default();
+        // A leaf across the way, wider than the walk drifts.
+        let leaf = |x: f32| cuboid(Vec3::new(x, 0.0, -20.0), Vec3::new(x + 0.1, 3.0, 20.0));
+        let mut pieces = Pieces::new(vec![leaf(5.0)], &settings);
+        let ground = Ground::slab(0.0, 1.0);
+        let start = Vec3::new(0.0, 0.01, 0.0);
+        let mut walker = Walker::new(&pieces, &ground, start, settings).unwrap();
+        let walk = |walker: &mut Walker, pieces: &Pieces, seconds: f32| {
+            for _ in 0..(seconds / TICK) as u32 {
+                walker.advance(pieces, [2.0, 0.0], f64::from(TICK));
+            }
+            walker.feet().x
+        };
+        // Shut: it stops at the leaf.
+        let x = walk(&mut walker, &pieces, 4.0);
+        assert!(x > 4.0 && x < 5.0, "{x}");
+        // Open: the leaf disabled, it walks on.
+        pieces.set_enabled(0, false);
+        let x = walk(&mut walker, &pieces, 2.0);
+        assert!(x > 6.0, "{x}");
+        assert_eq!(walker.kept(), 0);
+        // Shut again, moved ahead of it: stopped there.
+        pieces.replace(0, leaf(12.0));
+        pieces.set_enabled(0, true);
+        let x = walk(&mut walker, &pieces, 6.0);
+        assert!(x > 11.0 && x < 12.0, "{x}");
+        // Removed, and another added further on: past the first, stopped by the second.
+        pieces.remove(0);
+        let next = pieces.add(leaf(20.0));
+        let x = walk(&mut walker, &pieces, 6.0);
+        assert!(x > 19.0 && x < 20.0, "{x}");
+        assert_eq!(walker.kept(), 1);
+        assert!(walker.kept.contains_key(&next));
+        // A walker made after the edits meets the same leaf.
+        let mut late = Walker::new(&pieces, &ground, start, settings).unwrap();
+        let x = walk(&mut late, &pieces, 12.0);
+        assert!(x > 19.0 && x < 20.0, "{x}");
+    }
+
+    #[test]
+    fn a_door_toggled_among_many_pieces_costs_a_step_not_a_rebuild() {
+        // A town's worth of pieces round the walker: 40 000 posts on a 1 m grid, half of them
+        // within its reach, and a door leaf among them.
+        let settings = WalkSettings::default();
+        let mut list = Vec::new();
+        for i in 0..200 {
+            for j in 0..200 {
+                let at = Vec3::new(i as f32 - 100.0, 0.0, j as f32 - 100.0);
+                list.push(cuboid(at, at + Vec3::new(0.2, 3.0, 0.2)));
+            }
+        }
+        let door = list.len() as u32;
+        list.push(cuboid(Vec3::new(0.3, 0.0, 0.05), Vec3::new(0.9, 2.1, 0.15)));
+        let ground = Ground::slab(0.0, 1.0);
+        let start = Vec3::new(0.6, 0.01, 0.6);
+        let t = std::time::Instant::now();
+        let mut pieces = Pieces::new(list, &settings);
+        let mut walker = Walker::new(&pieces, &ground, start, settings).unwrap();
+        let rebuild = t.elapsed();
+        let kept = walker.kept();
+        let mut toggles = Vec::new();
+        for k in 0..6 {
+            let t = std::time::Instant::now();
+            pieces.set_enabled(door, k % 2 == 1);
+            walker.advance(&pieces, [0.0, 0.0], 0.0);
+            toggles.push(t.elapsed());
+            assert_eq!(walker.kept(), kept - usize::from(k % 2 == 0));
+        }
+        let toggle = toggles.iter().min().copied().unwrap_or_default();
+        let t = std::time::Instant::now();
+        walker.advance(&pieces, [0.0, 0.0], 0.0);
+        let still = t.elapsed();
+        let t = std::time::Instant::now();
+        walker.world.optimize_broad_phase();
+        let optimize = t.elapsed();
+        eprintln!(
+            "{kept} pieces kept: rebuilt in {rebuild:?}, a toggle followed in {toggle:?} \
+             (a step without one: {still:?}; optimizing the broad phase as well: {optimize:?})"
+        );
+        assert!(toggle * 4 < rebuild, "{toggle:?} against {rebuild:?}");
     }
 
     #[test]

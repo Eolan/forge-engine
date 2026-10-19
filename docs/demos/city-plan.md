@@ -2382,6 +2382,17 @@ The walker is the shared one, `city_blocks::walker` (#290), which other scenes u
   while its end is near.
 - **A ground with holes:** cut where flights go below it.
 - **A start at any height**, a cellar's included.
+- **Pieces that change at run time** (#324): each keeps its id while it is enabled, disabled,
+  replaced or removed, and pieces are added after `Pieces::new`. Every walker follows at its
+  next step:
+  - the bodies of pieces disabled, removed or replaced are dropped;
+  - those enabled or added within reach are built;
+  - the broad phase is optimized only after more than 16 edits, because doing so costs
+    2.9 ms with 20,000 bodies.
+
+  A door's leaf toggled among 20,189 pieces within reach costs 0.35 ms, against 0.33 ms for a
+  step without a toggle and 133 ms to rebuild the pieces and the walker. The navigation
+  follows a door through its passage's state (`forge_nav::Passages::set_state`, #316).
 
 The village keeps its settings: cells of 50 m, 80 m of reach and a 2 m ground. The map check's
 two walks moved by 6 and 0 pixels, and its fixed views by none.
