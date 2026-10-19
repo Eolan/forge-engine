@@ -10,7 +10,10 @@
 //! 2. **Links** ([`Link`]): a door that is not open, a window, a low fence, a gap. Each joins the
 //!    place at one end to the place at the other, with a cost (the crossing's seconds) and a kind
 //!    the game reads when an agent reaches it (#316). The field never detects them from its
-//!    geometry: they come with the pieces' data.
+//!    geometry: they come with the pieces' data, as [`Passage`]s (#316: a window, a door, a
+//!    low or a tall fence, a gap, with their heights and state), which make the links of the
+//!    archetypes that cross them ([`Passages::links`]) and tell a player which one its movement
+//!    meets ([`Passages::met_by`]), the crossing fixed by the passage's kind ([`CrossingKind`]).
 //! 3. **The search** ([`Field::path`]): A* over the walkable spans the walker's radius fits and
 //!    over the links, integer costs (10 straight, 14 across), ties by place, a budget of nodes.
 //!    With no path, the reachable place nearest the goal (an agent goes there and waits; it never
@@ -25,6 +28,10 @@
 //! spans and paths on every machine.
 
 #![forbid(unsafe_code)]
+
+mod passage;
+
+pub use passage::{CrossingKind, PASSAGE_CELL, Passage, PassageKind, PassageState, Passages};
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;

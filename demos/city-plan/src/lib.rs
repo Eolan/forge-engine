@@ -4960,6 +4960,85 @@ fn parapet_pieces(size: f64, plan: &CityPlan, site: &Site, shore: &Shore) -> Vec
         .collect()
 }
 
+/// The village's passages (#316, D-076), the world's metres, made with its pieces: each house's
+/// ground-floor windows and doors (side A the street's, side B the house's floor) and the garden
+/// walls, low (vaulted, up to 1.1 m) or tall (climbed). `piece` numbers them: a mass's index for
+/// its openings, `GARDEN_WALL_PIECE` plus the wall's index for a garden wall.
+pub fn village_passages(
+    size: f64,
+    plan: &CityPlan,
+    masses: &[Mass],
+    structures: &[Structure],
+) -> Vec<forge_nav::Passage> {
+    use forge_nav::{Passage, PassageKind, PassageState};
+    let mut out = Vec::new();
+    let v3 = |p: DVec2, y: f64| world(size, p, y);
+    for (i, (m, s)) in masses.iter().zip(structures).enumerate() {
+        let centroid = geom::centroid(&m.footprint);
+        let inside = floor_level(s, 0);
+        for o in s.openings.iter().filter(|o| o.storey == 0) {
+            let kind = match o.kind {
+                OpeningKind::Window => PassageKind::Window,
+                OpeningKind::Door => PassageKind::Door,
+                _ => continue,
+            };
+            let w = &s.walls[o.wall];
+            if w.role == WallRole::Inner {
+                continue;
+            }
+            let t = (w.b - w.a).normalize_or_zero();
+            let mut inward = DVec2::new(-t.y, t.x);
+            if inward.dot(centroid - (w.a + w.b) * 0.5) < 0.0 {
+                inward = -inward;
+            }
+            let depth = w.thickness.max(0.2);
+            let (lo, hi) = o.span();
+            let mid = |along: f64| w.a + t * along + inward * (depth * 0.5);
+            let drop = inside - WALK_LEVEL;
+            let across = v3(inward, 0.0) - v3(DVec2::ZERO, 0.0);
+            out.push(Passage {
+                kind,
+                ends: [v3(mid(lo), WALK_LEVEL), v3(mid(hi), WALK_LEVEL)],
+                across: across.normalize_or_zero(),
+                sill: (o.sill + drop) as f32,
+                head: Some((o.head + drop) as f32),
+                depth: depth as f32,
+                drop: drop as f32,
+                both_ways: true,
+                state: PassageState::Open,
+                piece: i as u32,
+            });
+        }
+    }
+    for (k, w) in plan.walls.iter().enumerate() {
+        let t = (w.b - w.a).normalize_or_zero();
+        let left = DVec2::new(-t.y, t.x);
+        let (r, l) = w.band();
+        let shift = left * ((l - r) * 0.5);
+        let kind = if w.height <= 1.1 {
+            PassageKind::LowFence
+        } else {
+            PassageKind::TallFence
+        };
+        out.push(Passage {
+            kind,
+            ends: [v3(w.a + shift, WALK_LEVEL), v3(w.b + shift, WALK_LEVEL)],
+            across: (v3(left, 0.0) - v3(DVec2::ZERO, 0.0)).normalize_or_zero(),
+            sill: w.height as f32,
+            head: None,
+            depth: (r + l) as f32,
+            drop: 0.0,
+            both_ways: true,
+            state: PassageState::Open,
+            piece: GARDEN_WALL_PIECE + k as u32,
+        });
+    }
+    out
+}
+
+/// Where the garden walls' numbers start in [`village_passages`]' `piece`.
+const GARDEN_WALL_PIECE: u32 = 1 << 24;
+
 /// The buildings' walls as the walker's convex pieces, the world's metres (D-060): each street,
 /// courtyard and party wall a slab of its thickness (0.2 m at least) inwards from its outer face,
 /// from the ground to 0.9 m over its roof; where a passage runs through, the wall either side of
@@ -8292,6 +8371,169 @@ mod tests {
             missed.len(),
             &missed[..missed.len().min(12)]
         );
+    }
+
+    /// The village's passages (#316, D-076): with a house's front door shut, a walker no longer
+    /// gets in from the street, and a climber does through a ground-floor window's link; walking
+    /// straight through a window from the street meets that window (the player's automatic
+    /// crossing); a garden wall is a fence by its height.
+    #[test]
+    fn a_shut_door_is_passed_by_a_window_for_climbers() {
+        use forge_nav::{Field, FieldDesc, PERSON, PassageKind, Passages};
+        let size = 600.0;
+        let site = example::site(size, 10.0);
+        let v = forge_procgen::city::village::village(
+            &site,
+            &forge_procgen::city::village::params(size),
+            1,
+        );
+        let structures = structure::structures(&v.plan, &v.masses);
+        let passages = Passages::new(village_passages(size, &v.plan, &v.masses, &structures));
+        let count = |k: PassageKind| passages.all().iter().filter(|p| p.kind == k).count();
+        let (windows, doors) = (count(PassageKind::Window), count(PassageKind::Door));
+        let fences = count(PassageKind::LowFence) + count(PassageKind::TallFence);
+        assert!(
+            windows > 100 && doors > 50 && fences > 50,
+            "{windows} {doors} {fences}"
+        );
+        let walls = wall_pieces(size, &v.masses, &structures);
+        let prism = |piece: &[Vec3], out: &mut Vec<[Vec3; 3]>| {
+            let (y0, y1) = (piece[0].y, piece[1].y);
+            let ring: Vec<Vec3> = piece.iter().step_by(2).copied().collect();
+            let n = ring.len();
+            let at = |p: Vec3, y: f32| Vec3::new(p.x, y, p.z);
+            for k in 1..n.saturating_sub(1) {
+                for (y, up) in [(y1, true), (y0, false)] {
+                    let mut t = [at(ring[0], y), at(ring[k], y), at(ring[k + 1], y)];
+                    if ((t[1] - t[0]).cross(t[2] - t[0]).y > 0.0) != up {
+                        t.swap(1, 2);
+                    }
+                    out.push(t);
+                }
+            }
+            for k in 0..n {
+                let (a, b) = (ring[k], ring[(k + 1) % n]);
+                out.push([at(a, y0), at(b, y0), at(b, y1)]);
+                out.push([at(a, y0), at(b, y1), at(a, y1)]);
+            }
+        };
+        let (mut shut, mut climbed) = (0, 0);
+        for (i, (m, s)) in v.masses.iter().zip(&structures).enumerate() {
+            if interior::house(m, s).is_none() {
+                continue;
+            }
+            let Some(door) = passages
+                .all()
+                .iter()
+                .find(|p| p.kind == PassageKind::Door && p.piece == i as u32)
+            else {
+                continue;
+            };
+            if !passages
+                .all()
+                .iter()
+                .any(|p| p.kind == PassageKind::Window && p.piece == i as u32)
+            {
+                continue;
+            }
+            if shut == 8 {
+                break;
+            }
+            shut += 1;
+            let (lo, hi) = m.footprint.iter().fold(
+                (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)),
+                |(lo, hi), &p| (lo.min(p), hi.max(p)),
+            );
+            let (lo, hi) = (world(size, lo - 4.0, 0.0), world(size, hi + 4.0, 0.0));
+            let desc = FieldDesc {
+                corner: glam::Vec2::new(lo.x, lo.z),
+                cells: (((hi.x - lo.x).max(hi.z - lo.z) / 0.1).ceil() as u32).min(1024),
+                cell: 0.1,
+            };
+            let mut triangles = Vec::new();
+            let y = WALK_LEVEL as f32;
+            let g = [
+                Vec3::new(lo.x, y, lo.z),
+                Vec3::new(hi.x, y, lo.z),
+                Vec3::new(hi.x, y, hi.z),
+                Vec3::new(lo.x, y, hi.z),
+            ];
+            triangles.push([g[0], g[2], g[1]]);
+            triangles.push([g[0], g[3], g[2]]);
+            if let Some(ring) = inner_ring(m, s) {
+                let piece: Vec<Vec3> = ring
+                    .iter()
+                    .flat_map(|&p| {
+                        [
+                            world(size, p, WALK_LEVEL),
+                            world(size, p, floor_level(s, 0)),
+                        ]
+                    })
+                    .collect();
+                prism(&piece, &mut triangles);
+            }
+            let inside = |p: &[Vec3]| {
+                p.iter()
+                    .any(|q| q.x >= lo.x && q.x <= hi.x && q.z >= lo.z && q.z <= hi.z)
+            };
+            for piece in walls
+                .iter()
+                .chain(&interior_pieces(size, &v.masses, &structures, &[i]))
+                .filter(|p| inside(p))
+            {
+                prism(piece, &mut triangles);
+            }
+            // Every ground-floor door shut: a leaf across each doorway, up to its head.
+            for d in passages
+                .all()
+                .iter()
+                .filter(|p| p.kind == PassageKind::Door && p.piece == i as u32)
+            {
+                let side = d.across * (d.depth * 0.5);
+                let (a, b) = (d.ends[0], d.ends[1]);
+                let top = d.ends[0].y + d.head.unwrap_or(2.1);
+                let leaf: Vec<Vec3> = [a - side, b - side, b + side, a + side]
+                    .into_iter()
+                    .flat_map(|p| [Vec3::new(p.x, y, p.z), Vec3::new(p.x, top, p.z)])
+                    .collect();
+                prism(&leaf, &mut triangles);
+            }
+            let field = Field::build(desc, PERSON, &triangles);
+            let from = door.middle() - door.across * 1.5;
+            let hall = door.middle() + door.across * 1.5 + Vec3::Y * door.drop;
+            // Shut: no way in on foot.
+            let walking = field
+                .path(from, hall, &[], 400_000)
+                .expect("a place outside");
+            assert!(!walking.complete, "lot {}: in through a shut door", m.lot);
+            // A climber's links: the ground-floor windows, two seconds each.
+            let links = passages.links(0.5, |p| {
+                (p.kind == PassageKind::Window).then_some((2.0, PassageKind::Window as u16))
+            });
+            let climbing = field
+                .path(from, hall, &links, 400_000)
+                .expect("a place outside");
+            if climbing.complete {
+                climbed += 1;
+                let (_, k) = climbing.links[0];
+                assert_eq!(links[k].kind, PassageKind::Window as u16);
+            }
+            // Walking straight at a window's middle from the street meets that window.
+            let w = passages
+                .all()
+                .iter()
+                .position(|p| p.kind == PassageKind::Window && p.piece == i as u32)
+                .expect("a window");
+            let p = passages.get(w);
+            let met = passages.met_by(
+                p.middle() - p.across * 0.6,
+                p.middle() + p.across * 0.6,
+                PERSON.step,
+            );
+            assert_eq!(met.map(|m| m.0), Some(w), "lot {}", m.lot);
+        }
+        println!("{shut} houses shut, {climbed} entered through a window");
+        assert!(shut == 8 && climbed * 4 >= shut * 3, "{climbed} of {shut}");
     }
 
     /// A walker's capsule passes every doorway of the village's houses' insides (#276): through

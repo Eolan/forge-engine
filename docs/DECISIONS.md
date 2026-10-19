@@ -6810,8 +6810,23 @@ best guess or data"):
   spare; the field's clearance, a lower bound, counts it shut.
 - **Cell size:** the 0.05 m columns reached fewer (144) at four times the cost; the clearance's
   half-cell bound decides more than the cell.
-- **Left:** the passages' records from the pieces (#316), steering and avoidance, tiles built
-  round the agents, and the town's pursuers as the first user.
+- **Left:** steering and avoidance, tiles built round the agents, and the town's pursuers as the
+  first user.
+
+**Passages built** (#316, the same day, `forge_nav::Passage`):
+- **The record:** a passage carries its kind (door, window, low fence, tall fence, gap), its span
+  on the wall's middle line, the way across, its sill and head, the wall's depth, the drop and its
+  state (open, shut, broken, barred).
+- **The crossing:** fixed by the kind (`CrossingKind`: walk, climb through, vault, climb, jump).
+- **`Passages`:** an index by 8 m cells, `near`, `links` (an archetype's rule gives each link's
+  cost and kind) and `met_by`, the passage a movement crosses first, which a player takes
+  automatically.
+- **The village** (`village_passages`): its houses' ground-floor windows and doors, and its garden
+  walls as low or tall fences by their height, all made with the pieces.
+- **Checked** (`a_shut_door_is_passed_by_a_window_for_climbers`):
+  - with every ground-floor door of 8 houses shut, a walker no longer gets in from the street, and
+    a climber does, all 8 through a window's link;
+  - walking straight at a window from the street meets that window.
 
 *(research: navigation-traversal.md, game-ai-ecosystems.md §2 and §7, animation.md §5; D-012,
 D-016, D-062; issues #90, #276, #311, #316, #317)*
