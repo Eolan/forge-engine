@@ -5616,7 +5616,9 @@ impl PlanScenario {
                 (0..forge_flora::grow::INDIVIDUALS).map(move |k| Cook::Plant(sp, k))
             }))
             .chain(self.kit_meshes.iter().enumerate().map(|(m, mesh)| {
-                Cook::Mesh(mesh, CookOptions::default(), format!("{scene}-kit{m}"))
+                // Hard surfaces: a door or a drawer proud of its face folds onto it otherwise
+                // (#309).
+                Cook::Mesh(mesh, CookOptions::HARD_SURFACE, format!("{scene}-kit{m}"))
             }))
             .chain(
                 self.tiles
@@ -5625,7 +5627,7 @@ impl PlanScenario {
                     .filter(|(_, tile)| !tile.insides.indices.is_empty())
                     .map(|(t, tile)| {
                         let name = format!("{scene}-tile{t}-insides");
-                        Cook::Mesh(&tile.insides, CookOptions::default(), name)
+                        Cook::Mesh(&tile.insides, CookOptions::HARD_SURFACE, name)
                     }),
             )
             .collect();

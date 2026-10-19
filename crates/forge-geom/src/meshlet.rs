@@ -102,6 +102,18 @@ pub struct CookOptions {
     pub uv_weight: f32,
 }
 
+impl CookOptions {
+    /// Hard-surface pieces (furniture, appliances, a style kit's modules): their normals weighed
+    /// by 0.5, as the props' blocks and lathes are. With geometry alone a panel 1–2 cm proud of
+    /// a face (a drawer's front, a wardrobe's door) folds back onto the face behind it at about a
+    /// pixel of error: the two tie in depth, the jitter picks the winner each frame, a flash one
+    /// frame in eight, and the folded front takes its sides' normals (#309).
+    pub const HARD_SURFACE: CookOptions = CookOptions {
+        normal_weight: 0.5,
+        uv_weight: 0.0,
+    };
+}
+
 /// The shape of a cooked DAG (the metrics the research asks to track: roots reached, fill).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DagStats {
@@ -146,7 +158,8 @@ pub struct MeshletMesh {
 
 impl MeshletMesh {
     /// Optimises the index buffer for the vertex cache, clusters it and builds the LOD DAG,
-    /// with the default [`CookOptions`] (geometric error only).
+    /// with the default [`CookOptions`] (geometric error only): for terrain, rocks and foliage;
+    /// hard-surface pieces take [`CookOptions::HARD_SURFACE`] (#309).
     pub fn build(mesh: &TriMesh) -> Self {
         Self::build_with(mesh, CookOptions::default())
     }

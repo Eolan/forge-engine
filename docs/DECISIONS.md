@@ -82,6 +82,15 @@ the fallback's draw about twice the mesh draw. Software rasteriser (#3): full de
 fallback), the ballad at full detail 4.37 → 2.02; the LOD views unchanged (it stays off).
 Root lists (#37): 980 k rocks 5.95 → 1.36 ms, the million-instance city 4.90 → 1.06 ms,
 the same pixels.
+*Hard surfaces under the cluster LOD* (#309, 2026-10-19, found by a scene built outside the
+repository): with geometry alone in the simplification error, a panel 1–2 cm proud of a face (a
+drawer's front, a wardrobe's door) folds back onto the face behind it at about a pixel of error.
+The two tie in depth and the jitter picks the winner each frame, a flash one frame in eight, and
+the fold takes the panel's side normals (about 60 % too dark). Hard-surface pieces cook with
+their normals weighed (`CookOptions::HARD_SURFACE`, 0.5, as the props' blocks and lathes): the
+city plan's kit and the houses' insides since then; geometry alone stays for terrain, rocks and
+foliage. Better still, model no face behind another. The village's views moved by at most 0.007
+mean LDR-ꟻLIP from afar (the near ones not at all) for no measurable cost.
 *(research: gpu-geometry.md; demo: meshlets)*
 
 ## D-004 — Coordinates: f64 nested frames, camera-relative f32, Y-up metres ✅ (2026-09-24)
