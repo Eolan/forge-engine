@@ -90,7 +90,8 @@ struct GpuProbeField {
     region_cell: f32,
     region_count: u32,
     region_dims: [u32; 2],
-    region_pad: [u32; 2],
+    far_room_sky: f32,
+    region_pad: u32,
 }
 
 const _: () = assert!(std::mem::size_of::<GpuProbeField>() == 400);
@@ -291,6 +292,12 @@ pub struct ProbeParams {
     /// them). The movers keep their sun and lamp shadows and their reflections; only the
     /// probes' diffuse light does not see them.
     pub movers: bool,
+    /// The share of the open sky's luminance a room takes where no room-sized cascade covers it
+    /// and none of its region's probes stands among a coarser cascade's eight (#321): what its
+    /// windows let in, a daylight factor. 0.06 matches the village's rooms (their own probes
+    /// against the fallback forced on them); deep rooms behind small windows want less, shallow
+    /// rooms with wide ones more (`--probe-far-sky`, the scene's look).
+    pub far_room_sky: f32,
 }
 
 impl Default for ProbeParams {
@@ -306,6 +313,7 @@ impl Default for ProbeParams {
             hysteresis: 0.97,
             cadence: 2,
             movers: false,
+            far_room_sky: 0.06,
         }
     }
 }
@@ -819,7 +827,8 @@ impl Probes {
             region_cell: REGION_CELL,
             region_count: self.regions.as_ref().map_or(0, |r| r.count),
             region_dims: self.regions.as_ref().map_or([1; 2], |r| r.dims),
-            region_pad: [0; 2],
+            far_room_sky: p.far_room_sky,
+            region_pad: 0,
         };
         self.fields[slot.index].write(0, &[field]);
 

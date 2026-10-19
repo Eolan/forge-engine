@@ -414,6 +414,10 @@ pub struct Args {
     /// `ROOM_PROBE_SPACING` in the models lab's rooms, 1 in the village.
     #[arg(long)]
     probe_spacing: Option<f32>,
+    /// The open sky's share a far room without its own probes takes (#321,
+    /// `ProbeParams::far_room_sky`, 0.06 by default): its daylight factor.
+    #[arg(long)]
+    probe_far_sky: Option<f32>,
     /// Draw the island without its water (issue #105, D-038): the stand-in sea's opaque plane,
     /// and the rivers and lakes painted into the ground's layers.
     #[arg(long)]
@@ -1196,6 +1200,9 @@ impl Gallery {
                     .probe_spacing
                     .unwrap_or(look.probes.map_or(ProbeParams::default().spacing, |p| p.1)),
                 movers: look.probes_see_movers,
+                far_room_sky: args
+                    .probe_far_sky
+                    .unwrap_or(ProbeParams::default().far_room_sky),
                 ..ProbeParams::default()
             };
             let mut probes = Probes::new(&ctx.device, &ctx.shaders, params)?;

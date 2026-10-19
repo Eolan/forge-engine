@@ -69,12 +69,6 @@ public static const float PROBE_ROOM_SPACING = 1.5;
 // In a room (D-068), the share of the trilinear weight its own probes must hold among the eight
 // for a cascade to claim all of a point's light; with less, the next cascade fills the rest.
 static const float PROBE_ROOM_COVER = 0.25;
-// A room beyond the room-sized cascades whose region has no probe among a coarser cascade's eight
-// takes this share of the open sky's light (#321, `probe_lookup`): what its windows let in, a
-// daylight factor, matched in the village's room and hall against their own probes (in linear
-// light the room 24.6 against 22.7, the hall 16.7 against 18.4; 0.15 made them 2–2.5 times too
-// bright, and the outside's probes, roof voids among them, left a deep house's rooms black).
-static const float PROBE_FAR_ROOM_SKY = 0.06;
 
 // Mirrors `GpuCascade` in crates/forge-render/src/probes.rs.
 public struct ProbeCascade
@@ -152,7 +146,8 @@ public struct ProbeField
     public float region_cell;     // its cells' side, metres
     public uint region_count;     // volumes: 0, no regions (every probe lights every surface)
     public uint2 region_dims;     // cells along x and z
-    public uint2 region_pad;
+    public float far_room_sky;    // the open sky's share a far room without its probes takes (#321, ProbeParams)
+    public uint region_pad;
 };
 
 // The region at `p` (scene frame): the first volume holding it, in their order; outside them all,
@@ -563,13 +558,13 @@ float3 probe_lookup<let MIRROR : int>(ProbeField* field, float3 p, float3 n, flo
         // A room beyond the room-sized cascades with none of its probes among a coarser one's
         // eight (an upper storey between probes 4 m apart, #321): the probes there are other
         // rooms', the street's behind a wall or the roof void's (which no region covers, so it
-        // counts as outside), and the room came out black. It takes PROBE_FAR_ROOM_SKY of the
+        // counts as outside), and the room came out black. It takes `far_room_sky` of the
         // open sky's light instead, what its windows let in, in the warm white the rooms' walls
         // give it back: the sky's own blue turned their floors blue.
         float3 tint = float3(1.10, 0.99, 0.80);
         float3 luma = float3(0.2126, 0.7152, 0.0722);
-        e = float4(tint * (dot(open_sky, luma) * PROBE_FAR_ROOM_SKY), 1.0);
-        toward_d = tint * (dot(open_sky_d, luma) * PROBE_FAR_ROOM_SKY);
+        e = float4(tint * (dot(open_sky, luma) * field[0].far_room_sky), 1.0);
+        toward_d = tint * (dot(open_sky_d, luma) * field[0].far_room_sky);
     }
     if (masked && e.w <= 0.0)
         e = cascades_lookup<MIRROR>(field, p, n, g, v, d, mask, false, toward_d);

@@ -5571,8 +5571,9 @@ application of their patents just in case."
   (3.0–5.7 m) holds none of its region's. The fallback to every probe then mixed other rooms',
   the roof's and the street's probes behind walls and slabs, and such rooms came out black
   through their windows until the camera was within a few metres. Now a room that no room-sized
-  cascade covers and whose region has no probe among the eight takes `PROBE_FAR_ROOM_SKY`
-  (0.06) of the open sky's luminance, what its windows let in (a daylight factor), in a warm
+  cascade covers and whose region has no probe among the eight takes `ProbeParams::far_room_sky`
+  (0.06; `--probe-far-sky`) of the open sky's luminance, what its windows let in (a daylight
+  factor, deep rooms behind small windows less, shallow ones with wide windows more), in a warm
   white (`far_from_rooms`; `--show-regions` tints it orange). A first version took 0.25 of the
   outside's probes around it: in a deep house under a pitched roof those include the roof
   void's (no region covers it, so its probes count as outside), and the upper rooms got a
