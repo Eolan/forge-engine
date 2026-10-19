@@ -6863,5 +6863,35 @@ best guess or data"):
   - the map check's third walk, over the longest low garden wall on a street, shot at the
     vault's top; the other twelve images are unchanged.
 
+**Following and avoidance built** (#317, the same day, `forge_nav::{Follow, Crowd}`):
+- **Following:** an agent heads for its path's next corner and passes it within 0.25 m. It
+  slows within 1 m of where it must stop: the path's end, or a link's start, where it waits for
+  the game to cross (`at_link`, `crossed`).
+- **Avoidance:** ORCA, written from RVO2's algorithm.
+  - **Neighbours:** within 5 m on the same floor, the nearest 10, by a grid, ordered by distance
+    then index.
+  - **Constraints:** kept clear 2 s ahead.
+  - **Order:** every velocity is chosen from the step's state.
+  - **Deterministic additions:**
+    - a nudge of 1 mm/s from a hash of the agent and the step, against perfectly symmetric
+      meetings;
+    - a turn to the right when blocked, up to 45° in proportion to the speed lost: people keep
+      to one side, and a jam turns as one.
+- **The ground:** a move the field does not walk straight is slid along x or z, or not made.
+- **Checked:**
+  - two people head-on;
+  - twelve swapping across a 16 m circle, the same to the bit on a second run;
+  - two groups of ten crossing;
+  - sixteen pursuers closing on one point without overlapping;
+  - a wall slid along;
+  - two people through a 2 m opening from either side.
+- **Cost:** a step of 1,000 people takes 0.83 ms on one thread.
+- **Limits of this first step:**
+  - Twenty-four swapping across the same circle pack into a ring that touches all round, which
+    ORCA cannot set turning.
+  - Two people meeting in a doorway too narrow for both stand still: one must yield, which needs
+    a rule, such as a door taken one at a time.
+  - Walls are not among ORCA's constraints, only the field's slide.
+
 *(research: navigation-traversal.md, game-ai-ecosystems.md §2 and §7, animation.md §5; D-012,
 D-016, D-062; issues #90, #276, #311, #316, #317)*

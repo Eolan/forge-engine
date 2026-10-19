@@ -716,6 +716,12 @@ soft edges, their pixel-wide minimum, their reactive mask and their hash:
   within its step and a chamfer distance field for its radius.
 - **The search.** Peter E. Hart, Nils J. Nilsson and Bertram Raphael, "A Formal Basis for the
   Heuristic Determination of Minimum Cost Paths", 1968 (A*), with an octile heuristic.
+- **The crossing's warp.** Andrew Witkin and Zoran Popović, "Motion Warping", SIGGRAPH 1995: a
+  clip's root path scaled per axis between targets (`forge_nav::CrossingMotion`, #316).
+- **Avoidance.** Jur van den Berg, Stephen J. Guy, Ming Lin and Dinesh Manocha, "Reciprocal
+  n-Body Collision Avoidance", 2011 (ORCA), and its library RVO2 (UNC, Apache-2.0, read, not
+  used as code): the half-planes, the incremental linear programs and the nudge against
+  symmetric meetings (`forge_nav::Crowd`).
 
 **Sound** (`forge-audio`, #267, D-011):
 - **The audio thread's rules.** Ross Bencina, "Real-time audio programming 101: time waits for

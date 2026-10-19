@@ -23,6 +23,9 @@
 //! 5. **Crossing** ([`CrossingMotion`], #316): the body carried over a passage from its entry by
 //!    the top to its exit, on a curve or along a clip's root path warped onto those targets
 //!    ([`RootPath`]); the controller carries it and checks that it fits at the exit.
+//! 6. **Following and avoidance** ([`Follow`], [`Crowd`]): agents head for their paths' next
+//!    corners, wait at a link for the game to cross it, and keep clear of one another by ORCA, with
+//!    their neighbours in a fixed order, their moves kept to the field.
 //!
 //! Space games ahead (the owner, 2026-10-19): the links and the path's shape do not depend on
 //! the field, so other representations can answer the same questions later (polygons outdoors,
@@ -33,9 +36,11 @@
 #![forbid(unsafe_code)]
 
 mod crossing;
+mod crowd;
 mod passage;
 
 pub use crossing::{CrossingMotion, CrossingSpec, RootPath};
+pub use crowd::{ARRIVAL, Agent, CORNER_REACH, Crowd, CrowdSettings, Follow};
 pub use passage::{CrossingKind, PASSAGE_CELL, Passage, PassageKind, PassageState, Passages};
 
 use std::cmp::Reverse;
@@ -692,7 +697,7 @@ mod tests {
     use super::*;
 
     /// A horizontal quad from (x0, z0) to (x1, z1) at height y, facing up.
-    fn floor(out: &mut Vec<[Vec3; 3]>, x0: f32, z0: f32, x1: f32, z1: f32, y: f32) {
+    pub(crate) fn floor(out: &mut Vec<[Vec3; 3]>, x0: f32, z0: f32, x1: f32, z1: f32, y: f32) {
         let (a, b) = (Vec3::new(x0, y, z0), Vec3::new(x1, y, z0));
         let (c, d) = (Vec3::new(x1, y, z1), Vec3::new(x0, y, z1));
         out.push([a, c, b]);
@@ -700,7 +705,7 @@ mod tests {
     }
 
     /// A box from `lo` to `hi`: its twelve triangles, the top facing up.
-    fn block(out: &mut Vec<[Vec3; 3]>, lo: Vec3, hi: Vec3) {
+    pub(crate) fn block(out: &mut Vec<[Vec3; 3]>, lo: Vec3, hi: Vec3) {
         floor(out, lo.x, lo.z, hi.x, hi.z, hi.y);
         // The sides, upright (never walkable), and the bottom.
         let p = |x: f32, y: f32, z: f32| Vec3::new(x, y, z);
@@ -744,7 +749,7 @@ mod tests {
 
     /// A 10 m square of ground with a wall across it at x = 5 (0.2 m thick, 3 m high) from z = 0
     /// to `door_from` and from `door_to` to 10: a doorway between them when they differ.
-    fn walled(door_from: f32, door_to: f32) -> Vec<[Vec3; 3]> {
+    pub(crate) fn walled(door_from: f32, door_to: f32) -> Vec<[Vec3; 3]> {
         let mut t = Vec::new();
         floor(&mut t, 0.0, 0.0, 10.0, 10.0, 0.0);
         block(
@@ -760,7 +765,7 @@ mod tests {
         t
     }
 
-    fn desc() -> FieldDesc {
+    pub(crate) fn desc() -> FieldDesc {
         FieldDesc {
             corner: Vec2::ZERO,
             cells: 100,
