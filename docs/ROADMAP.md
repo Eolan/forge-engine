@@ -698,8 +698,11 @@ game (scenarios, missions, licensed assets) is a private repository, as the city
 2. **The check per commit:** the gate, then one seed, six views and a walked path against an
    accepted set, two minutes. The tiers run at milestones on the owner's word.
 3. **The core, in order:** geometry and LOD correctness; materials (trim sheets, decals,
-   layering); structures with interiors, lit by their lamps at night (D-065, #270: the houses'
-   lamps as data, the rooms as light lists and the probes lit by them, built 2026-10-18; RTXDI
+   layering: decals in the resolve from a world grid, D-074, #304, decided 2026-10-19; the
+   ground's blend map after them); the forests' ladder and grass (D-075, #302, #300, decided
+   2026-10-19: the ladder record and dithered crossing, a fixed representation per tree for the
+   rays, the impostor baker, then the GPU grass pass); structures with interiors, lit by their
+   lamps at night (D-065, #270: the houses' lamps as data, the rooms as light lists and the probes lit by them, built 2026-10-18; RTXDI
    to compare next); flora; the particle system (smoke, dust, fire, rain,
    sparks; D-064's step 1 built 2026-10-18, #271: emitters as data, the lab's smoke yard);
    characters' animation; sound, fauna and networking, the last three in parallel sessions off
