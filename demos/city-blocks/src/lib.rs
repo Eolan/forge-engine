@@ -541,6 +541,11 @@ pub struct Args {
     /// With `--tree-ladder`: tint the shells blue (a crossing tree shows both, dithered).
     #[arg(long)]
     show_ladder: bool,
+    /// With `--tree-ladder`: the distance from the camera, metres, from which the shadow rays
+    /// meet the plants' opaque shadow proxies in place of their leaf cards (D-075 step 3; 60 by
+    /// default, 0 never).
+    #[arg(long)]
+    pub far_shadows: Option<f32>,
     /// Show the ambient occlusion in grey instead of the shading (V toggles it).
     #[arg(long)]
     show_ao: bool,

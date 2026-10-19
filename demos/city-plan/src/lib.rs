@@ -5616,6 +5616,10 @@ fn tile_meshes(tile: &Tile) -> impl Iterator<Item = (&TriMesh, usize, f32, &'sta
 /// its crown's shells over a quarter of the crossing's size either side of it.
 const TREE_LADDER_BAND: f32 = 0.25;
 
+/// With the trees' ladder, the distance from the camera from which the shadow rays meet the
+/// plants' shadow proxies in place of their cards (D-075 step 3, `--far-shadows`), metres.
+const FAR_SHADOWS: f32 = 60.0;
+
 /// The crown shells' colour as a share of their leaves' (D-075's ladder): opaque and smooth, at
 /// the leaves' own colour a far wood stood 1.75 times as bright as its cards.
 const CROWN_SHELL_TONE: f32 = 0.55;
@@ -5639,8 +5643,9 @@ fn planted(
 impl PlanScenario {
     /// Every mesh of the scene in the order the build adds them (the tiles', the plants', the
     /// kit's modules, the tiles' insides), each plant's with its height and crown and followed by
-    /// its crown's proxy for the probes' rays ([`forge_geom::flora::grown_proxy`]) and its crown's
-    /// shells, the next step on its ladder ([`forge_geom::flora::grown_shells`]). Each is kept
+    /// its crown's proxy for the probes' rays ([`forge_geom::flora::grown_proxy`]), its crown's
+    /// shells, the next step on its ladder ([`forge_geom::flora::grown_shells`]), and the proxy the
+    /// far shadow rays meet ([`forge_geom::flora::grown_shadow_proxy`]). Each is kept
     /// in the derived cache (D-053) under its name (its place in the scene, so a changed tile
     /// replaces its old copy) and a key: its content's digest, its cook's options and the
     /// cooking code's digest (`cook_code`).
@@ -5708,7 +5713,8 @@ impl PlanScenario {
                     let name = format!("plant-{}-{k}", s.id);
                     let options = CookOptions::default();
                     // And its crown as the probes' rays see it (#297), right after it, then its
-                    // crown's shells, the next step on its ladder (D-075, `--tree-ladder`).
+                    // crown's shells, the next step on its ladder, and its far shadows' proxy
+                    // (D-075, `--tree-ladder`).
                     vec![
                         (Cow::Owned(plant.mesh), options, name.clone(), size),
                         (
@@ -5717,7 +5723,13 @@ impl PlanScenario {
                             name.clone() + "-proxy",
                             size,
                         ),
-                        (Cow::Owned(plant.shells), options, name + "-shells", size),
+                        (
+                            Cow::Owned(plant.shells),
+                            options,
+                            name.clone() + "-shells",
+                            size,
+                        ),
+                        (Cow::Owned(plant.shadow), options, name + "-shadow", size),
                     ]
                 }
             };
@@ -6625,7 +6637,21 @@ impl Scenario for PlanScenario {
             // The probes' rays meet each plant's crown proxy, not its leaf cards (#297), unless
             // `--leaf-probes`.
             let proxies = !args.leaf_probes;
-            type Grown = (forge_render::MeshId, Option<forge_render::MeshId>, f32, f32);
+            // With the ladder, the shadow rays from points `far_shadows` metres off and more meet
+            // each plant's opaque shadow proxy in place of its cards (D-075 step 3).
+            let far_shadows = args
+                .tree_ladder
+                .map_or(0.0, |_| args.far_shadows.unwrap_or(FAR_SHADOWS));
+            if far_shadows > 0.0 {
+                builder.set_far_shadows(far_shadows);
+            }
+            struct Grown {
+                id: forge_render::MeshId,
+                proxy: Option<forge_render::MeshId>,
+                shadow: Option<forge_render::MeshId>,
+                height: f32,
+                crown: f32,
+            }
             let mut models: std::collections::HashMap<u16, Vec<Grown>> = Default::default();
             for &sp in &planted {
                 let grown = (0..forge_flora::grow::INDIVIDUALS)
@@ -6634,6 +6660,7 @@ impl Scenario for PlanScenario {
                         let (proxy, _) = cooked.next().expect("a plant's crown proxy cooked");
                         let (shells, [.., lump]) =
                             cooked.next().expect("a plant's crown shells cooked");
+                        let (shadow, _) = cooked.next().expect("a plant's shadow proxy cooked");
                         let proxy = proxies.then(|| builder.add_mesh(&proxy));
                         let id = builder.add_mesh(&mesh);
                         // With `--tree-ladder` (D-075, #302): the cards near, the crown's shells
@@ -6645,7 +6672,16 @@ impl Scenario for PlanScenario {
                             let across = 2.0 * mesh.radius / lump;
                             builder.set_ladder(id, next, px * across, TREE_LADDER_BAND);
                         }
-                        (id, proxy, height, crown)
+                        // Placed with the ladder whatever the distance, so `--far-shadows 0` keeps
+                        // the instances' ids (each tree's tones follow its id) for the A/B.
+                        let shadow = args.tree_ladder.map(|_| builder.add_mesh(&shadow));
+                        Grown {
+                            id,
+                            proxy,
+                            shadow,
+                            height,
+                            crown,
+                        }
                     })
                     .collect();
                 models.insert(sp, grown);
@@ -6656,18 +6692,19 @@ impl Scenario for PlanScenario {
                 };
                 let ages = usize::from(forge_flora::grow::AGES);
                 let Some(age) = (0..ages.min(grown.len())).min_by(|&a, &b| {
-                    (grown[a].2 / height)
+                    (grown[a].height / height)
                         .ln()
                         .abs()
-                        .total_cmp(&(grown[b].2 / height).ln().abs())
+                        .total_cmp(&(grown[b].height / height).ln().abs())
                 }) else {
                     continue;
                 };
                 let seeds = grown.len().div_ceil(ages);
                 let k = age + ages * (usize::from(pick) % seeds);
-                let Some(&(id, proxy, h, w)) = grown.get(k).or(grown.get(age)) else {
+                let Some(model) = grown.get(k).or(grown.get(age)) else {
                     continue;
                 };
+                let (id, h, w) = (model.id, model.height, model.crown);
                 let across = crown * 2.0 / w;
                 let stretch = 0.92 + f32::from(pick >> 2) / 63.0 * 0.16;
                 let transform = Mat4::from_scale_rotation_translation(
@@ -6677,19 +6714,26 @@ impl Scenario for PlanScenario {
                 );
                 let row = flora_rows[usize::from(sp)];
                 builder.add_instance_with_material(id, transform, row);
-                if let Some(proxy) = proxy {
-                    // The cards for the picture, the shadows and the mirrors; the proxy for the
-                    // probes alone.
-                    let plant = builder.instance_count() - 1;
-                    builder.set_instance_visibility(
-                        plant,
-                        forge_render::Visibility {
-                            probes: false,
-                            ..forge_render::Visibility::ALL
-                        },
-                    );
+                // The cards for the picture, the shadows and the mirrors; the proxy for the
+                // probes alone, and the shadow proxy for the far shadow rays alone.
+                let plant = builder.instance_count() - 1;
+                builder.set_instance_visibility(
+                    plant,
+                    forge_render::Visibility {
+                        probes: model.proxy.is_none(),
+                        far_shadows: model.shadow.is_none(),
+                        ..forge_render::Visibility::ALL
+                    },
+                );
+                if let Some(proxy) = model.proxy {
                     builder.add_instance_with_material(proxy, transform, row);
-                    builder.set_instance_visibility(plant + 1, forge_render::Visibility::PROBES);
+                    let at = builder.instance_count() - 1;
+                    builder.set_instance_visibility(at, forge_render::Visibility::PROBES);
+                }
+                if let Some(shadow) = model.shadow {
+                    builder.add_instance_with_material(shadow, transform, row);
+                    let at = builder.instance_count() - 1;
+                    builder.set_instance_visibility(at, forge_render::Visibility::FAR_SHADOWS);
                 }
             }
         }

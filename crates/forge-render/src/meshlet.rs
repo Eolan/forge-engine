@@ -127,8 +127,12 @@ const INSTANCE_VACANT: u32 = 2;
 pub struct Visibility {
     /// Drawn in the picture (culled and rasterised).
     pub drawn: bool,
-    /// Met by the shadow rays: the sun's and the lamps', the particles' and the dust's.
+    /// Met by the shadow rays: the sun's and the lamps', the particles' and the dust's (from
+    /// points nearer than the scene's far shadows, [`MeshletSceneBuilder::set_far_shadows`]).
     pub shadows: bool,
+    /// Met by the shadow rays from points at the scene's far shadows' distance and beyond
+    /// (D-075 step 3): a tree's cards are not, its opaque proxy alone is.
+    pub far_shadows: bool,
     /// Met by the probes' rays, and their hits' shadow rays.
     pub probes: bool,
     /// Met by the mirror rays (the resolve's, the water's and the glass's), and their hits'
@@ -141,6 +145,7 @@ impl Visibility {
     pub const ALL: Visibility = Visibility {
         drawn: true,
         shadows: true,
+        far_shadows: true,
         probes: true,
         mirrors: true,
     };
@@ -149,7 +154,18 @@ impl Visibility {
     pub const PROBES: Visibility = Visibility {
         drawn: false,
         shadows: false,
+        far_shadows: false,
         probes: true,
+        mirrors: false,
+    };
+
+    /// Only the shadow rays from far points meet it (D-075 step 3): a tree's opaque proxy, its
+    /// cards `Visibility { far_shadows: false, ..Visibility::ALL }`.
+    pub const FAR_SHADOWS: Visibility = Visibility {
+        drawn: false,
+        shadows: false,
+        far_shadows: true,
+        probes: false,
         mirrors: false,
     };
 
@@ -160,6 +176,11 @@ impl Visibility {
                 0
             } else {
                 INSTANCE_NO_SHADOW_RAYS
+            })
+            | (if self.far_shadows {
+                0
+            } else {
+                INSTANCE_NO_FAR_SHADOW_RAYS
             })
             | (if self.probes {
                 0
@@ -188,9 +209,14 @@ const INSTANCE_NO_SHADOW_RAYS: u32 = 8;
 const INSTANCE_NO_PROBE_RAYS: u32 = 16;
 /// `Instance::flags`: not met by the mirror rays (#301).
 const INSTANCE_NO_MIRROR_RAYS: u32 = 32;
+/// `Instance::flags`: not met by the shadow rays from far points (D-075 step 3).
+const INSTANCE_NO_FAR_SHADOW_RAYS: u32 = 64;
 /// Every `Instance::flags` bit [`Visibility`] sets.
-const INSTANCE_VISIBILITY: u32 =
-    INSTANCE_NO_RASTER | INSTANCE_NO_SHADOW_RAYS | INSTANCE_NO_PROBE_RAYS | INSTANCE_NO_MIRROR_RAYS;
+const INSTANCE_VISIBILITY: u32 = INSTANCE_NO_RASTER
+    | INSTANCE_NO_SHADOW_RAYS
+    | INSTANCE_NO_FAR_SHADOW_RAYS
+    | INSTANCE_NO_PROBE_RAYS
+    | INSTANCE_NO_MIRROR_RAYS;
 
 /// No ground window: its least corner past its greatest.
 const NO_GROUND_WINDOW: [f32; 4] = [1.0, 1.0, 0.0, 0.0];
@@ -625,6 +651,10 @@ struct GpuFrame {
     /// Per instance, this frame's crossing of its ladder (D-075): a transient the instance culls
     /// write ("geometry/cull clears" writes its address), 0 in a scene without ladders.
     ladder: u64,
+    /// The distance from which the shadow rays meet the far shadows' world (D-075 step 3,
+    /// [`MeshletSceneBuilder::set_far_shadows`]), metres; 0: never.
+    far_shadows: f32,
+    far_shadows_pad: u32,
 }
 
 /// Where a frame slot's light lists start in its lamps' buffer, bytes: after the lamps.
@@ -1216,6 +1246,8 @@ pub struct MeshletSceneBuilder {
     far_lamps: Option<crate::lamps::FarLamps>,
     /// Some mesh has a next step on a ladder ([`MeshletSceneBuilder::set_ladder`], D-075).
     ladders: bool,
+    /// Where the far shadows start ([`MeshletSceneBuilder::set_far_shadows`]), 0: never.
+    far_shadows: f32,
     /// What the scene keeps alive ([`MeshletSceneBuilder::keep`]).
     kept: Vec<Box<dyn std::any::Any + Send>>,
 }
@@ -1589,6 +1621,15 @@ impl MeshletSceneBuilder {
     /// default.
     pub fn set_far_lamps(&mut self, lamps: &[crate::lamps::Lamp]) {
         self.far_lamps = crate::lamps::FarLamps::new(lamps);
+    }
+
+    /// The shadow rays from points `start` metres from the camera and beyond meet the far
+    /// shadows' world (D-075 step 3): the instances [`Visibility::far_shadows`] keeps (a tree's
+    /// opaque proxy, [`Visibility::FAR_SHADOWS`]) in place of those [`Visibility::shadows`] keeps
+    /// (its cards), the switch dithered over the next quarter of the distance. A ray through a
+    /// proxy has no cut-out candidate to test. 0, the default: never.
+    pub fn set_far_shadows(&mut self, start: f32) {
+        self.far_shadows = start.max(0.0);
     }
 
     /// What an instance of the mesh `info` can put in the work lists: its mesh's work and, on a
@@ -2182,6 +2223,7 @@ impl MeshletSceneBuilder {
             cutouts,
             jelly,
             ladders: self.ladders,
+            far_shadows: self.far_shadows,
             ground_window: Cell::new(NO_GROUND_WINDOW),
             _kept: std::mem::take(&mut self.kept),
             planet: Cell::new(GpuPlanet::default()),
@@ -2404,6 +2446,8 @@ pub struct MeshletScene {
     /// Whether a mesh has a next step on a ladder (D-075, [`MeshletSceneBuilder::set_ladder`]):
     /// the frames then write each such instance's crossing.
     ladders: bool,
+    /// Where the far shadows start ([`MeshletSceneBuilder::set_far_shadows`]), 0: never.
+    far_shadows: f32,
     /// The ground window (#197, [`Self::set_ground_window`]), as the frame block holds it.
     ground_window: Cell<[f32; 4]>,
     /// The planet ([`Self::set_planet`]), as the frame block holds it.
@@ -4192,6 +4236,8 @@ impl MeshletRenderer {
                 .as_ref()
                 .map_or(0, |l| l.shares[slot.index].address()),
             ladder: 0,
+            far_shadows: scene.far_shadows,
+            far_shadows_pad: 0,
         }
     }
 
@@ -6066,6 +6112,37 @@ mod tests {
                 .zip(1u32..)
                 .all(|(i, k)| i.id == k)
         );
+    }
+
+    /// D-075 step 3: a tree's cards leave the far shadow rays' world to its shadow proxy, which no
+    /// other ray meets; every other instance is in both shadow worlds.
+    #[test]
+    fn far_shadows_are_a_world_of_their_own() {
+        let cards = Visibility {
+            probes: false,
+            far_shadows: false,
+            ..Visibility::ALL
+        };
+        assert_eq!(Visibility::ALL.flags(), 0);
+        assert_eq!(
+            cards.flags(),
+            INSTANCE_NO_PROBE_RAYS | INSTANCE_NO_FAR_SHADOW_RAYS
+        );
+        assert_eq!(
+            Visibility::FAR_SHADOWS.flags(),
+            INSTANCE_NO_RASTER
+                | INSTANCE_NO_SHADOW_RAYS
+                | INSTANCE_NO_PROBE_RAYS
+                | INSTANCE_NO_MIRROR_RAYS
+        );
+        // The probes' proxies stay out of both shadow worlds.
+        assert_ne!(Visibility::PROBES.flags() & INSTANCE_NO_FAR_SHADOW_RAYS, 0);
+        assert_ne!(Visibility::PROBES.flags() & INSTANCE_NO_SHADOW_RAYS, 0);
+        let mut builder = MeshletSceneBuilder::new();
+        builder.set_far_shadows(-5.0);
+        assert_eq!(builder.far_shadows, 0.0);
+        builder.set_far_shadows(60.0);
+        assert_eq!(builder.far_shadows, 60.0);
     }
 
     /// A ladder (D-075): the mesh names its next step, its instances' spheres hold the next

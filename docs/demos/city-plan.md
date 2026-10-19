@@ -502,7 +502,10 @@ and DLAA averages them. `--show-ladder` (or the console's `r.show.ladder`) tints
 From the air the far woods stand whole where the cluster LOD had thinned some species' cards to
 bare twigs, and the frame is 0.35 ms shorter (4.69 → 4.34 ms); on the ground, where more trees are
 crossing, it is about the same (`docs/PROFILE.md`). A still camera's frames 10 apart differ on
-0.06–0.07 % of their pixels, 0.08 % without. The rays keep meeting the cards. Capture:
+0.06–0.07 % of their pixels, 0.08 % without. The rays keep meeting the cards, except the shadow
+rays from points 60 m off and more (`--far-shadows M`, 0 never; D-075 step 3): those meet each
+plant's opaque shadow proxy (each lump at 0.8 of its radius), which halves `shadow/trace` from the
+air (0.22 → 0.11 ms) and leaves the far shadows' shapes as they were. Capture:
 `reports/2026-10-19/village-tree-ladder.png` (left: the far woods with cards, with the ladder,
 the shells in blue; right: the meadow's trees gliding, cards above, the ladder below).
 

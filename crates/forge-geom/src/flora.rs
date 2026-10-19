@@ -21,6 +21,9 @@ pub struct GrownPlant {
     pub proxy: TriMesh,
     /// The plant at the middle of its ladder (D-075's L1, [`grown_shells`]): sections 0 and 4.
     pub shells: TriMesh,
+    /// What the shadow rays from far points meet in its stead ([`grown_shadow_proxy`]): sections
+    /// 0 and 3.
+    pub shadow: TriMesh,
     /// Its crown's shells' mean diameter, metres: where they stand in for the cards, a lump
     /// should be a few pixels across (the ladder's crossing, D-075).
     pub lump: f32,
@@ -45,6 +48,7 @@ pub fn grow_plant(s: &Species, conditions: &Conditions) -> GrownPlant {
         mesh: grown_mesh(&graph, shrub, broad, lift, s.look.spray),
         proxy: grown_proxy(&graph, shrub, broad, lift),
         shells: grown_shells(&graph, shrub, broad, lift),
+        shadow: grown_shadow_proxy(&graph, shrub, broad, lift),
         lump: lump.max(0.05),
         height: graph.height().max(0.1),
         crown: graph.crown_width().max(0.1),
@@ -84,6 +88,24 @@ pub fn grown_mesh(g: &TreeGraph, shrub: bool, broad: bool, lift: f32, spray: Lea
 /// the leaves' colour, opaque). A probe ray crossing a crown tested each leaf card it met against
 /// the leaf atlas (a candidate each), and the probes' light is too soft to show a leaf.
 pub fn grown_proxy(g: &TreeGraph, shrub: bool, broad: bool, lift: f32) -> TriMesh {
+    proxy_of(g, shrub, broad, lift, CROWN_PROXY)
+}
+
+/// [`grown_mesh`]'s plant as the shadow rays from far points see it (D-075 step 3): its wood, and
+/// each lump of its crown a closed shell of [`CROWN_SHADOW`] of the lump's radius (section 3,
+/// opaque), whose shadow stands for the cards' without a candidate to test.
+pub fn grown_shadow_proxy(g: &TreeGraph, shrub: bool, broad: bool, lift: f32) -> TriMesh {
+    proxy_of(g, shrub, broad, lift, CROWN_SHADOW)
+}
+
+/// A crown's far shadow proxy's lump ([`grown_shadow_proxy`]) as a share of the lump's radius:
+/// the cards' shadow is as wide as their lumps but full of holes (#302's plan; the probes' three
+/// fifths would shrink the far shadows at the switch).
+pub const CROWN_SHADOW: f32 = 0.8;
+
+/// The plant's wood and each lump of its crown a closed shell of `share` of its radius,
+/// section 3.
+fn proxy_of(g: &TreeGraph, shrub: bool, broad: bool, lift: f32, share: f32) -> TriMesh {
     let mut mesh = TriMesh::default();
     if !shrub {
         wood(&mut mesh, g);
@@ -91,13 +113,7 @@ pub fn grown_proxy(g: &TreeGraph, shrub: bool, broad: bool, lift: f32) -> TriMes
     let faces = icosahedron();
     for (i, &(centre, radius)) in crown_lumps(g, shrub, broad, lift).iter().enumerate() {
         let first = mesh.sections.len();
-        lump_of(
-            &mut mesh,
-            centre,
-            radius * CROWN_PROXY,
-            i as u32 % 8,
-            &faces,
-        );
+        lump_of(&mut mesh, centre, radius * share, i as u32 % 8, &faces);
         mesh.sections[first..].fill(3);
     }
     mesh.uvs = vec![[0.0, 0.0]; mesh.positions.len()];

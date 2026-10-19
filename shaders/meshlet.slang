@@ -169,11 +169,13 @@ static const uint INSTANCE_NO_RASTER = 4;      // Instance::flags: left out of t
 static const uint INSTANCE_NO_SHADOW_RAYS = 8; // Instance::flags: not met by the shadow rays (the sun's, the lamps'; #301)
 static const uint INSTANCE_NO_PROBE_RAYS = 16; // Instance::flags: not met by the probes' rays (#301)
 static const uint INSTANCE_NO_MIRROR_RAYS = 32; // Instance::flags: not met by the mirror rays (#301)
+static const uint INSTANCE_NO_FAR_SHADOW_RAYS = 64; // Instance::flags: not met by the shadow rays from far points (D-075 step 3, `shadow_world`)
 // The TLAS records' mask bits, one a world of rays (#301): an instance a kind of ray does not meet
 // leaves its bit out, and a pass's rays carry their own (`g_ray_mask`).
 static const uint RAY_SHADOW = 1;
 static const uint RAY_PROBE = 2;
 static const uint RAY_MIRROR = 4;
+static const uint RAY_SHADOW_FAR = 8; // the shadow rays from points `Frame::far_shadows` metres off and more
 
 public static const uint MATERIAL_CLASS_STANDARD = 0;
 public static const uint MATERIAL_CLASS_ICE = 1;
@@ -472,6 +474,8 @@ public struct Frame
     public FarLamps* far_lamps;     // the street lamps lit beyond the frame's set (#284), null: none
     public float* far_shares;       // their shares of their light this frame, unshadowed
     public float* ladder;           // per instance on a ladder (D-075), this frame's crossing (`ladder_crossing`), written by the instance culls; null: no ladder
+    public float far_shadows;       // metres from the camera from which the shadow rays meet RAY_SHADOW_FAR's world (D-075 step 3, `shadow_world`); 0: never
+    public uint far_shadows_pad;
 };
 
 // Whether this thread's rays meet the movers: every pass's but the probes' unless their scene asks
@@ -482,6 +486,19 @@ static bool g_trace_movers = true;
 // RAY_PROBE and the mirror rays' RAY_MIRROR, so an instance left out of one is out of all that
 // pass's rays (a probe's hit's shadow rays too).
 static uint g_ray_mask = RAY_SHADOW;
+
+// The world a shadow ray from a point `relative` to the camera meets (D-075 step 3): RAY_SHADOW's
+// near (a tree's leaf cards), RAY_SHADOW_FAR's from `Frame::far_shadows` metres on (its opaque
+// proxy in their stead, a ray through it no candidate to test), the switch dithered by the pixel
+// over the next quarter of that distance, which the shadows' denoiser averages.
+uint shadow_world(Frame* f, float3 relative, uint2 pixel)
+{
+    float start = f[0].far_shadows;
+    if (start <= 0.0)
+        return RAY_SHADOW;
+    float t = saturate((length(relative) - start) / (0.25 * start));
+    return interleaved_gradient_noise(pixel, f[0].noise_frame, float2(17.0, 29.0)) < t ? RAY_SHADOW_FAR : RAY_SHADOW;
+}
 
 // The movers' structure the rays meet, 0 for none (`g_trace_movers`).
 uint64_t movers_tlas(Frame* f)
@@ -5758,6 +5775,8 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
         bind_pose_surface(f, mesh, meshlet_index, m, base, tri, b, s);
     bool mirror_ray = wants_mirror_ray<SHADOWS>(f, mat);
     s.traced = mirror_ray && resolve_push.request_image != 0xFFFFFFFFu;
+    // Its shadow rays (the sun's, the lamps'): the trees' cards near, their proxies far.
+    g_ray_mask = shadow_world(f, surface_relative, pixel);
     if (SHADOWS != 0 && f[0].tlas != 0 && (f[0].flags & FLAG_SHADOWS) != 0)
     {
         // NVIDIA's SIGMA denoised the sun's shadow before the resolve (#172), or the reference
@@ -6168,6 +6187,8 @@ void sun_shadow_trace_main(uint3 id : SV_DispatchThreadID)
         penumbra[pixel] = dot(n, sun) <= 0.0 ? 0.0 : NRD_MISS;
         return;
     }
+    // The trees' cards near, their proxies far (D-075 step 3).
+    g_ray_mask = shadow_world(f, surface_relative, pixel);
     // A point of the disc, uniform in area, as `sun_shadow` aims.
     float2 u = spatio_temporal_noise(pixel, f[0].noise_frame);
     float3 t = normalize(cross(sun, abs(sun.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0)));
@@ -6318,6 +6339,8 @@ void lamp_rays_main(uint3 id : SV_DispatchThreadID)
     }
     PixelSurface s = pixel_surface(f, vis, pixel, p.width, p.height);
     float3 world = to_scene(f, s.relative);
+    // The trees' cards near, their proxies far (D-075 step 3).
+    g_ray_mask = shadow_world(f, s.relative, pixel);
     LampPlace place = lamp_place(f, p.probes, world, s.n);
     surface[pixel] = float4(s.relative, place.region == REGION_NONE ? 0.0 : float(1u + place.region % 2047u));
     normal[pixel] = oct_encode(s.n);
@@ -6736,6 +6759,8 @@ void tlas_instances_main(uint3 id : SV_DispatchThreadID)
     uint mask = 0xFFu;
     if ((inst.flags & INSTANCE_NO_SHADOW_RAYS) != 0)
         mask &= ~RAY_SHADOW;
+    if ((inst.flags & INSTANCE_NO_FAR_SHADOW_RAYS) != 0)
+        mask &= ~RAY_SHADOW_FAR;
     if ((inst.flags & INSTANCE_NO_PROBE_RAYS) != 0)
         mask &= ~RAY_PROBE;
     if ((inst.flags & INSTANCE_NO_MIRROR_RAYS) != 0)

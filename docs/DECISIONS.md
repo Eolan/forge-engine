@@ -6663,7 +6663,25 @@ looked:
   differs in 0 px; without it every image is the accepted set's. The far woods, whose cards the
   cluster LOD had thinned to bare twigs, stand whole (`reports/2026-10-19/village-tree-ladder.png`).
 - **Left:** the look of the shells for the owner (smooth lumps, one colour per tree), timings on
-  the serial frame, then step 3.
+  the serial frame.
+
+**Step 3 built** (#302, 2026-10-19), with the ladder (`--tree-ladder`; `--far-shadows M`, 0 off):
+- **A world of rays of its own:** `RAY_SHADOW_FAR`. An instance's `Visibility::far_shadows` says
+  whether it is in it. A plant's cards are not; its shadow proxy (`grown_shadow_proxy`: its wood,
+  each lump a closed shell at 0.8 of its radius, opaque) is in it alone (`Visibility::FAR_SHADOWS`).
+  Every other instance is in both shadow worlds.
+- **The switch:** a shadow ray (the sun's, in its trace and the resolve, and the lamps') from a
+  point `MeshletSceneBuilder::set_far_shadows` metres from the camera and beyond (60 in the
+  village) meets the far world. It is dithered by the pixel over the next quarter of the distance,
+  which SIGMA averages.
+- **Measured** (the village with the ladder, 1600 × 900, DLAA):
+  - **From the air:** `shadow/trace` 0.22 → 0.11 ms, the frame 4.15–4.24 → 4.04–4.09 ms.
+  - **On the main street,** where the shadows fall within 60 m: unchanged (0.35 ms).
+  - **The images:** the far trees' shadows keep their shapes, their outlines a pixel off (air view:
+    ꟻLIP mean 0.021; the main street 0.5 % of pixels, ꟻLIP 0.008).
+- **The proxies are placed with the ladder whatever the distance:** each tree's two tones follow
+  its instance's id, and placing them only with far shadows reshuffled every later tree's tones in
+  the A/B.
 
 *(research: forests-and-grass.md, vegetation-materials.md, flora.md; D-013, D-016, D-029, D-036,
 D-053, D-063; issues #297, #300, #301, #302, #303)*

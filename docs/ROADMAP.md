@@ -703,8 +703,9 @@ game (scenarios, missions, licensed assets) is a private repository, as the city
    ground's blend map after them); the forests' ladder and grass (D-075, #302, #300, decided
    2026-10-19: the BLAS split done (#307), the mid level's crown shells cooked (`grown_shells`),
    the ladder record and dithered crossing built behind `--tree-ladder` (#302, the far woods whole
-   and the frame 0.35 ms shorter from the air); next the owner's look at it, a fixed
-   representation per tree for the rays, the impostor baker, then the GPU grass pass); structures with interiors, lit by their
+   and the frame 0.35 ms shorter from the air), the far shadow rays meeting opaque proxies with it
+   (step 3, `shadow/trace` halved from the air); next the owner's look at it, the impostor baker,
+   then the GPU grass pass); structures with interiors, lit by their
    lamps at night (D-065, #270: the houses' lamps as data, the rooms as light lists and the probes lit by them, built 2026-10-18; RTXDI
    to compare next); flora; the particle system (smoke, dust, fire, rain,
    sparks; D-064's step 1 built 2026-10-18, #271: emitters as data, the lab's smoke yard);

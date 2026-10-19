@@ -869,6 +869,19 @@ ground more of the visible trees are in the band, where both meshes take the cut
 (`meshlet pass 1` +0.08 ms). The instance culls are unchanged (0.03 ms). To time on the serial
 frame (`FORGE_ASYNC=0`) before the ladder becomes the default.
 
+**The far shadows** (D-075 step 3, the same day; with the ladder, `--far-shadows 0` the A/B): the
+shadow rays from points 60 m off and more meet each plant's opaque proxy, not its cards. Two runs
+each:
+
+| View | frame | `shadow/trace` |
+|---|---|---|
+| the air view | 4.17–4.24 → 4.04–4.09 ms | 0.22 → 0.11 |
+| the main street | 4.58–4.67 → 4.60–4.71 ms (noise) | 0.35 → 0.35 |
+| the green | 4.31 → 4.33–4.38 ms (noise) | 0.137 → 0.132 |
+
+Every shadow ray through a crown from the air tested its cards against the leaf atlas; the
+proxy is opaque, so the hardware ends them. The main street's shadows fall within 60 m.
+
 **A cut-out row's triangles alone in the query loop** (#307, 2026-10-19): each mesh's structure
 holds its opaque sections and its cut-out ones as two geometries (D-029). The village, best of
 three, against the build before:
