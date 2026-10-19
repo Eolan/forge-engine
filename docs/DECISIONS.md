@@ -6426,6 +6426,19 @@ questions of `research/decals.md` §11 answered as recommended:
 7. **The crossings** (#256): moved to decals if the A/B shows less shimmer than the ground pieces.
 8. **Scope:** static surfaces only for now: nothing on movers, no bullet holes.
 
+**Built, colour decals first** (2026-10-19, `forge_render::decals`): `MeshletSceneBuilder::
+set_decals` takes a `DecalSet` (kinds and boxes); the standard, UV-mapped and layered classes
+call `apply_decals` between the row's surface and its lighting. The grid's columns are 4 m (2 m
+and 8 m both cost more in the village), at most 16 decals a column, the non-empty ones in an
+open-addressed hash. A kind is one premultiplied RGBA texture for now, a separate image rather
+than a layer of an array (the arrays come with the row decals' masks); a strip repeats along `u`
+from a phase of its own per decal, so neighbouring walls do not repeat it. The city plan's kit
+walls (street and court, where the ground storey meets open air, broken at doors, shopfronts and
+passages) carry a strip of `textures::decal_grime` from 0.1 m under the ground to 1 m up;
+`--no-decals` is the A/B. Cost in the village at 1600 × 900, three runs each way:
+`shading/standard` 0.804 → 0.830 ms (the house view) and 0.890 → 0.925 ms (the junction from
+12 m up). Next: the row decals on the layered ground, then cracks and stains on the paving.
+
 *(research: decals.md; D-007, D-013, D-021, D-026, D-028, D-047, D-065; issue #304)*
 
 ## D-075 — Forests as a ladder per tree, grass as a GPU pass near the camera ✅ (proposed 2026-10-19, #302, #300; the owner's go the same day: "follow your recommendations")

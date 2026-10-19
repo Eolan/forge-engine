@@ -606,6 +606,9 @@ struct GpuFrame {
     lamp_count: u32,
     lamp_list_count: u32,
     lamp_lists: u64,
+    /// The decals' grid record (D-074, `DecalGrid` in the shader), 0 without decals.
+    decals: u64,
+    decals_pad: u64,
 }
 
 /// Where a frame slot's light lists start in its lamps' buffer, bytes: after the lamps.
@@ -1181,6 +1184,8 @@ pub struct MeshletSceneBuilder {
     movers: Option<u32>,
     /// The skinned meshes ([`MeshletSceneBuilder::add_skinned_mesh`], #165).
     skins: Vec<SkinSource>,
+    /// The decals on its static surfaces ([`MeshletSceneBuilder::set_decals`], D-074).
+    decals: crate::decals::DecalSet,
     /// What the scene keeps alive ([`MeshletSceneBuilder::keep`]).
     kept: Vec<Box<dyn std::any::Any + Send>>,
 }
@@ -1538,6 +1543,12 @@ impl MeshletSceneBuilder {
         self.kept.push(Box::new(item));
     }
 
+    /// The decals on the scene's static surfaces (D-074, [`crate::decals`]): boxes in the scene's
+    /// frame, their kinds' textures already in the scene's [`TextureSet`]. None by default.
+    pub fn set_decals(&mut self, decals: crate::decals::DecalSet) {
+        self.decals = decals;
+    }
+
     /// Number of instances so far.
     pub fn instance_count(&self) -> usize {
         self.instances.len()
@@ -1884,6 +1895,41 @@ impl MeshletSceneBuilder {
         if let Some(rays) = &mut rays {
             rays.set_materials(materials.address());
         }
+        // The decals' tables, then the record the frame points at (D-074).
+        let decals = match self.decals.tables(|id| {
+            self.textures
+                .as_ref()
+                .map_or(crate::material::TEXTURE_NONE, |t| t.sampled(id))
+        }) {
+            Some(t) => {
+                let tables = device.create_buffer_with_data(
+                    &t.bytes,
+                    usage,
+                    MemoryCategory::Geometry,
+                    "decals",
+                )?;
+                let base = tables.address();
+                let grid = crate::decals::GpuDecalGrid {
+                    slots: base + t.slots,
+                    indices: base + t.indices,
+                    decals: base + t.decals,
+                    kinds: base + t.kinds,
+                    slot_mask: t.slot_mask,
+                    cell: crate::decals::CELL,
+                    count: t.count,
+                    pad: 0,
+                };
+                let record = device.create_buffer_with_data(
+                    bytemuck::bytes_of(&grid),
+                    usage,
+                    MemoryCategory::Geometry,
+                    "decal grid",
+                )?;
+                tracing::info!(decals = t.count, "the scene's decals");
+                Some((tables, record))
+            }
+            None => None,
+        };
         Ok(MeshletScene {
             pool: GraphBuffer::new(pool),
             meshlets: Arc::new(table_with_room(
@@ -2000,6 +2046,7 @@ impl MeshletSceneBuilder {
                 })
                 .collect::<Result<Vec<_>>>()?,
             lamp_counts: std::array::from_fn(|_| Cell::new([0; 2])),
+            decals,
             textures: self.textures.take(),
             instance_count: self.instances.len() as u32,
             origin: self.origin,
@@ -2210,6 +2257,9 @@ pub struct MeshletScene {
     /// and how many of each.
     lamp_buffers: Vec<Buffer>,
     lamp_counts: [Cell<[u32; 2]>; FRAMES_IN_FLIGHT],
+    /// Its decals' tables and the record pointing into them (D-074, [`MeshletSceneBuilder::set_decals`]),
+    /// none without decals.
+    decals: Option<(Buffer, Buffer)>,
     textures: Option<TextureSet>,
     /// What it keeps alive for its instances ([`MeshletSceneBuilder::keep`]).
     _kept: Vec<Box<dyn std::any::Any + Send>>,
@@ -3898,6 +3948,8 @@ impl MeshletRenderer {
             lamp_count: scene.lamp_counts[slot.index].get()[0],
             lamp_list_count: scene.lamp_counts[slot.index].get()[1],
             lamp_lists: scene.lamp_buffers[slot.index].address() + LAMP_LISTS_OFFSET,
+            decals: scene.decals.as_ref().map_or(0, |d| d.1.address()),
+            decals_pad: 0,
         }
     }
 

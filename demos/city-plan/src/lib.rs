@@ -247,6 +247,63 @@ fn world(size: f64, p: DVec2, height: f64) -> Vec3 {
     )
 }
 
+/// The grime at the foot of the outer walls of the masses `near` (D-074): one strip of decal
+/// kind 0 along each stretch of a street or court wall that meets open air at the ground storey,
+/// broken at its doors, shopfronts and passages, from 0.1 m under the walking level to 1 m over it.
+fn wall_foot_grime(
+    size: f64,
+    structures: &[Structure],
+    near: &[usize],
+) -> Vec<forge_render::Decal> {
+    let mut decals = Vec::new();
+    for s in near.iter().map(|&i| &structures[i]) {
+        for (w, wall) in s.walls.iter().enumerate() {
+            if !matches!(wall.role, WallRole::Street | WallRole::Court) || wall.length() < 0.3 {
+                continue;
+            }
+            let t = (wall.b - wall.a) / wall.length();
+            // Out of the wall; the box's `x` turned so that its `z` runs down the wall and its
+            // texture's dark `v` = 1 meets the ground.
+            let out = DVec2::new(t.y, -t.x);
+            let rotation = glam::Quat::from_mat3(&glam::Mat3::from_cols(
+                Vec3::new(-t.x as f32, 0.0, -t.y as f32),
+                Vec3::new(out.x as f32, 0.0, out.y as f32),
+                -Vec3::Y,
+            ));
+            let gaps: Vec<(f64, f64)> = s
+                .openings
+                .iter()
+                .filter(|o| o.wall == w && o.storey == 0 && o.sill < 0.3)
+                .map(|o| o.span())
+                .collect();
+            let open = wall.open.first().map_or(&[][..], |o| &o[..]);
+            for &(from, to) in open {
+                // The stretch less the openings across it.
+                let mut cuts = vec![(from, to)];
+                for &(g0, g1) in &gaps {
+                    cuts = cuts
+                        .into_iter()
+                        .flat_map(|(a, b)| [(a, b.min(g0)), (a.max(g1), b)])
+                        .filter(|(a, b)| b - a > 0.3)
+                        .collect();
+                }
+                for (a, b) in cuts {
+                    let mid = wall.a + t * ((a + b) * 0.5);
+                    let length = (b - a) as f32;
+                    decals.push(forge_render::Decal {
+                        centre: world(size, mid, ground::WALK_LEVEL + 0.45),
+                        rotation,
+                        half: Vec3::new(length * 0.5, 0.3, 0.55),
+                        kind: 0,
+                        repeat: (length * 0.5).round().max(1.0),
+                    });
+                }
+            }
+        }
+    }
+    decals
+}
+
 /// Lines ending at one hub stood their trams on one spot for their turns: each further line
 /// ending within 30 m of another's terminus now ends 45 m before it, along its own track
 /// (while its last leg stays 60 m or more).
@@ -336,6 +393,8 @@ pub struct PlanScenario {
     flora: Vec<(Vec3, f32, f32, f32, u16, u8)>,
     /// Each lamp's place, scale (its height over the model's 8 m) and turn.
     lamps: Vec<(Vec3, f32, f32, bool)>,
+    /// The grime strips at the kit's walls' feet (D-074).
+    grime: Vec<forge_render::Decal>,
     /// The style kit's instanced modules and their instances (module, transform, group).
     kit_meshes: Vec<TriMesh>,
     kit_instances: Vec<(u32, Mat4, u8)>,
@@ -782,6 +841,7 @@ impl PlanScenario {
             &regions,
             residents.as_ref(),
         );
+        let grime = wall_foot_grime(size, &structures, &near);
         laps.mark("insides");
         // The passages into the courts (D-060), and where to look into one: 10 m out on the
         // street before the kit's first, for the log once the app logs.
@@ -1906,6 +1966,7 @@ impl PlanScenario {
             trees,
             flora,
             lamps,
+            grime,
             kit_meshes,
             kit_instances,
             kit_report,
@@ -6161,6 +6222,12 @@ impl Scenario for PlanScenario {
         } else {
             Some(materials.textures.add(&textures::leaves(41, 1024))?)
         };
+        // The grime at the walls' feet (D-074): one strip kind, its texture repeating along u.
+        let grime_texture = if self.grime.is_empty() {
+            None
+        } else {
+            Some(materials.textures.add(&textures::decal_grime(74, 512))?)
+        };
         let flora_rows: Vec<_> = species
             .iter()
             .map(|s| {
@@ -6228,6 +6295,19 @@ impl Scenario for PlanScenario {
         laps.mark("materials applied");
         builder.set_ray_traced(!args.no_shadows);
         builder.set_origin(scene_origin(args));
+        if let Some(texture) = grime_texture.filter(|_| !args.no_decals) {
+            builder.set_decals(forge_render::DecalSet {
+                kinds: vec![forge_render::DecalKind {
+                    texture,
+                    tint: [1.0; 4],
+                    strip: true,
+                    priority: 0,
+                    depth_fade: 0.3,
+                    facing: [0.3, 0.6],
+                }],
+                decals: self.grime.clone(),
+            });
+        }
         let rows = [ground_row, mass_row, grille_row];
         let planted = planted(&self.flora, &species);
         // The meshes the loading thread cooked or read from the cache (`prepare`), or now.

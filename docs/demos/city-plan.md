@@ -1273,6 +1273,20 @@ leaves stand 2.15 m high where the opening allows, the transom light over them
 (`modules::door`): at 0.7 m under the head a 2.6 m door's leaves stood 1.9 m, at a walker's eyes
 ("doors heights are a bit too low for people").
 
+### Grime at the walls' feet (D-074, #304)
+
+The kit's buildings carry a strip of grime along the foot of each street and court wall where its
+ground storey meets open air, broken at its doors, shopfronts and passages: rain splashed up with
+soil, densest and damp at the ground, its top wandering between about 0.3 and 0.6 m and speckled
+where the splashes thin out. It is a decal (`forge_render::decals`): a box of 0.6 m across the
+wall's face, from 0.1 m under the ground to 1 m up, applied in the resolve between the surface
+and its lighting, so the sun, the probes' light and the occlusion fall on it as on the wall (the
+mirror and probe rays still meet the bare wall: decals at their hits come later). It fades out on
+the ground under it, which does not face its axis. Each strip starts its 2 m texture at a
+phase of its own. `--no-decals` leaves it out: `shading/standard` +0.026 ms on a house front and
++0.035 ms over the junction (`docs/PROFILE.md`). Capture: `reports/2026-10-19/village-wall-grime.png`
+(above without, below with).
+
 ### Local exposure (D-067, #275)
 
 The owner, walking into a house: "light outside is very strong, I would expect the inside to be

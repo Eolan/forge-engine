@@ -482,6 +482,10 @@ pub struct Args {
     /// A/B; the city plan's forest).
     #[arg(long)]
     pub leaf_probes: bool,
+    /// No decals (D-074): the city plan's walls without the grime at their feet (the decals'
+    /// A/B, for their look and their cost in the resolve).
+    #[arg(long)]
+    pub no_decals: bool,
     /// Every lamp by ReSTIR DI, NVIDIA's RTXDI, in place of the light lists' filtered shadows
     /// (D-065's comparison). Needs RTXDI's headers in `rtxdi-sdk/` and ray queries.
     #[arg(long)]

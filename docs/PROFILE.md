@@ -1635,6 +1635,11 @@ something stands out). Two things to watch:
         once).
     - The street lamps as lamps by default (in the light lists, their glow left out of the
       probes) cost nothing measurable beside the lists' other lamps.
+  - *2026-10-19, the grime at the walls' feet (D-074's decals):* the village at 15:00 under DLAA
+    at 1600 × 900, the house and junction views of the map check, three runs each way,
+    alternating with `--no-decals`: `shading/standard` 0.804 → 0.830 ms on the house front and
+    0.890 → 0.925 ms over the junction from 12 m up. Grid columns of 2 m (0.839–0.846 ms on the
+    house front) and 8 m (0.840–0.844) cost more than 4 m.
 
 ## Loading `city-plan`: the village and the city (#274, 2026-10-16)
 

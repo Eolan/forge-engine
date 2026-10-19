@@ -1579,6 +1579,111 @@ pub fn mip_ramp(size: u32) -> TextureData {
     }
 }
 
+/// A decal's texture (D-074, `forge_render::decals`) from its linear colour and alpha per texel:
+/// sRGB colour premultiplied by its alpha, each mip the plain average of its four texels' (colour
+/// times alpha, and alpha), so a soft edge fades into the surface's own colour with distance
+/// rather than into the colour of the texels it leaves bare.
+fn premultiplied_texture(name: &'static str, size: u32, linear: Vec<[f32; 4]>) -> TextureData {
+    let mut current: Vec<[f32; 4]> = linear
+        .into_iter()
+        .map(|[r, g, b, a]| [r * a, g * a, b * a, a])
+        .collect();
+    let encode = |level: &[[f32; 4]]| {
+        encode(level, |c| {
+            [
+                to_byte(linear_to_srgb(c[0])),
+                to_byte(linear_to_srgb(c[1])),
+                to_byte(linear_to_srgb(c[2])),
+                to_byte(c[3]),
+            ]
+        })
+    };
+    let mut levels = vec![encode(&current)];
+    let mut side = size;
+    while side > 1 {
+        current = downsample(&current, side, |a, b, c, d| {
+            [0, 1, 2, 3].map(|k| (a[k] + b[k] + c[k] + d[k]) * 0.25)
+        });
+        side /= 2;
+        levels.push(encode(&current));
+    }
+    TextureData {
+        name: name.into(),
+        size,
+        height: size,
+        srgb: true,
+        levels,
+    }
+}
+
+/// Grime at the foot of a wall (D-074): rain splashed up with soil, densest at the ground
+/// (`v` = 1) and gone by the top (`v` = 0), its upper edge wandering and speckled where the
+/// splashes thin out; it repeats along `u`, for a strip 2 m a repeat and 1.1 m high whose foot
+/// stands 0.1 m under the ground.
+pub fn decal_grime(seed: u64, size: u32) -> TextureData {
+    kept("texture-decal-grime", &(seed, size), || {
+        let texels = grid(size, |u, v| {
+            // Metres over the ground, and the band's top along the wall.
+            let h = 1.0 - 1.1 * v;
+            let edge = 0.28 + 0.34 * fbm(seed, u, 0.37, 3, 3);
+            let band = 1.0 - smoothstep(edge - 0.32, edge + 0.05, h);
+            let foot = 1.0 - smoothstep(0.0, 0.22, h);
+            let mottle = fbm(seed ^ 0x6A1, u, v, 8, 4);
+            let speck = smoothstep(0.62, 0.78, fbm(seed ^ 0x5EC, u, v, 48, 2))
+                * (1.0 - smoothstep(edge, edge + 0.22, h))
+                * smoothstep(edge - 0.2, edge, h);
+            let alpha =
+                ((0.58 * band + 0.3 * foot) * (0.55 + 0.45 * mottle) + 0.3 * speck).clamp(0.0, 0.9);
+            // Brown soil, greener and darker at the very foot where it stays damp.
+            let soil = [0.19, 0.16, 0.12];
+            let damp = [0.11, 0.12, 0.09];
+            let c: [f32; 3] = std::array::from_fn(|k| soil[k] + (damp[k] - soil[k]) * foot);
+            [c[0], c[1], c[2], alpha]
+        });
+        premultiplied_texture("decal grime", size, texels)
+    })
+}
+
+/// Cracks in a paving or a render (D-074): a few dark lines along the edges of a Voronoi tiling,
+/// thinning and fading out towards the stamp's rim; a stamp clamped at its edges.
+pub fn decal_cracks(seed: u64, size: u32) -> TextureData {
+    kept("texture-decal-cracks", &(seed, size), || {
+        const CELLS: i32 = 5;
+        let point = |i: i32, j: i32| {
+            let h = |s: u64| unit_f32(hash_cell2(seed ^ s, i, j));
+            [
+                i as f32 + 0.15 + 0.7 * h(0x51),
+                j as f32 + 0.15 + 0.7 * h(0x52),
+            ]
+        };
+        let texels = grid(size, |u, v| {
+            let (x, y) = (u * CELLS as f32, v * CELLS as f32);
+            let (ci, cj) = (x.floor() as i32, y.floor() as i32);
+            // The nearest two points: a crack where they are equally near.
+            let (mut d1, mut d2) = (f32::MAX, f32::MAX);
+            for j in cj - 1..=cj + 1 {
+                for i in ci - 1..=ci + 1 {
+                    let p = point(i, j);
+                    let d = ((p[0] - x).powi(2) + (p[1] - y).powi(2)).sqrt();
+                    if d < d1 {
+                        d2 = d1;
+                        d1 = d;
+                    } else if d < d2 {
+                        d2 = d;
+                    }
+                }
+            }
+            let rim = ((u - 0.5).powi(2) + (v - 0.5).powi(2)).sqrt() * 2.0;
+            let width = 0.06 * (1.0 - rim).max(0.0);
+            let line = 1.0 - smoothstep(width * 0.3, width, d2 - d1);
+            let wander = fbm(seed ^ 0xC4A, u, v, 8, 3);
+            let alpha = (line * smoothstep(0.35, 0.65, wander + 0.3 * (1.0 - rim))).clamp(0.0, 1.0);
+            [0.05, 0.045, 0.04, alpha * 0.9]
+        });
+        premultiplied_texture("decal cracks", size, texels)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

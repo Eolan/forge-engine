@@ -229,6 +229,15 @@ The resolve is three kinds of pass:
   layers around each pixel. A row's contour (`RenderLayer::contour`, #106) draws one layer by
   the ground's height under the pixel instead of the map's texels: the island's sand under
   2.5 m.
+- **Decals in the resolve** (#304, D-074, `forge_render::decals`): boxes in the scene's frame
+  that colour what stands inside them, applied by the standard, UV-mapped and layered classes
+  between the row's surface and its lighting. A pixel finds its decals in a world grid of 4 m
+  columns built once on the CPU (an open-addressed hash of the non-empty columns, each list in
+  painter's order, 16 at most); the texture's gradients are the box's axes dotted with the
+  resolve's analytic derivatives (`SampleGrad`, no halo at depth edges). A kind is one
+  premultiplied RGBA texture, clamped (a stamp) or repeating along `u` (a strip), fading out
+  towards the box's faces and on the surfaces that do not face its axis. The city plan's kit
+  walls carry a grime strip at their feet.
 
 **Dense clusters go to a software rasteriser** (issue #3). The cluster cull marks a cluster
 dense when it is in front of the near plane, under 64 pixels across and has fewer than two

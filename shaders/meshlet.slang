@@ -318,6 +318,44 @@ public struct RtScene
     public uint64_t pad;
 };
 
+// A decal (D-074, forge_render::decals): a box in the scene frame, its `x` along its texture's
+// u, its `z` along v, its `y` the axis it projects along.
+public struct Decal
+{
+    public float3 centre;
+    public uint kind;
+    public float4 rotation; // a unit quaternion, xyz w
+    public float3 half;     // the box's half sizes
+    public float repeat;    // a strip's repeats along x
+};
+
+// A kind of decal: its texture (colour premultiplied by alpha), its sampler (a stamp's clamps, a
+// strip's repeats along u), how it fades by depth and by the surface's facing, and its tint.
+public struct DecalKind
+{
+    public uint texture;
+    public uint sampler;
+    public float depth_fade; // the share of the box's depth it fades over towards both faces
+    public uint strip;       // 1: its texture repeats along u, each decal from a phase of its own
+    public float4 tint;      // rgb times its colour, a its strength
+    public float4 facing;    // x: the cosine to the box's y under which it is gone, y: over which whole
+};
+
+// The decals' grid (D-074): columns of `cell` metres (x, z) in an open-addressed hash of
+// `slot_mask` + 1 slots (x, z, first, count; count 0 an empty slot), each column's decals at
+// `indices[first..]` in painter's order.
+public struct DecalGrid
+{
+    public uint4* slots;
+    public uint* indices;
+    public Decal* decals;
+    public DecalKind* kinds;
+    public uint slot_mask;
+    public float cell;
+    public uint count;
+    public uint pad;
+};
+
 // Every matrix is camera-relative (D-004, issue #93): the camera stands at the origin of the
 // space `view_proj` takes, and positions get there through `instance_relative`. Rays and the
 // probes live in the scene frame, `camera_in_scene` from the camera (`to_scene`).
@@ -397,6 +435,8 @@ public struct Frame
     public uint lamp_count;
     public uint lamp_list_count;    // the entries of their light lists (lamps.rs, `lists`)
     public uint2* lamp_lists;       // (region, lamp) sorted by region, the lamps of every region under REGION_ANY
+    public DecalGrid* decals;       // the decals on the static surfaces (D-074), null: none
+    public uint64_t decals_pad;
 };
 
 // Whether this thread's rays meet the movers: every pass's but the probes' unless their scene asks
@@ -3399,6 +3439,63 @@ float value_noise3(float3 p)
 
 // The albedo and the normal a standard row gives the surface: the row's two colours mixed by
 // the instance, its cavity, and its textures projected along the object's axes.
+// `v` turned by the unit quaternion `q` (xyz w), or back when `back`.
+float3 quat_turn(float4 q, float3 v, bool back)
+{
+    float3 u = back ? -q.xyz : q.xyz;
+    float3 t = 2.0 * cross(u, v);
+    return v + q.w * t + cross(u, t);
+}
+
+// The decals over surface `s` (D-074, forge_render::decals): the decals of its grid column, in
+// painter's order, whose box holds it, each blended into `albedo` as its texture's premultiplied
+// colour. A decal fades out towards its box's faces along its axis, and on the surfaces that do
+// not face that axis (the ground under a wall's grime). Its texture's gradients are its box's
+// axes dotted with the surface's analytic change per pixel, scaled as the rows' textures are
+// (`texture_lod_scale`): no halo where the surface ends, its mips and anisotropy whole.
+void apply_decals(Frame* f, Surface s, inout float3 albedo)
+{
+    DecalGrid* g = f[0].decals;
+    if (g == nullptr)
+        return;
+    int2 c = int2(floor(s.world.xz / g[0].cell));
+    uint h = (uint(c.x) * 73856093u ^ uint(c.y) * 19349663u) & g[0].slot_mask;
+    uint4 slot = uint4(0u);
+    for (uint tries = 0u; tries <= g[0].slot_mask; tries++)
+    {
+        slot = g[0].slots[h];
+        if (slot.w == 0u || (int(slot.x) == c.x && int(slot.y) == c.y))
+            break;
+        h = (h + 1u) & g[0].slot_mask;
+    }
+    if (slot.w == 0u || int(slot.x) != c.x || int(slot.y) != c.y)
+        return;
+    for (uint i = 0u; i < slot.w; i++)
+    {
+        uint index = g[0].indices[slot.z + i];
+        Decal d = g[0].decals[index];
+        float3 local = quat_turn(d.rotation, s.world - d.centre, true);
+        if (any(abs(local) > d.half))
+            continue;
+        DecalKind k = g[0].kinds[d.kind];
+        if (k.texture == TEXTURE_NONE)
+            continue;
+        float facing = smoothstep(k.facing.x, k.facing.y, dot(s.n, quat_turn(d.rotation, float3(0.0, 1.0, 0.0), false)));
+        float depth = saturate((d.half.y - abs(local.y)) / max(d.half.y * k.depth_fade, 1e-4));
+        float strength = facing * depth * k.tint.a;
+        if (strength <= 0.0)
+            continue;
+        float2 scale = float2(d.repeat, 1.0) / (2.0 * d.half.xz);
+        // A strip starts its texture at a place of its own, so neighbouring walls do not repeat it.
+        float phase = k.strip != 0u ? frac(float(index) * 0.618034) : 0.0;
+        float2 uv = (local.xz / (2.0 * d.half.xz) + 0.5) * float2(d.repeat, 1.0) + float2(phase, 0.0);
+        float2 gx = quat_turn(d.rotation, mul(s.frame, s.dpdx), true).xz * scale * f[0].texture_lod_scale;
+        float2 gy = quat_turn(d.rotation, mul(s.frame, s.dpdy), true).xz * scale * f[0].texture_lod_scale;
+        float4 t = sample_image_grad(k.texture, k.sampler, uv, gx, gy);
+        albedo = albedo * (1.0 - t.a * strength) + t.rgb * k.tint.rgb * strength;
+    }
+}
+
 void standard_surface(Material mat, Surface s, out float3 albedo, out float3 n)
 {
     n = s.n;
@@ -3463,6 +3560,7 @@ float3 shade_uv_mapped(Frame* f, Material mat, Surface s)
         base = lerp(mat.color_a, mat.color_b, hash_color(s.instance_id).x);
     if (mat.albedo_texture != TEXTURE_NONE)
         base *= sample_image_grad(mat.albedo_texture, mat.sampler, uv, gx, gy).rgb;
+    apply_decals(f, s, base);
     float roughness = mat.roughness;
     float metal = mat.metallic;
     if (mat.metal_rough_texture != TEXTURE_NONE)
@@ -3680,6 +3778,7 @@ float3 shade_standard(Frame* f, Material mat, Surface s)
             return pane + seen * (1.0 - fresnel);
         }
         standard_surface(mat, s, albedo, n);
+        apply_decals(f, s, albedo);
     }
     float ndl;
     return sun_light(f, albedo, n, s.n, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, s.world, s.probes, s.traced, ndl) + emission(f, mat);
@@ -3927,6 +4026,7 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
                 specular_power = lerp(a.specular_power, b.specular_power, blend);
         }
         albedo = lerp(albedo * tint, body.rgb, body.a);
+        apply_decals(f, s, albedo);
     }
     float3 shadow = s.shadow;
     if (s.shore != nullptr)
