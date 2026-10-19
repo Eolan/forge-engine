@@ -40,6 +40,7 @@ cargo test --release
 cargo clippy --release --all-features --all-targets -- -D warnings
 cargo fmt --all -- --check
 cargo run --release -q -p credits -- --check
+bash tools/luau-check.sh   # the Luau game scripts (D-072), skipped without luau-lsp locally
 ```
 
 - **Gate only:** docs, reports and Markdown.

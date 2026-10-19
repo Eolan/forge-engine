@@ -1,12 +1,13 @@
 --!strict
 -- The `game` table a game script gets (#319, D-072; `forge_script::Game`), for luau-lsp:
---   luau-lsp analyze --definitions=crates/forge-script/defs/game.d.luau my_script.luau
+--   luau-lsp analyze --platform=standard --definitions=@forge=crates/forge-script/defs/game.d.luau my_script.luau
+-- (tools/luau-check.sh runs it over crates/forge-script/scripts/ in the gate and CI).
 -- Written by hand from `crates/forge-script/src/game.rs`; kept beside it until D-072's
 -- definition files are generated from the Rust API.
 
 -- An entity's handle: its stable id, opaque to the script. Handles compare equal when their ids
 -- do, and print as "entity <id>".
-declare class Entity
+declare extern type Entity with
 	-- The stable id the host knows the entity by.
 	function id(self): number
 end

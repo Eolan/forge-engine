@@ -40,3 +40,15 @@ jobs:
         run: cargo test --release --workspace ${{ env.NO_DEMOS }}
       - name: Clippy
         run: cargo clippy --release --all-features --all-targets -- -D warnings
+      # The Luau game scripts against the game API's definitions (D-072, #319): luau-lsp's
+      # release, pinned with its checksum, on Linux.
+      - name: Luau scripts (luau-lsp analyze)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/luau-lsp.zip" \
+            https://github.com/JohnnyMorganz/luau-lsp/releases/download/1.70.1/luau-lsp-linux-x86_64.zip
+          echo "1a2ea1ae4f98f8946cefd970a4b54853e11ab4775e6932faa7f60cf920346567  $RUNNER_TEMP/luau-lsp.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/luau-lsp.zip" -d "$RUNNER_TEMP/luau-lsp"
+          chmod +x "$RUNNER_TEMP/luau-lsp/luau-lsp"
+          LUAU_LSP="$RUNNER_TEMP/luau-lsp/luau-lsp" bash tools/luau-check.sh

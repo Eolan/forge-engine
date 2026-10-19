@@ -429,7 +429,48 @@ mod tests {
                 "{key} missing from game.d.luau"
             );
         }
-        assert!(defs.contains("declare class Entity") && defs.contains("function id(self)"));
+        assert!(defs.contains("declare extern type Entity") && defs.contains("function id(self)"));
+    }
+
+    #[test]
+    fn the_example_script_sends_the_healthy_after_a_noise_and_the_hurt_flee() {
+        // Zombies 7 and 9 healthy, 12 hurt; then 7 hurt while it chases.
+        struct Hurt(Cell<i64>);
+        impl World for Hurt {
+            fn get(&self, id: u64, _: &str) -> Data {
+                Data::Integer(match id {
+                    7 => self.0.get(),
+                    9 => 80,
+                    _ => 10,
+                })
+            }
+            fn find(&self, _: &str) -> Vec<u64> {
+                vec![7, 9, 12]
+            }
+        }
+        let world = Hurt(Cell::new(90));
+        let source = include_str!("../scripts/pursuit.luau");
+        let mut g = Game::new(Limits::default(), "pursuit", source, 10).unwrap();
+        g.send("noise", &[Data::Number(4.5), Data::Number(-2.0)], &world)
+            .unwrap();
+        let go: Vec<Vec<Data>> = g.commands().into_iter().map(|c| c.args).collect();
+        assert_eq!(
+            go,
+            vec![
+                vec![Data::Entity(7), Data::Number(4.5), Data::Integer(-2)],
+                vec![Data::Entity(9), Data::Number(4.5), Data::Integer(-2)],
+            ]
+        );
+        world.0.set(20);
+        for _ in 0..10 {
+            g.tick(&world).unwrap();
+        }
+        let flee: Vec<(u64, String, Vec<Data>)> = g
+            .commands()
+            .into_iter()
+            .map(|c| (c.tick, c.name, c.args))
+            .collect();
+        assert_eq!(flee, vec![(10, "flee".to_owned(), vec![Data::Entity(7)])]);
     }
 
     #[test]

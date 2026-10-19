@@ -6370,8 +6370,17 @@ rules that build their tables in loops. The owner approved `mlua`'s download.
     budget).
   - **Definitions:** `crates/forge-script/defs/game.d.luau` describes `game` and `Entity` for
     `luau-lsp`, written by hand. A test checks that it names every function of the table.
-  - **Left:** generating the definitions from the Rust API; `luau-lsp analyze` in the gate (not
-    installed here: a download for the owner to approve); an F1 zone per script; hot reload.
+    luau-lsp 1.70 reads classes declared as `declare extern type … with`.
+  - **`luau-lsp analyze` in the gate** (the owner's go for the download, 2026-10-19):
+    - `tools/luau-check.sh` checks every `crates/forge-script/scripts/*.luau` against the
+      definitions, with `--platform=standard`.
+    - CI downloads release 1.70.1 on Linux and checks its SHA-256 before running it.
+    - Locally the release is unpacked in `luau-lsp/` (ignored by git); without it, the check
+      says so and passes.
+    - It caught a misspelt `game.fnd` and a string passed as a timer's seconds.
+  - **The example:** `scripts/pursuit.luau` sends the healthy zombies after a noise and makes
+    the hurt ones flee. A test runs it, and the check type-checks it.
+  - **Left:** generating the definitions from the Rust API; an F1 zone per script; hot reload.
 
 ## D-073 — Missions as data: the record, its evaluator and its two saves ✅ (2026-10-18, #287, D-072's first point)
 

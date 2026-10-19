@@ -535,6 +535,7 @@ step "clippy, tests and credits (in the background, $run/gate.txt)"
   cargo clippy --release --all-features --all-targets -- -D warnings || status=1
   cargo test --release || status=1
   cargo run --release -q -p credits -- --check || status=1
+  bash tools/luau-check.sh || status=1
   exit $status
 ) > "$run/gate.txt" 2>&1 &
 gate_pid=$!

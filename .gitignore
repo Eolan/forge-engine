@@ -25,6 +25,8 @@
 /rtxdi-sdk/
 # Steam Audio's SDK (forge-audio's `steam-audio` feature, #267): 181 MB, kept locally.
 /steam-audio-sdk/
+# luau-lsp (MIT, JohnnyMorganz/luau-lsp), its release unpacked for tools/luau-check.sh (#319).
+/luau-lsp/
 /fidelityfx-sdk/
 
 # Compiled shaders are rebuilt from shaders/*.slang

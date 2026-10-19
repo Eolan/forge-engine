@@ -268,7 +268,8 @@ With changes in hand, re-baseline the base in a worktree, then verify the change
    verdicts of the mip check ("mip check passed") and of the ACES 2.0 check ("tone check
    passed").
 5. **Before pushing** (the gate, in every tier): `cargo fmt --all -- --check`,
-   `cargo test --release`, `cargo run --release -q -p credits -- --check`, and
+   `cargo test --release`, `cargo run --release -q -p credits -- --check`,
+   `bash tools/luau-check.sh` (the Luau game scripts against their definitions, D-072), and
    `cargo clippy --release --all-features --all-targets -- -D warnings` exactly as CI runs it.
    A plain clippy run hides a lint that CI then fails on.
 6. **Leave a trace a cloud session can read, when one needs it.** With `FORGE_KEEP_LOGS=1`
