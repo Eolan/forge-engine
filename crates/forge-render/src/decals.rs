@@ -9,11 +9,14 @@
 //! A decal's box has its own frame: `x` along its texture's `u`, `z` along `v`, `y` the axis it
 //! projects along (out of the surface it marks). Kinds take their colour from a texture of their
 //! own ([`crate::textures::decal_grime`] and the like), premultiplied by its alpha in every mip,
-//! clamped at its edges (a stamp) or repeating along `u` (a strip: the foot of a wall).
+//! clamped at its edges (a stamp) or repeating along `u` (a strip: the foot of a wall). A row
+//! decal (`DecalKind::row`) takes from its texture only its alpha, a mask over a material row: where
+//! it masks, the surface is that row's (its colour and its normal), as a layered ground's layer is;
+//! the layered class alone takes them for now.
 
 use crate::columns::{ColumnTables, place};
 use bytemuck::{Pod, Zeroable};
-use forge_core::material::TextureId;
+use forge_core::material::{MaterialId, TextureId};
 use glam::{Quat, Vec3};
 
 /// A grid column's side in the scene's frame, metres (`x` and `z`; a column holds every height).
@@ -30,9 +33,8 @@ pub struct DecalKind {
     pub texture: TextureId,
     /// What its colour is multiplied by (rgb), and its strength (a).
     pub tint: [f32; 4],
-    /// Its texture repeats along the box's `x` (a strip: [`Decal::repeat`] times, each decal from
-    /// a phase of its own so that neighbours do not repeat it), else it is a stamp clamped at its
-    /// edges.
+    /// Its texture repeats along the box's `x` (a strip: [`Decal::repeat`] times, from the decal's
+    /// [`Decal::phase`]), else it is a stamp clamped at its edges.
     pub strip: bool,
     /// Its place among the decals a pixel walks: higher paints over lower.
     pub priority: u8,
@@ -42,6 +44,10 @@ pub struct DecalKind {
     /// over which it is whole: it marks the faces it looks at, not those at right angles (the
     /// ground under a wall's grime).
     pub facing: [f32; 2],
+    /// A row decal's material row (D-074, a mask over a material row): where its texture's alpha
+    /// masks, the surface takes that row's colour (times [`Self::tint`]) and normal, as a layered
+    /// ground's layer; the layered class alone draws them for now. `None`: a colour decal.
+    pub row: Option<MaterialId>,
 }
 
 /// A decal: a box in the scene's frame and its kind.
@@ -58,6 +64,10 @@ pub struct Decal {
     pub kind: u16,
     /// A strip's repeats of its texture along `x` (1 for a stamp).
     pub repeat: f32,
+    /// Where a strip's texture starts along `x`, in repeats: a run of strips along a bank goes on
+    /// where the one before it ended, and lone strips start apart so that neighbours do not
+    /// repeat it.
+    pub phase: f32,
 }
 
 /// A scene's decals and their kinds.
@@ -78,6 +88,8 @@ struct GpuDecal {
     rotation: [f32; 4],
     half: [f32; 3],
     repeat: f32,
+    phase: f32,
+    pad: [u32; 3],
 }
 
 /// Mirrors `DecalKind` in `meshlet.slang`.
@@ -88,8 +100,8 @@ struct GpuDecalKind {
     /// The sampler: anisotropic, clamped (a stamp) or repeating along `u` (a strip).
     sampler: u32,
     depth_fade: f32,
-    /// 1 for a strip: its texture repeats along `u`, each decal from a phase of its own.
-    strip: u32,
+    /// A row decal's material row, `u32::MAX` for a colour decal.
+    row: u32,
     tint: [f32; 4],
     facing: [f32; 4],
 }
@@ -179,6 +191,8 @@ impl DecalSet {
                 rotation: d.rotation.normalize().to_array(),
                 half: d.half.max(Vec3::splat(1e-3)).to_array(),
                 repeat: d.repeat.max(1e-3),
+                phase: d.phase,
+                pad: [0; 3],
             })
             .collect();
         let kinds: Vec<GpuDecalKind> = self
@@ -189,7 +203,7 @@ impl DecalSet {
                 // Wrap modes (u, v): a strip repeats along u; both clamp on a stamp.
                 sampler: ANISOTROPIC_WRAP + 3 * u32::from(!k.strip) + 1,
                 depth_fade: k.depth_fade.clamp(0.0, 1.0),
-                strip: u32::from(k.strip),
+                row: k.row.map_or(u32::MAX, |r| r.0),
                 tint: k.tint,
                 facing: [k.facing[0], k.facing[1], 0.0, 0.0],
             })
@@ -223,6 +237,7 @@ mod tests {
             priority,
             depth_fade: 0.2,
             facing: [0.2, 0.5],
+            row: None,
         }
     }
 
@@ -233,6 +248,7 @@ mod tests {
             half: Vec3::new(1.0, 0.2, 1.0),
             kind,
             repeat: 1.0,
+            phase: 0.0,
         }
     }
 

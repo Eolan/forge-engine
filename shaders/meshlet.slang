@@ -327,7 +327,14 @@ public struct Decal
     public float4 rotation; // a unit quaternion, xyz w
     public float3 half;     // the box's half sizes
     public float repeat;    // a strip's repeats along x
+    public float phase;     // where a strip's texture starts along x, in repeats
+    public float pad0;
+    public float pad1;
+    public float pad2;
 };
+
+// A row decal's `DecalKind::row` for a colour decal.
+static const uint DECAL_NO_ROW = 0xFFFFFFFFu;
 
 // A kind of decal: its texture (colour premultiplied by alpha), its sampler (a stamp's clamps, a
 // strip's repeats along u), how it fades by depth and by the surface's facing, and its tint.
@@ -336,7 +343,7 @@ public struct DecalKind
     public uint texture;
     public uint sampler;
     public float depth_fade; // the share of the box's depth it fades over towards both faces
-    public uint strip;       // 1: its texture repeats along u, each decal from a phase of its own
+    public uint row;         // a row decal's material row, its texture's alpha the mask (~0: a colour decal)
     public float4 tint;      // rgb times its colour, a its strength
     public float4 facing;    // x: the cosine to the box's y under which it is gone, y: over which whole
 };
@@ -3514,12 +3521,14 @@ uint2 column_run(uint4* slots, uint slot_mask, float cell, float3 world)
 }
 
 // The decals over surface `s` (D-074, forge_render::decals): the decals of its grid column, in
-// painter's order, whose box holds it, each blended into `albedo` as its texture's premultiplied
-// colour. A decal fades out towards its box's faces along its axis, and on the surfaces that do
-// not face that axis (the ground under a wall's grime). Its texture's gradients are its box's
-// axes dotted with the surface's analytic change per pixel, scaled as the rows' textures are
-// (`texture_lod_scale`): no halo where the surface ends, its mips and anisotropy whole.
-void apply_decals(Frame* f, Surface s, inout float3 albedo)
+// painter's order, whose box holds it. A colour decal blends into `albedo` its texture's
+// premultiplied colour; a row decal (`rows`: the layered class) its row's surface, colour and
+// normal (`n`), by its texture's alpha, as a layer of the ground. A decal fades out towards its
+// box's faces along its axis, and on the surfaces that do not face that axis (the ground under a
+// wall's grime). Its texture's gradients are its box's axes dotted with the surface's analytic
+// change per pixel, scaled as the rows' textures are (`texture_lod_scale`): no halo where the
+// surface ends, its mips and anisotropy whole.
+void apply_decals(Frame* f, Surface s, inout float3 albedo, inout float3 n, bool rows)
 {
     DecalGrid* g = f[0].decals;
     if (g == nullptr)
@@ -3533,7 +3542,7 @@ void apply_decals(Frame* f, Surface s, inout float3 albedo)
         if (any(abs(local) > d.half))
             continue;
         DecalKind k = g[0].kinds[d.kind];
-        if (k.texture == TEXTURE_NONE)
+        if (k.texture == TEXTURE_NONE || (k.row != DECAL_NO_ROW && !rows))
             continue;
         float facing = smoothstep(k.facing.x, k.facing.y, dot(s.n, quat_turn(d.rotation, float3(0.0, 1.0, 0.0), false)));
         float depth = saturate((d.half.y - abs(local.y)) / max(d.half.y * k.depth_fade, 1e-4));
@@ -3541,14 +3550,30 @@ void apply_decals(Frame* f, Surface s, inout float3 albedo)
         if (strength <= 0.0)
             continue;
         float2 scale = float2(d.repeat, 1.0) / (2.0 * d.half.xz);
-        // A strip starts its texture at a place of its own, so neighbouring walls do not repeat it.
-        float phase = k.strip != 0u ? frac(float(index) * 0.618034) : 0.0;
-        float2 uv = (local.xz / (2.0 * d.half.xz) + 0.5) * float2(d.repeat, 1.0) + float2(phase, 0.0);
+        float2 uv = (local.xz / (2.0 * d.half.xz) + 0.5) * float2(d.repeat, 1.0) + float2(d.phase, 0.0);
         float2 gx = quat_turn(d.rotation, mul(s.frame, s.dpdx), true).xz * scale * f[0].texture_lod_scale;
         float2 gy = quat_turn(d.rotation, mul(s.frame, s.dpdy), true).xz * scale * f[0].texture_lod_scale;
         float4 t = sample_image_grad(k.texture, k.sampler, uv, gx, gy);
-        albedo = albedo * (1.0 - t.a * strength) + t.rgb * k.tint.rgb * strength;
+        if (k.row == DECAL_NO_ROW)
+        {
+            albedo = albedo * (1.0 - t.a * strength) + t.rgb * k.tint.rgb * strength;
+            continue;
+        }
+        float mask = t.a * strength;
+        if (mask <= 0.0)
+            continue;
+        float3 row_albedo, row_n;
+        standard_surface(f[0].materials[k.row], s, row_albedo, row_n);
+        albedo = lerp(albedo, row_albedo * k.tint.rgb, mask);
+        n = normalize(lerp(n, row_n, mask));
     }
+}
+
+// `apply_decals` for a class without row decals: their colour alone.
+void apply_decals(Frame* f, Surface s, inout float3 albedo)
+{
+    float3 n = s.n;
+    apply_decals(f, s, albedo, n, false);
 }
 
 // The albedo and the normal a standard row gives the surface: the row's two colours mixed by
@@ -4083,7 +4108,7 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
                 specular_power = lerp(a.specular_power, b.specular_power, blend);
         }
         albedo = lerp(albedo * tint, body.rgb, body.a);
-        apply_decals(f, s, albedo);
+        apply_decals(f, s, albedo, n, true);
     }
     float3 shadow = s.shadow;
     if (s.shore != nullptr)

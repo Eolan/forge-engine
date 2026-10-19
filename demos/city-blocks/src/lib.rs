@@ -482,8 +482,8 @@ pub struct Args {
     /// A/B; the city plan's forest).
     #[arg(long)]
     pub leaf_probes: bool,
-    /// No decals (D-074): the city plan's walls without the grime at their feet (the decals'
-    /// A/B, for their look and their cost in the resolve).
+    /// No decals (D-074): the city plan's walls without the grime at their feet and its paving
+    /// without its stains (the decals' A/B, for their look and their cost in the resolve).
     #[arg(long)]
     pub no_decals: bool,
     /// No street lamps beyond the frame's set (#284): their pools go dark past the nearest

@@ -6478,7 +6478,21 @@ ground), one stain to 40 m² and one crack to 150 m², each at a turn and a size
 wholly on the paving (its middle and its corners: none spills onto a lawn); they mark the faces
 that look up only. The village holds 1 210 decals with the grime. `shading/standard` without
 the decals (`--no-decals`) and with them: 0.816 → 0.863–0.869 ms on the house front, 0.905 →
-0.968–0.971 ms over the junction (two runs each way). Next: the row decals on the layered ground.
+0.968–0.971 ms over the junction (two runs each way).
+
+**Row decals** (2026-10-19): a kind with a `row` (`DecalKind::row`) takes only its texture's alpha,
+a mask over that material row: where it masks, the surface takes the row's colour and normal
+(`standard_surface` of the row), as a layered ground's layer; the layered class alone draws them
+for now (`apply_decals(…, rows)`), the other classes skip them. A strip's texture now starts at its
+decal's own `Decal::phase`, so a run of strips along a curve goes on from one to the next (the
+grime's phases are the same as before: the village's twelve views 0 px from the accepted set, and
+`shading/standard` the same within noise). **The first use tried, and left out:** the island's
+rivers' wet margins, a ragged strip of the lake bed's mud along each edge of each river (60 281
+strips, `shading/layered` +0.04 ms at the mouth, +0.17 ms up the steep valley). One row does not
+suit every bank: a dark mud line ran along the sand at the mouth and over the bars where two
+rivers meet, and flat mud covered the steep stream's gravel. A river's edge wants wetness on
+whatever its bank is (as the shore's swash), not another row; row decals wait for a feature drawn
+in one material (a track, a worn path, a patch of another layer).
 
 *(research: decals.md; D-007, D-013, D-021, D-026, D-028, D-047, D-065; issue #304)*
 

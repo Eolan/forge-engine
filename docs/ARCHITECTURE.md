@@ -237,7 +237,8 @@ The resolve is three kinds of pass:
   resolve's analytic derivatives (`SampleGrad`, no halo at depth edges). A kind is one
   premultiplied RGBA texture, clamped (a stamp) or repeating along `u` (a strip), fading out
   towards the box's faces and on the surfaces that do not face its axis. The city plan's kit
-  walls carry a grime strip at their feet.
+  walls carry a grime strip at their feet, its paving stains and cracks. A row decal masks a
+  material row in instead of a colour (the layered class only, D-074).
 
 **Dense clusters go to a software rasteriser** (issue #3). The cluster cull marks a cluster
 dense when it is in front of the near plane, under 64 pixels across and has fewer than two

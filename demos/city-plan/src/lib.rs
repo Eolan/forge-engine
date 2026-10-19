@@ -336,6 +336,7 @@ fn paving_marks(
                     half: Vec3::new(half_x as f32, 0.15, half_z as f32),
                     kind,
                     repeat: 1.0,
+                    phase: 0.0,
                 });
             }
         }
@@ -392,6 +393,8 @@ fn wall_foot_grime(
                         half: Vec3::new(length * 0.5, 0.3, 0.55),
                         kind: 0,
                         repeat: (length * 0.5).round().max(1.0),
+                        // Each strip from a place of its own: neighbouring walls do not repeat it.
+                        phase: (decals.len() as f32 * 0.618_034).fract(),
                     });
                 }
             }
@@ -6490,6 +6493,7 @@ impl Scenario for PlanScenario {
                 priority,
                 depth_fade: 0.5,
                 facing: [0.6, 0.85],
+                row: None,
             };
             builder.set_decals(forge_render::DecalSet {
                 kinds: vec![
@@ -6500,6 +6504,7 @@ impl Scenario for PlanScenario {
                         priority: 0,
                         depth_fade: 0.3,
                         facing: [0.3, 0.6],
+                        row: None,
                     },
                     stamp(stain, 1.0, 1),
                     stamp(cracks, 0.9, 2),
