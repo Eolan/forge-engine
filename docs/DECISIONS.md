@@ -6939,8 +6939,8 @@ best guess or data"):
     both;
   - a tile not built stops the path at the edge of the one built, and building it opens the
     way;
-  - two tiles built in 34 ms, the path in 25 ms over 76,420 places (hash maps: dense per-tile
-    arrays would be faster).
+  - two tiles built in 34 ms, the path in 8.5 ms over 76,420 places (dense arrays per tile,
+    made when the search first reaches a tile; 25 ms with hash maps).
 
 **The proof, the same day** (city-plan's `pursuers_get_into_a_house_by_its_door_or_through_its_windows`):
 - **The setup:** four pursuers on the street, 3 m before the first house with insides, go for

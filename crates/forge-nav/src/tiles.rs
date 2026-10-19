@@ -12,7 +12,7 @@
 //! - **Pulling straight** checks a line across tiles as on one field ([`Tiles::walkable_line`]).
 
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, BinaryHeap, HashMap};
+use std::collections::{BTreeMap, BinaryHeap};
 
 use glam::{Vec2, Vec3};
 
@@ -26,6 +26,8 @@ pub const TILE_MARGIN: u32 = 8;
 /// A place on the tiles: its tile and its index in that tile's field.
 pub type TilePlace = ((i32, i32), u32);
 type Node = TilePlace;
+/// A place in the search: its tile's slot among those built, and its index in that field.
+type Slot = (usize, u32);
 
 /// The walk field in tiles.
 #[derive(Clone, Debug)]
@@ -164,33 +166,67 @@ impl Tiles {
     pub fn path(&self, from: Vec3, to: Vec3, links: &[Link], budget: u32) -> Option<Path> {
         let start = self.place(from)?;
         let goal = self.place(to);
+        // The tiles built as slots, in their order: the search's places are (slot, place), its
+        // costs dense arrays per slot made when the search first reaches the slot.
+        let tiles: Vec<(i32, i32)> = self.fields.keys().copied().collect();
+        let fields: Vec<&Field> = self.fields.values().collect();
+        let slot_of = |t: (i32, i32)| tiles.binary_search(&t).ok();
+        let to_slot = |n: Node| (slot_of(n.0).expect("a built tile"), n.1);
+        let own = TILE_MARGIN..TILE_MARGIN + TILE_CELLS;
+        // As `owned`, by slots.
+        let owned = |sl: usize, s: u32| -> Option<(usize, u32)> {
+            let (i, j) = fields[sl].at[s as usize];
+            if own.contains(&i) && own.contains(&j) {
+                return Some((sl, s));
+            }
+            let p = fields[sl].point(s);
+            let other = slot_of(self.tile_of(p))?;
+            Some((other, fields[other].place(p)?))
+        };
+        let (c, m) = (i64::from(TILE_CELLS), i64::from(TILE_MARGIN));
+        let column = |(sl, s): (usize, u32)| {
+            let (i, j) = fields[sl].at[s as usize];
+            let t = tiles[sl];
+            (
+                i64::from(t.0) * c + i64::from(i) - m,
+                i64::from(t.1) * c + i64::from(j) - m,
+            )
+        };
         let target = (
             (to.x / self.cell).floor() as i64,
             (to.z / self.cell).floor() as i64,
         );
-        // The links' ends as nodes, both ways where they lead back.
-        let mut jumps: BTreeMap<Node, Vec<(Node, u32, usize)>> = BTreeMap::new();
+        let h = |n: (usize, u32)| Self::heuristic(column(n), target);
+        // The links' ends as places, both ways where they lead back.
+        let mut jumps: BTreeMap<Slot, Vec<(Slot, u32, usize)>> = BTreeMap::new();
         for (k, l) in links.iter().enumerate().filter(|(_, l)| l.enabled) {
             let (Some(a), Some(b)) = (self.place(l.a), self.place(l.b)) else {
                 continue;
             };
+            let (a, b) = (to_slot(a), to_slot(b));
             let cost = ((l.cost.max(0.0) * 1.4 / self.cell * 10.0).round() as u32).max(1);
             jumps.entry(a).or_default().push((b, cost, k));
             if l.both_ways {
                 jumps.entry(b).or_default().push((a, cost, k));
             }
         }
-        let mut cost: HashMap<Node, u32> = HashMap::new();
-        let mut came: HashMap<Node, (Node, u32)> = HashMap::new();
+        let mut cost: Vec<Vec<u32>> = vec![Vec::new(); tiles.len()];
+        let mut came: Vec<Vec<(u32, u32, u32)>> = vec![Vec::new(); tiles.len()];
+        let reached_at = |cost: &[Vec<u32>], (sl, s): (usize, u32)| {
+            cost[sl].get(s as usize).copied().unwrap_or(u32::MAX)
+        };
+        let (start, goal) = (to_slot(start), goal.map(to_slot));
+        cost[start.0] = vec![u32::MAX; fields[start.0].spans.len()];
+        came[start.0] = vec![(NONE, NONE, NONE); fields[start.0].spans.len()];
+        cost[start.0][start.1 as usize] = 0;
         let mut open = BinaryHeap::new();
-        cost.insert(start, 0);
-        let h0 = Self::heuristic(self.column(start), target);
-        open.push(Reverse((h0, start)));
-        let mut best = (h0, start);
+        open.push(Reverse((h(start), start.0, start.1)));
+        let mut best = (h(start), start);
         let (mut expanded, mut reached) = (0, false);
-        while let Some(Reverse((f, n))) = open.pop() {
-            let here = cost[&n];
-            if f > here + Self::heuristic(self.column(n), target) {
+        while let Some(Reverse((f, sl, s))) = open.pop() {
+            let n = (sl, s);
+            let here = reached_at(&cost, n);
+            if f > here + h(n) {
                 // An older entry, since reached more cheaply.
                 continue;
             }
@@ -202,32 +238,35 @@ impl Tiles {
                 break;
             }
             expanded += 1;
-            let h = Self::heuristic(self.column(n), target);
-            if (h, n) < best {
-                best = (h, n);
+            if (h(n), n) < best {
+                best = (h(n), n);
             }
-            let mut relax = |o: Node, step: u32, link: u32| {
-                if !self.fits(o) {
-                    return;
-                }
-                let c = here + step;
-                if cost.get(&o).is_none_or(|&old| c < old) {
-                    cost.insert(o, c);
-                    came.insert(o, (n, link));
-                    open.push(Reverse((c + Self::heuristic(self.column(o), target), o)));
-                }
-            };
-            let field = &self.fields[&n.0];
-            for (d, &o) in field.spans[n.1 as usize].next.iter().enumerate() {
+            let mut steps: Vec<((usize, u32), u32, u32)> = Vec::with_capacity(8);
+            for (d, &o) in fields[sl].spans[s as usize].next.iter().enumerate() {
                 if o == NONE {
                     continue;
                 }
-                if let Some(o) = self.owned(n.0, o) {
-                    relax(o, if d < 4 { 10 } else { 14 }, NONE);
+                if let Some(o) = owned(sl, o) {
+                    steps.push((o, if d < 4 { 10 } else { 14 }, NONE));
                 }
             }
             for &(b, c, k) in jumps.get(&n).map_or(&[][..], |v| &v[..]) {
-                relax(b, c, k as u32);
+                steps.push((b, c, k as u32));
+            }
+            for (o, step, link) in steps {
+                if !fields[o.0].fits(o.1) {
+                    continue;
+                }
+                if cost[o.0].is_empty() {
+                    cost[o.0] = vec![u32::MAX; fields[o.0].spans.len()];
+                    came[o.0] = vec![(NONE, NONE, NONE); fields[o.0].spans.len()];
+                }
+                let c = here + step;
+                if c < cost[o.0][o.1 as usize] {
+                    cost[o.0][o.1 as usize] = c;
+                    came[o.0][o.1 as usize] = (sl as u32, s, link);
+                    open.push(Reverse((c + h(o), o.0, o.1)));
+                }
             }
         }
         let end = if reached {
@@ -235,13 +274,16 @@ impl Tiles {
         } else {
             best.1
         };
-        let mut steps = vec![(end, NONE)];
+        let node = |(sl, s): (usize, u32)| (tiles[sl], s);
+        let mut steps = vec![(node(end), NONE)];
         let mut n = end;
         while n != start {
-            let Some(&(prev, link)) = came.get(&n) else {
+            let (psl, ps, link) = came[n.0][n.1 as usize];
+            if psl == NONE {
                 break;
-            };
-            steps.push((prev, link));
+            }
+            let prev = (psl as usize, ps);
+            steps.push((node(prev), link));
             n = prev;
         }
         steps.reverse();
