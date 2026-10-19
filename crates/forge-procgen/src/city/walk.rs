@@ -53,6 +53,8 @@ struct Grid {
     h: usize,
     /// Whether a walker's middle may stand in each cell.
     free: Vec<bool>,
+    /// Each cell's distance to the nearest blocked one, metres (0 where it is blocked).
+    dist: Vec<f64>,
     /// Whether the flood reached it.
     seen: Vec<bool>,
 }
@@ -214,6 +216,7 @@ fn grid(floor: &[DVec2], inner: &Interior, furniture: &[Placed], k: usize) -> Gr
         w,
         h,
         free: d.iter().map(|&v| v * CELL >= RADIUS).collect(),
+        dist: d.iter().map(|&v| v * CELL).collect(),
         seen: vec![false; w * h],
     }
 }
@@ -232,6 +235,67 @@ pub fn house(m: &Mass, s: &Structure) -> Option<Walk> {
     let inner = interior::house(m, s)?;
     let furniture = furnished(m, s, &inner);
     walk(m, s, &inner, &furniture)
+}
+
+/// How roomy house `m` is once built and furnished (#285: the owner's wider corridors, doors and
+/// rooms): for each room and each storey's hall, the widest circle free of walls, furniture and
+/// flights, metres (a wheelchair turns in 1.50 m); and how deep a strip 1.10 m wide stays clear
+/// straight in from the front door, metres (a hall 1.20 m wide between walls holds it). `None` where [`house`] has nothing to walk.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Comfort {
+    /// Each room's kind, storey, floor area (m²) and widest free circle (m).
+    pub rooms: Vec<(RoomKind, usize, f64, f64)>,
+    /// Each storey's hall's widest free circle, metres.
+    pub halls: Vec<f64>,
+    /// The clear depth behind the front door, metres (the law asks 1.70 m, 2.20 m where the door
+    /// opens towards the one coming in).
+    pub front: f64,
+}
+
+/// House `m`'s [`Comfort`], among the furniture [`furnished`] keeps.
+pub fn comfort(m: &Mass, s: &Structure) -> Option<Comfort> {
+    let inner = interior::house(m, s)?;
+    let furniture = furnished(m, s, &inner);
+    let thickness: Vec<f64> = s.walls.iter().map(|w| w.thickness).collect();
+    let floor = structure::floor(m, &thickness)?;
+    let front = s
+        .cores
+        .iter()
+        .find(|c| c.house)
+        .and_then(|c| s.openings.get(c.door))?;
+    let mut out = Comfort::default();
+    for k in 0..s.storeys.len() {
+        let g = grid(&floor, &inner, &furniture, k);
+        let widest = |outline: &[DVec2]| {
+            (0..g.dist.len())
+                .filter(|&i| geom::contains(outline, g.at(i)))
+                .map(|i| g.dist[i] * 2.0)
+                .fold(0.0, f64::max)
+        };
+        for r in inner.rooms.iter().filter(|r| r.storey == k) {
+            let area = geom::signed_area(&r.outline).abs();
+            out.rooms.push((r.kind, k, area, widest(&r.outline)));
+        }
+        out.halls.push(widest(&inner.hall));
+        if k == 0 {
+            // Step in along the strip until a cell across it is blocked.
+            let (p, inward) = door_inside(s, front);
+            let across = DVec2::new(inward.y, -inward.x);
+            let mut depth = 0.0;
+            'strip: while depth < 4.0 {
+                let q = p + inward * (depth + 0.05 + CELL * 0.5);
+                for j in -11..=11 {
+                    let c = q + across * (f64::from(j) * 0.05);
+                    if g.cell(c).is_none_or(|i| g.dist[i] <= 0.0) {
+                        break 'strip;
+                    }
+                }
+                depth += CELL;
+            }
+            out.front = depth;
+        }
+    }
+    Some(out)
 }
 
 /// The most pieces [`furnished`] takes out of a house.
@@ -466,6 +530,74 @@ pub fn map(m: &Mass, s: &Structure, k: usize) -> Option<String> {
 mod tests {
     use super::super::{example, structure, village};
     use super::*;
+
+    /// How roomy the village's houses are as built and furnished (#285), by room kind: the widest
+    /// free circle's least, median and share of 1.50 m or more, the floor areas, the halls and
+    /// the clear depth behind the front doors: `cargo test --release -p forge-procgen
+    /// comfort_survey -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn comfort_survey() {
+        let size = 600.0;
+        let site = example::site(size, 10.0);
+        let v = village::village(&site, &village::params(size), 1);
+        let structures = structure::structures(&v.plan, &v.masses);
+        let all: Vec<Comfort> = v
+            .masses
+            .iter()
+            .zip(&structures)
+            .filter_map(|(m, s)| comfort(m, s))
+            .collect();
+        let line = |name: &str, mut x: Vec<f64>, at_least: f64| {
+            x.sort_by(f64::total_cmp);
+            if x.is_empty() {
+                return;
+            }
+            let share = x.iter().filter(|&&v| v >= at_least).count() as f64 / x.len() as f64;
+            println!(
+                "{name}: {} of them, least {:.2}, median {:.2}, most {:.2}; {:.0} % at least {at_least}",
+                x.len(),
+                x[0],
+                x[x.len() / 2],
+                x[x.len() - 1],
+                share * 100.0
+            );
+        };
+        println!("{} houses with insides", all.len());
+        let mut kinds: Vec<RoomKind> = Vec::new();
+        for r in all.iter().flat_map(|c| c.rooms.iter()) {
+            if !kinds.contains(&r.0) {
+                kinds.push(r.0);
+            }
+        }
+        for kind in kinds {
+            let rooms: Vec<&(RoomKind, usize, f64, f64)> = all
+                .iter()
+                .flat_map(|c| c.rooms.iter())
+                .filter(|r| r.0 == kind)
+                .collect();
+            line(
+                &format!("{kind:?}, free circle (m)"),
+                rooms.iter().map(|r| r.3).collect(),
+                1.5,
+            );
+            line(
+                &format!("{kind:?}, floor (m²)"),
+                rooms.iter().map(|r| r.2).collect(),
+                10.5,
+            );
+        }
+        line(
+            "halls, free circle (m)",
+            all.iter().flat_map(|c| c.halls.iter().copied()).collect(),
+            1.5,
+        );
+        line(
+            "behind the front door, a 1.10 m strip clear (m)",
+            all.iter().map(|c| c.front).collect(),
+            2.2,
+        );
+    }
 
     /// Prints the walk grid of the village's house `FORGE_WALK_HOUSE` on storey
     /// `FORGE_WALK_STOREY` (0 by default): `cargo test -p forge-procgen walk_map -- --ignored
