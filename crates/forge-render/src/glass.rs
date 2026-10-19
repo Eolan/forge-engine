@@ -30,6 +30,9 @@ use crate::meshlet::RayRequests;
 use crate::sky::SkyFrame;
 use crate::taa::HDR_FORMAT;
 
+/// A pane corner's [`GlassPanes::lamp`] when its glow fades in by distance.
+pub const NO_LAMP: u32 = u32::MAX;
+
 /// The format of the ray requests (the water's).
 const REQUEST_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 
@@ -43,6 +46,12 @@ pub struct GlassPanes {
     /// Each corner's room's glow seen through the pane when the room is lit, cd/m² (zero for a
     /// dark room): what the frame's lamps no longer light farther away ([`GlassLook::glow`]).
     pub glow: Vec<[f32; 3]>,
+    /// Each corner's room's lamp (#284): an index into the lamps the frames light with
+    /// ([`crate::MeshletScene::set_lamps`]) whose share the frame leaves unlit
+    /// ([`Glass::set_unlit`]) lights the glow, so a room shows its glow exactly where the frame's
+    /// lamps no longer light it; [`NO_LAMP`] (or none given) for a glow faded in by distance
+    /// ([`GlassLook::glow`]).
+    pub lamp: Vec<u32>,
 }
 
 impl GlassPanes {
@@ -66,7 +75,8 @@ pub struct GlassLook {
     /// The share reflected at normal incidence (Fresnel's F0), rising towards 1 at grazing
     /// angles.
     pub reflectance: f32,
-    /// Metres from the camera over which a lit room's glow fades in ([`GlassPanes::glow`]),
+    /// Metres from the camera over which a lit room's glow fades in on a pane without a room lamp
+    /// ([`GlassPanes::glow`], [`GlassPanes::lamp`]),
     /// where the frame's lamps ([`crate::lamps::nearest`]) stop lighting the rooms.
     pub glow: [f32; 2],
 }
@@ -114,14 +124,14 @@ struct GpuGlassFrame {
     sky_scale: f32,
     exposure: f32,
     depth: u32,
-    pad: u32,
+    unlit_count: u32,
     width: f32,
     height: f32,
     pad2: [u32; 2],
     vertices: u64,
     sky: u64,
     sky_light: u64,
-    pad4: u64,
+    unlit: u64,
 }
 
 const _: () = assert!(std::mem::size_of::<GpuGlassFrame>() == 160);
@@ -136,6 +146,10 @@ pub struct Glass {
     draw: Pipeline,
     /// Per frame slot: the frame's block, written by the CPU.
     frames: Vec<Buffer>,
+    /// Per frame slot: the share of each lamp the frame leaves unlit ([`Self::set_unlit`]).
+    unlit: Vec<Buffer>,
+    /// How many lamps those hold: the panes' greatest lamp index and one.
+    unlit_count: u32,
 }
 
 impl Glass {
@@ -183,12 +197,38 @@ impl Glass {
             .iter()
             .zip(&panes.normals)
             .zip(&panes.glow)
-            .map(|((p, n), g)| GpuGlassVertex {
+            .enumerate()
+            .map(|(i, ((p, n), g))| GpuGlassVertex {
                 position: p.extend(1.0).to_array(),
                 normal: n.extend(0.0).to_array(),
-                glow: [g[0], g[1], g[2], 0.0],
+                glow: [
+                    g[0],
+                    g[1],
+                    g[2],
+                    f32::from_bits(panes.lamp.get(i).copied().unwrap_or(NO_LAMP)),
+                ],
             })
             .collect();
+        let unlit_count = panes
+            .lamp
+            .iter()
+            .filter(|&&l| l != NO_LAMP)
+            .max()
+            .map_or(0, |&l| l + 1);
+        let unlit = (0..FRAMES_IN_FLIGHT)
+            .map(|i| {
+                let buffer = device.create_buffer(BufferDesc {
+                    size: u64::from(unlit_count.max(4)) * 4,
+                    usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+                    location: MemoryLocation::CpuToGpu,
+                    category: MemoryCategory::Frame,
+                    name: &format!("glass unlit lamps {i}"),
+                })?;
+                // Until a frame says otherwise, every lamp's light is the glow's.
+                buffer.write(0, &vec![1.0_f32; unlit_count as usize]);
+                Ok(buffer)
+            })
+            .collect::<Result<_>>()?;
         let vertices = device.create_buffer_with_data(
             &corners,
             vk::BufferUsageFlags::STORAGE_BUFFER,
@@ -213,7 +253,23 @@ impl Glass {
             requests: requests?,
             draw: draw?,
             frames,
+            unlit,
+            unlit_count,
         })
+    }
+
+    /// The share of each lamp's light frame `slot` leaves unlit ([`crate::lamps::unlit`]), by
+    /// the lamps' indices in the frame's list: a pane whose room's lamp it is
+    /// ([`GlassPanes::lamp`]) glows with that share of its room's light. A pane's lamp past the
+    /// end of `unlit` is taken as unlit.
+    pub fn set_unlit(&self, slot: FrameSlot, unlit: &[f32]) {
+        let mut shares = vec![1.0_f32; self.unlit_count as usize];
+        for (s, &u) in shares.iter_mut().zip(unlit) {
+            *s = u;
+        }
+        if !shares.is_empty() {
+            self.unlit[slot.index].write(0, &shares);
+        }
     }
 
     /// Triangles drawn.
@@ -279,14 +335,14 @@ impl Glass {
             sky_scale: params.sky_scale,
             exposure: params.exposure,
             depth: 0,
-            pad: 0,
+            unlit_count: self.unlit_count,
             width: extent.width as f32,
             height: extent.height as f32,
             pad2: [0; 2],
             vertices: self.vertices.address(),
             sky: sky.address(),
             sky_light: sky.light.address,
-            pad4: 0,
+            unlit: self.unlit[slot.index].address(),
         };
         frame_buffer.write(0, &[gpu]);
         // The frame's depth by its sampled handle, known once the graph runs.

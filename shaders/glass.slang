@@ -11,7 +11,8 @@
 // - `glass/draw`: every pane over what is behind it, premultiplied: the room dimmed by what the
 //   glass lets through, the sky in the mirror direction added by the Fresnel term, hazed as the
 //   compose hazes the rest. A lit room's glow fades in with distance, where the frame's lamps
-//   (`lamps::nearest`) no longer light the room behind it.
+//   (`lamps::nearest`) no longer light the room behind it: by its room lamp's share the frame
+//   leaves unlit (#284), or by distance for a pane without one.
 // Both test the frame's depth themselves (the glass writes none: TAA reprojects the room through
 // it by the room's own depth).
 
@@ -23,12 +24,17 @@ import sh;
 // Below this weight a mirror ray changes too little to trace (the water's).
 static const float REQUEST_MIN_WEIGHT = 0.001;
 
+// A window's reveal over its opening's width: seen aslant, the reveal's sides fill the pane and
+// less of the room shows (#284: a lit room's glow from afar, matched against the rooms as drawn).
+static const float REVEAL_DEPTH = 0.5;
+
 // Must match GpuGlassVertex in glass.rs: a triangle's corner, three to a triangle.
 struct GlassVertex
 {
     float4 position; // xyz: the scene's frame, metres
     float4 normal;   // xyz: unit; either side is drawn
-    float4 glow;     // rgb: a lit room's light through the pane, cd/m² (0: a dark room)
+    float4 glow;     // rgb: a lit room's light through the pane, cd/m² (0: a dark room); w: its
+                     // room's lamp, an index into `GlassFrame::unlit` (as bits; ~0: none, #284)
 };
 
 // Must match GpuGlassFrame in glass.rs.
@@ -42,7 +48,7 @@ struct GlassFrame
     float sky_scale;      // pre-exposed luminance of a unit of the sky's table
     float exposure;       // pre-exposed per cd/m²
     uint depth;           // the frame's depth (sampled)
-    uint pad;
+    uint unlit_count;     // the lamps `unlit` holds
     float width;
     float height;
     uint pad2;
@@ -50,7 +56,7 @@ struct GlassFrame
     GlassVertex* vertices;
     Sky* sky;             // the sky's frame block, for the haze
     float4* sky_light;    // the sky's irradiance, then its table's up and forward (sky.slang)
-    uint64_t pad4;
+    float* unlit;         // the share of each lamp's light the frame leaves unlit (glass.rs, `set_unlit`)
 };
 
 struct GlassPush
@@ -66,7 +72,7 @@ struct GlassVaryings
     float4 position : SV_Position;
     float3 rel : REL;       // camera-relative, metres
     float3 normal : NORMAL;
-    float3 glow : GLOW;
+    float4 glow : GLOW;     // rgb: the glow, its lamp's unlit share in; w: 1 where a lamp drives it
 };
 
 [shader("vertex")]
@@ -79,7 +85,12 @@ GlassVaryings vert_main(uint vertex : SV_VertexID)
     o.position = mul(f[0].view_proj, float4(rel, 1.0));
     o.rel = rel;
     o.normal = v.normal.xyz;
-    o.glow = v.glow.rgb;
+    // A pane whose room has a lamp glows with the share of its light the frame's lamps leave
+    // unlit (#284), at any distance; the others fade in by distance.
+    uint lamp = asuint(v.glow.w);
+    o.glow = float4(v.glow.rgb, 0.0);
+    if (lamp < f[0].unlit_count)
+        o.glow = float4(v.glow.rgb * f[0].unlit[lamp], 1.0);
     return o;
 }
 
@@ -98,6 +109,7 @@ struct GlassLight
     float fresnel;   // Schlick's
     float through;   // the share of what is behind that passes
     float distance;  // metres from the camera
+    float room;      // the share of the pane the room behind shows through, past its reveal
     float4 air;      // the haze between the camera and the pane
 };
 
@@ -115,6 +127,9 @@ GlassLight glass_light(GlassFrame* f, GlassVaryings input)
     o.fresnel = f0 + (1.0 - f0) * pow(1.0 - nv, 5.0);
     o.mirror = normalize(reflect(-v, n));
     o.through = (1.0 - o.fresnel) * f[0].look.x;
+    // The share of the pane through which the room shows rather than its reveal's sides.
+    float tan_view = sqrt(max(1.0 - nv * nv, 0.0)) / max(nv, 1e-3);
+    o.room = saturate(1.0 - REVEAL_DEPTH * tan_view);
     float2 uv = saturate(input.position.xy / float2(f[0].width, f[0].height));
     o.air = aerial_at(f[0].sky, uv, o.distance * 0.001);
     return o;
@@ -153,8 +168,8 @@ float4 draw_main(GlassVaryings input) : SV_Target0
     float3 forward = f[0].sky_light[SH_COEFFICIENTS + 1].xyz;
     float3 sky = sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, forward, l.mirror) * f[0].sky_scale;
     float alpha = 1.0 - l.through;
-    float fade = smoothstep(f[0].look.z, f[0].look.w, l.distance);
-    float3 glow = input.glow * (f[0].exposure * fade);
+    float fade = input.glow.w > 0.5 ? 1.0 : smoothstep(f[0].look.z, f[0].look.w, l.distance);
+    float3 glow = input.glow.rgb * (f[0].exposure * fade * l.room);
     // Over what is behind, by what the pane stops: its reflection and the glow, hazed, and the
     // haze in front of it that the blend would dim with the room.
     float3 colour = (l.fresnel * sky + glow) * l.air.a + l.air.rgb * (f[0].sky_scale * alpha);

@@ -1371,7 +1371,7 @@ impl PlanScenario {
             .collect();
         let mut seats = Vec::new();
         let far_lit = kit.as_ref().and_then(|k| k.homes_share);
-        let (mut kit_meshes, mut kit_instances, kit_report, glass) =
+        let (mut kit_meshes, mut kit_instances, kit_report, mut glass) =
             kit.map_or((Vec::new(), Vec::new(), None, Default::default()), |k| {
                 let instanced: usize = k
                     .instances
@@ -1628,8 +1628,9 @@ impl PlanScenario {
                 );
             }
         }
+        let placed = home_lamps;
         let mut home_lamps: Vec<forge_render::lamps::Lamp> =
-            home_lamps.iter().filter(|l| l.on).map(|l| l.lamp).collect();
+            placed.iter().filter(|l| l.on).map(|l| l.lamp).collect();
         if !home_lamps.is_empty() {
             eprintln!("the houses' lamps: {} on", home_lamps.len());
         }
@@ -1639,6 +1640,10 @@ impl PlanScenario {
             eprintln!("the street lamps: {} on", street.len());
             home_lamps.extend(street);
         }
+        // The clear panes glow with their rooms' own lamps (#284).
+        let lamped: std::collections::HashSet<u32> =
+            placed.iter().map(|l| l.lamp.regions[0]).collect();
+        room_lamps(&mut glass, &regions, &lamped, &home_lamps);
         // Chess tables round the fountain of each square of 0.15 ha or more without a landmark,
         // four 9 m from its middle on the diagonals, where they stand clear of the trunks and the
         // benches and inside the building lines; their players sit as the terraces' guests do,
@@ -3219,6 +3224,67 @@ struct PlacedLamp {
     /// How far its fitting reaches from the globe's middle: up to the ceiling, or back to the
     /// wall.
     reach: f32,
+}
+
+/// A lit room's luminance seen through its window from afar, per candela of its strongest lamp
+/// (#284), cd/m² per cd: what the resolve shows of the room when the frame lights that lamp,
+/// matched against every lamp lit (`--all-lamps`) at 80 m.
+const ROOM_GLOW: f32 = 0.02;
+
+/// The clear panes' rooms' lamps (#284): for each pane of `glass`, the room behind it among
+/// `regions` (30 cm off it, either side), and of `lamps` (the frame's, all on) the strongest whose
+/// own room it is and whose storey band holds the pane (a house lamp lights from 2.7 m under it
+/// to 0.8 m over it, `lamp_weight_in`: the hall is one region through every storey). The pane
+/// then glows with [`ROOM_GLOW`] of that lamp's light in its colour, by the share of it the frame
+/// leaves unlit (`GlassPanes::lamp`), at any distance; a pane of a room with a lamp (`lamped`, on
+/// or off) but none on in its band glows with nothing. A pane whose room has no lamp, or none is
+/// found, keeps its window's glow faded in by distance.
+fn room_lamps(
+    glass: &mut forge_render::GlassPanes,
+    regions: &[forge_render::RegionVolume],
+    lamped: &std::collections::HashSet<u32>,
+    lamps: &[forge_render::lamps::Lamp],
+) {
+    let mut by_room: std::collections::HashMap<u32, Vec<usize>> = std::collections::HashMap::new();
+    for (i, l) in lamps.iter().enumerate() {
+        if !l.outside() && l.regions[0] != forge_render::lamps::NO_REGION {
+            by_room.entry(l.regions[0]).or_default().push(i);
+        }
+    }
+    glass.lamp = vec![forge_render::NO_LAMP; glass.positions.len()];
+    for t in 0..glass.triangle_count() {
+        let corners = 3 * t..3 * t + 3;
+        let c = glass.positions[corners.clone()].iter().sum::<Vec3>() / 3.0;
+        let n = glass.normals[3 * t];
+        let Some(room) = [0.3_f32, -0.3]
+            .into_iter()
+            .map(|s| forge_render::region_at(regions, c + n * s))
+            .find(|h| h.region != 0 && h.kind != forge_render::RegionKind::Solid)
+            .map(|h| h.region)
+            .filter(|r| lamped.contains(r))
+        else {
+            continue;
+        };
+        let strongest = by_room
+            .get(&room)
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|&i| (-2.7..=0.8).contains(&(c.y - lamps[i].position.y)))
+            .max_by(|&a, &b| lamps[a].candela.total_cmp(&lamps[b].candela));
+        let (glow, lamp) = match strongest {
+            Some(i) => {
+                let l = &lamps[i];
+                let c = forge_render::lamps::lamp_rgb(l.kelvin) * (l.candela * ROOM_GLOW);
+                (c.to_array(), i as u32)
+            }
+            None => ([0.0; 3], forge_render::NO_LAMP),
+        };
+        for k in corners {
+            glass.glow[k] = glow;
+            glass.lamp[k] = lamp;
+        }
+    }
 }
 
 /// The lamps of the houses `halls` names ([`probe_regions`]: each house and its hall's region)

@@ -336,6 +336,19 @@ pub fn choose_shares(lamps: &[Lamp], camera: Vec3, choice: LampChoice) -> Vec<(u
     }
 }
 
+/// The share of each of `count` lamps' light a frame leaves unlit, by their indices: 1 less the
+/// share `kept` lights it with ([`choose_shares`]), 1 for a lamp not kept. A clear pane's room
+/// glows with its lamp's ([`crate::Glass::set_unlit`], #284).
+pub fn unlit(count: usize, kept: &[(usize, f32)]) -> Vec<f32> {
+    let mut out = vec![1.0_f32; count];
+    for &(i, share) in kept {
+        if let Some(u) = out.get_mut(i) {
+            *u = (1.0 - share).max(0.0);
+        }
+    }
+    out
+}
+
 /// The lamps a frame lights with: those whose light reaches within 50 m of the camera at
 /// `camera` (scene frame), [`MAX_LAMPS`] at most ([`LampChoice::Nearest`]).
 pub fn nearest(lamps: &[Lamp], camera: Vec3) -> Vec<GpuLamp> {
@@ -698,6 +711,8 @@ mod tests {
         // A street lamp switched off is lit by neither.
         let off: Vec<Lamp> = lamps[1..].to_vec();
         assert_eq!(far.weights(&off, &[])[0], 0.0);
+        // What the set leaves unlit of each lamp, for the clear glass's rooms.
+        assert_eq!(unlit(4, &[(1, 0.25), (3, 1.0)]), vec![1.0, 0.75, 1.0, 0.0]);
     }
 
     #[test]

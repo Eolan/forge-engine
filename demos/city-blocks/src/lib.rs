@@ -2123,9 +2123,15 @@ impl Demo for Gallery {
         } else {
             forge_render::lamps::LampChoice::Nearest
         };
-        self.kept_lamps = self
-            .scene
-            .set_lamps(frame.slot, &lamps, camera_in_scene, choice);
+        let shares = forge_render::lamps::choose_shares(&lamps, camera_in_scene, choice);
+        self.kept_lamps = self.scene.set_chosen_lamps(frame.slot, &lamps, &shares);
+        // The clear glass's rooms glow with what the frame leaves unlit of their lamps (#284).
+        if let Some(glass) = &self.glass {
+            glass.set_unlit(
+                frame.slot,
+                &forge_render::lamps::unlit(lamps.len(), &shares),
+            );
+        }
         // The scene's movers (#216): the lab's bodies between their last two ticks (#136).
         if let Some(running) = &mut self.running {
             running.movers(&mut self.scene);

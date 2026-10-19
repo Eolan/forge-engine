@@ -4948,8 +4948,9 @@ again (`demos/physics-lab.md`).
           and the haze are added.
         - The glass writes no depth, so TAA reprojects the room by its own depth.
       - **The far rooms' glow.** Beyond the frame's lamps (the 64 nearest), a lit room's glow
-        fades in on its panes from 30 to 60 m, at half the faked rooms' light, so the far houses
-        stay lit at night.
+        shows on its panes, so the far houses stay lit at night: at first faded in from 30 to
+        60 m at half the faked rooms' light; since #284, from the room's own lamp by the share of
+        it the frame leaves unlit (below).
       - **Cost** in the map check's views: `glass/requests` 0.011–0.018 ms, `glass/draw`
         0.004–0.006 ms, `glass/reflections` 0.035–0.141 ms (the street view with the most
         windows).
@@ -5184,8 +5185,20 @@ again (`demos/physics-lab.md`).
       over the path; `--all-lamps` takes 6.33 ms. Capture:
       `reports/2026-10-19/village-far-street-lamps.png` (80 m out, brightened four times; before,
       with, and every lamp shadowed).
-    - **Next** (#284's second direction): the windows' far glow against their real rooms, on a
-      path 30–60 m before a facade at a brighter exposure.
+    - **The windows' far glow from their rooms' own lamps** (#284's second direction). At 80 m
+      what still differed from `--all-lamps` was the windows: a pane's glow followed its
+      facade's per-window draw and its room's lamps the room's own, so far panes glowed white or
+      television-blue over dark rooms and stayed dark over lit ones. Now each clear pane takes
+      its room (the probes' regions, 30 cm either side) and that room's strongest lamp that is on
+      in its storey band (city-plan's `room_lamps`, `GlassPanes::lamp`): it glows with 0.02 cd/m²
+      a candela of that lamp's light, in its colour, times the share of it the frame leaves unlit
+      (`lamps::unlit`, `Glass::set_unlit`), at any distance; a room whose lamps are off stays
+      dark. Seen aslant, the glow shrinks with the share of the pane the room shows through past
+      a reveal half as deep as the opening is wide (`REVEAL_DEPTH`). Along the same path, the
+      light the windows differ by from `--all-lamps` at 60–100 m went 240–301 → 18–45 (the sum of
+      the differing pixels' linear light); the frame's cost is the same (`glass/draw` 0.006 ms).
+      Capture: `reports/2026-10-19/village-far-windows.png` (80 m out, ×3; the old glow, the
+      rooms' own, every lamp lit).
 
 ## D-066 — Pieces with sockets: one connector schema for generation, the anomaly check and player building ✅ (proposed 2026-10-16 on the owner's walk of #266; the owner's go the same evening)
 

@@ -866,8 +866,11 @@ mesh to test navigations inside the houses"):
     glass: 1 116 triangles in the village.
     - Each pane shows the room through what Fresnel lets pass, and reflects by its mirror ray:
       the street from outside, the room from inside.
-    - Past the frame's lamps, a lit room's glow fades in on its panes from 30 to 60 m, at half
-      the faked rooms' light: the houses across the green stay lit at night.
+    - Past the frame's lamps, a lit room's glow shows on its panes: its strongest lamp's light by
+      the share the frame leaves unlit, at any distance, less when seen aslant (#284; it faded in
+      from 30 to 60 m by its facade's draw before, not its room's lamps). A pane whose room has
+      no lamp still fades in from 30 to 60 m at half the faked rooms' light: the houses across
+      the green stay lit at night.
   - **Shimmer:** with a still camera under DLAA, frames 10 apart differ on 0.06 % of the pixels
     by day (as without the glass) and on 0.040 % at night (0.038 % without).
   - **Cost:** 0.05–0.16 ms in the map check's views (`docs/PROFILE.md`).

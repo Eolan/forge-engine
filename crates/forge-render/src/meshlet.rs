@@ -2548,13 +2548,25 @@ impl MeshletScene {
         choice: crate::lamps::LampChoice,
     ) -> Vec<crate::lamps::GpuLamp> {
         let shares = crate::lamps::choose_shares(lamps, camera, choice);
+        self.set_chosen_lamps(slot, lamps, &shares)
+    }
+
+    /// As [`Self::set_lamps`], with the lamps already chosen: `shares` as
+    /// [`crate::lamps::choose_shares`] gives them for `lamps` (whose shares the caller also hands
+    /// to the clear glass, [`crate::Glass::set_unlit`]).
+    pub fn set_chosen_lamps(
+        &self,
+        slot: FrameSlot,
+        lamps: &[crate::lamps::Lamp],
+        shares: &[(usize, f32)],
+    ) -> Vec<crate::lamps::GpuLamp> {
         let kept: Vec<crate::lamps::GpuLamp> = shares
             .iter()
             .map(|&(i, share)| crate::lamps::gpu_lamp(&lamps[i], share))
             .collect();
         // The street lamps beyond the set: the rest of each one's light (#284).
         if let Some(far) = &self.far_lamps {
-            far.shares[slot.index].write(0, &far.far.weights(lamps, &shares));
+            far.shares[slot.index].write(0, &far.far.weights(lamps, shares));
         }
         let lists = crate::lamps::lists(&kept);
         if !kept.is_empty() {
