@@ -4,7 +4,9 @@
 //! street or from the room.
 //!
 //! The caller hands over the panes once ([`GlassPanes`]: triangles in the scene's frame, each
-//! corner with its room's glow) and, every frame after the sky's compose and the water,
+//! corner with its room's glow and its pane's id), moves or hides a pane by its id when the game
+//! says ([`Glass::set_pane`], #325: a sash raised, a window smashed) and, every frame after the
+//! sky's compose and the water,
 //! [`Glass::draw`] declares two passes:
 //! - `glass/requests`: the nearest pane at each pixel asks for its mirror ray, which
 //!   [`crate::MeshletRenderer::trace_requested`] traces against the scene as it does the
@@ -17,6 +19,7 @@
 //! in the ray-traced scene: the sun, the probes' rays and the mirror rays pass the windows.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use bytemuck::{Pod, Zeroable};
 use forge_gpu::{
@@ -52,6 +55,10 @@ pub struct GlassPanes {
     /// lamps no longer light it; [`NO_LAMP`] (or none given) for a glow faded in by distance
     /// ([`GlassLook::glow`]).
     pub lamp: Vec<u32>,
+    /// Each corner's pane (#325): the id, from 0, by which the host moves or hides it at run
+    /// time ([`Glass::set_pane`]: a sash raised, a window smashed); none given, every corner is
+    /// pane 0.
+    pub pane: Vec<u32>,
 }
 
 impl GlassPanes {
@@ -127,7 +134,7 @@ struct GpuGlassFrame {
     unlit_count: u32,
     width: f32,
     height: f32,
-    pad2: [u32; 2],
+    panes: u64,
     vertices: u64,
     sky: u64,
     sky_light: u64,
@@ -150,7 +157,18 @@ pub struct Glass {
     unlit: Vec<Buffer>,
     /// How many lamps those hold: the panes' greatest lamp index and one.
     unlit_count: u32,
+    /// Each pane's transform (#325): three rows of a 3 × 4 matrix from the corners as given to
+    /// where they are drawn; all zero for a hidden pane.
+    panes: Vec<[f32; 12]>,
+    /// Per frame slot: the panes' transforms as that slot's frames read them.
+    pane_buffers: Vec<Buffer>,
+    /// The panes' edits so far, and per frame slot how many its buffer holds.
+    edits: u64,
+    written: Vec<AtomicU64>,
 }
+
+/// The identity as a pane's transform.
+const PANE_IDENTITY: [f32; 12] = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
 
 impl Glass {
     /// Compiles the passes and uploads `panes`.
@@ -200,7 +218,9 @@ impl Glass {
             .enumerate()
             .map(|(i, ((p, n), g))| GpuGlassVertex {
                 position: p.extend(1.0).to_array(),
-                normal: n.extend(0.0).to_array(),
+                normal: n
+                    .extend(f32::from_bits(panes.pane.get(i).copied().unwrap_or(0)))
+                    .to_array(),
                 glow: [
                     g[0],
                     g[1],
@@ -235,6 +255,21 @@ impl Glass {
             MemoryCategory::Geometry,
             "glass panes",
         )?;
+        let pane_count = panes.pane.iter().max().map_or(1, |&p| p as usize + 1);
+        let pane_rows = vec![PANE_IDENTITY; pane_count];
+        let pane_buffers = (0..FRAMES_IN_FLIGHT)
+            .map(|i| {
+                let buffer = device.create_buffer(BufferDesc {
+                    size: std::mem::size_of_val(pane_rows.as_slice()) as u64,
+                    usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+                    location: MemoryLocation::CpuToGpu,
+                    category: MemoryCategory::Frame,
+                    name: &format!("glass pane transforms {i}"),
+                })?;
+                buffer.write(0, &pane_rows);
+                Ok(buffer)
+            })
+            .collect::<Result<_>>()?;
         let frames = (0..FRAMES_IN_FLIGHT)
             .map(|i| {
                 device.create_buffer(BufferDesc {
@@ -255,7 +290,34 @@ impl Glass {
             frames,
             unlit,
             unlit_count,
+            panes: pane_rows,
+            pane_buffers,
+            edits: 0,
+            written: (0..FRAMES_IN_FLIGHT).map(|_| AtomicU64::new(0)).collect(),
         })
+    }
+
+    /// How many panes: the greatest id in [`GlassPanes::pane`] and one.
+    pub fn pane_count(&self) -> u32 {
+        self.panes.len() as u32
+    }
+
+    /// Moves pane `id` (#325) by `transform` from where its corners were given (the identity puts
+    /// it back), or hides it (`None`: a window smashed). The next frames draw it so, its mirror
+    /// rays and its glow following; an id past [`Self::pane_count`] changes nothing.
+    pub fn set_pane(&mut self, id: u32, transform: Option<Mat4>) {
+        let Some(rows) = self.panes.get_mut(id as usize) else {
+            return;
+        };
+        *rows = transform.map_or([0.0; 12], |m| {
+            let r = m.transpose();
+            let mut out = [0.0; 12];
+            out[..4].copy_from_slice(&r.x_axis.to_array());
+            out[4..8].copy_from_slice(&r.y_axis.to_array());
+            out[8..].copy_from_slice(&r.z_axis.to_array());
+            out
+        });
+        self.edits += 1;
     }
 
     /// The share of each lamp's light frame `slot` leaves unlit ([`crate::lamps::unlit`]), by
@@ -323,6 +385,12 @@ impl Glass {
             vk::ImageAspectFlags::DEPTH,
         ));
         let frame_buffer = &self.frames[slot.index];
+        // The panes' transforms, into this slot's copy when edits came since it was written.
+        let panes = &self.pane_buffers[slot.index];
+        if self.written[slot.index].load(Ordering::Relaxed) != self.edits {
+            panes.write(0, &self.panes);
+            self.written[slot.index].store(self.edits, Ordering::Relaxed);
+        }
         let gpu = GpuGlassFrame {
             view_proj: params.view_proj.to_cols_array(),
             camera: params.camera.extend(0.0).to_array(),
@@ -338,7 +406,7 @@ impl Glass {
             unlit_count: self.unlit_count,
             width: extent.width as f32,
             height: extent.height as f32,
-            pad2: [0; 2],
+            panes: panes.address(),
             vertices: self.vertices.address(),
             sky: sky.address(),
             sky_light: sky.light.address,

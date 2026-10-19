@@ -5026,6 +5026,23 @@ again (`demos/physics-lab.md`).
         0.004–0.006 ms, `glass/reflections` 0.035–0.141 ms (the street view with the most
         windows).
       - `--no-glass` shows the rooms without their panes.
+      - **Panes changed at run time** (#325, 2026-10-19), for a sash raised or a window
+        smashed:
+        - Each corner carries its pane's id (`GlassPanes::pane`; the village numbers a window
+          piece's glass as one pane).
+        - `Glass::set_pane(id, Some(transform) | None)` moves a pane from where it was given,
+          or hides it with a zero transform, under which its triangles cover nothing.
+        - The vertex shader applies the pane's 3 × 4 rows, so the mirror-ray requests and the
+          glow follow.
+        - The transforms (48 bytes a pane) are written into a frame slot's copy only on the
+          frames after an edit.
+        - A scene sends its edits through `Running::glass_edits`, in the world frame.
+        - **Checks:**
+          - With every pane at the identity, the map check's 13 images are unchanged
+            (0 pixels).
+          - `--glass-test` hides every other pane one second in and raises the rest 0.4 m. On
+            the first house's street front, the raised window loses its glass on its lowest
+            0.4 m, and the door's transom glass goes up behind the wall.
   - **RTXDI fetched (the owner's go, 2026-10-18):**
     - NVIDIA's `RTXDI-Library` 3.1 (commit f12037f, 2026-09-03) is in `rtxdi-sdk/`, ignored by git
       as `nrd-sdk/` is. It holds 68 files: HLSL includes for ReSTIR DI, GI and PT, ReGIR and the

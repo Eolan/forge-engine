@@ -2149,6 +2149,20 @@ impl Demo for Gallery {
         };
         let shares = forge_render::lamps::choose_shares(&lamps, camera_in_scene, choice);
         self.kept_lamps = self.scene.set_chosen_lamps(frame.slot, &lamps, &shares);
+        // The clear panes moved or hidden since the last frame (#325), from the world frame to
+        // the scene's.
+        if let (Some(glass), Some(running)) = (self.glass.as_mut(), self.running.as_mut()) {
+            let o = origin.to_f64();
+            for (id, transform) in running.glass_edits(time) {
+                let scene = transform.map(|m| {
+                    (glam::DMat4::from_translation(-o)
+                        * m.as_dmat4()
+                        * glam::DMat4::from_translation(o))
+                    .as_mat4()
+                });
+                glass.set_pane(id, scene);
+            }
+        }
         // The clear glass's rooms glow with what the frame leaves unlit of their lamps (#284).
         if let Some(glass) = &self.glass {
             glass.set_unlit(

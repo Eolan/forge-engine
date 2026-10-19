@@ -32,7 +32,8 @@ static const float REVEAL_DEPTH = 0.5;
 struct GlassVertex
 {
     float4 position; // xyz: the scene's frame, metres
-    float4 normal;   // xyz: unit; either side is drawn
+    float4 normal;   // xyz: unit; either side is drawn; w: its pane, an index into
+                     // `GlassFrame::panes` (as bits, #325)
     float4 glow;     // rgb: a lit room's light through the pane, cd/m² (0: a dark room); w: its
                      // room's lamp, an index into `GlassFrame::unlit` (as bits; ~0: none, #284)
 };
@@ -51,8 +52,7 @@ struct GlassFrame
     uint unlit_count;     // the lamps `unlit` holds
     float width;
     float height;
-    uint pad2;
-    uint pad3;
+    float4* panes;        // each pane's transform, three rows of a 3x4 matrix (glass.rs, `set_pane`, #325)
     GlassVertex* vertices;
     Sky* sky;             // the sky's frame block, for the haze
     float4* sky_light;    // the sky's irradiance, then its table's up and forward (sky.slang)
@@ -80,11 +80,19 @@ GlassVaryings vert_main(uint vertex : SV_VertexID)
 {
     GlassFrame* f = glass_push.frame;
     GlassVertex v = f[0].vertices[vertex];
-    float3 rel = v.position.xyz - f[0].camera.xyz;
+    // Where its pane is now (#325): moved, or hidden by a zero transform (every corner at one
+    // point, so the triangle covers nothing).
+    uint pane = asuint(v.normal.w) * 3;
+    float4 r0 = f[0].panes[pane];
+    float4 r1 = f[0].panes[pane + 1];
+    float4 r2 = f[0].panes[pane + 2];
+    float4 p = float4(v.position.xyz, 1.0);
+    float3 at = float3(dot(r0, p), dot(r1, p), dot(r2, p));
+    float3 rel = at - f[0].camera.xyz;
     GlassVaryings o;
     o.position = mul(f[0].view_proj, float4(rel, 1.0));
     o.rel = rel;
-    o.normal = v.normal.xyz;
+    o.normal = float3(dot(r0.xyz, v.normal.xyz), dot(r1.xyz, v.normal.xyz), dot(r2.xyz, v.normal.xyz));
     // A pane whose room has a lamp glows with the share of its light the frame's lamps leave
     // unlit (#284), at any distance; the others fade in by distance.
     uint lamp = asuint(v.glow.w);

@@ -557,6 +557,8 @@ pub struct PlanScenario {
     /// net floor area.
     holds: Vec<Occupancy>,
     walk_on_start: bool,
+    /// When to hide every other clear pane and raise the rest (`--glass-test`, #325), seconds.
+    glass_test: Option<f32>,
     /// The names the fingerposts' blades carry, a row of their atlas each.
     sign_names: Vec<String>,
     /// Seconds into the run at which to board the nearest tram (scripted rides).
@@ -2167,6 +2169,7 @@ impl PlanScenario {
             passage_note,
             holds: holds.clone(),
             walk_on_start: false,
+            glass_test: None,
             ride_after: None,
             games,
             stalls: stalls.iter().map(|&(at, _)| at).collect(),
@@ -2250,6 +2253,13 @@ impl PlanScenario {
     /// Walking from the start, in first person where the camera stands (Enter frees it).
     pub fn walking(mut self) -> Self {
         self.walk_on_start = true;
+        self
+    }
+
+    /// One second in, every other clear pane hidden and the rest raised 0.4 m: the check of
+    /// panes changed at run time (#325).
+    pub fn glass_test(mut self) -> Self {
+        self.glass_test = Some(1.0);
         self
     }
 
@@ -3036,7 +3046,10 @@ fn kit(
                 } else {
                     [0.0; 3]
                 };
+                // Each window's glass one pane (#325), numbered as laid out.
+                let pane = glass.pane.last().map_or(0, |&n| n + 1);
                 for &i in &p.indices {
+                    glass.pane.push(pane);
                     let (q, n) = (
                         Vec3::from(p.positions[i as usize]),
                         Vec3::from(p.normals[i as usize]),
@@ -7000,6 +7013,7 @@ impl Scenario for PlanScenario {
                 walls: walk::Walls::new(self.walls.clone(), self.crossings.clone()),
                 walker: None,
                 walk_on_start: self.walk_on_start,
+                glass_test: self.glass_test,
                 ride_at: self.ride_after.map(|s| self.clock + s),
                 riding: None,
                 screens: self
@@ -7042,6 +7056,8 @@ struct PlanRunning {
     /// The masses as walls, the walker among them, and whether it walks from the start.
     walls: walk::Walls,
     walker: Option<walk::Walker>,
+    /// When to hide every other clear pane and raise the rest (`--glass-test`, #325), seconds.
+    glass_test: Option<f32>,
     walk_on_start: bool,
     /// The population on foot round the camera, and where the camera last stood (x, z).
     crowd: Option<crowd::Crowd>,
@@ -7160,6 +7176,18 @@ impl Running for PlanRunning {
 
     fn glass(&self) -> forge_render::GlassPanes {
         self.glass.clone()
+    }
+
+    fn glass_edits(&mut self, time: f32) -> Vec<(u32, Option<Mat4>)> {
+        if self.glass_test.is_none_or(|at| time < at) {
+            return Vec::new();
+        }
+        self.glass_test = None;
+        let count = self.glass.pane.iter().max().map_or(0, |&p| p + 1);
+        let raised = Mat4::from_translation(Vec3::Y * 0.4);
+        (0..count)
+            .map(|k| (k, (k % 2 == 1).then_some(raised)))
+            .collect()
     }
 
     fn key_pressed(&mut self, code: KeyCode, camera: &FlyCamera) -> bool {

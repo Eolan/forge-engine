@@ -49,6 +49,10 @@ struct Cli {
     /// app's `--walk vx,vz` scripts the walk).
     #[arg(long)]
     walk_start: bool,
+    /// One second in, hide every other clear pane and raise the rest by 0.4 m: the check of
+    /// panes changed at run time (#325).
+    #[arg(long)]
+    glass_test: bool,
     /// Board the tram nearest the camera this many seconds in (C boards and gets off by hand).
     #[arg(long)]
     ride: Option<f64>,
@@ -477,6 +481,11 @@ fn main() -> anyhow::Result<()> {
         };
         let scenario = if cli.walk_start {
             scenario.walking()
+        } else {
+            scenario
+        };
+        let scenario = if cli.glass_test {
+            scenario.glass_test()
         } else {
             scenario
         };

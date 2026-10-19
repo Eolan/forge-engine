@@ -198,6 +198,13 @@ pub trait Running: Send {
     fn glass(&self) -> forge_render::GlassPanes {
         forge_render::GlassPanes::default()
     }
+    /// Its clear panes' edits since the last frame at `time` (the particles' clock, seconds;
+    /// #325), in the world frame: each pane's id ([`forge_render::GlassPanes::pane`]) and its
+    /// transform from where it was given (a sash raised), or `None` to hide it (a window
+    /// smashed). None by default.
+    fn glass_edits(&mut self, _time: f32) -> Vec<(u32, Option<glam::Mat4>)> {
+        Vec::new()
+    }
     /// Its particles' emitters and bursts at `time` (the splashes' clock, seconds), in the
     /// scene's frame (D-064): the effects by name through `particles`.
     fn particles(
