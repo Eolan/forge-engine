@@ -1597,7 +1597,9 @@ impl MeshletSceneBuilder {
     }
 
     /// Sets what sees instance `instance` (in the order added; #301): the picture, the shadow
-    /// rays, the probes' rays and the mirror rays. Everything by default.
+    /// rays, the probes' rays and the mirror rays. Everything by default. A mover's
+    /// ([`Self::reserve_movers`]) holds as it moves: with the probes seeing movers, the grass and
+    /// the characters can be left out of their rays while a door's leaf stays in.
     pub fn set_instance_visibility(&mut self, instance: usize, visibility: Visibility) {
         let record = &mut self.instances[instance];
         record.flags = (record.flags & !INSTANCE_VISIBILITY) | visibility.flags();
@@ -2659,7 +2661,10 @@ impl MeshletScene {
                     rotation: t.rotation.to_array(),
                     center: center.to_array(),
                     radius: bounds.w * t.scale,
-                    flags: if still(k) { INSTANCE_STILL } else { 0 },
+                    // Its visibility as the builder set it (`set_instance_visibility`: a mover
+                    // the probes' rays pass, #299), and whether it is still this frame.
+                    flags: (template.flags & INSTANCE_VISIBILITY)
+                        | if still(k) { INSTANCE_STILL } else { 0 },
                     ..*template
                 }
             })
