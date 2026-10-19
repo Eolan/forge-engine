@@ -4793,14 +4793,10 @@ float3 hit_lamps(Frame* f, RayHit hit, uint region, uint seed, bool probe)
     if (chosen >= count)
         return float3(0.0);
     Lamp lamp = f[0].lamps[chosen];
-    float3 d = lamp.position_radius.xyz - hit.position;
-    float length_to = length(d);
-    RayDesc ray;
-    ray.Origin = hit.position + hit.n * SHADOW_BIAS;
-    ray.Direction = d / max(length_to, 1e-6);
-    ray.TMin = 0.0;
-    ray.TMax = max(length_to - lamp.position_radius.w - 0.02, 0.0);
-    if (ray_blocked(f, ray))
+    // Aimed from where it starts (`lamp_ray`, #298): aimed from the hit and started SHADOW_BIAS
+    // off it, the ray ran beside the line to the lamp and ended up to 15 cm from its middle, in
+    // its globe or its fitting, and a room's light moved by up to an EV with the start.
+    if (ray_blocked(f, lamp_ray(lamp, hit.position, hit.n, SHADOW_BIAS, float3(0.0))))
         return float3(0.0);
     // Its colour of luminance 1 times every lamp's light: its own over its chance, w / total.
     float3 colour = lamp.colour_reach.rgb / max(dot(lamp.colour_reach.rgb, float3(0.2126, 0.7152, 0.0722)), 1e-9);

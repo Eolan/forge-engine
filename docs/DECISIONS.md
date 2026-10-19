@@ -5037,9 +5037,25 @@ again (`demos/physics-lab.md`).
       terrain keeps its sun rays' start. Meshes under the cut's budget are cut at full detail, so
       near the camera they start at 2 cm.
     - **Where:** the resolve's lamp rays and the penumbra filter's (`lamp_rays_main`). The
-      probes' and mirror rays' hits keep 15 cm for now. There the start changes the rooms'
-      indirect light by up to 1 EV, and not steadily: 8 cm halves a hall's, and 2 cm adds half a
-      stop. That is #298, to be understood before their start is chosen.
+      probes' and mirror rays' hits keep 15 cm. There the start changed the rooms' indirect
+      light by up to 1 EV, and not steadily: 8 cm halved a hall's, and 2 cm added half a stop
+      (#298, below).
+  - **A hit's lamp ray is aimed from where it starts** (#298, 2026-10-19).
+    - **The cause:** `hit_lamps` started its ray 15 cm off the hit along the normal but aimed it
+      along the line from the hit itself. The ray ran beside that line and ended up to 15 cm
+      from the lamp's middle, in its globe or its fitting, or past it. How often it ended inside
+      the fitting depended on the start, hence the swings. The resolve's rays (`lamp_ray`) were
+      always aimed from their start.
+    - **Now:** `hit_lamps` traces `lamp_ray` too.
+    - **Checked** (21:00, DLAA, a fixed EV, the probes' light alone):
+
+      | Start | The hall, before | The room, before | The hall, after | The room, after |
+      |---|---|---|---|---|
+      | 8 cm, against 15 | −1.00 EV | −0.55 EV | −0.003 EV | −0.005 EV |
+      | 2 cm, against 15 | +0.54 EV | +0.30 EV | −0.009 EV | −0.009 EV |
+
+      At 15 cm the hall is 0.55 EV and the room 0.31 EV brighter than before, the light the
+      fittings had taken. The start stays 15 cm, since it no longer matters.
     - **Checked** (old start against new, 21:00, DLAA):
       - the village's room and window recess: 5 500 and 4 400 px gain shadow (the window frame
         against its reveal, the table's legs under its top), 0.0007 EV or less;
