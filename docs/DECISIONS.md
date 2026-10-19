@@ -6340,6 +6340,28 @@ rules that build their tables in loops. The owner approved `mlua`'s download.
     - no `arg` table in vararg functions.
   - **Speed:** a 1.1 MB table ran in 25 ms, and the whole corpus in 1.2 s.
   - **Tests:** 16.
+- **Game scripts, built 2026-10-19** (#319, `forge_script::Game`, asked by an out-of-tree test
+  scene). D-072's second point, the first step:
+  - **Events:** `game.on(name, handler)`. The host sends events (`Game::send`) and ticks
+    (`Game::tick`, the `"tick"` event with the tick's number). Each event's handlers run in the
+    order registered.
+  - **Timers:** `game.after(seconds, f)`, `game.every(seconds, f)` and `game.cancel(n)` count the
+    host's ticks, never a clock. Timers due on one tick run in the order set, before its
+    handlers. A repeating timer is set again before its handler runs, so the handler can
+    cancel it.
+  - **Entities:** handles (`Entity`, userdata with `:id()`, equality and `tostring`), never
+    plain numbers. They come from events and from `game.find(kind)`.
+  - **Reading the world:** `game.get(entity, field)` and `game.find(kind)`, through the host's
+    `World` trait, answer only while an event runs. The world is lent through Luau's registry:
+    Luau resolves `game.find` once, when a handler loads (an import of its safe environment),
+    so swapping the table's field was never seen.
+  - **Effects:** `game.command(name, ...)` queues commands stamped with the tick
+    (`Game::commands`), for Rust systems to apply on every machine.
+  - **Caps:** each event runs under the script's caps, its budget of interrupts reset at each.
+    A handler over its budget ends with an error, and the game goes on.
+  - **Tests:** 4 (events in order, timers, entity handles through a world, a handler over its
+    budget).
+  - **Left:** the definition files for `luau-lsp`, an F1 zone per script, and hot reload.
 
 ## D-073 — Missions as data: the record, its evaluator and its two saves ✅ (2026-10-18, #287, D-072's first point)
 

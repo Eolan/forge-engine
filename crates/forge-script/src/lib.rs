@@ -22,11 +22,17 @@
 //!   goes on.
 //! - **Stub globals:** values and Rust functions the caller injects, so code written against
 //!   another engine's interface can partly run ([`Script::set`], [`Script::function`]).
+//! - **Game scripts** ([`Game`], #319): events, timers counted in ticks, entity handles, the
+//!   world read through the host's [`World`], effects as [`Command`]s stamped with the tick.
 //!
-//! Not here (D-072's answers): scripts in the game's tick, mods, missions calling Luau. Scripts
-//! never run inside the predicted step.
+//! Not here (D-072's answers): mods, missions calling Luau. Scripts never run inside the
+//! predicted step.
 
 #![forbid(unsafe_code)]
+
+mod game;
+
+pub use game::{Command, Entity, Game, World};
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashSet};
@@ -53,7 +59,9 @@ pub enum Data {
     List(Vec<Data>),
     /// Any other table: its entries by key.
     Map(BTreeMap<Key, Data>),
-    /// What has no data form: a function, a coroutine, a userdata; its type's name.
+    /// An entity's handle (#319, [`Entity`]): its stable id.
+    Entity(u64),
+    /// What has no data form: a function, a coroutine, another userdata; its type's name.
     Opaque(&'static str),
 }
 
@@ -472,6 +480,10 @@ fn to_data(v: Value, depth: usize, seen: &mut HashSet<usize>) -> Result<Data, St
                 Data::Map(map)
             }
         }
+        Value::UserData(ud) if ud.is::<Entity>() => match ud.borrow::<Entity>() {
+            Ok(e) => Data::Entity(e.0),
+            Err(_) => Data::Opaque("userdata"),
+        },
         other => Data::Opaque(other.type_name()),
     })
 }
@@ -489,6 +501,7 @@ fn number(n: f64) -> Data {
 fn to_lua(lua: &Lua, d: &Data) -> mlua::Result<Value> {
     Ok(match d {
         Data::Nil | Data::Opaque(_) => Value::Nil,
+        Data::Entity(id) => Value::UserData(lua.create_userdata(Entity(*id))?),
         Data::Bool(b) => Value::Boolean(*b),
         Data::Integer(i) => Value::Number(*i as f64),
         Data::Number(n) => Value::Number(*n),
