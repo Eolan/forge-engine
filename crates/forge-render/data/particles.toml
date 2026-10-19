@@ -96,3 +96,22 @@ curl = [0.4, 0.5]
 colour = [[5.0, 5.0, 5.0, 1.0], [2.5, 2.5, 2.5, 0.0]]
 draw = "glow"
 texture = "fire"
+
+# A flesh hit's spray (asked by an out-of-tree town for its rifle): dark red droplets in a burst
+# along the shot, falling, each kept where it meets the ground or a wall (no bounce) until it
+# fades: the spatter's first form, before decals (#304).
+[blood-spray]
+rate = 36.0
+life = [0.6, 1.2]
+radius = [0.03, 0.045]
+speed = [1.5, 3.5]
+cone = 35.0
+spread = 0.03
+gravity = 1.0
+drag = 0.3
+wind = 0.0
+curl = [0.0, 1.0]
+colour = [[0.1, 0.004, 0.003, 1.0], [0.06, 0.002, 0.002, 0.0]]
+draw = "smoke"
+burst = true
+bounce = 0.0

@@ -855,7 +855,14 @@ mod tests {
         let names: Vec<&str> = effects.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(
             names,
-            ["chimney-smoke", "footstep-dust", "embers", "sparks", "fire"]
+            [
+                "chimney-smoke",
+                "footstep-dust",
+                "embers",
+                "sparks",
+                "fire",
+                "blood-spray"
+            ]
         );
         assert!(effects[1].burst);
         assert_eq!(effects[2].draw, DrawKind::Glow);
@@ -866,6 +873,10 @@ mod tests {
         assert_eq!(GpuEffect::of(&effects[2]).draw, 1);
         // The fire: a glow drawn from the baked fire (flipbook 2).
         assert_eq!(GpuEffect::of(&effects[4]).draw, 1 | (2 << 8));
+        // The blood spray: lit droplets in a burst, meeting the scene and kept where they land
+        // (a bounce of 0, the flag set).
+        assert!(effects[5].burst);
+        assert_eq!(GpuEffect::of(&effects[5]).draw, 1 << 24);
     }
 
     #[test]

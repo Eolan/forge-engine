@@ -4781,6 +4781,17 @@ downloaded sets stay out unless the owner says otherwise.
     refused TAA's `R8_UNORM`: "Cannot have undefined format").
   - The smoke yard under `--dlaa` came out bit-identical with and without each one.
   - DLAA keeps its own handling of the particles. The attempt is not in the tree.
+- **A blood spray** (2026-10-19, asked by an out-of-tree town for its rifle's hits): `blood-spray`
+  in `data/particles.toml`.
+  - A burst of 36 dark red droplets, lit puffs 3–4.5 cm across, launched at 1.5–3.5 m/s within
+    35° of the shot.
+  - They fall under full gravity and stay where they meet the scene (a bounce of 0) until they
+    fade, in 0.6–1.2 s.
+  - Looked at in the smoke yard, a burst in place of a step's dust: they read as dark drops in
+    the air and on the ground.
+  - Appended last, so the other effects keep their indices: the smoke yard's captures are at
+    0 pixels.
+  - A spatter that stays waits for decals (#304).
 
 ## D-065 — Lighting the insides: lamps by clustered lists until ReSTIR's patents are settled ✅ (proposed 2026-10-16, #270; the owner's go 2026-10-17: both, compared)
 
