@@ -698,14 +698,18 @@ game (scenarios, missions, licensed assets) is a private repository, as the city
 2. **The check per commit:** the gate, then one seed, six views and a walked path against an
    accepted set, two minutes. The tiers run at milestones on the owner's word.
 3. **The core, in order:** geometry and LOD correctness; materials (trim sheets, decals,
-   layering: decals in the resolve from a world grid, D-074, #304, decided 2026-10-19; the
+   layering: decals in the resolve from a world grid, D-074, #304, built 2026-10-19: the walls'
+   grime, the paving's wear and cracks, row decals in the layered class; the
    ground's blend map after them); the forests' ladder and grass (D-075, #302, #300, decided
-   2026-10-19: the ladder record and dithered crossing, a fixed representation per tree for the
+   2026-10-19: the BLAS split done (#307), the mid level's crown shells cooked (`grown_shells`);
+   next the ladder record and dithered crossing (the plan on #302), a fixed representation per tree for the
    rays, the impostor baker, then the GPU grass pass); structures with interiors, lit by their
    lamps at night (D-065, #270: the houses' lamps as data, the rooms as light lists and the probes lit by them, built 2026-10-18; RTXDI
    to compare next); flora; the particle system (smoke, dust, fire, rain,
    sparks; D-064's step 1 built 2026-10-18, #271: emitters as data, the lab's smoke yard);
-   characters' animation; sound, fauna and networking, the last three in parallel sessions off
+   characters' animation (imported rigs' root frames, root motion, masked and additive layers
+   built 2026-10-19, #310, #311, #313; a state machine next, #312); sound, fauna and networking,
+   the last three in parallel sessions off
    the GPU: #267 sound, #268 networking, #269 flora and fauna.
 4. **Then the first scenario:** zombies (melee); later a base to infiltrate, a solo fight.
 5. **Rendering:** RT-first; DLSS 4's features, a neural radiance cache, path tracing when the
