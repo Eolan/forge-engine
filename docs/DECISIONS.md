@@ -6942,5 +6942,18 @@ best guess or data"):
   - two tiles built in 34 ms, the path in 25 ms over 76,420 places (hash maps: dense per-tile
     arrays would be faster).
 
+**The proof, the same day** (city-plan's `pursuers_get_into_a_house_by_its_door_or_through_its_windows`):
+- **The setup:** four pursuers on the street, 3 m before the first house with insides, go for
+  its hall on the house's field. They follow their paths, keep clear of one another, and cross
+  each window link as a carried crossing.
+- **Door open:** all four walk in.
+- **Doors shut:** all four climb in through the windows, one at a time, each window's far side
+  clear before the next. The least gap between two people walking is −6 mm.
+- **Two things the test taught:**
+  - A crossing's own exit, 0.35 m past the inner face, can fall where no place fits within a
+    metre (furniture under the window). An agent therefore lands where its path goes on:
+    `Follow::link_end` and `CrossingMotion::landing`.
+  - Four crossings at once landed on one point. A passage is taken one at a time.
+
 *(research: navigation-traversal.md, game-ai-ecosystems.md §2 and §7, animation.md §5; D-012,
 D-016, D-062; issues #90, #276, #311, #316, #317)*

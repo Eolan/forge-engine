@@ -144,6 +144,21 @@ impl CrossingMotion {
         })
     }
 
+    /// This crossing landing at `at` instead of past the far face: where an agent's path goes
+    /// on from the link (`Follow::link_end`), a place on its field. The top's time is set again;
+    /// a clip's ([`Self::with_root`]) comes after.
+    pub fn landing(mut self, at: Vec3) -> Self {
+        self.exit = at;
+        let before = (self.top - self.entry).dot(self.ahead).max(0.0);
+        let after = (self.exit - self.top).dot(self.ahead).max(0.0);
+        self.top_at = if before + after > 0.0 {
+            before / (before + after)
+        } else {
+            0.5
+        };
+        self
+    }
+
     /// This crossing played with a clip: its root path warped onto the targets, the top met at
     /// the path's `top_at`, over the clip's own seconds.
     pub fn with_root(mut self, root: RootPath, seconds: f32) -> Self {
@@ -303,6 +318,12 @@ mod tests {
             ..fence
         };
         assert!(CrossingMotion::over(&one_way, feet, 0.3, spec).is_none());
+        // Landing where a path goes on: there at the end, the top still over the middle.
+        let landed = CrossingMotion::over(&fence, feet, 0.3, spec)
+            .unwrap()
+            .landing(Vec3::new(-1.7, 0.0, -0.8));
+        assert_eq!(landed.at(landed.seconds), Vec3::new(-1.7, 0.0, -0.8));
+        assert!((landed.at(landed.top_at * landed.seconds) - landed.top).length() < 1e-5);
     }
 
     #[test]

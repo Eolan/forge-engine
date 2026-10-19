@@ -109,6 +109,13 @@ impl Follow {
         self.waiting
     }
 
+    /// The far end of the link it waits at: where its path goes on once the link is crossed, a
+    /// place on its field (a crossing lands there: `CrossingMotion::landing`).
+    pub fn link_end(&self) -> Option<Vec3> {
+        self.waiting?;
+        self.points.get(self.next + 1).copied()
+    }
+
     /// The game crossed the link it waited at: the agent is at the link's other end and goes on
     /// from there.
     pub fn crossed(&mut self) {
@@ -765,6 +772,7 @@ mod tests {
             crowd.step(dt, None);
         }
         assert_eq!(follow.at_link(), Some(5));
+        assert_eq!(follow.link_end(), Some(p(4.0, 0.0)));
         assert!(crowd.agents[0].position.distance(p(3.0, 0.0)) <= CORNER_REACH);
         // The game carries it over and says so.
         crowd.agents[0].position = p(4.0, 0.0);
