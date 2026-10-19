@@ -84,8 +84,13 @@ impl Clip {
     }
 
     /// How root joint `root` moved from `from` to `to` seconds into the clip (each held at its
-    /// ends), in the character's frame at `from`. With `from` after `to` the clip is taken as
-    /// looping: to its end, then on from its start.
+    /// ends), in the root's own frame at `from`: its turn about +Y then taken out. With `from`
+    /// after `to` the clip is taken as looping: to its end, then on from its start.
+    ///
+    /// The root's frame is the character's when its rest faces the way the character does. Some
+    /// rigs carry the travel on a root frame turned differently from clip to clip (along its `x`
+    /// in one, its `z` in the next): there, use the ground move's length along the way the
+    /// controller already knows (`translation.xz().length()`), or [`Clip::natural_speed`].
     pub fn root_motion(&self, skeleton: &Skeleton, root: usize, from: f32, to: f32) -> RootMotion {
         if from > to {
             let end = self.root_motion(skeleton, root, from, self.duration);
@@ -98,6 +103,20 @@ impl Clip {
             translation: y0.inverse() * (p1 - p0),
             turn: (y1 * y0.inverse()).normalize(),
         }
+    }
+
+    /// The speed root joint `root` travels at over the whole clip, metres a second along the
+    /// ground: its natural speed, which a host playing it at a controller's speed divides by
+    /// (a walk's loop played at the speed over it keeps its stride). 0 for a clip without
+    /// duration.
+    pub fn natural_speed(&self, skeleton: &Skeleton, root: usize) -> f32 {
+        if self.duration <= 0.0 {
+            return 0.0;
+        }
+        let travel = self
+            .root_motion(skeleton, root, 0.0, self.duration)
+            .translation;
+        Vec3::new(travel.x, 0.0, travel.z).length() / self.duration
     }
 }
 
@@ -217,6 +236,11 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_clip_s_natural_speed_is_its_ground_travel_over_its_duration() {
+        let (skeleton, clip) = walker();
+        assert!((clip.natural_speed(&skeleton, 0) - 2.0).abs() < 1e-5);
+    }
     #[test]
     fn the_twist_keeps_the_turn_about_the_vertical_only() {
         let yaw = Quat::from_rotation_y(0.7);
