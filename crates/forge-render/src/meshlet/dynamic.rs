@@ -649,6 +649,7 @@ impl SceneEditor {
                     BlasTriangles {
                         positions: &cut.positions,
                         indices: &cut.indices,
+                        opaque: cut.opaque,
                     }
                 })
                 .collect();

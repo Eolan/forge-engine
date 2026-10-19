@@ -82,6 +82,12 @@ impl GpuMaterial {
     pub fn jelly(&self) -> bool {
         self.class_index == forge_core::material::ShadingClass::Jelly.index()
     }
+
+    /// Whether the rays' query loop must see its triangles: cut out, or jelly (`masked_rows` in
+    /// `meshlet.slang`, #307).
+    pub fn ray_masked(&self) -> bool {
+        self.flags & MATERIAL_MASKED != 0 || self.jelly()
+    }
 }
 
 /// [`GpuMaterial`] flag: the textures are hex-tiled and offset per instance

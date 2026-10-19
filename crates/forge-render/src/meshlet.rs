@@ -1671,6 +1671,30 @@ impl MeshletSceneBuilder {
                     cut.shadow_start = terrain_start;
                 }
             }
+            // The sections each mesh's instances draw cut out or as jelly, whose triangles the
+            // rays' query loop must see (#307); the others go in an opaque geometry. A dynamic
+            // scene's meshes and the skinned ones keep one opaque geometry: their instances with
+            // such rows stay non-opaque as a whole (`tlas_instances_main`).
+            if self.dynamic.is_none() {
+                let mut masked = vec![0_u32; cuts.len()];
+                for inst in &self.instances {
+                    let Some(cut) = cuts.get(inst.mesh as usize) else {
+                        continue;
+                    };
+                    let rows = cut.sections.iter().max().map_or(0, |&s| s + 1).min(32);
+                    for s in 0..rows {
+                        let row = self.materials.get((inst.material + s) as usize);
+                        if row.is_some_and(GpuMaterial::ray_masked) {
+                            masked[inst.mesh as usize] |= 1 << s;
+                        }
+                    }
+                }
+                for (cut, masked) in cuts.iter_mut().zip(masked) {
+                    if masked != 0 && !cut.dynamic {
+                        cut.split(masked);
+                    }
+                }
+            }
             let ms = start.elapsed().as_secs_f64() * 1e3;
             let capacity = self.dynamic.map(|c| raytrace::RayCapacity {
                 meshes: c.meshes,

@@ -1216,6 +1216,38 @@ eight.
     rays are shadow rays. A dynamic scene sets it through `SceneEditor::set_instance_visibility`.
   - **Checks:** with every instance seen by everything, the captures are those of the previous
     build.
+- **A cut-out row's triangles alone reach the query loop** (#307, 2026-10-19; D-075's first
+  point).
+  - **Before:** an instance with a cut-out or jelly row was non-opaque as a whole
+    (`FORCE_NO_OPAQUE`), so a ray through a tree tested its wood and its crown's cores in the
+    candidate loop as well as its cards.
+  - **Now:** the scene build finds the sections each mesh's instances draw cut out or as jelly
+    (`Cut::split`). Their triangles go last in the cut, and the mesh's structure takes two
+    geometries: the others opaque, those not (`BlasTriangles::opaque`). A ray's triangle `p` in
+    the second geometry is the cut's `opaque_triangles + p` (`cut_triangle`).
+    - An instance whose rows are all opaque is forced opaque.
+    - One whose cut-out rows fall in the second geometry takes the geometries' own opacity.
+    - Any other (a dynamic scene's meshes, the skinned ones, a mover given a cut-out row after
+      the build) stays non-opaque as a whole.
+  - **Measured** (the village, best of three, against the build before):
+
+    | View | frame | `gi/probe rays` | `shadow/trace` |
+    |---|---|---|---|
+    | the main street, 15:00 | 4.63 → 4.57 ms | 1.49 → 1.38 | 0.340 → 0.344 |
+    | the green | 4.24 → 4.19 ms | 1.22 → 1.15 | 0.131 → 0.136 |
+    | the garden | 3.63 → 3.61 ms | 0.81 → 0.78 | 0.100 → 0.103 |
+    | the junction at 21:00 | 4.93 → 4.91 ms | 1.24 → 1.18 | 0.218 → 0.222 |
+
+    - **The probes gain most:** since #297 they meet no leaf card, and the kit's gratings' frames
+      no longer enter the loop.
+    - **The sun's and the lamps' rays lose 1–3 %** (the lamps' rays 0.308 → 0.320 ms at the
+      junction). Two geometries in one structure trace a little slower than one, and the
+      village's trees are mostly cards.
+  - **Checks:** the map check's 12 views 0 px; the day check's sentinels 0 px; the lab's models,
+    materials, slime, room and tank, the city's culled and orbit views and the island 0 px. Sponza
+    is the exception, 2 px by 3 levels: a probe keeps a quarter of the cut-out triangles it meets
+    by a hash of the triangle's index (`probe_leaf_kept`), and the cut-out triangles moved to the
+    end of the cut.
 
 ## D-030 — Ambient occlusion: GTAO from the depth, after XeGTAO, occluding the sky's light ✅ (2026-09-25)
 

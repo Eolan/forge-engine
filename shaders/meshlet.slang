@@ -302,8 +302,8 @@ public struct RtMesh
     public float shadow_start; // how far its surfaces' shadow rays start, object space (0: SHADOW_BIAS; terrain, #96)
     public uint first_uv;      // its first vertex's UV in `RtScene::uvs`, RT_NO_UVS without them (#171)
     public uint rows;          // the rows its instances draw with: its cut's highest section and one (#265)
-    public uint pad1;
-    public uint pad2;
+    public uint masked_sections;  // the sections in its structure's second geometry, not opaque, a bit each (#307)
+    public uint opaque_triangles; // its first geometry's triangles: the second's triangle p is the cut's opaque_triangles + p
 };
 
 static const uint RT_NO_UVS = 0xFFFFFFFFu;
@@ -4403,6 +4403,16 @@ uint ray_opacity(Frame* f)
     return (f[0].flags & (FLAG_CUTOUTS | FLAG_JELLY)) != 0 ? RAY_FLAG_NONE : RAY_FLAG_FORCE_OPAQUE;
 }
 
+// The triangle of instance `instance`'s cut a ray met: `primitive` of its structure's `geometry`,
+// the second's after the first's opaque triangles (#307, `RtMesh::opaque_triangles`).
+uint cut_triangle(Frame* f, uint instance, uint geometry, uint primitive)
+{
+    if (geometry == 0u)
+        return primitive;
+    RtScene* rs = f[0].rt_scene;
+    return rs[0].meshes[f[0].instances[instance].mesh].opaque_triangles + primitive;
+}
+
 // The row of triangle `primitive` of instance `instance`, as the rays' scene has it.
 Material candidate_row(Frame* f, uint instance, uint primitive)
 {
@@ -4459,7 +4469,7 @@ bool ray_blocked(Frame* f, RayDesc ray)
     q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), ray_opacity(f), g_ray_mask, ray);
     while (q.Proceed())
     {
-        if (shadow_candidate_kept(f, q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics()))
+        if (shadow_candidate_kept(f, q.CandidateInstanceID(), cut_triangle(f, q.CandidateInstanceID(), q.CandidateGeometryIndex(), q.CandidatePrimitiveIndex()), q.CandidateTriangleBarycentrics()))
             q.CommitNonOpaqueTriangleHit();
     }
     if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
@@ -4470,7 +4480,7 @@ bool ray_blocked(Frame* f, RayDesc ray)
     m.TraceRayInline(RaytracingAccelerationStructure(movers_tlas(f)), ray_opacity(f), g_ray_mask, ray);
     while (m.Proceed())
     {
-        if (shadow_candidate_kept(f, m.CandidateInstanceID(), m.CandidatePrimitiveIndex(), m.CandidateTriangleBarycentrics()))
+        if (shadow_candidate_kept(f, m.CandidateInstanceID(), cut_triangle(f, m.CandidateInstanceID(), m.CandidateGeometryIndex(), m.CandidatePrimitiveIndex()), m.CandidateTriangleBarycentrics()))
             m.CommitNonOpaqueTriangleHit();
     }
     return m.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
@@ -4502,7 +4512,7 @@ void jelly_depth_in(Frame* f, uint64_t tlas, RayDesc ray, inout float3 depth)
     {
         if (q.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE)
             continue;
-        Material mat = candidate_row(f, q.CandidateInstanceID(), q.CandidatePrimitiveIndex());
+        Material mat = candidate_row(f, q.CandidateInstanceID(), cut_triangle(f, q.CandidateInstanceID(), q.CandidateGeometryIndex(), q.CandidatePrimitiveIndex()));
         if (mat.class_index != MATERIAL_CLASS_JELLY)
             continue;
         float3 extinction = -log(clamp(mat.color_a, float3(1e-3), float3(1.0))) / JELLY_DEPTH + mat.scattering;
@@ -4554,16 +4564,16 @@ ClosestHit trace_closest(Frame* f, RayDesc ray, bool shadow = false, bool probe 
     q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), ray_opacity(f), g_ray_mask, ray);
     while (q.Proceed())
     {
-        if ((!probe || probe_leaf_kept(f, q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), seed)) && (shadow
-            ? shadow_candidate_kept(f, q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics())
-            : ray_candidate_kept(f, q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics())))
+        if ((!probe || probe_leaf_kept(f, q.CandidateInstanceID(), cut_triangle(f, q.CandidateInstanceID(), q.CandidateGeometryIndex(), q.CandidatePrimitiveIndex()), seed)) && (shadow
+            ? shadow_candidate_kept(f, q.CandidateInstanceID(), cut_triangle(f, q.CandidateInstanceID(), q.CandidateGeometryIndex(), q.CandidatePrimitiveIndex()), q.CandidateTriangleBarycentrics())
+            : ray_candidate_kept(f, q.CandidateInstanceID(), cut_triangle(f, q.CandidateInstanceID(), q.CandidateGeometryIndex(), q.CandidatePrimitiveIndex()), q.CandidateTriangleBarycentrics())))
             q.CommitNonOpaqueTriangleHit();
     }
     if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
     {
         o.hit = true;
         o.instance = q.CommittedInstanceID();
-        o.primitive = q.CommittedPrimitiveIndex();
+        o.primitive = cut_triangle(f, q.CommittedInstanceID(), q.CommittedGeometryIndex(), q.CommittedPrimitiveIndex());
         o.barycentrics = q.CommittedTriangleBarycentrics();
         o.t = q.CommittedRayT();
     }
@@ -4575,16 +4585,16 @@ ClosestHit trace_closest(Frame* f, RayDesc ray, bool shadow = false, bool probe 
         m.TraceRayInline(RaytracingAccelerationStructure(movers_tlas(f)), ray_opacity(f), g_ray_mask, ray);
         while (m.Proceed())
         {
-            if ((!probe || probe_leaf_kept(f, m.CandidateInstanceID(), m.CandidatePrimitiveIndex(), seed)) && (shadow
-                ? shadow_candidate_kept(f, m.CandidateInstanceID(), m.CandidatePrimitiveIndex(), m.CandidateTriangleBarycentrics())
-                : ray_candidate_kept(f, m.CandidateInstanceID(), m.CandidatePrimitiveIndex(), m.CandidateTriangleBarycentrics())))
+            if ((!probe || probe_leaf_kept(f, m.CandidateInstanceID(), cut_triangle(f, m.CandidateInstanceID(), m.CandidateGeometryIndex(), m.CandidatePrimitiveIndex()), seed)) && (shadow
+                ? shadow_candidate_kept(f, m.CandidateInstanceID(), cut_triangle(f, m.CandidateInstanceID(), m.CandidateGeometryIndex(), m.CandidatePrimitiveIndex()), m.CandidateTriangleBarycentrics())
+                : ray_candidate_kept(f, m.CandidateInstanceID(), cut_triangle(f, m.CandidateInstanceID(), m.CandidateGeometryIndex(), m.CandidatePrimitiveIndex()), m.CandidateTriangleBarycentrics())))
                 m.CommitNonOpaqueTriangleHit();
         }
         if (m.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
         {
             o.hit = true;
             o.instance = m.CommittedInstanceID();
-            o.primitive = m.CommittedPrimitiveIndex();
+            o.primitive = cut_triangle(f, m.CommittedInstanceID(), m.CommittedGeometryIndex(), m.CommittedPrimitiveIndex());
             o.barycentrics = m.CommittedTriangleBarycentrics();
             o.t = m.CommittedRayT();
             o.mover = true;
@@ -4975,7 +4985,7 @@ struct Crossings
     float farthest;
 };
 
-void gather_crossings(uint64_t tlas, uint instance, RayDesc ray, inout Crossings c)
+void gather_crossings(Frame* f, uint64_t tlas, uint instance, RayDesc ray, inout Crossings c)
 {
     if (tlas == 0)
         return;
@@ -4991,7 +5001,7 @@ void gather_crossings(uint64_t tlas, uint instance, RayDesc ray, inout Crossings
         if (t < c.nearest)
         {
             c.nearest = t;
-            c.primitive = q.CandidatePrimitiveIndex();
+            c.primitive = cut_triangle(f, q.CandidateInstanceID(), q.CandidateGeometryIndex(), q.CandidatePrimitiveIndex());
             c.barycentrics = q.CandidateTriangleBarycentrics();
         }
     }
@@ -5005,8 +5015,8 @@ Crossings own_crossings(Frame* f, uint instance, RayDesc ray)
     c.primitive = 0;
     c.barycentrics = float2(0.0);
     c.farthest = -1.0;
-    gather_crossings(f[0].tlas, instance, ray, c);
-    gather_crossings(movers_tlas(f), instance, ray, c);
+    gather_crossings(f, f[0].tlas, instance, ray, c);
+    gather_crossings(f, movers_tlas(f), instance, ray, c);
     return c;
 }
 
@@ -5020,7 +5030,7 @@ bool blocked_in(Frame* f, uint64_t tlas, RayDesc ray, uint skip)
     while (q.Proceed())
     {
         if (q.CandidateInstanceID() != skip
-            && shadow_candidate_kept(f, q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics()))
+            && shadow_candidate_kept(f, q.CandidateInstanceID(), cut_triangle(f, q.CandidateInstanceID(), q.CandidateGeometryIndex(), q.CandidatePrimitiveIndex()), q.CandidateTriangleBarycentrics()))
             q.CommitNonOpaqueTriangleHit();
     }
     return q.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
@@ -5042,14 +5052,14 @@ void closest_in(Frame* f, uint64_t tlas, inout RayDesc ray, uint skip, bool move
     while (q.Proceed())
     {
         if (q.CandidateInstanceID() != skip
-            && ray_candidate_kept(f, q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics()))
+            && ray_candidate_kept(f, q.CandidateInstanceID(), cut_triangle(f, q.CandidateInstanceID(), q.CandidateGeometryIndex(), q.CandidatePrimitiveIndex()), q.CandidateTriangleBarycentrics()))
             q.CommitNonOpaqueTriangleHit();
     }
     if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
     {
         o.hit = true;
         o.instance = q.CommittedInstanceID();
-        o.primitive = q.CommittedPrimitiveIndex();
+        o.primitive = cut_triangle(f, q.CommittedInstanceID(), q.CommittedGeometryIndex(), q.CommittedPrimitiveIndex());
         o.barycentrics = q.CommittedTriangleBarycentrics();
         o.t = q.CommittedRayT();
         o.mover = mover;
@@ -6390,31 +6400,44 @@ void tlas_instances_main(uint3 id : SV_DispatchThreadID)
     if (vacant)
         mask = 0u;
     r[12] = (index & 0xFFFFFFu) | (mask << 24);
-    // An instance with a cut-out or a jelly row stays non-opaque, so the rays' query loop keeps
-    // or passes its triangles; the others are opaque, as their structures' geometry is, and
-    // the loop never sees them: one cut-out row made every ray of the scene loop (#265).
-    bool loops = !vacant && !rows_opaque(inst);
-    // VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT, and FORCE_NO_OPAQUE for those.
-    r[13] = (0x1u | (loops ? 0x8u : 0x0u)) << 24;
+    // An instance whose rows are all opaque is opaque, and the rays' query loop never sees it:
+    // one cut-out row made every ray of the scene loop (#265). One whose cut-out or jelly rows
+    // fall in its structure's second geometry takes the geometries' own opacity, so the loop sees
+    // those rows' triangles alone (#307: not a tree's wood and its crown's cores); any other
+    // stays non-opaque as a whole.
+    uint masked = vacant ? 0u : masked_rows(inst);
+    uint opacity = 0x4u; // VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT
+    if (masked != 0u)
+    {
+        opacity = 0x8u; // FORCE_NO_OPAQUE
+        if (tlas_push.rt_meshes != nullptr)
+        {
+            if ((masked & ~tlas_push.rt_meshes[inst.mesh].masked_sections) == 0u)
+                opacity = 0x0u;
+        }
+    }
+    // VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT, and the opacity.
+    r[13] = (0x1u | opacity) << 24;
     uint64_t blas = vacant ? 0 : tlas_push.blas[inst.mesh];
     r[14] = uint(blas);
     r[15] = uint(blas >> 32);
 }
 
-// Whether every row the instance draws with is opaque to the rays: no cut-out, no jelly. Without
-// the rows (no table given), none is.
-bool rows_opaque(Instance inst)
+// The rows the instance draws with that are not opaque to the rays, a bit per section: cut-out or
+// jelly. A section from 32 on sets every bit; without the rows (no table given), all are.
+uint masked_rows(Instance inst)
 {
     if (tlas_push.materials == nullptr || tlas_push.rt_meshes == nullptr)
-        return false;
+        return 0xFFFFFFFFu;
     uint rows = tlas_push.rt_meshes[inst.mesh].rows;
+    uint masked = 0u;
     for (uint s = 0; s < rows; s++)
     {
         Material mat = tlas_push.materials[inst.material + s];
         if ((mat.flags & MATERIAL_FLAG_MASKED) != 0 || mat.class_index == MATERIAL_CLASS_JELLY)
-            return false;
+            masked |= s < 32u ? 1u << s : 0xFFFFFFFFu;
     }
-    return true;
+    return masked;
 }
 
 // ---------------------------------------------------------------- placement ---

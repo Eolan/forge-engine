@@ -54,14 +54,17 @@ pub struct BlasTriangles<'a> {
     pub positions: &'a [[f32; 3]],
     /// Three indices per triangle.
     pub indices: &'a [u32],
+    /// How many of the first triangles are opaque; the others make a second geometry, not
+    /// opaque, whose triangles a ray's query loop sees as candidates (#307). A ray meets the
+    /// second's triangle `p` as the list's `opaque + p`. All of them: one opaque geometry.
+    pub opaque: u32,
 }
 
-/// One build's parts: its geometry description, the structure it builds into and the
-/// scratch memory it needs.
+/// One build's parts: its geometries with their primitive counts, the structure it builds into
+/// and the scratch memory it needs.
 struct Build {
-    geometry: vk::AccelerationStructureGeometryKHR<'static>,
+    geometries: Vec<(vk::AccelerationStructureGeometryKHR<'static>, u32)>,
     ty: vk::AccelerationStructureTypeKHR,
-    primitives: u32,
     structure: AccelerationStructure,
     scratch: Buffer,
 }
@@ -72,28 +75,29 @@ impl Device {
             .ok_or_else(|| GpuError::Unsupported("acceleration structures (no ray queries)".into()))
     }
 
-    /// Sizes a build of `geometry`, creates its structure and scratch.
+    /// Sizes a build of `geometries` (each with its primitive count), creates its structure and
+    /// scratch.
     fn prepare_build(
         self: &Arc<Self>,
-        geometry: vk::AccelerationStructureGeometryKHR<'static>,
+        geometries: Vec<(vk::AccelerationStructureGeometryKHR<'static>, u32)>,
         ty: vk::AccelerationStructureTypeKHR,
-        primitives: u32,
         name: &str,
     ) -> Result<Build> {
         let loader = self.acceleration()?;
-        let geometries = [geometry];
+        let descriptions: Vec<_> = geometries.iter().map(|g| g.0).collect();
+        let primitives: Vec<u32> = geometries.iter().map(|g| g.1).collect();
         let info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
             .ty(ty)
             .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
             .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-            .geometries(&geometries);
+            .geometries(&descriptions);
         let mut sizes = vk::AccelerationStructureBuildSizesInfoKHR::default();
-        // SAFETY: a size query on valid build info.
+        // SAFETY: a size query on valid build info, a primitive count per geometry.
         unsafe {
             loader.get_acceleration_structure_build_sizes(
                 vk::AccelerationStructureBuildTypeKHR::DEVICE,
                 &info,
-                &[primitives],
+                &primitives,
                 &mut sizes,
             )
         };
@@ -123,9 +127,8 @@ impl Device {
             name: "acceleration structure scratch",
         })?;
         Ok(Build {
-            geometry,
+            geometries,
             ty,
-            primitives,
             structure: AccelerationStructure {
                 device: Arc::clone(self),
                 raw,
@@ -139,8 +142,10 @@ impl Device {
     /// Records every build of `builds` into one submission and waits for it.
     fn run_builds(&self, builds: &[Build]) -> Result<()> {
         let loader = self.acceleration()?;
-        let geometries: Vec<[vk::AccelerationStructureGeometryKHR<'static>; 1]> =
-            builds.iter().map(|b| [b.geometry]).collect();
+        let geometries: Vec<Vec<vk::AccelerationStructureGeometryKHR<'static>>> = builds
+            .iter()
+            .map(|b| b.geometries.iter().map(|g| g.0).collect())
+            .collect();
         let infos: Vec<vk::AccelerationStructureBuildGeometryInfoKHR<'_>> = builds
             .iter()
             .zip(&geometries)
@@ -160,11 +165,15 @@ impl Device {
                     })
             })
             .collect();
-        let ranges: Vec<[vk::AccelerationStructureBuildRangeInfoKHR; 1]> = builds
+        let ranges: Vec<Vec<vk::AccelerationStructureBuildRangeInfoKHR>> = builds
             .iter()
             .map(|b| {
-                [vk::AccelerationStructureBuildRangeInfoKHR::default()
-                    .primitive_count(b.primitives)]
+                b.geometries
+                    .iter()
+                    .map(|g| {
+                        vk::AccelerationStructureBuildRangeInfoKHR::default().primitive_count(g.1)
+                    })
+                    .collect()
             })
             .collect();
         let range_refs: Vec<&[vk::AccelerationStructureBuildRangeInfoKHR]> =
@@ -202,8 +211,8 @@ impl Device {
         })
     }
 
-    /// Builds a bottom-level structure over each of `meshes` (opaque triangles), in one
-    /// submission; waits for it.
+    /// Builds a bottom-level structure over each of `meshes` (its opaque triangles, then the
+    /// others, [`BlasTriangles::opaque`]), in one submission; waits for it.
     pub fn build_blases(
         self: &Arc<Self>,
         meshes: &[BlasTriangles<'_>],
@@ -229,15 +238,31 @@ impl Device {
         let mut builds = Vec::with_capacity(meshes.len());
         let (mut first_position, mut first_index) = (0_u64, 0_u64);
         for mesh in meshes {
-            let geometry = triangle_geometry(
-                position_buffer.address() + first_position * 12,
-                mesh.positions.len() as u32,
-                index_buffer.address() + first_index * 4,
-            );
+            let triangles = (mesh.indices.len() / 3) as u32;
+            let opaque = mesh.opaque.min(triangles);
+            let positions = position_buffer.address() + first_position * 12;
+            let vertices = mesh.positions.len() as u32;
+            let first = index_buffer.address() + first_index * 4;
+            // One geometry when the triangles are all opaque or none is; else the opaque ones,
+            // then the others.
+            let geometries = if opaque == triangles || opaque == 0 {
+                vec![(
+                    triangle_geometry(positions, vertices, first, opaque == triangles),
+                    triangles,
+                )]
+            } else {
+                let rest = first + u64::from(opaque) * 12;
+                vec![
+                    (triangle_geometry(positions, vertices, first, true), opaque),
+                    (
+                        triangle_geometry(positions, vertices, rest, false),
+                        triangles - opaque,
+                    ),
+                ]
+            };
             builds.push(self.prepare_build(
-                geometry,
+                geometries,
                 vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
-                (mesh.indices.len() / 3) as u32,
                 name,
             )?);
             first_position += mesh.positions.len() as u64;
@@ -267,9 +292,8 @@ impl Device {
             .geometry(vk::AccelerationStructureGeometryDataKHR { instances: data })
             .flags(vk::GeometryFlagsKHR::OPAQUE);
         let build = self.prepare_build(
-            geometry,
+            vec![(geometry, count)],
             vk::AccelerationStructureTypeKHR::TOP_LEVEL,
-            count,
             name,
         )?;
         self.run_builds(std::slice::from_ref(&build))?;
@@ -277,12 +301,13 @@ impl Device {
     }
 }
 
-/// The geometry of opaque triangles: `vertices` positions (three floats each, packed) at device
-/// address `positions`, three `u32` indices a triangle at `indices`.
+/// The geometry of triangles, `opaque` or not: `vertices` positions (three floats each, packed)
+/// at device address `positions`, three `u32` indices a triangle at `indices`.
 fn triangle_geometry(
     positions: u64,
     vertices: u32,
     indices: u64,
+    opaque: bool,
 ) -> vk::AccelerationStructureGeometryKHR<'static> {
     let triangles = vk::AccelerationStructureGeometryTrianglesDataKHR::default()
         .vertex_format(vk::Format::R32G32B32_SFLOAT)
@@ -298,7 +323,11 @@ fn triangle_geometry(
     vk::AccelerationStructureGeometryKHR::default()
         .geometry_type(vk::GeometryTypeKHR::TRIANGLES)
         .geometry(vk::AccelerationStructureGeometryDataKHR { triangles })
-        .flags(vk::GeometryFlagsKHR::OPAQUE)
+        .flags(if opaque {
+            vk::GeometryFlagsKHR::OPAQUE
+        } else {
+            vk::GeometryFlagsKHR::empty()
+        })
 }
 
 /// A bottom-level structure over triangles whose positions a pass rewrites every frame (a
@@ -372,7 +401,7 @@ impl Device {
         name: &str,
     ) -> Result<DynamicBlas> {
         let loader = self.acceleration()?;
-        let geometry = triangle_geometry(positions, vertices, indices);
+        let geometry = triangle_geometry(positions, vertices, indices, true);
         let geometries = [geometry];
         let info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
             .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)

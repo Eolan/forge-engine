@@ -852,6 +852,18 @@ opaque crown proxy (D-036, `--leaf-probes` the A/B).
 | the garden (`-50.7,1.7,-116.7,163.7,0`) | 4.34, 1.54 ms | 3.62, 0.82 ms | 3.34, 0.59 ms |
 | the air view | 4.41, 1.45 ms | 4.39, 1.32 ms | 4.28, 1.28 ms |
 
+**A cut-out row's triangles alone in the query loop** (#307, 2026-10-19): each mesh's structure
+holds its opaque sections and its cut-out ones as two geometries (D-029). The village, best of
+three, against the build before:
+
+| View | frame | `gi/probe rays` | `shadow/trace` | `shadow/lamp rays` |
+|---|---|---|---|---|
+| the main street, 15:00 | 4.63 → 4.57 ms | 1.49 → 1.38 | 0.340 → 0.344 | |
+| the green | 4.24 → 4.19 ms | 1.22 → 1.15 | 0.131 → 0.136 | |
+| the garden | 3.63 → 3.61 ms | 0.81 → 0.78 | 0.100 → 0.103 | |
+| the junction, 21:00 | 4.93 → 4.91 ms | 1.24 → 1.18 | 0.218 → 0.222 | 0.308 → 0.320 |
+| the main street, 21:00 | 5.29 → 5.25 ms | 1.52 → 1.45 | 0.182 → 0.186 | 0.573 → 0.583 |
+
 With the movers' acceleration structure (the second step), the same views and rounds:
 
 | View | frame: 0 → 1 000 → 10 000 | `movers/tlas` | `water/reflections` | `gi/probe rays` | `shading/layered` |

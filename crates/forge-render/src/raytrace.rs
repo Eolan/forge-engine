@@ -72,6 +72,37 @@ pub(crate) struct Cut {
     /// A skinned mesh's (#165): its structure is refitted every frame from the positions the
     /// skin pass writes ([`forge_gpu::DynamicBlas`]).
     pub dynamic: bool,
+    /// The sections some instance draws cut out (or as jelly), a bit each ([`Cut::split`],
+    /// #307): their triangles come last, in the structure's second geometry, not opaque.
+    pub masked: u32,
+    /// How many of the first triangles are in no masked section: the structure's opaque
+    /// geometry (all of them when nothing is masked).
+    pub opaque: u32,
+}
+
+impl Cut {
+    /// Moves the triangles of the sections in `masked` (a bit each; sections from 32 on are
+    /// never split) after the others, keeping each side's order (#307). The structure then
+    /// takes the others as an opaque geometry, and only the masked ones' reach a ray's query
+    /// loop: one cut-out row made every triangle of its instance a candidate (a tree's wood and
+    /// its crown's cores with its leaf cards).
+    pub fn split(&mut self, masked: u32) {
+        let in_masked = |s: u32| s < 32 && masked & (1 << s) != 0;
+        let order: Vec<usize> = (0..self.sections.len())
+            .filter(|&t| !in_masked(self.sections[t]))
+            .chain((0..self.sections.len()).filter(|&t| in_masked(self.sections[t])))
+            .collect();
+        self.opaque = order
+            .iter()
+            .take_while(|&&t| !in_masked(self.sections[t]))
+            .count() as u32;
+        self.masked = masked;
+        self.indices = order
+            .iter()
+            .flat_map(|&t| self.indices[t * 3..t * 3 + 3].iter().copied())
+            .collect();
+        self.sections = order.iter().map(|&t| self.sections[t]).collect();
+    }
 }
 
 /// Triangles of the cut of `meshlets` (one mesh's clusters) at error `e`.
@@ -145,6 +176,8 @@ pub(crate) fn mesh_cut_at(
         error,
         shadow_start: 0.0,
         dynamic: false,
+        masked: 0,
+        opaque: 0,
     };
     for m in clusters {
         let base = at[&m.page] + m.payload as usize;
@@ -171,6 +204,7 @@ pub(crate) fn mesh_cut_at(
                 .extend((0..m.vertex_count as usize).map(|v| paged_uv(payload, layout.uvs, v)));
         }
     }
+    cut.opaque = cut.sections.len() as u32;
     Ok(cut)
 }
 
@@ -232,7 +266,11 @@ struct GpuRtMesh {
     first_uv: u32,
     /// The rows its instances draw with: its cut's highest section and one (#265).
     rows: u32,
-    pad: [u32; 2],
+    /// The sections in its structure's second geometry, a bit each ([`Cut::masked`], #307).
+    masked_sections: u32,
+    /// The triangles of its structure's first geometry ([`Cut::opaque`]): a ray's triangle `p`
+    /// in the second is the cut's `opaque_triangles + p`.
+    opaque_triangles: u32,
 }
 
 /// The rows a cut's instances draw with: its highest section and one.
@@ -307,7 +345,8 @@ pub(crate) fn cut_writes<'a>(
             first_vertex
         },
         rows: cut_rows(cut),
-        pad: [0; 2],
+        masked_sections: cut.masked,
+        opaque_triangles: cut.opaque,
     };
     let (v, t) = (u64::from(first_vertex), u64::from(first_triangle));
     let size = std::mem::size_of::<GpuRtMesh>() as u64;
@@ -434,6 +473,7 @@ impl SceneRays {
             .map(|c| BlasTriangles {
                 positions: &c.positions,
                 indices: &c.indices,
+                opaque: c.opaque,
             })
             .collect();
         let blases = device.build_blases(&statics, "mesh BLAS")?;
@@ -461,7 +501,8 @@ impl SceneRays {
                 shadow_start: c.shadow_start,
                 first_uv,
                 rows: cut_rows(c),
-                pad: [0; 2],
+                masked_sections: c.masked,
+                opaque_triangles: c.opaque,
             });
             uvs.extend_from_slice(&c.uvs);
             positions.extend(c.positions.iter().flatten());
