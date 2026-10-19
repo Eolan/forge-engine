@@ -49,6 +49,10 @@ struct Cli {
     /// app's `--walk vx,vz` scripts the walk).
     #[arg(long)]
     walk_start: bool,
+    /// Four pursuers on the street before the first house with insides go for its hall, by its
+    /// door or over a window's sill (#317); the log names a view of its front.
+    #[arg(long)]
+    pursuers: bool,
     /// One second in, hide every other clear pane and raise the rest by 0.4 m: the check of
     /// panes changed at run time (#325).
     #[arg(long)]
@@ -486,6 +490,11 @@ fn main() -> anyhow::Result<()> {
         };
         let scenario = if cli.glass_test {
             scenario.glass_test()
+        } else {
+            scenario
+        };
+        let scenario = if cli.pursuers {
+            scenario.with_pursuers(&plan, &masses)
         } else {
             scenario
         };

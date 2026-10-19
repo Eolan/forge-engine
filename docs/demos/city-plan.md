@@ -2413,6 +2413,35 @@ two walks moved by 6 and 0 pixels, and its fixed views by none.
 *Three seconds up a lane at eye height, walked by the script: café terraces, a street tree, the
 first floor's balconies.*
 
+## Pursuers (#317, D-076's proof as a scene)
+
+```
+cargo run --release -p city-plan -- --village 600 --pursuers --view=77.8,1.7,-184.4,146.8,-5
+```
+
+Four figures stand on the street, 3 m before the first house with insides and 3 m apart along
+its front. They go for its hall on the house's walk field (`forge_nav`):
+- **Following:** each follows its path, back to the path's line near the walls.
+- **Avoidance:** they keep clear of one another (ORCA) and take turns at the door.
+- **Windows:** a window is a climber's link of two seconds, crossed as a carried crossing that
+  lands where the path goes on.
+
+With the door open, all four take it, as the cheaper way, and are inside by about 9 s. The log
+names the view of the house's front.
+
+City-plan's test `pursuers_get_into_a_house_by_its_door_or_through_its_windows` runs the same
+module (`pursuers.rs`) with the doors open and with them shut:
+- **Door open:** 4 of 4 get in.
+- **Doors shut:** 4 of 4 climb through the windows, one at a time.
+
+The figures glide in one pose: walking clips and the crossing's clip come with the animation
+work (#311).
+
+![Pursuers going in](images/city-plan-pursuers.png)
+
+*One, three and seven seconds in: the four on the street, three at the door taking turns, the
+last going in.*
+
 ## Next (#245–#247)
 
 - Squares at the radial districts' centres; the landmarks' sightlines.

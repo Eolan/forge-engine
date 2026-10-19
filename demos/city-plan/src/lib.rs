@@ -47,6 +47,7 @@ use glam::{DVec2, Mat4, Vec3};
 use winit::keyboard::KeyCode;
 
 mod crowd;
+mod pursuers;
 mod residents;
 mod signs;
 mod taxis;
@@ -564,6 +565,8 @@ pub struct PlanScenario {
     /// Seconds into the run at which to board the nearest tram (scripted rides).
     ride_after: Option<f64>,
     crowd: Option<crowd::Crowd>,
+    /// The pursuers going for a house (`--pursuers`, #317).
+    pursuers: Option<pursuers::Pursuers>,
     /// The automated taxis (D-061).
     taxis: Option<taxis::Taxis>,
     size: f64,
@@ -2175,6 +2178,7 @@ impl PlanScenario {
             stalls: stalls.iter().map(|&(at, _)| at).collect(),
             sign_names,
             crowd: None,
+            pursuers: None,
             taxis: taxis::Taxis::new(plan, masses, &holds, 8.0, 3600.0),
             size,
             camera,
@@ -2260,6 +2264,36 @@ impl PlanScenario {
     /// panes changed at run time (#325).
     pub fn glass_test(mut self) -> Self {
         self.glass_test = Some(1.0);
+        self
+    }
+
+    /// Four pursuers on the street before the first house with insides, 3 m apart along its
+    /// front, going for its hall by its door or over a window's sill (#317, D-076's proof as a
+    /// scene). The log names a view of the house's front.
+    pub fn with_pursuers(mut self, plan: &CityPlan, masses: &[Mass]) -> Self {
+        let structures = structure::structures(plan, masses);
+        let passages =
+            forge_nav::Passages::new(village_passages(self.size, plan, masses, &structures));
+        let Some((i, door, windows)) = pursued_house(masses, &structures, &passages) else {
+            tracing::warn!("no house for the pursuers");
+            return self;
+        };
+        let field = house_field(self.size, masses, &structures, &passages, i, false);
+        self.pursuers = pursuers::Pursuers::new(field, &door, windows, 3.0);
+        let eye = door.middle() - door.across * 8.0;
+        let look = door.across;
+        tracing::info!(
+            "the pursuers' house (lot {}): --view={:.1},1.7,{:.1},{:.1},-5 ({} pursuers)",
+            masses[i].lot,
+            eye.x,
+            eye.z,
+            (-look.x).atan2(-look.z).to_degrees(),
+            if self.pursuers.is_some() {
+                pursuers::COUNT
+            } else {
+                0
+            }
+        );
         self
     }
 
@@ -5059,6 +5093,127 @@ pub fn village_passages(
 /// Where the garden walls' numbers start in [`village_passages`]' `piece`.
 const GARDEN_WALL_PIECE: u32 = 1 << 24;
 
+/// Pieces as the walk field's solids: each piece's corners in pairs (bottom, top) round its
+/// ring, made a prism of triangles, its top facing up.
+fn field_prism(piece: &[Vec3], out: &mut Vec<[Vec3; 3]>) {
+    let (y0, y1) = (piece[0].y, piece[1].y);
+    let ring: Vec<Vec3> = piece.iter().step_by(2).copied().collect();
+    let n = ring.len();
+    let at = |p: Vec3, y: f32| Vec3::new(p.x, y, p.z);
+    for k in 1..n.saturating_sub(1) {
+        for (y, up) in [(y1, true), (y0, false)] {
+            let mut t = [at(ring[0], y), at(ring[k], y), at(ring[k + 1], y)];
+            if ((t[1] - t[0]).cross(t[2] - t[0]).y > 0.0) != up {
+                t.swap(1, 2);
+            }
+            out.push(t);
+        }
+    }
+    for k in 0..n {
+        let (a, b) = (ring[k], ring[(k + 1) % n]);
+        out.push([at(a, y0), at(b, y0), at(b, y1)]);
+        out.push([at(a, y0), at(b, y1), at(a, y1)]);
+    }
+}
+
+/// House `i`'s walk field: its lot and 4 m round it, the ground, the buildings' walls, its
+/// insides and raised floor, each ground-floor door shut by a leaf when `shut`.
+pub fn house_field(
+    size: f64,
+    masses: &[Mass],
+    structures: &[Structure],
+    passages: &forge_nav::Passages,
+    i: usize,
+    shut: bool,
+) -> forge_nav::Field {
+    use forge_nav::{Field, FieldDesc, PERSON, PassageKind};
+    let (m, s) = (&masses[i], &structures[i]);
+    let walls = wall_pieces(size, masses, structures);
+    let (lo, hi) = m.footprint.iter().fold(
+        (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)),
+        |(lo, hi), &p| (lo.min(p), hi.max(p)),
+    );
+    let (lo, hi) = (world(size, lo - 4.0, 0.0), world(size, hi + 4.0, 0.0));
+    let desc = FieldDesc {
+        corner: glam::Vec2::new(lo.x, lo.z),
+        cells: (((hi.x - lo.x).max(hi.z - lo.z) / 0.1).ceil() as u32).min(1024),
+        cell: 0.1,
+    };
+    let mut triangles = Vec::new();
+    let y = WALK_LEVEL as f32;
+    let g = [
+        Vec3::new(lo.x, y, lo.z),
+        Vec3::new(hi.x, y, lo.z),
+        Vec3::new(hi.x, y, hi.z),
+        Vec3::new(lo.x, y, hi.z),
+    ];
+    triangles.push([g[0], g[2], g[1]]);
+    triangles.push([g[0], g[3], g[2]]);
+    if let Some(ring) = inner_ring(m, s) {
+        let piece: Vec<Vec3> = ring
+            .iter()
+            .flat_map(|&p| {
+                [
+                    world(size, p, WALK_LEVEL),
+                    world(size, p, floor_level(s, 0)),
+                ]
+            })
+            .collect();
+        field_prism(&piece, &mut triangles);
+    }
+    let inside = |p: &[Vec3]| {
+        p.iter()
+            .any(|q| q.x >= lo.x && q.x <= hi.x && q.z >= lo.z && q.z <= hi.z)
+    };
+    for piece in walls
+        .iter()
+        .chain(&interior_pieces(size, masses, structures, &[i]))
+        .filter(|p| inside(p))
+    {
+        field_prism(piece, &mut triangles);
+    }
+    // Each ground-floor door shut: a leaf across its doorway, up to its head.
+    for d in passages
+        .all()
+        .iter()
+        .filter(|p| shut && p.kind == PassageKind::Door && p.piece == i as u32)
+    {
+        let side = d.across * (d.depth * 0.5);
+        let (a, b) = (d.ends[0], d.ends[1]);
+        let top = d.ends[0].y + d.head.unwrap_or(2.1);
+        let leaf: Vec<Vec3> = [a - side, b - side, b + side, a + side]
+            .into_iter()
+            .flat_map(|p| [Vec3::new(p.x, y, p.z), Vec3::new(p.x, top, p.z)])
+            .collect();
+        field_prism(&leaf, &mut triangles);
+    }
+    Field::build(desc, PERSON, &triangles)
+}
+
+/// The house the pursuers go for (#317, `--pursuers`): the first with insides, a ground-floor
+/// door and windows; its index, its first door and its ground-floor windows.
+pub fn pursued_house(
+    masses: &[Mass],
+    structures: &[Structure],
+    passages: &forge_nav::Passages,
+) -> Option<(usize, forge_nav::Passage, Vec<forge_nav::Passage>)> {
+    use forge_nav::PassageKind;
+    let of = |i: usize, kind: PassageKind| -> Vec<forge_nav::Passage> {
+        passages
+            .all()
+            .iter()
+            .filter(|p| p.kind == kind && p.piece == i as u32)
+            .copied()
+            .collect()
+    };
+    (0..masses.len()).find_map(|i| {
+        interior::house(&masses[i], &structures[i])?;
+        let door = *of(i, PassageKind::Door).first()?;
+        let windows = of(i, PassageKind::Window);
+        (!windows.is_empty()).then_some((i, door, windows))
+    })
+}
+
 /// The buildings' walls as the walker's convex pieces, the world's metres (D-060): each street,
 /// courtyard and party wall a slab of its thickness (0.2 m at least) inwards from its outer face,
 /// from the ground to 0.9 m over its roof; where a passage runs through, the wall either side of
@@ -6946,6 +7101,13 @@ impl Scenario for PlanScenario {
             builder.set_mesh_material(shuttle, materials_taxi);
             tram_movers.push((shuttle, t.shuttles() as u32));
         }
+        // The pursuers (#317), the very last.
+        if self.pursuers.is_some() {
+            let figure =
+                builder.add_mesh(&MeshletMesh::build(&forge_geom::figures::walker(1.75, 0.0)));
+            builder.set_mesh_material(figure, people_rows[1 % people_rows.len()]);
+            tram_movers.push((figure, pursuers::COUNT as u32));
+        }
         laps.mark("movers");
         // The kit buildings' insides, a mesh a tile cooked apart from the masses (#273), last
         // among the static instances so every other keeps its id (each tree's tone is hashed
@@ -7033,6 +7195,7 @@ impl Scenario for PlanScenario {
                     .collect(),
                 crowd: self.crowd.take(),
                 taxis: self.taxis.take(),
+                pursuers: self.pursuers.take(),
                 walkers: Vec::new(),
                 camera: glam::Vec2::ZERO,
                 size: self.size,
@@ -7061,6 +7224,8 @@ struct PlanRunning {
     walk_on_start: bool,
     /// The population on foot round the camera, and where the camera last stood (x, z).
     crowd: Option<crowd::Crowd>,
+    /// The pursuers going for a house (`--pursuers`, #317).
+    pursuers: Option<pursuers::Pursuers>,
     /// The automated taxis.
     taxis: Option<taxis::Taxis>,
     /// The people on foot drawn last frame, on the plan.
@@ -7249,6 +7414,9 @@ impl Running for PlanRunning {
             let walk = city_blocks::wished_walk(args, camera.yaw, input);
             walker.advance(&self.walls, walk, f64::from(step));
         }
+        if let Some(p) = &mut self.pursuers {
+            p.advance(f64::from(step));
+        }
         None
     }
 
@@ -7286,6 +7454,7 @@ impl Running for PlanRunning {
             && self.crowd.is_none()
             && self.boats.is_empty()
             && self.taxis.is_none()
+            && self.pursuers.is_none()
         {
             return;
         }
@@ -7412,6 +7581,19 @@ impl Running for PlanRunning {
                     at.y -= 50.0;
                 }
                 transforms.push(place((at, pose.yaw)));
+            }
+        }
+        // Then the pursuers (#317), the very last; the slots none fills wait under the ground.
+        if let Some(p) = &self.pursuers {
+            still.resize(transforms.len(), false);
+            let (feet, facing) = (p.feet(), p.facing());
+            let parked = (Vec3::new(0.0, -1000.0, 0.0) + origin, 0.0);
+            for k in 0..pursuers::COUNT {
+                still.push(false);
+                let pose = feet.get(k).zip(facing.get(k));
+                transforms.push(place(
+                    pose.map_or(parked, |(&at, f)| (at, (-f.x).atan2(-f.y))),
+                ));
             }
         }
         scene.set_movers_still(&transforms, |k| still.get(k).copied().unwrap_or(false));
@@ -8408,103 +8590,6 @@ mod tests {
         );
     }
 
-    /// Pieces as the walk field's solids: each piece's corners in pairs (bottom, top) round its
-    /// ring, made a prism of triangles, its top facing up.
-    fn prism(piece: &[Vec3], out: &mut Vec<[Vec3; 3]>) {
-        let (y0, y1) = (piece[0].y, piece[1].y);
-        let ring: Vec<Vec3> = piece.iter().step_by(2).copied().collect();
-        let n = ring.len();
-        let at = |p: Vec3, y: f32| Vec3::new(p.x, y, p.z);
-        for k in 1..n.saturating_sub(1) {
-            for (y, up) in [(y1, true), (y0, false)] {
-                let mut t = [at(ring[0], y), at(ring[k], y), at(ring[k + 1], y)];
-                if ((t[1] - t[0]).cross(t[2] - t[0]).y > 0.0) != up {
-                    t.swap(1, 2);
-                }
-                out.push(t);
-            }
-        }
-        for k in 0..n {
-            let (a, b) = (ring[k], ring[(k + 1) % n]);
-            out.push([at(a, y0), at(b, y0), at(b, y1)]);
-            out.push([at(a, y0), at(b, y1), at(a, y1)]);
-        }
-    }
-
-    /// House `i`'s walk field: its lot and 4 m round it, the ground, the buildings' walls, its
-    /// insides and raised floor, each ground-floor door shut by a leaf when `shut`.
-    fn house_field(
-        size: f64,
-        v: &forge_procgen::city::village::Village,
-        structures: &[Structure],
-        passages: &forge_nav::Passages,
-        i: usize,
-        shut: bool,
-    ) -> forge_nav::Field {
-        use forge_nav::{Field, FieldDesc, PERSON, PassageKind};
-        let (m, s) = (&v.masses[i], &structures[i]);
-        let walls = wall_pieces(size, &v.masses, structures);
-        let (lo, hi) = m.footprint.iter().fold(
-            (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)),
-            |(lo, hi), &p| (lo.min(p), hi.max(p)),
-        );
-        let (lo, hi) = (world(size, lo - 4.0, 0.0), world(size, hi + 4.0, 0.0));
-        let desc = FieldDesc {
-            corner: glam::Vec2::new(lo.x, lo.z),
-            cells: (((hi.x - lo.x).max(hi.z - lo.z) / 0.1).ceil() as u32).min(1024),
-            cell: 0.1,
-        };
-        let mut triangles = Vec::new();
-        let y = WALK_LEVEL as f32;
-        let g = [
-            Vec3::new(lo.x, y, lo.z),
-            Vec3::new(hi.x, y, lo.z),
-            Vec3::new(hi.x, y, hi.z),
-            Vec3::new(lo.x, y, hi.z),
-        ];
-        triangles.push([g[0], g[2], g[1]]);
-        triangles.push([g[0], g[3], g[2]]);
-        if let Some(ring) = inner_ring(m, s) {
-            let piece: Vec<Vec3> = ring
-                .iter()
-                .flat_map(|&p| {
-                    [
-                        world(size, p, WALK_LEVEL),
-                        world(size, p, floor_level(s, 0)),
-                    ]
-                })
-                .collect();
-            prism(&piece, &mut triangles);
-        }
-        let inside = |p: &[Vec3]| {
-            p.iter()
-                .any(|q| q.x >= lo.x && q.x <= hi.x && q.z >= lo.z && q.z <= hi.z)
-        };
-        for piece in walls
-            .iter()
-            .chain(&interior_pieces(size, &v.masses, structures, &[i]))
-            .filter(|p| inside(p))
-        {
-            prism(piece, &mut triangles);
-        }
-        // Each ground-floor door shut: a leaf across its doorway, up to its head.
-        for d in passages
-            .all()
-            .iter()
-            .filter(|p| shut && p.kind == PassageKind::Door && p.piece == i as u32)
-        {
-            let side = d.across * (d.depth * 0.5);
-            let (a, b) = (d.ends[0], d.ends[1]);
-            let top = d.ends[0].y + d.head.unwrap_or(2.1);
-            let leaf: Vec<Vec3> = [a - side, b - side, b + side, a + side]
-                .into_iter()
-                .flat_map(|p| [Vec3::new(p.x, y, p.z), Vec3::new(p.x, top, p.z)])
-                .collect();
-            prism(&leaf, &mut triangles);
-        }
-        Field::build(desc, PERSON, &triangles)
-    }
-
     /// The village's passages (#316, D-076): with a house's front door shut, a walker no longer
     /// gets in from the street, and a climber does through a ground-floor window's link; walking
     /// straight through a window from the street meets that window (the player's automatic
@@ -8551,7 +8636,7 @@ mod tests {
                 break;
             }
             shut += 1;
-            let field = house_field(size, &v, &structures, &passages, i, true);
+            let field = house_field(size, &v.masses, &structures, &passages, i, true);
             let from = door.middle() - door.across * 1.5;
             let hall = door.middle() + door.across * 1.5 + Vec3::Y * door.drop;
             // Shut: no way in on foot.
@@ -8595,10 +8680,7 @@ mod tests {
     /// one another.
     #[test]
     fn pursuers_get_into_a_house_by_its_door_or_through_its_windows() {
-        use forge_nav::{
-            Agent, CrossingMotion, CrossingSpec, Crowd, CrowdSettings, Follow, PassageKind,
-            Passages,
-        };
+        use forge_nav::Passages;
         let size = 600.0;
         let site = example::site(size, 10.0);
         let v = forge_procgen::city::village::village(
@@ -8608,128 +8690,41 @@ mod tests {
         );
         let structures = structure::structures(&v.plan, &v.masses);
         let passages = Passages::new(village_passages(size, &v.plan, &v.masses, &structures));
-        let of = |i: usize, kind: PassageKind| -> Vec<usize> {
-            (0..passages.all().len())
-                .filter(|&k| passages.get(k).kind == kind && passages.get(k).piece == i as u32)
-                .collect()
-        };
-        // The first house with its insides, a door and windows.
-        let (i, door) = (0..v.masses.len())
-            .find_map(|i| {
-                let house = interior::house(&v.masses[i], &structures[i]).is_some();
-                let door = of(i, PassageKind::Door).first().copied()?;
-                (house && !of(i, PassageKind::Window).is_empty()).then_some((i, door))
-            })
-            .expect("a house");
-        let door = *passages.get(door);
+        let (i, door, windows) = pursued_house(&v.masses, &structures, &passages).expect("a house");
         let hall = door.middle() + door.across * 1.5 + Vec3::Y * door.drop;
         // Inside: the places a walker reaches from the hall with the doors shut.
-        let shut_field = house_field(size, &v, &structures, &passages, i, true);
+        let shut_field = house_field(size, &v.masses, &structures, &passages, i, true);
         let inside = shut_field.reach(shut_field.place(hall).expect("the hall"));
         let is_in = |p: Vec3| shut_field.place(p).is_some_and(|s| inside[s as usize]);
-        // A climber's links: the house's ground-floor windows, two seconds each.
-        let windows = of(i, PassageKind::Window);
-        let links: Vec<forge_nav::Link> = windows
-            .iter()
-            .map(|&k| {
-                passages
-                    .get(k)
-                    .link(2.0, PassageKind::Window as u16, 0.5, true)
-            })
-            .collect();
-        let along = (door.ends[1] - door.ends[0]).normalize_or_zero();
         for shut in [false, true] {
-            let field = house_field(size, &v, &structures, &passages, i, shut);
-            let mut crowd = Crowd::new(CrowdSettings::default());
-            let mut follows = Vec::new();
-            for k in 0..4 {
-                let at = door.middle() - door.across * 3.0 + along * (k as f32 - 1.5);
-                let path = field
-                    .path(at, hall, &links, 400_000)
-                    .expect("a place outside");
-                assert!(path.complete, "shut {shut}: pursuer {k} finds no way in");
-                crowd.add(Agent::new(path.points[0], 0.3, 1.4));
-                follows.push(Follow::new(&path));
-            }
-            // Each one carried: its crossing, the seconds into it and the link.
-            let mut carried: Vec<Option<(CrossingMotion, f32, usize)>> = vec![None; 4];
-            let (mut crossings, mut least) = (0, f32::INFINITY);
-            let dt = 1.0 / 60.0;
+            let field = house_field(size, &v.masses, &structures, &passages, i, shut);
+            let mut pursuers =
+                pursuers::Pursuers::new(field, &door, windows.clone(), 1.0).expect("ways in");
+            let mut least = f32::INFINITY;
             for _ in 0..60 * 60 {
-                for k in 0..4 {
-                    // A window is taken one at a time, its far side clear.
-                    if carried[k].is_none()
-                        && let Some(link) = follows[k].at_link()
-                    {
-                        let p = passages.get(windows[link]);
-                        let spec = CrossingSpec::person(p.crossing());
-                        let feet = crowd.agents[k].position;
-                        // Landing where its path goes on, a place on the field.
-                        let motion =
-                            CrossingMotion::over(p, feet, 0.3, spec).map(|m| {
-                                match follows[k].link_end() {
-                                    Some(end) => m.landing(end),
-                                    None => m,
-                                }
-                            });
-                        let free = |m: &CrossingMotion| {
-                            !carried.iter().flatten().any(|c| c.2 == link)
-                                && crowd
-                                    .agents
-                                    .iter()
-                                    .enumerate()
-                                    .all(|(j, a)| j == k || a.position.distance(m.exit) > 0.6)
-                        };
-                        if let Some(m) = motion.filter(|m| free(m)) {
-                            carried[k] = Some((m, 0.0, link));
-                        }
-                    }
-                    let agent = &mut crowd.agents[k];
-                    agent.preferred = if carried[k].is_some() || follows[k].at_link().is_some() {
-                        glam::Vec2::ZERO
-                    } else {
-                        follows[k].preferred(agent.position, agent.max_speed, Some(&field))
-                    };
-                }
-                crowd.step(dt, Some(&field));
-                // The carried go where their crossing has them, whatever the crowd did.
-                for k in 0..4 {
-                    let Some((m, t, _)) = &mut carried[k] else {
-                        continue;
-                    };
-                    *t += dt;
-                    crowd.agents[k].position = m.at(*t);
-                    crowd.agents[k].velocity = glam::Vec2::ZERO;
-                    if m.done(*t) {
-                        // Landed: on the field's place nearest the exit the walker fits.
-                        let exit = m.exit;
-                        crowd.agents[k].position =
-                            field.place_near(exit, 1.0).map_or(exit, |s| field.point(s));
-                        carried[k] = None;
-                        follows[k].crossed();
-                        crossings += 1;
-                    }
-                }
-                for a in 0..4 {
-                    for b in a + 1..4 {
-                        if carried[a].is_none() && carried[b].is_none() {
-                            let (p, q) = (crowd.agents[a].position, crowd.agents[b].position);
+                pursuers.advance(1.0 / 60.0);
+                let (feet, climbing) = (pursuers.feet(), pursuers.climbing());
+                for a in 0..feet.len() {
+                    for b in a + 1..feet.len() {
+                        if !climbing[a] && !climbing[b] {
+                            let (p, q) = (feet[a], feet[b]);
                             let gap = glam::Vec2::new(p.x - q.x, p.z - q.z).length() - 0.6;
                             least = least.min(gap);
                         }
                     }
                 }
             }
-            let got_in = crowd.agents.iter().filter(|a| is_in(a.position)).count();
+            let got_in = pursuers.feet().iter().filter(|&&p| is_in(p)).count();
             println!(
-                "lot {}, doors {}: {got_in} of 4 in, {crossings} through windows, least gap {least:.3} m",
+                "lot {}, doors {}: {got_in} of 4 in, {} through windows, least gap {least:.3} m",
                 v.masses[i].lot,
-                if shut { "shut" } else { "open" }
+                if shut { "shut" } else { "open" },
+                pursuers.crossings
             );
             assert_eq!(got_in, 4, "doors shut: {shut}");
             assert!(least > -0.05, "{least}");
             if shut {
-                assert!(crossings >= 4, "{crossings}");
+                assert!(pursuers.crossings >= 4, "{}", pursuers.crossings);
             }
         }
     }
