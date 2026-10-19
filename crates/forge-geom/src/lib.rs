@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 pub mod cache;
+pub mod check;
 pub mod city;
 pub mod depot;
 pub mod figures;

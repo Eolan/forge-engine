@@ -89,7 +89,9 @@ The two tie in depth and the jitter picks the winner each frame, a flash one fra
 the fold takes the panel's side normals (about 60 % too dark). Hard-surface pieces cook with
 their normals weighed (`CookOptions::HARD_SURFACE`, 0.5, as the props' blocks and lathes): the
 city plan's kit and the houses' insides since then; geometry alone stays for terrain, rocks and
-foliage. Better still, model no face behind another. The village's views moved by at most 0.007
+foliage. Better still, model no face behind another (`forge_geom::check::stacked_faces` lists the
+faces 1 mm to 3 cm in front of another facing the same way: the wardrobe's doors, the counter's
+cupboard doors, the bed's panels). The village's views moved by at most 0.007
 mean LDR-ꟻLIP from afar (the near ones not at all) for no measurable cost.
 *(research: gpu-geometry.md; demo: meshlets)*
 
