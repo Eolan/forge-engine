@@ -25,6 +25,7 @@ forge-physics = { path = "crates/forge-physics" }
 forge-sim = { path = "crates/forge-sim" }
 forge-anim = { path = "crates/forge-anim" }
 forge-flora = { path = "crates/forge-flora" }
+forge-nav = { path = "crates/forge-nav" }
 forge-mission = { path = "crates/forge-mission" }
 forge-script = { path = "crates/forge-script" }
 # The demos the island demo builds on

@@ -8108,6 +8108,192 @@ mod tests {
         );
     }
 
+    /// D-076's walk field (#317, `forge-nav`) over the village's houses as the walker meets them
+    /// (their walls open at their front doors, partitions, flights, floors and furniture: the
+    /// walker's convex pieces, each a prism) and the ground: from the street a metre and a half
+    /// outside each front door to the middle of every room, up the flights. The field, 0.10 m
+    /// columns over the house and 4 m round it, is built from the pieces' triangles.
+    #[test]
+    fn forge_nav_walks_from_the_street_into_every_room() {
+        use forge_nav::{Field, FieldDesc, PERSON};
+        let size = 600.0;
+        let site = example::site(size, 10.0);
+        let v = forge_procgen::city::village::village(
+            &site,
+            &forge_procgen::city::village::params(size),
+            1,
+        );
+        let structures = structure::structures(&v.plan, &v.masses);
+        let walls = wall_pieces(size, &v.masses, &structures);
+        // A piece's prism (its corners in pairs, at its foot and its top) as triangles, its top
+        // facing up and its underside down.
+        let prism = |piece: &[Vec3], out: &mut Vec<[Vec3; 3]>| {
+            let (y0, y1) = (piece[0].y, piece[1].y);
+            let ring: Vec<Vec3> = piece.iter().step_by(2).copied().collect();
+            let n = ring.len();
+            let at = |p: Vec3, y: f32| Vec3::new(p.x, y, p.z);
+            for k in 1..n.saturating_sub(1) {
+                for (y, up) in [(y1, true), (y0, false)] {
+                    let mut t = [at(ring[0], y), at(ring[k], y), at(ring[k + 1], y)];
+                    let ny = (t[1] - t[0]).cross(t[2] - t[0]).y;
+                    if (ny > 0.0) != up {
+                        t.swap(1, 2);
+                    }
+                    out.push(t);
+                }
+            }
+            for k in 0..n {
+                let (a, b) = (ring[k], ring[(k + 1) % n]);
+                out.push([at(a, y0), at(b, y0), at(b, y1)]);
+                out.push([at(a, y0), at(b, y1), at(a, y1)]);
+            }
+        };
+        let (mut houses, mut rooms, mut reached, mut upstairs) = (0, 0, 0, 0);
+        let (mut build, mut search) = (std::time::Duration::ZERO, std::time::Duration::ZERO);
+        let mut missed = Vec::new();
+        for (i, (m, s)) in v.masses.iter().zip(&structures).enumerate() {
+            let Some(inner) = interior::house(m, s) else {
+                continue;
+            };
+            let Some(door) = s
+                .openings
+                .iter()
+                .find(|o| o.kind == OpeningKind::Door && o.storey == 0)
+            else {
+                continue;
+            };
+            houses += 1;
+            if houses > 24 {
+                break;
+            }
+            let (lo, hi) = m.footprint.iter().fold(
+                (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)),
+                |(lo, hi), &p| (lo.min(p), hi.max(p)),
+            );
+            let (lo, hi) = (world(size, lo - 4.0, 0.0), world(size, hi + 4.0, 0.0));
+            let cell = 0.1_f32;
+            let cells = (((hi.x - lo.x).max(hi.z - lo.z) / cell).ceil() as u32).min(1024);
+            let desc = FieldDesc {
+                corner: glam::Vec2::new(lo.x, lo.z),
+                cells,
+                cell,
+            };
+            let inside = |p: &[Vec3]| {
+                p.iter()
+                    .any(|q| q.x >= lo.x && q.x <= hi.x && q.z >= lo.z && q.z <= hi.z)
+            };
+            let mut triangles = Vec::new();
+            let ground = [
+                Vec3::new(lo.x, WALK_LEVEL as f32, lo.z),
+                Vec3::new(hi.x, WALK_LEVEL as f32, lo.z),
+                Vec3::new(hi.x, WALK_LEVEL as f32, hi.z),
+                Vec3::new(lo.x, WALK_LEVEL as f32, hi.z),
+            ];
+            triangles.push([ground[0], ground[2], ground[1]]);
+            triangles.push([ground[0], ground[3], ground[2]]);
+            // The ground floor's slab, up to its level.
+            if let Some(ring) = inner_ring(m, s) {
+                let y = floor_level(s, 0);
+                let piece: Vec<Vec3> = ring
+                    .iter()
+                    .flat_map(|&p| [world(size, p, WALK_LEVEL), world(size, p, y)])
+                    .collect();
+                prism(&piece, &mut triangles);
+            }
+            for piece in walls
+                .iter()
+                .chain(&interior_pieces(size, &v.masses, &structures, &[i]))
+                .filter(|p| inside(p))
+            {
+                prism(piece, &mut triangles);
+            }
+            let started = std::time::Instant::now();
+            let field = Field::build(desc, PERSON, &triangles);
+            build += started.elapsed();
+            // Outside the front door, a metre and a half out from its wall's middle.
+            let w = &s.walls[door.wall];
+            let t = (w.b - w.a).normalize_or_zero();
+            let mut out = DVec2::new(t.y, -t.x);
+            let centroid = geom::centroid(&m.footprint);
+            let on = w.a + t * door.along;
+            if out.dot(on - centroid) < 0.0 {
+                out = -out;
+            }
+            let from = world(size, on + out * 1.5, WALK_LEVEL);
+            // What a walker reaches from the street on the field alone: a room counts when some
+            // of its floor is reached (as the walk grid counts, `walk::house`). A path to the
+            // reached place nearest its middle times the search.
+            let Some(door_place) = field.place_near(from, 1.0) else {
+                missed.push((m.lot, "front door".to_owned(), 0));
+                continue;
+            };
+            let seen = field.reach(door_place);
+            for room in &inner.rooms {
+                rooms += 1;
+                let level = floor_level(s, room.storey) as f32;
+                let middle = room.outline.iter().fold(DVec2::ZERO, |a, &p| a + p) * 0.25;
+                let middle = world(size, middle, f64::from(level));
+                let ring: Vec<DVec2> = room
+                    .outline
+                    .iter()
+                    .map(|&p| {
+                        let w = world(size, p, 0.0);
+                        DVec2::new(f64::from(w.x), f64::from(w.z))
+                    })
+                    .collect();
+                let d = field.desc();
+                let nearest = (0..d.cells)
+                    .flat_map(|j| (0..d.cells).map(move |i| (i, j)))
+                    .filter(|&(i, j)| {
+                        let c = d.centre(i, j);
+                        geom::contains(&ring, DVec2::new(f64::from(c.x), f64::from(c.y)))
+                    })
+                    .flat_map(|(i, j)| field.column(i, j))
+                    .filter(|&q| {
+                        seen[q as usize] && (field.spans()[q as usize].floor - level).abs() < 0.2
+                    })
+                    .min_by(|&a, &b| {
+                        let (pa, pb) = (field.point(a), field.point(b));
+                        pa.distance(middle)
+                            .total_cmp(&pb.distance(middle))
+                            .then(a.cmp(&b))
+                    });
+                let Some(q) = nearest else {
+                    missed.push((m.lot, format!("{:?}", room.kind), room.storey));
+                    continue;
+                };
+                reached += 1;
+                upstairs += usize::from(room.storey > 0);
+                let started = std::time::Instant::now();
+                let path = field.path(from, field.point(q), &[], 400_000);
+                search += started.elapsed();
+                assert!(
+                    path.is_some_and(|p| p.complete),
+                    "lot {}: no path to a place its flood reached",
+                    m.lot
+                );
+            }
+        }
+        println!(
+            "{} houses, {reached} of {rooms} rooms reached ({upstairs} upstairs); fields \
+             built in {:.1} ms each, paths in {:.2} ms each; not reached (lot, kind, storey): \
+             {missed:?}",
+            houses.min(24),
+            build.as_secs_f64() * 1000.0 / houses.min(24) as f64,
+            search.as_secs_f64() * 1000.0 / reached.max(1) as f64
+        );
+        assert!(houses > 10, "{houses} houses");
+        // 152 of 154 (2026-10-19): lot 110's ground flight starts in a pocket about 0.6 m deep
+        // before its first riser, fenced by its rail, which a walker 0.6 m across turns into
+        // with centimetres to spare: the field's clearance, a lower bound, counts it shut.
+        assert!(
+            missed.len() * 50 <= rooms,
+            "{} rooms of {rooms} not reached (lot, kind, storey): {:?}",
+            missed.len(),
+            &missed[..missed.len().min(12)]
+        );
+    }
+
     /// A walker's capsule passes every doorway of the village's houses' insides (#276): through
     /// the doorway's middle, 0.4 m either side of its partition, against the partitions (their
     /// heads over the doorways included), the furniture as drawn ([`walk::furnished`]) and the

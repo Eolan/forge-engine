@@ -710,7 +710,7 @@ game (scenarios, missions, licensed assets) is a private repository, as the city
    to compare next); flora; the particle system (smoke, dust, fire, rain,
    sparks; D-064's step 1 built 2026-10-18, #271: emitters as data, the lab's smoke yard);
    characters' animation (imported rigs' root frames, root motion, masked and additive layers
-   built 2026-10-19, #310, #311, #313; the data-driven state machine, #312, the same day); sound, fauna and networking,
+   built 2026-10-19, #310, #311, #313; the data-driven state machine, #312, the same day); navigation (D-076, #317: `forge-nav`'s walk field, links and A*, the village's rooms reached from the street, 2026-10-19; passages as data next, #316); sound, fauna and networking,
    the last three in parallel sessions off
    the GPU: #267 sound, #268 networking, #269 flora and fauna.
 4. **Then the first scenario:** zombies (melee); later a base to infiltrate, a solo fight.

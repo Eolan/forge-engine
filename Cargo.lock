@@ -514,6 +514,7 @@ dependencies = [
  "forge-core",
  "forge-flora",
  "forge-geom",
+ "forge-nav",
  "forge-physics",
  "forge-procgen",
  "forge-render",
@@ -1089,6 +1090,13 @@ dependencies = [
  "ron",
  "serde",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "forge-nav"
+version = "0.1.0"
+dependencies = [
+ "glam",
 ]
 
 [[package]]

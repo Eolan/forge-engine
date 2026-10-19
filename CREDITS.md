@@ -710,6 +710,13 @@ soft edges, their pixel-wide minimum, their reactive mask and their hash:
     (flight speeds), Kays et al. 2020 and Jensen et al. 2022 (pet cats), Chebli et al. 2022 and
     the Filabres study (goats), as `docs/research/fauna.md` lists them.
 
+**Navigation** (`forge-nav`, D-076, #317):
+- **The walk field.** Mikko Mononen, Recast & Detour (zlib, read, not used as code): the solids
+  rasterised into spans per column, a walkable top under the walker's height, neighbours joined
+  within its step and a chamfer distance field for its radius.
+- **The search.** Peter E. Hart, Nils J. Nilsson and Bertram Raphael, "A Formal Basis for the
+  Heuristic Determination of Minimum Cost Paths", 1968 (A*), with an octile heuristic.
+
 **Sound** (`forge-audio`, #267, D-011):
 - **The audio thread's rules.** Ross Bencina, "Real-time audio programming 101: time waits for
   nothing", 2011: no lock, allocation, file or unbounded call on the audio thread; what it is

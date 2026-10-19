@@ -6793,5 +6793,25 @@ best guess or data"):
   - a field is built in the frame of what it stands on (a ship's deck, not the world), as the
     character controller moves with its ground.
 
+**Step 1 built** (the same day, `forge-nav`):
+- **The field:** `Field::build` from a tile's solid triangles (0.10 m columns, the person's step
+  0.4 m and height 1.95 m, ground up to 45°).
+- **Links and the search:** `Link` records, `Field::path` (A* with integer octile costs, the
+  reachable place nearest the goal when there is no path), the path pulled straight, `reach` and
+  `place_near` (a path's end in a bed takes the nearest place a person fits, within 1 m).
+- **Checked on the village** (city-plan's `forge_nav_walks_from_the_street_into_every_room`):
+  - the walker's pieces of 24 houses (walls open at their front doors, partitions, flights,
+    floors, furniture) and the ground;
+  - from 1.5 m outside each front door, 152 of 154 rooms are reached, 96 of them upstairs;
+  - 38 ms a house's field (a tile of 0.10 m columns over the house and 4 m round it), 0.9 ms a
+    path.
+- **The two rooms not reached** are upstairs in one house. Its ground flight starts in a pocket
+  about 0.6 m deep, fenced by its rail, that a walker 0.6 m across turns into with centimetres to
+  spare; the field's clearance, a lower bound, counts it shut.
+- **Cell size:** the 0.05 m columns reached fewer (144) at four times the cost; the clearance's
+  half-cell bound decides more than the cell.
+- **Left:** the passages' records from the pieces (#316), steering and avoidance, tiles built
+  round the agents, and the town's pursuers as the first user.
+
 *(research: navigation-traversal.md, game-ai-ecosystems.md §2 and §7, animation.md §5; D-012,
 D-016, D-062; issues #90, #276, #311, #316, #317)*

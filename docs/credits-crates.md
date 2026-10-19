@@ -71,7 +71,7 @@ Where Forge uses them:
 - `crossbeam-channel`: forge-task
 - `crossbeam-deque`: forge-task
 - `crossbeam-utils`: forge-task
-- `glam`: asteroids, city-blocks, city-map, city-plan, forge-anim, forge-app, forge-audio, forge-core, forge-fauna, forge-flora, forge-geom, forge-mission, forge-net, forge-physics, forge-procgen, forge-render, forge-sim, forge-terrain, forge-world, meshlets, physics-lab, planet
+- `glam`: asteroids, city-blocks, city-map, city-plan, forge-anim, forge-app, forge-audio, forge-core, forge-fauna, forge-flora, forge-geom, forge-mission, forge-nav, forge-net, forge-physics, forge-procgen, forge-render, forge-sim, forge-terrain, forge-world, meshlets, physics-lab, planet
 - `gltf`: forge-anim, forge-geom
 - `gpu-allocator`: forge-gpu
 - `i_overlay`: forge-procgen
