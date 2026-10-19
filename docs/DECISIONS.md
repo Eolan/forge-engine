@@ -408,6 +408,15 @@ deformable layer (Phase 3's materials step), and the footsteps audio's (D-011).
 its clip, the flow over each including its own beat, so the beat gives the thrust. It is guided
 the same way: a balance torque holds it facing its flight, its wings at an angle of attack, and
 banked to turn onto its circuit.
+**Imported rigs and root motion** (#310, #311, 2026-10-19, needs found by a character test built
+outside the repository): a clip's channels on nodes between a joint and its parent (or above a
+root) that are not joints are baked into the joint under them at 60 keys a second, so a rig whose
+root frame above the pelvis carries the travel and turn moves (the skeleton and the vertices'
+joint indices unchanged). `Clip::root_motion` gives the root joint's move and turn about +Y
+between two times, in the character's frame at the first (over a loop's end too), for a
+controller to apply, and `lock_root` holds the pose's root at an anchor while it does: the whole
+motion applied and locked reproduces the clip's own path, the hips' sway included. The turn is
+the rotation's twist about +Y, a quaternion with `sqrt` only (D-016).
 
 ## D-013 — Vegetation, impostor ladder, trim sheets ✅ (2026-09-24)
 

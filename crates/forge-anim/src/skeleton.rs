@@ -112,6 +112,12 @@ impl Skeleton {
         &self.inverse_bind
     }
 
+    /// The still frame between joint `joint` and its parent (the nodes in between that are not
+    /// joints; the identity for most), as [`Self::model_space`] applies it.
+    pub fn frame(&self, joint: usize) -> Mat4 {
+        self.frames[joint]
+    }
+
     /// Writes each joint's transform in the model's frame into `out`: its local transform
     /// from `pose` after its parent's.
     ///
