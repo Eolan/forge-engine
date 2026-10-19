@@ -406,6 +406,33 @@ mod tests {
     }
 
     #[test]
+    fn the_definitions_name_every_function_of_the_game_table() {
+        let defs = include_str!("../defs/game.d.luau");
+        let mut g = game("");
+        let keys = g
+            .script
+            .run(
+                "keys",
+                "local ks = {} for k in pairs(game) do table.insert(ks, k) end table.sort(ks) return ks",
+            )
+            .unwrap();
+        let Data::List(keys) = keys else {
+            panic!("{keys:?}")
+        };
+        assert_eq!(keys.len(), 7, "{keys:?}");
+        for key in keys {
+            let Data::String(key) = key else {
+                panic!("{key:?}")
+            };
+            assert!(
+                defs.contains(&format!("\t{key}: (")),
+                "{key} missing from game.d.luau"
+            );
+        }
+        assert!(defs.contains("declare class Entity") && defs.contains("function id(self)"));
+    }
+
+    #[test]
     fn a_handler_over_its_budget_ends_and_the_game_goes_on() {
         let limits = Limits {
             interrupts: 10_000,

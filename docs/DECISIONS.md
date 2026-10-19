@@ -6368,7 +6368,10 @@ rules that build their tables in loops. The owner approved `mlua`'s download.
     A handler over its budget ends with an error, and the game goes on.
   - **Tests:** 4 (events in order, timers, entity handles through a world, a handler over its
     budget).
-  - **Left:** the definition files for `luau-lsp`, an F1 zone per script, and hot reload.
+  - **Definitions:** `crates/forge-script/defs/game.d.luau` describes `game` and `Entity` for
+    `luau-lsp`, written by hand. A test checks that it names every function of the table.
+  - **Left:** generating the definitions from the Rust API; `luau-lsp analyze` in the gate (not
+    installed here: a download for the owner to approve); an F1 zone per script; hot reload.
 
 ## D-073 — Missions as data: the record, its evaluator and its two saves ✅ (2026-10-18, #287, D-072's first point)
 
