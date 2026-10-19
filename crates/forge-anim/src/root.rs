@@ -44,6 +44,20 @@ impl RootMotion {
             turn: (next.turn * self.turn).normalize(),
         }
     }
+
+    /// This motion and `other` mixed, `weight` of `other`: a blend of two clips' motions (the
+    /// turns normalised from their linear mix, the short way round).
+    pub fn mix(self, other: RootMotion, weight: f32) -> RootMotion {
+        let b = if self.turn.dot(other.turn) < 0.0 {
+            -other.turn
+        } else {
+            other.turn
+        };
+        RootMotion {
+            translation: self.translation + (other.translation - self.translation) * weight,
+            turn: (self.turn * (1.0 - weight) + b * weight).normalize(),
+        }
+    }
 }
 
 /// The twist of `q` about +Y: the turn about the vertical it holds, a unit quaternion (the

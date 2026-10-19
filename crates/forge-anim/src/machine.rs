@@ -11,9 +11,15 @@
 //! - **Ways** out of a state are tried most specific first (the most conditions), then in their
 //!   order. Several steps run in one update, but never back to a state already passed in it: a
 //!   variable the game sets and the host does not would bounce between two states every frame.
-//! - **The node that plays** is the one whose conditions hold with the most conditions, then the
-//!   highest priority, then the first: priority first let a three-condition sprint vault lose to a
-//!   one-condition start.
+//! - **The node that plays** is the one whose conditions hold with the most conditions (those of
+//!   the group that holds, when its conditions are alternatives), then the highest priority, then
+//!   the first: priority first let a three-condition sprint vault lose to a one-condition start.
+//! - **A gait** (`match_speed`) plays at the character's speed over its natural speed, a blend's
+//!   mixed from its clips' by their weights, so the feet keep to the ground; an in-between clip
+//!   at its transition's rate. [`Animator::root_motion`] gives what the last update's playing
+//!   carried the root by, through blends and in-between clips.
+//! - **A rig with fewer clips than the data names** binds with
+//!   [`Machine::new_dropping_missing`], which leaves out what it cannot play and says what.
 //! - **Inheritance:** a node may extend another (a state's node or a base): the parent's fields,
 //!   then the child's, its lists appended (its conditions joined to every group of the parent's),
 //!   so a variant is a few lines.
@@ -28,7 +34,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-use crate::{BlendSpace, Clip, Player, Pose, Skeleton, Source};
+use crate::{BlendSpace, Clip, Player, Pose, RootMotion, Skeleton, Source};
 
 /// What can go wrong building a machine.
 #[derive(Debug, thiserror::Error)]
@@ -116,11 +122,11 @@ impl Value {
     }
 
     /// Whether it equals `literal`, compared as the literal's kind: a flag as a flag, a number
-    /// as a number, a word without case.
+    /// as a number to [`NUMBER_EQUAL`], a word without case.
     fn equals(&self, literal: &Value) -> bool {
         match literal {
             Value::Bool(b) => self.truthy() == *b,
-            Value::Number(x) => self.number() == *x,
+            Value::Number(x) => (self.number() - *x).abs() <= NUMBER_EQUAL,
             Value::Text(t) => match self {
                 Value::Text(s) => s.eq_ignore_ascii_case(t),
                 _ => false,
@@ -128,6 +134,10 @@ impl Value {
         }
     }
 }
+
+/// How near two numbers count as equal (`name == 0.5`): a value the game computed lands a
+/// rounding off the literal the data wrote.
+pub const NUMBER_EQUAL: f32 = 1e-4;
 
 /// A character's variables: names compared without case, a missing one reading false, 0 or "".
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -365,6 +375,8 @@ pub struct TransitionDef {
     pub blend: Option<f32>,
     /// The in-between clip, by name.
     pub via: Option<String>,
+    /// The in-between clip's playback rate (1 without).
+    pub speed: Option<f32>,
 }
 
 /// An animation node as data: the fields it leaves out come from its parent ([`Self::extends`])
@@ -381,10 +393,12 @@ pub struct NodeDef {
     pub looped: Option<bool>,
     /// The blend time of a switch to it, seconds.
     pub blend: Option<f32>,
-    /// Its playback rate.
+    /// Its playback rate (unless it matches the character's speed).
     pub speed: Option<f32>,
-    /// A variable holding the character's speed: a clip node then plays at it over the clip's
-    /// natural speed ([`Clip::natural_speed`]), clamped to 0.5–1.8, times its own rate.
+    /// A variable holding the character's speed: the node then plays at it over its natural
+    /// speed, clamped to 0.5–1.8, in place of its own rate (a gait's stride kept on the ground).
+    /// A clip's natural speed is its root's ([`Clip::natural_speed`]); a blend's, its two clips'
+    /// mixed by their weights at its variable.
     pub match_speed: Option<String>,
     /// Ties among the nodes whose conditions hold as specifically.
     pub priority: Option<i32>,
@@ -512,6 +526,7 @@ struct TransitionFile {
     to: String,
     blend: Option<f32>,
     via: Option<String>,
+    speed: Option<f32>,
 }
 
 #[derive(Deserialize)]
@@ -584,6 +599,7 @@ impl NodeFile {
                     to: t.to,
                     blend: t.blend,
                     via: t.via,
+                    speed: t.speed,
                 })
                 .collect(),
         })
@@ -675,8 +691,11 @@ struct Node {
     looped: bool,
     blend: f32,
     speed: f32,
-    /// The variable holding the character's speed, and the clip's natural speed.
-    match_speed: Option<(String, f32)>,
+    /// The variable holding the character's speed ([`NodeDef::match_speed`]).
+    match_speed: Option<String>,
+    /// Its clip's, or each of its blend's entries', root travel over a cycle (metres) and cycles
+    /// a second.
+    natural: Vec<[f32; 2]>,
     /// A blend node's variable.
     scalar: Option<String>,
     priority: i32,
@@ -685,11 +704,61 @@ struct Node {
     transitions: Vec<Transition>,
 }
 
+impl Node {
+    /// Its playback rate with `vars`: the character's speed over its natural speed, clamped, or
+    /// its own rate (without a speed to match, or a natural speed of 0). A blend's natural speed
+    /// is its root's as it plays: its two clips' travel over a cycle mixed by their weights, times
+    /// their cycles a second mixed the same way ([`BlendSpace::rate`]).
+    fn rate(&self, vars: &Vars) -> f32 {
+        let [travel, cycles] = match &self.source {
+            Source::Clip(_) => self.natural.first().copied().unwrap_or([0.0; 2]),
+            Source::Blend(space) => {
+                let parameter = self.scalar.as_deref().map_or(0.0, |s| vars.number(s));
+                let (i, j, w) = space.around(parameter);
+                let (a, b) = (self.natural[i], self.natural[j]);
+                [a[0] + (b[0] - a[0]) * w, a[1] + (b[1] - a[1]) * w]
+            }
+        };
+        let natural = travel * cycles;
+        match &self.match_speed {
+            Some(var) if natural > 0.0 => {
+                (vars.number(var) / natural).clamp(MATCH_SPEED.0, MATCH_SPEED.1)
+            }
+            _ => self.speed,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Transition {
     to: String,
     blend: Option<f32>,
     via: Option<usize>,
+    speed: f32,
+}
+
+/// What [`Machine::new_dropping_missing`] left out: a node one of whose clips the rig lacks (or a
+/// blend's entry, the rest of its entries kept), or a transition's in-between clip (the
+/// transition kept without it).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Dropped {
+    /// The node.
+    pub node: String,
+    /// The clip the rig lacks.
+    pub clip: String,
+    /// What went: the node, one of its blend's entries, or a transition's in-between clip.
+    pub what: DroppedPart,
+}
+
+/// What of a node [`Dropped`] names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DroppedPart {
+    /// The node, its clip missing (or all its blend's).
+    Node,
+    /// One entry of its blend.
+    BlendEntry,
+    /// A transition's in-between clip.
+    InBetween,
 }
 
 #[derive(Clone, Debug)]
@@ -723,13 +792,37 @@ fn clip_index(clips: &[Clip], name: &str) -> Option<usize> {
 
 impl Machine {
     /// `def` bound to `clips` (a rig's), their names resolved; `root` is the skeleton's joint
-    /// whose travel gives a clip's natural speed ([`NodeDef::match_speed`]).
+    /// whose travel gives a clip's natural speed ([`NodeDef::match_speed`]). A clip the rig lacks
+    /// is an error ([`Self::new_dropping_missing`] leaves its node out instead).
     pub fn new(
         def: &MachineDef,
         clips: &[Clip],
         skeleton: &Skeleton,
         root: usize,
     ) -> Result<Machine, MachineError> {
+        Self::bind(def, clips, skeleton, root, false).map(|(machine, _)| machine)
+    }
+
+    /// [`Self::new`], leaving out what names a clip the rig lacks, and saying what: a node (a
+    /// blend's entry, the node kept with the rest), or a transition's in-between clip (the
+    /// transition kept without it). A game's data names hundreds of clips and one rig carries a
+    /// few dozen of them.
+    pub fn new_dropping_missing(
+        def: &MachineDef,
+        clips: &[Clip],
+        skeleton: &Skeleton,
+        root: usize,
+    ) -> Result<(Machine, Vec<Dropped>), MachineError> {
+        Self::bind(def, clips, skeleton, root, true)
+    }
+
+    fn bind(
+        def: &MachineDef,
+        clips: &[Clip],
+        skeleton: &Skeleton,
+        root: usize,
+        drop_missing: bool,
+    ) -> Result<(Machine, Vec<Dropped>), MachineError> {
         if def.states.is_empty() {
             return Err(MachineError::Empty);
         }
@@ -742,12 +835,20 @@ impl Machine {
                     to: to.to_owned(),
                 })
         };
-        let clip = |node: &str, name: &str| {
-            clip_index(clips, name).ok_or_else(|| MachineError::UnknownClip {
-                node: node.to_owned(),
-                clip: name.to_owned(),
-            })
+        let missing = |node: &str, name: &str| MachineError::UnknownClip {
+            node: node.to_owned(),
+            clip: name.to_owned(),
         };
+        // A clip's root travel over a cycle and its cycles a second.
+        let natural = |c: usize| {
+            let d = clips[c].duration;
+            if d > 0.0 {
+                [clips[c].natural_speed(skeleton, root) * d, 1.0 / d]
+            } else {
+                [0.0; 2]
+            }
+        };
+        let mut dropped = Vec::new();
         let mut states = Vec::with_capacity(def.states.len());
         for s in &def.states {
             let ways = s
@@ -763,50 +864,81 @@ impl Machine {
             let mut nodes = Vec::with_capacity(s.nodes.len());
             for n in &s.nodes {
                 let n = def.resolved(n)?;
-                let (source, scalar, natural) = match &n.motion {
-                    Some(Motion::Clip(c)) => {
-                        let c = clip(&n.name, c)?;
-                        (
-                            Source::Clip(c),
-                            None,
-                            clips[c].natural_speed(skeleton, root),
-                        )
-                    }
+                let (source, scalar, naturals) = match &n.motion {
+                    Some(Motion::Clip(name)) => match clip_index(clips, name) {
+                        Some(c) => (Source::Clip(c), None, vec![natural(c)]),
+                        None if drop_missing => {
+                            dropped.push(Dropped {
+                                node: n.name.clone(),
+                                clip: name.clone(),
+                                what: DroppedPart::Node,
+                            });
+                            continue;
+                        }
+                        None => return Err(missing(&n.name, name)),
+                    },
                     Some(Motion::Blend { scalar, entries }) => {
-                        let entries = entries
-                            .iter()
-                            .map(|(c, v)| Ok((clip(&n.name, c)?, *v)))
-                            .collect::<Result<_, MachineError>>()?;
+                        let mut kept = Vec::with_capacity(entries.len());
+                        for (name, value) in entries {
+                            match clip_index(clips, name) {
+                                Some(c) => kept.push((c, *value)),
+                                None if drop_missing => dropped.push(Dropped {
+                                    node: n.name.clone(),
+                                    clip: name.clone(),
+                                    what: DroppedPart::BlendEntry,
+                                }),
+                                None => return Err(missing(&n.name, name)),
+                            }
+                        }
+                        if kept.is_empty() {
+                            dropped.push(Dropped {
+                                node: n.name.clone(),
+                                clip: String::new(),
+                                what: DroppedPart::Node,
+                            });
+                            continue;
+                        }
+                        let naturals = kept.iter().map(|&(c, _)| natural(c)).collect();
                         (
-                            Source::Blend(BlendSpace { entries }),
+                            Source::Blend(BlendSpace { entries: kept }),
                             Some(scalar.clone()),
-                            0.0,
+                            naturals,
                         )
                     }
                     None => return Err(MachineError::NoMotion(n.name.clone())),
                 };
-                let transitions = n
-                    .transitions
-                    .iter()
-                    .map(|t| {
-                        Ok(Transition {
-                            to: t.to.clone(),
-                            blend: t.blend,
-                            via: t.via.as_deref().map(|v| clip(&n.name, v)).transpose()?,
-                        })
-                    })
-                    .collect::<Result<_, MachineError>>()?;
+                let mut transitions = Vec::with_capacity(n.transitions.len());
+                for t in &n.transitions {
+                    let via = match t.via.as_deref() {
+                        None => None,
+                        Some(name) => match clip_index(clips, name) {
+                            Some(c) => Some(c),
+                            None if drop_missing => {
+                                dropped.push(Dropped {
+                                    node: n.name.clone(),
+                                    clip: name.to_owned(),
+                                    what: DroppedPart::InBetween,
+                                });
+                                None
+                            }
+                            None => return Err(missing(&n.name, name)),
+                        },
+                    };
+                    transitions.push(Transition {
+                        to: t.to.clone(),
+                        blend: t.blend,
+                        via,
+                        speed: t.speed.unwrap_or(1.0),
+                    });
+                }
                 nodes.push(Node {
                     name: n.name.clone(),
                     source,
                     looped: n.looped.unwrap_or(true),
                     blend: n.blend.unwrap_or(0.2),
                     speed: n.speed.unwrap_or(1.0),
-                    match_speed: n
-                        .match_speed
-                        .clone()
-                        .filter(|_| natural > 0.0)
-                        .map(|v| (v, natural)),
+                    match_speed: n.match_speed.clone(),
+                    natural: naturals,
                     scalar,
                     priority: n.priority.unwrap_or(0),
                     when: n.when.clone(),
@@ -824,7 +956,7 @@ impl Machine {
             Some(name) => state_index("start", name)?,
             None => 0,
         };
-        Ok(Machine { states, start })
+        Ok((Machine { states, start }, dropped))
     }
 
     /// Its states' names, in order.
@@ -848,10 +980,20 @@ pub struct Animator {
     /// The node playing (or the one an in-between clip leads to): its state and its index there.
     /// A state without a node of its own keeps the one before playing.
     node: Option<(usize, usize)>,
-    /// An in-between clip plays before `node`.
+    /// An in-between clip plays before `node`, at this rate.
     between: bool,
+    between_speed: f32,
+    /// Where the last update's motion started in the source playing: the phase it was at, or
+    /// `None` when the source started in that update (from its start).
+    motion_from: Option<f32>,
+    /// The source was switched in this update.
+    switched: bool,
     player: Player,
 }
+
+/// Events posted for one update, at most: the rest are dropped (a host posting every frame
+/// without updating would grow the list without end).
+pub const MAX_POSTED: usize = 32;
 
 impl Animator {
     /// A character of `joints` joints at `machine`'s start, playing nothing until its first
@@ -863,13 +1005,51 @@ impl Animator {
             state: machine.start,
             node: None,
             between: false,
+            between_speed: 1.0,
+            motion_from: None,
+            switched: false,
             player: Player::new(Source::Clip(0), joints),
         }
     }
 
-    /// Posts `event` for the next update's conditions (`event:name`); it is cleared after.
+    /// Posts `event` for the next update's conditions (`event:name`); it is cleared after. The
+    /// same event twice counts once, and past [`MAX_POSTED`] events are dropped.
     pub fn post(&mut self, event: &str) {
-        self.posted.push(event.to_owned());
+        if self.posted.len() < MAX_POSTED && !self.posted.iter().any(|p| p == event) {
+            self.posted.push(event.to_owned());
+        }
+    }
+
+    /// The player under it: its source (a node's clip or blend, or an in-between clip), its
+    /// phase and the parameter a blend reads.
+    pub fn player(&self) -> &Player {
+        &self.player
+    }
+
+    /// How the root moved over the last update ([`Clip::root_motion`]): along what plays from
+    /// the phase it was at to the one it reached (from its start when it started in that
+    /// update), a blend's clips' motions mixed by their weights; an in-between clip's too. For a
+    /// controller that moves the character by its animation (#311); `root` is the skeleton's
+    /// root joint.
+    pub fn root_motion(&self, clips: &[Clip], skeleton: &Skeleton, root: usize) -> RootMotion {
+        let to = self.player.phase();
+        let from = self.motion_from.unwrap_or(0.0);
+        let along = |c: usize| {
+            let d = clips[c].duration;
+            clips[c].root_motion(skeleton, root, from * d, to * d)
+        };
+        match self.player.source() {
+            Source::Clip(c) => along(*c),
+            Source::Blend(space) => {
+                let (i, j, w) = space.around(self.player.parameter);
+                let a = along(space.entries[i].0);
+                if j == i || w <= 0.0 {
+                    a
+                } else {
+                    a.mix(along(space.entries[j].0), w)
+                }
+            }
+        }
     }
 
     /// Its state's name.
@@ -927,6 +1107,7 @@ impl Animator {
     ) -> Vec<Fired> {
         let events = std::mem::take(&mut self.posted);
         let mut fired = Vec::new();
+        self.switched = false;
         // The states: the most specific way that holds (the first of those as specific), never
         // back to a state passed in this update.
         let mut passed = vec![self.state];
@@ -972,11 +1153,13 @@ impl Animator {
             });
             let blend = transition.and_then(|t| t.blend).unwrap_or(target.blend);
             self.node = Some(c);
-            match transition.and_then(|t| t.via) {
-                Some(via) => {
+            match transition.and_then(|t| t.via.map(|via| (via, t.speed))) {
+                Some((via, speed)) => {
                     self.player
                         .play_once(Source::Clip(via), blend, clips, skeleton);
                     self.between = true;
+                    self.between_speed = speed;
+                    self.switched = true;
                 }
                 None => {
                     self.start(target, blend, clips, skeleton);
@@ -994,17 +1177,15 @@ impl Animator {
             self.fire(node, At::Start, &mut fired);
         }
         if self.between {
-            self.player.speed = 1.0;
+            self.player.speed = self.between_speed;
         } else {
-            let matched = node.match_speed.as_ref().map_or(1.0, |(var, natural)| {
-                (self.vars.number(var) / natural).clamp(MATCH_SPEED.0, MATCH_SPEED.1)
-            });
-            self.player.speed = node.speed * matched;
+            self.player.speed = node.rate(&self.vars);
             if let Some(scalar) = &node.scalar {
                 self.player.parameter = self.vars.number(scalar);
             }
         }
         let (phase0, done0) = (self.player.phase(), self.player.finished());
+        self.motion_from = (!self.switched).then_some(phase0);
         self.player.update(clips, skeleton, dt, out);
         if self.between {
             return fired;
@@ -1038,6 +1219,7 @@ impl Animator {
     /// Switches the player to `node` over `blend` seconds.
     fn start(&mut self, node: &Node, blend: f32, clips: &[Clip], skeleton: &Skeleton) {
         self.between = false;
+        self.switched = true;
         if node.looped {
             self.player
                 .play(node.source.clone(), blend, clips, skeleton);
@@ -1402,5 +1584,139 @@ mod tests {
         let fired = run(&mut b, &m, 241, 1.0 / 60.0);
         let steps = fired.iter().filter(|f| f.name == "Footstep").count();
         assert_eq!(steps, 7);
+    }
+
+    /// A machine of one state with one node, `node`, over the test clips.
+    fn one_node(node: NodeDef) -> (Machine, Vec<Clip>, Skeleton) {
+        let (clips, skeleton) = (clips(), skeleton());
+        let def = MachineDef {
+            start: None,
+            bases: Vec::new(),
+            states: vec![StateDef {
+                name: "moving".into(),
+                ways: Vec::new(),
+                nodes: vec![node],
+            }],
+        };
+        let machine = Machine::new(&def, &clips, &skeleton, 0).unwrap();
+        (machine, clips, skeleton)
+    }
+
+    #[test]
+    fn a_blend_matches_the_speed_its_clips_mix_to() {
+        // The walk carries the root 1.5 m/s, the run 4 m/s: at either end the blend plays the
+        // clip's natural speed as authored, at 6 m/s the run alone 1.5 times, at 0.3 the clamp.
+        let m = one_node(NodeDef {
+            name: "gait".into(),
+            motion: Some(Motion::Blend {
+                scalar: "Speed".into(),
+                entries: vec![("Walk".into(), 1.5), ("Run".into(), 4.0)],
+            }),
+            match_speed: Some("Speed".into()),
+            speed: Some(0.92),
+            ..NodeDef::default()
+        });
+        let mut a = Animator::new(&m.0, 1);
+        for (speed, rate) in [(4.0, 1.0), (6.0, 1.5), (1.5, 1.0), (0.3, 0.5)] {
+            a.vars.set("Speed", Value::Number(speed));
+            run(&mut a, &m, 2, 1.0 / 60.0);
+            assert!(
+                (a.player().speed - rate).abs() < 1e-5,
+                "at {speed} m/s: {}",
+                a.player().speed
+            );
+        }
+        // Its root moves at the character's speed: a second at 2.75 m/s carries it 2.75 m.
+        a.vars.set("Speed", Value::Number(2.75));
+        let mut pose = m.2.rest().clone();
+        let mut travel = 0.0;
+        for _ in 0..60 {
+            a.update(&m.0, &m.1, &m.2, 1.0 / 60.0, &mut pose);
+            travel += a.root_motion(&m.1, &m.2, 0).translation.x;
+        }
+        assert!((travel - 2.75).abs() < 0.02, "{travel} m in a second");
+    }
+
+    #[test]
+    fn an_in_between_clip_plays_at_its_transitions_rate() {
+        let text = MACHINE.replace(
+            r#"transitions = [{ to = "run", blend = 0.1, via = "IdleToRun" }]"#,
+            r#"transitions = [{ to = "run", blend = 0.1, via = "IdleToRun", speed = 2.0 }]"#,
+        );
+        let (clips, skeleton) = (clips(), skeleton());
+        let def = MachineDef::from_toml(&text).unwrap();
+        let machine = Machine::new(&def, &clips, &skeleton, 0).unwrap();
+        let m = (machine, clips, skeleton);
+        let mut a = Animator::new(&m.0, 1);
+        run(&mut a, &m, 2, 1.0 / 60.0);
+        a.vars.set("isMoving", Value::Bool(true));
+        a.vars.set("isRunning", Value::Bool(true));
+        run(&mut a, &m, 1, 1.0 / 60.0);
+        assert!(a.node(&m.0).2);
+        assert_eq!(a.player().speed, 2.0);
+        // IdleToRun's 0.3 s at twice its rate: done in 0.15 s, where the first test's took 0.3.
+        run(&mut a, &m, 12, 1.0 / 60.0);
+        assert!(!a.node(&m.0).2, "{}", a.describe(&m.0));
+    }
+
+    #[test]
+    fn a_rig_without_some_clips_binds_without_their_nodes() {
+        let (clips, skeleton) = (clips(), skeleton());
+        let mut def = MachineDef::from_toml(MACHINE).unwrap();
+        def.states[1].nodes.push(NodeDef {
+            name: "sneak".into(),
+            motion: Some(Motion::Clip("Sneak".into())),
+            ..NodeDef::default()
+        });
+        def.states[1].nodes.push(NodeDef {
+            name: "gait".into(),
+            motion: Some(Motion::Blend {
+                scalar: "Speed".into(),
+                entries: vec![
+                    ("Walk".into(), 1.5),
+                    ("Jog".into(), 2.5),
+                    ("Run".into(), 4.0),
+                ],
+            }),
+            ..NodeDef::default()
+        });
+        def.states[0].nodes[0].transitions[0].via = Some("Stumble".into());
+        assert!(Machine::new(&def, &clips, &skeleton, 0).is_err());
+        let (machine, dropped) = Machine::new_dropping_missing(&def, &clips, &skeleton, 0).unwrap();
+        let parts: Vec<(&str, &str, DroppedPart)> = dropped
+            .iter()
+            .map(|d| (d.node.as_str(), d.clip.as_str(), d.what))
+            .collect();
+        assert_eq!(
+            parts,
+            [
+                ("idle", "Stumble", DroppedPart::InBetween),
+                ("sneak", "Sneak", DroppedPart::Node),
+                ("gait", "Jog", DroppedPart::BlendEntry),
+            ]
+        );
+        // The rest runs: idle to run straight, without the in-between clip it lost.
+        let m = (machine, clips, skeleton);
+        let mut a = Animator::new(&m.0, 1);
+        run(&mut a, &m, 2, 1.0 / 60.0);
+        a.vars.set("isMoving", Value::Bool(true));
+        a.vars.set("isRunning", Value::Bool(true));
+        run(&mut a, &m, 1, 1.0 / 60.0);
+        assert_eq!(a.node(&m.0), ("run", a.node(&m.0).1, false));
+    }
+
+    #[test]
+    fn numbers_compare_to_a_rounding_and_posted_events_are_bounded() {
+        let mut vars = Vars::default();
+        vars.set("lean", Value::Number(0.500_04));
+        assert!(Condition::parse("lean == 0.5").unwrap().holds(&vars, &[]));
+        assert!(!Condition::parse("lean == 0.51").unwrap().holds(&vars, &[]));
+        let m = machine();
+        let mut a = Animator::new(&m.0, 1);
+        for k in 0..100 {
+            a.post(&format!("E{}", k % 50));
+            a.post("Vault");
+        }
+        assert_eq!(a.posted.len(), MAX_POSTED);
     }
 }
