@@ -6960,7 +6960,9 @@ best guess or data"):
   columns and an 8-column margin, so its clearance at the edge sees what stands beyond.
 - **Building:** the host builds the tiles round its agents (`round`) from the solids over a
   tile's `bounds`, rebuilds one alone when what stands on it changes, and drops those no agent
-  needs.
+  needs. It may build a tile's field on any thread (`Field::build(tiles.desc(t), tiles.walker(),
+  ..)`) and hand it over (`insert`, which gives back a field built for another tile or walker),
+  as an out-of-tree town asked: it had cloned all its tiles to build a batch off the main thread.
 - **A place** belongs to the tile owning its column. A step into a margin goes on in the owning
   tile, at the same point on the same floor. A tile not built is not walked, and a path towards
   it ends at the reachable place nearest the goal.

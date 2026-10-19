@@ -80,13 +80,35 @@ impl Tiles {
     /// Builds tile `t`'s field from `triangles` (the solids over [`Self::bounds`]; others are
     /// clipped away), replacing the one it had.
     pub fn build(&mut self, t: (i32, i32), triangles: &[[Vec3; 3]]) {
-        let desc = FieldDesc {
+        self.fields
+            .insert(t, Field::build(self.desc(t), self.walker, triangles));
+    }
+
+    /// What tile `t`'s field is built with: its own columns and the margin round them. A host
+    /// may build it on any thread, `Field::build(tiles.desc(t), tiles.walker(), triangles)`, and
+    /// hand it over ([`Self::insert`]) without the tiles going with it.
+    pub fn desc(&self, t: (i32, i32)) -> FieldDesc {
+        FieldDesc {
             corner: self.bounds(t).0,
             cells: TILE_CELLS + 2 * TILE_MARGIN,
             cell: self.cell,
-        };
-        self.fields
-            .insert(t, Field::build(desc, self.walker, triangles));
+        }
+    }
+
+    /// The walker the tiles' fields are built for.
+    pub fn walker(&self) -> Walker {
+        self.walker
+    }
+
+    /// Makes `field` tile `t`'s, replacing the one it had: a field built elsewhere with
+    /// [`Self::desc`] and [`Self::walker`]. A field built for another tile or walker is given
+    /// back.
+    pub fn insert(&mut self, t: (i32, i32), field: Field) -> Result<(), Field> {
+        if field.desc() != self.desc(t) || field.walker() != self.walker {
+            return Err(field);
+        }
+        self.fields.insert(t, field);
+        Ok(())
     }
 
     /// Drops tile `t`'s field: no agent needs it.
@@ -462,6 +484,28 @@ mod tests {
             "{:?}",
             crowd.agents
         );
+    }
+
+    #[test]
+    fn a_tile_built_on_another_thread_is_handed_over() {
+        let t = ground();
+        let mut tiles = Tiles::new(PERSON, 0.1);
+        tiles.build((0, 0), &t);
+        // The second tile built on a thread of its own, with only its description and walker.
+        let (desc, walker) = (tiles.desc((1, 0)), tiles.walker());
+        let triangles = t.clone();
+        let field = std::thread::spawn(move || Field::build(desc, walker, &triangles))
+            .join()
+            .unwrap();
+        // Not the tile it was built for: given back.
+        let field = tiles.insert((2, 0), field).unwrap_err();
+        tiles.insert((1, 0), field).unwrap();
+        let (a, b) = (Vec3::new(5.0, 0.0, 10.0), Vec3::new(45.0, 0.0, 10.0));
+        let handed = tiles.path(a, b, &[], 1 << 22).unwrap();
+        tiles.build((1, 0), &t);
+        let built = tiles.path(a, b, &[], 1 << 22).unwrap();
+        assert!(handed.complete);
+        assert_eq!(handed, built);
     }
 
     #[test]
