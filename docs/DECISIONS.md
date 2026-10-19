@@ -5199,6 +5199,13 @@ again (`demos/physics-lab.md`).
       probes' and mirror rays' hits keep 15 cm. There the start changed the rooms' indirect
       light by up to 1 EV, and not steadily: 8 cm halved a hall's, and 2 cm added half a stop
       (#298, below).
+    - **The sun's rays, by the mesh** (#326, 2026-10-19). The case: a 4 cm door leaf shut in
+      a 20 cm wall let the sun light the lining and the floor behind it.
+      - `MeshletSceneBuilder::set_shadow_start_by_cut` gives chosen meshes the lamps' start for
+        the sun's rays too (a negative `shadow_start`, read in `shadow_bias`).
+      - Every other mesh keeps 15 cm, so nothing drawn changes: the map check's 13 images and
+        the lab's 84 captures are at 0 pixels, the #71 flake aside.
+      - Whether to make it every mesh's start waits for a Tier 1 (acne on coarse cuts).
   - **A hit's lamp ray is aimed from where it starts** (#298, 2026-10-19).
     - **The cause:** `hit_lamps` started its ray 15 cm off the hit along the normal but aimed it
       along the line from the hit itself. The ray ran beside that line and ended up to 15 cm

@@ -4601,6 +4601,9 @@ static const uint TILE_GROUPS_X = 64;
 // meshes' DAGs (crates/forge-render/src/raytrace.rs) and may stand a little in front of the drawn
 // ones; the start also moves along the normal so grazing surfaces do not shadow themselves.
 static const float SHADOW_BIAS = 0.15;
+// The least start of a lamp's shadow ray off a surface, metres (#293), and of the sun's from a
+// mesh that starts by its cut (#326).
+static const float LAMP_SHADOW_START = 0.02;
 // A terrain's ray starts this many times its errors off its drawn surface (raytrace.rs has the
 // same constant for its cut's error).
 static const float TERRAIN_SHADOW_START = 2.0;
@@ -4627,19 +4630,22 @@ float2 sun_disc_point(uint2 pixel, uint frame)
 // coarser level of its DAG than the cut, up to its cluster's `self_error` further off it, so
 // its ray starts twice that further too (#106: a far valley drawn under the cut shadowed
 // itself in a dark blot); the levels near the camera, at no error, keep the cut's start.
+// A mesh that asks for it (`set_shadow_start_by_cut`, a negative `shadow_start`; #326) starts as
+// the lamps' rays do (`lamp_shadow_start`): a thin occluder close to it, a door's leaf in its
+// lining, then shadows it.
 float shadow_bias(Frame* f, Instance inst, Meshlet m)
 {
     RtScene* rs = f[0].rt_scene;
     if (rs == nullptr)
         return SHADOW_BIAS;
-    float start = rs[0].meshes[inst.mesh].shadow_start;
+    RtMesh mesh = rs[0].meshes[inst.mesh];
+    float start = mesh.shadow_start;
+    if (start < 0.0)
+        return clamp(2.0 * (mesh.cut_error + m.self_error) * inst.scale, LAMP_SHADOW_START, SHADOW_BIAS);
     if (start > 0.0)
         start += TERRAIN_SHADOW_START * m.self_error;
     return max(SHADOW_BIAS, start * inst.scale);
 }
-
-// The least start of a lamp's shadow ray off a surface, metres (#293).
-static const float LAMP_SHADOW_START = 0.02;
 
 // How far a lamp's shadow ray from a drawn surface of `inst` starts (#293): twice the gap the
 // traced cut may leave in front of it (the cut's error, and the drawn cluster's own where a

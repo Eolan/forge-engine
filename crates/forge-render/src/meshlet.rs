@@ -1225,6 +1225,8 @@ pub struct MeshletSceneBuilder {
     ray_groups: Vec<(Vec<u32>, u32)>,
     /// Meshes the rays take as ground whatever their size ([`MeshletSceneBuilder::set_ray_terrain`]).
     ray_terrain: Vec<u32>,
+    /// Meshes whose sun rays start by their cut, as the lamps' do ([`MeshletSceneBuilder::set_shadow_start_by_cut`]).
+    ray_cut_start: Vec<u32>,
     /// Meshes the rays cut to a budget of their own ([`MeshletSceneBuilder::set_ray_budget`]).
     ray_budgets: HashMap<u32, u32>,
     /// The room a dynamic scene reserves ([`MeshletSceneBuilder::reserve_dynamic`], #220).
@@ -1496,6 +1498,14 @@ impl MeshletSceneBuilder {
     /// drawn ground stands under it.
     pub fn set_ray_terrain(&mut self, meshes: &[MeshId]) {
         self.ray_terrain.extend(meshes.iter().map(|m| m.0));
+    }
+
+    /// Has the sun's shadow rays from `meshes`' surfaces start as the lamps' do (#293, #326):
+    /// by twice the gap the traced cut may leave in front of them, from 2 cm to the 15 cm of
+    /// every other mesh. A thin occluder close to them (a door's leaf in its lining) then
+    /// shadows them; a mesh cut coarsely for the rays may show acne.
+    pub fn set_shadow_start_by_cut(&mut self, meshes: &[MeshId]) {
+        self.ray_cut_start.extend(meshes.iter().map(|m| m.0));
     }
 
     /// Cuts `meshes` for the rays each to the finest cut of at most `budget` triangles, whatever
@@ -1797,6 +1807,9 @@ impl MeshletSceneBuilder {
                     };
                     if terrain {
                         cut.shadow_start = raytrace::TERRAIN_SHADOW_START * cut.error;
+                    } else if self.ray_cut_start.contains(&(m as u32)) {
+                        // By the cut, as the lamps' (`shadow_bias` in meshlet.slang).
+                        cut.shadow_start = -1.0;
                     }
                     cut.dynamic = skinned.contains(&m);
                     Ok(cut)
