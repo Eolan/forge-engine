@@ -1337,6 +1337,19 @@ the captures are those of the previous build.
 **Mirror rays** (issue #50, 2026-09-25):
 - **Which rows:** a Blinn-Phong exponent of 60 and above, the glass. They trace their mirror
   ray in the `_rt` resolve; a miss keeps the sky.
+  - **A share by roughness** (#306, 2026-10-19; `mirror_ray_share`): the ray traces all of
+    the mirror reflection up to roughness 0.30 (Blinn-Phong about 245: glass at 3000, water at
+    900, a vehicle's at 300), fading to none at 0.42 (the exponent 60). The rest takes the
+    probes' dimmed sky, as an untraced row's does (#68).
+  - **Why:** at the exponent 60 a row went at once from no ray to 70 % of a sharp mirror. A
+    glossy tile floor indoors (90, roughness 0.38) showed its room point-sampled at grazing
+    angles, a hatch of blue-white streaks. The reflections' history held it steady: without the
+    history, or without the rays, it was gone. A scene built outside the repository and the
+    village with such a floor showed it alike.
+  - **Now:** that floor traces 21 % of its mirror. The streaks are faint, and a still camera's
+    frames 10 apart differ on 10 600 pixels rather than 42 000. What is left lies along the
+    wardrobe's foot, where rays slip under it. The city's start view changes on 1 760 pixels
+    (far lamp posts); the glass and the water are unchanged.
 - **The hit data:** the cuts stay on the GPU after the BLAS builds, 34 MiB with each
   triangle's section. A hit reads its instance from the record's custom index and its
   triangle from the cut.

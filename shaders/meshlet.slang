@@ -3035,23 +3035,42 @@ RayDesc lamp_ray(Lamp lamp, float3 world, float3 n, float bias, float3 offset)
 // bounding its rise at grazing angles. GTAO's visibility `ao` (or -1) occludes it as
 // Lagarde and de Rousiers do (Moving Frostbite to PBR, 2014). `fresnel` is the share the
 // surface reflects, which its diffuse part loses. `sky_share` scales the table's light in the
-// mirror direction `r`: the share of it the probes find there (issue #68), else 1.
-float3 sky_reflection(float4* sky, float3 irradiance, float3 n, float3 view, float3 r, float3 sky_share, float specular_power, float ao, float f0, out float fresnel)
+// mirror direction `r`: the share of it the probes find there (issue #68), else 1. `traced`: a
+// mirror ray replaces the open sky's part of it that `traced_share` gives.
+float3 sky_reflection(float4* sky, float3 irradiance, float3 n, float3 view, float3 r, float3 sky_share, float specular_power, float ao, float f0, bool traced, out float fresnel)
 {
     float roughness = sqrt(sqrt(2.0 / (specular_power + 2.0))); // RenderLayer::roughness_for_power, inverted
     float nv = saturate(dot(n, view));
     fresnel = f0 + (max(1.0 - roughness, f0) - f0) * pow(1.0 - nv, 5.0);
     float4 up_table = sky[SH_COEFFICIENTS];
     float3 forward = sky[SH_COEFFICIENTS + 1].xyz;
-    // Luminance per unit of sun illuminance, times π: the resolve's units.
-    float3 mirror = sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, forward, r) * 3.14159265 * sky_share;
+    // Luminance per unit of sun illuminance, times π: the resolve's units. The traced share
+    // takes the open sky, which its ray's hit replaces; the rest the probes' share of it.
+    float traced_share = traced ? mirror_ray_share(roughness) : 0.0;
+    float3 open = sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, forward, r) * 3.14159265;
+    float3 mirror = open * lerp(sky_share, float3(1.0), traced_share);
     float blend = saturate(2.0 * roughness * roughness);
     float3 environment = lerp(mirror, irradiance, blend);
     float occlusion = ao >= 0.0 ? saturate(pow(nv + ao, exp2(-16.0 * roughness - 1.0)) - 1.0 + ao) : 1.0;
     // For the mirror ray of the smooth rows (issue #52): its direction, and the weight of what
-    // it meets in place of `mirror`.
-    g_reflection_request = float4(r, fresnel * occlusion * (1.0 - blend));
+    // it meets in place of the open sky.
+    g_reflection_request = float4(r, fresnel * occlusion * (1.0 - blend) * traced_share);
     return fresnel * occlusion * environment;
+}
+
+// The rough end of the mirror rays (#306): roughness 0.30, Blinn-Phong about 245. Smoother rows
+// (glass at 3000, water at 900, a vehicle's at 300) trace their whole mirror reflection.
+static const float MIRROR_RAY_FULL = 0.30;
+
+// The share of a row's mirror reflection its ray traces (#306): all of it up to MIRROR_RAY_FULL,
+// fading to none at RAY_REFLECTION_POWER's roughness (0.42); the rest the probes' dimmed sky. A
+// row at power 60 to 90 traced 70 % of a sharp mirror at once: a glossy floor indoors (0.38)
+// showed the room, point-sampled at grazing angles, as a hatch of streaks that the reflections'
+// history held steady, and where a ray found no hit, the open sky.
+float mirror_ray_share(float roughness)
+{
+    float rough_end = sqrt(sqrt(2.0 / (RAY_REFLECTION_POWER + 2.0)));
+    return saturate((rough_end - roughness) / (rough_end - MIRROR_RAY_FULL));
 }
 
 float3 sun_light(Frame* f, float3 albedo, float3 n, float3 geometric, float specular_power, float specular_weight, float3 shadow, float4* sky, float ao, float3 view, float reflectance, float3 world, ProbeField* probes, bool traced, out float ndl)
@@ -3072,13 +3091,13 @@ float3 sun_light(Frame* f, float3 albedo, float3 n, float3 geometric, float spec
         float3 r = reflect(-view, n);
         float3 sky_share = float3(1.0);
         float3 irradiance = sh_irradiance(sky, n);
-        if (probes != nullptr && reflects && !traced)
+        if (probes != nullptr && reflects)
         {
             // The sky's reflection dims as the probes' light does (issue #68): their light for
             // a normal along the mirror direction over the open sky's there, per channel, up
             // to 1. Lazarov rescaled reflection probes so at the normal (Black Ops II,
             // SIGGRAPH 2013); along the mirror, a street's ground sees the buildings, not the
-            // sky above it. A mirror ray sees for itself.
+            // sky above it. A mirror ray sees for itself, in its share (`mirror_ray_share`).
             float3 open_r = sh_irradiance(sky, r);
             float3 toward_r;
             irradiance = probe_irradiance_mirror(probes, world, n, geometric, view, irradiance, r, open_r, toward_r);
@@ -3090,7 +3109,7 @@ float3 sun_light(Frame* f, float3 albedo, float3 n, float3 geometric, float spec
         if (!reflects)
             return albedo * (diffuse * sun + ambient + g_lamp_diffuse) + specular * sun + g_lamp_specular;
         float fresnel;
-        float3 reflection = sky_reflection(sky, irradiance, n, view, r, sky_share, specular_power, ao, reflectance, fresnel);
+        float3 reflection = sky_reflection(sky, irradiance, n, view, r, sky_share, specular_power, ao, reflectance, traced, fresnel);
         return albedo * (diffuse * sun + ambient + g_lamp_diffuse) * (1.0 - fresnel) + specular * sun + g_lamp_specular + reflection;
     }
     // Space: hard sun, faint fill from the nebula side, a little wrap so shadows are not black.
