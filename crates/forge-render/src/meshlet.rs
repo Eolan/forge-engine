@@ -1616,14 +1616,19 @@ impl MeshletSceneBuilder {
 
     /// Reserves the movers (#79): instances whose transforms the CPU writes every frame
     /// ([`MeshletScene::set_movers`]), `per_mesh` saying how many show each mesh, in that
-    /// order. They are the table's last instances: nothing is added after them. They stay out
-    /// of the static acceleration structure. Returns the first one's index.
+    /// order. They are the table's last instances: nothing but more movers is added after them.
+    /// They stay out of the static acceleration structure. Returns the first one's index.
+    ///
+    /// Each system that moves instances can reserve its own (#314): every call adds its movers
+    /// after the ones before, and each system writes its own with
+    /// [`MeshletScene::set_movers_at`] from the index its call returned.
     pub fn reserve_movers(&mut self, per_mesh: &[(MeshId, u32)]) -> u32 {
+        let earlier = self.movers.take();
         let first = self.reserve_instances(per_mesh);
         for (k, instance) in self.instances[first as usize..].iter_mut().enumerate() {
             instance.id = first + k as u32;
         }
-        self.movers = Some(first);
+        self.movers = Some(earlier.unwrap_or(first));
         first
     }
 
@@ -2405,6 +2410,10 @@ struct SceneMovers {
     /// movers' structure already hold them, and the movers have no motion of their own: their
     /// passes are skipped (#198).
     steady: Cell<u64>,
+    /// The transforms the systems gave by their reservations (#314, [`MeshletScene::set_movers_at`]),
+    /// and whether each stands still, until [`MeshletScene::commit_movers`] uploads them; a mover
+    /// none has given yet has a scale of 0, drawn nowhere.
+    staged: RefCell<Vec<(MoverTransform, bool)>>,
     /// Whether this frame skipped them: its motion pass is skipped too.
     skipped: Cell<bool>,
 }
@@ -2443,6 +2452,17 @@ impl SceneMovers {
             previous: Cell::new(0),
             written: Cell::new(0),
             last: RefCell::new(Vec::new()),
+            staged: RefCell::new(vec![
+                (
+                    MoverTransform {
+                        position: Vec3::ZERO,
+                        rotation: Quat::IDENTITY,
+                        scale: 0.0,
+                    },
+                    false,
+                );
+                templates.len()
+            ]),
             steady: Cell::new(0),
             skipped: Cell::new(false),
         })
@@ -2456,6 +2476,47 @@ impl MeshletScene {
     /// every frame the scene has movers, before drawing.
     pub fn set_movers(&self, transforms: &[MoverTransform]) {
         self.set_movers_still(transforms, |_| false);
+    }
+
+    /// The transforms of one system's movers for the frame about to be drawn (#314): those from
+    /// instance `first` (what its [`MeshletSceneBuilder::reserve_movers`] returned) on, the ones
+    /// `still` names standing still as with [`Self::set_movers_still`]. They are kept until
+    /// [`Self::commit_movers`] uploads every system's at once; a mover none has given yet is
+    /// drawn nowhere (a scale of 0), and one a system leaves out of a frame keeps its last.
+    ///
+    /// # Panics
+    ///
+    /// When the scene has no movers, or `first` and `transforms` reach outside them.
+    pub fn set_movers_at(
+        &self,
+        first: u32,
+        transforms: &[MoverTransform],
+        still: impl Fn(usize) -> bool,
+    ) {
+        let movers = self.movers.as_ref().expect("a scene with movers");
+        let at = first
+            .checked_sub(movers.first)
+            .expect("an index reserve_movers returned") as usize;
+        let mut staged = movers.staged.borrow_mut();
+        assert!(
+            at + transforms.len() <= staged.len(),
+            "movers past the reserved ones"
+        );
+        for (k, t) in transforms.iter().enumerate() {
+            staged[at + k] = (*t, still(k));
+        }
+    }
+
+    /// Uploads the movers' transforms the systems gave with [`Self::set_movers_at`] (#314): once
+    /// a frame, after every system has written its own, before drawing; in place of
+    /// [`Self::set_movers`].
+    pub fn commit_movers(&self) {
+        let Some(movers) = &self.movers else {
+            return;
+        };
+        let staged = movers.staged.borrow().clone();
+        let transforms: Vec<MoverTransform> = staged.iter().map(|s| s.0).collect();
+        self.set_movers_still(&transforms, |k| staged[k].1);
     }
 
     /// [`Self::set_movers`], with the movers `still` names given no motion of their own this
@@ -5896,5 +5957,27 @@ mod tests {
         }
         builder.add_mesh(&mesh);
         assert_eq!(builder.meshes[1].root_count, 0);
+    }
+
+    /// Two systems reserve their own movers (#314): one after the other at the table's end, the
+    /// scene's movers starting at the first's.
+    #[test]
+    fn movers_reserved_twice_follow_each_other() {
+        let rock = forge_geom::procedural::asteroid(forge_core::Seed::new(7), 16, 1.0, 0.3);
+        let mut builder = MeshletSceneBuilder::new();
+        let mesh = builder.add_mesh(&MeshletMesh::build(&rock));
+        builder.add_instance(mesh, Mat4::IDENTITY);
+        let grass = builder.reserve_movers(&[(mesh, 3)]);
+        let walkers = builder.reserve_movers(&[(mesh, 2)]);
+        assert_eq!((grass, walkers), (1, 4));
+        assert_eq!(builder.movers, Some(1));
+        assert_eq!(builder.instances.len(), 6);
+        // Each mover's id is its own index, as for a single reservation.
+        assert!(
+            builder.instances[1..]
+                .iter()
+                .zip(1u32..)
+                .all(|(i, k)| i.id == k)
+        );
     }
 }
