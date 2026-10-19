@@ -841,6 +841,17 @@ walkers, movers) and without.
 
 The cost was the probes' wait for the movers' upload on the other queue, not their rays.
 
+**The probes and the leaf cards** (#297, 2026-10-19): the village at 15:00, 240 frames, best of
+three. The probes' rays met every leaf card of a crown as a candidate; they now meet each plant's
+opaque crown proxy (D-036, `--leaf-probes` the A/B).
+
+| View | cards: frame, `gi/probe rays` | crown proxies | no plants in the probes |
+|---|---|---|---|
+| the main street (`-79.8,1.7,-272.0,-98.3,0`) | 6.16, 3.02 ms | 4.63–4.66, 1.48–1.49 ms | 3.75, 0.79 ms |
+| the green (`12.9,1.7,-226.0,176.1,-5`) | 5.43, 2.43 ms | 4.24, 1.22 ms | 3.57, 0.70 ms |
+| the garden (`-50.7,1.7,-116.7,163.7,0`) | 4.34, 1.54 ms | 3.62, 0.82 ms | 3.34, 0.59 ms |
+| the air view | 4.41, 1.45 ms | 4.39, 1.32 ms | 4.28, 1.28 ms |
+
 With the movers' acceleration structure (the second step), the same views and rounds:
 
 | View | frame: 0 → 1 000 → 10 000 | `movers/tlas` | `water/reflections` | `gi/probe rays` | `shading/layered` |

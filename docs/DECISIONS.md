@@ -1672,6 +1672,29 @@ positive numbers only (`wrap_cells`).
     dominoes and the drop's blocks. The city's and the island's captures did not change.
   - **Measured** (best of three, 240 frames): with the walkers 6.51–6.53 ms, without them
     6.49–6.50 ms; `gi/probe rays` 3.28–3.30 ms with them.
+- **The probes meet a plant's crown proxy, not its leaf cards** (#297, 2026-10-19; city-plan's
+  forest, through #301's `Visibility`).
+  - **Before:** a probe ray crossing a crown tested each card it met against the leaf atlas, a
+    candidate each in the query's loop. Under the village's holm oaks the probes' rays took
+    3.0 ms of a 6.2 ms frame.
+  - **Now:** each grown plant is cooked with a proxy (`grown_proxy`): its wood, and each lump of
+    its crown a closed shell of 0.6 of the lump's radius, opaque, in the leaves' colour. The
+    proxy instance is seen by the probes' rays alone (`Visibility::PROBES`), the plant by
+    everything else. `--leaf-probes` is the A/B.
+  - **The share, by the light** (15:00, a fixed exposure, against the probes through the cards):
+    under the main street's holm oaks −0.15 EV and ꟻLIP 0.074 at 0.6, −0.32 EV and 0.099 at 0.8,
+    +0.04 EV and 0.080 at 0.5; the air view, the garden and the green within +0.07 EV. Without the
+    plants in the probes at all, the street's shade was 2.45 EV brighter and the crowns glowed.
+  - **Measured** (best of three, 240 frames):
+
+    | View | cards: frame, `gi/probe rays` | proxy | no plants |
+    |---|---|---|---|
+    | the main street | 6.16, 3.02 ms | 4.63–4.66, 1.48–1.49 ms | 3.75, 0.79 ms |
+    | the green | 5.43, 2.43 ms | 4.24, 1.22 ms | 3.57, 0.70 ms |
+    | the garden | 4.34, 1.54 ms | 3.62, 0.82 ms | 3.34, 0.59 ms |
+    | the air view | 4.41, 1.45 ms | 4.39, 1.32 ms | 4.28, 1.28 ms |
+
+    The proxy's share barely moves the cost (the main street 4.63–4.66 ms from 0.6 to 0.8).
 
 ## D-037 — World partition: sectors of 2⁴⁰ m, cells of 1 km, `u64` cell ids, a clipmap of cells ✅ (2026-09-30)
 

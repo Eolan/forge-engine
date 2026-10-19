@@ -478,6 +478,10 @@ pub struct Args {
     /// filter (D-065: the filter's A/B).
     #[arg(long)]
     no_lamp_filter: bool,
+    /// The probes' rays through the plants' leaf cards, not their crowns' opaque proxies (#297's
+    /// A/B; the city plan's forest).
+    #[arg(long)]
+    pub leaf_probes: bool,
     /// Every lamp by ReSTIR DI, NVIDIA's RTXDI, in place of the light lists' filtered shadows
     /// (D-065's comparison). Needs RTXDI's headers in `rtxdi-sdk/` and ray queries.
     #[arg(long)]

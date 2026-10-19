@@ -481,6 +481,15 @@ flags every edge, and the paving and the grass make most of it in both builds. C
 `reports/2026-10-16/village-leaf-cards.png` (the plane over the junction) and
 `village-leaf-cards-road.png`.
 
+**The probes meet crown proxies, not the cards** (#297, 2026-10-19). Each grown plant is cooked
+with a proxy (`grown_proxy`): its wood, and each lump of its crown a closed shell of 0.6 of the
+lump's radius, opaque, in the leaves' colour. The probes' rays meet the proxy alone and the
+picture, the shadows and the mirrors the cards alone (`forge_render::Visibility`, #301).
+`--leaf-probes` sends the probes' rays through the cards again. Under the main street's holm oaks
+the frame went 6.16 → 4.64 ms and the probes' rays 3.02 → 1.49 ms; the light there is 0.15 EV
+darker than through the cards, elsewhere within 0.07 EV (D-036; `docs/PROFILE.md`). A proxy has
+40–60 % of its plant's triangles, mostly its wood.
+
 **The stairs' shimmer** (the owner, the same evening). In a hall lit only through its door, the
 light on the flight rose and fell: a still camera's frames 10 apart differed on 3–7 % of their
 pixels, all of it gone without the GI probes. The probes' rotations repeat with TAA's 8-frame

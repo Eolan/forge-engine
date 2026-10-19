@@ -5337,10 +5337,11 @@ fn planted(
 
 impl PlanScenario {
     /// Every mesh of the scene in the order the build adds them (the tiles', the plants', the
-    /// kit's modules, the tiles' insides), each plant's with its height and crown. Each is kept
-    /// in the derived cache (D-053) under its name (its place in the scene, so a changed tile
-    /// replaces its old copy) and a key: its content's digest, its cook's options and the
-    /// cooking code's digest (`cook_code`).
+    /// kit's modules, the tiles' insides), each plant's with its height and crown and followed by
+    /// its crown's proxy for the probes' rays ([`grown_proxy`]). Each is kept in the derived cache
+    /// (D-053) under its name (its place in the scene, so a changed tile replaces its old copy)
+    /// and a key: its content's digest, its cook's options and the cooking code's digest
+    /// (`cook_code`).
     fn cook_meshes(
         &self,
         species: &[forge_flora::species::Species],
@@ -5394,9 +5395,9 @@ impl PlanScenario {
         }
         let code = forge_geom::cache::cook_code();
         let made: Vec<Made> = par_map(jobs.len(), cores(), None, |i| {
-            let (mesh, options, name, height, crown) = match &jobs[i] {
+            let meshes = match &jobs[i] {
                 Cook::Mesh(mesh, options, name) => {
-                    (Cow::Borrowed(*mesh), *options, name.clone(), 0.0, 0.0)
+                    vec![(Cow::Borrowed(*mesh), *options, name.clone(), 0.0, 0.0)]
                 }
                 &Cook::Plant(sp, k) => {
                     let s = &species[usize::from(sp)];
@@ -5404,32 +5405,40 @@ impl PlanScenario {
                     let broad = s.foliage == forge_flora::species::Foliage::Broad;
                     let conditions = flora_conditions(s, sp, k);
                     let graph = forge_flora::grow::grow(s, &conditions);
-                    let mesh = grown_mesh(
-                        &graph,
-                        shrub,
-                        broad,
-                        conditions.pruning.lift as f32,
-                        leaf_spray(&s.id),
-                    );
+                    let lift = conditions.pruning.lift as f32;
+                    let mesh = grown_mesh(&graph, shrub, broad, lift, leaf_spray(&s.id));
+                    // And its crown as the probes' rays see it (#297), right after it.
+                    let proxy = grown_proxy(&graph, shrub, broad, lift);
                     let (height, crown) = (graph.height().max(0.1), graph.crown_width().max(0.1));
                     let name = format!("plant-{}-{k}", s.id);
                     let options = CookOptions::default();
-                    (Cow::Owned(mesh), options, name, height, crown)
+                    vec![
+                        (Cow::Owned(mesh), options, name.clone(), height, crown),
+                        (Cow::Owned(proxy), options, name + "-proxy", height, crown),
+                    ]
                 }
             };
-            let key = format!(
-                "plan mesh {:016x} {options:?} code {code:016x}",
-                mesh_digest(&mesh)
-            );
-            Made {
-                mesh,
-                options,
-                name,
-                key,
-                height,
-                crown,
-            }
-        });
+            meshes
+                .into_iter()
+                .map(|(mesh, options, name, height, crown)| {
+                    let key = format!(
+                        "plan mesh {:016x} {options:?} code {code:016x}",
+                        mesh_digest(&mesh)
+                    );
+                    Made {
+                        mesh,
+                        options,
+                        name,
+                        key,
+                        height,
+                        crown,
+                    }
+                })
+                .collect::<Vec<_>>()
+        })
+        .into_iter()
+        .flatten()
+        .collect();
         drop(jobs);
         let dir = forge_core::derived::cache_dir(forge_core::derived::CacheKind::Meshes);
         let take = |m: &Made| {
@@ -6180,6 +6189,8 @@ impl Scenario for PlanScenario {
                                 ..foliage
                             },
                         ),
+                        // The crown's proxy that the probes' rays meet (#297), opaque.
+                        (format!("{} crown", s.id), foliage),
                     ],
                 );
                 materials.of(group)
@@ -6245,13 +6256,18 @@ impl Scenario for PlanScenario {
             // young tree, not a mature one shrunk (a 10 m plane was a ball on a stem), and of
             // that age the individual its hash picks, its crown stretched by up to 8 % along its
             // turn.
-            let mut models: std::collections::HashMap<u16, Vec<(forge_render::MeshId, f32, f32)>> =
-                Default::default();
+            // The probes' rays meet each plant's crown proxy, not its leaf cards (#297), unless
+            // `--leaf-probes`.
+            let proxies = !args.leaf_probes;
+            type Grown = (forge_render::MeshId, Option<forge_render::MeshId>, f32, f32);
+            let mut models: std::collections::HashMap<u16, Vec<Grown>> = Default::default();
             for &sp in &planted {
                 let grown = (0..FLORA_INDIVIDUALS)
                     .map(|_| {
                         let (mesh, height, crown) = cooked.next().expect("a plant cooked");
-                        (builder.add_mesh(&mesh), height, crown)
+                        let (proxy, ..) = cooked.next().expect("a plant's crown proxy cooked");
+                        let proxy = proxies.then(|| builder.add_mesh(&proxy));
+                        (builder.add_mesh(&mesh), proxy, height, crown)
                     })
                     .collect();
                 models.insert(sp, grown);
@@ -6262,16 +6278,16 @@ impl Scenario for PlanScenario {
                 };
                 let ages = usize::from(FLORA_AGES);
                 let Some(age) = (0..ages.min(grown.len())).min_by(|&a, &b| {
-                    (grown[a].1 / height)
+                    (grown[a].2 / height)
                         .ln()
                         .abs()
-                        .total_cmp(&(grown[b].1 / height).ln().abs())
+                        .total_cmp(&(grown[b].2 / height).ln().abs())
                 }) else {
                     continue;
                 };
                 let seeds = grown.len().div_ceil(ages);
                 let k = age + ages * (usize::from(pick) % seeds);
-                let Some(&(id, h, w)) = grown.get(k).or(grown.get(age)) else {
+                let Some(&(id, proxy, h, w)) = grown.get(k).or(grown.get(age)) else {
                     continue;
                 };
                 let across = crown * 2.0 / w;
@@ -6281,7 +6297,22 @@ impl Scenario for PlanScenario {
                     glam::Quat::from_rotation_y(turn),
                     at,
                 );
-                builder.add_instance_with_material(id, transform, flora_rows[usize::from(sp)]);
+                let row = flora_rows[usize::from(sp)];
+                builder.add_instance_with_material(id, transform, row);
+                if let Some(proxy) = proxy {
+                    // The cards for the picture, the shadows and the mirrors; the proxy for the
+                    // probes alone.
+                    let plant = builder.instance_count() - 1;
+                    builder.set_instance_visibility(
+                        plant,
+                        forge_render::Visibility {
+                            probes: false,
+                            ..forge_render::Visibility::ALL
+                        },
+                    );
+                    builder.add_instance_with_material(proxy, transform, row);
+                    builder.set_instance_visibility(plant + 1, forge_render::Visibility::PROBES);
+                }
             }
         }
         laps.mark("flora");
@@ -7168,49 +7199,11 @@ fn grown_mesh(
     spray: textures::LeafSpray,
 ) -> TriMesh {
     let mut mesh = TriMesh::default();
-    let width = g.crown_width();
-    let cell = (width
-        / if shrub {
-            3.0
-        } else if broad {
-            8.0
-        } else {
-            6.0
-        })
-    .max(g.height() / 10.0)
-    .max(0.3);
     if !shrub {
-        for s in g.segments() {
-            let node = &g.nodes[s.node as usize];
-            let parent = g.nodes[node.parent as usize].radius.max(s.radius);
-            if s.radius >= 0.05 && s.a.distance(s.b) > 1e-3 {
-                limb(&mut mesh, s.a, s.b, parent, s.radius);
-            }
-        }
+        wood(&mut mesh, g);
     }
-    let mut cells: std::collections::BTreeMap<(i32, i32, i32), (Vec3, u32, f32)> =
-        Default::default();
-    for l in &g.leaves {
-        let k = (l.pos / cell).floor();
-        let e = cells
-            .entry((k.x as i32, k.y as i32, k.z as i32))
-            .or_insert((Vec3::ZERO, 0, 0.0));
-        e.0 += l.pos;
-        e.1 += 1;
-        e.2 = e.2.max(l.size);
-    }
+    let lumps = crown_lumps(g, shrub, broad, lift);
     let faces = icosahedron();
-    let mean = g.leaves.len() as f32 / cells.len().max(1) as f32;
-    let lumps: Vec<(Vec3, f32)> = cells
-        .into_values()
-        .map(|(sum, n, size)| {
-            let radius = cell * (0.45 + 0.35 * (n as f32 / mean).sqrt().min(1.6)) + size * 0.3;
-            // Kept over a lifted crown's clear trunk: a lump round a low cluster hung below it.
-            let mut centre = sum / n as f32;
-            centre.y = centre.y.max(lift + radius * 0.7);
-            (centre, radius)
-        })
-        .collect();
     // The crown's middle, which the cards' normals bend away from with their lump's.
     let middle = lumps.iter().fold(Vec3::ZERO, |s, l| s + l.0) / lumps.len().max(1) as f32;
     for (i, &(centre, radius)) in lumps.iter().enumerate() {
@@ -7224,11 +7217,99 @@ fn grown_mesh(
     mesh
 }
 
+/// [`grown_mesh`]'s plant as the probes' rays see it (#297): its wood, and each lump of its
+/// crown a closed shell of [`CROWN_PROXY`] of the lump's radius in the cards' stead (section 3,
+/// the leaves' colour, opaque). A probe ray crossing a crown tested each leaf card it met against
+/// the leaf atlas (a candidate each), and the probes' light is too soft to show a leaf.
+fn grown_proxy(g: &forge_flora::graph::TreeGraph, shrub: bool, broad: bool, lift: f32) -> TriMesh {
+    let mut mesh = TriMesh::default();
+    if !shrub {
+        wood(&mut mesh, g);
+    }
+    let faces = icosahedron();
+    for (i, &(centre, radius)) in crown_lumps(g, shrub, broad, lift).iter().enumerate() {
+        let first = mesh.sections.len();
+        lump_of(
+            &mut mesh,
+            centre,
+            radius * CROWN_PROXY,
+            i as u32 % 8,
+            &faces,
+        );
+        mesh.sections[first..].fill(3);
+    }
+    mesh.uvs = vec![[0.0, 0.0]; mesh.positions.len()];
+    mesh
+}
+
+/// A tree's wood 5 cm thick or more as tapered limbs, section 0 ([`grown_mesh`]).
+fn wood(mesh: &mut TriMesh, g: &forge_flora::graph::TreeGraph) {
+    for s in g.segments() {
+        let node = &g.nodes[s.node as usize];
+        let parent = g.nodes[node.parent as usize].radius.max(s.radius);
+        if s.radius >= 0.05 && s.a.distance(s.b) > 1e-3 {
+            limb(mesh, s.a, s.b, parent, s.radius);
+        }
+    }
+}
+
+/// A grown crown's lumps ([`grown_mesh`]), their centres and radii: its leaves gathered on a grid
+/// of a sixth of its width (an eighth of a broad-leaved tree's, a third of a shrub's) or a tenth
+/// of its height, whichever is larger, each cell's into one lump at their middle, kept over a
+/// lifted crown's clear trunk.
+fn crown_lumps(
+    g: &forge_flora::graph::TreeGraph,
+    shrub: bool,
+    broad: bool,
+    lift: f32,
+) -> Vec<(Vec3, f32)> {
+    let width = g.crown_width();
+    let cell = (width
+        / if shrub {
+            3.0
+        } else if broad {
+            8.0
+        } else {
+            6.0
+        })
+    .max(g.height() / 10.0)
+    .max(0.3);
+    let mut cells: std::collections::BTreeMap<(i32, i32, i32), (Vec3, u32, f32)> =
+        Default::default();
+    for l in &g.leaves {
+        let k = (l.pos / cell).floor();
+        let e = cells
+            .entry((k.x as i32, k.y as i32, k.z as i32))
+            .or_insert((Vec3::ZERO, 0, 0.0));
+        e.0 += l.pos;
+        e.1 += 1;
+        e.2 = e.2.max(l.size);
+    }
+    let mean = g.leaves.len() as f32 / cells.len().max(1) as f32;
+    cells
+        .into_values()
+        .map(|(sum, n, size)| {
+            let radius = cell * (0.45 + 0.35 * (n as f32 / mean).sqrt().min(1.6)) + size * 0.3;
+            // Kept over a lifted crown's clear trunk: a lump round a low cluster hung below it.
+            let mut centre = sum / n as f32;
+            centre.y = centre.y.max(lift + radius * 0.7);
+            (centre, radius)
+        })
+        .collect()
+}
+
 /// A crown lump's core, as a share of the lump's radius ([`grown_mesh`]): three tenths, drawn
 /// darker, the shade between the cards (at 0.6 in the leaves' colour, then at half with 12 cards
 /// at most a lump, the near holm oaks showed it as balls; at two fifths, once the metered
 /// exposure lit the wood, as faceted green stones among the leaves).
 const CROWN_CORE: f32 = 0.3;
+
+/// A crown proxy's lump ([`grown_proxy`]) as a share of the lump's radius: three fifths, the
+/// light nearest the cards' (#297; the village at 15:00, a fixed exposure, against the probes
+/// through the cards). Under the main street's holm oaks −0.15 EV and ꟻLIP 0.074, against −0.32
+/// EV and 0.099 at 0.8, +0.04 EV and 0.080 at half; the other views within +0.07 EV. Without the
+/// plants in the probes at all, the street's shade was +2.45 EV.
+const CROWN_PROXY: f32 = 0.6;
 
 /// Leaf cards round a crown's lump at `centre`, `radius` across (D-013), section 2, cut from
 /// `spray`'s quarter of the leaf atlas (`textures::leaves`): 6 to 16 squares (a shrub's 4),
@@ -7793,12 +7874,25 @@ mod tests {
                     leaf_spray(&s.id),
                 );
                 let budget = if shrub { 1_500 } else { 40_000 };
-                println!("{} {k}: {} triangles", s.id, m.triangle_count());
+                // Its crown's proxy for the probes' rays (#297): fewer triangles than the plant.
+                let proxy = grown_proxy(&g, shrub, broad, conditions.pruning.lift as f32);
+                println!(
+                    "{} {k}: {} triangles, its proxy {}",
+                    s.id,
+                    m.triangle_count(),
+                    proxy.triangle_count()
+                );
                 assert!(
                     m.triangle_count() > 0 && m.triangle_count() <= budget,
                     "{} {k}: {} triangles",
                     s.id,
                     m.triangle_count()
+                );
+                assert!(
+                    proxy.triangle_count() > 0 && proxy.triangle_count() < m.triangle_count(),
+                    "{} {k}: a proxy of {} triangles",
+                    s.id,
+                    proxy.triangle_count()
                 );
             }
         }
