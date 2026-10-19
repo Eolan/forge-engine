@@ -73,6 +73,40 @@ impl Conditions {
     }
 }
 
+/// The ages each species is grown at for a forest (#296): a quarter, half and all of its
+/// maturity.
+pub const AGES: u8 = 3;
+/// The individuals grown at each age, each from its own seed, in its own breeze and on its own
+/// site: one an age made every holm oak of a wood's edge the same tree (the owner, 2026-10-16:
+/// "trees are too much identical, they need variations").
+pub const SEEDS: u8 = 3;
+/// How many individuals of each species a forest grows: individual `k` is age `k % AGES`, seed
+/// `k / AGES` ([`individual`]).
+pub const INDIVIDUALS: u8 = AGES * SEEDS;
+
+/// The growing conditions of individual `k` of species `s`, `index` its place in its list (#296,
+/// city-plan's forest's): a quarter, half and all of its maturity, the first seed on a good site in
+/// still air, the others leaning in a breeze each its own way on a poorer site; the crown lifted on
+/// the species' `planted_lift` share of the height it has grown to by then, so a tree scaled to a
+/// street's height keeps its clear trunk in proportion (lifted in metres, a 9 m plane's crown hung
+/// at the eyes). A wild plant's: set `pruning.lift` to 0.
+pub fn individual(s: &Species, index: u16, k: u8) -> Conditions {
+    let variant = usize::from(k / AGES) % usize::from(SEEDS);
+    let k = usize::from(k);
+    let age = s.maturity * [0.25, 0.5, 1.0][k % usize::from(AGES)];
+    let tall = (s.height[0] + s.height[1]) * 0.5 * growth_share(age, s.maturity);
+    Conditions {
+        age,
+        seed: 1000 + u64::from(index) * 10 + k as u64,
+        site: [1.0, 0.8, 0.9][variant],
+        pruning: Pruning {
+            lift: tall * s.planted_lift,
+            ..Default::default()
+        },
+        wind: [DVec2::ZERO, DVec2::new(0.3, 0.0), DVec2::new(-0.1, -0.25)][variant],
+    }
+}
+
 /// Cycles of growth at most, whatever the age (one a year below it): each grows the envelope
 /// by an equal step of size.
 const MAX_CYCLES: u32 = 28;

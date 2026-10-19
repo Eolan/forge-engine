@@ -872,7 +872,7 @@ mesh to test navigations inside the houses"):
     by day (as without the glass) and on 0.040 % at night (0.038 % without).
   - **Cost:** 0.05–0.16 ms in the map check's views (`docs/PROFILE.md`).
   - `--no-glass` shows the rooms without their panes.
-- *Street lamps lit* (D-065, #270: `street_lamps`).
+- *Street lamps lit* (D-065, #270: `forge_render::lamps::street_lights` since #296).
 
   ![The junction at 22:00 from above: each street lamp's pool under its head](images/village-street-lamps.png)
 

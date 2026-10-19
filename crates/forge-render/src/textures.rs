@@ -1073,41 +1073,9 @@ pub fn black_and_white(size: u32) -> [TextureData; 2] {
     ]
 }
 
-/// The quarters of the [`leaves`] atlas, in the order [`LeafSpray::quarter`] counts them.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum LeafSpray {
-    /// Small oval leaves on a branching twig: holm and kermes oaks, the garrigue's broad shrubs.
-    Small,
-    /// Broad leaves on long stalks, few to a twig: planes and limes.
-    Broad,
-    /// Needles in tufts along a shoot: the pines, rosemary.
-    Needles,
-    /// Narrow pointed leaves in opposite pairs: olives, cistus.
-    Narrow,
-}
-
-impl LeafSpray {
-    /// The four sprays, in their quarters' order.
-    pub const ALL: [LeafSpray; 4] = [Self::Small, Self::Broad, Self::Needles, Self::Narrow];
-
-    /// Its quarter of the atlas: 0 top left, 1 top right, 2 bottom left, 3 bottom right.
-    pub fn quarter(self) -> u32 {
-        match self {
-            Self::Small => 0,
-            Self::Broad => 1,
-            Self::Needles => 2,
-            Self::Narrow => 3,
-        }
-    }
-
-    /// The texture coordinates of its quarter's corners `(u0, v0)` and `(u1, v1)`, a margin of
-    /// a hundredth of the atlas inside, the spray's stem at the middle of the `v1` edge.
-    pub fn uv_box(self) -> ([f32; 2], [f32; 2]) {
-        let q = self.quarter();
-        let (u0, v0) = ((q % 2) as f32 * 0.5, (q / 2) as f32 * 0.5);
-        ([u0 + 0.01, v0 + 0.01], [u0 + 0.49, v0 + 0.49])
-    }
-}
+/// The quarters of the [`leaves`] atlas: the sprays a species' cards are cut from (#296: the
+/// species data names its own, [`forge_flora::species::Look`]).
+pub use forge_flora::species::LeafSpray;
 
 /// A leaf or a twig of a spray, in its quarter's unit square (`v` down, the stem at the bottom).
 struct Stroke {

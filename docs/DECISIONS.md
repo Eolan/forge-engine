@@ -4535,6 +4535,13 @@ village's trees and shrubs (#266) are grown, where they stand, and how the city'
 - **Species as data:** one TOML record each (`data/mediterranean.toml`): the published height and
   spread with their sources, the crown's shape, a dozen growth parameters marked as estimates, and
   a habitat (bands of soil, moisture, heat and slope, the light it needs, its spacing and opacity).
+  Since #296 also how it is drawn (`[species.look]`: its leaf atlas's spray, two tones of bark and
+  of leaves) and a planted tree's lifted crown (`planted_lift`, a share of its height).
+- **Meshed for the renderer** (#296, from city-plan's forest): `forge_flora::grow::individual`
+  gives a forest's individuals (three ages of three seeds), `forge_geom::flora::grow_plant` grows
+  one and meshes it: its wood, its crown's lumps and leaf cards (`grown_mesh`), and the opaque proxy
+  the probes' rays meet (`grown_proxy`, #297). The village's images and cooked meshes are the same
+  to the bit as before the move.
 - **Placement** (`forge-flora::place`): the ground's fields (slope, the sun's heat by aspect, soil
   depth from the relief and the flow, moisture from the drained area), planted rows and groves
   first, then the wild canopy, then the understorey in the light it leaves, each by darts in
@@ -5008,7 +5015,8 @@ again (`demos/physics-lab.md`).
     heads only. The pools on the ground came from the probes, which saw the lenses' glow and
     spread it in blocks of their grid, away from the lamps. The moon's shadow of each pole
     crossed its "pool".
-    - **Now a lamp under each head** (city-plan's `street_lamps`):
+    - **Now a lamp under each head** (`forge_render::lamps::street_lights` since #296, under
+      `forge_geom::street::lamp`'s lenses):
       - its intensity is the lens's luminance times its area: 109 cd, so 1.9 lux under an 8 m
         lamp, at 2 700 K;
       - on from 17:00 to 7:00;

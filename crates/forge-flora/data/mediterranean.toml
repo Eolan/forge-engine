@@ -48,6 +48,11 @@ spacing = 1.25
 abundance = 0.7
 opacity = 0.55
 
+[species.look]
+spray = "needles"
+bark = [[0.26, 0.17, 0.12], [0.40, 0.31, 0.24]]
+leaves = [[0.10, 0.18, 0.07], [0.17, 0.25, 0.09]]
+
 [[species]]
 id = "holm-oak"
 name = "Holm oak"
@@ -87,6 +92,11 @@ spacing = 0.7
 abundance = 1.0
 opacity = 0.85
 
+[species.look]
+spray = "small"
+bark = [[0.16, 0.14, 0.12], [0.28, 0.25, 0.22]]
+leaves = [[0.05, 0.11, 0.04], [0.10, 0.16, 0.06]]
+
 [[species]]
 id = "olive"
 name = "Olive"
@@ -98,6 +108,8 @@ height = [5.0, 10.0]
 crown_width = [8.0, 12.0]
 maturity = 60.0
 foliage = "broad"
+# A planted tree's crown lifted on this share of its height, clear of the passers-by (#296).
+planted_lift = 0.15
 # A short gnarled and twisted trunk (Wikipedia), tangled dense branching (Van den Berk).
 young_crown = { widest = 0.45, fullness = 0.55, base = 0.25 }
 crown = { widest = 0.45, fullness = 0.4, base = 0.22 }
@@ -126,6 +138,11 @@ light = 0.6
 spacing = 0.8
 abundance = 1.0
 opacity = 0.6
+
+[species.look]
+spray = "narrow"
+bark = [[0.26, 0.24, 0.20], [0.40, 0.37, 0.31]]
+leaves = [[0.22, 0.26, 0.18], [0.32, 0.35, 0.26]]
 
 [[species]]
 id = "italian-cypress"
@@ -168,6 +185,11 @@ spacing = 0.8
 abundance = 1.0
 opacity = 0.9
 
+[species.look]
+spray = "needles"
+bark = [[0.20, 0.15, 0.11], [0.36, 0.30, 0.24]]
+leaves = [[0.04, 0.09, 0.04], [0.08, 0.13, 0.06]]
+
 [[species]]
 id = "rosemary"
 name = "Rosemary"
@@ -207,6 +229,11 @@ spacing = 0.9
 abundance = 1.0
 opacity = 0.5
 
+[species.look]
+spray = "needles"
+bark = [[0.20, 0.15, 0.11], [0.36, 0.30, 0.24]]
+leaves = [[0.16, 0.22, 0.13], [0.24, 0.29, 0.19]]
+
 [[species]]
 id = "cistus"
 name = "Grey-leaved cistus"
@@ -245,6 +272,11 @@ light = 0.65
 spacing = 0.85
 abundance = 1.2
 opacity = 0.4
+
+[species.look]
+spray = "narrow"
+bark = [[0.20, 0.15, 0.11], [0.36, 0.30, 0.24]]
+leaves = [[0.24, 0.28, 0.20], [0.33, 0.36, 0.27]]
 
 [[species]]
 id = "kermes-oak"
@@ -291,6 +323,11 @@ opacity = 0.7
 # sources in docs/research/flora.md; the growth parameters estimates after the holm oak's and the
 # Aleppo pine's, marked so there.
 
+[species.look]
+spray = "small"
+bark = [[0.20, 0.15, 0.11], [0.36, 0.30, 0.24]]
+leaves = [[0.07, 0.14, 0.05], [0.13, 0.20, 0.08]]
+
 [[species]]
 id = "london-plane"
 name = "London plane"
@@ -301,6 +338,8 @@ height = [20.0, 30.0]
 crown_width = [18.0, 25.0]
 maturity = 60.0
 foliage = "broad"
+# A planted tree's crown lifted on this share of its height, clear of the passers-by (#296).
+planted_lift = 0.38
 # A tall clear trunk under a broad round crown of heavy limbs.
 young_crown = { widest = 0.45, fullness = 0.6, base = 0.15 }
 crown = { widest = 0.5, fullness = 0.5, base = 0.3 }
@@ -330,6 +369,11 @@ spacing = 1.0
 abundance = 1.0
 opacity = 0.8
 
+[species.look]
+spray = "broad"
+bark = [[0.38, 0.36, 0.29], [0.55, 0.53, 0.44]]
+leaves = [[0.10, 0.20, 0.06], [0.18, 0.28, 0.09]]
+
 [[species]]
 id = "common-lime"
 name = "Common lime"
@@ -341,6 +385,8 @@ height = [18.0, 30.0]
 crown_width = [12.0, 20.0]
 maturity = 60.0
 foliage = "broad"
+# A planted tree's crown lifted on this share of its height, clear of the passers-by (#296).
+planted_lift = 0.38
 # A broad pyramidal, half-open crown (Van den Berk).
 young_crown = { widest = 0.3, fullness = 0.7, base = 0.1 }
 crown = { widest = 0.35, fullness = 0.6, base = 0.2 }
@@ -370,6 +416,11 @@ spacing = 0.9
 abundance = 1.0
 opacity = 0.85
 
+[species.look]
+spray = "broad"
+bark = [[0.22, 0.19, 0.16], [0.34, 0.30, 0.25]]
+leaves = [[0.12, 0.24, 0.06], [0.20, 0.32, 0.09]]
+
 [[species]]
 id = "umbrella-pine"
 name = "Umbrella pine"
@@ -381,6 +432,8 @@ height = [12.0, 20.0]
 crown_width = [8.0, 15.0]
 maturity = 80.0
 foliage = "needles"
+# A planted tree's crown lifted on this share of its height, clear of the passers-by (#296).
+planted_lift = 0.5
 # Broadly conical when young, a spherical crown flattened on top later on (Van den Berk): the
 # umbrella on a long clear bole.
 young_crown = { widest = 0.15, fullness = 0.9, base = 0.05 }
@@ -411,3 +464,8 @@ light = 0.5
 spacing = 1.2
 abundance = 1.0
 opacity = 0.55
+
+[species.look]
+spray = "needles"
+bark = [[0.28, 0.18, 0.12], [0.44, 0.33, 0.25]]
+leaves = [[0.09, 0.17, 0.06], [0.15, 0.24, 0.08]]

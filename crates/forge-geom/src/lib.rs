@@ -7,6 +7,7 @@ pub mod cache;
 pub mod city;
 pub mod depot;
 pub mod figures;
+pub mod flora;
 pub mod fracture;
 pub mod furniture;
 pub mod landmarks;
@@ -18,6 +19,7 @@ pub mod page;
 pub mod procedural;
 pub mod skin;
 pub mod stone;
+pub mod street;
 pub mod vehicles;
 
 pub use lod::{ClusterDag, GROUP_SIZE, MAX_LEVELS, build_dag, build_dag_clustered};

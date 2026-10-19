@@ -1053,6 +1053,7 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "forge-core",
+ "forge-flora",
  "glam",
  "gltf",
  "meshopt",
@@ -1135,6 +1136,7 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "forge-core",
+ "forge-flora",
  "forge-geom",
  "forge-gpu",
  "forge-world",

@@ -4351,14 +4351,21 @@ impl CityMaterials {
     /// Adds `rows` one after the other, the first for `prop`: a mesh with sections draws
     /// section `s` with the row `s` after its own (a model's materials, #138).
     pub fn add_rows(&mut self, prop: &'static str, rows: Vec<(String, RenderLayer)>) {
+        if let Some(first) = self.add_row_block(rows) {
+            self.by_prop.insert(prop, first);
+        }
+    }
+
+    /// Adds `rows` one after the other, as [`Self::add_rows`] does, for meshes that take their
+    /// first row's id rather than a prop's name (a species' plants, #296); none when `rows` is
+    /// empty.
+    pub fn add_row_block(&mut self, rows: Vec<(String, RenderLayer)>) -> Option<MaterialId> {
         let mut first = None;
         for (name, layer) in rows {
             let id = self.table.add(Material::new(&name, layer));
             first.get_or_insert(id);
         }
-        if let Some(first) = first {
-            self.by_prop.insert(prop, first);
-        }
+        first
     }
 
     /// The table and its textures into `builder`, and each prop's row: the mesh `ids[k]` of

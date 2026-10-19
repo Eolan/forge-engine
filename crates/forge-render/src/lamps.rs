@@ -234,6 +234,44 @@ pub enum LampChoice {
 /// house lamps nearer the camera crowded them out, and a lit street went dark.
 pub const STREET_SHARE: usize = 24;
 
+/// A street lamp's lens luminance, cd/m², in its red channel (its colour 1, 0.78, 0.55;
+/// `forge_geom::street::lamp`'s section 1): shielded LEDs at 2 700 K behind a frosted diffuser.
+/// At 4 and 6 times it (7.5 and 12 lux under a lamp, LED street lighting's range) the owner
+/// preferred this (2026-10-18).
+pub const STREET_LENS: f32 = 1000.0;
+
+/// The street lamps' lights (D-065, #296; city-plan's until then): one under each arm's lens
+/// (`forge_geom::street`), its intensity the lens's luminance times its area, so the light on the
+/// road matches the glow seen (about 1.9 lux under an 8 m lamp, eight times a full moon's). They
+/// light the outside's region only (D-068), the street and not the rooms behind the windows,
+/// where they took the house lamps' places. `lamps`: each lamp's foot, scale, turn about +Y and
+/// whether it has its second arm.
+pub fn street_lights(lamps: &[(Vec3, f32, f32, bool)]) -> Vec<Lamp> {
+    use forge_geom::street::{LENS_SIZE, LENS_Z};
+    let mut regions = [NO_REGION; LAMP_REGIONS];
+    regions[0] = REGION_OUTSIDE;
+    // The lens's luminance by its colour (1, 0.78, 0.55), over its area.
+    let lens = LENS_SIZE[0] * LENS_SIZE[1] * STREET_LENS * (0.2126 + 0.7152 * 0.78 + 0.0722 * 0.55);
+    // A bulb of 12 cm just under the lens (7.69 m on the 8 m model).
+    let (radius, under) = (0.12, 7.56);
+    let mut out = Vec::new();
+    for &(at, scale, turn, double) in lamps {
+        let arms = if double { &LENS_Z[..] } else { &LENS_Z[..1] };
+        for &z in arms {
+            out.push(Lamp {
+                position: at
+                    + glam::Quat::from_rotation_y(turn) * (Vec3::new(0.0, under, z) * scale),
+                radius: radius * scale,
+                candela: lens * scale * scale,
+                kelvin: 2700.0,
+                regions,
+                emission: Emission::STREET,
+            });
+        }
+    }
+    out
+}
+
 /// How far before its cut a kept lamp fades out, as a share of the cut's distance, at least
 /// [`LEAST_FADE`] metres (#295). The cut is the distance of the nearest lamp of its kind not kept,
 /// or where its light stops counting (its reach and the margin). Kept or not changed at once

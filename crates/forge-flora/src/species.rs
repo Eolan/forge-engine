@@ -160,6 +160,75 @@ pub struct Species {
     /// ever planted by hand.
     #[serde(default)]
     pub habitat: Option<Habitat>,
+    /// The share of its height a planted tree's crown is lifted to, clear of the passers-by, as
+    /// a street's or a square's are (a young plane was a bush on a stick); 0 for none.
+    #[serde(default)]
+    pub planted_lift: f64,
+    /// How it is drawn (#296).
+    #[serde(default)]
+    pub look: Look,
+}
+
+/// How a species is drawn (#296): the spray its leaf cards are cut from, and two tones of its
+/// bark and of its leaves, each plant taking its own mix of the two.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct Look {
+    /// The leaf atlas's spray its cards are cut from.
+    pub spray: LeafSpray,
+    /// Its bark's two tones, linear RGB.
+    pub bark: [[f32; 3]; 2],
+    /// Its leaves' two tones, linear RGB.
+    pub leaves: [[f32; 3]; 2],
+}
+
+impl Default for Look {
+    fn default() -> Self {
+        Self {
+            spray: LeafSpray::Small,
+            bark: [[0.20, 0.15, 0.11], [0.36, 0.30, 0.24]],
+            leaves: [[0.08, 0.19, 0.06], [0.16, 0.27, 0.07]],
+        }
+    }
+}
+
+/// The sprays drawn in the leaf atlas's quarters (`forge_render::textures::leaves`), in the order
+/// [`LeafSpray::quarter`] counts them; a species' cards are cut from one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LeafSpray {
+    /// Small oval leaves on a branching twig: holm and kermes oaks, the garrigue's broad shrubs.
+    #[default]
+    Small,
+    /// Broad leaves on long stalks, few to a twig: planes and limes.
+    Broad,
+    /// Needles in tufts along a shoot: the pines, rosemary.
+    Needles,
+    /// Narrow pointed leaves in opposite pairs: olives, cistus.
+    Narrow,
+}
+
+impl LeafSpray {
+    /// The four sprays, in their quarters' order.
+    pub const ALL: [LeafSpray; 4] = [Self::Small, Self::Broad, Self::Needles, Self::Narrow];
+
+    /// Its quarter of the atlas: 0 top left, 1 top right, 2 bottom left, 3 bottom right.
+    pub fn quarter(self) -> u32 {
+        match self {
+            Self::Small => 0,
+            Self::Broad => 1,
+            Self::Needles => 2,
+            Self::Narrow => 3,
+        }
+    }
+
+    /// The texture coordinates of its quarter's corners `(u0, v0)` and `(u1, v1)`, a margin of
+    /// a hundredth of the atlas inside, the spray's stem at the middle of the `v1` edge.
+    pub fn uv_box(self) -> ([f32; 2], [f32; 2]) {
+        let q = self.quarter();
+        let (u0, v0) = ((q % 2) as f32 * 0.5, (q / 2) as f32 * 0.5);
+        ([u0 + 0.01, v0 + 0.01], [u0 + 0.49, v0 + 0.49])
+    }
 }
 
 fn default_divergence() -> f64 {

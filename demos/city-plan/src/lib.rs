@@ -22,6 +22,7 @@ use forge_app::{FlyCamera, Input, Setup};
 use forge_core::material::{RenderLayer, TextureId, UvMapping};
 use forge_geom::MeshletMesh;
 use forge_geom::city::PropSpec;
+use forge_geom::flora::{limb, lump};
 use forge_geom::meshlet::CookOptions;
 use forge_geom::procedural::TriMesh;
 use forge_geom::{modules, vehicles};
@@ -1574,7 +1575,7 @@ impl PlanScenario {
         }
         // And the street lamps' after dark, as the residents' lamps go on (D-065).
         if detail.and_then(|d| d.lit_hour).is_some_and(street_lamps_on) {
-            let street = street_lamps(&lamps);
+            let street = forge_render::lamps::street_lights(&lamps);
             eprintln!("the street lamps: {} on", street.len());
             home_lamps.extend(street);
         }
@@ -5321,7 +5322,8 @@ fn tile_meshes(tile: &Tile) -> impl Iterator<Item = (&TriMesh, usize, f32, &'sta
 }
 
 /// The forest's species in the order their first plants come (D-063): each grows
-/// `FLORA_INDIVIDUALS` individuals, at a quarter, half and all of its maturity, three of each.
+/// `forge_flora::grow::INDIVIDUALS` individuals, at a quarter, half and all of its maturity,
+/// three of each.
 fn planted(
     flora: &[(Vec3, f32, f32, f32, u16, u8)],
     species: &[forge_flora::species::Species],
@@ -5338,10 +5340,10 @@ fn planted(
 impl PlanScenario {
     /// Every mesh of the scene in the order the build adds them (the tiles', the plants', the
     /// kit's modules, the tiles' insides), each plant's with its height and crown and followed by
-    /// its crown's proxy for the probes' rays ([`grown_proxy`]). Each is kept in the derived cache
-    /// (D-053) under its name (its place in the scene, so a changed tile replaces its old copy)
-    /// and a key: its content's digest, its cook's options and the cooking code's digest
-    /// (`cook_code`).
+    /// its crown's proxy for the probes' rays ([`forge_geom::flora::grown_proxy`]). Each is kept
+    /// in the derived cache (D-053) under its name (its place in the scene, so a changed tile
+    /// replaces its old copy) and a key: its content's digest, its cook's options and the
+    /// cooking code's digest (`cook_code`).
     fn cook_meshes(
         &self,
         species: &[forge_flora::species::Species],
@@ -5364,11 +5366,9 @@ impl PlanScenario {
                     Cook::Mesh(mesh, options, format!("{scene}-tile{t}-{kind}"))
                 })
             })
-            .chain(
-                planted(&self.flora, species)
-                    .into_iter()
-                    .flat_map(|sp| (0..FLORA_INDIVIDUALS).map(move |k| Cook::Plant(sp, k))),
-            )
+            .chain(planted(&self.flora, species).into_iter().flat_map(|sp| {
+                (0..forge_flora::grow::INDIVIDUALS).map(move |k| Cook::Plant(sp, k))
+            }))
             .chain(self.kit_meshes.iter().enumerate().map(|(m, mesh)| {
                 Cook::Mesh(mesh, CookOptions::default(), format!("{scene}-kit{m}"))
             }))
@@ -5401,20 +5401,21 @@ impl PlanScenario {
                 }
                 &Cook::Plant(sp, k) => {
                     let s = &species[usize::from(sp)];
-                    let shrub = s.habit == forge_flora::species::Habit::Shrub;
-                    let broad = s.foliage == forge_flora::species::Foliage::Broad;
-                    let conditions = flora_conditions(s, sp, k);
-                    let graph = forge_flora::grow::grow(s, &conditions);
-                    let lift = conditions.pruning.lift as f32;
-                    let mesh = grown_mesh(&graph, shrub, broad, lift, leaf_spray(&s.id));
-                    // And its crown as the probes' rays see it (#297), right after it.
-                    let proxy = grown_proxy(&graph, shrub, broad, lift);
-                    let (height, crown) = (graph.height().max(0.1), graph.crown_width().max(0.1));
+                    let plant =
+                        forge_geom::flora::grow_plant(s, &forge_flora::grow::individual(s, sp, k));
+                    let (height, crown) = (plant.height, plant.crown);
                     let name = format!("plant-{}-{k}", s.id);
                     let options = CookOptions::default();
+                    // And its crown as the probes' rays see it (#297), right after it.
                     vec![
-                        (Cow::Owned(mesh), options, name.clone(), height, crown),
-                        (Cow::Owned(proxy), options, name + "-proxy", height, crown),
+                        (Cow::Owned(plant.mesh), options, name.clone(), height, crown),
+                        (
+                            Cow::Owned(plant.proxy),
+                            options,
+                            name + "-proxy",
+                            height,
+                            crown,
+                        ),
                     ]
                 }
             };
@@ -6163,15 +6164,14 @@ impl Scenario for PlanScenario {
         let flora_rows: Vec<_> = species
             .iter()
             .map(|s| {
-                let (group, bark, leaves) = flora_tones(&s.id);
+                let [bark, leaves] = [s.look.bark, s.look.leaves].map(|[a, b]| (a, b));
                 let foliage = tones(leaves.0, leaves.1, 6.0);
                 // The crowns' cores at three tenths of the leaves' colour: the shade inside a
                 // crown (at half, once the metered exposure lit the wood, their sunlit facets
                 // read paler than the cards round them).
                 let shade = |c: [f32; 3]| c.map(|k| k * 0.3);
-                materials.add_rows(
-                    group,
-                    vec![
+                materials
+                    .add_row_block(vec![
                         (format!("{} bark", s.id), tones(bark.0, bark.1, 8.0)),
                         (
                             format!("{} leaves", s.id),
@@ -6191,15 +6191,15 @@ impl Scenario for PlanScenario {
                         ),
                         // The crown's proxy that the probes' rays meet (#297), opaque.
                         (format!("{} crown", s.id), foliage),
-                    ],
-                );
-                materials.of(group)
+                    ])
+                    .expect("a species' rows")
             })
             .collect();
         // Lamp heads of about 1 000 cd/m²: shielded LEDs at 2 700 K behind a frosted diffuser (the
         // style bible's lighting). At 3 000 their halos read too strong (the owner). Their light
-        // is a lamp's (`street_lamps`), so the probes leave their glow out, as a house's globes.
-        let head = STREET_LENS;
+        // is a lamp's (`forge_render::lamps::street_lights`), so the probes leave their glow out, as
+        // a house's globes.
+        let head = forge_render::lamps::STREET_LENS;
         materials.add_rows(
             "plan-lamp",
             vec![
@@ -6262,7 +6262,7 @@ impl Scenario for PlanScenario {
             type Grown = (forge_render::MeshId, Option<forge_render::MeshId>, f32, f32);
             let mut models: std::collections::HashMap<u16, Vec<Grown>> = Default::default();
             for &sp in &planted {
-                let grown = (0..FLORA_INDIVIDUALS)
+                let grown = (0..forge_flora::grow::INDIVIDUALS)
                     .map(|_| {
                         let (mesh, height, crown) = cooked.next().expect("a plant cooked");
                         let (proxy, ..) = cooked.next().expect("a plant's crown proxy cooked");
@@ -6276,7 +6276,7 @@ impl Scenario for PlanScenario {
                 let Some(grown) = models.get(&sp) else {
                     continue;
                 };
-                let ages = usize::from(FLORA_AGES);
+                let ages = usize::from(forge_flora::grow::AGES);
                 let Some(age) = (0..ages.min(grown.len())).min_by(|&a, &b| {
                     (grown[a].2 / height)
                         .ln()
@@ -6328,8 +6328,9 @@ impl Scenario for PlanScenario {
             }
         }
         if !self.lamps.is_empty() {
-            let models = [false, true]
-                .map(|double| builder.add_mesh(&MeshletMesh::build(&lamp_model(double))));
+            let models = [false, true].map(|double| {
+                builder.add_mesh(&MeshletMesh::build(&forge_geom::street::lamp(double)))
+            });
             for &(at, scale, turn, double) in &self.lamps {
                 let transform = Mat4::from_scale_rotation_translation(
                     Vec3::splat(scale),
@@ -7058,453 +7059,6 @@ fn tree_model() -> TriMesh {
     mesh
 }
 
-/// The ages each species is grown at for the forest (D-063): a quarter, half and all of its
-/// maturity.
-const FLORA_AGES: u8 = 3;
-/// The individuals grown at each age, each from its own seed, in its own breeze and on its own
-/// site: one an age made every holm oak of the wood's edge the same tree (the owner, 2026-10-16:
-/// "trees are too much identical, they need variations").
-const FLORA_SEEDS: u8 = 3;
-/// How many individuals of each species are grown: individual `k` is age `k % FLORA_AGES`, seed
-/// `k / FLORA_AGES`.
-const FLORA_INDIVIDUALS: u8 = FLORA_AGES * FLORA_SEEDS;
-
-/// The growing conditions of species `s`'s (its index `sp`) individual `k`: a quarter, half and
-/// all of its maturity, the first seed on a good site in still air, the others leaning in a breeze
-/// each its own way on a poorer site; the planted trees' crowns lifted as a street's and a
-/// square's are, clear of the passers-by (a young plane was a bush on a stick): planes and limes
-/// on 38 % of their height, umbrella pines on half their long bole, olives 15 %.
-fn flora_conditions(
-    s: &forge_flora::species::Species,
-    sp: u16,
-    k: u8,
-) -> forge_flora::grow::Conditions {
-    let variant = usize::from(k / FLORA_AGES) % usize::from(FLORA_SEEDS);
-    let k = usize::from(k);
-    let age = s.maturity * [0.25, 0.5, 1.0][k % usize::from(FLORA_AGES)];
-    // A share of the height it grows to by then, so a tree scaled to a street's height keeps
-    // its clear trunk in proportion (lifted in metres, a 9 m plane's crown hung at the eyes).
-    let tall =
-        (s.height[0] + s.height[1]) * 0.5 * forge_flora::species::growth_share(age, s.maturity);
-    let lift = tall
-        * match s.id.as_str() {
-            "london-plane" | "common-lime" => 0.38,
-            "umbrella-pine" => 0.5,
-            "olive" => 0.15,
-            _ => 0.0,
-        };
-    forge_flora::grow::Conditions {
-        age,
-        seed: 1000 + u64::from(sp) * 10 + k as u64,
-        site: [1.0, 0.8, 0.9][variant],
-        pruning: forge_flora::grow::Pruning {
-            lift,
-            ..Default::default()
-        },
-        wind: [DVec2::ZERO, DVec2::new(0.3, 0.0), DVec2::new(-0.1, -0.25)][variant],
-    }
-}
-
-/// A species' material group and its bark's and foliage's two tones (`forge_flora`'s ids):
-/// the Aleppo pine's reddish bark and light needles, the holm oak's dark leaves, the olive's
-/// silver, the cypress's near black, the garrigue's greys.
-#[allow(clippy::type_complexity)]
-fn flora_tones(id: &str) -> (&'static str, ([f32; 3], [f32; 3]), ([f32; 3], [f32; 3])) {
-    let bark = ([0.20, 0.15, 0.11], [0.36, 0.30, 0.24]);
-    match id {
-        "aleppo-pine" => (
-            "flora-aleppo-pine",
-            ([0.26, 0.17, 0.12], [0.40, 0.31, 0.24]),
-            ([0.10, 0.18, 0.07], [0.17, 0.25, 0.09]),
-        ),
-        "holm-oak" => (
-            "flora-holm-oak",
-            ([0.16, 0.14, 0.12], [0.28, 0.25, 0.22]),
-            ([0.05, 0.11, 0.04], [0.10, 0.16, 0.06]),
-        ),
-        "olive" => (
-            "flora-olive",
-            ([0.26, 0.24, 0.20], [0.40, 0.37, 0.31]),
-            ([0.22, 0.26, 0.18], [0.32, 0.35, 0.26]),
-        ),
-        "italian-cypress" => (
-            "flora-italian-cypress",
-            bark,
-            ([0.04, 0.09, 0.04], [0.08, 0.13, 0.06]),
-        ),
-        "rosemary" => (
-            "flora-rosemary",
-            bark,
-            ([0.16, 0.22, 0.13], [0.24, 0.29, 0.19]),
-        ),
-        "cistus" => (
-            "flora-cistus",
-            bark,
-            ([0.24, 0.28, 0.20], [0.33, 0.36, 0.27]),
-        ),
-        "kermes-oak" => (
-            "flora-kermes-oak",
-            bark,
-            ([0.07, 0.14, 0.05], [0.13, 0.20, 0.08]),
-        ),
-        "london-plane" => (
-            "flora-london-plane",
-            ([0.38, 0.36, 0.29], [0.55, 0.53, 0.44]),
-            ([0.10, 0.20, 0.06], [0.18, 0.28, 0.09]),
-        ),
-        "common-lime" => (
-            "flora-common-lime",
-            ([0.22, 0.19, 0.16], [0.34, 0.30, 0.25]),
-            ([0.12, 0.24, 0.06], [0.20, 0.32, 0.09]),
-        ),
-        "umbrella-pine" => (
-            "flora-umbrella-pine",
-            ([0.28, 0.18, 0.12], [0.44, 0.33, 0.25]),
-            ([0.09, 0.17, 0.06], [0.15, 0.24, 0.08]),
-        ),
-        _ => (
-            "flora-other",
-            bark,
-            ([0.08, 0.19, 0.06], [0.16, 0.27, 0.07]),
-        ),
-    }
-}
-
-/// The leaf atlas's spray a species' cards are cut from (`textures::leaves`): broad leaves for
-/// planes and limes, needles for the pines, the cypress and rosemary, narrow leaves for olives
-/// and cistus, small oval ones for the oaks.
-fn leaf_spray(id: &str) -> textures::LeafSpray {
-    use textures::LeafSpray;
-    match id {
-        "london-plane" | "common-lime" => LeafSpray::Broad,
-        "aleppo-pine" | "umbrella-pine" | "italian-cypress" | "rosemary" => LeafSpray::Needles,
-        "olive" | "cistus" => LeafSpray::Narrow,
-        _ => LeafSpray::Small,
-    }
-}
-
-/// A grown plant's mesh (`forge_flora`, D-063), a tree's few thousand triangles and a shrub's a
-/// few hundred, the full graph's being 2 000 to 250 000: a tree's wood 5 cm thick or more as
-/// tapered limbs (section 0; a shrub's twigs hide in its leaves), its leaf clusters gathered
-/// on a grid of a sixth of its crown's width (an eighth of a broad-leaved tree's, a third of a
-/// shrub's) or a tenth of its height, whichever is larger (a cypress's narrow column took 50 000
-/// triangles), each cell's into one lump at their middle: a core of 20 triangles (section 1) in
-/// leaf cards cut from `spray` (section 2, [`leaf_cards`]). The cells are keyed in order, so a
-/// plant's mesh is the same from run to run.
-fn grown_mesh(
-    g: &forge_flora::graph::TreeGraph,
-    shrub: bool,
-    broad: bool,
-    lift: f32,
-    spray: textures::LeafSpray,
-) -> TriMesh {
-    let mut mesh = TriMesh::default();
-    if !shrub {
-        wood(&mut mesh, g);
-    }
-    let lumps = crown_lumps(g, shrub, broad, lift);
-    let faces = icosahedron();
-    // The crown's middle, which the cards' normals bend away from with their lump's.
-    let middle = lumps.iter().fold(Vec3::ZERO, |s, l| s + l.0) / lumps.len().max(1) as f32;
-    for (i, &(centre, radius)) in lumps.iter().enumerate() {
-        // A core of two fifths of the lump, the shade the cards hide and the far crown keeps
-        // (it simplifies as a closed mesh; the cards cannot), then the cards round it.
-        lump_of(&mut mesh, centre, radius * CROWN_CORE, i as u32 % 8, &faces);
-        leaf_cards(&mut mesh, centre, radius, middle, spray, shrub, i as u32);
-    }
-    let missing = mesh.positions.len() - mesh.uvs.len();
-    mesh.uvs.extend(std::iter::repeat_n([0.0, 0.0], missing));
-    mesh
-}
-
-/// [`grown_mesh`]'s plant as the probes' rays see it (#297): its wood, and each lump of its
-/// crown a closed shell of [`CROWN_PROXY`] of the lump's radius in the cards' stead (section 3,
-/// the leaves' colour, opaque). A probe ray crossing a crown tested each leaf card it met against
-/// the leaf atlas (a candidate each), and the probes' light is too soft to show a leaf.
-fn grown_proxy(g: &forge_flora::graph::TreeGraph, shrub: bool, broad: bool, lift: f32) -> TriMesh {
-    let mut mesh = TriMesh::default();
-    if !shrub {
-        wood(&mut mesh, g);
-    }
-    let faces = icosahedron();
-    for (i, &(centre, radius)) in crown_lumps(g, shrub, broad, lift).iter().enumerate() {
-        let first = mesh.sections.len();
-        lump_of(
-            &mut mesh,
-            centre,
-            radius * CROWN_PROXY,
-            i as u32 % 8,
-            &faces,
-        );
-        mesh.sections[first..].fill(3);
-    }
-    mesh.uvs = vec![[0.0, 0.0]; mesh.positions.len()];
-    mesh
-}
-
-/// A tree's wood 5 cm thick or more as tapered limbs, section 0 ([`grown_mesh`]).
-fn wood(mesh: &mut TriMesh, g: &forge_flora::graph::TreeGraph) {
-    for s in g.segments() {
-        let node = &g.nodes[s.node as usize];
-        let parent = g.nodes[node.parent as usize].radius.max(s.radius);
-        if s.radius >= 0.05 && s.a.distance(s.b) > 1e-3 {
-            limb(mesh, s.a, s.b, parent, s.radius);
-        }
-    }
-}
-
-/// A grown crown's lumps ([`grown_mesh`]), their centres and radii: its leaves gathered on a grid
-/// of a sixth of its width (an eighth of a broad-leaved tree's, a third of a shrub's) or a tenth
-/// of its height, whichever is larger, each cell's into one lump at their middle, kept over a
-/// lifted crown's clear trunk.
-fn crown_lumps(
-    g: &forge_flora::graph::TreeGraph,
-    shrub: bool,
-    broad: bool,
-    lift: f32,
-) -> Vec<(Vec3, f32)> {
-    let width = g.crown_width();
-    let cell = (width
-        / if shrub {
-            3.0
-        } else if broad {
-            8.0
-        } else {
-            6.0
-        })
-    .max(g.height() / 10.0)
-    .max(0.3);
-    let mut cells: std::collections::BTreeMap<(i32, i32, i32), (Vec3, u32, f32)> =
-        Default::default();
-    for l in &g.leaves {
-        let k = (l.pos / cell).floor();
-        let e = cells
-            .entry((k.x as i32, k.y as i32, k.z as i32))
-            .or_insert((Vec3::ZERO, 0, 0.0));
-        e.0 += l.pos;
-        e.1 += 1;
-        e.2 = e.2.max(l.size);
-    }
-    let mean = g.leaves.len() as f32 / cells.len().max(1) as f32;
-    cells
-        .into_values()
-        .map(|(sum, n, size)| {
-            let radius = cell * (0.45 + 0.35 * (n as f32 / mean).sqrt().min(1.6)) + size * 0.3;
-            // Kept over a lifted crown's clear trunk: a lump round a low cluster hung below it.
-            let mut centre = sum / n as f32;
-            centre.y = centre.y.max(lift + radius * 0.7);
-            (centre, radius)
-        })
-        .collect()
-}
-
-/// A crown lump's core, as a share of the lump's radius ([`grown_mesh`]): three tenths, drawn
-/// darker, the shade between the cards (at 0.6 in the leaves' colour, then at half with 12 cards
-/// at most a lump, the near holm oaks showed it as balls; at two fifths, once the metered
-/// exposure lit the wood, as faceted green stones among the leaves).
-const CROWN_CORE: f32 = 0.3;
-
-/// A crown proxy's lump ([`grown_proxy`]) as a share of the lump's radius: three fifths, the
-/// light nearest the cards' (#297; the village at 15:00, a fixed exposure, against the probes
-/// through the cards). Under the main street's holm oaks −0.15 EV and ꟻLIP 0.074, against −0.32
-/// EV and 0.099 at 0.8, +0.04 EV and 0.080 at half; the other views within +0.07 EV. Without the
-/// plants in the probes at all, the street's shade was +2.45 EV.
-const CROWN_PROXY: f32 = 0.6;
-
-/// Leaf cards round a crown's lump at `centre`, `radius` across (D-013), section 2, cut from
-/// `spray`'s quarter of the leaf atlas (`textures::leaves`): 6 to 16 squares (a shrub's 4),
-/// their middles 0.4 to 0.7 radii out along directions spread over the sphere and turned by
-/// `seed`, facing out with a tilt, their sprays growing upwards. Their normals bend out from the
-/// crown's `middle` and the lump's, so the crown is lit as a rounded mass of leaves.
-fn leaf_cards(
-    mesh: &mut TriMesh,
-    centre: Vec3,
-    radius: f32,
-    middle: Vec3,
-    spray: textures::LeafSpray,
-    shrub: bool,
-    seed: u32,
-) {
-    let ([u0, v0], [u1, v1]) = spray.uv_box();
-    // Leaves near their own size: a card's half side at most 0.6 m for broad leaves (a plane's
-    // 20–25 cm), 0.4 m for small and narrow ones, 0.5 m for needles; a card of 0.75 lump radii
-    // drew a plane's leaves 40–60 cm wide by the eye. More cards where they are smaller, so the
-    // lump keeps its cover.
-    let cap = match spray {
-        textures::LeafSpray::Broad => 0.6,
-        textures::LeafSpray::Needles => 0.5,
-        textures::LeafSpray::Small | textures::LeafSpray::Narrow => 0.4,
-    };
-    let half = (radius * 0.75).min(cap);
-    let count = if shrub {
-        4
-    } else {
-        (6.0 * (radius * 0.75 / half).powi(2))
-            .round()
-            .clamp(6.0, 16.0) as u32
-    };
-    let random = |k: u32, salt: u32| {
-        let h = (seed.wrapping_mul(0x9E37_79B9) ^ k.wrapping_mul(0x85EB_CA6B) ^ salt)
-            .wrapping_mul(0xC2B2_AE35);
-        ((h ^ (h >> 15)) & 0xFFFF) as f32 / 65535.0
-    };
-    let golden = std::f32::consts::PI * (3.0 - 5.0_f32.sqrt());
-    let spin = random(0, 1) * std::f32::consts::TAU;
-    for k in 0..count {
-        // A Fibonacci spiral over the sphere.
-        let y = 1.0 - 2.0 * (k as f32 + 0.5) / count as f32;
-        let ring = (1.0 - y * y).max(0.0).sqrt();
-        let a = spin + golden * k as f32;
-        let out = Vec3::new(ring * a.cos(), y, ring * a.sin());
-        let tilt = out.any_orthonormal_vector();
-        let tilt = (tilt * (random(k, 2) - 0.5) + out.cross(tilt) * (random(k, 3) - 0.5)) * 1.2;
-        let normal = (out + tilt).normalize();
-        // The spray grows upwards, turned a little about the card's normal.
-        let level = Vec3::Y - normal * normal.dot(Vec3::Y);
-        let up = if level.length_squared() > 1e-4 {
-            level.normalize()
-        } else {
-            normal.any_orthonormal_vector()
-        };
-        let turn = (random(k, 4) - 0.5) * 1.4;
-        let up = glam::Quat::from_axis_angle(normal, turn) * up;
-        let side = up.cross(normal);
-        let at =
-            centre + Vec3::new(out.x, out.y * 0.85, out.z) * radius * (0.4 + 0.3 * random(k, 5));
-        let corners = [
-            (at - up * half - side * half, [u0, v1]),
-            (at - up * half + side * half, [u1, v1]),
-            (at + up * half + side * half, [u1, v0]),
-            (at + up * half - side * half, [u0, v0]),
-        ];
-        let missing = mesh.positions.len() - mesh.uvs.len();
-        mesh.uvs.extend(std::iter::repeat_n([0.0, 0.0], missing));
-        let base = mesh.positions.len() as u32;
-        for (p, uv) in corners {
-            let bent = ((p - middle).normalize_or_zero() + (p - centre).normalize_or_zero())
-                .normalize_or(normal);
-            mesh.positions.push(p.to_array());
-            mesh.normals.push(bent.to_array());
-            mesh.uvs.push(uv);
-        }
-        // Counter-clockwise seen from the normal's side.
-        mesh.indices
-            .extend([base, base + 1, base + 2, base, base + 2, base + 3]);
-        mesh.sections.extend([2, 2]);
-    }
-}
-
-/// A triangle with a normal per corner, turned so it faces along their sum.
-fn smooth_triangle(mesh: &mut TriMesh, mut p: [Vec3; 3], mut n: [Vec3; 3], section: u8) {
-    if (p[1] - p[0]).cross(p[2] - p[0]).dot(n[0] + n[1] + n[2]) < 0.0 {
-        p.swap(1, 2);
-        n.swap(1, 2);
-    }
-    let base = mesh.positions.len() as u32;
-    for (q, m) in p.into_iter().zip(n) {
-        mesh.positions.push(q.to_array());
-        mesh.normals.push(m.to_array());
-    }
-    mesh.indices.extend([base, base + 1, base + 2]);
-    mesh.sections.push(section);
-}
-
-/// A tapering seven-sided limb from `a` (radius `ra`) to `b` (radius `rb`), section 0.
-fn limb(mesh: &mut TriMesh, a: Vec3, b: Vec3, ra: f32, rb: f32) {
-    let axis = (b - a).normalize();
-    let u = axis.any_orthonormal_vector();
-    let v = axis.cross(u);
-    let sides = 7;
-    let ring = |k: u32| {
-        let t = k as f32 / sides as f32 * std::f32::consts::TAU;
-        u * t.cos() + v * t.sin()
-    };
-    for k in 0..sides {
-        let (d0, d1) = (ring(k), ring(k + 1));
-        let (p0, p1) = (a + d0 * ra, a + d1 * ra);
-        let (q0, q1) = (b + d0 * rb, b + d1 * rb);
-        smooth_triangle(mesh, [p0, p1, q1], [d0, d1, d1], 0);
-        smooth_triangle(mesh, [p0, q1, q0], [d0, d1, d0], 0);
-    }
-}
-
-/// A crown's lump round `centre`, about `radius` across, a little flattened, its surface
-/// rippled by `seed`; section 1.
-fn lump(mesh: &mut TriMesh, centre: Vec3, radius: f32, seed: u32) {
-    lump_of(mesh, centre, radius, seed, &icosphere());
-}
-
-/// [`lump`] on the faces `faces` (unit directions): an [`icosahedron`]'s 20 for a shrub's.
-fn lump_of(mesh: &mut TriMesh, centre: Vec3, radius: f32, seed: u32, faces: &[[Vec3; 3]]) {
-    let s = seed as f32 * 1.7;
-    let place = |d: Vec3| {
-        let d = d.normalize();
-        let bump = 1.0
-            + 0.09 * (d.x * 7.3 + d.y * 3.1 + d.z * 5.7 + s).sin()
-            + 0.05 * (d.x * 13.1 - d.z * 11.3 + s * 2.3).sin();
-        (
-            centre + Vec3::new(d.x, d.y * 0.85, d.z) * radius * bump,
-            Vec3::new(d.x, d.y / 0.85, d.z).normalize(),
-        )
-    };
-    for &tri in faces {
-        let p = tri.map(place);
-        smooth_triangle(mesh, p.map(|q| q.0), p.map(|q| q.1), 1);
-    }
-}
-
-/// An icosahedron's 20 faces, their corners as directions (not of unit length).
-fn icosahedron() -> Vec<[Vec3; 3]> {
-    let t = (1.0 + 5.0_f32.sqrt()) * 0.5;
-    let v: [Vec3; 12] = [
-        Vec3::new(-1.0, t, 0.0),
-        Vec3::new(1.0, t, 0.0),
-        Vec3::new(-1.0, -t, 0.0),
-        Vec3::new(1.0, -t, 0.0),
-        Vec3::new(0.0, -1.0, t),
-        Vec3::new(0.0, 1.0, t),
-        Vec3::new(0.0, -1.0, -t),
-        Vec3::new(0.0, 1.0, -t),
-        Vec3::new(t, 0.0, -1.0),
-        Vec3::new(t, 0.0, 1.0),
-        Vec3::new(-t, 0.0, -1.0),
-        Vec3::new(-t, 0.0, 1.0),
-    ];
-    let faces: [[usize; 3]; 20] = [
-        [0, 11, 5],
-        [0, 5, 1],
-        [0, 1, 7],
-        [0, 7, 10],
-        [0, 10, 11],
-        [1, 5, 9],
-        [5, 11, 4],
-        [11, 10, 2],
-        [10, 7, 6],
-        [7, 1, 8],
-        [3, 9, 4],
-        [3, 4, 2],
-        [3, 2, 6],
-        [3, 6, 8],
-        [3, 8, 9],
-        [4, 9, 5],
-        [2, 4, 11],
-        [6, 2, 10],
-        [8, 6, 7],
-        [9, 8, 1],
-    ];
-    faces.iter().map(|f| [v[f[0]], v[f[1]], v[f[2]]]).collect()
-}
-
-/// An icosahedron's faces, each cut in four: 80 triangles of unit directions.
-fn icosphere() -> Vec<[Vec3; 3]> {
-    let mut out = Vec::with_capacity(80);
-    for [a, b, c] in icosahedron() {
-        let (ab, bc, ca) = ((a + b) * 0.5, (b + c) * 0.5, (c + a) * 0.5);
-        out.extend([[a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]]);
-    }
-    out
-}
-
 /// A pedestrian's eye on the pavement of the avenue nearest `near`, 1.7 m up, looking along it.
 pub fn street_camera(plan: &CityPlan, near: DVec2) -> Option<FlyCamera> {
     use forge_procgen::city::Profile;
@@ -7677,226 +7231,16 @@ fn street_ground(tiles: &mut Tiles, map: &ground::GroundMap, site: &Site) {
     }
 }
 
-/// A street lamp head's lens luminance, cd/m², in its red channel (its colour 1, 0.78, 0.55;
-/// `lamp_model`'s section 1).
-const STREET_LENS: f32 = 1000.0;
-
 /// Whether the street lamps are on at `hour` (0 to 24): from 17:00 to 7:00, the middle of the
 /// residents' lamps' ramps at dusk and dawn ([`residents::lamps`]).
 fn street_lamps_on(hour: f64) -> bool {
     !(7.0..17.0).contains(&hour.rem_euclid(24.0))
 }
 
-/// The street lamps' lights (D-065): one under each arm's lens (`lamp_model`), its intensity the
-/// lens's luminance times its area, so the light on the road matches the glow seen (about
-/// 1.9 lux under an 8 m lamp, eight times a full moon's). They light the outside's region only
-/// (D-068), the street and not the rooms behind the windows, where they took the house lamps'
-/// places. Before, only the probes lit the street from the lenses' glow, in blocks of their grid,
-/// off the lamps, and the moon's shadow of the pole crossed the pool (the owner, 2026-10-18).
-/// `lamps`: each lamp's place, scale and turn.
-fn street_lamps(lamps: &[(Vec3, f32, f32, bool)]) -> Vec<forge_render::lamps::Lamp> {
-    use forge_render::lamps::{LAMP_REGIONS, Lamp, NO_REGION};
-    let mut regions = [NO_REGION; LAMP_REGIONS];
-    // The outside's region (`REGION_OUTSIDE` in `probes.slang`).
-    regions[0] = 0;
-    // The lens: 0.24 by 0.56 m, its luminance by its colour (1, 0.78, 0.55).
-    // At 4 and 6 times it (7.5 and 12 lux under a lamp, LED street lighting's range) the owner
-    // preferred this (2026-10-18).
-    let lens = 0.24 * 0.56 * STREET_LENS * (0.2126 + 0.7152 * 0.78 + 0.0722 * 0.55);
-    // A bulb of 12 cm just under the lens (7.69 m on the 8 m model).
-    let (radius, under) = (0.12, 7.56);
-    let mut out = Vec::new();
-    for &(at, scale, turn, double) in lamps {
-        let arms: &[f32] = if double { &[-1.40, 1.00] } else { &[-1.40] };
-        for &z in arms {
-            out.push(Lamp {
-                position: at
-                    + glam::Quat::from_rotation_y(turn) * (Vec3::new(0.0, under, z) * scale),
-                radius: radius * scale,
-                candela: lens * scale * scale,
-                kelvin: 2700.0,
-                regions,
-                emission: forge_render::lamps::Emission::STREET,
-            });
-        }
-    }
-    out
-}
-
-/// A street lamp 8 m tall: a hexagonal pole and an arm reaching 1.4 m along −z over the road, and
-/// when `double` a second reaching 1 m along +z over the pavement (section 0); under each arm's end
-/// a dark housing (section 0) lit only underneath (section 1, emissive): shielded, no light into
-/// the sky (the owner, 2026-10-11).
-fn lamp_model(double: bool) -> TriMesh {
-    let mut mesh = TriMesh::default();
-    let sides = 6;
-    for k in 0..sides {
-        let a = k as f32 / sides as f32 * std::f32::consts::TAU;
-        let b = (k + 1) as f32 / sides as f32 * std::f32::consts::TAU;
-        let (pa, pb) = (
-            Vec3::new(a.cos() * 0.07, 0.0, a.sin() * 0.07),
-            Vec3::new(b.cos() * 0.07, 0.0, b.sin() * 0.07),
-        );
-        let up = Vec3::Y * 8.0;
-        let out = ((pa + pb) * 0.5).normalize();
-        triangle(&mut mesh, [pa, pb, pb + up], out, 0);
-        triangle(&mut mesh, [pa, pb + up, pa + up], out, 0);
-    }
-    // A box from `lo` to `hi` in a section.
-    let boxed = |mesh: &mut TriMesh, lo: Vec3, hi: Vec3, section: u8| {
-        let c = |x: bool, y: bool, z: bool| {
-            Vec3::new(
-                if x { hi.x } else { lo.x },
-                if y { hi.y } else { lo.y },
-                if z { hi.z } else { lo.z },
-            )
-        };
-        let faces = [
-            (
-                Vec3::X,
-                [
-                    c(true, false, false),
-                    c(true, true, false),
-                    c(true, true, true),
-                    c(true, false, true),
-                ],
-            ),
-            (
-                -Vec3::X,
-                [
-                    c(false, false, false),
-                    c(false, false, true),
-                    c(false, true, true),
-                    c(false, true, false),
-                ],
-            ),
-            (
-                Vec3::Y,
-                [
-                    c(false, true, false),
-                    c(false, true, true),
-                    c(true, true, true),
-                    c(true, true, false),
-                ],
-            ),
-            (
-                -Vec3::Y,
-                [
-                    c(false, false, false),
-                    c(true, false, false),
-                    c(true, false, true),
-                    c(false, false, true),
-                ],
-            ),
-            (
-                Vec3::Z,
-                [
-                    c(false, false, true),
-                    c(true, false, true),
-                    c(true, true, true),
-                    c(false, true, true),
-                ],
-            ),
-            (
-                -Vec3::Z,
-                [
-                    c(false, false, false),
-                    c(false, true, false),
-                    c(true, true, false),
-                    c(true, false, false),
-                ],
-            ),
-        ];
-        for (n, q) in faces {
-            triangle(mesh, [q[0], q[1], q[2]], n, section);
-            triangle(mesh, [q[0], q[2], q[3]], n, section);
-        }
-    };
-    // The arms: over the road along −z, and over the pavement along +z.
-    let arms: &[f32] = if double { &[-1.0, 1.0] } else { &[-1.0] };
-    for &way in arms {
-        let reach = if way < 0.0 { 1.45 } else { 1.05 };
-        let (z0, z1) = if way < 0.0 {
-            (-reach, 0.0)
-        } else {
-            (0.0, reach)
-        };
-        boxed(
-            &mut mesh,
-            Vec3::new(-0.04, 7.85, z0),
-            Vec3::new(0.04, 7.95, z1),
-            0,
-        );
-        // The housing, dark, and under it the lit lens, facing down only.
-        let (h0, h1) = if way < 0.0 {
-            (-reach - 0.25, -reach + 0.35)
-        } else {
-            (reach - 0.35, reach + 0.25)
-        };
-        boxed(
-            &mut mesh,
-            Vec3::new(-0.14, 7.70, h0),
-            Vec3::new(0.14, 7.85, h1),
-            0,
-        );
-        let lens = [
-            Vec3::new(-0.12, 7.69, h0 + 0.02),
-            Vec3::new(0.12, 7.69, h0 + 0.02),
-            Vec3::new(0.12, 7.69, h1 - 0.02),
-            Vec3::new(-0.12, 7.69, h1 - 0.02),
-        ];
-        triangle(&mut mesh, [lens[0], lens[1], lens[2]], -Vec3::Y, 1);
-        triangle(&mut mesh, [lens[0], lens[2], lens[3]], -Vec3::Y, 1);
-    }
-    mesh
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use forge_procgen::city::{example, plan};
-
-    /// The forest's grown plants keep to their budgets: a tree 40 000 triangles at most, a
-    /// shrub 1 500 (the full graphs' run to 250 000).
-    #[test]
-    fn the_grown_plants_keep_their_budgets() {
-        for (sp, s) in forge_flora::species::mediterranean().iter().enumerate() {
-            let shrub = s.habit == forge_flora::species::Habit::Shrub;
-            let broad = s.foliage == forge_flora::species::Foliage::Broad;
-            for k in 0..FLORA_INDIVIDUALS {
-                let conditions = flora_conditions(s, sp as u16, k);
-                let g = forge_flora::grow::grow(s, &conditions);
-                let m = grown_mesh(
-                    &g,
-                    shrub,
-                    broad,
-                    conditions.pruning.lift as f32,
-                    leaf_spray(&s.id),
-                );
-                let budget = if shrub { 1_500 } else { 40_000 };
-                // Its crown's proxy for the probes' rays (#297): fewer triangles than the plant.
-                let proxy = grown_proxy(&g, shrub, broad, conditions.pruning.lift as f32);
-                println!(
-                    "{} {k}: {} triangles, its proxy {}",
-                    s.id,
-                    m.triangle_count(),
-                    proxy.triangle_count()
-                );
-                assert!(
-                    m.triangle_count() > 0 && m.triangle_count() <= budget,
-                    "{} {k}: {} triangles",
-                    s.id,
-                    m.triangle_count()
-                );
-                assert!(
-                    proxy.triangle_count() > 0 && proxy.triangle_count() < m.triangle_count(),
-                    "{} {k}: a proxy of {} triangles",
-                    s.id,
-                    proxy.triangle_count()
-                );
-            }
-        }
-    }
 
     #[test]
     fn a_depot_s_trams_stand_on_its_tracks_in_their_places() {
