@@ -416,6 +416,19 @@ SDF profiles. One normal-compositing rule (Mikkelsen's surface-gradient framewor
 Zstd with BC7/BC5/BC4.
 *(research: vegetation-materials.md, large-worlds.md §7)* Accepted by the owner 2026-09-24.
 
+- **Foliage under the cluster LOD** (#303, found by a scene built outside the repository; the
+  ladder's far end is D-075 🟡):
+  - **Leaf cards and open blade strips never simplify.** The simplifier keeps a mesh's open
+    borders (`LockBorder` in `forge_geom::lod`), and a card is all border, so a far crown draws
+    and traces every card. Freeing the borders thins a crown unless the remaining leaves grow,
+    and that is what Pixar's US 7,973,789 B2 claims (to about 2028-11): it waits for the
+    owner's word (`research/forests-and-grass.md` §3, §9).
+  - **Two sheets at the same positions collapse.** The simplifier tells a seam from a border by
+    position, so a two-sided surface made of a front and a back sheet on the same vertices
+    reads as closed. It went at 1–2 cm of error, the blades vanishing a few metres away,
+    whatever the normal weight. Keep the back sheet off the front by 1.5 mm or more, as
+    `forge_geom::modules::sheet` does (2 cm), or draw one sheet with a double-sided row.
+
 ## D-014 — Terrain representation ✅ (2026-09-24)
 
 Equi-angular cube-sphere quadtree for planets and a flat grid for islands, CDLOD heightfield
