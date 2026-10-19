@@ -437,3 +437,34 @@ fn the_lua_5_1_mode_has_writable_libraries() {
         Data::String("nilnil".into())
     );
 }
+
+#[test]
+fn a_root_its_modules_require_back_runs_once() {
+    let root = std::env::temp_dir().join(format!("forge-script-root-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    // The root counts its runs in a global; its module requires it back.
+    std::fs::write(
+        root.join("main.lua"),
+        "Runs = (Runs or 0) + 1 local part = require('part') return { part = part, runs = Runs }",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("part.lua"),
+        "local m = require('main') return type(m)",
+    )
+    .unwrap();
+    let mut s = Script::new(Limits {
+        require_root: Some(root.clone()),
+        ..Limits::default()
+    })
+    .unwrap();
+    let out = s.run_module("main").unwrap();
+    assert_eq!(
+        out,
+        map(&[
+            ("part", Data::String("boolean".into())),
+            ("runs", Data::Integer(1))
+        ])
+    );
+    std::fs::remove_dir_all(&root).ok();
+}

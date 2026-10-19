@@ -356,6 +356,13 @@ impl Script {
         }
     }
 
+    /// Runs module `name` from the require folder ([`Limits::require_root`]) as `require` would,
+    /// and returns what it returns: a module tree's root, whose own modules require it back, then
+    /// runs once.
+    pub fn run_module(&mut self, name: &str) -> Result<Data, Error> {
+        self.run(name, &format!("return require({name:?})"))
+    }
+
     /// The globals the chunks set (not those the caller set), by name.
     pub fn globals(&self) -> Result<BTreeMap<String, Data>, Error> {
         let mut out = BTreeMap::new();
