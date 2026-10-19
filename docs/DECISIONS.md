@@ -6923,5 +6923,24 @@ best guess or data"):
     12, so it was taken out.
   - Pursuers on a target's rim jostle within 2.5 m.
 
+**Field tiles built** (#317, the same day, `forge_nav::Tiles`):
+- **The tiles:** square, 256 columns of 0.10 m (25.6 m). Each tile's field covers its own
+  columns and an 8-column margin, so its clearance at the edge sees what stands beyond.
+- **Building:** the host builds the tiles round its agents (`round`) from the solids over a
+  tile's `bounds`, rebuilds one alone when what stands on it changes, and drops those no agent
+  needs.
+- **A place** belongs to the tile owning its column. A step into a margin goes on in the owning
+  tile, at the same point on the same floor. A tile not built is not walked, and a path towards
+  it ends at the reachable place nearest the goal.
+- **The search** is the field's, over (tile, place) nodes, on the tiles' common grid, with the
+  links. `walkable_line` and the pulling cross tiles too.
+- **Checked:**
+  - a path round a wall's end across two tiles is 46.98 m, against 47.03 m on one field over
+    both;
+  - a tile not built stops the path at the edge of the one built, and building it opens the
+    way;
+  - two tiles built in 34 ms, the path in 25 ms over 76,420 places (hash maps: dense per-tile
+    arrays would be faster).
+
 *(research: navigation-traversal.md, game-ai-ecosystems.md §2 and §7, animation.md §5; D-012,
 D-016, D-062; issues #90, #276, #311, #316, #317)*
