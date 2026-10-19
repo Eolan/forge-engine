@@ -16,6 +16,12 @@ pub const COUNT: usize = 4;
 const TICK: f64 = 1.0 / 60.0;
 /// The most ticks a frame runs; a longer frame's rest is dropped.
 const CATCH_UP: u32 = 4;
+/// The strides their figures are drawn in (`forge_geom::figures::walker`'s, the crowd's): the
+/// left foot ahead, passing, the right ahead, and the halves between.
+pub const STRIDES: [f32; 5] = [0.3, 0.0, -0.3, 0.15, -0.15];
+/// A gait cycle of 1.4 m in eight poses, as `STRIDES` (the crowd's): the left stride, half,
+/// passing, half, the right stride, half, passing, half.
+const GAIT: [usize; 8] = [0, 3, 1, 4, 2, 4, 1, 3];
 
 /// The pursuers and the house they go for.
 pub struct Pursuers {
@@ -30,6 +36,10 @@ pub struct Pursuers {
     facing: Vec<Vec2>,
     /// Seconds not yet ticked.
     owed: f64,
+    /// How far each has walked, metres: its stride's phase.
+    walked: Vec<f32>,
+    /// Each one's pose last drawn, as `STRIDES`.
+    drawn: Vec<usize>,
     /// The windows climbed through so far.
     pub crossings: usize,
 }
@@ -68,6 +78,8 @@ impl Pursuers {
             carried: vec![None; n],
             facing: vec![towards; n],
             owed: 0.0,
+            walked: vec![0.0; n],
+            drawn: vec![1; n],
             crossings: 0,
         })
     }
@@ -124,6 +136,7 @@ impl Pursuers {
         self.crowd.step(dt, Some(&self.field));
         for k in 0..self.follows.len() {
             let v = self.crowd.agents[k].velocity;
+            self.walked[k] += v.length() * dt;
             if v.length_squared() > 0.01 {
                 self.facing[k] = v.normalize();
             }
@@ -151,6 +164,27 @@ impl Pursuers {
     /// Each one's feet, metres.
     pub fn feet(&self) -> Vec<Vec3> {
         self.crowd.agents.iter().map(|a| a.position).collect()
+    }
+
+    /// Each one's pose to draw now, as [`STRIDES`], and whether it changed since the last
+    /// drawn (its figure then moves to another mesh's slot: no motion of its own that frame).
+    /// Walking, its gait's pose by the way it has walked, each at its own phase; standing or
+    /// carried over a sill, passing.
+    pub fn poses(&mut self) -> Vec<(usize, bool)> {
+        (0..self.drawn.len())
+            .map(|k| {
+                let moving = self.carried[k].is_none()
+                    && self.crowd.agents[k].velocity.length_squared() > 0.01;
+                let pose = if moving {
+                    GAIT[((self.walked[k] / 0.175) as usize + 3 * k) % GAIT.len()]
+                } else {
+                    1
+                };
+                let changed = pose != self.drawn[k];
+                self.drawn[k] = pose;
+                (pose, changed)
+            })
+            .collect()
     }
 
     /// Each one's way it faces (x and z, unit).

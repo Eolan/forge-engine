@@ -7101,12 +7101,15 @@ impl Scenario for PlanScenario {
             builder.set_mesh_material(shuttle, materials_taxi);
             tram_movers.push((shuttle, t.shuttles() as u32));
         }
-        // The pursuers (#317), the very last.
+        // The pursuers (#317), the very last: a mesh a stride, a slot of each for each of them.
         if self.pursuers.is_some() {
-            let figure =
-                builder.add_mesh(&MeshletMesh::build(&forge_geom::figures::walker(1.75, 0.0)));
-            builder.set_mesh_material(figure, people_rows[1 % people_rows.len()]);
-            tram_movers.push((figure, pursuers::COUNT as u32));
+            for stride in pursuers::STRIDES {
+                let figure = builder.add_mesh(&MeshletMesh::build(&forge_geom::figures::walker(
+                    1.75, stride,
+                )));
+                builder.set_mesh_material(figure, people_rows[1 % people_rows.len()]);
+                tram_movers.push((figure, pursuers::COUNT as u32));
+            }
         }
         laps.mark("movers");
         // The kit buildings' insides, a mesh a tile cooked apart from the masses (#273), last
@@ -7583,17 +7586,27 @@ impl Running for PlanRunning {
                 transforms.push(place((at, pose.yaw)));
             }
         }
-        // Then the pursuers (#317), the very last; the slots none fills wait under the ground.
-        if let Some(p) = &self.pursuers {
+        // Then the pursuers (#317), the very last: each in its pose's mesh, the slots of its
+        // other poses (and those none fills) under the ground. A figure that changed mesh has
+        // no motion of its own that frame.
+        if let Some(p) = &mut self.pursuers {
             still.resize(transforms.len(), false);
-            let (feet, facing) = (p.feet(), p.facing());
+            let (feet, facing, poses) = (p.feet(), p.facing().to_vec(), p.poses());
             let parked = (Vec3::new(0.0, -1000.0, 0.0) + origin, 0.0);
-            for k in 0..pursuers::COUNT {
-                still.push(false);
-                let pose = feet.get(k).zip(facing.get(k));
-                transforms.push(place(
-                    pose.map_or(parked, |(&at, f)| (at, (-f.x).atan2(-f.y))),
-                ));
+            for mesh in 0..pursuers::STRIDES.len() {
+                for k in 0..pursuers::COUNT {
+                    let figure = feet.get(k).zip(facing.get(k)).zip(poses.get(k));
+                    match figure.filter(|(_, (pose, _))| *pose == mesh) {
+                        Some(((&at, f), &(_, changed))) => {
+                            still.push(changed);
+                            transforms.push(place((at, (-f.x).atan2(-f.y))));
+                        }
+                        None => {
+                            still.push(true);
+                            transforms.push(place(parked));
+                        }
+                    }
+                }
             }
         }
         scene.set_movers_still(&transforms, |k| still.get(k).copied().unwrap_or(false));

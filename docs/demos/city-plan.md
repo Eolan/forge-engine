@@ -2434,8 +2434,9 @@ module (`pursuers.rs`) with the doors open and with them shut:
 - **Door open:** 4 of 4 get in.
 - **Doors shut:** 4 of 4 climb through the windows, one at a time.
 
-The figures glide in one pose: walking clips and the crossing's clip come with the animation
-work (#311).
+The figures walk the crowd's gait: eight poses over 1.4 m from five stride meshes, each at its own
+phase, standing and climbing in the passing pose. A figure that changes mesh has no motion of
+its own that frame. Real clips, and the crossing's own, come with the animation work (#311).
 
 ![Pursuers going in](images/city-plan-pursuers.png)
 
