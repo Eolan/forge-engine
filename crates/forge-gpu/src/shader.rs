@@ -474,13 +474,14 @@ impl ShaderCompiler {
     }
 
     /// The options in the cached file's name, so that optimised and debug builds, or a
-    /// precise entry ([`precise`]), keep their own SPIR-V side by side.
+    /// precise entry ([`precise`]), keep their own SPIR-V side by side. A precise entry's `x`:
+    /// its mixes written out (#282), not the SPIR-V cached before.
     fn variant(&self, file: &str, entry: &str) -> &'static str {
         match (self.optimize, precise(file, entry)) {
             (true, false) => "O2",
-            (true, true) => "O2p",
+            (true, true) => "O2px",
             (false, false) => "O0",
-            (false, true) => "O0p",
+            (false, true) => "O0px",
         }
     }
 
@@ -653,9 +654,20 @@ impl ShaderCompiler {
                 "{file}:{entry}: slangc produced no SPIR-V"
             )));
         }
+        let mut words: Vec<u32> = bytemuck::cast_slice(&bytes).to_vec();
+        // A precise entry's mixes written out, unfused as its own arithmetic (#282); cached so.
+        if precise(file, entry) {
+            let (exact, mixes) = crate::exact_mix::exact_mixes(&words);
+            if mixes > 0 {
+                words = exact;
+                debug_assert_eq!(crate::exact_mix::mixes(&words), 0, "{file}:{entry}");
+                fs::write(&cached, bytemuck::cast_slice::<u32, u8>(&words))?;
+                tracing::debug!(shader = file, entry, mixes, "mixes written out");
+            }
+        }
         self.prune(file, entry, &cached);
         tracing::info!(shader = file, entry, "compiled");
-        Ok(bytemuck::cast_slice(&bytes).to_vec())
+        Ok(words)
     }
 }
 

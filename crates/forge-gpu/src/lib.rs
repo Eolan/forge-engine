@@ -18,6 +18,7 @@ mod device;
 mod display;
 pub mod dlss;
 mod error;
+mod exact_mix;
 mod frame;
 #[forbid(unsafe_code)]
 pub mod graph;

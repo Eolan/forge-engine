@@ -454,7 +454,11 @@ authoritative, in integers.**
   - denormals "may be flushed to zero" unless `DenormPreserve` is declared, which not every device
     supports;
   - a multiply and an add may fuse unless decorated `NoContraction`, and the decoration does not
-    reach an extended instruction such as `FMix` (Slang's `lerp`: #281, `shaders/exact.slang`);
+    reach an extended instruction such as `FMix` (Slang's `lerp`: #281, `shaders/exact.slang`).
+    Since #282 (2026-10-19) a precise entry's SPIR-V has each `FMix(a, b, t)` written out as
+    `(b − a) · t + a`, each operation `NoContraction`, whatever its source says
+    (`forge-gpu/src/exact_mix.rs`, cached as the `O2px` variant). The images moved by rounding:
+    1 to 4 pixels of a sentinel, by at most 4 levels;
   - for doubles, "the precision of double-precision instructions is at least that of single
     precision", and nothing more.
 - **One definition:** the CPU runs the same integer code, as the reference, the fallback and the
