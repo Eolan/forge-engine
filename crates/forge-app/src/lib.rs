@@ -535,6 +535,8 @@ struct State<D: Demo> {
     display_info: Var<i64>,
     /// `app.console`: whether the console shows (the key under Esc).
     console_shown: Var<bool>,
+    /// `app.mouse_look`: the game's mouse look (the cursor captured, the right button free).
+    mouse_look: Var<bool>,
     /// The overrides naming no variable were reported (once, after the demo registered its).
     unmatched_reported: bool,
     #[cfg(feature = "profiling")]
@@ -915,6 +917,15 @@ impl<D: Demo> State<D> {
             )
             .release(),
         );
+        let mouse_look = settings.add(
+            Spec::bool(
+                "app.mouse_look",
+                false,
+                "The game's mouse look: the cursor captured and hidden, the view turning without a \
+                 button held, every mouse button the game's; Esc releases it.",
+            )
+            .release(),
+        );
         settings.add_command(
             "app.capture",
             "[PATH]",
@@ -1020,6 +1031,7 @@ impl<D: Demo> State<D> {
             modifiers: winit::keyboard::ModifiersState::default(),
             display_info,
             console_shown,
+            mouse_look,
             unmatched_reported: false,
             demo,
             ctx,
@@ -1148,6 +1160,20 @@ impl<D: Demo> State<D> {
             _ => OverlayMode::Full,
         };
         self.ctx.profile.set_mode(wanted);
+        // `app.mouse_look` (D-069): the game's mouse look, the cursor captured (locked where the
+        // platform can, else kept in the window) and hidden, the view turning with no button.
+        let look = self.ctx.settings.get(self.mouse_look);
+        if look != self.input.mouse_look {
+            self.input.mouse_look = look;
+            self.input.looking = look;
+            let window = &self.ctx.window;
+            if !look {
+                let _ = window.set_cursor_grab(CursorGrabMode::None);
+            } else if window.set_cursor_grab(CursorGrabMode::Locked).is_err() {
+                let _ = window.set_cursor_grab(CursorGrabMode::Confined);
+            }
+            window.set_cursor_visible(!look);
+        }
         if !self.unmatched_reported && !self.ctx.loading {
             self.unmatched_reported = true;
             let unmatched: Vec<(String, settings::Source)> = self
@@ -1760,6 +1786,11 @@ impl<D: Demo> ApplicationHandler for App<D> {
                         return;
                     }
                     if pressed && code == KeyCode::Escape {
+                        // The game's mouse look first lets the mouse go; then Esc quits.
+                        if state.input.mouse_look {
+                            state.ctx.settings.set(state.mouse_look, false);
+                            return;
+                        }
                         event_loop.exit();
                         return;
                     }
@@ -1815,18 +1846,56 @@ impl<D: Demo> ApplicationHandler for App<D> {
             }
             WindowEvent::ModifiersChanged(modifiers) => state.modifiers = modifiers.state(),
             WindowEvent::MouseInput {
-                button: MouseButton::Right,
+                button,
                 state: pressed,
                 ..
             } => {
-                let looking = pressed == ElementState::Pressed;
-                state.input.looking = looking;
-                let _ = state.ctx.window.set_cursor_grab(if looking {
-                    CursorGrabMode::Confined
-                } else {
-                    CursorGrabMode::None
-                });
-                state.ctx.window.set_cursor_visible(!looking);
+                let down = pressed == ElementState::Pressed;
+                // A button bound to a console line (`bind mouse1 …`, D-069) runs it, as a key.
+                if down
+                    && !state.ctx.loading
+                    && let Some(name) = input::button_name(button)
+                    && let Some(requests) = state.console.run_bound(name, &mut state.ctx.settings)
+                {
+                    for request in requests {
+                        let console::Request::Command { name, args } = request else {
+                            continue;
+                        };
+                        match state.run_command(&name, &args) {
+                            Ok(false) => {}
+                            Ok(true) => event_loop.exit(),
+                            Err(e) => {
+                                self.error = Some(e);
+                                event_loop.exit();
+                            }
+                        }
+                    }
+                    return;
+                }
+                state.input.set_button(button, down);
+                // The right button turns the fly camera's view, unless the game's mouse look holds
+                // the cursor and the button is the game's (aiming).
+                if button == MouseButton::Right && !state.input.mouse_look {
+                    state.input.looking = down;
+                    let _ = state.ctx.window.set_cursor_grab(if down {
+                        CursorGrabMode::Confined
+                    } else {
+                        CursorGrabMode::None
+                    });
+                    state.ctx.window.set_cursor_visible(!down);
+                }
+            }
+            // Back in the window, the game's mouse look takes the cursor again.
+            WindowEvent::Focused(focused) => {
+                if !focused {
+                    state.input.release_all();
+                } else if state.input.mouse_look {
+                    let window = &state.ctx.window;
+                    if window.set_cursor_grab(CursorGrabMode::Locked).is_err() {
+                        let _ = window.set_cursor_grab(CursorGrabMode::Confined);
+                    }
+                    window.set_cursor_visible(false);
+                }
             }
             // The wheel's notches (a touchpad's pixels at 40 a notch): the fly camera's speed.
             WindowEvent::MouseWheel { delta, .. } => {

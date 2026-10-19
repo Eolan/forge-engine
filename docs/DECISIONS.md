@@ -5846,6 +5846,19 @@ layouts other than the owner's AZERTY and QWERTY, with their own default maps, a
   - a run with a test `forge.cfg`, the console listing its binds and the new settings;
   - `docs/demos/console.md` maps each old key to its setting, with a `forge.cfg` that puts them
     back on the function keys.
+- **Mouse buttons and the game's mouse look** (2026-10-19, asked by an out-of-tree town for a
+  rifle and its scope):
+  - `Input::button_down`, `button_pressed` and `button_released` give each mouse button held,
+    pressed and released this frame.
+  - A button binds as a key does: `bind mouse1 …`, with mouse1 the left, mouse2 the right,
+    mouse3 the middle, mouse4 and mouse5 the sides.
+  - `app.mouse_look`, a setting, captures and hides the cursor (locked where the platform can,
+    else kept in the window). The view then turns with no button held, and the right button is
+    the game's, for aiming.
+  - Esc first lets the mouse go, and a second Esc quits.
+  - Losing the window's focus lets every key and button go; coming back, the mouse look takes the
+    cursor again.
+  - The fly camera's right-button look is unchanged when the mode is off.
 
 ## D-070 — DLSS is the reference image, FSR replaces TAA everywhere else ✅ (2026-10-18, #286, the owner's decision)
 
