@@ -416,7 +416,10 @@ joint indices unchanged). `Clip::root_motion` gives the root joint's move and tu
 between two times, in the character's frame at the first (over a loop's end too), for a
 controller to apply, and `lock_root` holds the pose's root at an anchor while it does: the whole
 motion applied and locked reproduces the clip's own path, the hips' sway included. The turn is
-the rotation's twist about +Y, a quaternion with `sqrt` only (D-016).
+the rotation's twist about +Y, a quaternion with `sqrt` only (D-016). **Layers** (#313):
+`Pose::mix_masked` mixes a clip over another on a joint mask (`Skeleton::mask_below`: a joint and
+what it carries), and `Pose::add` adds an additive layer's difference from its reference, its
+rotation in the joint's own frame as engines' additive layers do.
 
 ## D-013 — Vegetation, impostor ladder, trim sheets ✅ (2026-09-24)
 

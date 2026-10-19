@@ -118,6 +118,23 @@ impl Skeleton {
         self.frames[joint]
     }
 
+    /// A joint mask for [`crate::Pose::mix_masked`] (#313): 1 for `joint` and every joint under
+    /// it (the spine and what it carries, for an upper-body layer), 0 for the others.
+    pub fn mask_below(&self, joint: usize) -> Vec<f32> {
+        (0..self.len())
+            .map(|j| {
+                let mut at = Some(j);
+                while let Some(a) = at {
+                    if a == joint {
+                        return 1.0;
+                    }
+                    at = self.parent(a);
+                }
+                0.0
+            })
+            .collect()
+    }
+
     /// Writes each joint's transform in the model's frame into `out`: its local transform
     /// from `pose` after its parent's.
     ///
@@ -216,5 +233,22 @@ mod tests {
             vec![Mat4::IDENTITY; 2],
         );
         assert!(matches!(error, Err(SkeletonError::BadParent(_))));
+    }
+
+    #[test]
+    fn a_mask_below_a_joint_holds_it_and_what_it_carries() {
+        // A chain 0 → 1 → 2, and a second root 3.
+        let rest = [crate::pose::Transform::IDENTITY; 4];
+        let skeleton = Skeleton::new(
+            (0..4).map(|j| format!("j{j}")).collect(),
+            vec![None, Some(0), Some(1), None],
+            vec![Mat4::IDENTITY; 4],
+            &rest,
+            vec![Mat4::IDENTITY; 4],
+        )
+        .unwrap();
+        assert_eq!(skeleton.mask_below(1), [0.0, 1.0, 1.0, 0.0]);
+        assert_eq!(skeleton.mask_below(0), [1.0, 1.0, 1.0, 0.0]);
+        assert_eq!(skeleton.mask_below(3), [0.0, 0.0, 0.0, 1.0]);
     }
 }

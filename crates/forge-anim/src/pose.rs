@@ -82,6 +82,49 @@ impl Pose {
         }
     }
 
+    /// Mixes `other` into this pose joint by joint (#313): joint `j` by `weight · mask[j]`, so a
+    /// clip plays over another on some joints only (an upper-body action over walking, the mask
+    /// from [`crate::Skeleton::mask_below`]). A mask of ones is [`Pose::mix`].
+    ///
+    /// # Panics
+    ///
+    /// When the poses and the mask do not have the same number of joints.
+    pub fn mix_masked(&mut self, other: &Pose, weight: f32, mask: &[f32]) {
+        assert!(self.len() == other.len() && mask.len() == self.len());
+        for (j, &m) in mask.iter().enumerate() {
+            let w = weight * m;
+            if w == 0.0 {
+                continue;
+            }
+            self.translations[j] = lerp3(self.translations[j], other.translations[j], w);
+            self.rotations[j] = nlerp(self.rotations[j], other.rotations[j], w);
+            self.scales[j] = lerp3(self.scales[j], other.scales[j], w);
+        }
+    }
+
+    /// Adds `additive`'s difference from `reference` to this pose by `weight` (#313): a lean, a
+    /// recoil or a breath over whatever plays. Per joint, the translation moves by `weight` of
+    /// `additive − reference`; the rotation turns by `weight` of `reference⁻¹ · additive` in its
+    /// own frame (local space, as engines' additive layers do; the short way, normalised); the
+    /// scale multiplies by `weight` of `additive / reference`. Added at weight 0, or with
+    /// `additive` equal to `reference`, it leaves the pose as it was.
+    ///
+    /// # Panics
+    ///
+    /// When the three poses do not have the same number of joints.
+    pub fn add(&mut self, additive: &Pose, reference: &Pose, weight: f32) {
+        assert!(self.len() == additive.len() && self.len() == reference.len());
+        for j in 0..self.len() {
+            let moved = additive.translations[j] - reference.translations[j];
+            self.translations[j] += moved * weight;
+            let turn = reference.rotations[j].inverse() * additive.rotations[j];
+            let turn = nlerp(Quat::IDENTITY, turn, weight);
+            self.rotations[j] = (self.rotations[j] * turn).normalize();
+            let grown = additive.scales[j] / reference.scales[j];
+            self.scales[j] *= lerp3(Vec3::ONE, grown, weight);
+        }
+    }
+
     /// Writes `a` mixed with `b` into `out`: `a` at weight 0, `b` at 1. Translations and scales
     /// are lerped, rotations taken the short way round and normalised; a pose mixed with
     /// itself is that pose.
@@ -177,5 +220,41 @@ mod tests {
         Pose::blend(&a, &b, 0.5, &mut out);
         let (_, angle) = out.rotations[0].to_axis_angle();
         assert!((angle - 0.2).abs() < 1e-4, "{angle}");
+    }
+
+    #[test]
+    fn a_masked_mix_moves_only_the_masked_joints() {
+        let (a, b) = (pose(0.2, 0.0), pose(0.9, 1.0));
+        let mut out = a.clone();
+        out.mix_masked(&b, 1.0, &[0.0, 1.0]);
+        assert_eq!(out.translations[0], a.translations[0]);
+        assert_eq!(out.rotations[0], a.rotations[0]);
+        assert!(out.rotations[1].abs_diff_eq(b.rotations[1], 1e-6));
+        // A mask of ones is a plain mix.
+        let (mut masked, mut plain) = (a.clone(), a.clone());
+        masked.mix_masked(&b, 0.4, &[1.0, 1.0]);
+        plain.mix(&b, 0.4);
+        assert_eq!(masked, plain);
+    }
+
+    #[test]
+    fn an_additive_layer_adds_its_difference_from_its_reference() {
+        let base = pose(0.3, 0.5);
+        let reference = pose(0.0, 0.0);
+        let lean = pose(0.25, 0.1);
+        // Its own reference adds nothing, and nothing is added at weight 0.
+        let mut out = base.clone();
+        out.add(&reference, &reference, 1.0);
+        for (q, r) in out.rotations.iter().zip(&base.rotations) {
+            assert!(q.abs_diff_eq(*r, 1e-6));
+        }
+        let mut out = base.clone();
+        out.add(&lean, &reference, 0.0);
+        assert_eq!(out.translations, base.translations);
+        // Whole: the first joint turned 0.25 more about z, moved 0.1 along x.
+        let mut out = base.clone();
+        out.add(&lean, &reference, 1.0);
+        assert!(out.rotations[0].abs_diff_eq(Quat::from_rotation_z(0.55), 1e-5));
+        assert!((out.translations[0].x - 0.6).abs() < 1e-6);
     }
 }

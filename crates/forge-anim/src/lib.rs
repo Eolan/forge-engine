@@ -7,6 +7,9 @@
 //! 1. [`Clip::sample`] writes a clip's [`Pose`] at a time: each joint's local transform, kept
 //!    as three arrays (translations, rotations, scales);
 //! 2. [`Pose::blend`] mixes two poses by a weight (a walk into a run, an idle into a walk);
+//!    [`Pose::mix_masked`] on some joints only ([`Skeleton::mask_below`]: an upper-body action
+//!    over walking), and [`Pose::add`] adds a layer's difference from its reference (a lean, a
+//!    recoil; #313);
 //! 3. [`Skeleton::model_space`] chains the local transforms from the roots down;
 //! 4. [`Skeleton::skinning_matrices`] multiplies each by its inverse bind matrix: what the
 //!    GPU's skinning moves the vertices by.
