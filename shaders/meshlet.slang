@@ -155,6 +155,15 @@ static const uint MESH_WINDOWED_GROUND = 1;     // Mesh::flags: its fragments in
 static const uint MESH_SCENE_SHADED = 2;        // Mesh::flags: a ground window's mesh, shaded where it stands in the scene (#197)
 static const uint INSTANCE_STILL = 1;          // Instance::flags: a mover with no motion of its own this frame (#197)
 static const uint INSTANCE_VACANT = 2;         // Instance::flags: a dynamic scene's slot no instance holds (#220)
+static const uint INSTANCE_NO_RASTER = 4;      // Instance::flags: left out of the picture, a stand-in the rays alone meet (#301)
+static const uint INSTANCE_NO_SHADOW_RAYS = 8; // Instance::flags: not met by the shadow rays (the sun's, the lamps'; #301)
+static const uint INSTANCE_NO_PROBE_RAYS = 16; // Instance::flags: not met by the probes' rays (#301)
+static const uint INSTANCE_NO_MIRROR_RAYS = 32; // Instance::flags: not met by the mirror rays (#301)
+// The TLAS records' mask bits, one a world of rays (#301): an instance a kind of ray does not meet
+// leaves its bit out, and a pass's rays carry their own (`g_ray_mask`).
+static const uint RAY_SHADOW = 1;
+static const uint RAY_PROBE = 2;
+static const uint RAY_MIRROR = 4;
 
 public static const uint MATERIAL_CLASS_STANDARD = 0;
 public static const uint MATERIAL_CLASS_ICE = 1;
@@ -179,7 +188,7 @@ public struct Instance
     public float radius;
     public uint id;
     public uint material;   // its row in `Frame::materials`
-    public uint flags;      // INSTANCE_STILL (#197), INSTANCE_VACANT (#220)
+    public uint flags;      // INSTANCE_STILL (#197), INSTANCE_VACANT (#220), INSTANCE_NO_* (#301)
     public uint texture;    // its own texture's sampled index plus one, 0 for none: a planet tile's normal map (#220)
 };
 
@@ -393,6 +402,11 @@ public struct Frame
 // Whether this thread's rays meet the movers: every pass's but the probes' unless their scene asks
 // (`ProbeParams::movers`, #299), which `probe_trace_main` sets.
 static bool g_trace_movers = true;
+
+// The world this thread's rays meet (#301): RAY_SHADOW unless its pass sets another, the probes'
+// RAY_PROBE and the mirror rays' RAY_MIRROR, so an instance left out of one is out of all that
+// pass's rays (a probe's hit's shadow rays too).
+static uint g_ray_mask = RAY_SHADOW;
 
 // The movers' structure the rays meet, 0 for none (`g_trace_movers`).
 uint64_t movers_tlas(Frame* f)
@@ -1900,7 +1914,7 @@ void cull_main(uint thread : SV_GroupThreadID)
         sphere_center = instance_center_relative(f, inst);
         sphere_radius = inst.radius;
         bool frustum = (f[0].flags & FLAG_FRUSTUM_CULLING) != 0;
-        visible = (inst.flags & INSTANCE_VACANT) == 0
+        visible = (inst.flags & (INSTANCE_VACANT | INSTANCE_NO_RASTER)) == 0
             && (!frustum || sphere_in_frustum(f, sphere_center, sphere_radius));
     }
     uint in_frustum = WaveActiveCountBits(visible);
@@ -2196,7 +2210,7 @@ void cull_deferred_main(uint thread : SV_GroupThreadID)
         {
             Instance inst = f[0].instances[instance_index];
             bool frustum = (f[0].flags & FLAG_FRUSTUM_CULLING) != 0;
-            candidate = (inst.flags & INSTANCE_VACANT) == 0
+            candidate = (inst.flags & (INSTANCE_VACANT | INSTANCE_NO_RASTER)) == 0
                 && (!frustum || sphere_in_frustum(f, instance_center_relative(f, inst), inst.radius));
         }
     }
@@ -4442,7 +4456,7 @@ bool ray_candidate_kept(Frame* f, uint instance, uint primitive, float2 b)
 bool ray_blocked(Frame* f, RayDesc ray)
 {
     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER> q;
-    q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), ray_opacity(f), 0xFF, ray);
+    q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), ray_opacity(f), g_ray_mask, ray);
     while (q.Proceed())
     {
         if (shadow_candidate_kept(f, q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics()))
@@ -4453,7 +4467,7 @@ bool ray_blocked(Frame* f, RayDesc ray)
     if (movers_tlas(f) == 0)
         return false;
     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER> m;
-    m.TraceRayInline(RaytracingAccelerationStructure(movers_tlas(f)), ray_opacity(f), 0xFF, ray);
+    m.TraceRayInline(RaytracingAccelerationStructure(movers_tlas(f)), ray_opacity(f), g_ray_mask, ray);
     while (m.Proceed())
     {
         if (shadow_candidate_kept(f, m.CandidateInstanceID(), m.CandidatePrimitiveIndex(), m.CandidateTriangleBarycentrics()))
@@ -4483,7 +4497,7 @@ void jelly_depth_in(Frame* f, uint64_t tlas, RayDesc ray, inout float3 depth)
     if (tlas == 0)
         return;
     RayQuery<RAY_FLAG_FORCE_NON_OPAQUE | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER> q;
-    q.TraceRayInline(RaytracingAccelerationStructure(tlas), RAY_FLAG_NONE, 0xFF, ray);
+    q.TraceRayInline(RaytracingAccelerationStructure(tlas), RAY_FLAG_NONE, g_ray_mask, ray);
     while (q.Proceed())
     {
         if (q.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE)
@@ -4537,7 +4551,7 @@ ClosestHit trace_closest(Frame* f, RayDesc ray, bool shadow = false, bool probe 
     o.t = ray.TMax;
     o.mover = false;
     RayQuery<RAY_FLAG_NONE> q;
-    q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), ray_opacity(f), 0xFF, ray);
+    q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), ray_opacity(f), g_ray_mask, ray);
     while (q.Proceed())
     {
         if ((!probe || probe_leaf_kept(f, q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), seed)) && (shadow
@@ -4558,7 +4572,7 @@ ClosestHit trace_closest(Frame* f, RayDesc ray, bool shadow = false, bool probe 
         // Only what stands nearer than the static hit.
         ray.TMax = o.t;
         RayQuery<RAY_FLAG_NONE> m;
-        m.TraceRayInline(RaytracingAccelerationStructure(movers_tlas(f)), ray_opacity(f), 0xFF, ray);
+        m.TraceRayInline(RaytracingAccelerationStructure(movers_tlas(f)), ray_opacity(f), g_ray_mask, ray);
         while (m.Proceed())
         {
             if ((!probe || probe_leaf_kept(f, m.CandidateInstanceID(), m.CandidatePrimitiveIndex(), seed)) && (shadow
@@ -4903,7 +4917,7 @@ float3 ice_transmission(Frame* f, uint instance, float3 world, float scattering)
     ray.TMin = 0.0;
     ray.TMax = 2.0 * inst.radius + 1.0;
     RayQuery<RAY_FLAG_FORCE_NON_OPAQUE> q;
-    q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), RAY_FLAG_NONE, 0xFF, ray);
+    q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), RAY_FLAG_NONE, g_ray_mask, ray);
     float last = -1.0;
     while (q.Proceed())
     {
@@ -4970,7 +4984,7 @@ void gather_crossings(uint64_t tlas, uint instance, RayDesc ray, inout Crossings
     if (tlas == 0)
         return;
     RayQuery<RAY_FLAG_FORCE_NON_OPAQUE> q;
-    q.TraceRayInline(RaytracingAccelerationStructure(tlas), RAY_FLAG_NONE, 0xFF, ray);
+    q.TraceRayInline(RaytracingAccelerationStructure(tlas), RAY_FLAG_NONE, g_ray_mask, ray);
     while (q.Proceed())
     {
         if (q.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE || q.CandidateInstanceID() != instance)
@@ -5006,7 +5020,7 @@ bool blocked_in(Frame* f, uint64_t tlas, RayDesc ray, uint skip)
     if (tlas == 0)
         return false;
     RayQuery<RAY_FLAG_FORCE_NON_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q;
-    q.TraceRayInline(RaytracingAccelerationStructure(tlas), RAY_FLAG_NONE, 0xFF, ray);
+    q.TraceRayInline(RaytracingAccelerationStructure(tlas), RAY_FLAG_NONE, g_ray_mask, ray);
     while (q.Proceed())
     {
         if (q.CandidateInstanceID() != skip
@@ -5028,7 +5042,7 @@ void closest_in(Frame* f, uint64_t tlas, inout RayDesc ray, uint skip, bool move
     if (tlas == 0)
         return;
     RayQuery<RAY_FLAG_FORCE_NON_OPAQUE> q;
-    q.TraceRayInline(RaytracingAccelerationStructure(tlas), RAY_FLAG_NONE, 0xFF, ray);
+    q.TraceRayInline(RaytracingAccelerationStructure(tlas), RAY_FLAG_NONE, g_ray_mask, ray);
     while (q.Proceed())
     {
         if (q.CandidateInstanceID() != skip
@@ -5534,6 +5548,7 @@ void resolve_tiles<let SHADOWS : int>(uint class_index, uint3 group, uint3 threa
 [numthreads(8, 8, 1)]
 void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
 {
+    g_ray_mask = RAY_MIRROR;
     uint tile_index = group.y * TILE_GROUPS_X + group.x;
     if (tile_index >= resolve_push.class_args[REFLECTION_LIST * 4 + 3])
         return;
@@ -6137,6 +6152,7 @@ void requested_rays_main(uint3 id : SV_DispatchThreadID)
     if (request.w > 0.0)
     {
         float3 direction = normalize(request.xyz);
+        g_ray_mask = RAY_MIRROR;
         float4 hit = trace_reflection(f, p.sky, p.probes, world, direction, uint(id.x) * 0x8DA6B343u ^ uint(id.y) * 0xD8163841u);
         if (hit.w > 0.0)
         {
@@ -6182,6 +6198,7 @@ ProbeTracePush probe_push;
 void probe_trace_main(uint3 group : SV_GroupID, uint thread : SV_GroupThreadID)
 {
     g_trace_movers = probe_push.movers != 0u;
+    g_ray_mask = RAY_PROBE;
     ProbeField* field = probe_push.field;
     uint probe = group.z * 65535u + group.y;
     uint ray = group.x * PROBE_TRACE_GROUP + thread;
@@ -6366,7 +6383,16 @@ void tlas_instances_main(uint3 id : SV_DispatchThreadID)
     // A vacant slot (#220) is inactive: no structure, which the build would read (its mesh's
     // may be freed), and no mask bit a ray could meet.
     bool vacant = (inst.flags & INSTANCE_VACANT) != 0;
-    uint mask = vacant ? 0u : 0xFFu;
+    // The worlds of rays it is left out of (#301).
+    uint mask = 0xFFu;
+    if ((inst.flags & INSTANCE_NO_SHADOW_RAYS) != 0)
+        mask &= ~RAY_SHADOW;
+    if ((inst.flags & INSTANCE_NO_PROBE_RAYS) != 0)
+        mask &= ~RAY_PROBE;
+    if ((inst.flags & INSTANCE_NO_MIRROR_RAYS) != 0)
+        mask &= ~RAY_MIRROR;
+    if (vacant)
+        mask = 0u;
     r[12] = (index & 0xFFFFFFu) | (mask << 24);
     // An instance with a cut-out or a jelly row stays non-opaque, so the rays' query loop keeps
     // or passes its triangles; the others are opaque, as their structures' geometry is, and

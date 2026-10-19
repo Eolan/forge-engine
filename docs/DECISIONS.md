@@ -1203,6 +1203,20 @@ should. Wider penumbrae (a larger sun, an area light) would need more samples th
 eight.
 *(research: lighting-gi.md; D-008; issues #45, #46, #54; demos: city-blocks, asteroids)*
 
+- **What sees an instance** (#301, 2026-10-19; `Visibility`, `set_instance_visibility`).
+  - **The need:** an instance drawn but not traced, or traced but not drawn: #297's crown
+    proxies, which only the probes' rays meet, in place of the leaf cards. Before, the only
+    traced-but-not-drawn instances were the `drawn_after` rows', by accident.
+  - **How:** four bits of the instance's flags (`INSTANCE_NO_RASTER`, `INSTANCE_NO_SHADOW_RAYS`,
+    `INSTANCE_NO_PROBE_RAYS`, `INSTANCE_NO_MIRROR_RAYS`). The culls skip an instance that is not
+    drawn. The TLAS build turns the others into the instance's 8-bit mask (`RAY_SHADOW` 1,
+    `RAY_PROBE` 2, `RAY_MIRROR` 4), and each pass's rays carry their own (`g_ray_mask`): shadow
+    rays by default, the probes' pass its own for its rays and their hits' shadow rays, the
+    reflections' and the requested rays' theirs. The particles', the dust's and the splashes'
+    rays are shadow rays. A dynamic scene sets it through `SceneEditor::set_instance_visibility`.
+  - **Checks:** with every instance seen by everything, the captures are those of the previous
+    build.
+
 ## D-030 — Ambient occlusion: GTAO from the depth, after XeGTAO, occluding the sky's light ✅ (2026-09-25)
 
 Research step (3) feeds the sky's light to every surface (D-023's note, issue #47). Nothing

@@ -325,7 +325,7 @@ float sun_visibility(SplashFrame* f, float3 p)
     ray.TMin = 0.05;
     ray.TMax = 1e4;
     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_FORCE_OPAQUE> q;
-    q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), RAY_FLAG_NONE, 0xFF, ray);
+    q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), RAY_FLAG_NONE, 0x01, ray); // RAY_SHADOW (#301)
     while (q.Proceed())
     {
     }

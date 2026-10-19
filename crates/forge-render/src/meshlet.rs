@@ -116,6 +116,78 @@ const INSTANCE_STILL: u32 = 1;
 /// shader).
 const INSTANCE_VACANT: u32 = 2;
 
+/// What sees an instance (#301): the picture and each world of rays. A stand-in the probes' rays
+/// meet in place of leaf cards is [`Visibility::PROBES`], the cards it stands for
+/// `Visibility { probes: false, ..Visibility::ALL }`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Visibility {
+    /// Drawn in the picture (culled and rasterised).
+    pub drawn: bool,
+    /// Met by the shadow rays: the sun's and the lamps', the particles' and the dust's.
+    pub shadows: bool,
+    /// Met by the probes' rays, and their hits' shadow rays.
+    pub probes: bool,
+    /// Met by the mirror rays (the resolve's, the water's and the glass's), and their hits'
+    /// shadow rays.
+    pub mirrors: bool,
+}
+
+impl Visibility {
+    /// Everything sees it: an instance's default.
+    pub const ALL: Visibility = Visibility {
+        drawn: true,
+        shadows: true,
+        probes: true,
+        mirrors: true,
+    };
+
+    /// Only the probes' rays meet it: a stand-in for their light (#297's crown proxies).
+    pub const PROBES: Visibility = Visibility {
+        drawn: false,
+        shadows: false,
+        probes: true,
+        mirrors: false,
+    };
+
+    /// Its `Instance::flags` bits (`INSTANCE_NO_*` in the shader).
+    fn flags(self) -> u32 {
+        (if self.drawn { 0 } else { INSTANCE_NO_RASTER })
+            | (if self.shadows {
+                0
+            } else {
+                INSTANCE_NO_SHADOW_RAYS
+            })
+            | (if self.probes {
+                0
+            } else {
+                INSTANCE_NO_PROBE_RAYS
+            })
+            | (if self.mirrors {
+                0
+            } else {
+                INSTANCE_NO_MIRROR_RAYS
+            })
+    }
+}
+
+impl Default for Visibility {
+    fn default() -> Self {
+        Self::ALL
+    }
+}
+
+/// `Instance::flags`: left out of the picture (#301, `INSTANCE_NO_RASTER` in the shader).
+const INSTANCE_NO_RASTER: u32 = 4;
+/// `Instance::flags`: not met by the shadow rays (#301).
+const INSTANCE_NO_SHADOW_RAYS: u32 = 8;
+/// `Instance::flags`: not met by the probes' rays (#301).
+const INSTANCE_NO_PROBE_RAYS: u32 = 16;
+/// `Instance::flags`: not met by the mirror rays (#301).
+const INSTANCE_NO_MIRROR_RAYS: u32 = 32;
+/// Every `Instance::flags` bit [`Visibility`] sets.
+const INSTANCE_VISIBILITY: u32 =
+    INSTANCE_NO_RASTER | INSTANCE_NO_SHADOW_RAYS | INSTANCE_NO_PROBE_RAYS | INSTANCE_NO_MIRROR_RAYS;
+
 /// No ground window: its least corner past its greatest.
 const NO_GROUND_WINDOW: [f32; 4] = [1.0, 1.0, 0.0, 0.0];
 
@@ -1451,6 +1523,13 @@ impl MeshletSceneBuilder {
     /// ([`MeshletSceneBuilder::keep`]).
     pub fn set_instance_texture(&mut self, instance: usize, sampled: u32) {
         self.instances[instance].texture = sampled + 1;
+    }
+
+    /// Sets what sees instance `instance` (in the order added; #301): the picture, the shadow
+    /// rays, the probes' rays and the mirror rays. Everything by default.
+    pub fn set_instance_visibility(&mut self, instance: usize, visibility: Visibility) {
+        let record = &mut self.instances[instance];
+        record.flags = (record.flags & !INSTANCE_VISIBILITY) | visibility.flags();
     }
 
     /// Has the scene keep `item` alive until it is dropped: the textures its instances name

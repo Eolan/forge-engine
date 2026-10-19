@@ -113,7 +113,7 @@ void light_main(uint3 id : SV_DispatchThreadID)
         ray.TMin = 0.0;
         ray.TMax = 1e5;
         RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_FORCE_OPAQUE> q;
-        q.TraceRayInline(RaytracingAccelerationStructure(d[0].tlas), RAY_FLAG_NONE, 0xFF, ray);
+        q.TraceRayInline(RaytracingAccelerationStructure(d[0].tlas), RAY_FLAG_NONE, 0x01, ray); // RAY_SHADOW (#301)
         q.Proceed();
         visible = q.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? 0.0 : 1.0;
         // The movers' own structure when the static one let the sun through (#79): the ships
@@ -121,7 +121,7 @@ void light_main(uint3 id : SV_DispatchThreadID)
         if (visible > 0.0 && d[0].tlas_movers != 0)
         {
             RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_FORCE_OPAQUE> m;
-            m.TraceRayInline(RaytracingAccelerationStructure(d[0].tlas_movers), RAY_FLAG_NONE, 0xFF, ray);
+            m.TraceRayInline(RaytracingAccelerationStructure(d[0].tlas_movers), RAY_FLAG_NONE, 0x01, ray); // RAY_SHADOW (#301)
             m.Proceed();
             visible = m.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? 0.0 : 1.0;
         }

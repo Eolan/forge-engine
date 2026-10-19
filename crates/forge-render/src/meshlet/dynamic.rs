@@ -609,6 +609,13 @@ impl SceneEditor {
         self.instances[instance as usize].texture = sampled + 1;
     }
 
+    /// Sets what sees instance `instance`, added in this edit
+    /// ([`MeshletSceneBuilder::set_instance_visibility`], #301).
+    pub fn set_instance_visibility(&mut self, instance: u32, visibility: Visibility) {
+        let record = &mut self.instances[instance as usize];
+        record.flags = (record.flags & !INSTANCE_VISIBILITY) | visibility.flags();
+    }
+
     /// Has the scene keep `item` alive until instance `instance` leaves it.
     pub fn keep(&mut self, instance: u32, item: impl Any + Send) {
         self.kept.push((instance, Box::new(item)));

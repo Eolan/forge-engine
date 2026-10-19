@@ -77,7 +77,7 @@ pub use meshlet::{
     AmbientLight, CullCamera, CullFlags, DrawTargets, DynamicCapacity, FrameStats, GeometryPath,
     InstanceOcclusion, LampShadows, MeshId, MeshRays, MeshletRenderer, MeshletScene,
     MeshletSceneBuilder, MoverTransform, MoversFrame, PlanetView, RayRequests, SceneEdit,
-    SceneEditor, SunShadowRays, SwRaster,
+    SceneEditor, SunShadowRays, SwRaster, Visibility,
 };
 pub use particles::{Burst, DrawKind, Effect, Emitter, ParticleParams, ParticleStats, Particles};
 pub use probes::{ProbeLight, ProbeParams, Probes, RegionHit, RegionKind, RegionVolume, region_at};
