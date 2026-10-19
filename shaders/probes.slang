@@ -69,6 +69,10 @@ public static const float PROBE_ROOM_SPACING = 1.5;
 // In a room (D-068), the share of the trilinear weight its own probes must hold among the eight
 // for a cascade to claim all of a point's light; with less, the next cascade fills the rest.
 static const float PROBE_ROOM_COVER = 0.25;
+// A room beyond the room-sized cascades whose region has no probe among a coarser cascade's eight
+// takes this share of the outside's light around it (#321, `probe_lookup`): what its windows let
+// in, matched against the rooms whose probes are found at the same distance.
+static const float PROBE_FAR_ROOM_SHARE = 0.25;
 
 // Mirrors `GpuCascade` in crates/forge-render/src/probes.rs.
 public struct ProbeCascade
@@ -373,6 +377,17 @@ public float cascade_weight(ProbeField* field, uint c, float3 p)
     return w.x * w.y * w.z;
 }
 
+// Whether no room-sized cascade (probes at most PROBE_ROOM_SPACING apart) covers `p`.
+bool far_from_rooms(ProbeField* field, float3 p)
+{
+    for (uint c = 0; c < field[0].cascade_count; c++)
+    {
+        if (field[0].cascades[c].spacing <= PROBE_ROOM_SPACING && cascade_weight(field, c, p) > 0.0)
+            return false;
+    }
+    return true;
+}
+
 // Irradiance at `p` (unit normal `n` for the light's direction, `g` the surface's own,
 // interpolated normal, `v` towards the viewer) from cascade `c`'s eight probes around it, in the
 // resolve's units (the cosine-weighted mean of the radiance the rays met, as the shading
@@ -541,6 +556,26 @@ float3 probe_lookup<let MIRROR : int>(ProbeField* field, float3 p, float3 n, flo
     bool masked = field[0].region_count > 0u && mask.kind != REGION_SOLID;
     // The region's probes, then every probe where they found none.
     float4 e = cascades_lookup<MIRROR>(field, p, n, g, v, d, mask, masked, toward_d);
+    if (masked && e.w <= 0.0 && mask.region != REGION_OUTSIDE && far_from_rooms(field, p))
+    {
+        // A room beyond the room-sized cascades with none of its probes among a coarser one's
+        // eight (an upper storey between probes 4 m apart, #321): every probe there is another
+        // room's, the roof's or the street's behind a wall, and the room came out black. It
+        // takes a share of the outside's light around it instead, what its windows let in.
+        RegionHit outside = mask;
+        outside.region = REGION_OUTSIDE;
+        outside.other = REGION_OUTSIDE;
+        outside.ramp = 0.0;
+        outside.kind = REGION_ROOM;
+        e = cascades_lookup<MIRROR>(field, p, n, g, v, d, outside, true, toward_d);
+        e.rgb *= PROBE_FAR_ROOM_SHARE;
+        toward_d *= PROBE_FAR_ROOM_SHARE;
+        if (e.w > 0.0)
+        {
+            toward_d /= e.w;
+            e = float4(e.rgb / e.w, 1.0);
+        }
+    }
     if (masked && e.w <= 0.0)
         e = cascades_lookup<MIRROR>(field, p, n, g, v, d, mask, false, toward_d);
     else if (masked && mask.region != REGION_OUTSIDE && e.w < 1.0)
@@ -609,7 +644,8 @@ float3 region_colour(uint region)
 // interpolated normal `g`, `v` towards the viewer), as `probe_lookup` decides it. A room's own
 // colour, a doorway's from one side's to the other's, green in a window's reveal, white in a
 // house's body (every probe), black outside, red where no probe of the region stood among any
-// cascade's eight and every probe lit it (the fallback); grey without regions.
+// cascade's eight and every probe lit it (the fallback), orange where a room beyond the
+// room-sized cascades took the outside's share instead (#321); grey without regions.
 public float3 probe_region_tint(ProbeField* field, float3 p, float3 g, float3 v)
 {
     if (field[0].region_count == 0u)
@@ -619,7 +655,7 @@ public float3 probe_region_tint(ProbeField* field, float3 p, float3 g, float3 v)
         return float3(1.0);
     float3 unused;
     if (cascades_lookup<0>(field, p, g, g, v, g, mask, true, unused).w <= 0.0)
-        return float3(1.0, 0.0, 0.0);
+        return mask.region != REGION_OUTSIDE && far_from_rooms(field, p) ? float3(1.0, 0.5, 0.0) : float3(1.0, 0.0, 0.0);
     if (mask.kind == REGION_RECESS)
         return float3(0.0, 1.0, 0.0);
     if (mask.kind == REGION_DOORWAY)

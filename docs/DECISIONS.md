@@ -5551,6 +5551,16 @@ application of their patents just in case."
 - **Not done:** `tools/amd-check.sh` (it draws no probe regions).
 - **Its effect:** the rooms are lit by their windows, brighter than before (the owner asked for
   it: "I would expect the inside to be a bit brighter").
+- **Rooms beyond the room-sized cascades** (#321, 2026-10-19, found by a scene built outside the
+  repository): from about 10 m in the village only cascades coarser than `PROBE_ROOM_SPACING`
+  cover a room, and at 4 m spacing the probes stand at about 2, 6 and 10 m: an upper storey
+  (3.0–5.7 m) holds none of its region's. The fallback to every probe then mixed other rooms',
+  the roof's and the street's probes behind walls and slabs, and such rooms came out black
+  through their windows until the camera was within a few metres. Now a room that no room-sized
+  cascade covers and whose region has no probe among the eight takes `PROBE_FAR_ROOM_SHARE`
+  (0.25) of the outside's probes' light around it, what its windows let in (`far_from_rooms`;
+  `--show-regions` tints it orange). Near the camera nothing changes: the map check's interiors
+  0 px, its street views at most 0.0097 mean LDR-ꟻLIP, all in the windows seen from afar.
 
 ## D-069 — One set of engine settings for every demo, defaults at the best look, and a console on ² ✅ (proposed 2026-10-17, #278, the owner's request; the owner's go the same day)
 
