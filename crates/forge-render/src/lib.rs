@@ -14,6 +14,7 @@ pub mod blit;
 pub mod bloom;
 pub mod cells;
 pub mod clouds;
+mod columns;
 pub mod debug_hash;
 pub mod decals;
 pub mod display;

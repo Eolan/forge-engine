@@ -356,6 +356,20 @@ public struct DecalGrid
     public uint pad;
 };
 
+// The street lamps lit beyond the frame's set (#284, lamps.rs `FarLamps`): columns of `cell`
+// metres in a hash as the decals', each column's lamps at `indices[first..]`, indices into
+// `lamps` (their whole light) and the frame's shares of it (`Frame::far_shares`).
+public struct FarLamps
+{
+    public uint4* slots;
+    public uint* indices;
+    public Lamp* lamps;
+    public uint slot_mask;
+    public float cell;
+    public uint count;
+    public uint pad;
+};
+
 // Every matrix is camera-relative (D-004, issue #93): the camera stands at the origin of the
 // space `view_proj` takes, and positions get there through `instance_relative`. Rays and the
 // probes live in the scene frame, `camera_in_scene` from the camera (`to_scene`).
@@ -436,7 +450,9 @@ public struct Frame
     public uint lamp_list_count;    // the entries of their light lists (lamps.rs, `lists`)
     public uint2* lamp_lists;       // (region, lamp) sorted by region, the lamps of every region under REGION_ANY
     public DecalGrid* decals;       // the decals on the static surfaces (D-074), null: none
-    public uint64_t decals_pad;
+    public FarLamps* far_lamps;     // the street lamps lit beyond the frame's set (#284), null: none
+    public float* far_shares;       // their shares of their light this frame, unshadowed
+    public uint64_t far_pad;
 };
 
 // Whether this thread's rays meet the movers: every pass's but the probes' unless their scene asks
@@ -2948,7 +2964,11 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
     g_lamp_specular = float3(0.0);
     uint count = f[0].lamp_count;
     if (count == 0u || f[0].lamps == nullptr)
+    {
+        if (f[0].far_lamps != nullptr)
+            far_lamps_at(f, lamp_place(f, probes, world, n), world, n, view, specular_power, specular_weight);
         return;
+    }
     uint share = code & 0xFFFFu;
     uint restir = code >> 16;
     // The rest's light first: the share scales it alone.
@@ -2996,6 +3016,10 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
             if (picks.chosen < count)
                 lamp_add<SHADOWS>(f, f[0].lamps[picks.chosen], picks.chosen, picks.scale, world, n, view, specular_power, specular_weight, bias, u);
         }
+        // The street lamps beyond the set, the rest of their light unshadowed (#284); ReSTIR's
+        // street lamps are all in the set.
+        if (!skip_outside)
+            far_lamps_at(f, place, world, n, view, specular_power, specular_weight);
     }
     if (restir != 0xFFFFu)
     {
@@ -3042,6 +3066,31 @@ void lamp_add<let SHADOWS : int>(Frame* f, Lamp lamp, uint i, float scale, float
     g_lamp_diffuse += illuminance;
     float3 half_vector = normalize(dir + view);
     g_lamp_specular += pow(max(dot(n, half_vector), 0.0), specular_power) * specular_weight * illuminance;
+}
+
+// The street lamps lit beyond the frame's set (#284, `Frame::far_lamps`) on a surface at `world`
+// facing `n` in `place`: those of its grid column whose reach it is in, each its share of its
+// light this frame (`Frame::far_shares`: what the set does not light of it), unshadowed and
+// without the penumbra filter, added to `g_lamp_diffuse` and `g_lamp_specular`. Only the outside
+// takes them, as it takes the street lamps of the set.
+void far_lamps_at(Frame* f, LampPlace place, float3 world, float3 n, float3 view, float specular_power, float specular_weight)
+{
+    FarLamps* g = f[0].far_lamps;
+    if (g == nullptr)
+        return;
+    if (place.region != REGION_NONE && place.region != REGION_OUTSIDE && place.other != REGION_OUTSIDE)
+        return;
+    uint2 run = column_run(g[0].slots, g[0].slot_mask, g[0].cell, world);
+    for (uint e = 0u; e < run.y; e++)
+    {
+        uint k = g[0].indices[run.x + e];
+        float share = f[0].far_shares[k];
+        if (share <= 0.0)
+            continue;
+        Lamp lamp = g[0].lamps[k];
+        if (lamp_weight(lamp, world, n) > 0.0)
+            lamp_add<0>(f, lamp, k, share, world, n, view, specular_power, specular_weight, 0.0, float2(0.0));
+    }
 }
 
 // Two axes across `dir`, the direction from a surface to a lamp: they span the disc of the lamp's
@@ -3437,14 +3486,31 @@ float value_noise3(float3 p)
     return lerp(lerp(x00, x10, t.y), lerp(x01, x11, t.y), t.z);
 }
 
-// The albedo and the normal a standard row gives the surface: the row's two colours mixed by
-// the instance, its cavity, and its textures projected along the object's axes.
 // `v` turned by the unit quaternion `q` (xyz w), or back when `back`.
 float3 quat_turn(float4 q, float3 v, bool back)
 {
     float3 u = back ? -q.xyz : q.xyz;
     float3 t = 2.0 * cross(u, v);
     return v + q.w * t + cross(u, t);
+}
+
+// The list of the grid column over `world` in a hash of columns of `cell` metres (`slots`, of
+// `slot_mask` + 1: x, z, first, count; count 0 an empty slot; crates/forge-render/src/columns.rs):
+// where it starts in its indices and how long it is, (0, 0) without one.
+uint2 column_run(uint4* slots, uint slot_mask, float cell, float3 world)
+{
+    int2 c = int2(floor(world.xz / cell));
+    uint h = (uint(c.x) * 73856093u ^ uint(c.y) * 19349663u) & slot_mask;
+    for (uint tries = 0u; tries <= slot_mask; tries++)
+    {
+        uint4 slot = slots[h];
+        if (slot.w == 0u)
+            break;
+        if (int(slot.x) == c.x && int(slot.y) == c.y)
+            return slot.zw;
+        h = (h + 1u) & slot_mask;
+    }
+    return uint2(0u);
 }
 
 // The decals over surface `s` (D-074, forge_render::decals): the decals of its grid column, in
@@ -3458,21 +3524,10 @@ void apply_decals(Frame* f, Surface s, inout float3 albedo)
     DecalGrid* g = f[0].decals;
     if (g == nullptr)
         return;
-    int2 c = int2(floor(s.world.xz / g[0].cell));
-    uint h = (uint(c.x) * 73856093u ^ uint(c.y) * 19349663u) & g[0].slot_mask;
-    uint4 slot = uint4(0u);
-    for (uint tries = 0u; tries <= g[0].slot_mask; tries++)
+    uint2 run = column_run(g[0].slots, g[0].slot_mask, g[0].cell, s.world);
+    for (uint i = 0u; i < run.y; i++)
     {
-        slot = g[0].slots[h];
-        if (slot.w == 0u || (int(slot.x) == c.x && int(slot.y) == c.y))
-            break;
-        h = (h + 1u) & g[0].slot_mask;
-    }
-    if (slot.w == 0u || int(slot.x) != c.x || int(slot.y) != c.y)
-        return;
-    for (uint i = 0u; i < slot.w; i++)
-    {
-        uint index = g[0].indices[slot.z + i];
+        uint index = g[0].indices[run.x + i];
         Decal d = g[0].decals[index];
         float3 local = quat_turn(d.rotation, s.world - d.centre, true);
         if (any(abs(local) > d.half))
@@ -3496,6 +3551,8 @@ void apply_decals(Frame* f, Surface s, inout float3 albedo)
     }
 }
 
+// The albedo and the normal a standard row gives the surface: the row's two colours mixed by
+// the instance, its cavity, and its textures projected along the object's axes.
 void standard_surface(Material mat, Surface s, out float3 albedo, out float3 n)
 {
     n = s.n;

@@ -606,14 +606,26 @@ struct GpuFrame {
     lamp_count: u32,
     lamp_list_count: u32,
     lamp_lists: u64,
-    /// The decals' grid record (D-074, `DecalGrid` in the shader), 0 without decals.
+    /// The decals' grid record (D-074, `DecalGrid` in the shader), 0 without decals; the far
+    /// street lamps' (#284, `FarLamps`) and this frame slot's shares of their light, 0 without.
     decals: u64,
-    decals_pad: u64,
+    far_lamps: u64,
+    far_shares: u64,
+    far_pad: u64,
 }
 
 /// Where a frame slot's light lists start in its lamps' buffer, bytes: after the lamps.
 const LAMP_LISTS_OFFSET: u64 =
     (crate::lamps::LAMP_CAPACITY * std::mem::size_of::<crate::lamps::GpuLamp>()) as u64;
+
+/// The far street lamps' buffers (#284): their grid, the record the frame points at, and their
+/// shares of their light a frame slot.
+struct FarLampBuffers {
+    far: crate::lamps::FarLamps,
+    _tables: Buffer,
+    record: Buffer,
+    shares: Vec<Buffer>,
+}
 
 const _: () = assert!(std::mem::offset_of!(GpuFrame, ground_window) % 16 == 0);
 
@@ -1186,6 +1198,9 @@ pub struct MeshletSceneBuilder {
     skins: Vec<SkinSource>,
     /// The decals on its static surfaces ([`MeshletSceneBuilder::set_decals`], D-074).
     decals: crate::decals::DecalSet,
+    /// The street lamps lit beyond each frame's set ([`MeshletSceneBuilder::set_far_lamps`],
+    /// #284).
+    far_lamps: Option<crate::lamps::FarLamps>,
     /// What the scene keeps alive ([`MeshletSceneBuilder::keep`]).
     kept: Vec<Box<dyn std::any::Any + Send>>,
 }
@@ -1547,6 +1562,14 @@ impl MeshletSceneBuilder {
     /// frame, their kinds' textures already in the scene's [`TextureSet`]. None by default.
     pub fn set_decals(&mut self, decals: crate::decals::DecalSet) {
         self.decals = decals;
+    }
+
+    /// The street lamps the frames light beyond their set (#284, [`crate::lamps::FarLamps`]): of
+    /// `lamps` (in the frame [`MeshletScene::set_lamps`] is given), those that are street lamps
+    /// and on. Each frame lights the share of their light its set does not, unshadowed. None by
+    /// default.
+    pub fn set_far_lamps(&mut self, lamps: &[crate::lamps::Lamp]) {
+        self.far_lamps = crate::lamps::FarLamps::new(lamps);
     }
 
     /// Number of instances so far.
@@ -1930,6 +1953,65 @@ impl MeshletSceneBuilder {
             }
             None => None,
         };
+        // The far street lamps' grid and the record the frame points at, and a buffer a frame
+        // slot of their shares of their light (#284).
+        let far_lamps = match self.far_lamps.take() {
+            Some(far) => {
+                let mut bytes = Vec::new();
+                let columns = &far.columns;
+                let slots = crate::columns::place(&mut bytes, bytemuck::cast_slice(&columns.slots));
+                let indices =
+                    crate::columns::place(&mut bytes, bytemuck::cast_slice(&columns.indices));
+                let lamps = crate::columns::place(&mut bytes, bytemuck::cast_slice(&far.lamps));
+                let tables = device.create_buffer_with_data(
+                    &bytes,
+                    usage,
+                    MemoryCategory::Geometry,
+                    "far lamps",
+                )?;
+                let base = tables.address();
+                let grid = crate::lamps::GpuFarLamps {
+                    slots: base + slots,
+                    indices: base + indices,
+                    lamps: base + lamps,
+                    slot_mask: columns.mask,
+                    cell: crate::lamps::FAR_CELL,
+                    count: far.len() as u32,
+                    pad: 0,
+                };
+                let record = device.create_buffer_with_data(
+                    bytemuck::bytes_of(&grid),
+                    usage,
+                    MemoryCategory::Geometry,
+                    "far lamp grid",
+                )?;
+                let shares = (0..FRAMES_IN_FLIGHT)
+                    .map(|i| {
+                        let buffer = device.create_buffer(BufferDesc {
+                            size: (far.len() * 4).max(16) as u64,
+                            usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+                            location: MemoryLocation::CpuToGpu,
+                            category: MemoryCategory::Frame,
+                            name: &format!("far lamp shares {i}"),
+                        })?;
+                        buffer.write(0, &vec![0.0_f32; far.len()]);
+                        Ok(buffer)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                tracing::info!(
+                    lamps = far.len(),
+                    entries = columns.indices.len(),
+                    "the street lamps lit beyond the frame's set"
+                );
+                Some(FarLampBuffers {
+                    far,
+                    _tables: tables,
+                    record,
+                    shares,
+                })
+            }
+            None => None,
+        };
         Ok(MeshletScene {
             pool: GraphBuffer::new(pool),
             meshlets: Arc::new(table_with_room(
@@ -2047,6 +2129,7 @@ impl MeshletSceneBuilder {
                 .collect::<Result<Vec<_>>>()?,
             lamp_counts: std::array::from_fn(|_| Cell::new([0; 2])),
             decals,
+            far_lamps,
             textures: self.textures.take(),
             instance_count: self.instances.len() as u32,
             origin: self.origin,
@@ -2260,6 +2343,9 @@ pub struct MeshletScene {
     /// Its decals' tables and the record pointing into them (D-074, [`MeshletSceneBuilder::set_decals`]),
     /// none without decals.
     decals: Option<(Buffer, Buffer)>,
+    /// The street lamps lit beyond each frame's set (#284, [`MeshletSceneBuilder::set_far_lamps`]),
+    /// none without.
+    far_lamps: Option<FarLampBuffers>,
     textures: Option<TextureSet>,
     /// What it keeps alive for its instances ([`MeshletSceneBuilder::keep`]).
     _kept: Vec<Box<dyn std::any::Any + Send>>,
@@ -2451,8 +2537,9 @@ impl MeshletScene {
 
     /// The lamps frame `slot` lights with (D-065 step 1, [`crate::lamps`]): of `lamps` (the
     /// scene's frame), those `choice` keeps seen from `camera` ([`crate::lamps::choose`]). Call it
-    /// each frame before the draw; none by default. Returns the lamps kept, in the frame's order
-    /// (for [`crate::LampRestir::prepare`]).
+    /// each frame before the draw; none by default. The street lamps of
+    /// [`MeshletSceneBuilder::set_far_lamps`] light the rest of their light unshadowed (#284).
+    /// Returns the lamps kept, in the frame's order (for [`crate::LampRestir::prepare`]).
     pub fn set_lamps(
         &self,
         slot: FrameSlot,
@@ -2460,7 +2547,15 @@ impl MeshletScene {
         camera: Vec3,
         choice: crate::lamps::LampChoice,
     ) -> Vec<crate::lamps::GpuLamp> {
-        let kept = crate::lamps::choose(lamps, camera, choice);
+        let shares = crate::lamps::choose_shares(lamps, camera, choice);
+        let kept: Vec<crate::lamps::GpuLamp> = shares
+            .iter()
+            .map(|&(i, share)| crate::lamps::gpu_lamp(&lamps[i], share))
+            .collect();
+        // The street lamps beyond the set: the rest of each one's light (#284).
+        if let Some(far) = &self.far_lamps {
+            far.shares[slot.index].write(0, &far.far.weights(lamps, &shares));
+        }
         let lists = crate::lamps::lists(&kept);
         if !kept.is_empty() {
             let buffer = &self.lamp_buffers[slot.index];
@@ -3949,7 +4044,12 @@ impl MeshletRenderer {
             lamp_list_count: scene.lamp_counts[slot.index].get()[1],
             lamp_lists: scene.lamp_buffers[slot.index].address() + LAMP_LISTS_OFFSET,
             decals: scene.decals.as_ref().map_or(0, |d| d.1.address()),
-            decals_pad: 0,
+            far_lamps: scene.far_lamps.as_ref().map_or(0, |l| l.record.address()),
+            far_shares: scene
+                .far_lamps
+                .as_ref()
+                .map_or(0, |l| l.shares[slot.index].address()),
+            far_pad: 0,
         }
     }
 

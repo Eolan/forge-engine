@@ -889,9 +889,13 @@ mesh to test navigations inside the houses"):
     behind the windows.
   - **Out of the probes:** the probes leave out the lenses' glow and the lamps' bounce, which
     had come back as sharp blocks of light on the grass under the trees, away from any lamp.
-  - **The far ones:** each frame lights the 64 nearest lamps, so a street 100 m off goes dark.
-    `--street-restir` lights every street lamp by ReSTIR DI, however far, and the far streets
-    keep their light. It isn't the default yet: on a lit street a still camera's frames differ on
+  - **The far ones** (#284): each frame lights the 64 nearest lamps with shadow rays, and every
+    other street lamp without one (`FarLamps`, 8 m columns): a lamp fading out of the 64 fades
+    into the unshadowed light, so the far streets keep their pools. Receding from the junction
+    to 100 m, a frame differs from `--all-lamps` (every lamp shadowed) on 1 200–4 300 px against
+    2 300–26 200 before, for 0.05 ms of `shading/standard`. `--no-far-lamps` turns it off.
+    `--street-restir` lights every street lamp by ReSTIR DI instead, however far, with its
+    shadows. It isn't the default yet: on a lit street a still camera's frames differ on
     0.9–1.6 % of the pixels (the light lists 0.002–0.005 %), and it costs 1.3 ms more.
   - `--lamp-restir` lights every lamp by ReSTIR, and `--all-lamps` takes every lamp that is on:
     D-065's comparison of RTXDI with the light lists.

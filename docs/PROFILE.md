@@ -1640,6 +1640,11 @@ something stands out). Two things to watch:
     alternating with `--no-decals`: `shading/standard` 0.804 → 0.830 ms on the house front and
     0.890 → 0.925 ms over the junction from 12 m up. Grid columns of 2 m (0.839–0.846 ms on the
     house front) and 8 m (0.840–0.844) cost more than 4 m.
+  - *2026-10-19, the street lamps beyond the set (#284):* the village at 22:00 under DLAA, EV 3,
+    receding from the junction 12 m up for 100 m (3 000 frames, the mean): `shading/standard`
+    1.026 → 1.072 ms and the frame 4.916 → 4.955 ms with the far lamps (`--no-far-lamps` the
+    base); every lamp shadowed instead (`--all-lamps`) 6.331 ms, `shading/standard` 1.629 ms and
+    `shadow/lamp rays` 0.770 ms.
 
 ## Loading `city-plan`: the village and the city (#274, 2026-10-16)
 

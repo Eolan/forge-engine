@@ -6308,6 +6308,22 @@ impl Scenario for PlanScenario {
                 decals: self.grime.clone(),
             });
         }
+        // The street lamps beyond each frame's set, the rest of their light unshadowed (#284), in
+        // the frame the frames' lamps are given in.
+        if !args.no_lamps && !args.no_far_lamps {
+            let origin = scene_origin(args);
+            let street: Vec<_> = self
+                .home_lamps
+                .iter()
+                .filter(|l| l.outside())
+                .map(|l| forge_render::lamps::Lamp {
+                    position: forge_render::CellPos::from_f64(l.position.as_dvec3())
+                        .relative_to(origin),
+                    ..*l
+                })
+                .collect();
+            builder.set_far_lamps(&street);
+        }
         let rows = [ground_row, mass_row, grille_row];
         let planted = planted(&self.flora, &species);
         // The meshes the loading thread cooked or read from the cache (`prepare`), or now.

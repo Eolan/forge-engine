@@ -11,6 +11,7 @@
 //! own ([`crate::textures::decal_grime`] and the like), premultiplied by its alpha in every mip,
 //! clamped at its edges (a stamp) or repeating along `u` (a strip: the foot of a wall).
 
+use crate::columns::{ColumnTables, place};
 use bytemuck::{Pod, Zeroable};
 use forge_core::material::TextureId;
 use glam::{Quat, Vec3};
@@ -124,11 +125,6 @@ pub(crate) struct DecalTables {
     pub count: u32,
 }
 
-/// A column's slot in the hash: `x` and `z` hashed, linear probing.
-pub(crate) fn slot_of(x: i32, z: i32, mask: u32) -> u32 {
-    ((x as u32).wrapping_mul(73_856_093) ^ (z as u32).wrapping_mul(19_349_663)) & mask
-}
-
 impl DecalSet {
     /// The columns of [`CELL`] a decal's box overlaps, as (`x`, `z`) cell indices.
     fn columns(d: &Decal) -> impl Iterator<Item = (i32, i32)> {
@@ -173,18 +169,7 @@ impl DecalSet {
         if dropped > 0 {
             tracing::warn!(dropped, "decals beyond a column's {MAX_PER_CELL} left out");
         }
-        let size = (columns.len() * 2).next_power_of_two().max(2);
-        let mask = size as u32 - 1;
-        let mut slots = vec![[0_u32; 4]; size];
-        let mut indices: Vec<u32> = Vec::new();
-        for (&(x, z), list) in &columns {
-            let mut s = slot_of(x, z, mask);
-            while slots[s as usize][3] != 0 {
-                s = (s + 1) & mask;
-            }
-            slots[s as usize] = [x as u32, z as u32, indices.len() as u32, list.len() as u32];
-            indices.extend_from_slice(list);
-        }
+        let columns = ColumnTables::new(&columns);
         let decals: Vec<GpuDecal> = self
             .decals
             .iter()
@@ -210,25 +195,17 @@ impl DecalSet {
             })
             .collect();
         let mut bytes: Vec<u8> = Vec::new();
-        let mut place = |data: &[u8]| {
-            while !bytes.len().is_multiple_of(16) {
-                bytes.push(0);
-            }
-            let at = bytes.len() as u64;
-            bytes.extend_from_slice(data);
-            at
-        };
-        let slots_at = place(bytemuck::cast_slice(&slots));
-        let indices_at = place(bytemuck::cast_slice(&indices));
-        let decals_at = place(bytemuck::cast_slice(&decals));
-        let kinds_at = place(bytemuck::cast_slice(&kinds));
+        let slots_at = place(&mut bytes, bytemuck::cast_slice(&columns.slots));
+        let indices_at = place(&mut bytes, bytemuck::cast_slice(&columns.indices));
+        let decals_at = place(&mut bytes, bytemuck::cast_slice(&decals));
+        let kinds_at = place(&mut bytes, bytemuck::cast_slice(&kinds));
         Some(DecalTables {
             bytes,
             slots: slots_at,
             indices: indices_at,
             decals: decals_at,
             kinds: kinds_at,
-            slot_mask: mask,
+            slot_mask: columns.mask,
             count: self.decals.len() as u32,
         })
     }
@@ -264,7 +241,7 @@ mod tests {
         let slots: &[[u32; 4]] =
             bytemuck::cast_slice(&t.bytes[t.slots as usize..t.indices as usize]);
         let indices: &[u32] = bytemuck::cast_slice(&t.bytes[t.indices as usize..t.decals as usize]);
-        let mut s = slot_of(x, z, t.slot_mask);
+        let mut s = crate::columns::slot_of(x, z, t.slot_mask);
         for _ in 0..=t.slot_mask {
             let slot = slots[s as usize];
             if slot[3] == 0 {

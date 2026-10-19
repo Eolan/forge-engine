@@ -5167,6 +5167,25 @@ again (`demos/physics-lab.md`).
     - **So it waits behind its switch until ReSTIR's street light has a denoiser** (NRD's
       ReLAX or REBLUR, or the lamps' own filter on its ratio; patents to check). The default
       keeps the street lamps in the light lists, the 64 nearest.
+  - **The street lamps beyond the set, unshadowed** (#284, 2026-10-19; the issue's first
+    direction, the owner's "follow recommendations"). The 64 nearest keep their shadow rays and
+    the penumbra filter; every other street lamp lights the outside without a shadow ray.
+    - **How it works:** `lamps::FarLamps` lists the street lamps in a grid of 8 m columns, each
+      lamp in those its reach overlaps (`MeshletSceneBuilder::set_far_lamps`, the decals' hash of
+      columns). Each frame, `set_lamps` gives every one of them the share of its light the set
+      does not light (`choose_shares`): 0 for a lamp kept whole, 1 for one left out, and in
+      between for a lamp fading at the set's cut, so a lamp fades from one path into the other.
+      The resolve adds those shares after the penumbra filter (`far_lamps_at`), outside only.
+      `--no-far-lamps` is the A/B.
+    - **Measured** (#284's path: the village at 22:00 under DLAA, EV 3, receding from the junction
+      12 m up, 100 m at 2 m/s): against `--all-lamps` (every lamp with its shadow rays) a frame
+      differs on 1 200–4 300 px along the path, against 2 300–26 200 px before; what is left is
+      the far pools' shadows. `shading/standard` 1.026 → 1.072 ms and the frame 4.92 → 4.96 ms
+      over the path; `--all-lamps` takes 6.33 ms. Capture:
+      `reports/2026-10-19/village-far-street-lamps.png` (80 m out, brightened four times; before,
+      with, and every lamp shadowed).
+    - **Next** (#284's second direction): the windows' far glow against their real rooms, on a
+      path 30–60 m before a facade at a brighter exposure.
 
 ## D-066 — Pieces with sockets: one connector schema for generation, the anomaly check and player building ✅ (proposed 2026-10-16 on the owner's walk of #266; the owner's go the same evening)
 

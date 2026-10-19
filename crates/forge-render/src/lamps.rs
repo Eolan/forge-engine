@@ -9,8 +9,10 @@
 //! clustered lists (Olsson, Billeter and Assarsson 2012) come when a view holds more lamps than
 //! a village's few rooms; the probes lit by the lamps after.
 
+use crate::columns::ColumnTables;
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
+use std::collections::BTreeMap;
 
 /// The most lamps a frame lights with.
 pub const MAX_LAMPS: usize = 64;
@@ -284,6 +286,15 @@ const LEAST_FADE: f32 = 2.0;
 /// The lamps a frame lights with, of `lamps`, seen from `camera` (scene frame), by `choice`: the
 /// nearest first within each kind, each faded towards its cut ([`FADE`]).
 pub fn choose(lamps: &[Lamp], camera: Vec3, choice: LampChoice) -> Vec<GpuLamp> {
+    choose_shares(lamps, camera, choice)
+        .into_iter()
+        .map(|(i, share)| gpu_lamp(&lamps[i], share))
+        .collect()
+}
+
+/// The lamps [`choose`] keeps, as their indices in `lamps` and the share of their light each is
+/// lit with (1, less its fade towards its cut), in the frame's order.
+pub fn choose_shares(lamps: &[Lamp], camera: Vec3, choice: LampChoice) -> Vec<(usize, f32)> {
     match choice {
         LampChoice::Nearest => {
             let streets = candidates(lamps, camera, 50.0, Lamp::outside);
@@ -299,25 +310,27 @@ pub fn choose(lamps: &[Lamp], camera: Vec3, choice: LampChoice) -> Vec<GpuLamp> 
                     (None, None) => break,
                 }
             }
-            let mut out: Vec<(f32, GpuLamp)> = faded(&streets, s, 50.0)
-                .chain(faded(&houses, h, 50.0))
+            let mut out: Vec<(f32, usize, f32)> = faded(lamps, &streets, s, 50.0)
+                .chain(faded(lamps, &houses, h, 50.0))
                 .collect();
             out.sort_by(|a, b| a.0.total_cmp(&b.0));
-            out.into_iter().map(|(_, l)| l).collect()
+            out.into_iter().map(|(_, i, share)| (i, share)).collect()
         }
         LampChoice::Every => {
             let all = candidates(lamps, camera, f32::INFINITY, |_| true);
             let n = all.len().min(LAMP_CAPACITY);
-            faded(&all, n, f32::INFINITY).map(|(_, l)| l).collect()
+            faded(lamps, &all, n, f32::INFINITY)
+                .map(|(_, i, share)| (i, share))
+                .collect()
         }
         LampChoice::Streets => {
             let houses = candidates(lamps, camera, 50.0, |l| !l.outside());
             let h = houses.len().min(MAX_LAMPS);
             let streets = candidates(lamps, camera, f32::INFINITY, Lamp::outside);
             let s = streets.len().min(LAMP_CAPACITY - h);
-            faded(&houses, h, 50.0)
-                .chain(faded(&streets, s, f32::INFINITY))
-                .map(|(_, l)| l)
+            faded(lamps, &houses, h, 50.0)
+                .chain(faded(lamps, &streets, s, f32::INFINITY))
+                .map(|(_, i, share)| (i, share))
                 .collect()
         }
     }
@@ -336,41 +349,43 @@ pub fn every(lamps: &[Lamp], camera: Vec3) -> Vec<GpuLamp> {
 }
 
 /// The lamps of `lamps` that `pick` takes, are on and whose light reaches within `margin` metres
-/// of `camera`, with their distances, the nearest first.
+/// of `camera`, as their distances and indices, the nearest first.
 fn candidates(
     lamps: &[Lamp],
     camera: Vec3,
     margin: f32,
     pick: impl Fn(&Lamp) -> bool,
-) -> Vec<(f32, &Lamp)> {
-    let mut near: Vec<(f32, &Lamp)> = lamps
+) -> Vec<(f32, usize)> {
+    let mut near: Vec<(f32, usize)> = lamps
         .iter()
-        .filter(|l| l.candela > 0.0 && pick(l))
-        .map(|l| (l.position.distance(camera), l))
-        .filter(|(d, l)| *d < reach(l.candela) + margin)
+        .enumerate()
+        .filter(|(_, l)| l.candela > 0.0 && pick(l))
+        .map(|(i, l)| (l.position.distance(camera), i))
+        .filter(|&(d, i)| d < reach(lamps[i].candela) + margin)
         .collect();
     near.sort_by(|a, b| a.0.total_cmp(&b.0));
     near
 }
 
-/// The first `kept` of `near` as the GPU takes them, with their distances, each faded towards
-/// its cut: the next candidate's distance, and its own reach and `margin`.
+/// The first `kept` of `near` (of `lamps`), with their distances, indices and shares, each faded
+/// towards its cut: the next candidate's distance, and its own reach and `margin`.
 fn faded<'a>(
-    near: &'a [(f32, &'a Lamp)],
+    lamps: &'a [Lamp],
+    near: &'a [(f32, usize)],
     kept: usize,
     margin: f32,
-) -> impl Iterator<Item = (f32, GpuLamp)> + 'a {
+) -> impl Iterator<Item = (f32, usize, f32)> + 'a {
     let next = near.get(kept).map(|c| c.0);
-    near[..kept].iter().map(move |&(d, l)| {
+    near[..kept].iter().map(move |&(d, i)| {
         let out = |cut: f32| ((cut - d) / (FADE * cut).max(LEAST_FADE)).clamp(0.0, 1.0);
-        let edge = reach(l.candela) + margin;
+        let edge = reach(lamps[i].candela) + margin;
         let share = next.map_or(1.0, out) * if edge.is_finite() { out(edge) } else { 1.0 };
-        (d, gpu_lamp(l, share))
+        (d, i, share)
     })
 }
 
 /// `l` as the GPU takes it, its light times `share`.
-fn gpu_lamp(l: &Lamp, share: f32) -> GpuLamp {
+pub(crate) fn gpu_lamp(l: &Lamp, share: f32) -> GpuLamp {
     let c = lamp_rgb(l.kelvin) * (l.candela * share);
     let (beam, beam_edge) = l.emission.gpu();
     GpuLamp {
@@ -384,6 +399,121 @@ fn gpu_lamp(l: &Lamp, share: f32) -> GpuLamp {
         regions: l.regions,
         beam,
         beam_edge,
+    }
+}
+
+/// A far lamps' grid column's side, metres (#284).
+pub const FAR_CELL: f32 = 8.0;
+
+/// Mirrors `FarLamps` in `meshlet.slang`: where [`FarLamps`]' tables stand and the hash's size.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub(crate) struct GpuFarLamps {
+    pub slots: u64,
+    pub indices: u64,
+    pub lamps: u64,
+    /// The slots' count less one (a power of two less one).
+    pub slot_mask: u32,
+    pub cell: f32,
+    pub count: u32,
+    pub pad: u32,
+}
+
+/// The street lamps lit beyond the frame's set (#284): each one's light, less the share of it the
+/// set lights ([`choose_shares`]), unshadowed and without the penumbra filter, found by the
+/// resolve in a grid of [`FAR_CELL`] columns built once (`far_lamps_at` in `meshlet.slang`).
+/// Only [`MAX_LAMPS`] are lit with shadow rays a frame, the nearest, and the far streets' pools
+/// went dark while their lamp heads kept glowing; a lamp leaving the set fades into this as it
+/// fades out of it, and back.
+pub struct FarLamps {
+    /// The lamps as the GPU takes them, their whole light.
+    pub(crate) lamps: Vec<GpuLamp>,
+    /// Their peak intensities as built, candelas: a frame's lamp of another weighs its share.
+    candela: Vec<f32>,
+    /// The columns each lamp's reach overlaps.
+    pub(crate) columns: ColumnTables,
+}
+
+impl FarLamps {
+    /// The grid of `lamps`' street lamps that are on ([`Lamp::outside`]), in the frame
+    /// [`crate::MeshletScene::set_lamps`] is given; `None` without any.
+    pub fn new(lamps: &[Lamp]) -> Option<Self> {
+        let street: Vec<&Lamp> = lamps
+            .iter()
+            .filter(|l| l.outside() && l.candela > 0.0)
+            .collect();
+        if street.is_empty() {
+            return None;
+        }
+        let mut columns: BTreeMap<(i32, i32), Vec<u32>> = BTreeMap::new();
+        for (k, l) in street.iter().enumerate() {
+            let r = reach(l.candela);
+            let at = glam::Vec2::new(l.position.x, l.position.z);
+            let (lo, hi) = (
+                ((at - r) / FAR_CELL).floor().as_ivec2(),
+                ((at + r) / FAR_CELL).floor().as_ivec2(),
+            );
+            for x in lo.x..=hi.x {
+                for z in lo.y..=hi.y {
+                    // The column's nearest point to the lamp, within its reach.
+                    let corner = glam::Vec2::new(x as f32, z as f32) * FAR_CELL;
+                    if at.clamp(corner, corner + FAR_CELL).distance(at) < r {
+                        columns.entry((x, z)).or_default().push(k as u32);
+                    }
+                }
+            }
+        }
+        Some(Self {
+            lamps: street.iter().map(|l| gpu_lamp(l, 1.0)).collect(),
+            candela: street.iter().map(|l| l.candela).collect(),
+            columns: ColumnTables::new(&columns),
+        })
+    }
+
+    /// How many lamps it holds.
+    pub fn len(&self) -> usize {
+        self.lamps.len()
+    }
+
+    /// Whether it holds none (never: [`Self::new`] gives `None` then).
+    pub fn is_empty(&self) -> bool {
+        self.lamps.is_empty()
+    }
+
+    /// Its lamp standing at `position` (within a centimetre), if any.
+    fn find(&self, position: Vec3) -> Option<usize> {
+        let (x, z) = (
+            (position.x / FAR_CELL).floor() as i32,
+            (position.z / FAR_CELL).floor() as i32,
+        );
+        self.columns
+            .column(x, z)
+            .iter()
+            .map(|&k| k as usize)
+            .find(|&k| {
+                let p = self.lamps[k].position_radius;
+                Vec3::new(p[0], p[1], p[2]).distance_squared(position) < 1e-4
+            })
+    }
+
+    /// Each of its lamps' share of its light this frame: of `lamps` (the frame's, as given to
+    /// [`crate::MeshletScene::set_lamps`]), the street lamps that are on, less the share `kept`
+    /// lights them with ([`choose_shares`]); 0 for a lamp not among them (off).
+    pub fn weights(&self, lamps: &[Lamp], kept: &[(usize, f32)]) -> Vec<f32> {
+        let mut lit = vec![0.0_f32; lamps.len()];
+        for &(i, share) in kept {
+            lit[i] = share;
+        }
+        let mut out = vec![0.0_f32; self.lamps.len()];
+        for (i, l) in lamps.iter().enumerate() {
+            if !l.outside() || l.candela <= 0.0 {
+                continue;
+            }
+            if let Some(k) = self.find(l.position) {
+                out[k] = (1.0 - lit[i]).max(0.0) * l.candela / self.candela[k];
+            }
+        }
+        out
     }
 }
 
@@ -520,6 +650,54 @@ mod tests {
         // Without the houses, the streets take every slot they need.
         let alone: Vec<Lamp> = lamps[100..].to_vec();
         assert_eq!(nearest(&alone, Vec3::ZERO).len(), 30);
+    }
+
+    #[test]
+    fn the_far_lamps_light_what_the_set_leaves_of_each_street_lamp() {
+        let lamp = |at: Vec3, outside: bool| {
+            let mut regions = EVERY_REGION;
+            regions[0] = if outside { REGION_OUTSIDE } else { 7 };
+            Lamp {
+                position: at,
+                radius: 0.12,
+                candela: 109.0,
+                kelvin: 2700.0,
+                regions,
+                emission: Emission::STREET,
+            }
+        };
+        // A street of a hundred lamps 25 m apart and a house lamp; the camera at its start.
+        let lamps: Vec<Lamp> = (0..100)
+            .map(|i| lamp(Vec3::new(3.0, 7.5, 25.0 * i as f32), true))
+            .chain([lamp(Vec3::new(0.0, 2.0, 0.0), false)])
+            .collect();
+        let far = FarLamps::new(&lamps).expect("street lamps");
+        assert_eq!(far.len(), 100);
+        // A lamp is listed under the column it stands in, not in one beyond its reach (47 m).
+        assert!(far.columns.column(0, 50).contains(&16));
+        assert!(!far.columns.column(0, 50).contains(&30));
+        let kept = choose_shares(&lamps, Vec3::ZERO, LampChoice::Nearest);
+        let weights = far.weights(&lamps, &kept);
+        // Each street lamp's light is lit once: by the set, by the far lamps, or shared.
+        let mut lit = [0.0_f32; 100];
+        for &(i, share) in &kept {
+            if i < 100 {
+                lit[i] = share;
+            }
+        }
+        for k in 0..100 {
+            assert!(
+                (lit[k] + weights[k] - 1.0).abs() < 1e-5,
+                "{k}: {} {}",
+                lit[k],
+                weights[k]
+            );
+        }
+        assert_eq!(weights[0], 0.0);
+        assert_eq!(weights[99], 1.0);
+        // A street lamp switched off is lit by neither.
+        let off: Vec<Lamp> = lamps[1..].to_vec();
+        assert_eq!(far.weights(&off, &[])[0], 0.0);
     }
 
     #[test]

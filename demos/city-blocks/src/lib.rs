@@ -473,7 +473,7 @@ pub struct Args {
     /// No lamps (D-065): the scene's lamps light nothing, their globes still glow (the A/B for
     /// their light).
     #[arg(long)]
-    no_lamps: bool,
+    pub no_lamps: bool,
     /// The lamps' shadow rays traced in the resolve, each pixel's own, as before their penumbra
     /// filter (D-065: the filter's A/B).
     #[arg(long)]
@@ -486,6 +486,10 @@ pub struct Args {
     /// A/B, for their look and their cost in the resolve).
     #[arg(long)]
     pub no_decals: bool,
+    /// No street lamps beyond the frame's set (#284): their pools go dark past the nearest
+    /// lamps the frame lights with shadow rays, as before (the far lamps' A/B).
+    #[arg(long)]
+    pub no_far_lamps: bool,
     /// Every lamp by ReSTIR DI, NVIDIA's RTXDI, in place of the light lists' filtered shadows
     /// (D-065's comparison). Needs RTXDI's headers in `rtxdi-sdk/` and ray queries.
     #[arg(long)]
