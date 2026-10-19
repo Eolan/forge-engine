@@ -6469,7 +6469,16 @@ walls (street and court, where the ground storey meets open air, broken at doors
 passages) carry a strip of `textures::decal_grime` from 0.1 m under the ground to 1 m up;
 `--no-decals` is the A/B. Cost in the village at 1600 × 900, three runs each way:
 `shading/standard` 0.804 → 0.830 ms (the house view) and 0.890 → 0.925 ms (the junction from
-12 m up). Next: the row decals on the layered ground, then cracks and stains on the paving.
+12 m up).
+
+**Stains and cracks on the paving** (2026-10-19): two stamp kinds, `textures::decal_stain` (a
+ragged damp patch, its rim darker) and `textures::decal_cracks`, scattered over the city plan's
+paved walking ground within the detail (the blocks' paved pieces and the streets' walking
+ground), one stain to 40 m² and one crack to 150 m², each at a turn and a size of its own and
+wholly on the paving (its middle and its corners: none spills onto a lawn); they mark the faces
+that look up only. The village holds 1 210 decals with the grime. `shading/standard` without
+the decals (`--no-decals`) and with them: 0.816 → 0.863–0.869 ms on the house front, 0.905 →
+0.968–0.971 ms over the junction (two runs each way). Next: the row decals on the layered ground.
 
 *(research: decals.md; D-007, D-013, D-021, D-026, D-028, D-047, D-065; issue #304)*
 

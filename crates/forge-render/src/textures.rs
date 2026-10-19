@@ -1644,6 +1644,26 @@ pub fn decal_grime(seed: u64, size: u32) -> TextureData {
     })
 }
 
+/// A stain on a paving (D-074): a soft, ragged patch of grime where water stood and dried, its
+/// rim a little darker, faint and mottled; a stamp clamped at its edges, gone before them.
+pub fn decal_stain(seed: u64, size: u32) -> TextureData {
+    kept("texture-decal-stain", &(seed, size), || {
+        let texels = grid(size, |u, v| {
+            // 0 in the middle, 1 at the middle of an edge, ragged by broad noise.
+            let r = ((u - 0.5).powi(2) + (v - 0.5).powi(2)).sqrt() * 2.0;
+            let reach = r + 0.4 * (fbm(seed, u, v, 3, 4) - 0.5);
+            let patch = 1.0 - smoothstep(0.35, 0.75, reach);
+            let rim = smoothstep(0.45, 0.68, reach) * patch;
+            let mottle = fbm(seed ^ 0x57A, u, v, 12, 3);
+            let alpha = ((patch * (0.32 + 0.3 * mottle) + rim * 0.15)
+                * (1.0 - smoothstep(0.85, 1.0, r)))
+            .clamp(0.0, 0.7);
+            [0.09, 0.08, 0.065, alpha]
+        });
+        premultiplied_texture("decal stain", size, texels)
+    })
+}
+
 /// Cracks in a paving or a render (D-074): a few dark lines along the edges of a Voronoi tiling,
 /// thinning and fading out towards the stamp's rim; a stamp clamped at its edges.
 pub fn decal_cracks(seed: u64, size: u32) -> TextureData {

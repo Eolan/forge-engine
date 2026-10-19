@@ -247,6 +247,102 @@ fn world(size: f64, p: DVec2, height: f64) -> Vec3 {
     )
 }
 
+/// Paved ground per stain on the paving (D-074), m².
+const STAIN_EVERY: f64 = 40.0;
+/// Paved ground per crack on the paving (D-074), m².
+const CRACKS_EVERY: f64 = 150.0;
+
+/// Stains and cracks on the paved walking ground within `detail` (D-074): stamps of decal kinds
+/// 1 (a stain, [`textures::decal_stain`]) and 2 (cracks, [`textures::decal_cracks`]) scattered
+/// over `paved` (triangles in plan coordinates, each at its level), one stain to
+/// [`STAIN_EVERY`] m² and one crack to [`CRACKS_EVERY`] m², each at a turn and a size of its own
+/// and wholly on the paving (its middle and its footprint's corners): none spills onto a lawn.
+/// None without `detail`.
+fn paving_marks(
+    size: f64,
+    paved: &[([DVec2; 3], f64)],
+    detail: Option<&Detail>,
+) -> Vec<forge_render::Decal> {
+    const CELL: f64 = 4.0;
+    let Some(d) = detail else {
+        return Vec::new();
+    };
+    // The triangles by the cells of CELL their boxes cover, to find the one under a point.
+    let cell = |p: DVec2| ((p.x / CELL).floor() as i64, (p.y / CELL).floor() as i64);
+    let mut cells: std::collections::HashMap<(i64, i64), Vec<usize>> =
+        std::collections::HashMap::new();
+    for (i, (t, _)) in paved.iter().enumerate() {
+        let lo = cell(t[0].min(t[1]).min(t[2]));
+        let hi = cell(t[0].max(t[1]).max(t[2]));
+        for x in lo.0..=hi.0 {
+            for y in lo.1..=hi.1 {
+                cells.entry((x, y)).or_default().push(i);
+            }
+        }
+    }
+    let inside = |t: &[DVec2; 3], p: DVec2| {
+        let side = |a: DVec2, b: DVec2| (b - a).perp_dot(p - a);
+        let s = [side(t[0], t[1]), side(t[1], t[2]), side(t[2], t[0])];
+        s.iter().all(|&v| v >= 0.0) || s.iter().all(|&v| v <= 0.0)
+    };
+    let level_at = |p: DVec2| {
+        cells.get(&cell(p)).and_then(|list| {
+            list.iter()
+                .find(|&&i| inside(&paved[i].0, p))
+                .map(|&i| paved[i].1)
+        })
+    };
+    let unit = |h: u64| (h >> 11) as f64 / (1u64 << 53) as f64;
+    let mut out = Vec::new();
+    for (i, (t, level)) in paved.iter().enumerate() {
+        let area = (t[1] - t[0]).perp_dot(t[2] - t[0]).abs() * 0.5;
+        if t[0].distance(d.centre) > d.radius + 30.0 {
+            continue;
+        }
+        for (kind, every) in [(1u16, STAIN_EVERY), (2, CRACKS_EVERY)] {
+            let seed = mix((i as u64) << 8 | u64::from(kind));
+            // As many as its area holds, the fraction by a draw.
+            let count = (area / every + unit(seed)).floor() as u64;
+            for k in 0..count {
+                let h = |s: u64| unit(mix(seed ^ (k << 16) ^ s));
+                // A point of the triangle, uniform in its area.
+                let (mut a, mut b) = (h(1), h(2));
+                if a + b > 1.0 {
+                    (a, b) = (1.0 - a, 1.0 - b);
+                }
+                let p = t[0] + (t[1] - t[0]) * a + (t[2] - t[0]) * b;
+                let (half_x, half_z) = if kind == 1 {
+                    (0.35 + 0.6 * h(3), 0.3 + 0.5 * h(4))
+                } else {
+                    (0.4 + 0.4 * h(3), 0.4 + 0.4 * h(3))
+                };
+                let turn = h(5) * std::f64::consts::TAU;
+                let (s, c) = turn.sin_cos();
+                let corners = [(1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)].map(|(u, w)| {
+                    p + DVec2::new(
+                        c * u * half_x + s * w * half_z,
+                        -s * u * half_x + c * w * half_z,
+                    )
+                });
+                let on_paving = std::iter::once(p)
+                    .chain(corners)
+                    .all(|q| level_at(q).is_some_and(|l| (l - level).abs() < 0.05));
+                if !on_paving {
+                    continue;
+                }
+                out.push(forge_render::Decal {
+                    centre: world(size, p, *level),
+                    rotation: glam::Quat::from_rotation_y(turn as f32),
+                    half: Vec3::new(half_x as f32, 0.15, half_z as f32),
+                    kind,
+                    repeat: 1.0,
+                });
+            }
+        }
+    }
+    out
+}
+
 /// The grime at the foot of the outer walls of the masses `near` (D-074): one strip of decal
 /// kind 0 along each stretch of a street or court wall that meets open air at the ground storey,
 /// broken at its doors, shopfronts and passages, from 0.1 m under the walking level to 1 m over it.
@@ -393,8 +489,9 @@ pub struct PlanScenario {
     flora: Vec<(Vec3, f32, f32, f32, u16, u8)>,
     /// Each lamp's place, scale (its height over the model's 8 m) and turn.
     lamps: Vec<(Vec3, f32, f32, bool)>,
-    /// The grime strips at the kit's walls' feet (D-074).
-    grime: Vec<forge_render::Decal>,
+    /// Its decals (D-074): the grime strips at the kit's walls' feet (kind 0), the stains (1) and
+    /// the cracks (2) on the paving.
+    decals: Vec<forge_render::Decal>,
     /// The style kit's instanced modules and their instances (module, transform, group).
     kit_meshes: Vec<TriMesh>,
     kit_instances: Vec<(u32, Mat4, u8)>,
@@ -842,6 +939,25 @@ impl PlanScenario {
             residents.as_ref(),
         );
         let grime = wall_foot_grime(size, &structures, &near);
+        // Stains and cracks on the paving (D-074): the blocks' paved pieces and the streets'
+        // walking ground.
+        let mut paved: Vec<([DVec2; 3], f64)> = pieces
+            .iter()
+            .flatten()
+            .filter(|p| p.3 == PAVING)
+            .flat_map(|(_, triangles, level, _)| triangles.iter().map(move |t| (*t, *level)))
+            .collect();
+        for t in &plan.ground.tiles {
+            for polygon in ground::simple_polygons(&t.walk) {
+                paved.extend(
+                    ground::triangles(&polygon)
+                        .into_iter()
+                        .map(|t| (t, WALK_LEVEL)),
+                );
+            }
+        }
+        let mut grime = grime;
+        grime.extend(paving_marks(size, &paved, detail));
         laps.mark("insides");
         // The passages into the courts (D-060), and where to look into one: 10 m out on the
         // street before the kit's first, for the log once the app logs.
@@ -1971,7 +2087,7 @@ impl PlanScenario {
             trees,
             flora,
             lamps,
-            grime,
+            decals: grime,
             kit_meshes,
             kit_instances,
             kit_report,
@@ -6288,11 +6404,16 @@ impl Scenario for PlanScenario {
         } else {
             Some(materials.textures.add(&textures::leaves(41, 1024))?)
         };
-        // The grime at the walls' feet (D-074): one strip kind, its texture repeating along u.
-        let grime_texture = if self.grime.is_empty() {
+        // The decals' textures (D-074): the grime at the walls' feet, a strip repeating along u;
+        // a stain and cracks on the paving, stamps.
+        let decal_textures = if self.decals.is_empty() || args.no_decals {
             None
         } else {
-            Some(materials.textures.add(&textures::decal_grime(74, 512))?)
+            Some([
+                materials.textures.add(&textures::decal_grime(74, 512))?,
+                materials.textures.add(&textures::decal_stain(75, 256))?,
+                materials.textures.add(&textures::decal_cracks(76, 256))?,
+            ])
         };
         let flora_rows: Vec<_> = species
             .iter()
@@ -6361,17 +6482,29 @@ impl Scenario for PlanScenario {
         laps.mark("materials applied");
         builder.set_ray_traced(!args.no_shadows);
         builder.set_origin(scene_origin(args));
-        if let Some(texture) = grime_texture.filter(|_| !args.no_decals) {
+        if let Some([grime, stain, cracks]) = decal_textures {
+            let stamp = |texture, strength: f32, priority| forge_render::DecalKind {
+                texture,
+                tint: [1.0, 1.0, 1.0, strength],
+                strip: false,
+                priority,
+                depth_fade: 0.5,
+                facing: [0.6, 0.85],
+            };
             builder.set_decals(forge_render::DecalSet {
-                kinds: vec![forge_render::DecalKind {
-                    texture,
-                    tint: [1.0; 4],
-                    strip: true,
-                    priority: 0,
-                    depth_fade: 0.3,
-                    facing: [0.3, 0.6],
-                }],
-                decals: self.grime.clone(),
+                kinds: vec![
+                    forge_render::DecalKind {
+                        texture: grime,
+                        tint: [1.0; 4],
+                        strip: true,
+                        priority: 0,
+                        depth_fade: 0.3,
+                        facing: [0.3, 0.6],
+                    },
+                    stamp(stain, 1.0, 1),
+                    stamp(cracks, 0.9, 2),
+                ],
+                decals: self.decals.clone(),
             });
         }
         // The street lamps beyond each frame's set, the rest of their light unshadowed (#284), in
