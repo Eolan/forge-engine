@@ -1805,6 +1805,17 @@ positive numbers only (`wrap_cells`).
 
     The proxy's share barely moves the cost (the main street 4.63–4.66 ms from 0.6 to 0.8).
 
+- **The frame after a reset updates every probe eight times** (#320, 2026-10-19; found by an
+  out-of-tree scene: rooms seen through windows black as it opened). The first round lights its
+  rays' hits by the sun alone (#171), each next one by the sun and the maps the round before
+  left, every probe new in each (its maps replaced whole).
+  - **Measured** (the village's room and hall at a fixed exposure, the first frame against the
+    twentieth): 15 % of the light with one round, 62 % with three, 85 % with six, 91 % with
+    eight.
+  - **The cost:** about 1.4 ms a round, on that frame alone (the start, a jump of the camera).
+  - **Every probe scene's history moves with it:** at frame 20 the room stood 16 % brighter than
+    after a single round, so the captures of the scenes with probes were accepted again.
+
 ## D-037 — World partition: sectors of 2⁴⁰ m, cells of 1 km, `u64` cell ids, a clipmap of cells ✅ (2026-09-30)
 
 `forge-world` (the cloud branch, `docs/HANDOVER.md`) fixes four numbers that D-004 left open;

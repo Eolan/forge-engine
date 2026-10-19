@@ -47,6 +47,11 @@ const DISTANCE_TILE: u32 = 16;
 const TRACE_GROUP: u32 = 64;
 /// Workgroups along one dimension of a dispatch (the shaders spread probes over two).
 const MAX_GROUPS: u32 = 65535;
+/// The probes' updates on the frame after a reset (#320): the sun's light, then seven bounces.
+/// A whitewashed room lit through its window, on its first frame against its twentieth: 15 % of
+/// its light with one round, 62 % with three, 85 % with six, 91 % with eight (the village's room
+/// and hall, the same at a fixed exposure); about 1.4 ms a round, on that frame alone.
+const RESET_ROUNDS: u32 = 8;
 /// `probe_data`'s w for an inactive probe (`PROBE_INACTIVE`).
 const PROBE_INACTIVE: f32 = 1.0;
 
@@ -868,67 +873,76 @@ impl Probes {
                     Ok(())
                 });
         }
-        let trace = &this.trace;
-        graph
-            .pass("gi/probe rays")
-            .queue(QueueKind::Compute)
-            .buffer(sky.buffer, BufferAccess::ShaderRead(compute))
-            .image(sky.table, ImageAccess::Sampled(compute))
-            .image(irradiance, ImageAccess::Sampled(compute))
-            .image(distance, ImageAccess::Sampled(compute))
-            .buffer(data, BufferAccess::ShaderRead(compute))
-            .buffer(region, BufferAccess::ShaderRead(compute))
-            .buffer(rays, BufferAccess::ShaderWrite(compute))
-            .with(|b| MoversFrame::declare(movers, b, compute, true))
-            .run(move |_, commands| {
-                commands.bind_pipeline(trace);
-                commands.push_constants(
-                    trace,
-                    &TracePush {
-                        frame,
-                        field: address,
-                        sky: sky.address,
-                        probe_count: count,
-                        first_update: u32::from(first_update),
-                        movers: u32::from(movers.is_some()),
-                        pad: 0,
-                    },
-                );
-                commands.dispatch(p.rays.div_ceil(TRACE_GROUP), spread[0], spread[1]);
-                Ok(())
-            });
-        let push = UpdatePush {
-            field: address,
-            probe_count: count,
-            pad: 0,
-        };
-        let state = &this.state;
-        graph
-            .pass("gi/probe state")
-            .queue(QueueKind::Compute)
-            .buffer(rays, BufferAccess::ShaderRead(compute))
-            .buffer(data, BufferAccess::ShaderReadWrite(compute))
-            .buffer(region, BufferAccess::ShaderReadWrite(compute))
-            .run(move |_, commands| {
-                commands.bind_pipeline(state);
-                commands.push_constants(state, &push);
-                commands.dispatch(count.div_ceil(64), 1, 1);
-                Ok(())
-            });
-        let blend = &this.blend;
-        graph
-            .pass("gi/probe blend")
-            .queue(QueueKind::Compute)
-            .buffer(rays, BufferAccess::ShaderRead(compute))
-            .buffer(data, BufferAccess::ShaderRead(compute))
-            .image(irradiance, ImageAccess::StorageReadWrite(compute))
-            .image(distance, ImageAccess::StorageReadWrite(compute))
-            .run(move |_, commands| {
-                commands.bind_pipeline(blend);
-                commands.push_constants(blend, &push);
-                commands.dispatch(spread[0], spread[1], 1);
-                Ok(())
-            });
+        // After a reset the frame updates every probe `RESET_ROUNDS` times (#320): the first round
+        // lights its rays' hits by the sun alone, each next one by the sun and the maps the round
+        // before left, and every probe is new in each (its maps replaced whole). With one round
+        // a room lit only by bounce stood black on the first frame drawn (seen through a window
+        // as the scene opened), and the light came on over the next ten.
+        let rounds = if first_update { RESET_ROUNDS } else { 1 };
+        for round in 0..rounds {
+            let trace = &this.trace;
+            let first_round = first_update && round == 0;
+            graph
+                .pass("gi/probe rays")
+                .queue(QueueKind::Compute)
+                .buffer(sky.buffer, BufferAccess::ShaderRead(compute))
+                .image(sky.table, ImageAccess::Sampled(compute))
+                .image(irradiance, ImageAccess::Sampled(compute))
+                .image(distance, ImageAccess::Sampled(compute))
+                .buffer(data, BufferAccess::ShaderRead(compute))
+                .buffer(region, BufferAccess::ShaderRead(compute))
+                .buffer(rays, BufferAccess::ShaderWrite(compute))
+                .with(|b| MoversFrame::declare(movers, b, compute, true))
+                .run(move |_, commands| {
+                    commands.bind_pipeline(trace);
+                    commands.push_constants(
+                        trace,
+                        &TracePush {
+                            frame,
+                            field: address,
+                            sky: sky.address,
+                            probe_count: count,
+                            first_update: u32::from(first_round),
+                            movers: u32::from(movers.is_some()),
+                            pad: 0,
+                        },
+                    );
+                    commands.dispatch(p.rays.div_ceil(TRACE_GROUP), spread[0], spread[1]);
+                    Ok(())
+                });
+            let push = UpdatePush {
+                field: address,
+                probe_count: count,
+                pad: 0,
+            };
+            let state = &this.state;
+            graph
+                .pass("gi/probe state")
+                .queue(QueueKind::Compute)
+                .buffer(rays, BufferAccess::ShaderRead(compute))
+                .buffer(data, BufferAccess::ShaderReadWrite(compute))
+                .buffer(region, BufferAccess::ShaderReadWrite(compute))
+                .run(move |_, commands| {
+                    commands.bind_pipeline(state);
+                    commands.push_constants(state, &push);
+                    commands.dispatch(count.div_ceil(64), 1, 1);
+                    Ok(())
+                });
+            let blend = &this.blend;
+            graph
+                .pass("gi/probe blend")
+                .queue(QueueKind::Compute)
+                .buffer(rays, BufferAccess::ShaderRead(compute))
+                .buffer(data, BufferAccess::ShaderRead(compute))
+                .image(irradiance, ImageAccess::StorageReadWrite(compute))
+                .image(distance, ImageAccess::StorageReadWrite(compute))
+                .run(move |_, commands| {
+                    commands.bind_pipeline(blend);
+                    commands.push_constants(blend, &push);
+                    commands.dispatch(spread[0], spread[1], 1);
+                    Ok(())
+                });
+        }
         ProbeLight {
             address,
             data,
