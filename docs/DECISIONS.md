@@ -5423,8 +5423,12 @@ application of their patents just in case."
     - **Now:** that bedroom is 1.78 EV darker at a fixed exposure, the same with or without its
       glass. The map check's landing (the same storey) is 0.28 EV darker at its metered
       exposure, the other views within 0.03 EV. The lab's rooms and the city are unchanged (0 px).
-    - **Still to do:** the sun's patches through the windows (the shadow rays still stop at the
-      glass).
+    - **The shadow rays pass it too** (the same day): the sun's and the lamps' rays, the probes'
+      hits' included (`shadow_candidate_kept`). The glass is a candidate section in its mesh's
+      structure (#307: `GpuMaterial::clear_glass` counts as masked), so the other rays still meet
+      it at no cost. Before, a pane shadowed its own reveal and the floor behind it: in the
+      evening (`--time-of-day 0.85`) the room's window jamb and table now take the sun. The map
+      check at 15:00 changes by ꟻLIP 0.002 at most; the day check is 0 px.
 - **A probe outside every house** (most probes, the coarse cascades' too) lights what its rays
   meet as the outside's, without the lookup. The lookup at every ray's hit cost the rays
   0.14 ms in a room.

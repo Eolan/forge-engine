@@ -4425,9 +4425,22 @@ Material candidate_row(Frame* f, uint instance, uint primitive)
 // tints it instead (`jelly_transmittance`).
 bool shadow_candidate_kept(Frame* f, uint instance, uint primitive, float2 b)
 {
-    if ((f[0].flags & FLAG_JELLY) != 0 && candidate_row(f, instance, primitive).class_index == MATERIAL_CLASS_JELLY)
+    Material mat = candidate_row(f, instance, primitive);
+    if ((f[0].flags & FLAG_JELLY) != 0 && mat.class_index == MATERIAL_CLASS_JELLY)
+        return false;
+    // A drawn house's window lets the sun and the lamps through (#280: the sun's patches on its
+    // floors, its rooms' lamps on the street).
+    if (clear_glass(mat))
         return false;
     return ray_candidate_kept(f, instance, primitive, b);
+}
+
+// Whether `mat` is the clear glass of a house whose rooms are drawn: glazed and drawn after the
+// resolve (D-065's part 4, `GpuMaterial::clear_glass`).
+bool clear_glass(Material mat)
+{
+    const uint clear = MATERIAL_FLAG_GLAZED | MATERIAL_FLAG_DRAWN_AFTER;
+    return (mat.flags & clear) == clear;
 }
 
 // Whether a ray's candidate hit (barycentrics `b` on triangle `primitive` of instance `instance`)
@@ -6444,7 +6457,7 @@ uint masked_rows(Instance inst)
     for (uint s = 0; s < rows; s++)
     {
         Material mat = tlas_push.materials[inst.material + s];
-        if ((mat.flags & MATERIAL_FLAG_MASKED) != 0 || mat.class_index == MATERIAL_CLASS_JELLY)
+        if ((mat.flags & MATERIAL_FLAG_MASKED) != 0 || mat.class_index == MATERIAL_CLASS_JELLY || clear_glass(mat))
             masked |= s < 32u ? 1u << s : 0xFFFFFFFFu;
     }
     return masked;

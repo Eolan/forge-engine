@@ -83,10 +83,17 @@ impl GpuMaterial {
         self.class_index == forge_core::material::ShadingClass::Jelly.index()
     }
 
-    /// Whether the rays' query loop must see its triangles: cut out, or jelly (`masked_rows` in
-    /// `meshlet.slang`, #307).
+    /// Whether the rays' query loop must see its triangles: cut out, jelly, or a drawn house's
+    /// clear glass, which the shadow rays pass (`masked_rows` in `meshlet.slang`, #307).
     pub fn ray_masked(&self) -> bool {
-        self.flags & MATERIAL_MASKED != 0 || self.jelly()
+        self.flags & MATERIAL_MASKED != 0 || self.jelly() || self.clear_glass()
+    }
+
+    /// Whether it is the clear glass of a house whose rooms are drawn: glazed, and drawn after
+    /// the resolve (D-065's part 4). The probes' rays (#280) and the shadow rays pass it.
+    pub fn clear_glass(&self) -> bool {
+        self.flags & (MATERIAL_GLAZED | MATERIAL_DRAWN_AFTER)
+            == MATERIAL_GLAZED | MATERIAL_DRAWN_AFTER
     }
 }
 
