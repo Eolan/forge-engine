@@ -4,7 +4,9 @@
 //! - **Following** ([`Follow`]): an agent heads for its path's next corner and passes it once
 //!   within [`CORNER_REACH`]. It slows within [`ARRIVAL`] metres of where it must stop: the path's
 //!   end, or a corner where a link starts. There it waits for the game to cross the link
-//!   ([`Follow::at_link`], then [`Follow::crossed`]).
+//!   ([`Follow::at_link`], then [`Follow::crossed`]). Within [`NEAR_WALLS`] of the walkable's
+//!   edge it heads [`LOOK_AHEAD`] along its leg instead, back to the line the path was pulled
+//!   along clear of the walls (a door's middle); in the open it may drift aside.
 //! - **Avoidance** ([`Crowd`]): ORCA, optimal reciprocal collision avoidance (van den Berg, Guy,
 //!   Lin and Manocha, "Reciprocal n-body collision avoidance", 2011), written here from the
 //!   algorithm of UNC's RVO2 library (Apache-2.0).
@@ -15,10 +17,15 @@
 //!     half-planes and its top speed. This is a linear program in the plane, solved
 //!     incrementally. When the half-planes leave nothing, it takes the velocity that breaks them
 //!     least.
+//!   - **Keeping right:** slowed away from walls, it turns the velocity it prefers to its right,
+//!     up to 45°, and a crowd jammed face to face turns as one and unwinds.
+//!   - **Giving way:** two agents heading opposite ways, blocked face to face for 3 s (a door
+//!     too narrow for both), the one with the higher index backs off for 1.5 s.
 //!   - **Same result on every machine** (D-016: `+ − × ÷ sqrt` only):
 //!     - the neighbours come from a grid: the nearest [`CrowdSettings::max_neighbours`], ordered
 //!       by distance and then by index;
-//!     - every new velocity is chosen from the step's state before anyone moves.
+//!     - every new velocity is chosen from the step's state before anyone moves;
+//!     - a nudge of 1 mm/s from a hash of the agent and the step breaks perfect symmetry.
 //! - **The ground:** given a walk field, a move the field does not walk straight is slid along x
 //!   or z, or not made.
 //!
@@ -35,6 +42,11 @@ use crate::{Field, Path};
 pub const CORNER_REACH: f32 = 0.25;
 /// How far before a stop an agent starts slowing, metres.
 pub const ARRIVAL: f32 = 1.0;
+/// How far along its path's leg, past where it stands across from it, an agent near walls
+/// heads, metres.
+pub const LOOK_AHEAD: f32 = 0.7;
+/// How near the walkable's edge an agent keeps to its path's line, metres.
+pub const NEAR_WALLS: f32 = 1.0;
 /// How far apart in height two agents are on different floors and ignore each other, metres.
 const OTHER_FLOOR: f32 = 1.5;
 /// Below this, two lines of the linear program are parallel.
@@ -47,6 +59,16 @@ fn plan(p: Vec3) -> Vec2 {
 /// The determinant of `a` and `b`: positive when `b` turns left of `a`.
 fn det(a: Vec2, b: Vec2) -> f32 {
     a.x * b.y - a.y * b.x
+}
+
+/// Whether `at` lies on `field` within [`NEAR_WALLS`] of the walkable's edge.
+fn near_walls(field: Option<&Field>, at: Vec3) -> bool {
+    field.is_some_and(|f| {
+        f.place(at).is_some_and(|s| {
+            let clearance = f32::from(f.spans()[s as usize].clearance) * f.desc().cell * 0.5;
+            clearance < NEAR_WALLS
+        })
+    })
 }
 
 /// A path being followed.
@@ -97,8 +119,10 @@ impl Follow {
 
     /// The velocity it prefers at `at` (x and z), `speed` m/s at most: towards its next corner,
     /// slowing to stop at the path's end or at a link's start, zero there. It passes the corners
-    /// it reaches.
-    pub fn preferred(&mut self, at: Vec3, speed: f32) -> Vec2 {
+    /// it reaches. On `field`, within [`NEAR_WALLS`] of the walkable's edge, it heads back to its
+    /// path's line instead.
+    pub fn preferred(&mut self, at: Vec3, speed: f32, field: Option<&Field>) -> Vec2 {
+        let near_walls = near_walls(field, at);
         while self.waiting.is_none() {
             let Some(corner) = self.next() else {
                 break;
@@ -107,7 +131,25 @@ impl Follow {
             let distance = d.length();
             if distance > CORNER_REACH {
                 let stop = distance + self.beyond();
-                return d / distance * (speed * (stop / ARRIVAL).min(1.0));
+                // Near walls, towards the point [`LOOK_AHEAD`] along its leg past where it
+                // stands across from it: pushed off the leg by others, it comes back to the line
+                // the path was pulled along clear of them, through a door's middle. In the open
+                // it heads for the corner, and a crowd that pushed it aside can turn.
+                let from = plan(self.points[self.next - 1]);
+                let leg = plan(corner) - from;
+                let length = leg.length();
+                let ahead = if near_walls && length > 0.0 {
+                    let along = ((plan(at) - from).dot(leg) / length).max(0.0);
+                    from + leg * ((along + LOOK_AHEAD).min(length) / length) - plan(at)
+                } else {
+                    d
+                };
+                let way = if ahead.length_squared() > 1e-8 {
+                    ahead.normalize()
+                } else {
+                    d / distance
+                };
+                return way * (speed * (stop / ARRIVAL).min(1.0));
             }
             match self.links.iter().find(|&&(k, _)| k == self.next) {
                 Some(&(_, link)) => self.waiting = Some(link),
@@ -146,6 +188,10 @@ pub struct Agent {
     pub radius: f32,
     /// Its top speed, m/s.
     pub max_speed: f32,
+    /// How long it has gone at under a fifth of the speed it prefers, seconds.
+    pub blocked_for: f32,
+    /// How long it still gives way, backing off from one it met face to face, seconds.
+    pub giving_way: f32,
 }
 
 impl Agent {
@@ -157,9 +203,28 @@ impl Agent {
             preferred: Vec2::ZERO,
             radius,
             max_speed,
+            blocked_for: 0.0,
+            giving_way: 0.0,
+        }
+    }
+
+    /// The velocity it heads for this step: the one it prefers, or back from it at half speed
+    /// while it gives way.
+    fn wanted(&self) -> Vec2 {
+        if self.giving_way > 0.0 {
+            -self.preferred * 0.5
+        } else {
+            self.preferred
         }
     }
 }
+
+/// How long two agents stand blocked face to face before one gives way, seconds.
+const GIVE_WAY_AFTER: f32 = 3.0;
+/// How long the one that gives way backs off, seconds.
+const GIVE_WAY_FOR: f32 = 1.5;
+/// How near two agents' edges are when they meet face to face, metres.
+const FACE_TO_FACE: f32 = 0.6;
 
 /// How a crowd's agents avoid one another.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -206,7 +271,7 @@ pub struct Crowd {
 const NUDGE: f32 = 1e-3;
 
 /// How far a blocked agent turns the velocity it prefers to its right, at most, as a share of
-/// that velocity set sideways (0.5: about 27°), in proportion to how much slower it goes. People
+/// that velocity set sideways (1.0: 45°), in proportion to how much slower it goes. People
 /// keep to one side, and a crowd jammed face to face turns as one and unwinds; ORCA alone holds
 /// such a jam still, the velocities that would turn it lying square to those preferred.
 const KEEP_RIGHT: f32 = 1.0;
@@ -244,14 +309,55 @@ impl Crowd {
         }
         let grid = self.grid();
         let chosen: Vec<Vec2> = (0..self.agents.len())
-            .map(|i| self.avoid(i, dt, &grid))
+            .map(|i| self.avoid(i, dt, &grid, near_walls(field, self.agents[i].position)))
             .collect();
         for (agent, v) in self.agents.iter_mut().zip(chosen) {
             let to = walk_on(field, agent.position, v * dt);
             agent.velocity = (plan(to) - plan(agent.position)) / dt;
             agent.position = to;
+            agent.giving_way = (agent.giving_way - dt).max(0.0);
+            let speed = agent.preferred.length();
+            agent.blocked_for = if speed > 0.0
+                && agent.giving_way == 0.0
+                && agent.velocity.length() < 0.2 * speed
+            {
+                agent.blocked_for + dt
+            } else {
+                0.0
+            };
         }
+        self.give_way(&grid);
         self.steps += 1;
+    }
+
+    /// Two agents blocked face to face for [`GIVE_WAY_AFTER`] (a doorway too narrow for both):
+    /// the one with the higher index backs off for [`GIVE_WAY_FOR`] and the other goes through.
+    fn give_way(&mut self, grid: &HashMap<(i32, i32), Vec<u32>>) {
+        let mut yielding = Vec::new();
+        for i in 0..self.agents.len() {
+            let a = self.agents[i];
+            if a.blocked_for < GIVE_WAY_AFTER {
+                continue;
+            }
+            let met = self.neighbours(i, grid).into_iter().any(|j| {
+                let b = self.agents[j as usize];
+                let towards = plan(b.position) - plan(a.position);
+                (j as usize) < i
+                    && b.blocked_for >= GIVE_WAY_AFTER
+                    && towards.length() - a.radius - b.radius < FACE_TO_FACE
+                    && a.preferred.dot(towards) > 0.0
+                    && b.preferred.dot(-towards) > 0.0
+                    && a.preferred.dot(b.preferred) < 0.0
+            });
+            if met {
+                yielding.push(i);
+            }
+        }
+        for i in yielding {
+            let a = &mut self.agents[i];
+            a.giving_way = GIVE_WAY_FOR;
+            a.blocked_for = 0.0;
+        }
     }
 
     /// The agents by the grid's cells.
@@ -296,8 +402,9 @@ impl Crowd {
         near.into_iter().map(|(_, j)| j).collect()
     }
 
-    /// Agent `i`'s new velocity: ORCA's, from the step's state.
-    fn avoid(&self, i: usize, dt: f32, grid: &HashMap<(i32, i32), Vec<u32>>) -> Vec2 {
+    /// Agent `i`'s new velocity: ORCA's, from the step's state (`walled` near walls, where it
+    /// does not turn).
+    fn avoid(&self, i: usize, dt: f32, grid: &HashMap<(i32, i32), Vec<u32>>, walled: bool) -> Vec2 {
         let me = self.agents[i];
         let (p, v) = (plan(me.position), me.velocity);
         let inv_horizon = 1.0 / self.settings.time_horizon;
@@ -354,17 +461,22 @@ impl Crowd {
                 direction,
             });
         }
-        // Blocked, it turns to its right as people keep to one side, and a nudge breaks a
-        // perfectly symmetric meeting.
-        let speed = me.preferred.length();
+        // Slowed, it turns to its right as people keep to one side (not by walls: turning there
+        // only drives it into them), and a nudge breaks a perfectly symmetric meeting.
+        let wanted = me.wanted();
+        let speed = wanted.length();
         let preferred = if speed > 0.0 {
-            let blocked = (1.0 - me.velocity.length() / speed).clamp(0.0, 1.0);
-            let right = Vec2::new(-me.preferred.y, me.preferred.x);
+            let blocked = if walled {
+                0.0
+            } else {
+                (1.0 - me.velocity.length() / speed).clamp(0.0, 1.0)
+            };
+            let right = Vec2::new(-wanted.y, wanted.x);
             let seed = (self.steps << 24) ^ i as u64;
             let nudge = Vec2::new(unit(seed * 2), unit(seed * 2 + 1)) * NUDGE;
-            me.preferred + right * (KEEP_RIGHT * blocked) + nudge
+            wanted + right * (KEEP_RIGHT * blocked) + nudge
         } else {
-            me.preferred
+            wanted
         };
         let mut result = Vec2::ZERO;
         let failed = program2(&lines, me.max_speed, preferred, false, &mut result);
@@ -532,7 +644,7 @@ mod tests {
         let mut least = f32::INFINITY;
         for _ in 0..(seconds * 60.0) as u32 {
             for (a, f) in crowd.agents.iter_mut().zip(follows.iter_mut()) {
-                a.preferred = f.preferred(a.position, a.max_speed);
+                a.preferred = f.preferred(a.position, a.max_speed, field);
             }
             crowd.step(dt, field);
             let n = crowd.agents.len();
@@ -548,12 +660,15 @@ mod tests {
     }
 
     /// `n` people on a circle of `r` metres round the origin, each going to the opposite point.
+    /// `n` people on a circle of `r` metres round the origin, each off its place by up to 10 cm
+    /// (people never stand perfectly round), each going to the point opposite its place.
     fn circle(n: usize, r: f32) -> (Crowd, Vec<Follow>, Vec<Vec3>) {
         let mut crowd = Crowd::new(CrowdSettings::default());
         let (mut follows, mut goals) = (Vec::new(), Vec::new());
         for k in 0..n {
             let (s, c) = (k as f32 / n as f32 * std::f32::consts::TAU).sin_cos();
-            let start = Vec3::new(c * r, 0.0, s * r);
+            let off = Vec3::new(unit(k as u64 * 2), 0.0, unit(k as u64 * 2 + 1)) * 0.1;
+            let start = Vec3::new(c * r, 0.0, s * r) + off;
             let goal = -start;
             crowd.add(Agent::new(start, 0.3, 1.4));
             follows.push(Follow::new(&straight(start, goal)));
@@ -615,7 +730,8 @@ mod tests {
 
     #[test]
     fn pursuers_gather_round_their_target_without_overlapping() {
-        // Sixteen on a circle 16 m across, all to its middle: they close round it, packed.
+        // Sixteen on a circle 16 m across, all to its middle: they close round it, packed; those
+        // on the rim jostle, one giving way to another now and then, within 2.5 m of it.
         let mut crowd = Crowd::new(CrowdSettings::default());
         let mut follows = Vec::new();
         for k in 0..16 {
@@ -627,7 +743,7 @@ mod tests {
         let least = run(&mut crowd, &mut follows, 20.0, None);
         assert!(least > -0.02, "{least}");
         for a in &crowd.agents {
-            assert!(plan(a.position).length() < 2.0, "{a:?}");
+            assert!(plan(a.position).length() < 2.5, "{a:?}");
         }
     }
 
@@ -645,7 +761,7 @@ mod tests {
         let mut follow = Follow::new(&path);
         let dt = 1.0 / 60.0;
         for _ in 0..600 {
-            crowd.agents[0].preferred = follow.preferred(crowd.agents[0].position, 1.4);
+            crowd.agents[0].preferred = follow.preferred(crowd.agents[0].position, 1.4, None);
             crowd.step(dt, None);
         }
         assert_eq!(follow.at_link(), Some(5));
@@ -655,7 +771,7 @@ mod tests {
         follow.crossed();
         assert_eq!(follow.at_link(), None);
         for _ in 0..600 {
-            crowd.agents[0].preferred = follow.preferred(crowd.agents[0].position, 1.4);
+            crowd.agents[0].preferred = follow.preferred(crowd.agents[0].position, 1.4, None);
             crowd.step(dt, None);
         }
         assert!(follow.arrived());
@@ -686,6 +802,24 @@ mod tests {
         // a doorway too narrow for both, one must wait: ORCA alone does not choose who.)
         let field = Field::build(desc(), PERSON, &walled(4.0, 6.0));
         let (a, b) = (Vec3::new(2.0, 0.0, 2.0), Vec3::new(8.0, 0.0, 8.0));
+        let mut crowd = Crowd::new(CrowdSettings::default());
+        crowd.add(Agent::new(a, 0.3, 1.4));
+        crowd.add(Agent::new(b, 0.3, 1.4));
+        let mut follows = vec![
+            Follow::new(&field.path(a, b, &[], 1 << 20).unwrap()),
+            Follow::new(&field.path(b, a, &[], 1 << 20).unwrap()),
+        ];
+        let least = run(&mut crowd, &mut follows, 30.0, Some(&field));
+        assert!(least > -0.02, "{least}");
+        assert!(follows.iter().all(Follow::arrived), "{:?}", crowd.agents);
+    }
+
+    #[test]
+    fn two_people_meeting_in_a_narrow_door_take_turns() {
+        // A 0.9 m door, too narrow for two: they meet in it, stand a second, the second gives
+        // way, and both get through.
+        let field = Field::build(desc(), PERSON, &walled(4.5, 5.4));
+        let (a, b) = (Vec3::new(2.0, 0.0, 4.95), Vec3::new(8.0, 0.0, 4.95));
         let mut crowd = Crowd::new(CrowdSettings::default());
         crowd.add(Agent::new(a, 0.3, 1.4));
         crowd.add(Agent::new(b, 0.3, 1.4));

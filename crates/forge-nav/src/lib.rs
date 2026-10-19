@@ -40,7 +40,9 @@ mod crowd;
 mod passage;
 
 pub use crossing::{CrossingMotion, CrossingSpec, RootPath};
-pub use crowd::{ARRIVAL, Agent, CORNER_REACH, Crowd, CrowdSettings, Follow};
+pub use crowd::{
+    ARRIVAL, Agent, CORNER_REACH, Crowd, CrowdSettings, Follow, LOOK_AHEAD, NEAR_WALLS,
+};
 pub use passage::{CrossingKind, PASSAGE_CELL, Passage, PassageKind, PassageState, Passages};
 
 use std::cmp::Reverse;

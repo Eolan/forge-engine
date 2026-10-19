@@ -6906,9 +6906,22 @@ best guess or data"):
 - **Limits of this first step:**
   - Twenty-four swapping across the same circle pack into a ring that touches all round, which
     ORCA cannot set turning.
-  - Two people meeting in a doorway too narrow for both stand still: one must yield, which needs
-    a rule, such as a door taken one at a time.
   - Walls are not among ORCA's constraints, only the field's slide.
+- **Doors, the same day:** two people meeting in a 0.9 m door stood still, one wedged against
+  the jamb. Three rules fixed it:
+  - **Giving way:** two agents heading opposite ways, blocked face to face for 3 s, make the one
+    with the higher index back off for 1.5 s. A shorter wait broke up the ring's unwinding.
+  - **Back to the line near walls:** within 1 m of the walkable's edge, an agent heads 0.7 m
+    along its path's leg, back to the line pulled clear of the walls. In the open it may drift
+    aside, and pulling it back there jammed the circle.
+  - **No turn near walls:** keeping right next to a wall only drives the agent into it.
+- **Learned on the way:**
+  - The first version's circle unwound only because every agent read as blocked on its first
+    step and turned at once. The circle test now starts each person up to 10 cm off the
+    circle, as people stand.
+  - A "facing" weight read from the nearest 10 neighbours missed the people across a ring of
+    12, so it was taken out.
+  - Pursuers on a target's rim jostle within 2.5 m.
 
 *(research: navigation-traversal.md, game-ai-ecosystems.md §2 and §7, animation.md §5; D-012,
 D-016, D-062; issues #90, #276, #311, #316, #317)*
