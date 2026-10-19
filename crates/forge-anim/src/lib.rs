@@ -14,7 +14,8 @@
 //! 4. [`Skeleton::skinning_matrices`] multiplies each by its inverse bind matrix: what the
 //!    GPU's skinning moves the vertices by.
 //!
-//! Above the clips (#167): a [`Player`] runs a clip or a [`BlendSpace`] on, its switches
+//! Above the clips (#167): a [`Player`] runs a clip or a [`BlendSpace`] on (or once, holding its
+//! end: [`Player::play_once`]), its switches
 //! inertialized ([`Inertializer`]); a [`PackedClip`] holds a clip on as few bits a track as keep
 //! the skeleton within a tolerance, a quarter to a third of its bytes. [`Clip::root_motion`] gives
 //! a clip's travel and turn for a character controller, and [`lock_root`] holds the pose in place

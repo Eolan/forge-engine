@@ -239,6 +239,10 @@ pub enum Source {
     Blend(BlendSpace),
 }
 
+/// Where a one-shot ([`Player::play_once`]) holds: as near its end as a phase that wraps at 1
+/// keeps it.
+const ONE_SHOT_END: f32 = 1.0 - 1e-6;
+
 /// A creature's animation (#167): its source, the phase it has reached, the parameter a blend
 /// space reads, and the last switch dying away. Each [`Player::update`] writes the pose.
 #[derive(Clone, Debug, PartialEq)]
@@ -250,6 +254,8 @@ pub struct Player {
     pub parameter: f32,
     /// The playback rate: 1 as authored.
     pub speed: f32,
+    /// Whether the source cycles; a one-shot ([`Player::play_once`]) holds at its end.
+    looping: bool,
     inertializer: Inertializer,
     /// The last two poses written, for the next switch's offset and its rate.
     last: Pose,
@@ -271,6 +277,7 @@ impl Player {
             phase: 0.0,
             parameter: 0.0,
             speed: 1.0,
+            looping: true,
             inertializer: Inertializer::default(),
             last: empty.clone(),
             before: empty.clone(),
@@ -292,9 +299,39 @@ impl Player {
     /// Switches to `source` from its start, the change dying away over `duration` seconds.
     /// Takes effect at the next [`Player::update`]; before any update, it just sets the source.
     pub fn play(&mut self, source: Source, duration: f32, clips: &[Clip], skeleton: &Skeleton) {
+        self.start(source, duration, clips, skeleton, true);
+    }
+
+    /// [`Player::play`] once: the source runs to its end and holds its last pose there, and
+    /// [`Player::finished`] says so (a vault, a climb, a bite), where the host clamped the speed
+    /// on the last step before (#312's prototype).
+    pub fn play_once(
+        &mut self,
+        source: Source,
+        duration: f32,
+        clips: &[Clip],
+        skeleton: &Skeleton,
+    ) {
+        self.start(source, duration, clips, skeleton, false);
+    }
+
+    /// Whether a one-shot ([`Player::play_once`]) has reached its end; never for a cycle.
+    pub fn finished(&self) -> bool {
+        !self.looping && self.phase >= 1.0
+    }
+
+    fn start(
+        &mut self,
+        source: Source,
+        duration: f32,
+        clips: &[Clip],
+        skeleton: &Skeleton,
+        looping: bool,
+    ) {
         let first = self.last_dt == 0.0;
         self.source = source;
         self.phase = 0.0;
+        self.looping = looping;
         if first {
             return;
         }
@@ -323,6 +360,12 @@ impl Player {
 
     /// The source's pose at `phase` into `out`.
     fn sample(&mut self, clips: &[Clip], skeleton: &Skeleton, phase: f32, out: &mut Pose) {
+        // A one-shot holds its ends: sampled just short of 1, as the cycles below wrap it.
+        let phase = if self.looping {
+            phase
+        } else {
+            phase.clamp(0.0, ONE_SHOT_END)
+        };
         match &self.source {
             Source::Clip(c) => {
                 let clip = &clips[*c];
@@ -341,7 +384,12 @@ impl Player {
     pub fn update(&mut self, clips: &[Clip], skeleton: &Skeleton, dt: f32, out: &mut Pose) {
         let rate = self.rate(clips);
         if self.last_dt != 0.0 {
-            self.phase = (self.phase + dt * rate * self.speed).rem_euclid(1.0);
+            let reached = self.phase + dt * rate * self.speed;
+            self.phase = if self.looping {
+                reached.rem_euclid(1.0)
+            } else {
+                reached.clamp(0.0, 1.0)
+            };
         }
         let phase = self.phase;
         self.sample(clips, skeleton, phase, out);
@@ -533,5 +581,59 @@ mod tests {
             pose
         };
         assert_eq!(run(), run());
+    }
+
+    /// A one-shot runs to its end and holds there, where a cycle wraps round (#312).
+    #[test]
+    fn a_one_shot_holds_its_last_pose() {
+        let skeleton = skeleton();
+        // The root carried 2 m along x over its second.
+        let carry = Clip {
+            name: String::new(),
+            start: 0.0,
+            duration: 1.0,
+            joints: vec![
+                JointTracks {
+                    translation: Some(Track {
+                        times: vec![0.0, 1.0],
+                        values: vec![Vec3::ZERO, Vec3::X * 2.0],
+                        interpolation: Interpolation::Linear,
+                    }),
+                    rotation: None,
+                    scale: None,
+                },
+                JointTracks::default(),
+            ],
+        };
+        let clips = [carry];
+        let mut pose = skeleton.rest().clone();
+        let mut player = Player::new(Source::Clip(0), 2);
+        player.play_once(Source::Clip(0), 0.0, &clips, &skeleton);
+        // The first update draws the start; each next one moves on.
+        player.update(&clips, &skeleton, 0.6, &mut pose);
+        player.update(&clips, &skeleton, 0.6, &mut pose);
+        assert!(!player.finished());
+        for _ in 0..3 {
+            player.update(&clips, &skeleton, 0.6, &mut pose);
+            assert!(player.finished());
+            assert!(
+                (pose.translations[0].x - 2.0).abs() < 1e-4,
+                "{}",
+                pose.translations[0]
+            );
+        }
+        // Played as a cycle, it wraps round: 1.2 s in is 0.2 s in.
+        let mut pose = skeleton.rest().clone();
+        let mut cycle = Player::new(Source::Clip(0), 2);
+        cycle.play(Source::Clip(0), 0.0, &clips, &skeleton);
+        cycle.update(&clips, &skeleton, 0.6, &mut pose);
+        cycle.update(&clips, &skeleton, 0.6, &mut pose);
+        cycle.update(&clips, &skeleton, 0.6, &mut pose);
+        assert!(!cycle.finished());
+        assert!(
+            (pose.translations[0].x - 0.4).abs() < 1e-4,
+            "{}",
+            pose.translations[0]
+        );
     }
 }
