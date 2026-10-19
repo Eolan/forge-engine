@@ -70,9 +70,11 @@ public static const float PROBE_ROOM_SPACING = 1.5;
 // for a cascade to claim all of a point's light; with less, the next cascade fills the rest.
 static const float PROBE_ROOM_COVER = 0.25;
 // A room beyond the room-sized cascades whose region has no probe among a coarser cascade's eight
-// takes this share of the outside's light around it (#321, `probe_lookup`): what its windows let
-// in, matched against the rooms whose probes are found at the same distance.
-static const float PROBE_FAR_ROOM_SHARE = 0.25;
+// takes this share of the open sky's light (#321, `probe_lookup`): what its windows let in, a
+// daylight factor, matched in the village's room and hall against their own probes (in linear
+// light the room 24.6 against 22.7, the hall 16.7 against 18.4; 0.15 made them 2–2.5 times too
+// bright, and the outside's probes, roof voids among them, left a deep house's rooms black).
+static const float PROBE_FAR_ROOM_SKY = 0.06;
 
 // Mirrors `GpuCascade` in crates/forge-render/src/probes.rs.
 public struct ProbeCascade
@@ -559,22 +561,15 @@ float3 probe_lookup<let MIRROR : int>(ProbeField* field, float3 p, float3 n, flo
     if (masked && e.w <= 0.0 && mask.region != REGION_OUTSIDE && far_from_rooms(field, p))
     {
         // A room beyond the room-sized cascades with none of its probes among a coarser one's
-        // eight (an upper storey between probes 4 m apart, #321): every probe there is another
-        // room's, the roof's or the street's behind a wall, and the room came out black. It
-        // takes a share of the outside's light around it instead, what its windows let in.
-        RegionHit outside = mask;
-        outside.region = REGION_OUTSIDE;
-        outside.other = REGION_OUTSIDE;
-        outside.ramp = 0.0;
-        outside.kind = REGION_ROOM;
-        e = cascades_lookup<MIRROR>(field, p, n, g, v, d, outside, true, toward_d);
-        e.rgb *= PROBE_FAR_ROOM_SHARE;
-        toward_d *= PROBE_FAR_ROOM_SHARE;
-        if (e.w > 0.0)
-        {
-            toward_d /= e.w;
-            e = float4(e.rgb / e.w, 1.0);
-        }
+        // eight (an upper storey between probes 4 m apart, #321): the probes there are other
+        // rooms', the street's behind a wall or the roof void's (which no region covers, so it
+        // counts as outside), and the room came out black. It takes PROBE_FAR_ROOM_SKY of the
+        // open sky's light instead, what its windows let in, in the warm white the rooms' walls
+        // give it back: the sky's own blue turned their floors blue.
+        float3 tint = float3(1.10, 0.99, 0.80);
+        float3 luma = float3(0.2126, 0.7152, 0.0722);
+        e = float4(tint * (dot(open_sky, luma) * PROBE_FAR_ROOM_SKY), 1.0);
+        toward_d = tint * (dot(open_sky_d, luma) * PROBE_FAR_ROOM_SKY);
     }
     if (masked && e.w <= 0.0)
         e = cascades_lookup<MIRROR>(field, p, n, g, v, d, mask, false, toward_d);
@@ -645,7 +640,7 @@ float3 region_colour(uint region)
 // colour, a doorway's from one side's to the other's, green in a window's reveal, white in a
 // house's body (every probe), black outside, red where no probe of the region stood among any
 // cascade's eight and every probe lit it (the fallback), orange where a room beyond the
-// room-sized cascades took the outside's share instead (#321); grey without regions.
+// room-sized cascades took the open sky's share instead (#321); grey without regions.
 public float3 probe_region_tint(ProbeField* field, float3 p, float3 g, float3 v)
 {
     if (field[0].region_count == 0u)

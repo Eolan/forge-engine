@@ -5571,10 +5571,18 @@ application of their patents just in case."
   (3.0–5.7 m) holds none of its region's. The fallback to every probe then mixed other rooms',
   the roof's and the street's probes behind walls and slabs, and such rooms came out black
   through their windows until the camera was within a few metres. Now a room that no room-sized
-  cascade covers and whose region has no probe among the eight takes `PROBE_FAR_ROOM_SHARE`
-  (0.25) of the outside's probes' light around it, what its windows let in (`far_from_rooms`;
-  `--show-regions` tints it orange). Near the camera nothing changes: the map check's interiors
-  0 px, its street views at most 0.0097 mean LDR-ꟻLIP, all in the windows seen from afar.
+  cascade covers and whose region has no probe among the eight takes `PROBE_FAR_ROOM_SKY`
+  (0.06) of the open sky's luminance, what its windows let in (a daylight factor), in a warm
+  white (`far_from_rooms`; `--show-regions` tints it orange). A first version took 0.25 of the
+  outside's probes around it: in a deep house under a pitched roof those include the roof
+  void's (no region covers it, so its probes count as outside), and the upper rooms got a
+  fifth of what the share promised, still near black (the scene built outside the repository:
+  facade 0.136 linear under `--show-gi`, its upper windows 0.007). The sky's own light, unlike
+  the probes, does not depend on where they stand; its blue turned the floors blue, hence the
+  luminance and the tint. Calibrated by forcing the fallback on the village's room and hall,
+  which have their own probes: in linear light 24.6 against 22.7 and 16.7 against 18.4 at 0.06
+  (0.15 made them 2–2.5 times too bright). Near the camera nothing changes: the map check's
+  interiors 0 px, its street views at most 0.0023 mean LDR-ꟻLIP against the first version.
 
 ## D-069 — One set of engine settings for every demo, defaults at the best look, and a console on ² ✅ (proposed 2026-10-17, #278, the owner's request; the owner's go the same day)
 
