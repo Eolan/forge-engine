@@ -323,13 +323,9 @@ pub fn trees(site: &Site, plan: &CityPlan, seed: u64) -> Vec<Tree> {
                 .iter()
                 .any(|(reach, grid)| grid.any_within(t.pos, reach + extra, |_| false))
         };
-        // And 2 m from any water, the sea's and the lakes' too: on a quay's edge a trunk stood
-        // over the water in its reflection (the owner, 2026-10-16: "tree above water").
-        let dry = (0..8).all(|k| {
-            let a = f64::from(k) * std::f64::consts::FRAC_PI_4;
-            site.water_at(t.pos + DVec2::new(a.cos(), a.sin()) * 2.0) == LAND
-        });
-        !(t.setting != Setting::Street && near(&ways, 1.5)) && !near(&banks, 0.0) && dry
+        !(t.setting != Setting::Street && near(&ways, 1.5))
+            && !near(&banks, 0.0)
+            && trunk_dry(site, t.pos)
     });
     // And none where a lamp stands, whichever street's it is: the lamps take precedence.
     let mut lamps = PointGrid::new(plan.size, 20.0);
@@ -396,12 +392,17 @@ pub fn trees(site: &Site, plan: &CityPlan, seed: u64) -> Vec<Tree> {
                 s.heat = 0.5 + 0.12 * t;
             }
         }
+        // Off the water as the other trees: a wild trunk stood in the river on either bank (the
+        // owner, 2026-10-19), placed by its own point alone; its crown may reach over.
         let keep_out = |p: DVec2| {
             p.x < 0.0
                 || p.y < 0.0
                 || p.x >= plan.size
                 || p.y >= plan.size
-                || site.water_at(p) != LAND
+                || !trunk_dry(site, p)
+                || banks
+                    .iter()
+                    .any(|(reach, grid)| grid.any_within(p, *reach, |_| false))
                 || super::district_index(&plan.district_field, p).is_some()
                 || roads.nearest(p, 12.0).is_some()
                 || plan
@@ -477,6 +478,17 @@ pub fn trees(site: &Site, plan: &CityPlan, seed: u64) -> Vec<Tree> {
     // The trees the plan's own generators planted: the village's gardens' olives.
     out.extend(plan.planted.iter().copied());
     out
+}
+
+/// Whether a trunk at `pos` stands 2 m from any water, the sea's and the lakes' too: on a quay's
+/// edge a trunk stood over the water in its reflection (the owner, 2026-10-16: "tree above
+/// water").
+fn trunk_dry(site: &Site, pos: DVec2) -> bool {
+    site.water_at(pos) == LAND
+        && (0..8).all(|k| {
+            let a = f64::from(k) * std::f64::consts::FRAC_PI_4;
+            site.water_at(pos + DVec2::new(a.cos(), a.sin()) * 2.0) == LAND
+        })
 }
 
 /// Each cell of the site's water field's distance from the nearest water, metres (a two-pass
@@ -610,6 +622,32 @@ mod tests {
                     .map(|w| geom::distance_to_segment(t.pos, w[0], w[1]))
                     .fold(f64::MAX, f64::min);
                 assert!(d > e.profile.width() * 0.5, "a tree on a road at {}", t.pos);
+            }
+        }
+    }
+
+    /// The first map's forest (D-062) keeps its trunks off the water as the other trees do: two
+    /// wild trunks stood in the river, one on either bank (the owner, 2026-10-19).
+    #[test]
+    fn the_villages_wild_trunks_keep_off_the_water() {
+        let size = 600.0;
+        let site = example::site(size, 10.0);
+        let city = plan(&site, &super::super::village::params(size));
+        let trees = trees(&site, &city, 5);
+        let wild: Vec<&Tree> = trees
+            .iter()
+            .filter(|t| t.setting == Setting::Forest)
+            .collect();
+        assert!(wild.len() > 1_000, "{} wild trees", wild.len());
+        for t in wild {
+            assert!(trunk_dry(&site, t.pos), "a trunk by the water at {}", t.pos);
+            for r in &site.rivers {
+                let d = r
+                    .centreline
+                    .windows(2)
+                    .map(|w| geom::distance_to_segment(t.pos, w[0], w[1]))
+                    .fold(f64::MAX, f64::min);
+                assert!(d > r.width * 0.5 + 3.0, "a trunk in the river at {}", t.pos);
             }
         }
     }

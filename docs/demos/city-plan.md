@@ -432,7 +432,10 @@ grown three times, from its own seed, the second in a breeze of 0.3 from one sid
 0.8, the third in one of 0.27 from another on 0.9 (`FLORA_SEEDS`), and a plant's hash picks one
 of the three at the age nearest its height and stretches its crown by up to 8 % along its turn.
 No tree stands within 2 m of any water, the sea's and the lakes' too (on a quay's edge a trunk
-stood over the water in its reflection: "tree above water").
+stood over the water in its reflection: "tree above water"). The wood's wild trees keep the same
+rules since 2026-10-19 (2 m from any water, 4 m clear of a river's bank): placed by their own
+point alone, two trunks stood in the river, one on either bank (the owner). Their crowns may
+still reach over the water.
 
 **Leaf cards** (D-013, the same afternoon). Each lump is now a core and the cards round it.
 - **The core:** 20 triangles at three tenths of the lump's radius, in three tenths of the
