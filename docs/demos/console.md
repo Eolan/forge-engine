@@ -147,7 +147,7 @@ The shell's, in every demo:
 
 | Name | What | Values | In a shipped game |
 |---|---|---|---|
-| `r.display_info` | the profile overlay (F1 steps through it) | 0 off, 1 on, 2 on (verbose) | yes |
+| `r.display_info` | the profile overlay (F1 steps through it); off at start unless `--overlay` | 0 off, 1 on, 2 on (verbose) | yes |
 | `app.console` | the console shown | 0, 1 | yes |
 | `app.capture [PATH]` | command: saves the next frame as a PNG | | no |
 | `app.quit` | command: closes the window | | yes |

@@ -82,8 +82,9 @@ pub struct AppConfig {
     pub capture_every: Option<u64>,
     /// Compile shaders with optimisation.
     pub optimize_shaders: bool,
-    /// Whether the profiling overlay starts visible: `None` = yes when interactive, no when
-    /// a frame limit is set (scripted captures); `Some` forces it. F1 toggles it at run time.
+    /// Whether the profiling overlay starts visible: `None` = no (the owner, 2026-10-19: the
+    /// console's `r.display_info` or F1 shows it); `Some` forces it. F1 steps through it at run
+    /// time.
     pub overlay: Option<bool>,
     /// Load the Vulkan API through NVIDIA Streamline so the device can offer DLSS (needs the
     /// `dlss` feature on Windows and the SDK in `streamline-sdk/bin/x64`, or wherever
@@ -872,7 +873,7 @@ impl<D: Demo> State<D> {
             Some("off") => OverlayMode::Off,
             Some("compact") => OverlayMode::Compact,
             Some("full") => OverlayMode::Full,
-            _ if config.overlay.unwrap_or(config.frame_limit.is_none()) => OverlayMode::Compact,
+            _ if config.overlay.unwrap_or(false) => OverlayMode::Compact,
             _ => OverlayMode::Off,
         };
         let graph = RenderGraph::new(&device);

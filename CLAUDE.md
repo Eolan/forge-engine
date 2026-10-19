@@ -133,7 +133,8 @@ this file.
   jurisdiction, status and expiry, and whether there is an alternative. Decisions prefer
   unpatented or expired methods. Ask the owner before building on a live patent.
 - **Profiling.** Every new pass shows in the F1 overlay (a graph pass gets its zone
-  automatically) and in `docs/PROFILE.md`. The overlay stays compact and off the scene.
+  automatically) and in `docs/PROFILE.md`. The overlay stays compact and off the scene, and
+  off by default: the owner shows it with the console (`r.display_info 1`) or F1.
 - **After a push and green CI,** post a short summary on the issue: what changed, the
   numbers, the checks run. Close the issue if the commit closes it.
 - **Ask the owner first** before downloading anything, and before posting outside this
