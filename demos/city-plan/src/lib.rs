@@ -579,7 +579,7 @@ pub struct PlanScenario {
     scene: String,
     /// Its meshes, cooked or read from the cache on the loading thread ([`Scenario::prepare`]),
     /// in the order the build adds them, each plant's with its height and crown.
-    cooked: Option<Vec<(MeshletMesh, f32, f32)>>,
+    cooked: Option<Vec<(MeshletMesh, [f32; 3])>>,
     /// The houses' rooms for the probes (D-068, [`probe_regions`]), in the world frame.
     regions: Vec<forge_render::RegionVolume>,
     /// The houses' lamps that are on (D-065, [`home_lamps`]), in the world frame.
@@ -5612,6 +5612,14 @@ fn tile_meshes(tile: &Tile) -> impl Iterator<Item = (&TriMesh, usize, f32, &'sta
     .filter(|(mesh, ..)| !mesh.indices.is_empty())
 }
 
+/// The band of the trees' ladder (D-075, `--tree-ladder`): each tree crosses from its cards to
+/// its crown's shells over a quarter of the crossing's size either side of it.
+const TREE_LADDER_BAND: f32 = 0.25;
+
+/// The crown shells' colour as a share of their leaves' (D-075's ladder): opaque and smooth, at
+/// the leaves' own colour a far wood stood 1.75 times as bright as its cards.
+const CROWN_SHELL_TONE: f32 = 0.55;
+
 /// The forest's species in the order their first plants come (D-063): each grows
 /// `forge_flora::grow::INDIVIDUALS` individuals, at a quarter, half and all of its maturity,
 /// three of each.
@@ -5631,14 +5639,15 @@ fn planted(
 impl PlanScenario {
     /// Every mesh of the scene in the order the build adds them (the tiles', the plants', the
     /// kit's modules, the tiles' insides), each plant's with its height and crown and followed by
-    /// its crown's proxy for the probes' rays ([`forge_geom::flora::grown_proxy`]). Each is kept
+    /// its crown's proxy for the probes' rays ([`forge_geom::flora::grown_proxy`]) and its crown's
+    /// shells, the next step on its ladder ([`forge_geom::flora::grown_shells`]). Each is kept
     /// in the derived cache (D-053) under its name (its place in the scene, so a changed tile
     /// replaces its old copy) and a key: its content's digest, its cook's options and the
     /// cooking code's digest (`cook_code`).
     fn cook_meshes(
         &self,
         species: &[forge_flora::species::Species],
-    ) -> Vec<(MeshletMesh, f32, f32)> {
+    ) -> Vec<(MeshletMesh, [f32; 3])> {
         enum Cook<'a> {
             Mesh(&'a TriMesh, CookOptions, String),
             Plant(u16, u8),
@@ -5683,38 +5692,38 @@ impl PlanScenario {
             options: CookOptions,
             name: String,
             key: String,
-            height: f32,
-            crown: f32,
+            size: [f32; 3],
         }
         let code = forge_geom::cache::cook_code();
         let made: Vec<Made> = par_map(jobs.len(), cores(), None, |i| {
             let meshes = match &jobs[i] {
                 Cook::Mesh(mesh, options, name) => {
-                    vec![(Cow::Borrowed(*mesh), *options, name.clone(), 0.0, 0.0)]
+                    vec![(Cow::Borrowed(*mesh), *options, name.clone(), [0.0; 3])]
                 }
                 &Cook::Plant(sp, k) => {
                     let s = &species[usize::from(sp)];
                     let plant =
                         forge_geom::flora::grow_plant(s, &forge_flora::grow::individual(s, sp, k));
-                    let (height, crown) = (plant.height, plant.crown);
+                    let size = [plant.height, plant.crown, plant.lump];
                     let name = format!("plant-{}-{k}", s.id);
                     let options = CookOptions::default();
-                    // And its crown as the probes' rays see it (#297), right after it.
+                    // And its crown as the probes' rays see it (#297), right after it, then its
+                    // crown's shells, the next step on its ladder (D-075, `--tree-ladder`).
                     vec![
-                        (Cow::Owned(plant.mesh), options, name.clone(), height, crown),
+                        (Cow::Owned(plant.mesh), options, name.clone(), size),
                         (
                             Cow::Owned(plant.proxy),
                             options,
-                            name + "-proxy",
-                            height,
-                            crown,
+                            name.clone() + "-proxy",
+                            size,
                         ),
+                        (Cow::Owned(plant.shells), options, name + "-shells", size),
                     ]
                 }
             };
             meshes
                 .into_iter()
-                .map(|(mesh, options, name, height, crown)| {
+                .map(|(mesh, options, name, size)| {
                     let key = format!(
                         "plan mesh {:016x} {options:?} code {code:016x}",
                         mesh_digest(&mesh)
@@ -5724,8 +5733,7 @@ impl PlanScenario {
                         options,
                         name,
                         key,
-                        height,
-                        crown,
+                        size,
                     }
                 })
                 .collect::<Vec<_>>()
@@ -5770,7 +5778,7 @@ impl PlanScenario {
         taken
             .into_iter()
             .zip(&made)
-            .map(|(mesh, m)| (mesh.expect("every mesh taken"), m.height, m.crown))
+            .map(|(mesh, m)| (mesh.expect("every mesh taken"), m.size))
             .collect()
     }
 }
@@ -6495,6 +6503,17 @@ impl Scenario for PlanScenario {
                         ),
                         // The crown's proxy that the probes' rays meet (#297), opaque.
                         (format!("{} crown", s.id), foliage),
+                        // The crown's shells, the next step on its ladder (D-075): the cards'
+                        // look from afar, their leaves' colour through the atlas's and the
+                        // shade the cards cast on each other.
+                        (
+                            format!("{} crown shells", s.id),
+                            tones(
+                                leaves.0.map(|k| k * CROWN_SHELL_TONE),
+                                leaves.1.map(|k| k * CROWN_SHELL_TONE),
+                                6.0,
+                            ),
+                        ),
                     ])
                     .expect("a species' rows")
             })
@@ -6588,7 +6607,7 @@ impl Scenario for PlanScenario {
         for tile in &self.tiles {
             let at = Mat4::from_translation(tile.centre);
             for (_, kind, ..) in tile_meshes(tile) {
-                let (mesh, _, _) = cooked.next().expect("a tile's mesh cooked");
+                let (mesh, _) = cooked.next().expect("a tile's mesh cooked");
                 let id = builder.add_mesh(&mesh);
                 builder.add_instance_with_material(id, at, rows[kind]);
                 meshes += 1;
@@ -6611,10 +6630,22 @@ impl Scenario for PlanScenario {
             for &sp in &planted {
                 let grown = (0..forge_flora::grow::INDIVIDUALS)
                     .map(|_| {
-                        let (mesh, height, crown) = cooked.next().expect("a plant cooked");
-                        let (proxy, ..) = cooked.next().expect("a plant's crown proxy cooked");
+                        let (mesh, [height, crown, _]) = cooked.next().expect("a plant cooked");
+                        let (proxy, _) = cooked.next().expect("a plant's crown proxy cooked");
+                        let (shells, [.., lump]) =
+                            cooked.next().expect("a plant's crown shells cooked");
                         let proxy = proxies.then(|| builder.add_mesh(&proxy));
-                        (builder.add_mesh(&mesh), proxy, height, crown)
+                        let id = builder.add_mesh(&mesh);
+                        // With `--tree-ladder` (D-075, #302): the cards near, the crown's shells
+                        // once a lump stands under the size it gives, dithered across a band of a
+                        // quarter of it. The ladder measures the plant's sphere: as many times the
+                        // lumps' size as its diameter holds their mean diameter.
+                        if let Some(px) = args.tree_ladder {
+                            let next = builder.add_mesh(&shells);
+                            let across = 2.0 * mesh.radius / lump;
+                            builder.set_ladder(id, next, px * across, TREE_LADDER_BAND);
+                        }
+                        (id, proxy, height, crown)
                     })
                     .collect();
                 models.insert(sp, grown);

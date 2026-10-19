@@ -106,6 +106,14 @@ impl Gallery {
                 CullFlags::SHOW_REGIONS,
                 false,
             ),
+            (
+                rs::show(
+                    "ladder",
+                    "The meshes instances cross to on their ladders, in blue (D-075).",
+                ),
+                CullFlags::SHOW_LADDER,
+                false,
+            ),
         ]
         .into_iter()
         .map(|(spec, b, default)| (s.add_from(spec, default, bit(b)), b))

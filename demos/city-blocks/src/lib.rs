@@ -533,6 +533,14 @@ pub struct Args {
     /// whose probes light it, red where none of its region's probes stood near.
     #[arg(long)]
     show_regions: bool,
+    /// The trees' ladder (D-075, #302): the city plan's plants cross from their leaf cards to
+    /// their crowns' closed shells, dithered, as the shells' lumps drop under this many output
+    /// pixels across (the flag alone: 6).
+    #[arg(long, num_args = 0..=1, default_missing_value = "6")]
+    pub tree_ladder: Option<f32>,
+    /// With `--tree-ladder`: tint the shells blue (a crossing tree shows both, dithered).
+    #[arg(long)]
+    show_ladder: bool,
     /// Show the ambient occlusion in grey instead of the shading (V toggles it).
     #[arg(long)]
     show_ao: bool,
@@ -1157,6 +1165,9 @@ impl Gallery {
         }
         if args.show_regions {
             flags.0 |= CullFlags::SHOW_REGIONS;
+        }
+        if args.show_ladder {
+            flags.0 |= CullFlags::SHOW_LADDER;
         }
         if !args.no_reflections {
             flags.0 |= CullFlags::SKY_REFLECTIONS;

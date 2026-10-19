@@ -852,6 +852,23 @@ opaque crown proxy (D-036, `--leaf-probes` the A/B).
 | the garden (`-50.7,1.7,-116.7,163.7,0`) | 4.34, 1.54 ms | 3.62, 0.82 ms | 3.34, 0.59 ms |
 | the air view | 4.41, 1.45 ms | 4.39, 1.32 ms | 4.28, 1.28 ms |
 
+**The trees' ladder** (D-075 step 2, #302, 2026-10-19; city-plan's `--tree-ladder`): the plants
+cross from their cards to their crowns' shells once the shells' lumps stand 6 pixels across,
+dithered over a quarter of that size either side. The village at 1600 × 900, DLAA, one run each
+(the air view's three runs: still, at its start and gliding at 12 m/s):
+
+| View | frame | `meshlet pass 1` | `cluster cull 1` | `software raster 1` |
+|---|---|---|---|---|
+| the air view | 4.69 → 4.34–4.38 ms | 1.30 → 1.10 | 0.51 → 0.34 | 0.17 → 0.20 |
+| the air view, gliding | 4.59 → 4.32 ms | 1.25 → 1.06 | 0.45 → 0.27 | 0.14 → 0.19 |
+| the main street | 4.81 → 4.72 ms | 0.51 → 0.59 | 0.33 → 0.27 | 0.06 → 0.00 |
+| the green | 4.43 → 4.46 ms | 0.42 → 0.51 | 0.35 → 0.30 | 0 |
+
+From the air most trees have crossed: their shells are fewer clusters than their cards. On the
+ground more of the visible trees are in the band, where both meshes take the cut-outs' raster
+(`meshlet pass 1` +0.08 ms). The instance culls are unchanged (0.03 ms). To time on the serial
+frame (`FORGE_ASYNC=0`) before the ladder becomes the default.
+
 **A cut-out row's triangles alone in the query loop** (#307, 2026-10-19): each mesh's structure
 holds its opaque sections and its cut-out ones as two geometries (D-029). The village, best of
 three, against the build before:

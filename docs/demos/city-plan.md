@@ -490,6 +490,19 @@ the frame went 6.16 → 4.64 ms and the probes' rays 3.02 → 1.49 ms; the light
 darker than through the cards, elsewhere within 0.07 EV (D-036; `docs/PROFILE.md`). A proxy has
 40–60 % of its plant's triangles, mostly its wood.
 
+**The trees' ladder** (D-075 step 2, #302, 2026-10-19; not yet the default). With
+`--tree-ladder [PX]` each grown plant crosses from its leaf cards to its crown's closed shells
+(`grown_shells`: each lump a 20-triangle shell at its full radius, in a row of its own at 0.55 of
+the leaves' colour) once the lumps stand `PX` pixels across (6 by default), dithered over a quarter
+of that size either side: each pixel of a crossing tree keeps one of the two by the frame's noise,
+and DLAA averages them. `--show-ladder` (or the console's `r.show.ladder`) tints the shells blue.
+From the air the far woods stand whole where the cluster LOD had thinned some species' cards to
+bare twigs, and the frame is 0.35 ms shorter (4.69 → 4.34 ms); on the ground, where more trees are
+crossing, it is about the same (`docs/PROFILE.md`). A still camera's frames 10 apart differ on
+0.06–0.07 % of their pixels, 0.08 % without. The rays keep meeting the cards. Capture:
+`reports/2026-10-19/village-tree-ladder.png` (left: the far woods with cards, with the ladder,
+the shells in blue; right: the meadow's trees gliding, cards above, the ladder below).
+
 **The stairs' shimmer** (the owner, the same evening). In a hall lit only through its door, the
 light on the flight rose and fell: a still camera's frames 10 apart differed on 3–7 % of their
 pixels, all of it gone without the GI probes. The probes' rotations repeat with TAA's 8-frame

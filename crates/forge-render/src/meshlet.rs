@@ -89,6 +89,10 @@ impl CullFlags {
     /// a house's body, black outside, and red where none of the region's probes stood near and
     /// every probe lit it (debug view).
     pub const SHOW_REGIONS: u32 = 1 << 25;
+    /// Tint blue the clusters of the meshes instances cross to on their ladders (D-075,
+    /// [`MeshletSceneBuilder::set_ladder`]): a crossing instance shows both, dithered (debug
+    /// view).
+    pub const SHOW_LADDER: u32 = 1 << 26;
     /// Everything on except the debug views.
     pub const DEFAULT: Self = Self(Self::CONE | Self::FRUSTUM | Self::OCCLUSION | Self::LOD);
 
@@ -429,6 +433,13 @@ struct GpuMesh {
     root_reach_max: f32,
     /// The material its instances take unless they name their own (GPU placement reads it).
     material: u32,
+    /// The next mesh on its ladder (D-075, [`MeshletSceneBuilder::set_ladder`]), `u32::MAX` for
+    /// none; the size of an instance's sphere on screen, output pixels across, at which it is
+    /// half crossed; and the band's half width, a share of that size.
+    ladder_next: u32,
+    ladder_px: f32,
+    ladder_band: f32,
+    ladder_pad: u32,
 }
 
 impl GpuMesh {
@@ -445,7 +456,7 @@ impl GpuMesh {
 /// `meshlet.slang`): an instance whose roots are all fine enough lists them in the root list
 /// instead of taking work items.
 const MAX_SHORTCUT_ROOTS: usize = 4;
-const _: () = assert!(std::mem::size_of::<GpuMesh>() == 400);
+const _: () = assert!(std::mem::size_of::<GpuMesh>() == 416);
 
 /// Mirrors `Instance` in `meshlet.slang` (80 bytes): an integer cell and an `f32` offset for
 /// the position, a quaternion and a uniform scale for the transform (issue #93).
@@ -611,7 +622,9 @@ struct GpuFrame {
     decals: u64,
     far_lamps: u64,
     far_shares: u64,
-    far_pad: u64,
+    /// Per instance, this frame's crossing of its ladder (D-075): a transient the instance culls
+    /// write ("geometry/cull clears" writes its address), 0 in a scene without ladders.
+    ladder: u64,
 }
 
 /// Where a frame slot's light lists start in its lamps' buffer, bytes: after the lamps.
@@ -1201,6 +1214,8 @@ pub struct MeshletSceneBuilder {
     /// The street lamps lit beyond each frame's set ([`MeshletSceneBuilder::set_far_lamps`],
     /// #284).
     far_lamps: Option<crate::lamps::FarLamps>,
+    /// Some mesh has a next step on a ladder ([`MeshletSceneBuilder::set_ladder`], D-075).
+    ladders: bool,
     /// What the scene keeps alive ([`MeshletSceneBuilder::keep`]).
     kept: Vec<Box<dyn std::any::Any + Send>>,
 }
@@ -1306,6 +1321,10 @@ fn mesh_record(mesh: &MeshletMesh, meshlet_offset: u32) -> (GpuMesh, u32, u32) {
         root_error_max,
         root_reach_max,
         material: MaterialTable::DEFAULT.0,
+        ladder_next: u32::MAX,
+        ladder_px: 0.0,
+        ladder_band: 0.0,
+        ladder_pad: 0,
     };
     let finest = mesh.meshlets.iter().filter(|m| m.lod_level == 0).count() as u32;
     let sections = mesh
@@ -1520,7 +1539,7 @@ impl MeshletSceneBuilder {
         let center = rotation * (Vec3::from(info.center) * scale) + position.local;
         self.total_triangles += u64::from(info.triangle_count);
         self.finest_clusters += u64::from(self.mesh_finest[mesh.0 as usize]);
-        self.work_bound += u64::from(info.work_bound());
+        self.work_bound += u64::from(self.ladder_work_bound(&info));
         self.instance_meshlets += u64::from(info.meshlet_count);
         self.instances.push(GpuInstance {
             cell: position.cell.to_array(),
@@ -1572,6 +1591,48 @@ impl MeshletSceneBuilder {
         self.far_lamps = crate::lamps::FarLamps::new(lamps);
     }
 
+    /// What an instance of the mesh `info` can put in the work lists: its mesh's work and, on a
+    /// ladder ([`Self::set_ladder`]), the next mesh's too (both while it crosses).
+    fn ladder_work_bound(&self, info: &GpuMesh) -> u32 {
+        let next = self.meshes.get(info.ladder_next as usize);
+        info.work_bound() + next.map_or(0, GpuMesh::work_bound)
+    }
+
+    /// Puts `next` after `mesh` on its ladder (D-075, #302): an instance of `mesh` whose sphere
+    /// stands under `size_px` output pixels across draws `next` in its stead, the same instance
+    /// (its transform, its material rows: `next`'s sections name the same rows), and in a band
+    /// of `band` of that size either side of it both, each pixel keeping one of them by the
+    /// frame's noise (a dithered crossing the anti-aliasing's history averages). Each
+    /// instance's size is taken up to 15 % off, by its id, so a wood crosses tree by tree.
+    ///
+    /// Call it before adding `mesh`'s instances: their spheres grow to hold `next`. The two
+    /// meshes must agree on their texture coordinates and neither be skinned (the frame reads
+    /// those from the instance's mesh). The rays keep meeting `mesh` (one shape per tree for
+    /// them, D-075), and `next`'s own ladder is not followed.
+    pub fn set_ladder(&mut self, mesh: MeshId, next: MeshId, size_px: f32, band: f32) {
+        assert!(mesh != next, "a mesh is not its own next step");
+        let near = self.meshes[mesh.0 as usize];
+        let far = self.meshes[next.0 as usize];
+        assert_eq!(
+            (near.uvs, near.flags),
+            (far.uvs, far.flags),
+            "a ladder's meshes agree on their texture coordinates and flags"
+        );
+        assert!(
+            near.skin == u32::MAX && far.skin == u32::MAX,
+            "no skinned mesh on a ladder"
+        );
+        // The instance's sphere is its mesh's: grown round the next mesh's, about the same
+        // centre (the culls' LOD tables are measured from it).
+        let reach = (Vec3::from(far.center) - Vec3::from(near.center)).length() + far.radius;
+        let record = &mut self.meshes[mesh.0 as usize];
+        record.radius = record.radius.max(reach);
+        record.ladder_next = next.0;
+        record.ladder_px = size_px.max(1.0);
+        record.ladder_band = band.clamp(0.01, 0.9);
+        self.ladders = true;
+    }
+
     /// Number of instances so far.
     pub fn instance_count(&self) -> usize {
         self.instances.len()
@@ -1591,7 +1652,7 @@ impl MeshletSceneBuilder {
             let n = u64::from(count);
             self.total_triangles += u64::from(info.triangle_count) * n;
             self.finest_clusters += u64::from(self.mesh_finest[mesh.0 as usize]) * n;
-            self.work_bound += u64::from(info.work_bound()) * n;
+            self.work_bound += u64::from(self.ladder_work_bound(&info)) * n;
             self.instance_meshlets += u64::from(info.meshlet_count) * n;
             // Placeholders: the GPU pass writes every one of them before the first frame.
             self.instances.extend(std::iter::repeat_n(
@@ -1911,6 +1972,8 @@ impl MeshletSceneBuilder {
         let shown =
             |f: fn(&GpuMaterial) -> bool| self.materials.iter().zip(&used).any(|(m, &u)| u && f(m));
         let (cutouts, jelly) = (shown(GpuMaterial::cut_out), shown(GpuMaterial::jelly));
+        // A ladder's crossing takes the cut-outs' raster (D-075).
+        let cutouts = cutouts || self.ladders;
         let materials = device.create_buffer_with_data(
             &self.materials,
             usage,
@@ -2118,6 +2181,7 @@ impl MeshletSceneBuilder {
             material_count: self.materials.len() as u32,
             cutouts,
             jelly,
+            ladders: self.ladders,
             ground_window: Cell::new(NO_GROUND_WINDOW),
             _kept: std::mem::take(&mut self.kept),
             planet: Cell::new(GpuPlanet::default()),
@@ -2337,6 +2401,9 @@ pub struct MeshletScene {
     /// Whether a row an instance draws with is jelly: the sun's shadow rays then see through it
     /// and are tinted by it (#180).
     pub jelly: bool,
+    /// Whether a mesh has a next step on a ladder (D-075, [`MeshletSceneBuilder::set_ladder`]):
+    /// the frames then write each such instance's crossing.
+    ladders: bool,
     /// The ground window (#197, [`Self::set_ground_window`]), as the frame block holds it.
     ground_window: Cell<[f32; 4]>,
     /// The planet ([`Self::set_planet`]), as the frame block holds it.
@@ -3253,6 +3320,8 @@ struct MeshPassIo {
     raster: forge_gpu::BufferHandle,
     /// The clusters pass 1 leaves to pass 2 (issue #92).
     rejects: forge_gpu::BufferHandle,
+    /// Per instance, its crossing of its ladder this frame (D-075), in a scene with ladders.
+    ladder: Option<forge_gpu::BufferHandle>,
     /// The software rasteriser's samples, when it runs this frame.
     vis64: Option<forge_gpu::BufferHandle>,
     stats: forge_gpu::BufferHandle,
@@ -4122,7 +4191,7 @@ impl MeshletRenderer {
                 .far_lamps
                 .as_ref()
                 .map_or(0, |l| l.shares[slot.index].address()),
-            far_pad: 0,
+            ladder: 0,
         }
     }
 
@@ -4226,6 +4295,15 @@ impl MeshletRenderer {
                 name: "deferred instances",
                 size: scene.deferred_bytes,
                 usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
+            }),
+            // Per instance on a ladder (D-075), its crossing this frame: written by the instance
+            // culls, read by the cluster culls and the cut-outs' raster.
+            ladder: scene.ladders.then(|| {
+                graph.transient_buffer(TransientBufferDesc {
+                    name: "ladder crossings",
+                    size: 4 * transient_instances(scene.instance_count),
+                    usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+                })
             }),
             // On the fallback path, one `VkDrawIndexedIndirectCommand` per hardware-drawn
             // cluster of the pass being drawn, the cut-out ones' in a second half (#265).
@@ -4458,7 +4536,7 @@ impl MeshletRenderer {
         // raced the device's writes of two frames before, which nothing made available to it.
         let (indirect, clusters): (&'f GraphBuffer, &'f GraphBuffer) =
             (&scene.indirect[slot.index], &scene.clusters[slot.index]);
-        let deferred_handle = io.deferred;
+        let (deferred_handle, ladder_handle) = (io.deferred, io.ladder);
         let cells = self.instance_cells(&params);
         let cell_list: &'f GraphBuffer = &scene.cell_lists[slot.index];
         let mut clears = graph
@@ -4493,6 +4571,7 @@ impl MeshletRenderer {
                 // Without occlusion there is no pass 2, and no list for it.
                 block.rejects = resources.buffer_address(rejects_handle);
                 block.deferred = resources.buffer(deferred_handle).address();
+                block.ladder = ladder_handle.map_or(0, |h| resources.buffer(h).address());
                 frame_buffer.write(offset, &[block]);
             }
             commands.update_buffer(indirect, 0, &INDIRECT_START);
@@ -4534,6 +4613,7 @@ impl MeshletRenderer {
             .pass("geometry/instance cull")
             .buffer(io.work, BufferAccess::ShaderWrite(compute))
             .buffer(io.roots, BufferAccess::ShaderWrite(compute))
+            .buffer_if(io.ladder, BufferAccess::ShaderWrite(compute))
             .buffer(io.indirect, BufferAccess::ShaderReadWrite(compute))
             .buffer(io.lookback, BufferAccess::ShaderReadWrite(compute))
             .buffer(io.deferred, BufferAccess::ShaderWrite(compute))
@@ -5411,6 +5491,7 @@ impl MeshletRenderer {
             .buffer(io.indirect, indirect)
             .buffer(io.work, BufferAccess::ShaderRead(compute))
             .buffer(io.roots, BufferAccess::ShaderRead(compute))
+            .buffer_if(io.ladder, BufferAccess::ShaderRead(compute))
             .buffer(io.clusters, BufferAccess::ShaderReadWrite(compute))
             .buffer(io.cluster_lookback, BufferAccess::ShaderReadWrite(compute))
             .buffer(io.visible, BufferAccess::ShaderWrite(compute))
@@ -5494,6 +5575,7 @@ impl MeshletRenderer {
             .buffer(io.indirect, BufferAccess::ShaderReadWrite(compute))
             .buffer(io.work, BufferAccess::ShaderWrite(compute))
             .buffer(io.roots, BufferAccess::ShaderWrite(compute))
+            .buffer_if(io.ladder, BufferAccess::ShaderReadWrite(compute))
             .buffer(io.lookback, BufferAccess::ShaderReadWrite(compute))
             .buffer(io.stats, BufferAccess::ShaderReadWrite(compute))
             .buffer_if(io.instances, BufferAccess::ShaderRead(compute))
@@ -5604,6 +5686,11 @@ impl MeshletRenderer {
                 ),
         };
         builder
+            // The cut-outs' fragments dither the ladders' crossings (D-075).
+            .buffer_if(
+                io.ladder.filter(|_| cutouts.is_some()),
+                BufferAccess::ShaderRead(S::FRAGMENT_SHADER),
+            )
             .image(io.visibility, ImageAccess::ColorAttachment)
             .image(io.depth, ImageAccess::DepthAttachment)
             .run(move |resources, commands| {
@@ -5978,6 +6065,36 @@ mod tests {
                 .iter()
                 .zip(1u32..)
                 .all(|(i, k)| i.id == k)
+        );
+    }
+
+    /// A ladder (D-075): the mesh names its next step, its instances' spheres hold the next
+    /// mesh's, and they may list both meshes' work while they cross.
+    #[test]
+    fn a_ladder_grows_its_instances_sphere_and_work() {
+        let small = forge_geom::procedural::asteroid(forge_core::Seed::new(7), 16, 1.0, 0.3);
+        let large = forge_geom::procedural::asteroid(forge_core::Seed::new(8), 16, 1.6, 0.3);
+        let mut builder = MeshletSceneBuilder::new();
+        let near = builder.add_mesh(&MeshletMesh::build(&small));
+        let far = builder.add_mesh(&MeshletMesh::build(&large));
+        let alone = builder.meshes[near.0 as usize];
+        assert_eq!(alone.ladder_next, u32::MAX);
+        builder.set_ladder(near, far, 40.0, 0.25);
+        assert!(builder.ladders);
+        let record = builder.meshes[near.0 as usize];
+        let next = builder.meshes[far.0 as usize];
+        assert_eq!((record.ladder_next, record.ladder_px), (far.0, 40.0));
+        let reach = (Vec3::from(next.center) - Vec3::from(record.center)).length() + next.radius;
+        assert!(record.radius >= reach - 1e-5 && record.radius >= alone.radius);
+        assert_eq!(
+            record.center, alone.center,
+            "the LOD tables are measured from it"
+        );
+        builder.add_instance(near, Mat4::from_scale(Vec3::splat(2.0)));
+        assert_eq!(builder.instances[0].radius, record.radius * 2.0);
+        assert_eq!(
+            builder.work_bound,
+            u64::from(record.work_bound() + next.work_bound())
         );
     }
 }

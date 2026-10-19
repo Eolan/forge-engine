@@ -6609,5 +6609,37 @@ questions of `research/forests-and-grass.md` §9 answered as recommended:
 per-instance crossing; two TLAS instances per tree with the shadow-ray bit; the impostor baker
 and its shading class; the grass pass; micromaps last.
 
+**Step 2 built** (#302, 2026-10-19), behind city-plan's `--tree-ladder [PX]` until the owner has
+looked:
+- **The record:** `MeshletSceneBuilder::set_ladder(mesh, next, size_px, band)` names a mesh's next
+  step, the projected size of an instance's sphere (output pixels across) at which it is half
+  crossed, and the band (a share of that size either side). The instance's sphere grows to hold
+  the next mesh's, about the same centre (the culls' LOD tables are measured from it). One step a
+  mesh for now: the next mesh's own ladder is not followed.
+- **The choice,** in both instance culls (`ladder_crossing`): the sphere's size, taken up to 15 %
+  off by the instance's id, against the band. The crossing `t` (0 the mesh, 1 the next) is
+  written per instance (`Frame::ladder`, a transient); the instance appends its mesh's work, the
+  next mesh's (tagged `INSTANCE_LADDER_BIT`, which the cluster cull reads to pick the mesh), or
+  both. Every list keeps its cull order, so the ids, and the images, stay the same from run to run.
+- **The crossing:** a crossing instance's clusters of both meshes take the cut-outs' raster
+  (`CUTOUT_LADDER`), where each pixel keeps its mesh's where `spatio_temporal_noise(..).x ≥ t`
+  and the next mesh's below: no hole and no double, averaged by DLAA's history. The resolve tells
+  the two apart by the cluster's index (outside its instance's mesh's run: the next mesh), so the
+  two meshes must agree on their texture coordinates and neither be skinned.
+- **The rays** keep meeting the mesh itself (the cards), as decided.
+- **The village's plants:** each grown plant cooks its crown's shells (`grown_shells`, a row of
+  their own at 0.55 of the leaves' colour: at the leaves' own a far wood stood 1.75 times as
+  bright as its cards). The crossing is set where the shells' lumps stand `PX` pixels across (6 by
+  default, `GrownPlant::lump`): measured on the sphere alone, the shrubs crossed at 7 m.
+- **Measured** (the village from the air, 1600 × 900, DLAA): the frame 4.69 → 4.34 ms (meshlet
+  pass 1 1.30 → 1.10, cluster cull 1 0.51 → 0.34); on the ground, where more trees cross than have
+  crossed, 4.81 → 4.72 and 4.43 → 4.46 (pass 1 +0.08 ms: both levels and the cut-outs' raster). A
+  still camera's frames 10 apart differ on 0.06–0.07 % of the pixels with the ladder, 0.08 %
+  without. The A/B harness with the ladder on (`--no-occlusion`, the fallback, `--show-culled`)
+  differs in 0 px; without it every image is the accepted set's. The far woods, whose cards the
+  cluster LOD had thinned to bare twigs, stand whole (`reports/2026-10-19/village-tree-ladder.png`).
+- **Left:** the look of the shells for the owner (smooth lumps, one colour per tree), timings on
+  the serial frame, then step 3.
+
 *(research: forests-and-grass.md, vegetation-materials.md, flora.md; D-013, D-016, D-029, D-036,
 D-053, D-063; issues #297, #300, #301, #302, #303)*

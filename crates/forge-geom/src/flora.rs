@@ -2,7 +2,8 @@
 //! branch graph ([`forge_flora::grow`]) as wood, crown lumps and leaf cards ([`grown_mesh`]), and
 //! the opaque proxy the probes' rays meet in the cards' stead ([`grown_proxy`], #297). Sections:
 //! 0 the bark, 1 the crown's cores, 2 the leaf cards (cut from the leaf atlas,
-//! `forge_render::textures::leaves`), 3 the proxy's crown. [`grow_plant`] grows and meshes one.
+//! `forge_render::textures::leaves`), 3 the proxy's crown, 4 the crown's shells on its ladder
+//! ([`grown_shells`], D-075). [`grow_plant`] grows and meshes one.
 
 use forge_flora::Conditions;
 use forge_flora::graph::TreeGraph;
@@ -11,13 +12,18 @@ use glam::Vec3;
 
 use crate::procedural::TriMesh;
 
-/// A grown plant's meshes: the drawn one ([`grown_mesh`]) and the probes' proxy
-/// ([`grown_proxy`]), with its height and its crown's width, metres.
+/// A grown plant's meshes: the drawn one ([`grown_mesh`]), the probes' proxy ([`grown_proxy`])
+/// and the next step on its ladder ([`grown_shells`]), with its height and its crown's width, metres.
 pub struct GrownPlant {
     /// The plant as drawn: sections 0 to 2.
     pub mesh: TriMesh,
     /// What the probes' rays meet in its stead: sections 0 and 3.
     pub proxy: TriMesh,
+    /// The plant at the middle of its ladder (D-075's L1, [`grown_shells`]): sections 0 and 4.
+    pub shells: TriMesh,
+    /// Its crown's shells' mean diameter, metres: where they stand in for the cards, a lump
+    /// should be a few pixels across (the ladder's crossing, D-075).
+    pub lump: f32,
     /// Its height, at least 10 cm.
     pub height: f32,
     /// Its crown's width, at least 10 cm.
@@ -32,9 +38,14 @@ pub fn grow_plant(s: &Species, conditions: &Conditions) -> GrownPlant {
     let broad = s.foliage == Foliage::Broad;
     let graph = forge_flora::grow(s, conditions);
     let lift = conditions.pruning.lift as f32;
+    let lumps = crown_lumps(&graph, shrub, broad, lift);
+    let lump =
+        2.0 * CROWN_SHELL * lumps.iter().map(|l| l.1).sum::<f32>() / lumps.len().max(1) as f32;
     GrownPlant {
         mesh: grown_mesh(&graph, shrub, broad, lift, s.look.spray),
         proxy: grown_proxy(&graph, shrub, broad, lift),
+        shells: grown_shells(&graph, shrub, broad, lift),
+        lump: lump.max(0.05),
         height: graph.height().max(0.1),
         crown: graph.crown_width().max(0.1),
     }
@@ -95,8 +106,8 @@ pub fn grown_proxy(g: &TreeGraph, shrub: bool, broad: bool, lift: f32) -> TriMes
 
 /// [`grown_mesh`]'s plant at the middle of D-075's ladder (L1, #302): its wood, and each lump of
 /// its crown a closed shell of [`CROWN_SHELL`] of the lump's radius, a bumped icosahedron of 20
-/// triangles (section 3, the crown's row: a lump is a few pixels where it stands in for the cards,
-/// from about 30 m), fewer than the cards and their core:
+/// triangles (section 4, a row of its own: a lump is a few pixels where it stands in for the
+/// cards, [`GrownPlant::lump`]), fewer than the cards and their core:
 /// closed, the cluster LOD simplifies it, as it cannot simplify the cards. Not #297's proxy for
 /// the probes, which keeps to three fifths of the lumps and would shrink the crown in sight.
 pub fn grown_shells(g: &TreeGraph, shrub: bool, broad: bool, lift: f32) -> TriMesh {
@@ -114,7 +125,7 @@ pub fn grown_shells(g: &TreeGraph, shrub: bool, broad: bool, lift: f32) -> TriMe
             i as u32 % 8,
             &faces,
         );
-        mesh.sections[first..].fill(3);
+        mesh.sections[first..].fill(4);
     }
     mesh.uvs = vec![[0.0, 0.0]; mesh.positions.len()];
     mesh
@@ -435,7 +446,7 @@ mod tests {
             let lift = conditions.pruning.lift as f32;
             let drawn = grown_mesh(&graph, shrub, broad, lift, s.look.spray);
             let shells = grown_shells(&graph, shrub, broad, lift);
-            assert!(shells.sections.iter().all(|&s| s == 0 || s == 3));
+            assert!(shells.sections.iter().all(|&s| s == 0 || s == 4));
             assert!(
                 shells.triangle_count() < drawn.triangle_count(),
                 "{}: {} triangles against {}",
@@ -443,7 +454,7 @@ mod tests {
                 shells.triangle_count(),
                 drawn.triangle_count()
             );
-            let (cards, crown) = (width(&drawn, 2), width(&shells, 3));
+            let (cards, crown) = (width(&drawn, 2), width(&shells, 4));
             assert!(
                 (0.75..1.2).contains(&(crown / cards)),
                 "{}: the shells {crown:.2} m across, the cards {cards:.2} m",

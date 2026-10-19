@@ -94,7 +94,16 @@ public struct Mesh
     public float root_error_max;
     public float root_reach_max;
     public uint material;          // the material its instances take unless they name their own (placement)
+    // D-075's ladder (#302): the mesh its instances cross to when they stand smaller on screen,
+    // LADDER_NONE for none; the projected size of an instance's sphere, output pixels across,
+    // at which the crossing is half done; and the band's half width, a share of that size.
+    public uint ladder_next;
+    public float ladder_px;
+    public float ladder_band;
+    public uint ladder_pad;
 };
+
+static const uint LADDER_NONE = 0xFFFFFFFFu;
 
 // A row of the material table (`GpuMaterial` in crates/forge-render/src/material.rs, from
 // the D-007 record in crates/forge-core/src/material.rs). Colours are in units of a white
@@ -151,6 +160,7 @@ static const uint MATERIAL_FLAG_GLAZED = 2048;  // a window's glass a probe's ra
 static const uint MATERIAL_FLAG_LAMP = 4096;    // a lamp's glowing part: the probes' rays take none of its glow (D-065)
 static const uint MATERIAL_FLAG_DRAWN_AFTER = 8192; // left out of the visibility pass, drawn after the resolve; the rays meet it (D-065's glass)
 static const uint CUTOUT_GROUND_WINDOW = 1u << 31; // `cluster_cutouts`: windowed ground reaching into the ground window (#197)
+static const uint CUTOUT_LADDER = 1u << 30;        // `describe_cluster`: a cluster of an instance crossing its ladder (D-075), dithered (`cutout_kept`)
 static const uint MESH_WINDOWED_GROUND = 1;     // Mesh::flags: its fragments in the frame's ground window go (#197)
 static const uint MESH_SCENE_SHADED = 2;        // Mesh::flags: a ground window's mesh, shaded where it stands in the scene (#197)
 static const uint INSTANCE_STILL = 1;          // Instance::flags: a mover with no motion of its own this frame (#197)
@@ -256,6 +266,8 @@ public static const uint FLAG_SHADOW_REFERENCE = 8388608;
 public static const uint FLAG_JELLY = 16777216;
 // Tint each surface by the probes' region that lights it (D-068).
 public static const uint FLAG_SHOW_REGIONS = 33554432;
+// Debug: tint the clusters of the meshes instances cross to on their ladder (D-075) blue.
+public static const uint FLAG_SHOW_LADDER = 67108864;
 
 static const uint PAGE_NONE = 0xFFFFFFFF;           // an absent page in `page_table`, no page in `child_page`
 static const uint MESHLET_INDEX_MASK = 0x3FFFFFFFu;
@@ -459,7 +471,7 @@ public struct Frame
     public DecalGrid* decals;       // the decals on the static surfaces (D-074), null: none
     public FarLamps* far_lamps;     // the street lamps lit beyond the frame's set (#284), null: none
     public float* far_shares;       // their shares of their light this frame, unshadowed
-    public uint64_t far_pad;
+    public float* ladder;           // per instance on a ladder (D-075), this frame's crossing (`ladder_crossing`), written by the instance culls; null: no ladder
 };
 
 // Whether this thread's rays meet the movers: every pass's but the probes' unless their scene asks
@@ -845,6 +857,65 @@ float3 cell_center_relative(Frame* f, CellBounds b)
     return cells_relative(f, b.cell, b.center);
 }
 
+// ------------------------------------------------------------ the ladder (D-075) ---
+//
+// A mesh can name the next mesh down its ladder (`Mesh::ladder_next`, #302): a tree's leaf cards
+// near, its crown's closed shells farther. Each frame the instance culls measure every instance
+// of such a mesh (`ladder_crossing`): above the band it draws its mesh, below it the next, and
+// inside it both, its clusters in the cut-outs' raster (`CUTOUT_LADDER`), where each pixel keeps
+// one of the two by the frame's spatio-temporal noise against the crossing (`cutout_kept`):
+// complementary, so no hole and no double, and the frames' noise averages the two (DLAA's
+// history), as the gratings' bars. The crossing is written per instance (`Frame::ladder`) and a
+// work item or root entry of the next mesh carries INSTANCE_LADDER_BIT.
+
+// With the instance in a work item or a root entry: its clusters are of the next mesh on its
+// mesh's ladder. INSTANCE_HIDDEN_BIT (instance cull 2's hidden instances) is the other tag.
+static const uint INSTANCE_LADDER_BIT = 0x40000000u;
+static const uint INSTANCE_TAG_BITS = 0xC0000000u;
+
+// The mesh an instance's work item or root entry tagged `tag` draws.
+uint drawn_mesh(Frame* f, Instance inst, uint tag)
+{
+    return (tag & INSTANCE_LADDER_BIT) != 0 ? f[0].meshes[inst.mesh].ladder_next : inst.mesh;
+}
+
+// A value in [0, 1) from `n`, the same for the same `n`.
+float hash_unit(uint n)
+{
+    n ^= n >> 16;
+    n *= 0x7feb352du;
+    n ^= n >> 15;
+    n *= 0x846ca68bu;
+    n ^= n >> 16;
+    return float(n >> 8) * (1.0 / 16777216.0);
+}
+
+// How far `inst` has crossed to the next mesh on its mesh's ladder this frame: 0 its mesh alone
+// (or no ladder), 1 the next alone, between both, by the projected size of its sphere in output
+// pixels (the render's over `texture_lod_scale`) against the mesh's `ladder_px`, linear over the
+// band. Each instance's size is taken up to 15 % off by its id's hash, so a wood crosses tree by
+// tree, not along a circle round the camera.
+float ladder_crossing(Frame* f, Instance inst)
+{
+    Mesh* mesh = f[0].meshes + inst.mesh;
+    if (f[0].ladder == nullptr || mesh[0].ladder_next == LADDER_NONE)
+        return 0.0;
+    float dist = max(length(instance_center_relative(f, inst)), f[0].znear);
+    float k = f[0].p11 * 0.5 * f[0].viewport_height / f[0].texture_lod_scale;
+    float px = 2.0 * inst.radius * k / dist * (0.85 + 0.3 * hash_unit(inst.id));
+    float band = max(mesh[0].ladder_band, 1e-3);
+    return saturate((1.0 + band - px / mesh[0].ladder_px) / (2.0 * band));
+}
+
+// Whether the clusters of instance `instance` are crossing this frame (written by its cull).
+bool ladder_crossing_now(Frame* f, uint instance, Instance inst)
+{
+    if (f[0].ladder == nullptr || f[0].meshes[inst.mesh].ladder_next == LADDER_NONE)
+        return false;
+    float t = f[0].ladder[instance];
+    return t > 0.0 && t < 1.0;
+}
+
 // An instance's rotation and scale and its origin relative to the camera, built once where
 // several of its points are needed (the cluster cull takes up to five per cluster). Rebuilt
 // at every point, the quaternion's matrix and the camera's cell and offset made the streamed
@@ -1206,7 +1277,11 @@ void describe_cluster(Frame* f, inout ClusterVerdict v, Meshlet m)
     v.vertex_count = m.vertex_count;
     v.payload = payload_base(f, m);
     v.lod_level = m.lod_level;
-    v.cutouts = cluster_cutouts(f, f[0].instances[v.instance], m);
+    Instance inst = f[0].instances[v.instance];
+    v.cutouts = cluster_cutouts(f, inst, m);
+    // Both meshes of an instance crossing its ladder take the cut-outs' raster, dithered (D-075).
+    if (ladder_crossing_now(f, v.instance, inst))
+        v.cutouts |= CUTOUT_LADDER;
 }
 
 // Pass 2's test of a cluster pass 1 did not draw: this frame's pyramid. With
@@ -1305,9 +1380,10 @@ ClusterVerdict cull_cluster(Frame* f, uint item, uint thread, bool streamed)
         local_meshlet = local_group * TASK_GROUP_SIZE + thread;
     }
     bool hidden_instance = (v.instance & INSTANCE_HIDDEN_BIT) != 0;
-    v.instance &= ~INSTANCE_HIDDEN_BIT;
+    uint tag = v.instance & INSTANCE_TAG_BITS;
+    v.instance &= ~INSTANCE_TAG_BITS;
     Instance* inst = f[0].instances + v.instance;
-    Mesh* mesh = f[0].meshes + inst[0].mesh;
+    Mesh* mesh = f[0].meshes + drawn_mesh(f, inst[0], tag);
     bool frustum = (f[0].flags & FLAG_FRUSTUM_CULLING) != 0;
     bool show_culled = (f[0].flags & FLAG_SHOW_CULLED) != 0;
     bool instance_visible = !frustum || sphere_in_frustum(f, instance_center_relative(f, inst[0]), inst[0].radius);
@@ -1782,11 +1858,12 @@ uint instance_roots(Frame* f, Mesh* mesh, float scale, float dist)
 // that can hold selected clusters at its distance, in increasing order, each once. Returns
 // how many; with `write`, also writes them to the work list from `base`, the instance tagged
 // with `tag`: the items `lane`, `lane + stride`, ... (a thread writes them all with lane 0 and
-// stride 1; a workgroup shares a large instance's, `append_instance_work`).
+// stride 1; a workgroup shares a large instance's, `append_instance_work`). With
+// INSTANCE_LADDER_BIT in `tag`, the groups of the next mesh on its ladder.
 uint instance_items(Frame* f, uint instance_index, uint base, bool write, uint tag, uint lane = 0, uint stride = 1)
 {
     Instance* inst = f[0].instances + instance_index;
-    Mesh* mesh = f[0].meshes + inst[0].mesh;
+    Mesh* mesh = f[0].meshes + drawn_mesh(f, inst[0], tag);
     float scale = inst[0].scale;
     float dist = length(instance_center_relative(f, inst[0]));
     uint groups = (mesh[0].meshlet_count + TASK_GROUP_SIZE - 1) / TASK_GROUP_SIZE;
@@ -1824,7 +1901,7 @@ groupshared uint s_root_counts[64];
 groupshared uint2 s_total;
 groupshared uint s_deferred[64];
 groupshared uint s_deferred_total;
-groupshared uint2 s_heavy[64]; // (tagged instance, first slot) of the workgroup's instances with many work items
+groupshared uint2 s_heavy[128]; // (tagged instance, first slot) of the workgroup's meshes with many work items, two an instance on a ladder
 groupshared uint s_heavy_count;
 
 // An instance with more work items than this has them written by its whole workgroup: the
@@ -1838,19 +1915,38 @@ static const uint HEAVY_ITEMS = 64;
 // Instance cull 1 writes the lists from their start (segment 1); instance cull 2 (`second`)
 // after segment 1 (segment 2, issue #38). The last workgroup writes the grid its cluster cull
 // reads, over the items that fit in `work_capacity` plus the root runs, and counts the demand;
-// each group of an instance is appended at most once.
+// each group of an instance is appended at most once. An instance on a ladder (D-075) has its
+// crossing written (`Frame::ladder`) and appends its mesh's work, the next mesh's (tagged
+// INSTANCE_LADDER_BIT) or, crossing, both: its mesh's first.
 void append_instance_work(Frame* f, uint64_t* status, uint ticket, uint groups, uint thread,
                           uint instance_index, bool visible, uint tag, bool second)
 {
-    uint count = 0;
-    uint roots = 0;
+    uint count = 0;      // work items, of both meshes
+    uint roots = 0;      // root entries, of both meshes
+    uint own_count = 0;  // of those, its own mesh's (the next mesh's follow)
+    uint own_roots = 0;
     if (visible)
     {
         Instance* inst = f[0].instances + instance_index;
         Mesh* mesh = f[0].meshes + inst[0].mesh;
         float dist = length(instance_center_relative(f, inst[0]));
-        roots = instance_roots(f, mesh, inst[0].scale, dist);
-        count = roots > 0 ? 0u : instance_items(f, instance_index, 0, false, 0u);
+        float t = ladder_crossing(f, inst[0]);
+        if (mesh[0].ladder_next != LADDER_NONE && f[0].ladder != nullptr)
+            f[0].ladder[instance_index] = t;
+        if (t < 1.0)
+        {
+            own_roots = instance_roots(f, mesh, inst[0].scale, dist);
+            own_count = own_roots > 0 ? 0u : instance_items(f, instance_index, 0, false, 0u);
+        }
+        count = own_count;
+        roots = own_roots;
+        if (t > 0.0)
+        {
+            Mesh* next = f[0].meshes + mesh[0].ladder_next;
+            uint next_roots = instance_roots(f, next, inst[0].scale, dist);
+            roots += next_roots;
+            count += next_roots > 0 ? 0u : instance_items(f, instance_index, 0, false, INSTANCE_LADDER_BIT);
+        }
     }
     s_counts[thread] = count;
     s_root_counts[thread] = roots;
@@ -1911,28 +2007,38 @@ void append_instance_work(Frame* f, uint64_t* status, uint ticket, uint groups, 
         s_heavy_count = 0;
     GroupMemoryBarrierWithGroupSync();
     uint slot = base.x + first.x + s_counts[thread];
-    if (count > HEAVY_ITEMS)
+    // Its own mesh's items, then the next mesh's on its ladder (`tag` is 0 or
+    // INSTANCE_HIDDEN_BIT, the next mesh's add INSTANCE_LADDER_BIT).
+    for (uint part = 0; part < 2; part++)
     {
-        uint k;
-        InterlockedAdd(s_heavy_count, 1, k);
-        s_heavy[k] = uint2(instance_index | tag, slot); // the tag is 0 or INSTANCE_HIDDEN_BIT
+        uint n = part == 0 ? own_count : count - own_count;
+        uint tagged = instance_index | tag | (part == 0 ? 0u : INSTANCE_LADDER_BIT);
+        uint at = slot + (part == 0 ? 0u : own_count);
+        if (n > HEAVY_ITEMS)
+        {
+            uint k;
+            InterlockedAdd(s_heavy_count, 1, k);
+            s_heavy[k] = uint2(tagged, at);
+        }
+        else if (n > 0)
+            instance_items(f, instance_index, at, true, tagged & INSTANCE_TAG_BITS);
     }
-    else if (count > 0)
-        instance_items(f, instance_index, slot, true, tag);
     GroupMemoryBarrierWithGroupSync();
     for (uint h = 0; h < s_heavy_count; h++)
     {
         uint tagged = s_heavy[h].x;
-        instance_items(f, tagged & ~INSTANCE_HIDDEN_BIT, s_heavy[h].y, true, tagged & INSTANCE_HIDDEN_BIT, thread, 64);
+        instance_items(f, tagged & ~INSTANCE_TAG_BITS, s_heavy[h].y, true, tagged & INSTANCE_TAG_BITS, thread, 64);
     }
     if (roots > 0)
     {
-        Mesh* mesh = f[0].meshes + f[0].instances[instance_index].mesh;
+        Instance inst = f[0].instances[instance_index];
+        uint entry = base.y + first.y + s_root_counts[thread];
         for (uint k = 0; k < roots; k++)
         {
-            uint entry = base.y + first.y + s_root_counts[thread] + k;
-            if (entry < f[0].work_capacity)
-                f[0].roots[entry] = uint2(instance_index | tag, mesh[0].roots[k]);
+            uint part_tag = k < own_roots ? 0u : INSTANCE_LADDER_BIT;
+            Mesh* mesh = f[0].meshes + drawn_mesh(f, inst, part_tag);
+            if (entry + k < f[0].work_capacity)
+                f[0].roots[entry + k] = uint2(instance_index | tag | part_tag, mesh[0].roots[k < own_roots ? k : k - own_roots]);
         }
     }
 }
@@ -2535,6 +2641,16 @@ bool cutout_kept(Frame* f, uint id, float2 uv, bool front, float2 ground, float2
     Instance inst = f[0].instances[record.x];
     if (in_ground_window(f, inst.mesh, ground))
         return false;
+    // An instance crossing its ladder (D-075): its own mesh's pixels where the noise is at or
+    // above the crossing, the next mesh's where it is below. Its next mesh's clusters lie outside
+    // its own mesh's run.
+    if (ladder_crossing_now(f, record.x, inst))
+    {
+        Mesh* mesh = f[0].meshes + inst.mesh;
+        bool next = (record.y & MESHLET_INDEX_MASK) - mesh[0].meshlet_offset >= mesh[0].meshlet_count;
+        if (next != (spatio_temporal_noise(pixel, f[0].noise_frame).x < f[0].ladder[record.x]))
+            return false;
+    }
     Material mat = f[0].materials[inst.material + triangle_section(m, id & ((1u << VISIBILITY_TRIANGLE_BITS) - 1u))];
     // Drawn after the resolve, over what this pass finds behind it (D-065's glass).
     if ((mat.flags & MATERIAL_FLAG_DRAWN_AFTER) != 0)
@@ -5684,6 +5800,9 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
         color = lerp(color, float3(1.0, 0.0, 0.0), 0.8); // a culling error (FLAG_SHOW_CULLED)
     if (software && (f[0].flags & FLAG_SHOW_RASTER) != 0)
         color = lerp(color, float3(0.1, 0.9, 0.3), 0.6); // the software rasteriser's pixels
+    // The next meshes on the ladders (D-075), whose clusters lie outside their instance's mesh's.
+    if ((f[0].flags & FLAG_SHOW_LADDER) != 0 && meshlet_index - mesh.meshlet_offset >= mesh.meshlet_count)
+        color = lerp(color, float3(0.15, 0.35, 1.0) * dot(color, float3(0.3, 0.6, 0.1)) * 2.0, 0.85);
     if ((f[0].flags & FLAG_SHOW_AO) != 0 && s.ao >= 0.0)
         color = float3(s.ao * 0.25); // the occlusion, as a light grey surface in the sun
     if ((f[0].flags & FLAG_SHOW_GI) != 0 && s.sky != nullptr)
