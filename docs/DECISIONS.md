@@ -441,6 +441,19 @@ for a player of about 125 nodes and a pursuer of about 40, `forge_anim::machine`
   are seen by the next update, then cleared.
 - **Built** from TOML (`MachineDef::from_toml`) or in code, bound to a rig's clips by name
   (`Machine::new`), run per character (`Animator`, with `describe` for a live view).
+- **After its first user's run** (the same day: a player of 13 nodes and a pursuer of 38 on its
+  rigs, 598/600 and 480/480 frames as its own interpreter drew them):
+  - **Gaits:** `match_speed` applies to blends too. The natural speed is the blend's root speed as
+    it plays (its clips' travel over a cycle mixed by their weights, times their cycles a second
+    mixed the same way), so a run at 3.4 m/s no longer cycled 1.7 times too fast. The matched
+    rate replaces the node's own.
+  - **In-between clips:** a transition's in-between clip plays at its own rate
+    (`TransitionDef::speed`).
+  - **Missing clips:** `Machine::new_dropping_missing` leaves out what names a clip the rig lacks
+    and lists it (the data names hundreds of clips, a rig carries a few dozen).
+  - **Root motion:** `Animator::root_motion` gives the root's motion over the last update, through
+    blends (the clips' motions mixed, `RootMotion::mix`) and in-between clips.
+  - **Smaller fixes:** numbers compare to 10⁻⁴; posted events are kept once each, at most 32.
 - **Left:** typed event channels in place of strings, and the overlay's or the console's live view
   (the prototype's asks).
 - **Patents:** none read on a machine loaded from local data. Zynga's US 9,463,386 B1 and
@@ -6696,3 +6709,89 @@ looked:
 
 *(research: forests-and-grass.md, vegetation-materials.md, flora.md; D-013, D-016, D-029, D-036,
 D-053, D-063; issues #297, #300, #301, #302, #303)*
+
+## D-076 — Navigation and traversal: a walk field with passage links first, Recast's polygons later ✅ (proposed 2026-10-19, #317, #316; the owner's go the same day, the player's crossing automatic)
+
+**The need** (#317, #316, found by an out-of-tree character test): pursuers walk straight at their
+target and slide along walls, never round a house or a fence. The walker does not know windows or
+fences, so the scene finds the nearest window edge by distance and carries the body by script.
+`game-ai-ecosystems.md` §2 (2026-09-26) chose Recast's pipeline on tiles with Polyanya and ORCA,
+but no decision took it, and it had no patent section. `research/navigation-traversal.md` adds
+one and the first step.
+
+**Proposed** (`navigation-traversal.md` §6):
+- **#317 first: a 2.5D walk field.** It is `walk.rs`'s rasterisation and clearance, as walkable
+  spans per column at 0.10 m in 25.6 m tiles. It is built from the same prisms the capsule sweep
+  uses (walls, partitions, furniture, flights, garden walls, hedges, trunks), on demand round the
+  agents, and rebuilt when a piece changes.
+- **The search:** A* over the spans and the passages' links, with integer octile costs, ties by
+  cell index (D-016) and a node budget. With no path, the agent goes to the reachable cell nearest
+  the goal. Then string pulling, with a link's ends as fixed corners.
+- **The check (#276):** every path is swept with the capsule against the same prisms; a hit is a
+  field bug, counted.
+- **Following:** steering to the next corner, a hand-over at a link, separation first, ORCA after
+  (`dodgy`/RVO2's algorithm with a fixed neighbour order).
+- **#316: passages as data.** A `Passage` (door, window, low fence, tall fence, gap) carries its
+  span, width, sill, head, depth, drop and state. Windows come from the structures' openings,
+  fences from the garden walls, gaps from the kit's breaks, all made with the pieces and never
+  detected from geometry.
+- **The crossing:** chosen by the passage's kind and the agent's archetype in data (climb through,
+  vault, climb, jump), each with its clip, its root motion warped onto the passage (#311), its
+  time (the link's cost) and an exit check that hands back to the controller.
+- **Later:** Recast's polygons and Polyanya for open terrain, with the same link records.
+- **In Rust:** `rerecast` (deterministic with `libm`), `polyanya` and `landmass` stay to read and
+  test against; nothing is bound to C++.
+
+**Patents** (§4; claim 1s read, expiries estimated). None was found on Recast-style generation,
+tiled rebuilds, any-angle search, ORCA or flow fields. The live ones sit at the edges, and the
+proposal keeps clear of each:
+- **Techland, US 8,979,652 B1 and US 9,238,175 B2** (to about 2034): a hook picked by a distance
+  score, the action chosen by its height relative to the player. Here the passage's kind fixes
+  the crossing in data, and the player crosses on a key.
+- **Tencent, US 11,679,331 B2** (to about 2040): a pursuer that leaps at a target out of reach.
+  Here jumps are links, or the agent waits at the nearest reachable cell.
+- **Square Enix, US 11,406,898, US 11,241,621 and US 11,148,054** (to about 2040): a
+  rooms-then-cells search. Here the search is one level until a measured need, then ask.
+- **Disney (now Adeia), US 8,810,566** (to 2033-01): one mesh shared by several radii. Here
+  clearance is kept per cell, or one mesh per radius class later.
+- **Amazon, US 10,792,568:** bottleneck radii sent to clients. Here the sweep stays a test.
+
+**Questions for the owner** (the recommendation in brackets):
+1. Cells: 0.10 m in 25.6 m tiles, or `walk.rs`'s 0.05 m? [0.10 m: a 0.9 m door keeps three free
+   cells for a 0.3 m walker.]
+2. One walker for the field and the controller: the sweep's (step 0.35 m, top 1.95 m) or the
+   physics controller's (step 0.4 m, 1.8 m)? [One record: the controller's step, the sweep's top.]
+3. Who crosses what? [Climbers: windows and low fences; tall fences for athletic archetypes;
+   wheelchair users: doors and ramps.]
+4. The player's crossing: on a context key, or automatic on walking into a low fence? [The key;
+   ask again before an automatic vault (Techland).]
+5. Windows' states (shut, open, broken, barred) switching their links? [Yes; a shut window is a
+   link only for archetypes that break glass.]
+6. Long routes across the village: one level with a node budget, or a hierarchy? [One level until
+   a measured need, then ask (Square Enix, Take-Two).]
+7. When do Recast's polygons and Polyanya take over outdoors? [With the island's terrain; the
+   field stays for buildings and streets.]
+8. A lawyer's reading of Techland's two claims? [Before a public release, not before the
+   prototype.]
+
+**Decided** (the owner, 2026-10-19: "I will follow recommendations", one answer changed, and
+"for your questions we will have to do some tests to see what works or not, but go with your
+best guess or data"):
+- **Questions 1–3 and 5–8 as recommended,** each open to the tests' numbers.
+- **Question 4: the player crosses automatically,** walking into a low fence or a window ("for
+  now"). It is kept clear of Techland's two claims by their two elements:
+  - the passage is the one the player's movement line meets, never one picked from those near by
+    a distance score;
+  - the crossing is the passage's kind's in data, never chosen from its height relative to the
+    body.
+  The lawyer's reading (question 8) stays before a public release.
+- **Space games ahead** ("nav needs to be advanced, but we can start simple"):
+  - the passage and link records and the path query do not depend on the walk field, so other
+    representations can serve the same queries later: Recast's polygons outdoors, a sparse voxel
+    octree for flight and zero gravity (`game-ai-ecosystems.md` §2, Brewer's Warframe octree),
+    a ship's interior in its own moving frame;
+  - a field is built in the frame of what it stands on (a ship's deck, not the world), as the
+    character controller moves with its ground.
+
+*(research: navigation-traversal.md, game-ai-ecosystems.md §2 and §7, animation.md §5; D-012,
+D-016, D-062; issues #90, #276, #311, #316, #317)*
