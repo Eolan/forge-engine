@@ -1283,7 +1283,8 @@ leaves stand 2.15 m high where the opening allows, the transom light over them
 ### Grime at the walls' feet (D-074, #304)
 
 The kit's buildings carry a strip of grime along the foot of each street and court wall where its
-ground storey meets open air, broken at its doors, shopfronts and passages: rain splashed up with
+ground storey meets open air (and the village's garden walls along each face), broken at its
+doors, shopfronts and passages: rain splashed up with
 soil, densest and damp at the ground, its top wandering between about 0.3 and 0.6 m and speckled
 where the splashes thin out. It is a decal (`forge_render::decals`): a box of 0.6 m across the
 wall's face, from 0.1 m under the ground to 1 m up, applied in the resolve between the surface

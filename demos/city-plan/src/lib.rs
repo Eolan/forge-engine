@@ -403,6 +403,49 @@ fn wall_foot_grime(
     decals
 }
 
+/// The grime at the foot of the village's garden walls (`city::walls`, D-074): a strip of decal
+/// kind 0 along each face of each wall within `detail`, as [`wall_foot_grime`] lays it along the
+/// houses' walls.
+fn garden_wall_grime(
+    size: f64,
+    plan: &CityPlan,
+    detail: Option<&Detail>,
+    phase_from: usize,
+) -> Vec<forge_render::Decal> {
+    let Some(d) = detail else {
+        return Vec::new();
+    };
+    let mut decals = Vec::new();
+    for w in &plan.walls {
+        let ring = w.ring();
+        if geom::signed_area(&ring) <= 0.0 || ring[0].distance(d.centre) > d.radius {
+            continue;
+        }
+        for (k, &a) in ring.iter().enumerate() {
+            let b = ring[(k + 1) % ring.len()];
+            let length = a.distance(b);
+            if length < 0.3 {
+                continue;
+            }
+            let t = (b - a) / length;
+            let out = DVec2::new(t.y, -t.x);
+            decals.push(forge_render::Decal {
+                centre: world(size, (a + b) * 0.5, ground::WALK_LEVEL + 0.45),
+                rotation: glam::Quat::from_mat3(&glam::Mat3::from_cols(
+                    Vec3::new(-t.x as f32, 0.0, -t.y as f32),
+                    Vec3::new(out.x as f32, 0.0, out.y as f32),
+                    -Vec3::Y,
+                )),
+                half: Vec3::new(length as f32 * 0.5, 0.3, 0.55),
+                kind: 0,
+                repeat: (length as f32 * 0.5).round().max(1.0),
+                phase: ((phase_from + decals.len()) as f32 * 0.618_034).fract(),
+            });
+        }
+    }
+    decals
+}
+
 /// Lines ending at one hub stood their trams on one spot for their turns: each further line
 /// ending within 30 m of another's terminus now ends 45 m before it, along its own track
 /// (while its last leg stays 60 m or more).
@@ -961,6 +1004,8 @@ impl PlanScenario {
         }
         let mut grime = grime;
         grime.extend(paving_marks(size, &paved, detail));
+        let walls = garden_wall_grime(size, plan, detail, grime.len());
+        grime.extend(walls);
         laps.mark("insides");
         // The passages into the courts (D-060), and where to look into one: 10 m out on the
         // street before the kit's first, for the log once the app logs.

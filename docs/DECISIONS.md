@@ -6507,7 +6507,8 @@ ragged damp patch, its rim darker) and `textures::decal_cracks`, scattered over 
 paved walking ground within the detail (the blocks' paved pieces and the streets' walking
 ground), one stain to 40 m² and one crack to 150 m², each at a turn and a size of its own and
 wholly on the paving (its middle and its corners: none spills onto a lawn); they mark the faces
-that look up only. The village holds 1 210 decals with the grime. `shading/standard` without
+that look up only. The village holds 1 210 decals with the grime (1 594 since its garden walls carry
+the wall grime too). `shading/standard` without
 the decals (`--no-decals`) and with them: 0.816 → 0.863–0.869 ms on the house front, 0.905 →
 0.968–0.971 ms over the junction (two runs each way). In motion they add no shimmer: the
 garden lane dollied at 1 m/s under DLAA, each frame's change against an `--ssaa` run's, differs
