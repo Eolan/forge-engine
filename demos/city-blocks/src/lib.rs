@@ -835,6 +835,10 @@ struct Gallery {
     /// Frame times (ms) since the last title, and over the whole run (the exit log).
     frame_ms: Vec<f64>,
     run_frame_ms: Vec<f64>,
+    /// The captures the app had saved at the last frame, and the frames a capture slowed, left
+    /// out of the frame times.
+    captures_seen: u64,
+    capture_frames: usize,
     last_frame: Instant,
     /// When the first frame was rendered, until the streamer first settles (nothing wanted
     /// or being read).
@@ -1615,6 +1619,8 @@ impl Gallery {
             streaming: Vec::new(),
             frame_ms: Vec::new(),
             run_frame_ms: Vec::new(),
+            captures_seen: 0,
+            capture_frames: 0,
             last_frame: Instant::now(),
             started: None,
             settled: false,
@@ -1795,7 +1801,12 @@ impl Demo for Gallery {
         let now = Instant::now();
         let ms = (now - self.last_frame).as_secs_f64() * 1e3;
         self.last_frame = now;
-        if self.frame > 0 {
+        // A frame that saved a capture waited for the GPU and wrote a PNG: not the demo's time.
+        let captured = ctx.captures_written != self.captures_seen;
+        self.captures_seen = ctx.captures_written;
+        if self.frame > 0 && captured {
+            self.capture_frames += 1;
+        } else if self.frame > 0 {
             self.frame_ms.push(ms);
             self.run_frame_ms.push(ms);
         }
@@ -3159,7 +3170,8 @@ impl Drop for Gallery {
             p50 = format!("{:.2}", percentile(&mut frames, 0.5)),
             p99 = format!("{:.2}", percentile(&mut frames, 0.99)),
             max = format!("{:.2}", percentile(&mut frames, 1.0)),
-            "frame times (ms) over the run"
+            captured = self.capture_frames,
+            "frame times (ms) over the run, the frames that saved a capture left out"
         );
         if let Some(splashes) = &self.splashes {
             tracing::info!(

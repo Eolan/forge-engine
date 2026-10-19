@@ -152,6 +152,10 @@ pub struct Context {
     pub window: Arc<Window>,
     /// Frames rendered so far.
     pub frames_rendered: u64,
+    /// Frames saved as captures so far (`--capture`, `--capture-every`, a demo's request): a
+    /// capture's wait and PNG slow the frame it ends, so a demo's frame-time statistics leave
+    /// out the frames during which this count grew.
+    pub captures_written: u64,
     /// The frame profile behind the overlay; demos add counter lines to it.
     pub profile: Profile,
     /// The render graph's persistent side (transient heap, statistics).
@@ -952,6 +956,7 @@ impl<D: Demo> State<D> {
             shaders,
             window,
             frames_rendered: 0,
+            captures_written: 0,
             profile: Profile::new(overlay_mode),
             graph,
             capture_request: None,
@@ -1543,6 +1548,7 @@ impl<D: Demo> State<D> {
             // Debugging aid (`FORGE_WAIT_IDLE=1`): no CPU/GPU overlap at all.
             self.ctx.device.wait_idle();
         }
+        let capture_path_saved = capture.is_some();
         for (capture, format) in [
             (capture, self.ctx.swapchain.format()),
             (capture_hdr, OFFSCREEN_FORMAT),
@@ -1552,6 +1558,9 @@ impl<D: Demo> State<D> {
                 save_capture(&path, &buffer, extent, format)?;
                 tracing::info!(path = %path.display(), "captured frame {}", self.ctx.frames_rendered);
             }
+        }
+        if capture_path_saved {
+            self.ctx.captures_written += 1;
         }
         if !self.ctx.loading {
             self.ctx.frames_rendered += 1;
