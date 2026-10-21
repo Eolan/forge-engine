@@ -14,6 +14,7 @@
 module probes;
 
 import bindless;
+import exact;
 
 public static const uint PROBE_MAX_CASCADES = 6;
 // The first rays of every probe keep fixed directions (not rotated per frame), so relocation
@@ -66,6 +67,9 @@ static const float PROBE_LEAST_WEIGHT = 0.05;
 // shows.
 static const float PROBE_LEAST_FRONT = 0.01;
 public static const float PROBE_ROOM_SPACING = 1.5;
+// How many of a room-sized cascade's spacings, inside its edge, its light takes to blend into
+// what lies beyond it on a room's surfaces (#334).
+static const float ROOM_BLEND = 4.0;
 // In a room (D-068), the share of the trilinear weight its own probes must hold among the eight
 // for a cascade to claim all of a point's light; with less, the next cascade fills the rest.
 static const float PROBE_ROOM_COVER = 0.25;
@@ -517,13 +521,15 @@ public float4 cascade_irradiance<let MIRROR : int>(ProbeField* field, uint c, fl
 
 // The cascades' light at `p`, finer first, each over what the finer ones left, and how much of
 // it they covered (w).
-float4 cascades_lookup<let MIRROR : int>(ProbeField* field, float3 p, float3 n, float3 g, float3 v, float3 d, RegionHit mask, bool masked, out float3 toward_d)
+float4 cascades_lookup<let MIRROR : int>(ProbeField* field, float3 p, float3 n, float3 g, float3 v, float3 d, RegionHit mask, bool masked, bool rooms, out float3 toward_d)
 {
     float3 e = float3(0.0);
     float3 e_d = float3(0.0);
     float covered = 0.0;
     for (uint c = 0; c < field[0].cascade_count && covered < 0.999; c++)
     {
+        if (!rooms && field[0].cascades[c].spacing <= PROBE_ROOM_SPACING)
+            continue;
         float w = cascade_weight(field, c, p);
         if (w <= 0.0)
             continue;
@@ -551,10 +557,60 @@ float3 probe_lookup<let MIRROR : int>(ProbeField* field, float3 p, float3 n, flo
 {
     RegionHit mask = region_at(field, p + g * 0.02);
     bool masked = field[0].region_count > 0u && mask.kind != REGION_SOLID;
-    // The region's probes, then every probe where they found none.
-    float4 e = cascades_lookup<MIRROR>(field, p, n, g, v, d, mask, masked, toward_d);
-    if (masked && e.w <= 0.0 && mask.region != REGION_OUTSIDE && far_from_rooms(field, p))
+    bool unused_far;
+    float3 near = probe_lookup_with<MIRROR>(field, p, n, g, v, open_sky, d, open_sky_d, mask, masked, true, toward_d, unused_far);
+    if (!masked || mask.region == REGION_OUTSIDE)
+        return near;
+    // A room near the room-sized cascades' edge, with none of its probes in the coarser ones
+    // (#334): their light blended into the far room's share of the open sky it takes beyond
+    // them (#321) over ROOM_BLEND spacings across the ground, not switched over the cascade's
+    // own one. A window seen while walking towards its building popped from dark to lit within
+    // a metre. Where a coarser cascade has the room's probes, its light takes over over the
+    // cascade's own spacing, as before.
+    float k = room_depth(field, p);
+    if (k <= 0.0 || k >= 1.0)
+        return near;
+    float3 beyond_d;
+    bool far;
+    float3 beyond = probe_lookup_with<MIRROR>(field, p, n, g, v, open_sky, d, open_sky_d, mask, masked, false, beyond_d, far);
+    if (!far)
+        return near;
+    toward_d = lerp_exact(beyond_d, toward_d, k);
+    return lerp_exact(beyond, near, k);
+}
+
+// How deep `p` stands in the room-sized cascades across the ground (#334): 1 from ROOM_BLEND
+// of their spacings inside their edge along x and z (one spacing up and down, where they reach
+// a few metres), falling to 0 at it and beyond; 1 where there are none.
+float room_depth(ProbeField* field, float3 p)
+{
+    float k = 0.0;
+    bool any = false;
+    for (uint c = 0; c < field[0].cascade_count; c++)
     {
+        float s = field[0].cascades[c].spacing;
+        if (s > PROBE_ROOM_SPACING)
+            continue;
+        any = true;
+        float3 reach = (float3(field[0].counts) * 0.5 - 1.5) * s;
+        float3 band = float3(ROOM_BLEND, 1.0, ROOM_BLEND) * s;
+        float3 w = saturate((reach - abs(p - field[0].camera)) / band);
+        k = max(k, w.x * w.y * w.z);
+    }
+    return any ? k : 1.0;
+}
+
+// `probe_lookup`'s light for a region `mask` (`masked` when regions apply), with the room-sized
+// cascades (`rooms`) or as if the point stood beyond them; `far`: it took a far room's share of
+// the open sky (#321).
+float3 probe_lookup_with<let MIRROR : int>(ProbeField* field, float3 p, float3 n, float3 g, float3 v, float3 open_sky, float3 d, float3 open_sky_d, RegionHit mask, bool masked, bool rooms, out float3 toward_d, out bool far)
+{
+    far = false;
+    // The region's probes, then every probe where they found none.
+    float4 e = cascades_lookup<MIRROR>(field, p, n, g, v, d, mask, masked, rooms, toward_d);
+    if (masked && e.w <= 0.0 && mask.region != REGION_OUTSIDE && (!rooms || far_from_rooms(field, p)))
+    {
+        far = true;
         // A room beyond the room-sized cascades with none of its probes among a coarser one's
         // eight (an upper storey between probes 4 m apart, #321): the probes there are other
         // rooms', the street's behind a wall or the roof void's (which no region covers, so it
@@ -567,7 +623,7 @@ float3 probe_lookup<let MIRROR : int>(ProbeField* field, float3 p, float3 n, flo
         toward_d = tint * (dot(open_sky_d, luma) * field[0].far_room_sky);
     }
     if (masked && e.w <= 0.0)
-        e = cascades_lookup<MIRROR>(field, p, n, g, v, d, mask, false, toward_d);
+        e = cascades_lookup<MIRROR>(field, p, n, g, v, d, mask, false, rooms, toward_d);
     else if (masked && mask.region != REGION_OUTSIDE && e.w < 1.0)
     {
         // A room's cascades covered part of it: theirs is all its light, not the open sky's.
@@ -604,7 +660,7 @@ public float3 probe_irradiance_hit(ProbeField* field, float3 p, float3 n, float3
         mask = region_at(field, p + n * 0.02);
     bool masked = field[0].region_count > 0u && mask.kind != REGION_SOLID;
     float3 unused;
-    float4 e = cascades_lookup<0>(field, p, n, n, v, n, mask, masked, unused);
+    float4 e = cascades_lookup<0>(field, p, n, n, v, n, mask, masked, true, unused);
     if (masked && mask.region != REGION_OUTSIDE)
         return e.w > 0.0 ? e.rgb / e.w : float3(0.0);
     return e.rgb + (1.0 - e.w) * open_sky;
@@ -644,7 +700,7 @@ public float3 probe_region_tint(ProbeField* field, float3 p, float3 g, float3 v)
     if (mask.kind == REGION_SOLID)
         return float3(1.0);
     float3 unused;
-    if (cascades_lookup<0>(field, p, g, g, v, g, mask, true, unused).w <= 0.0)
+    if (cascades_lookup<0>(field, p, g, g, v, g, mask, true, true, unused).w <= 0.0)
         return mask.region != REGION_OUTSIDE && far_from_rooms(field, p) ? float3(1.0, 0.5, 0.0) : float3(1.0, 0.0, 0.0);
     if (mask.kind == REGION_RECESS)
         return float3(0.0, 1.0, 0.0);

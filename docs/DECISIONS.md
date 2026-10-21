@@ -5668,6 +5668,15 @@ application of their patents just in case."
   which have their own probes: in linear light 24.6 against 22.7 and 16.7 against 18.4 at 0.06
   (0.15 made them 2–2.5 times too bright). Near the camera nothing changes: the map check's
   interiors 0 px, its street views at most 0.0023 mean LDR-ꟻLIP against the first version.
+- **No pop as the room-sized cascade reaches such a room** (#334, 2026-10-21, the owner's
+  playtest of a scene built outside the repository: "there is a pop … a window thing again").
+  The room-sized cascade fades over one spacing at its edge, and where it covered a room partly
+  its share was taken for all of the room's light: walking towards a building, its windows
+  switched from the far room's share to the probes' within a metre. Now a room's surface within
+  `ROOM_BLEND` (4) spacings of that cascade's edge across the ground, whose light beyond it would
+  be the far room's, is blended from that into the probes' light over the band (`room_depth`,
+  `probe_lookup_with` in `probes.slang`). Where a coarser cascade holds the room's probes nothing
+  changes. The map check moved by 7 px.
 
 ## D-069 — One set of engine settings for every demo, defaults at the best look, and a console on ² ✅ (proposed 2026-10-17, #278, the owner's request; the owner's go the same day)
 
