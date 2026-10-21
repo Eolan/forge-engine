@@ -64,6 +64,38 @@ static const float BLIND_LONGEST = 0.75;
 static const float BLIND_MIN_HEIGHT = 0.4;
 // The share of the sky the window sees that reaches the blind past the reveal and the frame.
 static const float BLIND_LIGHT = 0.6;
+// Grime without textures (#339, step 2's first part): a pane's haze varies over it in soft
+// patches GRIME_PATCH metres across, between GRIME_LOW and GRIME_HIGH of its level (smudges and
+// what a cleaning missed), and dust settles along its foot, up to GRIME_FOOT more over its lowest
+// GRIME_FOOT_HEIGHT metres. Both are low in frequency: they do not sparkle.
+static const float GRIME_PATCH = 0.35;
+static const float GRIME_LOW = 0.4;
+static const float GRIME_HIGH = 1.6;
+static const float GRIME_FOOT = 0.12;
+static const float GRIME_FOOT_HEIGHT = 0.12;
+
+// Smooth value noise in [0, 1) over lattice cells of size 1.
+float pane_noise(float3 p)
+{
+    float3 i = floor(p);
+    float3 t = p - i;
+    t = t * t * (3.0 - 2.0 * t);
+    int3 c = int3(i);
+    float corner[8];
+    [unroll]
+    for (uint k = 0; k < 8; k++)
+    {
+        int3 q = c + int3(k & 1u, (k >> 1) & 1u, k >> 2);
+        uint h = asuint(q.x) * 0x8da6b343u ^ asuint(q.y) * 0xd8163841u ^ asuint(q.z) * 0xcb1ab31fu;
+        h ^= h >> 16;
+        h *= 0x7feb352du;
+        h ^= h >> 15;
+        corner[k] = float(h >> 8) * (1.0 / 16777216.0);
+    }
+    float x0 = lerp(lerp(corner[0], corner[1], t.x), lerp(corner[2], corner[3], t.x), t.y);
+    float x1 = lerp(lerp(corner[4], corner[5], t.x), lerp(corner[6], corner[7], t.x), t.y);
+    return lerp(x0, x1, t.z);
+}
 
 // Four numbers in [0, 1) from a pane's index and a salt (PCG's output permutation).
 float4 pane_hash(uint pane, uint salt)
@@ -211,13 +243,16 @@ GlassLight glass_light(GlassFrame* f, GlassVaryings input)
     float f0 = f[0].look.y * (h.z < 1.0 / 3.0 ? 1.0 : PANE_DOUBLE_F0) * (0.9 + 0.2 * w.x);
     o.fresnel = f0 + (1.0 - f0) * pow(1.0 - nv, 5.0);
     o.mirror = normalize(reflect(-v, n));
-    o.haze = PANE_HAZE * h.w * h.w;
+    // Its haze in soft patches (#339's grime), and the dust along its foot below.
+    float patches = pane_noise(world / GRIME_PATCH + w.xyz * 17.0);
+    o.haze = PANE_HAZE * h.w * h.w * lerp(GRIME_LOW, GRIME_HIGH, patches);
     // Its blind, if it has one (#339): down from the pane's top to its hem.
     o.blind = 0.0;
     o.blind_albedo = float3(0.0);
     if (f[0].pane_heights != nullptr)
     {
         float2 span = f[0].pane_heights[input.pane];
+        o.haze += GRIME_FOOT * h.z * (1.0 - saturate((input.height - span.x) / GRIME_FOOT_HEIGHT));
         float4 k = pane_hash(input.pane, 2u);
         if (k.x < PANE_BLIND_SHARE && span.y - span.x > BLIND_MIN_HEIGHT)
         {

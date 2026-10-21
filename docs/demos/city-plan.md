@@ -909,6 +909,11 @@ mesh to test navigations inside the houses"):
     its own lit by 0.6 of the sky the window sees, its hem a soft step a pixel wide
     (`GlassFrame::pane_heights`, each pane's lowest and highest corner). The house view's left
     window shows one; a still camera's frames change as before (1 006–1 428 px).
+  - **Grime without textures** (#339, step 2's first part): each pane's haze varies in soft
+    patches 0.35 m across, from 0.4 to 1.6 of its level, and dust settles along its foot (up to
+    0.12 more over its lowest 12 cm). Both stay low in frequency; a still camera's frames change
+    as before (1 000–1 439 px). The textured smudges, fingerprints and stickers wait for the
+    owner's go to download CC0 masks.
   - **Shimmer:** with a still camera under DLAA, frames 10 apart differ on 0.06 % of the pixels
     by day (as without the glass) and on 0.040 % at night (0.038 % without).
   - **Cost:** 0.05–0.16 ms in the map check's views (`docs/PROFILE.md`).
