@@ -91,6 +91,10 @@ pub struct Args {
     /// never do; `FORGE_SOUND=0` and `snd.volume 0` silence it too.
     #[arg(long)]
     no_sound: bool,
+    /// A crosshair and a translucent panel drawn by the HUD (#328): the check of the game's HUD
+    /// layer.
+    #[arg(long, hide = true)]
+    hud_test: bool,
     /// Exit after this many frames.
     #[arg(long)]
     frames: Option<u64>,
@@ -1929,6 +1933,24 @@ impl Demo for Gallery {
         // The camera behind the vehicle the scene follows (C in the physics lab, #138).
         if let Some(running) = &mut self.running {
             running.follow(&mut self.camera);
+        }
+        // `--hud-test` (#328): a crosshair at the window's middle and a translucent panel.
+        if self.args.hud_test {
+            let e = ctx.swapchain.extent();
+            let (cx, cy) = (e.width as f32 * 0.5, e.height as f32 * 0.5);
+            let white = [1.0, 1.0, 1.0, 0.9];
+            ctx.hud.push(forge_app::hud::HudQuad::solid(
+                [40.0, e.height as f32 - 120.0, 360.0, e.height as f32 - 40.0],
+                [0.02, 0.02, 0.03, 0.55],
+            ));
+            ctx.hud.push(forge_app::hud::HudQuad::solid(
+                [cx - 12.0, cy - 1.0, cx + 12.0, cy + 1.0],
+                white,
+            ));
+            ctx.hud.push(forge_app::hud::HudQuad::solid(
+                [cx - 1.0, cy - 12.0, cx + 1.0, cy + 12.0],
+                white,
+            ));
         }
         // The world's sound (#318), where the shell opened the device: the ambience at the
         // sun's hour (mid-afternoon when nothing sets it), the player's steps, the scene's own.

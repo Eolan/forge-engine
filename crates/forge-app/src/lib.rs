@@ -14,6 +14,7 @@ mod camera;
 pub mod console;
 mod content_light;
 mod hdr;
+pub mod hud;
 mod input;
 mod loading;
 mod overlay;
@@ -180,6 +181,9 @@ pub struct Context {
     pub settings: Settings,
     /// The sound output, when the demo asked for it and the run is interactive (#318).
     pub sound: Option<sound::Sound>,
+    /// The game's HUD this frame (#328): drawn after the frame, under the debug overlay, in
+    /// order, then emptied ([`hud`]).
+    pub hud: Vec<hud::HudQuad>,
     /// The frame's size over the window's, each way: 1, or [`ssaa::FACTOR`] when supersampling.
     ssaa: u32,
     /// The first frame (in the frame slots' numbering) the demo recorded after the loading
@@ -567,6 +571,9 @@ struct State<D: Demo> {
     console_shown: Var<bool>,
     /// `app.mouse_look`: the game's mouse look (the cursor captured, the right button free).
     mouse_look: Var<bool>,
+    /// The game's HUD (#328) and `app.hud`, whether it shows.
+    hud: hud::Hud,
+    hud_shown: Var<bool>,
     /// `snd.volume`: the master's level (#318), and the level last sent to the mixer.
     volume: Var<f64>,
     volume_sent: f64,
@@ -992,6 +999,14 @@ impl<D: Demo> State<D> {
             )
             .release(),
         );
+        let hud_shown = settings.add(
+            Spec::bool(
+                "app.hud",
+                true,
+                "The game's HUD over the picture (#328): off for a capture without it.",
+            )
+            .release(),
+        );
         let volume = settings.add(
             Spec::float(
                 "snd.volume",
@@ -1055,6 +1070,7 @@ impl<D: Demo> State<D> {
             loading: false,
             settings,
             sound: None,
+            hud: Vec::new(),
             ssaa: 1,
             counted_from: 0,
             _surface: surface,
@@ -1124,6 +1140,8 @@ impl<D: Demo> State<D> {
             display_info,
             console_shown,
             mouse_look,
+            hud: hud::Hud::new(&ctx.device, &ctx.shaders, ctx.swapchain.format())?,
+            hud_shown,
             volume,
             volume_sent: 1.0,
             _sound_output: sound_output,
@@ -1587,6 +1605,25 @@ impl<D: Demo> State<D> {
                     &self.ctx.output,
                 );
             }
+            // The game's HUD (#328): over the picture, under the debug overlay.
+            if self.ctx.settings.get(self.hud_shown)
+                && !self.ctx.loading
+                && !self.ctx.hud.is_empty()
+            {
+                self.hud.set_output(
+                    &self.ctx.shaders,
+                    self.ctx.swapchain.format(),
+                    self.ctx.output.ui_white,
+                )?;
+                self.hud.draw(
+                    &mut frame.graph,
+                    slot.index,
+                    swapchain_image,
+                    extent,
+                    &self.ctx.hud,
+                );
+            }
+            self.ctx.hud.clear();
             let profiling = self.ctx.profile.is_visible() && !self.ctx.loading;
             let console = self.console.is_open() && !self.ctx.loading;
             // What a bound key did, a few seconds at the bottom (D-069).

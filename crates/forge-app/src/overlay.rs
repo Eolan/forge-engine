@@ -215,7 +215,7 @@ pub struct Overlay {
 
 /// `OUTPUT_*` of `tonemap.slang` for a target of `format` (as forge-render's
 /// `OutputEncoding::for_format`, SDR targets taking the palette as it is).
-fn encoding(format: vk::Format) -> u32 {
+pub(crate) fn encoding(format: vk::Format) -> u32 {
     match format {
         vk::Format::A2B10G10R10_UNORM_PACK32 | vk::Format::A2R10G10B10_UNORM_PACK32 => 2,
         vk::Format::R16G16B16A16_SFLOAT => 3,
