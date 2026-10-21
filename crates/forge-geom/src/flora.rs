@@ -66,7 +66,7 @@ pub fn grow_plant(s: &Species, conditions: &Conditions) -> GrownPlant {
 pub fn grown_mesh(g: &TreeGraph, shrub: bool, broad: bool, lift: f32, spray: LeafSpray) -> TriMesh {
     let mut mesh = TriMesh::default();
     if !shrub {
-        wood(&mut mesh, g);
+        wood(&mut mesh, g, WOOD_RADIUS);
     }
     let lumps = crown_lumps(g, shrub, broad, lift);
     let faces = icosahedron();
@@ -108,7 +108,7 @@ pub const CROWN_SHADOW: f32 = 0.8;
 fn proxy_of(g: &TreeGraph, shrub: bool, broad: bool, lift: f32, share: f32) -> TriMesh {
     let mut mesh = TriMesh::default();
     if !shrub {
-        wood(&mut mesh, g);
+        wood(&mut mesh, g, WOOD_RADIUS);
     }
     let faces = icosahedron();
     for (i, &(centre, radius)) in crown_lumps(g, shrub, broad, lift).iter().enumerate() {
@@ -129,7 +129,7 @@ fn proxy_of(g: &TreeGraph, shrub: bool, broad: bool, lift: f32, share: f32) -> T
 pub fn grown_shells(g: &TreeGraph, shrub: bool, broad: bool, lift: f32) -> TriMesh {
     let mut mesh = TriMesh::default();
     if !shrub {
-        wood(&mut mesh, g);
+        wood(&mut mesh, g, WOOD_RADIUS);
     }
     let faces = icosahedron();
     for (i, &(centre, radius)) in crown_lumps(g, shrub, broad, lift).iter().enumerate() {
@@ -153,11 +153,15 @@ pub fn grown_shells(g: &TreeGraph, shrub: bool, broad: bool, lift: f32) -> TriMe
 /// 0.78–0.95 (to tune per species by the crossing's look).
 pub const CROWN_SHELL: f32 = 1.0;
 
+/// The thinnest wood the grown plants draw, metres of radius ([`wood`]).
+pub const WOOD_RADIUS: f32 = 0.05;
+
 /// The sides of a limb's tube.
 const LIMB_SIDES: u32 = 7;
 
-/// A tree's wood 5 cm thick or more, section 0 ([`grown_mesh`]): each axis of its graph (a node
-/// and the child that carries on its way, not a branch) one tapered tube of [`LIMB_SIDES`] sides,
+/// A tree's wood of `min_radius` or more (the grown plants' [`WOOD_RADIUS`]), section 0
+/// ([`grown_mesh`]; public for a host's own stand-ins): each axis of its graph (a node
+/// and the child that carries on its way, not a branch) one tapered tube of seven sides,
 /// closed. The owner saw holes in the trunks, the most at the bends (2026-10-21): each segment was
 /// a tube of its own, open, its ends square to it and its ring turned anyhow, so a bend opened a
 /// wedge on its outside and the next ring's corners left slots into the open tube.
@@ -166,13 +170,13 @@ const LIMB_SIDES: u32 = 7;
 ///   both tubes' sides end there exactly (the mitre).
 /// - A tip, or a bend too sharp to mitre, is closed by a short cone.
 /// - A branch starts on its parent's axis as wide as its parent there, buried in it.
-fn wood(mesh: &mut TriMesh, g: &TreeGraph) {
+pub fn wood(mesh: &mut TriMesh, g: &TreeGraph, min_radius: f32) {
     let n = g.nodes.len();
     let parent = |i: usize| g.nodes[i].parent as usize;
     let drawn = |i: usize| {
         let node = &g.nodes[i];
         node.parent != forge_flora::graph::NO_PARENT
-            && node.radius >= 0.05
+            && node.radius >= min_radius
             && node.pos.distance(g.nodes[node.parent as usize].pos) > 1e-3
     };
     // Each drawn node's axis from its parent, and each node's way on: its drawn child that is
@@ -590,7 +594,7 @@ mod tests {
             for k in 0..forge_flora::grow::INDIVIDUALS {
                 let graph = forge_flora::grow(s, &forge_flora::grow::individual(s, sp as u16, k));
                 let mut mesh = TriMesh::default();
-                wood(&mut mesh, &graph);
+                wood(&mut mesh, &graph, WOOD_RADIUS);
                 let key = |i: u32| {
                     (Vec3::from(mesh.positions[i as usize]) * 1e4)
                         .round()
@@ -611,7 +615,7 @@ mod tests {
                 let nodes = &graph.nodes;
                 let drawn = |i: usize| {
                     nodes[i].parent != forge_flora::graph::NO_PARENT
-                        && nodes[i].radius >= 0.05
+                        && nodes[i].radius >= WOOD_RADIUS
                         && nodes[i].pos.distance(nodes[nodes[i].parent as usize].pos) > 1e-3
                 };
                 let along =
