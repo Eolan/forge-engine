@@ -313,7 +313,7 @@ public struct RtMesh
     public uint first_vertex;
     public uint first_triangle;
     public float cut_error;  // how far the cut may stand from the drawn surface, object space
-    public float shadow_start; // how far its surfaces' shadow rays start, object space (0: SHADOW_BIAS; terrain, #96)
+    public float shadow_start; // how far its surfaces' shadow rays start, object space (a terrain's, #96; 0: by its cut, or SHADOW_BIAS with cut-outs; negative: by its cut, #326)
     public uint first_uv;      // its first vertex's UV in `RtScene::uvs`, RT_NO_UVS without them (#171)
     public uint rows;          // the rows its instances draw with: its cut's highest section and one (#265)
     public uint masked_sections;  // the sections in its structure's second geometry, not opaque, a bit each (#307)
@@ -4685,17 +4685,21 @@ float2 sun_disc_point(uint2 pixel, uint frame)
     return float2((k + 0.5) / float(SUN_DISC_POINTS), frac(turn + k * 0.381966011));
 }
 
-// How far a shadow ray from a drawn surface of `inst` starts: SHADOW_BIAS, or its mesh's
-// `shadow_start` scaled with the instance where that is further. Only a terrain sets one
-// (twice its cut's error, `TERRAIN_SHADOW_START` in raytrace.rs): the island's 8.4 M triangles
-// of relief cut to 600 000 stand up to a metre off the drawn slopes, which shadowed themselves
-// from 0.15 m (#96); the city's flat ground stays at SHADOW_BIAS. Far away a terrain draws a
+// How far a sun's shadow ray from a drawn surface of `inst` starts (#326): as the lamps'
+// (`lamp_shadow_start`), twice the gap its cut may leave in front of it, from 2 cm to
+// SHADOW_BIAS, so that what stands close to it shadows it (a door's leaf in its lining, a
+// cornice's tier, a body resting on the ground). A mesh with cut-out sections keeps
+// SHADOW_BIAS unless it asks for its cut's (`set_shadow_start_by_cut`, a negative
+// `shadow_start`): a tree's leaf cards, their normals bent out from the crown, shadowed each
+// other inside it from 2 cm, and the crowns lost their sunlit leaves.
+// A terrain starts by its mesh's `shadow_start` scaled with the instance where that is further
+// than SHADOW_BIAS (twice its cut's error, `TERRAIN_SHADOW_START` in raytrace.rs): the island's
+// 8.4 M triangles of relief cut to 600 000 stand up to a metre off the drawn slopes, which
+// shadowed themselves from 0.15 m (#96); the city's flat ground is no terrain and starts by its
+// cut. Far away a terrain draws a
 // coarser level of its DAG than the cut, up to its cluster's `self_error` further off it, so
 // its ray starts twice that further too (#106: a far valley drawn under the cut shadowed
 // itself in a dark blot); the levels near the camera, at no error, keep the cut's start.
-// A mesh that asks for it (`set_shadow_start_by_cut`, a negative `shadow_start`; #326) starts as
-// the lamps' rays do (`lamp_shadow_start`): a thin occluder close to it, a door's leaf in its
-// lining, then shadows it.
 float shadow_bias(Frame* f, Instance inst, Meshlet m)
 {
     RtScene* rs = f[0].rt_scene;
@@ -4703,10 +4707,11 @@ float shadow_bias(Frame* f, Instance inst, Meshlet m)
         return SHADOW_BIAS;
     RtMesh mesh = rs[0].meshes[inst.mesh];
     float start = mesh.shadow_start;
-    if (start < 0.0)
+    if (start == 0.0 && mesh.masked_sections != 0u)
+        return SHADOW_BIAS;
+    if (start <= 0.0)
         return clamp(2.0 * (mesh.cut_error + m.self_error) * inst.scale, LAMP_SHADOW_START, SHADOW_BIAS);
-    if (start > 0.0)
-        start += TERRAIN_SHADOW_START * m.self_error;
+    start += TERRAIN_SHADOW_START * m.self_error;
     return max(SHADOW_BIAS, start * inst.scale);
 }
 

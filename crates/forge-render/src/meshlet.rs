@@ -1243,7 +1243,7 @@ pub struct MeshletSceneBuilder {
     ray_groups: Vec<(Vec<u32>, u32)>,
     /// Meshes the rays take as ground whatever their size ([`MeshletSceneBuilder::set_ray_terrain`]).
     ray_terrain: Vec<u32>,
-    /// Meshes whose sun rays start by their cut, as the lamps' do ([`MeshletSceneBuilder::set_shadow_start_by_cut`]).
+    /// Meshes whose sun rays start by their cut even with cut-out sections ([`MeshletSceneBuilder::set_shadow_start_by_cut`]).
     ray_cut_start: Vec<u32>,
     /// Meshes the rays cut to a budget of their own ([`MeshletSceneBuilder::set_ray_budget`]).
     ray_budgets: HashMap<u32, u32>,
@@ -1521,10 +1521,11 @@ impl MeshletSceneBuilder {
         self.ray_terrain.extend(meshes.iter().map(|m| m.0));
     }
 
-    /// Has the sun's shadow rays from `meshes`' surfaces start as the lamps' do (#293, #326):
-    /// by twice the gap the traced cut may leave in front of them, from 2 cm to the 15 cm of
-    /// every other mesh. A thin occluder close to them (a door's leaf in its lining) then
-    /// shadows them; a mesh cut coarsely for the rays may show acne.
+    /// Has the sun's shadow rays from `meshes`' surfaces start as the lamps' do (#293, #326)
+    /// even where they have cut-out sections: by twice the gap the traced cut may leave in
+    /// front of them, from 2 cm to 15 cm. Every mesh without cut-outs starts so (but a
+    /// terrain); one with them (a tree's leaf cards, whose normals are bent out from the crown)
+    /// keeps 15 cm, as its cards would otherwise shadow each other inside the crown.
     pub fn set_shadow_start_by_cut(&mut self, meshes: &[MeshId]) {
         self.ray_cut_start.extend(meshes.iter().map(|m| m.0));
     }

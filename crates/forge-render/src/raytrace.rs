@@ -66,8 +66,10 @@ pub(crate) struct Cut {
     pub uvs: Vec<[f32; 2]>,
     /// The cut's object-space error.
     pub error: f32,
-    /// How far the shadow rays of the mesh's drawn surfaces start off them, object space; 0
-    /// for the shader's `SHADOW_BIAS` (see [`TERRAIN_SHADOW_START`]).
+    /// How far the shadow rays of the mesh's drawn surfaces start off them, object space (see
+    /// [`TERRAIN_SHADOW_START`]); 0 for the shader's start by the cut's error (`shadow_bias`,
+    /// #326), or its `SHADOW_BIAS` where the mesh has cut-out sections; negative for the start
+    /// by the cut even then.
     pub shadow_start: f32,
     /// A skinned mesh's (#165): its structure is refitted every frame from the positions the
     /// skin pass writes ([`forge_gpu::DynamicBlas`]).

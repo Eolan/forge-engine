@@ -5216,7 +5216,16 @@ again (`demos/physics-lab.md`).
         the sun's rays too (a negative `shadow_start`, read in `shadow_bias`).
       - Every other mesh keeps 15 cm, so nothing drawn changes: the map check's 13 images and
         the lab's 84 captures are at 0 pixels, the #71 flake aside.
-      - Whether to make it every mesh's start waits for a Tier 1 (acne on coarse cuts).
+      - **Every mesh's start since 2026-10-21**, but a terrain's (its own, #96) and a mesh with
+        cut-out sections' (trees, gratings: 15 cm). The leaf cards' normals are bent out from
+        the crown to shade it as a volume. From 2 cm they shadowed each other inside it, and
+        the crowns lost their sunlit leaves (the junction view's ꟻLIP mean 0.066 with them,
+        0.024 without).
+      - What it shows: the cornice's tiers shade the faces under them, a door's leaf its
+        lining, a capsule and the lab's spheres the ground they touch, the material slabs'
+        edges the floor. No acne on the coarse cuts: the start grows with the cut's error up to
+        15 cm. The map check moved by up to ꟻLIP mean 0.045 (the vault's view), the sentinels by
+        up to 0.0045 (the lab's materials).
   - **A hit's lamp ray is aimed from where it starts** (#298, 2026-10-19).
     - **The cause:** `hit_lamps` started its ray 15 cm off the hit along the normal but aimed it
       along the line from the hit itself. The ray ran beside that line and ended up to 15 cm
