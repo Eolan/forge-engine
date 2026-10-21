@@ -53,6 +53,17 @@ static const float PI = 3.14159265;
 // sun's light none is asked.
 static const float GLINT_ROUGHNESS = 0.05;
 static const float GLINT_MIN = 1e-4;
+// What is behind varies (#339, step 4): a roller blind behind PANE_BLIND_SHARE of the panes, let
+// down from the pane's top over a share between BLIND_SHORTEST and BLIND_LONGEST of its height,
+// its fabric an off-white of its own, lit by the sky through the glass and glowing with its room's
+// light. Its hem is a soft step a pixel wide, so it does not crawl. Panes under BLIND_MIN_HEIGHT
+// metres (a transom) have none.
+static const float PANE_BLIND_SHARE = 0.3;
+static const float BLIND_SHORTEST = 0.15;
+static const float BLIND_LONGEST = 0.75;
+static const float BLIND_MIN_HEIGHT = 0.4;
+// The share of the sky the window sees that reaches the blind past the reveal and the frame.
+static const float BLIND_LIGHT = 0.6;
 
 // Four numbers in [0, 1) from a pane's index and a salt (PCG's output permutation).
 float4 pane_hash(uint pane, uint salt)
@@ -100,6 +111,7 @@ struct GlassFrame
     float* unlit;         // the share of each lamp's light the frame leaves unlit (glass.rs, `set_unlit`)
     float4 sun;           // xyz: towards the sun, unit (#339's glints)
     float4 sun_light;     // rgb: its pre-exposed illuminance through the air (0 below the horizon)
+    float2* pane_heights; // each pane's lowest and highest corner as given (#339's blinds); null without pane ids
 };
 
 struct GlassPush
@@ -117,6 +129,7 @@ struct GlassVaryings
     float3 normal : NORMAL;
     float4 glow : GLOW;     // rgb: the glow, its lamp's unlit share in; w: 1 where a lamp drives it
     nointerpolation uint pane : PANE; // its pane, for its condition (#339)
+    float height : HEIGHT;  // the height of the corner as given, before its pane moved (#339's blinds)
 };
 
 [shader("vertex")]
@@ -138,6 +151,7 @@ GlassVaryings vert_main(uint vertex : SV_VertexID)
     o.rel = rel;
     o.normal = float3(dot(r0.xyz, v.normal.xyz), dot(r1.xyz, v.normal.xyz), dot(r2.xyz, v.normal.xyz));
     o.pane = asuint(v.normal.w);
+    o.height = v.position.y;
     // A pane whose room has a lamp glows with the share of its light the frame's lamps leave
     // unlit (#284), at any distance; the others fade in by distance.
     uint lamp = asuint(v.glow.w);
@@ -167,6 +181,8 @@ struct GlassLight
     float3 normal;   // the pane's, bent by its condition, towards the camera
     float haze;      // the share of what passes its haze scatters (#339)
     float3 glint;    // the sun's light it reflects towards the camera, pre-exposed, hazed (#339)
+    float blind;     // how much of it a roller blind behind covers here, 0 to 1 (#339)
+    float3 blind_albedo;
 };
 
 GlassLight glass_light(GlassFrame* f, GlassVaryings input)
@@ -196,6 +212,21 @@ GlassLight glass_light(GlassFrame* f, GlassVaryings input)
     o.fresnel = f0 + (1.0 - f0) * pow(1.0 - nv, 5.0);
     o.mirror = normalize(reflect(-v, n));
     o.haze = PANE_HAZE * h.w * h.w;
+    // Its blind, if it has one (#339): down from the pane's top to its hem.
+    o.blind = 0.0;
+    o.blind_albedo = float3(0.0);
+    if (f[0].pane_heights != nullptr)
+    {
+        float2 span = f[0].pane_heights[input.pane];
+        float4 k = pane_hash(input.pane, 2u);
+        if (k.x < PANE_BLIND_SHARE && span.y - span.x > BLIND_MIN_HEIGHT)
+        {
+            float hem = span.y - lerp(BLIND_SHORTEST, BLIND_LONGEST, k.y) * (span.y - span.x);
+            float step = max(fwidth(input.height), 1e-4);
+            o.blind = saturate((input.height - hem) / step + 0.5);
+            o.blind_albedo = lerp(float3(0.82, 0.78, 0.70), float3(0.72, 0.75, 0.78), k.z) * lerp(0.65, 0.9, k.w);
+        }
+    }
     o.through = (1.0 - o.fresnel) * f[0].look.x;
     // The share of the pane through which the room shows rather than its reveal's sides.
     float tan_view = sqrt(max(1.0 - nv * nv, 0.0)) / max(nv, 1e-3);
@@ -253,14 +284,17 @@ float4 draw_main(GlassVaryings input) : SV_Target0
     float3 sky = sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, forward, l.mirror) * f[0].sky_scale;
     // The pane's haze (#339): what it scatters of what passes is taken from the room behind and
     // given back as a veil the sky lights, as a white diffuser facing out would be.
-    float through = l.through * (1.0 - l.haze);
+    float through = l.through * (1.0 - l.haze) * (1.0 - l.blind);
     float alpha = 1.0 - through;
-    float3 veil = (l.haze * l.through / PI) * sh_irradiance(f[0].sky_light, l.normal) * f[0].sky_scale;
+    float3 sky_diffuse = sh_irradiance(f[0].sky_light, l.normal) * (f[0].sky_scale / PI);
+    float3 veil = l.haze * l.through * sky_diffuse;
+    // A blind behind it (#339): its fabric lit by the sky the window sees, through the glass.
+    float3 blind = (l.blind * l.through * BLIND_LIGHT) * l.blind_albedo * sky_diffuse;
     float fade = input.glow.w > 0.5 ? 1.0 : smoothstep(f[0].look.z, f[0].look.w, l.distance);
     float3 glow = input.glow.rgb * (f[0].exposure * fade * l.room);
     // Over what is behind, by what the pane stops: its reflection, its veil and the glow, hazed,
     // and the haze in front of it that the blend would dim with the room.
-    float3 colour = (l.fresnel * sky + veil + glow) * l.air.a + l.air.rgb * (f[0].sky_scale * alpha);
+    float3 colour = (l.fresnel * sky + veil + blind + glow) * l.air.a + l.air.rgb * (f[0].sky_scale * alpha);
     // The sun's glint, hazed already; `glass/reflections` takes it away where the sun is hidden.
     if (max(l.glint.r, max(l.glint.g, l.glint.b)) >= GLINT_MIN)
         colour += l.glint;

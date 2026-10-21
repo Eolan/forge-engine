@@ -904,6 +904,11 @@ mesh to test navigations inside the houses"):
     scene hides the sun. None of the map check's views catches one (0 px); with the lobe widened
     to 0.5 for the check, the house's sunlit panes took the low morning sun's warm light and those
     in its shadow none.
+  - **Blinds** (#339, step 4): behind three panes in ten (where the host gives the panes ids, and
+    over 0.4 m tall) a roller blind let down from the top over 15–75 % of the pane, an off-white of
+    its own lit by 0.6 of the sky the window sees, its hem a soft step a pixel wide
+    (`GlassFrame::pane_heights`, each pane's lowest and highest corner). The house view's left
+    window shows one; a still camera's frames change as before (1 006–1 428 px).
   - **Shimmer:** with a still camera under DLAA, frames 10 apart differ on 0.06 % of the pixels
     by day (as without the glass) and on 0.040 % at night (0.038 % without).
   - **Cost:** 0.05–0.16 ms in the map check's views (`docs/PROFILE.md`).

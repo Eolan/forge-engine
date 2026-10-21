@@ -146,9 +146,10 @@ struct GpuGlassFrame {
     unlit: u64,
     sun: [f32; 4],
     sun_light: [f32; 4],
+    pane_heights: u64,
 }
 
-const _: () = assert!(std::mem::size_of::<GpuGlassFrame>() == 192);
+const _: () = assert!(std::mem::size_of::<GpuGlassFrame>() == 200);
 
 /// The panes and their passes (D-065's part 4).
 pub struct Glass {
@@ -169,6 +170,8 @@ pub struct Glass {
     panes: Vec<[f32; 12]>,
     /// Per frame slot: the panes' transforms as that slot's frames read them.
     pane_buffers: Vec<Buffer>,
+    /// Each pane's lowest and highest corner as given (#339's blinds), when the panes have ids.
+    heights: Option<Buffer>,
     /// The panes' edits so far, and per frame slot how many its buffer holds.
     edits: u64,
     written: Vec<AtomicU64>,
@@ -263,6 +266,24 @@ impl Glass {
             "glass panes",
         )?;
         let pane_count = panes.pane.iter().max().map_or(1, |&p| p as usize + 1);
+        // Each pane's height span, for the blinds some panes have (#339): only when the host
+        // gave the panes ids (one pane holding every corner has no span of its own).
+        let heights = (pane_count > 1)
+            .then(|| {
+                let mut spans = vec![[f32::MAX, f32::MIN]; pane_count];
+                for (p, id) in panes.positions.iter().zip(&panes.pane) {
+                    let span = &mut spans[*id as usize];
+                    span[0] = span[0].min(p.y);
+                    span[1] = span[1].max(p.y);
+                }
+                device.create_buffer_with_data(
+                    &spans,
+                    vk::BufferUsageFlags::STORAGE_BUFFER,
+                    MemoryCategory::Geometry,
+                    "glass pane heights",
+                )
+            })
+            .transpose()?;
         let pane_rows = vec![PANE_IDENTITY; pane_count];
         let pane_buffers = (0..FRAMES_IN_FLIGHT)
             .map(|i| {
@@ -299,6 +320,7 @@ impl Glass {
             unlit_count,
             panes: pane_rows,
             pane_buffers,
+            heights,
             edits: 0,
             written: (0..FRAMES_IN_FLIGHT).map(|_| AtomicU64::new(0)).collect(),
         })
@@ -420,6 +442,7 @@ impl Glass {
             unlit: self.unlit[slot.index].address(),
             sun: params.sun.extend(0.0).to_array(),
             sun_light: params.sun_light.extend(0.0).to_array(),
+            pane_heights: self.heights.as_ref().map_or(0, Buffer::address),
         };
         frame_buffer.write(0, &[gpu]);
         // The frame's depth by its sampled handle, known once the graph runs.
