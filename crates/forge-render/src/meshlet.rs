@@ -1792,6 +1792,14 @@ impl MeshletSceneBuilder {
         device: &Arc<Device>,
         residency: Residency,
     ) -> Result<MeshletScene> {
+        let _task = forge_core::activity::begin(
+            "scene",
+            format!(
+                "building the scene: {} meshes, {} instances",
+                self.meshes.len(),
+                self.instances.len()
+            ),
+        );
         let page_count = self.store.sources.len() as u32;
         if let Some(capacity) = self.dynamic {
             self.check_dynamic(capacity, residency)?;
@@ -1824,6 +1832,10 @@ impl MeshletSceneBuilder {
             }
             let skinned: Vec<usize> = self.skins.iter().map(|s| s.mesh as usize).collect();
             // Each mesh's cut on its own (its pages read and unpacked, #215), side by side.
+            let cutting = forge_core::activity::begin(
+                "scene",
+                format!("the rays' cuts: {} meshes", self.meshes.len()),
+            );
             let mut slots: Vec<Option<Result<raytrace::Cut>>> = std::iter::repeat_with(|| None)
                 .take(self.meshes.len())
                 .collect();
@@ -1903,6 +1915,11 @@ impl MeshletSceneBuilder {
                 ray_ranges.push((at.0, size.0, at.1, size.1));
                 at = (at.0 + size.0, at.1 + size.1);
             }
+            drop(cutting);
+            let _task = forge_core::activity::begin(
+                "scene",
+                format!("the rays' structures: {} meshes", cuts.len()),
+            );
             Some(SceneRays::new(device, &cuts, ms, capacity)?)
         } else {
             None
@@ -2994,6 +3011,7 @@ impl MeshletScene {
     /// are written (after GPU placement). Nothing without [`MeshletSceneBuilder::set_ray_traced`]
     /// or ray queries.
     pub fn build_tlas(&mut self, device: &Arc<Device>, shaders: &ShaderCompiler) -> Result<()> {
+        let _task = forge_core::activity::begin("scene", "the rays' top-level structure");
         let count = self.static_count();
         if let Some(rays) = &mut self.rays {
             let updatable = self.static_edits.is_some();
@@ -3107,6 +3125,7 @@ impl MeshletScene {
         let (Some(prep), Some(streamer)) = (self.start.take(), self.streamer.as_mut()) else {
             return Ok(());
         };
+        let _task = forge_core::activity::begin("scene", "the first view's pages");
         let start = std::time::Instant::now();
         let size = std::mem::size_of::<GpuInstance>();
         let bytes = device.read_back(

@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod activity;
 pub mod derived;
 pub mod dmath;
 pub mod fixed;

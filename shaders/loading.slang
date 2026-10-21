@@ -1,6 +1,7 @@
 // The loading screen (issues #25, #200): a hammer striking a red-hot bar on an anvil in the
 // bottom right corner, stylised, while a demo prepares its scene on another thread; and at the
-// bottom centre, while the shaders the cache lacks compile ahead, a bar of their share done.
+// bottom left, while the shaders the cache lacks compile ahead, a bar of their share done. The
+// text of what loads goes over it in the overlay (loading.rs).
 // Drawn into the swapchain image by crates/forge-app/src/loading.rs, every shape a 2-D distance
 // field antialiased over a pixel.
 
@@ -219,12 +220,15 @@ float3 forge(float3 colour, float2 p, float pixel, float time)
     return colour;
 }
 
-// The shaders' bar at the bottom centre: a dim track, the share done in the sparks' orange, a
-// glint running along it.
+// The shaders' bar at the bottom left (the owner, 2026-10-21: the middle for the text of what
+// loads, `crates/forge-app/src/loading.rs`): a dim track, the share done in the sparks' orange, a
+// glint running along it. BAR_LEFT and BAR_HALF are loading.rs's too.
+static const float BAR_LEFT = 0.06;
+static const float BAR_HALF = 0.16;
 float3 progress_bar(float3 colour, float2 pixel_at, float scale, float time)
 {
-    float2 centre = float2(0.5 * push.size.x, push.size.y - 0.06 * scale);
-    float2 half_size = float2(0.16 * scale, 0.0035 * scale);
+    float2 centre = float2((BAR_LEFT + BAR_HALF) * scale, push.size.y - 0.06 * scale);
+    float2 half_size = float2(BAR_HALF * scale, 0.0035 * scale);
     float2 p = pixel_at - centre;
     float track = sd_box(p, half_size, half_size.y);
     over(colour, float3(0.05, 0.055, 0.065), 0.5 - track);

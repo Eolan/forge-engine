@@ -5778,10 +5778,12 @@ impl Laps {
         }
     }
 
-    /// Ends the step `name`.
+    /// Ends the step `name`, which the loading screen shows as the last done
+    /// (`forge_core::activity`).
     fn mark(&mut self, name: &'static str) {
         let now = std::time::Instant::now();
         self.steps.push((name, (now - self.last).as_millis()));
+        forge_core::activity::note("village", name, Some(now - self.last));
         self.last = now;
     }
 
@@ -6038,11 +6040,29 @@ impl PlanScenario {
         // time, the largest first: a large mesh's DAG spreads its groups over threads of its own,
         // and the city's 783 meshes cooked fastest 4–6 at a time (2.8–3.2 s; 9.9 s one by one,
         // 7.6 s sixteen at a time).
-        let loaded = par_map(hits.len(), cores(), None, |j| take(&made[hits[j]]));
+        // The loading screen's count (`forge_core::activity`): the meshes read or cooked so far.
+        let task = forge_core::activity::begin(
+            "cooking",
+            format!(
+                "the meshes: {} cached, {} to cook",
+                hits.len(),
+                misses.len()
+            ),
+        );
+        let total = (hits.len() + misses.len()) as u64;
+        let finished = std::sync::atomic::AtomicU64::new(0);
+        let counted = |m: &Made| {
+            let done = take(m);
+            let n = finished.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            task.progress(n, total);
+            done
+        };
+        let loaded = par_map(hits.len(), cores(), None, |j| counted(&made[hits[j]]));
         let order = largest_first(misses.iter().map(|&i| made[i].mesh.indices.len()));
         let cooked_now = par_map(misses.len(), (cores() / 3).max(2), Some(&order), |j| {
-            take(&made[misses[j]])
+            counted(&made[misses[j]])
         });
+        drop(task);
         tracing::info!(
             from_cache = hits.len(),
             cooked = misses.len(),

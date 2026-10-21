@@ -437,6 +437,10 @@ impl ShaderCompiler {
             }
         }
         progress.missing.store(missing.len(), Ordering::Relaxed);
+        // The count the loading screen shows (`forge_core::activity`): a task with the entries
+        // compiled of those missing.
+        let total = missing.len() as u64;
+        let task = (total > 0).then(|| forge_core::activity::begin("shaders", "compiling ahead"));
         let next = std::sync::atomic::AtomicUsize::new(0);
         // The first failure, returned once the others are compiled: one entry that fails no
         // longer leaves its thread's share uncompiled.
@@ -457,7 +461,10 @@ impl ShaderCompiler {
                             {
                                 first.get_or_insert(error);
                             }
-                            progress.compiled.fetch_add(1, Ordering::Relaxed);
+                            let done = progress.compiled.fetch_add(1, Ordering::Relaxed) + 1;
+                            if let Some(task) = &task {
+                                task.progress(done as u64, total);
+                            }
                         }
                     })
                 })
@@ -606,6 +613,8 @@ impl ShaderCompiler {
             return Ok(bytemuck::cast_slice(&bytes).to_vec());
         }
         let source = self.shader_dir.join(file);
+        // What the loading screen shows compiling (`forge_core::activity`).
+        let _task = forge_core::activity::begin("shaders", format!("{file} {entry}"));
         let mut cmd = Command::new(&self.slangc);
         cmd.arg(&source)
             .args(["-target", "spirv", "-profile", "spirv_1_6"])

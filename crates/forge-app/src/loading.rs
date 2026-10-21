@@ -1,8 +1,10 @@
 //! The loading screen (issue #25). A demo started with [`crate::run_loading`] does its heavy
 //! CPU work (procedural meshes, cluster DAGs) on a thread of its own while the shell keeps the
 //! window alive: this stage draws a hammer striking an anvil in the bottom right corner, and a
-//! bar of the shaders compiled ahead at the bottom centre (#200, `shaders/loading.slang`); the
-//! frames it draws do not count ([`Context::loading`]). When the thread is done, the step it
+//! bar of the shaders compiled ahead at the bottom left (#200, `shaders/loading.slang`); the
+//! shell writes over it what the engine is busy with ([`layout_activity`], from
+//! `forge_core::activity`): the shaders compiling over the bar, the longest tasks running and
+//! the last step done beside the forge. The frames it draws do not count ([`Context::loading`]). When the thread is done, the step it
 //! returns finishes the demo (the uploads, the pipelines) on a worker with the shell's
 //! [`Setup`], the loading screen drawing on meanwhile (#201: on the main thread it froze the
 //! screen for seconds; the device's queues are held by whoever uses them). Then the demo takes
@@ -20,7 +22,7 @@ use forge_gpu::{
 };
 use winit::keyboard::KeyCode;
 
-use crate::{Context, Demo, FrameInfo, Input, Profile, Setup};
+use crate::{Canvas, Color, Context, Demo, FrameInfo, Input, Profile, Setup};
 
 /// What a demo's preparation hands back: the step that finishes it (uploads, pipelines), with
 /// the shell's [`Setup`]. It runs on a worker while the loading screen goes on drawing (#201);
@@ -68,6 +70,9 @@ pub(crate) enum Stage<D> {
         /// The frames the demo will draw behind the screen once started ([`SETTLE_FRAMES`]; 0 in
         /// scripted runs).
         settle: u32,
+        /// While the preparation is done and the shaders compiled ahead are not: what the screen
+        /// says it waits for (`forge_core::activity`).
+        waiting: Option<forge_core::activity::Task>,
     },
     /// The demo started, its first frames drawn behind the loading screen (#342): `shown`
     /// frames left with the screen over them, then `linger` more before the screen's pipeline,
@@ -132,7 +137,10 @@ impl<D: Demo + Send> Stage<D> {
         let pipeline = pipeline?;
         let thread = std::thread::Builder::new()
             .name("loading".to_owned())
-            .spawn(prepare)?;
+            .spawn(move || {
+                let _task = forge_core::activity::begin("app", "preparing the scene");
+                prepare()
+            })?;
         let program = std::env::current_exe()
             .ok()
             .and_then(|exe| exe.file_stem().map(|s| s.to_string_lossy().into_owned()))
@@ -167,6 +175,7 @@ impl<D: Demo + Send> Stage<D> {
             last_frame: Instant::now(),
             longest_gap: Duration::ZERO,
             settle,
+            waiting: None,
         })
     }
 
@@ -181,6 +190,7 @@ impl<D: Demo + Send> Stage<D> {
             finishing,
             last_frame,
             longest_gap,
+            waiting,
             ..
         } = self
         else {
@@ -211,9 +221,16 @@ impl<D: Demo + Send> Stage<D> {
             return;
         }
         if !finished(thread) || !finished(warm_up) {
+            if finished(thread) && waiting.is_none() {
+                *waiting = Some(forge_core::activity::begin(
+                    "app",
+                    "waiting for the shaders compiled ahead",
+                ));
+            }
             std::thread::sleep(LOADING_FRAME);
             return;
         }
+        *waiting = None;
         match warm_up.take().map(JoinHandle::join) {
             Some(Ok(Ok(compiled))) if compiled > 0 => {
                 tracing::info!(compiled, "shaders compiled ahead behind the loading screen");
@@ -238,8 +255,11 @@ impl<D: Demo + Send> Stage<D> {
         let given = setup.extent();
         match std::thread::Builder::new()
             .name("finishing".to_owned())
-            .spawn(move || finish(&setup))
-        {
+            .spawn(move || {
+                let _task =
+                    forge_core::activity::begin("app", "finishing: GPU uploads and pipelines");
+                finish(&setup)
+            }) {
             Ok(worker) => {
                 *finishing = Some(Box::new(Finishing {
                     worker,
@@ -404,6 +424,139 @@ impl<D: Demo + Send> Demo for Stage<D> {
             Self::Running(demo) | Self::Settling { demo, .. } => demo.command(ctx, name, args),
             _ => None,
         }
+    }
+}
+
+/// The shaders' bar's left end and half its length, shares of the screen's smaller side
+/// (`BAR_LEFT`, `BAR_HALF` in `loading.slang`), and its height over the screen's foot.
+const BAR_LEFT: f32 = 0.06;
+const BAR_HALF: f32 = 0.16;
+const BAR_UP: f32 = 0.06;
+/// The forge's centre in from the bottom right corner and its size, shares of the smaller side
+/// (`frag_main` in `loading.slang`).
+const FORGE_IN: [f32; 2] = [0.14, 0.13];
+const FORGE_SIZE: f32 = 0.16;
+/// Tasks of the engine's running shown beside the forge, at most.
+const SHOWN_TASKS: usize = 4;
+
+/// What the engine is busy with ([`forge_core::activity`], the owner, 2026-10-21: "some loadings
+/// are quite long and I would like to know what"), on `canvas` over the loading screen at
+/// `extent`: above the shaders' bar their count and the entries compiling; beside the forge, to
+/// its left, the longest tasks running and the last step done. Where the screen is too narrow
+/// for them there, above the forge.
+pub(crate) fn layout_activity(canvas: &mut Canvas, extent: vk::Extent2D) {
+    let (cols, rows) = (canvas.cols(), canvas.rows());
+    if cols < 8 || rows < 4 {
+        return;
+    }
+    let activity = forge_core::activity::snapshot();
+    let (w, h) = (extent.width as f32, extent.height as f32);
+    let (cell_w, cell_h) = (w / cols as f32, h / rows as f32);
+    let scale = w.min(h);
+    let col_at = |x: f32| (x / cell_w).floor().max(0.0) as usize;
+    let row_at = |y: f32| (y / cell_h).floor().clamp(0.0, (rows - 1) as f32) as usize;
+    // Above the bar, from its left end: the count compiled ahead, then the entries compiling.
+    let ahead = activity.running_in("shaders").find_map(|r| r.progress);
+    let compiling: Vec<&str> = activity
+        .running_in("shaders")
+        .filter(|r| r.progress.is_none())
+        .map(|r| r.label.as_str())
+        .collect();
+    let bar_left = col_at(BAR_LEFT * scale);
+    let bar_row = row_at(h - BAR_UP * scale);
+    if ahead.is_some() || !compiling.is_empty() {
+        let mut line = match ahead {
+            Some((done, total)) => format!("Compiling shaders {done}/{total}"),
+            None => "Compiling shaders".to_owned(),
+        };
+        if !compiling.is_empty() {
+            line += ": ";
+            line += &compiling.join(", ");
+        }
+        let room = col_at(w * 0.5).saturating_sub(bar_left).max(16);
+        canvas.text(
+            bar_left,
+            bar_row.saturating_sub(2),
+            &fit(&line, room),
+            Color::Grey,
+        );
+    }
+    // To the forge's left: the longest tasks running, the last step done under them.
+    let mut lines: Vec<(String, Color)> = activity
+        .running
+        .iter()
+        .filter(|r| r.system != "shaders")
+        .take(SHOWN_TASKS)
+        .map(|r| {
+            let count = r
+                .progress
+                .map(|(done, total)| format!(" {done}/{total}"))
+                .unwrap_or_default();
+            (
+                format!("{}{count}  {}", capitalised(&r.label), seconds(r.elapsed)),
+                Color::White,
+            )
+        })
+        .collect();
+    if let Some(d) = activity.done.iter().rev().find(|d| d.system != "shaders") {
+        let took = d
+            .took
+            .map(|t| format!(" ({})", seconds(t)))
+            .unwrap_or_default();
+        lines.push((format!("done: {}{took}", d.label), Color::Dim));
+    }
+    if lines.is_empty() {
+        return;
+    }
+    let forge_x = w - FORGE_IN[0] * scale;
+    let forge_y = h - FORGE_IN[1] * scale;
+    let right = col_at(forge_x - 0.75 * FORGE_SIZE * scale);
+    let left = col_at((BAR_LEFT + 2.0 * BAR_HALF) * scale) + 2;
+    let (right, room, last) = if right.saturating_sub(left) >= 24 {
+        // Beside it, its lines about its middle, over the bar's text.
+        let last = (row_at(forge_y) + lines.len() / 2).min(bar_row.saturating_sub(3));
+        (right, right - left, last)
+    } else {
+        // Above it.
+        let right = cols.saturating_sub(2);
+        let last = row_at(forge_y - 0.7 * FORGE_SIZE * scale);
+        (right, right.min(cols / 2), last)
+    };
+    let first = (last + 1).saturating_sub(lines.len());
+    for (k, (text, colour)) in lines.iter().enumerate() {
+        let text = fit(text, room);
+        let col = right.saturating_sub(text.len());
+        canvas.text(col, first + k, &text, *colour);
+    }
+}
+
+/// `text` cut to `room` characters, "..." where cut.
+fn fit(text: &str, room: usize) -> String {
+    if text.chars().count() <= room {
+        return text.to_owned();
+    }
+    let kept: String = text.chars().take(room.saturating_sub(3)).collect();
+    kept + "..."
+}
+
+/// `text` with a capital first letter.
+fn capitalised(text: &str) -> String {
+    let mut chars = text.chars();
+    chars
+        .next()
+        .map(|c| c.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
+}
+
+/// A duration as the screen shows it: "0.4 s", "12 s", "2 min 05 s".
+fn seconds(d: Duration) -> String {
+    let s = d.as_secs_f32();
+    if s < 10.0 {
+        format!("{s:.1} s")
+    } else if s < 120.0 {
+        format!("{s:.0} s")
+    } else {
+        format!("{} min {:02} s", d.as_secs() / 60, d.as_secs() % 60)
     }
 }
 

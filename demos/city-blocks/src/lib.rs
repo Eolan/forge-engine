@@ -3392,10 +3392,15 @@ fn cook_props(props: &[PropSpec], recook: bool, pages_in_memory: bool) -> (Vec<M
         }
     }
     let pool = TaskPool::client();
+    // The loading screen's count (`forge_core::activity`): the props cooked or read so far.
+    let task = forge_core::activity::begin("cooking", "the props' meshes");
+    let total = props.len() as u64;
+    let finished = std::sync::atomic::AtomicU64::new(0);
     let mut cooked: Vec<Option<(MeshletMesh, bool, f64)>> = props.iter().map(|_| None).collect();
     pool.scope(|s| {
         for (spec, slot) in props.iter().zip(cooked.iter_mut()) {
             let cache = cache.clone();
+            let (task, finished) = (&task, &finished);
             s.spawn(move |_| {
                 let spec: &PropSpec = spec;
                 let (done, stored) = cook_cached(
@@ -3410,6 +3415,8 @@ fn cook_props(props: &[PropSpec], recook: bool, pages_in_memory: bool) -> (Vec<M
                     tracing::warn!(prop = %spec.name, %error, "cooked mesh not cached");
                 }
                 *slot = Some((done.mesh, done.from_cache, done.ms));
+                let n = finished.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                task.progress(n, total);
             });
         }
     });

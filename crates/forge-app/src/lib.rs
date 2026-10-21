@@ -546,6 +546,10 @@ struct State<D: Demo> {
     debug_hdr_cycle: u64,
     /// The frame of the last scripted switch (a frame can start twice, after a resize).
     last_hdr_cycle: u64,
+    /// `FORGE_LOADING_CAPTURE=path`: one loading frame captured there, `FORGE_LOADING_CAPTURE_AT`
+    /// seconds (2 by default) after the shell started, to check what the loading screen says;
+    /// taken once.
+    loading_capture: Option<(PathBuf, Instant)>,
     overlay: Overlay,
     /// The preview, the content-light meter and the calibration pages.
     hdr: HdrPasses,
@@ -1174,6 +1178,16 @@ impl<D: Demo> State<D> {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(0),
             last_hdr_cycle: 0,
+            loading_capture: std::env::var_os("FORGE_LOADING_CAPTURE").map(|path| {
+                let at = std::env::var("FORGE_LOADING_CAPTURE_AT")
+                    .ok()
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .unwrap_or(2.0);
+                (
+                    PathBuf::from(path),
+                    Instant::now() + Duration::from_secs_f64(at.max(0.0)),
+                )
+            }),
             overlay,
             graph_stats: GraphStats::default(),
             memory_mark: None,
@@ -1422,7 +1436,10 @@ impl<D: Demo> State<D> {
         let extent = self.ctx.swapchain.extent();
         let frame_number = self.ctx.frames_rendered;
         let capture_path = match &self.config.capture {
-            _ if self.ctx.loading => None,
+            _ if self.ctx.loading => self
+                .loading_capture
+                .take_if(|(_, at)| Instant::now() >= *at)
+                .map(|(path, _)| path),
             Some((path, frame)) if *frame == frame_number => Some(path.clone()),
             Some((path, _))
                 if self
@@ -1643,7 +1660,9 @@ impl<D: Demo> State<D> {
             // What a bound key did, a few seconds at the bottom (D-069).
             let now = Instant::now();
             let notices = !console && !self.ctx.loading && self.console.has_notices(now);
-            if calibrating || profiling || console || notices {
+            // Over the loading screen: what the engine is busy with (`forge_core::activity`).
+            let loading = self.ctx.loading;
+            if calibrating || profiling || console || notices || loading {
                 if !calibrating && self.ctx.output.is_hdr() {
                     self.ctx.profile.counter(self.ctx.output.describe());
                 }
@@ -1652,6 +1671,9 @@ impl<D: Demo> State<D> {
                 if calibrating {
                     self.hdr.calibration.layout(canvas, &self.ctx.output);
                 } else {
+                    if loading {
+                        loading::layout_activity(canvas, extent);
+                    }
                     if profiling {
                         self.ctx.profile.layout(canvas, &title, extent);
                     }
