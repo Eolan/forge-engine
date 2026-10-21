@@ -810,6 +810,8 @@ struct Gallery {
     glass_check: Option<GlassCheck>,
     /// `FORGE_LAMP_TABLE` (#338's check): the frames' lamps by stable ids.
     lamp_check: Option<LampCheck>,
+    /// `FORGE_CELL_RECORD` (#338's check): the first house as a streamed cell's record.
+    cell_check: Option<CellCheck>,
     /// `--lamp-restir`: the lamps by ReSTIR DI (D-065's comparison), and the lamps the frame
     /// lights with, in its order.
     restir: Option<forge_render::LampRestir>,
@@ -1251,7 +1253,8 @@ impl Gallery {
             "--probe-cadence takes 1 to 8"
         );
         let mut region_check = None;
-        let probes = if ctx.device.features().ray_query && scene.rays().is_some() {
+        let mut cell_rooms = None;
+        let mut probes = if ctx.device.features().ray_query && scene.rays().is_some() {
             let params = ProbeParams {
                 rays: probe_rays,
                 cascades: probe_cascades,
@@ -1297,7 +1300,13 @@ impl Gallery {
                 // A check of #338's region sets: `FORGE_REGION_SETS` gives the probes the rooms
                 // as sets, the volumes whose footprints touch together (a house, a row), and
                 // `=toggle` removes the first set at frame 100 and adds it again at frame 150.
-                match std::env::var("FORGE_REGION_SETS").ok() {
+                // `FORGE_CELL_RECORD` (#338's check of a cell's record) gives the same sets but
+                // the first, whose rooms are the house its record adds (`CellCheck`).
+                let record = std::env::var("FORGE_CELL_RECORD").is_ok();
+                let sets = std::env::var("FORGE_REGION_SETS")
+                    .ok()
+                    .or_else(|| record.then(String::new));
+                match sets {
                     Some(mode) if !volumes.is_empty() => {
                         let groups = touching_groups(&volumes);
                         probes.reserve_regions(
@@ -1308,14 +1317,18 @@ impl Gallery {
                             ),
                         )?;
                         let mut first = None;
-                        for group in &groups {
+                        for group in groups.iter().skip(usize::from(record)) {
                             let id = probes.add_regions(&ctx.device, group)?;
                             first.get_or_insert(id);
                         }
                         tracing::info!(sets = groups.len(), "probe region sets (#338's check)");
-                        region_check = (mode == "toggle")
-                            .then(|| first.map(|id| (id, groups[0].clone())))
-                            .flatten();
+                        if record {
+                            cell_rooms = Some(groups[0].clone());
+                        } else {
+                            region_check = (mode == "toggle")
+                                .then(|| first.map(|id| (id, groups[0].clone())))
+                                .flatten();
+                        }
                     }
                     _ => probes.set_regions(&ctx.device, &volumes)?,
                 }
@@ -1563,6 +1576,27 @@ impl Gallery {
             }
             _ => None,
         };
+        // A check of #338's cell record: `FORGE_CELL_RECORD` gives the first house's rooms
+        // (`cell_rooms`), the lamps lighting them and the panes over them as one streamed cell's
+        // sets, the rest by sets beside them; `=toggle` takes the house out at frame 100 and
+        // in again at 150.
+        let mut cell_check = match (cell_rooms, running.as_mut()) {
+            (Some(rooms), Some(running)) if !args.no_lamps => {
+                let origin = scene.origin();
+                let lamps: Vec<_> = running
+                    .lamps(0.0)
+                    .into_iter()
+                    .map(|l| forge_render::lamps::Lamp {
+                        position: forge_render::CellPos::from_f64(l.position.as_dvec3())
+                            .relative_to(origin),
+                        ..l
+                    })
+                    .collect();
+                let toggle = std::env::var("FORGE_CELL_RECORD").is_ok_and(|m| m == "toggle");
+                Some(CellCheck::new(&lamps, rooms, toggle))
+            }
+            _ => None,
+        };
         // The scene's clear glass (D-065's part 4), from the world frame to the scene's.
         let mut glass = None;
         let mut glass_check = None;
@@ -1585,6 +1619,57 @@ impl Gallery {
                 // sets of 256 ids, and `=toggle` removes the first set at frame 100 and adds it
                 // again at frame 150 (`=toggle=K`: set K).
                 let made = match std::env::var("FORGE_GLASS_SETS").ok() {
+                    // `FORGE_CELL_RECORD`: the house's panes to its record, their lamps the
+                    // house's own; the rest one set, their lamps by their ids in the table.
+                    _ if cell_check.is_some() => {
+                        let check = cell_check.as_mut().expect("the cell check");
+                        let (mut house, mut rest) = split_panes(&panes, |t| check.holds(&panes, t));
+                        for l in &mut rest.lamp {
+                            *l = check
+                                .ids
+                                .get(*l as usize)
+                                .copied()
+                                .flatten()
+                                .unwrap_or(forge_render::NO_LAMP);
+                        }
+                        for l in &mut house.lamp {
+                            *l = check
+                                .house
+                                .iter()
+                                .position(|&h| h as u32 == *l)
+                                .map_or(forge_render::NO_LAMP, |k| k as u32);
+                        }
+                        let key = house.pane.iter().copied().min().unwrap_or(0);
+                        for p in &mut house.pane {
+                            *p -= key;
+                        }
+                        let ids = panes.pane.iter().max().map_or(1, |&p| p + 1);
+                        let mut made = forge_render::Glass::with_capacity(
+                            &ctx.device,
+                            &ctx.shaders,
+                            forge_render::GlassCapacity {
+                                corners: 2 * panes.positions.len() as u32,
+                                panes: 3 * ids,
+                                lamps: check.table.lamps().len() as u32,
+                            },
+                        )?;
+                        if !rest.is_empty() {
+                            made.add_panes(&ctx.device, &rest, 0)?;
+                        }
+                        let corners = check.sets.regions.iter().flat_map(|v| v.corners);
+                        let n = 4 * check.sets.regions.len().max(1);
+                        let middle = corners.fold(glam::Vec2::ZERO, |a, c| a + c) / n as f32;
+                        tracing::info!(
+                            triangles = house.triangle_count(),
+                            lamps = check.house.len(),
+                            rooms = check.sets.regions.len(),
+                            at = ?(scene.origin().offset(glam::Vec3::new(middle.x, 0.0, middle.y))).to_f64(),
+                            "a house's panes to its record (#338's check)"
+                        );
+                        check.sets.panes = house;
+                        check.sets.key = key;
+                        made
+                    }
                     Some(mode) => {
                         let sets = glass_check_sets(&panes);
                         let lamps = panes
@@ -1651,6 +1736,16 @@ impl Gallery {
             );
             None
         };
+        // #338's check of a cell's record: the house added as one before the first frame.
+        if let Some(check) = cell_check.as_mut() {
+            let record = forge_render::CellSystems {
+                probes: probes.as_mut(),
+                glass: glass.as_mut(),
+                lamps: &mut check.table,
+            }
+            .add(&ctx.device, &check.sets)?;
+            check.record = Some(record);
+        }
         let mut gallery = Self {
             barrels,
             walker,
@@ -1671,6 +1766,7 @@ impl Gallery {
             glass,
             glass_check,
             lamp_check,
+            cell_check,
             restir,
             kept_lamps: Vec::new(),
             tonemap: args.tonemap,
@@ -2339,6 +2435,52 @@ impl Demo for Gallery {
                         frame = ctx.frames_rendered,
                         "a lamp set removed or added (#338's check)"
                     );
+                }
+                check.update(&lamps);
+                if check.table.take_streets_changed() && !self.args.no_far_lamps {
+                    let street: Vec<_> = check
+                        .table
+                        .lamps()
+                        .iter()
+                        .filter(|l| l.outside())
+                        .copied()
+                        .collect();
+                    if let Err(e) = self.scene.set_far_lamps(&ctx.device, &street) {
+                        tracing::warn!("#338's check: the far lamps: {e}");
+                    }
+                }
+                check.table.lamps().to_vec()
+            }
+            None => lamps,
+        };
+        // #338's check of a cell's record (`FORGE_CELL_RECORD=toggle`): the house out at frame
+        // 100 and in again at 150, its rooms, panes and lamps as one; the lamps by their ids.
+        let lamps = match self.cell_check.as_mut() {
+            Some(check) => {
+                let mut systems = forge_render::CellSystems {
+                    probes: self.probes.as_mut(),
+                    glass: self.glass.as_mut(),
+                    lamps: &mut check.table,
+                };
+                let edited = match (check.toggle, ctx.frames_rendered) {
+                    (true, 100) => check.record.take().map(|r| {
+                        systems.remove(&r);
+                        Ok(())
+                    }),
+                    (true, 150) => Some(
+                        systems
+                            .add(&ctx.device, &check.sets)
+                            .map(|r| check.record = Some(r)),
+                    ),
+                    _ => None,
+                };
+                match edited {
+                    Some(Ok(())) => tracing::info!(
+                        frame = ctx.frames_rendered,
+                        "a house's record removed or added (#338's check)"
+                    ),
+                    Some(Err(e)) => tracing::warn!("#338's check: {e}"),
+                    None => {}
                 }
                 check.update(&lamps);
                 if check.table.take_streets_changed() && !self.args.no_far_lamps {
@@ -3624,6 +3766,103 @@ struct LampCheck {
     toggle: Option<usize>,
 }
 
+/// #338's check of a cell's record (`FORGE_CELL_RECORD`): the scene's first house (its touching
+/// rooms, the lamps lighting them and the panes over them) given as one streamed cell's sets
+/// ([`forge_render::CellSystems`]), the rest by sets beside it.
+struct CellCheck {
+    /// The frames' lamps by stable ids: the rest's, then the house's.
+    table: forge_render::lamps::LampTable,
+    /// Per lamp as the scene gives them, its id in the table; `None` for the house's, whose ids
+    /// its record gives.
+    ids: Vec<Option<u32>>,
+    /// The house's lamps, by their index as the scene gives them.
+    house: Vec<usize>,
+    /// The house's sets.
+    sets: forge_render::CellSets,
+    /// Its record while it is in.
+    record: Option<forge_render::CellRecord>,
+    /// `=toggle`: the house out at frame 100 and in again at 150.
+    toggle: bool,
+}
+
+impl CellCheck {
+    /// `lamps` (in the scene's frame) in a table, those lighting `rooms` (the house's) apart.
+    fn new(
+        lamps: &[forge_render::lamps::Lamp],
+        rooms: Vec<forge_render::RegionVolume>,
+        toggle: bool,
+    ) -> Self {
+        let ids_of: Vec<u32> = rooms.iter().map(|v| v.region).collect();
+        let house: Vec<usize> = (0..lamps.len())
+            .filter(|&i| lamps[i].regions.iter().any(|r| ids_of.contains(r)))
+            .collect();
+        let rest: Vec<usize> = (0..lamps.len()).filter(|i| !house.contains(i)).collect();
+        let mut table = forge_render::lamps::LampTable::new(2 * lamps.len() as u32 + 64);
+        let mut ids = vec![None; lamps.len()];
+        if !rest.is_empty() {
+            let set = table
+                .add(&rest.iter().map(|&i| lamps[i]).collect::<Vec<_>>())
+                .expect("the table's room");
+            let first = table.first(set).expect("the set just added");
+            for (k, &i) in rest.iter().enumerate() {
+                ids[i] = Some(first + k as u32);
+            }
+        }
+        Self {
+            table,
+            ids,
+            sets: forge_render::CellSets {
+                regions: rooms,
+                lamps: house.iter().map(|&i| lamps[i]).collect(),
+                ..Default::default()
+            },
+            house,
+            record: None,
+            toggle,
+        }
+    }
+
+    /// Lamp `i`'s id in the table (as the scene gives them), the house's while it is in.
+    fn id(&self, i: usize) -> Option<u32> {
+        match self.ids.get(i).copied().flatten() {
+            Some(id) => Some(id),
+            None => {
+                let k = self.house.iter().position(|&h| h == i)?;
+                let set = self.record?.lamps?;
+                Some(self.table.first(set)? + k as u32)
+            }
+        }
+    }
+
+    /// Whether pane triangle `t`'s middle stands in one of the house's rooms (padded by half a
+    /// metre: the panes lie in their walls).
+    fn holds(&self, panes: &forge_render::GlassPanes, t: usize) -> bool {
+        let c = (panes.positions[3 * t] + panes.positions[3 * t + 1] + panes.positions[3 * t + 2])
+            / 3.0;
+        self.sets.regions.iter().any(|v| {
+            let lo = v.corners.iter().fold(glam::Vec2::MAX, |a, &p| a.min(p)) - 0.5;
+            let hi = v.corners.iter().fold(glam::Vec2::MIN, |a, &p| a.max(p)) + 0.5;
+            c.x >= lo.x
+                && c.x <= hi.x
+                && c.z >= lo.y
+                && c.z <= hi.y
+                && c.y >= v.floor - 0.5
+                && c.y <= v.ceiling + 0.5
+        })
+    }
+
+    /// The frame's `lamps` into the table where they changed, the house's while it is in.
+    fn update(&mut self, lamps: &[forge_render::lamps::Lamp]) {
+        for (i, lamp) in lamps.iter().enumerate() {
+            if let Some(id) = self.id(i)
+                && self.table.lamps()[id as usize] != *lamp
+            {
+                self.table.set(id, *lamp);
+            }
+        }
+    }
+}
+
 /// The lamps a set holds in #338's check.
 const LAMP_CHECK_SET: usize = 32;
 
@@ -3703,6 +3942,27 @@ impl LampCheck {
             }
         }
     }
+}
+
+/// `panes` split by triangle: those `take` names, then the others.
+fn split_panes(
+    panes: &forge_render::GlassPanes,
+    take: impl Fn(usize) -> bool,
+) -> (forge_render::GlassPanes, forge_render::GlassPanes) {
+    let mut taken = forge_render::GlassPanes::default();
+    let mut rest = forge_render::GlassPanes::default();
+    for t in 0..panes.triangle_count() {
+        let to = if take(t) { &mut taken } else { &mut rest };
+        for c in 3 * t..3 * t + 3 {
+            to.positions.push(panes.positions[c]);
+            to.normals.push(panes.normals[c]);
+            to.glow.push(panes.glow[c]);
+            to.lamp
+                .push(panes.lamp.get(c).copied().unwrap_or(forge_render::NO_LAMP));
+            to.pane.push(panes.pane.get(c).copied().unwrap_or(0));
+        }
+    }
+    (taken, rest)
 }
 
 /// The panes a set holds in #338's check: ids from `GLASS_CHECK_PANES * k`.

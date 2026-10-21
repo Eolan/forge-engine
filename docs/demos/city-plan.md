@@ -980,6 +980,21 @@ mesh to test navigations inside the houses"):
     0 pixels against `=visible` to frame 44, then 20–50 (at most 1 000 for three frames after
     the demotion), the probes its mover woke as it moved (a static edit wakes none). Without
     probes, 0 pixels in every frame. `=swing` swings it there.
+- *A streamed cell's record* (#338): a cell comes in as a scene edit and its sets
+  (`forge_render::CellSets`: its rooms as the probes' regions, its clear panes, its lamps),
+  which `CellSystems::add` gives the probes, the glass and the lamp table in the update that
+  applies the edit, so all of it lands on one frame; `remove` takes them out the same way. The
+  lamps go first (the panes name the cell's own, which become the table's ids), and a set that
+  fails takes the others out again.
+  - **`FORGE_CELL_RECORD=on`:** the first touching group of rooms (at midnight 246 rooms east
+    of the green, their 61 lamps and 178 pane triangles) given as a record, the rest by sets:
+    against the village given whole (`--time-of-day 1.5 --fixed-exposure --ev100=-3`,
+    `--view=76.6,1.7,-184.3,146.8,0`), 210 pixels on the first frame (the far lamps' grid made
+    again), 0 to 3 from frame 20.
+  - **`=toggle`:** the record out at frame 100 and in again at 150. Equal to `=on` to frame 90;
+    the block's lamps, panes and rooms all go on the same frame. 140 frames after it is back,
+    69 000 pixels (at most 49 levels) still differ round its lit door and window, the probes
+    learning its rooms' light again.
 - *Street lamps lit* (D-065, #270: `forge_render::lamps::street_lights` since #296).
 
   ![The junction at 22:00 from above: each street lamp's pool under its head](images/village-street-lamps.png)

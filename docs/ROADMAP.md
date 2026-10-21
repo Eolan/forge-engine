@@ -676,12 +676,12 @@ The items below are the phase's original outline; the plan above orders them.
      `forge-world`'s cells (the flat grid, the cube sphere, the sectors), compressed (#215),
      and streamed by distance. A game's town drives it (#338, 2026-10-21): a scene's pages
      streamed (step 1), its dynamic scene holding movers and skinned meshes (step 2, 230b6add),
-     next a cell's content added and removed as one record (step 3: the editor's in-place edits,
-     the probes' region sets (23505d6e), the glass's pane sets, the lamps by stable ids and the
-     pool of movers static instances are promoted to while they move built; the record next),
-     then the streaming plan
-     driving it with far proxies (step 4); the loads profiled and the camera's view uploaded
-     first after it (#345).
+     a cell's content added and removed as one record (step 3, built 2026-10-22: the editor's
+     in-place edits, the probes' region sets (23505d6e), the glass's pane sets, the lamps by
+     stable ids, the pool of movers static instances are promoted to while they move, and
+     `CellSystems` adding a cell's rooms, panes and lamps beside its edit), next the streaming
+     plan driving it with far proxies (step 4); the loads profiled and the camera's view
+     uploaded first after it (#345).
    - **Generation at run time** stays possible where a game needs it: the same makers, run
      by the engine for a chunk on the fly instead of loading it.
    - **Still to find:** how to generate whole worlds, planets included, so that their chunks
