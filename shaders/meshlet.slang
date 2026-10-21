@@ -2970,6 +2970,34 @@ static float4 g_reflection_request;
 static float3 g_lamp_diffuse = float3(0.0);
 static float3 g_lamp_specular = float3(0.0);
 
+// Geometric specular anti-aliasing (#331; Tokuyoshi and Kaplanyan, "Improved Geometric Specular
+// Antialiasing", I3D 2019): how much the interpolated normal turns across the pixel being shaded,
+// as a kernel's roughness² (min(2σ²(|∂n/∂x|² + |∂n/∂y|²), κ)), set where its surface is rebuilt
+// from the mesh (0 elsewhere). The sun's and the lamps' highlights widen by it (`aa_power`), their
+// energy kept, so a curved glossy body's highlight no longer shrinks under a pixel and flickers as
+// it moves; the reflections keep their roughness, which the mirror rays' shares follow.
+static float g_normal_variance = 0.0;
+static const float GEOMETRIC_AA_SIGMA2 = 0.15915494; // 1 / 2π, the paper's screen-space variance
+static const float GEOMETRIC_AA_KAPPA = 0.18;         // the paper's clamp
+
+// A Blinn-Phong exponent widened by `g_normal_variance` (GGX's α² = 2 / (power + 2) and back).
+float aa_power(float power)
+{
+    float alpha2 = 2.0 / (power + 2.0);
+    return 2.0 / saturate(alpha2 + g_normal_variance) - 2.0;
+}
+
+// A Blinn-Phong highlight with its exponent widened by `g_normal_variance`, its energy kept (the
+// lobe's integral goes as 1 / (power + 2)).
+float aa_highlight(float nh, float power)
+{
+    // A flat surface keeps its highlight to the bit.
+    if (g_normal_variance <= 0.0)
+        return pow(max(nh, 0.0), power);
+    float widened = max(aa_power(power), 0.001);
+    return pow(max(nh, 0.0), widened) * ((widened + 2.0) / (power + 2.0));
+}
+
 // Where a surface at `world` (the scene's frame) facing `n` takes its lamps from (D-065): with
 // `probes` and their regions (D-068), its region and the one across a doorway, whose lamps light
 // it (`lamp_lights`: a house's rooms are its light lists); the runs of the light lists they name
@@ -3170,7 +3198,7 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
             float3 illuminance = light.rgb / max(f[0].sun_illuminance, 1e-9);
             float3 half_vector = normalize(normalize(f[0].lamps[i - 1u].position_radius.xyz - world) + view);
             g_lamp_diffuse += illuminance;
-            g_lamp_specular += pow(max(dot(n, half_vector), 0.0), specular_power) * specular_weight * illuminance;
+            g_lamp_specular += aa_highlight(dot(n, half_vector), specular_power) * specular_weight * illuminance;
         }
     }
 }
@@ -3205,7 +3233,7 @@ void lamp_add<let SHADOWS : int>(Frame* f, Lamp lamp, uint i, float scale, float
     float3 illuminance = lamp.colour_reach.rgb / max(dist2, radius * radius) * (max(ndl, 0.0) * window * window * to_units * scale * lamp_beam(lamp, dir));
     g_lamp_diffuse += illuminance;
     float3 half_vector = normalize(dir + view);
-    g_lamp_specular += pow(max(dot(n, half_vector), 0.0), specular_power) * specular_weight * illuminance;
+    g_lamp_specular += aa_highlight(dot(n, half_vector), specular_power) * specular_weight * illuminance;
 }
 
 // The street lamps lit beyond the frame's set (#284, `Frame::far_lamps`) on a surface at `world`
@@ -3309,7 +3337,7 @@ float3 sun_light(Frame* f, float3 albedo, float3 n, float3 geometric, float spec
     float3 diffuse = max(ndl, 0.0) * shadow;
     // The highlight's half vector, from the surface towards the camera (issue #98).
     float3 half_vector = normalize(light + view);
-    float3 specular = pow(max(dot(n, half_vector), 0.0), specular_power) * specular_weight * (ndl > 0.0 ? shadow : float3(0.0));
+    float3 specular = aa_highlight(dot(n, half_vector), specular_power) * specular_weight * (ndl > 0.0 ? shadow : float3(0.0));
     float3 sun = f[0].sun_color.rgb;
     // Under a sky: the light the sky and the ground send the normal (issue #47), scaled by
     // how much of it the surface sees (issue #48). With probes, what they measured there
@@ -5719,6 +5747,13 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     float3 n2 = normalize(mul(frame, o2));
     Surface s;
     s.n = normalize(b.lambda.x * n0 + b.lambda.y * n1 + b.lambda.z * n2);
+    // How far the normal turns across the pixel (#331): the vertices' normals by the
+    // barycentrics' change per pixel.
+    float3 dndx = b.ddx.x * n0 + b.ddx.y * n1 + b.ddx.z * n2;
+    float3 dndy = b.ddy.x * n0 + b.ddy.y * n1 + b.ddy.z * n2;
+    float turn = min(2.0 * GEOMETRIC_AA_SIGMA2 * (dot(dndx, dndx) + dot(dndy, dndy)), GEOMETRIC_AA_KAPPA);
+    // A flat face's normals cancel to rounding: it keeps its highlight to the bit.
+    g_normal_variance = turn > 1e-6 ? turn : 0.0;
     s.object_normal = normalize(b.lambda.x * o0 + b.lambda.y * o1 + b.lambda.z * o2);
     s.object_position = b.lambda.x * v0.position + b.lambda.y * v1.position + b.lambda.z * v2.position;
     s.dpdx = b.ddx.x * v0.position + b.ddx.y * v1.position + b.ddx.z * v2.position;
