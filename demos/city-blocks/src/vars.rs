@@ -36,6 +36,8 @@ pub(crate) struct RenderVars {
     bits: Vec<(Var<bool>, u32)>,
     /// The sun's shadows' denoiser (`r.shadows.denoiser`, F6 before D-069), where there is one.
     denoiser: Option<Var<usize>>,
+    /// Its frames of history (`r.shadows.history`, #337), where there is one.
+    shadow_history: Option<Var<i64>>,
     /// The catalogue's stars and the Moon's albedo at night (`r.sky.real`, the period key
     /// before D-069), where the night has them.
     sky_real: Option<Var<bool>>,
@@ -219,6 +221,10 @@ impl Gallery {
             ),
             bits,
             denoiser,
+            shadow_history: (!self.sun_shadows.is_empty()).then(|| {
+                let history = forge_render::sun_shadow::SHADOW_HISTORY as i64;
+                s.add(rs::shadow_history(history))
+            }),
             sky_real,
             liquid,
         });
@@ -340,6 +346,14 @@ impl Gallery {
         for &(var, bit) in &v.bits {
             if changed(var) && self.flags.has(bit) != s.get(var) {
                 self.flags.toggle(bit);
+            }
+        }
+        if let Some(var) = v.shadow_history
+            && s.changed_since(var, seen)
+        {
+            let history = s.get(var) as u32;
+            for denoiser in &mut self.sun_shadows {
+                denoiser.history = history;
             }
         }
         if let Some(var) = v.denoiser

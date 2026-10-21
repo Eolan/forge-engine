@@ -79,7 +79,14 @@ pub struct SunShadowDenoiser {
     backend: Backend,
     previous: Option<SunShadowCamera>,
     reset: bool,
+    /// SIGMA's most frames of temporal stabilisation ([`SHADOW_HISTORY`] by default; #337: a
+    /// moving caster's shadow trails over them, a still one's penumbra steadies). FFX's ignores it.
+    pub history: u32,
 }
+
+/// [`SunShadowDenoiser::history`]'s default: past NRD's 5, on the models lab's curtains at noon the
+/// per-pixel range over the 16-frame cycle fell from 1.67 to 1.51 codes (99th percentile 17 to 14).
+pub const SHADOW_HISTORY: u32 = 7;
 
 impl SunShadowDenoiser {
     /// Loads NRD's SIGMA from `dir` (`nrd-sdk/bin`, or wherever `FORGE_NRD_DIR` points) for
@@ -109,6 +116,7 @@ impl SunShadowDenoiser {
             backend,
             previous: None,
             reset: true,
+            history: SHADOW_HISTORY,
         }
     }
 
@@ -199,9 +207,7 @@ impl SunShadowDenoiser {
                 reset,
                 // The shadow rays' reach (`sun_shadow`'s 50 km); the sky is written far beyond.
                 denoising_range: 50_000.0,
-                // NRD's most (5 by default): on the models lab's curtains at noon, the per-pixel range
-                // over the 16-frame cycle fell from 1.67 to 1.51 codes (99th percentile 17 to 14).
-                stabilized_frames: 7,
+                stabilized_frames: self.history,
             },
             ffx: FfxFrame {
                 view: camera.view,

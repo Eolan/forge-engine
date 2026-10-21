@@ -216,6 +216,17 @@ pub fn ao_radius(default: f64) -> Spec<f64> {
     )
 }
 
+/// How many frames the sun's shadows' denoiser steadies over (#337, SIGMA's stabilisation).
+pub fn shadow_history(default: i64) -> Spec<i64> {
+    Spec::int(
+        "r.shadows.history",
+        default,
+        0..=7,
+        "Frames the sun's shadows' denoiser (SIGMA) steadies over: fewer keep a moving caster's \
+         shadow from trailing behind it, more steady a still penumbra.",
+    )
+}
+
 /// What the ambient occlusion leaves out near the camera (#337).
 pub fn ao_ignore_nearer(default: f64) -> Spec<f64> {
     Spec::float(
