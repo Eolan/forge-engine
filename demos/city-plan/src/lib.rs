@@ -3772,29 +3772,51 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
                     continue;
                 };
                 let p = |x: f64, d: f64| wall.a + t * x + inward * d;
-                let (tx, h) = (
-                    Vec3::new(t.x as f32, 0.0, t.y as f32),
-                    ((y1 - y0) / 3.0) as f32,
-                );
+                let tx = Vec3::new(t.x as f32, 0.0, t.y as f32);
                 let r = ((deep - from) / 3.0) as f32;
+                // The reveals cut where the face round the hole is, so the two share their
+                // corners along the inner edge: the jambs at the heights the bands beside them
+                // stop at, the head and sill at the bands' edges across the hole. A head whole
+                // under a face cut by the window over the door left T-junctions along their
+                // edge, white flakes in a line in low sun (the owner, 2026-10-21).
+                let up: Vec<f64> = std::iter::once(y0)
+                    .chain(
+                        cuts.iter()
+                            .copied()
+                            .filter(|&c| c > y0 + 0.005 && c < y1 - 0.005),
+                    )
+                    .chain(std::iter::once(y1))
+                    .collect();
+                let across: Vec<f64> = std::iter::once(lo)
+                    .chain(
+                        edges
+                            .iter()
+                            .copied()
+                            .filter(|&e| e > lo + 0.005 && e < hi - 0.005),
+                    )
+                    .chain(std::iter::once(hi))
+                    .collect();
                 for (x, n) in [(lo, tx), (hi, -tx)] {
                     let (a, b) = (p(x, from), p(x, deep));
-                    triangle_uv(
-                        mesh,
-                        [at(a, y0), at(b, y0), at(b, y1)],
-                        [[0.0, 0.0], [r, 0.0], [r, -h]],
-                        n,
-                        plaster,
-                    );
-                    triangle_uv(
-                        mesh,
-                        [at(a, y0), at(b, y1), at(a, y1)],
-                        [[0.0, 0.0], [r, -h], [0.0, -h]],
-                        n,
-                        plaster,
-                    );
+                    for pair in up.windows(2) {
+                        let (ya, yb) = (pair[0], pair[1]);
+                        let (va, vb) = ((-(ya - y0) / 3.0) as f32, (-(yb - y0) / 3.0) as f32);
+                        triangle_uv(
+                            mesh,
+                            [at(a, ya), at(b, ya), at(b, yb)],
+                            [[0.0, va], [r, va], [r, vb]],
+                            n,
+                            plaster,
+                        );
+                        triangle_uv(
+                            mesh,
+                            [at(a, ya), at(b, yb), at(a, yb)],
+                            [[0.0, va], [r, vb], [0.0, vb]],
+                            n,
+                            plaster,
+                        );
+                    }
                 }
-                let l = ((hi - lo) / 3.0) as f32;
                 // The head; a window's sill; a door's floor through the wall at its storey's
                 // floor (`floor_level`: the ground floor 2 cm over the sill the kit's threshold
                 // stone stands on), in the floor's stone: from the threshold's inner end to the
@@ -3811,21 +3833,25 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
                 }
                 let bottom = caps[1].0;
                 for &(y, n, section) in &caps {
-                    let (a, b, c, d) = (p(lo, from), p(hi, from), p(hi, deep), p(lo, deep));
-                    triangle_uv(
-                        mesh,
-                        [at(a, y), at(b, y), at(c, y)],
-                        [[0.0, 0.0], [l, 0.0], [l, r]],
-                        n,
-                        section,
-                    );
-                    triangle_uv(
-                        mesh,
-                        [at(a, y), at(c, y), at(d, y)],
-                        [[0.0, 0.0], [l, r], [0.0, r]],
-                        n,
-                        section,
-                    );
+                    for pair in across.windows(2) {
+                        let (xa, xb) = (pair[0], pair[1]);
+                        let (a, b, c, d) = (p(xa, from), p(xb, from), p(xb, deep), p(xa, deep));
+                        let (ua, ub) = (((xa - lo) / 3.0) as f32, ((xb - lo) / 3.0) as f32);
+                        triangle_uv(
+                            mesh,
+                            [at(a, y), at(b, y), at(c, y)],
+                            [[ua, 0.0], [ub, 0.0], [ub, r]],
+                            n,
+                            section,
+                        );
+                        triangle_uv(
+                            mesh,
+                            [at(a, y), at(c, y), at(d, y)],
+                            [[ua, 0.0], [ub, r], [ua, r]],
+                            n,
+                            section,
+                        );
+                    }
                 }
                 // Behind the joint with the kit's lining (at `from`), a strip 5 mm into the wall
                 // round the hole: the lining and these reveals are two meshes whose common edge

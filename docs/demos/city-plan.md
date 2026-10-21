@@ -1042,7 +1042,11 @@ mesh to test navigations inside the houses"):
   meshes whose common edge never quite closes. Every band is now cut at every height a band of
   its wall stops at, and a strip 5 mm into the wall backs each lining's joint round the hole.
   The plaster is mapped by the place along the wall and the height, so it runs on from band to
-  band.
+  band. The reveals' inner edge did the same against the face (the owner, 2026-10-21: white
+  flakes along the edge of the wall over the hall's door, bright in low sun): the head was one
+  quad under a face cut at the edges of the window above, the jambs whole beside bands cut at
+  their neighbours' sills. The jambs are now cut at those heights and the head and sill at the
+  bands' edges, so the two share their corners.
 - *A front past a bend* (`houses::footprint_of`). A house across its whole lot followed the lot's
   front round a bend in the street, 4.4 m past its frontage on the square's corner, but its
   plan's rooms stop at the frontage: that wall had nothing behind it, blank on three storeys
