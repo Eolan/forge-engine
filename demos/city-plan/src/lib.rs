@@ -561,6 +561,8 @@ pub struct PlanScenario {
     walk_on_start: bool,
     /// When to hide every other clear pane and raise the rest (`--glass-test`, #325), seconds.
     glass_test: Option<f32>,
+    /// When to hide the forest (`--static-test`, #323), seconds.
+    static_test: Option<f32>,
     /// The names the fingerposts' blades carry, a row of their atlas each.
     sign_names: Vec<String>,
     /// Seconds into the run at which to board the nearest tram (scripted rides).
@@ -2174,6 +2176,7 @@ impl PlanScenario {
             holds: holds.clone(),
             walk_on_start: false,
             glass_test: None,
+            static_test: None,
             ride_after: None,
             games,
             stalls: stalls.iter().map(|&(at, _)| at).collect(),
@@ -2265,6 +2268,13 @@ impl PlanScenario {
     /// panes changed at run time (#325).
     pub fn glass_test(mut self) -> Self {
         self.glass_test = Some(1.0);
+        self
+    }
+
+    /// One second in, the village's forest hidden, its trees, their stand-ins and their shadows: the
+    /// check of static instances changed at run time (#323).
+    pub fn static_test(mut self) -> Self {
+        self.static_test = Some(1.0);
         self
     }
 
@@ -6821,6 +6831,9 @@ impl Scenario for PlanScenario {
         laps.mark("materials applied");
         builder.set_ray_traced(!args.no_shadows);
         builder.set_origin(scene_origin(args));
+        if self.static_test.is_some() {
+            builder.allow_static_edits();
+        }
         if let Some([grime, stain, cracks]) = decal_textures {
             let stamp = |texture, strength: f32, priority| forge_render::DecalKind {
                 texture,
@@ -6886,6 +6899,7 @@ impl Scenario for PlanScenario {
         laps.mark("tiles");
         // The forest by species (D-063): a few individuals of each grown once (`forge_flora`),
         // their meshes instanced, each plant scaled to its height and crown.
+        let flora_first = builder.instance_count() as u32;
         if !self.flora.is_empty() {
             // Each species' individuals, grown at a quarter, half and all of its maturity, three
             // of each; a plant takes the age nearest its height, so a young street tree is a
@@ -6995,6 +7009,7 @@ impl Scenario for PlanScenario {
                 }
             }
         }
+        let flora_end = builder.instance_count() as u32;
         laps.mark("flora");
         if !self.trees.is_empty() {
             let model = builder.add_mesh(&MeshletMesh::build(&tree_model()));
@@ -7183,6 +7198,9 @@ impl Scenario for PlanScenario {
                 walker: None,
                 walk_on_start: self.walk_on_start,
                 glass_test: self.glass_test,
+                static_test: self
+                    .static_test
+                    .map(|at| (self.clock + f64::from(at), flora_first..flora_end)),
                 ride_at: self.ride_after.map(|s| self.clock + s),
                 riding: None,
                 screens: self
@@ -7229,6 +7247,8 @@ struct PlanRunning {
     walker: Option<walk::Walker>,
     /// When to hide every other clear pane and raise the rest (`--glass-test`, #325), seconds.
     glass_test: Option<f32>,
+    /// When to hide the forest, on the service clock, and its instances (`--static-test`, #323).
+    static_test: Option<(f64, std::ops::Range<u32>)>,
     walk_on_start: bool,
     /// The population on foot round the camera, and where the camera last stood (x, z).
     crowd: Option<crowd::Crowd>,
@@ -7460,6 +7480,17 @@ impl Running for PlanRunning {
     }
 
     fn movers(&mut self, scene: &mut MeshletScene) {
+        // `--static-test` (#323): the forest hidden at its time, its records, cells and place in
+        // the rays' structure changed in place.
+        if let Some((at, trees)) = &self.static_test
+            && self.clock >= *at
+        {
+            for instance in trees.clone() {
+                scene.set_static_visibility(instance, forge_render::meshlet::Visibility::NONE);
+            }
+            tracing::info!(instances = trees.len(), "static test: the forest hidden");
+            self.static_test = None;
+        }
         if self.trams.is_empty()
             && self.crowd.is_none()
             && self.boats.is_empty()

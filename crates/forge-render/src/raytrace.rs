@@ -235,6 +235,10 @@ pub(crate) fn tlas_push(
     }
 }
 
+/// Updates in place of the static structure (#323) before it is built anew: an update keeps the
+/// tree and only refits its boxes, which grow as instances move.
+const STATIC_REBUILD_AFTER: u32 = 240;
+
 /// Mirrors `TlasPush` in `meshlet.slang`.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -427,6 +431,11 @@ pub struct SceneRays {
     /// Per mesh, its bottom-level structure's address (read by the instance pass).
     blas_addresses: Arc<Buffer>,
     tlas: Option<AccelerationStructure>,
+    /// In a scene whose static instances change at run time (#323): the static structure, built
+    /// once and updated in place over the records the edits rewrite, in place of `tlas`; and the
+    /// instance pass that writes its records, and the updates since its last full build.
+    static_tlas: Option<(DynamicTlas, Pipeline)>,
+    static_updates: std::cell::Cell<u32>,
     /// Triangles over the bottom-level structures.
     pub triangles: u64,
     /// The largest object-space error of the meshes' cuts: how far the traced surfaces may
@@ -652,6 +661,8 @@ impl SceneRays {
             skin_frames: AtomicU64::new(0),
             blas_addresses: Arc::new(blas_addresses),
             tlas: None,
+            static_tlas: None,
+            static_updates: std::cell::Cell::new(0),
             blas_ms: ms + start.elapsed().as_secs_f64() * 1e3,
             tlas_ms: 0.0,
             movers: None,
@@ -866,6 +877,7 @@ impl SceneRays {
         instances: &Buffer,
         count: u32,
         origin: CellPos,
+        updatable: bool,
     ) -> Result<()> {
         let start = std::time::Instant::now();
         let module = device.create_shader_module(
@@ -879,6 +891,31 @@ impl SceneRays {
         });
         device.destroy_shader_module(module);
         let pipeline = pipeline?;
+        if updatable {
+            // Static instances that change at run time (#323): the structure keeps its records
+            // and its instance pass, and frames with edits update it in place.
+            let tlas = device.create_updatable_tlas(count, "scene TLAS")?;
+            let push = TlasPush {
+                instances: instances.address(),
+                blas: self.blas_addresses.address(),
+                records: tlas.records().address(),
+                rt_meshes: self.hit_data[1].address(),
+                materials: self.materials,
+                count,
+                first: 0,
+                origin_cell: origin.cell.extend(0).to_array(),
+                origin_local: origin.local.extend(0.0).to_array(),
+            };
+            device.execute_compute_once(|commands| {
+                commands.bind_pipeline(&pipeline);
+                commands.push_constants(&pipeline, &push);
+                commands.dispatch(count.div_ceil(64), 1, 1);
+            })?;
+            device.execute_compute_once(|commands| commands.build_dynamic_tlas(&tlas, count))?;
+            self.static_tlas = Some((tlas, pipeline));
+            self.tlas_ms = start.elapsed().as_secs_f64() * 1e3;
+            return Ok(());
+        }
         let records = device.create_buffer(BufferDesc {
             size: u64::from(count.max(1)) * 64,
             usage: vk::BufferUsageFlags::STORAGE_BUFFER
@@ -915,7 +952,80 @@ impl SceneRays {
 
     /// The top-level structure's address, 0 before it is built.
     pub fn tlas_address(&self) -> u64 {
-        self.tlas.as_ref().map_or(0, AccelerationStructure::address)
+        match &self.static_tlas {
+            Some((tlas, _)) => tlas.address(),
+            None => self.tlas.as_ref().map_or(0, AccelerationStructure::address),
+        }
+    }
+
+    /// The static structure's storage, in a scene whose static instances change (#323): the
+    /// passes tracing rays declare it every frame, so a frame's update waits for the frames
+    /// before it to finish tracing. `None` in other scenes.
+    pub(crate) fn static_storage<'f>(&'f self, graph: &mut FrameGraph<'f>) -> Option<BufferHandle> {
+        let (tlas, _) = self.static_tlas.as_ref()?;
+        Some(graph.import_buffer(tlas.storage()))
+    }
+
+    /// Declares the update of the static structure over the static instances `first..=last`
+    /// of `instances` (the table, which this frame's edits rewrote, #323): their records by the
+    /// instance pass, then the structure updated in place, or built anew every
+    /// [`STATIC_REBUILD_AFTER`] updates so its boxes fit again. Returns its storage, for the
+    /// passes tracing rays to declare; `None` in a scene without static edits.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn declare_static_update<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        instances: BufferHandle,
+        instances_address: u64,
+        first: u32,
+        last: u32,
+        count: u32,
+        origin: CellPos,
+    ) -> Option<BufferHandle> {
+        let (tlas, pipeline) = self.static_tlas.as_ref()?;
+        let records = graph.import_buffer(tlas.records());
+        let storage = graph.import_buffer(tlas.storage());
+        let scratch = graph.import_buffer(tlas.scratch());
+        let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+        let edited = last + 1 - first;
+        let push = TlasPush {
+            instances: instances_address,
+            blas: self.blas_addresses.address(),
+            records: tlas.records().address() + u64::from(first) * 64,
+            rt_meshes: self.hit_data[1].address(),
+            materials: self.materials,
+            count: edited,
+            first,
+            origin_cell: origin.cell.extend(0).to_array(),
+            origin_local: origin.local.extend(0.0).to_array(),
+        };
+        let updates = self.static_updates.get() + 1;
+        if updates >= STATIC_REBUILD_AFTER {
+            tlas.rebuild_next();
+            self.static_updates.set(0);
+        } else {
+            self.static_updates.set(updates);
+        }
+        graph
+            .pass("scene/static tlas instances")
+            .buffer(instances, BufferAccess::ShaderRead(compute))
+            .buffer(records, BufferAccess::ShaderWrite(compute))
+            .run(move |_, commands| {
+                commands.bind_pipeline(pipeline);
+                commands.push_constants(pipeline, &push);
+                commands.dispatch(edited.div_ceil(64), 1, 1);
+                Ok(())
+            });
+        graph
+            .pass("scene/static tlas")
+            .buffer(records, BufferAccess::BuildInput)
+            .buffer(storage, BufferAccess::BuildWrite)
+            .buffer(scratch, BufferAccess::BuildWrite)
+            .run(move |_, commands| {
+                commands.build_dynamic_tlas(tlas, count);
+                Ok(())
+            });
+        Some(storage)
     }
 
     /// Bytes of every structure.
@@ -927,6 +1037,7 @@ impl SceneRays {
             .sum::<u64>()
             + self.dynamic.iter().map(DynamicBlas::size).sum::<u64>()
             + self.tlas.as_ref().map_or(0, AccelerationStructure::size)
+            + self.static_tlas.as_ref().map_or(0, |(t, _)| t.size())
     }
 }
 

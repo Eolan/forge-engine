@@ -568,6 +568,17 @@ impl DynamicTlas {
     pub fn capacity(&self) -> u32 {
         self.capacity
     }
+
+    /// Makes the next build a full one rather than an update in place: an updated structure's
+    /// boxes grow as its instances move, and a rebuild now and then fits them again (#323).
+    pub fn rebuild_next(&self) {
+        self.built.set(None);
+    }
+
+    /// Bytes of its storage.
+    pub fn size(&self) -> u64 {
+        self.storage.size()
+    }
 }
 
 impl Drop for DynamicTlas {
@@ -615,6 +626,32 @@ impl Device {
     /// Creates a top-level structure for builds every frame over at most `capacity` instance
     /// records ([`DynamicTlas`]).
     pub fn create_dynamic_tlas(self: &Arc<Self>, capacity: u32, name: &str) -> Result<DynamicTlas> {
+        let flag = |name: &str| std::env::var_os(name).is_some_and(|v| v != "0");
+        let refit = flag("FORGE_TLAS_REFIT");
+        let flags = dynamic_tlas_flags(refit, flag("FORGE_TLAS_FAST_TRACE"));
+        self.create_tlas_with(capacity, name, refit, flags)
+    }
+
+    /// Creates a top-level structure built once, fast to trace, then updated in place when a
+    /// few of its `capacity` instance records change (#323: a scene's static instances shown,
+    /// hidden or moved at run time). Its first [`crate::Commands::build_dynamic_tlas`] builds it;
+    /// the next ones over the same count update it, until [`DynamicTlas::rebuild_next`].
+    pub fn create_updatable_tlas(
+        self: &Arc<Self>,
+        capacity: u32,
+        name: &str,
+    ) -> Result<DynamicTlas> {
+        use vk::BuildAccelerationStructureFlagsKHR as F;
+        self.create_tlas_with(capacity, name, true, F::PREFER_FAST_TRACE | F::ALLOW_UPDATE)
+    }
+
+    fn create_tlas_with(
+        self: &Arc<Self>,
+        capacity: u32,
+        name: &str,
+        refit: bool,
+        flags: vk::BuildAccelerationStructureFlagsKHR,
+    ) -> Result<DynamicTlas> {
         let loader = self.acceleration()?;
         let capacity = capacity.max(1);
         let records = self.create_buffer(BufferDesc {
@@ -625,9 +662,6 @@ impl Device {
             category: MemoryCategory::Work,
             name: &format!("{name} records"),
         })?;
-        let flag = |name: &str| std::env::var_os(name).is_some_and(|v| v != "0");
-        let refit = flag("FORGE_TLAS_REFIT");
-        let flags = dynamic_tlas_flags(refit, flag("FORGE_TLAS_FAST_TRACE"));
         let geometries = [instance_geometry(records.address())];
         let info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
             .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL)

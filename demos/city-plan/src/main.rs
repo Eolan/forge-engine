@@ -57,6 +57,10 @@ struct Cli {
     /// panes changed at run time (#325).
     #[arg(long)]
     glass_test: bool,
+    /// One second in, hide the village's forest, its trees' stand-ins and shadows with them: the
+    /// check of static instances changed at run time (#323).
+    #[arg(long)]
+    static_test: bool,
     /// Board the tram nearest the camera this many seconds in (C boards and gets off by hand).
     #[arg(long)]
     ride: Option<f64>,
@@ -490,6 +494,11 @@ fn main() -> anyhow::Result<()> {
         };
         let scenario = if cli.glass_test {
             scenario.glass_test()
+        } else {
+            scenario
+        };
+        let scenario = if cli.static_test {
+            scenario.static_test()
         } else {
             scenario
         };

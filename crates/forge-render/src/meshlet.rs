@@ -37,6 +37,7 @@ use forge_gpu::{
 use glam::{DQuat, DVec3, Mat4, Quat, Vec2, Vec3, Vec4};
 
 mod dynamic;
+mod static_edits;
 pub use dynamic::{DynamicCapacity, MeshRays, SceneEdit, SceneEditor};
 
 /// Culling flags, mirrored in `meshlet.slang`.
@@ -148,6 +149,15 @@ impl Visibility {
         far_shadows: true,
         probes: true,
         mirrors: true,
+    };
+
+    /// Nothing sees it: hidden (#323, [`MeshletScene::set_static_visibility`]).
+    pub const NONE: Visibility = Visibility {
+        drawn: false,
+        shadows: false,
+        far_shadows: false,
+        probes: false,
+        mirrors: false,
     };
 
     /// Only the probes' rays meet it: a stand-in for their light (#297's crown proxies).
@@ -1120,6 +1130,8 @@ pub struct MoversFrame {
     pub instances: forge_gpu::BufferHandle,
     /// The movers' acceleration structure's storage.
     pub tlas: Option<forge_gpu::BufferHandle>,
+    /// The static structure's storage, in a scene whose static instances change (#323).
+    pub static_tlas: Option<forge_gpu::BufferHandle>,
     /// The address of the movers' records of this frame, in the table.
     pub records: u64,
     /// The address of their records of the frame before, their ring's slot.
@@ -1149,6 +1161,10 @@ impl MoversFrame {
             .buffer(m.instances, BufferAccess::ShaderRead(stages))
             .buffer_if(
                 m.tlas.filter(|_| traces),
+                BufferAccess::AccelerationStructureRead(stages),
+            )
+            .buffer_if(
+                m.static_tlas.filter(|_| traces),
                 BufferAccess::AccelerationStructureRead(stages),
             )
             .buffer_if(
@@ -1231,6 +1247,9 @@ pub struct MeshletSceneBuilder {
     ray_budgets: HashMap<u32, u32>,
     /// The room a dynamic scene reserves ([`MeshletSceneBuilder::reserve_dynamic`], #220).
     dynamic: Option<DynamicCapacity>,
+    /// The static instances change at run time ([`MeshletSceneBuilder::allow_static_edits`],
+    /// #323).
+    static_edits: bool,
     /// What the scene keeps alive for one instance each ([`MeshletSceneBuilder::keep_for`]).
     instance_kept: Vec<(usize, Box<dyn std::any::Any + Send>)>,
     /// The view whose pages a streamed scene loads first
@@ -1516,6 +1535,15 @@ impl MeshletSceneBuilder {
             .extend(meshes.iter().map(|m| (m.0, budget)));
     }
 
+    /// Lets the scene's static instances change at run time (#323,
+    /// [`MeshletScene::set_static_transform`], [`MeshletScene::set_static_visibility`]): it keeps
+    /// their records on the CPU, and its static acceleration structure is built to be updated in
+    /// place (fast to trace still). Not with a dynamic scene ([`Self::reserve_dynamic`]) or
+    /// instances the GPU places (`crate::placement`), whose records the CPU does not hold.
+    pub fn allow_static_edits(&mut self) {
+        self.static_edits = true;
+    }
+
     /// Reserves `capacity` for a scene that takes and frees meshes and instances as it runs
     /// (#220, [`MeshletScene::editor`]): its tables are made at that size. Such a scene streams
     /// its pages ([`Residency::Streamed`]) and has no movers, skinned meshes or GPU-placed
@@ -1762,6 +1790,12 @@ impl MeshletSceneBuilder {
         let page_count = self.store.sources.len() as u32;
         if let Some(capacity) = self.dynamic {
             self.check_dynamic(capacity, residency)?;
+            if self.static_edits {
+                return Err(GpuError::Unsupported(
+                    "a dynamic scene edits its instances through its editor, not as static edits"
+                        .to_owned(),
+                ));
+            }
         }
         let usage = vk::BufferUsageFlags::STORAGE_BUFFER;
         // Per mesh, its vertices' and triangles' ranges in the rays' tables (first, count each).
@@ -2175,6 +2209,13 @@ impl MeshletSceneBuilder {
                     )
                 })
                 .transpose()?,
+            static_edits: self
+                .static_edits
+                .then(|| {
+                    let count = self.movers.map_or(self.instances.len(), |m| m as usize);
+                    static_edits::StaticEdits::new(device, &self.instances[..count], &self.meshes)
+                })
+                .transpose()?,
             indirect: (0..FRAMES_IN_FLIGHT)
                 .map(|i| {
                     device
@@ -2421,6 +2462,8 @@ pub struct MeshletScene {
     instances: GraphBuffer,
     /// The movers (#79), when the scene has them.
     movers: Option<SceneMovers>,
+    /// Its static instances as the CPU changes them (#323), when it allows it.
+    static_edits: Option<static_edits::StaticEdits>,
     /// The skinned meshes (#165), when the scene has them.
     skins: Option<SceneSkins>,
     /// The scene's origin: the frame of the acceleration structure, the probes and the dust
@@ -2824,6 +2867,41 @@ impl MeshletScene {
         }
     }
 
+    /// Puts static instance `instance` (in the order added) at `transform` from the next frame
+    /// drawn (#323): its record, its culling cell and its place in the static acceleration
+    /// structure, which updates in place on that frame. A few hundred a frame cost a few tens of
+    /// microseconds; up to 4 096 are uploaded a frame, the rest on the next ones. What swings
+    /// every frame belongs to the movers (#79), which give it its own motion.
+    ///
+    /// # Panics
+    ///
+    /// When the scene was built without [`MeshletSceneBuilder::allow_static_edits`], or
+    /// `instance` is not a static one.
+    pub fn set_static_transform(&self, instance: u32, transform: MoverTransform) {
+        let edits = self.static_edits_of(instance);
+        edits.set_transform(self.origin, instance, transform);
+    }
+
+    /// Changes what sees static instance `instance` from the next frame drawn (#323): hidden
+    /// (every field false), drawn again, out of the shadows, as [`Visibility`] says.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::set_static_transform`].
+    pub fn set_static_visibility(&self, instance: u32, visibility: Visibility) {
+        self.static_edits_of(instance)
+            .set_visibility(instance, visibility);
+    }
+
+    fn static_edits_of(&self, instance: u32) -> &static_edits::StaticEdits {
+        let edits = self
+            .static_edits
+            .as_ref()
+            .expect("a scene built with allow_static_edits");
+        assert!(instance < edits.len(), "a static instance");
+        edits
+    }
+
     /// The instances before the movers': those the static acceleration structure holds.
     fn static_count(&self) -> u32 {
         self.movers
@@ -2837,7 +2915,15 @@ impl MeshletScene {
     pub fn build_tlas(&mut self, device: &Arc<Device>, shaders: &ShaderCompiler) -> Result<()> {
         let count = self.static_count();
         if let Some(rays) = &mut self.rays {
-            rays.build_tlas(device, shaders, &self.instances, count, self.origin)?;
+            let updatable = self.static_edits.is_some();
+            rays.build_tlas(
+                device,
+                shaders,
+                &self.instances,
+                count,
+                self.origin,
+                updatable,
+            )?;
             // The movers' own, rebuilt every frame (#79).
             if let Some(movers) = &self.movers {
                 rays.add_movers(device, shaders, movers.templates.len() as u32)?;
@@ -4420,12 +4506,12 @@ impl MeshletRenderer {
                 .streamer
                 .as_ref()
                 .map(|s| graph.import_buffer(&s.readback[slot.index])),
-            instances: (scene.movers.is_some() || scene.dynamic.is_some())
-                .then(|| graph.import_buffer(&scene.instances)),
-            cells: scene
-                .movers
-                .as_ref()
-                .map(|_| graph.import_buffer(&scene.cells)),
+            instances: (scene.movers.is_some()
+                || scene.dynamic.is_some()
+                || scene.static_edits.is_some())
+            .then(|| graph.import_buffer(&scene.instances)),
+            cells: (scene.movers.is_some() || scene.static_edits.is_some())
+                .then(|| graph.import_buffer(&scene.cells)),
         };
         let frame_address = self.frame_buffers[slot.index].address();
 
@@ -4534,6 +4620,66 @@ impl MeshletRenderer {
                     &skin_blases,
                 )
             });
+        }
+
+        // Static instances changed since the last frame (#323): their records into the table,
+        // their cells' bounds, and the static structure updated in place over them. In such a
+        // scene the passes tracing rays declare that structure every frame (`MoversFrame`), so a
+        // frame's update waits for the frames before it to finish tracing.
+        let mut static_tlas = None;
+        if let (Some(edits), Some(instances)) = (scene.static_edits.as_ref(), io.instances) {
+            match edits.stage(slot.index) {
+                Some(staged) => {
+                    let staging: &'f Buffer = edits.staging(slot.index);
+                    let table: &'f GraphBuffer = &scene.instances;
+                    let regions = staged.regions;
+                    graph
+                        .pass("scene/static edits")
+                        .buffer(instances, BufferAccess::TransferDst)
+                        .run(move |_, commands| {
+                            commands.copy_buffer_regions(staging, table, &regions);
+                            Ok(())
+                        });
+                    if let Some(cells) = io.cells {
+                        let pipeline = &self.pipeline_cell_bounds;
+                        let push = CellBoundsPush {
+                            instances: scene.instances.address(),
+                            cells: scene.cells.address(),
+                            count: scene.instance_count,
+                            first_cell: staged.first / 64,
+                        };
+                        let cell_groups = staged.last / 64 - staged.first / 64 + 1;
+                        let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+                        graph
+                            .pass("scene/static cell bounds")
+                            .buffer(instances, BufferAccess::ShaderRead(compute))
+                            .buffer(cells, BufferAccess::ShaderWrite(compute))
+                            .run(move |_, commands| {
+                                commands.bind_pipeline(pipeline);
+                                commands.push_constants(pipeline, &push);
+                                commands.dispatch(cell_groups, 1, 1);
+                                Ok(())
+                            });
+                    }
+                    static_tlas = scene.rays.as_ref().and_then(|rays| {
+                        rays.declare_static_update(
+                            graph,
+                            instances,
+                            scene.instances.address(),
+                            staged.first,
+                            staged.last,
+                            scene.static_count(),
+                            scene.origin,
+                        )
+                    });
+                }
+                None => {
+                    static_tlas = scene
+                        .rays
+                        .as_ref()
+                        .and_then(|rays| rays.static_storage(graph));
+                }
+            }
         }
 
         // A dynamic scene's edits published this frame (#220): their pages, page-table entries
@@ -4805,6 +4951,7 @@ impl MeshletRenderer {
                 (Some(instances), Some(movers)) => Some(MoversFrame {
                     instances,
                     tlas: movers_tlas,
+                    static_tlas,
                     records: scene.instances.address()
                         + u64::from(movers.first) * std::mem::size_of::<GpuInstance>() as u64,
                     previous: movers.ring[movers.previous.get()].address(),
@@ -4816,6 +4963,7 @@ impl MeshletRenderer {
                 (Some(instances), None) => Some(MoversFrame {
                     instances,
                     tlas: None,
+                    static_tlas,
                     records: 0,
                     previous: 0,
                     count: 0,
