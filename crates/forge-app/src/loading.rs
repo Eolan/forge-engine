@@ -15,7 +15,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use forge_gpu::{
-    FullscreenPipelineDesc, ImageAccess, Pipeline, ShaderCompiler, ShaderStage, WarmProgress, vk,
+    FRAMES_IN_FLIGHT, FullscreenPipelineDesc, ImageAccess, Pipeline, ShaderCompiler, ShaderStage,
+    WarmProgress, vk,
 };
 use winit::keyboard::KeyCode;
 
@@ -29,6 +30,11 @@ pub type Finish<D> = Box<dyn FnOnce(&Setup) -> Result<D> + Send>;
 /// How long a loading frame lasts at least: the preparation needs the cores more than the
 /// animation needs a high frame rate.
 const LOADING_FRAME: Duration = Duration::from_millis(8);
+
+/// Frames an interactive run draws behind the loading screen once the demo has started (#342):
+/// its first frames create pipelines on first use, start the upscaler and update every probe as
+/// young, and took 55–120 ms in a large town (frame 3 still 25–40 ms), a hitch as it appeared.
+pub(crate) const SETTLE_FRAMES: u32 = 6;
 
 /// Threads compiling shaders ahead, `slangc` being a process per entry point: all the cores but
 /// two, four at least. Four left a fresh cache's 150 entries a quarter of the machine.
@@ -59,6 +65,20 @@ pub(crate) enum Stage<D> {
         /// screen's longest freeze (#201).
         last_frame: Instant,
         longest_gap: Duration,
+        /// The frames the demo will draw behind the screen once started ([`SETTLE_FRAMES`]; 0 in
+        /// scripted runs).
+        settle: u32,
+    },
+    /// The demo started, its first frames drawn behind the loading screen (#342): `shown`
+    /// frames left with the screen over them, then `linger` more before the screen's pipeline,
+    /// which the frames in flight may still use, is dropped.
+    Settling {
+        demo: D,
+        pipeline: Pipeline,
+        started: Instant,
+        progress: Arc<WarmProgress>,
+        shown: u32,
+        linger: u32,
     },
     Running(D),
     /// The preparation or the finishing step failed: the next frame returns the error.
@@ -83,6 +103,7 @@ impl<D: Demo + Send> Stage<D> {
     pub(crate) fn start(
         ctx: &mut Context,
         prepare: impl FnOnce() -> Result<Finish<D>> + Send + 'static,
+        settle: u32,
     ) -> Result<Self> {
         let vertex = ctx.device.create_shader_module(
             &ctx.shaders
@@ -145,6 +166,7 @@ impl<D: Demo + Send> Stage<D> {
             finishing: None,
             last_frame: Instant::now(),
             longest_gap: Duration::ZERO,
+            settle,
         })
     }
 
@@ -240,11 +262,17 @@ impl<D: Demo + Send> Stage<D> {
         given: vk::Extent2D,
         entries: &Path,
     ) {
+        // The frames drawn behind the screen (#342): not over an HDR or a supersampled frame,
+        // whose targets the screen's pipeline does not draw into.
+        let settle = match self {
+            Self::Loading { settle, .. } if !ctx.output.is_hdr() && ctx.ssaa == 1 => *settle,
+            _ => 0,
+        };
         // The loading frames still in flight use the pipeline this drops.
         ctx.device.wait_idle();
         ctx.loading = false;
         ctx.profile = Profile::new(ctx.profile.mode);
-        *self = match result {
+        let next = match result {
             Ok(mut demo) => {
                 if let Err(error) = ctx.shaders.save_entries(entries) {
                     tracing::warn!(%error, "cannot list the shader entries for the next start");
@@ -264,30 +292,61 @@ impl<D: Demo + Send> Stage<D> {
                 }
                 // Its console variables, on the main thread now that it exists (D-069).
                 demo.register(ctx);
-                Self::Running(demo)
+                if settle > 0
+                    && let Self::Loading {
+                        pipeline,
+                        started,
+                        progress,
+                        ..
+                    } = std::mem::replace(self, Self::Failed(None))
+                {
+                    Self::Settling {
+                        demo,
+                        pipeline,
+                        started,
+                        progress,
+                        shown: settle,
+                        linger: FRAMES_IN_FLIGHT as u32 + 1,
+                    }
+                } else {
+                    Self::Running(demo)
+                }
             }
             Err(error) => Self::Failed(Some(error)),
         };
+        *self = next;
     }
 }
 
 impl<D: Demo + Send> Demo for Stage<D> {
     fn resized(&mut self, ctx: &mut Context) -> Result<()> {
         match self {
-            Self::Running(demo) => demo.resized(ctx),
+            Self::Running(demo) | Self::Settling { demo, .. } => demo.resized(ctx),
             _ => Ok(()),
         }
     }
 
     fn key_pressed(&mut self, ctx: &mut Context, code: KeyCode) {
-        if let Self::Running(demo) = self {
+        if let Self::Running(demo) | Self::Settling { demo, .. } = self {
             demo.key_pressed(ctx, code);
         }
     }
 
     fn update(&mut self, ctx: &mut Context, input: &Input, dt: f32) {
         self.poll(ctx);
-        if let Self::Running(demo) = self {
+        // The screen's frames are done and none in flight uses its pipeline: the demo alone.
+        if matches!(
+            self,
+            Self::Settling {
+                shown: 0,
+                linger: 0,
+                ..
+            }
+        ) && let Self::Settling { demo, .. } = std::mem::replace(self, Self::Failed(None))
+        {
+            *self = Self::Running(demo);
+        }
+        if let Self::Running(demo) | Self::Settling { demo, .. } = self {
             demo.update(ctx, input, dt);
         }
     }
@@ -304,42 +363,25 @@ impl<D: Demo + Send> Demo for Stage<D> {
                 progress,
                 ..
             } => {
-                // The window's own size: the loading screen is not supersampled.
-                let extent = ctx.swapchain.extent();
-                let push = [
-                    extent.width as f32,
-                    extent.height as f32,
-                    started.elapsed().as_secs_f32(),
-                    // The shaders compiled ahead, or none to compile: no bar.
-                    progress.share().unwrap_or(-1.0),
-                ];
-                let pipeline = &*pipeline;
-                let target = frame.target;
-                frame
-                    .graph
-                    .pass("app/loading")
-                    .image(target, ImageAccess::ColorAttachment)
-                    .run(move |resources, commands| {
-                        let attachments = [vk::RenderingAttachmentInfo::default()
-                            .image_view(resources.view(target))
-                            .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                            .load_op(vk::AttachmentLoadOp::DONT_CARE)
-                            .store_op(vk::AttachmentStoreOp::STORE)];
-                        let info = vk::RenderingInfo::default()
-                            .render_area(vk::Rect2D {
-                                offset: vk::Offset2D::default(),
-                                extent,
-                            })
-                            .layer_count(1)
-                            .color_attachments(&attachments);
-                        commands.begin_rendering(&info);
-                        commands.bind_pipeline(pipeline);
-                        commands.set_viewport_full(extent);
-                        commands.push_constants(pipeline, &push);
-                        commands.draw(3, 1);
-                        commands.end_rendering();
-                        Ok(())
-                    });
+                draw_screen(ctx, frame, pipeline, *started, progress);
+                Ok(())
+            }
+            Self::Settling {
+                demo,
+                pipeline,
+                started,
+                progress,
+                shown,
+                linger,
+            } => {
+                // The demo's frame, under the screen while it settles (#342).
+                demo.render(ctx, frame)?;
+                if *shown > 0 {
+                    *shown -= 1;
+                    draw_screen(ctx, frame, pipeline, *started, progress);
+                } else {
+                    *linger = linger.saturating_sub(1);
+                }
                 Ok(())
             }
         }
@@ -347,7 +389,7 @@ impl<D: Demo + Send> Demo for Stage<D> {
 
     fn title(&mut self, ctx: &Context) -> Option<String> {
         match self {
-            Self::Running(demo) => demo.title(ctx),
+            Self::Running(demo) | Self::Settling { demo, .. } => demo.title(ctx),
             _ => None,
         }
     }
@@ -359,8 +401,52 @@ impl<D: Demo + Send> Demo for Stage<D> {
         args: &[String],
     ) -> Option<std::result::Result<String, String>> {
         match self {
-            Self::Running(demo) => demo.command(ctx, name, args),
+            Self::Running(demo) | Self::Settling { demo, .. } => demo.command(ctx, name, args),
             _ => None,
         }
     }
+}
+
+/// The loading screen over `frame`'s target, at the window's own size (it is not supersampled).
+fn draw_screen<'f>(
+    ctx: &Context,
+    frame: &mut FrameInfo<'f>,
+    pipeline: &'f Pipeline,
+    started: Instant,
+    progress: &WarmProgress,
+) {
+    let extent = ctx.swapchain.extent();
+    let push = [
+        extent.width as f32,
+        extent.height as f32,
+        started.elapsed().as_secs_f32(),
+        // The shaders compiled ahead, or none to compile: no bar.
+        progress.share().unwrap_or(-1.0),
+    ];
+    let target = frame.target;
+    frame
+        .graph
+        .pass("app/loading")
+        .image(target, ImageAccess::ColorAttachment)
+        .run(move |resources, commands| {
+            let attachments = [vk::RenderingAttachmentInfo::default()
+                .image_view(resources.view(target))
+                .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                .load_op(vk::AttachmentLoadOp::DONT_CARE)
+                .store_op(vk::AttachmentStoreOp::STORE)];
+            let info = vk::RenderingInfo::default()
+                .render_area(vk::Rect2D {
+                    offset: vk::Offset2D::default(),
+                    extent,
+                })
+                .layer_count(1)
+                .color_attachments(&attachments);
+            commands.begin_rendering(&info);
+            commands.bind_pipeline(pipeline);
+            commands.set_viewport_full(extent);
+            commands.push_constants(pipeline, &push);
+            commands.draw(3, 1);
+            commands.end_rendering();
+            Ok(())
+        });
 }

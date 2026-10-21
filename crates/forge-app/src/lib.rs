@@ -311,7 +311,14 @@ pub fn run_loading<D: Demo + Send>(
     config: AppConfig,
     prepare: impl FnOnce() -> Result<Finish<D>> + Send + 'static,
 ) -> Result<()> {
-    run(config, move |ctx| loading::Stage::start(ctx, prepare))
+    // Interactive runs draw the demo's first frames behind the loading screen (#342); scripted
+    // ones show them, their frames counted from the first.
+    let scripted =
+        config.frame_limit.is_some() || config.capture.is_some() || config.capture_every.is_some();
+    let settle = if scripted { 0 } else { loading::SETTLE_FRAMES };
+    run(config, move |ctx| {
+        loading::Stage::start(ctx, prepare, settle)
+    })
 }
 
 /// Runs the demo built by `init` until the window closes, Escape is pressed or the frame
