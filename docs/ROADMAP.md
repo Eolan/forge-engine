@@ -625,7 +625,10 @@ The items below are the phase's original outline; the plan above orders them.
 
 1. `forge-audio`: real-time thread, mixer graph, streaming decode, voice management ✅
    (#267, 2026-10-16: built and tested headless, `docs/demos/audio.md`; the device in
-   `audio-demo`, which the owner starts).
+   `audio-demo`, which the owner starts). In the app since 2026-10-21 (#318): forge-app owns the
+   device in interactive runs, never in scripted ones; a cap per family of voices; the village
+   plays its ambience, the player's steps and the pursuers' boots through walls. The owner's
+   check by ear is pending.
 2. Spatialisation and occlusion (D-011), material-driven footsteps and impacts, weather and
    medium ambience, underwater. Started (#267, 2026-10-16): panning, distance, air absorption,
    occlusion through Steam Audio's material presets, Doppler and reverb zones, headless;
@@ -710,12 +713,17 @@ game (scenarios, missions, licensed assets) is a private repository, as the city
    to compare next); flora; the particle system (smoke, dust, fire, rain,
    sparks; D-064's step 1 built 2026-10-18, #271: emitters as data, the lab's smoke yard);
    characters' animation (imported rigs' root frames, root motion, masked and additive layers
-   built 2026-10-19, #310, #311, #313; the data-driven state machine, #312, the same day); navigation (D-076, #317: `forge-nav`'s walk field, links and A*, the village's rooms reached from the street, 2026-10-19; the same day passages as data and crossings, #316: a walker vaults the low walls it walks into and climbs through open windows; following and ORCA avoidance with turns at narrow doors; walker pieces and glass panes changed at run time, #324, #325; field tiles round the agents and the pursuers' scene (`city-plan --pursuers`); static instance edits #323, the sun's ray start #326 and doorways switched with their doors #327 next); sound, fauna and networking,
+   built 2026-10-19, #310, #311, #313; the data-driven state machine, #312, the same day); navigation (D-076, #317: `forge-nav`'s walk field, links and A*, the village's rooms reached from the street, 2026-10-19; the same day passages as data and crossings, #316: a walker vaults the low walls it walks into and climbs through open windows; following and ORCA avoidance with turns at narrow doors; walker pieces and glass panes changed at run time, #324, #325; field tiles round the agents and the pursuers' scene (`city-plan --pursuers`); static instance edits built 2026-10-21 (#323), the sun's ray start #326 and doorways switched with their doors #327 next); sound (in the app since 2026-10-21, #318), fauna and networking,
    the last three in parallel sessions off
    the GPU: #267 sound, #268 networking, #269 flora and fauna.
 4. **Then the first scenario:** zombies (melee); later a base to infiltrate, a solo fight.
 5. **Rendering:** RT-first; DLSS 4's features, a neural radiance cache, path tracing when the
-   quality asks; no non-RT fallbacks for new work.
+   quality asks; no non-RT fallbacks for new work. On 2026-10-21, from a game's playtest: specular
+   anti-aliasing (Toksvig on normal maps, geometric on curved meshes, #331), probes that settle in
+   about half a second after a door opens (#336), local exposure on in the village (#275), the
+   far rooms' light blended at the probe grid's edge (#334), and glass that is no longer
+   perfect: each pane its tilt, waves, glazing, haze, grime, blind and the sun's glint (#339,
+   `research/glass-credibility.md`).
 
 ## The integration target — The city sandbox (D-059)
 
