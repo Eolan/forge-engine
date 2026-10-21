@@ -784,12 +784,15 @@ fn door(m: &mut TriMesh, w: f32, h: f32, open: bool) {
             }
         }
     }
+    // The transom and the light's bars closed on every side, as a window's frame: an entered
+    // house's hall sees their backs (the owner, 2026-10-21: the structure over the door drawn
+    // outside, not from inside).
     cuboid(
         m,
         Vec3::new(0.0, transom, z - 0.02),
         Vec3::new(w, transom + 0.08, z + 0.03),
         WOOD,
-        NO_BACK,
+        ALL,
     );
     let glass = [
         Vec3::new(0.0, transom + 0.08, z - 0.03),
@@ -802,10 +805,11 @@ fn door(m: &mut TriMesh, w: f32, h: f32, open: bool) {
         let x = w * k as f32 / 4.0;
         cuboid(
             m,
-            Vec3::new(x - 0.02, transom + 0.08, z - 0.03),
+            // Through the glass, their back 2 cm behind it, never on its plane.
+            Vec3::new(x - 0.02, transom + 0.08, z - 0.05),
             Vec3::new(x + 0.02, h, z),
             FRAME,
-            NO_BACK,
+            ALL,
         );
     }
     // Surround, hood and threshold: a stone 2 cm proud, level with the floor inside (the owner:
