@@ -317,7 +317,7 @@ pub(crate) struct RayCapacity {
 /// record and its structure's address at its slot.
 #[derive(Clone)]
 pub(crate) struct RayTables {
-    pub positions: Arc<Buffer>,
+    pub positions: Arc<GraphBuffer>,
     pub indices: Arc<Buffer>,
     pub sections: Arc<Buffer>,
     pub meshes: Arc<Buffer>,
@@ -390,11 +390,12 @@ pub(crate) fn cut_writes<'a>(
     ]
 }
 
-/// The cuts' positions: in the frame's graph, where a skin pass rewrites them, or shared with the
-/// worker that writes a dynamic scene's new meshes' (#220), which has no skinned mesh.
+/// The cuts' positions, in the frame's graph, where a skin pass rewrites a skinned mesh's: a
+/// scene's own, or shared with the worker that writes a dynamic scene's new meshes' (#220) into
+/// ranges no frame reads, apart from the skinned meshes' (#338).
 enum HitPositions {
     Graph(Box<GraphBuffer>),
-    Shared(Arc<Buffer>),
+    Shared(Arc<GraphBuffer>),
 }
 
 impl HitPositions {
@@ -464,9 +465,9 @@ impl SceneRays {
 
     /// Builds one bottom-level structure per cut: a static one, or for a skinned mesh's cut
     /// ([`Cut::dynamic`]) one refitted every frame over the hit positions. With `capacity` (a
-    /// dynamic scene, #220, which has no skinned mesh) the tables have room for the meshes it
-    /// will take, each mesh's UVs at its first vertex, and each mesh's structure is kept by its
-    /// slot, to leave with it.
+    /// dynamic scene, #220) the tables have room for the meshes it will take, each mesh's UVs at
+    /// its first vertex, and each static mesh's structure is kept by its slot, to leave with it
+    /// (a skinned one stays, #338).
     pub(crate) fn new(
         device: &Arc<Device>,
         cuts: &[Cut],
@@ -474,10 +475,6 @@ impl SceneRays {
         capacity: Option<RayCapacity>,
     ) -> Result<Self> {
         let start = std::time::Instant::now();
-        assert!(
-            capacity.is_none() || cuts.iter().all(|c| !c.dynamic),
-            "a dynamic scene has no skinned mesh"
-        );
         let statics: Vec<BlasTriangles<'_>> = cuts
             .iter()
             .filter(|c| !c.dynamic)
@@ -585,6 +582,11 @@ impl SceneRays {
                 )?;
                 addresses.push(blas.address());
                 dynamic.push(blas);
+                // A slot of its own all the same, so that a slot is its mesh's (#338): no edit
+                // removes a skinned mesh.
+                if capacity.is_some() {
+                    slots.push(None);
+                }
             } else {
                 let blas = built.next().expect("a static structure per static cut");
                 addresses.push(blas.address());
@@ -641,7 +643,7 @@ impl SceneRays {
             "ray hit record",
         )?;
         let hit_positions = if capacity.is_some() {
-            HitPositions::Shared(Arc::new(positions_buffer))
+            HitPositions::Shared(Arc::new(GraphBuffer::new(positions_buffer)))
         } else {
             HitPositions::Graph(Box::new(GraphBuffer::new(positions_buffer)))
         };
@@ -745,7 +747,7 @@ impl SceneRays {
     pub(crate) fn hit_positions(&self) -> &GraphBuffer {
         match &self.hit_positions {
             HitPositions::Graph(b) => b,
-            HitPositions::Shared(_) => unreachable!("a dynamic scene has no skinned mesh"),
+            HitPositions::Shared(b) => b,
         }
     }
 

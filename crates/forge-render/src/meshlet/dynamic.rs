@@ -18,6 +18,12 @@
 //! - **Leaving.** What a removed instance or mesh held (its pages, its ranges, its structure,
 //!   what it kept alive) is freed `FRAMES_IN_FLIGHT + 1` frames after the frame that removed it,
 //!   when no frame reads it and the needs read back no longer name its pages.
+//! - **Movers and skinned meshes** (#338) stay the frames': the movers' slots are the build's
+//!   last, which the editor never writes (vacant in its top-level structure; the movers have
+//!   their own), and its instances go after them. The meshes the movers show and the skinned
+//!   ones (their pages pinned where the skin pass writes, their structures refitted in the frame)
+//!   are never removed, and a skinned mesh is shown by movers only. The skin pass writes the
+//!   rays' positions the editor writes its new meshes' into, in ranges of their own.
 
 use std::any::Any;
 use std::borrow::Cow;
@@ -209,10 +215,13 @@ struct AddedMesh {
 }
 
 /// What the first editor starts from ([`MeshletScene::editor`]): every slot's instance record,
-/// and every mesh's record and highest section, as built.
+/// and every mesh's record and highest section, as built (a mover's slot vacant, a skinned
+/// mesh's none); the movers' slots, and the meshes it may not remove.
 struct EditorSeed {
     instances: Vec<GpuInstance>,
     meshes: Vec<Option<(GpuMesh, u32)>>,
+    movers: std::ops::Range<u32>,
+    held: Vec<bool>,
 }
 
 /// Something that leaves once no frame reads it.
@@ -256,6 +265,8 @@ pub(super) struct SceneDynamic {
     /// What the first editor starts from.
     seed: Option<EditorSeed>,
     capacity: DynamicCapacity,
+    /// What the movers' instances keep alive, as long as the scene.
+    _kept: Vec<Box<dyn Any + Send>>,
 }
 
 /// What an instance of `mesh` adds to the scene's triangles, finest clusters, work bound and
@@ -283,6 +294,12 @@ pub(super) struct DynamicSeed<'a> {
     pub ray_ranges: &'a [(u32, u32, u32, u32)],
     pub instances: &'a [GpuInstance],
     pub kept: Vec<(usize, Box<dyn Any + Send>)>,
+    /// The movers' slots ([`MeshletSceneBuilder::reserve_movers`]), the build's last
+    /// instances: the CPU writes them every frame, the editor never.
+    pub movers: std::ops::Range<u32>,
+    /// Per mesh, whether it is skinned ([`MeshletSceneBuilder::add_skinned_mesh`]): its pages
+    /// pinned where the skin pass writes them and its structure refitted in the frame.
+    pub skinned: Vec<bool>,
 }
 
 impl SceneDynamic {
@@ -331,19 +348,31 @@ impl SceneDynamic {
                 })
             })
             .collect();
+        // The movers' slots are no live instance: the editor neither moves nor frees them.
+        let movers = seed.movers.clone();
         let mut instances: Vec<Option<LiveInstance>> = seed
             .instances
             .iter()
-            .map(|i| {
-                Some(LiveInstance {
+            .enumerate()
+            .map(|(slot, i)| {
+                (!movers.contains(&(slot as u32))).then(|| LiveInstance {
                     mesh: i.mesh,
                     kept: Vec::new(),
                 })
             })
             .collect();
+        // The meshes the movers show or the skin pass bends: never removed by an edit.
+        let mut held = seed.skinned.clone();
+        held.resize(seed.meshes.len(), false);
+        for slot in movers.clone() {
+            held[seed.instances[slot as usize].mesh as usize] = true;
+        }
+        // What a mover's instance keeps alive lives as long as the scene.
+        let mut kept = Vec::new();
         for (instance, item) in seed.kept {
-            if let Some(Some(live)) = instances.get_mut(instance) {
-                live.kept.push(item);
+            match instances.get_mut(instance) {
+                Some(Some(live)) => live.kept.push(item),
+                _ => kept.push(item),
             }
         }
         Self {
@@ -354,21 +383,68 @@ impl SceneDynamic {
             this_frame: Vec::new(),
             leaving: Vec::new(),
             frame: 0,
+            // The editor's structure masks the movers' slots out (the movers' own structure holds
+            // them), and it adds no instance of a skinned mesh (its structure is refitted in the
+            // frame, which the editor's build off the frames would race).
             seed: Some(EditorSeed {
-                instances: seed.instances.to_vec(),
+                instances: seed
+                    .instances
+                    .iter()
+                    .enumerate()
+                    .map(|(slot, &i)| {
+                        if movers.contains(&(slot as u32)) {
+                            vacant()
+                        } else {
+                            i
+                        }
+                    })
+                    .collect(),
                 meshes: seed
                     .meshes
                     .iter()
                     .zip(seed.mesh_sections)
-                    .map(|(m, &s)| Some((*m, s)))
+                    .enumerate()
+                    .map(|(m, (r, &s))| {
+                        (!seed.skinned.get(m).copied().unwrap_or(false)).then_some((*r, s))
+                    })
                     .collect(),
+                movers,
+                held,
             }),
             capacity: c,
+            _kept: kept,
         }
     }
 }
 
 impl MeshletSceneBuilder {
+    /// Room for what the builder holds `times` over (#338): its meshes, instances, cluster
+    /// records and pages, and its rays' cuts bounded by every level's vertices and triangles
+    /// (a cut never takes more). For [`Self::reserve_dynamic`] when the scene starts with a good
+    /// share of what it will hold.
+    pub fn dynamic_capacity(&self, times: u32) -> DynamicCapacity {
+        let times = times.max(1);
+        let vertices: u64 = self
+            .meshlets
+            .iter()
+            .map(|m| u64::from(m.vertex_count))
+            .sum();
+        let triangles: u64 = self
+            .meshlets
+            .iter()
+            .map(|m| u64::from(m.triangle_count))
+            .sum();
+        let grown = |n: u64| (n * u64::from(times)).min(u64::from(u32::MAX)) as u32;
+        DynamicCapacity {
+            meshes: grown(self.meshes.len() as u64),
+            instances: grown(self.instances.len() as u64),
+            meshlets: grown(self.meshlets.len() as u64),
+            pages: grown(self.store.sources.len() as u64),
+            ray_vertices: grown(vertices),
+            ray_triangles: grown(triangles),
+        }
+    }
+
     /// Fails unless a dynamic scene can be built as this builder stands (#220).
     pub(super) fn check_dynamic(
         &self,
@@ -379,8 +455,18 @@ impl MeshletSceneBuilder {
         if !matches!(residency, Residency::Streamed(_)) {
             return fail("streams its pages".into());
         }
-        if self.movers.is_some() || !self.skins.is_empty() {
-            return fail("has no movers and no skinned meshes".into());
+        // Movers and skinned meshes are the frames' (#338): the editor leaves the movers' slots
+        // and the meshes they show alone. A skinned mesh is shown by movers only: its structure
+        // is refitted in the frame, which the editor's structure, built off the frames, would
+        // race.
+        let first_mover = self.movers.unwrap_or(self.instances.len() as u32) as usize;
+        if let Some(i) = self.instances[..first_mover]
+            .iter()
+            .position(|i| self.skins.iter().any(|s| s.mesh == i.mesh))
+        {
+            return fail(format!(
+                "shows its skinned meshes by movers only (instance {i} is none)"
+            ));
         }
         let counts = [
             ("meshes", self.meshes.len(), capacity.meshes),
@@ -443,8 +529,13 @@ pub struct SceneEditor {
     material_count: u32,
     /// Per instance slot, its record as the edits leave it (a vacant slot's flagged).
     instances: Vec<GpuInstance>,
-    /// Per mesh slot, its record and its highest section, while it is in the scene.
+    /// Per mesh slot, its record and its highest section, while it is in the scene and may be
+    /// instanced (not a skinned mesh).
     mesh_records: Vec<Option<(GpuMesh, u32)>>,
+    /// The movers' slots, which the frames' CPU writes: no edit touches them.
+    movers: std::ops::Range<u32>,
+    /// Per mesh slot of the build, whether a mover shows it or it is skinned: no edit removes it.
+    held: Vec<bool>,
     /// The edit in progress.
     new_meshes: Vec<NewMesh>,
     added: Vec<u32>,
@@ -605,13 +696,23 @@ impl SceneEditor {
 
     /// Gives instance `instance` a texture of its own, by its sampled index
     /// ([`MeshletSceneBuilder::set_instance_texture`]).
+    ///
+    /// # Panics
+    ///
+    /// When `instance` is a mover's ([`MeshletSceneBuilder::reserve_movers`]).
     pub fn set_instance_texture(&mut self, instance: u32, sampled: u32) {
+        self.assert_not_mover(instance);
         self.instances[instance as usize].texture = sampled + 1;
     }
 
     /// Sets what sees instance `instance`, added in this edit
     /// ([`MeshletSceneBuilder::set_instance_visibility`], #301).
+    ///
+    /// # Panics
+    ///
+    /// When `instance` is a mover's.
     pub fn set_instance_visibility(&mut self, instance: u32, visibility: Visibility) {
+        self.assert_not_mover(instance);
         let record = &mut self.instances[instance as usize];
         record.flags = (record.flags & !INSTANCE_VISIBILITY) | visibility.flags();
     }
@@ -622,15 +723,38 @@ impl SceneEditor {
     }
 
     /// Removes instance `instance`: its slot is vacant from the frame the edit is published.
+    ///
+    /// # Panics
+    ///
+    /// When `instance` is a mover's: the frames write it every frame.
     pub fn remove_instance(&mut self, instance: u32) {
+        self.assert_not_mover(instance);
         self.instances[instance as usize].flags = INSTANCE_VACANT;
         self.removed_instances.push(instance);
     }
 
     /// Removes mesh `mesh`, whose instances are removed in the same edit or before.
+    ///
+    /// # Panics
+    ///
+    /// When a mover shows `mesh` or it is skinned: the movers' structure reads its structure,
+    /// and the skin pass writes its pinned pages, every frame.
     pub fn remove_mesh(&mut self, mesh: MeshId) {
+        assert!(
+            !self.held.get(mesh.0 as usize).copied().unwrap_or(false),
+            "mesh {} is a mover's or skinned: a dynamic scene keeps it",
+            mesh.0
+        );
         self.mesh_records[mesh.0 as usize] = None;
         self.removed_meshes.push(mesh.0);
+    }
+
+    /// Panics when `instance` is a mover's slot.
+    fn assert_not_mover(&self, instance: u32) {
+        assert!(
+            !self.movers.contains(&instance),
+            "instance {instance} is a mover's: the frames write it, not the editor"
+        );
     }
 
     /// Finishes the edit: the new meshes' tables written and their structures built, their root
@@ -911,6 +1035,8 @@ impl MeshletScene {
         let Some(EditorSeed {
             instances,
             meshes: mesh_records,
+            movers,
+            held,
         }) = dynamic.seed.take()
         else {
             return Ok(None);
@@ -968,6 +1094,8 @@ impl MeshletScene {
             material_count: self.material_count,
             instances,
             mesh_records,
+            movers,
+            held,
             new_meshes: Vec::new(),
             added: Vec::new(),
             kept: Vec::new(),

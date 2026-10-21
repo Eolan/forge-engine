@@ -4631,9 +4631,11 @@ struct ReflectionHistory
     uint previous;                  // sampled (rgba16f): what the rays added so far, before the exposure (rgb); the view depth of the virtual point they showed (a; negative: a mover's; 0: none)
     uint next;                      // storage: the same for this frame, cleared before the pass
     uint first_mover;               // the movers' first instance (#79), or 0xFFFFFFFF: none
+    uint mover_count;               // how many: a dynamic scene's edits add instances after them (#338)
     float blend;                    // the new ray's share of a pixel with a whole history
     uint reset;                     // 1: no history yet (the first frame, a new size)
     float near;                     // the reversed-Z projection's near plane: depth = near / view depth
+    uint3 pad;
 };
 
 [[vk::push_constant]]
@@ -6113,7 +6115,7 @@ float3 steadied_reflection(ReflectionHistory* h, Frame* f, uint2 pixel, float2 s
     float depth = virtual_point.z / virtual_point.w;
     float2 uv = (float2(pixel) + 0.5 - h[0].jitter) / size;
     float2 at = float2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
-    bool own = mover || (instance & ~INSTANCE_HIDDEN_BIT) >= h[0].first_mover;
+    bool own = mover || (instance & ~INSTANCE_HIDDEN_BIT) - h[0].first_mover < h[0].mover_count;
     float3 result = added;
     float w;
     float2 previous_uv = previous_uv_of(h, float3(at, depth), w);

@@ -513,9 +513,15 @@ impl Scenario for LabScenario {
         args: &Args,
         cooked: Cooked,
     ) -> Result<(MeshletScene, Box<dyn Running>)> {
-        let (scene, mut lab) = super::build(ctx, args, &self.flags, cooked, self.kind)?;
+        let (mut scene, mut lab) = super::build(ctx, args, &self.flags, cooked, self.kind)?;
         lab.arm_pose = self.flags.arm_pose;
         let chase = self.look().chase;
+        // `FORGE_DYNAMIC_SCENE=noedit`: the scene built to be edited, no edit made.
+        let edits = std::env::var("FORGE_DYNAMIC_SCENE").is_ok_and(|v| v != "noedit");
+        let editor = match lab.edited {
+            Some(_) if edits => scene.editor(&ctx.device, &ctx.shaders)?,
+            _ => None,
+        };
         Ok((
             scene,
             Box::new(LabRunning {
@@ -528,6 +534,9 @@ impl Scenario for LabScenario {
                 handbrake: false,
                 beds_seen: u64::MAX,
                 beds_again: false,
+                editor,
+                edit_frames: 0,
+                edit_slot: None,
                 flying: [0.0; 4],
                 pulling: 0.5,
             }),
@@ -556,7 +565,16 @@ struct LabRunning {
     flying: [f32; 4],
     /// The tug-of-war's pull last sent (#149).
     pulling: f32,
+    /// With `FORGE_DYNAMIC_SCENE` (#338's check): the scene's editor, the frames run, and the
+    /// slot of the instance its edit added.
+    editor: Option<forge_render::meshlet::SceneEditor>,
+    edit_frames: u64,
+    edit_slot: Option<u32>,
 }
+
+/// The frames at which #338's check adds its instance, then removes it.
+const EDIT_ADD: u64 = 30;
+const EDIT_REMOVE: u64 = 60;
 
 impl Running for LabRunning {
     fn water(&mut self, ctx: &Setup, args: &Args) -> Result<Option<Water>> {
@@ -776,6 +794,41 @@ impl Running for LabRunning {
     }
 
     fn movers(&mut self, scene: &mut MeshletScene) {
+        // #338's check: an instance added 1 km under the ground, then removed, while the movers
+        // and the skinned creatures run; the frames stay the scene built whole's.
+        if let (Some(editor), Some(mesh)) = (self.editor.as_mut(), self.lab.edited) {
+            self.edit_frames += 1;
+            let edit = match self.edit_frames {
+                EDIT_ADD => {
+                    let slot = editor
+                        .add_instance_at(
+                            mesh,
+                            forge_render::CellPos::from_f64(glam::DVec3::new(0.0, -1000.0, 0.0)),
+                            glam::Quat::IDENTITY,
+                            1.0,
+                            forge_core::material::MaterialId(0),
+                        )
+                        .expect("room for the check's instance");
+                    self.edit_slot = Some(slot);
+                    true
+                }
+                EDIT_REMOVE => {
+                    if let Some(slot) = self.edit_slot.take() {
+                        editor.remove_instance(slot);
+                    }
+                    true
+                }
+                _ => false,
+            };
+            if edit {
+                let edit = editor.finish(None).expect("the check's edit");
+                scene.apply(edit).expect("the check's edit applied");
+                tracing::info!(
+                    frame = self.edit_frames,
+                    "dynamic scene edited (#338's check)"
+                );
+            }
+        }
         {
             let lab = &self.lab;
             let (mut skins, mut morphs) = (Vec::new(), Vec::new());

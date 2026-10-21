@@ -2095,6 +2095,8 @@ struct Replay {
 
 /// The lab's running state: the world, how it runs, the transforms of the last two ticks.
 pub(crate) struct Lab {
+    /// With `FORGE_DYNAMIC_SCENE` (#338's check), the mesh an edit adds an instance of.
+    pub(crate) edited: Option<MeshId>,
     /// `--arm-pose` (#169): the mannequins' left forearm drawn twisted or bent on top of their
     /// pose, to compare the skinning's blends.
     pub(crate) arm_pose: Option<creatures::ArmPose>,
@@ -2462,7 +2464,24 @@ pub(crate) fn build(
             }
         });
     builder.reserve_movers(&per_mesh);
-    let mut scene = builder.build(&ctx.device)?;
+    // A check of #338: `FORGE_DYNAMIC_SCENE` builds the scene to be edited as it runs, its pages
+    // streamed, its movers and skinned creatures the frames' as in a scene built whole
+    // ([`hooks`] adds an instance far below the ground and removes it; `=noedit` makes no
+    // edit). `=streamed` builds it whole with its pages streamed, the check's reference: the
+    // first frames' pages arrive as they stream, so a resident build's differ a little.
+    let check = std::env::var("FORGE_DYNAMIC_SCENE").ok();
+    let dynamic = check.is_some();
+    let mut scene = if dynamic {
+        if check.as_deref() != Some("streamed") {
+            builder.reserve_dynamic(builder.dynamic_capacity(2));
+        }
+        builder.build_with(
+            &ctx.device,
+            forge_render::Residency::Streamed(forge_render::StreamingConfig::from_mib(512, 64)),
+        )?
+    } else {
+        builder.build(&ctx.device)?
+    };
     scene.build_tlas(&ctx.device, &ctx.shaders)?;
 
     let mut current = Vec::new();
@@ -2544,6 +2563,7 @@ pub(crate) fn build(
             skinned,
             slime_points: [points.clone(), points],
             mission_file,
+            edited: dynamic.then(|| ids[0]),
         },
     ))
 }

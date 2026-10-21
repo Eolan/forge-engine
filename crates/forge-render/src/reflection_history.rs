@@ -35,12 +35,14 @@ struct ReflectionHistoryBlock {
     previous: u32,
     next: u32,
     first_mover: u32,
+    mover_count: u32,
     blend: f32,
     reset: u32,
     near: f32,
+    pad: [u32; 3],
 }
 
-const _: () = assert!(std::mem::size_of::<ReflectionHistoryBlock>() == 96);
+const _: () = assert!(std::mem::size_of::<ReflectionHistoryBlock>() == 112);
 
 /// One frame of the history, for [`crate::AmbientLight::reflection_history`].
 #[derive(Clone, Copy, Debug)]
@@ -143,8 +145,8 @@ impl ReflectionHistory {
     /// Declares "shading/reflection history", which clears the image this frame's rays write,
     /// and returns the frame for the resolve. `previous_from_current` and `jitter` are TAA's
     /// ([`crate::TaaFrame`]), `near` the reversed-Z projection's near plane (depth = `near` / view
-    /// depth), `first_mover` the scene's first mover's instance ([`crate::MeshletScene::first_mover`]):
-    /// glass on a mover keeps each frame's ray.
+    /// depth), `movers` the scene's movers' instances ([`crate::MeshletScene::movers`]): glass
+    /// on a mover keeps each frame's ray.
     pub fn frame<'f>(
         &'f self,
         graph: &mut FrameGraph<'f>,
@@ -152,7 +154,7 @@ impl ReflectionHistory {
         previous_from_current: Mat4,
         jitter: Vec2,
         near: f32,
-        first_mover: Option<u32>,
+        movers: Option<std::ops::Range<u32>>,
     ) -> ReflectionHistoryFrame {
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
         let next = graph.import(&self.images[self.written]);
@@ -171,10 +173,12 @@ impl ReflectionHistory {
                         jitter: jitter.to_array(),
                         previous: resources.sampled(previous).0,
                         next: resources.storage(next, 0).0,
-                        first_mover: first_mover.unwrap_or(u32::MAX),
+                        first_mover: movers.as_ref().map_or(u32::MAX, |m| m.start),
+                        mover_count: movers.as_ref().map_or(0, |m| m.len() as u32),
                         blend: REFLECTION_BLEND,
                         reset: reset as u32,
                         near,
+                        pad: [0; 3],
                     }],
                 );
                 commands.clear_color_image(resources.image(next).raw);

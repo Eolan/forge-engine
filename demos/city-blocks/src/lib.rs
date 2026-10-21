@@ -2575,7 +2575,7 @@ impl Demo for Gallery {
                 taa_frame.jitter,
                 // Reversed-Z, infinite: clip z is the near plane.
                 self.camera.projection(ctx.aspect()).w_axis.z,
-                self.scene.first_mover(),
+                self.scene.movers(),
             ));
         } else {
             self.reflection_history.reset_history();

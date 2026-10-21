@@ -1549,8 +1549,10 @@ impl MeshletSceneBuilder {
 
     /// Reserves `capacity` for a scene that takes and frees meshes and instances as it runs
     /// (#220, [`MeshletScene::editor`]): its tables are made at that size. Such a scene streams
-    /// its pages ([`Residency::Streamed`]) and has no movers, skinned meshes or GPU-placed
-    /// instances.
+    /// its pages ([`Residency::Streamed`]) and has no GPU-placed instances or static edits. Its
+    /// movers ([`Self::reserve_movers`]) and skinned meshes are the frames' (#338): the editor's
+    /// instances go after the movers' slots, which it never touches, and it neither removes the
+    /// meshes the movers show nor instances a skinned mesh, which only movers show.
     pub fn reserve_dynamic(&mut self, capacity: DynamicCapacity) {
         self.dynamic = Some(capacity);
     }
@@ -2045,6 +2047,15 @@ impl MeshletSceneBuilder {
                 ray_ranges: &ray_ranges,
                 instances: &self.instances,
                 kept: std::mem::take(&mut self.instance_kept),
+                movers: self.movers.unwrap_or(self.instances.len() as u32)
+                    ..self.instances.len() as u32,
+                skinned: {
+                    let mut skinned = vec![false; self.meshes.len()];
+                    for s in &self.skins {
+                        skinned[s.mesh as usize] = true;
+                    }
+                    skinned
+                },
             }))
         });
         // A scene built whole keeps what its instances need as long as it lives.
@@ -3053,6 +3064,14 @@ impl MeshletScene {
     /// without movers.
     pub fn first_mover(&self) -> Option<u32> {
         self.movers.as_ref().map(|m| m.first)
+    }
+
+    /// The movers' instances (#79): the build's trailing range, which a dynamic scene's edits
+    /// add after (#338). `None` without movers.
+    pub fn movers(&self) -> Option<std::ops::Range<u32>> {
+        self.movers
+            .as_ref()
+            .map(|m| m.first..m.first + m.templates.len() as u32)
     }
 
     /// Bytes of texture the materials sample (every mip level).
@@ -5038,7 +5057,7 @@ impl MeshletRenderer {
                     previous: 0,
                     count: 0,
                     origin: scene.origin,
-                    ray_positions: None,
+                    ray_positions,
                 }),
                 _ => None,
             },
