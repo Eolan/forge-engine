@@ -808,6 +808,8 @@ struct Gallery {
     glass: Option<forge_render::Glass>,
     /// `FORGE_GLASS_SETS` (#338's check): the glass given by sets.
     glass_check: Option<GlassCheck>,
+    /// `FORGE_LAMP_TABLE` (#338's check): the frames' lamps by stable ids.
+    lamp_check: Option<LampCheck>,
     /// `--lamp-restir`: the lamps by ReSTIR DI (D-065's comparison), and the lamps the frame
     /// lights with, in its order.
     restir: Option<forge_render::LampRestir>,
@@ -1550,11 +1552,30 @@ impl Gallery {
                 )
             })
             .transpose()?;
+        // A check of #338's lamp table: `FORGE_LAMP_TABLE` gives the frames their lamps by stable
+        // ids, in sets in a table with dark places, the far lamps made again at run time;
+        // `=toggle=K` removes set K at frame 100 and adds it again at frame 150.
+        let lamp_check = match (std::env::var("FORGE_LAMP_TABLE").ok(), running.as_mut()) {
+            (Some(mode), Some(running)) if !args.no_lamps => {
+                let check = LampCheck::new(&running.lamps(0.0), &mode);
+                tracing::info!(sets = check.sets.len(), "lamp table (#338's check)");
+                Some(check)
+            }
+            _ => None,
+        };
         // The scene's clear glass (D-065's part 4), from the world frame to the scene's.
         let mut glass = None;
         let mut glass_check = None;
         if let Some(running) = running.as_ref().filter(|_| !args.no_glass) {
             let mut panes = running.glass();
+            // Its rooms' lamps by their ids in the table under #338's check.
+            if let Some(check) = &lamp_check {
+                for l in &mut panes.lamp {
+                    if let Some(&id) = check.ids.get(*l as usize) {
+                        *l = id;
+                    }
+                }
+            }
             if !panes.is_empty() {
                 let origin = scene.origin();
                 for p in &mut panes.positions {
@@ -1649,6 +1670,7 @@ impl Gallery {
             particle_born: 0,
             glass,
             glass_check,
+            lamp_check,
             restir,
             kept_lamps: Vec::new(),
             tonemap: args.tonemap,
@@ -2303,6 +2325,38 @@ impl Demo for Gallery {
                 ..l
             })
             .collect();
+        // Under #338's check, the lamps by their ids in the table: set K out and in again, the
+        // others kept up to date, the far lamps made again when a street lamp came or went.
+        let lamps = match self.lamp_check.as_mut() {
+            Some(check) => {
+                let edited = match (check.toggle, ctx.frames_rendered) {
+                    (Some(k), 100) => check.remove(k),
+                    (Some(k), 150) => check.restore(k),
+                    _ => false,
+                };
+                if edited {
+                    tracing::info!(
+                        frame = ctx.frames_rendered,
+                        "a lamp set removed or added (#338's check)"
+                    );
+                }
+                check.update(&lamps);
+                if check.table.take_streets_changed() && !self.args.no_far_lamps {
+                    let street: Vec<_> = check
+                        .table
+                        .lamps()
+                        .iter()
+                        .filter(|l| l.outside())
+                        .copied()
+                        .collect();
+                    if let Err(e) = self.scene.set_far_lamps(&ctx.device, &street) {
+                        tracing::warn!("#338's check: the far lamps: {e}");
+                    }
+                }
+                check.table.lamps().to_vec()
+            }
+            None => lamps,
+        };
         // ReSTIR DI's street lamps all, however far; the light lists' lamps the nearest.
         let choice = if self.args.all_lamps {
             forge_render::lamps::LampChoice::Every
@@ -3556,6 +3610,99 @@ struct GlassCheck {
     /// `=toggle` (or `=toggle=K`): the first set (set K) removed at frame 100 and added again
     /// at 150.
     toggle: Option<usize>,
+}
+
+/// #338's check of the lamp table (`FORGE_LAMP_TABLE`).
+struct LampCheck {
+    table: forge_render::lamps::LampTable,
+    /// Each set's id and the indices, in the frame's lamps as the scene gives them, it holds.
+    sets: Vec<(forge_render::lamps::LampSetId, std::ops::Range<usize>)>,
+    /// Each lamp's id in the table, by its index in the frame's lamps.
+    ids: Vec<u32>,
+    /// The set out (`=toggle=K` between frames 100 and 150), whose lamps stay dark.
+    out: Option<usize>,
+    toggle: Option<usize>,
+}
+
+/// The lamps a set holds in #338's check.
+const LAMP_CHECK_SET: usize = 32;
+
+impl LampCheck {
+    /// `lamps` by sets of [`LAMP_CHECK_SET`] in a table twice as large, the rest dark.
+    fn new(lamps: &[forge_render::lamps::Lamp], mode: &str) -> Self {
+        let mut table = forge_render::lamps::LampTable::new(2 * lamps.len() as u32 + 64);
+        let mut check = Self {
+            table: forge_render::lamps::LampTable::new(0),
+            sets: Vec::new(),
+            ids: vec![0; lamps.len()],
+            out: None,
+            toggle: mode
+                .strip_prefix("toggle")
+                .map(|k| k.trim_start_matches('=').parse().unwrap_or(0)),
+        };
+        for start in (0..lamps.len()).step_by(LAMP_CHECK_SET) {
+            let range = start..(start + LAMP_CHECK_SET).min(lamps.len());
+            let set = table.add(&lamps[range.clone()]).expect("the table's room");
+            let first = table.first(set).expect("the set just added");
+            for (k, i) in range.clone().enumerate() {
+                check.ids[i] = first + k as u32;
+            }
+            check.sets.push((set, range));
+        }
+        check.table = table;
+        check
+    }
+
+    /// Set `k` out of the table; whether it was in.
+    fn remove(&mut self, k: usize) -> bool {
+        let Some((set, _)) = self.sets.get(k) else {
+            return false;
+        };
+        self.table.remove(*set);
+        self.out = Some(k);
+        true
+    }
+
+    /// Set `k` back in the table, its lamps dark until [`Self::update`] gives them; whether it
+    /// was out.
+    fn restore(&mut self, k: usize) -> bool {
+        if self.out != Some(k) {
+            return false;
+        }
+        let range = self.sets[k].1.clone();
+        let Some(set) = self
+            .table
+            .add(&vec![forge_render::lamps::DARK; range.len()])
+        else {
+            return false;
+        };
+        let first = self.table.first(set).expect("the set just added");
+        if first != self.ids[range.start] {
+            // The glass names the ids it was given.
+            tracing::warn!("#338's check: the lamp set came back elsewhere");
+        }
+        for (k, i) in range.clone().enumerate() {
+            self.ids[i] = first + k as u32;
+        }
+        self.sets[k].0 = set;
+        self.out = None;
+        true
+    }
+
+    /// The frame's `lamps` into the table where they changed, but those of the set out.
+    fn update(&mut self, lamps: &[forge_render::lamps::Lamp]) {
+        let out = self.out.map(|k| self.sets[k].1.clone());
+        for (i, lamp) in lamps.iter().enumerate() {
+            if out.as_ref().is_some_and(|r| r.contains(&i)) {
+                continue;
+            }
+            if let Some(&id) = self.ids.get(i)
+                && self.table.lamps()[id as usize] != *lamp
+            {
+                self.table.set(id, *lamp);
+            }
+        }
+    }
 }
 
 /// The panes a set holds in #338's check: ids from `GLASS_CHECK_PANES * k`.

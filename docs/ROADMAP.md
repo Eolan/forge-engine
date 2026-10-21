@@ -677,9 +677,10 @@ The items below are the phase's original outline; the plan above orders them.
      and streamed by distance. A game's town drives it (#338, 2026-10-21): a scene's pages
      streamed (step 1), its dynamic scene holding movers and skinned meshes (step 2, 230b6add),
      next a cell's content added and removed as one record (step 3: the editor's in-place edits,
-     the probes' region sets (23505d6e) and the glass's pane sets built; the lamps and the
-     record next), then the streaming plan driving it with far proxies (step 4); the loads
-     profiled and the camera's view uploaded first after it (#345).
+     the probes' region sets (23505d6e), the glass's pane sets and the lamps by stable ids built;
+     the ticket with promote and demote, then the record, next), then the streaming plan
+     driving it with far proxies (step 4); the loads profiled and the camera's view uploaded
+     first after it (#345).
    - **Generation at run time** stays possible where a game needs it: the same makers, run
      by the engine for a chunk on the fly instead of loading it.
    - **Still to find:** how to generate whole worlds, planets included, so that their chunks

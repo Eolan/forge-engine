@@ -415,6 +415,104 @@ pub(crate) fn gpu_lamp(l: &Lamp, share: f32) -> GpuLamp {
     }
 }
 
+/// A lamp that gives no light: a [`LampTable`]'s free place. Every choice and the far lamps'
+/// grid pass over it.
+pub const DARK: Lamp = Lamp {
+    position: Vec3::ZERO,
+    radius: 0.0,
+    candela: 0.0,
+    kelvin: WHITE_BALANCE,
+    regions: EVERY_REGION,
+    emission: Emission::Every,
+};
+
+/// A set of lamps in a [`LampTable`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct LampSetId(u32);
+
+/// The lamps of a scene that streams (#338), by ids that stay theirs while their set is in: a
+/// cell's lamps added as a set when it comes ([`Self::add`]) and removed when it goes. Each
+/// lamp's id is its index in [`Self::lamps`], the list the frames choose from
+/// ([`crate::MeshletScene::set_lamps`]) and the clear panes name ([`crate::GlassPanes::lamp`]):
+/// a removed set's places are left [`DARK`] until another set takes them.
+///
+/// The probes follow a lamp that comes or goes by themselves (#336's adaptive hysteresis): woken
+/// young again, they ran their placement anew and settled elsewhere in the crowns, 0.4 % of a
+/// street at night still off 850 frames after its lamps came back (38 pixels without).
+pub struct LampTable {
+    lamps: Vec<Lamp>,
+    free: crate::meshlet::dynamic::Ranges,
+    sets: Vec<Option<(u32, u32)>>,
+    /// Whether a street lamp came, went or changed since [`Self::take_streets_changed`].
+    streets_changed: bool,
+}
+
+impl LampTable {
+    /// Room for `capacity` lamps, all dark.
+    pub fn new(capacity: u32) -> Self {
+        Self {
+            lamps: vec![DARK; capacity as usize],
+            free: crate::meshlet::dynamic::Ranges::new(capacity, 0),
+            sets: Vec::new(),
+            streets_changed: false,
+        }
+    }
+
+    /// Adds `lamps` as a set: lamp `i` of them is id [`Self::first`]`(set) + i`. `None` without
+    /// room for them in one run.
+    pub fn add(&mut self, lamps: &[Lamp]) -> Option<LampSetId> {
+        let n = lamps.len() as u32;
+        let first = self.free.take(n)?;
+        self.lamps[first as usize..(first + n) as usize].copy_from_slice(lamps);
+        self.streets_changed |= lamps.iter().any(Lamp::outside);
+        let id = match self.sets.iter().position(Option::is_none) {
+            Some(free) => free,
+            None => {
+                self.sets.push(None);
+                self.sets.len() - 1
+            }
+        };
+        self.sets[id] = Some((first, n));
+        Some(LampSetId(id as u32))
+    }
+
+    /// Removes set `set`: its places dark from now on. Nothing for a set not in.
+    pub fn remove(&mut self, set: LampSetId) {
+        let Some((first, n)) = self.sets.get_mut(set.0 as usize).and_then(Option::take) else {
+            return;
+        };
+        let places = &mut self.lamps[first as usize..(first + n) as usize];
+        self.streets_changed |= places.iter().any(Lamp::outside);
+        places.fill(DARK);
+        self.free.give(first, n);
+    }
+
+    /// The id of set `set`'s first lamp; `None` for a set not in.
+    pub fn first(&self, set: LampSetId) -> Option<u32> {
+        self.sets.get(set.0 as usize)?.map(|(first, _)| first)
+    }
+
+    /// Lamp `id`, to switch, dim or move it (a lamp turned off: its candela 0). Nothing for an id
+    /// past the table.
+    pub fn set(&mut self, id: u32, lamp: Lamp) {
+        if let Some(l) = self.lamps.get_mut(id as usize) {
+            self.streets_changed |= l.outside() || lamp.outside();
+            *l = lamp;
+        }
+    }
+
+    /// Every place, the dark ones too: the frames' list, by id.
+    pub fn lamps(&self) -> &[Lamp] {
+        &self.lamps
+    }
+
+    /// Whether a street lamp came, went or changed since the last call: the far lamps' grid is
+    /// to be made again ([`crate::MeshletScene::set_far_lamps`]).
+    pub fn take_streets_changed(&mut self) -> bool {
+        std::mem::take(&mut self.streets_changed)
+    }
+}
+
 /// A far lamps' grid column's side, metres (#284).
 pub const FAR_CELL: f32 = 8.0;
 
@@ -798,5 +896,46 @@ mod tests {
             Emission::STREET.gpu(),
             ([0.0, -1.0, 0.0, 0.5], [0.087, 0.0, 0.0, 0.0])
         );
+    }
+
+    #[test]
+    fn a_lamp_table_keeps_its_ids_and_leaves_a_removed_set_dark() {
+        let lamp = |x: f32, street: bool| Lamp {
+            position: Vec3::new(x, 3.0, 0.0),
+            candela: 100.0,
+            regions: if street {
+                [REGION_OUTSIDE; LAMP_REGIONS]
+            } else {
+                EVERY_REGION
+            },
+            ..DARK
+        };
+        let mut table = LampTable::new(8);
+        let a = table.add(&[lamp(1.0, false), lamp(2.0, false)]).unwrap();
+        assert!(!table.take_streets_changed());
+        let b = table.add(&[lamp(3.0, true)]).unwrap();
+        assert!(table.take_streets_changed());
+        assert_eq!((table.first(a), table.first(b)), (Some(0), Some(2)));
+        // A set out: its places dark, the others' ids unchanged, nothing chosen there.
+        table.remove(a);
+        assert_eq!(table.first(a), None);
+        assert_eq!(table.lamps()[0], DARK);
+        assert_eq!(table.lamps()[2].position.x, 3.0);
+        let chosen = choose_shares(table.lamps(), Vec3::ZERO, LampChoice::Every);
+        assert_eq!(chosen.iter().map(|c| c.0).collect::<Vec<_>>(), vec![2]);
+        // The room it left is taken again first; past the table's room, nothing.
+        let c = table.add(&[lamp(4.0, false)]).unwrap();
+        assert_eq!(table.first(c), Some(0));
+        assert!(table.add(&[lamp(5.0, false); 6]).is_none());
+        // A street lamp switched off asks for the far lamps' grid again.
+        table.set(
+            2,
+            Lamp {
+                candela: 0.0,
+                ..table.lamps()[2]
+            },
+        );
+        assert!(table.take_streets_changed());
+        assert!(FarLamps::new(table.lamps()).is_none());
     }
 }

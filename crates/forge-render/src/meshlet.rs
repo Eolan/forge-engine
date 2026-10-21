@@ -680,6 +680,61 @@ struct FarLampBuffers {
     shares: Vec<Buffer>,
 }
 
+impl FarLampBuffers {
+    /// `far`'s grid on the GPU, the record the frame points at, and a buffer a frame slot of
+    /// their shares of their light (#284).
+    fn new(device: &Arc<Device>, far: crate::lamps::FarLamps) -> Result<Self> {
+        let usage = vk::BufferUsageFlags::STORAGE_BUFFER;
+        let mut bytes = Vec::new();
+        let columns = &far.columns;
+        let slots = crate::columns::place(&mut bytes, bytemuck::cast_slice(&columns.slots));
+        let indices = crate::columns::place(&mut bytes, bytemuck::cast_slice(&columns.indices));
+        let lamps = crate::columns::place(&mut bytes, bytemuck::cast_slice(&far.lamps));
+        let tables =
+            device.create_buffer_with_data(&bytes, usage, MemoryCategory::Geometry, "far lamps")?;
+        let base = tables.address();
+        let grid = crate::lamps::GpuFarLamps {
+            slots: base + slots,
+            indices: base + indices,
+            lamps: base + lamps,
+            slot_mask: columns.mask,
+            cell: crate::lamps::FAR_CELL,
+            count: far.len() as u32,
+            pad: 0,
+        };
+        let record = device.create_buffer_with_data(
+            bytemuck::bytes_of(&grid),
+            usage,
+            MemoryCategory::Geometry,
+            "far lamp grid",
+        )?;
+        let shares = (0..FRAMES_IN_FLIGHT)
+            .map(|i| {
+                let buffer = device.create_buffer(BufferDesc {
+                    size: (far.len() * 4).max(16) as u64,
+                    usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+                    location: MemoryLocation::CpuToGpu,
+                    category: MemoryCategory::Frame,
+                    name: &format!("far lamp shares {i}"),
+                })?;
+                buffer.write(0, &vec![0.0_f32; far.len()]);
+                Ok(buffer)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        tracing::info!(
+            lamps = far.len(),
+            entries = columns.indices.len(),
+            "the street lamps lit beyond the frame's set"
+        );
+        Ok(Self {
+            far,
+            _tables: tables,
+            record,
+            shares,
+        })
+    }
+}
+
 const _: () = assert!(std::mem::offset_of!(GpuFrame, ground_window) % 16 == 0);
 
 const _: () = assert!(std::mem::offset_of!(GpuFrame, sun_color) % 16 == 0);
@@ -2144,63 +2199,11 @@ impl MeshletSceneBuilder {
         };
         // The far street lamps' grid and the record the frame points at, and a buffer a frame
         // slot of their shares of their light (#284).
-        let far_lamps = match self.far_lamps.take() {
-            Some(far) => {
-                let mut bytes = Vec::new();
-                let columns = &far.columns;
-                let slots = crate::columns::place(&mut bytes, bytemuck::cast_slice(&columns.slots));
-                let indices =
-                    crate::columns::place(&mut bytes, bytemuck::cast_slice(&columns.indices));
-                let lamps = crate::columns::place(&mut bytes, bytemuck::cast_slice(&far.lamps));
-                let tables = device.create_buffer_with_data(
-                    &bytes,
-                    usage,
-                    MemoryCategory::Geometry,
-                    "far lamps",
-                )?;
-                let base = tables.address();
-                let grid = crate::lamps::GpuFarLamps {
-                    slots: base + slots,
-                    indices: base + indices,
-                    lamps: base + lamps,
-                    slot_mask: columns.mask,
-                    cell: crate::lamps::FAR_CELL,
-                    count: far.len() as u32,
-                    pad: 0,
-                };
-                let record = device.create_buffer_with_data(
-                    bytemuck::bytes_of(&grid),
-                    usage,
-                    MemoryCategory::Geometry,
-                    "far lamp grid",
-                )?;
-                let shares = (0..FRAMES_IN_FLIGHT)
-                    .map(|i| {
-                        let buffer = device.create_buffer(BufferDesc {
-                            size: (far.len() * 4).max(16) as u64,
-                            usage: vk::BufferUsageFlags::STORAGE_BUFFER,
-                            location: MemoryLocation::CpuToGpu,
-                            category: MemoryCategory::Frame,
-                            name: &format!("far lamp shares {i}"),
-                        })?;
-                        buffer.write(0, &vec![0.0_f32; far.len()]);
-                        Ok(buffer)
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                tracing::info!(
-                    lamps = far.len(),
-                    entries = columns.indices.len(),
-                    "the street lamps lit beyond the frame's set"
-                );
-                Some(FarLampBuffers {
-                    far,
-                    _tables: tables,
-                    record,
-                    shares,
-                })
-            }
-            None => None,
-        };
+        let far_lamps = self
+            .far_lamps
+            .take()
+            .map(|far| FarLampBuffers::new(device, far))
+            .transpose()?;
         Ok(MeshletScene {
             pool: GraphBuffer::new(pool),
             meshlets: Arc::new(table_with_room(
@@ -2328,6 +2331,8 @@ impl MeshletSceneBuilder {
             lamp_counts: std::array::from_fn(|_| Cell::new([0; 2])),
             decals,
             far_lamps,
+            far_retired: Vec::new(),
+            frame: 0,
             textures: self.textures.take(),
             instance_count: self.instances.len() as u32,
             origin: self.origin,
@@ -2551,6 +2556,10 @@ pub struct MeshletScene {
     /// The street lamps lit beyond each frame's set (#284, [`MeshletSceneBuilder::set_far_lamps`]),
     /// none without.
     far_lamps: Option<FarLampBuffers>,
+    /// Far lamps' grids replaced at run time ([`MeshletScene::set_far_lamps`]), each dropped once
+    /// frame `.0` begins, and the frame the scene last began.
+    far_retired: Vec<(u64, FarLampBuffers)>,
+    frame: u64,
     textures: Option<TextureSet>,
     /// What it keeps alive for its instances ([`MeshletSceneBuilder::keep`]).
     _kept: Vec<Box<dyn std::any::Any + Send>>,
@@ -2907,6 +2916,32 @@ impl MeshletScene {
         }
         self.lamp_counts[slot.index].set([kept.len() as u32, lists.len() as u32]);
         kept
+    }
+
+    /// Makes the far street lamps' grid again from `lamps` (#284's, as
+    /// [`MeshletSceneBuilder::set_far_lamps`] makes it; #338: a streamed cell's street lamps come
+    /// or go, [`crate::lamps::LampTable::take_streets_changed`]), from the next frame; call it
+    /// before that frame's [`Self::set_lamps`]. The grid it replaces is freed once no frame in
+    /// flight reads it.
+    pub fn set_far_lamps(
+        &mut self,
+        device: &Arc<Device>,
+        lamps: &[crate::lamps::Lamp],
+    ) -> Result<()> {
+        let made = crate::lamps::FarLamps::new(lamps)
+            .map(|far| FarLampBuffers::new(device, far))
+            .transpose()?;
+        if let Some(old) = std::mem::replace(&mut self.far_lamps, made) {
+            self.far_retired
+                .push((self.frame + FRAMES_IN_FLIGHT as u64 + 1, old));
+        }
+        Ok(())
+    }
+
+    /// The start of frame `frame`: the far lamps' grids no frame in flight reads any more freed.
+    fn begin_scene_frame(&mut self, frame: u64) {
+        self.frame = frame;
+        self.far_retired.retain(|(gone, _)| *gone > frame);
     }
 
     /// The lamps frame `slot` lights with ([`Self::set_lamps`]).
@@ -4183,6 +4218,7 @@ impl MeshletRenderer {
     ) -> Result<Option<FrameStats>> {
         // A dynamic scene's edits applied since the last frame, before the streamer plans this
         // frame's pages over the residency they changed (#220).
+        scene.begin_scene_frame(slot.frame_number);
         scene.begin_dynamic_frame(slot.frame_number);
         if let Some(streamer) = scene.streamer.as_mut() {
             streamer.begin_frame(slot.index, slot.frame_number);
