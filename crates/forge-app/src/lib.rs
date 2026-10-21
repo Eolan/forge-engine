@@ -19,6 +19,7 @@ mod loading;
 mod overlay;
 mod profile;
 pub mod settings;
+pub mod sound;
 mod ssaa;
 
 use std::path::PathBuf;
@@ -110,6 +111,10 @@ pub struct AppConfig {
     /// The settings given at start (D-069): `--set NAME=VALUE` and the settings file, applied
     /// to [`Context::settings`] as each variable registers.
     pub settings: SettingsArgs,
+    /// The demo plays sound (#318): an interactive run opens the default output device
+    /// ([`Context::sound`]). Scripted runs (a frame limit, a capture) and `FORGE_SOUND=0` never
+    /// do.
+    pub sound: bool,
 }
 
 impl Default for AppConfig {
@@ -132,6 +137,7 @@ impl Default for AppConfig {
             hdr_ui_white: None,
             ssaa: false,
             settings: SettingsArgs::default(),
+            sound: false,
         }
     }
 }
@@ -172,6 +178,8 @@ pub struct Context {
     /// The console variables and commands (D-069): the shell's (`r.display_info`, `app.`), the
     /// renderer's and the demo's, registered in [`Demo::register`] and read every frame.
     pub settings: Settings,
+    /// The sound output, when the demo asked for it and the run is interactive (#318).
+    pub sound: Option<sound::Sound>,
     /// The frame's size over the window's, each way: 1, or [`ssaa::FACTOR`] when supersampling.
     ssaa: u32,
     /// The first frame (in the frame slots' numbering) the demo recorded after the loading
@@ -552,6 +560,11 @@ struct State<D: Demo> {
     console_shown: Var<bool>,
     /// `app.mouse_look`: the game's mouse look (the cursor captured, the right button free).
     mouse_look: Var<bool>,
+    /// `snd.volume`: the master's level (#318), and the level last sent to the mixer.
+    volume: Var<f64>,
+    volume_sent: f64,
+    /// The playing audio device, for as long as the run lasts.
+    _sound_output: Option<sound::Output>,
     /// The overrides naming no variable were reported (once, after the demo registered its).
     unmatched_reported: bool,
     #[cfg(feature = "profiling")]
@@ -972,6 +985,15 @@ impl<D: Demo> State<D> {
             )
             .release(),
         );
+        let volume = settings.add(
+            Spec::float(
+                "snd.volume",
+                1.0,
+                0.0..=1.0,
+                "The sound's master level, 0 to 1 (#318; 0 is silent).",
+            )
+            .release(),
+        );
         settings.add_command(
             "app.capture",
             "[PATH]",
@@ -1025,6 +1047,7 @@ impl<D: Demo> State<D> {
             capture_request: None,
             loading: false,
             settings,
+            sound: None,
             ssaa: 1,
             counted_from: 0,
             _surface: surface,
@@ -1068,6 +1091,15 @@ impl<D: Demo> State<D> {
                 None => tracing::warn!("FORGE_HDR_CALIBRATION: peak, black or white"),
             }
         }
+        // Sound before the demo starts, so that it can play from its first frame (#318).
+        let sound_output = if sound::wanted(&config) {
+            sound::open().map(|(sound, output)| {
+                ctx.sound = Some(sound);
+                output
+            })
+        } else {
+            None
+        };
         let mut demo = init(&mut ctx)?;
         demo.register(&mut ctx);
         // The history is kept between interactive runs only: scripted ones never open it.
@@ -1085,6 +1117,9 @@ impl<D: Demo> State<D> {
             display_info,
             console_shown,
             mouse_look,
+            volume,
+            volume_sent: 1.0,
+            _sound_output: sound_output,
             unmatched_reported: false,
             demo,
             ctx,
@@ -1274,6 +1309,17 @@ impl<D: Demo> State<D> {
             }
         }
         let was_loading = self.ctx.loading;
+        if let Some(sound) = self.ctx.sound.as_mut() {
+            sound.update();
+            let volume = self.ctx.settings.get(self.volume);
+            if volume != self.volume_sent {
+                sound.engine.control(forge_audio::Control::BusGain {
+                    bus: forge_audio::BusId::MASTER,
+                    gain: volume as f32,
+                });
+                self.volume_sent = volume;
+            }
+        }
         let update_start = Instant::now();
         {
             #[cfg(feature = "profiling")]

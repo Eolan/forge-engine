@@ -3,7 +3,8 @@
 //! The game thread talks to the mixer through an [`AudioEngine`]; the mixer, a [`Mixer`], runs
 //! wherever the output wants it: inside a device's callback, on its own thread
 //! ([`MixThread`]), or in a test that renders seconds of sound into a buffer
-//! ([`OfflineRenderer`]). Nothing in this crate opens an audio device.
+//! ([`OfflineRenderer`]). Only the `device` feature opens an audio device (`device`, on
+//! Windows: the default output through `cpal`, #318), and only a binary asks for it.
 //!
 //! - **Commands** cross from the game to the mixer through a wait-free single-producer,
 //!   single-consumer ring (`rtrb`), each stamped with the sample frame it acts on, so a sound
@@ -43,6 +44,8 @@ pub mod ambience;
 pub mod bus;
 pub mod clock;
 pub mod decode;
+#[cfg(all(windows, feature = "device"))]
+pub mod device;
 pub mod dsp;
 pub mod engine;
 pub mod foley;

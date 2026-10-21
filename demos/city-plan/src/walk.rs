@@ -31,6 +31,12 @@ impl Walls {
             Passages::new(passages),
         )
     }
+
+    /// How many pieces stand between `a` and `b` (the world's metres): the walls and floors a
+    /// sound passes through (#318).
+    pub fn between(&self, a: Vec3, b: Vec3) -> usize {
+        self.0.between(a, b)
+    }
 }
 
 /// What the player crosses on its own (D-076's defaults): an open or broken window is climbed

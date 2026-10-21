@@ -205,6 +205,30 @@ impl Pieces {
         self.generation
     }
 
+    /// How many enabled pieces the segment from `a` to `b` passes through: what stands between
+    /// a sound and its listener (#318). A piece counts as its outline on the ground (the hull of
+    /// its corners' x and z) between its lowest and highest corner, which fits upright walls and
+    /// level floors; the segment counts it when its height, where it crosses the outline,
+    /// overlaps the piece's.
+    pub fn between(&self, a: Vec3, b: Vec3) -> usize {
+        let (a2, b2) = (Vec2::new(a.x, a.z), Vec2::new(b.x, b.z));
+        let reach = 0.5 * (b2 - a2).length() + self.cell;
+        self.near(0.5 * (a2 + b2), reach)
+            .into_iter()
+            .filter(|&i| {
+                let piece = &self.pieces[i as usize];
+                let Some((t0, t1)) = clip_segment(a2, b2, &hull_xz(piece)) else {
+                    return false;
+                };
+                let (lo, hi) = piece.iter().fold((f32::MAX, f32::MIN), |(lo, hi), c| {
+                    (lo.min(c.y), hi.max(c.y))
+                });
+                let (y0, y1) = (a.y + (b.y - a.y) * t0, a.y + (b.y - a.y) * t1);
+                y0.min(y1) <= hi && y0.max(y1) >= lo
+            })
+            .count()
+    }
+
     /// The pieces enabled whose footprints lie within `r` of `p` (the world's x and z), each
     /// once, in order, the ones kept from the start included.
     pub fn near(&self, p: Vec2, r: f32) -> Vec<u32> {
@@ -295,6 +319,68 @@ fn footprint(piece: &[Vec3]) -> [Vec2; 2] {
             [lo.min(q), hi.max(q)]
         },
     )
+}
+
+/// The hull of a piece's corners on the ground (x and z), counter-clockwise (Andrew's monotone
+/// chain).
+fn hull_xz(piece: &[Vec3]) -> Vec<Vec2> {
+    let mut points: Vec<Vec2> = piece.iter().map(|p| Vec2::new(p.x, p.z)).collect();
+    points.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
+    points.dedup();
+    if points.len() < 3 {
+        return points;
+    }
+    let cross = |o: Vec2, a: Vec2, b: Vec2| (a - o).perp_dot(b - o);
+    let mut hull: Vec<Vec2> = Vec::with_capacity(points.len() + 1);
+    for pass in 0..2 {
+        let start = hull.len();
+        let ordered: Box<dyn Iterator<Item = &Vec2>> = if pass == 0 {
+            Box::new(points.iter())
+        } else {
+            Box::new(points.iter().rev())
+        };
+        for &p in ordered {
+            while hull.len() >= start + 2
+                && cross(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 0.0
+            {
+                hull.pop();
+            }
+            hull.push(p);
+        }
+        hull.pop();
+    }
+    hull
+}
+
+/// The stretch of the segment `a`–`b` inside the convex counter-clockwise polygon `hull`, as
+/// the segment's parameters (Cyrus–Beck), if it crosses it.
+fn clip_segment(a: Vec2, b: Vec2, hull: &[Vec2]) -> Option<(f32, f32)> {
+    if hull.len() < 3 {
+        return None;
+    }
+    let d = b - a;
+    let (mut t0, mut t1) = (0.0f32, 1.0f32);
+    for (i, &p) in hull.iter().enumerate() {
+        let q = hull[(i + 1) % hull.len()];
+        let e = q - p;
+        // Outward for a counter-clockwise polygon.
+        let n = Vec2::new(e.y, -e.x);
+        let num = n.dot(p - a);
+        let den = n.dot(d);
+        if den.abs() < 1e-12 {
+            if num < 0.0 {
+                return None;
+            }
+        } else if den < 0.0 {
+            t0 = t0.max(num / den);
+        } else {
+            t1 = t1.min(num / den);
+        }
+        if t0 > t1 {
+            return None;
+        }
+    }
+    Some((t0, t1))
 }
 
 /// The cell of a point.
@@ -651,6 +737,35 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    #[test]
+    fn walls_between_count_what_a_sound_passes_through() {
+        // Two walls 0.2 m thick across x at z = 2 and z = 5, 3 m high; a floor slab from
+        // y = 3 to 3.2 over the whole; a pillar off to the side.
+        let pieces = Pieces::new(
+            vec![
+                cuboid(Vec3::new(-5.0, 0.0, 2.0), Vec3::new(5.0, 3.0, 2.2)),
+                cuboid(Vec3::new(-5.0, 0.0, 5.0), Vec3::new(5.0, 3.0, 5.2)),
+                cuboid(Vec3::new(-5.0, 3.0, -1.0), Vec3::new(5.0, 3.2, 8.0)),
+                cuboid(Vec3::new(8.0, 0.0, 0.0), Vec3::new(9.0, 3.0, 1.0)),
+            ],
+            &WalkSettings::default(),
+        );
+        let at = |x: f32, y: f32, z: f32| Vec3::new(x, y, z);
+        assert_eq!(pieces.between(at(0.0, 1.6, 0.0), at(0.0, 1.6, 1.5)), 0);
+        assert_eq!(pieces.between(at(0.0, 1.6, 0.0), at(0.0, 1.6, 3.0)), 1);
+        assert_eq!(pieces.between(at(0.0, 1.6, 0.0), at(0.0, 1.6, 7.0)), 2);
+        // Upstairs, straight above: through the floor only.
+        assert_eq!(pieces.between(at(1.0, 1.6, 1.0), at(1.0, 4.5, 1.0)), 1);
+        // At 3.1 m, over the walls' tops and inside the floor slab: the floor alone.
+        assert_eq!(pieces.between(at(0.0, 3.1, 0.0), at(0.0, 3.1, 7.0)), 1);
+        // Beside the pillar.
+        assert_eq!(pieces.between(at(7.5, 1.6, -1.0), at(7.5, 1.6, 2.0)), 0);
+        // Disabled (a door's leaf open): no longer in the way.
+        let mut pieces = pieces;
+        pieces.set_enabled(0, false);
+        assert_eq!(pieces.between(at(0.0, 1.6, 0.0), at(0.0, 1.6, 3.0)), 0);
     }
 
     #[test]

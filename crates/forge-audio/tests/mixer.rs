@@ -209,6 +209,40 @@ fn at_equal_priority_the_farthest_voice_is_stolen() {
 }
 
 #[test]
+fn a_family_keeps_to_its_cap_and_leaves_the_rest_of_the_budget() {
+    // Six growls (family 1, capped at 3) and two other voices in a budget of 16: the three
+    // nearest growls play, the others are stolen or refused, and the other voices play.
+    let (mut engine, mut renderer) = plain();
+    engine.set_family_cap(1, 3);
+    let tone = sine_loop(400.0, 0.2, 0.1, RATE).shared();
+    let mut growls = Vec::new();
+    for distance in [2.0, 16.0, 4.0, 8.0, 3.0, 30.0] {
+        let mut params = PlayParams::at(DVec3::new(0.0, 0.0, -distance));
+        params.looping = true;
+        params.family = 1;
+        growls.push(engine.play(&tone, params));
+    }
+    for distance in [40.0, 50.0] {
+        let mut params = PlayParams::at(DVec3::new(0.0, 0.0, -distance));
+        params.looping = true;
+        engine.play(&tone, params);
+    }
+    renderer.render_seconds(0.1);
+    let mut gone = ended(engine.update());
+    gone.sort_by_key(|(id, _)| id.0);
+    // 16 m gives way to 8 m, then 8 m to 3 m; 30 m is refused.
+    assert_eq!(
+        gone,
+        vec![
+            (growls[1], EndReason::Stolen),
+            (growls[3], EndReason::Stolen),
+            (growls[5], EndReason::Rejected),
+        ]
+    );
+    assert_eq!(engine.stats().real_voices, 5);
+}
+
+#[test]
 fn scheduling_is_sample_accurate() {
     let (mut engine, mut renderer) = plain();
     let latency = renderer.mixer().latency();

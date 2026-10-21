@@ -29,7 +29,7 @@ anyhow = { workspace = true }
 clap = { workspace = true }
 
 [features]
-# The audio device for the `audio-demo` example, which only the owner starts: `cpal` (WASAPI),
+# The audio device (`device`, #318) for forge-app and the `audio-demo` example: `cpal` (WASAPI),
 # on Windows only for now (ALSA needs system headers the Linux CI does not install). Nothing
 # else in the crate opens a device.
 device = ["dep:cpal"]

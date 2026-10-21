@@ -208,6 +208,8 @@ pub(crate) struct Voice {
     pub pitch: f32,
     pub pan: f32,
     pub priority: u8,
+    /// Its family for the per-family caps (0: none).
+    pub family: u8,
     pub looping: bool,
     pub virtualize: bool,
     pub spatial: Option<Spatial>,
@@ -272,6 +274,7 @@ impl Voice {
             pitch: self.pitch,
             pan: self.pan,
             priority: self.priority,
+            family: self.family,
             looping: self.looping,
             virtualize: self.virtualize,
             spatial: self.spatial,

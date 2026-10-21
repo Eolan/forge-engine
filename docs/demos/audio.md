@@ -143,11 +143,39 @@ listen to; each line prints the voices, steals and the limiter's work.
 | `village` | A day in a minute, 3 s an hour from 3:00: night, the dawn chorus, cicadas from mid-morning, wind and a shower in the afternoon, a walk down to the quay from 30 s (the sea grows on the right), a dive from 45 to 50 s (the world goes low, quiet and narrow, the rumble and bubbles come up), and the evening |
 | `orbit-hrtf` | With `--features steam-audio`: the orbit through the HRTF, for headphones; the rain circling behind now sounds behind |
 
+## Sound in the app (#318)
+
+forge-app owns the output device (`forge_audio::device`, the `device` feature: `cpal`, WASAPI,
+Windows only for now). A demo that asks for sound (`AppConfig::sound`; the galleries do, the city
+plan and the village among them) opens the default device at its own rate when the run is
+interactive; **scripted runs never do**: a frame limit (`--frames`), a capture, `--no-sound` or
+`FORGE_SOUND=0` keep it silent. The console's `snd.volume` (0 to 1) is the master's level, and
+`snd.volume 0` in `forge.cfg` silences every run.
+
+- **What the game gets** (`Context::sound`): the engine to play voices on, the buses (the
+  ambience's, `effects` and `foley` under the world's bus and sending to its reverb, `ui` under
+  the master), the stream opener for beds and music (decoded on the shell's thread), the voices
+  that ended each frame, and `listen` for the camera.
+- **The galleries** (`city_blocks::world_sound`): the ambience's beds at the sun's hour (`--day`,
+  `--time-of-day`; mid-afternoon otherwise), the player's footsteps every 0.75 m walked (1.1 m
+  running) on what the scene says is underfoot (`Running::footing`), and the scene's own sounds
+  (`Running::sounds`).
+- **The village** (city-plan): boards indoors (inside a room's region), stone outside; with
+  `--pursuers`, their boots, each step muffled by the walls and floors between it and the camera
+  (`Pieces::between`: brick's transmission per layer, at most three) and at most six mixed at once.
+- **A cap per family of voices** (`PlayParams::family`, `AudioEngine::set_family_cap`): past it
+  a new voice takes the place of its family's weakest when it beats it (priority, then loudness at
+  the listener), and is refused or kept virtual otherwise; the other families keep their places.
+
+To hear it: `cargo run --release -p city-plan -- --village 600 --pursuers --view=77.8,1.7,-184.4,146.8,-5`,
+Enter to walk (the owner's check
+by ear, 2026-10-21).
+
 ## Hearing it live: `audio-demo` (the owner starts it)
 
-The one program that opens the audio device. It is an example behind the `device` feature, which
-brings `cpal` (WASAPI) on Windows only; nothing else in the crate, its tests or the scripts opens
-a device, and no session runs it.
+The audio crate's own program, the whole village of sounds driven from the terminal. It is an
+example behind the `device` feature, which brings `cpal` (WASAPI) on Windows only, and opens the
+device the same way the app does; no test, script or session runs it.
 
 ```
 cargo run --release -p forge-audio --features device --example audio-demo -- --tour

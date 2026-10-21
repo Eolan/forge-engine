@@ -38,6 +38,9 @@ pub struct PlayParams {
     pub pan: f32,
     /// What it keeps its place by when the budget is full: higher keeps.
     pub priority: u8,
+    /// Its family (0: none), for the cap on voices of one kind at once that
+    /// [`AudioEngine::set_family_cap`] sets (twenty growls at once, #318).
+    pub family: u8,
     /// Plays again from the start at its end.
     pub looping: bool,
     /// When stolen or refused a place, keeps running silently and comes back when it is
@@ -61,6 +64,7 @@ impl Default for PlayParams {
             pitch: 1.0,
             pan: 0.0,
             priority: 128,
+            family: 0,
             looping: false,
             virtualize: false,
             spatial: None,
@@ -161,6 +165,15 @@ pub enum Control {
         bus: BusId,
         /// The new parameters.
         params: ReverbParams,
+    },
+    /// The most voices of one family mixed at once (0: no cap). A new voice past the cap
+    /// takes the place of its family's weakest when it beats it, and is refused (or kept
+    /// virtual) otherwise.
+    FamilyCap {
+        /// Which (1 to 255).
+        family: u8,
+        /// Voices.
+        cap: u16,
     },
     /// Where the filter of a bus that has one ([`BusLayout::set_filter`]) moves to.
     BusFilter {
@@ -323,6 +336,11 @@ impl AudioEngine {
     /// Stops a voice with a fade of `fade` frames.
     pub fn stop(&mut self, voice: VoiceId, fade: u32) {
         self.control(Control::Stop { voice, fade });
+    }
+
+    /// Caps the voices of `family` mixed at once (0: no cap), from the next block.
+    pub fn set_family_cap(&mut self, family: u8, cap: u16) {
+        self.control(Control::FamilyCap { family, cap });
     }
 
     /// Moves the listener.

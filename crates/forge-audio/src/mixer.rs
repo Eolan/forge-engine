@@ -195,6 +195,8 @@ pub struct Mixer {
     virtuals: Vec<Voice>,
     real: usize,
     tails: usize,
+    /// The most voices of each family mixed at once (0: no cap).
+    family_caps: [u16; 256],
     free_slots: Vec<u16>,
     buses: Vec<Bus>,
     limiter: Limiter,
@@ -233,6 +235,7 @@ impl Mixer {
             virtuals: Vec::with_capacity(config.max_virtual),
             real: 0,
             tails: 0,
+            family_caps: [0; 256],
             free_slots: (0..slots as u16).rev().collect(),
             buses: layout
                 .buses()
@@ -528,6 +531,7 @@ impl Mixer {
             pitch: params.pitch,
             pan: params.pan,
             priority: params.priority,
+            family: params.family,
             looping: params.looping,
             virtualize: params.virtualize,
             spatial: params.spatial,
@@ -563,11 +567,24 @@ impl Mixer {
 
     /// Gives a new voice a place: a free one, the weakest voice's, a virtual one, or none.
     fn admit(&mut self, voice: Voice) {
+        let family = voice.family;
+        if at_cap(&self.family_caps, &self.family_counts(), family) {
+            // Its family is at its cap: only in place of its own family's weakest.
+            if let Some(w) = self.weakest_real(Some(family))
+                && beats(score(&voice), score(&self.voices[w]), 1.0)
+            {
+                self.demote(w);
+                self.start_real(voice);
+            } else {
+                self.park_or_reject(voice);
+            }
+            return;
+        }
         if self.real < self.config.max_voices {
             self.start_real(voice);
             return;
         }
-        let weakest = self.weakest_real();
+        let weakest = self.weakest_real(None);
         if let Some(w) = weakest
             && beats(score(&voice), score(&self.voices[w]), 1.0)
         {
@@ -636,22 +653,46 @@ impl Mixer {
 
     /// Lets the loudest virtual voices back, a few a block.
     fn promote(&mut self) {
+        let mut counts = self.family_counts();
+        // Families at their cap whose best virtual voice lost to their own weakest: the other
+        // virtual voices still get their turn.
+        let mut blocked = [false; 256];
         for _ in 0..4 {
             let now = self.now;
             let best = self
                 .virtuals
                 .iter()
                 .enumerate()
-                .filter(|(_, v)| v.start_at <= now)
+                .filter(|(_, v)| v.start_at <= now && !blocked[v.family as usize])
                 .max_by(|(_, a), (_, b)| cmp_score(score(a), score(b)))
                 .map(|(i, _)| i);
             let Some(best) = best else { break };
+            let family = self.virtuals[best].family;
+            if at_cap(&self.family_caps, &counts, family) {
+                if let Some(w) = self.weakest_real(Some(family))
+                    && beats(
+                        score(&self.virtuals[best]),
+                        score(&self.voices[w]),
+                        self.config.promote_margin,
+                    )
+                {
+                    let v = self.virtuals.remove(best);
+                    self.demote(w);
+                    self.resume(v);
+                } else {
+                    blocked[family as usize] = true;
+                }
+                continue;
+            }
             if self.real < self.config.max_voices {
                 let v = self.virtuals.remove(best);
+                counts[family as usize] += 1;
                 self.resume(v);
                 continue;
             }
-            let Some(w) = self.weakest_real() else { break };
+            let Some(w) = self.weakest_real(None) else {
+                break;
+            };
             if !beats(
                 score(&self.virtuals[best]),
                 score(&self.voices[w]),
@@ -660,9 +701,20 @@ impl Mixer {
                 break;
             }
             let v = self.virtuals.remove(best);
+            counts[self.voices[w].family as usize] -= 1;
+            counts[family as usize] += 1;
             self.demote(w);
             self.resume(v);
         }
+    }
+
+    /// The voices of each family in the budget (fading tails left out).
+    fn family_counts(&self) -> [u16; 256] {
+        let mut counts = [0u16; 256];
+        for v in self.voices.iter().filter(|v| !v.tail) {
+            counts[v.family as usize] += 1;
+        }
+        counts
     }
 
     /// A virtual voice back in the budget, fading in where its time has reached.
@@ -677,11 +729,12 @@ impl Mixer {
 
     /// The real voice that would give up its place first: stopping voices, then the lowest
     /// priority, then the quietest at the listener.
-    fn weakest_real(&self) -> Option<usize> {
+    /// `family`: among one family's voices only.
+    fn weakest_real(&self, family: Option<u8>) -> Option<usize> {
         self.voices
             .iter()
             .enumerate()
-            .filter(|(_, v)| !v.tail)
+            .filter(|(_, v)| !v.tail && family.is_none_or(|f| v.family == f))
             .min_by(|(_, a), (_, b)| cmp_score(score(a), score(b)))
             .map(|(i, _)| i)
     }
@@ -689,6 +742,7 @@ impl Mixer {
     fn control(&mut self, control: Control, at: u64) {
         match control {
             Control::Listener(listener) => self.listener = listener,
+            Control::FamilyCap { family, cap } => self.family_caps[family as usize] = cap,
             Control::BusGain { bus, gain } => {
                 if let Some(b) = self.buses.get_mut(bus.index()) {
                     b.gain = gain;
@@ -841,6 +895,12 @@ fn score(v: &Voice) -> (u8, f32) {
 /// Whether `a` beats `b`: a higher priority, or the same and louder by more than `margin`.
 fn beats(a: (u8, f32), b: (u8, f32), margin: f32) -> bool {
     a.0 > b.0 || (a.0 == b.0 && a.1 > b.1 * margin)
+}
+
+/// Whether `family` (not 0) has as many voices in the budget as its cap allows.
+fn at_cap(caps: &[u16; 256], counts: &[u16; 256], family: u8) -> bool {
+    let cap = caps[family as usize];
+    family != 0 && cap > 0 && counts[family as usize] >= cap
 }
 
 fn cmp_score(a: (u8, f32), b: (u8, f32)) -> std::cmp::Ordering {

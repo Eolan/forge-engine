@@ -68,6 +68,7 @@ pub mod traction;
 mod vars;
 pub mod walker;
 mod world;
+pub mod world_sound;
 
 use afloat::Barrels;
 use scenario::{Backdrop, Running, Scenario};
@@ -86,6 +87,10 @@ pub struct Args {
     /// Vulkan validation layer.
     #[arg(long)]
     validate: bool,
+    /// No sound (#318): the app opens no audio device. Scripted runs (`--frames`, a capture)
+    /// never do; `FORGE_SOUND=0` and `snd.volume 0` silence it too.
+    #[arg(long)]
+    no_sound: bool,
     /// Exit after this many frames.
     #[arg(long)]
     frames: Option<u64>,
@@ -795,6 +800,11 @@ struct Gallery {
     kept_lamps: Vec<forge_render::lamps::GpuLamp>,
     /// `--day`: seconds into the day, the metered scene and the automatic exposure (issue #57).
     day_time: f32,
+    /// Where the sun is in its cycle (0 sunrise, 0.5 noon, 1 sunset, 1.5 midnight), once
+    /// `--day` or `--time-of-day` set it: the ambience's hour (#318).
+    sun_cycle: Option<f32>,
+    /// The world's sound, once the app has a device (#318).
+    world_sound: Option<world_sound::WorldSound>,
     /// The night (D-046, issue #164) with `--day` and `--time-of-day`: where the Moon and the
     /// stars are, the stars on the GPU, and this frame's sky and lights.
     night: Option<forge_render::night::NightSky>,
@@ -1592,6 +1602,8 @@ impl Gallery {
             sea_time: 0.0,
             sea_time_submitted: 0.0,
             day_time: 0.0,
+            sun_cycle: None,
+            world_sound: None,
             night,
             celestial,
             night_settings,
@@ -1656,6 +1668,7 @@ impl Gallery {
     /// light goes to the Moon once the sun is down: its direction, colour and illuminance take
     /// the sun's fields, which are then per unit of the frame's reference illuminance.
     fn set_sun_of_day(&mut self, t: f32) {
+        self.sun_cycle = Some(t);
         let sun_illuminance = forge_render::starfield::SUN_ILLUMINANCE_1AU;
         let sky = self.celestial.at(t, sun_illuminance);
         let params = &self.atmosphere.params;
@@ -1897,6 +1910,33 @@ impl Demo for Gallery {
         // The camera behind the vehicle the scene follows (C in the physics lab, #138).
         if let Some(running) = &mut self.running {
             running.follow(&mut self.camera);
+        }
+        // The world's sound (#318), where the shell opened the device: the ambience at the
+        // sun's hour (mid-afternoon when nothing sets it), the player's steps, the scene's own.
+        if let Some(sound) = ctx.sound.as_mut() {
+            let hour = self.sun_cycle.map_or(15.0, world_sound::hour_of_cycle);
+            let world = self
+                .world_sound
+                .get_or_insert_with(|| world_sound::WorldSound::start(sound, hour));
+            let footing = self.running.as_ref().and_then(|r| r.footing()).or_else(|| {
+                let feet = self
+                    .running
+                    .as_mut()
+                    .and_then(|r| r.player())
+                    .or_else(|| self.walker.as_ref().map(|w| w.feet().as_vec3()));
+                feet.map(|f| (f, forge_audio::Surface::Stone))
+            });
+            world.update(
+                sound,
+                &self.camera,
+                footing.map(|f| f.0),
+                footing.map_or(forge_audio::Surface::Stone, |f| f.1),
+                hour,
+                dt,
+            );
+            if let Some(running) = &mut self.running {
+                running.sounds(sound, self.camera.position);
+            }
         }
         self.frame += 1;
     }
@@ -6309,6 +6349,7 @@ pub fn run_making(
         ssaa: args.ssaa,
         width: args.width,
         height: args.height,
+        sound: !args.no_sound,
         ..AppConfig::default()
     };
     // The props cook (or load from the cache) behind the loading screen (issue #25).

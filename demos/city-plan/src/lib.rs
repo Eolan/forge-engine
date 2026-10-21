@@ -50,6 +50,7 @@ mod crowd;
 mod pursuers;
 mod residents;
 mod signs;
+mod sounds;
 mod taxis;
 mod walk;
 
@@ -7199,6 +7200,7 @@ impl Scenario for PlanScenario {
                 crowd: self.crowd.take(),
                 taxis: self.taxis.take(),
                 pursuers: self.pursuers.take(),
+                steps: None,
                 walkers: Vec::new(),
                 camera: glam::Vec2::ZERO,
                 size: self.size,
@@ -7229,6 +7231,8 @@ struct PlanRunning {
     crowd: Option<crowd::Crowd>,
     /// The pursuers going for a house (`--pursuers`, #317).
     pursuers: Option<pursuers::Pursuers>,
+    /// Their footsteps (#318), once the app has a device.
+    steps: Option<sounds::Steps>,
     /// The automated taxis.
     taxis: Option<taxis::Taxis>,
     /// The people on foot drawn last frame, on the plan.
@@ -7614,6 +7618,37 @@ impl Running for PlanRunning {
 
     fn title(&mut self) -> String {
         self.title.clone()
+    }
+
+    fn footing(&self) -> Option<(Vec3, forge_audio::Surface)> {
+        let feet = self.walker.as_ref()?.feet();
+        Some((feet, ground_under(&self.regions, feet)))
+    }
+
+    fn sounds(&mut self, sound: &mut forge_app::sound::Sound, listener: Vec3) {
+        let Some(pursuers) = &self.pursuers else {
+            return;
+        };
+        let steps = self.steps.get_or_insert_with(|| sounds::Steps::new(sound));
+        let (regions, walls) = (&self.regions, &self.walls);
+        steps.update(
+            sound,
+            &pursuers.feet(),
+            listener,
+            |at| ground_under(regions, at),
+            |a, b| walls.between(a, b),
+        );
+    }
+}
+
+/// What a foot lands on at `feet` (#318): the floors indoors (inside a room's volume) are
+/// boards, the streets and the courts stone.
+fn ground_under(regions: &[forge_render::RegionVolume], feet: Vec3) -> forge_audio::Surface {
+    let hit = forge_render::region_at(regions, feet + Vec3::Y * 0.1);
+    if hit.region == 0 {
+        forge_audio::Surface::Stone
+    } else {
+        forge_audio::Surface::Wood
     }
 }
 

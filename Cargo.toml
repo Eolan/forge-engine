@@ -28,6 +28,7 @@ forge-flora = { path = "crates/forge-flora" }
 forge-nav = { path = "crates/forge-nav" }
 forge-mission = { path = "crates/forge-mission" }
 forge-script = { path = "crates/forge-script" }
+forge-audio = { path = "crates/forge-audio" }
 # The demos the island demo builds on
 city-blocks = { path = "demos/city-blocks" }
 

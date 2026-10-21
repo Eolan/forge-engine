@@ -26,23 +26,21 @@ fn main() -> anyhow::Result<()> {
 #[cfg(windows)]
 mod device {
     use std::io::BufRead;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
-    use anyhow::{Context, Result, anyhow, bail};
+    use anyhow::Result;
     use clap::Parser;
-    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-    use cpal::{FromSample, SizedSample};
+    use cpal::traits::{DeviceTrait, HostTrait};
     use forge_audio::ambience::{
         Ambience, AmbienceAssets, AmbienceBuses, AmbienceState, BedKind, Medium, Shore,
     };
+    use forge_audio::device::Device;
     use forge_audio::dsp::ReverbParams;
     use forge_audio::stream::streams;
     use forge_audio::{
-        AudioEngine, BusId, BusLayout, Control, Foley, Footwear, Impact, Listener, MixThread,
-        MixerConfig, OutputRing, PlayParams, Step, Surface, create, db_to_gain,
+        AudioEngine, BusId, BusLayout, Control, Foley, Footwear, Impact, Listener, MixerConfig,
+        PlayParams, Step, Surface, create, db_to_gain,
     };
     use glam::{DVec3, Vec3};
 
@@ -274,51 +272,6 @@ commands (one a line); a line `now:` names each sound as it comes or goes:
         }
     }
 
-    /// Opens the device's stream of samples of type `T`: the callback copies out of the ring
-    /// (stereo into the first two channels, the rest silent; a mono device gets the mean).
-    fn open<T>(
-        device: &cpal::Device,
-        config: cpal::StreamConfig,
-        mut ring: OutputRing,
-        short: Arc<AtomicU64>,
-    ) -> Result<cpal::Stream>
-    where
-        T: SizedSample + FromSample<f32>,
-    {
-        let channels = config.channels as usize;
-        // Sized here: the callback never allocates.
-        let mut stereo = vec![0.0f32; 8192];
-        let stream = device.build_output_stream(
-            config,
-            move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
-                for chunk in data.chunks_mut(channels * stereo.len() / 2) {
-                    let frames = chunk.len() / channels;
-                    let s = &mut stereo[..frames * 2];
-                    if ring.pull(s) < frames {
-                        short.fetch_add(1, Ordering::Relaxed);
-                    }
-                    for (frame, out) in s.as_chunks::<2>().0.iter().zip(chunk.chunks_mut(channels))
-                    {
-                        if channels == 1 {
-                            out[0] = T::from_sample(0.5 * (frame[0] + frame[1]));
-                            continue;
-                        }
-                        for (c, o) in out.iter_mut().enumerate() {
-                            *o = if c < 2 {
-                                T::from_sample(frame[c])
-                            } else {
-                                T::EQUILIBRIUM
-                            };
-                        }
-                    }
-                }
-            },
-            |e| eprintln!("the device: {e}"),
-            None,
-        )?;
-        Ok(stream)
-    }
-
     pub fn run() -> Result<()> {
         let args = Args::parse();
         let host = cpal::default_host();
@@ -329,18 +282,12 @@ commands (one a line); a line `now:` names each sound as it comes or goes:
             }
             return Ok(());
         }
-        let device = host
-            .default_output_device()
-            .ok_or_else(|| anyhow!("no output device"))?;
-        let supported = device
-            .default_output_config()
-            .context("the device's default output format")?;
-        let format = supported.sample_format();
-        let config: cpal::StreamConfig = supported.into();
-        let rate = config.sample_rate;
+        let device = Device::default_output()?;
+        let rate = device.sample_rate();
         println!(
-            "{device}: {rate} Hz, {} channels, {format:?}; the ring adds {:.1} ms",
-            config.channels,
+            "{}: {rate} Hz, {} channels; the ring adds {:.1} ms",
+            device.name(),
+            device.channels(),
             args.ring as f64 * 1000.0 / rate as f64
         );
 
@@ -358,6 +305,7 @@ commands (one a line); a line `now:` names each sound as it comes or goes:
         if args.hrtf {
             #[cfg(feature = "steam-audio")]
             {
+                use anyhow::Context as _;
                 let steam = forge_audio::steam::SteamSpatializer::for_mixer(&mix_config)
                     .context("Steam Audio (steam-audio-sdk/, docs/demos/audio.md)")?;
                 mixer.set_spatializer(Box::new(steam));
@@ -408,15 +356,7 @@ commands (one a line); a line `now:` names each sound as it comes or goes:
         params.sends[0] = Some((reverb, 0.25));
         let mut foley = Foley::new(rate, 267, params);
 
-        let (mix, ring) = MixThread::spawn(mixer, args.ring);
-        let short = Arc::new(AtomicU64::new(0));
-        let stream = match format {
-            cpal::SampleFormat::F32 => open::<f32>(&device, config, ring, short.clone())?,
-            cpal::SampleFormat::I16 => open::<i16>(&device, config, ring, short.clone())?,
-            cpal::SampleFormat::I32 => open::<i32>(&device, config, ring, short.clone())?,
-            other => bail!("the device wants {other:?} samples; the demo plays f32, i16 and i32"),
-        };
-        stream.play()?;
+        let output = device.play(mixer, args.ring)?;
 
         let (lines, input) = mpsc::channel::<String>();
         std::thread::spawn(move || {
@@ -478,13 +418,10 @@ commands (one a line); a line `now:` names each sound as it comes or goes:
                 next = Instant::now();
             }
         }
-        drop(stream);
-        let _mixer = mix.stop();
+        let short = output.short_pulls();
+        drop(output);
         world.status(&engine);
-        println!(
-            "the device found the ring short {} times",
-            short.load(Ordering::Relaxed)
-        );
+        println!("the device found the ring short {short} times");
         Ok(())
     }
 }
