@@ -66,3 +66,57 @@ float4 frag_main(Varyings input) : SV_Target0
         color.rgb *= push.ui_white / 80.0;
     return color;
 }
+
+// ------------------------------------------------------------------- the lens ---
+// A magnifier (#328): inside a circle, the frame round its centre `factor` times larger, read
+// from a copy of the frame made just before, tinted and darkened towards its rim; its edge is a
+// pixel wide. Drawn before the quads, so a reticle stands over it.
+
+struct LensPush
+{
+    float2 centre;          // the window's pixels
+    float radius;           // pixels
+    float factor;           // 2: a 2× scope
+    float4 tint;            // rgb: times the lens's picture
+    float vignette;         // how dark the rim gets, 0 to 1
+    float vignette_start;   // the share of the radius where it starts darkening
+    uint frame;             // sampled image: the frame's copy
+    uint encoding;          // as `Push::encoding`
+    float2 size;            // the window's pixels
+    float2 pad;
+};
+
+[[vk::push_constant]]
+LensPush lens_push;
+
+struct LensVaryings
+{
+    float4 position : SV_Position;
+};
+
+[shader("vertex")]
+LensVaryings lens_vert_main(uint vertex : SV_VertexID)
+{
+    uint2 k = CORNERS[vertex % 6];
+    float2 corner = lens_push.centre + (float2(k) * 2.0 - 1.0) * (lens_push.radius + 1.0);
+    LensVaryings o;
+    o.position = float4(corner / lens_push.size * 2.0 - 1.0, 0.0, 1.0);
+    return o;
+}
+
+[shader("fragment")]
+float4 lens_main(LensVaryings input) : SV_Target0
+{
+    float2 pixel = input.position.xy;
+    float2 offset = pixel - lens_push.centre;
+    float d = length(offset);
+    float edge = saturate(lens_push.radius - d + 0.5);
+    if (edge <= 0.0)
+        discard;
+    float2 source = lens_push.centre + offset / max(lens_push.factor, 1e-3);
+    float3 color = sample_image_level(lens_push.frame, SAMPLER_LINEAR_CLAMP, source / lens_push.size, 0.0).rgb;
+    color *= lens_push.tint.rgb;
+    float rim = smoothstep(lens_push.vignette_start, 1.0, d / max(lens_push.radius, 1.0));
+    color *= 1.0 - saturate(lens_push.vignette) * rim;
+    return float4(color, edge);
+}

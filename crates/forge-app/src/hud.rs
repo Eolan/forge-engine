@@ -12,7 +12,8 @@ use std::sync::Arc;
 use bytemuck::{Pod, Zeroable};
 use forge_gpu::{
     Buffer, BufferDesc, Device, FRAMES_IN_FLIGHT, FrameGraph, FullscreenPipelineDesc, ImageAccess,
-    ImageHandle, MemoryCategory, MemoryLocation, Pipeline, Result, ShaderCompiler, ShaderStage, vk,
+    ImageHandle, MemoryCategory, MemoryLocation, Pipeline, Result, ShaderCompiler, ShaderStage,
+    TransientDesc, vk,
 };
 
 /// The most quads a frame draws; past them the rest are left out (logged once).
@@ -53,6 +54,55 @@ impl HudQuad {
     }
 }
 
+/// A lens over the picture (#328, a scope's): inside a circle, the frame round its centre
+/// magnified, tinted and darkened towards its rim. Drawn before the quads, so a reticle stands
+/// over it; not in the HDR outputs yet.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HudMagnifier {
+    /// Its centre in the window's pixels.
+    pub centre: [f32; 2],
+    /// Its radius in pixels.
+    pub radius: f32,
+    /// How much larger the frame shows through it (2 for a 2× scope).
+    pub factor: f32,
+    /// Times its picture, per channel (a coated lens's slight tint; 1 for none).
+    pub tint: [f32; 3],
+    /// How dark its rim gets, 0 to 1.
+    pub vignette: f32,
+    /// Where the darkening starts, a share of the radius.
+    pub vignette_start: f32,
+}
+
+impl HudMagnifier {
+    /// A clear lens of `radius` pixels at `centre`, `factor` times, its rim darkened a little.
+    pub fn new(centre: [f32; 2], radius: f32, factor: f32) -> Self {
+        Self {
+            centre,
+            radius,
+            factor,
+            tint: [1.0; 3],
+            vignette: 0.35,
+            vignette_start: 0.7,
+        }
+    }
+}
+
+/// Must match `LensPush` in `hud.slang`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct LensPush {
+    centre: [f32; 2],
+    radius: f32,
+    factor: f32,
+    tint: [f32; 4],
+    vignette: f32,
+    vignette_start: f32,
+    frame: u32,
+    encoding: u32,
+    size: [f32; 2],
+    pad: [f32; 2],
+}
+
 /// Must match `Quad` in `hud.slang`.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -80,6 +130,7 @@ struct Push {
 pub(crate) struct Hud {
     device: Arc<Device>,
     pipeline: Pipeline,
+    lens: Pipeline,
     format: vk::Format,
     encoding: u32,
     ui_white: f32,
@@ -108,6 +159,7 @@ impl Hud {
         Ok(Self {
             device: Arc::clone(device),
             pipeline: Self::pipeline(device, shaders, format)?,
+            lens: Self::lens_pipeline(device, shaders, format)?,
             format,
             encoding: crate::overlay::encoding(format),
             ui_white: 203.0,
@@ -144,6 +196,110 @@ impl Hud {
         pipeline
     }
 
+    fn lens_pipeline(
+        device: &Arc<Device>,
+        shaders: &ShaderCompiler,
+        format: vk::Format,
+    ) -> Result<Pipeline> {
+        let vertex = device.create_shader_module(
+            &shaders.compile("hud.slang", "lens_vert_main", ShaderStage::Vertex)?,
+            "hud lens vs",
+        )?;
+        let fragment = device.create_shader_module(
+            &shaders.compile("hud.slang", "lens_main", ShaderStage::Fragment)?,
+            "hud lens fs",
+        )?;
+        let pipeline = device.create_fullscreen_pipeline(&FullscreenPipelineDesc {
+            vertex: (vertex, "lens_vert_main"),
+            fragment: (fragment, "lens_main"),
+            color_formats: &[format],
+            push_constant_bytes: std::mem::size_of::<LensPush>() as u32,
+            alpha_blend: true,
+            depth_test: None,
+            depth_write: false,
+            name: "hud lens",
+        });
+        device.destroy_shader_module(vertex);
+        device.destroy_shader_module(fragment);
+        pipeline
+    }
+
+    /// Declares the passes of `lens` over `target`: the frame copied (`app/hud lens copy`), then
+    /// the lens drawn from the copy (`app/hud lens`).
+    pub(crate) fn draw_magnifier<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        target: ImageHandle,
+        extent: vk::Extent2D,
+        lens: HudMagnifier,
+    ) {
+        let copy = graph.transient(TransientDesc {
+            name: "hud lens copy",
+            width: extent.width,
+            height: extent.height,
+            format: self.format,
+            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
+            aspect: vk::ImageAspectFlags::COLOR,
+            mip_levels: 1,
+        });
+        graph
+            .pass("app/hud lens copy")
+            .image(target, ImageAccess::TransferSrc)
+            .image(copy, ImageAccess::TransferDst)
+            .run(move |resources, commands| {
+                commands.blit_image(
+                    resources.image(target).raw,
+                    resources.image(copy).raw,
+                    extent,
+                    vk::Filter::NEAREST,
+                );
+                Ok(())
+            });
+        let base = LensPush {
+            centre: lens.centre,
+            radius: lens.radius,
+            factor: lens.factor,
+            tint: [lens.tint[0], lens.tint[1], lens.tint[2], 1.0],
+            vignette: lens.vignette,
+            vignette_start: lens.vignette_start,
+            frame: 0,
+            encoding: self.encoding,
+            size: [extent.width as f32, extent.height as f32],
+            pad: [0.0; 2],
+        };
+        let pipeline = &self.lens;
+        let fragment = vk::PipelineStageFlags2::FRAGMENT_SHADER;
+        graph
+            .pass("app/hud lens")
+            .image(copy, ImageAccess::Sampled(fragment))
+            .image(target, ImageAccess::ColorAttachment)
+            .run(move |resources, commands| {
+                let push = LensPush {
+                    frame: resources.sampled(copy).0,
+                    ..base
+                };
+                let color = [vk::RenderingAttachmentInfo::default()
+                    .image_view(resources.view(target))
+                    .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                    .load_op(vk::AttachmentLoadOp::LOAD)
+                    .store_op(vk::AttachmentStoreOp::STORE)];
+                let info = vk::RenderingInfo::default()
+                    .render_area(vk::Rect2D {
+                        offset: vk::Offset2D::default(),
+                        extent,
+                    })
+                    .layer_count(1)
+                    .color_attachments(&color);
+                commands.begin_rendering(&info);
+                commands.bind_pipeline(pipeline);
+                commands.set_viewport_full(extent);
+                commands.push_constants(pipeline, &push);
+                commands.draw(6, 1);
+                commands.end_rendering();
+                Ok(())
+            });
+    }
+
     /// Follows the window's format and the HDR interface white (as the overlay does).
     pub(crate) fn set_output(
         &mut self,
@@ -153,6 +309,7 @@ impl Hud {
     ) -> Result<()> {
         if format != self.format {
             self.pipeline = Self::pipeline(&self.device, shaders, format)?;
+            self.lens = Self::lens_pipeline(&self.device, shaders, format)?;
             self.format = format;
             self.encoding = crate::overlay::encoding(format);
         }

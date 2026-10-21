@@ -91,7 +91,7 @@ pub struct Args {
     /// never do; `FORGE_SOUND=0` and `snd.volume 0` silence it too.
     #[arg(long)]
     no_sound: bool,
-    /// A crosshair and a translucent panel drawn by the HUD (#328): the check of the game's HUD
+    /// A 2× lens, a crosshair and a translucent panel drawn by the HUD (#328): the check of the game's HUD
     /// layer.
     #[arg(long, hide = true)]
     hud_test: bool,
@@ -1934,10 +1934,12 @@ impl Demo for Gallery {
         if let Some(running) = &mut self.running {
             running.follow(&mut self.camera);
         }
-        // `--hud-test` (#328): a crosshair at the window's middle and a translucent panel.
+        // `--hud-test` (#328): a 2× lens and a crosshair at the window's middle, and a translucent
+        // panel.
         if self.args.hud_test {
             let e = ctx.swapchain.extent();
             let (cx, cy) = (e.width as f32 * 0.5, e.height as f32 * 0.5);
+            ctx.magnifier = Some(forge_app::hud::HudMagnifier::new([cx, cy], 140.0, 2.0));
             let white = [1.0, 1.0, 1.0, 0.9];
             ctx.hud.push(forge_app::hud::HudQuad::solid(
                 [40.0, e.height as f32 - 120.0, 360.0, e.height as f32 - 40.0],

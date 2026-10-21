@@ -184,6 +184,9 @@ pub struct Context {
     /// The game's HUD this frame (#328): drawn after the frame, under the debug overlay, in
     /// order, then emptied ([`hud`]).
     pub hud: Vec<hud::HudQuad>,
+    /// A lens over the picture this frame (#328, a scope's), under the HUD's quads; emptied
+    /// after it is drawn.
+    pub magnifier: Option<hud::HudMagnifier>,
     /// The frame's size over the window's, each way: 1, or [`ssaa::FACTOR`] when supersampling.
     ssaa: u32,
     /// The first frame (in the frame slots' numbering) the demo recorded after the loading
@@ -1071,6 +1074,7 @@ impl<D: Demo> State<D> {
             settings,
             sound: None,
             hud: Vec::new(),
+            magnifier: None,
             ssaa: 1,
             counted_from: 0,
             _surface: surface,
@@ -1605,16 +1609,26 @@ impl<D: Demo> State<D> {
                     &self.ctx.output,
                 );
             }
-            // The game's HUD (#328): over the picture, under the debug overlay.
+            // The game's HUD (#328): over the picture, under the debug overlay; its lens first
+            // (not in the HDR outputs yet), then its quads.
+            let lens = self
+                .ctx
+                .magnifier
+                .take()
+                .filter(|_| !self.ctx.output.is_hdr());
             if self.ctx.settings.get(self.hud_shown)
                 && !self.ctx.loading
-                && !self.ctx.hud.is_empty()
+                && (!self.ctx.hud.is_empty() || lens.is_some())
             {
                 self.hud.set_output(
                     &self.ctx.shaders,
                     self.ctx.swapchain.format(),
                     self.ctx.output.ui_white,
                 )?;
+                if let Some(lens) = lens {
+                    self.hud
+                        .draw_magnifier(&mut frame.graph, swapchain_image, extent, lens);
+                }
                 self.hud.draw(
                     &mut frame.graph,
                     slot.index,
