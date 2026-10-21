@@ -3795,17 +3795,74 @@ void standard_surface(Material mat, Surface s, out float3 albedo, out float3 n)
 // map times its factor. A metal keeps no diffuse colour and reflects as much as its base
 // colour's brightest channel at normal incidence (the reflection is not tinted); the
 // occlusion map darkens the sky's and the probes' light only.
+// Leaf cards (#346, research/leaf-detail.md §1 and §3). Their rows (MATERIAL_FLAG_FOLIAGE) take
+// two fields of the ice's: `scattering`, how much paler and greyer a leaf's underside is (0 the
+// same, 1 a holm oak's down), and `scatter`, the share of the light behind a leaf that comes
+// through it, per channel of its colour (0: none).
+//
+// A leaf turns its top up and out, so the crown's leaves seen from below, as from the street
+// under a tree, show their undersides: LEAF_OUT is the share of the crown's bent normal in a
+// leaf's up, and the underside shows from UNDER_START to UNDER_FULL of the view's cosine under it.
+static const float LEAF_OUT = 0.5;
+static const float UNDER_START = 0.0;
+static const float UNDER_FULL = 0.6;
+// The underside's colour: its leaf's greyed by UNDERSIDE_GREY and lightened by UNDERSIDE_LIFT.
+static const float UNDERSIDE_GREY = 0.6;
+static const float UNDERSIDE_LIFT = 1.5;
+// The light through a leaf (Barré-Brisebois and Bouchard's approximation, as Frostbite's): the
+// light's direction bent by LEAF_DISTORTION of the normal, the lobe round the view's
+// LEAF_POWER.
+static const float LEAF_DISTORTION = 0.3;
+static const float LEAF_POWER = 4.0;
+
+// The normal a surface's sun shadow takes: its own, or a leaf card's turned towards the sun when
+// it faces away (the shadow then the sun's visibility from the leaf, for the light through it).
+float3 leaf_shadow_normal(Frame* f, Material mat, float3 n)
+{
+    if ((mat.flags & MATERIAL_FLAG_FOLIAGE) != 0 && dot(n, f[0].sun_dir) < 0.0)
+        return -n;
+    return n;
+}
+
+// A leaf's colour `base` as seen: its top's, or towards its underside's as the view turns under
+// it (`paleness`, the row's `scattering`).
+float3 leaf_underside(float3 base, float paleness, Surface s)
+{
+    if (paleness <= 0.0)
+        return base;
+    float3 up = normalize(float3(0.0, 1.0, 0.0) + LEAF_OUT * s.n);
+    float under = smoothstep(UNDER_START, UNDER_FULL, -dot(s.view, up));
+    float grey = dot(base, float3(0.2126, 0.7152, 0.0722));
+    float3 pale = lerp(base, float3(grey), UNDERSIDE_GREY) * UNDERSIDE_LIFT;
+    return lerp(base, pale, under * paleness);
+}
+
+// The sun's (or the moon's) light through a leaf towards the camera, strongest looking at the
+// light through it, the leaf's colour times `through` (the row's `scatter`), as far as the light
+// reaches the leaf (`s.shadow`, traced from the side that faces it).
+float3 leaf_transmission(Frame* f, float3 base, float3 through, Surface s)
+{
+    if (all(through <= 0.0))
+        return float3(0.0);
+    float3 l = normalize(normalize(f[0].sun_dir) + s.n * LEAF_DISTORTION);
+    float lobe = pow(saturate(dot(s.view, -l)), LEAF_POWER);
+    return base * through * f[0].sun_color.rgb * s.shadow * lobe;
+}
+
 float3 shade_uv_mapped(Frame* f, Material mat, Surface s)
 {
     float2 uv = float2(dot(mat.uv_u, float3(s.uv, 1.0)), dot(mat.uv_v, float3(s.uv, 1.0)));
     float2 gx = float2(dot(mat.uv_u.xy, s.duvdx), dot(mat.uv_v.xy, s.duvdx));
     float2 gy = float2(dot(mat.uv_u.xy, s.duvdy), dot(mat.uv_v.xy, s.duvdy));
     float3 base = mat.color_a;
+    bool leaves = (mat.flags & MATERIAL_FLAG_FOLIAGE) != 0;
     // Leaf cards: each instance its own mix of the two colours, as projected rows.
-    if ((mat.flags & MATERIAL_FLAG_FOLIAGE) != 0)
+    if (leaves)
         base = lerp(mat.color_a, mat.color_b, hash_color(s.instance_id).x);
     if (mat.albedo_texture != TEXTURE_NONE)
         base *= sample_image_grad(mat.albedo_texture, mat.sampler, uv, gx, gy).rgb;
+    if (leaves)
+        base = leaf_underside(base, mat.scattering, s);
     apply_decals(f, s, base);
     float roughness = mat.roughness;
     float metal = mat.metallic;
@@ -3859,7 +3916,10 @@ float3 shade_uv_mapped(Frame* f, Material mat, Surface s)
     float reflectance = lerp(mat.reflectance, max(base.r, max(base.g, base.b)), metal);
     float specular = mat.specular + METAL_SPECULAR * metal;
     float ndl;
-    return sun_light(f, diffuse, n, s.n, power, specular, s.shadow, s.sky, ao, s.view, reflectance, s.world, s.probes, s.traced, ndl) + emissive;
+    float3 lit = sun_light(f, diffuse, n, s.n, power, specular, s.shadow, s.sky, ao, s.view, reflectance, s.world, s.probes, s.traced, ndl) + emissive;
+    if (leaves)
+        lit += leaf_transmission(f, diffuse, mat.scatter, s);
+    return lit;
 }
 
 // A faked window's pane condition (#339, `glass.slang`'s for the clear glass): a tilt of up to
@@ -5862,19 +5922,22 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     g_ray_mask = shadow_world(f, surface_relative, pixel);
     if (SHADOWS != 0 && f[0].tlas != 0 && (f[0].flags & FLAG_SHADOWS) != 0)
     {
+        // A leaf card's shadow is the sun's from whichever side faces it (#346): the light
+        // through the leaf needs it where the leaf turns away (`leaf_transmission`).
+        float3 shadow_n = leaf_shadow_normal(f, mat, s.n);
         // NVIDIA's SIGMA denoised the sun's shadow before the resolve (#172), or the reference
         // traces 256 rays here; else one ray a frame and TAA's average (#54).
         if (resolve_push.sun_shadow != 0xFFFFFFFFu)
-            s.shadow = denoised_sun_shadow(f, s.n, pixel);
+            s.shadow = denoised_sun_shadow(f, shadow_n, pixel);
         else if ((f[0].flags & FLAG_SHADOW_REFERENCE) != 0)
-            s.shadow = sun_shadow_reference(f, surface_scene, s.n, pixel, shadow_bias(f, inst, m));
+            s.shadow = sun_shadow_reference(f, surface_scene, shadow_n, pixel, shadow_bias(f, inst, m));
         else
-            s.shadow = sun_shadow(f, surface_scene, s.n, sun_disc_point(pixel, f[0].noise_frame), shadow_bias(f, inst, m));
+            s.shadow = sun_shadow(f, surface_scene, shadow_n, sun_disc_point(pixel, f[0].noise_frame), shadow_bias(f, inst, m));
         // The jelly the sunlight crossed on its way tints it (#180): the rays above see through
         // jelly, and one more ray, to a point of the disc that turns with TAA's cycle, measures
         // how much it crossed (TAA averages the points into the tint's penumbra).
         if ((f[0].flags & FLAG_JELLY) != 0 && any(s.shadow > 0.0))
-            s.shadow *= jelly_transmittance(f, sun_ray(f, surface_scene, s.n, sun_disc_point(pixel, f[0].noise_frame), shadow_bias(f, inst, m)));
+            s.shadow *= jelly_transmittance(f, sun_ray(f, surface_scene, shadow_n, sun_disc_point(pixel, f[0].noise_frame), shadow_bias(f, inst, m)));
     }
     // Under the clouds (#145).
     if (resolve_push.cloud_shadow != 0xFFFFFFFFu)
@@ -6168,6 +6231,7 @@ struct PixelSurface
     float3 relative;
     Instance inst;
     Meshlet m;
+    float3 shadow_n; // the normal its sun shadow takes (`leaf_shadow_normal`, #346)
 };
 
 PixelSurface pixel_surface(Frame* f, uint vis, uint2 pixel, uint width, uint height)
@@ -6201,6 +6265,7 @@ PixelSurface pixel_surface(Frame* f, uint vis, uint2 pixel, uint width, uint hei
         s.n = -s.n;
     if ((mat.flags & MATERIAL_FLAG_GRATING) != 0)
         s.n = grating_normal(normalize(-s.relative));
+    s.shadow_n = leaf_shadow_normal(f, mat, s.n);
     return s;
 }
 
@@ -6263,6 +6328,8 @@ void sun_shadow_trace_main(uint3 id : SV_DispatchThreadID)
     normal[pixel] = float4(n, 1.0);
     view_z[pixel] = dot(p.view_z.xyz, surface_relative) + p.view_z.w;
     float3 sun = normalize(f[0].sun_dir);
+    // A leaf card traces from whichever side faces the sun (#346).
+    n = s.shadow_n;
     if (dot(n, sun) <= 0.0 || f[0].tlas == 0)
     {
         // Facing away: in its own shade, a penumbra of 0 (a hard shadow). Without a structure

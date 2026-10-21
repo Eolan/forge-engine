@@ -180,6 +180,13 @@ pub struct Look {
     pub bark: [[f32; 3]; 2],
     /// Its leaves' two tones, linear RGB.
     pub leaves: [[f32; 3]; 2],
+    /// How much paler and greyer its leaves' undersides are, seen from under the crown (#346):
+    /// 0 the same as their tops, 1 a holm oak's or an olive's whitish down.
+    pub underside: f32,
+    /// The share of the light behind a leaf that comes through it, of the leaf's own colour
+    /// (#346): about 1 for a thin broad leaf, half for a leathery one, less for needles and
+    /// scales.
+    pub through: f32,
 }
 
 impl Default for Look {
@@ -188,6 +195,8 @@ impl Default for Look {
             spray: LeafSpray::Small,
             bark: [[0.20, 0.15, 0.11], [0.36, 0.30, 0.24]],
             leaves: [[0.08, 0.19, 0.06], [0.16, 0.27, 0.07]],
+            underside: 0.3,
+            through: 0.5,
         }
     }
 }

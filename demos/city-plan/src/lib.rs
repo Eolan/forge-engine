@@ -5917,6 +5917,11 @@ const FAR_SHADOWS: f32 = 60.0;
 /// the leaves' own colour a far wood stood 1.75 times as bright as its cards.
 const CROWN_SHELL_TONE: f32 = 0.55;
 
+/// How strongly the leaf cards' own normals (`textures::leaf_normals`, #346) turn the crown's
+/// bent ones: enough for each leaf to catch the light its own way, the crown still lit as a
+/// rounded mass (research/leaf-detail.md §2: reduced strength over the bent normal).
+const LEAF_NORMAL_STRENGTH: f32 = 0.6;
+
 /// The forest's species in the order their first plants come (D-063): each grows
 /// `forge_flora::grow::INDIVIDUALS` individuals, at a quarter, half and all of its maturity,
 /// three of each.
@@ -6783,10 +6788,14 @@ impl Scenario for PlanScenario {
         // The forest's species (D-063): each its bark, its crowns' cores and its leaf cards
         // (D-013), in two tones; the cards cut out of the leaf atlas.
         let species = forge_flora::species::mediterranean();
-        let leaf_atlas = if self.flora.is_empty() {
-            None
+        let (leaf_atlas, leaf_normals) = if self.flora.is_empty() {
+            (None, None)
         } else {
-            Some(materials.textures.add(&textures::leaves(41, 1024))?)
+            (
+                Some(materials.textures.add(&textures::leaves(41, 1024))?),
+                // Each leaf leaning its own way (#346).
+                Some(materials.textures.add(&textures::leaf_normals(41, 1024))?),
+            )
         };
         // The decals' textures (D-074): the grime at the walls' feet, a strip repeating along u;
         // a stain and cracks on the paving, stamps.
@@ -6819,11 +6828,17 @@ impl Scenario for PlanScenario {
                             format!("{} leaf cards", s.id),
                             RenderLayer {
                                 albedo_texture: leaf_atlas,
+                                normal_texture: leaf_normals,
+                                normal_strength: LEAF_NORMAL_STRENGTH,
                                 uv: Some(UvMapping {
                                     alpha_cutoff: Some(0.5),
                                     ..UvMapping::default()
                                 }),
                                 foliage: true,
+                                // Their undersides seen from under the crown and the light
+                                // through them, yellower than their faces (#346).
+                                underside: s.look.underside,
+                                scatter: [1.0, 1.1, 0.6].map(|k| k * s.look.through),
                                 ..foliage
                             },
                         ),

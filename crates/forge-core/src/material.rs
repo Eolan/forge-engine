@@ -171,7 +171,9 @@ pub struct RenderLayer {
     /// illuminance (D-046): the same light at noon and at midnight, through a running day
     /// (#254). Without it, `emissive` is in the shading's units, relative to that reference.
     pub emissive_absolute: bool,
-    /// Ice: light scattered back where the surface turns away from the sun.
+    /// Ice: light scattered back where the surface turns away from the sun. Leaf cards
+    /// (`foliage`): the share of the light behind a leaf that comes through it, per channel of
+    /// the leaf's colour (#346); 0 none.
     pub scatter: [f32; 3],
     /// Standard: an albedo texture multiplied into the base colour, projected along the
     /// object's three axes (no texture coordinates are needed).
@@ -250,8 +252,12 @@ pub struct RenderLayer {
     /// their normals are not turned towards the viewer: a crown's normals bend out from its
     /// middle on both sides of a card. Each instance takes its own mix of `color_a` and
     /// `color_b`, as projected rows do. Their map's mips should keep the share of texels the
-    /// cut-off keeps (`forge_render::textures::leaves`), or the far crowns thin out.
+    /// cut-off keeps (`forge_render::textures::leaves`), or the far crowns thin out. Their
+    /// [`Self::scatter`] is the light through a leaf and [`Self::underside`] its underside (#346).
     pub foliage: bool,
+    /// Leaf cards (`foliage`, #346): how much paler and greyer a leaf's underside is than its
+    /// top, seen from under the crown (0 the same, 1 a holm oak's whitish down).
+    pub underside: f32,
     /// [`ShadingClass::Layered`] only: the layers are weighed by the height over the sea, the
     /// slope and the latitude on the frame's planet (#220), not read from a layer map: the
     /// standard rows after this one are the sea, sand, grass, rock and snow.
@@ -338,6 +344,7 @@ impl Default for RenderLayer {
             uv: None,
             double_sided: false,
             foliage: false,
+            underside: 0.0,
             planet_layers: false,
         }
     }

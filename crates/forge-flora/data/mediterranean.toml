@@ -52,6 +52,8 @@ opacity = 0.55
 spray = "needles"
 bark = [[0.26, 0.17, 0.12], [0.40, 0.31, 0.24]]
 leaves = [[0.10, 0.18, 0.07], [0.17, 0.25, 0.09]]
+underside = 0.2
+through = 0.25
 
 [[species]]
 id = "holm-oak"
@@ -96,6 +98,8 @@ opacity = 0.85
 spray = "small"
 bark = [[0.16, 0.14, 0.12], [0.28, 0.25, 0.22]]
 leaves = [[0.05, 0.11, 0.04], [0.10, 0.16, 0.06]]
+underside = 1.0
+through = 0.4
 
 [[species]]
 id = "olive"
@@ -143,6 +147,8 @@ opacity = 0.6
 spray = "narrow"
 bark = [[0.26, 0.24, 0.20], [0.40, 0.37, 0.31]]
 leaves = [[0.22, 0.26, 0.18], [0.32, 0.35, 0.26]]
+underside = 1.0
+through = 0.4
 
 [[species]]
 id = "italian-cypress"
@@ -189,6 +195,8 @@ opacity = 0.9
 spray = "needles"
 bark = [[0.20, 0.15, 0.11], [0.36, 0.30, 0.24]]
 leaves = [[0.04, 0.09, 0.04], [0.08, 0.13, 0.06]]
+underside = 0.1
+through = 0.15
 
 [[species]]
 id = "rosemary"
@@ -233,6 +241,8 @@ opacity = 0.5
 spray = "needles"
 bark = [[0.20, 0.15, 0.11], [0.36, 0.30, 0.24]]
 leaves = [[0.16, 0.22, 0.13], [0.24, 0.29, 0.19]]
+underside = 0.7
+through = 0.25
 
 [[species]]
 id = "cistus"
@@ -277,6 +287,8 @@ opacity = 0.4
 spray = "narrow"
 bark = [[0.20, 0.15, 0.11], [0.36, 0.30, 0.24]]
 leaves = [[0.24, 0.28, 0.20], [0.33, 0.36, 0.27]]
+underside = 0.6
+through = 0.5
 
 [[species]]
 id = "kermes-oak"
@@ -327,6 +339,8 @@ opacity = 0.7
 spray = "small"
 bark = [[0.20, 0.15, 0.11], [0.36, 0.30, 0.24]]
 leaves = [[0.07, 0.14, 0.05], [0.13, 0.20, 0.08]]
+underside = 0.4
+through = 0.4
 
 [[species]]
 id = "london-plane"
@@ -373,6 +387,8 @@ opacity = 0.8
 spray = "broad"
 bark = [[0.38, 0.36, 0.29], [0.55, 0.53, 0.44]]
 leaves = [[0.10, 0.20, 0.06], [0.18, 0.28, 0.09]]
+underside = 0.35
+through = 0.9
 
 [[species]]
 id = "common-lime"
@@ -420,6 +436,8 @@ opacity = 0.85
 spray = "broad"
 bark = [[0.22, 0.19, 0.16], [0.34, 0.30, 0.25]]
 leaves = [[0.12, 0.24, 0.06], [0.20, 0.32, 0.09]]
+underside = 0.35
+through = 0.9
 
 [[species]]
 id = "umbrella-pine"
@@ -469,3 +487,5 @@ opacity = 0.55
 spray = "needles"
 bark = [[0.28, 0.18, 0.12], [0.44, 0.33, 0.25]]
 leaves = [[0.09, 0.17, 0.06], [0.15, 0.24, 0.08]]
+underside = 0.2
+through = 0.25

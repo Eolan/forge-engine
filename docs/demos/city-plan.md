@@ -487,6 +487,27 @@ flags every edge, and the paving and the grass make most of it in both builds. C
 `reports/2026-10-16/village-leaf-cards.png` (the plane over the junction) and
 `village-leaf-cards-road.png`.
 
+**Leaves with detail** (#346, 2026-10-22; the owner: "the leaves have no details";
+`research/leaf-detail.md`'s first four recommendations).
+- **The atlas** (`textures::leaves`): each leaf its own value (0.64 to 1, was 0.74 to 1) and
+  hue (yellower or bluer), darker at its base, secondary veins off the midrib on the broad
+  enough leaves, a faint mottle, and a leaf's shade 2.5 texels past its edge on the leaves
+  under it.
+- **Their normals** (`textures::leaf_normals`, the cards' normal map at 0.6): each leaf leaning
+  its own way, up to 24°, and folded along its midrib, each twig rounded, so a card's leaves
+  catch the sun and the sky each their own way rather than all as the crown's bent normal.
+- **Undersides** (`Look::underside`, the row's `RenderLayer::underside`): seen from under the
+  crown, as from the street, a leaf turns paler and greyer, a holm oak's and an olive's most.
+- **Light through the leaves** (`Look::through`, the row's `scatter`): the sun or the moon behind
+  a leaf lights it towards the camera (Barré-Brisebois and Bouchard's approximation), yellower
+  than its face, as far as the traced shadow lets the light reach it. A leaf card's sun shadow
+  is now traced from whichever side faces the sun, the light through it needing it where the
+  leaf turns away.
+- **No added shimmer:** under DLAA the still main view changes 0.30–0.37 % of its pixels frame to
+  frame, the same as the build before (6bb18a14), the leaf normals off or the shading's terms off.
+  Of that, the local exposure (on in the village since 2026-10-21, #275) makes about 0.15 %: 0.18–0.22 %
+  without it, its changes 3 to 8 levels (at most 17, 13 without).
+
 **The probes meet crown proxies, not the cards** (#297, 2026-10-19). Each grown plant is cooked
 with a proxy (`grown_proxy`): its wood, and each lump of its crown a closed shell of 0.6 of the
 lump's radius, opaque, in the leaves' colour. The probes' rays meet the proxy alone and the

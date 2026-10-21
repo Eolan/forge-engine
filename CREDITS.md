@@ -286,6 +286,9 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
 - **Leaf cards' mips** (`forge_render::textures::leaves`, D-013). Ignacio Castaño, "Computing
   Alpha Mipmaps", his blog, written for The Witness, 2010: each mip's alpha scaled so an alpha
   test keeps the share of texels level 0 keeps.
+- **The light through leaves** (`meshlet.slang`'s `leaf_transmission`, #346). Barré-Brisebois and
+  Bouchard's translucency approximation (GDC 2011, above), the light's direction bent by the
+  normal and a lobe round the view, as Frostbite uses it for thin foliage.
 
 **The render graph** (`forge-gpu::graph`, D-020):
 - **The frame graph.** Yuriy O'Donnell, "FrameGraph: Extensible Rendering Architecture in

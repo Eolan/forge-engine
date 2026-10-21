@@ -477,7 +477,12 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
                 inv_texture_scale: 1.0 / r.texture_scale.max(1e-3),
                 normal_strength: r.normal_strength,
                 reflectance: r.reflectance,
-                scattering: bubble_scattering(r.bubbles),
+                // Leaf cards take the ice's field for their undersides (#346, `leaf_underside`).
+                scattering: if r.foliage {
+                    r.underside
+                } else {
+                    bubble_scattering(r.bubbles)
+                },
                 flags: if r.hex_tiling { MATERIAL_HEX_TILING } else { 0 }
                     | if r.uv.is_some() { MATERIAL_UV } else { 0 }
                     | if uv.alpha_cutoff.is_some() {

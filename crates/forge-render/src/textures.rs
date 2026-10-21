@@ -1095,6 +1095,20 @@ struct Stroke {
     colour: [f32; 3],
 }
 
+/// How far past a leaf's edge its shade falls on the leaves under it in the atlas, texels, and
+/// how dark it makes them at the edge (#346, research/leaf-detail.md §1: darker overlaps).
+const LEAF_SHADE: f32 = 2.5;
+const LEAF_SHADE_DEPTH: f32 = 0.2;
+/// How much lighter a leaf's secondary veins are, and how far its mottle goes either way (#346).
+const LEAF_VEINS: f32 = 0.16;
+const LEAF_MOTTLE: f32 = 0.2;
+/// The most a leaf's normal leans its own way in [`leaf_normals`], the tangent of the angle
+/// (#346, research/leaf-detail.md §2).
+pub const LEAF_TILT: f32 = 0.45;
+/// How much a leaf's halves fold up along its midrib in [`leaf_normals`], the tangent of the
+/// angle.
+pub const LEAF_FOLD: f32 = 0.3;
+
 /// One spray's strokes, the twigs first.
 fn spray_strokes(seed: u64, spray: LeafSpray) -> Vec<Stroke> {
     let mut strokes = Vec::new();
@@ -1148,7 +1162,11 @@ fn spray_strokes(seed: u64, spray: LeafSpray) -> Vec<Stroke> {
         });
     }
     let mut leaf = |at: [f32; 2], dir: [f32; 2], scale: f32, r: f32| {
-        let shade = 0.74 + 0.26 * r;
+        // Each leaf its own value and hue (#346, research/leaf-detail.md §1): a third darker or
+        // lighter, some yellower, some bluer. A quarter apart in value and one hue, the crowns
+        // read as cut-outs of one colour (the owner, 2026-10-22: "the leaves have no details").
+        let shade = 0.64 + 0.36 * r;
+        let yellow = unit_f32(hash_cell2(u64::from(r.to_bits()), 1, 9)) - 0.5;
         strokes.push(Stroke {
             from: at,
             dir,
@@ -1156,7 +1174,11 @@ fn spray_strokes(seed: u64, spray: LeafSpray) -> Vec<Stroke> {
             width: width * scale,
             shape,
             lobes,
-            colour: [shade * 0.97, shade, shade * 0.9],
+            colour: [
+                shade * (0.97 + 0.14 * yellow),
+                shade,
+                shade * (0.9 - 0.16 * yellow),
+            ],
         });
     };
     for &(from, dir, reach) in &twigs {
@@ -1238,6 +1260,89 @@ fn spray_strokes(seed: u64, spray: LeafSpray) -> Vec<Stroke> {
 /// so the test keeps the share level 0 keeps (Castaño 2010).
 pub fn leaves(seed: u64, size: u32) -> TextureData {
     kept("texture-leaves", &(seed, size), || {
+        let (mut texels, _) = paint_leaves(seed, size);
+        let side = size as usize;
+        // The empty texels take the covered ones' mean colour.
+        let (mut sum, mut weight) = ([0.0_f32; 3], 0.0_f32);
+        for t in &texels {
+            for k in 0..3 {
+                sum[k] += t[k] * t[3];
+            }
+            weight += t[3];
+        }
+        let mean = sum.map(|c| c / weight.max(1e-6));
+        for t in &mut texels {
+            let w = t[3];
+            for k in 0..3 {
+                t[k] = t[k] * w + mean[k] * (1.0 - w);
+            }
+        }
+        debug_assert_eq!(texels.len(), side * side);
+        leaf_levels(texels, size)
+    })
+}
+
+/// The leaf cards' normal map (#346, research/leaf-detail.md §2), cut as [`leaves`]: each leaf
+/// tilted its own way, up to [`LEAF_TILT`], and folded along its midrib by [`LEAF_FOLD`], each
+/// twig rounded, in the atlas's tangent space (+y up the image, as glTF's). A card's leaves catch
+/// the light each its own way instead of all as the card's bent normal. The mips average the
+/// covered texels' normals without making them unit again: shorter where the leaves under a
+/// texel lean apart, as the shading's Toksvig factor reads them.
+pub fn leaf_normals(seed: u64, size: u32) -> TextureData {
+    kept("texture-leaf-normals", &(seed, size), || {
+        let (_, mut normals) = paint_leaves(seed, size);
+        // The empty texels face straight out.
+        for t in &mut normals {
+            let w = t[3];
+            t[2] = t[2] * w + (1.0 - w);
+        }
+        let encode = |level: &[[f32; 4]]| {
+            encode(level, |c| {
+                [
+                    to_byte(c[0] * 0.5 + 0.5),
+                    to_byte(c[1] * 0.5 + 0.5),
+                    to_byte(c[2] * 0.5 + 0.5),
+                    255,
+                ]
+            })
+        };
+        let unit = |c: [f32; 4]| {
+            let l = (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt().max(1e-6);
+            [c[0] / l, c[1] / l, c[2] / l, c[3]]
+        };
+        let first: Vec<[f32; 4]> = normals.iter().map(|&c| unit(c)).collect();
+        let mut levels = vec![encode(&first)];
+        let (mut current, mut side) = (first, size);
+        while side > 1 {
+            current = downsample(&current, side, |a, b, c, d| {
+                let alpha = a[3] + b[3] + c[3] + d[3];
+                let n = [0, 1, 2].map(|k| {
+                    if alpha > 1e-6 {
+                        (a[k] * a[3] + b[k] * b[3] + c[k] * c[3] + d[k] * d[3]) / alpha
+                    } else {
+                        (a[k] + b[k] + c[k] + d[k]) * 0.25
+                    }
+                });
+                [n[0], n[1], n[2], alpha * 0.25]
+            });
+            side /= 2;
+            levels.push(encode(&current));
+        }
+        TextureData {
+            name: "leaf normals".into(),
+            size,
+            height: size,
+            srgb: false,
+            levels,
+        }
+    })
+}
+
+/// The leaf atlas painted (D-013): a spray of leaves in each quarter ([`LeafSpray`]). Per texel,
+/// the linear colour of what covers it with the share of it covered, and the normal of what
+/// covers it in the atlas's tangent space ([`leaf_normals`]), not yet unit, with the same share.
+fn paint_leaves(seed: u64, size: u32) -> (Vec<[f32; 4]>, Vec<[f32; 4]>) {
+    {
         let side = size as usize;
         let half = size as f32 * 0.5;
         // Each spray paints its own quarter, on a thread of its own: no stroke leaves its quarter,
@@ -1247,11 +1352,19 @@ pub fn leaves(seed: u64, size: u32) -> TextureData {
             let q = spray.quarter();
             let (ox, oy) = ((q % 2) as usize * hs, (q / 2) as usize * hs);
             let mut quarter = vec![[0.0_f32; 4]; hs * hs];
+            let mut bent = vec![[0.0_f32, 0.0, 1.0, 0.0]; hs * hs];
             let origin = [(q % 2) as f32 * half, (q / 2) as f32 * half];
             // A quarter's unit square is `half` texels, inside a margin of 2 %.
             let scale = half * 0.96;
             let offset = [origin[0] + half * 0.02, origin[1] + half * 0.02];
-            for stroke in spray_strokes(seed, spray) {
+            for (k, stroke) in spray_strokes(seed, spray).into_iter().enumerate() {
+                // Its own lean (#346): a direction and up to LEAF_TILT, in the image's x and y
+                // (down); across it, the image's direction of `t` below.
+                let h = hash_cell2(seed ^ 0x7469_6c74, q as i32, k as i32);
+                let angle = unit_f32(h) * std::f32::consts::TAU;
+                let lean = LEAF_TILT * (0.35 + 0.65 * unit_f32(hash_cell2(h, 1, 2)));
+                let tilt = [angle.cos() * lean, angle.sin() * lean];
+                let perp = [-stroke.dir[1], stroke.dir[0]];
                 let from = [
                     offset[0] + stroke.from[0] * scale,
                     offset[1] + stroke.from[1] * scale,
@@ -1261,7 +1374,8 @@ pub fn leaves(seed: u64, size: u32) -> TextureData {
                     from[0] + stroke.dir[0] * length,
                     from[1] + stroke.dir[1] * length,
                 ];
-                let reach = width + 1.5;
+                // A leaf's shade on those under it reaches past its edge (#346).
+                let reach = width + 1.5 + if stroke.shape == 0.0 { 0.0 } else { LEAF_SHADE };
                 let lo = [
                     (from[0].min(to[0]) - reach).floor().max(origin[0]) as usize,
                     (from[1].min(to[1]) - reach).floor().max(origin[1]) as usize,
@@ -1299,25 +1413,74 @@ pub fn leaves(seed: u64, size: u32) -> TextureData {
                                 1.0
                             };
                             let edge = 1.0 - 0.12 * smoothstep(0.6, 1.0, across);
-                            (t.abs() - w, stroke.colour.map(|c| c * rib * edge))
+                            // Darker at its base, where it meets its twig and the leaves crowd.
+                            let foot = 0.78 + 0.22 * smoothstep(0.0, 0.3, u);
+                            // A broad enough leaf's secondary veins, from the midrib towards its
+                            // tip and edge, and a faint mottle: what a leaf near the camera shows
+                            // (#346; at a few metres both fall under a pixel).
+                            let veins = if width > 3.0 {
+                                let spacing = (length / 7.0).max(4.0);
+                                let phase = (s - t.abs() * 0.9) / spacing;
+                                let d = (phase - phase.round()).abs() * spacing;
+                                1.0 + LEAF_VEINS
+                                    * (1.0 - smoothstep(0.35, 1.1, d))
+                                    * (1.0 - smoothstep(0.75, 0.95, across))
+                            } else {
+                                1.0
+                            };
+                            let mottle = 1.0
+                                + LEAF_MOTTLE
+                                    * (periodic_noise(
+                                        seed ^ 0x6c65_6166,
+                                        x as f32 * 0.12,
+                                        y as f32 * 0.12,
+                                        1 << 12,
+                                    ) - 0.5);
+                            let shade = rib * edge * foot * veins * mottle;
+                            (t.abs() - w, stroke.colour.map(|c| c * shade))
                         };
                         let cover = (0.5 - distance).clamp(0.0, 1.0);
+                        let texel = &mut quarter[(y - oy) * hs + (x - ox)];
                         if cover <= 0.0 {
+                            // Just past a leaf's edge, the leaves already under it in its shade.
+                            if stroke.shape != 0.0 && texel[3] > 0.0 && distance < 0.5 + LEAF_SHADE
+                            {
+                                let near = 1.0 - (distance - 0.5) / LEAF_SHADE;
+                                for c in &mut texel[..3] {
+                                    *c *= 1.0 - LEAF_SHADE_DEPTH * near;
+                                }
+                            }
                             continue;
                         }
-                        let texel = &mut quarter[(y - oy) * hs + (x - ox)];
+                        // Its normal: a twig rounded across, a leaf leaning its own way and
+                        // folded up along its midrib (in the image, then +y up).
+                        let image = if stroke.shape == 0.0 {
+                            let across = (t / width.max(1e-3)).clamp(-1.0, 1.0);
+                            perp.map(|v| v * across * 0.8)
+                        } else {
+                            let fold = -t.signum()
+                                * LEAF_FOLD
+                                * smoothstep(0.0, 0.25, t.abs() / width.max(1e-3));
+                            [tilt[0] + perp[0] * fold, tilt[1] + perp[1] * fold]
+                        };
+                        let length = (image[0] * image[0] + image[1] * image[1] + 1.0).sqrt();
+                        let normal = [image[0] / length, -image[1] / length, 1.0 / length];
                         let a = cover + texel[3] * (1.0 - cover);
+                        let n = &mut bent[(y - oy) * hs + (x - ox)];
                         for k in 0..3 {
                             texel[k] = (colour[k] * cover + texel[k] * texel[3] * (1.0 - cover))
                                 / a.max(1e-6);
+                            n[k] =
+                                (normal[k] * cover + n[k] * texel[3] * (1.0 - cover)) / a.max(1e-6);
                         }
                         texel[3] = a;
+                        n[3] = a;
                     }
                 }
             }
-            quarter
+            (quarter, bent)
         };
-        let quarters: Vec<Vec<[f32; 4]>> = std::thread::scope(|scope| {
+        let quarters: Vec<_> = std::thread::scope(|scope| {
             let painting: Vec<_> = LeafSpray::ALL
                 .map(|spray| scope.spawn(move || paint(spray)))
                 .into_iter()
@@ -1328,28 +1491,27 @@ pub fn leaves(seed: u64, size: u32) -> TextureData {
                 .collect()
         });
         let mut texels = vec![[0.0_f32; 4]; side * side];
-        for (spray, quarter) in LeafSpray::ALL.into_iter().zip(&quarters) {
+        let mut normals = vec![[0.0_f32, 0.0, 1.0, 0.0]; side * side];
+        for (spray, (quarter, bent)) in LeafSpray::ALL.into_iter().zip(&quarters) {
             let q = spray.quarter() as usize;
             let (ox, oy) = ((q % 2) * hs, (q / 2) * hs);
-            for (r, row) in quarter.chunks_exact(hs).enumerate() {
+            for (r, (row, bent_row)) in quarter
+                .chunks_exact(hs)
+                .zip(bent.chunks_exact(hs))
+                .enumerate()
+            {
                 texels[(oy + r) * side + ox..][..hs].copy_from_slice(row);
+                normals[(oy + r) * side + ox..][..hs].copy_from_slice(bent_row);
             }
         }
-        // The empty texels take the covered ones' mean colour.
-        let (mut sum, mut weight) = ([0.0_f32; 3], 0.0_f32);
-        for t in &texels {
-            for k in 0..3 {
-                sum[k] += t[k] * t[3];
-            }
-            weight += t[3];
-        }
-        let mean = sum.map(|c| c / weight.max(1e-6));
-        for t in &mut texels {
-            let w = t[3];
-            for k in 0..3 {
-                t[k] = t[k] * w + mean[k] * (1.0 - w);
-            }
-        }
+        (texels, normals)
+    }
+}
+
+/// [`leaves`]' levels from its painted texels: sRGB, each mip's alpha scaled per quarter so the
+/// alpha test keeps the share of each quarter level 0 keeps (Castaño 2010).
+fn leaf_levels(texels: Vec<[f32; 4]>, size: u32) -> TextureData {
+    {
         let encode = |level: &[[f32; 4]]| {
             encode(level, |c| {
                 [
@@ -1425,7 +1587,7 @@ pub fn leaves(seed: u64, size: u32) -> TextureData {
             srgb: true,
             levels,
         }
-    })
+    }
 }
 
 /// What a model's image holds, which decides how its mips are made (#166, D-047).
