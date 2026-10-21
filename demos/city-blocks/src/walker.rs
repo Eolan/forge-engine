@@ -18,6 +18,7 @@
 //! repository can too.
 
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use forge_nav::{CrossingMotion, CrossingSpec, Passage, Passages};
@@ -76,6 +77,9 @@ impl Default for WalkSettings {
     }
 }
 
+/// Each piece's hull by its id: its shape's version, the convex radius, the shape (#340).
+type Hulls = Mutex<HashMap<u32, (u32, u32, Arc<Shape>)>>;
+
 /// The pieces to walk on and against, found by the cells their footprints overlap.
 ///
 /// Each piece keeps its id (its index) for good. Pieces change at run time (#324): a door's leaf
@@ -101,6 +105,10 @@ pub struct Pieces {
     /// The pieces over more than [`MOST_CELLS`] cells, kept from the start.
     always: Vec<u32>,
     cell: f32,
+    /// Each piece's convex shape, made the first time a walker keeps it and shared by every
+    /// walker after (#340: a walker's start among 981 pieces took 22.5 ms, most of it their
+    /// hulls): its shape's version, the convex radius it was made with, the shape.
+    hulls: Hulls,
 }
 
 impl Pieces {
@@ -119,6 +127,7 @@ impl Pieces {
             cells: HashMap::new(),
             always: Vec::new(),
             cell: settings.cell,
+            hulls: Mutex::new(HashMap::new()),
         };
         for i in 0..n {
             out.index(i as u32);
@@ -203,6 +212,22 @@ impl Pieces {
     /// The edits made since `new`: a walker that saw this many has nothing to catch up.
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// Piece `id`'s convex shape at `radius`, made once and shared by the walkers (#340); `None`
+    /// when its corners make none.
+    fn hull(&self, id: u32, radius: f32) -> Option<Arc<Shape>> {
+        let version = self.shapes[id as usize];
+        let mut hulls = self.hulls.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((v, r, shape)) = hulls.get(&id)
+            && *v == version
+            && *r == radius.to_bits()
+        {
+            return Some(Arc::clone(shape));
+        }
+        let shape = Arc::new(Shape::convex_hull(self.corners(id), radius, 1000.0).ok()?);
+        hulls.insert(id, (version, radius.to_bits(), Arc::clone(&shape)));
+        Some(shape)
     }
 
     /// How many enabled pieces the segment from `a` to `b` passes through: what stands between
@@ -687,8 +712,7 @@ impl Walker {
             if self.kept.contains_key(&i) {
                 continue;
             }
-            let points = pieces.corners(i);
-            let Ok(shape) = Shape::convex_hull(points, self.settings.convex_radius, 1000.0) else {
+            let Some(shape) = pieces.hull(i, self.settings.convex_radius) else {
                 continue;
             };
             let body = self.world.add_body(&BodyDesc::fixed(&shape, DVec3::ZERO))?;
@@ -1005,6 +1029,37 @@ mod tests {
              (a step without one: {still:?}; optimizing the broad phase as well: {optimize:?})"
         );
         assert!(toggle * 4 < rebuild, "{toggle:?} against {rebuild:?}");
+    }
+
+    #[test]
+    fn a_second_walker_shares_the_first_ones_hulls() {
+        // A thousand posts round the walker (#340: a walker's start among 981 pieces took
+        // 22.5 ms, each Enter again): the second walker makes none of their hulls again.
+        let settings = WalkSettings::default();
+        let mut list = Vec::new();
+        for i in 0..40 {
+            for j in 0..40 {
+                let at = Vec3::new(i as f32 * 0.5 - 10.0, 0.0, j as f32 * 0.5 - 10.0);
+                list.push(cuboid(at, at + Vec3::new(0.1, 3.0, 0.1)));
+            }
+        }
+        let pieces = Pieces::new(list, &settings);
+        let ground = Ground::slab(0.0, 1.0);
+        let start = Vec3::new(0.25, 0.01, 0.25);
+        let t = std::time::Instant::now();
+        let first = Walker::new(&pieces, &ground, start, settings).unwrap();
+        let cold = t.elapsed();
+        let made = pieces.hulls.lock().unwrap().len();
+        let t = std::time::Instant::now();
+        let second = Walker::new(&pieces, &ground, start, settings).unwrap();
+        let warm = t.elapsed();
+        eprintln!(
+            "{} pieces kept: the first walker in {cold:?}, the second in {warm:?}",
+            first.kept()
+        );
+        assert_eq!(second.kept(), first.kept());
+        assert_eq!(made, first.kept());
+        assert_eq!(pieces.hulls.lock().unwrap().len(), made);
     }
 
     #[test]
