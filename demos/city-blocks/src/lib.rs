@@ -806,6 +806,8 @@ struct Gallery {
     particle_born: u64,
     /// The scene's clear glass over its built rooms (D-065's part 4), when it has any.
     glass: Option<forge_render::Glass>,
+    /// `FORGE_GLASS_SETS` (#338's check): the glass given by sets.
+    glass_check: Option<GlassCheck>,
     /// `--lamp-restir`: the lamps by ReSTIR DI (D-065's comparison), and the lamps the frame
     /// lights with, in its order.
     restir: Option<forge_render::LampRestir>,
@@ -1550,6 +1552,7 @@ impl Gallery {
             .transpose()?;
         // The scene's clear glass (D-065's part 4), from the world frame to the scene's.
         let mut glass = None;
+        let mut glass_check = None;
         if let Some(running) = running.as_ref().filter(|_| !args.no_glass) {
             let mut panes = running.glass();
             if !panes.is_empty() {
@@ -1557,7 +1560,44 @@ impl Gallery {
                 for p in &mut panes.positions {
                     *p = forge_render::CellPos::from_f64(p.as_dvec3()).relative_to(origin);
                 }
-                let made = forge_render::Glass::new(&ctx.device, &ctx.shaders, &panes)?;
+                // A check of #338's pane sets: `FORGE_GLASS_SETS` gives the glass its panes by
+                // sets of 256 ids, and `=toggle` removes the first set at frame 100 and adds it
+                // again at frame 150 (`=toggle=K`: set K).
+                let made = match std::env::var("FORGE_GLASS_SETS").ok() {
+                    Some(mode) => {
+                        let sets = glass_check_sets(&panes);
+                        let lamps = panes
+                            .lamp
+                            .iter()
+                            .filter(|&&l| l != forge_render::NO_LAMP)
+                            .max()
+                            .map_or(0, |&l| l + 1);
+                        let ids = panes.pane.iter().max().map_or(1, |&p| p + 1);
+                        let mut made = forge_render::Glass::with_capacity(
+                            &ctx.device,
+                            &ctx.shaders,
+                            forge_render::GlassCapacity {
+                                corners: 2 * panes.positions.len() as u32,
+                                panes: 2 * ids + GLASS_CHECK_PANES,
+                                lamps,
+                            },
+                        )?;
+                        let mut check = GlassCheck {
+                            sets: Vec::new(),
+                            toggle: mode
+                                .strip_prefix("toggle")
+                                .map(|k| k.trim_start_matches('=').parse().unwrap_or(0)),
+                        };
+                        for (set, key) in sets {
+                            let id = made.add_panes(&ctx.device, &set, key)?;
+                            check.sets.push((id, set, key));
+                        }
+                        tracing::info!(sets = check.sets.len(), "glass pane sets (#338's check)");
+                        glass_check = Some(check);
+                        made
+                    }
+                    None => forge_render::Glass::new(&ctx.device, &ctx.shaders, &panes)?,
+                };
                 tracing::info!(
                     triangles = made.triangle_count(),
                     kib = made.bytes() / 1024,
@@ -1608,6 +1648,7 @@ impl Gallery {
             particle_peak: 0,
             particle_born: 0,
             glass,
+            glass_check,
             restir,
             kept_lamps: Vec::new(),
             tonemap: args.tonemap,
@@ -2283,7 +2324,43 @@ impl Demo for Gallery {
                         * glam::DMat4::from_translation(o))
                     .as_mat4()
                 });
-                glass.set_pane(id, scene);
+                // By its set under #338's check.
+                let id = match &self.glass_check {
+                    Some(check) => check
+                        .sets
+                        .iter()
+                        .find(|(_, _, key)| (*key..*key + GLASS_CHECK_PANES).contains(&id))
+                        .and_then(|(set, _, key)| glass.pane_of(*set, id - key)),
+                    None => Some(id),
+                };
+                if let Some(id) = id {
+                    glass.set_pane(id, scene);
+                }
+            }
+        }
+        // #338's check (`FORGE_GLASS_SETS=toggle`): the first pane set out, then in again.
+        if let (Some(glass), Some(check)) = (self.glass.as_mut(), self.glass_check.as_mut())
+            && let Some(k) = check.toggle
+            && let Some((id, set, key)) = check.sets.get_mut(k)
+        {
+            let edited = match ctx.frames_rendered {
+                100 => {
+                    glass.remove_panes(*id);
+                    Ok(true)
+                }
+                150 => glass.add_panes(&ctx.device, set, *key).map(|new| {
+                    *id = new;
+                    true
+                }),
+                _ => Ok(false),
+            };
+            match edited {
+                Ok(true) => tracing::info!(
+                    frame = ctx.frames_rendered,
+                    "a pane set removed or added (#338's check)"
+                ),
+                Ok(false) => {}
+                Err(e) => tracing::warn!("#338's check: {e}"),
             }
         }
         // The doorways shut or opened by their doors since the last frame (#327).
@@ -3430,8 +3507,6 @@ pub fn percentile(values: &mut [f64], q: f64) -> f64 {
         .unwrap_or(0.0)
 }
 
-/// Cooks (or loads) `props` in parallel on the job system, logging each prop's DAG; returns
-/// the meshes in order and the milliseconds they took together.
 /// `volumes` in groups whose footprints touch, each group in their order (#338's check of the
 /// probes' region sets): a house's rooms, doorways, reveals and body together, a row of houses
 /// sharing walls one group.
@@ -3475,6 +3550,49 @@ fn touching_groups(volumes: &[forge_render::RegionVolume]) -> Vec<Vec<forge_rend
     groups.into_values().collect()
 }
 
+/// #338's check of the glass's sets (`FORGE_GLASS_SETS`): each set's id, its panes and its key.
+struct GlassCheck {
+    sets: Vec<(forge_render::PaneSetId, forge_render::GlassPanes, u32)>,
+    /// `=toggle` (or `=toggle=K`): the first set (set K) removed at frame 100 and added again
+    /// at 150.
+    toggle: Option<usize>,
+}
+
+/// The panes a set holds in #338's check: ids from `GLASS_CHECK_PANES * k`.
+const GLASS_CHECK_PANES: u32 = 256;
+
+/// `panes` as #338's check gives them, by sets of [`GLASS_CHECK_PANES`] ids in the order the
+/// triangles come: each set's panes, ids its own from 0, and its key, the first id it holds.
+fn glass_check_sets(panes: &forge_render::GlassPanes) -> Vec<(forge_render::GlassPanes, u32)> {
+    let mut sets: Vec<(forge_render::GlassPanes, u32)> = Vec::new();
+    for t in 0..panes.triangle_count() {
+        let id = panes.pane.get(3 * t).copied().unwrap_or(0);
+        let key = id / GLASS_CHECK_PANES * GLASS_CHECK_PANES;
+        let at = match sets.iter().position(|(_, k)| *k == key) {
+            Some(at) => at,
+            None => {
+                sets.push((forge_render::GlassPanes::default(), key));
+                sets.len() - 1
+            }
+        };
+        let set = &mut sets[at].0;
+        for c in 3 * t..3 * t + 3 {
+            set.positions.push(panes.positions[c]);
+            set.normals.push(panes.normals[c]);
+            set.glow.push(panes.glow[c]);
+            if let Some(&lamp) = panes.lamp.get(c) {
+                set.lamp.push(lamp);
+            }
+            if let Some(&pane) = panes.pane.get(c) {
+                set.pane.push(pane - key);
+            }
+        }
+    }
+    sets
+}
+
+/// Cooks (or loads) `props` in parallel on the job system, logging each prop's DAG; returns
+/// the meshes in order and the milliseconds they took together.
 fn cook_props(props: &[PropSpec], recook: bool, pages_in_memory: bool) -> (Vec<MeshletMesh>, f64) {
     let cache = forge_core::derived::cache_dir(forge_core::derived::CacheKind::Meshes);
     if recook {

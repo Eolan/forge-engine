@@ -115,7 +115,8 @@ float4 pane_hash(uint pane, uint salt)
 // Must match GpuGlassVertex in glass.rs: a triangle's corner, three to a triangle.
 struct GlassVertex
 {
-    float4 position; // xyz: the scene's frame, metres
+    float4 position; // xyz: the scene's frame, metres; w: its pane's key, whose hash gives its
+                     // condition (as bits, #338: the same each time a streamed set comes back)
     float4 normal;   // xyz: unit; either side is drawn; w: its pane, an index into
                      // `GlassFrame::panes` (as bits, #325)
     float4 glow;     // rgb: a lit room's light through the pane, cd/m² (0: a dark room); w: its
@@ -160,7 +161,8 @@ struct GlassVaryings
     float3 rel : REL;       // camera-relative, metres
     float3 normal : NORMAL;
     float4 glow : GLOW;     // rgb: the glow, its lamp's unlit share in; w: 1 where a lamp drives it
-    nointerpolation uint pane : PANE; // its pane, for its condition (#339)
+    nointerpolation uint pane : PANE; // its pane, for its span (#339)
+    nointerpolation uint key : KEY;   // its pane's key, for its condition (#339, #338)
     float height : HEIGHT;  // the height of the corner as given, before its pane moved (#339's blinds)
 };
 
@@ -183,6 +185,7 @@ GlassVaryings vert_main(uint vertex : SV_VertexID)
     o.rel = rel;
     o.normal = float3(dot(r0.xyz, v.normal.xyz), dot(r1.xyz, v.normal.xyz), dot(r2.xyz, v.normal.xyz));
     o.pane = asuint(v.normal.w);
+    o.key = asuint(v.position.w);
     o.height = v.position.y;
     // A pane whose room has a lamp glows with the share of its light the frame's lamps leave
     // unlit (#284), at any distance; the others fade in by distance.
@@ -224,8 +227,8 @@ GlassLight glass_light(GlassFrame* f, GlassVaryings input)
     float3 v = -input.rel / max(o.distance, 1e-4);
     // The pane's condition (#339): its tilt and roller waves bend its normal in its own plane.
     float3 n = normalize(input.normal);
-    float4 h = pane_hash(input.pane, 0u);
-    float4 w = pane_hash(input.pane, 1u);
+    float4 h = pane_hash(input.key, 0u);
+    float4 w = pane_hash(input.key, 1u);
     float3 up = abs(n.y) < 0.95 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
     float3 across = normalize(cross(up, n));
     float3 rise = cross(n, across);
@@ -253,7 +256,7 @@ GlassLight glass_light(GlassFrame* f, GlassVaryings input)
     {
         float2 span = f[0].pane_heights[input.pane];
         o.haze += GRIME_FOOT * h.z * (1.0 - saturate((input.height - span.x) / GRIME_FOOT_HEIGHT));
-        float4 k = pane_hash(input.pane, 2u);
+        float4 k = pane_hash(input.key, 2u);
         if (k.x < PANE_BLIND_SHARE && span.y - span.x > BLIND_MIN_HEIGHT)
         {
             float hem = span.y - lerp(BLIND_SHORTEST, BLIND_LONGEST, k.y) * (span.y - span.x);

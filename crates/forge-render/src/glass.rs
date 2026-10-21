@@ -17,19 +17,23 @@
 //!
 //! The glass writes no depth (TAA reprojects the room through it by the room's own) and is not
 //! in the ray-traced scene: the sun, the probes' rays and the mirror rays pass the windows.
+//!
+//! A scene that streams (#338) makes the glass with room instead ([`Glass::with_capacity`]) and
+//! adds and removes its panes by sets as it runs ([`Glass::add_panes`], a cell's windows).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use bytemuck::{Pod, Zeroable};
 use forge_gpu::{
-    Buffer, BufferAccess, BufferDesc, Device, FRAMES_IN_FLIGHT, FrameGraph, FrameSlot, ImageAccess,
-    ImageHandle, MemoryCategory, MemoryLocation, Pipeline, Result, ShaderCompiler, ShaderStage,
-    TransientDesc, VertexPipelineDesc, vk,
+    Buffer, BufferAccess, BufferDesc, Device, FRAMES_IN_FLIGHT, FrameGraph, FrameSlot, GpuError,
+    ImageAccess, ImageHandle, MemoryCategory, MemoryLocation, Pipeline, Result, ShaderCompiler,
+    ShaderStage, TransientDesc, VertexPipelineDesc, vk,
 };
 use glam::{Mat4, Vec3};
 
 use crate::meshlet::RayRequests;
+use crate::meshlet::dynamic::Ranges;
 use crate::sky::SkyFrame;
 use crate::taa::HDR_FORMAT;
 
@@ -72,6 +76,22 @@ impl GlassPanes {
         self.positions.is_empty()
     }
 }
+
+/// Room for pane sets a scene adds and removes as it runs (#338: a streamed cell's windows,
+/// [`Glass::with_capacity`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GlassCapacity {
+    /// Corners over every set, three a triangle.
+    pub corners: u32,
+    /// Panes over every set.
+    pub panes: u32,
+    /// The lamps the sets' corners name ([`GlassPanes::lamp`]): one past the greatest index.
+    pub lamps: u32,
+}
+
+/// A set of panes added as the scene runs ([`Glass::add_panes`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PaneSetId(u32);
 
 /// How the glass looks.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -175,14 +195,187 @@ pub struct Glass {
     /// The panes' edits so far, and per frame slot how many its buffer holds.
     edits: u64,
     written: Vec<AtomicU64>,
+    /// With room ([`Self::with_capacity`], #338): the sets added.
+    sets: Option<PaneSets>,
+    /// Frames drawn so far.
+    drawn: AtomicU64,
+}
+
+/// An added set's ranges: (first, count) of the corners and of the panes.
+#[derive(Clone, Copy, Debug)]
+struct PaneSet {
+    corners: (u32, u32),
+    panes: (u32, u32),
+}
+
+/// The sets of a glass with room (#338).
+struct PaneSets {
+    corners: Ranges,
+    panes: Ranges,
+    sets: Vec<Option<PaneSet>>,
+    /// Whether each pane is a set's (the others are hidden and stay so).
+    live: Vec<bool>,
+    /// Sets removed, their ranges given back once frame `.0` is drawn.
+    leaving: Vec<(u64, PaneSet)>,
+}
+
+impl PaneSets {
+    /// One past the last corner a set in or leaving holds: the corners a frame draws.
+    fn high(&self) -> u32 {
+        self.sets
+            .iter()
+            .flatten()
+            .chain(self.leaving.iter().map(|(_, s)| s))
+            .map(|s| s.corners.0 + s.corners.1)
+            .max()
+            .unwrap_or(0)
+    }
 }
 
 /// The identity as a pane's transform.
 const PANE_IDENTITY: [f32; 12] = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
 
+/// A pane's height span when the panes have no ids: far below, neither dirtied along its foot
+/// nor blinded (#339).
+const NO_SPAN: [f32; 2] = [-1e30, -1e30];
+
+/// `panes`' corners as the shader reads them: pane `i` moved by transform `first + i`, its
+/// condition that of key `key + i`.
+fn gpu_corners(panes: &GlassPanes, first: u32, key: u32) -> Vec<GpuGlassVertex> {
+    panes
+        .positions
+        .iter()
+        .zip(&panes.normals)
+        .zip(&panes.glow)
+        .enumerate()
+        .map(|(i, ((p, n), g))| {
+            let pane = panes.pane.get(i).copied().unwrap_or(0);
+            GpuGlassVertex {
+                position: p.extend(f32::from_bits(key.wrapping_add(pane))).to_array(),
+                normal: n.extend(f32::from_bits(first + pane)).to_array(),
+                glow: [
+                    g[0],
+                    g[1],
+                    g[2],
+                    f32::from_bits(panes.lamp.get(i).copied().unwrap_or(NO_LAMP)),
+                ],
+            }
+        })
+        .collect()
+}
+
+/// How many panes `panes` has: its greatest id and one.
+fn panes_in(panes: &GlassPanes) -> u32 {
+    panes.pane.iter().max().map_or(1, |&p| p + 1)
+}
+
+/// Each of `panes`' `count` panes' lowest and highest corner as given (#339's blinds).
+fn pane_spans(panes: &GlassPanes, count: usize) -> Vec<[f32; 2]> {
+    if panes.pane.is_empty() {
+        return vec![NO_SPAN; count];
+    }
+    let mut spans = vec![[f32::MAX, f32::MIN]; count];
+    for (p, id) in panes.positions.iter().zip(&panes.pane) {
+        let span = &mut spans[*id as usize];
+        span[0] = span[0].min(p.y);
+        span[1] = span[1].max(p.y);
+    }
+    spans
+}
+
 impl Glass {
     /// Compiles the passes and uploads `panes`.
     pub fn new(device: &Arc<Device>, shaders: &ShaderCompiler, panes: &GlassPanes) -> Result<Self> {
+        let corners = gpu_corners(panes, 0, 0);
+        let unlit_count = panes
+            .lamp
+            .iter()
+            .filter(|&&l| l != NO_LAMP)
+            .max()
+            .map_or(0, |&l| l + 1);
+        let vertices = device.create_buffer_with_data(
+            &corners,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            MemoryCategory::Geometry,
+            "glass panes",
+        )?;
+        let pane_count = panes_in(panes) as usize;
+        // Each pane's height span, for the blinds some panes have (#339): only when the host
+        // gave the panes ids (one pane holding every corner has no span of its own).
+        let heights = (pane_count > 1)
+            .then(|| {
+                device.create_buffer_with_data(
+                    &pane_spans(panes, pane_count),
+                    vk::BufferUsageFlags::STORAGE_BUFFER,
+                    MemoryCategory::Geometry,
+                    "glass pane heights",
+                )
+            })
+            .transpose()?;
+        Self::build(
+            device,
+            shaders,
+            vertices,
+            (corners.len() / 3 * 3) as u32,
+            vec![PANE_IDENTITY; pane_count],
+            heights,
+            unlit_count,
+            None,
+        )
+    }
+
+    /// Compiles the passes and makes room for pane sets the scene adds as it runs (#338,
+    /// [`Self::add_panes`]); none at first.
+    pub fn with_capacity(
+        device: &Arc<Device>,
+        shaders: &ShaderCompiler,
+        capacity: GlassCapacity,
+    ) -> Result<Self> {
+        let gpu = |bytes: u64, name: &str| {
+            device.create_buffer(BufferDesc {
+                size: bytes.max(4),
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+                location: MemoryLocation::GpuOnly,
+                category: MemoryCategory::Geometry,
+                name,
+            })
+        };
+        let vertices = gpu(
+            u64::from(capacity.corners) * std::mem::size_of::<GpuGlassVertex>() as u64,
+            "glass panes",
+        )?;
+        let heights = gpu(u64::from(capacity.panes) * 8, "glass pane heights")?;
+        Self::build(
+            device,
+            shaders,
+            vertices,
+            0,
+            // A row past the panes, always zero: the pane the corners a set gave back are on.
+            vec![[0.0; 12]; capacity.panes as usize + 1],
+            Some(heights),
+            capacity.lamps,
+            Some(PaneSets {
+                corners: Ranges::new(capacity.corners, 0),
+                panes: Ranges::new(capacity.panes, 0),
+                sets: Vec::new(),
+                live: vec![false; capacity.panes as usize],
+                leaving: Vec::new(),
+            }),
+        )
+    }
+
+    /// The passes and the frames' buffers about the panes' own.
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        device: &Arc<Device>,
+        shaders: &ShaderCompiler,
+        vertices: Buffer,
+        vertex_count: u32,
+        pane_rows: Vec<[f32; 12]>,
+        heights: Option<Buffer>,
+        unlit_count: u32,
+        sets: Option<PaneSets>,
+    ) -> Result<Self> {
         let module = |entry: &str, stage, name: &str| -> Result<vk::ShaderModule> {
             device.create_shader_module(&shaders.compile("glass.slang", entry, stage)?, name)
         };
@@ -220,31 +413,6 @@ impl Glass {
         device.destroy_shader_module(vertex);
         device.destroy_shader_module(request_fragment);
         device.destroy_shader_module(draw_fragment);
-        let corners: Vec<GpuGlassVertex> = panes
-            .positions
-            .iter()
-            .zip(&panes.normals)
-            .zip(&panes.glow)
-            .enumerate()
-            .map(|(i, ((p, n), g))| GpuGlassVertex {
-                position: p.extend(1.0).to_array(),
-                normal: n
-                    .extend(f32::from_bits(panes.pane.get(i).copied().unwrap_or(0)))
-                    .to_array(),
-                glow: [
-                    g[0],
-                    g[1],
-                    g[2],
-                    f32::from_bits(panes.lamp.get(i).copied().unwrap_or(NO_LAMP)),
-                ],
-            })
-            .collect();
-        let unlit_count = panes
-            .lamp
-            .iter()
-            .filter(|&&l| l != NO_LAMP)
-            .max()
-            .map_or(0, |&l| l + 1);
         let unlit = (0..FRAMES_IN_FLIGHT)
             .map(|i| {
                 let buffer = device.create_buffer(BufferDesc {
@@ -259,36 +427,10 @@ impl Glass {
                 Ok(buffer)
             })
             .collect::<Result<_>>()?;
-        let vertices = device.create_buffer_with_data(
-            &corners,
-            vk::BufferUsageFlags::STORAGE_BUFFER,
-            MemoryCategory::Geometry,
-            "glass panes",
-        )?;
-        let pane_count = panes.pane.iter().max().map_or(1, |&p| p as usize + 1);
-        // Each pane's height span, for the blinds some panes have (#339): only when the host
-        // gave the panes ids (one pane holding every corner has no span of its own).
-        let heights = (pane_count > 1)
-            .then(|| {
-                let mut spans = vec![[f32::MAX, f32::MIN]; pane_count];
-                for (p, id) in panes.positions.iter().zip(&panes.pane) {
-                    let span = &mut spans[*id as usize];
-                    span[0] = span[0].min(p.y);
-                    span[1] = span[1].max(p.y);
-                }
-                device.create_buffer_with_data(
-                    &spans,
-                    vk::BufferUsageFlags::STORAGE_BUFFER,
-                    MemoryCategory::Geometry,
-                    "glass pane heights",
-                )
-            })
-            .transpose()?;
-        let pane_rows = vec![PANE_IDENTITY; pane_count];
         let pane_buffers = (0..FRAMES_IN_FLIGHT)
             .map(|i| {
                 let buffer = device.create_buffer(BufferDesc {
-                    size: std::mem::size_of_val(pane_rows.as_slice()) as u64,
+                    size: (std::mem::size_of_val(pane_rows.as_slice()) as u64).max(48),
                     usage: vk::BufferUsageFlags::STORAGE_BUFFER,
                     location: MemoryLocation::CpuToGpu,
                     category: MemoryCategory::Frame,
@@ -312,7 +454,7 @@ impl Glass {
         Ok(Self {
             look: GlassLook::default(),
             vertices,
-            vertex_count: (corners.len() / 3 * 3) as u32,
+            vertex_count,
             requests: requests?,
             draw: draw?,
             frames,
@@ -323,18 +465,176 @@ impl Glass {
             heights,
             edits: 0,
             written: (0..FRAMES_IN_FLIGHT).map(|_| AtomicU64::new(0)).collect(),
+            sets,
+            drawn: AtomicU64::new(0),
         })
     }
 
-    /// How many panes: the greatest id in [`GlassPanes::pane`] and one.
+    /// How many pane ids: the greatest id in [`GlassPanes::pane`] and one, or with room
+    /// ([`Self::with_capacity`]) its panes.
     pub fn pane_count(&self) -> u32 {
-        self.panes.len() as u32
+        self.sets
+            .as_ref()
+            .map_or(self.panes.len(), |s| s.live.len()) as u32
+    }
+
+    /// Adds `panes` as a set (#338: a streamed cell's windows), drawn from the next frame. Pane
+    /// `i` of them ([`GlassPanes::pane`]) is [`Self::set_pane`]'s id [`Self::pane_of`]`(set, i)`
+    /// and looks as pane `key + i` would (its condition, its blind: a set given the same key
+    /// each time it comes back looks the same). Their lamps ([`GlassPanes::lamp`]) are indices
+    /// into the frame's as [`Self::new`]'s are, up to [`GlassCapacity::lamps`]. Fails without
+    /// room ([`Self::with_capacity`]) or when a corner lacks its normal or glow.
+    pub fn add_panes(
+        &mut self,
+        device: &Arc<Device>,
+        panes: &GlassPanes,
+        key: u32,
+    ) -> Result<PaneSetId> {
+        self.retire(device)?;
+        let sets = self.sets.as_mut().ok_or_else(|| {
+            GpuError::Unsupported("pane sets need room first (`Glass::with_capacity`)".into())
+        })?;
+        let corner_count = (panes.positions.len() / 3 * 3) as u32;
+        if panes.normals.len() < corner_count as usize || panes.glow.len() < corner_count as usize {
+            return Err(GpuError::Unsupported(
+                "a pane set's corners each need a normal and a glow".into(),
+            ));
+        }
+        let full =
+            |what: &str| GpuError::Unsupported(format!("the glass is out of room for {what}"));
+        let pane_count = panes_in(panes);
+        let first_corner = sets
+            .corners
+            .take(corner_count)
+            .ok_or_else(|| full("corners"))?;
+        let Some(first_pane) = sets.panes.take(pane_count) else {
+            sets.corners.give(first_corner, corner_count);
+            return Err(full("panes"));
+        };
+        let mut corners = gpu_corners(panes, first_pane, key);
+        corners.truncate(corner_count as usize);
+        let heights = self
+            .heights
+            .as_ref()
+            .expect("a glass with room has its heights");
+        if let Err(e) = device.write_buffers_staged(&[
+            (
+                &self.vertices,
+                u64::from(first_corner) * std::mem::size_of::<GpuGlassVertex>() as u64,
+                bytemuck::cast_slice(&corners),
+            ),
+            (
+                heights,
+                u64::from(first_pane) * 8,
+                bytemuck::cast_slice(&pane_spans(panes, pane_count as usize)),
+            ),
+        ]) {
+            sets.corners.give(first_corner, corner_count);
+            sets.panes.give(first_pane, pane_count);
+            return Err(e);
+        }
+        for p in first_pane..first_pane + pane_count {
+            self.panes[p as usize] = PANE_IDENTITY;
+            sets.live[p as usize] = true;
+        }
+        self.edits += 1;
+        let set = PaneSet {
+            corners: (first_corner, corner_count),
+            panes: (first_pane, pane_count),
+        };
+        let id = match sets.sets.iter().position(Option::is_none) {
+            Some(free) => free,
+            None => {
+                sets.sets.push(None);
+                sets.sets.len() - 1
+            }
+        };
+        sets.sets[id] = Some(set);
+        self.vertex_count = sets.high();
+        Ok(PaneSetId(id as u32))
+    }
+
+    /// Removes set `id` (#338) from the next frame: its panes' ids ([`Self::pane_of`]) are no
+    /// longer its own. Nothing for a set not in.
+    pub fn remove_panes(&mut self, id: PaneSetId) {
+        let Some(sets) = self.sets.as_mut() else {
+            return;
+        };
+        let Some(set) = sets.sets.get_mut(id.0 as usize).and_then(Option::take) else {
+            return;
+        };
+        for p in set.panes.0..set.panes.0 + set.panes.1 {
+            self.panes[p as usize] = [0.0; 12];
+            sets.live[p as usize] = false;
+        }
+        self.edits += 1;
+        // Its ranges once no frame in flight draws them: hidden until then.
+        let drawn = *self.drawn.get_mut();
+        sets.leaving
+            .push((drawn + FRAMES_IN_FLIGHT as u64 + 1, set));
+    }
+
+    /// The id [`Self::set_pane`] takes for pane `pane` of set `set` ([`GlassPanes::pane`]):
+    /// `None` for a set not in or a pane past its own.
+    pub fn pane_of(&self, set: PaneSetId, pane: u32) -> Option<u32> {
+        let s = self.sets.as_ref()?.sets.get(set.0 as usize)?.as_ref()?;
+        (pane < s.panes.1).then_some(s.panes.0 + pane)
+    }
+
+    /// Gives back the ranges of the sets removed that no frame draws any more, their corners
+    /// first moved to the pane always hidden: a pane id given again must not move them.
+    fn retire(&mut self, device: &Arc<Device>) -> Result<()> {
+        let drawn = *self.drawn.get_mut();
+        let Some(sets) = self.sets.as_mut() else {
+            return Ok(());
+        };
+        let done: Vec<PaneSet> = sets
+            .leaving
+            .iter()
+            .filter(|&&(at, _)| at <= drawn)
+            .map(|&(_, set)| set)
+            .collect();
+        if done.is_empty() {
+            return Ok(());
+        }
+        let hidden = GpuGlassVertex {
+            position: [0.0; 4],
+            normal: [0.0, 0.0, 0.0, f32::from_bits(sets.live.len() as u32)],
+            glow: [0.0, 0.0, 0.0, f32::from_bits(NO_LAMP)],
+        };
+        let longest = done.iter().map(|s| s.corners.1).max().unwrap_or(0);
+        let fill = vec![hidden; longest as usize];
+        let size = std::mem::size_of::<GpuGlassVertex>() as u64;
+        let writes: Vec<(&Buffer, u64, &[u8])> = done
+            .iter()
+            .map(|s| {
+                (
+                    &self.vertices,
+                    u64::from(s.corners.0) * size,
+                    bytemuck::cast_slice(&fill[..s.corners.1 as usize]),
+                )
+            })
+            .collect();
+        device.write_buffers_staged(&writes)?;
+        sets.leaving.retain(|&(at, _)| at > drawn);
+        for set in done {
+            sets.corners.give(set.corners.0, set.corners.1);
+            sets.panes.give(set.panes.0, set.panes.1);
+        }
+        self.vertex_count = sets.high();
+        Ok(())
     }
 
     /// Moves pane `id` (#325) by `transform` from where its corners were given (the identity puts
     /// it back), or hides it (`None`: a window smashed). The next frames draw it so, its mirror
-    /// rays and its glow following; an id past [`Self::pane_count`] changes nothing.
+    /// rays and its glow following; an id past [`Self::pane_count`], or with room no set's,
+    /// changes nothing.
     pub fn set_pane(&mut self, id: u32, transform: Option<Mat4>) {
+        if let Some(sets) = &self.sets
+            && !sets.live.get(id as usize).copied().unwrap_or(false)
+        {
+            return;
+        }
         let Some(rows) = self.panes.get_mut(id as usize) else {
             return;
         };
@@ -370,7 +670,7 @@ impl Glass {
 
     /// Bytes of the panes.
     pub fn bytes(&self) -> u64 {
-        self.vertices.size()
+        self.vertices.size() + self.heights.as_ref().map_or(0, Buffer::size)
     }
 
     /// Declares the passes over `color` (the frame's HDR image, after the sky's compose and the
@@ -413,6 +713,7 @@ impl Glass {
             vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
             vk::ImageAspectFlags::DEPTH,
         ));
+        self.drawn.fetch_add(1, Ordering::Relaxed);
         let frame_buffer = &self.frames[slot.index];
         // The panes' transforms, into this slot's copy when edits came since it was written.
         let panes = &self.pane_buffers[slot.index];

@@ -68,7 +68,7 @@ pub use dust::{DustParams, DustVolume};
 pub use exposure::{AutoExposure, LuminanceHistogram, LuminanceMeter, exposure_from_ev100};
 pub use forge_gpu::DlssMode;
 pub use fsr::{FsrGroup, FsrMode, FsrUpscaler};
-pub use glass::{Glass, GlassLook, GlassPanes, GlassParams, NO_LAMP};
+pub use glass::{Glass, GlassCapacity, GlassLook, GlassPanes, GlassParams, NO_LAMP, PaneSetId};
 pub use gtao::{Gtao, GtaoParams};
 pub use liquid::{
     FRESH_FOAM_LIFE, LIQUID_MAX_OBSTACLES, LIQUID_MAX_SUBSTEPS, Liquid, LiquidDrawParams,
