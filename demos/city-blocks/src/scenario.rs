@@ -66,6 +66,11 @@ pub struct Look {
     /// `--fixed-exposure`): a map walked into from the street, whose rooms, lit through their
     /// doors and windows, are a few stops under the street, as the eye adapts to them.
     pub metered: bool,
+    /// Local exposure (D-067) on from the start (unless `--no-local-exposure`), with the meter
+    /// keyed on a lower band (0.25–0.95) and the shadows' contrast at 0.55 (unless
+    /// `--meter-band`, `--local-exposure-contrast`): a room seen from a lit hall through its door
+    /// reads a bit darker, as the eye sees it, not black (the owner, 2026-10-19, #275).
+    pub local_exposure: bool,
 }
 
 impl Default for Look {
@@ -81,6 +86,7 @@ impl Default for Look {
             probe_far_room_sky: None,
             chase: false,
             metered: false,
+            local_exposure: false,
         }
     }
 }

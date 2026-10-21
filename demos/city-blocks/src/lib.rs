@@ -158,10 +158,13 @@ pub struct Args {
     fixed_exposure: bool,
     /// Local exposure (D-067, #275): a dark hall beside a sunlit doorway lifted, the doorway
     /// lowered a little, by a gain read per pixel from a bilateral grid of this frame's log
-    /// luminance (X cycles it off, on, and on with the gain in false colours). Off by default
-    /// until the owner has seen it.
+    /// luminance (X cycles it off, on, and on with the gain in false colours). On by default in
+    /// the scenes whose look asks for it (the village, #275), off elsewhere.
     #[arg(long)]
     local_exposure: bool,
+    /// No local exposure in a scene whose look turns it on (the village, #275).
+    #[arg(long, conflicts_with = "local_exposure")]
+    no_local_exposure: bool,
     /// Local exposure's contrasts `SHADOWS,HIGHLIGHTS` around middle grey (0.7,0.85 by default;
     /// 1 leaves that side as it is). Turns local exposure on.
     #[arg(long, value_parser = parse_contrasts)]
@@ -1025,6 +1028,19 @@ impl Gallery {
         // it; space's sky (the owner's ask of 2026-10-03) is the stars, the sun's disc and a
         // planet below.
         let look = scenario.as_ref().map(|s| s.look()).unwrap_or_default();
+        // Local exposure on where the look asks for it (D-067, #275: the owner's look of
+        // 2026-10-19, a room seen from a lit hall through its door pitch black without it),
+        // with the meter keyed on a lower band and the shadows lifted a little more, which a game
+        // measured to read "a bit darker" there and to leave a street view as it was.
+        if look.local_exposure && !args.no_local_exposure {
+            local_settings.enabled = true;
+            if args.local_exposure_contrast.is_none() {
+                local_settings.shadow_contrast = LOOK_SHADOW_CONTRAST;
+            }
+            if args.meter_band.is_none() {
+                auto_exposure.band = LOOK_METER_BAND;
+            }
+        }
         let space = (look.backdrop == Backdrop::Space)
             .then(|| SpaceSky::new(ctx, renderer.sun_illuminance))
             .transpose()?;
@@ -5390,6 +5406,13 @@ fn water_check(
     }
     Ok(())
 }
+
+/// The meter's band in a look with local exposure (#275): from a quarter of the metered samples
+/// up, not half, so that indoors the lit walls alone do not set the exposure.
+const LOOK_METER_BAND: (f32, f32) = (0.25, 0.95);
+
+/// Local exposure's contrast under middle grey in such a look (#275; 0.7 by default).
+const LOOK_SHADOW_CONTRAST: f32 = 0.55;
 
 /// `--meter-band`: two fractions in 0..1, `LOW,HIGH`, the first below the second.
 fn parse_sea_water(text: &str) -> std::result::Result<forge_render::SeaWater, String> {

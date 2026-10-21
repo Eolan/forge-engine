@@ -241,6 +241,7 @@ impl Scenario for LabScenario {
             chase: matches!(kind, LabScene::Drive | LabScene::Flyer),
             // Each lab scene at its own fixed exposure (its captures compared at one).
             metered: false,
+            local_exposure: false,
         }
     }
 

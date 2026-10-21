@@ -5484,6 +5484,16 @@ application are to be looked into further (D-068's note; done in `research/light
   map check's views matched to the pixel.
 - **Left for the owner:** the look. Then on by default in the village and the city
   (`map-check --accept`).
+- **On in the village** (#275, 2026-10-21). The owner saw it on 2026-10-19 in a scene built
+  outside the repository. From a lit hall, an open door showed a windowless room pitch black
+  without it ("makes no sense"); with it, dim, as the eye sees it. That scene measured the meter
+  as the cause: at a fixed EV 6 the room is only a bit darker than the hall, but the band
+  (0.5, 0.98) let the hall's lit walls alone set the exposure. A band of (0.25, 0.95) and a
+  shadow contrast of 0.55 made the room read "a bit darker", as the owner expects, and barely
+  changed a street view. A scene's look now turns it on with those two (`Look::local_exposure`;
+  the village's, with its metered exposure; `--no-local-exposure`, `--meter-band` and
+  `--local-exposure-contrast` override). In the village's map check the streets keep their light
+  and the trees' crowns open up; the hall's doorway is less blown.
 
 ## D-068 — Probe regions from the generator: a room's probes light only its own surfaces ✅ (proposed 2026-10-17, #266; the owner's go the same day)
 
