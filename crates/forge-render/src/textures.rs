@@ -1450,13 +1450,30 @@ const MIP_ROWS_PER_THREAD: usize = 16;
 pub fn decode_image(name: &str, bytes: &[u8], usage: ImageUse) -> image::ImageResult<TextureData> {
     let rgba = image::load_from_memory(bytes)?.to_rgba8();
     let (w, h) = rgba.dimensions();
+    Ok(texture_from_rgba8(name, rgba.as_raw(), w, h, usage))
+}
+
+/// [`decode_image`] for an image already in memory: `rgba` holds `width` × `height` RGBA8
+/// pixels, rows top to bottom, as `usage` reads them (sRGB colour, a tangent-space normal map,
+/// linear data). A game's images made at load go through the same mips as a model's: a normal
+/// map's keep the mean normal's length, which Toksvig's factor reads (#331).
+///
+/// # Panics
+///
+/// When `rgba` is not `width` × `height` × 4 bytes.
+pub fn texture_from_rgba8(name: &str, rgba: &[u8], w: u32, h: u32, usage: ImageUse) -> TextureData {
+    assert_eq!(
+        rgba.len(),
+        4 * w as usize * h as usize,
+        "RGBA8, width × height"
+    );
     let (pw, ph) = (w.next_power_of_two(), h.next_power_of_two());
     // Every texel, every level's encoding and every mip texel stands on its own, so they are
     // worked out in parallel, in chunks the threads share (#220: the planet's 16K colour map took
     // 7 s of one thread at every start), and each byte's value in linear light once. The same
     // bits as one thread texel by texel.
     let linear: [f32; 256] = std::array::from_fn(|b| srgb_to_linear(b as f32 / 255.0));
-    let raw = rgba.as_raw();
+    let raw = rgba;
     let mut texels = vec![[0.0_f32; 4]; raw.len() / 4];
     par_chunks_mut(&mut texels, DECODE_CHUNK, 1, |i, chunk| {
         let first = 4 * i * DECODE_CHUNK;
@@ -1542,13 +1559,13 @@ pub fn decode_image(name: &str, bytes: &[u8], usage: ImageUse) -> image::ImageRe
         (current, width, height) = (next, nw, nh);
         levels.push(encode(&current));
     }
-    Ok(TextureData {
+    TextureData {
         name: name.to_owned().into(),
         size: pw,
         height: ph,
         srgb: usage == ImageUse::Color,
         levels,
-    })
+    }
 }
 
 /// A test texture for the mip check (`--mip-check`): level `k` is filled with `k / 16`, so a
@@ -1902,6 +1919,18 @@ mod tests {
         let flat = decode_image("flat", &flat, ImageUse::Normal).unwrap();
         let n = &flat.levels.last().unwrap()[..3];
         assert!(n[2] >= 254, "{n:?}");
+        // The same pixels made in memory (a game's bake at load) give the same levels.
+        let raw: Vec<u8> = (0..64)
+            .flat_map(|i| {
+                if (i % 8) % 2 == 0 {
+                    [218, 128, 218, 255]
+                } else {
+                    [38, 128, 218, 255]
+                }
+            })
+            .collect();
+        let made = texture_from_rgba8("bumps", &raw, 8, 8, ImageUse::Normal);
+        assert_eq!(made.levels, normal.levels);
         assert!(decode_image("garbage", b"not an image", ImageUse::Color).is_err());
     }
 
