@@ -2547,8 +2547,21 @@ pub struct MeshletScene {
 /// read) and one more, so the CPU never writes a slot a frame in flight still reads.
 const MOVER_SLOTS: usize = FRAMES_IN_FLIGHT + 1;
 
+/// Runs of movers (first, past the last) sorted and merged where they touch or overlap (#344).
+fn merge_runs(mut runs: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
+    runs.sort_unstable();
+    let mut merged: Vec<(usize, usize)> = Vec::with_capacity(runs.len());
+    for (a, b) in runs {
+        match merged.last_mut() {
+            Some((_, end)) if a <= *end => *end = (*end).max(b),
+            _ => merged.push((a, b)),
+        }
+    }
+    merged
+}
+
 /// A mover's transform for a frame ([`MeshletScene::set_movers`], #79).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MoverTransform {
     /// Its origin relative to the scene's ([`MeshletSceneBuilder::set_origin`]), metres.
     pub position: Vec3,
@@ -2583,6 +2596,12 @@ struct SceneMovers {
     /// and whether each stands still, until [`MeshletScene::commit_movers`] uploads them; a mover
     /// none has given yet has a scale of 0, drawn nowhere.
     staged: RefCell<Vec<(MoverTransform, bool)>>,
+    /// The movers whose staged transform changed since the last commit (#344): the commit
+    /// rebuilds only their records.
+    dirty: RefCell<Vec<bool>>,
+    /// Per ring slot, the runs of movers (first, past the last) whose records changed since the
+    /// slot was last written: a slot written gets them and this frame's, nothing else (#344).
+    missing: RefCell<Vec<Vec<(usize, usize)>>>,
     /// Whether this frame skipped them: its motion pass is skipped too.
     skipped: Cell<bool>,
 }
@@ -2634,6 +2653,8 @@ impl SceneMovers {
             ]),
             steady: Cell::new(0),
             skipped: Cell::new(false),
+            dirty: RefCell::new(vec![false; templates.len()]),
+            missing: RefCell::new(vec![Vec::new(); MOVER_SLOTS]),
         })
     }
 }
@@ -2667,25 +2688,115 @@ impl MeshletScene {
             .checked_sub(movers.first)
             .expect("an index reserve_movers returned") as usize;
         let mut staged = movers.staged.borrow_mut();
+        let mut dirty = movers.dirty.borrow_mut();
         assert!(
             at + transforms.len() <= staged.len(),
             "movers past the reserved ones"
         );
+        // Only what changed is marked, for the commit to rebuild (#344).
         for (k, t) in transforms.iter().enumerate() {
-            staged[at + k] = (*t, still(k));
+            let entry = (*t, still(k));
+            if staged[at + k] != entry {
+                staged[at + k] = entry;
+                dirty[at + k] = true;
+            }
         }
     }
 
     /// Uploads the movers' transforms the systems gave with [`Self::set_movers_at`] (#314): once
     /// a frame, after every system has written its own, before drawing; in place of
-    /// [`Self::set_movers`].
+    /// [`Self::set_movers`]. Only the movers whose transform or stillness changed are rebuilt,
+    /// and the ring's slot gets them and those that changed since it was last written (#344);
+    /// when none changed, the movers stand as they stood (#198).
     pub fn commit_movers(&self) {
         let Some(movers) = &self.movers else {
             return;
         };
-        let staged = movers.staged.borrow().clone();
-        let transforms: Vec<MoverTransform> = staged.iter().map(|s| s.0).collect();
-        self.set_movers_still(&transforms, |k| staged[k].1);
+        let staged = movers.staged.borrow();
+        let mut dirty = movers.dirty.borrow_mut();
+        let mut last = movers.last.borrow_mut();
+        let written = movers.written.get();
+        // The runs of movers (first, past the last) to rebuild: all of them the first time.
+        let mut runs: Vec<(usize, usize)> = Vec::new();
+        if written == 0 {
+            last.clone_from(&movers.templates);
+            runs.push((0, staged.len()));
+            dirty.fill(false);
+        } else {
+            let mut k = 0;
+            while k < dirty.len() {
+                if !dirty[k] {
+                    k += 1;
+                    continue;
+                }
+                let start = k;
+                while k < dirty.len() && dirty[k] {
+                    dirty[k] = false;
+                    k += 1;
+                }
+                runs.push((start, k));
+            }
+        }
+        // Standing as they stood (a parked walker, sleeping bodies, #198): the slot written last
+        // holds them, and they move no more than the camera makes them.
+        if runs.is_empty() {
+            movers.previous.set(movers.current.get());
+            movers.steady.set(movers.steady.get() + 1);
+            return;
+        }
+        for &(a, b) in &runs {
+            for k in a..b {
+                last[k] = self.mover_record(movers, k, staged[k]);
+            }
+        }
+        // This slot was written MOVER_SLOTS writes ago: it also lacks what changed since.
+        let slot = (written % MOVER_SLOTS as u64) as usize;
+        let mut missing = movers.missing.borrow_mut();
+        for (s, lacks) in missing.iter_mut().enumerate() {
+            if s != slot {
+                lacks.extend_from_slice(&runs);
+                *lacks = merge_runs(std::mem::take(lacks));
+            }
+        }
+        let mut write = std::mem::take(&mut missing[slot]);
+        write.extend_from_slice(&runs);
+        let size = std::mem::size_of::<GpuInstance>() as u64;
+        for (a, b) in merge_runs(write) {
+            movers.ring[slot].write(a as u64 * size, &last[a..b]);
+        }
+        movers.steady.set(0);
+        movers.previous.set(if written == 0 {
+            slot
+        } else {
+            movers.current.get()
+        });
+        movers.current.set(slot);
+        movers.written.set(written + 1);
+    }
+
+    /// Mover `k`'s record at `transform`, still or not.
+    fn mover_record(
+        &self,
+        movers: &SceneMovers,
+        k: usize,
+        (t, still): (MoverTransform, bool),
+    ) -> GpuInstance {
+        let template = &movers.templates[k];
+        let bounds = movers.bounds[k];
+        let position = self.origin.offset(t.position);
+        let center = t.rotation * (bounds.truncate() * t.scale) + position.local;
+        GpuInstance {
+            cell: position.cell.to_array(),
+            local: position.local.to_array(),
+            scale: t.scale,
+            rotation: t.rotation.to_array(),
+            center: center.to_array(),
+            radius: bounds.w * t.scale,
+            // Its visibility as the builder set it (`set_instance_visibility`: a mover the probes'
+            // rays pass, #299), and whether it is still this frame.
+            flags: (template.flags & INSTANCE_VISIBILITY) | if still { INSTANCE_STILL } else { 0 },
+            ..*template
+        }
     }
 
     /// [`Self::set_movers`], with the movers `still` names given no motion of their own this
@@ -2700,52 +2811,8 @@ impl MeshletScene {
             movers.templates.len(),
             "a transform per mover"
         );
-        let slot = (movers.written.get() % MOVER_SLOTS as u64) as usize;
-        let records: Vec<GpuInstance> = movers
-            .templates
-            .iter()
-            .zip(&movers.bounds)
-            .zip(transforms)
-            .enumerate()
-            .map(|(k, ((template, bounds), t))| {
-                let position = self.origin.offset(t.position);
-                let center = t.rotation * (bounds.truncate() * t.scale) + position.local;
-                GpuInstance {
-                    cell: position.cell.to_array(),
-                    local: position.local.to_array(),
-                    scale: t.scale,
-                    rotation: t.rotation.to_array(),
-                    center: center.to_array(),
-                    radius: bounds.w * t.scale,
-                    // Its visibility as the builder set it (`set_instance_visibility`: a mover
-                    // the probes' rays pass, #299), and whether it is still this frame.
-                    flags: (template.flags & INSTANCE_VISIBILITY)
-                        | if still(k) { INSTANCE_STILL } else { 0 },
-                    ..*template
-                }
-            })
-            .collect();
-        // Standing as they stood (a parked walker, sleeping bodies, #198): the slot written last
-        // holds them, and they move no more than the camera makes them.
-        if movers.written.get() > 0
-            && bytemuck::cast_slice::<GpuInstance, u8>(&records)
-                == bytemuck::cast_slice::<GpuInstance, u8>(&movers.last.borrow())
-        {
-            movers.previous.set(movers.current.get());
-            movers.steady.set(movers.steady.get() + 1);
-            return;
-        }
-        movers.steady.set(0);
-        movers.ring[slot].write(0, &records);
-        *movers.last.borrow_mut() = records;
-        let first_frame = movers.written.get() == 0;
-        movers.previous.set(if first_frame {
-            slot
-        } else {
-            movers.current.get()
-        });
-        movers.current.set(slot);
-        movers.written.set(movers.written.get() + 1);
+        self.set_movers_at(movers.first, transforms, still);
+        self.commit_movers();
     }
 
     /// The skinned meshes' joints' matrices for the frame about to be drawn (#165): every
@@ -6128,6 +6195,15 @@ struct MeshPass {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mover_runs_merge_where_they_touch() {
+        assert_eq!(merge_runs(vec![]), vec![]);
+        assert_eq!(
+            merge_runs(vec![(10, 20), (0, 5), (5, 8), (15, 30), (40, 41)]),
+            vec![(0, 8), (10, 30), (40, 41)]
+        );
+    }
 
     #[test]
     fn a_full_work_list_says_so_too() {
