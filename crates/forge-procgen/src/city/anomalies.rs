@@ -807,11 +807,19 @@ mod tests {
     use super::super::{example, structure, village};
     use super::*;
 
-    /// The 600 m village's anomalies, by kind, never more than when the check came in
-    /// (2026-10-16): each fix lowers its bound.
+    /// The villages' anomalies, by kind, never more than when the check came in (2026-10-16, at
+    /// 600 m; the smaller villages since they have houses, #308): each fix lowers its bound.
     #[test]
     fn the_villages_anomalies_never_grow() {
-        let size = 600.0;
+        let mut over = Vec::new();
+        for size in [400.0, 500.0, 600.0] {
+            over.extend(over_bounds(size));
+        }
+        assert!(over.is_empty(), "{over:?}");
+    }
+
+    /// The anomalies of the village `size` across over their bounds.
+    fn over_bounds(size: f64) -> Vec<String> {
         let site = example::site(size, 10.0);
         let v = village::village(&site, &village::params(size), 1);
         let mut structures = structure::structures(&v.plan, &v.masses);
@@ -850,14 +858,21 @@ mod tests {
             (Kind::OpeningMisfit, 0),
             (Kind::DoorBlocked, 0),
         ];
+        // The smaller villages' own, where they had more when they came in (#308: two garden
+        // walls meeting a little apart at a corner at 500 m).
+        let since: [(f64, Kind, usize); 1] = [(500.0, Kind::FreeWallEnd, 1)];
         let mut over = Vec::new();
         for (kind, bound) in bounds {
+            let bound = since
+                .iter()
+                .find(|&&(s, k, _)| s == size && k == kind)
+                .map_or(bound, |&(_, _, b)| b);
             let n = count(&all, kind);
-            println!("{kind:?}: {n} ({bound} at most)");
+            println!("{size} m, {kind:?}: {n} ({bound} at most)");
             if n > bound {
-                over.push(format!("{n} {kind:?}, {bound} at most"));
+                over.push(format!("{size} m: {n} {kind:?}, {bound} at most"));
             }
         }
-        assert!(over.is_empty(), "{over:?}");
+        over
     }
 }

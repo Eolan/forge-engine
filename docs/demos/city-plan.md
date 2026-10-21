@@ -611,7 +611,12 @@ everywhere, it means something is wrong, we need a way to detect anomalies"): th
 against the rules of `research/house-layouts.md` §8, each breach with its place and a point to look
 at it from. `city-plan --village 600 --anomalies` prints them with a `--view` each and stops; the
 test `the_villages_anomalies_never_grow` fails when a kind's count rises over its bound, and each
-fix lowers the bound.
+fix lowers the bound. Since 2026-10-21 (#308) it checks the villages of 400 and 500 m too. They
+had no houses before: at 400 m the plan's only block became a park serving itself alone, and at
+500 m the square took the block the park had left. Now a park must serve another built block, and
+a square never takes its district's last one. They have 9 and 7 houses; 400 m shows no anomaly,
+500 m one garden wall end (two walls meeting a little apart at a corner, bound 1). The 600 m plan
+and the city's are unchanged (the map check, the city and island captures at 0 px).
 
 | Anomaly | Rule | When the check came in | After the fixes above |
 |---|---|---|---|

@@ -301,10 +301,19 @@ pub fn add_squares(
         if near_one {
             continue;
         }
+        // Never a district's last built block (#308: a small village's square took the block
+        // its park had left, and the village had no houses).
+        let built_in = |district: usize| {
+            blocks
+                .iter()
+                .filter(|b| b.use_ == BlockUse::Built && b.district == district)
+                .count()
+        };
         let nearest = blocks
             .iter()
             .enumerate()
             .filter(|(_, b)| b.use_ == BlockUse::Built && (smallest..=largest).contains(&b.area))
+            .filter(|(_, b)| built_in(b.district) > 1)
             .map(|(i, b)| {
                 let d = if geom::contains(&b.polygon, anchor) {
                     0.0
@@ -414,10 +423,16 @@ pub fn add_parks(blocks: &mut [Block], reach: f64, min_area: f64, share_cap: f64
             {
                 continue;
             }
-            let serves = served_by(blocks, j)
+            let served: Vec<usize> = served_by(blocks, j)
                 .into_iter()
                 .filter(|&k| blocks[k].use_ == BlockUse::Built && !covered[k])
-                .count();
+                .collect();
+            // A park for itself alone serves nobody: a small village's only block became one
+            // and the village had no houses (#308).
+            if served.iter().all(|&k| k == j) {
+                continue;
+            }
+            let serves = served.len();
             if best.is_none_or(|(_, s)| serves > s) {
                 best = Some((j, serves));
             }

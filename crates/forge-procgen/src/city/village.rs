@@ -609,6 +609,24 @@ mod tests {
     use super::super::structure::{self, OpeningKind, WallRole};
     use super::*;
 
+    /// The smaller villages keep houses (#308): at 400 m the plan's only block became a park for
+    /// itself, and at 500 m the square took the block the park had left.
+    #[test]
+    fn the_smaller_villages_have_houses() {
+        for (size, least) in [(400.0, 9), (500.0, 7)] {
+            let v = village(&example::site(size, 10.0), &params(size), 1);
+            let uses: Vec<String> = v
+                .plan
+                .blocks
+                .iter()
+                .map(|b| format!("{:?}", b.use_))
+                .collect();
+            let houses = v.houses().count();
+            println!("{size} m: {houses} houses, blocks {uses:?}");
+            assert!(houses >= least, "{size} m: {houses} houses");
+        }
+    }
+
     #[test]
     fn the_villages_own_plan_has_lanes_houses_and_no_trams() {
         let size = 600.0;
