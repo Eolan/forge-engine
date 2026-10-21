@@ -21,7 +21,7 @@ use std::sync::Arc;
 use forge_gpu::{
     Buffer, BufferDesc, Device, FRAMES_IN_FLIGHT, MemoryCategory, MemoryLocation, Result, vk,
 };
-use glam::{Vec3, Vec4};
+use glam::{IVec3, Quat, Vec3, Vec4};
 
 use super::{GpuInstance, GpuMesh, INSTANCE_VISIBILITY, MoverTransform, Visibility};
 use crate::cells::CellPos;
@@ -101,10 +101,39 @@ impl StaticEdits {
 
     /// Changes what sees static instance `instance`.
     pub(super) fn set_visibility(&self, instance: u32, visibility: Visibility) {
+        self.set_visibility_flags(instance, visibility.flags());
+    }
+
+    /// [`Self::set_visibility`] from the flags' bits (`INSTANCE_VISIBILITY`'s).
+    pub(super) fn set_visibility_flags(&self, instance: u32, bits: u32) {
         let mut records = self.records.borrow_mut();
         let record = &mut records[instance as usize];
-        record.flags = (record.flags & !INSTANCE_VISIBILITY) | visibility.flags();
+        record.flags = (record.flags & !INSTANCE_VISIBILITY) | (bits & INSTANCE_VISIBILITY);
         self.dirty.borrow_mut().insert(instance);
+    }
+
+    /// Static instance `instance`'s record as the edits leave it (#338's promotions).
+    pub(super) fn record(&self, instance: u32) -> GpuInstance {
+        self.records.borrow()[instance as usize]
+    }
+
+    /// Static instance `instance`'s transform as the edits leave it, from the scene's `origin`.
+    pub(super) fn transform(&self, origin: CellPos, instance: u32) -> MoverTransform {
+        let record = self.record(instance);
+        let at = CellPos {
+            cell: IVec3::from_array(record.cell),
+            local: Vec3::from_array(record.local),
+        };
+        MoverTransform {
+            position: at.relative_to(origin),
+            rotation: Quat::from_array(record.rotation),
+            scale: record.scale,
+        }
+    }
+
+    /// Mesh `mesh`'s bounding sphere in object space (centre, radius).
+    pub(super) fn mesh_bounds(&self, mesh: u32) -> Vec4 {
+        self.bounds[mesh as usize]
     }
 
     /// Writes up to [`EDITS_PER_FRAME`] changed records into frame slot `slot`'s staging, the

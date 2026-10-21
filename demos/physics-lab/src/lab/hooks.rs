@@ -537,11 +537,19 @@ impl Scenario for LabScenario {
                 editor,
                 edit_frames: 0,
                 edit_slot: None,
-                edit_at: if std::env::var("FORGE_DYNAMIC_SCENE").is_ok_and(|v| v == "visible") {
+                edit_at: if std::env::var("FORGE_DYNAMIC_SCENE")
+                    .is_ok_and(|v| matches!(v.as_str(), "visible" | "promote" | "swing"))
+                {
                     glam::DVec3::new(0.0, 9.0, 0.0)
                 } else {
                     glam::DVec3::new(0.0, -1000.0, 0.0)
                 },
+                promote: match std::env::var("FORGE_DYNAMIC_SCENE").as_deref() {
+                    Ok("promote") => Some(false),
+                    Ok("swing") => Some(true),
+                    _ => None,
+                },
+                promoted: None,
                 flying: [0.0; 4],
                 pulling: 0.5,
             }),
@@ -578,11 +586,19 @@ struct LabRunning {
     /// Where the check's instance stands: 1 km under the ground, or in the sky over the
     /// pyramid with `FORGE_DYNAMIC_SCENE=visible`; its move takes it 2.5 m along x.
     edit_at: glam::DVec3,
+    /// With `=promote` or `=swing` (#338 piece 5), whether it swings, and its mover while it is
+    /// promoted.
+    promote: Option<bool>,
+    promoted: Option<u32>,
 }
 
-/// The frames at which #338's check adds its instance, moves it, then removes it.
+/// The frames at which #338's check adds its instance, moves it, then removes it; with
+/// `=promote` or `=swing` it is promoted and demoted where the move takes it, in place of the
+/// move.
 const EDIT_ADD: u64 = 30;
+const EDIT_PROMOTE: u64 = 35;
 const EDIT_MOVE: u64 = 45;
+const EDIT_DEMOTE: u64 = 50;
 const EDIT_REMOVE: u64 = 60;
 
 impl Running for LabRunning {
@@ -805,9 +821,31 @@ impl Running for LabRunning {
     fn movers(&mut self, scene: &mut MeshletScene) {
         // #338's check: an instance added 1 km under the ground, then removed, while the movers
         // and the skinned creatures run; the frames stay the scene built whole's.
+        // `=promote` and `=swing` (#338 piece 5): the instance promoted to a mover, which takes
+        // it where `=visible`'s edit moves it, then demoted there.
+        let moved = (
+            self.edit_at + glam::DVec3::new(2.5, 0.0, 0.0),
+            glam::Quat::from_rotation_y(0.5),
+        );
         if let (Some(editor), Some(mesh)) = (self.editor.as_mut(), self.lab.edited) {
             self.edit_frames += 1;
             let edit = match self.edit_frames {
+                EDIT_PROMOTE if self.promote.is_some() => {
+                    let slot = self.edit_slot.expect("the check's instance");
+                    self.promoted = Some(editor.promote(slot).expect("a free mover"));
+                    true
+                }
+                EDIT_MOVE if self.promote.is_some() => false,
+                EDIT_DEMOTE if self.promote.is_some() => {
+                    let mover = self.promoted.take().expect("the promoted mover");
+                    editor.demote(
+                        mover,
+                        forge_render::CellPos::from_f64(moved.0),
+                        moved.1,
+                        1.0,
+                    );
+                    true
+                }
                 EDIT_ADD => {
                     let slot = editor
                         .add_instance_at(
@@ -850,6 +888,34 @@ impl Running for LabRunning {
                 tracing::info!(
                     frame = self.edit_frames,
                     "dynamic scene edited (#338's check)"
+                );
+            }
+        }
+        // The promoted mover's pose, before the movers are committed: where the instance stood,
+        // then where `=visible`'s edit moves it on the frame that edit is published (no motion of
+        // its own, as the edit's), or swung there over the frames to its demotion (`=swing`).
+        if let (Some(mover), Some(swing)) = (self.promoted, self.promote) {
+            let f = self.edit_frames;
+            let t = if swing {
+                // There the frame before the demotion is made.
+                ((f - EDIT_PROMOTE) as f32 / (EDIT_DEMOTE - 1 - EDIT_PROMOTE) as f32).min(1.0)
+            } else if f > EDIT_MOVE {
+                1.0
+            } else {
+                0.0
+            };
+            let at = self.edit_at.lerp(moved.0, f64::from(t));
+            let transform = forge_render::meshlet::MoverTransform {
+                position: forge_render::CellPos::from_f64(at).relative_to(scene.origin()),
+                rotation: glam::Quat::IDENTITY.slerp(moved.1, t),
+                scale: 1.0,
+            };
+            scene.set_movers_at(mover, &[transform], |_| !swing);
+            if f == EDIT_PROMOTE + 1 {
+                tracing::info!(
+                    frame = f,
+                    shown = scene.mover_shown(mover),
+                    "promoted (#338's check)"
                 );
             }
         }

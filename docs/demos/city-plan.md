@@ -957,8 +957,29 @@ mesh to test navigations inside the houses"):
   the records into the table, redoes their cells and updates the rays' structure in place.
   `--static-test` hides the forest one second in, its shadows with it (`docs/PROFILE.md`). What
   swings every frame (a door's leaf while it turns) belongs to the movers, which carry its motion
-  for DLSS: a game hides the static leaf, swings a mover from a small pool, and puts the static
-  leaf at its new place when it stops.
+  for DLSS.
+- *Promoted while they move* (#338, the owner's "promote while animating, demote when still"):
+  a scene with a pool of movers (`MeshletSceneBuilder::reserve_mover_pool`) hands one to a
+  static instance about to move (`MeshletScene::promote`, or the editor's `promote` in a
+  dynamic scene). On one frame the static record leaves the picture and the mover shows it
+  where it stood; the game swings the mover, then `demote` puts the record at the last pose
+  and hides the mover on one frame again. While it is promoted, the probes' rays still meet
+  the static record where it stood: they skip the movers here, and a tree promoted without
+  them brightened the ground round it by up to 109 levels in a second. A hidden mover wakes no
+  probes.
+  - **`--promote-test hold`:** the tree 12 m before the camera (on the green,
+    `--view=12.9,1.7,-226.0,176.1,-5`) is promoted one second in and demoted a second later
+    where it stands. Every second frame to 170 equals `--promote-test none` (the pool, nothing
+    promoted): 0 pixels.
+  - **`--promote-test swing`:** it leans 15° over the second, one tree drawn all along. Against
+    `snap` (leant at once when the swing ends, a static edit), 98 000 pixels differ on the
+    demotion's frame and 15 000 (at most 40 levels, speckle in the crown) 48 frames later, as
+    DLSS's history of the motion fades.
+  - **The physics lab** (`FORGE_DYNAMIC_SCENE=promote`, a dynamic scene): its instance
+    promoted at frame 35, moved where `=visible`'s edit moves it at frame 46, demoted at 50:
+    0 pixels against `=visible` to frame 44, then 20–50 (at most 1 000 for three frames after
+    the demotion), the probes its mover woke as it moved (a static edit wakes none). Without
+    probes, 0 pixels in every frame. `=swing` swings it there.
 - *Street lamps lit* (D-065, #270: `forge_render::lamps::street_lights` since #296).
 
   ![The junction at 22:00 from above: each street lamp's pool under its head](images/village-street-lamps.png)

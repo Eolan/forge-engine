@@ -61,6 +61,11 @@ struct Cli {
     /// check of static instances changed at run time (#323).
     #[arg(long)]
     static_test: bool,
+    /// One second in, the tree 12 m before the camera promoted to a mover and demoted a second
+    /// later (#338): `hold` where it stands, `swing` leant 15° on the way, `snap` leant at once
+    /// without a mover (the swing's reference), `none` the pool alone (the others' reference).
+    #[arg(long, value_parser = ["none", "hold", "swing", "snap"])]
+    promote_test: Option<String>,
     /// Board the tram nearest the camera this many seconds in (C boards and gets off by hand).
     #[arg(long)]
     ride: Option<f64>,
@@ -501,6 +506,15 @@ fn main() -> anyhow::Result<()> {
             scenario.static_test()
         } else {
             scenario
+        };
+        let scenario = match cli.promote_test.as_deref() {
+            Some(mode) => scenario.promote_test(match mode {
+                "hold" => city_plan::PromoteTest::Hold,
+                "swing" => city_plan::PromoteTest::Swing,
+                "snap" => city_plan::PromoteTest::Snap,
+                _ => city_plan::PromoteTest::None,
+            }),
+            None => scenario,
         };
         let scenario = if cli.pursuers {
             scenario.with_pursuers(&plan, &masses)

@@ -2469,8 +2469,12 @@ pub(crate) fn build(
     // ([`hooks`] adds an instance far below the ground and removes it; `=noedit` makes no
     // edit). `=streamed` builds it whole with its pages streamed, the check's reference: the
     // first frames' pages arrive as they stream, so a resident build's differ a little.
+    // `=promote` and `=swing` (#338 piece 5) promote the instance to a mover of a pool.
     let check = std::env::var("FORGE_DYNAMIC_SCENE").ok();
     let dynamic = check.is_some();
+    if matches!(check.as_deref(), Some("promote" | "swing")) {
+        builder.reserve_mover_pool(4);
+    }
     let mut scene = if dynamic {
         if check.as_deref() != Some("streamed") {
             builder.reserve_dynamic(builder.dynamic_capacity(2));

@@ -335,6 +335,11 @@ void probe_wake_main(uint3 id : SV_DispatchThreadID)
     ProbeField* field = p.field;
     float4 now = mover_sphere(p.now[mover]);
     float4 before = mover_sphere(p.before[mover]);
+    // A hidden mover (a scale of 0: one not given yet, a pool's free one) wakes nothing, nor one
+    // shown or hidden: a pool's mover stands for the static instance it is promoted from or
+    // demoted to, which the probes' rays meet all along (#338).
+    if (now.w <= 0.0 || before.w <= 0.0)
+        return;
     ProbeCascade cascade = field[0].cascades[c];
     float s = cascade.spacing;
     int3 n = int3(field[0].counts);

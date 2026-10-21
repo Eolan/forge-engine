@@ -24,6 +24,11 @@
 //!   ones (their pages pinned where the skin pass writes, their structures refitted in the frame)
 //!   are never removed, and a skinned mesh is shown by movers only. The skin pass writes the
 //!   rays' positions the editor writes its new meshes' into, in ranges of their own.
+//! - **Promotions** (#338, [`SceneEditor::promote`]): an instance about to move (a door's leaf)
+//!   is shown by a mover of the scene's pool ([`MeshletSceneBuilder::reserve_mover_pool`]) while
+//!   it moves. The edit hides its record and the frame that publishes the edit shows the mover,
+//!   at the same place; a demotion puts the record where the mover left it and hides the mover,
+//!   on one frame too.
 
 use std::any::Any;
 use std::borrow::Cow;
@@ -247,6 +252,18 @@ pub(super) struct Applied {
     added: Vec<(u32, LiveInstance)>,
     removed_instances: Vec<u32>,
     removed_meshes: Vec<u32>,
+    promotions: Vec<Promotion>,
+    demotions: Vec<u32>,
+}
+
+/// An instance promoted to a pool's mover by an edit (#338): the mover, the instance and its
+/// record (the mover's template), its mesh's bounds, and where it stands.
+struct Promotion {
+    mover: u32,
+    instance: u32,
+    template: GpuInstance,
+    bounds: Vec4,
+    at: MoverTransform,
 }
 
 /// A dynamic scene's own state (#220).
@@ -544,6 +561,14 @@ pub struct SceneEditor {
     kept: Vec<(u32, Box<dyn Any + Send>)>,
     removed_instances: Vec<u32>,
     removed_meshes: Vec<u32>,
+    /// The scene's pool's free movers (#338), shared with the frames, which give them back.
+    pool: Option<Arc<Mutex<Vec<u32>>>>,
+    /// The pool's movers this editor promoted: the instance each shows and the visibility bits
+    /// it gets back.
+    promoted: HashMap<u32, (u32, u32)>,
+    /// The edit's promotions and demotions.
+    promotions: Vec<Promotion>,
+    demotions: Vec<u32>,
 }
 
 /// An edit [`SceneEditor::finish`] made, for [`MeshletScene::apply`].
@@ -560,6 +585,8 @@ pub struct SceneEdit {
     added: Vec<(u32, LiveInstance)>,
     removed_instances: Vec<u32>,
     removed_meshes: Vec<u32>,
+    promotions: Vec<Promotion>,
+    demotions: Vec<u32>,
     /// Pages its new meshes' first view wants, loaded with them.
     pub preloaded: u32,
 }
@@ -764,13 +791,97 @@ impl SceneEditor {
         self.kept.push((instance, Box::new(item)));
     }
 
+    /// Promotes instance `instance` to a mover of the scene's pool while it moves (#338, the
+    /// owner's "promote while animating, demote when still"): a door about to swing. From the
+    /// frame the edit is published, its record is hidden (but from the probes' rays) and the
+    /// mover shows it where it stood: never both, never neither ([`MeshletScene::mover_shown`]
+    /// tells when). The frames give the mover its transforms ([`MeshletScene::set_movers_at`],
+    /// after the frame's [`MeshletRenderer::begin_frame`]); one given before the edit is
+    /// published is the pose it shows first. Returns the mover's instance, or `None` when the
+    /// pool is empty: the caller then moves the instance itself (a door snapped to its end).
+    ///
+    /// # Panics
+    ///
+    /// When the scene has no pool ([`MeshletSceneBuilder::reserve_mover_pool`]), or `instance`
+    /// is a mover's, vacant or promoted already.
+    pub fn promote(&mut self, instance: u32) -> Option<u32> {
+        self.assert_not_mover(instance);
+        let record = self.instances[instance as usize];
+        assert!(
+            record.flags & INSTANCE_VACANT == 0,
+            "instance {instance} is vacant"
+        );
+        assert!(
+            !self.promoted.values().any(|&(i, _)| i == instance),
+            "instance {instance} is promoted already"
+        );
+        let mover = self
+            .pool
+            .as_ref()
+            .expect("a scene with a pool of movers")
+            .lock()
+            .expect("the pool")
+            .pop()?;
+        let visibility = record.flags & INSTANCE_VISIBILITY;
+        let (info, _) =
+            self.mesh_records[record.mesh as usize].expect("an instance's mesh in the scene");
+        let cell = CellPos {
+            cell: IVec3::from_array(record.cell),
+            local: Vec3::from_array(record.local),
+        };
+        self.promotions.push(Promotion {
+            mover,
+            instance,
+            template: GpuInstance {
+                flags: visibility,
+                ..record
+            },
+            bounds: Vec3::from(info.center).extend(info.radius),
+            at: MoverTransform {
+                position: cell.relative_to(self.origin),
+                rotation: Quat::from_array(record.rotation),
+                scale: record.scale,
+            },
+        });
+        self.promoted.insert(mover, (instance, visibility));
+        // Hidden but from the probes' rays (`promoted_visibility`).
+        let record = &mut self.instances[instance as usize];
+        record.flags = (record.flags & !INSTANCE_VISIBILITY) | promoted_visibility(visibility);
+        self.modified.push(instance);
+        Some(mover)
+    }
+
+    /// Demotes the pool's mover `mover` ([`Self::promote`]) once its instance stands still: from
+    /// the frame the edit is published, the instance's record stands at `position`, turned by
+    /// `rotation` and scaled by `scale` (the mover's last pose) with its visibility back, and
+    /// the mover is hidden. The mover returns to the pool `FRAMES_IN_FLIGHT + 1` frames later.
+    ///
+    /// # Panics
+    ///
+    /// When `mover` is not one this editor promoted.
+    pub fn demote(&mut self, mover: u32, position: CellPos, rotation: Quat, scale: f32) {
+        let (instance, visibility) = self
+            .promoted
+            .remove(&mover)
+            .expect("a mover this editor promoted");
+        self.set_instance_transform(instance, position, rotation, scale);
+        let record = &mut self.instances[instance as usize];
+        record.flags = (record.flags & !INSTANCE_VISIBILITY) | visibility;
+        self.demotions.push(mover);
+    }
+
     /// Removes instance `instance`: its slot is vacant from the frame the edit is published.
     ///
     /// # Panics
     ///
-    /// When `instance` is a mover's: the frames write it every frame.
+    /// When `instance` is a mover's: the frames write it every frame; or promoted: demote it
+    /// first.
     pub fn remove_instance(&mut self, instance: u32) {
         self.assert_not_mover(instance);
+        assert!(
+            !self.promoted.values().any(|&(i, _)| i == instance),
+            "instance {instance} is promoted: demote it first"
+        );
         self.instances[instance as usize].flags = INSTANCE_VACANT;
         self.removed_instances.push(instance);
     }
@@ -785,6 +896,14 @@ impl SceneEditor {
         assert!(
             !self.held.get(mesh.0 as usize).copied().unwrap_or(false),
             "mesh {} is a mover's or skinned: a dynamic scene keeps it",
+            mesh.0
+        );
+        assert!(
+            !self
+                .promoted
+                .values()
+                .any(|&(i, _)| self.instances[i as usize].mesh == mesh.0),
+            "mesh {} shows a promoted instance: demote it first",
             mesh.0
         );
         self.mesh_records[mesh.0 as usize] = None;
@@ -1016,6 +1135,8 @@ impl SceneEditor {
             added,
             removed_instances: std::mem::take(&mut self.removed_instances),
             removed_meshes: std::mem::take(&mut self.removed_meshes),
+            promotions: std::mem::take(&mut self.promotions),
+            demotions: std::mem::take(&mut self.demotions),
         })
     }
 }
@@ -1149,6 +1270,14 @@ impl MeshletScene {
             kept: Vec::new(),
             removed_instances: Vec::new(),
             removed_meshes: Vec::new(),
+            pool: self
+                .movers
+                .as_ref()
+                .and_then(|m| m.pool.as_ref())
+                .map(|p| Arc::clone(&p.borrow().free)),
+            promoted: HashMap::new(),
+            promotions: Vec::new(),
+            demotions: Vec::new(),
         }))
     }
 
@@ -1196,6 +1325,8 @@ impl MeshletScene {
             added: edit.added,
             removed_instances: edit.removed_instances,
             removed_meshes: edit.removed_meshes,
+            promotions: edit.promotions,
+            demotions: edit.demotions,
         });
         Ok(())
     }
@@ -1263,6 +1394,17 @@ impl MeshletScene {
                     dynamic
                         .leaving
                         .push((gone, Leaving::Mesh(slot, Box::new(mesh))));
+                }
+            }
+            // The pool's promotions and demotions (#338), on the frame the edit hides their
+            // instances' records or puts them back.
+            if let Some(movers) = &self.movers {
+                for p in std::mem::take(&mut applied.promotions) {
+                    let k = (p.mover - movers.first) as usize;
+                    movers.show(k, p.instance, p.template, p.bounds, p.at);
+                }
+                for mover in std::mem::take(&mut applied.demotions) {
+                    movers.hide((mover - movers.first) as usize, gone);
                 }
             }
             if let (Some(rays), Some(tlas)) = (self.rays.as_mut(), applied.tlas.take())

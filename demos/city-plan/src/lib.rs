@@ -563,6 +563,8 @@ pub struct PlanScenario {
     glass_test: Option<f32>,
     /// When to hide the forest (`--static-test`, #323), seconds.
     static_test: Option<f32>,
+    /// How a tree is promoted to a mover one second in (`--promote-test`, #338).
+    promote_test: Option<PromoteTest>,
     /// The names the fingerposts' blades carry, a row of their atlas each.
     sign_names: Vec<String>,
     /// Seconds into the run at which to board the nearest tram (scripted rides).
@@ -2177,6 +2179,7 @@ impl PlanScenario {
             walk_on_start: false,
             glass_test: None,
             static_test: None,
+            promote_test: None,
             ride_after: None,
             games,
             stalls: stalls.iter().map(|&(at, _)| at).collect(),
@@ -2275,6 +2278,14 @@ impl PlanScenario {
     /// check of static instances changed at run time (#323).
     pub fn static_test(mut self) -> Self {
         self.static_test = Some(1.0);
+        self
+    }
+
+    /// One second in, the tree before the camera promoted to a mover of a pool, and demoted a
+    /// second later, as `mode` says: the check of static instances promoted while they move
+    /// (#338).
+    pub fn promote_test(mut self, mode: PromoteTest) -> Self {
+        self.promote_test = Some(mode);
         self
     }
 
@@ -6892,7 +6903,7 @@ impl Scenario for PlanScenario {
         laps.mark("materials applied");
         builder.set_ray_traced(!args.no_shadows);
         builder.set_origin(scene_origin(args));
-        if self.static_test.is_some() {
+        if self.static_test.is_some() || self.promote_test.is_some() {
             builder.allow_static_edits();
         }
         if let Some([grime, stain, cracks]) = decal_textures {
@@ -7206,6 +7217,9 @@ impl Scenario for PlanScenario {
         if !tram_movers.is_empty() {
             builder.reserve_movers(&tram_movers);
         }
+        if self.promote_test.is_some() {
+            builder.reserve_mover_pool(PROMOTE_POOL);
+        }
         laps.mark("insides");
         let mut scene = builder.build(&ctx.device)?;
         laps.mark("scene upload");
@@ -7262,6 +7276,15 @@ impl Scenario for PlanScenario {
                 static_test: self
                     .static_test
                     .map(|at| (self.clock + f64::from(at), flora_first..flora_end)),
+                promote_test: self.promote_test.map(|mode| PromoteRun {
+                    mode,
+                    at: self.clock + 1.0,
+                    trees: flora_first..flora_end,
+                    tree: Vec::new(),
+                    pivot: Vec3::ZERO,
+                    done: false,
+                }),
+                view: (Vec3::ZERO, Vec3::NEG_Z),
                 ride_at: self.ride_after.map(|s| self.clock + s),
                 riding: None,
                 screens: self
@@ -7310,6 +7333,10 @@ struct PlanRunning {
     glass_test: Option<f32>,
     /// When to hide the forest, on the service clock, and its instances (`--static-test`, #323).
     static_test: Option<(f64, std::ops::Range<u32>)>,
+    /// The tree promoted to a mover and demoted (`--promote-test`, #338).
+    promote_test: Option<PromoteRun>,
+    /// The camera's position and forward after its last update.
+    view: (Vec3, Vec3),
     walk_on_start: bool,
     /// The population on foot round the camera, and where the camera last stood (x, z).
     crowd: Option<crowd::Crowd>,
@@ -7421,6 +7448,120 @@ impl PlanRunning {
     }
 }
 
+/// How `--promote-test` (#338) moves its tree: one second in, for a second.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PromoteTest {
+    /// Nothing promoted, the pool and the static edits there: the others' reference.
+    None,
+    /// Promoted and demoted where it stands: the frames the reference's.
+    Hold,
+    /// Promoted, leant [`PROMOTE_LEAN`] over the second, and demoted there.
+    Swing,
+    /// Not promoted: leant where the swing ends when it ends, a static edit (the swing's
+    /// reference after it).
+    Snap,
+}
+
+/// The pool's movers (`--promote-test`): room for a tree's instances.
+const PROMOTE_POOL: u32 = 16;
+/// How far `--promote-test`'s swing leans its tree, degrees.
+const PROMOTE_LEAN: f32 = 15.0;
+
+/// `--promote-test` as it runs.
+struct PromoteRun {
+    mode: PromoteTest,
+    /// When the tree is promoted, on the service clock.
+    at: f64,
+    /// The forest's instances, the tree picked among them.
+    trees: std::ops::Range<u32>,
+    /// The tree's instances, with their movers once promoted and where each stood.
+    tree: Vec<(u32, Option<u32>, MoverTransform)>,
+    /// The foot of the tree, which it leans about.
+    pivot: Vec3,
+    done: bool,
+}
+
+impl PromoteRun {
+    /// Its frame, before the movers are committed: the tree before the camera (`eye`, `forward`,
+    /// relative to the scene's origin) picked and promoted at its time, its pose given, and a
+    /// second later demoted, or moved where the swing ends (`Snap`).
+    fn step(&mut self, scene: &MeshletScene, clock: f64, (eye, forward): (Vec3, Vec3)) {
+        if self.done || clock < self.at {
+            return;
+        }
+        let flat = |a: Vec3, b: Vec3| glam::Vec2::new(a.x - b.x, a.z - b.z).length();
+        if self.tree.is_empty() {
+            // The instance nearest a point 12 m before the camera, and those standing where it
+            // stands: its tree's trunk, cards and stand-ins.
+            let target = eye + forward * 12.0;
+            let at = |i: u32| scene.static_transform(i).position;
+            let Some(nearest) = self
+                .trees
+                .clone()
+                .min_by(|&a, &b| flat(at(a), target).total_cmp(&flat(at(b), target)))
+            else {
+                self.done = true;
+                return;
+            };
+            let foot = at(nearest);
+            self.tree = self
+                .trees
+                .clone()
+                .filter(|&i| flat(at(i), foot) < 0.5)
+                .take(PROMOTE_POOL as usize)
+                .map(|i| (i, None, scene.static_transform(i)))
+                .collect();
+            self.pivot = self
+                .tree
+                .iter()
+                .map(|t| t.2.position)
+                .min_by(|a, b| a.y.total_cmp(&b.y))
+                .unwrap_or(foot);
+            if matches!(self.mode, PromoteTest::Hold | PromoteTest::Swing) {
+                for (instance, mover, _) in &mut self.tree {
+                    *mover = scene.promote(*instance);
+                }
+            }
+            tracing::info!(
+                instances = self.tree.len(),
+                promoted = self.tree.iter().filter(|t| t.1.is_some()).count(),
+                at = ?self.pivot,
+                "promote test: a tree picked (#338)"
+            );
+        }
+        let end = clock >= self.at + 1.0;
+        let s = match self.mode {
+            PromoteTest::Swing => ((clock - self.at) as f32).min(1.0),
+            PromoteTest::Snap => 1.0,
+            _ => 0.0,
+        };
+        let lean = glam::Quat::from_rotation_x((PROMOTE_LEAN * s).to_radians());
+        let pivot = self.pivot;
+        let pose = |t: &MoverTransform| MoverTransform {
+            position: pivot + lean * (t.position - pivot),
+            rotation: lean * t.rotation,
+            scale: t.scale,
+        };
+        for (instance, mover, t) in &self.tree {
+            match (self.mode, mover) {
+                (PromoteTest::Hold | PromoteTest::Swing, Some(mover)) if end => {
+                    scene.demote(*mover, pose(t));
+                }
+                (PromoteTest::Hold | PromoteTest::Swing, Some(mover)) => {
+                    let still = self.mode == PromoteTest::Hold;
+                    scene.set_movers_at(*mover, &[pose(t)], |_| still);
+                }
+                (PromoteTest::Snap, _) if end => scene.set_static_transform(*instance, pose(t)),
+                _ => {}
+            }
+        }
+        if end {
+            self.done = true;
+            tracing::info!("promote test: demoted (#338)");
+        }
+    }
+}
+
 impl Running for PlanRunning {
     fn probe_regions(&self) -> Vec<forge_render::RegionVolume> {
         self.regions.clone()
@@ -7516,6 +7657,7 @@ impl Running for PlanRunning {
     }
 
     fn follow(&mut self, camera: &mut FlyCamera) {
+        self.view = (camera.position, camera.forward());
         // Aboard: standing in the section's aisle, the view where the mouse turns it.
         if let Some(ride) = &mut self.riding {
             let (at, yaw) =
@@ -7552,12 +7694,21 @@ impl Running for PlanRunning {
             tracing::info!(instances = trees.len(), "static test: the forest hidden");
             self.static_test = None;
         }
+        // `--promote-test` (#338): its tree's movers and edits before the movers are committed.
+        if let Some(test) = &mut self.promote_test {
+            let (eye, forward) = self.view;
+            test.step(scene, self.clock, (eye - self.origin, forward));
+        }
         if self.trams.is_empty()
             && self.crowd.is_none()
             && self.boats.is_empty()
             && self.taxis.is_none()
             && self.pursuers.is_none()
         {
+            // The pool's movers are committed without others.
+            if self.promote_test.is_some() {
+                scene.commit_movers();
+            }
             return;
         }
         // In the order the movers were reserved: a line's cabs (front and rear of each

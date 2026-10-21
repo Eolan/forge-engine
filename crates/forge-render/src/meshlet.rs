@@ -12,7 +12,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use bytemuck::{Pod, Zeroable};
 use forge_geom::{GpuMeshlet, MeshletMesh, PAGE_NONE, PAGE_SIZE, SkinnedMesh};
@@ -34,7 +34,7 @@ use forge_gpu::{
     ImageHandle, MemoryCategory, MemoryLocation, MeshPipelineDesc, Pipeline, QueueKind, Result,
     ShaderCompiler, ShaderStage, TransientBufferDesc, TransientDesc, VertexPipelineDesc, vk,
 };
-use glam::{DQuat, DVec3, Mat4, Quat, Vec2, Vec3, Vec4};
+use glam::{DQuat, DVec3, IVec3, Mat4, Quat, Vec2, Vec3, Vec4};
 
 pub(crate) mod dynamic;
 mod static_edits;
@@ -227,6 +227,15 @@ const INSTANCE_VISIBILITY: u32 = INSTANCE_NO_RASTER
     | INSTANCE_NO_FAR_SHADOW_RAYS
     | INSTANCE_NO_PROBE_RAYS
     | INSTANCE_NO_MIRROR_RAYS;
+
+/// The visibility bits of a static instance a pool's mover shows (#338), from its own: the
+/// probes' rays alone see it, where it stood, as before; nothing else does (the mover is drawn
+/// and met by the other rays). The probes do not trace the movers by default
+/// ([`crate::ProbeParams::movers`]), and a tree promoted without them brightened the ground
+/// round it by up to 109 levels in a second; they settle slower than a door swings.
+fn promoted_visibility(visibility: u32) -> u32 {
+    (Visibility::NONE.flags() & !INSTANCE_NO_PROBE_RAYS) | (visibility & INSTANCE_NO_PROBE_RAYS)
+}
 
 /// No ground window: its least corner past its greatest.
 const NO_GROUND_WINDOW: [f32; 4] = [1.0, 1.0, 0.0, 0.0];
@@ -1315,6 +1324,9 @@ pub struct MeshletSceneBuilder {
     /// The first of the movers' instances, the table's last ones
     /// ([`MeshletSceneBuilder::reserve_movers`], #79).
     movers: Option<u32>,
+    /// The pool of movers for promoted static instances, first and count
+    /// ([`MeshletSceneBuilder::reserve_mover_pool`], #338).
+    mover_pool: Option<(u32, u32)>,
     /// The skinned meshes ([`MeshletSceneBuilder::add_skinned_mesh`], #165).
     skins: Vec<SkinSource>,
     /// The decals on its static surfaces ([`MeshletSceneBuilder::set_decals`], D-074).
@@ -1825,12 +1837,46 @@ impl MeshletSceneBuilder {
     /// after the ones before, and each system writes its own with
     /// [`MeshletScene::set_movers_at`] from the index its call returned.
     pub fn reserve_movers(&mut self, per_mesh: &[(MeshId, u32)]) -> u32 {
+        assert!(
+            self.mover_pool.is_none(),
+            "the pool of movers is reserved after the others"
+        );
         let earlier = self.movers.take();
         let first = self.reserve_instances(per_mesh);
         for (k, instance) in self.instances[first as usize..].iter_mut().enumerate() {
             instance.id = first + k as u32;
         }
         self.movers = Some(earlier.unwrap_or(first));
+        first
+    }
+
+    /// Reserves a pool of `count` movers for static instances promoted while they move (#338,
+    /// [`MeshletScene::promote`]): a door swinging, a piece breaking off. Each is hidden until
+    /// it is handed out, then shows the instance's mesh, material and texture. Size it to what
+    /// moves at once: the movers' structure is rebuilt over all of them on the frames they
+    /// move. One pool a scene, reserved after the other movers: its are the table's last
+    /// instances. Returns the first one's index.
+    pub fn reserve_mover_pool(&mut self, count: u32) -> u32 {
+        assert!(self.mover_pool.is_none(), "one pool of movers a scene");
+        assert!(!self.meshes.is_empty(), "a mesh for the pool to show");
+        let first = self.reserve_movers(&[(MeshId(0), count)]);
+        // Any mesh may show in a slot: the counts take the largest instead of the first's.
+        let n = u64::from(count);
+        let largest = |of: &dyn Fn(usize) -> u64| -> u64 {
+            (0..self.meshes.len()).map(of).max().unwrap_or(0) - of(0)
+        };
+        let triangles = largest(&|m| u64::from(self.meshes[m].triangle_count));
+        let finest = largest(&|m| u64::from(self.mesh_finest[m]));
+        let work = largest(&|m| u64::from(self.ladder_work_bound(&self.meshes[m])));
+        let meshlets = largest(&|m| u64::from(self.meshes[m].meshlet_count));
+        self.total_triangles += triangles * n;
+        self.finest_clusters += finest * n;
+        self.work_bound += work * n;
+        self.instance_meshlets += meshlets * n;
+        for instance in &mut self.instances[first as usize..] {
+            instance.flags = Visibility::NONE.flags();
+        }
+        self.mover_pool = Some((first, count));
         first
     }
 
@@ -2240,6 +2286,7 @@ impl MeshletSceneBuilder {
                         first,
                         &self.instances[first as usize..],
                         &self.meshes,
+                        self.mover_pool,
                     )
                 })
                 .transpose()?,
@@ -2616,10 +2663,13 @@ pub struct MoverTransform {
 struct SceneMovers {
     /// The first mover's instance.
     first: u32,
-    /// As reserved: the mesh, the material and the id each mover keeps.
-    templates: Vec<GpuInstance>,
+    /// As reserved: the mesh, the material and the id each mover keeps; a pool's slot's those
+    /// of the static instance it shows (#338).
+    templates: RefCell<Vec<GpuInstance>>,
     /// Per mover, its mesh's bounding sphere in object space (centre, radius).
-    bounds: Vec<Vec4>,
+    bounds: RefCell<Vec<Vec4>>,
+    /// The pool for promoted static instances (#338), when the scene has one.
+    pool: Option<RefCell<MoverPool>>,
     ring: Vec<Buffer>,
     /// The slot written last, and the one written before it (the same on the first frame).
     current: Cell<usize>,
@@ -2646,12 +2696,48 @@ struct SceneMovers {
     skipped: Cell<bool>,
 }
 
+/// A scene's pool of movers (#338, [`MeshletSceneBuilder::reserve_mover_pool`]): static
+/// instances promoted while they move ([`MeshletScene::promote`]).
+struct MoverPool {
+    /// Its movers, among the scene's (from the first mover).
+    slots: std::ops::Range<usize>,
+    /// Its free movers' instances, the lowest last: shared with a dynamic scene's editor, which
+    /// promotes on its worker.
+    free: Arc<Mutex<Vec<u32>>>,
+    /// Per mover of the pool, the static instance it holds, the visibility bits that instance
+    /// gets back when demoted, and whether the mover shows it yet.
+    held: Vec<Option<Held>>,
+    /// Per mover of the pool, whether its next record is its first shown one: still, as the
+    /// ring's record before it is the hidden one.
+    fresh: Vec<bool>,
+    /// Promotions and demotions asked for since the movers were last committed, which applies
+    /// them with the static instances' edits of the same frame.
+    queued: Vec<PoolChange>,
+    /// Movers demoted, free again from frame `.0` on (no frame in flight reads them then).
+    leaving: Vec<(u64, u32)>,
+}
+
+/// A static instance a pool's mover holds.
+#[derive(Clone, Copy)]
+struct Held {
+    instance: u32,
+    visibility: u32,
+    shown: bool,
+}
+
+/// A change to a pool's mover, applied when the movers are committed.
+enum PoolChange {
+    Promote(u32),
+    Demote(u32, MoverTransform),
+}
+
 impl SceneMovers {
     fn new(
         device: &Arc<Device>,
         first: u32,
         templates: &[GpuInstance],
         meshes: &[GpuMesh],
+        pool: Option<(u32, u32)>,
     ) -> Result<Self> {
         let ring = (0..MOVER_SLOTS)
             .map(|i| {
@@ -2667,14 +2753,27 @@ impl SceneMovers {
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
             first,
-            templates: templates.to_vec(),
-            bounds: templates
-                .iter()
-                .map(|t| {
-                    let mesh = &meshes[t.mesh as usize];
-                    Vec3::from(mesh.center).extend(mesh.radius)
+            templates: RefCell::new(templates.to_vec()),
+            bounds: RefCell::new(
+                templates
+                    .iter()
+                    .map(|t| {
+                        let mesh = &meshes[t.mesh as usize];
+                        Vec3::from(mesh.center).extend(mesh.radius)
+                    })
+                    .collect(),
+            ),
+            pool: pool.map(|(pool_first, count)| {
+                let start = (pool_first - first) as usize;
+                RefCell::new(MoverPool {
+                    slots: start..start + count as usize,
+                    free: Arc::new(Mutex::new((pool_first..pool_first + count).rev().collect())),
+                    held: vec![None; count as usize],
+                    fresh: vec![false; count as usize],
+                    queued: Vec::new(),
+                    leaving: Vec::new(),
                 })
-                .collect(),
+            }),
             ring,
             current: Cell::new(0),
             previous: Cell::new(0),
@@ -2696,6 +2795,57 @@ impl SceneMovers {
             dirty: RefCell::new(vec![false; templates.len()]),
             missing: RefCell::new(vec![Vec::new(); MOVER_SLOTS]),
         })
+    }
+
+    /// How many movers there are, the pool's included.
+    fn len(&self) -> usize {
+        self.templates.borrow().len()
+    }
+
+    /// The pool's mover `k` (among the scene's movers), when `k` is one.
+    fn pool_slot(&self, k: usize) -> Option<usize> {
+        let pool = self.pool.as_ref()?.borrow();
+        pool.slots.contains(&k).then(|| k - pool.slots.start)
+    }
+
+    /// A dynamic scene's promotion published (#338): the pool's mover `k` shows `template`,
+    /// static instance `instance`'s, from the next commit, at `at` unless it was given a
+    /// transform since it was hidden; still on its first shown frame.
+    fn show(
+        &self,
+        k: usize,
+        instance: u32,
+        template: GpuInstance,
+        bounds: Vec4,
+        at: MoverTransform,
+    ) {
+        let i = self.pool_slot(k).expect("a pool's mover");
+        let mut pool = self.pool.as_ref().expect("a pool").borrow_mut();
+        pool.held[i] = Some(Held {
+            instance,
+            visibility: template.flags & INSTANCE_VISIBILITY,
+            shown: true,
+        });
+        pool.fresh[i] = true;
+        self.templates.borrow_mut()[k] = template;
+        self.bounds.borrow_mut()[k] = bounds;
+        let mut staged = self.staged.borrow_mut();
+        if staged[k].0.scale == 0.0 {
+            staged[k] = (at, true);
+        }
+        self.dirty.borrow_mut()[k] = true;
+    }
+
+    /// A pool's mover `k` hidden from the next commit (#338, a demotion), and free again from
+    /// frame `free_from` on.
+    fn hide(&self, k: usize, free_from: u64) {
+        let i = self.pool_slot(k).expect("a pool's mover");
+        let mut pool = self.pool.as_ref().expect("a pool").borrow_mut();
+        pool.held[i] = None;
+        pool.fresh[i] = false;
+        pool.leaving.push((free_from, self.first + k as u32));
+        self.staged.borrow_mut()[k].0.scale = 0.0;
+        self.dirty.borrow_mut()[k] = true;
     }
 }
 
@@ -2752,6 +2902,7 @@ impl MeshletScene {
         let Some(movers) = &self.movers else {
             return;
         };
+        self.apply_pool(movers);
         let staged = movers.staged.borrow();
         let mut dirty = movers.dirty.borrow_mut();
         let mut last = movers.last.borrow_mut();
@@ -2759,7 +2910,7 @@ impl MeshletScene {
         // The runs of movers (first, past the last) to rebuild: all of them the first time.
         let mut runs: Vec<(usize, usize)> = Vec::new();
         if written == 0 {
-            last.clone_from(&movers.templates);
+            last.clone_from(&movers.templates.borrow());
             runs.push((0, staged.len()));
             dirty.fill(false);
         } else {
@@ -2788,6 +2939,11 @@ impl MeshletScene {
             for k in a..b {
                 last[k] = self.mover_record(movers, k, staged[k]);
             }
+        }
+        // The promoted movers' first shown records are written (each was marked): from the
+        // next on, their motion is their own.
+        if let Some(pool) = &movers.pool {
+            pool.borrow_mut().fresh.fill(false);
         }
         // This slot was written MOVER_SLOTS writes ago: it also lacks what changed since.
         let slot = (written % MOVER_SLOTS as u64) as usize;
@@ -2821,38 +2977,176 @@ impl MeshletScene {
         k: usize,
         (t, still): (MoverTransform, bool),
     ) -> GpuInstance {
-        let template = &movers.templates[k];
-        let bounds = movers.bounds[k];
+        let template = movers.templates.borrow()[k];
+        let bounds = movers.bounds.borrow()[k];
+        // A pool's mover is hidden while it shows nothing, and still on its first shown frame
+        // (#338).
+        let (shown, fresh) = movers.pool_slot(k).map_or((true, false), |i| {
+            let pool = movers.pool.as_ref().expect("a pool").borrow();
+            (pool.held[i].is_some_and(|h| h.shown), pool.fresh[i])
+        });
+        let scale = if shown { t.scale } else { 0.0 };
         let position = self.origin.offset(t.position);
-        let center = t.rotation * (bounds.truncate() * t.scale) + position.local;
+        let center = t.rotation * (bounds.truncate() * scale) + position.local;
         GpuInstance {
             cell: position.cell.to_array(),
             local: position.local.to_array(),
-            scale: t.scale,
+            scale,
             rotation: t.rotation.to_array(),
             center: center.to_array(),
-            radius: bounds.w * t.scale,
+            radius: bounds.w * scale,
             // Its visibility as the builder set it (`set_instance_visibility`: a mover the probes'
             // rays pass, #299), and whether it is still this frame.
-            flags: (template.flags & INSTANCE_VISIBILITY) | if still { INSTANCE_STILL } else { 0 },
-            ..*template
+            flags: if shown {
+                template.flags & INSTANCE_VISIBILITY
+            } else {
+                Visibility::NONE.flags()
+            } | if still || fresh { INSTANCE_STILL } else { 0 },
+            ..template
         }
     }
 
     /// [`Self::set_movers`], with the movers `still` names given no motion of their own this
     /// frame (#197): a ground window's mesh moved a step along with the heights it raises, so
-    /// that its surface stands where it stood. Their pixels move as the camera makes them.
+    /// that its surface stands where it stood. Their pixels move as the camera makes them. A
+    /// pool's movers ([`MeshletSceneBuilder::reserve_mover_pool`]) take theirs with
+    /// [`Self::set_movers_at`] before it.
     pub fn set_movers_still(&self, transforms: &[MoverTransform], still: impl Fn(usize) -> bool) {
         let Some(movers) = &self.movers else {
             return;
         };
+        let pool = movers.pool.as_ref().map_or(0, |p| p.borrow().slots.len());
         assert_eq!(
             transforms.len(),
-            movers.templates.len(),
-            "a transform per mover"
+            movers.len() - pool,
+            "a transform per mover (the pool's aside)"
         );
         self.set_movers_at(movers.first, transforms, still);
         self.commit_movers();
+    }
+
+    /// Promotes static instance `instance` to a mover of the pool while it moves (#338, the
+    /// owner's "promote while animating, demote when still"): a door about to swing. From the
+    /// frame the movers are next committed ([`Self::commit_movers`]), the static record is
+    /// hidden (but from the probes' rays, which keep seeing it where it stood) and the mover
+    /// shows it there, on the same frame: never both, never neither. Give the mover its
+    /// transforms with [`Self::set_movers_at`] from then on (its first shown frame has no motion
+    /// of its own), and [`Self::demote`] it when it stands still.
+    /// Returns the mover's instance, or `None` when the pool is empty: the caller then moves
+    /// the static instance itself (a door snapped to its end).
+    ///
+    /// # Panics
+    ///
+    /// When the scene has no pool ([`MeshletSceneBuilder::reserve_mover_pool`]) or was built
+    /// without [`MeshletSceneBuilder::allow_static_edits`] (a dynamic scene promotes through its
+    /// editor), or `instance` is not a static one.
+    pub fn promote(&self, instance: u32) -> Option<u32> {
+        let edits = self.static_edits_of(instance);
+        let movers = self.movers.as_ref().expect("a scene with a pool of movers");
+        let pool = movers.pool.as_ref().expect("a scene with a pool of movers");
+        let mut pool = pool.borrow_mut();
+        let mover = pool.free.lock().expect("the pool").pop()?;
+        let k = (mover - movers.first) as usize;
+        let record = edits.record(instance);
+        let start = pool.slots.start;
+        pool.held[k - start] = Some(Held {
+            instance,
+            visibility: record.flags & INSTANCE_VISIBILITY,
+            shown: false,
+        });
+        pool.queued.push(PoolChange::Promote(mover));
+        drop(pool);
+        movers.templates.borrow_mut()[k] = GpuInstance {
+            flags: record.flags & INSTANCE_VISIBILITY,
+            ..record
+        };
+        movers.bounds.borrow_mut()[k] = edits.mesh_bounds(record.mesh);
+        // Where the static record stands, until the caller gives it a transform.
+        let at = edits.transform(self.origin, instance);
+        self.set_movers_at(mover, &[at], |_| true);
+        Some(mover)
+    }
+
+    /// Demotes the pool's mover `mover` ([`Self::promote`]) once its instance stands still: from
+    /// the frame the movers are next committed, the static record stands at `at` (the mover's
+    /// last pose) with its visibility back, and the mover is hidden, on the same frame. The
+    /// mover returns to the pool `FRAMES_IN_FLIGHT + 1` frames later.
+    ///
+    /// # Panics
+    ///
+    /// When `mover` is not a promoted mover of the pool.
+    pub fn demote(&self, mover: u32, at: MoverTransform) {
+        let movers = self.movers.as_ref().expect("a scene with a pool of movers");
+        let k = mover.checked_sub(movers.first).expect("a pool's mover") as usize;
+        let i = movers.pool_slot(k).expect("a pool's mover");
+        let mut pool = movers.pool.as_ref().expect("a pool").borrow_mut();
+        assert!(pool.held[i].is_some(), "a promoted mover");
+        pool.queued.push(PoolChange::Demote(mover, at));
+    }
+
+    /// Whether the pool's mover `mover` shows its promoted instance yet (#338): from the frame
+    /// its promotion lands (the commit after [`Self::promote`], or the frame a dynamic scene's
+    /// edit is published) to the one its demotion lands.
+    pub fn mover_shown(&self, mover: u32) -> bool {
+        let Some(movers) = &self.movers else {
+            return false;
+        };
+        let k = mover.wrapping_sub(movers.first) as usize;
+        movers.pool_slot(k).is_some_and(|i| {
+            movers.pool.as_ref().expect("a pool").borrow().held[i].is_some_and(|h| h.shown)
+        })
+    }
+
+    /// Applies the pool's promotions and demotions asked for since the movers were last
+    /// committed (#338), with the static instances' edits the same frame uploads; the movers
+    /// demoted `FRAMES_IN_FLIGHT + 1` frames ago are free again.
+    fn apply_pool(&self, movers: &SceneMovers) {
+        let Some(pool) = &movers.pool else {
+            return;
+        };
+        let frame = self.frame;
+        let queued = {
+            let mut pool = pool.borrow_mut();
+            let MoverPool { free, leaving, .. } = &mut *pool;
+            leaving.retain(|&(from, mover)| {
+                if from <= frame {
+                    free.lock().expect("the pool").push(mover);
+                }
+                from > frame
+            });
+            std::mem::take(&mut pool.queued)
+        };
+        if queued.is_empty() {
+            return;
+        }
+        let edits = self
+            .static_edits
+            .as_ref()
+            .expect("a scene built with allow_static_edits");
+        for change in queued {
+            match change {
+                PoolChange::Promote(mover) => {
+                    let k = (mover - movers.first) as usize;
+                    let i = movers.pool_slot(k).expect("a pool's mover");
+                    let mut pool = pool.borrow_mut();
+                    let held = pool.held[i]
+                        .as_mut()
+                        .expect("a promoted mover holds its instance");
+                    held.shown = true;
+                    edits.set_visibility_flags(held.instance, promoted_visibility(held.visibility));
+                    pool.fresh[i] = true;
+                    movers.dirty.borrow_mut()[k] = true;
+                }
+                PoolChange::Demote(mover, at) => {
+                    let k = (mover - movers.first) as usize;
+                    let i = movers.pool_slot(k).expect("a pool's mover");
+                    let held = pool.borrow().held[i].expect("a promoted mover");
+                    edits.set_transform(self.origin, held.instance, at);
+                    edits.set_visibility_flags(held.instance, held.visibility);
+                    movers.hide(k, frame + FRAMES_IN_FLIGHT as u64 + 1);
+                }
+            }
+        }
     }
 
     /// The skinned meshes' joints' matrices for the frame about to be drawn (#165): every
@@ -3026,6 +3320,17 @@ impl MeshletScene {
             .set_visibility(instance, visibility);
     }
 
+    /// Static instance `instance`'s transform as the edits leave it (#338): where a door's leaf
+    /// stands before it swings, from the scene's origin.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::set_static_transform`].
+    pub fn static_transform(&self, instance: u32) -> MoverTransform {
+        self.static_edits_of(instance)
+            .transform(self.origin, instance)
+    }
+
     fn static_edits_of(&self, instance: u32) -> &static_edits::StaticEdits {
         let edits = self
             .static_edits
@@ -3060,7 +3365,7 @@ impl MeshletScene {
             )?;
             // The movers' own, rebuilt every frame (#79).
             if let Some(movers) = &self.movers {
-                rays.add_movers(device, shaders, movers.templates.len() as u32)?;
+                rays.add_movers(device, shaders, movers.len() as u32)?;
             }
         }
         Ok(())
@@ -3124,7 +3429,7 @@ impl MeshletScene {
     pub fn movers(&self) -> Option<std::ops::Range<u32>> {
         self.movers
             .as_ref()
-            .map(|m| m.first..m.first + m.templates.len() as u32)
+            .map(|m| m.first..m.first + m.len() as u32)
     }
 
     /// Bytes of texture the materials sample (every mip level).
@@ -4700,7 +5005,7 @@ impl MeshletRenderer {
             let ring: &'f Buffer = &movers.ring[movers.current.get()];
             let table: &'f GraphBuffer = &scene.instances;
             let size = std::mem::size_of::<GpuInstance>() as u64;
-            let count = movers.templates.len() as u64;
+            let count = movers.len() as u64;
             let at = u64::from(movers.first) * size;
             // Every frame, standing or not: the copy is a microsecond, and the compute queue's
             // probes, which read the table, wait for it. Without it they started at once and ran
@@ -4759,7 +5064,7 @@ impl MeshletRenderer {
                     instances,
                     scene.instances.address(),
                     movers.first,
-                    movers.templates.len() as u32,
+                    movers.len() as u32,
                     scene.origin,
                     &skin_blases,
                 )
@@ -5099,7 +5404,7 @@ impl MeshletRenderer {
                     records: scene.instances.address()
                         + u64::from(movers.first) * std::mem::size_of::<GpuInstance>() as u64,
                     previous: movers.ring[movers.previous.get()].address(),
-                    count: movers.templates.len() as u32,
+                    count: movers.len() as u32,
                     origin: scene.origin,
                     ray_positions,
                 }),
@@ -5179,7 +5484,7 @@ impl MeshletRenderer {
         let address = block.address();
         let frame = self.frame_address(slot);
         let previous = movers.ring[movers.previous.get()].address();
-        let (first, count) = (movers.first, movers.templates.len() as u32);
+        let (first, count) = (movers.first, movers.len() as u32);
         let extent = self.extent;
         let pipeline = &self.pipeline_mover_motion;
         let (visibility, depth) = (targets.visibility, targets.depth);
