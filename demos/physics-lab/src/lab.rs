@@ -2563,7 +2563,22 @@ pub(crate) fn build(
             skinned,
             slime_points: [points.clone(), points],
             mission_file,
-            edited: dynamic.then(|| ids[0]),
+            // The check's instance: the prop nearest a metre across (the ground would cover the
+            // view).
+            edited: dynamic
+                .then(|| {
+                    cooked
+                        .meshes
+                        .iter()
+                        .zip(&ids)
+                        .min_by(|a, b| {
+                            (a.0.radius - 0.5)
+                                .abs()
+                                .total_cmp(&(b.0.radius - 0.5).abs())
+                        })
+                        .map(|(_, &id)| id)
+                })
+                .flatten(),
         },
     ))
 }

@@ -539,6 +539,8 @@ pub struct SceneEditor {
     /// The edit in progress.
     new_meshes: Vec<NewMesh>,
     added: Vec<u32>,
+    /// Slots changed in place: moved, hidden or shown, retextured.
+    modified: Vec<u32>,
     kept: Vec<(u32, Box<dyn Any + Send>)>,
     removed_instances: Vec<u32>,
     removed_meshes: Vec<u32>,
@@ -703,10 +705,12 @@ impl SceneEditor {
     pub fn set_instance_texture(&mut self, instance: u32, sampled: u32) {
         self.assert_not_mover(instance);
         self.instances[instance as usize].texture = sampled + 1;
+        self.modified.push(instance);
     }
 
-    /// Sets what sees instance `instance`, added in this edit
-    /// ([`MeshletSceneBuilder::set_instance_visibility`], #301).
+    /// Sets what sees instance `instance` ([`MeshletSceneBuilder::set_instance_visibility`],
+    /// #301): one added in this edit, or one in the scene already (#338: a door's leaf hidden),
+    /// from the frame the edit is published.
     ///
     /// # Panics
     ///
@@ -715,6 +719,44 @@ impl SceneEditor {
         self.assert_not_mover(instance);
         let record = &mut self.instances[instance as usize];
         record.flags = (record.flags & !INSTANCE_VISIBILITY) | visibility.flags();
+        self.modified.push(instance);
+    }
+
+    /// Places instance `instance` anew (#338: a door's leaf opened or shut at rest), from the
+    /// frame the edit is published: at `position` in the world, turned by `rotation`, scaled by
+    /// `scale`, as [`Self::add_instance_at`] places one. Its pixels get no motion of their own
+    /// for the move (a mover's do), and the probes about it are not woken.
+    ///
+    /// # Panics
+    ///
+    /// When `instance` is a mover's, or vacant.
+    pub fn set_instance_transform(
+        &mut self,
+        instance: u32,
+        position: CellPos,
+        rotation: Quat,
+        scale: f32,
+    ) {
+        self.assert_not_mover(instance);
+        let record = self.instances[instance as usize];
+        assert!(
+            record.flags & INSTANCE_VACANT == 0,
+            "instance {instance} is vacant"
+        );
+        let (info, _) =
+            self.mesh_records[record.mesh as usize].expect("an instance's mesh in the scene");
+        let position = position.normalized();
+        let center = rotation * (Vec3::from(info.center) * scale) + position.local;
+        self.instances[instance as usize] = GpuInstance {
+            cell: position.cell.to_array(),
+            local: position.local.to_array(),
+            scale,
+            rotation: rotation.to_array(),
+            center: center.to_array(),
+            radius: info.radius * scale,
+            ..record
+        };
+        self.modified.push(instance);
     }
 
     /// Has the scene keep `item` alive until instance `instance` leaves it.
@@ -864,12 +906,17 @@ impl SceneEditor {
             .collect();
         // The instances' records, after the pages; then room for the page-table entries.
         let instance_size = std::mem::size_of::<GpuInstance>() as u64;
-        let changed: Vec<u32> = self
+        // The slots added, removed, or changed in place (#338: moved, hidden, retextured).
+        let modified = std::mem::take(&mut self.modified);
+        let mut changed: Vec<u32> = self
             .added
             .iter()
             .chain(&self.removed_instances)
+            .chain(&modified)
             .copied()
             .collect();
+        changed.sort_unstable();
+        changed.dedup();
         let records_at = bytes.len() as u64;
         let table_at = records_at + changed.len() as u64 * instance_size;
         let new_pages: u64 = new_meshes.iter().map(|m| u64::from(m.ranges.pages.1)).sum();
@@ -1097,6 +1144,7 @@ impl MeshletScene {
             movers,
             held,
             new_meshes: Vec::new(),
+            modified: Vec::new(),
             added: Vec::new(),
             kept: Vec::new(),
             removed_instances: Vec::new(),

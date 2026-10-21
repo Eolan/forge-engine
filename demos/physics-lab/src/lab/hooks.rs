@@ -537,6 +537,11 @@ impl Scenario for LabScenario {
                 editor,
                 edit_frames: 0,
                 edit_slot: None,
+                edit_at: if std::env::var("FORGE_DYNAMIC_SCENE").is_ok_and(|v| v == "visible") {
+                    glam::DVec3::new(0.0, 9.0, 0.0)
+                } else {
+                    glam::DVec3::new(0.0, -1000.0, 0.0)
+                },
                 flying: [0.0; 4],
                 pulling: 0.5,
             }),
@@ -570,10 +575,14 @@ struct LabRunning {
     editor: Option<forge_render::meshlet::SceneEditor>,
     edit_frames: u64,
     edit_slot: Option<u32>,
+    /// Where the check's instance stands: 1 km under the ground, or in the sky over the
+    /// pyramid with `FORGE_DYNAMIC_SCENE=visible`; its move takes it 2.5 m along x.
+    edit_at: glam::DVec3,
 }
 
-/// The frames at which #338's check adds its instance, then removes it.
+/// The frames at which #338's check adds its instance, moves it, then removes it.
 const EDIT_ADD: u64 = 30;
+const EDIT_MOVE: u64 = 45;
 const EDIT_REMOVE: u64 = 60;
 
 impl Running for LabRunning {
@@ -803,13 +812,28 @@ impl Running for LabRunning {
                     let slot = editor
                         .add_instance_at(
                             mesh,
-                            forge_render::CellPos::from_f64(glam::DVec3::new(0.0, -1000.0, 0.0)),
+                            forge_render::CellPos::from_f64(self.edit_at),
                             glam::Quat::IDENTITY,
                             1.0,
                             forge_core::material::MaterialId(0),
                         )
                         .expect("room for the check's instance");
                     self.edit_slot = Some(slot);
+                    true
+                }
+                EDIT_MOVE => {
+                    // Moved and its visibility set again in place (#338 step 3).
+                    if let Some(slot) = self.edit_slot {
+                        editor.set_instance_transform(
+                            slot,
+                            forge_render::CellPos::from_f64(
+                                self.edit_at + glam::DVec3::new(2.5, 0.0, 0.0),
+                            ),
+                            glam::Quat::from_rotation_y(0.5),
+                            1.0,
+                        );
+                        editor.set_instance_visibility(slot, forge_render::Visibility::ALL);
+                    }
                     true
                 }
                 EDIT_REMOVE => {
