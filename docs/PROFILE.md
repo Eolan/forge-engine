@@ -1411,6 +1411,12 @@ The frame takes 3.48 ms without SIGMA (`--no-shadow-denoiser`) and 3.96–3.99 m
 `shading/standard` drops 0.93 → 0.84 ms, the resolve's own ray gone. The trace costs more than
 four times that ray: it looks for the closest hit, not the first.
 
+The sun's rays start by each mesh's cut since #326 (2026-10-21), from 2 cm rather than 15 near
+the camera. In the village's forest view (`--view=230,1.7,-200,90,0`, two runs each)
+`shadow/trace` is unchanged, 0.406–0.409 ms before and 0.399–0.401 after: its leaf cards keep 15
+cm. A game's yard of opaque grass blades, which start at 2 cm, measured 0.324 → 0.369 ms: each
+ray starts among the blades and walks more of them.
+
 The same denoiser in the other demos, 2560 × 1440, 3 000 frames, two runs each, alternating:
 
 | View | without SIGMA | with SIGMA | `shadow/trace` | SIGMA's passes |
