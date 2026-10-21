@@ -460,7 +460,7 @@ fn shutters(m: &mut TriMesh, w: f32, h: f32) {
     let leaf = w * 0.5;
     // Each leaf's span and its hinge edge.
     for (x0, x1, hinge) in [(-leaf, 0.0, 0.0), (w, w + leaf, w)] {
-        shutter_leaf(m, x0, x1, h, OPEN_Z);
+        shutter_leaf(m, x0, x1, h, OPEN_Z, false);
         let front = OPEN_Z + 0.04;
         let reach = (x1 - x0) * 0.7;
         let (s0, s1) = if hinge == x1 {
@@ -494,18 +494,22 @@ fn shutters(m: &mut TriMesh, w: f32, h: f32) {
     }
 }
 
-/// Two louvred shutters closed over an opening, in its reveal just behind the wall's face.
+/// Two louvred shutters closed over an opening, in its reveal just behind the wall's face, their
+/// backs drawn for the room behind its glass.
 fn closed_shutters(m: &mut TriMesh, w: f32, h: f32) {
     let leaf = w * 0.5;
     for x0 in [0.0, leaf] {
-        shutter_leaf(m, x0, x0 + leaf, h, -0.08);
+        shutter_leaf(m, x0, x0 + leaf, h, -0.08, true);
     }
 }
 
 /// One louvred shutter from `x0` to `x1`, `h` tall, its back at depth `z0`: a frame of stiles
-/// and rails round sloping slats.
-fn shutter_leaf(m: &mut TriMesh, x0: f32, x1: f32, h: f32, z0: f32) {
+/// and rails round sloping slats; with `back`, closed on every side and boarded behind its slats,
+/// for a room that sees it from behind (an entered house's closed shutters: from inside, the
+/// street showed through them, as through a door's light, 2026-10-21).
+fn shutter_leaf(m: &mut TriMesh, x0: f32, x1: f32, h: f32, z0: f32, back: bool) {
     let (zb, zf) = (z0 + 0.01, z0 + 0.035);
+    let faces = if back { ALL } else { NO_BACK };
     // The leaf's frame: stiles and rails.
     let (stile, rail) = (0.05, 0.08);
     cuboid(
@@ -513,31 +517,45 @@ fn shutter_leaf(m: &mut TriMesh, x0: f32, x1: f32, h: f32, z0: f32) {
         Vec3::new(x0, 0.0, z0),
         Vec3::new(x0 + stile, h, zf + 0.005),
         SHUTTER,
-        NO_BACK,
+        faces,
     );
     cuboid(
         m,
         Vec3::new(x1 - stile, 0.0, z0),
         Vec3::new(x1, h, zf + 0.005),
         SHUTTER,
-        NO_BACK,
+        faces,
     );
     cuboid(
         m,
         Vec3::new(x0 + stile, 0.0, z0),
         Vec3::new(x1 - stile, rail, zf + 0.005),
         SHUTTER,
-        NO_BACK,
+        faces,
     );
     cuboid(
         m,
         Vec3::new(x0 + stile, h - rail, z0),
         Vec3::new(x1 - stile, h, zf + 0.005),
         SHUTTER,
-        NO_BACK,
+        faces,
     );
     // The slats: each slopes back from its lower edge, its underside shows below it.
     let (xa, xb) = (x0 + stile, x1 - stile);
+    if back {
+        // The board behind them, facing in, 5 mm in front of the frame's back.
+        let z = z0 + 0.005;
+        quad(
+            m,
+            [
+                Vec3::new(xa, rail, z),
+                Vec3::new(xa, h - rail, z),
+                Vec3::new(xb, h - rail, z),
+                Vec3::new(xb, rail, z),
+            ],
+            SHUTTER,
+        );
+    }
     let pitch = 0.07;
     let slats = ((h - 2.0 * rail) / pitch).floor() as u32;
     let start = rail + ((h - 2.0 * rail) - slats as f32 * pitch) * 0.5;
