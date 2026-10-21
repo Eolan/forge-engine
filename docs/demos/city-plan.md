@@ -914,6 +914,10 @@ mesh to test navigations inside the houses"):
     0.12 more over its lowest 12 cm). Both stay low in frequency; a still camera's frames change
     as before (1 000–1 439 px). The textured smudges, fingerprints and stickers wait for the
     owner's go to download CC0 masks.
+  - **The faked rooms' windows too** (#339): the same tilt and waves from a hash of where the
+    window stands (`window_pane_normal` in `meshlet.slang`), so a row of far facades no longer
+    mirrors the sky as one sheet. Only the map check's view from the air shows them (ꟻLIP mean
+    0.00055); its still frames change as before (7 010–9 567 px, against 6 994–9 556).
   - **Shimmer:** with a still camera under DLAA, frames 10 apart differ on 0.06 % of the pixels
     by day (as without the glass) and on 0.040 % at night (0.038 % without).
   - **Cost:** 0.05–0.16 ms in the map check's views (`docs/PROFILE.md`).

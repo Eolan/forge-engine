@@ -3862,6 +3862,27 @@ float3 shade_uv_mapped(Frame* f, Material mat, Surface s)
     return sun_light(f, diffuse, n, s.n, power, specular, s.shadow, s.sky, ao, s.view, reflectance, s.world, s.probes, s.traced, ndl) + emissive;
 }
 
+// A faked window's pane condition (#339, `glass.slang`'s for the clear glass): a tilt of up to
+// WINDOW_TILT radians each way and roller waves of up to WINDOW_WAVE every WINDOW_WAVE_LENGTH
+// metres across and up the pane (the window mesh's x and y), from a hash of where the window
+// stands, the waves faded out where a pixel covers a quarter of one so they never shimmer.
+static const float WINDOW_TILT = 0.006;
+static const float WINDOW_WAVE = 0.003;
+static const float WINDOW_WAVE_LENGTH = 0.9;
+
+float3 window_pane_normal(float3 n, Surface s)
+{
+    float3 h = hash_color(s.instance_place * 0x2C1B3C6Du + 0x297A2D39u);
+    float3 w = hash_color(s.instance_place * 0x9E3779B9u + 0x7F4A7C15u);
+    float3 across = normalize(mul(s.frame, float3(1.0, 0.0, 0.0)));
+    float3 rise = normalize(mul(s.frame, float3(0.0, 1.0, 0.0)));
+    float footprint = max(length(s.dpdx), length(s.dpdy));
+    float fade = saturate(1.0 - footprint / (0.25 * WINDOW_WAVE_LENGTH));
+    float2 waves = sin(s.object_position.xy * (6.2831853 / WINDOW_WAVE_LENGTH) + w.xy * 6.2831853);
+    float2 lean = (h.xy * 2.0 - 1.0) * WINDOW_TILT + waves * w.z * (WINDOW_WAVE * fade);
+    return normalize(n + across * lean.x + rise * lean.y);
+}
+
 // The room behind a window's glass (interior mapping, D-060's step 3; Van Dongen, "Interior
 // Mapping", 2008): a box in the window mesh's own space, the glass on its z plane and the room
 // towards −z, from 1.4 m left of the glass's left edge, 0.9 m under its foot, 4.5 m deep. Its
@@ -4009,9 +4030,11 @@ float3 shade_standard(Frame* f, Material mat, Surface s)
             return shade_uv_mapped(f, mat, s);
         if ((mat.flags & MATERIAL_FLAG_INTERIOR) != 0)
         {
-            // The pane: its reflection over dark glass.
+            // The pane: its reflection over dark glass, its normal bent by its own condition
+            // (#339, as the clear glass's): neighbouring windows reflect the street askew.
             float ndl;
-            float3 pane = sun_light(f, mat.color_a, n, s.n, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, s.world, s.probes, s.traced, ndl);
+            float3 pane_n = window_pane_normal(n, s);
+            float3 pane = sun_light(f, mat.color_a, pane_n, s.n, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, s.world, s.probes, s.traced, ndl);
             // The room behind, seen along the view into the mesh's space.
             float3 d = normalize(mul(transpose(s.frame), -s.view));
             if (d.z > -1e-3)
