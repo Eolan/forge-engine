@@ -1930,7 +1930,11 @@ stored once per cluster). Issue #92 adds the list of the clusters pass 1 leaves 
 (512 KiB per frame slot to start) and a third run of the cluster culls' status words: work
 buffers 19.96 → 21.76 MiB for the ballad, 5.15 → 6.34 for the bench, 127.8 → 145.9 for the
 city. The city's first frames, before instance occlusion's auto mode turns on, leave 820 k
-clusters to pass 2 and grow its list to the 8 MiB cap per slot. **Verdicts:**
+clusters to pass 2 and grow its list to the 8 MiB cap per slot. Since #333 the cap is 32 MiB a
+slot (4 M clusters): a game's yard of leaf cards left 1.8 M, and past the cap pass 2 walks pass
+1's work items again. Forced over a lower cap, the village's forest view (579 k) took 0.479 ms in
+cluster cull 2 instead of 0.149. The city's first frames now grow the list to 16 MiB a slot.
+**Verdicts:**
 
 1. **The allocator's block size, not the data, sets the VRAM figure.** `gpu-allocator`
    reserves 256 MiB device blocks and 64 MiB host-visible ones. Each demo holds one of each

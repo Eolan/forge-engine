@@ -983,8 +983,10 @@ fn create_shading_tiles(device: &Arc<Device>, extent: vk::Extent2D) -> Result<[G
 /// city's views leave 80–160 k, the bench's side view 330 k). What does not fit, pass 2 walks
 /// again from pass 1's work items (issue #92), and [`MeshletRenderer::begin_frame`] grows it.
 const REJECTS_INITIAL_CAPACITY: u32 = 1 << 16;
-/// Most slots it grows to (8 MiB per frame slot).
-const REJECTS_MAX_CAPACITY: u32 = 1 << 20;
+/// Most slots it grows to (32 MiB per frame slot). A dense yard of leaf cards leaves 1.8 M
+/// (#333): past 1 M, pass 2 walked pass 1's work items again, 3.2 times the cull of the
+/// village's forest view (579 k forced over a lower bound: 0.149 → 0.479 ms).
+const REJECTS_MAX_CAPACITY: u32 = 1 << 22;
 
 /// Slots the visible-cluster list starts with per frame slot, both passes together (512 KiB;
 /// the LOD views of both demos list 8–15 k clusters). The cluster cull drops and counts what
