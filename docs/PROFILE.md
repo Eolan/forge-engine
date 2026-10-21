@@ -2118,6 +2118,19 @@ buffer each, copied bit by bit).
     without them to the pixel (the updatable structure traces as the other did).
   - Without its forest the view's frame takes 3.5 ms against 4.9 ms.
 
+## The movers' commit (#344, 2026-10-21)
+
+- **What was measured:** a game built outside the repository, a town of 12 × 12 cells with
+  35,114 movers (a grass ring of 34,890 and a pool of doors), a 1,801-step walk on foot, its own
+  laps round `commit_movers`, three windows of 600 frames.
+- **Results:**
+  - `commit_movers`: 1.12–1.32 ms → 0.013–0.020 ms a frame. Only the movers whose transform or
+    stillness changed are rebuilt, and a ring slot is written only the runs it lacks.
+  - `set_movers_at`, now comparing each mover with what is staged: the grass ring's
+    0.061–0.075 → 0.115–0.118 ms.
+  - The app's `cpu/declare passes`: 1.67 → 0.66 ms; the frame became GPU-bound (3.74 → 3.67 ms).
+- **Pixels:** the physics lab's and the sentinels' 196 captures match the accepted set.
+
 ## Not measured yet
 
 - **Streaming**: residency pools, request queue depth, drive and decompression throughput.
