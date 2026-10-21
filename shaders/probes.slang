@@ -101,7 +101,7 @@ public struct RegionVolume
     public uint region;       // the room it belongs to: on a doorway, the side of corners 0–1
     public uint other;        // a doorway's other side, at corners 3–2; else `region`
     public uint kind;         // REGION_ROOM, REGION_RECESS (a window's inner reveal: its room's), REGION_DOORWAY or REGION_SOLID
-    public uint pad;
+    public float split;       // a doorway shut by its door (#327): its leaf this share of the way across from `region`; 0 open
 };
 
 public static const uint REGION_OUTSIDE = 0u;
@@ -198,6 +198,9 @@ public RegionHit region_at(ProbeField* field, float3 p)
             float2 across = normalize(float2(-e.y, e.x));
             float depth = dot(v.corners[3] - v.corners[0], across);
             hit.ramp = saturate(dot(p.xz - v.corners[0], across) / max(depth, 1e-4));
+            // Shut by its door (#327): each side of the leaf takes its own side's probes alone.
+            if (v.split > 0.0)
+                hit.ramp = hit.ramp < v.split ? 0.0 : 1.0;
         }
         return hit;
     }

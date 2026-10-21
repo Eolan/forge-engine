@@ -5678,6 +5678,14 @@ application of their patents just in case."
   which have their own probes: in linear light 24.6 against 22.7 and 16.7 against 18.4 at 0.06
   (0.15 made them 2–2.5 times too bright). Near the camera nothing changes: the map check's
   interiors 0 px, its street views at most 0.0023 mean LDR-ꟻLIP against the first version.
+- **A doorway shut by its door** (#327, 2026-10-21): a doorway's ramp assumes an open opening,
+  and a shut door's outer face took the dark room's probes (blotches on a garage door in a scene
+  built outside the repository). `Probes::set_doorway(volume, Some(s))` puts the leaf at `s` of
+  the way across: each side of it takes its own side's probes alone (`RegionVolume::split`);
+  `None` opens it again. From the next frame, without starting the probes over: once a doorway
+  is set, each frame slot reads its own copy of the volumes, rewritten after an edit, as the
+  glass panes' transforms (#325). A scene hands its doors' states through
+  `Running::doorway_edits`. With no doorway shut, the map check is unchanged.
 - **No pop as the room-sized cascade reaches such a room** (#334, 2026-10-21, the owner's
   playtest of a scene built outside the repository: "there is a pop … a window thing again").
   The room-sized cascade fades over one spacing at its edge, and where it covered a room partly

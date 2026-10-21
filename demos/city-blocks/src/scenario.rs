@@ -204,6 +204,13 @@ pub trait Running: Send {
     fn glass(&self) -> forge_render::GlassPanes {
         forge_render::GlassPanes::default()
     }
+    /// Its doorways shut or opened by their doors since the last frame at `time` (the
+    /// particles' clock, seconds; #327): each its place in [`Running::probe_regions`] and the
+    /// share of the way across from its `region` side its door's leaf stands at, or `None`
+    /// open ([`forge_render::Probes::set_doorway`]). None by default.
+    fn doorway_edits(&mut self, _time: f32) -> Vec<(usize, Option<f32>)> {
+        Vec::new()
+    }
     /// Its clear panes' edits since the last frame at `time` (the particles' clock, seconds;
     /// #325), in the world frame: each pane's id ([`forge_render::GlassPanes::pane`]) and its
     /// transform from where it was given (a sash raised), or `None` to hide it (a window

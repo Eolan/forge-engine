@@ -2257,6 +2257,14 @@ impl Demo for Gallery {
                 glass.set_pane(id, scene);
             }
         }
+        // The doorways shut or opened by their doors since the last frame (#327).
+        if let (Some(probes), Some(running)) = (self.probes.as_mut(), self.running.as_mut()) {
+            for (volume, shut) in running.doorway_edits(time) {
+                if let Err(e) = probes.set_doorway(&ctx.device, volume, shut) {
+                    tracing::warn!("a doorway's split: {e}");
+                }
+            }
+        }
         // The clear glass's rooms glow with what the frame leaves unlit of their lamps (#284).
         if let Some(glass) = &self.glass {
             glass.set_unlit(

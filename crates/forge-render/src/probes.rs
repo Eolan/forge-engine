@@ -111,7 +111,9 @@ struct GpuRegionVolume {
     region: u32,
     other: u32,
     kind: u32,
-    pad: u32,
+    /// A doorway shut by its door (#327): its leaf at this share of the way across from the
+    /// `region` side, each side of it all its own; 0 open.
+    split: f32,
 }
 
 const _: () = assert!(std::mem::size_of::<GpuRegionVolume>() == 56);
@@ -407,6 +409,15 @@ struct Regions {
     origin: [f32; 2],
     dims: [u32; 2],
     count: u32,
+    /// The volumes as ordered, their doorways' splits as last set (#327), and where each volume
+    /// the host gave stands in that order.
+    table: Vec<GpuRegionVolume>,
+    place: Vec<u32>,
+    /// Once a doorway was set: a copy of the table per frame slot, which a frame points at, and
+    /// the edits each slot's copy holds.
+    slots: Vec<Buffer>,
+    edits: u64,
+    written: Vec<u64>,
 }
 
 /// The volumes in the order the lookup tries them, recesses and doorways first (they overlap
@@ -440,7 +451,7 @@ fn ordered(volumes: &[RegionVolume]) -> Vec<GpuRegionVolume> {
                     RegionKind::Doorway => 2,
                     RegionKind::Solid => 3,
                 },
-                pad: 0,
+                split: 0.0,
             }
         })
         .collect();
@@ -451,6 +462,22 @@ fn ordered(volumes: &[RegionVolume]) -> Vec<GpuRegionVolume> {
         _ => 2,
     });
     out
+}
+
+/// Where each of `volumes` stands in [`ordered`]'s order (the sort is stable, by kind alone).
+fn places(volumes: &[RegionVolume]) -> Vec<u32> {
+    let rank = |k: RegionKind| match k {
+        RegionKind::Recess | RegionKind::Doorway => 0,
+        RegionKind::Room => 1,
+        RegionKind::Solid => 2,
+    };
+    let mut order: Vec<usize> = (0..volumes.len()).collect();
+    order.sort_by_key(|&i| rank(volumes[i].kind));
+    let mut place = vec![0u32; volumes.len()];
+    for (at, &i) in order.iter().enumerate() {
+        place[i] = at as u32;
+    }
+    place
 }
 
 /// The grid over `volumes` ([`REGION_CELL`] cells): its corner, its size in cells, and per cell
@@ -693,7 +720,52 @@ impl Probes {
             origin,
             dims,
             count: ordered.len() as u32,
+            place: places(volumes),
+            table: ordered,
+            slots: Vec::new(),
+            edits: 0,
+            written: vec![0; FRAMES_IN_FLIGHT],
         });
+        Ok(())
+    }
+
+    /// Shuts or opens doorway `volume` (its place in what [`Self::set_regions`] was given, #327):
+    /// `Some(s)`, its door's leaf at `s` (0 to 1) of the way across from its `region` side, each
+    /// side of it lit by its own probes alone; `None`, open, the doorway ramping from one side to
+    /// the other. From the next frame, without starting the probes over: those round the door
+    /// settle as their light changes. Any other volume is left as it is.
+    pub fn set_doorway(
+        &mut self,
+        device: &Arc<Device>,
+        volume: usize,
+        shut: Option<f32>,
+    ) -> Result<()> {
+        let Some(regions) = self.regions.as_mut() else {
+            return Ok(());
+        };
+        let Some(&at) = regions.place.get(volume) else {
+            return Ok(());
+        };
+        let record = &mut regions.table[at as usize];
+        if record.kind != 2 {
+            return Ok(());
+        }
+        record.split = shut.map_or(0.0, |s| s.clamp(1e-3, 1.0));
+        if regions.slots.is_empty() {
+            let bytes = std::mem::size_of_val(regions.table.as_slice()) as u64;
+            regions.slots = (0..FRAMES_IN_FLIGHT)
+                .map(|i| {
+                    device.create_buffer(BufferDesc {
+                        size: bytes.max(4),
+                        usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+                        location: MemoryLocation::CpuToGpu,
+                        category: MemoryCategory::Frame,
+                        name: &format!("probe region volumes {i}"),
+                    })
+                })
+                .collect::<Result<_>>()?;
+        }
+        regions.edits += 1;
         Ok(())
     }
 
@@ -805,6 +877,19 @@ impl Probes {
             [1.0 / w as f32, 1.0 / h as f32]
         };
         let empty = self.no_regions.address();
+        // The volumes this frame reads: the table as built, or once a doorway was set (#327)
+        // this slot's copy, rewritten when it lags the edits.
+        let region_volumes = match self.regions.as_mut() {
+            Some(r) if !r.slots.is_empty() => {
+                if r.written[slot.index] != r.edits {
+                    r.slots[slot.index].write(0, &r.table);
+                    r.written[slot.index] = r.edits;
+                }
+                r.slots[slot.index].address()
+            }
+            Some(r) => r.volumes.address(),
+            None => empty,
+        };
         let field = GpuProbeField {
             rotation: [row(0), row(1), row(2)],
             cascades,
@@ -825,7 +910,7 @@ impl Probes {
             cadence: p.cadence,
             phase: (noise_frame % u64::from(p.cadence)) as u32,
             probe_region: self.region.address(),
-            region_volumes: self.regions.as_ref().map_or(empty, |r| r.volumes.address()),
+            region_volumes,
             region_cells: self.regions.as_ref().map_or(empty, |r| r.cells.address()),
             region_indices: self.regions.as_ref().map_or(empty, |r| r.indices.address()),
             region_origin: self.regions.as_ref().map_or([0.0; 2], |r| r.origin),
@@ -1014,6 +1099,28 @@ mod tests {
                 kind: RegionKind::Recess,
             },
         ]
+    }
+
+    /// A doorway set by its place among the volumes given (#327) is the one the table holds there.
+    #[test]
+    fn a_volume_given_finds_its_place_in_the_lookup_order() {
+        let v = little_house();
+        let table = ordered(&v);
+        let place = places(&v);
+        for (i, given) in v.iter().enumerate() {
+            let kind = match given.kind {
+                RegionKind::Room => 0,
+                RegionKind::Recess => 1,
+                RegionKind::Doorway => 2,
+                RegionKind::Solid => 3,
+            };
+            let record = &table[place[i] as usize];
+            assert_eq!(record.kind, kind);
+            assert_eq!((record.floor, record.ceiling), (given.floor, given.ceiling));
+        }
+        let mut seen = place.clone();
+        seen.sort_unstable();
+        assert_eq!(seen, (0..v.len() as u32).collect::<Vec<_>>());
     }
 
     /// D-068's lookup: rooms, a doorway's ramp either way round, a reveal, the body, outside.
