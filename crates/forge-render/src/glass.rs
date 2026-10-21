@@ -110,6 +110,11 @@ pub struct GlassParams {
     pub sky_scale: f32,
     /// Pre-exposed units per cd/m².
     pub exposure: f32,
+    /// Towards the sun, unit (#339's glints).
+    pub sun: Vec3,
+    /// The sun's pre-exposed illuminance through the air, per channel: 0 below the horizon and
+    /// at night.
+    pub sun_light: Vec3,
 }
 
 /// Must match `GlassVertex` in `glass.slang`.
@@ -139,9 +144,11 @@ struct GpuGlassFrame {
     sky: u64,
     sky_light: u64,
     unlit: u64,
+    sun: [f32; 4],
+    sun_light: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuGlassFrame>() == 160);
+const _: () = assert!(std::mem::size_of::<GpuGlassFrame>() == 192);
 
 /// The panes and their passes (D-065's part 4).
 pub struct Glass {
@@ -411,6 +418,8 @@ impl Glass {
             sky: sky.address(),
             sky_light: sky.light.address,
             unlit: self.unlit[slot.index].address(),
+            sun: params.sun.extend(0.0).to_array(),
+            sun_light: params.sun_light.extend(0.0).to_array(),
         };
         frame_buffer.write(0, &[gpu]);
         // The frame's depth by its sampled handle, known once the graph runs.

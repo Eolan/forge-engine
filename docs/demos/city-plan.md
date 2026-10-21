@@ -898,6 +898,12 @@ mesh to test navigations inside the houses"):
     follows the bent normal, so neighbouring panes reflect the street a little askew of each
     other. A still camera's frames 10 apart change as before (1 052–1 417 px in the house view,
     against 1 048–1 404).
+  - **The sun's glint** (#339, step 3): the key light's disc in the pane's mirror direction, a
+    normalised lobe no narrower than GGX's alpha 0.05 so a glint covers a few pixels and turns
+    with the pane's tilt and waves; a shadow ray (`glass/reflections`) takes it away where the
+    scene hides the sun. None of the map check's views catches one (0 px); with the lobe widened
+    to 0.5 for the check, the house's sunlit panes took the low morning sun's warm light and those
+    in its shadow none.
   - **Shimmer:** with a still camera under DLAA, frames 10 apart differ on 0.06 % of the pixels
     by day (as without the glass) and on 0.040 % at night (0.038 % without).
   - **Cost:** 0.05–0.16 ms in the map check's views (`docs/PROFILE.md`).

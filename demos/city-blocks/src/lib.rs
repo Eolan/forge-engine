@@ -2861,6 +2861,14 @@ impl Demo for Gallery {
                     camera: camera_in_scene,
                     sky_scale: self.renderer.sun_illuminance * exposure,
                     exposure,
+                    sun: self.renderer.sun_dir.normalize_or_zero(),
+                    // The key light's glint on the panes (#339): the sun's, or at night the
+                    // Moon's when it lights the scene; none once below the horizon.
+                    sun_light: if self.renderer.sun_dir.y > 0.0 {
+                        self.renderer.sun_color * (self.renderer.sun_illuminance * exposure)
+                    } else {
+                        Vec3::ZERO
+                    },
                 },
                 taa_frame.color,
                 targets.depth,

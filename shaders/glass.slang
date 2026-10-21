@@ -46,6 +46,13 @@ static const float PANE_WAVE_LENGTH = 0.9;
 static const float PANE_DOUBLE_F0 = 2.5;
 static const float PANE_HAZE = 0.08;
 static const float PI = 3.14159265;
+// The sun's glint on a pane (#339, step 3): its disc in the pane's mirror direction, a
+// normalised Blinn-Phong lobe no narrower than GLINT_ROUGHNESS (GGX's alpha), so that a glint
+// covers a few pixels and turns with the pane's tilt and waves rather than sparkling. A shadow ray
+// takes it away where the scene hides the sun (`glass/reflections`); below this share of the
+// sun's light none is asked.
+static const float GLINT_ROUGHNESS = 0.05;
+static const float GLINT_MIN = 1e-4;
 
 // Four numbers in [0, 1) from a pane's index and a salt (PCG's output permutation).
 float4 pane_hash(uint pane, uint salt)
@@ -91,6 +98,8 @@ struct GlassFrame
     Sky* sky;             // the sky's frame block, for the haze
     float4* sky_light;    // the sky's irradiance, then its table's up and forward (sky.slang)
     float* unlit;         // the share of each lamp's light the frame leaves unlit (glass.rs, `set_unlit`)
+    float4 sun;           // xyz: towards the sun, unit (#339's glints)
+    float4 sun_light;     // rgb: its pre-exposed illuminance through the air (0 below the horizon)
 };
 
 struct GlassPush
@@ -157,6 +166,7 @@ struct GlassLight
     float4 air;      // the haze between the camera and the pane
     float3 normal;   // the pane's, bent by its condition, towards the camera
     float haze;      // the share of what passes its haze scatters (#339)
+    float3 glint;    // the sun's light it reflects towards the camera, pre-exposed, hazed (#339)
 };
 
 GlassLight glass_light(GlassFrame* f, GlassVaryings input)
@@ -192,6 +202,20 @@ GlassLight glass_light(GlassFrame* f, GlassVaryings input)
     o.room = saturate(1.0 - REVEAL_DEPTH * tan_view);
     float2 uv = saturate(input.position.xy / float2(f[0].width, f[0].height));
     o.air = aerial_at(f[0].sky, uv, o.distance * 0.001);
+    // The sun's glint: E D(h) F(v·h) / (4 n·v), the lobe's peak normalised.
+    o.glint = float3(0.0);
+    float3 sun = f[0].sun.xyz;
+    float nl = dot(n, sun);
+    if (nl > 0.0 && any(f[0].sun_light.rgb > 0.0))
+    {
+        float3 half_vector = normalize(sun + v);
+        float alpha2 = GLINT_ROUGHNESS * GLINT_ROUGHNESS;
+        float power = 2.0 / alpha2 - 2.0;
+        float d = (power + 2.0) / (2.0 * PI) * pow(saturate(dot(n, half_vector)), power);
+        float vh = saturate(dot(v, half_vector));
+        float fresnel = f0 + (1.0 - f0) * pow(1.0 - vh, 5.0);
+        o.glint = f[0].sun_light.rgb * (d * fresnel / (4.0 * max(nv, 0.05))) * o.air.a;
+    }
     return o;
 }
 
@@ -208,12 +232,12 @@ RequestTargets request_main(GlassVaryings input)
     if (hidden(f, input.position))
         discard;
     GlassLight l = glass_light(f, input);
-    // What the ray meets replaces the sky `draw_main` reflected, by the same weight. No sun's
-    // highlight on the glass, so no shadow ray.
+    // What the ray meets replaces the sky `draw_main` reflected, by the same weight; a shadow ray
+    // takes the sun's glint away where the scene hides the sun (#339).
     float weight = l.fresnel * l.air.a;
     RequestTargets o;
     o.mirror = weight >= REQUEST_MIN_WEIGHT ? float4(l.mirror, weight) : float4(0.0);
-    o.sun = float4(0.0);
+    o.sun = max(l.glint.r, max(l.glint.g, l.glint.b)) >= GLINT_MIN ? float4(l.glint, 1.0) : float4(0.0);
     return o;
 }
 
@@ -237,5 +261,8 @@ float4 draw_main(GlassVaryings input) : SV_Target0
     // Over what is behind, by what the pane stops: its reflection, its veil and the glow, hazed,
     // and the haze in front of it that the blend would dim with the room.
     float3 colour = (l.fresnel * sky + veil + glow) * l.air.a + l.air.rgb * (f[0].sky_scale * alpha);
+    // The sun's glint, hazed already; `glass/reflections` takes it away where the sun is hidden.
+    if (max(l.glint.r, max(l.glint.g, l.glint.b)) >= GLINT_MIN)
+        colour += l.glint;
     return float4(min(colour, 32768.0), alpha);
 }
