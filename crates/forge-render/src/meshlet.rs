@@ -36,7 +36,7 @@ use forge_gpu::{
 };
 use glam::{DQuat, DVec3, Mat4, Quat, Vec2, Vec3, Vec4};
 
-mod dynamic;
+pub(crate) mod dynamic;
 mod static_edits;
 pub use dynamic::{DynamicCapacity, MeshRays, SceneEdit, SceneEditor};
 

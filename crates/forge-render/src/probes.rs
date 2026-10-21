@@ -34,6 +34,11 @@ use glam::{IVec3, Mat3, Quat, Vec3};
 use crate::meshlet::MoversFrame;
 use crate::sky::SkyLight;
 
+mod regions;
+
+use regions::{REGION_CELL, RegionStore, TOP_CELL, ordered};
+pub use regions::{RegionCapacity, RegionSetId};
+
 /// Most cascades (`PROBE_MAX_CASCADES` in `probes.slang`).
 pub const MAX_CASCADES: usize = 6;
 /// Rays per probe whose directions never change (`PROBE_FIXED_RAYS`).
@@ -91,38 +96,36 @@ struct GpuProbeField {
     region_volumes: u64,
     region_cells: u64,
     region_indices: u64,
-    region_origin: [f32; 2],
+    region_sets: u64,
+    region_top: u64,
+    region_top_list: u64,
+    region_splits: u64,
     region_cell: f32,
+    region_top_cell: f32,
+    region_top_mask: u32,
     region_count: u32,
-    region_dims: [u32; 2],
     far_room_sky: f32,
-    region_pad: u32,
+    region_pad: [u32; 3],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuProbeField>() == 400);
-
-/// Mirrors `RegionVolume` in `probes.slang`.
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct GpuRegionVolume {
-    corners: [[f32; 2]; 4],
-    floor: f32,
-    ceiling: f32,
-    region: u32,
-    other: u32,
-    kind: u32,
-    /// A doorway shut by its door (#327): its leaf at this share of the way across from the
-    /// `region` side, each side of it all its own; 0 open.
-    split: f32,
-}
-
-const _: () = assert!(std::mem::size_of::<GpuRegionVolume>() == 56);
+const _: () = assert!(std::mem::size_of::<GpuProbeField>() == 432);
 
 /// `REGION_NONE` in `probes.slang`: a probe in a recess or a doorway, no region's.
 const REGION_NONE: u32 = u32::MAX;
 
-/// The side of the cells of the grid that finds a point's region volumes, metres.
-const REGION_CELL: f32 = 2.0;
+/// Boxes of region sets added or removed whose probes one frame wakes, at most (#338): the rest
+/// wait for the next.
+const MAX_WAKE_BOXES: usize = 64;
+
+/// Mirrors `WakeRegionsPush` in `probe_update.slang`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct WakeRegionsPush {
+    field: u64,
+    boxes: u64,
+    count: u32,
+    probes: u32,
+}
 
 /// What a region volume is (D-068, `RegionVolume` in `probes.slang`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -401,126 +404,6 @@ fn frame_rotation(index: u64) -> Mat3 {
     )
 }
 
-/// A scene's region volumes on the GPU (D-068) and the grid over them.
-struct Regions {
-    volumes: Buffer,
-    cells: Buffer,
-    indices: Buffer,
-    origin: [f32; 2],
-    dims: [u32; 2],
-    count: u32,
-    /// The volumes as ordered, their doorways' splits as last set (#327), and where each volume
-    /// the host gave stands in that order.
-    table: Vec<GpuRegionVolume>,
-    place: Vec<u32>,
-    /// Once a doorway was set: a copy of the table per frame slot, which a frame points at, and
-    /// the edits each slot's copy holds.
-    slots: Vec<Buffer>,
-    edits: u64,
-    written: Vec<u64>,
-}
-
-/// The volumes in the order the lookup tries them, recesses and doorways first (they overlap
-/// their rooms' edges), the houses' bodies last (round their rooms), each anticlockwise in x and z
-/// (a doorway turned round swaps its sides).
-fn ordered(volumes: &[RegionVolume]) -> Vec<GpuRegionVolume> {
-    let mut out: Vec<GpuRegionVolume> = volumes
-        .iter()
-        .map(|v| {
-            let c = v.corners;
-            let area: f32 = (0..4)
-                .map(|i| {
-                    let (a, b) = (c[i], c[(i + 1) % 4]);
-                    a.x * b.y - b.x * a.y
-                })
-                .sum();
-            let (corners, region, other) = if area >= 0.0 {
-                (c, v.region, v.other)
-            } else {
-                ([c[3], c[2], c[1], c[0]], v.other, v.region)
-            };
-            GpuRegionVolume {
-                corners: corners.map(|p| p.to_array()),
-                floor: v.floor,
-                ceiling: v.ceiling,
-                region,
-                other,
-                kind: match v.kind {
-                    RegionKind::Room => 0,
-                    RegionKind::Recess => 1,
-                    RegionKind::Doorway => 2,
-                    RegionKind::Solid => 3,
-                },
-                split: 0.0,
-            }
-        })
-        .collect();
-    // Recesses and doorways, then the rooms, then the houses' bodies.
-    out.sort_by_key(|v| match v.kind {
-        1 | 2 => 0,
-        0 => 1,
-        _ => 2,
-    });
-    out
-}
-
-/// Where each of `volumes` stands in [`ordered`]'s order (the sort is stable, by kind alone).
-fn places(volumes: &[RegionVolume]) -> Vec<u32> {
-    let rank = |k: RegionKind| match k {
-        RegionKind::Recess | RegionKind::Doorway => 0,
-        RegionKind::Room => 1,
-        RegionKind::Solid => 2,
-    };
-    let mut order: Vec<usize> = (0..volumes.len()).collect();
-    order.sort_by_key(|&i| rank(volumes[i].kind));
-    let mut place = vec![0u32; volumes.len()];
-    for (at, &i) in order.iter().enumerate() {
-        place[i] = at as u32;
-    }
-    place
-}
-
-/// The grid over `volumes` ([`REGION_CELL`] cells): its corner, its size in cells, and per cell
-/// the first of its volumes' indices and their count, then the indices.
-fn region_grid(volumes: &[GpuRegionVolume]) -> ([f32; 2], [u32; 2], Vec<[u32; 2]>, Vec<u32>) {
-    let (mut lo, mut hi) = (glam::Vec2::splat(f32::MAX), glam::Vec2::splat(f32::MIN));
-    for v in volumes {
-        for c in v.corners {
-            lo = lo.min(glam::Vec2::from(c));
-            hi = hi.max(glam::Vec2::from(c));
-        }
-    }
-    let origin = lo - glam::Vec2::splat(REGION_CELL);
-    let dims = ((hi - origin) / REGION_CELL).ceil().as_uvec2() + glam::UVec2::ONE;
-    let mut lists: Vec<Vec<u32>> = vec![Vec::new(); (dims.x * dims.y) as usize];
-    for (i, v) in volumes.iter().enumerate() {
-        let (mut a, mut b) = (glam::Vec2::splat(f32::MAX), glam::Vec2::splat(f32::MIN));
-        for c in v.corners {
-            a = a.min(glam::Vec2::from(c));
-            b = b.max(glam::Vec2::from(c));
-        }
-        let (c0, c1) = (
-            ((a - origin) / REGION_CELL).floor().as_uvec2(),
-            ((b - origin) / REGION_CELL)
-                .floor()
-                .as_uvec2()
-                .min(dims - 1),
-        );
-        for z in c0.y..=c1.y {
-            for x in c0.x..=c1.x {
-                lists[(z * dims.x + x) as usize].push(i as u32);
-            }
-        }
-    }
-    let mut cells = Vec::with_capacity(lists.len());
-    let mut indices = Vec::new();
-    for list in lists {
-        cells.push([indices.len() as u32, list.len() as u32]);
-        indices.extend(list);
-    }
-    (origin.to_array(), dims.to_array(), cells, indices)
-}
-
 /// The probes: their maps, their rays and state, and the passes that update them.
 pub struct Probes {
     params: ProbeParams,
@@ -529,14 +412,21 @@ pub struct Probes {
     blend: Pipeline,
     /// The settled probes woken where the movers pass (#79, #69).
     wake: Pipeline,
+    /// The settled probes woken about a region set added or removed (#338), and per frame slot
+    /// the boxes they stand in.
+    wake_regions: Pipeline,
+    wake_boxes: Vec<Buffer>,
     irradiance: GraphImage,
     distance: GraphImage,
     rays: GraphBuffer,
     data: GraphBuffer,
     /// Each probe's region (D-068), `REGION_NONE` until its first update with regions.
     region: GraphBuffer,
-    /// The scene's region volumes and the grid that finds them, when it knows its rooms.
-    regions: Option<Regions>,
+    /// The scene's region volumes in sets and the grids that find them, when it knows its rooms
+    /// (D-068; added and removed as it runs, #338).
+    regions: Option<RegionStore>,
+    /// The set [`Self::set_regions`] made, which [`Self::set_doorway`] edits.
+    whole: Option<RegionSetId>,
     /// Zeros, what the field's region pointers name in a scene without regions: one empty cell, a
     /// volume and an index, so the region lookup's reads stay in a buffer where the GPU reads
     /// ahead of its early return (`region_at` in `probes.slang`).
@@ -634,6 +524,17 @@ impl Probes {
             name: "no probe regions",
         })?;
         device.write_buffer_staged(&no_regions, 0, &[0_u8; 256])?;
+        let wake_boxes = (0..FRAMES_IN_FLIGHT)
+            .map(|i| {
+                device.create_buffer(BufferDesc {
+                    size: (MAX_WAKE_BOXES * 32) as u64,
+                    usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+                    location: MemoryLocation::CpuToGpu,
+                    category: MemoryCategory::Frame,
+                    name: &format!("probe wake boxes {i}"),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
         let fields = (0..FRAMES_IN_FLIGHT)
             .map(|i| {
                 device.create_buffer(BufferDesc {
@@ -671,6 +572,13 @@ impl Probes {
                 std::mem::size_of::<WakePush>(),
                 "probe wake",
             )?,
+            wake_regions: compute(
+                "probe_update.slang",
+                "probe_wake_regions_main",
+                std::mem::size_of::<WakeRegionsPush>(),
+                "probe wake regions",
+            )?,
+            wake_boxes,
             irradiance: atlas(
                 IRRADIANCE_TILE,
                 vk::Format::R16G16B16A16_SFLOAT,
@@ -681,6 +589,7 @@ impl Probes {
             data: GraphBuffer::new(data),
             region: GraphBuffer::new(region),
             regions: None,
+            whole: None,
             no_regions,
             fields,
             origins: [IVec3::ZERO; MAX_CASCADES],
@@ -694,38 +603,14 @@ impl Probes {
     /// probe starts over at the next update.
     pub fn set_regions(&mut self, device: &Arc<Device>, volumes: &[RegionVolume]) -> Result<()> {
         self.reset = true;
+        self.whole = None;
         if volumes.is_empty() {
             self.regions = None;
             return Ok(());
         }
-        let ordered = ordered(volumes);
-        let (origin, dims, cells, indices) = region_grid(&ordered);
-        let buffer = |bytes: &[u8], name: &str| -> Result<Buffer> {
-            let buffer = device.create_buffer(BufferDesc {
-                size: bytes.len().max(4) as u64,
-                usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
-                location: MemoryLocation::GpuOnly,
-                category: MemoryCategory::Work,
-                name,
-            })?;
-            if !bytes.is_empty() {
-                device.write_buffer_staged(&buffer, 0, bytes)?;
-            }
-            Ok(buffer)
-        };
-        self.regions = Some(Regions {
-            volumes: buffer(bytemuck::cast_slice(&ordered), "probe region volumes")?,
-            cells: buffer(bytemuck::cast_slice(&cells), "probe region cells")?,
-            indices: buffer(bytemuck::cast_slice(&indices), "probe region indices")?,
-            origin,
-            dims,
-            count: ordered.len() as u32,
-            place: places(volumes),
-            table: ordered,
-            slots: Vec::new(),
-            edits: 0,
-            written: vec![0; FRAMES_IN_FLIGHT],
-        });
+        let mut store = RegionStore::new(device, RegionStore::fitting(volumes))?;
+        self.whole = Some(store.add(device, volumes, false)?);
+        self.regions = Some(store);
         Ok(())
     }
 
@@ -736,37 +621,62 @@ impl Probes {
     /// settle as their light changes. Any other volume is left as it is.
     pub fn set_doorway(
         &mut self,
-        device: &Arc<Device>,
+        _device: &Arc<Device>,
         volume: usize,
         shut: Option<f32>,
     ) -> Result<()> {
-        let Some(regions) = self.regions.as_mut() else {
-            return Ok(());
-        };
-        let Some(&at) = regions.place.get(volume) else {
-            return Ok(());
-        };
-        let record = &mut regions.table[at as usize];
-        if record.kind != 2 {
-            return Ok(());
+        if let Some(id) = self.whole {
+            self.set_doorway_of(id, volume, shut);
         }
-        record.split = shut.map_or(0.0, |s| s.clamp(1e-3, 1.0));
-        if regions.slots.is_empty() {
-            let bytes = std::mem::size_of_val(regions.table.as_slice()) as u64;
-            regions.slots = (0..FRAMES_IN_FLIGHT)
-                .map(|i| {
-                    device.create_buffer(BufferDesc {
-                        size: bytes.max(4),
-                        usage: vk::BufferUsageFlags::STORAGE_BUFFER,
-                        location: MemoryLocation::CpuToGpu,
-                        category: MemoryCategory::Frame,
-                        name: &format!("probe region volumes {i}"),
-                    })
-                })
-                .collect::<Result<_>>()?;
-        }
-        regions.edits += 1;
         Ok(())
+    }
+
+    /// Makes room for region sets a scene adds and removes as it runs (#338: a streamed cell's
+    /// rooms, [`Self::add_regions`]): the regions so far are dropped, and every probe starts over
+    /// at the next update.
+    pub fn reserve_regions(
+        &mut self,
+        device: &Arc<Device>,
+        capacity: RegionCapacity,
+    ) -> Result<()> {
+        self.reset = true;
+        self.whole = None;
+        self.regions = Some(RegionStore::new(device, capacity)?);
+        Ok(())
+    }
+
+    /// Adds `volumes` as a set (#338: a cell's rooms, its regions' ids its own, global to the
+    /// scene, and its volumes not overlapping another set's), from the next frame: the probes
+    /// about it are woken and take their region anew, the others keep theirs. Fails without room
+    /// ([`Self::reserve_regions`]).
+    pub fn add_regions(
+        &mut self,
+        device: &Arc<Device>,
+        volumes: &[RegionVolume],
+    ) -> Result<RegionSetId> {
+        let store = self.regions.as_mut().ok_or_else(|| {
+            forge_gpu::GpuError::Unsupported(
+                "region sets need room first (`Probes::reserve_regions`)".into(),
+            )
+        })?;
+        store.add(device, volumes, true)
+    }
+
+    /// Removes set `id` (#338) from the next frame: the probes about it are woken. Nothing for a
+    /// set not in.
+    pub fn remove_regions(&mut self, id: RegionSetId) -> Result<()> {
+        match self.regions.as_mut() {
+            Some(store) => store.remove(id),
+            None => Ok(()),
+        }
+    }
+
+    /// Shuts or opens doorway `volume` of set `id` (its place in what [`Self::add_regions`] was
+    /// given), as [`Self::set_doorway`] does.
+    pub fn set_doorway_of(&mut self, id: RegionSetId, volume: usize, shut: Option<f32>) {
+        if let Some(store) = self.regions.as_mut() {
+            store.set_doorway(id, volume, shut.map_or(0.0, |s| s.clamp(1e-3, 1.0)));
+        }
     }
 
     /// The layout and update this was made with.
@@ -796,10 +706,8 @@ impl Probes {
             + self.data.size()
             + self.region.size()
             + self.no_regions.size()
-            + self
-                .regions
-                .as_ref()
-                .map_or(0, |r| r.volumes.size() + r.cells.size() + r.indices.size())
+            + self.regions.as_ref().map_or(0, RegionStore::bytes)
+            + self.wake_boxes.iter().map(Buffer::size).sum::<u64>()
     }
 
     /// Every probe's offset from its cell's centre (xyz, metres) and state and age (w: the
@@ -877,19 +785,14 @@ impl Probes {
             [1.0 / w as f32, 1.0 / h as f32]
         };
         let empty = self.no_regions.address();
-        // The volumes this frame reads: the table as built, or once a doorway was set (#327)
-        // this slot's copy, rewritten when it lags the edits.
-        let region_volumes = match self.regions.as_mut() {
-            Some(r) if !r.slots.is_empty() => {
-                if r.written[slot.index] != r.edits {
-                    r.slots[slot.index].write(0, &r.table);
-                    r.written[slot.index] = r.edits;
-                }
-                r.slots[slot.index].address()
-            }
-            Some(r) => r.volumes.address(),
-            None => empty,
-        };
+        // The regions this frame reads (#338): this slot's copies of the sets' table, the coarse
+        // grid and the doorways' splits brought up to the edits; zeros without regions.
+        let regions = self.regions.as_mut().map(|r| r.frame(slot.index));
+        let wake_boxes = self
+            .regions
+            .as_mut()
+            .map(RegionStore::take_wake)
+            .unwrap_or_default();
         let field = GpuProbeField {
             rotation: [row(0), row(1), row(2)],
             cascades,
@@ -910,15 +813,19 @@ impl Probes {
             cadence: p.cadence,
             phase: (noise_frame % u64::from(p.cadence)) as u32,
             probe_region: self.region.address(),
-            region_volumes,
-            region_cells: self.regions.as_ref().map_or(empty, |r| r.cells.address()),
-            region_indices: self.regions.as_ref().map_or(empty, |r| r.indices.address()),
-            region_origin: self.regions.as_ref().map_or([0.0; 2], |r| r.origin),
+            region_volumes: regions.as_ref().map_or(empty, |r| r.volumes),
+            region_cells: regions.as_ref().map_or(empty, |r| r.cells),
+            region_indices: regions.as_ref().map_or(empty, |r| r.indices),
+            region_sets: regions.as_ref().map_or(empty, |r| r.sets),
+            region_top: regions.as_ref().map_or(empty, |r| r.top),
+            region_top_list: regions.as_ref().map_or(empty, |r| r.top_list),
+            region_splits: regions.as_ref().map_or(empty, |r| r.splits),
             region_cell: REGION_CELL,
-            region_count: self.regions.as_ref().map_or(0, |r| r.count),
-            region_dims: self.regions.as_ref().map_or([1; 2], |r| r.dims),
+            region_top_cell: TOP_CELL,
+            region_top_mask: regions.as_ref().map_or(0, |r| r.top_mask),
+            region_count: regions.as_ref().map_or(0, |r| r.count),
             far_room_sky: p.far_room_sky,
-            region_pad: 0,
+            region_pad: [0; 3],
         };
         self.fields[slot.index].write(0, &[field]);
 
@@ -955,6 +862,44 @@ impl Probes {
                     commands.bind_pipeline(wake);
                     commands.push_constants(wake, &push);
                     commands.dispatch((m.count * p.cascades).div_ceil(64), 1, 1);
+                    Ok(())
+                });
+        }
+        // The settled probes about the region sets added or removed since the last frame (#338),
+        // young again before this frame's rays: they take their region anew. Past
+        // MAX_WAKE_BOXES, the rest as one box round them.
+        if !wake_boxes.is_empty() && !first_update {
+            let mut boxes: Vec<[f32; 4]> = Vec::with_capacity(2 * MAX_WAKE_BOXES);
+            let (head, tail) = wake_boxes.split_at(wake_boxes.len().min(MAX_WAKE_BOXES - 1));
+            let mut push_box = |lo: Vec3, hi: Vec3| {
+                boxes.push(lo.extend(0.0).to_array());
+                boxes.push(hi.extend(0.0).to_array());
+            };
+            for &(lo, hi) in head {
+                push_box(lo, hi);
+            }
+            if !tail.is_empty() {
+                let lo = tail.iter().fold(Vec3::splat(f32::MAX), |a, b| a.min(b.0));
+                let hi = tail.iter().fold(Vec3::splat(f32::MIN), |a, b| a.max(b.1));
+                push_box(lo, hi);
+            }
+            let buffer = &this.wake_boxes[slot.index];
+            buffer.write(0, &boxes);
+            let wake = &this.wake_regions;
+            let push = WakeRegionsPush {
+                field: address,
+                boxes: buffer.address(),
+                count: (boxes.len() / 2) as u32,
+                probes: count,
+            };
+            graph
+                .pass("gi/probe wake regions")
+                .queue(QueueKind::Compute)
+                .buffer(data, BufferAccess::ShaderReadWrite(compute))
+                .run(move |_, commands| {
+                    commands.bind_pipeline(wake);
+                    commands.push_constants(wake, &push);
+                    commands.dispatch(count.div_ceil(64), 1, 1);
                     Ok(())
                 });
         }
@@ -1040,6 +985,7 @@ impl Probes {
 
 #[cfg(test)]
 mod tests {
+    use super::regions::{places, region_grid};
     use super::*;
     use glam::Vec2;
 

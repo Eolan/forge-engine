@@ -357,3 +357,44 @@ void probe_wake_main(uint3 id : SV_DispatchThreadID)
                     field[0].probe_data[probe].w = probe_state(w);
             }
 }
+
+// ----------------------------------------------------------- regions' wake (#338) ---
+
+// The probes about a set of region volumes added or removed (a streamed cell's, regions.rs):
+// settled ones in its box, padded by their spacing, made young again, so that they take their
+// region anew (`probe_state_main`) rather than every probe starting over.
+struct WakeRegionsPush
+{
+    ProbeField* field;
+    float4* boxes; // per box: its lowest corner (xyz), then its highest, scene frame
+    uint count;    // boxes
+    uint probes;   // probes of every cascade
+};
+
+[[vk::push_constant]]
+WakeRegionsPush wake_regions_push;
+
+// A thread per probe.
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void probe_wake_regions_main(uint3 id : SV_DispatchThreadID)
+{
+    WakeRegionsPush p = wake_regions_push;
+    if (id.x >= p.probes)
+        return;
+    ProbeField* field = p.field;
+    ProbeSlot slot = probe_slot(field, id.x);
+    if (slot.fresh)
+        return;
+    for (uint b = 0u; b < p.count; b++)
+    {
+        float3 lo = p.boxes[2u * b].xyz - slot.spacing;
+        float3 hi = p.boxes[2u * b + 1u].xyz + slot.spacing;
+        if (any(slot.position < lo) || any(slot.position > hi))
+            continue;
+        float w = field[0].probe_data[id.x].w;
+        if (probe_age(w) > PROBE_SETTLE_UPDATES)
+            field[0].probe_data[id.x].w = probe_state(w);
+        return;
+    }
+}

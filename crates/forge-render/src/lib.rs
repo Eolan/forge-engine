@@ -83,7 +83,10 @@ pub use meshlet::{
     SceneEditor, SunShadowRays, SwRaster, Visibility,
 };
 pub use particles::{Burst, DrawKind, Effect, Emitter, ParticleParams, ParticleStats, Particles};
-pub use probes::{ProbeLight, ProbeParams, Probes, RegionHit, RegionKind, RegionVolume, region_at};
+pub use probes::{
+    ProbeLight, ProbeParams, Probes, RegionCapacity, RegionHit, RegionKind, RegionSetId,
+    RegionVolume, region_at,
+};
 pub use reflection_history::{ReflectionHistory, ReflectionHistoryFrame};
 pub use restir::{LampRestir, RestirParams, RestirSettings};
 pub use shallow::{

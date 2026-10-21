@@ -763,6 +763,9 @@ struct Gallery {
     /// Diffuse light from probes (issue #53), on while `probes_on`; `probes_live` while they
     /// were updated every frame (else they start over).
     probes: Option<Probes>,
+    /// `FORGE_REGION_SETS=toggle` (#338's check): the first region set and its volumes, removed
+    /// at frame 100 and added again at 150.
+    region_check: Option<(forge_render::RegionSetId, Vec<forge_render::RegionVolume>)>,
     probes_on: bool,
     probes_live: bool,
     /// The island's sea (issue #105): the GPU's cascades and the CPU's spectra they came
@@ -1243,6 +1246,7 @@ impl Gallery {
             (1..=8).contains(&args.probe_cadence),
             "--probe-cadence takes 1 to 8"
         );
+        let mut region_check = None;
         let probes = if ctx.device.features().ray_query && scene.rays().is_some() {
             let params = ProbeParams {
                 rays: probe_rays,
@@ -1286,7 +1290,31 @@ impl Gallery {
                 if !volumes.is_empty() {
                     tracing::info!(volumes = volumes.len(), "probe regions");
                 }
-                probes.set_regions(&ctx.device, &volumes)?;
+                // A check of #338's region sets: `FORGE_REGION_SETS` gives the probes the rooms
+                // as sets, the volumes whose footprints touch together (a house, a row), and
+                // `=toggle` removes the first set at frame 100 and adds it again at frame 150.
+                match std::env::var("FORGE_REGION_SETS").ok() {
+                    Some(mode) if !volumes.is_empty() => {
+                        let groups = touching_groups(&volumes);
+                        probes.reserve_regions(
+                            &ctx.device,
+                            forge_render::RegionCapacity::new(
+                                2 * volumes.len() as u32,
+                                groups.len() as u32 + 8,
+                            ),
+                        )?;
+                        let mut first = None;
+                        for group in &groups {
+                            let id = probes.add_regions(&ctx.device, group)?;
+                            first.get_or_insert(id);
+                        }
+                        tracing::info!(sets = groups.len(), "probe region sets (#338's check)");
+                        region_check = (mode == "toggle")
+                            .then(|| first.map(|id| (id, groups[0].clone())))
+                            .flatten();
+                    }
+                    _ => probes.set_regions(&ctx.device, &volumes)?,
+                }
             }
             let p = probes.params();
             tracing::info!(
@@ -1619,6 +1647,7 @@ impl Gallery {
             ao_on,
             ao_ignore_nearer: 0.0,
             probes,
+            region_check,
             probes_on,
             probes_live: false,
             water,
@@ -2263,6 +2292,27 @@ impl Demo for Gallery {
                 if let Err(e) = probes.set_doorway(&ctx.device, volume, shut) {
                     tracing::warn!("a doorway's split: {e}");
                 }
+            }
+        }
+        // #338's check (`FORGE_REGION_SETS=toggle`): the first region set out, then in again.
+        if let (Some(probes), Some((id, volumes))) =
+            (self.probes.as_mut(), self.region_check.as_mut())
+        {
+            let edited = match ctx.frames_rendered {
+                100 => probes.remove_regions(*id).map(|()| true),
+                150 => probes.add_regions(&ctx.device, volumes).map(|new| {
+                    *id = new;
+                    true
+                }),
+                _ => Ok(false),
+            };
+            match edited {
+                Ok(true) => tracing::info!(
+                    frame = ctx.frames_rendered,
+                    "a region set removed or added (#338's check)"
+                ),
+                Ok(false) => {}
+                Err(e) => tracing::warn!("#338's check: {e}"),
             }
         }
         // The clear glass's rooms glow with what the frame leaves unlit of their lamps (#284).
@@ -3382,6 +3432,49 @@ pub fn percentile(values: &mut [f64], q: f64) -> f64 {
 
 /// Cooks (or loads) `props` in parallel on the job system, logging each prop's DAG; returns
 /// the meshes in order and the milliseconds they took together.
+/// `volumes` in groups whose footprints touch, each group in their order (#338's check of the
+/// probes' region sets): a house's rooms, doorways, reveals and body together, a row of houses
+/// sharing walls one group.
+fn touching_groups(volumes: &[forge_render::RegionVolume]) -> Vec<Vec<forge_render::RegionVolume>> {
+    let boxes: Vec<(glam::Vec2, glam::Vec2)> = volumes
+        .iter()
+        .map(|v| {
+            let lo = v
+                .corners
+                .iter()
+                .fold(glam::Vec2::splat(f32::MAX), |a, &c| a.min(c));
+            let hi = v
+                .corners
+                .iter()
+                .fold(glam::Vec2::splat(f32::MIN), |a, &c| a.max(c));
+            (lo - 0.05, hi + 0.05)
+        })
+        .collect();
+    let mut parent: Vec<usize> = (0..volumes.len()).collect();
+    fn root(parent: &mut [usize], mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    for i in 0..volumes.len() {
+        for j in i + 1..volumes.len() {
+            let (a, b) = (boxes[i], boxes[j]);
+            if a.0.x <= b.1.x && b.0.x <= a.1.x && a.0.y <= b.1.y && b.0.y <= a.1.y {
+                let (ri, rj) = (root(&mut parent, i), root(&mut parent, j));
+                parent[ri.max(rj)] = ri.min(rj);
+            }
+        }
+    }
+    let mut groups: std::collections::BTreeMap<usize, Vec<forge_render::RegionVolume>> =
+        Default::default();
+    for (i, v) in volumes.iter().enumerate() {
+        groups.entry(root(&mut parent, i)).or_default().push(*v);
+    }
+    groups.into_values().collect()
+}
+
 fn cook_props(props: &[PropSpec], recook: bool, pages_in_memory: bool) -> (Vec<MeshletMesh>, f64) {
     let cache = forge_core::derived::cache_dir(forge_core::derived::CacheKind::Meshes);
     if recook {

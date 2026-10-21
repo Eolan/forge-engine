@@ -53,7 +53,7 @@ pub struct DynamicCapacity {
 
 /// A table's free ranges, first fit.
 #[derive(Debug)]
-struct Ranges {
+pub(crate) struct Ranges {
     /// (start, length), by start, none touching another.
     free: Vec<(u32, u32)>,
     /// One past the highest entry ever handed out.
@@ -62,7 +62,7 @@ struct Ranges {
 
 impl Ranges {
     /// A table of `capacity` entries whose first `used` are taken.
-    fn new(capacity: u32, used: u32) -> Self {
+    pub(crate) fn new(capacity: u32, used: u32) -> Self {
         Self {
             free: if used < capacity {
                 vec![(used, capacity - used)]
@@ -74,7 +74,7 @@ impl Ranges {
     }
 
     /// The first free range of `len` entries; `None` when none is that long.
-    fn take(&mut self, len: u32) -> Option<u32> {
+    pub(crate) fn take(&mut self, len: u32) -> Option<u32> {
         if len == 0 {
             return Some(0);
         }
@@ -90,7 +90,7 @@ impl Ranges {
     }
 
     /// Gives back `len` entries from `start`.
-    fn give(&mut self, start: u32, len: u32) {
+    pub(crate) fn give(&mut self, start: u32, len: u32) {
         if len == 0 {
             return;
         }

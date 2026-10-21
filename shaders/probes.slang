@@ -92,7 +92,7 @@ public struct ProbeCascade
 // neither is a failure of the test, so a second test decides. Every surface outside every
 // volume is outside (REGION_OUTSIDE), as are the probes there.
 
-// Mirrors `GpuRegionVolume` in crates/forge-render/src/probes.rs.
+// Mirrors `GpuRegionVolume` in crates/forge-render/src/probes/regions.rs.
 public struct RegionVolume
 {
     public float2 corners[4]; // its outline on the ground, x and z in the scene frame, anticlockwise from above (x right, z down)
@@ -101,7 +101,26 @@ public struct RegionVolume
     public uint region;       // the room it belongs to: on a doorway, the side of corners 0–1
     public uint other;        // a doorway's other side, at corners 3–2; else `region`
     public uint kind;         // REGION_ROOM, REGION_RECESS (a window's inner reveal: its room's), REGION_DOORWAY or REGION_SOLID
-    public float split;       // a doorway shut by its door (#327): its leaf this share of the way across from `region`; 0 open
+    public uint pad;          // (a doorway's split is the frame's: `ProbeField::region_splits`)
+};
+
+// Mirrors `GpuRegionSet` in regions.rs (#338): a set of volumes (a streamed cell's) and the grid
+// over its box listing them.
+public struct RegionSet
+{
+    public float3 origin; // its grid's corner at its lowest floor, scene frame: its volumes are relative to it
+    public uint cells;    // its first cell in `region_cells`
+    public uint2 dims;    // its cells along x and z
+    public uint2 pad;
+};
+
+// Mirrors `GpuTopEntry` in regions.rs: a coarse cell of `region_top_cell` metres, the first of
+// the sets reaching it in `region_top_list` and their count (0: an empty entry).
+public struct RegionTop
+{
+    public int2 key;
+    public uint first;
+    public uint count;
 };
 
 public static const uint REGION_OUTSIDE = 0u;
@@ -143,16 +162,46 @@ public struct ProbeField
     public uint cadence;          // a settled probe updates every `cadence` frames (issue #103)
     public uint phase;            // this frame's turn, 0..cadence-1
     public uint* probe_region;    // per probe: the region of where it stands (D-068), REGION_NONE in a recess or a doorway
-    public RegionVolume* region_volumes; // the rooms, recesses and doorways, recesses and doorways first
-    public uint2* region_cells;   // per cell of a grid over them: the first of its volumes' indices and their count
+    public RegionVolume* region_volumes; // the rooms, recesses and doorways, each set's recesses and doorways first
+    public uint2* region_cells;   // per cell of a set's grid: the first of its volumes' indices and their count
     public uint* region_indices;  // the volumes' indices, cell after cell
-    public float2 region_origin;  // the grid's corner, x and z in the scene frame
-    public float region_cell;     // its cells' side, metres
+    public RegionSet* region_sets; // the sets (#338): a streamed cell's each
+    public RegionTop* region_top; // the coarse grid over the sets, hashed (`top_hash`)
+    public uint* region_top_list; // the sets each coarse cell lists
+    public float* region_splits;  // per volume: a doorway shut by its door (#327), its leaf this share of the way across from `region`; 0 open
+    public float region_cell;     // a set's cells' side, metres
+    public float region_top_cell; // the coarse cells' side, metres
+    public uint region_top_mask;  // the coarse table's entries less one
     public uint region_count;     // volumes: 0, no regions (every probe lights every surface)
-    public uint2 region_dims;     // cells along x and z
     public float far_room_sky;    // the open sky's share a far room without its probes takes (#321, ProbeParams)
-    public uint region_pad;
+    public uint3 region_pad;
 };
+
+// The coarse cell `key`'s first entry in a table of `mask + 1` (`top_hash` in regions.rs).
+uint top_hash(int2 key, uint mask)
+{
+    uint h = uint(key.x) * 0x8DA6B343u ^ uint(key.y) * 0xD8163841u;
+    return (h ^ (h >> 15)) & mask;
+}
+
+// The sets the coarse cell holding `p` lists: the first in `region_top_list` and their count.
+uint2 region_top_run(ProbeField* field, float2 p)
+{
+    int2 key = int2(floor(p / field[0].region_top_cell));
+    uint mask = field[0].region_top_mask;
+    uint at = top_hash(key, mask);
+    // Linear probing in a table at most half full: an empty entry ends the run.
+    for (uint k = 0u; k <= mask; k++)
+    {
+        RegionTop e = field[0].region_top[at];
+        if (e.count == 0u)
+            break;
+        if (all(e.key == key))
+            return uint2(e.first, e.count);
+        at = (at + 1u) & mask;
+    }
+    return uint2(0u, 0u);
+}
 
 // The region at `p` (scene frame): the first volume holding it, in their order; outside them all,
 // REGION_OUTSIDE.
@@ -163,46 +212,59 @@ public RegionHit region_at(ProbeField* field, float3 p)
     hit.other = REGION_OUTSIDE;
     hit.ramp = 0.0;
     hit.kind = REGION_ROOM;
-    int2 c = int2(floor((p.xz - field[0].region_origin) / field[0].region_cell));
-    int2 dims = int2(field[0].region_dims);
-    if (field[0].region_count == 0u || any(c < 0) || any(c >= dims))
+    if (field[0].region_count == 0u)
         return hit;
-    // The cell clamped into the grid before the read. Unclamped, the lookup made the physics
-    // lab's frames differ from run to run (scattered pixels a few levels off), though with no
-    // regions it returns above: the GPU read ahead of the return, far outside the grid. A scene
-    // without regions names a buffer of zeros, one empty cell (`Probes::no_regions`), not null.
-    c = clamp(c, int2(0), max(dims - 1, int2(0)));
-    uint2 range = field[0].region_cells[c.y * dims.x + c.x];
-    for (uint i = 0u; i < range.y; i++)
+    // The sets the coarse cell lists, in the order they were added (#338), then each set's grid.
+    uint2 run = region_top_run(field, p.xz);
+    for (uint s = 0u; s < run.y; s++)
     {
-        RegionVolume v = field[0].region_volumes[field[0].region_indices[range.x + i]];
-        if (p.y < v.floor || p.y > v.ceiling)
+        RegionSet rs = field[0].region_sets[field[0].region_top_list[run.x + s]];
+        // The point relative to the set (its volumes are): a shift of the scene's origin moves
+        // the set's alone.
+        float3 q = p - rs.origin;
+        int2 c = int2(floor(q.xz / field[0].region_cell));
+        int2 dims = int2(rs.dims);
+        if (any(c < 0) || any(c >= dims))
             continue;
-        bool inside = true;
-        for (uint k = 0u; k < 4u; k++)
+        // The cell clamped into the grid before the read. Unclamped, the lookup made the physics
+        // lab's frames differ from run to run (scattered pixels a few levels off), though with no
+        // regions it returns above: the GPU read ahead of the return, far outside the grid. A
+        // scene without regions names a buffer of zeros (`Probes::no_regions`), not null.
+        c = clamp(c, int2(0), max(dims - 1, int2(0)));
+        uint2 range = field[0].region_cells[rs.cells + uint(c.y * dims.x + c.x)];
+        for (uint i = 0u; i < range.y; i++)
         {
-            float2 a = v.corners[k];
-            float2 e = v.corners[(k + 1u) & 3u] - a;
-            float2 d = p.xz - a;
-            inside = inside && e.x * d.y - e.y * d.x >= 0.0;
+            uint index = field[0].region_indices[range.x + i];
+            RegionVolume v = field[0].region_volumes[index];
+            if (q.y < v.floor || q.y > v.ceiling)
+                continue;
+            bool inside = true;
+            for (uint k = 0u; k < 4u; k++)
+            {
+                float2 a = v.corners[k];
+                float2 e = v.corners[(k + 1u) & 3u] - a;
+                float2 d = q.xz - a;
+                inside = inside && e.x * d.y - e.y * d.x >= 0.0;
+            }
+            if (!inside)
+                continue;
+            hit.region = v.region;
+            hit.other = v.other;
+            hit.kind = v.kind;
+            if (v.kind == REGION_DOORWAY)
+            {
+                // Across the doorway from corners 0–1 to corners 3–2.
+                float2 e = v.corners[1] - v.corners[0];
+                float2 across = normalize(float2(-e.y, e.x));
+                float depth = dot(v.corners[3] - v.corners[0], across);
+                hit.ramp = saturate(dot(q.xz - v.corners[0], across) / max(depth, 1e-4));
+                // Shut by its door (#327): each side of the leaf takes its own side's probes alone.
+                float split = field[0].region_splits[index];
+                if (split > 0.0)
+                    hit.ramp = hit.ramp < split ? 0.0 : 1.0;
+            }
+            return hit;
         }
-        if (!inside)
-            continue;
-        hit.region = v.region;
-        hit.other = v.other;
-        hit.kind = v.kind;
-        if (v.kind == REGION_DOORWAY)
-        {
-            // Across the doorway from corners 0–1 to corners 3–2.
-            float2 e = v.corners[1] - v.corners[0];
-            float2 across = normalize(float2(-e.y, e.x));
-            float depth = dot(v.corners[3] - v.corners[0], across);
-            hit.ramp = saturate(dot(p.xz - v.corners[0], across) / max(depth, 1e-4));
-            // Shut by its door (#327): each side of the leaf takes its own side's probes alone.
-            if (v.split > 0.0)
-                hit.ramp = hit.ramp < v.split ? 0.0 : 1.0;
-        }
-        return hit;
     }
     return hit;
 }
