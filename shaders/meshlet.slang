@@ -3431,6 +3431,9 @@ float3 triplanar_normal(uint image, float strength, float3 n, float3 w, float3 p
 
 // How much more a metal's highlight weighs (forge_core::material::METAL_SPECULAR).
 static const float METAL_SPECULAR = 0.35;
+// How far a unit normal stored in bytes may come out shorter than 1 (each channel rounded to
+// 1/255 of its range): no variance below it (#331).
+static const float NORMAL_LENGTH_ROUNDING = 0.01;
 
 // Size of the hex tiles, in the paper's (about a third of a repeat across). Three times that,
 // about a repeat across, crosses fewer seams, where the blend softens the texture: on the
@@ -3794,6 +3797,8 @@ float3 shade_uv_mapped(Frame* f, Material mat, Surface s)
     if (mat.emissive_texture != TEXTURE_NONE)
         emissive *= sample_image_grad(mat.emissive_texture, mat.sampler, uv, gx, gy).rgb;
     float3 n = s.n;
+    // The normals' variance under the pixel, from the normal map's filtered length (Toksvig).
+    float variance = 0.0;
     if (mat.normal_texture != TEXTURE_NONE)
     {
         // The tangent frame from the derivatives of the position and of the transformed UVs
@@ -3806,6 +3811,10 @@ float3 shade_uv_mapped(Frame* f, Material mat, Surface s)
         float3 B = dp2perp * gx.y + dp1perp * gy.y;
         float scale = rsqrt(max(max(dot(T, T), dot(B, B)), 1e-30));
         float3 t = sample_image_grad(mat.normal_texture, mat.sampler, uv, gx, gy).xyz * 2.0 - 1.0;
+        // The mips keep the mean normal's length (#331): shorter where the normals under the
+        // pixel part (a tile's grout bevels seen from a few metres), past the bytes' rounding.
+        float len = length(t);
+        variance = max(1.0 - len - NORMAL_LENGTH_ROUNDING, 0.0) / max(len, 0.05) * mat.normal_strength;
         t.xy *= mat.normal_strength;
         float3 bent = (t.x * T - t.y * B) * scale + t.z * N;
         n = normalize(mul(s.frame, bent));
@@ -3815,6 +3824,9 @@ float3 shade_uv_mapped(Frame* f, Material mat, Surface s)
     // RenderLayer::specular_power, kept over 0: at roughness 1 the exponent is 0, and pow(0, 0) is NaN
     // where the surface turns from the light.
     float power = max(2.0 / (alpha * alpha) - 2.0, 0.001);
+    // Toksvig's factor (#331): the lobe widened by the normals' variance under the pixel, so a
+    // bevel too fine for it gives a broad, steady highlight instead of a flickering line.
+    power /= 1.0 + power * variance;
     float3 diffuse = base * (1.0 - metal);
     float reflectance = lerp(mat.reflectance, max(base.r, max(base.g, base.b)), metal);
     float specular = mat.specular + METAL_SPECULAR * metal;

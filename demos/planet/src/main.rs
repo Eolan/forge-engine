@@ -1675,6 +1675,7 @@ impl Demo for PlanetDemo {
                     projection: taa_frame.jittered_projection,
                     frame: self.taa.frame_index() % u64::from(self.taa.jitter_phases),
                     radius: 2.0,
+                    ignore_nearer: 0.0,
                 },
             )
         });

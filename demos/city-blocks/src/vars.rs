@@ -22,6 +22,9 @@ pub(crate) struct RenderVars {
     local: Var<usize>,
     ao: Var<bool>,
     ao_radius: Var<f64>,
+    ao_ignore_nearer: Var<f64>,
+    exposure_brighten: Var<f64>,
+    exposure_darken: Var<f64>,
     probes: Var<bool>,
     sky_light: Var<bool>,
     sun_disc: Var<bool>,
@@ -185,6 +188,17 @@ impl Gallery {
             local: s.add_from(rs::local_exposure(0), 0, local_now),
             ao: s.add_from(rs::ao(true), true, self.ao_on),
             ao_radius: s.add_from_f32(rs::ao_radius(1.5), 1.5, self.args.ao_radius),
+            ao_ignore_nearer: s.add(rs::ao_ignore_nearer(0.0)),
+            exposure_brighten: s.add_from_f32(
+                rs::exposure_speed_brighten(0.8),
+                0.8,
+                self.auto_exposure.speed_brighten,
+            ),
+            exposure_darken: s.add_from_f32(
+                rs::exposure_speed_darken(1.5),
+                1.5,
+                self.auto_exposure.speed_darken,
+            ),
             probes: s.add_from(rs::probes(true), true, self.probes_on),
             sky_light: s.add_from(rs::sky_light(true), true, self.sky_light),
             sun_disc: s.add_from(
@@ -291,6 +305,15 @@ impl Gallery {
         }
         if s.changed_since(v.ao_radius, seen) {
             self.args.ao_radius = s.get(v.ao_radius) as f32;
+        }
+        if s.changed_since(v.ao_ignore_nearer, seen) {
+            self.ao_ignore_nearer = s.get(v.ao_ignore_nearer) as f32;
+        }
+        if s.changed_since(v.exposure_brighten, seen) {
+            self.auto_exposure.speed_brighten = s.get(v.exposure_brighten) as f32;
+        }
+        if s.changed_since(v.exposure_darken, seen) {
+            self.auto_exposure.speed_darken = s.get(v.exposure_darken) as f32;
         }
         if changed(v.probes) {
             self.probes_on = s.get(v.probes);

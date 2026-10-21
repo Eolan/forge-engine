@@ -128,11 +128,22 @@ static const float DISTANCE_SHARPNESS_ROOM = 10.0;
 // The share of its maps a young probe's update keeps: after its eight young updates, its first
 // keeps 0.5^8, 0.4 %.
 static const float YOUNG_HYSTERESIS = 0.25;
+// Adaptive hysteresis (#336, as DDGI lowers its hysteresis on a large change): a settled probe
+// whose measured light differs from its maps' by more than CHANGE_START of the brighter (the
+// means of its irradiance texels' luminance) keeps less of its maps, down to CHANGED_HYSTERESIS
+// from CHANGE_FULL on. A door opened or a lamp switched settles in a few updates, where 0.97
+// took 1.7 s (and a doorway's chain of probes, each waiting on the next, about 4 s); the noise
+// of a settled probe's mean over its rays stays far under the start.
+static const float CHANGE_START = 0.3;
+static const float CHANGE_FULL = 0.8;
+static const float CHANGED_HYSTERESIS = 0.5;
 
 groupshared float3 s_dir[PROBE_MAX_RAYS];
 groupshared float4 s_ray[PROBE_MAX_RAYS];
 groupshared float3 s_irradiance[IRRADIANCE_TEXELS * IRRADIANCE_TEXELS];
+groupshared float3 s_irradiance_old[IRRADIANCE_TEXELS * IRRADIANCE_TEXELS];
 groupshared float2 s_distance[DISTANCE_TEXELS * DISTANCE_TEXELS];
+groupshared float s_hysteresis;
 
 [shader("compute")]
 [numthreads(BLEND_GROUP, 1, 1)]
@@ -186,9 +197,35 @@ void probe_blend_main(uint3 group : SV_GroupID, uint thread : SV_GroupIndex)
             total += w;
         }
         float3 old = irradiance[irradiance_tile + 1 + t].rgb;
-        float3 measured = total > 1e-3 ? sum / total : (reset ? float3(0.0) : old);
+        s_irradiance[thread] = total > 1e-3 ? sum / total : (reset ? float3(0.0) : old);
+        s_irradiance_old[thread] = old;
+    }
+    GroupMemoryBarrierWithGroupSync();
+    if (thread == 0)
+    {
+        float kept = h;
+        if (!reset && age > PROBE_SETTLE_UPDATES)
+        {
+            float3 luma = float3(0.2126, 0.7152, 0.0722);
+            float now = 0.0;
+            float before = 0.0;
+            for (uint i = 0; i < IRRADIANCE_TEXELS * IRRADIANCE_TEXELS; i++)
+            {
+                now += dot(s_irradiance[i], luma);
+                before += dot(s_irradiance_old[i], luma);
+            }
+            float change = abs(now - before) / max(max(now, before), 1e-12);
+            kept = min(h, lerp(h, CHANGED_HYSTERESIS, smoothstep(CHANGE_START, CHANGE_FULL, change)));
+        }
+        s_hysteresis = kept;
+    }
+    GroupMemoryBarrierWithGroupSync();
+    h = s_hysteresis;
+    if (thread < IRRADIANCE_TEXELS * IRRADIANCE_TEXELS)
+    {
         // `select`, not `lerp`: a map that was never written may hold anything, NaN included.
-        s_irradiance[thread] = h > 0.0 ? lerp(measured, old, h) : measured;
+        float3 measured = s_irradiance[thread];
+        s_irradiance[thread] = h > 0.0 ? lerp(measured, s_irradiance_old[thread], h) : measured;
     }
     if (thread < DISTANCE_TEXELS * DISTANCE_TEXELS)
     {

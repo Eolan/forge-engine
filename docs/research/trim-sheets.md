@@ -375,7 +375,8 @@ opinion). "None found" means none found by web search; patent databases were not
 | TAA in a multisampling pipeline | US 9,208,605, NVIDIA, priority 2003-08-29 [57] | Active, adjusted expiry 2030-01-11 | Already-shipped TAA; scope of claims not analysed |
 | Trim sheets, UV snapping, kit-baked cards, HLOD | None found | – | Long-standing public practice [1][25] |
 | Wire AA (minimum width + fade) | None found | – | – |
-| Toksvig, LEAN/LEADR, NDF filtering (Kaplanyan et al., Tokuyoshi) | None found | – | – |
+| Toksvig, LEADR, NDF filtering (Kaplanyan et al., Tokuyoshi) | None found | – | – |
+| LEAN mapping (corrected 2026-10-21, `glass-credibility.md`) | US 9,684,975 B2, Take-Two (Baker, Olano) | Active, to about 2033-03-26 | Toksvig's factor (built for the models' normal maps, #331) |
 | Procedural paving, SDF borders, deferred/clustered decals | Not checked | – | – |
 
 ## Recommendations

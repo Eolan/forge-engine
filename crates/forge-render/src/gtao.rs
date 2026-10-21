@@ -42,7 +42,7 @@ struct GtaoPush {
     src_level: u32,
     dst: u32,
     depth_mips: u32,
-    pad: u32,
+    ignore_nearer: f32,
 }
 
 const _: () = assert!(std::mem::size_of::<GtaoPush>() == 64);
@@ -61,6 +61,10 @@ pub struct GtaoParams {
     /// How far an occluder reaches, metres (XeGTAO's effect radius; the shader widens it by
     /// its radius multiplier).
     pub radius: f32,
+    /// What the occlusion leaves out: the depth nearer the camera than this, metres (0:
+    /// nothing). A first-person weapon or hands (#337) then darken no wall behind them and
+    /// take no occlusion themselves.
+    pub ignore_nearer: f32,
 }
 
 /// The passes' pipelines.
@@ -134,6 +138,7 @@ impl Gtao {
             near: p.w_axis.z,
             radius: params.radius,
             frame: params.frame as u32,
+            ignore_nearer: params.ignore_nearer,
             ..GtaoPush::zeroed()
         };
         for level in 0..DEPTH_MIPS {

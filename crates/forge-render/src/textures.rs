@@ -1433,7 +1433,8 @@ pub fn leaves(seed: u64, size: u32) -> TextureData {
 pub enum ImageUse {
     /// sRGB colour (base colour, emissive): averaged in linear light.
     Color,
-    /// A tangent-space normal map: the vectors averaged and renormalised.
+    /// A tangent-space normal map: the vectors averaged, the mips' means not renormalised
+    /// (their length is the normals' variance, for Toksvig's factor, #331).
     Normal,
     /// Linear data (metalness, roughness, occlusion): averaged as stored.
     Data,
@@ -1531,12 +1532,11 @@ pub fn decode_image(name: &str, bytes: &[u8], usage: ImageUse) -> image::ImageRe
                     current[(sy * width + sx) as usize]
                 };
                 let (a, b, c, d) = (at(0, 0), at(1, 0), at(0, 1), at(1, 1));
-                let mut mean = [0, 1, 2, 3].map(|k| (a[k] + b[k] + c[k] + d[k]) * 0.25);
-                if usage == ImageUse::Normal {
-                    let n = normalize([mean[0], mean[1], mean[2]]);
-                    mean = [n[0], n[1], n[2], mean[3]];
-                }
-                *texel = mean;
+                // A normal map's mean is kept as it is, not renormalised (#331): its length,
+                // shorter where the normals below it part, is how much they vary, and the
+                // shading widens the highlight by it (Toksvig) instead of letting a groove too
+                // fine for the pixel flicker.
+                *texel = [0, 1, 2, 3].map(|k| (a[k] + b[k] + c[k] + d[k]) * 0.25);
             }
         });
         (current, width, height) = (next, nw, nh);
@@ -1883,7 +1883,8 @@ mod tests {
         assert!(!data.srgb);
         let last = data.levels.last().unwrap()[0];
         assert!((120..=136).contains(&last), "{last}");
-        // Normals tilting either way average to straight up, unit.
+        // Normals tilting 45° either way average to straight up, shortened to cos 45° (their
+        // variance, for Toksvig's factor, #331); a flat map's mips stay unit.
         let bumps = png(8, 8, |x, _| {
             if x % 2 == 0 {
                 [218, 128, 218, 255]
@@ -1893,7 +1894,14 @@ mod tests {
         });
         let normal = decode_image("bumps", &bumps, ImageUse::Normal).unwrap();
         let n = &normal.levels.last().unwrap()[..3];
-        assert!((n[0] as i32 - 128).abs() <= 1 && n[2] >= 254, "{n:?}");
+        assert!(
+            (n[0] as i32 - 128).abs() <= 1 && (n[2] as i32 - 218).abs() <= 2,
+            "{n:?}"
+        );
+        let flat = png(8, 8, |_, _| [128, 128, 255, 255]);
+        let flat = decode_image("flat", &flat, ImageUse::Normal).unwrap();
+        let n = &flat.levels.last().unwrap()[..3];
+        assert!(n[2] >= 254, "{n:?}");
         assert!(decode_image("garbage", b"not an image", ImageUse::Color).is_err());
     }
 

@@ -1033,6 +1033,7 @@ impl Demo for Ballad {
                     projection: taa_frame.jittered_projection,
                     frame: self.taa.frame_index() % u64::from(self.taa.jitter_phases),
                     radius: self.args.ao_radius,
+                    ignore_nearer: 0.0,
                 },
             )
         });

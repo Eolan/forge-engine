@@ -751,6 +751,8 @@ struct Gallery {
     /// Ambient occlusion of the sky's light (issue #48), on while `ao_on`.
     gtao: Gtao,
     ao_on: bool,
+    /// `r.ao.ignore_nearer`: what the occlusion leaves out near the camera, metres (#337).
+    ao_ignore_nearer: f32,
     /// Diffuse light from probes (issue #53), on while `probes_on`; `probes_live` while they
     /// were updated every frame (else they start over).
     probes: Option<Probes>,
@@ -1595,6 +1597,7 @@ impl Gallery {
             sky_light,
             gtao,
             ao_on,
+            ao_ignore_nearer: 0.0,
             probes,
             probes_on,
             probes_live: false,
@@ -2403,6 +2406,7 @@ impl Demo for Gallery {
                     projection: taa_frame.jittered_projection,
                     frame: self.taa.frame_index() % u64::from(self.taa.jitter_phases),
                     radius: self.args.ao_radius,
+                    ignore_nearer: self.ao_ignore_nearer,
                 },
             )
         });

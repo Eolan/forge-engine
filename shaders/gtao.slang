@@ -35,7 +35,7 @@ struct Push
     uint src_level;
     uint dst;                // storage image (r32f)
     uint depth_mips;         // sampled image: the distance chain (gtao_main, denoise_main)
-    uint pad;
+    float ignore_nearer;     // metres: nearer depth counts as empty (0: none; a first-person weapon, #337)
 };
 
 [[vk::push_constant]]
@@ -67,6 +67,10 @@ void prefilter0_main(uint3 id : SV_DispatchThreadID)
         return;
     float depth = g_sampled_images_r[NonUniformResourceIndex(push.src)].Load(int3(id.xy, 0));
     float z = depth > 0.0 ? push.near / depth : SKY_DISTANCE;
+    // What stands nearer than `ignore_nearer` (a first-person weapon, #337) is left out as the
+    // sky is: it occludes no wall behind it (no dark halo trailing round it) and takes none.
+    if (z < push.ignore_nearer)
+        z = SKY_DISTANCE;
     g_storage_images_r32f[NonUniformResourceIndex(push.dst)][id.xy] = min(z, SKY_DISTANCE);
 }
 

@@ -216,6 +216,39 @@ pub fn ao_radius(default: f64) -> Spec<f64> {
     )
 }
 
+/// What the ambient occlusion leaves out near the camera (#337).
+pub fn ao_ignore_nearer(default: f64) -> Spec<f64> {
+    Spec::float(
+        "r.ao.ignore_nearer",
+        default,
+        0.0..=2.0,
+        "The ambient occlusion leaves out what stands nearer the camera than this, metres (0: \
+         nothing): a first-person weapon or hands then cast no dark halo on the wall behind them.",
+    )
+}
+
+/// How fast the automatic exposure brightens the image when the scene darkens (#336).
+pub fn exposure_speed_brighten(default: f64) -> Spec<f64> {
+    Spec::float(
+        "r.exposure.speed_brighten",
+        default,
+        0.05..=20.0,
+        "How fast the automatic exposure brightens the image when the scene gets darker (walking \
+         into a dark room), per second: most of the way in about 2 / speed seconds.",
+    )
+}
+
+/// How fast the automatic exposure darkens the image when the scene brightens (#336).
+pub fn exposure_speed_darken(default: f64) -> Spec<f64> {
+    Spec::float(
+        "r.exposure.speed_darken",
+        default,
+        0.05..=20.0,
+        "How fast the automatic exposure darkens the image when the scene gets brighter (walking \
+         out into the sun), per second: most of the way in about 2 / speed seconds.",
+    )
+}
+
 /// The probes' diffuse light.
 pub fn probes(default: bool) -> Spec<bool> {
     Spec::bool(

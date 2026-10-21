@@ -130,6 +130,17 @@ probes update every frame, so the planes the camera brings in converge as fast a
   2.83 ms, the rays 0.56 → 0.78 and the blend 0.45 → 0.63). The step at a cadence over 1 is
   the thing to smooth if the 0.2 ms matters again.
 
+## A large change settles fast (issue #336, 2026-10-21)
+
+A door opened on a windowless room took about 4 s to light it (a game's playtest, at a fixed
+EV 6): the hysteresis of 0.97 alone takes 1.7 s, and a doorway's chain of probes, each waiting
+on the next, stacks the lag. As DDGI does, a settled probe whose measured light differs from its
+maps' by a large share (the means of its irradiance texels' luminance, against the brighter of
+the two) now keeps less of them for that update: none of the change below 30 %, down to a
+hysteresis of 0.5 from 80 % on (`probe_update.slang`, `CHANGE_START`, `CHANGE_FULL`). The noise
+of a settled probe's mean over its rays, and a passer-by blocking a few of them, stay under the
+start, so a still view keeps its pixels; young probes keep their own, lower hysteresis.
+
 ## Specks on walls in shade (issue #102, 2026-09-30)
 
 Walls facing away from the sun showed bright specks at the rims of their normal map's bumps,
