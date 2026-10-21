@@ -890,6 +890,14 @@ mesh to test navigations inside the houses"):
       from 30 to 60 m by its facade's draw before, not its room's lamps). A pane whose room has
       no lamp still fades in from 30 to 60 m at half the faked rooms' light: the houses across
       the green stay lit at night.
+  - **Each pane its own condition** (#339, the owner on 2026-10-21: "too perfect"; step 1 of
+    `research/glass-credibility.md`): from a hash of the pane, a tilt of up to 0.006 rad each
+    way, roller waves of up to 0.003 rad every 0.9 m (faded out where a pixel covers a quarter
+    of a wave), double glazing's reflectance (2.5 times the look's, two panes in three) and a
+    haze of up to 8 % of what passes, given back as a veil the sky lights. The mirror ray
+    follows the bent normal, so neighbouring panes reflect the street a little askew of each
+    other. A still camera's frames 10 apart change as before (1 052–1 417 px in the house view,
+    against 1 048–1 404).
   - **Shimmer:** with a still camera under DLAA, frames 10 apart differ on 0.06 % of the pixels
     by day (as without the glass) and on 0.040 % at night (0.038 % without).
   - **Cost:** 0.05–0.16 ms in the map check's views (`docs/PROFILE.md`).

@@ -28,6 +28,40 @@ static const float REQUEST_MIN_WEIGHT = 0.001;
 // less of the room shows (#284: a lit room's glow from afar, matched against the rooms as drawn).
 static const float REVEAL_DEPTH = 0.5;
 
+// Each pane its own condition (#339, step 1 of research/glass-credibility.md): real panes are
+// never in one plane, never alike and never clean, and a row of identical mirrors read as "too
+// perfect". From a hash of the pane:
+// - a tilt of up to PANE_TILT radians each way (a sash not quite square, a sealed unit bowed);
+// - roller waves (toughened glass), a ripple of up to PANE_WAVE radians every PANE_WAVE_LENGTH
+//   metres across and up, faded out where a pixel covers a quarter of a wave so it never
+//   shimmers;
+// - its reflectance at normal incidence: the look's for single glazing, PANE_DOUBLE_F0 times it
+//   for double glazing's four surfaces (two panes in three), each give or take a tenth;
+// - a haze, the film a pane gathers between cleanings: up to PANE_HAZE of what passes scattered
+//   into a veil the sky lights, most panes near clean.
+// The mirror rays follow the bent normal (`glass/requests` and `glass/draw` share it).
+static const float PANE_TILT = 0.006;
+static const float PANE_WAVE = 0.003;
+static const float PANE_WAVE_LENGTH = 0.9;
+static const float PANE_DOUBLE_F0 = 2.5;
+static const float PANE_HAZE = 0.08;
+static const float PI = 3.14159265;
+
+// Four numbers in [0, 1) from a pane's index and a salt (PCG's output permutation).
+float4 pane_hash(uint pane, uint salt)
+{
+    float4 o;
+    uint state = pane * 747796405u + salt * 2891336453u + 1u;
+    [unroll]
+    for (uint k = 0; k < 4; k++)
+    {
+        state = state * 747796405u + 2891336453u;
+        uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+        o[k] = float((word >> 22u) ^ word) * (1.0 / 4294967296.0);
+    }
+    return o;
+}
+
 // Must match GpuGlassVertex in glass.rs: a triangle's corner, three to a triangle.
 struct GlassVertex
 {
@@ -73,6 +107,7 @@ struct GlassVaryings
     float3 rel : REL;       // camera-relative, metres
     float3 normal : NORMAL;
     float4 glow : GLOW;     // rgb: the glow, its lamp's unlit share in; w: 1 where a lamp drives it
+    nointerpolation uint pane : PANE; // its pane, for its condition (#339)
 };
 
 [shader("vertex")]
@@ -93,6 +128,7 @@ GlassVaryings vert_main(uint vertex : SV_VertexID)
     o.position = mul(f[0].view_proj, float4(rel, 1.0));
     o.rel = rel;
     o.normal = float3(dot(r0.xyz, v.normal.xyz), dot(r1.xyz, v.normal.xyz), dot(r2.xyz, v.normal.xyz));
+    o.pane = asuint(v.normal.w);
     // A pane whose room has a lamp glows with the share of its light the frame's lamps leave
     // unlit (#284), at any distance; the others fade in by distance.
     uint lamp = asuint(v.glow.w);
@@ -119,6 +155,8 @@ struct GlassLight
     float distance;  // metres from the camera
     float room;      // the share of the pane the room behind shows through, past its reveal
     float4 air;      // the haze between the camera and the pane
+    float3 normal;   // the pane's, bent by its condition, towards the camera
+    float haze;      // the share of what passes its haze scatters (#339)
 };
 
 GlassLight glass_light(GlassFrame* f, GlassVaryings input)
@@ -126,14 +164,28 @@ GlassLight glass_light(GlassFrame* f, GlassVaryings input)
     GlassLight o;
     o.distance = length(input.rel);
     float3 v = -input.rel / max(o.distance, 1e-4);
-    // Either side: the street's or the room's.
+    // The pane's condition (#339): its tilt and roller waves bend its normal in its own plane.
     float3 n = normalize(input.normal);
+    float4 h = pane_hash(input.pane, 0u);
+    float4 w = pane_hash(input.pane, 1u);
+    float3 up = abs(n.y) < 0.95 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
+    float3 across = normalize(cross(up, n));
+    float3 rise = cross(n, across);
+    float3 world = input.rel + f[0].camera.xyz;
+    float footprint = max(length(ddx(input.rel)), length(ddy(input.rel)));
+    float fade = saturate(1.0 - footprint / (0.25 * PANE_WAVE_LENGTH));
+    float2 waves = sin(float2(dot(world, across), dot(world, rise)) * (2.0 * PI / PANE_WAVE_LENGTH) + w.xy * (2.0 * PI));
+    float2 lean = (h.xy * 2.0 - 1.0) * PANE_TILT + waves * w.zw * (PANE_WAVE * fade);
+    n = normalize(n + across * lean.x + rise * lean.y);
+    // Either side: the street's or the room's.
     if (dot(n, v) < 0.0)
         n = -n;
+    o.normal = n;
     float nv = saturate(dot(n, v));
-    float f0 = f[0].look.y;
+    float f0 = f[0].look.y * (h.z < 1.0 / 3.0 ? 1.0 : PANE_DOUBLE_F0) * (0.9 + 0.2 * w.x);
     o.fresnel = f0 + (1.0 - f0) * pow(1.0 - nv, 5.0);
     o.mirror = normalize(reflect(-v, n));
+    o.haze = PANE_HAZE * h.w * h.w;
     o.through = (1.0 - o.fresnel) * f[0].look.x;
     // The share of the pane through which the room shows rather than its reveal's sides.
     float tan_view = sqrt(max(1.0 - nv * nv, 0.0)) / max(nv, 1e-3);
@@ -175,11 +227,15 @@ float4 draw_main(GlassVaryings input) : SV_Target0
     float4 up_table = f[0].sky_light[SH_COEFFICIENTS];
     float3 forward = f[0].sky_light[SH_COEFFICIENTS + 1].xyz;
     float3 sky = sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, forward, l.mirror) * f[0].sky_scale;
-    float alpha = 1.0 - l.through;
+    // The pane's haze (#339): what it scatters of what passes is taken from the room behind and
+    // given back as a veil the sky lights, as a white diffuser facing out would be.
+    float through = l.through * (1.0 - l.haze);
+    float alpha = 1.0 - through;
+    float3 veil = (l.haze * l.through / PI) * sh_irradiance(f[0].sky_light, l.normal) * f[0].sky_scale;
     float fade = input.glow.w > 0.5 ? 1.0 : smoothstep(f[0].look.z, f[0].look.w, l.distance);
     float3 glow = input.glow.rgb * (f[0].exposure * fade * l.room);
-    // Over what is behind, by what the pane stops: its reflection and the glow, hazed, and the
-    // haze in front of it that the blend would dim with the room.
-    float3 colour = (l.fresnel * sky + glow) * l.air.a + l.air.rgb * (f[0].sky_scale * alpha);
+    // Over what is behind, by what the pane stops: its reflection, its veil and the glow, hazed,
+    // and the haze in front of it that the blend would dim with the room.
+    float3 colour = (l.fresnel * sky + veil + glow) * l.air.a + l.air.rgb * (f[0].sky_scale * alpha);
     return float4(min(colour, 32768.0), alpha);
 }
