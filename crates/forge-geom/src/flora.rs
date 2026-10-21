@@ -153,13 +153,112 @@ pub fn grown_shells(g: &TreeGraph, shrub: bool, broad: bool, lift: f32) -> TriMe
 /// 0.78–0.95 (to tune per species by the crossing's look).
 pub const CROWN_SHELL: f32 = 1.0;
 
-/// A tree's wood 5 cm thick or more as tapered limbs, section 0 ([`grown_mesh`]).
+/// The sides of a limb's tube.
+const LIMB_SIDES: u32 = 7;
+
+/// A tree's wood 5 cm thick or more, section 0 ([`grown_mesh`]): each axis of its graph (a node
+/// and the child that carries on its way, not a branch) one tapered tube of [`LIMB_SIDES`] sides,
+/// closed. The owner saw holes in the trunks, the most at the bends (2026-10-21): each segment was
+/// a tube of its own, open, its ends square to it and its ring turned anyhow, so a bend opened a
+/// wedge on its outside and the next ring's corners left slots into the open tube.
+/// - Each ring is turned from the last by the bend between them, so a straight run's line up.
+/// - At a bend of under 90° the two segments share one ring, in the plane halving the bend:
+///   both tubes' sides end there exactly (the mitre).
+/// - A tip, or a bend too sharp to mitre, is closed by a short cone.
+/// - A branch starts on its parent's axis as wide as its parent there, buried in it.
 fn wood(mesh: &mut TriMesh, g: &TreeGraph) {
-    for s in g.segments() {
-        let node = &g.nodes[s.node as usize];
-        let parent = g.nodes[node.parent as usize].radius.max(s.radius);
-        if s.radius >= 0.05 && s.a.distance(s.b) > 1e-3 {
-            limb(mesh, s.a, s.b, parent, s.radius);
+    let n = g.nodes.len();
+    let parent = |i: usize| g.nodes[i].parent as usize;
+    let drawn = |i: usize| {
+        let node = &g.nodes[i];
+        node.parent != forge_flora::graph::NO_PARENT
+            && node.radius >= 0.05
+            && node.pos.distance(g.nodes[node.parent as usize].pos) > 1e-3
+    };
+    // Each drawn node's axis from its parent, and each node's way on: its drawn child that is
+    // no branch (the thickest, should there be two).
+    let mut axis = vec![Vec3::Y; n];
+    let mut next = vec![usize::MAX; n];
+    for i in (0..n).filter(|&i| drawn(i)) {
+        let p = parent(i);
+        axis[i] = (g.nodes[i].pos - g.nodes[p].pos).normalize();
+        if !g.nodes[i].starts_branch
+            && (next[p] == usize::MAX || g.nodes[i].radius > g.nodes[next[p]].radius)
+        {
+            next[p] = i;
+        }
+    }
+    // Where a drawn node's tube carries on into its way on through a shared ring.
+    let mitred = |j: usize| drawn(j) && next[j] != usize::MAX && axis[j].dot(axis[next[j]]) > 0.0;
+    // Each drawn node's ring direction across its axis: carried from its parent's through the
+    // bend where it carries on its parent's way, else any.
+    let mut across = vec![Vec3::X; n];
+    for i in (0..n).filter(|&i| drawn(i)) {
+        let p = parent(i);
+        across[i] = if drawn(p) && next[p] == i {
+            let turned = glam::Quat::from_rotation_arc(axis[p], axis[i]) * across[p];
+            (turned - axis[i] * turned.dot(axis[i])).normalize()
+        } else {
+            axis[i].any_orthonormal_vector()
+        };
+    }
+    // A ring's corner `k` across axis `along`, counted from `u`: its unit direction from the axis.
+    let corner = |u: Vec3, along: Vec3, k: u32| {
+        let t = k as f32 / LIMB_SIDES as f32 * std::f32::consts::TAU;
+        u * t.cos() + along.cross(u) * t.sin()
+    };
+    // Node `j`'s shared ring: each corner of its own tube's end moved along its axis onto the
+    // plane halving the bend into its way on, its normal between the two tubes'.
+    let mitre = |j: usize| -> Vec<(Vec3, Vec3)> {
+        let (a, b) = (axis[j], axis[next[j]]);
+        let half = (a + b).normalize();
+        let turn = glam::Quat::from_rotation_arc(a, b);
+        let r = g.nodes[j].radius;
+        (0..LIMB_SIDES)
+            .map(|k| {
+                let e = corner(across[j], a, k);
+                let s = -r * e.dot(half) / a.dot(half);
+                (g.nodes[j].pos + e * r + a * s, (e + turn * e).normalize())
+            })
+            .collect()
+    };
+    // A plain ring round `centre`, square to node `i`'s axis.
+    let ring = |i: usize, centre: Vec3, r: f32| -> Vec<(Vec3, Vec3)> {
+        (0..LIMB_SIDES)
+            .map(|k| {
+                let e = corner(across[i], axis[i], k);
+                (centre + e * r, e)
+            })
+            .collect()
+    };
+    for i in (0..n).filter(|&i| drawn(i)) {
+        let p = parent(i);
+        let start = if mitred(p) && next[p] == i {
+            mitre(p)
+        } else {
+            let r = g.nodes[p].radius.max(g.nodes[i].radius);
+            ring(i, g.nodes[p].pos, r)
+        };
+        let end = if mitred(i) {
+            mitre(i)
+        } else {
+            ring(i, g.nodes[i].pos, g.nodes[i].radius)
+        };
+        for k in 0..LIMB_SIDES as usize {
+            let l = (k + 1) % LIMB_SIDES as usize;
+            let (p0, p1, q0, q1) = (start[k], start[l], end[k], end[l]);
+            smooth_triangle(mesh, [p0.0, p1.0, q1.0], [p0.1, p1.1, q1.1], 0);
+            smooth_triangle(mesh, [p0.0, q1.0, q0.0], [p0.1, q1.1, q0.1], 0);
+        }
+        if !mitred(i) {
+            // Closed by a cone half its radius long.
+            let tip = g.nodes[i].pos + axis[i] * g.nodes[i].radius * 0.5;
+            for k in 0..LIMB_SIDES as usize {
+                let l = (k + 1) % LIMB_SIDES as usize;
+                let n0 = (end[k].1 + axis[i]).normalize();
+                let n1 = (end[l].1 + axis[i]).normalize();
+                smooth_triangle(mesh, [end[k].0, end[l].0, tip], [n0, n1, axis[i]], 0);
+            }
         }
     }
 }
@@ -476,6 +575,67 @@ mod tests {
                 "{}: the shells {crown:.2} m across, the cards {cards:.2} m",
                 s.id
             );
+        }
+    }
+
+    /// The trees' wood is closed (the owner: holes in the trunks, the most at the bends): its
+    /// corners welded within 0.1 mm, each edge is two triangles' but the rings where an axis
+    /// starts (a branch's, buried in its parent; a stem's, at the ground).
+    #[test]
+    fn the_trees_wood_has_no_holes() {
+        for (sp, s) in forge_flora::species::mediterranean().iter().enumerate() {
+            if s.habit == Habit::Shrub {
+                continue;
+            }
+            for k in 0..forge_flora::grow::INDIVIDUALS {
+                let graph = forge_flora::grow(s, &forge_flora::grow::individual(s, sp as u16, k));
+                let mut mesh = TriMesh::default();
+                wood(&mut mesh, &graph);
+                let key = |i: u32| {
+                    (Vec3::from(mesh.positions[i as usize]) * 1e4)
+                        .round()
+                        .as_ivec3()
+                };
+                let mut edges = std::collections::HashMap::new();
+                for t in mesh.indices.chunks(3) {
+                    for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                        let (a, b) = (key(a).to_array(), key(b).to_array());
+                        *edges
+                            .entry(if a < b { (a, b) } else { (b, a) })
+                            .or_insert(0) += 1;
+                    }
+                }
+                let open = edges.values().filter(|&&c| c == 1).count();
+                // The axes' starts: each drawn node but the way on of a drawn parent (its
+                // thickest drawn child that is no branch) bending under 90° into it.
+                let nodes = &graph.nodes;
+                let drawn = |i: usize| {
+                    nodes[i].parent != forge_flora::graph::NO_PARENT
+                        && nodes[i].radius >= 0.05
+                        && nodes[i].pos.distance(nodes[nodes[i].parent as usize].pos) > 1e-3
+                };
+                let along =
+                    |i: usize| (nodes[i].pos - nodes[nodes[i].parent as usize].pos).normalize();
+                let mut way_on = vec![usize::MAX; nodes.len()];
+                for i in (0..nodes.len()).filter(|&i| drawn(i) && !nodes[i].starts_branch) {
+                    let p = nodes[i].parent as usize;
+                    if way_on[p] == usize::MAX || nodes[i].radius > nodes[way_on[p]].radius {
+                        way_on[p] = i;
+                    }
+                }
+                let starts = (0..nodes.len())
+                    .filter(|&i| drawn(i))
+                    .filter(|&i| {
+                        let p = nodes[i].parent as usize;
+                        !(drawn(p) && way_on[p] == i && along(p).dot(along(i)) > 0.0)
+                    })
+                    .count();
+                assert!(
+                    open <= starts * LIMB_SIDES as usize,
+                    "{} {k}: {open} open edges, {starts} axes' starts",
+                    s.id
+                );
+            }
         }
     }
 }

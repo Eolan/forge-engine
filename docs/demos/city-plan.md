@@ -405,7 +405,10 @@ deep moist alluvium by the river, the thin dry soil of a limestone plateau 300 m
 600 m: 278 Aleppo pines, 870 holm oaks, and 21 002 garrigue shrubs (2 291 rosemary, 7 999
 cistus, 10 712 kermes oaks). The demo grows three individuals of each species once
 (`forge_flora::grow`) and instances them, each scaled to its plant's height and crown, in its
-species' bark and foliage (`grown_mesh`): a tree's wood 5 cm thick or more as tapered limbs,
+species' bark and foliage (`grown_mesh`): a tree's wood 5 cm thick or more as tapered limbs
+(since 2026-10-21 each axis one closed tube, its rings carried along it and shared at its bends,
+mitred, its tips capped: the owner saw holes in the trunks, the most at the bends, where each
+segment had been an open tube of its own, its ring turned anyhow; `the_trees_wood_has_no_holes`),
 its leaf clusters gathered on a grid of a sixth of its crown (an eighth of a broadleaf's, a third
 of a shrub's, a tenth of its height at least) into lumps sized by how many clusters they hold,
 a shrub's of 20 triangles. A tree takes 8 000 to 33 000 triangles, a shrub about 600 (the full
