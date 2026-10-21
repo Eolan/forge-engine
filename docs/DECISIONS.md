@@ -454,6 +454,13 @@ for a player of about 125 nodes and a pursuer of about 40, `forge_anim::machine`
   - **Root motion:** `Animator::root_motion` gives the root's motion over the last update, through
     blends (the clips' motions mixed, `RootMotion::mix`) and in-between clips.
   - **Smaller fixes:** numbers compare to 10⁻⁴; posted events are kept once each, at most 32.
+- **Layers over the states** (#329, 2026-10-21, a game's rifle: aiming while walking):
+  `[[layer]]` names a joint (its subtree is the layer's mask), a mode (`override` or `additive`,
+  the latter from its node's first frame), a variable scaling its weight, a fade (0.2 s) and
+  conditions. Its nodes are chosen as a state's, a blend by the aim's pitch among them. Its weight
+  fades in while its conditions hold and out when they stop. The root's motion stays the states'.
+  Tests on a four-joint body: the legs and the root exactly the walk's under an aiming upper body,
+  half the fade halfway, a recoil added from its first frame.
 - **Left:** typed event channels in place of strings, and the overlay's or the console's live view
   (the prototype's asks).
 - **Patents:** none read on a machine loaded from local data. Zynga's US 9,463,386 B1 and

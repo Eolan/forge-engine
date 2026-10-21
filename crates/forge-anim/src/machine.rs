@@ -25,6 +25,10 @@
 //!   so a variant is a few lines.
 //! - **Events** the game posts ([`Animator::post`]) are seen by the next update, then cleared.
 //!   Variables ([`Vars`]) are named without case; a missing one reads false, 0 or "".
+//! - **Layers** ([`LayerDef`], #329) play their own nodes on a joint and those under it over
+//!   what the states play (an aiming upper body over walking legs), in place of it or added to
+//!   it, faded in and out by their conditions and scaled by a variable; the root's motion stays
+//!   the states'.
 //!
 //! Built in code ([`MachineDef`]) or from TOML ([`MachineDef::from_toml`]), bound to a rig's
 //! clips by name ([`Machine::new`]) and run per character ([`Animator`]). Nothing here calls a
@@ -70,6 +74,9 @@ pub enum MachineError {
     /// The machine has no state.
     #[error("the machine has no state")]
     Empty,
+    /// A layer names a joint the skeleton does not have, or a mode there is not.
+    #[error("layer {0:?}: {1}")]
+    Layer(String, String),
 }
 
 /// A variable's value.
@@ -439,11 +446,48 @@ pub struct MachineDef {
     pub bases: Vec<NodeDef>,
     /// The states.
     pub states: Vec<StateDef>,
+    /// The layers over them, applied in order ([`LayerDef`], #329).
+    pub layers: Vec<LayerDef>,
+}
+
+/// How a layer's pose goes over what plays under it, on its joints.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LayerMode {
+    /// Its pose in place of the one under it, by its weight.
+    #[default]
+    Override,
+    /// Its pose's difference from its node's first frame added to the one under it, by its
+    /// weight ([`Pose::add`]): a recoil or a breath over whatever plays.
+    Additive,
+}
+
+/// A layer over the states (#329): its own nodes, chosen as a state's (the most specific whose
+/// conditions hold), played on a joint and every joint under it over the pose the states write
+/// (an aiming upper body, a blend by the aim's angle, over walking or strafing legs). Its weight
+/// fades in while its conditions hold and out when they stop, over [`Self::fade`], times its
+/// variable's. The root's motion ([`Animator::root_motion`]) stays the states'.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LayerDef {
+    /// Its name.
+    pub name: String,
+    /// The joint it drives with every joint under it, by name (the spine's first for an upper
+    /// body; the root's would move what [`Animator::root_motion`] does not see).
+    pub joint: String,
+    /// How its pose goes over the one under it.
+    pub mode: LayerMode,
+    /// A variable its weight is multiplied by, 0 to 1 (1 without).
+    pub weight: Option<String>,
+    /// Seconds its weight takes to come in or go out (0.2 without).
+    pub fade: Option<f32>,
+    /// When it plays (always without).
+    pub when: When,
+    /// Its nodes, in order.
+    pub nodes: Vec<NodeDef>,
 }
 
 // The TOML layout: `start`, `[[base]]` nodes, `[[state]]` with `[[state.way]]` and
-// `[[state.node]]`. Conditions are written `when = ["a", "!b", "c > 2"]` (one group) or
-// `when = [["a"], ["b", "c"]]` (alternatives).
+// `[[state.node]]`, `[[layer]]` with `[[layer.node]]`. Conditions are written
+// `when = ["a", "!b", "c > 2"]` (one group) or `when = [["a"], ["b", "c"]]` (alternatives).
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FileDef {
@@ -452,6 +496,22 @@ struct FileDef {
     base: Vec<NodeFile>,
     #[serde(default)]
     state: Vec<StateFile>,
+    #[serde(default)]
+    layer: Vec<LayerFile>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LayerFile {
+    name: String,
+    joint: String,
+    mode: Option<String>,
+    weight: Option<String>,
+    fade: Option<f32>,
+    #[serde(default)]
+    when: WhenFile,
+    #[serde(default)]
+    node: Vec<NodeFile>,
 }
 
 #[derive(Deserialize)]
@@ -611,10 +671,43 @@ impl MachineDef {
     /// `[[state]]` tables (`name`) with their `[[state.way]]` (`to`, `when`) and
     /// `[[state.node]]` (`name`, `extends`, `clip` or `blend_space = { scalar, entries }`,
     /// `looped`, `blend`, `speed`, `match_speed`, `priority`, `when`, `events = [{ at, name,
-    /// value }]` with `at` "start", "end" or a share, `transitions = [{ to, blend, via }]`).
+    /// value }]` with `at` "start", "end" or a share, `transitions = [{ to, blend, via }]`), and
+    /// `[[layer]]` tables (`name`, `joint`, `mode` "override" or "additive", `weight`, `fade`,
+    /// `when`) with their `[[layer.node]]`.
     pub fn from_toml(text: &str) -> Result<MachineDef, MachineError> {
         let file: FileDef = toml::from_str(text)?;
+        let layers = file
+            .layer
+            .into_iter()
+            .map(|l| {
+                let mode = match l.mode.as_deref() {
+                    None => LayerMode::Override,
+                    Some(m) if m.eq_ignore_ascii_case("override") => LayerMode::Override,
+                    Some(m) if m.eq_ignore_ascii_case("additive") => LayerMode::Additive,
+                    Some(m) => {
+                        return Err(MachineError::Layer(
+                            l.name,
+                            format!("no mode {m:?} (override or additive)"),
+                        ));
+                    }
+                };
+                Ok(LayerDef {
+                    name: l.name,
+                    joint: l.joint,
+                    mode,
+                    weight: l.weight,
+                    fade: l.fade,
+                    when: l.when.parse()?,
+                    nodes: l
+                        .node
+                        .into_iter()
+                        .map(NodeFile::parse)
+                        .collect::<Result<_, _>>()?,
+                })
+            })
+            .collect::<Result<_, MachineError>>()?;
         Ok(MachineDef {
+            layers,
             start: file.start,
             bases: file
                 .base
@@ -654,10 +747,13 @@ impl MachineDef {
             self.bases
                 .iter()
                 .chain(self.states.iter().flat_map(|s| &s.nodes))
+                .chain(self.layers.iter().flat_map(|l| &l.nodes))
                 .find(|n| n.name.eq_ignore_ascii_case(name))
         };
         // The chain from `node` up, bounded by the nodes there are (a longer one loops).
-        let total = self.bases.len() + self.states.iter().map(|s| s.nodes.len()).sum::<usize>();
+        let total = self.bases.len()
+            + self.states.iter().map(|s| s.nodes.len()).sum::<usize>()
+            + self.layers.iter().map(|l| l.nodes.len()).sum::<usize>();
         let mut chain = vec![node];
         while let Some(parent) = chain.last().and_then(|n| n.extends.as_deref()) {
             let found = find(parent)
@@ -779,7 +875,20 @@ struct State {
 #[derive(Clone, Debug)]
 pub struct Machine {
     states: Vec<State>,
+    layers: Vec<Layer>,
     start: usize,
+}
+
+/// A layer bound to the rig ([`LayerDef`]).
+#[derive(Clone, Debug)]
+struct Layer {
+    /// 1 on its joint and every joint under it, 0 elsewhere.
+    mask: Vec<f32>,
+    mode: LayerMode,
+    weight: Option<String>,
+    fade: f32,
+    when: When,
+    nodes: Vec<Node>,
 }
 
 /// The clip of `clips` named `name`: the same name first, else the same without case.
@@ -835,10 +944,6 @@ impl Machine {
                     to: to.to_owned(),
                 })
         };
-        let missing = |node: &str, name: &str| MachineError::UnknownClip {
-            node: node.to_owned(),
-            clip: name.to_owned(),
-        };
         // A clip's root travel over a cycle and its cycles a second.
         let natural = |c: usize| {
             let d = clips[c].duration;
@@ -863,88 +968,14 @@ impl Machine {
                 .collect::<Result<_, MachineError>>()?;
             let mut nodes = Vec::with_capacity(s.nodes.len());
             for n in &s.nodes {
-                let n = def.resolved(n)?;
-                let (source, scalar, naturals) = match &n.motion {
-                    Some(Motion::Clip(name)) => match clip_index(clips, name) {
-                        Some(c) => (Source::Clip(c), None, vec![natural(c)]),
-                        None if drop_missing => {
-                            dropped.push(Dropped {
-                                node: n.name.clone(),
-                                clip: name.clone(),
-                                what: DroppedPart::Node,
-                            });
-                            continue;
-                        }
-                        None => return Err(missing(&n.name, name)),
-                    },
-                    Some(Motion::Blend { scalar, entries }) => {
-                        let mut kept = Vec::with_capacity(entries.len());
-                        for (name, value) in entries {
-                            match clip_index(clips, name) {
-                                Some(c) => kept.push((c, *value)),
-                                None if drop_missing => dropped.push(Dropped {
-                                    node: n.name.clone(),
-                                    clip: name.clone(),
-                                    what: DroppedPart::BlendEntry,
-                                }),
-                                None => return Err(missing(&n.name, name)),
-                            }
-                        }
-                        if kept.is_empty() {
-                            dropped.push(Dropped {
-                                node: n.name.clone(),
-                                clip: String::new(),
-                                what: DroppedPart::Node,
-                            });
-                            continue;
-                        }
-                        let naturals = kept.iter().map(|&(c, _)| natural(c)).collect();
-                        (
-                            Source::Blend(BlendSpace { entries: kept }),
-                            Some(scalar.clone()),
-                            naturals,
-                        )
-                    }
-                    None => return Err(MachineError::NoMotion(n.name.clone())),
-                };
-                let mut transitions = Vec::with_capacity(n.transitions.len());
-                for t in &n.transitions {
-                    let via = match t.via.as_deref() {
-                        None => None,
-                        Some(name) => match clip_index(clips, name) {
-                            Some(c) => Some(c),
-                            None if drop_missing => {
-                                dropped.push(Dropped {
-                                    node: n.name.clone(),
-                                    clip: name.to_owned(),
-                                    what: DroppedPart::InBetween,
-                                });
-                                None
-                            }
-                            None => return Err(missing(&n.name, name)),
-                        },
-                    };
-                    transitions.push(Transition {
-                        to: t.to.clone(),
-                        blend: t.blend,
-                        via,
-                        speed: t.speed.unwrap_or(1.0),
-                    });
-                }
-                nodes.push(Node {
-                    name: n.name.clone(),
-                    source,
-                    looped: n.looped.unwrap_or(true),
-                    blend: n.blend.unwrap_or(0.2),
-                    speed: n.speed.unwrap_or(1.0),
-                    match_speed: n.match_speed.clone(),
-                    natural: naturals,
-                    scalar,
-                    priority: n.priority.unwrap_or(0),
-                    when: n.when.clone(),
-                    events: n.events.clone(),
-                    transitions,
-                });
+                nodes.extend(bind_node(
+                    def,
+                    n,
+                    clips,
+                    &natural,
+                    drop_missing,
+                    &mut dropped,
+                )?);
             }
             states.push(State {
                 name: s.name.clone(),
@@ -952,17 +983,154 @@ impl Machine {
                 nodes,
             });
         }
+        let mut layers = Vec::with_capacity(def.layers.len());
+        for l in &def.layers {
+            let joint = skeleton
+                .joint(&l.joint)
+                .or_else(|| {
+                    let names = skeleton.names();
+                    names.iter().position(|n| n.eq_ignore_ascii_case(&l.joint))
+                })
+                .ok_or_else(|| {
+                    MachineError::Layer(l.name.clone(), format!("no joint {:?}", l.joint))
+                })?;
+            let mut nodes = Vec::with_capacity(l.nodes.len());
+            for n in &l.nodes {
+                nodes.extend(bind_node(
+                    def,
+                    n,
+                    clips,
+                    &natural,
+                    drop_missing,
+                    &mut dropped,
+                )?);
+            }
+            layers.push(Layer {
+                mask: skeleton.mask_below(joint),
+                mode: l.mode,
+                weight: l.weight.clone(),
+                fade: l.fade.unwrap_or(0.2).max(0.0),
+                when: l.when.clone(),
+                nodes,
+            });
+        }
         let start = match &def.start {
             Some(name) => state_index("start", name)?,
             None => 0,
         };
-        Ok((Machine { states, start }, dropped))
+        Ok((
+            Machine {
+                states,
+                layers,
+                start,
+            },
+            dropped,
+        ))
     }
 
     /// Its states' names, in order.
     pub fn state_names(&self) -> impl Iterator<Item = &str> {
         self.states.iter().map(|s| s.name.as_str())
     }
+}
+
+/// Node `n` of `def` bound to `clips`, its parents' fields resolved (`natural` gives a clip's
+/// root travel over a cycle and its cycles a second); with `drop_missing`, `None` where the rig
+/// lacks its clip (or all its blend's), and what went said in `dropped`.
+fn bind_node(
+    def: &MachineDef,
+    n: &NodeDef,
+    clips: &[Clip],
+    natural: &dyn Fn(usize) -> [f32; 2],
+    drop_missing: bool,
+    dropped: &mut Vec<Dropped>,
+) -> Result<Option<Node>, MachineError> {
+    let missing = |node: &str, name: &str| MachineError::UnknownClip {
+        node: node.to_owned(),
+        clip: name.to_owned(),
+    };
+    let n = def.resolved(n)?;
+    let (source, scalar, naturals) = match &n.motion {
+        Some(Motion::Clip(name)) => match clip_index(clips, name) {
+            Some(c) => (Source::Clip(c), None, vec![natural(c)]),
+            None if drop_missing => {
+                dropped.push(Dropped {
+                    node: n.name.clone(),
+                    clip: name.clone(),
+                    what: DroppedPart::Node,
+                });
+                return Ok(None);
+            }
+            None => return Err(missing(&n.name, name)),
+        },
+        Some(Motion::Blend { scalar, entries }) => {
+            let mut kept = Vec::with_capacity(entries.len());
+            for (name, value) in entries {
+                match clip_index(clips, name) {
+                    Some(c) => kept.push((c, *value)),
+                    None if drop_missing => dropped.push(Dropped {
+                        node: n.name.clone(),
+                        clip: name.clone(),
+                        what: DroppedPart::BlendEntry,
+                    }),
+                    None => return Err(missing(&n.name, name)),
+                }
+            }
+            if kept.is_empty() {
+                dropped.push(Dropped {
+                    node: n.name.clone(),
+                    clip: String::new(),
+                    what: DroppedPart::Node,
+                });
+                return Ok(None);
+            }
+            let naturals = kept.iter().map(|&(c, _)| natural(c)).collect();
+            (
+                Source::Blend(BlendSpace { entries: kept }),
+                Some(scalar.clone()),
+                naturals,
+            )
+        }
+        None => return Err(MachineError::NoMotion(n.name.clone())),
+    };
+    let mut transitions = Vec::with_capacity(n.transitions.len());
+    for t in &n.transitions {
+        let via = match t.via.as_deref() {
+            None => None,
+            Some(name) => match clip_index(clips, name) {
+                Some(c) => Some(c),
+                None if drop_missing => {
+                    dropped.push(Dropped {
+                        node: n.name.clone(),
+                        clip: name.to_owned(),
+                        what: DroppedPart::InBetween,
+                    });
+                    None
+                }
+                None => return Err(missing(&n.name, name)),
+            },
+        };
+        transitions.push(Transition {
+            to: t.to.clone(),
+            blend: t.blend,
+            via,
+            speed: t.speed.unwrap_or(1.0),
+        });
+    }
+    Ok(Some(Node {
+        name: n.name.clone(),
+        source,
+        looped: n.looped.unwrap_or(true),
+        blend: n.blend.unwrap_or(0.2),
+        speed: n.speed.unwrap_or(1.0),
+        match_speed: n.match_speed.clone(),
+        natural: naturals,
+        scalar,
+        priority: n.priority.unwrap_or(0),
+        when: n.when.clone(),
+        events: n.events.clone(),
+        transitions,
+    }))
 }
 
 /// The match-speed rate's bounds: a stride played slower than half or faster than 1.8 times its
@@ -989,6 +1157,8 @@ pub struct Animator {
     /// The source was switched in this update.
     switched: bool,
     player: Player,
+    /// Each layer's play, in the machine's order.
+    layers: Vec<LayerRun>,
 }
 
 /// Events posted for one update, at most: the rest are dropped (a host posting every frame
@@ -1009,6 +1179,11 @@ impl Animator {
             motion_from: None,
             switched: false,
             player: Player::new(Source::Clip(0), joints),
+            layers: machine
+                .layers
+                .iter()
+                .map(|_| LayerRun::new(joints))
+                .collect(),
         }
     }
 
@@ -1095,8 +1270,9 @@ impl Animator {
 
     /// Moves on by `dt` seconds: takes the ways the variables and the events posted open, then
     /// the node whose conditions hold most specifically, switches to it (through its
-    /// transition's in-between clip when it names one), and writes the pose into `out`. Returns
-    /// the events fired, `SetVariable`'s already applied.
+    /// transition's in-between clip when it names one), and writes the pose into `out`; then
+    /// each layer's ([`LayerDef`]) over it. Returns the events fired, `SetVariable`'s already
+    /// applied.
     pub fn update(
         &mut self,
         machine: &Machine,
@@ -1106,6 +1282,21 @@ impl Animator {
         out: &mut Pose,
     ) -> Vec<Fired> {
         let events = std::mem::take(&mut self.posted);
+        let mut fired = self.update_states(machine, clips, skeleton, dt, &events, out);
+        self.update_layers(machine, clips, skeleton, dt, &events, out, &mut fired);
+        fired
+    }
+
+    /// [`Self::update`]'s states.
+    fn update_states(
+        &mut self,
+        machine: &Machine,
+        clips: &[Clip],
+        skeleton: &Skeleton,
+        dt: f32,
+        events: &[String],
+        out: &mut Pose,
+    ) -> Vec<Fired> {
         let mut fired = Vec::new();
         self.switched = false;
         // The states: the most specific way that holds (the first of those as specific), never
@@ -1117,7 +1308,7 @@ impl Animator {
                 .iter()
                 .enumerate()
                 .filter(|(_, w)| !passed.contains(&w.to))
-                .filter_map(|(i, w)| w.when.holds(&self.vars, &events).map(|n| (n, i, w.to)))
+                .filter_map(|(i, w)| w.when.holds(&self.vars, events).map(|n| (n, i, w.to)))
                 .max_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
             let Some((.., to)) = next else {
                 break;
@@ -1133,7 +1324,7 @@ impl Animator {
             .iter()
             .enumerate()
             .filter_map(|(i, n)| {
-                let count = n.when.holds(&self.vars, &events)?;
+                let count = n.when.holds(&self.vars, events)?;
                 Some((count, n.priority, i))
             })
             .max_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(b.2.cmp(&a.2)))
@@ -1190,30 +1381,103 @@ impl Animator {
         if self.between {
             return fired;
         }
-        // The shares passed: (phase0, phase1], across the wrap when it cycled.
-        let phase1 = self.player.phase();
-        let wrapped = node.looped && phase1 < phase0;
-        let crossed = |s: f32| {
-            if wrapped {
-                s > phase0 || s <= phase1
-            } else {
-                s > phase0 && s <= phase1
-            }
-        };
-        for e in &node.events {
-            if let At::Share(share) = e.at
-                && crossed(share)
-            {
-                emit(&mut self.vars, e, &mut fired);
-            }
-        }
-        if wrapped || (!node.looped && self.player.finished() && !done0) {
-            self.fire(node, At::End, &mut fired);
-            if wrapped {
-                self.fire(node, At::Start, &mut fired);
-            }
-        }
+        let ended = !node.looped && self.player.finished() && !done0;
+        fire_passed(
+            node,
+            (phase0, self.player.phase()),
+            ended,
+            &mut self.vars,
+            &mut fired,
+        );
         fired
+    }
+
+    /// [`Self::update`]'s layers, over the pose the states wrote into `out`.
+    #[allow(clippy::too_many_arguments)]
+    fn update_layers(
+        &mut self,
+        machine: &Machine,
+        clips: &[Clip],
+        skeleton: &Skeleton,
+        dt: f32,
+        events: &[String],
+        out: &mut Pose,
+        fired: &mut Vec<Fired>,
+    ) {
+        let vars = &mut self.vars;
+        for (layer, run) in machine.layers.iter().zip(&mut self.layers) {
+            // Its node: the most specific whose conditions hold, else the one playing; none
+            // chosen while the layer's own do not hold, the one playing fading out.
+            let holds = layer.when.holds(vars, events).is_some();
+            let chosen = holds
+                .then(|| most_specific(&layer.nodes, vars, events))
+                .flatten()
+                .or(run.node);
+            if let Some(c) = chosen
+                && run.node != Some(c)
+            {
+                let node = &layer.nodes[c];
+                // From nothing, at once: the fade brings it in.
+                let blend = if run.node.is_some() { node.blend } else { 0.0 };
+                if node.looped {
+                    run.player.play(node.source.clone(), blend, clips, skeleton);
+                } else {
+                    run.player
+                        .play_once(node.source.clone(), blend, clips, skeleton);
+                }
+                run.node = Some(c);
+                for e in node.events.iter().filter(|e| e.at == At::Start) {
+                    emit(vars, e, fired);
+                }
+            }
+            let target = if holds && run.node.is_some() {
+                1.0
+            } else {
+                0.0
+            };
+            run.amount = if layer.fade > 0.0 {
+                let step = dt / layer.fade;
+                (run.amount + (target - run.amount).clamp(-step, step)).clamp(0.0, 1.0)
+            } else {
+                target
+            };
+            let Some(c) = run.node else {
+                continue;
+            };
+            if run.amount <= 0.0 {
+                continue;
+            }
+            let node = &layer.nodes[c];
+            run.player.speed = node.rate(vars);
+            if let Some(scalar) = &node.scalar {
+                run.player.parameter = vars.number(scalar);
+            }
+            let (phase0, done0) = (run.player.phase(), run.player.finished());
+            run.player.update(clips, skeleton, dt, &mut run.pose);
+            let ended = !node.looped && run.player.finished() && !done0;
+            fire_passed(node, (phase0, run.player.phase()), ended, vars, fired);
+            let weight = run.amount
+                * layer
+                    .weight
+                    .as_deref()
+                    .map_or(1.0, |w| vars.number(w).clamp(0.0, 1.0));
+            match layer.mode {
+                LayerMode::Override => out.mix_masked(&run.pose, weight, &layer.mask),
+                LayerMode::Additive => {
+                    // Its first frame the reference, the sum mixed in on its joints only.
+                    first_pose(
+                        &node.source,
+                        run.player.parameter,
+                        (clips, skeleton),
+                        &mut run.reference,
+                        &mut run.added,
+                    );
+                    run.added.clone_from(out);
+                    run.added.add(&run.pose, &run.reference, weight);
+                    out.mix_masked(&run.added, 1.0, &layer.mask);
+                }
+            }
+        }
     }
 
     /// Switches the player to `node` over `blend` seconds.
@@ -1233,6 +1497,96 @@ impl Animator {
     fn fire(&mut self, node: &Node, at: At, fired: &mut Vec<Fired>) {
         for e in node.events.iter().filter(|e| e.at == at) {
             emit(&mut self.vars, e, fired);
+        }
+    }
+}
+
+/// The node of `nodes` whose conditions hold with the most conditions, then the highest priority,
+/// then the first.
+fn most_specific(nodes: &[Node], vars: &Vars, events: &[String]) -> Option<usize> {
+    nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(i, n)| Some((n.when.holds(vars, events)?, n.priority, i)))
+        .max_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(b.2.cmp(&a.2)))
+        .map(|(.., i)| i)
+}
+
+/// Fires `node`'s events its play from `phase0` to `phase1` passed: the shares in (phase0,
+/// phase1], across the wrap when it cycled; its end where it cycled or `ended` (a one-shot
+/// reaching it), and its start again where it cycled.
+fn fire_passed(
+    node: &Node,
+    (phase0, phase1): (f32, f32),
+    ended: bool,
+    vars: &mut Vars,
+    fired: &mut Vec<Fired>,
+) {
+    let wrapped = node.looped && phase1 < phase0;
+    let crossed = |s: f32| {
+        if wrapped {
+            s > phase0 || s <= phase1
+        } else {
+            s > phase0 && s <= phase1
+        }
+    };
+    for e in &node.events {
+        if let At::Share(share) = e.at
+            && crossed(share)
+        {
+            emit(vars, e, fired);
+        }
+    }
+    if wrapped || ended {
+        for e in node.events.iter().filter(|e| e.at == At::End) {
+            emit(vars, e, fired);
+        }
+        if wrapped {
+            for e in node.events.iter().filter(|e| e.at == At::Start) {
+                emit(vars, e, fired);
+            }
+        }
+    }
+}
+
+/// `source`'s pose at its start (an additive layer's reference), a blend's at `parameter`, into
+/// `out`, with `scratch` for a blend's second clip.
+fn first_pose(
+    source: &Source,
+    parameter: f32,
+    (clips, skeleton): (&[Clip], &Skeleton),
+    out: &mut Pose,
+    scratch: &mut Pose,
+) {
+    match source {
+        Source::Clip(c) => clips[*c].sample(skeleton, 0.0, out),
+        Source::Blend(space) => space.sample(clips, skeleton, (parameter, 0.0), out, scratch),
+    }
+}
+
+/// A layer's play for one character ([`Animator`]): its node, its player, its weight faded in
+/// so far and its poses.
+#[derive(Clone, Debug)]
+struct LayerRun {
+    node: Option<usize>,
+    player: Player,
+    /// Its fade, 0 to 1.
+    amount: f32,
+    pose: Pose,
+    reference: Pose,
+    added: Pose,
+}
+
+impl LayerRun {
+    fn new(joints: usize) -> Self {
+        let empty = Pose::from_transforms(&vec![crate::pose::Transform::IDENTITY; joints]);
+        Self {
+            node: None,
+            player: Player::new(Source::Clip(0), joints),
+            amount: 0.0,
+            pose: empty.clone(),
+            reference: empty.clone(),
+            added: empty,
         }
     }
 }
@@ -1592,6 +1946,7 @@ mod tests {
         let def = MachineDef {
             start: None,
             bases: Vec::new(),
+            layers: Vec::new(),
             states: vec![StateDef {
                 name: "moving".into(),
                 ways: Vec::new(),
@@ -1718,5 +2073,203 @@ mod tests {
             a.post("Vault");
         }
         assert_eq!(a.posted.len(), MAX_POSTED);
+    }
+
+    /// A body of four joints (#329): the root, the legs under it, the spine under it and an arm
+    /// on the spine.
+    fn body() -> Skeleton {
+        Skeleton::new(
+            vec!["root".into(), "legs".into(), "spine".into(), "arm".into()],
+            vec![None, Some(0), Some(0), Some(2)],
+            vec![Mat4::IDENTITY; 4],
+            &[Transform::IDENTITY; 4],
+            vec![Mat4::IDENTITY; 4],
+        )
+        .unwrap()
+    }
+
+    /// A clip of 1 s over the body: the root walking `travel` metres along x, and the legs, the
+    /// spine and the arm each turned about z from one angle to another (radians), where given.
+    fn body_clip(name: &str, travel: f32, turns: [Option<(f32, f32)>; 3]) -> Clip {
+        let track = |a: Vec3, b: Vec3| Track {
+            times: vec![0.0, 1.0],
+            values: vec![a, b],
+            interpolation: Interpolation::Linear,
+        };
+        let mut joints = vec![JointTracks {
+            translation: Some(track(Vec3::ZERO, Vec3::X * travel)),
+            rotation: None,
+            scale: None,
+        }];
+        for turn in turns {
+            joints.push(JointTracks {
+                translation: None,
+                rotation: turn.map(|(a, b)| Track {
+                    times: vec![0.0, 1.0],
+                    values: vec![
+                        glam::Quat::from_rotation_z(a),
+                        glam::Quat::from_rotation_z(b),
+                    ],
+                    interpolation: Interpolation::Linear,
+                }),
+                scale: None,
+            });
+        }
+        Clip {
+            name: name.into(),
+            start: 0.0,
+            duration: 1.0,
+            joints,
+        }
+    }
+
+    /// Walking legs under an aiming upper body: the aim's blend by its pitch, faded in over
+    /// 0.2 s while aiming, and a recoil added on the spine.
+    const LAYERED: &str = r#"
+        start = "moving"
+
+        [[state]]
+        name = "moving"
+        [[state.node]]
+        name = "walk"
+        clip = "Walk"
+
+        [[layer]]
+        name = "aim"
+        joint = "spine"
+        fade = 0.2
+        when = ["aiming"]
+        [[layer.node]]
+        name = "aim"
+        blend_space = { scalar = "aimPitch", entries = [["AimDown", -1.0], ["AimUp", 1.0]] }
+
+        [[layer]]
+        name = "recoil"
+        joint = "spine"
+        mode = "additive"
+        fade = 0.0
+        when = ["firing"]
+        [[layer.node]]
+        name = "kick"
+        clip = "Recoil"
+    "#;
+
+    fn layered() -> (Machine, Vec<Clip>, Skeleton) {
+        let clips = vec![
+            body_clip("Walk", 1.5, [Some((0.0, 0.6)), None, None]),
+            body_clip("AimDown", 0.0, [None, Some((-0.4, -0.4)), Some((0.2, 0.2))]),
+            body_clip("AimUp", 0.0, [None, Some((0.4, 0.4)), Some((-0.2, -0.2))]),
+            body_clip("Recoil", 0.0, [None, Some((0.0, 0.3)), None]),
+        ];
+        let skeleton = body();
+        let def = MachineDef::from_toml(LAYERED).expect("the layers parse");
+        let machine = Machine::new(&def, &clips, &skeleton, 0).expect("the layers bind");
+        (machine, clips, skeleton)
+    }
+
+    /// The angle about z of `q`, radians.
+    fn turn_z(q: glam::Quat) -> f32 {
+        let (axis, angle) = q.to_axis_angle();
+        angle * axis.z.signum()
+    }
+
+    /// Runs `animator` `steps` updates of 1/60 s from the rest pose, returning the last pose.
+    fn pose_after(
+        animator: &mut Animator,
+        (machine, clips, skeleton): &(Machine, Vec<Clip>, Skeleton),
+        steps: usize,
+    ) -> Pose {
+        let mut pose = skeleton.rest().clone();
+        for _ in 0..steps {
+            animator.update(machine, clips, skeleton, 1.0 / 60.0, &mut pose);
+        }
+        pose
+    }
+
+    #[test]
+    fn an_aiming_layer_drives_the_upper_body_over_walking_legs() {
+        let m = layered();
+        let mut walking = Animator::new(&m.0, 4);
+        let mut aiming = Animator::new(&m.0, 4);
+        aiming.vars.set("aiming", Value::Bool(true));
+        aiming.vars.set("aimPitch", Value::Number(1.0));
+        let (plain, aimed) = (
+            pose_after(&mut walking, &m, 30),
+            pose_after(&mut aiming, &m, 30),
+        );
+        // The root and the legs exactly the walk's; the spine and the arm the aim's, up.
+        for j in [0, 1] {
+            assert_eq!(aimed.translations[j], plain.translations[j], "joint {j}");
+            assert_eq!(aimed.rotations[j], plain.rotations[j], "joint {j}");
+        }
+        assert!((turn_z(aimed.rotations[2]) - 0.4).abs() < 1e-4);
+        assert!((turn_z(aimed.rotations[3]) + 0.2).abs() < 1e-4);
+        assert!(turn_z(plain.rotations[2]).abs() < 1e-6);
+        // The root's motion stays the states'.
+        let (a, b) = (
+            walking.root_motion(&m.1, &m.2, 0),
+            aiming.root_motion(&m.1, &m.2, 0),
+        );
+        assert_eq!(a.translation, b.translation);
+    }
+
+    #[test]
+    fn a_layer_fades_in_and_out_over_its_time() {
+        let m = layered();
+        let mut a = Animator::new(&m.0, 4);
+        a.vars.set("aiming", Value::Bool(true));
+        a.vars.set("aimPitch", Value::Number(1.0));
+        // Six updates of 1/60 s: half of the 0.2 s fade, the spine half way to the aim's 0.4.
+        let half = pose_after(&mut a, &m, 6);
+        assert!(
+            (turn_z(half.rotations[2]) - 0.2).abs() < 1e-3,
+            "{}",
+            turn_z(half.rotations[2])
+        );
+        // In, then out over as long: the walk's spine again, the legs never touched.
+        let full = pose_after(&mut a, &m, 12);
+        assert!((turn_z(full.rotations[2]) - 0.4).abs() < 1e-4);
+        a.vars.set("aiming", Value::Bool(false));
+        let out = pose_after(&mut a, &m, 12);
+        assert!(turn_z(out.rotations[2]).abs() < 1e-6);
+        let mut walking = Animator::new(&m.0, 4);
+        let plain = pose_after(&mut walking, &m, 30);
+        assert_eq!(out.rotations[1], plain.rotations[1]);
+    }
+
+    #[test]
+    fn an_additive_layer_adds_its_turn_from_its_first_frame() {
+        let m = layered();
+        let mut a = Animator::new(&m.0, 4);
+        a.vars.set("firing", Value::Bool(true));
+        // 31 updates: the recoil half way through its second, 0.15 rad from its first frame,
+        // added on the walk's straight spine; the legs the walk's.
+        let pose = pose_after(&mut a, &m, 31);
+        assert!(
+            (turn_z(pose.rotations[2]) - 0.15).abs() < 1e-4,
+            "{}",
+            turn_z(pose.rotations[2])
+        );
+        let mut walking = Animator::new(&m.0, 4);
+        let plain = pose_after(&mut walking, &m, 31);
+        assert_eq!(pose.rotations[1], plain.rotations[1]);
+    }
+
+    #[test]
+    fn a_layer_with_no_such_joint_or_mode_is_refused() {
+        let clips = vec![body_clip("Walk", 1.5, [None, None, None])];
+        let base = "[[state]]\nname = \"s\"\n[[state.node]]\nname = \"w\"\nclip = \"Walk\"\n";
+        let sideways =
+            format!("{base}[[layer]]\nname = \"l\"\njoint = \"spine\"\nmode = \"sideways\"\n");
+        assert!(matches!(
+            MachineDef::from_toml(&sideways),
+            Err(MachineError::Layer(..))
+        ));
+        let tail = format!("{base}[[layer]]\nname = \"l\"\njoint = \"tail\"\n");
+        let def = MachineDef::from_toml(&tail).unwrap();
+        assert!(matches!(
+            Machine::new(&def, &clips, &body(), 0),
+            Err(MachineError::Layer(..))
+        ));
     }
 }
