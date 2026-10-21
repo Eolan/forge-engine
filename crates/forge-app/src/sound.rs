@@ -21,9 +21,11 @@ use forge_audio::{
 use glam::{DVec3, Vec3};
 
 /// Frames the mix thread runs ahead of the device: 21 ms at 48 kHz.
+#[cfg_attr(not(windows), allow(dead_code))]
 const RING_FRAMES: usize = 1024;
 
 /// Seconds of a streamed sound decoded ahead.
+#[cfg_attr(not(windows), allow(dead_code))]
 const STREAM_AHEAD: f32 = 0.25;
 
 /// The buses the shell lays out.
@@ -99,6 +101,7 @@ pub(crate) fn wanted(config: &crate::AppConfig) -> bool {
 }
 
 /// The mix at `rate`: the buses and the engine.
+#[cfg_attr(not(windows), allow(dead_code))]
 fn mix(rate: u32) -> (Sound, Mixer) {
     let mut layout = BusLayout::new();
     let ambience = AmbienceBuses::add(&mut layout);
