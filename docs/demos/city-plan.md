@@ -902,6 +902,14 @@ mesh to test navigations inside the houses"):
     by day (as without the glass) and on 0.040 % at night (0.038 % without).
   - **Cost:** 0.05–0.16 ms in the map check's views (`docs/PROFILE.md`).
   - `--no-glass` shows the rooms without their panes.
+- *Static instances edited at run time* (#323): a scene built with
+  `MeshletSceneBuilder::allow_static_edits` shows, hides and moves its static instances
+  (`MeshletScene::set_static_visibility`, `set_static_transform`); the frame after an edit copies
+  the records into the table, redoes their cells and updates the rays' structure in place.
+  `--static-test` hides the forest one second in, its shadows with it (`docs/PROFILE.md`). What
+  swings every frame (a door's leaf while it turns) belongs to the movers, which carry its motion
+  for DLSS: a game hides the static leaf, swings a mover from a small pool, and puts the static
+  leaf at its new place when it stops.
 - *Street lamps lit* (D-065, #270: `forge_render::lamps::street_lights` since #296).
 
   ![The junction at 22:00 from above: each street lamp's pool under its head](images/village-street-lamps.png)

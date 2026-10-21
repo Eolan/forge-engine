@@ -2103,6 +2103,21 @@ buffer each, copied bit by bit).
   `a_door_toggled_among_many_pieces_costs_a_step_not_a_rebuild`). Nothing runs in a frame
   yet, except the walker and `--pursuers`, so there is no F1 zone.
 
+## Static instances edited at run time (#323, 2026-10-21)
+
+- **What was measured:** the village at 600 m with `--static-test`, which hides its forest
+  (47,426 instances: the trees, their stand-ins and their shadow proxies) one second in, 4,096
+  records a frame over 12 frames; 1600 × 900, DLAA, RTX 5070 Ti, the F1 zones' means over 210
+  frames.
+- **Results:**
+  - `scene/static edits` (the records' copies, one a run of consecutive instances): 0.000 ms;
+    4,096 copies of one record each took 0.126 ms on average before the runs were merged.
+  - `scene/static cell bounds` 0.000 ms, `scene/static tlas instances` 0.000 ms,
+    `scene/static tlas` (the update in place) 0.003 ms.
+  - Frames without edits add no pass. With edits allowed and none made, the frame matches a run
+    without them to the pixel (the updatable structure traces as the other did).
+  - Without its forest the view's frame takes 3.5 ms against 4.9 ms.
+
 ## Not measured yet
 
 - **Streaming**: residency pools, request queue depth, drive and decompression throughput.
