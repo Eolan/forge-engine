@@ -1933,7 +1933,9 @@ city. The city's first frames, before instance occlusion's auto mode turns on, l
 clusters to pass 2 and grow its list to the 8 MiB cap per slot. Since #333 the cap is 32 MiB a
 slot (4 M clusters): a game's yard of leaf cards left 1.8 M, and past the cap pass 2 walks pass
 1's work items again. Forced over a lower cap, the village's forest view (579 k) took 0.479 ms in
-cluster cull 2 instead of 0.149. The city's first frames now grow the list to 16 MiB a slot.
+cluster cull 2 instead of 0.149. In the game's yard (1.80 M left to pass 2), cluster cull 2 went
+from 1.08 to 0.37 ms and the frame from 6.24 to 5.65 ms, with an identical image. The city's
+first frames now grow the list to 16 MiB a slot.
 **Verdicts:**
 
 1. **The allocator's block size, not the data, sets the VRAM figure.** `gpu-allocator`
