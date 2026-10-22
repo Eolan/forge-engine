@@ -156,7 +156,13 @@ impl Follow {
             // straight walkable line from where it stands, else once at it or once it stops
             // coming nearer (others in the way: a queue at a door). Passing two corners round a
             // wall's end within reach, one cut the end and stood wedged against it (#317).
+            // A corner where a link starts passes within reach as before: the way on is the
+            // link, never walkable on the field, and creeping to 3 cm at the slowing speed held
+            // each crossing back about 1.5 s.
             let way_on = || {
+                if self.links.iter().any(|&(k, _)| k == self.next) {
+                    return true;
+                }
                 let (Some(f), Some(&after)) = (field, self.points.get(self.next + 1)) else {
                     return true;
                 };

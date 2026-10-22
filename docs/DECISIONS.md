@@ -7067,7 +7067,9 @@ best guess or data"):
   stall escape is what the door needed: there the pursuers queue, stop coming nearer, and pass
   as before. Both people now round the wall's end tightly (`a_crowd_rounds_a_walls_end_tightly`,
   from z = 10). The pursuers still all get in: 4 of 4 by the door, least gap −0.018 m (−0.028
-  before), and 4 of 4 through the windows, −0.008 m (−0.000).
+  before), and 4 of 4 through the windows, −0.015 m (−0.000). A corner where a link starts keeps
+  the old reach: its way on is the link, never walkable on the field, and creeping to 3 cm at the
+  slowing speed held each crossing back about 1.5 s (found in review).
 
 **The proof, the same day** (city-plan's `pursuers_get_into_a_house_by_its_door_or_through_its_windows`):
 - **The setup:** four pursuers on the street, 3 m before the first house with insides, go for
