@@ -1808,7 +1808,20 @@ that changes the resolve's code (a constant of the leaves' light):
   | The driver's `shading standard` | 9.6 s | 5.3 s |
   | The start | about 17 s | 11.9 s |
   | `slangc`, the entry alone (SPIR-V) | 4.5 s (868 KiB) | 3.3 s (643 KiB) |
-  | `shading/standard` on the GPU, best of 3 | 0.779 ms | 0.728 ms | The 25 others are
+  | `shading/standard` on the GPU, best of 3 | 0.779 ms | 0.728 ms |
+
+  The same binaries with only `meshlet.slang` swapped, 300 fixed frames under DLAA, best of
+  three interleaved runs:
+
+  | `shading/standard` (the frame) | Before | After |
+  |---|---|---|
+  | The village, the green | 0.780 (4.36) ms | 0.732 (4.27) ms |
+  | The city from the air | 0.931 (4.10) ms | 0.789 (3.96) ms |
+  | The island | 0.069 (2.92) ms | 0.070 (2.92) ms |
+  | The physics lab's rain | 0.409 (2.77) ms | 0.426 (2.77) ms |
+
+  The lab's pass, procedural surfaces only, takes 0.02 ms more: it now passes its inputs where
+  it named the row's constants. The 25 others are
   near-instant, found in the driver's cache. Making each pipeline in the warm-up as its entry
   compiled (tried, then removed) only moved those 11 s there: one pipeline does not
   parallelise.
