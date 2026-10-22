@@ -2329,6 +2329,25 @@ across the builds, at most 9 levels: it is not still from run to run.
   - 4 work items: cull 1 up to 0.06 ms slower (the air), the green mixed.
 - **Registers:** 40 for the resident scene's cull, 60 for the streamed one's (`FORGE_SHADER_STATS`).
 
+**The probe rays' own cost** (2026-10-23): their async zone times the queue while it shares the
+GPU, so it reads about twice the pass's own cost. `FORGE_ASYNC=0`, mean of two runs, ms:
+
+| View | `gi/probe rays` async | serial |
+|---|---|---|
+| air | 1.65 | 0.17 |
+| green | 1.37 | 0.67 |
+| forest | 1.99 | 1.01 |
+| main street | 1.64 | 0.77 |
+
+Serially, the forest's frame is 5.9 ms against the main street's 5.2. The extra goes to the probe
+rays (+0.24), `shadow/trace` (+0.20), the probe blend (+0.10) and cluster cull 1 (+0.075).
+
+**Tried and dropped: 32 probe rays a workgroup instead of 64**, so that a settled probe's skipped
+fixed rays would leave a whole group idle instead of half of one. Images are identical, but
+serially the rays don't change (−0.07 to +0.04 ms). Async, the overlap shifted: in the forest,
+the blend went 0.50 → 0.75 ms, meshlet pass 1 0.63 → 0.78, and the frame +0.2 ms. Weigh a change
+to an async pass by its serial time and by the frame both ways.
+
 `FORGE_SHADER_LINES=1` keeps the source lines (`-g2`) in an optimised build's shaders. A trace
 opened in Nsight Graphics then shows its real-time shader profiler's samples per line (GPU
 Trace's `--real-time-shader-profiler`, Blackwell `--architecture "Blackwell GB20x"`). Its
