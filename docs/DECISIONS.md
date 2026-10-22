@@ -6982,8 +6982,8 @@ DIR` writes the atlases as images (`forge_render::impostor`, `shaders/impostor.s
   measured: the bake's colours (each species the same at every age), the shadow ray (without it
   12) and its noise, the leaves' depths in a texel, the normals' spread (they agree), the sky's
   direction.
-- **Not yet:** the bright young crowns above; block compression (D-047), each age's other seeds,
-  and the default (the owner's look first).
+- **Not yet:** the bright young crowns above, each age's other seeds, and the default (the
+  owner's look first). Block compression is built (above, "Memory").
 
 *(research: forests-and-grass.md, vegetation-materials.md, flora.md; D-013, D-016, D-029, D-036,
 D-053, D-063; issues #297, #300, #301, #302, #303)*

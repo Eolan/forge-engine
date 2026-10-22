@@ -725,7 +725,7 @@ game (scenarios, missions, licensed assets) is a private repository, as the city
    first frame, drawn after the resolve where the shells fade, lit as the leaves with a ray into
    the far shadows' world), their atlases cached and block-compressed, 1.0 MB a kind); structures with interiors, lit by their
    lamps at night (D-065, #270: the houses' lamps as data, the rooms as light lists and the probes lit by them, built 2026-10-18; RTXDI
-   to compare next); flora; the particle system (smoke, dust, fire, rain,
+   compared, and the street lamps by it behind `--street-restir`); flora; the particle system (smoke, dust, fire, rain,
    sparks; D-064's step 1 built 2026-10-18, #271: emitters as data, the lab's smoke yard);
    characters' animation (imported rigs' root frames, root motion, masked and additive layers
    built 2026-10-19, #310, #311, #313; the data-driven state machine, #312, the same day; its layers on a joint's subtree, an aim over a walk, #329, 2026-10-21); navigation (D-076, #317: `forge-nav`'s walk field, links and A*, the village's rooms reached from the street, 2026-10-19; the same day passages as data and crossings, #316: a walker vaults the low walls it walks into and climbs through open windows; following and ORCA avoidance with turns at narrow doors; walker pieces and glass panes changed at run time, #324, #325; field tiles round the agents and the pursuers' scene (`city-plan --pursuers`); static instance edits (#323), the sun's ray start by the mesh's cut (#326) and doorways switched with their doors (#327) built 2026-10-21); sound (in the app since 2026-10-21, #318), fauna and networking,
