@@ -140,6 +140,14 @@ static const float CHANGED_HYSTERESIS = 0.5;
 // How many standard errors of an update's mean a change must pass before it counts (a game's
 // forest: the rotations' sampling alone moved the means by more than CHANGE_START).
 static const float CHANGE_NOISE = 2.0;
+// A change that lasts passes anyway (a game's doorway: opened, its room's probes saw a few bright
+// rays among dark ones, as under a crown, and the noise test held its light back, 2 s to settle
+// became 5 s). The rays' rotations repeat every 8 frames with the jitter, so over a probe's last
+// DRIFT_UPDATES updates the rotations' noise sums to about nothing, while a door's light keeps
+// its sign: the mean of those updates' gaps, each a share of the brighter as the change is, counts
+// as a change too. They ride in the alpha of the probe's first irradiance texels, which nothing
+// samples.
+static const uint DRIFT_UPDATES = 8;
 
 groupshared float3 s_dir[PROBE_MAX_RAYS];
 groupshared float4 s_ray[PROBE_MAX_RAYS];
@@ -147,6 +155,7 @@ groupshared float3 s_irradiance[IRRADIANCE_TEXELS * IRRADIANCE_TEXELS];
 groupshared float3 s_irradiance_old[IRRADIANCE_TEXELS * IRRADIANCE_TEXELS];
 groupshared float2 s_distance[DISTANCE_TEXELS * DISTANCE_TEXELS];
 groupshared float s_hysteresis;
+groupshared float s_drift[DRIFT_UPDATES];
 
 [shader("compute")]
 [numthreads(BLEND_GROUP, 1, 1)]
@@ -207,6 +216,8 @@ void probe_blend_main(uint3 group : SV_GroupID, uint thread : SV_GroupIndex)
     if (thread == 0)
     {
         float kept = h;
+        for (uint k = 0; k < DRIFT_UPDATES; k++)
+            s_drift[k] = 0.0;
         if (!reset && age > PROBE_SETTLE_UPDATES)
         {
             float3 luma = float3(0.2126, 0.7152, 0.0722);
@@ -238,7 +249,20 @@ void probe_blend_main(uint3 group : SV_GroupID, uint thread : SV_GroupIndex)
             float spread = sqrt(max(squares / max(n, 1.0) - mean * mean, 0.0));
             float texels = float(IRRADIANCE_TEXELS * IRRADIANCE_TEXELS);
             float noise = CHANGE_NOISE * 2.0 * spread / sqrt(max(n, 1.0));
-            float change = max(abs(now - before) / texels - noise, 0.0) / max(max(now, before) / texels, 1e-12);
+            float brighter = max(max(now, before) / texels, 1e-12);
+            float gap = (now - before) / texels / brighter;
+            float change = max(abs(now - before) / texels - noise, 0.0) / brighter;
+            // The last updates' gaps, this one first, and their mean.
+            s_drift[0] = gap;
+            float lasting = gap;
+            for (uint k = 1; k < DRIFT_UPDATES; k++)
+            {
+                float g = irradiance[irradiance_tile + 1 + uint2((k - 1) % IRRADIANCE_TEXELS, (k - 1) / IRRADIANCE_TEXELS)].a;
+                g = abs(g) <= 1.0 ? g : 0.0; // a map never written holds anything, NaN included
+                s_drift[k] = g;
+                lasting += g;
+            }
+            change = max(change, abs(lasting) / float(DRIFT_UPDATES));
             kept = min(h, lerp(h, CHANGED_HYSTERESIS, smoothstep(CHANGE_START, CHANGE_FULL, change)));
         }
         s_hysteresis = kept;
@@ -285,7 +309,8 @@ void probe_blend_main(uint3 group : SV_GroupID, uint thread : SV_GroupIndex)
     {
         uint2 u = uint2(thread % IRRADIANCE_TILE, thread / IRRADIANCE_TILE);
         uint2 e = border_source(u, IRRADIANCE_TEXELS);
-        irradiance[irradiance_tile + u] = float4(s_irradiance[e.y * IRRADIANCE_TEXELS + e.x], 1.0);
+        uint i = e.y * IRRADIANCE_TEXELS + e.x;
+        irradiance[irradiance_tile + u] = float4(s_irradiance[i], i < DRIFT_UPDATES ? s_drift[i] : 0.0);
     }
 }
 
