@@ -5707,6 +5707,11 @@ application of their patents just in case."
   is set, each frame slot reads its own copy of the volumes, rewritten after an edit, as the
   glass panes' transforms (#325). A scene hands its doors' states through
   `Running::doorway_edits`. With no doorway shut, the map check is unchanged.
+  - **Either way round** (2026-10-22): the lookup turns a doorway given clockwise round, which
+    swaps its sides, and its leaf's share was not turned with it: the leaf stood mirrored
+    across the doorway, the door on the far room's side, black on that scene's garage doors (a
+    ninth of its doorways). `set_doorway` now measures it from the side the lookup keeps
+    (`split_as_stored`), tested both ways round.
 - **No pop as the room-sized cascade reaches such a room** (#334, 2026-10-21, the owner's
   playtest of a scene built outside the repository: "there is a pop … a window thing again").
   The room-sized cascade fades over one spacing at its edge, and where it covered a room partly

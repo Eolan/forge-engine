@@ -985,7 +985,7 @@ impl Probes {
 
 #[cfg(test)]
 mod tests {
-    use super::regions::{places, region_grid};
+    use super::regions::{places, region_grid, split_as_stored, turned};
     use super::*;
     use glam::Vec2;
 
@@ -1067,6 +1067,46 @@ mod tests {
         let mut seen = place.clone();
         seen.sort_unstable();
         assert_eq!(seen, (0..v.len() as u32).collect::<Vec<_>>());
+    }
+
+    /// A shut doorway's leaf stays where it was given whichever way round its outline goes: a
+    /// doorway given clockwise, turned round by the lookup, had its leaf mirrored, so the door
+    /// stood on the far room's side and took its probes (#327).
+    #[test]
+    fn a_shut_doorway_splits_where_given_either_way_round() {
+        let house = little_house();
+        let doorway = house
+            .iter()
+            .position(|v| v.kind == RegionKind::Doorway)
+            .unwrap();
+        let clockwise = house[doorway];
+        let c = clockwise.corners;
+        let anticlockwise = RegionVolume {
+            corners: [c[1], c[0], c[3], c[2]],
+            ..clockwise
+        };
+        assert!(turned(&clockwise) && !turned(&anticlockwise));
+        // The leaf 0.2 of the way across from room 1's side (x from 3.89 to 4.11): at 3.934.
+        let leaf = 0.2;
+        for v in [clockwise, anticlockwise] {
+            let mut volumes = house.clone();
+            volumes[doorway] = v;
+            let split = split_as_stored(leaf, turned(&v));
+            for (x, room) in [(3.9, 1), (3.92, 1), (3.95, 2), (4.1, 2)] {
+                let hit = region_at(&volumes, Vec3::new(x, 1.0, 1.5));
+                assert_eq!(hit.kind, RegionKind::Doorway);
+                // The shader's rule (`region_at` in probes.slang): a shut doorway's point is its
+                // `region`'s before the leaf, its `other`'s after.
+                let side = if hit.ramp < split {
+                    hit.region
+                } else {
+                    hit.other
+                };
+                assert_eq!(side, room, "x {x}, turned {}", turned(&v));
+            }
+        }
+        // Open stays open.
+        assert_eq!(split_as_stored(0.0, true), 0.0);
     }
 
     /// D-068's lookup: rooms, a doorway's ramp either way round, a reveal, the body, outside.

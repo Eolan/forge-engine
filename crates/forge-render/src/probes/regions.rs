@@ -139,8 +139,10 @@ pub(super) struct RegionStore {
     cell_ranges: Ranges,
     index_ranges: Ranges,
     sets: Vec<Option<Set>>,
-    /// Per volume slot, its kind (`GpuRegionVolume::kind`) and its doorway's split.
+    /// Per volume slot, its kind (`GpuRegionVolume::kind`), whether [`ordered`] turned it round
+    /// ([`turned`]) and its doorway's split.
     kinds: Vec<u32>,
+    turned: Vec<bool>,
     splits: Vec<f32>,
     /// The splits' edits, (generation, first, count), and the generation each slot's copy holds.
     split_log: Vec<(u64, u32, u32)>,
@@ -164,6 +166,30 @@ pub(super) struct RegionStore {
     wake: Vec<(Vec3, Vec3)>,
 }
 
+/// Whether `v` is given clockwise in x and z: [`ordered`] turns it round, and a doorway turned
+/// round swaps its sides.
+pub(super) fn turned(v: &RegionVolume) -> bool {
+    let c = v.corners;
+    let area: f32 = (0..4)
+        .map(|i| {
+            let (a, b) = (c[i], c[(i + 1) % 4]);
+            a.x * b.y - b.x * a.y
+        })
+        .sum();
+    area < 0.0
+}
+
+/// A shut doorway's split (its leaf's share of the way across from its `region` side) as the
+/// lookup measures it: from the side [`ordered`] made its `region`, the other one when it was
+/// turned round. Open (0) stays open.
+pub(super) fn split_as_stored(split: f32, turned: bool) -> f32 {
+    if turned && split > 0.0 {
+        (1.0 - split).max(1e-3)
+    } else {
+        split
+    }
+}
+
 /// The volumes in the order the lookup tries them, recesses and doorways first (they overlap
 /// their rooms' edges), the houses' bodies last (round their rooms), each anticlockwise in x and z
 /// (a doorway turned round swaps its sides).
@@ -172,16 +198,10 @@ pub(super) fn ordered(volumes: &[RegionVolume]) -> Vec<GpuRegionVolume> {
         .iter()
         .map(|v| {
             let c = v.corners;
-            let area: f32 = (0..4)
-                .map(|i| {
-                    let (a, b) = (c[i], c[(i + 1) % 4]);
-                    a.x * b.y - b.x * a.y
-                })
-                .sum();
-            let (corners, region, other) = if area >= 0.0 {
-                (c, v.region, v.other)
-            } else {
+            let (corners, region, other) = if turned(v) {
                 ([c[3], c[2], c[1], c[0]], v.other, v.region)
+            } else {
+                (c, v.region, v.other)
             };
             GpuRegionVolume {
                 corners: corners.map(|p| p.to_array()),
@@ -330,6 +350,7 @@ impl RegionStore {
             index_ranges: Ranges::new(capacity.indices, 0),
             sets: Vec::new(),
             kinds: vec![0; capacity.volumes as usize],
+            turned: vec![false; capacity.volumes as usize],
             splits: vec![0.0; capacity.volumes as usize],
             split_log: Vec::new(),
             split_generation: 0,
@@ -442,6 +463,10 @@ impl RegionStore {
                 hi = hi.max(Vec3::new(c[0], v.ceiling, c[1]));
             }
         }
+        let place: Vec<u32> = places(volumes).iter().map(|&p| p + first_volume).collect();
+        for (v, &at) in volumes.iter().zip(&place) {
+            self.turned[at as usize] = turned(v);
+        }
         let set = Set {
             volumes: (first_volume, n),
             cells: (first_cell, cells.len() as u32),
@@ -450,7 +475,7 @@ impl RegionStore {
             dims,
             lo,
             hi,
-            place: places(volumes).iter().map(|&p| p + first_volume).collect(),
+            place,
         };
         if wake {
             self.wake.push((set.lo, set.hi));
@@ -502,7 +527,7 @@ impl RegionStore {
         if self.kinds[at as usize] != 2 {
             return;
         }
-        self.splits[at as usize] = split;
+        self.splits[at as usize] = split_as_stored(split, self.turned[at as usize]);
         self.split_generation += 1;
         self.split_log.push((self.split_generation, at, 1));
     }
