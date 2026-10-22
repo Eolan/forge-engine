@@ -25,6 +25,9 @@ pub enum Kind {
     GateJamb,
     /// A hedge's end: where a garden wall may stop and the hedge go on.
     HedgeEnd,
+    /// A hedge's length: what a garden wall's end may stop against, the hedge's thickness
+    /// taking the wall's end in.
+    HedgeSide,
 }
 
 /// What a socket covers about its origin.
@@ -91,15 +94,17 @@ pub fn compatible(a: &Socket, b: &Socket) -> bool {
     if a.piece == b.piece {
         return false;
     }
-    let point_on_face = |p: &Socket, f: &Socket| {
+    // Within `reach` of the face's middle line, along its width.
+    let near_face = |p: &Socket, f: &Socket, reach: f64| {
         let Extent::Rect { width, .. } = f.extent else {
             return false;
         };
         let half = f.across() * (width * 0.5);
         let (s0, s1) = (f.at - half, f.at + half);
         let t = ((p.at - s0).dot(s1 - s0) / (s1 - s0).length_squared().max(1e-12)).clamp(0.0, 1.0);
-        p.at.distance(s0 + (s1 - s0) * t) < p.thickness * 0.5 + TOLERANCE
+        p.at.distance(s0 + (s1 - s0) * t) < reach
     };
+    let point_on_face = |p: &Socket, f: &Socket| near_face(p, f, p.thickness * 0.5 + TOLERANCE);
     // Two points meet within the thicker one's half (a gate's jamb is as wide as its opening).
     let points_meet = |p: &Socket, q: &Socket| {
         p.at.distance(q.at) < TOLERANCE + p.thickness.max(q.thickness) * 0.5
@@ -108,6 +113,8 @@ pub fn compatible(a: &Socket, b: &Socket) -> bool {
         (GardenEnd, GardenEnd) => points_meet(a, b),
         (GardenEnd, GardenFace | HouseFace | PartyFace) => point_on_face(a, b),
         (GardenEnd, GateJamb | HedgeEnd) | (GateJamb | HedgeEnd, GardenEnd) => points_meet(a, b),
+        // The wall's end face within the hedge: its middle within both halves of the line.
+        (GardenEnd, HedgeSide) => near_face(a, b, (a.thickness + b.thickness) * 0.5 + TOLERANCE),
         (PartyFace, PartyFace) => {
             let (Extent::Rect { width: wa, .. }, Extent::Rect { width: wb, .. }) =
                 (a.extent, b.extent)

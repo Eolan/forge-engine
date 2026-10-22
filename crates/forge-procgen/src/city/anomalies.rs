@@ -458,6 +458,22 @@ pub fn village_sockets(v: &Village, structures: &[Structure]) -> Vec<Socket> {
                     need: Need::Optional,
                 });
             }
+            // Its length, which a wall's end may stop against (#308): 0.8 m of body, as its ends,
+            // within the shrubs' crowns (0.55–0.7 m about the line, `village`).
+            let t = (q - p).normalize_or_zero();
+            out.push(Socket {
+                kind: SocketKind::HedgeSide,
+                piece,
+                at: (p + q) * 0.5,
+                level: 0.0,
+                normal: DVec2::new(t.y, -t.x),
+                extent: Extent::Rect {
+                    width: p.distance(q),
+                    height: 1.0,
+                },
+                thickness: 0.8,
+                need: Need::Optional,
+            });
             piece += 1;
         }
     }
@@ -872,20 +888,18 @@ mod tests {
             (Kind::OpeningMisfit, 0),
             (Kind::DoorBlocked, 0),
         ];
-        // The other sizes' own, where they had more when they came in (#308: two garden walls
-        // meeting a little apart at a corner at 500 m; at 700 to 900 m, 2026-10-22, after the
-        // stairs, the rows' corners, the backs and the walls' corners: 77 down to 19).
-        let since: [(f64, Kind, usize); 11] = [
-            (500.0, Kind::FreeWallEnd, 1),
+        // The other sizes' own, where they had more when they came in (#308: at 700 to 900 m,
+        // 2026-10-22, after the stairs, the rows' corners, the backs, the walls' corners and the
+        // hedges' sides: 77 down to 13).
+        let since: [(f64, Kind, usize); 9] = [
             (700.0, Kind::UnlitRoom, 2),
-            (700.0, Kind::FreeWallEnd, 2),
+            (700.0, Kind::FreeWallEnd, 1),
             (700.0, Kind::RidgeStep, 2),
-            (800.0, Kind::FreeWallEnd, 3),
             (800.0, Kind::RidgeStep, 2),
             (800.0, Kind::BlankStreetWall, 1),
             (900.0, Kind::UnlitRoom, 1),
             (900.0, Kind::Sliver, 1),
-            (900.0, Kind::FreeWallEnd, 3),
+            (900.0, Kind::FreeWallEnd, 1),
             (900.0, Kind::LonePartyWall, 2),
         ];
         let mut over = Vec::new();

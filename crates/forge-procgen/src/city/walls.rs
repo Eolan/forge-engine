@@ -35,6 +35,10 @@ const IN_LINE_JOIN: f64 = 0.75;
 /// out in the open meeting nothing (#308). From 75° up the overrun stays within the other's
 /// face; under 36° a mitre leans past the 0.3 of square [`Wall::ring`] keeps, and would part.
 const MITRE: (f64, f64) = (0.26, 0.81);
+/// And obtuse corners, 100° to 162° (where walls in line meet on their own mitre): butted, two
+/// walls whose thickness both took the garden's side left their ends' faces 0.27 m apart at the
+/// corner (#308).
+const MITRE_OBTUSE: (f64, f64) = (-0.95, -0.17);
 /// How near a stretch running along a house's wall may come to it and still be walled, metres:
 /// nearer, the house's own wall bounds the garden. A lot line half a metre behind a row's backs
 /// stood a garden wall in a slot before their court doors, the paths to them ending at it.
@@ -502,8 +506,11 @@ fn joints(walls: &mut Vec<Wall>) {
         let o = &walls[j];
         let near = nearer(o, c);
         let away = if near == o.a { dir(o) } else { -dir(o) };
-        (near.distance(c) < JOIN && (MITRE.0..MITRE.1).contains(&into.dot(away)))
-            .then_some((j, near, away))
+        (near.distance(c) < JOIN
+            && [MITRE, MITRE_OBTUSE]
+                .iter()
+                .any(|r| (r.0..r.1).contains(&into.dot(away))))
+        .then_some((j, near, away))
     };
     // Each end's mitre at such a corner, both walls each other's only one there: the face's
     // direction to the wall's left.
