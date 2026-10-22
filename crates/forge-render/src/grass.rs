@@ -218,6 +218,7 @@ pub(crate) struct Grass {
     origin: Vec2,
     cell: f32,
     width: u32,
+    depth: u32,
     settings: GrassSettings,
     count: Pipeline,
     scan: Pipeline,
@@ -358,6 +359,7 @@ impl Grass {
             origin: map.origin,
             cell: map.cell,
             width: map.width,
+            depth: map.depth,
             settings,
             count,
             scan,
@@ -380,14 +382,15 @@ impl Grass {
     }
 
     /// The frame block's grass fields: the map's address, its corner, a cell's side, the reach,
-    /// its cells along x and the blades' row.
-    pub(crate) fn frame_fields(&self) -> (u64, [f32; 2], f32, f32, u32, u32) {
+    /// its cells along x and z and the blades' row.
+    pub(crate) fn frame_fields(&self) -> (u64, [f32; 2], f32, f32, u32, u32, u32) {
         (
             self.cells.address(),
             self.origin.to_array(),
             self.cell,
             self.settings.reach,
             self.width,
+            self.depth,
             self.settings.row,
         )
     }

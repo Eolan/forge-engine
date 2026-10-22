@@ -503,7 +503,7 @@ public struct Frame
     public uint grass_row;          // the blades' material row
     public float4 grass_wind;       // xy: the wind's way on the ground (unit), z: its strength (the tips' lean in it, a share of their height), w: the sway's time (s)
     public float grass_wind_before; // the sway's time the frame before (s): the blades' motion (`grass_motion_main`)
-    public uint grass_pad;
+    public uint grass_depth;        // its cells along z
     public uint2 grass_pad2;
 };
 
@@ -2825,7 +2825,7 @@ void grass_count_main(uint3 id : SV_DispatchThreadID)
     int2 c = grass_push.window + int2(int(id.x % size), int(id.x / size));
     uint width = f[0].grass_width;
     uint patches = 0;
-    if (all(c >= 0) && uint(c.x) < width && uint(c.y) * width + uint(c.x) < (1u << GRASS_CELL_BITS))
+    if (all(c >= 0) && uint(c.x) < width && uint(c.y) < f[0].grass_depth)
     {
         uint cell = uint(c.y) * width + uint(c.x);
         GrassCell g = f[0].grass[cell];

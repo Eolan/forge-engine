@@ -692,7 +692,7 @@ struct GpuFrame {
     /// sway's time the frame before.
     grass_wind: [f32; 4],
     grass_wind_before: f32,
-    grass_pad: u32,
+    grass_depth: u32,
     grass_pad2: [u32; 2],
 }
 
@@ -4829,9 +4829,9 @@ impl MeshletRenderer {
         // A point relative to this camera sits `camera − previous camera` further from the
         // previous one (issue #93): a small step, exact in the cells' arithmetic.
         let step = params.cull.position.relative_to(prev.camera);
-        let (grass, grass_origin, grass_cell, grass_reach, grass_width, grass_row) =
+        let (grass, grass_origin, grass_cell, grass_reach, grass_width, grass_depth, grass_row) =
             self.grass.as_ref().map_or(
-                (0, [0.0; 2], 1.0, 0.0, 1, 0),
+                (0, [0.0; 2], 1.0, 0.0, 1, 0, 0),
                 crate::grass::Grass::frame_fields,
             );
         let wind = self
@@ -4943,7 +4943,7 @@ impl MeshletRenderer {
             grass_row,
             grass_wind: [way.x, way.y, wind.length(), grass_now],
             grass_wind_before: grass_before,
-            grass_pad: 0,
+            grass_depth,
             grass_pad2: [0; 2],
         }
     }
