@@ -1325,14 +1325,16 @@ impl<D: Demo> State<D> {
         let look = self.ctx.settings.get(self.mouse_look);
         if look != self.input.mouse_look {
             self.input.mouse_look = look;
-            self.input.looking = look;
+            // Out of the window, it waits for the focus to come back (`WindowEvent::Focused`).
+            let take = look && !self.input.unfocused;
+            self.input.looking = take;
             let window = &self.ctx.window;
-            if !look {
+            if !take {
                 let _ = window.set_cursor_grab(CursorGrabMode::None);
             } else if window.set_cursor_grab(CursorGrabMode::Locked).is_err() {
                 let _ = window.set_cursor_grab(CursorGrabMode::Confined);
             }
-            window.set_cursor_visible(!look);
+            window.set_cursor_visible(!take);
         }
         if !self.unmatched_reported && !self.ctx.loading {
             self.unmatched_reported = true;
@@ -2093,12 +2095,20 @@ impl<D: Demo> ApplicationHandler for App<D> {
                     state.ctx.window.set_cursor_visible(!down);
                 }
             }
-            // Back in the window, the game's mouse look takes the cursor again.
+            // As games do: out of the window (Alt+Tab, another window clicked) the cursor is the
+            // system's again, free and shown, and no key, button or motion stays the game's; back
+            // in it, the game's mouse look takes the cursor again.
             WindowEvent::Focused(focused) => {
+                let window = &state.ctx.window;
+                state.input.unfocused = !focused;
                 if !focused {
                     state.input.release_all();
+                    state.input.looking = false;
+                    state.input.mouse_delta = (0.0, 0.0);
+                    let _ = window.set_cursor_grab(CursorGrabMode::None);
+                    window.set_cursor_visible(true);
                 } else if state.input.mouse_look {
-                    let window = &state.ctx.window;
+                    state.input.looking = true;
                     if window.set_cursor_grab(CursorGrabMode::Locked).is_err() {
                         let _ = window.set_cursor_grab(CursorGrabMode::Confined);
                     }
@@ -2118,7 +2128,10 @@ impl<D: Demo> ApplicationHandler for App<D> {
     }
 
     fn device_event(&mut self, _event_loop: &ActiveEventLoop, _id: DeviceId, event: DeviceEvent) {
-        if let (Some(state), DeviceEvent::MouseMotion { delta }) = (self.state.as_mut(), event) {
+        // The raw motion comes whichever window has the focus: the game's only while it has it.
+        if let (Some(state), DeviceEvent::MouseMotion { delta }) = (self.state.as_mut(), event)
+            && !state.input.unfocused
+        {
             state.input.mouse_delta.0 += delta.0 as f32;
             state.input.mouse_delta.1 += delta.1 as f32;
         }

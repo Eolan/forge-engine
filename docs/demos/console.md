@@ -86,7 +86,7 @@ commands, set from the console; `bind` puts one on a key.
   - any other key by its name: `f5`, `tab`, `space`, `enter`, `pageup`, `up`, `numpad1`.
   - the mouse's buttons: `mouse1` the left, `mouse2` the right, `mouse3` the middle, `mouse4` and `mouse5` the sides.
   - The key under Esc, Esc and F1 stay the shell's.
-- **The game's mouse look** (`app.mouse_look`, e.g. `bind m toggle app.mouse_look`): the cursor captured and hidden, the view turning with no button held, and the right button the game's (aiming). Esc lets the mouse go first, and a second Esc quits.
+- **The game's mouse look** (`app.mouse_look`, e.g. `bind m toggle app.mouse_look`): the cursor captured and hidden, the view turning with no button held, and the right button the game's (aiming). Esc lets the mouse go first, and a second Esc quits. Out of the window (Alt+Tab, another window clicked) the cursor is the system's again, free and shown, and the mouse's motion turns nothing; back in the window, the game takes it again.
 - **How long binds last:**
   - typed in the console, for the run, as every console change;
   - as lines in `forge.cfg`, every run, run once the demo is ready.

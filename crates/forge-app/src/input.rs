@@ -21,6 +21,9 @@ pub struct Input {
     /// The game's mouse look is on (`app.mouse_look`): the view turns with the mouse without a
     /// button held, and every button is the game's (fire, aim).
     pub mouse_look: bool,
+    /// The window has lost the keyboard's focus (Alt+Tab, another window clicked): the cursor is
+    /// the system's again and the mouse's motion is not the game's.
+    pub(crate) unfocused: bool,
 }
 
 impl Input {
