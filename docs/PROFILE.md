@@ -1796,7 +1796,19 @@ that changes the resolve's code (a constant of the leaves' light):
   (`vkCreateComputePipelines`): `resolve_standard_rt_main`, 11.2 s alone. Each pipeline made is
   a step of its own now ("pipelines", by its name), which the loading screen shows while the
   driver works and the profile times. #348 has what its time is made of: removing the
-  resolve's four traced parts saves 1 s of 9.3; the standard shading itself is the rest. The 25 others are
+  resolve's four traced parts saves 1 s of 9.3; the standard shading itself is the rest, each
+  of its paths (the rows read by UV, the faked windows) about 2.5 s with its own inlined call
+  of `sun_light`.
+- **One `sun_light` for the standard class** (#348): its paths give their light's inputs
+  (`LightInputs`) and the light is worked out once. The same image (0 pixels on the village and
+  the day check's sentinels), and on the village after an edit of the resolve:
+
+  | | Before | After |
+  |---|---|---|
+  | The driver's `shading standard` | 9.6 s | 5.3 s |
+  | The start | about 17 s | 11.9 s |
+  | `slangc`, the entry alone (SPIR-V) | 4.5 s (868 KiB) | 3.3 s (643 KiB) |
+  | `shading/standard` on the GPU, best of 3 | 0.779 ms | 0.728 ms | The 25 others are
   near-instant, found in the driver's cache. Making each pipeline in the warm-up as its entry
   compiled (tried, then removed) only moved those 11 s there: one pipeline does not
   parallelise.

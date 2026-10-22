@@ -3849,7 +3849,22 @@ float3 leaf_transmission(Frame* f, float3 base, float3 through, Surface s)
     return base * through * f[0].sun_color.rgb * s.shadow * lobe;
 }
 
-float3 shade_uv_mapped(Frame* f, Material mat, Surface s)
+// What a surface of the standard class gives the sun's and the sky's light (`sun_light`), whose
+// one call `shade_standard` makes for each of its paths: each call, inlined, cost the driver
+// about 2.5 s of the resolve's compile (#348).
+struct LightInputs
+{
+    float3 albedo;
+    float3 n;
+    float power;
+    float specular;
+    float ao;
+    float reflectance;
+    float3 emissive;
+};
+
+// A row read by UV (D-047): its maps, decals and leaves into what its light takes.
+LightInputs uv_mapped_light(Frame* f, Material mat, Surface s)
 {
     float2 uv = float2(dot(mat.uv_u, float3(s.uv, 1.0)), dot(mat.uv_v, float3(s.uv, 1.0)));
     float2 gx = float2(dot(mat.uv_u.xy, s.duvdx), dot(mat.uv_v.xy, s.duvdx));
@@ -3912,14 +3927,15 @@ float3 shade_uv_mapped(Frame* f, Material mat, Surface s)
     // Toksvig's factor (#331): the lobe widened by the normals' variance under the pixel, so a
     // bevel too fine for it gives a broad, steady highlight instead of a flickering line.
     power /= 1.0 + power * variance;
-    float3 diffuse = base * (1.0 - metal);
-    float reflectance = lerp(mat.reflectance, max(base.r, max(base.g, base.b)), metal);
-    float specular = mat.specular + METAL_SPECULAR * metal;
-    float ndl;
-    float3 lit = sun_light(f, diffuse, n, s.n, power, specular, s.shadow, s.sky, ao, s.view, reflectance, s.world, s.probes, s.traced, ndl) + emissive;
-    if (leaves)
-        lit += leaf_transmission(f, diffuse, mat.scatter, s);
-    return lit;
+    LightInputs li;
+    li.albedo = base * (1.0 - metal);
+    li.reflectance = lerp(mat.reflectance, max(base.r, max(base.g, base.b)), metal);
+    li.specular = mat.specular + METAL_SPECULAR * metal;
+    li.n = n;
+    li.power = power;
+    li.ao = ao;
+    li.emissive = emissive;
+    return li;
 }
 
 // A faked window's pane condition (#339, `glass.slang`'s for the clear glass): a tilt of up to
@@ -4084,42 +4100,73 @@ float3 shade_standard(Frame* f, Material mat, Surface s)
 {
     float3 albedo;
     float3 n = s.n;
+    // The light's inputs from the row's path, the light worked out once below (#348).
+    LightInputs li;
+    li.n = n;
+    li.power = mat.specular_power;
+    li.specular = mat.specular;
+    li.ao = s.ao;
+    li.reflectance = mat.reflectance;
+    bool uv = false;
+    bool interior = false;
     if (!debug_albedo(f, s.meshlet_index, s.lod_level, albedo))
     {
         if ((mat.flags & MATERIAL_FLAG_UV) != 0 && s.has_uv)
-            return shade_uv_mapped(f, mat, s);
-        if ((mat.flags & MATERIAL_FLAG_INTERIOR) != 0)
+        {
+            li = uv_mapped_light(f, mat, s);
+            uv = true;
+        }
+        else if ((mat.flags & MATERIAL_FLAG_INTERIOR) != 0)
         {
             // The pane: its reflection over dark glass, its normal bent by its own condition
             // (#339, as the clear glass's): neighbouring windows reflect the street askew.
-            float ndl;
-            float3 pane_n = window_pane_normal(n, s);
-            float3 pane = sun_light(f, mat.color_a, pane_n, s.n, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, s.world, s.probes, s.traced, ndl);
-            // The room behind, seen along the view into the mesh's space.
-            float3 d = normalize(mul(transpose(s.frame), -s.view));
-            if (d.z > -1e-3)
-                return pane;
-            // Each window's room by where it stands, so a city that gains or loses an instance
-            // keeps its rooms (by its index, every window after it changed room).
-            bool shop = (mat.flags & MATERIAL_FLAG_SHOP) != 0;
-            float3 room = interior_room(s.object_position, d, s.instance_place, max(length(s.dpdx), length(s.dpdy)), shop);
-            float3 h = hash_color(s.instance_place);
-            // A shop keeps its window bare.
-            float curtain = !shop && h.x < ROOM_CURTAINS ? 0.35 + 0.5 * h.x / ROOM_CURTAINS : 0.0;
-            // Lit by the daylight the window gets (a white wall's facing out), or the row's lamp.
-            float ndl_white;
-            float3 daylight = sun_light(f, float3(1.0, 1.0, 1.0), n, s.n, 1.0, 0.0, s.shadow, s.sky, s.ao, s.view, 0.0, s.world, s.probes, false, ndl_white);
-            float3 lamp = emission(f, mat) * (shop ? ROOM_SHOP_LAMP : ROOM_LAMP);
-            float3 seen = lerp(room * (daylight * ROOM_DAYLIGHT + lamp), mat.color_b * (daylight + lamp), curtain);
-            // Through the glass, less what it reflects (Schlick).
-            float fresnel = mat.reflectance + (1.0 - mat.reflectance) * pow(1.0 - saturate(dot(n, s.view)), 5.0);
-            return pane + seen * (1.0 - fresnel);
+            interior = true;
+            li.albedo = mat.color_a;
+            li.n = window_pane_normal(n, s);
+            li.emissive = float3(0.0);
         }
-        standard_surface(mat, s, albedo, n);
-        apply_decals(f, s, albedo);
+        else
+        {
+            standard_surface(mat, s, albedo, n);
+            apply_decals(f, s, albedo);
+            li.albedo = albedo;
+            li.n = n;
+            li.emissive = emission(f, mat);
+        }
+    }
+    else
+    {
+        li.albedo = albedo;
+        li.emissive = emission(f, mat);
     }
     float ndl;
-    return sun_light(f, albedo, n, s.n, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, s.world, s.probes, s.traced, ndl) + emission(f, mat);
+    float3 lit = sun_light(f, li.albedo, li.n, s.n, li.power, li.specular, s.shadow, s.sky, li.ao, s.view, li.reflectance, s.world, s.probes, s.traced, ndl) + li.emissive;
+    if (uv && (mat.flags & MATERIAL_FLAG_FOLIAGE) != 0)
+        lit += leaf_transmission(f, li.albedo, mat.scatter, s);
+    if (interior)
+    {
+        float3 pane = lit;
+        // The room behind, seen along the view into the mesh's space.
+        float3 d = normalize(mul(transpose(s.frame), -s.view));
+        if (d.z > -1e-3)
+            return pane;
+        // Each window's room by where it stands, so a city that gains or loses an instance
+        // keeps its rooms (by its index, every window after it changed room).
+        bool shop = (mat.flags & MATERIAL_FLAG_SHOP) != 0;
+        float3 room = interior_room(s.object_position, d, s.instance_place, max(length(s.dpdx), length(s.dpdy)), shop);
+        float3 h = hash_color(s.instance_place);
+        // A shop keeps its window bare.
+        float curtain = !shop && h.x < ROOM_CURTAINS ? 0.35 + 0.5 * h.x / ROOM_CURTAINS : 0.0;
+        // Lit by the daylight the window gets (a white wall's facing out), or the row's lamp.
+        float ndl_white;
+        float3 daylight = sun_light(f, float3(1.0, 1.0, 1.0), n, s.n, 1.0, 0.0, s.shadow, s.sky, s.ao, s.view, 0.0, s.world, s.probes, false, ndl_white);
+        float3 lamp = emission(f, mat) * (shop ? ROOM_SHOP_LAMP : ROOM_LAMP);
+        float3 seen = lerp(room * (daylight * ROOM_DAYLIGHT + lamp), mat.color_b * (daylight + lamp), curtain);
+        // Through the glass, less what it reflects (Schlick).
+        float fresnel = mat.reflectance + (1.0 - mat.reflectance) * pow(1.0 - saturate(dot(n, s.view)), 5.0);
+        return pane + seen * (1.0 - fresnel);
+    }
+    return lit;
 }
 
 // The wet sand (issue #105). The swash's sheet is a function of position and time
