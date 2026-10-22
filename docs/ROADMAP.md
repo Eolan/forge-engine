@@ -679,9 +679,10 @@ The items below are the phase's original outline; the plan above orders them.
      a cell's content added and removed as one record (step 3, built 2026-10-22: the editor's
      in-place edits, the probes' region sets (23505d6e), the glass's pane sets, the lamps by
      stable ids, the pool of movers static instances are promoted to while they move, and
-     `CellSystems` adding a cell's rooms, panes and lamps beside its edit), next the streaming
-     plan driving it with far proxies (step 4); the loads profiled and the camera's view
-     uploaded first after it (#345).
+     `CellSystems` adding a cell's rooms, panes and lamps beside its edit), the streaming plan
+     driving it (step 4: `CellStreamer` and a game's `CellSource`, built 2026-10-22; the far
+     cells' proxies proposed in D-077 🟡, the owner's to decide); the loads profiled (#345,
+     2026-10-22: the long starts are the shaders, the upload a small share).
    - **Generation at run time** stays possible where a game needs it: the same makers, run
      by the engine for a chunk on the fly instead of loading it.
    - **Still to find:** how to generate whole worlds, planets included, so that their chunks

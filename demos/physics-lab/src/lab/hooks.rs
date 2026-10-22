@@ -518,8 +518,31 @@ impl Scenario for LabScenario {
         let chase = self.look().chase;
         // `FORGE_DYNAMIC_SCENE=noedit`: the scene built to be edited, no edit made.
         let edits = std::env::var("FORGE_DYNAMIC_SCENE").is_ok_and(|v| v != "noedit");
-        let editor = match lab.edited {
+        let mut editor = match lab.edited {
             Some(_) if edits => scene.editor(&ctx.device, &ctx.shaders)?,
+            _ => None,
+        };
+        // `=cells` (#338 step 4): the editor goes to a cell streamer, whose cells are props in
+        // the sky over the pyramid, streamed round a viewer that crosses the view.
+        let cells = match (std::env::var("FORGE_DYNAMIC_SCENE").as_deref(), lab.edited) {
+            (Ok("cells"), Some(mesh)) => {
+                let editor = editor.take().expect("the scene's editor");
+                let streamer = forge_render::CellStreamer::new(
+                    editor,
+                    GridCells { mesh },
+                    GRID,
+                    forge_render::CellStreamConfig {
+                        policy: forge_world::StreamPolicy {
+                            finest: GRID_LEVEL,
+                            coarsest: GRID_LEVEL,
+                            rings: 2.5,
+                            hysteresis: 0.25,
+                        },
+                        cells_per_edit: 8,
+                    },
+                )?;
+                Some((streamer, std::sync::Arc::clone(&ctx.device)))
+            }
             _ => None,
         };
         Ok((
@@ -550,10 +573,62 @@ impl Scenario for LabScenario {
                     _ => None,
                 },
                 promoted: None,
+                cells,
                 flying: [0.0; 4],
                 pulling: 0.5,
             }),
         ))
+    }
+}
+
+/// `=cells`' world (#338 step 4): a flat grid of 64 m roots, its cells of [`GRID_LEVEL`] (16 m).
+const GRID: forge_world::FlatGrid = forge_world::FlatGrid { root_size: 64.0 };
+const GRID_LEVEL: u8 = 2;
+/// The props a cell holds, at this height over the ground.
+const GRID_PROPS: u32 = 4;
+const GRID_HEIGHT: f64 = 9.0;
+
+/// `=cells`' source: each cell's props, placed by its id, as a game's cells would come from its
+/// data.
+struct GridCells {
+    mesh: forge_render::MeshId,
+}
+
+impl forge_render::CellSource for GridCells {
+    fn load(
+        &mut self,
+        cell: forge_world::CellId,
+        editor: &mut forge_render::meshlet::SceneEditor,
+    ) -> forge_gpu::Result<forge_render::LoadedCell> {
+        use forge_world::Partition;
+        let size = GRID.cell_size(cell.level());
+        let (x, y) = cell.xy();
+        let mut instances = Vec::new();
+        for k in 0..GRID_PROPS {
+            // A cell's own hash per prop: where it stands in the cell and how it turns.
+            let mut h = cell.0 ^ (u64::from(k) + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+            h ^= h >> 31;
+            h = h.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            h ^= h >> 29;
+            let unit = |shift: u32| ((h >> shift) & 0xffff) as f64 / 65_536.0;
+            let at = glam::DVec3::new(
+                (x as f64 + 0.15 + 0.7 * unit(0)) * size,
+                GRID_HEIGHT + 4.0 * unit(16),
+                (y as f64 + 0.15 + 0.7 * unit(32)) * size,
+            );
+            instances.push(editor.add_instance_at(
+                self.mesh,
+                forge_render::CellPos::from_f64(at),
+                glam::Quat::from_rotation_y((unit(48) * std::f64::consts::TAU) as f32),
+                1.0,
+                forge_core::material::MaterialId(0),
+            )?);
+        }
+        Ok(forge_render::LoadedCell {
+            instances,
+            meshes: Vec::new(),
+            sets: forge_render::CellSets::default(),
+        })
     }
 }
 
@@ -590,6 +665,11 @@ struct LabRunning {
     /// promoted.
     promote: Option<bool>,
     promoted: Option<u32>,
+    /// With `=cells` (#338 step 4): the cell streamer, with the device its cells' sets need.
+    cells: Option<(
+        forge_render::CellStreamer,
+        std::sync::Arc<forge_gpu::Device>,
+    )>,
 }
 
 /// The frames at which #338's check adds its instance, moves it, then removes it; with
@@ -889,6 +969,36 @@ impl Running for LabRunning {
                     frame = self.edit_frames,
                     "dynamic scene edited (#338's check)"
                 );
+            }
+        }
+        // `=cells` (#338 step 4): the viewer crosses the view along x, 100 m west of the pyramid
+        // to 80 m east from frame 30 to 330; each frame takes every edit its position asks for
+        // (`update_settled`), so a run's frames do not hang on the worker's timing.
+        if let Some((streamer, device)) = self.cells.as_mut() {
+            self.edit_frames += 1;
+            let f = self.edit_frames as f64;
+            let viewer =
+                glam::DVec3::new((-100.0 + 0.6 * (f - 30.0)).clamp(-100.0, 80.0), 0.0, 0.0);
+            let seq = streamer.view(viewer);
+            let mut lamps = forge_render::lamps::LampTable::new(0);
+            let mut systems = forge_render::CellSystems {
+                probes: None,
+                glass: None,
+                lamps: &mut lamps,
+            };
+            match streamer.update_settled(seq, device, scene, &mut systems) {
+                Ok(took) if took.edits > 0 => tracing::info!(
+                    frame = self.edit_frames,
+                    x = viewer.x,
+                    edits = took.edits,
+                    loaded = took.loaded,
+                    unloaded = took.unloaded,
+                    cells = streamer.loaded(),
+                    worker_ms = %format_args!("{:.1}", took.worker_s * 1e3),
+                    "cells streamed (#338's check)"
+                ),
+                Ok(_) => {}
+                Err(e) => tracing::error!("#338's cell stream: {e}"),
             }
         }
         // The promoted mover's pose, before the movers are committed: where the instance stood,

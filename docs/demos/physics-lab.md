@@ -2206,6 +2206,27 @@ Steps 1 and 3 of D-065 (`forge_render::lamps`, `lamps_at` and `hit_lamps` in `me
   filter, best of three: "shadow/lamp rays" 0.30 ms, "shadow/lamp filter" 0.15 ms and
   `shading/standard` 0.66 → 0.39 ms, the frame 1.84 → 2.02 ms.
 
+## `FORGE_DYNAMIC_SCENE`: the scene edited as it runs (issues #220, #338)
+
+The rain's scene built to take and free meshes and instances in place (`reserve_dynamic`), its
+pages streamed:
+- **The editor's checks** (`=visible`, the default under the ground):
+  - an instance added at frame 30, moved at 45, removed at 60;
+  - `=promote` and `=swing` promote it to a mover of a pool instead of moving it, and demote it
+    where the move takes it (`docs/demos/city-plan.md`, "Promoted while they move").
+- **`=cells`: streamed cells** (#338 step 4, D-077's streamer):
+  - **The world:** a flat grid of 16 m cells (`forge_world::FlatGrid`, level 2 of 64 m roots).
+    Each cell holds four props in the sky over the pyramid, placed by its id as a game's data
+    would.
+  - **The viewer:** crosses the view along x from 100 m west to 80 m east, frames 30 to 330.
+  - **The streamer** (`forge_render::CellStreamer`): its worker makes D-037's plan (a reach of
+    2.5 cells, a hysteresis of 0.25) and loads the nearest cells first, at most 8 cells an edit.
+    Each frame takes every edit its position asks for (`update_settled`), so a run's frames do
+    not hang on the worker's timing.
+  - **Measured:** 26 cells in 4 edits at the start. Then, as the viewer moves, 2 to 4 cells load
+    ahead and 2 unload behind, 33 to 37 cells in, the worker 0.3 to 1.2 ms an edit.
+  - **Determinism:** two runs give the same frames every 60 frames (0 pixels).
+
 ## Captures
 
 The batch (`tools/captures.sh`, set `lab`) takes `lab-drop90` (the rain in mid-air), its A/B
