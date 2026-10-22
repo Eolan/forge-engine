@@ -7112,6 +7112,17 @@ without one. Three ways:
 **Recommended: B for the town now** (near: the cells within about 0.5 km, full; far: proxies to
 about 2 km; beyond: nothing, under the fog of the town's own look). D-037's coarse levels
 stay for content of their own scale (terrain, the sky's distant ranges). C can come later
-through B's proxies. Patents: not researched for this entry. B uses only Forge's own cooking
-(the merged mesh's cluster DAG), and C would need the check before it is built.
+through B's proxies.
+
+**Patents** (a first search, 2026-10-22: web searches and Google Patents' pages of the three
+nearest hits; a full search before C is built):
+- **US 10,825,236 B1**, "Composite mesh LOD construction":
+  - Arvizio Inc., US, active, expected to expire 2039-03-12.
+  - Claim 1 sorts a model's objects into classes processed alike, builds an LOD structure per class with a rendering strategy that depends on the viewer's location *and gaze direction*, then merges them into one structure looked up by location and gaze.
+  - B (a merged mesh per cell, chosen by its size on screen) has no classes and no gaze-dependent strategy, so it does not match.
+- **US 12,589,303 B2**, LOD assets for a videogame session:
+  - Activision Publishing, US, granted 2026-03-31, expected to expire 2044-05-16.
+  - Claim 1 builds a point cloud with normals around part of a landscape, generates a mesh from it, and simplifies that mesh into proxy meshes swapped at run time.
+  - B merges the cell's own meshes and simplifies them by their cluster DAG, with no point cloud. C must not remesh through a point cloud (some HLOD tools do).
+- **US 2014/0354626 A1** (Google, block-based LOD of buildings by height in a quadtree): abandoned.
 *(research: large-worlds.md §5; D-037; issue #338)*
