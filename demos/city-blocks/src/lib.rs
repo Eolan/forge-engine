@@ -549,7 +549,8 @@ pub struct Args {
     /// Move the probes' cascades away from the camera at this velocity (m/s, the scene's x and
     /// z; a frame's step at a time with `--fixed-step`): they scroll as a walk would scroll them
     /// while the view keeps still, so whatever the image does then is the probes' doing (the
-    /// flashes of a cascade's new probes, measured with `--show-gi`).
+    /// flashes of a cascade's new probes, measured with `--show-gi`). A third value stops them
+    /// after that many seconds, where they then stay: a room lit by the coarser cascades alone.
     #[arg(long, value_delimiter = ',', allow_hyphen_values = true)]
     probe_drift: Option<Vec<f32>>,
     /// With the probes' regions (the village's houses, D-068): tint each surface by the region
@@ -2920,7 +2921,8 @@ impl Demo for Gallery {
                 let cycle = u64::from(self.taa.jitter_phases) * u64::from(probes.params().cadence);
                 let drift = self.args.probe_drift.as_ref().map_or(Vec3::ZERO, |v| {
                     let z = v.get(1).copied().unwrap_or(0.0);
-                    Vec3::new(v[0], 0.0, z) * (self.frame as f32 * self.step)
+                    let t = self.frame as f32 * self.step;
+                    Vec3::new(v[0], 0.0, z) * v.get(2).map_or(t, |&stop| t.min(stop))
                 });
                 Some(probes.update(
                     &mut frame.graph,
