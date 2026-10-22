@@ -5920,8 +5920,10 @@ layouts other than the owner's AZERTY and QWERTY, with their own default maps, a
     else kept in the window). The view then turns with no button held, and the right button is
     the game's, for aiming.
   - Esc first lets the mouse go, and a second Esc quits.
-  - Losing the window's focus lets every key and button go; coming back, the mouse look takes the
-    cursor again.
+    - **Since 2026-10-22 (the owner's choice):** as games do before their menu, which Forge has not yet. The mouse look stays on, a click in the window takes the cursor back (the game gets no press), and the game runs on meanwhile, as a networked one must. It used to turn the mouse look off, to be toggled back.
+  - Losing the window's focus lets every key and button go and frees and shows the cursor (since
+    2026-10-22: it stayed held and hidden, and Alt+Tab fought it); coming back, the mouse look
+    takes the cursor again, unless Esc let it go.
   - The fly camera's right-button look is unchanged when the mode is off.
 
 ## D-070 — DLSS is the reference image, FSR replaces TAA everywhere else ✅ (2026-10-18, #286, the owner's decision)

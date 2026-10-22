@@ -1325,16 +1325,15 @@ impl<D: Demo> State<D> {
         let look = self.ctx.settings.get(self.mouse_look);
         if look != self.input.mouse_look {
             self.input.mouse_look = look;
+            self.input.paused = false;
             // Out of the window, it waits for the focus to come back (`WindowEvent::Focused`).
             let take = look && !self.input.unfocused;
             self.input.looking = take;
-            let window = &self.ctx.window;
-            if !take {
-                let _ = window.set_cursor_grab(CursorGrabMode::None);
-            } else if window.set_cursor_grab(CursorGrabMode::Locked).is_err() {
-                let _ = window.set_cursor_grab(CursorGrabMode::Confined);
+            if take {
+                capture_cursor(&self.ctx.window);
+            } else {
+                free_cursor(&self.ctx.window);
             }
-            window.set_cursor_visible(!take);
         }
         if !self.unmatched_reported && !self.ctx.loading {
             self.unmatched_reported = true;
@@ -1864,6 +1863,21 @@ struct App<D: Demo> {
     error: Option<anyhow::Error>,
 }
 
+/// The game's mouse look takes the cursor: locked where the platform can, else kept in the
+/// window, and hidden.
+fn capture_cursor(window: &Window) {
+    if window.set_cursor_grab(CursorGrabMode::Locked).is_err() {
+        let _ = window.set_cursor_grab(CursorGrabMode::Confined);
+    }
+    window.set_cursor_visible(false);
+}
+
+/// The cursor is the system's again: free and shown.
+fn free_cursor(window: &Window) {
+    let _ = window.set_cursor_grab(CursorGrabMode::None);
+    window.set_cursor_visible(true);
+}
+
 impl<D: Demo> ApplicationHandler for App<D> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.state.is_some() {
@@ -2009,9 +2023,14 @@ impl<D: Demo> ApplicationHandler for App<D> {
                         return;
                     }
                     if pressed && code == KeyCode::Escape {
-                        // The game's mouse look first lets the mouse go; then Esc quits.
-                        if state.input.mouse_look {
-                            state.ctx.settings.set(state.mouse_look, false);
+                        // Where a game opens its menu (none yet; the game runs on, as a networked
+                        // one must): the game's mouse look first lets the cursor go, a click in
+                        // the window takes it back, and Esc while it is let go quits.
+                        if state.input.mouse_look && !state.input.paused {
+                            state.input.paused = true;
+                            state.input.looking = false;
+                            state.input.mouse_delta = (0.0, 0.0);
+                            free_cursor(&state.ctx.window);
                             return;
                         }
                         event_loop.exit();
@@ -2061,6 +2080,15 @@ impl<D: Demo> ApplicationHandler for App<D> {
                 ..
             } => {
                 let down = pressed == ElementState::Pressed;
+                // Let go at Esc, the game's mouse look takes the cursor back at a click in the
+                // window, which the game does not get (its release is not either: no button is
+                // held).
+                if down && state.input.paused {
+                    state.input.paused = false;
+                    state.input.looking = true;
+                    capture_cursor(&state.ctx.window);
+                    return;
+                }
                 // A button bound to a console line (`bind mouse1 …`, D-069) runs it, as a key.
                 if down
                     && !state.ctx.loading
@@ -2097,22 +2125,17 @@ impl<D: Demo> ApplicationHandler for App<D> {
             }
             // As games do: out of the window (Alt+Tab, another window clicked) the cursor is the
             // system's again, free and shown, and no key, button or motion stays the game's; back
-            // in it, the game's mouse look takes the cursor again.
+            // in it, the game's mouse look takes the cursor again, unless Esc let it go.
             WindowEvent::Focused(focused) => {
-                let window = &state.ctx.window;
                 state.input.unfocused = !focused;
                 if !focused {
                     state.input.release_all();
                     state.input.looking = false;
                     state.input.mouse_delta = (0.0, 0.0);
-                    let _ = window.set_cursor_grab(CursorGrabMode::None);
-                    window.set_cursor_visible(true);
-                } else if state.input.mouse_look {
+                    free_cursor(&state.ctx.window);
+                } else if state.input.mouse_look && !state.input.paused {
                     state.input.looking = true;
-                    if window.set_cursor_grab(CursorGrabMode::Locked).is_err() {
-                        let _ = window.set_cursor_grab(CursorGrabMode::Confined);
-                    }
-                    window.set_cursor_visible(false);
+                    capture_cursor(&state.ctx.window);
                 }
             }
             // The wheel's notches (a touchpad's pixels at 40 a notch): the fly camera's speed.
