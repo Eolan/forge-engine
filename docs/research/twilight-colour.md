@@ -15,6 +15,11 @@ the overhead sky turns red plus blue: lavender. A single-scattering model of the
 (§4) gives x,y = 0.317, 0.274 (lavender) with Forge's three samples, and 0.266, 0.263 (blue)
 with 41 wavelengths.
 
+**Built (2026-10-22, the owner's go):** §6's items 1 and 2. `atmosphere.rs`'s test
+`the_zenith_keeps_the_spectrums_colour_down_to_twilight` is §5's CPU test, and failed with the
+680 nm values (R/G 0.51 against the spectrum's 0.61 at +45°). Red's Rayleigh is now 7.2e-3 and
+its ozone 2.4e-3 per km. Items 3 to 6 are left for later.
+
 Sources were read with WebFetch and WebSearch on 2026-10-22. Claims taken from a search
 result's summary, not from the source itself, are marked †. Values read off published figures
 are approximate: about ±0.003 in u′ and v′, which is about ±0.1 in the ratios below.

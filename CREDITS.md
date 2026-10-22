@@ -174,6 +174,11 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   Rendering Technique", EGSR 2020. Its Earth preset, the transmittance table's mapping and
   the planet-view table's split at the horizon (issue #26) come from Eric Bruneton,
   "Precomputed Atmospheric Scattering: a New Implementation", 2017.
+  - The twilight test's tables (`atmosphere.rs`, #347), every 10 nm from 380 to 780 nm: from
+    Bruneton's demo (BSD licence), the ozone cross-sections (the University of Bremen's 2011
+    spectra at 233 K) and the sun above the air (ASTM G-173's extraterrestrial column); the
+    CIE 1931 colour-matching functions (a CIE data set). Red's CIE-weighted coefficients come
+    from them (`docs/research/twilight-colour.md`).
 - **Physical light units and pre-exposure.** Sébastien Lagarde, Charles de Rousiers, "Moving
   Frostbite to Physically Based Rendering", SIGGRAPH 2014.
 - **Automatic exposure.** Krzysztof Narkowicz, "Automatic Exposure", 2016.

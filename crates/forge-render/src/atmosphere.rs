@@ -77,19 +77,22 @@ pub struct AtmosphereParams {
 }
 
 impl AtmosphereParams {
-    /// The Earth of Hillaire 2020 (and Bruneton 2017): Rayleigh coefficients for 680, 550 and
-    /// 440 nm, a continental aerosol, the ozone layer between 10 and 40 km.
+    /// The Earth of Hillaire 2020 (and Bruneton 2017): Rayleigh coefficients for 550 and 440 nm,
+    /// a continental aerosol, the ozone layer between 10 and 40 km. Red's Rayleigh and ozone are
+    /// weighted by the CIE functions rather than sampled at 680 nm (#347,
+    /// `docs/research/twilight-colour.md`): there red saw a quarter of ozone's absorption over
+    /// the sRGB red channel, and twilight read lavender everywhere.
     pub fn earth() -> Self {
         Self {
             bottom_radius: 6360.0,
             top_radius: 6460.0,
-            rayleigh_scattering: [5.802e-3, 13.558e-3, 33.1e-3],
+            rayleigh_scattering: [7.2e-3, 13.558e-3, 33.1e-3],
             rayleigh_scale_height: 8.0,
             mie_scattering: [3.996e-3; 3],
             mie_absorption: [0.444e-3; 3],
             mie_scale_height: 1.2,
             mie_asymmetry: 0.8,
-            ozone_absorption: [0.650e-3, 1.881e-3, 0.085e-3],
+            ozone_absorption: [2.4e-3, 1.881e-3, 0.085e-3],
             ozone_peak_altitude: 25.0,
             ozone_half_width: 15.0,
             ground_albedo: 0.3,
@@ -547,5 +550,139 @@ mod tests {
             (chord / expected - 1.0).abs() < 0.02,
             "{chord} vs {expected}"
         );
+    }
+
+    /// The single-scattered zenith seen from the ground with the sun `elevation` degrees up, for
+    /// each (Rayleigh, ozone) pair of `channels` (per km), in the sun's units: each height of the
+    /// zenith lit through the planet's shadow and the shell, then dimmed on its way down
+    /// (`docs/research/twilight-colour.md`, §4). The aerosols and the layers' shapes are
+    /// `earth`'s.
+    fn zenith(earth: &AtmosphereParams, elevation: f64, channels: &[(f64, f64)]) -> Vec<f64> {
+        use std::f64::consts::PI;
+        let (r, top) = (earth.bottom_radius as f64, earth.top_radius as f64);
+        let (hr, hm) = (
+            earth.rayleigh_scale_height as f64,
+            earth.mie_scale_height as f64,
+        );
+        let mie_scattering = earth.mie_scattering[GREEN] as f64;
+        let mie_extinction = mie_scattering + earth.mie_absorption[GREEN] as f64;
+        let (peak, half) = (
+            earth.ozone_peak_altitude as f64,
+            earth.ozone_half_width as f64,
+        );
+        let tent = |h: f64| (1.0 - (h - peak).abs() / half).max(0.0);
+        let g = earth.mie_asymmetry as f64;
+        let (sx, sy) = (elevation.to_radians().cos(), elevation.to_radians().sin());
+        // The view straight up: the scattering angle's cosine is the sun's height.
+        let cos = sy;
+        let rayleigh_phase = 3.0 / (16.0 * PI) * (1.0 + cos * cos);
+        let mie_phase = 3.0 / (8.0 * PI) * (1.0 - g * g) * (1.0 + cos * cos)
+            / ((2.0 + g * g) * (1.0 + g * g - 2.0 * g * cos).powf(1.5));
+        // Each lit height's columns (Rayleigh, aerosol, ozone) towards the sun and down to the
+        // eye, and its own densities.
+        let dz = 0.25;
+        let mut rows = Vec::new();
+        for k in 0..400 {
+            let z = (k as f64 + 0.5) * dz;
+            let py = r + z;
+            // The sun's ray passes closest to the centre `along` km on: under the ground there.
+            let along = -py * sy;
+            if along > 0.0 && (py * py - along * along).sqrt() < r {
+                continue;
+            }
+            let exit = -py * sy + ((py * sy).powi(2) - (py * py - top * top)).sqrt();
+            let steps = 1500;
+            let dt = exit / steps as f64;
+            let mut column = [0.0_f64; 3];
+            for i in 0..steps {
+                let t = (i as f64 + 0.5) * dt;
+                let h = ((t * sx).powi(2) + (py + t * sy).powi(2)).sqrt() - r;
+                column[0] += (-h / hr).exp() * dt;
+                column[1] += (-h / hm).exp() * dt;
+                column[2] += tent(h) * dt;
+            }
+            column[0] += hr * (1.0 - (-z / hr).exp());
+            column[1] += hm * (1.0 - (-z / hm).exp());
+            column[2] += (0..50)
+                .map(|j| tent((j as f64 + 0.5) * z / 50.0) * z / 50.0)
+                .sum::<f64>();
+            rows.push((column, (-z / hr).exp(), (-z / hm).exp()));
+        }
+        channels
+            .iter()
+            .map(|&(rayleigh, ozone)| {
+                rows.iter()
+                    .map(|&(c, rho, mu)| {
+                        let depth = rayleigh * c[0] + mie_extinction * c[1] + ozone * c[2];
+                        (rayleigh * rho * rayleigh_phase + mie_scattering * mu * mie_phase)
+                            * (-depth).exp()
+                            * dz
+                    })
+                    .sum()
+            })
+            .collect()
+    }
+
+    /// #347: the three channels' zenith keeps the colour of the same sky integrated at 41
+    /// wavelengths, from the day down to twilight. With red sampled at 680 nm, red over green
+    /// came out 1.4 times the spectrum's with the sun on the horizon and 2.3 times at −6°: the
+    /// lavender twilight.
+    #[test]
+    fn the_zenith_keeps_the_spectrums_colour_down_to_twilight() {
+        // 380 to 780 nm every 10 nm: the CIE 1931 functions; from Bruneton's demo (2017), the
+        // ozone cross-sections in m² and ASTM G-173's sun above the air in W m⁻² nm⁻¹.
+        #[rustfmt::skip]
+        const XBAR: [f64; 41] = [0.001368, 0.004243, 0.014310, 0.043510, 0.134380, 0.283900, 0.348280, 0.336200, 0.290800, 0.195360, 0.095640, 0.032010, 0.004900, 0.009300, 0.063270, 0.165500, 0.290400, 0.433450, 0.594500, 0.762100, 0.916300, 1.026300, 1.062200, 1.002600, 0.854450, 0.642400, 0.447900, 0.283500, 0.164900, 0.087400, 0.046770, 0.022700, 0.011359, 0.005790, 0.002899, 0.001440, 0.000690, 0.000332, 0.000166, 0.000083, 0.000042];
+        #[rustfmt::skip]
+        const YBAR: [f64; 41] = [0.000039, 0.000120, 0.000396, 0.001210, 0.004000, 0.011600, 0.023000, 0.038000, 0.060000, 0.090980, 0.139020, 0.208020, 0.323000, 0.503000, 0.710000, 0.862000, 0.954000, 0.994950, 0.995000, 0.952000, 0.870000, 0.757000, 0.631000, 0.503000, 0.381000, 0.265000, 0.175000, 0.107000, 0.061000, 0.032000, 0.017000, 0.008210, 0.004102, 0.002091, 0.001047, 0.000520, 0.000249, 0.000120, 0.000060, 0.000030, 0.000015];
+        #[rustfmt::skip]
+        const ZBAR: [f64; 41] = [0.006450, 0.020050, 0.067850, 0.207400, 0.645600, 1.385600, 1.747060, 1.772110, 1.669200, 1.287640, 0.812950, 0.465180, 0.272000, 0.158200, 0.078250, 0.042160, 0.020300, 0.008750, 0.003900, 0.002100, 0.001650, 0.001100, 0.000800, 0.000340, 0.000190, 0.000050, 0.000020, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        #[rustfmt::skip]
+        const OZONE: [f64; 41] = [2.818e-28, 6.636e-28, 1.527e-27, 2.763e-27, 5.52e-27, 8.451e-27, 1.582e-26, 2.316e-26, 3.669e-26, 4.924e-26, 7.752e-26, 9.016e-26, 1.48e-25, 1.602e-25, 2.139e-25, 2.755e-25, 3.091e-25, 3.5e-25, 4.266e-25, 4.672e-25, 4.398e-25, 4.701e-25, 5.019e-25, 4.305e-25, 3.74e-25, 3.215e-25, 2.662e-25, 2.238e-25, 1.852e-25, 1.473e-25, 1.209e-25, 9.423e-26, 7.455e-26, 6.566e-26, 5.105e-26, 4.15e-26, 4.228e-26, 3.237e-26, 2.451e-26, 2.801e-26, 2.534e-26];
+        #[rustfmt::skip]
+        const SUN: [f64; 41] = [1.01249, 1.14716, 1.72765, 1.73054, 1.6887, 1.61253, 1.91198, 2.03474, 2.02042, 2.02212, 1.93377, 1.95809, 1.91686, 1.8298, 1.8685, 1.8931, 1.85149, 1.8504, 1.8341, 1.8345, 1.8147, 1.78158, 1.7533, 1.6965, 1.68194, 1.64654, 1.6048, 1.52143, 1.55622, 1.5113, 1.474, 1.4482, 1.41018, 1.36775, 1.34188, 1.31429, 1.28303, 1.26758, 1.2367, 1.2082, 1.18737];
+        let earth = AtmosphereParams::earth();
+        // 300 Dobson units in the tent: molecules per m³ at its peak.
+        let peak = 300.0 * 2.687e20 / (earth.ozone_half_width as f64 * 1000.0);
+        let mut channels: Vec<(f64, f64)> = (0..41)
+            .map(|i| {
+                let lambda = 380.0 + 10.0 * i as f64;
+                (33.1e-3 * (440.0 / lambda).powi(4), OZONE[i] * peak * 1000.0)
+            })
+            .collect();
+        channels.extend((0..3).map(|c| {
+            (
+                earth.rayleigh_scattering[c] as f64,
+                earth.ozone_absorption[c] as f64,
+            )
+        }));
+        // The scene's sun colour (`meshlet.rs`'s default `sun_color`).
+        let sun = [1.0, 0.96, 0.9];
+        for elevation in [45.0, 0.0, -2.0, -4.0, -6.0] {
+            let radiance = zenith(&earth, elevation, &channels);
+            let mut xyz = [0.0; 3];
+            for i in 0..41 {
+                let l = SUN[i] * radiance[i];
+                xyz[0] += l * XBAR[i];
+                xyz[1] += l * YBAR[i];
+                xyz[2] += l * ZBAR[i];
+            }
+            let [x, y, z] = xyz;
+            let spectrum = [
+                3.2406 * x - 1.5372 * y - 0.4986 * z,
+                -0.9689 * x + 1.8758 * y + 0.0415 * z,
+                0.0557 * x - 0.2040 * y + 1.0570 * z,
+            ];
+            let ours: [f64; 3] = std::array::from_fn(|c| radiance[41 + c] * sun[c]);
+            let want = [spectrum[0] / spectrum[1], spectrum[2] / spectrum[1]];
+            let got = [ours[0] / ours[1], ours[2] / ours[1]];
+            for k in 0..2 {
+                assert!(
+                    (got[k] / want[k] - 1.0).abs() < 0.1,
+                    "the sun at {elevation}°: the zenith's R/G, B/G {got:.3?}, the spectrum's \
+                     {want:.3?}"
+                );
+            }
+        }
     }
 }
