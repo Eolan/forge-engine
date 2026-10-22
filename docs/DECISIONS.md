@@ -6889,8 +6889,13 @@ DIR` writes the atlases as images (`forge_render::impostor`, `shaders/impostor.s
 - **The bake, before the run's first counted frame:** one kind for each species and age class
   (the age's last seed; the village's 27), one after another, a frame of a bake each app frame.
   Meanwhile the app counts no frame (`Context::preparing`: captures, frame limits and the run's
-  clock wait, the screen black), so a capture is the same whatever the bake took: 1.2 s for the
-  27. One renderer for all, its resolve compiled from `meshlet_bake.slang` (`CullFlags::BAKE_ALBEDO`,
+  clock wait, the screen black), so a capture is the same whatever the bake took: 1.4 s for the
+  27. Kept in D-053's derived cache (`impostor-atlases`, the first levels in half floats, 46 MB
+  for the 27 compressed), keyed by the cooked mesh, its rows, its textures' inputs and the code
+  that bakes (`crates/forge-render/build.rs`: the bake, the resolve, the materials, the
+  textures): a start that finds a kind uploads it and makes its mips again in one frame, the 27
+  in 0.28 s, the image the same to the pixel; the fresh bakes are stored on a thread of their own.
+  One renderer for all, its resolve compiled from `meshlet_bake.slang` (`CullFlags::BAKE_ALBEDO`,
   `BAKE_NORMAL`: `sun_light` returns them, the leaves' light through adds nothing; in the frame's
   own entries a branch never taken showed #349's unshaded tiles). Each frame drawn at full detail
   from 1000 radii off with a field that fits its sphere (near enough to parallel), at 256², taken
@@ -6952,8 +6957,8 @@ DIR` writes the atlases as images (`forge_render::impostor`, `shaders/impostor.s
   measured: the bake's colours (each species the same at every age), the shadow ray (without it
   12) and its noise, the leaves' depths in a texel, the normals' spread (they agree), the sky's
   direction.
-- **Not yet:** the bright young crowns above; the atlases into D-053's cache, block compression
-  (D-047), each age's other seeds, and the default (the owner's look first).
+- **Not yet:** the bright young crowns above; block compression (D-047), each age's other seeds,
+  and the default (the owner's look first).
 
 *(research: forests-and-grass.md, vegetation-materials.md, flora.md; D-013, D-016, D-029, D-036,
 D-053, D-063; issues #297, #300, #301, #302, #303)*

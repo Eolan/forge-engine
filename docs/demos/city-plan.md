@@ -556,7 +556,8 @@ unchanged.
 `--tree-ladder --impostors [PX]` each plant's crown shells fade in turn once its sphere stands
 under `PX` output pixels across (40 by default), and its impostor takes the pixels they leave
 (`forge_render::impostor`). Before the first frame the scenario's plants are baked, one for each
-species and age (the village's 27 in 1.2 s, the run's clock and captures waiting): 8 × 8 views
+species and age (the village's 27 in 1.4 s, the run's clock and captures waiting; 0.28 s from
+the derived cache once baked): 8 × 8 views
 over the upper hemisphere in a hemi-octahedral layout, each drawn at full detail from 1000 radii
 off and taken 4 × 4 into its 64² square, the base colour with its coverage, the normals with the
 depth, then the share of the sky each point sees past the plant itself. Drawn after the resolve,

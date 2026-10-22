@@ -399,6 +399,13 @@ impl KeyHasher {
         self.0.update(&value.to_le_bytes());
         self
     }
+    /// Adds raw bytes, with their length: a mesh's or a table's contents.
+    #[must_use]
+    pub fn bytes(mut self, data: &[u8]) -> Self {
+        self.0.update(&(data.len() as u64).to_le_bytes());
+        self.0.update(data);
+        self
+    }
     /// The key, with `code`, the product's code digest.
     #[must_use]
     pub fn key(self, code: u64) -> Key {
@@ -471,32 +478,48 @@ impl DerivedCache {
         make: impl FnOnce() -> T,
     ) -> Derived<T> {
         let start = Instant::now();
+        if let Some(value) = self.get(product, key) {
+            return Derived {
+                value,
+                from_cache: true,
+                ms: start.elapsed().as_millis(),
+            };
+        }
+        let value = make();
+        self.put(product, key, &value);
+        Derived {
+            value,
+            from_cache: false,
+            ms: start.elapsed().as_millis(),
+        }
+    }
+
+    /// `product` for `key` if stored: for a product made over several frames (an impostor's
+    /// bake on the GPU), which [`Self::put`] stores once made. An entry that cannot be read is
+    /// logged and removed.
+    pub fn get<T: Stored>(&self, product: &str, key: Key) -> Option<T> {
         let path = self.path(product, key);
         sweep_once(&self.dir, &[EXTENSION], UNUSED_FOR);
         match self.load(product, key, &path) {
             Ok(Some(value)) => {
                 // The last use, for the sweep and the size cap.
                 touch(&path);
-                return Derived {
-                    value,
-                    from_cache: true,
-                    ms: start.elapsed().as_millis(),
-                };
+                Some(value)
             }
-            Ok(None) => {}
+            Ok(None) => None,
             Err(error) => {
                 tracing::warn!(product, %error, path = %path.display(), "a derived entry that cannot be read: removed, made again");
                 let _ = fs::remove_file(&path);
+                None
             }
         }
-        let value = make();
-        if let Err(error) = self.store(product, key, &path, &value) {
+    }
+
+    /// Stores `value` as `product` for `key`; a failed write is logged.
+    pub fn put<T: Stored>(&self, product: &str, key: Key, value: &T) {
+        let path = self.path(product, key);
+        if let Err(error) = self.store(product, key, &path, value) {
             tracing::warn!(product, %error, "the derived product could not be stored");
-        }
-        Derived {
-            value,
-            from_cache: false,
-            ms: start.elapsed().as_millis(),
         }
     }
 

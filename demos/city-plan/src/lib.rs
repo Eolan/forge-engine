@@ -5923,6 +5923,10 @@ const TREE_LADDER_BAND: f32 = 0.25;
 /// The band of the crown shells' fade into the plants' impostors (D-075 step 4, `--impostors`).
 const IMPOSTOR_FADE_BAND: f32 = 0.25;
 
+/// The leaf atlas's and its normals' seed and size (`textures::leaves`, `leaf_normals`): part of
+/// the impostors' cache key, which only names the textures by index.
+const LEAF_ATLAS: (u64, u32) = (41, 1024);
+
 /// With the trees' ladder, the distance from the camera from which the shadow rays meet the
 /// plants' shadow proxies in place of their cards (D-075 step 3, `--far-shadows`), metres.
 const FAR_SHADOWS: f32 = 60.0;
@@ -6806,9 +6810,17 @@ impl Scenario for PlanScenario {
             (None, None)
         } else {
             (
-                Some(materials.textures.add(&textures::leaves(41, 1024))?),
+                Some(
+                    materials
+                        .textures
+                        .add(&textures::leaves(LEAF_ATLAS.0, LEAF_ATLAS.1))?,
+                ),
                 // Each leaf leaning its own way (#346).
-                Some(materials.textures.add(&textures::leaf_normals(41, 1024))?),
+                Some(
+                    materials
+                        .textures
+                        .add(&textures::leaf_normals(LEAF_ATLAS.0, LEAF_ATLAS.1))?,
+                ),
             )
         };
         // The decals' textures (D-074): the grime at the walls' feet, a strip repeating along u;
@@ -7048,6 +7060,11 @@ impl Scenario for PlanScenario {
                                     leaves: forge_core::material::MaterialId(
                                         flora_rows[usize::from(sp)].0 + 2,
                                     ),
+                                    // The leaf atlas's and its normals' seed and size.
+                                    inputs: forge_core::derived::KeyHasher::new()
+                                        .debug(&LEAF_ATLAS)
+                                        .key(0)
+                                        .digest(),
                                 },
                             ));
                         }

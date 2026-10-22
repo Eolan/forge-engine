@@ -11,7 +11,8 @@
 //!   jumps from one frame to the next.
 //! - **The bake** ([`ImpostorBaker`]), before the run's first counted frame: each frame drawn by
 //!   the meshlet renderer unlit, its base colour and its normals with their depth; then the
-//!   occlusion, every frame read as a shadow map from each texel's point.
+//!   occlusion, every frame read as a shadow map from each texel's point. Kept in the derived
+//!   cache (D-053): a start that finds a kind there uploads it instead.
 //! - **The draw** ([`Impostors`]), after the resolve: where an instance's meshes fade, its
 //!   impostor takes the pixels they leave, its depth where the bake saw the leaves, lit as the
 //!   resolve lights a rough row (`shaders/impostor_draw.slang`).
@@ -20,6 +21,7 @@ use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
+use forge_core::derived::{CacheKind, DerivedCache, Key, KeyHasher, cache_dir};
 use forge_core::material::MaterialId;
 use forge_geom::meshlet::MeshletMesh;
 use forge_gpu::{
@@ -137,6 +139,84 @@ pub struct BakeSource {
     pub material: MaterialId,
     /// Its leaves' row among them: the sheen and the light through that its impostor keeps.
     pub leaves: MaterialId,
+    /// A digest of what draws it that the rows only name by index: its textures' inputs (their
+    /// seeds and sizes), for the derived cache's key; the textures' code is in it already.
+    pub inputs: u64,
+}
+
+include!(concat!(env!("OUT_DIR"), "/code_digests.rs"));
+
+/// The derived cache's product name of a kind's atlases (D-053).
+const CACHED: &str = "impostor-atlases";
+
+/// The derived cache's key of `source`'s atlases: its cooked mesh, its rows, the rows it is
+/// drawn with and its textures' inputs, and the bake's code.
+fn bake_key(source: &BakeSource) -> Key {
+    let mesh = &source.mesh;
+    KeyHasher::new()
+        .bytes(bytemuck::cast_slice(&mesh.meshlets))
+        .bytes(&mesh.pages)
+        .number(u64::from(mesh.page_count))
+        .bytes(bytemuck::cast_slice(&[
+            mesh.center[0],
+            mesh.center[1],
+            mesh.center[2],
+            mesh.radius,
+        ]))
+        .bytes(bytemuck::cast_slice(&source.rows))
+        .number(u64::from(source.material.0))
+        .number(u64::from(source.leaves.0))
+        .number(source.inputs)
+        .key(CODE_IMPOSTOR_BAKE)
+}
+
+/// A kind's atlases as the bake leaves them, half floats, the first level of each: what the
+/// derived cache keeps (its mips are made again on the GPU from it).
+#[derive(Clone)]
+pub struct AtlasTexels {
+    /// The base colour's, RGBA ([`BakedAtlases::albedo`]).
+    pub albedo: Vec<u16>,
+    /// The normals' and depth's, RGBA.
+    pub normal: Vec<u16>,
+    /// The occlusion's, RG.
+    pub occlusion: Vec<u16>,
+}
+
+forge_core::stored!(AtlasTexels {
+    albedo,
+    normal,
+    occlusion
+});
+
+impl AtlasTexels {
+    /// Each atlas's texels, in [`ATLAS_FORMATS`]' order.
+    fn each(&self) -> [&[u16]; ATLASES] {
+        [&self.albedo, &self.normal, &self.occlusion]
+    }
+}
+
+impl From<&AtlasTexels> for BakedAtlases {
+    fn from(texels: &AtlasTexels) -> Self {
+        let rgba = |halves: &[u16]| {
+            halves
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|t| t.map(half_to_f32))
+                .collect::<Vec<_>>()
+        };
+        Self {
+            albedo: rgba(&texels.albedo),
+            normal: rgba(&texels.normal),
+            occlusion: texels
+                .occlusion
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|t| half_to_f32(t[0]))
+                .collect(),
+        }
+    }
 }
 
 /// An impostor's atlases, read back: [`ATLAS_TEXELS`]² texels each, rows top down, frame
@@ -191,9 +271,11 @@ fn bake_image(
             width: side,
             height: side,
             format,
+            // Copied out after a bake, and in when found in the derived cache.
             usage: vk::ImageUsageFlags::STORAGE
                 | vk::ImageUsageFlags::SAMPLED
-                | vk::ImageUsageFlags::TRANSFER_SRC,
+                | vk::ImageUsageFlags::TRANSFER_SRC
+                | vk::ImageUsageFlags::TRANSFER_DST,
             aspect: vk::ImageAspectFlags::COLOR,
             mip_levels: mips,
             name,
@@ -248,9 +330,13 @@ struct BakeTools {
 /// [`ImpostorBaker::poll`] hands each bake back once its atlases are read back.
 pub struct ImpostorBaker {
     tools: BakeTools,
-    /// The sources still to bake, the next last.
-    queue: Vec<(String, BakeSource)>,
+    /// The sources still to bake, the next last, each with its derived cache's key.
+    queue: Vec<(String, BakeSource, Key)>,
     current: Option<(String, ImpostorBake)>,
+    cache: DerivedCache,
+    /// How many kinds were found in the cache, how many baked.
+    found: usize,
+    baked: usize,
 }
 
 impl ImpostorBaker {
@@ -279,6 +365,13 @@ impl ImpostorBaker {
         };
         let push = std::mem::size_of::<DownsamplePush>();
         sources.reverse();
+        let queue = sources
+            .into_iter()
+            .map(|(name, source)| {
+                let key = bake_key(&source);
+                (name, source, key)
+            })
+            .collect();
         Ok(Self {
             tools: BakeTools {
                 renderer: MeshletRenderer::for_bake(device, shaders, extent)?,
@@ -298,8 +391,11 @@ impl ImpostorBaker {
                     std::mem::size_of::<OcclusionPush>(),
                 )?,
             },
-            queue: sources,
+            queue,
             current: None,
+            cache: DerivedCache::new(cache_dir(CacheKind::World)),
+            found: 0,
+            baked: 0,
         })
     }
 
@@ -308,8 +404,14 @@ impl ImpostorBaker {
         self.current.is_none() && self.queue.is_empty()
     }
 
-    /// At a frame's start, before [`Self::record`]: the bake whose atlases were read back, if
-    /// one was, with its name; the next begun when none is under way.
+    /// How many kinds were found in the derived cache and how many baked, so far.
+    pub fn counts(&self) -> (usize, usize) {
+        (self.found, self.baked)
+    }
+
+    /// At a frame's start, before [`Self::record`]: the bake whose atlases were read back (or
+    /// uploaded from the derived cache), if one was, with its name; the next begun when none is
+    /// under way. A fresh bake's atlases go to the cache on a thread of their own.
     pub fn poll(&mut self, device: &Arc<Device>) -> Result<Option<(String, ImpostorBake)>> {
         let finished = if self
             .current
@@ -320,10 +422,32 @@ impl ImpostorBaker {
         } else {
             None
         };
-        if self.current.is_none()
-            && let Some((name, source)) = self.queue.pop()
+        if let Some((name, bake)) = &finished
+            && !bake.from_cache
+            && let Some(texels) = bake.texels.borrow().clone()
         {
-            self.current = Some((name, ImpostorBake::new(device, &source)?));
+            let (cache, key, name) = (self.cache.clone(), bake.key, name.clone());
+            let stored = std::thread::Builder::new()
+                .name("impostor cache".into())
+                .spawn(move || {
+                    let start = std::time::Instant::now();
+                    cache.put(CACHED, key, &texels);
+                    tracing::debug!(name, ms = start.elapsed().as_millis(), "impostor cached");
+                });
+            if let Err(error) = stored {
+                tracing::warn!(%error, "an impostor's atlases not cached");
+            }
+        }
+        if self.current.is_none()
+            && let Some((name, source, key)) = self.queue.pop()
+        {
+            let cached = self.cache.get::<AtlasTexels>(CACHED, key);
+            if cached.is_some() {
+                self.found += 1;
+            } else {
+                self.baked += 1;
+            }
+            self.current = Some((name, ImpostorBake::new(device, &source, key, cached)?));
         }
         Ok(finished)
     }
@@ -343,9 +467,11 @@ impl ImpostorBaker {
 /// writes its base colour or its normal unlit ([`CullFlags::BAKE_ALBEDO`],
 /// [`CullFlags::BAKE_NORMAL`]), and the downsample takes the render into the frame's square of
 /// the atlas, the normals with the render's depth. Then the two atlases' mips are made, the
-/// occlusion from them and its mips, and the three are read back.
+/// occlusion from them and its mips, and the three are read back. Found in the derived cache,
+/// its texels are uploaded instead and their mips made, in one frame.
 pub struct ImpostorBake {
-    scene: MeshletScene,
+    /// The one mesh's scene; none when found in the cache.
+    scene: Option<MeshletScene>,
     centre: Vec3,
     radius: f32,
     /// Its leaves' row's sheen and two colours (`GpuMaterial::sheen`, `GpuMaterial::tones`).
@@ -353,26 +479,59 @@ pub struct ImpostorBake {
     tones: [[f32; 3]; 2],
     atlases: [GraphImage; ATLASES],
     readback: [GraphBuffer; ATLASES],
+    /// The texels to upload, when found in the cache.
+    upload: Option<[GraphBuffer; ATLASES]>,
+    /// Its derived cache's key, and whether it was found there.
+    key: Key,
+    from_cache: bool,
     /// The next frame to bake, the base colour's frames first.
     next: Cell<u32>,
-    /// The frame slot that copied the atlases out, read once it comes round again.
+    /// The frame slot that copied the atlases out (or in), done once it comes round again.
     copied: Cell<Option<usize>>,
-    baked: RefCell<Option<BakedAtlases>>,
-    /// Whether the atlases were read back.
+    /// The atlases' texels, once read back or as found in the cache.
+    texels: RefCell<Option<AtlasTexels>>,
+    /// Whether the atlases are done.
     read: Cell<bool>,
 }
 
 impl ImpostorBake {
-    fn new(device: &Arc<Device>, source: &BakeSource) -> Result<Self> {
-        let mut builder = MeshletSceneBuilder::new();
-        let mesh = builder.add_mesh(&source.mesh);
-        // Each row at the mean of its two colours: the species' look, each impostor then its own
-        // instance's leaves' mix (`shaders/impostor_draw.slang`).
-        let mut rows = source.rows.clone();
-        rows.iter_mut().for_each(GpuMaterial::mean_tone);
-        builder.set_material_rows(rows);
-        builder.add_instance_with_material(mesh, Mat4::IDENTITY, source.material);
-        let scene = builder.build(device)?;
+    fn new(
+        device: &Arc<Device>,
+        source: &BakeSource,
+        key: Key,
+        cached: Option<AtlasTexels>,
+    ) -> Result<Self> {
+        let scene = if cached.is_some() {
+            None
+        } else {
+            let mut builder = MeshletSceneBuilder::new();
+            let mesh = builder.add_mesh(&source.mesh);
+            // Each row at the mean of its two colours: the species' look, each impostor then its
+            // own instance's leaves' mix (`shaders/impostor_draw.slang`).
+            let mut rows = source.rows.clone();
+            rows.iter_mut().for_each(GpuMaterial::mean_tone);
+            builder.set_material_rows(rows);
+            builder.add_instance_with_material(mesh, Mat4::IDENTITY, source.material);
+            Some(builder.build(device)?)
+        };
+        let upload = match &cached {
+            Some(texels) => {
+                let buffers = texels.each().map(|halves| -> Result<GraphBuffer> {
+                    let buffer = device.create_buffer(BufferDesc {
+                        size: std::mem::size_of_val(halves) as u64,
+                        usage: vk::BufferUsageFlags::TRANSFER_SRC,
+                        location: MemoryLocation::CpuToGpu,
+                        category: MemoryCategory::Transfer,
+                        name: "impostor upload",
+                    })?;
+                    buffer.write(0, halves);
+                    Ok(GraphBuffer::new(buffer))
+                });
+                let [a, b, c] = buffers;
+                Some([a?, b?, c?])
+            }
+            None => None,
+        };
         let readback = |name: &'static str, texel_bytes: u64| {
             device
                 .create_buffer(BufferDesc {
@@ -418,16 +577,29 @@ impl ImpostorBake {
                 readback("impostor normal read back", 8)?,
                 readback("impostor occlusion read back", 4)?,
             ],
-            next: Cell::new(0),
+            upload,
+            key,
+            from_cache: cached.is_some(),
+            // Found in the cache: no frame to bake.
+            next: Cell::new(if cached.is_some() {
+                RENDERED * FRAMES * FRAMES
+            } else {
+                0
+            }),
             copied: Cell::new(None),
-            baked: RefCell::new(None),
+            texels: RefCell::new(cached),
             read: Cell::new(false),
         })
     }
 
-    /// Takes the atlases, once read back.
+    /// The atlases as floats, once done (for review: [`Self::write_png`]).
     pub fn take(&self) -> Option<BakedAtlases> {
-        self.baked.borrow_mut().take()
+        self.texels.borrow().as_ref().map(BakedAtlases::from)
+    }
+
+    /// Whether its atlases came from the derived cache rather than a bake.
+    pub fn from_cache(&self) -> bool {
+        self.from_cache
     }
 
     /// The bake, once read back, as a kind of impostor to draw ([`Impostors`]), standing in
@@ -458,29 +630,19 @@ impl ImpostorBake {
             // The slot comes round once its frame is done: the copies have landed.
             if copied == slot.index && !self.read.get() {
                 self.read.set(true);
-                let halves = |buffer: &GraphBuffer, channels: u32| {
-                    let mut halves = vec![0u16; (ATLAS_TEXELS * ATLAS_TEXELS * channels) as usize];
-                    buffer.read(0, &mut halves);
-                    halves
-                };
-                let rgba = |buffer: &GraphBuffer| {
-                    halves(buffer, 4)
-                        .as_chunks::<4>()
-                        .0
-                        .iter()
-                        .map(|t| t.map(half_to_f32))
-                        .collect::<Vec<_>>()
-                };
-                *self.baked.borrow_mut() = Some(BakedAtlases {
-                    albedo: rgba(&self.readback[0]),
-                    normal: rgba(&self.readback[1]),
-                    occlusion: halves(&self.readback[2], 2)
-                        .as_chunks::<2>()
-                        .0
-                        .iter()
-                        .map(|t| half_to_f32(t[0]))
-                        .collect(),
-                });
+                if !self.from_cache {
+                    let halves = |buffer: &GraphBuffer, channels: u32| {
+                        let mut halves =
+                            vec![0u16; (ATLAS_TEXELS * ATLAS_TEXELS * channels) as usize];
+                        buffer.read(0, &mut halves);
+                        halves
+                    };
+                    *self.texels.borrow_mut() = Some(AtlasTexels {
+                        albedo: halves(&self.readback[0], 4),
+                        normal: halves(&self.readback[1], 4),
+                        occlusion: halves(&self.readback[2], 2),
+                    });
+                }
             }
             return Ok(());
         }
@@ -491,6 +653,28 @@ impl ImpostorBake {
                 height: ATLAS_TEXELS,
             };
             let images = self.atlases.each_ref().map(|atlas| graph.import(atlas));
+            // Found in the cache: the first levels uploaded, then each atlas's mips.
+            if let Some(upload) = &self.upload {
+                for (&image, buffer) in images.iter().zip(upload) {
+                    let handle = graph.import_buffer(buffer);
+                    graph
+                        .pass("impostor/upload")
+                        .buffer(handle, BufferAccess::TransferSrc)
+                        .image(image, ImageAccess::TransferDst)
+                        .run(move |resources, commands| {
+                            commands.copy_buffer_to_image(
+                                buffer,
+                                resources.image(image).raw,
+                                extent,
+                            );
+                            Ok(())
+                        });
+                }
+                declare_mips(graph, images[0], &tools.mips);
+                declare_mips(graph, images[1], &tools.mips);
+                declare_mips(graph, images[2], &tools.mips_rg);
+                return Ok(());
+            }
             // The base colour's and the normals' mips first: the occlusion reads them.
             declare_mips(graph, images[0], &tools.mips);
             declare_mips(graph, images[1], &tools.mips);
@@ -566,7 +750,10 @@ impl ImpostorBake {
             graph,
             slot,
             DrawParams {
-                scene: &self.scene,
+                scene: self
+                    .scene
+                    .as_ref()
+                    .expect("a bake not found in the cache has its scene"),
                 view_proj: cull.view_proj,
                 cull,
                 draw_jitter: Vec2::ZERO,

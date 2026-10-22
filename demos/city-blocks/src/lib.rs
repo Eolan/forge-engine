@@ -2268,12 +2268,15 @@ impl Demo for Gallery {
                     .push(bake.into_kind(set.fade_px, set.fade_band));
             }
             if baker.is_done() {
+                let (cached, baked) = baker.counts();
                 self.impostor_baker = None;
                 let set = self.impostor_set.take().expect("the bakes' set");
                 let kinds = std::mem::take(&mut self.impostor_kinds);
                 if !set.instances.is_empty() {
                     tracing::info!(
                         kinds = kinds.len(),
+                        cached,
+                        baked,
                         instances = set.instances.len(),
                         "impostors baked"
                     );
