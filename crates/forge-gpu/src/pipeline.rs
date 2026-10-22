@@ -157,6 +157,9 @@ impl Device {
         self: &Arc<Self>,
         desc: &ComputePipelineDesc<'_>,
     ) -> Result<Pipeline> {
+        // The driver compiles it here: seconds for a large shader (the loading screen and the load
+        // profile show which, #345, #348).
+        let _task = forge_core::activity::begin("pipelines", desc.name.to_owned());
         let layout = self.create_layout(vk::ShaderStageFlags::COMPUTE, desc.push_constant_bytes)?;
         let name = CString::new(desc.shader.1).expect("entry point name");
         let stage = vk::PipelineShaderStageCreateInfo::default()
@@ -203,6 +206,7 @@ impl Device {
         self: &Arc<Self>,
         desc: &FullscreenPipelineDesc<'_>,
     ) -> Result<Pipeline> {
+        let _task = forge_core::activity::begin("pipelines", desc.name.to_owned());
         let stages_mask = vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT;
         let layout = self.create_layout(stages_mask, desc.push_constant_bytes)?;
         let vertex_name = CString::new(desc.vertex.1).expect("entry point name");
@@ -294,6 +298,7 @@ impl Device {
     /// Creates a mesh-shading pipeline. Requires the mesh-shader feature; a task stage is not
     /// supported yet (the device leaves `taskShader` off: no pass has one, issue #67).
     pub fn create_mesh_pipeline(self: &Arc<Self>, desc: &MeshPipelineDesc<'_>) -> Result<Pipeline> {
+        let _task = forge_core::activity::begin("pipelines", desc.name.to_owned());
         if desc.task.is_some() {
             return Err(GpuError::Unsupported(
                 "task stages need the taskShader feature, which the device leaves off".into(),
@@ -355,6 +360,7 @@ impl Device {
         self: &Arc<Self>,
         desc: &VertexPipelineDesc<'_>,
     ) -> Result<Pipeline> {
+        let _task = forge_core::activity::begin("pipelines", desc.name.to_owned());
         let vertex_name = CString::new(desc.vertex.1).expect("entry point name");
         let fragment_name = CString::new(desc.fragment.1).expect("entry point name");
         let stages = [

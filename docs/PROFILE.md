@@ -1793,7 +1793,10 @@ that changes the resolve's code (a constant of the leaves' light):
 | The finishing step | 11.3 s | 28.9 s |
 
 - **The finishing step is the driver.** Nearly all of it is one pipeline compiled by the driver
-  (`vkCreateComputePipelines`): `resolve_standard_rt_main`, 11.2 s alone. The 25 others are
+  (`vkCreateComputePipelines`): `resolve_standard_rt_main`, 11.2 s alone. Each pipeline made is
+  a step of its own now ("pipelines", by its name), which the loading screen shows while the
+  driver works and the profile times. #348 has what its time is made of: removing the
+  resolve's four traced parts saves 1 s of 9.3; the standard shading itself is the rest. The 25 others are
   near-instant, found in the driver's cache. Making each pipeline in the warm-up as its entry
   compiled (tried, then removed) only moved those 11 s there: one pipeline does not
   parallelise.
