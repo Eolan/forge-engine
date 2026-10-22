@@ -808,11 +808,12 @@ mod tests {
     use super::*;
 
     /// The villages' anomalies, by kind, never more than when the check came in (2026-10-16, at
-    /// 600 m; the smaller villages since they have houses, #308): each fix lowers its bound.
+    /// 600 m; the smaller villages since they have houses, the larger since 2026-10-22, #308):
+    /// each fix lowers its bound.
     #[test]
     fn the_villages_anomalies_never_grow() {
         let mut over = Vec::new();
-        for size in [400.0, 500.0, 600.0] {
+        for size in [400.0, 500.0, 600.0, 700.0, 800.0, 900.0] {
             over.extend(over_bounds(size));
         }
         assert!(over.is_empty(), "{over:?}");
@@ -858,9 +859,22 @@ mod tests {
             (Kind::OpeningMisfit, 0),
             (Kind::DoorBlocked, 0),
         ];
-        // The smaller villages' own, where they had more when they came in (#308: two garden
-        // walls meeting a little apart at a corner at 500 m).
-        let since: [(f64, Kind, usize); 1] = [(500.0, Kind::FreeWallEnd, 1)];
+        // The other sizes' own, where they had more when they came in (#308: two garden walls
+        // meeting a little apart at a corner at 500 m; at 700 to 900 m, 2026-10-22, after the
+        // stairs, the rows' corners and the backs: 77 anomalies down to 42).
+        let since: [(f64, Kind, usize); 11] = [
+            (500.0, Kind::FreeWallEnd, 1),
+            (700.0, Kind::UnlitRoom, 2),
+            (700.0, Kind::FreeWallEnd, 8),
+            (700.0, Kind::RidgeStep, 2),
+            (800.0, Kind::FreeWallEnd, 14),
+            (800.0, Kind::RidgeStep, 2),
+            (800.0, Kind::BlankStreetWall, 1),
+            (900.0, Kind::UnlitRoom, 1),
+            (900.0, Kind::Sliver, 1),
+            (900.0, Kind::FreeWallEnd, 9),
+            (900.0, Kind::LonePartyWall, 2),
+        ];
         let mut over = Vec::new();
         for (kind, bound) in bounds {
             let bound = since

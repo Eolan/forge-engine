@@ -513,11 +513,11 @@ fn structure(
     if cores.is_empty() {
         match m.rooms {
             Some(_) => hall_door(m, &storeys, &walls, &mut openings),
-            None => add_door(m, &storeys, &walls, &mut openings, WallRole::Street),
+            None => add_door(m, &storeys, &walls, &[], &mut openings, WallRole::Street),
         }
     }
     if m.rooms.is_none() || !garden_door(&storeys, m, &walls, &cores, &mut openings) {
-        add_door(m, &storeys, &walls, &mut openings, WallRole::Court);
+        add_door(m, &storeys, &walls, &cores, &mut openings, WallRole::Court);
     }
     if m.rooms.is_some() {
         clear_hall(&walls, &cores, &mut openings);
@@ -750,7 +750,7 @@ fn hall_door(m: &Mass, storeys: &[Storey], walls: &[Wall], out: &mut Vec<Opening
         .iter()
         .position(|w| w.edge == 0 && w.role == WallRole::Street)
     else {
-        add_door(m, storeys, walls, out, WallRole::Street);
+        add_door(m, storeys, walls, &[], out, WallRole::Street);
         return;
     };
     let side = walls[(w + walls.len() - 1) % walls.len()].thickness;
@@ -924,8 +924,16 @@ fn garden_door(
 
 /// A door on a wall of `role`: the ground window or shopfront nearest the middle of that side's
 /// longest open stretch. The street's where no core took one; the court's to the stairs (the
-/// owner: no door onto the court).
-fn add_door(m: &Mass, storeys: &[Storey], walls: &[Wall], out: &mut [Opening], role: WallRole) {
+/// owner: no door onto the court). Never one before a house's flight (`cores`): a corner house
+/// whose back is a party wall took its garden door here, onto the side of its flight (#308).
+fn add_door(
+    m: &Mass,
+    storeys: &[Storey],
+    walls: &[Wall],
+    cores: &[Core],
+    out: &mut [Opening],
+    role: WallRole,
+) {
     let best = walls
         .iter()
         .enumerate()
@@ -935,11 +943,22 @@ fn add_door(m: &Mass, storeys: &[Storey], walls: &[Wall], out: &mut [Opening], r
     let Some((w, lo, hi)) = best else {
         return;
     };
+    // Whether a door at `along` opens onto a house's flight: across its width, 0.4 m inside.
+    let wall = &walls[w];
+    let t = (wall.b - wall.a).normalize_or_zero();
+    let inward = DVec2::new(-t.y, t.x);
+    let on_flight = |along: f64| {
+        [-0.5, 0.0, 0.5].iter().any(|&x| {
+            let q = wall.a + t * (along + x * DOOR) + inward * (wall.thickness + 0.4);
+            cores.iter().any(|c| c.house && geom::contains(&c.stair, q))
+        })
+    };
     let middle = (lo + hi) * 0.5;
     let door = out
         .iter()
         .enumerate()
         .filter(|(_, o)| o.wall == w && o.storey == 0 && o.kind != OpeningKind::Door)
+        .filter(|(_, o)| !on_flight(o.along))
         .min_by(|x, y| {
             (x.1.along - middle)
                 .abs()

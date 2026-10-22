@@ -40,6 +40,10 @@ pub fn plan_depth(ty: &ParcelType) -> f64 {
 /// the lot (a corner's wedge, a strip's remainder) joins its neighbour along the street.
 pub const MIN_FRONT: f64 = rooms::HALL + 2.4 + rooms::WALL;
 
+/// How near its lot's corner a row house's front may start or end and take the corner, metres:
+/// the lot then reaches a room deep within this of it (a side line up to about 10° off square).
+const CORNER: f64 = 0.5;
+
 /// `lots` (each its street side first, `keys` the households they were cut for) with each lot
 /// whose front is a room deep along under [`MIN_FRONT`] joined to its neighbour along the same
 /// street, the two sharing a side and their fronts in line: the neighbour's household builds on
@@ -99,9 +103,16 @@ pub fn merge_small(
         .unzip()
 }
 
+/// The shortest edge a footprint keeps, metres: the facades give a shorter one no face
+/// (`facades::edge_kinds`), its wall an inner one, and a house with an inner wall counts as a
+/// wing another mass's core serves: it got no stair (#308).
+const STUB: f64 = 0.5;
+
 /// `fp` without its corners that turn by under 3° or close an edge under 15 cm: a footprint cut
 /// from a lot keeps the lot's points along its sides, and a roof whose edges nearly line up, or
 /// one turns over at once, will not pitch (the kit then flattens it, grey in a row of tiles).
+/// An edge under [`STUB`] (a lot's corner clipped off at the back) goes too, its neighbours
+/// run on to where they meet.
 pub fn tidy(fp: &[DVec2]) -> Vec<DVec2> {
     let mut out = fp.to_vec();
     let mut changed = true;
@@ -117,6 +128,32 @@ pub fn tidy(fp: &[DVec2]) -> Vec<DVec2> {
                 changed = true;
                 break;
             }
+        }
+        if changed {
+            continue;
+        }
+        for i in 0..n {
+            let (p, c, q, r) = (
+                out[(i + n - 1) % n],
+                out[i],
+                out[(i + 1) % n],
+                out[(i + 2) % n],
+            );
+            if c.distance(q) >= STUB {
+                continue;
+            }
+            // Where the edges either side meet, if near; else the stub's start goes.
+            let (d1, d2) = (c - p, r - q);
+            let denom = geom::cross(d1, d2);
+            let meet = (denom.abs() > 1e-9)
+                .then(|| p + d1 * (geom::cross(q - p, d2) / denom))
+                .filter(|x| x.distance(c) < STUB && x.distance(q) < STUB);
+            if let Some(x) = meet {
+                out[(i + 1) % n] = x;
+            }
+            out.remove(i);
+            changed = true;
+            break;
         }
     }
     out
@@ -187,6 +224,25 @@ pub fn houses(
             // front had a window at its end with the roof right behind it and no room (the
             // owner, 2026-10-16). The rest of the front stays garden, as do the type's sides.
             let (s0, s1) = front_stretch(lot, a, t, inward, rooms::DEPTH.0)?;
+            // A row house (no side gardens) whose stretch starts or ends within [`CORNER`] of its
+            // lot's corner takes the corner: a side line a degree off square left the house a
+            // quarter metre short of it, and the houses either side stood apart by a slit (#308).
+            // The lot's depth is still measured along the stretch as found: at the corner itself
+            // a side off square leaves it a metre deep, and the house went.
+            let found = (s0 + ty.sides, s1 - ty.sides);
+            let frontage = parcels::frontage(lot);
+            let (s0, s1) = if ty.sides > 0.0 {
+                (s0, s1)
+            } else {
+                (
+                    if s0 <= CORNER { 0.0 } else { s0 },
+                    if s1 >= frontage - CORNER {
+                        frontage
+                    } else {
+                        s1
+                    },
+                )
+            };
             let (mut s0, mut s1) = (s0 + ty.sides, s1 - ty.sides);
             if s1 - s0 < MIN_FRONT {
                 return None;
@@ -217,7 +273,8 @@ pub fn houses(
             let width = s1 - s0;
             // As deep as the lot lets it along its stretch at most: a plan deeper than its lot
             // left the lot's lines for a rectangle, a sliver beside its neighbour.
-            let room = least_depth(lot, a, t, inward, s0, s1).min(plan_depth(ty));
+            let room = least_depth(lot, a, t, inward, s0.max(found.0), s1.min(found.1))
+                .min(plan_depth(ty));
             let mut plan = rooms::plan(
                 &rooms::programme(people, means),
                 width,
@@ -257,11 +314,17 @@ pub fn houses(
             if plan.storeys.len() > 1 {
                 // A house of storeys needs its flight's depth on its lot: deeper than the lot
                 // along its front, its footprint ran past the lot, and an L-shaped corner lot's
-                // inner side cut it to a sliver 0.9 m deep. The lot stays a garden.
-                if stair.min(plan_depth(ty)) > room.max(rooms::DEPTH.0) + 0.05 {
+                // inner side cut it to a sliver 0.9 m deep. The lot stays a garden. On a strip
+                // whose type leaves a plan shallower than the flight (a faubourg's shallowest,
+                // its garden given up) it still takes the flight's depth where the lot has it:
+                // kept to the type's, the house got no stair and its upper rooms no way up (#308).
+                let lot_room = least_depth(lot, a, t, inward, s0.max(found.0), s1.min(found.1));
+                if stair.min(plan_depth(ty)) > room.max(rooms::DEPTH.0) + 0.05
+                    || stair > lot_room.max(rooms::DEPTH.0) + 0.05
+                {
                     return None;
                 }
-                plan.deepen(stair.min(plan_depth(ty)));
+                plan.deepen(stair);
             }
             // A front cut short (a corner's wedge) with a household's rooms piled over three
             // storeys is no village house: the lot stays garden.
@@ -339,13 +402,17 @@ pub fn houses(
     // width (Italy's Civil Code: buildings "united or adjoining", or 3 m apart; the owner,
     // 2026-10-16: "there are either adjoining properties or there should be a legal distance
     // between structures"). Its rooms are laid again on the shallower depth; a house that would
-    // then lose its stair's depth or take a fourth storey stays as it was.
+    // then lose its stair's depth or take a fourth storey adjoins instead where its back faces
+    // another's side and its lot reaches that far: deepened to it (#308: a house 1.5 m short of
+    // its corner neighbour's side, its back wall blank against the slit).
     let mut prints: Vec<Option<Vec<DVec2>>> = lots
         .iter()
         .zip(&drafts)
         .map(|(lot, d)| d.as_ref().and_then(|d| footprint_of(lot, d)))
         .collect();
     let mut shrink = vec![0.0f64; lots.len()];
+    // The gap to a side straight behind, where the house could adjoin instead.
+    let mut reach = vec![0.0f64; lots.len()];
     for i in 0..lots.len() {
         let (Some(d), Some(_)) = (&drafts[i], &prints[i]) else {
             continue;
@@ -373,6 +440,9 @@ pub fn houses(
             });
             let want = (BACK_GAP - g) * if facing { 0.5 } else { 1.0 };
             shrink[i] = shrink[i].max(want);
+            if !facing {
+                reach[i] = g;
+            }
         }
     }
     for (k, (lot, d)) in lots.iter().zip(drafts.iter_mut()).enumerate() {
@@ -385,20 +455,32 @@ pub fn houses(
             d.s1 - d.s0,
             depth.min(plan_depth(ty)),
         );
-        if plan.storeys.len() > 1 {
-            if depth < stair {
-                continue;
+        let shrunk = if plan.storeys.len() > 1 && depth < stair {
+            false
+        } else {
+            if plan.storeys.len() > 1 {
+                plan.deepen(stair.min(depth));
             }
-            plan.deepen(stair.min(depth));
-        }
-        if plan.storeys.len() > 3 || plan.depth > depth + 1e-6 {
+            plan.storeys.len() <= 3 && plan.depth <= depth + 1e-6
+        };
+        if shrunk {
+            d.plan = plan;
+            prints[k] = footprint_of(lot, d);
             continue;
         }
-        d.plan = plan;
-        prints[k] = footprint_of(lot, d);
+        // To the other's side, the lot's line between them: no deeper than the lot.
+        let wanted = d.plan.depth + reach[k];
+        let least = least_depth(lot, d.a, d.t, DVec2::new(-d.t.y, d.t.x), d.s0, d.s1);
+        let deeper = wanted.min(least);
+        if reach[k] > 0.0 && deeper <= MAX_DEPTH + 0.05 && least >= wanted - 0.05 {
+            d.plan.deepen(deeper);
+            prints[k] = footprint_of(lot, d);
+        }
     }
-    // Walls closer than a metre brought together (`snap`).
+    // Walls closer than a metre brought together (`snap`), those a degree or two apart swung
+    // together (`swing`).
     snap(&mut prints);
+    swing(&mut prints);
     lots.iter()
         .zip(drafts)
         .zip(prints)
@@ -477,6 +559,56 @@ fn snap(prints: &mut [Option<Vec<DVec2>>]) {
     }
 }
 
+/// Two houses' walls facing each other within 0.5° to 3°, closer than a metre at both ends of one
+/// without touching (a back square to its front against a side on a lot line a degree off, #308):
+/// that one's ends brought straight out onto the other's line, the wall swung onto it. Each
+/// house of a pair is tried as the one that moves: a side running past the other's back reaches
+/// past its line at one end, while the back lies within the side's.
+fn swing(prints: &mut [Option<Vec<DVec2>>]) {
+    let n = prints.len();
+    for i in 0..n {
+        for j in 0..n {
+            let (Some(p), Some(q)) = (prints[i].clone(), prints[j].clone()) else {
+                continue;
+            };
+            if i == j {
+                continue;
+            }
+            let (pn, qn) = (p.len(), q.len());
+            for e in 0..pn {
+                let (a0, a1) = (p[e], p[(e + 1) % pn]);
+                let ta = (a1 - a0).normalize_or_zero();
+                let out = DVec2::new(ta.y, -ta.x);
+                let length = a0.distance(a1);
+                let swung = (0..qn).find_map(|f| {
+                    let (b0, b1) = (q[f], q[(f + 1) % qn]);
+                    let tb = (b1 - b0).normalize_or_zero();
+                    if !(-0.99996..-0.99863).contains(&ta.dot(tb)) {
+                        return None;
+                    }
+                    let denom = geom::cross(out, tb);
+                    let to = |a: DVec2| geom::cross(b0 - a, tb) / denom;
+                    let (d0, d1) = (to(a0), to(a1));
+                    let (u0, u1) = ((b0 - a0).dot(ta), (b1 - a0).dot(ta));
+                    let overlap = u0.max(u1).min(length) - u0.min(u1).max(0.0);
+                    ((-0.005..1.0).contains(&d0)
+                        && (-0.005..1.0).contains(&d1)
+                        && d0.max(d1) > 0.005
+                        && overlap > 0.5)
+                        .then_some((d0.max(0.0), d1.max(0.0)))
+                });
+                if let Some((d0, d1)) = swung {
+                    let mut p = p.clone();
+                    p[e] += out * d0;
+                    p[(e + 1) % pn] += out * d1;
+                    prints[i] = Some(p);
+                    break;
+                }
+            }
+        }
+    }
+}
+
 /// The gap a house's back keeps from the next house straight behind it, metres: a light court
 /// under which two houses must touch instead (`research/house-layouts.md` rule 1).
 pub const BACK_GAP: f64 = 3.0;
@@ -528,15 +660,41 @@ fn footprint_of(lot: &[DVec2], d: &Draft) -> Option<Vec<DVec2>> {
     }
     let (a, b) = (a + t * s0, a + t * s1);
     let inward = unit_in * d.plan.depth;
-    let mut footprint = vec![a, b, b + inward, a + inward];
+    // An end on its lot's corner runs its side along the lot's side line (0.17° to 15° off
+    // square, as `snap` swings a V) to the back: square to the front, a house narrower than its
+    // lot or deeper than it lets stood in a V with its row neighbour at a bend, a slit opening to
+    // a metre at the back (#308).
+    let n = lot.len();
+    let side = |corner: DVec2, next: DVec2| {
+        let dir = (next - corner).normalize_or_zero();
+        let square = dir.dot(unit_in);
+        if square > 15f64.to_radians().cos() && square < 0.003f64.cos() {
+            dir * (d.plan.depth / square)
+        } else {
+            inward
+        }
+    };
+    let back_a = if n >= 3 && a.distance(lot[0]) < 0.05 {
+        a + side(lot[0], lot[n - 1])
+    } else {
+        a + inward
+    };
+    let back_b = if n >= 3 && b.distance(lot[1]) < 0.05 {
+        b + side(lot[1], lot[2])
+    } else {
+        b + inward
+    };
+    let mut footprint = vec![a, b, back_b, back_a];
     // Within the lot: a corner lot narrows towards the back. The cut is by each side's half
     // plane, as for a convex lot; a footprint already inside the lot keeps whole (a corner's two
     // lots made one, `parcels::strips_by`, are an L, and its inner corner's side cut the house
-    // to 0.9 m).
+    // to 0.9 m). Within a centimetre of its outline counts: a back corner a millimetre past a
+    // lot's back line sent the house through every side's clip, and a stub of the outline's
+    // cut its back corner off (#308).
     let inside = footprint.iter().all(|&p| {
         geom::contains(lot, p)
             || (0..lot.len())
-                .any(|i| geom::distance_to_segment(p, lot[i], lot[(i + 1) % lot.len()]) < 1e-6)
+                .any(|i| geom::distance_to_segment(p, lot[i], lot[(i + 1) % lot.len()]) < 0.01)
     });
     let n = if inside { 0 } else { lot.len() };
     for i in 0..n {
