@@ -2291,6 +2291,49 @@ buffer each, copied bit by bit).
   - The app's `cpu/declare passes`: 1.67 → 0.66 ms; the frame became GPU-bound (3.74 → 3.67 ms).
 - **Pixels:** the physics lab's and the sentinels' 196 captures match the accepted set.
 
+## The cluster culls' look-back (#333, 2026-10-22)
+
+A cluster cull's workgroup appends its survivors in workgroup order: it publishes its counts and
+adds up those of the workgroups before it (a decoupled look-back). Pass 1 does it for two lists
+(the drawn clusters, then those it leaves to pass 2 with the cut-out ones), and so does pass 2
+with cut-outs on. The second list's look-back ran after the first's, and a workgroup published
+its second counts only once its first look-back had ended. Both lists now publish together and
+look back in the same rounds (`lookback_exclusive2`).
+
+The village at 600 m, 18:00, 1600 × 900, DLAA, 240 fixed steps, async compute on. Mean of three
+runs per build, alternated; ms:
+
+| View | cluster cull 1: before → after | cluster cull 2: before → after |
+|---|---|---|
+| green | 0.417 → 0.392 | 0.118 → 0.115 |
+| forest | 0.567 → 0.542 | 0.191 → 0.159 |
+| air | 0.606 → 0.572 | 0.074 → 0.078 |
+| main street | 0.395 → 0.375 | 0.092 → 0.084 |
+
+The frame times move within their run-to-run noise (±0.3 ms). The images match to the pixel in
+the green and the forest. The hall's runs differ by 3–16 pixels with the same build and by 21–24
+across the builds, at most 9 levels: it is not still from run to run.
+
+**Where the cull's time goes**, measured on the way:
+- **One look-back costs ~0.03 ms a pass:** an extra look-back whose result was thrown away, on
+  status words of its own, added 0.028 ms to the green's cull 1. The rest of the pass is the cull
+  itself: a chain of dependent reads (work item, instance, mesh, its levels, cluster, page and
+  materials, the previous pyramid).
+- **Its own cost is lower than async compute shows:** the green's cull 1 takes 0.28 ms and cull 2
+  0.07 with `FORGE_ASYNC=0`, against 0.37 and 0.15 beside the probe rays. That frame was 5.40 ms
+  serial against 5.70 async, two runs each.
+- **Tried and dropped:**
+  - reading a cluster's page, materials and ladder only once its LOD and frustum tests pass:
+    cull 1 +0.03–0.09 ms in every view. The reads no longer overlap the tests' arithmetic;
+  - 16 work items a workgroup instead of 8: no gain (green cull 1 0.40 → 0.43);
+  - 4 work items: cull 1 up to 0.06 ms slower (the air), the green mixed.
+- **Registers:** 40 for the resident scene's cull, 60 for the streamed one's (`FORGE_SHADER_STATS`).
+
+`FORGE_SHADER_LINES=1` keeps the source lines (`-g2`) in an optimised build's shaders. A trace
+opened in Nsight Graphics then shows its real-time shader profiler's samples per line (GPU
+Trace's `--real-time-shader-profiler`, Blackwell `--architecture "Blackwell GB20x"`). Its
+command-line export holds only the per-pass tables.
+
 ## Not measured yet
 
 - **Streaming**: residency pools, request queue depth, drive and decompression throughput.

@@ -1576,66 +1576,82 @@ uint2 lookback_unpack(uint64_t word)
     return uint2(uint(word & 0x7FFFFFFFull), uint((word >> 31) & 0x7FFFFFFFull));
 }
 
-static const uint LOOKBACK_LANES = 32; // predecessors read per round
+static const uint LOOKBACK_LANES = 32; // predecessors read per round and run
+static const uint LOOKBACK_RUNS = 2;   // runs a workgroup looks back on at once
 
-groupshared uint64_t s_window[LOOKBACK_LANES];
-groupshared uint64_t s_exclusive; // counts of the tickets before this one, summed so far
-groupshared uint s_cursor;    // tickets [0, s_cursor) not yet added
-groupshared uint s_found;     // a published prefix was reached
+groupshared uint64_t s_window[LOOKBACK_RUNS * LOOKBACK_LANES];
+groupshared uint64_t s_exclusive[LOOKBACK_RUNS]; // counts of the tickets before this one, summed so far
+groupshared uint s_cursor[LOOKBACK_RUNS];         // tickets [0, s_cursor) not yet added
+groupshared uint s_pending;                       // bit r: run r has not reached a published prefix
 
-// Publishes `counts` for workgroup `ticket` in `status` and returns the sums of the counts of
-// the tickets before it. Every thread of the workgroup calls it with the same arguments (the
-// wait is shared): each round, the first LOOKBACK_LANES threads read one predecessor's status
-// word each, nearest first, and thread 0 adds them up to the first prefix or to the first
-// predecessor that has published nothing yet, where the next round starts.
-uint2 lookback_exclusive(uint64_t* status, uint ticket, uint2 counts, uint thread)
+// Publishes `counts` (xy in `status0`, zw in `status1`) for workgroup `ticket` in each of the
+// first `runs` runs (1 or 2), and returns the sums of the counts of the tickets before it in
+// each (xy, zw). Every thread of the workgroup calls it with the same arguments (the wait is
+// shared), at least LOOKBACK_LANES threads a run: each round, LOOKBACK_LANES threads of each
+// run still looking back read one predecessor's status word each, nearest first, and the run's
+// first thread adds them up to the first prefix or to the first predecessor that has published
+// nothing yet, where the run's next round starts. Two runs publish together and look back in
+// the same rounds: the second run's predecessors do not wait for their first look-back to end
+// before they publish, as two calls one after the other made them (#333).
+uint4 lookback_exclusive2(uint64_t* status0, uint64_t* status1, uint runs, uint ticket, uint4 counts, uint thread)
 {
-    uint64_t count = lookback_pack(counts);
+    uint run = thread / LOOKBACK_LANES;
+    uint lane = thread % LOOKBACK_LANES;
+    bool reader = run < runs;
+    uint64_t* status = run == 0 ? status0 : status1;
+    uint64_t count = lookback_pack(run == 0 ? counts.xy : counts.zw);
     uint64_t ignored;
-    if (thread == 0)
+    if (reader && lane == 0)
     {
         InterlockedExchange(status[ticket], (ticket == 0 ? LOOKBACK_PREFIX : LOOKBACK_AGGREGATE) | count, ignored);
-        s_exclusive = 0;
-        s_cursor = ticket;
-        s_found = ticket == 0 ? 1u : 0u;
+        s_exclusive[run] = 0;
+        s_cursor[run] = ticket;
     }
+    if (thread == 0)
+        s_pending = ticket == 0 ? 0u : (1u << runs) - 1u;
     GroupMemoryBarrierWithGroupSync();
-    while (s_found == 0)
+    while (s_pending != 0)
     {
-        uint cursor = s_cursor;
-        if (thread < LOOKBACK_LANES)
+        bool looking = reader && ((s_pending >> run) & 1u) != 0;
+        uint cursor = reader ? s_cursor[run] : 0u;
+        if (looking)
         {
             uint64_t word = 0;
-            if (thread < cursor)
-                InterlockedOr(status[cursor - 1 - thread], 0ull, word); // an atomic read
+            if (lane < cursor)
+                InterlockedOr(status[cursor - 1 - lane], 0ull, word); // an atomic read
             s_window[thread] = word;
         }
         GroupMemoryBarrierWithGroupSync();
-        if (thread == 0)
+        if (looking && lane == 0)
         {
             uint n = min(LOOKBACK_LANES, cursor);
             uint added = 0;
             for (; added < n; added++)
             {
-                uint64_t word = s_window[added];
+                uint64_t word = s_window[thread + added];
                 uint64_t flag = word & LOOKBACK_FLAGS;
                 if (flag == 0)
                     break; // not published yet: the next round starts here
-                s_exclusive += word & ~LOOKBACK_FLAGS;
+                s_exclusive[run] += word & ~LOOKBACK_FLAGS;
                 if (flag == LOOKBACK_PREFIX)
                 {
-                    s_found = 1;
+                    InterlockedAnd(s_pending, ~(1u << run));
                     break;
                 }
             }
-            s_cursor = cursor - added;
+            s_cursor[run] = cursor - added;
         }
         GroupMemoryBarrierWithGroupSync();
     }
-    uint64_t exclusive = s_exclusive;
-    if (thread == 0 && ticket != 0)
-        InterlockedExchange(status[ticket], LOOKBACK_PREFIX | (exclusive + count), ignored);
-    return lookback_unpack(exclusive);
+    if (reader && lane == 0 && ticket != 0)
+        InterlockedExchange(status[ticket], LOOKBACK_PREFIX | (s_exclusive[run] + count), ignored);
+    return uint4(lookback_unpack(s_exclusive[0]), runs > 1 ? lookback_unpack(s_exclusive[1]) : uint2(0, 0));
+}
+
+// `lookback_exclusive2` over one run.
+uint2 lookback_exclusive(uint64_t* status, uint ticket, uint2 counts, uint thread)
+{
+    return lookback_exclusive2(status, status, 1, ticket, uint4(counts, 0, 0), thread).xy;
 }
 
 // Workgroups of the instance cull, one status word each in `Frame::lookback`.
@@ -1750,28 +1766,19 @@ void cluster_cull(uint thread, bool streamed)
         before += k < local ? n : uint2(0, 0);
         drawn += n;
     }
-    uint2 first = lookback_exclusive(cluster_status(f), ticket, drawn, thread);
-    uint below = (1u << lane) - 1u;
-    uint index = first.x + before.x + countbits(s_drawn[local] & below);
-    uint sw_index = first.y + before.y + countbits(s_software[local] & below); // software clusters before this one
-    uint hw_index = index - sw_index; // for a hardware-drawn cluster, the hardware-drawn ones before it
     // Pass 1 lists the clusters it leaves to pass 2 in the same order (issue #92), and both
     // passes list their cut-out clusters apart (#265), through a run of status words of each
-    // pass's own after the two passes' first runs: (rejected, cut out). Without a previous
-    // pyramid pass 1 draws nothing and leaves everything: pass 2 then walks the work items
-    // again, as it would.
+    // pass's own after the two passes' first runs: (rejected, cut out), looked back on with
+    // the first. Without a previous pyramid pass 1 draws nothing and leaves everything: pass 2
+    // then walks the work items again, as it would.
     bool lists = f[0].pass == PASS_PREVIOUSLY_VISIBLE && (f[0].flags & FLAG_PREV_PYRAMID) != 0;
     bool cut = (f[0].flags & FLAG_CUTOUTS) != 0;
-    uint rejected = 0;     // this workgroup's
-    uint rejects_first = 0; // the workgroups' before it
-    uint reject_index = 0; // this thread's slot in `Frame::rejects`
-    uint cutouts = 0;      // this workgroup's cut-out clusters
-    uint cut_first = 0;    // the workgroups' before it
-    uint cut_index = 0;    // the cut-out clusters before this thread's
+    uint rejected = 0;        // this workgroup's
+    uint rejected_before = 0; // the same for the work items before this thread's
+    uint cutouts = 0;         // this workgroup's cut-out clusters
+    uint cut_before = 0;      // the same for the work items before this thread's
     if (lists || cut)
     {
-        uint rejected_before = 0;
-        uint cut_before = 0;
         for (uint k = 0; k < CULL_ITEMS; k++)
         {
             uint n = lists ? countbits(s_rejected[k]) : 0u;
@@ -1781,14 +1788,20 @@ void cluster_cull(uint thread, bool streamed)
             cut_before += k < local ? c : 0u;
             cutouts += c;
         }
-        GroupMemoryBarrierWithGroupSync(); // every thread is done with the first look-back's shared words
-        uint64_t* run = f[0].cluster_lookback + (second ? 3 : 2) * f[0].cluster_groups;
-        uint2 firsts = lookback_exclusive(run, ticket, uint2(rejected, cutouts), thread);
-        rejects_first = firsts.x;
-        cut_first = firsts.y;
-        reject_index = rejects_first + rejected_before + countbits(s_rejected[local] & below);
-        cut_index = cut_first + cut_before + countbits(s_cutout[local] & below);
     }
+    uint64_t* run = f[0].cluster_lookback + (second ? 3 : 2) * f[0].cluster_groups;
+    uint4 firsts = lookback_exclusive2(cluster_status(f), run, lists || cut ? 2u : 1u, ticket,
+                                       uint4(drawn, rejected, cutouts), thread);
+    uint2 first = firsts.xy;
+    uint below = (1u << lane) - 1u;
+    uint index = first.x + before.x + countbits(s_drawn[local] & below);
+    uint sw_index = first.y + before.y + countbits(s_software[local] & below); // software clusters before this one
+    uint hw_index = index - sw_index; // for a hardware-drawn cluster, the hardware-drawn ones before it
+    uint rejects_first = firsts.z; // the workgroups' before it
+    uint cut_first = firsts.w;     // the workgroups' before it
+    // This thread's slot in `Frame::rejects`, and the cut-out clusters before this thread's.
+    uint reject_index = lists ? rejects_first + rejected_before + countbits(s_rejected[local] & below) : 0u;
+    uint cut_index = cut ? cut_first + cut_before + countbits(s_cutout[local] & below) : 0u;
     // The list ends in this workgroup (at most one does); every thread agrees on both.
     bool past_end = first.x + drawn.x > capacity;
     bool ends_here = past_end && first.x <= capacity;
