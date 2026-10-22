@@ -2223,8 +2223,16 @@ pages streamed:
     2.5 cells, a hysteresis of 0.25) and loads the nearest cells first, at most 8 cells an edit.
     Each frame takes every edit its position asks for (`update_settled`), so a run's frames do
     not hang on the worker's timing.
-  - **Measured:** 26 cells in 4 edits at the start. Then, as the viewer moves, 2 to 4 cells load
-    ahead and 2 unload behind, 33 to 37 cells in, the worker 0.3 to 1.2 ms an edit.
+  - **Measured** (without proxies, `FORGE_CELL_PROXIES=0`): 26 cells in 4 edits at the start.
+    Then, as the viewer moves, 2 to 4 cells load ahead and 2 unload behind, 33 to 37 cells in,
+    the worker 0.3 to 1.2 ms an edit.
+  - **The far cells' proxies** (D-077, 2026-10-22, on by default): past the 2.5 cells and to 6, a
+    cell shows its proxy, its four props merged into one mesh of rocks (`forge_geom::proxy`),
+    cooked on the worker and added as one instance (`GridCells::load_proxy`). 123 cells come in
+    at the start (26 as their props, 97 as proxies) in 16 edits, 133 ms of the worker. As the
+    viewer moves, 1 to 4 cells swap each way an edit, taken out and brought back in the same
+    edit, 9 to 13 ms of the worker with the cooking. Two runs give the same frames (0 pixels
+    every 60 frames), and a validated run is clean.
   - **Determinism:** two runs give the same frames every 60 frames (0 pixels).
   - **At a town's scale** (`FORGE_CELL_PROPS`, the props a cell; room for 200 000 instances):
     each edit builds the editor's top-level structure over every instance anew, so its cost

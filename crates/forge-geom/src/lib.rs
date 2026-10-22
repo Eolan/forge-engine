@@ -18,6 +18,7 @@ pub mod model;
 pub mod modules;
 pub mod page;
 pub mod procedural;
+pub mod proxy;
 pub mod skin;
 pub mod stone;
 pub mod street;

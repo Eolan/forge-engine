@@ -9,8 +9,12 @@
 //! - **The frames** take each finished edit and its cells' sets in one update
 //!   ([`CellStreamer::update`]): the edit applied ([`MeshletScene::apply`]) and the sets added
 //!   or removed ([`CellSystems`]), so a cell comes and goes on the frame the edit is published.
-//! - **Not here:** the far cells' look (D-077's proxies, the owner's to decide), and a cell's own
-//!   state, which the game keeps and gives back when the cell loads again.
+//! - **The far cells' proxies** (D-077): with the policy's `proxy_rings`, a cell past its
+//!   content's reach shows its proxy ([`CellSource::load_proxy`]), typically one mesh merged from
+//!   its own (`forge_geom::proxy`). A cell swapping between the two has the one taken out and the
+//!   other put in by the same edit: never both on a frame, never neither.
+//! - **Not here:** a cell's own state, which the game keeps and gives back when the cell loads
+//!   again.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -20,7 +24,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use forge_gpu::{Device, GpuError, Result};
-use forge_world::{CellId, Partition, Residency, StreamPlan, StreamPolicy};
+use forge_world::{CellId, Detail, Partition, Residency, StreamPlan, StreamPolicy};
 use glam::DVec3;
 
 use crate::cell_record::{CellRecord, CellSets, CellSystems};
@@ -42,22 +46,35 @@ pub trait CellSource: Send + 'static {
     /// Adds cell `cell`'s meshes and instances through `editor` and says what it added. A cell
     /// that fails is left empty (the error logged) until it unloads.
     fn load(&mut self, cell: CellId, editor: &mut SceneEditor) -> Result<LoadedCell>;
+
+    /// Adds cell `cell`'s proxy (D-077), what stands in for it past its content's reach: one mesh
+    /// merged from the cell's own seen from afar (`forge_geom::proxy::merge`), cooked once and
+    /// kept. A source without proxies adds nothing (the default), and the cell shows nothing
+    /// there.
+    fn load_proxy(&mut self, cell: CellId, editor: &mut SceneEditor) -> Result<LoadedCell> {
+        let _ = (cell, editor);
+        Ok(LoadedCell::default())
+    }
 }
 
 /// How a [`CellStreamer`] streams.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CellStreamConfig {
-    /// The plan's levels and reaches (`forge_world::StreamPolicy`).
+    /// The plan's levels and reaches (`forge_world::StreamPolicy`), the proxies' with them.
     pub policy: StreamPolicy,
-    /// The most cells an edit brings or takes.
+    /// The most cells an edit brings or takes (a swap counts once each way).
     pub cells_per_edit: usize,
 }
 
 /// One edit and the cells it brings or takes.
 struct Batch {
     edit: SceneEdit,
-    loaded: Vec<(CellId, CellSets)>,
+    /// The cells it brings, at their detail: a swapped cell is in `unloaded` too, taken out
+    /// first.
+    loaded: Vec<(CellId, Detail, CellSets)>,
     unloaded: Vec<CellId>,
+    /// How many of the loaded swapped from the other detail.
+    swapped: u32,
     /// How long the worker took over it.
     took: Duration,
 }
@@ -67,10 +84,13 @@ struct Batch {
 pub struct CellStreamStats {
     /// Edits applied.
     pub edits: u32,
-    /// Cells added.
+    /// Cells added, at either detail.
     pub loaded: u32,
-    /// Cells removed.
+    /// Cells removed, at either detail.
     pub unloaded: u32,
+    /// Cells swapped between their content and their proxy (each also counted loaded and
+    /// unloaded).
+    pub swapped: u32,
     /// The worker's time over them, seconds.
     pub worker_s: f64,
 }
@@ -80,6 +100,7 @@ impl std::ops::AddAssign for CellStreamStats {
         self.edits += o.edits;
         self.loaded += o.loaded;
         self.unloaded += o.unloaded;
+        self.swapped += o.swapped;
         self.worker_s += o.worker_s;
     }
 }
@@ -92,7 +113,7 @@ pub struct CellStreamer {
     /// The last position whose changes the worker has all made and sent.
     settled: Arc<AtomicU64>,
     batches: Receiver<Result<Batch>>,
-    records: HashMap<CellId, CellRecord>,
+    records: HashMap<CellId, (Detail, CellRecord)>,
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
 }
@@ -207,15 +228,16 @@ impl CellStreamer {
             };
             let batch = batch?;
             scene.apply(batch.edit)?;
+            // Out first: a swapped cell's old record goes before its new one comes.
             for cell in &batch.unloaded {
-                if let Some(record) = self.records.remove(cell) {
+                if let Some((_, record)) = self.records.remove(cell) {
                     systems.remove(&record);
                 }
             }
-            for (cell, sets) in &batch.loaded {
+            for (cell, detail, sets) in &batch.loaded {
                 match systems.add(device, sets) {
                     Ok(record) => {
-                        self.records.insert(*cell, record);
+                        self.records.insert(*cell, (*detail, record));
                     }
                     Err(e) => tracing::warn!(?cell, "a streamed cell's sets: {e}"),
                 }
@@ -223,14 +245,23 @@ impl CellStreamer {
             stats.edits += 1;
             stats.loaded += batch.loaded.len() as u32;
             stats.unloaded += batch.unloaded.len() as u32;
+            stats.swapped += batch.swapped;
             stats.worker_s += batch.took.as_secs_f64();
         }
         Ok(stats)
     }
 
-    /// The cells in, as the frames have them.
+    /// The cells in, as the frames have them, at either detail.
     pub fn loaded(&self) -> usize {
         self.records.len()
+    }
+
+    /// Of them, those shown by their proxy.
+    pub fn proxies(&self) -> usize {
+        self.records
+            .values()
+            .filter(|(detail, _)| *detail == Detail::Proxy)
+            .count()
     }
 }
 
@@ -245,6 +276,13 @@ impl Drop for CellStreamer {
     }
 }
 
+/// What a cell in has added, at which detail.
+struct Live {
+    detail: Detail,
+    instances: Vec<u32>,
+    meshes: Vec<MeshId>,
+}
+
 /// The worker's side.
 struct Worker<P, S> {
     editor: SceneEditor,
@@ -252,10 +290,10 @@ struct Worker<P, S> {
     partition: P,
     config: CellStreamConfig,
     residency: Residency,
-    /// What each cell in added: its instances and meshes.
-    live: HashMap<CellId, (Vec<u32>, Vec<MeshId>)>,
-    /// The changes not made yet.
-    loads: VecDeque<CellId>,
+    /// What each cell in added.
+    live: HashMap<CellId, Live>,
+    /// The changes not made yet: cells to bring in at a detail (or swap to it), cells to take out.
+    loads: VecDeque<(CellId, Detail)>,
     unloads: VecDeque<CellId>,
 }
 
@@ -302,52 +340,82 @@ impl<P: Partition, S: CellSource> Worker<P, S> {
         }
     }
 
-    /// The plan around `at`, its changes queued: a cell queued to load and now to unload is
-    /// dropped from both.
+    /// The plan around `at`, its changes queued. A cell queued to load and now to unload is
+    /// dropped from the loads, and taken out if it is in at all; a cell queued twice keeps its
+    /// latest detail, and none when that is the detail it is in at.
     fn plan(&mut self, at: DVec3) {
         let plan = StreamPlan::around(&self.partition, at, &self.config.policy);
         let changes = self
             .residency
             .update(&self.partition, at, &plan, &self.config.policy);
         for cell in changes.unload {
-            if let Some(k) = self.loads.iter().position(|&c| c == cell) {
-                self.loads.remove(k);
-            } else {
+            self.loads.retain(|&(c, _)| c != cell);
+            if self.live.contains_key(&cell) && !self.unloads.contains(&cell) {
                 self.unloads.push_back(cell);
             }
         }
         // The plan's order: nearest and finest first.
-        self.loads.extend(changes.load);
+        for (cell, detail) in changes.load {
+            self.loads.retain(|&(c, _)| c != cell);
+            let back = self.live.get(&cell).is_some_and(|l| l.detail == detail);
+            if back && !self.unloads.contains(&cell) {
+                continue;
+            }
+            self.loads.push_back((cell, detail));
+        }
     }
 
-    /// The next edit: unloads first, then loads, up to the configured cells.
+    /// Takes out what a cell added.
+    fn take_out(&mut self, live: Live) {
+        for i in live.instances {
+            self.editor.remove_instance(i);
+        }
+        for m in live.meshes {
+            self.editor.remove_mesh(m);
+        }
+    }
+
+    /// The next edit: unloads first, then loads, up to the configured cells. A cell in at the
+    /// other detail is taken out in the same edit that brings it at this one.
     fn batch(&mut self) -> Result<Batch> {
         let start = Instant::now();
         let mut unloaded = Vec::new();
         let mut loaded = Vec::new();
+        let mut swapped = 0;
         let budget = self.config.cells_per_edit.max(1);
         while unloaded.len() < budget
             && let Some(cell) = self.unloads.pop_front()
         {
-            if let Some((instances, meshes)) = self.live.remove(&cell) {
-                for i in instances {
-                    self.editor.remove_instance(i);
-                }
-                for m in meshes {
-                    self.editor.remove_mesh(m);
-                }
+            if let Some(live) = self.live.remove(&cell) {
+                self.take_out(live);
             }
             unloaded.push(cell);
         }
         while unloaded.len() + loaded.len() < budget
-            && let Some(cell) = self.loads.pop_front()
+            && let Some((cell, detail)) = self.loads.pop_front()
         {
-            match self.source.load(cell, &mut self.editor) {
+            if let Some(live) = self.live.remove(&cell) {
+                self.take_out(live);
+                unloaded.push(cell);
+                swapped += 1;
+            }
+            let made = match detail {
+                Detail::Full => self.source.load(cell, &mut self.editor),
+                Detail::Proxy => self.source.load_proxy(cell, &mut self.editor),
+            };
+            match made {
                 Ok(cell_in) => {
-                    self.live.insert(cell, (cell_in.instances, cell_in.meshes));
-                    loaded.push((cell, cell_in.sets));
+                    self.live.insert(
+                        cell,
+                        Live {
+                            detail,
+                            instances: cell_in.instances,
+                            meshes: cell_in.meshes,
+                        },
+                    );
+                    loaded.push((cell, detail, cell_in.sets));
                 }
-                Err(e) => tracing::warn!(?cell, "a streamed cell not made: {e}"),
+                Err(e) => tracing::warn!(?cell, ?detail, "a streamed cell not made: {e}"),
             }
         }
         let edit = self.editor.finish(None)?;
@@ -355,6 +423,7 @@ impl<P: Partition, S: CellSource> Worker<P, S> {
             edit,
             loaded,
             unloaded,
+            swapped,
             took: start.elapsed(),
         })
     }

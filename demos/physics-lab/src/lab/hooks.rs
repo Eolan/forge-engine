@@ -535,14 +535,29 @@ impl Scenario for LabScenario {
                             .ok()
                             .and_then(|v| v.parse().ok())
                             .unwrap_or(GRID_PROPS),
+                        rock: forge_geom::procedural::asteroid(
+                            forge_core::Seed::new(7),
+                            4,
+                            0.5,
+                            0.2,
+                        ),
                     },
                     GRID,
                     forge_render::CellStreamConfig {
+                        // The cells' content within 40 m, their proxies to 96 m (D-077);
+                        // `FORGE_CELL_PROXIES=0`: none.
                         policy: forge_world::StreamPolicy {
                             finest: GRID_LEVEL,
                             coarsest: GRID_LEVEL,
                             rings: 2.5,
                             hysteresis: 0.25,
+                            proxy_rings: if std::env::var("FORGE_CELL_PROXIES")
+                                .is_ok_and(|v| v == "0")
+                            {
+                                0.0
+                            } else {
+                                6.0
+                            },
                         },
                         cells_per_edit: 8,
                     },
@@ -601,6 +616,28 @@ struct GridCells {
     mesh: forge_render::MeshId,
     /// Its props a cell.
     props: u32,
+    /// What stands for a prop in a cell's proxy (D-077): a rock, so a capture tells them apart.
+    rock: forge_geom::TriMesh,
+}
+
+impl GridCells {
+    /// Prop `k` of `cell`: where it stands and how it turns, from a hash of the cell's id.
+    fn place(cell: forge_world::CellId, k: u32) -> (glam::DVec3, f32) {
+        use forge_world::Partition;
+        let size = GRID.cell_size(cell.level());
+        let (x, y) = cell.xy();
+        let mut h = cell.0 ^ (u64::from(k) + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        h ^= h >> 31;
+        h = h.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        h ^= h >> 29;
+        let unit = |shift: u32| ((h >> shift) & 0xffff) as f64 / 65_536.0;
+        let at = glam::DVec3::new(
+            (x as f64 + 0.15 + 0.7 * unit(0)) * size,
+            GRID_HEIGHT + 4.0 * unit(16),
+            (y as f64 + 0.15 + 0.7 * unit(32)) * size,
+        );
+        (at, (unit(48) * std::f64::consts::TAU) as f32)
+    }
 }
 
 impl forge_render::CellSource for GridCells {
@@ -609,26 +646,13 @@ impl forge_render::CellSource for GridCells {
         cell: forge_world::CellId,
         editor: &mut forge_render::meshlet::SceneEditor,
     ) -> forge_gpu::Result<forge_render::LoadedCell> {
-        use forge_world::Partition;
-        let size = GRID.cell_size(cell.level());
-        let (x, y) = cell.xy();
         let mut instances = Vec::new();
         for k in 0..self.props {
-            // A cell's own hash per prop: where it stands in the cell and how it turns.
-            let mut h = cell.0 ^ (u64::from(k) + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15);
-            h ^= h >> 31;
-            h = h.wrapping_mul(0xbf58_476d_1ce4_e5b9);
-            h ^= h >> 29;
-            let unit = |shift: u32| ((h >> shift) & 0xffff) as f64 / 65_536.0;
-            let at = glam::DVec3::new(
-                (x as f64 + 0.15 + 0.7 * unit(0)) * size,
-                GRID_HEIGHT + 4.0 * unit(16),
-                (y as f64 + 0.15 + 0.7 * unit(32)) * size,
-            );
+            let (at, turn) = Self::place(cell, k);
             instances.push(editor.add_instance_at(
                 self.mesh,
                 forge_render::CellPos::from_f64(at),
-                glam::Quat::from_rotation_y((unit(48) * std::f64::consts::TAU) as f32),
+                glam::Quat::from_rotation_y(turn),
                 1.0,
                 forge_core::material::MaterialId(0),
             )?);
@@ -636,6 +660,53 @@ impl forge_render::CellSource for GridCells {
         Ok(forge_render::LoadedCell {
             instances,
             meshes: Vec::new(),
+            sets: forge_render::CellSets::default(),
+        })
+    }
+
+    /// The cell's props as one mesh, a rock where each stands (D-077's proxy), cooked on the
+    /// worker: one mesh and one instance a far cell.
+    fn load_proxy(
+        &mut self,
+        cell: forge_world::CellId,
+        editor: &mut forge_render::meshlet::SceneEditor,
+    ) -> forge_gpu::Result<forge_render::LoadedCell> {
+        use forge_world::Partition;
+        let size = GRID.cell_size(cell.level());
+        let (x, y) = cell.xy();
+        let origin = glam::DVec3::new(x as f64 * size, GRID_HEIGHT, y as f64 * size);
+        let parts: Vec<forge_geom::proxy::Part> = (0..self.props)
+            .map(|k| {
+                let (at, turn) = Self::place(cell, k);
+                forge_geom::proxy::Part {
+                    mesh: &self.rock,
+                    at: (at - origin).as_vec3(),
+                    rotation: glam::Quat::from_rotation_y(turn),
+                    scale: 1.0,
+                    material: 0,
+                }
+            })
+            .collect();
+        let (merged, row) = forge_geom::proxy::merge(&parts)
+            .map_err(|e| forge_gpu::GpuError::Unsupported(format!("a cell's proxy: {e}")))?;
+        let cooked = forge_geom::MeshletMesh::build(&merged);
+        let mesh = editor.add_mesh(
+            &cooked,
+            forge_render::meshlet::MeshRays {
+                budget: merged.triangle_count() as u32,
+                terrain: false,
+            },
+        )?;
+        let instance = editor.add_instance_at(
+            mesh,
+            forge_render::CellPos::from_f64(origin),
+            glam::Quat::IDENTITY,
+            1.0,
+            forge_core::material::MaterialId(row),
+        )?;
+        Ok(forge_render::LoadedCell {
+            instances: vec![instance],
+            meshes: vec![mesh],
             sets: forge_render::CellSets::default(),
         })
     }
@@ -1009,7 +1080,9 @@ impl Running for LabRunning {
                     edits = took.edits,
                     loaded = took.loaded,
                     unloaded = took.unloaded,
+                    swapped = took.swapped,
                     cells = streamer.loaded(),
+                    proxies = streamer.proxies(),
                     worker_ms = %format_args!("{:.1}", took.worker_s * 1e3),
                     frame_ms = %format_args!("{:.2}", taken.elapsed().as_secs_f64() * 1e3),
                     "cells streamed (#338's check)"

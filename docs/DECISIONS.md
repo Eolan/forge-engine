@@ -7135,4 +7135,18 @@ nearest hits; a full search before C is built):
   - Claim 1 builds a point cloud with normals around part of a landscape, generates a mesh from it, and simplifies that mesh into proxy meshes swapped at run time.
   - B merges the cell's own meshes and simplifies them by their cluster DAG, with no point cloud. C must not remesh through a point cloud (some HLOD tools do).
 - **US 2014/0354626 A1** (Google, block-based LOD of buildings by height in a quadtree): abandoned.
+
+**B built** (2026-10-22, the owner's go the same day):
+- **The plan:** `StreamPolicy::proxy_rings` (0, none, by default). A level's cells within its
+  `rings` are wanted as their content, those beyond and within `proxy_rings` as their proxy
+  (`forge_world::Detail`). `Residency` swaps a proxy to its content as soon as it is wanted, and
+  content to its proxy (or a proxy to nothing) past the hysteresis, as it unloads.
+- **The streamer:** `CellSource::load_proxy` adds a cell's proxy (nothing by default). A
+  swapping cell's old detail is taken out in the edit that brings the new one, and its records
+  are swapped in the same update.
+- **The merge:** `forge_geom::proxy::merge`, the cell's placed meshes as one, its instance's
+  row the lowest of the parts', each triangle's section the distance to its own row. The game
+  chooses the parts and cooks the result once (`cache::cook_cached`, keyed by the cell's
+  content).
+- **Checked** in the lab (`FORGE_DYNAMIC_SCENE=cells`, `docs/demos/physics-lab.md`).
 *(research: large-worlds.md §5; D-037; issue #338)*

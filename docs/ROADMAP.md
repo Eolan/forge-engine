@@ -681,7 +681,8 @@ The items below are the phase's original outline; the plan above orders them.
      stable ids, the pool of movers static instances are promoted to while they move, and
      `CellSystems` adding a cell's rooms, panes and lamps beside its edit), the streaming plan
      driving it (step 4: `CellStreamer` and a game's `CellSource`, built 2026-10-22; the far
-     cells' proxies: D-077 accepted the same day, B, a proxy per cell swapped in one edit);
+     cells' proxies: D-077 accepted the same day, B, a proxy per cell swapped in one edit, built
+     the same day);
      the loads profiled (#345, 2026-10-22: the long starts are the shaders, the upload a small
      share).
    - **Generation at run time** stays possible where a game needs it: the same makers, run
