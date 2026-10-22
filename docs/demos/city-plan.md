@@ -441,11 +441,13 @@ point alone, two trunks stood in the river, one on either bank (the owner). Thei
 still reach over the water.
 
 **Leaf cards** (D-013, the same afternoon). Each lump is now a core and the cards round it.
-- **The core:** 20 triangles at three tenths of the lump's radius, in three tenths of the
-  leaves' colour, the shade inside a crown. At 0.6 of the radius in the leaves' own colour its
-  smooth faces showed, and at half with 12 cards at most a lump the near holm oaks still showed it
-  as dark balls; at two fifths in half the colour, once the metered exposure lit the wood, as
-  faceted green stones among the leaves.
+- **The core:** 20 triangles at a fifth of the lump's radius, in 0.15 of the leaves' colour,
+  the shade inside a crown. At 0.6 of the radius in the leaves' own colour its smooth faces
+  showed, and at half with 12 cards at most a lump the near holm oaks still showed it as dark
+  balls; at two fifths in half the colour, once the metered exposure lit the wood, as faceted
+  green stones among the leaves; at three tenths in three tenths of the colour, with the leaves'
+  detail (#346), as faceted olive balls through the gaps close up (2026-10-22: of four
+  versions, the smaller and darker, the one recommended, with the owner's go).
 - **The cards:** 6 to 16 squares round each lump (a shrub's 4), cut from a leaf atlas drawn at
   start-up (`forge_render::textures::leaves`, 1024 × 1024). Its four sprays are small oval
   leaves for the oaks, broad ones for planes and limes, needle tufts for the pines, the cypress

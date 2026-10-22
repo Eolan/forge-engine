@@ -6839,10 +6839,11 @@ impl Scenario for PlanScenario {
             .map(|s| {
                 let [bark, leaves] = [s.look.bark, s.look.leaves].map(|[a, b]| (a, b));
                 let foliage = tones(leaves.0, leaves.1, 6.0);
-                // The crowns' cores at three tenths of the leaves' colour: the shade inside a
-                // crown (at half, once the metered exposure lit the wood, their sunlit facets
-                // read paler than the cards round them).
-                let shade = |c: [f32; 3]| c.map(|k| k * 0.3);
+                // The crowns' cores at 0.15 of the leaves' colour: the shade inside a crown (at
+                // half, once the metered exposure lit the wood, their sunlit facets read paler
+                // than the cards round them; at three tenths, olive balls through the leaves'
+                // gaps close up, #346).
+                let shade = |c: [f32; 3]| c.map(|k| k * 0.15);
                 materials
                     .add_row_block(vec![
                         (format!("{} bark", s.id), tones(bark.0, bark.1, 8.0)),

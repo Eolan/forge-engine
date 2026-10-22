@@ -81,7 +81,7 @@ advice.
 - **The trees drawn today** (`demos/city-plan/src/lib.rs`) [local]:
   - `grown_mesh`: wood 5 cm thick or more as seven-sided limbs. The leaf clusters are gathered on a
     grid (a sixth of the crown's width, an eighth for broad leaves) into lumps.
-  - Each lump: a 20-triangle core at 0.3 of its radius (`CROWN_CORE`) and 6–16 leaf cards (a
+  - Each lump: a 20-triangle core at 0.2 of its radius (`CROWN_CORE`) and 6–16 leaf cards (a
     shrub's 4) cut from the leaf atlas, with normals bent out from the crown's middle.
   - `grown_proxy` (#297): the wood and each lump as a closed shell at 0.8 of its radius
     (`CROWN_PROXY`), section 3, opaque. Only the probes' rays see it, through #301's bits.

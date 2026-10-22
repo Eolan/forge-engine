@@ -73,7 +73,7 @@ pub fn grown_mesh(g: &TreeGraph, shrub: bool, broad: bool, lift: f32, spray: Lea
     // The crown's middle, which the cards' normals bend away from with their lump's.
     let middle = lumps.iter().fold(Vec3::ZERO, |s, l| s + l.0) / lumps.len().max(1) as f32;
     for (i, &(centre, radius)) in lumps.iter().enumerate() {
-        // A core of two fifths of the lump, the shade the cards hide and the far crown keeps
+        // A core of a fifth of the lump, the shade the cards hide and the far crown keeps
         // (it simplifies as a closed mesh; the cards cannot), then the cards round it.
         lump_of(&mut mesh, centre, radius * CROWN_CORE, i as u32 % 8, &faces);
         leaf_cards(&mut mesh, centre, radius, middle, spray, shrub, i as u32);
@@ -307,11 +307,12 @@ pub fn crown_lumps(g: &TreeGraph, shrub: bool, broad: bool, lift: f32) -> Vec<(V
         .collect()
 }
 
-/// A crown lump's core, as a share of the lump's radius ([`grown_mesh`]): three tenths, drawn
+/// A crown lump's core, as a share of the lump's radius ([`grown_mesh`]): a fifth, drawn
 /// darker, the shade between the cards (at 0.6 in the leaves' colour, then at half with 12 cards
 /// at most a lump, the near holm oaks showed it as balls; at two fifths, once the metered
-/// exposure lit the wood, as faceted green stones among the leaves).
-pub const CROWN_CORE: f32 = 0.3;
+/// exposure lit the wood, as faceted green stones among the leaves; at three tenths, with the
+/// leaves' detail (#346), as faceted olive balls through the gaps close up).
+pub const CROWN_CORE: f32 = 0.2;
 
 /// A crown proxy's lump ([`grown_proxy`]) as a share of the lump's radius: three fifths, the
 /// light nearest the cards' (#297; the village at 15:00, a fixed exposure, against the probes
