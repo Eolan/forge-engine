@@ -274,6 +274,9 @@ pub struct ShaderCompiler {
     /// An optimised build's level (`-O2`; `FORGE_SHADER_OPT` gives 1 to 3 for a run, to weigh a
     /// compile's time against the frames', #345).
     level: u8,
+    /// `FORGE_SHADER_LINES=1`: an optimised build keeps its source lines (`-g2`), for a GPU
+    /// profiler's per-line samples (Nsight's real-time shader profiler, #333).
+    lines: bool,
     version: String,
     /// Every entry asked for so far, in order (issue #25), shared with the clones.
     requested: Arc<Mutex<Vec<ShaderEntry>>>,
@@ -360,6 +363,7 @@ impl ShaderCompiler {
                 .and_then(|v| v.parse().ok())
                 .filter(|l| (1..=3).contains(l))
                 .unwrap_or(2),
+            lines: env::var_os("FORGE_SHADER_LINES").is_some_and(|v| v != "0"),
             version,
             requested: Arc::new(Mutex::new(Vec::new())),
         })
@@ -617,6 +621,9 @@ impl ShaderCompiler {
         if self.opt_level() != 2 && self.optimize {
             hasher.update(&[self.level]);
         }
+        if self.lines && self.optimize {
+            hasher.update(b"lines");
+        }
         Ok(hasher.digest())
     }
 
@@ -687,7 +694,7 @@ impl ShaderCompiler {
                 .arg(dir)
                 .args(["-warnings-disable", SDK_WARNINGS]);
         }
-        if !self.optimize {
+        if !self.optimize || self.lines {
             cmd.arg("-g2");
         }
         if precise(file, entry) {
@@ -883,6 +890,7 @@ mod tests {
             cache_dir: dir.clone(),
             optimize: true,
             level: 2,
+            lines: false,
             version: "test".into(),
             requested: Arc::default(),
         };
@@ -911,6 +919,7 @@ mod tests {
             cache_dir: PathBuf::new(),
             optimize: true,
             level: 2,
+            lines: false,
             version: String::new(),
             requested: Arc::default(),
         };
