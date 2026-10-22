@@ -719,7 +719,8 @@ game (scenarios, missions, licensed assets) is a private repository, as the city
    and the frame 0.35 ms shorter from the air), the far shadow rays meeting opaque proxies with it
    (step 3, `shadow/trace` halved from the air); followed down a game's tree → stand-in → far
    step, three crossings, #332, 2026-10-22; the GPU grass pass built the same day behind
-   `--grass`, #300: blades in the visibility buffer from a map of the ground, swayed by a wind;
+   `--grass`, #300: blades in the visibility buffer from a map of the ground, swayed by a wind,
+   out to 50 m thinned from 12 m, stopping at the lawn's edge within a ninth of a cell;
    next the owner's look at both, then the impostor baker); structures with interiors, lit by their
    lamps at night (D-065, #270: the houses' lamps as data, the rooms as light lists and the probes lit by them, built 2026-10-18; RTXDI
    to compare next); flora; the particle system (smoke, dust, fire, rain,

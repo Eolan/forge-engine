@@ -6837,14 +6837,16 @@ looked:
   its instance's id, and placing them only with far shadows reshuffled every later tree's tones in
   the A/B.
 
-**The grass pass built** (#300, 2026-10-22), behind city-blocks' `--grass [M]` until the owner has
-looked (`forge_render::grass`, `shaders/meshlet.slang`'s "grass"):
+**The grass pass built** (#300, 2026-10-22), behind city-blocks' `--grass [M]` (50 m) until the
+owner has looked (`forge_render::grass`, `shaders/meshlet.slang`'s "grass"):
 - **The map:** square cells of 0.5 m (`GrassMap`), each with the ground's level and its blades'
   count (at most 64), height and row, made once from the region's data. The village paints its
   gardens' lawns (40 blades a cell, 12 cm) and its parks' grass (56, 22 cm) from the ground
   tiles, cleared under the houses and along the garden walls. A blade is a function of its cell
   and its index there: placement, height, lean, facing and width from a hash, nothing evaluated
-  round the viewer.
+  round the viewer. Each cell also keeps the ninths of it no blade stands in, painted and
+  cleared at a ninth's precision: the lawn stops within 8 cm of the paving (the owner saw blades
+  on it, a border cell's spreading up to 25 cm past the lawn's edge).
 - **Its ids:** the visibility id's top bit, the visible list capped at 2^24 slots for it:
   `cell << 9 | blade << 3 | triangle`. The resolve, the sun's shadow trace for SIGMA and the
   lamps' passes rebuild a blade's triangle from it alone, from the map uploaded once; the
@@ -6856,11 +6858,18 @@ looked (`forge_render::grass`, `shaders/meshlet.slang`'s "grass"):
   non-indexed draw on the fallback path, both compiled precise. A blade under a pixel wide is
   drawn a pixel wide and its covered share kept by the frame's noise. Over the last fifth of the
   reach the blades sink into the ground's own grass.
+- **Far** (`--grass-thin T`, 12 m by default, the reach 50 m; the owner saw the curve where a
+  20 m reach ended): from `T` on, a cell keeps the share (T / distance)² of its blades, about as
+  many on a pixel, each sinking over the last fifth of its own distance, T × √(count / (index +
+  ½)), so none pops, and the rest widened by distance / T, so a grazing ray crosses as much
+  blade as before. At 50 m the four passes take 0.22 ms against 0.13 at 20 m (0.32 without the
+  thinning), the turn's flicker the same 3.6 %, the band from 17 m to the lawn's far end 0.1 %.
 - **The look:** the blades take their cell's row (the lawn's, the park's) and one of its two
   colours a clump, darker towards the root; their normals rounded across them. With distance,
-  their normals and contrast converge to the clump's mean, and at the reach their brightness to
-  the ground's they sink into, which took the visible flicker of a turn under DLAA against a
-  supersampled reference from 17 % to 6 % of the grass's pixels.
+  their normals and contrast converge to the clump's mean, fully by 20 m or the reach if nearer
+  (a reach's distance alone let a 50 m reach's blades shimmer twice as much), and at the reach
+  their brightness to the ground's they sink into, which took the visible flicker of a turn under
+  DLAA against a supersampled reference from 17 % to 6 % of the grass's pixels.
 - **The wind** (`--grass-wind S`, 0.15 by default): a gust's wave rolls across the field along the
   wind's way, each blade a little out of step, with a flutter of its own; the tips lean `S` of
   their height at most. "grass/motion" gives the blades' pixels their motion (the blade rebuilt

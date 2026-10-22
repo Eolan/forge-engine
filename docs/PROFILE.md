@@ -882,15 +882,23 @@ each:
 Every shadow ray through a crown from the air tested its cards against the leaf atlas; the
 proxy is opaque, so the hardware ends them. The main street's shadows fall within 60 m.
 
-**Grass near the camera** (#300, D-075, 2026-10-22; city-blocks' `--grass`, 20 m): the village
-at 1600 × 900, DLAA, the green's view (`12.9,1.7,-226.0,176.1,-5`) over the park's grass, its
-map 1.44 M cells and 3.96 M blades.
+**Grass near the camera** (#300, D-075, 2026-10-22; city-blocks' `--grass`, 50 m thinned from
+12 m, first 20 m): the village at 1600 × 900, DLAA, the green's view (`12.9,1.7,-226.0,176.1,-5`)
+over the park's grass, its map 1.44 M cells and 3.95 M blades.
 
 | | `grass/count` | `grass/scan` | `grass/emit` | `grass/raster` | The frame |
 |---|---|---|---|---|---|
 | The green, still | 0.021 ms | 0.008 | 0.002 | 0.091 | 4.70 ms |
 | A metre lower, eyes at 0.6 m | 0.021 | 0.008 | 0.002 | 0.102 | 4.64 |
 | Turning 4°/s | 0.019 | 0.008 | 0.002 | 0.099 | 4.54 (4.40 without) |
+| The green, still, 50 m thinned from 12 m | 0.022 | 0.001 | 0.017 | 0.179 | 4.57 |
+| A metre lower, 50 m | 0.023 | 0.001 | 0.017 | 0.187 | 4.38 |
+| Turning 4°/s, 50 m | 0.023 | 0.001 | 0.021 | 0.178 | 4.70 |
+| Turning 4°/s, 50 m without the thinning | 0.024 | 0.001 | 0.019 | 0.279 | 4.79 |
+
+The first three rows are the first reach, 20 m, whose end the owner saw as a curve. From the
+thinning's start a cell keeps the share (12 / distance)² of its blades, each sinking at its own
+distance, the rest widened: the raster 0.18 ms against 0.28 without.
 
 With the wind (`--grass-wind`, 0.15 by default), "grass/motion" adds 0.015 ms: the blades' pixels
 move with them, so a still view's swaying grass under DLAA stays as close to a supersampled run as
@@ -903,6 +911,13 @@ their clump's with distance, 6.3 % once their brightness meets the ground's at t
 swaying in the wind, against a swaying reference; the bare lawn: 0 %); at the default 2 levels, 66 % and 59.5 % (the
 bare lawn 6.5 %). Neither the coverage dither (no dither: 66 %) nor a 12 m reach (57 %) is the
 cause: the stripes of lit blades over their dark gaps are. With the camera still, nothing moves.
+
+The 50 m reach first converged the normals and contrast by the reach's distance: the turn's
+flicker rose to 8.1 % (3.6 % at 20 m, over three pairs of frames; the lawn's edge by ninths took
+the 20 m from 4.0 to 3.6 %). Converged by 20 m whatever the reach, it is 3.6 % at 20, 40, 50 and
+60 m, and 0.1 % over the band from 17 m to the lawn's far end. Converging by a blade's size on
+screen instead was unfair to the measure: the supersampled reference's blades are smaller on its
+pixels, so it shaded them otherwise.
 
 **A cut-out row's triangles alone in the query loop** (#307, 2026-10-19): each mesh's structure
 holds its opaque sections and its cut-out ones as two geometries (D-029). The village, best of

@@ -410,7 +410,7 @@ public struct FarLamps
 public struct GrassCell
 {
     public float level;             // the ground's height at the cell's middle, the scene frame
-    public uint look;               // its blades (bits 0–7, at most GRASS_CELL_BLADES), their height in centimetres (8–15), their row after `Frame::grass_row` (16–23)
+    public uint look;               // its blades (bits 0–7, at most GRASS_CELL_BLADES), their height in centimetres (8–15), their row after `Frame::grass_row` (16–22), the ninths no blade stands in (23–31, bit 23 + x + 3 z)
 };
 
 public struct Frame
@@ -504,7 +504,8 @@ public struct Frame
     public float4 grass_wind;       // xy: the wind's way on the ground (unit), z: its strength (the tips' lean in it, a share of their height), w: the sway's time (s)
     public float grass_wind_before; // the sway's time the frame before (s): the blades' motion (`grass_motion_main`)
     public uint grass_depth;        // its cells along z
-    public uint2 grass_pad2;
+    public float grass_thin;        // where the blades start thinning out with distance, metres (0: never)
+    public uint grass_pad2;
 };
 
 // Whether this thread's rays meet the movers: every pass's but the probes' unless their scene asks
@@ -2755,6 +2756,10 @@ static const uint GRASS_PATCH_TRIANGLES = GRASS_PATCH_BLADES * GRASS_BLADE_TRIAN
 static const uint GRASS_GRID_ROW = 256;
 // A blade's width at its root, metres, before its own spread.
 static const float GRASS_WIDTH = 0.012;
+// Where the blades' normals and contrast have converged to their clump's, metres: the distance
+// tuned against shimmer with a 20 m reach (#300). The same at every resolution, so a supersampled
+// reference shades as the frame it checks.
+static const float GRASS_CONVERGED = 20.0;
 // A blade's vertices: left and right at the foot of each segment, then the tip.
 static const uint3 GRASS_TRIANGLES[GRASS_BLADE_TRIANGLES] = {
     uint3(0, 1, 3), uint3(0, 3, 2), uint3(2, 3, 5), uint3(2, 5, 4), uint3(4, 5, 6)
@@ -2837,11 +2842,25 @@ GrassBlade grass_blade_at(Frame* f, uint cell, uint index, float time)
     float distance = length(b.root - f[0].camera_in_scene.xyz);
     float pixel = 2.0 * distance / (f[0].p00 * float(f[0].target_width));
     float width = GRASS_WIDTH * (0.75 + 0.5 * grass_unit(grass_hash(h3, 0x68E31DA4u), 0));
+    // From `Frame::grass_thin` on, a cell keeps the share (thin / distance)² of its blades, about
+    // as many on a pixel: blade `index` of `count` sinks over the last fifth of its own distance,
+    // thin × sqrt(count / (index + 0.5)), and those left widen by distance / thin, so a grazing
+    // ray crosses as many blades' width as before.
+    float thin = f[0].grass_thin;
+    if (thin > 0.0)
+    {
+        float stands = thin * sqrt(float(min(c.look & 0xFFu, GRASS_CELL_BLADES)) / (float(index) + 0.5));
+        b.height *= saturate((stands - distance) / (0.2 * stands));
+        width *= max(distance / thin, 1.0);
+    }
     b.half_width = 0.5 * max(width, pixel);
     b.coverage = width / max(width, pixel);
     // Over the last fifth of the reach the blades sink into the ground's own grass.
     b.height *= saturate((f[0].grass_reach - distance) / (0.2 * f[0].grass_reach));
-    b.alive = index < min(c.look & 0xFFu, GRASS_CELL_BLADES) && b.height > 0.005;
+    // None stands in the cell's bare ninths, past its lawn's edge or by a wall.
+    uint ninth = min(uint(grass_unit(h, 0) * 3.0), 2u) + 3u * min(uint(grass_unit(h, 16) * 3.0), 2u);
+    b.alive = index < min(c.look & 0xFFu, GRASS_CELL_BLADES) && b.height > 0.005
+        && ((c.look >> (23u + ninth)) & 1u) == 0u;
     return b;
 }
 
@@ -2893,7 +2912,12 @@ void grass_count_main(uint3 id : SV_DispatchThreadID)
         float2 middle = f[0].grass_origin + (float2(c) + 0.5) * f[0].grass_cell;
         float3 centre = float3(middle.x, g.level + 0.5 * tallest, middle.y) - f[0].camera_in_scene.xyz;
         float radius = 0.71 * f[0].grass_cell + tallest;
-        if (count > 0u && length(centre) - radius < f[0].grass_reach && sphere_in_frustum(f, centre, radius))
+        float closest = length(centre) - radius;
+        // Past the thinning's start only the first blades stand (`grass_blade_at`).
+        float thin = f[0].grass_thin;
+        if (thin > 0.0 && closest > thin)
+            count = min(count, uint(float(count) * (thin / closest) * (thin / closest)) + 1u);
+        if (count > 0u && closest < f[0].grass_reach && sphere_in_frustum(f, centre, radius))
             patches = (count + GRASS_PATCH_BLADES - 1u) / GRASS_PATCH_BLADES;
     }
     grass_push.counts[id.x] = patches;
@@ -3109,7 +3133,7 @@ GrassHit grass_hit(Frame* f, uint vis, uint2 pixel, float2 size)
     h.dpdy = bc.ddy.x * p0 + bc.ddy.y * p1 + bc.ddy.z * p2;
     h.along = saturate((h.scene.y - b.root.y) / max(b.height, 1e-4));
     h.hash = b.hash;
-    h.tint = (f[0].grass[cell].look >> 16) & 0xFFu;
+    h.tint = (f[0].grass[cell].look >> 16) & 0x7Fu;
     h.cell = cell;
     // The blade's face, turned to the viewer, rounded across it: its edges' normals lean out.
     float t = h.along;
@@ -3123,8 +3147,10 @@ GrassHit grass_hit(Frame* f, uint vis, uint2 pixel, float2 size)
                            k.z == 6u ? 0.0 : ((k.z & 1u) != 0u ? 1.0 : -1.0));
     float outward = dot(bc.lambda, across);
     float3 n = normalize(face + side * (0.6 * outward));
-    // Far blades take their clump's normal, up (Ghost of Tsushima's rule against shimmer).
-    h.far = saturate(length(h.relative) / max(f[0].grass_reach, 1.0));
+    // Far blades take their clump's normal, up (Ghost of Tsushima's rule against shimmer): all of
+    // it by `GRASS_CONVERGED`, or by the reach where the ground's own grass takes over.
+    float distance = length(h.relative);
+    h.far = saturate(distance / min(max(f[0].grass_reach, 1.0), GRASS_CONVERGED));
     h.n = normalize(lerp(n, float3(0.0, 1.0, 0.0), 0.45 + 0.55 * sqrt(h.far)));
     return h;
 }
