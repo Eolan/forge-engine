@@ -141,6 +141,19 @@ hysteresis of 0.5 from 80 % on (`probe_update.slang`, `CHANGE_START`, `CHANGE_FU
 of a settled probe's mean over its rays, and a passer-by blocking a few of them, stay under the
 start, so a still view keeps its pixels; young probes keep their own, lower hysteresis.
 
+Under a game's dense forest (2026-10-22), the noise did not stay under it: the foliage near a
+still camera flickered, 7 to 55 % of the pixels moving between captures 10 frames apart, gone
+without the probes. Each of the rays' eight rotations meets the sky through other gaps between
+the leaves, and the rotations' means parted by more than 30 % with nothing changed, so the probes
+kept half their maps and followed the rotations' 8-frame cycle. A change now counts only past
+`CHANGE_NOISE` (2) standard errors of the update's mean, the rays' luminance spread over √n, a
+texel taking about a quarter of them. In the village's forest with 64 rays a probe (the flicker
+the default 256 rays hide), a still camera's changes went from 0.004–0.09 % of the pixels,
+repeating every 40 frames, to 0.001–0.003 %, as with 256 rays. A probe's change below 30 % is
+untouched, so calm views keep their pixels, and the lamps of a block switched off and on at
+midnight (`FORGE_CELL_RECORD=toggle`) settle as fast as before (0.83 % of the pixels off when
+they come back, 0.07 % 70 frames later, both ways).
+
 ## Specks on walls in shade (issue #102, 2026-09-30)
 
 Walls facing away from the sun showed bright specks at the rims of their normal map's bumps,

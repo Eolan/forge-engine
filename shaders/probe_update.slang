@@ -137,6 +137,9 @@ static const float YOUNG_HYSTERESIS = 0.25;
 static const float CHANGE_START = 0.3;
 static const float CHANGE_FULL = 0.8;
 static const float CHANGED_HYSTERESIS = 0.5;
+// How many standard errors of an update's mean a change must pass before it counts (a game's
+// forest: the rotations' sampling alone moved the means by more than CHANGE_START).
+static const float CHANGE_NOISE = 2.0;
 
 groupshared float3 s_dir[PROBE_MAX_RAYS];
 groupshared float4 s_ray[PROBE_MAX_RAYS];
@@ -214,7 +217,28 @@ void probe_blend_main(uint3 group : SV_GroupID, uint thread : SV_GroupIndex)
                 now += dot(s_irradiance[i], luma);
                 before += dot(s_irradiance_old[i], luma);
             }
-            float change = abs(now - before) / max(max(now, before), 1e-12);
+            // What this update's own sampling explains: the rays' luminance spread over √n, a
+            // texel taking about a quarter of them, counted CHANGE_NOISE times. Under a crown each
+            // of the rays' rotations meets the sky through other gaps, and their means parted by
+            // more than CHANGE_START with nothing changed: the probes followed the 8-frame cycle of
+            // rotations and the foliage flickered with the camera still (a game's forest).
+            float sum = 0.0;
+            float squares = 0.0;
+            float n = 0.0;
+            for (uint i = 0; i < random; i++)
+            {
+                if (s_ray[i].w < 0.0)
+                    continue;
+                float l = dot(s_ray[i].rgb, luma);
+                sum += l;
+                squares += l * l;
+                n += 1.0;
+            }
+            float mean = sum / max(n, 1.0);
+            float spread = sqrt(max(squares / max(n, 1.0) - mean * mean, 0.0));
+            float texels = float(IRRADIANCE_TEXELS * IRRADIANCE_TEXELS);
+            float noise = CHANGE_NOISE * 2.0 * spread / sqrt(max(n, 1.0));
+            float change = max(abs(now - before) / texels - noise, 0.0) / max(max(now, before) / texels, 1e-12);
             kept = min(h, lerp(h, CHANGED_HYSTERESIS, smoothstep(CHANGE_START, CHANGE_FULL, change)));
         }
         s_hysteresis = kept;
