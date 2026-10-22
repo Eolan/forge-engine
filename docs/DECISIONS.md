@@ -7327,3 +7327,47 @@ nearest hits; a full search before C is built):
   content).
 - **Checked** in the lab (`FORGE_DYNAMIC_SCENE=cells`, `docs/demos/physics-lab.md`).
 *(research: large-worlds.md §5; D-037; issue #338)*
+
+## D-078 — Rooms lit by probe grids of their own, the cascades for the outside and far rooms 🟡 (proposed 2026-10-23, #353)
+
+**The question:** a room surface takes its light from the finest camera-centred cascade that
+covers it. The coarser cascades light rooms darker, so a far wall brightens as the finest
+cascade reaches it. The owner saw it in a game's 20 m hall: "the wall lights up if you move
+forward". ebbd2075 spread the change over 4 m and took the coarser cascades' bounce loss away
+(#353). What remains is the near-wall probes. In a 2 m cascade, the layer nearest an outer wall
+often stands in the wall, a window's recess or just outside. The rooms' masks (D-068) rightly
+leave those probes out, so the wall reads probes up to 2 m back. On the game's wall, without the
+masks the 2 m light matches the 1 m one: 132 against 131, and 107 with them. The game runs at
+1.5 m spacing meanwhile, where its hall stays in the finest cascade.
+
+**Research:** `research/probe-levels-indoors.md` (2026-10-23, the owner's go for a patent-free
+answer).
+
+| | How | For | Against |
+|---|---|---|---|
+| **A. A probe grid per room** (recommended) | Each room volume the generator gives (D-068) gets a small world-anchored grid, its outer layer 0.3–0.4 m in from the walls, floor and ceiling. Its surfaces and the probes' hits in it read that grid alone: no masks, no cascade loop, a linear blend. Doorways ramp between two rooms' grids. The cascades' probes inside such rooms go inactive. Near houses only (the ones whose insides are drawn), within a radius with hysteresis, each room cross-fading in over about 0.5 s. | No step: the grid doesn't move with the camera. Every wall has probes in front of it. Prior art: Source's per-leaf ambient cubes, Blender's room-aligned grids, DDGI's dense volumes. Moves further from Square Enix's claim 37 (one region number per grid, chosen up front). | A new lookup path and a pool of room probes in the atlases. Odd-shaped rooms need several boxes. Open-plan spaces without volumes stay on the cascades. Cost estimated at 0.05–0.3 ms for 1,000–2,000 room probes, less the in-room cascade probes it retires; to be measured. |
+| **B. The cascades as they are, tuned** | The finest cascade wider (`ProbeParams::finest_counts`, built in d22d3779: 32 across, +0.21–0.32 ms, reach 14.5 m), and rooms blended linearly. | Small, mostly built. | The step stays, only farther. Linear blending brightens rooms 2–4 levels and narrows the gap by ~1.5 (measured). |
+| **C. Companion probes by outer walls** | In the coarser cascades, a probe standing in a wall, a recess or outside, with a room within half a cell, gets a companion in the room 0.3 m from the wall. The lookup takes the companion when the probe isn't the room's. | Fixes the near-wall cause in the coarse cascades only, at the perimeter's cost. | The step from the cascades' other differences stays. Region-aware relocation, its nearest try, gave +4 in one room and −6 in another. |
+
+**Recommendation:** A, built in steps, each measured with #353's drift test and the map check:
+1. The pool and the grids for the camera's house, behind a switch.
+2. The lookup and the hits.
+3. Retiring the cascades' in-room probes.
+4. The radius and the cross-fade, then on by default where the scene gives rooms.
+
+B's linear blend could come first as a look change for the owner to judge, but it doesn't
+remove the step.
+
+**A patent the research found, for the owner:** NVIDIA's US 11,790,594 B2 (active to
+2041-10-17).
+- **Its claim 1:** rank the locations holding irradiance caches, cast rays from the higher-ranked
+  ones, and render. Its dependent claims rank by distance to the camera and by frames since the
+  last update.
+- **What comes near it here:** Forge's cadence (#103) updates settled probes every `cadence`
+  frames, on a fixed turn, not by a ranking. The village and the town run cadence 1; the city's
+  default is 2.
+- **Under A:** every room probe updates every frame with the same rays, so nothing is ranked.
+- **Not decided here:** whether a fixed round robin reads on the claims is a question for
+  counsel.
+
+*(research: probe-levels-indoors.md; D-068; issue #353)*
