@@ -681,6 +681,14 @@ walked house: the room view now shows two chairs at the table), and two acute ga
 corners are mitred. Left at the larger sizes: free wall ends at junctions with hedges, ridge
 steps where a lot keeps one house of a row shallower, and a few unlit rooms in corner houses.
 
+**One more house at 600 m** (the owner's go, 2026-10-22). A wide lot on the north-east street was
+refused its house for a shallow end of its front: its depth was measured along the whole front,
+before the house was narrowed to a squarer plan beside its neighbour. Measured where the house
+stands, the lot is 11 m deep, and a house of two storeys stands there behind a front garden. Its
+front wall, 20.6 m, is now the village's longest garden wall, so the map check's garden and vault
+views (the longest wall and the longest low one) moved to it. Inserted among the houses, it moved
+the frosted windows of 11 others, which a hash of each house's index picks.
+
 | Anomaly | Rule | When the check came in | After the fixes above |
 |---|---|---|---|
 | a room past its house's walls (its plan's rectangle on a footprint the lot cut) | — | 66 | 45 |

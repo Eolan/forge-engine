@@ -307,10 +307,11 @@ pub fn houses(
                 // whose type leaves a plan shallower than the flight (a faubourg's shallowest,
                 // its garden given up) it still takes the flight's depth where the lot has it:
                 // kept to the type's, the house got no stair and its upper rooms no way up (#308).
+                // The lot's depth is where the house stands, once narrowed to a squarer plan:
+                // measured along the whole front, a lot 11 m deep under the house was refused
+                // for a shallow end beside it (#308, the owner's go, 2026-10-22).
                 let lot_room = least_depth(lot, a, t, inward, s0.max(found.0), s1.min(found.1));
-                if stair.min(plan_depth(ty)) > room.max(rooms::DEPTH.0) + 0.05
-                    || stair > lot_room.max(rooms::DEPTH.0) + 0.05
-                {
+                if stair > lot_room.max(rooms::DEPTH.0) + 0.05 {
                     return None;
                 }
                 plan.deepen(stair);
