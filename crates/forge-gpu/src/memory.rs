@@ -86,6 +86,8 @@ impl Buffer {
             "write exceeds buffer size"
         );
         self.device.memory_counters().upload(bytes.len() as u64);
+        // And to this thread's tasks while a load is profiled (#345).
+        forge_core::activity::uploaded(bytes.len() as u64);
         // SAFETY: the mapping covers `size` bytes and the bounds were checked above; the caller
         // ensures the GPU is not reading this range (frame slots).
         unsafe {

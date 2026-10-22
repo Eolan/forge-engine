@@ -1023,6 +1023,20 @@ impl<D: Demo> State<D> {
             )
             .release(),
         );
+        // A load profiled (#345): from here to the demo's first frame, in the log and in
+        // `cache/profiles/` (the latest few kept); compiled out of shipped builds.
+        let load_profile = settings.add(
+            Spec::bool(
+                "dev.load_profile",
+                false,
+                "Profiles the start's load (#345): each step's time, its thread and the bytes it \
+                 uploaded, in the log and in cache/profiles/ (the 10 latest kept). Read at start.",
+            )
+            .restart(),
+        );
+        if settings.get(load_profile) {
+            forge_core::activity::record_start();
+        }
         settings.add_command(
             "app.capture",
             "[PATH]",

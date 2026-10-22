@@ -1758,6 +1758,31 @@ Left: a fresh cache's 149 shaders (a program could compile only its own if a lis
 sources); the city's ground (1 s on all cores; the cache could keep it), its quays and streets
 (0.4 s, triangulated on one thread) and its plan before the window (0.7 s); the upload.
 
+### A load profiled (#345, 2026-10-22)
+
+`--set dev.load_profile=1` (or `dev.load_profile 1` in `forge.cfg`) profiles the start's load:
+every step the activity system times (`forge_core::activity`), from the settings read to the
+demo's first frame, with its thread and the bytes its thread wrote for the GPU meanwhile (every
+mapped write, staging included, as the memory report counts them). The report goes to the log
+and to `cache/profiles/load-PROGRAM-SECONDS.txt`, the ten latest kept and none older than a
+week. A development build's: the `shipping` feature compiles the recording out.
+
+Measured beside the night check's batch (the machine shared), warm shader cache:
+
+| | The village (`--village 600`) | The city (4 km) |
+|---|---|---|
+| The load | 2.32 s | 13.18 s (its 789 meshes cooked: 8.26 s) |
+| Preparing, on the loading thread | 1.70 s | 11.57 s |
+| Finishing: uploads, structures, pipelines | 0.61 s | 1.60 s |
+| Uploaded | 320 MiB | 1.1 GiB |
+| of which the scene's tables (`building the scene`) | 117 MiB | 500 MiB |
+| and the rays' structures' inputs | 100 MiB | 525 MiB |
+
+The two threads run one after the other (the loading thread, then the finishing step's), each
+spreading its own work over the job system's cores; the profile sees their steps, not the jobs.
+Both maps upload every page of every mesh before the first frame (`Residency::All`): #345's
+next step measures what the first view needs of it.
+
 ## Local exposure (`--local-exposure`, #275, D-067, 2026-10-17)
 
 RTX 5070 Ti, `city-plan --village 600` at 18:00, the map check's door view (`--view=70.3,1.6,-172.9,-33.2,-3`),

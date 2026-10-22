@@ -302,6 +302,21 @@ impl<D: Demo + Send> Stage<D> {
                     total_ms = started.elapsed().as_millis(),
                     "loaded"
                 );
+                // The load profiled (`dev.load_profile`, #345): its report in the log and in
+                // the cache's profiles.
+                if let Some(profile) = forge_core::activity::record_finish() {
+                    tracing::info!("{}", profile.report());
+                    let dir =
+                        forge_core::derived::cache_dir(forge_core::derived::CacheKind::Profiles);
+                    let program = std::env::current_exe()
+                        .ok()
+                        .and_then(|p| p.file_stem()?.to_str().map(str::to_owned))
+                        .unwrap_or_else(|| "program".to_owned());
+                    match profile.save(&dir, &program) {
+                        Ok(path) => tracing::info!(path = %path.display(), "load profile saved"),
+                        Err(error) => tracing::warn!(%error, "cannot save the load profile"),
+                    }
+                }
                 // The window changed size while the step worked with the size it was given.
                 let now = ctx.extent();
                 if (now.width, now.height) != (given.width, given.height)

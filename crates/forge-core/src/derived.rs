@@ -710,6 +710,9 @@ pub enum CacheKind {
     Meshes,
     /// The worlds' products ([`DerivedCache`], #208), `cache/world/`.
     World,
+    /// The loads profiled in development builds (#345, [`crate::activity::Profile::save`]), the
+    /// latest few, `cache/profiles/`.
+    Profiles,
 }
 
 impl CacheKind {
@@ -718,6 +721,7 @@ impl CacheKind {
             Self::Shaders => "shaders",
             Self::Meshes => "meshes",
             Self::World => "world",
+            Self::Profiles => "profiles",
         }
     }
 }
