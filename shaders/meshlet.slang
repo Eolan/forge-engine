@@ -95,8 +95,9 @@ public struct Mesh
     public float root_reach_max;
     public uint material;          // the material its instances take unless they name their own (placement)
     // D-075's ladder (#302): the mesh its instances cross to when they stand smaller on screen,
-    // LADDER_NONE for none; the projected size of an instance's sphere, output pixels across,
-    // at which the crossing is half done; and the band's half width, a share of that size.
+    // LADDER_NONE for none, LADDER_VANISH for nothing (#343: it dissolves away); the projected
+    // size of an instance's sphere, output pixels across, at which the crossing is half done;
+    // and the band's half width, a share of that size.
     public uint ladder_next;
     public float ladder_px;
     public float ladder_band;
@@ -104,6 +105,7 @@ public struct Mesh
 };
 
 static const uint LADDER_NONE = 0xFFFFFFFFu;
+static const uint LADDER_VANISH = 0xFFFFFFFEu;
 
 // A row of the material table (`GpuMaterial` in crates/forge-render/src/material.rs, from
 // the D-007 record in crates/forge-core/src/material.rs). Colours are in units of a white
@@ -1957,7 +1959,8 @@ void append_instance_work(Frame* f, uint64_t* status, uint ticket, uint groups, 
         }
         count = own_count;
         roots = own_roots;
-        if (t > 0.0)
+        // A ladder to nothing (LADDER_VANISH, #343): past its crossing, no work.
+        if (t > 0.0 && mesh[0].ladder_next != LADDER_VANISH)
         {
             Mesh* next = f[0].meshes + mesh[0].ladder_next;
             uint next_roots = instance_roots(f, next, inst[0].scale, dist);

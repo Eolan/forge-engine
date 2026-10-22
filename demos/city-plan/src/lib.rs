@@ -543,6 +543,10 @@ pub struct PlanScenario {
     /// The style kit's instanced modules and their instances (module, transform, group).
     kit_meshes: Vec<TriMesh>,
     kit_instances: Vec<(u32, Mat4, u8)>,
+    /// The kit's modules that are the houses' furniture, and the size on screen, pixels across,
+    /// under which they fade away (`--fade-furniture`, #343; none by default).
+    home_kit: Vec<u32>,
+    fade_furniture: Option<f32>,
     /// The tram lines' runs, and the service's clock at the start, seconds.
     trams: Vec<TramRun>,
     /// The river shuttles, one a crossing.
@@ -1759,6 +1763,7 @@ impl PlanScenario {
                     ));
             }
         }
+        let mut home_kit = Vec::new();
         for (name, at) in homes {
             let piece = furnish::Piece::ALL
                 .into_iter()
@@ -1769,6 +1774,7 @@ impl PlanScenario {
                 kit_meshes.push(mesh);
                 let id = (kit_meshes.len() - 1) as u32;
                 kit_instances.extend(at.into_iter().map(|at| (id, at, 0)));
+                home_kit.push(id);
             }
         }
         // Their lamps (D-065 step 2): a globe on its cord, stem or arm, a mesh for each kind and
@@ -2150,6 +2156,8 @@ impl PlanScenario {
             lamps,
             decals: grime,
             kit_meshes,
+            home_kit,
+            fade_furniture: None,
             kit_instances,
             kit_report,
             far_lit,
@@ -2271,6 +2279,13 @@ impl PlanScenario {
     /// panes changed at run time (#325).
     pub fn glass_test(mut self) -> Self {
         self.glass_test = Some(1.0);
+        self
+    }
+
+    /// The houses' furniture fading away under `px` pixels across on screen (#343, a ladder to
+    /// nothing): a few tens of metres off, the culls and the raster skip it.
+    pub fn fade_furniture(mut self, px: f32) -> Self {
+        self.fade_furniture = Some(px);
         self
     }
 
@@ -7117,6 +7132,11 @@ impl Scenario for PlanScenario {
             .iter()
             .map(|_| builder.add_mesh(&cooked.next().expect("a kit module cooked").0))
             .collect();
+        if let Some(px) = self.fade_furniture {
+            for &k in &self.home_kit {
+                builder.set_fade(kit_ids[k as usize], px, FURNITURE_FADE_BAND);
+            }
+        }
         for &(module, transform, group) in &self.kit_instances {
             builder.add_instance_with_material(
                 kit_ids[module as usize],
@@ -7464,6 +7484,9 @@ pub enum PromoteTest {
 
 /// The pool's movers (`--promote-test`): room for a tree's instances.
 const PROMOTE_POOL: u32 = 16;
+/// `--fade-furniture`'s band, a share of its size either side: the furniture dissolves over
+/// about half again its distance.
+const FURNITURE_FADE_BAND: f32 = 0.25;
 /// How far `--promote-test`'s swing leans its tree, degrees.
 const PROMOTE_LEAN: f32 = 15.0;
 

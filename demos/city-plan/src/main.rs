@@ -66,6 +66,10 @@ struct Cli {
     /// without a mover (the swing's reference), `none` the pool alone (the others' reference).
     #[arg(long, value_parser = ["none", "hold", "swing", "snap"])]
     promote_test: Option<String>,
+    /// The houses' furniture fades away under this many pixels across on screen (#343, a ladder
+    /// to nothing; 24: about 35 m for a chair at 1600×900). Off by default.
+    #[arg(long)]
+    fade_furniture: Option<f32>,
     /// Board the tram nearest the camera this many seconds in (C boards and gets off by hand).
     #[arg(long)]
     ride: Option<f64>,
@@ -506,6 +510,10 @@ fn main() -> anyhow::Result<()> {
             scenario.static_test()
         } else {
             scenario
+        };
+        let scenario = match cli.fade_furniture {
+            Some(px) => scenario.fade_furniture(px),
+            None => scenario,
         };
         let scenario = match cli.promote_test.as_deref() {
             Some(mode) => scenario.promote_test(match mode {

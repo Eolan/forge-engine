@@ -958,6 +958,17 @@ mesh to test navigations inside the houses"):
   `--static-test` hides the forest one second in, its shadows with it (`docs/PROFILE.md`). What
   swings every frame (a door's leaf while it turns) belongs to the movers, which carry its motion
   for DLSS.
+- *Furniture that fades away* (#343, `--fade-furniture PX`, off by default): the houses'
+  furniture meshes take a ladder to nothing (`MeshletSceneBuilder::set_fade`). Under `PX`
+  pixels across they are not drawn, and in a band of a quarter of that either side each pixel
+  keeps them or not by the frame's noise, so they dissolve rather than pop. The rays keep
+  meeting them.
+  - **At 24 px** (about 35 m for a chair), 240 frames under DLAA:
+    - near interiors (`house`, `room`) are unchanged, 0 pixels;
+    - from the air, 223 pixels of furniture seen through far windows go;
+    - in one run the frame took 4.94 → 4.37 ms, `meshlet pass 1` 1.28 → 1.21 ms.
+  - **Off by default:** only the houses near the view are furnished here. The town it is made
+    for draws 270 000 pieces from 60 m up.
 - *Promoted while they move* (#338, the owner's "promote while animating, demote when still"):
   a scene with a pool of movers (`MeshletSceneBuilder::reserve_mover_pool`) hands one to a
   static instance about to move (`MeshletScene::promote`, or the editor's `promote` in a

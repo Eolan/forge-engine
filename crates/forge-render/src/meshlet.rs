@@ -479,13 +479,18 @@ struct GpuMesh {
     /// The material its instances take unless they name their own (GPU placement reads it).
     material: u32,
     /// The next mesh on its ladder (D-075, [`MeshletSceneBuilder::set_ladder`]), `u32::MAX` for
-    /// none; the size of an instance's sphere on screen, output pixels across, at which it is
-    /// half crossed; and the band's half width, a share of that size.
+    /// none, [`LADDER_VANISH`] for nothing ([`MeshletSceneBuilder::set_fade`]); the size of an
+    /// instance's sphere on screen, output pixels across, at which it is half crossed; and the
+    /// band's half width, a share of that size.
     ladder_next: u32,
     ladder_px: f32,
     ladder_band: f32,
     ladder_pad: u32,
 }
+
+/// `Mesh::ladder_next` for a mesh that dissolves away with nothing after it (`LADDER_VANISH` in
+/// the shader, [`MeshletSceneBuilder::set_fade`], #343).
+const LADDER_VANISH: u32 = u32::MAX - 1;
 
 impl GpuMesh {
     /// What an instance can put in either work list: all its groups of 32 clusters, or its
@@ -1781,6 +1786,24 @@ impl MeshletSceneBuilder {
         let record = &mut self.meshes[mesh.0 as usize];
         record.radius = record.radius.max(reach);
         record.ladder_next = next.0;
+        record.ladder_px = size_px.max(1.0);
+        record.ladder_band = band.clamp(0.01, 0.9);
+        self.ladders = true;
+    }
+
+    /// Has `mesh` dissolve away with nothing after it (#343, a ladder to nothing): an instance
+    /// whose sphere stands under `size_px` output pixels across is not drawn, and in a band of
+    /// `band` of that size either side of it each pixel keeps it or not by the frame's noise, as
+    /// [`Self::set_ladder`]'s crossing does, so it fades rather than pops: the furniture inside
+    /// buildings seen from afar, the grass far off. The culls skip it past the band; the rays
+    /// keep meeting it (its shadows stay).
+    pub fn set_fade(&mut self, mesh: MeshId, size_px: f32, band: f32) {
+        assert!(
+            self.meshes[mesh.0 as usize].skin == u32::MAX,
+            "no skinned mesh fades"
+        );
+        let record = &mut self.meshes[mesh.0 as usize];
+        record.ladder_next = LADDER_VANISH;
         record.ladder_px = size_px.max(1.0);
         record.ladder_band = band.clamp(0.01, 0.9);
         self.ladders = true;
@@ -6797,5 +6820,24 @@ mod tests {
             builder.work_bound,
             u64::from(record.work_bound() + next.work_bound())
         );
+    }
+
+    /// A fade (#343): a ladder to nothing, its sphere and work its own mesh's alone.
+    #[test]
+    fn a_fade_is_a_ladder_to_nothing() {
+        let rock = forge_geom::procedural::asteroid(forge_core::Seed::new(7), 16, 1.0, 0.3);
+        let mut builder = MeshletSceneBuilder::new();
+        let mesh = builder.add_mesh(&MeshletMesh::build(&rock));
+        let alone = builder.meshes[mesh.0 as usize];
+        builder.set_fade(mesh, 24.0, 0.25);
+        assert!(builder.ladders);
+        let record = builder.meshes[mesh.0 as usize];
+        assert_eq!(
+            (record.ladder_next, record.ladder_px, record.ladder_band),
+            (LADDER_VANISH, 24.0, 0.25)
+        );
+        assert_eq!((record.radius, record.center), (alone.radius, alone.center));
+        builder.add_instance(mesh, Mat4::IDENTITY);
+        assert_eq!(builder.work_bound, u64::from(record.work_bound()));
     }
 }
