@@ -354,8 +354,12 @@ struct MoverRecord
     float radius;
     uint id;
     uint material;
-    uint2 pad;
+    uint flags;   // `Instance::flags`: MOVER_NO_PROBE_RAYS
+    uint texture;
 };
+
+// `INSTANCE_NO_PROBE_RAYS` in meshlet.slang: a mover the probes' rays never meet.
+static const uint MOVER_NO_PROBE_RAYS = 16u;
 
 struct WakePush
 {
@@ -407,6 +411,11 @@ void probe_wake_main(uint3 id : SV_DispatchThreadID)
     // shown or hidden: a pool's mover stands for the static instance it is promoted from or
     // demoted to, which the probes' rays meet all along (#338).
     if (now.w <= 0.0 || before.w <= 0.0)
+        return;
+    // Nor one the probes' rays never meet, here or before: it changes nothing they see, and its
+    // wake would only make them settle again (#351: a game's grass ring, its patches moved round
+    // the camera).
+    if ((p.now[mover].flags & p.before[mover].flags & MOVER_NO_PROBE_RAYS) != 0u)
         return;
     ProbeCascade cascade = field[0].cascades[c];
     float s = cascade.spacing;
