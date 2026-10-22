@@ -5721,6 +5721,28 @@ application of their patents just in case."
   be the far room's, is blended from that into the probes' light over the band (`room_depth`,
   `probe_lookup_with` in `probes.slang`). Where a coarser cascade holds the room's probes nothing
   changes. The map check moved by 7 px.
+  - **Where the coarser cascade holds the room's probes too** (#353, 2026-10-22, the owner in a
+    scene built outside the repository: "the wall lights up if you move forward"). The 2 m
+    cascade lit rooms darker than the 1 m one, and a far wall brightened within a metre as the
+    finest cascade reached it.
+    - **The cause, measured:** a still village room, lit by the 1 m cascade, then by the 2 m
+      alone (the cascades drifted away). Most of the 12.7-level gap on its back wall came from
+      the 2 m probes' own bounce. Their rays' hits were looked up 0.36 m towards the probe that
+      shot them (the view term of the lookup's offset, which grows with the spacing). Without
+      it, the 2 m cascade's walls rose 5–8 levels and the 1 m cascade's under one.
+    - **What changed:**
+      - a hit in a room takes the offset along its normal alone (`probe_irradiance_hit`); the
+        outside's hits keep both terms, so outdoor light is unchanged to the bit;
+      - a room's surface leaves a room-sized cascade for the next over `ROOM_BLEND` spacings,
+        not one (`cascades_lookup`).
+    - **Measured:**
+      - the village room's back wall gap went from 12.7 to 8.5 levels;
+      - drifting the cascades towards a house door at 1.4 m/s, its dark hall rose 24 levels
+        over 2.8 m, up to 5 a 0.3 m; now 19 over 4 m, 1.4 a 0.3 m, from 6 levels higher.
+    - **The map check:** interiors moved by ꟻLIP 0.016–0.043 (the landing's quadrants by at
+      most 1.4 luma), outdoor views under 0.001.
+    - **Left:** what remains is how a 2 m grid interpolates a room (a table top 13 levels
+      darker, a side wall 13 brighter). The issue keeps those leads.
 
 ## D-069 — One set of engine settings for every demo, defaults at the best look, and a console on ² ✅ (proposed 2026-10-17, #278, the owner's request; the owner's go the same day)
 

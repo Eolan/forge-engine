@@ -70,6 +70,8 @@ public static const float PROBE_ROOM_SPACING = 1.5;
 // How many of a room-sized cascade's spacings, inside its edge, its light takes to blend into
 // what lies beyond it on a room's surfaces (#334).
 static const float ROOM_BLEND = 4.0;
+// ROOM_BLEND across the ground, one spacing up and down, where the cascades reach a few metres.
+static const float3 ROOM_BAND = float3(ROOM_BLEND, 1.0, ROOM_BLEND);
 // In a room (D-068), the share of the trilinear weight its own probes must hold among the eight
 // for a cascade to claim all of a point's light; with less, the next cascade fills the rest.
 static const float PROBE_ROOM_COVER = 0.25;
@@ -439,9 +441,15 @@ public float4 unpack_ray(uint2 v)
 // volume scrolls.
 public float cascade_weight(ProbeField* field, uint c, float3 p)
 {
+    return cascade_weight_over(field, c, p, float3(1.0));
+}
+
+// `cascade_weight` fading over `band` of the cascade's spacings along each axis instead of one.
+float cascade_weight_over(ProbeField* field, uint c, float3 p, float3 band)
+{
     float s = field[0].cascades[c].spacing;
     float3 reach = (float3(field[0].counts) * 0.5 - 1.5) * s;
-    float3 w = saturate((reach - abs(p - field[0].camera)) / s);
+    float3 w = saturate((reach - abs(p - field[0].camera)) / (band * s));
     return w.x * w.y * w.z;
 }
 
@@ -597,7 +605,10 @@ float4 cascades_lookup<let MIRROR : int>(ProbeField* field, float3 p, float3 n, 
     {
         if (!rooms && field[0].cascades[c].spacing <= PROBE_ROOM_SPACING)
             continue;
-        float w = cascade_weight(field, c, p);
+        // A room's surface leaves a room-sized cascade for the next over ROOM_BLEND of its
+        // spacings (#353): where their light differs, a far wall changed within a metre.
+        bool room_blend = masked && mask.region != REGION_OUTSIDE && field[0].cascades[c].spacing <= PROBE_ROOM_SPACING;
+        float w = room_blend ? cascade_weight_over(field, c, p, ROOM_BAND) : cascade_weight(field, c, p);
         if (w <= 0.0)
             continue;
         float3 ce_d;
@@ -632,8 +643,8 @@ float3 probe_lookup<let MIRROR : int>(ProbeField* field, float3 p, float3 n, flo
     // (#334): their light blended into the far room's share of the open sky it takes beyond
     // them (#321) over ROOM_BLEND spacings across the ground, not switched over the cascade's
     // own one. A window seen while walking towards its building popped from dark to lit within
-    // a metre. Where a coarser cascade has the room's probes, its light takes over over the
-    // cascade's own spacing, as before.
+    // a metre. Where a coarser cascade has the room's probes, its light takes over across the
+    // same band (`cascades_lookup`, #353).
     float k = room_depth(field, p);
     if (k <= 0.0 || k >= 1.0)
         return near;
@@ -655,14 +666,10 @@ float room_depth(ProbeField* field, float3 p)
     bool any = false;
     for (uint c = 0; c < field[0].cascade_count; c++)
     {
-        float s = field[0].cascades[c].spacing;
-        if (s > PROBE_ROOM_SPACING)
+        if (field[0].cascades[c].spacing > PROBE_ROOM_SPACING)
             continue;
         any = true;
-        float3 reach = (float3(field[0].counts) * 0.5 - 1.5) * s;
-        float3 band = float3(ROOM_BLEND, 1.0, ROOM_BLEND) * s;
-        float3 w = saturate((reach - abs(p - field[0].camera)) / band);
-        k = max(k, w.x * w.y * w.z);
+        k = max(k, cascade_weight_over(field, c, p, ROOM_BAND));
     }
     return any ? k : 1.0;
 }
@@ -716,6 +723,13 @@ public float3 probe_irradiance(ProbeField* field, float3 p, float3 n, float3 g, 
 // stands among the eight, a hit in a house takes no bounce, rather than the sky's, and the
 // outside's the open sky. `outside`: the caller knows the hit is the outside's (a probe's ray
 // from a probe outside every house), and the lookup skips finding its region.
+//
+// In a room the hit's point is moved off it along its normal alone, not also towards where the
+// ray came from (#353). That second offset grows with the spacing (0.36 m between probes 2 m
+// apart), and through the probes' bounce it darkened the coarser cascades' rooms. In a village
+// room lit by the 2 m cascade alone, it took 4–8 sRGB levels from the walls, floor and table.
+// In the same room lit by the 1 m one it took under one. So a far wall brightened as the finest
+// cascade reached it.
 public float3 probe_irradiance_hit(ProbeField* field, float3 p, float3 n, float3 v, float3 open_sky, bool outside)
 {
     RegionHit mask;
@@ -726,9 +740,10 @@ public float3 probe_irradiance_hit(ProbeField* field, float3 p, float3 n, float3
     if (!outside)
         mask = region_at(field, p + n * 0.02);
     bool masked = field[0].region_count > 0u && mask.kind != REGION_SOLID;
+    bool room = masked && mask.region != REGION_OUTSIDE;
     float3 unused;
-    float4 e = cascades_lookup<0>(field, p, n, n, v, n, mask, masked, true, unused);
-    if (masked && mask.region != REGION_OUTSIDE)
+    float4 e = cascades_lookup<0>(field, p, n, n, room ? float3(0.0) : v, n, mask, masked, true, unused);
+    if (room)
         return e.w > 0.0 ? e.rgb / e.w : float3(0.0);
     return e.rgb + (1.0 - e.w) * open_sky;
 }
