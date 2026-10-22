@@ -68,6 +68,8 @@ struct GpuCascade {
     spacing: f32,
     previous: [i32; 3],
     pad: u32,
+    counts: [u32; 3],
+    first_row: u32,
 }
 
 /// Mirrors `ProbeField` in `probes.slang`.
@@ -76,7 +78,8 @@ struct GpuCascade {
 struct GpuProbeField {
     rotation: [[f32; 4]; 3],
     cascades: [GpuCascade; MAX_CASCADES],
-    counts: [u32; 3],
+    atlas_row: u32,
+    atlas_pad: [u32; 2],
     cascade_count: u32,
     camera: [f32; 3],
     rays: u32,
@@ -109,7 +112,7 @@ struct GpuProbeField {
     region_pad: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<GpuProbeField>() == 432);
+const _: () = assert!(std::mem::size_of::<GpuProbeField>() == 528);
 
 /// `REGION_NONE` in `probes.slang`: a probe in a recess or a doorway, no region's.
 const REGION_NONE: u32 = u32::MAX;
@@ -283,6 +286,9 @@ struct UpdatePush {
 pub struct ProbeParams {
     /// Probes per cascade along x, y (up) and z, each even.
     pub counts: [u32; 3],
+    /// The finest cascade's own counts, when it reaches farther than the others (#353): a room as
+    /// long as a hall kept in the room-sized cascade. `None`: `counts`.
+    pub finest_counts: Option<[u32; 3]>,
     /// Cascades, each twice as coarse as the one before (at most [`MAX_CASCADES`]).
     pub cascades: u32,
     /// Metres between the finest cascade's probes.
@@ -324,6 +330,7 @@ impl Default for ProbeParams {
     fn default() -> Self {
         Self {
             counts: [24, 12, 24],
+            finest_counts: None,
             cascades: 5,
             spacing: 4.0,
             rays: 128,
@@ -337,16 +344,41 @@ impl Default for ProbeParams {
 }
 
 impl ProbeParams {
-    /// Probes in all the cascades.
+    /// Cascade `c`'s probes along x, y and z.
+    pub fn cascade_counts(&self, c: u32) -> [u32; 3] {
+        match self.finest_counts {
+            Some(counts) if c == 0 => counts,
+            _ => self.counts,
+        }
+    }
+
+    /// Probes a row of the atlases: the widest cascade's x × y. A narrower cascade leaves the
+    /// rest of its rows unused (`ProbeSlot::unused`).
+    fn atlas_row(&self) -> u32 {
+        (0..self.cascades)
+            .map(|c| {
+                let n = self.cascade_counts(c);
+                n[0] * n[1]
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// The atlases' first row of cascade `c`: a row per z of every cascade before it.
+    fn first_row(&self, c: u32) -> u32 {
+        (0..c).map(|c| self.cascade_counts(c)[2]).sum()
+    }
+
+    /// Probe slots in all the cascades, the unused ones of narrower cascades included.
     pub fn probe_count(&self) -> u32 {
-        self.counts.iter().product::<u32>() * self.cascades
+        self.atlas_row() * self.first_row(self.cascades)
     }
 
     /// The atlas of maps `tile` texels a side: a row of x × y tiles per z of every cascade.
     fn atlas_size(&self, tile: u32) -> [u32; 2] {
         [
-            self.counts[0] * self.counts[1] * tile,
-            self.counts[2] * self.cascades * tile,
+            self.atlas_row() * tile,
+            self.first_row(self.cascades) * tile,
         ]
     }
 }
@@ -459,7 +491,11 @@ impl Probes {
             "1 to {MAX_CASCADES} cascades"
         );
         assert!(
-            params.counts.iter().all(|&n| n >= 4 && n % 2 == 0),
+            params
+                .counts
+                .iter()
+                .chain(params.finest_counts.iter().flatten())
+                .all(|&n| n >= 4 && n % 2 == 0),
             "even counts of at least 4"
         );
         assert!(
@@ -765,10 +801,11 @@ impl Probes {
         let mut cascades = [GpuCascade::zeroed(); MAX_CASCADES];
         for (c, cascade) in cascades.iter_mut().enumerate().take(p.cascades as usize) {
             let spacing = p.spacing * (1u32 << c) as f32;
-            let origin = cascade_origin(camera, spacing, p.counts);
+            let counts = p.cascade_counts(c as u32);
+            let origin = cascade_origin(camera, spacing, counts);
             // After a reset, a previous origin two volumes away: every probe is new.
             let previous = if self.reset {
-                origin + 2 * IVec3::new(p.counts[0] as i32, p.counts[1] as i32, p.counts[2] as i32)
+                origin + 2 * IVec3::new(counts[0] as i32, counts[1] as i32, counts[2] as i32)
             } else {
                 self.origins[c]
             };
@@ -778,6 +815,8 @@ impl Probes {
                 spacing,
                 previous: previous.to_array(),
                 pad: 0,
+                counts,
+                first_row: p.first_row(c as u32),
             };
         }
         // The first update after a reset lights its rays' hits by the sun alone (#171).
@@ -804,7 +843,8 @@ impl Probes {
         let field = GpuProbeField {
             rotation: [row(0), row(1), row(2)],
             cascades,
-            counts: p.counts,
+            atlas_row: p.atlas_row(),
+            atlas_pad: [0; 2],
             cascade_count: p.cascades,
             camera: camera.to_array(),
             rays: p.rays,

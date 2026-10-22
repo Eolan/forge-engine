@@ -83,6 +83,8 @@ public struct ProbeCascade
     public float spacing; // metres between probes
     public int3 previous; // the origin of the frame before: the probes outside it are new this frame
     public uint pad;
+    public uint3 counts;  // its probes along x, y (up) and z, each even (the finest may reach farther, #353)
+    public uint first_row; // its first row of the atlases: a row of x × y probes per z
 };
 
 // ------------------------------------------------------------------- regions ---
@@ -147,7 +149,9 @@ public struct ProbeField
 {
     public float4 rotation[3];    // rows of this frame's random rotation of the rays
     public ProbeCascade cascades[PROBE_MAX_CASCADES];
-    public uint3 counts;          // probes per cascade along x, y (up) and z, each even
+    public uint atlas_row;        // probes a row of the atlases: the widest cascade's x × y
+    public uint atlas_pad0;
+    public uint atlas_pad1;
     public uint cascade_count;
     public float3 camera;         // world metres: the cascades fade out around it
     public uint rays;             // per probe and frame, the first PROBE_FIXED_RAYS fixed
@@ -333,9 +337,10 @@ public float3 probe_ray_direction(ProbeField* field, uint ray)
 // enters are new (and take the slots of the planes it left).
 public uint probe_index(ProbeField* field, uint cascade, int3 cell)
 {
-    int3 n = int3(field[0].counts);
+    ProbeCascade c = field[0].cascades[cascade];
+    int3 n = int3(c.counts);
     int3 slot = wrap_cells(cell, n);
-    return uint(((int(cascade) * n.z + slot.z) * n.y + slot.y) * n.x + slot.x);
+    return (c.first_row + uint(slot.z)) * field[0].atlas_row + uint(slot.y * n.x + slot.x);
 }
 
 // `cells` modulo `n`, in [0, n) for negative cells too. The remainder is taken of a positive
@@ -355,17 +360,26 @@ public struct ProbeSlot
     public float3 position; // its cell's centre, world metres (without its offset)
     public float spacing;
     public bool fresh;      // its cell entered the cascade this frame: nothing measured yet
+    public int3 local;      // its slot in the cascade's volume
+    public bool unused;     // a slot past a narrower cascade's x × y in its atlas row: no probe
 };
 
 public ProbeSlot probe_slot(ProbeField* field, uint probe)
 {
-    int3 n = int3(field[0].counts);
-    uint per_cascade = uint(n.x * n.y * n.z);
+    uint row = probe / field[0].atlas_row;
+    uint along = probe % field[0].atlas_row;
     ProbeSlot s;
-    s.cascade = probe / per_cascade;
-    uint local = probe % per_cascade;
-    int3 slot = int3(int(local % uint(n.x)), int((local / uint(n.x)) % uint(n.y)), int(local / uint(n.x * n.y)));
+    s.cascade = 0u;
+    for (uint k = 1u; k < field[0].cascade_count; k++)
+    {
+        if (row >= field[0].cascades[k].first_row)
+            s.cascade = k;
+    }
     ProbeCascade c = field[0].cascades[s.cascade];
+    int3 n = int3(c.counts);
+    s.unused = along >= uint(n.x * n.y);
+    int3 slot = int3(int(along % uint(n.x)), int(along / uint(n.x)), int(row - c.first_row));
+    s.local = slot;
     s.cell = c.origin + wrap_cells(slot - c.origin, n);
     s.spacing = c.spacing;
     s.position = (float3(s.cell) + 0.5) * c.spacing;
@@ -384,9 +398,7 @@ public bool probe_due(ProbeField* field, uint probe, ProbeSlot slot, float age, 
     bool young = after_state ? age <= PROBE_SETTLE_UPDATES : age < PROBE_SETTLE_UPDATES;
     if (slot.fresh || young || field[0].cadence <= 1u)
         return true;
-    uint3 n = field[0].counts;
-    uint local = probe % (n.x * n.y * n.z);
-    uint turn = local % n.x + (local / n.x) % n.y + local / (n.x * n.y);
+    uint turn = uint(slot.local.x + slot.local.y + slot.local.z);
     return (turn + field[0].phase) % field[0].cadence == 0u;
 }
 
@@ -394,7 +406,7 @@ public bool probe_due(ProbeField* field, uint probe, ProbeSlot slot, float age, 
 // starts in its atlas: the atlas holds a row of x × y tiles per z of every cascade.
 public uint2 probe_tile(ProbeField* field, uint probe, uint tile)
 {
-    uint row = field[0].counts.x * field[0].counts.y;
+    uint row = field[0].atlas_row;
     return uint2(probe % row, probe / row) * tile;
 }
 
@@ -448,7 +460,7 @@ public float cascade_weight(ProbeField* field, uint c, float3 p)
 float cascade_weight_over(ProbeField* field, uint c, float3 p, float3 band)
 {
     float s = field[0].cascades[c].spacing;
-    float3 reach = (float3(field[0].counts) * 0.5 - 1.5) * s;
+    float3 reach = (float3(field[0].cascades[c].counts) * 0.5 - 1.5) * s;
     float3 w = saturate((reach - abs(p - field[0].camera)) / (band * s));
     return w.x * w.y * w.z;
 }
@@ -477,7 +489,7 @@ public float4 cascade_irradiance<let MIRROR : int>(ProbeField* field, uint c, fl
     toward_d = float3(0.0);
     ProbeCascade cascade = field[0].cascades[c];
     float s = cascade.spacing;
-    int3 counts = int3(field[0].counts);
+    int3 counts = int3(cascade.counts);
     // The 2021 paper's bias: off the surface, mostly towards the viewer (`ProbeParams::sample_bias`,
     // 0.2 of the normal and 0.8 of the view by default), in proportion to the spacing, so the visibility test does not sit on the surface's own shadow boundary. Along
     // the surface's interpolated normal, not the bent one of its normal map (D-068; EA's GIBS
@@ -492,7 +504,7 @@ public float4 cascade_irradiance<let MIRROR : int>(ProbeField* field, uint c, fl
     // The corners' slots step from the base's, wrapping by a subtraction: `probe_index` and
     // `probe_tile` divide, and 8 probes' divisions cost the resolve more than their fetches.
     int3 base_slot = wrap_cells(base, counts);
-    uint row = uint(counts.x * counts.y);
+    uint row = field[0].atlas_row;
     float2 texel_n = (oct_encode(n) * 0.5 + 0.5) * float(IRRADIANCE_TEXELS);
     float2 texel_d = (oct_encode(d) * 0.5 + 0.5) * float(IRRADIANCE_TEXELS);
     float3 sum = float3(0.0);
@@ -520,7 +532,7 @@ public float4 cascade_irradiance<let MIRROR : int>(ProbeField* field, uint c, fl
         int3 cell = base + corner;
         int3 slot = base_slot + corner;
         slot = select(slot >= counts, slot - counts, slot);
-        uint2 tile = uint2(uint(slot.y * counts.x + slot.x), c * uint(counts.z) + uint(slot.z));
+        uint2 tile = uint2(uint(slot.y * counts.x + slot.x), cascade.first_row + uint(slot.z));
         uint probe = tile.y * row + tile.x;
         float share = 1.0;
         float keep;

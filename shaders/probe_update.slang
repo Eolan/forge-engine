@@ -36,6 +36,8 @@ void probe_state_main(uint3 id : SV_DispatchThreadID)
         return;
     ProbeField* field = push.field;
     ProbeSlot slot = probe_slot(field, probe);
+    if (slot.unused)
+        return;
     float4 data = slot.fresh ? float4(0.0, 0.0, 0.0, PROBE_INACTIVE) : field[0].probe_data[probe];
     float state_before = probe_state(data.w);
     float age = probe_age(data.w);
@@ -419,7 +421,7 @@ void probe_wake_main(uint3 id : SV_DispatchThreadID)
         return;
     ProbeCascade cascade = field[0].cascades[c];
     float s = cascade.spacing;
-    int3 n = int3(field[0].counts);
+    int3 n = int3(cascade.counts);
     float3 lo = min(now.xyz - now.w, before.xyz - before.w) - s;
     float3 hi = max(now.xyz + now.w, before.xyz + before.w) + s;
     int3 first = max(int3(floor(lo / s)), cascade.origin);
@@ -466,7 +468,7 @@ void probe_wake_regions_main(uint3 id : SV_DispatchThreadID)
         return;
     ProbeField* field = p.field;
     ProbeSlot slot = probe_slot(field, id.x);
-    if (slot.fresh)
+    if (slot.fresh || slot.unused)
         return;
     for (uint b = 0u; b < p.count; b++)
     {

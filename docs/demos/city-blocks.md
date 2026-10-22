@@ -100,6 +100,11 @@ Options:
   ms at 24 → 32 → 40 across the ground: green 4.82 → 5.70 → 6.72, forest 5.84 → 6.91 → 8.10, main
   street 5.23 → 6.12 → 7.01, the hall 5.49 → 6.33 → 7.27. The probe rays and the blend grow with the
   probes.
+  `--probe-finest X,Y,Z` widens the finest cascade alone (`ProbeParams::finest_counts`): a long room
+  stays in the room-sized cascade. The atlases' rows are then as wide as its x × y, and the other
+  cascades leave the rest of theirs unused. With the village's 24,12,24, the frame grows +0.21 to
+  +0.32 ms at 32,12,32 (reach 14.5 m) and +0.53 to +0.86 ms at 40,12,40 (18.5 m). Serial, green,
+  forest, main street and hall. It moves a far wall's cascade change farther, not away (#353).
 - `--no-reflections` draws without the sky's reflection (`r.reflections.sky`).
 - `--no-ray-reflections` reflects only the sky in the glass and the water (`r.reflections.rays`).
 - `--no-reflection-history` leaves the glass's mirror rays to TAA alone, without their history (#176).

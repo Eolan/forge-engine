@@ -7382,6 +7382,8 @@ void probe_trace_main(uint3 group : SV_GroupID, uint thread : SV_GroupThreadID)
     if (probe >= probe_push.probe_count || ray >= field[0].rays)
         return;
     ProbeSlot slot = probe_slot(field, probe);
+    if (slot.unused)
+        return;
     float4 data = slot.fresh ? float4(0.0, 0.0, 0.0, PROBE_ACTIVE) : field[0].probe_data[probe];
     // A settled probe (probes.slang) needs no fixed rays; an inactive one no others, and a
     // settled one traces the others on its turn only (issue #103).
