@@ -84,6 +84,13 @@ Options:
   village's houses, D-068), `--show-regions` tints each surface by the region whose probes
   light it, red where it fell back to every probe, and `--no-regions` leaves the rooms out:
   every probe lights every surface, as before the regions (their A/B, #291).
+  `--probe-drift X,Z` moves the cascades away from a still camera at that velocity (m/s): they
+  scroll as a walk scrolls them and take new probes at their leading faces while the view keeps
+  still, so with `--show-gi` and `--capture-every` whatever the image does is the probes'
+  doing. In the village (2026-10-22), drifting at 1.4 m/s towards a house's facade and towards
+  its open street door for 7.8 m, no capture's luma jumped by more than a level beyond the
+  still view's; the doorway's inside brightened smoothly (10 → 21) as the finer cascades took
+  it.
 - `--no-reflections` draws without the sky's reflection (`r.reflections.sky`).
 - `--no-ray-reflections` reflects only the sky in the glass and the water (`r.reflections.rays`).
 - `--no-reflection-history` leaves the glass's mirror rays to TAA alone, without their history (#176).

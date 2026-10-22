@@ -541,6 +541,12 @@ pub struct Args {
     /// (the open sky's with `--no-probes`); U toggles it.
     #[arg(long)]
     show_gi: bool,
+    /// Move the probes' cascades away from the camera at this velocity (m/s, the scene's x and
+    /// z; a frame's step at a time with `--fixed-step`): they scroll as a walk would scroll them
+    /// while the view keeps still, so whatever the image does then is the probes' doing (the
+    /// flashes of a cascade's new probes, measured with `--show-gi`).
+    #[arg(long, value_delimiter = ',', allow_hyphen_values = true)]
+    probe_drift: Option<Vec<f32>>,
     /// With the probes' regions (the village's houses, D-068): tint each surface by the region
     /// whose probes light it, red where none of its region's probes stood near.
     #[arg(long)]
@@ -2901,12 +2907,16 @@ impl Demo for Gallery {
                 self.probes_live = true;
                 // The rotations repeat with the jitter, once per round of turns (issue #103).
                 let cycle = u64::from(self.taa.jitter_phases) * u64::from(probes.params().cadence);
+                let drift = self.args.probe_drift.as_ref().map_or(Vec3::ZERO, |v| {
+                    let z = v.get(1).copied().unwrap_or(0.0);
+                    Vec3::new(v[0], 0.0, z) * (self.frame as f32 * self.step)
+                });
                 Some(probes.update(
                     &mut frame.graph,
                     frame.slot,
                     self.renderer.frame_address(frame.slot),
                     scene_light,
-                    camera_in_scene,
+                    camera_in_scene + drift,
                     self.taa.frame_index() % cycle,
                     targets.movers,
                 ))
