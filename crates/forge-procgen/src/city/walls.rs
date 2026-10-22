@@ -454,9 +454,17 @@ fn corner_mitre(w: &Wall, c: DVec2, o: &Wall) -> Option<(DVec2, DVec2)> {
     };
     let (t, to) = (dir(w), dir(o));
     let (normal, o_normal) = (DVec2::new(-t.y, t.x), DVec2::new(-to.y, to.x));
-    // The inner sides: each one's side towards the other.
-    let o_on_left = normal.dot((o.a + o.b) * 0.5 - c) > 0.0;
-    let w_on_left = o_normal.dot((w.a + w.b) * 0.5 - c) > 0.0;
+    // The inner sides: each one's side towards the other, by the way each runs from the corner
+    // (a short wall's middle, its end off the other's line, stood on the wrong side near 162°).
+    let away = |x: &Wall, d: DVec2| {
+        if x.a.distance(c) < x.b.distance(c) {
+            d
+        } else {
+            -d
+        }
+    };
+    let o_on_left = normal.dot(away(o, to)) > 0.0;
+    let w_on_left = o_normal.dot(away(w, t)) > 0.0;
     let ((wl, wr), (ol, or)) = (edges(w), edges(o));
     let (w_in, w_out) = if o_on_left { (wl, wr) } else { (wr, wl) };
     let (o_in, o_out) = if w_on_left { (ol, or) } else { (or, ol) };
@@ -520,8 +528,11 @@ fn joints(walls: &mut Vec<Wall>) {
             let w = &walls[i];
             // The end, and the way from it into the wall.
             let (c, into) = if end { (w.b, -dir(w)) } else { (w.a, dir(w)) };
+            // Both walls take the mitre or neither: one mitred against the other butted left the
+            // corner open.
             let mitred = corner_of(i, c, into)
                 .filter(|&(j, near, away)| corner_of(j, near, away).is_some_and(|k| k.0 == i))
+                .filter(|&(j, near, _)| corner_mitre(&walls[j], near, w).is_some())
                 .and_then(|(j, _, _)| corner_mitre(w, c, &walls[j]));
             if let Some((at, face)) = mitred {
                 snaps[i][end as usize] = Some(at);
@@ -593,13 +604,16 @@ fn joints(walls: &mut Vec<Wall>) {
                     let into = if near == x.a { dir(x) } else { -dir(x) };
                     x.length() - clearing(x, near, into, &walls[other]) >= SHORTEST
                 };
-                // Whether `x` ranks above `y` here: higher, then longer, then first, but a wall
-                // that would go clearing the other while the other would not runs on instead (a
-                // stub from a wall's end to a house it ran beside went, and the slit stayed).
+                // Whether `x` ranks above `y` here: higher, then longer, then first, but where two
+                // walls meet alone, one that would go clearing the other while the other would not
+                // runs on instead (a stub from a wall's end to a house it ran beside went, and the
+                // slit stayed). Where more meet, that could go round in a circle, every wall
+                // stepping back and the junction left open: the order alone.
+                let pair = crossing.len() == 1;
                 let over = |x: usize, y: usize| {
-                    if !fits(y, x) && fits(x, y) {
+                    if pair && !fits(y, x) && fits(x, y) {
                         false
-                    } else if !fits(x, y) && fits(y, x) {
+                    } else if pair && !fits(x, y) && fits(y, x) {
                         true
                     } else {
                         rank(x) > rank(y) || (rank(x) == rank(y) && x < y)

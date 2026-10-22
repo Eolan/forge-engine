@@ -111,8 +111,8 @@ const STUB: f64 = 0.5;
 /// `fp` without its corners that turn by under 3° or close an edge under 15 cm: a footprint cut
 /// from a lot keeps the lot's points along its sides, and a roof whose edges nearly line up, or
 /// one turns over at once, will not pitch (the kit then flattens it, grey in a row of tiles).
-/// An edge under [`STUB`] (a lot's corner clipped off at the back) goes too, its neighbours
-/// run on to where they meet.
+/// An edge under [`STUB`] (a lot's corner clipped off at the back) goes too, its two ends made
+/// one at its middle.
 pub fn tidy(fp: &[DVec2]) -> Vec<DVec2> {
     let mut out = fp.to_vec();
     let mut changed = true;
@@ -133,24 +133,13 @@ pub fn tidy(fp: &[DVec2]) -> Vec<DVec2> {
             continue;
         }
         for i in 0..n {
-            let (p, c, q, r) = (
-                out[(i + n - 1) % n],
-                out[i],
-                out[(i + 1) % n],
-                out[(i + 2) % n],
-            );
+            let (c, q) = (out[i], out[(i + 1) % n]);
             if c.distance(q) >= STUB {
                 continue;
             }
-            // Where the edges either side meet, if near; else the stub's start goes.
-            let (d1, d2) = (c - p, r - q);
-            let denom = geom::cross(d1, d2);
-            let meet = (denom.abs() > 1e-9)
-                .then(|| p + d1 * (geom::cross(q - p, d2) / denom))
-                .filter(|x| x.distance(c) < STUB && x.distance(q) < STUB);
-            if let Some(x) = meet {
-                out[(i + 1) % n] = x;
-            }
+            // Its two ends made one at its middle, on the line that cut it: run on to where its
+            // neighbours meet, the corner stood past the lot's line, by up to half the stub.
+            out[(i + 1) % n] = (c + q) * 0.5;
             out.remove(i);
             changed = true;
             break;

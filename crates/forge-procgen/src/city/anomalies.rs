@@ -836,6 +836,66 @@ mod tests {
     use super::super::{example, structure, village};
     use super::*;
 
+    /// No two houses of a village share ground, at 400 to 900 m (#308: a house deepened to
+    /// adjoin the side behind it, or swung onto a neighbour's wall, must stop at it): each pair
+    /// whose boxes meet sampled every 10 cm, points within 2 cm of either outline left out (two
+    /// houses sharing a party wall touch along it).
+    #[test]
+    fn the_villages_houses_never_overlap() {
+        let mut shared = Vec::new();
+        for size in [400.0, 500.0, 600.0, 700.0, 800.0, 900.0] {
+            let site = example::site(size, 10.0);
+            let v = village::village(&site, &village::params(size), 1);
+            let boxes: Vec<(DVec2, DVec2)> = v
+                .masses
+                .iter()
+                .map(|m| {
+                    m.footprint.iter().fold(
+                        (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)),
+                        |(lo, hi), &p| (lo.min(p), hi.max(p)),
+                    )
+                })
+                .collect();
+            let off_outline = |fp: &[DVec2], p: DVec2| {
+                let n = fp.len();
+                (0..n).all(|k| geom::distance_to_segment(p, fp[k], fp[(k + 1) % n]) > 0.02)
+            };
+            for i in 0..v.masses.len() {
+                for j in i + 1..v.masses.len() {
+                    let (lo, hi) = (boxes[i].0.max(boxes[j].0), boxes[i].1.min(boxes[j].1));
+                    if lo.x >= hi.x || lo.y >= hi.y {
+                        continue;
+                    }
+                    let (a, b) = (&v.masses[i].footprint, &v.masses[j].footprint);
+                    let mut inside = 0;
+                    let mut y = lo.y + 0.05;
+                    while y < hi.y {
+                        let mut x = lo.x + 0.05;
+                        while x < hi.x {
+                            let p = DVec2::new(x, y);
+                            if geom::contains(a, p)
+                                && geom::contains(b, p)
+                                && off_outline(a, p)
+                                && off_outline(b, p)
+                            {
+                                inside += 1;
+                            }
+                            x += 0.1;
+                        }
+                        y += 0.1;
+                    }
+                    if inside > 0 {
+                        shared.push(format!(
+                            "{size} m: houses {i} and {j} share about {:.2} m²",
+                            f64::from(inside) * 0.01
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(shared.is_empty(), "{shared:?}");
+    }
+
     /// The villages' anomalies, by kind, never more than when the check came in (2026-10-16, at
     /// 600 m; the smaller villages since they have houses, the larger since 2026-10-22, #308):
     /// each fix lowers its bound.
