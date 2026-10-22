@@ -884,7 +884,8 @@ proxy is opaque, so the hardware ends them. The main street's shadows fall withi
 
 **Grass near the camera** (#300, D-075, 2026-10-22; city-blocks' `--grass`, 50 m, first
 20 m): the village at 1600 × 900, DLAA, the green's view (`12.9,1.7,-226.0,176.1,-5`)
-over the park's grass, its map 1.44 M cells and 3.95 M blades.
+over the park's grass, its map 1.44 M cells and 3.95 M blades (5.58 M since the densities rose
+to 56 and 80 a cell).
 
 | | `grass/count` | `grass/scan` | `grass/emit` | `grass/raster` | The frame |
 |---|---|---|---|---|---|
@@ -894,6 +895,9 @@ over the park's grass, its map 1.44 M cells and 3.95 M blades.
 | The green, still, 50 m | 0.022 | 0.001 | 0.018 | 0.287 | 4.61 |
 | A metre lower, 50 m | 0.021 | 0.001 | 0.018 | 0.293 | 4.48 |
 | Turning 4°/s, 50 m | 0.024 | 0.001 | 0.019 | 0.282 | 4.79 |
+| The green, still, 50 m, 56 and 80 a cell | 0.024 | 0.001 | 0.017 | 0.360 | 4.90 |
+| A metre lower, 50 m, 56 and 80 a cell | 0.023 | 0.001 | 0.017 | 0.378 | 4.81 |
+| Turning 4°/s, 50 m, 56 and 80 a cell | 0.023 | 0.001 | 0.018 | 0.351 | 4.89 |
 
 The first three rows are the first reach, 20 m, whose end the owner saw as a curve. Thinning the
 blades past 12 m with the rest widened took the 50 m raster to 0.18 ms, but D-075 keeps the

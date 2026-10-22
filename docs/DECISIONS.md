@@ -6840,15 +6840,16 @@ looked:
 **The grass pass built** (#300, 2026-10-22), behind city-blocks' `--grass [M]` (50 m) until the
 owner has looked (`forge_render::grass`, `shaders/meshlet.slang`'s "grass"):
 - **The map:** square cells of 0.5 m (`GrassMap`), each with the ground's level and its blades'
-  count (at most 64), height and row, made once from the region's data. The village paints its
-  gardens' lawns (40 blades a cell, 12 cm) and its parks' grass (56, 22 cm) from the ground
-  tiles, cleared under the houses and along the garden walls. A blade is a function of its cell
+  count (at most 128), height and row, made once from the region's data. The village paints its
+  gardens' lawns (56 blades a cell, 12 cm) and its parks' grass (80, 22 cm; 40 and 56 before the
+  owner asked for a little more density) from the ground tiles, cleared under the houses and
+  along the garden walls. A blade is a function of its cell
   and its index there: placement, height, lean, facing and width from a hash, nothing evaluated
   round the viewer. Each cell also keeps the ninths of it no blade stands in, painted and
   cleared at a ninth's precision: the lawn stops within 8 cm of the paving (the owner saw blades
   on it, a border cell's spreading up to 25 cm past the lawn's edge).
 - **Its ids:** the visibility id's top bit, the visible list capped at 2^24 slots for it:
-  `cell << 9 | blade << 3 | triangle`. The resolve, the sun's shadow trace for SIGMA and the
+  `cell << 10 | blade << 3 | triangle`. The resolve, the sun's shadow trace for SIGMA and the
   lamps' passes rebuild a blade's triangle from it alone, from the map uploaded once; the
   reflections and the movers' motion skip it.
 - **The culls,** in a fixed order: each cell of a window round the camera counts its patches of
@@ -6861,8 +6862,8 @@ owner has looked (`forge_render::grass`, `shaders/meshlet.slang`'s "grass"):
 - **Far** (the reach 50 m; the owner saw the curve where a 20 m reach ended): every blade of a
   cell stands out to the reach. A first try thinned them from 12 m with the rest widened
   (7148e1d0), which decision 2 below rules out while Pixar's US 7,973,789 B2 runs: taken out the
-  same day. At 50 m the four passes take 0.33 ms against 0.13 at 20 m, the turn's flicker the same
-  3.6 %, the band from 17 m to the lawn's far end 0.1 %.
+  same day. At 50 m the four passes take 0.40 ms (0.33 with the first counts, 0.13 at 20 m), the
+  turn's flicker 3.5 %, the band from 17 m to the lawn's far end 0.1 %.
 - **The look:** the blades take their cell's row (the lawn's, the park's) and one of its two
   colours a clump, darker towards the root; their normals rounded across them. With distance,
   their normals and contrast converge to the clump's mean, fully by 20 m or the reach if nearer

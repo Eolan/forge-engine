@@ -539,14 +539,14 @@ the shells in blue; right: the meadow's trees gliding, cards above, the ladder b
 **Grass near the camera** (D-075, #300, 2026-10-22; not yet the default). With `--grass [M]` (50
 by default) the gardens' lawns and the parks' grass stand as blades within `M` metres of the
 camera (`forge_render::grass`): a map of 0.5 m cells painted from the ground tiles' garden and
-park triangles (40 blades of 12 cm a lawn's cell, 56 of 22 cm a park's), cleared under the houses
+park triangles (56 blades of 12 cm a lawn's cell, 80 of 22 cm a park's), cleared under the houses
 and along the garden walls. A cell grows in the ninths of it the lawn holds, so the blades stop at
 the paving within 8 cm (they first spread over their whole cell, up to 25 cm onto it). Each blade
 is drawn into the visibility buffer and shaded in its section's row, a clump's colour, darker at
 its root, its normal and contrast converging to the clump's by 20 m. Every blade stands out to the
 reach, so the lawn ends without the curve a 20 m reach showed (D-075 keeps the counts: no fewer,
 wider blades far off); over the last fifth of the reach they sink into the ground's grass. A breeze sways them (`--grass-wind S`, the tips' lean, 0.15 by default, 0 still), their
-pixels moving with them for DLAA. The four passes take about 0.33 ms (0.13 at 20 m,
+pixels moving with them for DLAA. The four passes take about 0.40 ms (0.13 at 20 m,
 `docs/PROFILE.md`); the fallback path draws the same pixels, and the images without the flag are
 unchanged.
 

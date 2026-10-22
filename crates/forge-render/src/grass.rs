@@ -35,8 +35,8 @@ use glam::{Vec2, Vec3};
 
 use crate::meshlet::GeometryPath;
 
-/// The most blades a cell holds (the id keeps 6 bits for a blade's index).
-pub const CELL_BLADES: u8 = 64;
+/// The most blades a cell holds (the id keeps 7 bits for a blade's index).
+pub const CELL_BLADES: u8 = 128;
 /// The most cells a map holds (the id keeps 21 bits for a cell).
 pub const MAX_CELLS: u32 = 1 << 21;
 /// The last material row a cell can name ([`GrassCell::look`] keeps 7 bits for it).

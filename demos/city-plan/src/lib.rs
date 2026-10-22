@@ -7943,11 +7943,11 @@ fn grass_map(
     for tile in &tiles.tiles {
         let mesh = &tile.ground;
         for (t, tri) in mesh.indices.as_chunks::<3>().0.iter().enumerate() {
-            // Blades a cell, their height and their row after the garden's: a lawn's 40 (160 a
-            // square metre) of 12 cm, a park's 56 of 22 cm in its own colours.
+            // Blades a cell, their height and their row after the garden's: a lawn's 56 (224 a
+            // square metre) of 12 cm, a park's 80 of 22 cm in its own colours.
             let (count, height, row) = match mesh.section(t) {
-                GARDEN => (40, 12, 0),
-                PARK => (56, 22, PARK - GARDEN),
+                GARDEN => (56, 12, 0),
+                PARK => (80, 22, PARK - GARDEN),
                 _ => continue,
             };
             let p = [0, 1, 2].map(|k| tile.centre + Vec3::from(mesh.positions[tri[k] as usize]));

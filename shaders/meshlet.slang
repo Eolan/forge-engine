@@ -308,7 +308,7 @@ public static const uint STAT_REJECTED = 17;       // clusters pass 1 selected i
 public static const uint VISIBILITY_EMPTY = 0xFFFFFFFFu;
 public static const uint VISIBILITY_TRIANGLE_BITS = 7;
 // A grass blade's id (#300, D-075) has the top bit, which no cluster's has (the visible list
-// stops at 2^24 slots): `VISIBILITY_GRASS_BIT | cell << 9 | blade << 3 | triangle`, its cell of
+// stops at 2^24 slots): `VISIBILITY_GRASS_BIT | cell << 10 | blade << 3 | triangle`, its cell of
 // the grass map, its index there and its triangle (`grass_blade`).
 public static const uint VISIBILITY_GRASS_BIT = 0x80000000u;
 
@@ -2744,7 +2744,7 @@ uint frag_fallback_main(nointerpolation uint id_base : VISIBILITY_ID, uint trian
 // kept by the frame's noise (Humus' wires; DLAA averages it). Met by no ray.
 
 static const uint GRASS_CELL_BITS = 21;
-static const uint GRASS_CELL_BLADES = 64;
+static const uint GRASS_CELL_BLADES = 128;
 static const uint GRASS_PATCH_BLADES = 16;
 static const uint GRASS_SEGMENTS = 3;
 static const uint GRASS_BLADE_VERTICES = 2 * GRASS_SEGMENTS + 1;
@@ -2875,7 +2875,7 @@ float3 grass_vertex(GrassBlade b, uint k)
 // The id of triangle `j` of blade `index` of `cell`.
 uint grass_id(uint cell, uint index, uint j)
 {
-    return VISIBILITY_GRASS_BIT | (cell << 9) | (index << 3) | j;
+    return VISIBILITY_GRASS_BIT | (cell << 10) | (index << 3) | j;
 }
 
 // Per cell of the window round the camera: the patches of its blades within the reach and the
@@ -3097,7 +3097,7 @@ struct GrassHit
 
 GrassHit grass_hit(Frame* f, uint vis, uint2 pixel, float2 size)
 {
-    uint cell = (vis >> 9) & ((1u << GRASS_CELL_BITS) - 1u);
+    uint cell = (vis >> 10) & ((1u << GRASS_CELL_BITS) - 1u);
     uint index = (vis >> 3) & (GRASS_CELL_BLADES - 1u);
     uint3 k = GRASS_TRIANGLES[min(vis & 7u, GRASS_BLADE_TRIANGLES - 1u)];
     GrassBlade b = grass_blade(f, cell, index);
@@ -8042,7 +8042,7 @@ void grass_motion_main(uint3 id : SV_DispatchThreadID)
     float2 uv = (float2(id.xy) + 0.5 - float2(p[0].jitter_x, p[0].jitter_y)) / size;
     float4 h = mul(p[0].relative_from_clip, float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0));
     float3 point = h.xyz / h.w;
-    uint cell = (vis >> 9) & ((1u << GRASS_CELL_BITS) - 1u);
+    uint cell = (vis >> 10) & ((1u << GRASS_CELL_BITS) - 1u);
     uint index = (vis >> 3) & (GRASS_CELL_BLADES - 1u);
     uint3 k = GRASS_TRIANGLES[min(vis & 7u, GRASS_BLADE_TRIANGLES - 1u)];
     float3 camera = f[0].camera_in_scene.xyz;
