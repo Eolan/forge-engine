@@ -168,6 +168,14 @@ lamps settle as before. A first try, a decaying sum of the gaps in standard erro
 flicker back (0.04–0.09 %): within the 8-frame cycle the rotations' noise runs the same way for
 several updates.
 
+The 10 % start then let the flicker partly back where the rotations don't cancel: the game's
+camera inside a dense crown, its probes' gaps large and of either sign, flickered on 2.6–3.5 % of
+its pixels against 0.3–1.1 % (the door's light came in about 2.5 s). The mean now counts only as
+far as it stands clear of the 8 gaps' own spread, 2.5 to 4 standard errors (a t-test,
+`DRIFT_SURE_START`, `DRIFT_SURE_FULL`): leaf noise spreads far wider than its mean, a door's gaps
+share their sign. In the village, a camera inside a crown with 64 rays changed on spikes of
+0.0054 % with the 10 % start alone and holds 0.0006–0.0008 % with the test, as before it.
+
 ## Specks on walls in shade (issue #102, 2026-09-30)
 
 Walls facing away from the sun showed bright specks at the rims of their normal map's bumps,

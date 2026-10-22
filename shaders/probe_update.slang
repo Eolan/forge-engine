@@ -147,11 +147,17 @@ static const float CHANGE_NOISE = 2.0;
 // its sign: the mean of those updates' gaps, each a share of the brighter as the change is, counts
 // as a change too, from DRIFT_START to DRIFT_FULL: rid of the noise, it can start lower (with the
 // 30 % start the door's light came in a step and then tailed off over 4 s, where single updates
-// had crossed it on their noise). They ride in the alpha of the probe's first irradiance texels,
-// which nothing samples.
+// had crossed it on their noise). It counts only as far as it stands clear of the gaps' own
+// spread, from DRIFT_SURE_START to DRIFT_SURE_FULL standard errors (a t-test over the 8): where
+// the rotations don't cancel (a game's camera inside a dense crown, its gaps large and of either
+// sign) the 10 % start alone let the flicker back, three times the noise test's, while a door's
+// gaps share their sign. They ride in the alpha of the probe's first irradiance texels, which
+// nothing samples.
 static const uint DRIFT_UPDATES = 8;
 static const float DRIFT_START = 0.1;
 static const float DRIFT_FULL = 0.4;
+static const float DRIFT_SURE_START = 2.5;
+static const float DRIFT_SURE_FULL = 4.0;
 
 groupshared float3 s_dir[PROBE_MAX_RAYS];
 groupshared float4 s_ray[PROBE_MAX_RAYS];
@@ -256,18 +262,26 @@ void probe_blend_main(uint3 group : SV_GroupID, uint thread : SV_GroupIndex)
             float brighter = max(max(now, before) / texels, 1e-12);
             float gap = (now - before) / texels / brighter;
             float change = max(abs(now - before) / texels - noise, 0.0) / brighter;
-            // The last updates' gaps, this one first, and their mean.
+            // The last updates' gaps, this one first, their mean and how sure it is.
             s_drift[0] = gap;
             float lasting = gap;
+            float lasting_squares = gap * gap;
             for (uint k = 1; k < DRIFT_UPDATES; k++)
             {
                 float g = irradiance[irradiance_tile + 1 + uint2((k - 1) % IRRADIANCE_TEXELS, (k - 1) / IRRADIANCE_TEXELS)].a;
                 g = abs(g) <= 1.0 ? g : 0.0; // a map never written holds anything, NaN included
                 s_drift[k] = g;
                 lasting += g;
+                lasting_squares += g * g;
             }
+            float updates = float(DRIFT_UPDATES);
+            float drift_mean = lasting / updates;
+            float spread_now = max(lasting_squares / updates - drift_mean * drift_mean, 0.0);
+            float deviation = sqrt(spread_now * updates / (updates - 1.0));
+            float sure = abs(drift_mean) / max(deviation / sqrt(updates), 1e-6);
             float lowered = max(smoothstep(CHANGE_START, CHANGE_FULL, change),
-                                smoothstep(DRIFT_START, DRIFT_FULL, abs(lasting) / float(DRIFT_UPDATES)));
+                                smoothstep(DRIFT_START, DRIFT_FULL, abs(drift_mean))
+                                    * smoothstep(DRIFT_SURE_START, DRIFT_SURE_FULL, sure));
             kept = min(h, lerp(h, CHANGED_HYSTERESIS, lowered));
         }
         s_hysteresis = kept;
