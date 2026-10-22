@@ -765,7 +765,20 @@ fn garden_walls(v: &Village, out: &mut Vec<Anomaly>) {
             let d = (q - p).normalize_or_zero();
             geom::distance_to_segment(mid, p, q) < 1.0 && t.perp_dot(d).abs() < 0.105
         });
-        if !on_line {
+        // A stub (`walls::stubs`): short, one end on a house's wall, square to it (within 6°),
+        // joining a garden wall that ran beside the house to it (#308).
+        let stub = w.length() <= walls::GATE + walls::THICKNESS
+            && v.masses.iter().any(|m| {
+                let n = m.footprint.len();
+                (0..n).any(|k| {
+                    let (p, q) = (m.footprint[k], m.footprint[(k + 1) % n]);
+                    let d = (q - p).normalize_or_zero();
+                    [w.a, w.b].iter().any(|&e| {
+                        geom::distance_to_segment(e, p, q) < walls::THICKNESS * 0.5 + 0.06
+                    }) && t.dot(d).abs() < 0.105
+                })
+            });
+        if !on_line && !stub {
             out.push(Anomaly {
                 kind: Kind::CrookedWall,
                 at: mid,
@@ -861,18 +874,18 @@ mod tests {
         ];
         // The other sizes' own, where they had more when they came in (#308: two garden walls
         // meeting a little apart at a corner at 500 m; at 700 to 900 m, 2026-10-22, after the
-        // stairs, the rows' corners, the backs and the walls' acute corners: 77 down to 21).
+        // stairs, the rows' corners, the backs and the walls' corners: 77 down to 19).
         let since: [(f64, Kind, usize); 11] = [
             (500.0, Kind::FreeWallEnd, 1),
             (700.0, Kind::UnlitRoom, 2),
-            (700.0, Kind::FreeWallEnd, 3),
+            (700.0, Kind::FreeWallEnd, 2),
             (700.0, Kind::RidgeStep, 2),
             (800.0, Kind::FreeWallEnd, 3),
             (800.0, Kind::RidgeStep, 2),
             (800.0, Kind::BlankStreetWall, 1),
             (900.0, Kind::UnlitRoom, 1),
             (900.0, Kind::Sliver, 1),
-            (900.0, Kind::FreeWallEnd, 4),
+            (900.0, Kind::FreeWallEnd, 3),
             (900.0, Kind::LonePartyWall, 2),
         ];
         let mut over = Vec::new();

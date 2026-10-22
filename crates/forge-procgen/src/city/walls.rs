@@ -357,7 +357,9 @@ fn hugs(fp: &[DVec2], mid: DVec2, along: DVec2) -> bool {
 
 /// The stubs joining to a house the stretches' ends a stretch along its wall left free
 /// ([`hugs`]): each end that meets no other stretch and stands within [`NEAR`] of a house, from
-/// the end to the house's nearest wall, square to it.
+/// the end to the house's nearest wall, square to it. An end counts as on the house only within
+/// half a thickness and 5 cm: within a whole thickness, a wall centred on a lot line 0.33 m
+/// behind a house's back stopped beside it, its face 13 cm off (#308).
 fn stubs(stretches: &[Stretch], footprints: &[Vec<DVec2>]) -> Vec<Stretch> {
     let mut out = Vec::new();
     for (i, s) in stretches.iter().enumerate() {
@@ -368,7 +370,7 @@ fn stubs(stretches: &[Stretch], footprints: &[Vec<DVec2>]) -> Vec<Stretch> {
                 .any(|(j, o)| j != i && geom::distance_to_segment(end, o.a, o.b) < JOIN)
                 || footprints
                     .iter()
-                    .any(|fp| boundary_distance(fp, end) < THICKNESS);
+                    .any(|fp| boundary_distance(fp, end) < THICKNESS * 0.5 + 0.05);
             if met {
                 continue;
             }
@@ -577,11 +579,26 @@ fn joints(walls: &mut Vec<Wall>) {
                     })
                     .collect();
                 let rank = |k: usize| (walls[k].height, walls[k].length());
-                let above: Vec<usize> = crossing
-                    .iter()
-                    .copied()
-                    .filter(|&j| rank(j) > rank(i) || (rank(j) == rank(i) && j < i))
-                    .collect();
+                // Whether wall `k`, clearing `other` at its end here, keeps [`SHORTEST`].
+                let fits = |k: usize, other: usize| {
+                    let x = &walls[k];
+                    let near = nearer(x, c);
+                    let into = if near == x.a { dir(x) } else { -dir(x) };
+                    x.length() - clearing(x, near, into, &walls[other]) >= SHORTEST
+                };
+                // Whether `x` ranks above `y` here: higher, then longer, then first, but a wall
+                // that would go clearing the other while the other would not runs on instead (a
+                // stub from a wall's end to a house it ran beside went, and the slit stayed).
+                let over = |x: usize, y: usize| {
+                    if !fits(y, x) && fits(x, y) {
+                        false
+                    } else if !fits(x, y) && fits(y, x) {
+                        true
+                    } else {
+                        rank(x) > rank(y) || (rank(x) == rank(y) && x < y)
+                    }
+                };
+                let above: Vec<usize> = crossing.iter().copied().filter(|&j| over(j, i)).collect();
                 if !through.is_empty() {
                     farthest(&through)
                 } else if !above.is_empty() {

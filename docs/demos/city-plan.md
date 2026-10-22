@@ -643,7 +643,7 @@ a square never takes its district's last one. They have 9 and 7 houses; 400 m sh
 and the city's are unchanged (the map check, the city and island captures at 0 px).
 
 Since 2026-10-22 it checks 700, 800 and 900 m as well, after a pass over what broke there: 77
-anomalies down to 21 (20 → 7, 33 → 6, 24 → 8).
+anomalies down to 19 (20 → 6, 33 → 6, 24 → 7).
 - **Upper rooms out of reach (16):** houses of storeys on a faubourg's shallowest strip were kept
   to the type's 5.5 m, shorter than their flight, and got no stair; they take the flight's depth
   where the lot has it. A footprint's edge under 0.5 m goes too: the facades gave it no face, and
@@ -659,6 +659,12 @@ anomalies down to 21 (20 → 7, 33 → 6, 24 → 8).
 - **Garden walls at acute corners (36° to 75°):** mitred on the face through the corners their
   faces make. Butted, the higher one ran on past the other's far face, its end a spike meeting
   nothing.
+- **Garden walls stopping beside a house:** a wall centred on a lot line 0.33 m behind a house's
+  back stopped where the house began, its face 13 cm off it: an end counted as on the house
+  within a whole wall's thickness. It now counts within half a thickness and 5 cm, and the stub
+  joining it to the house stays: at a corner, a wall that would vanish clearing the other runs on
+  instead, the other butting it. The anomaly check takes such a stub, square to a house's wall,
+  for what it is, not a crooked wall.
 
 The 600 m village changed in two places, accepted in the map check: a corner house that stopped a
 quarter metre short of its lot's corner (a walled slit) reaches it, its rooms laid again (the
