@@ -72,6 +72,27 @@ pub struct GpuMaterial {
 const _: () = assert!(std::mem::size_of::<GpuMaterial>() == 176);
 
 impl GpuMaterial {
+    /// What a far impostor drawn with this row keeps of its look (D-075 step 4): the share of the
+    /// sun's light through it (foliage), its reflectance, and its highlight's weight and power.
+    pub(crate) fn sheen(&self) -> ([f32; 3], f32, f32, f32) {
+        let through = if self.flags & MATERIAL_FOLIAGE != 0 {
+            self.scatter
+        } else {
+            [0.0; 3]
+        };
+        (
+            through,
+            self.reflectance,
+            self.specular,
+            self.specular_power,
+        )
+    }
+
+    /// Its two colours, which each instance mixes by its id (`hash_color` in meshlet.slang).
+    pub(crate) fn tones(&self) -> [[f32; 3]; 2] {
+        [self.color_a, self.color_b]
+    }
+
     /// Whether its clusters take the cut-outs' raster (#171): cut out or double-sided, or drawn
     /// after the resolve (its fragments all go there).
     pub fn cut_out(&self) -> bool {

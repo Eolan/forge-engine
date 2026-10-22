@@ -567,8 +567,14 @@ pub struct Args {
     /// (a light breeze, 0.15, by default; 0 still air).
     #[arg(long, default_value_t = 0.15)]
     pub grass_wind: f32,
-    /// Bake the scenario's trees' impostors (D-075 step 4, #302) one after another as the run
-    /// goes, each one's atlases written as PNG images to this directory (`<species>-albedo.png`,
+    /// With `--tree-ladder`: the far plants as impostors (D-075 step 4, #302): each plant's crown
+    /// shells fade once its sphere stands under this many output pixels across (the flag alone:
+    /// 40), and its impostor takes the pixels they leave. The impostors are baked before the
+    /// run's first frame.
+    #[arg(long, num_args = 0..=1, default_missing_value = "40")]
+    pub impostors: Option<f32>,
+    /// Bake the scenario's trees' impostors (D-075 step 4, #302) before the run, each one's
+    /// atlases written as PNG images to this directory (`<species>-albedo.png`,
     /// `<species>-normal.png`).
     #[arg(long)]
     pub impostor_bake: Option<std::path::PathBuf>,
@@ -797,10 +803,13 @@ struct Gallery {
     /// A demo's own scene, built (#216): the physics lab's (`physics-lab`, #136), whose bodies
     /// are the movers.
     running: Option<Box<dyn Running>>,
-    /// The impostors to bake (`--impostor-bake`, D-075 step 4), the next last, and the one under
-    /// way with its name.
-    impostor_queue: Vec<(String, forge_render::impostor::BakeSource)>,
-    impostor_bake: Option<(String, forge_render::impostor::ImpostorBake)>,
+    /// The impostors' bakes under way (D-075 step 4), before the run's first counted frame
+    /// (`Context::preparing`), the kinds baked so far, and the set they are for.
+    impostor_baker: Option<forge_render::impostor::ImpostorBaker>,
+    impostor_kinds: Vec<forge_render::impostor::ImpostorKind>,
+    impostor_set: Option<forge_render::impostor::ImpostorSet>,
+    /// The impostors drawn, once baked.
+    impostors: Option<forge_render::impostor::Impostors>,
     /// What surrounds the scene (the scene's `Look`).
     backdrop: Backdrop,
     /// The liquid's tank's corner in the scene, and the scene's ticks between its log lines.
@@ -1795,18 +1804,26 @@ impl Gallery {
             .add(&ctx.device, &check.sets)?;
             check.record = Some(record);
         }
-        let mut impostor_queue = match (&args.impostor_bake, running.as_mut()) {
-            (Some(_), Some(r)) => r.impostor_sources(),
-            _ => Vec::new(),
+        let mut impostor_set = running.as_mut().and_then(|r| r.impostors());
+        let impostor_baker = match impostor_set.as_mut() {
+            Some(set) if !set.sources.is_empty() => {
+                Some(forge_render::impostor::ImpostorBaker::new(
+                    &ctx.device,
+                    &ctx.shaders,
+                    std::mem::take(&mut set.sources),
+                )?)
+            }
+            _ => None,
         };
-        impostor_queue.reverse();
         let mut gallery = Self {
             barrels,
             walker,
             sand,
             running,
-            impostor_queue,
-            impostor_bake: None,
+            impostor_baker,
+            impostor_kinds: Vec::new(),
+            impostor_set,
+            impostors: None,
             backdrop: look.backdrop,
             liquid_corner: liquid_setup.as_ref().map_or(Vec3::ZERO, |l| l.corner),
             liquid_log: liquid_setup.as_ref().map_or(60, |l| l.log_every),
@@ -2078,6 +2095,11 @@ impl Demo for Gallery {
         // The settings changed since the last frame: the console's, the bound keys', and at the
         // first frame those forge.cfg and --set gave (D-069).
         self.apply_vars(ctx);
+        // The impostors' bakes first (D-075 step 4): the run waits, its clock still.
+        ctx.preparing = self.impostor_baker.is_some();
+        if ctx.preparing {
+            return;
+        }
         let now = Instant::now();
         let ms = (now - self.last_frame).as_secs_f64() * 1e3;
         self.last_frame = now;
@@ -2232,25 +2254,69 @@ impl Demo for Gallery {
     }
 
     fn render<'f>(&'f mut self, ctx: &mut Context, frame: &mut FrameInfo<'f>) -> Result<()> {
-        // The impostors' bakes (`--impostor-bake`): one at a time, a bake's atlases written once
-        // read back, then the next begun (its frames declared after this frame's own passes).
-        if let Some(dir) = self.args.impostor_bake.clone() {
-            let done = self
-                .impostor_bake
-                .as_ref()
-                .and_then(|(name, bake)| bake.take().map(|atlases| (name.clone(), atlases)));
-            if let Some((name, atlases)) = done {
-                forge_render::impostor::ImpostorBake::write_png(&atlases, &dir, &name)?;
-                tracing::info!(name, dir = %dir.display(), "an impostor baked");
-                self.impostor_bake = None;
+        // The impostors' bakes (D-075 step 4) before the scene is drawn: a frame of each bake a
+        // frame (`Context::preparing`: they do not count), the screen black; each bake's
+        // atlases written with `--impostor-bake`, then the impostors made of them.
+        if let Some(baker) = self.impostor_baker.as_mut() {
+            if let Some((name, bake)) = baker.poll(&ctx.device)? {
+                if let (Some(dir), Some(atlases)) = (&self.args.impostor_bake, bake.take()) {
+                    forge_render::impostor::ImpostorBake::write_png(&atlases, dir, &name)?;
+                    tracing::info!(name, dir = %dir.display(), "an impostor's atlases written");
+                }
+                let set = self.impostor_set.as_ref().expect("the bakes' set");
+                self.impostor_kinds
+                    .push(bake.into_kind(set.fade_px, set.fade_band));
             }
-            if self.impostor_bake.is_none()
-                && let Some((name, source)) = self.impostor_queue.pop()
-            {
-                let bake =
-                    forge_render::impostor::ImpostorBake::new(&ctx.device, &ctx.shaders, &source)?;
-                self.impostor_bake = Some((name, bake));
+            if baker.is_done() {
+                self.impostor_baker = None;
+                let set = self.impostor_set.take().expect("the bakes' set");
+                let kinds = std::mem::take(&mut self.impostor_kinds);
+                if !set.instances.is_empty() {
+                    tracing::info!(
+                        kinds = kinds.len(),
+                        instances = set.instances.len(),
+                        "impostors baked"
+                    );
+                    self.impostors = Some(forge_render::impostor::Impostors::new(
+                        &ctx.device,
+                        &ctx.shaders,
+                        kinds,
+                        &set.instances,
+                    )?);
+                }
             }
+        }
+        // A frame the update held (the last bake's too, handed back above): still uncounted, so
+        // no scene in it (DLSS numbers its frames by the counted ones).
+        if ctx.preparing {
+            if let Some(baker) = self.impostor_baker.as_ref() {
+                baker.record(&mut frame.graph, frame.slot)?;
+            }
+            let (target, extent) = (frame.target, ctx.extent());
+            frame
+                .graph
+                .pass("impostor/wait")
+                .image(target, forge_gpu::ImageAccess::ColorAttachment)
+                .run(move |resources, commands| {
+                    use forge_gpu::vk;
+                    let attachment = [vk::RenderingAttachmentInfo::default()
+                        .image_view(resources.view(target))
+                        .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                        .load_op(vk::AttachmentLoadOp::CLEAR)
+                        .store_op(vk::AttachmentStoreOp::STORE)
+                        .clear_value(vk::ClearValue::default())];
+                    let info = vk::RenderingInfo::default()
+                        .render_area(vk::Rect2D {
+                            offset: vk::Offset2D::default(),
+                            extent,
+                        })
+                        .layer_count(1)
+                        .color_attachments(&attachment);
+                    commands.begin_rendering(&info);
+                    commands.end_rendering();
+                    Ok(())
+                });
+            return Ok(());
         }
         // In space, on the tank's bench and in the sharpness room (#159), no sky light: a constant
         // fill. The bench's card in place of the sky.
@@ -3077,6 +3143,36 @@ impl Demo for Gallery {
             use forge_render::debug_hash::HashKind;
             h.add(&mut frame.graph, taa_frame.color, HashKind::Float4, extent);
         }
+        // The far plants' impostors where their meshes fade (D-075 step 4): over the resolve's
+        // colour and the scene's depth, before the sky hazes them with the rest.
+        if let Some(impostors) = &self.impostors {
+            impostors.draw(
+                &mut frame.graph,
+                frame.slot,
+                &forge_render::impostor::ImpostorView {
+                    view_proj: taa_frame.jittered_projection * self.camera.view_rotation(),
+                    previous_from_current: taa_frame.previous_from_current,
+                    jitter: taa_frame.jitter,
+                    camera: camera.position,
+                    p11: camera.p11,
+                    near: camera.near,
+                    texture_lod_bias: self.renderer.texture_lod_bias,
+                    noise_frame: self.renderer.noise_frame,
+                    sun_dir: self.renderer.sun_dir,
+                    sun_color: self.renderer.sun_color,
+                    sun_illuminance: self.renderer.sun_illuminance,
+                    exposure,
+                    sky: (self.sky_light && !in_space).then_some(scene_light),
+                    camera_in_scene,
+                    tlas: self.scene.rays().map_or(0, |r| r.tlas_address()),
+                    static_tlas: targets.movers.and_then(|m| m.static_tlas),
+                    extent,
+                },
+                taa_frame.color,
+                targets.depth,
+                early_motion,
+            );
+        }
         if let Some(space) = self.space.as_mut() {
             // Space's sky where nothing was drawn: the stars, the sun's disc, the planet and its
             // air seen from orbit; no haze over the ship.
@@ -3607,9 +3703,6 @@ impl Demo for Gallery {
                 h.add(&mut frame.graph, bloom, HashKind::Float4, half);
             }
             h.finish(&mut frame.graph);
-        }
-        if let Some((_, bake)) = &self.impostor_bake {
-            bake.record(&mut frame.graph, frame.slot)?;
         }
         Ok(())
     }

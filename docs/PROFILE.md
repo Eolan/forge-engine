@@ -882,6 +882,23 @@ each:
 Every shadow ray through a crown from the air tested its cards against the leaf atlas; the
 proxy is opaque, so the hardware ends them. The main street's shadows fall within 60 m.
 
+**The trees' impostors** (D-075 step 4, #302, 2026-10-22; city-plan's `--tree-ladder
+--impostors`, 40 px): the village at 1600 × 900, DLAA, best of three runs, the ladder alone
+against the ladder with the impostors:
+
+| View | The frame | `impostors/draw` | `geometry/meshlet pass 1` |
+|---|---|---|---|
+| The air view | 4.03 → 3.92 ms | 0.21 | 0.99 → 0.93 |
+| The main street | 5.11 → 5.12 ms | 0.06 | 0.66 → 0.68 |
+
+From the air the far woods' shells give way to quads; on the street few plants are small enough.
+The quad stands at the front of the plant's sphere and the pass writes no depth nearer than it
+(`SV_DepthLessEqual`), so the depth test rejects the hidden far trees' pixels before they are
+shaded: on the street the pass went 0.14 → 0.06 ms (a centred quad writing its depth turned the
+early test off). With nothing crossed it costs 0.03 ms. The bake (`impostor/downsample`,
+`impostor/mips`, `impostor/occlusion`, `impostor/read back`: the village's 27 kinds in 1.2 s)
+runs before the first counted frame, outside the run's profile.
+
 **Grass near the camera** (#300, D-075, 2026-10-22; city-blocks' `--grass`, 50 m, first
 20 m): the village at 1600 × 900, DLAA, the green's view (`12.9,1.7,-226.0,176.1,-5`)
 over the park's grass, its map 1.44 M cells and 3.95 M blades (5.58 M since the densities rose

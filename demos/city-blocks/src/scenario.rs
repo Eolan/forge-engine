@@ -209,10 +209,10 @@ pub trait Running: Send {
     fn grass(&self) -> Option<(forge_render::grass::GrassMap, u32)> {
         None
     }
-    /// The meshes to bake impostors of (D-075 step 4, `--impostor-bake`), each with a name for
-    /// its atlases' files, taken once after the build. None by default.
-    fn impostor_sources(&mut self) -> Vec<(String, forge_render::impostor::BakeSource)> {
-        Vec::new()
+    /// Its impostors (D-075 step 4): the meshes to bake, each with a name for its atlases'
+    /// files, and the plants drawn with them, taken once after the build. None by default.
+    fn impostors(&mut self) -> Option<forge_render::impostor::ImpostorSet> {
+        None
     }
     /// Its doorways shut or opened by their doors since the last frame at `time` (the
     /// particles' clock, seconds; #327): each its place in [`Running::probe_regions`] and the

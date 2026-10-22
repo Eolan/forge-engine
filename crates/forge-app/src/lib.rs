@@ -176,6 +176,10 @@ pub struct Context {
     /// screen shows, and its frames do not count (`frames_rendered`, captures, the frame limit,
     /// the profile, the memory counters).
     pub loading: bool,
+    /// The demo's own preparation on the GPU once started (an impostor's bake, D-075 step 4):
+    /// while the demo sets it, its frames do not count (`frames_rendered`, captures, the frame
+    /// limit, the profile), so a scripted run waits for it; they are drawn as usual.
+    pub preparing: bool,
     /// The console variables and commands (D-069): the shell's (`r.display_info`, `app.`), the
     /// renderer's and the demo's, registered in [`Demo::register`] and read every frame.
     pub settings: Settings,
@@ -1099,6 +1103,7 @@ impl<D: Demo> State<D> {
             graph,
             capture_request: None,
             loading: false,
+            preparing: false,
             settings,
             sound: None,
             hud: Vec::new(),
@@ -1414,7 +1419,7 @@ impl<D: Demo> State<D> {
             .profile
             .cpu_zone("cpu/wait for GPU (frame slot)", ms_since(wait_start));
         // The zones are those of the frame that used the slot before, FRAMES_IN_FLIGHT ago.
-        if self.ctx.loading {
+        if self.ctx.loading || self.ctx.preparing {
             self.ctx.counted_from = slot.frame_number + 1;
         } else if slot.frame_number >= self.ctx.counted_from + FRAMES_IN_FLIGHT as u64 {
             self.ctx
@@ -1464,6 +1469,7 @@ impl<D: Demo> State<D> {
                 .loading_capture
                 .take_if(|(_, at)| Instant::now() >= *at)
                 .map(|(path, _)| path),
+            _ if self.ctx.preparing => None,
             Some((path, frame)) if *frame == frame_number => Some(path.clone()),
             Some((path, _))
                 if self
@@ -1481,7 +1487,7 @@ impl<D: Demo> State<D> {
         };
         // The demo's own request, taken by this frame.
         let capture_path = match capture_path {
-            None if !self.ctx.loading => self.ctx.capture_request.take(),
+            None if !self.ctx.loading && !self.ctx.preparing => self.ctx.capture_request.take(),
             path => path,
         };
         // Four times per second, and on a captured frame so that a scripted capture shows
@@ -1791,7 +1797,7 @@ impl<D: Demo> State<D> {
         if capture_path_saved {
             self.ctx.captures_written += 1;
         }
-        if !self.ctx.loading {
+        if !self.ctx.loading && !self.ctx.preparing {
             self.ctx.frames_rendered += 1;
         }
         if self.debug_stall_ms > 0 {

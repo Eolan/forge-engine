@@ -6878,26 +6878,71 @@ owner has looked (`forge_render::grass`, `shaders/meshlet.slang`'s "grass"):
   0.0474 on the grass). 0.015 ms.
 - **Not yet:** the walkers' bending, a measured fit of the colours to the ground beneath.
 
-**Step 4 begun: the baker** (#302, 2026-10-22, the plan in #302's comments), behind city-plan's
-`--impostor-bake DIR` until the impostors are drawn (`forge_render::impostor`,
-`shaders/impostor.slang`):
+**Step 4 built: the impostors** (#302, 2026-10-22, the plan in #302's comments), behind
+city-plan's `--impostors [PX]` with `--tree-ladder` until the owner has looked; `--impostor-bake
+DIR` writes the atlases as images (`forge_render::impostor`, `shaders/impostor.slang`,
+`impostor_layout.slang`, `impostor_draw.slang`):
 - **The layout:** the upper hemisphere unfolded into a square, a diamond turned to fill it (R.
   Brucks), 8 × 8 frames each baked from the direction at its middle (the lowest 7° above the
   horizon), a view blending the three frames around its point by barycentric weights; the frames'
   axes (`frame_axes`) never upside down.
-- **The bake, on the GPU:** a renderer of its own over a scene of the one mesh, one frame each
-  app frame: the mesh drawn at full detail from 1000 radii off with a field that fits its sphere
-  (near enough to parallel), the resolve writing its base colour or its normal unlit
-  (`CullFlags::BAKE_ALBEDO`, `BAKE_NORMAL`: `sun_light`, which every class goes through, returns
-  them, and the leaves' light through adds nothing, only in the bake's own shading passes from
-  `meshlet_bake.slang`: in the frame's, a branch never taken showed #349's unshaded tiles), at
-  512² into a target the downsample takes
-  4 × 4 into the frame's 128² square: the colour weighted by coverage, the share covered its
-  alpha, the normals averaged and made unit. 128 frames, then both atlases read back (1024²
-  each, half floats): about 0.7 s a species in the village, its nine in 6 s.
-- **Not yet:** the depth (for the parallax offset and the rays' point), the normals at 512² as
-  decided, the atlases into D-053's cache, then the impostor's raster and its shading class
-  and the ladder's last step (#302's plan).
+- **The bake, before the run's first counted frame:** one kind for each species and age class
+  (the age's last seed; the village's 27), one after another, a frame of a bake each app frame.
+  Meanwhile the app counts no frame (`Context::preparing`: captures, frame limits and the run's
+  clock wait, the screen black), so a capture is the same whatever the bake took: 1.2 s for the
+  27. One renderer for all, its resolve compiled from `meshlet_bake.slang` (`CullFlags::BAKE_ALBEDO`,
+  `BAKE_NORMAL`: `sun_light` returns them, the leaves' light through adds nothing; in the frame's
+  own entries a branch never taken showed #349's unshaded tiles). Each frame drawn at full detail
+  from 1000 radii off with a field that fits its sphere (near enough to parallel), at 256², taken
+  4 × 4 into the frame's 64² square: the base colour weighted by coverage and premultiplied by it
+  (its alpha); the normals averaged and left that long, shorter where the leaves spread, so lit
+  by them a texel gives its leaves' average light (made unit, a crown's spread leaves lit as one
+  face, 3 % brighter); beside them the depth, the surface's distance from the middle towards the
+  frame's camera in radii. Then the mips, and the occlusion: from each texel's point every frame
+  read as a shadow map (the point behind the surface that frame saw, its coverage stops the light
+  there), weighted by the cosine with the normal.
+- **Memory:** frames of 64 px, not question 7's 128 for the base colour. An impostor begins under
+  50 px across (its fade's size and band), so a frame still gives each pixel more than a texel,
+  and a kind for each age (its own proportions: the oldest stretched to a young plant's crown read
+  squashed, the hedges' shrubs flat) costs less than one a species at 128: 6.7 MB a kind in half
+  floats (the base colour, the normals and depth, the occlusion, with mips), 180 MB for the
+  village, until D-047's compression.
+- **The crossing:** the shells fade in turn (`set_fade`, the ladder's last step), and an
+  instance's impostor draws where their noise leaves their pixels: the same crossing measured the
+  same way (the instance's culling sphere and id, the shells' size and band, and not before the
+  cards' crossing to the shells has ended), the complementary pixels. A quad facing the camera, six
+  vertices an instance, every instance each frame (one not crossing moved off screen by its vertex
+  shader).
+- **The draw: a forward pass after the resolve,** before the sky's compose hazes it with the rest,
+  not a shading class of the resolve (a change in the resolve's entries shows #349). Its depth is
+  written where the bake saw the leaves, so a plant meets the ground and its neighbours where it
+  stands; its motion with it when the motion vectors came before (with SIGMA), else that pass
+  takes it from the depth. The quad stands at the front of the sphere and no depth written is
+  nearer (`SV_DepthLessEqual`), so the depth test rejects hidden plants before their shading:
+  from the air the frame is 0.11 ms shorter (4.03 → 3.92 ms, the pass 0.21), on the main street
+  the same (the pass 0.06 ms; 0.14 with a centred quad).
+- **Its light, as the resolve lights a rough row:** each plant its own tone (its id's mix of its
+  leaves' two colours, `hash_color`), the sun through one shadow ray from the leaves' point into
+  the far shadows' world (its own proxy and its neighbours', as the far cards' rays), the point
+  moved along the view by the frame's noise so that DLAA averages it as SIGMA does the cards'; the
+  sky's irradiance and its reflection (the row's Fresnel and roughness) dimmed by the baked
+  occlusion (`occlusion_bounce`); the highlight and the light through the leaves. Each term
+  measured against the cards from the air (green, sRGB, by the square): lit without a shadow, 107
+  against the cards' 89 (the shells' tone, 0.55 of the leaves', answers the same); without the
+  reflection, too green (blue 41 against 54); with its own frames as its shadow map in place of
+  its proxy, 98 on the young street trees. With all of it, 90.7 against 89.2, and the far woods
+  67.3 and 76.4 against the shells' 66.8 and 80.7.
+- **The checks:** the mesh path against the fallback, `--no-occlusion` and
+  `--instance-occlusion on|off` 0 px with the impostors; validation (synchronisation included)
+  clean on both paths; a still camera's frames 10 apart differ on 0.51 % of their pixels (the
+  cards 0.53 %, the shells 0.37 %: the coverage's dither at the edges, as the cards' cut-outs).
+- **Not yet:** the crowns' contrast. Tree by tree the impostors still spread wider than the cards
+  (the deviation of 4 × 4 blocks' green by the square 13 against 8, the means equal): some crowns
+  read lime-bright, some near black-green. It is not the bake (each species' colour the same at
+  every age), nor the shadow ray alone (without it, 12), nor its noise (the ray's start wandering
+  over a third of the crown took 19.8 to 18.1 per pixel): next, the light across a crown. Then
+  the atlases into D-053's cache, block compression (D-047), each age's other seeds, and the
+  default (the owner's look first).
 
 *(research: forests-and-grass.md, vegetation-materials.md, flora.md; D-013, D-016, D-029, D-036,
 D-053, D-063; issues #297, #300, #301, #302, #303)*

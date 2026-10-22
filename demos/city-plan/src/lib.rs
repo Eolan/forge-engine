@@ -5920,6 +5920,9 @@ fn tile_meshes(tile: &Tile) -> impl Iterator<Item = (&TriMesh, usize, f32, &'sta
 /// its crown's shells over a quarter of the crossing's size either side of it.
 const TREE_LADDER_BAND: f32 = 0.25;
 
+/// The band of the crown shells' fade into the plants' impostors (D-075 step 4, `--impostors`).
+const IMPOSTOR_FADE_BAND: f32 = 0.25;
+
 /// With the trees' ladder, the distance from the camera from which the shadow rays meet the
 /// plants' shadow proxies in place of their cards (D-075 step 3, `--far-shadows`), metres.
 const FAR_SHADOWS: f32 = 60.0;
@@ -6900,9 +6903,13 @@ impl Scenario for PlanScenario {
         let grille_row = materials.of("plan-grille");
         laps.mark("rows and leaves");
         let mut builder = MeshletSceneBuilder::new();
-        // The rows an impostor's bake draws a plant with (`--impostor-bake`, D-075 step 4).
-        let bake_rows = args.impostor_bake.is_some().then(|| materials.gpu_rows());
+        // The rows an impostor's bake draws a plant with (`--impostors`, `--impostor-bake`, D-075
+        // step 4), and the plants drawn as impostors with the trees' ladder.
+        let drawn_impostors = args.tree_ladder.and(args.impostors);
+        let bake_rows = (args.impostor_bake.is_some() || drawn_impostors.is_some())
+            .then(|| materials.gpu_rows());
         let mut impostors = Vec::new();
+        let mut impostor_instances = Vec::new();
         materials.apply(&mut builder, &[], &[]);
         laps.mark("materials applied");
         builder.set_ray_traced(!args.no_shadows);
@@ -6999,8 +7006,17 @@ impl Scenario for PlanScenario {
                 shadow: Option<forge_render::MeshId>,
                 height: f32,
                 crown: f32,
+                /// Its culling sphere, in its own frame, and its ladder's crossing (0 without).
+                centre: Vec3,
+                radius: f32,
+                ladder_px: f32,
             }
             let mut models: std::collections::HashMap<u16, Vec<Grown>> = Default::default();
+            // Each species' impostors (D-075 step 4), one for each age: its kind, the middle of its
+            // baked sphere and the crown it was baked with.
+            let mut impostor_kinds: std::collections::HashMap<(u16, u8), (u32, Vec3, f32)> =
+                Default::default();
+            let origin = scene_origin(args);
             for &sp in &planted {
                 let grown = (0..forge_flora::grow::INDIVIDUALS)
                     .map(|individual| {
@@ -7011,17 +7027,27 @@ impl Scenario for PlanScenario {
                         let (shadow, _) = cooked.next().expect("a plant's shadow proxy cooked");
                         let proxy = proxies.then(|| builder.add_mesh(&proxy));
                         let id = builder.add_mesh(&mesh);
-                        // The species' last individual, its oldest, is the one its impostor is
-                        // baked from (`--impostor-bake`).
+                        // The species' last seed of each age is the individual its impostor for
+                        // that age is baked from (`--impostors`, `--impostor-bake`).
+                        let age = individual % forge_flora::grow::AGES;
                         if let Some(rows) = &bake_rows
-                            && individual + 1 == forge_flora::grow::INDIVIDUALS
+                            && individual + forge_flora::grow::AGES
+                                >= forge_flora::grow::INDIVIDUALS
                         {
+                            impostor_kinds.insert(
+                                (sp, age),
+                                (impostors.len() as u32, Vec3::from(mesh.center), crown),
+                            );
                             impostors.push((
-                                species[usize::from(sp)].id.clone(),
+                                format!("{}-{age}", species[usize::from(sp)].id),
                                 forge_render::impostor::BakeSource {
                                     mesh: mesh.clone(),
                                     rows: rows.clone(),
                                     material: flora_rows[usize::from(sp)],
+                                    // The block's third row: its leaf cards.
+                                    leaves: forge_core::material::MaterialId(
+                                        flora_rows[usize::from(sp)].0 + 2,
+                                    ),
                                 },
                             ));
                         }
@@ -7029,10 +7055,17 @@ impl Scenario for PlanScenario {
                         // once a lump stands under the size it gives, dithered across a band of a
                         // quarter of it. The ladder measures the plant's sphere: as many times the
                         // lumps' size as its diameter holds their mean diameter.
+                        // With `--impostors` the shells fade in turn where the plant's impostor
+                        // takes their pixels (D-075 step 4).
+                        let mut ladder_px = 0.0;
                         if let Some(px) = args.tree_ladder {
                             let next = builder.add_mesh(&shells);
                             let across = 2.0 * mesh.radius / lump;
-                            builder.set_ladder(id, next, px * across, TREE_LADDER_BAND);
+                            ladder_px = px * across;
+                            builder.set_ladder(id, next, ladder_px, TREE_LADDER_BAND);
+                            if let Some(fade) = drawn_impostors {
+                                builder.set_fade(next, fade, IMPOSTOR_FADE_BAND);
+                            }
                         }
                         // Placed with the ladder whatever the distance, so `--far-shadows 0` keeps
                         // the instances' ids (each tree's tones follow its id) for the A/B.
@@ -7043,6 +7076,9 @@ impl Scenario for PlanScenario {
                             shadow,
                             height,
                             crown,
+                            centre: Vec3::from(mesh.center),
+                            radius: mesh.radius,
+                            ladder_px,
                         }
                     })
                     .collect();
@@ -7087,6 +7123,29 @@ impl Scenario for PlanScenario {
                         ..forge_render::Visibility::ALL
                     },
                 );
+                // Its impostor where its shells fade (`--impostors`): of its species at its age, its
+                // crown as wide as this plant's, its fade measured as the culls measure it.
+                if drawn_impostors.is_some()
+                    && let Some(&(kind, middle, baked_crown)) = impostor_kinds.get(&(sp, age as u8))
+                {
+                    let (scale, rotation, translation) = transform.to_scale_rotation_translation();
+                    let place = origin.offset(translation).normalized();
+                    let culled = rotation * (model.centre * scale.x);
+                    let size = crown * 2.0 * stretch / baked_crown;
+                    impostor_instances.push(forge_render::impostor::ImpostorInstance {
+                        kind,
+                        position: forge_render::CellPos {
+                            cell: place.cell,
+                            local: place.local + culled,
+                        },
+                        middle: rotation * (middle * size) - culled,
+                        rotation,
+                        scale: size,
+                        cull_radius: model.radius * scale.x,
+                        id: plant as u32,
+                        ladder: Some((model.ladder_px, TREE_LADDER_BAND)),
+                    });
+                }
                 if let Some(proxy) = model.proxy {
                     builder.add_instance_with_material(proxy, transform, row);
                     let at = builder.instance_count() - 1;
@@ -7340,7 +7399,12 @@ impl Scenario for PlanScenario {
                     .grass
                     .take()
                     .map(|m| (m, ground_row.0 + u32::from(GARDEN))),
-                impostors,
+                impostors: (!impostors.is_empty()).then(|| forge_render::impostor::ImpostorSet {
+                    sources: impostors,
+                    instances: impostor_instances,
+                    fade_px: args.impostors.unwrap_or(0.0),
+                    fade_band: IMPOSTOR_FADE_BAND,
+                }),
             }),
         ))
     }
@@ -7394,8 +7458,8 @@ struct PlanRunning {
     glass: forge_render::GlassPanes,
     /// The grass map (#300) and its blades' row (the gardens'), in the world frame.
     grass: Option<(forge_render::grass::GrassMap, u32)>,
-    /// The plants to bake impostors of (`--impostor-bake`, D-075 step 4), taken once.
-    impostors: Vec<(String, forge_render::impostor::BakeSource)>,
+    /// The plants' impostors (`--impostors`, `--impostor-bake`, D-075 step 4), taken once.
+    impostors: Option<forge_render::impostor::ImpostorSet>,
 }
 
 /// A ride aboard a tram ([`PlanRunning::toggle_ride`]).
@@ -7610,8 +7674,8 @@ impl Running for PlanRunning {
         self.glass.clone()
     }
 
-    fn impostor_sources(&mut self) -> Vec<(String, forge_render::impostor::BakeSource)> {
-        std::mem::take(&mut self.impostors)
+    fn impostors(&mut self) -> Option<forge_render::impostor::ImpostorSet> {
+        self.impostors.take()
     }
 
     fn grass(&self) -> Option<(forge_render::grass::GrassMap, u32)> {

@@ -27,7 +27,8 @@ use crate::cells::CellPos;
 
 /// Colour format of the offscreen scene target.
 pub const HDR_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
-const MOTION_FORMAT: vk::Format = vk::Format::R16G16_SFLOAT;
+/// Format of the motion vectors (UV offsets to the previous frame).
+pub const MOTION_FORMAT: vk::Format = vk::Format::R16G16_SFLOAT;
 /// Jitter phases before the sequence repeats, at native resolution. An upscaler wants
 /// `JITTER_PHASES × (output / render)²` so every output pixel is covered ([`jitter_phases`]).
 pub const JITTER_PHASES: u32 = 8;
@@ -246,8 +247,11 @@ impl Taa {
             width: extent.width,
             height: extent.height,
             format: MOTION_FORMAT,
-            // Storage: written by a compute pass (#161), the movers' motion over the camera's (#79).
-            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE,
+            // Storage: written by a compute pass (#161), the movers' motion over the camera's (#79);
+            // an attachment of the impostors' draw (D-075 step 4), their pixels' own.
+            usage: vk::ImageUsageFlags::SAMPLED
+                | vk::ImageUsageFlags::STORAGE
+                | vk::ImageUsageFlags::COLOR_ATTACHMENT,
             aspect: vk::ImageAspectFlags::COLOR,
             mip_levels: 1,
         });

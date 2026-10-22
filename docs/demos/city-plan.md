@@ -551,14 +551,23 @@ moving with them for DLAA. The four passes take about 0.40 ms (0.13 at 20 m,
 `docs/PROFILE.md`); the fallback path draws the same pixels, and the images without the flag are
 unchanged.
 
-**The trees' impostors, baked** (D-075 step 4, #302, 2026-10-22; not drawn yet). With
-`--impostor-bake DIR` each species' oldest individual is baked as the run goes, one frame of its
-impostor each app frame (`forge_render::impostor`): 8 × 8 views over the upper hemisphere in a
-hemi-octahedral layout, each drawn at full detail from 1000 radii off at 512² with the resolve
-writing its base colour or its normal unlit, then taken 4 × 4 into its 128² square. The atlases
-(1024², the base colour with its coverage as alpha, the normals) are written as
-`<species>-albedo.png` and `<species>-normal.png`: the village's nine species in about 6 s.
-Their draw and shading class come next.
+**The trees' impostors** (D-075 step 4, #302, 2026-10-22; not yet the default). With
+`--tree-ladder --impostors [PX]` each plant's crown shells fade in turn once its sphere stands
+under `PX` output pixels across (40 by default), and its impostor takes the pixels they leave
+(`forge_render::impostor`). Before the first frame the scenario's plants are baked, one for each
+species and age (the village's 27 in 1.2 s, the run's clock and captures waiting): 8 × 8 views
+over the upper hemisphere in a hemi-octahedral layout, each drawn at full detail from 1000 radii
+off and taken 4 × 4 into its 64² square, the base colour with its coverage, the normals with the
+depth, then the share of the sky each point sees past the plant itself. Drawn after the resolve,
+each impostor writes its depth where the leaves are and is lit as the resolve lights the leaves:
+its own tone, the sun through one ray into the far shadows' world, the sky dimmed by its
+occlusion, the sky's reflection. From the air the far woods read as their shells (green 67.3 and
+76.4 against 66.8 and 80.7), the square's trees as their cards (90.7 against 89.2), and
+the frame is 0.11 ms shorter (4.03 → 3.92 ms; on the main street the same, `docs/PROFILE.md`).
+Tree by tree they are still more contrasty than the cards (D-075, "Not yet"). Capture:
+`reports/2026-10-22/village-impostors.png` (from the air: the cards, the shells, the impostors).
+`--impostor-bake DIR` writes each kind's atlases as
+`<species>-<age>-albedo.png`, `-normal.png`, `-depth.png` and `-occlusion.png`.
 
 **The stairs' shimmer** (the owner, the same evening). In a hall lit only through its door, the
 light on the flight rose and fell: a still camera's frames 10 apart differed on 3–7 % of their
