@@ -13,9 +13,9 @@
 //! - **The raster** ("grass/raster"): a patch a mesh-shader workgroup, or one non-indexed draw on
 //!   the fallback path, over the clusters already drawn. A blade under a pixel wide is drawn a
 //!   pixel wide, the share it covers kept by the frame's noise.
-//! - **Far** ([`GrassSettings::thin`]): the blades thin out with distance, about as many on a
-//!   pixel, each sinking at its own distance and the rest widened: a 50 m reach for about 0.1 ms
-//!   more than a 20 m one. Their normals and contrast converge to their clump's by 20 m.
+//! - **Far:** every blade of a cell stands out to the reach (D-075 keeps the counts: no fewer,
+//!   wider blades with distance while Pixar's US 7,973,789 B2 runs), their normals and contrast
+//!   converged to their clump's by 20 m.
 //! - **The wind** ([`GrassSettings::wind`]): a gust's wave rolling across the field sways the
 //!   blades at the game's clock ([`crate::meshlet::MeshletRenderer::set_grass_time`]), and
 //!   "grass/motion" gives their pixels their motion for the temporal upscaler.
@@ -235,10 +235,6 @@ pub struct GrassSettings {
     /// How far from the camera blades stand, metres: they sink into the ground over the last
     /// fifth.
     pub reach: f32,
-    /// Where they start thinning out, metres (0: never): past it a cell keeps its blades in the
-    /// square of this over their distance, about as many on a pixel, each blade sinking at its
-    /// own distance and the rest widened to cover the ground as before.
-    pub thin: f32,
     /// The blades' material row: the ground's grass, so the blades take its colours.
     pub row: u32,
     /// The wind over them: its way on the ground (x, z) times its strength, the tips' lean in it
@@ -430,8 +426,8 @@ impl Grass {
     }
 
     /// The frame block's grass fields: the map's address, its corner, a cell's side, the reach,
-    /// its cells along x and z, the blades' row and where they start thinning.
-    pub(crate) fn frame_fields(&self) -> (u64, [f32; 2], f32, f32, u32, u32, u32, f32) {
+    /// its cells along x and z and the blades' row.
+    pub(crate) fn frame_fields(&self) -> (u64, [f32; 2], f32, f32, u32, u32, u32) {
         (
             self.cells.address(),
             self.origin.to_array(),
@@ -440,7 +436,6 @@ impl Grass {
             self.width,
             self.depth,
             self.settings.row,
-            self.settings.thin,
         )
     }
 

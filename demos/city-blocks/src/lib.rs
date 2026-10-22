@@ -567,10 +567,6 @@ pub struct Args {
     /// (a light breeze, 0.15, by default; 0 still air).
     #[arg(long, default_value_t = 0.15)]
     pub grass_wind: f32,
-    /// With `--grass`: where the blades start thinning out with distance, metres (12 by default,
-    /// 0 never), about as many standing on a pixel from there to the reach.
-    #[arg(long, default_value_t = 12.0)]
-    pub grass_thin: f32,
     /// Show the ambient occlusion in grey instead of the shading (V toggles it).
     #[arg(long)]
     show_ao: bool,
@@ -1749,7 +1745,6 @@ impl Gallery {
                     &map,
                     forge_render::grass::GrassSettings {
                         reach,
-                        thin: args.grass_thin,
                         row,
                         // From the south-west, as the village's prevailing breeze.
                         wind: glam::Vec2::new(0.8, -0.6) * args.grass_wind,

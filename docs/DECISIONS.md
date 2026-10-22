@@ -6858,12 +6858,11 @@ owner has looked (`forge_render::grass`, `shaders/meshlet.slang`'s "grass"):
   non-indexed draw on the fallback path, both compiled precise. A blade under a pixel wide is
   drawn a pixel wide and its covered share kept by the frame's noise. Over the last fifth of the
   reach the blades sink into the ground's own grass.
-- **Far** (`--grass-thin T`, 12 m by default, the reach 50 m; the owner saw the curve where a
-  20 m reach ended): from `T` on, a cell keeps the share (T / distance)² of its blades, about as
-  many on a pixel, each sinking over the last fifth of its own distance, T × √(count / (index +
-  ½)), so none pops, and the rest widened by distance / T, so a grazing ray crosses as much
-  blade as before. At 50 m the four passes take 0.22 ms against 0.13 at 20 m (0.32 without the
-  thinning), the turn's flicker the same 3.6 %, the band from 17 m to the lawn's far end 0.1 %.
+- **Far** (the reach 50 m; the owner saw the curve where a 20 m reach ended): every blade of a
+  cell stands out to the reach. A first try thinned them from 12 m with the rest widened
+  (7148e1d0), which decision 2 below rules out while Pixar's US 7,973,789 B2 runs: taken out the
+  same day. At 50 m the four passes take 0.33 ms against 0.13 at 20 m, the turn's flicker the same
+  3.6 %, the band from 17 m to the lawn's far end 0.1 %.
 - **The look:** the blades take their cell's row (the lawn's, the park's) and one of its two
   colours a clump, darker towards the root; their normals rounded across them. With distance,
   their normals and contrast converge to the clump's mean, fully by 20 m or the reach if nearer

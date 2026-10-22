@@ -504,8 +504,7 @@ public struct Frame
     public float4 grass_wind;       // xy: the wind's way on the ground (unit), z: its strength (the tips' lean in it, a share of their height), w: the sway's time (s)
     public float grass_wind_before; // the sway's time the frame before (s): the blades' motion (`grass_motion_main`)
     public uint grass_depth;        // its cells along z
-    public float grass_thin;        // where the blades start thinning out with distance, metres (0: never)
-    public uint grass_pad2;
+    public uint2 grass_pad2;
 };
 
 // Whether this thread's rays meet the movers: every pass's but the probes' unless their scene asks
@@ -2842,17 +2841,6 @@ GrassBlade grass_blade_at(Frame* f, uint cell, uint index, float time)
     float distance = length(b.root - f[0].camera_in_scene.xyz);
     float pixel = 2.0 * distance / (f[0].p00 * float(f[0].target_width));
     float width = GRASS_WIDTH * (0.75 + 0.5 * grass_unit(grass_hash(h3, 0x68E31DA4u), 0));
-    // From `Frame::grass_thin` on, a cell keeps the share (thin / distance)² of its blades, about
-    // as many on a pixel: blade `index` of `count` sinks over the last fifth of its own distance,
-    // thin × sqrt(count / (index + 0.5)), and those left widen by distance / thin, so a grazing
-    // ray crosses as many blades' width as before.
-    float thin = f[0].grass_thin;
-    if (thin > 0.0)
-    {
-        float stands = thin * sqrt(float(min(c.look & 0xFFu, GRASS_CELL_BLADES)) / (float(index) + 0.5));
-        b.height *= saturate((stands - distance) / (0.2 * stands));
-        width *= max(distance / thin, 1.0);
-    }
     b.half_width = 0.5 * max(width, pixel);
     b.coverage = width / max(width, pixel);
     // Over the last fifth of the reach the blades sink into the ground's own grass.
@@ -2913,10 +2901,6 @@ void grass_count_main(uint3 id : SV_DispatchThreadID)
         float3 centre = float3(middle.x, g.level + 0.5 * tallest, middle.y) - f[0].camera_in_scene.xyz;
         float radius = 0.71 * f[0].grass_cell + tallest;
         float closest = length(centre) - radius;
-        // Past the thinning's start only the first blades stand (`grass_blade_at`).
-        float thin = f[0].grass_thin;
-        if (thin > 0.0 && closest > thin)
-            count = min(count, uint(float(count) * (thin / closest) * (thin / closest)) + 1u);
         if (count > 0u && closest < f[0].grass_reach && sphere_in_frustum(f, centre, radius))
             patches = (count + GRASS_PATCH_BLADES - 1u) / GRASS_PATCH_BLADES;
     }

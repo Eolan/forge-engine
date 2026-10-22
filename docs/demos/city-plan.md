@@ -543,12 +543,10 @@ park triangles (40 blades of 12 cm a lawn's cell, 56 of 22 cm a park's), cleared
 and along the garden walls. A cell grows in the ninths of it the lawn holds, so the blades stop at
 the paving within 8 cm (they first spread over their whole cell, up to 25 cm onto it). Each blade
 is drawn into the visibility buffer and shaded in its section's row, a clump's colour, darker at
-its root, its normal and contrast converging to the clump's by 20 m. From `--grass-thin T` (12 m)
-on, a cell keeps the share (T / distance)² of its blades, each sinking at its own distance and
-the rest widened, so as many stand on a pixel out to the reach and the lawn ends without the
-curve a 20 m reach showed; over the last fifth of the reach the last ones sink into the ground's
-grass. A breeze sways them (`--grass-wind S`, the tips' lean, 0.15 by default, 0 still), their
-pixels moving with them for DLAA. The four passes take about 0.22 ms (0.13 at 20 m,
+its root, its normal and contrast converging to the clump's by 20 m. Every blade stands out to the
+reach, so the lawn ends without the curve a 20 m reach showed (D-075 keeps the counts: no fewer,
+wider blades far off); over the last fifth of the reach they sink into the ground's grass. A breeze sways them (`--grass-wind S`, the tips' lean, 0.15 by default, 0 still), their
+pixels moving with them for DLAA. The four passes take about 0.33 ms (0.13 at 20 m,
 `docs/PROFILE.md`); the fallback path draws the same pixels, and the images without the flag are
 unchanged.
 
