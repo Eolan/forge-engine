@@ -42,19 +42,10 @@ struct Kind
     float3 through;   // the share of the sun's light through the leaves (their row's `scatter`)
     float power;
     float3 tone_a;    // the leaves' row's two colours, which each instance mixes by its id: the
-    uint pad_a;       // bake drew instance 0's mix
+    uint pad_a;       // bake drew their mean
     float3 tone_b;
     uint pad_b;
 };
-
-// The resolve's multi-bounce occlusion (`occlusion_bounce` in meshlet.slang; Jimenez et al. 2016).
-float3 occlusion_bounce(float visibility, float3 albedo)
-{
-    float3 a = 2.0404 * albedo - 0.3324;
-    float3 b = -4.7951 * albedo + 0.6417;
-    float3 c = 2.7552 * albedo + 0.6903;
-    return max(float3(visibility), ((visibility * a + b) * visibility + c) * visibility);
-}
 
 // The resolve's per-instance colour hash (`hash_color` in meshlet.slang).
 float3 hash_color(uint n)
@@ -305,10 +296,14 @@ Shaded shade(Varyings v)
     float open;
     blend_rest(kind, w, coverages, normal, point, open);
     float coverage = max(albedo.a, 1e-4);
-    // Its own instance's mix of its leaves' colours in place of the bake's.
-    float3 baked = lerp(kind.tone_a, kind.tone_b, hash_color(0u).x);
+    // Its own instance's mix of its leaves' colours over the bake's (their mean), on the leaves
+    // alone, told by their colour: the wood is not green (with the leaves' ratio, up to twice
+    // their red, a trunk would turn pink).
+    float3 baked = albedo.rgb / coverage;
+    float3 mean = 0.5 * (kind.tone_a + kind.tone_b);
     float3 tone = lerp(kind.tone_a, kind.tone_b, hash_color(imp.id).x);
-    float3 base = albedo.rgb / coverage * (tone / max(baked, 1e-4));
+    float leafy = saturate(4.0 * (baked.g - max(baked.r, baked.b)) / max(baked.g, 1e-4));
+    float3 base = baked * lerp(float3(1.0), tone / max(mean, 1e-4), leafy);
     // The leaves' average normal, as long as they agree: lit by it, the average of their light.
     float3 spread = rotate(imp.rotation, normal / coverage * 2.0 - 1.0);
     float agree = min(length(spread), 1.0);
@@ -338,8 +333,10 @@ Shaded shade(Varyings v)
     // As `sun_light` lights a rough row: the diffuse part less what it reflects, the sun's
     // highlight, and the sky's light reflected (`sky_reflection`: a row this rough reflects the
     // irradiance), with the light through the leaves (`leaf_transmission`).
-    // The sky's light and its reflection dimmed by the share of it the point sees past the plant
-    // (`occlusion_bounce`, and the reflection's occlusion in `sky_reflection`).
+    // The sky's reflection dimmed by the share of the sky the point sees past the plant (the
+    // reflection's occlusion in `sky_reflection`): undimmed, it paled the olives. Its diffuse
+    // light is not, as the shells' and the far cards' are not (the screen's occlusion is weak that
+    // far): dimmed, the crowns in shade read near black beside their shells.
     float ao = saturate(open / coverage);
     float roughness = sqrt(sqrt(2.0 / (kind.power + 2.0)));
     float f0 = kind.reflectance;
@@ -350,7 +347,7 @@ Shaded shade(Varyings v)
     float3 l = normalize(sun + n * LEAF_DISTORTION);
     float lobe = pow(saturate(dot(view, -l)), LEAF_POWER);
     float3 sun_light = f[0].sun_color * shadow;
-    float3 color = base * (max(ndl, 0.0) * sun_light + sky * occlusion_bounce(ao, base)) * (1.0 - fresnel)
+    float3 color = base * (max(ndl, 0.0) * sun_light + sky) * (1.0 - fresnel)
         + highlight * sun_light + reflected * sky + base * kind.through * sun_light * lobe;
     Shaded o;
     o.color = float4(color * f[0].light_scale, 1.0);

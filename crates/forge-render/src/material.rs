@@ -93,6 +93,14 @@ impl GpuMaterial {
         [self.color_a, self.color_b]
     }
 
+    /// Both its colours set to their mean: what an impostor's bake draws (D-075 step 4), each
+    /// impostor then taking its own instance's mix.
+    pub(crate) fn mean_tone(&mut self) {
+        let mean = std::array::from_fn(|k| 0.5 * (self.color_a[k] + self.color_b[k]));
+        self.color_a = mean;
+        self.color_b = mean;
+    }
+
     /// Whether its clusters take the cut-outs' raster (#171): cut out or double-sided, or drawn
     /// after the resolve (its fragments all go there).
     pub fn cut_out(&self) -> bool {

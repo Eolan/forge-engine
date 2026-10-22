@@ -366,7 +366,11 @@ impl ImpostorBake {
     fn new(device: &Arc<Device>, source: &BakeSource) -> Result<Self> {
         let mut builder = MeshletSceneBuilder::new();
         let mesh = builder.add_mesh(&source.mesh);
-        builder.set_material_rows(source.rows.clone());
+        // Each row at the mean of its two colours: the species' look, each impostor then its own
+        // instance's leaves' mix (`shaders/impostor_draw.slang`).
+        let mut rows = source.rows.clone();
+        rows.iter_mut().for_each(GpuMaterial::mean_tone);
+        builder.set_material_rows(rows);
         builder.add_instance_with_material(mesh, Mat4::IDENTITY, source.material);
         let scene = builder.build(device)?;
         let readback = |name: &'static str, texel_bytes: u64| {

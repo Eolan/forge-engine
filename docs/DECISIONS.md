@@ -6925,8 +6925,8 @@ DIR` writes the atlases as images (`forge_render::impostor`, `shaders/impostor.s
   leaves' two colours, `hash_color`), the sun through one shadow ray from the leaves' point into
   the far shadows' world (its own proxy and its neighbours', as the far cards' rays), the point
   moved along the view by the frame's noise so that DLAA averages it as SIGMA does the cards'; the
-  sky's irradiance and its reflection (the row's Fresnel and roughness) dimmed by the baked
-  occlusion (`occlusion_bounce`); the highlight and the light through the leaves. Each term
+  sky's irradiance, and its reflection (the row's Fresnel and roughness) dimmed by the baked
+  occlusion; the highlight and the light through the leaves. Each term
   measured against the cards from the air (green, sRGB, by the square): lit without a shadow, 107
   against the cards' 89 (the shells' tone, 0.55 of the leaves', answers the same); without the
   reflection, too green (blue 41 against 54); with its own frames as its shadow map in place of
@@ -6936,13 +6936,24 @@ DIR` writes the atlases as images (`forge_render::impostor`, `shaders/impostor.s
   `--instance-occlusion on|off` 0 px with the impostors; validation (synchronisation included)
   clean on both paths; a still camera's frames 10 apart differ on 0.51 % of their pixels (the
   cards 0.53 %, the shells 0.37 %: the coverage's dither at the edges, as the cards' cut-outs).
-- **Not yet:** the crowns' contrast. Tree by tree the impostors still spread wider than the cards
-  (the deviation of 4 × 4 blocks' green by the square 13 against 8, the means equal): some crowns
-  read lime-bright, some near black-green. It is not the bake (each species' colour the same at
-  every age), nor the shadow ray alone (without it, 12), nor its noise (the ray's start wandering
-  over a third of the crown took 19.8 to 18.1 per pixel): next, the light across a crown. Then
-  the atlases into D-053's cache, block compression (D-047), each age's other seeds, and the
-  default (the owner's look first).
+- **The crowns' contrast** (the same day). From the air, tree by tree, the impostors spread wider
+  than the shells and the far cards (the deviation of 4 × 4 blocks' green, the means equal: 13
+  against 7–9). Against the cards at full detail (the green's view, every tree past the ladder an
+  impostor) they spread as the cards do (17.8 and 17.5 against 20.1 and 16.2): the far cards are
+  thinned by the cluster LOD, and the shells lit each lump as a sphere of its own. The owner's
+  choice: the shells round, their normals bent out from the crown's middle as the cards' are
+  (`grown_shells`), so the three steps light a crown alike; the shells' means moved under 2 %, the
+  tone kept. Two more of the impostor's own: the bake at each row's mean tone (one instance's tone
+  was baked for the species), each plant's tone on its leaves alone (the leaves' ratio turned the
+  trunks pink); and the occlusion on the reflection alone, the sky's diffuse light undimmed as on
+  the shells and the far cards (the crowns in shade read near black: the darkest tenth 60.5 →
+  64.4, the shells' 69.6). Left: the brightest tenth by the square, the young street trees'
+  sunlit crowns, 115 against the shells' 95 and the cards' 100, lime beside them. Not the cause,
+  measured: the bake's colours (each species the same at every age), the shadow ray (without it
+  12) and its noise, the leaves' depths in a texel, the normals' spread (they agree), the sky's
+  direction.
+- **Not yet:** the bright young crowns above; the atlases into D-053's cache, block compression
+  (D-047), each age's other seeds, and the default (the owner's look first).
 
 *(research: forests-and-grass.md, vegetation-materials.md, flora.md; D-013, D-016, D-029, D-036,
 D-053, D-063; issues #297, #300, #301, #302, #303)*

@@ -124,16 +124,21 @@ fn proxy_of(g: &TreeGraph, shrub: bool, broad: bool, lift: f32, share: f32) -> T
 /// its crown a closed shell of [`CROWN_SHELL`] of the lump's radius, a bumped icosahedron of 20
 /// triangles (section 4, a row of its own: a lump is a few pixels where it stands in for the
 /// cards, [`GrownPlant::lump`]), fewer than the cards and their core:
-/// closed, the cluster LOD simplifies it, as it cannot simplify the cards. Not #297's proxy for
-/// the probes, which keeps to three fifths of the lumps and would shrink the crown in sight.
+/// closed, the cluster LOD simplifies it, as it cannot simplify the cards. Its normals bend as
+/// the cards' do. Not #297's proxy for the probes, which keeps to three fifths of the lumps and
+/// would shrink the crown in sight.
 pub fn grown_shells(g: &TreeGraph, shrub: bool, broad: bool, lift: f32) -> TriMesh {
     let mut mesh = TriMesh::default();
     if !shrub {
         wood(&mut mesh, g, WOOD_RADIUS);
     }
     let faces = icosahedron();
-    for (i, &(centre, radius)) in crown_lumps(g, shrub, broad, lift).iter().enumerate() {
+    let lumps = crown_lumps(g, shrub, broad, lift);
+    // The crown's middle, as the cards' ([`grown_mesh`]).
+    let middle = lumps.iter().fold(Vec3::ZERO, |s, l| s + l.0) / lumps.len().max(1) as f32;
+    for (i, &(centre, radius)) in lumps.iter().enumerate() {
         let first = mesh.sections.len();
+        let first_vertex = mesh.positions.len();
         lump_of(
             &mut mesh,
             centre,
@@ -142,6 +147,16 @@ pub fn grown_shells(g: &TreeGraph, shrub: bool, broad: bool, lift: f32) -> TriMe
             &faces,
         );
         mesh.sections[first..].fill(4);
+        // Bent out from the crown's middle and the lump's, as the cards' normals ([`leaf_cards`]):
+        // the crown lit as one rounded mass, as near and as its impostor far (D-075). Each lump
+        // lit as a sphere of its own read flatter than both (the owner's choice, 2026-10-22).
+        for v in first_vertex..mesh.positions.len() {
+            let p = Vec3::from_array(mesh.positions[v]);
+            let bent = (p - middle).normalize_or_zero() + (p - centre).normalize_or_zero();
+            if let Some(bent) = bent.try_normalize() {
+                mesh.normals[v] = bent.to_array();
+            }
+        }
     }
     mesh.uvs = vec![[0.0, 0.0]; mesh.positions.len()];
     mesh
@@ -579,6 +594,33 @@ mod tests {
                 (0.75..1.2).contains(&(crown / cards)),
                 "{}: the shells {crown:.2} m across, the cards {cards:.2} m",
                 s.id
+            );
+            // Their normals bend out from the crown's middle, as the cards' do: a lump's inner
+            // side, facing the middle, lit as the crown's outside it belongs to.
+            let shell: Vec<usize> = shells
+                .indices
+                .chunks(3)
+                .zip(&shells.sections)
+                .filter(|(_, section)| **section == 4)
+                .flat_map(|(t, _)| t.iter().map(|&i| i as usize))
+                .collect();
+            let middle = shell
+                .iter()
+                .fold(Vec3::ZERO, |m, &i| m + Vec3::from(shells.positions[i]))
+                / shell.len() as f32;
+            let outward = shell
+                .iter()
+                .filter(|&&i| {
+                    let n = Vec3::from(shells.normals[i]);
+                    (n.length() - 1.0).abs() < 1e-3
+                        && n.dot(Vec3::from(shells.positions[i]) - middle) > 0.0
+                })
+                .count();
+            assert!(
+                outward as f32 > 0.97 * shell.len() as f32,
+                "{}: {outward} of {} shell normals face out of the crown",
+                s.id,
+                shell.len()
             );
         }
     }

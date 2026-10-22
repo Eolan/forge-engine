@@ -523,7 +523,8 @@ darker than through the cards, elsewhere within 0.07 EV (D-036; `docs/PROFILE.md
 **The trees' ladder** (D-075 step 2, #302, 2026-10-19; not yet the default). With
 `--tree-ladder [PX]` each grown plant crosses from its leaf cards to its crown's closed shells
 (`grown_shells`: each lump a 20-triangle shell at its full radius, in a row of its own at 0.55 of
-the leaves' colour) once the lumps stand `PX` pixels across (6 by default), dithered over a quarter
+the leaves' colour, its normals bent out from the crown's middle as the cards' are since
+2026-10-22, so the crown is lit as one rounded mass) once the lumps stand `PX` pixels across (6 by default), dithered over a quarter
 of that size either side: each pixel of a crossing tree keeps one of the two by the frame's noise,
 and DLAA averages them. `--show-ladder` (or the console's `r.show.ladder`) tints the shells blue.
 From the air the far woods stand whole where the cluster LOD had thinned some species' cards to
@@ -560,11 +561,12 @@ over the upper hemisphere in a hemi-octahedral layout, each drawn at full detail
 off and taken 4 × 4 into its 64² square, the base colour with its coverage, the normals with the
 depth, then the share of the sky each point sees past the plant itself. Drawn after the resolve,
 each impostor writes its depth where the leaves are and is lit as the resolve lights the leaves:
-its own tone, the sun through one ray into the far shadows' world, the sky dimmed by its
-occlusion, the sky's reflection. From the air the far woods read as their shells (green 67.3 and
+its own tone on its leaves, the sun through one ray into the far shadows' world, the sky, the
+sky's reflection dimmed by its occlusion. From the air the far woods read as their shells (green 67.3 and
 76.4 against 66.8 and 80.7), the square's trees as their cards (90.7 against 89.2), and
 the frame is 0.11 ms shorter (4.03 → 3.92 ms; on the main street the same, `docs/PROFILE.md`).
-Tree by tree they are still more contrasty than the cards (D-075, "Not yet"). Capture:
+Against the cards at full detail they are as contrasty; from the air the young street trees'
+sunlit crowns still read brighter than their shells (D-075, "The crowns' contrast"). Capture:
 `reports/2026-10-22/village-impostors.png` (from the air: the cards, the shells, the impostors).
 `--impostor-bake DIR` writes each kind's atlases as
 `<species>-<age>-albedo.png`, `-normal.png`, `-depth.png` and `-occlusion.png`.
