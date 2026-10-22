@@ -529,7 +529,13 @@ impl Scenario for LabScenario {
                 let editor = editor.take().expect("the scene's editor");
                 let streamer = forge_render::CellStreamer::new(
                     editor,
-                    GridCells { mesh },
+                    GridCells {
+                        mesh,
+                        props: std::env::var("FORGE_CELL_PROPS")
+                            .ok()
+                            .and_then(|v| v.parse().ok())
+                            .unwrap_or(GRID_PROPS),
+                    },
                     GRID,
                     forge_render::CellStreamConfig {
                         policy: forge_world::StreamPolicy {
@@ -584,7 +590,8 @@ impl Scenario for LabScenario {
 /// `=cells`' world (#338 step 4): a flat grid of 64 m roots, its cells of [`GRID_LEVEL`] (16 m).
 const GRID: forge_world::FlatGrid = forge_world::FlatGrid { root_size: 64.0 };
 const GRID_LEVEL: u8 = 2;
-/// The props a cell holds, at this height over the ground.
+/// The props a cell holds by default (`FORGE_CELL_PROPS` gives another count: the editor's cost at
+/// a town's scale), at this height over the ground.
 const GRID_PROPS: u32 = 4;
 const GRID_HEIGHT: f64 = 9.0;
 
@@ -592,6 +599,8 @@ const GRID_HEIGHT: f64 = 9.0;
 /// data.
 struct GridCells {
     mesh: forge_render::MeshId,
+    /// Its props a cell.
+    props: u32,
 }
 
 impl forge_render::CellSource for GridCells {
@@ -604,7 +613,7 @@ impl forge_render::CellSource for GridCells {
         let size = GRID.cell_size(cell.level());
         let (x, y) = cell.xy();
         let mut instances = Vec::new();
-        for k in 0..GRID_PROPS {
+        for k in 0..self.props {
             // A cell's own hash per prop: where it stands in the cell and how it turns.
             let mut h = cell.0 ^ (u64::from(k) + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15);
             h ^= h >> 31;

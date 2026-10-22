@@ -2226,6 +2226,16 @@ pages streamed:
   - **Measured:** 26 cells in 4 edits at the start. Then, as the viewer moves, 2 to 4 cells load
     ahead and 2 unload behind, 33 to 37 cells in, the worker 0.3 to 1.2 ms an edit.
   - **Determinism:** two runs give the same frames every 60 frames (0 pixels).
+  - **At a town's scale** (`FORGE_CELL_PROPS`, the props a cell; room for 200 000 instances):
+    each edit builds the editor's top-level structure over every instance anew, so its cost
+    follows the scene's size. It stays on the worker, off the frames:
+
+    | Props a cell | Instances in | An edit (2 to 4 cells), median | The first 26 cells |
+    |---|---|---|---|
+    | 4 | 140 | 0.7 ms | 2.4 ms |
+    | 100 | 3 500 | 1.0 ms | 3.4 ms |
+    | 1 000 | 35 000 | 2.5 ms | 21.5 ms |
+    | 4 000 | 140 000 | 7.6 ms | 84.7 ms |
 
 ## Captures
 

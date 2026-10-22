@@ -2477,7 +2477,12 @@ pub(crate) fn build(
     }
     let mut scene = if dynamic {
         if check.as_deref() != Some("streamed") {
-            builder.reserve_dynamic(builder.dynamic_capacity(2));
+            let mut capacity = builder.dynamic_capacity(2);
+            // `=cells` with `FORGE_CELL_PROPS`: room for a town's instances (#338 step 4).
+            if check.as_deref() == Some("cells") {
+                capacity.instances = capacity.instances.max(200_000);
+            }
+            builder.reserve_dynamic(capacity);
         }
         builder.build_with(
             &ctx.device,
