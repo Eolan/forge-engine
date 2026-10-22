@@ -160,7 +160,9 @@ ones, as under a crown, and the noise test held the change back; one update can'
 apart, but the rotations repeat every 8 frames with the jitter, so over a probe's last 8 updates
 their noise sums to about nothing while a door's light keeps its sign. The mean of those updates'
 gaps (each a share of the brighter, kept in the alpha of the probe's first irradiance texels,
-which nothing samples) now counts as a change too (`DRIFT_UPDATES`). The forest's flicker stays
+which nothing samples) now counts as a change too (`DRIFT_UPDATES`), on a ramp of its own from
+10 to 40 %: on the 30 % start the game's room took 60 % of its light at once, then tailed off for
+4 s, where single updates had crossed the start on their noise. The forest's flicker stays
 where the noise test put it (64 rays: 0.0024–0.0032 % and 0.0016–0.0031 %), and the midnight
 lamps settle as before. A first try, a decaying sum of the gaps in standard errors, brought the
 flicker back (0.04–0.09 %): within the 8-frame cycle the rotations' noise runs the same way for

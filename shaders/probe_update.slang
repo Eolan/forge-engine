@@ -145,9 +145,13 @@ static const float CHANGE_NOISE = 2.0;
 // became 5 s). The rays' rotations repeat every 8 frames with the jitter, so over a probe's last
 // DRIFT_UPDATES updates the rotations' noise sums to about nothing, while a door's light keeps
 // its sign: the mean of those updates' gaps, each a share of the brighter as the change is, counts
-// as a change too. They ride in the alpha of the probe's first irradiance texels, which nothing
-// samples.
+// as a change too, from DRIFT_START to DRIFT_FULL: rid of the noise, it can start lower (with the
+// 30 % start the door's light came in a step and then tailed off over 4 s, where single updates
+// had crossed it on their noise). They ride in the alpha of the probe's first irradiance texels,
+// which nothing samples.
 static const uint DRIFT_UPDATES = 8;
+static const float DRIFT_START = 0.1;
+static const float DRIFT_FULL = 0.4;
 
 groupshared float3 s_dir[PROBE_MAX_RAYS];
 groupshared float4 s_ray[PROBE_MAX_RAYS];
@@ -262,8 +266,9 @@ void probe_blend_main(uint3 group : SV_GroupID, uint thread : SV_GroupIndex)
                 s_drift[k] = g;
                 lasting += g;
             }
-            change = max(change, abs(lasting) / float(DRIFT_UPDATES));
-            kept = min(h, lerp(h, CHANGED_HYSTERESIS, smoothstep(CHANGE_START, CHANGE_FULL, change)));
+            float lowered = max(smoothstep(CHANGE_START, CHANGE_FULL, change),
+                                smoothstep(DRIFT_START, DRIFT_FULL, abs(lasting) / float(DRIFT_UPDATES)));
+            kept = min(h, lerp(h, CHANGED_HYSTERESIS, lowered));
         }
         s_hysteresis = kept;
     }
