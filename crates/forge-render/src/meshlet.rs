@@ -688,6 +688,12 @@ struct GpuFrame {
     grass_reach: f32,
     grass_width: u32,
     grass_row: u32,
+    /// The wind over the grass: its way (x, z), its strength, the sway's time now (s); and the
+    /// sway's time the frame before.
+    grass_wind: [f32; 4],
+    grass_wind_before: f32,
+    grass_pad: u32,
+    grass_pad2: [u32; 2],
 }
 
 /// Where a frame slot's light lists start in its lamps' buffer, bytes: after the lamps.
@@ -761,6 +767,7 @@ impl FarLampBuffers {
 const _: () = assert!(std::mem::offset_of!(GpuFrame, ground_window) % 16 == 0);
 
 const _: () = assert!(std::mem::offset_of!(GpuFrame, sun_color) % 16 == 0);
+const _: () = assert!(std::mem::offset_of!(GpuFrame, grass_wind) % 16 == 0);
 // Both passes' blocks share one buffer at this stride.
 const _: () = assert!(std::mem::size_of::<GpuFrame>() as u64 <= FRAME_BLOCK_STRIDE);
 
@@ -3779,6 +3786,8 @@ pub struct MeshletRenderer {
     path: GeometryPath,
     /// The grass near the camera (#300, [`Self::set_grass`]): none by default.
     grass: Option<crate::grass::Grass>,
+    /// The grass's sway time now and the frame before, seconds ([`Self::set_grass_time`]).
+    grass_clock: Cell<[f32; 2]>,
     /// The draw pipelines: mesh shaders, or vertex + fragment on the fallback path.
     pipeline_solid: Pipeline,
     pipeline_wire: Pipeline,
@@ -4358,6 +4367,7 @@ impl MeshletRenderer {
             device: Arc::clone(device),
             path,
             grass: None,
+            grass_clock: Cell::new([0.0; 2]),
             pipeline_solid,
             pipeline_wire,
             pipeline_cutouts,
@@ -4531,11 +4541,81 @@ impl MeshletRenderer {
     ) -> Result<()> {
         self.grass = match map {
             Some((map, settings)) => Some(crate::grass::Grass::new(
-                device, shaders, map, settings, self.path,
+                device,
+                shaders,
+                map,
+                settings,
+                self.path,
+                std::mem::size_of::<GpuMoverMotion>() as u64,
             )?),
             None => None,
         };
         Ok(())
+    }
+
+    /// The grass's sway time for the next frame, seconds (the game's clock: a fixed step's gives
+    /// the same blades run to run); the one before it moves the blades' pixels
+    /// ([`Self::grass_motion`]).
+    pub fn set_grass_time(&self, seconds: f32) {
+        let [now, _] = self.grass_clock.get();
+        self.grass_clock.set([seconds, now]);
+    }
+
+    /// Writes the grass blades' motion in the wind over the camera's into `motion` (#300,
+    /// `grass_motion_main`), as [`Self::mover_motion`] does the movers'. Nothing without grass or
+    /// wind.
+    #[allow(clippy::too_many_arguments)]
+    pub fn grass_motion<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        slot: FrameSlot,
+        targets: &DrawTargets,
+        motion: ImageHandle,
+        view_proj: Mat4,
+        previous_from_current: Mat4,
+        jitter: Vec2,
+    ) {
+        let Some(grass) = self.grass.as_ref().filter(|g| g.wind() != Vec2::ZERO) else {
+            return;
+        };
+        let (pipeline, block) = grass.motion(slot.index);
+        let address = block.address();
+        let frame = self.frame_address(slot);
+        let extent = self.extent;
+        let (visibility, depth) = (targets.visibility, targets.depth);
+        let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+        graph
+            .pass("grass/motion")
+            .image(visibility, ImageAccess::Sampled(compute))
+            .image(depth, ImageAccess::Sampled(compute))
+            .image(motion, ImageAccess::StorageReadWrite(compute))
+            .run(move |resources, commands| {
+                block.write(
+                    0,
+                    &[GpuMoverMotion {
+                        relative_from_clip: view_proj.inverse().to_cols_array(),
+                        previous_from_relative: (previous_from_current * view_proj).to_cols_array(),
+                        frame,
+                        previous: 0,
+                        visibility: resources.sampled(visibility).0,
+                        depth: resources.sampled(depth).0,
+                        motion: resources.storage(motion, 0).0,
+                        first: 0,
+                        count: 0,
+                        width: extent.width,
+                        height: extent.height,
+                        jitter: jitter.to_array(),
+                        skinned: 0,
+                        skin_clusters: 0,
+                        skin_previous: 0,
+                        pad: [0; 2],
+                    }],
+                );
+                commands.bind_pipeline(pipeline);
+                commands.push_constants(pipeline, &address);
+                commands.dispatch(extent.width.div_ceil(8), extent.height.div_ceil(8), 1);
+                Ok(())
+            });
     }
 
     /// The device address of frame slot `slot`'s `Frame` block (`meshlet.slang`), written by
@@ -4754,6 +4834,12 @@ impl MeshletRenderer {
                 (0, [0.0; 2], 1.0, 0.0, 1, 0),
                 crate::grass::Grass::frame_fields,
             );
+        let wind = self
+            .grass
+            .as_ref()
+            .map_or(Vec2::ZERO, crate::grass::Grass::wind);
+        let way = wind.normalize_or_zero();
+        let [grass_now, grass_before] = self.grass_clock.get();
         GpuFrame {
             view_proj: params.view_proj.to_cols_array(),
             cull_view_proj: params.cull.view_proj.to_cols_array(),
@@ -4855,6 +4941,10 @@ impl MeshletRenderer {
             grass_reach,
             grass_width,
             grass_row,
+            grass_wind: [way.x, way.y, wind.length(), grass_now],
+            grass_wind_before: grass_before,
+            grass_pad: 0,
+            grass_pad2: [0; 2],
         }
     }
 

@@ -542,7 +542,9 @@ camera (`forge_render::grass`): a map of 0.5 m cells painted from the ground til
 park triangles (40 blades of 12 cm a lawn's cell, 56 of 22 cm a park's), cleared under the houses
 and along the garden walls. Each blade is drawn into the visibility buffer and shaded in its
 section's row, a clump's colour, darker at its root, its normal and contrast converging to the
-clump's with distance; over the last fifth of the reach it sinks into the ground's grass. The
+clump's with distance; over the last fifth of the reach it sinks into the ground's grass. A
+breeze sways them (`--grass-wind S`, the tips' lean, 0.15 by default, 0 still), their pixels
+moving with them for DLAA. The
 four passes take about 0.13 ms (`docs/PROFILE.md`); the fallback path draws the same pixels, and
 the images without the flag are unchanged.
 

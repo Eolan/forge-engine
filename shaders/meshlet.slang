@@ -501,6 +501,10 @@ public struct Frame
     public float grass_reach;       // how far from the camera blades stand, metres
     public uint grass_width;        // its cells along x
     public uint grass_row;          // the blades' material row
+    public float4 grass_wind;       // xy: the wind's way on the ground (unit), z: its strength (the tips' lean in it, a share of their height), w: the sway's time (s)
+    public float grass_wind_before; // the sway's time the frame before (s): the blades' motion (`grass_motion_main`)
+    public uint grass_pad;
+    public uint2 grass_pad2;
 };
 
 // Whether this thread's rays meet the movers: every pass's but the probes' unless their scene asks
@@ -2739,9 +2743,10 @@ struct GrassBlade
     bool alive;
 };
 
-// Blade `index` of grass map cell `cell`. Compiled precise in every entry that calls it
-// (`PRECISE_ENTRIES`), so the raster's triangles and the resolve's are the same to the bit.
-GrassBlade grass_blade(Frame* f, uint cell, uint index)
+// Blade `index` of grass map cell `cell` at the sway's time `time`. Compiled precise in every
+// entry that calls it (`PRECISE_ENTRIES`), so the raster's triangles and the resolve's are the
+// same to the bit.
+GrassBlade grass_blade_at(Frame* f, uint cell, uint index, float time)
 {
     GrassCell c = f[0].grass[cell];
     GrassBlade b;
@@ -2758,6 +2763,17 @@ GrassBlade grass_blade(Frame* f, uint cell, uint index)
     float2 d = float2(grass_unit(h3, 0), grass_unit(h3, 16)) * 2.0 - 1.0;
     b.side = dot(d, d) > 1e-4 ? normalize(d) : float2(1.0, 0.0);
     b.lean = float2(-b.side.y, b.side.x) * (0.15 + 0.4 * grass_unit(h2, 16));
+    // The wind: a gust's wave rolling across the field along the wind's way, each blade a little
+    // out of step, bends the tips its way, with a flutter of their own.
+    float strength = f[0].grass_wind.z;
+    if (strength > 0.0)
+    {
+        float2 way = f[0].grass_wind.xy;
+        uint h4 = grass_hash(h3, 0x1B873593u);
+        float gust = 0.55 + 0.45 * sin(dot(at, way) * 0.45 - time * 1.9 + grass_unit(h4, 0) * 1.2);
+        float flutter = 0.12 * sin(time * 7.3 + grass_unit(h4, 16) * 6.2831853);
+        b.lean += way * (strength * (gust + flutter));
+    }
     // At least a pixel wide: a thinner blade covers its share of the pixel.
     float distance = length(b.root - f[0].camera_in_scene.xyz);
     float pixel = 2.0 * distance / (f[0].p00 * float(f[0].target_width));
@@ -2768,6 +2784,12 @@ GrassBlade grass_blade(Frame* f, uint cell, uint index)
     b.height *= saturate((f[0].grass_reach - distance) / (0.2 * f[0].grass_reach));
     b.alive = index < min(c.look & 0xFFu, GRASS_CELL_BLADES) && b.height > 0.005;
     return b;
+}
+
+// Blade `index` of grass map cell `cell` now.
+GrassBlade grass_blade(Frame* f, uint cell, uint index)
+{
+    return grass_blade_at(f, cell, index, f[0].grass_wind.w);
 }
 
 // Vertex `k` of blade `b` (`GRASS_TRIANGLES`), the scene frame.
@@ -7922,6 +7944,57 @@ void mover_motion_main(uint3 id : SV_DispatchThreadID)
     if (p[0].skinned != 0)
         object = skinned_before(p, f, now.mesh, vis, object);
     float3 point_before = mul(quat_matrix(before.rotation), object * before.scale) + instance_relative(f, before);
+    float4 clip = mul(p[0].previous_from_relative, float4(point_before, 1.0));
+    if (clip.w <= 1e-9)
+        return;
+    float2 ndc = clip.xy / clip.w;
+    float2 previous_uv = float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    g_storage_images_rg16f[p[0].motion][id.xy] = previous_uv - uv;
+}
+
+// A grass blade's pixel moves with the wind (#300): its point, placed on its triangle as the
+// blade stands now, is put on the same triangle as the blade stood at the sway's time of the
+// frame before (`Frame::grass_wind_before`), then seen by the camera of the frame before. Uses
+// `mover_motion_push`'s block (`first` and `count` unused).
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void grass_motion_main(uint3 id : SV_DispatchThreadID)
+{
+    MoverMotion* p = mover_motion_push.motion;
+    if (id.x >= p[0].width || id.y >= p[0].height)
+        return;
+    uint vis = g_sampled_images_u32[p[0].visibility].Load(int3(id.xy, 0));
+    if (!is_grass(vis))
+        return;
+    Frame* f = p[0].frame;
+    float depth = g_sampled_images_r[p[0].depth].Load(int3(id.xy, 0));
+    float2 size = float2(float(p[0].width), float(p[0].height));
+    float2 uv = (float2(id.xy) + 0.5 - float2(p[0].jitter_x, p[0].jitter_y)) / size;
+    float4 h = mul(p[0].relative_from_clip, float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0));
+    float3 point = h.xyz / h.w;
+    uint cell = (vis >> 9) & ((1u << GRASS_CELL_BITS) - 1u);
+    uint index = (vis >> 3) & (GRASS_CELL_BLADES - 1u);
+    uint3 k = GRASS_TRIANGLES[min(vis & 7u, GRASS_BLADE_TRIANGLES - 1u)];
+    float3 camera = f[0].camera_in_scene.xyz;
+    GrassBlade now = grass_blade(f, cell, index);
+    GrassBlade before = grass_blade_at(f, cell, index, f[0].grass_wind_before);
+    float3 p0 = grass_vertex(now, k.x) - camera;
+    float3 e0 = grass_vertex(now, k.y) - camera - p0;
+    float3 e1 = grass_vertex(now, k.z) - camera - p0;
+    // The point's barycentrics on the triangle's plane.
+    float3 v = point - p0;
+    float d00 = dot(e0, e0);
+    float d01 = dot(e0, e1);
+    float d11 = dot(e1, e1);
+    float den = d00 * d11 - d01 * d01;
+    if (abs(den) < 1e-14)
+        return;
+    float l1 = (d11 * dot(v, e0) - d01 * dot(v, e1)) / den;
+    float l2 = (d00 * dot(v, e1) - d01 * dot(v, e0)) / den;
+    float3 q0 = grass_vertex(before, k.x) - camera;
+    float3 q1 = grass_vertex(before, k.y) - camera;
+    float3 q2 = grass_vertex(before, k.z) - camera;
+    float3 point_before = q0 + l1 * (q1 - q0) + l2 * (q2 - q0);
     float4 clip = mul(p[0].previous_from_relative, float4(point_before, 1.0));
     if (clip.w <= 1e-9)
         return;

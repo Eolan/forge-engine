@@ -12,6 +12,9 @@
 //! - **The raster** ("grass/raster"): a patch a mesh-shader workgroup, or one non-indexed draw on
 //!   the fallback path, over the clusters already drawn. A blade under a pixel wide is drawn a
 //!   pixel wide, the share it covers kept by the frame's noise.
+//! - **The wind** ([`GrassSettings::wind`]): a gust's wave rolling across the field sways the
+//!   blades at the game's clock ([`crate::meshlet::MeshletRenderer::set_grass_time`]), and
+//!   "grass/motion" gives their pixels their motion for the temporal upscaler.
 //! - **Met by no ray**, as D-075 decided: it casts no traced shadow, and the probes see the
 //!   ground's own grass row.
 
@@ -190,6 +193,10 @@ pub struct GrassSettings {
     pub reach: f32,
     /// The blades' material row: the ground's grass, so the blades take its colours.
     pub row: u32,
+    /// The wind over them: its way on the ground (x, z) times its strength, the tips' lean in it
+    /// as a share of their height (0: still air). It sways them, a gust's wave rolling across the
+    /// field; their pixels' motion follows ([`crate::meshlet::MeshletRenderer::grass_motion`]).
+    pub wind: Vec2,
 }
 
 /// The grass passes' push constants (`GrassPush` in the shader).
@@ -217,6 +224,9 @@ pub(crate) struct Grass {
     emit: Pipeline,
     raster: Pipeline,
     path: GeometryPath,
+    /// The blades' motion in the wind (`grass_motion_main`) and its blocks, a frame slot each.
+    motion: Pipeline,
+    motion_blocks: Vec<Buffer>,
 }
 
 impl Grass {
@@ -227,6 +237,7 @@ impl Grass {
         map: &GrassMap,
         settings: GrassSettings,
         path: GeometryPath,
+        motion_block_bytes: u64,
     ) -> Result<Self> {
         if map.cells.len() as u64 > u64::from(MAX_CELLS) {
             return Err(forge_gpu::GpuError::Unsupported(format!(
@@ -259,6 +270,31 @@ impl Grass {
         let count = compute("grass_count_main", "grass count")?;
         let scan = compute("grass_scan_main", "grass scan")?;
         let emit = compute("grass_emit_main", "grass emit")?;
+        let motion = {
+            let entry = "grass_motion_main";
+            let module = device.create_shader_module(
+                &shaders.compile("meshlet.slang", entry, ShaderStage::Compute)?,
+                "grass motion",
+            )?;
+            let pipeline = device.create_compute_pipeline(&ComputePipelineDesc {
+                shader: (module, entry),
+                push_constant_bytes: std::mem::size_of::<u64>() as u32,
+                name: "grass motion",
+            });
+            device.destroy_shader_module(module);
+            pipeline?
+        };
+        let motion_blocks = (0..forge_gpu::FRAMES_IN_FLIGHT)
+            .map(|i| {
+                device.create_buffer(BufferDesc {
+                    size: motion_block_bytes,
+                    usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+                    location: MemoryLocation::CpuToGpu,
+                    category: MemoryCategory::Frame,
+                    name: &format!("grass motion {i}"),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
         let color_formats = &[vk::Format::R32_UINT];
         let raster = match path {
             GeometryPath::MeshShader => {
@@ -328,7 +364,19 @@ impl Grass {
             emit,
             raster,
             path,
+            motion,
+            motion_blocks,
         })
+    }
+
+    /// The wind over the blades: its way times its strength.
+    pub(crate) fn wind(&self) -> Vec2 {
+        self.settings.wind
+    }
+
+    /// The blades' motion pipeline and frame slot `slot`'s block for it.
+    pub(crate) fn motion(&self, slot: usize) -> (&Pipeline, &Buffer) {
+        (&self.motion, &self.motion_blocks[slot])
     }
 
     /// The frame block's grass fields: the map's address, its corner, a cell's side, the reach,

@@ -892,6 +892,10 @@ map 1.44 M cells and 3.96 M blades.
 | A metre lower, eyes at 0.6 m | 0.021 | 0.008 | 0.002 | 0.102 | 4.64 |
 | Turning 4°/s | 0.019 | 0.008 | 0.002 | 0.099 | 4.54 (4.40 without) |
 
+With the wind (`--grass-wind`, 0.15 by default), "grass/motion" adds 0.015 ms: the blades' pixels
+move with them, so a still view's swaying grass under DLAA stays as close to a supersampled run as
+still grass (ꟻLIP 0.0465 against 0.0474 on the grass).
+
 The blades' shading rides in `shading/standard`. **In motion,** turning 4°/s against a 2 × 2
 supersampled run (`imgdiff --then`, the grass's crop): the pixels whose change differs by more
 than 10 levels, 17.1 % with the blades' own normals and contrast, 7.1 % once they converge to

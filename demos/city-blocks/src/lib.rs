@@ -563,6 +563,10 @@ pub struct Args {
     /// gardens and parks).
     #[arg(long, num_args = 0..=1, default_missing_value = "20")]
     pub grass: Option<f32>,
+    /// With `--grass`: the wind's strength over it, the tips' lean as a share of their height
+    /// (a light breeze, 0.15, by default; 0 still air).
+    #[arg(long, default_value_t = 0.15)]
+    pub grass_wind: f32,
     /// Show the ambient occlusion in grey instead of the shading (V toggles it).
     #[arg(long)]
     show_ao: bool,
@@ -1737,7 +1741,15 @@ impl Gallery {
             renderer.set_grass(
                 &ctx.device,
                 &ctx.shaders,
-                Some((&map, forge_render::grass::GrassSettings { reach, row })),
+                Some((
+                    &map,
+                    forge_render::grass::GrassSettings {
+                        reach,
+                        row,
+                        // From the south-west, as the village's prevailing breeze.
+                        wind: glam::Vec2::new(0.8, -0.6) * args.grass_wind,
+                    },
+                )),
             )?;
         }
         // The lamps by ReSTIR DI (D-065), where RTXDI's headers are (`rtxdi-sdk/`) and the device
@@ -2438,6 +2450,8 @@ impl Demo for Gallery {
         // The scene's lamps (D-065) at the particles' clock, the nearest that reach the camera, for
         // this frame.
         let time = self.sea_time as f32;
+        // The grass's sway at the same clock (#300).
+        self.renderer.set_grass_time(time);
         let origin = self.scene.origin();
         let lamps: Vec<_> = self
             .running
@@ -2883,6 +2897,16 @@ impl Demo for Gallery {
                         taa_frame.jitter,
                     );
                 }
+                // The grass blades' in the wind (#300).
+                self.renderer.grass_motion(
+                    &mut frame.graph,
+                    frame.slot,
+                    &targets,
+                    motion,
+                    camera.view_proj,
+                    taa_frame.previous_from_current,
+                    taa_frame.jitter,
+                );
                 early_motion = Some(motion);
                 let denoiser: &'f forge_render::SunShadowDenoiser = &self.sun_shadows[index];
                 sun_shadow = Some(denoiser.denoise(
@@ -3391,6 +3415,17 @@ impl Demo for Gallery {
                 &mut frame.graph,
                 frame.slot,
                 &self.scene,
+                &targets,
+                motion,
+                camera.view_proj,
+                taa_frame.previous_from_current,
+                taa_frame.jitter,
+            );
+        }
+        if early_motion.is_none() {
+            self.renderer.grass_motion(
+                &mut frame.graph,
+                frame.slot,
                 &targets,
                 motion,
                 camera.view_proj,

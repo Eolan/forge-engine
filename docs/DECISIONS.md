@@ -6855,7 +6855,13 @@ looked (`forge_render::grass`, `shaders/meshlet.slang`'s "grass"):
   colours a clump, darker towards the root; their normals rounded across them. With distance,
   their normals and contrast converge to the clump's mean, which took the visible flicker of a
   turn under DLAA against a supersampled reference from 17 % to 7 % of the grass's pixels.
-- **Not yet:** wind, the walkers' bending, a measured fit of the colours to the ground beneath.
+- **The wind** (`--grass-wind S`, 0.15 by default): a gust's wave rolls across the field along the
+  wind's way, each blade a little out of step, with a flutter of its own; the tips lean `S` of
+  their height at most. "grass/motion" gives the blades' pixels their motion (the blade rebuilt
+  at the frame before's sway time, as `mover_motion_main` does a mover), so DLAA keeps them:
+  against a supersampled frame the swaying grass is as close as the still (ꟻLIP 0.0465 and
+  0.0474 on the grass). 0.015 ms.
+- **Not yet:** the walkers' bending, a measured fit of the colours to the ground beneath.
 
 *(research: forests-and-grass.md, vegetation-materials.md, flora.md; D-013, D-016, D-029, D-036,
 D-053, D-063; issues #297, #300, #301, #302, #303)*
