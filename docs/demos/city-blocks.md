@@ -90,7 +90,9 @@ Options:
   doing. In the village (2026-10-22), drifting at 1.4 m/s towards a house's facade and towards
   its open street door for 7.8 m, no capture's luma jumped by more than a level beyond the
   still view's; the doorway's inside brightened smoothly (10 → 21) as the finer cascades took
-  it.
+  it. `--probe-bias N,V` sets where a surface's point is looked up among the probes: those
+  shares of its normal and of the way to the viewer (`ProbeParams::sample_bias`, 0.2,0.8 by
+  default, the 2021 paper's); `1,0` keeps the point still as the camera moves (#351).
 - `--no-reflections` draws without the sky's reflection (`r.reflections.sky`).
 - `--no-ray-reflections` reflects only the sky in the glass and the water (`r.reflections.rays`).
 - `--no-reflection-history` leaves the glass's mirror rays to TAA alone, without their history (#176).

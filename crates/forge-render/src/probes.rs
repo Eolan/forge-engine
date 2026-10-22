@@ -105,7 +105,8 @@ struct GpuProbeField {
     region_top_mask: u32,
     region_count: u32,
     far_room_sky: f32,
-    region_pad: [u32; 3],
+    sample_bias: [f32; 2],
+    region_pad: u32,
 }
 
 const _: () = assert!(std::mem::size_of::<GpuProbeField>() == 432);
@@ -308,6 +309,12 @@ pub struct ProbeParams {
     /// against the fallback forced on them); deep rooms behind small windows want less, shallow
     /// rooms with wide ones more (`--probe-far-sky`, the scene's look).
     pub far_room_sky: f32,
+    /// Where a surface's point is looked up among the probes, off the surface: this share of its
+    /// normal and of the way to the viewer, times 0.225 of the cascade's spacing (the 2021 paper's
+    /// bias, so the visibility test does not sit on the surface's own shadow boundary). (0.2, 0.8)
+    /// by default. The viewer's share moves the point as the camera moves (#351 tests whether
+    /// that steps a face's light while walking, `--probe-bias`).
+    pub sample_bias: [f32; 2],
 }
 
 impl Default for ProbeParams {
@@ -324,6 +331,7 @@ impl Default for ProbeParams {
             cadence: 2,
             movers: false,
             far_room_sky: 0.06,
+            sample_bias: [0.2, 0.8],
         }
     }
 }
@@ -825,7 +833,8 @@ impl Probes {
             region_top_mask: regions.as_ref().map_or(0, |r| r.top_mask),
             region_count: regions.as_ref().map_or(0, |r| r.count),
             far_room_sky: p.far_room_sky,
-            region_pad: [0; 3],
+            sample_bias: p.sample_bias,
+            region_pad: 0,
         };
         self.fields[slot.index].write(0, &[field]);
 

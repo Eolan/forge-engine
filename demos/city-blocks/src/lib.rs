@@ -430,6 +430,11 @@ pub struct Args {
     /// `ProbeParams::far_room_sky`, 0.06 by default): its daylight factor.
     #[arg(long)]
     probe_far_sky: Option<f32>,
+    /// Where a surface's point is looked up among the probes, off it: `N,V`, the shares of its
+    /// normal and of the way to the viewer (`ProbeParams::sample_bias`, 0.2,0.8 by default; #351
+    /// tests 1,0, a point that stays put as the camera moves).
+    #[arg(long, value_delimiter = ',')]
+    probe_bias: Option<Vec<f32>>,
     /// Draw the island without its water (issue #105, D-038): the stand-in sea's opaque plane,
     /// and the rivers and lakes painted into the ground's layers.
     #[arg(long)]
@@ -1300,6 +1305,12 @@ impl Gallery {
                     .probe_far_sky
                     .or(look.probe_far_room_sky)
                     .unwrap_or(ProbeParams::default().far_room_sky),
+                sample_bias: args
+                    .probe_bias
+                    .as_ref()
+                    .map_or(ProbeParams::default().sample_bias, |b| {
+                        [b[0], b.get(1).copied().unwrap_or(0.0)]
+                    }),
                 ..ProbeParams::default()
             };
             let mut probes = Probes::new(&ctx.device, &ctx.shaders, params)?;

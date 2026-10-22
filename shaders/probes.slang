@@ -174,7 +174,9 @@ public struct ProbeField
     public uint region_top_mask;  // the coarse table's entries less one
     public uint region_count;     // volumes: 0, no regions (every probe lights every surface)
     public float far_room_sky;    // the open sky's share a far room without its probes takes (#321, ProbeParams)
-    public uint3 region_pad;
+    public float normal_bias;     // a surface's lookup point off it: this share of its normal (`ProbeParams::sample_bias`)
+    public float view_bias;       // and this share of the way to the viewer
+    public uint region_pad;
 };
 
 // The coarse cell `key`'s first entry in a table of `mask + 1` (`top_hash` in regions.rs).
@@ -468,11 +470,11 @@ public float4 cascade_irradiance<let MIRROR : int>(ProbeField* field, uint c, fl
     ProbeCascade cascade = field[0].cascades[c];
     float s = cascade.spacing;
     int3 counts = int3(field[0].counts);
-    // The 2021 paper's bias: off the surface, mostly towards the viewer, in proportion to the
-    // spacing, so the visibility test does not sit on the surface's own shadow boundary. Along
+    // The 2021 paper's bias: off the surface, mostly towards the viewer (`ProbeParams::sample_bias`,
+    // 0.2 of the normal and 0.8 of the view by default), in proportion to the spacing, so the visibility test does not sit on the surface's own shadow boundary. Along
     // the surface's interpolated normal, not the bent one of its normal map (D-068; EA's GIBS
     // takes the vertices' normal): a bump's normal leaned the point into the wall.
-    float3 q = p + (g * 0.2 + v * 0.8) * (0.75 * 0.3 * s);
+    float3 q = p + (g * field[0].normal_bias + v * field[0].view_bias) * (0.75 * 0.3 * s);
     float3 grid = q / s - 0.5;
     int3 base = int3(floor(grid));
     float3 alpha = grid - float3(base);
