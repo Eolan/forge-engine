@@ -83,7 +83,11 @@ struct LensPush
     uint frame;             // sampled image: the frame's copy
     uint encoding;          // as `Push::encoding`
     float2 size;            // the window's pixels
-    float2 pad;
+    float2 glint_towards;   // the sun's place, the window's pixels
+    float glint;            // the sun's glint, 0 for none to 1
+    float pad0;             // three floats, not a float3: that aligns to 16 bytes, past the
+    float pad1;             // Rust struct's 80
+    float pad2;
 };
 
 [[vk::push_constant]]
@@ -118,5 +122,19 @@ float4 lens_main(LensVaryings input) : SV_Target0
     color *= lens_push.tint.rgb;
     float rim = smoothstep(lens_push.vignette_start, 1.0, d / max(lens_push.radius, 1.0));
     color *= 1.0 - saturate(lens_push.vignette) * rim;
+    // The sun's glint (#328): a soft hotspot halfway out on the glass's side towards the sun,
+    // and a thin crescent along that side of the rim, warm white over the picture.
+    if (lens_push.glint > 0.0)
+    {
+        float radius = max(lens_push.radius, 1.0);
+        float2 toward = lens_push.glint_towards - lens_push.centre;
+        float2 way = dot(toward, toward) > 1e-6 ? normalize(toward) : float2(0.0, -1.0);
+        float2 spot = lens_push.centre + way * radius * 0.45;
+        float hot = exp(-dot(pixel - spot, pixel - spot) / (radius * radius * 0.03));
+        float r = d / radius;
+        float side = saturate(dot(offset / max(d, 1e-3), way));
+        float crescent = smoothstep(0.84, 0.95, r) * (1.0 - smoothstep(0.95, 1.0, r)) * side * side;
+        color += lens_push.glint * (hot + 0.6 * crescent) * float3(1.0, 0.96, 0.88);
+    }
     return float4(color, edge);
 }

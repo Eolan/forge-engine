@@ -71,10 +71,17 @@ pub struct HudMagnifier {
     pub vignette: f32,
     /// Where the darkening starts, a share of the radius.
     pub vignette_start: f32,
+    /// The sun's glint on its glass (#328, the owner's first try of a scope), 0 for none to 1:
+    /// the game's to set when the sun is near the view, which it knows.
+    pub glint: f32,
+    /// Where the sun stands in the window's pixels, on screen or off it: the glint lies on the
+    /// lens's side towards it.
+    pub glint_towards: [f32; 2],
 }
 
 impl HudMagnifier {
-    /// A clear lens of `radius` pixels at `centre`, `factor` times, its rim darkened a little.
+    /// A clear lens of `radius` pixels at `centre`, `factor` times, its rim darkened a little,
+    /// no glint.
     pub fn new(centre: [f32; 2], radius: f32, factor: f32) -> Self {
         Self {
             centre,
@@ -83,6 +90,8 @@ impl HudMagnifier {
             tint: [1.0; 3],
             vignette: 0.35,
             vignette_start: 0.7,
+            glint: 0.0,
+            glint_towards: centre,
         }
     }
 }
@@ -100,7 +109,9 @@ struct LensPush {
     frame: u32,
     encoding: u32,
     size: [f32; 2],
-    pad: [f32; 2],
+    glint_towards: [f32; 2],
+    glint: f32,
+    pad: [f32; 3],
 }
 
 /// Must match `Quad` in `hud.slang`.
@@ -265,7 +276,9 @@ impl Hud {
             frame: 0,
             encoding: self.encoding,
             size: [extent.width as f32, extent.height as f32],
-            pad: [0.0; 2],
+            glint_towards: lens.glint_towards,
+            glint: lens.glint.clamp(0.0, 1.0),
+            pad: [0.0; 3],
         };
         let pipeline = &self.lens;
         let fragment = vk::PipelineStageFlags2::FRAGMENT_SHADER;
