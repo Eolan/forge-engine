@@ -54,6 +54,9 @@ mod sounds;
 mod taxis;
 mod walk;
 
+// The code digests of the derived products, `CODE_*` (build.rs).
+include!(concat!(env!("OUT_DIR"), "/code_digests.rs"));
+
 /// A tile's side, metres.
 pub const TILE: f64 = 250.0;
 
@@ -750,65 +753,36 @@ impl PlanScenario {
         // The blocks off the streets, at the walking level as the pavements round them (D-061):
         // one level wherever people walk, no step at a gap between the buildings. Each block's
         // pieces cut and triangulated on the machine's threads, then laid in the tiles in the
-        // blocks' order: one thread took 13 s over the city's.
-        let pieces = par_map(plan.blocks.len(), cores(), None, |b| {
-            let block = &plan.blocks[b];
-            let mut pieces: Vec<(DVec2, Vec<[DVec2; 3]>, f64, u8)> = Vec::new();
-            let mut lay = |shapes: &ground::Shapes, level: f64, section: u8| {
-                for polygon in ground::simple_polygons(shapes) {
-                    if polygon.len() >= 3 {
-                        pieces.push((polygon[0], ground::triangles(&polygon), level, section));
-                    }
-                }
-            };
-            let section = match block.use_ {
-                BlockUse::Built => GARDEN,
-                BlockUse::Park => PARK,
-                BlockUse::Square => PAVING,
-                // A quay's face holds its river: the land under it is the ground's paving.
-                BlockUse::Quay => return pieces,
-            };
-            if block.use_ == BlockUse::Built {
-                // A paved forecourt along its streets, as the pavement it meets, its gardens
-                // behind: grass met the pavement in the gaps between the buildings (the owner).
-                // The paths across its green paved with it, one surface.
-                // A tram depot's yard paved with the forecourt, then cut out of it in asphalt.
-                let yard = plan
-                    .tram_depots
-                    .iter()
-                    .find(|d| d.block == b as u32)
-                    .map(|d| d.yard());
-                let mut ways = paths[b].clone();
-                ways.extend(yard.clone());
-                let (front, rest) = plan.ground.forecourt(&block.polygon, FORECOURT, &ways);
-                let front = match &yard {
-                    Some(yard) => {
-                        let (inside, outside) = ground::split(&front, yard);
-                        lay(&inside, WALK_LEVEL, STREET);
-                        outside
-                    }
-                    None => front,
-                };
-                lay(&front, WALK_LEVEL, PAVING);
-                lay(&rest, WALK_LEVEL, section);
-            } else if let Some((middle, mirror)) = &middles[b] {
-                // A large square's lawn or water mirror, cut out of its paving at its level: one
-                // laid over the other would fight it, and the water is level with the stone.
-                let (inside, outside) = plan.ground.off_streets_split(&block.polygon, middle);
-                let within = if *mirror { MIRROR } else { PARK };
-                lay(&inside, SQUARE_LEVEL, within);
-                lay(&outside, SQUARE_LEVEL, section);
-            } else {
-                lay(
-                    &plan.ground.off_streets(&block.polygon),
-                    WALK_LEVEL,
-                    section,
-                );
-            }
-            pieces
+        // blocks' order: one thread took 13 s over the city's. Kept in the derived cache (#345):
+        // made, the city's took 1.1 s of 16 threads, one park's 0.9 s alone.
+        let key = blocks_ground_key(plan, &paths, &middles);
+        let made = forge_core::derived::DerivedCache::new(forge_core::derived::cache_dir(
+            forge_core::derived::CacheKind::World,
+        ))
+        .get_or_make("city-blocks-ground", key, || {
+            blocks_ground(plan, &paths, &middles)
+                .into_iter()
+                .flatten()
+                .map(|(first, triangles, level, section)| {
+                    (
+                        first.to_array(),
+                        triangles
+                            .iter()
+                            .map(|t| t.map(|p| p.to_array()))
+                            .collect::<Vec<_>>(),
+                        (level, section),
+                    )
+                })
+                .collect::<Vec<_>>()
         });
-        for (first, triangles, level, section) in pieces.iter().flatten() {
-            tiles.flat_triangles(*first, triangles, *level, *section, false);
+        tracing::debug!(
+            from_cache = made.from_cache,
+            ms = made.ms,
+            "the blocks' ground (#345)"
+        );
+        for (first, triangles, (level, section)) in &made.value {
+            let triangles: Vec<[DVec2; 3]> = triangles.iter().map(|t| t.map(DVec2::from)).collect();
+            tiles.flat_triangles(DVec2::from(*first), &triangles, *level, *section, false);
         }
         laps.mark("blocks");
         // The quays' land as lawns, cell by cell (their faces hold water), under the trees.
@@ -1004,11 +978,13 @@ impl PlanScenario {
         let grime = wall_foot_grime(size, &structures, &near);
         // Stains and cracks on the paving (D-074): the blocks' paved pieces and the streets'
         // walking ground.
-        let mut paved: Vec<([DVec2; 3], f64)> = pieces
+        let mut paved: Vec<([DVec2; 3], f64)> = made
+            .value
             .iter()
-            .flatten()
-            .filter(|p| p.3 == PAVING)
-            .flat_map(|(_, triangles, level, _)| triangles.iter().map(move |t| (*t, *level)))
+            .filter(|p| p.2.1 == PAVING)
+            .flat_map(|(_, triangles, (level, _))| {
+                triangles.iter().map(move |t| (t.map(DVec2::from), *level))
+            })
             .collect();
         for t in &plan.ground.tiles {
             for polygon in ground::simple_polygons(&t.walk) {
@@ -7920,6 +7896,125 @@ fn ground_under(regions: &[forge_render::RegionVolume], feet: Vec3) -> forge_aud
     } else {
         forge_audio::Surface::Wood
     }
+}
+
+/// A block's ground piece: its first corner (the tile it goes in), its triangles, its level and
+/// its section.
+type GroundPiece = (DVec2, Vec<[DVec2; 3]>, f64, u8);
+
+/// Each block's ground off the streets, cut and triangulated on the machine's threads
+/// ([`PlanScenario::detailed`]): a built block's forecourt paved with its `paths` and its depot's
+/// yard, the rest its gardens; a large square's `middles` cut out of its paving.
+fn blocks_ground(
+    plan: &CityPlan,
+    paths: &[Vec<Vec<DVec2>>],
+    middles: &[Option<(Vec<DVec2>, bool)>],
+) -> Vec<Vec<GroundPiece>> {
+    par_map(plan.blocks.len(), cores(), None, |b| {
+        let block = &plan.blocks[b];
+        let mut pieces: Vec<GroundPiece> = Vec::new();
+        let mut lay = |shapes: &ground::Shapes, level: f64, section: u8| {
+            for polygon in ground::simple_polygons(shapes) {
+                if polygon.len() >= 3 {
+                    pieces.push((polygon[0], ground::triangles(&polygon), level, section));
+                }
+            }
+        };
+        let section = match block.use_ {
+            BlockUse::Built => GARDEN,
+            BlockUse::Park => PARK,
+            BlockUse::Square => PAVING,
+            // A quay's face holds its river: the land under it is the ground's paving.
+            BlockUse::Quay => return pieces,
+        };
+        if block.use_ == BlockUse::Built {
+            // A paved forecourt along its streets, as the pavement it meets, its gardens
+            // behind: grass met the pavement in the gaps between the buildings (the owner).
+            // The paths across its green paved with it, one surface.
+            // A tram depot's yard paved with the forecourt, then cut out of it in asphalt.
+            let yard = plan
+                .tram_depots
+                .iter()
+                .find(|d| d.block == b as u32)
+                .map(|d| d.yard());
+            let mut ways = paths[b].clone();
+            ways.extend(yard.clone());
+            let (front, rest) = plan.ground.forecourt(&block.polygon, FORECOURT, &ways);
+            let front = match &yard {
+                Some(yard) => {
+                    let (inside, outside) = ground::split(&front, yard);
+                    lay(&inside, WALK_LEVEL, STREET);
+                    outside
+                }
+                None => front,
+            };
+            lay(&front, WALK_LEVEL, PAVING);
+            lay(&rest, WALK_LEVEL, section);
+        } else if let Some((middle, mirror)) = &middles[b] {
+            // A large square's lawn or water mirror, cut out of its paving at its level: one
+            // laid over the other would fight it, and the water is level with the stone.
+            let (inside, outside) = plan.ground.off_streets_split(&block.polygon, middle);
+            let within = if *mirror { MIRROR } else { PARK };
+            lay(&inside, SQUARE_LEVEL, within);
+            lay(&outside, SQUARE_LEVEL, section);
+        } else {
+            lay(
+                &plan.ground.off_streets(&block.polygon),
+                WALK_LEVEL,
+                section,
+            );
+        }
+        pieces
+    })
+}
+
+/// The derived cache's key of [`blocks_ground`] (#345): a digest of everything it reads (the
+/// blocks, their paths, the depots' yards, the squares' middles and the street ground), and the
+/// digest of its code.
+fn blocks_ground_key(
+    plan: &CityPlan,
+    paths: &[Vec<Vec<DVec2>>],
+    middles: &[Option<(Vec<DVec2>, bool)>],
+) -> forge_core::derived::Key {
+    let mut hash = xxhash_rust::xxh3::Xxh3::new();
+    let mut put = |x: f64| hash.update(&x.to_bits().to_le_bytes());
+    let points = |put: &mut dyn FnMut(f64), p: &[DVec2]| {
+        put(p.len() as f64);
+        for q in p {
+            put(q.x);
+            put(q.y);
+        }
+    };
+    put(plan.blocks.len() as f64);
+    for (b, block) in plan.blocks.iter().enumerate() {
+        put(match block.use_ {
+            BlockUse::Built => 0.0,
+            BlockUse::Park => 1.0,
+            BlockUse::Square => 2.0,
+            BlockUse::Quay => 3.0,
+        });
+        points(&mut put, &block.polygon);
+        put(paths[b].len() as f64);
+        for path in &paths[b] {
+            points(&mut put, path);
+        }
+        match &middles[b] {
+            Some((middle, mirror)) => {
+                put(f64::from(u8::from(*mirror)) + 1.0);
+                points(&mut put, middle);
+            }
+            None => put(0.0),
+        }
+    }
+    put(plan.tram_depots.len() as f64);
+    for depot in &plan.tram_depots {
+        put(f64::from(depot.block));
+        points(&mut put, &depot.yard());
+    }
+    plan.ground.numbers(&mut put);
+    forge_core::derived::KeyHasher::new()
+        .number(hash.digest())
+        .key(CODE_BLOCKS_GROUND)
 }
 
 /// The middle of the squares, inside their trees and benches (the owner: "water mirrors as in

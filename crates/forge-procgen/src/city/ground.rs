@@ -510,6 +510,34 @@ fn arms(graph: &RoadGraph) -> Vec<Vec<Arm>> {
 }
 
 impl GroundMap {
+    /// Gives `out`, in a fixed order, every number the blocks' cuts read ([`Self::off_streets`],
+    /// [`Self::off_streets_split`], [`Self::forecourt`]): the streets' and the rivers' outlines
+    /// and the lines with their widths. A product made from those cuts keys on them (#345: the
+    /// city's blocks' ground, kept in the derived cache).
+    pub fn numbers(&self, out: &mut impl FnMut(f64)) {
+        out(self.streets.len() as f64);
+        out(self.water.len() as f64);
+        out(self.lines.len() as f64);
+        for piece in self.streets.iter().chain(&self.water) {
+            out(piece.contours.len() as f64);
+            for contour in &piece.contours {
+                out(contour.len() as f64);
+                for p in contour {
+                    out(p[0]);
+                    out(p[1]);
+                }
+            }
+        }
+        for (line, width) in &self.lines {
+            out(*width);
+            out(line.len() as f64);
+            for p in line {
+                out(p.x);
+                out(p.y);
+            }
+        }
+    }
+
     /// The map of `graph`'s streets over a frame of side `size`, in tiles of side `tile`; the
     /// carriageways widened to clear the trams' swept paths along `trams`' lines, round the
     /// junctions' corners too; the taxi stands' `laybys` carriageway, and the depots'

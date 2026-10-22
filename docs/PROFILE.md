@@ -1755,8 +1755,9 @@ meshes, on the loading thread`, `the plan's scene's steps`):
 | The upload and the acceleration structures | 0.20 s | 0.42 s |
 
 Left: a fresh cache's 149 shaders (a program could compile only its own if a list came with the
-sources); the city's ground (1 s on all cores; the cache could keep it), its quays and streets
-(0.4 s, triangulated on one thread) and its plan before the window (0.7 s); the upload.
+sources, since done); the city's ground (1 s on all cores; kept in the cache since #345), its
+quays and streets (0.4 s, triangulated on one thread) and its plan before the window (0.7 s);
+the upload.
 
 ### A load profiled (#345, 2026-10-22)
 
@@ -1837,6 +1838,13 @@ that changes the resolve's code (a constant of the leaves' light):
   is 9.4 s, the warm-up 7.8 s (15.8 and 14.1 before). An entry a list lacks compiles when
   asked for. The lists are the caches' (`cache/shaders/PROGRAM.entries`, written at each
   start), copied in when they drift.
+- **The city's blocks' ground in the derived cache** (item 2 of #345's plan): each block's
+  ground cut off the streets and triangulated took 1.1 s of all 16 threads (15.6 s of their
+  time, one park alone 0.9 s), at every start. Kept now (`city-blocks-ground`, 20 MB), keyed by
+  a digest of what the cuts read (the blocks, their paths and yards, the squares' middles, the
+  street ground's outlines) and of their code (`demos/city-plan/build.rs`). The step takes
+  1.30 s when it makes the entry and 0.22 s when it reads it; a warm city start went from 4.5
+  to 3.4 s in the profile, the same image (0 pixels, both runs against a build before).
 
 ## Local exposure (`--local-exposure`, #275, D-067, 2026-10-17)
 

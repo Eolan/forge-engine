@@ -149,7 +149,8 @@ from the site's cells. A private sandbox hands its own plan to `PlanScenario::ne
 
 It loads behind the loading screen (#274): `city_blocks::run_making` lays the plan out in its
 tiles on the loading thread, the blocks' ground and the buildings' structures made on all
-cores, and `Scenario::prepare` cooks the scene's meshes there or reads them from the derived
+cores (the blocks' ground kept in the derived cache, #345: 1.3 s at the city's first start,
+0.22 s after), and `Scenario::prepare` cooks the scene's meshes there or reads them from the derived
 cache (each under its place in the scene, its content's digest and the cooking code's), beside
 a fresh cache's shaders compiled ahead; the generated textures are read back from the cache
 too. The log names each step's milliseconds; `tools/load-time.sh city-plan --village 600`
