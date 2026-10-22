@@ -357,6 +357,8 @@ pub fn houses(
         row[k] = r;
         r
     }
+    // The touching neighbours: house `i`'s end against house `j`'s start.
+    let mut touching: Vec<(usize, usize)> = Vec::new();
     for i in 0..lots.len() {
         for j in 0..lots.len() {
             if i != j
@@ -368,6 +370,7 @@ pub fn houses(
             {
                 let (ri, rj) = (root(&mut row, i), root(&mut row, j));
                 row[ri] = rj;
+                touching.push((i, j));
             }
         }
     }
@@ -464,6 +467,54 @@ pub fn houses(
         if reach[k] > 0.0 && deeper <= MAX_DEPTH + 0.05 && least >= wanted - 0.05 {
             d.plan.deepen(deeper);
             prints[k] = footprint_of(lot, d);
+        }
+    }
+    // One ridge along a row (the owner, 2026-10-16: "they would probably share their roof
+    // structures"; #308): of two touching houses with as many storeys more than 0.3 m apart in
+    // depth, the deeper is laid again at the other's depth where its rooms keep their storeys
+    // and its stair's depth. A lot keeping one shallower, or the backs shrinking one, stepped
+    // their ridges. Repeated while it changes something, once a house at most.
+    for _ in 0..lots.len() {
+        let mut changed = false;
+        for &(i, j) in &touching {
+            let (Some(a), Some(b)) = (&drafts[i], &drafts[j]) else {
+                continue;
+            };
+            if a.plan.storeys.len() != b.plan.storeys.len()
+                || (a.plan.depth - b.plan.depth).abs() <= 0.3
+            {
+                continue;
+            }
+            let (deep, depth) = if a.plan.depth > b.plan.depth {
+                (i, b.plan.depth)
+            } else {
+                (j, a.plan.depth)
+            };
+            let Some(d) = drafts[deep].as_mut() else {
+                continue;
+            };
+            let storeys = d.plan.storeys.len();
+            if storeys > 1 && depth < stair - 1e-6 {
+                continue;
+            }
+            let mut plan = rooms::plan(
+                &rooms::programme(d.people, d.means),
+                d.s1 - d.s0,
+                depth.min(plan_depth(ty)),
+            );
+            if storeys > 1 {
+                plan.deepen(stair.min(depth));
+            }
+            plan.deepen(depth);
+            if plan.storeys.len() != storeys || (plan.depth - depth).abs() > 1e-6 {
+                continue;
+            }
+            d.plan = plan;
+            prints[deep] = footprint_of(&lots[deep], d);
+            changed = true;
+        }
+        if !changed {
+            break;
         }
     }
     // Walls closer than a metre brought together (`snap`), those a degree or two apart swung

@@ -950,11 +950,10 @@ mod tests {
         ];
         // The other sizes' own, where they had more when they came in (#308: at 700 to 900 m,
         // 2026-10-22, after the stairs, the rows' corners, the backs, the walls' corners and the
-        // hedges' sides: 77 down to 13).
-        let since: [(f64, Kind, usize); 9] = [
+        // hedges' sides and the rows' ridges: 77 down to 11).
+        let since: [(f64, Kind, usize); 8] = [
             (700.0, Kind::UnlitRoom, 2),
             (700.0, Kind::FreeWallEnd, 1),
-            (700.0, Kind::RidgeStep, 2),
             (800.0, Kind::RidgeStep, 2),
             (800.0, Kind::BlankStreetWall, 1),
             (900.0, Kind::UnlitRoom, 1),
