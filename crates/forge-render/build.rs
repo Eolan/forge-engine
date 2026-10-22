@@ -17,6 +17,7 @@ const IMPOSTOR_BAKE: &[&str] = &[
     "crates/forge-render/src/textures.rs",
     "shaders/bindless.slang",
     "shaders/impostor.slang",
+    "shaders/impostor_compress.slang",
     "shaders/impostor_layout.slang",
     "shaders/meshlet.slang",
     "shaders/meshlet_bake.slang",

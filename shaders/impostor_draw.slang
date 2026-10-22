@@ -32,8 +32,8 @@ struct Impostor
 struct Kind
 {
     uint albedo;      // sampled atlases, premultiplied by coverage, with mips: the base colour
-    uint normal;      // and its coverage; the normal (× 0.5 + 0.5) and the depth in radii; the
-    uint occlusion;   // share of the sky the point sees past the plant itself
+    uint normal;      // and its coverage; the normal (× 0.5 + 0.5); the share of the sky the
+    uint occlusion;   // point sees past the plant itself and the depth in radii (× 0.5 + 0.5)
     float fade_px;    // its shells' fade (`set_fade`): the size on screen and the band
     float fade_band;
     float radius;     // the sphere its frames were baked around
@@ -232,10 +232,10 @@ void blend_rest(Kind kind, Views w, float coverage[3], out float3 normal, out fl
     open = 0.0;
     for (uint k = 0; k < 3; k++)
     {
-        float4 n = sample_image_grad(kind.normal, SAMPLER_LINEAR_CLAMP, w.atlas[k], w.dx[k], w.dy[k]);
-        normal += w.weight[k] * n.rgb;
-        open += w.weight[k] * sample_image_grad(kind.occlusion, SAMPLER_LINEAR_CLAMP, w.atlas[k], w.dx[k], w.dy[k]).r;
-        point += w.weight[k] * (w.plane[k] * coverage[k] + w.direction[k] * (n.a * kind.radius));
+        normal += w.weight[k] * sample_image_grad(kind.normal, SAMPLER_LINEAR_CLAMP, w.atlas[k], w.dx[k], w.dy[k]).rgb;
+        float2 o = sample_image_grad(kind.occlusion, SAMPLER_LINEAR_CLAMP, w.atlas[k], w.dx[k], w.dy[k]).rg;
+        open += w.weight[k] * o.x;
+        point += w.weight[k] * (w.plane[k] * coverage[k] + w.direction[k] * ((o.y * 2.0 - 1.0) * kind.radius));
     }
 }
 

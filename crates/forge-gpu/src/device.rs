@@ -267,6 +267,8 @@ impl Device {
             // The meshlet fallback's indirect draws carry the visible-list slot in firstInstance.
             .draw_indirect_first_instance(true)
             .fill_mode_non_solid(true)
+            // Block-compressed images (D-047): the impostors' atlases, BC7 and BC4 (#302).
+            .texture_compression_bc(true)
             .shader_storage_image_write_without_format(best.features.storage_write_without_format)
             .fragment_stores_and_atomics(best.features.int64_atomics)
             // No geometry shaders are ever used (D-003), but a fragment shader that reads
@@ -690,6 +692,7 @@ impl Device {
             ),
             ("fillModeNonSolid", on(base.fill_mode_non_solid)),
             ("geometryShader", on(base.geometry_shader)),
+            ("textureCompressionBC", on(base.texture_compression_bc)),
             ("shaderDrawParameters", on(v11.shader_draw_parameters)),
             ("timelineSemaphore", on(v12.timeline_semaphore)),
             ("bufferDeviceAddress", on(v12.buffer_device_address)),

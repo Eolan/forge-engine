@@ -113,7 +113,8 @@ static const float OCCLUSION_LEVEL = 1.0;
 // every frame read as a shadow map (`frame_occlusion`) from the point the texel's own frame saw,
 // weighted by the cosine with its leaves' average normal (a little towards even, where they
 // spread). The resolve dims the sky's light and its reflection by the screen's occlusion; far off
-// a crown's own shade has to come from here.
+// a crown's own shade has to come from here. Its second channel carries the texel's premultiplied
+// depth over from the normals' alpha: compressed together (BC5), the normals then fit alone.
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void impostor_occlusion_main(uint3 id : SV_DispatchThreadID)
@@ -145,5 +146,5 @@ void impostor_occlusion_main(uint3 id : SV_DispatchThreadID)
         seen += w * (1.0 - frame_occlusion(occlusion_push.albedo, occlusion_push.normal, other, p, OCCLUSION_BIAS, OCCLUSION_LEVEL));
         total += w;
     }
-    target[texel] = float2(seen / total * a.a, 0.0);
+    target[texel] = float2(seen / total * a.a, n4.a);
 }

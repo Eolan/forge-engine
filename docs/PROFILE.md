@@ -895,10 +895,12 @@ From the air the far woods' shells give way to quads; on the street few plants a
 The quad stands at the front of the plant's sphere and the pass writes no depth nearer than it
 (`SV_DepthLessEqual`), so the depth test rejects the hidden far trees' pixels before they are
 shaded: on the street the pass went 0.14 → 0.06 ms (a centred quad writing its depth turned the
-early test off). With nothing crossed it costs 0.03 ms. The bake (`impostor/downsample`,
-`impostor/mips`, `impostor/occlusion`, `impostor/read back`: the village's 27 kinds in 1.4 s)
-runs before the first counted frame, outside the run's profile; found in the derived cache, the
-27 are uploaded with their mips (`impostor/upload`) in 0.28 s.
+early test off). With nothing crossed it costs 0.03 ms. Block-compressed (BC7 and BC5, D-047),
+the atlases cost the pass less to read: 0.21 → 0.19 ms from the air, 0.07 → 0.05 on the main
+street, the frames unchanged. The bake (`impostor/downsample`, `impostor/mips`,
+`impostor/occlusion`, `impostor/compress`, `impostor/upload`, `impostor/read back`: the
+village's 27 kinds in 1.4 s) runs before the first counted frame, outside the run's profile;
+found in the derived cache, the 27 kinds' blocks are copied in (`impostor/upload`) in 0.33 s.
 
 **Grass near the camera** (#300, D-075, 2026-10-22; city-blocks' `--grass`, 50 m, first
 20 m): the village at 1600 × 900, DLAA, the green's view (`12.9,1.7,-226.0,176.1,-5`)

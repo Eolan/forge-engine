@@ -583,36 +583,43 @@ impl<'a> Commands<'a> {
         }
     }
 
-    /// Copies `buffer`, tightly packed, into the first mip of a whole 2-D colour image (in
-    /// `TRANSFER_DST_OPTIMAL` layout): an upload, the inverse of [`Self::copy_image_to_buffer`].
-    /// The buffer must hold `width × height` texels of the image's format.
-    pub fn copy_buffer_to_image(
+    /// Copies parts of `buffer` into levels of a 2-D colour image (in `TRANSFER_DST_OPTIMAL`
+    /// layout), one region each: its offset in the buffer, the level and the level's extent in
+    /// texels. Each part is tightly packed: texels, or a block-compressed image's blocks. An
+    /// upload, the inverse of [`Self::copy_image_to_buffer`].
+    pub fn copy_buffer_to_image_levels(
         &self,
         buffer: &crate::Buffer,
         image: vk::Image,
-        extent: vk::Extent2D,
+        levels: &[(u64, u32, vk::Extent2D)],
     ) {
-        let region = vk::BufferImageCopy::default()
-            .image_subresource(vk::ImageSubresourceLayers {
-                aspect_mask: vk::ImageAspectFlags::COLOR,
-                mip_level: 0,
-                base_array_layer: 0,
-                layer_count: 1,
+        let regions: Vec<vk::BufferImageCopy> = levels
+            .iter()
+            .map(|&(offset, level, extent)| {
+                vk::BufferImageCopy::default()
+                    .buffer_offset(offset)
+                    .image_subresource(vk::ImageSubresourceLayers {
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        mip_level: level,
+                        base_array_layer: 0,
+                        layer_count: 1,
+                    })
+                    .image_extent(vk::Extent3D {
+                        width: extent.width,
+                        height: extent.height,
+                        depth: 1,
+                    })
             })
-            .image_extent(vk::Extent3D {
-                width: extent.width,
-                height: extent.height,
-                depth: 1,
-            });
-        // SAFETY: recording state; the image is in the transfer-destination layout and the
-        // buffer holds the texels (documented precondition).
+            .collect();
+        // SAFETY: recording state; the image is in the transfer-destination layout and every
+        // region lies inside the buffer and the image (documented precondition).
         unsafe {
             self.device.raw().cmd_copy_buffer_to_image(
                 self.cb,
                 buffer.raw(),
                 image,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                &[region],
+                &regions,
             );
         }
     }

@@ -2704,6 +2704,11 @@ fixed fully, and its foliage and chains are glTF `MASK`.
 - **Mip coverage:** a cut-out's mips average its alpha, so it thins with distance.
   Coverage-preserving mips wait until a model shows it.
 
+**Block compression, first used (#302, 2026-10-22):** by the impostors' atlases (D-075 step 4),
+encoded on the GPU at their bake by an encoder of our own (`shaders/impostor_compress.slang`:
+BC7 mode 6 and BC5), so no encoder crate came in. `textureCompressionBC` is now a required
+device feature (every target GPU has it). The models' and materials' textures are still RGBA8.
+
 ## D-048 — Reference models from outside: the Khronos glTF sample assets ✅ (proposed and accepted 2026-10-04)
 
 Our own models are simple: the lab's vehicles and creatures are built from a few shapes in
@@ -6890,11 +6895,12 @@ DIR` writes the atlases as images (`forge_render::impostor`, `shaders/impostor.s
   (the age's last seed; the village's 27), one after another, a frame of a bake each app frame.
   Meanwhile the app counts no frame (`Context::preparing`: captures, frame limits and the run's
   clock wait, the screen black), so a capture is the same whatever the bake took: 1.4 s for the
-  27. Kept in D-053's derived cache (`impostor-atlases`, the first levels in half floats, 46 MB
-  for the 27 compressed), keyed by the cooked mesh, its rows, its textures' inputs and the code
-  that bakes (`crates/forge-render/build.rs`: the bake, the resolve, the materials, the
-  textures): a start that finds a kind uploads it and makes its mips again in one frame, the 27
-  in 0.28 s, the image the same to the pixel; the fresh bakes are stored on a thread of their own.
+  27. Kept in D-053's derived cache (`impostor-blocks`, every level's blocks as drawn, 12 MB on
+  disk for the 27), keyed by the cooked mesh, its rows, its textures' inputs and the code that
+  bakes (`crates/forge-render/build.rs`: the bake and its encoder, the resolve, the materials,
+  the textures): a start that finds a kind copies its blocks into its atlases in one frame, the
+  27 in 0.33 s, the image the same to the pixel; the fresh bakes are stored on a thread of their
+  own.
   One renderer for all, its resolve compiled from `meshlet_bake.slang` (`CullFlags::BAKE_ALBEDO`,
   `BAKE_NORMAL`: `sun_light` returns them, the leaves' light through adds nothing; in the frame's
   own entries a branch never taken showed #349's unshaded tiles). Each frame drawn at full detail
@@ -6909,9 +6915,23 @@ DIR` writes the atlases as images (`forge_render::impostor`, `shaders/impostor.s
 - **Memory:** frames of 64 px, not question 7's 128 for the base colour. An impostor begins under
   50 px across (its fade's size and band), so a frame still gives each pixel more than a texel,
   and a kind for each age (its own proportions: the oldest stretched to a young plant's crown read
-  squashed, the hedges' shrubs flat) costs less than one a species at 128: 6.7 MB a kind in half
-  floats (the base colour, the normals and depth, the occlusion, with mips), 180 MB for the
-  village, until D-047's compression.
+  squashed, the hedges' shrubs flat) costs less than one a species at 128. Baked in half floats
+  (6.7 MB a kind with mips, 180 MB for the village as first built), then block-compressed on
+  the GPU (D-047; `shaders/impostor_compress.slang`): the base colour in BC7 (its colour in
+  sRGB), the normals in BC7, the occlusion and the depth in BC5, a BC4 block each. 1.0 MB a kind,
+  27 MB for the village; the half floats are one set shared by the bakes and freed after.
+  - **The encoder:** BC7's mode 6 alone (one subset, 4-bit indices), its endpoints at the
+    block's extremes along its principal axis, then refitted by least squares (0.1–0.3 dB more);
+    BC4 from each block's least and greatest value. First the depth shared the normals' alpha
+    in one BC7 block (ꟻLIP 0.009 in the air view); moved beside the occlusion, the normals fit
+    their colour alone and the depth gains 14 dB.
+  - **Against the half floats** (`imgdiff`): ꟻLIP 0.007 from the air (2 % of the pixels, the
+    far crowns' dithered edges) and 0.002 in the street views; drawn ten times their size
+    (`--tree-ladder 40 --impostors 400`) 0.006–0.007, the crowns' shading a little grainier.
+    The atlases' PSNR over the 27: base colour 40 dB (the worst 36), depth 48 (42), occlusion
+    36 (34); the normals about 30 by the review images, whose straight values carry the
+    coverage's error at the crowns' edges. The draw got cheaper: 0.19 ms from the air (0.21),
+    0.05 in the street (0.07).
 - **The crossing:** the shells fade in turn (`set_fade`, the ladder's last step), and an
   instance's impostor draws where their noise leaves their pixels: the same crossing measured the
   same way (the instance's culling sphere and id, the shells' size and band, and not before the

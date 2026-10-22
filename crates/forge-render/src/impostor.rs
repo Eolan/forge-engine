@@ -11,8 +11,9 @@
 //!   jumps from one frame to the next.
 //! - **The bake** ([`ImpostorBaker`]), before the run's first counted frame: each frame drawn by
 //!   the meshlet renderer unlit, its base colour and its normals with their depth; then the
-//!   occlusion, every frame read as a shadow map from each texel's point. Kept in the derived
-//!   cache (D-053): a start that finds a kind there uploads it instead.
+//!   occlusion, every frame read as a shadow map from each texel's point; then every level
+//!   block-compressed (BC7 and BC5, `shaders/impostor_compress.slang`). The blocks are kept in
+//!   the derived cache (D-053): a start that finds a kind there copies them in instead.
 //! - **The draw** ([`Impostors`]), after the resolve: where an instance's meshes fade, its
 //!   impostor takes the pixels they leave, its depth where the bake saw the leaves, lit as the
 //!   resolve lights a rough row (`shaders/impostor_draw.slang`).
@@ -62,14 +63,41 @@ const CAMERA_DISTANCE: f32 = 1000.0;
 const ATLASES: usize = 3;
 /// The atlases drawn frame by frame; the occlusion is made from them.
 const RENDERED: u32 = 2;
-/// Each atlas's format.
-const ATLAS_FORMATS: [vk::Format; ATLASES] = [
+/// Each atlas's format while baked: half floats.
+const WORK_FORMATS: [vk::Format; ATLASES] = [
     vk::Format::R16G16B16A16_SFLOAT,
     vk::Format::R16G16B16A16_SFLOAT,
     vk::Format::R16G16_SFLOAT,
 ];
-/// An atlas's mips: down to frames of a texel.
+/// Each atlas's format as drawn, block-compressed (D-047) once baked: the base colour in BC7,
+/// its colour in sRGB; the normals in BC7; the occlusion and the depth in BC5, a BC4 block each
+/// (`shaders/impostor_compress.slang`).
+const ATLAS_FORMATS: [vk::Format; ATLASES] = [
+    vk::Format::BC7_SRGB_BLOCK,
+    vk::Format::BC7_UNORM_BLOCK,
+    vk::Format::BC5_UNORM_BLOCK,
+];
+/// Each atlas's bytes a block of 4 × 4 texels.
+const BLOCK_BYTES: [u64; ATLASES] = [16, 16, 16];
+/// An atlas's mips: down to frames of a texel (the last two levels' blocks span several frames,
+/// the atlas still 8 texels a side).
 pub const ATLAS_MIPS: u32 = FRAME_TEXELS.ilog2() + 1;
+
+/// Where level `level` of atlas `atlas` lies among a kind's blocks, and its bytes: the atlases
+/// one after another, each level after the finer one.
+fn blocks_at(atlas: usize, level: u32) -> (u64, u64) {
+    let bytes = |a: usize, l: u32| u64::from((ATLAS_TEXELS >> l) / 4).pow(2) * BLOCK_BYTES[a];
+    let atlas_bytes = |a: usize| (0..ATLAS_MIPS).map(|l| bytes(a, l)).sum::<u64>();
+    let start =
+        (0..atlas).map(atlas_bytes).sum::<u64>() + (0..level).map(|l| bytes(atlas, l)).sum::<u64>();
+    (start, bytes(atlas, level))
+}
+
+/// A kind's blocks' bytes: every level of its atlases.
+fn kind_bytes() -> u64 {
+    let (start, bytes) = blocks_at(ATLASES - 1, ATLAS_MIPS - 1);
+    start + bytes
+}
 
 /// The unit direction, from the impostor's middle towards the eye, that the point `uv` of the
 /// layout stands for (0 to 1 both ways).
@@ -146,8 +174,8 @@ pub struct BakeSource {
 
 include!(concat!(env!("OUT_DIR"), "/code_digests.rs"));
 
-/// The derived cache's product name of a kind's atlases (D-053).
-const CACHED: &str = "impostor-atlases";
+/// The derived cache's product name of a kind's atlases (D-053): their blocks.
+const CACHED: &str = "impostor-blocks";
 
 /// The derived cache's key of `source`'s atlases: its cooked mesh, its rows, the rows it is
 /// drawn with and its textures' inputs, and the bake's code.
@@ -170,57 +198,132 @@ fn bake_key(source: &BakeSource) -> Key {
         .key(CODE_IMPOSTOR_BAKE)
 }
 
-/// A kind's atlases as the bake leaves them, half floats, the first level of each: what the
-/// derived cache keeps (its mips are made again on the GPU from it).
+/// A kind's atlases as drawn: every level's blocks ([`blocks_at`]), read back after a bake, as
+/// the derived cache keeps them.
 #[derive(Clone)]
-pub struct AtlasTexels {
-    /// The base colour's, RGBA ([`BakedAtlases::albedo`]).
-    pub albedo: Vec<u16>,
-    /// The normals' and depth's, RGBA.
-    pub normal: Vec<u16>,
-    /// The occlusion's, RG.
-    pub occlusion: Vec<u16>,
+struct AtlasBlocks {
+    blocks: Vec<u32>,
 }
 
-forge_core::stored!(AtlasTexels {
-    albedo,
-    normal,
-    occlusion
-});
+forge_core::stored!(AtlasBlocks { blocks });
 
-impl AtlasTexels {
-    /// Each atlas's texels, in [`ATLAS_FORMATS`]' order.
-    fn each(&self) -> [&[u16]; ATLASES] {
-        [&self.albedo, &self.normal, &self.occlusion]
+impl AtlasBlocks {
+    /// Atlas `atlas`'s first level: its blocks, row by row.
+    fn first_level(&self, atlas: usize) -> &[u32] {
+        let (start, bytes) = blocks_at(atlas, 0);
+        &self.blocks[(start / 4) as usize..((start + bytes) / 4) as usize]
     }
 }
 
-impl From<&AtlasTexels> for BakedAtlases {
-    fn from(texels: &AtlasTexels) -> Self {
-        let rgba = |halves: &[u16]| {
-            halves
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|t| t.map(half_to_f32))
-                .collect::<Vec<_>>()
+/// BC7's weights of the second endpoint with 4-bit indices, of 64.
+const BC7_WEIGHTS: [u32; 16] = [0, 4, 9, 13, 17, 21, 26, 30, 34, 38, 43, 47, 51, 55, 60, 64];
+
+/// `count` bits of `block` (its words least significant first) from bit `at`.
+fn bits(block: &[u32], at: u32, count: u32) -> u32 {
+    (0..count).fold(0, |value, i| {
+        let bit = at + i;
+        value | ((block[(bit / 32) as usize] >> (bit % 32)) & 1) << i
+    })
+}
+
+/// A BC7 block's texels, row by row, 0 to 255 a channel: mode 6, the one the bake writes
+/// (`shaders/impostor_compress.slang`); another mode comes back black.
+fn decode_bc7(block: &[u32]) -> [[u8; 4]; 16] {
+    let mut texels = [[0; 4]; 16];
+    if block[0] & 0x7f != 0x40 {
+        return texels;
+    }
+    // Seven bits a channel, red's two endpoints first, then each endpoint's own low bit.
+    let endpoint = |k: u32| -> [u32; 4] {
+        std::array::from_fn(|c| {
+            bits(block, 7 + 14 * c as u32 + 7 * k, 7) << 1 | bits(block, 63 + k, 1)
+        })
+    };
+    let (e0, e1) = (endpoint(0), endpoint(1));
+    // The first texel's index has three bits, its top one clear.
+    let mut at = 65;
+    for (i, texel) in texels.iter_mut().enumerate() {
+        let count = if i == 0 { 3 } else { 4 };
+        let w = BC7_WEIGHTS[bits(block, at, count) as usize];
+        at += count;
+        *texel = std::array::from_fn(|c| (((64 - w) * e0[c] + w * e1[c] + 32) >> 6) as u8);
+    }
+    texels
+}
+
+/// A BC4 block's texels, row by row, 0 to 1.
+fn decode_bc4(block: &[u32]) -> [f32; 16] {
+    let (r0, r1) = (block[0] & 0xff, (block[0] >> 8) & 0xff);
+    let (a, b) = (r0 as f32, r1 as f32);
+    std::array::from_fn(|i| {
+        let k = bits(block, 16 + 3 * i as u32, 3);
+        let value = match k {
+            0 => a,
+            1 => b,
+            k if r0 > r1 => ((8 - k) as f32 * a + (k - 1) as f32 * b) / 7.0,
+            k if k < 6 => ((6 - k) as f32 * a + (k - 1) as f32 * b) / 5.0,
+            6 => 0.0,
+            _ => 255.0,
         };
+        value / 255.0
+    })
+}
+
+/// Each texel of an atlas's first level from its blocks, row by row, by `decode` (a block's
+/// texels from its words) and `texel` (one of them as kept).
+fn decode_level<B: Copy, T: Copy + Default>(
+    blocks: &[u32],
+    words: usize,
+    decode: impl Fn(&[u32]) -> [B; 16],
+    texel: impl Fn(B) -> T,
+) -> Vec<T> {
+    let side = ATLAS_TEXELS as usize;
+    let row = side / 4;
+    let mut texels = vec![T::default(); side * side];
+    for (b, block) in blocks.chunks_exact(words).enumerate() {
+        for (i, &t) in decode(block).iter().enumerate() {
+            texels[(b / row * 4 + i / 4) * side + b % row * 4 + i % 4] = texel(t);
+        }
+    }
+    texels
+}
+
+impl From<&AtlasBlocks> for BakedAtlases {
+    fn from(found: &AtlasBlocks) -> Self {
+        let linear = |c: u8| {
+            let c = f32::from(c) / 255.0;
+            if c <= 0.040_45 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        let unorm = |c: u8| f32::from(c) / 255.0;
+        // BC5: the occlusion's BC4 block, then the depth's.
+        let bc5 = |block: &[u32]| {
+            let (occlusion, depth) = (decode_bc4(&block[..2]), decode_bc4(&block[2..]));
+            std::array::from_fn::<_, 16, _>(|i| (occlusion[i], depth[i] * 2.0 - 1.0))
+        };
+        let rest = decode_level(found.first_level(2), 4, bc5, |t| t);
         Self {
-            albedo: rgba(&texels.albedo),
-            normal: rgba(&texels.normal),
-            occlusion: texels
-                .occlusion
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|t| half_to_f32(t[0]))
-                .collect(),
+            albedo: decode_level(found.first_level(0), 4, decode_bc7, |t| {
+                [linear(t[0]), linear(t[1]), linear(t[2]), unorm(t[3])]
+            }),
+            normal: decode_level(found.first_level(1), 4, decode_bc7, |t| {
+                [unorm(t[0]), unorm(t[1]), unorm(t[2]), 0.0]
+            })
+            .into_iter()
+            .zip(&rest)
+            .map(|(n, &(_, depth))| [n[0], n[1], n[2], depth])
+            .collect(),
+            occlusion: rest.iter().map(|&(occlusion, _)| occlusion).collect(),
         }
     }
 }
 
-/// An impostor's atlases, read back: [`ATLAS_TEXELS`]² texels each, rows top down, frame
-/// (column, row) at its [`FRAME_TEXELS`]² square.
+/// An impostor's atlases, their first level as drawn (decoded from their blocks):
+/// [`ATLAS_TEXELS`]² texels each, rows top down, frame (column, row) at its [`FRAME_TEXELS`]²
+/// square.
 pub struct BakedAtlases {
     /// The base colour (linear) premultiplied by the share of the texel the mesh covers, and
     /// that share.
@@ -256,8 +359,23 @@ struct OcclusionPush {
     pad: u32,
 }
 
-/// A storage, sampled and copied half-float image of `format`, `side` texels square with `mips`
-/// levels: a bake's render or one of its atlases.
+/// The compression's push constants (`Push` in `shaders/impostor_compress.slang`).
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct CompressPush {
+    source: u32,
+    blocks_x: u32,
+    blocks_y: u32,
+    flags: u32,
+    blocks: u64,
+}
+
+/// [`CompressPush::flags`]: the colour stored in sRGB; the alpha left out (stored as 1).
+const COLOR_SRGB: u32 = 1;
+const OPAQUE: u32 = 2;
+
+/// A storage and sampled half-float image of `format`, `side` texels square with `mips` levels:
+/// a bake's render or one of its atlases while baked.
 fn bake_image(
     device: &Arc<Device>,
     name: &'static str,
@@ -271,11 +389,7 @@ fn bake_image(
             width: side,
             height: side,
             format,
-            // Copied out after a bake, and in when found in the derived cache.
-            usage: vk::ImageUsageFlags::STORAGE
-                | vk::ImageUsageFlags::SAMPLED
-                | vk::ImageUsageFlags::TRANSFER_SRC
-                | vk::ImageUsageFlags::TRANSFER_DST,
+            usage: vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED,
             aspect: vk::ImageAspectFlags::COLOR,
             mip_levels: mips,
             name,
@@ -315,14 +429,18 @@ fn declare_mips<'f>(graph: &mut FrameGraph<'f>, image: ImageHandle, pipeline: &'
 }
 
 /// What every bake shares: the renderer (its resolve compiled from `meshlet_bake.slang` once),
-/// the render a frame is drawn into, the downsample, the mips (RGBA and RG) and the occlusion.
+/// the render a frame is drawn into, the atlases while baked (one bake at a time), the
+/// downsample, the mips (RGBA and RG), the occlusion and the compressions (BC7 and BC5).
 struct BakeTools {
     renderer: MeshletRenderer,
     render: GraphImage,
+    work: [GraphImage; ATLASES],
     downsample: Pipeline,
     mips: Pipeline,
     mips_rg: Pipeline,
     occlusion: Pipeline,
+    bc7: Pipeline,
+    bc5: Pipeline,
 }
 
 /// The bakes of a scene's impostors (D-075 step 4), one after another, one of their frames
@@ -350,9 +468,9 @@ impl ImpostorBaker {
             width: RENDER_TEXELS,
             height: RENDER_TEXELS,
         };
-        let compute = |entry: &str, name: &str, push: usize| -> Result<Pipeline> {
+        let compute_in = |file: &str, entry: &str, name: &str, push: usize| -> Result<Pipeline> {
             let module = device.create_shader_module(
-                &shaders.compile("impostor.slang", entry, ShaderStage::Compute)?,
+                &shaders.compile(file, entry, ShaderStage::Compute)?,
                 entry,
             )?;
             let pipeline = device.create_compute_pipeline(&ComputePipelineDesc {
@@ -363,7 +481,12 @@ impl ImpostorBaker {
             device.destroy_shader_module(module);
             pipeline
         };
+        let compute =
+            |entry: &str, name: &str, push: usize| compute_in("impostor.slang", entry, name, push);
         let push = std::mem::size_of::<DownsamplePush>();
+        let work = |index: usize, name: &'static str| {
+            bake_image(device, name, ATLAS_TEXELS, ATLAS_MIPS, WORK_FORMATS[index])
+        };
         sources.reverse();
         let queue = sources
             .into_iter()
@@ -375,13 +498,12 @@ impl ImpostorBaker {
         Ok(Self {
             tools: BakeTools {
                 renderer: MeshletRenderer::for_bake(device, shaders, extent)?,
-                render: bake_image(
-                    device,
-                    "impostor render",
-                    RENDER_TEXELS,
-                    1,
-                    ATLAS_FORMATS[0],
-                )?,
+                render: bake_image(device, "impostor render", RENDER_TEXELS, 1, WORK_FORMATS[0])?,
+                work: [
+                    work(0, "impostor albedo (baked)")?,
+                    work(1, "impostor normal (baked)")?,
+                    work(2, "impostor occlusion (baked)")?,
+                ],
                 downsample: compute("impostor_downsample_main", "impostor downsample", push)?,
                 mips: compute("impostor_mip_main", "impostor mips", push)?,
                 mips_rg: compute("impostor_mip_rg_main", "impostor mips (rg)", push)?,
@@ -389,6 +511,18 @@ impl ImpostorBaker {
                     "impostor_occlusion_main",
                     "impostor occlusion",
                     std::mem::size_of::<OcclusionPush>(),
+                )?,
+                bc7: compute_in(
+                    "impostor_compress.slang",
+                    "impostor_bc7_main",
+                    "impostor bc7",
+                    std::mem::size_of::<CompressPush>(),
+                )?,
+                bc5: compute_in(
+                    "impostor_compress.slang",
+                    "impostor_bc5_main",
+                    "impostor bc5",
+                    std::mem::size_of::<CompressPush>(),
                 )?,
             },
             queue,
@@ -424,14 +558,14 @@ impl ImpostorBaker {
         };
         if let Some((name, bake)) = &finished
             && !bake.from_cache
-            && let Some(texels) = bake.texels.borrow().clone()
+            && let Some(blocks) = bake.blocks_read.borrow().clone()
         {
             let (cache, key, name) = (self.cache.clone(), bake.key, name.clone());
             let stored = std::thread::Builder::new()
                 .name("impostor cache".into())
                 .spawn(move || {
                     let start = std::time::Instant::now();
-                    cache.put(CACHED, key, &texels);
+                    cache.put(CACHED, key, &blocks);
                     tracing::debug!(name, ms = start.elapsed().as_millis(), "impostor cached");
                 });
             if let Err(error) = stored {
@@ -441,7 +575,7 @@ impl ImpostorBaker {
         if self.current.is_none()
             && let Some((name, source, key)) = self.queue.pop()
         {
-            let cached = self.cache.get::<AtlasTexels>(CACHED, key);
+            let cached = self.cache.get::<AtlasBlocks>(CACHED, key);
             if cached.is_some() {
                 self.found += 1;
             } else {
@@ -466,9 +600,11 @@ impl ImpostorBaker {
 /// [`CAMERA_DISTANCE`] radii off, its sphere filling the picture, at full detail; the resolve
 /// writes its base colour or its normal unlit ([`CullFlags::BAKE_ALBEDO`],
 /// [`CullFlags::BAKE_NORMAL`]), and the downsample takes the render into the frame's square of
-/// the atlas, the normals with the render's depth. Then the two atlases' mips are made, the
-/// occlusion from them and its mips, and the three are read back. Found in the derived cache,
-/// its texels are uploaded instead and their mips made, in one frame.
+/// the atlas while baked ([`BakeTools`]' half floats), the normals with the render's depth.
+/// Then the two atlases' mips are made, the occlusion from them and its mips, every level of
+/// the three compressed into blocks (`shaders/impostor_compress.slang`), and the blocks copied
+/// into the atlases drawn and read back. Found in the derived cache, its blocks are copied in
+/// instead, in one frame.
 pub struct ImpostorBake {
     /// The one mesh's scene; none when found in the cache.
     scene: Option<MeshletScene>,
@@ -477,19 +613,20 @@ pub struct ImpostorBake {
     /// Its leaves' row's sheen and two colours (`GpuMaterial::sheen`, `GpuMaterial::tones`).
     sheen: ([f32; 3], f32, f32, f32),
     tones: [[f32; 3]; 2],
+    /// The atlases drawn: block-compressed ([`ATLAS_FORMATS`]), every level.
     atlases: [GraphImage; ATLASES],
-    readback: [GraphBuffer; ATLASES],
-    /// The texels to upload, when found in the cache.
-    upload: Option<[GraphBuffer; ATLASES]>,
+    /// Their blocks ([`blocks_at`]): written by the compression and read back, or found in the
+    /// cache and copied in.
+    blocks: GraphBuffer,
     /// Its derived cache's key, and whether it was found there.
     key: Key,
     from_cache: bool,
     /// The next frame to bake, the base colour's frames first.
     next: Cell<u32>,
-    /// The frame slot that copied the atlases out (or in), done once it comes round again.
+    /// The frame slot that copied the blocks in (and out), done once it comes round again.
     copied: Cell<Option<usize>>,
-    /// The atlases' texels, once read back or as found in the cache.
-    texels: RefCell<Option<AtlasTexels>>,
+    /// The blocks, once read back or as found in the cache.
+    blocks_read: RefCell<Option<AtlasBlocks>>,
     /// Whether the atlases are done.
     read: Cell<bool>,
 }
@@ -499,7 +636,7 @@ impl ImpostorBake {
         device: &Arc<Device>,
         source: &BakeSource,
         key: Key,
-        cached: Option<AtlasTexels>,
+        cached: Option<AtlasBlocks>,
     ) -> Result<Self> {
         let scene = if cached.is_some() {
             None
@@ -514,34 +651,38 @@ impl ImpostorBake {
             builder.add_instance_with_material(mesh, Mat4::IDENTITY, source.material);
             Some(builder.build(device)?)
         };
-        let upload = match &cached {
-            Some(texels) => {
-                let buffers = texels.each().map(|halves| -> Result<GraphBuffer> {
-                    let buffer = device.create_buffer(BufferDesc {
-                        size: std::mem::size_of_val(halves) as u64,
-                        usage: vk::BufferUsageFlags::TRANSFER_SRC,
-                        location: MemoryLocation::CpuToGpu,
-                        category: MemoryCategory::Transfer,
-                        name: "impostor upload",
-                    })?;
-                    buffer.write(0, halves);
-                    Ok(GraphBuffer::new(buffer))
-                });
-                let [a, b, c] = buffers;
-                Some([a?, b?, c?])
-            }
-            None => None,
-        };
-        let readback = |name: &'static str, texel_bytes: u64| {
-            device
-                .create_buffer(BufferDesc {
-                    size: u64::from(ATLAS_TEXELS) * u64::from(ATLAS_TEXELS) * texel_bytes,
-                    usage: vk::BufferUsageFlags::TRANSFER_DST,
-                    location: MemoryLocation::GpuToCpu,
-                    category: MemoryCategory::Transfer,
+        // Written on the GPU and read back after a bake; written here and copied in when found.
+        let blocks = device.create_buffer(BufferDesc {
+            size: kind_bytes(),
+            usage: if cached.is_some() {
+                vk::BufferUsageFlags::TRANSFER_SRC
+            } else {
+                vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC
+            },
+            location: if cached.is_some() {
+                MemoryLocation::CpuToGpu
+            } else {
+                MemoryLocation::GpuToCpu
+            },
+            category: MemoryCategory::Transfer,
+            name: "impostor blocks",
+        })?;
+        if let Some(found) = &cached {
+            blocks.write(0, &found.blocks);
+        }
+        let atlas = |index: usize, name: &'static str| {
+            GraphImage::new(
+                device,
+                ImageDesc {
+                    width: ATLAS_TEXELS,
+                    height: ATLAS_TEXELS,
+                    format: ATLAS_FORMATS[index],
+                    usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
+                    aspect: vk::ImageAspectFlags::COLOR,
+                    mip_levels: ATLAS_MIPS,
                     name,
-                })
-                .map(GraphBuffer::new)
+                },
+            )
         };
         Ok(Self {
             scene,
@@ -550,34 +691,11 @@ impl ImpostorBake {
             sheen: source.rows[source.leaves.0 as usize].sheen(),
             tones: source.rows[source.leaves.0 as usize].tones(),
             atlases: [
-                bake_image(
-                    device,
-                    "impostor albedo",
-                    ATLAS_TEXELS,
-                    ATLAS_MIPS,
-                    ATLAS_FORMATS[0],
-                )?,
-                bake_image(
-                    device,
-                    "impostor normal",
-                    ATLAS_TEXELS,
-                    ATLAS_MIPS,
-                    ATLAS_FORMATS[1],
-                )?,
-                bake_image(
-                    device,
-                    "impostor occlusion",
-                    ATLAS_TEXELS,
-                    ATLAS_MIPS,
-                    ATLAS_FORMATS[2],
-                )?,
+                atlas(0, "impostor albedo")?,
+                atlas(1, "impostor normal")?,
+                atlas(2, "impostor occlusion")?,
             ],
-            readback: [
-                readback("impostor albedo read back", 8)?,
-                readback("impostor normal read back", 8)?,
-                readback("impostor occlusion read back", 4)?,
-            ],
-            upload,
+            blocks: GraphBuffer::new(blocks),
             key,
             from_cache: cached.is_some(),
             // Found in the cache: no frame to bake.
@@ -587,14 +705,14 @@ impl ImpostorBake {
                 0
             }),
             copied: Cell::new(None),
-            texels: RefCell::new(cached),
+            blocks_read: RefCell::new(cached),
             read: Cell::new(false),
         })
     }
 
-    /// The atlases as floats, once done (for review: [`Self::write_png`]).
+    /// The atlases' first levels decoded, once done (for review: [`Self::write_png`]).
     pub fn take(&self) -> Option<BakedAtlases> {
-        self.texels.borrow().as_ref().map(BakedAtlases::from)
+        self.blocks_read.borrow().as_ref().map(BakedAtlases::from)
     }
 
     /// Whether its atlases came from the derived cache rather than a bake.
@@ -617,8 +735,8 @@ impl ImpostorBake {
     }
 
     /// Declares this frame's part of the bake into `graph`: the next frame drawn into its
-    /// square, or the mips made and the atlases copied out after the last, or nothing while the
-    /// copy is in flight.
+    /// square, or after the last the mips made, the atlases compressed and their blocks copied
+    /// in and out, or nothing while the copies are in flight.
     fn record<'f>(
         &'f self,
         tools: &'f BakeTools,
@@ -631,88 +749,50 @@ impl ImpostorBake {
             if copied == slot.index && !self.read.get() {
                 self.read.set(true);
                 if !self.from_cache {
-                    let halves = |buffer: &GraphBuffer, channels: u32| {
-                        let mut halves =
-                            vec![0u16; (ATLAS_TEXELS * ATLAS_TEXELS * channels) as usize];
-                        buffer.read(0, &mut halves);
-                        halves
-                    };
-                    *self.texels.borrow_mut() = Some(AtlasTexels {
-                        albedo: halves(&self.readback[0], 4),
-                        normal: halves(&self.readback[1], 4),
-                        occlusion: halves(&self.readback[2], 2),
-                    });
+                    let mut blocks = vec![0u32; (kind_bytes() / 4) as usize];
+                    self.blocks.read(0, &mut blocks);
+                    *self.blocks_read.borrow_mut() = Some(AtlasBlocks { blocks });
                 }
             }
             return Ok(());
         }
         if self.next.get() == total {
             self.copied.set(Some(slot.index));
-            let extent = vk::Extent2D {
-                width: ATLAS_TEXELS,
-                height: ATLAS_TEXELS,
-            };
-            let images = self.atlases.each_ref().map(|atlas| graph.import(atlas));
-            // Found in the cache: the first levels uploaded, then each atlas's mips.
-            if let Some(upload) = &self.upload {
-                for (&image, buffer) in images.iter().zip(upload) {
-                    let handle = graph.import_buffer(buffer);
-                    graph
-                        .pass("impostor/upload")
-                        .buffer(handle, BufferAccess::TransferSrc)
-                        .image(image, ImageAccess::TransferDst)
-                        .run(move |resources, commands| {
-                            commands.copy_buffer_to_image(
-                                buffer,
-                                resources.image(image).raw,
-                                extent,
-                            );
-                            Ok(())
-                        });
-                }
-                declare_mips(graph, images[0], &tools.mips);
-                declare_mips(graph, images[1], &tools.mips);
-                declare_mips(graph, images[2], &tools.mips_rg);
-                return Ok(());
+            let blocks = graph.import_buffer(&self.blocks);
+            if !self.from_cache {
+                self.compress(tools, graph, blocks);
             }
-            // The base colour's and the normals' mips first: the occlusion reads them.
-            declare_mips(graph, images[0], &tools.mips);
-            declare_mips(graph, images[1], &tools.mips);
-            let occlusion = &tools.occlusion;
-            let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
-            graph
-                .pass("impostor/occlusion")
-                .image(images[0], ImageAccess::Sampled(compute))
-                .image(images[1], ImageAccess::Sampled(compute))
-                .image(images[2], ImageAccess::StorageWrite(compute))
-                .run(move |resources, commands| {
-                    commands.bind_pipeline(occlusion);
-                    commands.push_constants(
-                        occlusion,
-                        &OcclusionPush {
-                            albedo: resources.sampled(images[0]).0,
-                            normal: resources.sampled(images[1]).0,
-                            occlusion: resources.storage(images[2], 0).0,
-                            pad: 0,
-                        },
-                    );
-                    commands.dispatch(ATLAS_TEXELS / 8, ATLAS_TEXELS / 8, 1);
-                    Ok(())
-                });
-            declare_mips(graph, images[2], &tools.mips_rg);
-            for (&image, readback) in images.iter().zip(&self.readback) {
-                let buffer = graph.import_buffer(readback);
+            // Every level's blocks into the atlases drawn.
+            for (index, atlas) in self.atlases.iter().enumerate() {
+                let image = graph.import(atlas);
+                let buffer = &self.blocks;
                 graph
-                    .pass("impostor/read back")
-                    .image(image, ImageAccess::TransferSrc)
-                    .buffer(buffer, BufferAccess::TransferDst)
+                    .pass("impostor/upload")
+                    .buffer(blocks, BufferAccess::TransferSrc)
+                    .image(image, ImageAccess::TransferDst)
                     .run(move |resources, commands| {
-                        commands.copy_image_to_buffer(resources.image(image).raw, extent, readback);
+                        let levels: Vec<_> = (0..ATLAS_MIPS)
+                            .map(|level| {
+                                let side = ATLAS_TEXELS >> level;
+                                let extent = vk::Extent2D {
+                                    width: side,
+                                    height: side,
+                                };
+                                (blocks_at(index, level).0, level, extent)
+                            })
+                            .collect();
+                        commands.copy_buffer_to_image_levels(
+                            buffer,
+                            resources.image(image).raw,
+                            &levels,
+                        );
                         Ok(())
                     });
+            }
+            if !self.from_cache {
                 graph
                     .pass("impostor/read back")
-                    .buffer(buffer, BufferAccess::HostRead)
+                    .buffer(blocks, BufferAccess::HostRead)
                     .run(|_, _| Ok(()));
             }
             return Ok(());
@@ -780,7 +860,7 @@ impl ImpostorBake {
             Some([0.0; 4]),
             AmbientLight::default(),
         );
-        let atlas = graph.import(&self.atlases[atlas_index]);
+        let atlas = graph.import(&tools.work[atlas_index]);
         let downsample = &tools.downsample;
         let tile = frame * FRAME_TEXELS;
         graph
@@ -815,6 +895,74 @@ impl ImpostorBake {
                 Ok(())
             });
         Ok(())
+    }
+
+    /// Declares the end of a fresh bake into `graph`: the base colour's and the normals' mips,
+    /// the occlusion from them and its mips, then every level of the three compressed into
+    /// `blocks`.
+    fn compress<'f>(
+        &'f self,
+        tools: &'f BakeTools,
+        graph: &mut FrameGraph<'f>,
+        blocks: BufferHandle,
+    ) {
+        let work = tools.work.each_ref().map(|atlas| graph.import(atlas));
+        // The base colour's and the normals' mips first: the occlusion reads them.
+        declare_mips(graph, work[0], &tools.mips);
+        declare_mips(graph, work[1], &tools.mips);
+        let occlusion = &tools.occlusion;
+        let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+        graph
+            .pass("impostor/occlusion")
+            .image(work[0], ImageAccess::Sampled(compute))
+            .image(work[1], ImageAccess::Sampled(compute))
+            .image(work[2], ImageAccess::StorageWrite(compute))
+            .run(move |resources, commands| {
+                commands.bind_pipeline(occlusion);
+                commands.push_constants(
+                    occlusion,
+                    &OcclusionPush {
+                        albedo: resources.sampled(work[0]).0,
+                        normal: resources.sampled(work[1]).0,
+                        occlusion: resources.storage(work[2], 0).0,
+                        pad: 0,
+                    },
+                );
+                commands.dispatch(ATLAS_TEXELS / 8, ATLAS_TEXELS / 8, 1);
+                Ok(())
+            });
+        declare_mips(graph, work[2], &tools.mips_rg);
+        let address = self.blocks.address();
+        for (index, &image) in work.iter().enumerate() {
+            let (pipeline, flags) = match index {
+                0 => (&tools.bc7, COLOR_SRGB),
+                1 => (&tools.bc7, OPAQUE),
+                _ => (&tools.bc5, 0),
+            };
+            graph
+                .pass("impostor/compress")
+                .image(image, ImageAccess::StorageRead(compute))
+                .buffer(blocks, BufferAccess::ShaderWrite(compute))
+                .run(move |resources, commands| {
+                    commands.bind_pipeline(pipeline);
+                    for level in 0..ATLAS_MIPS {
+                        let side = (ATLAS_TEXELS >> level) / 4;
+                        let at = address + blocks_at(index, level).0;
+                        commands.push_constants(
+                            pipeline,
+                            &CompressPush {
+                                source: resources.storage(image, level).0,
+                                blocks_x: side,
+                                blocks_y: side,
+                                flags,
+                                blocks: at,
+                            },
+                        );
+                        commands.dispatch(side.div_ceil(8), side.div_ceil(8), 1);
+                    }
+                    Ok(())
+                });
+        }
     }
 
     /// Writes the atlases as PNG images to `dir`, for review: `{name}-albedo.png` in sRGB with
@@ -1276,35 +1424,94 @@ impl Impostors {
     }
 }
 
-/// An IEEE half's value.
-fn half_to_f32(h: u16) -> f32 {
-    let sign = if h & 0x8000 != 0 { -1.0 } else { 1.0 };
-    let exponent = i32::from((h >> 10) & 0x1f);
-    let mantissa = f32::from(h & 0x3ff);
-    match exponent {
-        0 => sign * mantissa * 2f32.powi(-24),
-        31 => {
-            if mantissa == 0.0 {
-                sign * f32::INFINITY
-            } else {
-                f32::NAN
-            }
-        }
-        e => sign * (1.0 + mantissa / 1024.0) * 2f32.powi(e - 15),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// `count` bits of `value` into `block` at bit `at` (`put` in impostor_compress.slang).
+    fn put(block: &mut [u32], at: &mut u32, value: u32, count: u32) {
+        for i in 0..count {
+            let bit = *at + i;
+            block[(bit / 32) as usize] |= ((value >> i) & 1) << (bit % 32);
+        }
+        *at += count;
+    }
+
     #[test]
-    fn halves_read_back() {
-        assert_eq!(half_to_f32(0x3c00), 1.0);
-        assert_eq!(half_to_f32(0xc000), -2.0);
-        assert_eq!(half_to_f32(0x3800), 0.5);
-        assert_eq!(half_to_f32(0), 0.0);
-        assert!((half_to_f32(0x3555) - 0.333_25).abs() < 1e-4);
+    fn a_mode_6_block_decodes_as_the_bake_writes_it() {
+        // Endpoints of 7 bits a channel and their low bits, as the encoder lays them out.
+        let (q0, q1, p0, p1) = ([10u32, 20, 30, 127], [100u32, 110, 120, 0], 1, 0);
+        // The first index below 8, as its three bits need.
+        let indices: [u32; 16] = std::array::from_fn(|i| (i as u32 * 5) % 16);
+        let mut block = [0u32; 4];
+        let mut at = 0;
+        put(&mut block, &mut at, 1 << 6, 7);
+        for c in 0..4 {
+            put(&mut block, &mut at, q0[c], 7);
+            put(&mut block, &mut at, q1[c], 7);
+        }
+        put(&mut block, &mut at, p0, 1);
+        put(&mut block, &mut at, p1, 1);
+        put(&mut block, &mut at, indices[0], 3);
+        for &index in &indices[1..] {
+            put(&mut block, &mut at, index, 4);
+        }
+        assert_eq!(at, 128);
+        let texels = decode_bc7(&block);
+        for (i, texel) in texels.iter().enumerate() {
+            let w = BC7_WEIGHTS[indices[i] as usize];
+            for c in 0..4 {
+                let (e0, e1) = (q0[c] << 1 | p0, q1[c] << 1 | p1);
+                assert_eq!(
+                    u32::from(texel[c]),
+                    ((64 - w) * e0 + w * e1 + 32) >> 6,
+                    "{i} {c}"
+                );
+            }
+        }
+        // The endpoints themselves at weights 0 and 64.
+        assert_eq!(texels[0], [21, 41, 61, 255]);
+        // Another mode is not the bake's.
+        block[0] ^= 0x40;
+        assert_eq!(decode_bc7(&block), [[0; 4]; 16]);
+    }
+
+    #[test]
+    fn a_bc4_block_decodes_its_eight_values() {
+        let (r0, r1) = (200u32, 60u32);
+        let indices: [u32; 16] = std::array::from_fn(|i| i as u32 % 8);
+        let mut block = [r0 | r1 << 8, 0];
+        let mut at = 16;
+        for &index in &indices {
+            put(&mut block, &mut at, index, 3);
+        }
+        let values = decode_bc4(&block);
+        let expected = |k: u32| match k {
+            0 => 200.0,
+            1 => 60.0,
+            k => ((8 - k) as f32 * 200.0 + (k - 1) as f32 * 60.0) / 7.0,
+        };
+        for (i, &v) in values.iter().enumerate() {
+            assert!((v * 255.0 - expected(indices[i])).abs() < 1e-3, "{i}: {v}");
+        }
+    }
+
+    #[test]
+    fn the_blocks_lie_end_to_end() {
+        let mut next = 0;
+        for (atlas, block) in BLOCK_BYTES.iter().enumerate() {
+            for level in 0..ATLAS_MIPS {
+                let (start, bytes) = blocks_at(atlas, level);
+                assert_eq!(start, next, "atlas {atlas}, level {level}");
+                // Every level a whole number of blocks; the last 8 texels a side.
+                assert_eq!(bytes % block, 0);
+                next += bytes;
+            }
+        }
+        assert_eq!(ATLAS_TEXELS >> (ATLAS_MIPS - 1), 8);
+        assert_eq!(next, kind_bytes());
+        // A kind is 1.05 MB: its half floats were 7 MB with their mips.
+        assert_eq!(kind_bytes(), 1_048_512);
     }
 
     #[test]
