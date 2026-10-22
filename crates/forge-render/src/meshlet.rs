@@ -4185,24 +4185,41 @@ impl MeshletRenderer {
         // With ray queries, the variants that trace the sun's shadows when a scene has a TLAS.
         let rt = device.features().ray_query;
         let entry = |plain: &'static str, traced: &'static str| if rt { traced } else { plain };
-        let pipeline_resolve = [
-            shading_pipeline(
-                entry("resolve_standard_main", "resolve_standard_rt_main"),
-                "shading standard",
-            )?,
-            shading_pipeline(
-                entry("resolve_ice_main", "resolve_ice_rt_main"),
-                "shading ice",
-            )?,
-            shading_pipeline(
-                entry("resolve_layered_main", "resolve_layered_rt_main"),
-                "shading layered",
-            )?,
-            shading_pipeline(
-                entry("resolve_jelly_main", "resolve_jelly_rt_main"),
-                "shading jelly",
-            )?,
-        ];
+        // The four made side by side: after an edit of meshlet.slang the driver takes seconds
+        // over each, and one after another they took 26 s of the start (#348).
+        let made = std::thread::scope(|scope| {
+            let shading_pipeline = &shading_pipeline;
+            [
+                (
+                    entry("resolve_standard_main", "resolve_standard_rt_main"),
+                    "shading standard",
+                ),
+                (
+                    entry("resolve_ice_main", "resolve_ice_rt_main"),
+                    "shading ice",
+                ),
+                (
+                    entry("resolve_layered_main", "resolve_layered_rt_main"),
+                    "shading layered",
+                ),
+                (
+                    entry("resolve_jelly_main", "resolve_jelly_rt_main"),
+                    "shading jelly",
+                ),
+            ]
+            .map(|(entry, name)| {
+                std::thread::Builder::new()
+                    .name(name.to_owned())
+                    .spawn_scoped(scope, move || shading_pipeline(entry, name))
+            })
+            .map(|thread| {
+                thread?
+                    .join()
+                    .unwrap_or_else(|e| std::panic::resume_unwind(e))
+            })
+        });
+        let [standard, ice, layered, jelly] = made;
+        let pipeline_resolve = [standard?, ice?, layered?, jelly?];
         let pipeline_reflections = if rt {
             Some(shading_pipeline("reflections_main", "shading reflections")?)
         } else {
