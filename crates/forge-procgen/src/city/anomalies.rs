@@ -861,18 +861,18 @@ mod tests {
         ];
         // The other sizes' own, where they had more when they came in (#308: two garden walls
         // meeting a little apart at a corner at 500 m; at 700 to 900 m, 2026-10-22, after the
-        // stairs, the rows' corners and the backs: 77 anomalies down to 42).
+        // stairs, the rows' corners, the backs and the walls' acute corners: 77 down to 21).
         let since: [(f64, Kind, usize); 11] = [
             (500.0, Kind::FreeWallEnd, 1),
             (700.0, Kind::UnlitRoom, 2),
-            (700.0, Kind::FreeWallEnd, 8),
+            (700.0, Kind::FreeWallEnd, 3),
             (700.0, Kind::RidgeStep, 2),
-            (800.0, Kind::FreeWallEnd, 14),
+            (800.0, Kind::FreeWallEnd, 3),
             (800.0, Kind::RidgeStep, 2),
             (800.0, Kind::BlankStreetWall, 1),
             (900.0, Kind::UnlitRoom, 1),
             (900.0, Kind::Sliver, 1),
-            (900.0, Kind::FreeWallEnd, 9),
+            (900.0, Kind::FreeWallEnd, 4),
             (900.0, Kind::LonePartyWall, 2),
         ];
         let mut over = Vec::new();

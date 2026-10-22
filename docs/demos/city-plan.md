@@ -642,6 +642,30 @@ a square never takes its district's last one. They have 9 and 7 houses; 400 m sh
 500 m one garden wall end (two walls meeting a little apart at a corner, bound 1). The 600 m plan
 and the city's are unchanged (the map check, the city and island captures at 0 px).
 
+Since 2026-10-22 it checks 700, 800 and 900 m as well, after a pass over what broke there: 77
+anomalies down to 21 (20 → 7, 33 → 6, 24 → 8).
+- **Upper rooms out of reach (16):** houses of storeys on a faubourg's shallowest strip were kept
+  to the type's 5.5 m, shorter than their flight, and got no stair; they take the flight's depth
+  where the lot has it. A footprint's edge under 0.5 m goes too: the facades gave it no face, and
+  a house with an inner wall counted as a wing another building's core serves.
+- **Slivers and lone party walls at bends:** each house stood square to its own front, so two row
+  houses at a bend opened a V behind their shared corner, 5 cm to a metre wide. A row house within
+  half a metre of its lot's corner takes the corner, and an end on the corner runs along the lot's
+  side line.
+- **Backs:** a house that cannot shrink to the 3 m light court without a fourth storey adjoins the
+  side behind it where its lot reaches; walls within 0.5° to 3° of facing are swung together.
+- **A court door on a flight:** a corner house whose back is a party wall took its garden door on
+  the court side its flight runs along; that door skips windows before a house's flight.
+- **Garden walls at acute corners (36° to 75°):** mitred on the face through the corners their
+  faces make. Butted, the higher one ran on past the other's far face, its end a spike meeting
+  nothing.
+
+The 600 m village changed in two places, accepted in the map check: a corner house that stopped a
+quarter metre short of its lot's corner (a walled slit) reaches it, its rooms laid again (the
+walked house: the room view now shows two chairs at the table), and two acute garden-wall
+corners are mitred. Left at the larger sizes: free wall ends at junctions with hedges, ridge
+steps where a lot keeps one house of a row shallower, and a few unlit rooms in corner houses.
+
 | Anomaly | Rule | When the check came in | After the fixes above |
 |---|---|---|---|
 | a room past its house's walls (its plan's rectangle on a footprint the lot cut) | — | 66 | 45 |

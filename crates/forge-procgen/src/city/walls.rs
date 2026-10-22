@@ -30,6 +30,11 @@ const JOIN: f64 = THICKNESS;
 /// How far apart the ends of two walls nearly in line may stand to be joined, metres: a slot
 /// narrower than a gate is no way through, and showed as a dark strip in the wall.
 const IN_LINE_JOIN: f64 = 0.75;
+/// Two walls ending together at a corner between these angles apart are mitred (`joints`), as
+/// cosines (75° to 36°): butted, the one ranking above ran on past the other's far face, its end
+/// out in the open meeting nothing (#308). From 75° up the overrun stays within the other's
+/// face; under 36° a mitre leans past the 0.3 of square [`Wall::ring`] keeps, and would part.
+const MITRE: (f64, f64) = (0.26, 0.81);
 /// How near a stretch running along a house's wall may come to it and still be walled, metres:
 /// nearer, the house's own wall bounds the garden. A lot line half a metre behind a row's backs
 /// stood a garden wall in a slot before their court doors, the paths to them ending at it.
@@ -425,6 +430,37 @@ fn clearing(w: &Wall, c: DVec2, into: DVec2, other: &Wall) -> f64 {
         .fold(0.0, f64::max)
 }
 
+/// The mitre where wall `w`'s end `c` meets wall `o` at a corner: the face through the corners
+/// their faces make, inner with inner and outer with outer (whichever side each one's thickness
+/// takes), as where `w`'s line crosses it and the face's direction to `w`'s left. `None` where
+/// the face leans past the 0.3 of square [`Wall::ring`] keeps, or crosses the line far off.
+fn corner_mitre(w: &Wall, c: DVec2, o: &Wall) -> Option<(DVec2, DVec2)> {
+    // A wall's band edges (left, right) as lines (a point, the direction).
+    let edges = |x: &Wall| {
+        let t = dir(x);
+        let normal = DVec2::new(-t.y, t.x);
+        let (right, left) = x.band();
+        ((x.a + normal * left, t), (x.a - normal * right, t))
+    };
+    let meet = |(p, u): (DVec2, DVec2), (q, v): (DVec2, DVec2)| {
+        let d = geom::cross(u, v);
+        (d.abs() > 1e-9).then(|| p + u * (geom::cross(q - p, v) / d))
+    };
+    let (t, to) = (dir(w), dir(o));
+    let (normal, o_normal) = (DVec2::new(-t.y, t.x), DVec2::new(-to.y, to.x));
+    // The inner sides: each one's side towards the other.
+    let o_on_left = normal.dot((o.a + o.b) * 0.5 - c) > 0.0;
+    let w_on_left = o_normal.dot((w.a + w.b) * 0.5 - c) > 0.0;
+    let ((wl, wr), (ol, or)) = (edges(w), edges(o));
+    let (w_in, w_out) = if o_on_left { (wl, wr) } else { (wr, wl) };
+    let (o_in, o_out) = if w_on_left { (ol, or) } else { (or, ol) };
+    let (inner, outer) = (meet(w_in, o_in)?, meet(w_out, o_out)?);
+    let face = (outer - inner).normalize_or_zero();
+    let at = meet((w.a, t), (inner, face))?;
+    let face = if face.dot(normal) < 0.0 { -face } else { face };
+    (face.dot(normal) >= 0.3 && at.distance(c) < 2.0 * THICKNESS).then_some((at, face))
+}
+
 /// Where walls meet, one butts against the other so that none overlaps another: two walls of a
 /// height overlapping would put their tops on one plane, the flicker the owner sees
 /// (`forge-geometry-pitfalls`). A wall ending within a wall's thickness of another: stops at the
@@ -453,11 +489,36 @@ fn joints(walls: &mut Vec<Wall>) {
             p.b
         }
     };
+    // The one wall at wall `i`'s end `c` (going `into` it), when it ends there too at a corner
+    // [`MITRE`] sharp: its index, its end and the way into it.
+    let corner_of = |i: usize, c: DVec2, into: DVec2| {
+        let mut at = (0..n)
+            .filter(|&j| j != i && geom::distance_to_segment(c, walls[j].a, walls[j].b) < JOIN);
+        let (Some(j), None) = (at.next(), at.next()) else {
+            return None;
+        };
+        let o = &walls[j];
+        let near = nearer(o, c);
+        let away = if near == o.a { dir(o) } else { -dir(o) };
+        (near.distance(c) < JOIN && (MITRE.0..MITRE.1).contains(&into.dot(away)))
+            .then_some((j, near, away))
+    };
+    // Each end's mitre at such a corner, both walls each other's only one there: the face's
+    // direction to the wall's left.
+    let mut corners: Vec<[Option<DVec2>; 2]> = vec![[None, None]; n];
     for i in 0..n {
         for end in [false, true] {
             let w = &walls[i];
             // The end, and the way from it into the wall.
             let (c, into) = if end { (w.b, -dir(w)) } else { (w.a, dir(w)) };
+            let mitred = corner_of(i, c, into)
+                .filter(|&(j, near, away)| corner_of(j, near, away).is_some_and(|k| k.0 == i))
+                .and_then(|(j, _, _)| corner_mitre(w, c, &walls[j]));
+            if let Some((at, face)) = mitred {
+                snaps[i][end as usize] = Some(at);
+                corners[i][end as usize] = Some(face);
+                continue;
+            }
             let touching =
                 |j: usize| j != i && geom::distance_to_segment(c, walls[j].a, walls[j].b) < JOIN;
             let crossing: Vec<usize> = (0..n)
@@ -565,6 +626,11 @@ fn joints(walls: &mut Vec<Wall>) {
             let d = if d.dot(t) < 0.0 { -d } else { d };
             let mean = (t + d).normalize_or_zero();
             mitres[i][end] = Some(DVec2::new(-mean.y, mean.x));
+        }
+        for end in 0..2 {
+            if corners[i][end].is_some() {
+                mitres[i][end] = corners[i][end];
+            }
         }
     }
     let mut kept = Vec::with_capacity(n);
