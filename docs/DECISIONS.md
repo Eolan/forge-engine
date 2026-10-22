@@ -7087,7 +7087,7 @@ best guess or data"):
 *(research: navigation-traversal.md, game-ai-ecosystems.md §2 and §7, animation.md §5; D-012,
 D-016, D-062; issues #90, #276, #311, #316, #317)*
 
-## D-077 — Streamed cells: a streamer driving the game's cell source, the far cells by a proxy each 🟡 (proposed 2026-10-22, #338 step 4)
+## D-077 — Streamed cells: a streamer driving the game's cell source, the far cells by a proxy each ✅ (proposed 2026-10-22, #338 step 4; the owner's go the same day, B: "I will follow the recommendations")
 
 #338's last step: the town's map (78×63 cells, 9,547 buildings) cannot be held whole, so the
 engine adds and removes its cells around the camera. Step 3 built every part a cell needs: the
