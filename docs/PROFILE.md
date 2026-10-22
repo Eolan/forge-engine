@@ -1819,6 +1819,11 @@ that changes the resolve's code (a constant of the leaves' light):
 - **A fresh cache** (every entry compiled, every mesh cooked): the village starts in 15.8 s, the
   warm-up's 177 entries 200 s of the cores' time and 14.1 s of the start. The largest files go
   first now, `meshlet.slang`'s resolve variants among them (15.2 s before).
+- **Each program's own list on a fresh cache** (`shaders/entries/PROGRAM.entries`): the warm-up
+  compiles the 69 entries the village asks for rather than every one declared. The fresh start
+  is 9.4 s, the warm-up 7.8 s (15.8 and 14.1 before). An entry a list lacks compiles when
+  asked for. The lists are the caches' (`cache/shaders/PROGRAM.entries`, written at each
+  start), copied in when they drift.
 
 ## Local exposure (`--local-exposure`, #275, D-067, 2026-10-17)
 

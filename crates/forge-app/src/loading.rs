@@ -153,11 +153,16 @@ impl<D: Demo + Send> Stage<D> {
         let warm_up = std::thread::Builder::new()
             .name("shader warm-up".to_owned())
             .spawn(move || {
-                // A program's first start on this cache has no list: every entry the shaders
-                // declare, rather than its own one by one as it asks for them (26 s of the
-                // village's 34 on a fresh cache).
+                // A program's first start on this cache has no list: the repository's for it
+                // (#345), else every entry the shaders declare, rather than its own one by one
+                // as it asks for them (26 s of the village's 34 on a fresh cache).
                 let listed = if listed.is_empty() {
-                    compiler.declared_entries()
+                    let repository = compiler.listed_entries(&program);
+                    if repository.is_empty() {
+                        compiler.declared_entries()
+                    } else {
+                        repository
+                    }
                 } else {
                     listed
                 };

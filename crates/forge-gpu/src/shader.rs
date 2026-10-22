@@ -387,6 +387,19 @@ impl ShaderCompiler {
         parse_entries(&fs::read_to_string(path).unwrap_or_default())
     }
 
+    /// `program`'s entries as the repository lists them (`entries/PROGRAM.entries` in the
+    /// shader directory, #345): what its first start on a fresh cache compiles ahead, the
+    /// village's 70 rather than all 177 the files declare. None for a program without a list;
+    /// an entry it lacks compiles when asked for.
+    pub fn listed_entries(&self, program: &str) -> Vec<ShaderEntry> {
+        Self::load_entries(
+            &self
+                .shader_dir
+                .join("entries")
+                .join(format!("{program}.entries")),
+        )
+    }
+
     /// Every entry point the shader directory's files declare (`[shader("stage")]` before a
     /// function), file by file: what to compile ahead for a program with no list yet. On a fresh
     /// cache the village's first start compiled its 57 entries one after another as it asked
