@@ -122,6 +122,19 @@ pub struct StreamPlan {
 impl StreamPlan {
     /// The plan around `viewer` (metres in the partition's frame) under `policy`.
     pub fn around<P: Partition>(partition: &P, viewer: DVec3, policy: &StreamPolicy) -> Self {
+        Self::around_facing(partition, viewer, None, policy)
+    }
+
+    /// As [`Self::around`], the cells the viewer faces first (#345: what the camera sees loads
+    /// first): past the viewer's own cell, a cell's priority grows with its angle off `facing`,
+    /// a cell straight behind counting as twice as far. Every wanted cell is still wanted.
+    pub fn around_facing<P: Partition>(
+        partition: &P,
+        viewer: DVec3,
+        facing: Option<DVec3>,
+        policy: &StreamPolicy,
+    ) -> Self {
+        let facing = facing.and_then(|f| f.try_normalize());
         assert!(
             policy.finest >= policy.coarsest,
             "finest is the deeper level"
@@ -149,11 +162,17 @@ impl StreamPlan {
                 }
             }
             for (cell, nearest) in cells {
-                let distance = (partition.cell_center(cell) - viewer).length();
+                let to = partition.cell_center(cell) - viewer;
+                let distance = to.length();
+                // 1 ahead to 2 behind, past the viewer's own cell.
+                let off = match facing {
+                    Some(f) if distance > size => 1.0 + (1.0 - f.dot(to) / distance) * 0.5,
+                    _ => 1.0,
+                };
                 wants.push(CellWant {
                     cell,
                     distance,
-                    priority: distance / size,
+                    priority: distance / size * off,
                     detail: if nearest <= reach * reach {
                         Detail::Full
                     } else {
@@ -402,6 +421,46 @@ mod tests {
         }
         assert!(residency.is_loaded(grid.cell_of(far, 6)));
         assert!(!residency.is_loaded(grid.cell_of(start, 6)));
+    }
+
+    /// #345: facing a way, the cells ahead come before those behind, and the same cells are
+    /// wanted.
+    #[test]
+    fn the_cells_the_viewer_faces_come_first() {
+        let grid = FlatGrid {
+            root_size: 65_536.0,
+        };
+        let policy = StreamPolicy {
+            finest: 6,
+            coarsest: 6,
+            rings: 4.0,
+            hysteresis: 0.25,
+            proxy_rings: 0.0,
+        };
+        let size = grid.cell_size(6);
+        let viewer = DVec3::new(0.5 * size, 0.0, 0.5 * size);
+        let plain = StreamPlan::around(&grid, viewer, &policy);
+        let east = StreamPlan::around_facing(&grid, viewer, Some(DVec3::X), &policy);
+        let cells = |p: &StreamPlan| {
+            let mut c: Vec<CellId> = p.wants.iter().map(|w| w.cell).collect();
+            c.sort_unstable();
+            c
+        };
+        assert_eq!(cells(&plain), cells(&east));
+        assert_eq!(east.wants[0].cell, grid.cell_of(viewer, 6));
+        // Of the first half, ahead and behind: most ahead when facing, as many without.
+        let split = |p: &StreamPlan| {
+            let half = &p.wants[..p.wants.len() / 2];
+            let x = |w: &&CellWant| grid.cell_center(w.cell).x - viewer.x;
+            (
+                half.iter().filter(|w| x(w) > 0.0).count(),
+                half.iter().filter(|w| x(w) < 0.0).count(),
+            )
+        };
+        let (ahead, behind) = split(&east);
+        assert!(ahead > 2 * behind, "{ahead} ahead, {behind} behind");
+        let (ahead, behind) = split(&plain);
+        assert_eq!(ahead, behind);
     }
 
     /// D-077: content near, proxies farther, swapped as the viewer goes by, each way with its

@@ -4,8 +4,9 @@
 //! - **The worker** holds the dynamic scene's editor ([`SceneEditor`]), the game's source and the
 //!   residency (`forge_world::Residency`). Given the viewer's position, it makes the plan
 //!   (`forge_world::StreamPlan`) and takes its changes in batches: the unloads first, then the
-//!   loads, nearest and finest first, up to [`CellStreamConfig::cells_per_edit`] cells an edit,
-//!   since each edit builds the editor's top-level structure anew off the frames.
+//!   loads, nearest and finest first, the cells it faces before those behind it
+//!   ([`CellStreamer::view_facing`], #345), up to [`CellStreamConfig::cells_per_edit`] cells an
+//!   edit, since each edit builds the editor's top-level structure anew off the frames.
 //! - **The frames** take each finished edit and its cells' sets in one update
 //!   ([`CellStreamer::update`]): the edit applied ([`MeshletScene::apply`]) and the sets added
 //!   or removed ([`CellSystems`]), so a cell comes and goes on the frame the edit is published.
@@ -107,7 +108,7 @@ impl std::ops::AddAssign for CellStreamStats {
 
 /// A world's cells streamed around the viewer (see the module notes).
 pub struct CellStreamer {
-    viewer: Sender<(u64, DVec3)>,
+    viewer: Sender<(u64, DVec3, Option<DVec3>)>,
     /// The positions given so far.
     sent: u64,
     /// The last position whose changes the worker has all made and sent.
@@ -131,7 +132,7 @@ impl CellStreamer {
         P: Partition + Send + 'static,
         S: CellSource,
     {
-        let (viewer, viewers) = mpsc::channel::<(u64, DVec3)>();
+        let (viewer, viewers) = mpsc::channel::<(u64, DVec3, Option<DVec3>)>();
         // Two edits ahead at most: each holds its staging until the frames take it.
         let (done, batches) = mpsc::sync_channel::<Result<Batch>>(2);
         let stop = Arc::new(AtomicBool::new(false));
@@ -168,8 +169,14 @@ impl CellStreamer {
     /// The viewer's position for the next plan (the partition's frame), once a frame; its
     /// number, for [`Self::update_settled`].
     pub fn view(&mut self, at: DVec3) -> u64 {
+        self.view_facing(at, None)
+    }
+
+    /// As [`Self::view`], with the way the viewer faces (the partition's frame): the cells it
+    /// faces load first (#345), and a turn of more than about 15° plans again.
+    pub fn view_facing(&mut self, at: DVec3, facing: Option<DVec3>) -> u64 {
         self.sent += 1;
-        let _ = self.viewer.send((self.sent, at));
+        let _ = self.viewer.send((self.sent, at, facing));
         self.sent
     }
 
@@ -300,12 +307,13 @@ struct Worker<P, S> {
 impl<P: Partition, S: CellSource> Worker<P, S> {
     fn run(
         &mut self,
-        viewers: &Receiver<(u64, DVec3)>,
+        viewers: &Receiver<(u64, DVec3, Option<DVec3>)>,
         done: &SyncSender<Result<Batch>>,
         stop: &AtomicBool,
         settled: &AtomicU64,
     ) {
-        let mut viewer: Option<DVec3> = None;
+        // Where the last plan was made from, and the way it faced.
+        let mut viewer: Option<(DVec3, Option<DVec3>)> = None;
         let mut seq = 0;
         while !stop.load(Ordering::Relaxed) {
             // The latest position; wait for one when there is nothing to do.
@@ -319,11 +327,20 @@ impl<P: Partition, S: CellSource> Worker<P, S> {
             } else {
                 viewers.try_recv().ok()
             };
-            if let Some((n, at)) = first.map(|g| viewers.try_iter().last().unwrap_or(g)) {
+            if let Some((n, at, facing)) = first.map(|g| viewers.try_iter().last().unwrap_or(g)) {
                 seq = n;
-                if viewer != Some(at) {
-                    viewer = Some(at);
-                    self.plan(at);
+                let facing = facing.and_then(DVec3::try_normalize);
+                // Moved, or turned by more than about 15°.
+                let again = viewer.is_none_or(|(was, faced)| {
+                    was != at
+                        || match (faced, facing) {
+                            (Some(a), Some(b)) => a.dot(b) < 0.966,
+                            (a, b) => a.is_some() != b.is_some(),
+                        }
+                });
+                if again {
+                    viewer = Some((at, facing));
+                    self.plan(at, facing);
                 }
             }
             if self.loads.is_empty() && self.unloads.is_empty() {
@@ -340,11 +357,12 @@ impl<P: Partition, S: CellSource> Worker<P, S> {
         }
     }
 
-    /// The plan around `at`, its changes queued. A cell queued to load and now to unload is
-    /// dropped from the loads, and taken out if it is in at all; a cell queued twice keeps its
-    /// latest detail, and none when that is the detail it is in at.
-    fn plan(&mut self, at: DVec3) {
-        let plan = StreamPlan::around(&self.partition, at, &self.config.policy);
+    /// The plan around `at` facing `facing`, its changes queued. A cell queued to load and now to
+    /// unload is dropped from the loads, and taken out if it is in at all; a cell queued twice
+    /// keeps its latest detail, and none when that is the detail it is in at. The loads queued
+    /// take the plan's order, the cells faced first.
+    fn plan(&mut self, at: DVec3, facing: Option<DVec3>) {
+        let plan = StreamPlan::around_facing(&self.partition, at, facing, &self.config.policy);
         let changes = self
             .residency
             .update(&self.partition, at, &plan, &self.config.policy);
@@ -363,6 +381,12 @@ impl<P: Partition, S: CellSource> Worker<P, S> {
             }
             self.loads.push_back((cell, detail));
         }
+        let priority: HashMap<CellId, f64> =
+            plan.wants.iter().map(|w| (w.cell, w.priority)).collect();
+        let rank = |cell: &CellId| priority.get(cell).copied().unwrap_or(f64::INFINITY);
+        self.loads
+            .make_contiguous()
+            .sort_by(|a, b| rank(&a.0).total_cmp(&rank(&b.0)));
     }
 
     /// Takes out what a cell added.

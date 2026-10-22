@@ -2233,6 +2233,12 @@ pages streamed:
     viewer moves, 1 to 4 cells swap each way an edit, taken out and brought back in the same
     edit, 9 to 13 ms of the worker with the cooking. Two runs give the same frames (0 pixels
     every 60 frames), and a validated run is clean.
+  - **The cells it faces first** (#345, the same day): the viewer faces east, its way
+    (`CellStreamer::view_facing`), and past its own cell each cell's priority grows with its
+    angle off that way, one straight behind counting as twice as far. The same cells come in
+    (the frames are the same, 0 pixels), those ahead first: as a game takes them
+    (`FORGE_CELL_REALTIME`, an edit a frame), the first edits bring the viewer's cell and those
+    ahead of it, and a turn of more than about 15° orders the queued loads again.
   - **Determinism:** two runs give the same frames every 60 frames (0 pixels).
   - **At a town's scale** (`FORGE_CELL_PROPS`, the props a cell; room for 200 000 instances):
     each edit builds the editor's top-level structure over every instance anew, so its cost

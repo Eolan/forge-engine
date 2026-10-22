@@ -1059,7 +1059,8 @@ impl Running for LabRunning {
             let f = self.edit_frames as f64;
             let viewer =
                 glam::DVec3::new((-100.0 + 0.6 * (f - 30.0)).clamp(-100.0, 80.0), 0.0, 0.0);
-            let seq = streamer.view(viewer);
+            // Facing its way east: the cells ahead load first (#345).
+            let seq = streamer.view_facing(viewer, Some(glam::DVec3::X));
             let mut lamps = forge_render::lamps::LampTable::new(0);
             let mut systems = forge_render::CellSystems {
                 probes: None,
