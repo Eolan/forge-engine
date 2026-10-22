@@ -27,6 +27,7 @@ pub mod fsr;
 pub mod glass;
 pub mod grass;
 pub mod gtao;
+pub mod impostor;
 pub mod lamps;
 pub mod liquid;
 pub mod local_exposure;

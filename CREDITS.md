@@ -378,6 +378,10 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   Tsushima'", GDC 2021. Plain opaque triangles darkened towards the root: Angelo Pesce,
   "Vegetation system" (notes on Call of Duty: Black Ops 4's grass). Blades at least a pixel wide,
   their covered share kept by noise: Emil Persson, "Phone-wire AA", 2012.
+- **Impostors** (`forge_render::impostor`, `shaders/impostor.slang`, #302, D-075 step 4). The
+  upper hemisphere's views in a hemi-octahedral layout, three frames blended by a view's
+  barycentric weights: Ryan Brucks, "Octahedral Impostors", 2018 (shaderbits.com). Read for the
+  method, no code taken.
 - **The rivers** (`forge_procgen::river`, `shaders/water.slang`, issue #105). Flow maps after
   Alex Vlachos, "Water Flow in Portal 2", SIGGRAPH 2010, *Advances in Real-Time Rendering in 3D
   Graphics and Games* (two phases of a texture advected along the flow and cross-faded); the

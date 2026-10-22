@@ -545,10 +545,20 @@ the paving within 8 cm (they first spread over their whole cell, up to 25 cm ont
 is drawn into the visibility buffer and shaded in its section's row, a clump's colour, darker at
 its root, its normal and contrast converging to the clump's by 20 m. Every blade stands out to the
 reach, so the lawn ends without the curve a 20 m reach showed (D-075 keeps the counts: no fewer,
-wider blades far off); over the last fifth of the reach they sink into the ground's grass. A breeze sways them (`--grass-wind S`, the tips' lean, 0.15 by default, 0 still), their
-pixels moving with them for DLAA. The four passes take about 0.40 ms (0.13 at 20 m,
+wider blades far off); over the last fifth of the reach they sink into the ground's grass. A
+breeze sways them (`--grass-wind S`, the tips' lean, 0.15 by default, 0 still), their pixels
+moving with them for DLAA. The four passes take about 0.40 ms (0.13 at 20 m,
 `docs/PROFILE.md`); the fallback path draws the same pixels, and the images without the flag are
 unchanged.
+
+**The trees' impostors, baked** (D-075 step 4, #302, 2026-10-22; not drawn yet). With
+`--impostor-bake DIR` each species' oldest individual is baked as the run goes, one frame of its
+impostor each app frame (`forge_render::impostor`): 8 × 8 views over the upper hemisphere in a
+hemi-octahedral layout, each drawn at full detail from 1000 radii off at 512² with the resolve
+writing its base colour or its normal unlit, then taken 4 × 4 into its 128² square. The atlases
+(1024², the base colour with its coverage as alpha, the normals) are written as
+`<species>-albedo.png` and `<species>-normal.png`: the village's nine species in about 6 s.
+Their draw and shading class come next.
 
 **The stairs' shimmer** (the owner, the same evening). In a hall lit only through its door, the
 light on the flight rose and fell: a still camera's frames 10 apart differed on 3–7 % of their

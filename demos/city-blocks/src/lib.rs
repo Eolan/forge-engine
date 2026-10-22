@@ -567,6 +567,11 @@ pub struct Args {
     /// (a light breeze, 0.15, by default; 0 still air).
     #[arg(long, default_value_t = 0.15)]
     pub grass_wind: f32,
+    /// Bake the scenario's trees' impostors (D-075 step 4, #302) one after another as the run
+    /// goes, each one's atlases written as PNG images to this directory (`<species>-albedo.png`,
+    /// `<species>-normal.png`).
+    #[arg(long)]
+    pub impostor_bake: Option<std::path::PathBuf>,
     /// Show the ambient occlusion in grey instead of the shading (V toggles it).
     #[arg(long)]
     show_ao: bool,
@@ -792,6 +797,10 @@ struct Gallery {
     /// A demo's own scene, built (#216): the physics lab's (`physics-lab`, #136), whose bodies
     /// are the movers.
     running: Option<Box<dyn Running>>,
+    /// The impostors to bake (`--impostor-bake`, D-075 step 4), the next last, and the one under
+    /// way with its name.
+    impostor_queue: Vec<(String, forge_render::impostor::BakeSource)>,
+    impostor_bake: Option<(String, forge_render::impostor::ImpostorBake)>,
     /// What surrounds the scene (the scene's `Look`).
     backdrop: Backdrop,
     /// The liquid's tank's corner in the scene, and the scene's ticks between its log lines.
@@ -1786,11 +1795,18 @@ impl Gallery {
             .add(&ctx.device, &check.sets)?;
             check.record = Some(record);
         }
+        let mut impostor_queue = match (&args.impostor_bake, running.as_mut()) {
+            (Some(_), Some(r)) => r.impostor_sources(),
+            _ => Vec::new(),
+        };
+        impostor_queue.reverse();
         let mut gallery = Self {
             barrels,
             walker,
             sand,
             running,
+            impostor_queue,
+            impostor_bake: None,
             backdrop: look.backdrop,
             liquid_corner: liquid_setup.as_ref().map_or(Vec3::ZERO, |l| l.corner),
             liquid_log: liquid_setup.as_ref().map_or(60, |l| l.log_every),
@@ -2216,6 +2232,26 @@ impl Demo for Gallery {
     }
 
     fn render<'f>(&'f mut self, ctx: &mut Context, frame: &mut FrameInfo<'f>) -> Result<()> {
+        // The impostors' bakes (`--impostor-bake`): one at a time, a bake's atlases written once
+        // read back, then the next begun (its frames declared after this frame's own passes).
+        if let Some(dir) = self.args.impostor_bake.clone() {
+            let done = self
+                .impostor_bake
+                .as_ref()
+                .and_then(|(name, bake)| bake.take().map(|atlases| (name.clone(), atlases)));
+            if let Some((name, atlases)) = done {
+                forge_render::impostor::ImpostorBake::write_png(&atlases, &dir, &name)?;
+                tracing::info!(name, dir = %dir.display(), "an impostor baked");
+                self.impostor_bake = None;
+            }
+            if self.impostor_bake.is_none()
+                && let Some((name, source)) = self.impostor_queue.pop()
+            {
+                let bake =
+                    forge_render::impostor::ImpostorBake::new(&ctx.device, &ctx.shaders, &source)?;
+                self.impostor_bake = Some((name, bake));
+            }
+        }
         // In space, on the tank's bench and in the sharpness room (#159), no sky light: a constant
         // fill. The bench's card in place of the sky.
         let in_space = self.backdrop != Backdrop::Sky;
@@ -3571,6 +3607,9 @@ impl Demo for Gallery {
                 h.add(&mut frame.graph, bloom, HashKind::Float4, half);
             }
             h.finish(&mut frame.graph);
+        }
+        if let Some((_, bake)) = &self.impostor_bake {
+            bake.record(&mut frame.graph, frame.slot)?;
         }
         Ok(())
     }
@@ -5221,6 +5260,12 @@ impl CityMaterials {
             first.get_or_insert(id);
         }
         first
+    }
+
+    /// The table's rows as the GPU reads them, over its textures (which [`Self::apply`] hands
+    /// the scene): what an impostor's bake draws its mesh with (D-075 step 4).
+    pub fn gpu_rows(&self) -> Vec<forge_render::material::GpuMaterial> {
+        forge_render::material::gpu_rows(&self.table, Some(&self.textures))
     }
 
     /// The table and its textures into `builder`, and each prop's row: the mesh `ids[k]` of

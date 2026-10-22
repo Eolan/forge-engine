@@ -721,7 +721,8 @@ game (scenarios, missions, licensed assets) is a private repository, as the city
    step, three crossings, #332, 2026-10-22; the GPU grass pass built the same day behind
    `--grass`, #300: blades in the visibility buffer from a map of the ground, swayed by a wind,
    out to 50 m, stopping at the lawn's edge within a ninth of a cell;
-   next the owner's look at both, then the impostor baker); structures with interiors, lit by their
+   the impostor baker built the same day behind `--impostor-bake` (the hemi-octahedral layout,
+   the frames baked on the GPU into 1024² atlases); next its draw and shading class); structures with interiors, lit by their
    lamps at night (D-065, #270: the houses' lamps as data, the rooms as light lists and the probes lit by them, built 2026-10-18; RTXDI
    to compare next); flora; the particle system (smoke, dust, fire, rain,
    sparks; D-064's step 1 built 2026-10-18, #271: emitters as data, the lab's smoke yard);

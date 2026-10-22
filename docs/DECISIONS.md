@@ -6878,6 +6878,27 @@ owner has looked (`forge_render::grass`, `shaders/meshlet.slang`'s "grass"):
   0.0474 on the grass). 0.015 ms.
 - **Not yet:** the walkers' bending, a measured fit of the colours to the ground beneath.
 
+**Step 4 begun: the baker** (#302, 2026-10-22, the plan in #302's comments), behind city-plan's
+`--impostor-bake DIR` until the impostors are drawn (`forge_render::impostor`,
+`shaders/impostor.slang`):
+- **The layout:** the upper hemisphere unfolded into a square, a diamond turned to fill it (R.
+  Brucks), 8 × 8 frames each baked from the direction at its middle (the lowest 7° above the
+  horizon), a view blending the three frames around its point by barycentric weights; the frames'
+  axes (`frame_axes`) never upside down.
+- **The bake, on the GPU:** a renderer of its own over a scene of the one mesh, one frame each
+  app frame: the mesh drawn at full detail from 1000 radii off with a field that fits its sphere
+  (near enough to parallel), the resolve writing its base colour or its normal unlit
+  (`CullFlags::BAKE_ALBEDO`, `BAKE_NORMAL`: `sun_light`, which every class goes through, returns
+  them, and the leaves' light through adds nothing, only in the bake's own shading passes from
+  `meshlet_bake.slang`: in the frame's, a branch never taken showed #349's unshaded tiles), at
+  512² into a target the downsample takes
+  4 × 4 into the frame's 128² square: the colour weighted by coverage, the share covered its
+  alpha, the normals averaged and made unit. 128 frames, then both atlases read back (1024²
+  each, half floats): about 0.7 s a species in the village, its nine in 6 s.
+- **Not yet:** the depth (for the parallax offset and the rays' point), the normals at 512² as
+  decided, the atlases into D-053's cache, then the impostor's raster and its shading class
+  and the ladder's last step (#302's plan).
+
 *(research: forests-and-grass.md, vegetation-materials.md, flora.md; D-013, D-016, D-029, D-036,
 D-053, D-063; issues #297, #300, #301, #302, #303)*
 

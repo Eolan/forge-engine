@@ -272,6 +272,12 @@ public static const uint FLAG_JELLY = 16777216;
 public static const uint FLAG_SHOW_REGIONS = 33554432;
 // Debug: tint the clusters of the meshes instances cross to on their ladder (D-075) blue.
 public static const uint FLAG_SHOW_LADDER = 67108864;
+// An impostor's bake (D-075 step 4): the base colour, or the shading normal (× 0.5 + 0.5), unlit,
+// instead of the shading (`sun_light`, `leaf_transmission`). Only the bake's own resolve
+// (`meshlet_bake.slang`, FORGE_IMPOSTOR_BAKE) reads them: the frame's entries carry none of it, as
+// a branch they never took changed their code enough to show #349's unshaded tiles.
+public static const uint FLAG_BAKE_ALBEDO = 134217728;
+public static const uint FLAG_BAKE_NORMAL = 268435456;
 
 static const uint PAGE_NONE = 0xFFFFFFFF;           // an absent page in `page_table`, no page in `child_page`
 static const uint MESHLET_INDEX_MASK = 0x3FFFFFFFu;
@@ -3828,6 +3834,14 @@ float mirror_ray_share(float roughness)
 
 float3 sun_light(Frame* f, float3 albedo, float3 n, float3 geometric, float specular_power, float specular_weight, float3 shadow, float4* sky, float ao, float3 view, float reflectance, float3 world, ProbeField* probes, bool traced, out float ndl)
 {
+#ifdef FORGE_IMPOSTOR_BAKE
+    // An impostor's bake (D-075 step 4): what the surface is, unlit.
+    if ((f[0].flags & (FLAG_BAKE_ALBEDO | FLAG_BAKE_NORMAL)) != 0)
+    {
+        ndl = 1.0;
+        return (f[0].flags & FLAG_BAKE_ALBEDO) != 0 ? albedo : n * 0.5 + 0.5;
+    }
+#endif
     float3 light = normalize(f[0].sun_dir);
     ndl = dot(n, light);
     float3 diffuse = max(ndl, 0.0) * shadow;
@@ -4340,6 +4354,10 @@ float3 leaf_transmission(Frame* f, float3 base, float3 through, Surface s)
 {
     if (all(through <= 0.0))
         return float3(0.0);
+#ifdef FORGE_IMPOSTOR_BAKE
+    if ((f[0].flags & (FLAG_BAKE_ALBEDO | FLAG_BAKE_NORMAL)) != 0)
+        return float3(0.0);
+#endif
     float3 l = normalize(normalize(f[0].sun_dir) + s.n * LEAF_DISTORTION);
     float lobe = pow(saturate(dot(s.view, -l)), LEAF_POWER);
     return base * through * f[0].sun_color.rgb * s.shadow * lobe;

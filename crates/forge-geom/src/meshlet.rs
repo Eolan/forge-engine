@@ -129,6 +129,7 @@ pub struct DagStats {
 }
 
 /// A mesh cut into clusters at every LOD level and packed into pages, ready for upload.
+#[derive(Clone)]
 pub struct MeshletMesh {
     /// Meshlet records, all levels (the hierarchy, always resident).
     pub meshlets: Vec<GpuMeshlet>,

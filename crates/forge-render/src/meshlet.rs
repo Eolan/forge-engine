@@ -94,6 +94,13 @@ impl CullFlags {
     /// [`MeshletSceneBuilder::set_ladder`]): a crossing instance shows both, dithered (debug
     /// view).
     pub const SHOW_LADDER: u32 = 1 << 26;
+    /// The surfaces' base colour, unlit, instead of the shading: an impostor's bake (D-075
+    /// step 4, [`crate::impostor`]). With an exposure of π over the sun's illuminance the
+    /// target holds the albedo itself.
+    pub const BAKE_ALBEDO: u32 = 1 << 27;
+    /// Their shading normal (scene frame, × 0.5 + 0.5) instead of the shading, as
+    /// [`Self::BAKE_ALBEDO`] does the base colour.
+    pub const BAKE_NORMAL: u32 = 1 << 28;
     /// Everything on except the debug views.
     pub const DEFAULT: Self = Self(Self::CONE | Self::FRUSTUM | Self::OCCLUSION | Self::LOD);
 
@@ -3998,6 +4005,27 @@ impl MeshletRenderer {
         shaders: &ShaderCompiler,
         extent: vk::Extent2D,
     ) -> Result<Self> {
+        Self::with_shading(device, shaders, extent, "meshlet.slang")
+    }
+
+    /// A renderer for an impostor's bake ([`crate::impostor::ImpostorBake`]): its shading
+    /// passes compiled from `meshlet_bake.slang`, which answers [`CullFlags::BAKE_ALBEDO`] and
+    /// [`CullFlags::BAKE_NORMAL`]. The frame's own renderers never carry that code (#349).
+    pub fn for_bake(
+        device: &Arc<Device>,
+        shaders: &ShaderCompiler,
+        extent: vk::Extent2D,
+    ) -> Result<Self> {
+        Self::with_shading(device, shaders, extent, "meshlet_bake.slang")
+    }
+
+    /// [`Self::new`], its shading passes from `shading`.
+    fn with_shading(
+        device: &Arc<Device>,
+        shaders: &ShaderCompiler,
+        extent: vk::Extent2D,
+        shading: &'static str,
+    ) -> Result<Self> {
         let path = if device.features().mesh_shader {
             GeometryPath::MeshShader
         } else {
@@ -4171,7 +4199,7 @@ impl MeshletRenderer {
         // The shading passes share their push constants.
         let shading_pipeline = |entry: &str, name: &str| -> Result<Pipeline> {
             let module = device.create_shader_module(
-                &shaders.compile("meshlet.slang", entry, ShaderStage::Compute)?,
+                &shaders.compile(shading, entry, ShaderStage::Compute)?,
                 name,
             )?;
             let pipeline = device.create_compute_pipeline(&ComputePipelineDesc {
