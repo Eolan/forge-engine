@@ -7076,3 +7076,42 @@ best guess or data"):
 
 *(research: navigation-traversal.md, game-ai-ecosystems.md §2 and §7, animation.md §5; D-012,
 D-016, D-062; issues #90, #276, #311, #316, #317)*
+
+## D-077 — Streamed cells: a streamer driving the game's cell source, the far cells by a proxy each 🟡 (proposed 2026-10-22, #338 step 4)
+
+#338's last step: the town's map (78×63 cells, 9,547 buildings) cannot be held whole, so the
+engine adds and removes its cells around the camera. Step 3 built every part a cell needs: the
+dynamic scene's editor (meshes and instances), the probes' region sets, the glass's pane sets,
+the lamps by stable ids, the pool of movers, and a cell's record (`CellSystems`) landing all of
+it on one frame. D-037 fixed the plan: a clipmap of cells with hysteresis (`forge_world::
+StreamPlan`, `Residency`, unit-tested).
+
+**The streamer** (`forge_render::stream`, what D-037 already covers; built first):
+- **The game gives a cell source:** a trait whose `load(cell, editor)` adds a cell's meshes and
+  instances through the scene's editor and returns its sets (`CellSets`), on the streamer's
+  worker. It reads the game's own data and cache (cooked meshes with their pages on disk).
+- **The worker** holds the editor and the residency. It takes the viewer's position from the
+  frames, makes the plan, and loads the nearest and finest cells first. Several cells
+  go into one edit, since each edit rebuilds the editor's top-level structure off the frame.
+  An unload removes the cell's instances and meshes in an edit.
+- **The frames** take each finished edit with its cells' sets in one update (`apply` and
+  `CellSystems::add` or `remove`), so a cell comes and goes on one frame. A frame budget caps
+  the edits taken a frame.
+- **Not here:** the far cells' look (below), and a cell's own state (doors open, things moved),
+  which the game keeps and gives back when the cell loads again.
+
+**The far cells' proxies: the open question.** A cell beyond the load reach shows nothing
+without one. Three ways:
+
+| | How | For | Against |
+|---|---|---|---|
+| **A. D-037's coarse levels** | Each coarser level's cells carry their own content, drawn until all their fine children are resident. | The plan as written: one proxy for a wide area, few instances far away. | While only some children are resident, the proxy and the fine cells overlap (z-fighting, doubled shadows), unless the proxy is cut per child, which is B. |
+| **B. A proxy per cell** (recommended) | Two reaches per cell: within the near one its full content, within the far one its proxy, one merged mesh of the cell. The swap happens in one edit, so the proxy is hidden on the frame the content shows: never both, never neither. | No overlap rule. The proxy's DAG and the page streaming bring its detail down with distance for free. The game or an engine helper makes it from the cell's own meshes, cooked once into the derived cache. | One instance per far cell: 4,914 cells is many instances at the map's full extent, which a coarse level of B's proxies could merge later. |
+| **C. Merged and simplified per group of cells** (Unreal's HLOD) | Groups' meshes merged and simplified offline. | The fewest triangles and instances far away. | The most tooling (offline merging and simplification per group), and the same overlap as A when a group is partly loaded. |
+
+**Recommended: B for the town now** (near: the cells within about 0.5 km, full; far: proxies to
+about 2 km; beyond: nothing, under the fog of the town's own look). D-037's coarse levels
+stay for content of their own scale (terrain, the sky's distant ranges). C can come later
+through B's proxies. Patents: not researched for this entry. B uses only Forge's own cooking
+(the merged mesh's cluster DAG), and C would need the check before it is built.
+*(research: large-worlds.md §5; D-037; issue #338)*
