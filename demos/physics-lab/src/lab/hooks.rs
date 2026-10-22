@@ -995,7 +995,14 @@ impl Running for LabRunning {
                 glass: None,
                 lamps: &mut lamps,
             };
-            match streamer.update_settled(seq, device, scene, &mut systems) {
+            // `FORGE_CELL_REALTIME`: as a game takes them, an edit a frame at most, unwaited.
+            let taken = std::time::Instant::now();
+            let took = if std::env::var_os("FORGE_CELL_REALTIME").is_some() {
+                streamer.update(device, scene, &mut systems, 1, None)
+            } else {
+                streamer.update_settled(seq, device, scene, &mut systems)
+            };
+            match took {
                 Ok(took) if took.edits > 0 => tracing::info!(
                     frame = self.edit_frames,
                     x = viewer.x,
@@ -1004,6 +1011,7 @@ impl Running for LabRunning {
                     unloaded = took.unloaded,
                     cells = streamer.loaded(),
                     worker_ms = %format_args!("{:.1}", took.worker_s * 1e3),
+                    frame_ms = %format_args!("{:.2}", taken.elapsed().as_secs_f64() * 1e3),
                     "cells streamed (#338's check)"
                 ),
                 Ok(_) => {}

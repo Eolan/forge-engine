@@ -2237,6 +2237,10 @@ pages streamed:
     | 1 000 | 35 000 | 2.5 ms | 21.5 ms |
     | 4 000 | 140 000 | 7.6 ms | 84.7 ms |
 
+    The frames' side of an edit (`apply` and the cells' sets) takes 0.01 to 0.03 ms at either
+    scale. `FORGE_CELL_REALTIME` takes the edits as a game would, one a frame at most and
+    unwaited: 50 edits over 400 frames, 37 cells in at the end.
+
 ## Captures
 
 The batch (`tools/captures.sh`, set `lab`) takes `lab-drop90` (the rain in mid-air), its A/B
