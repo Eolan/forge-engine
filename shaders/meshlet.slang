@@ -919,10 +919,51 @@ float3 cell_center_relative(Frame* f, CellBounds b)
 static const uint INSTANCE_LADDER_BIT = 0x40000000u;
 static const uint INSTANCE_TAG_BITS = 0xC0000000u;
 
-// The mesh an instance's work item or root entry tagged `tag` draws.
-uint drawn_mesh(Frame* f, Instance inst, uint tag)
+// The most crossings a ladder is followed down (#332): a tree's cards, its shells or a stand-in,
+// a coarser step, and a last.
+static const uint LADDER_STEPS = 3;
+
+// An instance's crossing this frame, as the instance culls write it (`Frame::ladder`): `2 k + t`,
+// crossing `t` (0 to 1) from the mesh `k` steps down its ladder to the next. Twice the step, so
+// the end of one crossing (t = 1) is not the start of the next.
+uint ladder_pair(float value)
 {
-    return (tag & INSTANCE_LADDER_BIT) != 0 ? f[0].meshes[inst.mesh].ladder_next : inst.mesh;
+    return uint(value * 0.5);
+}
+
+float ladder_t(float value)
+{
+    return value - 2.0 * float(ladder_pair(value));
+}
+
+// The mesh `steps` steps down `mesh`'s ladder.
+uint ladder_step(Frame* f, uint mesh, uint steps)
+{
+    for (uint k = 0; k < steps && k < LADDER_STEPS; k++)
+    {
+        uint next = f[0].meshes[mesh].ladder_next;
+        if (next == LADDER_NONE || next == LADDER_VANISH)
+            break;
+        mesh = next;
+    }
+    return mesh;
+}
+
+// The first mesh of the pair instance `instance` crosses this frame: its own mesh but on a
+// ladder followed past its first step.
+uint ladder_first(Frame* f, uint instance, Instance inst)
+{
+    if (f[0].ladder == nullptr || f[0].meshes[inst.mesh].ladder_next == LADDER_NONE)
+        return inst.mesh;
+    return ladder_step(f, inst.mesh, ladder_pair(f[0].ladder[instance]));
+}
+
+// The mesh instance `instance`'s work item or root entry tagged `tag` draws: the first of the
+// pair it crosses, or with INSTANCE_LADDER_BIT the next.
+uint drawn_mesh(Frame* f, uint instance, Instance inst, uint tag)
+{
+    uint first = ladder_first(f, instance, inst);
+    return (tag & INSTANCE_LADDER_BIT) != 0 ? f[0].meshes[first].ladder_next : first;
 }
 
 // A value in [0, 1) from `n`, the same for the same `n`.
@@ -941,16 +982,31 @@ float hash_unit(uint n)
 // pixels (the render's over `texture_lod_scale`) against the mesh's `ladder_px`, linear over the
 // band. Each instance's size is taken up to 15 % off by its id's hash, so a wood crosses tree by
 // tree, not along a circle round the camera.
+//
+// The ladder is followed down (#332): past its crossing, an instance whose next mesh has a
+// ladder of its own measures it against that one's size and band, up to LADDER_STEPS crossings.
+// It returns `2 k + t` (`ladder_pair`, `ladder_t`).
 float ladder_crossing(Frame* f, Instance inst)
 {
-    Mesh* mesh = f[0].meshes + inst.mesh;
-    if (f[0].ladder == nullptr || mesh[0].ladder_next == LADDER_NONE)
+    uint m = inst.mesh;
+    if (f[0].ladder == nullptr || f[0].meshes[m].ladder_next == LADDER_NONE)
         return 0.0;
     float dist = max(length(instance_center_relative(f, inst)), f[0].znear);
     float k = f[0].p11 * 0.5 * f[0].viewport_height / f[0].texture_lod_scale;
     float px = 2.0 * inst.radius * k / dist * (0.85 + 0.3 * hash_unit(inst.id));
-    float band = max(mesh[0].ladder_band, 1e-3);
-    return saturate((1.0 + band - px / mesh[0].ladder_px) / (2.0 * band));
+    for (uint step = 0; step < LADDER_STEPS; step++)
+    {
+        Mesh* mesh = f[0].meshes + m;
+        float band = max(mesh[0].ladder_band, 1e-3);
+        float t = saturate((1.0 + band - px / mesh[0].ladder_px) / (2.0 * band));
+        uint next = mesh[0].ladder_next;
+        bool on = t >= 1.0 && next != LADDER_VANISH && step + 1 < LADDER_STEPS
+            && f[0].meshes[next].ladder_next != LADDER_NONE;
+        if (!on)
+            return 2.0 * float(step) + t;
+        m = next;
+    }
+    return 0.0;
 }
 
 // Whether the clusters of instance `instance` are crossing this frame (written by its cull).
@@ -958,7 +1014,7 @@ bool ladder_crossing_now(Frame* f, uint instance, Instance inst)
 {
     if (f[0].ladder == nullptr || f[0].meshes[inst.mesh].ladder_next == LADDER_NONE)
         return false;
-    float t = f[0].ladder[instance];
+    float t = ladder_t(f[0].ladder[instance]);
     return t > 0.0 && t < 1.0;
 }
 
@@ -1429,7 +1485,7 @@ ClusterVerdict cull_cluster(Frame* f, uint item, uint thread, bool streamed)
     uint tag = v.instance & INSTANCE_TAG_BITS;
     v.instance &= ~INSTANCE_TAG_BITS;
     Instance* inst = f[0].instances + v.instance;
-    Mesh* mesh = f[0].meshes + drawn_mesh(f, inst[0], tag);
+    Mesh* mesh = f[0].meshes + drawn_mesh(f, v.instance, inst[0], tag);
     bool frustum = (f[0].flags & FLAG_FRUSTUM_CULLING) != 0;
     bool show_culled = (f[0].flags & FLAG_SHOW_CULLED) != 0;
     bool instance_visible = !frustum || sphere_in_frustum(f, instance_center_relative(f, inst[0]), inst[0].radius);
@@ -1909,7 +1965,7 @@ uint instance_roots(Frame* f, Mesh* mesh, float scale, float dist)
 uint instance_items(Frame* f, uint instance_index, uint base, bool write, uint tag, uint lane = 0, uint stride = 1)
 {
     Instance* inst = f[0].instances + instance_index;
-    Mesh* mesh = f[0].meshes + drawn_mesh(f, inst[0], tag);
+    Mesh* mesh = f[0].meshes + drawn_mesh(f, instance_index, inst[0], tag);
     float scale = inst[0].scale;
     float dist = length(instance_center_relative(f, inst[0]));
     uint groups = (mesh[0].meshlet_count + TASK_GROUP_SIZE - 1) / TASK_GROUP_SIZE;
@@ -1976,20 +2032,23 @@ void append_instance_work(Frame* f, uint64_t* status, uint ticket, uint groups, 
         Instance* inst = f[0].instances + instance_index;
         Mesh* mesh = f[0].meshes + inst[0].mesh;
         float dist = length(instance_center_relative(f, inst[0]));
-        float t = ladder_crossing(f, inst[0]);
+        float value = ladder_crossing(f, inst[0]);
         if (mesh[0].ladder_next != LADDER_NONE && f[0].ladder != nullptr)
-            f[0].ladder[instance_index] = t;
+            f[0].ladder[instance_index] = value;
+        // The pair it crosses: its own mesh and the next, or further down its ladder (#332).
+        float t = ladder_t(value);
+        Mesh* first_mesh = f[0].meshes + ladder_step(f, inst[0].mesh, ladder_pair(value));
         if (t < 1.0)
         {
-            own_roots = instance_roots(f, mesh, inst[0].scale, dist);
+            own_roots = instance_roots(f, first_mesh, inst[0].scale, dist);
             own_count = own_roots > 0 ? 0u : instance_items(f, instance_index, 0, false, 0u);
         }
         count = own_count;
         roots = own_roots;
         // A ladder to nothing (LADDER_VANISH, #343): past its crossing, no work.
-        if (t > 0.0 && mesh[0].ladder_next != LADDER_VANISH)
+        if (t > 0.0 && first_mesh[0].ladder_next != LADDER_VANISH)
         {
-            Mesh* next = f[0].meshes + mesh[0].ladder_next;
+            Mesh* next = f[0].meshes + first_mesh[0].ladder_next;
             uint next_roots = instance_roots(f, next, inst[0].scale, dist);
             roots += next_roots;
             count += next_roots > 0 ? 0u : instance_items(f, instance_index, 0, false, INSTANCE_LADDER_BIT);
@@ -2083,7 +2142,7 @@ void append_instance_work(Frame* f, uint64_t* status, uint ticket, uint groups, 
         for (uint k = 0; k < roots; k++)
         {
             uint part_tag = k < own_roots ? 0u : INSTANCE_LADDER_BIT;
-            Mesh* mesh = f[0].meshes + drawn_mesh(f, inst, part_tag);
+            Mesh* mesh = f[0].meshes + drawn_mesh(f, instance_index, inst, part_tag);
             if (entry + k < f[0].work_capacity)
                 f[0].roots[entry + k] = uint2(instance_index | tag | part_tag, mesh[0].roots[k < own_roots ? k : k - own_roots]);
         }
@@ -3089,9 +3148,10 @@ bool cutout_kept(Frame* f, uint id, float2 uv, bool front, float2 ground, float2
     // its own mesh's run.
     if (ladder_crossing_now(f, record.x, inst))
     {
-        Mesh* mesh = f[0].meshes + inst.mesh;
-        bool next = (record.y & MESHLET_INDEX_MASK) - mesh[0].meshlet_offset >= mesh[0].meshlet_count;
-        if (next != (spatio_temporal_noise(pixel, f[0].noise_frame).x < f[0].ladder[record.x]))
+        Mesh* mesh = f[0].meshes + ladder_first(f, record.x, inst);
+        uint cluster = record.y & MESHLET_INDEX_MASK;
+        bool next = cluster - mesh[0].meshlet_offset >= mesh[0].meshlet_count;
+        if (next != (spatio_temporal_noise(pixel, f[0].noise_frame).x < ladder_t(f[0].ladder[record.x])))
             return false;
     }
     Material mat = f[0].materials[inst.material + triangle_section(m, id & ((1u << VISIBILITY_TRIANGLE_BITS) - 1u))];

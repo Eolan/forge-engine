@@ -492,6 +492,9 @@ struct GpuMesh {
 /// the shader, [`MeshletSceneBuilder::set_fade`], #343).
 const LADDER_VANISH: u32 = u32::MAX - 1;
 
+/// The most crossings a ladder is followed down (`LADDER_STEPS` in the shader, #332).
+const LADDER_STEPS: usize = 3;
+
 impl GpuMesh {
     /// What an instance can put in either work list: all its groups of 32 clusters, or its
     /// roots.
@@ -1767,10 +1770,19 @@ impl MeshletSceneBuilder {
     }
 
     /// What an instance of the mesh `info` can put in the work lists: its mesh's work and, on a
-    /// ladder ([`Self::set_ladder`]), the next mesh's too (both while it crosses).
+    /// ladder ([`Self::set_ladder`]), the costliest two neighbours down it (both while it
+    /// crosses, followed `LADDER_STEPS` crossings down, #332).
     fn ladder_work_bound(&self, info: &GpuMesh) -> u32 {
-        let next = self.meshes.get(info.ladder_next as usize);
-        info.work_bound() + next.map_or(0, GpuMesh::work_bound)
+        let mut bound = info.work_bound();
+        let mut here = *info;
+        for _ in 0..LADDER_STEPS {
+            let Some(next) = self.meshes.get(here.ladder_next as usize) else {
+                break;
+            };
+            bound = bound.max(here.work_bound() + next.work_bound());
+            here = *next;
+        }
+        bound
     }
 
     /// Puts `next` after `mesh` on its ladder (D-075, #302): an instance of `mesh` whose sphere
@@ -1783,7 +1795,13 @@ impl MeshletSceneBuilder {
     /// Call it before adding `mesh`'s instances: their spheres grow to hold `next`. The two
     /// meshes must agree on their texture coordinates and neither be skinned (the frame reads
     /// those from the instance's mesh). The rays keep meeting `mesh` (one shape per tree for
-    /// them, D-075), and `next`'s own ladder is not followed.
+    /// them, D-075).
+    ///
+    /// `next`'s own ladder is followed (#332), up to `LADDER_STEPS` crossings: past this
+    /// crossing an instance measures itself against `next`'s size and band, crossing to the mesh
+    /// after it. Give the far end first (`set_ladder(stand_in, far)`, then
+    /// `set_ladder(tree, stand_in)`), so each sphere holds the whole ladder below it; each
+    /// step's `size_px` smaller than the one above.
     pub fn set_ladder(&mut self, mesh: MeshId, next: MeshId, size_px: f32, band: f32) {
         assert!(mesh != next, "a mesh is not its own next step");
         let near = self.meshes[mesh.0 as usize];
@@ -6963,6 +6981,32 @@ mod tests {
             builder.work_bound,
             u64::from(record.work_bound() + next.work_bound())
         );
+    }
+
+    /// A ladder of three meshes (#332), its far end given first: the first mesh's sphere holds
+    /// the whole ladder, and an instance's work is bound by the costliest two neighbours.
+    #[test]
+    fn a_ladder_of_three_holds_its_whole_chain() {
+        let rock = |seed, radius, segments| {
+            MeshletMesh::build(&forge_geom::procedural::asteroid(
+                forge_core::Seed::new(seed),
+                segments,
+                radius,
+                0.3,
+            ))
+        };
+        let mut builder = MeshletSceneBuilder::new();
+        let tree = builder.add_mesh(&rock(7, 1.0, 32));
+        let stand_in = builder.add_mesh(&rock(8, 1.4, 16));
+        let far = builder.add_mesh(&rock(9, 2.0, 8));
+        builder.set_ladder(stand_in, far, 12.0, 0.25);
+        builder.set_ladder(tree, stand_in, 40.0, 0.25);
+        let [a, b, c] = [tree, stand_in, far].map(|m| builder.meshes[m.0 as usize]);
+        assert_eq!((a.ladder_next, b.ladder_next), (stand_in.0, far.0));
+        let reach = (Vec3::from(c.center) - Vec3::from(a.center)).length() + c.radius;
+        assert!(a.radius >= reach - 1e-4, "{} against {reach}", a.radius);
+        let pairs = (a.work_bound() + b.work_bound()).max(b.work_bound() + c.work_bound());
+        assert_eq!(builder.ladder_work_bound(&a), pairs);
     }
 
     /// A fade (#343): a ladder to nothing, its sphere and work its own mesh's alone.

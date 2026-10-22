@@ -6787,8 +6787,13 @@ looked:
 - **The record:** `MeshletSceneBuilder::set_ladder(mesh, next, size_px, band)` names a mesh's next
   step, the projected size of an instance's sphere (output pixels across) at which it is half
   crossed, and the band (a share of that size either side). The instance's sphere grows to hold
-  the next mesh's, about the same centre (the culls' LOD tables are measured from it). One step a
-  mesh for now: the next mesh's own ladder is not followed.
+  the next mesh's, about the same centre (the culls' LOD tables are measured from it). Since
+  2026-10-22 (#332, a game's full tree → stand-in → far step) the next mesh's own ladder is
+  followed, up to three crossings: past a crossing an instance measures itself against the next
+  step's size and band, and the culls write `2 k + t` (the pair `k` steps down, its crossing
+  `t`), which the cluster cull, the cut-outs' raster and the resolve read. The far end is given
+  first, so each sphere holds the ladder below it; one-step ladders draw as before (0 pixels),
+  and a three-step chain draws the same on both paths with clean validation.
 - **The choice,** in both instance culls (`ladder_crossing`): the sphere's size, taken up to 15 %
   off by the instance's id, against the band. The crossing `t` (0 the mesh, 1 the next) is
   written per instance (`Frame::ladder`, a transient); the instance appends its mesh's work, the
