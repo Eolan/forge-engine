@@ -268,6 +268,9 @@ pub struct ShaderCompiler {
     shader_dir: PathBuf,
     cache_dir: PathBuf,
     optimize: bool,
+    /// An optimised build's level (`-O2`; `FORGE_SHADER_OPT` gives 1 to 3 for a run, to weigh a
+    /// compile's time against the frames', #345).
+    level: u8,
     version: String,
     /// Every entry asked for so far, in order (issue #25), shared with the clones.
     requested: Arc<Mutex<Vec<ShaderEntry>>>,
@@ -349,6 +352,11 @@ impl ShaderCompiler {
             shader_dir: shader_dir.into(),
             cache_dir,
             optimize,
+            level: env::var("FORGE_SHADER_OPT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .filter(|l| (1..=3).contains(l))
+                .unwrap_or(2),
             version,
             requested: Arc::new(Mutex::new(Vec::new())),
         })
@@ -436,6 +444,16 @@ impl ShaderCompiler {
                 missing.push(e);
             }
         }
+        // The largest files' first (`meshlet.slang`'s resolve variants took 7 to 10 s each,
+        // begun 5 s into a fresh village's warm-up): the longest compiles do not end it alone.
+        let size = |file: &str| fs::metadata(self.shader_dir.join(file)).map_or(0, |m| m.len());
+        let mut sizes: HashMap<&str, u64> = HashMap::new();
+        for e in &missing {
+            sizes
+                .entry(e.file.as_str())
+                .or_insert_with(|| size(&e.file));
+        }
+        missing.sort_by_key(|e| std::cmp::Reverse(sizes[e.file.as_str()]));
         progress.missing.store(missing.len(), Ordering::Relaxed);
         // The count the loading screen shows (`forge_core::activity`): a task with the entries
         // compiled of those missing.
@@ -447,30 +465,35 @@ impl ShaderCompiler {
         let failed: Mutex<Option<GpuError>> = Mutex::new(None);
         std::thread::scope(|scope| {
             let workers: Vec<_> = (0..threads.max(1))
-                .map(|_| {
-                    scope.spawn(|| {
-                        loop {
-                            let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                            let Some(e) = missing.get(i) else {
-                                return;
-                            };
-                            // Not listed as asked for: an entry the program no longer asks
-                            // for leaves the list at its next save.
-                            if let Err(error) = self.compile_unlisted(&e.file, &e.entry, e.stage)
-                                && let Ok(mut first) = failed.lock()
-                            {
-                                first.get_or_insert(error);
+                .map(|k| {
+                    // Named for the load profile (#345).
+                    std::thread::Builder::new()
+                        .name(format!("shaders {k}"))
+                        .spawn_scoped(scope, || {
+                            loop {
+                                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                let Some(e) = missing.get(i) else {
+                                    return;
+                                };
+                                // Not listed as asked for: an entry the program no longer asks
+                                // for leaves the list at its next save.
+                                if let Err(error) =
+                                    self.compile_unlisted(&e.file, &e.entry, e.stage)
+                                    && let Ok(mut first) = failed.lock()
+                                {
+                                    first.get_or_insert(error);
+                                }
+                                let done = progress.compiled.fetch_add(1, Ordering::Relaxed) + 1;
+                                if let Some(task) = &task {
+                                    task.progress(done as u64, total);
+                                }
                             }
-                            let done = progress.compiled.fetch_add(1, Ordering::Relaxed) + 1;
-                            if let Some(task) = &task {
-                                task.progress(done as u64, total);
-                            }
-                        }
-                    })
+                        })
                 })
                 .collect();
             workers.into_iter().try_for_each(|w| {
-                w.join()
+                w.map_err(|e| GpuError::Shader(format!("a shader warm-up thread: {e}")))?
+                    .join()
                     .map_err(|_| GpuError::Shader("a shader warm-up thread panicked".into()))
             })
         })?;
@@ -484,12 +507,21 @@ impl ShaderCompiler {
     /// precise entry ([`precise`]), keep their own SPIR-V side by side. A precise entry's `x`:
     /// its mixes written out (#282), not the SPIR-V cached before.
     fn variant(&self, file: &str, entry: &str) -> &'static str {
-        match (self.optimize, precise(file, entry)) {
-            (true, false) => "O2",
-            (true, true) => "O2px",
-            (false, false) => "O0",
-            (false, true) => "O0px",
+        match (self.opt_level(), precise(file, entry)) {
+            (0, false) => "O0",
+            (0, true) => "O0px",
+            (1, false) => "O1",
+            (1, true) => "O1px",
+            (3, false) => "O3",
+            (3, true) => "O3px",
+            (_, false) => "O2",
+            (_, true) => "O2px",
         }
+    }
+
+    /// The `-O` level its entries compile at: 0 for a debug build's.
+    fn opt_level(&self) -> u8 {
+        if self.optimize { self.level } else { 0 }
     }
 
     fn cached_path(&self, file: &str, entry: &str, hash: u64) -> PathBuf {
@@ -565,6 +597,10 @@ impl ShaderCompiler {
         }
         hasher.update(self.version.as_bytes());
         hasher.update(&[u8::from(self.optimize)]);
+        // A level other than the default keys its own SPIR-V; the default's keys are unchanged.
+        if self.opt_level() != 2 && self.optimize {
+            hasher.update(&[self.level]);
+        }
         Ok(hasher.digest())
     }
 
@@ -619,7 +655,7 @@ impl ShaderCompiler {
         cmd.arg(&source)
             .args(["-target", "spirv", "-profile", "spirv_1_6"])
             .args(["-entry", entry, "-stage", stage.slang_name()])
-            .arg(if self.optimize { "-O2" } else { "-O0" })
+            .arg(format!("-O{}", self.opt_level()))
             .args(["-fvk-use-entrypoint-name", "-matrix-layout-column-major"])
             // 39001: the bindless set aliases one binding under several resource types on purpose.
             .args(["-warnings-disable", "39001"])
@@ -830,6 +866,7 @@ mod tests {
             shader_dir: dir.clone(),
             cache_dir: dir.clone(),
             optimize: true,
+            level: 2,
             version: "test".into(),
             requested: Arc::default(),
         };
@@ -857,6 +894,7 @@ mod tests {
             shader_dir: PathBuf::new(),
             cache_dir: PathBuf::new(),
             optimize: true,
+            level: 2,
             version: String::new(),
             requested: Arc::default(),
         };

@@ -1780,8 +1780,30 @@ Measured beside the night check's batch (the machine shared), warm shader cache:
 
 The two threads run one after the other (the loading thread, then the finishing step's), each
 spreading its own work over the job system's cores; the profile sees their steps, not the jobs.
-Both maps upload every page of every mesh before the first frame (`Residency::All`): #345's
-next step measures what the first view needs of it.
+Both maps upload every page of every mesh before the first frame (`Residency::All`), but at a
+warm start the upload is a small share of the load.
+
+**Where a long start goes: the shaders.** The village's start after an edit of `meshlet.slang`
+that changes the resolve's code (a constant of the leaves' light):
+
+| | `-O2` (as built) | `-O1` (`FORGE_SHADER_OPT=1`) |
+|---|---|---|
+| The start | 18.8 s | 32.3 s |
+| `slangc` (the warm-up) | 7.4 s | 3.4 s |
+| The finishing step | 11.3 s | 28.9 s |
+
+- **The finishing step is the driver.** Nearly all of it is one pipeline compiled by the driver
+  (`vkCreateComputePipelines`): `resolve_standard_rt_main`, 11.2 s alone. The 25 others are
+  near-instant, found in the driver's cache. Making each pipeline in the warm-up as its entry
+  compiled (tried, then removed) only moved those 11 s there: one pipeline does not
+  parallelise.
+- **`-O1` costs more than it saves.** `slangc` is 2.75 times faster on the eight resolve
+  variants (12.4 s against 34 s of one core), but their SPIR-V is 2 to 5 times larger and the
+  driver takes 2.6 times longer on it. The optimised builds stay at `-O2`;
+  `FORGE_SHADER_OPT` (1 to 3) remains to measure it again.
+- **A fresh cache** (every entry compiled, every mesh cooked): the village starts in 15.8 s, the
+  warm-up's 177 entries 200 s of the cores' time and 14.1 s of the start. The largest files go
+  first now, `meshlet.slang`'s resolve variants among them (15.2 s before).
 
 ## Local exposure (`--local-exposure`, #275, D-067, 2026-10-17)
 
