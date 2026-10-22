@@ -329,7 +329,9 @@ pub fn run_loading<D: Demo + Send>(
 }
 
 /// Runs the demo built by `init` until the window closes, Escape is pressed or the frame
-/// limit is reached.
+/// limit is reached. The demo and the shell's resources are dropped before it returns, but the
+/// GPU device itself is left for the process's end to reclaim (#341), unless validating or with
+/// `FORGE_TEARDOWN=1`: a host that runs it more than once in a process sets that.
 pub fn run<D: Demo>(
     config: AppConfig,
     init: impl FnOnce(&mut Context) -> Result<D> + 'static,
@@ -380,6 +382,14 @@ pub fn run<D: Demo>(
                 light.max_cll,
                 light.max_fall
             );
+        }
+        // The device's own teardown (`vkDestroyDevice`, the allocator's blocks, Streamline) is
+        // left to the process's end, which reclaims it at once: after a long run the driver took
+        // 0.4–1.9 s over it, growing with the frames run (#341), and a game's exe stayed locked
+        // meanwhile. Everything else drops as before, the demo's own state first. Validation
+        // runs (they report what was left undestroyed) and `FORGE_TEARDOWN=1` destroy it too.
+        if !state.config.validate && std::env::var_os("FORGE_TEARDOWN").is_none() {
+            std::mem::forget(Arc::clone(&state.ctx.device));
         }
         drop(state);
         tracing::info!(frames, "exited cleanly");

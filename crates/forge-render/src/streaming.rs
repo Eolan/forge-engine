@@ -1077,8 +1077,11 @@ impl PageStreamer {
 
 impl Drop for PageStreamer {
     fn drop(&mut self) {
-        // Closing the channel ends the I/O thread's loop after its current read.
+        // The I/O thread's loop ends after its current read once its results have nowhere to
+        // go: closing the requests alone let it read and unpack every request still queued
+        // (up to `reads_in_flight` pages) before it saw the end (#341).
         self.reads = None;
+        drop(std::mem::replace(&mut self.loaded, mpsc::channel().1));
         if let Some(handle) = self.io_thread.take() {
             let _ = handle.join();
         }
