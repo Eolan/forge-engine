@@ -6853,8 +6853,9 @@ looked (`forge_render::grass`, `shaders/meshlet.slang`'s "grass"):
   reach the blades sink into the ground's own grass.
 - **The look:** the blades take their cell's row (the lawn's, the park's) and one of its two
   colours a clump, darker towards the root; their normals rounded across them. With distance,
-  their normals and contrast converge to the clump's mean, which took the visible flicker of a
-  turn under DLAA against a supersampled reference from 17 % to 7 % of the grass's pixels.
+  their normals and contrast converge to the clump's mean, and at the reach their brightness to
+  the ground's they sink into, which took the visible flicker of a turn under DLAA against a
+  supersampled reference from 17 % to 6 % of the grass's pixels.
 - **The wind** (`--grass-wind S`, 0.15 by default): a gust's wave rolls across the field along the
   wind's way, each blade a little out of step, with a flutter of its own; the tips lean `S` of
   their height at most. "grass/motion" gives the blades' pixels their motion (the blade rebuilt

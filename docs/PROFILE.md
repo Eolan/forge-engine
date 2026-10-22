@@ -899,7 +899,8 @@ still grass (ꟻLIP 0.0465 against 0.0474 on the grass).
 The blades' shading rides in `shading/standard`. **In motion,** turning 4°/s against a 2 × 2
 supersampled run (`imgdiff --then`, the grass's crop): the pixels whose change differs by more
 than 10 levels, 17.1 % with the blades' own normals and contrast, 7.1 % once they converge to
-their clump's with distance (the bare lawn: 0 %); at the default 2 levels, 66 % and 59.5 % (the
+their clump's with distance, 6.3 % once their brightness meets the ground's at the reach (3.9 %
+swaying in the wind, against a swaying reference; the bare lawn: 0 %); at the default 2 levels, 66 % and 59.5 % (the
 bare lawn 6.5 %). Neither the coverage dither (no dither: 66 %) nor a 12 m reach (57 %) is the
 cause: the stripes of lit blades over their dark gaps are. With the camera still, nothing moves.
 

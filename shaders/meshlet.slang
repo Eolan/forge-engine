@@ -6330,7 +6330,7 @@ uint shade_grass<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     // The blades' contrast converges to their clump's mean with distance (Ghost of Tsushima's
     // rule): far, a lawn shows its colour, not stripes of dark gaps between lit tips.
     float blade = 0.88 + 0.24 * grass_unit(h.hash, 7);
-    color *= lerp(lerp(0.55, 1.05, h.along) * blade, 0.85, sqrt(h.far));
+    color *= lerp(lerp(0.55, 1.05, h.along) * blade, 1.0, sqrt(h.far));
     if ((f[0].flags & FLAG_SHOW_AO) != 0 && s.ao >= 0.0)
         color = float3(s.ao * 0.25);
     if ((f[0].flags & FLAG_SHOW_GI) != 0 && s.sky != nullptr)
