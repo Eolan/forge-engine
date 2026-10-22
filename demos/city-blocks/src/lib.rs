@@ -435,6 +435,10 @@ pub struct Args {
     /// tests 1,0, a point that stays put as the camera moves).
     #[arg(long, value_delimiter = ',')]
     probe_bias: Option<Vec<f32>>,
+    /// Probes per cascade along x, y (up) and z, `X,Y,Z`, each even (`ProbeParams::counts`,
+    /// 24,12,24 by default): wider cascades reach farther from the camera (#353 weighs it).
+    #[arg(long, value_delimiter = ',')]
+    probe_counts: Option<Vec<u32>>,
     /// Draw the island without its water (issue #105, D-038): the stand-in sea's opaque plane,
     /// and the rivers and lakes painted into the ground's layers.
     #[arg(long)]
@@ -1312,6 +1316,11 @@ impl Gallery {
                     .map_or(ProbeParams::default().sample_bias, |b| {
                         [b[0], b.get(1).copied().unwrap_or(0.0)]
                     }),
+                counts: args
+                    .probe_counts
+                    .as_ref()
+                    .filter(|c| c.len() == 3)
+                    .map_or(ProbeParams::default().counts, |c| [c[0], c[1], c[2]]),
                 ..ProbeParams::default()
             };
             let mut probes = Probes::new(&ctx.device, &ctx.shaders, params)?;

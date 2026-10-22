@@ -95,6 +95,11 @@ Options:
   1 m one so). `--probe-bias N,V` sets where a surface's point is looked up among the probes: those
   shares of its normal and of the way to the viewer (`ProbeParams::sample_bias`, 0.2,0.8 by
   default, the 2021 paper's); `1,0` keeps the point still as the camera moves (#351).
+  `--probe-counts X,Y,Z` sets every cascade's probes along each axis (24,12,24; each even). Wider
+  cascades reach farther from the camera, at a cost (#353). Village, 18:00, `FORGE_ASYNC=0`, frame
+  ms at 24 → 32 → 40 across the ground: green 4.82 → 5.70 → 6.72, forest 5.84 → 6.91 → 8.10, main
+  street 5.23 → 6.12 → 7.01, the hall 5.49 → 6.33 → 7.27. The probe rays and the blend grow with the
+  probes.
 - `--no-reflections` draws without the sky's reflection (`r.reflections.sky`).
 - `--no-ray-reflections` reflects only the sky in the glass and the water (`r.reflections.rays`).
 - `--no-reflection-history` leaves the glass's mirror rays to TAA alone, without their history (#176).
