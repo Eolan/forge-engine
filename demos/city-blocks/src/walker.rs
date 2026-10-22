@@ -506,6 +506,8 @@ pub struct Walker {
     seen: u64,
     /// Seconds not yet ticked.
     owed: f64,
+    /// Its feet before the last tick, which [`Walker::drawn_feet`] draws from.
+    before: Vec3,
     /// The crossing under way (#316) and the seconds into it.
     crossing: Option<(CrossingMotion, f32)>,
     /// How the last crossing ended.
@@ -550,6 +552,7 @@ impl Walker {
             settings,
             seen: pieces.generation(),
             owed: 0.0,
+            before: feet,
             crossing: None,
             crossed: None,
         };
@@ -562,9 +565,18 @@ impl Walker {
         Ok(walker)
     }
 
-    /// Its feet, the world's metres.
+    /// Its feet, the world's metres, as its last tick left them: what the game reads.
     pub fn feet(&self) -> Vec3 {
         self.world.character(self.character).position.as_vec3()
+    }
+
+    /// Its feet as drawn: between the last two ticks by the share of a tick owed since the last,
+    /// a tick behind, so that what follows them (the camera, the body) moves every frame at any
+    /// refresh rate. Drawn at the last tick, at 144 Hz the view held for a frame or two, then
+    /// jumped a tick, and DLAA's history shimmered on every wall (the owner, 2026-10-22).
+    pub fn drawn_feet(&self) -> Vec3 {
+        let share = (self.owed / f64::from(TICK)).clamp(0.0, 1.0) as f32;
+        self.before.lerp(self.feet(), share)
     }
 
     /// How many pieces it holds as bodies.
@@ -582,6 +594,7 @@ impl Walker {
         let due = (self.owed / tick).floor();
         self.owed -= due * tick;
         for _ in 0..(due as u32).min(CATCH_UP) {
+            self.before = self.feet();
             if self.crossing.is_some() {
                 self.carry();
             } else {
@@ -1136,5 +1149,42 @@ mod tests {
             walker.advance(&pieces, [2.0, 0.0], f64::from(TICK));
         }
         assert!(walker.feet().x < 5.5, "{}", walker.feet());
+    }
+
+    #[test]
+    fn the_feet_drawn_move_every_frame_at_144_hz() {
+        let settings = WalkSettings::default();
+        let pieces = Pieces::new(Vec::new(), &settings);
+        let ground = Ground::slab(0.0, 1.0);
+        let mut walker =
+            Walker::new(&pieces, &ground, Vec3::new(0.0, 0.01, 0.0), settings).unwrap();
+        // Up to speed first.
+        for _ in 0..60 {
+            walker.advance(&pieces, [1.4, 0.0], f64::from(TICK));
+        }
+        let frame = 1.0 / 144.0;
+        let mut drawn = walker.drawn_feet().x;
+        let mut ticked = walker.feet().x;
+        let (mut still, mut steps) = (0, Vec::new());
+        for _ in 0..144 {
+            walker.advance(&pieces, [1.4, 0.0], frame);
+            if walker.feet().x == ticked {
+                still += 1;
+            }
+            ticked = walker.feet().x;
+            let next = walker.drawn_feet().x;
+            steps.push(next - drawn);
+            drawn = next;
+        }
+        // The game's feet hold on frames without a tick; the drawn ones move every frame, by
+        // about a frame's walk, never the jump of a tick.
+        assert!(still > 40, "{still} frames without a tick");
+        let step = 1.4 * frame as f32;
+        assert!(
+            steps.iter().all(|&s| s > 0.3 * step && s < 2.0 * step),
+            "{steps:?}"
+        );
+        // A tick behind the game's feet, at most.
+        assert!(walker.feet().x - drawn < 1.5 * 1.4 * TICK);
     }
 }

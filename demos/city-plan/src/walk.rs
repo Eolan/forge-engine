@@ -71,6 +71,12 @@ impl Walker {
         self.0.feet()
     }
 
+    /// Its feet as drawn, between its last two ticks (`Walker::drawn_feet`): where the camera
+    /// follows it, at any refresh rate.
+    pub fn drawn_feet(&self) -> Vec3 {
+        self.0.drawn_feet()
+    }
+
     /// Walks `walk` (m/s along the ground, the world's x and z) for the ticks `dt` seconds owe,
     /// crossing what it walks into.
     pub fn advance(&mut self, walls: &Walls, walk: [f32; 2], dt: f64) {

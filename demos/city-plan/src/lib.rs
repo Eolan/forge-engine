@@ -7802,7 +7802,7 @@ impl Running for PlanRunning {
         }
         // In first person: the camera at the walker's eyes, the view where the mouse turns it.
         if let Some(walker) = &self.walker {
-            camera.position = walker.feet() + Vec3::Y * walk::EYES;
+            camera.position = walker.drawn_feet() + Vec3::Y * walk::EYES;
         }
     }
 
