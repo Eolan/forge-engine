@@ -449,13 +449,25 @@ mod tests {
     #[test]
     fn a_crowd_walks_across_tiles_on_each_ones_field() {
         // Two people crossing from the first tile into the second, and back, past the wall's end
-        // with room to spare. (Rounding the end tightly, one cut the corner and stood wedged
-        // against it: #317's known case.)
+        // with room to spare.
+        crowd_across(23.0);
+    }
+
+    #[test]
+    fn a_crowd_rounds_a_walls_end_tightly() {
+        // The same from z = 10, round the wall's end at z = 20: one passed the two corners there
+        // within reach, cut the end and stood wedged against it (#317's known case).
+        crowd_across(10.0);
+    }
+
+    /// Two people from (20, `z`) to (45, `z`) and back across the two tiles, each on its tile's
+    /// field: both arrive within a minute, never through the wall.
+    fn crowd_across(z: f32) {
         let t = ground();
         let mut tiles = Tiles::new(PERSON, 0.1);
         tiles.build((0, 0), &t);
         tiles.build((1, 0), &t);
-        let (a, b) = (Vec3::new(20.0, 0.0, 23.0), Vec3::new(45.0, 0.0, 23.0));
+        let (a, b) = (Vec3::new(20.0, 0.0, z), Vec3::new(45.0, 0.0, z));
         let mut crowd = crate::Crowd::new(crate::CrowdSettings::default());
         let mut follows = Vec::new();
         for (from, to) in [(a, b), (b, a)] {

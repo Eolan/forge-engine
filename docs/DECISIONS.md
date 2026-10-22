@@ -7061,6 +7061,14 @@ best guess or data"):
   - reaching such a corner within 3–10 cm when the way on was not straight;
   - heading for a leg's start while short of it.
 
+  **Fixed on 2026-10-22:** within reach, a follower passes a corner only where the way on to
+  the next one is a straight walkable line from where it stands; otherwise it walks on to the
+  corner (3 cm) or until it stops coming a centimetre nearer for 30 calls, half a second. The
+  stall escape is what the door needed: there the pursuers queue, stop coming nearer, and pass
+  as before. Both people now round the wall's end tightly (`a_crowd_rounds_a_walls_end_tightly`,
+  from z = 10). The pursuers still all get in: 4 of 4 by the door, least gap −0.018 m (−0.028
+  before), and 4 of 4 through the windows, −0.008 m (−0.000).
+
 **The proof, the same day** (city-plan's `pursuers_get_into_a_house_by_its_door_or_through_its_windows`):
 - **The setup:** four pursuers on the street, 3 m before the first house with insides, go for
   its hall on the house's field. They follow their paths, keep clear of one another, and cross

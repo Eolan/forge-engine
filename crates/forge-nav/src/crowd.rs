@@ -2,8 +2,10 @@
 //! walk field.
 //!
 //! - **Following** ([`Follow`]): an agent heads for its path's next corner and passes it once
-//!   within [`CORNER_REACH`]. It slows within [`ARRIVAL`] metres of where it must stop: the path's
-//!   end, or a corner where a link starts. There it waits for the game to cross the link
+//!   within [`CORNER_REACH`] where the way on to the corner after it is walkable from where it
+//!   stands, else at the corner or once it stops coming nearer. It slows within [`ARRIVAL`]
+//!   metres of where it must stop: the path's end, or a corner where a link starts. There it
+//!   waits for the game to cross the link
 //!   ([`Follow::at_link`], then [`Follow::crossed`]). Within [`NEAR_WALLS`] of the walkable's
 //!   edge it heads [`LOOK_AHEAD`] along its leg instead, back to the line the path was pulled
 //!   along clear of the walls (a door's middle); in the open it may drift aside.
@@ -38,8 +40,13 @@ use glam::{Vec2, Vec3};
 
 use crate::{Field, Path, Tiles};
 
-/// How near a corner an agent passes it, metres.
+/// How near a corner an agent passes it, metres (where the way on is clear: [`Follow`]).
 pub const CORNER_REACH: f32 = 0.25;
+/// How near a corner an agent passes it whatever lies beyond, metres.
+const AT_CORNER: f32 = 0.03;
+/// After how many calls without coming a centimetre nearer its corner an agent within reach
+/// passes it whatever lies beyond: half a second at 60 steps a second.
+const STALLED: u32 = 30;
 /// How far before a stop an agent starts slowing, metres.
 pub const ARRIVAL: f32 = 1.0;
 /// How far along its path's leg, past where it stands across from it, an agent near walls
@@ -81,6 +88,9 @@ pub struct Follow {
     next: usize,
     /// The link it waits at.
     waiting: Option<usize>,
+    /// The nearest it has come to its next corner, metres, and the calls since it last came
+    /// a centimetre nearer.
+    closest: (f32, u32),
 }
 
 impl Follow {
@@ -91,6 +101,7 @@ impl Follow {
             links: path.links.clone(),
             next: path.points.len().min(1),
             waiting: None,
+            closest: (f32::MAX, 0),
         }
     }
 
@@ -136,7 +147,27 @@ impl Follow {
             };
             let d = plan(corner) - plan(at);
             let distance = d.length();
-            if distance > CORNER_REACH {
+            if distance < self.closest.0 - 0.01 {
+                self.closest = (distance, 0);
+            } else {
+                self.closest.1 += 1;
+            }
+            // Within reach it passes the corner where the way on to the corner after it is a
+            // straight walkable line from where it stands, else once at it or once it stops
+            // coming nearer (others in the way: a queue at a door). Passing two corners round a
+            // wall's end within reach, one cut the end and stood wedged against it (#317).
+            let way_on = || {
+                let (Some(f), Some(&after)) = (field, self.points.get(self.next + 1)) else {
+                    return true;
+                };
+                match (f.place(at), f.place(after)) {
+                    (Some(a), Some(b)) => f.walkable_line(a, b),
+                    _ => true,
+                }
+            };
+            let pass = distance <= CORNER_REACH
+                && (distance < AT_CORNER || self.closest.1 >= STALLED || way_on());
+            if !pass {
                 let stop = distance + self.beyond();
                 // Near walls, towards the point [`LOOK_AHEAD`] along its leg past where it
                 // stands across from it: pushed off the leg by others, it comes back to the line
@@ -162,6 +193,7 @@ impl Follow {
                 Some(&(_, link)) => self.waiting = Some(link),
                 None => self.next += 1,
             }
+            self.closest = (f32::MAX, 0);
         }
         Vec2::ZERO
     }
