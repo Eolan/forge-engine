@@ -558,6 +558,11 @@ pub struct Args {
     /// default, 0 never).
     #[arg(long)]
     pub far_shadows: Option<f32>,
+    /// Grass near the camera (#300, D-075): blades drawn into the visibility buffer within this
+    /// many metres (the flag alone: 20) where the scenario has a grass map (the city plan's
+    /// gardens and parks).
+    #[arg(long, num_args = 0..=1, default_missing_value = "20")]
+    pub grass: Option<f32>,
     /// Show the ambient occlusion in grey instead of the shading (V toggles it).
     #[arg(long)]
     show_ao: bool,
@@ -1711,6 +1716,29 @@ impl Gallery {
                 );
                 glass = Some(made);
             }
+        }
+        // The scene's grass near the camera (#300, `--grass`), from the world frame to the
+        // scene's.
+        if let (Some(reach), Some((mut map, row))) =
+            (args.grass, running.as_ref().and_then(|r| r.grass()))
+        {
+            let shift =
+                forge_render::CellPos::from_f64(glam::DVec3::ZERO).relative_to(scene.origin());
+            map.origin += glam::Vec2::new(shift.x, shift.z);
+            for c in &mut map.cells {
+                c.level += shift.y;
+            }
+            tracing::info!(
+                cells = map.cells.len(),
+                blades = map.blades(),
+                reach,
+                "grass"
+            );
+            renderer.set_grass(
+                &ctx.device,
+                &ctx.shaders,
+                Some((&map, forge_render::grass::GrassSettings { reach, row })),
+            )?;
         }
         // The lamps by ReSTIR DI (D-065), where RTXDI's headers are (`rtxdi-sdk/`) and the device
         // traces rays: with `--street-restir` the street lamps of a scene that has them, every one

@@ -679,6 +679,15 @@ struct GpuFrame {
     /// [`MeshletSceneBuilder::set_far_shadows`]), metres; 0: never.
     far_shadows: f32,
     far_shadows_pad: u32,
+    /// The grass map's cells (#300, [`MeshletRenderer::set_grass`]), 0 without grass; its corner
+    /// (x, z) in the scene frame, a cell's side, the blades' reach, its cells along x and the
+    /// blades' material row.
+    grass: u64,
+    grass_origin: [f32; 2],
+    grass_cell: f32,
+    grass_reach: f32,
+    grass_width: u32,
+    grass_row: u32,
 }
 
 /// Where a frame slot's light lists start in its lamps' buffer, bytes: after the lamps.
@@ -1064,8 +1073,9 @@ const REJECTS_MAX_CAPACITY: u32 = 1 << 22;
 pub const VISIBLE_INITIAL_CAPACITY: u32 = 1 << 16;
 
 /// Most slots the list can grow to: the visibility id keeps 7 bits for the triangle
-/// (`slot << 7 | triangle`), the slot has the other 25 (256 MiB of list per frame slot).
-pub const VISIBLE_MAX_CAPACITY: u32 = 1 << (32 - 7);
+/// (`slot << 7 | triangle`) and its top bit for the grass blades (#300), the slot has the other 24
+/// (128 MiB of list per frame slot).
+pub const VISIBLE_MAX_CAPACITY: u32 = 1 << (32 - 7 - 1);
 const _: () = assert!(VISIBLE_INITIAL_CAPACITY <= VISIBLE_MAX_CAPACITY);
 
 /// The list size after a frame that wanted `wanted` slots: unchanged while they fit, else the
@@ -3767,6 +3777,8 @@ fn create_vis64(device: &Arc<Device>, extent: vk::Extent2D) -> Result<GraphBuffe
 pub struct MeshletRenderer {
     device: Arc<Device>,
     path: GeometryPath,
+    /// The grass near the camera (#300, [`Self::set_grass`]): none by default.
+    grass: Option<crate::grass::Grass>,
     /// The draw pipelines: mesh shaders, or vertex + fragment on the fallback path.
     pipeline_solid: Pipeline,
     pipeline_wire: Pipeline,
@@ -4345,6 +4357,7 @@ impl MeshletRenderer {
         Ok(Self {
             device: Arc::clone(device),
             path,
+            grass: None,
             pipeline_solid,
             pipeline_wire,
             pipeline_cutouts,
@@ -4506,6 +4519,23 @@ impl MeshletRenderer {
     /// Size of the depth pyramids' level 0.
     pub fn hzb_extent(&self) -> vk::Extent2D {
         self.hzb[0].extent()
+    }
+
+    /// Draws grass near the camera from `map` (#300, D-075, [`crate::grass`]), or none: the blades
+    /// over every frame's clusters, rebuilt by the resolve.
+    pub fn set_grass(
+        &mut self,
+        device: &Arc<Device>,
+        shaders: &ShaderCompiler,
+        map: Option<(&crate::grass::GrassMap, crate::grass::GrassSettings)>,
+    ) -> Result<()> {
+        self.grass = match map {
+            Some((map, settings)) => Some(crate::grass::Grass::new(
+                device, shaders, map, settings, self.path,
+            )?),
+            None => None,
+        };
+        Ok(())
     }
 
     /// The device address of frame slot `slot`'s `Frame` block (`meshlet.slang`), written by
@@ -4719,6 +4749,11 @@ impl MeshletRenderer {
         // A point relative to this camera sits `camera − previous camera` further from the
         // previous one (issue #93): a small step, exact in the cells' arithmetic.
         let step = params.cull.position.relative_to(prev.camera);
+        let (grass, grass_origin, grass_cell, grass_reach, grass_width, grass_row) =
+            self.grass.as_ref().map_or(
+                (0, [0.0; 2], 1.0, 0.0, 1, 0),
+                crate::grass::Grass::frame_fields,
+            );
         GpuFrame {
             view_proj: params.view_proj.to_cols_array(),
             cull_view_proj: params.cull.view_proj.to_cols_array(),
@@ -4814,6 +4849,12 @@ impl MeshletRenderer {
             ladder: 0,
             far_shadows: scene.far_shadows,
             far_shadows_pad: 0,
+            grass,
+            grass_origin,
+            grass_cell,
+            grass_reach,
+            grass_width,
+            grass_row,
         }
     }
 
@@ -5399,6 +5440,17 @@ impl MeshletRenderer {
                 second,
                 &params,
                 slot,
+            );
+        }
+        // The grass blades (#300) over the clusters both passes drew.
+        if let Some(grass) = &self.grass {
+            grass.draw(
+                graph,
+                frame_address,
+                params.cull.position.relative_to(scene.origin),
+                io.visibility,
+                io.depth,
+                params.extent,
             );
         }
         self.prev.set(match (occlusion, build) {
@@ -6650,8 +6702,9 @@ mod tests {
 
     #[test]
     fn every_list_slot_fits_the_visibility_id() {
-        // The id keeps 7 bits for the triangle (124 per cluster): the slot has the other 25.
-        assert!(u64::from(VISIBLE_MAX_CAPACITY) <= 1 << (32 - 7));
+        // The id keeps 7 bits for the triangle (124 per cluster) and its top bit for the grass
+        // blades (#300): the slot has the other 24.
+        assert!(u64::from(VISIBLE_MAX_CAPACITY) <= 1 << (32 - 7 - 1));
     }
 
     #[test]

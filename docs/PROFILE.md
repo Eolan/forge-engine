@@ -882,6 +882,23 @@ each:
 Every shadow ray through a crown from the air tested its cards against the leaf atlas; the
 proxy is opaque, so the hardware ends them. The main street's shadows fall within 60 m.
 
+**Grass near the camera** (#300, D-075, 2026-10-22; city-blocks' `--grass`, 20 m): the village
+at 1600 × 900, DLAA, the green's view (`12.9,1.7,-226.0,176.1,-5`) over the park's grass, its
+map 1.44 M cells and 3.96 M blades.
+
+| | `grass/count` | `grass/scan` | `grass/emit` | `grass/raster` | The frame |
+|---|---|---|---|---|---|
+| The green, still | 0.021 ms | 0.008 | 0.002 | 0.091 | 4.70 ms |
+| A metre lower, eyes at 0.6 m | 0.021 | 0.008 | 0.002 | 0.102 | 4.64 |
+| Turning 4°/s | 0.019 | 0.008 | 0.002 | 0.099 | 4.54 (4.40 without) |
+
+The blades' shading rides in `shading/standard`. **In motion,** turning 4°/s against a 2 × 2
+supersampled run (`imgdiff --then`, the grass's crop): the pixels whose change differs by more
+than 10 levels, 17.1 % with the blades' own normals and contrast, 7.1 % once they converge to
+their clump's with distance (the bare lawn: 0 %); at the default 2 levels, 66 % and 59.5 % (the
+bare lawn 6.5 %). Neither the coverage dither (no dither: 66 %) nor a 12 m reach (57 %) is the
+cause: the stripes of lit blades over their dark gaps are. With the camera still, nothing moves.
+
 **A cut-out row's triangles alone in the query loop** (#307, 2026-10-19): each mesh's structure
 holds its opaque sections and its cut-out ones as two geometries (D-029). The village, best of
 three, against the build before:

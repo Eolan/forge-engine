@@ -25,6 +25,7 @@ pub mod exposure;
 pub mod ffx_shadows;
 pub mod fsr;
 pub mod glass;
+pub mod grass;
 pub mod gtao;
 pub mod lamps;
 pub mod liquid;

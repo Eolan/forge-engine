@@ -204,6 +204,11 @@ pub trait Running: Send {
     fn glass(&self) -> forge_render::GlassPanes {
         forge_render::GlassPanes::default()
     }
+    /// Its grass near the camera (#300, D-075), taken once after the build, in the world frame
+    /// (as `glass`): its map, and the material row of its blades. None by default.
+    fn grass(&self) -> Option<(forge_render::grass::GrassMap, u32)> {
+        None
+    }
     /// Its doorways shut or opened by their doors since the last frame at `time` (the
     /// particles' clock, seconds; #327): each its place in [`Running::probe_regions`] and the
     /// share of the way across from its `region` side its door's leaf stands at, or `None`

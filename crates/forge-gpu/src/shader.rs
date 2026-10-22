@@ -158,6 +158,9 @@ const PRECISE_ENTRIES: &[(&str, &str)] = &[
     ("meshlet.slang", "resolve_jelly_main"),
     ("meshlet.slang", "resolve_jelly_rt_main"),
     ("meshlet.slang", "reflections_main"),
+    // The grass blades (#300): drawn, then rebuilt by the resolve from their ids to the bit.
+    ("meshlet.slang", "grass_mesh_main"),
+    ("meshlet.slang", "grass_vertex_main"),
     // D-065's lamps: their rays and the filter of what they found feed the resolve.
     ("meshlet.slang", "lamp_rays_main"),
     ("meshlet.slang", "lamp_filter_main"),

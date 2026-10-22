@@ -307,6 +307,16 @@ public static const uint STAT_REJECTED = 17;       // clusters pass 1 selected i
 // float bits: reversed-Z, nearer is larger; 0 is empty) until the merge.
 public static const uint VISIBILITY_EMPTY = 0xFFFFFFFFu;
 public static const uint VISIBILITY_TRIANGLE_BITS = 7;
+// A grass blade's id (#300, D-075) has the top bit, which no cluster's has (the visible list
+// stops at 2^24 slots): `VISIBILITY_GRASS_BIT | cell << 9 | blade << 3 | triangle`, its cell of
+// the grass map, its index there and its triangle (`grass_blade`).
+public static const uint VISIBILITY_GRASS_BIT = 0x80000000u;
+
+// Whether the (non-empty) id `vis` is a grass blade's.
+bool is_grass(uint vis)
+{
+    return (vis & VISIBILITY_GRASS_BIT) != 0u && vis != VISIBILITY_EMPTY;
+}
 
 // What a ray's hit reads to shade its triangle (issue #50, crates/forge-render/src/raytrace.rs):
 // every mesh's cut, as the bottom-level structures hold it, and where each mesh starts in it.
@@ -396,6 +406,13 @@ public struct FarLamps
 // Every matrix is camera-relative (D-004, issue #93): the camera stands at the origin of the
 // space `view_proj` takes, and positions get there through `instance_relative`. Rays and the
 // probes live in the scene frame, `camera_in_scene` from the camera (`to_scene`).
+// A cell of the grass map (#300, D-075; `forge_render::grass::GrassCell`).
+public struct GrassCell
+{
+    public float level;             // the ground's height at the cell's middle, the scene frame
+    public uint look;               // its blades (bits 0–7, at most GRASS_CELL_BLADES), their height in centimetres (8–15), their row after `Frame::grass_row` (16–23)
+};
+
 public struct Frame
 {
     public float4x4 view_proj;      // for drawing
@@ -478,6 +495,12 @@ public struct Frame
     public float* ladder;           // per instance on a ladder (D-075), this frame's crossing (`ladder_crossing`), written by the instance culls; null: no ladder
     public float far_shadows;       // metres from the camera from which the shadow rays meet RAY_SHADOW_FAR's world (D-075 step 3, `shadow_world`); 0: never
     public uint far_shadows_pad;
+    public GrassCell* grass;        // the grass map's cells (#300, D-075), rows of increasing z; null: no grass
+    public float2 grass_origin;     // its corner (x, z), the scene frame
+    public float grass_cell;        // a cell's side, metres
+    public float grass_reach;       // how far from the camera blades stand, metres
+    public uint grass_width;        // its cells along x
+    public uint grass_row;          // the blades' material row
 };
 
 // Whether this thread's rays meet the movers: every pass's but the probes' unless their scene asks
@@ -2645,6 +2668,384 @@ uint frag_main(uint id : SV_PrimitiveID) : SV_Target
 uint frag_fallback_main(nointerpolation uint id_base : VISIBILITY_ID, uint triangle : SV_PrimitiveID) : SV_Target
 {
     return id_base | triangle;
+}
+
+// -------------------------------------------------------------------- grass ---
+// Grass near the camera (#300, D-075): blades drawn into the visibility buffer from the region's
+// grass map (`Frame::grass`), each a pure function of its cell and its index there, the same
+// wherever the camera stands (D-063: nothing is generated around the viewer). Three culls list
+// the patches of 16 blades within the reach in a fixed order (`grass_count_main`,
+// `grass_scan_main`, `grass_emit_main`); `grass_mesh_main` draws them (the fallback:
+// `grass_vertex_main`), and the resolve rebuilds a blade's triangle from its id
+// (`grass_hit`). Opaque blades at least a pixel wide, the part of a pixel a thinner one covers
+// kept by the frame's noise (Humus' wires; DLAA averages it). Met by no ray.
+
+static const uint GRASS_CELL_BITS = 21;
+static const uint GRASS_CELL_BLADES = 64;
+static const uint GRASS_PATCH_BLADES = 16;
+static const uint GRASS_SEGMENTS = 3;
+static const uint GRASS_BLADE_VERTICES = 2 * GRASS_SEGMENTS + 1;
+static const uint GRASS_BLADE_TRIANGLES = 2 * GRASS_SEGMENTS - 1;
+static const uint GRASS_PATCH_VERTICES = GRASS_PATCH_BLADES * GRASS_BLADE_VERTICES;
+static const uint GRASS_PATCH_TRIANGLES = GRASS_PATCH_BLADES * GRASS_BLADE_TRIANGLES;
+// The mesh grid's rows: a patch's index is `group.y * GRASS_GRID_ROW + group.x`.
+static const uint GRASS_GRID_ROW = 256;
+// A blade's width at its root, metres, before its own spread.
+static const float GRASS_WIDTH = 0.012;
+// A blade's vertices: left and right at the foot of each segment, then the tip.
+static const uint3 GRASS_TRIANGLES[GRASS_BLADE_TRIANGLES] = {
+    uint3(0, 1, 3), uint3(0, 3, 2), uint3(2, 3, 5), uint3(2, 5, 4), uint3(4, 5, 6)
+};
+
+struct GrassPush
+{
+    Frame* frame;     // the pass 1 block
+    uint* counts;     // per cell of the window: its patches; from `window_size²` on, its first patch
+    uint* patches;    // per patch: its cell << 2 | its quarter of the cell's blades
+    uint* args;       // the mesh grid (x, y, z), the patch count, the fallback's draw (vertices, instances, first vertex, first instance)
+    int2 window;      // the window's first cell (x, z) this frame
+    uint window_size; // its side, cells
+    uint capacity;    // patches at most
+};
+
+[[vk::push_constant]]
+GrassPush grass_push;
+
+uint grass_hash(uint a, uint b)
+{
+    uint n = a * 0x9E3779B9u ^ (b + 0x7F4A7C15u) * 0x85EBCA6Bu;
+    n ^= n >> 16;
+    n *= 0x7feb352du;
+    n ^= n >> 15;
+    n *= 0x846ca68bu;
+    n ^= n >> 16;
+    return n;
+}
+
+float grass_unit(uint h, uint shift)
+{
+    return float((h >> shift) & 0xFFFFu) / 65536.0;
+}
+
+struct GrassBlade
+{
+    float3 root;      // the scene frame
+    float2 side;      // across the blade (x, z), unit
+    float2 lean;      // the tip's offset along x and z per metre of height (bent quadratically)
+    float height;
+    float half_width; // drawn, at the root
+    float coverage;   // the share of the drawn width the blade covers (under a pixel: dithered)
+    uint hash;
+    bool alive;
+};
+
+// Blade `index` of grass map cell `cell`. Compiled precise in every entry that calls it
+// (`PRECISE_ENTRIES`), so the raster's triangles and the resolve's are the same to the bit.
+GrassBlade grass_blade(Frame* f, uint cell, uint index)
+{
+    GrassCell c = f[0].grass[cell];
+    GrassBlade b;
+    uint h = grass_hash(cell, index);
+    uint h2 = grass_hash(h, 0x51ED270Bu);
+    uint h3 = grass_hash(h2, 0x2545F491u);
+    b.hash = h;
+    uint x = cell % f[0].grass_width;
+    uint z = cell / f[0].grass_width;
+    float2 at = f[0].grass_origin
+        + (float2(float(x), float(z)) + float2(grass_unit(h, 0), grass_unit(h, 16))) * f[0].grass_cell;
+    b.root = float3(at.x, c.level, at.y);
+    b.height = float((c.look >> 8) & 0xFFu) * 0.01 * (0.55 + 0.9 * grass_unit(h2, 0));
+    float2 d = float2(grass_unit(h3, 0), grass_unit(h3, 16)) * 2.0 - 1.0;
+    b.side = dot(d, d) > 1e-4 ? normalize(d) : float2(1.0, 0.0);
+    b.lean = float2(-b.side.y, b.side.x) * (0.15 + 0.4 * grass_unit(h2, 16));
+    // At least a pixel wide: a thinner blade covers its share of the pixel.
+    float distance = length(b.root - f[0].camera_in_scene.xyz);
+    float pixel = 2.0 * distance / (f[0].p00 * float(f[0].target_width));
+    float width = GRASS_WIDTH * (0.75 + 0.5 * grass_unit(grass_hash(h3, 0x68E31DA4u), 0));
+    b.half_width = 0.5 * max(width, pixel);
+    b.coverage = width / max(width, pixel);
+    // Over the last fifth of the reach the blades sink into the ground's own grass.
+    b.height *= saturate((f[0].grass_reach - distance) / (0.2 * f[0].grass_reach));
+    b.alive = index < min(c.look & 0xFFu, GRASS_CELL_BLADES) && b.height > 0.005;
+    return b;
+}
+
+// Vertex `k` of blade `b` (`GRASS_TRIANGLES`), the scene frame.
+float3 grass_vertex(GrassBlade b, uint k)
+{
+    uint level = min(k / 2u, GRASS_SEGMENTS);
+    float t = float(level) / float(GRASS_SEGMENTS);
+    float3 p = b.root + float3(b.lean.x * t * t, t, b.lean.y * t * t) * b.height;
+    if (k < 2u * GRASS_SEGMENTS)
+    {
+        float w = b.half_width * (1.0 - 0.8 * t);
+        p.xz += b.side * ((k & 1u) != 0u ? w : -w);
+    }
+    return p;
+}
+
+// The id of triangle `j` of blade `index` of `cell`.
+uint grass_id(uint cell, uint index, uint j)
+{
+    return VISIBILITY_GRASS_BIT | (cell << 9) | (index << 3) | j;
+}
+
+// Per cell of the window round the camera: the patches of its blades within the reach and the
+// frustum, 0 for the others.
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void grass_count_main(uint3 id : SV_DispatchThreadID)
+{
+    uint size = grass_push.window_size;
+    if (id.x >= size * size)
+        return;
+    Frame* f = grass_push.frame;
+    int2 c = grass_push.window + int2(int(id.x % size), int(id.x / size));
+    uint width = f[0].grass_width;
+    uint patches = 0;
+    if (all(c >= 0) && uint(c.x) < width && uint(c.y) * width + uint(c.x) < (1u << GRASS_CELL_BITS))
+    {
+        uint cell = uint(c.y) * width + uint(c.x);
+        GrassCell g = f[0].grass[cell];
+        uint count = min(g.look & 0xFFu, GRASS_CELL_BLADES);
+        float tallest = float((g.look >> 8) & 0xFFu) * 0.01 * 1.45;
+        float2 middle = f[0].grass_origin + (float2(c) + 0.5) * f[0].grass_cell;
+        float3 centre = float3(middle.x, g.level + 0.5 * tallest, middle.y) - f[0].camera_in_scene.xyz;
+        float radius = 0.71 * f[0].grass_cell + tallest;
+        if (count > 0u && length(centre) - radius < f[0].grass_reach && sphere_in_frustum(f, centre, radius))
+            patches = (count + GRASS_PATCH_BLADES - 1u) / GRASS_PATCH_BLADES;
+    }
+    grass_push.counts[id.x] = patches;
+}
+
+groupshared uint g_grass_runs[256];
+
+// Each window cell's first patch, in the window's order (the same patches, ids and image from
+// run to run), and the draws' arguments.
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void grass_scan_main(uint thread : SV_GroupThreadID)
+{
+    uint n = grass_push.window_size * grass_push.window_size;
+    uint per = (n + 255u) / 256u;
+    uint start = min(thread * per, n);
+    uint end = min(start + per, n);
+    uint sum = 0;
+    for (uint i = start; i < end; i++)
+        sum += grass_push.counts[i];
+    g_grass_runs[thread] = sum;
+    GroupMemoryBarrierWithGroupSync();
+    if (thread == 0u)
+    {
+        uint run = 0;
+        for (uint t = 0; t < 256u; t++)
+        {
+            uint s = g_grass_runs[t];
+            g_grass_runs[t] = run;
+            run += s;
+        }
+        uint total = min(run, grass_push.capacity);
+        grass_push.args[0] = min(total, GRASS_GRID_ROW);
+        grass_push.args[1] = (total + GRASS_GRID_ROW - 1u) / GRASS_GRID_ROW;
+        grass_push.args[2] = 1u;
+        grass_push.args[3] = total;
+        grass_push.args[4] = total * GRASS_PATCH_TRIANGLES * 3u;
+        grass_push.args[5] = 1u;
+        grass_push.args[6] = 0u;
+        grass_push.args[7] = 0u;
+    }
+    GroupMemoryBarrierWithGroupSync();
+    uint first = g_grass_runs[thread];
+    for (uint i = start; i < end; i++)
+    {
+        grass_push.counts[n + i] = first;
+        first += grass_push.counts[i];
+    }
+}
+
+// Each window cell's patches, from its first.
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void grass_emit_main(uint3 id : SV_DispatchThreadID)
+{
+    uint size = grass_push.window_size;
+    uint n = size * size;
+    if (id.x >= n)
+        return;
+    uint patches = grass_push.counts[id.x];
+    if (patches == 0u)
+        return;
+    int2 c = grass_push.window + int2(int(id.x % size), int(id.x / size));
+    uint cell = uint(c.y) * grass_push.frame[0].grass_width + uint(c.x);
+    uint first = grass_push.counts[n + id.x];
+    for (uint k = 0; k < patches; k++)
+    {
+        if (first + k < grass_push.capacity)
+            grass_push.patches[first + k] = (cell << 2) | k;
+    }
+}
+
+struct GrassVertexOut
+{
+    float4 position : SV_Position;
+    nointerpolation float coverage : GRASS_COVERAGE;
+};
+
+struct GrassPrimitiveOut
+{
+    uint id : SV_PrimitiveID;
+    bool cull : SV_CullPrimitive;
+};
+
+// One workgroup a patch: up to 16 blades of 7 vertices and 5 triangles.
+[shader("mesh")]
+[outputtopology("triangle")]
+[numthreads(32, 1, 1)]
+void grass_mesh_main(
+    uint thread : SV_GroupThreadID,
+    uint3 group : SV_GroupID,
+    out vertices GrassVertexOut verts[GRASS_PATCH_VERTICES],
+    out indices uint3 tris[GRASS_PATCH_TRIANGLES],
+    out primitives GrassPrimitiveOut prims[GRASS_PATCH_TRIANGLES])
+{
+    Frame* f = grass_push.frame;
+    uint index = group.y * GRASS_GRID_ROW + group.x;
+    uint blades = 0;
+    uint cell = 0;
+    uint first = 0;
+    if (index < grass_push.args[3])
+    {
+        uint patch = grass_push.patches[index];
+        cell = patch >> 2;
+        first = (patch & 3u) * GRASS_PATCH_BLADES;
+        uint count = min(f[0].grass[cell].look & 0xFFu, GRASS_CELL_BLADES);
+        blades = count > first ? min(count - first, GRASS_PATCH_BLADES) : 0u;
+    }
+    // One call at the top level (#28).
+    SetMeshOutputCounts(blades * GRASS_BLADE_VERTICES, blades * GRASS_BLADE_TRIANGLES);
+    float3 camera = f[0].camera_in_scene.xyz;
+    for (uint v = thread; v < blades * GRASS_BLADE_VERTICES; v += 32u)
+    {
+        GrassBlade b = grass_blade(f, cell, first + v / GRASS_BLADE_VERTICES);
+        verts[v].position = mul(f[0].view_proj, float4(grass_vertex(b, v % GRASS_BLADE_VERTICES) - camera, 1));
+        verts[v].coverage = b.coverage;
+    }
+    for (uint t = thread; t < blades * GRASS_BLADE_TRIANGLES; t += 32u)
+    {
+        uint blade = t / GRASS_BLADE_TRIANGLES;
+        uint j = t % GRASS_BLADE_TRIANGLES;
+        tris[t] = GRASS_TRIANGLES[j] + blade * GRASS_BLADE_VERTICES;
+        prims[t].id = grass_id(cell, first + blade, j);
+        prims[t].cull = !grass_blade(f, cell, first + blade).alive;
+    }
+}
+
+// Whether the frame's noise keeps a fragment of a blade covering `coverage` of its drawn width.
+bool grass_kept(float2 position, float coverage)
+{
+    return coverage >= 1.0 || spatio_temporal_noise(uint2(position), grass_push.frame[0].noise_frame).x < coverage;
+}
+
+[shader("fragment")]
+uint grass_frag_main(float4 position : SV_Position, nointerpolation float coverage : GRASS_COVERAGE, uint id : SV_PrimitiveID) : SV_Target
+{
+    if (!grass_kept(position.xy, coverage))
+        discard;
+    return id;
+}
+
+struct GrassFallbackOut
+{
+    float4 position : SV_Position;
+    nointerpolation float coverage : GRASS_COVERAGE;
+    nointerpolation uint id : GRASS_ID;
+};
+
+// The fallback's blades (D-003): one non-indexed draw of every patch's 80 triangles, a dead
+// blade's left outside the view.
+[shader("vertex")]
+GrassFallbackOut grass_vertex_main(uint vertex : SV_VulkanVertexID)
+{
+    Frame* f = grass_push.frame;
+    uint tri = vertex / 3u;
+    uint patch = grass_push.patches[tri / GRASS_PATCH_TRIANGLES];
+    uint local = tri % GRASS_PATCH_TRIANGLES;
+    uint cell = patch >> 2;
+    uint index = (patch & 3u) * GRASS_PATCH_BLADES + local / GRASS_BLADE_TRIANGLES;
+    uint j = local % GRASS_BLADE_TRIANGLES;
+    GrassBlade b = grass_blade(f, cell, index);
+    GrassFallbackOut o;
+    o.position = b.alive
+        ? mul(f[0].view_proj, float4(grass_vertex(b, GRASS_TRIANGLES[j][vertex % 3u]) - f[0].camera_in_scene.xyz, 1))
+        : float4(2.0, 2.0, 0.5, 1.0);
+    o.coverage = b.coverage;
+    o.id = grass_id(cell, index, j);
+    return o;
+}
+
+[shader("fragment")]
+uint grass_frag_fallback_main(float4 position : SV_Position, nointerpolation float coverage : GRASS_COVERAGE, nointerpolation uint id : GRASS_ID) : SV_Target
+{
+    if (!grass_kept(position.xy, coverage))
+        discard;
+    return id;
+}
+
+// A blade's surface at a pixel, rebuilt from its id as the raster drew it.
+struct GrassHit
+{
+    float3 relative;  // to the camera
+    float3 scene;     // the scene frame
+    float3 n;
+    float3 dpdx;      // the scene position's change per pixel
+    float3 dpdy;
+    float along;      // up the blade, 0 at its root to 1 at its tip
+    uint hash;
+    uint tint;        // its cell's: the row after the map's first its blades take
+    float far;        // how far it stands, a share of the reach
+    uint cell;        // its cell: its clump's colour
+};
+
+GrassHit grass_hit(Frame* f, uint vis, uint2 pixel, float2 size)
+{
+    uint cell = (vis >> 9) & ((1u << GRASS_CELL_BITS) - 1u);
+    uint index = (vis >> 3) & (GRASS_CELL_BLADES - 1u);
+    uint3 k = GRASS_TRIANGLES[min(vis & 7u, GRASS_BLADE_TRIANGLES - 1u)];
+    GrassBlade b = grass_blade(f, cell, index);
+    float3 camera = f[0].camera_in_scene.xyz;
+    float3 p0 = grass_vertex(b, k.x) - camera;
+    float3 p1 = grass_vertex(b, k.y) - camera;
+    float3 p2 = grass_vertex(b, k.z) - camera;
+    float4 c0 = mul(f[0].view_proj, float4(p0, 1));
+    float4 c1 = mul(f[0].view_proj, float4(p1, 1));
+    float4 c2 = mul(f[0].view_proj, float4(p2, 1));
+    float2 ndc = float2((float(pixel.x) + 0.5) / size.x * 2.0 - 1.0, 1.0 - (float(pixel.y) + 0.5) / size.y * 2.0);
+    Barycentrics bc = barycentrics(c0, c1, c2, ndc, size);
+    GrassHit h;
+    h.relative = bc.lambda.x * p0 + bc.lambda.y * p1 + bc.lambda.z * p2;
+    h.scene = h.relative + camera;
+    h.dpdx = bc.ddx.x * p0 + bc.ddx.y * p1 + bc.ddx.z * p2;
+    h.dpdy = bc.ddy.x * p0 + bc.ddy.y * p1 + bc.ddy.z * p2;
+    h.along = saturate((h.scene.y - b.root.y) / max(b.height, 1e-4));
+    h.hash = b.hash;
+    h.tint = (f[0].grass[cell].look >> 16) & 0xFFu;
+    h.cell = cell;
+    // The blade's face, turned to the viewer, rounded across it: its edges' normals lean out.
+    float t = h.along;
+    float3 up = normalize(float3(2.0 * b.lean.x * t, 1.0, 2.0 * b.lean.y * t));
+    float3 side = float3(b.side.x, 0.0, b.side.y);
+    float3 face = normalize(cross(side, up));
+    if (dot(face, -h.relative) < 0.0)
+        face = -face;
+    float3 across = float3(k.x == 6u ? 0.0 : ((k.x & 1u) != 0u ? 1.0 : -1.0),
+                           k.y == 6u ? 0.0 : ((k.y & 1u) != 0u ? 1.0 : -1.0),
+                           k.z == 6u ? 0.0 : ((k.z & 1u) != 0u ? 1.0 : -1.0));
+    float outward = dot(bc.lambda, across);
+    float3 n = normalize(face + side * (0.6 * outward));
+    // Far blades take their clump's normal, up (Ghost of Tsushima's rule against shimmer).
+    h.far = saturate(length(h.relative) / max(f[0].grass_reach, 1.0));
+    h.n = normalize(lerp(n, float3(0.0, 1.0, 0.0), 0.45 + 0.55 * sqrt(h.far)));
+    return h;
 }
 
 // Whether a fragment of the cut-outs' raster stays (#171): a single-sided row's back faces go
@@ -5844,11 +6245,92 @@ float3x3 turn_onto(float3 a, float3 b)
         float3(v.z * v.x * k - v.y, v.z * v.y * k + v.x, v.z * v.z * k + c));
 }
 
+// The shadow rays' start off a grass blade, metres: the rays meet no grass.
+static const float GRASS_SHADOW_BIAS = 0.02;
+
+// `shade_pixel` for a grass blade's pixel (#300): the map's row, with the blade's surface rebuilt
+// from its id, each blade its own tint of the row's two (by its hash), darker towards its root
+// (the blades round it shade it).
+uint shade_grass<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
+{
+    Frame* f = resolve_push.frame;
+    GrassHit h = grass_hit(f, vis, pixel, float2(float(resolve_push.width), float(resolve_push.height)));
+    uint row = f[0].grass_row + h.tint;
+    Material mat = f[0].materials[row];
+    if (mat.class_index != class_index)
+        return mat.class_index | (wants_mirror_ray<SHADOWS>(f, mat) ? REFLECT_BIT : 0u);
+    Surface s;
+    s.n = h.n;
+    s.object_normal = h.n;
+    g_normal_variance = 0.0;
+    // Shaded where it stands, as the ground it grows from is textured.
+    s.object_position = h.scene;
+    s.dpdx = h.dpdx * f[0].texture_lod_scale;
+    s.dpdy = h.dpdy * f[0].texture_lod_scale;
+    s.frame = float3x3(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0);
+    // Each clump (cell) its own of the row's two colours.
+    s.instance_id = grass_hash(h.cell, 0x632BE5ABu);
+    s.instance_place = s.instance_id;
+    s.meshlet_index = 0u;
+    s.lod_level = 0u;
+    s.shadow = 1.0;
+    s.sky = resolve_push.sky;
+    s.ao = resolve_push.ao_image != 0xFFFFFFFFu
+        ? g_sampled_images_r[NonUniformResourceIndex(resolve_push.ao_image)].Load(int3(pixel, 0))
+        : -1.0;
+    s.view = normalize(-h.relative);
+    s.world = h.scene;
+    s.probes = resolve_push.probes;
+    s.shore = resolve_push.shore;
+    s.has_uv = false;
+    s.coast = -1.0;
+    s.uv = float2(0.0);
+    s.duvdx = float2(0.0);
+    s.duvdy = float2(0.0);
+    bool mirror_ray = wants_mirror_ray<SHADOWS>(f, mat);
+    s.traced = mirror_ray && resolve_push.request_image != 0xFFFFFFFFu;
+    g_ray_mask = shadow_world(f, h.relative, pixel);
+    if (SHADOWS != 0 && f[0].tlas != 0 && (f[0].flags & FLAG_SHADOWS) != 0)
+    {
+        if (resolve_push.sun_shadow != 0xFFFFFFFFu)
+            s.shadow = denoised_sun_shadow(f, s.n, pixel);
+        else if ((f[0].flags & FLAG_SHADOW_REFERENCE) != 0)
+            s.shadow = sun_shadow_reference(f, h.scene, s.n, pixel, GRASS_SHADOW_BIAS);
+        else
+            s.shadow = sun_shadow(f, h.scene, s.n, sun_disc_point(pixel, f[0].noise_frame), GRASS_SHADOW_BIAS);
+    }
+    if (resolve_push.cloud_shadow != 0xFFFFFFFFu)
+        s.shadow *= cloud_light(h.scene, normalize(f[0].sun_dir));
+    lamps_at<SHADOWS>(f, s.probes, h.scene, s.n, s.view, mat.specular_power, mat.specular, GRASS_SHADOW_BIAS, pixel, resolve_push.lamp_share);
+    s.transmitted = float3(0.0);
+    s.cloud = 1.0;
+    float3 color = class_index == MATERIAL_CLASS_LAYERED ? shade_layered(f, row, mat, s) : shade_standard(f, mat, s);
+    // The blades' contrast converges to their clump's mean with distance (Ghost of Tsushima's
+    // rule): far, a lawn shows its colour, not stripes of dark gaps between lit tips.
+    float blade = 0.88 + 0.24 * grass_unit(h.hash, 7);
+    color *= lerp(lerp(0.55, 1.05, h.along) * blade, 0.85, sqrt(h.far));
+    if ((f[0].flags & FLAG_SHOW_AO) != 0 && s.ao >= 0.0)
+        color = float3(s.ao * 0.25);
+    if ((f[0].flags & FLAG_SHOW_GI) != 0 && s.sky != nullptr)
+    {
+        color = sh_irradiance(s.sky, s.n);
+        if (s.probes != nullptr)
+            color = probe_irradiance(s.probes, s.world, s.n, s.n, s.view, color);
+    }
+    color *= f[0].sun_illuminance * f[0].exposure / 3.14159265;
+    g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.color_image)][pixel] = float4(color, 1.0);
+    if (s.traced)
+        g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.request_image)][pixel] = g_reflection_request;
+    return class_index | (mirror_ray ? REFLECT_BIT : 0u);
+}
+
 // Shades the pixel at `pixel` whose (non-empty) visibility id is `vis`, when its material is
 // of class `class_index` (a compile-time constant at every call); `SHADOWS` compiles the
 // shadow ray in (devices with ray queries). Returns the class it has.
 uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
 {
+    if (is_grass(vis))
+        return shade_grass<SHADOWS>(class_index, pixel, vis);
     Frame* f = resolve_push.frame;
     uint slot = vis >> VISIBILITY_TRIANGLE_BITS;
     uint tri = vis & ((1u << VISIBILITY_TRIANGLE_BITS) - 1u);
@@ -6111,7 +6593,7 @@ void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
     if (pixel.x >= resolve_push.width || pixel.y >= resolve_push.height)
         return;
     uint vis = g_sampled_images_u32[NonUniformResourceIndex(resolve_push.vis_image)].Load(int3(pixel, 0));
-    if (vis == VISIBILITY_EMPTY)
+    if (vis == VISIBILITY_EMPTY || is_grass(vis))
     {
         carry_reflection(pixel);
         return;
@@ -6286,6 +6768,16 @@ struct PixelSurface
 
 PixelSurface pixel_surface(Frame* f, uint vis, uint2 pixel, uint width, uint height)
 {
+    if (is_grass(vis))
+    {
+        // A grass blade's (#300), as the resolve rebuilds it.
+        GrassHit h = grass_hit(f, vis, pixel, float2(float(width), float(height)));
+        PixelSurface g = {};
+        g.n = h.n;
+        g.relative = h.relative;
+        g.shadow_n = h.n;
+        return g;
+    }
     uint slot = vis >> VISIBILITY_TRIANGLE_BITS;
     uint tri = vis & ((1u << VISIBILITY_TRIANGLE_BITS) - 1u);
     uint2 record = f[0].visible[slot];
@@ -6396,7 +6888,7 @@ void sun_shadow_trace_main(uint3 id : SV_DispatchThreadID)
     float r = p.tan_radius * sqrt(u.x);
     float phi = 6.2831853 * u.y;
     RayDesc ray;
-    ray.Origin = to_scene(f, surface_relative) + (n + sun) * shadow_bias(f, s.inst, s.m);
+    ray.Origin = to_scene(f, surface_relative) + (n + sun) * (is_grass(vis) ? GRASS_SHADOW_BIAS : shadow_bias(f, s.inst, s.m));
     ray.Direction = normalize(sun + (t * cos(phi) + bt * sin(phi)) * r);
     ray.TMin = 0.0;
     ray.TMax = 50000.0;
@@ -6546,7 +7038,7 @@ void lamp_rays_main(uint3 id : SV_DispatchThreadID)
     normal[pixel] = oct_encode(s.n);
     LampPicks picks = lamp_picks(f, place, world, s.n, pixel, p.skip_outside != 0u);
     uint count = f[0].lamp_count;
-    float bias = lamp_shadow_start(f, s.inst, s.m);
+    float bias = is_grass(vis) ? GRASS_SHADOW_BIAS : lamp_shadow_start(f, s.inst, s.m);
     float3 unshadowed = float3(0.0);
     float3 shadowed = float3(0.0);
     for (uint j = 0u; j < 4u; j++)
@@ -7410,7 +7902,7 @@ void mover_motion_main(uint3 id : SV_DispatchThreadID)
     if (id.x >= p[0].width || id.y >= p[0].height)
         return;
     uint vis = g_sampled_images_u32[p[0].visibility].Load(int3(id.xy, 0));
-    if (vis == 0xFFFFFFFFu)
+    if (vis == 0xFFFFFFFFu || is_grass(vis))
         return;
     Frame* f = p[0].frame;
     uint instance = f[0].visible[vis >> VISIBILITY_TRIANGLE_BITS].x & ~INSTANCE_HIDDEN_BIT;

@@ -420,7 +420,7 @@ void lamp_restir_main(uint3 id : SV_DispatchThreadID)
     RAB_Surface surface;
     surface.world = world;
     surface.normal = ps.n;
-    surface.bias = shadow_bias(f, ps.inst, ps.m);
+    surface.bias = is_grass(vis) ? GRASS_SHADOW_BIAS : shadow_bias(f, ps.inst, ps.m);
     surface.region = place.region;
     surface.other = place.other;
     surface.valid = 1u;

@@ -442,6 +442,7 @@ fn main() -> anyhow::Result<()> {
         centre
     };
     let lit_hour = cli.app.time_of_day.map(city_plan::hour_of_day);
+    let grass = cli.app.grass.is_some();
     if cli.tram.as_deref().is_some_and(|t| t.len() != 3) {
         anyhow::bail!("--tram takes x,z,lead");
     }
@@ -465,6 +466,7 @@ fn main() -> anyhow::Result<()> {
             },
             seed: KIT_SEED,
             railing_cards: cli.railing_cards,
+            grass,
             lit_hour,
             mix: forge_sim::population::Mix::default(),
         };

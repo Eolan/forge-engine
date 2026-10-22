@@ -367,6 +367,12 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   Physically based wet surfaces", blog, 2013
   (<https://seblagarde.wordpress.com/2013/03/19/water-drop-3a-physically-based-wet-surfaces/>):
   the water film darkens a porous surface and smooths it to water's reflection.
+- **Grass near the camera** (`forge_render::grass`, `shaders/meshlet.slang`, #300, D-075). Blades
+  generated on the GPU from a map of the ground, their normals and contrast converging to their
+  clump's with distance, a colour a clump: E. Wohllaib, "Procedural Grass in 'Ghost of
+  Tsushima'", GDC 2021. Plain opaque triangles darkened towards the root: Angelo Pesce,
+  "Vegetation system" (notes on Call of Duty: Black Ops 4's grass). Blades at least a pixel wide,
+  their covered share kept by noise: Emil Persson, "Phone-wire AA", 2012.
 - **The rivers** (`forge_procgen::river`, `shaders/water.slang`, issue #105). Flow maps after
   Alex Vlachos, "Water Flow in Portal 2", SIGGRAPH 2010, *Advances in Real-Time Rendering in 3D
   Graphics and Games* (two phases of a texture advected along the flow and cross-faded); the

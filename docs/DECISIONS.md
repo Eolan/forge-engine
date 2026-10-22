@@ -6832,6 +6832,31 @@ looked:
   its instance's id, and placing them only with far shadows reshuffled every later tree's tones in
   the A/B.
 
+**The grass pass built** (#300, 2026-10-22), behind city-blocks' `--grass [M]` until the owner has
+looked (`forge_render::grass`, `shaders/meshlet.slang`'s "grass"):
+- **The map:** square cells of 0.5 m (`GrassMap`), each with the ground's level and its blades'
+  count (at most 64), height and row, made once from the region's data. The village paints its
+  gardens' lawns (40 blades a cell, 12 cm) and its parks' grass (56, 22 cm) from the ground
+  tiles, cleared under the houses and along the garden walls. A blade is a function of its cell
+  and its index there: placement, height, lean, facing and width from a hash, nothing evaluated
+  round the viewer.
+- **Its ids:** the visibility id's top bit, the visible list capped at 2^24 slots for it:
+  `cell << 9 | blade << 3 | triangle`. The resolve, the sun's shadow trace for SIGMA and the
+  lamps' passes rebuild a blade's triangle from it alone, from the map uploaded once; the
+  reflections and the movers' motion skip it.
+- **The culls,** in a fixed order: each cell of a window round the camera counts its patches of
+  16 blades within the reach and the frustum, one workgroup scans the counts, and the cells list
+  their patches. The same ids, and images, from run to run.
+- **The raster:** a mesh-shader workgroup a patch (7 vertices and 5 triangles a blade), or one
+  non-indexed draw on the fallback path, both compiled precise. A blade under a pixel wide is
+  drawn a pixel wide and its covered share kept by the frame's noise. Over the last fifth of the
+  reach the blades sink into the ground's own grass.
+- **The look:** the blades take their cell's row (the lawn's, the park's) and one of its two
+  colours a clump, darker towards the root; their normals rounded across them. With distance,
+  their normals and contrast converge to the clump's mean, which took the visible flicker of a
+  turn under DLAA against a supersampled reference from 17 % to 7 % of the grass's pixels.
+- **Not yet:** wind, the walkers' bending, a measured fit of the colours to the ground beneath.
+
 *(research: forests-and-grass.md, vegetation-materials.md, flora.md; D-013, D-016, D-029, D-036,
 D-053, D-063; issues #297, #300, #301, #302, #303)*
 

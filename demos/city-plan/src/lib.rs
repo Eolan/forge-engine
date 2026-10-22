@@ -607,6 +607,8 @@ pub struct PlanScenario {
     /// The clear glass of the houses whose insides are drawn (D-065's part 4), in the world
     /// frame: left out of their windows' modules.
     glass: forge_render::GlassPanes,
+    /// The gardens' and parks' grass map (#300, `Detail::grass`), in the world frame.
+    grass: Option<forge_render::grass::GrassMap>,
 }
 
 /// Buildings drawn from a style set's grammar and kit (D-039's modules) within `radius` of
@@ -632,6 +634,8 @@ pub struct Detail<'a> {
     pub lit_hour: Option<f64>,
     /// The residents' roles (`with_people_mix`'s): `Mix::adults()` for a world with no children.
     pub mix: forge_sim::population::Mix,
+    /// Make a grass map for the blades near the camera (#300, city-blocks' `--grass`).
+    pub grass: bool,
 }
 
 /// The hour (0 to 24) of a `--time-of-day` (0 sunrise, 0.5 noon, 1 sunset, 1.5 midnight), with
@@ -2117,6 +2121,10 @@ impl PlanScenario {
                 }
             }
         }
+        // The grass map (#300), when asked for: the gardens' and parks' ground at half a metre.
+        let grass = detail
+            .filter(|d| d.grass)
+            .and_then(|_| grass_map(size, &tiles, masses, &plan.walls));
         laps.mark("the rest");
         eprintln!(
             "the plan laid out in its tiles, its steps (ms): {}",
@@ -2126,6 +2134,7 @@ impl PlanScenario {
             regions,
             home_lamps,
             glass,
+            grass,
             tiles: tiles.tiles,
             trees,
             flora,
@@ -7310,6 +7319,10 @@ impl Scenario for PlanScenario {
                 regions: std::mem::take(&mut self.regions),
                 home_lamps: std::mem::take(&mut self.home_lamps),
                 glass: std::mem::take(&mut self.glass),
+                grass: self
+                    .grass
+                    .take()
+                    .map(|m| (m, ground_row.0 + u32::from(GARDEN))),
             }),
         ))
     }
@@ -7361,6 +7374,8 @@ struct PlanRunning {
     home_lamps: Vec<forge_render::lamps::Lamp>,
     /// The houses' clear glass (D-065's part 4), in the world frame, handed over once.
     glass: forge_render::GlassPanes,
+    /// The grass map (#300) and its blades' row (the gardens'), in the world frame.
+    grass: Option<(forge_render::grass::GrassMap, u32)>,
 }
 
 /// A ride aboard a tram ([`PlanRunning::toggle_ride`]).
@@ -7573,6 +7588,10 @@ impl Running for PlanRunning {
 
     fn glass(&self) -> forge_render::GlassPanes {
         self.glass.clone()
+    }
+
+    fn grass(&self) -> Option<(forge_render::grass::GrassMap, u32)> {
+        self.grass.clone()
     }
 
     fn glass_edits(&mut self, time: f32) -> Vec<(u32, Option<Mat4>)> {
@@ -7896,6 +7915,59 @@ fn ground_under(regions: &[forge_render::RegionVolume], feet: Vec3) -> forge_aud
     } else {
         forge_audio::Surface::Wood
     }
+}
+
+/// The grass map's cell, metres (#300).
+const GRASS_CELL: f32 = 0.5;
+
+/// The grass map of a plan of side `size` (#300, `--grass`): the gardens' lawns and the parks'
+/// longer grass where the tiles lay them, cleared under the buildings and along the garden
+/// walls; `None` for a plan too large for one map (the city).
+fn grass_map(
+    size: f64,
+    tiles: &Tiles,
+    masses: &[Mass],
+    walls: &[forge_procgen::city::walls::Wall],
+) -> Option<forge_render::grass::GrassMap> {
+    let side = (size / f64::from(GRASS_CELL)).ceil() as u32;
+    if u64::from(side) * u64::from(side) > u64::from(forge_render::grass::MAX_CELLS) {
+        return None;
+    }
+    let corner = world(size, DVec2::ZERO, 0.0);
+    let mut map = forge_render::grass::GrassMap::new(
+        glam::Vec2::new(corner.x, corner.z),
+        GRASS_CELL,
+        side,
+        side,
+    );
+    for tile in &tiles.tiles {
+        let mesh = &tile.ground;
+        for (t, tri) in mesh.indices.as_chunks::<3>().0.iter().enumerate() {
+            // Blades a cell, their height and their row after the garden's: a lawn's 40 (160 a
+            // square metre) of 12 cm, a park's 56 of 22 cm in its own colours.
+            let (count, height, row) = match mesh.section(t) {
+                GARDEN => (40, 12, 0),
+                PARK => (56, 22, PARK - GARDEN),
+                _ => continue,
+            };
+            let p = [0, 1, 2].map(|k| tile.centre + Vec3::from(mesh.positions[tri[k] as usize]));
+            map.paint(p, count, height, row);
+        }
+    }
+    let flat = |p: DVec2| {
+        let w = world(size, p, 0.0);
+        glam::Vec2::new(w.x, w.z)
+    };
+    for m in masses {
+        let ring: Vec<glam::Vec2> = m.footprint.iter().map(|&p| flat(p)).collect();
+        map.clear(&ring, 0.15);
+    }
+    let half = (forge_procgen::city::walls::THICKNESS * 0.5) as f32;
+    for w in walls {
+        let (a, b) = (flat(w.a), flat(w.b));
+        map.clear(&[a, b, b, a], half + 0.05);
+    }
+    Some(map)
 }
 
 /// A block's ground piece: its first corner (the tile it goes in), its triangles, its level and
