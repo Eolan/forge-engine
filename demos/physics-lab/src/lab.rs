@@ -1948,13 +1948,177 @@ impl Simulation for LabWorld {
     }
 }
 
-/// `--net`: the server, this player's client and the bot's, and their links.
+/// How the lab's two players reach its server.
+enum Wire {
+    /// D-010's in-process links (`forge_sim::Link`) on the ticks' clock, from seeds: the same
+    /// session every run.
+    Links {
+        up: Box<[Link<InputPacket<LabCommand>>; 2]>,
+        down: Box<[Link<Snapshot>; 2]>,
+    },
+    /// QUIC on loopback through the network thread and the link conditioner both ways
+    /// (`--net-quic`, #268), on the wall clock.
+    Quic(Box<Quic>),
+}
+
+/// `--net-quic`'s connections. Dropped in this order: the sessions, the listener, the thread.
+struct Quic {
+    /// The players' sessions to the server.
+    clients: [forge_net::Session; 2],
+    /// The server's session for each player.
+    server: [forge_net::Session; 2],
+    _listener: forge_net::Listener,
+    _thread: forge_net::NetThread,
+}
+
+/// `--net-quic`: the snapshots (whole states, 280 KB in `drop`) on the reliable ordered channel,
+/// the players' packets on the unreliable one.
+const QUIC_SNAPSHOTS: forge_net::ChannelId = forge_net::ChannelId(0);
+const QUIC_INPUTS: forge_net::ChannelId = forge_net::ChannelId(2);
+
+impl Quic {
+    /// The server on loopback and the two players connected to it, each way through a
+    /// conditioner of `delay_ms` and the lab's losses.
+    fn connect(delay_ms: f64) -> Result<Self> {
+        use forge_net::{
+            ClientConfig, ConditionerConfig, NetThread, ServerConfig, ServerIdentity, TokenClaims,
+            TokenIssuer, TokenVerifier,
+        };
+        const SERVER: u64 = 1;
+        let link = |seed| ConditionerConfig::new(delay_ms.round() as u64, NET_LOSS, seed);
+        let thread = NetThread::start()?;
+        let issuer = TokenIssuer::generate()?;
+        let identity = ServerIdentity::generate(&["localhost"])?;
+        let certificate = identity.certificate().to_vec();
+        let mut config =
+            ServerConfig::loopback(identity, TokenVerifier::new(issuer.public_key(), SERVER));
+        config.conditioner = Some(link(20));
+        let listener = thread.serve(config)?;
+        let mut clients = Vec::new();
+        let mut server = Vec::new();
+        for player in 0..2_u64 {
+            let mut config = ClientConfig::loopback(&certificate);
+            config.conditioner = Some(link(10 + player));
+            let token = issuer.issue(&TokenClaims::new(player + 1, SERVER, 3600));
+            clients.push(thread.connect(config, listener.local_address(), &token)?);
+            // The server's side of it, in the same order.
+            let deadline = Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                if let Some(session) = listener.try_accept() {
+                    server.push(session);
+                    break;
+                }
+                anyhow::ensure!(
+                    Instant::now() < deadline,
+                    "the lab's server never took a player"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
+        let pair = |v: Vec<forge_net::Session>| -> [forge_net::Session; 2] {
+            v.try_into().unwrap_or_else(|_| unreachable!("two players"))
+        };
+        Ok(Self {
+            clients: pair(clients),
+            server: pair(server),
+            _listener: listener,
+            _thread: thread,
+        })
+    }
+}
+
+/// A message's bytes as `T`; `None` (logged) when they are not one.
+fn quic_decode<T: Codec>(payload: &[u8]) -> Option<T> {
+    let mut bytes = payload;
+    let value = T::decode(&mut bytes).filter(|_| bytes.is_empty());
+    if value.is_none() {
+        tracing::warn!("--net-quic: a message that does not decode");
+    }
+    value
+}
+
+impl Wire {
+    /// What reached the server by `now` (the ticks' seconds; the wall clock's over QUIC).
+    fn at_server(&mut self, now: f64) -> Vec<InputPacket<LabCommand>> {
+        match self {
+            Wire::Links { up, .. } => up.iter_mut().flat_map(|l| l.receive(now)).collect(),
+            Wire::Quic(q) => q
+                .server
+                .iter_mut()
+                .flat_map(|s| std::iter::from_fn(|| s.try_recv()))
+                .filter_map(|m| quic_decode(&m.payload))
+                .collect(),
+        }
+    }
+
+    /// The server's snapshot to both players.
+    fn send_snapshot(&mut self, now: f64, snapshot: &Snapshot) {
+        match self {
+            Wire::Links { down, .. } => {
+                let bytes = snapshot.state.len();
+                for link in down {
+                    link.send(now, snapshot.clone(), bytes);
+                }
+            }
+            Wire::Quic(q) => {
+                let mut bytes = Vec::new();
+                snapshot.encode(&mut bytes);
+                for s in &q.server {
+                    if let Err(e) = s.send(QUIC_SNAPSHOTS, bytes.clone()) {
+                        tracing::warn!("--net-quic: a snapshot not sent: {e}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// The snapshots that reached player `k` by `now`.
+    fn snapshots(&mut self, k: usize, now: f64) -> Vec<Snapshot> {
+        match self {
+            Wire::Links { down, .. } => down[k].receive(now),
+            Wire::Quic(q) => std::iter::from_fn(|| q.clients[k].try_recv())
+                .filter_map(|m| quic_decode(&m.payload))
+                .collect(),
+        }
+    }
+
+    /// Player `k`'s packet to the server.
+    fn send_input(&mut self, k: usize, now: f64, packet: InputPacket<LabCommand>) {
+        match self {
+            Wire::Links { up, .. } => up[k].send(now, packet, 64),
+            Wire::Quic(q) => {
+                let mut bytes = Vec::new();
+                packet.encode(&mut bytes);
+                if let Err(e) = q.clients[k].send(QUIC_INPUTS, bytes) {
+                    tracing::warn!("--net-quic: a packet not sent: {e}");
+                }
+            }
+        }
+    }
+
+    /// This player's bytes up and down (the payloads in process; UDP's over QUIC), and the
+    /// packets lost both ways.
+    fn bytes(&self) -> (u64, u64, u64) {
+        match self {
+            Wire::Links { up, down } => (
+                up[0].stats.bytes,
+                down[0].stats.bytes,
+                up[0].stats.lost + down[0].stats.lost,
+            ),
+            Wire::Quic(q) => {
+                let s = q.clients[0].stats();
+                (s.udp_sent.1, s.udp_received.1, s.lost_packets)
+            }
+        }
+    }
+}
+
+/// `--net`: the server, this player's client and the bot's, and the wire between them.
 struct Net {
     server: Server<LabWorld>,
     client: Client<LabWorld>,
     bot: Client<LabWorld>,
-    up: [Link<InputPacket<LabCommand>>; 2],
-    down: [Link<Snapshot>; 2],
+    wire: Wire,
     /// One way, milliseconds.
     delay_ms: f64,
     /// Milliseconds the client's corrections took since the last title, and the most.
@@ -2070,7 +2234,15 @@ fn bot_command(bot: &mut Client<LabWorld>, pulls: bool) {
 }
 
 impl Net {
+    /// The session over the in-process links (the tests').
+    #[cfg(test)]
     fn new(kind: LabScene, delay_ms: f64, pool: &Arc<TaskPool>) -> Result<Self> {
+        Self::over(kind, delay_ms, pool, false)
+    }
+
+    /// The server, the two players and the wire: the in-process links, or QUIC through the network
+    /// thread when `quic` (`--net-quic`).
+    fn over(kind: LabScene, delay_ms: f64, pool: &Arc<TaskPool>, quic: bool) -> Result<Self> {
         let lead = (delay_ms / 1e3 / f64::from(TICK)).ceil() as u64 + 2;
         // A client runs ahead through its own steps, so it knows the digests of those ticks.
         let ahead = |player: PlayerId| -> Result<Client<LabWorld>> {
@@ -2081,12 +2253,19 @@ impl Net {
             Ok(client)
         };
         let link = |seed| LinkParams::new(delay_ms, NET_LOSS, seed);
+        let wire = if quic {
+            Wire::Quic(Box::new(Quic::connect(delay_ms)?))
+        } else {
+            Wire::Links {
+                up: Box::new([Link::new(link(10)), Link::new(link(11))]),
+                down: Box::new([Link::new(link(20)), Link::new(link(21))]),
+            }
+        };
         Ok(Self {
             server: Server::new(LabWorld::new(kind, Arc::clone(pool))?.0),
             client: ahead(0)?,
             bot: ahead(1)?,
-            up: [Link::new(link(10)), Link::new(link(11))],
-            down: [Link::new(link(20)), Link::new(link(21))],
+            wire,
             delay_ms,
             correction_ms: Vec::new(),
             worst_correction_ms: 0.0,
@@ -2116,18 +2295,13 @@ impl Net {
     fn tick(&mut self, mine: &mut Vec<LabCommand>) {
         let now = self.server.sim.now() as f64 / f64::from(TICK_RATE);
         fade_tick(&mut self.fades);
-        for link in &mut self.up {
-            for packet in link.receive(now) {
-                self.server.receive(&packet);
-            }
+        for packet in self.wire.at_server(now) {
+            self.server.receive(&packet);
         }
         self.server.step();
         if self.server.sim.now().is_multiple_of(SNAPSHOT_EVERY) {
             let snapshot = self.server.snapshot();
-            let bytes = snapshot.state.len();
-            for link in &mut self.down {
-                link.send(now, snapshot.clone(), bytes);
-            }
+            self.wire.send_snapshot(now, &snapshot);
         }
         for c in mine.drain(..) {
             self.client.command(c);
@@ -2138,7 +2312,7 @@ impl Net {
             } else {
                 &mut self.bot
             };
-            for snapshot in self.down[k].receive(now) {
+            for snapshot in self.wire.snapshots(k, now) {
                 let start = Instant::now();
                 let corrected = client.stats.corrected;
                 if k == 0 {
@@ -2176,7 +2350,7 @@ impl Net {
                 }
                 client.step();
                 if let Some(packet) = client.outgoing() {
-                    self.up[k].send(now, packet, 64);
+                    self.wire.send_input(k, now, packet);
                 }
             }
         }
@@ -2687,6 +2861,7 @@ pub(crate) fn build(
             delay_ms,
             loss = NET_LOSS,
             snapshot_every = SNAPSHOT_EVERY,
+            quic = flags.net_quic,
             bot = if kind == LabScene::Tug {
                 "pulls"
             } else {
@@ -2694,7 +2869,7 @@ pub(crate) fn build(
             },
             "the lab through a server and a client, a bot playing too"
         );
-        let mut net = Net::new(kind, delay_ms, &pool)?;
+        let mut net = Net::over(kind, delay_ms, &pool, flags.net_quic)?;
         if flags.record.is_some() {
             net.server.record(RECORD_EVERY, KEYFRAME_EVERY);
         }
@@ -3404,6 +3579,7 @@ impl Drop for Lab {
             }
             Mode::Net(net) => {
                 let (c, s) = (net.client.stats, net.server.stats);
+                let (up_bytes, down_bytes, lost) = net.wire.bytes();
                 tracing::info!(
                     snapshots = c.snapshots,
                     matched = c.matched,
@@ -3414,9 +3590,9 @@ impl Drop for Lab {
                     still_corrections = net.still_corrections,
                     server_applied = s.applied,
                     server_late = s.late,
-                    up_bytes = net.up[0].stats.bytes,
-                    down_bytes = net.down[0].stats.bytes,
-                    lost = net.up[0].stats.lost + net.down[0].stats.lost,
+                    up_bytes,
+                    down_bytes,
+                    lost,
                     "the session over the run (this player's client)"
                 );
                 if let (Some(path), Some(recording)) = (&self.record, net.server.recording()) {

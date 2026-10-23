@@ -58,6 +58,10 @@ pub(crate) struct LabArgs {
     /// this many milliseconds one way, 2 % of the packets lost, a bot throwing too (#137).
     #[arg(long)]
     pub(crate) net: Option<f64>,
+    /// With `--net`, the players reach the server over QUIC on loopback through the network
+    /// thread (`forge_net::NetThread`), the link conditioner both ways, on the wall clock (#268).
+    #[arg(long, requires = "net")]
+    pub(crate) net_quic: bool,
     /// With `--lab`, throw a ball from the camera every this many frames, as Space does.
     #[arg(long)]
     pub(crate) throw_every: Option<u64>,

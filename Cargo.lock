@@ -2359,6 +2359,7 @@ dependencies = [
  "forge-geom",
  "forge-gpu",
  "forge-mission",
+ "forge-net",
  "forge-physics",
  "forge-procgen",
  "forge-render",

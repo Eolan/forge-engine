@@ -23,6 +23,7 @@ forge-render = { path = "crates/forge-render" }
 forge-world = { path = "crates/forge-world" }
 forge-physics = { path = "crates/forge-physics" }
 forge-sim = { path = "crates/forge-sim" }
+forge-net = { path = "crates/forge-net" }
 forge-anim = { path = "crates/forge-anim" }
 forge-fauna = { path = "crates/forge-fauna" }
 forge-flora = { path = "crates/forge-flora" }

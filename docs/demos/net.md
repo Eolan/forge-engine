@@ -294,6 +294,17 @@ lost, through the conditioner both ways; 20 pushes each over 900 ticks. Four run
 
 Every command was taken once and none late, and each client ended where the server is.
 
+**The physics lab over QUIC** (`physics-lab --lab tug --net 100 --net-quic`): the lab's server
+and its two players in the app's own frame loop, the players' packets on the unreliable channel
+and the snapshots (whole states) on the reliable ordered one, 100 ms each way and 2 % lost
+through the conditioner, on the wall clock. 6000 frames of the tug-of-war, the in-process links
+against QUIC: 152 against 135 snapshots, 10 against 8 corrections, every command taken and none
+late; a correction runs more ticks again over QUIC (673 in all against 140, at most 6.2 ms),
+since a snapshot held back for a resent packet arrives older. **`drop` does not keep up:** its
+whole states, 280 KB ten times a second, need 2.8 MB/s, and QUIC's congestion control over a
+200 ms round trip losing 2 % gives about 50 kB/s (1.22 · MSS / (RTT · √p)): one snapshot in a
+run. The replication's deltas, quantisation and budget above are what a real scene goes through.
+
 ## Authority between workers (step 2's handoff, 2026-10-23)
 
 `forge_sim::authority`: D-010's replication layer and its workers, in one process, before any
@@ -378,7 +389,7 @@ lockstep on the first channel (reliable, ordered).
   what it aims at); the layer's own replay (its workers' writes recorded, diffed against a fresh
   run, as the research's stage 4 asks); and the `hundred-bots` demo on the server PC.
 - The population of #250 as the replicated world: its near tiers' records in place of the crowd.
-- The physics lab's `--net` over QUIC through `NetThread` (its whole-state snapshots, 280 KB,
-  on a reliable channel until they are deltas).
+- The physics lab's scenes replicated rather than sent whole, so `drop` runs over QUIC too (its
+  bodies as the replicator's entities, the rest of the state rebuilt on the client).
 - The server PC and the Raspberry Pi come later, on the owner's word: nothing here binds
   anything but loopback.

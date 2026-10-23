@@ -30,6 +30,7 @@ forge-physics = { workspace = true }
 forge-procgen = { workspace = true }
 forge-render = { workspace = true }
 forge-sim = { workspace = true }
+forge-net = { workspace = true }
 forge-task = { workspace = true }
 forge-world = { workspace = true }
 glam = { workspace = true }
