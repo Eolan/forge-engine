@@ -2355,6 +2355,24 @@ serially the rays don't change (−0.07 to +0.04 ms). Async, the overlap shifted
 the blend went 0.50 → 0.75 ms, meshlet pass 1 0.63 → 0.78, and the frame +0.2 ms. Weigh a change
 to an async pass by its serial time and by the frame both ways.
 
+**The milestone's timings** (`tools/timings.sh`, 2026-10-23: the last accepted Tier 2, 17fe84ca,
+against 448630c8, three runs each, ms):
+
+| View | 17fe84ca | 448630c8 |
+|---|---|---|
+| city | 3.69–3.74 | 3.76–3.77 |
+| city orbit | 3.90–3.92 | 3.99–4.01 |
+| city fly | 3.46 | 3.53–3.56 |
+| city resident | 3.66–3.70 | 3.74–3.77 |
+| island | 2.94 | 2.99–3.00 |
+| island tour | 2.73–2.74 | 2.79 |
+| meshlets, ballad | — | within noise |
+
+Of the island's +0.05 ms, the mirror rays' pass's full barrier (#349) takes 0.012–0.016,
+measured against the same build without it. The city pays nothing for it. Most of the rest is the
+async probe work (the island's rays +0.036 ms, its blend +0.018), plausibly #336's lasting-change
+test; not isolated.
+
 **Tried and dropped: the probe blend's last gaps read in parallel.** Thread 0 reads a probe's
 seven last update gaps (#336) one after another, while the group's other 255 threads wait at a
 barrier. Seven threads reading them before the barrier gave identical images, but the serial
