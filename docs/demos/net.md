@@ -221,7 +221,10 @@ delay. D-010 paces them instead:
 - **The measure:** every input packet carries its client's tick (`InputPacket::tick`), and a
   packet goes every tick, commands or not. The server takes each one's lead on arrival (the
   client's tick less its own) and reports the least of the last 60 in each snapshot
-  (`Snapshot::leads`): a measure, never a pace.
+  (`Snapshot::leads`): a measure, never a pace. A packet's tick follows its client's step, so its
+  newest commands are for the tick before: a lead of 1 is just in time, and a target keeps a
+  tick or more above that with its tolerance (the lab aims at 3, give or take one, since a
+  review's note of 2026-10-23).
 - **The clock:** `PaceClock` runs the client's ticks from the time that passes at a rate that
   follows the lead's error alone, 2 % a tick of lead missed, within ±10 %: faster when its packets
   arrive with less lead than its target, slower with more. Only the simulation's clock is paced.

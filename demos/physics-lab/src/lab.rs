@@ -2145,9 +2145,9 @@ struct Net {
     after: Vec<Transform>,
 }
 
-/// The lead on arrival the clients' clocks aim at, ticks: the two of margin they start with
-/// ([`Net::new`]), give or take one.
-const PACE_TARGET: i64 = 2;
+/// The lead on arrival the clients' clocks aim at, ticks, give or take one. A packet's tick follows
+/// its client's step, so a lead of 1 is just in time: 3 keeps at least one tick spare.
+const PACE_TARGET: i64 = 3;
 
 /// D-010's fade: a correction leaves the screen over this long, seconds, by a fixed time whatever
 /// its size or the body's motion…
