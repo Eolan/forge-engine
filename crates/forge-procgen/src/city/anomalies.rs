@@ -952,13 +952,20 @@ mod tests {
         // 2026-10-22, after the stairs, the rows' corners, the backs, the walls' corners and the
         // hedges' sides and the rows' ridges: 77 down to 11; 2026-10-23, a storey's lit rooms
         // packed front and back, a narrow end house's hall on its party side, a blank street wall's
-        // window from the room behind its bend: 7).
-        let since: [(f64, Kind, usize); 5] = [
+        // window from the room behind its bend: 7). Then #285 (2026-10-23) widened the houses' halls
+        // to 1.40 m and their lots with them, and the villages were laid again: 600 m kept at none,
+        // 700 to 900 m at 13, those new #308's next.
+        let since: [(f64, Kind, usize); 10] = [
             (700.0, Kind::FreeWallEnd, 1),
-            (800.0, Kind::RidgeStep, 2),
+            (800.0, Kind::UnlitRoom, 1),
+            (800.0, Kind::FreeWallEnd, 1),
+            (800.0, Kind::RidgeStep, 1),
+            (800.0, Kind::BlankStreetWall, 1),
+            (900.0, Kind::PartitionInOpening, 1),
             (900.0, Kind::Sliver, 1),
-            (900.0, Kind::FreeWallEnd, 1),
-            (900.0, Kind::LonePartyWall, 2),
+            (900.0, Kind::FreeWallEnd, 2),
+            (900.0, Kind::LonePartyWall, 1),
+            (900.0, Kind::RidgeStep, 3),
         ];
         let mut over = Vec::new();
         for (kind, bound) in bounds {

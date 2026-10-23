@@ -27,7 +27,7 @@ pub const CORE_WALL: f64 = 0.2;
 pub const HALL: f64 = 1.5;
 /// A house's corridor beside its straight flight, metres: a wheelchair's passage, the landing at
 /// the flight's head as wide.
-pub const HOUSE_HALL: f64 = 1.2;
+pub const HOUSE_HALL: f64 = 1.4;
 /// A lift's shaft inside, along the wall and inwards, metres: a type 2 car (EN 81-70, 1.10 ×
 /// 1.40 m) with its clearances.
 pub const SHAFT: (f64, f64) = (1.6, 1.9);

@@ -274,22 +274,27 @@ pub fn garden_walls(
     // The ends a stretch along a house's wall left free, joined to the house.
     let joined = stubs(&stretches, footprints);
     stretches.extend(joined);
-    // The gates: each lot's in its longest wall along the street, its front's first.
+    // The gates: each lot's in its longest wall along the street, its front's first, clear of
+    // the walls meeting that wall along its length (a gate beside a junction left the wall
+    // beyond it running back through the gate onto the wall before it, #285); in the next wall
+    // where none fits.
     let mut gate_at: Vec<Option<f64>> = vec![None; stretches.len()];
+    let half = GATE * 0.5 + JOIN + SHORTEST;
     for k in 0..lots.len() {
-        let best = stretches
+        let mut candidates: Vec<(usize, &Stretch)> = stretches
             .iter()
             .enumerate()
             .filter(|(_, s)| s.owner == k && s.street && !s.hedge)
             .filter(|(_, s)| s.a.distance(s.b) >= GATE + 2.0 * (JOIN + SHORTEST))
-            .max_by(|(_, x), (_, y)| {
-                (x.front, x.a.distance(x.b))
-                    .partial_cmp(&(y.front, y.a.distance(y.b)))
-                    .unwrap()
-            });
-        if let Some((i, s)) = best {
+            .collect();
+        candidates.sort_by(|(i, x), (j, y)| {
+            (y.front, y.a.distance(y.b))
+                .partial_cmp(&(x.front, x.a.distance(x.b)))
+                .unwrap()
+                .then(i.cmp(j))
+        });
+        for (i, s) in candidates {
             let length = s.a.distance(s.b);
-            let half = GATE * 0.5 + JOIN + SHORTEST;
             // Before the house on a front: the nearest footprint's middle, along the stretch.
             let mid = (s.a + s.b) * 0.5;
             let at = if s.front {
@@ -303,7 +308,34 @@ pub fn garden_walls(
             } else {
                 length * 0.5
             };
-            gate_at[i] = Some(at.clamp(half, length - half));
+            // Where other walls come within a wall's thickness of it, every 10 cm, its ends'
+            // own neighbours aside.
+            let met: Vec<f64> = (1..)
+                .map(|n| f64::from(n) * 0.1)
+                .take_while(|&d| d < length - JOIN)
+                .filter(|&d| d > JOIN)
+                .filter(|&d| {
+                    let p = s.a + (s.b - s.a) * (d / length);
+                    stretches.iter().enumerate().any(|(j, o)| {
+                        j != i && !o.hedge && geom::distance_to_segment(p, o.a, o.b) < JOIN
+                    })
+                })
+                .collect();
+            let clear = |x: f64| met.iter().all(|&m| (x - m).abs() >= half);
+            let place = std::iter::once(at)
+                .chain(met.iter().flat_map(|&m| [m - half, m + half]))
+                .map(|x| x.clamp(half, length - half))
+                .filter(|&x| clear(x))
+                .min_by(|x, y| {
+                    (x - at)
+                        .abs()
+                        .total_cmp(&(y - at).abs())
+                        .then(x.total_cmp(y))
+                });
+            if let Some(x) = place {
+                gate_at[i] = Some(x);
+                break;
+            }
         }
     }
     let mut out = GardenWalls::default();

@@ -1278,7 +1278,7 @@ counts the party walls' halves and the core's full width (`rooms::HALL` 2.95 m f
 wall's middle), so village and core lots start at 6 m, and a house of two storeys or more is
 made deep enough for its flight (8.3 m outside for old stone, `Plan::deepen`). Inside the
 walls, `interior::house` stretches the plan's bands between the hall and the far wall, front to
-back: the hall's wall with a doorway (0.90 m clear, 2.10 m high) into each band's first room,
+back: the hall's wall with a doorway (0.93 m clear since #285, 2.10 m high) into each band's first room,
 plastered partitions between the bands, and between the rooms of a band with a doorway each,
 so every room of a storey is reached from the hall; where the core stood by the far corner the
 plan runs mirrored. The kit draws them near the view: the partitions floor to ceiling with a
@@ -1628,7 +1628,7 @@ hall, looking back at its open front door.
 
 - **A house's stair** (2026-10-16, for the first map's village): where no dog-leg fits anywhere
   along the walls (a 5 m house holds no hall of 1.5 m beside two flights), a house's core: one
-  straight flight of 1.1 m along the party wall beside a corridor of 1.2 m, the hall the whole
+  straight flight of 1.1 m along the party wall beside a corridor of 1.2 m (1.4 m since #285), the hall the whole
   depth, no lift (`Core::house`, `cores::flight_length` for its depth); the units take it as a
   compact core, one home a storey. The dog-legs keep the first choice everywhere, so the
   city's cores stay as they were. (Of the village's 371 storeyed houses, 38 had a stair before:
@@ -2659,6 +2659,35 @@ its own that frame. Real clips, and the crossing's own, come with the animation 
 *One, three and seven seconds in: the four on the street, three at the door taking turns, the
 last going in.*
 
+## Wider halls and doorways (#285, 2026-10-23)
+
+The owner found the houses' corridors and rooms a bit narrow, with wheelchairs in mind:
+- **The hall:** 1.40 m beside the flight (1.20 m before), the doorways 0.93 m clear (0.90 m).
+- **The lots grow with it:** an old core's and a faubourg's lots are 6.2 m wide at least (6.0 m),
+  so the rooms keep their width and the village keeps its 60 houses.
+- **One bedroom a home keeps a 1.50 m circle free** (`walk::TURNING`, the arrêté of
+  24 December 2015): where none does, the roomiest gives up its desk and chair, then its
+  wardrobe.
+- **A flight's first steps are open on the hall's side** (`RAIL_FROM`): the balustrade begins
+  where the steps stand 0.45 m up. From the first step it boxed the flight's foot in against the
+  back wall, which a walker turned into with centimetres to spare.
+
+`cargo test --release -p forge-procgen comfort_survey -- --ignored --nocapture`, at 600 m:
+
+| | Before | After |
+|---|---|---|
+| Halls holding a 1.50 m circle | 89 % (least 1.41 m) | 100 % (least 1.61 m) |
+| Kitchens holding one | 88 % | 98 % |
+| Houses with a bedroom holding one (the wider hall alone, then with the rule) | 83 % | 98 % |
+| Bedrooms of 10.5 m² or more | 86 % (median 14.0 m²) | 87 % (median 14.0 m²) |
+| Rooms a walker reaches on the walk field (24 houses) | 147 of 152 | 153 of 153 |
+
+The one house left without a roomy bedroom (lot 154) has a single bedroom of 2.8 × 3.2 m; its plan
+is #285's next step. The gardens' walls also changed: a gate stays clear of the walls meeting its
+wall, and a gate's sides are never carried on to the next wall (one ran back through its own
+gate). The larger villages' anomalies moved with the new lots (700 to 900 m: 13, from 7; 600 m
+none): #308's next.
+
 ## The village's test mission (#287, 2026-10-23)
 
 ```
@@ -2681,8 +2710,8 @@ turned towards where it walks. The log names the house and a view of its front, 
 with its tick.
 
 **On the 600 m village (lot 97), fixed step:**
-- **The run:** upstairs at tick 998, the parcel at 1525, won at 2021 (33.7 s). The digest at
-  the end is `cd3fef3df427d650`.
+- **The run:** upstairs at tick 964, the parcel at 1489, won at 1987 (33.1 s). The digest at
+  the end is `9af069343ea13c81`. (Before #285's wider halls: 998, 1525 and 2021.)
 - **The evaluator:** 0.54 µs a tick on average, 5.5 µs at most.
 - **The test** `the_village_mission_is_won_on_its_autopilot` plays it twice without the
   renderer: the walker against the house's walls and insides, the same ticks and state both

@@ -502,11 +502,23 @@ pub fn village(site: &Site, params: &CityParams, seed: u64) -> Village {
             }
         }
     }
+    // A gate's sides are free ends too, and stay where they are: carried on, the wall beyond a
+    // gate ran back through it onto the wall before it, two walls on one line (#285).
+    let gates: Vec<DVec2> = blocks
+        .iter()
+        .flat_map(|b| b.gates.iter().copied())
+        .collect();
     for k in 0..city.walls.len() {
         for end in 0..2 {
             let w = &city.walls[k];
             let (p, from) = if end == 0 { (w.a, w.b) } else { (w.b, w.a) };
             let dir = (p - from).normalize_or_zero();
+            if gates
+                .iter()
+                .any(|g| g.distance(p) < walls::GATE * 0.5 + 0.05)
+            {
+                continue;
+            }
             let met = masses.iter().any(|m| near(&m.footprint, p, 0.05))
                 || city
                     .walls

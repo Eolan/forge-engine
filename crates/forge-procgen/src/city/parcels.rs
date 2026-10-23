@@ -52,7 +52,7 @@ impl ParcelType {
     /// whole lot, a court only where the rooms leave one.
     pub const CORE: Self = Self {
         depth: 12.0,
-        width: (6.0, 9.0),
+        width: (6.2, 9.0),
         setback: 0.0,
         sides: 0.0,
         yard: 0.0,
@@ -61,7 +61,7 @@ impl ParcelType {
     /// garden of 12 m at least behind.
     pub const FAUBOURG: Self = Self {
         depth: 30.0,
-        width: (6.0, 12.0),
+        width: (6.2, 12.0),
         setback: 0.0,
         sides: 0.0,
         yard: 12.0,

@@ -11,9 +11,9 @@
 use glam::DVec2;
 
 use super::cores::GOING;
-use super::furnish::{self, Placed};
+use super::furnish::{self, Piece, Placed};
 use super::geom;
-use super::interior::{self, Interior};
+use super::interior::{self, InRoom, Interior};
 use super::mass::Mass;
 use super::rooms::RoomKind;
 use super::structure::{self, Opening, OpeningKind, Structure, WallRole};
@@ -359,7 +359,53 @@ pub fn furnished(m: &Mass, s: &Structure, inner: &Interior) -> Vec<Placed> {
         };
         pieces.remove(j);
     }
+    keep_a_turning_circle(m, s, inner, &mut pieces);
     pieces
+}
+
+/// The free circle the law keeps in one bedroom of a home at least, metres: a wheelchair's
+/// turn (#285, the arrêté of 24 December 2015).
+pub const TURNING: f64 = 1.5;
+
+/// One bedroom at least keeps a [`TURNING`] circle free (#285): where none does, the roomiest
+/// gives up its desk and its chair, then its wardrobe, until it does.
+fn keep_a_turning_circle(m: &Mass, s: &Structure, inner: &Interior, pieces: &mut Vec<Placed>) {
+    let thickness: Vec<f64> = s.walls.iter().map(|w| w.thickness).collect();
+    let Some(floor) = structure::floor(m, &thickness) else {
+        return;
+    };
+    let widest = |pieces: &[Placed], r: &InRoom| {
+        let g = grid(&floor, inner, pieces, r.storey);
+        (0..g.dist.len())
+            .filter(|&i| geom::contains(&r.outline, g.at(i)))
+            .map(|i| g.dist[i] * 2.0)
+            .fold(0.0, f64::max)
+    };
+    let bedrooms: Vec<&InRoom> = inner
+        .rooms
+        .iter()
+        .filter(|r| r.kind == RoomKind::Bedroom)
+        .collect();
+    if bedrooms.iter().any(|r| widest(pieces, r) >= TURNING) {
+        return;
+    }
+    // The roomiest, the first of equals.
+    let Some(room) = bedrooms.iter().copied().reduce(|a, b| {
+        let area = |r: &InRoom| geom::signed_area(&r.outline).abs();
+        if area(b) > area(a) + 1e-9 { b } else { a }
+    }) else {
+        return;
+    };
+    for kinds in [&[Piece::Desk, Piece::Chair][..], &[Piece::Wardrobe]] {
+        pieces.retain(|p| {
+            !(p.storey == room.storey
+                && kinds.contains(&p.piece)
+                && geom::contains(&room.outline, p.centre))
+        });
+        if widest(pieces, room) >= TURNING {
+            return;
+        }
+    }
 }
 
 /// The walk through house `m` among `furniture`, its insides `inner`.
@@ -587,6 +633,20 @@ mod tests {
                 10.5,
             );
         }
+        // The law's ask is per home: one bedroom at least with a 1.50 m circle (#285).
+        line(
+            "each house's roomiest bedroom, free circle (m)",
+            all.iter()
+                .filter_map(|c| {
+                    c.rooms
+                        .iter()
+                        .filter(|r| r.0 == RoomKind::Bedroom)
+                        .map(|r| r.3)
+                        .max_by(f64::total_cmp)
+                })
+                .collect(),
+            1.5,
+        );
         line(
             "halls, free circle (m)",
             all.iter().flat_map(|c| c.halls.iter().copied()).collect(),

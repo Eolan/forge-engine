@@ -4133,6 +4133,16 @@ fn floor_level(s: &Structure, k: usize) -> f64 {
 const RAIL: f64 = 0.075;
 /// How high a flight's balustrade stands over the steps' nosings, metres.
 const RAIL_HEIGHT: f64 = 0.9;
+/// How high the steps stand where a flight's balustrade begins, metres: below, its side is open
+/// to the hall beside it, so its foot is entered from there as well as from its end (#285: the
+/// balustrade from the first step boxed the foot in against the back wall, a pocket a walker
+/// 0.6 m across turned into with centimetres to spare).
+const RAIL_FROM: f64 = 0.45;
+
+/// The first tread a flight's balustrade stands over, for steps `rise` metres high.
+fn rail_start(rise: f64) -> u32 {
+    ((RAIL_FROM / rise.max(1e-3)).ceil() as u32).saturating_sub(1)
+}
 
 /// The balustrade along a flight's open side: a plastered half wall [`RAIL`] thick and
 /// [`RAIL_HEIGHT`] over the steps' nosings, on the side away from the walls, its outer face `out`
@@ -4258,17 +4268,21 @@ fn soffits(
         }
         // The balustrade on its open side (`balustrade`): its faces over the steps' profile up
         // to its sloped top, on the string's plane outside, and its top and ends.
-        if let Some((outer, inner_u, sign)) = balustrade(s, stair, inner.climb, r, OUT) {
+        // From its first tread [`RAIL_FROM`] up (`rail_start`): below, the side is open.
+        let first = rail_start(rise);
+        if first + 1 < r
+            && let Some((outer, inner_u, sign)) = balustrade(s, stair, inner.climb, r, OUT)
+        {
             let over = |v: f64| base + rise + v / g * rise + RAIL_HEIGHT;
-            let last = f64::from(r - 1) * g;
+            let (start, last) = (f64::from(first) * g, f64::from(r - 1) * g);
             let mut wall: Vec<DVec2> = Vec::new();
-            for i in 0..r - 1 {
+            for i in first..r - 1 {
                 let y = base + f64::from(i + 1) * rise;
                 wall.push(DVec2::new(f64::from(i) * g, y));
                 wall.push(DVec2::new(f64::from(i + 1) * g, y));
             }
             wall.push(DVec2::new(last, over(last)));
-            wall.push(DVec2::new(0.0, over(0.0)));
+            wall.push(DVec2::new(start, over(start)));
             if geom::signed_area(&wall) < 0.0 {
                 wall.reverse();
             }
@@ -4282,20 +4296,21 @@ fn soffits(
             quad(
                 mesh,
                 [
-                    p(0.0, inner_u, over(0.0)),
-                    p(0.0, outer, over(0.0)),
+                    p(start, inner_u, over(start)),
+                    p(start, outer, over(start)),
                     p(last, outer, over(last)),
                     p(last, inner_u, over(last)),
                 ],
                 -down,
             );
+            let low = base + f64::from(first + 1) * rise;
             quad(
                 mesh,
                 [
-                    p(0.0, inner_u, base + rise),
-                    p(0.0, outer, base + rise),
-                    p(0.0, outer, over(0.0)),
-                    p(0.0, inner_u, over(0.0)),
+                    p(start, inner_u, low),
+                    p(start, outer, low),
+                    p(start, outer, over(start)),
+                    p(start, inner_u, over(start)),
                 ],
                 -along,
             );
@@ -4565,7 +4580,7 @@ fn interior_pieces(
                 let base = floor_level(s, k);
                 let rise = (s.storeys[k + 1].level - base) / f64::from(r);
                 let (u0, u1) = (outer.min(inside), outer.max(inside));
-                for t in 0..r - 1 {
+                for t in rail_start(rise)..r - 1 {
                     let (v0, v1) = (f64::from(t) * cores::GOING, f64::from(t + 1) * cores::GOING);
                     let ring = [(v0, u0), (v0, u1), (v1, u1), (v1, u0)]
                         .map(|(v, u)| stair[0] + inner.climb * v + across * u);
@@ -9312,13 +9327,12 @@ mod tests {
             search.as_secs_f64() * 1000.0 / reached.max(1) as f64
         );
         assert!(houses > 10, "{houses} houses");
-        // 147 of 152 (2026-10-22): lots 108 and 111's ground flights start in a pocket by the
-        // back wall before their first riser, fenced by their rail, which a walker 0.6 m across
-        // turns into with centimetres to spare: the field's clearance, a lower bound, counts it
-        // shut (`the_village_flights_feet_are_clear`, `..._pass_a_walkers_capsule`). Lot 111
-        // was lot 110 until the house on lot 108 came in (#308): the two have the same layout.
+        // Every room since 2026-10-23 (#285): the flights' first steps are open on the hall's side
+        // (`RAIL_FROM`). Their foot stands in a pocket by the back wall, which the rail from the
+        // first step boxed in: a walker 0.6 m across turned into it with centimetres to spare,
+        // and the field's clearance, a lower bound, counted it shut (147 of 152 rooms before).
         assert!(
-            missed.len() * 30 <= rooms,
+            missed.is_empty(),
             "{} rooms of {rooms} not reached (lot, kind, storey): {:?}",
             missed.len(),
             &missed[..missed.len().min(12)]
@@ -9506,6 +9520,15 @@ mod tests {
                 }
             }
             let got_in = pursuers.feet().iter().filter(|&&p| is_in(p)).count();
+            eprintln!(
+                "DEBUG hall {hall:?} inside {}; feet {:?}",
+                inside.iter().filter(|&&b| b).count(),
+                pursuers
+                    .feet()
+                    .iter()
+                    .map(|p| (p, is_in(*p)))
+                    .collect::<Vec<_>>()
+            );
             println!(
                 "lot {}, doors {}: {got_in} of 4 in, {} through windows, least gap {least:.3} m",
                 v.masses[i].lot,

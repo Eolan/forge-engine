@@ -46,7 +46,7 @@ pub struct Pursuers {
 
 impl Pursuers {
     /// Up to four on the street 3 m before `door`, `spread` metres apart along it, going for the
-    /// point 1.5 m inside it on `field`, the house's ground-floor `windows` their climbers' links
+    /// hall on `field`, each for its own point 1.5 to 3.9 m inside the door, the house's ground-floor `windows` their climbers' links
     /// (two seconds each): those that stand on the field and have a way in. None when none has.
     pub fn new(field: Field, door: &Passage, windows: Vec<Passage>, spread: f32) -> Option<Self> {
         let hall = door.middle() + door.across * 1.5 + Vec3::Y * door.drop;
@@ -57,9 +57,20 @@ impl Pursuers {
         let along = (door.ends[1] - door.ends[0]).normalize_or_zero();
         let mut crowd = Crowd::new(CrowdSettings::default());
         let mut follows = Vec::new();
+        // Each its own goal down the hall, 0.8 m apart, the deepest for those nearest the door's
+        // middle: the first in leave the doorway clear (#285: in a 1.4 m hall two stood abreast
+        // at one goal and closed it to the others).
+        let mut order: Vec<usize> = (0..COUNT).collect();
+        order.sort_by(|&a, &b| {
+            let off = |k: usize| (k as f32 - 1.5).abs();
+            off(a).total_cmp(&off(b)).then(a.cmp(&b))
+        });
         for k in 0..COUNT {
             let at = door.middle() - door.across * 3.0 + along * ((k as f32 - 1.5) * spread);
-            let Some(path) = field.path(at, hall, &links, 400_000).filter(|p| p.complete) else {
+            let rank = order.iter().position(|&o| o == k).unwrap_or(0);
+            let deep = hall + door.across * (0.8 * (COUNT - 1 - rank) as f32);
+            let goal = field.place_near(deep, 0.6).map_or(hall, |s| field.point(s));
+            let Some(path) = field.path(at, goal, &links, 400_000).filter(|p| p.complete) else {
                 continue;
             };
             crowd.add(Agent::new(path.points[0], 0.3, 1.4));

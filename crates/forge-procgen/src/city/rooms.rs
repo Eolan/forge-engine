@@ -870,7 +870,7 @@ mod tests {
             2,
             "a couple's bedroom and the children's"
         );
-        let plan = plan(&p, 6.0, 12.0);
+        let plan = plan(&p, 6.2, 12.0);
         check(&plan, &p, 12.0);
         assert!(
             (2..=3).contains(&plan.storeys.len()),
@@ -888,7 +888,7 @@ mod tests {
         let mut alone = Vec::new();
         for means in [Means::Poor, Means::Modest, Means::Comfortable, Means::Rich] {
             for people in 1..=6 {
-                for width in [5.6, 6.0, 7.0, 8.5, 10.0, 12.0] {
+                for width in [5.8, 6.2, 7.0, 8.5, 10.0, 12.0] {
                     for max_depth in [8.0, 10.0, 12.0] {
                         let p = programme(people, means);
                         let plan = plan(&p, width, max_depth);
@@ -914,7 +914,7 @@ mod tests {
     fn every_plan_ends_on_shallow_lots() {
         for means in [Means::Poor, Means::Modest, Means::Comfortable, Means::Rich] {
             for people in 1..=6 {
-                for width in [5.6, 6.0, 8.5, 12.0] {
+                for width in [5.8, 6.2, 8.5, 12.0] {
                     for max_depth in [2.6, 3.0, 4.0, 5.0, 5.5, 6.0, 7.0] {
                         let p = programme(people, means);
                         let plan = plan(&p, width, max_depth);
@@ -926,7 +926,7 @@ mod tests {
         }
     }
 
-    /// A row house one room wide and 12 m deep (the village's core, 6 m lots): a storey of three
+    /// A row house one room wide and 12 m deep (the village's core, lots of 6.2 m and more): a storey of three
     /// bedrooms one behind the other kept its middle one dark under a storey of an office and a
     /// bathroom 8.8 m deep. The village's poor and modest households in houses of two storeys or
     /// more keep every bedroom and study on an outside wall now, and every plan still tiles and
@@ -935,7 +935,7 @@ mod tests {
     fn a_row_house_keeps_its_bedrooms_on_its_outside_walls() {
         for means in [Means::Poor, Means::Modest] {
             for people in 1..=6 {
-                for width in [6.0, 6.3, 7.0] {
+                for width in [6.2, 6.5, 7.2] {
                     let p = programme(people, means);
                     let plan = plan(&p, width, 12.0);
                     check(&plan, &p, 12.0);
@@ -993,7 +993,7 @@ mod tests {
     #[test]
     fn a_poor_household_keeps_the_minimums() {
         let p = programme(3, Means::Poor);
-        let plan = plan(&p, 6.0, 10.0);
+        let plan = plan(&p, 6.2, 10.0);
         check(&plan, &p, 10.0);
         for r in plan.storeys.iter().flatten() {
             let area = (r.x.1 - r.x.0) * (r.y.1 - r.y.0);

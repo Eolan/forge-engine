@@ -226,6 +226,61 @@ pub fn by_room(m: &Mass, s: &mut Structure, seed: u64) {
     s.openings = out;
 }
 
+/// The insides laid again with every window and glazed bay in (the partitions move off the
+/// front's and the back's openings, and the gardens' glazed bays come after the rooms' windows,
+/// `gardens::glaze`): a window a partition still meets keeps its longer side of it, a [`PIER`]
+/// off the partition, or goes when under half a metre is left (#285: a corner house's glazed
+/// bay on its side met the partition between two of its rooms). A few rounds, since a narrowed
+/// window can move a partition again.
+pub(crate) fn narrow_to_partitions(m: &Mass, s: &mut Structure) {
+    for _ in 0..3 {
+        let Some(inner) = interior::house(m, s) else {
+            return;
+        };
+        let hits = interior::openings_hit(s, &inner);
+        if hits.is_empty() {
+            return;
+        }
+        for (end, k) in hits {
+            let Some(i) = s.openings.iter().position(|o| {
+                let w = &s.walls[o.wall];
+                let t = (w.b - w.a).normalize_or_zero();
+                let along = (end - w.a).dot(t);
+                let n = DVec2::new(-t.y, t.x);
+                o.storey == k
+                    && o.kind == OpeningKind::Window
+                    && ((end - w.a).dot(n) - w.thickness).abs() < 0.1
+                    && along > o.span().0 - 0.1
+                    && along < o.span().1 + 0.1
+            }) else {
+                continue;
+            };
+            let o = s.openings[i];
+            let w = &s.walls[o.wall];
+            let x = (end - w.a).dot((w.b - w.a).normalize_or_zero());
+            let clear = interior::PARTITION * 0.5 + PIER;
+            let (lo, hi) = o.span();
+            let (left, right) = ((lo, x - clear), (x + clear, hi));
+            let (a, b) = if left.1 - left.0 >= right.1 - right.0 {
+                left
+            } else {
+                right
+            };
+            let width = ((b - a) * 10.0).floor() / 10.0;
+            if width < 0.5 {
+                s.openings.remove(i);
+            } else {
+                s.openings[i].width = width;
+                s.openings[i].along = if b == hi {
+                    b - width * 0.5
+                } else {
+                    a + width * 0.5
+                };
+            }
+        }
+    }
+}
+
 /// How far a room may stand off a street wall's inner face and still take its window (#308),
 /// metres: its rooms are laid square to the front, and a side line that bends (a corner house on a
 /// bend) leaves a wedge of floor, open to the room, between its rectangle and that wall.

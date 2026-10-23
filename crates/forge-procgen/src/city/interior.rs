@@ -16,7 +16,7 @@ use super::structure::{self, Structure};
 /// A partition's thickness, metres: plastered brick on edge.
 pub const PARTITION: f64 = 0.1;
 /// A doorway's clear width, metres: a wheelchair's (0.90 m, the owner's rule).
-pub const DOORWAY: f64 = 0.9;
+pub const DOORWAY: f64 = 0.93;
 /// A doorway's head over its floor, metres.
 pub const DOORWAY_HEAD: f64 = 2.1;
 /// How far a doorway keeps from a partition's ends, metres: room for its frame.
