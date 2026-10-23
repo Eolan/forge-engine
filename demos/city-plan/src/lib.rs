@@ -8092,6 +8092,16 @@ impl Running for PlanRunning {
         }
     }
 
+    fn hud_lines(&self) -> Vec<String> {
+        // The mission's objective, or how it ended (#287).
+        self.mission
+            .as_ref()
+            .map(mission::MissionRun::line)
+            .filter(|l| !l.is_empty())
+            .into_iter()
+            .collect()
+    }
+
     fn footing(&self) -> Option<(Vec3, forge_audio::Surface)> {
         let feet = self.walker.as_ref()?.feet();
         Some((feet, ground_under(&self.regions, feet)))

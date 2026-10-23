@@ -2310,6 +2310,35 @@ impl Demo for Gallery {
                 white,
             ));
         }
+        // The scene's lines on the HUD (a mission's objective, #287): at the window's top left,
+        // on a dark band, a line each.
+        let lines = self
+            .running
+            .as_ref()
+            .map(|r| r.hud_lines())
+            .unwrap_or_default();
+        if !lines.is_empty() {
+            let px = (ctx.hud_size()[1] / 40.0).clamp(14.0, 30.0);
+            let (pad, step) = (px * 0.6, px * 1.5);
+            let widest = lines
+                .iter()
+                .map(|l| ctx.hud_text_width(px, l))
+                .fold(0.0, f32::max);
+            let top = pad * 2.0;
+            ctx.hud.push(forge_app::hud::HudQuad::solid(
+                [
+                    pad,
+                    top,
+                    pad * 3.0 + widest,
+                    top + pad + step * lines.len() as f32,
+                ],
+                [0.01, 0.012, 0.015, 0.6],
+            ));
+            for (k, line) in lines.iter().enumerate() {
+                let at = [pad * 2.0, top + pad * 0.5 + step * k as f32];
+                ctx.hud_text(at, px, [0.95, 0.95, 0.95, 1.0], line);
+            }
+        }
         // The world's sound (#318), where the shell opened the device: the ambience at the
         // sun's hour (mid-afternoon when nothing sets it), the player's steps, the scene's own.
         if let Some(sound) = ctx.sound.as_mut() {

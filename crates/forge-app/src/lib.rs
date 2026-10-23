@@ -204,6 +204,11 @@ pub struct Context {
     /// passes the update a zero `dt`; a demo that steps at a fixed rate of its own skips its
     /// steps while this is set.
     pub paused: bool,
+    /// The HUD's glyphs (the menu's, [`Context::hud_text`]'s), made the first time they are
+    /// needed: `Some(None)` when they could not be.
+    glyphs: Option<Option<menu::MenuFont>>,
+    /// The font they are made from, the overlay's.
+    font_path: PathBuf,
     /// The frame's size over the window's, each way: 1, or [`ssaa::FACTOR`] when supersampling.
     ssaa: u32,
     /// The first frame (in the frame slots' numbering) the demo recorded after the loading
@@ -238,6 +243,50 @@ impl Context {
             output: self.output,
             extent: self.extent(),
         }
+    }
+
+    /// The HUD's size: the window's pixels, which [`hud::HudQuad`]'s rectangles are in.
+    pub fn hud_size(&self) -> [f32; 2] {
+        let e = self.swapchain.extent();
+        [e.width as f32, e.height as f32]
+    }
+
+    /// `text` on the HUD this frame, in the glyphs of the game's menu (#352, the overlay's
+    /// font): its first cell's top left at `at` (window pixels), `px` pixels high, in `color`
+    /// (linear, straight alpha). Printable ASCII; other characters show as `?`. Its width in
+    /// pixels (0 when the glyphs could not be made).
+    pub fn hud_text(&mut self, at: [f32; 2], px: f32, color: [f32; 4], text: &str) -> f32 {
+        self.make_glyphs();
+        let Some(Some(font)) = &self.glyphs else {
+            return 0.0;
+        };
+        font.text(&mut self.hud, at, px, color, text);
+        font.metrics().width(px, text)
+    }
+
+    /// How wide [`Context::hud_text`] draws `text` at `px` pixels.
+    pub fn hud_text_width(&mut self, px: f32, text: &str) -> f32 {
+        self.make_glyphs();
+        match &self.glyphs {
+            Some(Some(font)) => font.metrics().width(px, text),
+            _ => 0.0,
+        }
+    }
+
+    /// The HUD's glyphs, made from the overlay's font the first time they are needed.
+    fn make_glyphs(&mut self) {
+        if self.glyphs.is_none() {
+            self.glyphs = Some(
+                menu::MenuFont::new(&self.device, Some(&self.font_path))
+                    .inspect_err(|e| tracing::warn!("the HUD's glyphs: {e}"))
+                    .ok(),
+            );
+        }
+    }
+
+    /// The glyphs' metrics, once made.
+    fn glyph_metrics(&self) -> Option<menu::Metrics> {
+        self.glyphs.as_ref()?.as_ref().map(|f| f.metrics())
     }
 }
 
@@ -618,13 +667,9 @@ struct State<D: Demo> {
     /// silence behind the game's menu while the game holds (#352).
     volume: Var<f64>,
     volume_sent: f64,
-    /// The game's menu on Esc (#352), its glyphs (none if they could not be made), and where the
-    /// cursor stands in the window, pixels.
+    /// The game's menu on Esc (#352), and where the cursor stands in the window, pixels.
     menu: menu::Menu,
-    menu_font: Option<menu::MenuFont>,
     cursor: [f32; 2],
-    /// The overlay's font, which the menu's glyphs are made from when it first opens.
-    font_path: PathBuf,
     /// The playing audio device, for as long as the run lasts.
     _sound_output: Option<sound::Output>,
     /// The mix written to a file instead (`AppConfig::sound_record`).
@@ -752,12 +797,7 @@ impl<D: Demo> State<D> {
     /// Opens the game's menu (#352), its glyphs made the first time: the keys and buttons held
     /// let go, the cursor the system's.
     fn open_menu(&mut self) {
-        if self.menu_font.is_none() {
-            match menu::MenuFont::new(&self.ctx.device, Some(&self.font_path)) {
-                Ok(font) => self.menu_font = Some(font),
-                Err(e) => tracing::warn!("the menu's glyphs: {e}"),
-            }
-        }
+        self.ctx.make_glyphs();
         self.menu.open();
         self.input.release_all();
         self.input.paused = true;
@@ -1185,6 +1225,8 @@ impl<D: Demo> State<D> {
             magnifier: None,
             ssaa: 1,
             paused: false,
+            glyphs: None,
+            font_path: font_path.clone(),
             counted_from: 0,
             _surface: surface,
             _instance: instance,
@@ -1265,9 +1307,7 @@ impl<D: Demo> State<D> {
             volume,
             volume_sent: 1.0,
             menu: menu::Menu::default(),
-            menu_font: None,
             cursor: [0.0; 2],
-            font_path,
             _sound_output: sound_output,
             sound_recorder,
             unmatched_reported: false,
@@ -1777,7 +1817,7 @@ impl<D: Demo> State<D> {
                 self.ctx.hud.clear();
             }
             if self.menu.is_open()
-                && let Some(font) = &self.menu_font
+                && let Some(Some(font)) = &self.ctx.glyphs
             {
                 let size = [extent.width as f32, extent.height as f32];
                 let paused = self.ctx.paused;
@@ -2228,7 +2268,7 @@ impl<D: Demo> ApplicationHandler for App<D> {
                 if state.menu.is_open() {
                     if down
                         && button == MouseButton::Left
-                        && let Some(m) = state.menu_font.as_ref().map(|f| f.metrics())
+                        && let Some(m) = state.ctx.glyph_metrics()
                     {
                         let e = state.ctx.swapchain.extent();
                         let size = [e.width as f32, e.height as f32];
@@ -2295,7 +2335,7 @@ impl<D: Demo> ApplicationHandler for App<D> {
             WindowEvent::CursorMoved { position, .. } => {
                 state.cursor = [position.x as f32, position.y as f32];
                 if state.menu.is_open()
-                    && let Some(m) = state.menu_font.as_ref().map(|f| f.metrics())
+                    && let Some(m) = state.ctx.glyph_metrics()
                 {
                     let e = state.ctx.swapchain.extent();
                     let size = [e.width as f32, e.height as f32];

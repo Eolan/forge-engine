@@ -2703,7 +2703,8 @@ kitchen (or a living room) downstairs, all reached from its street on its walk f
    1 m of the feet.
 3. **Back out to the street:** the place 3 m before the front door, where the walk starts.
 
-It plays in first person from that street, walking. The window's title shows the objective. With
+It plays in first person from that street, walking. The objective shows at the window's top
+left (`Running::hud_lines`, drawn with `Context::hud_text`) and in its title. With
 `--mission-autopilot` the walker walks it on its own: a path on the house's field to the
 mission's first target (`Runtime::targets`), followed as the pursuers follow theirs, with the view
 turned towards where it walks. The log names the house and a view of its front, and each change

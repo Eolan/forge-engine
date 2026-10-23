@@ -1,5 +1,6 @@
 //! The game's menu on Esc (#352, the owner on 2026-10-22): resume, settings and quit, over the
-//! picture as the HUD's quads (#328), with a font atlas of its own.
+//! picture as the HUD's quads (#328), with glyphs of its own, which [`crate::Context::hud_text`]
+//! lends to the games too.
 //!
 //! - **Esc** opens it, and on its first page closes it again (resume); on the settings page it
 //!   goes back.
@@ -77,6 +78,13 @@ pub struct Menu {
 pub struct Metrics {
     advance: f32,
     height: f32,
+}
+
+impl Metrics {
+    /// How wide `text` is at `px` pixels, its cells one advance each.
+    pub fn width(self, px: f32, text: &str) -> f32 {
+        self.advance * px * text.len() as f32
+    }
 }
 
 /// Where everything goes, the window's pixels.
@@ -426,7 +434,14 @@ impl MenuFont {
     }
 
     /// `text`'s quads, its cells' top left corner at `at`, `px` pixels in size.
-    fn text(&self, out: &mut Vec<HudQuad>, at: [f32; 2], px: f32, color: [f32; 4], text: &str) {
+    pub(crate) fn text(
+        &self,
+        out: &mut Vec<HudQuad>,
+        at: [f32; 2],
+        px: f32,
+        color: [f32; 4],
+        text: &str,
+    ) {
         let atlas = self
             .atlases
             .iter()

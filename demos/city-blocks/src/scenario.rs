@@ -271,4 +271,9 @@ pub trait Running: Send {
     fn networked(&self) -> bool {
         false
     }
+    /// The lines it shows on the HUD, at the window's top left (#287: a mission's objective).
+    /// None by default.
+    fn hud_lines(&self) -> Vec<String> {
+        Vec::new()
+    }
 }
