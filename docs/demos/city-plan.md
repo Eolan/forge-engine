@@ -2659,6 +2659,41 @@ its own that frame. Real clips, and the crossing's own, come with the animation 
 *One, three and seven seconds in: the four on the street, three at the door taking turns, the
 last going in.*
 
+## The village's test mission (#287, 2026-10-23)
+
+```
+cargo run --release -p city-plan -- --village 600 --mission [--mission-autopilot]
+```
+
+The first map's one objective, as a record (`forge_mission`, D-073) that the generator writes
+for the village (`mission.rs`). It takes the first house with a stair, a bedroom upstairs and a
+kitchen (or a living room) downstairs, all reached from its street on its walk field (D-076):
+1. **Go up to the bedroom:** a place where a walker stands nearest the bedroom's middle (a bed
+   may fill the middle itself). Reaching it puts the parcel in the kitchen.
+2. **Take the parcel in the kitchen:** an item at the kitchen's such place, picked up within
+   1 m of the feet.
+3. **Back out to the street:** the place 3 m before the front door, where the walk starts.
+
+It plays in first person from that street, walking. The window's title shows the objective. With
+`--mission-autopilot` the walker walks it on its own: a path on the house's field to the
+mission's first target (`Runtime::targets`), followed as the pursuers follow theirs, with the view
+turned towards where it walks. The log names the house and a view of its front, and each change
+with its tick.
+
+**On the 600 m village (lot 97), fixed step:**
+- **The run:** upstairs at tick 998, the parcel at 1525, won at 2021 (33.7 s). The digest at
+  the end is `cd3fef3df427d650`.
+- **The evaluator:** 0.54 µs a tick on average, 5.5 µs at most.
+- **The test** `the_village_mission_is_won_on_its_autopilot` plays it twice without the
+  renderer: the walker against the house's walls and insides, the same ticks and state both
+  times, won at the same tick as the demo.
+- **Without the flag** the map check's views are unchanged.
+
+![The village's mission](images/city-plan-mission.png)
+
+*On the stair, the bedroom as it is reached, the parcel in the kitchen just before it is taken,
+and back on the street.*
+
 ## Next (#245–#247)
 
 - Squares at the radial districts' centres; the landmarks' sightlines.

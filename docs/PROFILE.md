@@ -2258,9 +2258,12 @@ buffer each, copied bit by bit).
   lab's world, wall clock around the call.
 - **Result:** 1.18 µs a tick on average over 1272 ticks of a real-time run, 6.1 µs at most; 1.57
   µs over a shorter run. The record's second version (the race now a wait with `fail_if`):
-  1.01 µs on average over 900 fixed-step ticks, 6.9 µs at most.
-- **Where it shows:** logged at exit ("the mission's ticks (µs) over the run"). The app's CPU
-  zones are its own, so it has no F1 zone yet.
+  1.01 µs on average over 900 fixed-step ticks, 6.9 µs at most. The village's test mission
+  (`city-plan --village 600 --mission --mission-autopilot`, 2026-10-23: three objectives, two
+  places, one item, no timer): 0.54 µs on average over its 2021 ticks, 5.5 µs at most.
+- **Where it shows:** logged at exit ("the mission's ticks (µs) over the run"), in the village at
+  the mission's end ("the village's mission ended"). The app's CPU zones are its own, so it has
+  no F1 zone yet.
 
 ## `forge-script` — a data file read in Luau (#292, D-072, 2026-10-18)
 

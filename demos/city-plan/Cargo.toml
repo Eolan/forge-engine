@@ -27,6 +27,7 @@ forge-audio = { workspace = true }
 forge-core = { workspace = true }
 forge-flora = { workspace = true }
 forge-geom = { workspace = true }
+forge-mission = { workspace = true }
 forge-nav = { workspace = true }
 forge-physics = { workspace = true }
 forge-procgen = { workspace = true }

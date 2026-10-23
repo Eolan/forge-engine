@@ -707,7 +707,8 @@ the core technologies, which the city and the demos take back. The engine stays 
 game (scenarios, missions, licensed assets) is a private repository, as the city sandbox.
 1. **The first map:** a Mediterranean village from the city's buildings, in a local forest,
    entered on foot: enterable buildings from a structure generator, props, plants, the day
-   cycle, one objective. No enemies or weapons until it looks right still and moving.
+   cycle, one objective (a test mission written for the village, `city-plan --mission`, #287,
+   2026-10-23). No enemies or weapons until it looks right still and moving.
 2. **The check per commit:** the gate, then one seed, six views and a walked path against an
    accepted set, two minutes. The tiers run at milestones on the owner's word.
 3. **The core, in order:** geometry and LOD correctness; materials (trim sheets, decals,

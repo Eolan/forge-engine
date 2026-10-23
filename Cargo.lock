@@ -517,6 +517,7 @@ dependencies = [
  "forge-core",
  "forge-flora",
  "forge-geom",
+ "forge-mission",
  "forge-nav",
  "forge-physics",
  "forge-procgen",

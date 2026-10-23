@@ -47,6 +47,7 @@ use glam::{DVec2, Mat4, Vec3};
 use winit::keyboard::KeyCode;
 
 mod crowd;
+mod mission;
 mod pursuers;
 mod residents;
 mod signs;
@@ -579,6 +580,8 @@ pub struct PlanScenario {
     crowd: Option<crowd::Crowd>,
     /// The pursuers going for a house (`--pursuers`, #317).
     pursuers: Option<pursuers::Pursuers>,
+    /// The village's test mission (`--mission`, #287) and whether its autopilot walks it.
+    mission: Option<(mission::VillageMission, bool)>,
     /// The automated taxis (D-061).
     taxis: Option<taxis::Taxis>,
     size: f64,
@@ -2179,6 +2182,7 @@ impl PlanScenario {
             sign_names,
             crowd: None,
             pursuers: None,
+            mission: None,
             taxis: taxis::Taxis::new(plan, masses, &holds, 8.0, 3600.0),
             size,
             camera,
@@ -2316,6 +2320,31 @@ impl PlanScenario {
                 0
             }
         );
+        self
+    }
+
+    /// The village's test mission (#287's proof on the first map): written from the first house
+    /// with a stair (`mission::village`), played from the street before its front door, the
+    /// walker on from the start; `autopilot` walks it on the house's field. The log names the
+    /// house and each change.
+    pub fn with_mission(mut self, plan: &CityPlan, masses: &[Mass], autopilot: bool) -> Self {
+        let Some(m) = mission::village(self.size, plan, masses) else {
+            tracing::warn!("no house for the village's mission");
+            return self;
+        };
+        tracing::info!(
+            house = m.house,
+            lot = m.lot,
+            "the village's mission: --view={:.1},1.7,{:.1},{:.1},-3",
+            m.start.x,
+            m.start.z,
+            (-m.facing.x).atan2(-m.facing.z).to_degrees()
+        );
+        self.camera.position = m.start + Vec3::Y * walk::EYES;
+        self.camera.yaw = (-m.facing.x).atan2(-m.facing.z);
+        self.camera.pitch = -0.05;
+        self.walk_on_start = true;
+        self.mission = Some((m, autopilot));
         self
     }
 
@@ -6909,6 +6938,14 @@ impl Scenario for PlanScenario {
                 ),
             ],
         );
+        // The mission's parcel (`--mission`, #287): cardboard.
+        if self.mission.is_some() {
+            materials.add_rows(
+                "plan-parcel",
+                vec![("plan parcel".into(), colour([0.50, 0.36, 0.22], 6.0, 0.03))],
+            );
+        }
+        let parcel_row = self.mission.is_some().then(|| materials.of("plan-parcel"));
         let lamp_row = materials.of("plan-lamp");
         let ground_row = materials.of("plan-ground");
         let mass_row = materials.of("plan-mass");
@@ -7301,6 +7338,12 @@ impl Scenario for PlanScenario {
                 tram_movers.push((figure, pursuers::COUNT as u32));
             }
         }
+        // The mission's parcel (#287), after them: one slot, under the ground until it lies.
+        if let Some(row) = parcel_row {
+            let parcel = builder.add_mesh(&MeshletMesh::build(&mission::parcel_mesh()));
+            builder.set_mesh_material(parcel, row);
+            tram_movers.push((parcel, 1));
+        }
         laps.mark("movers");
         // The kit buildings' insides, a mesh a tile cooked apart from the masses (#273), last
         // among the static instances so every other keeps its id (each tree's tone is hashed
@@ -7404,6 +7447,11 @@ impl Scenario for PlanScenario {
                 crowd: self.crowd.take(),
                 taxis: self.taxis.take(),
                 pursuers: self.pursuers.take(),
+                mission: self.mission.take().and_then(|(m, autopilot)| {
+                    mission::MissionRun::new(m, autopilot)
+                        .inspect_err(|e| tracing::warn!("the village's mission: {e}"))
+                        .ok()
+                }),
                 steps: None,
                 walkers: Vec::new(),
                 camera: glam::Vec2::ZERO,
@@ -7461,6 +7509,8 @@ struct PlanRunning {
     crowd: Option<crowd::Crowd>,
     /// The pursuers going for a house (`--pursuers`, #317).
     pursuers: Option<pursuers::Pursuers>,
+    /// The village's test mission (`--mission`, #287).
+    mission: Option<mission::MissionRun>,
     /// Their footsteps (#318), once the app has a device.
     steps: Option<sounds::Steps>,
     /// The automated taxis.
@@ -7779,8 +7829,17 @@ impl Running for PlanRunning {
             self.toggle_ride(camera, f32::MAX);
         }
         if let Some(walker) = &mut self.walker {
-            let walk = city_blocks::wished_walk(args, camera.yaw, input);
+            let walk = self
+                .mission
+                .as_mut()
+                .and_then(|m| m.walk(walker.feet()))
+                .unwrap_or_else(|| city_blocks::wished_walk(args, camera.yaw, input));
             walker.advance(&self.walls, walk, f64::from(step));
+            // The mission (#287), once the walker moved: its feet where they stand.
+            if let Some(m) = &mut self.mission {
+                m.steer(walk, step);
+                m.advance(walker.feet(), f64::from(step));
+            }
         }
         if let Some(p) = &mut self.pursuers {
             p.advance(f64::from(step));
@@ -7812,9 +7871,13 @@ impl Running for PlanRunning {
             }
             return;
         }
-        // In first person: the camera at the walker's eyes, the view where the mouse turns it.
+        // In first person: the camera at the walker's eyes, the view where the mouse turns it,
+        // or the mission's autopilot where it walks.
         if let Some(walker) = &self.walker {
             camera.position = walker.drawn_feet() + Vec3::Y * walk::EYES;
+            if let Some((yaw, pitch)) = self.mission.as_ref().and_then(|m| m.view()) {
+                (camera.yaw, camera.pitch) = (yaw, pitch);
+            }
         }
     }
 
@@ -7840,6 +7903,7 @@ impl Running for PlanRunning {
             && self.boats.is_empty()
             && self.taxis.is_none()
             && self.pursuers.is_none()
+            && self.mission.is_none()
         {
             // The pool's movers are committed without others.
             if self.promote_test.is_some() {
@@ -7995,11 +8059,22 @@ impl Running for PlanRunning {
                 }
             }
         }
+        // Then the mission's parcel (#287): where it lies, or under the ground.
+        if let Some(m) = &self.mission {
+            still.resize(transforms.len(), false);
+            still.push(true);
+            let at = m.parcel().unwrap_or(Vec3::new(0.0, -1000.0, 0.0) + origin);
+            transforms.push(place((at, 0.0)));
+        }
         scene.set_movers_still(&transforms, |k| still.get(k).copied().unwrap_or(false));
     }
 
     fn title(&mut self) -> String {
-        self.title.clone()
+        // The mission's objective after the place's name (#287).
+        match self.mission.as_ref().map(|m| m.line()) {
+            Some(line) if !line.is_empty() => format!("{} — {line}", self.title),
+            _ => self.title.clone(),
+        }
     }
 
     fn footing(&self) -> Option<(Vec3, forge_audio::Surface)> {
@@ -9332,6 +9407,62 @@ mod tests {
         }
         println!("{shut} houses shut, {climbed} entered through a window");
         assert!(shut == 8 && climbed * 4 >= shut * 3, "{climbed} of {shut}");
+    }
+
+    /// The village's test mission (#287's proof on the first map) is won on its autopilot: the
+    /// walker against the house's walls and insides up to the bedroom, to the parcel in the
+    /// kitchen and back out to the street, the same ticks and state twice.
+    #[test]
+    fn the_village_mission_is_won_on_its_autopilot() {
+        let size = 600.0;
+        let site = example::site(size, 10.0);
+        let v = forge_procgen::city::village::village(
+            &site,
+            &forge_procgen::city::village::params(size),
+            1,
+        );
+        let structures = structure::structures(&v.plan, &v.masses);
+        let run = || {
+            let m = mission::village(size, &v.plan, &v.masses).expect("a house for the mission");
+            let (i, lot) = (m.house, m.lot);
+            let pieces = wall_pieces(size, &v.masses, &structures)
+                .into_iter()
+                .chain(interior_pieces(size, &v.masses, &structures, &[i]))
+                .collect();
+            let passages = village_passages(size, &v.plan, &v.masses, &structures)
+                .into_iter()
+                .filter(|p| p.piece as usize == i)
+                .collect();
+            let walls = walk::Walls::new(pieces, passages);
+            let mut walker = walk::Walker::new(&walls, m.start).expect("a walker on the street");
+            let mut run = mission::MissionRun::new(m, true).expect("a valid mission");
+            let mut lines = vec![run.line()];
+            for _ in 0..60 * 180 {
+                let wish = run.walk(walker.feet()).expect("the autopilot walks");
+                walker.advance(&walls, wish, 1.0 / 60.0);
+                run.advance(walker.feet(), 1.0 / 60.0);
+                if lines.last() != Some(&run.line()) {
+                    lines.push(run.line());
+                }
+                if run.outcome() != forge_mission::Outcome::Running {
+                    break;
+                }
+            }
+            println!(
+                "lot {lot}: {:?} at tick {} ({:.1} s): {lines:?}",
+                run.outcome(),
+                run.tick(),
+                run.tick() as f64 / 60.0
+            );
+            assert_eq!(
+                run.outcome(),
+                forge_mission::Outcome::Succeeded,
+                "lot {lot}: {lines:?}, the walker at {:?}",
+                walker.feet()
+            );
+            (run.tick(), run.digest())
+        };
+        assert_eq!(run(), run());
     }
 
     /// D-076's proof (#317): four pursuers on the street before a house reach its insides, by

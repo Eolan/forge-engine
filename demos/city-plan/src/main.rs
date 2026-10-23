@@ -53,6 +53,14 @@ struct Cli {
     /// door or over a window's sill (#317); the log names a view of its front.
     #[arg(long)]
     pursuers: bool,
+    /// With `--village`: the village's test mission (#287): written from the first house with a
+    /// stair, played from the street before its front door, walking: up to a bedroom, the parcel
+    /// that then lies in the kitchen, back out to the street. The title shows the objective.
+    #[arg(long)]
+    mission: bool,
+    /// With `--mission`: the walker walks it on its own, on the house's walk field (D-076).
+    #[arg(long)]
+    mission_autopilot: bool,
     /// One second in, hide every other clear pane and raise the rest by 0.4 m: the check of
     /// panes changed at run time (#325).
     #[arg(long)]
@@ -528,6 +536,14 @@ fn main() -> anyhow::Result<()> {
         };
         let scenario = if cli.pursuers {
             scenario.with_pursuers(&plan, &masses)
+        } else {
+            scenario
+        };
+        if cli.mission && cli.village.is_none() {
+            eprintln!("--mission plays on the village: add --village 600");
+        }
+        let scenario = if cli.mission && cli.village.is_some() {
+            scenario.with_mission(&plan, &masses, cli.mission_autopilot)
         } else {
             scenario
         };
