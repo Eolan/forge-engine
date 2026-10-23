@@ -138,7 +138,9 @@ and the date next to every number.
   records a barrier.
 - **Audio thread**: real-time priority, never touches the pool, communicates by lock-free
   queues.
-- **Network thread**: `tokio` runtime for I/O only; packets are handed to the simulation.
+- **Network thread**: `tokio` runtime for I/O only; packets are handed to the simulation
+  (`forge_net::NetThread`: the simulation connects or serves through it, then sends and takes
+  messages on its sessions without waiting).
 - **GPU**: a graphics queue, and an async compute and a transfer queue when the device has
   them (#77, D-020; `FORGE_ASYNC=0` keeps everything on graphics). The city's sky tables and
   probe update run on the compute queue beside the geometry, its streamed page copies on the

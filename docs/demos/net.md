@@ -272,6 +272,28 @@ the whole state every 10 s; a replay must reproduce the run to the bit.
   `--replay FILE --seek 900` restores the keyframe at 600 and runs 300 ticks in 0.18–0.22 s before
   the first frame, then checks the last 10. At tick 1200 both draw every body in the same place.
 
+## The simulation over QUIC, through the network thread (2026-10-23)
+
+Until now `forge-sim`'s scheme (stamped commands sent again until acknowledged, snapshots checked
+by digest, the paced clock) ran over in-process links only, and the transport's tests were
+async. `forge_net::NetThread` puts the tokio runtime on a thread of its own, `forge-net`: the
+simulation's thread connects through it (`connect`, waiting for the handshake at start-up) or
+serves through it (`serve`: `Listener::try_accept` hands over each new client's session, never
+waiting); then it sends and takes messages on plain sessions, `send` and `try_recv` never
+waiting either. `InputPacket` and `Snapshot` have their bytes (`Codec`).
+
+**The test** (`tests/sim_over_quic.rs`): a server and two clients in synchronous loops, the
+clock four times fast (240 ticks a second), each link 40 ms one way with 4 ms of jitter and 2 %
+lost, through the conditioner both ways; 20 pushes each over 900 ticks. Four runs:
+
+| | Client 0 | Client 1 |
+|---|---|---|
+| Snapshots taken (of 200) | 194–197 | 192–197 |
+| Predicted to the bit / corrected | 176–179 / 18 | 170–175 / 21–22 |
+| Lead on arrival once settled (target 4) | 2–5 ticks | 2–5 ticks |
+
+Every command was taken once and none late, and each client ended where the server is.
+
 ## Authority between workers (step 2's handoff, 2026-10-23)
 
 `forge_sim::authority`: D-010's replication layer and its workers, in one process, before any
@@ -356,7 +378,7 @@ lockstep on the first channel (reliable, ordered).
   what it aims at); the layer's own replay (its workers' writes recorded, diffed against a fresh
   run, as the research's stage 4 asks); and the `hundred-bots` demo on the server PC.
 - The population of #250 as the replicated world: its near tiers' records in place of the crowd.
-- A handle for the simulation's thread (the engine's network thread runs the tokio runtime;
-  the simulation hands messages over and never waits on I/O).
+- The physics lab's `--net` over QUIC through `NetThread` (its whole-state snapshots, 280 KB,
+  on a reliable channel until they are deltas).
 - The server PC and the Raspberry Pi come later, on the owner's word: nothing here binds
   anything but loopback.

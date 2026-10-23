@@ -292,6 +292,26 @@ fn the_servers_recording_replays_its_session_and_starts_anywhere() {
 }
 
 #[test]
+fn packets_and_snapshots_cross_a_transport_as_bytes() {
+    let commands = vec![pushes(0, 30, 1200, 21), pushes(1, 30, 1200, 22)];
+    let mut s = session(2, 100.0, 0.02, &commands);
+    let snapshot = s.server.snapshot();
+    assert!(!snapshot.acked.is_empty() && !snapshot.leads.is_empty());
+    let packet = InputPacket {
+        player: 1,
+        tick: 77,
+        commands: commands[1][..3].to_vec(),
+    };
+    let (mut a, mut b) = (Vec::new(), Vec::new());
+    snapshot.encode(&mut a);
+    packet.encode(&mut b);
+    assert_eq!(Snapshot::decode(&mut a.as_slice()), Some(snapshot));
+    assert_eq!(InputPacket::decode(&mut b.as_slice()), Some(packet));
+    // Cut short: not a packet.
+    assert_eq!(InputPacket::<Push>::decode(&mut &b[..b.len() - 1]), None);
+}
+
+#[test]
 fn a_client_alone_predicts_what_the_server_does() {
     let commands = vec![pushes(0, 60, 1200, 11)];
     let mut s = session(1, 100.0, 0.02, &commands);

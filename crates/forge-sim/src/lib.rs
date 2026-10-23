@@ -598,6 +598,86 @@ pub struct Snapshot {
     pub leads: Vec<(PlayerId, i64)>,
 }
 
+/// An input packet's bytes for a transport (`forge_net`): the player, the tick, the commands.
+impl<C: Codec> Codec for InputPacket<C> {
+    fn encode(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.player.to_le_bytes());
+        put_u64(out, self.tick);
+        out.extend_from_slice(&(self.commands.len() as u16).to_le_bytes());
+        for c in &self.commands {
+            c.encode(out);
+        }
+    }
+
+    fn decode(bytes: &mut &[u8]) -> Option<Self> {
+        let player = take::<2>(bytes).map(u16::from_le_bytes)?;
+        let tick = take_u64(bytes)?;
+        let n = take::<2>(bytes).map(u16::from_le_bytes)?;
+        let commands = (0..n)
+            .map(|_| Stamped::decode(bytes))
+            .collect::<Option<Vec<_>>>()?;
+        Some(Self {
+            player,
+            tick,
+            commands,
+        })
+    }
+}
+
+/// A snapshot's bytes for a transport (`forge_net`): the tick, the digest, the state, then each
+/// player's acknowledgement and lead.
+impl Codec for Snapshot {
+    fn encode(&self, out: &mut Vec<u8>) {
+        put_u64(out, self.tick);
+        put_u64(out, self.digest);
+        put_u64(out, self.state.len() as u64);
+        out.extend_from_slice(&self.state);
+        out.extend_from_slice(&(self.acked.len() as u16).to_le_bytes());
+        for &(player, below) in &self.acked {
+            out.extend_from_slice(&player.to_le_bytes());
+            out.extend_from_slice(&below.to_le_bytes());
+        }
+        out.extend_from_slice(&(self.leads.len() as u16).to_le_bytes());
+        for &(player, lead) in &self.leads {
+            out.extend_from_slice(&player.to_le_bytes());
+            out.extend_from_slice(&lead.to_le_bytes());
+        }
+    }
+
+    fn decode(bytes: &mut &[u8]) -> Option<Self> {
+        let tick = take_u64(bytes)?;
+        let digest = take_u64(bytes)?;
+        let len = usize::try_from(take_u64(bytes)?).ok()?;
+        let (state, rest) = bytes.split_at_checked(len)?;
+        *bytes = rest;
+        let n = take::<2>(bytes).map(u16::from_le_bytes)?;
+        let acked = (0..n)
+            .map(|_| {
+                Some((
+                    take::<2>(bytes).map(u16::from_le_bytes)?,
+                    take::<4>(bytes).map(u32::from_le_bytes)?,
+                ))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let n = take::<2>(bytes).map(u16::from_le_bytes)?;
+        let leads = (0..n)
+            .map(|_| {
+                Some((
+                    take::<2>(bytes).map(u16::from_le_bytes)?,
+                    take::<8>(bytes).map(i64::from_le_bytes)?,
+                ))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(Self {
+            tick,
+            digest,
+            state: state.to_vec(),
+            acked,
+            leads,
+        })
+    }
+}
+
 /// The commands taken of a player: all those numbered under `below`, and some after.
 #[derive(Debug, Default)]
 struct Taken {

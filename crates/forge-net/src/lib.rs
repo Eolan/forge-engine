@@ -17,7 +17,8 @@
 //!
 //! [`Server`] and [`Client`] make [`Session`]s; a session sends and receives [`Message`]s on
 //! its channels. Everything runs on a tokio runtime, which in the engine is the network thread's
-//! (ARCHITECTURE.md, "Threads"); the simulation hands messages over and never waits on I/O.
+//! ([`thread`], ARCHITECTURE.md, "Threads"); the simulation hands messages over and never waits
+//! on I/O.
 //!
 //! On the channels, **replication** (no I/O of its own, so it is tested on a virtual clock):
 //! - [`quantize`]: an entity's state in integers both ends share; [`bits`]: the bit writer;
@@ -48,6 +49,7 @@ pub mod replicate;
 pub mod session;
 pub mod snapshot;
 pub mod socket;
+pub mod thread;
 pub mod token;
 pub mod wire;
 
@@ -66,4 +68,5 @@ pub use replicate::{ReplicationConfig, Replicator, SnapshotStats};
 pub use session::{Message, SendError, Session, SessionStats};
 pub use snapshot::{Ack, EntityId, SnapshotReceiver, Taken};
 pub use socket::Conditioner;
+pub use thread::{Listener, NetThread};
 pub use token::{TokenClaims, TokenError, TokenIssuer, TokenVerifier};
