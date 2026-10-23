@@ -1,6 +1,7 @@
 //! The loading screen (issue #25). A demo started with [`crate::run_loading`] does its heavy
-//! CPU work (procedural meshes, cluster DAGs) on a thread of its own while the shell keeps the
-//! window alive: this stage draws a hammer striking an anvil in the bottom right corner, and a
+//! CPU work (procedural meshes, cluster DAGs) on a thread of its own, started with the process,
+//! beside the window's and the device's creation (Streamline's start takes seconds), while the
+//! shell keeps the window alive: this stage draws a hammer striking an anvil in the bottom right corner, and a
 //! bar of the shaders compiled ahead at the bottom left (#200, `shaders/loading.slang`); the
 //! shell writes over it what the engine is busy with ([`layout_activity`], from
 //! `forge_core::activity`): the shaders compiling over the bar, the longest tasks running and
@@ -103,11 +104,24 @@ fn finished<T>(handle: &Option<JoinHandle<T>>) -> bool {
     handle.as_ref().is_none_or(JoinHandle::is_finished)
 }
 
+/// Starts `prepare` on the loading thread ([`crate::run_loading`]: before the window and the
+/// device, which it does not need).
+pub(crate) fn prepare<D: Demo + Send + 'static>(
+    prepare: impl FnOnce() -> Result<Finish<D>> + Send + 'static,
+) -> Result<JoinHandle<Result<Finish<D>>>> {
+    Ok(std::thread::Builder::new()
+        .name("loading".to_owned())
+        .spawn(move || {
+            let _task = forge_core::activity::begin("app", "preparing the scene");
+            prepare()
+        })?)
+}
+
 impl<D: Demo + Send> Stage<D> {
-    /// Starts `prepare` on its thread and the loading screen in the window.
+    /// Starts the loading screen in the window, `thread` preparing the scene ([`prepare`]).
     pub(crate) fn start(
         ctx: &mut Context,
-        prepare: impl FnOnce() -> Result<Finish<D>> + Send + 'static,
+        thread: JoinHandle<Result<Finish<D>>>,
         settle: u32,
     ) -> Result<Self> {
         let vertex = ctx.device.create_shader_module(
@@ -135,12 +149,6 @@ impl<D: Demo + Send> Stage<D> {
         ctx.device.destroy_shader_module(vertex);
         ctx.device.destroy_shader_module(fragment);
         let pipeline = pipeline?;
-        let thread = std::thread::Builder::new()
-            .name("loading".to_owned())
-            .spawn(move || {
-                let _task = forge_core::activity::begin("app", "preparing the scene");
-                prepare()
-            })?;
         let program = std::env::current_exe()
             .ok()
             .and_then(|exe| exe.file_stem().map(|s| s.to_string_lossy().into_owned()))

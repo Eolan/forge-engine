@@ -386,18 +386,37 @@ pub trait Demo: Sized + 'static {
 /// (uploads, pipelines), which runs on a worker of its own too while the animation goes on
 /// (#201), with the [`Setup`] of the shell. The loading frames do not count: the demo's frames
 /// number from 0, as with [`run`], so frame limits and captures are unchanged.
-pub fn run_loading<D: Demo + Send>(
+pub fn run_loading<D: Demo + Send + 'static>(
     config: AppConfig,
     prepare: impl FnOnce() -> Result<Finish<D>> + Send + 'static,
 ) -> Result<()> {
+    init_tracing();
+    // The preparation starts at once, beside the window's and the device's creation, which it
+    // does not need: Streamline's start alone took 4.1 s of the village's 7.2 (#274). Its steps
+    // are recorded from here, kept for the load profile when `dev.load_profile` asks for one
+    // (#345) and dropped at the shell's start otherwise.
+    forge_core::activity::record_start();
+    let preparing = loading::prepare(prepare)?;
     // Interactive runs draw the demo's first frames behind the loading screen (#342); scripted
     // ones show them, their frames counted from the first.
     let scripted =
         config.frame_limit.is_some() || config.capture.is_some() || config.capture_every.is_some();
     let settle = if scripted { 0 } else { loading::SETTLE_FRAMES };
     run(config, move |ctx| {
-        loading::Stage::start(ctx, prepare, settle)
+        loading::Stage::start(ctx, preparing, settle)
     })
+}
+
+/// The log, to the console, filtered by `RUST_LOG` ("info" by default); once.
+fn init_tracing() {
+    if !tracing::dispatcher::has_been_set() {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| "info".into()),
+            )
+            .init();
+    }
 }
 
 /// Runs the demo built by `init` until the window closes, the game's menu quits (#352) or the
@@ -408,14 +427,7 @@ pub fn run<D: Demo>(
     config: AppConfig,
     init: impl FnOnce(&mut Context) -> Result<D> + 'static,
 ) -> Result<()> {
-    if !tracing::dispatcher::has_been_set() {
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| "info".into()),
-            )
-            .init();
-    }
+    init_tracing();
     // The frames first: work beside them (a planet's tiles cooked as the camera flies, the
     // city's streaming) takes the cores they leave. The cooking threads below normal measured
     // worse, the frame thread above normal half the slow frames (#220, `forge_task::priority`).
@@ -956,6 +968,16 @@ impl<D: Demo> State<D> {
     }
 
     fn new(window: Arc<Window>, config: AppConfig, init: InitFn<D>) -> Result<Self> {
+        // In the load profile (#345): the device's creation, Streamline's start inside it, which
+        // a loading demo's preparation runs beside.
+        let device_task = forge_core::activity::begin(
+            "app",
+            if config.streamline {
+                "the device, Streamline starting"
+            } else {
+                "the device"
+            },
+        );
         let display = window.display_handle()?.as_raw();
         let window_handle = window.window_handle()?.as_raw();
         let validation = config.validate || cfg!(debug_assertions);
@@ -1028,6 +1050,7 @@ impl<D: Demo> State<D> {
                 Pacing::Smooth
             },
         )?;
+        drop(device_task);
         // What the OS says of the window's display (issue #94), under the calibration saved for
         // it and the flags (#125). Scripted runs keep to the OS's values, so captures do not
         // depend on a calibration.
@@ -1157,8 +1180,13 @@ impl<D: Demo> State<D> {
             )
             .restart(),
         );
+        // `run_loading` began recording with its preparation: kept when asked, else dropped.
         if settings.get(load_profile) {
-            forge_core::activity::record_start();
+            if !forge_core::activity::recording() {
+                forge_core::activity::record_start();
+            }
+        } else if forge_core::activity::recording() {
+            forge_core::activity::record_finish();
         }
         settings.add_command(
             "app.capture",

@@ -1954,6 +1954,25 @@ that changes the resolve's code (a constant of the leaves' light):
   1.30 s when it makes the entry and 0.22 s when it reads it; a warm city start went from 4.5
   to 3.4 s in the profile, the same image (0 pixels, both runs against a build before).
 
+**The preparation beside the device** (2026-10-23). Since DLAA became the default (D-070),
+Streamline's start sits in front of the loading screen: the village's warm start had grown to
+7.23 s, 3.12 s with FSR (Streamline not loaded). Its own log (verbose) puts 1.66 s in NGX
+asking DLSS for its requirements at `slInit` and 1.7 s in NGX's start inside `vkCreateDevice`.
+Neither is Forge's to change. Over-the-air updates are off, and the updater NGX runs anyway
+takes 0.6 s on a thread of its own. What `run_loading` can do is start the demo's preparation (the
+village laid out, its houses' insides, the meshes read) at the process's start, beside the window
+and the device: it needs neither. The load profile (`--set dev.load_profile=1`) now spans the
+whole start, the device's step named.
+
+| `tools/load-time.sh`, best of three | Before | Now |
+|---|---|---|
+| `city-plan --village 600` | 7.23 s | **5.80 s** |
+| the same with `--set r.aa=fsr` | 3.12 s | **2.38 s** |
+
+The village's start now: the window at 0.22 s; the preparation done at 1.6 s; Streamline and
+the device until about 4.7 s; then the finishing (uploads, the rays' structures, pipelines),
+0.75 s.
+
 ## Local exposure (`--local-exposure`, #275, D-067, 2026-10-17)
 
 RTX 5070 Ti, `city-plan --village 600` at 18:00, the map check's door view (`--view=70.3,1.6,-172.9,-33.2,-3`),
