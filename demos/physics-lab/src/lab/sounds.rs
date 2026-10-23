@@ -3,12 +3,12 @@
 //! meeting ([`Impact::between`]): each that has a surface rings, the softer one setting how long
 //! the contact lasts.
 //!
-//! Each sound is made on the game thread, 0.1 to 1 ms for one (10 to 40 ns a sample, and a heavy
-//! body rings for up to a second), and a pile coming down begins some 700 meetings a second: more
-//! than any ear tells apart, or [`IMPACTS_CAP`] voices hold. So the hardest meeting waiting is
-//! made each frame ([`MOST_A_FRAME`]), the others wait up to [`LATE`] frames (balls landing in
-//! the same tick are heard one after the other, as from 20 m away), and a moving body sounds
-//! again only [`COOLDOWN`] ticks after it last did.
+//! Each sound takes 0.1 to 1 ms to make (10 to 40 ns a sample, and a heavy body rings for up to a
+//! second), on the audio engine's maker thread, which the next frame waits for; and a pile coming
+//! down begins some 700 meetings a second: more than any ear tells apart, or [`IMPACTS_CAP`]
+//! voices hold. So the hardest meeting waiting is made each frame ([`MOST_A_FRAME`]), the others
+//! wait up to [`LATE`] frames (balls landing in the same tick are heard one after the other, as
+//! from 20 m away), and a moving body sounds again only [`COOLDOWN`] ticks after it last did.
 
 use std::collections::HashMap;
 
@@ -62,7 +62,8 @@ pub(crate) struct Impacts {
     made: u64,
     /// Meetings let go after waiting too long.
     let_go: u64,
-    /// Milliseconds spent making them, over the run.
+    /// Milliseconds the game thread spent on them over the run (choosing and asking; the making
+    /// is the maker thread's).
     ms: f64,
 }
 

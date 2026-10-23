@@ -2293,19 +2293,19 @@ sound as they meet. Phase 7's contact events reach the material layer (D-007):
 - **What each weighs:** `World::masses`, none for a fixed body.
 - **The sound:** `forge_audio::Impact::between` (`docs/demos/audio.md`): both bodies ring, the
   softer setting how long the contact lasts and clicking in its own band.
-- **The budget:** each sound is made on the game thread (0.1 to 1 ms), and `drop`'s pile coming
-  down begins some 700 meetings a second. So the hardest waiting meeting is made each frame, the
-  others wait up to 4 frames (67 ms, what sound takes over 23 m) and are let go after, a moving
-  body sounds again only 10 ticks after it last did, and eight are mixed at most (a family of
-  voices).
+- **The budget:** each sound takes 0.1 to 1 ms to make, on the audio engine's maker thread, which
+  the next frame waits for, and `drop`'s pile coming down begins some 700 meetings a second. So
+  the hardest waiting meeting is made each frame, the others wait up to 4 frames (67 ms, what
+  sound takes over 23 m) and are let go after, a moving body sounds again only 10 ticks after it
+  last did, and eight are mixed at most (a family of voices).
 
 Over 600 frames at the fixed step (`--sound-record`, `FORGE_SOUND=0`; the counts the same every
 run):
 
-| Scene | The first impact | Made | Let go | Making them |
+| Scene | The first impact | Made | Let go | The game thread on them (in the call before the maker) |
 |---|---|---|---|---|
-| `materials` | tick 39: a ball on the brick, 6.27 m/s (a 2 m fall: 6.26), only the brick ringing | 19 | 0 | 4 ms |
-| `drop` | tick 34: two stone blocks, 330 kg reduced, 0.66 m/s | 643 | 1 469 | 223 ms (0.37 ms a frame) |
+| `materials` | tick 39: a ball on the brick, 6.27 m/s (a 2 m fall: 6.26), only the brick ringing | 19 | 0 | 0.19 ms (4 ms) |
+| `drop` | tick 34: two stone blocks, 330 kg reduced, 0.66 m/s | 643 | 1 469 | 2.8 ms (223 ms, 0.37 ms a frame) |
 
 In the recording the ball's landing is a step from −27 to −16 dBFS over the ambience's bed, in the
 frame the log names. The lab's marks by material (decals where a body struck) come next.

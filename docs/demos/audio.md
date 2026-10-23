@@ -204,6 +204,13 @@ checks what a scene sounds like without playing it on the owner's machine.
     `two_bodies_meeting_ring_each_other`).
   - **Rubber, cloth and flesh** have no surface of their own (`SoundLayer::surface` is `None`):
     only what they strike rings.
+- **Steps and impacts made off the game thread** (2026-10-24, `AudioEngine::make_off_thread`, on
+  in the app): `Foley` asks the engine's maker thread for each sound (`AudioEngine::play_made`).
+  The voice is named at once, and controls sent to it wait with it (the pursuers' occlusion). The
+  next frame's `update` waits for every sound asked for before it and starts them in order, so a
+  sound starts one frame later, the same in every run, with the samples made in the call (the test
+  `sounds_made_off_the_game_thread_are_the_same`). The physics lab's game thread spent 223 ms on
+  its impacts over `drop`'s 600 frames, and 2.8 ms with the maker.
 - **A cap per family of voices** (`PlayParams::family`, `AudioEngine::set_family_cap`): past it
   a new voice takes the place of its family's weakest when it beats it (priority, then loudness at
   the listener), and is refused or kept virtual otherwise; the other families keep their places.
@@ -277,10 +284,8 @@ mixer's counters and how often the device found the ring short.
   the vegetation's wind field, recordings to fit the modal banks (Ren et al.; a download).
 - **Surfaces of their own for sand, mud, snow and ice:** their rows borrow grass's dull press,
   gravel's grains and stone's ring for now.
-- **Sounds made off the game thread:** an impact or a step is synthesised where it is asked for,
-  0.1 to 1 ms each (10 to 40 ns a sample, a heavy body's ring lasting up to a second). The lab
-  makes one meeting a frame for that reason (0.37 ms a frame on average while its pile comes
-  down); a worker making them a frame ahead would lift the limit.
+- **More than one maker thread:** one makes every step and impact (0.1 to 1 ms each), and the
+  next frame waits for it, so the lab still makes one meeting a frame.
 - **The ambience's sources.** The beds are textures around the listener; birds and cicadas
   placed in the map's trees, and the sea along its actual quays, wait for the map's data.
 - **Better resampling** for sounds far from the mixer's rate: the Hermite interpolator aliases

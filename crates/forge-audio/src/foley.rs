@@ -3,8 +3,10 @@
 //!
 //! The game thread calls [`Foley::step`] or [`Foley::impact`] with the surface, the place, and
 //! how hard: a walker's speed and weight, or a body's speed and mass. The sound is synthesised
-//! there and then into a short buffer (a few hundred microseconds of work) and played as a
-//! spatial voice; nothing is recorded or downloaded, and no two steps are the same.
+//! into a short buffer (0.1 to 1 ms of work) on the engine's maker thread when it runs
+//! ([`AudioEngine::make_off_thread`], the app's), started at the next frame, or in the call
+//! otherwise, and played as a spatial voice; nothing is recorded or downloaded, and no two steps
+//! are the same.
 //!
 //! A contact is a force pulse, `sin²` over its width ([`synth::force_pulse`]): short on hard
 //! ground (0.4 ms on metal), long on soft (12 ms on grass), so a hard surface is excited high
@@ -37,8 +39,6 @@
 //! contact length (±25 %), click strength (±3 dB), modes (stone ±8 %), balance of heel and
 //! ball, gap between them, scuff or none, and level (±1.5 dB); [`Foley`] also plays each at its
 //! own pitch (±2.5 %).
-
-use std::sync::Arc;
 
 use forge_core::SplitMix64;
 use forge_core::material::SoundSurface;
@@ -1005,13 +1005,8 @@ impl Foley {
         }
     }
 
-    fn play(
-        &mut self,
-        engine: &mut AudioEngine,
-        sound: SampleBuffer,
-        position: DVec3,
-        start: Option<u64>,
-    ) -> VoiceId {
+    /// How a sound at `position`, on frame `start`, plays: placed, at its own pitch.
+    fn placed(&mut self, position: DVec3, start: Option<u64>) -> PlayParams {
         let mut params = self.params;
         let mut spatial = params.spatial.unwrap_or(Spatial {
             attenuation: Attenuation::Inverse {
@@ -1027,14 +1022,14 @@ impl Foley {
         params.start = start;
         params.looping = false;
         params.pitch *= self.rng.range_f32(0.975, 1.025);
-        engine.play(&Arc::new(sound), params)
+        params
     }
 
     /// The listener's own foot lands: played without a place (straight below the head an
     /// HRTF has no measurements and a panner no direction), at the level of 1.6 m away and a
     /// little to the side of the foot (`foot`: −1 left, 1 right).
     pub fn own_step(&mut self, engine: &mut AudioEngine, step: &Step, foot: f32) -> VoiceId {
-        let sound = step_sound(step, self.rng.next_u64(), self.rate);
+        let (step, seed, rate) = (*step, self.rng.next_u64(), self.rate);
         let mut params = self.params;
         params.spatial = None;
         params.gain *= 1.0 / 1.6;
@@ -1042,18 +1037,20 @@ impl Foley {
         params.start = step.start;
         params.looping = false;
         params.pitch *= self.rng.range_f32(0.975, 1.025);
-        engine.play(&Arc::new(sound), params)
+        engine.play_made(params, move || step_sound(&step, seed, rate))
     }
 
     /// A foot lands.
     pub fn step(&mut self, engine: &mut AudioEngine, step: &Step) -> VoiceId {
-        let sound = step_sound(step, self.rng.next_u64(), self.rate);
-        self.play(engine, sound, step.position, step.start)
+        let (step, seed, rate) = (*step, self.rng.next_u64(), self.rate);
+        let params = self.placed(step.position, step.start);
+        engine.play_made(params, move || step_sound(&step, seed, rate))
     }
 
     /// A body hits a surface.
     pub fn impact(&mut self, engine: &mut AudioEngine, impact: &Impact) -> VoiceId {
-        let sound = impact_sound(impact, self.rng.next_u64(), self.rate);
-        self.play(engine, sound, impact.position, impact.start)
+        let (impact, seed, rate) = (*impact, self.rng.next_u64(), self.rate);
+        let params = self.placed(impact.position, impact.start);
+        engine.play_made(params, move || impact_sound(&impact, seed, rate))
     }
 }

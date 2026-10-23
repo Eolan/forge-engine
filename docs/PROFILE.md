@@ -2271,7 +2271,9 @@ if that ever shows in the frame.
 longest. `drop`'s pile coming down begins some 700 meetings a second. Making four a frame cost
 0.97 ms a frame on average (1,577 sounds and 583 ms over 600 frames), more than the voices can
 hold, so the lab makes the hardest one a frame, the others waiting 4 frames at most: 643 sounds,
-223 ms, 0.37 ms a frame. Making them on a worker a frame ahead is what would lift the limit.
+223 ms, 0.37 ms a frame. Since 2026-10-24 they are made on the audio engine's maker thread
+(`AudioEngine::make_off_thread`, started by the next frame's `update`): the game thread's share of
+the same run is 2.8 ms, 0.005 ms a frame, and the samples are those made in the call.
 
 **The ambience beds** run on the decode thread (`ambience`; ten seconds of each, the best of
 three): wind at 10 m/s 1.03 ms a second of sound, rain at 2 mm/h 0.87 ms and at 20 mm/h 1.55 ms,

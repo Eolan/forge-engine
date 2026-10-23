@@ -6,7 +6,9 @@ mod common;
 
 use common::*;
 use forge_audio::foley::{Footwear, Impact, ImpactBody, Step, Surface, impact_sound, step_sound};
-use forge_audio::{BusLayout, Foley, Listener, MixerConfig, OfflineRenderer, PlayParams, create};
+use forge_audio::{
+    BusLayout, Control, Foley, Listener, MixerConfig, OfflineRenderer, PlayParams, create,
+};
 use glam::DVec3;
 
 const RATE: u32 = 48_000;
@@ -449,4 +451,49 @@ fn steps_land_where_and_when_the_game_says() {
     assert!(top < -38.0, "{top:.1} dB");
     let worst = worst_window_above_db(&left, 16_000.0, RATE);
     assert!(worst < -25.0, "{worst:.1} dB");
+}
+
+/// Made on the engine's thread (`AudioEngine::make_off_thread`): the same steps, named the same
+/// voices, give the same samples as made in the call once `update` has started them; a control
+/// sent to a voice while it is being made waits for it (a step silenced before it was made stays
+/// silent).
+#[test]
+fn sounds_made_off_the_game_thread_are_the_same() {
+    let render = |off: bool| {
+        let layout = BusLayout::new();
+        let (mut engine, mixer) = create(MixerConfig::default(), &layout);
+        if off {
+            engine.make_off_thread().expect("the maker thread");
+        }
+        let mut foley = Foley::new(RATE, 21, PlayParams::default());
+        engine.set_listener(Listener::at(DVec3::new(0.0, 1.6, 0.0)));
+        let voices: Vec<_> = Surface::ALL
+            .iter()
+            .enumerate()
+            .map(|(i, &s)| {
+                let step = Step {
+                    start: Some(2400 + i as u64 * 72_000),
+                    ..Step::walk(s, DVec3::new(0.0, 0.0, -0.3))
+                };
+                foley.step(&mut engine, &step)
+            })
+            .collect();
+        engine.control(Control::Gain {
+            voice: voices[2],
+            gain: 0.0,
+        });
+        engine.update();
+        let mut offline = OfflineRenderer::new(mixer);
+        let out = offline.render(RATE as usize * 9);
+        (out, voices, offline.mixer().latency())
+    };
+    let (inline, voices, latency) = render(false);
+    let (made, made_voices, _) = render(true);
+    assert_eq!(voices, made_voices);
+    assert_eq!(inline, made, "the same samples");
+    let left = channel(&made, 0);
+    let silenced = 2400 + 2 * 72_000 + latency;
+    assert!(peak(&left[silenced..silenced + 4800]) < 1e-6);
+    let heard = 2400 + 3 * 72_000 + latency;
+    assert!(peak(&left[heard..heard + 4800]) > 1e-3);
 }

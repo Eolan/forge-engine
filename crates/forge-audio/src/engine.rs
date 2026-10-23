@@ -4,9 +4,17 @@
 //! go one way, finished voices (their sounds, to be dropped here) and their reasons come
 //! back. The engine never waits on the mixer: when the command ring is full it keeps the
 //! commands, in order, and sends them at the next call.
+//!
+//! A sound made in code for the moment (a footstep, an impact: [`AudioEngine::play_made`]) is
+//! made on the engine's maker thread once [`AudioEngine::make_off_thread`] turns it on: its voice
+//! is named at once, the controls sent to it wait with it, and the next [`AudioEngine::update`]
+//! (the shell calls it at the start of each frame) waits for every sound asked for before it
+//! and starts them in order. A frame's sounds are made while the frame goes on, and start one
+//! frame later, the same in every run.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::mpsc::{Receiver, Sender};
 
 use glam::{DVec3, Vec3};
 use rtrb::{Consumer, Producer, RingBuffer};
@@ -260,6 +268,51 @@ pub struct AudioEngine {
     stats: Arc<SharedStats>,
     rate: u32,
     events: Vec<Event>,
+    maker: Option<Maker>,
+}
+
+/// Something that makes a sound.
+type Make = Box<dyn FnOnce() -> SampleBuffer + Send>;
+
+/// The maker thread ([`AudioEngine::make_off_thread`]) and the sounds asked of it, in order:
+/// each voice's parameters and the commands sent to it while it waits.
+struct Maker {
+    jobs: Option<Sender<Make>>,
+    made: Receiver<SampleBuffer>,
+    thread: Option<std::thread::JoinHandle<()>>,
+    waiting: Vec<(VoiceId, PlayParams, Vec<Timed>)>,
+}
+
+impl Maker {
+    fn start() -> std::io::Result<Self> {
+        let (jobs, inbox) = std::sync::mpsc::channel::<Make>();
+        let (outbox, made) = std::sync::mpsc::channel();
+        let thread = std::thread::Builder::new()
+            .name("forge-audio-maker".into())
+            .spawn(move || {
+                for make in inbox {
+                    if outbox.send(make()).is_err() {
+                        break;
+                    }
+                }
+            })?;
+        Ok(Self {
+            jobs: Some(jobs),
+            made,
+            thread: Some(thread),
+            waiting: Vec::new(),
+        })
+    }
+}
+
+impl Drop for Maker {
+    fn drop(&mut self) {
+        // Its inbox closed, the thread ends after the sound it is making.
+        self.jobs = None;
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
 }
 
 /// Makes a mixer for `layout` and the engine that drives it.
@@ -290,6 +343,7 @@ pub fn create(config: MixerConfig, layout: &BusLayout) -> (AudioEngine, Mixer) {
         stats,
         rate: config.sample_rate,
         events: Vec::new(),
+        maker: None,
     };
     (engine, mixer)
 }
@@ -316,9 +370,90 @@ impl AudioEngine {
         id
     }
 
+    /// From now on [`AudioEngine::play_made`] makes its sounds on a thread of the engine's (the
+    /// module's documentation), until the engine is dropped. A shell that calls
+    /// [`AudioEngine::update`] each frame turns it on; without it each sound is made in the
+    /// call. Errs when the thread cannot start, and the sounds are made in the call then.
+    pub fn make_off_thread(&mut self) -> std::io::Result<()> {
+        if self.maker.is_none() {
+            self.maker = Some(Maker::start()?);
+        }
+        Ok(())
+    }
+
+    /// Plays the sound `make` makes (a footstep, an impact made in code for the moment): on the
+    /// maker thread when it runs, started by the next [`AudioEngine::update`]; in the call
+    /// otherwise. The voice is named at once, and the controls sent to it wait with it.
+    pub fn play_made(
+        &mut self,
+        params: PlayParams,
+        make: impl FnOnce() -> SampleBuffer + Send + 'static,
+    ) -> VoiceId {
+        let make: Make = Box::new(make);
+        let sent = match self.maker.as_ref().and_then(|m| m.jobs.as_ref()) {
+            Some(jobs) => jobs.send(make).map_err(|e| e.0),
+            None => Err(make),
+        };
+        match (sent, &mut self.maker) {
+            (Ok(()), Some(maker)) => {
+                let id = VoiceId(self.next_id);
+                self.next_id += 1;
+                maker.waiting.push((id, params, Vec::new()));
+                id
+            }
+            // No thread, or it ended: made here.
+            (Err(make), _) => self.play(&Arc::new(make()), params),
+            (Ok(()), None) => unreachable!("sent to a maker that is not there"),
+        }
+    }
+
+    /// Starts every sound the maker thread was asked for, in order, waiting for those not made
+    /// yet, each followed by the controls sent to it meanwhile.
+    fn start_made(&mut self) {
+        let Some(maker) = &mut self.maker else {
+            return;
+        };
+        if maker.waiting.is_empty() {
+            return;
+        }
+        let mut started = Vec::with_capacity(maker.waiting.len());
+        for (id, params, held) in std::mem::take(&mut maker.waiting) {
+            // The thread makes them in the order asked; a closed thread made none of the rest.
+            let Ok(sound) = maker.made.recv() else {
+                break;
+            };
+            started.push((id, params, sound, held));
+        }
+        for (id, params, sound, held) in started {
+            self.send(Timed {
+                at: params.start,
+                cmd: Command::Play(PlayCommand {
+                    id,
+                    source: Source::Memory(Arc::new(sound)),
+                    params,
+                }),
+            });
+            for timed in held {
+                self.send(timed);
+            }
+        }
+    }
+
+    /// Sends a control, or keeps it with its voice while that voice is being made.
+    fn send_control(&mut self, timed: Timed) {
+        if let (Some(maker), Command::Control(control)) = (&mut self.maker, &timed.cmd)
+            && let Some(voice) = control.voice()
+            && let Some(waiting) = maker.waiting.iter_mut().find(|w| w.0 == voice)
+        {
+            waiting.2.push(timed);
+            return;
+        }
+        self.send(timed);
+    }
+
     /// Applies a change at the next block.
     pub fn control(&mut self, control: Control) {
-        self.send(Timed {
+        self.send_control(Timed {
             at: None,
             cmd: Command::Control(control),
         });
@@ -327,7 +462,7 @@ impl AudioEngine {
     /// Applies a change at `frame`: a stop on that very frame, any other change at the start
     /// of the block holding it (gains and positions are ramped across a block).
     pub fn control_at(&mut self, frame: u64, control: Control) {
-        self.send(Timed {
+        self.send_control(Timed {
             at: Some(frame),
             cmd: Command::Control(control),
         });
@@ -368,9 +503,11 @@ impl AudioEngine {
         }
     }
 
-    /// Sends what waited, drops what the mixer returned, and gives the events since the
-    /// last call.
+    /// Starts the sounds the maker thread was asked for since the last call (waiting for them),
+    /// sends what waited, drops what the mixer returned, and gives the events since the last
+    /// call.
     pub fn update(&mut self) -> &[Event] {
+        self.start_made();
         self.flush();
         self.events.clear();
         while let Ok(returned) = self.returns.pop() {

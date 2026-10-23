@@ -178,7 +178,11 @@ fn mix(rate: u32) -> (Sound, Mixer) {
         sample_rate: rate,
         ..MixerConfig::default()
     };
-    let (engine, mixer) = create(config, &layout);
+    let (mut engine, mixer) = create(config, &layout);
+    // Footsteps and impacts made on the engine's thread, started at the next frame's update.
+    if let Err(e) = engine.make_off_thread() {
+        tracing::warn!("sounds made in code stay on the game thread: {e}");
+    }
     let (streams, pump) = streams(STREAM_AHEAD);
     let sound = Sound {
         engine,
