@@ -2327,10 +2327,10 @@ impl PlanScenario {
         self
     }
 
-    /// The village's animals (#269's fauna, `--fauna`): its sparrows, pigeons and swifts, cats,
-    /// and dogs walked by their owners, from `hour` (0 to 24) of a June day, stepped with the
+    /// The village's animals (#269's fauna, `--fauna`): its sparrows, pigeons, swifts and gulls,
+    /// cats, and dogs walked by their owners, from `hour` (0 to 24) of a June day, stepped with the
     /// player and the pursuers as people they flee. The log counts them.
-    pub fn with_fauna(mut self, plan: &CityPlan, masses: &[Mass], hour: f64) -> Self {
+    pub fn with_fauna(mut self, site: &Site, plan: &CityPlan, masses: &[Mass], hour: f64) -> Self {
         let structures = structure::structures(plan, masses);
         let half = self.size * 0.5;
         let on_plan = |p: Vec3| DVec2::new(f64::from(p.x) + half, f64::from(p.z) + half);
@@ -2348,7 +2348,7 @@ impl PlanScenario {
                     (on_plan(at), f64::from(height), f64::from(crown))
                 }))
                 .collect();
-        let parts = fauna::parts(plan, masses, &structures, &trees);
+        let parts = fauna::parts(site, plan, masses, &structures, &trees);
         self.fauna = Some(fauna::FaunaRun::new(parts, hour, 1));
         self
     }
@@ -9558,7 +9558,7 @@ mod tests {
             .map(|t| (t.pos, t.height, t.crown))
             .collect();
         let run = || {
-            let parts = fauna::parts(&v.plan, &v.masses, &structures, &trees);
+            let parts = fauna::parts(&site, &v.plan, &v.masses, &structures, &trees);
             let mut r = fauna::FaunaRun::new(parts, 18.0, 7);
             for _ in 0..20 * 60 * 10 {
                 r.advance(0.1, &[]);

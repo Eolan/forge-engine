@@ -3,14 +3,14 @@
 //! pursuers as what they flee, and drawn as movers, a mesh a species and pose
 //! (`forge_geom::animals`).
 //!
-//! The first version keeps the village's everyday animals: sparrows, pigeons and swifts, cats,
-//! and dogs walked by their owners. The water's (gulls, mullet) wait for the shore as outlines,
-//! the goats for a pasture.
+//! The first version keeps the village's everyday animals: sparrows, pigeons, swifts and gulls,
+//! cats, and dogs walked by their owners. The goats wait for a pasture, the mullet for a water
+//! that shows what swims in it.
 
 use forge_fauna::plan::{Building, Garden, Parts, Street, Sun, Tree, Wall};
 use forge_fauna::{Activity, Behaviour, Disturber, Fauna, Mode, Plan, Roster, Species, Threat};
 use forge_geom::animals::{Bird, Gait, Quadruped, Wings};
-use forge_procgen::city::{BlockUse, CityPlan, RoadClass, geom};
+use forge_procgen::city::{BlockUse, CityPlan, LAND, RoadClass, Site, geom};
 use glam::{DVec2, Vec2, Vec3};
 
 use super::{Mass, Structure};
@@ -27,6 +27,7 @@ const MAIN_LIMIT: f32 = 30.0;
 /// squares and greens, its streets, and its trees: `trees` (the plan's, `(x, y, height, crown)`
 /// on the plan) and the forest's plants within [`NEAR_HOUSES`] of a house.
 pub fn parts(
+    site: &Site,
     plan: &CityPlan,
     masses: &[Mass],
     structures: &[Structure],
@@ -151,8 +152,8 @@ pub fn parts(
         squares,
         nodes,
         streets,
-        water: Vec::new(),
-        quay: Vec::new(),
+        water: water_strips(site),
+        quay: quay(site, masses),
         pasture: Vec::new(),
         fold: Vec::new(),
         trees,
@@ -163,6 +164,134 @@ pub fn parts(
             set: 18.0 * 3600.0,
         },
     }
+}
+
+/// How near a house the bank counts as the village's quay, metres.
+const QUAY_REACH: f64 = 60.0;
+/// The bank's places chained into the quay at most this far apart, metres.
+const QUAY_STEP: f64 = 15.0;
+
+/// The site's water as the fauna sees it: each row's run of wet cells a rectangle.
+fn water_strips(site: &Site) -> Vec<Vec<Vec2>> {
+    let (n, s) = (site.water.size, site.water.spacing);
+    let size = site.size;
+    let mut out = Vec::new();
+    for y in 0..n {
+        let mut x = 0;
+        while x < n {
+            if site.water.get(x, y) == LAND {
+                x += 1;
+                continue;
+            }
+            let x0 = x;
+            while x < n && site.water.get(x, y) != LAND {
+                x += 1;
+            }
+            let clamp = |c: f64| c.clamp(0.0, size) as f32;
+            let (a, b) = (
+                clamp((f64::from(x0) - 0.5) * s),
+                clamp((f64::from(x) - 0.5) * s),
+            );
+            let (c, d) = (
+                clamp((f64::from(y) - 0.5) * s),
+                clamp((f64::from(y) + 0.5) * s),
+            );
+            out.push(vec![
+                Vec2::new(a, c),
+                Vec2::new(b, c),
+                Vec2::new(b, d),
+                Vec2::new(a, d),
+            ]);
+        }
+    }
+    out
+}
+
+/// The quay: the bank nearest the village, its land cells beside the water within
+/// [`QUAY_REACH`] of a house, the largest run of them chained from one end, a cell's middle each.
+fn quay(site: &Site, masses: &[Mass]) -> Vec<Vec2> {
+    let (n, s) = (site.water.size as i64, site.water.spacing);
+    let wet = |x: i64, y: i64| {
+        (0..n).contains(&x) && (0..n).contains(&y) && site.water.get(x as u32, y as u32) != LAND
+    };
+    let centres: Vec<DVec2> = masses
+        .iter()
+        .map(|m| geom::centroid(&m.footprint))
+        .collect();
+    let mut bank: Vec<(i64, i64)> = Vec::new();
+    for y in 0..n {
+        for x in 0..n {
+            let p = DVec2::new(x as f64 * s, y as f64 * s);
+            if !wet(x, y)
+                && [(1, 0), (-1, 0), (0, 1), (0, -1)]
+                    .iter()
+                    .any(|&(dx, dy)| wet(x + dx, y + dy))
+                && centres.iter().any(|c| c.distance(p) < QUAY_REACH)
+            {
+                bank.push((x, y));
+            }
+        }
+    }
+    // Its runs, cells touching at a side or a corner; the largest kept.
+    let mut run_of = vec![usize::MAX; bank.len()];
+    let mut runs: Vec<Vec<usize>> = Vec::new();
+    for start in 0..bank.len() {
+        if run_of[start] != usize::MAX {
+            continue;
+        }
+        let r = runs.len();
+        let mut stack = vec![start];
+        run_of[start] = r;
+        let mut members = Vec::new();
+        while let Some(i) = stack.pop() {
+            members.push(i);
+            for (j, &(x, y)) in bank.iter().enumerate() {
+                let (dx, dy) = (x - bank[i].0, y - bank[i].1);
+                if run_of[j] == usize::MAX && dx.abs() <= 1 && dy.abs() <= 1 {
+                    run_of[j] = r;
+                    stack.push(j);
+                }
+            }
+        }
+        runs.push(members);
+    }
+    let Some(run) = runs.into_iter().max_by_key(Vec::len) else {
+        return Vec::new();
+    };
+    let points: Vec<DVec2> = run
+        .iter()
+        .map(|&i| DVec2::new(bank[i].0 as f64 * s, bank[i].1 as f64 * s))
+        .collect();
+    // Chained from the end farthest from the run's middle, each to its nearest left.
+    let mid = points.iter().fold(DVec2::ZERO, |a, &p| a + p) / points.len() as f64;
+    let first = (0..points.len())
+        .max_by(|&a, &b| {
+            points[a]
+                .distance(mid)
+                .total_cmp(&points[b].distance(mid))
+                .then(b.cmp(&a))
+        })
+        .unwrap_or(0);
+    let mut left: Vec<usize> = (0..points.len()).filter(|&i| i != first).collect();
+    let mut chain = vec![points[first]];
+    while let Some(k) = (0..left.len()).min_by(|&a, &b| {
+        let last = chain[chain.len() - 1];
+        points[left[a]]
+            .distance(last)
+            .total_cmp(&points[left[b]].distance(last))
+            .then(a.cmp(&b))
+    }) {
+        let p = points[left[k]];
+        if p.distance(chain[chain.len() - 1]) > QUAY_STEP {
+            break;
+        }
+        chain.push(p);
+        left.remove(k);
+    }
+    chain
+        .iter()
+        .map(|p| Vec2::new(p.x as f32, p.y as f32))
+        .collect()
 }
 
 /// The least garden kept behind a house, square metres.
@@ -209,7 +338,7 @@ pub fn roster(species: &[Species]) -> Roster {
     r.groups.retain(|&(s, _)| {
         !matches!(
             species[s as usize].behaviour,
-            Behaviour::Gull | Behaviour::Goat | Behaviour::Fish
+            Behaviour::Goat | Behaviour::Fish
         )
     });
     r
@@ -394,6 +523,7 @@ pub fn body(s: &Species) -> Option<(Body, &'static [Coat])> {
     const SPARROW: &[Coat] = &[([0.30, 0.20, 0.12], BEAK)];
     const PIGEON: &[Coat] = &[([0.36, 0.38, 0.42], [0.55, 0.25, 0.25])];
     const SWIFT: &[Coat] = &[([0.07, 0.06, 0.06], BEAK)];
+    const GULL: &[Coat] = &[([0.80, 0.81, 0.83], [0.85, 0.65, 0.12])];
     const CAT: &[Coat] = &[
         ([0.55, 0.30, 0.12], [0.35, 0.15, 0.12]),
         ([0.32, 0.31, 0.30], [0.12, 0.11, 0.11]),
@@ -407,6 +537,7 @@ pub fn body(s: &Species) -> Option<(Body, &'static [Coat])> {
         Behaviour::Sparrow => (bird(1.6, 0.35), SPARROW),
         Behaviour::Pigeon => (bird(2.0, 0.3), PIGEON),
         Behaviour::Swift => (bird(2.5, 0.4), SWIFT),
+        Behaviour::Gull => (bird(2.3, 0.3), GULL),
         Behaviour::Cat => (quad(0.55, (0.6, 0.8), 0.07), CAT),
         Behaviour::Dog => (quad(0.75, (0.35, 0.5), 0.05), DOG),
         _ => return None,
@@ -521,6 +652,7 @@ impl FaunaRun {
         away: Vec3,
     ) -> Vec<(Vec3, f32, bool)> {
         let ground = Vec3::Y * super::ground::WALK_LEVEL as f32;
+        let water = super::WATER_LEVEL as f32;
         let n = self.fauna.len();
         drawn.facing.resize(n, 0.0);
         drawn.pose.resize(n, None);
@@ -543,7 +675,7 @@ impl FaunaRun {
             }
             let pose = match (b, mode) {
                 (_, Mode::Hidden) => None,
-                (Body::Bird(_), Mode::Rest | Mode::Ground | Mode::Walk) => Some(0),
+                (Body::Bird(_), Mode::Rest | Mode::Ground | Mode::Walk | Mode::Water) => Some(0),
                 (Body::Bird(_), _) => {
                     let beat = wingbeat(sp.behaviour) * time as f32 + i as f32 * 0.37;
                     Some(1 + (beat * 4.0) as usize % 3)
@@ -557,7 +689,13 @@ impl FaunaRun {
             let changed = pose != drawn.pose[i];
             drawn.pose[i] = pose;
             if let Some(k) = pose {
-                out[starts[first + k] + rank as usize] = (at + ground, drawn.facing[i], changed);
+                // Afloat on the water's surface, else over the walking level.
+                let at = if mode == Mode::Water {
+                    Vec3::new(at.x, water, at.z)
+                } else {
+                    at + ground
+                };
+                out[starts[first + k] + rank as usize] = (at, drawn.facing[i], changed);
             }
         }
         // The owners, a block a stride: walking, the crowd's gait at their pace; still, square.

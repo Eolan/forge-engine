@@ -121,11 +121,14 @@ The hook above, built for the village (`demos/city-plan/src/fauna.rs`), and the 
   - the squares and greens;
   - the street graph cut into straight pieces of 12 m at most, main roads limited to 30 km/h and
     the lanes the people's;
-  - the street and garden trees and the forest's plants within about 55 m of the houses.
-- **No water or pasture yet:** the gulls, the mullet and the goats stay out until the shore
-  comes as outlines and the map has a hillside.
-  - The village keeps 6 flocks of sparrows, 2 of pigeons, 3 parties of swifts, 10 cats and
-    8 dogs with their owners: 145 to 170 animals by seed.
+  - the street and garden trees and the forest's plants within about 55 m of the houses;
+  - the river and the sea as the site's wet cells, a rectangle a row's run of them;
+  - the quay: the bank's land cells within 60 m of a house, the longest run of them chained
+    along the bank.
+- **No pasture yet, and no fish drawn:** the goats wait for a hillside. The mullet would swim
+  under a surface that hides them, so they stay out too.
+  - The village keeps 6 flocks of sparrows, 2 of pigeons, 3 parties of swifts, 3 flocks of
+    gulls, 10 cats and 8 dogs with their owners: 165 to 193 animals by seed.
   - Their day follows the scene's sun, up from 6:00 to 18:00 (`hour_of_day`). They start
     40 game minutes before the run's hour (`WARM_UP`): a cat stays in 20 to 60 minutes at the
     start, and a run that began with them showed none.
@@ -134,8 +137,8 @@ The hook above, built for the village (`demos/city-plan/src/fauna.rs`), and the 
   the frame before.
 - **The bodies** (`forge_geom::animals`), blocky placeholders like the people's figures, at each
   species' length:
-  - a bird folded (perched, hopping) or with its wings up, level or down, beating at 6 to 12 Hz
-    in flight;
+  - a bird folded (perched, hopping, afloat on the water's surface) or with its wings up, level
+    or down, beating at 6 to 12 Hz in flight;
   - a cat or a dog in three strides by the distance it walked, or lying when it rests;
   - the dogs' owners in the crowd's walking figures;
   - three cats' coats and two dogs'.
@@ -155,12 +158,12 @@ stands in a house; all stay on the plan; the same seed gives the same digest.
 
 ![The village's animals](images/fauna-village.png)
 
-*At 07:48: a dog walked by its owner across the square, and pigeons along a house's eave.*
+*At 07:48: a dog walked by its owner across the square, pigeons along a house's eave, and gulls on
+the riverside promenade.*
 
 ## Next
 
-- The village's water and hillside (the shore as outlines, a pasture), then the gulls, mullet and
-  goats; the city's own animals (more pigeons and gulls, fewer goats).
+- The village's hillside and a pasture for the goats; fish drawn under a clear surface; the city's own animals (more pigeons and gulls, fewer goats).
 - Bodies past the placeholders: modelled, skinned and animated, flapping and gliding by speed.
 - Later: seasons (the swifts leave in August), weather (birds shelter in rain), a city's towers
   (a navigation volume for birds), the population's own dogs and cats.
