@@ -131,6 +131,11 @@ pub enum SeekError {
     /// The tick is before the recording's first keyframe or past its end.
     #[error("tick {0} is outside the recording (before its first keyframe or past its end)")]
     Outside(u64),
+    /// The keyframe at this tick restored a world at another: not this world's recording.
+    #[error(
+        "the keyframe at tick {0} restores a world at another tick: not this world's recording"
+    )]
+    Keyframe(u64),
     /// The run from the keyframe left the recording.
     #[error(transparent)]
     Diverged(#[from] Divergence),
@@ -225,11 +230,9 @@ impl<C: Copy + Codec> Recording<C> {
         }
         let at = self.keyframes.partition_point(|k| k.0 <= tick) - 1;
         sim.restore(&self.keyframes[at].1);
-        debug_assert_eq!(
-            sim.now(),
-            self.keyframes[at].0,
-            "a keyframe restores its tick"
-        );
+        if sim.now() != self.keyframes[at].0 {
+            return Err(SeekError::Keyframe(self.keyframes[at].0));
+        }
         Ok(self.run(sim, tick)?)
     }
 
@@ -334,7 +337,9 @@ impl<C: Copy + Codec> Recording<C> {
         } else {
             Vec::new()
         };
-        bytes.is_empty().then_some(Self {
+        // A seek takes the last keyframe at or before a tick: they come in order.
+        let ordered = keyframes.windows(2).all(|w| w[0].0 < w[1].0);
+        (bytes.is_empty() && ordered).then_some(Self {
             commands,
             digests,
             ticks,
@@ -816,6 +821,9 @@ pub struct Client<S: Simulation> {
     next_seq: u32,
     /// Its commands the server has not acknowledged, oldest first.
     unacked: VecDeque<Stamped<S::Command>>,
+    /// Its commands the server took before their tick and has not run yet: acknowledged, but in no
+    /// snapshot's state, so a correction runs them again at their ticks.
+    ahead: VecDeque<Stamped<S::Command>>,
     /// Its commands for the coming ticks (made this frame, applied at the next tick).
     queued: Vec<Stamped<S::Command>>,
     /// The digest it predicted for each recent tick, to check the snapshots against.
@@ -854,6 +862,7 @@ impl<S: Simulation> Client<S> {
             player,
             next_seq: 0,
             unacked: VecDeque::new(),
+            ahead: VecDeque::new(),
             queued: Vec::new(),
             predicted: VecDeque::new(),
             last_snapshot: 0,
@@ -916,10 +925,16 @@ impl<S: Simulation> Client<S> {
         self.last_snapshot = snapshot.tick;
         self.stats.snapshots += 1;
         if let Some(&(_, below)) = snapshot.acked.iter().find(|(p, _)| *p == self.player) {
-            while self.unacked.front().is_some_and(|c| c.seq < below) {
-                self.unacked.pop_front();
+            while let Some(c) = self.unacked.pop_front_if(|c| c.seq < below) {
+                // Taken before the snapshot, due at or after it: on time, so the server runs it
+                // at its own tick, past this state.
+                if c.tick >= snapshot.tick {
+                    self.ahead.push_back(c);
+                }
             }
         }
+        // What the server has run by the snapshot's tick is in its state.
+        self.ahead.retain(|c| c.tick >= snapshot.tick);
         let predicted = self
             .predicted
             .iter()
@@ -934,19 +949,21 @@ impl<S: Simulation> Client<S> {
         let target = self.sim.now();
         self.sim.restore(&snapshot.state);
         self.predicted.retain(|&(t, _)| t <= snapshot.tick);
-        // A command whose tick the snapshot has passed, not taken yet, will be taken late: the
-        // best guess is the snapshot's tick.
+        // Its commands taken ahead, at their ticks; and a command whose tick the snapshot has
+        // passed, not taken yet, will be taken late: the best guess is the snapshot's tick.
         let pending: Vec<_> = self
-            .unacked
+            .ahead
             .iter()
-            .map(|c| Stamped {
+            .copied()
+            .chain(self.unacked.iter().map(|c| Stamped {
                 tick: c.tick.max(snapshot.tick),
                 ..*c
-            })
+            }))
             .collect();
         while self.sim.now() < target {
             let now = self.sim.now();
-            let these: Vec<_> = pending.iter().filter(|c| c.tick == now).copied().collect();
+            let mut these: Vec<_> = pending.iter().filter(|c| c.tick == now).copied().collect();
+            order(&mut these);
             self.sim.tick(&these);
             self.stats.replayed_ticks += 1;
             let digest = self.sim.digest();

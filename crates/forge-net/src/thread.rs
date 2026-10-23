@@ -8,8 +8,9 @@
 //! [`Session::send`] queues and [`Session::try_recv`] takes what arrived, neither waiting, while
 //! the network thread does the I/O.
 //!
-//! Drop the sessions and the listener before the thread: dropping it stops the runtime, and the
-//! connections with it.
+//! Keep the listener as long as the sessions it handed over: dropping it closes the server's
+//! endpoint, and every connection on it. Drop the sessions and the listener before the thread:
+//! dropping the thread stops the runtime, and the connections with it.
 
 use std::net::SocketAddr;
 use std::sync::mpsc;
@@ -69,7 +70,8 @@ impl NetThread {
     }
 }
 
-/// A server served by the network thread.
+/// A server served by the network thread. Dropping it closes the server, and the sessions it
+/// handed over with it.
 pub struct Listener {
     accepted: mpsc::Receiver<Session>,
     address: SocketAddr,
@@ -90,7 +92,7 @@ impl Listener {
 
 impl Drop for Listener {
     fn drop(&mut self) {
-        // The server with it: no new client is taken.
+        // The server with it: its endpoint closes, and every connection on it.
         self.task.abort();
     }
 }

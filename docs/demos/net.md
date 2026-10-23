@@ -284,15 +284,23 @@ waiting either. `InputPacket` and `Snapshot` have their bytes (`Codec`).
 
 **The test** (`tests/sim_over_quic.rs`): a server and two clients in synchronous loops, the
 clock four times fast (240 ticks a second), each link 40 ms one way with 4 ms of jitter and 2 %
-lost, through the conditioner both ways; 20 pushes each over 900 ticks. Four runs:
+lost, through the conditioner both ways; 20 pushes each over 900 ticks. Two runs:
 
 | | Client 0 | Client 1 |
 |---|---|---|
-| Snapshots taken (of 200) | 194–197 | 192–197 |
-| Predicted to the bit / corrected | 176–179 / 18 | 170–175 / 21–22 |
-| Lead on arrival once settled (target 4) | 2–5 ticks | 2–5 ticks |
+| Snapshots taken (of 200) | 197 | 195–197 |
+| Predicted to the bit / corrected | 180 / 17 | 176–178 / 19 |
+| Lead on arrival once settled (target 4) | 2–5 ticks | 4 ticks |
 
 Every command was taken once and none late, and each client ended where the server is.
+
+**A fix the review found** (2026-10-23, in `forge-sim`'s client since #137): the server
+acknowledges a command when it takes it, which can be before the command's tick. A correction in
+between ran the ticks again without it, and the next snapshot corrected the client a second time.
+Such commands are kept now (`Client::ahead`) until a snapshot's tick passes them
+(`a_command_taken_before_its_tick_is_kept_through_a_correction`). Over QUIC this took the
+corrections from 18 and 21–22 to 17 and 19; the lab's runs above were not in that window, and its
+captures are the same.
 
 **The physics lab over QUIC** (`physics-lab --lab tug --net 100 --net-quic`): the lab's server
 and its two players in the app's own frame loop, the players' packets on the unreliable channel
@@ -303,7 +311,9 @@ late; a correction runs more ticks again over QUIC (673 in all against 140, at m
 since a snapshot held back for a resent packet arrives older. **`drop` does not keep up:** its
 whole states, 280 KB ten times a second, need 2.8 MB/s, and QUIC's congestion control over a
 200 ms round trip losing 2 % gives about 50 kB/s (1.22 · MSS / (RTT · √p)): one snapshot in a
-run. The replication's deltas, quantisation and budget above are what a real scene goes through.
+run, its whole states piling up on the reliable channel. `--net-quic` now refuses a scene whose
+state is over 8 KiB; the replication's deltas, quantisation and budget above are what a real
+scene goes through.
 
 ## Authority between workers (step 2's handoff, 2026-10-23)
 

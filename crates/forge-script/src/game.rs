@@ -231,7 +231,7 @@ impl Game {
     /// now); the commands the host has not taken yet stay, before any the new script gives as
     /// it loads. When `source` fails to load, the old script runs on and the error is returned.
     pub fn reload(&mut self, source: &str) -> Result<(), Error> {
-        let next = Self::start(
+        let mut next = Self::start(
             self.limits.clone(),
             &self.name,
             source,
@@ -241,6 +241,12 @@ impl Game {
         let mut kept = self.commands();
         kept.append(&mut next.commands.borrow_mut());
         *next.commands.borrow_mut() = kept;
+        // The old script's times since the last call, then the new one's.
+        for (event, (runs, ms)) in std::mem::take(&mut self.timings) {
+            let t = next.timings.entry(event).or_default();
+            t.0 += runs;
+            t.1 += ms;
+        }
         *self = next;
         Ok(())
     }
@@ -595,6 +601,9 @@ mod tests {
         // The old timer (due at tick 10) went with its script.
         assert_eq!(log, expect);
         assert_eq!(g.timers(), 0);
+        // The ticks' times across the reload: the old script's 4 and the new one's 6.
+        let ticks = g.timings().into_iter().find(|t| t.event == "tick");
+        assert_eq!(ticks.map(|t| t.runs), Some(10));
     }
 
     #[test]

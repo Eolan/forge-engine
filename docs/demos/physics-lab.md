@@ -120,8 +120,8 @@ commands as it applied them and its whole state every 10 s; `--replay FILE --see
 the replay at that tick from the state before it (2026-10-23, `docs/demos/net.md`, "Replays").
 A replay only shows the session: the keys play no part in it. `--net-quic` takes the players to
 the server over QUIC on loopback instead (`forge_net::NetThread`, the conditioner both ways, the
-wall clock): the tug-of-war runs as through the links; `drop`'s whole states are too big for a
-lossy QUIC link (`docs/demos/net.md`).
+wall clock): the tug-of-war runs as through the links; a scene whose state is over 8 KiB
+(`drop`'s 280 KB) is refused, its whole states too big for a lossy QUIC link (`docs/demos/net.md`).
 
 **The network, in one process.** `--net MS` runs the scene through a server and this player's
 client, the second player a bot throwing at the pyramid every 2.5 s, over links of MS one way

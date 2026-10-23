@@ -1975,6 +1975,9 @@ struct Quic {
 /// the players' packets on the unreliable one.
 const QUIC_SNAPSHOTS: forge_net::ChannelId = forge_net::ChannelId(0);
 const QUIC_INPUTS: forge_net::ChannelId = forge_net::ChannelId(2);
+/// `--net-quic`: the largest whole state sent, bytes. Ten a second must fit what QUIC's congestion
+/// control drains over a lossy link: the tug-of-war's 6 KB (60 kB/s) keeps up at 200 ms and 2 %.
+const QUIC_STATE_MOST: usize = 8 << 10;
 
 impl Quic {
     /// The server on loopback and the two players connected to it, each way through a
@@ -2253,7 +2256,17 @@ impl Net {
             Ok(client)
         };
         let link = |seed| LinkParams::new(delay_ms, NET_LOSS, seed);
+        let mut server = Server::new(LabWorld::new(kind, Arc::clone(pool))?.0);
         let wire = if quic {
+            // Whole states queue on the reliable channel faster than a lossy link drains them
+            // (`drop`'s 280 KB ten times a second): refused rather than left to grow.
+            let state = server.sim.save().len();
+            anyhow::ensure!(
+                state <= QUIC_STATE_MOST,
+                "--net-quic sends whole states, and this scene's are {} KiB (at most {} KiB keep up over a lossy link): replication's deltas are for scenes this big",
+                state / 1024,
+                QUIC_STATE_MOST / 1024
+            );
             Wire::Quic(Box::new(Quic::connect(delay_ms)?))
         } else {
             Wire::Links {
@@ -2262,7 +2275,7 @@ impl Net {
             }
         };
         Ok(Self {
-            server: Server::new(LabWorld::new(kind, Arc::clone(pool))?.0),
+            server,
             client: ahead(0)?,
             bot: ahead(1)?,
             wire,

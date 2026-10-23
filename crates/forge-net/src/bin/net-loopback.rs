@@ -275,10 +275,11 @@ async fn serve(
         if let Some(r) = &mut replication {
             let t = Instant::now();
             match &mut r.layer {
-                // The layer's ticks at 60 Hz, its workers stepping the crowd.
+                // The layer's ticks at 60 Hz, its workers stepping the crowd: those owed by the
+                // server's ticks so far, at any snapshot rate.
                 Some(host) => {
-                    let steps = (60.0 / o.rate).round().max(1.0) as usize;
-                    for _ in 0..steps {
+                    let due = (f64::from(server_tick) * 60.0 / o.rate).floor() as u64;
+                    for _ in r.layer_ticks..due {
                         let l = Instant::now();
                         let report = host.tick(Duration::from_secs(5)).await;
                         r.layer_time += l.elapsed();

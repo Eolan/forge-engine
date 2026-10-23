@@ -265,6 +265,13 @@ fn the_servers_recording_replays_its_session_and_starts_anywhere() {
         recording.seek(&mut Toy::new(), end + 1),
         Err(SeekError::Outside(end + 1))
     );
+    // A keyframe that restores a world at another tick is not this world's recording.
+    let mut wrong = recording.clone();
+    wrong.keyframes[1].0 += 1;
+    assert_eq!(
+        wrong.seek(&mut Toy::new(), 301),
+        Err(SeekError::Keyframe(301))
+    );
     // Its bytes, keyframes and all; the first format still read.
     let back = Recording::from_bytes(&recording.to_bytes()).expect("its bytes");
     assert_eq!(back, recording);
@@ -289,6 +296,49 @@ fn the_servers_recording_replays_its_session_and_starts_anywhere() {
         panic!("a divergence")
     };
     assert_eq!(d.tick, (tick / 60 + 1) * 60);
+}
+
+#[test]
+fn a_command_taken_before_its_tick_is_kept_through_a_correction() {
+    // The client runs 10 ticks ahead and pushes at its tick 10; the server takes the push at its
+    // tick 0 (and acknowledges it), due at 10.
+    let mut server = Server::new(Toy::new());
+    let mut client = Client::new(Toy::new(), 0);
+    for _ in 0..10 {
+        client.step();
+    }
+    client.command(Push { ball: 1, by: 40 });
+    client.step();
+    server.receive(&client.outgoing().unwrap());
+    // Another player's push at tick 2, which the client cannot know of.
+    server.receive(&InputPacket {
+        player: 1,
+        tick: 2,
+        commands: vec![Stamped {
+            tick: 2,
+            player: 1,
+            seq: 0,
+            command: Push { ball: 3, by: 25 },
+        }],
+    });
+    // The snapshot at 6 holds the other push, not ours yet, and acknowledges ours: corrected.
+    for _ in 0..6 {
+        server.step();
+    }
+    client.apply(&server.snapshot());
+    assert_eq!(client.stats.corrected, 1);
+    // The run again kept our push at 10: the server's next snapshot is what the client predicted.
+    for _ in 0..6 {
+        server.step();
+    }
+    client.step();
+    client.apply(&server.snapshot());
+    assert_eq!(
+        (client.stats.corrected, client.stats.matched),
+        (1, 1),
+        "{:?}",
+        client.stats
+    );
 }
 
 #[test]
