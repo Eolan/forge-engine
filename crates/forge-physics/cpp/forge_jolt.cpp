@@ -39,6 +39,7 @@
 #include <Jolt/Skeleton/Skeleton.h>
 #include <Jolt/Physics/PhysicsSettings.h>
 #include <Jolt/Physics/PhysicsSystem.h>
+#include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/Physics/StateRecorder.h>
 #include <Jolt/RegisterTypes.h>
 
@@ -93,6 +94,51 @@ class LayerVsBroad final : public JPH::ObjectVsBroadPhaseLayerFilter {
 public:
     bool ShouldCollide(JPH::ObjectLayer layer, JPH::BroadPhaseLayer broad_layer) const override {
         return layer == kMoving || layer == kWheel || broad_layer == broad::kMoving;
+    }
+};
+
+// The contacts begun in a step (Phase 7: contact events to the material layer): each pair of
+// bodies that came into touch, where, the normal from the first towards the second, and how fast
+// they closed along it before the step's solve. Jolt calls it from its jobs, so under a lock; the
+// step sorts them after, so the list is the same every run. It only reads: the simulation is
+// the same with it or without.
+struct Begun {
+    uint32_t a, b;
+    double point[3];
+    float normal[3];
+    float speed;
+};
+
+class Contacts final : public JPH::ContactListener {
+public:
+    std::mutex lock;
+    std::vector<Begun> begun;
+
+    void OnContactAdded(const JPH::Body &a, const JPH::Body &b, const JPH::ContactManifold &manifold,
+                        JPH::ContactSettings &) override {
+        const JPH::RVec3 p = manifold.GetWorldSpaceContactPointOn1(0);
+        const JPH::Vec3 n = manifold.mWorldSpaceNormal;
+        const float speed = (a.GetPointVelocity(p) - b.GetPointVelocity(p)).Dot(n);
+        Begun c{a.GetID().GetIndexAndSequenceNumber(),
+                b.GetID().GetIndexAndSequenceNumber(),
+                {double(p.GetX()), double(p.GetY()), double(p.GetZ())},
+                {n.GetX(), n.GetY(), n.GetZ()},
+                speed};
+        std::lock_guard<std::mutex> guard(lock);
+        begun.push_back(c);
+    }
+
+    void sort() {
+        std::sort(begun.begin(), begun.end(), [](const Begun &x, const Begun &y) {
+            if (x.a != y.a)
+                return x.a < y.a;
+            if (x.b != y.b)
+                return x.b < y.b;
+            for (int k = 0; k < 3; k++)
+                if (x.point[k] != y.point[k])
+                    return x.point[k] < y.point[k];
+            return false;
+        });
     }
 };
 
@@ -174,6 +220,8 @@ struct FjWorld {
     LayerPairs layer_pairs;
     JPH::TempAllocatorImpl temp;
     JPH::JobSystemThreadPool jobs;
+    // Before the system, so it outlives it: the system calls it while tracked.
+    Contacts contacts;
     JPH::PhysicsSystem system;
     Bytes saved;
     // After the system, so they go first: each holds the system.
@@ -348,8 +396,33 @@ void fj_world_free(FjWorld *world) { delete world; }
 void fj_world_optimize_broad_phase(FjWorld *world) { world->system.OptimizeBroadPhase(); }
 
 uint32_t fj_world_step(FjWorld *world, float dt, int32_t collision_steps) {
-    return static_cast<uint32_t>(
+    world->contacts.begun.clear();
+    const uint32_t flags = static_cast<uint32_t>(
         world->system.Update(dt, collision_steps, &world->temp, &world->jobs));
+    world->contacts.sort();
+    return flags;
+}
+
+void fj_world_track_contacts(FjWorld *world, int32_t on) {
+    world->system.SetContactListener(on ? &world->contacts : nullptr);
+    world->contacts.begun.clear();
+}
+
+uint32_t fj_world_contacts(const FjWorld *world, uint32_t capacity, uint32_t *bodies,
+                           double *points, float *normals, float *speeds) {
+    const auto &begun = world->contacts.begun;
+    const size_t count = std::min<size_t>(begun.size(), capacity);
+    for (size_t i = 0; i < count; i++) {
+        const Begun &c = begun[i];
+        bodies[2 * i] = c.a;
+        bodies[2 * i + 1] = c.b;
+        for (int k = 0; k < 3; k++) {
+            points[3 * i + k] = c.point[k];
+            normals[3 * i + k] = c.normal[k];
+        }
+        speeds[i] = c.speed;
+    }
+    return static_cast<uint32_t>(begun.size());
 }
 
 uint32_t fj_world_active_bodies(const FjWorld *world) {

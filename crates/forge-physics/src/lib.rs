@@ -363,6 +363,23 @@ impl BodyId {
     }
 }
 
+/// Two bodies that came into touch in the last step ([`World::contacts`]; Phase 7: contact events
+/// to the material layer, for impacts' sounds and marks).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Contact {
+    /// The first body.
+    pub a: BodyId,
+    /// The second.
+    pub b: BodyId,
+    /// Where they met, metres.
+    pub point: DVec3,
+    /// The contact's normal, from the first towards the second (unit).
+    pub normal: Vec3,
+    /// How fast they closed along the normal before the step's solve, m/s: an impact's strength.
+    /// Low for a body woken while resting on another.
+    pub speed: f32,
+}
+
 /// Where a car's wheel touches the ground (#186, [`World::wheel_contacts`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WheelContact {
@@ -788,6 +805,55 @@ impl World {
         } else {
             Err(PhysicsError::Step(flags))
         }
+    }
+
+    /// Whether the steps record the contacts that begin ([`World::contacts`]); off at the start,
+    /// when the world runs without a contact listener. The simulation is the same either way.
+    pub fn track_contacts(&mut self, on: bool) {
+        // SAFETY: the world is live and not stepping (`&mut self`).
+        unsafe { ffi::fj_world_track_contacts(self.raw.as_ptr(), i32::from(on)) };
+    }
+
+    /// The contacts begun in the last step, sorted by their bodies, then their points (the same
+    /// list every run), into `out`; none unless [`World::track_contacts`] is on.
+    pub fn contacts(&self, out: &mut Vec<Contact>) {
+        out.clear();
+        // SAFETY: the world is live; a capacity of 0 writes nothing and returns the count.
+        let count = unsafe {
+            ffi::fj_world_contacts(
+                self.raw.as_ptr(),
+                0,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        } as usize;
+        if count == 0 {
+            return;
+        }
+        let mut bodies = vec![[0_u32; 2]; count];
+        let mut points = vec![[0.0_f64; 3]; count];
+        let mut normals = vec![[0.0_f32; 3]; count];
+        let mut speeds = vec![0.0_f32; count];
+        // SAFETY: each buffer holds `count` entries of the shape written.
+        unsafe {
+            ffi::fj_world_contacts(
+                self.raw.as_ptr(),
+                count as u32,
+                bodies.as_mut_ptr().cast(),
+                points.as_mut_ptr().cast(),
+                normals.as_mut_ptr().cast(),
+                speeds.as_mut_ptr(),
+            );
+        }
+        out.extend((0..count).map(|i| Contact {
+            a: BodyId(bodies[i][0]),
+            b: BodyId(bodies[i][1]),
+            point: DVec3::from_array(points[i]),
+            normal: Vec3::from_array(normals[i]),
+            speed: speeds[i],
+        }));
     }
 
     /// The bodies awake now.

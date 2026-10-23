@@ -221,6 +221,15 @@ unsafe extern "C" {
     pub fn fj_world_optimize_broad_phase(world: *mut FjWorld);
     pub fn fj_world_step(world: *mut FjWorld, dt: f32, collision_steps: i32) -> u32;
     pub fn fj_world_active_bodies(world: *const FjWorld) -> u32;
+    pub fn fj_world_track_contacts(world: *mut FjWorld, on: i32);
+    pub fn fj_world_contacts(
+        world: *const FjWorld,
+        capacity: u32,
+        bodies: *mut u32,
+        points: *mut f64,
+        normals: *mut f32,
+        speeds: *mut f32,
+    ) -> u32;
 
     pub fn fj_body_add(world: *mut FjWorld, desc: *const FjBodyDesc) -> u32;
     pub fn fj_body_remove(world: *mut FjWorld, body: u32);

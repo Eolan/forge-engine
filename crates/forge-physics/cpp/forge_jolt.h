@@ -196,6 +196,14 @@ void fj_world_optimize_broad_phase(FjWorld *world);
 // Advances by `dt` seconds in `collision_steps` steps; Jolt's error flags (0: none).
 uint32_t fj_world_step(FjWorld *world, float dt, int32_t collision_steps);
 uint32_t fj_world_active_bodies(const FjWorld *world);
+// Whether the steps record the contacts that begin (Phase 7: contact events to the material layer);
+// off at the start. Off, the world runs without a contact listener.
+void fj_world_track_contacts(FjWorld *world, int32_t on);
+// The contacts begun in the last step, sorted by bodies, then point: up to `capacity` of them, each
+// its two bodies, its point (three doubles), the normal from the first towards the second (three
+// floats) and how fast they closed along it (m/s, before the step's solve). The count begun.
+uint32_t fj_world_contacts(const FjWorld *world, uint32_t capacity, uint32_t *bodies,
+                           double *points, float *normals, float *speeds);
 
 // The body's id; 0xFFFFFFFF when the world is full.
 uint32_t fj_body_add(FjWorld *world, const FjBodyDesc *desc);

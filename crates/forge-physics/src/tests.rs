@@ -1027,3 +1027,51 @@ fn a_soft_body_kept_upright_does_not_roll() {
     assert!(tops[0] < 0.9, "it did not roll: its top at {}", tops[0]);
     assert!(tops[1] > 0.95, "kept upright, its top at {}", tops[1]);
 }
+
+/// A box dropped 5 m reports its impact (about √(2 g · 5) = 9.9 m/s, along the vertical), the same
+/// list of contacts every run; a world that does not track them reports none.
+#[test]
+fn a_dropped_box_reports_its_impact_the_same_every_run() {
+    let run = |tracked: bool| {
+        let mut world = World::new(&WorldDesc {
+            threads: 3,
+            ..WorldDesc::default()
+        });
+        let ground = Shape::cuboid(Vec3::new(10.0, 0.5, 10.0), 0.05, 0.0).unwrap();
+        let cube = Shape::cuboid(Vec3::splat(0.25), 0.05, 500.0).unwrap();
+        let floor = world
+            .add_body(&BodyDesc::fixed(&ground, DVec3::new(0.0, -0.5, 0.0)))
+            .unwrap();
+        let body = world
+            .add_body(&BodyDesc::dynamic(&cube, DVec3::new(0.0, 5.25, 0.0)))
+            .unwrap();
+        world.track_contacts(tracked);
+        let (mut all, mut contacts) = (Vec::new(), Vec::new());
+        for tick in 0..240 {
+            world.step(1.0 / 60.0, 1).unwrap();
+            world.contacts(&mut contacts);
+            all.extend(contacts.iter().map(|&c| (tick, c)));
+        }
+        (floor, body, all)
+    };
+    let (floor, body, first) = run(true);
+    let (tick, hit) = first[0];
+    eprintln!(
+        "the box's first contact: tick {tick}, {:.2} m/s; {} contacts in all",
+        hit.speed,
+        first.len()
+    );
+    assert!(
+        [hit.a, hit.b].contains(&floor) && [hit.a, hit.b].contains(&body),
+        "{hit:?}"
+    );
+    assert!(
+        (8.8..10.5).contains(&hit.speed),
+        "{} m/s at tick {tick}",
+        hit.speed
+    );
+    assert!(hit.normal.y.abs() > 0.99, "{:?}", hit.normal);
+    assert!((hit.point.y.abs()) < 0.3, "{:?}", hit.point);
+    assert_eq!(run(true).2, first, "the same every run");
+    assert!(run(false).2.is_empty());
+}

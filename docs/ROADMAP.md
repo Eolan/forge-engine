@@ -658,7 +658,8 @@ The items below are the phase's original outline; the plan above orders them.
    two-bone IK and a look-at ✅ (#167; the lab's mannequins watch the dogs); the feet on uneven
    ground and foot-down events ✅ (#167, `--lab course`).
 2. Motion matching for the player; powered ragdolls tracking poses; hit reactions;
-   contact events to the material layer.
+   contact events to the material layer (the contacts begun in a step, with where and how fast ✅,
+   2026-10-23, `World::contacts`; their sounds and marks by material next).
 3. Generated creatures: gait synthesis for procedurally generated bodies.
    **Demo:** `rough-ground` — a biped and a generated hexapod cross rough terrain, get
    shoved by a physics object and recover; footprints in snow.
