@@ -206,6 +206,11 @@ against the world as its shooter saw it (server-side rewind, Bernier 2001).
   people have moved on since the moment the client drew, about 0.2 s before (the 117 ms delay
   and the two 50 ms links): a walker at 1.4 m/s by some 0.3 m.
 - **Deterministic:** two runs give the same shots and the same errors.
+- **Eight clients** (D-010's hit-registration stage, in one process): eight clients spread 30 m
+  round the square's middle, over links of 10, 25, 40, 55, 70, 90, 110 and 125 ms each way (round
+  trips of 20 to 250 ms, a fifth of the delay as jitter, 5 % lost), each shooting at the people it
+  draws. Every shot that arrived met the person its client saw, 168 to 179 a client, the distance
+  off by 4.2 to 6.1 mm at the 99th percentile. At the server's present, 91 to 173 a client would.
 
 ## Authority between workers (step 2's handoff, 2026-10-23)
 
