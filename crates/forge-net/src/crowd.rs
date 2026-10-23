@@ -142,3 +142,156 @@ impl Crowd {
         }
     }
 }
+
+/// One person of a crowd that workers step (`forge_net::layer`, #268): everything its step reads is
+/// its own, its turns drawn from its id and its tick, so whichever worker owns it steps it as any
+/// other would. The same motion as [`Crowd`]'s: walking, strolling or standing, turning now and
+/// then, turning back at the square's edge.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Person {
+    /// Where, in world metres.
+    pub position: DVec3,
+    /// Its heading, radians from +z towards +x.
+    pub heading: f64,
+    /// Metres a second.
+    pub speed: f64,
+    /// Steps taken: what its turns are drawn from.
+    pub tick: u64,
+}
+
+impl Crowd {
+    /// Its people as workers step them ([`Person`]), by id: where and how [`Crowd::new`] made them.
+    pub fn people(&self) -> Vec<(EntityId, Person)> {
+        self.walkers
+            .iter()
+            .map(|w| {
+                (
+                    w.id,
+                    Person {
+                        position: w.position,
+                        heading: w.heading,
+                        speed: w.speed,
+                        tick: 0,
+                    },
+                )
+            })
+            .collect()
+    }
+}
+
+impl Person {
+    /// Person `id` a step of `dt` seconds on, in a square `side` metres wide about the origin.
+    pub fn step(&self, id: EntityId, dt: f64, side: f64) -> Person {
+        let half = side / 2.0;
+        let mut p = self.clone();
+        p.tick += 1;
+        if p.speed == 0.0 {
+            return p;
+        }
+        let mut random =
+            SplitMix64::new(u64::from(id) ^ p.tick.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        if random.next_f64() < dt / 8.0 {
+            p.heading += random.range_f64(-1.5, 1.5);
+        }
+        let (s, c) = (libm::sin(p.heading), libm::cos(p.heading));
+        p.position.x += s * p.speed * dt;
+        p.position.z += c * p.speed * dt;
+        if p.position.x.abs() > half || p.position.z.abs() > half {
+            p.heading += std::f64::consts::PI;
+            p.position.x = p.position.x.clamp(-half, half);
+            p.position.z = p.position.z.clamp(-half, half);
+        }
+        p
+    }
+
+    /// Its state as the replicator sends it ([`Crowd::states`]' form).
+    pub fn state(&self, id: EntityId) -> EntityState {
+        let (s, c) = (libm::sin(self.heading), libm::cos(self.heading));
+        EntityState {
+            position: self.position,
+            rotation: Quat::from_xyzw(
+                0.0,
+                libm::sin(self.heading / 2.0) as f32,
+                0.0,
+                libm::cos(self.heading / 2.0) as f32,
+            ),
+            velocity: Vec3::new((s * self.speed) as f32, 0.0, (c * self.speed) as f32),
+            archetype: (id % 7) as u16,
+            animation: u16::from(self.speed > 1.0) + u16::from(self.speed > 0.0),
+        }
+    }
+}
+
+impl forge_sim::authority::Placed for Person {
+    fn position(&self) -> DVec3 {
+        self.position
+    }
+}
+
+impl forge_sim::Codec for Person {
+    fn encode(&self, out: &mut Vec<u8>) {
+        for v in self.position.to_array() {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        out.extend_from_slice(&self.heading.to_le_bytes());
+        out.extend_from_slice(&self.speed.to_le_bytes());
+        out.extend_from_slice(&self.tick.to_le_bytes());
+    }
+
+    fn decode(bytes: &mut &[u8]) -> Option<Self> {
+        let mut v = [0_u64; 6];
+        for x in &mut v {
+            let (head, rest) = bytes.split_first_chunk::<8>()?;
+            *x = u64::from_le_bytes(*head);
+            *bytes = rest;
+        }
+        Some(Self {
+            position: DVec3::new(
+                f64::from_bits(v[0]),
+                f64::from_bits(v[1]),
+                f64::from_bits(v[2]),
+            ),
+            heading: f64::from_bits(v[3]),
+            speed: f64::from_bits(v[4]),
+            tick: v[5],
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use forge_sim::Codec;
+
+    #[test]
+    fn people_stay_in_the_square_and_cross_the_wire_unchanged() {
+        let side = 60.0;
+        let mut people = Crowd::new(200, side, 5).people();
+        let start = people.clone();
+        for _ in 0..3600 {
+            for (id, p) in &mut people {
+                *p = p.step(*id, 1.0 / 60.0, side);
+            }
+        }
+        let half = side / 2.0;
+        assert!(
+            people
+                .iter()
+                .all(|(_, p)| p.position.x.abs() <= half && p.position.z.abs() <= half)
+        );
+        assert!(
+            people
+                .iter()
+                .zip(&start)
+                .filter(|(a, b)| a.1.position != b.1.position)
+                .count()
+                > 100
+        );
+        for (_, p) in &people {
+            let mut bytes = Vec::new();
+            p.encode(&mut bytes);
+            assert_eq!(bytes.len(), 48);
+            assert_eq!(Person::decode(&mut bytes.as_slice()).as_ref(), Some(p));
+        }
+    }
+}

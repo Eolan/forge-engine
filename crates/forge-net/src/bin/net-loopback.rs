@@ -23,16 +23,20 @@ use std::time::{Duration, Instant};
 use glam::DVec3;
 
 use forge_core::SplitMix64;
-use forge_net::crowd::Crowd;
+use forge_net::crowd::{Crowd, Person};
+use forge_net::layer::{self, LayerHost};
 use forge_net::{
     Ack, ChannelId, Client, ClientConfig, ConditionerConfig, ReplicationConfig, Replicator, Server,
     ServerConfig, ServerIdentity, Session, SnapshotReceiver, TokenClaims, TokenIssuer,
     TokenVerifier,
 };
+use forge_sim::authority::{Layer, Strips, WorkerId};
 use tokio::time::MissedTickBehavior;
 
 const UNRELIABLE: ChannelId = ChannelId(2);
 const SERVER_ID: u64 = 1;
+/// The replication layer's endpoint for its workers (`--workers`).
+const LAYER_ID: u64 = 2;
 
 #[derive(Clone, Copy, Debug)]
 struct Options {
@@ -51,6 +55,9 @@ struct Options {
     side: f64,
     /// A snapshot's budget, bytes.
     budget: usize,
+    /// With `--replicate`: the crowd stepped at 60 Hz by this many workers, each owning a strip
+    /// of the square, through the replication layer (`forge_net::layer`); 0 steps it here.
+    workers: usize,
 }
 
 fn num<T: std::str::FromStr>(flag: &str, value: &str) -> Result<T, String> {
@@ -74,6 +81,7 @@ impl Options {
             replicate: 0,
             side: 600.0,
             budget: ReplicationConfig::default().packet_budget,
+            workers: 0,
         };
         let args: Vec<String> = std::env::args().skip(1).collect();
         let mut k = 0;
@@ -95,6 +103,7 @@ impl Options {
                 "--replicate" => o.replicate = num(flag, value)?,
                 "--side" => o.side = num(flag, value)?,
                 "--budget" => o.budget = num(flag, value)?,
+                "--workers" => o.workers = num(flag, value)?,
                 other => return Err(format!("unknown option {other}")),
             }
             k += 2;
@@ -198,6 +207,12 @@ async fn run_client(
 /// The server's crowd and replicator, in `--replicate` mode.
 struct Replication {
     crowd: Crowd,
+    /// With `--workers`: the replication layer and its workers stepping the crowd, the handoffs
+    /// they made and the time the layer's ticks took.
+    layer: Option<LayerHost<Person>>,
+    handoffs: usize,
+    layer_time: Duration,
+    layer_ticks: u64,
     replicator: Replicator,
     random: SplitMix64,
     half: f64,
@@ -208,10 +223,19 @@ struct Replication {
     ticks: u64,
 }
 
-async fn serve(o: Options, mut server: Server, start: Instant) -> (u64, Option<Replication>) {
+async fn serve(
+    o: Options,
+    mut server: Server,
+    start: Instant,
+    layer: Option<LayerHost<Person>>,
+) -> (u64, Option<Replication>) {
     let mut sessions: Vec<Session> = Vec::with_capacity(o.clients);
     let mut replication = (o.replicate > 0).then(|| Replication {
         crowd: Crowd::new(o.replicate, o.side, o.seed),
+        layer,
+        handoffs: 0,
+        layer_time: Duration::ZERO,
+        layer_ticks: 0,
         replicator: Replicator::new(ReplicationConfig {
             packet_budget: o.budget,
             ..ReplicationConfig::default()
@@ -250,9 +274,32 @@ async fn serve(o: Options, mut server: Server, start: Instant) -> (u64, Option<R
         server_tick += 1;
         if let Some(r) = &mut replication {
             let t = Instant::now();
-            r.crowd.step(1.0 / o.rate);
-            r.replicator
-                .set_world(r.crowd.states().iter().map(|(id, s)| (*id, s, 1.0)));
+            match &mut r.layer {
+                // The layer's ticks at 60 Hz, its workers stepping the crowd.
+                Some(host) => {
+                    let steps = (60.0 / o.rate).round().max(1.0) as usize;
+                    for _ in 0..steps {
+                        let l = Instant::now();
+                        let report = host.tick(Duration::from_secs(5)).await;
+                        r.layer_time += l.elapsed();
+                        r.layer_ticks += 1;
+                        r.handoffs += report.handoffs.len();
+                    }
+                    let states: Vec<_> = host
+                        .layer()
+                        .records()
+                        .iter()
+                        .map(|(&id, record)| (id, record.state.state(id)))
+                        .collect();
+                    r.replicator
+                        .set_world(states.iter().map(|(id, s)| (*id, s, 1.0)));
+                }
+                None => {
+                    r.crowd.step(1.0 / o.rate);
+                    r.replicator
+                        .set_world(r.crowd.states().iter().map(|(id, s)| (*id, s, 1.0)));
+                }
+            }
             r.world += t.elapsed();
             r.ticks += 1;
         }
@@ -287,6 +334,46 @@ async fn serve(o: Options, mut server: Server, start: Instant) -> (u64, Option<R
     (sent, replication)
 }
 
+/// The replication layer over the crowd's people and its `--workers` workers, each a client of an
+/// endpoint of its own on loopback with no conditioner (a datacentre's link), owning a strip of the
+/// square along x; the endpoint is returned to be kept as long as the host.
+async fn start_layer(o: &Options, issuer: &TokenIssuer) -> (LayerHost<Person>, Server) {
+    let identity = ServerIdentity::generate(&["localhost"]).expect("a certificate");
+    let certificate = identity.certificate().to_vec();
+    let config =
+        ServerConfig::loopback(identity, TokenVerifier::new(issuer.public_key(), LAYER_ID));
+    let mut server = Server::bind(config).expect("the layer could not bind");
+    let address = server.local_address();
+    let half = o.side / 2.0;
+    let strips = Strips {
+        cuts: (1..o.workers)
+            .map(|k| -half + o.side * k as f64 / o.workers as f64)
+            .collect(),
+        margin: 2.0,
+        band: 2.0,
+    };
+    let people = Crowd::new(o.replicate, o.side, o.seed).people();
+    let mut host = LayerHost::new(Layer::new(&strips, people), strips);
+    let side = o.side;
+    for w in 0..o.workers as WorkerId {
+        let token = issuer.issue(&TokenClaims::new(u64::from(w) + 1, LAYER_ID, 600));
+        let certificate = certificate.clone();
+        tokio::spawn(async move {
+            let mut session =
+                Client::connect(ClientConfig::loopback(&certificate), address, &token)
+                    .await
+                    .expect("a worker could not connect");
+            layer::serve(w, &mut session, |id, p: &Person, _| {
+                p.step(id, 1.0 / 60.0, side)
+            })
+            .await
+        });
+        let session = server.accept().await.expect("the layer closed");
+        host.attach(w, session);
+    }
+    (host, server)
+}
+
 fn main() {
     let o = match Options::parse() {
         Ok(o) => o,
@@ -316,7 +403,13 @@ fn main() {
                 tokio::spawn(run_client(o, k, certificate.clone(), token, address, start))
             })
             .collect();
-        let (sent, replication) = serve(o, server, start).await;
+        let (layer, _layer_endpoint) = if o.replicate > 0 && o.workers > 0 {
+            let (host, endpoint) = start_layer(&o, &issuer).await;
+            (Some(host), Some(endpoint))
+        } else {
+            (None, None)
+        };
+        let (sent, replication) = serve(o, server, start, layer).await;
         let mut reports = Vec::new();
         for c in clients {
             reports.push(c.await.expect("a client failed"));
@@ -385,5 +478,13 @@ fn print(o: &Options, sent: u64, reports: &[Report], replication: Option<&Replic
             r.world.as_secs_f64() * 1e6 / r.ticks.max(1) as f64,
             r.encode.as_secs_f64() * 1e6 / r.snapshots.max(1) as f64
         );
+        if r.layer.is_some() {
+            println!(
+                "the layer: {} workers stepping the crowd at 60 Hz, {} handoffs, {:.0} us a tick (its pictures out and its workers' writes back, over QUIC)",
+                o.workers,
+                r.handoffs,
+                r.layer_time.as_secs_f64() * 1e6 / r.layer_ticks.max(1) as f64
+            );
+        }
     }
 }

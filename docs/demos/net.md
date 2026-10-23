@@ -297,6 +297,24 @@ lockstep on the first channel (reliable, ordered).
   bit. Worker 1 killed at tick 400 before it answers (its session closed): covered by worker 0 on
   that tick, 192 entities reassigned there and back when it returns at tick 600, the records still
   the same. The 900 ticks take 0.3 s.
+- **Under the clients** (`net-loopback --replicate 3000 --workers N`): the crowd that the 100
+  clients receive is stepped at 60 Hz by N workers through the layer, each owning a strip of the
+  square; the server reads the records for its snapshots. With 50 ms and 2 % loss to the clients,
+  20 s, the clients' numbers don't move (22.5 kB/s down, 98.05 % delivered, every snapshot
+  decoded). The layer's tick, its pictures out and its workers' writes back over QUIC on
+  loopback, all on the server's one thread:
+
+  | People | Workers | Handoffs in 20 s | The layer's tick |
+  |---|---|---|---|
+  | 300 | 2 | 1 | 0.53 ms |
+  | 1000 | 2 | 6 | 1.03 ms |
+  | 3000 | 2 | 48 | 3.55 ms |
+  | 3000 | 4 | 147 | 3.92 ms |
+
+  About 0.3 ms a tick plus 1.1 µs a person, against 0.15 ms to step the 3000 in place: every
+  picture carries each entity's whole state and every ghost each tick. Pictures by change, and
+  ghosts only within the band, are the first savings when the layer meets real load.
+
 ## Next
 
 - The layer and its workers on separate machines (the server PC), and a worker's region split
