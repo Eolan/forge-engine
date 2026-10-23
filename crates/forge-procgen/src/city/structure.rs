@@ -437,6 +437,7 @@ pub fn structures(plan: &CityPlan, masses: &[Mass]) -> Vec<Structure> {
     // No partition meets a window or a glazed bay (#285).
     for (i, s) in out.iter_mut().enumerate() {
         super::windows::narrow_to_partitions(&masses[i], s);
+        cores::reindex(&mut s.cores, &s.openings);
     }
     // The flats round the cores, once the doors and the passages are settled, and the net area
     // again (a dropped core gave its floor back): each mass's on the machine's threads (#274).

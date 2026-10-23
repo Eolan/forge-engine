@@ -230,8 +230,10 @@ pub fn by_room(m: &Mass, s: &mut Structure, seed: u64) {
 /// front's and the back's openings, and the gardens' glazed bays come after the rooms' windows,
 /// `gardens::glaze`): a window a partition still meets keeps its longer side of it, a [`PIER`]
 /// off the partition, or goes when under half a metre is left (#285: a corner house's glazed
-/// bay on its side met the partition between two of its rooms). A few rounds, since a narrowed
-/// window can move a partition again.
+/// bay on its side met the partition between two of its rooms); a garden door a partition meets
+/// slides off it. A few rounds, since a narrowed window can move a partition again. Removing a
+/// window moves the openings after it: the caller finds the cores' doors again
+/// (`cores::reindex`).
 pub(crate) fn narrow_to_partitions(m: &Mass, s: &mut Structure) {
     for _ in 0..3 {
         let Some(inner) = interior::house(m, s) else {
@@ -248,7 +250,7 @@ pub(crate) fn narrow_to_partitions(m: &Mass, s: &mut Structure) {
                 let along = (end - w.a).dot(t);
                 let n = DVec2::new(-t.y, t.x);
                 o.storey == k
-                    && o.kind == OpeningKind::Window
+                    && matches!(o.kind, OpeningKind::Window | OpeningKind::Door)
                     && ((end - w.a).dot(n) - w.thickness).abs() < 0.1
                     && along > o.span().0 - 0.1
                     && along < o.span().1 + 0.1
@@ -258,6 +260,32 @@ pub(crate) fn narrow_to_partitions(m: &Mass, s: &mut Structure) {
             let o = s.openings[i];
             let w = &s.walls[o.wall];
             let x = (end - w.a).dot((w.b - w.a).normalize_or_zero());
+            if o.kind == OpeningKind::Door {
+                // A door keeps its width: one no core names (a garden door) slides off the
+                // partition along its wall, where the wall has room and nothing else stands
+                // there (900 m's house 48: a partition 4 cm inside a garden door's jamb).
+                if s.cores.iter().any(|c| c.door == i) {
+                    continue;
+                }
+                let clear = interior::PARTITION * 0.5 + 0.05;
+                let shift = if x < o.along {
+                    x + clear - o.span().0
+                } else {
+                    x - clear - o.span().1
+                };
+                let (lo, hi) = (o.span().0 + shift, o.span().1 + shift);
+                let free = s.openings.iter().enumerate().all(|(j, q)| {
+                    j == i
+                        || q.wall != o.wall
+                        || q.storey != o.storey
+                        || q.span().1 + PIER <= lo
+                        || q.span().0 >= hi + PIER
+                });
+                if lo >= PIER && hi <= w.length() - PIER && free {
+                    s.openings[i].along += shift;
+                }
+                continue;
+            }
             let clear = interior::PARTITION * 0.5 + PIER;
             let (lo, hi) = o.span();
             let (left, right) = ((lo, x - clear), (x + clear, hi));
