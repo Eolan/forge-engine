@@ -115,7 +115,10 @@ from the camera), Enter a `Reset` (everything back to the start; the clock runs 
 exit; `--replay FILE` plays them again in place of the keys and checks each digest. A session
 of 601 ticks and 13 throws replays to all 10 digests, and to the same digests at ticks 60, 300
 and 600 and at the end. A recording with one throw left out leaves it at the next digest
-(the tests).
+(the tests). With `--net`, `--record FILE` writes the server's session instead: both players'
+commands as it applied them and its whole state every 10 s; `--replay FILE --seek TICK` starts
+the replay at that tick from the state before it (2026-10-23, `docs/demos/net.md`, "Replays").
+A replay only shows the session: the keys play no part in it.
 
 **The network, in one process.** `--net MS` runs the scene through a server and this player's
 client, the second player a bot throwing at the pyramid every 2.5 s, over links of MS one way

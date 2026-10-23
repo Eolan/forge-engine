@@ -169,6 +169,7 @@ fn session(players: u16, delay_ms: f64, loss: f64, commands: &[Vec<Stamped<Push>
     let lead = (delay_ms / 1e3 / f64::from(TICK)).ceil() as u64 + 2;
     let every = 6;
     let mut server = Server::new(Toy::new());
+    server.record(60, 300);
     let mut clients: Vec<Client<Toy>> = (0..players)
         .map(|p| {
             // Run ahead through the client, so it knows the digests of the ticks it skipped.
@@ -228,6 +229,66 @@ fn same_world(session: &mut Session, client: usize) -> bool {
         server.tick(&[]);
     }
     server.digest() == session.clients[client].sim.digest()
+}
+
+#[test]
+fn the_servers_recording_replays_its_session_and_starts_anywhere() {
+    let commands = vec![pushes(0, 30, 1200, 21), pushes(1, 30, 1200, 22)];
+    let s = session(2, 100.0, 0.02, &commands);
+    let recording = s.server.recording().expect("recorded").clone();
+    let end = s.server.sim.now();
+    assert_eq!((recording.start(), recording.ticks), (Some(0), end));
+    assert_eq!(recording.commands.len(), 60, "every command, once");
+    assert_eq!(recording.keyframes.len() as u64, end / 300 + 1);
+    let digest_at = |tick: u64| {
+        let mut toy = Toy::new();
+        Recording {
+            keyframes: recording.keyframes[..1].to_vec(),
+            ..recording.clone()
+        }
+        .seek(&mut toy, tick)
+        .expect("from the start");
+        toy.digest()
+    };
+    // From its start, as the session went: every digest, and the server's world at the end.
+    let mut toy = Toy::new();
+    recording.replay(&mut toy).expect("the same digests");
+    assert_eq!(toy.digest(), s.server.sim.clone().digest());
+    // From the keyframe before a tick between keyframes: the world the run from the start has.
+    for tick in [0, 299, 300, 777, end] {
+        let mut toy = Toy::new();
+        recording.seek(&mut toy, tick).expect("a seek");
+        assert_eq!(toy.now(), tick);
+        assert_eq!(toy.digest(), digest_at(tick), "tick {tick}");
+    }
+    assert_eq!(
+        recording.seek(&mut Toy::new(), end + 1),
+        Err(SeekError::Outside(end + 1))
+    );
+    // Its bytes, keyframes and all; the first format still read.
+    let back = Recording::from_bytes(&recording.to_bytes()).expect("its bytes");
+    assert_eq!(back, recording);
+    let plain = Recording {
+        keyframes: Vec::new(),
+        ..recording.clone()
+    };
+    let mut first = plain.to_bytes();
+    first.truncate(first.len() - 8); // no keyframe count
+    first[..8].copy_from_slice(b"FRGREC01");
+    assert_eq!(Recording::from_bytes(&first), Some(plain));
+    // A command changed after a keyframe shows at the next digest, seeking from that keyframe.
+    let mut changed = recording.clone();
+    let k = changed
+        .commands
+        .iter()
+        .position(|c| c.tick > 600 && c.tick % 300 < 240)
+        .expect("a push well before a keyframe");
+    let tick = changed.commands[k].tick;
+    changed.commands[k].command.by += 1;
+    let Err(SeekError::Diverged(d)) = changed.seek(&mut Toy::new(), tick / 300 * 300 + 299) else {
+        panic!("a divergence")
+    };
+    assert_eq!(d.tick, (tick / 60 + 1) * 60);
 }
 
 #[test]

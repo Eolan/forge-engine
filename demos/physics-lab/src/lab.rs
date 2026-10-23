@@ -238,6 +238,9 @@ const FRESH: Fluid = Fluid {
 const WORDS: usize = 17;
 /// Ticks between the digests a recording keeps.
 const RECORD_EVERY: u64 = 60;
+/// `--net --record`: ticks between the whole states the server's recording keeps (10 s, the
+/// research's "a full snapshot every 10 s"), where `--seek` starts.
+const KEYFRAME_EVERY: u64 = 600;
 /// `--net`: ticks between the server's snapshots, the share of packets lost, ticks between the
 /// bot's throws.
 const SNAPSHOT_EVERY: u64 = 6;
@@ -2614,6 +2617,48 @@ pub(crate) fn build(
     };
     scene.build_tlas(&ctx.device, &ctx.shaders)?;
 
+    // `--replay`, and with `--seek` the world at that tick before the first frame.
+    anyhow::ensure!(
+        flags.net.is_none() || flags.replay.is_none(),
+        "--net replays nothing"
+    );
+    let replay = flags
+        .replay
+        .as_ref()
+        .map(|path| -> Result<Replay> {
+            let bytes = std::fs::read(path)
+                .with_context(|| format!("reading the recording {}", path.display()))?;
+            let recording = Recording::from_bytes(&bytes)
+                .with_context(|| format!("{} is not a recording", path.display()))?;
+            if let Some(tick) = flags.seek {
+                let seek = Instant::now();
+                recording
+                    .seek(&mut world, tick)
+                    .with_context(|| format!("seeking {} to tick {tick}", path.display()))?;
+                tracing::info!(
+                    tick,
+                    keyframes = recording.keyframes.len(),
+                    ms = seek.elapsed().as_millis(),
+                    "the replay starts part-way"
+                );
+            }
+            tracing::info!(
+                ticks = recording.ticks,
+                commands = recording.commands.len(),
+                digests = recording.digests.len(),
+                "replaying {}",
+                path.display()
+            );
+            Ok(Replay {
+                next: recording.commands.partition_point(|c| c.tick < world.now()),
+                recording,
+                checked: 0,
+                diverged: None,
+            })
+        })
+        .transpose()?
+        .map(Box::new);
+
     let mut current = Vec::new();
     world.transforms(&mut current);
     let mut points = Vec::new();
@@ -2627,10 +2672,6 @@ pub(crate) fn build(
         "physics lab ready"
     );
     let mode = if let Some(delay_ms) = flags.net {
-        anyhow::ensure!(
-            flags.record.is_none() && flags.replay.is_none(),
-            "--net records and replays nothing"
-        );
         tracing::info!(
             delay_ms,
             loss = NET_LOSS,
@@ -2642,32 +2683,12 @@ pub(crate) fn build(
             },
             "the lab through a server and a client, a bot playing too"
         );
-        Mode::Net(Box::new(Net::new(kind, delay_ms, &pool)?))
+        let mut net = Net::new(kind, delay_ms, &pool)?;
+        if flags.record.is_some() {
+            net.server.record(RECORD_EVERY, KEYFRAME_EVERY);
+        }
+        Mode::Net(Box::new(net))
     } else {
-        let replay = flags
-            .replay
-            .as_ref()
-            .map(|path| -> Result<Replay> {
-                let bytes = std::fs::read(path)
-                    .with_context(|| format!("reading the recording {}", path.display()))?;
-                let recording = Recording::from_bytes(&bytes)
-                    .with_context(|| format!("{} is not a recording", path.display()))?;
-                tracing::info!(
-                    ticks = recording.ticks,
-                    commands = recording.commands.len(),
-                    digests = recording.digests.len(),
-                    "replaying {}",
-                    path.display()
-                );
-                Ok(Replay {
-                    recording,
-                    next: 0,
-                    checked: 0,
-                    diverged: None,
-                })
-            })
-            .transpose()?
-            .map(Box::new);
         Mode::Local {
             world: Box::new(world),
             recording: Recording::new(),
@@ -3386,6 +3407,21 @@ impl Drop for Lab {
                     lost = net.up[0].stats.lost + net.down[0].stats.lost,
                     "the session over the run (this player's client)"
                 );
+                if let (Some(path), Some(recording)) = (&self.record, net.server.recording()) {
+                    let bytes = recording.to_bytes();
+                    match std::fs::write(path, &bytes) {
+                        Ok(()) => tracing::info!(
+                            ticks = recording.ticks,
+                            commands = recording.commands.len(),
+                            digests = recording.digests.len(),
+                            keyframes = recording.keyframes.len(),
+                            kib = bytes.len() / 1024,
+                            "recorded the server's session in {}",
+                            path.display()
+                        ),
+                        Err(e) => tracing::warn!("writing {}: {e}", path.display()),
+                    }
+                }
             }
         }
     }
@@ -4175,6 +4211,42 @@ mod tests {
             server.tick(&[]);
         }
         assert_eq!(server.digest(), net.client.sim.digest());
+    }
+
+    #[test]
+    fn a_net_session_recorded_on_the_server_replays_and_starts_anywhere() {
+        let mut net = Net::new(LabScene::Tug, 100.0, &test_pool()).unwrap();
+        net.server.record(RECORD_EVERY, 300);
+        let mut queued = Vec::new();
+        for k in 0..720 {
+            net.bot_on = k < 600;
+            if net.client.sim.now() == 30 {
+                queued.push(LabCommand::Pull { strength: 0.4 });
+            }
+            net.tick(&mut queued);
+        }
+        let recording = net.server.recording().expect("recorded").clone();
+        // This player's pull and the bot's six, as the server took them.
+        assert_eq!(recording.commands.len(), 7);
+        assert_eq!(recording.keyframes.len(), 3);
+        // Replayed on a fresh world: the server's digests, and its world at the end.
+        let fresh = || LabWorld::new(LabScene::Tug, test_pool()).unwrap().0;
+        let mut world = fresh();
+        recording.replay(&mut world).expect("the server's digests");
+        assert_eq!(world.digest(), net.server.sim.digest());
+        // Started at tick 420 from the keyframe at 300: the world the run from the start has.
+        let mut sought = fresh();
+        recording.seek(&mut sought, 420).expect("a seek");
+        let mut from_start = fresh();
+        Recording {
+            keyframes: recording.keyframes[..1].to_vec(),
+            ..recording.clone()
+        }
+        .seek(&mut from_start, 420)
+        .expect("from the start");
+        assert_eq!(sought.digest(), from_start.digest());
+        let back = Recording::from_bytes(&recording.to_bytes()).expect("its bytes");
+        assert_eq!(back, recording);
     }
 
     #[test]

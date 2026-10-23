@@ -343,6 +343,11 @@ US 9,479,618 B2.
 *Corrections faded* (2026-10-23, the physics lab's `--net`): a corrected body stays drawn where
 the prediction had it and the difference fades to 5 % in 0.1 s, by a fixed time; one more than
 2 m off is drawn at once. At 100 ms one way the lab's corrections moved a body by at most 0.47 m.
+*Replays built* (2026-10-23, `Server::record`, `Recording::seek`): the server records what it
+applies, a digest every second and its whole state every 10 s; a replay starts at any tick from
+the state before it and checks the digests on the way. The lab's networked session replays to
+all its digests, whole or from part-way. Replays only reproduce: never play resumed from a
+recorded moment (Blizzard's US 9,089,777 family, `research/netcode.md` §9).
 
 ## D-011 — Audio: own data layer and mixer, Steam Audio spatialiser ✅ (2026-09-24)
 

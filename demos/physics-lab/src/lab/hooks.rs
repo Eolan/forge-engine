@@ -42,12 +42,18 @@ pub(crate) struct LabArgs {
     /// `WaterBottle`), framed for a capture beside Khronos's screenshot (#170, D-048).
     #[arg(long)]
     pub(crate) model: Option<String>,
-    /// With `--lab`, write the session's commands and digests to this file at exit (#137).
+    /// With `--lab`, write the session's commands and digests to this file at exit (#137). With
+    /// `--net`, the server's: every player's commands as it applied them, and its whole state
+    /// every 10 s, so `--seek` can start the replay anywhere (#268).
     #[arg(long)]
     pub(crate) record: Option<PathBuf>,
     /// With `--lab`, play a recorded session again instead of the keys, checking its digests.
     #[arg(long)]
     pub(crate) replay: Option<PathBuf>,
+    /// With `--replay`, start at this tick: the recording's last keyframe before it restored and
+    /// the ticks between run before the first frame (a recording made with `--net`).
+    #[arg(long, requires = "replay")]
+    pub(crate) seek: Option<u64>,
     /// With `--lab`, run the scene through a server and this player's client over a link of
     /// this many milliseconds one way, 2 % of the packets lost, a bot throwing too (#137).
     #[arg(long)]

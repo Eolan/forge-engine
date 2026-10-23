@@ -7,7 +7,9 @@
 //! that rest three things:
 //!
 //! - [`Recording`]: a run's commands and its digests, written to a file and replayed against a
-//!   fresh world, which must reach the same digests at the same ticks;
+//!   fresh world, which must reach the same digests at the same ticks; a server records what it
+//!   applies ([`Server::record`]) with its whole state every so often, so a replay can start at
+//!   any tick from the keyframe before it ([`Recording::seek`]);
 //! - [`Server`] and [`Client`]: the server owns the world and applies everyone's commands; a
 //!   client runs ahead of it by the link's delay, predicts its own commands at once, and checks
 //!   each snapshot the server sends against what it predicted for that tick: a match costs
@@ -107,7 +109,8 @@ impl<C: Codec> Codec for Stamped<C> {
     }
 }
 
-/// A run as it happened: the commands, and the digest every so many ticks.
+/// A run as it happened: the commands, the digest every so many ticks and, for a replay that
+/// starts part-way, the whole state every so many more.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Recording<C> {
     /// Every command applied, in the order applied.
@@ -116,6 +119,21 @@ pub struct Recording<C> {
     pub digests: Vec<(u64, u64)>,
     /// Ticks the run lasted.
     pub ticks: u64,
+    /// `(tick, state)`: the whole state ([`Simulation::save`]) when that many ticks were done,
+    /// oldest first. A recording made as it runs ([`Recorder`], [`Server::record`]) starts with
+    /// one; [`Recording::record`] keeps none.
+    pub keyframes: Vec<(u64, Vec<u8>)>,
+}
+
+/// Why [`Recording::seek`] stopped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum SeekError {
+    /// The tick is before the recording's first keyframe or past its end.
+    #[error("tick {0} is outside the recording (before its first keyframe or past its end)")]
+    Outside(u64),
+    /// The run from the keyframe left the recording.
+    #[error(transparent)]
+    Diverged(#[from] Divergence),
 }
 
 /// Where a replay left the recording.
@@ -132,7 +150,9 @@ pub struct Divergence {
     pub got: u64,
 }
 
-const RECORDING_MAGIC: &[u8; 8] = b"FRGREC01";
+const RECORDING_MAGIC: &[u8; 8] = b"FRGREC02";
+/// The first format, without keyframes: still read.
+const RECORDING_MAGIC_V1: &[u8; 8] = b"FRGREC01";
 
 impl<C: Copy + Codec> Recording<C> {
     /// An empty recording.
@@ -141,6 +161,7 @@ impl<C: Copy + Codec> Recording<C> {
             commands: Vec::new(),
             digests: Vec::new(),
             ticks: 0,
+            keyframes: Vec::new(),
         }
     }
 
@@ -180,9 +201,50 @@ impl<C: Copy + Codec> Recording<C> {
     /// Replays the recording on `sim`, which must stand where the recorded world stood when it
     /// began; the first digest that differs is the error.
     pub fn replay<S: Simulation<Command = C>>(&self, sim: &mut S) -> Result<(), Divergence> {
-        let mut next = 0;
-        let mut checks = self.digests.iter().peekable();
-        for _ in 0..self.ticks {
+        let until = sim.now() + self.ticks;
+        self.run(sim, until)
+    }
+
+    /// Sets `sim` to the recorded world at `tick`: the last keyframe at or before it restored,
+    /// then the recorded commands of the ticks between run, the digests on the way checked. A
+    /// replay can start anywhere so, without running from the start.
+    ///
+    /// For watching and checking a run, as [`Recording::replay`]: nothing here lets play go on
+    /// from a recorded moment (Blizzard's US 9,089,777 family claims resuming play that way,
+    /// `docs/research/netcode.md` §9).
+    pub fn seek<S: Simulation<Command = C>>(
+        &self,
+        sim: &mut S,
+        tick: u64,
+    ) -> Result<(), SeekError> {
+        let Some(&(start, _)) = self.keyframes.first() else {
+            return Err(SeekError::Outside(tick));
+        };
+        if tick < start || tick > start + self.ticks {
+            return Err(SeekError::Outside(tick));
+        }
+        let at = self.keyframes.partition_point(|k| k.0 <= tick) - 1;
+        sim.restore(&self.keyframes[at].1);
+        debug_assert_eq!(
+            sim.now(),
+            self.keyframes[at].0,
+            "a keyframe restores its tick"
+        );
+        Ok(self.run(sim, tick)?)
+    }
+
+    /// The tick a recording made as it ran ([`Recorder`]) started at: its first keyframe's.
+    pub fn start(&self) -> Option<u64> {
+        self.keyframes.first().map(|k| k.0)
+    }
+
+    /// Runs `sim` from where it stands up to tick `until` with the recorded commands of those
+    /// ticks, checking the digests recorded for them; the first that differs is the error.
+    fn run<S: Simulation<Command = C>>(&self, sim: &mut S, until: u64) -> Result<(), Divergence> {
+        let mut next = self.commands.partition_point(|c| c.tick < sim.now());
+        let from = self.digests.partition_point(|d| d.0 <= sim.now());
+        let mut checks = self.digests[from..].iter().peekable();
+        while sim.now() < until {
             let now = sim.now();
             let first = next;
             while next < self.commands.len() && self.commands[next].tick == now {
@@ -206,7 +268,7 @@ impl<C: Copy + Codec> Recording<C> {
         Ok(())
     }
 
-    /// The recording's bytes: a magic, the ticks, the commands, the digests.
+    /// The recording's bytes: a magic, the ticks, the commands, the digests, the keyframes.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut out = RECORDING_MAGIC.to_vec();
         put_u64(&mut out, self.ticks);
@@ -219,13 +281,21 @@ impl<C: Copy + Codec> Recording<C> {
             put_u64(&mut out, tick);
             put_u64(&mut out, digest);
         }
+        put_u64(&mut out, self.keyframes.len() as u64);
+        for (tick, state) in &self.keyframes {
+            put_u64(&mut out, *tick);
+            put_u64(&mut out, state.len() as u64);
+            out.extend_from_slice(state);
+        }
         out
     }
 
-    /// A recording back from its bytes; `None` when they are not one.
+    /// A recording back from its bytes (either format); `None` when they are not one.
     pub fn from_bytes(mut bytes: &[u8]) -> Option<Self> {
         let bytes = &mut bytes;
-        if take::<8>(bytes)? != *RECORDING_MAGIC {
+        let magic = take::<8>(bytes)?;
+        let keyframed = magic == *RECORDING_MAGIC;
+        if !keyframed && magic != *RECORDING_MAGIC_V1 {
             return None;
         }
         let ticks = take_u64(bytes)?;
@@ -237,11 +307,75 @@ impl<C: Copy + Codec> Recording<C> {
         let digests = (0..n)
             .map(|_| Some((take_u64(bytes)?, take_u64(bytes)?)))
             .collect::<Option<Vec<_>>>()?;
+        let keyframes = if keyframed {
+            let n = take_u64(bytes)?;
+            (0..n)
+                .map(|_| {
+                    let tick = take_u64(bytes)?;
+                    let len = usize::try_from(take_u64(bytes)?).ok()?;
+                    let (state, rest) = bytes.split_at_checked(len)?;
+                    *bytes = rest;
+                    Some((tick, state.to_vec()))
+                })
+                .collect::<Option<Vec<_>>>()?
+        } else {
+            Vec::new()
+        };
         bytes.is_empty().then_some(Self {
             commands,
             digests,
             ticks,
+            keyframes,
         })
+    }
+}
+
+/// A recording made as a run goes (a server's, [`Server::record`]): the commands each tick
+/// applied, a digest every `every` ticks and the whole state every `keyframe_every`, the first
+/// at its start. The research's "a full snapshot every 10 s" is 600 ticks at 60 Hz.
+#[derive(Debug)]
+pub struct Recorder<C> {
+    recording: Recording<C>,
+    start: u64,
+    every: u64,
+    keyframe_every: u64,
+}
+
+impl<C: Copy + Codec> Recorder<C> {
+    /// Starts recording `sim` from where it stands: a keyframe of it now.
+    pub fn start<S: Simulation<Command = C>>(sim: &mut S, every: u64, keyframe_every: u64) -> Self {
+        let mut recording = Recording::new();
+        recording.keyframes.push((sim.now(), sim.save()));
+        Self {
+            recording,
+            start: sim.now(),
+            every: every.max(1),
+            keyframe_every: keyframe_every.max(1),
+        }
+    }
+
+    /// Takes the tick `sim` has just run with `commands`.
+    pub fn ticked<S: Simulation<Command = C>>(&mut self, sim: &mut S, commands: &[Stamped<C>]) {
+        let r = &mut self.recording;
+        r.commands.extend_from_slice(commands);
+        r.ticks += 1;
+        let done = sim.now() - self.start;
+        if done.is_multiple_of(self.every) {
+            r.digests.push((sim.now(), sim.digest()));
+        }
+        if done.is_multiple_of(self.keyframe_every) {
+            r.keyframes.push((sim.now(), sim.save()));
+        }
+    }
+
+    /// What it has recorded so far.
+    pub fn recording(&self) -> &Recording<C> {
+        &self.recording
+    }
+
+    /// The recording, done.
+    pub fn finish(self) -> Recording<C> {
+        self.recording
     }
 }
 
@@ -481,6 +615,8 @@ pub struct Server<S: Simulation> {
     taken: BTreeMap<PlayerId, Taken>,
     /// Each player's recent leads on arrival, newest last (at most [`LEAD_WINDOW`]).
     leads: BTreeMap<PlayerId, VecDeque<i64>>,
+    /// With [`Server::record`]: what it applies, for a replay.
+    recorder: Option<Recorder<S::Command>>,
     /// What it did.
     pub stats: ServerStats,
 }
@@ -504,8 +640,22 @@ impl<S: Simulation> Server<S> {
             waiting: BTreeMap::new(),
             taken: BTreeMap::new(),
             leads: BTreeMap::new(),
+            recorder: None,
             stats: ServerStats::default(),
         }
+    }
+
+    /// Records from now on what it applies (D-010's replays): every player's commands at the
+    /// ticks it applied them (a late one at the tick it was taken), a digest every `every`
+    /// ticks and its whole state every `keyframe_every`, the first now. A replay of the
+    /// recording ([`Recording::replay`], [`Recording::seek`]) is the session as the server ran it.
+    pub fn record(&mut self, every: u64, keyframe_every: u64) {
+        self.recorder = Some(Recorder::start(&mut self.sim, every, keyframe_every));
+    }
+
+    /// What it has recorded since [`Server::record`].
+    pub fn recording(&self) -> Option<&Recording<S::Command>> {
+        self.recorder.as_ref().map(Recorder::recording)
     }
 
     /// Takes an input packet: each command not seen yet waits for its tick, or for the next
@@ -543,6 +693,9 @@ impl<S: Simulation> Server<S> {
         order(&mut commands);
         self.stats.applied += commands.len() as u64;
         self.sim.tick(&commands);
+        if let Some(r) = &mut self.recorder {
+            r.ticked(&mut self.sim, &commands);
+        }
     }
 
     /// The world as it stands, for the clients.

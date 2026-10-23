@@ -623,9 +623,14 @@ The items below are the phase's original outline; the plan above orders them.
    compensation, replays. Pacing ✅ (2026-10-23, `PaceClock`: the server's measure of the lead,
    the client's rate from its error, no command late once settled); lag compensation's history,
    the client's interpolation and the moment a shot carries ✅ (eight clients from 20 to 250 ms
-   round trips meeting what they saw, in one process).
+   round trips meeting what they saw, in one process); corrections faded on screen and replays
+   ✅ (2026-10-23: the server records what it applies with its state every 10 s, a replay starts
+   at any tick and reaches every digest).
    **Demo:** `hundred-bots` — 100 headless bots over a 100 ms / 2 % loss link on the server
-   PC, two workers with a boundary across the island, bandwidth per client measured.
+   PC, two workers with a boundary across the island, bandwidth per client measured. On loopback
+   ✅ (2026-10-23, `net-loopback --clients 100 --replicate 3000 --workers 2`: the clients' crowd
+   stepped by two workers through the layer, 22.5 kB/s a client); the server PC waits for the
+   owner's word.
 
 ## Phase 6 — Audio
 

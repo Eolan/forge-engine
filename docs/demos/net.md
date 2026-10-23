@@ -245,6 +245,32 @@ by a fixed time, never chosen from the error or the motion (Tencent's US 12,157,
 correction chosen that way); one more than 2 m off is drawn at once. At 100 ms one way the lab's
 corrections moved a body by 0.31 m (the sled) to 0.47 m (the pyramid hit by the bot's throws).
 
+## Replays (step 3, 2026-10-23)
+
+The research's recommendation (`docs/research/netcode.md`): record every input with its tick and
+the whole state every 10 s; a replay must reproduce the run to the bit.
+- **The server records what it applies** (`Server::record`, `forge_sim::Recorder`): every
+  player's commands at the tick it applied them (a late one at the tick it took it), a digest
+  every 60 ticks, and its whole state every `keyframe_every` ticks, the first at the start.
+- **A replay starts anywhere** (`Recording::seek`): the last keyframe at or before the tick is
+  restored and the recorded ticks between are run, their digests checked. `Recording::replay`
+  runs from the start, as before. The file format is `FRGREC02` (keyframes after the digests);
+  `FRGREC01` files still read.
+- **Watching and checking only:** nothing lets play go on from a recorded moment. Blizzard's
+  US 9,089,777 family (to US 11,654,356, about 2033-04) claims resuming gameplay from a point
+  between checkpoints by loading the saved states and replaying the inputs; a replay that only
+  reproduces the past stays outside it (`docs/research/netcode.md` §9).
+- **The tests:** `forge-sim`'s two players over 100 ms and 2 % loss, the server's recording
+  replayed on a fresh world (every digest and the server's world at the end), started at ticks
+  0, 299, 300, 777 and the end (the same world as from the start), its bytes round-tripped, a
+  changed command caught at the next digest from the keyframe before it. The lab's tug-of-war the
+  same way (`a_net_session_recorded_on_the_server_replays_and_starts_anywhere`).
+- **In the lab** (`physics-lab --lab drop --net 100 --throw-every 45 --record FILE`, 1500
+  ticks): 42 commands of both players (one late), 25 digests, 3 keyframes, 648 KiB, nearly all
+  of it the three whole states, uncompressed. `--replay FILE` checks the 25 digests;
+  `--replay FILE --seek 900` restores the keyframe at 600 and runs 300 ticks in 177 ms before
+  the first frame, then checks the last 10. At tick 1200 both draw every body in the same place.
+
 ## Authority between workers (step 2's handoff, 2026-10-23)
 
 `forge_sim::authority`: D-010's replication layer and its workers, in one process, before any
@@ -325,9 +351,10 @@ lockstep on the first channel (reliable, ordered).
 
 - The layer and its workers on separate machines (the server PC), and a worker's region split
   and merged by load (its own patent search first); the skinned parts' corrections faded too;
-  lag compensation in a scene (a shot in
-  the lab's `--net`, the client's `Interpolator` drawing what it aims at), replays (step 3), and the
-  `hundred-bots` demo on the server PC.
+  lag compensation in a scene (a shot in the lab's `--net`, the client's `Interpolator` drawing
+  what it aims at); the layer's own replay (its workers' writes recorded, diffed against a fresh
+  run, as the research's stage 4 asks); keyframes compressed; and the `hundred-bots` demo on the
+  server PC.
 - The population of #250 as the replicated world: its near tiers' records in place of the crowd.
 - A handle for the simulation's thread (the engine's network thread runs the tokio runtime;
   the simulation hands messages over and never waits on I/O).
