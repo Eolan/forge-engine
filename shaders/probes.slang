@@ -875,7 +875,7 @@ float4 room_irradiance<let MIRROR : int>(ProbeField* field, uint index, float3 p
     float3 sum_d = float3(0.0);
     float total = 0.0;
     bool found = false;
-    [unroll]
+    [loop]
     for (uint k = 0; k < 8; k++)
     {
         int3 corner = int3(int(k & 1u), int((k >> 1) & 1u), int(k >> 2));
@@ -937,71 +937,144 @@ float4 room_irradiance<let MIRROR : int>(ProbeField* field, uint index, float3 p
     return float4(sum / total, 1.0);
 }
 
-// The light of a surface on side `region` of where it stands (D-078): its room grid's (`grid`, at
-// its fade) over the cascades' for that side alone, as `probe_lookup_cascades` gives it.
-float3 room_side<let MIRROR : int>(ProbeField* field, float3 p, float3 n, float3 g, float3 v, float3 open_sky, float3 d, float3 open_sky_d, uint region, uint grid, out float3 toward_d)
+// What the room grids give a surface or a hit at `p` (D-078): their light, each side's grid at its
+// fade (a doorway's two sides weighed by its ramp), and how much of the point's light that is (w).
+// `rest` is the region the cascades light the remainder for: the point's own `mask`, or the one
+// side no grid covers whole; `rest_masked` whether regions apply to it.
+struct RoomShare
 {
-    float fade = grid != ROOM_NONE ? field[0].room_grids[grid].fade : 0.0;
-    float3 e = float3(0.0);
-    float3 e_d = float3(0.0);
-    if (fade > 0.0)
+    float3 e;
+    float3 e_d;
+    float w;
+    RegionHit rest;
+    bool rest_masked;
+};
+
+// A region of its own, for the cascades' light on one side alone.
+RegionHit region_alone(uint region)
+{
+    RegionHit h;
+    h.region = region;
+    h.other = region;
+    h.ramp = 0.0;
+    h.kind = REGION_ROOM;
+    return h;
+}
+
+// The grids' share at `p` (`RoomShare`), `mask` and `masked` the point's region as the lookup found
+// it, `v` the view for the grids' bias. With MIRROR, also their light for a normal along `d`.
+// Each grid is read once, in a loop over the sides, so the driver compiles the lookup once: every
+// call site of a lookup is a whole inlined copy (#348; a copy per side and branch made the resolve
+// a 220 s pipeline).
+RoomShare room_share<let MIRROR : int>(ProbeField* field, float3 p, float3 n, float3 g, float3 v, float3 d, RegionHit mask, bool masked)
+{
+    RoomShare r;
+    r.e = float3(0.0);
+    r.e_d = float3(0.0);
+    r.w = 0.0;
+    r.rest = mask;
+    r.rest_masked = masked;
+    if (field[0].room_count == 0u || field[0].region_count == 0u)
+        return r;
+    // The sides: (region, grid, share).
+    uint region0 = mask.region;
+    uint region1 = mask.other;
+    uint grid0 = ROOM_NONE;
+    uint grid1 = ROOM_NONE;
+    float share0 = 1.0;
+    float share1 = 0.0;
+    if (mask.kind == REGION_SOLID)
     {
-        float4 r = room_irradiance<MIRROR>(field, grid, p, n, g, v, d, e_d);
-        if (r.w > 0.0)
-            e = r.rgb;
+        // A house's body: the grid within reach, its room the side (`room_grid_near`).
+        grid0 = room_grid_near(field, p);
+        if (grid0 == ROOM_NONE)
+            return r;
+        region0 = field[0].room_grids[grid0].region;
+        region1 = region0;
+    }
+    else if (masked)
+    {
+        // (A doorway's first side may be the outside, its second a room: `room_grid_of` tells.)
+        bool doorway = mask.kind == REGION_DOORWAY;
+        grid0 = mask.ramp < 1.0 ? room_grid_of(field, mask.region, p) : ROOM_NONE;
+        grid1 = doorway && mask.ramp > 0.0 ? room_grid_of(field, mask.other, p) : ROOM_NONE;
+        if (doorway)
+        {
+            share0 = 1.0 - mask.ramp;
+            share1 = mask.ramp;
+        }
+    }
+    if (grid0 == ROOM_NONE && grid1 == ROOM_NONE)
+        return r;
+    float covered0 = 0.0;
+    float covered1 = 0.0;
+    [loop]
+    for (uint k = 0u; k < 2u; k++)
+    {
+        uint grid = k == 0u ? grid0 : grid1;
+        float share = k == 0u ? share0 : share1;
+        if (grid == ROOM_NONE || share <= 0.0)
+            continue;
+        float fade = field[0].room_grids[grid].fade;
+        if (fade <= 0.0)
+            continue;
+        float3 e_d;
+        float4 e = room_irradiance<MIRROR>(field, grid, p, n, g, v, d, e_d);
+        if (e.w <= 0.0)
+            continue; // none of its probes lights anything here: the cascades
+        r.e += (share * fade) * e.rgb;
+        r.e_d += (share * fade) * e_d;
+        r.w += share * fade;
+        if (k == 0u)
+            covered0 = fade;
         else
-            fade = 0.0; // none of its probes lights anything here: the cascades
+            covered1 = fade;
     }
-    if (fade >= 1.0)
+    // The cascades light the rest: a house's body point its grid's room alone, even where none of the
+    // grid's probes lit it (a stair's mass: every probe's light there is the outside's once the
+    // room's cascade probes retire, and the stairwell came out 2 to 3 levels too bright); one side
+    // alone where the other's grid covers it whole; else the point's region as it stands (both sides
+    // fading at a doorway: their cascades blended by its ramp, as without grids).
+    if (mask.kind == REGION_SOLID)
     {
-        toward_d = e_d;
-        return e;
+        r.rest = region_alone(region0);
+        r.rest_masked = true;
     }
-    RegionHit side;
-    side.region = region;
-    side.other = region;
-    side.ramp = 0.0;
-    side.kind = REGION_ROOM;
-    float3 c_d;
-    float3 c = probe_lookup_cascades<MIRROR>(field, p, n, g, v, open_sky, d, open_sky_d, side, true, c_d);
-    toward_d = lerp_exact(c_d, e_d, fade);
-    return lerp_exact(c, e, fade);
+    else if (covered0 >= 1.0 && share1 > 0.0)
+    {
+        r.rest = region_alone(region1);
+        r.rest_masked = true;
+    }
+    else if (covered1 >= 1.0 && share0 > 0.0)
+    {
+        r.rest = region_alone(region0);
+        r.rest_masked = true;
+    }
+    return r;
 }
 
 // `probe_irradiance` and its mirror twin: a room with a grid of its own takes its light from it
-// (D-078), across a doorway each side from its own, as far as the point stands towards it; every
-// other surface from the cascades (`probe_lookup_cascades`).
+// (D-078, `room_share`), every other surface, and what the grids leave, from the cascades
+// (`probe_lookup_cascades`, called once).
 float3 probe_lookup<let MIRROR : int>(ProbeField* field, float3 p, float3 n, float3 g, float3 v, float3 open_sky, float3 d, float3 open_sky_d, out float3 toward_d)
 {
     RegionHit mask = region_at(field, p + g * 0.02);
     bool masked = field[0].region_count > 0u && mask.kind != REGION_SOLID;
-    // (A doorway's first side may be the outside, its second a room: `room_grid_of` tells.)
-    if (mask.kind == REGION_SOLID && field[0].region_count > 0u && field[0].room_count > 0u)
+    RoomShare rooms = room_share<MIRROR>(field, p, n, g, v, d, mask, masked);
+    if (rooms.w >= 1.0)
     {
-        uint near = room_grid_near(field, p);
-        if (near != ROOM_NONE)
-            return room_side<MIRROR>(field, p, n, g, v, open_sky, d, open_sky_d, field[0].room_grids[near].region, near, toward_d);
+        toward_d = rooms.e_d;
+        return rooms.e;
     }
-    if (masked && field[0].room_count > 0u)
+    float3 c_d;
+    float3 c = probe_lookup_cascades<MIRROR>(field, p, n, g, v, open_sky, d, open_sky_d, rooms.rest, rooms.rest_masked, c_d);
+    if (rooms.w <= 0.0)
     {
-        bool doorway = mask.kind == REGION_DOORWAY;
-        uint a = mask.ramp < 1.0 ? room_grid_of(field, mask.region, p) : ROOM_NONE;
-        uint b = doorway && mask.ramp > 0.0 ? room_grid_of(field, mask.other, p) : ROOM_NONE;
-        if (a != ROOM_NONE || b != ROOM_NONE)
-        {
-            if (!doorway || mask.ramp <= 0.0)
-                return room_side<MIRROR>(field, p, n, g, v, open_sky, d, open_sky_d, mask.region, a, toward_d);
-            if (mask.ramp >= 1.0)
-                return room_side<MIRROR>(field, p, n, g, v, open_sky, d, open_sky_d, mask.other, b, toward_d);
-            float3 a_d;
-            float3 b_d;
-            float3 ea = room_side<MIRROR>(field, p, n, g, v, open_sky, d, open_sky_d, mask.region, a, a_d);
-            float3 eb = room_side<MIRROR>(field, p, n, g, v, open_sky, d, open_sky_d, mask.other, b, b_d);
-            toward_d = lerp_exact(a_d, b_d, mask.ramp);
-            return lerp_exact(ea, eb, mask.ramp);
-        }
+        toward_d = c_d;
+        return c;
     }
-    return probe_lookup_cascades<MIRROR>(field, p, n, g, v, open_sky, d, open_sky_d, mask, masked, toward_d);
+    toward_d = rooms.e_d + (1.0 - rooms.w) * c_d;
+    return rooms.e + (1.0 - rooms.w) * c;
 }
 
 // How deep `p` stands in the room-sized cascades across the ground (#334): 1 from ROOM_BLEND
@@ -1069,7 +1142,8 @@ public float3 probe_irradiance(ProbeField* field, float3 p, float3 n, float3 g, 
 // copy of the lookup (a second cost them 0.11 ms in a room). Where none of the region's probes
 // stands among the eight, a hit in a house takes no bounce, rather than the sky's, and the
 // outside's the open sky. `outside`: the caller knows the hit is the outside's (a probe's ray
-// from a probe outside every house), and the lookup skips finding its region.
+// from a probe outside every house), and the lookup skips finding its region. A room with a grid
+// of its own (D-078) bounces its light in its grid (`room_share`).
 //
 // In a room the hit's point is moved off it along its normal alone, not also towards where the
 // ray came from (#353). That second offset grows with the spacing (0.36 m between probes 2 m
@@ -1087,62 +1161,16 @@ public float3 probe_irradiance_hit(ProbeField* field, float3 p, float3 n, float3
     if (!outside)
         mask = region_at(field, p + n * 0.02);
     bool masked = field[0].region_count > 0u && mask.kind != REGION_SOLID;
-    bool room = masked && mask.region != REGION_OUTSIDE;
     float3 unused;
-    if (mask.kind == REGION_SOLID && field[0].region_count > 0u && field[0].room_count > 0u)
-    {
-        uint near = room_grid_near(field, p);
-        if (near != ROOM_NONE)
-            return room_hit_side(field, p, n, v, open_sky, field[0].room_grids[near].region, near);
-    }
-    // A room with a grid of its own (D-078): the bounce stays in its grid, each side of a doorway
-    // from its own.
-    if (masked && field[0].room_count > 0u)
-    {
-        bool doorway = mask.kind == REGION_DOORWAY;
-        uint a = mask.ramp < 1.0 ? room_grid_of(field, mask.region, p) : ROOM_NONE;
-        uint b = doorway && mask.ramp > 0.0 ? room_grid_of(field, mask.other, p) : ROOM_NONE;
-        if (a != ROOM_NONE || b != ROOM_NONE)
-        {
-            float3 ea = mask.ramp < 1.0 ? room_hit_side(field, p, n, v, open_sky, mask.region, a) : float3(0.0);
-            if (!doorway || mask.ramp <= 0.0)
-                return ea;
-            float3 eb = room_hit_side(field, p, n, v, open_sky, mask.other, b);
-            return lerp_exact(ea, eb, mask.ramp);
-        }
-    }
-    float4 e = cascades_lookup<0>(field, p, n, n, room ? float3(0.0) : v, n, mask, masked, true, unused);
-    if (room)
-        return e.w > 0.0 ? e.rgb / e.w : float3(0.0);
-    return e.rgb + (1.0 - e.w) * open_sky;
-}
-
-// `probe_irradiance_hit` on side `region` of where a hit stands (D-078): its room grid's light
-// (`grid`, at its fade) over the cascades' for that side alone; the outside's over the open sky.
-float3 room_hit_side(ProbeField* field, float3 p, float3 n, float3 v, float3 open_sky, uint region, uint grid)
-{
-    float fade = grid != ROOM_NONE ? field[0].room_grids[grid].fade : 0.0;
-    float3 unused;
-    float3 e = float3(0.0);
-    if (fade > 0.0)
-    {
-        float4 r = room_irradiance<0>(field, grid, p, n, n, float3(0.0), n, unused);
-        if (r.w > 0.0)
-            e = r.rgb;
-        else
-            fade = 0.0;
-    }
-    if (fade >= 1.0)
-        return e;
-    RegionHit side;
-    side.region = region;
-    side.other = region;
-    side.ramp = 0.0;
-    side.kind = REGION_ROOM;
-    bool room = region != REGION_OUTSIDE;
-    float4 c = cascades_lookup<0>(field, p, n, n, room ? float3(0.0) : v, n, side, true, true, unused);
-    float3 cascades = room ? (c.w > 0.0 ? c.rgb / c.w : float3(0.0)) : c.rgb + (1.0 - c.w) * open_sky;
-    return lerp_exact(cascades, e, fade);
+    RoomShare rooms = room_share<0>(field, p, n, n, float3(0.0), n, mask, masked);
+    if (rooms.w >= 1.0)
+        return rooms.e;
+    bool room = rooms.rest_masked && rooms.rest.region != REGION_OUTSIDE;
+    float4 e = cascades_lookup<0>(field, p, n, n, room ? float3(0.0) : v, n, rooms.rest, rooms.rest_masked, true, unused);
+    float3 c = room ? (e.w > 0.0 ? e.rgb / e.w : float3(0.0)) : e.rgb + (1.0 - e.w) * open_sky;
+    if (rooms.w <= 0.0)
+        return c;
+    return rooms.e + (1.0 - rooms.w) * c;
 }
 
 // `probe_irradiance`, and the irradiance the probes find for a normal along the mirror

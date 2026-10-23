@@ -60,6 +60,11 @@ pub struct Look {
     /// `ProbeParams::far_room_sky`), when the scene sets it (unless `--probe-far-sky` does): its
     /// rooms' daylight factor (0.06 the village's; shallow rooms with wide windows about 0.27).
     pub probe_far_room_sky: Option<f32>,
+    /// The rooms' own probe grids (D-078, `ProbeParams::rooms`), when the scene sets them (unless
+    /// `--probe-rooms` and `--probe-room-spacing` do): their reach, spacing and pool. A town's street
+    /// of houses may want a shorter reach than the default 20 m: each room within it updates its
+    /// grid every frame (a game measured +0.41 ms at 20 m, +0.18 at 12 m on a street walk).
+    pub probe_room_grids: Option<forge_render::RoomGridParams>,
     /// The camera follows the scene's vehicle from the start ([`Running::follow`]).
     pub chase: bool,
     /// The exposure follows the scene's metered light without `--day` or `--time-of-day` (unless
@@ -84,6 +89,7 @@ impl Default for Look {
             probes: None,
             probes_see_movers: false,
             probe_far_room_sky: None,
+            probe_room_grids: None,
             chase: false,
             metered: false,
             local_exposure: false,

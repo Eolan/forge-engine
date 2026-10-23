@@ -448,8 +448,9 @@ pub struct Args {
     #[arg(long, value_delimiter = ',')]
     probe_finest: Option<Vec<u32>>,
     /// The room grids' reach (D-078, `RoomGridParams::radius`): the scene's rooms within RADIUS
-    /// metres of the camera get one (20 by default), as far as the pool allows. On wherever the
-    /// scene gives rooms; `--probe-rooms` alone is kept so older commands run.
+    /// metres of the camera get one (the scene's `Look::probe_room_grids`, else 20), as far as the
+    /// pool allows. On wherever the scene gives rooms; `--probe-rooms` alone is kept so older
+    /// commands run.
     #[arg(long, num_args = 0..=1, default_missing_value = "20")]
     probe_rooms: Option<f32>,
     /// No room grids (D-078): every room lit by the cascades, as before 2026-10-23.
@@ -1378,20 +1379,21 @@ impl Gallery {
                     .as_ref()
                     .filter(|c| c.len() == 3)
                     .map(|c| [c[0], c[1], c[2]]),
-                rooms: room_grids.then(|| forge_render::RoomGridParams {
-                    radius: args
-                        .probe_rooms
-                        .unwrap_or(forge_render::RoomGridParams::default().radius),
-                    spacing: args
-                        .probe_room_spacing
-                        .as_ref()
-                        .map_or(forge_render::RoomGridParams::default().spacing, |s| s[0]),
-                    height_spacing: args
-                        .probe_room_spacing
-                        .as_ref()
-                        .and_then(|s| s.get(1).copied())
-                        .unwrap_or(forge_render::RoomGridParams::default().height_spacing),
-                    ..forge_render::RoomGridParams::default()
+                rooms: room_grids.then(|| {
+                    let scene = look.probe_room_grids.unwrap_or_default();
+                    forge_render::RoomGridParams {
+                        radius: args.probe_rooms.unwrap_or(scene.radius),
+                        spacing: args
+                            .probe_room_spacing
+                            .as_ref()
+                            .map_or(scene.spacing, |s| s[0]),
+                        height_spacing: args
+                            .probe_room_spacing
+                            .as_ref()
+                            .and_then(|s| s.get(1).copied())
+                            .unwrap_or(scene.height_spacing),
+                        ..scene
+                    }
                 }),
                 ..ProbeParams::default()
             };

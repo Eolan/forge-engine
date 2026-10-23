@@ -3871,20 +3871,21 @@ float3 sun_light(Frame* f, float3 albedo, float3 n, float3 geometric, float spec
         float3 r = reflect(-view, n);
         float3 sky_share = float3(1.0);
         float3 irradiance = sh_irradiance(sky, n);
-        if (probes != nullptr && reflects)
+        if (probes != nullptr)
         {
             // The sky's reflection dims as the probes' light does (issue #68): their light for
             // a normal along the mirror direction over the open sky's there, per channel, up
             // to 1. Lazarov rescaled reflection probes so at the normal (Black Ops II,
             // SIGGRAPH 2013); along the mirror, a street's ground sees the buildings, not the
             // sky above it. A mirror ray sees for itself, in its share (`mirror_ray_share`).
-            float3 open_r = sh_irradiance(sky, r);
+            // One call with reflections or without (#348): every call site of the lookup is a
+            // whole inlined copy for the driver; its irradiance is the plain lookup's.
+            float3 open_r = reflects ? sh_irradiance(sky, r) : irradiance;
             float3 toward_r;
-            irradiance = probe_irradiance_mirror(probes, world, n, geometric, view, irradiance, r, open_r, toward_r);
-            sky_share = saturate(toward_r / max(open_r, 1e-4));
+            irradiance = probe_irradiance_mirror(probes, world, n, geometric, view, irradiance, reflects ? r : n, open_r, toward_r);
+            if (reflects)
+                sky_share = saturate(toward_r / max(open_r, 1e-4));
         }
-        else if (probes != nullptr)
-            irradiance = probe_irradiance(probes, world, n, geometric, view, irradiance);
         float3 ambient = ao >= 0.0 ? irradiance * occlusion_bounce(ao, albedo) : irradiance;
         if (!reflects)
             return albedo * (diffuse * sun + ambient + g_lamp_diffuse) + specular * sun + g_lamp_specular;
@@ -6371,18 +6372,11 @@ float3x3 turn_onto(float3 a, float3 b)
 // The shadow rays' start off a grass blade, metres: the rays meet no grass.
 static const float GRASS_SHADOW_BIAS = 0.02;
 
-// `shade_pixel` for a grass blade's pixel (#300): the map's row, with the blade's surface rebuilt
-// from its id, each blade its own tint of the row's two (by its hash), darker towards its root
-// (the blades round it shade it).
-uint shade_grass<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
+// A grass blade's surface (#300) for `shade_pixel`: the map's row, the blade's surface rebuilt from
+// its id, each clump its own tint of the row's two (by its hash). `scale` the blade's darkening
+// towards its root (the blades round it shade it), its contrast fading with distance.
+void grass_surface(Frame* f, GrassHit h, uint2 pixel, inout Surface s, out float scale)
 {
-    Frame* f = resolve_push.frame;
-    GrassHit h = grass_hit(f, vis, pixel, float2(float(resolve_push.width), float(resolve_push.height)));
-    uint row = f[0].grass_row + h.tint;
-    Material mat = f[0].materials[row];
-    if (mat.class_index != class_index)
-        return mat.class_index | (wants_mirror_ray<SHADOWS>(f, mat) ? REFLECT_BIT : 0u);
-    Surface s;
     s.n = h.n;
     s.object_normal = h.n;
     g_normal_variance = 0.0;
@@ -6396,181 +6390,178 @@ uint shade_grass<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     s.instance_place = s.instance_id;
     s.meshlet_index = 0u;
     s.lod_level = 0u;
-    s.shadow = 1.0;
-    s.sky = resolve_push.sky;
-    s.ao = resolve_push.ao_image != 0xFFFFFFFFu
-        ? g_sampled_images_r[NonUniformResourceIndex(resolve_push.ao_image)].Load(int3(pixel, 0))
-        : -1.0;
     s.view = normalize(-h.relative);
     s.world = h.scene;
-    s.probes = resolve_push.probes;
-    s.shore = resolve_push.shore;
     s.has_uv = false;
     s.coast = -1.0;
     s.uv = float2(0.0);
     s.duvdx = float2(0.0);
     s.duvdy = float2(0.0);
-    bool mirror_ray = wants_mirror_ray<SHADOWS>(f, mat);
-    s.traced = mirror_ray && resolve_push.request_image != 0xFFFFFFFFu;
-    g_ray_mask = shadow_world(f, h.relative, pixel);
-    if (SHADOWS != 0 && f[0].tlas != 0 && (f[0].flags & FLAG_SHADOWS) != 0)
-    {
-        if (resolve_push.sun_shadow != 0xFFFFFFFFu)
-            s.shadow = denoised_sun_shadow(f, s.n, pixel);
-        else if ((f[0].flags & FLAG_SHADOW_REFERENCE) != 0)
-            s.shadow = sun_shadow_reference(f, h.scene, s.n, pixel, GRASS_SHADOW_BIAS);
-        else
-            s.shadow = sun_shadow(f, h.scene, s.n, sun_disc_point(pixel, f[0].noise_frame), GRASS_SHADOW_BIAS);
-    }
-    if (resolve_push.cloud_shadow != 0xFFFFFFFFu)
-        s.shadow *= cloud_light(h.scene, normalize(f[0].sun_dir));
-    lamps_at<SHADOWS>(f, s.probes, h.scene, s.n, s.view, mat.specular_power, mat.specular, GRASS_SHADOW_BIAS, pixel, resolve_push.lamp_share);
-    s.transmitted = float3(0.0);
-    s.cloud = 1.0;
-    float3 color = class_index == MATERIAL_CLASS_LAYERED ? shade_layered(f, row, mat, s) : shade_standard(f, mat, s);
     // The blades' contrast converges to their clump's mean with distance (Ghost of Tsushima's
     // rule): far, a lawn shows its colour, not stripes of dark gaps between lit tips.
     float blade = 0.88 + 0.24 * grass_unit(h.hash, 7);
-    color *= lerp(lerp(0.55, 1.05, h.along) * blade, 1.0, sqrt(h.far));
-    if ((f[0].flags & FLAG_SHOW_AO) != 0 && s.ao >= 0.0)
-        color = float3(s.ao * 0.25);
-    if ((f[0].flags & FLAG_SHOW_GI) != 0 && s.sky != nullptr)
-    {
-        color = sh_irradiance(s.sky, s.n);
-        if (s.probes != nullptr)
-            color = probe_irradiance(s.probes, s.world, s.n, s.n, s.view, color);
-    }
-    color *= f[0].sun_illuminance * f[0].exposure / 3.14159265;
-    g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.color_image)][pixel] = float4(color, 1.0);
-    if (s.traced)
-        g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.request_image)][pixel] = g_reflection_request;
-    return class_index | (mirror_ray ? REFLECT_BIT : 0u);
+    scale = lerp(lerp(0.55, 1.05, h.along) * blade, 1.0, sqrt(h.far));
 }
 
 // Shades the pixel at `pixel` whose (non-empty) visibility id is `vis`, when its material is
 // of class `class_index` (a compile-time constant at every call); `SHADOWS` compiles the
-// shadow ray in (devices with ray queries). Returns the class it has.
+// shadow ray in (devices with ray queries). Returns the class it has. A grass blade's pixel
+// (#300) and a mesh's share everything after their surface: the shadows, the lamps, the class's
+// shading and the debug views (#348: the grass's own copy of them made every resolve entry's
+// pipeline seconds longer in the driver, each call site a whole inlined copy).
 uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
 {
-    if (is_grass(vis))
-        return shade_grass<SHADOWS>(class_index, pixel, vis);
     Frame* f = resolve_push.frame;
-    uint slot = vis >> VISIBILITY_TRIANGLE_BITS;
-    uint tri = vis & ((1u << VISIBILITY_TRIANGLE_BITS) - 1u);
-    uint2 record = f[0].visible[slot];
-    Instance inst = f[0].instances[record.x];
-    uint meshlet_index = record.y & MESHLET_INDEX_MASK;
-    Meshlet m = f[0].meshlets[meshlet_index];
-    // The instance names its first section's row; the others follow it (issue #41).
-    uint row = inst.material + triangle_section(m, tri);
-    Material mat = f[0].materials[row];
-    if (mat.class_index != class_index)
-        return mat.class_index | (wants_mirror_ray<SHADOWS>(f, mat) ? REFLECT_BIT : 0u);
-    bool culled_debug = (record.y & CULLED_BIT) != 0;
-    bool software = (record.y & SOFTWARE_BIT) != 0;
-    uint base = payload_base(f, m);
-    PagedVertex v0 = paged_vertex(f, base, m, paged_index(f, base, m, tri, 0));
-    PagedVertex v1 = paged_vertex(f, base, m, paged_index(f, base, m, tri, 1));
-    PagedVertex v2 = paged_vertex(f, base, m, paged_index(f, base, m, tri, 2));
-    float3x3 frame = instance_frame(inst);
-    float3 relative = instance_relative(f, inst);
-    float4 c0 = mul(f[0].view_proj, float4(mul(frame, v0.position) + relative, 1));
-    float4 c1 = mul(f[0].view_proj, float4(mul(frame, v1.position) + relative, 1));
-    float4 c2 = mul(f[0].view_proj, float4(mul(frame, v2.position) + relative, 1));
-    float2 size = float2(float(resolve_push.width), float(resolve_push.height));
-    float2 ndc = float2((float(pixel.x) + 0.5) / size.x * 2.0 - 1.0, 1.0 - (float(pixel.y) + 0.5) / size.y * 2.0);
-    Barycentrics b = barycentrics(c0, c1, c2, ndc, size);
-    // The textures' mip bias (D-070): drawn smaller for an upscaler, a pixel's footprint is taken
-    // as the output's, so the textures keep its detail. ×1 at the output's size: nothing changes.
-    b.ddx *= f[0].texture_lod_scale;
-    b.ddy *= f[0].texture_lod_scale;
-    float3 o0 = decode_normal(v0.normal);
-    float3 o1 = decode_normal(v1.normal);
-    float3 o2 = decode_normal(v2.normal);
-    float3 n0 = normalize(mul(frame, o0));
-    float3 n1 = normalize(mul(frame, o1));
-    float3 n2 = normalize(mul(frame, o2));
+    bool grass = is_grass(vis);
     Surface s;
-    s.n = normalize(b.lambda.x * n0 + b.lambda.y * n1 + b.lambda.z * n2);
-    // How far the normal turns across the pixel (#331): the vertices' normals by the
-    // barycentrics' change per pixel.
-    float3 dndx = b.ddx.x * n0 + b.ddx.y * n1 + b.ddx.z * n2;
-    float3 dndy = b.ddy.x * n0 + b.ddy.y * n1 + b.ddy.z * n2;
-    float turn = min(2.0 * GEOMETRIC_AA_SIGMA2 * (dot(dndx, dndx) + dot(dndy, dndy)), GEOMETRIC_AA_KAPPA);
-    // A flat face's normals cancel to rounding: it keeps its highlight to the bit.
-    g_normal_variance = turn > 1e-6 ? turn : 0.0;
-    s.object_normal = normalize(b.lambda.x * o0 + b.lambda.y * o1 + b.lambda.z * o2);
-    s.object_position = b.lambda.x * v0.position + b.lambda.y * v1.position + b.lambda.z * v2.position;
-    s.dpdx = b.ddx.x * v0.position + b.ddx.y * v1.position + b.ddx.z * v2.position;
-    s.dpdy = b.ddy.x * v0.position + b.ddy.y * v1.position + b.ddy.z * v2.position;
-    // The surface relative to the camera, and in the scene frame for the rays and the probes.
-    float3 surface_relative = mul(frame, s.object_position) + relative;
-    float3 surface_scene = to_scene(f, surface_relative);
-    s.frame = frame;
-    s.instance_id = inst.id;
-    s.instance_place = asuint(inst.local.x) * 0x8da6b343u ^ asuint(inst.local.y) * 0xd8163841u
-        ^ asuint(inst.local.z) * 0xcb1ab31fu ^ asuint(inst.cell.x) * 0x9E3779B9u ^ asuint(inst.cell.z) * 0x85EBCA6Bu;
-    s.meshlet_index = meshlet_index;
-    s.lod_level = m.lod_level;
+    Material mat;
+    uint row;
+    // What the shared part needs of the surface's path.
+    float3 surface_relative;
+    float3 surface_scene;
+    float sun_bias;
+    float lamp_start;
+    uint instance_index = 0u;
+    float grass_scale = 1.0;
+    bool culled_debug = false;
+    bool software = false;
+    bool ladder = false;
+    if (grass)
+    {
+        GrassHit h = grass_hit(f, vis, pixel, float2(float(resolve_push.width), float(resolve_push.height)));
+        row = f[0].grass_row + h.tint;
+        mat = f[0].materials[row];
+        if (mat.class_index != class_index)
+            return mat.class_index | (wants_mirror_ray<SHADOWS>(f, mat) ? REFLECT_BIT : 0u);
+        grass_surface(f, h, pixel, s, grass_scale);
+        surface_relative = h.relative;
+        surface_scene = h.scene;
+        sun_bias = GRASS_SHADOW_BIAS;
+        lamp_start = GRASS_SHADOW_BIAS;
+    }
+    else
+    {
+        uint slot = vis >> VISIBILITY_TRIANGLE_BITS;
+        uint tri = vis & ((1u << VISIBILITY_TRIANGLE_BITS) - 1u);
+        uint2 record = f[0].visible[slot];
+        Instance inst = f[0].instances[record.x];
+        uint meshlet_index = record.y & MESHLET_INDEX_MASK;
+        Meshlet m = f[0].meshlets[meshlet_index];
+        // The instance names its first section's row; the others follow it (issue #41).
+        row = inst.material + triangle_section(m, tri);
+        mat = f[0].materials[row];
+        if (mat.class_index != class_index)
+            return mat.class_index | (wants_mirror_ray<SHADOWS>(f, mat) ? REFLECT_BIT : 0u);
+        culled_debug = (record.y & CULLED_BIT) != 0;
+        software = (record.y & SOFTWARE_BIT) != 0;
+        instance_index = record.x;
+        uint base = payload_base(f, m);
+        PagedVertex v0 = paged_vertex(f, base, m, paged_index(f, base, m, tri, 0));
+        PagedVertex v1 = paged_vertex(f, base, m, paged_index(f, base, m, tri, 1));
+        PagedVertex v2 = paged_vertex(f, base, m, paged_index(f, base, m, tri, 2));
+        float3x3 frame = instance_frame(inst);
+        float3 relative = instance_relative(f, inst);
+        float4 c0 = mul(f[0].view_proj, float4(mul(frame, v0.position) + relative, 1));
+        float4 c1 = mul(f[0].view_proj, float4(mul(frame, v1.position) + relative, 1));
+        float4 c2 = mul(f[0].view_proj, float4(mul(frame, v2.position) + relative, 1));
+        float2 size = float2(float(resolve_push.width), float(resolve_push.height));
+        float2 ndc = float2((float(pixel.x) + 0.5) / size.x * 2.0 - 1.0, 1.0 - (float(pixel.y) + 0.5) / size.y * 2.0);
+        Barycentrics b = barycentrics(c0, c1, c2, ndc, size);
+        // The textures' mip bias (D-070): drawn smaller for an upscaler, a pixel's footprint is taken
+        // as the output's, so the textures keep its detail. ×1 at the output's size: nothing changes.
+        b.ddx *= f[0].texture_lod_scale;
+        b.ddy *= f[0].texture_lod_scale;
+        float3 o0 = decode_normal(v0.normal);
+        float3 o1 = decode_normal(v1.normal);
+        float3 o2 = decode_normal(v2.normal);
+        float3 n0 = normalize(mul(frame, o0));
+        float3 n1 = normalize(mul(frame, o1));
+        float3 n2 = normalize(mul(frame, o2));
+        s.n = normalize(b.lambda.x * n0 + b.lambda.y * n1 + b.lambda.z * n2);
+        // How far the normal turns across the pixel (#331): the vertices' normals by the
+        // barycentrics' change per pixel.
+        float3 dndx = b.ddx.x * n0 + b.ddx.y * n1 + b.ddx.z * n2;
+        float3 dndy = b.ddy.x * n0 + b.ddy.y * n1 + b.ddy.z * n2;
+        float turn = min(2.0 * GEOMETRIC_AA_SIGMA2 * (dot(dndx, dndx) + dot(dndy, dndy)), GEOMETRIC_AA_KAPPA);
+        // A flat face's normals cancel to rounding: it keeps its highlight to the bit.
+        g_normal_variance = turn > 1e-6 ? turn : 0.0;
+        s.object_normal = normalize(b.lambda.x * o0 + b.lambda.y * o1 + b.lambda.z * o2);
+        s.object_position = b.lambda.x * v0.position + b.lambda.y * v1.position + b.lambda.z * v2.position;
+        s.dpdx = b.ddx.x * v0.position + b.ddx.y * v1.position + b.ddx.z * v2.position;
+        s.dpdy = b.ddy.x * v0.position + b.ddy.y * v1.position + b.ddy.z * v2.position;
+        // The surface relative to the camera, and in the scene frame for the rays and the probes.
+        surface_relative = mul(frame, s.object_position) + relative;
+        surface_scene = to_scene(f, surface_relative);
+        s.frame = frame;
+        s.instance_id = inst.id;
+        s.instance_place = asuint(inst.local.x) * 0x8da6b343u ^ asuint(inst.local.y) * 0xd8163841u
+            ^ asuint(inst.local.z) * 0xcb1ab31fu ^ asuint(inst.cell.x) * 0x9E3779B9u ^ asuint(inst.cell.z) * 0x85EBCA6Bu;
+        s.meshlet_index = meshlet_index;
+        s.lod_level = m.lod_level;
+        s.view = normalize(-surface_relative);
+        // A double-sided row seen from behind (#171): its normals turn to the viewer, and a normal
+        // map's frame with them (`shade_uv_mapped` builds it about `object_normal`). Not leaf cards':
+        // they bend out from the crown's middle on both sides.
+        if ((mat.flags & (MATERIAL_FLAG_DOUBLE_SIDED | MATERIAL_FLAG_FOLIAGE)) == MATERIAL_FLAG_DOUBLE_SIDED
+            && dot(cross(mul(frame, v1.position - v0.position), mul(frame, v2.position - v0.position)), s.view) < 0.0)
+        {
+            s.n = -s.n;
+            s.object_normal = -s.object_normal;
+        }
+        if ((mat.flags & MATERIAL_FLAG_GRATING) != 0)
+        {
+            s.n = grating_normal(s.view);
+            s.object_normal = normalize(mul(transpose(frame), s.n));
+        }
+        s.world = surface_scene;
+        // A mesh with texture coordinates (D-047): interpolated as the position is.
+        Mesh mesh = f[0].meshes[inst.mesh];
+        s.has_uv = mesh.uvs != 0;
+        s.coast = -1.0;
+        s.uv = float2(0.0);
+        s.duvdx = float2(0.0);
+        s.duvdy = float2(0.0);
+        if (s.has_uv)
+        {
+            uint stream = uv_stream(f, base, m);
+            float2 t0 = paged_uv(f, stream, paged_index(f, base, m, tri, 0));
+            float2 t1 = paged_uv(f, stream, paged_index(f, base, m, tri, 1));
+            float2 t2 = paged_uv(f, stream, paged_index(f, base, m, tri, 2));
+            s.uv = b.lambda.x * t0 + b.lambda.y * t1 + b.lambda.z * t2;
+            s.duvdx = b.ddx.x * t0 + b.ddx.y * t1 + b.ddx.z * t2;
+            s.duvdy = b.ddy.x * t0 + b.ddy.y * t1 + b.ddy.z * t2;
+            // A planet's tile carries its normal map (#220): the next level's slopes, filtered by
+            // its mips, so a tile swapped for its children changes no slope that shows and a coarse
+            // cluster shows its slopes filtered rather than its vertices' samples of them.
+            if ((mat.flags & MATERIAL_FLAG_PLANET) != 0u && inst.texture != 0u)
+            {
+                float4 texel = sample_image_grad(inst.texture - 1u, SAMPLER_LINEAR_CLAMP, s.uv, s.duvdx, s.duvdy);
+                s.object_normal = normalize(texel.rgb * 2.0 - 1.0);
+                s.n = normalize(mul(frame, s.object_normal));
+                s.coast = texel.a;
+            }
+        }
+        // A skinned mesh's projected textures are projected from its bind pose, or they swim over
+        // the body as it bends (#166); its UV-mapped ones take their tangent frame from it. A ground
+        // window's mesh is shaded where it stands in the scene, as the ground it stands in for
+        // (#197): its layered rows look their layers up there (its mover moves its own frame), its
+        // normal the raised surface's.
+        if ((mesh.flags & MESH_SCENE_SHADED) != 0)
+            s.object_position = surface_scene;
+        else if (mesh.skin != 0xFFFFFFFFu)
+            bind_pose_surface(f, mesh, meshlet_index, m, base, tri, b, s);
+        sun_bias = shadow_bias(f, inst, m);
+        lamp_start = lamp_shadow_start(f, inst, m);
+        // The next meshes on the ladders (D-075), whose clusters lie outside their instance's mesh's.
+        ladder = meshlet_index - mesh.meshlet_offset >= mesh.meshlet_count;
+    }
     s.shadow = 1.0;
     s.sky = resolve_push.sky;
     s.ao = resolve_push.ao_image != 0xFFFFFFFFu
         ? g_sampled_images_r[NonUniformResourceIndex(resolve_push.ao_image)].Load(int3(pixel, 0))
         : -1.0;
-    s.view = normalize(-surface_relative);
-    // A double-sided row seen from behind (#171): its normals turn to the viewer, and a normal
-    // map's frame with them (`shade_uv_mapped` builds it about `object_normal`). Not leaf cards':
-    // they bend out from the crown's middle on both sides.
-    if ((mat.flags & (MATERIAL_FLAG_DOUBLE_SIDED | MATERIAL_FLAG_FOLIAGE)) == MATERIAL_FLAG_DOUBLE_SIDED
-        && dot(cross(mul(frame, v1.position - v0.position), mul(frame, v2.position - v0.position)), s.view) < 0.0)
-    {
-        s.n = -s.n;
-        s.object_normal = -s.object_normal;
-    }
-    if ((mat.flags & MATERIAL_FLAG_GRATING) != 0)
-    {
-        s.n = grating_normal(s.view);
-        s.object_normal = normalize(mul(transpose(frame), s.n));
-    }
-    s.world = surface_scene;
     s.probes = resolve_push.probes; // read under a sky only
     s.shore = resolve_push.shore;
-    // A mesh with texture coordinates (D-047): interpolated as the position is.
-    Mesh mesh = f[0].meshes[inst.mesh];
-    s.has_uv = mesh.uvs != 0;
-    s.coast = -1.0;
-    s.uv = float2(0.0);
-    s.duvdx = float2(0.0);
-    s.duvdy = float2(0.0);
-    if (s.has_uv)
-    {
-        uint stream = uv_stream(f, base, m);
-        float2 t0 = paged_uv(f, stream, paged_index(f, base, m, tri, 0));
-        float2 t1 = paged_uv(f, stream, paged_index(f, base, m, tri, 1));
-        float2 t2 = paged_uv(f, stream, paged_index(f, base, m, tri, 2));
-        s.uv = b.lambda.x * t0 + b.lambda.y * t1 + b.lambda.z * t2;
-        s.duvdx = b.ddx.x * t0 + b.ddx.y * t1 + b.ddx.z * t2;
-        s.duvdy = b.ddy.x * t0 + b.ddy.y * t1 + b.ddy.z * t2;
-        // A planet's tile carries its normal map (#220): the next level's slopes, filtered by
-        // its mips, so a tile swapped for its children changes no slope that shows and a coarse
-        // cluster shows its slopes filtered rather than its vertices' samples of them.
-        if ((mat.flags & MATERIAL_FLAG_PLANET) != 0u && inst.texture != 0u)
-        {
-            float4 texel = sample_image_grad(inst.texture - 1u, SAMPLER_LINEAR_CLAMP, s.uv, s.duvdx, s.duvdy);
-            s.object_normal = normalize(texel.rgb * 2.0 - 1.0);
-            s.n = normalize(mul(frame, s.object_normal));
-            s.coast = texel.a;
-        }
-    }
-    // A skinned mesh's projected textures are projected from its bind pose, or they swim over
-    // the body as it bends (#166); its UV-mapped ones take their tangent frame from it. A ground
-    // window's mesh is shaded where it stands in the scene, as the ground it stands in for
-    // (#197): its layered rows look their layers up there (its mover moves its own frame), its
-    // normal the raised surface's.
-    if ((mesh.flags & MESH_SCENE_SHADED) != 0)
-        s.object_position = surface_scene;
-    else if (mesh.skin != 0xFFFFFFFFu)
-        bind_pose_surface(f, mesh, meshlet_index, m, base, tri, b, s);
     bool mirror_ray = wants_mirror_ray<SHADOWS>(f, mat);
     s.traced = mirror_ray && resolve_push.request_image != 0xFFFFFFFFu;
     // Its shadow rays (the sun's, the lamps'): the trees' cards near, their proxies far.
@@ -6578,21 +6569,22 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     if (SHADOWS != 0 && f[0].tlas != 0 && (f[0].flags & FLAG_SHADOWS) != 0)
     {
         // A leaf card's shadow is the sun's from whichever side faces it (#346): the light
-        // through the leaf needs it where the leaf turns away (`leaf_transmission`).
-        float3 shadow_n = leaf_shadow_normal(f, mat, s.n);
+        // through the leaf needs it where the leaf turns away (`leaf_transmission`). A blade's,
+        // its own normal's.
+        float3 shadow_n = grass ? s.n : leaf_shadow_normal(f, mat, s.n);
         // NVIDIA's SIGMA denoised the sun's shadow before the resolve (#172), or the reference
         // traces 256 rays here; else one ray a frame and TAA's average (#54).
         if (resolve_push.sun_shadow != 0xFFFFFFFFu)
             s.shadow = denoised_sun_shadow(f, shadow_n, pixel);
         else if ((f[0].flags & FLAG_SHADOW_REFERENCE) != 0)
-            s.shadow = sun_shadow_reference(f, surface_scene, shadow_n, pixel, shadow_bias(f, inst, m));
+            s.shadow = sun_shadow_reference(f, surface_scene, shadow_n, pixel, sun_bias);
         else
-            s.shadow = sun_shadow(f, surface_scene, shadow_n, sun_disc_point(pixel, f[0].noise_frame), shadow_bias(f, inst, m));
+            s.shadow = sun_shadow(f, surface_scene, shadow_n, sun_disc_point(pixel, f[0].noise_frame), sun_bias);
         // The jelly the sunlight crossed on its way tints it (#180): the rays above see through
         // jelly, and one more ray, to a point of the disc that turns with TAA's cycle, measures
-        // how much it crossed (TAA averages the points into the tint's penumbra).
-        if ((f[0].flags & FLAG_JELLY) != 0 && any(s.shadow > 0.0))
-            s.shadow *= jelly_transmittance(f, sun_ray(f, surface_scene, shadow_n, sun_disc_point(pixel, f[0].noise_frame), shadow_bias(f, inst, m)));
+        // how much it crossed (TAA averages the points into the tint's penumbra). Not the grass's.
+        if (!grass && (f[0].flags & FLAG_JELLY) != 0 && any(s.shadow > 0.0))
+            s.shadow *= jelly_transmittance(f, sun_ray(f, surface_scene, shadow_n, sun_disc_point(pixel, f[0].noise_frame), sun_bias));
     }
     // Under the clouds (#145).
     if (resolve_push.cloud_shadow != 0xFFFFFFFFu)
@@ -6600,28 +6592,29 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     // The lamps (D-065): every one whose reach the surface is in and that lights its room, times
     // the filtered share of their light that reaches it (`lamp_filter_main`), or with a shadow ray
     // each; the classes take them where they take the sun (`sun_light`).
-    lamps_at<SHADOWS>(f, s.probes, surface_scene, s.n, s.view, mat.specular_power, mat.specular, lamp_shadow_start(f, inst, m), pixel, resolve_push.lamp_share);
+    lamps_at<SHADOWS>(f, s.probes, surface_scene, s.n, s.view, mat.specular_power, mat.specular, lamp_start, pixel, resolve_push.lamp_share);
     s.transmitted = float3(0.0);
     s.cloud = 1.0;
     if (SHADOWS != 0 && class_index == MATERIAL_CLASS_ICE && f[0].tlas != 0 && (f[0].flags & FLAG_TRANSLUCENCY) != 0)
-        s.transmitted = ice_transmission(f, record.x, surface_scene, mat.scattering);
+        s.transmitted = ice_transmission(f, instance_index, surface_scene, mat.scattering);
     // The jelly's see-through (#180): under a sky, with the rays' scene.
     bool jelly_traced = SHADOWS != 0 && class_index == MATERIAL_CLASS_JELLY && (f[0].tlas != 0 || movers_tlas(f) != 0)
         && f[0].rt_scene != nullptr && resolve_push.sky != nullptr;
     if (jelly_traced)
-        s.transmitted = jelly_through(f, mat, record.x, surface_scene, s.n, s.view, s.cloud);
+        s.transmitted = jelly_through(f, mat, instance_index, surface_scene, s.n, s.view, s.cloud);
     // The classes work in units of a white Lambertian surface facing the sun; the frame
     // stores luminance (cd/m²) times the exposure.
     float3 color = class_index == MATERIAL_CLASS_ICE ? shade_ice(f, mat, s)
         : class_index == MATERIAL_CLASS_LAYERED ? shade_layered(f, row, mat, s)
-        : class_index == MATERIAL_CLASS_JELLY ? shade_jelly(f, mat, s, record.x, jelly_traced && (f[0].flags & FLAG_SKY_REFLECTIONS) != 0)
+        : class_index == MATERIAL_CLASS_JELLY ? shade_jelly(f, mat, s, instance_index, jelly_traced && (f[0].flags & FLAG_SKY_REFLECTIONS) != 0)
         : shade_standard(f, mat, s);
+    if (grass)
+        color *= grass_scale;
     if (culled_debug)
         color = lerp(color, float3(1.0, 0.0, 0.0), 0.8); // a culling error (FLAG_SHOW_CULLED)
     if (software && (f[0].flags & FLAG_SHOW_RASTER) != 0)
         color = lerp(color, float3(0.1, 0.9, 0.3), 0.6); // the software rasteriser's pixels
-    // The next meshes on the ladders (D-075), whose clusters lie outside their instance's mesh's.
-    if ((f[0].flags & FLAG_SHOW_LADDER) != 0 && meshlet_index - mesh.meshlet_offset >= mesh.meshlet_count)
+    if ((f[0].flags & FLAG_SHOW_LADDER) != 0 && ladder)
         color = lerp(color, float3(0.15, 0.35, 1.0) * dot(color, float3(0.3, 0.6, 0.1)) * 2.0, 0.85);
     if ((f[0].flags & FLAG_SHOW_AO) != 0 && s.ao >= 0.0)
         color = float3(s.ao * 0.25); // the occlusion, as a light grey surface in the sun
@@ -6633,7 +6626,7 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
         if (s.probes != nullptr)
             color = probe_irradiance(s.probes, s.world, s.n, s.n, s.view, color);
     }
-    if ((f[0].flags & FLAG_SHOW_REGIONS) != 0 && s.probes != nullptr)
+    if (!grass && (f[0].flags & FLAG_SHOW_REGIONS) != 0 && s.probes != nullptr)
         color = probe_region_tint(s.probes, s.world, s.n, s.view);
     color *= f[0].sun_illuminance * f[0].exposure / 3.14159265;
     g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.color_image)][pixel] = float4(color, 1.0);

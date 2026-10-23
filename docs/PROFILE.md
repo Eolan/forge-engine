@@ -1886,6 +1886,30 @@ that changes the resolve's code (a constant of the leaves' light):
   near-instant, found in the driver's cache. Making each pipeline in the warm-up as its entry
   compiled (tried, then removed) only moved those 11 s there: one pipeline does not
   parallelise.
+- **The resolve's lookups each once** (#348, 2026-10-23). D-078's room grids at first called the
+  probes' lookup from up to five places per lookup, each a full inlined copy of the cascades'. The
+  village's start after an edit of the resolve took **267 s**: `slangc` 47 s on the standard
+  entry, the driver 220 s on its pipeline. Three changes, measured with a constant the driver
+  had never seen:
+
+  | The village's start after a resolve edit | Start | `slangc`, standard entry | The driver: standard, jelly |
+  |---|---|---|---|
+  | D-078 as first pushed (1463632a) | 267.3 s | 46.7 s | 219.8 s, 185.8 s |
+  | The grids' light per side in a loop, the cascades called once | 40.6 s | 13.1 s | 23.8 s, 22.6 s |
+  | The grid's eight probes in a loop, not unrolled | 38.0 s | | 20.9 s, 19.9 s |
+  | The grass merged into `shade_pixel`'s shared part, one lookup in `sun_light` | **13.4 s** | 5.5 s | 6.1 s, 6.7 s |
+
+  - **The grass path** had a whole `shade_standard` of its own, with its lighting.
+  - **`sun_light`** called the mirror lookup with reflections and the plain one without. The
+    mirror lookup gives the same irradiance, so one call does both.
+  - **The start was 27.6 s before D-078 (5f5e7dd4).** It is half that now.
+  - **`shading/standard`** (serial, three runs each): the room 0.830 → 0.755 ms, the house from the
+    street 1.023 → 0.986, the main street 0.812 → 0.785, the green 0.868 → 0.862.
+  - **The images:** the other scenes 0 px (the day check); the village's map views at most 96
+    pixels past 2 levels (rounding in the room grids' sums, carried by the probes' bounce). A first
+    version sent a house's body point whose grid probes were all inactive (a stair's mass) to every
+    probe, the outside's alone with the room's retired: the stairwell 2 to 3 levels brighter. It now
+    takes its grid's room's cascades, as before.
 - **`-O1` costs more than it saves.** `slangc` is 2.75 times faster on the eight resolve
   variants (12.4 s against 34 s of one core), but their SPIR-V is 2 to 5 times larger and the
   driver takes 2.6 times longer on it. The optimised builds stay at `-O2`;

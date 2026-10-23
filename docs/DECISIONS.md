@@ -7394,6 +7394,9 @@ technique with similar results that does not infringe.
   - Rays that met a house's body outside every grid's box took every probe's light. With the
     room's cascade probes retired, only the bright outside ones were left, and the room came out
     6 levels too bright. Taking the grid within 0.6 m fixed it.
+  - The first lookup called the cascades' from five places, each an inlined copy, and a start
+    after a resolve edit took 267 s. One call (the grids' sides summed in a loop, the cascades
+    for what they leave) brought it to 13.4 s with #348's other changes (`PROFILE.md`).
 
 **Measured (2026-10-23, the village at 18:00):**
 - **#353's drift test** (the room settled, then the cascades drifted 14 m off): the cascades alone
