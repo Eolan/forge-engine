@@ -2313,7 +2313,7 @@ frame the log names.
 **The player's steps** take the row of the body under its feet too (`Running::footing`): in
 `materials` the walker's boots sound as brick (stone) for its first 160 frames, then wood, sand
 (as grass) and snow (as gravel) for 120 frames each, then the ice (as stone) it slides to a stop
-on. The lab's marks by material (decals where a body struck) come next.
+on. The marks by material (decals where a body struck) are proposed in D-079 (🟡, the owner's word).
 
 ## Captures
 

@@ -235,6 +235,14 @@ row by its prop, as its drawing does. Not yet: the absorption and transmission v
 village's walls still name brick's in code), surfaces of their own for sand, mud, snow and ice,
 and the deformable layer's sound.
 
+**The deformable layer and Take-Two's US 11,534,688 B2** (to 2039, read 2026-10-24,
+`research/impact-marks.md` §5.1). Its claim 1 stores the marks characters leave where the camera
+is not, then writes them into a trail map round the camera when it comes near, with a shader by
+terrain type. The layer's window (`Layer::move_to`) keeps only what lies where its old and new
+places overlap, and gives the ground it takes on its plain depth: nothing pressed outside it is
+kept. **It must stay so:** tracks kept far away would be a layer of their own, written at once
+and drawn as they are, never stored to be replayed into a near map.
+
 ## D-008 — Lighting tiers and the ray-tracing policy ✅ (2026-09-24)
 
 Four tiers on one renderer: **T0 raster** (SDF-updated probe clipmaps, screen-space
@@ -7508,3 +7516,63 @@ technique with similar results that does not infringe.
   (0.03 to 0.09), accepted.
 
 *(research: probe-levels-indoors.md; D-068; issue #353)*
+
+## D-079 — Marks where bodies strike: a pool of run-time decals on static surfaces 🟡 (proposed 2026-10-24, Phase 7)
+
+**The need:** Phase 7's contact events now sound by material (`physics-lab`'s impacts, D-007's
+sound layer). The roadmap's next step is their marks: where a body strikes a static surface hard
+enough, a scuff on stone, a dent or scratch on painted metal, a dark print on soft ground, chosen by
+the struck and striking materials and scaled by the impact. D-074 decided decals on static
+surfaces from a world grid **built once**, "nothing on movers, no bullet holes" for now. Marks
+added at run time change the "built once", so this needs the owner's word.
+
+**What games do** (`research/impact-marks.md` §2–3): impact marks are ordinary projected decals
+with a lifetime or a fade, capped by a count, the oldest dropped first (Unreal, Source's 2048,
+s&box, Godot, HDRP). The mark is chosen by the struck surface's type (Source's game material,
+Unreal's surface types) or a surface × surface matrix (CryEngine's material effects), a random
+variant within a size range. Strength gates are a minimum speed, mass or impulse (Chaos) or an
+energy (CryEngine's ½mv²).
+
+**Proposed:**
+1. **A pool beside the static decals:** 1 024 run-time marks by default (4 096 at most), 64-byte
+   records like `GpuDecal`, in a ring; the spare words hold the birth time, the strength and the
+   fade's start, so the shader fades them and fading uploads nothing.
+2. **A second one-level grid of 4 m columns** for the marks, each column's list inline (at most 8,
+   a ninth recycling that column's oldest), updated in place on the CPU when a mark is added
+   (about 256 bytes uploaded a mark). Never a coarser level over it, never screen binning.
+3. **From a contact to a mark,** on the game thread after the step, beside its sound: contacts
+   with one fixed body, not a networked client's re-run ticks; the energy `½ μ v²` (μ the reduced
+   mass `Impact::between` already uses); a table (struck surface × striker) → the mark's kind,
+   with its least and full energies, sizes and variants; a near mark of the same kind strengthened
+   rather than a new one; the box along the contact's normal, 3 to 5 cm deep, its roll and variant
+   from a hash of the tick and the bodies (the same marks every run and in replays). At most 8
+   marks a tick; a body marks again only 10 ticks later.
+4. **The look:** textures made in code, faint and warm (the 2026-10-19 lesson: round dark stains
+   read as shadows), a 0.15 s fade-in so a mark never appears in one frame under DLAA, a 2 s
+   fade-out once the ring is 90 % full. Applied in the resolve like the static decals: the
+   surface's motion vectors kept, probes and mirror rays seeing bare surfaces.
+5. **Soft ground with a deform layer** gets a press (D-007's `deform`), not a mark.
+6. **Then:** dents and scratches need the colour decals' normal and roughness D-074 planned; city
+   meshes need the struck triangle's row in `Contact` (Jolt's per-triangle materials).
+
+**Patents** (`research/impact-marks.md` §5): none found on decal pools, recycling, fading,
+overlap rejection, material-pair tables or energy thresholds (published practice: Source SDK
+2013, CryEngine 3, Unreal, Godot). The binning patents met require coarse-to-fine levels over a
+field of view or image tiles: Activision's US 12,064,688 B2 (to 2042) and its pending continuation
+US 2024/0408486 A1, Apple's US 9,183,664 B2 (to 2033), AMD's US 10,803,655 B2 (to 2036). One
+world-space level does neither, hence "never a coarser level". Take-Two's US 11,534,688 B2 (to
+2039, trail maps for soft terrain) bears on D-007's deform layer, not on these marks: claim 1
+stores marks made away from the camera and writes them into a trail map when the camera comes
+near. The deform layer's window drops what lies outside it (read 2026-10-24, §5.1); it must keep
+doing so.
+
+**For the owner:**
+1. **Scope:** run-time marks on static surfaces, changing D-074's "built once"? Bullet holes and
+   scorches later through the same pool?
+2. **Lifetime:** kept until recycled (proposed), or a time limit as well?
+3. **State:** presentation only (not saved, not in replay digests, each client its own;
+   proposed), or simulation state?
+4. **Normals and roughness** for colour decals first (for dents and scratches), or scuffs and
+   prints only to begin with (proposed)?
+
+*(research: impact-marks.md, decals.md; D-074, D-007)*
