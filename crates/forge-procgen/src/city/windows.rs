@@ -311,8 +311,9 @@ pub(crate) fn narrow_to_partitions(m: &Mass, s: &mut Structure) {
 
 /// How far a room may stand off a street wall's inner face and still take its window (#308),
 /// metres: its rooms are laid square to the front, and a side line that bends (a corner house on a
-/// bend) leaves a wedge of floor, open to the room, between its rectangle and that wall.
-const REACH: f64 = 1.2;
+/// bend) leaves a wedge of floor, open to the room, between its rectangle and that wall (1.2 m
+/// until 800 m's house 54: its upper bathroom stood 0 to 1.7 m off a short street wall at a bend).
+const REACH: f64 = 2.0;
 
 /// A street wall still without an opening on a storey, where its open stretch runs past
 /// [`super::anomalies::BLANK`] (#308: 800 m's house 58, its kitchen 0.08 to 0.8 m off its second

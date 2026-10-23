@@ -954,13 +954,13 @@ mod tests {
         // packed front and back, a narrow end house's hall on its party side, a blank street wall's
         // window from the room behind its bend: 7). Then #285 (2026-10-23) widened the houses' halls
         // to 1.40 m and their lots with them, and the villages were laid again: 600 m kept at none,
-        // 700 to 900 m at 13, those new #308's next; a garden door slid off a partition: 12.
-        let since: [(f64, Kind, usize); 9] = [
+        // 700 to 900 m at 13, those new #308's next; a garden door slid off a partition: 12;
+        // a blank street wall at a bend took its window from a room 1.7 m off: 11.
+        let since: [(f64, Kind, usize); 8] = [
             (700.0, Kind::FreeWallEnd, 1),
             (800.0, Kind::UnlitRoom, 1),
             (800.0, Kind::FreeWallEnd, 1),
             (800.0, Kind::RidgeStep, 1),
-            (800.0, Kind::BlankStreetWall, 1),
             (900.0, Kind::Sliver, 1),
             (900.0, Kind::FreeWallEnd, 2),
             (900.0, Kind::LonePartyWall, 1),
