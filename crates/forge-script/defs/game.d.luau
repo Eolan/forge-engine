@@ -13,8 +13,9 @@ declare extern type Entity with
 end
 
 declare game: {
-	-- Answers event `event` (the host's names; "tick" each tick, with the tick's number). An
-	-- event's handlers run in the order they were registered.
+	-- Answers event `event` (the host's names; "tick" each tick, with the tick's number;
+	-- "input" for the player's actions, with the action's name and its value: 1 pressed, 0
+	-- released, -1 to 1 for an axis). An event's handlers run in the order they were registered.
 	on: (event: string, handler: (...any) -> ()) -> (),
 	-- Runs `handler` once, `seconds` from now (counted in the host's ticks, never a clock); the
 	-- timer's number.

@@ -2335,6 +2335,9 @@ buffer each, copied bit by bit).
 - **Result:** 92.6 ms; the state held 8.2 MB after it.
 - **Where it shows:** the test prints it. The host has no F1 zone: it does not run in the
   frame yet.
+- **A game script's events** (#319, 2026-10-23): `Game::timings()` gives each event's runs and
+  milliseconds (the timers apart) since the last call, for a host's profile, once a demo runs a
+  game script in its frame.
 
 ## `forge-nav` — fields, paths, crowds and walker edits (D-076, #317, #324, 2026-10-19)
 

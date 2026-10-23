@@ -6509,6 +6509,19 @@ rules that build their tables in loops. The owner approved `mlua`'s download.
   - **The example:** `scripts/pursuit.luau` sends the healthy zombies after a noise and makes
     the hurt ones flee. A test runs it, and the check type-checks it.
   - **Left:** generating the definitions from the Rust API; an F1 zone per script; hot reload.
+- **Then (2026-10-23, #319):**
+  - **Hot reload:** `Game::reload(source)` starts the script again at the tick it is at. The new
+    script's handlers and timers replace the old ones (its timers count from that tick); the
+    commands not yet taken stay. A source that fails to load leaves the old script running and
+    returns the error. State a script keeps in its own locals starts afresh: D-072's third point
+    (state lives in records) is what makes a reload lose nothing.
+  - **Input as a built-in event:** `Game::input(action, value)` sends `"input"` with the action's
+    name (the game's, as its `bind` lines name it, D-069) and its value (1 pressed, 0 released,
+    −1 to 1 for an axis).
+  - **Time per event:** `Game::timings()` gives each event's runs and milliseconds since the last
+    call (`"timers"` for the timers), for the host's profile. The engine's F1 overlay takes them
+    once a demo runs a game script; none does yet.
+  - **Tests:** 2 more (a reload at the same tick, a failed one; input and the timings).
 
 ## D-073 — Missions as data: the record, its evaluator and its two saves ✅ (2026-10-18, #287, D-072's first point)
 
