@@ -1962,17 +1962,20 @@ Neither is Forge's to change. Over-the-air updates are off, and the updater NGX 
 takes 0.6 s on a thread of its own. What `run_loading` can do is start the demo's preparation (the
 village laid out, its houses' insides, the meshes read) at the process's start, beside the window
 and the device: it needs neither. A fresh cache's shaders compiled ahead (`slangc`, no device)
-start there too, and the shell takes the same compiler. The load profile (`--set
-dev.load_profile=1`) now spans the whole start, the device's step named.
+start there too, and the shell takes the same compiler. City-plan makes its plan (the site, the
+plan, its masses, trees and lamps, the camera) on the loading thread too, so its window opens at
+0.17 s. The load profile (`--set dev.load_profile=1`) now spans the whole start, the device's
+step named.
 
 | `tools/load-time.sh`, best of three | Before | Now |
 |---|---|---|
-| `city-plan --village 600` | 7.23 s | **5.80 s** |
+| `city-plan --village 600` | 7.23 s | **5.25 s** |
 | the same with `--set r.aa=fsr` | 3.12 s | **2.38 s** |
 | the village on a fresh cache (`--fresh`; before: the preparation moved already) | 14.35 s | **9.34 s** |
+| the city, 4 km (before: the preparation moved already) | 6.55 s | **5.79 s** |
 
-The village's start now: the window at 0.22 s; the preparation done at 1.6 s; Streamline and
-the device until about 4.7 s; then the finishing (uploads, the rays' structures, pipelines),
+The village's start now: the window at 0.17 s; the preparation done at about 1.6 s; Streamline
+and the device until about 4.4 s; then the finishing (uploads, the rays' structures, pipelines),
 0.75 s.
 
 ## Local exposure (`--local-exposure`, #275, D-067, 2026-10-17)

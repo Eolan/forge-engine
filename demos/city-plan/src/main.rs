@@ -103,12 +103,21 @@ const KIT_TOP: f64 = 0.9;
 /// The kit's seed for its buildings' choices (`Detail::seed`).
 const KIT_SEED: u64 = 12;
 
-fn main() -> anyhow::Result<()> {
-    let matches = Cli::command()
-        .name("city-plan")
-        .about("A city's plan in 3D: the example city's masses, streets, parks and trams")
-        .get_matches();
-    let cli = Cli::from_arg_matches(&matches)?;
+/// What the scene is made from: the site, its plan and masses, its trees and lamps, the camera
+/// and the kit's centre.
+struct Made {
+    site: city::Site,
+    plan: city::CityPlan,
+    masses: Vec<mass::Mass>,
+    trees: Vec<city::trees::Tree>,
+    lamps: Vec<city::lamps::Lamp>,
+    camera: FlyCamera,
+    detail_centre: DVec2,
+}
+
+/// The plan and its views, printed for the map check (`tools/map-check.sh` reads them from the
+/// log); `None` once `--anomalies` has printed the village's, which runs no window.
+fn made(cli: &Cli) -> anyhow::Result<Option<Made>> {
     let size = cli.village.unwrap_or(cli.size);
     let site = example::site(size, 10.0);
     // The village on its own parameters: lanes, one main road, no trams nor landmarks.
@@ -251,7 +260,7 @@ fn main() -> anyhow::Result<()> {
                 for kind in city::anomalies::Kind::ALL {
                     println!("{kind:?}: {}", city::anomalies::count(&all, kind));
                 }
-                return Ok(());
+                return Ok(None);
             }
             if let Some((s, inner)) = v.masses.iter().zip(&structures).find_map(|(m, s)| {
                 city::interior::house(m, s)
@@ -438,12 +447,6 @@ fn main() -> anyhow::Result<()> {
     } else {
         camera
     };
-    // The kit round the street view, or round the centre seen from the air.
-    let text = match &cli.rules {
-        Some(path) => std::fs::read_to_string(path)?,
-        None => city::facades::MEDITERRANEAN.to_owned(),
-    };
-    let grammar = forge_procgen::grammar::Grammar::parse(&text)?;
     let half = size * 0.5;
     let detail_centre = if cli.street {
         DVec2::new(
@@ -453,6 +456,36 @@ fn main() -> anyhow::Result<()> {
     } else {
         centre
     };
+    Ok(Some(Made {
+        site,
+        plan,
+        masses,
+        trees,
+        lamps,
+        camera,
+        detail_centre,
+    }))
+}
+
+fn main() -> anyhow::Result<()> {
+    let matches = Cli::command()
+        .name("city-plan")
+        .about("A city's plan in 3D: the example city's masses, streets, parks and trams")
+        .get_matches();
+    let cli = Cli::from_arg_matches(&matches)?;
+    let size = cli.village.unwrap_or(cli.size);
+    // The village's anomalies printed, without a window.
+    if cli.anomalies && cli.village.is_some() {
+        made(&cli)?;
+        return Ok(());
+    }
+    // The kit round the street view, or round the centre seen from the air.
+    let text = match &cli.rules {
+        Some(path) => std::fs::read_to_string(path)?,
+        None => city::facades::MEDITERRANEAN.to_owned(),
+    };
+    let grammar = forge_procgen::grammar::Grammar::parse(&text)?;
+    let half = size * 0.5;
     let lit_hour = cli.app.time_of_day.map(city_plan::hour_of_day);
     let grass = cli.app.grass.is_some();
     if cli.tram.as_deref().is_some_and(|t| t.len() != 3) {
@@ -463,9 +496,23 @@ fn main() -> anyhow::Result<()> {
     } else {
         "city plan"
     };
-    // The scene made on the loading thread, the window open (#274: the city's took 4 s before
-    // its window showed).
-    city_blocks::run_making(cli.app, "forge city-plan", move || {
+    // The scene made on the loading thread, the plan with it, beside the window's and the
+    // device's creation (#274: the city's plan kept its window from opening for 0.66 s).
+    let app = cli.app.clone();
+    city_blocks::run_making(app, "forge city-plan", move || {
+        let Made {
+            site,
+            plan,
+            masses,
+            trees,
+            lamps,
+            camera,
+            detail_centre,
+        } = match made(&cli) {
+            Ok(Some(made)) => made,
+            Ok(None) => return None,
+            Err(error) => panic!("the plan: {error:#}"),
+        };
         let detail = city_plan::Detail {
             grammar: &grammar,
             top: KIT_TOP,
