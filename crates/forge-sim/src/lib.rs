@@ -619,6 +619,7 @@ impl<S: Simulation> Client<S> {
     }
 }
 
+pub mod authority;
 pub mod population;
 pub mod rewind;
 pub mod taxi;

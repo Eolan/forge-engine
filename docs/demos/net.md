@@ -207,9 +207,53 @@ against the world as its shooter saw it (server-side rewind, Bernier 2001).
   and the two 50 ms links): a walker at 1.4 m/s by some 0.3 m.
 - **Deterministic:** two runs give the same shots and the same errors.
 
+## Authority between workers (step 2's handoff, 2026-10-23)
+
+`forge_sim::authority`: D-010's replication layer and its workers, in one process, before any
+socket. The layer holds every entity's state, the worker that owns it and an epoch; a worker
+holds nothing between ticks.
+- **The regions:** `Strips`, the world cut along x, one strip a worker (D-010's first stage:
+  static regions; splitting and merging them by load comes later). An entity stays with its
+  owner until it is `margin` past the owner's border, so one walking along a border does not
+  change hands every tick.
+- **The layer:** `Layer::write` takes a worker's write only when it carries the record's epoch
+  and comes from its owner: a fencing token, so a worker that has not heard that authority
+  moved on writes in vain. `Layer::rebalance`, at the tick's end, hands every entity past its
+  owner's border by the margin to the owner of the region it stands in, its epoch one more.
+  The handoff takes effect at the next tick's barrier: it costs no tick.
+- **The workers:** at each tick's barrier, `Worker::sync` takes from the layer the entities the
+  worker owns, with their epochs, and as read-only ghosts the others within `band` of its
+  region; `Worker::step` steps its own from that picture. A worker killed and started again
+  takes the same picture. A worker gone is covered: `Layer::reassign` gives its region to
+  another, and back when it returns.
+- **Why the split world steps as one:** a step reads the world as the last tick left it (an
+  entity from its own state and its neighbours' at the barrier), the conservative scheme of
+  distributed simulation with one tick of lookahead (Fujimoto). With a band as wide as the
+  margin and the reach of what an entity reads, a worker's picture holds everything its
+  entities read.
+- **Patents** (`docs/research/netcode.md` §9, searched before building it): Improbable's handover
+  patent (US 10,878,146 B2) claims telling the old worker in advance that authority will move
+  after a period; here it moves at a tick's end with no notice. Authority is whole-entity and
+  each worker takes one picture of the layer a tick, not the add, remove and delegate messages per
+  component of US 10,289,767 B2. Interactions across a border are read from the ghosts, and the
+  layer and the workers share one tick. Moving regions by load later (Amazon's and Improbable's
+  balancing patents) needs its own search.
+
+**The test** (`crates/forge-sim/tests/authority.rs`): 200 bots in a 24 × 20 m strip patrol
+back and forth across x = 0, each pushed off the neighbours within 1.5 m. Two workers own the
+two sides, an entity changing hands 2 m past the border; each sees 3.51 m beyond its side.
+Over 1800 ticks (30 s), against one worker holding everything:
+
+| Run | Handoffs | Writes refused | Records against one worker |
+|---|---|---|---|
+| two workers | 292 | 0 | the same, every tick, to the bit |
+| revokes reaching the old owner up to two ticks late (it keeps writing at its old epoch) | 292 | 312 | the same |
+| worker 1 away from tick 400 to 600, worker 0 covering its region | 244, and 192 reassigned | 0 | the same |
+
 ## Next
 
-- Authority handoff between workers (the rest of step 2); lag compensation in a scene (a shot in
+- The layer and its workers as processes over the transport (the handoff is in one process
+  so far); lag compensation in a scene (a shot in
   the lab's `--net`, the client's `Interpolator` drawing what it aims at), replays (step 3), and the
   `hundred-bots` demo on the server PC.
 - The population of #250 as the replicated world: its near tiers' records in place of the crowd.

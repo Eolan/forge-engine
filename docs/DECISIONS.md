@@ -322,6 +322,14 @@ client gets every entity's first state before any delta, which keeps clear of Ve
 US 11,810,245 (`research/netcode.md`, §9; the owner to confirm). 100 clients over QUIC at
 100 ms and 2 % loss took 23.6 kB/s each for 10 minutes on loopback, under the second proof
 stage's 24 KB/s; authority handoff remains.
+*Authority handoff built, in one process* (#268, 2026-10-23, `forge_sim::authority`): the layer
+holds each entity's state, its owner and an epoch, and refuses a write at a stale epoch; it hands
+an entity over at a tick's end once it is 2 m past its owner's strip, and workers take their
+entities and a band of read-only ghosts from it at each tick's barrier, holding nothing between
+ticks. 200 bots across a two-worker boundary step to the bit as one worker steps them, with
+revokes arriving late (312 stale writes refused) and with a worker away and covered. The
+protocol keeps clear of Improbable's 2016 family (`research/netcode.md` §9): no advance notice
+of a handover, whole-entity authority taken as one picture a tick, one layer, one tick rate.
 
 ## D-011 — Audio: own data layer and mixer, Steam Audio spatialiser ✅ (2026-09-24)
 

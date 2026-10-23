@@ -571,6 +571,13 @@ soft edges, their pixel-wide minimum, their reactive mask and their hash:
   the others a fixed delay behind, between the two states about that moment; Glenn Fiedler,
   "Snapshot Interpolation", Gaffer On Games, 2014: the playout delay that covers the snapshots'
   gaps and losses (`forge_net::interpolate`).
+- **Authority between workers** (`forge_sim::authority`, #268). Richard M. Fujimoto, *Parallel
+  and Distributed Simulation Systems*, Wiley, 2000: conservative synchronisation with one tick of
+  lookahead, so the split world steps as one. Fencing by epochs, as Viewstamped Replication's view
+  numbers (Oki and Liskov, 1988), Chubby's sequencers (Mike Burrows, OSDI 2006) and Raft's terms
+  (Ongaro and Ousterhout, 2014) fence a stale leader. Border ghosts promoted on crossing, as
+  Linden's regions (US 2003/0195735) and BigWorld's real and ghost entities; the replication
+  layer and its workers, as Cloud Imperium describes server meshing (2021–2023).
 - **Networked physics.** Glenn Fiedler, "Introduction to Networked Physics" and the series
   after it, Gaffer On Games, 2014–2015: the link conditioner and the commands sent again until
   acknowledged (#137).

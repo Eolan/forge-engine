@@ -731,6 +731,35 @@ quarter of a century old. The only live claims near it are Amazon's two above, w
 input-timing variance. As before, not finding one is not evidence that none exists; the owner
 decides before a sold product.
 
+**Authority handoff between workers, searched before building it** (2026-10-23, for step 2's
+remainder). A research agent read the independent claims on Google Patents. The fetch tool cut
+quotes short, so the readings are close paraphrases; claim 1 of US 10,878,146 was read again
+here. Statuses and expiries are Google's estimates.
+
+| Patent | Holder | What the independent claims need | Status | Bearing |
+|---|---|---|---|---|
+| **US 10,878,146 B2**, "Handover techniques for simulation systems and methods" (priority 2016-08-24) | Improbable Worlds | authority over components given to a worker; a handover decided; **the first worker told that authority will move after a period of time**; the second given it; both told | active, US, about 2037-07-15 | Read only by an advance notice. Forge's layer moves authority at a tick's end with no notice and no handshake: the old owner finds the entity gone from its picture at the next barrier, and its late writes are refused by the epoch. Keep it so |
+| **US 10,289,767 B2**, "Communications interface facilitating operations of a persistent spatially-optimized computer-based simulation" (2016-08-24) | Improbable | workers by spatial region, sent add-entity, remove-entity, component-state-change and delegate-authority-over-a-component messages | active, about 2037-07-15 | Kept clear: authority is whole-entity (one epoch an entity, no component named), and a worker takes one picture of the layer each tick (owned with epochs, ghosts), working out what came and went itself. No such message API |
+| **US 10,839,116 B2** and **US 11,816,402 B2**, "Simulation systems and methods" | Improbable | the combination: chunk modules that monitor a region's entities and migrate them, a bridge a worker, a receptionist, an oracle; recovery from snapshots; balancing | active, to about 2036–2038 | Kept clear: one layer with a flat table, regions as data, workers talking to the layer directly |
+| **US 10,380,282 B2**, **US 11,550,621 B2**, pending **US 2023/0090130 A1** (load-balancing via partitions and virtual processes) | Improbable | partitions sent to partition-enforcer services and virtual processes to a manager; one entity's components split between processes | active (the application pending) | Kept clear: the layer owns the static table, workers are processes started with their region, authority whole-entity |
+| **US 11,416,305 B2**, "Commands for simulation systems and methods" | Improbable | a command to a component another worker owns, routed through bridges, the response carrying the command's id | active, about 2037-10-13 | Kept clear: interactions across a border are read from the ghosts; events, when they come, one-way and addressed to an entity, no response |
+| **US 12,386,655 B2**, "Event-based view synchronization" | Improbable | a runtime ticking faster than its workers, finding authority changes in a tick | active, about 2044 | Kept clear: the layer and the workers share one tick |
+| **US 10,474,655 B1**, **US 11,301,447 B2**, "Entity database" | Improbable | a client subscribes to a query; queries kept with ids in an index by region | active, about 2038 | The client side of the layer: interest stays the server's, cells per client, no client queries |
+| **US 12,681,773 B2**, **US 12,636,578 B2**, **US 11,909,601 B1**; **US 10,303,821 B2** | Amazon; Improbable | partitions moved between workers or applications by load, workers scaled; a volume split off to a new node by load | active, to about 2042–2044 | Not this stage (static regions). Moving regions by load later needs its own search and design-around |
+| pending **US 2025/0239013 A1**, and **US 12,654,102 B2** | Tencent | proxies made in both spaces for a transfer and recycled after; a frame around the object, a map-cut request | pending; active | Ghosts here are standing read-only views of a band, not made per transfer. Watch the application |
+| **US 8,612,196 B2** (2002) | Linden Research | regions on servers; the claims: changes sent when perceptible at the display's resolution | active to about 2028-06 | Its 2003 publication is prime prior art for ghosts promoted on crossing. Never filter updates by display resolution before 2028 |
+
+Never moving a client's connection to a worker, nor promoting a client to simulate, stays clear
+of Microsoft's US 10,348,836, Amazon's US 10,960,304 and Build A Rocket Boy's US 12,544,661.
+**Prior art** for the parts built: HLA's ownership transfer (1998, IEEE 1516-2000) and DIS's
+Transfer Ownership PDU (IEEE 1278.1a-1998); Linden's regions with border ghosts (US 2003/0195735);
+BigWorld's real and ghost entities; Colyseus (NSDI 2006); EVE's node mapping; Fujimoto (2000) for
+conservative synchronisation with lookahead; fencing by epochs and terms (Viewstamped Replication
+1988, leases 1989, Paxos 1998, Chubby's sequencers 2006, ZooKeeper 2010, Raft 2014). No patent
+claiming stale-epoch write rejection in games was found. No search reached CN, KR or JP filings in
+depth (Tencent and NetEase file heavily on seamless worlds there), and not finding a patent is not
+evidence that none exists.
+
 Nothing was met on QUIC itself (an IETF standard whose participants file IPR disclosures with the
 IETF; not checked here), on connect tokens, fragmentation or a link conditioner.
 
