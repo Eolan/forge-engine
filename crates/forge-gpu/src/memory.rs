@@ -510,15 +510,17 @@ impl Device {
     ) -> Result<Buffer> {
         let bytes: &[u8] = bytemuck::cast_slice(data);
         if self.resizable_bar() {
-            let buffer = self.create_buffer(BufferDesc {
+            // Kept only where it landed in the device's own memory, mapped. A failed attempt (the
+            // BAR and system memory full, or a usage no host-visible type allows) falls back to the
+            // staged copy below, as before ReBAR.
+            if let Ok(buffer) = self.create_buffer(BufferDesc {
                 size: bytes.len().max(4) as u64,
                 usage: usage | vk::BufferUsageFlags::TRANSFER_DST,
                 location: MemoryLocation::CpuToGpu,
                 category,
                 name,
-            })?;
-            // Kept only where it landed in the device's own memory, mapped.
-            if buffer.device_local_mapped() {
+            }) && buffer.device_local_mapped()
+            {
                 buffer.write(0, bytes);
                 return Ok(buffer);
             }
