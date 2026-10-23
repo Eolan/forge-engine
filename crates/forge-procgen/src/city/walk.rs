@@ -368,7 +368,8 @@ pub fn furnished(m: &Mass, s: &Structure, inner: &Interior) -> Vec<Placed> {
 pub const TURNING: f64 = 1.5;
 
 /// One bedroom at least keeps a [`TURNING`] circle free (#285): where none does, the roomiest
-/// gives up its desk and its chair, then its wardrobe, until it does.
+/// gives up its desk and its chair, then its wardrobe, until it does; last, its bed slides
+/// against a wall where the walk still reaches every room.
 fn keep_a_turning_circle(m: &Mass, s: &Structure, inner: &Interior, pieces: &mut Vec<Placed>) {
     let thickness: Vec<f64> = s.walls.iter().map(|w| w.thickness).collect();
     let Some(floor) = structure::floor(m, &thickness) else {
@@ -406,7 +407,55 @@ fn keep_a_turning_circle(m: &Mass, s: &Structure, inner: &Interior, pieces: &mut
             return;
         }
     }
+    // Last, its bed slid sideways against a wall, the side that frees the wider circle (#285: a
+    // 2.8 m room's single bed stood clear of both walls, a 1.41 m circle beside it).
+    let Some(b) = pieces.iter().position(|p| {
+        p.storey == room.storey
+            && matches!(p.piece, Piece::Bed | Piece::SingleBed)
+            && geom::contains(&room.outline, p.centre)
+    }) else {
+        return;
+    };
+    let bed = pieces[b];
+    let side = DVec2::new(bed.facing.y, -bed.facing.x);
+    // How far it slides along `d` to stand a wall's gap off the room's outline: each corner cast
+    // along `d` to the outline, the nearest less the gap (its head, against the wall it backs
+    // onto, does not hold it back).
+    let reach = |d: DVec2| {
+        bed.outline()
+            .iter()
+            .map(|&c| {
+                (0..4)
+                    .filter_map(|k| {
+                        let (p, q) = (room.outline[k], room.outline[(k + 1) % 4]);
+                        geom::segment_intersection(c, c + d * 10.0, p, q).map(|(t, _)| t * 10.0)
+                    })
+                    .filter(|&t| t > 1e-6)
+                    .fold(f64::MAX, f64::min)
+            })
+            .fold(f64::MAX, f64::min)
+            .min(2.0)
+            - BED_GAP
+    };
+    let best = [side, -side]
+        .into_iter()
+        .map(|d| {
+            let mut tried = pieces.clone();
+            tried[b].centre = bed.centre + d * reach(d).max(0.0);
+            (widest(&tried, room), tried)
+        })
+        .max_by(|x, y| x.0.total_cmp(&y.0));
+    // Only where the walk still reaches every room: a bed slid across a doorway would not.
+    if let Some((w, tried)) = best
+        && w >= TURNING
+        && walk(m, s, inner, &tried).is_some_and(|w| w.rooms.is_empty())
+    {
+        *pieces = tried;
+    }
 }
+
+/// How far a bed slid to a wall stands off it, metres.
+const BED_GAP: f64 = 0.06;
 
 /// The walk through house `m` among `furniture`, its insides `inner`.
 fn walk(m: &Mass, s: &Structure, inner: &Interior, furniture: &[Placed]) -> Option<Walk> {

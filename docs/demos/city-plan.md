@@ -2667,7 +2667,7 @@ The owner found the houses' corridors and rooms a bit narrow, with wheelchairs i
   so the rooms keep their width and the village keeps its 60 houses.
 - **One bedroom a home keeps a 1.50 m circle free** (`walk::TURNING`, the arrêté of
   24 December 2015): where none does, the roomiest gives up its desk and chair, then its
-  wardrobe.
+  wardrobe, and last its bed slides against a wall where the walk still reaches every room.
 - **A flight's first steps are open on the hall's side** (`RAIL_FROM`): the balustrade begins
   where the steps stand 0.45 m up. From the first step it boxed the flight's foot in against the
   back wall, which a walker turned into with centimetres to spare.
@@ -2678,12 +2678,12 @@ The owner found the houses' corridors and rooms a bit narrow, with wheelchairs i
 |---|---|---|
 | Halls holding a 1.50 m circle | 89 % (least 1.41 m) | 100 % (least 1.61 m) |
 | Kitchens holding one | 88 % | 98 % |
-| Houses with a bedroom holding one (the wider hall alone, then with the rule) | 83 % | 98 % |
+| Houses with a bedroom holding one (the wider hall alone, then with the rule) | 83 % | 100 % (least 1.51 m) |
 | Bedrooms of 10.5 m² or more | 86 % (median 14.0 m²) | 87 % (median 14.0 m²) |
 | Rooms a walker reaches on the walk field (24 houses) | 147 of 152 | 153 of 153 |
 
-The one house left without a roomy bedroom (lot 154) has a single bedroom of 2.8 × 3.2 m; its plan
-is #285's next step. The gardens' walls also changed: a gate stays clear of the walls meeting its
+The last of them (lot 154), a single bedroom of 2.8 × 3.2 m, keeps its circle with its bed against the
+wall. The gardens' walls also changed: a gate stays clear of the walls meeting its
 wall, and a gate's sides are never carried on to the next wall (one ran back through its own
 gate). The larger villages' anomalies moved with the new lots (700 to 900 m: 13, from 7; 600 m
 none): #308's next.
