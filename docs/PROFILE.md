@@ -2348,6 +2348,12 @@ serially the rays don't change (−0.07 to +0.04 ms). Async, the overlap shifted
 the blend went 0.50 → 0.75 ms, meshlet pass 1 0.63 → 0.78, and the frame +0.2 ms. Weigh a change
 to an async pass by its serial time and by the frame both ways.
 
+**Tried and dropped: the probe blend's last gaps read in parallel.** Thread 0 reads a probe's
+seven last update gaps (#336) one after another, while the group's other 255 threads wait at a
+barrier. Seven threads reading them before the barrier gave identical images, but the serial
+blend didn't move: green 0.343 → 0.343 ms, forest 0.469 → 0.465, main street 0.407 → 0.407.
+The other groups hide that wait.
+
 `FORGE_SHADER_LINES=1` keeps the source lines (`-g2`) in an optimised build's shaders. A trace
 opened in Nsight Graphics then shows its real-time shader profiler's samples per line (GPU
 Trace's `--real-time-shader-profiler`, Blackwell `--architecture "Blackwell GB20x"`). Its

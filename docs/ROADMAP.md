@@ -738,7 +738,11 @@ game (scenarios, missions, licensed assets) is a private repository, as the city
    about half a second after a door opens (#336), local exposure on in the village (#275), the
    far rooms' light blended at the probe grid's edge (#334), and glass that is no longer
    perfect: each pane its tilt, waves, glazing, haze, grime, blind and the sun's glint (#339,
-   `research/glass-credibility.md`).
+   `research/glass-credibility.md`). On 2026-10-22–23, from the same playtest: a far wall that brightened
+   as the finest probe cascade reached it (#353), its change spread over 4 m and the coarser
+   cascades' bounce no longer darkened in rooms. Room probe grids are proposed as the fix
+   (D-078 🟡, `research/probe-levels-indoors.md`). The ambience follows the place: cicadas in the
+   trees, fewer doves, the outside muffled indoors (#350).
 
 ## The integration target — The city sandbox (D-059)
 
