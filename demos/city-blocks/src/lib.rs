@@ -1346,11 +1346,14 @@ impl Gallery {
                         })
                         .collect()
                 });
-            // Rooms lit by probe grids of their own (D-078) wherever the scene gives rooms.
+            // Rooms lit by probe grids of their own (D-078) wherever the scene gives rooms, or says it
+            // will (its look's `probe_room_grids`: a scene that streams its rooms in, #338, gives none
+            // at the start).
             let room_grids = !args.no_probe_rooms
-                && volumes
-                    .iter()
-                    .any(|v| v.kind == forge_render::RegionKind::Room);
+                && (look.probe_room_grids.is_some()
+                    || volumes
+                        .iter()
+                        .any(|v| v.kind == forge_render::RegionKind::Room));
             let params = ProbeParams {
                 rays: probe_rays,
                 cascades: probe_cascades,
