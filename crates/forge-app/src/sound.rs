@@ -112,27 +112,32 @@ pub(crate) struct Recorder {
     mixer: Mixer,
     path: std::path::PathBuf,
     samples: Vec<f32>,
+    /// Seconds a frame renders, when the demo keeps a fixed step.
+    step: Option<f32>,
     /// The fraction of a frame not rendered yet.
     owed: f64,
 }
 
 impl Recorder {
-    /// The mix for a run that records to `path`.
-    pub(crate) fn start(path: std::path::PathBuf) -> (Sound, Self) {
+    /// The mix for a run that records to `path`, each frame `step` seconds of it (the frame's own
+    /// time without).
+    pub(crate) fn start(path: std::path::PathBuf, step: Option<f32>) -> (Sound, Self) {
         let (sound, mixer) = mix(RECORD_RATE);
-        tracing::info!(path = %path.display(), rate = RECORD_RATE, "sound recorded, not played");
+        tracing::info!(path = %path.display(), rate = RECORD_RATE, ?step, "sound recorded, not played");
         let recorder = Self {
             mixer,
             path,
+            step,
             samples: Vec::new(),
             owed: 0.0,
         };
         (sound, recorder)
     }
 
-    /// Renders the `dt` seconds of the frame just made.
+    /// Renders the frame just made: its fixed step, or its `dt` seconds.
     pub(crate) fn advance(&mut self, dt: f32) {
-        self.owed += f64::from(dt.max(0.0)) * f64::from(RECORD_RATE);
+        let seconds = self.step.unwrap_or(dt);
+        self.owed += f64::from(seconds.max(0.0)) * f64::from(RECORD_RATE);
         let frames = self.owed.floor();
         self.owed -= frames;
         let start = self.samples.len();
@@ -277,7 +282,7 @@ mod tests {
     fn a_recorded_run_writes_its_mix() {
         let path = std::env::temp_dir().join(format!("forge-record-{}.wav", std::process::id()));
         {
-            let (sound, mut recorder) = Recorder::start(path.clone());
+            let (sound, mut recorder) = Recorder::start(path.clone(), None);
             // A second of a tone in the effects bus, over frames of uneven length.
             let tone: Vec<f32> = (0..RECORD_RATE)
                 .map(|i| {

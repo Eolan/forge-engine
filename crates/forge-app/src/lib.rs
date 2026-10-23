@@ -119,6 +119,9 @@ pub struct AppConfig {
     /// Writes the run's mix to this WAV file instead of playing it (`--sound-record`): scripted
     /// runs too, never a device. For checks of what a scene sounds like.
     pub sound_record: Option<PathBuf>,
+    /// Seconds of sound each frame of a recorded run renders: the demo's fixed step
+    /// (`--fixed-step`), so the sound keeps time with the scene. None: the frame's own time.
+    pub sound_record_step: Option<f32>,
 }
 
 impl Default for AppConfig {
@@ -143,6 +146,7 @@ impl Default for AppConfig {
             settings: SettingsArgs::default(),
             sound: false,
             sound_record: None,
+            sound_record_step: None,
         }
     }
 }
@@ -1161,7 +1165,7 @@ impl<D: Demo> State<D> {
         let mut sound_recorder = None;
         let sound_output = if let Some(path) = config.sound_record.clone().filter(|_| config.sound)
         {
-            let (sound, recorder) = sound::Recorder::start(path);
+            let (sound, recorder) = sound::Recorder::start(path, config.sound_record_step);
             ctx.sound = Some(sound);
             sound_recorder = Some(recorder);
             None

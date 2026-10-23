@@ -7354,6 +7354,8 @@ pub fn run_making(
         height: args.height,
         sound: !args.no_sound,
         sound_record: args.sound_record.clone(),
+        // A scripted run's sound keeps the scene's time, not the wall clock's.
+        sound_record_step: args.fixed_step.then(|| 1.0 / args.step_hz),
         ..AppConfig::default()
     };
     // The props cook (or load from the cache) behind the loading screen (issue #25).

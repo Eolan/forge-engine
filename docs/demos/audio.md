@@ -155,7 +155,8 @@ interactive; **scripted runs never do**: a frame limit (`--frames`), a capture, 
 
 **Recording instead of playing** (`--sound-record FILE.wav`, `AppConfig::sound_record`): the same
 buses and mixer at 48 kHz, rendered a frame's time at the end of each frame into a float WAV
-written at exit. Scripted runs may record; the device is never opened. It is how a session
+written at exit: the demo's step with `--fixed-step` (`AppConfig::sound_record_step`), so the sound
+keeps the scene's time; the wall clock's otherwise. Scripted runs may record; the device is never opened. It is how a session
 checks what a scene sounds like without playing it on the owner's machine.
 
 - **The village at its house view** (`--view=76.6,1.7,-184.3,146.8,0`, 15:00, green 1.0):
