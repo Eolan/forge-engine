@@ -573,6 +573,7 @@ fn footsteps() -> (Vec<f32>, MixerStats) {
                 engine,
                 &Impact {
                     surface,
+                    against: None,
                     position: DVec3::new(x, 0.0, -3.0),
                     speed,
                     mass,

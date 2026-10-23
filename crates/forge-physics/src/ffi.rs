@@ -282,6 +282,12 @@ unsafe extern "C" {
         count: u32,
         centers: *mut f64,
     );
+    pub fn fj_bodies_masses(
+        world: *const FjWorld,
+        bodies: *const u32,
+        count: u32,
+        masses: *mut f32,
+    );
     pub fn fj_body_set_velocity(
         world: *mut FjWorld,
         body: u32,

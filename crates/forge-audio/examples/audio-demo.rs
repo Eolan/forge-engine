@@ -180,6 +180,7 @@ commands (one a line); a line `now:` names each sound as it comes or goes:
                             engine,
                             &Impact {
                                 surface: s,
+                                against: None,
                                 position: self.position + DVec3::new(0.0, 0.0, -3.0),
                                 speed,
                                 mass,

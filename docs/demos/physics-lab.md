@@ -2277,6 +2277,39 @@ pages streamed:
     scale. `FORGE_CELL_REALTIME` takes the edits as a game would, one a frame at most and
     unwaited: 50 edits over 400 frames, 37 cells in at the end.
 
+## Impacts by material (Phase 7)
+
+When the app plays sound (an interactive run, or `--sound-record FILE.wav`), every scene's bodies
+sound as they meet. Phase 7's contact events reach the material layer (D-007):
+- **The contacts:** Jolt reports those begun in each tick (`World::contacts`: the two bodies, the
+  point, the closing speed along the normal), sorted after the step, the same list every run. The
+  lab keeps them only in a run of its own or a replay: a networked client's corrections step ticks
+  again, which would sound twice.
+- **What each body is:** its prop's row in the table the scenes are drawn with
+  (`CityMaterials::sound`), the materials scene's patches their rows (`traction::ROWS`), the fixed
+  world the floor's. Crates, decks, logs and dominoes are wood; barrels, beams and the wrecking ball
+  metal; blocks, rocks, bricks and the floor stone; the balls rubber, which rings of nothing, so a
+  ball sounds as what it lands on.
+- **What each weighs:** `World::masses`, none for a fixed body.
+- **The sound:** `forge_audio::Impact::between` (`docs/demos/audio.md`): both bodies ring, the
+  softer setting how long the contact lasts and clicking in its own band.
+- **The budget:** each sound is made on the game thread (0.1 to 1 ms), and `drop`'s pile coming
+  down begins some 700 meetings a second. So the hardest waiting meeting is made each frame, the
+  others wait up to 4 frames (67 ms, what sound takes over 23 m) and are let go after, a moving
+  body sounds again only 10 ticks after it last did, and eight are mixed at most (a family of
+  voices).
+
+Over 600 frames at the fixed step (`--sound-record`, `FORGE_SOUND=0`; the counts the same every
+run):
+
+| Scene | The first impact | Made | Let go | Making them |
+|---|---|---|---|---|
+| `materials` | tick 39: a ball on the brick, 6.27 m/s (a 2 m fall: 6.26), only the brick ringing | 19 | 0 | 4 ms |
+| `drop` | tick 34: two stone blocks, 330 kg reduced, 0.66 m/s | 643 | 1 469 | 223 ms (0.37 ms a frame) |
+
+In the recording the ball's landing is a step from −27 to −16 dBFS over the ambience's bed, in the
+frame the log names. The lab's marks by material (decals where a body struck) come next.
+
 ## Captures
 
 The batch (`tools/captures.sh`, set `lab`) takes `lab-drop90` (the rain in mid-air), its A/B

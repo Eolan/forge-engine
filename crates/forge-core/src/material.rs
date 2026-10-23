@@ -2,9 +2,10 @@
 //! looks like ice, slips like ice and sounds like ice from the same entry.
 //!
 //! A row has a render layer (the shading class, colours, surface, textures), a physics layer
-//! (density, friction, restitution) and gameplay tags. The renderer uploads the render layers
-//! as a table the visibility resolve indexes by each instance's material id
-//! (`forge_render::material`); physics and audio will read the same rows when they land.
+//! (density, friction, restitution), a sound layer (the surface its footsteps and impacts are
+//! made for) and gameplay tags. The renderer uploads the render layers as a table the
+//! visibility resolve indexes by each instance's material id (`forge_render::material`);
+//! physics and audio read the same rows.
 //! Weather overrides and the deformable layer join the row with the systems that use them.
 
 use std::fmt;
@@ -391,6 +392,42 @@ impl Default for PhysicsLayer {
     }
 }
 
+/// What a foot or a body landing on a material sounds like: the surface `forge-audio`'s foley
+/// synthesises (D-011's modal banks per material).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum SoundSurface {
+    /// Stone, brick, concrete, rock: rings briefly and high.
+    #[default]
+    Stone,
+    /// Loose gravel: grains ticking.
+    Gravel,
+    /// Grass over soil, and other soft ground: a dull press and a rustle.
+    Grass,
+    /// Boards, crates, logs.
+    Wood,
+    /// Plates, grates, barrels.
+    Metal,
+    /// Shallow water.
+    Water,
+}
+
+/// What audio reads of a material (D-007's audio layer).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SoundLayer {
+    /// Its footsteps and impacts; `None` for a material with no ring of its own (rubber, cloth,
+    /// flesh): only what it strikes rings.
+    pub surface: Option<SoundSurface>,
+}
+
+impl Default for SoundLayer {
+    fn default() -> Self {
+        // Rock's, as the physics layer's default.
+        Self {
+            surface: Some(SoundSurface::Stone),
+        }
+    }
+}
+
 /// Gameplay tags of a material, as bits.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct MaterialTags(pub u32);
@@ -431,17 +468,21 @@ pub struct Material {
     pub render: RenderLayer,
     /// How it moves and collides.
     pub physics: PhysicsLayer,
+    /// How it sounds.
+    pub sound: SoundLayer,
     /// Gameplay tags.
     pub tags: MaterialTags,
 }
 
 impl Material {
-    /// A material named `name` drawn as `render`, with default physics and no tags.
+    /// A material named `name` drawn as `render`, with default physics and sound (rock's) and
+    /// no tags.
     pub fn new(name: &str, render: RenderLayer) -> Self {
         Self {
             name: name.to_owned(),
             render,
             physics: PhysicsLayer::default(),
+            sound: SoundLayer::default(),
             tags: MaterialTags::default(),
         }
     }
@@ -480,6 +521,11 @@ impl MaterialTable {
     /// The row `id`.
     pub fn get(&self, id: MaterialId) -> &Material {
         &self.rows[id.0 as usize]
+    }
+
+    /// The row `id`, to change (a layer set after the row was made, or weather's overrides).
+    pub fn get_mut(&mut self, id: MaterialId) -> &mut Material {
+        &mut self.rows[id.0 as usize]
     }
 
     /// The row named `name`, if any.

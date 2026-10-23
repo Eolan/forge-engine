@@ -5,7 +5,7 @@
 mod common;
 
 use common::*;
-use forge_audio::foley::{Footwear, Impact, Step, Surface, impact_sound, step_sound};
+use forge_audio::foley::{Footwear, Impact, ImpactBody, Step, Surface, impact_sound, step_sound};
 use forge_audio::{BusLayout, Foley, Listener, MixerConfig, OfflineRenderer, PlayParams, create};
 use glam::DVec3;
 
@@ -231,6 +231,7 @@ fn impacts_follow_mass_and_speed() {
             impact_sound(
                 &Impact {
                     surface: s,
+                    against: None,
                     position: DVec3::ZERO,
                     speed,
                     mass,
@@ -257,6 +258,108 @@ fn impacts_follow_mass_and_speed() {
             );
         }
     }
+}
+
+/// Two bodies meeting: each with a surface rings, both driven by the pair's reduced mass, and
+/// the softer surface sets how long the contact lasts (Phase 7's contacts to the material
+/// layer).
+#[test]
+fn two_bodies_meeting_ring_each_other() {
+    let body = |surface, mass| ImpactBody { surface, mass };
+    let at = DVec3::new(1.0, 0.0, 2.0);
+    // A 20 kg crate dropped on fixed stone: the stone and the crate, each at 20 kg.
+    let crate_on_stone: Vec<Impact> = Impact::between(
+        body(Some(Surface::Wood), Some(20.0)),
+        body(Some(Surface::Stone), None),
+        at,
+        3.0,
+        Some(48),
+    )
+    .collect();
+    assert_eq!(crate_on_stone.len(), 2);
+    assert_eq!(
+        (crate_on_stone[0].surface, crate_on_stone[0].against),
+        (Surface::Wood, Some(Surface::Stone))
+    );
+    assert_eq!(
+        (crate_on_stone[1].surface, crate_on_stone[1].against),
+        (Surface::Stone, Some(Surface::Wood))
+    );
+    for hit in &crate_on_stone {
+        assert_eq!((hit.mass, hit.speed, hit.start), (20.0, 3.0, Some(48)));
+        assert_eq!(hit.position, at);
+    }
+    // Two 10 kg bodies: 5 kg each way.
+    let pair: Vec<Impact> = Impact::between(
+        body(Some(Surface::Metal), Some(10.0)),
+        body(Some(Surface::Metal), Some(10.0)),
+        at,
+        2.0,
+        None,
+    )
+    .collect();
+    assert_eq!(pair.len(), 2);
+    assert!(pair.iter().all(|h| (h.mass - 5.0).abs() < 1e-6));
+    // A body of no surface on a plate: the plate alone; two fixed bodies: nothing.
+    let plate: Vec<Impact> = Impact::between(
+        body(None, Some(2.0)),
+        body(Some(Surface::Metal), None),
+        at,
+        2.0,
+        None,
+    )
+    .collect();
+    assert_eq!(plate.len(), 1);
+    assert_eq!((plate[0].surface, plate[0].against), (Surface::Metal, None));
+    let none = Impact::between(
+        body(Some(Surface::Stone), None),
+        body(Some(Surface::Stone), None),
+        at,
+        2.0,
+        None,
+    );
+    assert_eq!(none.count(), 0);
+
+    // The softer decides: a steel plate's upper modes ring less the softer what strikes it; a
+    // harder body changes nothing (stone struck by metal is stone's own contact).
+    let hit = |surface, against| {
+        impact_sound(
+            &Impact {
+                surface,
+                against,
+                position: DVec3::ZERO,
+                speed: 2.0,
+                mass: 2.0,
+                start: None,
+            },
+            7,
+            RATE,
+        )
+    };
+    // The plate's upper modes (3 to 9 kHz): a long, soft contact hardly excites them.
+    let ring = |against| band_db(hit(Surface::Metal, against).samples(), 3000.0, 9000.0, RATE);
+    // Struck by steel −29.7 dB, by a wooden crate −53.3, by a sack (grass) nothing (−126).
+    let by_steel = ring(Some(Surface::Metal));
+    let by_wood = ring(Some(Surface::Wood));
+    let by_soft = ring(Some(Surface::Grass));
+    assert!(
+        by_wood < by_steel - 15.0 && by_soft < by_wood - 30.0,
+        "steel {by_steel:.1}, wood {by_wood:.1}, grass {by_soft:.1} dB"
+    );
+    assert_eq!(
+        hit(Surface::Stone, Some(Surface::Metal)).samples(),
+        hit(Surface::Stone, None).samples()
+    );
+}
+
+/// A material row's sound layer names each of the foley's surfaces.
+#[test]
+fn a_material_rows_sound_layer_names_each_surface() {
+    use forge_core::material::SoundSurface;
+    for s in Surface::ALL {
+        assert_eq!(Surface::from(SoundSurface::from(s)), s);
+    }
+    assert_eq!(Surface::from(SoundSurface::default()), Surface::Stone);
 }
 
 #[test]

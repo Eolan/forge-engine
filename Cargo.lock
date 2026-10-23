@@ -2355,6 +2355,7 @@ dependencies = [
  "clap",
  "forge-anim",
  "forge-app",
+ "forge-audio",
  "forge-core",
  "forge-geom",
  "forge-gpu",

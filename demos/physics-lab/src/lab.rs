@@ -13,16 +13,19 @@
 //! plays them again and checks the digests; `--net MS` runs the scene through a server and this
 //! player's client over a link of MS one way, with a second player (a bot) throwing too.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Context as _, Result};
 use forge_app::Setup;
+use forge_audio::ImpactBody;
+use forge_core::material::SoundSurface;
 use forge_geom::SkinnedMesh;
 use forge_geom::city::{Block, Lathe, PropKind, PropSpec};
 use forge_physics::buoyancy::{Fluid, Hull};
-use forge_physics::{BodyDesc, BodyId, Shape, Transform, Velocity, World, WorldDesc};
+use forge_physics::{BodyDesc, BodyId, Contact, Shape, Transform, Velocity, World, WorldDesc};
 use forge_render::material::ModelTextures;
 use forge_render::meshlet::MeshId;
 use forge_render::{MeshletScene, MeshletSceneBuilder, MoverTransform};
@@ -56,6 +59,7 @@ mod sea;
 mod ship;
 mod slime;
 mod smoke;
+mod sounds;
 pub(crate) use city_blocks::SLIME_FLAVOURS;
 mod space;
 pub(crate) mod tank;
@@ -525,6 +529,8 @@ pub(crate) struct Group {
 pub(crate) struct LabWorld {
     world: World,
     bodies: Vec<BodyId>,
+    /// Each body's prop, in `bodies`' order: what it is drawn as and made of.
+    body_props: Vec<usize>,
     thrown: Vec<BodyId>,
     next_throw: u32,
     tick: u64,
@@ -714,11 +720,13 @@ impl LabWorld {
 
         let mut bodies = Vec::new();
         let mut groups = Vec::new();
+        let mut body_props = Vec::new();
         let mut group = |prop: usize, ids: Vec<BodyId>, bodies: &mut Vec<BodyId>| {
             groups.push(Group {
                 prop,
                 count: ids.len() as u32,
             });
+            body_props.extend(std::iter::repeat_n(prop, ids.len()));
             bodies.extend(ids);
         };
         let mut floaters = Vec::new();
@@ -1270,6 +1278,7 @@ impl LabWorld {
             Self {
                 world,
                 bodies,
+                body_props,
                 thrown,
                 next_throw: 0,
                 tick: 0,
@@ -1309,6 +1318,44 @@ impl LabWorld {
             },
             Layout { groups, statics },
         ))
+    }
+
+    /// Each body with its prop (an index in [`props`]).
+    pub(crate) fn body_props(&self) -> impl Iterator<Item = (BodyId, usize)> + '_ {
+        self.bodies
+            .iter()
+            .copied()
+            .zip(self.body_props.iter().copied())
+    }
+
+    /// The materials scene's patches, each with its row in [`MATERIAL_ROWS`].
+    pub(crate) fn patches(&self) -> &[(BodyId, usize)] {
+        self.materials
+            .as_ref()
+            .map_or(&[], materials::Yard::patches)
+    }
+
+    /// Records the contacts each tick begins, for their sounds (Phase 7); the steps are the same
+    /// either way.
+    pub(crate) fn track_contacts(&mut self, on: bool) {
+        self.world.track_contacts(on);
+    }
+
+    /// The contacts the last tick began, each with its two bodies' masses (none for a fixed
+    /// one), into `out` (cleared first).
+    pub(crate) fn contacts(&self, out: &mut Vec<(Contact, [Option<f32>; 2])>) {
+        let mut contacts = Vec::new();
+        self.world.contacts(&mut contacts);
+        let pairs: Vec<BodyId> = contacts.iter().flat_map(|c| [c.a, c.b]).collect();
+        let mut masses = Vec::new();
+        self.world.masses(&pairs, &mut masses);
+        out.clear();
+        out.extend(
+            contacts
+                .into_iter()
+                .zip(masses.as_chunks::<2>().0)
+                .map(|(c, &m)| (c, m)),
+        );
     }
 
     /// Its bodies' transforms, in the movers' order, into `out`.
@@ -2443,6 +2490,68 @@ pub(crate) struct Lab {
     slime_points: [Vec<Vec3>; 2],
     /// `--mission`: its record's file, read again when it changes (#287).
     mission_file: Option<MissionFile>,
+    /// What its contacts sound like, and those heard (Phase 7).
+    hearing: Hearing,
+}
+
+/// What the lab's contacts sound like (Phase 7's contact events to the material layer, D-007's
+/// sound layer): each body's surface by its prop's row, the materials scene's patches by theirs,
+/// the rest of the fixed world as the floor; and, once something listens, the contacts the ticks
+/// began since it last took them.
+struct Hearing {
+    surfaces: HashMap<BodyId, Option<SoundSurface>>,
+    ground: Option<SoundSurface>,
+    heard: Option<Vec<Heard>>,
+    contacts: Vec<(Contact, [Option<f32>; 2])>,
+}
+
+/// The most contacts kept between two takes: a frame's sounds take far fewer.
+const HEARD_MOST: usize = 256;
+
+impl Hearing {
+    /// Keeps the contacts `world`'s last tick began, when listening.
+    fn listen(&mut self, world: &LabWorld) {
+        let Some(heard) = &mut self.heard else {
+            return;
+        };
+        world.contacts(&mut self.contacts);
+        for &(contact, masses) in &self.contacts {
+            let body = |id: BodyId, mass: Option<f32>| ImpactBody {
+                surface: self
+                    .surfaces
+                    .get(&id)
+                    .copied()
+                    .unwrap_or(self.ground)
+                    .map(Into::into),
+                mass,
+            };
+            heard.push(Heard {
+                tick: world.now(),
+                point: contact.point,
+                speed: contact.speed,
+                ids: [contact.a, contact.b],
+                bodies: [body(contact.a, masses[0]), body(contact.b, masses[1])],
+            });
+        }
+        if heard.len() > HEARD_MOST {
+            heard.drain(..heard.len() - HEARD_MOST);
+        }
+    }
+}
+
+/// A contact a tick began, as its sound needs it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Heard {
+    /// The tick it began in.
+    pub tick: u64,
+    /// Where, metres.
+    pub point: DVec3,
+    /// How fast the bodies closed, m/s.
+    pub speed: f32,
+    /// The two bodies.
+    pub ids: [BodyId; 2],
+    /// What each sounds as and weighs.
+    pub bodies: [ImpactBody; 2],
 }
 
 /// A mission's record on disk (`--mission`, #287), watched for changes.
@@ -2621,6 +2730,12 @@ pub(crate) fn build(
         .collect();
     let bird_row = materials.of("lab-bird");
     let slime_rows = SLIME_FLAVOURS.map(|(name, _)| materials.of(name));
+    // What each prop sounds like, from its row (D-007), and the floor under everything else.
+    let prop_sounds: Vec<Option<SoundSurface>> = props
+        .iter()
+        .map(|p| materials.sound(&p.name).surface)
+        .collect();
+    let floor_sound = materials.sound("lab-floor").surface;
     materials.apply(&mut builder, &props, &ids);
     builder.set_ray_traced(!args.no_shadows);
     builder.set_origin(scene_origin(args));
@@ -2861,6 +2976,22 @@ pub(crate) fn build(
     world.transforms(&mut current);
     let mut points = Vec::new();
     world.slime_points(&mut points);
+    let mut surfaces: HashMap<BodyId, Option<SoundSurface>> = world
+        .body_props()
+        .map(|(body, prop)| (body, prop_sounds.get(prop).copied().flatten()))
+        .collect();
+    surfaces.extend(
+        world
+            .patches()
+            .iter()
+            .map(|&(body, row)| (body, MATERIAL_ROWS[row].sound.surface)),
+    );
+    let hearing = Hearing {
+        surfaces,
+        ground: floor_sound,
+        heard: None,
+        contacts: Vec::new(),
+    };
     tracing::info!(
         scene = ?kind,
         bodies = world.bodies(),
@@ -2913,6 +3044,7 @@ pub(crate) fn build(
             skinned,
             slime_points: [points.clone(), points],
             mission_file,
+            hearing,
             // The check's instance: the prop nearest a metre across (the ground would cover the
             // view).
             edited: dynamic
@@ -2934,6 +3066,26 @@ pub(crate) fn build(
 }
 
 impl Lab {
+    /// From now on the contacts each tick begins are kept for [`Lab::take_heard`]: in a run in
+    /// this process alone or a replay (a networked client's corrections step ticks again, which
+    /// would sound twice).
+    pub(crate) fn hear(&mut self) {
+        if let Mode::Local { world, .. } = &mut self.mode
+            && self.hearing.heard.is_none()
+        {
+            world.track_contacts(true);
+            self.hearing.heard = Some(Vec::new());
+        }
+    }
+
+    /// The contacts heard since the last take, oldest first, into `out` (cleared first).
+    pub(crate) fn take_heard(&mut self, out: &mut Vec<Heard>) {
+        out.clear();
+        if let Some(heard) = &mut self.hearing.heard {
+            out.append(heard);
+        }
+    }
+
     /// The world the screen shows: the local one, or the client's prediction.
     fn shown(&mut self) -> &mut LabWorld {
         match &mut self.mode {
@@ -3116,6 +3268,7 @@ impl Lab {
                 self.queued.clear();
                 forge_sim::order(&mut these);
                 world.tick(&these);
+                self.hearing.listen(world);
                 recording.commands.extend(these);
                 recording.ticks += 1;
                 if world.now().is_multiple_of(RECORD_EVERY) {

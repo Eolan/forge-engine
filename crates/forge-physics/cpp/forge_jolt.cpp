@@ -663,6 +663,25 @@ void fj_bodies_centers_of_mass(const FjWorld *world, const uint32_t *bodies, uin
     }
 }
 
+void fj_bodies_masses(const FjWorld *world, const uint32_t *bodies, uint32_t count,
+                      float *masses) {
+    const JPH::BodyLockInterfaceNoLock &locks = world->system.GetBodyLockInterfaceNoLock();
+    for (uint32_t i = 0; i < count; ++i) {
+        masses[i] = 0.0f;
+        JPH::BodyLockRead lock(locks, id_of(bodies[i]));
+        if (!lock.Succeeded()) {
+            continue;
+        }
+        const JPH::Body &b = lock.GetBody();
+        if (b.IsDynamic() && !b.IsSoftBody()) {
+            const float inverse = b.GetMotionProperties()->GetInverseMass();
+            if (inverse > 0.0f) {
+                masses[i] = 1.0f / inverse;
+            }
+        }
+    }
+}
+
 void fj_body_set_velocity(FjWorld *world, uint32_t body, const float linear[3],
                           const float angular[3]) {
     world->system.GetBodyInterface().SetLinearAndAngularVelocity(id_of(body), vec3(linear),

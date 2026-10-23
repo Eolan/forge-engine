@@ -3,18 +3,21 @@
 //! a pair of them gives. The materials lab (`physics-lab --lab materials`) and the island's
 //! walker both read them.
 
-use forge_core::material::{MaterialTags, PhysicsLayer};
+use forge_core::material::{MaterialTags, PhysicsLayer, SoundLayer, SoundSurface};
 
 /// Gravity, m/s².
 const GRAVITY: f32 = 9.81;
 
-/// A material's row as physics reads it: its name (the prop drawn with it), its physical layer
-/// and its tags.
+/// A material's row as physics and sound read it: its name (the prop drawn with it), its
+/// physical layer, its sound layer and its tags. The foley has six surfaces: sand, mud and snow
+/// borrow the nearest (grass's dull press, gravel's grains) until they have their own.
 pub struct Row {
     /// Its name: the prop drawn with it, or the ground's in the walker's title.
     pub name: &'static str,
     /// Its physical layer.
     pub physics: PhysicsLayer,
+    /// Its sound layer: its footsteps and impacts.
+    pub sound: SoundLayer,
     /// Its tags.
     pub tags: MaterialTags,
 }
@@ -32,6 +35,9 @@ pub const ROWS: [Row; 5] = [
             dynamic_friction: 0.6,
             restitution: 0.4,
         },
+        sound: SoundLayer {
+            surface: Some(SoundSurface::Stone),
+        },
         tags: MaterialTags(0),
     },
     Row {
@@ -41,6 +47,9 @@ pub const ROWS: [Row; 5] = [
             static_friction: 0.5,
             dynamic_friction: 0.4,
             restitution: 0.45,
+        },
+        sound: SoundLayer {
+            surface: Some(SoundSurface::Wood),
         },
         tags: MaterialTags::FLAMMABLE,
     },
@@ -52,6 +61,9 @@ pub const ROWS: [Row; 5] = [
             dynamic_friction: 0.5,
             restitution: 0.05,
         },
+        sound: SoundLayer {
+            surface: Some(SoundSurface::Grass),
+        },
         tags: MaterialTags::DEFORMABLE,
     },
     Row {
@@ -61,6 +73,9 @@ pub const ROWS: [Row; 5] = [
             static_friction: 0.3,
             dynamic_friction: 0.2,
             restitution: 0.1,
+        },
+        sound: SoundLayer {
+            surface: Some(SoundSurface::Gravel),
         },
         tags: MaterialTags(MaterialTags::DEFORMABLE.0 | MaterialTags::SLIPPERY.0),
     },
@@ -72,6 +87,9 @@ pub const ROWS: [Row; 5] = [
             static_friction: 0.05,
             dynamic_friction: 0.02,
             restitution: 0.6,
+        },
+        sound: SoundLayer {
+            surface: Some(SoundSurface::Stone),
         },
         tags: MaterialTags::SLIPPERY,
     },
@@ -85,10 +103,12 @@ pub const SOLE: PhysicsLayer = PhysicsLayer {
     restitution: 0.5,
 };
 
-/// A row of the island's ground (#206): its name as the walker's title shows it, then the
-/// friction (static, dynamic, each against itself), the restitution, the density and the tags.
+/// A row of the island's ground (#206): its name as the walker's title shows it, its sound, then
+/// the friction (static, dynamic, each against itself), the restitution, the density and the
+/// tags.
 const fn ground(
     name: &'static str,
+    surface: SoundSurface,
     friction: [f32; 2],
     restitution: f32,
     density: f32,
@@ -102,6 +122,9 @@ const fn ground(
             dynamic_friction: friction[1],
             restitution,
         },
+        sound: SoundLayer {
+            surface: Some(surface),
+        },
         tags,
     }
 }
@@ -114,9 +137,17 @@ const DEFORMABLE_SLIPPERY: MaterialTags =
 /// best and wet or loose ground least: the streams' stones under a film of algae, and the
 /// lakes' mud.
 pub const ISLAND_ROWS: [Row; forge_terrain::island_layer::COUNT as usize] = [
-    ground("grass", [0.5, 0.4], 0.2, 1300.0, MaterialTags(0)),
+    ground(
+        "grass",
+        SoundSurface::Grass,
+        [0.5, 0.4],
+        0.2,
+        1300.0,
+        MaterialTags(0),
+    ),
     ground(
         "dry sand",
+        SoundSurface::Grass,
         [
             ROWS[2].physics.static_friction,
             ROWS[2].physics.dynamic_friction,
@@ -127,43 +158,124 @@ pub const ISLAND_ROWS: [Row; forge_terrain::island_layer::COUNT as usize] = [
     ),
     ground(
         "wet sand",
+        SoundSurface::Grass,
         [0.6, 0.5],
         0.05,
         2000.0,
         MaterialTags::DEFORMABLE,
     ),
-    ground("granite", [0.8, 0.7], 0.5, 2700.0, MaterialTags(0)),
+    ground(
+        "granite",
+        SoundSurface::Stone,
+        [0.8, 0.7],
+        0.5,
+        2700.0,
+        MaterialTags(0),
+    ),
     ground(
         "wet stones",
+        SoundSurface::Stone,
         [0.35, 0.25],
         0.3,
         2000.0,
         MaterialTags::SLIPPERY,
     ),
-    ground("dry grass", [0.55, 0.45], 0.2, 1300.0, MaterialTags(0)),
-    ground("lush grass", [0.4, 0.3], 0.2, 1400.0, MaterialTags(0)),
+    ground(
+        "dry grass",
+        SoundSurface::Grass,
+        [0.55, 0.45],
+        0.2,
+        1300.0,
+        MaterialTags(0),
+    ),
+    ground(
+        "lush grass",
+        SoundSurface::Grass,
+        [0.4, 0.3],
+        0.2,
+        1400.0,
+        MaterialTags(0),
+    ),
     ground(
         "riverbank",
+        SoundSurface::Grass,
         [0.4, 0.3],
         0.1,
         1500.0,
         MaterialTags::DEFORMABLE,
     ),
-    ground("mud", [0.3, 0.2], 0.05, 1500.0, DEFORMABLE_SLIPPERY),
-    ground("gravel", [0.5, 0.4], 0.3, 1900.0, MaterialTags(0)),
-    ground("scree", [0.5, 0.4], 0.3, 1800.0, MaterialTags(0)),
-    ground("scrub", [0.5, 0.4], 0.2, 1300.0, MaterialTags(0)),
+    ground(
+        "mud",
+        SoundSurface::Grass,
+        [0.3, 0.2],
+        0.05,
+        1500.0,
+        DEFORMABLE_SLIPPERY,
+    ),
+    ground(
+        "gravel",
+        SoundSurface::Gravel,
+        [0.5, 0.4],
+        0.3,
+        1900.0,
+        MaterialTags(0),
+    ),
+    ground(
+        "scree",
+        SoundSurface::Gravel,
+        [0.5, 0.4],
+        0.3,
+        1800.0,
+        MaterialTags(0),
+    ),
+    ground(
+        "scrub",
+        SoundSurface::Grass,
+        [0.5, 0.4],
+        0.2,
+        1300.0,
+        MaterialTags(0),
+    ),
     ground(
         "silty sand",
+        SoundSurface::Grass,
         [0.65, 0.55],
         0.05,
         1900.0,
         MaterialTags::DEFORMABLE,
     ),
-    ground("shingle", [0.45, 0.35], 0.3, 1800.0, MaterialTags(0)),
-    ground("limestone", [0.6, 0.5], 0.5, 2600.0, MaterialTags(0)),
-    ground("karst", [0.7, 0.6], 0.5, 2600.0, MaterialTags(0)),
-    ground("grus", [0.55, 0.45], 0.1, 1700.0, MaterialTags::DEFORMABLE),
+    ground(
+        "shingle",
+        SoundSurface::Gravel,
+        [0.45, 0.35],
+        0.3,
+        1800.0,
+        MaterialTags(0),
+    ),
+    ground(
+        "limestone",
+        SoundSurface::Stone,
+        [0.6, 0.5],
+        0.5,
+        2600.0,
+        MaterialTags(0),
+    ),
+    ground(
+        "karst",
+        SoundSurface::Stone,
+        [0.7, 0.6],
+        0.5,
+        2600.0,
+        MaterialTags(0),
+    ),
+    ground(
+        "grus",
+        SoundSurface::Gravel,
+        [0.55, 0.45],
+        0.1,
+        1700.0,
+        MaterialTags::DEFORMABLE,
+    ),
 ];
 
 /// The pair friction of two rows' coefficients, as Jolt combines them.

@@ -41,6 +41,7 @@
 use std::sync::Arc;
 
 use forge_core::SplitMix64;
+use forge_core::material::SoundSurface;
 use glam::DVec3;
 
 use crate::dsp::Biquad;
@@ -95,6 +96,33 @@ impl Surface {
             Surface::Wood => &WOOD,
             Surface::Metal => &METAL,
             Surface::Water => &WATER,
+        }
+    }
+}
+
+/// The surface a material row's sound layer names (D-007).
+impl From<SoundSurface> for Surface {
+    fn from(surface: SoundSurface) -> Self {
+        match surface {
+            SoundSurface::Stone => Surface::Stone,
+            SoundSurface::Gravel => Surface::Gravel,
+            SoundSurface::Grass => Surface::Grass,
+            SoundSurface::Wood => Surface::Wood,
+            SoundSurface::Metal => Surface::Metal,
+            SoundSurface::Water => Surface::Water,
+        }
+    }
+}
+
+impl From<Surface> for SoundSurface {
+    fn from(surface: Surface) -> Self {
+        match surface {
+            Surface::Stone => SoundSurface::Stone,
+            Surface::Gravel => SoundSurface::Gravel,
+            Surface::Grass => SoundSurface::Grass,
+            Surface::Wood => SoundSurface::Wood,
+            Surface::Metal => SoundSurface::Metal,
+            Surface::Water => SoundSurface::Water,
         }
     }
 }
@@ -550,6 +578,11 @@ impl Step {
 pub struct Impact {
     /// What it hits.
     pub surface: Surface,
+    /// What the body is, when it sounds as a surface of its own. A softer body is to the
+    /// surface what a soft sole is to hard ground: the contact lasts as long as it lets it (a
+    /// crate on a steel plate presses as long as wood does, so the plate rings lower), and the
+    /// click is its own (a sack on the plate: none).
+    pub against: Option<Surface>,
     /// Where, in the world.
     pub position: DVec3,
     /// The speed along the surface's normal, m/s.
@@ -558,6 +591,47 @@ pub struct Impact {
     pub mass: f32,
     /// The frame it hits on (`None`: the next block).
     pub start: Option<u64>,
+}
+
+/// One of two bodies meeting ([`Impact::between`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ImpactBody {
+    /// What it sounds as (`None`: nothing of its own, only what it hits rings).
+    pub surface: Option<Surface>,
+    /// Its mass, kg (`None`: fixed in the world, the ground or a wall).
+    pub mass: Option<f32>,
+}
+
+impl Impact {
+    /// Two bodies meeting at `position`, closing at `speed` along their contact's normal: each
+    /// that sounds as a surface rings, struck by the other, on frame `start`. The pair's reduced
+    /// mass, `m₁m₂ / (m₁ + m₂)`, drives both (a body on fixed ground: its own mass), as it sets
+    /// the contact's force; the contact lasts as long as the softer surface lets it. None when
+    /// both are fixed.
+    pub fn between(
+        a: ImpactBody,
+        b: ImpactBody,
+        position: DVec3,
+        speed: f32,
+        start: Option<u64>,
+    ) -> impl Iterator<Item = Impact> {
+        let mass = match (a.mass, b.mass) {
+            (Some(x), Some(y)) => Some(x * y / (x + y).max(f32::MIN_POSITIVE)),
+            (Some(m), None) | (None, Some(m)) => Some(m),
+            (None, None) => None,
+        };
+        let hit = move |struck: ImpactBody, by: ImpactBody| {
+            Some(Impact {
+                surface: struck.surface?,
+                against: by.surface,
+                position,
+                speed,
+                mass: mass?,
+                start,
+            })
+        };
+        [hit(a, b), hit(b, a)].into_iter().flatten()
+    }
 }
 
 /// One contact of a sound being made.
@@ -690,13 +764,27 @@ pub fn step_sound(step: &Step, seed: u64, rate: u32) -> SampleBuffer {
 
 /// An impact's sound: mono, at `rate`, from `seed`. A heavier or faster body presses longer
 /// (`width ∝ mass^0.4 / speed^0.2`, as a Hertzian contact does) and sounds louder (the
-/// amplitude `∝ √(mass) × speed`, relative to 1 kg at 2 m/s, at most +18 dB).
+/// amplitude `∝ √(mass) × speed`, relative to 1 kg at 2 m/s, at most +18 dB). A body softer than
+/// the surface ([`Impact::against`]) presses as long as it lets the contact last and clicks in
+/// its own band.
 pub fn impact_sound(impact: &Impact, seed: u64, rate: u32) -> SampleBuffer {
     let model = impact.surface.model();
     let mut rng = SplitMix64::new(seed);
     let mass = impact.mass.max(0.01);
     let speed = impact.speed.max(0.05);
-    let width = (model.contact * mass.powf(0.4) * (2.0 / speed).powf(0.2)).clamp(0.00015, 0.04);
+    // A softer body is to the surface what a soft sole is to hard ground: the contact lasts as
+    // long as it lets it, and the click is its own (none for grass or gravel).
+    let softer = impact
+        .against
+        .map(Surface::model)
+        .filter(|by| by.contact > model.contact);
+    let contact = softer.map_or(model.contact, |by| by.contact);
+    let sole = softer.map_or(Sole::NONE, |by| Sole {
+        band: by.click.map(|band| (band.low, band.high)),
+        click: if by.click.is_some() { 1.0 } else { 0.0 },
+        thump: 1.0,
+    });
+    let width = (contact * mass.powf(0.4) * (2.0 / speed).powf(0.2)).clamp(0.00015, 0.04);
     let press = (model.press * mass.powf(0.33)).clamp(0.01, 0.4);
     let contacts = [Contact {
         at: 0.001,
@@ -706,7 +794,7 @@ pub fn impact_sound(impact: &Impact, seed: u64, rate: u32) -> SampleBuffer {
         brush: 1.0,
     }];
     let level = model.level * (mass.sqrt() * speed / 2.0).min(8.0);
-    synthesize(model, &contacts, &[], Sole::NONE, level, &mut rng, rate)
+    synthesize(model, &contacts, &[], sole, level, &mut rng, rate)
 }
 
 /// Seconds of fade at a sound's end: it ends on 0, whatever is still ringing.

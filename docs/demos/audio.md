@@ -188,6 +188,18 @@ checks what a scene sounds like without playing it on the owner's machine.
 - **The village** (city-plan): boards indoors (inside a room's region), stone outside; with
   `--pursuers`, their boots, each step muffled by the walls and floors between it and the camera
   (`Pieces::between`: brick's transmission per layer, at most three) and at most six mixed at once.
+- **The physics lab's impacts** (Phase 7, 2026-10-23): each contact a tick begins sounds as its two
+  bodies' material rows (`forge_core::material::SoundLayer`, D-007; `docs/demos/physics-lab.md`,
+  "Impacts by material").
+  - **Two bodies meeting** (`Impact::between`): each with a surface rings, both driven by the
+    pair's reduced mass, `m₁m₂ / (m₁ + m₂)` (a body on fixed ground: its own).
+  - **The softer sets the contact** (`Impact::against`), as a soft sole does on hard ground: it
+    lasts as long as the softer lets it, and the click is the softer's own, none for grass or
+    gravel. A steel plate's modes from 3 to 9 kHz, struck at 2 m/s by 2 kg: −29.7 dBFS by steel,
+    −53.3 by a wooden crate, nothing (−126) by a sack (the test
+    `two_bodies_meeting_ring_each_other`).
+  - **Rubber, cloth and flesh** have no surface of their own (`SoundLayer::surface` is `None`):
+    only what they strike rings.
 - **A cap per family of voices** (`PlayParams::family`, `AudioEngine::set_family_cap`): past it
   a new voice takes the place of its family's weakest when it beats it (priority, then loudness at
   the listener), and is refused or kept virtual otherwise; the other families keep their places.
@@ -255,10 +267,16 @@ mixer's counters and how often the device found the ring short.
 - **Steam Audio, further:** its occlusion and reflections; the ambisonic bus; SADIE II's HRTF
   (D-011's pick, a download of its own); the HRTF only for the nearest voices, the far ones panned,
   if 8 % of a core for 64 voices matters.
-- **The rest of the second part** of #267: the acoustic values and the footstep surface in the
-  world's material rows (D-007) and occlusion found by rays against the world, sources heard from
-  another room, the struck object's own modes, rolling and sliding, the wind sampled from the
-  vegetation's wind field, recordings to fit the modal banks (Ren et al.; a download).
+- **The rest of the second part** of #267: the acoustic values in the world's material rows
+  (D-007; the footstep and impact surface is there since 2026-10-23) and occlusion found by rays
+  against the world, sources heard from another room, rolling and sliding, the wind sampled from
+  the vegetation's wind field, recordings to fit the modal banks (Ren et al.; a download).
+- **Surfaces of their own for sand, mud, snow and ice:** their rows borrow grass's dull press,
+  gravel's grains and stone's ring for now.
+- **Sounds made off the game thread:** an impact or a step is synthesised where it is asked for,
+  0.1 to 1 ms each (10 to 40 ns a sample, a heavy body's ring lasting up to a second). The lab
+  makes one meeting a frame for that reason (0.37 ms a frame on average while its pile comes
+  down); a worker making them a frame ahead would lift the limit.
 - **The ambience's sources.** The beds are textures around the listener; birds and cicadas
   placed in the map's trees, and the sea along its actual quays, wait for the map's data.
 - **Better resampling** for sounds far from the mixer's rate: the Hermite interpolator aliases

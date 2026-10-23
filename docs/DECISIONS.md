@@ -226,6 +226,15 @@ walker's grip on a ground with a row is its sole's pair friction times g, so it 
 Not yet: a hit's material from Jolt itself (per-triangle materials, a body's user data read
 back), the static coefficient, combine rules per row.
 
+**Audio reads the row ✅ (Phase 7, 2026-10-23, `physics-lab`'s impacts).** A row's sound layer
+(`SoundLayer`) names the surface its footsteps and impacts are made for, one of the foley's six
+(stone, gravel, grass, wood, metal, water), or none for a material that rings of nothing (rubber,
+cloth, flesh). The contacts each tick begins sound as their two bodies' rows: each rings, the
+softer setting how long the contact lasts (`forge_audio::Impact::between`). The lab finds a body's
+row by its prop, as its drawing does. Not yet: the absorption and transmission values (the
+village's walls still name brick's in code), surfaces of their own for sand, mud, snow and ice,
+and the deformable layer's sound.
+
 ## D-008 — Lighting tiers and the ray-tracing policy ✅ (2026-09-24)
 
 Four tiers on one renderer: **T0 raster** (SDF-updated probe clipmaps, screen-space

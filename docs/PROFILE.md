@@ -2266,6 +2266,13 @@ toes' scuff and the variation added about 100 µs a step). Ten walkers, two step
 second each, cost the game thread about 0.9 % of a core; a step's sound could move to a worker
 if that ever shows in the frame.
 
+**Impacts as bodies meet** (Phase 7, `physics-lab`, 2026-10-23): an impact at 3 m/s costs 0.09 ms
+(stone, 1 kg) to 1.2 ms (gravel struck by 330 kg), 10 to 40 ns a sample, the heavy ones ringing
+longest. `drop`'s pile coming down begins some 700 meetings a second. Making four a frame cost
+0.97 ms a frame on average (1,577 sounds and 583 ms over 600 frames), more than the voices can
+hold, so the lab makes the hardest one a frame, the others waiting 4 frames at most: 643 sounds,
+223 ms, 0.37 ms a frame. Making them on a worker a frame ahead is what would lift the limit.
+
 **The ambience beds** run on the decode thread (`ambience`; ten seconds of each, the best of
 three): wind at 10 m/s 1.03 ms a second of sound, rain at 2 mm/h 0.87 ms and at 20 mm/h 1.55 ms,
 the full cicada chorus 3.19 ms, birds through the day 0.77 ms and at the dawn chorus 2.06 ms

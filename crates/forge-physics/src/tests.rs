@@ -1045,6 +1045,11 @@ fn a_dropped_box_reports_its_impact_the_same_every_run() {
         let body = world
             .add_body(&BodyDesc::dynamic(&cube, DVec3::new(0.0, 5.25, 0.0)))
             .unwrap();
+        // What its sound weighs: the fixed floor none, the 0.5 m cube of 500 kg/m³ 62.5 kg.
+        let mut masses = Vec::new();
+        world.masses(&[floor, body], &mut masses);
+        assert_eq!(masses[0], None);
+        assert!((masses[1].unwrap() - 62.5).abs() < 0.1, "{masses:?}");
         world.track_contacts(tracked);
         let (mut all, mut contacts) = (Vec::new(), Vec::new());
         for tick in 0..240 {

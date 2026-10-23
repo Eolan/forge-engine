@@ -1048,6 +1048,24 @@ impl World {
         out.extend(centers.iter().map(|&c| DVec3::from_array(c)));
     }
 
+    /// The masses of `bodies`, kg, in their order, into `out` (cleared first): `None` for a body
+    /// forces do not move (static or kinematic) and for a soft body. What an impact's sound
+    /// weighs ([`World::contacts`]).
+    pub fn masses(&self, bodies: &[BodyId], out: &mut Vec<Option<f32>>) {
+        let mut masses = vec![0.0_f32; bodies.len()];
+        // SAFETY: one float per body, written during the call.
+        unsafe {
+            ffi::fj_bodies_masses(
+                self.raw.as_ptr(),
+                bodies.as_ptr().cast(),
+                bodies.len() as u32,
+                masses.as_mut_ptr(),
+            );
+        }
+        out.clear();
+        out.extend(masses.iter().map(|&m| (m > 0.0).then_some(m)));
+    }
+
     /// Sets a body's velocity and spin.
     pub fn set_velocity(&mut self, body: BodyId, velocity: Velocity) {
         let (v, w) = (velocity.linear.to_array(), velocity.angular.to_array());

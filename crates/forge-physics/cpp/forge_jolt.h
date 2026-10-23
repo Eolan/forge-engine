@@ -248,6 +248,10 @@ void fj_bodies_push(FjWorld *world, const uint32_t *bodies, uint32_t count, cons
 // The centres of mass (three doubles each) of `count` bodies.
 void fj_bodies_centers_of_mass(const FjWorld *world, const uint32_t *bodies, uint32_t count,
                                double *centers);
+// The masses, kg, of `count` bodies: 0 for one that forces do not move (static, kinematic) and
+// for a soft body (its mass is its vertices').
+void fj_bodies_masses(const FjWorld *world, const uint32_t *bodies, uint32_t count,
+                      float *masses);
 void fj_body_set_velocity(FjWorld *world, uint32_t body, const float linear[3],
                           const float angular[3]);
 void fj_body_set_transform(FjWorld *world, uint32_t body, const double position[3],

@@ -659,7 +659,9 @@ The items below are the phase's original outline; the plan above orders them.
    ground and foot-down events ✅ (#167, `--lab course`).
 2. Motion matching for the player; powered ragdolls tracking poses; hit reactions;
    contact events to the material layer (the contacts begun in a step, with where and how fast ✅,
-   2026-10-23, `World::contacts`; their sounds and marks by material next).
+   2026-10-23, `World::contacts`; their sounds by material ✅ the same day: the material record's
+   sound layer, both bodies ringing with the softer setting the contact, `physics-lab`'s impacts;
+   their marks next).
 3. Generated creatures: gait synthesis for procedurally generated bodies.
    **Demo:** `rough-ground` — a biped and a generated hexapod cross rough terrain, get
    shoved by a physics object and recover; footprints in snow.

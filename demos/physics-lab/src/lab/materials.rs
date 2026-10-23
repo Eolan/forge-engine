@@ -267,6 +267,11 @@ impl Yard {
             .map(|&(_, k)| &ROWS[k])
     }
 
+    /// The patches and ramps, each with its row in [`ROWS`].
+    pub(crate) fn patches(&self) -> &[(BodyId, usize)] {
+        &self.grounds
+    }
+
     /// The walk the autopilot asks at the walker's position `z`: along +z at the pace until it
     /// stands on the ice, then none.
     pub(crate) fn walk(&self, z: f64) -> [f32; 2] {

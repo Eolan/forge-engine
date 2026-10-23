@@ -12,7 +12,7 @@ use forge_render::{LiquidLook, LiquidSolver, LiquidStep, MeshletScene, SplashSou
 use glam::Vec3;
 use winit::keyboard::KeyCode;
 
-use super::{ArmPose, Lab, LabScene, models, room, tank, yard};
+use super::{ArmPose, Lab, LabScene, models, room, sounds, tank, yard};
 use city_blocks::scenario::{Backdrop, LiquidSetup, Look, PoolView, Running, Scenario, Water};
 use city_blocks::{Args, Cooked};
 
@@ -608,6 +608,8 @@ impl Scenario for LabScenario {
                 cells,
                 flying: [0.0; 4],
                 pulling: 0.5,
+                impacts: None,
+                heard: Vec::new(),
             }),
         ))
     }
@@ -761,6 +763,10 @@ struct LabRunning {
         forge_render::CellStreamer,
         std::sync::Arc<forge_gpu::Device>,
     )>,
+    /// Its impacts' sounds, once the app plays sound (Phase 7), and the contacts heard this
+    /// frame.
+    impacts: Option<sounds::Impacts>,
+    heard: Vec<super::Heard>,
 }
 
 /// The frames at which #338's check adds its instance, moves it, then removes it; with
@@ -945,6 +951,16 @@ impl Running for LabRunning {
 
     fn networked(&self) -> bool {
         self.flags.net.is_some()
+    }
+
+    fn sounds(&mut self, sound: &mut forge_app::sound::Sound, _listener: Vec3) {
+        // The contacts are kept from the first frame that has sound to play them.
+        let impacts = self.impacts.get_or_insert_with(|| {
+            self.lab.hear();
+            sounds::Impacts::new(sound)
+        });
+        self.lab.take_heard(&mut self.heard);
+        impacts.play(sound, &self.heard);
     }
 
     fn follow(&mut self, camera: &mut FlyCamera) {

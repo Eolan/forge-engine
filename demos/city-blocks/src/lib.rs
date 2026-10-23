@@ -5031,10 +5031,29 @@ impl CityMaterials {
             };
             let id = table.add(Material {
                 physics: row.physics,
+                sound: row.sound,
                 tags: row.tags,
                 ..Material::new(row.name, look)
             });
             by_prop.insert(row.name, id);
+        }
+        // What the rows sound like (D-007's audio layer, the foley's six surfaces): the rest
+        // keep rock's. Rubber rings of nothing: only what it strikes does. The soft ground
+        // borrows the nearest, as the traction rows do.
+        use forge_core::material::SoundSurface;
+        for (rows, surface) in [
+            (&[crate_wood, deck_wood, bark][..], Some(SoundSurface::Wood)),
+            (
+                &[metal, red_paint, yellow_paint, steel][..],
+                Some(SoundSurface::Metal),
+            ),
+            (&[grass, damp_sand, mud][..], Some(SoundSurface::Grass)),
+            (&[snow][..], Some(SoundSurface::Gravel)),
+            (&[rubber][..], None),
+        ] {
+            for &row in rows {
+                table.get_mut(row).sound.surface = surface;
+            }
         }
         Ok(Self {
             table,
@@ -5042,6 +5061,11 @@ impl CityMaterials {
             by_prop,
             sets,
         })
+    }
+
+    /// What `prop`'s row sounds like (D-007): its footsteps and impacts.
+    pub fn sound(&self, prop: &str) -> forge_core::material::SoundLayer {
+        self.table.get(self.of(prop)).sound
     }
 
     /// The ground in layers (issue #42): uploads `layers` (`texels` a side over `size` metres,
