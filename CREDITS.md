@@ -565,6 +565,12 @@ soft edges, their pixel-wide minimum, their reactive mask and their hash:
   against the client's last acknowledged snapshot; Mark Frohnmayer and Tim Gift, "The TRIBES
   Engine Networking Model", 1999: scoped, prioritised partial updates (`forge_net::snapshot`,
   `forge_net::replicate`, #268).
+- **Lag compensation.** Yahn W. Bernier, "Latency Compensating Methods in Client/Server In-game
+  Protocol Design and Optimization", GDC 2001: the server keeps its recent hit shapes and tests
+  a shot against them as its shooter saw them (`forge_sim::rewind`, #268), and the client draws
+  the others a fixed delay behind, between the two states about that moment; Glenn Fiedler,
+  "Snapshot Interpolation", Gaffer On Games, 2014: the playout delay that covers the snapshots'
+  gaps and losses (`forge_net::interpolate`).
 - **Networked physics.** Glenn Fiedler, "Introduction to Networked Physics" and the series
   after it, Gaffer On Games, 2014–2015: the link conditioner and the commands sent again until
   acknowledged (#137).

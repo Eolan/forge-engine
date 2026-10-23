@@ -176,10 +176,41 @@ against the world as its shooter saw it (server-side rewind, Bernier 2001).
   An old view is clamped. The capsule's ray is checked on its side, its ends, past it, past the
   reach and from inside.
 
+### The client's picture and the moment a shot carries (2026-10-23)
+
+`forge_net::interpolate`: what the client draws, and so what its shots claim.
+- **`Interpolator`:** each entity's recent states by the server tick they were sent at, taken
+  from the receiver after each packet it applied. An entity is drawn at a moment between its two
+  states about it, or at its first or last outside them, never carried past what was sent. One
+  the receiver no longer holds is forgotten.
+- **`PlayoutClock`:** the moment to draw is the server's tick the freshest recent snapshot implies
+  (its tick minus the local time it came, the largest over the last 30), minus a fixed delay. The
+  delay covers the gaps between a near person's states (7 ticks, 117 ms, in the test: three
+  snapshot intervals at 30 Hz and one tick of jitter).
+- **A shot carries that `Moment`**, a tick and a fraction, which the server takes as its rewind's
+  `View`.
+- **Patents:** the delay is the client's own and never set from how its packets arrive. The
+  offset follows the freshest arrival, which is clock synchronisation, not a measure of the
+  timing's variance that Amazon's two patents claim (§9).
+
+**End to end** (`tests/lag_compensation.rs`, on a virtual clock):
+- **The setup:** 400 people in a 120 m square, replicated at 30 Hz over the bad link both ways
+  (50 ms, 10 ms of jitter, 5 % lost). From 2 s in, every 6 ticks the client shoots at the chest
+  of the nearest person it draws 5–30 m away, the shots over a bad link of their own. The server
+  tests each as it arrives against its hit history (60 ticks of capsules) at the shot's moment.
+- **The result:** of 177 shots that arrived, 176 meet the person the client saw first along the
+  ray. Their distance is off from the client's by 1.7 mm at the median and 5.0 mm at most (the
+  1 cm quantisation and the interpolation). The one miss grazed a nearer person: the ray passes
+  0.3025 m from that person's axis, outside the 0.30 m radius by 2.5 mm.
+- **Without the rewind,** at the server's present tick, 129 of the 177 meet that person: the
+  people have moved on since the moment the client drew, about 0.2 s before (the 117 ms delay
+  and the two 50 ms links): a walker at 1.4 m/s by some 0.3 m.
+- **Deterministic:** two runs give the same shots and the same errors.
+
 ## Next
 
 - Authority handoff between workers (the rest of step 2); lag compensation in a scene (a shot in
-  the lab's `--net`, its view from the client's interpolation), replays (step 3), and the
+  the lab's `--net`, the client's `Interpolator` drawing what it aims at), replays (step 3), and the
   `hundred-bots` demo on the server PC.
 - The population of #250 as the replicated world: its near tiers' records in place of the crowd.
 - A handle for the simulation's thread (the engine's network thread runs the tokio runtime;

@@ -25,6 +25,8 @@
 //!   [`SnapshotReceiver`];
 //! - [`interest`] and [`replicate`]: the server's [`Replicator`], interest by cells and a
 //!   priority accumulator under each client's byte budget;
+//! - [`interpolate`]: the client's picture of the others, a fixed delay behind the server's clock,
+//!   and the moment a shot carries for the authority's rewind;
 //! - [`crowd`]: a stand-in crowd for the tests and the measures.
 
 #![forbid(unsafe_code)]
@@ -36,6 +38,7 @@ pub mod crowd;
 pub mod endpoint;
 pub mod fragment;
 pub mod interest;
+pub mod interpolate;
 pub mod protocol;
 pub mod quantize;
 pub mod replicate;
@@ -52,6 +55,7 @@ pub use endpoint::{
     SetupError, TransportSettings, loopback,
 };
 pub use interest::InterestGrid;
+pub use interpolate::{Interpolator, Moment, PlayoutClock};
 pub use protocol::{ALPN, PROTOCOL_VERSION, Refusal};
 pub use quantize::{EntityState, QState, Quantization};
 pub use quinn::ConnectionError;

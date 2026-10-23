@@ -21,3 +21,6 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
 ring = "0.17"
 tokio = { version = "1", features = ["rt", "time", "sync", "net", "macros"] }
+
+[dev-dependencies]
+forge-sim = { workspace = true }
