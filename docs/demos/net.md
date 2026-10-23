@@ -300,8 +300,8 @@ lockstep on the first channel (reliable, ordered).
 ## Next
 
 - The layer and its workers on separate machines (the server PC), and a worker's region split
-  and merged by load (its own patent search first); the lab's `--net` paced by `PaceClock`, its
-  corrections faded; lag compensation in a scene (a shot in
+  and merged by load (its own patent search first); the lab's `--net` corrections faded on screen;
+  lag compensation in a scene (a shot in
   the lab's `--net`, the client's `Interpolator` drawing what it aims at), replays (step 3), and the
   `hundred-bots` demo on the server PC.
 - The population of #250 as the replicated world: its near tiers' records in place of the crowd.

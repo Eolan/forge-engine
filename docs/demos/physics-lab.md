@@ -122,9 +122,11 @@ client, the second player a bot throwing at the pyramid every 2.5 s, over links 
 with 10 % of it as jitter and 2 % of the packets lost, both ways, from seeds:
 - the server owns the world and takes every player's commands at their tick; one that comes
   after its tick is taken at the next;
-- a client runs ahead of the server by the delay and two ticks, so its commands arrive in time,
+- a client starts ahead of the server by the delay and two ticks, so its commands arrive in time,
   applies its own at once, and sends every command it has not seen acknowledged in each packet,
-  so a lost packet loses none;
+  so a lost packet loses none; its clock is paced (D-010, 2026-10-23): the server measures how far
+  ahead its packets arrive and the client runs a little faster or slower to keep two ticks, give
+  or take one (the window's title shows the lead and the pace, `docs/demos/net.md`);
 - each snapshot (every 6 ticks) carries the server's state, its digest and the commands taken;
   the client compares the digest with the one it predicted for that tick. When they agree it
   does nothing; when they differ (the other player threw, a command came late) it goes back to

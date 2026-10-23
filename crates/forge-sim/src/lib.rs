@@ -378,6 +378,8 @@ pub const LEAD_WINDOW: usize = 60;
 pub struct PaceClock {
     /// The lead on arrival aimed at, ticks.
     target: i64,
+    /// The error left alone either side of the target, ticks ([`PaceClock::tolerance`]).
+    tolerance: i64,
     /// Ticks per tick of time: 1 on target.
     rate: f64,
     /// Ticks owed, a fraction.
@@ -393,14 +395,23 @@ impl PaceClock {
     pub fn new(target: i64) -> Self {
         Self {
             target,
+            tolerance: 0,
             rate: 1.0,
             owed: 0.0,
         }
     }
 
+    /// Leaves the rate at 1 while the lead is within `ticks` of the target: no hunting about it
+    /// when the measure wavers by a tick.
+    pub fn tolerance(mut self, ticks: i64) -> Self {
+        self.tolerance = ticks.max(0);
+        self
+    }
+
     /// The server's measure of the lead on arrival ([`Snapshot::leads`]): the rate from now on.
     pub fn report(&mut self, lead: i64) {
-        let error = (self.target - lead) as f64;
+        let missed = self.target - lead;
+        let error = (missed.signum() * (missed.abs() - self.tolerance).max(0)) as f64;
         self.rate = 1.0 + (error * PACE_GAIN).clamp(-PACE_LIMIT, PACE_LIMIT);
     }
 

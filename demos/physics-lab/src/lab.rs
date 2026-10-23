@@ -27,8 +27,8 @@ use forge_render::material::ModelTextures;
 use forge_render::meshlet::MeshId;
 use forge_render::{MeshletScene, MeshletSceneBuilder, MoverTransform};
 use forge_sim::{
-    Client, Codec, InputPacket, Link, LinkParams, PlayerId, Recording, Server, Simulation,
-    Snapshot, Stamped, TICK, TICK_RATE,
+    Client, Codec, InputPacket, Link, LinkParams, PaceClock, PlayerId, Recording, Server,
+    Simulation, Snapshot, Stamped, TICK, TICK_RATE,
 };
 use forge_task::TaskPool;
 use glam::{DVec3, Mat4, Quat, Vec2, Vec3};
@@ -1960,6 +1960,47 @@ struct Net {
     /// Whether the bot plays, and whether it pulls (the tug-of-war) rather than throws.
     bot_on: bool,
     bot_pulls: bool,
+    /// The client's and the bot's paced clocks (D-010, `forge_sim::PaceClock`).
+    clocks: [PaceClock; 2],
+    /// The client's lead on arrival, as the server last measured it.
+    lead: Option<i64>,
+}
+
+/// The lead on arrival the clients' clocks aim at, ticks: the two of margin they start with
+/// ([`Net::new`]), give or take one.
+const PACE_TARGET: i64 = 2;
+
+/// The bot's command for the tick it is about to run, if any: in the tug-of-war it (the right
+/// team) pulls hard and eases off in turn, every 1.5 s; elsewhere it throws at the pyramid from
+/// one of eight places round it, every 2.5 s.
+fn bot_command(bot: &mut Client<LabWorld>, pulls: bool) {
+    let tick = bot.sim.now();
+    if pulls {
+        if tick > 0 && tick.is_multiple_of(BOT_PULL_EVERY) {
+            let hard = (tick / BOT_PULL_EVERY) % 2 == 1;
+            bot.command(LabCommand::Pull {
+                strength: if hard { 1.0 } else { 0.3 },
+            });
+        }
+    } else if tick > 0 && tick.is_multiple_of(BOT_EVERY) {
+        const ROUND: [[f32; 2]; 8] = [
+            [14.0, 0.0],
+            [10.0, 10.0],
+            [0.0, 14.0],
+            [-10.0, 10.0],
+            [-14.0, 0.0],
+            [-10.0, -10.0],
+            [0.0, -14.0],
+            [10.0, -10.0],
+        ];
+        let [x, z] = ROUND[(tick / BOT_EVERY % 8) as usize];
+        let from = Vec3::new(x, 3.0, z);
+        let forward = (Vec3::new(0.0, 4.0, 0.0) - from).normalize();
+        bot.command(LabCommand::Throw {
+            from: from.to_array(),
+            forward: forward.to_array(),
+        });
+    }
 }
 
 impl Net {
@@ -1985,6 +2026,8 @@ impl Net {
             worst_correction_ms: 0.0,
             bot_on: true,
             bot_pulls: kind == LabScene::Tug,
+            clocks: std::array::from_fn(|_| PaceClock::new(PACE_TARGET).tolerance(1)),
+            lead: None,
         })
     }
 
@@ -2005,39 +2048,15 @@ impl Net {
                 link.send(now, snapshot.clone(), bytes);
             }
         }
-        // In the tug-of-war the bot (the right team) pulls hard and eases off in turn, every
-        // 1.5 s; elsewhere it throws at the pyramid from one of eight places round it, every 2.5 s.
-        let bot_tick = self.bot.sim.now();
-        if self.bot_pulls {
-            if self.bot_on && bot_tick > 0 && bot_tick.is_multiple_of(BOT_PULL_EVERY) {
-                let hard = (bot_tick / BOT_PULL_EVERY) % 2 == 1;
-                self.bot.command(LabCommand::Pull {
-                    strength: if hard { 1.0 } else { 0.3 },
-                });
-            }
-        } else if self.bot_on && bot_tick > 0 && bot_tick.is_multiple_of(BOT_EVERY) {
-            const ROUND: [[f32; 2]; 8] = [
-                [14.0, 0.0],
-                [10.0, 10.0],
-                [0.0, 14.0],
-                [-10.0, 10.0],
-                [-14.0, 0.0],
-                [-10.0, -10.0],
-                [0.0, -14.0],
-                [10.0, -10.0],
-            ];
-            let [x, z] = ROUND[(bot_tick / BOT_EVERY % 8) as usize];
-            let from = Vec3::new(x, 3.0, z);
-            let forward = (Vec3::new(0.0, 4.0, 0.0) - from).normalize();
-            self.bot.command(LabCommand::Throw {
-                from: from.to_array(),
-                forward: forward.to_array(),
-            });
-        }
         for c in mine.drain(..) {
             self.client.command(c);
         }
-        for (k, client) in [&mut self.client, &mut self.bot].into_iter().enumerate() {
+        for k in 0..2 {
+            let client = if k == 0 {
+                &mut self.client
+            } else {
+                &mut self.bot
+            };
             for snapshot in self.down[k].receive(now) {
                 let start = Instant::now();
                 let corrected = client.stats.corrected;
@@ -2047,10 +2066,23 @@ impl Net {
                     self.correction_ms.push(ms);
                     self.worst_correction_ms = self.worst_correction_ms.max(ms);
                 }
+                if let Some(&(_, lead)) = snapshot.leads.iter().find(|(p, _)| *p == client.player) {
+                    self.clocks[k].report(lead);
+                    if k == 0 {
+                        self.lead = Some(lead);
+                    }
+                }
             }
-            client.step();
-            if let Some(packet) = client.outgoing() {
-                self.up[k].send(now, packet, 64);
+            // The ticks its paced clock owes (D-010): one, mostly; two or none while it gains or
+            // gives back lead. The bot decides at each tick it runs.
+            for _ in 0..self.clocks[k].advance(1.0) {
+                if k == 1 && self.bot_on {
+                    bot_command(client, self.bot_pulls);
+                }
+                client.step();
+                if let Some(packet) = client.outgoing() {
+                    self.up[k].send(now, packet, 64);
+                }
             }
         }
     }
@@ -2061,7 +2093,7 @@ impl Net {
         let mean = self.correction_ms.iter().sum::<f64>() / n.max(1) as f64;
         self.correction_ms.clear();
         format!(
-            "net {:.0} ms, {:.0} % lost: {} snapshots, {} predicted to the bit, {} corrected ({} ticks run again; {mean:.1} ms each lately, at most {:.1})",
+            "net {:.0} ms, {:.0} % lost: {} snapshots, {} predicted to the bit, {} corrected ({} ticks run again; {mean:.1} ms each lately, at most {:.1}); lead {} ticks, pace {:.2}",
             self.delay_ms,
             NET_LOSS * 100.0,
             s.snapshots,
@@ -2069,6 +2101,8 @@ impl Net {
             s.corrected,
             s.replayed_ticks,
             self.worst_correction_ms,
+            self.lead.map_or("-".to_owned(), |l| l.to_string()),
+            self.clocks[0].rate(),
         )
     }
 }
