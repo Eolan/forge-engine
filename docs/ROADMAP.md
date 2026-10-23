@@ -646,7 +646,9 @@ The items below are the phase's original outline; the plan above orders them.
    then footsteps and impacts synthesised for six surfaces, and ambience beds (wind, rain,
    cicadas, birds, the sea, under water) the hour, the weather and the medium drive, the world
    muffled under water by a filter on its bus; Steam Audio's HRTF (feature `steam-audio`) and
-   recorded birds.
+   recorded birds. Material-driven ✅ (2026-10-23 and 24): the material record's sound layer, the
+   village's and the island's footsteps by the ground under them, the physics lab's impacts by
+   their two bodies' rows, all made on the audio engine's maker thread.
    **Demo:** `forest-to-cave` — walk from a forest into a cave in the rain; occlusion,
    reverb and material sounds change without any scripting.
 
