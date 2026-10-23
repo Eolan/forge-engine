@@ -2359,12 +2359,17 @@ impl Demo for Gallery {
                     .and_then(|r| r.habitat(self.camera.position)),
             );
             let footing = self.running.as_ref().and_then(|r| r.footing()).or_else(|| {
-                let feet = self
-                    .running
+                // A scenario's player on stone; the island's walker on its ground's row (D-007).
+                let stone = forge_audio::Surface::Stone;
+                self.running
                     .as_mut()
                     .and_then(|r| r.player())
-                    .or_else(|| self.walker.as_ref().map(|w| w.feet().as_vec3()));
-                feet.map(|f| (f, forge_audio::Surface::Stone))
+                    .map(|f| (f, stone))
+                    .or_else(|| {
+                        self.walker
+                            .as_ref()
+                            .map(|w| (w.feet().as_vec3(), w.surface().unwrap_or(stone)))
+                    })
             });
             world.update(
                 sound,

@@ -246,6 +246,15 @@ impl Walker {
         std::mem::take(&mut self.footfalls)
     }
 
+    /// What its boots land on (#318, D-007): the sound of the row of the layer under them (none
+    /// without a layer map).
+    pub(crate) fn surface(&self) -> Option<forge_audio::Surface> {
+        self.underfoot
+            .and_then(|layer| ISLAND_ROWS.get(usize::from(layer)))
+            .and_then(|row| row.sound.surface)
+            .map(Into::into)
+    }
+
     /// Its feet as the last tick left them, (x, z).
     pub(crate) fn feet_xz(&self) -> DVec2 {
         DVec2::new(self.feet[1].x, self.feet[1].z)
@@ -467,7 +476,7 @@ mod tests {
                 walker.advance(0.0, true);
             }
             let later = (walker.feet[1].x - walker.feet[0].x) / f64::from(TICK);
-            (walker.underfoot, ten, later)
+            (walker.underfoot, ten, later, walker.surface())
         };
         let mut speeds = Vec::new();
         for layer in [
@@ -475,7 +484,17 @@ mod tests {
             island_layer::GRASS,
             island_layer::LAKEBED,
         ] {
-            let (underfoot, ten, later) = speed_up(layer);
+            let (underfoot, ten, later, surface) = speed_up(layer);
+            // Its steps sound as the row (#318): rock stone, grass grass.
+            let heard = match layer {
+                island_layer::ROCK => Some(forge_audio::Surface::Stone),
+                island_layer::GRASS => Some(forge_audio::Surface::Grass),
+                _ => ISLAND_ROWS[usize::from(layer)]
+                    .sound
+                    .surface
+                    .map(Into::into),
+            };
+            assert_eq!(surface, heard);
             assert_eq!(
                 underfoot,
                 Some(layer),

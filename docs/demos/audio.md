@@ -169,8 +169,9 @@ checks what a scene sounds like without playing it on the owner's machine.
   that ended each frame, and `listen` for the camera.
 - **The galleries** (`city_blocks::world_sound`): the ambience's beds at the sun's hour (`--day`,
   `--time-of-day`; mid-afternoon otherwise), the player's footsteps every 0.75 m walked (1.1 m
-  running) on what the scene says is underfoot (`Running::footing`), and the scene's own sounds
-  (`Running::sounds`).
+  running) on what the scene says is underfoot (`Running::footing`; the island's walker on its
+  ground's row since 2026-10-24: sand and grass as grass, rock stone, gravel and scree gravel),
+  and the scene's own sounds (`Running::sounds`).
   - **The place** (#350, `Running::habitat`): how green the ground within earshot is and how far
     indoors the camera stands. The beds follow it over 1.5 s (open country when a scene gives
     none).
