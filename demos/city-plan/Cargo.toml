@@ -25,6 +25,7 @@ clap = { workspace = true }
 forge-app = { workspace = true }
 forge-audio = { workspace = true }
 forge-core = { workspace = true }
+forge-fauna = { workspace = true }
 forge-flora = { workspace = true }
 forge-geom = { workspace = true }
 forge-mission = { workspace = true }

@@ -2724,6 +2724,17 @@ with its tick.
 *On the stair, the bedroom as it is reached, the parcel in the kitchen just before it is taken,
 and back on the street.*
 
+## The village's animals (#269, 2026-10-23)
+
+```
+cargo run --release -p city-plan -- --village 600 --fauna
+```
+
+Sparrows, pigeons and swifts, cats, and dogs walked by their owners (`forge_fauna`), stepped with
+the player and the pursuers as the people they flee, drawn as blocky placeholders
+(`forge_geom::animals`). The log names a view of each species' first group. Details and numbers
+in [fauna.md](fauna.md).
+
 ## Next (#245–#247)
 
 - Squares at the radial districts' centres; the landmarks' sightlines.

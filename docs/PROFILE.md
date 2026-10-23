@@ -2265,6 +2265,17 @@ buffer each, copied bit by bit).
   the mission's end ("the village's mission ended"). The app's CPU zones are its own, so it has
   no F1 zone yet.
 
+## `forge-fauna` in the village — its animals stepped and drawn (#269, 2026-10-23)
+
+- **What was measured:** `city-plan --village 600 --fauna`, the green at 07:48, 1600 × 900, DLAA, 600
+  frames, two runs each way.
+- **Result:** the frame 5.43 → 5.64 ms on average (GPU 5.45 → 5.69 ms): four more movers' slots an
+  animal (one a pose) and five an owner (one a stride), no new pass. The
+  simulation is forge-fauna's 155–291 ns an animal a step at 10 Hz: under 0.1 ms of one core a
+  frame.
+- **Where it shows:** in the movers' share of the geometry passes; the steps are on the update's
+  CPU zone.
+
 ## `forge-script` — a data file read in Luau (#292, D-072, 2026-10-18)
 
 - **What was measured:** a synthetic 1 MB data file (12 264 records of four fields, two of them

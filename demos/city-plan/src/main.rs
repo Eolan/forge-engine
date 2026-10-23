@@ -61,6 +61,10 @@ struct Cli {
     /// With `--mission`: the walker walks it on its own, on the house's walk field (D-076).
     #[arg(long)]
     mission_autopilot: bool,
+    /// With `--village`: the village's animals (#269): sparrows, pigeons and swifts, cats, and
+    /// dogs walked by their owners, at the run's hour of a June day, fleeing the player.
+    #[arg(long)]
+    fauna: bool,
     /// One second in, hide every other clear pane and raise the rest by 0.4 m: the check of
     /// panes changed at run time (#325).
     #[arg(long)]
@@ -544,6 +548,11 @@ fn main() -> anyhow::Result<()> {
         }
         let scenario = if cli.mission && cli.village.is_some() {
             scenario.with_mission(&plan, &masses, cli.mission_autopilot)
+        } else {
+            scenario
+        };
+        let scenario = if cli.fauna && cli.village.is_some() {
+            scenario.with_fauna(&plan, &masses, lit_hour.unwrap_or(15.0))
         } else {
             scenario
         };

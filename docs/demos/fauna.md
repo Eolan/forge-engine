@@ -110,11 +110,57 @@ not touch them):
 - `pasture` and `fold`: on the village's hillside, where the map wants its herd;
 - the population's walkers and the traffic as `Disturber`s each step, the player among them.
 
+## In the first map's village (`city-plan --village 600 --fauna`, 2026-10-23)
+
+The hook above, built for the village (`demos/city-plan/src/fauna.rs`), and the bodies drawn:
+- **The parts:**
+  - each house's footprint, its eaves at its mass's height, its door just outside its core's
+    front door (or 0.6 m out of its footprint's first edge);
+  - the garden walls (`CityPlan::walls`);
+  - each house's garden: its lot behind the house's back wall;
+  - the squares and greens;
+  - the street graph cut into straight pieces of 12 m at most, main roads limited to 30 km/h and
+    the lanes the people's;
+  - the street and garden trees and the forest's plants within about 55 m of the houses.
+- **No water or pasture yet:** the gulls, the mullet and the goats stay out until the shore
+  comes as outlines and the map has a hillside.
+  - The village keeps 6 flocks of sparrows, 2 of pigeons, 3 parties of swifts, 10 cats and
+    8 dogs with their owners: 145 to 170 animals by seed.
+  - Their day follows the scene's sun, up from 6:00 to 18:00 (`hour_of_day`). They start
+    40 game minutes before the run's hour (`WARM_UP`): a cat stays in 20 to 60 minutes at the
+    start, and a run that began with them showed none.
+- **Stepped** at the fauna's 10 Hz in the scene's update, drawn between their last two steps.
+  The player and the pursuers are the people they flee, their velocities from where they stood
+  the frame before.
+- **The bodies** (`forge_geom::animals`), blocky placeholders like the people's figures, at each
+  species' length:
+  - a bird folded (perched, hopping) or with its wings up, level or down, beating at 6 to 12 Hz
+    in flight;
+  - a cat or a dog in three strides by the distance it walked, or lying when it rests;
+  - the dogs' owners in the crowd's walking figures;
+  - three cats' coats and two dogs'.
+- **Drawn as movers:** a block of slots per species, coat and pose. Each animal keeps its slot
+  in every block, so its motion vectors hold while it keeps a pose, and a slot is still on the
+  frame its animal changes pose.
+- **The log names a view of each species' first group out of doors** ("the village's
+  feral-pigeon: --view=…").
+
+**Numbers** (600 m, 1600 × 900, DLAA, the green at 07:48, two runs each way):
+- the frame 5.43 → 5.64 ms on average (GPU 5.45 → 5.69 ms);
+- the simulation under 0.1 ms of one core a frame (forge-fauna's 155–291 ns an animal a step).
+
+**Test:** `the_village_animals_keep_out_of_its_walls` runs the village's animals 20 minutes from
+18:00 after their warm-up. No flyer ends a step in a wall, a roof or the ground; none on foot
+stands in a house; all stay on the plan; the same seed gives the same digest.
+
+![The village's animals](images/fauna-village.png)
+
+*At 07:48: a dog walked by its owner across the square, and pigeons along a house's eave.*
+
 ## Next
 
-- The hook above, by the coordinating session; the city's own animals (more pigeons and gulls,
-  fewer goats).
-- The renderer's session: the bodies and their animation from `pos`, `vel` and `mode` (a perched,
-  hopping, flying, swimming or walking animal), the swifts' and pigeons' flocks as instanced birds.
+- The village's water and hillside (the shore as outlines, a pasture), then the gulls, mullet and
+  goats; the city's own animals (more pigeons and gulls, fewer goats).
+- Bodies past the placeholders: modelled, skinned and animated, flapping and gliding by speed.
 - Later: seasons (the swifts leave in August), weather (birds shelter in rain), a city's towers
   (a navigation volume for birds), the population's own dogs and cats.

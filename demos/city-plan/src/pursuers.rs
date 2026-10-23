@@ -21,7 +21,7 @@ const CATCH_UP: u32 = 4;
 pub const STRIDES: [f32; 5] = [0.3, 0.0, -0.3, 0.15, -0.15];
 /// A gait cycle of 1.4 m in eight poses, as `STRIDES` (the crowd's): the left stride, half,
 /// passing, half, the right stride, half, passing, half.
-const GAIT: [usize; 8] = [0, 3, 1, 4, 2, 4, 1, 3];
+pub(crate) const GAIT: [usize; 8] = [0, 3, 1, 4, 2, 4, 1, 3];
 
 /// The pursuers and the house they go for.
 pub struct Pursuers {

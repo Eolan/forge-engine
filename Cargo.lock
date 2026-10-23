@@ -515,6 +515,7 @@ dependencies = [
  "forge-app",
  "forge-audio",
  "forge-core",
+ "forge-fauna",
  "forge-flora",
  "forge-geom",
  "forge-mission",

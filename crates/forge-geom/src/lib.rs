@@ -3,6 +3,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod animals;
 pub mod cache;
 pub mod check;
 pub mod city;

@@ -47,6 +47,7 @@ use glam::{DVec2, Mat4, Vec3};
 use winit::keyboard::KeyCode;
 
 mod crowd;
+mod fauna;
 mod mission;
 mod pursuers;
 mod residents;
@@ -582,6 +583,8 @@ pub struct PlanScenario {
     pursuers: Option<pursuers::Pursuers>,
     /// The village's test mission (`--mission`, #287) and whether its autopilot walks it.
     mission: Option<(mission::VillageMission, bool)>,
+    /// The village's animals (`--fauna`, #269).
+    fauna: Option<fauna::FaunaRun>,
     /// The automated taxis (D-061).
     taxis: Option<taxis::Taxis>,
     size: f64,
@@ -2183,6 +2186,7 @@ impl PlanScenario {
             crowd: None,
             pursuers: None,
             mission: None,
+            fauna: None,
             taxis: taxis::Taxis::new(plan, masses, &holds, 8.0, 3600.0),
             size,
             camera,
@@ -2320,6 +2324,32 @@ impl PlanScenario {
                 0
             }
         );
+        self
+    }
+
+    /// The village's animals (#269's fauna, `--fauna`): its sparrows, pigeons and swifts, cats,
+    /// and dogs walked by their owners, from `hour` (0 to 24) of a June day, stepped with the
+    /// player and the pursuers as people they flee. The log counts them.
+    pub fn with_fauna(mut self, plan: &CityPlan, masses: &[Mass], hour: f64) -> Self {
+        let structures = structure::structures(plan, masses);
+        let half = self.size * 0.5;
+        let on_plan = |p: Vec3| DVec2::new(f64::from(p.x) + half, f64::from(p.z) + half);
+        let trees: Vec<(DVec2, f64, f64)> =
+            self.trees
+                .iter()
+                .map(|&(at, scale, ..)| {
+                    (
+                        on_plan(at),
+                        f64::from(scale.y) * 10.0,
+                        f64::from(scale.x) * 4.2,
+                    )
+                })
+                .chain(self.flora.iter().map(|&(at, height, crown, ..)| {
+                    (on_plan(at), f64::from(height), f64::from(crown))
+                }))
+                .collect();
+        let parts = fauna::parts(plan, masses, &structures, &trees);
+        self.fauna = Some(fauna::FaunaRun::new(parts, hour, 1));
         self
     }
 
@@ -6961,6 +6991,29 @@ impl Scenario for PlanScenario {
             );
         }
         let parcel_row = self.mission.is_some().then(|| materials.of("plan-parcel"));
+        // The animals' coats (`--fauna`, #269): a group a species and coat, its fur and its
+        // dark parts.
+        let fauna_layout = self.fauna.as_ref().map(fauna::FaunaRun::layout);
+        let mut fauna_rows = Vec::new();
+        if let (Some(run), Some(layout)) = (&self.fauna, &fauna_layout) {
+            for &(s, c, k, _) in &layout.blocks {
+                let sp = &run.species()[s];
+                let Some((_, coats)) = fauna::body(sp).filter(|_| k == 0) else {
+                    continue;
+                };
+                let (coat, dark) = coats[c];
+                // A name for the run (the materials key their groups by static names).
+                let group: &'static str = format!("plan-fauna-{}-{c}", sp.id).leak();
+                materials.add_rows(
+                    group,
+                    vec![
+                        (format!("{group} coat"), colour(coat, 10.0, 0.04)),
+                        (format!("{group} dark"), colour(dark, 20.0, 0.05)),
+                    ],
+                );
+                fauna_rows.push(((s, c), materials.of(group)));
+            }
+        }
         let lamp_row = materials.of("plan-lamp");
         let ground_row = materials.of("plan-ground");
         let mass_row = materials.of("plan-mass");
@@ -7359,6 +7412,29 @@ impl Scenario for PlanScenario {
             builder.set_mesh_material(parcel, row);
             tram_movers.push((parcel, 1));
         }
+        // The animals (`--fauna`, #269), after it: a block of slots a species, coat and pose,
+        // then the dogs' owners, a block a stride.
+        if let (Some(run), Some(layout)) = (&self.fauna, &fauna_layout) {
+            for &(s, c, k, n) in &layout.blocks {
+                let Some((b, _)) = fauna::body(&run.species()[s]) else {
+                    continue;
+                };
+                let mesh = builder.add_mesh(&MeshletMesh::build(&fauna::mesh(b, k)));
+                if let Some(&(_, row)) = fauna_rows.iter().find(|(key, _)| *key == (s, c)) {
+                    builder.set_mesh_material(mesh, row);
+                }
+                tram_movers.push((mesh, n));
+            }
+            if layout.owners > 0 {
+                for stride in pursuers::STRIDES {
+                    let figure = builder.add_mesh(&MeshletMesh::build(
+                        &forge_geom::figures::walker(1.72, stride),
+                    ));
+                    builder.set_mesh_material(figure, people_rows[2 % people_rows.len()]);
+                    tram_movers.push((figure, layout.owners));
+                }
+            }
+        }
         laps.mark("movers");
         // The kit buildings' insides, a mesh a tile cooked apart from the masses (#273), last
         // among the static instances so every other keeps its id (each tree's tone is hashed
@@ -7462,6 +7538,11 @@ impl Scenario for PlanScenario {
                 crowd: self.crowd.take(),
                 taxis: self.taxis.take(),
                 pursuers: self.pursuers.take(),
+                fauna: self
+                    .fauna
+                    .take()
+                    .zip(fauna_layout)
+                    .map(|(run, layout)| (run, layout, fauna::Drawn::default())),
                 mission: self.mission.take().and_then(|(m, autopilot)| {
                     mission::MissionRun::new(m, autopilot)
                         .inspect_err(|e| tracing::warn!("the village's mission: {e}"))
@@ -7526,6 +7607,9 @@ struct PlanRunning {
     pursuers: Option<pursuers::Pursuers>,
     /// The village's test mission (`--mission`, #287).
     mission: Option<mission::MissionRun>,
+    /// The village's animals (`--fauna`, #269), their movers' layout and what their drawing
+    /// keeps.
+    fauna: Option<(fauna::FaunaRun, fauna::Layout, fauna::Drawn)>,
     /// Their footsteps (#318), once the app has a device.
     steps: Option<sounds::Steps>,
     /// The automated taxis.
@@ -7859,6 +7943,17 @@ impl Running for PlanRunning {
         if let Some(p) = &mut self.pursuers {
             p.advance(f64::from(step));
         }
+        // The animals (#269), the player and the pursuers the people they may flee.
+        if let Some((run, ..)) = &mut self.fauna {
+            let people: Vec<Vec3> = self
+                .walker
+                .as_ref()
+                .map(walk::Walker::feet)
+                .into_iter()
+                .chain(self.pursuers.iter().flat_map(|p| p.feet().to_vec()))
+                .collect();
+            run.advance(f64::from(step), &people);
+        }
         None
     }
 
@@ -7919,6 +8014,7 @@ impl Running for PlanRunning {
             && self.taxis.is_none()
             && self.pursuers.is_none()
             && self.mission.is_none()
+            && self.fauna.is_none()
         {
             // The pool's movers are committed without others.
             if self.promote_test.is_some() {
@@ -8080,6 +8176,15 @@ impl Running for PlanRunning {
             still.push(true);
             let at = m.parcel().unwrap_or(Vec3::new(0.0, -1000.0, 0.0) + origin);
             transforms.push(place((at, 0.0)));
+        }
+        // Then the animals (#269), in their blocks.
+        if let Some((run, layout, drawn)) = &mut self.fauna {
+            still.resize(transforms.len(), false);
+            let away = Vec3::new(0.0, -1000.0, 0.0) + origin;
+            for (at, yaw, changed) in run.poses(layout, drawn, self.clock, away) {
+                still.push(changed);
+                transforms.push(place((at, yaw)));
+            }
         }
         scene.set_movers_still(&transforms, |k| still.get(k).copied().unwrap_or(false));
     }
@@ -8716,6 +8821,7 @@ fn street_lamps_on(hour: f64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use forge_fauna::Mode;
     use forge_procgen::city::{example, plan};
 
     #[test]
@@ -9433,6 +9539,57 @@ mod tests {
         assert!(shut == 8 && climbed * 4 >= shut * 3, "{climbed} of {shut}");
     }
 
+    /// The village's animals (#269's fauna on the first map): the village's plan given as the
+    /// fauna's parts, twenty minutes of an evening from 18:00 (the swifts' parties, the dogs'
+    /// walks): no flyer ends a step in a wall, a roof or the ground, none on foot stands in a
+    /// house, all stay on the plan, and the same seed gives the same animals.
+    #[test]
+    fn the_village_animals_keep_out_of_its_walls() {
+        let size = 600.0;
+        let site = example::site(size, 10.0);
+        let v = forge_procgen::city::village::village(
+            &site,
+            &forge_procgen::city::village::params(size),
+            1,
+        );
+        let structures = structure::structures(&v.plan, &v.masses);
+        let trees: Vec<(DVec2, f64, f64)> = forge_procgen::city::trees::trees(&site, &v.plan, 5)
+            .iter()
+            .map(|t| (t.pos, t.height, t.crown))
+            .collect();
+        let run = || {
+            let parts = fauna::parts(&v.plan, &v.masses, &structures, &trees);
+            let mut r = fauna::FaunaRun::new(parts, 18.0, 7);
+            for _ in 0..20 * 60 * 10 {
+                r.advance(0.1, &[]);
+            }
+            let f = r.fauna();
+            let indoors = (0..f.len())
+                .filter(|&i| matches!(f.mode[i], Mode::Ground | Mode::Walk | Mode::Rest))
+                .filter(|&i| f.pos[i].z < 0.5 && f.plan.building_at(f.pos[i].truncate()).is_some())
+                .count();
+            let off = f.pos.iter().filter(|p| {
+                !(0.0..=size as f32).contains(&p.x) || !(0.0..=size as f32).contains(&p.y)
+            });
+            println!(
+                "{} animals in {} groups, {} sites; contacts {}, on foot in a house {indoors}, \
+                 off the plan {}; digest {:016x}",
+                f.len(),
+                f.groups.len(),
+                f.plan.sites.len(),
+                f.contacts,
+                off.clone().count(),
+                f.digest()
+            );
+            assert!(f.len() > 50, "{} animals", f.len());
+            assert_eq!(f.contacts, 0, "{:?}", f.contacts_by);
+            assert_eq!(indoors, 0);
+            assert_eq!(off.count(), 0);
+            f.digest()
+        };
+        assert_eq!(run(), run());
+    }
+
     /// The village's test mission (#287's proof on the first map) is won on its autopilot: the
     /// walker against the house's walls and insides up to the bedroom, to the parcel in the
     /// kitchen and back out to the street, the same ticks and state twice.
@@ -9530,15 +9687,6 @@ mod tests {
                 }
             }
             let got_in = pursuers.feet().iter().filter(|&&p| is_in(p)).count();
-            eprintln!(
-                "DEBUG hall {hall:?} inside {}; feet {:?}",
-                inside.iter().filter(|&&b| b).count(),
-                pursuers
-                    .feet()
-                    .iter()
-                    .map(|p| (p, is_in(*p)))
-                    .collect::<Vec<_>>()
-            );
             println!(
                 "lot {}, doors {}: {got_in} of 4 in, {} through windows, least gap {least:.3} m",
                 v.masses[i].lot,
