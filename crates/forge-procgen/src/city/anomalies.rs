@@ -950,13 +950,12 @@ mod tests {
         ];
         // The other sizes' own, where they had more when they came in (#308: at 700 to 900 m,
         // 2026-10-22, after the stairs, the rows' corners, the backs, the walls' corners and the
-        // hedges' sides and the rows' ridges: 77 down to 11).
-        let since: [(f64, Kind, usize); 8] = [
-            (700.0, Kind::UnlitRoom, 2),
+        // hedges' sides and the rows' ridges: 77 down to 11; 2026-10-23, a storey's lit rooms
+        // packed front and back, a narrow end house's hall on its party side: 8).
+        let since: [(f64, Kind, usize); 6] = [
             (700.0, Kind::FreeWallEnd, 1),
             (800.0, Kind::RidgeStep, 2),
             (800.0, Kind::BlankStreetWall, 1),
-            (900.0, Kind::UnlitRoom, 1),
             (900.0, Kind::Sliver, 1),
             (900.0, Kind::FreeWallEnd, 1),
             (900.0, Kind::LonePartyWall, 2),
@@ -974,5 +973,29 @@ mod tests {
             }
         }
         over
+    }
+}
+
+#[cfg(test)]
+mod digests {
+    use super::*;
+    use std::hash::{Hash, Hasher};
+
+    /// A digest of each size's masses and structures (#308), to tell whether a change to the
+    /// generator kept a village as it was: run before and after,
+    /// `cargo test --release -p forge-procgen --lib village_digests -- --ignored --nocapture`.
+    /// The 600 m village, the first map's, stays the same unless the owner agrees.
+    #[test]
+    #[ignore]
+    fn village_digests() {
+        for size in [400.0, 500.0, 600.0, 700.0, 800.0, 900.0] {
+            let site = crate::city::example::site(size, 10.0);
+            let v = crate::city::village::village(&site, &crate::city::village::params(size), 1);
+            let structures = structure::structures(&v.plan, &v.masses);
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            format!("{:?}", v.masses).hash(&mut h);
+            format!("{:?}", structures).hash(&mut h);
+            println!("digest {size}: {:016x}", h.finish());
+        }
     }
 }

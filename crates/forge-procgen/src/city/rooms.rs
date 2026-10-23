@@ -400,6 +400,12 @@ fn arrange(placed: &mut [Placed]) {
     placed.sort_by(|a, b| a.y.0.total_cmp(&b.y.0).then(a.x.0.total_cmp(&b.x.0)));
 }
 
+/// How many of a storey's bands (`placed`) hold a room that wants a window: more than two, and one of
+/// them stands in the middle, lit only from a side wall if at all (#308).
+pub fn lit_bands(placed: &[Placed]) -> usize {
+    bands(placed).iter().filter(|b| b.2).count()
+}
+
 /// Whether a room does without a window: a bathroom, a store, a service room.
 fn dark(kind: RoomKind) -> bool {
     matches!(
@@ -531,7 +537,7 @@ fn rebalance(storeys: &mut [Vec<Placed>], depth: f64) {
         let night =
             |r: &Placed| dark(r.kind) || matches!(r.kind, RoomKind::Bedroom | RoomKind::Study);
         if !band.iter().all(night) {
-            stay.push((k, y0));
+            give_up(&mut storeys[k], depth, &mut stay, k, y0);
             continue;
         }
         let need = least(&band, y0);
@@ -623,12 +629,89 @@ fn rebalance(storeys: &mut [Vec<Placed>], depth: f64) {
                     arrange(&mut storeys[t]);
                 }
             } else {
-                stay.push((k, y0));
+                give_up(&mut storeys[k], depth, &mut stay, k, y0);
             }
         } else {
-            stay.push((k, y0));
+            give_up(&mut storeys[k], depth, &mut stay, k, y0);
         }
     }
+}
+
+/// Where no other storey takes a middle band's rooms (`rebalance`): storey `k`'s rooms laid again
+/// in two bands of rooms that want a window, front and back, and one of the dark ones between
+/// ([`repack`]); else the band at `y0` stays.
+fn give_up(placed: &mut Vec<Placed>, depth: f64, stay: &mut Vec<(usize, f64)>, k: usize, y0: f64) {
+    match repack(placed, depth) {
+        Some(packed) => {
+            *placed = packed;
+            arrange(placed);
+        }
+        None => stay.push((k, y0)),
+    }
+}
+
+/// A room's width at least across its band, metres (the plan's, `plan`).
+const NARROW: f64 = 2.4;
+
+/// A storey's rooms laid again in at most three bands (#308): those that want a window in two,
+/// against the front and the back (the first of them at the front, then each to the lighter
+/// side), the dark ones in one between, each band's rooms [`NARROW`] wide and the rest of the width
+/// shared by their areas, the bands as deep as their rooms need ([`relayout`]). A row house whose sides are its
+/// neighbours' has windows at its front and its back alone, and a storey of an office before two
+/// bedrooms before a bedroom with its bathroom (the 700 m village's) left the middle pair dark.
+/// `None` where a band's rooms do not fit across at [`NARROW`] each or the bands are deeper than
+/// `depth`.
+fn repack(placed: &[Placed], depth: f64) -> Option<Vec<Placed>> {
+    let x0 = placed.iter().map(|r| r.x.0).fold(f64::MAX, f64::min);
+    let x1 = placed.iter().map(|r| r.x.1).fold(f64::MIN, f64::max);
+    let lit: Vec<&Placed> = placed.iter().filter(|r| !dark(r.kind)).collect();
+    let unlit: Vec<&Placed> = placed.iter().filter(|r| dark(r.kind)).collect();
+    let (first, rest) = lit.split_first()?;
+    let (mut front, mut back) = (vec![*first], Vec::new());
+    let (mut front_area, mut back_area) = (first.area, 0.0);
+    for r in rest {
+        if back_area <= front_area {
+            back.push(*r);
+            back_area += r.area;
+        } else {
+            front.push(*r);
+            front_area += r.area;
+        }
+    }
+    let mut out = Vec::with_capacity(placed.len());
+    for (b, band) in [front, unlit, back]
+        .iter()
+        .filter(|b| !b.is_empty())
+        .enumerate()
+    {
+        // Each room [`NARROW`] wide, and the rest of the width shared by area.
+        let total: f64 = band.iter().map(|r| r.area).sum();
+        let spare = (x1 - x0) - NARROW * band.len() as f64;
+        if spare < -1e-9 {
+            return None;
+        }
+        let mut x = x0;
+        for (i, r) in band.iter().enumerate() {
+            let end = if i + 1 == band.len() {
+                x1
+            } else {
+                x + NARROW + spare * r.area / total
+            };
+            // The bands told apart by their start until `relayout` lays them over the depth.
+            out.push(Placed {
+                x: (x, end),
+                y: (b as f64, b as f64 + 1.0),
+                ..**r
+            });
+            x = end;
+        }
+    }
+    let need: f64 = bands(&out).iter().map(|b| least(&out, b.0)).sum();
+    if need > depth + 1e-9 {
+        return None;
+    }
+    relayout(&mut out, depth);
+    Some(out)
 }
 
 /// The storey `placed` with its kitchen opened into its living room, the kitchen's area the
@@ -875,6 +958,33 @@ mod tests {
                             );
                         }
                     }
+                }
+            }
+        }
+    }
+
+    /// A comfortable household in a row house of two storeys, 9 to 12 m wide and 12 m deep (the 700 m
+    /// village's house 52, #308): its upper storey of an office, two bathrooms and three bedrooms took
+    /// three bands of rooms that want a window, and two bedrooms stood in the middle, dark. Packed
+    /// again ([`repack`]), they keep to the front and the back, and every plan still tiles and keeps
+    /// its rooms' areas.
+    #[test]
+    fn a_wide_row_house_keeps_its_bedrooms_on_its_outside_walls() {
+        for people in 2..=5 {
+            for width in [9.0, 10.0, 10.85, 12.0] {
+                let p = programme(people, Means::Comfortable);
+                let plan = plan(&p, width, 12.0);
+                check(&plan, &p, 12.0);
+                if plan.storeys.len() == 1 {
+                    continue;
+                }
+                for (k, s) in plan.storeys.iter().enumerate() {
+                    assert!(
+                        lit_bands(s) <= 2,
+                        "{people} people, {width} m: storey {k} has {} lit bands: {:?}",
+                        lit_bands(s),
+                        plan.storeys
+                    );
                 }
             }
         }

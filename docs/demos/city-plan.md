@@ -712,12 +712,22 @@ anomalies down to 11 (20 → 3, 33 → 3, 24 → 5).
 - **One ridge along a row:** of two touching houses with as many storeys, more than 0.3 m apart in
   depth (a lot keeping one shallower, or the backs shrinking one), the deeper is laid again at
   the other's depth where its rooms keep their storeys and its stair's depth.
+- **Unlit rooms (2026-10-23, 11 → 8):** a storey with more than two bands of rooms that want a
+  window (an office before two bedrooms before a bedroom with its bathroom, 700 m's house 52) left
+  the middle band dark in a row house lit front and back only. Where no other storey takes it, the
+  storey is laid again: those rooms in two bands, front and back, each at least 2.4 m wide, the
+  bathrooms between (`rooms::repack`). A one-storey end house too narrow for that (900 m's house
+  26, 4 m of rooms across) lays its hall along its party wall instead, the plan turned over
+  (`structure::hall_far`): along the open side wall the hall took its light. The 400, 600 and
+  800 m villages are unchanged to the bit (`village_digests`, a digest of each size's masses and
+  structures to run before and after a change).
 
 The 600 m village changed in two places, accepted in the map check: a corner house that stopped a
 quarter metre short of its lot's corner (a walled slit) reaches it, its rooms laid again (the
 walked house: the room view now shows two chairs at the table), and two acute garden-wall
 corners are mitred. Left at the larger sizes: free wall ends at junctions with hedges, ridge
-steps where a lot keeps one house of a row shallower, and a few unlit rooms in corner houses.
+steps where a lot keeps one house of a row shallower, a sliver and two lone party walls at 900 m,
+and a blank street wall at 800 m.
 
 **One more house at 600 m** (the owner's go, 2026-10-22). A wide lot on the north-east street was
 refused its house for a shallow end of its front: its depth was measured along the whole front,

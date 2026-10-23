@@ -520,7 +520,7 @@ fn structure(
         add_door(m, &storeys, &walls, &cores, &mut openings, WallRole::Court);
     }
     if m.rooms.is_some() {
-        clear_hall(&walls, &cores, &mut openings);
+        clear_hall(m, &walls, &cores, &mut openings);
     }
     let mut cores = cores;
     cores::reindex(&mut cores, &openings);
@@ -741,6 +741,30 @@ fn fit_shutters(s: &mut Structure) {
     }
 }
 
+/// Whether a house of one storey with no stair core lays its hall along its far side wall, its plan
+/// turned over (#308): where the front's near side wall (before its first corner) faces open air,
+/// its far one a neighbour, and a storey of its plan holds more than two bands of rooms that want
+/// a window. Along the open side the hall took the side's light, and a bedroom between the front
+/// and back rooms had none; turned over, the rooms reach the open side. `walls` in the order of
+/// the footprint's edges, the front on its first.
+pub fn hall_far(m: &Mass, walls: &[Wall]) -> bool {
+    let Some(plan) = &m.rooms else {
+        return false;
+    };
+    let Some(w) = walls
+        .iter()
+        .position(|w| w.edge == 0 && w.role == WallRole::Street)
+    else {
+        return false;
+    };
+    let n = walls.len();
+    matches!(
+        walls[(w + n - 1) % n].role,
+        WallRole::Street | WallRole::Court
+    ) && walls[(w + 1) % n].role == WallRole::Party
+        && plan.storeys.iter().any(|s| super::rooms::lit_bands(s) > 2)
+}
+
 /// The street door of a house from its rooms with no stair core (one storey): in the hall its
 /// plan keeps at the start of the front (`rooms::HALL` from its first corner), in the middle of the
 /// hall between the side wall and the hall's wall, the ground openings it covers gone. Without a
@@ -753,8 +777,15 @@ fn hall_door(m: &Mass, storeys: &[Storey], walls: &[Wall], out: &mut Vec<Opening
         add_door(m, storeys, walls, &[], out, WallRole::Street);
         return;
     };
-    let side = walls[(w + walls.len() - 1) % walls.len()].thickness;
-    let along = (side + super::rooms::HALL - cores::CORE_WALL) * 0.5;
+    let n = walls.len();
+    // From the first corner, or from the far one (`hall_far`).
+    let along = if hall_far(m, walls) {
+        let side = walls[(w + 1) % n].thickness;
+        walls[w].length() - (side + super::rooms::HALL - cores::CORE_WALL) * 0.5
+    } else {
+        let side = walls[(w + n - 1) % n].thickness;
+        (side + super::rooms::HALL - cores::CORE_WALL) * 0.5
+    };
     out.retain(|o| {
         !(o.wall == w
             && o.storey == 0
@@ -778,7 +809,7 @@ fn hall_door(m: &Mass, storeys: &[Storey], walls: &[Wall], out: &mut Vec<Opening
 /// hall and the rooms, front to back): a window standing across it moves along its wall to the
 /// rooms' side, on every storey alike, or goes where its stretch has no room; from inside, the
 /// wall stood in the middle of a window. The doors stay: they open into the hall.
-fn clear_hall(walls: &[Wall], cores: &[Core], openings: &mut Vec<Opening>) {
+fn clear_hall(m: &Mass, walls: &[Wall], cores: &[Core], openings: &mut Vec<Opening>) {
     let Some(front) = walls.iter().position(|w| w.edge == 0) else {
         return;
     };
@@ -799,8 +830,18 @@ fn clear_hall(walls: &[Wall], cores: &[Core], openings: &mut Vec<Opening>) {
         None => {
             let w = &walls[front];
             let t = (w.b - w.a).normalize_or_zero();
-            let along = super::rooms::HALL - cores::CORE_WALL * 0.5;
-            (w, w.a + t * along, w.a + t * (super::rooms::HALL * 0.5))
+            let (along, middle) = if hall_far(m, walls) {
+                (
+                    w.length() - (super::rooms::HALL - cores::CORE_WALL * 0.5),
+                    w.length() - super::rooms::HALL * 0.5,
+                )
+            } else {
+                (
+                    super::rooms::HALL - cores::CORE_WALL * 0.5,
+                    super::rooms::HALL * 0.5,
+                )
+            };
+            (w, w.a + t * along, w.a + t * middle)
         }
     };
     let t = (wall.b - wall.a).normalize_or_zero();
@@ -870,10 +911,12 @@ fn garden_door(
             let f = &walls[front];
             let t = (f.b - f.a).normalize_or_zero();
             let n = DVec2::new(-t.y, t.x);
-            (
-                f,
-                f.a + t * (super::rooms::HALL * 0.5) + n * (f.thickness + 1.0),
-            )
+            let along = if hall_far(m, walls) {
+                f.length() - super::rooms::HALL * 0.5
+            } else {
+                super::rooms::HALL * 0.5
+            };
+            (f, f.a + t * along + n * (f.thickness + 1.0))
         }
     };
     let t = (wall.b - wall.a).normalize_or_zero();

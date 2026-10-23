@@ -138,7 +138,13 @@ pub fn house(m: &Mass, s: &Structure) -> Option<Interior> {
             },
         )
     };
-    let (lo, hi) = core.map_or((umin, HALL), |c| c.span);
+    // Without a core the plan's hall from the front's first corner, or from its far one where the
+    // plan is turned over (`structure::hall_far`).
+    let (lo, hi) = match core {
+        Some(c) => c.span,
+        None if structure::hall_far(m, &s.walls) => (wall.length() - HALL, umax),
+        None => (umin, HALL),
+    };
     // The hall at the start of the wall, as the plan keeps it, or at its end where the core stood
     // by the far corner: the plan's rooms then run the other way. A core in the middle of the
     // front leaves no plan to follow.
