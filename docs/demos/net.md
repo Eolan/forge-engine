@@ -154,10 +154,33 @@ carried the server, 100 clients' QUIC and 6 ms of replication a tick (0.47 ms fo
 its world, 57 µs a client), beside other sessions' builds on the same machine, so packets waited
 for it. The server PC with the clients on other machines is the real test.
 
+## Lag compensation (step 3's first piece, 2026-10-23)
+
+`forge_sim::rewind`: the authority keeps each tick's hit shapes for a window, and tests a shot
+against the world as its shooter saw it (server-side rewind, Bernier 2001).
+- **`History`:** each tick's capsules by entity id, the oldest dropped past the window (12 ticks at
+  60 Hz, 200 ms, about what shooters allow).
+- **A shot carries its `View`:** the tick and the fraction of the next at which its shooter was
+  drawing the others. The game puts it in its own command; the client knows it from its
+  interpolation.
+- **`History::ray`:** the two ticks about the view interpolated, the shot tested against their
+  capsules (`Capsule::ray`, side and ends, from inside too), the shooter left out, the nearest hit
+  taken, ties to the lower id. A view older than the window is clamped to its oldest tick, so an
+  old claimed view gains nothing past it.
+- **Patents:** searched again before building it (`docs/research/netcode.md` §9): none found on the
+  rewind. Amazon's US 10,940,388 B1 and US 11,771,984 B2 claim hit volumes or shown places set from
+  the measured variance of a client's input timing. Forge measures none: the view is the client's
+  own, and its interpolation delay is fixed.
+- **Tests:** a target running across at 6 m/s, drawn 100 ms behind by the shooter. Aimed where the
+  shooter saw it, the shot hits at the shooter's view and misses at the authority's present tick.
+  An old view is clamped. The capsule's ray is checked on its side, its ends, past it, past the
+  reach and from inside.
+
 ## Next
 
-- Authority handoff between workers (the rest of step 2), then prediction, reconciliation, lag
-  compensation and replays (step 3), and the `hundred-bots` demo on the server PC.
+- Authority handoff between workers (the rest of step 2); lag compensation in a scene (a shot in
+  the lab's `--net`, its view from the client's interpolation), replays (step 3), and the
+  `hundred-bots` demo on the server PC.
 - The population of #250 as the replicated world: its near tiers' records in place of the crowd.
 - A handle for the simulation's thread (the engine's network thread runs the tokio runtime;
   the simulation hands messages over and never waits on I/O).
