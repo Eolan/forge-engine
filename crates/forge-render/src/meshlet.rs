@@ -19,6 +19,7 @@ use forge_geom::{GpuMeshlet, MeshletMesh, PAGE_NONE, PAGE_SIZE, SkinnedMesh};
 
 use crate::cells::CellPos;
 use crate::material::{GpuMaterial, TextureSet, gpu_rows};
+use crate::opacity;
 use crate::probes::ProbeLight;
 use crate::raytrace::{self, SceneRays};
 use crate::skin::{HeightField, SceneSkins, SkinPush, SkinSource};
@@ -1343,6 +1344,8 @@ pub struct MeshletSceneBuilder {
     ray_cut_start: Vec<u32>,
     /// Meshes the rays cut to a budget of their own ([`MeshletSceneBuilder::set_ray_budget`]).
     ray_budgets: HashMap<u32, u32>,
+    /// The cut-out triangles' opacity micromaps ([`MeshletSceneBuilder::set_opacity_micromaps`]).
+    opacity_micromaps: bool,
     /// The room a dynamic scene reserves ([`MeshletSceneBuilder::reserve_dynamic`], #220).
     dynamic: Option<DynamicCapacity>,
     /// The static instances change at run time ([`MeshletSceneBuilder::allow_static_edits`],
@@ -1602,6 +1605,14 @@ impl MeshletSceneBuilder {
     /// are written. Ignored on devices without ray queries.
     pub fn set_ray_traced(&mut self, on: bool) {
         self.ray_traced = on;
+    }
+
+    /// Bakes the cut-out triangles' opacity micromaps for the rays (#333) on a static scene
+    /// whose textures the builder holds, where the device has them: the rays skip the clear parts
+    /// of leaf cards and take their solid ones without the query loop's alpha test, for the same
+    /// picture. `FORGE_OMM` overrides it: 0 off, 1 on, more the finest subdivision level.
+    pub fn set_opacity_micromaps(&mut self, on: bool) {
+        self.opacity_micromaps = on;
     }
 
     /// Cuts `meshes` for the rays as one surface (#106: a ground in tiles): at one error, the
@@ -2086,7 +2097,35 @@ impl MeshletSceneBuilder {
                 "scene",
                 format!("the rays' structures: {} meshes", cuts.len()),
             );
-            Some(SceneRays::new(device, &cuts, ms, capacity)?)
+            // The cut-out triangles' opacity micromaps (#333, `set_opacity_micromaps`), on a static
+            // scene whose textures the builder holds.
+            let omm_level = match std::env::var("FORGE_OMM")
+                .ok()
+                .and_then(|v| v.parse::<u32>().ok())
+            {
+                Some(0) => None,
+                Some(1) => Some(opacity::MAX_LEVEL),
+                Some(level) => Some(level),
+                None => self.opacity_micromaps.then_some(opacity::MAX_LEVEL),
+            };
+            let baked = match (omm_level, device.micromap_max_level(), &self.textures) {
+                (Some(level), Some(max), Some(textures)) if self.dynamic.is_none() => {
+                    let placed: Vec<(u32, u32, bool)> = self
+                        .instances
+                        .iter()
+                        .map(|i| (i.mesh, i.material, i.flags & INSTANCE_NO_PROBE_RAYS == 0))
+                        .collect();
+                    Some(opacity::bake(
+                        &cuts,
+                        &placed,
+                        &self.materials,
+                        textures,
+                        level.min(max),
+                    ))
+                }
+                _ => None,
+            };
+            Some(SceneRays::new(device, &cuts, ms, capacity, baked.as_ref())?)
         } else {
             None
         };

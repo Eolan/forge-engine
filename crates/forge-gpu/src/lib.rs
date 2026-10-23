@@ -33,7 +33,10 @@ mod streamline;
 mod swapchain;
 mod timers;
 
-pub use accel::{AccelerationStructure, BlasTriangles, DynamicBlas, DynamicTlas};
+pub use accel::{
+    AccelerationStructure, BlasOpacity, BlasTriangles, DynamicBlas, DynamicTlas, MicromapTriangle,
+    OpacityMicromap, opacity_index,
+};
 pub use ash;
 pub use ash::vk;
 pub use bindless::{

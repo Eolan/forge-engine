@@ -7030,6 +7030,9 @@ impl Scenario for PlanScenario {
         materials.apply(&mut builder, &[], &[]);
         laps.mark("materials applied");
         builder.set_ray_traced(!args.no_shadows);
+        // The leaf cards' opacity micromaps for the rays (#333): the same picture, the sun's rays
+        // 10-21 % cheaper among the trees (`FORGE_OMM=0` builds without).
+        builder.set_opacity_micromaps(true);
         builder.set_origin(scene_origin(args));
         if self.static_test.is_some() || self.promote_test.is_some() {
             builder.allow_static_edits();

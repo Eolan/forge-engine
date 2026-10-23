@@ -397,6 +397,12 @@ pub struct Args {
     /// have none).
     #[arg(long)]
     pub no_shadows: bool,
+    /// Opacity micromaps for the rays' cut-out triangles (#333) where the device has them: the
+    /// rays skip the clear parts of leaf cards and take their solid ones without the query loop's
+    /// alpha test, for the same picture (city-plan always has them). `FORGE_OMM` overrides it (0
+    /// off, 1 on).
+    #[arg(long)]
+    pub omm: bool,
     /// Light the shaded sides with space's constant fill instead of the sky's irradiance (I
     /// toggles it).
     #[arg(long)]
@@ -6773,6 +6779,7 @@ fn build_island(
     let layers = painted.layers.clone();
     let sites = &painted.sites;
     builder.set_ray_traced(!args.no_shadows);
+    builder.set_opacity_micromaps(args.omm);
     // The ground's tiles, then the sea, then the rocks (`island_props`).
     let tiles = (ISLAND_TILES * ISLAND_TILES) as usize;
     let (tile_ids, sea) = (&ids[..tiles], ids[tiles]);
@@ -7184,6 +7191,7 @@ fn build_city(
         "ground layers"
     );
     builder.set_ray_traced(!args.no_shadows);
+    builder.set_opacity_micromaps(args.omm);
     let mut materials = CityMaterials::new(&ctx.device)?;
     materials.ground(&layers, texels, terrain.size)?;
     materials.apply(&mut builder, &props, &ids);
@@ -7283,6 +7291,7 @@ fn build_gallery(ctx: &Setup, args: &Args, cooked: Cooked) -> Result<(MeshletSce
     let ids: Vec<_> = meshes.iter().map(|m| builder.add_mesh(m)).collect();
     CityMaterials::new(&ctx.device)?.apply(&mut builder, &props, &ids);
     builder.set_ray_traced(!args.no_shadows);
+    builder.set_opacity_micromaps(args.omm);
     builder.set_origin(scene_origin(args));
     for (i, (spec, mesh)) in props.iter().zip(&meshes).enumerate() {
         let id = ids[i];

@@ -318,6 +318,8 @@ cards is drawn at full detail at every distance.
 - **For Forge** [inferred]: an optional speed-up for the card geometry, by D-008's T3 ("opacity
   micromaps"). It can wait for the BLAS split's numbers and the owner's word (§9). The fallback is
   the candidate loop, so the image must be the same either way.
+- **Built** (#333, 2026-10-23): Forge's own baker, on in the village, the picture the same and the
+  sun's rays 10–21 % cheaper (D-075's "Micromaps built", `docs/PROFILE.md`).
 
 **Proxies for the rays:**
 - **Unreal** [read]:

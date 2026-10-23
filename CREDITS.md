@@ -627,6 +627,13 @@ soft edges, their pixel-wide minimum, their reactive mask and their hash:
     Masked materials' clusters are drawn by a pipeline of their own, so the others keep the
     early depth test. Their alpha is tested in the ray queries' candidate loops, as Vulkan's
     `VK_KHR_ray_query` lets an inline query stand in for an any-hit shader.
+  - **Opacity micromaps** (#333, `forge_render::opacity`): the cut-out triangles' opacity in
+    Vulkan's `VK_EXT_opacity_micromap` maps, baked by Forge on the CPU. The micro-triangles'
+    order is the Vulkan specification's reference code, `BarycentricsToSpaceFillingCurveIndex`
+    (© The Khronos Group Inc., CC-BY-4.0, appendix `VK_EXT_opacity_micromap`), ported to Rust.
+    The conservative 4-state maps for shadow rays follow NVIDIA's "Path Tracing Optimizations
+    in Indiana Jones: Opacity MicroMaps and Compaction of Dynamic BLASs" (2024). None of
+    NVIDIA's OMM SDK.
 - **Clouds.** Andrew Schneider and Nathan Vos, "The Real-time Volumetric Cloudscapes of Horizon:
   Zero Dawn", SIGGRAPH 2015 Advances in Real-Time Rendering: a layer from a weather map,
   Perlin–Worley shapes eroded by Worley noise, Beer's law with the powder term, temporal

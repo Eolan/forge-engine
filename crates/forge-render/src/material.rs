@@ -124,6 +124,101 @@ impl GpuMaterial {
         self.flags & (MATERIAL_GLAZED | MATERIAL_DRAWN_AFTER)
             == MATERIAL_GLAZED | MATERIAL_DRAWN_AFTER
     }
+
+    /// Whether the rays' query loop keeps a hit on this row wherever it keeps one on `other`: the
+    /// fields it reads are the same (`opacity_rows_match` in `meshlet.slang` compares the same,
+    /// #333). Rows that differ in their tones alone.
+    pub(crate) fn same_ray_alpha(&self, other: &GpuMaterial) -> bool {
+        self.flags == other.flags
+            && self.class_index == other.class_index
+            && self.albedo_texture == other.albedo_texture
+            && self.sampler == other.sampler
+            && self.uv_u == other.uv_u
+            && self.uv_v == other.uv_v
+            && self.alpha == other.alpha
+            && self.alpha_cutoff == other.alpha_cutoff
+    }
+
+    /// How the rays' query loop keeps a hit on this row (`ray_candidate_kept` and
+    /// `shadow_candidate_kept` in `meshlet.slang`), for the opacity micromaps (#333).
+    pub(crate) fn ray_alpha(&self) -> RayAlpha {
+        if self.jelly() || self.clear_glass() || self.flags & MATERIAL_GRATING != 0 {
+            return RayAlpha::Loop;
+        }
+        if self.flags & MATERIAL_MASKED == 0 {
+            return RayAlpha::Kept;
+        }
+        if self.albedo_texture == TEXTURE_NONE {
+            return RayAlpha::Constant(self.alpha >= self.alpha_cutoff);
+        }
+        RayAlpha::Texture {
+            texture: self.albedo_texture,
+            sampler: self.sampler,
+            uv: [self.uv_u, self.uv_v],
+            alpha: self.alpha,
+            cutoff: self.alpha_cutoff,
+        }
+    }
+}
+
+/// How the rays' query loop keeps a hit on a row ([`GpuMaterial::ray_alpha`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum RayAlpha {
+    /// Everywhere: not cut out.
+    Kept,
+    /// By rules the micromaps do not follow: jelly and clear glass, which the shadow rays pass,
+    /// and a grating's bars.
+    Loop,
+    /// Everywhere or nowhere: cut out by its factor alone (no texture), or on a mesh without
+    /// UVs.
+    Constant(bool),
+    /// Where the base colour texture's alpha (at level 0, through its sampler, at the UVs
+    /// transformed by `uv`'s rows) times `alpha` reaches `cutoff`.
+    Texture {
+        texture: u32,
+        sampler: u32,
+        uv: [[f32; 3]; 2],
+        alpha: f32,
+        cutoff: f32,
+    },
+}
+
+/// A texture's alpha at level 0, kept on the CPU for the rays' opacity micromaps (#333).
+pub(crate) struct AlphaPlane {
+    pub width: u32,
+    pub height: u32,
+    /// A byte a texel, rows top to bottom.
+    pub texels: Vec<u8>,
+}
+
+/// What the CPU knows of a texture's alpha ([`TextureSet::alpha`]).
+#[derive(Clone)]
+pub(crate) enum TextureAlpha {
+    /// Nothing: uploaded from elsewhere, or not a colour.
+    Unknown,
+    /// 1 everywhere.
+    Opaque,
+    /// Its texels.
+    Plane(Arc<AlphaPlane>),
+}
+
+/// The alpha of RGBA8 `data`'s level 0.
+fn texture_alpha(data: &TextureData) -> TextureAlpha {
+    let Some(level) = data.levels.first() else {
+        return TextureAlpha::Unknown;
+    };
+    if level.len() != data.size as usize * data.height as usize * 4 {
+        return TextureAlpha::Unknown;
+    }
+    let (texels, _) = level.as_chunks::<4>();
+    if texels.iter().all(|t| t[3] == 255) {
+        return TextureAlpha::Opaque;
+    }
+    TextureAlpha::Plane(Arc::new(AlphaPlane {
+        width: data.size,
+        height: data.height,
+        texels: texels.iter().map(|t| t[3]).collect(),
+    }))
 }
 
 /// [`GpuMaterial`] flag: the textures are hex-tiled and offset per instance
@@ -190,6 +285,8 @@ pub struct TextureSet {
     device: Arc<Device>,
     textures: Vec<(Image, SampledImageId)>,
     bytes: u64,
+    /// Per texture, what the CPU knows of its alpha (the rays' opacity micromaps, #333).
+    alpha: Vec<TextureAlpha>,
 }
 
 impl TextureSet {
@@ -199,7 +296,16 @@ impl TextureSet {
             device: device.clone(),
             textures: Vec::new(),
             bytes: 0,
+            alpha: Vec::new(),
         }
+    }
+
+    /// What the CPU knows of the alpha of the texture of bindless index `sampled`.
+    pub(crate) fn alpha(&self, sampled: u32) -> TextureAlpha {
+        self.textures
+            .iter()
+            .position(|t| t.1.0 == sampled)
+            .map_or(TextureAlpha::Unknown, |i| self.alpha[i].clone())
     }
 
     /// Uploads `data` (RGBA8, every level) and returns its id for a material row.
@@ -226,6 +332,7 @@ impl TextureSet {
             .register_sampled_image(image.view(), vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
         self.bytes += levels.iter().map(|l| l.len() as u64).sum::<u64>();
         self.textures.push((image, sampled));
+        self.alpha.push(texture_alpha(data));
         Ok(TextureId(self.textures.len() as u32 - 1))
     }
 
@@ -237,6 +344,7 @@ impl TextureSet {
             .register_sampled_image(image.view(), vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
         self.bytes += bytes;
         self.textures.push((image, sampled));
+        self.alpha.push(TextureAlpha::Unknown);
         TextureId(self.textures.len() as u32 - 1)
     }
 
@@ -270,6 +378,7 @@ impl TextureSet {
             .register_sampled_image(image.view(), vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
         self.bytes += layers.len() as u64;
         self.textures.push((image, sampled));
+        self.alpha.push(TextureAlpha::Unknown);
         Ok(TextureId(self.textures.len() as u32 - 1))
     }
 

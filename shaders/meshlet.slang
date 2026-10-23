@@ -336,9 +336,12 @@ public struct RtMesh
     public uint rows;          // the rows its instances draw with: its cut's highest section and one (#265)
     public uint masked_sections;  // the sections in its structure's second geometry, not opaque, a bit each (#307)
     public uint opaque_triangles; // its first geometry's triangles: the second's triangle p is the cut's opaque_triangles + p
+    public uint opacity_material; // the instance material whose cut-out rows its opacity micromaps follow (#333), RT_NO_OPACITY without
+    public uint opacity_probes;   // 1: its maps hold no opaque cut-out micro-triangle, so the probes' rays may use them
 };
 
 static const uint RT_NO_UVS = 0xFFFFFFFFu;
+static const uint RT_NO_OPACITY = 0xFFFFFFFFu;
 
 public struct RtScene
 {
@@ -7598,11 +7601,45 @@ void tlas_instances_main(uint3 id : SV_DispatchThreadID)
                 opacity = 0x0u;
         }
     }
+    // Its structure's opacity micromaps (#333) where its cut-out rows read as those they follow,
+    // and, where the probes' rays see it, only maps with no opaque cut-out micro-triangle: they
+    // keep a quarter of a cut-out's triangles (`probe_leaf_kept`), which a micro-triangle met as
+    // opaque would skip. Any other instance turns them off, and its cut-out triangles all reach
+    // the query loop, as without them.
+    if (!vacant && tlas_push.rt_meshes != nullptr)
+    {
+        RtMesh rt = tlas_push.rt_meshes[inst.mesh];
+        bool probes = (inst.flags & INSTANCE_NO_PROBE_RAYS) == 0u;
+        if (rt.opacity_material != RT_NO_OPACITY && (!opacity_rows_match(inst, rt) || (probes && rt.opacity_probes == 0u)))
+            opacity |= 0x20u; // VK_GEOMETRY_INSTANCE_DISABLE_OPACITY_MICROMAPS_EXT
+    }
     // VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT, and the opacity.
     r[13] = (0x1u | opacity) << 24;
     uint64_t blas = vacant ? 0 : tlas_push.blas[inst.mesh];
     r[14] = uint(blas);
     r[15] = uint(blas >> 32);
+}
+
+// Whether the instance's cut-out rows read as those its mesh's opacity micromaps follow: the fields
+// the query loop's tests read the same (`GpuMaterial::same_ray_alpha`, #333).
+bool opacity_rows_match(Instance inst, RtMesh rt)
+{
+    if (inst.material == rt.opacity_material)
+        return true;
+    if (tlas_push.materials == nullptr)
+        return false;
+    for (uint s = 0; s < min(rt.rows, 32u); s++)
+    {
+        if ((rt.masked_sections & (1u << s)) == 0u)
+            continue;
+        Material a = tlas_push.materials[inst.material + s];
+        Material b = tlas_push.materials[rt.opacity_material + s];
+        if (a.flags != b.flags || a.class_index != b.class_index || a.albedo_texture != b.albedo_texture
+            || a.sampler != b.sampler || any(a.uv_u != b.uv_u) || any(a.uv_v != b.uv_v)
+            || a.alpha != b.alpha || a.alpha_cutoff != b.alpha_cutoff)
+            return false;
+    }
+    return true;
 }
 
 // The rows the instance draws with that are not opaque to the rays, a bit per section: cut-out or

@@ -7010,6 +7010,48 @@ DIR` writes the atlases as images (`forge_render::impostor`, `shaders/impostor.s
 - **Not yet:** the bright young crowns above, each age's other seeds, and the default (the
   owner's look first). Block compression is built (above, "Memory").
 
+**Micromaps built** (#333, 2026-10-23, question 4's answer), on by default in city-plan, where
+the device has them (`MeshletSceneBuilder::set_opacity_micromaps`, city-blocks' `--omm`,
+`FORGE_OMM=0` or `1` overriding; `forge_render::opacity`, `Device::build_opacity_micromap`):
+- **The extension:** `VK_EXT_opacity_micromap`, the KHR one's EXT predecessor. ash 0.38 has only
+  its names, and with the EXT enabled a ray query uses the maps without Slang declaring
+  `OpacityMicromapIdKHR`. The RTX 5070 Ti exposes both; a device without either (the RDNA 2 iGPU)
+  builds no maps, and the loop stays the fallback.
+- **Forge's own baker**, on the CPU at the scene's build:
+  - Each not-opaque triangle of a cut (#307's second geometry) is divided down to micro-triangles
+    about 2 texels on a side, at most level 9, in 32 MB in all.
+  - Each micro-triangle is transparent or opaque only where every alpha its bilinear taps can
+    read at level 0 (the box of its texels and one past) lies on one side of the cutoff, by
+    1/512. Elsewhere it is unknown, and the loop's test decides, so the picture is the same.
+  - A triangle wholly in one state takes a special index. Equal maps are stored once.
+  - A cut whose triangles all come out unknown gets no maps. Built with them anyway (the
+    houses' glass), its structure moved up to 800 px of a window in the garden view.
+  - The micro-triangles' order is the specification's reference code, ported (CREDITS.md).
+  - No NVIDIA OMM SDK code is used. Traversal is the driver's, as question 4 asked (NVIDIA's US
+    12,475,631 B2).
+- **Which instances keep them** (`tlas_instances_main`):
+  - One whose cut-out rows read as the rows the maps were baked from (`same_ray_alpha`,
+    `opacity_rows_match`: the fields the loop's tests read) keeps them. Any other turns them off
+    (`DISABLE_OPACITY_MICROMAPS`, the structure built to allow it).
+  - The probes' rays keep a quarter of a cut-out's triangles by a hash (`probe_leaf_kept`),
+    which an opaque micro-triangle would bypass. A mesh they see therefore gets maps with no
+    opaque cut-out state (the clear parts still skipped), and an instance they see turns off
+    maps that have one.
+  - The loops that force non-opaque (the jelly's and the ice's crossings, the rays leaving a
+    body) see an opaque micro-triangle as a candidate, by the specification's order: micromap,
+    then instance flags, then ray flags. A transparent one is skipped by every ray, the forced
+    opaque ones too (the dust's, the particles' and the splashes' sun rays now see through a
+    card's clear texels).
+- **Checks:**
+  - The forest, the green, the garden and the house: 0 px at frame 240.
+  - The map check's other views: within their run-to-run noise (20–81 px base against base;
+    with the maps 7–96 px, the same scattered pixels).
+  - Sponza with `FORGE_OMM=1` (its plants seen by the probes, so maps without opaque states):
+    1 px by 3 levels.
+  - Synchronization validation: silent.
+- **Measured** (`docs/PROFILE.md`): the sun's rays (`shadow/trace`) 10–21 % cheaper, the frame
+  0.05–0.13 ms faster in five views of the village.
+
 *(research: forests-and-grass.md, vegetation-materials.md, flora.md; D-013, D-016, D-029, D-036,
 D-053, D-063; issues #297, #300, #301, #302, #303)*
 

@@ -24,6 +24,7 @@ use forge_gpu::{
 };
 
 use crate::cells::CellPos;
+use crate::opacity;
 use crate::streaming::PageStore;
 
 /// Most triangles of a mesh's bottom-level structure (the terrain may take more, see
@@ -277,7 +278,16 @@ struct GpuRtMesh {
     /// The triangles of its structure's first geometry ([`Cut::opaque`]): a ray's triangle `p`
     /// in the second is the cut's `opaque_triangles + p`.
     opaque_triangles: u32,
+    /// The instance material whose cut-out rows its structure's opacity micromaps follow (#333),
+    /// [`NO_OPACITY`] without them: an instance whose rows read otherwise turns them off.
+    opacity_material: u32,
+    /// 1 when its maps hold no opaque cut-out micro-triangle, so that an instance the probes' rays
+    /// see keeps them ([`opacity::CutMaps::probes`]).
+    opacity_probes: u32,
 }
+
+/// [`GpuRtMesh::opacity_material`] of a mesh without opacity micromaps (`RT_NO_OPACITY`).
+const NO_OPACITY: u32 = u32::MAX;
 
 /// The rows a cut's instances draw with: its highest section and one.
 fn cut_rows(cut: &Cut) -> u32 {
@@ -353,6 +363,8 @@ pub(crate) fn cut_writes<'a>(
         rows: cut_rows(cut),
         masked_sections: cut.masked,
         opaque_triangles: cut.opaque,
+        opacity_material: NO_OPACITY,
+        opacity_probes: 0,
     };
     let (v, t) = (u64::from(first_vertex), u64::from(first_triangle));
     let size = std::mem::size_of::<GpuRtMesh>() as u64;
@@ -467,31 +479,82 @@ impl SceneRays {
     /// ([`Cut::dynamic`]) one refitted every frame over the hit positions. With `capacity` (a
     /// dynamic scene, #220) the tables have room for the meshes it will take, each mesh's UVs at
     /// its first vertex, and each static mesh's structure is kept by its slot, to leave with it
-    /// (a skinned one stays, #338).
+    /// (a skinned one stays, #338). `opacity`: the cut-out triangles' opacity micromaps
+    /// ([`crate::opacity`], #333).
     pub(crate) fn new(
         device: &Arc<Device>,
         cuts: &[Cut],
         ms: f64,
         capacity: Option<RayCapacity>,
+        opacity: Option<&opacity::Baked>,
     ) -> Result<Self> {
         let start = std::time::Instant::now();
+        // One micromap for every cut's maps; one map at least, for the cuts whose triangles all
+        // take special indices.
+        let micromap = match opacity {
+            Some(baked) if baked.cuts.iter().any(Option::is_some) => {
+                let (triangles, data) = if baked.triangles.is_empty() {
+                    (
+                        vec![forge_gpu::MicromapTriangle {
+                            offset: 0,
+                            level: 1,
+                        }],
+                        vec![0_u8],
+                    )
+                } else {
+                    (baked.triangles.clone(), baked.data.clone())
+                };
+                Some(device.build_opacity_micromap(&triangles, &data, "opacity micromap")?)
+            }
+            _ => None,
+        };
+        let maps = |m: usize| -> Option<&opacity::CutMaps> {
+            micromap.as_ref()?;
+            opacity?.cuts.get(m)?.as_ref()
+        };
         let statics: Vec<BlasTriangles<'_>> = cuts
             .iter()
-            .filter(|c| !c.dynamic)
-            .map(|c| BlasTriangles {
+            .enumerate()
+            .filter(|(_, c)| !c.dynamic)
+            .map(|(m, c)| BlasTriangles {
                 positions: &c.positions,
                 indices: &c.indices,
                 opaque: c.opaque,
+                opacity: maps(m).zip(micromap.as_ref()).map(|(maps, micromap)| {
+                    forge_gpu::BlasOpacity {
+                        micromap,
+                        indices: &maps.indices,
+                    }
+                }),
             })
             .collect();
         let blases = device.build_blases(&statics, "mesh BLAS")?;
+        if let (Some(baked), Some(micromap)) = (opacity, &micromap) {
+            let s = &baked.stats;
+            tracing::info!(
+                cut_out = s.triangles,
+                transparent = s.transparent,
+                opaque = s.opaque,
+                unknown = s.unknown,
+                mapped = s.mapped,
+                maps = s.maps,
+                micro = ?s.micro,
+                finest = s.level,
+                mixed = s.mixed,
+                probes = s.probes,
+                all_unknown = s.unknown_cuts,
+                kib = micromap.size() >> 10,
+                bake_ms = format_args!("{:.1}", s.ms),
+                "opacity micromaps (#333)"
+            );
+        }
         // The cuts again, for the shaders: one buffer each, the meshes one after another.
         let mut positions: Vec<f32> = Vec::new();
         let mut indices: Vec<u32> = Vec::new();
         let mut sections: Vec<u32> = Vec::new();
         let mut uvs: Vec<[f32; 2]> = Vec::new();
         let mut meshes = Vec::with_capacity(cuts.len());
-        for c in cuts {
+        for (m, c) in cuts.iter().enumerate() {
             let first_vertex = (positions.len() / 3) as u32;
             let first_uv = match (c.uvs.is_empty(), capacity) {
                 (true, _) => NO_UVS,
@@ -511,6 +574,10 @@ impl SceneRays {
                 rows: cut_rows(c),
                 masked_sections: c.masked,
                 opaque_triangles: c.opaque,
+                opacity_material: maps(m)
+                    .filter(|_| !c.dynamic)
+                    .map_or(NO_OPACITY, |maps| maps.rows),
+                opacity_probes: maps(m).is_some_and(|maps| maps.probes).into(),
             });
             uvs.extend_from_slice(&c.uvs);
             positions.extend(c.positions.iter().flatten());

@@ -935,6 +935,7 @@ impl SceneEditor {
                         positions: &cut.positions,
                         indices: &cut.indices,
                         opaque: cut.opaque,
+                        opacity: None,
                     }
                 })
                 .collect();

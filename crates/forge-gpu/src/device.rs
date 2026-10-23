@@ -45,6 +45,10 @@ pub struct DeviceFeatures {
     /// integrated GPU's frame stays on the CPU there (D-058: the planet's normal maps, whose
     /// first scene outlasted Windows' 2 s timeout on the dev machine's Radeon iGPU).
     pub discrete: bool,
+    /// `VK_EXT_opacity_micromap` (with ray queries): the cut-out triangles' opacity at a finer
+    /// grain than the triangle, so the rays skip their clear parts and take their solid ones
+    /// without the query loop's alpha test (#333).
+    pub opacity_micromap: bool,
 }
 
 /// The queues a render-graph pass can run on (issue #77).
@@ -143,6 +147,9 @@ pub struct Device {
     /// `minAccelerationStructureScratchOffsetAlignment` (256 on the RTX 5070 Ti and the
     /// RX 9070 XT), with ray queries; 1 without.
     scratch_alignment: u64,
+    /// Opacity micromaps (#333), with the feature, and the finest 4-state subdivision level.
+    micromap_loader: Option<ext::opacity_micromap::Device>,
+    micromap_max_level: u32,
     debug_utils: Option<ext::debug_utils::Device>,
     /// Push descriptors, when the device offers them (NRD's passes, issue #172).
     push_descriptor_loader: Option<khr::push_descriptor::Device>,
@@ -213,6 +220,7 @@ impl Device {
         {
             tracing::info!("ray queries left disabled (FORGE_NO_RAY_QUERY)");
             best.features.ray_query = false;
+            best.features.opacity_micromap = false;
         }
         tracing::info!(device = %best.name, features = ?best.features, "selected GPU");
 
@@ -246,6 +254,9 @@ impl Device {
             extensions.push(khr::ray_query::NAME.as_ptr());
             extensions.push(khr::deferred_host_operations::NAME.as_ptr());
             extensions.push(khr::ray_tracing_pipeline::NAME.as_ptr());
+        }
+        if best.features.opacity_micromap {
+            extensions.push(ext::opacity_micromap::NAME.as_ptr());
         }
         let stats_filter = std::env::var("FORGE_SHADER_STATS")
             .ok()
@@ -333,6 +344,10 @@ impl Device {
                 .push_next(&mut ray_query)
                 .push_next(&mut ray_tracing);
         }
+        let mut micromap = vk::PhysicalDeviceOpacityMicromapFeaturesEXT::default().micromap(true);
+        if best.features.opacity_micromap {
+            features2 = features2.push_next(&mut micromap);
+        }
         let mut executable = vk::PhysicalDevicePipelineExecutablePropertiesFeaturesKHR::default()
             .pipeline_executable_info(true);
         if stats_filter.is_some() {
@@ -414,9 +429,13 @@ impl Device {
         let mut mesh_props = vk::PhysicalDeviceMeshShaderPropertiesEXT::default();
         let mut acceleration_props =
             vk::PhysicalDeviceAccelerationStructurePropertiesKHR::default();
+        let mut micromap_props = vk::PhysicalDeviceOpacityMicromapPropertiesEXT::default();
         let mut props2 = vk::PhysicalDeviceProperties2::default();
         if best.features.mesh_shader {
             props2 = props2.push_next(&mut mesh_props);
+        }
+        if best.features.opacity_micromap {
+            props2 = props2.push_next(&mut micromap_props);
         }
         if best.features.ray_query {
             props2 = props2.push_next(&mut acceleration_props);
@@ -455,6 +474,11 @@ impl Device {
             .features
             .ray_query
             .then(|| khr::acceleration_structure::Device::new(raw_instance, &raw));
+        let micromap_loader = best
+            .features
+            .opacity_micromap
+            .then(|| ext::opacity_micromap::Device::new(raw_instance, &raw));
+        let micromap_max_level = micromap_props.max_opacity4_state_subdivision_level;
         let mesh_loader = best
             .features
             .mesh_shader
@@ -509,6 +533,8 @@ impl Device {
             mesh_loader,
             acceleration_loader,
             scratch_alignment,
+            micromap_loader,
+            micromap_max_level,
             debug_utils,
             push_descriptor_loader,
             allocator: Mutex::new(Some(allocator)),
@@ -674,6 +700,11 @@ impl Device {
         if robustness_ext {
             features2 = features2.push_next(&mut robustness);
         }
+        let micromap_ext = has(ext::opacity_micromap::NAME);
+        let mut micromap = vk::PhysicalDeviceOpacityMicromapFeaturesEXT::default();
+        if micromap_ext {
+            features2 = features2.push_next(&mut micromap);
+        }
         // SAFETY: feature query with a properly chained struct.
         unsafe { raw.get_physical_device_features2(physical, &mut features2) };
         let base = features2.features;
@@ -807,6 +838,11 @@ impl Device {
                 && on(v13.robust_image_access),
             float64: on(base.shader_float64),
             discrete: props.device_type == vk::PhysicalDeviceType::DISCRETE_GPU,
+            opacity_micromap: false,
+        };
+        let features = DeviceFeatures {
+            opacity_micromap: features.ray_query && micromap_ext && on(micromap.micromap),
+            ..features
         };
         let mut score = match props.device_type {
             vk::PhysicalDeviceType::DISCRETE_GPU => 1000,
@@ -958,6 +994,22 @@ impl Device {
     /// The acceleration-structure functions, on a device with ray queries.
     pub fn acceleration_loader(&self) -> Option<&khr::acceleration_structure::Device> {
         self.acceleration_loader.as_ref()
+    }
+
+    /// The opacity micromap functions and the finest 4-state subdivision level a micromap may
+    /// take, on a device with them (#333).
+    pub(crate) fn micromap_loader(&self) -> Option<(&ext::opacity_micromap::Device, u32)> {
+        self.micromap_loader
+            .as_ref()
+            .map(|l| (l, self.micromap_max_level))
+    }
+
+    /// The finest 4-state subdivision level an opacity micromap may take; none without them
+    /// ([`DeviceFeatures::opacity_micromap`], #333).
+    pub fn micromap_max_level(&self) -> Option<u32> {
+        self.micromap_loader
+            .as_ref()
+            .map(|_| self.micromap_max_level)
     }
 
     /// The push-descriptor functions, when the device offers them (issue #172).

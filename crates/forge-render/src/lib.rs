@@ -35,6 +35,7 @@ pub mod material;
 pub mod meshlet;
 pub mod mipcheck;
 pub mod night;
+mod opacity;
 pub mod particles;
 pub mod placement;
 pub mod precision;

@@ -942,6 +942,30 @@ edge by ninths took the 20 m from 4.0 to 3.6 %). Converged by 20 m whatever the 
 end. Converging by a blade's size on screen instead was unfair to the measure: the supersampled
 reference's blades are smaller on its pixels, so it shaded them otherwise.
 
+**Opacity micromaps for the cut-outs** (#333, 2026-10-23, D-075's last step): the leaf cards'
+not-opaque triangles carry `VK_EXT_opacity_micromap` maps, so a ray passes their clear parts and
+stops on their solid ones without the query loop (`forge_render::opacity`). On by default in
+city-plan; `FORGE_OMM=0` builds without. The village at 600 m, 18:00, serial frame
+(`FORGE_ASYNC=0`), mean of two or three runs each way:
+
+| View | frame | `shadow/trace` | `gi/probe rays` |
+|---|---|---|---|
+| the forest (`--view=230,1.7,-200,90,0`) | 5.79 → 5.66 ms | 0.686 → 0.585 | 0.960 → 0.958 |
+| the main street | 5.23 → 5.10 ms | 0.489 → 0.385 | 0.766 → 0.771 |
+| the house | 5.15 → 5.07 ms | 0.193 → 0.174 | 0.895 → 0.895 |
+| the green | 4.93 → 4.86 ms | 0.249 → 0.202 | 0.692 → 0.698 |
+| the garden | 4.63 → 4.58 ms | 0.152 → 0.132 | 0.863 → 0.864 |
+
+- **What is left of the cut-outs' cost:** with every ray forced opaque, the forest's
+  `shadow/trace` is 0.353 ms. That ray stops on a card's first hit, holes and all, so it is a floor
+  no correct shadow reaches. The maps leave 7 % of the cards' area unknown, the texels on a leaf's
+  edge, and the rays still cross the crowns through their holes.
+- **The probes' rays gain nothing:** the trees' cards are hidden from them (#297's proxies).
+- **The bake at load:** 205,204 cut-out triangles over 8 distinct maps (the cards are the leaf
+  atlas's four quarters), level 9, 512 KiB of micromap, in 113 ms. Sponza's plants (`--lab
+  models --model Sponza`, with `FORGE_OMM=1`): 34,940 triangles, 8,102 maps at level 6, 7.5 MB,
+  in 0.93 s.
+
 **A cut-out row's triangles alone in the query loop** (#307, 2026-10-19): each mesh's structure
 holds its opaque sections and its cut-out ones as two geometries (D-029). The village, best of
 three, against the build before:
