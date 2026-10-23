@@ -212,6 +212,33 @@ against the world as its shooter saw it (server-side rewind, Bernier 2001).
   draws. Every shot that arrived met the person its client saw, 168 to 179 a client, the distance
   off by 4.2 to 6.1 mm at the 99th percentile. At the server's present, 91 to 173 a client would.
 
+## Pacing the client (step 3, 2026-10-23)
+
+`forge_sim`'s clients (#137) ran ahead of the server by a lead set at the start from the link's
+delay. D-010 paces them instead:
+- **The measure:** every input packet carries its client's tick (`InputPacket::tick`), and a
+  packet goes every tick, commands or not. The server takes each one's lead on arrival (the
+  client's tick less its own) and reports the least of the last 60 in each snapshot
+  (`Snapshot::leads`): a measure, never a pace.
+- **The clock:** `PaceClock` runs the client's ticks from the time that passes at a rate that
+  follows the lead's error alone, 2 % a tick of lead missed, within ±10 %: faster when its packets
+  arrive with less lead than its target, slower with more. Only the simulation's clock is paced.
+- **A late command waits:** the server takes it at its next tick and the client is corrected, as
+  before. Nothing is repeated, guessed or extrapolated.
+- **Patents** (`docs/research/netcode.md` §9, searched first): no claim was found on pacing by
+  the lead's measure. Google's US 9,479,618 B2 claims a fixed ring of the last commands resent in
+  each packet; Forge's client resends what is not yet acknowledged and drops a command only on
+  its acknowledgement.
+
+**The test** (`a_paced_client_keeps_its_lead_as_the_route_changes`): one client over a link of
+100 ms one way, starting with no lead and aiming at 3 ticks; at 20 s the route goes to 200 ms, at
+40 s to 50 ms.
+- From no lead it reaches 3 ticks in about 5 s (it overshoots to 5), and stays at 3.
+- When the delay doubles, the lead falls to −3 and comes back to 3 in about 6 s. When it falls to
+  a quarter, the lead jumps to 7 and comes back in about 4 s.
+- 10 of the 300 commands came late, all in those changes, none once settled; every command was
+  taken once.
+
 ## Authority between workers (step 2's handoff, 2026-10-23)
 
 `forge_sim::authority`: D-010's replication layer and its workers, in one process, before any
@@ -273,7 +300,8 @@ lockstep on the first channel (reliable, ordered).
 ## Next
 
 - The layer and its workers on separate machines (the server PC), and a worker's region split
-  and merged by load (its own patent search first); lag compensation in a scene (a shot in
+  and merged by load (its own patent search first); the lab's `--net` paced by `PaceClock`, its
+  corrections faded; lag compensation in a scene (a shot in
   the lab's `--net`, the client's `Interpolator` drawing what it aims at), replays (step 3), and the
   `hundred-bots` demo on the server PC.
 - The population of #250 as the replicated world: its near tiers' records in place of the crowd.

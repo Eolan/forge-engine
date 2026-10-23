@@ -333,6 +333,13 @@ of a handover, whole-entity authority taken as one picture a tick, one layer, on
 Over QUIC the same day (`forge_net::layer`): the layer on a server, each worker a client in
 lockstep; a worker killed mid-tick is covered by another and the tick stepped again from the same
 pictures, so the records still match one worker's to the bit.
+*Pacing built* (2026-10-23, `forge_sim::PaceClock`): every input packet carries its client's
+tick; the server reports the least lead on arrival of the last 60 in each snapshot, a measure
+only; the client's clock runs within ±10 % of its rate from the lead's error alone. Over a route
+that changes from 100 to 200 to 50 ms, the lead settles at its 3 ticks and no command is late once
+settled. A late command still waits for the next tick, never repeated. Patents searched first
+(`research/netcode.md` §9): none on the pacing; the acknowledged-only resends keep clear of Google's
+US 9,479,618 B2.
 
 ## D-011 — Audio: own data layer and mixer, Steam Audio spatialiser ✅ (2026-09-24)
 

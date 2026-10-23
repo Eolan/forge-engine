@@ -571,6 +571,11 @@ soft edges, their pixel-wide minimum, their reactive mask and their hash:
   the others a fixed delay behind, between the two states about that moment; Glenn Fiedler,
   "Snapshot Interpolation", Gaffer On Games, 2014: the playout delay that covers the snapshots'
   gaps and losses (`forge_net::interpolate`).
+- **Pacing the client** (`forge_sim::PaceClock`, #268). Timothy Ford, "Overwatch Gameplay
+  Architecture and Netcode", GDC 2017: the client's simulation run faster or slower on the
+  server's feedback about its inputs' arrival; Unity's NetCode for Entities (2019–20), its command
+  age and time scale. Redundant inputs resent until acknowledged, as QuakeWorld and Quake 2 resent
+  their commands (id Software, 1996–97).
 - **Authority between workers** (`forge_sim::authority`, #268). Richard M. Fujimoto, *Parallel
   and Distributed Simulation Systems*, Wiley, 2000: conservative synchronisation with one tick of
   lookahead, so the split world steps as one. Fencing by epochs, as Viewstamped Replication's view

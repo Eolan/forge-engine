@@ -298,3 +298,122 @@ fn a_late_command_is_taken_at_the_next_tick_and_corrected() {
     };
     assert!(same_world(&mut s, 0));
 }
+
+/// What a paced run made: the leads the server measured (at each snapshot the client took, with
+/// the frame), and the commands taken late in each of its three phases' last two thirds.
+struct Paced {
+    leads: Vec<(u64, i64)>,
+    late_settled: [u64; 3],
+    late: u64,
+    applied: u64,
+}
+
+/// One client over a link of 100 ms one way, starting with no lead; its route goes to 200 ms at
+/// frame 1200 and to 50 ms at frame 2400. Its clock is paced to a lead of `target` ticks.
+fn paced(target: i64) -> Paced {
+    let mut server = Server::new(Toy::new());
+    let mut client = Client::new(Toy::new(), 0);
+    let mut clock = PaceClock::new(target);
+    let mut up = Link::new(LinkParams::new(100.0, 0.02, 41));
+    let mut down = Link::new(LinkParams::new(100.0, 0.02, 42));
+    let commands = pushes(0, 300, 3500, 43);
+    let mut out = Paced {
+        leads: Vec::new(),
+        late_settled: [0; 3],
+        late: 0,
+        applied: 0,
+    };
+    for frame in 0..3600u64 {
+        let now = frame as f64 / f64::from(TICK_RATE);
+        if frame == 1200 {
+            up.set_delay(0.2);
+            down.set_delay(0.2);
+        }
+        if frame == 2400 {
+            up.set_delay(0.05);
+            down.set_delay(0.05);
+        }
+        let late = server.stats.late;
+        for packet in up.receive(now) {
+            server.receive(&packet);
+        }
+        if frame % 1200 >= 400 {
+            out.late_settled[(frame / 1200) as usize] += server.stats.late - late;
+        }
+        server.step();
+        if server.sim.now().is_multiple_of(6) {
+            down.send(now, server.snapshot(), 0);
+        }
+        for snapshot in down.receive(now) {
+            if let Some(&(_, lead)) = snapshot.leads.iter().find(|(p, _)| *p == 0) {
+                clock.report(lead);
+                out.leads.push((frame, lead));
+            }
+            client.apply(&snapshot);
+        }
+        for _ in 0..clock.advance(1.0) {
+            let here = client.sim.now();
+            for c in commands.iter().filter(|c| c.tick == here) {
+                client.command(c.command);
+            }
+            client.step();
+            if let Some(packet) = client.outgoing() {
+                up.send(now, packet, 16);
+            }
+        }
+    }
+    out.late = server.stats.late;
+    out.applied = server.stats.applied;
+    out
+}
+
+/// D-010's pacing: a client with no lead runs a little faster until its packets reach the server
+/// `target` ticks ahead, and follows its route when the delay doubles and when it falls to a
+/// quarter: once settled, no command is late, and the lead stays near the target.
+#[test]
+fn a_paced_client_keeps_its_lead_as_the_route_changes() {
+    let run = paced(3);
+    for phase in 0..3u64 {
+        let leads: Vec<i64> = run
+            .leads
+            .iter()
+            .filter(|(f, _)| f / 1200 == phase && f % 1200 >= 400)
+            .map(|&(_, l)| l)
+            .collect();
+        eprintln!(
+            "phase {phase}: lead {}..{} after settling, {} late",
+            leads.iter().min().unwrap(),
+            leads.iter().max().unwrap(),
+            run.late_settled[phase as usize]
+        );
+    }
+    eprintln!("{} late of {} applied", run.late, run.applied);
+    assert_eq!(run.applied, 300, "every command taken, none repeated");
+    assert_eq!(run.late_settled, [0, 0, 0], "late once settled");
+    assert!(run.late < 20, "{} late in the changes", run.late);
+    for phase in 0..3u64 {
+        assert!(
+            run.leads
+                .iter()
+                .filter(|(f, _)| f / 1200 == phase && f % 1200 >= 400)
+                .all(|&(_, l)| (3..=4).contains(&l)),
+            "phase {phase} settles at its target"
+        );
+    }
+}
+
+/// The clock's rate follows the lead's error, within ±10 %, and its ticks the rate.
+#[test]
+fn the_pace_follows_the_error_within_a_tenth() {
+    let mut clock = PaceClock::new(3);
+    assert_eq!(clock.advance(10.0), 10);
+    clock.report(1);
+    assert!((clock.rate() - 1.04).abs() < 1e-12);
+    assert_eq!((0..100).map(|_| clock.advance(1.0)).sum::<u32>(), 104);
+    clock.report(-20);
+    assert!((clock.rate() - 1.1).abs() < 1e-12);
+    clock.report(30);
+    assert!((clock.rate() - 0.9).abs() < 1e-12);
+    clock.report(3);
+    assert_eq!(clock.rate(), 1.0);
+}

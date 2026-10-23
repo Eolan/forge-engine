@@ -760,6 +760,37 @@ claiming stale-epoch write rejection in games was found. No search reached CN, K
 depth (Tencent and NetEase file heavily on seamless worlds there), and not finding a patent is not
 evidence that none exists.
 
+**Input pacing, prediction and smoothing, searched before building the pacing** (2026-10-23).
+A research agent read the claims on Google Patents (close paraphrases); claim 1 of US 9,479,618
+was read again here. No claim was found on the pacing itself: the server reporting how early
+inputs arrive, the client running a little faster or slower to hold a target.
+
+| Patent | Holder | What the independent claims need | Status | Bearing |
+|---|---|---|---|---|
+| **US 9,479,618 B2** (priority 2014-03-25) | Google (from CiiNow) | on each new input command, the oldest in a ring buffer removed, the others shifted, the new one appended, and the ring's commands sent in one UDP message | active, US only, about 2035-01-16 | **Kept clear:** Forge's client sends the oldest commands not yet acknowledged and drops one only when the server acknowledges it, never because a new one came. Quake 2 (1997) and Quake 3's `cl_packetdup` (1999) are prior art. Never make the redundancy a fixed window of the last N |
+| **US 2026/0108808 A1** "Flexible netcode architecture" (priority 2024-10-23) | Roblox | an authoritative update; a rollback check against the prediction; roll back and apply; predict; reconcile the last displayed position with the updated one; render | **pending** | Reads as filed on prediction with smoothed corrections, which Quake (1996–97), Overwatch and Fiedler made public long before. Not infringeable unless granted: watch it, and keep these notes dated |
+| **US 10,942,588 B2** "Latency adjustment of user input devices" (2019-03-02; EP3934774B1) | Microsoft | a host sets a pace for an input device's reports and tells the device its interval and offset | active, about 2039 | Kept clear: the server sends a measure only, never a pace, interval or offset, and no device is retimed |
+| **US 12,290,753 B2** "Adaptive time dilation based on player performance" (2019-11-05) | Sony | presentation slowed for a player's slow reactions, sped back up if they stay slow | active, about 2042 | Kept clear: the rate follows the lead's error alone |
+| **US 11,700,402 B1**, **US 12,081,812 B2** (2022) | NVIDIA | a render rate set from a receiver's frame-buffer occupancy | active, about 2042 | Not the technique (frames for display); the simulation's clock alone is paced, never the display's vsync |
+| **US 11,033,813 B2** "Latency erasure" (2019) | Microsoft | the client returns its input with the server state it saw; the server applies it to that earlier state | active, about 2039 | Not on the path: inputs are applied at their stamped tick. Lag compensation by a state the client echoes would need a look first |
+| **US 11,876,685 B1**, **US 12,401,574 B2** (2021) | Amazon | predicted-state data (a hash) sent with the inputs; the server compares it with its own to decide a correction | active, about 2041 | Kept clear: the client compares the server's digests; nothing predicted goes upstream |
+| **US 12,157,057 B2** (2020) | Tencent | a correction chosen by comparing the deviation with a maximum from the server's update window and the motion | active, about 2041 | For smoothing later: fade by a fixed time, a constant snap threshold |
+| **US 8,069,258 B1** (2007) | Electronic Arts | a local simulation of this frame from local input and a network simulation of the last (P2P) | active, about 2030-09 (fees paid; the expired US 8,678,929 above is its sibling) | Not on the path: no second, lagged simulation |
+| **US 9,089,777 B2** family (2013) | Blizzard | play resumed from a reload point by replaying captured inputs | active, about 2033 | Look before a "resume from a replay" feature |
+
+Also met and outside: Microsoft US 10,924,525 (latency equalised between players), Disney US
+8,676,996, King's pending continuation US 2025/0083052 (snapshot prediction), EA US 12,472,427
+(lockstep), Bandai Namco US 8,734,246 (P2P input delay), Google US 11,366,586 (synthesised
+inputs). Prior art: QuakeWorld and Quake 2 (prediction, the error faded, three commands a packet),
+Quake 3, Tribes (2000), Bernier (2001), Source, GGPO (2006, MIT since 2019), Fiedler (2014–15),
+Ford's GDC 2017 talk (the client simulating faster on the server's starvation feedback), Unity's
+NetCode (2019–20: command age and time scale). Not found: any claim on pacing by buffer depth, on
+"wait, never repeat", or rollback patents by fighting-game makers. Rules kept: the server reports a
+measure only; the rate follows its error, in the simulation's clock alone; a late input waits,
+nothing is repeated, guessed or extrapolated; no predicted state upstream; nothing about hit
+volumes or places from input timing; smoothing (later) by a fixed time; redundancy by
+acknowledgement; no latency equalised between players.
+
 Nothing was met on QUIC itself (an IETF standard whose participants file IPR disclosures with the
 IETF; not checked here), on connect tokens, fragmentation or a link conditioner.
 

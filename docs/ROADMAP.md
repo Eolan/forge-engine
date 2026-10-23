@@ -620,7 +620,10 @@ The items below are the phase's original outline; the plan above orders them.
    bit as one worker, stale writes fenced by epochs, a worker away covered), and over QUIC
    (`forge_net::layer`: a worker killed covered without losing a tick).
 3. Prediction and reconciliation (input queues that wait rather than repeat), lag
-   compensation, replays.
+   compensation, replays. Pacing ✅ (2026-10-23, `PaceClock`: the server's measure of the lead,
+   the client's rate from its error, no command late once settled); lag compensation's history,
+   the client's interpolation and the moment a shot carries ✅ (eight clients from 20 to 250 ms
+   round trips meeting what they saw, in one process).
    **Demo:** `hundred-bots` — 100 headless bots over a 100 ms / 2 % loss link on the server
    PC, two workers with a boundary across the island, bandwidth per client measured.
 

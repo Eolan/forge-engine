@@ -316,6 +316,12 @@ impl<P> Link<P> {
         self.random.next_f64()
     }
 
+    /// Its delay from now on, seconds one way (a route that changes); what is in flight keeps
+    /// its own.
+    pub fn set_delay(&mut self, delay: f64) {
+        self.params.delay = delay;
+    }
+
     /// Sends `packet` of `bytes` bytes at `now` seconds.
     pub fn send(&mut self, now: f64, packet: P, bytes: usize) {
         self.stats.sent += 1;
@@ -352,8 +358,64 @@ impl<P> Link<P> {
 pub struct InputPacket<C> {
     /// The sender.
     pub player: PlayerId,
+    /// The sender's tick when it sent it (its world's `now`): how far ahead of the server it
+    /// runs, which the server measures on arrival ([`Snapshot::leads`], D-010's pacing).
+    pub tick: u64,
     /// Its unacknowledged commands, at most [`MAX_SENT`].
     pub commands: Vec<Stamped<C>>,
+}
+
+/// Packets a player's lead is measured over ([`Snapshot::leads`]): a second's at 60 Hz.
+pub const LEAD_WINDOW: usize = 60;
+
+/// A client's clock (D-010's pacing): the ticks it runs from the time that passes, a little faster
+/// when the server reports its packets arriving with less lead than `target`, a little slower
+/// with more. The rate follows the error alone (target less the measure), within ±10 %, and only
+/// the simulation's clock: the display and the input devices keep theirs. Nothing waits on a
+/// late input but the server, which takes it at its next tick; nothing is repeated or guessed.
+/// Patents: `docs/research/netcode.md` §9 (the search for pacing, 2026-10-23).
+#[derive(Clone, Debug)]
+pub struct PaceClock {
+    /// The lead on arrival aimed at, ticks.
+    target: i64,
+    /// Ticks per tick of time: 1 on target.
+    rate: f64,
+    /// Ticks owed, a fraction.
+    owed: f64,
+}
+
+/// The rate's change per tick of lead missed, and its bounds.
+const PACE_GAIN: f64 = 0.02;
+const PACE_LIMIT: f64 = 0.1;
+
+impl PaceClock {
+    /// A clock aiming for packets that arrive `target` ticks ahead of the server.
+    pub fn new(target: i64) -> Self {
+        Self {
+            target,
+            rate: 1.0,
+            owed: 0.0,
+        }
+    }
+
+    /// The server's measure of the lead on arrival ([`Snapshot::leads`]): the rate from now on.
+    pub fn report(&mut self, lead: i64) {
+        let error = (self.target - lead) as f64;
+        self.rate = 1.0 + (error * PACE_GAIN).clamp(-PACE_LIMIT, PACE_LIMIT);
+    }
+
+    /// Its rate, ticks per tick of time.
+    pub fn rate(&self) -> f64 {
+        self.rate
+    }
+
+    /// The ticks to run for `ticks` ticks of time passed (a frame's time over [`TICK`]).
+    pub fn advance(&mut self, ticks: f64) -> u32 {
+        self.owed += ticks * self.rate;
+        let run = self.owed.floor();
+        self.owed -= run;
+        run as u32
+    }
 }
 
 /// Commands in an input packet at most: the oldest unacknowledged ones (the rest wait their
@@ -372,6 +434,10 @@ pub struct Snapshot {
     pub state: Vec<u8>,
     /// `(player, n)`: the player's commands numbered under `n` are all taken.
     pub acked: Vec<(PlayerId, u32)>,
+    /// `(player, ticks)`: how far ahead of the server each player's packets were when they
+    /// arrived, the least over the last [`LEAD_WINDOW`] (a measure only: the client paces
+    /// itself to it, [`PaceClock`]).
+    pub leads: Vec<(PlayerId, i64)>,
 }
 
 /// The commands taken of a player: all those numbered under `below`, and some after.
@@ -402,6 +468,8 @@ pub struct Server<S: Simulation> {
     waiting: BTreeMap<u64, Vec<Stamped<S::Command>>>,
     /// The commands taken of each player (a repeated one is dropped).
     taken: BTreeMap<PlayerId, Taken>,
+    /// Each player's recent leads on arrival, newest last (at most [`LEAD_WINDOW`]).
+    leads: BTreeMap<PlayerId, VecDeque<i64>>,
     /// What it did.
     pub stats: ServerStats,
 }
@@ -424,13 +492,20 @@ impl<S: Simulation> Server<S> {
             sim,
             waiting: BTreeMap::new(),
             taken: BTreeMap::new(),
+            leads: BTreeMap::new(),
             stats: ServerStats::default(),
         }
     }
 
     /// Takes an input packet: each command not seen yet waits for its tick, or for the next
     /// tick when its own has passed.
+    /// How far ahead of it the sender ran is measured too ([`Snapshot::leads`]).
     pub fn receive(&mut self, packet: &InputPacket<S::Command>) {
+        let leads = self.leads.entry(packet.player).or_default();
+        if leads.len() == LEAD_WINDOW {
+            leads.pop_front();
+        }
+        leads.push_back(packet.tick as i64 - self.sim.now() as i64);
         for c in &packet.commands {
             if !self.taken.entry(c.player).or_default().take(c.seq) {
                 self.stats.repeats += 1;
@@ -466,6 +541,11 @@ impl<S: Simulation> Server<S> {
             digest: self.sim.digest(),
             state: self.sim.save(),
             acked: self.taken.iter().map(|(&p, t)| (p, t.below)).collect(),
+            leads: self
+                .leads
+                .iter()
+                .filter_map(|(&p, l)| Some((p, *l.iter().min()?)))
+                .collect(),
         }
     }
 }
@@ -553,13 +633,12 @@ impl<S: Simulation> Client<S> {
         }
     }
 
-    /// The packet to send this tick: the oldest [`MAX_SENT`] unacknowledged commands, or none.
+    /// The packet to send this tick: its tick, and the oldest [`MAX_SENT`] unacknowledged
+    /// commands (none, often: a packet goes every tick, so the server measures the lead).
     pub fn outgoing(&self) -> Option<InputPacket<S::Command>> {
-        if self.unacked.is_empty() {
-            return None;
-        }
         Some(InputPacket {
             player: self.player,
+            tick: self.sim.now(),
             commands: self.unacked.iter().take(MAX_SENT).copied().collect(),
         })
     }
