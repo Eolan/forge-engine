@@ -721,13 +721,18 @@ anomalies down to 11 (20 → 3, 33 → 3, 24 → 5).
   (`structure::hall_far`): along the open side wall the hall took its light. The 400, 600 and
   800 m villages are unchanged to the bit (`village_digests`, a digest of each size's masses and
   structures to run before and after a change).
+- **A blank street wall (2026-10-23, 8 → 7):** a corner house on a bend (800 m's house 58) has
+  its rooms laid square to its front, so where its side line breaks in two the kitchen's edge ran
+  0.08 to 0.8 m off the second street wall, and no room counted as touching it. A street wall still
+  without an opening on a storey now takes a window from the room nearest behind it within
+  1.2 m (`windows::blank_walls`): the wedge between is that room's floor.
 
 The 600 m village changed in two places, accepted in the map check: a corner house that stopped a
 quarter metre short of its lot's corner (a walled slit) reaches it, its rooms laid again (the
 walked house: the room view now shows two chairs at the table), and two acute garden-wall
 corners are mitred. Left at the larger sizes: free wall ends at junctions with hedges, ridge
-steps where a lot keeps one house of a row shallower, a sliver and two lone party walls at 900 m,
-and a blank street wall at 800 m.
+steps where a lot keeps one house of a row shallower, and a sliver and two lone party walls at
+900 m.
 
 **One more house at 600 m** (the owner's go, 2026-10-22). A wide lot on the north-east street was
 refused its house for a shallow end of its front: its depth was measured along the whole front,

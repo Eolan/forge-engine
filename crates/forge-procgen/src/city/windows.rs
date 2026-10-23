@@ -222,5 +222,102 @@ pub fn by_room(m: &Mass, s: &mut Structure, seed: u64) {
             }
         }
     }
+    blank_walls(s, &spaces, &feet, &mut out);
     s.openings = out;
+}
+
+/// How far a room may stand off a street wall's inner face and still take its window (#308),
+/// metres: its rooms are laid square to the front, and a side line that bends (a corner house on a
+/// bend) leaves a wedge of floor, open to the room, between its rectangle and that wall.
+const REACH: f64 = 1.2;
+
+/// A street wall still without an opening on a storey, where its open stretch runs past
+/// [`super::anomalies::BLANK`] (#308: 800 m's house 58, its kitchen 0.08 to 0.8 m off its second
+/// street wall, the storey's 6.7 m of street front blank): the room of that storey nearest behind
+/// it, within [`REACH`] of its inner face, takes a window there, in the middle of the stretch it
+/// faces. The owner, 2026-10-17: street fronts show windows on every storey.
+fn blank_walls(
+    s: &Structure,
+    spaces: &[(Option<RoomKind>, usize, Vec<DVec2>)],
+    feet: &[DVec2],
+    out: &mut Vec<Opening>,
+) {
+    let t = s.era.table();
+    for (w, wall) in s.walls.iter().enumerate() {
+        if wall.role != WallRole::Street {
+            continue;
+        }
+        let tw = (wall.b - wall.a).normalize_or_zero();
+        let inward = DVec2::new(-tw.y, tw.x);
+        for (k, storey) in s.storeys.iter().enumerate() {
+            let open: &[(f64, f64)] = wall.open.get(k).map_or(&[], |v| &v[..]);
+            let run: f64 = open.iter().map(|&(a, b)| b - a).sum();
+            if run <= super::anomalies::BLANK || out.iter().any(|o| o.wall == w && o.storey == k) {
+                continue;
+            }
+            // The rooms of the storey that come within reach, each with the stretch it faces.
+            let mut best: Option<(f64, f64)> = None;
+            for (kind, sk, outline) in spaces {
+                if *sk != k || matches!(kind, Some(RoomKind::Store) | None) {
+                    continue;
+                }
+                let along: Vec<f64> = outline
+                    .iter()
+                    .filter(|p| {
+                        let off = (**p - wall.a).dot(inward) - wall.thickness;
+                        (-0.25..=REACH).contains(&off)
+                    })
+                    .map(|p| (*p - wall.a).dot(tw))
+                    .collect();
+                if along.len() < 2 {
+                    continue;
+                }
+                let lo = along.iter().copied().fold(f64::MAX, f64::min).max(0.0);
+                let hi = along
+                    .iter()
+                    .copied()
+                    .fold(f64::MIN, f64::max)
+                    .min(wall.length());
+                if best.is_none_or(|(a, b)| hi - lo > b - a) {
+                    best = Some((lo, hi));
+                }
+            }
+            let Some((lo, hi)) = best else {
+                continue;
+            };
+            // Within the longest open stretch it overlaps, a pier off its ends.
+            let Some((a, b)) = open
+                .iter()
+                .map(|&(olo, ohi)| (lo.max(olo), hi.min(ohi)))
+                .filter(|(a, b)| b > a)
+                .max_by(|x, y| (x.1 - x.0).total_cmp(&(y.1 - y.0)))
+            else {
+                continue;
+            };
+            let width = (t.window.min(b - a - 2.0 * PIER) * 10.0).floor() / 10.0;
+            if width < 0.5 {
+                continue;
+            }
+            let along = (a + b) * 0.5;
+            let at = wall.a + tw * along;
+            if feet.iter().any(|f| f.distance(at) < 1.5 + width * 0.5) {
+                continue;
+            }
+            let (sill, head) = if k == 0 {
+                (1.0, storey.clear() - 0.4)
+            } else {
+                (t.sill, storey.clear() - 0.35)
+            };
+            out.push(Opening {
+                wall: w,
+                storey: k,
+                along,
+                width,
+                sill,
+                head,
+                kind: OpeningKind::Window,
+                frosted: false,
+            });
+        }
+    }
 }

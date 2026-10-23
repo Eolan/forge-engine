@@ -951,11 +951,11 @@ mod tests {
         // The other sizes' own, where they had more when they came in (#308: at 700 to 900 m,
         // 2026-10-22, after the stairs, the rows' corners, the backs, the walls' corners and the
         // hedges' sides and the rows' ridges: 77 down to 11; 2026-10-23, a storey's lit rooms
-        // packed front and back, a narrow end house's hall on its party side: 8).
-        let since: [(f64, Kind, usize); 6] = [
+        // packed front and back, a narrow end house's hall on its party side, a blank street wall's
+        // window from the room behind its bend: 7).
+        let since: [(f64, Kind, usize); 5] = [
             (700.0, Kind::FreeWallEnd, 1),
             (800.0, Kind::RidgeStep, 2),
-            (800.0, Kind::BlankStreetWall, 1),
             (900.0, Kind::Sliver, 1),
             (900.0, Kind::FreeWallEnd, 1),
             (900.0, Kind::LonePartyWall, 2),
