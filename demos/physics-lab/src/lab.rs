@@ -1971,6 +1971,8 @@ struct Net {
     /// (D-010), and the farthest a correction moved a drawn transform.
     fades: Vec<Fade>,
     farthest_fade: f64,
+    /// The client's corrections that moved nothing drawn.
+    still_corrections: u64,
     /// The client's transforms before a snapshot is applied and after (scratch).
     before: Vec<Transform>,
     after: Vec<Transform>,
@@ -2094,6 +2096,7 @@ impl Net {
             lead: None,
             fades: Vec::new(),
             farthest_fade: 0.0,
+            still_corrections: 0,
             before: Vec::new(),
             after: Vec::new(),
         })
@@ -2147,6 +2150,14 @@ impl Net {
                     self.correction_ms.push(ms);
                     self.worst_correction_ms = self.worst_correction_ms.max(ms);
                     client.sim.transforms(&mut self.after);
+                    // A correction that moved nothing drawn (the research's "corrections of
+                    // 0.000 m"): the states differed elsewhere, in a speed or a contact.
+                    let still = self.before.len() == self.after.len()
+                        && self.before.iter().zip(&self.after).all(|(b, a)| {
+                            b.position.distance(a.position) < 1e-4
+                                && b.rotation.angle_between(a.rotation) < 1e-4
+                        });
+                    self.still_corrections += u64::from(still);
                     let moved = fade_from(&mut self.fades, &self.before, &self.after);
                     self.farthest_fade = self.farthest_fade.max(moved);
                 }
@@ -3400,6 +3411,7 @@ impl Drop for Lab {
                     replayed_ticks = c.replayed_ticks,
                     worst_correction_ms = format!("{:.2}", net.worst_correction_ms),
                     farthest_fade_m = format!("{:.3}", net.farthest_fade),
+                    still_corrections = net.still_corrections,
                     server_applied = s.applied,
                     server_late = s.late,
                     up_bytes = net.up[0].stats.bytes,

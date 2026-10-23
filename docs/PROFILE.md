@@ -2482,6 +2482,20 @@ barrier. Seven threads reading them before the barrier gave identical images, bu
 blend didn't move: green 0.343 → 0.343 ms, forest 0.469 → 0.465, main street 0.407 → 0.407.
 The other groups hide that wait.
 
+**Tried and dropped again (2026-10-23, #274): the blend's parts side by side.** In the village's
+main street at 15:00 (serial, about 9,100 probes updated a frame, 0.42 ms), each part taken out
+in turn: every group leaving at once 0.038 ms (launching the 45,800 groups, most of them for
+probes that light nothing, is not the cost); the irradiance sums −0.06; thread 0's test −0.05;
+the distance lobe's `pow` −0.05. The rest is the distance sums' 196 threads × 96 rays.
+- **The sums side by side** (the irradiance texels', the distance texels', the rays' statistics
+  and the gaps on threads of their own, the test after one barrier): the same images to the bit
+  in five views, but 0.397 → 0.427 ms, 0.466 → 0.498 in the forest. The pass is bound by its
+  work, not by its waits, and a warp holding both kinds of texel runs both loops.
+- **A ray's direction and distance in one `float4`** (one shared-memory load an iteration), and
+  `[unroll(4)]` on top: 0.424 → 0.385–0.419 and 0.388–0.412, within the runs' spread.
+A cheaper blend would change what it computes (fewer distance texels, a lobe that splats each
+ray into its neighbourhood), which is a look decision.
+
 `FORGE_SHADER_LINES=1` keeps the source lines (`-g2`) in an optimised build's shaders. A trace
 opened in Nsight Graphics then shows its real-time shader profiler's samples per line (GPU
 Trace's `--real-time-shader-profiler`, Blackwell `--architecture "Blackwell GB20x"`). Its

@@ -141,7 +141,13 @@ with 10 % of it as jitter and 2 % of the packets lost, both ways, from seeds:
   drawn where it is. Over 600 ticks at 100 ms the corrections moved a body by at most 0.47 m in
   `drop --throw-every 45` (the bot's throws into the pyramid) and 0.31 m in `tug` (the sled when
   the bot changes its pull); the session's last line (`farthest_fade_m`) prints it. The skinned
-  parts (the creatures, the slime's points) are still drawn as corrected.
+  parts (the creatures, the slime's points) are still drawn as corrected;
+- the corrections that moved nothing drawn are counted (`still_corrections`, the research's
+  "corrections of 0.000 m"): none of `drop`'s 3, 4 of `tug`'s 6. There the bot's new pull reached
+  the client while the sled held on its friction, so only the bot's control differed. A digest
+  covers the whole state, controls included, and the ticks run again are what the next ticks'
+  prediction needs; in a reconciliation by position error the same count would be a threshold
+  bug.
 
 A single-player game runs the same server in its own process: nothing changes when a second
 player joins. With `--net 100 --throw-every 45`, 600 ticks:
