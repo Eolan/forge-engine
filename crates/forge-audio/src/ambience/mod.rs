@@ -79,7 +79,7 @@ pub struct Habitat {
     /// How green the place is within earshot, 0 (streets and houses only) to 1 (gardens and
     /// woods): the share of the ground under trees, hedges and gardens, as the scene measures it.
     /// Cicadas sing from trees and fall silent among houses with few of them; birds thin out but
-    /// stay (sparrows and doves live on the houses).
+    /// stay (sparrows live on the houses); the dove calls only near woods.
     pub green: f32,
     /// 0 outdoors to 1 well inside a building: the walls take most of the outside's beds.
     pub indoors: f32,
@@ -104,6 +104,13 @@ impl Habitat {
     /// The birds' share: a third among houses, all of them from 0.4 of green.
     pub fn birds(&self) -> f32 {
         1.0 - 0.65 * (1.0 - smoothstep(0.0, 0.4, self.green))
+    }
+
+    /// The share of [`BirdMix::dove`] that calls here: none among houses (green under 0.15), all
+    /// of it in a wood (0.5). The owner wanted the coo now and then from a tree near the forest,
+    /// not in every street (#350).
+    pub fn doves(&self) -> f32 {
+        smoothstep(0.15, 0.5, self.green)
     }
 
     /// What reaches the listener of the beds outside, through the walls: 1 outdoors, 0.15
@@ -378,6 +385,7 @@ impl Ambience {
                 assets,
             );
             control.set_awake(target.gain > 0.0);
+            control.set_green(state.habitat.green);
             let stream = streams.open(Box::new(bed), false)?;
             let voice = engine.play_stream(
                 stream,
@@ -440,6 +448,7 @@ impl Ambience {
                 bed.gain = target.gain;
             }
             bed.control.set_intensity(target.intensity);
+            bed.control.set_green(state.habitat.green);
             // A bed resting at 0 for a second sleeps; wanted again, it wakes.
             if bed.gain == 0.0 && target.gain == 0.0 {
                 bed.quiet += dt;

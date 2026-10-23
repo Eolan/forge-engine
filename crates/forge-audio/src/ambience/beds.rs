@@ -42,6 +42,7 @@ const TOP: f32 = 10_500.0;
 pub struct BedControl {
     intensity: AtomicU32,
     awake: AtomicBool,
+    green: AtomicU32,
 }
 
 impl BedControl {
@@ -49,6 +50,7 @@ impl BedControl {
         Self {
             intensity: AtomicU32::new(intensity.to_bits()),
             awake: AtomicBool::new(true),
+            green: AtomicU32::new(1.0f32.to_bits()),
         }
     }
 
@@ -71,12 +73,26 @@ impl BedControl {
     pub fn awake(&self) -> bool {
         self.awake.load(Ordering::Relaxed)
     }
+
+    /// Sets how green the listener's place is ([`super::Habitat::green`]), for the voices that
+    /// live only among trees.
+    pub fn set_green(&self, green: f32) {
+        self.green.store(green.to_bits(), Ordering::Relaxed);
+    }
+
+    /// How green the listener's place is.
+    pub fn green(&self) -> f32 {
+        f32::from_bits(self.green.load(Ordering::Relaxed))
+    }
 }
 
 /// A sound that goes on: what a bed renders.
 pub trait Texture: Send {
     /// Adds `left.len()` frames for `intensity` into `left` and `right`.
     fn render(&mut self, intensity: f32, left: &mut [f32], right: &mut [f32]);
+
+    /// How green the listener's place is ([`super::Habitat::green`]). Ignored by default.
+    fn set_green(&mut self, _green: f32) {}
 }
 
 /// The beds.
@@ -219,6 +235,7 @@ impl Decoder for Bed {
             let (left, right) = (&mut self.left[..n], &mut self.right[..n]);
             left.fill(0.0);
             right.fill(0.0);
+            self.texture.set_green(self.control.green());
             self.texture.render(intensity, left, right);
             let goal = if awake { 1.0 } else { 0.0 };
             for (i, frame) in chunk.as_chunks_mut::<2>().0.iter_mut().enumerate() {
@@ -711,7 +728,8 @@ struct Played {
 
 /// The birds' species and how often each calls (#350), shares of the calls (normalised; 0
 /// leaves a species out). The default is a Mediterranean village's, with the collared dove's coo
-/// one call in eighteen. The owner heard it everywhere at three in twenty ("too much coucou").
+/// one call in eighteen. Its share calls only near woods ([`super::Habitat::doves`]), about
+/// 5 dB under the others. The owner heard it everywhere at three in twenty ("too much coucou").
 /// A scene elsewhere sets its own ([`AmbienceAssets::bird_mix`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BirdMix {
@@ -795,10 +813,16 @@ pub struct Birds {
     chorus_at: usize,
     chorus_gain: f32,
     mix: BirdMix,
+    /// How green the place is: the doves call only among trees ([`super::Habitat::doves`]).
+    green: f32,
 }
 
 /// The morning chorus's crossfade where it loops, seconds.
 const CHORUS_SEAM: f32 = 2.0;
+
+/// The dove's calls against the other birds', about −5 dB: the owner heard it too near and
+/// too loud (#350, 2026-10-23), "one somewhere in a tree near the forest from time to time".
+const DOVE_GAIN: f32 = 0.55;
 
 impl Birds {
     /// From `seed`, every call made in code.
@@ -814,6 +838,7 @@ impl Birds {
             chorus_at: 0,
             chorus_gain: 0.0,
             mix: BirdMix::default(),
+            green: 1.0,
         }
     }
 
@@ -835,7 +860,16 @@ impl Birds {
 
     /// Starts a call: the species by the mix, recorded when there is a recording of it.
     fn spawn(&mut self) {
-        let voice = self.mix.pick(self.rng.next_f32());
+        let doves = super::Habitat {
+            green: self.green,
+            indoors: 0.0,
+        }
+        .doves();
+        let mix = BirdMix {
+            dove: self.mix.dove * doves,
+            ..self.mix
+        };
+        let voice = mix.pick(self.rng.next_f32());
         let species = match voice {
             BirdVoice::Blackbird => Some(Species::Blackbird),
             BirdVoice::Sparrow => Some(Species::Sparrow),
@@ -931,6 +965,12 @@ impl Birds {
             }
         }
         let distance = log_uniform(r, 0.1, 1.0);
+        // The dove coos from a tree farther off, under the others.
+        let distance = if voice == BirdVoice::Dove {
+            distance * DOVE_GAIN
+        } else {
+            distance
+        };
         Call {
             notes,
             next: 0,
@@ -944,6 +984,10 @@ impl Birds {
 }
 
 impl Texture for Birds {
+    fn set_green(&mut self, green: f32) {
+        self.green = green;
+    }
+
     fn render(&mut self, activity: f32, left: &mut [f32], right: &mut [f32]) {
         let dt = 1.0 / self.rate as f32;
         let calls = 5.0 * activity.clamp(0.0, 1.5);

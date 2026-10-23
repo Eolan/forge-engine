@@ -640,3 +640,23 @@ fn the_bird_mix_picks_each_voice_by_its_share() {
     // The last share takes the top of the range: u just under 1 is the dove's.
     assert_eq!(default.pick(0.999_99), BirdVoice::Dove);
 }
+
+#[test]
+fn the_dove_calls_only_near_woods() {
+    use forge_audio::ambience::Habitat;
+    let doves = |green: f32| {
+        Habitat {
+            green,
+            indoors: 0.0,
+        }
+        .doves()
+    };
+    // None in a street with a few trees (the town measures 0.05 to 0.09), all of its share in a
+    // wood and in the open country the beds were made for, some at a wood's edge.
+    assert_eq!(doves(0.0), 0.0);
+    assert_eq!(doves(0.1), 0.0);
+    assert_eq!(doves(0.5), 1.0);
+    assert_eq!(doves(1.0), 1.0);
+    let edge = doves(0.35);
+    assert!(edge > 0.3 && edge < 1.0, "{edge}");
+}
