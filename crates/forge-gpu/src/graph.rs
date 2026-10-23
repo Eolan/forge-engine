@@ -62,7 +62,16 @@
 //! 2.13–2.15 ms in the yard) and the async frame nothing. Since 2026-10-17 it also stands before
 //! every dispatch, rendering, blit and acceleration-structure build in a pass: with one before
 //! each pass alone, the physics lab's dominoes still parted in the serial batch, the shading's
-//! output from inputs that hashed alike. `FORGE_SERIAL_BARRIERS=0` leaves them all out.
+//! output from inputs that hashed alike. `FORGE_SERIAL_BARRIERS=0` leaves them all out, and
+//! `FORGE_SERIAL_BARRIERS=all` puts them in the async frame too (a debugging aid).
+//!
+//! The async frame has the same trouble in one place (#349): the mirror rays' pass read some
+//! pixels' colour back as the memory held before the class passes wrote them. Whole tiles of
+//! another transient's content showed on the far ice, in one run in two to eight once a class
+//! pass got faster. The serial frame without its barriers did the same. A full barrier before
+//! the mirror rays' pass alone ends it ([`PassBuilder::full_barrier`]). Found with
+//! `FORGE_FULL_BARRIERS_BEFORE=words`, a full barrier before the passes whose name holds one of
+//! the words.
 //!
 //! Debugging: `FORGE_GRAPH_LOG=1` logs the compiled plan (passes, barriers, transient
 //! placement) whenever it changes; `FORGE_GRAPH_NO_ALIAS=1` gives every transient its own
@@ -788,6 +797,8 @@ struct PassDecl {
     buffers: Vec<BufferUse>,
     /// The queue it asked for; resolved against the device by [`RenderGraph::execute`].
     queue: QueueKind,
+    /// A full memory barrier before it, besides the derived ones ([`PassBuilder::full_barrier`]).
+    full_barrier: bool,
 }
 
 type PassBody<'f> = Box<dyn FnOnce(&Resources<'_>, &Commands<'_>) -> Result<()> + 'f>;
@@ -862,6 +873,7 @@ impl<'f> FrameGraph<'f> {
                 images: Vec::new(),
                 buffers: Vec::new(),
                 queue: QueueKind::Graphics,
+                full_barrier: false,
             },
         }
     }
@@ -901,6 +913,18 @@ impl<'f> PassBuilder<'_, 'f> {
             mip: Some(level),
             access,
         });
+        self
+    }
+
+    /// A full memory barrier before the pass, besides the barriers the graph derives (#349). On the
+    /// RTX 5070 Ti, the mirror rays' pass read some of its pixels' colour back as the memory held
+    /// before the class passes wrote them. Those were this frame's sun-shadow normals, whose
+    /// transient shares the colour target's memory: whole tiles of green on the far ice. The
+    /// derived barrier (storage writes to storage reads and writes, `GENERAL`) orders them, as for
+    /// #204 and #207's passes. It happened only once a class pass got faster, one run in two to
+    /// eight. A full barrier before the pass takes it away.
+    pub fn full_barrier(mut self) -> Self {
+        self.decl.full_barrier = true;
         self
     }
 
@@ -1846,6 +1870,9 @@ pub struct RenderGraph {
     /// `FORGE_GRAPH_NO_ASYNC`: the passes that asked for another queue kept on the graphics
     /// queue, all of them (no words) or those whose name contains one of the words.
     no_async: Option<Vec<String>>,
+    /// `FORGE_FULL_BARRIERS_BEFORE=words`: a full barrier before the passes whose name contains one
+    /// of the words (#349, a debugging aid).
+    full_before: Option<Vec<String>>,
     /// `FORGE_FRAME_BARRIER=1`: a full barrier at the start of each queue's first batch, which
     /// serialises frames on the GPU (a debugging aid).
     frame_barrier: bool,
@@ -1856,7 +1883,8 @@ pub struct RenderGraph {
     /// The frames with transients this graph executed.
     executed: u32,
     /// A full barrier before every pass and every command in it (#207): on NVIDIA's serial
-    /// frame (no async compute queue), unless `FORGE_SERIAL_BARRIERS=0`.
+    /// frame (no async compute queue), unless `FORGE_SERIAL_BARRIERS=0`; in every frame with
+    /// `FORGE_SERIAL_BARRIERS=all`.
     serial_barriers: bool,
     /// What each queue's batches waited for on the other queues, from frame to frame (#104).
     waited: Waited,
@@ -1901,14 +1929,16 @@ impl RenderGraph {
             zero: words("FORGE_GRAPH_ZERO"),
             no_async: words("FORGE_GRAPH_NO_ASYNC"),
             frame_barrier: flag("FORGE_FRAME_BARRIER"),
+            full_before: words("FORGE_FULL_BARRIERS_BEFORE"),
             relayout_at: std::env::var("FORGE_GRAPH_RELAYOUT")
                 .ok()
                 .and_then(|v| v.parse().ok()),
             executed: 0,
             waited: Waited::default(),
-            serial_barriers: device.resolve_queue(QueueKind::Compute) == QueueKind::Graphics
+            serial_barriers: (device.resolve_queue(QueueKind::Compute) == QueueKind::Graphics
                 && device.vendor_id() == VENDOR_NVIDIA
-                && std::env::var_os("FORGE_SERIAL_BARRIERS").is_none_or(|v| v != "0"),
+                && std::env::var_os("FORGE_SERIAL_BARRIERS").is_none_or(|v| v != "0"))
+                || std::env::var_os("FORGE_SERIAL_BARRIERS").is_some_and(|v| v == "all"),
             last_plan: 0,
         }
     }
@@ -2270,7 +2300,15 @@ impl RenderGraph {
             // batch, the shading's output from inputs that hashed alike.
             commands.set_barrier_every_command(self.serial_barriers);
             while let Some((pass, plan)) = work.next_if(|(_, plan)| plan.batch == index) {
-                if self.serial_barriers || (laid_out && plan.first_transient) {
+                let named = self
+                    .full_before
+                    .as_ref()
+                    .is_some_and(|w| w.iter().any(|w| pass.decl.label.contains(w.as_str())));
+                if self.serial_barriers
+                    || named
+                    || pass.decl.full_barrier
+                    || (laid_out && plan.first_transient)
+                {
                     // The transients are new this frame (#204): in the serial frame on the
                     // mesh path, the sun-shadow trace's images read back empty in SIGMA on
                     // such a frame unless a full barrier stood between (on the RTX 5070 Ti;
@@ -2631,6 +2669,7 @@ mod tests {
                 .collect(),
             buffers: Vec::new(),
             queue: QueueKind::Graphics,
+            full_barrier: false,
         }
     }
 
@@ -2844,6 +2883,7 @@ mod tests {
                     },
                 ],
                 queue: QueueKind::Graphics,
+                full_barrier: false,
             },
             PassDecl {
                 label: "g/draw",
@@ -2859,6 +2899,7 @@ mod tests {
                     },
                 ],
                 queue: QueueKind::Graphics,
+                full_barrier: false,
             },
         ];
         let plan = compile(&passes, &[], &mut [], &mut buffers).unwrap();
@@ -2895,6 +2936,7 @@ mod tests {
                 access,
             }],
             queue: QueueKind::Graphics,
+            full_barrier: false,
         };
         let compute = S::COMPUTE_SHADER;
         let passes = [
@@ -2947,6 +2989,7 @@ mod tests {
                 })
                 .collect(),
             queue: QueueKind::Graphics,
+            full_barrier: false,
         }
     }
 

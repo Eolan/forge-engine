@@ -6157,8 +6157,10 @@ impl MeshletRenderer {
         }
         // The mirror rays over the tiles holding smooth rows (issue #52).
         if let (Some(pipeline), Some(request), Some(sky)) = (reflections, request, ambient.sky) {
+            // It reads back the colour the class passes wrote, behind a full barrier (#349).
             let mut builder = graph
                 .pass("shading/reflections")
+                .full_barrier()
                 .image(targets.visibility, ImageAccess::Sampled(compute))
                 .image(color, ImageAccess::StorageReadWrite(compute))
                 .image(request, ImageAccess::StorageRead(compute))
