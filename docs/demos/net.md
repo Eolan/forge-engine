@@ -186,7 +186,9 @@ against the world as its shooter saw it (server-side rewind, Bernier 2001).
 - **`PlayoutClock`:** the moment to draw is the server's tick the freshest recent snapshot implies
   (its tick minus the local time it came, the largest over the last 30), minus a fixed delay. The
   delay covers the gaps between a near person's states (7 ticks, 117 ms, in the test: three
-  snapshot intervals at 30 Hz and one tick of jitter).
+  snapshot intervals at 30 Hz and one tick of jitter). It never goes back: when the freshest
+  arrival leaves the 30 the offset can drop by the link's jitter, and the clock holds until time
+  catches up (a review's find, 2026-10-23).
 - **A shot carries that `Moment`**, a tick and a fraction, which the server takes as its rewind's
   `View`.
 - **Patents:** the delay is the client's own and never set from how its packets arrive. The
@@ -356,7 +358,17 @@ Over 1800 ticks (30 s), against one worker holding everything:
 |---|---|---|---|
 | two workers | 292 | 0 | the same, every tick, to the bit |
 | revokes reaching the old owner up to two ticks late (it keeps writing at its old epoch) | 292 | 312 | the same |
-| worker 1 away from tick 400 to 600, worker 0 covering its region | 244, and 192 reassigned | 0 | the same |
+| worker 1 away from tick 400 to 600, worker 0 covering its region | 243, and 171 reassigned | 0 | the same |
+| three workers (cuts at −4 and 4 m), 1200 ticks: worker 1 away at 400 (0 covering), worker 0 away at 500 (2 covering both regions), 0 back at 700, 1 back at 800 | 198, and 312 reassigned | 0 | the same |
+
+**Covers and give-backs, fixed after a review** (2026-10-23): a coverer going away left the region
+it covered to no one (its entities stood still), two workers gone in one try could cover each
+other, and a worker coming back left entities its coverer kept past its own regions without their
+ghosts for a tick. Now a gone worker's covers go with its own region to the worker taking it, the
+coverer is chosen among the workers still answering, and every reassignment ends with the margin
+rule of a tick's end, so whatever its owner no longer holds is handed over at once (the three-worker
+row above; the two-worker numbers moved from 192 to 171 reassigned, the entities a coverer holds
+within its margin now staying with it).
 
 
 **Over the transport** (`forge_net::layer`): the layer on a server, each worker a client, in
@@ -371,7 +383,7 @@ lockstep on the first channel (reliable, ordered).
 - **The test** (`tests/layer.rs`, QUIC on loopback): the same 200 bots for 900 ticks, against one
   worker holding everything in one process: 142 handoffs, the records the same every tick to the
   bit. Worker 1 killed at tick 400 before it answers (its session closed): covered by worker 0 on
-  that tick, 192 entities reassigned there and back when it returns at tick 600, the records still
+  that tick, 171 entities reassigned there and back when it returns at tick 600, the records still
   the same. The 900 ticks take 0.3 s.
 - **Workers leaving and joining** (2026-10-23): `LayerHost::recut(members)` takes the workers
   now, west to east, cuts the strips again so each holds as many entities as the others

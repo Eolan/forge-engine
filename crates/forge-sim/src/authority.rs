@@ -295,34 +295,27 @@ impl<S: Placed> Layer<S> {
         handoffs
     }
 
-    /// Gives region `away`'s entities, and the region, to worker `to` (a worker gone; `to ==
-    /// away` gives them back), each handed over with its epoch one more. In id order.
+    /// Gives region `away`, and those it covered, to worker `to` (a worker gone; `to == away` gives
+    /// its own region back), then hands over every entity its owner no longer holds within the
+    /// margin, each with its epoch one more, in id order.
     pub fn reassign(&mut self, strips: &Strips, away: WorkerId, to: WorkerId) -> Vec<Handoff> {
         if to == away {
+            // Back: its own region. What it covered while here stays with whoever took it over.
             self.covered.remove(&away);
         } else {
+            // Gone: its region, and those it covered, go to `to`, so no region is left to a worker
+            // gone (a coverer's going left the region it covered to no one).
+            for coverer in self.covered.values_mut() {
+                if *coverer == away {
+                    *coverer = to;
+                }
+            }
             self.covered.insert(away, to);
         }
-        let covered = &self.covered;
-        let owner_of = |region: WorkerId| covered.get(&region).copied().unwrap_or(region);
-        let mut handoffs = Vec::new();
-        for (&id, r) in &mut self.records {
-            let to = owner_of(strips.region(r.state.position()));
-            // The region's entities, and the gone worker's wherever they stand.
-            let moves =
-                (strips.region(r.state.position()) == away || r.owner == away) && to != r.owner;
-            if moves {
-                r.epoch += 1;
-                handoffs.push(Handoff {
-                    id,
-                    from: r.owner,
-                    to,
-                    epoch: r.epoch,
-                });
-                r.owner = to;
-            }
-        }
-        handoffs
+        // Then every entity its owner no longer holds within the margin goes to the owner of where
+        // it stands, as at a tick's end: all of a gone worker's, and those a coverer kept past its
+        // own regions when one comes back (it would step them with no ghosts round them).
+        self.rebalance(strips)
     }
 }
 

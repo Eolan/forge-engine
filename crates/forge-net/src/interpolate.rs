@@ -159,6 +159,8 @@ pub struct PlayoutClock {
     arrivals: VecDeque<(f64, u32)>,
     /// Arrivals the offset is taken over.
     window: usize,
+    /// The last moment drawn, in ticks: the clock never goes back before it.
+    drawn: Option<f64>,
 }
 
 impl PlayoutClock {
@@ -169,6 +171,7 @@ impl PlayoutClock {
             delay,
             arrivals: VecDeque::new(),
             window: window.max(1),
+            drawn: None,
         }
     }
 
@@ -182,14 +185,21 @@ impl PlayoutClock {
     }
 
     /// The moment to draw at local time `now`: the server's tick the freshest recent arrival
-    /// implies, minus the delay. None before the first snapshot.
-    pub fn moment(&self, now: f64) -> Option<Moment> {
+    /// implies, minus the delay, never before the last one drawn. When the freshest arrival leaves
+    /// the window the offset can drop by the link's jitter: the clock holds until time catches up,
+    /// rather than drawing (and shooting at) a moment it already passed. None before the first
+    /// snapshot.
+    pub fn moment(&mut self, now: f64) -> Option<Moment> {
         let offset = self
             .arrivals
             .iter()
             .map(|&(at, tick)| f64::from(tick) - at)
             .reduce(f64::max)?;
-        Some(Moment::at(now + offset - self.delay))
+        let ticks = self.drawn.map_or(now + offset - self.delay, |last| {
+            (now + offset - self.delay).max(last)
+        });
+        self.drawn = Some(ticks);
+        Some(Moment::at(ticks))
     }
 }
 
@@ -251,6 +261,18 @@ mod tests {
         }
         let m = clock.moment(30.0).expect("a moment");
         assert!((m.ticks() - 21.0).abs() < 1e-9, "{m:?}");
+        // A window of two: the freshest arrival leaves it and the offset drops by a tick; the
+        // moment holds there rather than going back, then goes on as time passes.
+        let mut short = PlayoutClock::new(6.0, 2);
+        short.arrived(10.0, 10);
+        short.arrived(13.0, 12);
+        assert!((short.moment(13.0).unwrap().ticks() - 7.0).abs() < 1e-9);
+        short.arrived(16.0, 14);
+        assert!(
+            (short.moment(13.5).unwrap().ticks() - 7.0).abs() < 1e-9,
+            "held"
+        );
+        assert!((short.moment(16.0).unwrap().ticks() - 9.0).abs() < 1e-9);
         assert_eq!(
             Moment::at(21.25),
             Moment {

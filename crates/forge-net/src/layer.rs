@@ -217,11 +217,15 @@ impl<S: Placed + Codec> LayerHost<S> {
             let mut gone = Vec::new();
             for (&w, session) in &self.workers {
                 let picture = self.layer.picture(w, &self.strips);
-                if session
-                    .send(CHANNEL, encode_picture(frame, self.tick, &picture))
-                    .is_err()
-                {
-                    gone.push(w);
+                match session.send(CHANNEL, encode_picture(frame, self.tick, &picture)) {
+                    Ok(()) => {}
+                    // Not a worker gone: covering it would give another a picture larger still.
+                    Err(e @ crate::SendError::TooLarge { .. }) => panic!(
+                        "worker {w}'s picture of {} entities: {e} (TransportSettings::max_message \
+                         on the layer's endpoints)",
+                        picture.len()
+                    ),
+                    Err(_) => gone.push(w),
                 }
             }
             let mut writes: Vec<(WorkerId, Writes<S>)> = Vec::new();
@@ -237,11 +241,14 @@ impl<S: Placed + Codec> LayerHost<S> {
             if gone.is_empty() {
                 break writes;
             }
-            // Covered by the lowest worker left; the tick stepped again from the same pictures.
-            for w in gone {
-                if let Some(session) = self.workers.remove(&w) {
+            // Covered by the lowest worker left (all of this try's gone taken out first, so none
+            // covers another); the tick stepped again from the same pictures.
+            for w in &gone {
+                if let Some(session) = self.workers.remove(w) {
                     session.close();
                 }
+            }
+            for w in gone {
                 let Some(&to) = self.workers.keys().next() else {
                     panic!("no worker left to step the world");
                 };
@@ -295,11 +302,13 @@ pub async fn serve<S: Placed + Codec>(
         };
         worker.take(picture);
         let writes = worker.step(&mut step);
-        if session
-            .send(CHANNEL, encode_writes(frame, tick, &writes))
-            .is_err()
-        {
-            break;
+        match session.send(CHANNEL, encode_writes(frame, tick, &writes)) {
+            Ok(()) => {}
+            // As the host's pictures: a setting to raise, not a worker to lose.
+            Err(e @ crate::SendError::TooLarge { .. }) => {
+                panic!("worker {id}'s writes of {} entities: {e}", writes.len())
+            }
+            Err(_) => break,
         }
         stepped += 1;
     }

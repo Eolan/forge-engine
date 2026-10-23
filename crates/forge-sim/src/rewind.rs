@@ -140,7 +140,7 @@ impl History {
     }
 
     /// The shapes as they stand at `tick` (after its step): kept in the order given, the oldest
-    /// tick dropped past the window. Ticks must come in order.
+    /// tick dropped past the window. Ticks must come in order; one may be skipped.
     pub fn record(&mut self, tick: u64, shapes: impl IntoIterator<Item = (u32, Capsule)>) {
         debug_assert!(self.ticks.back().is_none_or(|(t, _)| *t < tick));
         if self.ticks.len() == self.window {
@@ -181,18 +181,22 @@ impl History {
         let Some(view) = self.clamp(view) else {
             return Vec::new();
         };
-        let (lo, _) = self.span().expect("a history");
-        let i = (view.tick - lo) as usize;
-        let (_, now) = &self.ticks[i];
-        let next = self.ticks.get(i + 1).map(|(_, s)| s);
+        // The last tick kept at or before the view's (ticks may skip: found, not counted), and
+        // the share of the way to the next kept one.
+        let i = self.ticks.partition_point(|(t, _)| *t <= view.tick) - 1;
+        let (t0, now) = &self.ticks[i];
+        let next = self.ticks.get(i + 1).map(|(t1, s)| {
+            let share = ((view.tick - t0) as f64 + view.fraction) / (t1 - t0) as f64;
+            (share, s)
+        });
         now.iter()
             .map(|&(id, shape)| {
                 let then = next
-                    .filter(|_| view.fraction > 0.0)
-                    .and_then(|s| s.iter().find(|(o, _)| *o == id));
+                    .filter(|&(share, _)| share > 0.0)
+                    .and_then(|(share, s)| s.iter().find(|(o, _)| *o == id).map(|t| (share, t)));
                 (
                     id,
-                    then.map_or(shape, |(_, t)| shape.lerp(t, view.fraction)),
+                    then.map_or(shape, |(share, (_, t))| shape.lerp(t, share)),
                 )
             })
             .collect()
@@ -226,6 +230,32 @@ impl History {
 mod tests {
     use super::*;
     use crate::TICK;
+
+    /// Ticks kept every other one: a view between two is found and drawn over their span, never
+    /// read past the history.
+    #[test]
+    fn a_history_with_skipped_ticks_finds_the_tick_before_the_view() {
+        let mut history = History::new(12);
+        for tick in (0..24).step_by(2) {
+            let x = tick as f64;
+            history.record(
+                tick,
+                [(1, Capsule::standing(DVec3::new(x, 0.0, 0.0), 1.8, 0.3))],
+            );
+        }
+        assert_eq!(history.span(), Some((0, 22)));
+        // Tick 21 and a half: three quarters of the way from 20 to 22.
+        let at = history.at(View {
+            tick: 21,
+            fraction: 0.5,
+        });
+        assert!((at[0].1.a.x - 21.5).abs() < 1e-9, "{:?}", at[0].1);
+        let at = history.at(View {
+            tick: 20,
+            fraction: 0.0,
+        });
+        assert_eq!(at[0].1.a.x, 20.0);
+    }
 
     #[test]
     fn a_ray_meets_a_capsule_on_its_side_and_its_ends() {

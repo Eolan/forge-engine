@@ -86,6 +86,9 @@ enum Trouble {
     LateRevokes,
     /// Worker 1 goes away at tick 400 (worker 0 covers its region) and comes back at tick 600.
     WorkerAway,
+    /// Three workers: worker 1 away at tick 400 (covered by 0), then worker 0 away at 500 (covered by
+    /// 2, its own region and the one it covered), worker 0 back at 700, worker 1 back at 800.
+    Chain,
     /// Worker 1 leaves for good at tick 400 and worker 2 joins at tick 600: the strips are cut
     /// again each time, balanced over where the bots stand.
     Membership,
@@ -127,6 +130,19 @@ fn run(start: &Strips, ticks: usize, trouble: Trouble) -> Run {
         if trouble == Trouble::WorkerAway && tick == 600 {
             workers[1] = Some(Worker::new(1));
             out.reassigned += layer.reassign(&strips, 1, 1).len();
+        }
+        if trouble == Trouble::Chain {
+            let event = match tick {
+                400 => Some((1, 0, false)),
+                500 => Some((0, 2, false)),
+                700 => Some((0, 0, true)),
+                800 => Some((1, 1, true)),
+                _ => None,
+            };
+            if let Some((worker, to, back)) = event {
+                workers[usize::from(worker)] = back.then(|| Worker::new(worker));
+                out.reassigned += layer.reassign(&strips, worker, to).len();
+            }
         }
         // A worker leaving or joining: the strips cut again over the members, the handoffs at once.
         let members = match (trouble, tick) {
@@ -198,6 +214,11 @@ fn two() -> Strips {
     Strips::new(vec![0.0], 2.0, 2.0 + REACH + 0.01)
 }
 
+/// Three workers, the strips meeting at x = −4 and 4.
+fn three() -> Strips {
+    Strips::new(vec![-4.0, 4.0], 2.0, 2.0 + REACH + 0.01)
+}
+
 /// One worker holding everything: the reference.
 fn one() -> Strips {
     Strips::new(Vec::new(), 2.0, 0.0)
@@ -266,5 +287,17 @@ fn a_worker_leaving_and_another_joining_cut_the_strips_again() {
     assert_eq!(split.owned.get(&1), None, "the worker gone owns nothing");
     let (a, b) = (split.owned[&0], split.owned[&2]);
     assert!(a.abs_diff(b) < 60, "{a} and {b}");
+    assert_eq!(first_difference(&split, &reference), None);
+}
+
+#[test]
+fn three_workers_cover_each_other_in_a_chain_and_come_back() {
+    let reference = run(&one(), 1200, Trouble::None);
+    let split = run(&three(), 1200, Trouble::Chain);
+    eprintln!(
+        "three workers, covered in a chain: {} reassigned, {} handoffs besides",
+        split.reassigned, split.handoffs
+    );
+    assert!(split.reassigned > 100, "{} reassigned", split.reassigned);
     assert_eq!(first_difference(&split, &reference), None);
 }
