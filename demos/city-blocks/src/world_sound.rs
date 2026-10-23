@@ -6,7 +6,7 @@
 
 use forge_app::FlyCamera;
 use forge_app::sound::Sound;
-use forge_audio::ambience::{Ambience, AmbienceAssets, AmbienceState, Habitat};
+use forge_audio::ambience::{Ambience, AmbienceAssets, AmbienceState, BirdMix, Habitat};
 use forge_audio::{Foley, Listener, PlayParams, Step, Surface};
 use glam::{DVec3, Vec3};
 
@@ -36,15 +36,18 @@ pub struct WorldSound {
 impl WorldSound {
     /// Starts the beds (the recorded birds and cicadas where `tools/fetch-sounds.sh` put them,
     /// under the engine's root whatever the working directory, #350; beds made in code
-    /// otherwise) at `hour`.
-    pub fn start(sound: &mut Sound, hour: f32) -> Self {
+    /// otherwise) at `hour`, the birds by the scene's `bird_mix` (the default's without one).
+    pub fn start(sound: &mut Sound, hour: f32, bird_mix: Option<BirdMix>) -> Self {
         let rate = sound.sample_rate();
         let state = AmbienceState {
             hour,
             ..AmbienceState::default()
         };
         let root = forge_app::workspace_root_from(env!("CARGO_MANIFEST_DIR"));
-        let assets = AmbienceAssets::load(root.join("assets/sounds"), rate).unwrap_or_default();
+        let mut assets = AmbienceAssets::load(root.join("assets/sounds"), rate).unwrap_or_default();
+        if let Some(mix) = bird_mix {
+            assets.bird_mix = mix;
+        }
         let ambience = Ambience::start_with(
             &mut sound.engine,
             &sound.streams,

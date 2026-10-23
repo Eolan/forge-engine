@@ -164,6 +164,8 @@ interactive; **scripted runs never do**: a frame limit (`--frames`), a capture, 
   - **The place** (#350, `Running::habitat`): how green the ground within earshot is and how far
     indoors the camera stands. The beds follow it over 1.5 s (open country when a scene gives
     none).
+  - **The birds** (#350, `Running::bird_mix`): the scene's species and their shares, read once
+    when the beds start (the Mediterranean village's when a scene gives none).
   - **The recordings** are read from the engine's `assets/sounds/` whatever the working
     directory. A game run from its own folder used to get the beds made in code.
 - **The village's place** (city-plan, #350): the share of the ground within 32 m under the crowns

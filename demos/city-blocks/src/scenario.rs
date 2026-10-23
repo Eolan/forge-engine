@@ -253,4 +253,9 @@ pub trait Running: Send {
     fn habitat(&self, _listener: Vec3) -> Option<forge_audio::ambience::Habitat> {
         None
     }
+    /// Its birds' species and shares (#350), read once when the ambience starts. None by
+    /// default: [`forge_audio::ambience::BirdMix`]'s Mediterranean village.
+    fn bird_mix(&self) -> Option<forge_audio::ambience::BirdMix> {
+        None
+    }
 }

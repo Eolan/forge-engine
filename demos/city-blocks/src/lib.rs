@@ -2263,9 +2263,10 @@ impl Demo for Gallery {
         // sun's hour (mid-afternoon when nothing sets it), the player's steps, the scene's own.
         if let Some(sound) = ctx.sound.as_mut() {
             let hour = self.sun_cycle.map_or(15.0, world_sound::hour_of_cycle);
+            let bird_mix = self.running.as_ref().and_then(|r| r.bird_mix());
             let world = self
                 .world_sound
-                .get_or_insert_with(|| world_sound::WorldSound::start(sound, hour));
+                .get_or_insert_with(|| world_sound::WorldSound::start(sound, hour, bird_mix));
             world.set_habitat(
                 self.running
                     .as_ref()
