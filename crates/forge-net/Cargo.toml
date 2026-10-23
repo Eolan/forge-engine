@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 forge-core = { workspace = true }
+forge-sim = { workspace = true }
 glam = { workspace = true }
 libm = { workspace = true }
 thiserror = { workspace = true }
@@ -22,5 +23,3 @@ rcgen = { version = "0.14", default-features = false, features = ["crypto", "rin
 ring = "0.17"
 tokio = { version = "1", features = ["rt", "time", "sync", "net", "macros"] }
 
-[dev-dependencies]
-forge-sim = { workspace = true }

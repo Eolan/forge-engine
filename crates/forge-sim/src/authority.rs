@@ -104,6 +104,17 @@ pub struct Handoff {
     pub epoch: u32,
 }
 
+/// An entity in a worker's picture of the layer ([`Layer::picture`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Seen<S> {
+    /// The entity.
+    pub id: EntityId,
+    /// The epoch it was granted at, when the worker owns it; none for a ghost.
+    pub epoch: Option<u32>,
+    /// Its state.
+    pub state: S,
+}
+
 /// The replication layer: every entity's record (see the module's documentation).
 #[derive(Clone, Debug)]
 pub struct Layer<S> {
@@ -166,6 +177,30 @@ impl<S: Placed> Layer<S> {
                 Err(Stale { id, epoch })
             }
         }
+    }
+
+    /// What `worker` takes at a tick's barrier, in id order: the entities it owns, with their
+    /// epochs, and as ghosts the others within the band of a region it holds. One picture a tick,
+    /// all of it: the worker works out what came and went (`docs/research/netcode.md` §9).
+    pub fn picture(&self, worker: WorkerId, strips: &Strips) -> Vec<Seen<S>> {
+        let regions: Vec<WorkerId> = (0..strips.workers() as WorkerId)
+            .filter(|&w| self.owner_of_region(w) == worker)
+            .collect();
+        self.records
+            .iter()
+            .filter_map(|(&id, r)| {
+                let epoch = (r.owner == worker).then_some(r.epoch);
+                let seen = epoch.is_some()
+                    || regions
+                        .iter()
+                        .any(|&w| strips.outside(w, r.state.position()) <= strips.band);
+                seen.then(|| Seen {
+                    id,
+                    epoch,
+                    state: r.state.clone(),
+                })
+            })
+            .collect()
     }
 
     /// The worker that owns region `region` now: its own, or the one covering it.
@@ -273,21 +308,23 @@ impl<S: Placed> Worker<S> {
     }
 
     /// At the tick's barrier: takes from `layer` the entities it owns, with their epochs, and as
-    /// ghosts the others within the band of a region it holds.
+    /// ghosts the others within the band of a region it holds ([`Layer::picture`]).
     pub fn sync(&mut self, layer: &Layer<S>, strips: &Strips) {
+        self.take(layer.picture(self.id, strips));
+    }
+
+    /// Takes a picture the layer made for it ([`Layer::picture`]), in place of what it held.
+    pub fn take(&mut self, picture: impl IntoIterator<Item = Seen<S>>) {
         self.owned.clear();
         self.ghosts.clear();
-        let regions: Vec<WorkerId> = (0..strips.workers() as WorkerId)
-            .filter(|&w| layer.owner_of_region(w) == self.id)
-            .collect();
-        for (&id, r) in layer.records() {
-            if r.owner == self.id {
-                self.owned.insert(id, (r.epoch, r.state.clone()));
-            } else if regions
-                .iter()
-                .any(|&w| strips.outside(w, r.state.position()) <= strips.band)
-            {
-                self.ghosts.insert(id, r.state.clone());
+        for seen in picture {
+            match seen.epoch {
+                Some(epoch) => {
+                    self.owned.insert(seen.id, (epoch, seen.state));
+                }
+                None => {
+                    self.ghosts.insert(seen.id, seen.state);
+                }
             }
         }
     }

@@ -330,6 +330,9 @@ ticks. 200 bots across a two-worker boundary step to the bit as one worker steps
 revokes arriving late (312 stale writes refused) and with a worker away and covered. The
 protocol keeps clear of Improbable's 2016 family (`research/netcode.md` §9): no advance notice
 of a handover, whole-entity authority taken as one picture a tick, one layer, one tick rate.
+Over QUIC the same day (`forge_net::layer`): the layer on a server, each worker a client in
+lockstep; a worker killed mid-tick is covered by another and the tick stepped again from the same
+pictures, so the records still match one worker's to the bit.
 
 ## D-011 — Audio: own data layer and mixer, Steam Audio spatialiser ✅ (2026-09-24)
 

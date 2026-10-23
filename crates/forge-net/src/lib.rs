@@ -27,6 +27,8 @@
 //!   priority accumulator under each client's byte budget;
 //! - [`interpolate`]: the client's picture of the others, a fixed delay behind the server's clock,
 //!   and the moment a shot carries for the authority's rewind;
+//! - [`layer`]: the replication layer and its workers over the transport (`forge_sim::authority`),
+//!   one picture a tick each, the tick stepped again when a worker goes;
 //! - [`crowd`]: a stand-in crowd for the tests and the measures.
 
 #![forbid(unsafe_code)]
@@ -39,6 +41,7 @@ pub mod endpoint;
 pub mod fragment;
 pub mod interest;
 pub mod interpolate;
+pub mod layer;
 pub mod protocol;
 pub mod quantize;
 pub mod replicate;

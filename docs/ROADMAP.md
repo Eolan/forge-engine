@@ -617,7 +617,8 @@ The items below are the phase's original outline; the plan above orders them.
    quantisation, the accumulator and interest by cells ✅ (#268, 2026-10-16: 100 clients over QUIC at
    23.6 kB/s each for 10 minutes with 100 ms and 2 % loss, on loopback); the handoff in one process ✅
    (#268, 2026-10-23, `forge_sim::authority`: 200 bots across a two-worker boundary stepping to the
-   bit as one worker, stale writes fenced by epochs, a worker away covered), its processes next.
+   bit as one worker, stale writes fenced by epochs, a worker away covered), and over QUIC
+   (`forge_net::layer`: a worker killed covered without losing a tick).
 3. Prediction and reconciliation (input queues that wait rather than repeat), lag
    compensation, replays.
    **Demo:** `hundred-bots` — 100 headless bots over a 100 ms / 2 % loss link on the server

@@ -250,10 +250,25 @@ Over 1800 ticks (30 s), against one worker holding everything:
 | revokes reaching the old owner up to two ticks late (it keeps writing at its old epoch) | 292 | 312 | the same |
 | worker 1 away from tick 400 to 600, worker 0 covering its region | 244, and 192 reassigned | 0 | the same |
 
+
+**Over the transport** (`forge_net::layer`): the layer on a server, each worker a client, in
+lockstep on the first channel (reliable, ordered).
+- **Each tick:** the layer sends each worker one picture (its own entities with their epochs, its
+  ghosts); each worker steps its own and sends its writes back (`layer::serve`); once every worker
+  has answered, the layer takes the writes and hands over what crossed.
+- **A worker gone:** a session that closes, or stays silent past the host's patience, is covered
+  by the lowest worker left. The tick's writes are set aside and the tick is stepped again from the
+  same pictures, so no tick is lost. A message carries its frame, so an answer to the first try is
+  dropped. A worker that comes back is attached again and takes its region back.
+- **The test** (`tests/layer.rs`, QUIC on loopback): the same 200 bots for 900 ticks, against one
+  worker holding everything in one process: 142 handoffs, the records the same every tick to the
+  bit. Worker 1 killed at tick 400 before it answers (its session closed): covered by worker 0 on
+  that tick, 192 entities reassigned there and back when it returns at tick 600, the records still
+  the same. The 900 ticks take 0.3 s.
 ## Next
 
-- The layer and its workers as processes over the transport (the handoff is in one process
-  so far); lag compensation in a scene (a shot in
+- The layer and its workers on separate machines (the server PC), and a worker's region split
+  and merged by load (its own patent search first); lag compensation in a scene (a shot in
   the lab's `--net`, the client's `Interpolator` drawing what it aims at), replays (step 3), and the
   `hundred-bots` demo on the server PC.
 - The population of #250 as the replicated world: its near tiers' records in place of the crowd.
