@@ -44,8 +44,10 @@ Varyings vert_main(uint vertex : SV_VertexID)
     Quad quad = push.quads[q];
     float2 pixel = float2(k.x != 0 ? quad.rect.z : quad.rect.x, k.y != 0 ? quad.rect.w : quad.rect.y);
     Varyings o;
-    // Vulkan's clip space has y down, as the window's pixels.
-    o.position = float4(pixel / push.size * 2.0 - 1.0, 0.0, 1.0);
+    // The shell's viewport is flipped (`set_viewport_full`: y up in clip space), and the
+    // window's pixels count down from its top.
+    float2 clip = pixel / push.size * 2.0 - 1.0;
+    o.position = float4(clip.x, -clip.y, 0.0, 1.0);
     o.uv = float2(k.x != 0 ? quad.uv.z : quad.uv.x, k.y != 0 ? quad.uv.w : quad.uv.y);
     o.quad = q;
     return o;

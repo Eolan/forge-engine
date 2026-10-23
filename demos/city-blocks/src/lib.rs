@@ -2087,6 +2087,10 @@ impl Gallery {
 }
 
 impl Demo for Gallery {
+    fn networked(&self) -> bool {
+        self.running.as_ref().is_some_and(|r| r.networked())
+    }
+
     fn resized(&mut self, ctx: &mut Context) -> Result<()> {
         self.renderer.resize(ctx.extent())?;
         self.taa.resize(ctx.extent())?;
@@ -2197,11 +2201,9 @@ impl Demo for Gallery {
             self.frame_ms.push(ms);
             self.run_frame_ms.push(ms);
         }
-        self.step = if self.args.fixed_step {
-            1.0 / self.args.step_hz
-        } else {
-            dt
-        };
+        // Behind the game's menu a solo game holds (#352): no step, fixed or not.
+        let fixed = self.args.fixed_step && !ctx.paused;
+        self.step = if fixed { 1.0 / self.args.step_hz } else { dt };
         self.sea_time = match self.args.sea_time {
             Some(still) => still,
             None => self.sea_time + f64::from(self.step),
@@ -2216,7 +2218,7 @@ impl Demo for Gallery {
         // The island's walker (#196), as the playground's player walks.
         if let Some(walker) = &mut self.walker {
             walker.walk(wished_walk(&self.args, self.camera.yaw, input));
-            walker.advance(f64::from(dt), self.args.fixed_step);
+            walker.advance(f64::from(dt), fixed);
         }
         if let Some(length) = self.args.day {
             self.day_time += self.step;
@@ -2225,26 +2227,26 @@ impl Demo for Gallery {
             self.set_sun_of_day((self.day_time / length.max(1.0)).rem_euclid(cycle));
         }
         if let Some(tour) = &self.tour {
-            self.tour_time += if self.args.fixed_step { 1.0 / 60.0 } else { dt };
+            self.tour_time += if fixed { 1.0 / 60.0 } else { dt };
             tour.place(&mut self.camera, self.tour_time);
         } else if self.args.fly {
             // Counter-clockwise seen from above, facing along the path, a little down.
             const RADIUS: f32 = 1400.0;
             const SPEED: f32 = 300.0;
-            self.fly_time += if self.args.fixed_step { 1.0 / 60.0 } else { dt };
+            self.fly_time += if fixed { 1.0 / 60.0 } else { dt };
             let angle = self.fly_time * SPEED / RADIUS;
             self.camera.position = Vec3::new(angle.sin() * RADIUS, 140.0, angle.cos() * RADIUS);
             self.camera.yaw = angle - std::f32::consts::FRAC_PI_2;
             self.camera.pitch = -0.15;
         } else if let Some(speed) = self.args.dolly {
-            let step = if self.args.fixed_step { 1.0 / 60.0 } else { dt };
+            let step = if fixed { 1.0 / 60.0 } else { dt };
             self.camera.position += self.camera.forward() * speed * step;
         } else if let Some(speed) = self.args.pan {
-            let step = if self.args.fixed_step { 1.0 / 60.0 } else { dt };
+            let step = if fixed { 1.0 / 60.0 } else { dt };
             let right = self.camera.forward().cross(Vec3::Y).normalize_or_zero();
             self.camera.position += right * speed * step;
         } else if let Some(rate) = self.args.yaw_rate {
-            let step = if self.args.fixed_step { 1.0 / 60.0 } else { dt };
+            let step = if fixed { 1.0 / 60.0 } else { dt };
             self.camera.yaw -= rate.to_radians() * step;
         } else if self.args.orbit {
             // Deterministic per frame (not per second) so captures at a frame index match.

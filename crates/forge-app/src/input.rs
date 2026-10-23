@@ -24,9 +24,8 @@ pub struct Input {
     /// The window has lost the keyboard's focus (Alt+Tab, another window clicked): the cursor is
     /// the system's again and the mouse's motion is not the game's.
     pub(crate) unfocused: bool,
-    /// The game's mouse look let the cursor go at Esc (where a game opens its menu; the game
-    /// runs on, as a networked one must): the view keeps still until a click in the window takes
-    /// the cursor back (the click is not the game's), and another Esc quits.
+    /// The game's menu is open (#352): the cursor is the system's, the view keeps still, and the
+    /// keys and buttons are the menu's until it closes.
     pub(crate) paused: bool,
 }
 

@@ -266,4 +266,9 @@ pub trait Running: Send {
     fn bird_mix(&self) -> Option<forge_audio::ambience::BirdMix> {
         None
     }
+    /// Whether it runs with others, through a server: the game's menu (#352) then leaves it
+    /// running. False by default: a solo scene holds behind the menu.
+    fn networked(&self) -> bool {
+        false
+    }
 }

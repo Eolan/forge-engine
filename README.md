@@ -65,7 +65,7 @@ cargo clippy --workspace --all-targets
 All rendering demos share these options: `--vsync`, `--validate` (Vulkan validation layer),
 `--frames N` (exit after N frames, for headless runs), `--capture out.png --capture-frame N`
 (save frame N as a PNG). Right mouse drag looks around, WASD/QE move, Shift is 5 times faster
-and Ctrl 25 times (both together 125), Esc quits.
+and Ctrl 25 times (both together 125), Esc opens the menu (resume, settings, quit).
 
 ### `asteroids` — the ballad
 
@@ -77,7 +77,7 @@ A 90-second scripted flight through 10 000 asteroids (rock chunks and ice blocks
 procedural shapes (531 M source triangles) over a procedural sky with the sun and an Earth-like planet under a
 physical atmosphere, with temporal anti-aliasing. Keys: **F1** profiling overlay (off →
 compact → full: GPU time per pass and CPU time per zone, grouped by subject; the same zones go
-to Tracy with `--features profiling`), **Alt+Enter** fullscreen, **Esc** quit, and the key under
+to Tracy with `--features profiling`), **Alt+Enter** fullscreen, **Esc** the menu (resume, settings, quit), and the key under
 Esc (² on AZERTY, ` on QWERTY) for the console: the rest is set from there, or from a key the
 console's `bind` gives it (D-069's key map, 2026-10-17;
 [docs/demos/console.md](docs/demos/console.md) lists the settings and the keys they had before).

@@ -17,6 +17,7 @@ mod hdr;
 pub mod hud;
 mod input;
 mod loading;
+mod menu;
 mod overlay;
 mod profile;
 pub mod settings;
@@ -199,6 +200,10 @@ pub struct Context {
     /// A lens over the picture this frame (#328, a scope's), under the HUD's quads; emptied
     /// after it is drawn.
     pub magnifier: Option<hud::HudMagnifier>,
+    /// The game's menu is open over a solo game (#352): the game holds behind it. The shell
+    /// passes the update a zero `dt`; a demo that steps at a fixed rate of its own skips its
+    /// steps while this is set.
+    pub paused: bool,
     /// The frame's size over the window's, each way: 1, or [`ssaa::FACTOR`] when supersampling.
     ssaa: u32,
     /// The first frame (in the frame slots' numbering) the demo recorded after the loading
@@ -309,6 +314,12 @@ pub trait Demo: Sized + 'static {
     /// [`run_loading`]).
     fn register(&mut self, _ctx: &mut Context) {}
 
+    /// Whether the game runs with others (a networked session): its menu (#352) then leaves it
+    /// running; a solo game holds behind the menu ([`Context::paused`]).
+    fn networked(&self) -> bool {
+        false
+    }
+
     /// Runs a console command the demo registered: what to print, or why it failed. `None`
     /// when the command is not the demo's.
     fn command(
@@ -340,8 +351,8 @@ pub fn run_loading<D: Demo + Send>(
     })
 }
 
-/// Runs the demo built by `init` until the window closes, Escape is pressed or the frame
-/// limit is reached. The demo and the shell's resources are dropped before it returns, but the
+/// Runs the demo built by `init` until the window closes, the game's menu quits (#352) or the
+/// frame limit is reached. The demo and the shell's resources are dropped before it returns, but the
 /// GPU device itself is left for the process's end to reclaim (#341), unless validating or with
 /// `FORGE_TEARDOWN=1`: a host that runs it more than once in a process sets that.
 pub fn run<D: Demo>(
@@ -603,9 +614,17 @@ struct State<D: Demo> {
     /// The game's HUD (#328) and `app.hud`, whether it shows.
     hud: hud::Hud,
     hud_shown: Var<bool>,
-    /// `snd.volume`: the master's level (#318), and the level last sent to the mixer.
+    /// `snd.volume`: the master's level (#318), and the level last sent to the mixer: faded to
+    /// silence behind the game's menu while the game holds (#352).
     volume: Var<f64>,
     volume_sent: f64,
+    /// The game's menu on Esc (#352), its glyphs (none if they could not be made), and where the
+    /// cursor stands in the window, pixels.
+    menu: menu::Menu,
+    menu_font: Option<menu::MenuFont>,
+    cursor: [f32; 2],
+    /// The overlay's font, which the menu's glyphs are made from when it first opens.
+    font_path: PathBuf,
     /// The playing audio device, for as long as the run lasts.
     _sound_output: Option<sound::Output>,
     /// The mix written to a file instead (`AppConfig::sound_record`).
@@ -730,6 +749,45 @@ impl<D: Demo> State<D> {
     }
 
     /// A key on the open calibration pages (`fine`: Shift is down).
+    /// Opens the game's menu (#352), its glyphs made the first time: the keys and buttons held
+    /// let go, the cursor the system's.
+    fn open_menu(&mut self) {
+        if self.menu_font.is_none() {
+            match menu::MenuFont::new(&self.ctx.device, Some(&self.font_path)) {
+                Ok(font) => self.menu_font = Some(font),
+                Err(e) => tracing::warn!("the menu's glyphs: {e}"),
+            }
+        }
+        self.menu.open();
+        self.input.release_all();
+        self.input.paused = true;
+        self.input.looking = false;
+        self.input.mouse_delta = (0.0, 0.0);
+        free_cursor(&self.ctx.window);
+    }
+
+    /// Closes the menu: the game's mouse look takes the cursor again.
+    fn close_menu(&mut self) {
+        self.menu.close();
+        self.input.paused = false;
+        if self.input.mouse_look && !self.input.unfocused {
+            self.input.looking = true;
+            capture_cursor(&self.ctx.window);
+        }
+    }
+
+    /// Does what the menu asked: whether to quit.
+    fn menu_action(&mut self, action: Option<menu::Action>) -> bool {
+        match action {
+            Some(menu::Action::Resume) => {
+                self.close_menu();
+                false
+            }
+            Some(menu::Action::Quit) => true,
+            None => false,
+        }
+    }
+
     /// Borderless fullscreen on the window's monitor, or back to the window as it was before:
     /// its place, its size, maximised or not (Alt+Enter and `app.fullscreen`, the owner).
     fn toggle_fullscreen(&mut self) {
@@ -765,6 +823,7 @@ impl<D: Demo> State<D> {
     fn run_command(&mut self, name: &str, args: &[String]) -> Result<bool> {
         match name {
             "app.quit" => return Ok(true),
+            "app.menu" => self.open_menu(),
             "app.fullscreen" => self.toggle_fullscreen(),
             "app.capture" => {
                 let path = PathBuf::from(args.first().map_or("capture.png", String::as_str));
@@ -1067,7 +1126,13 @@ impl<D: Demo> State<D> {
             "Saves the next frame as a PNG (capture.png by default).",
             false,
         );
-        settings.add_command("app.quit", "", "Closes the window, as Escape does.", true);
+        settings.add_command("app.quit", "", "Closes the window.", true);
+        settings.add_command(
+            "app.menu",
+            "",
+            "Opens the game's menu, as Esc does (#352).",
+            true,
+        );
         settings.add_command(
             "app.fullscreen",
             "",
@@ -1119,6 +1184,7 @@ impl<D: Demo> State<D> {
             hud: Vec::new(),
             magnifier: None,
             ssaa: 1,
+            paused: false,
             counted_from: 0,
             _surface: surface,
             _instance: instance,
@@ -1198,6 +1264,10 @@ impl<D: Demo> State<D> {
             hud_shown,
             volume,
             volume_sent: 1.0,
+            menu: menu::Menu::default(),
+            menu_font: None,
+            cursor: [0.0; 2],
+            font_path,
             _sound_output: sound_output,
             sound_recorder,
             unmatched_reported: false,
@@ -1343,9 +1413,9 @@ impl<D: Demo> State<D> {
         let look = self.ctx.settings.get(self.mouse_look);
         if look != self.input.mouse_look {
             self.input.mouse_look = look;
-            self.input.paused = false;
+            self.input.paused = self.menu.is_open();
             // Out of the window, it waits for the focus to come back (`WindowEvent::Focused`).
-            let take = look && !self.input.unfocused;
+            let take = look && !self.input.unfocused && !self.menu.is_open();
             self.input.looking = take;
             if take {
                 capture_cursor(&self.ctx.window);
@@ -1400,17 +1470,36 @@ impl<D: Demo> State<D> {
             }
         }
         let was_loading = self.ctx.loading;
+        // Behind the game's menu a solo game holds (#352): its update sees no time pass, and its
+        // sound fades out over a quarter of a second, and back in after.
+        self.ctx.paused = self.menu.is_open() && !self.demo.networked();
+        if self.menu.is_open() {
+            self.input.mouse_delta = (0.0, 0.0);
+            self.input.wheel = 0.0;
+        }
         if let Some(sound) = self.ctx.sound.as_mut() {
             sound.update();
-            let volume = self.ctx.settings.get(self.volume);
-            if volume != self.volume_sent {
+            let volume = if self.ctx.paused {
+                0.0
+            } else {
+                self.ctx.settings.get(self.volume)
+            };
+            let fade = f64::from(dt) * 4.0;
+            let gain = self.volume_sent + (volume - self.volume_sent).clamp(-fade, fade);
+            let gain = if (gain - volume).abs() < 1e-3 {
+                volume
+            } else {
+                gain
+            };
+            if gain != self.volume_sent {
                 sound.engine.control(forge_audio::Control::BusGain {
                     bus: forge_audio::BusId::MASTER,
-                    gain: volume as f32,
+                    gain: gain as f32,
                 });
-                self.volume_sent = volume;
+                self.volume_sent = gain;
             }
         }
+        let dt = if self.ctx.paused { 0.0 } else { dt };
         let update_start = Instant::now();
         {
             #[cfg(feature = "profiling")]
@@ -1677,15 +1766,25 @@ impl<D: Demo> State<D> {
             }
             // The game's HUD (#328): over the picture, under the debug overlay; its lens first
             // (not in the HDR outputs yet), then its quads.
+            // The game's menu (#352) over them, shown with `app.hud 0` too.
+            let hud_shown = self.ctx.settings.get(self.hud_shown);
             let lens = self
                 .ctx
                 .magnifier
                 .take()
-                .filter(|_| !self.ctx.output.is_hdr());
-            if self.ctx.settings.get(self.hud_shown)
-                && !self.ctx.loading
-                && (!self.ctx.hud.is_empty() || lens.is_some())
+                .filter(|_| hud_shown && !self.ctx.output.is_hdr());
+            if !hud_shown {
+                self.ctx.hud.clear();
+            }
+            if self.menu.is_open()
+                && let Some(font) = &self.menu_font
             {
+                let size = [extent.width as f32, extent.height as f32];
+                let paused = self.ctx.paused;
+                self.menu
+                    .draw(font, size, &self.ctx.settings, paused, &mut self.ctx.hud);
+            }
+            if !self.ctx.loading && (!self.ctx.hud.is_empty() || lens.is_some()) {
                 self.hud.set_output(
                     &self.ctx.shaders,
                     self.ctx.swapchain.format(),
@@ -2050,18 +2149,34 @@ impl<D: Demo> ApplicationHandler for App<D> {
                         }
                         return;
                     }
-                    if pressed && code == KeyCode::Escape {
-                        // Where a game opens its menu (none yet; the game runs on, as a networked
-                        // one must): the game's mouse look first lets the cursor go, a click in
-                        // the window takes it back, and Esc while it is let go quits.
-                        if state.input.mouse_look && !state.input.paused {
-                            state.input.paused = true;
-                            state.input.looking = false;
-                            state.input.mouse_delta = (0.0, 0.0);
-                            free_cursor(&state.ctx.window);
-                            return;
+                    // The game's menu (#352): open, it takes the keys (but F1), the demo sees only
+                    // releases; held, the arrows repeat.
+                    if state.menu.is_open() && code != KeyCode::F1 {
+                        if !pressed {
+                            state.input.set_key(code, false);
+                        } else if !event.repeat
+                            || matches!(
+                                code,
+                                KeyCode::ArrowUp
+                                    | KeyCode::ArrowDown
+                                    | KeyCode::ArrowLeft
+                                    | KeyCode::ArrowRight
+                            )
+                        {
+                            let action = state.menu.key(code, &mut state.ctx.settings);
+                            if state.menu_action(action) {
+                                event_loop.exit();
+                            }
                         }
-                        event_loop.exit();
+                        return;
+                    }
+                    // Esc opens it; while loading, Esc still closes the window.
+                    if pressed && code == KeyCode::Escape {
+                        if state.ctx.loading {
+                            event_loop.exit();
+                        } else if !event.repeat {
+                            state.open_menu();
+                        }
                         return;
                     }
                     if pressed && code == KeyCode::F1 {
@@ -2108,13 +2223,23 @@ impl<D: Demo> ApplicationHandler for App<D> {
                 ..
             } => {
                 let down = pressed == ElementState::Pressed;
-                // Let go at Esc, the game's mouse look takes the cursor back at a click in the
-                // window, which the game does not get (its release is not either: no button is
-                // held).
-                if down && state.input.paused {
-                    state.input.paused = false;
-                    state.input.looking = true;
-                    capture_cursor(&state.ctx.window);
+                // The game's menu (#352) takes the buttons: a left click takes the entry under
+                // the cursor; the game gets none of them (their releases neither: none is held).
+                if state.menu.is_open() {
+                    if down
+                        && button == MouseButton::Left
+                        && let Some(m) = state.menu_font.as_ref().map(|f| f.metrics())
+                    {
+                        let e = state.ctx.swapchain.extent();
+                        let size = [e.width as f32, e.height as f32];
+                        let action =
+                            state
+                                .menu
+                                .click(state.cursor, size, m, &mut state.ctx.settings);
+                        if state.menu_action(action) {
+                            event_loop.exit();
+                        }
+                    }
                     return;
                 }
                 // A button bound to a console line (`bind mouse1 …`, D-069) runs it, as a key.
@@ -2164,6 +2289,17 @@ impl<D: Demo> ApplicationHandler for App<D> {
                 } else if state.input.mouse_look && !state.input.paused {
                     state.input.looking = true;
                     capture_cursor(&state.ctx.window);
+                }
+            }
+            // Where the cursor stands: the menu's entry under it is chosen (#352).
+            WindowEvent::CursorMoved { position, .. } => {
+                state.cursor = [position.x as f32, position.y as f32];
+                if state.menu.is_open()
+                    && let Some(m) = state.menu_font.as_ref().map(|f| f.metrics())
+                {
+                    let e = state.ctx.swapchain.extent();
+                    let size = [e.width as f32, e.height as f32];
+                    state.menu.hover(state.cursor, size, m, &state.ctx.settings);
                 }
             }
             // The wheel's notches (a touchpad's pixels at 40 a notch): the fly camera's speed.

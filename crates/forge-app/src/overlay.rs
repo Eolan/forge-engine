@@ -22,7 +22,7 @@ use forge_gpu::{
 /// Cells per slot buffer: enough for 4K at 8×16 (480 × 135).
 const MAX_CELLS: usize = 480 * 136;
 const BAR_GLYPH: u32 = 255;
-const GLYPHS: usize = 95;
+pub(crate) const GLYPHS: usize = 95;
 
 /// Overlay colours (indices into the palette in `overlay.slang`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -401,10 +401,10 @@ impl Overlay {
 }
 
 /// One row of 95 glyph cells, coverage 0..255.
-struct FontAtlas {
-    cell_w: u32,
-    cell_h: u32,
-    pixels: Vec<u8>,
+pub(crate) struct FontAtlas {
+    pub(crate) cell_w: u32,
+    pub(crate) cell_h: u32,
+    pub(crate) pixels: Vec<u8>,
 }
 
 impl FontAtlas {
@@ -428,7 +428,7 @@ impl FontAtlas {
 
 /// Rasterises ASCII 32..127 of a TTF/OTF at `px` pixels into fixed cells (the widest advance,
 /// so proportional fonts work too, just spaced).
-fn rasterize_ttf(bytes: &[u8], px: f32) -> Option<FontAtlas> {
+pub(crate) fn rasterize_ttf(bytes: &[u8], px: f32) -> Option<FontAtlas> {
     let font = FontRef::try_from_slice(bytes).ok()?;
     // `px` is the em size; ab_glyph's `PxScale` is the ascent-to-descent height.
     let units_per_em = font.units_per_em().unwrap_or(1000.0);
@@ -457,7 +457,7 @@ fn rasterize_ttf(bytes: &[u8], px: f32) -> Option<FontAtlas> {
 }
 
 /// The built-in 5×7 pixel font drawn at 2× into 12×16 cells.
-fn rasterize_builtin() -> FontAtlas {
+pub(crate) fn rasterize_builtin() -> FontAtlas {
     let mut atlas = FontAtlas::new(12, 16);
     for (i, rows) in FONT.iter().enumerate() {
         for (r, line) in rows.iter().enumerate() {

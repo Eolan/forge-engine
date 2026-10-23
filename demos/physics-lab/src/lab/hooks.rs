@@ -920,7 +920,8 @@ impl Running for LabRunning {
                     lab.walk(walk);
                 }
             }
-            lab.advance(dt, args.fixed_step);
+            // Behind the game's menu (#352) the step is 0: a fixed step holds too.
+            lab.advance(dt, args.fixed_step && step > 0.0);
             if let Some(time) = lab.sea_time() {
                 sea_time = Some(time);
             }
@@ -930,6 +931,10 @@ impl Running for LabRunning {
 
     fn player(&mut self) -> Option<Vec3> {
         self.lab.player().map(|p| p.position)
+    }
+
+    fn networked(&self) -> bool {
+        self.flags.net.is_some()
     }
 
     fn follow(&mut self, camera: &mut FlyCamera) {

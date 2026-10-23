@@ -1480,7 +1480,8 @@ impl Demo for PlanetDemo {
         // The settings changed since the last frame (D-069).
         self.apply_vars(ctx);
         self.longest_frame = self.longest_frame.max(dt);
-        self.step = if self.args.fixed_step {
+        // Behind the game's menu a solo game holds (#352).
+        self.step = if self.args.fixed_step && !ctx.paused {
             1.0 / 120.0
         } else {
             dt

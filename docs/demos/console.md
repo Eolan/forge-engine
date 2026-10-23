@@ -64,7 +64,7 @@ commands, set from the console; `bind` puts one on a key.
 
 **The shell keeps four:**
 - the key under Esc: the console;
-- Esc: closes the console, else the window;
+- Esc: closes the console, else opens the game's menu (resume, settings, quit; #352);
 - F1: steps `r.display_info` (off, on, verbose);
 - Alt+Enter: borderless fullscreen on the window's monitor, and back to the window as it was (its place, its size, maximised or not), the console open or not (`app.fullscreen` too).
 
@@ -86,7 +86,16 @@ commands, set from the console; `bind` puts one on a key.
   - any other key by its name: `f5`, `tab`, `space`, `enter`, `pageup`, `up`, `numpad1`.
   - the mouse's buttons: `mouse1` the left, `mouse2` the right, `mouse3` the middle, `mouse4` and `mouse5` the sides.
   - The key under Esc, Esc and F1 stay the shell's.
-- **The game's mouse look** (`app.mouse_look`, e.g. `bind m toggle app.mouse_look`): the cursor captured and hidden, the view turning with no button held, and the right button the game's (aiming). Esc lets the mouse go first, where a game opens its menu (none yet; the game runs on), a click in the window takes it back without firing, and a second Esc quits. Out of the window (Alt+Tab, another window clicked) the cursor is the system's again, free and shown, and the mouse's motion turns nothing; back in the window, the game takes it again.
+- **The game's mouse look** (`app.mouse_look`, e.g. `bind m toggle app.mouse_look`): the cursor captured and hidden, the view turning with no button held, and the right button the game's (aiming). Esc opens the game's menu and lets the mouse go; closing the menu takes it back. Out of the window (Alt+Tab, another window clicked) the cursor is the system's again, free and shown, and the mouse's motion turns nothing; back in the window, the game takes it again.
+- **The game's menu** (#352, Esc or `app.menu`): Resume, Settings and Quit, over the picture as the HUD's quads, shown with `app.hud 0` too.
+  - **Keys:** Up and Down (or W and S) choose, Enter or Space takes, Left and Right (or A and D) change a setting, Esc goes back (on the first page: back to the game). The mouse chooses by hovering, a click takes.
+  - **Settings:** anti-aliasing (`r.aa`), the volume (`snd.volume`), the mouse look (`app.mouse_look`) and the frame info (`r.display_info`), those the demo registered, changed for the run as the console changes them.
+  - **A solo game holds behind it:** its update sees no time pass (`Context::paused`; the demos stepping at a fixed rate of their own skip their steps), so the simulation, the particles and the scene's clocks stop, and the sound fades out over a quarter of a second, and back in on resume. A networked game (`Demo::networked`: the physics lab with `--net`) runs on behind it.
+
+  ![The game's menu](images/game-menu.png)
+
+  *The village paused behind the menu (`city-plan --village 600 --exec app.menu`).*
+
 - **How long binds last:**
   - typed in the console, for the run, as every console change;
   - as lines in `forge.cfg`, every run, run once the demo is ready.

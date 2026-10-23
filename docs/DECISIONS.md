@@ -5943,6 +5943,7 @@ layouts other than the owner's AZERTY and QWERTY, with their own default maps, a
     the game's, for aiming.
   - Esc first lets the mouse go, and a second Esc quits.
     - **Since 2026-10-22 (the owner's choice):** as games do before their menu, which Forge has not yet. The mouse look stays on, a click in the window takes the cursor back (the game gets no press), and the game runs on meanwhile, as a networked one must. It used to turn the mouse look off, to be toggled back.
+    - **Since 2026-10-23 (#352, the owner's ask):** Esc opens the game's menu in every demo (resume, settings, quit, `forge_app::menu`), the mouse look's cursor let go while it shows and taken back on resume. A solo game holds behind it (`Context::paused`, a zero `dt`); a networked one (`Demo::networked`) runs on. Quitting moved into the menu: Esc no longer closes the window, but while loading.
   - Losing the window's focus lets every key and button go and frees and shows the cursor (since
     2026-10-22: it stayed held and hidden, and Alt+Tab fought it); coming back, the mouse look
     takes the cursor again, unless Esc let it go.

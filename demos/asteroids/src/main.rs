@@ -817,7 +817,8 @@ impl Demo for Ballad {
         self.frame_ms
             .push((now - self.last_frame).as_secs_f64() * 1e3);
         self.last_frame = now;
-        let step = if self.args.fixed_step {
+        // Behind the game's menu a solo game holds (#352).
+        let step = if self.args.fixed_step && !ctx.paused {
             1.0 / 120.0
         } else {
             dt

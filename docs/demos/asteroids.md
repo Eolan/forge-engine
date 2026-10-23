@@ -34,7 +34,7 @@ With Tracy: `cargo run --release -p asteroids --features profiling` and connect
 `tracy/tracy-profiler.exe`. DLSS is built in by default (the `dlss` feature; Windows, the
 Streamline SDK in `streamline-sdk/`, an RTX GPU; without them the ballad keeps TAA).
 Controls: **F1** the profiling overlay (`app.profile.group N` folds a group), **Alt+Enter**
-borderless fullscreen on the window's monitor and back (in every demo), **Esc** quit; with
+borderless fullscreen on the window's monitor and back (in every demo), **Esc** the menu (quit is in it); with
 `asteroids.paused 1` the path stops and the camera flies freely (right mouse look, the keys at
 W, A, S, D, Q, E: Z, Q, S, D, A, E on AZERTY; Shift faster). The rest is set from the console
 (the key under Esc; [console.md](console.md) lists the settings and the keys they had before
