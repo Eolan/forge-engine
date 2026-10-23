@@ -239,6 +239,12 @@ delay. D-010 paces them instead:
 - 10 of the 300 commands came late, all in those changes, none once settled; every command was
   taken once.
 
+**Corrections faded on screen** (the physics lab's `--net`, `docs/demos/physics-lab.md`): a
+corrected body stays drawn where the prediction had it and the difference fades to 5 % in 0.1 s,
+by a fixed time, never chosen from the error or the motion (Tencent's US 12,157,057 B2 claims a
+correction chosen that way); one more than 2 m off is drawn at once. At 100 ms one way the lab's
+corrections moved a body by 0.31 m (the sled) to 0.47 m (the pyramid hit by the bot's throws).
+
 ## Authority between workers (step 2's handoff, 2026-10-23)
 
 `forge_sim::authority`: D-010's replication layer and its workers, in one process, before any
@@ -318,7 +324,7 @@ lockstep on the first channel (reliable, ordered).
 ## Next
 
 - The layer and its workers on separate machines (the server PC), and a worker's region split
-  and merged by load (its own patent search first); the lab's `--net` corrections faded on screen;
+  and merged by load (its own patent search first); the skinned parts' corrections faded too;
   lag compensation in a scene (a shot in
   the lab's `--net`, the client's `Interpolator` drawing what it aims at), replays (step 3), and the
   `hundred-bots` demo on the server PC.

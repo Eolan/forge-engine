@@ -1964,11 +1964,72 @@ struct Net {
     clocks: [PaceClock; 2],
     /// The client's lead on arrival, as the server last measured it.
     lead: Option<i64>,
+    /// What the client's corrections left to fade from the screen, one per drawn transform
+    /// (D-010), and the farthest a correction moved a drawn transform.
+    fades: Vec<Fade>,
+    farthest_fade: f64,
+    /// The client's transforms before a snapshot is applied and after (scratch).
+    before: Vec<Transform>,
+    after: Vec<Transform>,
 }
 
 /// The lead on arrival the clients' clocks aim at, ticks: the two of margin they start with
 /// ([`Net::new`]), give or take one.
 const PACE_TARGET: i64 = 2;
+
+/// D-010's fade: a correction leaves the screen over this long, seconds, by a fixed time whatever
+/// its size or the body's motion…
+const FADE_SECONDS: f64 = 0.1;
+/// …down to this share of it by then.
+const FADE_LEFT: f64 = 0.05;
+/// A correction this far, metres, is drawn at once: the body is somewhere else.
+const FADE_SNAP: f64 = 2.0;
+
+/// What a correction left to fade from one drawn transform: where the screen had it less where the
+/// corrected world has it.
+#[derive(Clone, Copy, Debug, Default)]
+struct Fade {
+    position: DVec3,
+    rotation: Quat,
+}
+
+/// Adds to `fades` what the corrections from `before` to `after` moved each transform, so the
+/// screen keeps drawing it where it was; returns the farthest move faded.
+fn fade_from(fades: &mut Vec<Fade>, before: &[Transform], after: &[Transform]) -> f64 {
+    if before.len() != after.len() {
+        // Bodies came or went: nothing to fade from.
+        fades.clear();
+        return 0.0;
+    }
+    if fades.len() != after.len() {
+        fades.clear();
+        fades.resize(after.len(), Fade::default());
+    }
+    let mut farthest = 0.0_f64;
+    for ((f, b), a) in fades.iter_mut().zip(before).zip(after) {
+        let drawn = b.position + f.position;
+        let moved = drawn - a.position;
+        if moved.length() > FADE_SNAP {
+            *f = Fade::default();
+            continue;
+        }
+        farthest = farthest.max(moved.length());
+        *f = Fade {
+            position: moved,
+            rotation: (f.rotation * b.rotation * a.rotation.inverse()).normalize(),
+        };
+    }
+    farthest
+}
+
+/// One tick of the fades: each keeps the same share of what it has left.
+fn fade_tick(fades: &mut [Fade]) {
+    let keep = FADE_LEFT.powf(f64::from(TICK) / FADE_SECONDS);
+    for f in fades {
+        f.position *= keep;
+        f.rotation = Quat::IDENTITY.slerp(f.rotation, keep as f32);
+    }
+}
 
 /// The bot's command for the tick it is about to run, if any: in the tug-of-war it (the right
 /// team) pulls hard and eases off in turn, every 1.5 s; elsewhere it throws at the pyramid from
@@ -2028,13 +2089,27 @@ impl Net {
             bot_pulls: kind == LabScene::Tug,
             clocks: std::array::from_fn(|_| PaceClock::new(PACE_TARGET).tolerance(1)),
             lead: None,
+            fades: Vec::new(),
+            farthest_fade: 0.0,
+            before: Vec::new(),
+            after: Vec::new(),
         })
+    }
+
+    /// The client's transforms as the screen draws them: each one where its corrections left it,
+    /// fading.
+    fn faded(&self, transforms: &mut [Transform]) {
+        for (t, f) in transforms.iter_mut().zip(&self.fades) {
+            t.position += f.position;
+            t.rotation = f.rotation * t.rotation;
+        }
     }
 
     /// One tick of the whole session: the server takes what arrived, steps and sometimes sends
     /// its snapshot; each client takes what arrived, steps with its own commands and sends them.
     fn tick(&mut self, mine: &mut Vec<LabCommand>) {
         let now = self.server.sim.now() as f64 / f64::from(TICK_RATE);
+        fade_tick(&mut self.fades);
         for link in &mut self.up {
             for packet in link.receive(now) {
                 self.server.receive(&packet);
@@ -2060,11 +2135,17 @@ impl Net {
             for snapshot in self.down[k].receive(now) {
                 let start = Instant::now();
                 let corrected = client.stats.corrected;
+                if k == 0 {
+                    client.sim.transforms(&mut self.before);
+                }
                 client.apply(&snapshot);
                 if k == 0 && client.stats.corrected > corrected {
                     let ms = start.elapsed().as_secs_f64() * 1e3;
                     self.correction_ms.push(ms);
                     self.worst_correction_ms = self.worst_correction_ms.max(ms);
+                    client.sim.transforms(&mut self.after);
+                    let moved = fade_from(&mut self.fades, &self.before, &self.after);
+                    self.farthest_fade = self.farthest_fade.max(moved);
                 }
                 if let Some(&(_, lead)) = snapshot.leads.iter().find(|(p, _)| *p == client.player) {
                     self.clocks[k].report(lead);
@@ -2675,6 +2756,9 @@ impl Lab {
             let shown = self.shown();
             shown.transforms(&mut current);
             let (now, awake) = (shown.now(), shown.awake());
+            if let Mode::Net(net) = &self.mode {
+                net.faded(&mut current);
+            }
             self.current = current;
             self.slime_points.swap(0, 1);
             let mut points = std::mem::take(&mut self.slime_points[1]);
@@ -3294,6 +3378,7 @@ impl Drop for Lab {
                     corrected = c.corrected,
                     replayed_ticks = c.replayed_ticks,
                     worst_correction_ms = format!("{:.2}", net.worst_correction_ms),
+                    farthest_fade_m = format!("{:.3}", net.farthest_fade),
                     server_applied = s.applied,
                     server_late = s.late,
                     up_bytes = net.up[0].stats.bytes,
@@ -4076,6 +4161,13 @@ mod tests {
         // late: corrected then, to the bit otherwise.
         let c = net.client.stats;
         assert!(c.matched > 0 && c.corrected >= 6, "{c:?}");
+        // Its corrections drawn faded (D-010): they moved the sled on screen, and are gone since.
+        assert!(
+            net.farthest_fade > 0.0 && net.farthest_fade < FADE_SNAP,
+            "{}",
+            net.farthest_fade
+        );
+        assert!(net.fades.iter().all(|f| f.position.length() < 1e-4));
         let state = net.server.sim.save();
         let (mut server, _) = LabWorld::new(LabScene::Tug, test_pool()).unwrap();
         server.restore(&state);
@@ -4083,6 +4175,39 @@ mod tests {
             server.tick(&[]);
         }
         assert_eq!(server.digest(), net.client.sim.digest());
+    }
+
+    #[test]
+    fn a_correction_fades_in_a_tenth_of_a_second_and_a_far_one_is_drawn_at_once() {
+        let at = |x: f64, turn: f32| Transform {
+            position: DVec3::new(x, 0.0, 0.0),
+            rotation: Quat::from_rotation_y(turn),
+        };
+        let mut fades = Vec::new();
+        // Predicted at 0 m and 10 m, corrected to 0.5 m (and turned) and to 13 m.
+        let before = [at(0.0, 0.0), at(10.0, 0.0)];
+        let after = [at(0.5, 0.2), at(13.0, 0.0)];
+        assert_eq!(fade_from(&mut fades, &before, &after), 0.5);
+        // Drawn where the screen had it, then 5 % of the way back after six ticks (0.1 s).
+        let drawn = |fades: &[Fade]| {
+            (
+                after[0].position + fades[0].position,
+                fades[0].rotation * after[0].rotation,
+            )
+        };
+        let (p, r) = drawn(&fades);
+        assert!(p.length() < 1e-9 && r.angle_between(Quat::IDENTITY) < 1e-5);
+        for _ in 0..6 {
+            fade_tick(&mut fades);
+        }
+        let (p, r) = drawn(&fades);
+        assert!((p.x - 0.5 * 0.95).abs() < 1e-6, "{p}");
+        assert!((r.angle_between(Quat::IDENTITY) - 0.2 * 0.95).abs() < 1e-4);
+        // The far one, 3 m off, is drawn where it is.
+        assert_eq!(fades[1].position, DVec3::ZERO);
+        // A second correction while the first fades starts from where the screen has it.
+        fade_from(&mut fades, &after, &[at(0.6, 0.2), at(13.0, 0.0)]);
+        assert!((0.6 + fades[0].position.x - 0.5 * 0.95).abs() < 1e-6);
     }
 
     #[test]

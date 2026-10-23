@@ -340,6 +340,9 @@ that changes from 100 to 200 to 50 ms, the lead settles at its 3 ticks and no co
 settled. A late command still waits for the next tick, never repeated. Patents searched first
 (`research/netcode.md` §9): none on the pacing; the acknowledged-only resends keep clear of Google's
 US 9,479,618 B2.
+*Corrections faded* (2026-10-23, the physics lab's `--net`): a corrected body stays drawn where
+the prediction had it and the difference fades to 5 % in 0.1 s, by a fixed time; one more than
+2 m off is drawn at once. At 100 ms one way the lab's corrections moved a body by at most 0.47 m.
 
 ## D-011 — Audio: own data layer and mixer, Steam Audio spatialiser ✅ (2026-09-24)
 

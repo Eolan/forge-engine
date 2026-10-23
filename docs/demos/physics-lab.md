@@ -131,7 +131,14 @@ with 10 % of it as jitter and 2 % of the packets lost, both ways, from seeds:
   the client compares the digest with the one it predicted for that tick. When they agree it
   does nothing; when they differ (the other player threw, a command came late) it goes back to
   the server's state and runs the ticks since again with its commands not yet taken (D-010's
-  reconciliation).
+  reconciliation);
+- a correction is drawn faded (D-010, 2026-10-23): each body and part stays on screen where the
+  prediction had it, and the difference fades to 5 % in 0.1 s, by a fixed time whatever its
+  size or the body's motion; one more than 2 m off (a ball thrown from its parking place) is
+  drawn where it is. Over 600 ticks at 100 ms the corrections moved a body by at most 0.47 m in
+  `drop --throw-every 45` (the bot's throws into the pyramid) and 0.31 m in `tug` (the sled when
+  the bot changes its pull); the session's last line (`farthest_fade_m`) prints it. The skinned
+  parts (the creatures, the slime's points) are still drawn as corrected.
 
 A single-player game runs the same server in its own process: nothing changes when a second
 player joins. With `--net 100 --throw-every 45`, 600 ticks:
