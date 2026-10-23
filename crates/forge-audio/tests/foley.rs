@@ -5,7 +5,9 @@
 mod common;
 
 use common::*;
-use forge_audio::foley::{Footwear, Impact, ImpactBody, Step, Surface, impact_sound, step_sound};
+use forge_audio::foley::{
+    Footwear, Impact, ImpactBody, Step, Striker, Surface, impact_sound, step_sound,
+};
 use forge_audio::{
     BusLayout, Control, Foley, Listener, MixerConfig, OfflineRenderer, PlayParams, create,
 };
@@ -281,11 +283,11 @@ fn two_bodies_meeting_ring_each_other() {
     assert_eq!(crate_on_stone.len(), 2);
     assert_eq!(
         (crate_on_stone[0].surface, crate_on_stone[0].against),
-        (Surface::Wood, Some(Surface::Stone))
+        (Surface::Wood, Some(Striker::Surface(Surface::Stone)))
     );
     assert_eq!(
         (crate_on_stone[1].surface, crate_on_stone[1].against),
-        (Surface::Stone, Some(Surface::Wood))
+        (Surface::Stone, Some(Striker::Surface(Surface::Wood)))
     );
     for hit in &crate_on_stone {
         assert_eq!((hit.mass, hit.speed, hit.start), (20.0, 3.0, Some(48)));
@@ -302,7 +304,8 @@ fn two_bodies_meeting_ring_each_other() {
     .collect();
     assert_eq!(pair.len(), 2);
     assert!(pair.iter().all(|h| (h.mass - 5.0).abs() < 1e-6));
-    // A body of no surface on a plate: the plate alone; two fixed bodies: nothing.
+    // A body of no surface (a rubber ball) on a plate: the plate alone, struck softly; two fixed
+    // bodies: nothing.
     let plate: Vec<Impact> = Impact::between(
         body(None, Some(2.0)),
         body(Some(Surface::Metal), None),
@@ -312,7 +315,10 @@ fn two_bodies_meeting_ring_each_other() {
     )
     .collect();
     assert_eq!(plate.len(), 1);
-    assert_eq!((plate[0].surface, plate[0].against), (Surface::Metal, None));
+    assert_eq!(
+        (plate[0].surface, plate[0].against),
+        (Surface::Metal, Some(Striker::Mute))
+    );
     let none = Impact::between(
         body(Some(Surface::Stone), None),
         body(Some(Surface::Stone), None),
@@ -340,16 +346,18 @@ fn two_bodies_meeting_ring_each_other() {
     };
     // The plate's upper modes (3 to 9 kHz): a long, soft contact hardly excites them.
     let ring = |against| band_db(hit(Surface::Metal, against).samples(), 3000.0, 9000.0, RATE);
-    // Struck by steel −29.7 dB, by a wooden crate −53.3, by a sack (grass) nothing (−126).
-    let by_steel = ring(Some(Surface::Metal));
-    let by_wood = ring(Some(Surface::Wood));
-    let by_soft = ring(Some(Surface::Grass));
+    // Struck by steel −29.7 dB, by a wooden crate −53.3, by a sack (grass) nothing (−126); by a
+    // rubber ball (mute) −91.8, with no click.
+    let by_steel = ring(Some(Striker::Surface(Surface::Metal)));
+    let by_wood = ring(Some(Striker::Surface(Surface::Wood)));
+    let by_soft = ring(Some(Striker::Surface(Surface::Grass)));
+    let by_rubber = ring(Some(Striker::Mute));
     assert!(
-        by_wood < by_steel - 15.0 && by_soft < by_wood - 30.0,
-        "steel {by_steel:.1}, wood {by_wood:.1}, grass {by_soft:.1} dB"
+        by_wood < by_steel - 15.0 && by_soft < by_wood - 30.0 && by_rubber < by_wood,
+        "steel {by_steel:.1}, wood {by_wood:.1}, grass {by_soft:.1}, rubber {by_rubber:.1} dB"
     );
     assert_eq!(
-        hit(Surface::Stone, Some(Surface::Metal)).samples(),
+        hit(Surface::Stone, Some(Striker::Surface(Surface::Metal))).samples(),
         hit(Surface::Stone, None).samples()
     );
 }

@@ -307,7 +307,8 @@ impl Maker {
 
 impl Drop for Maker {
     fn drop(&mut self) {
-        // Its inbox closed, the thread ends after the sound it is making.
+        // Its inbox closed, the thread makes what was already asked (at most a frame's sounds),
+        // then ends.
         self.jobs = None;
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();

@@ -2289,7 +2289,7 @@ sound as they meet. Phase 7's contact events reach the material layer (D-007):
   (`CityMaterials::sound`), the materials scene's patches their rows (`traction::ROWS`), the fixed
   world the floor's. Crates, decks, logs and dominoes are wood; barrels, beams and the wrecking ball
   metal; blocks, rocks, bricks and the floor stone; the balls rubber, which rings of nothing, so a
-  ball sounds as what it lands on.
+  ball sounds as what it lands on, struck softly (a 4 ms contact, no click).
 - **What each weighs:** `World::masses`, none for a fixed body.
 - **The sound:** `forge_audio::Impact::between` (`docs/demos/audio.md`): both bodies ring, the
   softer setting how long the contact lasts and clicking in its own band.

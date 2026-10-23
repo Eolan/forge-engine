@@ -203,7 +203,8 @@ checks what a scene sounds like without playing it on the owner's machine.
     −53.3 by a wooden crate, nothing (−126) by a sack (the test
     `two_bodies_meeting_ring_each_other`).
   - **Rubber, cloth and flesh** have no surface of their own (`SoundLayer::surface` is `None`):
-    only what they strike rings.
+    only what they strike rings, and softly (`Striker::Mute`: a 4 ms contact, no click; the steel
+    plate's upper modes at −91.8 dBFS struck by a rubber ball).
 - **Steps and impacts made off the game thread** (2026-10-24, `AudioEngine::make_off_thread`, on
   in the app): `Foley` asks the engine's maker thread for each sound (`AudioEngine::play_made`).
   The voice is named at once, and controls sent to it wait with it (the pursuers' occlusion). The

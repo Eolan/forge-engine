@@ -8246,7 +8246,7 @@ impl Running for PlanRunning {
     }
 
     fn footing(&self) -> Option<(Vec3, forge_audio::Surface)> {
-        let feet = self.walker.as_ref()?.feet();
+        let feet = self.walker.as_ref()?.drawn_feet();
         Some((feet, self.ground_under(feet)))
     }
 

@@ -248,8 +248,10 @@ pub trait Running: Send {
     }
     /// What the window's title adds.
     fn title(&mut self) -> String;
-    /// Where its player's feet are while it walks in first person (the camera at its eyes) and
-    /// what they walk on, for their footsteps (#318), in the scene's frame. None by default.
+    /// Where its player's feet are drawn this frame (between its ticks) while it walks in first
+    /// person (the camera at its eyes), and what they walk on, for their footsteps (#318), in the
+    /// scene's frame. A tick's place would stand still on the frames between ticks, which the
+    /// steps read as standing. None by default.
     fn footing(&self) -> Option<(Vec3, forge_audio::Surface)> {
         None
     }

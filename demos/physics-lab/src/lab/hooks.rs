@@ -610,6 +610,7 @@ impl Scenario for LabScenario {
                 pulling: 0.5,
                 impacts: None,
                 heard: Vec::new(),
+                feet: None,
             }),
         ))
     }
@@ -767,6 +768,8 @@ struct LabRunning {
     /// frame.
     impacts: Option<sounds::Impacts>,
     heard: Vec<super::Heard>,
+    /// Its player's feet as drawn this frame, between its ticks (#318).
+    feet: Option<Vec3>,
 }
 
 /// The frames at which #338's check adds its instance, moves it, then removes it; with
@@ -938,6 +941,8 @@ impl Running for LabRunning {
             }
             // Behind the game's menu (#352) the step is 0: a fixed step holds too.
             lab.advance(dt, args.fixed_step && step > 0.0);
+            // Its player's feet as drawn this frame, for its footsteps (#318).
+            self.feet = lab.player().map(|p| p.position);
             if let Some(time) = lab.sea_time() {
                 sea_time = Some(time);
             }
@@ -950,7 +955,8 @@ impl Running for LabRunning {
     }
 
     fn footing(&self) -> Option<(Vec3, forge_audio::Surface)> {
-        self.lab.footing()
+        let (_, surface) = self.lab.footing()?;
+        Some((self.feet?, surface))
     }
 
     fn networked(&self) -> bool {

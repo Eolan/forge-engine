@@ -4437,6 +4437,8 @@ pub struct CityMaterials {
     pub textures: TextureSet,
     /// Row per prop name.
     by_prop: HashMap<&'static str, MaterialId>,
+    /// How many rows a prop added by [`Self::add_rows`] has, a row a section (one otherwise).
+    row_counts: HashMap<&'static str, u32>,
     /// The albedo and normal maps: rock, concrete, brick, grass.
     sets: [(TextureId, TextureId); 4],
 }
@@ -5064,6 +5066,7 @@ impl CityMaterials {
             table,
             textures,
             by_prop,
+            row_counts: HashMap::new(),
             sets,
         })
     }
@@ -5094,9 +5097,11 @@ impl CityMaterials {
     }
 
     fn section_row(&self, prop: &str, section: u8) -> Option<MaterialId> {
+        // A part of a prop, `name@part`, is made of the prop's rows, as [`Self::of`] reads them.
+        let prop = prop.split_once('@').map_or(prop, |(whole, _)| whole);
         let first = self.by_prop.get(prop)?;
-        let id = MaterialId(first.0 + u32::from(section));
-        ((id.0 as usize) < self.table.len()).then_some(id)
+        let rows = self.row_counts.get(prop).copied().unwrap_or(1);
+        (u32::from(section) < rows).then_some(MaterialId(first.0 + u32::from(section)))
     }
 
     /// The ground in layers (issue #42): uploads `layers` (`texels` a side over `size` metres,
@@ -5546,6 +5551,7 @@ impl CityMaterials {
     /// Adds `rows` one after the other, the first for `prop`: a mesh with sections draws
     /// section `s` with the row `s` after its own (a model's materials, #138).
     pub fn add_rows(&mut self, prop: &'static str, rows: Vec<(String, RenderLayer)>) {
+        self.row_counts.insert(prop, rows.len() as u32);
         if let Some(first) = self.add_row_block(rows) {
             self.by_prop.insert(prop, first);
         }

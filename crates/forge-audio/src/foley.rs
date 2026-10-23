@@ -578,11 +578,11 @@ impl Step {
 pub struct Impact {
     /// What it hits.
     pub surface: Surface,
-    /// What the body is, when it sounds as a surface of its own. A softer body is to the
-    /// surface what a soft sole is to hard ground: the contact lasts as long as it lets it (a
-    /// crate on a steel plate presses as long as wood does, so the plate rings lower), and the
-    /// click is its own (a sack on the plate: none).
-    pub against: Option<Surface>,
+    /// What strikes it (`None`: not said, the surface's own contact and click). A softer body is
+    /// to the surface what a soft sole is to hard ground: the contact lasts as long as it lets it
+    /// (a crate on a steel plate presses as long as wood does, so the plate rings lower), and the
+    /// click is its own (a rubber ball's, a sack's: none).
+    pub against: Option<Striker>,
     /// Where, in the world.
     pub position: DVec3,
     /// The speed along the surface's normal, m/s.
@@ -592,6 +592,19 @@ pub struct Impact {
     /// The frame it hits on (`None`: the next block).
     pub start: Option<u64>,
 }
+
+/// What strikes a surface ([`Impact::against`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Striker {
+    /// A body that sounds as this surface.
+    Surface(Surface),
+    /// A body that rings of nothing (rubber, cloth, flesh): a soft contact of [`MUTE_CONTACT`]
+    /// and no click.
+    Mute,
+}
+
+/// The contact of a body that rings of nothing, seconds: a rubber ball's on hard ground.
+pub const MUTE_CONTACT: f32 = 0.004;
 
 /// One of two bodies meeting ([`Impact::between`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -623,7 +636,7 @@ impl Impact {
         let hit = move |struck: ImpactBody, by: ImpactBody| {
             Some(Impact {
                 surface: struck.surface?,
-                against: by.surface,
+                against: Some(by.surface.map_or(Striker::Mute, Striker::Surface)),
                 position,
                 speed,
                 mass: mass?,
@@ -776,12 +789,15 @@ pub fn impact_sound(impact: &Impact, seed: u64, rate: u32) -> SampleBuffer {
     // long as it lets it, and the click is its own (none for grass or gravel).
     let softer = impact
         .against
-        .map(Surface::model)
-        .filter(|by| by.contact > model.contact);
-    let contact = softer.map_or(model.contact, |by| by.contact);
-    let sole = softer.map_or(Sole::NONE, |by| Sole {
-        band: by.click.map(|band| (band.low, band.high)),
-        click: if by.click.is_some() { 1.0 } else { 0.0 },
+        .map(|by| match by {
+            Striker::Surface(s) => (s.model().contact, s.model().click),
+            Striker::Mute => (MUTE_CONTACT, None),
+        })
+        .filter(|&(contact, _)| contact > model.contact);
+    let contact = softer.map_or(model.contact, |(contact, _)| contact);
+    let sole = softer.map_or(Sole::NONE, |(_, click)| Sole {
+        band: click.map(|band| (band.low, band.high)),
+        click: if click.is_some() { 1.0 } else { 0.0 },
         thump: 1.0,
     });
     let width = (contact * mass.powf(0.4) * (2.0 / speed).powf(0.2)).clamp(0.00015, 0.04);

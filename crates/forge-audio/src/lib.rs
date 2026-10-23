@@ -64,7 +64,7 @@ pub mod zones;
 pub use bus::{BusId, BusLayout};
 pub use clock::{Clock, TickClock};
 pub use engine::{AudioEngine, Control, EndReason, Event, PlayParams, VoiceId, create};
-pub use foley::{Foley, Footwear, Impact, ImpactBody, Step, Surface};
+pub use foley::{Foley, Footwear, Impact, ImpactBody, Step, Striker, Surface};
 pub use mixer::{Mixer, MixerConfig, MixerStats};
 pub use render::{OfflineRenderer, WavFormat, wav_bytes, write_wav};
 pub use sound::SampleBuffer;
