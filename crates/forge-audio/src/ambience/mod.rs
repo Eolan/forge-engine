@@ -12,6 +12,9 @@
 //!   and give way to the wind from 5 m/s (silent by 10 m/s);
 //! - **birds** sing the dawn chorus from an hour before sunrise to 2.5 hours after, call a
 //!   little through the day and again at dusk, and are quiet at night, in rain and in wind;
+//! - **the place** ([`Habitat`], #350): the cicadas fall silent among houses with few trees, the
+//!   birds thin to a third there, and indoors the walls take the outside's beds (−16 dB well
+//!   inside); the birds' species and their shares are the scene's ([`BirdMix`]);
 //! - **wind** and **rain** follow their speed and rate;
 //! - **the sea** falls 3 dB each time the distance to the shore doubles past 4 m (a line of
 //!   quay is a line source), is panned toward the water, and swells with the wind;
@@ -31,7 +34,7 @@ use std::sync::Arc;
 
 use glam::Vec3;
 
-pub use beds::{Bed, BedControl, BedKind, Texture};
+pub use beds::{Bed, BedControl, BedKind, BirdMix, BirdVoice, Texture};
 pub use recordings::{BirdCalls, CicadaSong, Species};
 
 use crate::decode::DecodeError;
@@ -69,6 +72,47 @@ pub struct Shore {
     pub direction: Vec3,
 }
 
+/// The place round the listener (#350): what lives there, and whether walls stand between the
+/// listener and the outside. The default is open country with trees, as the beds were made for.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Habitat {
+    /// How green the place is within earshot, 0 (streets and houses only) to 1 (gardens and
+    /// woods): the share of the ground under trees, hedges and gardens, as the scene measures it.
+    /// Cicadas sing from trees and fall silent among houses with few of them; birds thin out but
+    /// stay (sparrows and doves live on the houses).
+    pub green: f32,
+    /// 0 outdoors to 1 well inside a building: the walls take most of the outside's beds.
+    pub indoors: f32,
+}
+
+impl Default for Habitat {
+    fn default() -> Self {
+        Self {
+            green: 1.0,
+            indoors: 0.0,
+        }
+    }
+}
+
+impl Habitat {
+    /// The cicadas' share where the listener stands: none among houses (green under 0.1), all of
+    /// them from a garden's worth of trees (0.5).
+    pub fn cicadas(&self) -> f32 {
+        smoothstep(0.1, 0.5, self.green)
+    }
+
+    /// The birds' share: a third among houses, all of them from 0.4 of green.
+    pub fn birds(&self) -> f32 {
+        1.0 - 0.65 * (1.0 - smoothstep(0.0, 0.4, self.green))
+    }
+
+    /// What reaches the listener of the beds outside, through the walls: 1 outdoors, 0.15
+    /// (about −16 dB) well inside.
+    pub fn outside(&self) -> f32 {
+        1.0 - 0.85 * self.indoors.clamp(0.0, 1.0)
+    }
+}
+
 /// The world where the listener is, as the simulation knows it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AmbienceState {
@@ -93,6 +137,8 @@ pub struct AmbienceState {
     /// How wet the place still is after rain, 0 (dry) to 1. [`Ambience`] also remembers the
     /// rain itself (two minutes to dry); the wetter of the two counts.
     pub wet: f32,
+    /// The place round the listener (#350).
+    pub habitat: Habitat,
 }
 
 impl Default for AmbienceState {
@@ -110,6 +156,7 @@ impl Default for AmbienceState {
             medium: Medium::Air,
             listener: Listener::default(),
             wet: 0.0,
+            habitat: Habitat::default(),
         }
     }
 }
@@ -152,13 +199,15 @@ pub fn targets(state: &AmbienceState) -> [BedTarget; 6] {
         * smoothstep(22.0, 27.0, state.temperature)
         * (1.0 - smoothstep(0.2, 1.0, rain))
         * (1.0 - smoothstep(0.1, 0.5, state.wet))
-        * (1.0 - smoothstep(5.0, 10.0, wind));
+        * (1.0 - smoothstep(5.0, 10.0, wind))
+        * state.habitat.cicadas();
     let dawn = window(rise - 1.0, rise, rise + 0.5, rise + 2.5);
     let day = 0.15 * window(rise + 1.0, rise + 2.5, set - 1.0, set);
     let dusk = 0.4 * window(set - 1.5, set - 0.5, set, set + 0.75);
     let birds = dawn.max(day).max(dusk)
         * (1.0 - smoothstep(1.0, 5.0, rain))
-        * (1.0 - smoothstep(6.0, 12.0, wind));
+        * (1.0 - smoothstep(6.0, 12.0, wind))
+        * state.habitat.birds();
 
     let sea = state.shore.map_or(BedTarget::default(), |shore| {
         let d = shore.distance.max(0.0);
@@ -174,7 +223,9 @@ pub fn targets(state: &AmbienceState) -> [BedTarget; 6] {
     } else {
         0.0
     };
-    [
+    // Indoors the walls take the beds of the outside (all but the one under water).
+    let outside = state.habitat.outside();
+    let mut beds = [
         BedTarget {
             gain: smoothstep(0.3, 1.5, wind),
             intensity: wind,
@@ -201,16 +252,22 @@ pub fn targets(state: &AmbienceState) -> [BedTarget; 6] {
             intensity: 1.0,
             pan: 0.0,
         },
-    ]
+    ];
+    for bed in &mut beds[..5] {
+        bed.gain *= outside;
+    }
+    beds
 }
 
-/// What the beds can play besides what they make in code.
+/// What the beds can play besides what they make in code, and the birds' species.
 #[derive(Clone, Debug, Default)]
 pub struct AmbienceAssets {
     /// Recorded birds ([`BirdCalls::load`]): the birds bed sings them when they are here.
     pub birds: Option<Arc<BirdCalls>>,
     /// Recorded cicadas ([`CicadaSong::load`]): the cicada bed layers them into its chorus.
     pub cicadas: Option<Arc<CicadaSong>>,
+    /// The birds' species and how often each calls (#350).
+    pub bird_mix: BirdMix,
 }
 
 impl AmbienceAssets {
@@ -222,6 +279,7 @@ impl AmbienceAssets {
         Ok(Self {
             birds: birds.map(Arc::new),
             cicadas: cicadas.map(Arc::new),
+            bird_mix: BirdMix::default(),
         })
     }
 }

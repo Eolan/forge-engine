@@ -248,4 +248,9 @@ pub trait Running: Send {
     /// Its own sounds this frame (#318), in the scene's frame, heard at `listener` (the
     /// camera); `sound` is the app's output, there only in interactive runs. None by default.
     fn sounds(&mut self, _sound: &mut forge_app::sound::Sound, _listener: Vec3) {}
+    /// The place round `listener` (the camera) for the ambience (#350): how green it is within
+    /// earshot, and how far indoors. None by default: open country, the beds as they were made.
+    fn habitat(&self, _listener: Vec3) -> Option<forge_audio::ambience::Habitat> {
+        None
+    }
 }

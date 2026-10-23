@@ -127,7 +127,9 @@ impl BedKind {
     /// Its texture, from `seed`, using `assets` when they have what it plays.
     pub fn texture_with(self, seed: u64, rate: u32, assets: &AmbienceAssets) -> Box<dyn Texture> {
         if let (BedKind::Birds, Some(recorded)) = (self, &assets.birds) {
-            return Box::new(Birds::with_recordings(seed, rate, recorded.clone()));
+            return Box::new(
+                Birds::with_recordings(seed, rate, recorded.clone()).with_mix(assets.bird_mix),
+            );
         }
         if let (BedKind::Cicadas, Some(song)) = (self, &assets.cicadas) {
             return Box::new(RecordedCicadas::new(seed, rate, song.clone()));
@@ -136,7 +138,7 @@ impl BedKind {
             BedKind::Wind => Box::new(Wind::new(seed, rate)),
             BedKind::Rain => Box::new(Rain::new(seed, rate)),
             BedKind::Cicadas => Box::new(Cicadas::new(seed, rate)),
-            BedKind::Birds => Box::new(Birds::new(seed, rate)),
+            BedKind::Birds => Box::new(Birds::new(seed, rate).with_mix(assets.bird_mix)),
             BedKind::Sea => Box::new(Sea::new(seed, rate)),
             BedKind::Underwater => Box::new(Underwater::new(seed, rate)),
         }
@@ -707,6 +709,73 @@ struct Played {
     dull: OnePole,
 }
 
+/// The birds' species and how often each calls (#350), shares of the calls (normalised; 0
+/// leaves a species out). The default is a Mediterranean village's, with the collared dove's coo
+/// one call in eighteen. The owner heard it everywhere at three in twenty ("too much coucou").
+/// A scene elsewhere sets its own ([`AmbienceAssets::bird_mix`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BirdMix {
+    /// The blackbird's warble.
+    pub blackbird: f32,
+    /// The house sparrow's chirps.
+    pub sparrow: f32,
+    /// The serin's trill.
+    pub serin: f32,
+    /// The collared dove's coos.
+    pub dove: f32,
+}
+
+impl Default for BirdMix {
+    fn default() -> Self {
+        Self {
+            blackbird: 0.3,
+            sparrow: 0.3,
+            serin: 0.25,
+            dove: 0.05,
+        }
+    }
+}
+
+/// One of [`BirdMix`]'s voices.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BirdVoice {
+    /// The blackbird.
+    Blackbird,
+    /// The house sparrow.
+    Sparrow,
+    /// The serin.
+    Serin,
+    /// The collared dove.
+    Dove,
+}
+
+impl BirdMix {
+    /// The voice a call takes for `u`, uniform in [0, 1): each by its share. A mix of no shares
+    /// sings the blackbird.
+    pub fn pick(&self, u: f32) -> BirdVoice {
+        let shares = [
+            (BirdVoice::Blackbird, self.blackbird),
+            (BirdVoice::Sparrow, self.sparrow),
+            (BirdVoice::Serin, self.serin),
+            (BirdVoice::Dove, self.dove),
+        ];
+        let total: f32 = shares.iter().map(|s| s.1.max(0.0)).sum();
+        let mut left = u * total;
+        for (voice, share) in shares {
+            let share = share.max(0.0);
+            if share > 0.0 && left < share {
+                return voice;
+            }
+            left -= share;
+        }
+        shares
+            .iter()
+            .rev()
+            .find(|s| s.1 > 0.0)
+            .map_or(BirdVoice::Blackbird, |s| s.0)
+    }
+}
+
 /// Birds: calls arriving as a Poisson process of up to 5 a second, each from a bird at its
 /// own place and distance. Four voices of a Mediterranean village: a blackbird's warble
 /// (1.5 to 3.2 kHz glides), a house sparrow's chirps (4.6 falling to 3.1 kHz), a serin's
@@ -725,6 +794,7 @@ pub struct Birds {
     recent: [VecDeque<usize>; 3],
     chorus_at: usize,
     chorus_gain: f32,
+    mix: BirdMix,
 }
 
 /// The morning chorus's crossfade where it loops, seconds.
@@ -743,7 +813,14 @@ impl Birds {
             recent: Default::default(),
             chorus_at: 0,
             chorus_gain: 0.0,
+            mix: BirdMix::default(),
         }
+    }
+
+    /// The same, its species called by `mix`.
+    pub fn with_mix(mut self, mix: BirdMix) -> Self {
+        self.mix = mix;
+        self
     }
 
     /// From `seed`, singing the recorded calls of `recorded` (cut for this `rate`).
@@ -756,15 +833,14 @@ impl Birds {
         birds
     }
 
-    /// Starts a call: the species by `kind` (blackbird, sparrow, serin, dove), recorded when
-    /// there is a recording of it.
+    /// Starts a call: the species by the mix, recorded when there is a recording of it.
     fn spawn(&mut self) {
-        let kind = self.rng.next_f32();
-        let species = match kind {
-            k if k < 0.3 => Some(Species::Blackbird),
-            k if k < 0.6 => Some(Species::Sparrow),
-            k if k < 0.85 => Some(Species::Serin),
-            _ => None,
+        let voice = self.mix.pick(self.rng.next_f32());
+        let species = match voice {
+            BirdVoice::Blackbird => Some(Species::Blackbird),
+            BirdVoice::Sparrow => Some(Species::Sparrow),
+            BirdVoice::Serin => Some(Species::Serin),
+            BirdVoice::Dove => None,
         };
         if let (Some(species), Some(recorded)) = (species, &self.recorded) {
             let count = recorded.of(species).count();
@@ -787,15 +863,15 @@ impl Birds {
                 return;
             }
         }
-        let call = self.call(kind);
+        let call = self.call(voice);
         self.calls.push(call);
     }
 
-    fn call(&mut self, kind: f32) -> Call {
+    fn call(&mut self, voice: BirdVoice) -> Call {
         let r = &mut self.rng;
         let mut notes = Vec::new();
         let mut t = 0.0;
-        if kind < 0.3 {
+        if voice == BirdVoice::Blackbird {
             // Blackbird.
             for k in 0..5 + r.below(5) {
                 let length = r.range_f32(0.08, 0.25);
@@ -810,7 +886,7 @@ impl Birds {
                 });
                 t += length + r.range_f32(0.03, 0.09);
             }
-        } else if kind < 0.6 {
+        } else if voice == BirdVoice::Sparrow {
             // House sparrow.
             for _ in 0..3 + r.below(5) {
                 let length = r.range_f32(0.06, 0.1);
@@ -824,7 +900,7 @@ impl Birds {
                 });
                 t += length + r.range_f32(0.1, 0.2);
             }
-        } else if kind < 0.85 {
+        } else if voice == BirdVoice::Serin {
             // Serin.
             let period = 1.0 / r.range_f32(20.0, 28.0);
             let count = (r.range_f32(1.2, 2.2) / period) as usize;

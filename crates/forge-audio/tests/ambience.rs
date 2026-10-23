@@ -563,3 +563,80 @@ fn recorded_cicadas_sing_as_a_chorus() {
     }
     assert_eq!(render(1.0), all);
 }
+
+#[test]
+fn the_habitat_quiets_cicadas_among_houses_and_the_outside_indoors() {
+    use forge_audio::ambience::Habitat;
+    // Noon in the heat: the full cicada chorus and the day's birds, a breeze, the sea near.
+    let noon = AmbienceState {
+        hour: 13.0,
+        temperature: 30.0,
+        wind: 3.0,
+        shore: Some(Shore {
+            distance: 10.0,
+            direction: Vec3::X,
+        }),
+        ..AmbienceState::default()
+    };
+    let open = targets(&noon);
+    let at = |green: f32, indoors: f32| {
+        targets(&AmbienceState {
+            habitat: Habitat { green, indoors },
+            ..noon
+        })
+    };
+    // The default habitat is the open country the beds were made for: nothing changes.
+    assert_eq!(at(1.0, 0.0), open);
+    // Among houses (no green) the cicadas are silent and a third of the birds call.
+    let streets = at(0.0, 0.0);
+    assert_eq!(streets[2].intensity, 0.0);
+    assert_eq!(streets[2].gain, 0.0);
+    assert!((streets[3].intensity - 0.35 * open[3].intensity).abs() < 1e-6);
+    // A street with a few trees: some cicadas, fewer than in a garden; the birds in between.
+    let trees = at(0.25, 0.0);
+    assert!(trees[2].intensity > 0.0 && trees[2].intensity < 0.5 * open[2].intensity);
+    assert!(trees[3].intensity > streets[3].intensity && trees[3].intensity < open[3].intensity);
+    // The wind and the sea do not care how green the place is.
+    assert_eq!(streets[0], open[0]);
+    assert_eq!(streets[4], open[4]);
+    // Well inside a building every bed of the outside is 16 dB down, the intensities kept.
+    let inside = at(1.0, 1.0);
+    for i in 0..5 {
+        assert!(
+            (inside[i].gain - 0.15 * open[i].gain).abs() < 1e-6,
+            "bed {i}"
+        );
+        assert_eq!(inside[i].intensity, open[i].intensity);
+    }
+    assert_eq!(inside[5], open[5]);
+}
+
+#[test]
+fn the_bird_mix_picks_each_voice_by_its_share() {
+    use forge_audio::ambience::{BirdMix, BirdVoice};
+    let count = |mix: BirdMix, voice: BirdVoice| {
+        (0..10_000)
+            .filter(|&i| mix.pick((i as f32 + 0.5) / 10_000.0) == voice)
+            .count()
+    };
+    // The default: the dove one call in eighteen (0.05 of 0.9), no longer three in twenty.
+    let default = BirdMix::default();
+    let doves = count(default, BirdVoice::Dove);
+    assert!((540..=572).contains(&doves), "{doves}");
+    assert_eq!(count(default, BirdVoice::Blackbird), 3_333);
+    // A species at 0 never calls; a mix of nothing sings the blackbird.
+    let no_doves = BirdMix {
+        dove: 0.0,
+        ..default
+    };
+    assert_eq!(count(no_doves, BirdVoice::Dove), 0);
+    let none = BirdMix {
+        blackbird: 0.0,
+        sparrow: 0.0,
+        serin: 0.0,
+        dove: 0.0,
+    };
+    assert_eq!(count(none, BirdVoice::Blackbird), 10_000);
+    // The last share takes the top of the range: u just under 1 is the dove's.
+    assert_eq!(default.pick(0.999_99), BirdVoice::Dove);
+}

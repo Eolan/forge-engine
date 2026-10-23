@@ -2266,6 +2266,11 @@ impl Demo for Gallery {
             let world = self
                 .world_sound
                 .get_or_insert_with(|| world_sound::WorldSound::start(sound, hour));
+            world.set_habitat(
+                self.running
+                    .as_ref()
+                    .and_then(|r| r.habitat(self.camera.position)),
+            );
             let footing = self.running.as_ref().and_then(|r| r.footing()).or_else(|| {
                 let feet = self
                     .running

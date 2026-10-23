@@ -7422,6 +7422,16 @@ impl Scenario for PlanScenario {
                     fade_px: args.impostors.unwrap_or(0.0),
                     fade_band: IMPOSTOR_FADE_BAND,
                 }),
+                canopy: Canopy::new(
+                    self.trees
+                        .iter()
+                        .map(|&(at, scale, ..)| (glam::Vec2::new(at.x, at.z), 4.2 * scale.x))
+                        .chain(
+                            self.flora
+                                .iter()
+                                .map(|&(at, _, crown, ..)| (glam::Vec2::new(at.x, at.z), crown)),
+                        ),
+                ),
             }),
         ))
     }
@@ -7477,6 +7487,8 @@ struct PlanRunning {
     grass: Option<(forge_render::grass::GrassMap, u32)>,
     /// The plants' impostors (`--impostors`, `--impostor-bake`, D-075 step 4), taken once.
     impostors: Option<forge_render::impostor::ImpostorSet>,
+    /// The trees' crowns over the plan, for the ambience's habitat (#350).
+    canopy: Canopy,
 }
 
 /// A ride aboard a tram ([`PlanRunning::toggle_ride`]).
@@ -7995,6 +8007,21 @@ impl Running for PlanRunning {
         Some((feet, ground_under(&self.regions, feet)))
     }
 
+    fn habitat(&self, listener: Vec3) -> Option<forge_audio::ambience::Habitat> {
+        // The trees within earshot (30 % of the ground under crowns is a wood), and indoors in
+        // a room's volume.
+        let green = (self
+            .canopy
+            .cover(glam::Vec2::new(listener.x, listener.z), HABITAT_REACH)
+            / 0.3)
+            .min(1.0);
+        let indoors = forge_render::region_at(&self.regions, listener).region != 0;
+        Some(forge_audio::ambience::Habitat {
+            green,
+            indoors: if indoors { 1.0 } else { 0.0 },
+        })
+    }
+
     fn sounds(&mut self, sound: &mut forge_app::sound::Sound, listener: Vec3) {
         let Some(pursuers) = &self.pursuers else {
             return;
@@ -8008,6 +8035,47 @@ impl Running for PlanRunning {
             |at| ground_under(regions, at),
             |a, b| walls.between(a, b),
         );
+    }
+}
+
+/// How far round the listener the ambience counts the trees, metres (#350).
+const HABITAT_REACH: f32 = 32.0;
+
+/// The trees' crowns over the plan (#350): their area in square metres per cell of [`Canopy::CELL`].
+struct Canopy {
+    area: std::collections::HashMap<(i32, i32), f32>,
+}
+
+impl Canopy {
+    /// Its cells' side, metres.
+    const CELL: f32 = 8.0;
+
+    /// From each crown's centre on the ground and its radius.
+    fn new(crowns: impl Iterator<Item = (glam::Vec2, f32)>) -> Self {
+        let mut area = std::collections::HashMap::new();
+        for (at, radius) in crowns {
+            let cell = (at / Self::CELL).floor();
+            *area.entry((cell.x as i32, cell.y as i32)).or_insert(0.0) +=
+                std::f32::consts::PI * radius * radius;
+        }
+        Self { area }
+    }
+
+    /// The share of the ground within `reach` of `at` under crowns, 0 to 1: the crown area of the
+    /// cells whose centre lies within it, over its disc.
+    fn cover(&self, at: glam::Vec2, reach: f32) -> f32 {
+        let lo = ((at - reach) / Self::CELL).floor();
+        let hi = ((at + reach) / Self::CELL).floor();
+        let mut sum = 0.0;
+        for y in lo.y as i32..=hi.y as i32 {
+            for x in lo.x as i32..=hi.x as i32 {
+                let centre = (glam::Vec2::new(x as f32, y as f32) + 0.5) * Self::CELL;
+                if centre.distance(at) <= reach {
+                    sum += self.area.get(&(x, y)).copied().unwrap_or(0.0);
+                }
+            }
+        }
+        (sum / (std::f32::consts::PI * reach * reach)).min(1.0)
     }
 }
 

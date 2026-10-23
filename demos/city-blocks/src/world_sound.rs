@@ -6,9 +6,13 @@
 
 use forge_app::FlyCamera;
 use forge_app::sound::Sound;
-use forge_audio::ambience::{Ambience, AmbienceAssets, AmbienceState};
+use forge_audio::ambience::{Ambience, AmbienceAssets, AmbienceState, Habitat};
 use forge_audio::{Foley, Listener, PlayParams, Step, Surface};
 use glam::{DVec3, Vec3};
+
+/// Seconds the place the ambience hears takes to follow the scene's habitat by `e`: a step
+/// through a door or out of a wood crossfades the beds (#350).
+const HABITAT_EASE: f32 = 1.5;
 
 /// Metres between steps walking, and running (above [`RUN`] m/s).
 const STRIDE: f32 = 0.75;
@@ -19,6 +23,8 @@ const RUN: f32 = 2.5;
 pub struct WorldSound {
     ambience: Option<Ambience>,
     state: AmbienceState,
+    /// The place the scene says the listener is in, which `state.habitat` follows.
+    habitat: Habitat,
     foley: Foley,
     /// The player's feet last frame and the ground walked since the last step.
     feet: Option<Vec3>,
@@ -29,14 +35,16 @@ pub struct WorldSound {
 
 impl WorldSound {
     /// Starts the beds (the recorded birds and cicadas where `tools/fetch-sounds.sh` put them,
-    /// beds made in code otherwise) at `hour`.
+    /// under the engine's root whatever the working directory, #350; beds made in code
+    /// otherwise) at `hour`.
     pub fn start(sound: &mut Sound, hour: f32) -> Self {
         let rate = sound.sample_rate();
         let state = AmbienceState {
             hour,
             ..AmbienceState::default()
         };
-        let assets = AmbienceAssets::load("assets/sounds", rate).unwrap_or_default();
+        let root = forge_app::workspace_root_from(env!("CARGO_MANIFEST_DIR"));
+        let assets = AmbienceAssets::load(root.join("assets/sounds"), rate).unwrap_or_default();
         let ambience = Ambience::start_with(
             &mut sound.engine,
             &sound.streams,
@@ -55,6 +63,7 @@ impl WorldSound {
         Self {
             ambience,
             state,
+            habitat: Habitat::default(),
             foley: Foley::new(rate, 318, params),
             feet: None,
             walked: 0.0,
@@ -62,8 +71,14 @@ impl WorldSound {
         }
     }
 
-    /// The frame's sound: the listener at the camera, the beds at `hour`, and a step each
-    /// stride the player's `feet` walk on `surface`.
+    /// The place round the listener this frame (#350): the scene's measure, open country
+    /// without one. The beds follow it over [`HABITAT_EASE`].
+    pub fn set_habitat(&mut self, habitat: Option<Habitat>) {
+        self.habitat = habitat.unwrap_or_default();
+    }
+
+    /// The frame's sound: the listener at the camera, the beds at `hour` in the place
+    /// [`Self::set_habitat`] gave, and a step each stride the player's `feet` walk on `surface`.
     pub fn update(
         &mut self,
         sound: &mut Sound,
@@ -82,6 +97,11 @@ impl WorldSound {
         sound.engine.set_listener(listener);
         self.state.hour = hour.rem_euclid(24.0);
         self.state.listener = listener;
+        let to = self.habitat;
+        let k = 1.0 - (-dt.max(0.0) / HABITAT_EASE).exp();
+        let place = &mut self.state.habitat;
+        place.green += (to.green - place.green) * k;
+        place.indoors += (to.indoors - place.indoors) * k;
         if let Some(ambience) = &mut self.ambience {
             ambience.update(&mut sound.engine, &self.state, dt);
         }
