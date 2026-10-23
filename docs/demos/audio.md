@@ -185,8 +185,11 @@ checks what a scene sounds like without playing it on the owner's machine.
   - **The dove** calls only near woods (none below 0.15 of green, all its share from 0.5), about
     5 dB under the other birds: the owner heard it too often and too near (2026-10-23).
   - **In a house:** the outside's beds are 16 dB down.
-- **The village** (city-plan): boards indoors (inside a room's region), stone outside; with
-  `--pursuers`, their boots, each step muffled by the walls and floors between it and the camera
+- **The village** (city-plan): boards indoors (inside a room's region); outdoors the ground's
+  section under the foot, as its row's sound layer says (D-007, 2026-10-24): the open land, the
+  gardens and the parks grass, the paving and the quays stone, the water mirrors water. The
+  sections come from a map at a metre painted from the tiles' ground at load (4 ms for the
+  600 m village; none for the city, whose streets stay stone). With `--pursuers`, their boots, each step muffled by the walls and floors between it and the camera
   (`Pieces::between`: brick's transmission per layer, at most three) and at most six mixed at once.
 - **The physics lab's impacts** (Phase 7, 2026-10-23): each contact a tick begins sounds as its two
   bodies' material rows (`forge_core::material::SoundLayer`, D-007; `docs/demos/physics-lab.md`,

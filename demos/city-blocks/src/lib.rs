@@ -5065,7 +5065,33 @@ impl CityMaterials {
 
     /// What `prop`'s row sounds like (D-007): its footsteps and impacts.
     pub fn sound(&self, prop: &str) -> forge_core::material::SoundLayer {
-        self.table.get(self.of(prop)).sound
+        self.section_sound(prop, 0)
+    }
+
+    /// What the row of `prop`'s section `section` sounds like (the rows [`Self::add_rows`] made
+    /// for it, in order); the default row's for a prop the table does not know.
+    pub fn section_sound(&self, prop: &str, section: u8) -> forge_core::material::SoundLayer {
+        self.section_row(prop, section)
+            .map_or_else(Default::default, |id| self.table.get(id).sound)
+    }
+
+    /// Sets what the row of `prop`'s section `section` sounds like; nothing for a prop the table
+    /// does not know.
+    pub fn set_section_sound(
+        &mut self,
+        prop: &str,
+        section: u8,
+        sound: forge_core::material::SoundLayer,
+    ) {
+        if let Some(id) = self.section_row(prop, section) {
+            self.table.get_mut(id).sound = sound;
+        }
+    }
+
+    fn section_row(&self, prop: &str, section: u8) -> Option<MaterialId> {
+        let first = self.by_prop.get(prop)?;
+        let id = MaterialId(first.0 + u32::from(section));
+        ((id.0 as usize) < self.table.len()).then_some(id)
     }
 
     /// The ground in layers (issue #42): uploads `layers` (`texels` a side over `size` metres,

@@ -19,7 +19,7 @@ use anyhow::Result;
 use city_blocks::scenario::{Look, Running, Scenario};
 use city_blocks::{Args, CityMaterials, Cooked, scene_origin};
 use forge_app::{FlyCamera, Input, Setup};
-use forge_core::material::{RenderLayer, TextureId, UvMapping};
+use forge_core::material::{RenderLayer, SoundLayer, SoundSurface, TextureId, UvMapping};
 use forge_geom::MeshletMesh;
 use forge_geom::city::PropSpec;
 use forge_geom::flora::{limb, lump};
@@ -48,6 +48,7 @@ use winit::keyboard::KeyCode;
 
 mod crowd;
 mod fauna;
+mod footing;
 mod mission;
 mod pursuers;
 mod residents;
@@ -615,6 +616,8 @@ pub struct PlanScenario {
     glass: forge_render::GlassPanes,
     /// The gardens' and parks' grass map (#300, `Detail::grass`), in the world frame.
     grass: Option<forge_render::grass::GrassMap>,
+    /// The ground's sections under the plan, for what a foot lands on (#318).
+    footing: Option<footing::Footing>,
 }
 
 /// Buildings drawn from a style set's grammar and kit (D-039's modules) within `radius` of
@@ -2132,6 +2135,9 @@ impl PlanScenario {
             .filter(|d| d.grass)
             .and_then(|_| grass_map(size, &tiles, masses, &plan.walls));
         laps.mark("the rest");
+        // What a foot lands on outdoors (#318): the ground's sections at a metre.
+        let footing = footing_map(size, &tiles);
+        laps.mark("footing");
         eprintln!(
             "the plan laid out in its tiles, its steps (ms): {}",
             laps.report()
@@ -2141,6 +2147,7 @@ impl PlanScenario {
             home_lamps,
             glass,
             grass,
+            footing,
             tiles: tiles.tiles,
             trees,
             flora,
@@ -6350,6 +6357,20 @@ impl Scenario for PlanScenario {
                 ),
             ],
         );
+        // What the ground sounds like underfoot (D-007): the open land, the gardens and the
+        // parks grass, the water and its mirrors water, the rest rock's stone.
+        for (section, surface) in [
+            (GROUND, SoundSurface::Grass),
+            (GARDEN, SoundSurface::Grass),
+            (PARK, SoundSurface::Grass),
+            (WATER, SoundSurface::Water),
+            (MIRROR, SoundSurface::Water),
+        ] {
+            let sound = SoundLayer {
+                surface: Some(surface),
+            };
+            materials.set_section_sound("plan-ground", section, sound);
+        }
         // The facades: a window bay and a shopfront, read by the walls' coordinates.
         // Their windows lit in the share the kit's residents lit theirs, or the homes' share of
         // the hour (`lit_share`) without a kit: the far city goes to bed with the near one.
@@ -7016,6 +7037,15 @@ impl Scenario for PlanScenario {
         }
         let lamp_row = materials.of("plan-lamp");
         let ground_row = materials.of("plan-ground");
+        // What each ground section sounds like underfoot (#318, D-007).
+        let ground_sounds: Vec<Option<forge_audio::Surface>> = (0..=MIRROR)
+            .map(|s| {
+                materials
+                    .section_sound("plan-ground", s)
+                    .surface
+                    .map(Into::into)
+            })
+            .collect();
         let mass_row = materials.of("plan-mass");
         let grille_row = materials.of("plan-grille");
         laps.mark("rows and leaves");
@@ -7557,6 +7587,8 @@ impl Scenario for PlanScenario {
                 size: self.size,
                 origin: scene_origin(args).to_f64().as_vec3(),
                 regions: std::mem::take(&mut self.regions),
+                footing: self.footing.take(),
+                ground_sounds,
                 home_lamps: std::mem::take(&mut self.home_lamps),
                 glass: std::mem::take(&mut self.glass),
                 grass: self
@@ -7631,6 +7663,9 @@ struct PlanRunning {
     screens: Vec<StopScreen>,
     /// The houses' rooms for the probes (D-068), in the world frame.
     regions: Vec<forge_render::RegionVolume>,
+    /// The ground's sections under the plan and what each sounds like underfoot (#318).
+    footing: Option<footing::Footing>,
+    ground_sounds: Vec<Option<forge_audio::Surface>>,
     /// The houses' lamps that are on (D-065), in the world frame.
     home_lamps: Vec<forge_render::lamps::Lamp>,
     /// The houses' clear glass (D-065's part 4), in the world frame, handed over once.
@@ -8212,7 +8247,7 @@ impl Running for PlanRunning {
 
     fn footing(&self) -> Option<(Vec3, forge_audio::Surface)> {
         let feet = self.walker.as_ref()?.feet();
-        Some((feet, ground_under(&self.regions, feet)))
+        Some((feet, self.ground_under(feet)))
     }
 
     fn habitat(&self, listener: Vec3) -> Option<forge_audio::ambience::Habitat> {
@@ -8235,12 +8270,17 @@ impl Running for PlanRunning {
             return;
         };
         let steps = self.steps.get_or_insert_with(|| sounds::Steps::new(sound));
-        let (regions, walls) = (&self.regions, &self.walls);
+        let ground = Ground {
+            regions: &self.regions,
+            footing: self.footing.as_ref(),
+            sounds: &self.ground_sounds,
+        };
+        let walls = &self.walls;
         steps.update(
             sound,
             &pursuers.feet(),
             listener,
-            |at| ground_under(regions, at),
+            |at| ground.under(at),
             |a, b| walls.between(a, b),
         );
     }
@@ -8287,15 +8327,57 @@ impl Canopy {
     }
 }
 
-/// What a foot lands on at `feet` (#318): the floors indoors (inside a room's volume) are
-/// boards, the streets and the courts stone.
-fn ground_under(regions: &[forge_render::RegionVolume], feet: Vec3) -> forge_audio::Surface {
-    let hit = forge_render::region_at(regions, feet + Vec3::Y * 0.1);
-    if hit.region == 0 {
-        forge_audio::Surface::Stone
-    } else {
-        forge_audio::Surface::Wood
+/// What a foot lands on (#318): the floors indoors (inside a room's volume) are boards; outdoors
+/// the ground's section under it sounds as its row says (D-007: the lawns and the open land grass,
+/// the water mirrors water), stone where no ground was laid or the plan has no map (the city).
+struct Ground<'a> {
+    regions: &'a [forge_render::RegionVolume],
+    footing: Option<&'a footing::Footing>,
+    sounds: &'a [Option<forge_audio::Surface>],
+}
+
+impl Ground<'_> {
+    /// What a foot at `feet` lands on.
+    fn under(&self, feet: Vec3) -> forge_audio::Surface {
+        let stone = forge_audio::Surface::Stone;
+        if forge_render::region_at(self.regions, feet + Vec3::Y * 0.1).region != 0 {
+            forge_audio::Surface::Wood
+        } else {
+            self.footing
+                .map_or(stone, |f| f.surface_at(feet, self.sounds, stone))
+        }
     }
+}
+
+impl PlanRunning {
+    /// What a foot at `feet` lands on ([`Ground`]).
+    fn ground_under(&self, feet: Vec3) -> forge_audio::Surface {
+        Ground {
+            regions: &self.regions,
+            footing: self.footing.as_ref(),
+            sounds: &self.ground_sounds,
+        }
+        .under(feet)
+    }
+}
+
+/// The ground's sections under a plan of side `size` (#318), painted from the tiles' ground at a
+/// metre; `None` for a plan too large (the city).
+fn footing_map(size: f64, tiles: &Tiles) -> Option<footing::Footing> {
+    let corner = world(size, DVec2::ZERO, 0.0);
+    let mut map = footing::Footing::new(glam::Vec2::new(corner.x, corner.z), size as f32)?;
+    for tile in &tiles.tiles {
+        let mesh = &tile.ground;
+        for (t, tri) in mesh.indices.as_chunks::<3>().0.iter().enumerate() {
+            let p = [0, 1, 2].map(|k| tile.centre + Vec3::from(mesh.positions[tri[k] as usize]));
+            map.paint(p, mesh.section(t));
+        }
+    }
+    tracing::info!(
+        cells_by_section = ?map.counts(),
+        "the ground underfoot, a metre a cell (the last: none laid)"
+    );
+    Some(map)
 }
 
 /// The grass map's cell, metres (#300).
