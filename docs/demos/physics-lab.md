@@ -2308,7 +2308,12 @@ run):
 | `drop` | tick 34: two stone blocks, 330 kg reduced, 0.66 m/s | 643 | 1 469 | 2.8 ms (223 ms, 0.37 ms a frame) |
 
 In the recording the ball's landing is a step from −27 to −16 dBFS over the ambience's bed, in the
-frame the log names. The lab's marks by material (decals where a body struck) come next.
+frame the log names.
+
+**The player's steps** take the row of the body under its feet too (`Running::footing`): in
+`materials` the walker's boots sound as brick (stone) for its first 160 frames, then wood, sand
+(as grass) and snow (as gravel) for 120 frames each, then the ice (as stone) it slides to a stop
+on. The lab's marks by material (decals where a body struck) come next.
 
 ## Captures
 

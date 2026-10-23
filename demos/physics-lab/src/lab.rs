@@ -3078,6 +3078,23 @@ impl Lab {
         }
     }
 
+    /// The player's feet and what they stand on (#318, D-007): the sound of the body under them
+    /// (a materials patch's row, a crate's wood), the floor's on fixed ground the lab does not
+    /// name; none without a player.
+    pub(crate) fn footing(&self) -> Option<(Vec3, forge_audio::Surface)> {
+        let world = match &self.mode {
+            Mode::Local { world, .. } => &**world,
+            Mode::Net(net) => &net.client.sim,
+        };
+        let state = world.world.character(world.player.character?);
+        let surface = state
+            .ground_body
+            .and_then(|body| self.hearing.surfaces.get(&body).copied())
+            .unwrap_or(self.hearing.ground)
+            .map_or(forge_audio::Surface::Stone, Into::into);
+        Some((state.position.as_vec3(), surface))
+    }
+
     /// The contacts heard since the last take, oldest first, into `out` (cleared first).
     pub(crate) fn take_heard(&mut self, out: &mut Vec<Heard>) {
         out.clear();

@@ -949,6 +949,10 @@ impl Running for LabRunning {
         self.lab.player().map(|p| p.position)
     }
 
+    fn footing(&self) -> Option<(Vec3, forge_audio::Surface)> {
+        self.lab.footing()
+    }
+
     fn networked(&self) -> bool {
         self.flags.net.is_some()
     }
