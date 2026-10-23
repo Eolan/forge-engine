@@ -105,6 +105,13 @@ Options:
   cascades leave the rest of theirs unused. With the village's 24,12,24, the frame grows +0.21 to
   +0.32 ms at 32,12,32 (reach 14.5 m) and +0.53 to +0.86 ms at 40,12,40 (18.5 m). Serial, green,
   forest, main street and hall. It moves a far wall's cascade change farther, not away (#353).
+  In a scene that gives rooms (the village), each room near the camera has a probe grid of its
+  own (D-078, `ProbeParams::rooms`), so a room's light no longer changes with the cascade that
+  reaches it (#353's drift test: 0.5 sRGB levels against 23). `--no-probe-rooms` lights the rooms
+  with the cascades as before; `--probe-rooms=R` sets their reach (20 m, as far as the pool of
+  4,096 probes allows), and `--probe-room-spacing=A,U` the probes' spacing across and up (1,1).
+  The frame-120 log line `room probe grids` gives their count, probes and how many have faded in,
+  and `probes lighting something` the cascades' probes `retired` in their rooms.
 - `--no-reflections` draws without the sky's reflection (`r.reflections.sky`).
 - `--no-ray-reflections` reflects only the sky in the glass and the water (`r.reflections.rays`).
 - `--no-reflection-history` leaves the glass's mirror rays to TAA alone, without their history (#176).

@@ -2398,6 +2398,27 @@ opened in Nsight Graphics then shows its real-time shader profiler's samples per
 Trace's `--real-time-shader-profiler`, Blackwell `--architecture "Blackwell GB20x"`). Its
 command-line export holds only the per-pass tables.
 
+## Room probe grids (D-078, #353, 2026-10-23)
+
+The village's rooms within 20 m each have a probe grid of their own, as far as a pool of 4,096
+probes allows, and the cascades' probes in those rooms retire. The village at 18:00, serial
+(`FORGE_ASYNC=0`), 600 frames, three runs each, without the grids (`--no-probe-rooms`) and with:
+
+| View | Frame without | Frame with | Probe rays | Probe blend |
+|---|---|---|---|---|
+| a room (`--view=71.5,1.6,-175.1,55.9,-12`) | 4.77 ms | 4.97 | 0.83 → 0.95 | 0.38 → 0.44 |
+| the hall | 5.52 | 5.64 | 0.82 → 0.95 | 0.37 → 0.44 |
+| a house from the street | 5.04 | 5.29 | 0.81 → 0.98 | 0.37 → 0.45 |
+| the main street | 5.28 | 5.30 | 0.80 → 0.82 | 0.37 → 0.38 |
+
+- **The room view:** 26 grids, 3,232 probes, and 1,739 cascade probes retired (1,391 of the 1 m
+  cascade's).
+- **The lookup:** at first `shading/standard` took +0.155 ms in the room view. Two integer divisions
+  per probe for its atlas tile, and no skipping of negligible weights, did it. Stepping the
+  corners' tiles from the base probe's, and skipping as the cascades do, left about +0.02.
+- **Not counted:** the probe passes run on the async compute queue, so the real frame pays less
+  than the serial one.
+
 ## Not measured yet
 
 - **Streaming**: residency pools, request queue depth, drive and decompression throughput.

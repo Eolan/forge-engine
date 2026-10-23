@@ -26,6 +26,7 @@ use forge_gpu::{
 };
 use glam::{Vec2, Vec3};
 
+use super::rooms::RoomOutline;
 use super::{RegionKind, RegionVolume};
 use crate::meshlet::dynamic::Ranges;
 
@@ -114,6 +115,10 @@ struct Set {
     hi: Vec3,
     /// Per volume as the host gave them, its place in the volumes' table.
     place: Vec<u32>,
+    /// Its serial among every set ever added: a room grid's key (D-078).
+    serial: u64,
+    /// Its rooms in the scene frame, for their probe grids.
+    rooms: Vec<RoomOutline>,
 }
 
 /// What a frame reads of the regions ([`RegionStore::frame`]): the addresses its field names.
@@ -164,6 +169,8 @@ pub(super) struct RegionStore {
     frame: u64,
     /// Boxes whose probes the next frame wakes.
     wake: Vec<(Vec3, Vec3)>,
+    /// The next set's serial.
+    serials: u64,
 }
 
 /// Whether `v` is given clockwise in x and z: [`ordered`] turns it round, and a doorway turned
@@ -367,6 +374,7 @@ impl RegionStore {
             leaving: Vec::new(),
             frame: 0,
             wake: Vec::new(),
+            serials: 0,
         };
         store.rebuild_tables()?;
         Ok(store)
@@ -476,6 +484,17 @@ impl RegionStore {
             lo,
             hi,
             place,
+            serial: self.serials,
+            rooms: volumes
+                .iter()
+                .filter(|v| v.kind == RegionKind::Room)
+                .map(|v| RoomOutline {
+                    region: v.region,
+                    corners: v.corners,
+                    floor: v.floor,
+                    ceiling: v.ceiling,
+                })
+                .collect(),
         };
         if wake {
             self.wake.push((set.lo, set.hi));
@@ -491,6 +510,7 @@ impl RegionStore {
                 self.sets.len() - 1
             }
         };
+        self.serials += 1;
         self.sets[id] = Some(set);
         self.live_volumes += n;
         if let Err(e) = self.rebuild_tables() {
@@ -644,6 +664,17 @@ impl RegionStore {
             top_mask: self.top_mask,
             count: self.live_volumes,
         }
+    }
+
+    /// Every live set's rooms, each keyed by its set's serial and its place among the set's
+    /// rooms (D-078).
+    pub(super) fn rooms(&self) -> impl Iterator<Item = ((u64, u32), &RoomOutline)> {
+        self.sets.iter().flatten().flat_map(|set| {
+            set.rooms
+                .iter()
+                .enumerate()
+                .map(move |(k, room)| ((set.serial, k as u32), room))
+        })
     }
 
     /// The boxes whose probes this frame wakes, taken.

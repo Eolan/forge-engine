@@ -91,7 +91,7 @@ pub use meshlet::{
 pub use particles::{Burst, DrawKind, Effect, Emitter, ParticleParams, ParticleStats, Particles};
 pub use probes::{
     ProbeLight, ProbeParams, Probes, RegionCapacity, RegionHit, RegionKind, RegionSetId,
-    RegionVolume, region_at,
+    RegionVolume, RoomGridParams, region_at,
 };
 pub use reflection_history::{ReflectionHistory, ReflectionHistoryFrame};
 pub use restir::{LampRestir, RestirParams, RestirSettings};

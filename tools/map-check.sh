@@ -9,6 +9,8 @@
 #   tools/map-check.sh            shoot, compare with captures/map/accepted, keep the run
 #   tools/map-check.sh --accept   the same, then make this run the accepted set
 #
+# FORGE_MAP_ARGS: more arguments for every shot (`--probe-rooms` to see a change behind a switch).
+#
 # The views come from the demo's own log (`city-plan --village` names them for `--view`), so
 # they follow the seed. Run from anywhere; the runs and their logs stay in captures/map/<time>/.
 # The owner's settings file (forge.cfg, D-069) never changes a scripted run.
@@ -47,7 +49,7 @@ shoot() {
   shift
   FORGE_MONITOR=${FORGE_MONITOR:-secondary} timeout 300 target/release/city-plan.exe \
     --village "$size" --time-of-day 0.75 --fixed-step --frames "${frames:-240}" \
-    --capture "$out/$name.png" --capture-frame "${frame:-200}" "$@" > "$out/$name.log" 2>&1
+    --capture "$out/$name.png" --capture-frame "${frame:-200}" "$@" ${FORGE_MAP_ARGS:-} > "$out/$name.log" 2>&1
   local status=$?
   local gpu
   gpu=$(sed 's/\x1b\[[0-9;]*m//g' "$out/$name.log" | grep -oE 'gpu: [0-9.]+ ms' | head -1)

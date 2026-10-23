@@ -41,8 +41,28 @@ void probe_state_main(uint3 id : SV_DispatchThreadID)
     float4 data = slot.fresh ? float4(0.0, 0.0, 0.0, PROBE_INACTIVE) : field[0].probe_data[probe];
     float state_before = probe_state(data.w);
     float age = probe_age(data.w);
+    // D-078: a cascade's probe in a room whose own grid lights it whole retires (it would light
+    // nothing the grid does not); once the grid fades out it starts over, young and measured anew.
+    bool retire = false;
+    if (slot.grid == ROOM_NONE && field[0].room_count > 0u && !slot.fresh)
+    {
+        uint region = field[0].probe_region[probe];
+        uint grid = region == REGION_NONE ? ROOM_NONE : room_grid_of(field, region, slot.position + data.xyz);
+        retire = grid != ROOM_NONE && field[0].room_grids[grid].fade >= 1.0;
+    }
+    if (state_before == PROBE_RETIRED && !retire)
+    {
+        field[0].probe_data[probe] = float4(data.xyz, PROBE_RESET);
+        return;
+    }
     if (age >= PROBE_SETTLE_UPDATES)
     {
+        if (retire)
+        {
+            if (state_before == PROBE_ACTIVE || state_before == PROBE_RESET)
+                field[0].probe_data[probe] = float4(data.xyz, PROBE_RETIRED + 4.0 * (PROBE_SETTLE_UPDATES + 1.0));
+            return;
+        }
         // Settled: it keeps its place and state; a reset lasts one update. The first time,
         // its age becomes PROBE_SETTLE_UPDATES + 1, which tells the blend it settled before
         // this update (`probe_due`, issue #103).
@@ -94,17 +114,31 @@ void probe_state_main(uint3 id : SV_DispatchThreadID)
     float length_now = length(offset);
     if (length_now > limit)
         offset *= limit / length_now;
-    float state = !inside && near ? PROBE_ACTIVE : PROBE_INACTIVE;
-    if (state == PROBE_ACTIVE && state_before == PROBE_INACTIVE)
-        state = PROBE_RESET;
-    field[0].probe_data[probe] = float4(offset, state + 4.0 * (age + 1.0));
+    // A room grid's probe (D-078) lights its room wherever it stands in it, near a surface or not:
+    // its grid's lookup has no other probes to fall back on.
+    float state = !inside && (near || slot.grid != ROOM_NONE) ? PROBE_ACTIVE : PROBE_INACTIVE;
     // Its region (D-068), where it now stands; kept once it settles. In a window's recess or a
     // doorway it has none: pushed into a reveal, half in the sun, it lit the window's head.
     if (field[0].region_count > 0u)
     {
         RegionHit hit = region_at(field, slot.position + offset);
-        field[0].probe_region[probe] = hit.kind == REGION_ROOM ? hit.region : REGION_NONE;
+        uint region = hit.kind == REGION_ROOM ? hit.region : REGION_NONE;
+        if (slot.grid != ROOM_NONE)
+        {
+            // A room grid's probe (D-078) is its room's. One standing outside it (in a wall, or
+            // past an outline that is not a rectangle) lights nothing of it.
+            uint own = field[0].room_grids[slot.grid].region;
+            if (hit.region != own && hit.other != own)
+                state = PROBE_INACTIVE;
+            region = own;
+        }
+        field[0].probe_region[probe] = region;
     }
+    if (state == PROBE_ACTIVE && state_before == PROBE_INACTIVE)
+        state = PROBE_RESET;
+    if (retire && state != PROBE_INACTIVE)
+        state = PROBE_RETIRED;
+    field[0].probe_data[probe] = float4(offset, state + 4.0 * (age + 1.0));
 }
 
 // ------------------------------------------------------------------- blend ---
@@ -179,9 +213,11 @@ void probe_blend_main(uint3 group : SV_GroupID, uint thread : SV_GroupIndex)
     ProbeField* field = push.field;
     float4 data = field[0].probe_data[probe];
     float state = probe_state(data.w);
-    if (state == PROBE_INACTIVE)
+    if (state == PROBE_INACTIVE || state == PROBE_RETIRED)
         return; // the whole group: its maps keep what they held
     ProbeSlot slot = probe_slot(field, probe);
+    if (slot.unused)
+        return; // a room grid's slot given back (D-078): nothing samples it
     float age = probe_age(data.w);
     if (!probe_due(field, probe, slot, age, true))
         return; // not its turn: its rays were not traced (issue #103)

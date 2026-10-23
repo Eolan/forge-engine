@@ -18,6 +18,10 @@
 //! A settled probe (past its first eight updates) traces and blends every
 //! [`ProbeParams::cadence`] frames, on its turn (issue #103).
 //!
+//! Rooms near the camera have probe grids of their own (D-078, [`ProbeParams::rooms`],
+//! `rooms.rs`): their probes take a pool after the cascades' rows, update every frame, and light
+//! their rooms' surfaces alone; the cascades' probes standing in such a room retire.
+//!
 //! The resolve then lights every pixel's diffuse side with the probes around it
 //! ([`crate::AmbientLight::probes`]) instead of the open sky's irradiance.
 
@@ -35,9 +39,12 @@ use crate::meshlet::MoversFrame;
 use crate::sky::SkyLight;
 
 mod regions;
+mod rooms;
 
 use regions::{REGION_CELL, RegionStore, TOP_CELL, ordered};
 pub use regions::{RegionCapacity, RegionSetId};
+pub use rooms::RoomGridParams;
+use rooms::RoomGrids;
 
 /// Most cascades (`PROBE_MAX_CASCADES` in `probes.slang`).
 pub const MAX_CASCADES: usize = 6;
@@ -110,9 +117,16 @@ struct GpuProbeField {
     far_room_sky: f32,
     sample_bias: [f32; 2],
     region_pad: u32,
+    room_slots: u64,
+    room_grids: u64,
+    room_table: u64,
+    room_first: u32,
+    room_mask: u32,
+    room_count: u32,
+    room_pad: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<GpuProbeField>() == 528);
+const _: () = assert!(std::mem::size_of::<GpuProbeField>() == 568);
 
 /// `REGION_NONE` in `probes.slang`: a probe in a recess or a doorway, no region's.
 const REGION_NONE: u32 = u32::MAX;
@@ -321,6 +335,9 @@ pub struct ProbeParams {
     /// by default. The viewer's share moves the point as the camera moves (#351 tests whether
     /// that steps a face's light while walking, `--probe-bias`).
     pub sample_bias: [f32; 2],
+    /// Rooms lit by probe grids of their own (D-078, [`RoomGridParams`]): the rooms of the
+    /// scene's regions near the camera. None: the cascades light every room.
+    pub rooms: Option<RoomGridParams>,
 }
 
 impl Default for ProbeParams {
@@ -339,6 +356,7 @@ impl Default for ProbeParams {
             movers: false,
             far_room_sky: 0.06,
             sample_bias: [0.2, 0.8],
+            rooms: None,
         }
     }
 }
@@ -370,15 +388,27 @@ impl ProbeParams {
     }
 
     /// Probe slots in all the cascades, the unused ones of narrower cascades included.
-    pub fn probe_count(&self) -> u32 {
+    pub fn cascade_probes(&self) -> u32 {
         self.atlas_row() * self.first_row(self.cascades)
     }
 
-    /// The atlas of maps `tile` texels a side: a row of x × y tiles per z of every cascade.
+    /// The atlases' rows of the room grids' pool (D-078), after the cascades'.
+    fn room_rows(&self) -> u32 {
+        self.rooms
+            .map_or(0, |r| r.probes.div_ceil(self.atlas_row().max(1)))
+    }
+
+    /// Probe slots in all: the cascades', then the room grids' pool.
+    pub fn probe_count(&self) -> u32 {
+        self.atlas_row() * (self.first_row(self.cascades) + self.room_rows())
+    }
+
+    /// The atlas of maps `tile` texels a side: a row of x × y tiles per z of every cascade, then
+    /// the room grids' rows.
     fn atlas_size(&self, tile: u32) -> [u32; 2] {
         [
             self.atlas_row() * tile,
-            self.first_row(self.cascades) * tile,
+            (self.first_row(self.cascades) + self.room_rows()) * tile,
         ]
     }
 }
@@ -472,6 +502,8 @@ pub struct Probes {
     /// ahead of its early return (`region_at` in `probes.slang`).
     no_regions: Buffer,
     fields: Vec<Buffer>,
+    /// The rooms' own probe grids (D-078), with [`ProbeParams::rooms`].
+    rooms: Option<RoomGrids>,
     /// Per cascade, the origin of the last update.
     origins: [IVec3; MAX_CASCADES],
     /// Every probe starts over at the next update.
@@ -636,6 +668,16 @@ impl Probes {
             whole: None,
             no_regions,
             fields,
+            rooms: params
+                .rooms
+                .map(|r| {
+                    let pool = RoomGridParams {
+                        probes: params.probe_count() - params.cascade_probes(),
+                        ..r
+                    };
+                    RoomGrids::new(device, pool, params.cascade_probes())
+                })
+                .transpose()?,
             origins: [IVec3::ZERO; MAX_CASCADES],
             reset: true,
         })
@@ -648,6 +690,9 @@ impl Probes {
     pub fn set_regions(&mut self, device: &Arc<Device>, volumes: &[RegionVolume]) -> Result<()> {
         self.reset = true;
         self.whole = None;
+        if let Some(rooms) = self.rooms.as_mut() {
+            rooms.clear();
+        }
         if volumes.is_empty() {
             self.regions = None;
             return Ok(());
@@ -685,6 +730,9 @@ impl Probes {
     ) -> Result<()> {
         self.reset = true;
         self.whole = None;
+        if let Some(rooms) = self.rooms.as_mut() {
+            rooms.clear();
+        }
         self.regions = Some(RegionStore::new(device, capacity)?);
         Ok(())
     }
@@ -723,6 +771,12 @@ impl Probes {
         }
     }
 
+    /// The room grids live (D-078), for logs and tests: each one's region, probes and share of
+    /// its room's light.
+    pub fn room_grids(&self) -> Vec<(u32, u32, f32)> {
+        self.rooms.as_ref().map_or_else(Vec::new, RoomGrids::live)
+    }
+
     /// The layout and update this was made with.
     pub fn params(&self) -> &ProbeParams {
         &self.params
@@ -752,6 +806,7 @@ impl Probes {
             + self.no_regions.size()
             + self.regions.as_ref().map_or(0, RegionStore::bytes)
             + self.wake_boxes.iter().map(Buffer::size).sum::<u64>()
+            + self.rooms.as_ref().map_or(0, RoomGrids::bytes)
     }
 
     /// Every probe's offset from its cell's centre (xyz, metres) and state and age (w: the
@@ -760,7 +815,8 @@ impl Probes {
     /// submitted frame left them, in probe
     /// order (`probe_index` in `probes.slang`). Waits for the device: for logs and tests.
     pub fn read_states(&self, device: &Arc<Device>) -> Result<Vec<[f32; 4]>> {
-        let bytes = device.read_back(&self.data, 0, self.data.size())?;
+        let bytes =
+            device.read_back(&self.data, 0, u64::from(self.params.cascade_probes()) * 16)?;
         Ok(bytemuck::cast_slice(&bytes).to_vec())
     }
 
@@ -840,6 +896,19 @@ impl Probes {
             .as_mut()
             .map(RegionStore::take_wake)
             .unwrap_or_default();
+        // The rooms' grids this frame reads (D-078), started over with the cascades.
+        let rooms = match (self.rooms.as_mut(), self.regions.as_ref()) {
+            (Some(grids), store) => {
+                if first_update {
+                    grids.restart();
+                }
+                Some(match store {
+                    Some(store) => grids.frame(slot.index, camera, store.rooms()),
+                    None => grids.frame(slot.index, camera, std::iter::empty()),
+                })
+            }
+            (None, _) => None,
+        };
         let field = GpuProbeField {
             rotation: [row(0), row(1), row(2)],
             cascades,
@@ -875,6 +944,13 @@ impl Probes {
             far_room_sky: p.far_room_sky,
             sample_bias: p.sample_bias,
             region_pad: 0,
+            room_slots: rooms.as_ref().map_or(empty, |r| r.slots),
+            room_grids: rooms.as_ref().map_or(empty, |r| r.grids),
+            room_table: rooms.as_ref().map_or(empty, |r| r.table),
+            room_first: p.cascade_probes(),
+            room_mask: rooms.as_ref().map_or(0, |r| r.table_mask),
+            room_count: rooms.as_ref().map_or(0, |r| r.count),
+            room_pad: 0,
         };
         self.fields[slot.index].write(0, &[field]);
 

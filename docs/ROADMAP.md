@@ -740,8 +740,9 @@ game (scenarios, missions, licensed assets) is a private repository, as the city
    perfect: each pane its tilt, waves, glazing, haze, grime, blind and the sun's glint (#339,
    `research/glass-credibility.md`). On 2026-10-22–23, from the same playtest: a far wall that brightened
    as the finest probe cascade reached it (#353), its change spread over 4 m and the coarser
-   cascades' bounce no longer darkened in rooms. Room probe grids are proposed as the fix
-   (D-078 🟡, `research/probe-levels-indoors.md`). The ambience follows the place: cicadas in the
+   cascades' bounce no longer darkened in rooms. Room probe grids fixed it (D-078, built the same
+   day, `research/probe-levels-indoors.md`): a room's light no longer depends on which cascade
+   reaches it (0.5 levels against 23), for +0.02 to +0.26 ms on the serial frame. The ambience follows the place: cicadas in the
    trees, fewer doves, the outside muffled indoors (#350).
 
 ## The integration target — The city sandbox (D-059)

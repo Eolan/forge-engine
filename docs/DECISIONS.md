@@ -7328,7 +7328,7 @@ nearest hits; a full search before C is built):
 - **Checked** in the lab (`FORGE_DYNAMIC_SCENE=cells`, `docs/demos/physics-lab.md`).
 *(research: large-worlds.md §5; D-037; issue #338)*
 
-## D-078 — Rooms lit by probe grids of their own, the cascades for the outside and far rooms 🟡 (proposed 2026-10-23, #353)
+## D-078 — Rooms lit by probe grids of their own, the cascades for the outside and far rooms ✅ (accepted 2026-10-23, #353)
 
 **The question:** a room surface takes its light from the finest camera-centred cascade that
 covers it. The coarser cascades light rooms darker, so a far wall brightens as the finest
@@ -7369,5 +7369,41 @@ remove the step.
 - **Under A:** every room probe updates every frame with the same rays, so nothing is ranked.
 - **Not decided here:** whether a fixed round robin reads on the claims is a question for
   counsel.
+
+**The owner's answers (2026-10-23):** yes to A. On the patent: continue as is; later, or for a hard
+problem, try the patented best in a private lab on this machine (never on GitHub), then find a
+technique with similar results that does not infringe.
+
+**Built (2026-10-23, all four steps; on wherever the scene gives rooms, `--no-probe-rooms` off):**
+- **The grids** (`probes/rooms.rs`): a box over each room volume's outline, along the edge that
+  gives the smallest box, probes at most 1 m apart across and up (three layers in a room 2.7 m
+  high), the outer ones 0.35 m in. A pool after the cascades' rows of the atlases (4,096 probes)
+  holds the grids of the rooms within 20 m, the nearest first; a full pool lets its farthest grid
+  go for a room 5 m nearer, so in a street of houses the pool sets the reach (33 rooms there).
+  A new grid takes its 8 young updates, then fades in over 30 frames; one 10 m past the radius
+  fades out.
+- **The lookup** (`room_irradiance` in `probes.slang`): the eight probes around the point, facing,
+  Chebyshev and the crush as in a cascade, blended linearly. A room's surfaces and the probes' hits
+  in it read its grid alone; across a doorway each side its own (or the cascades' for a side
+  without one); a point in a house's body (a corner, a window's frame) the grid within 0.6 m.
+- **The cascades' probes** standing in a room whose grid is fully in retire (state 3): not traced,
+  blended or read. They come back young when it fades out. The village's room view: 1,739 retired
+  (1,391 of the 1 m cascade's) for 3,232 grid probes in 26 rooms.
+- **Two errors found on the way:**
+  - Two layers 2 m apart left a bright V over a table: the lower probes stood under it.
+  - Rays that met a house's body outside every grid's box took every probe's light. With the
+    room's cascade probes retired, only the bright outside ones were left, and the room came out
+    6 levels too bright. Taking the grid within 0.6 m fixed it.
+
+**Measured (2026-10-23, the village at 18:00):**
+- **#353's drift test** (the room settled, then the cascades drifted 14 m off): the cascades alone
+  change by 8.5 to 23 sRGB levels across six patches; with the grids, by 0.5 at most.
+- **Against probes twice as dense** (cascades 0.5 m apart, grids 0.75 m): 1 m grids came within
+  2.5 levels in the room and the hall, 1.5 m grids up to 7 too bright, the 1 m cascade up to 8.5
+  too dark.
+- **Serial frame** (`FORGE_ASYNC=0`, three runs each): the room +0.20 ms, the hall +0.12, the
+  house from the street +0.26, the main street +0.02. The probe passes run on the async queue.
+- **The map check:** the outdoor views unchanged (ꟻLIP ≤ 0.002), the insides changed
+  (0.03 to 0.09), accepted.
 
 *(research: probe-levels-indoors.md; D-068; issue #353)*

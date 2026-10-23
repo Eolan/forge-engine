@@ -447,6 +447,18 @@ pub struct Args {
     /// it alone reaches farther, a long room kept in the room-sized cascade (#353).
     #[arg(long, value_delimiter = ',')]
     probe_finest: Option<Vec<u32>>,
+    /// The room grids' reach (D-078, `RoomGridParams::radius`): the scene's rooms within RADIUS
+    /// metres of the camera get one (20 by default), as far as the pool allows. On wherever the
+    /// scene gives rooms; `--probe-rooms` alone is kept so older commands run.
+    #[arg(long, num_args = 0..=1, default_missing_value = "20")]
+    probe_rooms: Option<f32>,
+    /// No room grids (D-078): every room lit by the cascades, as before 2026-10-23.
+    #[arg(long, conflicts_with = "probe_rooms")]
+    no_probe_rooms: bool,
+    /// The room grids' probes at most `ACROSS,UP` metres apart (`RoomGridParams::spacing` and
+    /// `height_spacing`).
+    #[arg(long, value_delimiter = ',')]
+    probe_room_spacing: Option<Vec<f32>>,
     /// Draw the island without its water (issue #105, D-038): the stand-in sea's opaque plane,
     /// and the rivers and lakes painted into the ground's layers.
     #[arg(long)]
@@ -1306,6 +1318,38 @@ impl Gallery {
         let mut region_check = None;
         let mut cell_rooms = None;
         let mut probes = if ctx.device.features().ray_query && scene.rays().is_some() {
+            // The scene's rooms (D-068), from the world frame to the scene's.
+            let scene_regions = running.as_ref().filter(|_| !args.no_regions);
+            let volumes: Vec<forge_render::RegionVolume> =
+                scene_regions.map_or_else(Vec::new, |running| {
+                    let origin = scene.origin();
+                    let to_scene = |x: f32, y: f32, z: f32| {
+                        forge_render::CellPos::from_f64(glam::DVec3::new(
+                            f64::from(x),
+                            f64::from(y),
+                            f64::from(z),
+                        ))
+                        .relative_to(origin)
+                    };
+                    running
+                        .probe_regions()
+                        .into_iter()
+                        .map(|v| forge_render::RegionVolume {
+                            corners: v.corners.map(|c| {
+                                let p = to_scene(c.x, 0.0, c.y);
+                                glam::Vec2::new(p.x, p.z)
+                            }),
+                            floor: to_scene(0.0, v.floor, 0.0).y,
+                            ceiling: to_scene(0.0, v.ceiling, 0.0).y,
+                            ..v
+                        })
+                        .collect()
+                });
+            // Rooms lit by probe grids of their own (D-078) wherever the scene gives rooms.
+            let room_grids = !args.no_probe_rooms
+                && volumes
+                    .iter()
+                    .any(|v| v.kind == forge_render::RegionKind::Room);
             let params = ProbeParams {
                 rays: probe_rays,
                 cascades: probe_cascades,
@@ -1334,33 +1378,25 @@ impl Gallery {
                     .as_ref()
                     .filter(|c| c.len() == 3)
                     .map(|c| [c[0], c[1], c[2]]),
+                rooms: room_grids.then(|| forge_render::RoomGridParams {
+                    radius: args
+                        .probe_rooms
+                        .unwrap_or(forge_render::RoomGridParams::default().radius),
+                    spacing: args
+                        .probe_room_spacing
+                        .as_ref()
+                        .map_or(forge_render::RoomGridParams::default().spacing, |s| s[0]),
+                    height_spacing: args
+                        .probe_room_spacing
+                        .as_ref()
+                        .and_then(|s| s.get(1).copied())
+                        .unwrap_or(forge_render::RoomGridParams::default().height_spacing),
+                    ..forge_render::RoomGridParams::default()
+                }),
                 ..ProbeParams::default()
             };
             let mut probes = Probes::new(&ctx.device, &ctx.shaders, params)?;
-            // The scene's rooms (D-068), from the world frame to the scene's.
-            if let Some(running) = running.as_ref().filter(|_| !args.no_regions) {
-                let origin = scene.origin();
-                let to_scene = |x: f32, y: f32, z: f32| {
-                    forge_render::CellPos::from_f64(glam::DVec3::new(
-                        f64::from(x),
-                        f64::from(y),
-                        f64::from(z),
-                    ))
-                    .relative_to(origin)
-                };
-                let volumes: Vec<forge_render::RegionVolume> = running
-                    .probe_regions()
-                    .into_iter()
-                    .map(|v| forge_render::RegionVolume {
-                        corners: v.corners.map(|c| {
-                            let p = to_scene(c.x, 0.0, c.y);
-                            glam::Vec2::new(p.x, p.z)
-                        }),
-                        floor: to_scene(0.0, v.floor, 0.0).y,
-                        ceiling: to_scene(0.0, v.ceiling, 0.0).y,
-                        ..v
-                    })
-                    .collect();
+            if scene_regions.is_some() {
                 if !volumes.is_empty() {
                     tracing::info!(volumes = volumes.len(), "probe regions");
                 }
@@ -2488,7 +2524,8 @@ impl Demo for Gallery {
                 let (active, moved): (Vec<usize>, Vec<usize>) = states
                     .chunks(per)
                     .map(|c| {
-                        let on: Vec<_> = c.iter().filter(|s| s[3] % 4.0 != 1.0).collect();
+                        // Active (0) or active again (2); not inactive (1) or retired (3, D-078).
+                        let on: Vec<_> = c.iter().filter(|s| s[3] % 2.0 == 0.0).collect();
                         let moved = on
                             .iter()
                             .filter(|s| Vec3::from_slice(&s[..3]).length() > 0.01)
@@ -2501,13 +2538,29 @@ impl Demo for Gallery {
                     .chunks(per)
                     .map(|c| c.iter().filter(|s| (s[3] / 4.0).floor() <= 8.0).count())
                     .collect();
+                // Retired in rooms their own grids light (D-078).
+                let retired: Vec<usize> = states
+                    .chunks(per)
+                    .map(|c| c.iter().filter(|s| s[3] % 4.0 == 3.0).count())
+                    .collect();
                 tracing::info!(
                     per_cascade = per,
                     ?active,
                     ?moved,
                     ?young,
+                    ?retired,
                     "probes lighting something"
                 );
+                // The rooms' own grids (D-078): how many, their probes, how many fully faded in.
+                let grids = probes.room_grids();
+                if !grids.is_empty() {
+                    tracing::info!(
+                        grids = grids.len(),
+                        probes = grids.iter().map(|g| g.1).sum::<u32>(),
+                        faded_in = grids.iter().filter(|g| g.2 >= 1.0).count(),
+                        "room probe grids"
+                    );
+                }
             }
         }
         // The soft shadows' noise repeats with TAA's jitter (issue #54).
