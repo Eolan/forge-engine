@@ -397,14 +397,28 @@ pub fn run_loading<D: Demo + Send + 'static>(
     // (#345) and dropped at the shell's start otherwise.
     forge_core::activity::record_start();
     let preparing = loading::prepare(prepare)?;
+    // The shaders compiled ahead start there too (slangc needs no device either: a fresh cache
+    // compiles for seconds after a shader's edit), and the shell takes the same compiler.
+    let shaders = shader_compiler(&config)?;
+    let warm_up = loading::warm_up(shaders.clone())?;
     // Interactive runs draw the demo's first frames behind the loading screen (#342); scripted
     // ones show them, their frames counted from the first.
     let scripted =
         config.frame_limit.is_some() || config.capture.is_some() || config.capture_every.is_some();
     let settle = if scripted { 0 } else { loading::SETTLE_FRAMES };
-    run(config, move |ctx| {
-        loading::Stage::start(ctx, preparing, settle)
+    run_with(config, Some(shaders), move |ctx| {
+        loading::Stage::start(ctx, preparing, warm_up, settle)
     })
+}
+
+/// The shell's shader compiler: the workspace's `shaders/`, the derived cache's.
+fn shader_compiler(config: &AppConfig) -> Result<ShaderCompiler> {
+    let root = workspace_root_from(env!("CARGO_MANIFEST_DIR"));
+    Ok(ShaderCompiler::new(
+        root.join("shaders"),
+        forge_core::derived::cache_dir(forge_core::derived::CacheKind::Shaders),
+        config.optimize_shaders,
+    )?)
 }
 
 /// The log, to the console, filtered by `RUST_LOG` ("info" by default); once.
@@ -427,6 +441,15 @@ pub fn run<D: Demo>(
     config: AppConfig,
     init: impl FnOnce(&mut Context) -> Result<D> + 'static,
 ) -> Result<()> {
+    run_with(config, None, init)
+}
+
+/// [`run`], the shell taking `shaders` when given ([`run_loading`] makes it at the start).
+fn run_with<D: Demo>(
+    config: AppConfig,
+    shaders: Option<ShaderCompiler>,
+    init: impl FnOnce(&mut Context) -> Result<D> + 'static,
+) -> Result<()> {
     init_tracing();
     // The frames first: work beside them (a planet's tiles cooked as the camera flies, the
     // city's streaming) takes the cores they leave. The cooking threads below normal measured
@@ -444,6 +467,7 @@ pub fn run<D: Demo>(
     let mut app = App::<D> {
         config,
         init: Some(Box::new(init)),
+        shaders,
         state: None,
         error: None,
     };
@@ -967,7 +991,12 @@ impl<D: Demo> State<D> {
         Ok(())
     }
 
-    fn new(window: Arc<Window>, config: AppConfig, init: InitFn<D>) -> Result<Self> {
+    fn new(
+        window: Arc<Window>,
+        config: AppConfig,
+        shaders: Option<ShaderCompiler>,
+        init: InitFn<D>,
+    ) -> Result<Self> {
         // In the load profile (#345): the device's creation, Streamline's start inside it, which
         // a loading demo's preparation runs beside.
         let device_task = forge_core::activity::begin(
@@ -1074,11 +1103,10 @@ impl<D: Demo> State<D> {
         output.scene_stops = config.hdr_stops;
         output.refresh(caps);
         let frames = Frames::new(Arc::clone(&device), swapchain.image_count())?;
-        let shaders = ShaderCompiler::new(
-            root.join("shaders"),
-            forge_core::derived::cache_dir(forge_core::derived::CacheKind::Shaders),
-            config.optimize_shaders,
-        )?;
+        let shaders = match shaders {
+            Some(shaders) => shaders,
+            None => shader_compiler(&config)?,
+        };
         let font_path = std::env::var_os("FORGE_OVERLAY_FONT")
             .map(PathBuf::from)
             .unwrap_or_else(|| root.join("assets/fonts/jetbrains-mono/JetBrainsMono-Variable.ttf"));
@@ -2047,6 +2075,8 @@ fn save_capture(
 struct App<D: Demo> {
     config: AppConfig,
     init: Option<InitFn<D>>,
+    /// The shader compiler `run_loading` made at the process's start, for the shell to take.
+    shaders: Option<ShaderCompiler>,
     state: Option<State<D>>,
     error: Option<anyhow::Error>,
 }
@@ -2110,7 +2140,12 @@ impl<D: Demo> ApplicationHandler for App<D> {
             return;
         };
         match event_loop.create_window(attributes) {
-            Ok(window) => match State::new(Arc::new(window), self.config.clone(), init) {
+            Ok(window) => match State::new(
+                Arc::new(window),
+                self.config.clone(),
+                self.shaders.take(),
+                init,
+            ) {
                 Ok(mut state) => {
                     // A window made inactive never hears `Focused(true)` unless clicked: it starts
                     // out of focus, so `app.mouse_look` on the command line doesn't capture the

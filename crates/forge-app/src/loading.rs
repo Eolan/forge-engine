@@ -117,11 +117,57 @@ pub(crate) fn prepare<D: Demo + Send + 'static>(
         })?)
 }
 
+/// The shaders compiled ahead (#200): the thread, its progress for the bar, and the file the
+/// program's list of entries is kept in.
+pub(crate) struct WarmUp {
+    thread: JoinHandle<forge_gpu::Result<usize>>,
+    progress: Arc<WarmProgress>,
+    entries: PathBuf,
+}
+
+/// Starts compiling the program's shaders ahead with `compiler` ([`crate::run_loading`]: at the
+/// process's start, beside the device, which `slangc` does not need).
+pub(crate) fn warm_up(compiler: ShaderCompiler) -> Result<WarmUp> {
+    let program = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.file_stem().map(|s| s.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| "program".to_owned());
+    let entries = compiler.cache_dir().join(format!("{program}.entries"));
+    let listed = ShaderCompiler::load_entries(&entries);
+    let progress = Arc::new(WarmProgress::default());
+    let counted = progress.clone();
+    let thread = std::thread::Builder::new()
+        .name("shader warm-up".to_owned())
+        .spawn(move || {
+            // A program's first start on this cache has no list: the repository's for it
+            // (#345), else every entry the shaders declare, rather than its own one by one as it
+            // asks for them (26 s of the village's 34 on a fresh cache).
+            let listed = if listed.is_empty() {
+                let repository = compiler.listed_entries(&program);
+                if repository.is_empty() {
+                    compiler.declared_entries()
+                } else {
+                    repository
+                }
+            } else {
+                listed
+            };
+            compiler.warm_counted(&listed, shader_threads(), &counted)
+        })?;
+    Ok(WarmUp {
+        thread,
+        progress,
+        entries,
+    })
+}
+
 impl<D: Demo + Send> Stage<D> {
-    /// Starts the loading screen in the window, `thread` preparing the scene ([`prepare`]).
+    /// Starts the loading screen in the window, `thread` preparing the scene ([`prepare`]) and
+    /// `warm_up` compiling the shaders ([`warm_up`]).
     pub(crate) fn start(
         ctx: &mut Context,
         thread: JoinHandle<Result<Finish<D>>>,
+        warm_up: WarmUp,
         settle: u32,
     ) -> Result<Self> {
         let vertex = ctx.device.create_shader_module(
@@ -149,41 +195,14 @@ impl<D: Demo + Send> Stage<D> {
         ctx.device.destroy_shader_module(vertex);
         ctx.device.destroy_shader_module(fragment);
         let pipeline = pipeline?;
-        let program = std::env::current_exe()
-            .ok()
-            .and_then(|exe| exe.file_stem().map(|s| s.to_string_lossy().into_owned()))
-            .unwrap_or_else(|| "program".to_owned());
-        let entries = ctx.shaders.cache_dir().join(format!("{program}.entries"));
-        let listed = ShaderCompiler::load_entries(&entries);
-        let compiler = ctx.shaders.clone();
-        let progress = Arc::new(WarmProgress::default());
-        let counted = progress.clone();
-        let warm_up = std::thread::Builder::new()
-            .name("shader warm-up".to_owned())
-            .spawn(move || {
-                // A program's first start on this cache has no list: the repository's for it
-                // (#345), else every entry the shaders declare, rather than its own one by one
-                // as it asks for them (26 s of the village's 34 on a fresh cache).
-                let listed = if listed.is_empty() {
-                    let repository = compiler.listed_entries(&program);
-                    if repository.is_empty() {
-                        compiler.declared_entries()
-                    } else {
-                        repository
-                    }
-                } else {
-                    listed
-                };
-                compiler.warm_counted(&listed, shader_threads(), &counted)
-            })?;
         ctx.loading = true;
         Ok(Self::Loading {
             pipeline,
             started: Instant::now(),
             thread: Some(thread),
-            warm_up: Some(warm_up),
-            progress,
-            entries,
+            warm_up: Some(warm_up.thread),
+            progress: warm_up.progress,
+            entries: warm_up.entries,
             finishing: None,
             last_frame: Instant::now(),
             longest_gap: Duration::ZERO,
