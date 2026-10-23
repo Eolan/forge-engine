@@ -74,6 +74,16 @@ impl Buffer {
         self.mapped.is_some()
     }
 
+    /// Whether it is mapped and in the device's own memory (Resizable BAR): written in place,
+    /// read by the GPU at its full speed.
+    pub fn device_local_mapped(&self) -> bool {
+        self.mapped.is_some()
+            && self.allocation.as_ref().is_some_and(|a| {
+                a.memory_properties()
+                    .contains(vk::MemoryPropertyFlags::DEVICE_LOCAL)
+            })
+    }
+
     /// Copies `data` into the mapped buffer at `offset` bytes.
     ///
     /// # Panics
@@ -487,7 +497,10 @@ impl Device {
         Ok(bytes)
     }
 
-    /// Creates a device-local buffer initialised with `data` through a staging copy.
+    /// Creates a device-local buffer initialised with `data`: written in place where the device's
+    /// memory is host-visible (Resizable BAR, [`Device::resizable_bar`]), with no staging copy
+    /// and no wait on a queue (the city's start uploads a gibibyte so, #274); else through a
+    /// staging copy.
     pub fn create_buffer_with_data<T: Pod>(
         self: &Arc<Self>,
         data: &[T],
@@ -496,6 +509,20 @@ impl Device {
         name: &str,
     ) -> Result<Buffer> {
         let bytes: &[u8] = bytemuck::cast_slice(data);
+        if self.resizable_bar() {
+            let buffer = self.create_buffer(BufferDesc {
+                size: bytes.len().max(4) as u64,
+                usage: usage | vk::BufferUsageFlags::TRANSFER_DST,
+                location: MemoryLocation::CpuToGpu,
+                category,
+                name,
+            })?;
+            // Kept only where it landed in the device's own memory, mapped.
+            if buffer.device_local_mapped() {
+                buffer.write(0, bytes);
+                return Ok(buffer);
+            }
+        }
         let buffer = self.create_buffer(BufferDesc {
             size: bytes.len().max(4) as u64,
             usage: usage | vk::BufferUsageFlags::TRANSFER_DST,

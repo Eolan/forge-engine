@@ -1965,14 +1965,17 @@ and the device: it needs neither. A fresh cache's shaders compiled ahead (`slang
 start there too, and the shell takes the same compiler. City-plan makes its plan (the site, the
 plan, its masses, trees and lamps, the camera) on the loading thread too, so its window opens at
 0.17 s. The load profile (`--set dev.load_profile=1`) now spans the whole start, the device's
-step named.
+step named. Data uploaded once is written in place where the GPU's memory is host-visible
+(Resizable BAR, `Device::resizable_bar`): no staging copy in 16 MB chunks, each waited for (the
+city's gibibyte took 64 of them). The village 5.25 → 4.92 s, the city 5.79 → 5.52 s; the frame and
+the pixels the same.
 
 | `tools/load-time.sh`, best of three | Before | Now |
 |---|---|---|
-| `city-plan --village 600` | 7.23 s | **5.25 s** |
+| `city-plan --village 600` | 7.23 s | **4.92 s** |
 | the same with `--set r.aa=fsr` | 3.12 s | **2.38 s** |
 | the village on a fresh cache (`--fresh`; before: the preparation moved already) | 14.35 s | **9.34 s** |
-| the city, 4 km (before: the preparation moved already) | 6.55 s | **5.79 s** |
+| the city, 4 km (before: the preparation moved already) | 6.55 s | **5.52 s** |
 
 The village's start now: the window at 0.17 s; the preparation done at about 1.6 s; Streamline
 and the device until about 4.4 s; then the finishing (uploads, the rays' structures, pipelines),

@@ -163,6 +163,11 @@ pub struct Device {
     bindless_set: vk::DescriptorSet,
     /// Bytes allocated per category, uploaded and read back.
     memory_counters: crate::memory_report::MemoryCounters,
+    /// Host-visible device-local memory as large as a gibibyte at least: Resizable BAR (or AMD's
+    /// Smart Access Memory), which data uploaded once is written into in place
+    /// ([`Device::create_buffer_with_data`]). The 256 MiB window of a GPU without it is left to
+    /// per-frame data.
+    resizable_bar: bool,
     /// `FORGE_VRAM_BUDGET_MB`: a smaller device-local budget than the OS gives (testing the
     /// warning, rehearsing a smaller card).
     budget_cap: Option<u64>,
@@ -458,6 +463,16 @@ impl Device {
             max_total_work_groups: mesh_props.max_mesh_work_group_total_count,
         });
 
+        // SAFETY: property query on a valid physical device.
+        let memory = unsafe { raw_instance.get_physical_device_memory_properties(best.physical) };
+        let wanted = vk::MemoryPropertyFlags::DEVICE_LOCAL | vk::MemoryPropertyFlags::HOST_VISIBLE;
+        let resizable_bar = memory.memory_types[..memory.memory_type_count as usize]
+            .iter()
+            .any(|t| {
+                t.property_flags.contains(wanted)
+                    && memory.memory_heaps[t.heap_index as usize].size >= 1 << 30
+            });
+        tracing::info!(resizable_bar, "uploads");
         let allocator = Allocator::new(&AllocatorCreateDesc {
             instance: raw_instance.clone(),
             device: raw.clone(),
@@ -545,6 +560,7 @@ impl Device {
             dlss,
             shader_stats,
             memory_counters: Default::default(),
+            resizable_bar,
             budget_cap: std::env::var("FORGE_VRAM_BUDGET_MB")
                 .ok()
                 .and_then(|v| v.parse::<u64>().ok())
@@ -877,6 +893,12 @@ impl Device {
     /// (`minAccelerationStructureScratchOffsetAlignment`; issue #67).
     pub fn scratch_alignment(&self) -> u64 {
         self.scratch_alignment
+    }
+
+    /// Whether the device's memory is host-visible in a heap a gibibyte large at least (Resizable
+    /// BAR): data uploaded once is then written in place ([`Device::create_buffer_with_data`]).
+    pub fn resizable_bar(&self) -> bool {
+        self.resizable_bar
     }
 
     /// The raw device.
