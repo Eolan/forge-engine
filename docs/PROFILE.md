@@ -2326,7 +2326,14 @@ across the builds, at most 9 levels: it is not still from run to run.
   - reading a cluster's page, materials and ladder only once its LOD and frustum tests pass:
     cull 1 +0.03–0.09 ms in every view. The reads no longer overlap the tests' arithmetic;
   - 16 work items a workgroup instead of 8: no gain (green cull 1 0.40 → 0.43);
-  - 4 work items: cull 1 up to 0.06 ms slower (the air), the green mixed.
+  - 4 work items: cull 1 up to 0.06 ms slower (the air), the green mixed;
+  - the cluster's record read before the group's LOD window test, to overlap it: serially, cull
+    1 +0.006–0.03 ms in every view. Groups that leave at the window paid for the read.
+- **Serially too** (`FORGE_ASYNC=0`, three runs each, the shader swapped on one build):
+  - the merged look-back: main street's cull 1 0.393 → 0.345 ms and cull 2 0.059 → 0.049; the
+    green 0.391 → 0.381;
+  - the serial frame's full barriers move the waits between the passes' zones, so its absolute
+    zone times differ from run set to run set. Compare within one set.
 - **Registers:** 40 for the resident scene's cull, 60 for the streamed one's (`FORGE_SHADER_STATS`).
 
 **The probe rays' own cost** (2026-10-23): their async zone times the queue while it shares the
