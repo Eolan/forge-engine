@@ -791,6 +791,57 @@ nothing is repeated, guessed or extrapolated; no predicted state upstream; nothi
 volumes or places from input timing; smoothing (later) by a fixed time; redundancy by
 acknowledgement; no latency equalised between players.
 
+**Regions by load (rebalancing), searched before building it** (2026-10-23). The question: may
+the layer move the strips' cuts by load, or split a busy region over two workers and merge quiet
+ones? A research agent read the claims on Google Patents; claim 1 and claim 6 of US 12,681,773 were
+read again here. Not legal advice: claim construction ("geographic space", "virtual location",
+"processing load") is a lawyer's question.
+
+| Patent | Holder | What the independent claims need | Status | Bearing |
+|---|---|---|---|---|
+| **US 12,681,773 B2** (priority 2023-06-30) | Amazon | worker-level resource consumption and per-partition information received; ownership of an identified spatial partition reassigned from one worker to another on both (cl. 6); cl. 1 adds instructions changing the number of workers | active, about 2044-03 | **The closest.** Never move identified cells, blocks or strips between workers on a load measure; strip *i* stays worker *i*; failover's target by a fixed rule (the lowest worker left), never the least loaded |
+| **US 2025/0004863 A1** (2023, PCT WO 2025/006754) | Amazon | a worker splits a parent partition into children or merges them from saturation data; a simulation manager accepts | **pending** | No parent/child partitions, no split or merge events, no worker proposing them. Watch it |
+| **US 11,909,601 B1** (2021) | Amazon | a node decides part of its volume goes to a newly allocated node and sends it the state | active, about 2042-04 | Forge's layer decides, workers hold nothing, no worker is allocated for a split |
+| **US 12,636,578 B2** (2023) | Amazon | partitions moved between applications inside one worker by their workload | active, about 2044-02 | One strip a worker process: not on the path |
+| **US 10,484,249 B1** (2015) | Amazon | a node over a load threshold re-clusters its objects around more centroids, a second node takes a cluster | active, about 2036-10 | No clustering of objects into partitions |
+| **US 10,303,821 B2** (2016) | Improbable | the target chosen by load-density centres and a transfer or "tensile energy" score | active, about 2037-10 | The target is the strip an entity stands in |
+| **US 10,549,189 B1**, **10,688,391 B1**, **11,229,838 B2**, **11,628,356 B2**, **11,918,893 B2**; **EP 3 897 892 B1** (2018) | Sony | users in a region over a per-compute limit, the region divided into sub-regions and compute added; or the number of computes per location adjusted from their monitored load, users' movement, user types or a prediction | active, about 2038–39 (EP: 2039, Europe) | A fixed worker pool, one worker a strip, no limits on player counts, no sub-regions, no prediction, no per-worker load in a decision |
+| **US 10,001,377 B2**, **10,215,570 B2**, 9,562,775, 9,784,584 (2015) | HCL (from IBM) | regions of a **geographic space** with mobile objects; the common boundary changed by a subsystem's data processing load | active, about 2035 | Literally "move the cut by load", but described for real land, sea and air with routes. The residual risk of moving cuts during play |
+| **US 11,798,119 B2** (2019) | TMRW | cells' resources from a demand ranked by the objects in avatars' fields of view; cells subdivided, then consolidated | active, about 2040-12 | No field-of-view demand, no temporary subdivision |
+| **US 12,619,482 B2**, **EP 3 933 590 B1** (2020) | Hadean | each process keeps a routing tree of regions; region-addressed messages forwarded through it | active, about 2043 (EP 2040) | Entity-addressed events through the layer's flat table only |
+| **US 2025/0239013 A1** (2023) | Tencent | proxies created in source and destination, synchronised, authority transferred, proxies recycled | **pending** | Ghosts are recomputed in each tick's picture, never created or recycled objects. Watch it |
+
+Also met: Amazon US 10,230,583 (a node assuming authority before the owner acknowledges), Sony US
+8,332,499 (a crossing's input buffered by a relay), Improbable US 10,025,892 (an oracle starting
+workers), Linden US 8,612,196 (changes sent only when perceptible at the client's resolution, to
+2028-06), Take-Two US 11,794,114 (ids renumbered when sessions merge). Prior art, public long
+before: Quazal US 6,801,930 (2000, expired: region areas adjusted to equalise load), Sony US
+6,370,565 (1999, expired), IBM US 7,428,588, 8,327,371 and Qurio US 8,116,323 (expired), DIS and HLA
+(1993–98), Berger and Bokhari's recursive bisection (1987), Chen et al. (PPoPP 2005), De
+Vleeschauwer et al. (2005), Lim et al. (2006: the boundary between servers moved), Bezerra and Geyer
+(2009), BigWorld's CellAppMgr resizing cells, LAMMPS's `balance shift` (cutting planes moved to
+equalise particle counts, 2013). In the US practising the prior art is no defence by itself, so
+Forge stays literally outside each claim.
+
+**Rules for rebalancing:**
+- a fixed worker pool, changed by configuration, an operator or a failure only; no autoscaling, no
+  worker started for a split;
+- N strips for N workers, strip *i* always worker *i*, a flat list of cuts: no parent and child
+  partitions, no split or merge events;
+- the layer alone moves the cuts, at a tick boundary, by a fixed rule from the world it holds
+  (weighted quantiles of entity positions, weights from a static cost per kind); per-worker
+  timings go to the overlay, never into the decision;
+- no limits on player counts, no field-of-view demand, no prediction;
+- no identified cells changing owner by load;
+- a cut moved hands entities over as today: at the tick's end, whole, epoch + 1, no notice, no
+  buffer, no state from the old worker;
+- failover's target by a fixed rule (`Layer::reassign`, the lowest worker left), never by load.
+
+**The options:** re-cutting on a worker joining, leaving or failing is the safest and comes first.
+Moving the cuts during play from entity positions is low risk under the rules, but the HCL and Sony
+claims are broad: **the owner decides before it is built.** A fine grid of cells handed to workers by
+load is not built.
+
 Nothing was met on QUIC itself (an IETF standard whose participants file IPR disclosures with the
 IETF; not checked here), on connect tokens, fragmentation or a link conditioner.
 

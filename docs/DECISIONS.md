@@ -348,6 +348,12 @@ applies, a digest every second and its whole state every 10 s; a replay starts a
 the state before it and checks the digests on the way. The lab's networked session replays to
 all its digests, whole or from part-way. Replays only reproduce: never play resumed from a
 recorded moment (Blizzard's US 9,089,777 family, `research/netcode.md` §9).
+*Regions by load, searched* (2026-10-23, `research/netcode.md` §9): Amazon's US 12,681,773 (to 2044)
+claims moving an identified partition to another worker on worker-level resource measures, and
+HCL's and Sony's families claim moving a boundary by load and adding servers per area. The rules
+kept: a fixed worker pool, strip *i* always worker *i*, the cuts moved by the layer alone from
+entity positions, no per-worker load in a decision. Re-cutting on a worker joining or leaving
+comes first; moving the cuts during play waits for the owner's word.
 
 ## D-011 — Audio: own data layer and mixer, Steam Audio spatialiser ✅ (2026-09-24)
 

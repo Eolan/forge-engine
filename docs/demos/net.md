@@ -351,7 +351,7 @@ lockstep on the first channel (reliable, ordered).
 ## Next
 
 - The layer and its workers on separate machines (the server PC), and a worker's region split
-  and merged by load (its own patent search first); the skinned parts' corrections faded too;
+  and merged by load (searched 2026-10-23: re-cut on a worker joining or leaving first, cuts moved during play on the owner's word, `docs/research/netcode.md` §9); the skinned parts' corrections faded too;
   lag compensation in a scene (a shot in the lab's `--net`, the client's `Interpolator` drawing
   what it aims at); the layer's own replay (its workers' writes recorded, diffed against a fresh
   run, as the research's stage 4 asks); and the `hundred-bots` demo on the server PC.
