@@ -254,8 +254,9 @@ the whole state every 10 s; a replay must reproduce the run to the bit.
   every 60 ticks, and its whole state every `keyframe_every` ticks, the first at the start.
 - **A replay starts anywhere** (`Recording::seek`): the last keyframe at or before the tick is
   restored and the recorded ticks between are run, their digests checked. `Recording::replay`
-  runs from the start, as before. The file format is `FRGREC02` (keyframes after the digests);
-  `FRGREC01` files still read.
+  runs from the start, as before. The file format is `FRGREC02`: the keyframes after the
+  digests, each packed with LZ4 as the caches are (`forge_core::pack`). `FRGREC01` files still
+  read.
 - **Watching and checking only:** nothing lets play go on from a recorded moment. Blizzard's
   US 9,089,777 family (to US 11,654,356, about 2033-04) claims resuming gameplay from a point
   between checkpoints by loading the saved states and replaying the inputs; a replay that only
@@ -266,9 +267,9 @@ the whole state every 10 s; a replay must reproduce the run to the bit.
   changed command caught at the next digest from the keyframe before it. The lab's tug-of-war the
   same way (`a_net_session_recorded_on_the_server_replays_and_starts_anywhere`).
 - **In the lab** (`physics-lab --lab drop --net 100 --throw-every 45 --record FILE`, 1500
-  ticks): 42 commands of both players (one late), 25 digests, 3 keyframes, 648 KiB, nearly all
-  of it the three whole states, uncompressed. `--replay FILE` checks the 25 digests;
-  `--replay FILE --seek 900` restores the keyframe at 600 and runs 300 ticks in 177 ms before
+  ticks): 42 commands of both players (one late), 25 digests, 3 keyframes, 464 KiB (648 KiB
+  unpacked, nearly all of it the three whole states). `--replay FILE` checks the 25 digests;
+  `--replay FILE --seek 900` restores the keyframe at 600 and runs 300 ticks in 0.18–0.22 s before
   the first frame, then checks the last 10. At tick 1200 both draw every body in the same place.
 
 ## Authority between workers (step 2's handoff, 2026-10-23)
@@ -353,8 +354,7 @@ lockstep on the first channel (reliable, ordered).
   and merged by load (its own patent search first); the skinned parts' corrections faded too;
   lag compensation in a scene (a shot in the lab's `--net`, the client's `Interpolator` drawing
   what it aims at); the layer's own replay (its workers' writes recorded, diffed against a fresh
-  run, as the research's stage 4 asks); keyframes compressed; and the `hundred-bots` demo on the
-  server PC.
+  run, as the research's stage 4 asks); and the `hundred-bots` demo on the server PC.
 - The population of #250 as the replicated world: its near tiers' records in place of the crowd.
 - A handle for the simulation's thread (the engine's network thread runs the tokio runtime;
   the simulation hands messages over and never waits on I/O).

@@ -268,7 +268,8 @@ impl<C: Copy + Codec> Recording<C> {
         Ok(())
     }
 
-    /// The recording's bytes: a magic, the ticks, the commands, the digests, the keyframes.
+    /// The recording's bytes: a magic, the ticks, the commands, the digests, the keyframes
+    /// (each packed, `forge_core::pack`).
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut out = RECORDING_MAGIC.to_vec();
         put_u64(&mut out, self.ticks);
@@ -283,9 +284,13 @@ impl<C: Copy + Codec> Recording<C> {
         }
         put_u64(&mut out, self.keyframes.len() as u64);
         for (tick, state) in &self.keyframes {
+            // Packed (`forge_core::pack`, LZ4): a physics world's state is mostly floats.
+            let (codec, packed) = forge_core::pack::pack(state, true);
             put_u64(&mut out, *tick);
             put_u64(&mut out, state.len() as u64);
-            out.extend_from_slice(state);
+            out.push(codec as u8);
+            put_u64(&mut out, packed.len() as u64);
+            out.extend_from_slice(&packed);
         }
         out
     }
@@ -313,9 +318,17 @@ impl<C: Copy + Codec> Recording<C> {
                 .map(|_| {
                     let tick = take_u64(bytes)?;
                     let len = usize::try_from(take_u64(bytes)?).ok()?;
-                    let (state, rest) = bytes.split_at_checked(len)?;
+                    let codec = forge_core::pack::Codec::from_byte(take::<1>(bytes)?[0]).ok()?;
+                    let packed = usize::try_from(take_u64(bytes)?).ok()?;
+                    let (packed, rest) = bytes.split_at_checked(packed)?;
                     *bytes = rest;
-                    Some((tick, state.to_vec()))
+                    // LZ4 grows a block at most 255 times: a larger length is not a recording.
+                    if len > packed.len().saturating_mul(255).saturating_add(64) {
+                        return None;
+                    }
+                    let mut state = vec![0; len];
+                    forge_core::pack::unpack(codec, packed, &mut state).ok()?;
+                    Some((tick, state))
                 })
                 .collect::<Option<Vec<_>>>()?
         } else {
