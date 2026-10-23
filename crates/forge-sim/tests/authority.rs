@@ -86,20 +86,26 @@ enum Trouble {
     LateRevokes,
     /// Worker 1 goes away at tick 400 (worker 0 covers its region) and comes back at tick 600.
     WorkerAway,
+    /// Worker 1 leaves for good at tick 400 and worker 2 joins at tick 600: the strips are cut
+    /// again each time, balanced over where the bots stand.
+    Membership,
 }
 
 /// What a run made: each tick's states, the handoffs and the refused writes.
 struct Run {
     states: Vec<Vec<(EntityId, Bot)>>,
     handoffs: usize,
-    /// Of them, those the worker away and back made.
+    /// Of them, those the worker away and back made, or the strips cut again.
     reassigned: usize,
+    /// The bots each worker owned at the end.
+    owned: BTreeMap<WorkerId, usize>,
     refused: u64,
 }
 
 /// `ticks` ticks of the bots over `strips`' workers.
-fn run(strips: &Strips, ticks: usize, trouble: Trouble) -> Run {
-    let mut layer = Layer::new(strips, bots(200));
+fn run(start: &Strips, ticks: usize, trouble: Trouble) -> Run {
+    let mut strips = start.clone();
+    let mut layer = Layer::new(&strips, bots(200));
     let mut workers: Vec<Option<Worker<Bot>>> = (0..strips.workers() as WorkerId)
         .map(|w| Some(Worker::new(w)))
         .collect();
@@ -110,20 +116,37 @@ fn run(strips: &Strips, ticks: usize, trouble: Trouble) -> Run {
         states: Vec::with_capacity(ticks),
         handoffs: 0,
         reassigned: 0,
+        owned: BTreeMap::new(),
         refused: 0,
     };
     for tick in 0..ticks {
         if trouble == Trouble::WorkerAway && tick == 400 {
             workers[1] = None;
-            out.reassigned += layer.reassign(strips, 1, 0).len();
+            out.reassigned += layer.reassign(&strips, 1, 0).len();
         }
         if trouble == Trouble::WorkerAway && tick == 600 {
             workers[1] = Some(Worker::new(1));
-            out.reassigned += layer.reassign(strips, 1, 1).len();
+            out.reassigned += layer.reassign(&strips, 1, 1).len();
+        }
+        // A worker leaving or joining: the strips cut again over the members, the handoffs at once.
+        let members = match (trouble, tick) {
+            (Trouble::Membership, 400) => Some(vec![0]),
+            (Trouble::Membership, 600) => Some(vec![0, 2]),
+            _ => None,
+        };
+        if let Some(members) = members {
+            let xs = layer.records().values().map(|r| r.state.position.x);
+            strips = Strips::balanced(members, xs, strips.margin, strips.band);
+            workers.resize_with(3, || None);
+            workers[1] = None;
+            if tick == 600 {
+                workers[2] = Some(Worker::new(2));
+            }
+            out.reassigned += layer.rebalance(&strips).len();
         }
         // The barrier: each worker takes its picture of the layer.
         for w in workers.iter_mut().flatten() {
-            w.sync(&layer, strips);
+            w.sync(&layer, &strips);
         }
         late.retain(|&(until, ..)| tick < until);
         for &(_, worker, id, epoch) in &late {
@@ -144,7 +167,7 @@ fn run(strips: &Strips, ticks: usize, trouble: Trouble) -> Run {
                 let _ = layer.write(worker, id, epoch, state);
             }
         }
-        let handoffs = layer.rebalance(strips);
+        let handoffs = layer.rebalance(&strips);
         if trouble == Trouble::LateRevokes {
             for h in &handoffs {
                 let lag = random.below(3) as usize;
@@ -163,26 +186,21 @@ fn run(strips: &Strips, ticks: usize, trouble: Trouble) -> Run {
         );
     }
     out.refused = layer.refused();
+    for r in layer.records().values() {
+        *out.owned.entry(r.owner).or_default() += 1;
+    }
     out
 }
 
 /// Two workers either side of x = 0: an entity changes hands 2 m past the border, and a worker
 /// sees 2 m and a neighbour's reach beyond its region.
 fn two() -> Strips {
-    Strips {
-        cuts: vec![0.0],
-        margin: 2.0,
-        band: 2.0 + REACH + 0.01,
-    }
+    Strips::new(vec![0.0], 2.0, 2.0 + REACH + 0.01)
 }
 
 /// One worker holding everything: the reference.
 fn one() -> Strips {
-    Strips {
-        cuts: Vec::new(),
-        margin: 2.0,
-        band: 0.0,
-    }
+    Strips::new(Vec::new(), 2.0, 0.0)
 }
 
 /// Where the split run first differs from the reference: its tick and entity.
@@ -232,5 +250,21 @@ fn a_worker_away_is_covered_and_comes_back() {
     );
     // Its region's entities went to worker 0 and back.
     assert!(split.reassigned > 150, "{} reassigned", split.reassigned);
+    assert_eq!(first_difference(&split, &reference), None);
+}
+
+#[test]
+fn a_worker_leaving_and_another_joining_cut_the_strips_again() {
+    let reference = run(&one(), 1800, Trouble::None);
+    let split = run(&two(), 1800, Trouble::Membership);
+    eprintln!(
+        "workers leaving and joining: {} handed over at the cuts, {} handoffs besides, owned at the end {:?}",
+        split.reassigned, split.handoffs, split.owned
+    );
+    // Worker 1's bots went to worker 0 at once, and half of them to worker 2 when it came.
+    assert!(split.reassigned > 150, "{} reassigned", split.reassigned);
+    assert_eq!(split.owned.get(&1), None, "the worker gone owns nothing");
+    let (a, b) = (split.owned[&0], split.owned[&2]);
+    assert!(a.abs_diff(b) < 60, "{a} and {b}");
     assert_eq!(first_difference(&split, &reference), None);
 }

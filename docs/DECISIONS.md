@@ -353,7 +353,8 @@ claims moving an identified partition to another worker on worker-level resource
 HCL's and Sony's families claim moving a boundary by load and adding servers per area. The rules
 kept: a fixed worker pool, strip *i* always worker *i*, the cuts moved by the layer alone from
 entity positions, no per-worker load in a decision. Re-cutting on a worker joining or leaving
-comes first; moving the cuts during play waits for the owner's word.
+is built (`Strips::balanced`, `LayerHost::recut`: the records still the one-worker run's to the
+bit); moving the cuts during play waits for the owner's word.
 
 ## D-011 — Audio: own data layer and mixer, Steam Audio spatialiser ✅ (2026-09-24)
 

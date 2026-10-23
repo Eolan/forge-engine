@@ -346,13 +346,13 @@ async fn start_layer(o: &Options, issuer: &TokenIssuer) -> (LayerHost<Person>, S
     let mut server = Server::bind(config).expect("the layer could not bind");
     let address = server.local_address();
     let half = o.side / 2.0;
-    let strips = Strips {
-        cuts: (1..o.workers)
+    let strips = Strips::new(
+        (1..o.workers)
             .map(|k| -half + o.side * k as f64 / o.workers as f64)
             .collect(),
-        margin: 2.0,
-        band: 2.0,
-    };
+        2.0,
+        2.0,
+    );
     let people = Crowd::new(o.replicate, o.side, o.seed).people();
     let mut host = LayerHost::new(Layer::new(&strips, people), strips);
     let side = o.side;

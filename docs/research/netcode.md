@@ -837,7 +837,7 @@ Forge stays literally outside each claim.
   buffer, no state from the old worker;
 - failover's target by a fixed rule (`Layer::reassign`, the lowest worker left), never by load.
 
-**The options:** re-cutting on a worker joining, leaving or failing is the safest and comes first.
+**The options:** re-cutting on a worker joining, leaving or failing is the safest and comes first (built 2026-10-23: `Strips::balanced`, `LayerHost::recut`).
 Moving the cuts during play from entity positions is low risk under the rules, but the HCL and Sony
 claims are broad: **the owner decides before it is built.** A fine grid of cells handed to workers by
 load is not built.

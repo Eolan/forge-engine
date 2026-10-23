@@ -180,6 +180,30 @@ impl<S: Placed + Codec> LayerHost<S> {
         self.layer.reassign(&self.strips, worker, worker)
     }
 
+    /// Where each worker holds.
+    pub fn strips(&self) -> &Strips {
+        &self.strips
+    }
+
+    /// The workers are now `members`, west to east: one left for good, or one joined (attached
+    /// first). The strips are cut again over where the entities stand ([`Strips::balanced`]), a
+    /// worker no longer among them is let go, and the handoffs are made at once, between ticks.
+    /// For a change of workers only, never for how loaded they are (`docs/research/netcode.md`
+    /// §9).
+    pub fn recut(&mut self, members: Vec<WorkerId>) -> Vec<Handoff> {
+        let xs = self.layer.records().values().map(|r| r.state.position().x);
+        self.strips = Strips::balanced(members, xs, self.strips.margin, self.strips.band);
+        let members = &self.strips.members;
+        self.workers.retain(|w, session| {
+            let kept = members.contains(w);
+            if !kept {
+                session.close();
+            }
+            kept
+        });
+        self.layer.rebalance(&self.strips)
+    }
+
     /// One tick (see the module's documentation): the pictures, the writes, the handoffs. A worker
     /// that closes, or stays silent past `patience`, is covered and the tick stepped again.
     /// Panics when no worker is left.

@@ -373,6 +373,14 @@ lockstep on the first channel (reliable, ordered).
   bit. Worker 1 killed at tick 400 before it answers (its session closed): covered by worker 0 on
   that tick, 192 entities reassigned there and back when it returns at tick 600, the records still
   the same. The 900 ticks take 0.3 s.
+- **Workers leaving and joining** (2026-10-23): `LayerHost::recut(members)` takes the workers
+  now, west to east, cuts the strips again so each holds as many entities as the others
+  (`Strips::balanced`: each cut halfway between the two entities its share falls between), lets
+  go of a worker no longer among them, and hands over at once, between ticks. Worker 1 let go for
+  good at tick 400 and worker 2 joining at 600: 171 entities handed over at the cuts, the records
+  the same as one worker's to the bit; in one process the bots end 98 and 102 a worker. The
+  patent search's safest form (`docs/research/netcode.md` §9): a change of workers re-cuts, never
+  a worker's measured load; moving the cuts during play waits for the owner's word.
 - **Under the clients** (`net-loopback --replicate 3000 --workers N`): the crowd that the 100
   clients receive is stepped at 60 Hz by N workers through the layer, each owning a strip of the
   square; the server reads the records for its snapshots. With 50 ms and 2 % loss to the clients,
@@ -394,7 +402,7 @@ lockstep on the first channel (reliable, ordered).
 ## Next
 
 - The layer and its workers on separate machines (the server PC), and a worker's region split
-  and merged by load (searched 2026-10-23: re-cut on a worker joining or leaving first, cuts moved during play on the owner's word, `docs/research/netcode.md` §9); the skinned parts' corrections faded too;
+  and merged by load (searched 2026-10-23, `docs/research/netcode.md` §9: the cuts moved during play on the owner's word); the skinned parts' corrections faded too;
   lag compensation in a scene (a shot in the lab's `--net`, the client's `Interpolator` drawing
   what it aims at); the layer's own replay (its workers' writes recorded, diffed against a fresh
   run, as the research's stage 4 asks); and the `hundred-bots` demo on the server PC.

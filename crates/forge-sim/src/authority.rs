@@ -2,8 +2,9 @@
 //! replication layer holds every entity's state, the worker that owns it and an epoch; workers
 //! hold nothing of their own between ticks.
 //!
-//! - **[`Strips`]:** the world cut into regions along x, one a worker (D-010's first stage: static
-//!   regions; splitting and merging them by load comes later). An entity stays with its owner
+//! - **[`Strips`]:** the world cut into regions along x, one a worker's (D-010's first stage); cut
+//!   again over where the entities stand when a worker joins or leaves ([`Strips::balanced`]),
+//!   never by how loaded a worker is measured to be. An entity stays with its owner
 //!   until it is [`Strips::margin`] past the owner's border, so one walking along a border does not
 //!   change hands every tick.
 //! - **[`Layer`]:** the replication layer. Each tick it takes the owners' writes, each carrying the
@@ -38,8 +39,7 @@ pub trait Placed: Clone + PartialEq {
     fn position(&self) -> DVec3;
 }
 
-/// The world cut along x into strips, worker `k` owning the `k`-th (see the module's
-/// documentation).
+/// The world cut along x into strips, each a worker's (see the module's documentation).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Strips {
     /// Where the strips meet along x, increasing: `n` cuts make `n + 1` strips.
@@ -49,22 +49,71 @@ pub struct Strips {
     /// How far beyond its region a worker sees the others' entities, metres: the reach of what an
     /// entity reads of its neighbours, and the margin.
     pub band: f64,
+    /// The worker each strip is, west to east: one more than the cuts. A worker keeps its strip
+    /// for as long as the strips last (`docs/research/netcode.md` §9, rebalancing).
+    pub members: Vec<WorkerId>,
 }
 
 impl Strips {
+    /// Strips at `cuts` for workers 0, 1, … west to east.
+    pub fn new(cuts: Vec<f64>, margin: f64, band: f64) -> Self {
+        let members = (0..=cuts.len() as WorkerId).collect();
+        Self {
+            cuts,
+            margin,
+            band,
+            members,
+        }
+    }
+
+    /// Strips for `members`, west to east, cut so each holds as many of the entities at `xs`
+    /// (where they stand along x) as the others, give or take one: each cut halfway between the
+    /// two entities its share falls between. For a worker joining or leaving: the cuts are a
+    /// function of where the world's entities stand, never of how loaded a worker is measured
+    /// to be (`docs/research/netcode.md` §9). With no entity, every cut at 0.
+    pub fn balanced(
+        members: Vec<WorkerId>,
+        xs: impl IntoIterator<Item = f64>,
+        margin: f64,
+        band: f64,
+    ) -> Self {
+        let mut xs: Vec<f64> = xs.into_iter().collect();
+        xs.sort_by(f64::total_cmp);
+        let n = members.len().max(1);
+        let cuts = (1..n)
+            .map(|k| {
+                let i = xs.len() * k / n;
+                match (i.checked_sub(1).and_then(|j| xs.get(j)), xs.get(i)) {
+                    (Some(&lo), Some(&hi)) => 0.5 * (lo + hi),
+                    (None, Some(&x)) | (Some(&x), None) => x,
+                    (None, None) => 0.0,
+                }
+            })
+            .collect();
+        Self {
+            cuts,
+            margin,
+            band,
+            members,
+        }
+    }
+
     /// How many workers the strips need.
     pub fn workers(&self) -> usize {
-        self.cuts.len() + 1
+        self.members.len()
     }
 
     /// The worker whose strip holds `position`.
     pub fn region(&self, position: DVec3) -> WorkerId {
-        self.cuts.iter().filter(|&&c| position.x >= c).count() as WorkerId
+        self.members[self.cuts.iter().filter(|&&c| position.x >= c).count()]
     }
 
-    /// How far `position` lies outside `worker`'s strip, metres; 0 inside it.
+    /// How far `position` lies outside `worker`'s strip, metres; 0 inside it, and infinitely far
+    /// for a worker with none.
     pub fn outside(&self, worker: WorkerId, position: DVec3) -> f64 {
-        let k = usize::from(worker);
+        let Some(k) = self.members.iter().position(|&m| m == worker) else {
+            return f64::INFINITY;
+        };
         let low = k.checked_sub(1).map_or(f64::NEG_INFINITY, |i| self.cuts[i]);
         let high = self.cuts.get(k).copied().unwrap_or(f64::INFINITY);
         (low - position.x).max(position.x - high).max(0.0)
@@ -183,7 +232,10 @@ impl<S: Placed> Layer<S> {
     /// epochs, and as ghosts the others within the band of a region it holds. One picture a tick,
     /// all of it: the worker works out what came and went (`docs/research/netcode.md` §9).
     pub fn picture(&self, worker: WorkerId, strips: &Strips) -> Vec<Seen<S>> {
-        let regions: Vec<WorkerId> = (0..strips.workers() as WorkerId)
+        let regions: Vec<WorkerId> = strips
+            .members
+            .iter()
+            .copied()
             .filter(|&w| self.owner_of_region(w) == worker)
             .collect();
         self.records
@@ -222,7 +274,10 @@ impl<S: Placed> Layer<S> {
                 continue;
             }
             // Its owner keeps it within the margin of one of the regions it holds.
-            let held = (0..strips.workers() as WorkerId)
+            let held = strips
+                .members
+                .iter()
+                .copied()
                 .filter(|&w| owner_of(w) == r.owner)
                 .any(|w| strips.outside(w, position) <= strips.margin);
             if held {
@@ -368,15 +423,37 @@ mod tests {
         }
     }
 
+    /// Balanced strips give each member as many entities, each cut halfway between two; a
+    /// worker without a strip is infinitely far from it.
+    #[test]
+    fn balanced_strips_share_the_entities_and_keep_their_members() {
+        let xs = [-9.0, -5.0, -4.0, -1.0, 0.0, 2.0, 3.0, 8.0, 9.5];
+        let strips = Strips::balanced(vec![0, 2, 7], xs, 2.0, 3.0);
+        assert_eq!(strips.cuts, vec![-2.5, 2.5]);
+        let count = |w| {
+            xs.iter()
+                .filter(|&&x| strips.region(DVec3::new(x, 0.0, 0.0)) == w)
+                .count()
+        };
+        assert_eq!((count(0), count(2), count(7)), (3, 3, 3));
+        assert_eq!(strips.outside(2, DVec3::new(3.0, 0.0, 0.0)), 0.5);
+        assert_eq!(strips.outside(1, DVec3::ZERO), f64::INFINITY);
+        assert_eq!(
+            Strips::balanced(vec![3], xs, 2.0, 3.0).cuts,
+            Vec::<f64>::new()
+        );
+        assert_eq!(
+            Strips::balanced(vec![0, 1], [], 2.0, 3.0).cuts,
+            vec![0.0],
+            "no entity"
+        );
+    }
+
     /// An entity changes hands only past the margin, its epoch one more; a write at the old epoch
     /// is refused, one at the new taken.
     #[test]
     fn authority_moves_past_the_margin_and_fences_the_old_owner() {
-        let strips = Strips {
-            cuts: vec![0.0],
-            margin: 2.0,
-            band: 3.0,
-        };
+        let strips = Strips::new(vec![0.0], 2.0, 3.0);
         assert_eq!(strips.region(DVec3::new(-0.1, 0.0, 0.0)), 0);
         assert_eq!(strips.region(DVec3::new(0.0, 0.0, 0.0)), 1);
         assert_eq!(strips.outside(0, DVec3::new(1.5, 0.0, 0.0)), 1.5);

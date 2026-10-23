@@ -119,20 +119,12 @@ fn bots() -> Vec<(EntityId, Bot)> {
 }
 
 fn two() -> Strips {
-    Strips {
-        cuts: vec![0.0],
-        margin: 2.0,
-        band: 2.0 + REACH + 0.01,
-    }
+    Strips::new(vec![0.0], 2.0, 2.0 + REACH + 0.01)
 }
 
 /// Each tick's records as one worker holding everything steps them, in this process.
 fn reference() -> Vec<Vec<(EntityId, Bot)>> {
-    let strips = Strips {
-        cuts: Vec::new(),
-        margin: 2.0,
-        band: 0.0,
-    };
+    let strips = Strips::new(Vec::new(), 2.0, 0.0);
     let mut layer = Layer::new(&strips, bots());
     let mut worker = Worker::new(0);
     (0..TICKS)
@@ -218,9 +210,20 @@ struct Run {
     covered: Vec<(u64, WorkerId, WorkerId)>,
 }
 
-/// The layer and two workers over loopback, worker 1 killed at [`KILLED`] and back at [`BACK`]
-/// when `kill`.
-async fn over_the_transport(kill: bool) -> Run {
+/// What happens to the workers during a run over the transport.
+#[derive(Clone, Copy, PartialEq)]
+enum Trouble {
+    /// Nothing.
+    None,
+    /// Worker 1 killed at [`KILLED`] and back at [`BACK`].
+    Kill,
+    /// Worker 1 let go for good at [`KILLED`], worker 2 joining at [`BACK`]: the strips cut again.
+    Recut,
+}
+
+/// The layer and two workers over loopback, through `trouble`.
+async fn over_the_transport(trouble: Trouble) -> Run {
+    let kill = trouble == Trouble::Kill;
     let mut rig = Rig::new();
     let mut host = LayerHost::new(Layer::new(&two(), bots()), two());
     for w in 0..2 {
@@ -244,6 +247,15 @@ async fn over_the_transport(kill: bool) -> Run {
             run.reassigned += host.attach(1, server).len();
             tokio::spawn(async move { layer::serve(1, &mut client, step).await });
         }
+        if trouble == Trouble::Recut && tick == KILLED {
+            run.reassigned += host.recut(vec![0]).len();
+        }
+        if trouble == Trouble::Recut && tick == BACK {
+            let (mut client, server) = rig.connect(2).await;
+            host.attach(2, server);
+            run.reassigned += host.recut(vec![0, 2]).len();
+            tokio::spawn(async move { layer::serve(2, &mut client, step).await });
+        }
         let report = host.tick(Duration::from_secs(10)).await;
         run.handoffs += report.handoffs.len();
         run.reassigned += report.reassigned;
@@ -261,7 +273,7 @@ fn first_difference(a: &[Vec<(EntityId, Bot)>], b: &[Vec<(EntityId, Bot)>]) -> O
 #[tokio::test]
 async fn two_workers_over_quic_step_the_bots_as_one_does() {
     within(120, async {
-        let run = over_the_transport(false).await;
+        let run = over_the_transport(Trouble::None).await;
         eprintln!("over QUIC: {} handoffs in {TICKS} ticks", run.handoffs);
         assert!(run.handoffs > 100, "{} handoffs", run.handoffs);
         assert!(run.covered.is_empty());
@@ -273,12 +285,27 @@ async fn two_workers_over_quic_step_the_bots_as_one_does() {
 #[tokio::test]
 async fn a_worker_killed_is_covered_without_losing_a_tick() {
     within(120, async {
-        let run = over_the_transport(true).await;
+        let run = over_the_transport(Trouble::Kill).await;
         eprintln!(
             "worker killed: covered {:?}, {} reassigned, {} handoffs besides",
             run.covered, run.reassigned, run.handoffs
         );
         assert_eq!(run.covered, vec![(KILLED, 1, 0)]);
+        assert!(run.reassigned > 150, "{} reassigned", run.reassigned);
+        assert_eq!(first_difference(&run.states, &reference()), None);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_worker_let_go_and_another_joining_cut_the_strips_again() {
+    within(120, async {
+        let run = over_the_transport(Trouble::Recut).await;
+        eprintln!(
+            "worker let go, another joining: {} handed over at the cuts, {} handoffs besides",
+            run.reassigned, run.handoffs
+        );
+        assert!(run.covered.is_empty(), "{:?}", run.covered);
         assert!(run.reassigned > 150, "{} reassigned", run.reassigned);
         assert_eq!(first_difference(&run.states, &reference()), None);
     })
