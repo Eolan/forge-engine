@@ -116,6 +116,9 @@ pub struct AppConfig {
     /// ([`Context::sound`]). Scripted runs (a frame limit, a capture) and `FORGE_SOUND=0` never
     /// do.
     pub sound: bool,
+    /// Writes the run's mix to this WAV file instead of playing it (`--sound-record`): scripted
+    /// runs too, never a device. For checks of what a scene sounds like.
+    pub sound_record: Option<PathBuf>,
 }
 
 impl Default for AppConfig {
@@ -139,6 +142,7 @@ impl Default for AppConfig {
             ssaa: false,
             settings: SettingsArgs::default(),
             sound: false,
+            sound_record: None,
         }
     }
 }
@@ -600,6 +604,8 @@ struct State<D: Demo> {
     volume_sent: f64,
     /// The playing audio device, for as long as the run lasts.
     _sound_output: Option<sound::Output>,
+    /// The mix written to a file instead (`AppConfig::sound_record`).
+    sound_recorder: Option<sound::Recorder>,
     /// The overrides naming no variable were reported (once, after the demo registered its).
     unmatched_reported: bool,
     #[cfg(feature = "profiling")]
@@ -1152,7 +1158,14 @@ impl<D: Demo> State<D> {
             }
         }
         // Sound before the demo starts, so that it can play from its first frame (#318).
-        let sound_output = if sound::wanted(&config) {
+        let mut sound_recorder = None;
+        let sound_output = if let Some(path) = config.sound_record.clone().filter(|_| config.sound)
+        {
+            let (sound, recorder) = sound::Recorder::start(path);
+            ctx.sound = Some(sound);
+            sound_recorder = Some(recorder);
+            None
+        } else if sound::wanted(&config) {
             sound::open().map(|(sound, output)| {
                 ctx.sound = Some(sound);
                 output
@@ -1182,6 +1195,7 @@ impl<D: Demo> State<D> {
             volume,
             volume_sent: 1.0,
             _sound_output: sound_output,
+            sound_recorder,
             unmatched_reported: false,
             demo,
             ctx,
@@ -1801,6 +1815,9 @@ impl<D: Demo> State<D> {
         if !self.ctx.loading && !self.ctx.preparing {
             self.ctx.frames_rendered += 1;
         }
+        if let Some(recorder) = &mut self.sound_recorder {
+            recorder.advance(dt);
+        }
         if self.debug_stall_ms > 0 {
             std::thread::sleep(Duration::from_millis(self.debug_stall_ms));
         }
@@ -1914,7 +1931,8 @@ impl<D: Demo> ApplicationHandler for App<D> {
                 attributes.with_position(PhysicalPosition::new(origin.x + 40, origin.y + 60));
             tracing::info!(monitor = ?monitor.name(), x = origin.x, y = origin.y, monitors = monitors.len(), "window placed");
         }
-        if self.config.frame_limit.is_some() {
+        let inactive = self.config.frame_limit.is_some();
+        if inactive {
             attributes = attributes.with_active(false);
         }
         let Some(init) = self.init.take() else {
@@ -1922,7 +1940,13 @@ impl<D: Demo> ApplicationHandler for App<D> {
         };
         match event_loop.create_window(attributes) {
             Ok(window) => match State::new(Arc::new(window), self.config.clone(), init) {
-                Ok(state) => self.state = Some(state),
+                Ok(mut state) => {
+                    // A window made inactive never hears `Focused(true)` unless clicked: it starts
+                    // out of focus, so `app.mouse_look` on the command line doesn't capture the
+                    // owner's cursor during a scripted run.
+                    state.input.unfocused = inactive;
+                    self.state = Some(state);
+                }
                 Err(e) => {
                     self.error = Some(e);
                     event_loop.exit();

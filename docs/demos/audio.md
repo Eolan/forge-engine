@@ -153,6 +153,15 @@ interactive; **scripted runs never do**: a frame limit (`--frames`), a capture, 
 `FORGE_SOUND=0` keep it silent. The console's `snd.volume` (0 to 1) is the master's level, and
 `snd.volume 0` in `forge.cfg` silences every run.
 
+**Recording instead of playing** (`--sound-record FILE.wav`, `AppConfig::sound_record`): the same
+buses and mixer at 48 kHz, rendered a frame's time at the end of each frame into a float WAV
+written at exit. Scripted runs may record; the device is never opened. It is how a session
+checks what a scene sounds like without playing it on the owner's machine.
+
+- **The village at its house view** (`--view=76.6,1.7,-184.3,146.8,0`, 15:00, green 1.0):
+  −25 dBFS RMS, the cicadas at full (2026-10-23). The mix plays there; if a run is silent, look
+  for the log's `sound` line (the device and its rate) or `no sound: …` at the start.
+
 - **What the game gets** (`Context::sound`): the engine to play voices on, the buses (the
   ambience's, `effects` and `foley` under the world's bus and sending to its reverb, `ui` under
   the master), the stream opener for beds and music (decoded on the shell's thread), the voices
@@ -172,6 +181,8 @@ interactive; **scripted runs never do**: a frame limit (`--frames`), a capture, 
   of its trees and its forest's plants, 30 % counting as a wood; indoors inside a room's volume.
   - **In a street:** the cicadas fall silent and a third of the birds call.
   - **In the forest:** both sing as before.
+  - **The dove** calls only near woods (none below 0.15 of green, all its share from 0.5), about
+    5 dB under the other birds: the owner heard it too often and too near (2026-10-23).
   - **In a house:** the outside's beds are 16 dB down.
 - **The village** (city-plan): boards indoors (inside a room's region), stone outside; with
   `--pursuers`, their boots, each step muffled by the walls and floors between it and the camera

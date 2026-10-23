@@ -6,6 +6,10 @@
 //! never open it: a frame limit, a capture, `--no-sound` or `FORGE_SOUND=0` keep the run silent
 //! (sound during scripted runs disturbs the owner). `snd.volume` is the master's level.
 //!
+//! A run can instead write its mix to a WAV file ([`crate::AppConfig::sound_record`]): the same
+//! buses and mixer at 48 kHz, rendered a frame's time at the end of each frame and never played.
+//! Scripted runs may record, so a check can measure what a scene sounds like without a device.
+//!
 //! The game reaches it through [`crate::Context::sound`]: it plays voices on
 //! [`Sound::engine`] into [`Sound::buses`], moves the listener with [`Sound::listen`] (the
 //! camera, every frame), and reads the voices that ended in [`Sound::events`].
@@ -100,8 +104,64 @@ pub(crate) fn wanted(config: &crate::AppConfig) -> bool {
     config.sound && !scripted && !silenced
 }
 
+/// The rate a recorded run mixes at.
+const RECORD_RATE: u32 = 48_000;
+
+/// A run's mix written to a file instead of a device ([`crate::AppConfig::sound_record`]).
+pub(crate) struct Recorder {
+    mixer: Mixer,
+    path: std::path::PathBuf,
+    samples: Vec<f32>,
+    /// The fraction of a frame not rendered yet.
+    owed: f64,
+}
+
+impl Recorder {
+    /// The mix for a run that records to `path`.
+    pub(crate) fn start(path: std::path::PathBuf) -> (Sound, Self) {
+        let (sound, mixer) = mix(RECORD_RATE);
+        tracing::info!(path = %path.display(), rate = RECORD_RATE, "sound recorded, not played");
+        let recorder = Self {
+            mixer,
+            path,
+            samples: Vec::new(),
+            owed: 0.0,
+        };
+        (sound, recorder)
+    }
+
+    /// Renders the `dt` seconds of the frame just made.
+    pub(crate) fn advance(&mut self, dt: f32) {
+        self.owed += f64::from(dt.max(0.0)) * f64::from(RECORD_RATE);
+        let frames = self.owed.floor();
+        self.owed -= frames;
+        let start = self.samples.len();
+        self.samples.resize(start + 2 * frames as usize, 0.0);
+        self.mixer.render(&mut self.samples[start..]);
+    }
+}
+
+impl Drop for Recorder {
+    fn drop(&mut self) {
+        let written = forge_audio::write_wav(
+            &self.path,
+            &self.samples,
+            2,
+            RECORD_RATE,
+            forge_audio::WavFormat::Float32,
+        );
+        match written {
+            Ok(()) => tracing::info!(
+                path = %self.path.display(),
+                seconds = self.samples.len() as f64 / 2.0 / f64::from(RECORD_RATE),
+                "sound written"
+            ),
+            Err(e) => tracing::warn!(path = %self.path.display(), "the sound record: {e}"),
+        }
+    }
+}
+
 /// The mix at `rate`: the buses and the engine.
-#[cfg_attr(not(windows), allow(dead_code))]
 fn mix(rate: u32) -> (Sound, Mixer) {
     let mut layout = BusLayout::new();
     let ambience = AmbienceBuses::add(&mut layout);
@@ -211,5 +271,41 @@ mod tests {
         let mut out = vec![1.0f32; forge_audio::BLOCK * forge_audio::CHANNELS];
         mixer.render(&mut out);
         assert!(out.iter().all(|s| *s == 0.0));
+    }
+
+    #[test]
+    fn a_recorded_run_writes_its_mix() {
+        let path = std::env::temp_dir().join(format!("forge-record-{}.wav", std::process::id()));
+        {
+            let (sound, mut recorder) = Recorder::start(path.clone());
+            // A second of a tone in the effects bus, over frames of uneven length.
+            let tone: Vec<f32> = (0..RECORD_RATE)
+                .map(|i| {
+                    0.25 * (i as f32 * 440.0 * std::f32::consts::TAU / RECORD_RATE as f32).sin()
+                })
+                .collect();
+            let mut engine = sound.engine;
+            engine.play(
+                &forge_audio::SampleBuffer::mono(RECORD_RATE, tone).shared(),
+                PlayParams {
+                    bus: sound.buses.effects,
+                    ..PlayParams::default()
+                },
+            );
+            for dt in [0.25, 0.1, 0.4, 0.25] {
+                recorder.advance(dt);
+            }
+        }
+        let bytes = std::fs::read(&path).expect("the record");
+        let _ = std::fs::remove_file(&path);
+        let record = forge_audio::decode::decode_all(
+            forge_audio::decode::open(std::io::Cursor::new(bytes))
+                .expect("a WAV")
+                .as_mut(),
+        )
+        .expect("its samples");
+        assert_eq!((record.channels(), record.rate()), (2, RECORD_RATE));
+        assert_eq!(record.frames(), RECORD_RATE as usize);
+        assert!(record.samples().iter().any(|s| s.abs() > 0.05));
     }
 }

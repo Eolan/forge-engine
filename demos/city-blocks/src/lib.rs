@@ -91,6 +91,10 @@ pub struct Args {
     /// never do; `FORGE_SOUND=0` and `snd.volume 0` silence it too.
     #[arg(long)]
     no_sound: bool,
+    /// Writes the run's sound to this WAV file (48 kHz float) instead of playing it: scripted runs
+    /// too, never a device. For checks of what a scene sounds like.
+    #[arg(long)]
+    sound_record: Option<PathBuf>,
     /// A 2× lens, a crosshair and a translucent panel drawn by the HUD (#328): the check of the game's HUD
     /// layer.
     #[arg(long, hide = true)]
@@ -7296,6 +7300,7 @@ pub fn run_making(
         width: args.width,
         height: args.height,
         sound: !args.no_sound,
+        sound_record: args.sound_record.clone(),
         ..AppConfig::default()
     };
     // The props cook (or load from the cache) behind the loading screen (issue #25).
