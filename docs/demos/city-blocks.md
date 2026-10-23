@@ -109,7 +109,7 @@ Options:
   own (D-078, `ProbeParams::rooms`), so a room's light no longer changes with the cascade that
   reaches it (#353's drift test: 0.5 sRGB levels against 23). `--no-probe-rooms` lights the rooms
   with the cascades as before; `--probe-rooms=R` sets their reach (20 m, as far as the pool of
-  4,096 probes allows; a scene sets its own in `Look::probe_room_grids`), and `--probe-room-spacing=A,U` the probes' spacing across and up (1,1).
+  4,096 probes allows; a scene sets its own in `Look::probe_room_grids`), `--probe-room-spacing=A,U` the probes' spacing across and up (1,1), and `--probe-room-rays N` their rays a frame (the cascades'; 64 against 128 saves 0.09–0.13 ms in the village but settles a room's light up to 4 levels apart).
   The frame-120 log line `room probe grids` gives their count, probes and how many have faded in,
   and `probes lighting something` the cascades' probes `retired` in their rooms.
 - `--no-reflections` draws without the sky's reflection (`r.reflections.sky`).

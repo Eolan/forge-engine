@@ -460,6 +460,9 @@ pub struct Args {
     /// `height_spacing`).
     #[arg(long, value_delimiter = ',')]
     probe_room_spacing: Option<Vec<f32>>,
+    /// Rays a room grid's probe traces a frame (`RoomGridParams::rays`, the cascades' by default).
+    #[arg(long)]
+    probe_room_rays: Option<u32>,
     /// Draw the island without its water (issue #105, D-038): the stand-in sea's opaque plane,
     /// and the rivers and lakes painted into the ground's layers.
     #[arg(long)]
@@ -1395,6 +1398,7 @@ impl Gallery {
                             .as_ref()
                             .and_then(|s| s.get(1).copied())
                             .unwrap_or(scene.height_spacing),
+                        rays: args.probe_room_rays.or(scene.rays),
                         ..scene
                     }
                 }),

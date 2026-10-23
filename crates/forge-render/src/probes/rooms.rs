@@ -56,6 +56,14 @@ pub struct RoomGridParams {
     pub spacing: f32,
     /// Metres between its layers up, at most.
     pub height_spacing: f32,
+    /// Rays a grid's probe traces a frame, the first 32 with fixed directions (64 up to
+    /// [`super::ProbeParams::rays`], which a larger count takes): the grids' cost is mostly their
+    /// rays, every probe every frame. Measured in the village's room view (serial, 2026-10-23):
+    /// 128 rays 4.80 ms, 96 4.71, 64 4.67; no more flicker with the camera still (0.05 % of the
+    /// pixels between frames 10 apart at each), but a room's light settles 2.7 (96) and 3.9 (64)
+    /// sRGB levels away from 128's on average: the rotations repeat every 8 frames, so the
+    /// fewer the rays the fewer directions a probe ever sees. `None`: the cascades' count.
+    pub rays: Option<u32>,
 }
 
 impl Default for RoomGridParams {
@@ -71,6 +79,7 @@ impl Default for RoomGridParams {
             radius: 20.0,
             spacing: 1.0,
             height_spacing: 1.0,
+            rays: None,
         }
     }
 }
@@ -665,6 +674,7 @@ mod tests {
             radius: 20.0,
             spacing: 1.0,
             height_spacing: 1.0,
+            rays: None,
         }
     }
 

@@ -228,11 +228,12 @@ void probe_blend_main(uint3 group : SV_GroupID, uint thread : SV_GroupIndex)
     // light, too bright indoors, and at the settled hysteresis that start took 200 frames to
     // wear off.
     float h = reset ? 0.0 : (age > PROBE_SETTLE_UPDATES ? field[0].settled_hysteresis : min(field[0].hysteresis, YOUNG_HYSTERESIS));
-    uint random = field[0].rays - PROBE_FIXED_RAYS;
+    uint rays = probe_rays(field, slot);
+    uint random = rays - PROBE_FIXED_RAYS;
     uint first = probe * field[0].rays + PROBE_FIXED_RAYS;
     for (uint i = thread; i < random; i += BLEND_GROUP)
     {
-        s_dir[i] = probe_ray_direction(field, PROBE_FIXED_RAYS + i);
+        s_dir[i] = probe_ray_direction(field, PROBE_FIXED_RAYS + i, rays);
         s_ray[i] = unpack_ray(field[0].ray_data[first + i]);
     }
     GroupMemoryBarrierWithGroupSync();

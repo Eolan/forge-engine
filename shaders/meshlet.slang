@@ -7377,6 +7377,10 @@ void probe_trace_main(uint3 group : SV_GroupID, uint thread : SV_GroupThreadID)
     ProbeSlot slot = probe_slot(field, probe);
     if (slot.unused)
         return;
+    // A room grid's probe traces its own count of rays (D-078, `RoomGridParams::rays`).
+    uint rays = probe_rays(field, slot);
+    if (ray >= rays)
+        return;
     float4 data = slot.fresh ? float4(0.0, 0.0, 0.0, PROBE_ACTIVE) : field[0].probe_data[probe];
     // A settled probe (probes.slang) needs no fixed rays; an inactive or retired one (D-078) no
     // others, and a settled one traces the others on its turn only (issue #103).
@@ -7387,7 +7391,7 @@ void probe_trace_main(uint3 group : SV_GroupID, uint thread : SV_GroupThreadID)
     Frame* f = probe_push.frame;
     float4* sky = probe_push.sky;
     float3 origin = slot.position + data.xyz;
-    float3 direction = probe_ray_direction(field, ray);
+    float3 direction = probe_ray_direction(field, ray, rays);
     RayDesc desc;
     desc.Origin = origin;
     desc.Direction = direction;

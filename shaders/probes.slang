@@ -234,7 +234,7 @@ public struct ProbeField
     public uint room_first;       // the pool's first probe: the cascades' probes come before it
     public uint room_mask;        // the hash's entries less one
     public uint room_count;       // grids this frame: 0, the cascades light every room
-    public uint room_pad;
+    public uint room_rays;        // rays a room grid's probe traces a frame (its first PROBE_FIXED_RAYS fixed), at most `rays`
 };
 
 // The coarse cell `key`'s first entry in a table of `mask + 1` (`top_hash` in regions.rs).
@@ -371,14 +371,14 @@ public float3 fibonacci_direction(uint i, uint n)
     return float3(cos(phi) * r, y, sin(phi) * r);
 }
 
-// The direction of a probe's ray `ray` this frame: the fixed rays are a lattice of their own;
-// the others a lattice turned by the frame's rotation, so the probes see new directions every
+// The direction of a probe's ray `ray` of `rays` this frame: the fixed rays are a lattice of their
+// own; the others a lattice turned by the frame's rotation, so the probes see new directions every
 // frame and the blend averages them.
-public float3 probe_ray_direction(ProbeField* field, uint ray)
+public float3 probe_ray_direction(ProbeField* field, uint ray, uint rays)
 {
     if (ray < PROBE_FIXED_RAYS)
         return fibonacci_direction(ray, PROBE_FIXED_RAYS);
-    float3 d = fibonacci_direction(ray - PROBE_FIXED_RAYS, field[0].rays - PROBE_FIXED_RAYS);
+    float3 d = fibonacci_direction(ray - PROBE_FIXED_RAYS, rays - PROBE_FIXED_RAYS);
     return float3(dot(field[0].rotation[0].xyz, d), dot(field[0].rotation[1].xyz, d), dot(field[0].rotation[2].xyz, d));
 }
 
@@ -453,6 +453,12 @@ public float3 room_probe_position(RoomGrid g, int3 l)
 
 // A probe of the room grids' pool (D-078): its grid's, or unused. Its slot in its grid is its
 // `local` (and `cell`); its spacing the grid's across the floor.
+// The rays probe `slot` traces a frame: a room grid's its own count (D-078), else the field's.
+public uint probe_rays(ProbeField* field, ProbeSlot slot)
+{
+    return slot.grid != ROOM_NONE ? field[0].room_rays : field[0].rays;
+}
+
 ProbeSlot room_probe_slot(ProbeField* field, uint probe)
 {
     ProbeSlot s;

@@ -123,7 +123,7 @@ struct GpuProbeField {
     room_first: u32,
     room_mask: u32,
     room_count: u32,
-    room_pad: u32,
+    room_rays: u32,
 }
 
 const _: () = assert!(std::mem::size_of::<GpuProbeField>() == 568);
@@ -950,7 +950,10 @@ impl Probes {
             room_first: p.cascade_probes(),
             room_mask: rooms.as_ref().map_or(0, |r| r.table_mask),
             room_count: rooms.as_ref().map_or(0, |r| r.count),
-            room_pad: 0,
+            room_rays: p
+                .rooms
+                .and_then(|r| r.rays)
+                .map_or(p.rays, |n| n.clamp(FIXED_RAYS + 32, p.rays)),
         };
         self.fields[slot.index].write(0, &[field]);
 
