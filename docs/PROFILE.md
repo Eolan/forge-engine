@@ -2373,6 +2373,20 @@ measured against the same build without it. The city pays nothing for it. Most o
 async probe work (the island's rays +0.036 ms, its blend +0.018), plausibly #336's lasting-change
 test; not isolated.
 
+**The city's +0.06 ms, bisected** (the city view, a build of each commit against the milestone's,
+three runs alternating):
+- **Clean up to bf1aa707.**
+- **2ac9777e, the grass in the visibility buffer:** about +0.02 ms although the city draws no grass.
+  Its zones shift between the culls (cluster cull 1 +0.034, instance cull −0.039), which reads
+  as async overlap.
+- **f30c20fe, #336's noise test:** about +0.02 ms, the probe blend +0.018 for the rays' spread it
+  now measures.
+- **After 2d77bf81:** the last +0.015 ms, spread over #336's later steps and the rest, not split
+  further.
+
+None is a bug; the grass pass's cost without grass may be worth a look when D-075's grass is
+turned on.
+
 **Tried and dropped: the probe blend's last gaps read in parallel.** Thread 0 reads a probe's
 seven last update gaps (#336) one after another, while the group's other 255 threads wait at a
 barrier. Seven threads reading them before the barrier gave identical images, but the serial
