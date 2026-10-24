@@ -768,12 +768,13 @@ impl PlanScenario {
         // pieces cut and triangulated on the machine's threads, then laid in the tiles in the
         // blocks' order: one thread took 13 s over the city's. Kept in the derived cache (#345):
         // made, the city's took 1.1 s of 16 threads, one park's 0.9 s alone.
-        let key = blocks_ground_key(plan, &paths, &middles);
+        let walled = walled_lots(plan, masses);
+        let key = blocks_ground_key(plan, &paths, &middles, &walled);
         let made = forge_core::derived::DerivedCache::new(forge_core::derived::cache_dir(
             forge_core::derived::CacheKind::World,
         ))
         .get_or_make("city-blocks-ground", key, || {
-            blocks_ground(plan, &paths, &middles)
+            blocks_ground(plan, &paths, &middles, &walled)
                 .into_iter()
                 .flatten()
                 .map(|(first, triangles, level, section)| {
@@ -3671,7 +3672,12 @@ fn home_lamps(
             };
             out.push(PlacedLamp {
                 lamp: Lamp {
-                    position: world(size, l.at, f64::from(level) + l.height),
+                    // Its height from its storey's level, as `furnish::lamps` measures it under
+                    // the ceiling: from the ground floor's, 0.32 m higher over the walk, a
+                    // pendant's canopy came 2 cm out of the floor above, a little brass square
+                    // on the bedroom's floor (the owner, 2026-10-24: "small things on the
+                    // floor").
+                    position: world(size, l.at, s.storeys[l.storey].level + l.height),
                     radius: l.radius as f32,
                     candela: l.candela as f32,
                     kelvin: l.kelvin as f32,
@@ -3984,10 +3990,16 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
             count += (mesh.indices.len() - before) / 3;
             continue;
         };
-        let cap = |mesh: &mut TriMesh, ring: &[DVec2], y: f64, normal: Vec3, section: u8| {
-            for t in geom::triangulate(ring) {
-                let p = t.map(|k| at(ring[k], y));
-                triangle_uv(mesh, p, [[0.0; 2]; 3], normal, section);
+        // A piece of a floor or a ceiling, its triangles split at its neighbours' `corners`
+        // ([`conforming_triangles`]).
+        let cap = |mesh: &mut TriMesh,
+                   ring: &[DVec2],
+                   corners: &[DVec2],
+                   y: f64,
+                   normal: Vec3,
+                   section: u8| {
+            for t in conforming_triangles(ring, corners) {
+                triangle_uv(mesh, t.map(|p| at(p, y)), [[0.0; 2]; 3], normal, section);
             }
         };
         // The ground floor keeps clear of the passages (their paving is the street's): the
@@ -4038,10 +4050,12 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
         };
         for (k, st) in s.storeys.iter().enumerate() {
             if k == 0 {
+                let corners: Vec<DVec2> = ground.iter().flatten().copied().collect();
                 for poly in &ground {
                     cap(
                         mesh,
                         poly,
+                        &corners,
                         st.level.max(WALK_LEVEL + 0.02),
                         Vec3::Y,
                         KIT_INSIDE_FLOOR,
@@ -4049,9 +4063,10 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
                 }
             } else {
                 let pieces = hole(k).map_or_else(|| vec![ring.clone()], |h| without(&ring, &h));
+                let corners: Vec<DVec2> = pieces.iter().flatten().copied().collect();
                 for poly in &pieces {
-                    cap(mesh, poly, st.level, Vec3::Y, KIT_INSIDE_FLOOR);
-                    cap(mesh, poly, st.level - st.slab, -Vec3::Y, plaster);
+                    cap(mesh, poly, &corners, st.level, Vec3::Y, KIT_INSIDE_FLOOR);
+                    cap(mesh, poly, &corners, st.level - st.slab, -Vec3::Y, plaster);
                 }
                 // The opening's four edges through the slab, facing into it: with the slab's top
                 // and underside alone, the opening's rim was a slot one saw through from the hall
@@ -4089,7 +4104,7 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
         }
         if let Some(last) = s.storeys.last() {
             let ceiling = (last.level + last.height - last.slab).min(top - 0.05);
-            cap(mesh, &ring, ceiling, -Vec3::Y, plaster);
+            cap(mesh, &ring, &[], ceiling, -Vec3::Y, plaster);
         }
         if let Some(inner) = &inner {
             // The flights' steps in the floors' smooth limestone: in the facades' pitted stone,
@@ -4687,6 +4702,54 @@ fn solid(
         let [p, q, r] = t.map(|i| at(ring[i], y0));
         triangle_uv(mesh, [p, r, q], [[0.0; 2]; 3], -Vec3::Y, section);
     }
+}
+
+/// `ring`'s triangles, each split where one of `points` lies inside one of its edges: the upper
+/// floors round a flight's opening are pieces cut along its edges' lines, and a piece's corner
+/// stands in the middle of its neighbour's edge (a T). Rasterised apart, the rounding opened a
+/// crack along that edge and the room below showed through it (the owner, 2026-10-24: "small
+/// things on the floor").
+fn conforming_triangles(ring: &[DVec2], points: &[DVec2]) -> Vec<[DVec2; 3]> {
+    let inside = |p: DVec2, a: DVec2, b: DVec2| {
+        let ab = b - a;
+        let length = ab.length();
+        if length < 1e-9 {
+            return false;
+        }
+        let t = (p - a).dot(ab) / length;
+        t > 1e-4 && t < length - 1e-4 && geom::cross(ab, p - a).abs() / length < 1e-5
+    };
+    let mut todo: Vec<[DVec2; 3]> = geom::triangulate(ring)
+        .into_iter()
+        .map(|t| t.map(|k| ring[k]))
+        .collect();
+    let mut out = Vec::new();
+    while let Some([a, b, c]) = todo.pop() {
+        // Bounded: each split takes a point off an edge, and the pieces are a few dozen points.
+        if out.len() + todo.len() > 4096 {
+            out.push([a, b, c]);
+            continue;
+        }
+        let split = points.iter().find_map(|&p| {
+            if inside(p, a, b) {
+                Some([[a, p, c], [p, b, c]])
+            } else if inside(p, b, c) {
+                Some([[a, b, p], [a, p, c]])
+            } else if inside(p, c, a) {
+                Some([[a, b, p], [p, b, c]])
+            } else {
+                None
+            }
+        });
+        match split {
+            Some([x, y]) => {
+                todo.push(x);
+                todo.push(y);
+            }
+            None => out.push([a, b, c]),
+        }
+    }
+    out
 }
 
 /// `ring` (convex, anticlockwise) without the rectangle `hole` (anticlockwise): the parts beyond
@@ -8437,9 +8500,10 @@ fn grass_map(
 /// its section.
 type GroundPiece = (DVec2, Vec<[DVec2; 3]>, f64, u8);
 
-/// Whether each block has garden walls (a village's, `CityPlan::walls`): a wall's middle in it.
-fn walled_blocks(plan: &CityPlan) -> Vec<bool> {
-    let mut out = vec![false; plan.blocks.len()];
+/// Each block's lots walled on their outline: in a block with garden walls (a village's,
+/// `CityPlan::walls`, a wall's middle in it), its houses' lots; none elsewhere.
+fn walled_lots(plan: &CityPlan, masses: &[Mass]) -> Vec<Vec<Vec<DVec2>>> {
+    let mut walled = vec![false; plan.blocks.len()];
     for w in &plan.walls {
         let mid = (w.a + w.b) * 0.5;
         if let Some(b) = plan
@@ -8447,7 +8511,14 @@ fn walled_blocks(plan: &CityPlan) -> Vec<bool> {
             .iter()
             .position(|block| geom::contains(&block.polygon, mid))
         {
-            out[b] = true;
+            walled[b] = true;
+        }
+    }
+    let mut out = vec![Vec::new(); plan.blocks.len()];
+    for m in masses {
+        let lot = &plan.lots[m.lot as usize];
+        if walled[lot.block as usize] {
+            out[lot.block as usize].push(lot.polygon.clone());
         }
     }
     out
@@ -8455,13 +8526,14 @@ fn walled_blocks(plan: &CityPlan) -> Vec<bool> {
 
 /// Each block's ground off the streets, cut and triangulated on the machine's threads
 /// ([`PlanScenario::detailed`]): a built block's forecourt paved with its `paths` and its depot's
-/// yard, the rest its gardens; a large square's `middles` cut out of its paving.
+/// yard, outside its `walled` lots, the rest its gardens; a large square's `middles` cut out of
+/// its paving.
 fn blocks_ground(
     plan: &CityPlan,
     paths: &[Vec<Vec<DVec2>>],
     middles: &[Option<(Vec<DVec2>, bool)>],
+    walled: &[Vec<Vec<DVec2>>],
 ) -> Vec<Vec<GroundPiece>> {
-    let walled = walled_blocks(plan);
     par_map(plan.blocks.len(), cores(), None, |b| {
         let block = &plan.blocks[b];
         let mut pieces: Vec<GroundPiece> = Vec::new();
@@ -8491,11 +8563,9 @@ fn blocks_ground(
                 .map(|d| d.yard());
             let mut ways = paths[b].clone();
             ways.extend(yard.clone());
-            // A village's block walls its gardens on the building line, the pavement's back
-            // edge: a forecourt there lay inside the walls, a band of paving round the lawns
-            // (the owner, 2026-10-24). Its paths stay paved.
-            let depth = if walled[b] { 0.0 } else { FORECOURT };
-            let (front, rest) = plan.ground.forecourt(&block.polygon, depth, &ways);
+            let (front, rest) = plan
+                .ground
+                .forecourt(&block.polygon, FORECOURT, &ways, &walled[b]);
             let front = match &yard {
                 Some(yard) => {
                     let (inside, outside) = ground::split(&front, yard);
@@ -8531,6 +8601,7 @@ fn blocks_ground_key(
     plan: &CityPlan,
     paths: &[Vec<Vec<DVec2>>],
     middles: &[Option<(Vec<DVec2>, bool)>],
+    walled: &[Vec<Vec<DVec2>>],
 ) -> forge_core::derived::Key {
     let mut hash = xxhash_rust::xxh3::Xxh3::new();
     let mut put = |x: f64| hash.update(&x.to_bits().to_le_bytes());
@@ -8542,9 +8613,11 @@ fn blocks_ground_key(
         }
     };
     put(plan.blocks.len() as f64);
-    let walled = walled_blocks(plan);
     for (b, block) in plan.blocks.iter().enumerate() {
-        put(f64::from(u8::from(walled[b])));
+        put(walled[b].len() as f64);
+        for lot in &walled[b] {
+            points(&mut put, lot);
+        }
         put(match block.use_ {
             BlockUse::Built => 0.0,
             BlockUse::Park => 1.0,
@@ -10142,6 +10215,40 @@ mod tests {
         mirrors
     }
 
+    /// A floor piece whose neighbour's corner stands in the middle of its edge (a T) is split
+    /// there, so the two share that edge's points and no crack opens between them (the owner's
+    /// "small things on the floor", 2026-10-24).
+    #[test]
+    fn floor_pieces_share_their_points_where_one_meets_anothers_edge() {
+        let a = [
+            DVec2::new(0.0, 0.0),
+            DVec2::new(2.0, 0.0),
+            DVec2::new(2.0, 1.0),
+            DVec2::new(0.0, 1.0),
+        ];
+        let b = [
+            DVec2::new(0.0, 1.0),
+            DVec2::new(1.0, 1.0),
+            DVec2::new(1.0, 2.0),
+            DVec2::new(0.0, 2.0),
+        ];
+        let corners: Vec<DVec2> = a.iter().chain(&b).copied().collect();
+        let tris = conforming_triangles(&a, &corners);
+        let area: f64 = tris.iter().map(|t| geom::signed_area(t).abs()).sum();
+        assert!((area - 2.0).abs() < 1e-9, "{area}");
+        let t_point = DVec2::new(1.0, 1.0);
+        assert!(tris.iter().any(|t| t.contains(&t_point)));
+        for t in &tris {
+            for i in 0..3 {
+                let (p, q) = (t[i], t[(i + 1) % 3]);
+                let inside = geom::distance_to_segment(t_point, p, q) < 1e-9
+                    && p.distance(t_point) > 1e-9
+                    && q.distance(t_point) > 1e-9;
+                assert!(!inside, "the T point inside the edge {p} {q}");
+            }
+        }
+    }
+
     #[test]
     fn the_court_paths_are_paved_with_the_forecourts_off_the_carriageways() {
         let size = 4000.0;
@@ -10178,7 +10285,9 @@ mod tests {
                 if paths[b].is_empty() {
                     continue;
                 }
-                let (front, rest) = city.ground.forecourt(&block.polygon, FORECOURT, &paths[b]);
+                let (front, rest) =
+                    city.ground
+                        .forecourt(&block.polygon, FORECOURT, &paths[b], &[]);
                 for polygon in &paths[b] {
                     let (lo, hi) = polygon.iter().fold(
                         (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)),

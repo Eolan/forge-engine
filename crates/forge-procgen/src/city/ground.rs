@@ -1030,11 +1030,15 @@ impl GroundMap {
     /// grass met the pavement in the gaps between the buildings (the owner: they "would either
     /// match the sidewalk or have a decoration"). `paths` (the paths across its green) are paved
     /// with the forecourt, one surface: drawn over it, a path showed as a patch on the paving.
+    /// The `walled` lots (a village's, walled on their outline) keep their ground off the
+    /// forecourt, their paths aside: paved, a band of paving ran round their lawns inside the
+    /// walls (the owner, 2026-10-24).
     pub fn forecourt(
         &self,
         polygon: &[DVec2],
         depth: f64,
         paths: &[Vec<DVec2>],
+        walled: &[Vec<DVec2>],
     ) -> (Shapes, Shapes) {
         let piece = Piece::from_points(polygon);
         let (lo, hi) = (
@@ -1060,6 +1064,14 @@ impl GroundMap {
             .map(|(line, w)| stroke(line, w + 2.0 * depth, true, true))
             .collect();
         let mut reach = union(&near, lo, hi);
+        let walled: Vec<Piece> = walled
+            .iter()
+            .filter(|w| w.len() >= 3)
+            .map(|w| Piece::from_points(w))
+            .collect();
+        if !walled.is_empty() {
+            reach = boolean(&reach, &union(&walled, lo, hi), OverlayRule::Difference);
+        }
         let paths: Vec<Piece> = paths.iter().map(|p| Piece::from_points(p)).collect();
         reach = boolean(&reach, &union(&paths, lo, hi), OverlayRule::Union);
         let front = boolean(&off, &reach, OverlayRule::Intersect);

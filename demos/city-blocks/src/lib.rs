@@ -998,6 +998,9 @@ impl SpaceSky {
     }
 }
 
+/// The bloom's share at night, of its day's (`Gallery::night_bloom`).
+const NIGHT_BLOOM: f32 = 0.25;
+
 /// Metres between the centres of neighbouring props in the gallery.
 const SPACING: f32 = 60.0;
 /// Props per row of the gallery.
@@ -2026,6 +2029,19 @@ impl Gallery {
             && !self.args.fixed_exposure
     }
 
+    /// The bloom's share at the hour, of its day's: all of it with the sun 6° up, a quarter
+    /// with it 6° down. At night a lit room is many stops over the moonlit street, and a 4 %
+    /// bloom made each window a spotlight's glare (the owner, 2026-10-24: "they are house
+    /// lights, not spotlights").
+    fn night_bloom(&self) -> f32 {
+        self.night_now.as_ref().map_or(1.0, |(at, _)| {
+            let up = at.sun.y.clamp(-1.0, 1.0).asin().to_degrees();
+            let day = ((up + 6.0) / 12.0).clamp(0.0, 1.0);
+            let day = day * day * (3.0 - 2.0 * day);
+            NIGHT_BLOOM + (1.0 - NIGHT_BLOOM) * day
+        })
+    }
+
     /// Local exposure's middle grey (D-067): where the automatic exposure keys the scene, the
     /// night's darkening taken off.
     fn local_middle(&self) -> f32 {
@@ -2387,6 +2403,8 @@ impl Demo for Gallery {
     }
 
     fn render<'f>(&'f mut self, ctx: &mut Context, frame: &mut FrameInfo<'f>) -> Result<()> {
+        // The bloom's share at the hour (the night as the last frame left it).
+        let bloom_share = self.taa.bloom_strength * self.night_bloom();
         // The impostors' bakes (D-075 step 4) before the scene is drawn: a frame of each bake a
         // frame (`Context::preparing`: they do not count), the screen black; each bake's
         // atlases written with `--impostor-bake`, then the impostors made of them.
@@ -3845,7 +3863,7 @@ impl Demo for Gallery {
             frame.target,
             ctx.extent(),
             self.tonemap,
-            bloom.map(|b| (b, self.taa.bloom_strength)),
+            bloom.map(|b| (b, bloom_share)),
             local,
         );
         if let Some(h) = hasher {
