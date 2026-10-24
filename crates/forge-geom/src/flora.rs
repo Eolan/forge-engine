@@ -170,6 +170,10 @@ pub const CROWN_SHELL: f32 = 1.0;
 
 /// The thinnest wood the grown plants draw, metres of radius ([`wood`]).
 pub const WOOD_RADIUS: f32 = 0.05;
+/// The thinnest a tree's trunk is drawn, metres of radius ([`wood`]): a tree's leader tapers to
+/// its species' tip, 1.2 cm or more, while a shrub's stems (order 0 as well) are millimetres
+/// thick, sticks under a pixel by the thousand on a hillside (a review, 2026-10-24).
+pub const TRUNK_RADIUS: f32 = 0.01;
 
 /// The sides of a limb's tube.
 const LIMB_SIDES: u32 = 7;
@@ -188,13 +192,13 @@ const LIMB_SIDES: u32 = 7;
 pub fn wood(mesh: &mut TriMesh, g: &TreeGraph, min_radius: f32) {
     let n = g.nodes.len();
     let parent = |i: usize| g.nodes[i].parent as usize;
-    // The trunk (the main stem, order 0) whatever its thickness: a young tree's tapered under
+    // The trunk (the main stem, order 0) down to [`TRUNK_RADIUS`]: a young tree's tapered under
     // `min_radius` a little way up, and its crown, lifted over the passers-by, floated over a
     // stump (the owner, 2026-10-24: "floating canopy, no trunk").
     let drawn = |i: usize| {
         let node = &g.nodes[i];
         node.parent != forge_flora::graph::NO_PARENT
-            && (node.radius >= min_radius || node.order == 0)
+            && (node.radius >= min_radius || (node.order == 0 && node.radius >= TRUNK_RADIUS))
             && node.pos.distance(g.nodes[node.parent as usize].pos) > 1e-3
     };
     // Each drawn node's axis from its parent, and each node's way on: its drawn child that is
@@ -680,6 +684,40 @@ mod tests {
         }
     }
 
+    /// A young tree's trunk reaches its crown (the owner, 2026-10-24: "floating canopy, no
+    /// trunk"), and a shrub's millimetre stems are not drawn (sticks under a pixel by the
+    /// thousand).
+    #[test]
+    fn young_trunks_reach_their_crowns_and_shrub_stems_stay_undrawn() {
+        let all = forge_flora::species::mediterranean();
+        for s in &all {
+            let young = forge_flora::grow(s, &forge_flora::Conditions::new(s.maturity * 0.25, 1));
+            let mut mesh = TriMesh::default();
+            wood(&mut mesh, &young, WOOD_RADIUS);
+            if s.habit == Habit::Shrub {
+                let thin = young.nodes.iter().all(|n| n.radius < TRUNK_RADIUS);
+                assert!(
+                    !thin || mesh.positions.is_empty(),
+                    "{}: {} wood vertices from stems under a centimetre",
+                    s.id,
+                    mesh.positions.len()
+                );
+                continue;
+            }
+            let top = mesh.positions.iter().map(|p| p[1]).fold(f32::MIN, f32::max);
+            let lowest = young
+                .leaves
+                .iter()
+                .map(|l| l.pos.y)
+                .fold(f32::MAX, f32::min);
+            assert!(
+                top >= lowest,
+                "{}: the wood stops at {top:.2} m, the lowest leaves at {lowest:.2}",
+                s.id
+            );
+        }
+    }
+
     /// The trees' wood is closed (the owner: holes in the trunks, the most at the bends): its
     /// corners welded within 0.1 mm, each edge is two triangles' but the rings where an axis
     /// starts (a branch's, buried in its parent; a stem's, at the ground).
@@ -713,7 +751,8 @@ mod tests {
                 let nodes = &graph.nodes;
                 let drawn = |i: usize| {
                     nodes[i].parent != forge_flora::graph::NO_PARENT
-                        && (nodes[i].radius >= WOOD_RADIUS || nodes[i].order == 0)
+                        && (nodes[i].radius >= WOOD_RADIUS
+                            || (nodes[i].order == 0 && nodes[i].radius >= TRUNK_RADIUS))
                         && nodes[i].pos.distance(nodes[nodes[i].parent as usize].pos) > 1e-3
                 };
                 let along =

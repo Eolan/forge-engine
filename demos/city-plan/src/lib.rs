@@ -260,8 +260,9 @@ fn world(size: f64, p: DVec2, height: f64) -> Vec3 {
 
 /// Paved ground per stain on the paving (D-074), m²: few, so that they read as wear here and there.
 const STAIN_EVERY: f64 = 90.0;
-/// The least a grown plant's sideways scale may be, as a share of its height's: squeezed to a
-/// narrow planned crown, its trunk thinned with it.
+/// The least a grown plant's sideways scale may be as a share of its height's, and its height's
+/// as a share of its sideways: squeezed to a narrow planned crown, its trunk thinned with it and
+/// its leaves turned to slivers.
 const SQUEEZE: f32 = 0.85;
 /// Paved ground per crack on the paving (D-074), m².
 const CRACKS_EVERY: f64 = 150.0;
@@ -3684,12 +3685,19 @@ fn home_lamps(
             };
             out.push(PlacedLamp {
                 lamp: Lamp {
-                    // Its height from its storey's level, as `furnish::lamps` measures it under
-                    // the ceiling: from the ground floor's, 0.32 m higher over the walk, a
+                    // A ceiling's lamp from its storey's level, as `furnish::lamps` measures it
+                    // under the ceiling: from the ground floor's, 0.32 m higher over the walk, a
                     // pendant's canopy came 2 cm out of the floor above, a little brass square
                     // on the bedroom's floor (the owner, 2026-10-24: "small things on the
-                    // floor").
-                    position: world(size, l.at, s.storeys[l.storey].level + l.height),
+                    // floor"). A sconce from the floor its bed or sofa stands on.
+                    position: world(
+                        size,
+                        l.at,
+                        match l.kind {
+                            furnish::LampKind::Sconce => f64::from(level),
+                            _ => s.storeys[l.storey].level,
+                        } + l.height,
+                    ),
                     radius: l.radius as f32,
                     candela: l.candela as f32,
                     kelvin: l.kelvin as f32,
@@ -7436,14 +7444,18 @@ impl Scenario for PlanScenario {
                     continue;
                 };
                 let (id, h, w) = (model.id, model.height, model.crown);
-                // To the plan's crown, but never squeezed sideways under [`SQUEEZE`] of its
-                // height's scale: a young umbrella pine on a street, 3 m across in the plan
-                // against its model's 4.2, kept a trunk of a few centimetres under a crown
-                // that seemed to float (the owner, 2026-10-24).
-                let across = (crown * 2.0 / w).max(SQUEEZE * height / h);
+                // To the plan's crown, its proportions kept within [`SQUEEZE`]: planned
+                // narrower than its model, it is drawn shorter, not thinner. Squeezed sideways
+                // to a street's room, a young umbrella pine kept a trunk of a few centimetres
+                // under a crown that seemed to float (the owner, 2026-10-24); widened past the
+                // plan, a crown reached the facades the plan kept it from (a review). Planned
+                // wider, it is never stretched past the inverse.
+                let planned = crown * 2.0 / w;
+                let tall = (height / h).min(planned / SQUEEZE);
+                let across = planned.min(tall / SQUEEZE);
                 let stretch = 0.92 + f32::from(pick >> 2) / 63.0 * 0.16;
                 let transform = Mat4::from_scale_rotation_translation(
-                    Vec3::new(across * stretch, height / h, across / stretch),
+                    Vec3::new(across * stretch, tall, across / stretch),
                     glam::Quat::from_rotation_y(turn),
                     at,
                 );

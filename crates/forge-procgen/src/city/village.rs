@@ -561,39 +561,34 @@ pub fn village(site: &Site, params: &CityParams, seed: u64) -> Village {
             // The first thing the line meets, and whether the end may stop on it: a house, or
             // another garden wall standing square to this one (met at a slant, the square end's
             // corner ran into it; along one in line, the end ran over it).
-            let mut hit: Option<(f64, bool)> = None;
-            let mut try_poly = |poly: &[DVec2], ok: bool| {
+            let mut hit: Option<(f64, bool, Option<usize>)> = None;
+            let mut try_poly = |poly: &[DVec2], ok: bool, wall: Option<usize>| {
                 for i in 0..poly.len() {
                     if let Some((t, _)) =
                         geom::segment_intersection(p, far, poly[i], poly[(i + 1) % poly.len()])
                         && t > 1e-6
-                        && hit.is_none_or(|(h, _)| t < h)
+                        && hit.is_none_or(|(h, _, _)| t < h)
                     {
-                        hit = Some((t, ok));
+                        hit = Some((t, ok, wall));
                     }
                 }
             };
             for m in &masses {
-                try_poly(&m.footprint, true);
+                try_poly(&m.footprint, true, None);
             }
             for (j, o) in city.walls.iter().enumerate() {
                 if j != k {
                     let square = (o.b - o.a).normalize_or_zero().dot(dir).abs() < 0.2;
-                    try_poly(&o.ring(), square);
+                    try_poly(&o.ring(), square, Some(j));
                 }
             }
-            if let Some((t, true)) = hit {
+            if let Some((t, true, met)) = hit {
                 let q = p + (far - p) * t;
                 // Stopped on a wall's face, its end face along it: square, a wall met a few
                 // degrees off square ran a corner 2 cm into it, the two tops on one plane there.
-                let face = city
-                    .walls
-                    .iter()
-                    .enumerate()
-                    .filter(|&(j, _)| j != k)
-                    .map(|(_, o)| o)
-                    .find(|o| near(&o.ring(), q, 1e-3))
-                    .map(|o| (o.b - o.a).normalize_or_zero());
+                // The wall the line met, not the first whose ring holds the point: at a joint
+                // that could be one in line with this wall, its end then turned along itself.
+                let face = met.map(|j| (city.walls[j].b - city.walls[j].a).normalize_or_zero());
                 let w = &mut city.walls[k];
                 if end == 0 {
                     w.a = q;
@@ -796,6 +791,13 @@ fn absorb_leftovers(
         let mut grown = despike(&grown);
         if geom::signed_area(&grown) < 0.0 {
             grown.reverse();
+        }
+        // Taken in only where the union holds it: apart from the lot, the largest shape was the
+        // lot alone, and the piece, counted given, belonged to no lot (a review, 2026-10-24).
+        if geom::signed_area(&grown)
+            < geom::signed_area(lot).abs() + 0.5 * geom::signed_area(&snapped).abs()
+        {
+            continue;
         }
         // Its street side first: the edge along the old front holding its middle.
         let (front, way) = (
