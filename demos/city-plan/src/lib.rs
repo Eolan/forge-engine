@@ -260,6 +260,9 @@ fn world(size: f64, p: DVec2, height: f64) -> Vec3 {
 
 /// Paved ground per stain on the paving (D-074), m²: few, so that they read as wear here and there.
 const STAIN_EVERY: f64 = 90.0;
+/// The least a grown plant's sideways scale may be, as a share of its height's: squeezed to a
+/// narrow planned crown, its trunk thinned with it.
+const SQUEEZE: f32 = 0.85;
 /// Paved ground per crack on the paving (D-074), m².
 const CRACKS_EVERY: f64 = 150.0;
 
@@ -7433,7 +7436,11 @@ impl Scenario for PlanScenario {
                     continue;
                 };
                 let (id, h, w) = (model.id, model.height, model.crown);
-                let across = crown * 2.0 / w;
+                // To the plan's crown, but never squeezed sideways under [`SQUEEZE`] of its
+                // height's scale: a young umbrella pine on a street, 3 m across in the plan
+                // against its model's 4.2, kept a trunk of a few centimetres under a crown
+                // that seemed to float (the owner, 2026-10-24).
+                let across = (crown * 2.0 / w).max(SQUEEZE * height / h);
                 let stretch = 0.92 + f32::from(pick >> 2) / 63.0 * 0.16;
                 let transform = Mat4::from_scale_rotation_translation(
                     Vec3::new(across * stretch, height / h, across / stretch),

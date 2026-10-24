@@ -188,10 +188,13 @@ const LIMB_SIDES: u32 = 7;
 pub fn wood(mesh: &mut TriMesh, g: &TreeGraph, min_radius: f32) {
     let n = g.nodes.len();
     let parent = |i: usize| g.nodes[i].parent as usize;
+    // The trunk (the main stem, order 0) whatever its thickness: a young tree's tapered under
+    // `min_radius` a little way up, and its crown, lifted over the passers-by, floated over a
+    // stump (the owner, 2026-10-24: "floating canopy, no trunk").
     let drawn = |i: usize| {
         let node = &g.nodes[i];
         node.parent != forge_flora::graph::NO_PARENT
-            && node.radius >= min_radius
+            && (node.radius >= min_radius || node.order == 0)
             && node.pos.distance(g.nodes[node.parent as usize].pos) > 1e-3
     };
     // Each drawn node's axis from its parent, and each node's way on: its drawn child that is
@@ -710,7 +713,7 @@ mod tests {
                 let nodes = &graph.nodes;
                 let drawn = |i: usize| {
                     nodes[i].parent != forge_flora::graph::NO_PARENT
-                        && nodes[i].radius >= WOOD_RADIUS
+                        && (nodes[i].radius >= WOOD_RADIUS || nodes[i].order == 0)
                         && nodes[i].pos.distance(nodes[nodes[i].parent as usize].pos) > 1e-3
                 };
                 let along =
