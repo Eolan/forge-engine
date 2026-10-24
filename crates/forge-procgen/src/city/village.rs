@@ -689,6 +689,9 @@ fn despike(ring: &[DVec2]) -> Vec<DVec2> {
 /// larger stays open ground).
 const LEFTOVER: (f64, f64) = (2.0, 600.0);
 
+/// The largest pocket closed all round by lots that a lot takes in, m².
+const POCKET: f64 = 30.0;
+
 /// `lots` with the ground of `outline` that neither they, the `court` nor the `kept` lots hold
 /// (where the strips of two streets meet in a block's corner, and the lots too small for a
 /// house) each piece given to the lot whose outline it shares most, a metre at least. Left over,
@@ -722,18 +725,13 @@ fn absorb_leftovers(
     for (piece, lot_of) in &pieces {
         let piece = &piece[..];
         let area = geom::signed_area(piece).abs();
-        // A sliver along two lots' backs (twice its area over its outline, its mean width,
-        // under a metre) stays: given to one lot, its end met the other's wall at a T the
-        // joints could not trim.
-        let mut ring = piece.to_vec();
-        ring.push(piece[0]);
-        let thin = 2.0 * area / geom::polyline_length(&ring) < 1.0;
-        if piece.len() < 3 || thin || !(LEFTOVER.0..=LEFTOVER.1).contains(&area) {
+        if piece.len() < 3 || !(LEFTOVER.0..=LEFTOVER.1).contains(&area) {
             continue;
         }
-        // How much of its outline each lot shares, and the street, every quarter metre.
+        // How much of its outline each lot shares, the street and the court, every quarter
+        // metre.
         let mut shared = vec![0.0; out.len()];
-        let mut street = 0.0;
+        let (mut street, mut by_court) = (0.0, 0.0);
         let n = piece.len();
         for i in 0..n {
             let (p, q) = (piece[i], piece[(i + 1) % n]);
@@ -744,12 +742,17 @@ fn absorb_leftovers(
                     shared[k] += p.distance(q) / steps;
                 } else if on(outline, x) {
                     street += p.distance(q) / steps;
+                } else if court.len() >= 3 && on(court, x) {
+                    by_court += p.distance(q) / steps;
                 }
             }
         }
-        // Only what lies open on a street: inside the block a piece is the court's edge, its
-        // hedges, and given to a lot it ended that lot's walls at T's the joints could not trim.
-        if street < 2.0 {
+        // A pocket closed all round by lots (not on the street, not on the court): walled on
+        // every side, it was a little closed square of lawn (the owner, 2026-10-24).
+        let pocket = area <= POCKET && street < 2.0 && by_court < 1.0;
+        // Else only what lies open on a street: inside the block, a piece on the court is the
+        // court's edge, hedged.
+        if !pocket && street < 2.0 {
             continue;
         }
         let Some(k) = (0..out.len())

@@ -958,10 +958,11 @@ mod tests {
         // a blank street wall at a bend took its window from a room 1.7 m off: 11. On 2026-10-24
         // the ground left between the strips and the lots too small for a house went to their
         // neighbours (the owner: open lawns on the street between walled gardens); two corners
-        // it walled anew, at 400 and 700 m, end a wall short of its neighbour: #308 next.
+        // it walled anew, one at 400 m and two at 700 m, end a wall short of its neighbour, and the
+        // 700 m village keeps two small closed pockets: #308 next.
         let since: [(f64, Kind, usize); 9] = [
             (400.0, Kind::FreeWallEnd, 1),
-            (700.0, Kind::FreeWallEnd, 2),
+            (700.0, Kind::FreeWallEnd, 3),
             (800.0, Kind::UnlitRoom, 1),
             (800.0, Kind::FreeWallEnd, 1),
             (800.0, Kind::RidgeStep, 1),
