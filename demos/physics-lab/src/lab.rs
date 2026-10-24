@@ -597,6 +597,10 @@ pub(crate) struct LabWorld {
     /// The bodies this tick's shots struck, with the impulse each took: blows for the reactions
     /// after the step, then cleared (never across ticks, so never saved).
     struck: Vec<(BodyId, f32)>,
+    /// What each tick's shot met, the first time that tick ran (nothing for a miss): on a client,
+    /// what its prediction showed when it shot. Kept through corrections, never saved (it is not
+    /// the world's state).
+    shots_met: std::collections::BTreeMap<u64, Option<BodyId>>,
     /// The slimes before the creatures, soft bodies (#179, #180).
     slimes: Vec<slime::Slime>,
     /// The gulls (#184).
@@ -1339,6 +1343,7 @@ impl LabWorld {
                 feet: creatures::Feet::default(),
                 reactions: creatures::Reactions::default(),
                 struck: Vec::new(),
+                shots_met: std::collections::BTreeMap::new(),
                 slimes,
                 birds,
                 beds,
@@ -1569,7 +1574,11 @@ impl LabWorld {
     /// is a blow of it in this tick's reactions (a ray makes no contact for them to find).
     fn shoot(&mut self, from: Vec3, forward: Vec3) {
         let forward = forward.normalize_or(Vec3::NEG_Z);
-        let Some(hit) = self.world.cast_ray(from.as_dvec3(), forward * SHOT_REACH) else {
+        let hit = self.world.cast_ray(from.as_dvec3(), forward * SHOT_REACH);
+        self.shots_met
+            .entry(self.tick)
+            .or_insert(hit.map(|h| h.body));
+        let Some(hit) = hit else {
             return;
         };
         let point = from.as_dvec3() + (forward * SHOT_REACH * hit.fraction).as_dvec3();
@@ -4903,6 +4912,66 @@ mod tests {
             server.tick(&[]);
         }
         assert_eq!(server.digest(), net.client.sim.digest());
+    }
+
+    /// #268's shot in a scene. The lab's players predict the whole world, and the server applies
+    /// each command at the tick its player stamped it: a shot meets on the server what it met in
+    /// its shooter's prediction when it was fired, unless another player's input, late to the
+    /// shooter, had moved what it aimed at. 100 ms one way and 2 % lost both ways, the bot
+    /// throwing balls among the creatures; the player shoots at a dog every half second, aimed
+    /// where its prediction shows the dog.
+    #[test]
+    fn shots_over_the_network_meet_what_their_shooter_saw() {
+        const DOGS: [usize; 2] = [3, 4];
+        let mut net = Net::new(LabScene::Creatures, 100.0, &test_pool()).unwrap();
+        let herd = net.client.sim.herd.clone().unwrap();
+        let mut queued = Vec::new();
+        let mut fired = 0;
+        for k in 0..1500_usize {
+            if k >= 120 && k.is_multiple_of(30) {
+                let dog = DOGS[(k / 30) % 2];
+                let torso = herd.roots(&net.client.sim.world)[dog].1.position;
+                let from = torso + DVec3::new(0.0, 0.2, 3.0);
+                queued.push(LabCommand::Shoot {
+                    from: from.as_vec3().to_array(),
+                    forward: (torso - from).normalize().as_vec3().to_array(),
+                });
+                fired += 1;
+            }
+            net.tick(&mut queued);
+        }
+        let (seen, server) = (&net.client.sim.shots_met, &net.server.sim.shots_met);
+        let hits = seen.values().filter(|m| m.is_some()).count();
+        // Each shot as the server ran it: at its tick, or, its packet lost and sent again, at
+        // the first of the server's shots within a few ticks after that the client did not fire.
+        let (mut on_time, mut late, mut other) = (0, 0, Vec::new());
+        for (&tick, met) in seen {
+            if server.get(&tick) == Some(met) {
+                on_time += 1;
+                continue;
+            }
+            let ran = server
+                .range(tick + 1..=tick + 6)
+                .find(|(t, _)| !seen.contains_key(t));
+            match ran {
+                Some((_, m)) if m == met => late += 1,
+                _ => other.push((tick, *met, ran)),
+            }
+        }
+        println!(
+            "{fired} shots, {hits} met a body in the shooter's prediction; on the server {on_time} \
+             met the same at its tick, {late} the same a few ticks late (a lost packet), {} \
+             something else: {other:?}",
+            other.len()
+        );
+        assert_eq!(seen.len(), fired);
+        assert!(hits * 10 >= fired * 9, "{hits} of {fired} met a body");
+        assert!(late * 10 <= fired, "{late} of {fired} late");
+        assert!(
+            other.len() * 20 <= fired,
+            "{} of {fired} met another",
+            other.len()
+        );
     }
 
     #[test]

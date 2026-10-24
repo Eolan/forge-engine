@@ -214,6 +214,24 @@ against the world as its shooter saw it (server-side rewind, Bernier 2001).
   draws. Every shot that arrived met the person its client saw, 168 to 179 a client, the distance
   off by 4.2 to 6.1 mm at the 99th percentile. At the server's present, 91 to 173 a client would.
 
+## A shot in a scene: the physics lab over the network (2026-10-24)
+
+The lab's players predict the whole world, and the server applies each command at the tick its
+player stamped it (pacing keeps them on time). So a shot (`LabCommand::Shoot`, a ray pushing what
+it meets, a creature's part struck, Phase 7's hit reactions) meets on the server what it met in its
+shooter's prediction, with no rewind. Only another player's input, late to the shooter, moving what
+it aimed at could make them differ.
+- **The measure** (`shots_over_the_network_meet_what_their_shooter_saw`): `--lab creatures` at
+  100 ms one way and 2 % lost both ways, the bot throwing balls among the creatures. The player
+  shoots at a dog every half second for 23 s, aimed where its prediction shows the dog. Each
+  world logs what each tick's shot met; a client keeps its first answer, the prediction it shot
+  on.
+- **46 shots, all meeting a body.** On the server, 45 met the same body at the same tick. The 46th
+  had its packet lost and sent again: it ran a tick late and met the same body. None met another.
+- **The rewind** (`forge_sim::rewind`, above) is for the other model, where a client draws the
+  others a delay behind the server through its `Interpolator`. A scene of that kind, a shooter
+  aiming at interpolated people, is still to come.
+
 ## Pacing the client (step 3, 2026-10-23)
 
 `forge_sim`'s clients (#137) ran ahead of the server by a lead set at the start from the link's
@@ -418,8 +436,8 @@ lockstep on the first channel (reliable, ordered).
 
 - The layer and its workers on separate machines (the server PC), and a worker's region split
   and merged by load (searched 2026-10-23, `docs/research/netcode.md` §9: the cuts moved during play on the owner's word); the skinned parts' corrections faded too;
-  lag compensation in a scene (a shot in the lab's `--net`, the client's `Interpolator` drawing
-  what it aims at); the layer's own replay (its workers' writes recorded, diffed against a fresh
+  lag compensation in a scene drawn through the client's `Interpolator` (the lab's predicted shots
+  meet without a rewind, 2026-10-24); the layer's own replay (its workers' writes recorded, diffed against a fresh
   run, as the research's stage 4 asks); and the `hundred-bots` demo on the server PC.
 - The population of #250 as the replicated world: its near tiers' records in place of the crowd.
 - The physics lab's scenes replicated rather than sent whole, so `drop` runs over QUIC too (its
