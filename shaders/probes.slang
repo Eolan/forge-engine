@@ -1138,7 +1138,7 @@ float3 probe_lookup_with<let MIRROR : int>(ProbeField* field, float3 p, float3 n
     // share was set against the grids' own light (#321).
     bool beyond = masked && mask.region != REGION_OUTSIDE && (!rooms || far_from_rooms(field, p));
     // The region's probes, then every probe where they found none.
-    float4 e = beyond && field[0].room_rays > 0u ? float4(0.0)
+    float4 e = beyond && field[0].room_mask != 0u ? float4(0.0)
         : cascades_lookup<MIRROR>(field, p, n, g, v, d, mask, masked, rooms, toward_d);
     if (beyond && e.w <= 0.0)
     {

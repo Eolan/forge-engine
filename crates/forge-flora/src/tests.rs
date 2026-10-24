@@ -186,3 +186,31 @@ fn broad_crowns_are_lobed_not_balls() {
         }
     }
 }
+
+#[test]
+fn a_planted_crown_grows_its_shape_over_the_lift() {
+    // A review, 2026-10-24: the lift taken against the grown height left a young planted crown's
+    // envelope starting under it, the crown cut at the lift at its widest. Over six bands from its
+    // lowest leaf to its highest, the widest is never the lowest.
+    let all = mediterranean();
+    for id in ["umbrella-pine", "london-plane", "common-lime"] {
+        let (i, sp) = all.iter().enumerate().find(|(_, s)| s.id == id).unwrap();
+        for k in 0..crate::grow::INDIVIDUALS {
+            let g = grow(sp, &crate::grow::individual(sp, i as u16, k));
+            let lo = g.leaves.iter().map(|l| l.pos.y).fold(f32::MAX, f32::min);
+            let hi = g.leaves.iter().map(|l| l.pos.y).fold(f32::MIN, f32::max);
+            let mut reach = [0.0f32; 6];
+            for l in &g.leaves {
+                let band = (((l.pos.y - lo) / (hi - lo).max(1e-3)) * 6.0).min(5.0) as usize;
+                reach[band] = reach[band].max(l.pos.x.hypot(l.pos.z));
+            }
+            let widest = (0..6)
+                .max_by(|&a, &b| reach[a].total_cmp(&reach[b]))
+                .unwrap();
+            assert!(
+                widest > 0,
+                "{id} individual {k}: widest at the lift, {reach:?}"
+            );
+        }
+    }
+}

@@ -7490,7 +7490,10 @@ impl Scenario for PlanScenario {
                     let (scale, rotation, translation) = transform.to_scale_rotation_translation();
                     let place = origin.offset(translation).normalized();
                     let culled = rotation * (model.centre * scale.x);
-                    let size = crown * 2.0 * stretch / baked_crown;
+                    // As wide as the drawn crown, not the planned one: planned wider than the
+                    // model's proportions allow, the mesh is narrower (`across`), and the impostor
+                    // stood wider than the shells it takes over from (a review).
+                    let size = across * w * stretch / baked_crown;
                     impostor_instances.push(forge_render::impostor::ImpostorInstance {
                         kind,
                         position: forge_render::CellPos {

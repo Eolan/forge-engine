@@ -27,8 +27,9 @@ use glam::{Vec2, Vec3};
 
 use crate::meshlet::dynamic::Ranges;
 
-/// Metres between a grid's outer probes and its room's walls, floor and ceiling: past the
-/// relocation's quarter-cell, so no probe stands in a wall or a window's recess.
+/// Metres between a grid's outer probes and its room's walls, floor and ceiling, so no probe
+/// stands in a wall or a window's recess: a grid's probes are never moved (`probe_state_main`),
+/// and one inside a solid is inactive.
 pub(super) const INSET: f32 = 0.35;
 /// Metres past the radius a grid stays before it fades out: a camera on the boundary does not
 /// make and drop it again and again.

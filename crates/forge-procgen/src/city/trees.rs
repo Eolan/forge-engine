@@ -61,6 +61,11 @@ pub const KERB_SLOT: f64 = 8.0;
 /// (the owner, 2026-10-11: a canopy a few centimetres from the windows).
 pub const CROWN_CLEAR: f64 = 2.5;
 
+/// The tallest a street tree stands for its crown's radius: the streets' own ranges give 2.8 to
+/// 3.8, and a grown plane or umbrella pine is drawn to its planned crown without being shortened
+/// up to about 4 (city-plan's `SQUEEZE`).
+const STREET_HEIGHT_PER_CROWN: f64 = 4.0;
+
 /// A kerb row: its offset from the centreline, and whether its slot `k` holds a lamp.
 pub type KerbRow = (f64, fn(usize) -> bool);
 
@@ -132,10 +137,15 @@ pub fn trees(site: &Site, plan: &CityPlan, seed: u64) -> Vec<Tree> {
                     continue;
                 }
                 placed.insert(q, 0);
+                let tall = rng.range_f64(height.0, height.1);
+                let crown = rng.range_f64(crown.0, crown.1).min(room);
                 out.push(Tree {
                     pos: q,
-                    height: rng.range_f64(height.0, height.1),
-                    crown: rng.range_f64(crown.0, crown.1).min(room),
+                    // A crown narrowed to the street's room on a tree of the street's height: a
+                    // 10 m tree 2 m across, which no grown model matches, drawn shorter than
+                    // planned with the birds perching over it (a review, 2026-10-24).
+                    height: tall.min(crown * STREET_HEIGHT_PER_CROWN),
+                    crown,
                     setting: Setting::Street,
                     species: None,
                 });

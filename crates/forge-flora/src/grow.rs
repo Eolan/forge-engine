@@ -122,6 +122,9 @@ const LEAN: f64 = 0.35;
 
 /// The most lobes a crown has.
 const MAX_LOBES: usize = 16;
+/// The sine below its widest over which a shrub's envelope goes from its lobes to the smooth
+/// profile its stems rise through ([`Lobes::reach`]).
+const SHRUB_BLEND: f64 = 0.3;
 /// The golden angle, radians: the lobes turn by it one after another round the crown.
 const GOLDEN: f64 = 2.399_963_229_728_653;
 
@@ -140,7 +143,8 @@ struct Lobes {
     count: usize,
     /// The core's reach: the least of the envelope's anywhere.
     core: f64,
-    /// A shrub's: its lower half keeps the smooth profile, where its stems rise from the ground.
+    /// A shrub's: below its widest it keeps the smooth profile, where its stems rise from the
+    /// ground ([`SHRUB_BLEND`]).
     shrub: bool,
 }
 
@@ -188,7 +192,7 @@ impl Lobes {
     /// of the smooth profile's: the farthest a lobe's ball reaches along that ray (a ball of
     /// radius `r` touching the envelope stands `1 - r` out), the core's at least.
     fn reach(&self, dir: DVec3) -> f64 {
-        if self.count == 0 || self.core >= 1.0 || (self.shrub && dir.y < 0.0) {
+        if self.count == 0 || self.core >= 1.0 {
             return 1.0;
         }
         let mut reach = self.core;
@@ -200,7 +204,14 @@ impl Lobes {
                 reach = reach.max(along + (r * r - off).sqrt());
             }
         }
-        reach.min(1.0)
+        // A shrub's smooth below its widest, blended in over the first SHRUB_BLEND of the sine down:
+        // switched there, it stood out as a shelf a quarter of its reach deep (a review).
+        let full = if self.shrub {
+            (-dir.y / SHRUB_BLEND).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (reach + (1.0 - reach) * full).min(1.0)
     }
 }
 
@@ -527,7 +538,12 @@ impl<'a> Grower<'a> {
             lean: self.cond.wind * LEAN,
             pruning: self.cond.pruning,
             lobes: self.lobes,
-            lift_share: (self.cond.pruning.lift / self.height.max(1e-6)).clamp(0.0, 0.9),
+            // The lift against the height the plant reaches by its age, the envelope's last: against
+            // its grown height, the crown started at the lift times its share of growth, a young
+            // one's under it, and was cut there at its widest (a review).
+            lift_share: (self.cond.pruning.lift
+                / (self.height * growth_share(self.cond.age, self.sp.maturity)).max(1e-6))
+            .clamp(0.0, 0.9),
         }
     }
 
