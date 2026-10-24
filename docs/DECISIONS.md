@@ -7738,3 +7738,41 @@ another value from the A/B)?
 right, and the moonlight may be a bit too bright. `r.exposure.night_floor` stays built and off.
 
 *(research: home-lighting.md, night-sky.md, local-exposure.md; D-046, D-067)*
+
+## D-081 — The first launch fits the machine, and the menu's graphics page keeps the user's choices ✅ (the owner's ask, 2026-10-25)
+
+**The owner (2026-10-25):** "The first time it's launched the engine should adapt itself to
+(resolutions and other technology) to the computer it's on like modern game engines do. And the
+user could change some settings in the game parameters menu under graphics like modern game
+engines do."
+
+**Built (2026-10-25, on the audit's configuration spec, its user layer):**
+- **The user's file,** `settings/user.cfg` (`FORGE_SETTINGS_DIR`): `name value` lines as
+  `forge.cfg`'s, marked as the user's (`Source::User`), read at start before `forge.cfg` and
+  `--set`, which override it, and never by a scripted run (`FORGE_CFG=none`, `--no-cfg`). The
+  shell writes it again whenever a setting is set as the user's (`forge_core::settings`:
+  `load_file_as`, `user_lines`, `take_user_changed`).
+- **Quality presets** (`r.preset`: custom, low, medium, high, ultra; `forge_app::presets`): a
+  preset is a patch over the renderer's shared names (how small DLSS and FSR render, the ambient
+  occlusion, the mirror reflections, the local exposure, the detail error), applied as from where
+  the preset came; a patched setting changed by hand puts the preset back to custom. `r.aa` is
+  left as the device decided it (DLAA where DLSS runs, else FSR).
+- **The display** (`app.window`: windowed or borderless fullscreen at the monitor's own size),
+  followed each frame, and following Alt+Enter for the run.
+- **The first launch:** with no user file and an interactive run, the shell reads the GPU's
+  device-local memory, whether it runs DLSS and the monitor, picks the preset by the memory (the
+  target's 16 GB and 12 GB ultra, 8 GB high, 5 GB medium, less low; unknown medium) and
+  fullscreen, and writes the file with what it saw as its first lines.
+- **The menu's graphics page** (Esc, Settings, Graphics): the preset, the display, the
+  anti-aliasing, the upscalers' modes, the ambient occlusion, the mirror reflections, the local
+  exposure, the bloom and the detail error, those the demo registered; every change in the menu
+  is the user's and lands in the file.
+
+**Checks:** unit tests of the presets (the memory's steps, the patches' names), the user file's
+round trip and its rank under `forge.cfg` and `--set`, and the menu's graphics page. The look
+is unchanged: a scripted run reads no user file, and `r.preset` is custom by default. Written
+on a laptop whose Vulkan loader lists no NVIDIA GPU: the first launch and the menu are for the
+owner's machine to try.
+
+**Not done:** a resolution scale apart from the upscalers' modes; presets fitted by a measured
+frame time rather than by memory; the menu's page for the sound and the keys.

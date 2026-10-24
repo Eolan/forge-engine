@@ -21,14 +21,31 @@ use winit::keyboard::KeyCode;
 use crate::hud::HudQuad;
 use crate::overlay::{FontAtlas, GLYPHS, rasterize_builtin, rasterize_ttf};
 
-/// The settings the page shows, in its order: the console's name, the label, and words for an
-/// integer's values.
-const SETTINGS: [(&str, &str, &[&str]); 5] = [
-    ("r.aa", "Anti-aliasing", &[]),
+/// A page's setting: the console's name, the label, and words for an integer's values.
+type Shown = (&'static str, &'static str, &'static [&'static str]);
+
+/// The settings page's settings, in its order; its last entries lead to the graphics page and
+/// back.
+const SETTINGS: [Shown; 4] = [
     ("snd.volume", "Volume", &[]),
     ("snd.ambience", "Ambience", &[]),
     ("app.mouse_look", "Mouse look", &[]),
     ("r.display_info", "Frame info", &["off", "on", "verbose"]),
+];
+
+/// The graphics page's settings (the owner, 2026-10-25: "in the game parameters menu under
+/// graphics like modern game engines do"): the preset first, then what it sets and the rest.
+const GRAPHICS: [Shown; 10] = [
+    ("r.preset", "Quality preset", &[]),
+    ("app.window", "Display", &[]),
+    ("r.aa", "Anti-aliasing", &[]),
+    ("r.dlss.mode", "DLSS renders at", &[]),
+    ("r.fsr.mode", "FSR renders at", &[]),
+    ("r.ao", "Ambient occlusion", &[]),
+    ("r.reflections.rays", "Mirror reflections", &[]),
+    ("r.exposure.local", "Local exposure", &[]),
+    ("r.bloom", "Bloom", &[]),
+    ("r.lod.error", "Detail error, px", &[]),
 ];
 
 /// The main page's entries.
@@ -64,6 +81,18 @@ enum Page {
     #[default]
     Main,
     Settings,
+    Graphics,
+}
+
+impl Page {
+    /// The settings the page lists, in order.
+    fn settings(self) -> &'static [Shown] {
+        match self {
+            Self::Main => &[],
+            Self::Settings => &SETTINGS,
+            Self::Graphics => &GRAPHICS,
+        }
+    }
 }
 
 /// The menu's state.
@@ -132,6 +161,7 @@ impl Menu {
                     return Some(Action::Resume);
                 }
                 Page::Settings => self.back(),
+                Page::Graphics => self.back_to_settings(settings),
             },
             KeyCode::ArrowUp | KeyCode::KeyW => self.selected = (self.selected + count - 1) % count,
             KeyCode::ArrowDown | KeyCode::KeyS => self.selected = (self.selected + 1) % count,
@@ -213,7 +243,7 @@ impl Menu {
         let hint = match (self.page, paused) {
             (Page::Main, true) => "Esc: back to the game",
             (Page::Main, false) => "The game goes on behind the menu",
-            (Page::Settings, _) => "Left and Right change, Esc goes back",
+            (Page::Settings | Page::Graphics, _) => "Left and Right change, Esc goes back",
         };
         font.text(
             out,
@@ -228,12 +258,18 @@ impl Menu {
     fn entries(&self, settings: &Settings) -> Vec<(String, Option<String>)> {
         match self.page {
             Page::Main => MAIN.iter().map(|&e| (e.to_owned(), None)).collect(),
-            Page::Settings => shown(settings)
-                .map(|(name, label, words)| {
-                    (label.to_owned(), Some(value_text(settings, name, words)))
-                })
-                .chain(std::iter::once(("Back".to_owned(), None)))
-                .collect(),
+            page => {
+                let mut entries: Vec<_> = shown(page, settings)
+                    .map(|(name, label, words)| {
+                        (label.to_owned(), Some(value_text(settings, name, words)))
+                    })
+                    .collect();
+                if page == Page::Settings {
+                    entries.push(("Graphics".to_owned(), None));
+                }
+                entries.push(("Back".to_owned(), None));
+                entries
+            }
         }
     }
 
@@ -253,8 +289,20 @@ impl Menu {
                 _ => Some(Action::Quit),
             },
             Page::Settings => {
-                if self.selected >= shown(settings).count() {
+                let count = shown(Page::Settings, settings).count();
+                if self.selected == count {
+                    self.page = Page::Graphics;
+                    self.selected = 0;
+                } else if self.selected > count {
                     self.back();
+                } else {
+                    self.change(settings, 1);
+                }
+                None
+            }
+            Page::Graphics => {
+                if self.selected >= shown(Page::Graphics, settings).count() {
+                    self.back_to_settings(settings);
                 } else {
                     self.change(settings, 1);
                 }
@@ -269,13 +317,20 @@ impl Menu {
         self.selected = 1;
     }
 
+    /// Back to the settings page, its graphics entry chosen.
+    fn back_to_settings(&mut self, settings: &Settings) {
+        self.page = Page::Settings;
+        self.selected = shown(Page::Settings, settings).count();
+    }
+
     /// Steps the chosen setting by `dir`: a switch flipped, a choice the next or the one before
-    /// (round), a number by one or by a tenth of its range (kept in it).
+    /// (round), a number by one or by a tenth of its range (kept in it). The change is the
+    /// user's ([`Source::User`]): the shell writes it to the user's file.
     fn change(&mut self, settings: &mut Settings, dir: i64) {
-        if self.page != Page::Settings {
+        if self.page == Page::Main {
             return;
         }
-        let Some((name, ..)) = shown(settings).nth(self.selected) else {
+        let Some((name, ..)) = shown(self.page, settings).nth(self.selected) else {
             return;
         };
         let Some(info) = settings.info(name) else {
@@ -295,7 +350,7 @@ impl Menu {
             }
             _ => return,
         };
-        if let Err(e) = settings.set_text(name, &text, Source::Console) {
+        if let Err(e) = settings.set_text(name, &text, Source::User) {
             tracing::warn!("the menu's {name}: {e}");
         }
     }
@@ -352,11 +407,10 @@ impl Menu {
 }
 
 /// The page's settings the demo registered and this build shows.
-fn shown(
-    settings: &Settings,
-) -> impl Iterator<Item = (&'static str, &'static str, &'static [&'static str])> + '_ {
-    SETTINGS
-        .into_iter()
+fn shown(page: Page, settings: &Settings) -> impl Iterator<Item = Shown> + '_ {
+    page.settings()
+        .iter()
+        .copied()
         .filter(|(name, ..)| settings.info(name).is_some_and(|i| i.visible()))
 }
 
@@ -556,9 +610,13 @@ mod tests {
         menu.open();
         menu.key(KeyCode::ArrowDown, &mut s);
         assert_eq!(menu.key(KeyCode::Enter, &mut s), None);
-        // r.aa is not registered here: the page shows the three others and Back.
+        // snd.ambience is not registered here: the page shows the three others, Graphics and
+        // Back.
         let labels: Vec<String> = menu.entries(&s).into_iter().map(|(l, _)| l).collect();
-        assert_eq!(labels, ["Volume", "Mouse look", "Frame info", "Back"]);
+        assert_eq!(
+            labels,
+            ["Volume", "Mouse look", "Frame info", "Graphics", "Back"]
+        );
         menu.key(KeyCode::ArrowLeft, &mut s);
         menu.key(KeyCode::ArrowLeft, &mut s);
         assert_eq!(
@@ -581,6 +639,40 @@ mod tests {
         assert_eq!(menu.key(KeyCode::Escape, &mut s), None);
         assert_eq!(menu.entries(&s).len(), 3);
         assert_eq!(menu.key(KeyCode::Escape, &mut s), Some(Action::Resume));
+    }
+
+    #[test]
+    fn the_graphics_page_lists_the_registered_settings_and_writes_them_as_the_users() {
+        let mut s = settings();
+        s.add(Spec::choice(
+            "r.preset",
+            &["custom", "low", "high"],
+            0,
+            "preset",
+        ));
+        s.add(Spec::bool("r.ao", true, "ao"));
+        let mut menu = Menu::default();
+        menu.open();
+        menu.key(KeyCode::ArrowDown, &mut s);
+        menu.key(KeyCode::Enter, &mut s);
+        // Settings: Volume, Mouse look, Frame info, Graphics, Back. Graphics is the fourth.
+        for _ in 0..3 {
+            menu.key(KeyCode::ArrowDown, &mut s);
+        }
+        assert_eq!(menu.key(KeyCode::Enter, &mut s), None);
+        let labels: Vec<String> = menu.entries(&s).into_iter().map(|(l, _)| l).collect();
+        assert_eq!(labels, ["Quality preset", "Ambient occlusion", "Back"]);
+        // Right steps the preset; the change is the user's, for the file.
+        menu.key(KeyCode::ArrowRight, &mut s);
+        assert_eq!(s.info("r.preset").map(|i| i.value), Some(Value::Choice(1)));
+        assert_eq!(s.info("r.preset").map(|i| i.source), Some(Source::User));
+        assert!(s.take_user_changed());
+        assert_eq!(s.user_lines(), ["r.preset low"]);
+        // Esc goes back to the settings page, on Graphics; Esc again to the first page.
+        assert_eq!(menu.key(KeyCode::Escape, &mut s), None);
+        assert_eq!(menu.entries(&s)[menu.selected].0, "Graphics");
+        assert_eq!(menu.key(KeyCode::Escape, &mut s), None);
+        assert_eq!(menu.entries(&s).len(), 3);
     }
 
     #[test]

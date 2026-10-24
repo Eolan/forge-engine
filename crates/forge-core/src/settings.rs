@@ -88,6 +88,8 @@ impl std::ops::BitOr for Flags {
 pub enum Source {
     /// Its default.
     Default,
+    /// The user's file (`settings/user.cfg`): the game's menu writes it, the first launch too.
+    User,
     /// `forge.cfg`.
     File,
     /// `--set` on the command line.
@@ -103,6 +105,7 @@ impl Source {
     pub fn describe(self) -> &'static str {
         match self {
             Self::Default => "default",
+            Self::User => "user file",
             Self::File => "forge.cfg",
             Self::CommandLine => "command line",
             Self::Console => "console",
@@ -409,6 +412,9 @@ pub struct Settings {
     changes: u64,
     /// `forge.cfg`'s console lines (`bind`, `unbind`), run once the demo is ready.
     startup: Vec<String>,
+    /// A value was set as the user's ([`Source::User`]) since the user's file was read or
+    /// written: the shell writes the file again ([`Settings::take_user_changed`]).
+    user_changed: bool,
 }
 
 /// The completion of a console line ([`Settings::complete`]).
@@ -485,11 +491,15 @@ impl Settings {
             .into_iter()
             .partition(|p| p.name == spec.name);
         self.pending = rest;
+        // What the user's file gave before the variable registered is not a change to write
+        // back to it.
+        let user_changed = self.user_changed;
         for p in matching {
             if let Err(e) = self.set_from(index, &p.value, p.source) {
                 tracing::warn!("{} ({}): {e}", p.name, p.source.describe());
             }
         }
+        self.user_changed = user_changed;
         Var {
             index,
             _type: PhantomData,
@@ -712,6 +722,38 @@ impl Settings {
     /// r.aa`) is kept for the console to run once the demo is ready ([`Settings::take_startup`]).
     /// A missing file is no error.
     pub fn load_file(&mut self, path: &Path) -> Result<usize, String> {
+        self.load_file_as(path, Source::File)
+    }
+
+    /// [`Settings::load_file`] with its values marked as from `source`: the user's file
+    /// ([`Source::User`]), read before `forge.cfg` so that both it and `--set` override it.
+    pub fn load_file_as(&mut self, path: &Path, source: Source) -> Result<usize, String> {
+        let count = self.read_file(path, source);
+        if source == Source::User {
+            // What the file gave is not a change to write back.
+            self.user_changed = false;
+        }
+        count
+    }
+
+    /// The user's settings ([`Source::User`]) as `name value` lines, by name: what the user's
+    /// file holds ([`Settings::load_file_as`]).
+    pub fn user_lines(&self) -> Vec<String> {
+        self.by_name
+            .values()
+            .map(|&i| &self.vars[i])
+            .filter(|v| v.source == Source::User)
+            .map(|v| format!("{} {}", v.name, v.value_text()))
+            .collect()
+    }
+
+    /// Whether a value was set as the user's since the user's file was read or written, and
+    /// clears it: the shell writes the file when it is.
+    pub fn take_user_changed(&mut self) -> bool {
+        std::mem::take(&mut self.user_changed)
+    }
+
+    fn read_file(&mut self, path: &Path, source: Source) -> Result<usize, String> {
         let text = match std::fs::read_to_string(path) {
             Ok(text) => text,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
@@ -737,7 +779,7 @@ impl Settings {
                     number + 1
                 ));
             };
-            if let Err(e) = self.set_text(name, value, Source::File) {
+            if let Err(e) = self.set_text(name, value, source) {
                 tracing::warn!("{}:{}: {e}", path.display(), number + 1);
             }
             count += 1;
@@ -969,6 +1011,9 @@ impl Settings {
             info.value = value;
             self.changes += 1;
             info.changed = self.changes;
+        }
+        if source == Source::User {
+            self.user_changed = true;
         }
     }
 }
@@ -1301,5 +1346,42 @@ mod tests {
             s.describe("r.aa").as_deref(),
             Some("r.aa = taa  [off|taa|dlaa]  anti-aliasing")
         );
+    }
+}
+
+#[cfg(test)]
+mod user_file_tests {
+    use super::*;
+
+    #[test]
+    fn the_users_values_round_trip_through_their_file_and_rank_under_the_others() {
+        let dir = std::env::temp_dir().join(format!("forge-user-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("user.cfg");
+        let mut s = Settings::new();
+        let preset = s.add(Spec::choice("r.preset", &["custom", "low"], 0, "preset"));
+        let info = s.add(Spec::int("r.display_info", 0, 0..=2, "info"));
+        assert!(!s.take_user_changed());
+        // The menu sets a value as the user's: the file is to be written, from its lines.
+        s.set_text("r.preset", "low", Source::User).unwrap();
+        assert!(s.take_user_changed());
+        assert!(!s.take_user_changed());
+        assert_eq!(s.user_lines(), ["r.preset low"]);
+        std::fs::write(&path, format!("# mine\n{}\n", s.user_lines().join("\n"))).unwrap();
+        // A fresh registry reads it before the variable registers, and nothing is to write.
+        let mut fresh = Settings::new();
+        assert_eq!(fresh.load_file_as(&path, Source::User), Ok(1));
+        let preset2 = fresh.add(Spec::choice("r.preset", &["custom", "low"], 0, "preset"));
+        assert_eq!(fresh.get(preset2), 1);
+        assert_eq!(fresh.source(preset2), Source::User);
+        assert!(!fresh.take_user_changed());
+        // forge.cfg and the command line override the user's file.
+        s.set_text("r.preset", "custom", Source::File).unwrap();
+        assert_eq!(s.get(preset), 0);
+        assert_eq!(s.source(preset), Source::File);
+        assert!(s.user_lines().is_empty());
+        s.set_by(info, 2, Source::CommandLine);
+        assert_eq!(s.source(info), Source::CommandLine);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

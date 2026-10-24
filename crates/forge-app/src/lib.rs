@@ -19,6 +19,7 @@ mod input;
 mod loading;
 mod menu;
 mod overlay;
+pub mod presets;
 mod profile;
 pub mod settings;
 pub mod sound;
@@ -706,6 +707,17 @@ struct State<D: Demo> {
     /// `snd.ambience`: the ambience's level under the master (#357), and the level last sent.
     ambience: Var<f64>,
     ambience_sent: f64,
+    /// `r.preset` (the quality preset, [`presets`]) and the settings' change count when its
+    /// patch was last applied: a patched setting changed by hand since puts it back to custom.
+    preset: Var<usize>,
+    preset_applied: u64,
+    /// `app.window`: windowed or borderless fullscreen, followed each frame.
+    window_mode: Var<usize>,
+    /// The user's settings file (`settings/user.cfg`): the menu's choices and the first
+    /// launch's, written again whenever one changes; `None` in a scripted run. Its leading
+    /// comment lines are kept.
+    user_file: Option<PathBuf>,
+    user_header: String,
     /// The game's menu on Esc (#352), and where the cursor stands in the window, pixels.
     menu: menu::Menu,
     cursor: [f32; 2],
@@ -895,6 +907,73 @@ impl<D: Demo> State<D> {
             }
         }
         tracing::info!("windowed again");
+    }
+
+    /// `app.window` followed: the window made fullscreen or windowed as the setting says (the
+    /// user's file at start, the menu's graphics page), and the setting following Alt+Enter.
+    fn follow_window_mode(&mut self) {
+        let wanted = self.ctx.settings.get(self.window_mode) == 1;
+        let is = self.ctx.window.fullscreen().is_some();
+        if wanted != is {
+            // Alt+Enter changed the window, not the setting: the setting follows, for the run.
+            if self.ctx.settings.source(self.window_mode) == settings::Source::Code
+                || !self
+                    .ctx
+                    .settings
+                    .changed_since(self.window_mode, self.preset_applied)
+            {
+                self.toggle_fullscreen();
+            }
+            let now = self.ctx.window.fullscreen().is_some();
+            self.ctx.settings.set(self.window_mode, usize::from(now));
+        }
+    }
+
+    /// `r.preset` followed ([`presets`]): a preset chosen sets its patch, as from where the
+    /// preset came (the user's file, the menu, the console); a patched setting changed by hand
+    /// since puts the preset back to custom.
+    fn apply_preset(&mut self) {
+        let s = &mut self.ctx.settings;
+        let preset = s.get(self.preset);
+        if s.changed_since(self.preset, self.preset_applied) {
+            if preset != presets::CUSTOM {
+                let source = s.source(self.preset);
+                for (name, value) in presets::patch(presets::PRESETS[preset]) {
+                    if let Err(e) = s.set_text(name, value, source) {
+                        tracing::warn!("r.preset {}: {name}: {e}", presets::PRESETS[preset]);
+                    }
+                }
+                tracing::info!(preset = presets::PRESETS[preset], "quality preset applied");
+            }
+            self.preset_applied = s.changes();
+        } else if preset != presets::CUSTOM
+            && s.vars()
+                .any(|v| presets::is_patched(&v.name) && v.changed > self.preset_applied)
+        {
+            let source = s.source(self.preset);
+            s.set_by(self.preset, presets::CUSTOM, source);
+            self.preset_applied = s.changes();
+        }
+    }
+
+    /// Writes the user's file from the settings that are the user's ([`settings::Source::User`]),
+    /// under its comment lines.
+    fn write_user_file(&self) {
+        let Some(path) = &self.user_file else {
+            return;
+        };
+        let mut text = self.user_header.clone();
+        for line in self.ctx.settings.user_lines() {
+            text.push_str(&line);
+            text.push('\n');
+        }
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        match std::fs::write(path, text) {
+            Ok(()) => tracing::info!(path = %path.display(), "user settings written"),
+            Err(e) => tracing::warn!(path = %path.display(), "user settings not written: {e}"),
+        }
     }
 
     /// Runs a console command (D-069): the shell's own (`app.`), else the demo's. Returns
@@ -1136,6 +1215,59 @@ impl<D: Demo> State<D> {
         // The settings (D-069): the file, then the command line, applied as each variable
         // registers; the shell's own first.
         let mut settings = Settings::new();
+        // The user's file first (the menu's choices, the first launch's): `forge.cfg` and
+        // `--set` override it. Never in a scripted run (`FORGE_CFG=none`, `--no-cfg`), which
+        // reads no file at all.
+        let user_file = config
+            .settings
+            .cfg_path()
+            .is_some()
+            .then(|| settings_dir(&root).join("user.cfg"));
+        let mut user_header = String::new();
+        if let Some(path) = &user_file {
+            if path.exists() {
+                user_header = std::fs::read_to_string(path)
+                    .unwrap_or_default()
+                    .lines()
+                    .take_while(|l| l.starts_with('#'))
+                    .map(|l| format!("{l}\n"))
+                    .collect();
+                match settings.load_file_as(path, settings::Source::User) {
+                    Ok(n) => {
+                        tracing::info!(path = %path.display(), lines = n, "user settings read")
+                    }
+                    Err(e) => tracing::warn!("user settings: {e}"),
+                }
+            } else if config.frame_limit.is_none() && config.capture.is_none() {
+                // The first launch on this machine: what the GPU and the monitor are, and the
+                // settings that fit them, written for the runs to come.
+                let machine = presets::Machine {
+                    video_memory: device
+                        .memory_report()
+                        .device_local()
+                        .map(|(_, budget)| budget),
+                    dlss: device.dlss().is_some(),
+                    monitor: window.current_monitor().map(|m| {
+                        let size = m.size();
+                        (size.width, size.height)
+                    }),
+                };
+                user_header = format!(
+                    "{}\n",
+                    presets::first_launch_header(&machine, device.name())
+                );
+                for (name, value) in presets::first_launch(&machine) {
+                    if let Err(e) = settings.set_text(&name, &value, settings::Source::User) {
+                        tracing::warn!("first launch: {name}: {e}");
+                    }
+                }
+                tracing::info!(
+                    ?machine,
+                    gpu = device.name(),
+                    "first launch: settings chosen"
+                );
+            }
+        }
         if let Some(cfg) = config.settings.cfg_path() {
             match settings.load_file(&cfg) {
                 Ok(0) => {}
@@ -1188,6 +1320,28 @@ impl<D: Demo> State<D> {
                 "app.hud",
                 true,
                 "The game's HUD over the picture (#328): off for a capture without it.",
+            )
+            .release(),
+        );
+        let preset = settings.add(
+            Spec::choice(
+                "r.preset",
+                presets::PRESETS,
+                presets::CUSTOM,
+                "Quality preset: custom, low, medium, high or ultra. One sets how small DLSS and \
+                 FSR render, the ambient occlusion, the mirror reflections, the local exposure \
+                 and the detail's error; changing one of those by hand puts it back to custom. \
+                 The first launch picks one from the GPU's memory.",
+            )
+            .release(),
+        );
+        let window_mode = settings.add(
+            Spec::choice(
+                "app.window",
+                &["windowed", "fullscreen"],
+                0,
+                "The window, or borderless fullscreen on its monitor at the monitor's own size \
+                 (Alt+Enter switches too). The first launch picks fullscreen.",
             )
             .release(),
         );
@@ -1377,6 +1531,11 @@ impl<D: Demo> State<D> {
             volume_sent: 1.0,
             ambience,
             ambience_sent: 1.0,
+            preset,
+            preset_applied: 0,
+            window_mode,
+            user_file,
+            user_header,
             menu: menu::Menu::default(),
             cursor: [0.0; 2],
             _sound_output: sound_output,
@@ -1519,6 +1678,13 @@ impl<D: Demo> State<D> {
             _ => OverlayMode::Full,
         };
         self.ctx.profile.set_mode(wanted);
+        // `r.preset` and `app.window` followed, and the user's file written when the menu (or a
+        // preset chosen as the user's) changed a setting.
+        self.apply_preset();
+        self.follow_window_mode();
+        if self.ctx.settings.take_user_changed() {
+            self.write_user_file();
+        }
         // `app.mouse_look` (D-069): the game's mouse look, the cursor captured (locked where the
         // platform can, else kept in the window) and hidden, the view turning with no button.
         let look = self.ctx.settings.get(self.mouse_look);
