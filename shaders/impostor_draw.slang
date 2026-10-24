@@ -81,13 +81,15 @@ struct Frame
     float3 sun_color;
     float znear;
     float3 camera_in_scene;          // the camera in the rays' frame
-    uint pad;
+    uint cloud_shadow;               // the clouds' shadow map (sampled, r32f), or 0xFFFFFFFF: none
     float2 jitter;                   // this frame's, pixels
     float2 size;                     // the target's, pixels
     Impostor* instances;
     Kind* kinds;
     float4* sky;                     // the sky's irradiance (sh.slang), or null
     uint64_t tlas;                   // the scene's rays' structure, 0 for none
+    float4 cloud_frame;              // the shadow map's first corner (world x, z), 1 / its span
+    uint64_t tlas_movers;            // the movers' structure (#79), 0 for none
 };
 
 struct Push
@@ -241,20 +243,44 @@ void blend_rest(Kind kind, Views w, float coverage[3], out float3 normal, out fl
 
 // Whether the sun is hidden from `relative` (to the camera): one ray into the far shadows' world
 // (D-075 step 3: the plants' opaque proxies, the plant's own among them, every other instance
-// opaque), as the far cards' shadow rays meet it.
+// opaque), as the far cards' shadow rays meet it, then into the movers' as the resolve's rays do
+// (`ray_blocked_except` in meshlet.slang): a plane or a ship passing over shades the far woods as
+// it shades the near trees (the owner, 2026-10-25).
+bool blocked_in(uint64_t tlas, RayDesc ray)
+{
+    if (tlas == 0)
+        return false;
+    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_FORCE_OPAQUE> q;
+    q.TraceRayInline(RaytracingAccelerationStructure(tlas), RAY_FLAG_NONE, RAY_SHADOW_FAR, ray);
+    q.Proceed();
+    return q.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
+}
+
 bool sun_blocked(Frame* f, float3 relative, float3 sun)
 {
-    if (f[0].tlas == 0)
-        return false;
     RayDesc ray;
     ray.Origin = f[0].camera_in_scene + relative + sun * 0.02;
     ray.Direction = sun;
     ray.TMin = 0.0;
     ray.TMax = 1e5;
-    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_FORCE_OPAQUE> q;
-    q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), RAY_FLAG_NONE, RAY_SHADOW_FAR, ray);
-    q.Proceed();
-    return q.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
+    return blocked_in(f[0].tlas, ray) || blocked_in(f[0].tlas_movers, ray);
+}
+
+// The sun's share through the clouds (#145) at `world` (the rays' frame), as the resolve takes it
+// (`cloud_light` in meshlet.slang): the shadow map holds it for the ground, so a point `y` up
+// reads it `y / sun.y` along the sun's foot. Without it the impostors stood in full sun under a
+// cloud's shadow, lime green beside the shells and cards they take over from (the owner,
+// 2026-10-25: trees "changing colour very strongly" while flying in). 1 without clouds, or off
+// the map.
+float cloud_light(Frame* f, float3 world, float3 sun)
+{
+    if (f[0].cloud_shadow == 0xFFFFFFFFu)
+        return 1.0;
+    float2 ground = world.xz - sun.xz * (world.y / max(sun.y, 0.05));
+    float2 uv = (ground - f[0].cloud_frame.xy) * f[0].cloud_frame.z;
+    if (any(uv < 0.0) || any(uv > 1.0))
+        return 1.0;
+    return sample_depth_level(f[0].cloud_shadow, SAMPLER_LINEAR_CLAMP, uv, 0.0);
 }
 
 struct Shaded
@@ -325,6 +351,7 @@ Shaded shade(Varyings v)
             interleaved_gradient_noise(pixel, f[0].noise_frame, float2(5.0, 37.0)),
             interleaved_gradient_noise(pixel, f[0].noise_frame, float2(41.0, 3.0))) - 0.5;
         shadow = sun_blocked(f, relative + wander * (SHADOW_WANDER * kind.radius * imp.scale), sun) ? 0.0 : 1.0;
+        shadow *= cloud_light(f, f[0].camera_in_scene + relative, sun);
     }
     // The sky's light on leaves that agree that much: from their normal's, towards its mean.
     float3 sky = f[0].sky != nullptr

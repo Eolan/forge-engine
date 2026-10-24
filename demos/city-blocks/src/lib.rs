@@ -3339,9 +3339,15 @@ impl Demo for Gallery {
                     sun_illuminance: self.renderer.sun_illuminance,
                     exposure,
                     sky: (self.sky_light && !in_space).then_some(scene_light),
+                    clouds: cloud_shadow,
                     camera_in_scene,
                     tlas: self.scene.rays().map_or(0, |r| r.tlas_address()),
                     static_tlas: targets.movers.and_then(|m| m.static_tlas),
+                    movers_tlas: self.scene.rays().and_then(|r| {
+                        let address = r.movers_address();
+                        let storage = targets.movers.and_then(|m| m.tlas)?;
+                        (address != 0).then_some((address, storage))
+                    }),
                     extent,
                 },
                 taa_frame.color,

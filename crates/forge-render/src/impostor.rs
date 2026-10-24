@@ -1104,6 +1104,9 @@ pub struct ImpostorView {
     pub exposure: f32,
     /// The sky's irradiance, when the sky lights the scene.
     pub sky: Option<SkyLight>,
+    /// The clouds' shadow on the sun's light ([`crate::Clouds::shadow`]), as the resolve takes it;
+    /// `None`: none.
+    pub clouds: Option<crate::CloudShadow>,
     /// The camera in the scene's frame, where the rays are traced.
     pub camera_in_scene: Vec3,
     /// The scene's rays' structure (`SceneRays::tlas_address`), 0 for none: the sun's shadow
@@ -1111,6 +1114,9 @@ pub struct ImpostorView {
     pub tlas: u64,
     /// Its storage, in a scene whose static instances change (`MoversFrame::static_tlas`, #323).
     pub static_tlas: Option<BufferHandle>,
+    /// The movers' structure (`SceneRays::movers_address`) and its storage this frame
+    /// (`MoversFrame::tlas`), which the sun's shadow rays also meet; `None`: no movers.
+    pub movers_tlas: Option<(u64, BufferHandle)>,
     /// The render's size.
     pub extent: vk::Extent2D,
 }
@@ -1167,13 +1173,17 @@ struct GpuImpostorFrame {
     sun_color: [f32; 3],
     znear: f32,
     camera_in_scene: [f32; 3],
-    pad: u32,
+    /// The clouds' shadow map's sampled index, `u32::MAX` for none.
+    cloud_shadow: u32,
     jitter: [f32; 2],
     size: [f32; 2],
     instances: u64,
     kinds: u64,
     sky: u64,
     tlas: u64,
+    /// Its first corner (world x, z), 1 / the metres it spans, 0 (`CloudShadow::frame`).
+    cloud_frame: [f32; 4],
+    tlas_movers: u64,
 }
 
 const _: () = assert!(std::mem::size_of::<GpuImpostor>() == 80);
@@ -1338,30 +1348,31 @@ impl Impostors {
         }
         let camera = view.camera.normalized();
         let frame_buffer = &self.frames[slot.index];
-        frame_buffer.write(
-            0,
-            &[GpuImpostorFrame {
-                view_proj: view.view_proj.to_cols_array(),
-                previous_from_current: view.previous_from_current.to_cols_array(),
-                camera_cell: camera.cell.to_array(),
-                noise_frame: view.noise_frame,
-                camera_local: camera.local.to_array(),
-                light_scale: view.sun_illuminance * view.exposure / std::f32::consts::PI,
-                sun_dir: view.sun_dir.to_array(),
-                // The culls' measure of a size on screen (`ladder_crossing` in meshlet.slang).
-                lod_k: view.p11 * 0.5 * view.extent.height as f32 / view.texture_lod_bias.exp2(),
-                sun_color: view.sun_color.to_array(),
-                znear: view.near,
-                camera_in_scene: view.camera_in_scene.to_array(),
-                pad: 0,
-                jitter: view.jitter.to_array(),
-                size: [view.extent.width as f32, view.extent.height as f32],
-                instances: self.instances.address(),
-                kinds: self.kind_table.address(),
-                sky: view.sky.map_or(0, |s| s.address),
-                tlas: view.tlas,
-            }],
-        );
+        let clouds = view.clouds;
+        // Written when the pass runs, where the cloud map's index is known.
+        let mut block = GpuImpostorFrame {
+            view_proj: view.view_proj.to_cols_array(),
+            previous_from_current: view.previous_from_current.to_cols_array(),
+            camera_cell: camera.cell.to_array(),
+            noise_frame: view.noise_frame,
+            camera_local: camera.local.to_array(),
+            light_scale: view.sun_illuminance * view.exposure / std::f32::consts::PI,
+            sun_dir: view.sun_dir.to_array(),
+            // The culls' measure of a size on screen (`ladder_crossing` in meshlet.slang).
+            lod_k: view.p11 * 0.5 * view.extent.height as f32 / view.texture_lod_bias.exp2(),
+            sun_color: view.sun_color.to_array(),
+            znear: view.near,
+            camera_in_scene: view.camera_in_scene.to_array(),
+            cloud_shadow: u32::MAX,
+            jitter: view.jitter.to_array(),
+            size: [view.extent.width as f32, view.extent.height as f32],
+            instances: self.instances.address(),
+            kinds: self.kind_table.address(),
+            sky: view.sky.map_or(0, |s| s.address),
+            tlas: view.tlas,
+            cloud_frame: clouds.map_or([0.0; 4], |c| c.frame),
+            tlas_movers: view.movers_tlas.map_or(0, |(address, _)| address),
+        };
         let address = frame_buffer.address();
         let atlases: Vec<ImageHandle> = self
             .kinds
@@ -1383,7 +1394,13 @@ impl Impostors {
         if let Some(sky) = view.sky {
             pass = pass.buffer(sky.buffer, BufferAccess::ShaderRead(fragment));
         }
+        if let Some(c) = clouds {
+            pass = pass.image(c.image, ImageAccess::Sampled(fragment));
+        }
         if let Some(storage) = view.static_tlas.filter(|_| view.tlas != 0) {
+            pass = pass.buffer(storage, BufferAccess::AccelerationStructureRead(fragment));
+        }
+        if let Some((_, storage)) = view.movers_tlas {
             pass = pass.buffer(storage, BufferAccess::AccelerationStructureRead(fragment));
         }
         let (pipeline, count, extent) = match motion {
@@ -1391,6 +1408,10 @@ impl Impostors {
             None => (&self.color_only, self.count, view.extent),
         };
         pass.run(move |resources, commands| {
+            if let Some(c) = clouds {
+                block.cloud_shadow = resources.sampled(c.image).0;
+            }
+            frame_buffer.write(0, &[block]);
             let attachment = |image| {
                 vk::RenderingAttachmentInfo::default()
                     .image_view(resources.view(image))
