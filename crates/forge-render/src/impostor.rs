@@ -1189,6 +1189,9 @@ struct GpuImpostorFrame {
 const _: () = assert!(std::mem::size_of::<GpuImpostor>() == 80);
 const _: () = assert!(std::mem::size_of::<GpuKind>() == 80);
 const _: () = assert!(std::mem::offset_of!(GpuImpostorFrame, instances) == 224);
+// std430's places for the fields after the pointers (a `float4` at 16 bytes).
+const _: () = assert!(std::mem::offset_of!(GpuImpostorFrame, cloud_frame) == 256);
+const _: () = assert!(std::mem::offset_of!(GpuImpostorFrame, tlas_movers) == 272);
 
 /// The impostors drawn (D-075 step 4): far plants as quads facing the camera, each showing its
 /// kind's atlases blended from the three frames around the view, drawn after the resolve and

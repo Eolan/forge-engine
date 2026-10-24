@@ -7125,8 +7125,17 @@ DIR` writes the atlases as images (`forge_render::impostor`, `shaders/impostor.s
     meadow's young tree, its impostor G 78.5 against its cards' 77.8. The cost (`docs/PROFILE.md`):
     0.2–0.5 ms with the ladder, 0.9 ms from the air without it (the far woods' cores drawn, which
     also read darker, as they do near).
+  - **The shells' tone per channel** (`CROWN_SHELL_TONE`, 0.55 → 0.80, 0.74, 0.95 of the
+    leaves'). Against the cards kept whole, over the shells' own pixels (`--show-ladder` as the
+    mask) in four views, the shells stood 8–11 % darker in luma and greener (red and blue 13–14 %
+    low: the cards' gaps show the ground and the sky). Now within 1 % at the default hour and
+    the morning's (the air view 60.0 against 59.7, 59.3 against 59.4), 9 % bright at noon, where
+    the cards' crowns hold more inner shade than round lumps do. The shells don't shrink under
+    the cluster LOD as the cores did (0.6–0.9 % of pixels move with it off).
   - **Left:** a young tree's impostor still 12 % brighter and greyer than its cards (R +24 %,
-    B +28 %, the meadow's view), the "bright young crowns" above.
+    B +28 %, the meadow's view), the "bright young crowns" above. Dimming the impostors' sky by
+    their baked openness fixed the nearest crowns in shade but darkened the far woods, and made
+    no difference at the real crossing (40 px), so it is left out.
 
 **Micromaps built** (#333, 2026-10-23, question 4's answer), on by default in city-plan, where
 the device has them (`MeshletSceneBuilder::set_opacity_micromaps`, city-blocks' `--omm`,

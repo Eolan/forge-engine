@@ -6201,9 +6201,13 @@ const LEAF_ATLAS: (u64, u32) = (41, 1024);
 /// plants' shadow proxies in place of their cards (D-075 step 3, `--far-shadows`), metres.
 const FAR_SHADOWS: f32 = 60.0;
 
-/// The crown shells' colour as a share of their leaves' (D-075's ladder): opaque and smooth, at
-/// the leaves' own colour a far wood stood 1.75 times as bright as its cards.
-const CROWN_SHELL_TONE: f32 = 0.55;
+/// The crown shells' colour as a share of their leaves', per channel (D-075's ladder): opaque and
+/// smooth, at the leaves' own colour a far wood stood 1.75 times as bright as its cards. At 0.55
+/// throughout, once the cards kept their crowns whole (`flora::CROWN_SECTIONS`), the shells stood
+/// 8–11 % darker than the cards over their own pixels and greener (red and blue 13–14 % low: the
+/// cards' gaps show the ground and the sky); fitted over four views (2026-10-25), within 1 % at
+/// the default hour and the morning's, 9 % bright at noon.
+const CROWN_SHELL_TONE: [f32; 3] = [0.80, 0.74, 0.95];
 
 /// How strongly the leaf cards' own normals (`textures::leaf_normals`, #346) turn the crown's
 /// bent ones: enough for each leaf to catch the light its own way, the crown still lit as a
@@ -7174,8 +7178,8 @@ impl Scenario for PlanScenario {
                         (
                             format!("{} crown shells", s.id),
                             tones(
-                                leaves.0.map(|k| k * CROWN_SHELL_TONE),
-                                leaves.1.map(|k| k * CROWN_SHELL_TONE),
+                                std::array::from_fn(|c| leaves.0[c] * CROWN_SHELL_TONE[c]),
+                                std::array::from_fn(|c| leaves.1[c] * CROWN_SHELL_TONE[c]),
                                 6.0,
                             ),
                         ),
