@@ -629,6 +629,8 @@ impl Default for WorldDesc {
 pub struct World {
     raw: NonNull<ffi::FjWorld>,
     threads: u32,
+    /// Each ragdoll's parts, by its id: what a drive's targets and strengths must cover.
+    ragdoll_parts: Vec<usize>,
 }
 
 // SAFETY: the world is used from one thread at a time (`&mut self` for every change); Jolt's
@@ -657,6 +659,7 @@ impl World {
         Self {
             raw: NonNull::new(world).expect("Jolt's world"),
             threads: desc.threads,
+            ragdoll_parts: Vec::new(),
         }
     }
 
@@ -1423,6 +1426,9 @@ impl World {
         if id == u32::MAX {
             return Err(PhysicsError::WorldFull);
         }
+        // Ragdolls are numbered in the order they are added, and never removed.
+        self.ragdoll_parts.push(parts.len());
+        debug_assert_eq!(self.ragdoll_parts.len(), id as usize + 1);
         Ok((RagdollId(id), bodies.into_iter().map(BodyId).collect()))
     }
 
@@ -1430,9 +1436,14 @@ impl World {
     /// ball joint the part's turn in its joint's frame (x along the twist axis, y along the
     /// plane axis; identity is the pose as built), for a hinge its angle in `x`. A powered ragdoll
     /// is kept awake, so its targets move it however still it was; a limp one may sleep.
+    ///
+    /// # Panics
+    ///
+    /// When `ragdoll` is not one of this world's, or `targets` has fewer entries than it has parts.
     pub fn drive_ragdoll(&mut self, ragdoll: RagdollId, targets: &[[f32; 4]], motors: Motors) {
-        // SAFETY: the world is live, the index one it gave, four floats a part read; no
-        // strengths.
+        self.check_drive(ragdoll, targets.len(), None);
+        // SAFETY: the world is live, the index one it gave (checked), four floats read for each of
+        // its parts (checked); no strengths.
         unsafe {
             ffi::fj_ragdoll_drive(
                 self.raw.as_ptr(),
@@ -1452,7 +1463,8 @@ impl World {
     ///
     /// # Panics
     ///
-    /// When `strength` has fewer entries than `targets`.
+    /// When `ragdoll` is not one of this world's, or `targets` or `strength` has fewer entries than
+    /// it has parts.
     pub fn drive_ragdoll_with(
         &mut self,
         ragdoll: RagdollId,
@@ -1460,9 +1472,9 @@ impl World {
         motors: Motors,
         strength: &[f32],
     ) {
-        assert!(strength.len() >= targets.len(), "a strength a part");
-        // SAFETY: the world is live, the index one it gave, four floats and a strength a part
-        // read.
+        self.check_drive(ragdoll, targets.len(), Some(strength.len()));
+        // SAFETY: the world is live, the index one it gave (checked), four floats and a strength
+        // read for each of its parts (checked).
         unsafe {
             ffi::fj_ragdoll_drive(
                 self.raw.as_ptr(),
@@ -1473,6 +1485,18 @@ impl World {
                 motors.torque,
                 strength.as_ptr(),
             );
+        }
+    }
+
+    /// What a ragdoll drive reads: one target (and one strength) for each of the ragdoll's parts.
+    fn check_drive(&self, ragdoll: RagdollId, targets: usize, strength: Option<usize>) {
+        let parts = *self
+            .ragdoll_parts
+            .get(ragdoll.0 as usize)
+            .expect("a ragdoll of this world");
+        assert!(targets >= parts, "{targets} targets for {parts} parts");
+        if let Some(n) = strength {
+            assert!(n >= parts, "{n} strengths for {parts} parts");
         }
     }
 

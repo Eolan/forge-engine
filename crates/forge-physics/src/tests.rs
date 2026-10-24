@@ -851,6 +851,20 @@ fn a_ragdoll_part_at_a_fraction_of_its_strength_gives_way() {
     );
 }
 
+/// A drive reads a target (and a strength) for each of the ragdoll's parts: fewer is a panic,
+/// never a read past the slice.
+#[test]
+#[should_panic(expected = "2 targets for 3 parts")]
+fn a_ragdoll_driven_with_too_few_targets_panics() {
+    let (mut world, ragdoll, _) = arm();
+    let motors = Motors {
+        stiffness: 1.0,
+        damping: 1.0,
+        torque: 1.0,
+    };
+    world.drive_ragdoll(ragdoll, &[[0.0, 0.0, 0.0, 1.0]; 2], motors);
+}
+
 /// A ball of `radius`: an octahedron cut twice into four (66 vertices, 128 triangles), wound
 /// outwards, its points pushed onto the sphere.
 fn ball(radius: f32) -> (Vec<Vec3>, Vec<[u32; 3]>) {

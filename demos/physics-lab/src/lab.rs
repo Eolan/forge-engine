@@ -1759,7 +1759,7 @@ impl Simulation for LabWorld {
             // The blows the step dealt them, and their recovery (Phase 7).
             let mut contacts = Vec::new();
             self.contacts(&mut contacts);
-            herd.react(&self.world, &contacts, &mut self.reactions);
+            herd.react(&self.world, self.limp, &contacts, &mut self.reactions);
             // Its dogs' paws that came down in the step.
             let beds = &self.beds;
             let came = herd.feel(&self.world, self.tick, &mut self.feet, &|x, z| {
@@ -1988,6 +1988,10 @@ impl Simulation for LabWorld {
             for (k, v) in s.velocity.to_array().into_iter().enumerate() {
                 d ^= u64::from(v.to_bits()).rotate_left(13 * k as u32 + 1);
             }
+        }
+        // What blows left of the creatures' motors, and who lies fallen (Phase 7).
+        if let Some(herd) = &self.herd {
+            d ^= self.reactions.digest(herd.len()).rotate_left(23);
         }
         // The mission's state (#287).
         if let Some(mission) = &self.mission {
@@ -4164,6 +4168,8 @@ mod tests {
             "{:?}",
             dogs(&first.world)
         );
+        // Let go, a dog lies as it falls: no fall counted, nothing to rise from when powered again.
+        assert_eq!(first.reactions.falls, 0);
         assert_eq!(herd.standing(&first.world), 3);
         let (mut second, _) = LabWorld::new(LabScene::Creatures, test_pool()).unwrap();
         for _ in 0..120 {
@@ -4305,6 +4311,38 @@ mod tests {
         );
         assert!(!first.reactions.is_down(DOG));
         assert!(up > 0.45, "up to {up:.2} m");
+        // Felled again, then struck as it rises: a hard blow fells it again.
+        let throw_now = |world: &LabWorld, seq: u32| {
+            let target = torso(world);
+            let from = target + DVec3::new(0.0, 0.15, 4.0);
+            [Stamped {
+                tick: world.now(),
+                player: 0,
+                seq,
+                command: LabCommand::Throw {
+                    from: from.as_vec3().to_array(),
+                    forward: (target - from).normalize().as_vec3().to_array(),
+                },
+            }]
+        };
+        let felled = first.reactions.falls;
+        let second_throw = throw_now(&first, 1);
+        first.tick(&second_throw);
+        for _ in 0..30 {
+            first.tick(&[]);
+        }
+        assert_eq!(first.reactions.falls, felled + 1, "felled again");
+        // Into its rise (lying 90 ticks), then a third ball.
+        for _ in 0..90 {
+            first.tick(&[]);
+        }
+        assert!(!first.reactions.is_down(DOG), "rising, not lying");
+        let third_throw = throw_now(&first, 2);
+        first.tick(&third_throw);
+        for _ in 0..30 {
+            first.tick(&[]);
+        }
+        assert_eq!(first.reactions.falls, felled + 2, "felled while it rose");
     }
 
     #[test]

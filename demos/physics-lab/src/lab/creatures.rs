@@ -655,6 +655,15 @@ impl Reactions {
         }
     }
 
+    /// Its state for `creatures` to the bit, as a number: what a digest of the world takes in.
+    pub(super) fn digest(&self, creatures: usize) -> u64 {
+        let mut bytes = Vec::with_capacity(Self::saved_len(creatures));
+        self.save(creatures, &mut bytes);
+        bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |h, &b| {
+            (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+        })
+    }
+
     /// How many bytes [`Reactions::save`] writes for `creatures`.
     pub(super) fn saved_len(creatures: usize) -> usize {
         16 + (4 * PARTS + 4) * creatures
@@ -1491,6 +1500,7 @@ impl Herd {
     pub(super) fn react(
         &self,
         world: &World,
+        limp: bool,
         contacts: &[(Contact, [Option<f32>; 2])],
         reactions: &mut Reactions,
     ) -> usize {
@@ -1551,17 +1561,29 @@ impl Herd {
             }
         }
         reactions.blows += blows;
-        // A dog (no stand) knocked down by a blow, or whose torso tilts past `FALLEN_TILT` (the
-        // balance check), has fallen.
+        // A dog (no stand) knocked down by a blow, even while it rises, or whose torso tilts past
+        // `FALLEN_TILT` once it is up (the balance check), has fallen. Let go (`limp`), it lies as
+        // it is, no fall counted: powered again, it is pulled up at once, as before a fall.
         let roots: Vec<BodyId> = self.creatures.iter().map(|c| c.root).collect();
         let mut at = Vec::new();
         world.transforms(&roots, &mut at);
         for (c, creature) in self.creatures.iter().enumerate() {
-            if creature.stand.is_some() || reactions.down[c] > 0 {
+            if creature.stand.is_some() {
+                continue;
+            }
+            if limp {
+                reactions.down[c] = 0;
+                continue;
+            }
+            let (lying, rising) = (
+                reactions.down[c] > RISE_TICKS,
+                reactions.down[c] > 0 && reactions.down[c] <= RISE_TICKS,
+            );
+            if lying {
                 continue;
             }
             let up = at[c].rotation * (creature.stance.rotation.inverse() * Vec3::Y);
-            if knocked[c] || up.y < FALLEN_TILT {
+            if knocked[c] || (!rising && up.y < FALLEN_TILT) {
                 reactions.down[c] = DOWN_TICKS + RISE_TICKS;
                 reactions.strength[c] = [DOWN_STRENGTH; PARTS];
                 reactions.falls += 1;

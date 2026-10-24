@@ -540,7 +540,8 @@ The physics layer's "hits simulated rather than played":
 - **The fall and the rise** (the same day): a dog's balance takes its torso's strength, so a blow
   there staggers it. A blow of 20 N·s or more, or its torso tilting past 50° (the balance check),
   fells it. It lies slack at 2 % for 1.5 s, then rises over 2 s as its strength and balance come
-  back, its balance unchecked until it is up. A thrown ball fells a dog 5 ticks after leaving the
+  back, its balance unchecked until it is up (a hard blow still fells it as it rises; let go with
+  ↓ it lies as it is, no fall counted). A thrown ball fells a dog 5 ticks after leaving the
   hand (its torso 0.57 → 0.20 m); four seconds on it stands at 0.56 m and walks its round
   (`a_dog_knocked_down_falls_lies_and_gets_up`). The rise is the dog's balance spring pulling it
   up, the lab's stand-in: a get-up clip would start from its first frame, never from the frame
