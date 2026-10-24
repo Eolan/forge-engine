@@ -156,6 +156,18 @@ pub struct Species {
     /// The deepest branch order grown (the trunk is 0).
     #[serde(default = "default_max_order")]
     pub max_order: u8,
+    /// The lobes a crown's envelope has, the range each plant draws from: the sub-crowns its
+    /// main limbs carry (`grow`'s `Lobes`).
+    #[serde(default = "default_lobes")]
+    pub lobes: [u32; 2],
+    /// A lobe's radius, a share of the envelope's reach (each plant's about it): the larger,
+    /// the fewer and broader the domes.
+    #[serde(default = "default_lobe_size")]
+    pub lobe_size: f64,
+    /// How far the envelope may draw in between its lobes and under them, a share of its
+    /// reach: 0 the species' smooth profile, a cypress's column; a plane's heavy limbs a third.
+    #[serde(default = "default_lobe_depth")]
+    pub lobe_depth: f64,
     /// Where it grows on its own, for the placement ([`crate::place`]); none for a species only
     /// ever planted by hand.
     #[serde(default)]
@@ -269,6 +281,15 @@ fn default_perception_angle() -> f64 {
 }
 fn default_max_order() -> u8 {
     6
+}
+fn default_lobes() -> [u32; 2] {
+    [7, 11]
+}
+fn default_lobe_size() -> f64 {
+    0.5
+}
+fn default_lobe_depth() -> f64 {
+    0.3
 }
 
 /// The share of the grown height a plant of `age` years has: a Chapman–Richards curve

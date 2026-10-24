@@ -120,6 +120,90 @@ pub const FORK_HOPS: u32 = 4;
 /// How far the crown leans, metres per metre of height, in a wind of strength 1.
 const LEAN: f64 = 0.35;
 
+/// The most lobes a crown has.
+const MAX_LOBES: usize = 16;
+/// The golden angle, radians: the lobes turn by it one after another round the crown.
+const GOLDEN: f64 = 2.399_963_229_728_653;
+
+/// An individual crown's lobes, the sub-crowns its main limbs carry. With the species' smooth
+/// profile alone the markers filled one ellipsoid evenly, and every crown grew into the same
+/// round ball, a holm oak's as a plane's (the owner, 2026-10-24: "as if the generation stopped
+/// too early"). Each lobe is a ball inside the envelope touching it, about half its size; the
+/// crown is their union over a core, so its outline is a cluster of domes, deepest where two
+/// lobes leave a gap. The first lobe stands over the trunk, so the crown keeps its height; the
+/// others go round it on a golden-angle spiral from the top to a little below the middle.
+#[derive(Clone, Copy, Debug)]
+struct Lobes {
+    /// Each lobe's direction from the crown's middle and its radius, a share of the envelope's
+    /// reach that way.
+    lobes: [(DVec3, f64); MAX_LOBES],
+    count: usize,
+    /// The core's reach: the least of the envelope's anywhere.
+    core: f64,
+    /// A shrub's: its lower half keeps the smooth profile, where its stems rise from the ground.
+    shrub: bool,
+}
+
+impl Lobes {
+    /// The plant's lobes, from a stream of their own: the markers and the growth draw what
+    /// they drew before.
+    fn new(sp: &Species, cond: &Conditions) -> Self {
+        let mut rng = Seed::new(cond.seed)
+            .derive_str(&sp.id)
+            .derive_str("lobes")
+            .rng();
+        let [lo, hi] = sp.lobes;
+        let count = (u64::from(lo) + rng.below(u64::from(hi.max(lo) - lo + 1)))
+            .min(MAX_LOBES as u64) as usize;
+        let phase = rng.range_f64(0.0, std::f64::consts::TAU);
+        let mut lobes = [(DVec3::Y, 1.0); MAX_LOBES];
+        for (k, lobe) in lobes.iter_mut().enumerate().take(count) {
+            // The height of the lobe's direction, its sine: the top's over the trunk, then
+            // down the crown to a little under its middle.
+            let up = if k == 0 {
+                rng.range_f64(0.9, 1.0)
+            } else {
+                let down = (k as f64 - 0.5) / (count as f64 - 1.0).max(1.0);
+                (0.8 - 1.1 * down + rng.range_f64(-0.12, 0.12)).clamp(-0.4, 0.95)
+            };
+            let flat = (1.0 - up * up).sqrt();
+            let turn = phase + GOLDEN * k as f64 + rng.range_f64(-0.3, 0.3);
+            let (s, c) = dmath::sin_cos(turn);
+            let size = sp.lobe_size * rng.range_f64(0.8, 1.2);
+            *lobe = (DVec3::new(c * flat, up, s * flat), size.clamp(0.1, 1.0));
+        }
+        Self {
+            lobes,
+            count,
+            // The limbs' sub-crowns come with age: a young plant's crown is smoother, at a
+            // quarter of its maturity a third as deep (a young umbrella pine's, lobed as a grown
+            // one's, kept half its width in a narrow clump on a stick).
+            core: 1.0
+                - sp.lobe_depth.clamp(0.0, 0.8) * growth_share(cond.age, sp.maturity).min(1.0),
+            shrub: sp.habit == Habit::Shrub,
+        }
+    }
+
+    /// The envelope's reach along the unit direction `dir` from the crown's middle, as a share
+    /// of the smooth profile's: the farthest a lobe's ball reaches along that ray (a ball of
+    /// radius `r` touching the envelope stands `1 - r` out), the core's at least.
+    fn reach(&self, dir: DVec3) -> f64 {
+        if self.count == 0 || self.core >= 1.0 || (self.shrub && dir.y < 0.0) {
+            return 1.0;
+        }
+        let mut reach = self.core;
+        for &(axis, r) in &self.lobes[..self.count] {
+            let a = 1.0 - r;
+            let along = a * dir.dot(axis);
+            let off = a * a - along * along;
+            if off < r * r {
+                reach = reach.max(along + (r * r - off).sqrt());
+            }
+        }
+        reach.min(1.0)
+    }
+}
+
 /// The crown's envelope at one age.
 #[derive(Clone, Copy, Debug)]
 struct Envelope {
@@ -128,6 +212,9 @@ struct Envelope {
     crown: Crown,
     lean: DVec2,
     pruning: Pruning,
+    lobes: Lobes,
+    /// A lifted crown's lift as a share of the grown plant's height, 0 for none.
+    lift_share: f64,
 }
 
 impl Envelope {
@@ -135,8 +222,14 @@ impl Envelope {
         self.lean * y
     }
 
+    /// Where the crown starts: the species' base, or a lifted crown's lift above it, as a share
+    /// of the envelope's height (`lift_share`). A planted tree's crown grows its whole shape over
+    /// its clear stem; cut at the lift instead, a young umbrella pine's cone, widest near the
+    /// ground, kept only its narrow top half, a spire on a stick (the owner, 2026-10-24: "a bit
+    /// of a strange canopy"). In metres, the young envelope stood all above the lift, and a
+    /// leader with no free space round it starved at 5 m.
     fn crown_base(&self) -> f64 {
-        self.crown.base * self.height
+        self.crown.base.max(self.lift_share) * self.height
     }
 
     /// Whether `p` lies in the space the crown may fill, grown by `margin`.
@@ -146,6 +239,29 @@ impl Envelope {
         }
         let base = self.crown_base();
         let depth = (self.height - base).max(1e-6);
+        if self.pruning.open_centre > 0.0 && p.y > self.pruning.lift + 0.3 {
+            let c = self.axis(p.y);
+            if DVec2::new(p.x - c.x, p.z - c.y).length() < self.pruning.open_centre {
+                return false;
+            }
+        }
+        // The point taken out from the crown's middle by the lobe it stands towards
+        // ([`Lobes::reach`]), then tested against the smooth profile.
+        let mid = base + self.crown.widest * depth;
+        let o = self.axis(mid);
+        let half = 0.5 * depth;
+        let across = self.radius.max(1e-6);
+        let q = DVec3::new(
+            (p.x - o.x) / across,
+            (p.y - mid) / half,
+            (p.z - o.y) / across,
+        );
+        let s = q.try_normalize().map_or(1.0, |dir| self.lobes.reach(dir));
+        let p = DVec3::new(
+            o.x + (p.x - o.x) / s,
+            mid + (p.y - mid) / s,
+            o.y + (p.z - o.y) / s,
+        );
         let t = (p.y - base) / depth;
         let slack = margin / depth;
         if t < -slack || t > 1.0 + slack {
@@ -153,12 +269,6 @@ impl Envelope {
         }
         let c = self.axis(p.y);
         let d = DVec2::new(p.x - c.x, p.z - c.y).length();
-        if self.pruning.open_centre > 0.0
-            && p.y > self.pruning.lift + 0.3
-            && d < self.pruning.open_centre
-        {
-            return false;
-        }
         d <= self.radius * self.crown.profile(t.clamp(0.0, 1.0)) + margin
     }
 }
@@ -286,6 +396,8 @@ struct Grower<'a> {
     /// The individual's grown height and crown radius.
     height: f64,
     radius: f64,
+    /// Its crown's lobes.
+    lobes: Lobes,
     nodes: Vec<GrowNode>,
     buds: Vec<Bud>,
     markers: Vec<DVec3>,
@@ -347,6 +459,7 @@ impl<'a> Grower<'a> {
             rng,
             height,
             radius,
+            lobes: Lobes::new(sp, cond),
             nodes: Vec::new(),
             buds: Vec::new(),
             taken: vec![false; markers.len()],
@@ -368,6 +481,8 @@ impl<'a> Grower<'a> {
             crown: self.sp.crown_at(share),
             lean: self.cond.wind * LEAN,
             pruning: self.cond.pruning,
+            lobes: self.lobes,
+            lift_share: (self.cond.pruning.lift / self.height.max(1e-6)).clamp(0.0, 0.9),
         }
     }
 

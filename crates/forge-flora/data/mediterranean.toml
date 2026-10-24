@@ -36,6 +36,11 @@ shed_after = 3
 max_shoot = 4
 limb_nodes = 150
 
+# An open, irregular crown: few lobes, deep gaps.
+lobes = [5, 8]
+lobe_size = 0.45
+lobe_depth = 0.4
+
 [species.habitat]
 # A pioneer of the dry, shallow, warm limestone, light-loving (docs/research/flora.md §3).
 layer = "canopy"
@@ -81,6 +86,11 @@ foliage_tips = 4
 shed_after = 4
 max_shoot = 4
 limb_nodes = 30
+
+# Dense and rounded, of many small domes.
+lobes = [10, 14]
+lobe_size = 0.4
+lobe_depth = 0.25
 
 [species.habitat]
 # The forest of the deeper, wetter soils; shade-tolerant: it grows up under the pines.
@@ -130,6 +140,11 @@ shed_after = 4
 max_shoot = 3
 limb_nodes = 12
 
+# Gnarled, in a few heavy clumps.
+lobes = [5, 8]
+lobe_size = 0.5
+lobe_depth = 0.35
+
 [species.habitat]
 # Planted: groves on warm, well-drained slopes (rows and groves only).
 layer = "canopy"
@@ -178,6 +193,11 @@ shed_after = 6
 max_shoot = 4
 occupancy = 1.6
 
+# A column, barely rippled.
+lobes = [6, 9]
+lobe_size = 0.6
+lobe_depth = 0.08
+
 [species.habitat]
 # Planted: alleys, windbreaks, by the houses (rows only).
 layer = "canopy"
@@ -225,6 +245,10 @@ max_shoot = 4
 stems = [5, 9]
 stem_spread = 28.0
 
+lobes = [5, 8]
+lobe_size = 0.5
+lobe_depth = 0.25
+
 [species.habitat]
 # The garrigue's open, dry, sun-baked ground; south or west facing (RHS).
 layer = "understorey"
@@ -270,6 +294,10 @@ shed_after = 4
 max_shoot = 4
 stems = [4, 7]
 stem_spread = 32.0
+
+lobes = [5, 8]
+lobe_size = 0.5
+lobe_depth = 0.2
 
 [species.habitat]
 # The garrigue's open ground; south or west facing (RHS); first back after a fire.
@@ -317,6 +345,10 @@ shed_after = 5
 max_shoot = 4
 stems = [6, 11]
 stem_spread = 40.0
+
+lobes = [6, 9]
+lobe_size = 0.5
+lobe_depth = 0.25
 
 [species.habitat]
 # The garrigue's thickets, on the poorest and the stoniest ground, under open pines too.
@@ -370,6 +402,11 @@ shed_after = 4
 max_shoot = 4
 limb_nodes = 40
 
+# Heavy limbs, each with its own dome.
+lobes = [6, 9]
+lobe_size = 0.5
+lobe_depth = 0.35
+
 [species.habitat]
 # Planted: avenues and squares (rows and groves only).
 layer = "canopy"
@@ -418,6 +455,11 @@ foliage_tips = 4
 shed_after = 4
 max_shoot = 4
 limb_nodes = 40
+
+# A fuller, more even dome than the plane's.
+lobes = [7, 10]
+lobe_size = 0.5
+lobe_depth = 0.2
 
 [species.habitat]
 # Planted: squares and streets (rows and groves only).
@@ -469,6 +511,11 @@ foliage_tips = 2
 shed_after = 3
 max_shoot = 4
 limb_nodes = 150
+
+# The umbrella in clumps.
+lobes = [7, 10]
+lobe_size = 0.45
+lobe_depth = 0.35
 
 [species.habitat]
 # Planted: by the sea, parks and avenues (rows and groves only).

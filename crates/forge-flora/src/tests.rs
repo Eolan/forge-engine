@@ -143,3 +143,46 @@ fn pruning_shapes_the_crown() {
         .count();
     assert_eq!(centre, 0, "wood in the olive's open centre");
 }
+
+/// How round a crown is from above: its outline's least reach over its greatest, the reach the
+/// farthest leaf in each of 24 directions round the leaves' middle.
+fn roundness(g: &TreeGraph) -> f32 {
+    const SECTORS: usize = 24;
+    let n = g.leaves.len().max(1) as f32;
+    let (x, z) = g
+        .leaves
+        .iter()
+        .fold((0.0, 0.0), |(x, z), l| (x + l.pos.x / n, z + l.pos.z / n));
+    let mut reach = [0.0_f32; SECTORS];
+    for l in &g.leaves {
+        let (dx, dz) = (l.pos.x - x, l.pos.z - z);
+        let turn = dz.atan2(dx) / std::f32::consts::TAU + 0.5;
+        let s = ((turn * SECTORS as f32) as usize).min(SECTORS - 1);
+        reach[s] = reach[s].max(dx.hypot(dz));
+    }
+    let most = reach.iter().copied().fold(0.0, f32::max);
+    reach.iter().copied().fold(most, f32::min) / most.max(1e-6)
+}
+
+#[test]
+fn broad_crowns_are_lobed_not_balls() {
+    // The owner, 2026-10-24: every crown the same ball. The lobes make each outline less round
+    // than the same plant's in the smooth envelope.
+    for id in ["holm-oak", "london-plane", "common-lime"] {
+        let sp = crate::species::by_id(&mediterranean(), id).unwrap().clone();
+        let smooth = Species {
+            lobe_depth: 0.0,
+            ..sp.clone()
+        };
+        for seed in 1..=3 {
+            let (lobed, ball) = (
+                roundness(&grown(&sp, seed)),
+                roundness(&grown(&smooth, seed)),
+            );
+            assert!(
+                lobed < ball - 0.04,
+                "{id} seed {seed}: roundness {lobed:.2} lobed, {ball:.2} smooth"
+            );
+        }
+    }
+}

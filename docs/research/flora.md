@@ -50,6 +50,16 @@ and cone; buds grow towards the mean direction of their markers; markers within 
 (kill) radius of new wood are removed. The envelope is the species' crown shape, so the crown's
 silhouette is controlled and its inside emerges.
 *Bearing:* the free-space signal each bud receives (`grow`, step 1).
+*Since 2026-10-24* (the owner: every crown "a strange similar shape, as if the generation stopped
+too early"): a smooth envelope filled evenly grows every broad crown into the same ball, so each
+plant's envelope is the union of a few balls inside the species' profile, each touching it (the
+sub-crowns its main limbs carry), over a core: `lobes`, `lobe_size` and `lobe_depth` per species,
+drawn from a stream of their own so the markers stay where they were. The holm oak takes 10–14
+small domes, the plane 6–9 heavy ones, the cypress barely ripples. The domes deepen with age (at
+a quarter of maturity a third as deep): lobed as a grown one, a young umbrella pine kept half its
+width. And a lifted crown's envelope starts at the lift, as a share of the plant's height, so a
+planted tree grows its whole crown shape over its clear stem; cut at the lift instead, a young
+umbrella pine's cone kept only its narrow top.
 
 **Wojciech Pałubicki, Kipp Horel, Steven Longay, Adam Runions, Brendan Lane, Radomír Měch, Przemyslaw
 Prusinkiewicz. "Self-organizing tree models for image synthesis." *ACM Transactions on Graphics*
