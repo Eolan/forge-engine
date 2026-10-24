@@ -7368,8 +7368,8 @@ impl Scenario for PlanScenario {
                 ladder_px: f32,
             }
             let mut models: std::collections::HashMap<u16, Vec<Grown>> = Default::default();
-            // Each species' impostors (D-075 step 4), one for each age: its kind, the middle of its
-            // baked sphere and the crown it was baked with.
+            // Each species' impostors (D-075 step 4), one for each individual: its kind, the middle
+            // of its baked sphere and the crown it was baked with.
             let mut impostor_kinds: std::collections::HashMap<(u16, u8), (u32, Vec3, f32)> =
                 Default::default();
             let origin = scene_origin(args);
@@ -7383,19 +7383,18 @@ impl Scenario for PlanScenario {
                         let (shadow, _) = cooked.next().expect("a plant's shadow proxy cooked");
                         let proxy = proxies.then(|| builder.add_mesh(&proxy));
                         let id = builder.add_mesh(&mesh);
-                        // The species' last seed of each age is the individual its impostor for
-                        // that age is baked from (`--impostors`, `--impostor-bake`).
-                        let age = individual % forge_flora::grow::AGES;
-                        if let Some(rows) = &bake_rows
-                            && individual + forge_flora::grow::AGES
-                                >= forge_flora::grow::INDIVIDUALS
-                        {
+                        // Each individual has its impostor (`--impostors`, `--impostor-bake`):
+                        // baked from the last seed of each age alone, two trees in three crossed
+                        // to another individual's crown, its top higher or lower, leaning another
+                        // way, and the woods' skyline popped where they crossed (the owner,
+                        // 2026-10-25: "a tree top appearing while moving forward").
+                        if let Some(rows) = &bake_rows {
                             impostor_kinds.insert(
-                                (sp, age),
+                                (sp, individual),
                                 (impostors.len() as u32, Vec3::from(mesh.center), crown),
                             );
                             impostors.push((
-                                format!("{}-{age}", species[usize::from(sp)].id),
+                                format!("{}-{individual}", species[usize::from(sp)].id),
                                 forge_render::impostor::BakeSource {
                                     mesh: mesh.clone(),
                                     rows: rows.clone(),
@@ -7438,7 +7437,10 @@ impl Scenario for PlanScenario {
                             height,
                             crown,
                             centre: Vec3::from(mesh.center),
-                            radius: mesh.radius,
+                            // As the culls measure it, grown round the shells by the ladder: the
+                            // impostor crosses where they do (from the cards' own radius it took
+                            // over at another size, both drawn or neither over a band).
+                            radius: builder.mesh_radius(id),
                             ladder_px,
                         }
                     })
@@ -7460,7 +7462,8 @@ impl Scenario for PlanScenario {
                 };
                 let seeds = grown.len().div_ceil(ages);
                 let k = age + ages * (usize::from(pick) % seeds);
-                let Some(model) = grown.get(k).or(grown.get(age)) else {
+                let k = if k < grown.len() { k } else { age };
+                let Some(model) = grown.get(k) else {
                     continue;
                 };
                 let (id, h, w) = (model.id, model.height, model.crown);
@@ -7492,10 +7495,10 @@ impl Scenario for PlanScenario {
                         ..forge_render::Visibility::ALL
                     },
                 );
-                // Its impostor where its shells fade (`--impostors`): of its species at its age, its
-                // crown as wide as this plant's, its fade measured as the culls measure it.
+                // Its impostor where its shells fade (`--impostors`): its own individual's, its crown as
+                // wide as this plant's, its fade measured as the culls measure it.
                 if drawn_impostors.is_some()
-                    && let Some(&(kind, middle, baked_crown)) = impostor_kinds.get(&(sp, age as u8))
+                    && let Some(&(kind, middle, baked_crown)) = impostor_kinds.get(&(sp, k as u8))
                 {
                     let (scale, rotation, translation) = transform.to_scale_rotation_translation();
                     let place = origin.offset(translation).normalized();

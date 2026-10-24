@@ -1862,6 +1862,13 @@ impl MeshletSceneBuilder {
         self.ladders = true;
     }
 
+    /// The radius of `mesh`'s culling sphere as the culls measure an instance's size from it:
+    /// grown by [`Self::set_ladder`] round its next mesh. Anything that crosses with the culls
+    /// (an impostor taking over where a ladder's last mesh fades) measures from it too.
+    pub fn mesh_radius(&self, mesh: MeshId) -> f32 {
+        self.meshes[mesh.0 as usize].radius
+    }
+
     /// Number of instances so far.
     pub fn instance_count(&self) -> usize {
         self.instances.len()
