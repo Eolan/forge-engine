@@ -19,6 +19,9 @@ pub const PARTY: f64 = 1.5;
 pub const FRONT: f64 = 1.0;
 /// A gate's width, metres: a wheelchair's passage.
 pub const GATE: f64 = 1.2;
+/// How far a gate's side stays from a house its wall runs to, metres: past the bed or the
+/// planter along the house's wall.
+const FROM_HOUSE: f64 = 1.5;
 /// How close a stretch lies to a house's outline or to a wall already kept to count as on it,
 /// metres (the court stands 5 cm in from the lanes, `parcels::strips_by`).
 const ON: f64 = 0.08;
@@ -323,9 +326,26 @@ pub fn garden_walls(
                 })
                 .collect();
             let clear = |x: f64| met.iter().all(|&m| (x - m).abs() >= half);
+            // Clear of a house at either end: a gate against the house's corner opened onto the
+            // planting along its wall (the owner, 2026-10-24: "humans would have put the opening
+            // a bit further from the house wall"). Where the stretch is too short, as before.
+            let at_house = |p: DVec2| {
+                footprints
+                    .iter()
+                    .any(|fp| boundary_distance(fp, p) < THICKNESS + JOIN)
+            };
+            let (lo, hi) = (
+                half + if at_house(s.a) { FROM_HOUSE } else { 0.0 },
+                length - half - if at_house(s.b) { FROM_HOUSE } else { 0.0 },
+            );
+            let (lo, hi) = if lo <= hi {
+                (lo, hi)
+            } else {
+                (half, length - half)
+            };
             let place = std::iter::once(at)
                 .chain(met.iter().flat_map(|&m| [m - half, m + half]))
-                .map(|x| x.clamp(half, length - half))
+                .map(|x| x.clamp(lo, hi))
                 .filter(|&x| clear(x))
                 .min_by(|x, y| {
                     (x - at)

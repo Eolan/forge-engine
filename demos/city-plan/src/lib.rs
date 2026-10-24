@@ -92,6 +92,9 @@ const KIT_PLASTER: u8 = 8;
 /// bouncing round a room took the colour at every bounce, and the halls read orange; with the
 /// facades' grain the walls a step away showed squiggles.
 const KIT_INSIDE: u8 = 15;
+/// How far behind a house's facade its backing stands ([`insides`]), metres: behind the kit's
+/// faces, in front of any reveal's lining.
+const BACKING: f64 = 0.03;
 /// The insides' floors: the stone's colour, smooth (its pits read as squiggles a step away).
 const KIT_INSIDE_FLOOR: u8 = 16;
 /// The insides' joinery: the cupboards' doors under the flights, a waxed oak.
@@ -3844,6 +3847,79 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
                 }
                 if top > y + 0.005 {
                     face(x0, x1, y, top);
+                }
+            }
+            // Behind the facade, [`BACKING`] into the wall, a face turned out to the street in the
+            // facade's plaster, cut at the openings: the kit's pieces meet at the storeys' lines
+            // and the corners on edges that never quite close (each piece placed on its own),
+            // and at night the lit rooms showed through as white flecks in a line (the owner,
+            // 2026-10-24). Hidden but through those cracks. Its ends meet the walls' beside it
+            // on their mitre, so a corner's crack shows it too.
+            let mitre_at = |c: DVec2, u: DVec2, v: DVec2, from_a: bool| {
+                // Where this wall's line, moved in, meets the other's, moved in as far: its place
+                // along this wall from `wall.a`.
+                let (n_u, n_v) = (DVec2::new(-u.y, u.x), DVec2::new(-v.y, v.x));
+                let denom = u.perp_dot(v);
+                if denom.abs() < 1e-6 {
+                    return if from_a { 0.0 } else { length };
+                }
+                // `u` this wall's way, `v` the other's: c + n_u d + u x = c + n_v d + v s.
+                let w = (n_v - n_u) * BACKING;
+                let x = w.perp_dot(v) / denom;
+                (c - wall.a).dot(u) + x
+            };
+            let (xa, xb) = (
+                mitre_at(wall.a, t, along(prev), true),
+                mitre_at(wall.b, t, along(next), false),
+            );
+            let outward = -normal;
+            let facade = KIT_PLASTER + tint_of(m.lot);
+            let mut backing = |x0: f64, x1: f64, y0: f64, y1: f64| {
+                let x0 = if x0 <= 0.0 { xa } else { x0.max(xa) };
+                let x1 = if x1 >= length { xb } else { x1.min(xb) };
+                if x1 < x0 + 0.005 {
+                    return;
+                }
+                let p = wall.a + t * x0 + inward * BACKING;
+                let q = wall.a + t * x1 + inward * BACKING;
+                let (u0, u1) = ((x0 / 3.0) as f32, (x1 / 3.0) as f32);
+                let (v0, v1) = ((-y0 / 3.0) as f32, (-y1 / 3.0) as f32);
+                triangle_uv(
+                    mesh,
+                    [at(p, y0), at(q, y0), at(q, y1)],
+                    [[u0, v0], [u1, v0], [u1, v1]],
+                    outward,
+                    facade,
+                );
+                triangle_uv(
+                    mesh,
+                    [at(p, y0), at(q, y1), at(p, y1)],
+                    [[u0, v0], [u1, v1], [u0, v1]],
+                    outward,
+                    facade,
+                );
+            };
+            for pair in edges.windows(2) {
+                let (x0, x1) = (pair[0], pair[1]);
+                if x1 - x0 < 0.005 {
+                    continue;
+                }
+                let mid = (x0 + x1) * 0.5;
+                let mut over: Vec<(f64, f64)> = holes
+                    .iter()
+                    .filter(|h| h.0 <= mid && mid <= h.1)
+                    .map(|h| (h.2.max(0.0), h.3.min(top)))
+                    .collect();
+                over.sort_by(|p, q| p.0.total_cmp(&q.0));
+                let mut y = 0.0;
+                for (c0, c1) in over {
+                    if c0 > y + 0.005 {
+                        backing(x0, x1, y, c0);
+                    }
+                    y = y.max(c1);
+                }
+                if top > y + 0.005 {
+                    backing(x0, x1, y, top);
                 }
             }
             // Each hole's reveals from where the kit's module stops to the inner face: the
