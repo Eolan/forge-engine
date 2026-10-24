@@ -20,6 +20,9 @@
 //!
 //! A single-player game runs the same server in its own process: there is no other machine to
 //! run the physics on, and nothing changes when a second player joins.
+//!
+//! [`clock::SimClock`] keeps the ticks apart from the frames: a frame hands it its wall time and
+//! runs the whole ticks it holds, a scripted run exactly one a frame (the audit's §4.2).
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -973,6 +976,7 @@ impl<S: Simulation> Client<S> {
 }
 
 pub mod authority;
+pub mod clock;
 pub mod population;
 pub mod rewind;
 pub mod taxi;
