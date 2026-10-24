@@ -7,6 +7,7 @@
 use forge_app::Context;
 use forge_app::settings::{Settings, Spec, Var};
 use forge_render::CullFlags;
+use forge_render::exposure::NO_NIGHT_FLOOR;
 use forge_render::settings::{self as rs, AA_DLAA, AA_DLSS, AA_FSR, AA_OFF};
 
 use crate::Gallery;
@@ -25,6 +26,7 @@ pub(crate) struct RenderVars {
     ao_ignore_nearer: Var<f64>,
     exposure_brighten: Var<f64>,
     exposure_darken: Var<f64>,
+    exposure_night_floor: Var<f64>,
     probes: Var<bool>,
     sky_light: Var<bool>,
     sun_disc: Var<bool>,
@@ -201,6 +203,11 @@ impl Gallery {
                 1.5,
                 self.auto_exposure.speed_darken,
             ),
+            exposure_night_floor: s.add_from_f32(
+                rs::exposure_night_floor(f64::from(NO_NIGHT_FLOOR)),
+                f64::from(NO_NIGHT_FLOOR),
+                self.auto_exposure.night_floor,
+            ),
             probes: s.add_from(rs::probes(true), true, self.probes_on),
             sky_light: s.add_from(rs::sky_light(true), true, self.sky_light),
             sun_disc: s.add_from(
@@ -320,6 +327,9 @@ impl Gallery {
         }
         if s.changed_since(v.exposure_darken, seen) {
             self.auto_exposure.speed_darken = s.get(v.exposure_darken) as f32;
+        }
+        if s.changed_since(v.exposure_night_floor, seen) {
+            self.auto_exposure.night_floor = s.get(v.exposure_night_floor) as f32;
         }
         if changed(v.probes) {
             self.probes_on = s.get(v.probes);

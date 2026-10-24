@@ -36,6 +36,9 @@ const MAX_LOG2: f32 = 8.0;
 /// a third of a stop to adapt away over two seconds.
 const START_READINGS: u32 = 10;
 
+/// [`AutoExposure::night_floor`]'s default, the automatic range's floor: no floor.
+pub const NO_NIGHT_FLOOR: f32 = -6.0;
+
 /// Exposure multiplier for an exposure value at ISO 100: the luminance `1.2 · 2^EV100`
 /// (cd/m²) saturates the sensor and maps to 1.
 pub fn exposure_from_ev100(ev100: f32) -> f32 {
@@ -149,6 +152,10 @@ pub struct AutoExposure {
     pub night_stops: f32,
     /// The metered EV100s where the night's darkening starts and where it is full.
     pub night_ev: (f32, f32),
+    /// At night, the least EV100 the target takes (by the night's share, `night_ev`): a night
+    /// with lamps shown at a lit village's exposure, not the moonlight's. The range's floor, the
+    /// default, changes nothing (D-046's night as it was).
+    pub night_floor: f32,
     /// The stops the night darkened the last metered target by: 0 by day (local exposure's
     /// middle grey follows it, D-067).
     pub night_offset: f32,
@@ -171,6 +178,7 @@ impl AutoExposure {
             speed_brighten: 0.8,
             night_stops: 0.0,
             night_ev: (8.0, -2.0),
+            night_floor: NO_NIGHT_FLOOR,
             night_offset: 0.0,
             readings: 0,
         }
@@ -210,7 +218,14 @@ impl AutoExposure {
             let (from, full) = self.night_ev;
             let night = ((from - metered) / (from - full)).clamp(0.0, 1.0);
             self.night_offset = night * self.night_stops;
-            self.target_ev100 = (metered + self.night_offset).clamp(self.range.0, self.range.1);
+            // A night's floor (`night_floor`, research/home-lighting.md §8.2): keyed on the
+            // moonlit scene, everything over about 2 cd/m² landed near white and the lit windows
+            // glared (the owner, 2026-10-24: "house lights, not spotlights"); a photographer
+            // meters lit buildings at night at EV 2. Not in `night_offset`: local exposure's
+            // middle grey stays the moonlit one, so it lifts the fields the floor darkens.
+            let floor = (self.night_floor - (metered + self.night_offset)).max(0.0) * night;
+            self.target_ev100 =
+                (metered + self.night_offset + floor).clamp(self.range.0, self.range.1);
             if self.readings < START_READINGS {
                 self.ev100 = self.target_ev100;
             }
@@ -504,6 +519,41 @@ mod tests {
         let rock = LuminanceHistogram::from_samples([(0.0, 10_000), (4000.0, 10)], 1e-4);
         space.update(Some(&rock), 1.0 / 60.0);
         assert!((space.ev100 - ev100_from_luminance(4000.0)).abs() < 0.05);
+    }
+
+    /// With `night_floor`, a moonlit night is shown no brighter than the floor; a day, and the
+    /// default floor, as before.
+    #[test]
+    fn a_night_floor_keeps_the_night_from_being_shown_too_bright() {
+        let night =
+            |exposure| LuminanceHistogram::from_samples([(0.01, 9_700), (5.0, 300)], exposure);
+        let settle = |auto: &mut AutoExposure| {
+            for _ in 0..START_READINGS + 2 {
+                auto.update(Some(&night(auto.exposure())), 1.0 / 60.0);
+            }
+        };
+        let mut moon = AutoExposure::new(0.0);
+        moon.night_stops = 2.0;
+        settle(&mut moon);
+        assert!(moon.target_ev100 < 0.0, "{}", moon.target_ev100);
+        let mut floored = AutoExposure::new(0.0);
+        floored.night_stops = 2.0;
+        floored.night_floor = 1.0;
+        settle(&mut floored);
+        assert!(
+            (floored.target_ev100 - 1.0).abs() < 0.05,
+            "{}",
+            floored.target_ev100
+        );
+        // Local exposure's middle grey stays the moonlit one, so it lifts the darkened fields.
+        assert!((floored.night_offset - moon.night_offset).abs() < 1e-6);
+        // By day the floor is far under the metered key: nothing changes.
+        let day = LuminanceHistogram::from_samples([(4000.0, 100)], exposure_from_ev100(15.0));
+        let mut sunny = AutoExposure::new(15.0);
+        sunny.night_stops = 2.0;
+        sunny.night_floor = 1.0;
+        sunny.update(Some(&day), 1.0 / 60.0);
+        assert!((sunny.target_ev100 - ev100_from_luminance(4000.0)).abs() < 0.05);
     }
 
     #[test]

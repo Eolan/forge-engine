@@ -183,6 +183,17 @@ pub fn exposure_compensation(default: f64) -> Spec<f64> {
     )
 }
 
+/// A night's exposure floor (`AutoExposure::night_floor`, research/home-lighting.md §8.2, D-080).
+pub fn exposure_night_floor(default: f64) -> Spec<f64> {
+    Spec::float(
+        "r.exposure.night_floor",
+        default,
+        -6.0..=8.0,
+        "At night, the least EV100 the exposure takes: 1 shows a lit village as a photographer \
+         would, its lamps and windows not blown out; -6 keys the night on the moonlight alone.",
+    )
+}
+
 /// [`local_exposure`]'s choices.
 pub const LOCAL_EXPOSURE: &[&str] = &["off", "on", "view"];
 

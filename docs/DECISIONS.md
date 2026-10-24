@@ -7620,3 +7620,38 @@ own research note first: how those games draw holes, and the patents on parallax
 mapping of decals.
 
 *(research: impact-marks.md, decals.md; D-074, D-007)*
+
+## D-080 — A night with lamps keyed on its lamps 🟡 (proposed 2026-10-24, #354)
+
+**The need:** the owner, on the village at night: the lit windows read "too strong … they are
+house lights, not spotlights". The research (`research/home-lighting.md`) finds Forge's lamps and
+faked windows close to real values (lit windows measure 1–8 cd/m² behind curtains; Forge's are
+about 5). What makes them glare is the exposure: D-046's film night keys the scene on moonlight
+(EV100 about −2), where anything over about 2 cd/m² lands in the top 15 % of the display. A curtained
+window, a lamp-lit wall and a street lamp's pool are squeezed together near white. Photographers
+meter lit buildings at EV 2, and cinematographers set practical lamps 2.5–4 stops over the key.
+
+**Built so far (2026-10-24):** the bloom at night a quarter of the day's; and, opt-in,
+`r.exposure.night_floor` (`AutoExposure::night_floor`, EV100; −6 by default, the automatic range's
+floor: no change): at night the exposure takes no lower EV100 than the floor, by the night's share.
+Local exposure's middle grey stays the moonlit key (the floor is kept out of `night_offset`), so it
+lifts the fields the floor darkens. A first try keyed on the frame's brightest 3 % instead: in the
+village's views those are mostly the lamp-lit paving, not the windows, and it changed nothing.
+Measured at three night views (the owner's): at EV100 0, the windows show their rooms (the shelves,
+the lamp's warm light) instead of white, the lamp-lit lawn and paving stay readable, the moonlit
+facades and the sky go darker; at +1 the street round them is nearly black.
+
+**Proposed:**
+1. `r.exposure.night_floor 0` by default where a scene has lamps (the village, the city), after
+   the owner's look at the A/B shots in the morning report.
+2. Then, the research's other steps, each its own change: shades on the house lamps (two-lobe
+   profiles, the shade glowing about 100 cd/m²); shutters and curtains per window chosen by the
+   household (never by a texture-space floor pattern: Bosch's EP 3238179 B1, granted 2026-02-11, and
+   US 10,380,790 B2); one or two lamps on per occupied home rather than every room; village
+   lanterns at 1,000–1,500 lm on 4–5 m brackets (EN 13201 P4–P3), once the exposure no longer makes
+   real values glare.
+
+**For the owner:** keep the moonlit key (D-046 as is), or floor a night with lamps at EV100 0 (or
+another value from the A/B)?
+
+*(research: home-lighting.md, night-sky.md, local-exposure.md; D-046, D-067)*
