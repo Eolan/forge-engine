@@ -357,8 +357,26 @@ pub fn village(site: &Site, params: &CityParams, seed: u64) -> Village {
             &gardens,
             front,
         );
+        // The room a crown at `p` has (the owner, 2026-10-25: "some bushes in the village are
+        // going through the walls (even some houses here and there)"): to the garden walls past
+        // their whole thickness, either side of their line, and to the houses' walls.
+        let lines: Vec<(DVec2, DVec2)> = garden.walls.iter().map(|w| (w.a, w.b)).collect();
+        let room = |p: DVec2| {
+            let walled = lines
+                .iter()
+                .map(|&(a, b)| geom::distance_to_segment(p, a, b) - walls::THICKNESS);
+            let housed = footprints.iter().flat_map(|f| {
+                (0..f.len()).map(move |k| geom::distance_to_segment(p, f[k], f[(k + 1) % f.len()]))
+            });
+            walled.chain(housed).fold(f64::INFINITY, f64::min)
+        };
+        // A crown of `crown` metres at `p`, narrowed to its room ([`CROWN_CLEAR`], and the
+        // stretch a drawn crown may take, [`CROWN_STRETCH`]).
+        let fit = |crown: f64, p: DVec2| crown.min((room(p) - CROWN_CLEAR) / CROWN_STRETCH);
         city.walls.extend(garden.walls);
-        // The hedges: kermes oaks clipped to a row, 0.9 m apart, 1.4 to 1.8 m high.
+        // The hedges: kermes oaks clipped to a row, 0.9 m apart, 1.4 to 1.8 m high. A hedge runs
+        // from a street wall to a house or another wall: its end plants are narrowed to the room
+        // they have, and left out under [`HEDGE_LEAST`] (they came through the street walls).
         for (h, &(p, q)) in garden
             .hedges
             .iter()
@@ -370,15 +388,32 @@ pub fn village(site: &Site, params: &CityParams, seed: u64) -> Village {
                 SplitMix64::new(seed ^ ((b as u64) << 20) ^ ((h as u64) << 8) ^ 0x004E_D6E5);
             for i in 0..count {
                 let pos = p + (q - p) * ((i as f64 + 0.5) / count as f64);
+                let height = rng.range_f64(1.4, 1.8);
+                let crown = fit(rng.range_f64(0.55, 0.7), pos);
+                if crown < HEDGE_LEAST {
+                    continue;
+                }
                 city.planted.push(Tree {
                     pos,
-                    height: rng.range_f64(1.4, 1.8),
-                    crown: rng.range_f64(0.55, 0.7),
+                    height,
+                    crown,
                     setting: Setting::Garden,
                     species: kermes,
                 });
             }
         }
+        // An olive of a drawn height and crown at `p`, its crown narrowed to its room and its
+        // height with it; none under [`OLIVE_LEAST`].
+        let olive_at = |p: DVec2, height: f64, crown: f64| {
+            let fitted = fit(crown, p);
+            (fitted >= OLIVE_LEAST).then(|| Tree {
+                pos: p,
+                height: height * fitted.min(crown) / crown,
+                crown: fitted.min(crown),
+                setting: Setting::Garden,
+                species: olive,
+            })
+        };
         // The court, the block's common ground: an olive grove, a tree every 8 m on a grid 3 m
         // in from its edges (the owner, 2026-10-16: the middle "should not exist or be common").
         if court.len() >= 3 && geom::signed_area(&court).abs() > 60.0 {
@@ -398,13 +433,8 @@ pub fn village(site: &Site, params: &CityParams, seed: u64) -> Village {
                                 > 3.0
                         });
                     if inside {
-                        city.planted.push(Tree {
-                            pos: p,
-                            height: rng.range_f64(4.5, 7.0),
-                            crown: rng.range_f64(2.0, 3.2),
-                            setting: Setting::Garden,
-                            species: olive,
-                        });
+                        let (height, crown) = (rng.range_f64(4.5, 7.0), rng.range_f64(2.0, 3.2));
+                        city.planted.extend(olive_at(p, height, crown));
                     }
                 }
             }
@@ -446,13 +476,8 @@ pub fn village(site: &Site, params: &CityParams, seed: u64) -> Village {
             };
             let mut rng = SplitMix64::new(seed ^ ((b as u64) << 20) ^ (k as u64) ^ 0x0717_7EE5);
             for p in spots.into_iter().filter(|&p| geom::contains(&ground, p)) {
-                city.planted.push(Tree {
-                    pos: p,
-                    height: rng.range_f64(4.5, 7.0),
-                    crown: rng.range_f64(2.0, 3.2),
-                    setting: Setting::Garden,
-                    species: olive,
-                });
+                let (height, crown) = (rng.range_f64(4.5, 7.0), rng.range_f64(2.0, 3.2));
+                city.planted.extend(olive_at(p, height, crown));
             }
         }
         blocks.push(VillageBlock {
@@ -687,6 +712,20 @@ const LEFTOVER: (f64, f64) = (2.0, 600.0);
 /// The largest pocket closed all round by lots that a lot takes in, m².
 const POCKET: f64 = 30.0;
 
+/// Metres a garden plant's crown keeps from a wall's face or a house's.
+const CROWN_CLEAR: f64 = 0.15;
+
+/// How much wider a drawn crown may stand than planted: the village draws each plant stretched
+/// by up to 8 % along one axis (city-plan's `stretch`).
+const CROWN_STRETCH: f64 = 1.08;
+
+/// The narrowest a hedge's plant may be fitted to its room, metres of crown radius: narrower, it
+/// is left out.
+const HEDGE_LEAST: f64 = 0.3;
+
+/// The narrowest an olive's crown may be fitted to its room, metres: narrower, none stands there.
+const OLIVE_LEAST: f64 = 1.2;
+
 /// `lots` with the ground of `outline` that neither they, the `court` nor the `kept` lots hold
 /// (where the strips of two streets meet in a block's corner, and the lots too small for a
 /// house) each piece given to the lot whose outline it shares most, a metre at least. Left over,
@@ -887,6 +926,46 @@ mod tests {
             println!("{size} m: {houses} houses, blocks {uses:?}");
             assert!(houses >= least, "{size} m: {houses} houses");
         }
+    }
+
+    /// No garden plant's crown reaches into a garden wall or a house (the owner, 2026-10-25:
+    /// "some bushes in the village are going through the walls (even some houses here and
+    /// there)"): every hedge plant and olive keeps its drawn crown clear of their faces.
+    #[test]
+    fn the_gardens_crowns_keep_clear_of_the_walls_and_houses() {
+        let size = 600.0;
+        let v = village(&example::site(size, 10.0), &example::params(size), 1);
+        let houses: Vec<&Vec<DVec2>> = v.houses().map(|h| &h.footprint).collect();
+        let mut checked = 0;
+        for t in v
+            .plan
+            .planted
+            .iter()
+            .filter(|t| t.setting == Setting::Garden)
+        {
+            let wall = v
+                .plan
+                .walls
+                .iter()
+                .map(|w| geom::distance_to_segment(t.pos, w.a, w.b) - walls::THICKNESS)
+                .fold(f64::INFINITY, f64::min);
+            let house = houses
+                .iter()
+                .flat_map(|f| {
+                    (0..f.len())
+                        .map(|k| geom::distance_to_segment(t.pos, f[k], f[(k + 1) % f.len()]))
+                })
+                .fold(f64::INFINITY, f64::min);
+            let reach = t.crown * CROWN_STRETCH;
+            assert!(
+                reach <= wall.min(house) + 1e-9,
+                "a crown of {:.2} m at {:?}: {wall:.2} m from a wall's face, {house:.2} from a house",
+                t.crown,
+                t.pos
+            );
+            checked += 1;
+        }
+        assert!(checked > 100, "{checked} garden plants");
     }
 
     #[test]
