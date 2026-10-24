@@ -349,6 +349,9 @@ bloom; with the anti-aliasing off it shows the frame as drawn, without jitter.
 The DLSS pass
 is a graph pass like any other: it declares every image it hands to Streamline, and its
 output with a `Custom` access, because NGX clears it at the transfer stage before writing it.
+It also takes the frame's reactive mask where there is one (the spray's, the particles', the
+tank's water's: 1 where the history is not to be trusted, as FSR reads it), tagged as its
+bias towards the current colour (2026-10-25, the audit's step 1).
 
 ## 5. Conventions
 

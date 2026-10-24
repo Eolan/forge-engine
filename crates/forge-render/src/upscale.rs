@@ -170,7 +170,9 @@ impl DlssUpscaler {
     /// Declares the pass "temporal/DLSS" that upscales `frame.color` (drawn with `depth`, moved
     /// by `motion` from [`crate::Taa::motion_vectors`]) into the HDR output, and returns it.
     /// `frame_number` identifies the frame to Streamline; `exposure` is the frame's
-    /// pre-exposure.
+    /// pre-exposure; `reactive`, when the frame has one, is the mask FSR reads too (1 where the
+    /// history is not to be trusted: the spray, the particles, the tank's water), which DLSS
+    /// takes as its bias towards the current colour.
     #[allow(clippy::too_many_arguments)]
     pub fn upscale<'f>(
         &'f mut self,
@@ -180,6 +182,7 @@ impl DlssUpscaler {
         camera: UpscaleCamera,
         depth: ImageHandle,
         motion: ImageHandle,
+        reactive: Option<ImageHandle>,
         exposure: f32,
     ) -> Result<ImageHandle> {
         let reset = std::mem::take(&mut self.reset) || frame.reset;
@@ -228,7 +231,7 @@ impl DlssUpscaler {
         let exposure_image = graph.import(&this.exposure);
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
         let color = frame.color;
-        graph
+        let pass = graph
             .pass("temporal/DLSS")
             .image(color, ImageAccess::Sampled(compute))
             .image(depth, ImageAccess::Sampled(compute))
@@ -244,30 +247,35 @@ impl DlssUpscaler {
                         | vk::AccessFlags2::SHADER_STORAGE_READ
                         | vk::AccessFlags2::SHADER_STORAGE_WRITE,
                 },
-            )
-            .run(move |resources, commands| {
-                let sampled = |handle| {
-                    let image = resources.image(handle);
-                    DlssImage {
-                        image,
-                        layout: image.sampled_layout,
-                    }
-                };
-                dlss.evaluate(
-                    commands,
-                    token,
-                    &DlssImages {
-                        color: sampled(color),
-                        depth: sampled(depth),
-                        motion: sampled(motion),
-                        exposure: sampled(exposure_image),
-                        output: DlssImage {
-                            image: resources.image(output),
-                            layout: vk::ImageLayout::GENERAL,
-                        },
+            );
+        let pass = match reactive {
+            Some(mask) => pass.image(mask, ImageAccess::Sampled(compute)),
+            None => pass,
+        };
+        pass.run(move |resources, commands| {
+            let sampled = |handle| {
+                let image = resources.image(handle);
+                DlssImage {
+                    image,
+                    layout: image.sampled_layout,
+                }
+            };
+            dlss.evaluate(
+                commands,
+                token,
+                &DlssImages {
+                    color: sampled(color),
+                    depth: sampled(depth),
+                    motion: sampled(motion),
+                    exposure: sampled(exposure_image),
+                    bias: reactive.map(sampled),
+                    output: DlssImage {
+                        image: resources.image(output),
+                        layout: vk::ImageLayout::GENERAL,
                     },
-                )
-            });
+                },
+            )
+        });
         Ok(output)
     }
 }

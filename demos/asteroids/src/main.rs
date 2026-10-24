@@ -1145,6 +1145,7 @@ impl Demo for Ballad {
                 upscale_camera,
                 targets.depth,
                 motion,
+                None,
                 exposure,
             )?),
             // FSR 3.1 (D-070) on the run's step, fixed in scripted runs.

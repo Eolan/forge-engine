@@ -1812,6 +1812,7 @@ impl Demo for PlanetDemo {
                 upscale_camera,
                 targets.depth,
                 motion,
+                None,
                 exposure,
             )?
         } else if let Some(fsr) = self.fsr.as_mut().filter(|_| fsr_on) {

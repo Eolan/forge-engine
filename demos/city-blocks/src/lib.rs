@@ -559,8 +559,8 @@ pub struct Args {
     /// ReSTIR DI takes them all; the light lists too, for the A/B).
     #[arg(long)]
     all_lamps: bool,
-    /// Draw the spray without the reactive mask, so TAA keeps its history there (the mask's
-    /// A/B, #107).
+    /// Draw the spray, the particles and the tank's water without their reactive mask, so the
+    /// upscaler (DLSS as FSR, 2026-10-25) keeps its history there (the mask's A/B, #107).
     #[arg(long, hide = true)]
     no_reactive: bool,
     /// No rings where the splashes' drops land on still water (#107's A/B for them).
@@ -3838,7 +3838,8 @@ impl Demo for Gallery {
         }
         let (dlaa_on, fsr_on) = (self.dlaa_on, self.fsr_on);
         let shown = if let Some(dlss) = self.dlaa.as_mut().filter(|_| dlaa_on) {
-            // DLAA (D-045): the jittered frame, its depth and motion to DLSS.
+            // DLAA (D-045): the jittered frame, its depth, motion and the reactive mask (the
+            // spray's, the particles', the tank's; as FSR takes it) to DLSS.
             dlss.upscale(
                 &mut frame.graph,
                 ctx.frames_rendered,
@@ -3846,6 +3847,7 @@ impl Demo for Gallery {
                 upscale_camera,
                 targets.depth,
                 motion,
+                reactive.filter(|_| !self.args.no_reactive),
                 exposure,
             )?
         } else if let Some(fsr) = self.fsr.as_mut().filter(|_| fsr_on) {
