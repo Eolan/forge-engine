@@ -9,6 +9,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod alloc_count;
 mod calibration;
 mod camera;
 pub mod console;
@@ -485,6 +486,12 @@ fn run_with<D: Demo>(
         if let Some(cpu) = state.ctx.profile.cpu_run_summary() {
             tracing::info!("cpu: {cpu}");
         }
+        if let Some(mean) = state.allocs.mean() {
+            tracing::info!(
+                "allocations: {mean:.1} per frame over {} frames",
+                state.allocs.frames()
+            );
+        }
         if let Some(light) = state.ctx.output.content_light {
             tracing::info!(
                 "hdr: MaxCLL {:.1} nits, MaxFALL {:.1} nits",
@@ -721,6 +728,8 @@ struct State<D: Demo> {
     /// The game's menu on Esc (#352), and where the cursor stands in the window, pixels.
     menu: menu::Menu,
     cursor: [f32; 2],
+    /// The heap allocations per frame (`alloc-count`), logged at exit.
+    allocs: alloc_count::PerFrame,
     /// The playing audio device, for as long as the run lasts.
     _sound_output: Option<sound::Output>,
     /// The mix written to a file instead (`AppConfig::sound_record`).
@@ -1538,6 +1547,7 @@ impl<D: Demo> State<D> {
             user_header,
             menu: menu::Menu::default(),
             cursor: [0.0; 2],
+            allocs: alloc_count::PerFrame::default(),
             _sound_output: sound_output,
             sound_recorder,
             unmatched_reported: false,
@@ -2202,6 +2212,7 @@ impl<D: Demo> State<D> {
         }
         if !self.ctx.loading && !self.ctx.preparing {
             self.ctx.frames_rendered += 1;
+            self.allocs.end_frame(self.ctx.frames_rendered);
         }
         if let Some(recorder) = &mut self.sound_recorder {
             recorder.advance(dt);

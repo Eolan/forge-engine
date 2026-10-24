@@ -32,10 +32,11 @@
 
 // `unsafe` is confined to `scope.rs`, where borrowed closures are lifetime-extended under the
 // guarantee that the scope waits for every job before returning (the `rayon` / `std::thread::scope`
-// pattern), and to `priority.rs`'s call to the operating system. Every block carries a `SAFETY:`
-// comment.
+// pattern), to `priority.rs`'s call to the operating system, and to `alloc_count.rs`'s allocator
+// wrapper (the `alloc-count` feature). Every block carries a `SAFETY:` comment.
 #![allow(unsafe_code)]
 
+mod alloc_count;
 mod blocking;
 mod counter;
 mod graph;
@@ -46,6 +47,7 @@ mod priority;
 mod scope;
 mod task;
 
+pub use alloc_count::{COUNTING, allocations};
 pub use blocking::BlockingPool;
 pub use counter::Counter;
 pub use graph::{GraphError, GraphRun, NodeId, TaskGraph};

@@ -20,6 +20,9 @@ dlss = ["forge-gpu/dlss"]
 shipping = ["forge-core/shipping"]
 # NVIDIA NRD's SIGMA for the sun's soft shadows (D-049; the library in `nrd-sdk/bin`).
 nrd = ["forge-gpu/nrd"]
+# Every heap allocation counted, the mean per frame logged at exit (`forge_app::alloc_count`,
+# the audit's §2.2).
+alloc-count = ["forge-task/alloc-count"]
 
 [dependencies]
 anyhow = { workspace = true }

@@ -2561,3 +2561,10 @@ probes allows, and the cascades' probes in those rooms retire. The village at 18
 - **Job system**: worker occupancy per frame — arrives with the simulation phase (Tracy shows
   it already under `--features profiling`).
 - **Presentation latency**: the time from submit to scan-out — once the render thread exists.
+- **Allocations per frame** (2026-10-25, the audit's §2.2): with `--features forge-app/alloc-count`
+  the process's allocator counts every heap allocation, and a run logs the mean per frame over
+  the frames after the first sixty at exit (`allocations: N per frame over M frames`). The rule
+  it serves: a steady frame allocates next to nothing. Not measured yet on the main machine; the
+  known per-frame allocations are the render graph's compile (`graph.rs`: the schedule, the
+  placement, two `decl.clone()` per pass and the pass bodies' boxes) and the profiler's
+  `format!` counters.

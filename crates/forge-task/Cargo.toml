@@ -13,6 +13,9 @@ workspace = true
 [features]
 # Job zones and worker thread names in Tracy.
 profiling = ["dep:tracy-client"]
+# Every heap allocation of the process counted (`alloc_count`): the app shell logs the mean per
+# frame at exit (the audit's §2.2, 2026-10-25).
+alloc-count = []
 
 [dependencies]
 core_affinity = { workspace = true }
