@@ -537,8 +537,15 @@ The physics layer's "hits simulated rather than played":
   - a hit clip chosen by the collision and warped (EA's US 10,022,628);
   - EMG-recorded muscle data (EA's US 10,497,163);
   - a struck limb made heavier or longer (Sony's US 11,113,862).
-- **Next:** the fall past a blow's threshold and the get-up, the balance check deciding stagger or
-  fall, bullets' impulses.
+- **The fall and the rise** (the same day): a dog's balance takes its torso's strength, so a blow
+  there staggers it. A blow of 20 N·s or more, or its torso tilting past 50° (the balance check),
+  fells it. It lies slack at 2 % for 1.5 s, then rises over 2 s as its strength and balance come
+  back, its balance unchecked until it is up. A thrown ball fells a dog 5 ticks after leaving the
+  hand (its torso 0.57 → 0.20 m); four seconds on it stands at 0.56 m and walks its round
+  (`a_dog_knocked_down_falls_lies_and_gets_up`). The rise is the dog's balance spring pulling it
+  up, the lab's stand-in: a get-up clip would start from its first frame, never from the frame
+  nearest the ragdoll's pose (EA's US 9,827,496).
+- **Next:** bullets' impulses (#268's shot), a mannequin's fall from its stand.
 
 ## D-013 — Vegetation, impostor ladder, trim sheets ✅ (2026-09-24)
 

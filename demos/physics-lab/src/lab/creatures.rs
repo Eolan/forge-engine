@@ -592,19 +592,41 @@ const RECOVER: f32 = 0.6;
 const NEIGHBOUR: f32 = 0.5;
 /// A slower meeting is a touch, not a blow, m/s.
 const SLOWEST_BLOW: f32 = 0.5;
+/// A dog whose torso tilts further than this from its stance has fallen (the balance check):
+/// the cosine of 50°.
+const FALLEN_TILT: f32 = 0.64;
+/// Ticks a fallen dog lies at its weakest before its strength, and its balance with it, come back
+/// and pull it up.
+const DOWN_TICKS: u32 = 90;
+/// Ticks a fallen dog then takes to rise, its strength and balance recovering, before its balance
+/// is checked again (it is still lying when it starts).
+const RISE_TICKS: u32 = 120;
+/// What a fallen dog's motors and balance keep while it lies: almost none, as a body knocked
+/// down goes slack.
+const DOWN_STRENGTH: f32 = 0.02;
+/// A blow that knocks a dog down outright, N·s: the lab's thrown ball (over 100 N·s on any of its
+/// parts) does; a dog brushing another does not.
+const FALL_BLOW: f32 = 20.0;
 
 /// D-012's strength schedule, Phase 7's hit reactions (`research/hit-reactions.md`): what blows
 /// left of each part's motors. A blow from a moving body lowers the struck part's strength by its
 /// impulse, its parent's and children's by [`NEIGHBOUR`] of that, and every part recovers to full
 /// over [`RECOVER`] seconds while its clip plays on, so the body is knocked off its pose and pulled
-/// back. Simulation state: saved, restored and replayed with the world. The clip is never
-/// switched, nor a part's mass changed (the live claims the research met need either).
+/// back. A dog's balance takes its torso's strength: a blow there staggers it; past
+/// [`FALLEN_TILT`] it has fallen, lies [`DOWN_TICKS`] at its weakest, then its strength and
+/// balance come back and pull it up. Simulation state: saved, restored and replayed with the
+/// world. The clip is never switched or chosen by the hit, nor a part's mass changed (the live
+/// claims the research met need one of these).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct Reactions {
     /// Each creature's parts' strengths, 0 to 1; empty before the first blow (all full).
     strength: Vec<[f32; PARTS]>,
+    /// Each creature's ticks left lying down then rising (0: up).
+    down: Vec<u32>,
     /// The blows taken since the start.
     pub blows: u64,
+    /// The falls since the start.
+    pub falls: u64,
 }
 
 impl Reactions {
@@ -613,34 +635,48 @@ impl Reactions {
         self.strength.get(c).copied().unwrap_or([1.0; PARTS])
     }
 
-    /// The bytes a saved state keeps for `creatures`: the blows' count, then every strength.
+    /// Whether creature `c` lies fallen.
+    #[cfg(test)]
+    pub(super) fn is_down(&self, c: usize) -> bool {
+        self.down.get(c).is_some_and(|&d| d > RISE_TICKS)
+    }
+
+    /// The bytes a saved state keeps for `creatures`: the blows' and the falls' counts, then
+    /// every creature's strengths and its ticks down.
     pub(super) fn save(&self, creatures: usize, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.blows.to_le_bytes());
+        out.extend_from_slice(&self.falls.to_le_bytes());
         for c in 0..creatures {
             for s in self.of(c) {
                 out.extend_from_slice(&s.to_bits().to_le_bytes());
             }
+            let down = self.down.get(c).copied().unwrap_or(0);
+            out.extend_from_slice(&down.to_le_bytes());
         }
     }
 
     /// How many bytes [`Reactions::save`] writes for `creatures`.
     pub(super) fn saved_len(creatures: usize) -> usize {
-        8 + 4 * PARTS * creatures
+        16 + (4 * PARTS + 4) * creatures
     }
 
     /// Back to what `bytes` ([`Reactions::save`]'s, for `creatures`) held.
     pub(super) fn restore(&mut self, creatures: usize, bytes: &[u8]) {
-        let (blows, rest) = bytes.split_at(8);
+        let (counts, rest) = bytes.split_at(16);
+        let (blows, falls) = counts.split_at(8);
         self.blows = u64::from_le_bytes(blows.try_into().expect("8 bytes"));
-        let values: Vec<f32> = rest
+        self.falls = u64::from_le_bytes(falls.try_into().expect("8 bytes"));
+        let words: Vec<u32> = rest
             .as_chunks::<4>()
             .0
             .iter()
-            .map(|&b| f32::from_bits(u32::from_le_bytes(b)))
+            .map(|&b| u32::from_le_bytes(b))
             .collect();
+        let each = PARTS + 1;
         self.strength = (0..creatures)
-            .map(|c| std::array::from_fn(|k| values[c * PARTS + k]))
+            .map(|c| std::array::from_fn(|k| f32::from_bits(words[c * each + k])))
             .collect();
+        self.down = (0..creatures).map(|c| words[c * each + PARTS]).collect();
     }
 }
 
@@ -1255,8 +1291,9 @@ fn facing(yaw: f64) -> Quat {
 }
 
 /// Pushes creature `c`'s root towards its stance (`BALANCE_TURN`, `BALANCE_HEIGHT`), turned by
-/// `yaw` radians about the vertical and raised by `lift` metres (the ground under its paws).
-fn balance(world: &mut World, c: &Creature, yaw: f64, lift: f64, guide: Guide) {
+/// `yaw` radians about the vertical and raised by `lift` metres (the ground under its paws), as
+/// strongly as its torso's `strength` (what blows left of it, [`Reactions`]).
+fn balance(world: &mut World, c: &Creature, yaw: f64, lift: f64, guide: Guide, strength: f32) {
     let (mut at, mut moving) = (Vec::new(), Vec::new());
     world.transforms(&[c.root], &mut at);
     world.velocities(&[c.root], &mut moving);
@@ -1290,7 +1327,11 @@ fn balance(world: &mut World, c: &Creature, yaw: f64, lift: f64, guide: Guide) {
     };
     world.push(
         &[c.root],
-        &[(Vec3::new(side, lift, along), at.position, torque)],
+        &[(
+            strength * Vec3::new(side, lift, along),
+            at.position,
+            strength * torque,
+        )],
     );
 }
 
@@ -1433,7 +1474,7 @@ impl Herd {
                     },
                     Ground::Flat => Guide::Spot(c.stance.position),
                 };
-                balance(world, c, yaw, lift, guide);
+                balance(world, c, yaw, lift, guide, reactions.of(i)[0]);
             }
         }
     }
@@ -1449,15 +1490,26 @@ impl Herd {
     /// the ground, the stands and a creature's own parts deal none. How many blows.
     pub(super) fn react(
         &self,
+        world: &World,
         contacts: &[(Contact, [Option<f32>; 2])],
         reactions: &mut Reactions,
     ) -> usize {
-        reactions
-            .strength
-            .resize(self.creatures.len(), [1.0; PARTS]);
+        let n = self.creatures.len();
+        reactions.strength.resize(n, [1.0; PARTS]);
+        reactions.down.resize(n, 0);
         let step = TICK / RECOVER * (1.0 - WEAKEST);
-        for s in reactions.strength.iter_mut().flatten() {
-            *s = (*s + step).min(1.0);
+        for (strength, down) in reactions.strength.iter_mut().zip(&mut reactions.down) {
+            if *down > RISE_TICKS {
+                // Lying where it fell, slack.
+                *down -= 1;
+                *strength = [DOWN_STRENGTH; PARTS];
+            } else {
+                // Up, or rising: its strength, and its balance with it, coming back.
+                *down = down.saturating_sub(1);
+                for s in strength {
+                    *s = (*s + step).min(1.0);
+                }
+            }
         }
         let part_of = |body: BodyId| {
             self.creatures.iter().enumerate().find_map(|(c, creature)| {
@@ -1465,6 +1517,7 @@ impl Herd {
             })
         };
         let mut blows = 0;
+        let mut knocked = vec![false; n];
         for (contact, masses) in contacts {
             if contact.speed < SLOWEST_BLOW {
                 continue;
@@ -1485,6 +1538,7 @@ impl Herd {
                 let mass = mass.unwrap_or(by);
                 let impulse = mass * by / (mass + by).max(f32::MIN_POSITIVE) * contact.speed;
                 let drop = (impulse / BLOW_FULL).min(1.0) * (1.0 - WEAKEST);
+                knocked[c] |= impulse >= FALL_BLOW;
                 let parts = self.creatures[c].kind.parts();
                 let strength = &mut reactions.strength[c];
                 strength[part] = strength[part].min(1.0 - drop);
@@ -1497,6 +1551,22 @@ impl Herd {
             }
         }
         reactions.blows += blows;
+        // A dog (no stand) knocked down by a blow, or whose torso tilts past `FALLEN_TILT` (the
+        // balance check), has fallen.
+        let roots: Vec<BodyId> = self.creatures.iter().map(|c| c.root).collect();
+        let mut at = Vec::new();
+        world.transforms(&roots, &mut at);
+        for (c, creature) in self.creatures.iter().enumerate() {
+            if creature.stand.is_some() || reactions.down[c] > 0 {
+                continue;
+            }
+            let up = at[c].rotation * (creature.stance.rotation.inverse() * Vec3::Y);
+            if knocked[c] || up.y < FALLEN_TILT {
+                reactions.down[c] = DOWN_TICKS + RISE_TICKS;
+                reactions.strength[c] = [DOWN_STRENGTH; PARTS];
+                reactions.falls += 1;
+            }
+        }
         blows as usize
     }
 

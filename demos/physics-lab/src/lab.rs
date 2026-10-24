@@ -1759,7 +1759,7 @@ impl Simulation for LabWorld {
             // The blows the step dealt them, and their recovery (Phase 7).
             let mut contacts = Vec::new();
             self.contacts(&mut contacts);
-            herd.react(&contacts, &mut self.reactions);
+            herd.react(&self.world, &contacts, &mut self.reactions);
             // Its dogs' paws that came down in the step.
             let beds = &self.beds;
             let came = herd.feel(&self.world, self.tick, &mut self.feet, &|x, z| {
@@ -4244,6 +4244,67 @@ mod tests {
         }
         assert_eq!(third.digest(), first.digest());
         assert_eq!(third.reactions, first.reactions);
+    }
+
+    /// A dog struck hard on its torso falls (the balance check: its torso past 50°), lies at its
+    /// weakest, then its strength and its balance with it come back and pull it onto its feet. A
+    /// run restored while it lies keeps the unbroken run's digests.
+    #[test]
+    fn a_dog_knocked_down_falls_lies_and_gets_up() {
+        const DOG: usize = 3;
+        let (mut first, _) = LabWorld::new(LabScene::Creatures, test_pool()).unwrap();
+        let herd = first.herd.clone().unwrap();
+        let torso = |world: &LabWorld| herd.roots(&world.world)[DOG].1.position;
+        for _ in 0..60 {
+            first.tick(&[]);
+        }
+        let target = torso(&first);
+        let from = target + DVec3::new(0.0, 0.15, 4.0);
+        let throw = [Stamped {
+            tick: 60,
+            player: 0,
+            seq: 0,
+            command: LabCommand::Throw {
+                from: from.as_vec3().to_array(),
+                forward: (target - from).normalize().as_vec3().to_array(),
+            },
+        }];
+        first.tick(&throw);
+        let (mut fell, mut lowest) = (None, f64::MAX);
+        for t in 0..60 {
+            first.tick(&[]);
+            lowest = lowest.min(torso(&first).y);
+            if fell.is_none() && first.reactions.is_down(DOG) {
+                fell = Some(t);
+            }
+        }
+        let standing = target.y;
+        println!(
+            "fell at +{fell:?} ticks, torso {standing:.2} -> {lowest:.2} m, falls {}",
+            first.reactions.falls
+        );
+        assert!(fell.is_some(), "the dog fell");
+        assert!(lowest < 0.35, "down to {lowest:.2} m");
+        // Restored while it lies: the same as the unbroken run.
+        let saved = first.save();
+        let (mut second, _) = LabWorld::new(LabScene::Creatures, test_pool()).unwrap();
+        second.restore(&saved);
+        for _ in 0..30 {
+            first.tick(&[]);
+            second.tick(&[]);
+        }
+        assert_eq!(second.digest(), first.digest());
+        // Up again: four seconds after the throw, on its feet near its standing height.
+        for _ in 0..150 {
+            first.tick(&[]);
+        }
+        let up = torso(&first).y;
+        println!(
+            "four seconds on: torso {up:.2} m, down {}",
+            first.reactions.is_down(DOG)
+        );
+        assert!(!first.reactions.is_down(DOG));
+        assert!(up > 0.45, "up to {up:.2} m");
     }
 
     #[test]

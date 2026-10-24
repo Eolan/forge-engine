@@ -946,6 +946,14 @@ weakens what it strikes, and the motors pull it back:
   children lose half as much.
 - **Strength** scales the part's joint's stiffness, damping and torque
   (`World::drive_ragdoll_with`). Every part recovers to full over 0.6 s while its clip plays on.
+- **A dog's fall:** its balance takes its torso's strength, so a blow there staggers it. A blow of
+  20 N·s or more, or its torso tilting past 50°, fells it: it lies slack (2 %) for 1.5 s, then
+  rises over 2 s as its strength and balance come back. A thrown ball fells it 5 ticks after
+  the throw (its torso 0.57 → 0.20 m); four seconds on it stands at 0.56 m and walks its round.
+  The rise is its balance spring pulling it up (about 40 frames), the lab's stand-in for a get-up.
+  ![The dog felled by a thrown ball](images/lab-dog-fall.png) Frames 280 to 480 at 40 apart: standing,
+  struck, lying 2 m back, still down, up, walking (`--lab creatures --fixed-step --throw-every 300
+  --view=-1.1,0.75,5.6,0,0`).
 - **State:** saved, restored and replayed with the lab's.
 - **Measured:** a ball thrown at the middle mannequin's chest deals 2 blows, the first 5 ticks
   after the throw, its weakest part at 0.10. Every part is back to full two seconds on. A run

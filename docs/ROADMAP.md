@@ -661,7 +661,7 @@ The items below are the phase's original outline; the plan above orders them.
    ground and foot-down events ✅ (#167, `--lab course`).
 2. Motion matching for the player; powered ragdolls tracking poses; hit reactions (the strength
    schedule ✅, 2026-10-24: a blow weakens the struck parts' motors, recovered over 0.6 s, saved
-   and replayed with the world; the fall and the get-up next);
+   and replayed with the world; a dog felled by a hard blow or a tilt past 50° lies, then rises);
    contact events to the material layer (the contacts begun in a step, with where and how fast ✅,
    2026-10-23, `World::contacts`; their sounds by material ✅ the same day: the material record's
    sound layer, both bodies ringing with the softer setting the contact, `physics-lab`'s impacts;
