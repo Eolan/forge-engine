@@ -7038,17 +7038,18 @@ DIR` writes the atlases as images (`forge_render::impostor`, `shaders/impostor.s
   (its alpha); the normals averaged and left that long, shorter where the leaves spread, so lit
   by them a texel gives its leaves' average light (made unit, a crown's spread leaves lit as one
   face, 3 % brighter); beside them the depth, the surface's distance from the middle towards the
-  frame's camera in radii. Then the mips, and the occlusion: from each texel's point every frame
-  read as a shadow map (the point behind the surface that frame saw, its coverage stops the light
-  there), weighted by the cosine with the normal.
+  frame's camera in radii; and the leaves' Fresnel weight towards the frame's camera, Schlick's
+  (1 - n·v)⁵ of each of the 16 render texels averaged (since 2026-10-25, below: it replaced the
+  occlusion, each texel's share of the sky read from every frame as a shadow map). Then the mips.
 - **Memory:** frames of 64 px, not question 7's 128 for the base colour. An impostor begins under
   50 px across (its fade's size and band), so a frame still gives each pixel more than a texel,
   and a kind for each age (its own proportions: the oldest stretched to a young plant's crown read
   squashed, the hedges' shrubs flat) costs less than one a species at 128. Baked in half floats
   (6.7 MB a kind with mips, 180 MB for the village as first built), then block-compressed on
   the GPU (D-047; `shaders/impostor_compress.slang`): the base colour in BC7 (its colour in
-  sRGB), the normals in BC7, the occlusion and the depth in BC5, a BC4 block each. 1.0 MB a kind,
-  27 MB for the village; the half floats are one set shared by the bakes and freed after.
+  sRGB), the normals in BC7, the Fresnel weight (first the occlusion) and the depth in BC5, a BC4
+  block each. 1.0 MB a kind, 27 MB for the village; the half floats are one set shared by the
+  bakes and freed after.
   - **The encoder:** BC7's mode 6 alone (one subset, 4-bit indices), its endpoints at the
     block's extremes along its principal axis, then refitted by least squares (0.1–0.3 dB more);
     BC4 from each block's least and greatest value. First the depth shared the normals' alpha
@@ -7080,7 +7081,8 @@ DIR` writes the atlases as images (`forge_render::impostor`, `shaders/impostor.s
   the far shadows' world (its own proxy and its neighbours', as the far cards' rays), the point
   moved along the view by the frame's noise so that DLAA averages it as SIGMA does the cards'; the
   sky's irradiance, and its reflection (the row's Fresnel and roughness) dimmed by the baked
-  occlusion; the highlight and the light through the leaves. Each term
+  occlusion (since 2026-10-25 the probes' light and the leaves' own Fresnel weight, below); the
+  highlight and the light through the leaves. Each term
   measured against the cards from the air (green, sRGB, by the square): lit without a shadow, 107
   against the cards' 89 (the shells' tone, 0.55 of the leaves', answers the same); without the
   reflection, too green (blue 41 against 54); with its own frames as its shadow map in place of
@@ -7145,6 +7147,35 @@ DIR` writes the atlases as images (`forge_render::impostor`, `shaders/impostor.s
   shadows' world comes with the ladder (60 m). The frame from the air 6.25 → 4.78 ms against the
   cards kept whole (`docs/PROFILE.md`); the impostors' bake adds 1.4 s to a first start, 0.33 s
   from the derived cache.
+- **The far woods' colour** (the owner, 2026-10-25: "a lot of color changes in the distant
+  forest", "the impostor ... far often looks a bit darker"). Measured at a fixed exposure (the
+  metered one moves with what the impostors draw), over the tiles the impostors cover, in the
+  owner's three views and the air view: the impostors stood 1.5–6 levels below the shells they
+  take over from in red and blue, and 0–3 in green, so greener and darker. Taking the leaves'
+  reflection out of the cards and the impostors alike (a scratch resolve) closed the gap to half
+  a level: the cards reflected 1.65–1.8 times the impostors' sky. Two causes, two changes:
+  - **The leaves' own Fresnel weight, baked.** The cards' leaves keep their normals bent out from
+    the crown's middle on both sides, so those at its edges and those seen through its gaps face
+    away and reflect the most; the impostor took Schlick's term at the leaves' averaged normal,
+    which faces the camera (the term is convex: the average of the leaves' is larger). The bake
+    now averages each leaf's into the BC5 atlas the occlusion held, and the reflection is no
+    longer dimmed by the occlusion (the far cards' is not: the screen's occlusion is weak that
+    far). Alone it overshot by a fifth: the cards reflect the probes' light, darker in a wood.
+  - **The probes' light, once a tree.** The vertex shader looks the probes up at the front of the
+    tree's sphere for a normal up and one down, over the open sky's; the sky's light and its
+    reflection are dimmed between the two by the normal. Per pixel the same lookups cost the pass
+    0.17 ms more for no visible gain (a far crown is smaller than the probes' 16–32 m spacing);
+    once a tree, 0.03–0.05 ms.
+  - **After:** within about a level of the shells in every channel (red, green, blue: the
+    flight-in view +1.0, +0.9, +1.2; the meadow +0.4, +0.1, +0.8; the riverbank +0.4, +0.5,
+    +0.6; the air view +1.3, 0.0, +2.3), where they were −1.8, −1.5, −2.8 / −3.7, −3.1, −5.0 /
+    +0.2, +0.7, −0.9 / −6.4, −5.8, −7.9. Tiles of 40 px off the shells by 1.5 levels or more at
+    the default exposure: 41 → 26, 92 → 51, 76 → 30. The bake lost its occlusion pass.
+    Tried and left out: the probes per pixel (above), the clamped cosine over the leaves' spread
+    for the sun (no change: the baked normals agree within a texel), the sky-view table in the
+    mirror direction (the leaves are rough enough that the resolve takes the irradiance alone).
+  - **Left:** against the cards (not the shells) green stays 1.5–3 levels high on the darkest
+    tiles, as the shells' own; the shells were fitted to the cards in luma.
 
 **Micromaps built** (#333, 2026-10-23, question 4's answer), on by default in city-plan, where
 the device has them (`MeshletSceneBuilder::set_opacity_micromaps`, city-blocks' `--omm`,

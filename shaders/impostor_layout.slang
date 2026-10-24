@@ -1,10 +1,9 @@
 // An impostor's layout (D-075 step 4, crates/forge-render/src/impostor.rs): the upper hemisphere
-// unfolded into FRAMES × FRAMES frames, each baked from the direction at its middle, and what a
-// point can learn from them. The atlases: the base colour premultiplied by its coverage, which is
-// its alpha; the normal (× 0.5 + 0.5) and the depth, the surface's distance from the middle
-// towards the frame's camera in radii, premultiplied by the same coverage.
+// unfolded into FRAMES × FRAMES frames, each baked from the direction at its middle. The
+// atlases: the base colour premultiplied by its coverage, which is its alpha; the normal
+// (× 0.5 + 0.5); the leaves' Fresnel weight and the depth, the surface's distance from the
+// middle towards the frame's camera in radii; each premultiplied by the same coverage.
 module impostor_layout;
-import bindless;
 
 public static const uint FRAMES = 8;
 
@@ -54,23 +53,3 @@ public void frames_around(float3 d, out float2 frames[3], out float weights[3])
     weights[2] = lower ? t.y : 1.0 - t.y;
 }
 
-// How much of the light coming along frame `frame`'s direction the mesh itself stops before it
-// reaches `p` (the mesh's frame, in radii of its sphere): the frame's coverage where `p` falls in
-// its picture, when `p` lies more than `bias` behind the surface the frame saw there (the depth
-// as a shadow map's), else nothing. Read at mip `level`, so the leaves' gaps let light through.
-public float frame_occlusion(uint albedo, uint normal, float2 frame, float3 p, float bias, float level)
-{
-    float3 d = frame_direction(frame);
-    float3 right;
-    float3 up;
-    frame_axes(d, right, up);
-    float2 uv = float2(dot(p, right), -dot(p, up)) * 0.5 + 0.5;
-    if (any(uv < 0.0) || any(uv > 1.0))
-        return 0.0;
-    float2 atlas = (frame + uv) / float(FRAMES);
-    float coverage = sample_image_level(albedo, SAMPLER_LINEAR_CLAMP, atlas, level).a;
-    if (coverage <= 1e-3)
-        return 0.0;
-    float front = sample_image_level(normal, SAMPLER_LINEAR_CLAMP, atlas, level).a / coverage;
-    return dot(p, d) < front - bias ? coverage : 0.0;
-}

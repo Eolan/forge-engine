@@ -5,6 +5,7 @@
 import bindless;
 import noise;
 import sh;
+import probes;
 import impostor_layout;
 
 static const float CELL_SIZE = 1024.0;
@@ -32,8 +33,8 @@ struct Impostor
 struct Kind
 {
     uint albedo;      // sampled atlases, premultiplied by coverage, with mips: the base colour
-    uint normal;      // and its coverage; the normal (× 0.5 + 0.5); the share of the sky the
-    uint occlusion;   // point sees past the plant itself and the depth in radii (× 0.5 + 0.5)
+    uint normal;      // and its coverage; the normal (× 0.5 + 0.5); its leaves' Fresnel weight
+    uint fresnel;     // towards the frame's camera and the depth in radii (× 0.5 + 0.5)
     float fade_px;    // its shells' fade (`set_fade`): the size on screen and the band
     float fade_band;
     float radius;     // the sphere its frames were baked around
@@ -90,6 +91,7 @@ struct Frame
     uint64_t tlas;                   // the scene's rays' structure, 0 for none
     float4 cloud_frame;              // the shadow map's first corner (world x, z), 1 / its span
     uint64_t tlas_movers;            // the movers' structure (#79), 0 for none
+    ProbeField* probes;              // this frame's light probes, as the resolve's, or null
 };
 
 struct Push
@@ -109,6 +111,8 @@ struct Varyings
     nointerpolation float3 centre : CENTRE; // the baked sphere's middle from the camera
     nointerpolation uint instance : INSTANCE;
     nointerpolation float crossing : CROSSING;
+    nointerpolation float3 shade_up : SHADE_UP;     // the probes' sky light over the open sky's
+    nointerpolation float3 shade_down : SHADE_DOWN; // for normals up and down (1: no probes)
 };
 
 // The culls' per-instance hash (`hash_unit` in meshlet.slang).
@@ -171,6 +175,22 @@ Varyings impostor_vertex_main(uint vertex : SV_VertexID, uint instance : SV_Inst
     o.centre = rel;
     o.instance = instance;
     o.crossing = t;
+    // The probes' sky light, as the resolve lights the cards and shells, for the whole tree: their
+    // irradiance over the open sky's for a normal up and one down, at its sphere's front (an
+    // outside point, `probe_irradiance_hit`), the same at each of its six vertices. A far crown is
+    // smaller than the probes' spacing there (16 to 32 m): looked up for each pixel, they cost the
+    // pass 0.17 ms more, here 0.04.
+    o.shade_up = float3(1.0);
+    o.shade_down = float3(1.0);
+    if (drawn && f[0].sky != nullptr && f[0].probes != nullptr)
+    {
+        float3 at = f[0].camera_in_scene + rel + eye * radius;
+        float3 up_n = float3(0.0, 1.0, 0.0);
+        float3 open_up = sh_irradiance(f[0].sky, up_n);
+        float3 open_down = sh_irradiance(f[0].sky, -up_n);
+        o.shade_up = probe_irradiance_hit(f[0].probes, at, up_n, eye, open_up, true) / max(open_up, 1e-4);
+        o.shade_down = probe_irradiance_hit(f[0].probes, at, -up_n, eye, open_down, true) / max(open_down, 1e-4);
+    }
     return o;
 }
 
@@ -225,18 +245,18 @@ float4 blended_albedo(Kind kind, Views w, out float coverage[3])
     return albedo;
 }
 
-// The frames' normal, the point seen (moved along each frame's direction by its depth) and the
-// sky it sees, blended and premultiplied by the coverage.
-void blend_rest(Kind kind, Views w, float coverage[3], out float3 normal, out float3 point, out float open)
+// The frames' normal, the point seen (moved along each frame's direction by its depth) and its
+// leaves' Fresnel weight, blended and premultiplied by the coverage.
+void blend_rest(Kind kind, Views w, float coverage[3], out float3 normal, out float3 point, out float schlick)
 {
     normal = float3(0.0);
     point = float3(0.0);
-    open = 0.0;
+    schlick = 0.0;
     for (uint k = 0; k < 3; k++)
     {
         normal += w.weight[k] * sample_image_grad(kind.normal, SAMPLER_LINEAR_CLAMP, w.atlas[k], w.dx[k], w.dy[k]).rgb;
-        float2 o = sample_image_grad(kind.occlusion, SAMPLER_LINEAR_CLAMP, w.atlas[k], w.dx[k], w.dy[k]).rg;
-        open += w.weight[k] * o.x;
+        float2 o = sample_image_grad(kind.fresnel, SAMPLER_LINEAR_CLAMP, w.atlas[k], w.dx[k], w.dy[k]).rg;
+        schlick += w.weight[k] * o.x;
         point += w.weight[k] * (w.plane[k] * coverage[k] + w.direction[k] * ((o.y * 2.0 - 1.0) * kind.radius));
     }
 }
@@ -319,8 +339,8 @@ Shaded shade(Varyings v)
         discard;
     float3 normal;
     float3 point;
-    float open;
-    blend_rest(kind, w, coverages, normal, point, open);
+    float schlick;
+    blend_rest(kind, w, coverages, normal, point, schlick);
     float coverage = max(albedo.a, 1e-4);
     // Its own instance's mix of its leaves' colours over the bake's (their mean), on the leaves
     // alone, told by their colour: the wood is not green (with the leaves' ratio, up to twice
@@ -353,23 +373,31 @@ Shaded shade(Varyings v)
         shadow = sun_blocked(f, relative + wander * (SHADOW_WANDER * kind.radius * imp.scale), sun) ? 0.0 : 1.0;
         shadow *= cloud_light(f, f[0].camera_in_scene + relative, sun);
     }
-    // The sky's light on leaves that agree that much: from their normal's, towards its mean.
-    float3 sky = f[0].sky != nullptr
-        ? lerp(f[0].sky[0].xyz * 0.282095, sh_irradiance(f[0].sky, n), agree)
-        : float3(0.03);
+    // The sky's light on leaves that agree that much: from their normal's, towards the mean of its
+    // two sides; each dimmed as the probes found it for the tree, between down and up by the
+    // normal. With the open sky's, the crowns in a wood's shade were 2 to 4 levels too bright
+    // beside the cards and shells, and reflected 1.2 times their sky.
+    float3 sky = float3(0.03);
+    if (f[0].sky != nullptr)
+    {
+        float3 front = sh_irradiance(f[0].sky, n) * lerp(v.shade_down, v.shade_up, n.y * 0.5 + 0.5);
+        float3 back = sh_irradiance(f[0].sky, -n) * lerp(v.shade_down, v.shade_up, 0.5 - n.y * 0.5);
+        sky = lerp(0.5 * (front + back), front, agree);
+    }
     // As `sun_light` lights a rough row: the diffuse part less what it reflects, the sun's
     // highlight, and the sky's light reflected (`sky_reflection`: a row this rough reflects the
     // irradiance), with the light through the leaves (`leaf_transmission`).
-    // The sky's reflection dimmed by the share of the sky the point sees past the plant (the
-    // reflection's occlusion in `sky_reflection`): undimmed, it paled the olives. Its diffuse
-    // light is not, as the shells' and the far cards' are not (the screen's occlusion is weak that
-    // far): dimmed, the crowns in shade read near black beside their shells.
-    float ao = saturate(open / coverage);
+    // Its Fresnel term is its leaves' own, each leaf's averaged in the bake: the cards' leaves keep
+    // their normals bent out from the crown's middle, so those at its edges and those seen through
+    // its gaps face away and reflect the most. Taken at the leaves' averaged normal, it reflected
+    // 0.6 of the cards' sky: their red and blue 3 to 5 levels low, the far woods greener than the
+    // cards they take over from (the owner, 2026-10-25: "a lot of color changes in the distant
+    // forest"). Undimmed, as the far cards' reflection is (the screen's occlusion is weak that
+    // far), as their diffuse light is.
     float roughness = sqrt(sqrt(2.0 / (kind.power + 2.0)));
     float f0 = kind.reflectance;
-    float nv = saturate(dot(n, view));
-    float fresnel = f0 + (max(1.0 - roughness, f0) - f0) * pow(1.0 - nv, 5.0);
-    float reflected = fresnel * saturate(pow(nv + ao, exp2(-16.0 * roughness - 1.0)) - 1.0 + ao);
+    float fresnel = f0 + (max(1.0 - roughness, f0) - f0) * saturate(schlick / coverage);
+    float reflected = fresnel;
     float highlight = ndl > 0.0 ? pow(max(dot(n, normalize(sun + view)), 0.0), kind.power) * kind.specular : 0.0;
     float3 l = normalize(sun + n * LEAF_DISTORTION);
     float lobe = pow(saturate(dot(view, -l)), LEAF_POWER);

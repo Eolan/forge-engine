@@ -10,10 +10,10 @@
 //!   ([`frames_for`]), which are blended by its barycentric weights, so a turning camera never
 //!   jumps from one frame to the next.
 //! - **The bake** ([`ImpostorBaker`]), before the run's first counted frame: each frame drawn by
-//!   the meshlet renderer unlit, its base colour and its normals with their depth; then the
-//!   occlusion, every frame read as a shadow map from each texel's point; then every level
-//!   block-compressed (BC7 and BC5, `shaders/impostor_compress.slang`). The blocks are kept in
-//!   the derived cache (D-053): a start that finds a kind there copies them in instead.
+//!   the meshlet renderer unlit, its base colour and its normals, with their leaves' Fresnel
+//!   weight and depth; then every level block-compressed (BC7 and BC5,
+//!   `shaders/impostor_compress.slang`). The blocks are kept in the derived cache (D-053): a
+//!   start that finds a kind there copies them in instead.
 //! - **The draw** ([`Impostors`]), after the resolve: where an instance's meshes fade, its
 //!   impostor takes the pixels they leave, its depth where the bake saw the leaves, lit as the
 //!   resolve lights a rough row (`shaders/impostor_draw.slang`).
@@ -58,10 +58,10 @@ const RENDER_TEXELS: u32 = FRAME_TEXELS * SAMPLES;
 /// How far the bake's camera stands from the mesh's middle, in radii of its sphere: near
 /// enough to a parallel view that the frames show it without perspective.
 const CAMERA_DISTANCE: f32 = 1000.0;
-/// The atlases a bake makes: the base colour and its coverage, the normals and the depth, then
-/// the occlusion.
+/// The atlases a bake makes: the base colour and its coverage, the normals, and the leaves'
+/// Fresnel weight and the depth.
 const ATLASES: usize = 3;
-/// The atlases drawn frame by frame; the occlusion is made from them.
+/// The atlases drawn frame by frame (the normals' draw also makes the Fresnel atlas).
 const RENDERED: u32 = 2;
 /// Each atlas's format while baked: half floats.
 const WORK_FORMATS: [vk::Format; ATLASES] = [
@@ -70,8 +70,8 @@ const WORK_FORMATS: [vk::Format; ATLASES] = [
     vk::Format::R16G16_SFLOAT,
 ];
 /// Each atlas's format as drawn, block-compressed (D-047) once baked: the base colour in BC7,
-/// its colour in sRGB; the normals in BC7; the occlusion and the depth in BC5, a BC4 block each
-/// (`shaders/impostor_compress.slang`).
+/// its colour in sRGB; the normals in BC7; the Fresnel weight and the depth in BC5, a BC4 block
+/// each (`shaders/impostor_compress.slang`).
 const ATLAS_FORMATS: [vk::Format; ATLASES] = [
     vk::Format::BC7_SRGB_BLOCK,
     vk::Format::BC7_UNORM_BLOCK,
@@ -299,10 +299,10 @@ impl From<&AtlasBlocks> for BakedAtlases {
             }
         };
         let unorm = |c: u8| f32::from(c) / 255.0;
-        // BC5: the occlusion's BC4 block, then the depth's.
+        // BC5: the Fresnel weight's BC4 block, then the depth's.
         let bc5 = |block: &[u32]| {
-            let (occlusion, depth) = (decode_bc4(&block[..2]), decode_bc4(&block[2..]));
-            std::array::from_fn::<_, 16, _>(|i| (occlusion[i], depth[i] * 2.0 - 1.0))
+            let (fresnel, depth) = (decode_bc4(&block[..2]), decode_bc4(&block[2..]));
+            std::array::from_fn::<_, 16, _>(|i| (fresnel[i], depth[i] * 2.0 - 1.0))
         };
         let rest = decode_level(found.first_level(2), 4, bc5, |t| t);
         Self {
@@ -316,7 +316,7 @@ impl From<&AtlasBlocks> for BakedAtlases {
             .zip(&rest)
             .map(|(n, &(_, depth))| [n[0], n[1], n[2], depth])
             .collect(),
-            occlusion: rest.iter().map(|&(occlusion, _)| occlusion).collect(),
+            fresnel: rest.iter().map(|&(fresnel, _)| fresnel).collect(),
         }
     }
 }
@@ -332,8 +332,9 @@ pub struct BakedAtlases {
     /// the mesh's middle towards the frame's camera, in radii of its sphere; both premultiplied
     /// by the coverage (the base colour's alpha).
     pub normal: Vec<[f32; 4]>,
-    /// The share of the sky the point sees past the mesh itself, premultiplied by the coverage.
-    pub occlusion: Vec<f32>,
+    /// The leaves' Fresnel weight towards the frame's camera, Schlick's (1 - n·v)⁵ of each leaf
+    /// averaged, premultiplied by the coverage.
+    pub fresnel: Vec<f32>,
 }
 
 /// The downsample's push constants (`Push` in `shaders/impostor.slang`).
@@ -346,17 +347,9 @@ struct DownsamplePush {
     samples: u32,
     normals: u32,
     depth: u32,
-    pad: u32,
-}
-
-/// The occlusion's push constants (`OcclusionPush` in `shaders/impostor.slang`).
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct OcclusionPush {
-    albedo: u32,
-    normal: u32,
-    occlusion: u32,
-    pad: u32,
+    /// With `normals`: the Fresnel atlas's first level, which takes the texels' Fresnel weight and
+    /// depth.
+    fresnel: u32,
 }
 
 /// The compression's push constants (`Push` in `shaders/impostor_compress.slang`).
@@ -419,7 +412,7 @@ fn declare_mips<'f>(graph: &mut FrameGraph<'f>, image: ImageHandle, pipeline: &'
                         samples: 2,
                         normals: 0,
                         depth: 0,
-                        pad: 0,
+                        fresnel: 0,
                     },
                 );
                 commands.dispatch(side.div_ceil(8), side.div_ceil(8), 1);
@@ -430,7 +423,7 @@ fn declare_mips<'f>(graph: &mut FrameGraph<'f>, image: ImageHandle, pipeline: &'
 
 /// What every bake shares: the renderer (its resolve compiled from `meshlet_bake.slang` once),
 /// the render a frame is drawn into, the atlases while baked (one bake at a time), the
-/// downsample, the mips (RGBA and RG), the occlusion and the compressions (BC7 and BC5).
+/// downsample, the mips (RGBA and RG) and the compressions (BC7 and BC5).
 struct BakeTools {
     renderer: MeshletRenderer,
     render: GraphImage,
@@ -438,7 +431,6 @@ struct BakeTools {
     downsample: Pipeline,
     mips: Pipeline,
     mips_rg: Pipeline,
-    occlusion: Pipeline,
     bc7: Pipeline,
     bc5: Pipeline,
 }
@@ -502,16 +494,11 @@ impl ImpostorBaker {
                 work: [
                     work(0, "impostor albedo (baked)")?,
                     work(1, "impostor normal (baked)")?,
-                    work(2, "impostor occlusion (baked)")?,
+                    work(2, "impostor fresnel (baked)")?,
                 ],
                 downsample: compute("impostor_downsample_main", "impostor downsample", push)?,
                 mips: compute("impostor_mip_main", "impostor mips", push)?,
                 mips_rg: compute("impostor_mip_rg_main", "impostor mips (rg)", push)?,
-                occlusion: compute(
-                    "impostor_occlusion_main",
-                    "impostor occlusion",
-                    std::mem::size_of::<OcclusionPush>(),
-                )?,
                 bc7: compute_in(
                     "impostor_compress.slang",
                     "impostor_bc7_main",
@@ -600,9 +587,9 @@ impl ImpostorBaker {
 /// [`CAMERA_DISTANCE`] radii off, its sphere filling the picture, at full detail; the resolve
 /// writes its base colour or its normal unlit ([`CullFlags::BAKE_ALBEDO`],
 /// [`CullFlags::BAKE_NORMAL`]), and the downsample takes the render into the frame's square of
-/// the atlas while baked ([`BakeTools`]' half floats), the normals with the render's depth.
-/// Then the two atlases' mips are made, the occlusion from them and its mips, every level of
-/// the three compressed into blocks (`shaders/impostor_compress.slang`), and the blocks copied
+/// the atlas while baked ([`BakeTools`]' half floats), the normals with their leaves' Fresnel
+/// weight and the render's depth into the third. Then the atlases' mips are made, every level
+/// of the three compressed into blocks (`shaders/impostor_compress.slang`), and the blocks copied
 /// into the atlases drawn and read back. Found in the derived cache, its blocks are copied in
 /// instead, in one frame.
 pub struct ImpostorBake {
@@ -693,7 +680,7 @@ impl ImpostorBake {
             atlases: [
                 atlas(0, "impostor albedo")?,
                 atlas(1, "impostor normal")?,
-                atlas(2, "impostor occlusion")?,
+                atlas(2, "impostor fresnel")?,
             ],
             blocks: GraphBuffer::new(blocks),
             key,
@@ -861,9 +848,11 @@ impl ImpostorBake {
             AmbientLight::default(),
         );
         let atlas = graph.import(&tools.work[atlas_index]);
+        let normals = atlas_index == 1;
+        let fresnel = normals.then(|| graph.import(&tools.work[2]));
         let downsample = &tools.downsample;
         let tile = frame * FRAME_TEXELS;
-        graph
+        let mut pass = graph
             .pass("impostor/downsample")
             .image(
                 render,
@@ -876,30 +865,35 @@ impl ImpostorBake {
             .image(
                 atlas,
                 ImageAccess::StorageWrite(vk::PipelineStageFlags2::COMPUTE_SHADER),
-            )
-            .run(move |resources, commands| {
-                commands.bind_pipeline(downsample);
-                commands.push_constants(
-                    downsample,
-                    &DownsamplePush {
-                        source: resources.storage(render, 0).0,
-                        atlas: resources.storage(atlas, 0).0,
-                        tile: tile.to_array(),
-                        samples: SAMPLES,
-                        normals: u32::from(atlas_index == 1),
-                        depth: resources.sampled(depth).0,
-                        pad: 0,
-                    },
-                );
-                commands.dispatch(FRAME_TEXELS / 8, FRAME_TEXELS / 8, 1);
-                Ok(())
-            });
+            );
+        if let Some(fresnel) = fresnel {
+            pass = pass.image(
+                fresnel,
+                ImageAccess::StorageWrite(vk::PipelineStageFlags2::COMPUTE_SHADER),
+            );
+        }
+        pass.run(move |resources, commands| {
+            commands.bind_pipeline(downsample);
+            commands.push_constants(
+                downsample,
+                &DownsamplePush {
+                    source: resources.storage(render, 0).0,
+                    atlas: resources.storage(atlas, 0).0,
+                    tile: tile.to_array(),
+                    samples: SAMPLES,
+                    normals: u32::from(normals),
+                    depth: resources.sampled(depth).0,
+                    fresnel: fresnel.map_or(u32::MAX, |f| resources.storage(f, 0).0),
+                },
+            );
+            commands.dispatch(FRAME_TEXELS / 8, FRAME_TEXELS / 8, 1);
+            Ok(())
+        });
         Ok(())
     }
 
-    /// Declares the end of a fresh bake into `graph`: the base colour's and the normals' mips,
-    /// the occlusion from them and its mips, then every level of the three compressed into
-    /// `blocks`.
+    /// Declares the end of a fresh bake into `graph`: the three atlases' mips, then every level
+    /// of the three compressed into `blocks`.
     fn compress<'f>(
         &'f self,
         tools: &'f BakeTools,
@@ -907,31 +901,10 @@ impl ImpostorBake {
         blocks: BufferHandle,
     ) {
         let work = tools.work.each_ref().map(|atlas| graph.import(atlas));
-        // The base colour's and the normals' mips first: the occlusion reads them.
         declare_mips(graph, work[0], &tools.mips);
         declare_mips(graph, work[1], &tools.mips);
-        let occlusion = &tools.occlusion;
-        let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
-        graph
-            .pass("impostor/occlusion")
-            .image(work[0], ImageAccess::Sampled(compute))
-            .image(work[1], ImageAccess::Sampled(compute))
-            .image(work[2], ImageAccess::StorageWrite(compute))
-            .run(move |resources, commands| {
-                commands.bind_pipeline(occlusion);
-                commands.push_constants(
-                    occlusion,
-                    &OcclusionPush {
-                        albedo: resources.sampled(work[0]).0,
-                        normal: resources.sampled(work[1]).0,
-                        occlusion: resources.storage(work[2], 0).0,
-                        pad: 0,
-                    },
-                );
-                commands.dispatch(ATLAS_TEXELS / 8, ATLAS_TEXELS / 8, 1);
-                Ok(())
-            });
         declare_mips(graph, work[2], &tools.mips_rg);
+        let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
         let address = self.blocks.address();
         for (index, &image) in work.iter().enumerate() {
             let (pipeline, flags) = match index {
@@ -967,8 +940,8 @@ impl ImpostorBake {
 
     /// Writes the atlases as PNG images to `dir`, for review: `{name}-albedo.png` in sRGB with
     /// its coverage as alpha, `{name}-normal.png`, `{name}-depth.png` (grey, the middle's plane
-    /// mid-grey, a radius towards the camera white) and `{name}-occlusion.png` (white: all the
-    /// sky seen), with the same alpha.
+    /// mid-grey, a radius towards the camera white) and `{name}-fresnel.png` (white: all the
+    /// sky reflected), with the same alpha.
     pub fn write_png(
         atlases: &BakedAtlases,
         dir: &std::path::Path,
@@ -992,9 +965,9 @@ impl ImpostorBake {
                 .albedo
                 .iter()
                 .zip(&atlases.normal)
-                .zip(&atlases.occlusion)
-                .flat_map(|((&albedo, &normal), &occlusion)| {
-                    let [r, g, b] = texel(albedo, normal, occlusion);
+                .zip(&atlases.fresnel)
+                .flat_map(|((&albedo, &normal), &fresnel)| {
+                    let [r, g, b] = texel(albedo, normal, fresnel);
                     [r, g, b, unorm(albedo[3])]
                 })
                 .collect();
@@ -1020,7 +993,7 @@ impl ImpostorBake {
             let d = unorm(straight(n, a[3])[3] * 0.5 + 0.5);
             [d, d, d]
         })?;
-        save(dir.join(format!("{name}-occlusion.png")), &|a, _, o| {
+        save(dir.join(format!("{name}-fresnel.png")), &|a, _, o| {
             let o = unorm(o / a[3].max(1e-4));
             [o, o, o]
         })
@@ -1117,6 +1090,9 @@ pub struct ImpostorView {
     /// The movers' structure (`SceneRays::movers_address`) and its storage this frame
     /// (`MoversFrame::tlas`), which the sun's shadow rays also meet; `None`: no movers.
     pub movers_tlas: Option<(u64, BufferHandle)>,
+    /// The probes' light, as the resolve's ([`crate::AmbientLight::probes`]): the sky's light on
+    /// each impostor where they reach, under a sky; `None`: the open sky's.
+    pub probes: Option<crate::probes::ProbeLight>,
     /// The render's size.
     pub extent: vk::Extent2D,
 }
@@ -1144,7 +1120,7 @@ struct GpuImpostor {
 struct GpuKind {
     albedo: u32,
     normal: u32,
-    occlusion: u32,
+    fresnel: u32,
     fade_px: f32,
     fade_band: f32,
     radius: f32,
@@ -1184,6 +1160,7 @@ struct GpuImpostorFrame {
     /// Its first corner (world x, z), 1 / the metres it spans, 0 (`CloudShadow::frame`).
     cloud_frame: [f32; 4],
     tlas_movers: u64,
+    probes: u64,
 }
 
 const _: () = assert!(std::mem::size_of::<GpuImpostor>() == 80);
@@ -1192,6 +1169,7 @@ const _: () = assert!(std::mem::offset_of!(GpuImpostorFrame, instances) == 224);
 // std430's places for the fields after the pointers (a `float4` at 16 bytes).
 const _: () = assert!(std::mem::offset_of!(GpuImpostorFrame, cloud_frame) == 256);
 const _: () = assert!(std::mem::offset_of!(GpuImpostorFrame, tlas_movers) == 272);
+const _: () = assert!(std::mem::offset_of!(GpuImpostorFrame, probes) == 280);
 
 /// The impostors drawn (D-075 step 4): far plants as quads facing the camera, each showing its
 /// kind's atlases blended from the three frames around the view, drawn after the resolve and
@@ -1223,7 +1201,7 @@ impl Impostors {
             .map(|k| GpuKind {
                 albedo: k.atlases[0].sampled().0,
                 normal: k.atlases[1].sampled().0,
-                occlusion: k.atlases[2].sampled().0,
+                fresnel: k.atlases[2].sampled().0,
                 fade_px: k.fade_px,
                 fade_band: k.fade_band,
                 radius: k.radius,
@@ -1352,6 +1330,7 @@ impl Impostors {
         let camera = view.camera.normalized();
         let frame_buffer = &self.frames[slot.index];
         let clouds = view.clouds;
+        let probes = view.sky.and(view.probes);
         // Written when the pass runs, where the cloud map's index is known.
         let mut block = GpuImpostorFrame {
             view_proj: view.view_proj.to_cols_array(),
@@ -1375,6 +1354,7 @@ impl Impostors {
             tlas: view.tlas,
             cloud_frame: clouds.map_or([0.0; 4], |c| c.frame),
             tlas_movers: view.movers_tlas.map_or(0, |(address, _)| address),
+            probes: probes.map_or(0, |p| p.address),
         };
         let address = frame_buffer.address();
         let atlases: Vec<ImageHandle> = self
@@ -1394,11 +1374,21 @@ impl Impostors {
         if let Some(motion) = motion {
             pass = pass.image(motion, ImageAccess::ColorAttachment);
         }
+        let vertex = vk::PipelineStageFlags2::VERTEX_SHADER;
         if let Some(sky) = view.sky {
-            pass = pass.buffer(sky.buffer, BufferAccess::ShaderRead(fragment));
+            // The vertex shader reads it too, with the probes (written on the compute queue: a
+            // stage the graph is not told of is neither waited for nor barriered, #71).
+            pass = pass.buffer(sky.buffer, BufferAccess::ShaderRead(vertex | fragment));
         }
         if let Some(c) = clouds {
             pass = pass.image(c.image, ImageAccess::Sampled(fragment));
+        }
+        if let Some(p) = probes {
+            pass = pass
+                .buffer(p.data, BufferAccess::ShaderRead(vertex))
+                .buffer(p.region, BufferAccess::ShaderRead(vertex))
+                .image(p.irradiance, ImageAccess::Sampled(vertex))
+                .image(p.distance, ImageAccess::Sampled(vertex));
         }
         if let Some(storage) = view.static_tlas.filter(|_| view.tlas != 0) {
             pass = pass.buffer(storage, BufferAccess::AccelerationStructureRead(fragment));

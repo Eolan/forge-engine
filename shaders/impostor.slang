@@ -1,5 +1,5 @@
-// Impostors (D-075 step 4, #302): the bake's frames taken into their atlases, the atlases' mips
-// and the occlusion. Driven by crates/forge-render/src/impostor.rs.
+// Impostors (D-075 step 4, #302): the bake's frames taken into their atlases and the atlases'
+// mips. Driven by crates/forge-render/src/impostor.rs.
 import bindless;
 import impostor_layout;
 
@@ -15,7 +15,7 @@ struct Push
     uint samples;    // the render's texels a side per atlas texel
     uint normals;    // 1: the render holds normals (× 0.5 + 0.5)
     uint depth;      // with `normals`: the render's depth (sampled, reversed-Z infinite)
-    uint pad;
+    uint fresnel;    // with `normals`: the Fresnel atlas's first level (a storage image, rg16f)
 };
 
 // How far the bake's camera stands from the mesh's middle, in radii (CAMERA_DISTANCE in
@@ -28,9 +28,10 @@ Push push;
 // One atlas texel, premultiplied by its coverage (so its mips are plain averages): the average of
 // its `samples`² render texels, each weighted by its coverage (an edge keeps the leaf's colour,
 // not the background's), times the share covered, which is its alpha. Normals are averaged as
-// vectors; their alpha is the depth instead, the surface's distance from the
-// mesh's middle towards the frame's camera in radii, averaged and premultiplied the same way (the
-// base colour's alpha is the coverage).
+// vectors. With them, into the Fresnel atlas, premultiplied the same way: the leaves' Fresnel
+// weight towards the frame's camera, Schlick's (1 - n·v)⁵ of each leaf averaged
+// (`impostor_draw.slang` reflects the sky by it), and the depth, the surface's distance from the
+// mesh's middle towards the frame's camera in radii.
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void impostor_downsample_main(uint3 id : SV_DispatchThreadID)
@@ -41,6 +42,8 @@ void impostor_downsample_main(uint3 id : SV_DispatchThreadID)
     float3 sum = float3(0.0);
     float covered = 0.0;
     float depth = 0.0;
+    float fresnel = 0.0;
+    float3 towards = frame_direction(float2(push.tile / FRAME_TEXELS));
     for (uint y = 0; y < n; y++)
     {
         for (uint x = 0; x < n; x++)
@@ -54,6 +57,9 @@ void impostor_downsample_main(uint3 id : SV_DispatchThreadID)
                 // Reversed-Z infinite: the view distance is near / z.
                 float z = g_sampled_images_r[NonUniformResourceIndex(push.depth)].Load(int3(at, 0));
                 depth += s.a * (CAMERA_DISTANCE - (CAMERA_DISTANCE - 2.0) / max(z, 1e-6));
+                float3 normal = s.rgb * 2.0 - 1.0;
+                float nv = saturate(dot(normal, towards) / max(length(normal), 1e-6));
+                fresnel += s.a * pow(1.0 - nv, 5.0);
             }
         }
     }
@@ -61,8 +67,12 @@ void impostor_downsample_main(uint3 id : SV_DispatchThreadID)
     // average of its leaves' light (a unit normal lit the spread leaves of a crown as one face).
     float3 value = covered > 0.0 ? sum / covered : float3(0.0);
     float alpha = covered / float(n * n);
-    float last = push.normals != 0u ? depth / float(n * n) : alpha;
-    atlas[push.tile + id.xy] = float4(value * alpha, last);
+    atlas[push.tile + id.xy] = float4(value * alpha, alpha);
+    if (push.normals != 0u)
+    {
+        RWTexture2D<float2> target = g_storage_images_rg16f[NonUniformResourceIndex(push.fresnel)];
+        target[push.tile + id.xy] = float2(fresnel, depth) / float(n * n);
+    }
 }
 
 // One texel of the next mip: the average of its four in the finer one. The frames' sides are
@@ -79,7 +89,7 @@ void impostor_mip_main(uint3 id : SV_DispatchThreadID)
     level[id.xy] = 0.25 * (finer[p] + finer[p + uint2(1, 0)] + finer[p + uint2(0, 1)] + finer[p + uint2(1, 1)]);
 }
 
-// The same for the occlusion atlas (rg16f).
+// The same for the Fresnel atlas (rg16f).
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void impostor_mip_rg_main(uint3 id : SV_DispatchThreadID)
@@ -90,61 +100,4 @@ void impostor_mip_rg_main(uint3 id : SV_DispatchThreadID)
     RWTexture2D<float2> level = g_storage_images_rg16f[NonUniformResourceIndex(push.atlas)];
     uint2 p = id.xy * 2;
     level[id.xy] = 0.25 * (finer[p] + finer[p + uint2(1, 0)] + finer[p + uint2(0, 1)] + finer[p + uint2(1, 1)]);
-}
-
-// Must match OcclusionPush in impostor.rs.
-struct OcclusionPush
-{
-    uint albedo;     // the finished atlases, sampled with their mips
-    uint normal;
-    uint occlusion;  // the occlusion atlas's first level: a storage image (rg16f)
-    uint pad;
-};
-
-[[vk::push_constant]]
-OcclusionPush occlusion_push;
-
-// How far behind the surface a frame saw a point must lie to be in the mesh's own shade, in radii,
-// and the mip the frames are read at as shadow maps (`SELF_SHADOW_BIAS` in impostor_draw.slang).
-static const float OCCLUSION_BIAS = 0.06;
-static const float OCCLUSION_LEVEL = 1.0;
-
-// The share of the sky one texel's point sees past the mesh itself, premultiplied by its coverage:
-// every frame read as a shadow map (`frame_occlusion`) from the point the texel's own frame saw,
-// weighted by the cosine with its leaves' average normal (a little towards even, where they
-// spread). The resolve dims the sky's light and its reflection by the screen's occlusion; far off
-// a crown's own shade has to come from here. Its second channel carries the texel's premultiplied
-// depth over from the normals' alpha: compressed together (BC5), the normals then fit alone.
-[shader("compute")]
-[numthreads(8, 8, 1)]
-void impostor_occlusion_main(uint3 id : SV_DispatchThreadID)
-{
-    uint2 texel = id.xy;
-    float4 a = g_sampled_images[NonUniformResourceIndex(occlusion_push.albedo)].Load(int3(texel, 0));
-    RWTexture2D<float2> target = g_storage_images_rg16f[NonUniformResourceIndex(occlusion_push.occlusion)];
-    if (a.a <= 0.0)
-    {
-        target[texel] = float2(0.0);
-        return;
-    }
-    float4 n4 = g_sampled_images[NonUniformResourceIndex(occlusion_push.normal)].Load(int3(texel, 0));
-    float3 normal = n4.rgb / a.a * 2.0 - 1.0;
-    // The point the texel's frame saw, in radii: its place in the picture, then its depth.
-    float2 frame = float2(texel / FRAME_TEXELS);
-    float2 uv = (float2(texel % FRAME_TEXELS) + 0.5) / float(FRAME_TEXELS);
-    float3 d = frame_direction(frame);
-    float3 right;
-    float3 up;
-    frame_axes(d, right, up);
-    float3 p = right * (uv.x * 2.0 - 1.0) + up * (1.0 - uv.y * 2.0) + d * (n4.a / a.a);
-    float seen = 0.0;
-    float total = 0.0;
-    for (uint k = 0; k < FRAMES * FRAMES; k++)
-    {
-        float2 other = float2(k % FRAMES, k / FRAMES);
-        float w = max(dot(normal, frame_direction(other)), 0.0) + 0.1;
-        seen += w * (1.0 - frame_occlusion(occlusion_push.albedo, occlusion_push.normal, other, p, OCCLUSION_BIAS, OCCLUSION_LEVEL));
-        total += w;
-    }
-    target[texel] = float2(seen / total * a.a, n4.a);
 }

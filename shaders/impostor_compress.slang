@@ -274,8 +274,9 @@ uint2 bc4_block(float value[16])
     return block;
 }
 
-// The occlusion atlas (rg16f): its first channel, 0 to 1, the second signed, -1 to 1 (the
-// premultiplied depth), stored as 0.5 + 0.5 × it; the draw reads it back as 2g - 1.
+// The Fresnel atlas (rg16f): its first channel, 0 to 1 (the premultiplied Fresnel weight), the
+// second signed, -1 to 1 (the premultiplied depth), stored as 0.5 + 0.5 × it; the draw reads it
+// back as 2g - 1.
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void impostor_bc5_main(uint3 id : SV_DispatchThreadID)

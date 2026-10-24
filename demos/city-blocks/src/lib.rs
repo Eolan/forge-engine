@@ -3365,6 +3365,7 @@ impl Demo for Gallery {
                         let storage = targets.movers.and_then(|m| m.tlas)?;
                         (address != 0).then_some((address, storage))
                     }),
+                    probes,
                     extent,
                 },
                 taa_frame.color,

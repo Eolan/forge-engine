@@ -898,11 +898,15 @@ shaded: on the street the pass went 0.14 → 0.06 ms (a centred quad writing its
 early test off). With nothing crossed it costs 0.03 ms. Block-compressed (BC7 and BC5, D-047),
 the atlases cost the pass less to read: 0.21 → 0.19 ms from the air, 0.07 → 0.05 on the main
 street, the frames unchanged. The bake (`impostor/downsample`, `impostor/mips`,
-`impostor/occlusion`, `impostor/compress`, `impostor/upload`, `impostor/read back`: the
-village's 27 kinds in 1.4 s) runs before the first counted frame, outside the run's profile;
-found in the derived cache, the 27 kinds' blocks are copied in (`impostor/upload`) in 0.33 s.
-With the clouds' shadow map read and the movers' structure on the shadow ray (2026-10-25), the
-pass stays at 0.19 ms from the air.
+`impostor/occlusion` until 2026-10-25, `impostor/compress`, `impostor/upload`,
+`impostor/read back`: the village's 27 kinds in 1.4 s) runs before the first counted frame,
+outside the run's profile; found in the derived cache, the 27 kinds' blocks are copied in
+(`impostor/upload`) in 0.33 s. With the clouds' shadow map read and the movers' structure on the
+shadow ray (2026-10-25), the pass stays at 0.19 ms from the air. With the probes' light looked up
+once a tree in its vertex shader and the leaves' baked Fresnel weight (2026-10-25, D-075's "far
+woods' colour"), it costs 0.03–0.05 ms more: the owner's flight-in, riverbank and meadow views
+0.239 → 0.287, 0.269 → 0.301 and 0.259 → 0.299 ms (their frames 3.91 → 3.83, 4.37 → 4.27 and
+4.12 → 4.01 ms, run to run). The same lookups for each pixel cost the pass 0.17 ms.
 
 **The plants' crowns kept whole** (D-075, 2026-10-25, `flora::CROWN_SECTIONS`): the cluster LOD
 no longer shrinks the crowns' cores, so a far crown draws every core and card until its ladder
