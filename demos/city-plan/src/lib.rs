@@ -3417,12 +3417,18 @@ fn probe_regions(
         // room's outline (a corner, a ceiling's edge) is lit by every probe, not taken for the
         // outside's (white specks down a corner). Its footprint's triangles, each a quad with a
         // corner twice.
+        // Up to just over the top ceiling ([`insides`]' under the roof): reaching 0.3 m over
+        // the walls, it held the roof's lowest course and the parapet's top, which took every
+        // lamp of the frame unshadowed, as the body does, and glowed as a band round the roof at
+        // night (the owner, 2026-10-24: "light is leaking on the roof").
+        let last = &s.storeys[n - 1];
+        let body_top = ((last.level + last.height - last.slab).min(m.height - 0.05) + 0.05) as f32;
         for t in geom::triangulate(&m.footprint) {
             let [a, b, c] = t.map(|k| m.footprint[k]);
             out.push(RegionVolume {
                 corners: [a, b, c, c].map(corner),
                 floor: floor(0) - 0.5,
-                ceiling: top + 0.3,
+                ceiling: body_top,
                 region: 0,
                 other: 0,
                 kind: RegionKind::Solid,
@@ -4181,6 +4187,36 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
         if let Some(last) = s.storeys.last() {
             let ceiling = (last.level + last.height - last.slab).min(top - 0.05);
             cap(mesh, &ring, &[], ceiling, -Vec3::Y, plaster);
+            // Its top, 2 cm over it: seen from above through the gap between the cornice and
+            // the roof's edge, the ceiling faced away and the lit room below showed as a bright
+            // strip along the eaves at night (the owner, 2026-10-24: "light is leaking on the
+            // roof as well").
+            cap(mesh, &ring, &[], ceiling + 0.02, Vec3::Y, plaster);
+        }
+        // The walls' tops, 2 cm under the roof's edge, from the building line to their inner
+        // faces: the walls are hollow, and looking down between the parapet and the roof one
+        // saw into the lit rooms through the inner faces' backs, a bright band round the roof
+        // at night (the owner, 2026-10-24: "light is leaking on the roof").
+        if let Some(inner) = inner_ring_into(m, s, 0.0).filter(|r| r.len() == m.footprint.len()) {
+            let n = m.footprint.len();
+            let y = top - 0.02;
+            for k in 0..n {
+                let quad = [
+                    m.footprint[k],
+                    m.footprint[(k + 1) % n],
+                    inner[(k + 1) % n],
+                    inner[k],
+                ];
+                for t in [[0, 1, 2], [0, 2, 3]] {
+                    triangle_uv(
+                        mesh,
+                        t.map(|i| at(quad[i], y)),
+                        [[0.0; 2]; 3],
+                        Vec3::Y,
+                        KIT_PLASTER + tint_of(m.lot),
+                    );
+                }
+            }
         }
         if let Some(inner) = &inner {
             // The flights' steps in the floors' smooth limestone: in the facades' pitted stone,
