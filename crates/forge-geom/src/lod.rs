@@ -217,6 +217,14 @@ fn build_dag_from(
         for (v, &canonical) in remap.iter().enumerate() {
             locked[v] = locked[canonical as usize];
         }
+        // And every vertex of the sections kept whole (`CookOptions::keep_sections`).
+        if options.keep_sections != 0 {
+            for (v, &s) in vertex_section.iter().enumerate() {
+                if s < 32 && options.keep_sections & (1 << s) != 0 {
+                    locked[v] = true;
+                }
+            }
+        }
 
         // Each group simplified and cut into clusters on its own, the groups spread over the
         // machine's threads (#220: a planet tile's DAG waited 0.1 s on one); then appended in

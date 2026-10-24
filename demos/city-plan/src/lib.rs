@@ -6253,6 +6253,7 @@ impl PlanScenario {
                     let options = CookOptions {
                         normal_weight: 2.0,
                         uv_weight,
+                        keep_sections: 0,
                     };
                     Cook::Mesh(mesh, options, format!("{scene}-tile{t}-{kind}"))
                 })
@@ -6298,11 +6299,16 @@ impl PlanScenario {
                     let size = [plant.height, plant.crown, plant.lump];
                     let name = format!("plant-{}-{k}", s.id);
                     let options = CookOptions::default();
+                    // Its crown kept whole: the far steps stand for its finest look.
+                    let crown = CookOptions {
+                        keep_sections: forge_geom::flora::CROWN_SECTIONS,
+                        ..options
+                    };
                     // And its crown as the probes' rays see it (#297), right after it, then its
                     // crown's shells, the next step on its ladder, and its far shadows' proxy
                     // (D-075, `--tree-ladder`).
                     vec![
-                        (Cow::Owned(plant.mesh), options, name.clone(), size),
+                        (Cow::Owned(plant.mesh), crown, name.clone(), size),
                         (
                             Cow::Owned(plant.proxy),
                             options,

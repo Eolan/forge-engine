@@ -7108,6 +7108,25 @@ DIR` writes the atlases as images (`forge_render::impostor`, `shaders/impostor.s
   direction.
 - **Not yet:** the bright young crowns above, each age's other seeds, and the default (the
   owner's look first). Block compression is built (above, "Memory").
+- **The owner's flight in** (2026-10-25, `--tree-ladder --impostors` flying forward: trees
+  "changing colour very strongly", crowns "almost empty" then full, small trees "popping into
+  existence"):
+  - **The clouds' shadow on the impostors' sun** (`cloud_light`, as the resolve reads it): they
+    stood in full sun under the clouds' shadow the cards and the shells were in. The square's
+    trees at 0.25: G 91.6 → 81.5, the cards' 81.2; at the default hour 84.7, the cards' 84.7;
+    noon unchanged. Their shadow ray also meets the movers' structure, as the resolve's do: a
+    plane or a ship passing over shades the far woods as it shades the near trees (the owner's
+    question).
+  - **The crowns kept whole in the cluster LOD** (`CookOptions::keep_sections`,
+    `flora::CROWN_SECTIONS`, #303's "keep the finest level"). The cards never simplify, but the
+    cores did and shrank to nothing, so a far crown thinned to specks before its shells and
+    impostor, made from its finest look, filled it out again; a young tree's faint cards then
+    gave way to a full dark ball. Now the cards draw every core and card to the crossing: the
+    meadow's young tree, its impostor G 78.5 against its cards' 77.8. The cost (`docs/PROFILE.md`):
+    0.2–0.5 ms with the ladder, 0.9 ms from the air without it (the far woods' cores drawn, which
+    also read darker, as they do near).
+  - **Left:** a young tree's impostor still 12 % brighter and greyer than its cards (R +24 %,
+    B +28 %, the meadow's view), the "bright young crowns" above.
 
 **Micromaps built** (#333, 2026-10-23, question 4's answer), on by default in city-plan, where
 the device has them (`MeshletSceneBuilder::set_opacity_micromaps`, city-blocks' `--omm`,

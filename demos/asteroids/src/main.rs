@@ -1364,6 +1364,7 @@ fn build_meshes(args: &Args) -> FieldMeshes {
                 let options = CookOptions {
                     normal_weight: lod_normals * radius,
                     uv_weight: 0.0,
+                    keep_sections: 0,
                 };
                 *slot = Some(MeshletMesh::build_with(&mesh, options));
             });
@@ -1375,6 +1376,7 @@ fn build_meshes(args: &Args) -> FieldMeshes {
             CookOptions {
                 normal_weight: lod_normals * SHIP_LENGTH * 0.5,
                 uv_weight: 0.0,
+                keep_sections: 0,
             },
         )
     });

@@ -100,6 +100,13 @@ pub struct CookOptions {
     /// a triangle from afar (the owner, 2026-10-15). About a texture repeat's width in metres
     /// counts a shift of the texture as far as it shows on the wall.
     pub uv_weight: f32,
+    /// The sections (a bit each, sections 0–31) whose triangles never simplify: their vertices
+    /// are locked at every level, so the coarse levels keep them whole (#303's "keep the finest
+    /// level"). A plant's crown (its cores and cards, `crate::flora::grown_mesh`), whose far
+    /// steps stand for its finest look: simplified, its cores shrank and the far crowns thinned
+    /// to a few specks, then filled out again where the shells and impostors took over (the
+    /// owner, 2026-10-25: "almost empty to full").
+    pub keep_sections: u32,
 }
 
 impl CookOptions {
@@ -111,6 +118,7 @@ impl CookOptions {
     pub const HARD_SURFACE: CookOptions = CookOptions {
         normal_weight: 0.5,
         uv_weight: 0.0,
+        keep_sections: 0,
     };
 }
 

@@ -369,6 +369,12 @@ pub fn crown_lumps(g: &TreeGraph, shrub: bool, broad: bool, lift: f32) -> Vec<(V
 /// leaves' detail (#346), as faceted olive balls through the gaps close up).
 pub const CROWN_CORE: f32 = 0.2;
 
+/// The sections of a plant's crown in [`grown_mesh`], its cores (1) and cards (2), which its cook
+/// keeps whole (`CookOptions::keep_sections`): the shells and the impostor that take over far
+/// off are made from its finest look, and the cluster LOD shrank the cores to nothing first (the
+/// cards cannot simplify), so the far crowns thinned to specks before they filled out again.
+pub const CROWN_SECTIONS: u32 = 1 << 1 | 1 << 2;
+
 /// How far up (or down) a leaf card's normal may point, as its vertical component: past it the
 /// card turns towards the side ([`leaf_cards`]), at least 37° off the horizontal.
 const CARD_STEEP: f32 = 0.8;
@@ -612,6 +618,57 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A tree cooked with its crown kept whole ([`CROWN_SECTIONS`]) holds every core and card
+    /// triangle in its coarsest cut, where the default cook shrinks the cores (the owner,
+    /// 2026-10-25: far crowns thinned to specks); its wood still simplifies.
+    #[test]
+    fn a_kept_crown_reaches_the_coarsest_cut_whole() {
+        use crate::meshlet::{CookOptions, MeshletMesh, triangle_section};
+        let species = forge_flora::species::mediterranean();
+        let (sp, s) = species
+            .iter()
+            .enumerate()
+            .find(|(_, s)| s.habit != Habit::Shrub)
+            .expect("a tree");
+        let plant = grow_plant(s, &forge_flora::grow::individual(s, sp as u16, 0));
+        // Each section's triangles at level 0 and in the roots (the cut drawn from afar).
+        let counts = |options: CookOptions| {
+            let built = MeshletMesh::build_with(&plant.mesh, options);
+            let count = |root: bool, section: u32| -> usize {
+                built
+                    .meshlets
+                    .iter()
+                    .filter(|m| {
+                        if root {
+                            m.parent_error.is_infinite()
+                        } else {
+                            m.lod_level == 0
+                        }
+                    })
+                    .map(|m| {
+                        (0..m.triangle_count)
+                            .filter(|&t| triangle_section(m.section, t) == section)
+                            .count()
+                    })
+                    .sum()
+            };
+            [0, 1, 2].map(|section| (count(false, section), count(true, section)))
+        };
+        let kept = counts(CookOptions {
+            keep_sections: CROWN_SECTIONS,
+            ..CookOptions::default()
+        });
+        let plain = counts(CookOptions::default());
+        assert_eq!(kept[1].0, kept[1].1, "the cores, kept");
+        assert_eq!(kept[2].0, kept[2].1, "the cards, kept");
+        assert!(kept[0].1 < kept[0].0, "the wood simplifies: {:?}", kept[0]);
+        assert!(
+            plain[1].1 < plain[1].0,
+            "the cores shrink uncut: {:?}",
+            plain[1]
+        );
     }
 
     /// The ladder's middle (D-075, #302): the shells hold the crown's outline where the cards

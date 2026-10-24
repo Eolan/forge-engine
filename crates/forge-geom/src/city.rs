@@ -231,6 +231,7 @@ impl PropSpec {
                 | PropKind::Heightfield(_) => 0.0,
             },
             uv_weight: 0.0,
+            keep_sections: 0,
         }
     }
 
@@ -1488,6 +1489,7 @@ mod tests {
             crate::meshlet::CookOptions {
                 normal_weight: 1.0,
                 uv_weight: 0.0,
+                keep_sections: 0,
             },
         );
         let at_level = |level: u32, section: u32| -> usize {

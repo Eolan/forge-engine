@@ -901,6 +901,22 @@ street, the frames unchanged. The bake (`impostor/downsample`, `impostor/mips`,
 `impostor/occlusion`, `impostor/compress`, `impostor/upload`, `impostor/read back`: the
 village's 27 kinds in 1.4 s) runs before the first counted frame, outside the run's profile;
 found in the derived cache, the 27 kinds' blocks are copied in (`impostor/upload`) in 0.33 s.
+With the clouds' shadow map read and the movers' structure on the shadow ray (2026-10-25), the
+pass stays at 0.19 ms from the air.
+
+**The plants' crowns kept whole** (D-075, 2026-10-25, `flora::CROWN_SECTIONS`): the cluster LOD
+no longer shrinks the crowns' cores, so a far crown draws every core and card until its ladder
+crosses. The village at 1600 × 900, DLAA, one run each:
+
+| View | Without the ladder | `--tree-ladder --impostors` |
+|---|---|---|
+| The default air view | 5.37 → 6.25 ms | 4.56 → 4.78 ms |
+| The owner's meadow view (`0,105.08,228.99,0,-24.1`) | 5.28 → 6.09 ms | 4.52 → 5.03 ms |
+| The owner's waterfront view (`-4.67,89.49,194.07,0,-24.1`) | 5.28 → 6.08 ms | 4.57 → 4.83 ms |
+| The map check's air / house / main / garden | 4.65 → 5.54, 5.93 → 6.12, 5.35 → 5.61, 4.70 → 4.82 ms | |
+
+Without the ladder the far woods' cores are all drawn; with it the shells and the impostors take
+most of them, the cost the ladder was built to save.
 
 **Grass near the camera** (#300, D-075, 2026-10-22; city-blocks' `--grass`, 50 m, first
 20 m): the village at 1600 × 900, DLAA, the green's view (`12.9,1.7,-226.0,176.1,-5`)
