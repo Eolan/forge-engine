@@ -264,6 +264,9 @@ const STAIN_EVERY: f64 = 90.0;
 /// as a share of its sideways: squeezed to a narrow planned crown, its trunk thinned with it and
 /// its leaves turned to slivers.
 const SQUEEZE: f32 = 0.85;
+/// The share of the open sky's light a village room beyond the room grids' reach takes (D-078,
+/// `ProbeParams::far_room_sky`; the scene's look explains the number).
+const VILLAGE_FAR_ROOM_SKY: f32 = 0.2;
 /// Paved ground per crack on the paving (D-074), m².
 const CRACKS_EVERY: f64 = 150.0;
 
@@ -6442,6 +6445,13 @@ impl Scenario for PlanScenario {
             // Local exposure with it (D-067, #275): a room seen from a lit hall through its door
             // was pitch black; lifted, it reads a bit darker, as the eye sees it.
             local_exposure: !self.flora.is_empty(),
+            // A room beyond the room grids' reach takes this share of the open sky (D-078, the
+            // probes' far room rule), set against the rooms the grids light: from the owner's
+            // view down to the houses, the windows' band matched them at 0.35 in the afternoon
+            // and 0.12 under a low sun (0.06, set before the grids, was 0.05 EV dark), and 0.2
+            // keeps both within 0.02 EV. The grids' rooms take the sun's bounce, which a share
+            // of the sky cannot follow through the day (#356).
+            probe_far_room_sky: (!self.flora.is_empty()).then_some(VILLAGE_FAR_ROOM_SKY),
             ..Look::default()
         }
     }

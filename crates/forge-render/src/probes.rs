@@ -324,10 +324,12 @@ pub struct ProbeParams {
     /// probes' diffuse light does not see them.
     pub movers: bool,
     /// The share of the open sky's luminance a room takes where no room-sized cascade covers it
-    /// and none of its region's probes stands among a coarser cascade's eight (#321): what its
-    /// windows let in, a daylight factor. 0.06 matches the village's rooms (their own probes
-    /// against the fallback forced on them); deep rooms behind small windows want less, shallow
-    /// rooms with wide ones more (`--probe-far-sky`, the scene's look).
+    /// and none of its region's probes stands among a coarser cascade's eight (#321), and, with
+    /// room grids ([`Self::rooms`]), wherever no room-sized cascade covers it (#354): what its
+    /// windows let in, a daylight factor. 0.06 matched the village's rooms against their own
+    /// cascade probes; against its grids the village takes 0.2 (D-078, #356). Deep rooms behind
+    /// small windows want less, shallow rooms with wide ones more (`--probe-far-sky`, the
+    /// scene's look).
     pub far_room_sky: f32,
     /// Where a surface's point is looked up among the probes, off the surface: this share of its
     /// normal and of the way to the viewer, times 0.225 of the cascade's spacing (the 2021 paper's

@@ -1130,9 +1130,17 @@ float room_depth(ProbeField* field, float3 p)
 float3 probe_lookup_with<let MIRROR : int>(ProbeField* field, float3 p, float3 n, float3 g, float3 v, float3 open_sky, float3 d, float3 open_sky_d, RegionHit mask, bool masked, bool rooms, out float3 toward_d, out bool far)
 {
     far = false;
+    // A room beyond the room-sized cascades. Where rooms have grids of their own (D-078) it takes
+    // the far room's share of the open sky, as one with none of its probes in a coarser cascade
+    // does, not that cascade's probes standing in it: those lit it darker (#353), and walking
+    // towards a house its rooms jumped from dark to lit as their grids came within reach (the
+    // owner, 2026-10-24: "the inside of the rooms look wrong at some transition points"). The
+    // share was set against the grids' own light (#321).
+    bool beyond = masked && mask.region != REGION_OUTSIDE && (!rooms || far_from_rooms(field, p));
     // The region's probes, then every probe where they found none.
-    float4 e = cascades_lookup<MIRROR>(field, p, n, g, v, d, mask, masked, rooms, toward_d);
-    if (masked && e.w <= 0.0 && mask.region != REGION_OUTSIDE && (!rooms || far_from_rooms(field, p)))
+    float4 e = beyond && field[0].room_rays > 0u ? float4(0.0)
+        : cascades_lookup<MIRROR>(field, p, n, g, v, d, mask, masked, rooms, toward_d);
+    if (beyond && e.w <= 0.0)
     {
         far = true;
         // A room beyond the room-sized cascades with none of its probes among a coarser one's

@@ -7551,6 +7551,14 @@ technique with similar results that does not infringe.
 - **The map check:** the outdoor views unchanged (ꟻLIP ≤ 0.002), the insides changed
   (0.03 to 0.09), accepted.
 
+**Rooms beyond the grids' reach (2026-10-24, #354, #356).** The owner, walking towards the
+houses: "the inside of the rooms look wrong at some transition points". Beyond the room-sized
+cascade a room took a coarser cascade's probes standing in it (dark, #353), and lit up when its
+grid came within reach. Since then, wherever the scene has grids, every such room takes the far
+room's share of the open sky (`far_room_sky`), set against the grids: the village's 0.2 keeps the
+windows within 0.02 EV of grid-lit rooms in the afternoon and under a low sun (0.06 was 0.05 EV
+dark). The grids take the sun's bounce, which the share cannot follow through the day: #356.
+
 *(research: probe-levels-indoors.md; D-068; issue #353)*
 
 ## D-079 — Marks where bodies strike: a pool of run-time decals on static surfaces ✅ (proposed 2026-10-24, accepted the same day, Phase 7)
