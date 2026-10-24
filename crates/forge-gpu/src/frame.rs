@@ -68,6 +68,8 @@ pub struct Frames {
     queue_values: [u64; 3],
     slots: Vec<PerSlot>,
     render_finished: Vec<vk::Semaphore>,
+    /// No swapchain ([`Frames::headless`]): no acquired image to wait for, nothing to present.
+    headless: bool,
     timers: GpuTimers,
     last_zones: Vec<GpuZone>,
     /// The last timestamp of the frame whose zones `last_zones` holds.
@@ -143,6 +145,7 @@ impl Frames {
             queue_values: [0; 3],
             slots,
             render_finished,
+            headless: false,
             timers,
             last_zones: Vec::new(),
             last_end: None,
@@ -150,6 +153,14 @@ impl Frames {
             batches: Vec::new(),
             garbage: Vec::new(),
         })
+    }
+
+    /// Frames with no swapchain (a headless run, [`crate::Headless`]): nothing is acquired or
+    /// presented, and [`Frames::submit_headless`] ends each frame.
+    pub fn headless(device: Arc<Device>) -> Result<Self> {
+        let mut frames = Self::new(device, 0)?;
+        frames.headless = true;
+        Ok(frames)
     }
 
     /// Keeps `item` alive until the frame being recorded (or about to be) has completed on
@@ -296,6 +307,18 @@ impl Frames {
     /// acquired image; the last batch (graphics) signals the per-image `render_finished`
     /// semaphore and the frame timeline, after closing the frame's timestamps.
     pub fn submit(&mut self, slot: FrameSlot, image_index: u32) -> Result<()> {
+        self.submit_with(slot, Some(image_index))
+    }
+
+    /// [`Frames::submit`] for frames with no swapchain ([`Frames::headless`]): no acquired
+    /// image is waited for and no `render_finished` semaphore is signalled; the frame
+    /// timeline still is, so [`Frames::wait_for_slot`] paces the frames as usual.
+    pub fn submit_headless(&mut self, slot: FrameSlot) -> Result<()> {
+        debug_assert!(self.headless, "submit_headless needs Frames::headless");
+        self.submit_with(slot, None)
+    }
+
+    fn submit_with(&mut self, slot: FrameSlot, image_index: Option<u32>) -> Result<()> {
         let raw = self.device.raw();
         let per = &self.slots[slot.index];
         let last = self.batches.len().checked_sub(1);
@@ -312,7 +335,7 @@ impl Frames {
             // SAFETY: the command buffer is in the recording state (`command_buffer`).
             unsafe { raw.end_command_buffer(cb)? };
             let mut waits = Vec::with_capacity(4);
-            if Some(i) == first_graphics {
+            if Some(i) == first_graphics && image_index.is_some() {
                 waits.push(
                     vk::SemaphoreSubmitInfo::default()
                         .semaphore(per.image_available)
@@ -344,11 +367,13 @@ impl Frames {
                     .stage_mask(signal_stage),
             ];
             if is_last {
-                signals.push(
-                    vk::SemaphoreSubmitInfo::default()
-                        .semaphore(self.render_finished[image_index as usize])
-                        .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS),
-                );
+                if let Some(image_index) = image_index {
+                    signals.push(
+                        vk::SemaphoreSubmitInfo::default()
+                            .semaphore(self.render_finished[image_index as usize])
+                            .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS),
+                    );
+                }
                 signals.push(
                     vk::SemaphoreSubmitInfo::default()
                         .semaphore(self.timeline)

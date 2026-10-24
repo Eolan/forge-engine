@@ -36,7 +36,7 @@ exactly as CI:
 
 ```
 cargo build --release
-cargo test --release
+FORGE_GPU_TESTS=1 cargo test --release   # the GPU pass tests too; CI has no GPU and skips them
 cargo clippy --release --all-features --all-targets -- -D warnings
 cargo fmt --all -- --check
 cargo run --release -q -p credits -- --check

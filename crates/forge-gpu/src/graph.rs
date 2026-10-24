@@ -1867,6 +1867,9 @@ pub struct RenderGraph {
     /// `FORGE_GRAPH_ZERO` (#204): the transient images cleared to zero before their first
     /// pass, all of them (no words) or those whose name contains one of the words.
     zero: Option<Vec<String>>,
+    /// Every transient image may be a copy's source ([`RenderGraph::allow_readback`]): a
+    /// headless test reads a pass's output back, which a frame never does.
+    readback: bool,
     /// `FORGE_GRAPH_NO_ASYNC`: the passes that asked for another queue kept on the graphics
     /// queue, all of them (no words) or those whose name contains one of the words.
     no_async: Option<Vec<String>>,
@@ -1927,6 +1930,7 @@ impl RenderGraph {
             alone: words("FORGE_GRAPH_NO_ALIAS").unwrap_or_default(),
             poison: flag("FORGE_GRAPH_POISON"),
             zero: words("FORGE_GRAPH_ZERO"),
+            readback: false,
             no_async: words("FORGE_GRAPH_NO_ASYNC"),
             frame_barrier: flag("FORGE_FRAME_BARRIER"),
             full_before: words("FORGE_FULL_BARRIERS_BEFORE"),
@@ -1946,6 +1950,13 @@ impl RenderGraph {
     /// Counters of the last executed frame.
     pub fn stats(&self) -> GraphStats {
         self.stats
+    }
+
+    /// Lets every transient image be a copy's source, so a test can read a pass's output back
+    /// ([`crate::readback_image`]). Call it before the first frame: the transients are created
+    /// with the usage, and a frame's never need it.
+    pub fn allow_readback(&mut self) {
+        self.readback = true;
     }
 
     /// Resolves each pass's queue, orders the passes ([`schedule`]), lays out the
@@ -2432,13 +2443,17 @@ impl RenderGraph {
         }
     }
 
-    /// The usage every transient image gains: `TRANSFER_DST` for `FORGE_GRAPH_ZERO`'s clears.
+    /// The usage every transient image gains: `TRANSFER_DST` for `FORGE_GRAPH_ZERO`'s clears,
+    /// `TRANSFER_SRC` for a test's readbacks ([`RenderGraph::allow_readback`]).
     fn extra_usage(&self) -> vk::ImageUsageFlags {
+        let mut usage = vk::ImageUsageFlags::empty();
         if self.zero.is_some() {
-            vk::ImageUsageFlags::TRANSFER_DST
-        } else {
-            vk::ImageUsageFlags::empty()
+            usage |= vk::ImageUsageFlags::TRANSFER_DST;
         }
+        if self.readback {
+            usage |= vk::ImageUsageFlags::TRANSFER_SRC;
+        }
+        usage
     }
 
     fn rebuild_cache(&mut self, placement: Placement, frames: &mut Frames) -> Result<()> {

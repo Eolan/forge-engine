@@ -389,6 +389,72 @@ impl LuminanceMeter {
 mod tests {
     use super::*;
 
+    /// A GPU test (`FORGE_GPU_TESTS=1`): the histogram pass counts every pixel once, in the
+    /// bin the CPU mirror names, and its edge threads stop at the image's edge (40 × 24 is not
+    /// a multiple of its 16 × 16 groups).
+    #[test]
+    fn the_histogram_counts_every_pixel_once_in_its_bin() {
+        let Some(mut gpu) = forge_gpu::Headless::for_test(forge_gpu::headless::shaders_of(env!(
+            "CARGO_MANIFEST_DIR"
+        ))) else {
+            return;
+        };
+        let extent = vk::Extent2D {
+            width: 40,
+            height: 24,
+        };
+        let (w, h) = (extent.width as usize, extent.height as usize);
+        // Grey pixels (their luminance is the grey): the top row black, the left half at 0.25,
+        // the right half at 2.0.
+        let half = crate::aces2::f32_to_f16;
+        let mut texels = Vec::with_capacity(w * h * 4);
+        for y in 0..h {
+            for x in 0..w {
+                let grey = if y == 0 {
+                    0.0
+                } else if x < w / 2 {
+                    0.25
+                } else {
+                    2.0
+                };
+                texels.extend_from_slice(&[half(grey), half(grey), half(grey), half(1.0)]);
+            }
+        }
+        let color = gpu
+            .upload_image(
+                "color",
+                extent.width,
+                extent.height,
+                vk::Format::R16G16B16A16_SFLOAT,
+                bytemuck::cast_slice(&texels),
+            )
+            .expect("colour");
+        let mut meter = LuminanceMeter::new(&gpu.device, &gpu.shaders).expect("the histogram pass");
+        let (slot, _) = gpu
+            .frame(extent, |graph, slot| {
+                let color = graph.import(&color);
+                meter.measure(graph, slot, color, extent, 1.0);
+                slot
+            })
+            .expect("frame");
+        gpu.finish()
+            .expect("the frame completed with no validation error");
+        let histogram = meter.take(slot).expect("measured");
+        let (black, dark, bright) = (w, (h - 1) * (w / 2), (h - 1) * (w - w / 2));
+        assert_eq!(histogram.samples(), (w * h) as u64);
+        assert_eq!(histogram.bins[0], black as u32, "the black row");
+        assert_eq!(
+            histogram.bins[luminance_bin(0.25)],
+            dark as u32,
+            "the dark half"
+        );
+        assert_eq!(
+            histogram.bins[luminance_bin(2.0)],
+            bright as u32,
+            "the bright half"
+        );
+    }
+
     #[test]
     fn a_sunlit_grey_card_meters_at_sunny_16() {
         // Sunny 16 at ISO 100: f/16 at 1/100 s, EV 14.6; a meter reads the grey card at noon.

@@ -1,6 +1,7 @@
 use std::ffi::{CStr, c_void};
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use ash::{ext, khr, vk};
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
@@ -8,6 +9,29 @@ use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use crate::error::Result;
 
 const VALIDATION_LAYER: &CStr = c"VK_LAYER_KHRONOS_validation";
+
+/// Errors the validation layer has reported in this process ([`validation_errors`]).
+static VALIDATION_ERRORS: AtomicUsize = AtomicUsize::new(0);
+/// The last few of them, in full ([`validation_messages`]).
+static VALIDATION_MESSAGES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+/// How many messages [`VALIDATION_MESSAGES`] keeps.
+const KEPT_MESSAGES: usize = 8;
+
+/// How many errors the validation layer has reported in this process so far. A headless test
+/// ([`crate::Headless::finish`]) fails when the count grew during its frames, so every pass
+/// test is a validation test too.
+pub fn validation_errors() -> usize {
+    VALIDATION_ERRORS.load(Ordering::Relaxed)
+}
+
+/// The last few errors the validation layer reported, oldest first, for a test's failure
+/// message (the log has them all).
+pub fn validation_messages() -> Vec<String> {
+    VALIDATION_MESSAGES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
 
 /// A Vulkan instance with optional validation and debug messenger.
 pub struct Instance {
@@ -45,6 +69,16 @@ unsafe extern "system" fn debug_callback(
         )
     };
     if severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::ERROR) {
+        VALIDATION_ERRORS.fetch_add(1, Ordering::Relaxed);
+        {
+            let mut kept = VALIDATION_MESSAGES
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if kept.len() == KEPT_MESSAGES {
+                kept.remove(0);
+            }
+            kept.push(format!("{id}: {message}"));
+        }
         tracing::error!(target: "vulkan", %id, ?kind, "{message}");
     } else if severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::WARNING) {
         tracing::warn!(target: "vulkan", %id, ?kind, "{message}");

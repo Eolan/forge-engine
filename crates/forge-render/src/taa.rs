@@ -327,4 +327,87 @@ mod tests {
         let moved = to_pixels(shifted * point) - to_pixels(projection * point);
         assert!(moved.abs_diff_eq(Vec2::new(0.25, -0.5), 1e-3), "{moved}");
     }
+
+    /// A GPU test (`FORGE_GPU_TESTS=1`): the motion pass's convention, which the upscalers
+    /// depend on and which images that repeat to the bit cannot prove. The previous frame's
+    /// camera is this frame's panned by a quarter of the clip width and zoomed in twice, so
+    /// every pixel's motion is known: the offset in UV from the pixel to where it was, y down,
+    /// the jitter taken out, and the sign would flip on any mistake in the matrix, the UV
+    /// mapping or the jitter.
+    #[test]
+    fn the_motion_pass_reports_a_pan_and_a_zoom_in_uv() {
+        let Some(mut gpu) = forge_gpu::Headless::for_test(forge_gpu::headless::shaders_of(env!(
+            "CARGO_MANIFEST_DIR"
+        ))) else {
+            return;
+        };
+        let extent = vk::Extent2D {
+            width: 64,
+            height: 48,
+        };
+        let (w, h) = (extent.width, extent.height);
+        let mut taa = Taa::new(&gpu.device, &gpu.shaders, extent).expect("the motion pass");
+        // The depth the frame was drawn with, a constant: the pass reads the red channel.
+        let depth = gpu
+            .upload_image(
+                "depth",
+                w,
+                h,
+                vk::Format::R32_SFLOAT,
+                bytemuck::cast_slice(&vec![0.5_f32; (w * h) as usize]),
+            )
+            .expect("depth");
+        let readback = gpu
+            .readback_buffer("motion", u64::from(w * h) * 4)
+            .expect("readback");
+        // A translation and a scale of clip space: `w` stays 1, so the expectation is exact.
+        let previous = Mat4::from_translation(glam::Vec3::new(0.25, 0.0, 0.0))
+            * Mat4::from_scale(glam::Vec3::new(2.0, 2.0, 1.0));
+        let camera = CellPos::ORIGIN;
+        gpu.frame(extent, |graph, _| {
+            taa.begin(graph, Mat4::IDENTITY, previous, camera);
+        })
+        .expect("frame 1");
+        let (frame, _) = gpu
+            .frame(extent, |graph, _| {
+                let frame = taa.begin(graph, Mat4::IDENTITY, Mat4::IDENTITY, camera);
+                let depth = graph.import(&depth);
+                let motion = taa.motion_vectors(graph, &frame, depth);
+                forge_gpu::readback_image(graph, motion, extent, &readback);
+                frame
+            })
+            .expect("frame 2");
+        gpu.finish()
+            .expect("the frames completed with no validation error");
+        assert!(!frame.reset, "the second frame has a history");
+        let mut texels = vec![0_u16; (w * h * 2) as usize];
+        readback.read(0, &mut texels);
+        let jitter = frame.jitter;
+        let mut worst = 0.0_f32;
+        for y in 0..h {
+            for x in 0..w {
+                // The pixel's unjittered UV, where it was under the previous camera, and the
+                // offset between them; UV's y runs down, clip's y up.
+                let uv = Vec2::new(
+                    (x as f32 + 0.5 - jitter.x) / w as f32,
+                    (y as f32 + 0.5 - jitter.y) / h as f32,
+                );
+                let ndc = glam::Vec4::new(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.5, 1.0);
+                let p = previous * ndc;
+                let was = Vec2::new(p.x / p.w * 0.5 + 0.5, 0.5 - p.y / p.w * 0.5);
+                let expected = was - uv;
+                let i = ((y * w + x) * 2) as usize;
+                let got = Vec2::new(
+                    forge_gpu::f16_to_f32(texels[i]),
+                    forge_gpu::f16_to_f32(texels[i + 1]),
+                );
+                worst = worst.max((got - expected).abs().max_element());
+            }
+        }
+        // Halves carry three decimals under 1: the pan alone is 0.125 UV, exact.
+        assert!(
+            worst < 2e-3,
+            "the motion differs from the cameras' by up to {worst} UV"
+        );
+    }
 }

@@ -22,6 +22,8 @@ mod exact_mix;
 mod frame;
 #[forbid(unsafe_code)]
 pub mod graph;
+#[forbid(unsafe_code)]
+pub mod headless;
 mod instance;
 mod memory;
 mod memory_report;
@@ -57,7 +59,8 @@ pub use graph::{
     ImageHandle, PassBuilder, RawImage, RenderGraph, ResolvedImage, ResourceState, Resources,
     TransientBufferDesc, TransientDesc,
 };
-pub use instance::{Instance, Surface};
+pub use headless::{Headless, f16_to_f32, readback_image};
+pub use instance::{Instance, Surface, validation_errors};
 pub use memory::{Buffer, BufferDesc, Image, ImageDesc, STAGING_CHUNK, TransientHeap};
 pub use memory_report::{BUDGET_WARNING, HeapReport, MemoryCategory, MemoryReport};
 pub use pipeline::{

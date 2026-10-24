@@ -107,6 +107,19 @@ and compares each with `captures/map/accepted` by LDR-ꟻLIP; `--accept` makes t
 accepted set. About two minutes: the check per commit for the map, where the tiers run at
 milestones on the owner's word. The runs stay in `captures/map/<time>/` with a contact sheet.
 
+- **The pass tests** (2026-10-25, the audit's step 4): GPU tests in `cargo test`, each a pass
+  over synthetic inputs run through the render graph on a device with no window
+  (`forge_gpu::Headless`), its output read back and judged in milliseconds. They run with
+  `FORGE_GPU_TESTS=1` (the gate sets it; CI's machines have no GPU and skip them, passing), one
+  device at a time, the validation layer on: a test fails on the layer's errors too, naming
+  them. The first two: the motion pass under a known pan and zoom (`taa.rs`: the convention
+  DLSS and FSR depend on, which images that repeat to the bit cannot prove) and the luminance
+  histogram over a known image (`exposure.rs`). A new pass gets one before a capture:
+  `Headless::for_test`, `upload_image`, `frame`, `readback_image`, `finish`. Run one by hand:
+
+  ```
+  FORGE_GPU_TESTS=1 cargo test --release -p forge-render -- motion_pass
+  ```
 - **The sentinels** are fourteen captures, one or more from every demo:
   - meshlets: `static60`, `orbit120`, `noocc120`;
   - the ballad without AA: `ast-notaa600`, `ast240`, `ast240-noocc`, and its HDR output

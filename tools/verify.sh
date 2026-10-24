@@ -533,7 +533,9 @@ step "clippy, tests and credits (in the background, $run/gate.txt)"
 (
   status=0
   cargo clippy --release --all-features --all-targets -- -D warnings || status=1
-  cargo test --release || status=1
+  # The GPU pass tests too (docs/PROCESS.md, "The pass tests"): milliseconds on this machine,
+  # skipped where there is no GPU.
+  FORGE_GPU_TESTS=1 cargo test --release || status=1
   cargo run --release -q -p credits -- --check || status=1
   bash tools/luau-check.sh || status=1
   exit $status
