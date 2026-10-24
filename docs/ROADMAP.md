@@ -839,3 +839,9 @@ setting.
 
 Rebuild `tropical-island` (#81), `world` and `shooter` (#82) on Forge, in that order,
 reusing their generation rules and lessons.
+
+**With Phase 10, a private reference test (the owner, 2026-10-25):** a shipped open-world city
+game's own maps and assets, from the owner's copy, loaded into Forge in a private side session (as
+the private town of D-062's reference work): the target is at least its performance and its
+image. Nothing of it enters this repository or is published; the side session sends what the
+engine needs to the main session, in generic wording.
