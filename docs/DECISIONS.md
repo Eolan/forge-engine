@@ -7633,7 +7633,7 @@ mapping of decals.
 
 *(research: impact-marks.md, decals.md; D-074, D-007)*
 
-## D-080 — A night with lamps keyed on its lamps 🟡 (proposed 2026-10-24, #354)
+## D-080 — A night with lamps keyed on its lamps 🅿️ (proposed 2026-10-24, #354; the owner, 2026-10-25: keep the moonlit key for now)
 
 **The need:** the owner, on the village at night: the lit windows read "too strong … they are
 house lights, not spotlights". The research (`research/home-lighting.md`) finds Forge's lamps and
@@ -7665,5 +7665,8 @@ facades and the sky go darker; at +1 the street round them is nearly black.
 
 **For the owner:** keep the moonlit key (D-046 as is), or floor a night with lamps at EV100 0 (or
 another value from the A/B)?
+
+**The owner (2026-10-25):** keep the moonlit key for now (the A/B's left column); either looks
+right, and the moonlight may be a bit too bright. `r.exposure.night_floor` stays built and off.
 
 *(research: home-lighting.md, night-sky.md, local-exposure.md; D-046, D-067)*
