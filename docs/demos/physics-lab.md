@@ -952,6 +952,9 @@ weakens what it strikes, and the motors pull it back:
   rises; let go with ↓, it lies as it is). A thrown ball fells it 5 ticks after
   the throw (its torso 0.57 → 0.20 m); four seconds on it stands at 0.56 m and walks its round.
   The rise is its balance spring pulling it up (about 40 frames), the lab's stand-in for a get-up.
+- **Shots** (`--shoot-every N`, from the camera, as `--throw-every` throws): a ray of 100 m; the
+  body it meets is pushed by a rifle bullet's 8 N·s at the point met, and a creature's part takes a
+  blow of it. One shot is a full blow on a part, short of felling a dog.
   ![The dog felled by a thrown ball](images/lab-dog-fall.png) Frames 280 to 480 at 40 apart: standing,
   struck, lying 2 m back, still down, up, walking (`--lab creatures --fixed-step --throw-every 300
   --view=-1.1,0.75,5.6,0,0`).

@@ -65,6 +65,10 @@ pub(crate) struct LabArgs {
     /// With `--lab`, throw a ball from the camera every this many frames, as Space does.
     #[arg(long)]
     pub(crate) throw_every: Option<u64>,
+    /// With `--lab`, shoot from the camera every this many frames: the body it meets is pushed,
+    /// a creature's part struck (Phase 7's hit reactions).
+    #[arg(long)]
+    pub(crate) shoot_every: Option<u64>,
     /// With `--lab sea`, the boat's throttle and rudder from the first frame, `T,R` (−1 to 1),
     /// in place of the arrow keys (#138).
     #[arg(long, value_delimiter = ',', allow_hyphen_values = true)]
@@ -839,6 +843,12 @@ impl Running for LabRunning {
                 && frame.is_multiple_of(every.max(1))
             {
                 lab.throw(camera.position, camera.forward());
+            }
+            if let Some(every) = self.flags.shoot_every
+                && frame > 0
+                && frame.is_multiple_of(every.max(1))
+            {
+                lab.shoot(camera.position, camera.forward());
             }
             if self.flags.release == Some(frame) {
                 lab.release();

@@ -1488,6 +1488,19 @@ impl Herd {
         }
     }
 
+    /// A blow of `impulse` (N·s) on creature `c`'s part `part`: its strength lowered by it, its
+    /// parent's and children's by [`NEIGHBOUR`] of that ([`Reactions`]).
+    fn strike(&self, c: usize, part: usize, impulse: f32, strength: &mut [f32; PARTS]) {
+        let drop = (impulse / BLOW_FULL).min(1.0) * (1.0 - WEAKEST);
+        let parts = self.creatures[c].kind.parts();
+        strength[part] = strength[part].min(1.0 - drop);
+        for (j, p) in parts.iter().enumerate() {
+            if p.parent == Some(part) || parts[part].parent == Some(j) {
+                strength[j] = strength[j].min(1.0 - NEIGHBOUR * drop);
+            }
+        }
+    }
+
     /// How many creatures it holds.
     pub(super) fn len(&self) -> usize {
         self.creatures.len()
@@ -1496,12 +1509,14 @@ impl Herd {
     /// After a step: every part recovers a tick's worth towards full, then the blows `contacts`
     /// (the step's begun contacts, each with its bodies' masses) dealt the creatures' parts lower
     /// them ([`Reactions`]). A blow is a moving body striking a part at [`SLOWEST_BLOW`] or faster;
-    /// the ground, the stands and a creature's own parts deal none. How many blows.
+    /// the ground, the stands and a creature's own parts deal none. `struck`: the bodies this
+    /// tick's shots met, each a blow of its impulse. `limp`: the motors let go. How many blows.
     pub(super) fn react(
         &self,
         world: &World,
         limp: bool,
         contacts: &[(Contact, [Option<f32>; 2])],
+        struck: &[(BodyId, f32)],
         reactions: &mut Reactions,
     ) -> usize {
         let n = self.creatures.len();
@@ -1547,16 +1562,16 @@ impl Herd {
                 }
                 let mass = mass.unwrap_or(by);
                 let impulse = mass * by / (mass + by).max(f32::MIN_POSITIVE) * contact.speed;
-                let drop = (impulse / BLOW_FULL).min(1.0) * (1.0 - WEAKEST);
+                self.strike(c, part, impulse, &mut reactions.strength[c]);
                 knocked[c] |= impulse >= FALL_BLOW;
-                let parts = self.creatures[c].kind.parts();
-                let strength = &mut reactions.strength[c];
-                strength[part] = strength[part].min(1.0 - drop);
-                for (j, p) in parts.iter().enumerate() {
-                    if p.parent == Some(part) || parts[part].parent == Some(j) {
-                        strength[j] = strength[j].min(1.0 - NEIGHBOUR * drop);
-                    }
-                }
+                blows += 1;
+            }
+        }
+        // The shots: a blow of the impulse each gave the part it met.
+        for &(body, impulse) in struck {
+            if let Some((c, part)) = part_of(body) {
+                self.strike(c, part, impulse, &mut reactions.strength[c]);
+                knocked[c] |= impulse >= FALL_BLOW;
                 blows += 1;
             }
         }

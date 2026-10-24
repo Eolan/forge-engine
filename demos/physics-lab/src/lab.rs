@@ -157,6 +157,11 @@ const RAIN_BALLS: u32 = 60;
 /// The balls the players throw, taken in turn, and how fast they leave, m/s.
 const THROWN: u32 = 32;
 const THROW_SPEED: f32 = 25.0;
+/// How far a shot reaches, metres.
+const SHOT_REACH: f32 = 100.0;
+/// What a shot pushes the body it meets by, N·s: a rifle bullet's momentum, 10 g at 800 m/s. A
+/// full blow on a creature's part, short of felling a dog.
+const SHOT_IMPULSE: f32 = 8.0;
 /// Where the balls not yet thrown wait, asleep, out of sight.
 const PARKED_Y: f64 = -500.0;
 /// The props' indices in [`props`].
@@ -403,6 +408,14 @@ pub(crate) enum LabCommand {
         /// 0 to 1 of full strength.
         strength: f32,
     },
+    /// A shot from `from` along `forward` (unit): the body it meets is pushed, a creature's part
+    /// struck (Phase 7, D-012's hit reactions).
+    Shoot {
+        /// Where it leaves, metres.
+        from: [f32; 3],
+        /// Its way.
+        forward: [f32; 3],
+    },
 }
 
 impl Codec for LabCommand {
@@ -439,6 +452,12 @@ impl Codec for LabCommand {
             Self::Pull { strength } => {
                 out.push(9);
                 out.extend_from_slice(&strength.to_bits().to_le_bytes());
+            }
+            Self::Shoot { from, forward } => {
+                out.push(10);
+                for v in from.iter().chain(forward) {
+                    out.extend_from_slice(&v.to_bits().to_le_bytes());
+                }
             }
         }
     }
@@ -509,6 +528,18 @@ impl Codec for LabCommand {
                     strength: f32::from_bits(u32::from_le_bytes(*word)),
                 })
             }
+            10 => {
+                let mut v = [0.0_f32; 6];
+                for x in &mut v {
+                    let (word, rest) = bytes.split_first_chunk::<4>()?;
+                    *x = f32::from_bits(u32::from_le_bytes(*word));
+                    *bytes = rest;
+                }
+                Some(Self::Shoot {
+                    from: [v[0], v[1], v[2]],
+                    forward: [v[3], v[4], v[5]],
+                })
+            }
             _ => None,
         }
     }
@@ -563,6 +594,9 @@ pub(crate) struct LabWorld {
     feet: creatures::Feet,
     /// What blows left of their motors (Phase 7's hit reactions, D-012's strength schedule).
     reactions: creatures::Reactions,
+    /// The bodies this tick's shots struck, with the impulse each took: blows for the reactions
+    /// after the step, then cleared (never across ticks, so never saved).
+    struck: Vec<(BodyId, f32)>,
     /// The slimes before the creatures, soft bodies (#179, #180).
     slimes: Vec<slime::Slime>,
     /// The gulls (#184).
@@ -1304,6 +1338,7 @@ impl LabWorld {
                 herd,
                 feet: creatures::Feet::default(),
                 reactions: creatures::Reactions::default(),
+                struck: Vec::new(),
                 slimes,
                 birds,
                 beds,
@@ -1529,6 +1564,24 @@ impl LabWorld {
         self.sea.is_some()
     }
 
+    /// A shot from `from` along `forward` (Phase 7): the first body within [`SHOT_REACH`] is
+    /// pushed by [`SHOT_IMPULSE`] at the point met, if it moves, and a creature's part struck so
+    /// is a blow of it in this tick's reactions (a ray makes no contact for them to find).
+    fn shoot(&mut self, from: Vec3, forward: Vec3) {
+        let forward = forward.normalize_or(Vec3::NEG_Z);
+        let Some(hit) = self.world.cast_ray(from.as_dvec3(), forward * SHOT_REACH) else {
+            return;
+        };
+        let point = from.as_dvec3() + (forward * SHOT_REACH * hit.fraction).as_dvec3();
+        let mut mass = Vec::new();
+        self.world.masses(&[hit.body], &mut mass);
+        if mass[0].is_some() {
+            self.world
+                .add_impulse_at(hit.body, forward * SHOT_IMPULSE, point);
+            self.struck.push((hit.body, SHOT_IMPULSE));
+        }
+    }
+
     fn throw(&mut self, from: Vec3, forward: Vec3) {
         let ball = self.thrown[self.next_throw as usize];
         self.next_throw = (self.next_throw + 1) % self.thrown.len() as u32;
@@ -1559,6 +1612,9 @@ impl Simulation for LabWorld {
             match c.command {
                 LabCommand::Throw { from, forward } => {
                     self.throw(Vec3::from_array(from), Vec3::from_array(forward));
+                }
+                LabCommand::Shoot { from, forward } => {
+                    self.shoot(Vec3::from_array(from), Vec3::from_array(forward));
                 }
                 LabCommand::Reset => {
                     let start = std::mem::take(&mut self.start);
@@ -1759,7 +1815,13 @@ impl Simulation for LabWorld {
             // The blows the step dealt them, and their recovery (Phase 7).
             let mut contacts = Vec::new();
             self.contacts(&mut contacts);
-            herd.react(&self.world, self.limp, &contacts, &mut self.reactions);
+            herd.react(
+                &self.world,
+                self.limp,
+                &contacts,
+                &self.struck,
+                &mut self.reactions,
+            );
             // Its dogs' paws that came down in the step.
             let beds = &self.beds;
             let came = herd.feel(&self.world, self.tick, &mut self.feet, &|x, z| {
@@ -1810,6 +1872,8 @@ impl Simulation for LabWorld {
                 tracing::info!(tick = self.tick, ?event, "mission");
             }
         }
+        // This tick's shots are spent.
+        self.struck.clear();
         self.tick += 1;
     }
 
@@ -3457,6 +3521,14 @@ impl Lab {
         });
     }
 
+    /// A shot from `from` along `forward` at the next tick ([`LabCommand::Shoot`]).
+    pub(crate) fn shoot(&mut self, from: Vec3, forward: Vec3) {
+        self.queued.push(LabCommand::Shoot {
+            from: from.to_array(),
+            forward: forward.normalize_or(Vec3::NEG_Z).to_array(),
+        });
+    }
+
     /// Everything back to the start at the next tick.
     pub(crate) fn reset(&mut self) {
         self.queued.push(LabCommand::Reset);
@@ -3896,6 +3968,12 @@ mod tests {
                 controls: [0.5, -1.0, 0.25, 0.0],
             },
             LabCommand::Release,
+            LabCommand::Limp { on: true },
+            LabCommand::Pull { strength: 0.75 },
+            LabCommand::Shoot {
+                from: [1.0, 1.6, 5.0],
+                forward: [0.0, -0.1, -1.0],
+            },
         ] {
             let mut bytes = Vec::new();
             c.encode(&mut bytes);
@@ -4250,6 +4328,50 @@ mod tests {
         }
         assert_eq!(third.digest(), first.digest());
         assert_eq!(third.reactions, first.reactions);
+    }
+
+    /// A shot (a ray, a rifle bullet's 8 N·s at the point it meets): at a dog's torso it is one
+    /// blow, the torso at its weakest the next tick, the dog not felled; into the floor it strikes
+    /// nothing.
+    #[test]
+    fn a_shot_strikes_the_part_it_meets() {
+        const DOG: usize = 3;
+        let (mut world, _) = LabWorld::new(LabScene::Creatures, test_pool()).unwrap();
+        let herd = world.herd.clone().unwrap();
+        for _ in 0..60 {
+            world.tick(&[]);
+        }
+        let shot = |from: DVec3, at: DVec3, seq: u32| Stamped {
+            tick: 60,
+            player: 0,
+            seq,
+            command: LabCommand::Shoot {
+                from: from.as_vec3().to_array(),
+                forward: (at - from).normalize().as_vec3().to_array(),
+            },
+        };
+        // Into the floor between the creatures: no blow.
+        let floor = DVec3::new(0.0, 0.0, 3.0);
+        world.tick(&[shot(floor + DVec3::new(0.0, 1.5, 0.5), floor, 0)]);
+        assert_eq!(world.reactions.blows, 0);
+        // At the dog's torso from 3 m in front.
+        let torso = herd.roots(&world.world)[DOG].1.position;
+        world.tick(&[shot(torso + DVec3::new(0.0, 0.1, 3.0), torso, 1)]);
+        println!(
+            "after the shot: blows {}, the dog's strengths {:?}",
+            world.reactions.blows,
+            world.reactions.of(DOG)
+        );
+        assert_eq!(world.reactions.blows, 1);
+        let strength = world.reactions.of(DOG);
+        assert!(
+            strength.iter().fold(1.0f32, |a, &s| a.min(s)) < 0.2,
+            "{strength:?}"
+        );
+        assert!(
+            !world.reactions.is_down(DOG),
+            "one shot does not fell a dog"
+        );
     }
 
     /// A dog struck hard on its torso falls (the balance check: its torso past 50°), lies at its

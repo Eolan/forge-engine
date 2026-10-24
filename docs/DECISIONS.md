@@ -546,7 +546,12 @@ The physics layer's "hits simulated rather than played":
   (`a_dog_knocked_down_falls_lies_and_gets_up`). The rise is the dog's balance spring pulling it
   up, the lab's stand-in: a get-up clip would start from its first frame, never from the frame
   nearest the ragdoll's pose (EA's US 9,827,496).
-- **Next:** bullets' impulses (#268's shot), a mannequin's fall from its stand.
+- **Shots** (the same day, `LabCommand::Shoot`, `physics-lab --shoot-every N`): a ray of 100 m;
+  the body it meets is pushed by a rifle bullet's 8 N·s at the point met, and a creature's part
+  takes a blow of it (a ray makes no contact for the reactions to find). One shot at a dog is a
+  full blow on the part it meets and does not fell it (`a_shot_strikes_the_part_it_meets`).
+- **Next:** the shot rewound to the moment its shooter saw (#268's lag compensation in a scene),
+  a mannequin's fall from its stand.
 
 ## D-013 — Vegetation, impostor ladder, trim sheets ✅ (2026-09-24)
 
