@@ -625,7 +625,9 @@ The items below are the phase's original outline; the plan above orders them.
    the client's interpolation and the moment a shot carries ✅ (eight clients from 20 to 250 ms
    round trips meeting what they saw, in one process); corrections faded on screen and replays
    ✅ (2026-10-23: the server records what it applies with its state every 10 s, a replay starts
-   at any tick and reaches every digest).
+   at any tick and reaches every digest); a shot in a scene ✅ (2026-10-24, the physics lab
+   over 100 ms and 2 % loss: 46 shots at moving dogs, each meeting on the server the body its
+   shooter's prediction showed; the interpolated kind of scene, with the rewind, still to come).
    **Demo:** `hundred-bots` — 100 headless bots over a 100 ms / 2 % loss link on the server
    PC, two workers with a boundary across the island, bandwidth per client measured. On loopback
    ✅ (2026-10-23, `net-loopback --clients 100 --replicate 3000 --workers 2`: the clients' crowd
