@@ -495,6 +495,10 @@ pub enum Body {
     Quad(Quadruped),
 }
 
+/// How far a floating bird's feet sink under the surface, in body lengths: its legs (a quarter)
+/// and a tenth of the body's depth.
+const FLOAT_DRAUGHT: f32 = 0.28;
+
 /// The poses a body is drawn in, a mesh each: a bird folded, then its wings up, level and down;
 /// a four-legged animal its near legs forward, square, back, and lying.
 pub const POSES: usize = 4;
@@ -689,9 +693,11 @@ impl FaunaRun {
             let changed = pose != drawn.pose[i];
             drawn.pose[i] = pose;
             if let Some(k) = pose {
-                // Afloat on the water's surface, else over the walking level.
+                // Afloat, its legs under the water and its belly a little below the surface
+                // (`forge_geom::animals::bird` stands the body on legs a quarter of its length);
+                // else over the walking level.
                 let at = if mode == Mode::Water {
-                    Vec3::new(at.x, water, at.z)
+                    Vec3::new(at.x, water - FLOAT_DRAUGHT * sp.body, at.z)
                 } else {
                     at + ground
                 };
