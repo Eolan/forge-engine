@@ -593,9 +593,10 @@ pub struct Args {
     show_regions: bool,
     /// The trees' ladder (D-075, #302): the city plan's plants cross from their leaf cards to
     /// their crowns' closed shells, dithered, as the shells' lumps drop under this many output
-    /// pixels across. On by default at 6 since 2026-10-25 (the owner); 0 turns it off, the cards
-    /// drawn all the way ([`Args::tree_ladder`]).
-    #[arg(long, num_args = 0..=1, default_value = "6", default_missing_value = "6")]
+    /// pixels across. On by default since 2026-10-25 (the owner), at 9: at 6 the cards met a far
+    /// wood a pixel or two each and it went see-through. 0 turns it off, the cards drawn all the
+    /// way ([`Args::tree_ladder`]).
+    #[arg(long, num_args = 0..=1, default_value = "9", default_missing_value = "9")]
     pub tree_ladder: Option<f32>,
     /// With `--tree-ladder`: tint the shells blue (a crossing tree shows both, dithered).
     #[arg(long)]

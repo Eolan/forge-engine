@@ -7137,7 +7137,10 @@ DIR` writes the atlases as images (`forge_render::impostor`, `shaders/impostor.s
     their baked openness fixed the nearest crowns in shade but darkened the far woods, and made
     no difference at the real crossing (40 px), so it is left out.
 - **On by default** (the owner, 2026-10-25: "yes make it the default"): city-plan draws the
-  ladder at 6 px and the impostors at 40 px without flags; `--tree-ladder 0` draws the cards all
+  ladder at 9 px (6 at first: the owner, flying back, "the trees become almost transparent", the
+  cards a pixel or two each, speckled dark over the water; at 9 the riverbank's row stands whole,
+  the meadow view 4.88 → 4.11 ms; at 12 the meadow's trees dulled to shells from the air) and the
+  impostors at 40 px without flags; `--tree-ladder 0` draws the cards all
   the way, `--impostors 0` keeps the shells (`Args::tree_ladder`, `Args::impostors`). The far
   shadows' world comes with the ladder (60 m). The frame from the air 6.25 → 4.78 ms against the
   cards kept whole (`docs/PROFILE.md`); the impostors' bake adds 1.4 s to a first start, 0.33 s
