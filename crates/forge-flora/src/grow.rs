@@ -386,8 +386,53 @@ fn random_unit(rng: &mut SplitMix64) -> DVec3 {
 
 /// Grows one plant of `species` under `conditions`.
 pub fn grow(species: &Species, conditions: &Conditions) -> TreeGraph {
-    Grower::new(species, conditions).run()
+    // A plant whose crown fills under MIN_FILL of its envelope's width, or grows under MIN_LEAVES
+    // of leaf clusters for it, is grown again from a seed derived from its own, the fullest of the
+    // tries kept: a young umbrella pine on a poorer site grew 16 leaf clusters, a few tufts on a
+    // stick (the owner, 2026-10-24: "a bit of a strange canopy"), where its age's others grew 40
+    // to 80. A nursery sells the full ones. Of the village's 90 individuals it alone regrows.
+    let grown = |k: u64| {
+        let c = Conditions {
+            seed: if k == 0 {
+                conditions.seed
+            } else {
+                Seed::new(conditions.seed).derive(k).value()
+            },
+            ..*conditions
+        };
+        let grower = Grower::new(species, &c);
+        let width = 2.0
+            * grower
+                .envelope(growth_share(c.age, species.maturity))
+                .radius;
+        let g = grower.run();
+        // Its crown's width and its leaves, each against what the envelope asks: 1 or more both.
+        let wide = f64::from(g.crown_width()) / (MIN_FILL * width).max(1e-6);
+        let leafy = g.leaves.len() as f64 / (MIN_LEAVES * width * width).max(1e-6);
+        (wide.min(leafy), g)
+    };
+    let mut best = grown(0);
+    for k in 1..=REGROWTHS {
+        if best.0 >= 1.0 {
+            break;
+        }
+        let next = grown(k);
+        if next.0 > best.0 {
+            best = next;
+        }
+    }
+    best.1
 }
+
+/// The least share of its envelope's width a plant's crown fills before it is grown again from
+/// another seed ([`grow`]).
+const MIN_FILL: f64 = 0.6;
+/// The fewest leaf clusters a plant grows per square metre of its envelope's width squared
+/// before it is grown again ([`grow`]): the young umbrella pine of 16 had 1.3, its age's others
+/// 3 to 4, the dense species tens.
+const MIN_LEAVES: f64 = 2.0;
+/// The most times a plant is grown again ([`MIN_FILL`]).
+const REGROWTHS: u64 = 3;
 
 struct Grower<'a> {
     sp: &'a Species,
