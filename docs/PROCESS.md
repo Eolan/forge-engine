@@ -107,6 +107,21 @@ and compares each with `captures/map/accepted` by LDR-ꟻLIP; `--accept` makes t
 accepted set. About two minutes: the check per commit for the map, where the tiers run at
 milestones on the owner's word. The runs stay in `captures/map/<time>/` with a contact sheet.
 
+**The light check** (2026-10-25, the audit's step 2): `tools/light-check.sh` shoots the
+village's named views (the house's street, the green, the hall, the door, the room, the
+landing) at three times of day (noon, the afternoon, a low sun) as HDR captures, and compares
+the mean log2 luminance of named patches in each (`tools/light-patches.txt`, fractions of the
+frame; `imgdiff --mean-log-in`) with a reference set, in EV of the scene's light: a lighting
+change is judged where it landed and by how much, patch by patch, rather than by a whole
+frame's ꟻLIP. The reference is the same views with the probes twice as dense (the cascades
+0.5 m apart, the room grids 0.75 m, 256 rays: D-078's measure), made with `--reference` at a
+milestone and kept in `captures/light/reference/`; a patch within 0.15 EV of it passes
+(`FORGE_LIGHT_TOLERANCE_EV`). Beside it, the still-camera measure per view: the pixels that
+differ between frames 200 and 210 with the camera still, under 0.5 % (`FORGE_LIGHT_STILL_PCT`).
+The run and its table (`light.txt`) stay in `captures/light/<time>/`. Not run by the tiers yet:
+by hand after a lighting change, and with the map check once its patches are placed on what
+the issues name (#353, #334, #356: a far wall seen from two distances is the handoff rule).
+
 - **The pass tests** (2026-10-25, the audit's step 4): GPU tests in `cargo test`, each a pass
   over synthetic inputs run through the render graph on a device with no window
   (`forge_gpu::Headless`), its output read back and judged in milliseconds. They run with

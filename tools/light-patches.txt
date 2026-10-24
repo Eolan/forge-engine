@@ -1,0 +1,11 @@
+# The light check's patches (tools/light-check.sh): per view, the named patches whose mean
+# log2 luminance is compared with the reference set, in EV. One patch a line:
+#
+#   view  patch  x y w h       fractions of the frame (0..1), from the top left
+#
+# `*` is every view that has no line of its own. Place a view's patches on what the lighting
+# issues name (a far wall, a floor by a door, a window's band, the lawn under a tree) with the
+# run's contact sheet beside you; the defaults below are three bands that fit any view.
+*   middle  0.35 0.35 0.30 0.30
+*   floor   0.30 0.70 0.40 0.25
+*   top     0.30 0.05 0.40 0.25

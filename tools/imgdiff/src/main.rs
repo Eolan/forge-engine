@@ -123,6 +123,58 @@ struct Args {
     /// another show the steps of the exposure (D-067: local exposure adds none).
     #[arg(long)]
     mean_log: bool,
+    /// The same inside a patch, "x,y,width,height" as fractions of the frame (0.4,0.3,0.2,0.2)
+    /// or in pixels (repeatable): the light check's patches (`tools/light-check.sh`). Over two
+    /// PQ captures the luminance is the light's, so the change is in EV; over SDR frames it is
+    /// the display's, after the curve.
+    #[arg(long, value_parser = parse_patch)]
+    mean_log_in: Vec<[f64; 4]>,
+}
+
+/// A patch "x,y,width,height": fractions of the frame when every value is at most 1, else
+/// pixels.
+fn parse_patch(text: &str) -> std::result::Result<[f64; 4], String> {
+    let parts: Vec<f64> = text
+        .split(',')
+        .map(|p| p.trim().parse::<f64>().map_err(|e| e.to_string()))
+        .collect::<std::result::Result<_, _>>()?;
+    match parts.as_slice() {
+        [x, y, w, h] if parts.iter().all(|v| v.is_finite() && *v >= 0.0) => Ok([*x, *y, *w, *h]),
+        _ => Err("expected x,y,width,height, fractions or pixels".to_owned()),
+    }
+}
+
+/// A patch's pixels within a frame of `width` × `height`: fractions scaled, pixels kept, both
+/// clamped to the frame.
+fn patch_pixels(patch: [f64; 4], width: u32, height: u32) -> [u32; 4] {
+    let fractions = patch.iter().all(|v| *v <= 1.0);
+    let scale = |v: f64, size: u32| {
+        let pixels = if fractions { v * f64::from(size) } else { v };
+        (pixels.round().max(0.0) as u32).min(size)
+    };
+    let (x, y) = (scale(patch[0], width), scale(patch[1], height));
+    let (w, h) = (
+        scale(patch[2], width).min(width - x),
+        scale(patch[3], height).min(height - y),
+    );
+    [x, y, w, h]
+}
+
+/// The mean of `values` (one per pixel, rows of `width`) inside a patch, or `None` when it
+/// holds no pixel.
+fn mean_in(values: &[f32], width: u32, [x, y, w, h]: [u32; 4]) -> Option<f64> {
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let mut sum = 0.0_f64;
+    for row in y..y + h {
+        let at = (row * width + x) as usize;
+        sum += values[at..at + w as usize]
+            .iter()
+            .map(|&v| f64::from(v))
+            .sum::<f64>();
+    }
+    Some(sum / f64::from(w * h))
 }
 
 fn parse_offset(text: &str) -> std::result::Result<[f64; 2], String> {
@@ -479,6 +531,36 @@ fn main() -> Result<ExitCode> {
             mb - ma
         );
     }
+    if !args.mean_log_in.is_empty() {
+        // Over PQ captures, the light's luminance (linear, 1.0 = NITS_PER_UNIT): a change is an
+        // EV of the scene. Over SDR frames, the display's, after the curve: a proxy.
+        let (la, lb, space) = match &light {
+            Some((la, lb)) => {
+                let luminance = |l: &[flip::Color]| -> Vec<f32> {
+                    l.iter()
+                        .map(|c| {
+                            (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2])
+                                .max(1e-6)
+                                .log2()
+                        })
+                        .collect()
+                };
+                (luminance(la), luminance(lb), "light")
+            }
+            None => (log_luminance(&a), log_luminance(&b), "display"),
+        };
+        for patch in &args.mean_log_in {
+            let pixels = patch_pixels(*patch, width, height);
+            let [x, y, w, h] = pixels;
+            match (mean_in(&la, width, pixels), mean_in(&lb, width, pixels)) {
+                (Some(ma), Some(mb)) => println!(
+                    "mean log2 luminance in {x},{y},{w},{h}: a {ma:.4}, b {mb:.4}, change {:+.4} EV ({space})",
+                    mb - ma
+                ),
+                _ => println!("mean log2 luminance in {x},{y},{w},{h}: no pixels"),
+            }
+        }
+    }
     if let Some(threshold) = args.reversal {
         let (reversed, both) = reversals(&a, &b, threshold);
         println!(
@@ -550,4 +632,43 @@ fn main() -> Result<ExitCode> {
     } else {
         ExitCode::SUCCESS
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_patch_is_fractions_or_pixels_and_stays_in_the_frame() {
+        assert_eq!(
+            patch_pixels([0.25, 0.5, 0.5, 0.5], 400, 200),
+            [100, 100, 200, 100]
+        );
+        assert_eq!(
+            patch_pixels([10.0, 20.0, 50.0, 30.0], 400, 200),
+            [10, 20, 50, 30]
+        );
+        // Past the edge: cut to the frame.
+        assert_eq!(
+            patch_pixels([0.9, 0.9, 0.5, 0.5], 400, 200),
+            [360, 180, 40, 20]
+        );
+        assert_eq!(
+            patch_pixels([390.0, 190.0, 50.0, 50.0], 400, 200),
+            [390, 190, 10, 10]
+        );
+        assert!(parse_patch("0.4,0.3,0.2,0.2").is_ok());
+        assert!(parse_patch("1,2,3").is_err());
+        assert!(parse_patch("-1,0,1,1").is_err());
+    }
+
+    #[test]
+    fn the_mean_in_a_patch_counts_its_pixels_alone() {
+        // A 4 × 3 frame: the top row 1, the rest 3.
+        let values = [1.0, 1.0, 1.0, 1.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0];
+        assert_eq!(mean_in(&values, 4, [0, 0, 4, 1]), Some(1.0));
+        assert_eq!(mean_in(&values, 4, [1, 1, 2, 2]), Some(3.0));
+        assert_eq!(mean_in(&values, 4, [0, 0, 4, 3]), Some(7.0 / 3.0));
+        assert_eq!(mean_in(&values, 4, [2, 2, 0, 1]), None);
+    }
 }
