@@ -3536,16 +3536,10 @@ LampPlace lamp_place(Frame* f, ProbeField* probes, float3 world, float3 n, float
     {
         // A face whose point 2 cm off it misses its room's outline (the house's body: a wall's
         // face set back from it) looks 15 cm off: taken as the body's, it took every lamp of
-        // the frame, and its own room's ones fell to the picked rest in streaks.
-        RegionHit at = region_at(probes, world + n * 0.02);
-        if (at.kind == REGION_SOLID)
-            at = region_at(probes, world + n * 0.15);
-        // Still in the body (a thin side face set into the wall: an open shutter's edge, a
-        // balcony's bracket): the side it is seen from, 30 cm towards the camera. Taken as the
-        // body's, those faces took every lamp of the frame and showed as white specks on the
-        // facades at night (the owner, 2026-10-24).
-        if (at.kind == REGION_SOLID)
-            at = region_at(probes, world + view * 0.3);
+        // the frame, and its own room's ones fell to the picked rest in streaks. Still in the
+        // body (a thin side face set into the wall), the side it is seen from, 30 cm towards
+        // the camera (`region_open`).
+        RegionHit at = region_open(probes, world + n * 0.02, world + n * 0.15, world + view * 0.3);
         if (at.kind != REGION_SOLID)
         {
             place.region = at.region;
