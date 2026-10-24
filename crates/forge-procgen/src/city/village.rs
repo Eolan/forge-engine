@@ -279,13 +279,42 @@ pub fn village(site: &Site, params: &CityParams, seed: u64) -> Village {
         };
         // A lot too narrow for a house of its own joins its neighbour along the street.
         let (lots, keys) = houses::merge_small(&lots, &keys, &ty);
-        let houses = houses::houses(&lots, &ty, |k| household_of(seed, b, keys[k], rich), stair);
+        let mut houses =
+            houses::houses(&lots, &ty, |k| household_of(seed, b, keys[k], rich), stair);
+        // The ground the strips left between them where two streets' strips meet, and the lots
+        // too small for a house, each given to the housed lot it borders most, the houses
+        // standing as they were.
+        let outline = geom::simplify_closed(&city.blocks[b].buildable, 0.6);
+        let housed_lots: Vec<Vec<DVec2>> = lots
+            .iter()
+            .filter(|lot| houses.iter().any(|h| h.lot == **lot))
+            .cloned()
+            .collect();
+        let empty: Vec<Vec<DVec2>> = lots
+            .iter()
+            .filter(|lot| !housed_lots.contains(lot))
+            .cloned()
+            .collect();
+        let (grown, kept) = absorb_leftovers(&outline, &housed_lots, &court, &empty);
+        // The corners of the lots that grew, put into the edges they end on.
+        let changed: Vec<bool> = grown
+            .iter()
+            .zip(&housed_lots)
+            .map(|(g, h)| g != h)
+            .chain(kept.iter().map(|_| false))
+            .collect();
+        let all: Vec<Vec<DVec2>> = grown.into_iter().chain(kept).collect();
+        let lots = conform(&all, &changed);
+        for h in &mut houses {
+            if let Some(k) = housed_lots.iter().position(|lot| *lot == h.lot) {
+                h.lot.clone_from(&lots[k]);
+            }
+        }
         for h in &houses {
             masses.push(mass(&mut city, b, h, &streets));
         }
         // The walls round its gardens and its court wherever no house stands, a lotissement's
         // front low: on the outline the strips were cut from.
-        let outline = geom::simplify_closed(&city.blocks[b].buildable, 0.6);
         let footprints: Vec<Vec<DVec2>> = houses.iter().map(|h| h.footprint.clone()).collect();
         let front = if ty.setback > 0.0 {
             walls::FRONT
@@ -555,11 +584,26 @@ pub fn village(site: &Site, params: &CityParams, seed: u64) -> Village {
             }
             if let Some((t, true)) = hit {
                 let q = p + (far - p) * t;
+                // Stopped on a wall's face, its end face along it: square, a wall met a few
+                // degrees off square ran a corner 2 cm into it, the two tops on one plane there.
+                let face = city
+                    .walls
+                    .iter()
+                    .enumerate()
+                    .filter(|&(j, _)| j != k)
+                    .map(|(_, o)| o)
+                    .find(|o| near(&o.ring(), q, 1e-3))
+                    .map(|o| (o.b - o.a).normalize_or_zero());
                 let w = &mut city.walls[k];
                 if end == 0 {
                     w.a = q;
                 } else {
                     w.b = q;
+                }
+                if let Some(d) = face {
+                    let t = (w.b - w.a).normalize_or_zero();
+                    let left = DVec2::new(-t.y, t.x);
+                    w.ends[end] = if d.dot(left) < 0.0 { -d } else { d };
                 }
             }
         }
@@ -575,6 +619,207 @@ pub fn village(site: &Site, params: &CityParams, seed: u64) -> Village {
         without,
         masses,
     }
+}
+
+/// `lots` with the corners lying on their edges put into those edges: into a grown lot's
+/// (`grown[k]`) every lot's corners, into the others' the grown lots' corners. A lot grown by
+/// [`absorb_leftovers`] runs its sides past its neighbours' corners and ends them on their
+/// edges, and the walls there met at a T the joints could not trim (two walls sharing a few
+/// square centimetres).
+fn conform(lots: &[Vec<DVec2>], grown: &[bool]) -> Vec<Vec<DVec2>> {
+    let all: Vec<DVec2> = lots.iter().flatten().copied().collect();
+    let new: Vec<DVec2> = lots
+        .iter()
+        .zip(grown)
+        .filter(|(_, g)| **g)
+        .flat_map(|(lot, _)| lot.iter().copied())
+        .collect();
+    lots.iter()
+        .zip(grown)
+        .map(|(lot, &g)| {
+            let corners = if g { &all } else { &new };
+            let n = lot.len();
+            let mut out = Vec::with_capacity(n);
+            for i in 0..n {
+                let (a, b) = (lot[i], lot[(i + 1) % n]);
+                out.push(a);
+                // Its street side whole: the front its gate and its house go by.
+                if i == 0 {
+                    continue;
+                }
+                let length = a.distance(b);
+                let mut on: Vec<(f64, DVec2)> = corners
+                    .iter()
+                    .filter(|&&c| geom::distance_to_segment(c, a, b) < 0.02)
+                    .map(|&c| (geom::closest_on_segment(c, a, b) * length, c))
+                    .filter(|&(t, _)| t > 0.05 && t < length - 0.05)
+                    .collect();
+                on.sort_by(|x, y| x.0.total_cmp(&y.0));
+                on.dedup_by(|x, y| (x.0 - y.0).abs() < 0.05);
+                out.extend(on.into_iter().map(|(_, c)| c));
+            }
+            out
+        })
+        .collect()
+}
+
+/// `ring` without its spikes (a point the outline turns back at, out and in along one line) and
+/// its points in line with their neighbours.
+fn despike(ring: &[DVec2]) -> Vec<DVec2> {
+    let mut out = geom::clean(ring, 1e-3);
+    let mut changed = true;
+    while changed && out.len() > 3 {
+        changed = false;
+        let n = out.len();
+        for i in 0..n {
+            let (a, b, c) = (out[(i + n - 1) % n], out[i], out[(i + 1) % n]);
+            let (u, v) = ((b - a).normalize_or_zero(), (c - b).normalize_or_zero());
+            // Back the way it came, or straight on.
+            if u.dot(v) < -0.999 || (u.perp_dot(v).abs() < 1e-3 && u.dot(v) > 0.0) {
+                out.remove(i);
+                changed = true;
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// The pieces of ground a housed lot takes in, m²: from this small, up to this large (an empty lot
+/// larger stays open ground).
+const LEFTOVER: (f64, f64) = (2.0, 600.0);
+
+/// `lots` with the ground of `outline` that neither they, the `court` nor the `kept` lots hold
+/// (where the strips of two streets meet in a block's corner, and the lots too small for a
+/// house) each piece given to the lot whose outline it shares most, a metre at least. Left over,
+/// those pieces were open lawn on the street between walled gardens, and the lots round them
+/// ended on the slant: walls and hedges cut wedges of lawn (the owner, 2026-10-24). Each lot
+/// keeps its street side first, anticlockwise.
+fn absorb_leftovers(
+    outline: &[DVec2],
+    lots: &[Vec<DVec2>],
+    court: &[DVec2],
+    empty: &[Vec<DVec2>],
+) -> (Vec<Vec<DVec2>>, Vec<Vec<DVec2>>) {
+    let mut out = lots.to_vec();
+    let mut taken = lots.to_vec();
+    taken.extend(empty.iter().cloned());
+    if court.len() >= 3 {
+        taken.push(court.to_vec());
+    }
+    let on = |ring: &[DVec2], p: DVec2| {
+        let n = ring.len();
+        (0..n).any(|i| geom::distance_to_segment(p, ring[i], ring[(i + 1) % n]) < 0.05)
+    };
+    // The pieces: what no lot holds, then each empty lot (`Some` its index).
+    let pieces: Vec<(Vec<DVec2>, Option<usize>)> = super::ground::difference(outline, &taken)
+        .into_iter()
+        .filter_map(|shape| shape.into_iter().next())
+        .map(|p| (p, None))
+        .chain(empty.iter().cloned().enumerate().map(|(i, p)| (p, Some(i))))
+        .collect();
+    let mut given = vec![false; empty.len()];
+    for (piece, lot_of) in &pieces {
+        let piece = &piece[..];
+        let area = geom::signed_area(piece).abs();
+        // A sliver along two lots' backs (twice its area over its outline, its mean width,
+        // under a metre) stays: given to one lot, its end met the other's wall at a T the
+        // joints could not trim.
+        let mut ring = piece.to_vec();
+        ring.push(piece[0]);
+        let thin = 2.0 * area / geom::polyline_length(&ring) < 1.0;
+        if piece.len() < 3 || thin || !(LEFTOVER.0..=LEFTOVER.1).contains(&area) {
+            continue;
+        }
+        // How much of its outline each lot shares, and the street, every quarter metre.
+        let mut shared = vec![0.0; out.len()];
+        let mut street = 0.0;
+        let n = piece.len();
+        for i in 0..n {
+            let (p, q) = (piece[i], piece[(i + 1) % n]);
+            let steps = (p.distance(q) / 0.25).ceil().max(1.0);
+            for s in 0..steps as usize {
+                let x = p + (q - p) * ((s as f64 + 0.5) / steps);
+                if let Some(k) = out.iter().position(|lot| on(lot, x)) {
+                    shared[k] += p.distance(q) / steps;
+                } else if on(outline, x) {
+                    street += p.distance(q) / steps;
+                }
+            }
+        }
+        // Only what lies open on a street: inside the block a piece is the court's edge, its
+        // hedges, and given to a lot it ended that lot's walls at T's the joints could not trim.
+        if street < 2.0 {
+            continue;
+        }
+        let Some(k) = (0..out.len())
+            .filter(|&k| shared[k] >= 1.0)
+            .max_by(|&a, &b| shared[a].total_cmp(&shared[b]))
+        else {
+            continue;
+        };
+        let lot = &out[k];
+        // The piece's corners on the lot's outline set on it exactly (the booleans round to
+        // their grid): a millimetre apart, the union kept the old edge as a slit.
+        let snapped: Vec<DVec2> = piece
+            .iter()
+            .map(|&p| {
+                let m = lot.len();
+                (0..m)
+                    .map(|i| {
+                        let (a, b) = (lot[i], lot[(i + 1) % m]);
+                        if a.distance(p) < 0.05 {
+                            a
+                        } else {
+                            a + (b - a) * geom::closest_on_segment(p, a, b)
+                        }
+                    })
+                    .filter(|q| q.distance(p) < 0.05)
+                    .min_by(|x, y| x.distance(p).total_cmp(&y.distance(p)))
+                    .unwrap_or(p)
+            })
+            .collect();
+        let Some(grown) = super::ground::union_of(lot, &snapped)
+            .into_iter()
+            .filter_map(|s| s.into_iter().next())
+            .max_by(|a, b| {
+                geom::signed_area(a)
+                    .abs()
+                    .total_cmp(&geom::signed_area(b).abs())
+            })
+        else {
+            continue;
+        };
+        let mut grown = despike(&grown);
+        if geom::signed_area(&grown) < 0.0 {
+            grown.reverse();
+        }
+        // Its street side first: the edge along the old front holding its middle.
+        let (front, way) = (
+            (lot[0] + lot[1]) * 0.5,
+            (lot[1] - lot[0]).normalize_or_zero(),
+        );
+        let m = grown.len();
+        let Some(start) = (0..m).find(|&i| {
+            let (a, b) = (grown[i], grown[(i + 1) % m]);
+            geom::distance_to_segment(front, a, b) < 0.05
+                && (b - a).normalize_or_zero().dot(way) > 0.99
+        }) else {
+            continue;
+        };
+        grown.rotate_left(start);
+        out[k] = grown;
+        if let Some(i) = *lot_of {
+            given[i] = true;
+        }
+    }
+    let left = empty
+        .iter()
+        .zip(&given)
+        .filter(|(_, g)| !**g)
+        .map(|(e, _)| e.clone())
+        .collect();
+    (out, left)
 }
 
 /// House `h` of block `b` as a mass on its lot, appended to the plan's lots: its storeys from

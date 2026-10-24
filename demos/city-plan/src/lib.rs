@@ -8437,6 +8437,22 @@ fn grass_map(
 /// its section.
 type GroundPiece = (DVec2, Vec<[DVec2; 3]>, f64, u8);
 
+/// Whether each block has garden walls (a village's, `CityPlan::walls`): a wall's middle in it.
+fn walled_blocks(plan: &CityPlan) -> Vec<bool> {
+    let mut out = vec![false; plan.blocks.len()];
+    for w in &plan.walls {
+        let mid = (w.a + w.b) * 0.5;
+        if let Some(b) = plan
+            .blocks
+            .iter()
+            .position(|block| geom::contains(&block.polygon, mid))
+        {
+            out[b] = true;
+        }
+    }
+    out
+}
+
 /// Each block's ground off the streets, cut and triangulated on the machine's threads
 /// ([`PlanScenario::detailed`]): a built block's forecourt paved with its `paths` and its depot's
 /// yard, the rest its gardens; a large square's `middles` cut out of its paving.
@@ -8445,6 +8461,7 @@ fn blocks_ground(
     paths: &[Vec<Vec<DVec2>>],
     middles: &[Option<(Vec<DVec2>, bool)>],
 ) -> Vec<Vec<GroundPiece>> {
+    let walled = walled_blocks(plan);
     par_map(plan.blocks.len(), cores(), None, |b| {
         let block = &plan.blocks[b];
         let mut pieces: Vec<GroundPiece> = Vec::new();
@@ -8474,7 +8491,11 @@ fn blocks_ground(
                 .map(|d| d.yard());
             let mut ways = paths[b].clone();
             ways.extend(yard.clone());
-            let (front, rest) = plan.ground.forecourt(&block.polygon, FORECOURT, &ways);
+            // A village's block walls its gardens on the building line, the pavement's back
+            // edge: a forecourt there lay inside the walls, a band of paving round the lawns
+            // (the owner, 2026-10-24). Its paths stay paved.
+            let depth = if walled[b] { 0.0 } else { FORECOURT };
+            let (front, rest) = plan.ground.forecourt(&block.polygon, depth, &ways);
             let front = match &yard {
                 Some(yard) => {
                     let (inside, outside) = ground::split(&front, yard);
@@ -8521,7 +8542,9 @@ fn blocks_ground_key(
         }
     };
     put(plan.blocks.len() as f64);
+    let walled = walled_blocks(plan);
     for (b, block) in plan.blocks.iter().enumerate() {
+        put(f64::from(u8::from(walled[b])));
         put(match block.use_ {
             BlockUse::Built => 0.0,
             BlockUse::Park => 1.0,

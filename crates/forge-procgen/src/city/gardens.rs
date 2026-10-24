@@ -161,6 +161,64 @@ fn green_court(plan: &CityPlan, b: u32) -> Option<&[DVec2]> {
     block.courtyard.as_deref()
 }
 
+/// The gaps between the buildings: the lots on a street left open, each lot's index. A lot a
+/// built lot covers (more than [`GAP_COVERED`] of it) is no gap: the village draws its houses'
+/// own lots over the city's cut, whose lots no house uses (`village::village`), and those showed
+/// as gaps everywhere, with paths, hedges and bike racks inside the walled gardens (the owner,
+/// 2026-10-24).
+fn gaps(plan: &CityPlan, masses: &[Mass]) -> Vec<usize> {
+    let built: HashSet<u32> = masses.iter().map(|m| m.lot).collect();
+    let bounds = |polygon: &[DVec2]| {
+        polygon.iter().fold(
+            (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)),
+            |(lo, hi), &p| (lo.min(p), hi.max(p)),
+        )
+    };
+    let housed: Vec<(&[DVec2], (DVec2, DVec2))> = built
+        .iter()
+        .map(|&i| {
+            let polygon = &plan.lots[i as usize].polygon[..];
+            (polygon, bounds(polygon))
+        })
+        .collect();
+    let mut out = Vec::new();
+    for (i, lot) in plan.lots.iter().enumerate() {
+        if !lot.frontage || built.contains(&(i as u32)) {
+            continue;
+        }
+        let (lo, hi) = bounds(&lot.polygon);
+        let over: Vec<&[DVec2]> = housed
+            .iter()
+            .filter(|(_, (l, h))| l.x < hi.x && h.x > lo.x && l.y < hi.y && h.y > lo.y)
+            .map(|&(p, _)| p)
+            .collect();
+        // Its ground every metre: how much of it a built lot holds.
+        let (mut inside, mut covered) = (0usize, 0usize);
+        if !over.is_empty() {
+            let mut y = lo.y + 0.5;
+            while y < hi.y {
+                let mut x = lo.x + 0.5;
+                while x < hi.x {
+                    let p = DVec2::new(x, y);
+                    if geom::contains(&lot.polygon, p) {
+                        inside += 1;
+                        covered += usize::from(over.iter().any(|o| geom::contains(o, p)));
+                    }
+                    x += 1.0;
+                }
+                y += 1.0;
+            }
+        }
+        if covered as f64 <= GAP_COVERED * inside as f64 {
+            out.push(i);
+        }
+    }
+    out
+}
+
+/// The share of a lot left open that built lots may cover and it still be a gap.
+const GAP_COVERED: f64 = 0.25;
+
 /// A wall's direction and its outward normal (the side its mass is not on).
 fn frame(m: &Mass, wall: &Wall) -> (DVec2, DVec2) {
     let t = (wall.b - wall.a).normalize_or_zero();
@@ -187,7 +245,9 @@ fn ccw(mut outline: Vec<DVec2>) -> Vec<DVec2> {
     outline
 }
 
-/// A polyline moved `d` metres to its left.
+/// A polyline moved `d` metres to its left, mitred at its bends (a bend moved along the mean of
+/// its two ways alone narrowed the path there by a fifth at a right angle, the owner's
+/// "intersection issues"), the mitre at most twice `d`.
 fn offset(points: &[DVec2], d: f64) -> Vec<DVec2> {
     let n = points.len();
     (0..n)
@@ -203,18 +263,33 @@ fn offset(points: &[DVec2], d: f64) -> Vec<DVec2> {
                 prev
             };
             let t = (prev.normalize_or_zero() + next.normalize_or_zero()).normalize_or_zero();
-            points[i] + DVec2::new(-t.y, t.x) * d
+            let half_turn = t.dot(next.normalize_or_zero()).max(0.5);
+            points[i] + DVec2::new(-t.y, t.x) * (d / half_turn)
         })
         .collect()
 }
 
-/// A path's outline along `line`, `half` metres either side, its points every 2 m.
+/// The points of a path's round end between its two sides: an odd count, so its sides' points
+/// still pair across its middle line.
+const END_POINTS: usize = 5;
+
+/// A path's outline along `line`, `half` metres either side, its points every 2 m: its left
+/// side, its end round, its right side back. The end is where it joins the network on another
+/// path's middle line: square, a path meeting another on the slant stood out past that one's
+/// edge as a step, or left a notch of lawn (the owner, 2026-10-24).
 fn path(line: &[DVec2], half: f64) -> Option<Vec<DVec2>> {
     let line = geom::resample(line, 2.0);
-    if line.len() < 2 {
+    let n = line.len();
+    if n < 2 {
         return None;
     }
     let mut outline = offset(&line, half);
+    let (end, way) = (line[n - 1], (line[n - 1] - line[n - 2]).normalize_or_zero());
+    let left = DVec2::new(-way.y, way.x);
+    outline.extend((1..=END_POINTS).map(|k| {
+        let a = std::f64::consts::PI * k as f64 / (END_POINTS + 1) as f64;
+        end + (left * a.cos() + way * a.sin()) * half
+    }));
     outline.extend(offset(&line, -half).into_iter().rev());
     Some(outline)
 }
@@ -246,15 +321,12 @@ fn nearest_on(segments: &[(DVec2, DVec2)], p: DVec2) -> Option<DVec2> {
 ///   paths join instead of running side by side; to the middle itself where joining would turn
 ///   them away from it.
 pub fn court_paths(plan: &CityPlan, masses: &[Mass], structures: &[Structure]) -> Vec<Piece> {
-    let built: HashSet<u32> = masses.iter().map(|m| m.lot).collect();
     let mut entrances: std::collections::BTreeMap<u32, Vec<Entrance>> = Default::default();
-    for (i, lot) in plan.lots.iter().enumerate() {
+    for i in gaps(plan, masses) {
+        let lot = &plan.lots[i];
         let Some(court) = green_court(plan, lot.block) else {
             continue;
         };
-        if !lot.frontage || built.contains(&(i as u32)) {
-            continue;
-        }
         // From the block's edge nearest the gap's middle, into the court.
         let block = &plan.blocks[lot.block as usize];
         let middle = geom::centroid(&lot.polygon);
@@ -794,7 +866,6 @@ pub fn gardens(plan: &CityPlan, masses: &[Mass], structures: &[Structure]) -> Ve
 /// decoration"; Paris's residents asked for low planting rather than fences,
 /// `research/ground-floors.md` §3).
 fn gap_hedges(plan: &CityPlan, masses: &[Mass], out: &mut Vec<Piece>) {
-    let built: HashSet<u32> = masses.iter().map(|m| m.lot).collect();
     let mut streets = PointGrid::new(plan.size, 20.0);
     for (k, e) in plan.roads.edges.iter().enumerate() {
         for p in geom::resample(&e.points, 2.0) {
@@ -823,8 +894,9 @@ fn gap_hedges(plan: &CityPlan, masses: &[Mass], out: &mut Vec<Piece>) {
     }
     let (hw, _, low) = HEDGE;
     let mut hedges = Vec::new();
-    for (i, lot) in plan.lots.iter().enumerate() {
-        if green_court(plan, lot.block).is_none() || !lot.frontage || built.contains(&(i as u32)) {
+    for i in gaps(plan, masses) {
+        let lot = &plan.lots[i];
+        if green_court(plan, lot.block).is_none() {
             continue;
         }
         let mut racked = false;

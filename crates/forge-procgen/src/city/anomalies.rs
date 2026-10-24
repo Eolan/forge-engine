@@ -955,9 +955,13 @@ mod tests {
         // window from the room behind its bend: 7). Then #285 (2026-10-23) widened the houses' halls
         // to 1.40 m and their lots with them, and the villages were laid again: 600 m kept at none,
         // 700 to 900 m at 13, those new #308's next; a garden door slid off a partition: 12;
-        // a blank street wall at a bend took its window from a room 1.7 m off: 11.
-        let since: [(f64, Kind, usize); 8] = [
-            (700.0, Kind::FreeWallEnd, 1),
+        // a blank street wall at a bend took its window from a room 1.7 m off: 11. On 2026-10-24
+        // the ground left between the strips and the lots too small for a house went to their
+        // neighbours (the owner: open lawns on the street between walled gardens); two corners
+        // it walled anew, at 400 and 700 m, end a wall short of its neighbour: #308 next.
+        let since: [(f64, Kind, usize); 9] = [
+            (400.0, Kind::FreeWallEnd, 1),
+            (700.0, Kind::FreeWallEnd, 2),
             (800.0, Kind::UnlitRoom, 1),
             (800.0, Kind::FreeWallEnd, 1),
             (800.0, Kind::RidgeStep, 1),

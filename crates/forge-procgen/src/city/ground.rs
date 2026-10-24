@@ -1068,6 +1068,28 @@ impl GroundMap {
     }
 }
 
+/// What of `polygon` lies outside every one of `others`.
+pub fn difference(polygon: &[DVec2], others: &[Vec<DVec2>]) -> Shapes {
+    let a = Piece::from_points(polygon);
+    let pieces: Vec<Piece> = others
+        .iter()
+        .filter(|o| o.len() >= 3)
+        .map(|o| Piece::from_points(o))
+        .collect();
+    let cut = union(&pieces, a.min, a.max);
+    to_shapes(boolean(&vec![a.contours], &cut, OverlayRule::Difference))
+}
+
+/// The union of `a` and `b`.
+pub fn union_of(a: &[DVec2], b: &[DVec2]) -> Shapes {
+    let (a, b) = (Piece::from_points(a), Piece::from_points(b));
+    to_shapes(boolean(
+        &vec![a.contours],
+        &vec![b.contours],
+        OverlayRule::Union,
+    ))
+}
+
 /// What of `polygon` lies inside `within`.
 pub fn clip(polygon: &[DVec2], within: &[DVec2]) -> Shapes {
     let (a, b) = (Piece::from_points(polygon), Piece::from_points(within));

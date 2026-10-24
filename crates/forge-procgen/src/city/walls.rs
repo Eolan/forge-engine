@@ -142,8 +142,9 @@ const HEDGE_SHARE: (u64, u64) = (2, 5);
 /// The walls and hedges of a block cut into `lots` round `court` within its `outline`, the
 /// houses' `footprints` standing on the lots and `housed[k]` saying whether lot `k` has its
 /// house: each stretch of a housed lot's outline that no house stands on, once. Along the block's
-/// outline a wall [`STREET`] high (on a lot's front `front` high: [`FRONT`] for a lotissement's);
-/// between two gardens a wall [`PARTY`] high or, for [`HEDGE_SHARE`] of them, a hedge; a garden's
+/// outline a wall `front` high, [`STREET`] or a lotissement's [`FRONT`], all round the block;
+/// between two gardens a wall [`PARTY`] high (no higher than `front`) or, for [`HEDGE_SHARE`] of
+/// them, a hedge; a garden's
 /// side on the court a hedge. The court is the block's common ground, open to the lanes and to
 /// the lots without a house, which stay open ground too: walled all round, the courts and the
 /// empty lots were yards of walls with nothing in them (the owner, 2026-10-16: "why is this place
@@ -344,11 +345,11 @@ pub fn garden_walls(
             out.hedges.push((s.a, s.b));
             continue;
         }
-        let height = match (s.street, s.front) {
-            (true, true) => front,
-            (true, false) => STREET,
-            (false, _) => PARTY,
-        };
+        // Along the streets one height round the block, its fronts': a corner lot's second
+        // street side stood at a street wall's 1.8 m beside its 1 m front (the owner,
+        // 2026-10-24: "why some walls are higher than the ones next to them for no reason?").
+        // Between the gardens no higher: a lotissement's walls all as low as its fronts.
+        let height = if s.street { front } else { PARTY.min(front) };
         let along = (s.b - s.a).normalize_or_zero();
         // The lots and the court wind anticlockwise: their inside is to the left.
         let inside = s
@@ -809,15 +810,27 @@ fn settle(walls: &mut Vec<Wall>) {
                 if i == j || !below || !near(w, o) || overlap(&w.ring(), &o.ring()) < 1e-4 {
                     continue;
                 }
-                let at_b = geom::distance_to_segment(w.b, o.a, o.b)
-                    < geom::distance_to_segment(w.a, o.a, o.b);
-                let (c, into) = if at_b { (w.b, -dir(w)) } else { (w.a, dir(w)) };
-                let back = clearing(w, c, into, o);
+                // The one stepping back: `w`, from its end nearer `o`; where that clears nothing
+                // (`o` ends on `w`'s side at a T, far from `w`'s ends), `o` from its end nearer
+                // `w` (a wall grown round a corner lot's leftover met one so, sharing 19 cm²).
+                let end_of = |w: &Wall, o: &Wall| {
+                    let at_b = geom::distance_to_segment(w.b, o.a, o.b)
+                        < geom::distance_to_segment(w.a, o.a, o.b);
+                    let (c, into) = if at_b { (w.b, -dir(w)) } else { (w.a, dir(w)) };
+                    (at_b, clearing(w, c, into, o))
+                };
+                let (mut k, (mut at_b, mut back)) = (i, end_of(w, o));
+                if back < 1e-9 {
+                    let (other_b, other_back) = end_of(o, w);
+                    if other_back < 0.5 {
+                        (k, at_b, back) = (j, other_b, other_back);
+                    }
+                }
                 if back < 1e-9 {
                     continue;
                 }
-                let t = dir(w);
-                let w = &mut walls[i];
+                let t = dir(&walls[k]);
+                let w = &mut walls[k];
                 if at_b {
                     w.b -= t * back.min(w.length());
                 } else {
