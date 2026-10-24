@@ -811,6 +811,46 @@ fn a_ragdoll_holds_its_pose_on_its_motors_and_falls_limp() {
     );
 }
 
+/// D-012's strength schedule: each joint's motors scaled by its part's strength. At full strength
+/// the arm holds as `drive_ragdoll` holds it, to the bit; the forearm's joint at 2 % lets it sag
+/// under its weight while the upper arm holds.
+#[test]
+fn a_ragdoll_part_at_a_fraction_of_its_strength_gives_way() {
+    let still = [[0.0, 0.0, 0.0, 1.0]; 3];
+    let strong = Motors {
+        stiffness: 2000.0,
+        damping: 60.0,
+        torque: 200.0,
+    };
+    let held = |strength: Option<[f32; 3]>| {
+        let (mut world, ragdoll, bodies) = arm();
+        for _ in 0..60 {
+            match strength {
+                Some(s) => world.drive_ragdoll_with(ragdoll, &still, strong, &s),
+                None => world.drive_ragdoll(ragdoll, &still, strong),
+            }
+            world.step(1.0 / 60.0, 1).unwrap();
+        }
+        let mut t = Vec::new();
+        world.transforms(&bodies, &mut t);
+        t
+    };
+    let plain = held(None);
+    assert_eq!(held(Some([1.0; 3])), plain);
+    let weak = held(Some([1.0, 1.0, 0.02]));
+    assert!(
+        (weak[1].position - plain[1].position).length() < 0.02,
+        "the upper arm holds: {}",
+        weak[1].position
+    );
+    assert!(
+        weak[2].position.y < plain[2].position.y - 0.05,
+        "the forearm sags: {} against {}",
+        weak[2].position,
+        plain[2].position
+    );
+}
+
 /// A ball of `radius`: an octahedron cut twice into four (66 vertices, 128 triangles), wound
 /// outwards, its points pushed onto the sphere.
 fn ball(radius: f32) -> (Vec<Vec3>, Vec<[u32; 3]>) {

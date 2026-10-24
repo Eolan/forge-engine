@@ -1033,7 +1033,7 @@ uint32_t fj_ragdoll_add(FjWorld *world, const FjRagdollPart *parts, uint32_t cou
 }
 
 void fj_ragdoll_drive(FjWorld *world, uint32_t ragdoll, const float *targets, float stiffness,
-                      float damping, float torque) {
+                      float damping, float torque, const float *strength) {
     JPH::Ragdoll &r = *world->ragdolls[ragdoll];
     const JPH::RagdollSettings &s = *world->ragdoll_settings[ragdoll];
     const JPH::EMotorState state =
@@ -1042,14 +1042,15 @@ void fj_ragdoll_drive(FjWorld *world, uint32_t ragdoll, const float *targets, fl
     for (int c = 0; c < static_cast<int>(r.GetConstraintCount()); ++c) {
         const int part = s.GetBodyIndicesForConstraintIndex(c).second;
         const float *t = targets + 4 * part;
+        const float k = strength != nullptr ? strength[part] : 1.0f;
         JPH::TwoBodyConstraint *constraint = r.GetConstraint(c);
         if (constraint->GetSubType() == JPH::EConstraintSubType::Hinge) {
             auto *hinge = static_cast<JPH::HingeConstraint *>(constraint);
             JPH::MotorSettings &m = hinge->GetMotorSettings();
             m.mSpringSettings.mMode = JPH::ESpringMode::StiffnessAndDamping;
-            m.mSpringSettings.mStiffness = stiffness;
-            m.mSpringSettings.mDamping = damping;
-            m.SetTorqueLimit(torque);
+            m.mSpringSettings.mStiffness = stiffness * k;
+            m.mSpringSettings.mDamping = damping * k;
+            m.SetTorqueLimit(torque * k);
             woken |= hinge->GetMotorState() != state;
             hinge->SetMotorState(state);
             hinge->SetTargetAngle(t[0]);
@@ -1058,9 +1059,9 @@ void fj_ragdoll_drive(FjWorld *world, uint32_t ragdoll, const float *targets, fl
             for (JPH::MotorSettings *m :
                  {&joint->GetSwingMotorSettings(), &joint->GetTwistMotorSettings()}) {
                 m->mSpringSettings.mMode = JPH::ESpringMode::StiffnessAndDamping;
-                m->mSpringSettings.mStiffness = stiffness;
-                m->mSpringSettings.mDamping = damping;
-                m->SetTorqueLimit(torque);
+                m->mSpringSettings.mStiffness = stiffness * k;
+                m->mSpringSettings.mDamping = damping * k;
+                m->SetTorqueLimit(torque * k);
             }
             woken |= joint->GetSwingMotorState() != state;
             joint->SetSwingMotorState(state);

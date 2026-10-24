@@ -659,7 +659,9 @@ The items below are the phase's original outline; the plan above orders them.
    space ✅ (#167, 2026-10-08), packed clips ✅ (#167, a quarter to a third of their bytes);
    two-bone IK and a look-at ✅ (#167; the lab's mannequins watch the dogs); the feet on uneven
    ground and foot-down events ✅ (#167, `--lab course`).
-2. Motion matching for the player; powered ragdolls tracking poses; hit reactions;
+2. Motion matching for the player; powered ragdolls tracking poses; hit reactions (the strength
+   schedule ✅, 2026-10-24: a blow weakens the struck parts' motors, recovered over 0.6 s, saved
+   and replayed with the world; the fall and the get-up next);
    contact events to the material layer (the contacts begun in a step, with where and how fast ✅,
    2026-10-23, `World::contacts`; their sounds by material ✅ the same day: the material record's
    sound layer, both bodies ringing with the softer setting the contact, `physics-lab`'s impacts;

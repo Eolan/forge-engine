@@ -1431,7 +1431,8 @@ impl World {
     /// plane axis; identity is the pose as built), for a hinge its angle in `x`. A powered ragdoll
     /// is kept awake, so its targets move it however still it was; a limp one may sleep.
     pub fn drive_ragdoll(&mut self, ragdoll: RagdollId, targets: &[[f32; 4]], motors: Motors) {
-        // SAFETY: the world is live, the index one it gave, four floats a part read.
+        // SAFETY: the world is live, the index one it gave, four floats a part read; no
+        // strengths.
         unsafe {
             ffi::fj_ragdoll_drive(
                 self.raw.as_ptr(),
@@ -1440,6 +1441,37 @@ impl World {
                 motors.stiffness,
                 motors.damping,
                 motors.torque,
+                std::ptr::null(),
+            );
+        }
+    }
+
+    /// As [`World::drive_ragdoll`], each part's joint's motors (its stiffness, damping and
+    /// torque) scaled by its `strength` (one a part, the root's ignored): what a hit leaves of
+    /// them while they recover (D-012's strength schedule).
+    ///
+    /// # Panics
+    ///
+    /// When `strength` has fewer entries than `targets`.
+    pub fn drive_ragdoll_with(
+        &mut self,
+        ragdoll: RagdollId,
+        targets: &[[f32; 4]],
+        motors: Motors,
+        strength: &[f32],
+    ) {
+        assert!(strength.len() >= targets.len(), "a strength a part");
+        // SAFETY: the world is live, the index one it gave, four floats and a strength a part
+        // read.
+        unsafe {
+            ffi::fj_ragdoll_drive(
+                self.raw.as_ptr(),
+                ragdoll.0,
+                targets.as_ptr().cast(),
+                motors.stiffness,
+                motors.damping,
+                motors.torque,
+                strength.as_ptr(),
             );
         }
     }

@@ -348,9 +348,10 @@ uint32_t fj_ragdoll_add(FjWorld *world, const FjRagdollPart *parts, uint32_t cou
 // swing-twist joint the part's turn in its joint's frame (a quaternion, x y z w; identity is
 // the pose as built), for a hinge its angle in the first. Motors of a spring of `stiffness`
 // (N·m a radian) and `damping` (N·m·s a radian), whatever the parts weigh, at most `torque`
-// N·m; a torque of 0 lets the ragdoll go limp.
+// N·m; a torque of 0 lets the ragdoll go limp. `strength`, when not null, one a part (the root's
+// ignored), scales each joint's stiffness, damping and torque (a hit's reaction, D-012).
 void fj_ragdoll_drive(FjWorld *world, uint32_t ragdoll, const float *targets, float stiffness,
-                      float damping, float torque);
+                      float damping, float torque, const float *strength);
 
 // The whole simulation state (bodies, contacts, constraints) into a buffer the world owns,
 // valid until the next call; `size` receives its length.

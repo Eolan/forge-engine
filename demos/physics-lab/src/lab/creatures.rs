@@ -22,8 +22,8 @@ use forge_geom::city::{Block, Lathe, PropKind, PropSpec};
 use forge_geom::model::{Model, ModelMesh, load_glb};
 use forge_geom::{MorphTarget, TriMesh, VertexSkin};
 use forge_physics::{
-    BodyDesc, BodyId, JointId, JointLoad, Motors, RagdollId, RagdollJoint, RagdollPart, Shape,
-    Transform, World,
+    BodyDesc, BodyId, Contact, JointId, JointLoad, Motors, RagdollId, RagdollJoint, RagdollPart,
+    Shape, Transform, World,
 };
 use forge_sim::TICK;
 use glam::{DVec3, Mat3, Mat4, Quat, Vec2, Vec3};
@@ -578,6 +578,70 @@ pub(super) struct Herd {
     /// The course's slabs and their materials' names (the props'); anything else fixed is the
     /// floor.
     grounds: Vec<(BodyId, &'static str)>,
+}
+
+/// The blow that takes a part down to [`WEAKEST`], N·s (`μ v`, μ the reduced mass of the part and
+/// what struck it). The lab's thrown ball (32.7 kg at 25 m/s) is a full blow on any part; a 3 kg
+/// part brushed at 1 m/s by a heavier body loses about a third.
+const BLOW_FULL: f32 = 8.0;
+/// The least of its motors a blow leaves a part: they keep pulling it back to its pose.
+const WEAKEST: f32 = 0.1;
+/// Seconds a part takes to recover from its weakest to full strength.
+const RECOVER: f32 = 0.6;
+/// The share of a blow the struck part's neighbours along the chain feel.
+const NEIGHBOUR: f32 = 0.5;
+/// A slower meeting is a touch, not a blow, m/s.
+const SLOWEST_BLOW: f32 = 0.5;
+
+/// D-012's strength schedule, Phase 7's hit reactions (`research/hit-reactions.md`): what blows
+/// left of each part's motors. A blow from a moving body lowers the struck part's strength by its
+/// impulse, its parent's and children's by [`NEIGHBOUR`] of that, and every part recovers to full
+/// over [`RECOVER`] seconds while its clip plays on, so the body is knocked off its pose and pulled
+/// back. Simulation state: saved, restored and replayed with the world. The clip is never
+/// switched, nor a part's mass changed (the live claims the research met need either).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct Reactions {
+    /// Each creature's parts' strengths, 0 to 1; empty before the first blow (all full).
+    strength: Vec<[f32; PARTS]>,
+    /// The blows taken since the start.
+    pub blows: u64,
+}
+
+impl Reactions {
+    /// Creature `c`'s parts' strengths.
+    pub(super) fn of(&self, c: usize) -> [f32; PARTS] {
+        self.strength.get(c).copied().unwrap_or([1.0; PARTS])
+    }
+
+    /// The bytes a saved state keeps for `creatures`: the blows' count, then every strength.
+    pub(super) fn save(&self, creatures: usize, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.blows.to_le_bytes());
+        for c in 0..creatures {
+            for s in self.of(c) {
+                out.extend_from_slice(&s.to_bits().to_le_bytes());
+            }
+        }
+    }
+
+    /// How many bytes [`Reactions::save`] writes for `creatures`.
+    pub(super) fn saved_len(creatures: usize) -> usize {
+        8 + 4 * PARTS * creatures
+    }
+
+    /// Back to what `bytes` ([`Reactions::save`]'s, for `creatures`) held.
+    pub(super) fn restore(&mut self, creatures: usize, bytes: &[u8]) {
+        let (blows, rest) = bytes.split_at(8);
+        self.blows = u64::from_le_bytes(blows.try_into().expect("8 bytes"));
+        let values: Vec<f32> = rest
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|&b| f32::from_bits(u32::from_le_bytes(b)))
+            .collect();
+        self.strength = (0..creatures)
+            .map(|c| std::array::from_fn(|k| values[c * PARTS + k]))
+            .collect();
+    }
 }
 
 /// The dogs' paws as they come down (#167's foot-down events, [`Herd::feel`]): whether each is
@@ -1285,6 +1349,7 @@ impl Herd {
         world: &mut World,
         time: f64,
         limp: bool,
+        reactions: &Reactions,
         soft: &dyn Fn(f64, f64) -> Option<f64>,
     ) {
         // The mannequins watch the nearest dog walk by.
@@ -1296,7 +1361,7 @@ impl Herd {
             .collect();
         let mut dogs_at = Vec::new();
         world.transforms(&dogs, &mut dogs_at);
-        for c in &self.creatures {
+        for (i, c) in self.creatures.iter().enumerate() {
             let motion = c.kind.motion();
             let mut pose = motion.rig.skeleton.rest().clone();
             motion.pose_at(time + c.phase, &mut pose);
@@ -1347,7 +1412,7 @@ impl Herd {
                 torque: if limp { 0.0 } else { c.kind.motors().torque },
                 ..c.kind.motors()
             };
-            world.drive_ragdoll(c.ragdoll, &targets, motors);
+            world.drive_ragdoll_with(c.ragdoll, &targets, motors, &reactions.of(i));
             if c.stand.is_none() && !limp {
                 // On the course: over its lane, at its walk's pace while it walks. On the floor:
                 // on its spot, which it walks about as it turns.
@@ -1371,6 +1436,68 @@ impl Herd {
                 balance(world, c, yaw, lift, guide);
             }
         }
+    }
+
+    /// How many creatures it holds.
+    pub(super) fn len(&self) -> usize {
+        self.creatures.len()
+    }
+
+    /// After a step: every part recovers a tick's worth towards full, then the blows `contacts`
+    /// (the step's begun contacts, each with its bodies' masses) dealt the creatures' parts lower
+    /// them ([`Reactions`]). A blow is a moving body striking a part at [`SLOWEST_BLOW`] or faster;
+    /// the ground, the stands and a creature's own parts deal none. How many blows.
+    pub(super) fn react(
+        &self,
+        contacts: &[(Contact, [Option<f32>; 2])],
+        reactions: &mut Reactions,
+    ) -> usize {
+        reactions
+            .strength
+            .resize(self.creatures.len(), [1.0; PARTS]);
+        let step = TICK / RECOVER * (1.0 - WEAKEST);
+        for s in reactions.strength.iter_mut().flatten() {
+            *s = (*s + step).min(1.0);
+        }
+        let part_of = |body: BodyId| {
+            self.creatures.iter().enumerate().find_map(|(c, creature)| {
+                Some((c, creature.parts.iter().position(|&p| p == body)?))
+            })
+        };
+        let mut blows = 0;
+        for (contact, masses) in contacts {
+            if contact.speed < SLOWEST_BLOW {
+                continue;
+            }
+            let sides = [(contact.a, masses[0]), (contact.b, masses[1])];
+            for (k, &(body, mass)) in sides.iter().enumerate() {
+                let (other, other_mass) = sides[1 - k];
+                let Some((c, part)) = part_of(body) else {
+                    continue;
+                };
+                // Struck by a moving body, not one of its own parts.
+                let Some(by) = other_mass else {
+                    continue;
+                };
+                if part_of(other).is_some_and(|(o, _)| o == c) {
+                    continue;
+                }
+                let mass = mass.unwrap_or(by);
+                let impulse = mass * by / (mass + by).max(f32::MIN_POSITIVE) * contact.speed;
+                let drop = (impulse / BLOW_FULL).min(1.0) * (1.0 - WEAKEST);
+                let parts = self.creatures[c].kind.parts();
+                let strength = &mut reactions.strength[c];
+                strength[part] = strength[part].min(1.0 - drop);
+                for (j, p) in parts.iter().enumerate() {
+                    if p.parent == Some(part) || parts[part].parent == Some(j) {
+                        strength[j] = strength[j].min(1.0 - NEIGHBOUR * drop);
+                    }
+                }
+                blows += 1;
+            }
+        }
+        reactions.blows += blows;
+        blows as usize
     }
 
     /// After a step of `dt`: the stands that carried more than they hold let their mannequins
@@ -1841,7 +1968,9 @@ mod tests {
         let (mut feet, mut falls) = (Feet::default(), Vec::new());
         for tick in 0..seconds * 60 {
             let time = f64::from(tick) * f64::from(TICK);
-            field.herd.drive(&mut world, time, false, &|_, _| None);
+            field
+                .herd
+                .drive(&mut world, time, false, &Reactions::default(), &|_, _| None);
             world.step(TICK, 1).expect("a step");
             let came = field
                 .herd

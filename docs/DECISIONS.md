@@ -517,6 +517,29 @@ for a player of about 125 nodes and a pursuer of about 40, `forge_anim::machine`
   US 9,821,230 B2 (D-072) claim a definition received from a server: reread them before a server
   sends a machine to clients.
 
+**Hit reactions: the strength schedule ✅ (Phase 7, 2026-10-24, `physics-lab --lab creatures`).**
+The physics layer's "hits simulated rather than played":
+- **A blow:** a moving body striking a creature's part at 0.5 m/s or more (not the ground, its stand
+  or its own parts), from the contacts each step begins. Its impulse `μ v` (μ the reduced mass of
+  the part and what struck it) lowers the part's strength; 8 N·s takes it to 10 %, never to none.
+  Its parent and children lose half as much.
+- **Strength:** scales the part's joint's motors, their stiffness, damping and torque
+  (`World::drive_ragdoll_with`). Each part recovers to full over 0.6 s while its clip plays on,
+  so the body is knocked off its pose and pulled back.
+- **Simulation state:** saved, restored and replayed with the world. A ball thrown at a mannequin:
+  2 blows, its weakest part at 0.10, all back to full two seconds on; a run restored mid-recovery
+  keeps the unbroken run's digests (`a_blow_weakens_a_creatures_parts_and_they_recover`).
+- **Patents** (`research/hit-reactions.md`): the whole technique, with the limp fall and the
+  centre-of-mass balance check, is in EA's US 7,403,202 B1 (filed 2005, expired). The live claims
+  read need what this does not do, and must keep not doing:
+  - a clip, frame or start frame chosen by matching against the hit or the ragdoll's pose (EA's
+    US 9,827,496 and US 10,388,053; a get-up must not start at the clip frame nearest the pose);
+  - a hit clip chosen by the collision and warped (EA's US 10,022,628);
+  - EMG-recorded muscle data (EA's US 10,497,163);
+  - a struck limb made heavier or longer (Sony's US 11,113,862).
+- **Next:** the fall past a blow's threshold and the get-up, the balance check deciding stagger or
+  fall, bullets' impulses.
+
 ## D-013 — Vegetation, impostor ladder, trim sheets ✅ (2026-09-24)
 
 Trees are grown, not modelled: Weber–Penn parameter files per species, space colonisation

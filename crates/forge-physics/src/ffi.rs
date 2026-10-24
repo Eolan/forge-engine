@@ -373,6 +373,7 @@ unsafe extern "C" {
         stiffness: f32,
         damping: f32,
         torque: f32,
+        strength: *const f32,
     );
     pub fn fj_joints_holding(
         world: *const FjWorld,

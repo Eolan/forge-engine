@@ -666,7 +666,13 @@ mod tests {
         for tick in 0..seconds * 60 {
             let time = f64::from(tick) * f64::from(TICK);
             let under = |x, z| top(&beds, x, z);
-            field.herd.drive(&mut world, time, false, &under);
+            field.herd.drive(
+                &mut world,
+                time,
+                false,
+                &crate::lab::creatures::Reactions::default(),
+                &under,
+            );
             drive(&mut world, &driver, &beds, u64::from(tick));
             world.step(TICK, 1).expect("a step");
             let came = field

@@ -938,6 +938,25 @@ slope (10° on the ramps), its heading along the ground, its pressure within 30 
 runs give the same footfalls; a ray among the fixed bodies passes through a moving one
 (`forge-physics`).
 
+**Hit reactions** (Phase 7, 2026-10-24; D-012's strength schedule, `creatures::Reactions`). A blow
+weakens what it strikes, and the motors pull it back:
+- **A blow:** a moving body striking a part at 0.5 m/s or more, from the contacts each step begins
+  (the ground, the stands and a creature's own parts deal none). It lowers the part's strength by
+  its impulse `μ v`: 8 N·s takes it to 10 %, which a thrown ball always does. Its parent and
+  children lose half as much.
+- **Strength** scales the part's joint's stiffness, damping and torque
+  (`World::drive_ragdoll_with`). Every part recovers to full over 0.6 s while its clip plays on.
+- **State:** saved, restored and replayed with the lab's.
+- **Measured:** a ball thrown at the middle mannequin's chest deals 2 blows, the first 5 ticks
+  after the throw, its weakest part at 0.10. Every part is back to full two seconds on. A run
+  restored mid-recovery keeps the unbroken run's digests, and the same throw gives the same world.
+- **The captures:** `lab-creatures-throw240` changed, accepted: the struck mannequin, knocked off
+  its stand, lies with its arms otherwise (3 555 px, ꟻLIP mean 0.004). The other herd captures
+  are 0 px; a dog walking by deals no blow there.
+- **Patents:** `research/hit-reactions.md`. The technique is in EA's expired US 7,403,202 B1. A clip
+  is never switched or chosen by the hit, and a part's mass never changed, which the live claims
+  read would need.
+
 ## `flyer`: gulls on their wings (issue #184)
 
 Phase 3's step 7 ends with a flyer. `physics-lab --lab flyer`: three gulls circle the lab 8 m up,

@@ -561,6 +561,8 @@ pub(crate) struct LabWorld {
     herd: Option<creatures::Herd>,
     /// Their dogs' paws coming down (#167's foot-down events).
     feet: creatures::Feet,
+    /// What blows left of their motors (Phase 7's hit reactions, D-012's strength schedule).
+    reactions: creatures::Reactions,
     /// The slimes before the creatures, soft bodies (#179, #180).
     slimes: Vec<slime::Slime>,
     /// The gulls (#184).
@@ -1273,6 +1275,10 @@ impl LabWorld {
             });
         }
         world.optimize_broad_phase();
+        // The creatures react to the blows the contacts tell of (Phase 7).
+        if herd.is_some() {
+            world.track_contacts(true);
+        }
         let start = world.save_state();
         Ok((
             Self {
@@ -1297,6 +1303,7 @@ impl LabWorld {
                 wall,
                 herd,
                 feet: creatures::Feet::default(),
+                reactions: creatures::Reactions::default(),
                 slimes,
                 birds,
                 beds,
@@ -1562,6 +1569,7 @@ impl Simulation for LabWorld {
                     self.next_throw = 0;
                     self.started = self.tick;
                     self.feet.clear();
+                    self.reactions = creatures::Reactions::default();
                     if let Some(yard) = &mut self.materials {
                         yard.stride = city_blocks::island_walk::Stride::default();
                     }
@@ -1736,6 +1744,7 @@ impl Simulation for LabWorld {
                 &mut self.world,
                 self.tick as f64 * f64::from(TICK),
                 self.limp,
+                &self.reactions,
                 &|x, z| yard::top(beds, x, z),
             );
         }
@@ -1747,6 +1756,10 @@ impl Simulation for LabWorld {
         // A mannequin knocked hard enough comes off its stand.
         if let Some(herd) = &self.herd {
             herd.knock(&mut self.world, TICK);
+            // The blows the step dealt them, and their recovery (Phase 7).
+            let mut contacts = Vec::new();
+            self.contacts(&mut contacts);
+            herd.react(&contacts, &mut self.reactions);
             // Its dogs' paws that came down in the step.
             let beds = &self.beds;
             let came = herd.feel(&self.world, self.tick, &mut self.feet, &|x, z| {
@@ -1812,6 +1825,10 @@ impl Simulation for LabWorld {
         let (down, falls) = self.feet.state();
         out.extend_from_slice(&down.to_le_bytes());
         out.extend_from_slice(&falls.to_le_bytes());
+        // The creatures' strengths after their blows (Phase 7).
+        if let Some(herd) = &self.herd {
+            self.reactions.save(herd.len(), &mut out);
+        }
         // The gulls' clips.
         for bird in &self.birds {
             for word in bird.state() {
@@ -1855,6 +1872,15 @@ impl Simulation for LabWorld {
         let (started, rest) = rest.split_at(8);
         let (next, rest) = rest.split_at(4);
         let (feet, rest) = rest.split_at(16);
+        let creatures = self.herd.as_ref().map_or(0, creatures::Herd::len);
+        let (reactions, rest) = rest.split_at(if creatures > 0 {
+            creatures::Reactions::saved_len(creatures)
+        } else {
+            0
+        });
+        if creatures > 0 {
+            self.reactions.restore(creatures, reactions);
+        }
         let (flock, mut rest) = rest.split_at(32 * self.birds.len());
         let mut values = Vec::new();
         for bed in &mut self.beds {
@@ -4144,6 +4170,80 @@ mod tests {
             second.tick(&[]);
         }
         recording.replay(&mut second).expect("the same digests");
+    }
+
+    /// Phase 7's hit reactions (D-012's strength schedule): a ball thrown at the middle
+    /// mannequin's chest is a blow. Its struck parts lose strength at once and are back to full a
+    /// recovery after the last blow; the strengths are saved and restored with the world (a run
+    /// restored mid-recovery keeps the unbroken run's digests), and the same throw gives the same
+    /// world.
+    #[test]
+    fn a_blow_weakens_a_creatures_parts_and_they_recover() {
+        let throw_at = |world: &LabWorld| {
+            let herd = world.herd.as_ref().unwrap();
+            let pelvis = herd.roots(&world.world)[1].1.position;
+            let target = pelvis + DVec3::new(0.0, 0.45, 0.0);
+            let from = target + DVec3::new(0.0, 0.1, 4.0);
+            vec![Stamped {
+                tick: 60,
+                player: 0,
+                seq: 0,
+                command: LabCommand::Throw {
+                    from: from.as_vec3().to_array(),
+                    forward: (target - from).normalize().as_vec3().to_array(),
+                },
+            }]
+        };
+        let weakest = |world: &LabWorld| world.reactions.of(1).into_iter().fold(1.0, f32::min);
+        let (mut first, _) = LabWorld::new(LabScene::Creatures, test_pool()).unwrap();
+        for _ in 0..60 {
+            first.tick(&[]);
+        }
+        let before = first.reactions.blows;
+        let throw = throw_at(&first);
+        first.tick(&throw);
+        // The blow: within half a second the mannequin's weakest part is down.
+        let mut low = 1.0f32;
+        let mut struck = None;
+        for t in 0..30 {
+            first.tick(&[]);
+            low = low.min(weakest(&first));
+            if struck.is_none() && first.reactions.blows > before {
+                struck = Some(t);
+            }
+        }
+        println!(
+            "blows {} (from {before}), first at +{struck:?} ticks, weakest {low:.2}",
+            first.reactions.blows
+        );
+        assert!(struck.is_some(), "the ball struck");
+        assert!(low < 0.5, "weakest {low}");
+        // Saved mid-recovery, restored into another world: both go on to the same digests.
+        let saved = first.save();
+        let (mut second, _) = LabWorld::new(LabScene::Creatures, test_pool()).unwrap();
+        second.restore(&saved);
+        assert_eq!(second.reactions, first.reactions);
+        for _ in 0..30 {
+            first.tick(&[]);
+            second.tick(&[]);
+        }
+        assert_eq!(second.digest(), first.digest());
+        // Two seconds on, the blows over: every part back to full.
+        for _ in 0..120 {
+            first.tick(&[]);
+        }
+        assert_eq!(weakest(&first), 1.0, "{:?}", first.reactions.of(1));
+        // The same throw from the start: the same world.
+        let (mut third, _) = LabWorld::new(LabScene::Creatures, test_pool()).unwrap();
+        for _ in 0..60 {
+            third.tick(&[]);
+        }
+        third.tick(&throw);
+        for _ in 0..180 {
+            third.tick(&[]);
+        }
+        assert_eq!(third.digest(), first.digest());
+        assert_eq!(third.reactions, first.reactions);
     }
 
     #[test]
