@@ -6694,6 +6694,38 @@ void resolve_tiles<let SHADOWS : int>(uint class_index, uint3 group, uint3 threa
         shade_pixel<SHADOWS>(class_index, pixel, vis);
 }
 
+// What a mirror ray that met nothing adds to the sky its pixel was shaded with (the table with
+// the clouds over it, `sky_reflection`): the clouds as the frame shows them in its direction,
+// where it shows them (the owner, 2026-10-24: the table's clouds, a degree a texel, streaked the
+// still water and slid as the camera moved). The clear table under the cloud layer the compose
+// lays over the sky, faded out towards the image's edges and only where the frame sees the sky
+// there (what stands in front of it hides the clouds behind from the water as from the camera),
+// as the water surface takes them (`water.slang`, #145). In the resolve's units; 0 without
+// clouds.
+float3 seen_clouds(Frame* f, float4* sky, float3 direction, float2 size)
+{
+    float4 seen = sky[SH_COEFFICIENTS + 2];
+    if (seen.x < 0.0 || seen.y < 0.0 || seen.z <= 0.0)
+        return float3(0.0);
+    float4 clip = mul(f[0].view_proj, float4(direction, 0.0));
+    if (clip.w <= 0.0)
+        return float3(0.0);
+    float2 uv = float2(clip.x / clip.w * 0.5 + 0.5, 0.5 - clip.y / clip.w * 0.5);
+    float edge = saturate(min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)) * 10.0);
+    if (edge <= 0.0)
+        return float3(0.0);
+    uint2 at = uint2(min(uv * size, size - 1.0));
+    if (g_sampled_images_u32[NonUniformResourceIndex(resolve_push.vis_image)].Load(int3(at, 0)) != VISIBILITY_EMPTY)
+        return float3(0.0);
+    float4 up_table = sky[SH_COEFFICIENTS];
+    float3 forward = sky[SH_COEFFICIENTS + 1].xyz;
+    float3 clear = sky_view_luminance(uint(seen.x + 0.5), up_table.xyz, forward, direction);
+    float3 clouded = sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, forward, direction);
+    // The layer's light is pre-exposed by the sky's luminance scale.
+    float4 c = sample_image_level(uint(seen.y + 0.5), SAMPLER_LINEAR_CLAMP, uv, 0.0);
+    return edge * (clear * c.a + c.rgb / seen.z - clouded) * 3.14159265;
+}
+
 // The mirror rays of the smooth rows (issue #52), in a pass of their own over the tiles the
 // standard pass listed, so the resolve does not carry the ray's code and registers. The
 // resolve shaded the pixel with the sky in the mirror direction and stored that direction and
@@ -6760,9 +6792,8 @@ void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
     bool mover;
     float4 hit = trace_reflection_from(f, sky, resolve_push.probes, world + n * 0.05, request.xyz, uint(pixel.x) * 0x8DA6B343u ^ uint(pixel.y) * 0xD8163841u, mirror_start(f, inst, m), distance, mover);
     ReflectionHistory* history = resolve_push.reflection_history;
-    if (hit.w <= 0.0 && history == nullptr)
-        return;
-    // What the ray adds, before the exposure: nothing on a miss (the sky is already there).
+    // What the ray adds, before the exposure: on a miss, the clouds as the frame shows them in
+    // place of the table's (`seen_clouds`; the rest of the sky is already there).
     float3 added = float3(0.0);
     if (hit.w > 0.0)
     {
@@ -6770,8 +6801,12 @@ void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
         float3 mirror = sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, sky[SH_COEFFICIENTS + 1].xyz, request.xyz) * 3.14159265;
         added = request.w * (hit.xyz - mirror);
     }
+    else
+        added = request.w * seen_clouds(f, sky, request.xyz, size);
     if (history != nullptr)
         added = steadied_reflection(history, f, pixel, size, mul(frame, object_position) + relative, record.x, added, hit.w > 0.0 ? distance : -1.0, mover);
+    else if (all(added == float3(0.0)))
+        return;
     RWTexture2D<float4> color = g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.color_image)];
     color[pixel] = float4(color[pixel].rgb + added * (f[0].sun_illuminance * f[0].exposure / 3.14159265), 1.0);
 }

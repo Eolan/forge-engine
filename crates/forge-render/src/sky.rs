@@ -37,8 +37,10 @@ const GROUP: u32 = 8;
 /// in `sh.slang`)...
 const IRRADIANCE_BYTES: u64 = 9 * 16;
 /// ...then the camera's frame on the planet and the sky-view table's index, for the resolve's
-/// reflections (issue #49): up (xyz) and the index as a float value (w), forward.
-const SKY_LIGHT_BYTES: u64 = IRRADIANCE_BYTES + 2 * 16;
+/// reflections (issue #49): up (xyz) and the index as a float value (w), forward; then, with the
+/// clouds over the table ([`SkyLight::seen_clouds`]), the clear table's and the cloud layer's
+/// indices as float values and the sky's luminance scale (-1, -1, 0 without).
+const SKY_LIGHT_BYTES: u64 = IRRADIANCE_BYTES + 3 * 16;
 
 /// Mirrors `Sky` in `skyframe.slang`.
 #[repr(C)]
@@ -157,6 +159,11 @@ pub struct SkyLight {
     pub address: u64,
     /// The sky-view table the resolve samples for reflections (issue #49).
     pub table: ImageHandle,
+    /// With the clouds over the table ([`GroundSky::light_with`]): the clear table and the cloud
+    /// layer as this frame sees it, which the mirror rays that meet nothing take their clouds
+    /// from where the frame shows the sky (the owner, 2026-10-24: the table's clouds, a degree a
+    /// texel, streaked the still water). Their indices follow the coefficients (`SKY_LIGHT_BYTES`).
+    pub seen_clouds: Option<[ImageHandle; 2]>,
 }
 
 /// A frame's sky between [`GroundSky::tables`] and [`GroundSky::compose`].
@@ -475,6 +482,7 @@ impl GroundSky {
                 buffer: irradiance,
                 address: irradiance_address,
                 table: sky_view,
+                seen_clouds: None,
             },
         }
     }
@@ -517,6 +525,7 @@ impl GroundSky {
             buffer,
             address: out,
             table,
+            seen_clouds: sky.clouds.map(|clouds| [sky.sky_view, clouds]),
         }
     }
 

@@ -6211,6 +6211,10 @@ impl MeshletRenderer {
                 .buffer(args, BufferAccess::IndirectArgsAndShaderRead(compute))
                 .buffer(sky.buffer, BufferAccess::ShaderRead(compute))
                 .image(sky.table, ImageAccess::Sampled(compute));
+            // A ray that meets nothing takes the clouds the frame shows (`seen_clouds`).
+            for image in sky.seen_clouds.into_iter().flatten() {
+                builder = builder.image(image, ImageAccess::Sampled(compute));
+            }
             if let Some(ao) = ambient.occlusion {
                 builder = builder.image(ao, ImageAccess::Sampled(compute));
             }

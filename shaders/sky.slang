@@ -484,5 +484,11 @@ void irradiance_main(uint3 id : SV_GroupThreadID)
         // the GPU may flush to zero.
         irradiance[SH_COEFFICIENTS] = float4(up, float(table));
         irradiance[SH_COEFFICIENTS + 1] = float4(forward, 0.0);
+        // With the clouds over the table: the clear table and the cloud layer the compose lays
+        // over the sky, with the sky's luminance scale (the layer's light is pre-exposed by it),
+        // for the mirror rays that meet nothing (`seen_clouds` in meshlet.slang).
+        irradiance[SH_COEFFICIENTS + 2] = clouded && s[0].clouds != 0xFFFFFFFFu
+            ? float4(float(s[0].sky_view), float(s[0].clouds), s[0].scale.x, 0.0)
+            : float4(-1.0, -1.0, 0.0, 0.0);
     }
 }
