@@ -597,10 +597,11 @@ pub(crate) struct LabWorld {
     /// The bodies this tick's shots struck, with the impulse each took: blows for the reactions
     /// after the step, then cleared (never across ticks, so never saved).
     struck: Vec<(BodyId, f32)>,
-    /// What each tick's shot met, the first time that tick ran (nothing for a miss): on a client,
-    /// what its prediction showed when it shot. Kept through corrections, never saved (it is not
-    /// the world's state).
-    shots_met: std::collections::BTreeMap<u64, Option<BodyId>>,
+    /// In tests: each shot (its player and sequence number), the tick it first ran at and what it
+    /// met then (nothing for a miss). On a client, its prediction when it fired: a correction runs
+    /// it again, perhaps at a later tick, and the first answer stays. Not the world's state.
+    #[cfg(test)]
+    shots_met: std::collections::BTreeMap<(forge_sim::PlayerId, u32), (u64, Option<BodyId>)>,
     /// The slimes before the creatures, soft bodies (#179, #180).
     slimes: Vec<slime::Slime>,
     /// The gulls (#184).
@@ -1343,6 +1344,7 @@ impl LabWorld {
                 feet: creatures::Feet::default(),
                 reactions: creatures::Reactions::default(),
                 struck: Vec::new(),
+                #[cfg(test)]
                 shots_met: std::collections::BTreeMap::new(),
                 slimes,
                 birds,
@@ -1571,16 +1573,11 @@ impl LabWorld {
 
     /// A shot from `from` along `forward` (Phase 7): the first body within [`SHOT_REACH`] is
     /// pushed by [`SHOT_IMPULSE`] at the point met, if it moves, and a creature's part struck so
-    /// is a blow of it in this tick's reactions (a ray makes no contact for them to find).
-    fn shoot(&mut self, from: Vec3, forward: Vec3) {
+    /// is a blow of it in this tick's reactions (a ray makes no contact for them to find). The body
+    /// met, if any.
+    fn shoot(&mut self, from: Vec3, forward: Vec3) -> Option<BodyId> {
         let forward = forward.normalize_or(Vec3::NEG_Z);
-        let hit = self.world.cast_ray(from.as_dvec3(), forward * SHOT_REACH);
-        self.shots_met
-            .entry(self.tick)
-            .or_insert(hit.map(|h| h.body));
-        let Some(hit) = hit else {
-            return;
-        };
+        let hit = self.world.cast_ray(from.as_dvec3(), forward * SHOT_REACH)?;
         let point = from.as_dvec3() + (forward * SHOT_REACH * hit.fraction).as_dvec3();
         let mut mass = Vec::new();
         self.world.masses(&[hit.body], &mut mass);
@@ -1589,6 +1586,7 @@ impl LabWorld {
                 .add_impulse_at(hit.body, forward * SHOT_IMPULSE, point);
             self.struck.push((hit.body, SHOT_IMPULSE));
         }
+        Some(hit.body)
     }
 
     fn throw(&mut self, from: Vec3, forward: Vec3) {
@@ -1623,7 +1621,11 @@ impl Simulation for LabWorld {
                     self.throw(Vec3::from_array(from), Vec3::from_array(forward));
                 }
                 LabCommand::Shoot { from, forward } => {
-                    self.shoot(Vec3::from_array(from), Vec3::from_array(forward));
+                    let _met = self.shoot(Vec3::from_array(from), Vec3::from_array(forward));
+                    #[cfg(test)]
+                    self.shots_met
+                        .entry((c.player, c.seq))
+                        .or_insert((self.tick, _met));
                 }
                 LabCommand::Reset => {
                     let start = std::mem::take(&mut self.start);
@@ -1635,6 +1637,8 @@ impl Simulation for LabWorld {
                     self.started = self.tick;
                     self.feet.clear();
                     self.reactions = creatures::Reactions::default();
+                    // A shot before the reset in this tick strikes nothing that is left.
+                    self.struck.clear();
                     if let Some(yard) = &mut self.materials {
                         yard.stride = city_blocks::island_walk::Stride::default();
                     }
@@ -4941,21 +4945,15 @@ mod tests {
             net.tick(&mut queued);
         }
         let (seen, server) = (&net.client.sim.shots_met, &net.server.sim.shots_met);
-        let hits = seen.values().filter(|m| m.is_some()).count();
-        // Each shot as the server ran it: at its tick, or, its packet lost and sent again, at
-        // the first of the server's shots within a few ticks after that the client did not fire.
+        let hits = seen.values().filter(|(_, m)| m.is_some()).count();
+        // Each shot (its player and number) as the server ran it: the same body at the same tick,
+        // or, its packet lost and sent again, the same body a few ticks late.
         let (mut on_time, mut late, mut other) = (0, 0, Vec::new());
-        for (&tick, met) in seen {
-            if server.get(&tick) == Some(met) {
-                on_time += 1;
-                continue;
-            }
-            let ran = server
-                .range(tick + 1..=tick + 6)
-                .find(|(t, _)| !seen.contains_key(t));
-            match ran {
-                Some((_, m)) if m == met => late += 1,
-                _ => other.push((tick, *met, ran)),
+        for (shot, &(tick, met)) in seen {
+            match server.get(shot) {
+                Some(&(t, m)) if m == met && t == tick => on_time += 1,
+                Some(&(t, m)) if m == met && t > tick && t <= tick + 6 => late += 1,
+                ran => other.push((tick, met, ran.copied())),
             }
         }
         println!(

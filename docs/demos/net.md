@@ -223,9 +223,10 @@ shooter's prediction, with no rewind. Only another player's input, late to the s
 it aimed at could make them differ.
 - **The measure** (`shots_over_the_network_meet_what_their_shooter_saw`): `--lab creatures` at
   100 ms one way and 2 % lost both ways, the bot throwing balls among the creatures. The player
-  shoots at a dog every half second for 23 s, aimed where its prediction shows the dog. Each
-  world logs what each tick's shot met; a client keeps its first answer, the prediction it shot
-  on.
+  shoots at a dog every half second for 23 s, aimed where its prediction shows the dog. In the
+  test each world logs every shot by its player and number, with the tick it ran at and what it
+  met. A client keeps its first answer, the prediction it fired on, since a correction may run
+  the shot again a tick later.
 - **46 shots, all meeting a body.** On the server, 45 met the same body at the same tick. The 46th
   had its packet lost and sent again: it ran a tick late and met the same body. None met another.
 - **The rewind** (`forge_sim::rewind`, above) is for the other model, where a client draws the
