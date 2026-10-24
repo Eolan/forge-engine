@@ -8981,6 +8981,133 @@ mod tests {
         }
     }
 
+    /// #262's measure (the owner, 2026-10-11: the city's people pass through trees and lamp
+    /// posts). A walker is an upright disc of 0.3 m, slid every 0.25 m along each street's two
+    /// walking lines: `(half − 3)` m either side of its middle, at least a metre, as
+    /// `crowd::Route::side` puts them (its corners at junctions left out). Against the street
+    /// trees' trunks (0.3 m at the foot for a crown of 4.2 m) and the lamps' posts (0.1 m), each
+    /// obstacle counted once. A control post on the first street's line shows the sweep looks.
+    /// The counts only go down: each fix lowers its bound.
+    #[test]
+    fn walkers_lines_meet_few_trunks_and_posts() {
+        use std::collections::{HashMap, HashSet};
+        let size = 4000.0;
+        let site = example::site(size, 10.0);
+        let city = plan(&site, &example::params(size));
+        let trees = forge_procgen::city::trees::trees(&site, &city, 5);
+        let lamps = forge_procgen::city::lamps::lamps(&site, &city);
+        const WALKER: f64 = 0.3;
+        let line_offset = |half: f64| (half - 3.0).max(1.0);
+        // Upright discs: where, radius, what (0 a trunk, 1 a post, 2 the control).
+        let mut discs: Vec<(DVec2, f64, u8)> = Vec::new();
+        for t in trees.iter().filter(|t| t.species.is_none()) {
+            discs.push((t.pos, 0.3 * t.crown / 4.2, 0));
+        }
+        for l in &lamps {
+            discs.push((l.pos, 0.1, 1));
+        }
+        if let Some(e) = city.roads.edges.first()
+            && e.points.len() >= 2
+        {
+            let (a, b) = (e.points[0], e.points[1]);
+            let dir = (b - a).normalize_or_zero();
+            let right = DVec2::new(-dir.y, dir.x);
+            let at = (a + b) * 0.5 + right * line_offset(e.profile.width() * 0.5);
+            discs.push((at, 0.1, 2));
+        }
+        const CELL: f64 = 10.0;
+        let key = |p: DVec2| ((p.x / CELL).floor() as i32, (p.y / CELL).floor() as i32);
+        let mut cells: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
+        for (i, d) in discs.iter().enumerate() {
+            cells.entry(key(d.0)).or_default().push(i);
+        }
+        // A street's walking line on one side (`off` signed, + on the right): its points moved
+        // out, their corners mitred where the two segments' lines meet, or their mean where a
+        // sharp turn's mitre runs far out, as `Route::corner` turns them.
+        let walking_line = |pts: &[DVec2], off: f64| -> Vec<DVec2> {
+            let n = pts.len();
+            let dir = |k: usize| (pts[k + 1] - pts[k]).normalize_or_zero();
+            let right = |d: DVec2| DVec2::new(-d.y, d.x);
+            (0..n)
+                .map(|i| {
+                    if i == 0 {
+                        return pts[0] + right(dir(0)) * off;
+                    }
+                    if i == n - 1 {
+                        return pts[n - 1] + right(dir(n - 2)) * off;
+                    }
+                    let (d0, d1) = (dir(i - 1), dir(i));
+                    let (p, q) = (pts[i] + right(d0) * off, pts[i] + right(d1) * off);
+                    let (denom, mean) = (d0.perp_dot(d1), (p + q) * 0.5);
+                    if denom.abs() < 1e-6 {
+                        return mean;
+                    }
+                    let mitre = p + d0 * ((q - p).perp_dot(d1) / denom);
+                    if mitre.distance(pts[i]) > 3.0 * off.abs() {
+                        mean
+                    } else {
+                        mitre
+                    }
+                })
+                .collect()
+        };
+        let mut met: HashSet<usize> = HashSet::new();
+        let mut km = 0.0;
+        for e in &city.roads.edges {
+            let off = line_offset(e.profile.width() * 0.5);
+            for side in [1.0, -1.0] {
+                for w in walking_line(&e.points, side * off).windows(2) {
+                    let (a, b) = (w[0], w[1]);
+                    let length = a.distance(b);
+                    let dir = (b - a).normalize_or_zero();
+                    km += length / 1000.0;
+                    let mut s = 0.0;
+                    while s <= length {
+                        let p = a + dir * s;
+                        let (cx, cz) = key(p);
+                        for dx in -1..=1 {
+                            for dz in -1..=1 {
+                                for &k in cells.get(&(cx + dx, cz + dz)).into_iter().flatten() {
+                                    let (at, r, _) = discs[k];
+                                    if p.distance(at) < WALKER + r {
+                                        met.insert(k);
+                                    }
+                                }
+                            }
+                        }
+                        s += 0.25;
+                    }
+                }
+            }
+        }
+        let count = |what: u8| met.iter().filter(|&&k| discs[k].2 == what).count();
+        let (trunks, posts, control) = (count(0), count(1), count(2));
+        let (all_trunks, all_posts) = (
+            discs.iter().filter(|d| d.2 == 0).count(),
+            discs.iter().filter(|d| d.2 == 1).count(),
+        );
+        println!(
+            "{km:.1} km of walking lines: {trunks} of {all_trunks} trunks and {posts} of \
+             {all_posts} lamp posts met; the control {control}"
+        );
+        assert_eq!(
+            control, 1,
+            "the control post on a walking line was never met"
+        );
+        // The bounds of 2026-10-24, when the measure came in.
+        assert!(
+            trunks <= TRUNKS_MET && posts <= POSTS_MET,
+            "{trunks} trunks, {posts} posts"
+        );
+    }
+
+    /// #262's bounds: the trunks and lamp posts the walkers' lines met when the measure came in
+    /// (2026-10-24, 390 km of lines): one trunk of 29,103 and two posts of 9,307, all on shared
+    /// streets at a bend (a sharp turn's line drawn in over the middle's trees, a lamp set by the
+    /// next segment's normal). Each fix lowers them.
+    const TRUNKS_MET: usize = 1;
+    const POSTS_MET: usize = 2;
+
     /// Every tram runs its line both ways clear of the street trees and the lamps (#276: a
     /// vehicle's box swept along its track). Each section is a box set by its two ends on the
     /// track (the middle of a section swings in on a curve, its ends out), 2.55 m wide, from

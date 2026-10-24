@@ -2578,6 +2578,16 @@ replace the figures.
   (`set_movers_still`): a walker's pose is another mesh every 0.7 m, and people come and go.
   The first fix gave every figure no motion of its own, only the camera's. A walker keeping
   pace ahead was then reprojected as the background and faded.
+- **What the walkers' lines run into** (#262's measure, 2026-10-24,
+  `walkers_lines_meet_few_trunks_and_posts`):
+  - **The sweep:** a walker, an upright disc of 0.3 m, slid every 0.25 m along each street's two
+    walking lines (their corners mitred as a route turns them), against the street trees'
+    trunks and the lamps' posts.
+  - **The 4 km city:** over 390 km of lines, 1 of 29,103 trunks and 2 of 9,307 posts met. All
+    three stand on shared streets at a bend, where a sharp turn's line is drawn in over the
+    middle's trees, or a lamp is set by the next segment's normal.
+  - **The bounds** are those counts; each fix lowers them. Walkers passing through each other
+    are not measured yet.
 
 ## Walking the streets (D-059's step 4)
 
