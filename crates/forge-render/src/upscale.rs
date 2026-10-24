@@ -23,6 +23,21 @@ use crate::taa::{HDR_FORMAT, TaaFrame};
 /// The exposure DLSS sees the scene at: pre-exposure is handed over relative to it.
 const REFERENCE_EV100: f32 = 15.0;
 
+/// The pre-exposure handed to DLSS while it follows an adapting exposure, stops relative to
+/// [`REFERENCE_EV100`]'s, at least and at most: the colour DLSS divides by it stays where fp16
+/// keeps it (#164 posterized the night's darks at 17 stops; at 8 their steps are under 2 %, and
+/// the brightest lamps stay under fp16's top at −6).
+const FOLLOW_RANGE: (f32, f32) = (-6.0, 8.0);
+
+/// Stops a frame the pre-exposure eases back to the steady one once it has followed the
+/// exposure (`FORGE_DLSS_EXPOSURE_EASE` overrides it): DLSS's history is off by this much a
+/// frame, against the whole adaptation's step before (0.06 stops a frame through a window).
+const EASE_STOPS: f32 = 0.004;
+
+/// A change of exposure over this many stops in one frame is a new start (the first frames'
+/// jump to the metered exposure), not an adaptation to follow.
+const CUT_STOPS: f32 = 2.0;
+
 /// The camera a frame was drawn with, besides what the [`TaaFrame`] carries.
 #[derive(Clone, Copy, Debug)]
 pub struct UpscaleCamera {
@@ -45,6 +60,47 @@ pub struct DlssUpscaler {
     exposure: GraphImage,
     /// The next frame starts a new history (first frame, new mode or size).
     reset: bool,
+    /// Stops the pre-exposure stands from the steady one ([`pre_exposure`]), 0 when settled.
+    follow: f32,
+    /// The last frame's exposure relative to [`REFERENCE_EV100`], stops; `None` before the
+    /// first.
+    last_stops: Option<f32>,
+    /// Stops a frame the pre-exposure eases back ([`EASE_STOPS`]).
+    ease: f32,
+}
+
+/// The pre-exposure for an exposure `ratio` to [`REFERENCE_EV100`]'s, given how far it still
+/// `follow`s the adaptation from the steady value (the ratio within 16, as #164 set it).
+/// Handed the steady value alone, DLSS never saw the exposure change while it was clamped (a
+/// night's street and the lit room behind a window both lie past 4 stops): its history no
+/// longer matched the frame as the eye adapted, and it showed its jitter pattern as a fine
+/// cross-hatch over the walls for a second or two (the owner, 2026-10-24: "a pattern stays
+/// visible after going through the window").
+fn pre_exposure(ratio: f32, follow: f32) -> f32 {
+    if follow == 0.0 {
+        ratio.clamp(1.0 / 16.0, 16.0)
+    } else {
+        2f32.powf(ratio.log2().clamp(-4.0, 4.0) + follow)
+    }
+}
+
+/// The next `follow` after the exposure moved from `last` to `stops` (relative stops): the
+/// change taken by the pre-exposure as far as the steady value's clamp hid it, within
+/// [`FOLLOW_RANGE`], then eased back by `ease` stops towards the steady value. A jump past
+/// [`CUT_STOPS`] starts again from the steady value.
+fn next_follow(follow: f32, last: f32, stops: f32, ease: f32) -> f32 {
+    if (stops - last).abs() > CUT_STOPS {
+        return 0.0;
+    }
+    let (before, after) = (last.clamp(-4.0, 4.0), stops.clamp(-4.0, 4.0));
+    // What the clamp hid of the change: the exposure's move less the steady value's.
+    let hidden = (stops - last) - (after - before);
+    let f = (follow + hidden).clamp(FOLLOW_RANGE.0 - after, FOLLOW_RANGE.1 - after);
+    if f.abs() <= ease {
+        0.0
+    } else {
+        f - ease.copysign(f)
+    }
 }
 
 impl DlssUpscaler {
@@ -77,6 +133,12 @@ impl DlssUpscaler {
             output: create_output(device, output_extent)?,
             exposure,
             reset: true,
+            follow: 0.0,
+            last_stops: None,
+            ease: std::env::var("FORGE_DLSS_EXPOSURE_EASE")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(EASE_STOPS),
         }))
     }
 
@@ -121,6 +183,16 @@ impl DlssUpscaler {
         exposure: f32,
     ) -> Result<ImageHandle> {
         let reset = std::mem::take(&mut self.reset) || frame.reset;
+        let ratio = exposure / exposure_from_ev100(REFERENCE_EV100);
+        let stops = ratio.log2();
+        self.follow = match self.last_stops {
+            Some(last) if !reset && stops.is_finite() => {
+                next_follow(self.follow, last, stops, self.ease)
+            }
+            _ => 0.0,
+        };
+        self.last_stops = stops.is_finite().then_some(stops);
+        let pre = pre_exposure(ratio, self.follow);
         let this: &'f Self = self;
         let dlss = this
             .device
@@ -148,9 +220,9 @@ impl DlssUpscaler {
             // its history stays in one space while the exposure adapts, as the TAA's rescale does.
             // Within 4 stops of it only (#164): a night under the Moon is 17 stops from EV 15,
             // and the colour divided by 2^17 fell under fp16's normal range inside DLSS, which
-            // posterized it and smeared the stars. Past that, its history follows the slow
-            // adaptation as it is.
-            (exposure / exposure_from_ev100(REFERENCE_EV100)).clamp(1.0 / 16.0, 16.0),
+            // posterized it and smeared the stars. Past that, the adaptation's changes are
+            // followed for a while (`pre_exposure`), then eased back.
+            pre,
         )?;
         let output = graph.import(&this.output);
         let exposure_image = graph.import(&this.exposure);
@@ -216,4 +288,42 @@ fn create_output(device: &Arc<Device>, extent: vk::Extent2D) -> Result<GraphImag
             name: "dlss output",
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Through a window at night the exposure falls 6 stops while both ends lie past the
+    /// steady value's clamp: the pre-exposure follows the change frame by frame, then eases
+    /// back to the steady value.
+    #[test]
+    fn the_pre_exposure_follows_an_adaptation_past_the_clamp_then_eases_back() {
+        let (mut follow, mut last) = (0.0, 16.9_f32);
+        let mut pre_last = pre_exposure(2f32.powf(last), follow);
+        assert_eq!(pre_last, 16.0);
+        for _ in 0..100 {
+            let stops = last - 0.061;
+            follow = next_follow(follow, last, stops, 0.0);
+            let pre = pre_exposure(2f32.powf(stops), follow);
+            assert!(((pre / pre_last).log2() + 0.061).abs() < 1e-3);
+            (last, pre_last) = (stops, pre);
+        }
+        for _ in 0..2000 {
+            follow = next_follow(follow, last, last, EASE_STOPS);
+        }
+        assert_eq!(follow, 0.0);
+        assert_eq!(pre_exposure(2f32.powf(last), follow), 16.0);
+    }
+
+    /// The first frames' jump to the metered exposure is no adaptation; and within the clamp
+    /// nothing is followed.
+    #[test]
+    fn a_jump_or_a_change_within_the_clamp_leaves_the_steady_value() {
+        assert_eq!(next_follow(0.0, 1.0, 16.9, EASE_STOPS), 0.0);
+        assert_eq!(next_follow(0.0, 1.0, 1.5, EASE_STOPS), 0.0);
+        // And the pre-exposure never leaves where fp16 keeps the colour.
+        let f = next_follow(0.0, 4.0, 5.9, 0.0);
+        assert!(4.0 + f <= FOLLOW_RANGE.1);
+    }
 }
