@@ -1065,6 +1065,17 @@ RoomShare room_share<let MIRROR : int>(ProbeField* field, float3 p, float3 n, fl
 float3 probe_lookup<let MIRROR : int>(ProbeField* field, float3 p, float3 n, float3 g, float3 v, float3 open_sky, float3 d, float3 open_sky_d, out float3 toward_d)
 {
     RegionHit mask = region_at(field, p + g * 0.02);
+    // A point in a house's body: the region on the side it is seen from, 30 cm towards the
+    // viewer, where that side tells. Taken for the nearest room grid's (`room_grid_near`), a
+    // thin face set into a facade (an open shutter's edge, a balcony's bracket) took a lit
+    // room's light seen from the street, white specks on the facades at night (the owner,
+    // 2026-10-24).
+    if (mask.kind == REGION_SOLID && field[0].region_count > 0u)
+    {
+        RegionHit seen = region_at(field, p + v * 0.3);
+        if (seen.kind != REGION_SOLID)
+            mask = seen;
+    }
     bool masked = field[0].region_count > 0u && mask.kind != REGION_SOLID;
     RoomShare rooms = room_share<MIRROR>(field, p, n, g, v, d, mask, masked);
     if (rooms.w >= 1.0)

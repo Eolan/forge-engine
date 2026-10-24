@@ -3527,7 +3527,7 @@ struct LampPlace
     LampRuns runs;
 };
 
-LampPlace lamp_place(Frame* f, ProbeField* probes, float3 world, float3 n)
+LampPlace lamp_place(Frame* f, ProbeField* probes, float3 world, float3 n, float3 view)
 {
     LampPlace place;
     place.region = REGION_NONE;
@@ -3540,6 +3540,12 @@ LampPlace lamp_place(Frame* f, ProbeField* probes, float3 world, float3 n)
         RegionHit at = region_at(probes, world + n * 0.02);
         if (at.kind == REGION_SOLID)
             at = region_at(probes, world + n * 0.15);
+        // Still in the body (a thin side face set into the wall: an open shutter's edge, a
+        // balcony's bracket): the side it is seen from, 30 cm towards the camera. Taken as the
+        // body's, those faces took every lamp of the frame and showed as white specks on the
+        // facades at night (the owner, 2026-10-24).
+        if (at.kind == REGION_SOLID)
+            at = region_at(probes, world + view * 0.3);
         if (at.kind != REGION_SOLID)
         {
             place.region = at.region;
@@ -3652,7 +3658,7 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
     if (count == 0u || f[0].lamps == nullptr)
     {
         if (f[0].far_lamps != nullptr)
-            far_lamps_at(f, lamp_place(f, probes, world, n), world, n, view, specular_power, specular_weight);
+            far_lamps_at(f, lamp_place(f, probes, world, n, view), world, n, view, specular_power, specular_weight);
         return;
     }
     uint share = code & 0xFFFFu;
@@ -3661,7 +3667,7 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
     if (share != 0xFFFEu)
     {
         bool skip_outside = restir != 0xFFFFu;
-        LampPlace place = lamp_place(f, probes, world, n);
+        LampPlace place = lamp_place(f, probes, world, n, view);
         if (share != 0xFFFFu)
         {
             for (uint r = 0u; r < 3u; r++)
@@ -7152,7 +7158,7 @@ void lamp_rays_main(uint3 id : SV_DispatchThreadID)
     float3 world = to_scene(f, s.relative);
     // The trees' cards near, their proxies far (D-075 step 3).
     g_ray_mask = shadow_world(f, s.relative, pixel);
-    LampPlace place = lamp_place(f, p.probes, world, s.n);
+    LampPlace place = lamp_place(f, p.probes, world, s.n, normalize(-s.relative));
     surface[pixel] = float4(s.relative, place.region == REGION_NONE ? 0.0 : float(1u + place.region % 2047u));
     normal[pixel] = oct_encode(s.n);
     LampPicks picks = lamp_picks(f, place, world, s.n, pixel, p.skip_outside != 0u);

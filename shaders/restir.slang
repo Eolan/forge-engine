@@ -416,7 +416,7 @@ void lamp_restir_main(uint3 id : SV_DispatchThreadID)
     }
     PixelSurface ps = pixel_surface(f, vis, pixel, p.width, p.height);
     float3 world = to_scene(f, ps.relative);
-    LampPlace place = lamp_place(f, p.probes, world, ps.n);
+    LampPlace place = lamp_place(f, p.probes, world, ps.n, normalize(-ps.relative));
     RAB_Surface surface;
     surface.world = world;
     surface.normal = ps.n;
