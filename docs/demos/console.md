@@ -89,7 +89,7 @@ commands, set from the console; `bind` puts one on a key.
 - **The game's mouse look** (`app.mouse_look`, e.g. `bind m toggle app.mouse_look`): the cursor captured and hidden, the view turning with no button held, and the right button the game's (aiming). Esc opens the game's menu and lets the mouse go; closing the menu takes it back. Out of the window (Alt+Tab, another window clicked) the cursor is the system's again, free and shown, and the mouse's motion turns nothing; back in the window, the game takes it again.
 - **The game's menu** (#352, Esc or `app.menu`): Resume, Settings and Quit, over the picture as the HUD's quads, shown with `app.hud 0` too.
   - **Keys:** Up and Down (or W and S) choose, Enter or Space takes, Left and Right (or A and D) change a setting, Esc goes back (on the first page: back to the game). The mouse chooses by hovering, a click takes.
-  - **Settings:** anti-aliasing (`r.aa`), the volume (`snd.volume`), the mouse look (`app.mouse_look`) and the frame info (`r.display_info`), those the demo registered, changed for the run as the console changes them.
+  - **Settings:** anti-aliasing (`r.aa`), the volume (`snd.volume`), the ambience (`snd.ambience`, #357), the mouse look (`app.mouse_look`) and the frame info (`r.display_info`), those the demo registered, changed for the run as the console changes them.
   - **A solo game holds behind it:** its update sees no time pass (`Context::paused`; the demos stepping at a fixed rate of their own skip their steps), so the simulation, the particles and the scene's clocks stop, and the sound fades out over a quarter of a second, and back in on resume. A networked game (`Demo::networked`: the physics lab with `--net`) runs on behind it.
 
   ![The game's menu](images/game-menu.png)
@@ -162,6 +162,7 @@ The shell's, in every demo:
 | `app.quit` | command: closes the window | | yes |
 | `app.fullscreen` | command: borderless fullscreen, and back to the window as it was (Alt+Enter) | | yes |
 | `snd.volume` | the sound's master level (#318), in runs that open the device (interactive ones only) | 0 to 1 (0 silent) | yes |
+| `snd.ambience` | the ambience's level under the master (#357): the beds and the perched birds | 0 to 1 | yes |
 | `app.hud` | the game's HUD (#328: the quads it pushes into `Context::hud`, drawn after the frame and under this overlay, pass `app/hud`); 0 for a capture without it | 0, 1 | yes |
 | `app.hdr`, `app.hdr.peak`, `app.hdr.false_colours` | commands: the HDR output on or off, the next peak, the preview's false colours | | no |
 | `app.calibrate` | command: the HDR calibration pages, in an HDR mode | | no |

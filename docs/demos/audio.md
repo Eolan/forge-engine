@@ -151,7 +151,7 @@ Windows only for now). A demo that asks for sound (`AppConfig::sound`; the galle
 plan and the village among them) opens the default device at its own rate when the run is
 interactive; **scripted runs never do**: a frame limit (`--frames`), a capture, `--no-sound` or
 `FORGE_SOUND=0` keep it silent. The console's `snd.volume` (0 to 1) is the master's level, and
-`snd.volume 0` in `forge.cfg` silences every run.
+`snd.volume 0` in `forge.cfg` silences every run; `snd.ambience` (0 to 1, the menu's "Ambience", #357) is the ambience's level under it.
 
 **Recording instead of playing** (`--sound-record FILE.wav`, `AppConfig::sound_record`): the same
 buses and mixer at 48 kHz, rendered a frame's time at the end of each frame into a float WAV
@@ -159,9 +159,11 @@ written at exit: the demo's step with `--fixed-step` (`AppConfig::sound_record_s
 keeps the scene's time; the wall clock's otherwise. Scripted runs may record; the device is never opened. It is how a session
 checks what a scene sounds like without playing it on the owner's machine.
 
-- **The village at its house view** (`--view=76.6,1.7,-184.3,146.8,0`, 15:00, green 1.0):
-  −25 dBFS RMS, the cicadas at full (2026-10-23). The mix plays there; if a run is silent, look
-  for the log's `sound` line (the device and its rate) or `no sound: …` at the start.
+- **The village at its house view** (`--view=76.6,1.7,-184.3,146.8,0`, 15:00): −25 dBFS RMS
+  with the cicadas at full (2026-10-23); since #357 only the placed sounds play, and a house
+  front hears no dove most minutes (see "Only the sounds of things" below). If a run is silent
+  where it should not be, look for the log's `sound` line (the device and its rate) or
+  `no sound: …` at the start.
 
 - **What the game gets** (`Context::sound`): the engine to play voices on, the buses (the
   ambience's, `effects` and `foley` under the world's bus and sending to its reverb, `ui` under
@@ -179,12 +181,41 @@ checks what a scene sounds like without playing it on the owner's machine.
     when the beds start (the Mediterranean village's when a scene gives none).
   - **The recordings** are read from the engine's `assets/sounds/` whatever the working
     directory. A game run from its own folder used to get the beds made in code.
-- **The village's place** (city-plan, #350): the share of the ground within 32 m under the crowns
-  of its trees and its forest's plants, 30 % counting as a wood; indoors inside a room's volume.
-  - **In a street:** the cicadas fall silent and a third of the birds call.
-  - **In the forest:** both sing as before.
-  - **The dove** calls only near woods (none below 0.15 of green, all its share from 0.5), about
-    5 dB under the other birds: the owner heard it too often and too near (2026-10-23).
+- **Only the sounds of things** (#357, 2026-10-25): the galleries set `AmbienceState::placed_only`,
+  so the cicadas' chorus and the birds' bed, which sing from no place, stay silent; the wind, the
+  rain and the sea still follow the weather and the shore. The owner, flying in from the start
+  camera high in the air, heard cicadas and doves: "sound is too loud and misplaced". The cicadas
+  wait for a study of where insects live and how many; for now, only sounds that belong to
+  physical objects. Music is a category of its own, later.
+  - **Perched doves** (`ambience::perched`, `Running::dove_perches`): each dove sits in a tree's
+    crown and calls in bouts of two to four coos 2.2 to 3.4 s apart, then keeps quiet 45 to 150 s
+    (longer at the edges of its hours, none at night, in rain or in a strong wind), a voice
+    placed where it sits (4 m reference, −6 dB a doubling past it, the air taking its highs).
+    Only those within 150 m start a call; their first calls spread over a bout's quiet. Six coos
+    made in code ahead (`beds::bird_call`, the bed's own dove). They play on the beds' bus.
+  - **The village's doves** (city-plan): one forest plant in 128 that stands in a wood, four
+    fifths up its height, at most 40 (`dove_perches`).
+  - **Heard from the air** (`Habitat::height`, the listener over the walking level): the ground's
+    singers fade from 15 m up and are gone from 80 m.
+  - **Recorded** (`--sound-record`, 45 s at 15:00, after 5 s): from the air and the owner's start
+    camera nothing (−71 and −76 dBFS before, the cicadas and the doves' bed); on the green, the
+    park's promenade and the meadow distant coos now and then (the loudest second −52 to
+    −59 dBFS, −33 before with the cicadas); in the garden none within earshot those 45 s; in a
+    room the coos faint through the walls.
+  - **The ambience's level** (`snd.ambience`, the menu's "Ambience"): the beds' bus under the
+    master, 0 to 1.
+- **The village's place** (city-plan, #350, #357): the share of the ground within 48 m that is
+  open (grass, gravel or water, not paving, nor under a house: the houses' ground floors painted
+  on the footing's map from the rooms' and the bodies' volumes at load), none within 25 m of a
+  house and all of it from 70 m (`Footing::open_share`, `Footing::nearest_built`). Measured: the
+  meadow 1.0, the park's promenade 0.87, the green 0.82, next to a house front, a garden wall or
+  on the square 0. The open share alone left a house front at 0.74. Indoors inside a room's
+  volume.
+  - **Among houses:** a third of the birds' bed would call.
+  - **The cicadas, when they come back:** only in the open, none below 0.6, all from 0.9 (the
+    owner: "if I'm approaching a place with no houses around and large meadow or field, yes,
+    other places no"), and their full chorus at −33 dBFS, 9 dB under the −24 the owner found "too
+    loud for a game".
   - **In a house:** the outside's beds are 16 dB down.
 - **The village** (city-plan): boards indoors (inside a room's region); outdoors the ground's
   section under the foot, as its row's sound layer says (D-007, 2026-10-24): the open land, the
@@ -287,7 +318,9 @@ mixer's counters and how often the device found the ring short.
   gravel's grains and stone's ring for now.
 - **More than one maker thread:** one makes every step and impact (0.1 to 1 ms each), and the
   next frame waits for it, so the lab still makes one meeting a frame.
-- **The ambience's sources.** The beds are textures around the listener; birds and cicadas
-  placed in the map's trees, and the sea along its actual quays, wait for the map's data.
+- **The ambience's sources.** The doves are placed (#357); the other birds (blackbirds in the
+  gardens, sparrows on the roofs, serins in the trees) wait to be perched the same way, the
+  cicadas for a study of where insects live, and the sea along the actual quays for the map's
+  data.
 - **Better resampling** for sounds far from the mixer's rate: the Hermite interpolator aliases
   when it reads faster than one frame a frame; `rubato` at load time is the research note's pick.

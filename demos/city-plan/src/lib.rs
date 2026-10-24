@@ -7745,6 +7745,31 @@ impl Scenario for PlanScenario {
                 eye.z
             );
         }
+        // The houses on the ground's map, which lays its ground under them too: the ambience's
+        // open ground leaves them out (#357). Their ground floors' rooms and their bodies.
+        if let Some(footing) = self.footing.as_mut() {
+            for v in &self.regions {
+                let kind = matches!(
+                    v.kind,
+                    forge_render::RegionKind::Room | forge_render::RegionKind::Solid
+                );
+                if kind && v.floor <= WALK_LEVEL as f32 + 2.5 {
+                    footing.paint_built(v.corners);
+                }
+            }
+        }
+        let canopy = Canopy::new(
+            self.trees
+                .iter()
+                .map(|&(at, scale, ..)| (glam::Vec2::new(at.x, at.z), 4.2 * scale.x))
+                .chain(
+                    self.flora
+                        .iter()
+                        .map(|&(at, _, crown, ..)| (glam::Vec2::new(at.x, at.z), crown)),
+                ),
+        );
+        let perches = dove_perches(&self.flora, &canopy);
+        tracing::info!(doves = perches.len(), "the village's doves perched (#357)");
         Ok((
             scene,
             Box::new(PlanRunning {
@@ -7818,16 +7843,8 @@ impl Scenario for PlanScenario {
                     fade_px: args.impostors.unwrap_or(0.0),
                     fade_band: IMPOSTOR_FADE_BAND,
                 }),
-                canopy: Canopy::new(
-                    self.trees
-                        .iter()
-                        .map(|&(at, scale, ..)| (glam::Vec2::new(at.x, at.z), 4.2 * scale.x))
-                        .chain(
-                            self.flora
-                                .iter()
-                                .map(|&(at, _, crown, ..)| (glam::Vec2::new(at.x, at.z), crown)),
-                        ),
-                ),
+                canopy,
+                perches,
             }),
         ))
     }
@@ -7893,6 +7910,8 @@ struct PlanRunning {
     impostors: Option<forge_render::impostor::ImpostorSet>,
     /// The trees' crowns over the plan, for the ambience's habitat (#350).
     canopy: Canopy,
+    /// Where the doves perch, in the world frame (#357).
+    perches: Vec<Vec3>,
 }
 
 /// A ride aboard a tram ([`PlanRunning::toggle_ride`]).
@@ -8468,18 +8487,36 @@ impl Running for PlanRunning {
     }
 
     fn habitat(&self, listener: Vec3) -> Option<forge_audio::ambience::Habitat> {
-        // The trees within earshot (30 % of the ground under crowns is a wood), and indoors in
-        // a room's volume.
-        let green = (self
-            .canopy
-            .cover(glam::Vec2::new(listener.x, listener.z), HABITAT_REACH)
-            / 0.3)
-            .min(1.0);
+        // How open the ground is within earshot (no paving, no house: #357), none within
+        // `HOUSES_NEAR` of a house and all of it from `HOUSES_FAR`, where the plan has its
+        // ground's map (a garden by a house front measured 0.74 open alone); the trees within
+        // earshot otherwise (30 % of the ground under crowns is a wood). Indoors in a room's
+        // volume; the height over the walking level.
+        let green = match &self.footing {
+            Some(footing) => {
+                let open = footing.open_share(listener, OPEN_REACH, &self.ground_sounds);
+                let house = footing
+                    .nearest_built(listener, HOUSES_FAR)
+                    .unwrap_or(HOUSES_FAR);
+                let t = ((house - HOUSES_NEAR) / (HOUSES_FAR - HOUSES_NEAR)).clamp(0.0, 1.0);
+                open * t * t * (3.0 - 2.0 * t)
+            }
+            None => (self
+                .canopy
+                .cover(glam::Vec2::new(listener.x, listener.z), HABITAT_REACH)
+                / 0.3)
+                .min(1.0),
+        };
         let indoors = forge_render::region_at(&self.regions, listener).region != 0;
         Some(forge_audio::ambience::Habitat {
             green,
             indoors: if indoors { 1.0 } else { 0.0 },
+            height: (listener.y - WALK_LEVEL as f32).max(0.0),
         })
+    }
+
+    fn dove_perches(&self) -> Vec<Vec3> {
+        self.perches.clone()
     }
 
     fn sounds(&mut self, sound: &mut forge_app::sound::Sound, listener: Vec3) {
@@ -8505,6 +8542,37 @@ impl Running for PlanRunning {
 
 /// How far round the listener the ambience counts the trees, metres (#350).
 const HABITAT_REACH: f32 = 32.0;
+
+/// How far round the listener the ambience measures the open ground, metres (#357).
+const OPEN_REACH: f32 = 48.0;
+
+/// Metres from a house within which the place counts as among houses (no cicadas), and from
+/// which it is open country (#357: "no houses around").
+const HOUSES_NEAR: f32 = 25.0;
+const HOUSES_FAR: f32 = 70.0;
+
+/// One forest plant in this many (by a hash of its place in the list) has a dove, if it stands
+/// in a wood (#357).
+const DOVE_ONE_IN: u32 = 128;
+
+/// The most doves the village perches.
+const DOVES_MOST: usize = 40;
+
+/// Where the village's doves perch (#357): in the crowns, four fifths up, of one forest plant in
+/// [`DOVE_ONE_IN`] that stands in a wood (half its [`HABITAT_REACH`] under crowns: the owner's
+/// dove "somewhere in a tree near the forest", #350), at most [`DOVES_MOST`].
+fn dove_perches(flora: &[(Vec3, f32, f32, f32, u16, u8)], canopy: &Canopy) -> Vec<Vec3> {
+    flora
+        .iter()
+        .enumerate()
+        .filter(|&(k, _)| (k as u32).wrapping_mul(0x9E37_79B9) < u32::MAX / DOVE_ONE_IN)
+        .filter(|&(_, &(at, ..))| {
+            canopy.cover(glam::Vec2::new(at.x, at.z), HABITAT_REACH) / 0.3 >= 0.5
+        })
+        .map(|(_, &(at, height, ..))| at + Vec3::Y * (0.8 * height))
+        .take(DOVES_MOST)
+        .collect()
+}
 
 /// The trees' crowns over the plan (#350): their area in square metres per cell of [`Canopy::CELL`].
 struct Canopy {

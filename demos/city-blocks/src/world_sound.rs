@@ -6,6 +6,7 @@
 
 use forge_app::FlyCamera;
 use forge_app::sound::Sound;
+use forge_audio::ambience::perched::Perched;
 use forge_audio::ambience::{Ambience, AmbienceAssets, AmbienceState, BirdMix, Habitat};
 use forge_audio::{Foley, Listener, PlayParams, Step, Surface};
 use glam::{DVec3, Vec3};
@@ -22,6 +23,8 @@ const RUN: f32 = 2.5;
 /// The world's sound while a scene runs.
 pub struct WorldSound {
     ambience: Option<Ambience>,
+    /// The scene's doves on their perches (#357), calling from where they sit.
+    doves: Option<Perched>,
     state: AmbienceState,
     /// The place the scene says the listener is in, which `state.habitat` follows.
     habitat: Habitat,
@@ -36,11 +39,20 @@ pub struct WorldSound {
 impl WorldSound {
     /// Starts the beds (the recorded birds and cicadas where `tools/fetch-sounds.sh` put them,
     /// under the engine's root whatever the working directory, #350; beds made in code
-    /// otherwise) at `hour`, the birds by the scene's `bird_mix` (the default's without one).
-    pub fn start(sound: &mut Sound, hour: f32, bird_mix: Option<BirdMix>) -> Self {
+    /// otherwise) at `hour`, the birds by the scene's `bird_mix` (the default's without one),
+    /// and the doves on the scene's `perches` (#357), which take the dove out of the bed.
+    pub fn start(
+        sound: &mut Sound,
+        hour: f32,
+        bird_mix: Option<BirdMix>,
+        perches: &[Vec3],
+    ) -> Self {
         let rate = sound.sample_rate();
+        // Only the sounds of things in the world (#357): no cicadas' chorus nor birds' bed from
+        // nowhere, the doves on their perches.
         let state = AmbienceState {
             hour,
+            placed_only: true,
             ..AmbienceState::default()
         };
         let root = forge_app::workspace_root_from(env!("CARGO_MANIFEST_DIR"));
@@ -48,6 +60,11 @@ impl WorldSound {
         if let Some(mix) = bird_mix {
             assets.bird_mix = mix;
         }
+        let doves = (!perches.is_empty()).then(|| {
+            assets.bird_mix.dove = 0.0;
+            let at: Vec<DVec3> = perches.iter().map(|p| p.as_dvec3()).collect();
+            Perched::doves(&at, 357, rate)
+        });
         let ambience = Ambience::start_with(
             &mut sound.engine,
             &sound.streams,
@@ -65,6 +82,7 @@ impl WorldSound {
         params.sends[0] = Some((sound.buses.reverb, 0.15));
         Self {
             ambience,
+            doves,
             state,
             habitat: Habitat::default(),
             foley: Foley::new(rate, 318, params),
@@ -105,8 +123,14 @@ impl WorldSound {
         let place = &mut self.state.habitat;
         place.green += (to.green - place.green) * k;
         place.indoors += (to.indoors - place.indoors) * k;
+        // The height as it is: the camera moves smoothly, and the beds ease their gains.
+        place.height = to.height;
         if let Some(ambience) = &mut self.ambience {
             ambience.update(&mut sound.engine, &self.state, dt);
+        }
+        if let Some(doves) = &mut self.doves {
+            let bus = sound.buses.ambience.beds;
+            doves.update(&mut sound.engine, &self.state, bus, dt);
         }
         let Some(feet) = feet else {
             self.feet = None;

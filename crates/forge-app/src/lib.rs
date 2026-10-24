@@ -703,6 +703,9 @@ struct State<D: Demo> {
     /// silence behind the game's menu while the game holds (#352).
     volume: Var<f64>,
     volume_sent: f64,
+    /// `snd.ambience`: the ambience's level under the master (#357), and the level last sent.
+    ambience: Var<f64>,
+    ambience_sent: f64,
     /// The game's menu on Esc (#352), and where the cursor stands in the window, pixels.
     menu: menu::Menu,
     cursor: [f32; 2],
@@ -1197,6 +1200,16 @@ impl<D: Demo> State<D> {
             )
             .release(),
         );
+        let ambience = settings.add(
+            Spec::float(
+                "snd.ambience",
+                1.0,
+                0.0..=1.0,
+                "The ambience's level under the master, 0 to 1 (#357): the wind, the birds, the \
+                 cicadas, the sea.",
+            )
+            .release(),
+        );
         // A load profiled (#345): from here to the demo's first frame, in the log and in
         // `cache/profiles/` (the latest few kept); compiled out of shipped builds.
         let load_profile = settings.add(
@@ -1362,6 +1375,8 @@ impl<D: Demo> State<D> {
             hud_shown,
             volume,
             volume_sent: 1.0,
+            ambience,
+            ambience_sent: 1.0,
             menu: menu::Menu::default(),
             cursor: [0.0; 2],
             _sound_output: sound_output,
@@ -1593,6 +1608,14 @@ impl<D: Demo> State<D> {
                     gain: gain as f32,
                 });
                 self.volume_sent = gain;
+            }
+            let ambience = self.ctx.settings.get(self.ambience);
+            if ambience != self.ambience_sent {
+                sound.engine.control(forge_audio::Control::BusGain {
+                    bus: sound.buses.ambience.beds,
+                    gain: ambience as f32,
+                });
+                self.ambience_sent = ambience;
             }
         }
         let dt = if self.ctx.paused { 0.0 } else { dt };

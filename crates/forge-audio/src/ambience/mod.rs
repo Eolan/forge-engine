@@ -12,9 +12,12 @@
 //!   and give way to the wind from 5 m/s (silent by 10 m/s);
 //! - **birds** sing the dawn chorus from an hour before sunrise to 2.5 hours after, call a
 //!   little through the day and again at dusk, and are quiet at night, in rain and in wind;
-//! - **the place** ([`Habitat`], #350): the cicadas fall silent among houses with few trees, the
-//!   birds thin to a third there, and indoors the walls take the outside's beds (−16 dB well
-//!   inside); the birds' species and their shares are the scene's ([`BirdMix`]);
+//! - **the place** ([`Habitat`], #350, #357): the cicadas sing only in the open, away from
+//!   houses, the birds thin to a third among houses, indoors the walls take the outside's beds
+//!   (−16 dB well inside), and from 15 m up the ground's singers fade (none from 80 m); the
+//!   birds' species and their shares are the scene's ([`BirdMix`]);
+//! - **doves perched** in the world ([`perched`], #357) call now and then from where they sit,
+//!   placed and heard by distance, in the bed's stead;
 //! - **wind** and **rain** follow their speed and rate;
 //! - **the sea** falls 3 dB each time the distance to the shore doubles past 4 m (a line of
 //!   quay is a line source), is panned toward the water, and swells with the wind;
@@ -28,6 +31,7 @@
 //! a bed whose gain has rested at 0 for a second sleeps and costs nothing.
 
 pub mod beds;
+pub mod perched;
 pub mod recordings;
 
 use std::sync::Arc;
@@ -72,17 +76,21 @@ pub struct Shore {
     pub direction: Vec3,
 }
 
-/// The place round the listener (#350): what lives there, and whether walls stand between the
-/// listener and the outside. The default is open country with trees, as the beds were made for.
+/// The place round the listener (#350): what lives there, whether walls stand between the
+/// listener and the outside, and how high above the ground it is. The default is open country
+/// with trees, heard standing on the ground, as the beds were made for.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Habitat {
-    /// How green the place is within earshot, 0 (streets and houses only) to 1 (gardens and
-    /// woods): the share of the ground under trees, hedges and gardens, as the scene measures it.
-    /// Cicadas sing from trees and fall silent among houses with few of them; birds thin out but
-    /// stay (sparrows live on the houses); the dove calls only near woods.
+    /// How green and open the place is within earshot, 0 (streets and houses only) to 1
+    /// (meadows, fields, gardens and woods with no house near), as the scene measures it.
+    /// Cicadas sing only in the open; birds thin out among houses but stay (sparrows live on
+    /// them); the dove calls only near woods.
     pub green: f32,
     /// 0 outdoors to 1 well inside a building: the walls take most of the outside's beds.
     pub indoors: f32,
+    /// Metres above the ground: the singers of the ground (the cicadas and the birds) fade from
+    /// the trees' height and are not heard from the air (the owner, #357, flying in high).
+    pub height: f32,
 }
 
 impl Default for Habitat {
@@ -90,27 +98,37 @@ impl Default for Habitat {
         Self {
             green: 1.0,
             indoors: 0.0,
+            height: 0.0,
         }
     }
 }
 
 impl Habitat {
-    /// The cicadas' share where the listener stands: none among houses (green under 0.1), all of
-    /// them from a garden's worth of trees (0.5).
+    /// The share of the ground's singers heard at [`Self::height`]: all of them up to 15 m (the
+    /// trees' crowns), none from 80 m.
+    pub fn ground(&self) -> f32 {
+        1.0 - smoothstep(15.0, 80.0, self.height)
+    }
+
+    /// The cicadas' share where the listener stands: only in the open, none where green is under
+    /// 0.6 (a house or a street within earshot), all of them from 0.9. The owner (#357): "if I'm
+    /// approaching a place with no houses around and large meadow or field, yes, other places
+    /// no" (#350 had them among a garden's trees).
     pub fn cicadas(&self) -> f32 {
-        smoothstep(0.1, 0.5, self.green)
+        smoothstep(0.6, 0.9, self.green) * self.ground()
     }
 
     /// The birds' share: a third among houses, all of them from 0.4 of green.
     pub fn birds(&self) -> f32 {
-        1.0 - 0.65 * (1.0 - smoothstep(0.0, 0.4, self.green))
+        (1.0 - 0.65 * (1.0 - smoothstep(0.0, 0.4, self.green))) * self.ground()
     }
 
     /// The share of [`BirdMix::dove`] that calls here: none among houses (green under 0.15), all
     /// of it in a wood (0.5). The owner wanted the coo now and then from a tree near the forest,
-    /// not in every street (#350).
+    /// not in every street (#350). A scene that perches its doves ([`perched`], #357) leaves them
+    /// out of the bed.
     pub fn doves(&self) -> f32 {
-        smoothstep(0.15, 0.5, self.green)
+        smoothstep(0.15, 0.5, self.green) * self.ground()
     }
 
     /// What reaches the listener of the beds outside, through the walls: 1 outdoors, 0.15
@@ -146,6 +164,12 @@ pub struct AmbienceState {
     pub wet: f32,
     /// The place round the listener (#350).
     pub habitat: Habitat,
+    /// Only the sounds of things in the world (#357): the cicadas' chorus and the birds' bed, which
+    /// sing from no place, stay silent; the wind, the rain and the sea follow the weather and the
+    /// shore, and birds perched in the world ([`perched`]) call. The owner, 2026-10-25: the cicadas
+    /// wait for a study of where insects live; for now only sounds that belong to physical
+    /// objects.
+    pub placed_only: bool,
 }
 
 impl Default for AmbienceState {
@@ -164,6 +188,7 @@ impl Default for AmbienceState {
             listener: Listener::default(),
             wet: 0.0,
             habitat: Habitat::default(),
+            placed_only: false,
         }
     }
 }
@@ -179,10 +204,11 @@ pub struct BedTarget {
     pub pan: f32,
 }
 
-/// Each bed's level at a gain of 1, so that wind at 10 m/s, rain at 10 mm/h, the full
-/// cicada chorus and the sea at 4 m play about −24 dBFS RMS, the underwater rumble −22 and
-/// the dawn chorus −30 (`tests/ambience.rs` measures them).
-pub const LEVELS: [f32; 6] = [0.375, 1.33, 1.0, 0.33, 1.8, 1.0];
+/// Each bed's level at a gain of 1, so that wind at 10 m/s, rain at 10 mm/h and the sea at 4 m
+/// play about −24 dBFS RMS, the underwater rumble −22, the dawn chorus −30 and the full cicada
+/// chorus −33 (`tests/ambience.rs` measures them). The cicadas at −24 were "too loud for a game"
+/// (the owner, #357).
+pub const LEVELS: [f32; 6] = [0.375, 1.33, 0.35, 0.33, 1.8, 1.0];
 
 /// Seconds each bed's gain takes to rise by `e` toward its target.
 pub const RISE: [f32; 6] = [1.0, 2.0, 3.0, 3.0, 0.5, 0.06];
@@ -201,20 +227,24 @@ pub fn targets(state: &AmbienceState) -> [BedTarget; 6] {
     let rain = state.rain.max(0.0);
     let wind = state.wind.max(0.0);
     let window = |a: f32, b: f32, c: f32, d: f32| smoothstep(a, b, h) * (1.0 - smoothstep(c, d, h));
+    // The singers placed nowhere, silent when only the world's things sound (#357).
+    let unplaced = if state.placed_only { 0.0 } else { 1.0 };
 
     let cicadas = window(rise + 2.5, rise + 4.5, set - 1.5, set)
         * smoothstep(22.0, 27.0, state.temperature)
         * (1.0 - smoothstep(0.2, 1.0, rain))
         * (1.0 - smoothstep(0.1, 0.5, state.wet))
         * (1.0 - smoothstep(5.0, 10.0, wind))
-        * state.habitat.cicadas();
+        * state.habitat.cicadas()
+        * unplaced;
     let dawn = window(rise - 1.0, rise, rise + 0.5, rise + 2.5);
     let day = 0.15 * window(rise + 1.0, rise + 2.5, set - 1.0, set);
     let dusk = 0.4 * window(set - 1.5, set - 0.5, set, set + 0.75);
     let birds = dawn.max(day).max(dusk)
         * (1.0 - smoothstep(1.0, 5.0, rain))
         * (1.0 - smoothstep(6.0, 12.0, wind))
-        * state.habitat.birds();
+        * state.habitat.birds()
+        * unplaced;
 
     let sea = state.shore.map_or(BedTarget::default(), |shore| {
         let d = shore.distance.max(0.0);

@@ -23,9 +23,10 @@ use crate::overlay::{FontAtlas, GLYPHS, rasterize_builtin, rasterize_ttf};
 
 /// The settings the page shows, in its order: the console's name, the label, and words for an
 /// integer's values.
-const SETTINGS: [(&str, &str, &[&str]); 4] = [
+const SETTINGS: [(&str, &str, &[&str]); 5] = [
     ("r.aa", "Anti-aliasing", &[]),
     ("snd.volume", "Volume", &[]),
+    ("snd.ambience", "Ambience", &[]),
     ("app.mouse_look", "Mouse look", &[]),
     ("r.display_info", "Frame info", &["off", "on", "verbose"]),
 ];

@@ -22,6 +22,7 @@ use crate::dsp::synth::{
 };
 use crate::dsp::{Biquad, OnePole};
 use crate::foley::smoothstep;
+use crate::sound::SampleBuffer;
 use crate::spatial::pan_gains;
 use crate::variation::pick_avoiding;
 
@@ -717,6 +718,68 @@ struct Call {
     gains: [f32; 2],
 }
 
+impl Call {
+    /// Its next sample, `dt` seconds after the last; `None` between its notes and past them.
+    fn sample(&mut self, dt: f32) -> Option<f32> {
+        let tau = std::f32::consts::TAU;
+        let pi = std::f32::consts::PI;
+        let t = self.t;
+        self.t += dt;
+        while self
+            .notes
+            .get(self.next)
+            .is_some_and(|n| t >= n.start + n.length)
+        {
+            self.next += 1;
+        }
+        let note = *self.notes.get(self.next).filter(|n| t >= n.start)?;
+        if self.tick.is_multiple_of(16) {
+            let u = (t - note.start) / note.length;
+            let glide = 0.5 - 0.5 * (pi * u).cos();
+            let w = tau * (note.from + (note.to - note.from) * glide) * dt;
+            self.turn = [w.cos(), w.sin()];
+            let norm = self.z[0].hypot(self.z[1]).max(1e-6);
+            self.z = self.z.map(|v| v / norm);
+        }
+        self.tick = self.tick.wrapping_add(1);
+        let [re, im] = self.z;
+        self.z = [
+            re * self.turn[0] - im * self.turn[1],
+            re * self.turn[1] + im * self.turn[0],
+        ];
+        let e = ((t - note.start) / note.edge)
+            .min((note.start + note.length - t) / note.edge)
+            .min(1.0);
+        let env = if e < 1.0 {
+            0.5 - 0.5 * (pi * e).cos()
+        } else {
+            1.0
+        };
+        // The sine and its octave (sin 2φ = 2 sin φ cos φ).
+        Some(0.3 * note.amplitude * env * (im + 0.24 * re * im))
+    }
+
+    /// Whether its last note has ended.
+    fn done(&self) -> bool {
+        self.next >= self.notes.len()
+    }
+}
+
+/// One call of `voice` made in code, as the birds' bed sings it, alone and mono at `rate`
+/// (its notes varied by `seed`): a bird placed in the world calls it from where it perches
+/// ([`super::perched`], #357).
+pub fn bird_call(voice: BirdVoice, seed: u64, rate: u32) -> SampleBuffer {
+    let mut call = Birds::new(seed, rate).call(voice);
+    let dt = 1.0 / rate as f32;
+    // The longest call (a serin's trill) lasts under three seconds; the bound keeps it finite.
+    let most = 10 * rate as usize;
+    let mut samples = Vec::with_capacity(4 * rate as usize);
+    while !call.done() && samples.len() < most {
+        samples.push(call.sample(dt).unwrap_or(0.0));
+    }
+    SampleBuffer::mono(rate, samples)
+}
+
 /// A recorded call playing: read at its own pitch (±3 %), dulled with distance.
 struct Played {
     samples: Arc<[f32]>,
@@ -862,7 +925,7 @@ impl Birds {
     fn spawn(&mut self) {
         let doves = super::Habitat {
             green: self.green,
-            indoors: 0.0,
+            ..super::Habitat::default()
         }
         .doves();
         let mix = BirdMix {
@@ -1001,51 +1064,16 @@ impl Texture for Birds {
         if calls <= 0.0 {
             self.until = 0.0;
         }
-        let tau = std::f32::consts::TAU;
-        let pi = std::f32::consts::PI;
         for call in &mut self.calls {
             for i in 0..left.len() {
-                let t = call.t;
-                call.t += dt;
-                while call
-                    .notes
-                    .get(call.next)
-                    .is_some_and(|n| t >= n.start + n.length)
-                {
-                    call.next += 1;
-                }
-                let Some(note) = call.notes.get(call.next).filter(|n| t >= n.start) else {
+                let Some(y) = call.sample(dt) else {
                     continue;
                 };
-                if call.tick.is_multiple_of(16) {
-                    let u = (t - note.start) / note.length;
-                    let glide = 0.5 - 0.5 * (pi * u).cos();
-                    let w = tau * (note.from + (note.to - note.from) * glide) * dt;
-                    call.turn = [w.cos(), w.sin()];
-                    let norm = call.z[0].hypot(call.z[1]).max(1e-6);
-                    call.z = call.z.map(|v| v / norm);
-                }
-                call.tick = call.tick.wrapping_add(1);
-                let [re, im] = call.z;
-                call.z = [
-                    re * call.turn[0] - im * call.turn[1],
-                    re * call.turn[1] + im * call.turn[0],
-                ];
-                let e = ((t - note.start) / note.edge)
-                    .min((note.start + note.length - t) / note.edge)
-                    .min(1.0);
-                let env = if e < 1.0 {
-                    0.5 - 0.5 * (pi * e).cos()
-                } else {
-                    1.0
-                };
-                // The sine and its octave (sin 2φ = 2 sin φ cos φ).
-                let y = 0.3 * note.amplitude * env * (im + 0.24 * re * im);
                 left[i] += y * call.gains[0];
                 right[i] += y * call.gains[1];
             }
         }
-        self.calls.retain(|c| c.next < c.notes.len());
+        self.calls.retain(|c| !c.done());
 
         // The recorded calls, read by linear interpolation.
         for p in &mut self.played {

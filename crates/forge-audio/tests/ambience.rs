@@ -83,7 +83,8 @@ fn cicadas_sing_in_the_heat_of_the_day() {
     let hot = steady(at(13.0, 30.0), 2.0, 6.0, 1);
     let cool = steady(at(13.0, 18.0), 2.0, 6.0, 1);
     let band = |x: &[f32]| band_db(x, 3000.0, 8000.0, RATE);
-    assert!(band(&hot) > -32.0, "{:.1} dBFS", band(&hot));
+    // The full chorus near −33 dBFS since the owner found −24 too loud for a game (#357).
+    assert!(band(&hot) > -38.0, "{:.1} dBFS", band(&hot));
     assert!(
         band(&hot) - band(&cool) > 10.0,
         "{:.1} against {:.1}",
@@ -581,7 +582,11 @@ fn the_habitat_quiets_cicadas_among_houses_and_the_outside_indoors() {
     let open = targets(&noon);
     let at = |green: f32, indoors: f32| {
         targets(&AmbienceState {
-            habitat: Habitat { green, indoors },
+            habitat: Habitat {
+                green,
+                indoors,
+                ..Habitat::default()
+            },
             ..noon
         })
     };
@@ -592,10 +597,14 @@ fn the_habitat_quiets_cicadas_among_houses_and_the_outside_indoors() {
     assert_eq!(streets[2].intensity, 0.0);
     assert_eq!(streets[2].gain, 0.0);
     assert!((streets[3].intensity - 0.35 * open[3].intensity).abs() < 1e-6);
-    // A street with a few trees: some cicadas, fewer than in a garden; the birds in between.
+    // A street with a few trees: no cicadas (only in the open, #357); the birds in between.
     let trees = at(0.25, 0.0);
-    assert!(trees[2].intensity > 0.0 && trees[2].intensity < 0.5 * open[2].intensity);
+    assert_eq!(trees[2].intensity, 0.0);
     assert!(trees[3].intensity > streets[3].intensity && trees[3].intensity < open[3].intensity);
+    // The open country's edge, a house or two within earshot: some cicadas, fewer than in the
+    // open.
+    let edge = at(0.75, 0.0);
+    assert!(edge[2].intensity > 0.0 && edge[2].intensity < 0.7 * open[2].intensity);
     // The wind and the sea do not care how green the place is.
     assert_eq!(streets[0], open[0]);
     assert_eq!(streets[4], open[4]);
@@ -647,7 +656,7 @@ fn the_dove_calls_only_near_woods() {
     let doves = |green: f32| {
         Habitat {
             green,
-            indoors: 0.0,
+            ..Habitat::default()
         }
         .doves()
     };
@@ -659,4 +668,63 @@ fn the_dove_calls_only_near_woods() {
     assert_eq!(doves(1.0), 1.0);
     let edge = doves(0.35);
     assert!(edge > 0.3 && edge < 1.0, "{edge}");
+}
+
+#[test]
+fn the_ground_s_singers_are_not_heard_from_the_air() {
+    use forge_audio::ambience::Habitat;
+    // Noon in the heat over open country: the cicadas and the birds by the listener's height.
+    let noon = AmbienceState {
+        hour: 13.0,
+        temperature: 30.0,
+        wind: 3.0,
+        ..AmbienceState::default()
+    };
+    let at = |height: f32| {
+        targets(&AmbienceState {
+            habitat: Habitat {
+                height,
+                ..Habitat::default()
+            },
+            ..noon
+        })
+    };
+    let ground = at(0.0);
+    // Among the crowns, nothing changes; over the roofs, less; from the air (the owner's start,
+    // 100 m and more up, #357), nothing.
+    assert_eq!(at(12.0), ground);
+    let roofs = at(40.0);
+    assert!(roofs[2].intensity > 0.0 && roofs[2].intensity < 0.8 * ground[2].intensity);
+    assert!(roofs[3].intensity > 0.0 && roofs[3].intensity < 0.8 * ground[3].intensity);
+    let air = at(100.0);
+    assert_eq!(air[2].gain, 0.0);
+    assert_eq!(air[3].gain, 0.0);
+    // The wind blows as hard up there.
+    assert_eq!(air[0], ground[0]);
+}
+
+#[test]
+fn only_the_world_s_things_sound_when_asked() {
+    // Noon in the heat by the sea: the cicadas, the birds and the sea; with only the sounds of
+    // things in the world (#357), the cicadas and the birds' bed fall silent and the sea stays.
+    let noon = AmbienceState {
+        hour: 13.0,
+        temperature: 30.0,
+        wind: 3.0,
+        shore: Some(Shore {
+            distance: 10.0,
+            direction: Vec3::X,
+        }),
+        ..AmbienceState::default()
+    };
+    let all = targets(&noon);
+    let placed = targets(&AmbienceState {
+        placed_only: true,
+        ..noon
+    });
+    assert!(all[2].gain > 0.0 && all[3].gain > 0.0);
+    assert_eq!(placed[2].gain, 0.0);
+    assert_eq!(placed[3].gain, 0.0);
+    assert_eq!(placed[0], all[0]);
+    assert_eq!(placed[4], all[4]);
 }

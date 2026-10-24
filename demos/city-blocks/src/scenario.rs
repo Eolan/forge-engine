@@ -268,6 +268,12 @@ pub trait Running: Send {
     fn bird_mix(&self) -> Option<forge_audio::ambience::BirdMix> {
         None
     }
+    /// Where its doves perch (#357), in the scene's frame, read once when the ambience starts:
+    /// each calls now and then from there ([`forge_audio::ambience::perched`]), and the birds' bed
+    /// leaves the dove out. None by default: the bed's dove.
+    fn dove_perches(&self) -> Vec<Vec3> {
+        Vec::new()
+    }
     /// Whether it runs with others, through a server: the game's menu (#352) then leaves it
     /// running. False by default: a solo scene holds behind the menu.
     fn networked(&self) -> bool {

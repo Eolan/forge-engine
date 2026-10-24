@@ -2365,10 +2365,12 @@ impl Demo for Gallery {
         // sun's hour (mid-afternoon when nothing sets it), the player's steps, the scene's own.
         if let Some(sound) = ctx.sound.as_mut() {
             let hour = self.sun_cycle.map_or(15.0, world_sound::hour_of_cycle);
-            let bird_mix = self.running.as_ref().and_then(|r| r.bird_mix());
-            let world = self
-                .world_sound
-                .get_or_insert_with(|| world_sound::WorldSound::start(sound, hour, bird_mix));
+            let running = self.running.as_ref();
+            let world = self.world_sound.get_or_insert_with(|| {
+                let bird_mix = running.and_then(|r| r.bird_mix());
+                let perches = running.map(|r| r.dove_perches()).unwrap_or_default();
+                world_sound::WorldSound::start(sound, hour, bird_mix, &perches)
+            });
             world.set_habitat(
                 self.running
                     .as_ref()
