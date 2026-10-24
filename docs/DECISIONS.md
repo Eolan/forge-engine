@@ -7558,6 +7558,10 @@ grid came within reach. Since then, wherever the scene has grids, every such roo
 room's share of the open sky (`far_room_sky`), set against the grids: the village's 0.2 keeps the
 windows within 0.02 EV of grid-lit rooms in the afternoon and under a low sun (0.06 was 0.05 EV
 dark). The grids take the sun's bounce, which the share cannot follow through the day: #356.
+The grids' probes also stay on their lattice: one standing in a landing's guard was moved out on
+the nearer side, the stairwell's, and lit the landing's floor along the guard's foot in spots a
+metre apart (the owner's sighting); one inside a solid is now inactive, its neighbours lighting
+round it (the map check's insides within FLIP 0.04, the outside views unchanged).
 
 *(research: probe-levels-indoors.md; D-068; issue #353)*
 

@@ -110,6 +110,13 @@ void probe_state_main(uint3 id : SV_DispatchThreadID)
         offset += back_dir * (closest_back + 0.5 * keep_off);
     else if (closest_front < keep_off)
         offset -= front_dir * (keep_off - closest_front);
+    // A room grid's probe (D-078) stays on its lattice: moved out of a solid standing in its room
+    // (a landing's guard, a wardrobe), it went out on the nearer side, and from the stairwell's it
+    // lit the landing's floor along the guard's foot in spots a metre apart (the owner,
+    // 2026-10-24: "light spots at the wall/floor junction"). One inside something is inactive,
+    // and its neighbours light round it.
+    if (slot.grid != ROOM_NONE)
+        offset = float3(0.0);
     float limit = 0.45 * s;
     float length_now = length(offset);
     if (length_now > limit)
