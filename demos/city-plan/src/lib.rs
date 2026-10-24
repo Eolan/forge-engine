@@ -7258,7 +7258,7 @@ impl Scenario for PlanScenario {
         let mut builder = MeshletSceneBuilder::new();
         // The rows an impostor's bake draws a plant with (`--impostors`, `--impostor-bake`, D-075
         // step 4), and the plants drawn as impostors with the trees' ladder.
-        let drawn_impostors = args.tree_ladder.and(args.impostors);
+        let drawn_impostors = args.impostors();
         let bake_rows = (args.impostor_bake.is_some() || drawn_impostors.is_some())
             .then(|| materials.gpu_rows());
         let mut impostors = Vec::new();
@@ -7351,7 +7351,7 @@ impl Scenario for PlanScenario {
             // With the ladder, the shadow rays from points `far_shadows` metres off and more meet
             // each plant's opaque shadow proxy in place of its cards (D-075 step 3).
             let far_shadows = args
-                .tree_ladder
+                .tree_ladder()
                 .map_or(0.0, |_| args.far_shadows.unwrap_or(FAR_SHADOWS));
             if far_shadows > 0.0 {
                 builder.set_far_shadows(far_shadows);
@@ -7419,7 +7419,7 @@ impl Scenario for PlanScenario {
                         // With `--impostors` the shells fade in turn where the plant's impostor
                         // takes their pixels (D-075 step 4).
                         let mut ladder_px = 0.0;
-                        if let Some(px) = args.tree_ladder {
+                        if let Some(px) = args.tree_ladder() {
                             let next = builder.add_mesh(&shells);
                             let across = 2.0 * mesh.radius / lump;
                             ladder_px = px * across;
@@ -7430,7 +7430,7 @@ impl Scenario for PlanScenario {
                         }
                         // Placed with the ladder whatever the distance, so `--far-shadows 0` keeps
                         // the instances' ids (each tree's tones follow its id) for the A/B.
-                        let shadow = args.tree_ladder.map(|_| builder.add_mesh(&shadow));
+                        let shadow = args.tree_ladder().map(|_| builder.add_mesh(&shadow));
                         Grown {
                             id,
                             proxy,
@@ -7840,7 +7840,7 @@ impl Scenario for PlanScenario {
                 impostors: (!impostors.is_empty()).then(|| forge_render::impostor::ImpostorSet {
                     sources: impostors,
                     instances: impostor_instances,
-                    fade_px: args.impostors.unwrap_or(0.0),
+                    fade_px: args.impostors().unwrap_or(0.0),
                     fade_band: IMPOSTOR_FADE_BAND,
                 }),
                 canopy,

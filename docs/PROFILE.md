@@ -852,7 +852,7 @@ opaque crown proxy (D-036, `--leaf-probes` the A/B).
 | the garden (`-50.7,1.7,-116.7,163.7,0`) | 4.34, 1.54 ms | 3.62, 0.82 ms | 3.34, 0.59 ms |
 | the air view | 4.41, 1.45 ms | 4.39, 1.32 ms | 4.28, 1.28 ms |
 
-**The trees' ladder** (D-075 step 2, #302, 2026-10-19; city-plan's `--tree-ladder`): the plants
+**The trees' ladder** (D-075 step 2, #302, 2026-10-19; city-plan's `--tree-ladder`, on by default since 2026-10-25): the plants
 cross from their cards to their crowns' shells once the shells' lumps stand 6 pixels across,
 dithered over a quarter of that size either side. The village at 1600 × 900, DLAA, one run each
 (the air view's three runs: still, at its start and gliding at 12 m/s):

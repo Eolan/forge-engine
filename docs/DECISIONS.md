@@ -6916,7 +6916,7 @@ questions of `research/forests-and-grass.md` §9 answered as recommended:
 per-instance crossing; two TLAS instances per tree with the shadow-ray bit; the impostor baker
 and its shading class; the grass pass; micromaps last.
 
-**Step 2 built** (#302, 2026-10-19), behind city-plan's `--tree-ladder [PX]` until the owner has
+**Step 2 built** (#302, 2026-10-19), behind city-plan's `--tree-ladder [PX]` until the owner had
 looked:
 - **The record:** `MeshletSceneBuilder::set_ladder(mesh, next, size_px, band)` names a mesh's next
   step, the projected size of an instance's sphere (output pixels across) at which it is half
@@ -7013,7 +7013,7 @@ owner has looked (`forge_render::grass`, `shaders/meshlet.slang`'s "grass"):
 - **Not yet:** the walkers' bending, a measured fit of the colours to the ground beneath.
 
 **Step 4 built: the impostors** (#302, 2026-10-22, the plan in #302's comments), behind
-city-plan's `--impostors [PX]` with `--tree-ladder` until the owner has looked; `--impostor-bake
+city-plan's `--impostors [PX]` with `--tree-ladder` until the owner had looked (on by default since 2026-10-25, below); `--impostor-bake
 DIR` writes the atlases as images (`forge_render::impostor`, `shaders/impostor.slang`,
 `impostor_layout.slang`, `impostor_draw.slang`):
 - **The layout:** the upper hemisphere unfolded into a square, a diamond turned to fill it (R.
@@ -7136,6 +7136,12 @@ DIR` writes the atlases as images (`forge_render::impostor`, `shaders/impostor.s
     B +28 %, the meadow's view), the "bright young crowns" above. Dimming the impostors' sky by
     their baked openness fixed the nearest crowns in shade but darkened the far woods, and made
     no difference at the real crossing (40 px), so it is left out.
+- **On by default** (the owner, 2026-10-25: "yes make it the default"): city-plan draws the
+  ladder at 6 px and the impostors at 40 px without flags; `--tree-ladder 0` draws the cards all
+  the way, `--impostors 0` keeps the shells (`Args::tree_ladder`, `Args::impostors`). The far
+  shadows' world comes with the ladder (60 m). The frame from the air 6.25 → 4.78 ms against the
+  cards kept whole (`docs/PROFILE.md`); the impostors' bake adds 1.4 s to a first start, 0.33 s
+  from the derived cache.
 
 **Micromaps built** (#333, 2026-10-23, question 4's answer), on by default in city-plan, where
 the device has them (`MeshletSceneBuilder::set_opacity_micromaps`, city-blocks' `--omm`,

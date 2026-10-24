@@ -745,7 +745,9 @@ game (scenarios, missions, licensed assets) is a private repository, as the city
    out to 50 m, stopping at the lawn's edge within a ninth of a cell;
    the impostors the same day behind `--impostors` (baked for each species and age before the
    first frame, drawn after the resolve where the shells fade, lit as the leaves with a ray into
-   the far shadows' world), their atlases cached and block-compressed, 1.0 MB a kind; the cards' opacity
+   the far shadows' world), their atlases cached and block-compressed, 1.0 MB a kind; the ladder
+   and the impostors on by default in the village since 2026-10-25 (the owner, after the flight
+   in: the clouds' shadow on the impostors, the crowns kept whole, the shells' tone fitted); the cards' opacity
    micromaps, the last step, on in the village 2026-10-23, #333: the sun's rays 10–21 % cheaper, the same picture); structures with interiors, lit by their
    lamps at night (D-065, #270: the houses' lamps as data, the rooms as light lists and the probes lit by them, built 2026-10-18; RTXDI
    compared, and the street lamps by it behind `--street-restir`); flora; the particle system (smoke, dust, fire, rain,

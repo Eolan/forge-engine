@@ -593,8 +593,9 @@ pub struct Args {
     show_regions: bool,
     /// The trees' ladder (D-075, #302): the city plan's plants cross from their leaf cards to
     /// their crowns' closed shells, dithered, as the shells' lumps drop under this many output
-    /// pixels across (the flag alone: 6).
-    #[arg(long, num_args = 0..=1, default_missing_value = "6")]
+    /// pixels across. On by default at 6 since 2026-10-25 (the owner); 0 turns it off, the cards
+    /// drawn all the way ([`Args::tree_ladder`]).
+    #[arg(long, num_args = 0..=1, default_value = "6", default_missing_value = "6")]
     pub tree_ladder: Option<f32>,
     /// With `--tree-ladder`: tint the shells blue (a crossing tree shows both, dithered).
     #[arg(long)]
@@ -613,11 +614,12 @@ pub struct Args {
     /// (a light breeze, 0.15, by default; 0 still air).
     #[arg(long, default_value_t = 0.15)]
     pub grass_wind: f32,
-    /// With `--tree-ladder`: the far plants as impostors (D-075 step 4, #302): each plant's crown
-    /// shells fade once its sphere stands under this many output pixels across (the flag alone:
-    /// 40), and its impostor takes the pixels they leave. The impostors are baked before the
-    /// run's first frame.
-    #[arg(long, num_args = 0..=1, default_missing_value = "40")]
+    /// With the trees' ladder: the far plants as impostors (D-075 step 4, #302): each plant's
+    /// crown shells fade once its sphere stands under this many output pixels across, and its
+    /// impostor takes the pixels they leave. On by default at 40 since 2026-10-25 (the owner);
+    /// 0 turns them off ([`Args::impostors`]). The impostors are baked before the run's first
+    /// frame (or read from the derived cache).
+    #[arg(long, num_args = 0..=1, default_value = "40", default_missing_value = "40")]
     pub impostors: Option<f32>,
     /// Bake the scenario's trees' impostors (D-075 step 4, #302) before the run, each one's
     /// atlases written as PNG images to this directory (`<species>-albedo.png`,
@@ -755,6 +757,18 @@ impl Args {
     /// `--water`, the old opt-in, asks for the default).
     pub fn water(&self) -> bool {
         self.legacy_water || !self.no_water
+    }
+
+    /// The trees' ladder's crossing, pixels (`--tree-ladder`, on by default): `None` at 0.
+    pub fn tree_ladder(&self) -> Option<f32> {
+        self.tree_ladder.filter(|&px| px > 0.0)
+    }
+
+    /// The impostors' fade, pixels (`--impostors`, on by default with the ladder): `None` at 0
+    /// or without the ladder.
+    pub fn impostors(&self) -> Option<f32> {
+        self.tree_ladder()
+            .and(self.impostors.filter(|&px| px > 0.0))
     }
 }
 
