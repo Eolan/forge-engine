@@ -667,7 +667,8 @@ The items below are the phase's original outline; the plan above orders them.
    contact events to the material layer (the contacts begun in a step, with where and how fast ✅,
    2026-10-23, `World::contacts`; their sounds by material ✅ the same day: the material record's
    sound layer, both bodies ringing with the softer setting the contact, `physics-lab`'s impacts;
-   their marks proposed, D-079 🟡).
+   their marks, D-079 ✅ 2026-10-24: a pool of run-time decals, scuffs and prints first, bullet holes
+   later with parallax depth).
 3. Generated creatures: gait synthesis for procedurally generated bodies.
    **Demo:** `rough-ground` — a biped and a generated hexapod cross rough terrain, get
    shoved by a physics object and recover; footprints in snow.
@@ -750,7 +751,7 @@ game (scenarios, missions, licensed assets) is a private repository, as the city
    compared, and the street lamps by it behind `--street-restir`); flora; the particle system (smoke, dust, fire, rain,
    sparks; D-064's step 1 built 2026-10-18, #271: emitters as data, the lab's smoke yard);
    characters' animation (imported rigs' root frames, root motion, masked and additive layers
-   built 2026-10-19, #310, #311, #313; the data-driven state machine, #312, the same day; its layers on a joint's subtree, an aim over a walk, #329, 2026-10-21); navigation (D-076, #317: `forge-nav`'s walk field, links and A*, the village's rooms reached from the street, 2026-10-19; the same day passages as data and crossings, #316: a walker vaults the low walls it walks into and climbs through open windows; following and ORCA avoidance with turns at narrow doors; walker pieces and glass panes changed at run time, #324, #325; field tiles round the agents and the pursuers' scene (`city-plan --pursuers`); static instance edits (#323), the sun's ray start by the mesh's cut (#326) and doorways switched with their doors (#327) built 2026-10-21); sound (in the app since 2026-10-21, #318), fauna (the village's animals drawn behind `--fauna`, 2026-10-23) and networking,
+   built 2026-10-19, #310, #311, #313; the data-driven state machine, #312, the same day; its layers on a joint's subtree, an aim over a walk, #329, 2026-10-21); navigation (D-076, #317: `forge-nav`'s walk field, links and A*, the village's rooms reached from the street, 2026-10-19; the same day passages as data and crossings, #316: a walker vaults the low walls it walks into and climbs through open windows; following and ORCA avoidance with turns at narrow doors; walker pieces and glass panes changed at run time, #324, #325; field tiles round the agents and the pursuers' scene (`city-plan --pursuers`); static instance edits (#323), the sun's ray start by the mesh's cut (#326) and doorways switched with their doors (#327) built 2026-10-21); sound (in the app since 2026-10-21, #318), fauna (the village's animals, 2026-10-23, on by default since 2026-10-24) and networking,
    the last three in parallel sessions off
    the GPU: #267 sound, #268 networking, #269 flora and fauna.
 4. **Then the first scenario:** zombies (melee); later a base to infiltrate, a solo fight.

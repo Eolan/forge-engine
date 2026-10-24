@@ -2737,10 +2737,11 @@ and back on the street.*
 ## The village's animals (#269, 2026-10-23)
 
 ```
-cargo run --release -p city-plan -- --village 600 --fauna
+cargo run --release -p city-plan -- --village 600
 ```
 
-Sparrows, pigeons, swifts and gulls, cats, and dogs walked by their owners (`forge_fauna`), stepped with
+On by default since 2026-10-24 (the owner's word); `--no-fauna` leaves them out, and the map check
+does so to keep its views. Sparrows, pigeons, swifts and gulls, cats, and dogs walked by their owners (`forge_fauna`), stepped with
 the player and the pursuers as the people they flee, drawn as blocky placeholders
 (`forge_geom::animals`). The log names a view of each species' first group. Details and numbers
 in [fauna.md](fauna.md).

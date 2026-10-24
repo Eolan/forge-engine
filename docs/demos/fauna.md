@@ -110,7 +110,7 @@ not touch them):
 - `pasture` and `fold`: on the village's hillside, where the map wants its herd;
 - the population's walkers and the traffic as `Disturber`s each step, the player among them.
 
-## In the first map's village (`city-plan --village 600 --fauna`, 2026-10-23)
+## In the first map's village (`city-plan --village 600`, 2026-10-23; on by default since 2026-10-24)
 
 The hook above, built for the village (`demos/city-plan/src/fauna.rs`), and the bodies drawn:
 - **The parts:**

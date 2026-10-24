@@ -49,7 +49,7 @@ shoot() {
   shift
   FORGE_MONITOR=${FORGE_MONITOR:-secondary} timeout 300 target/release/city-plan.exe \
     --village "$size" --time-of-day 0.75 --fixed-step --frames "${frames:-240}" \
-    --capture "$out/$name.png" --capture-frame "${frame:-200}" "$@" ${FORGE_MAP_ARGS:-} > "$out/$name.log" 2>&1
+    --capture "$out/$name.png" --capture-frame "${frame:-200}" --no-fauna "$@" ${FORGE_MAP_ARGS:-} > "$out/$name.log" 2>&1
   local status=$?
   local gpu
   gpu=$(sed 's/\x1b\[[0-9;]*m//g' "$out/$name.log" | grep -oE 'gpu: [0-9.]+ ms' | head -1)

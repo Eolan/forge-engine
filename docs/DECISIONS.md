@@ -7553,7 +7553,7 @@ technique with similar results that does not infringe.
 
 *(research: probe-levels-indoors.md; D-068; issue #353)*
 
-## D-079 — Marks where bodies strike: a pool of run-time decals on static surfaces 🟡 (proposed 2026-10-24, Phase 7)
+## D-079 — Marks where bodies strike: a pool of run-time decals on static surfaces ✅ (proposed 2026-10-24, accepted the same day, Phase 7)
 
 **The need:** Phase 7's contact events now sound by material (`physics-lab`'s impacts, D-007's
 sound layer). The roadmap's next step is their marks: where a body strikes a static surface hard
@@ -7610,5 +7610,13 @@ doing so.
    proposed), or simulation state?
 4. **Normals and roughness** for colour decals first (for dents and scratches), or scuffs and
    prints only to begin with (proposed)?
+
+**The owner's answer (2026-10-24):** the recommendations, all four: run-time marks on static
+surfaces, kept until recycled, presentation only, scuffs and prints first. For bullet holes, when
+they come through this pool, the owner prefers depth drawn with **parallax mapping** where it fits
+(the owner's references: Counter-Strike: Global Offensive or Counter-Strike 2, and Red Dead
+Redemption 2), before geometric chipping or real holes, or combined with them. That step gets its
+own research note first: how those games draw holes, and the patents on parallax and relief
+mapping of decals.
 
 *(research: impact-marks.md, decals.md; D-074, D-007)*
