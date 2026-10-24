@@ -298,20 +298,53 @@ pub fn crown_lumps(g: &TreeGraph, shrub: bool, broad: bool, lift: f32) -> Vec<(V
         })
     .max(g.height() / 10.0)
     .max(0.3);
-    let mut cells: std::collections::BTreeMap<(i32, i32, i32), (Vec3, u32, f32)> =
-        Default::default();
+    // The leaves gathered round seeds a cell apart, not into the cells of a grid: on the grid
+    // the lumps stood in layers a cell apart, and every round crown showed the same horizontal
+    // bands (the owner, 2026-10-24). Each seed the first leaf not yet gathered, in the graph's
+    // order (the same every run); each leaf goes to the nearest seed within a cell, those
+    // further out seeding their own.
+    let reach = cell * 0.6;
+    let mut grid: std::collections::HashMap<(i32, i32, i32), Vec<u32>> = Default::default();
+    let key = |p: Vec3| {
+        let k = (p / reach).floor();
+        (k.x as i32, k.y as i32, k.z as i32)
+    };
+    let mut seeds: Vec<Vec3> = Vec::new();
+    let mut sums: Vec<(Vec3, u32, f32)> = Vec::new();
     for l in &g.leaves {
-        let k = (l.pos / cell).floor();
-        let e = cells
-            .entry((k.x as i32, k.y as i32, k.z as i32))
-            .or_insert((Vec3::ZERO, 0, 0.0));
+        let (kx, ky, kz) = key(l.pos);
+        let mut best: Option<(u32, f32)> = None;
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    if let Some(list) = grid.get(&(kx + dx, ky + dy, kz + dz)) {
+                        for &s in list {
+                            let d = seeds[s as usize].distance_squared(l.pos);
+                            if d <= reach * reach && best.is_none_or(|(_, b)| d < b) {
+                                best = Some((s, d));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let s = match best {
+            Some((s, _)) => s,
+            None => {
+                seeds.push(l.pos);
+                sums.push((Vec3::ZERO, 0, 0.0));
+                let s = (seeds.len() - 1) as u32;
+                grid.entry((kx, ky, kz)).or_default().push(s);
+                s
+            }
+        };
+        let e = &mut sums[s as usize];
         e.0 += l.pos;
         e.1 += 1;
         e.2 = e.2.max(l.size);
     }
-    let mean = g.leaves.len() as f32 / cells.len().max(1) as f32;
-    cells
-        .into_values()
+    let mean = g.leaves.len() as f32 / sums.len().max(1) as f32;
+    sums.into_iter()
         .map(|(sum, n, size)| {
             let radius = cell * (0.45 + 0.35 * (n as f32 / mean).sqrt().min(1.6)) + size * 0.3;
             // Kept over a lifted crown's clear trunk: a lump round a low cluster hung below it.
@@ -328,6 +361,10 @@ pub fn crown_lumps(g: &TreeGraph, shrub: bool, broad: bool, lift: f32) -> Vec<(V
 /// exposure lit the wood, as faceted green stones among the leaves; at three tenths, with the
 /// leaves' detail (#346), as faceted olive balls through the gaps close up).
 pub const CROWN_CORE: f32 = 0.2;
+
+/// How far up (or down) a leaf card's normal may point, as its vertical component: past it the
+/// card turns towards the side ([`leaf_cards`]), at least 37° off the horizontal.
+const CARD_STEEP: f32 = 0.8;
 
 /// A crown proxy's lump ([`grown_proxy`]) as a share of the lump's radius: three fifths, the
 /// light nearest the cards' (#297; the village at 15:00, a fixed exposure, against the probes
@@ -384,6 +421,21 @@ pub fn leaf_cards(
         let tilt = out.any_orthonormal_vector();
         let tilt = (tilt * (random(k, 2) - 0.5) + out.cross(tilt) * (random(k, 3) - 0.5)) * 1.2;
         let normal = (out + tilt).normalize();
+        // No card lies flat: its normal at most [`CARD_STEEP`] up or down. A lump's top and
+        // bottom cards faced the sky and the ground and, seen from the side, were edges: a
+        // horizontal dash in every round crown, the same in all of them (the owner, 2026-10-24).
+        let normal = if normal.y.abs() > CARD_STEEP {
+            let level = Vec3::new(normal.x, 0.0, normal.z);
+            let level = if level.length_squared() > 1e-6 {
+                level.normalize()
+            } else {
+                let a = spin + golden * k as f32;
+                Vec3::new(a.cos(), 0.0, a.sin())
+            };
+            level * (1.0 - CARD_STEEP * CARD_STEEP).sqrt() + Vec3::Y * CARD_STEEP.copysign(normal.y)
+        } else {
+            normal
+        };
         // The spray grows upwards, turned a little about the card's normal.
         let level = Vec3::Y - normal * normal.dot(Vec3::Y);
         let up = if level.length_squared() > 1e-4 {
