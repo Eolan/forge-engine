@@ -29,7 +29,7 @@ use glam::{DVec3, Mat4, Vec2, Vec3};
 use crate::aces2::f32_to_f16;
 use crate::meshlet::RayRequests;
 use crate::sky::SkyFrame;
-use crate::taa::HDR_FORMAT;
+use crate::taa::{HDR_FORMAT, MOTION_FORMAT};
 
 /// Samples per side of a cascade (`N` in `water.slang`).
 pub const WATER_SIZE: u32 = 256;
@@ -557,9 +557,15 @@ struct GpuWaterSurface {
     foam_origin: [i32; 2],
     /// Metres a cell, cells a side, 0, 0.
     foam_frame: [f32; 4],
+    /// The previous frame's unjittered clip from this frame's, for the motion target
+    /// (`surface_motion` in the shader; [`WaterSurfaceParams::motion`]).
+    previous_from_current: [f32; 16],
+    /// This frame's jitter in pixels, x right, y down.
+    jitter: [f32; 2],
+    pad_motion: [f32; 2],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuWaterSurface>() == 928);
+const _: () = assert!(std::mem::size_of::<GpuWaterSurface>() == 1008);
 
 /// Bytes of `WaterAtCamera` in `water.slang`: the water's surface at the camera as a plane,
 /// its absorption and its scattering, then `water/under`'s dispatch.
@@ -1268,6 +1274,16 @@ pub struct WaterSurfaceParams {
     pub splash_foam: Option<crate::splashes::SplashFoam>,
     /// The sea's water ([`SeaWater`], #108).
     pub sea_water: SeaWater,
+    /// The previous frame's unjittered clip from this frame's ([`crate::TaaFrame`]'s): the
+    /// water writes its pixels' motion vectors from its own depth.
+    pub previous_from_current: Mat4,
+    /// This frame's jitter in pixels, x right, y down.
+    pub jitter: Vec2,
+    /// The frame's motion target, when the motion vectors were made before this pass (the sun's
+    /// shadows denoised, #172): the water's pixels carried the floor's motion under them, and
+    /// the upscalers smeared the reflections as the camera moved sideways. `None`: the motion
+    /// vectors come after the water, from its depth, and a scratch image takes the writes.
+    pub motion: Option<ImageHandle>,
 }
 
 /// The sea's surface (issue #105, step 2): a clipmap of grids around the camera displaced by
@@ -1493,7 +1509,7 @@ impl WaterSurface {
         let surface_desc = |fragment, entry, name| VertexPipelineDesc {
             vertex: (vertex, "surface_vert_main"),
             fragment: (fragment, entry),
-            color_formats: &[HDR_FORMAT, REQUEST_FORMAT, REQUEST_FORMAT],
+            color_formats: &[HDR_FORMAT, REQUEST_FORMAT, REQUEST_FORMAT, MOTION_FORMAT],
             depth_format: Some(vk::Format::D32_SFLOAT),
             push_constant_bytes: std::mem::size_of::<SurfacePush>() as u32,
             cull_mode: vk::CullModeFlags::NONE,
@@ -1551,7 +1567,7 @@ impl WaterSurface {
                     pipelines.push(device.create_vertex_pipeline(&VertexPipelineDesc {
                         vertex: (vertex, &vertex_entry),
                         fragment: (fragment, &fragment_entry),
-                        color_formats: &[HDR_FORMAT, REQUEST_FORMAT, REQUEST_FORMAT],
+                        color_formats: &[HDR_FORMAT, REQUEST_FORMAT, REQUEST_FORMAT, MOTION_FORMAT],
                         depth_format: Some(vk::Format::D32_SFLOAT),
                         push_constant_bytes: std::mem::size_of::<SurfacePush>() as u32,
                         cull_mode: vk::CullModeFlags::NONE,
@@ -2254,11 +2270,26 @@ impl WaterSurface {
                 Ok(())
             });
         }
+        // The motion target: the frame's, when its motion vectors were made before this pass,
+        // else a scratch image nobody reads (the pipelines have four colour targets either way).
+        let motion_real = params.motion.is_some();
+        let motion_target = params.motion.unwrap_or_else(|| {
+            graph.transient(TransientDesc {
+                name: "water motion scratch",
+                width: extent.width,
+                height: extent.height,
+                format: MOTION_FORMAT,
+                usage: vk::ImageUsageFlags::COLOR_ATTACHMENT,
+                aspect: vk::ImageAspectFlags::COLOR,
+                mip_levels: 1,
+            })
+        });
         let mut pass = graph
             .pass("water/surface")
             .image(color, ImageAccess::ColorAttachment)
             .image(mirror_requests, ImageAccess::ColorAttachment)
             .image(sun_requests, ImageAccess::ColorAttachment)
+            .image(motion_target, ImageAccess::ColorAttachment)
             .image(depth, ImageAccess::DepthAttachment)
             .image(scene_color, ImageAccess::Sampled(fragment))
             .image(scene_depth, ImageAccess::Sampled(fragment))
@@ -2378,6 +2409,9 @@ impl WaterSurface {
                         .cloud_image
                         .map_or(u32::MAX, |c| resources.sampled(c).0),
                     pad_cloud: [0; 2],
+                    previous_from_current: params.previous_from_current.to_cols_array(),
+                    jitter: params.jitter.to_array(),
+                    pad_motion: [0.0; 2],
                     splash_foam: params.splash_foam.map_or(0, |f| f.address),
                     foam_origin: params.splash_foam.map_or([0; 2], |f| f.origin),
                     foam_frame: params
@@ -2402,6 +2436,17 @@ impl WaterSurface {
                     .store_op(vk::AttachmentStoreOp::STORE),
                 cleared(mirror_requests),
                 cleared(sun_requests),
+                // The frame's motion target keeps what the motion pass and the impostors wrote
+                // where the water is not; the scratch one starts from zero.
+                if motion_real {
+                    vk::RenderingAttachmentInfo::default()
+                        .image_view(resources.view(motion_target))
+                        .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                        .load_op(vk::AttachmentLoadOp::LOAD)
+                        .store_op(vk::AttachmentStoreOp::STORE)
+                } else {
+                    cleared(motion_target)
+                },
             ];
             let depth_attachment = vk::RenderingAttachmentInfo::default()
                 .image_view(resources.view(depth))

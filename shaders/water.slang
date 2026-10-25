@@ -369,6 +369,9 @@ struct WaterSurface
     uint* splash_foam;    // the splashes' foam field (#107's polish, splash_foam.slang): cells × cells of units, a world cell at its index modulo cells; null: none
     int2 foam_origin;     // its window's first world cell (x, z)
     float4 foam_frame;    // metres a cell, cells a side, 0, 0
+    float4x4 previous_from_current; // the previous frame's unjittered clip from this frame's (taa.slang), for the motion target
+    float2 jitter;        // this frame's jitter in pixels, x right, y down
+    float2 pad_motion;
 };
 
 // The sun's share through the clouds (#145) at `world` (the scene's frame), from their shadow map
@@ -772,7 +775,25 @@ struct SurfaceTargets
     float4 color : SV_Target0;
     float4 request : SV_Target1;
     float4 sun : SV_Target2;
+    float2 motion : SV_Target3; // the pixel's motion (`surface_motion`): the surface's own, not the floor's under it
 };
+
+// The pixel's motion vectors as the motion pass computes them (`motion_at` in taa.slang), from
+// the surface's own depth. The frame's motion vectors are made before the water draws when the
+// sun's shadows are denoised (#172), from the floor's depth under the water, and with them the
+// upscalers reprojected the water's reflections by the floor's parallax: the trees and the
+// clouds smeared on the water as the camera moved sideways (the owner, 2026-10-25). The target
+// is a scratch image when the motion vectors come after the water, which then takes the
+// water's depth as everything else's.
+float2 surface_motion(WaterSurface* w, float4 position)
+{
+    float2 size = float2(float(w[0].width), float(w[0].height));
+    float2 uv = (position.xy - w[0].jitter) / size;
+    float4 previous = mul(w[0].previous_from_current, float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, position.z, 1.0));
+    return previous.w > 1e-9
+        ? float2(previous.x / previous.w * 0.5 + 0.5, 0.5 - previous.y / previous.w * 0.5) - uv
+        : float2(4.0, 4.0);
+}
 
 // Below this weight a mirror ray changes too little to trace.
 static const float REQUEST_MIN_WEIGHT = 0.001;
@@ -834,7 +855,10 @@ SeaSlopes sea_slopes(WaterSurface* w, float2 flat, ShorePoint shore)
 [shader("fragment")]
 SurfaceTargets surface_frag_main(SurfaceOut input)
 {
-    return sea_from_above(surface_push.surface, input);
+    WaterSurface* w = surface_push.surface;
+    SurfaceTargets o = sea_from_above(w, input);
+    o.motion = surface_motion(w, input.position);
+    return o;
 }
 
 // The sea when the camera stands low enough to be under it (#108, "under the water" below):
@@ -848,6 +872,7 @@ SurfaceTargets surface_under_frag_main(SurfaceOut input)
     WaterAtCamera at = w[0].at_camera[0];
     if (under_by(at, near_point(w, input.position.xy)) > 0.0)
         o = sea_from_below(w, input, at);
+    o.motion = surface_motion(w, input.position);
     return o;
 }
 
@@ -1534,7 +1559,9 @@ SurfaceTargets fresh_water(WaterSurface* w, FreshWater s)
 SurfaceTargets river_frag_main(RiverOut input)
 {
     WaterSurface* w = surface_push.surface;
-    return fresh_water(w, river_water(w, input));
+    SurfaceTargets o = fresh_water(w, river_water(w, input));
+    o.motion = surface_motion(w, input.position);
+    return o;
 }
 
 // A river when the camera stands low enough to be under the water (#108).
@@ -1542,7 +1569,9 @@ SurfaceTargets river_frag_main(RiverOut input)
 SurfaceTargets river_under_frag_main(RiverOut input)
 {
     WaterSurface* w = surface_push.surface;
-    return fresh_water_seen(w, river_water(w, input));
+    SurfaceTargets o = fresh_water_seen(w, river_water(w, input));
+    o.motion = surface_motion(w, input.position);
+    return o;
 }
 
 // How far inside the span from `span.x` to `span.y` the point `across` is: 1 inside, easing to 0
@@ -1701,7 +1730,9 @@ float lake_mask(WaterSurface* w, Lake lake, int2 s)
 SurfaceTargets lake_frag_main(LakeOut input)
 {
     WaterSurface* w = surface_push.surface;
-    return fresh_water(w, lake_water(w, input));
+    SurfaceTargets o = fresh_water(w, lake_water(w, input));
+    o.motion = surface_motion(w, input.position);
+    return o;
 }
 
 // A lake when the camera stands low enough to be under the water (#108).
@@ -1709,7 +1740,9 @@ SurfaceTargets lake_frag_main(LakeOut input)
 SurfaceTargets lake_under_frag_main(LakeOut input)
 {
     WaterSurface* w = surface_push.surface;
-    return fresh_water_seen(w, lake_water(w, input));
+    SurfaceTargets o = fresh_water_seen(w, lake_water(w, input));
+    o.motion = surface_motion(w, input.position);
+    return o;
 }
 
 // A lake's water at a pixel.
@@ -1818,7 +1851,9 @@ PoolOut pool_vert_main(uint id : SV_VertexID)
 SurfaceTargets pool_frag_main(PoolOut input)
 {
     WaterSurface* w = surface_push.surface;
-    return fresh_water(w, pool_water(w, input));
+    SurfaceTargets o = fresh_water(w, pool_water(w, input));
+    o.motion = surface_motion(w, input.position);
+    return o;
 }
 
 // A pool when the camera stands low enough to be under the water.
@@ -1826,7 +1861,9 @@ SurfaceTargets pool_frag_main(PoolOut input)
 SurfaceTargets pool_under_frag_main(PoolOut input)
 {
     WaterSurface* w = surface_push.surface;
-    return fresh_water_seen(w, pool_water(w, input));
+    SurfaceTargets o = fresh_water_seen(w, pool_water(w, input));
+    o.motion = surface_motion(w, input.position);
+    return o;
 }
 
 // A pool's water at a pixel.

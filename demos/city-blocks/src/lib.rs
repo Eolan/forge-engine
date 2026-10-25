@@ -3556,6 +3556,11 @@ impl Demo for Gallery {
                     cloud_image: cloud_shadow.and(cloud_images).map(|(this, _)| this),
                     splash_foam,
                     sea_water: self.args.sea_water,
+                    // The water's own motion vectors into the frame's, made before it when the
+                    // sun's shadows are denoised (#172): else they come after, from its depth.
+                    previous_from_current: taa_frame.previous_from_current,
+                    jitter: taa_frame.jitter,
+                    motion: early_motion,
                 },
                 taa_frame.color,
                 targets.depth,
