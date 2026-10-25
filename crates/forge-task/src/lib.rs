@@ -47,7 +47,7 @@ mod priority;
 mod scope;
 mod task;
 
-pub use alloc_count::{COUNTING, allocations};
+pub use alloc_count::{COUNTING, Counting, allocations};
 pub use blocking::BlockingPool;
 pub use counter::Counter;
 pub use graph::{GraphError, GraphRun, NodeId, TaskGraph};
