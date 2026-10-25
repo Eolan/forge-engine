@@ -49,3 +49,10 @@ Thumbs.db
 
 # The owner's settings file (D-069): edited by hand, read at start, never committed.
 /forge.cfg
+
+# The owner's bug-screenshot inbox (each image an issue to file) and reference photos from the
+# web (third-party): kept locally, never committed.
+/reports/anomalies/
+/reports/real pictures/
+# Windows shortcuts.
+*.lnk
