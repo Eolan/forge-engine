@@ -1986,16 +1986,24 @@ impl RenderGraph {
                 self.device.resolve_queue(pass.decl.queue)
             };
         }
-        let order = {
-            let decls: Vec<PassDecl> = passes.iter().map(|p| p.decl.clone()).collect();
-            schedule(&decls)
-        };
+        // The declarations copied once (each holds two Vecs), scheduled, then moved into the
+        // order the passes run in beside the passes themselves.
+        let declared: Vec<PassDecl> = passes.iter().map(|p| p.decl.clone()).collect();
+        let order = schedule(&declared);
         let mut slots: Vec<Option<Pass<'_>>> = passes.into_iter().map(Some).collect();
+        let mut declared: Vec<Option<PassDecl>> = declared.into_iter().map(Some).collect();
         let passes: Vec<Pass<'_>> = order
             .iter()
             .map(|&i| slots[i].take().expect("each pass is scheduled once"))
             .collect();
-        let decls: Vec<PassDecl> = passes.iter().map(|p| p.decl.clone()).collect();
+        let decls: Vec<PassDecl> = order
+            .iter()
+            .map(|&i| {
+                declared[i]
+                    .take()
+                    .expect("each declaration is scheduled once")
+            })
+            .collect();
 
         // Transient lifetimes, then their placement; reuse the cache when it matches.
         let mut requests = Vec::new();

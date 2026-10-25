@@ -135,6 +135,14 @@ the issues name (#353, #334, #356: a far wall seen from two distances is the han
   ```
   FORGE_GPU_TESTS=1 cargo test --release -p forge-render -- motion_pass
   ```
+- **The hazard check** (2026-10-25, the audit's §1.2): `tools/hazard-check.sh -n 8 -f 120 -- DEMO
+  ARGS` runs one scripted view many times under each of the render graph's debugging
+  variables (`FORGE_GRAPH_NO_ALIAS`, `FORGE_GRAPH_ZERO`, `FORGE_GRAPH_NO_ASYNC`, `FORGE_ASYNC=0`,
+  `FORGE_SERIAL_BARRIERS=0`, `FORGE_FULL_BARRIERS_BEFORE`) and compares the per-frame image
+  hashes (`FORGE_HASH_IMAGES=1`) across the runs: a pass that comes out one of two ways gives
+  two distinct lines over the baseline's runs, and the variable under which every run agrees
+  names the hazard's class (an aliased transient, a read of texels nothing wrote, a wait between
+  queues, a pass's own barrier). For #207 and #349, before their blanket barriers come out.
 - **The sentinels** are fourteen captures, one or more from every demo:
   - meshlets: `static60`, `orbit120`, `noocc120`;
   - the ballad without AA: `ast-notaa600`, `ast240`, `ast240-noocc`, and its HDR output
@@ -197,7 +205,7 @@ the issues name (#353, #334, #356: a far wall seen from two distances is the han
   `--no-accept` keeps the run without accepting it, and `--dry-run` only prints the tier.
 - **One GPU, shared:** before any demo runs, the script takes the lock directory
   `%TEMP%/forge-gpu.lock` (`FORGE_GPU_LOCK`). It retries every 30 s while another job holds
-  it, and removes it when done. Run demos by hand under the same lock.
+  it, and removes it when done. Run demos by hand under the same lock. On a machine with two GPUs (a laptop), set `FORGE_GPU=nvidia` so every run takes the NVIDIA one; without it the demos take the best GPU Vulkan lists.
 - **Order:** build, fmt, then clippy, the tests and the credits check in the background, beside
   the captures, compare and validation. The timings wait for the tests: never both at once.
 - **What it prints:** the base, the changed paths by pattern, the tier and why, each step with
