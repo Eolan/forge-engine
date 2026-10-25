@@ -775,7 +775,9 @@ struct SurfaceTargets
     float4 color : SV_Target0;
     float4 request : SV_Target1;
     float4 sun : SV_Target2;
-    float2 motion : SV_Target3; // the pixel's motion (`surface_motion`): the surface's own, not the floor's under it
+    float4 motion : SV_Target3; // the pixel's motion (`surface_motion`): the surface's own, not the floor's
+                                // under it; w the colour's alpha, which the rows drawn blended (the
+                                // rivers, the lakes, the pools) blend it by, as every target (`motion_of`)
 };
 
 // The pixel's motion vectors as the motion pass computes them (`motion_at` in taa.slang), from
@@ -793,6 +795,13 @@ float2 surface_motion(WaterSurface* w, float4 position)
     return previous.w > 1e-9
         ? float2(previous.x / previous.w * 0.5 + 0.5, 0.5 - previous.y / previous.w * 0.5) - uv
         : float2(4.0, 4.0);
+}
+
+// The motion target's output: the surface's motion, and the colour's alpha as its own. A row
+// drawn blended blends every target by the alpha each one writes, and a float2 left it undefined.
+float4 motion_of(WaterSurface* w, float4 position, SurfaceTargets o)
+{
+    return float4(surface_motion(w, position), 0.0, o.color.a);
 }
 
 // Below this weight a mirror ray changes too little to trace.
@@ -857,7 +866,7 @@ SurfaceTargets surface_frag_main(SurfaceOut input)
 {
     WaterSurface* w = surface_push.surface;
     SurfaceTargets o = sea_from_above(w, input);
-    o.motion = surface_motion(w, input.position);
+    o.motion = motion_of(w, input.position, o);
     return o;
 }
 
@@ -872,7 +881,7 @@ SurfaceTargets surface_under_frag_main(SurfaceOut input)
     WaterAtCamera at = w[0].at_camera[0];
     if (under_by(at, near_point(w, input.position.xy)) > 0.0)
         o = sea_from_below(w, input, at);
-    o.motion = surface_motion(w, input.position);
+    o.motion = motion_of(w, input.position, o);
     return o;
 }
 
@@ -1560,7 +1569,7 @@ SurfaceTargets river_frag_main(RiverOut input)
 {
     WaterSurface* w = surface_push.surface;
     SurfaceTargets o = fresh_water(w, river_water(w, input));
-    o.motion = surface_motion(w, input.position);
+    o.motion = motion_of(w, input.position, o);
     return o;
 }
 
@@ -1570,7 +1579,7 @@ SurfaceTargets river_under_frag_main(RiverOut input)
 {
     WaterSurface* w = surface_push.surface;
     SurfaceTargets o = fresh_water_seen(w, river_water(w, input));
-    o.motion = surface_motion(w, input.position);
+    o.motion = motion_of(w, input.position, o);
     return o;
 }
 
@@ -1731,7 +1740,7 @@ SurfaceTargets lake_frag_main(LakeOut input)
 {
     WaterSurface* w = surface_push.surface;
     SurfaceTargets o = fresh_water(w, lake_water(w, input));
-    o.motion = surface_motion(w, input.position);
+    o.motion = motion_of(w, input.position, o);
     return o;
 }
 
@@ -1741,7 +1750,7 @@ SurfaceTargets lake_under_frag_main(LakeOut input)
 {
     WaterSurface* w = surface_push.surface;
     SurfaceTargets o = fresh_water_seen(w, lake_water(w, input));
-    o.motion = surface_motion(w, input.position);
+    o.motion = motion_of(w, input.position, o);
     return o;
 }
 
@@ -1852,7 +1861,7 @@ SurfaceTargets pool_frag_main(PoolOut input)
 {
     WaterSurface* w = surface_push.surface;
     SurfaceTargets o = fresh_water(w, pool_water(w, input));
-    o.motion = surface_motion(w, input.position);
+    o.motion = motion_of(w, input.position, o);
     return o;
 }
 
@@ -1862,7 +1871,7 @@ SurfaceTargets pool_under_frag_main(PoolOut input)
 {
     WaterSurface* w = surface_push.surface;
     SurfaceTargets o = fresh_water_seen(w, pool_water(w, input));
-    o.motion = surface_motion(w, input.position);
+    o.motion = motion_of(w, input.position, o);
     return o;
 }
 
