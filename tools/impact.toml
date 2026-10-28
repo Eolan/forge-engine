@@ -83,6 +83,7 @@
 "tools/light-check.sh" = []
 "tools/light-patches.txt" = []
 "tools/hazard-check.sh" = []
+"tools/deps-check.sh" = []
 # The load times (#274): a script the tiers do not run.
 "tools/load-time.sh" = []
 # The night check (D-071): a script the day tiers do not run.

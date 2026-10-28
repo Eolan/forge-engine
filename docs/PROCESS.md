@@ -23,6 +23,11 @@ login, safe to re-run):
 - **Dependabot**: alerts and security-fix pull requests for crates; monthly grouped
   updates of the pinned CI actions (`.github/dependabot.yml`). Its pull requests are ours:
   a session merges them after CI when the owner says so.
+- **The weekly dependency check** (the owner, 2026-10-28): `tools/deps-check.sh` writes the
+  installed toolchain and SDKs against their latest releases, the crate updates `cargo update`
+  would take (a dry run) and the open Dependabot alerts to `captures/deps/latest.txt`; a
+  scheduled session runs it on Mondays and posts what it recommends taking on the tracking
+  issue. Updates are then ordinary changes, gated and night-checked, on the owner's word.
 - **CodeQL** default setup (Rust and the workflows) on pushes, pull requests and weekly.
 - **Private vulnerability reporting** (`SECURITY.md`).
 - **Workflows from forks** wait for approval unless the author is a collaborator; CI runs
