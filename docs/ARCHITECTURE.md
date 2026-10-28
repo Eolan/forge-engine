@@ -349,9 +349,11 @@ bloom; with the anti-aliasing off it shows the frame as drawn, without jitter.
 The DLSS pass
 is a graph pass like any other: it declares every image it hands to Streamline, and its
 output with a `Custom` access, because NGX clears it at the transfer stage before writing it.
-It also takes the frame's reactive mask where there is one (the spray's, the particles', the
-tank's water's: 1 where the history is not to be trusted, as FSR reads it), tagged as its
-bias towards the current colour (2026-10-25, the audit's step 1).
+It takes no reactive mask: the frame's mask (the spray's, the particles', the tank's water's)
+went to it as Streamline's bias-towards-the-current-colour hint from 2026-10-25 to 2026-10-29,
+until NVIDIA's guide (section 3.15) showed that only the old Preset F reads it and that it is not
+to be given to the current models (#360). FSR still reads the mask; for DLSS, what it cannot
+follow needs its own motion vectors.
 
 ## 5. Conventions
 

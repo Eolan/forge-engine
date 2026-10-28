@@ -125,10 +125,6 @@ pub struct DlssImages<'a> {
     pub exposure: DlssImage<'a>,
     /// The upscaled HDR colour at the output size (storage image).
     pub output: DlssImage<'a>,
-    /// The reactive mask at the render size, when the frame has one: 1 where the history is not
-    /// to be trusted (the spray, the particles, the tank's water), 0 elsewhere, as FSR reads it;
-    /// DLSS takes it as its bias towards the current colour.
-    pub bias: Option<DlssImage<'a>>,
 }
 
 /// The frame DLSS was prepared for, handed from [`Dlss::prepare`] to [`Dlss::evaluate`].
@@ -189,9 +185,9 @@ mod imp {
     use crate::commands::Commands;
     use crate::error::Result;
     use crate::streamline::{
-        BUFFER_BIAS_CURRENT_COLOR_HINT, BUFFER_DEPTH, BUFFER_EXPOSURE, BUFFER_MOTION_VECTORS,
-        BUFFER_SCALING_INPUT_COLOR, BUFFER_SCALING_OUTPUT_COLOR, Constants, DlssOptions, Extent,
-        FALSE, Resource, ResourceTag, Streamline, TRUE, ViewportHandle, VulkanImage,
+        BUFFER_DEPTH, BUFFER_EXPOSURE, BUFFER_MOTION_VECTORS, BUFFER_SCALING_INPUT_COLOR,
+        BUFFER_SCALING_OUTPUT_COLOR, Constants, DlssOptions, Extent, FALSE, Resource, ResourceTag,
+        Streamline, TRUE, ViewportHandle, VulkanImage,
     };
 
     /// The one viewport this engine upscales.
@@ -287,23 +283,18 @@ mod imp {
             images: &DlssImages<'_>,
         ) -> Result<()> {
             let viewport = ViewportHandle::new(VIEWPORT);
-            let mut tagged: Vec<(VulkanImage, u32)> = vec![
-                (vulkan_image(&images.color), BUFFER_SCALING_INPUT_COLOR),
-                (vulkan_image(&images.depth), BUFFER_DEPTH),
-                (vulkan_image(&images.motion), BUFFER_MOTION_VECTORS),
-                (vulkan_image(&images.exposure), BUFFER_EXPOSURE),
-                (vulkan_image(&images.output), BUFFER_SCALING_OUTPUT_COLOR),
-            ];
-            if let Some(bias) = &images.bias {
-                tagged.push((vulkan_image(bias), BUFFER_BIAS_CURRENT_COLOR_HINT));
-            }
-            let mut resources: Vec<Resource> = tagged
-                .iter()
-                .map(|(image, _)| Resource::image(*image))
-                .collect();
+            let tagged = [
+                (images.color, BUFFER_SCALING_INPUT_COLOR),
+                (images.depth, BUFFER_DEPTH),
+                (images.motion, BUFFER_MOTION_VECTORS),
+                (images.exposure, BUFFER_EXPOSURE),
+                (images.output, BUFFER_SCALING_OUTPUT_COLOR),
+            ]
+            .map(|(image, kind)| (vulkan_image(&image), kind));
+            let mut resources = tagged.map(|(image, _)| Resource::image(image));
             let tags: Vec<ResourceTag> = resources
                 .iter_mut()
-                .zip(tagged.iter().copied())
+                .zip(tagged)
                 .map(|(resource, (image, kind))| {
                     let extent = Extent {
                         top: 0,
