@@ -26,7 +26,7 @@ login, safe to re-run):
 - **The weekly dependency check** (the owner, 2026-10-28): `tools/deps-check.sh` writes the
   installed toolchain and SDKs against their latest releases, the crate updates `cargo update`
   would take (a dry run) and the open Dependabot alerts to `captures/deps/latest.txt`; a
-  scheduled session runs it on Mondays and posts what it recommends taking on the tracking
+  scheduled session runs it on Wednesdays at 22:00 and posts what it recommends taking on the tracking
   issue. Updates are then ordinary changes, gated and night-checked, on the owner's word.
 - **CodeQL** default setup (Rust and the workflows) on pushes, pull requests and weekly.
 - **Private vulnerability reporting** (`SECURITY.md`).
