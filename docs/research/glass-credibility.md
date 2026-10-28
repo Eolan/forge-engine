@@ -464,6 +464,9 @@ Costs are estimates for 1600 × 900 on the RTX 5070 Ti, scaled from section 0's 
 | US 7,129,945 B2 [72] | Bandai Namco | US | **expired** | 2024-07-05 | water drops rendered by mapping the frame-buffer image with preset offsets | Free to use for rain drops. |
 | EP 3 886 051 A1 [73] | Saint-Gobain | EP | **withdrawn** (2022) | – | physically based rendering of coated (spandrel) glass from its diffuse reflection spectrum | No restriction. |
 | US 9,275,477 B2 [74] | Square Enix | US | not checked | – | roughness estimated from sampled light paths in GI (not AA) | Not met. |
+| US 9,355,475 B1 [76] | Autodesk | US | active per Google Patents | ~2035-02-27 | Claim 1 (read, summarised): a reflection's incidence point reprojected with a first, surface motion vector; a second motion vector for the reflected point, reprojected to a previous place on the surface; the current viewpoint projected onto the surface's previous position | Read on 2026-10-28 for the mirrors' motion vectors (D-050's addendum) and D-050's history. Both use one virtual point moved by the camera's motion alone, over a surface taken as still, and leave a mover's reflection the surface's motion: no second motion vector for the reflected object and no projection onto the surface's previous position, so not every element is met (our reading, not a legal opinion). The owner chose to build it, 2026-10-28. |
+| US 11,836,844 B2, US 12,315,064 B2 [77] | NVIDIA | US | active | ~2042-06-11 | Claim 1 (read): a background region found from a beam path through refractive interfaces, and a motion vector for a pixel in it by a cross or optimisation function | Refraction through interfaces; Forge's mirrors have none. Not met. |
+| US 12,394,143 B2 [78] | Intel (inventors Kaplanyan, Zirr) | US | active | ~2043-05-08 | temporal gradients of higher-order effects guiding a (neural) temporal accumulation; claims not read | Forge feeds DLSS motion vectors, no gradients and no network of its own. To read before anything closer. |
 
 **Nothing found** in today's searches on:
 - dirt, grime or edge masks;
@@ -568,6 +571,9 @@ Not searched: patents on screen-space reflections, because this note does not re
 73. EP 3 886 051 A1, Saint-Gobain (withdrawn). <https://patents.google.com/patent/EP3886051A1/en> — read
 74. US 9,275,477 B2, Square Enix. <https://patents.google.com/patent/US9275477> — search-recorded
 75. Multiplayer.it, Digital Foundry's Forza Motorsport analysis. <https://multiplayer.it/notizie/forza-motorsport-analisi-digital-foundry-evidenzia-limiti-del-ray-tracing.html> — search-recorded
+76. US 9,355,475 B1, Autodesk, "Systems and methods for temporally reprojecting reflection data". <https://patents.google.com/patent/US9355475> — read (claims)
+77. US 11,836,844 B2 and US 12,315,064 B2, NVIDIA, "Motion vector optimization for multiple refractive and reflective interfaces". <https://patents.google.com/patent/US11836844> — read (claims)
+78. US 12,394,143 B2, Intel, "Temporal gradients of higher order effects to guide temporal accumulation". <https://patents.google.com/patent/US12394143> — search-recorded
 
 **Recalled, not checked today**
 

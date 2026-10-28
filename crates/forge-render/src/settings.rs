@@ -312,6 +312,15 @@ pub fn ray_reflections(default: bool) -> Spec<bool> {
     )
 }
 
+/// The mirrors' motion vectors moved towards their reflections.
+pub fn reflection_motion(default: bool) -> Spec<bool> {
+    Spec::bool(
+        "r.reflections.motion",
+        default,
+        "The smooth surfaces' motion vectors moved towards what they reflect, so the upscaler \n         follows the reflections; off, the surfaces.",
+    )
+}
+
 /// The sun's disc at its true size.
 pub fn sun_disc(default: bool) -> Spec<bool> {
     Spec::bool(

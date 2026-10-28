@@ -5250,7 +5250,7 @@ struct ResolvePush
     uint tile_capacity;
     float4 background;   // written to empty pixels where its w ≥ 0 (else they are left for the sky)
     float4* sky;         // the sky's irradiance (sh.slang), or null: space's constant fill (issue #47)
-    uint ao_image;       // sampled index of the ambient occlusion (gtao.slang, issue #48), or 0xFFFFFFFF
+    uint ao_image;       // sampled index of the ambient occlusion (gtao.slang, issue #48), or 0xFFFFFFFF; in `reflections_main`, the motion vectors' storage index (r.reflections.motion), or 0xFFFFFFFF
     uint request_image;  // storage index of the mirror rays' requests (issue #52), or 0xFFFFFFFF
     ProbeField* probes;  // the diffuse light's probes (probes.slang, issue #53), or null
     ShoreGround* shore;  // the shore whose swash wets the sand (issue #105), or null
@@ -5266,7 +5266,7 @@ struct ReflectionHistory
 {
     float4x4 previous_from_current; // the previous frame's unjittered clip from this frame's (TAA's)
     float2 jitter;                  // this frame's jitter, pixels
-    uint previous;                  // sampled (rgba16f): what the rays added so far, before the exposure (rgb); the view depth of the virtual point they showed (a; negative: a mover's; 0: none)
+    uint previous;                  // sampled (rgba16f): the light the mirror rays showed so far, before the exposure (rgb); the view depth of the virtual point they showed (a; negative: a mover's; 0: none)
     uint next;                      // storage: the same for this frame, cleared before the pass
     uint first_mover;               // the movers' first instance (#79), or 0xFFFFFFFF: none
     uint mover_count;               // how many: a dynamic scene's edits add instances after them (#338)
@@ -6792,20 +6792,40 @@ void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
     bool mover;
     float4 hit = trace_reflection_from(f, sky, resolve_push.probes, world + n * 0.05, request.xyz, uint(pixel.x) * 0x8DA6B343u ^ uint(pixel.y) * 0xD8163841u, mirror_start(f, inst, m), distance, mover);
     ReflectionHistory* history = resolve_push.reflection_history;
-    // What the ray adds, before the exposure: on a miss, the clouds as the frame shows them in
-    // place of the table's (`seen_clouds`; the rest of the sky is already there).
-    float3 added = float3(0.0);
-    if (hit.w > 0.0)
+    // The pixel's motion vector moved towards its reflection's virtual point (`r.reflections.motion`,
+    // the motion vectors' index in the ambient occlusion's slot, which this pass never reads): on
+    // the view ray as far as the surface plus the ray's length, the sky's at infinity on a miss, by
+    // the reflection's weight. DLSS followed the water and dragged its reflections at the
+    // surface's speed: the trees' and the clouds' reflections trailed as the camera moved sideways
+    // (the owner, 2026-10-28). A mover's reflection keeps the surface's.
+    if (resolve_push.ao_image != 0xFFFFFFFFu && history != nullptr && !mover)
     {
-        float4 up_table = sky[SH_COEFFICIENTS];
-        float3 mirror = sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, sky[SH_COEFFICIENTS + 1].xyz, request.xyz) * 3.14159265;
-        added = request.w * (hit.xyz - mirror);
+        float3 surface = mul(frame, object_position) + relative;
+        float stretch = hit.w > 0.0 ? 1.0 + distance / max(length(surface), 1e-3) : 1e5;
+        float4 virtual_point = mul(f[0].view_proj, float4(surface * stretch, 1.0));
+        float2 uv = (float2(pixel) + 0.5 - history[0].jitter) / size;
+        float w;
+        float2 previous_uv = previous_uv_of(history, float3(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, virtual_point.z / virtual_point.w), w);
+        if (w > 1e-9)
+        {
+            RWTexture2D<float2> motion = g_storage_images_rg16f[NonUniformResourceIndex(resolve_push.ao_image)];
+            motion[pixel] = lerp(motion[pixel], previous_uv - uv, saturate(2.0 * request.w));
+        }
     }
-    else
-        added = request.w * seen_clouds(f, sky, request.xyz, size);
+    // What the pixel reflects, before the exposure: what the ray met, or on a miss the sky as the
+    // frame shows it there (the table and `seen_clouds`). The history settles that light, and the
+    // sky the pixel was shaded with (the table in the mirror direction) is taken off after: kept
+    // with it, a difference against one frame's sky came back under another's, since the sky,
+    // at infinity, slides over a mirror unlike the trees it reflects. Moving sideways over the
+    // village's water, the clouds showed through the trees' reflections as pale streaks, and a
+    // blue band opened under the quay (the owner, 2026-10-28).
+    float4 up_table = sky[SH_COEFFICIENTS];
+    float3 mirror = sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, sky[SH_COEFFICIENTS + 1].xyz, request.xyz) * 3.14159265;
+    float3 reflected = hit.w > 0.0 ? hit.xyz : mirror + seen_clouds(f, sky, request.xyz, size);
     if (history != nullptr)
-        added = steadied_reflection(history, f, pixel, size, mul(frame, object_position) + relative, record.x, added, hit.w > 0.0 ? distance : -1.0, mover);
-    else if (all(added == float3(0.0)))
+        reflected = steadied_reflection(history, f, pixel, size, mul(frame, object_position) + relative, record.x, reflected, hit.w > 0.0 ? distance : -1.0, mover);
+    float3 added = request.w * (reflected - mirror);
+    if (all(added == float3(0.0)))
         return;
     RWTexture2D<float4> color = g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.color_image)];
     color[pixel] = float4(color[pixel].rgb + added * (f[0].sun_illuminance * f[0].exposure / 3.14159265), 1.0);
@@ -6846,10 +6866,10 @@ float2 previous_uv_of(ReflectionHistory* h, float3 at, out float w)
     return float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
 }
 
-// The mirror ray's light `added` at `pixel`, blended into its history and stored for the next
-// frame (#176, D-050). One exact ray a pixel lands somewhere else in the reflected scene with
-// every jitter of TAA, and TAA, which follows the glass and not its reflection, cannot settle
-// it. The history follows the reflection: a flat mirror shows what the ray met as a *virtual*
+// The light `added` the pixel's mirror ray showed (what it met, or the sky) at `pixel`, blended
+// into its history and stored for the next frame (#176, D-050). One exact ray a pixel lands
+// somewhere else in the reflected scene with every jitter of TAA, and TAA, which follows the
+// glass and not its reflection, cannot settle it. The history follows the reflection: a flat mirror shows what the ray met as a *virtual*
 // point behind it, on the pixel's view ray, as far from the eye as the surface plus the ray's
 // length (`distance`; negative on a miss: the sky, at infinity). That point is reprojected with
 // the camera's motion, as TAA reprojects a surface. `position` is the surface's,

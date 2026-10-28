@@ -192,6 +192,7 @@ command line": `--no-ao` and `--set r.ao=0` give the same image to the pixel.
 | `r.shadows.denoiser` | their denoiser, where there is one | sigma, ffx, none | sigma where NRD is, else ffx |
 | `r.shadows.history` | the frames SIGMA steadies the shadows over: fewer keep a moving caster's shadow from trailing behind it (#337), more steady a still penumbra | 0..7 | 7 |
 | `r.reflections.sky`, `r.reflections.rays` | the sky's reflection, mirror rays | 0, 1 | 1, 1 |
+| `r.reflections.motion` | the smooth surfaces' motion vectors moved towards what they reflect, so the upscaler follows the reflections (off: the surfaces) | 0, 1 | 1 |
 | `r.sun.disc` | the sun's disc at its true size | 0, 1 | 1 |
 | `r.sky.real` | at night, the catalogue's stars and the Moon's albedo (D-046), where the night has them | 0, 1 | 0 |
 | `r.cull.occlusion` | occlusion culling | 0, 1 | 1 |

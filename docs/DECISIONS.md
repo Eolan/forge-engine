@@ -3171,6 +3171,32 @@ FidelityFX-Denoiser at d7dfecb):
   live.
 - **Cost:** 0.023 ms beside the rays and 0.003 ms of clear at 1600 × 900 (`docs/PROFILE.md`).
 
+**In motion over the water** (the owner, 2026-10-28: the trees' and the clouds' reflections smear
+on the village's water when strafing, gone with `r.reflections.rays 0`):
+- **The history kept the wrong quantity.** It held what the ray added: the hit's light minus the
+  sky the pixel was shaded with in that frame. The resolve draws that sky afresh each frame, and
+  the sky, at infinity, slides over a mirror unlike the trees it reflects, so a difference against
+  one frame's sky came back under another's. Moving sideways at 60 m/s, a cloud showed through
+  the trees' reflection as a pale streak and a blue band opened under the quay (the history off,
+  neither). It now keeps the light the mirror direction showed (what the ray met, or the sky as
+  the frame shows it) and takes the frame's own sky off after the blend; held still, the same.
+- **The upscaler followed the surface.** DLSS reprojects its history by the motion vectors, the
+  water's own, while a reflection moves as its virtual point does (slower across the screen,
+  sideways, than the water nearer the eye). The mirror rays' pass now moves each pixel's motion
+  vector towards its reflection's virtual point (the one the history reprojects; the sky's at
+  infinity on a miss), by twice the reflection's weight, capped at all of it; a mover's
+  reflection keeps the surface's. `r.reflections.motion` (on by default; the owner, after
+  trying it: "it's better with it on, keep it"). The pass takes the motion vectors' index in
+  the push's ambient occlusion slot, which it never reads: the push is at 128 bytes. 0.003 ms.
+- **Tried and left out:** a reactive mask from the reflection's share of the pixel. FSR 3.1 reads
+  it; DLSS (its default preset) ignores the bias hint, the frames to the pixel the same, as with
+  the spray's and the particles' masks (the audit's step 1).
+- **Patents** (`docs/research/glass-credibility.md`, "Patents"): Autodesk's US 9,355,475 (to
+  ~2035) claims a surface motion vector, a second one for the reflected object and a projection
+  onto the surface's previous position; this moves one virtual point by the camera's motion over
+  a still surface, leaving movers out. NVIDIA's US 11,836,844 is about refractive interfaces.
+  The owner chose to build it after reading the summary.
+
 ## D-051 — Jelly: a body seen through by rays ✅ (2026-10-08, the owner's ask on #180)
 
 The owner asked for the slime "more jelly-like, translucent with a face", and then for the

@@ -831,6 +831,10 @@ struct Gallery {
     sun_shadow_on: Option<usize>,
     /// The mirror rays' history (#176, D-050): the glass's reflections settled before TAA.
     reflection_history: forge_render::ReflectionHistory,
+    /// The mirrors' motion vectors moved towards their reflections (`r.reflections.motion`): DLSS
+    /// follows a mirror's surface, and moving sideways it dragged the water's reflections at the
+    /// surface's speed (the owner, 2026-10-28).
+    reflection_motion: bool,
     /// The shadows' sun over the real one's size (D-049: softer where a denoiser smooths them,
     /// `--sun-size`); the Moon's at night scales with it.
     sun_scale: f32,
@@ -1982,6 +1986,7 @@ impl Gallery {
             sun_shadow_on,
             sun_shadows,
             reflection_history,
+            reflection_motion: true,
             sun_scale,
             sky_light,
             gtao,
@@ -3241,15 +3246,18 @@ impl Demo for Gallery {
             }
             self.reflection_history.advance();
             let history: &'f forge_render::ReflectionHistory = &self.reflection_history;
-            reflection_history = Some(history.frame(
-                &mut frame.graph,
-                frame.slot,
-                taa_frame.previous_from_current,
-                taa_frame.jitter,
-                // Reversed-Z, infinite: clip z is the near plane.
-                self.camera.projection(ctx.aspect()).w_axis.z,
-                self.scene.movers(),
-            ));
+            reflection_history = Some(forge_render::ReflectionHistoryFrame {
+                motion: early_motion.filter(|_| self.reflection_motion),
+                ..history.frame(
+                    &mut frame.graph,
+                    frame.slot,
+                    taa_frame.previous_from_current,
+                    taa_frame.jitter,
+                    // Reversed-Z, infinite: clip z is the near plane.
+                    self.camera.projection(ctx.aspect()).w_axis.z,
+                    self.scene.movers(),
+                )
+            });
         } else {
             self.reflection_history.reset_history();
         }

@@ -856,6 +856,9 @@ struct ResolvePush {
     /// The sky's irradiance coefficients (`sh.slang`, issue #47), or 0: space's constant fill.
     sky: u64,
     /// Sampled index of the ambient occlusion scaling the sky's light (issue #48), or `u32::MAX`.
+    /// The mirror rays' pass ("shading/reflections"), which reads no occlusion, takes the storage
+    /// index of the frame's motion vectors there instead, which it moves towards the reflections
+    /// ([`crate::ReflectionHistoryFrame::motion`]), or `u32::MAX`.
     ao_image: u32,
     /// Storage index of the mirror rays' requests (direction, weight; issue #52), or `u32::MAX`.
     request_image: u32,
@@ -6253,9 +6256,19 @@ impl MeshletRenderer {
                     .image(h.previous, ImageAccess::Sampled(compute))
                     .image(h.next, ImageAccess::StorageWrite(compute));
             }
+            // The motion vectors moved towards the reflections' virtual points (`r.reflections.motion`):
+            // their index in the ambient occlusion's slot, which this pass never reads.
+            let motion = ambient.reflection_history.and_then(|h| h.motion);
+            if let Some(m) = motion {
+                builder = builder.image(m, ImageAccess::StorageReadWrite(compute));
+            }
             builder.run(move |resources, commands| {
                 commands.bind_pipeline(pipeline);
-                commands.push_constants(pipeline, &push(resources));
+                let push = ResolvePush {
+                    ao_image: motion.map_or(u32::MAX, |m| resources.storage(m, 0).0),
+                    ..push(resources)
+                };
+                commands.push_constants(pipeline, &push);
                 commands.dispatch_indirect(args_buffer, REFLECTION_LIST * 16);
                 Ok(())
             });

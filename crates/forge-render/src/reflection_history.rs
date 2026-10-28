@@ -53,14 +53,17 @@ pub struct ReflectionHistoryFrame {
     pub previous: ImageHandle,
     /// This frame's, cleared.
     pub next: ImageHandle,
+    /// The frame's motion vectors, which the mirror rays' pass moves towards each reflection's
+    /// virtual point (`r.reflections.motion`); `None`: left as the surfaces' own.
+    pub motion: Option<ImageHandle>,
 }
 
 /// The history's images and per-frame blocks (see the module's documentation).
 pub struct ReflectionHistory {
     device: Arc<Device>,
     extent: vk::Extent2D,
-    /// What the rays added so far (rgb, before the exposure) and the view depth of the virtual
-    /// point they showed (a): written and read in turn.
+    /// The light the mirror rays showed so far (rgb, before the exposure: what they met, or the
+    /// sky) and the view depth of the virtual point they showed (a): written and read in turn.
     images: [GraphImage; 2],
     /// The per-frame blocks, one per frame slot.
     frames: Vec<Buffer>,
@@ -188,6 +191,7 @@ impl ReflectionHistory {
             address: block.address(),
             previous,
             next,
+            motion: None,
         }
     }
 }
