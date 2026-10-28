@@ -323,8 +323,59 @@ fn union(pieces: &[Piece], min: DVec2, max: DVec2) -> Raw {
         return Vec::new();
     }
     let none: Vec<Vec<[f64; 2]>> = Vec::new();
-    FloatOverlay::with_subj_and_clip_custom(&contours, &none, options(), Solver::default())
-        .overlay(OverlayRule::Subject, FillRule::NonZero)
+    despiked(
+        FloatOverlay::with_subj_and_clip_custom(&contours, &none, options(), Solver::default())
+            .overlay(OverlayRule::Subject, FillRule::NonZero),
+    )
+}
+
+/// Points closer than this on both axes are one point to [`despiked`], metres: i_overlay's
+/// integer grid leaves a sliver's two sides tens of micrometres apart.
+const SAME_POINT: f64 = 1e-3;
+
+/// `raw` without the repeated points and the zero-area spikes (out to a point and straight
+/// back, to within [`SAME_POINT`]) a boolean leaves where a sliver closes: i_overlay 9.0 closed
+/// one near the city's south border to a point repeated 40 µm apart, 9.1 to a 5 m needle into
+/// the street, which a van's path met (#361). A shape whose outer contour is left with fewer
+/// than three points goes.
+fn despiked(mut raw: Raw) -> Raw {
+    for shape in &mut raw {
+        for contour in shape.iter_mut() {
+            despike(contour);
+        }
+    }
+    raw.retain(|shape| shape.first().is_some_and(|outer| outer.len() >= 3));
+    for shape in &mut raw {
+        shape.retain(|contour| contour.len() >= 3);
+    }
+    raw
+}
+
+/// [`despiked`]'s work on one closed contour, until nothing more goes: a point at the next
+/// one, and a point whose neighbours are at each other (the spike's tip, with its way back).
+fn despike(c: &mut Vec<[f64; 2]>) {
+    let same = |a: [f64; 2], b: [f64; 2]| {
+        (a[0] - b[0]).abs() <= SAME_POINT && (a[1] - b[1]).abs() <= SAME_POINT
+    };
+    let mut i = 0;
+    // Each pass removes a point or moves on; a removal steps back to look at the new joint.
+    while c.len() >= 3 && i < c.len() {
+        let n = c.len();
+        let next = (i + 1) % n;
+        let prev = (i + n - 1) % n;
+        if same(c[i], c[next]) {
+            c.remove(next);
+            i = i.saturating_sub(1);
+        } else if same(c[prev], c[next]) {
+            // The tip at `i` and its way back to `prev`.
+            let (first, second) = if next > i { (next, i) } else { (i, next) };
+            c.remove(first);
+            c.remove(second);
+            i = i.saturating_sub(2);
+        } else {
+            i += 1;
+        }
+    }
 }
 
 fn boolean(a: &Raw, b: &Raw, rule: OverlayRule) -> Raw {
@@ -341,8 +392,10 @@ fn boolean(a: &Raw, b: &Raw, rule: OverlayRule) -> Raw {
             _ => a.clone(),
         };
     }
-    FloatOverlay::with_subj_and_clip_custom(a, b, options(), Solver::default())
-        .overlay(rule, FillRule::NonZero)
+    despiked(
+        FloatOverlay::with_subj_and_clip_custom(a, b, options(), Solver::default())
+            .overlay(rule, FillRule::NonZero),
+    )
 }
 
 fn rect(min: DVec2, max: DVec2) -> Raw {
@@ -1296,6 +1349,41 @@ mod tests {
             .map(|c| geom::signed_area(c))
             .sum::<f64>()
             .abs()
+    }
+
+    /// A boolean's spikes and repeated points go, the rest of the contour stays in its order,
+    /// and a shape whose outer contour collapses goes with its holes (#361).
+    #[test]
+    fn booleans_leave_no_spike_nor_repeated_point() {
+        let square = vec![[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]];
+        // A repeated corner, a needle out of the top edge and back to 40 µm from its foot (the
+        // integer grid's doing), and one at the contour's end.
+        let spiked = vec![
+            [0.0, 0.0],
+            [4.0, 0.0],
+            [4.0, 0.0],
+            [4.0, 4.0],
+            [2.0, 4.0],
+            [2.0, 9.0],
+            [2.00004, 3.99997],
+            [0.0, 4.0],
+            [-3.0, 0.0],
+        ];
+        let mut c = spiked.clone();
+        c.push([0.0, 4.0]);
+        let mut d = c.clone();
+        despike(&mut d);
+        assert_eq!(
+            d,
+            vec![[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [2.0, 4.0], [0.0, 4.0]]
+        );
+        let hole = vec![[1.0, 1.0], [1.0, 2.0], [2.0, 2.0]];
+        let flat = vec![[0.0, 0.0], [5.0, 0.0], [0.0, 0.0]];
+        let raw = despiked(vec![
+            vec![square.clone(), hole.clone()],
+            vec![flat, hole.clone()],
+        ]);
+        assert_eq!(raw, vec![vec![square, hole]]);
     }
 
     /// A crossroads of two avenues at (100, 100) in a 200 m frame, its arms 100 m long.
