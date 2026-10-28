@@ -54,7 +54,7 @@ core_affinity = "0.8"
 num_cpus = "1.16"
 
 # Math & determinism
-glam = "0.33"
+glam = "0.34"
 libm = "0.2"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 lz4_flex = { version = "0.14", default-features = false, features = ["std", "safe-encode", "safe-decode", "checked-decode"] }
