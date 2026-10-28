@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use ash::vk;
+use ash::vk::{self, TaggedStructure as _};
 
 use crate::device::{Device, QueueKind};
 use crate::error::Result;
@@ -85,7 +85,7 @@ fn timeline_semaphore(device: &Device, name: &str) -> Result<vk::Semaphore> {
     let mut kind = vk::SemaphoreTypeCreateInfo::default()
         .semaphore_type(vk::SemaphoreType::TIMELINE)
         .initial_value(0);
-    let info = vk::SemaphoreCreateInfo::default().push_next(&mut kind);
+    let info = vk::SemaphoreCreateInfo::default().push(&mut kind);
     // SAFETY: valid create infos on a live device.
     let semaphore = unsafe { device.raw().create_semaphore(&info, None)? };
     device.set_name(semaphore, name);

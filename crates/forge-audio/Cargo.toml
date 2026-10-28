@@ -19,7 +19,7 @@ rtrb = "0.4"
 # Ogg Vorbis, pure Rust.
 lewton = { version = "0.10", default-features = false, features = ["ogg"] }
 # Ogg pages for Opus (the version lewton reads with).
-ogg = "0.8"
+ogg = "0.9"
 # Opus, pure Rust: a port of libopus 1.6.
 opus-rs = "0.1"
 thiserror = { workspace = true }

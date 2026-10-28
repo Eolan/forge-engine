@@ -25,9 +25,15 @@ login, safe to re-run):
   a session merges them after CI when the owner says so.
 - **The weekly dependency check** (the owner, 2026-10-28): `tools/deps-check.sh` writes the
   installed toolchain and SDKs against their latest releases, the crate updates `cargo update`
-  would take (a dry run) and the open Dependabot alerts to `captures/deps/latest.txt`; a
+  would take (a dry run), how far the git pins and vendored crates are behind (ash's master,
+  `third_party/gpu-allocator`) and the open Dependabot alerts to `captures/deps/latest.txt`; a
   scheduled session runs it on Wednesdays at 22:00 and posts what it recommends taking on the tracking
   issue. Updates are then ordinary changes, gated and night-checked, on the owner's word.
+  - **Take the latest** (the owner, 2026-10-28): every library at its newest version, breaking
+    releases included, even when it brings nothing for us. The bumps that change nothing go in
+    one batch with one global test (the day check, the map check when the world's generation
+    could move); an update that changes our output (meshopt's clusters) gets its own step with a
+    before/after.
 - **CodeQL** default setup (Rust and the workflows) on pushes, pull requests and weekly.
 - **Private vulnerability reporting** (`SECURITY.md`).
 - **Workflows from forks** wait for approval unless the author is a collaborator; CI runs

@@ -232,7 +232,7 @@ impl Device {
             loader.get_acceleration_structure_build_sizes(
                 vk::AccelerationStructureBuildTypeKHR::DEVICE,
                 &info,
-                &primitives,
+                Some(primitives.as_slice()),
                 &mut sizes,
             )
         };
@@ -314,8 +314,8 @@ impl Device {
                     .collect()
             })
             .collect();
-        let range_refs: Vec<&[vk::AccelerationStructureBuildRangeInfoKHR]> =
-            ranges.iter().map(|r| r.as_slice()).collect();
+        let range_refs: Vec<Option<&[vk::AccelerationStructureBuildRangeInfoKHR]>> =
+            ranges.iter().map(|r| Some(r.as_slice())).collect();
         // Earlier writes (uploads, the instance pass, a micromap's build) before the builds read
         // them.
         let micromaps = if self.micromap_loader().is_some() {
@@ -743,7 +743,7 @@ impl Device {
             loader.get_acceleration_structure_build_sizes(
                 vk::AccelerationStructureBuildTypeKHR::DEVICE,
                 &info,
-                &[triangles],
+                Some(&[triangles]),
                 &mut sizes,
             )
         };
@@ -803,7 +803,7 @@ impl Device {
                     cb,
                     &vk::DependencyInfo::default().memory_barriers(&before),
                 );
-                loader.cmd_build_acceleration_structures(cb, &[info], &[&[range]]);
+                loader.cmd_build_acceleration_structures(cb, &[info], &[Some(&[range])]);
                 device.cmd_pipeline_barrier2(
                     cb,
                     &vk::DependencyInfo::default().memory_barriers(&after),
@@ -1003,7 +1003,7 @@ impl Device {
             loader.get_acceleration_structure_build_sizes(
                 vk::AccelerationStructureBuildTypeKHR::DEVICE,
                 &info,
-                &[capacity],
+                Some(&[capacity]),
                 &mut sizes,
             )
         };

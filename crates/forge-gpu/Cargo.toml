@@ -24,7 +24,7 @@ forge-core = { workspace = true }
 ash-window = { workspace = true }
 bytemuck = { workspace = true }
 gpu-allocator = { workspace = true }
-libloading = { version = "0.8", optional = true }
+libloading = { version = "0.9", optional = true }
 parking_lot = { workspace = true }
 raw-window-handle = { workspace = true }
 thiserror = { workspace = true }

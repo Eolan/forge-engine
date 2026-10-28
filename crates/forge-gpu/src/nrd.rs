@@ -28,7 +28,7 @@
 
 use std::sync::Arc;
 
-use ash::vk;
+use ash::vk::{self, TaggedStructure as _};
 
 use crate::device::Device;
 use crate::error::{GpuError, Result};
@@ -825,7 +825,7 @@ mod imp {
                 let info = vk::ComputePipelineCreateInfo::default()
                     .stage(stage)
                     .layout(layout)
-                    .push_next(&mut robust);
+                    .push(&mut robust);
                 // SAFETY: valid create info; the module outlives the call.
                 let created = unsafe {
                     raw.create_compute_pipelines(vk::PipelineCache::null(), &[info], None)

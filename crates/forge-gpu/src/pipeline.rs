@@ -1,7 +1,7 @@
 use std::ffi::CString;
 use std::sync::Arc;
 
-use ash::vk;
+use ash::vk::{self, TaggedStructure as _};
 
 use crate::device::Device;
 use crate::error::{GpuError, Result};
@@ -271,7 +271,7 @@ impl Device {
             .color_blend_state(&blend)
             .dynamic_state(&dynamic)
             .layout(layout)
-            .push_next(&mut rendering);
+            .push(&mut rendering);
         // SAFETY: all referenced state lives until the call returns.
         let created = unsafe {
             self.raw()
@@ -460,7 +460,7 @@ impl Device {
             .color_blend_state(&blend)
             .dynamic_state(&dynamic)
             .layout(layout)
-            .push_next(&mut rendering);
+            .push(&mut rendering);
         if vertex_input {
             info = info
                 .vertex_input_state(&empty_input)

@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "demos/*", "tools/*"]
+# Vendored crates, patched below: built as dependencies, not linted or formatted as ours.
+exclude = ["third_party/gpu-allocator"]
 
 [workspace.package]
 version = "0.1.0"
@@ -49,7 +51,7 @@ gltf = { version = "1.4", default-features = false, features = ["utils", "names"
 crossbeam-deque = "0.8"
 crossbeam-channel = "0.5"
 crossbeam-utils = "0.8"
-parking_lot = "0.12"
+parking_lot = "0.13"
 core_affinity = "0.8"
 num_cpus = "1.16"
 
@@ -111,3 +113,16 @@ codegen-units = 4
 
 [profile.bench]
 inherits = "release"
+
+# ash's master branch, pinned (the owner, 2026-10-28, #361): its last release, 0.38 of April 2024,
+# stops at the Vulkan 1.3.281 headers; master carries 1.4.352 (cluster and partitioned
+# acceleration structures, device-generated commands, present_wait2, Vulkan 1.4's commands).
+# Patched for the whole graph, so gpu-allocator builds on the same ash. Move the pin with the
+# weekly dependency check (tools/deps-check.sh shows how far master has gone); back to crates.io
+# with the next release.
+[patch.crates-io]
+ash = { git = "https://github.com/ash-rs/ash", rev = "8844f6b4eefb16d08cd73c8f3d340e1ac12deb16" }
+ash-window = { git = "https://github.com/ash-rs/ash", rev = "8844f6b4eefb16d08cd73c8f3d340e1ac12deb16" }
+# gpu-allocator 0.28.0, vendored with ash master's renamed `push` (two calls in
+# `src/vulkan/mod.rs`, marked "Forge (#361)"): back to crates.io once a release builds on ash's.
+gpu-allocator = { path = "third_party/gpu-allocator" }

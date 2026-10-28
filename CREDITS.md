@@ -57,11 +57,11 @@ This is a promise of intent, not a licence term.
 | Project | People | What Forge uses it for | Licence |
 |---|---|---|---|
 | [Vulkan](https://www.vulkan.org/) and the [Vulkan SDK](https://vulkan.lunarg.com/) | The Khronos Group; LunarG | the GPU API; the validation layers behind every `--validate` run | Apache-2.0 and MIT components |
-| [ash](https://github.com/ash-rs/ash) | Maik Klein, Benjamin Saunders, Marijn Suijten and contributors | Vulkan from Rust (`forge-gpu`) | MIT OR Apache-2.0 |
+| [ash](https://github.com/ash-rs/ash) | Maik Klein, Benjamin Saunders, Marijn Suijten and contributors | Vulkan from Rust (`forge-gpu`), and `ash-window`: their master branch, pinned by commit in `Cargo.toml` (#361) | MIT OR Apache-2.0 |
 | [Slang](https://github.com/shader-slang/slang) | the Slang contributors (a Khronos project, started by Yong He, Kayvon Fatahalian and Tim Foley) | every shader in `shaders/`, compiled by `slangc` | Apache-2.0 WITH LLVM-exception |
 | [meshoptimizer](https://github.com/zeux/meshoptimizer) | Arseny Kapoulkine | meshlets, simplification and cluster partitioning for the LOD DAG, following its `clusterlod.h` (`forge-geom`) | MIT |
 | [meshopt](https://github.com/gwihlidal/meshopt-rs) | Graham Wihlidal | meshoptimizer from Rust | MIT OR Apache-2.0 |
-| [gpu-allocator](https://github.com/Traverse-Research/gpu-allocator) | Traverse Research | GPU memory (`forge-gpu`) | MIT OR Apache-2.0 |
+| [gpu-allocator](https://github.com/Traverse-Research/gpu-allocator) | Traverse Research | GPU memory (`forge-gpu`): 0.28.0 vendored in `third_party/gpu-allocator` with its licences, two calls renamed for ash's master (#361) | MIT OR Apache-2.0 |
 | [winit](https://github.com/rust-windowing/winit) | Pierre Krieger and the winit contributors | windows and input (`forge-app`) | Apache-2.0 |
 | [windows-sys](https://github.com/microsoft/windows-rs) | Microsoft | Windows' display configuration: the HDR switch and the SDR white level (`forge-gpu`, issue #94) | MIT OR Apache-2.0 |
 | [glam](https://github.com/bitshifter/glam-rs) | Cameron Hart and contributors | vector and matrix maths | MIT OR Apache-2.0 |

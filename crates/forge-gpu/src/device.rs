@@ -1,6 +1,7 @@
 use std::ffi::CStr;
 use std::sync::Arc;
 
+use ash::vk::TaggedStructure as _;
 use ash::{ext, khr, vk};
 use gpu_allocator::vulkan::{Allocator, AllocatorCreateDesc};
 use parking_lot::Mutex;
@@ -327,16 +328,16 @@ impl Device {
         let mut mesh = vk::PhysicalDeviceMeshShaderFeaturesEXT::default().mesh_shader(true);
         let mut features2 = vk::PhysicalDeviceFeatures2::default()
             .features(base)
-            .push_next(&mut v11)
-            .push_next(&mut v12)
-            .push_next(&mut v13);
+            .push(&mut v11)
+            .push(&mut v12)
+            .push(&mut v13);
         if best.features.mesh_shader {
-            features2 = features2.push_next(&mut mesh);
+            features2 = features2.push(&mut mesh);
         }
         let mut uint8 =
             vk::PhysicalDeviceIndexTypeUint8FeaturesKHR::default().index_type_uint8(true);
         if best.features.index_type_uint8 {
-            features2 = features2.push_next(&mut uint8);
+            features2 = features2.push(&mut uint8);
         }
         let mut acceleration = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default()
             .acceleration_structure(true);
@@ -345,25 +346,25 @@ impl Device {
             vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default().ray_tracing_pipeline(true);
         if best.features.ray_query {
             features2 = features2
-                .push_next(&mut acceleration)
-                .push_next(&mut ray_query)
-                .push_next(&mut ray_tracing);
+                .push(&mut acceleration)
+                .push(&mut ray_query)
+                .push(&mut ray_tracing);
         }
         let mut micromap = vk::PhysicalDeviceOpacityMicromapFeaturesEXT::default().micromap(true);
         if best.features.opacity_micromap {
-            features2 = features2.push_next(&mut micromap);
+            features2 = features2.push(&mut micromap);
         }
         let mut executable = vk::PhysicalDevicePipelineExecutablePropertiesFeaturesKHR::default()
             .pipeline_executable_info(true);
         if stats_filter.is_some() {
-            features2 = features2.push_next(&mut executable);
+            features2 = features2.push(&mut executable);
         }
         // Only pipelines that ask for it are robust (NRD's, #172); every other keeps the
         // device's default behaviour.
         let mut robustness =
             vk::PhysicalDevicePipelineRobustnessFeaturesEXT::default().pipeline_robustness(true);
         if best.features.pipeline_robustness {
-            features2 = features2.push_next(&mut robustness);
+            features2 = features2.push(&mut robustness);
         }
         // Async compute and copies (issue #77): a compute-only family and a transfer-only one,
         // never the video or optical-flow engines. `FORGE_ASYNC=0` keeps the single queue.
@@ -405,8 +406,10 @@ impl Device {
             .collect();
         let info = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queue_info)
-            .enabled_extension_names(&extensions)
-            .push_next(&mut features2);
+            .enabled_extension_names(&extensions);
+        // SAFETY: `features2` heads the chain of the feature structs above, each alive and
+        // writable until the device is made (ash's `push` takes single structs only).
+        let info = unsafe { info.extend(&mut features2) };
         // SAFETY: `info` and everything it points to live until the call returns.
         let raw = unsafe { raw_instance.create_device(best.physical, &info, None)? };
         // SAFETY: the queue was requested in `queue_info`.
@@ -437,13 +440,13 @@ impl Device {
         let mut micromap_props = vk::PhysicalDeviceOpacityMicromapPropertiesEXT::default();
         let mut props2 = vk::PhysicalDeviceProperties2::default();
         if best.features.mesh_shader {
-            props2 = props2.push_next(&mut mesh_props);
+            props2 = props2.push(&mut mesh_props);
         }
         if best.features.opacity_micromap {
-            props2 = props2.push_next(&mut micromap_props);
+            props2 = props2.push(&mut micromap_props);
         }
         if best.features.ray_query {
-            props2 = props2.push_next(&mut acceleration_props);
+            props2 = props2.push(&mut acceleration_props);
         }
         // SAFETY: property query on a valid physical device.
         unsafe { raw_instance.get_physical_device_properties2(best.physical, &mut props2) };
@@ -482,31 +485,31 @@ impl Device {
             allocation_sizes: Default::default(),
         })?;
 
-        let swapchain_loader = khr::swapchain::Device::new(raw_instance, &raw);
+        let swapchain_loader = khr::swapchain::Device::load(raw_instance, &raw);
         let hdr_metadata_loader = (best.features.hdr_metadata && surface.is_some())
-            .then(|| ext::hdr_metadata::Device::new(raw_instance, &raw));
+            .then(|| ext::hdr_metadata::Device::load(raw_instance, &raw));
         let acceleration_loader = best
             .features
             .ray_query
-            .then(|| khr::acceleration_structure::Device::new(raw_instance, &raw));
+            .then(|| khr::acceleration_structure::Device::load(raw_instance, &raw));
         let micromap_loader = best
             .features
             .opacity_micromap
-            .then(|| ext::opacity_micromap::Device::new(raw_instance, &raw));
+            .then(|| ext::opacity_micromap::Device::load(raw_instance, &raw));
         let micromap_max_level = micromap_props.max_opacity4_state_subdivision_level;
         let mesh_loader = best
             .features
             .mesh_shader
-            .then(|| ext::mesh_shader::Device::new(raw_instance, &raw));
+            .then(|| ext::mesh_shader::Device::load(raw_instance, &raw));
         let debug_utils = instance
             .debug_labels_enabled()
-            .then(|| ext::debug_utils::Device::new(raw_instance, &raw));
+            .then(|| ext::debug_utils::Device::load(raw_instance, &raw));
         let push_descriptor_loader = best
             .features
             .push_descriptor
-            .then(|| khr::push_descriptor::Device::new(raw_instance, &raw));
+            .then(|| khr::push_descriptor::Device::load(raw_instance, &raw));
         let shader_stats = stats_filter.map(|filter| {
-            let loader = khr::pipeline_executable_properties::Device::new(raw_instance, &raw);
+            let loader = khr::pipeline_executable_properties::Device::load(raw_instance, &raw);
             (loader, filter)
         });
         let bindless = Bindless::new(&raw, max_anisotropy, best.features.sampler_minmax)?;
@@ -692,34 +695,34 @@ impl Device {
         let mut v13 = vk::PhysicalDeviceVulkan13Features::default();
         let mut mesh = vk::PhysicalDeviceMeshShaderFeaturesEXT::default();
         let mut features2 = vk::PhysicalDeviceFeatures2::default()
-            .push_next(&mut v11)
-            .push_next(&mut v12)
-            .push_next(&mut v13);
+            .push(&mut v11)
+            .push(&mut v12)
+            .push(&mut v13);
         let mesh_ext = has(ext::mesh_shader::NAME);
         if mesh_ext {
-            features2 = features2.push_next(&mut mesh);
+            features2 = features2.push(&mut mesh);
         }
         let uint8_ext = [vk::KHR_INDEX_TYPE_UINT8_NAME, vk::EXT_INDEX_TYPE_UINT8_NAME]
             .into_iter()
             .find(|name| has(name));
         let mut uint8 = vk::PhysicalDeviceIndexTypeUint8FeaturesKHR::default();
         if uint8_ext.is_some() {
-            features2 = features2.push_next(&mut uint8);
+            features2 = features2.push(&mut uint8);
         }
         let executable_ext = has(khr::pipeline_executable_properties::NAME);
         let mut executable = vk::PhysicalDevicePipelineExecutablePropertiesFeaturesKHR::default();
         if executable_ext {
-            features2 = features2.push_next(&mut executable);
+            features2 = features2.push(&mut executable);
         }
         let robustness_ext = has(ext::pipeline_robustness::NAME);
         let mut robustness = vk::PhysicalDevicePipelineRobustnessFeaturesEXT::default();
         if robustness_ext {
-            features2 = features2.push_next(&mut robustness);
+            features2 = features2.push(&mut robustness);
         }
         let micromap_ext = has(ext::opacity_micromap::NAME);
         let mut micromap = vk::PhysicalDeviceOpacityMicromapFeaturesEXT::default();
         if micromap_ext {
-            features2 = features2.push_next(&mut micromap);
+            features2 = features2.push(&mut micromap);
         }
         // SAFETY: feature query with a properly chained struct.
         unsafe { raw.get_physical_device_features2(physical, &mut features2) };
@@ -815,7 +818,7 @@ impl Device {
         }
         // The bindless set's sizes (`bindless.rs`) against the update-after-bind limits.
         let mut v12_props = vk::PhysicalDeviceVulkan12Properties::default();
-        let mut props2 = vk::PhysicalDeviceProperties2::default().push_next(&mut v12_props);
+        let mut props2 = vk::PhysicalDeviceProperties2::default().push(&mut v12_props);
         // SAFETY: property query with a properly chained struct.
         unsafe { raw.get_physical_device_properties2(physical, &mut props2) };
         let (sampled, storage) = crate::bindless::image_capacity();
@@ -1142,8 +1145,18 @@ impl Device {
             return;
         };
         let info = vk::PipelineInfoKHR::default().pipeline(pipeline);
-        // SAFETY: the pipeline was created on this device with CAPTURE_STATISTICS.
-        let Ok(executables) = (unsafe { loader.get_pipeline_executable_properties(&info) }) else {
+        // SAFETY: the pipeline was created on this device with CAPTURE_STATISTICS; the list is
+        // sized by the count query just before it.
+        let Ok(executables) = (unsafe {
+            loader
+                .get_pipeline_executable_properties_len(&info)
+                .and_then(|n| {
+                    let mut out = vec![vk::PipelineExecutablePropertiesKHR::default(); n];
+                    loader
+                        .get_pipeline_executable_properties(&info, &mut out)
+                        .map(|()| out)
+                })
+        }) else {
             return;
         };
         for (index, executable) in executables.iter().enumerate() {
@@ -1151,7 +1164,16 @@ impl Device {
                 .pipeline(pipeline)
                 .executable_index(index as u32);
             // SAFETY: as above, `index` within the executables just listed.
-            let Ok(stats) = (unsafe { loader.get_pipeline_executable_statistics(&at) }) else {
+            let Ok(stats) = (unsafe {
+                loader
+                    .get_pipeline_executable_statistics_len(&at)
+                    .and_then(|n| {
+                        let mut out = vec![vk::PipelineExecutableStatisticKHR::default(); n];
+                        loader
+                            .get_pipeline_executable_statistics(&at, &mut out)
+                            .map(|()| out)
+                    })
+            }) else {
                 continue;
             };
             let text: Vec<String> = stats

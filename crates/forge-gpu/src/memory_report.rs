@@ -5,7 +5,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use ash::vk;
+use ash::vk::{self, TaggedStructure as _};
 
 use crate::device::Device;
 
@@ -185,7 +185,7 @@ impl Device {
         let mut properties = vk::PhysicalDeviceMemoryProperties2::default();
         let has_budget = self.features().memory_budget;
         if has_budget {
-            properties = properties.push_next(&mut budget);
+            properties = properties.push(&mut budget);
         }
         // SAFETY: property query on the device's physical device with a properly chained
         // structure (the budget structure only when the extension is enabled).

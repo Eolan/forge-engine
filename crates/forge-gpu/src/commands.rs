@@ -466,7 +466,7 @@ impl<'a> Commands<'a> {
             loader.cmd_build_acceleration_structures(
                 self.cb,
                 std::slice::from_ref(&info),
-                &[ranges.as_slice()],
+                &[Some(ranges.as_slice())],
             )
         };
     }
@@ -496,8 +496,8 @@ impl<'a> Commands<'a> {
                 (info.geometries(g), [range])
             })
             .unzip();
-        let range_refs: Vec<&[vk::AccelerationStructureBuildRangeInfoKHR]> =
-            ranges.iter().map(|r| r.as_slice()).collect();
+        let range_refs: Vec<Option<&[vk::AccelerationStructureBuildRangeInfoKHR]>> =
+            ranges.iter().map(|r| Some(r.as_slice())).collect();
         self.paranoid_barrier();
         // SAFETY: recording state; each structure was built with these flags and geometry and
         // allows updates, has a scratch of its own large enough for a build or an update (the

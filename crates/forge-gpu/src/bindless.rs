@@ -7,7 +7,7 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use ash::vk;
+use ash::vk::{self, TaggedStructure as _};
 use parking_lot::Mutex;
 
 use crate::error::Result;
@@ -105,7 +105,7 @@ impl Bindless {
         let layout_info = vk::DescriptorSetLayoutCreateInfo::default()
             .bindings(&bindings)
             .flags(vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL)
-            .push_next(&mut flags_info);
+            .push(&mut flags_info);
         // SAFETY: valid create infos on a live device; the sizes are within the limits the
         // device advertises (checked at device selection, `image_capacity`).
         let layout = unsafe { raw.create_descriptor_set_layout(&layout_info, None)? };
@@ -179,7 +179,7 @@ impl Bindless {
                         .min_filter(vk::Filter::LINEAR)
                         .mipmap_mode(vk::SamplerMipmapMode::NEAREST);
                     if has_minmax {
-                        info = info.push_next(&mut reduction);
+                        info = info.push(&mut reduction);
                     }
                 }
                 5 => {

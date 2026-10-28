@@ -52,6 +52,19 @@ define() {
   echo "== Crates: what 'cargo update' would take (dry run; nothing written)"
   cargo update --dry-run --verbose 2>&1 | grep -E "Updating|Unchanged|Locking|Adding|Removing" | grep -v "crates.io index"
   echo
+  echo "== Pinned from git and vendored (Cargo.toml's [patch.crates-io]): the pin / upstream"
+  # Outside the workspace, so that `cargo info` reads the registry, not our patched lock.
+  released() { (cd / && cargo info "$1" 2> /dev/null | sed -n 's/^version: //p'); }
+  ash_rev=$(sed -n 's/^ash = { git = "[^"]*", rev = "\([0-9a-f]*\)" }$/\1/p' Cargo.toml)
+  if [ -n "$ash_rev" ]; then
+    behind=$(gh api "repos/ash-rs/ash/compare/$ash_rev...master" --jq '"\(.ahead_by) commits behind master"' 2> /dev/null || echo "?")
+    printf '%-22s %-28s %s\n' "ash (git)" "${ash_rev:0:8}" "$behind; last release $(released ash)"
+  fi
+  if [ -f third_party/gpu-allocator/Cargo.toml ]; then
+    vendored=$(sed -n 's/^version = "\(.*\)"$/\1/p' third_party/gpu-allocator/Cargo.toml | head -1)
+    printf '%-22s %-28s %s\n' "gpu-allocator (vendored)" "$vendored" "last release $(released gpu-allocator)"
+  fi
+  echo
   echo "== Security: open Dependabot alerts"
   gh api "repos/Eolan/forge-engine/dependabot/alerts?state=open&per_page=50" \
     --jq '.[] | "#\(.number) \(.security_advisory.severity) \(.dependency.package.name): \(.security_advisory.summary)"' 2> /dev/null ||

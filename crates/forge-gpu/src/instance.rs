@@ -3,6 +3,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use ash::vk::TaggedStructure as _;
 use ash::{ext, khr, vk};
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 
@@ -231,16 +232,16 @@ impl Instance {
             .enabled_extension_names(&extensions)
             .enabled_layer_names(&layer_names);
         if validation {
-            info = info.push_next(&mut messenger_info);
+            info = info.push(&mut messenger_info);
         }
         if !enabled_features.is_empty() {
-            info = info.push_next(&mut validation_features);
+            info = info.push(&mut validation_features);
         }
         // SAFETY: every pointer in `info` refers to data that outlives the call.
         let raw = unsafe { entry.create_instance(&info, None)? };
-        let surface_loader = khr::surface::Instance::new(&entry, &raw);
+        let surface_loader = khr::surface::Instance::load(&entry, &raw);
         let debug = if validation {
-            let loader = ext::debug_utils::Instance::new(&entry, &raw);
+            let loader = ext::debug_utils::Instance::load(&entry, &raw);
             // SAFETY: the messenger info is valid and the callback is `extern "system"`.
             let messenger = unsafe { loader.create_debug_utils_messenger(&messenger_info, None)? };
             Some((loader, messenger))
@@ -297,9 +298,10 @@ impl Instance {
         display: RawDisplayHandle,
         window: RawWindowHandle,
     ) -> Result<Arc<Surface>> {
-        // SAFETY: the handles come from a live window that the caller keeps alive.
-        let raw =
-            unsafe { ash_window::create_surface(&self.entry, &self.raw, display, window, None)? };
+        let factory = ash_window::SurfaceFactory::new(&self.entry, &self.raw, display)?;
+        // SAFETY: the handles come from a live window that the caller keeps alive, on the
+        // display the factory was made for.
+        let raw = unsafe { factory.create_surface(window, None)? };
         Ok(Arc::new(Surface {
             instance: Arc::clone(self),
             raw,
