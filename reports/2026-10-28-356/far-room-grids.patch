@@ -1,0 +1,332 @@
+diff --git a/crates/forge-render/src/probes.rs b/crates/forge-render/src/probes.rs
+index 5a8e9691..92b53d93 100644
+--- a/crates/forge-render/src/probes.rs
++++ b/crates/forge-render/src/probes.rs
+@@ -116,7 +116,8 @@ struct GpuProbeField {
+     region_count: u32,
+     far_room_sky: f32,
+     sample_bias: [f32; 2],
+-    region_pad: u32,
++    /// The frame's count, which the far room grids' turns run on (`probe_due`).
++    room_phase: u32,
+     room_slots: u64,
+     room_grids: u64,
+     room_table: u64,
+@@ -508,6 +509,8 @@ pub struct Probes {
+     rooms: Option<RoomGrids>,
+     /// Per cascade, the origin of the last update.
+     origins: [IVec3; MAX_CASCADES],
++    /// Updates so far, which the far room grids' turns run on (#356).
++    updates: u32,
+     /// Every probe starts over at the next update.
+     reset: bool,
+ }
+@@ -681,6 +684,7 @@ impl Probes {
+                 })
+                 .transpose()?,
+             origins: [IVec3::ZERO; MAX_CASCADES],
++            updates: 0,
+             reset: true,
+         })
+     }
+@@ -898,6 +902,14 @@ impl Probes {
+             .as_mut()
+             .map(RegionStore::take_wake)
+             .unwrap_or_default();
++        // A near room grid's probe's rays and a far one's (#356).
++        let room_rays = p
++            .rooms
++            .and_then(|r| r.rays)
++            .map_or(p.rays, |n| n.clamp(FIXED_RAYS + 32, p.rays));
++        let far_rays = p
++            .rooms
++            .map_or(p.rays, |r| r.far_rays.clamp(FIXED_RAYS + 32, room_rays));
+         // The rooms' grids this frame reads (D-078), started over with the cascades.
+         let rooms = match (self.rooms.as_mut(), self.regions.as_ref()) {
+             (Some(grids), store) => {
+@@ -905,8 +917,15 @@ impl Probes {
+                     grids.restart();
+                 }
+                 Some(match store {
+-                    Some(store) => grids.frame(slot.index, camera, store.rooms()),
+-                    None => grids.frame(slot.index, camera, std::iter::empty()),
++                    Some(store) => {
++                        grids.frame(slot.index, camera, store.rooms(), [room_rays, far_rays])
++                    }
++                    None => grids.frame(
++                        slot.index,
++                        camera,
++                        std::iter::empty(),
++                        [room_rays, far_rays],
++                    ),
+                 })
+             }
+             (None, _) => None,
+@@ -945,19 +964,17 @@ impl Probes {
+             region_count: regions.as_ref().map_or(0, |r| r.count),
+             far_room_sky: p.far_room_sky,
+             sample_bias: p.sample_bias,
+-            region_pad: 0,
++            room_phase: self.updates,
+             room_slots: rooms.as_ref().map_or(empty, |r| r.slots),
+             room_grids: rooms.as_ref().map_or(empty, |r| r.grids),
+             room_table: rooms.as_ref().map_or(empty, |r| r.table),
+             room_first: p.cascade_probes(),
+             room_mask: rooms.as_ref().map_or(0, |r| r.table_mask),
+             room_count: rooms.as_ref().map_or(0, |r| r.count),
+-            room_rays: p
+-                .rooms
+-                .and_then(|r| r.rays)
+-                .map_or(p.rays, |n| n.clamp(FIXED_RAYS + 32, p.rays)),
++            room_rays,
+         };
+         self.fields[slot.index].write(0, &[field]);
++        self.updates = self.updates.wrapping_add(1);
+ 
+         let this: &'f Self = self;
+         let address = this.fields[slot.index].address();
+diff --git a/crates/forge-render/src/probes/rooms.rs b/crates/forge-render/src/probes/rooms.rs
+index 174c2d00..2bc4fc75 100644
+--- a/crates/forge-render/src/probes/rooms.rs
++++ b/crates/forge-render/src/probes/rooms.rs
+@@ -42,7 +42,9 @@ pub(super) const YOUNG_FRAMES: u32 = 8;
+ /// Frames a grid takes to fade in and out: about half a second.
+ pub(super) const FADE_FRAMES: u32 = 30;
+ /// Grids at once, at most.
+-pub(super) const MAX_GRIDS: usize = 256;
++pub(super) const MAX_GRIDS: usize = 1024;
++/// Frames between a far grid's updates (`RoomGridParams::far_radius`): one in four, staggered.
++pub(super) const FAR_TURNS: u32 = 3;
+ /// `ROOM_NONE` in `probes.slang`: no grid.
+ pub(super) const ROOM_NONE: u32 = u32::MAX;
+ 
+@@ -65,6 +67,15 @@ pub struct RoomGridParams {
+     /// sRGB levels away from 128's on average: the rotations repeat every 8 frames, so the
+     /// fewer the rays the fewer directions a probe ever sees. `None`: the cascades' count.
+     pub rays: Option<u32>,
++    /// Metres from the camera to a room's box within which a room past [`Self::radius`] gets a
++    /// far grid (#356): the same probes, which trace [`Self::far_rays`] and update one frame in
++    /// [`FAR_TURNS`] once settled. Beyond the grids a room takes the far room's share of the open
++    /// sky, which cannot follow the hour: in the village that step, seen through the windows as
++    /// the grids came within reach at 20 m, was 0.15–0.19 EV at noon and in the afternoon. 0 (by
++    /// default): none.
++    pub far_radius: f32,
++    /// Rays a far grid's probe traces on its turn, at least 64 (the fixed and 32 more).
++    pub far_rays: u32,
+ }
+ 
+ impl Default for RoomGridParams {
+@@ -81,6 +92,8 @@ impl Default for RoomGridParams {
+             spacing: 1.0,
+             height_spacing: 1.0,
+             rays: None,
++            far_radius: 0.0,
++            far_rays: 64,
+         }
+     }
+ }
+@@ -196,7 +209,9 @@ pub(super) struct GpuRoomGrid {
+     counts: [u32; 3],
+     next: u32,
+     fresh: u32,
+-    pad: [u32; 3],
++    turns: u32,
++    turn: u32,
++    rays: u32,
+ }
+ 
+ const _: () = assert!(std::mem::size_of::<GpuRoomGrid>() == 80);
+@@ -220,6 +235,8 @@ struct Grid {
+     /// Its share of its room's light: 0 while young, rising by 1 / [`FADE_FRAMES`] a frame, falling
+     /// so again as it leaves, from wherever it stands.
+     fade: f32,
++    /// Its room's box from the camera this frame, metres: past the radius, a far grid.
++    distance: f32,
+ }
+ 
+ impl Grid {
+@@ -332,8 +349,9 @@ impl RoomBook {
+                 k += 1;
+             }
+         }
+-        // The rooms near enough, nearest first; every room's distance.
+-        let radius = self.params.radius;
++        // The rooms near enough (within the far grids' reach, when there are far grids), nearest
++        // first; every room's distance.
++        let radius = self.params.radius.max(self.params.far_radius);
+         let mut near: Vec<(f32, (u64, u32), &RoomOutline)> = Vec::new();
+         let mut present = std::collections::HashMap::new();
+         for (key, room) in rooms {
+@@ -351,6 +369,7 @@ impl RoomBook {
+             let gone = match present.get(&g.key) {
+                 None => true,
+                 Some(&d) => {
++                    g.distance = d;
+                     if d > radius + HYSTERESIS {
+                         g.leaving = true;
+                     } else if d <= radius && !g.evicted {
+@@ -414,6 +433,7 @@ impl RoomBook {
+                 leaving: false,
+                 evicted: false,
+                 fade: 0.0,
++                distance: wanting,
+             });
+         }
+     }
+@@ -421,7 +441,12 @@ impl RoomBook {
+     /// The GPU's tables for the grids as they stand: their records (each chained to the next of
+     /// its region, its first probe after `first_probe`), the regions' hash and its mask; the
+     /// pool's slots are brought up to them.
+-    fn tables(&mut self, first_probe: u32) -> (Vec<GpuRoomGrid>, Vec<[u32; 2]>, u32) {
++    /// `rays`: a near grid's probe's rays and a far grid's.
++    fn tables(
++        &mut self,
++        first_probe: u32,
++        rays: [u32; 2],
++    ) -> (Vec<GpuRoomGrid>, Vec<[u32; 2]>, u32) {
+         let size = table_size(self.grids.len());
+         let mask = size as u32 - 1;
+         let mut table = vec![[0u32, ROOM_NONE]; size];
+@@ -445,6 +470,7 @@ impl RoomBook {
+             for s in &mut self.slots[g.first as usize..(g.first + g.shape.len()) as usize] {
+                 *s = i as u32;
+             }
++            let far = g.distance > self.params.radius;
+             records.push(GpuRoomGrid {
+                 origin: g.shape.origin.to_array(),
+                 first: first_probe + g.first,
+@@ -456,7 +482,9 @@ impl RoomBook {
+                 counts: g.shape.counts,
+                 next,
+                 fresh: u32::from(g.age == 0),
+-                pad: [0; 3],
++                turns: if far { FAR_TURNS } else { 1 },
++                turn: i as u32 % FAR_TURNS,
++                rays: rays[usize::from(far)],
+             });
+         }
+         (records, table, mask)
+@@ -542,9 +570,10 @@ impl RoomGrids {
+         slot: usize,
+         camera: Vec3,
+         rooms: impl Iterator<Item = ((u64, u32), &'a RoomOutline)>,
++        rays: [u32; 2],
+     ) -> RoomFrame {
+         self.book.advance(camera, rooms);
+-        let (records, table, mask) = self.book.tables(self.first_probe);
++        let (records, table, mask) = self.book.tables(self.first_probe, rays);
+         let buffer = &self.slot_tables[slot];
+         let grids_at = u64::from(self.book.params.probes) * 4;
+         let table_at = grids_at + (MAX_GRIDS * std::mem::size_of::<GpuRoomGrid>()) as u64;
+@@ -665,7 +694,7 @@ mod tests {
+             camera,
+             rooms.iter().enumerate().map(|(k, r)| ((0, k as u32), r)),
+         );
+-        book.tables(0);
++        book.tables(0, [128, 64]);
+         book.finish();
+     }
+ 
+@@ -676,6 +705,8 @@ mod tests {
+             spacing: 1.0,
+             height_spacing: 1.0,
+             rays: None,
++            far_radius: 0.0,
++            far_rays: 64,
+         }
+     }
+ 
+@@ -786,7 +817,7 @@ mod tests {
+         let mut book = RoomBook::new(params(256));
+         for _ in 0..50 {
+             book.advance(Vec3::ZERO, [((0, 0), &a), ((1, 0), &b)].into_iter());
+-            book.tables(0);
++            book.tables(0, [128, 64]);
+             book.finish();
+         }
+         book.advance(Vec3::ZERO, [((1, 0), &b)].into_iter());
+diff --git a/demos/city-blocks/src/lib.rs b/demos/city-blocks/src/lib.rs
+index 54987c4d..cb0142f1 100644
+--- a/demos/city-blocks/src/lib.rs
++++ b/demos/city-blocks/src/lib.rs
+@@ -469,6 +469,18 @@ pub struct Args {
+     /// Rays a room grid's probe traces a frame (`RoomGridParams::rays`, the cascades' by default).
+     #[arg(long)]
+     probe_room_rays: Option<u32>,
++    /// The room grids' pool, in probes (`RoomGridParams::probes`, the scene's or 4,096): in a
++    /// street of houses it sets how far the grids reach.
++    #[arg(long)]
++    probe_room_pool: Option<u32>,
++    /// The far room grids' reach (#356, `RoomGridParams::far_radius`): rooms past the grids'
++    /// radius and within this many metres get a grid that updates one frame in four (the scene's,
++    /// or 0: none).
++    #[arg(long)]
++    probe_room_far: Option<f32>,
++    /// Rays a far room grid's probe traces on its turn (`RoomGridParams::far_rays`, 64 by default).
++    #[arg(long)]
++    probe_room_far_rays: Option<u32>,
+     /// Draw the island without its water (issue #105, D-038): the stand-in sea's opaque plane,
+     /// and the rivers and lakes painted into the ground's layers.
+     #[arg(long)]
+@@ -1427,6 +1439,9 @@ impl Gallery {
+                             .and_then(|s| s.get(1).copied())
+                             .unwrap_or(scene.height_spacing),
+                         rays: args.probe_room_rays.or(scene.rays),
++                        probes: args.probe_room_pool.unwrap_or(scene.probes),
++                        far_radius: args.probe_room_far.unwrap_or(scene.far_radius),
++                        far_rays: args.probe_room_far_rays.unwrap_or(scene.far_rays),
+                         ..scene
+                     }
+                 }),
+diff --git a/shaders/probes.slang b/shaders/probes.slang
+index c8ff66f4..4a0b67d4 100644
+--- a/shaders/probes.slang
++++ b/shaders/probes.slang
+@@ -184,9 +184,9 @@ public struct RoomGrid
+     public uint3 counts;  // its probes along x, y and across, 2 at least each
+     public uint next;     // the next grid of the same region, ROOM_NONE at the last
+     public uint fresh;    // 1 on its first frame: nothing measured yet
+-    public uint pad0;
+-    public uint pad1;
+-    public uint pad2;
++    public uint turns;    // frames between its updates once settled: 1, or a far grid's (#356, `FAR_TURNS`)
++    public uint turn;     // its place among them
++    public uint rays;     // its probes' rays a frame, the first PROBE_FIXED_RAYS fixed
+ };
+ 
+ // Mirrors `GpuProbeField` in crates/forge-render/src/probes.rs: one per frame.
+@@ -227,7 +227,7 @@ public struct ProbeField
+     public float far_room_sky;    // the open sky's share a far room without its probes takes (#321, ProbeParams)
+     public float normal_bias;     // a surface's lookup point off it: this share of its normal (`ProbeParams::sample_bias`)
+     public float view_bias;       // and this share of the way to the viewer
+-    public uint region_pad;
++    public uint room_phase;       // the frame's count, which the far room grids' turns run on (#356)
+     public uint* room_slots;      // per probe of the room grids' pool (from `room_first`): its grid, ROOM_NONE when unused (D-078)
+     public RoomGrid* room_grids;  // the rooms' own grids this frame
+     public uint2* room_table;     // the regions' hash: (region, its first grid), (0, ROOM_NONE) empty
+@@ -476,7 +476,7 @@ public float3 room_probe_position(RoomGrid g, int3 l)
+ // The rays probe `slot` traces a frame: a room grid's its own count (D-078), else the field's.
+ public uint probe_rays(ProbeField* field, ProbeSlot slot)
+ {
+-    return slot.grid != ROOM_NONE ? field[0].room_rays : field[0].rays;
++    return slot.grid != ROOM_NONE ? field[0].room_grids[slot.grid].rays : field[0].rays;
+ }
+ 
+ ProbeSlot room_probe_slot(ProbeField* field, uint probe)
+@@ -513,7 +513,15 @@ ProbeSlot room_probe_slot(ProbeField* field, uint probe)
+ public bool probe_due(ProbeField* field, uint probe, ProbeSlot slot, float age, bool after_state)
+ {
+     bool young = after_state ? age <= PROBE_SETTLE_UPDATES : age < PROBE_SETTLE_UPDATES;
+-    if (slot.fresh || young || field[0].cadence <= 1u || slot.grid != ROOM_NONE)
++    if (slot.fresh || young)
++        return true;
++    // A room grid's probe each frame, a far grid's on its turn once settled (#356).
++    if (slot.grid != ROOM_NONE)
++    {
++        RoomGrid grid = field[0].room_grids[slot.grid];
++        return grid.turns <= 1u || (field[0].room_phase + grid.turn) % grid.turns == 0u;
++    }
++    if (field[0].cadence <= 1u)
+         return true;
+     uint turn = uint(slot.local.x + slot.local.y + slot.local.z);
+     return (turn + field[0].phase) % field[0].cadence == 0u;

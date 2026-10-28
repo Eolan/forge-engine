@@ -469,6 +469,10 @@ pub struct Args {
     /// Rays a room grid's probe traces a frame (`RoomGridParams::rays`, the cascades' by default).
     #[arg(long)]
     probe_room_rays: Option<u32>,
+    /// The room grids' pool, in probes (`RoomGridParams::probes`, the scene's or 4,096): in a
+    /// street of houses it sets how far the grids reach.
+    #[arg(long)]
+    probe_room_pool: Option<u32>,
     /// Draw the island without its water (issue #105, D-038): the stand-in sea's opaque plane,
     /// and the rivers and lakes painted into the ground's layers.
     #[arg(long)]
@@ -1427,6 +1431,7 @@ impl Gallery {
                             .and_then(|s| s.get(1).copied())
                             .unwrap_or(scene.height_spacing),
                         rays: args.probe_room_rays.or(scene.rays),
+                        probes: args.probe_room_pool.unwrap_or(scene.probes),
                         ..scene
                     }
                 }),
