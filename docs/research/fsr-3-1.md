@@ -8,6 +8,9 @@ None of this is legal advice.
 
 ## The version
 
+*2026-10-28: v1.1.4 is no longer the last SDK with Vulkan. SDK 2.4.0 brings Vulkan back, with
+FSR 3.1.6 and the ML upscaler FSR 4.1 as signed DLLs: [fsr4-vulkan.md](fsr4-vulkan.md).*
+
 - **FSR 3.1.4, AMD FidelityFX SDK v1.1.4** (GitHub `GPUOpen-LibrariesAndSDKs/FidelityFX-SDK`,
   tag `v1.1.4`, MIT). The tag's source archive is 200 MB (SHA-256 `9a19e1f2…cc61179`). It sits in
   the ignored `fidelityfx-sdk/`, downloaded with the owner's yes.
