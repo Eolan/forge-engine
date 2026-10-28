@@ -144,8 +144,12 @@ this file.
 
 ## Environment (this machine)
 
-- Windows 11, RTX 5070 Ti, Vulkan SDK 1.4.357 (`slangc` on PATH), Tracy 0.14 in `tracy/`,
-  Streamline SDK in `streamline-sdk/` (both ignored by git).
+- Windows 11, RTX 5070 Ti, Vulkan SDK 1.4.363, Tracy 0.14 in `tracy/`, Streamline SDK in
+  `streamline-sdk/` (both ignored by git).
+- Shaders compile with Slang 2026.20, newer than the SDK's 2026.17: the user variable
+  `FORGE_SLANGC` points at `D:\sources\workspace-engines\slang-2026.20\extracted\bin\slangc.exe`
+  (the owner, 2026-10-29). Without it the engine takes the SDK's `slangc`; the shader cache keys
+  on the compiler's version.
 - Demo windows open on the **secondary** monitor (`FORGE_MONITOR`), scripted runs never take
   focus: the owner works on the main screen while sessions run.
 - Never open pages in the shared browser pane (it plays sound on the owner's machine);

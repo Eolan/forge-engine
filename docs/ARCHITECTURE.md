@@ -371,7 +371,8 @@ bias towards the current colour (2026-10-25, the audit's step 1).
 ## 6. Machines and services
 
 - Dev PC: Ryzen 7 9800X3D, 61 GB, RTX 5070 Ti (Blackwell, 16 GB), Windows 11, Vulkan 1.4
-  driver 617.14, Vulkan SDK 1.4.357 (Slang 2026.13).
+  driver 621.01, Vulkan SDK 1.4.363 (Slang 2026.17), shaders compiled by Slang 2026.20
+  through `FORGE_SLANGC` (2026-10-29).
 - Server PC: RTX 3080, 8 threads, `192.168.1.14` (Windows now, Linux later).
 - Raspberry Pi 5 at `192.168.1.80`: MongoDB (32017) and RabbitMQ (32672) for persistence and
   asynchronous events only, never on the tick path. Credentials stay in the ignored

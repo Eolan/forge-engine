@@ -33,7 +33,12 @@ define() {
   printf '%-22s %-28s %s\n' "rustc" "$(rustc --version | cut -d' ' -f2)" "$(latest rust-lang/rust)"
   vulkan_here=$(ls /c/VulkanSDK 2> /dev/null | sort -V | tail -1)
   printf '%-22s %-28s %s\n' "Vulkan SDK" "${vulkan_here:-?} (all: $(ls /c/VulkanSDK 2> /dev/null | tr '\n' ' '))" "$(curl -s https://vulkan.lunarg.com/sdk/latest/windows.txt)"
-  printf '%-22s %-28s %s\n' "slangc" "$(slangc -v 2>&1 | head -1)" "$(latest shader-slang/slang)"
+  # The compiler the engine takes: FORGE_SLANGC's when set (a standalone release, newer than the
+  # SDK's), else PATH's.
+  slangc_bin=slangc
+  [ -n "${FORGE_SLANGC:-}" ] && slangc_bin=$(cygpath -u "$FORGE_SLANGC" 2> /dev/null || echo "$FORGE_SLANGC")
+  printf '%-22s %-28s %s\n' "slangc${FORGE_SLANGC:+ (FORGE_SLANGC)}" "$("$slangc_bin" -v 2>&1 | head -1)" "$(latest shader-slang/slang)"
+  [ -n "${FORGE_SLANGC:-}" ] && printf '%-22s %-28s\n' "slangc (Vulkan SDK)" "$(slangc -v 2>&1 | head -1)"
   sl="streamline-sdk/include/sl_version.h"
   printf '%-22s %-28s %s\n' "Streamline" "$(define $sl SL_VERSION_MAJOR).$(define $sl SL_VERSION_MINOR).$(define $sl SL_VERSION_PATCH)" "$(latest NVIDIA-RTX/Streamline)"
   dlss=$(powershell -NoProfile -Command "(Get-Item 'streamline-sdk/bin/x64/nvngx_dlss.dll').VersionInfo.FileVersion" 2> /dev/null | tr -d '\r')
