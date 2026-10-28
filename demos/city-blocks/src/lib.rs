@@ -3150,14 +3150,52 @@ impl Demo for Gallery {
         }
         // The sun's soft shadow denoised by NVIDIA's SIGMA (#172) or AMD's FidelityFX (#173),
         // D-049: a ray a pixel before the resolve, which then reads the result in place of its
-        // own ray. The motion vectors come first, for the denoiser's reprojection (they are
-        // reused below).
-        let mut early_motion = None;
+        // own ray.
         let denoising = self.sun_shadow_on.filter(|_| {
             self.flags.has(CullFlags::SHADOWS)
                 && self.renderer.sun_angular_radius > 0.0
                 && self.scene.rays().is_some()
         });
+        // The mirror rays' history (#176, D-050): the glass's reflections settled before TAA.
+        let steadied = !self.args.no_reflection_history
+            && self.sky_light
+            && !in_space
+            && self.flags.has(CullFlags::SKY_REFLECTIONS)
+            && self.flags.has(CullFlags::RAY_REFLECTIONS)
+            && self.scene.rays().is_some();
+        // The motion vectors before the resolve when the denoiser reprojects through them or the
+        // reflections pass moves them towards its reflections (`r.reflections.motion`, which did
+        // nothing without a denoiser until the review of 2026-10-28), else after it (they are
+        // reused below): the camera's, the movers' own (#79) and the grass blades' in the wind
+        // (#300).
+        let mut early_motion = None;
+        if denoising.is_some() || (steadied && self.reflection_motion) {
+            let motion = self
+                .taa
+                .motion_vectors(&mut frame.graph, &taa_frame, targets.depth);
+            if !self.args.no_mover_motion {
+                self.renderer.mover_motion(
+                    &mut frame.graph,
+                    frame.slot,
+                    &self.scene,
+                    &targets,
+                    motion,
+                    camera.view_proj,
+                    taa_frame.previous_from_current,
+                    taa_frame.jitter,
+                );
+            }
+            self.renderer.grass_motion(
+                &mut frame.graph,
+                frame.slot,
+                &targets,
+                motion,
+                camera.view_proj,
+                taa_frame.previous_from_current,
+                taa_frame.jitter,
+            );
+            early_motion = Some(motion);
+        }
         let mut sun_shadow = None;
         if let Some(index) = denoising {
             let denoiser = &mut self.sun_shadows[index];
@@ -3185,33 +3223,8 @@ impl Demo for Gallery {
                 forge_render::SunShadowDenoiser::view_z_row(&shadow_camera),
                 self.renderer.sun_angular_radius.tan(),
                 closest,
-            ) {
-                let motion = self
-                    .taa
-                    .motion_vectors(&mut frame.graph, &taa_frame, targets.depth);
-                if !self.args.no_mover_motion {
-                    self.renderer.mover_motion(
-                        &mut frame.graph,
-                        frame.slot,
-                        &self.scene,
-                        &targets,
-                        motion,
-                        camera.view_proj,
-                        taa_frame.previous_from_current,
-                        taa_frame.jitter,
-                    );
-                }
-                // The grass blades' in the wind (#300).
-                self.renderer.grass_motion(
-                    &mut frame.graph,
-                    frame.slot,
-                    &targets,
-                    motion,
-                    camera.view_proj,
-                    taa_frame.previous_from_current,
-                    taa_frame.jitter,
-                );
-                early_motion = Some(motion);
+            ) && let Some(motion) = early_motion
+            {
                 let denoiser: &'f forge_render::SunShadowDenoiser = &self.sun_shadows[index];
                 sun_shadow = Some(denoiser.denoise(
                     &mut frame.graph,
@@ -3236,13 +3249,6 @@ impl Demo for Gallery {
                 }
             }
         }
-        // The mirror rays' history (#176, D-050): the glass's reflections settled before TAA.
-        let steadied = !self.args.no_reflection_history
-            && self.sky_light
-            && !in_space
-            && self.flags.has(CullFlags::SKY_REFLECTIONS)
-            && self.flags.has(CullFlags::RAY_REFLECTIONS)
-            && self.scene.rays().is_some();
         let mut reflection_history = None;
         if steadied {
             if taa_frame.reset {
@@ -3569,7 +3575,8 @@ impl Demo for Gallery {
                     splash_foam,
                     sea_water: self.args.sea_water,
                     // The water's own motion vectors into the frame's, made before it when the
-                    // sun's shadows are denoised (#172): else they come after, from its depth.
+                    // sun's shadows are denoised (#172) or the reflections move them: else they
+                    // come after, from its depth.
                     previous_from_current: taa_frame.previous_from_current,
                     jitter: taa_frame.jitter,
                     motion: early_motion,

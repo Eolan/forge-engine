@@ -6797,8 +6797,11 @@ void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
     // the view ray as far as the surface plus the ray's length, the sky's at infinity on a miss, by
     // the reflection's weight. DLSS followed the water and dragged its reflections at the
     // surface's speed: the trees' and the clouds' reflections trailed as the camera moved sideways
-    // (the owner, 2026-10-28). A mover's reflection keeps the surface's.
-    if (resolve_push.ao_image != 0xFFFFFFFFu && history != nullptr && !mover)
+    // (the owner, 2026-10-28). A mover's reflection keeps the surface's, and so does a reflection
+    // in a mover (a tram's or a taxi's glass: its vector is the mover's own, which the camera's
+    // motion does not explain; `steadied_reflection`'s test, the review of 2026-10-28).
+    if (resolve_push.ao_image != 0xFFFFFFFFu && history != nullptr && !mover
+        && (record.x & ~INSTANCE_HIDDEN_BIT) - history[0].first_mover >= history[0].mover_count)
     {
         float3 surface = mul(frame, object_position) + relative;
         float stretch = hit.w > 0.0 ? 1.0 + distance / max(length(surface), 1e-3) : 1e5;
