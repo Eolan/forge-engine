@@ -1432,7 +1432,6 @@ impl Gallery {
                             .unwrap_or(scene.height_spacing),
                         rays: args.probe_room_rays.or(scene.rays),
                         probes: args.probe_room_pool.unwrap_or(scene.probes),
-                        ..scene
                     }
                 }),
                 ..ProbeParams::default()
