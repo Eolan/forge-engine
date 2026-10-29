@@ -415,26 +415,32 @@ pub fn garden_walls(
             .iter()
             .any(|fp| boundary_distance(fp, p) < THICKNESS * 0.5 + 0.05)
     };
-    let lone: Vec<bool> =
-        out.walls
-            .iter()
-            .enumerate()
-            .map(|(i, w)| {
-                let meets =
-                    |p: DVec2| {
-                        on_house(p)
-                            || out.walls.iter().enumerate().any(|(j, o)| {
-                                j != i && geom::distance_to_segment(p, o.a, o.b) < JOIN
-                            })
-                            || out
-                                .hedges
-                                .iter()
-                                .any(|&(a, b)| geom::distance_to_segment(p, a, b) < JOIN)
-                    };
-                w.length() < LONE_STUB
-                    && ((on_house(w.a) && !meets(w.b)) || (on_house(w.b) && !meets(w.a)))
-            })
-            .collect();
+    let lone: Vec<bool> = out
+        .walls
+        .iter()
+        .enumerate()
+        .map(|(i, w)| {
+            // Met: a house, a wall (or a wall's end the joints would join in line), a hedge,
+            // or a gate (the post beside it: a gate next to a house kept its 0.7 m of wall
+            // to the house, a review of 0b78f96d).
+            let meets = |p: DVec2| {
+                on_house(p)
+                    || out.walls.iter().enumerate().any(|(j, o)| {
+                        j != i
+                            && (geom::distance_to_segment(p, o.a, o.b) < JOIN
+                                || o.a.distance(p) < IN_LINE_JOIN
+                                || o.b.distance(p) < IN_LINE_JOIN)
+                    })
+                    || out
+                        .hedges
+                        .iter()
+                        .any(|&(a, b)| geom::distance_to_segment(p, a, b) < JOIN)
+                    || out.gates.iter().any(|&g| g.distance(p) < GATE * 0.5 + JOIN)
+            };
+            w.length() < LONE_STUB
+                && ((on_house(w.a) && !meets(w.b)) || (on_house(w.b) && !meets(w.a)))
+        })
+        .collect();
     let mut flags = lone.into_iter();
     out.walls.retain(|_| !flags.next().unwrap_or(false));
     chamfer_sharp_corners(&mut out.walls, &out.hedges, footprints);
@@ -546,6 +552,11 @@ fn chamfer_sharp_corners(
                 } else {
                     continue;
                 };
+                // A street wall slanting: cut short, it would open a nook of the street and drop
+                // its height to a party wall's (a review of 67d39d08).
+                if walls[slant].inside.is_some() {
+                    continue;
+                }
                 let theta = cos.clamp(-1.0, 1.0).acos().max(1e-3);
                 let pi = std::f64::consts::PI;
                 // The triangle cut off: its corner on the line (the taker's) and on the slant.
@@ -565,7 +576,16 @@ fn chamfer_sharp_corners(
                 let housed = footprints.iter().any(|fp| {
                     (0..=8).any(|s| geom::contains(fp, p + (q - p) * (f64::from(s) / 8.0)))
                 });
-                if housed {
+                // Nothing else at the cut's end on the line: another wall there would meet the
+                // cut in a new corner.
+                let crowded = walls.iter().enumerate().any(|(k, x)| {
+                    k != line
+                        && k != slant
+                        && (x.a.distance(p) < JOIN
+                            || x.b.distance(p) < JOIN
+                            || geom::distance_to_segment(p, x.a, x.b) < JOIN)
+                });
+                if housed || crowded {
                     continue;
                 }
                 let height = walls[line].height.min(walls[slant].height);
@@ -1302,15 +1322,25 @@ mod tests {
         );
         let at_slant = degrees(cut.a - cut.b, slant - cut.b);
         assert!(at_slant > SHARP, "{at_slant}");
-        // A house standing on the point: nothing changes.
+        // A house standing on the point, or on the cut's line but clear of the point: nothing
+        // changes.
+        let square = |x0: f64, y0: f64, x1: f64, y1: f64| {
+            vec![
+                DVec2::new(x0, y0),
+                DVec2::new(x1, y0),
+                DVec2::new(x1, y1),
+                DVec2::new(x0, y1),
+            ]
+        };
+        for house in [square(-1.0, -1.0, 1.0, 0.0), square(1.0, 0.2, 2.0, 1.0)] {
+            let mut walls = make();
+            chamfer_sharp_corners(&mut walls, &[], &[house]);
+            assert_eq!(walls.len(), 3, "{walls:?}");
+        }
+        // A street wall slanting: left as it is.
         let mut walls = make();
-        let house = vec![
-            DVec2::new(-1.0, -1.0),
-            DVec2::new(1.0, -1.0),
-            DVec2::new(1.0, 0.0),
-            DVec2::new(-1.0, 0.0),
-        ];
-        chamfer_sharp_corners(&mut walls, &[], &[house]);
-        assert_eq!(walls.len(), 3);
+        walls[2] = Wall::new(c, slant, STREET, Some(DVec2::new(5.0, 1.0)));
+        chamfer_sharp_corners(&mut walls, &[], &[]);
+        assert_eq!(walls.len(), 3, "{walls:?}");
     }
 }

@@ -1014,7 +1014,7 @@ mod tests {
         // The "corners" of 0° at 800 and 900 m were one wall twice (a lot line's piece between two
         // houses' corners and the court, from both its lots): kept once, and such a stub left
         // meeting nothing dropped. 700 m keeps 3: two walls and two hedges at one point, and a Y.
-        let since: [(f64, Kind, usize); 7] = [
+        let since: [(f64, Kind, usize); 11] = [
             (700.0, Kind::FreeWallEnd, 3),
             (800.0, Kind::UnlitRoom, 1),
             (800.0, Kind::RidgeStep, 1),
@@ -1022,6 +1022,12 @@ mod tests {
             (900.0, Kind::LonePartyWall, 1),
             (900.0, Kind::RidgeStep, 3),
             (700.0, Kind::SharpWallCorner, 3),
+            // None left at these: none may come back (a review of 0b78f96d: the default 1 let
+            // them).
+            (400.0, Kind::SharpWallCorner, 0),
+            (600.0, Kind::SharpWallCorner, 0),
+            (800.0, Kind::SharpWallCorner, 0),
+            (900.0, Kind::SharpWallCorner, 0),
         ];
         let mut over = Vec::new();
         for (kind, bound) in bounds {
@@ -1044,8 +1050,8 @@ mod digests {
     use super::*;
     use std::hash::{Hash, Hasher};
 
-    /// A digest of each size's masses and structures (#308), to tell whether a change to the
-    /// generator kept a village as it was: run before and after,
+    /// A digest of each size's masses, structures and garden walls (#308), to tell whether a
+    /// change to the generator kept a village as it was: run before and after,
     /// `cargo test --release -p forge-procgen --lib village_digests -- --ignored --nocapture`.
     /// The 600 m village, the first map's, stays the same unless the owner agrees.
     #[test]
@@ -1058,6 +1064,11 @@ mod digests {
             let mut h = std::collections::hash_map::DefaultHasher::new();
             format!("{:?}", v.masses).hash(&mut h);
             format!("{:?}", structures).hash(&mut h);
+            // The garden walls, hedges and gates too, which no mass holds.
+            format!("{:?}", v.plan.walls).hash(&mut h);
+            for b in &v.blocks {
+                format!("{:?}{:?}{:?}", b.lots, b.hedges, b.gates).hash(&mut h);
+            }
             println!("digest {size}: {:016x}", h.finish());
         }
     }

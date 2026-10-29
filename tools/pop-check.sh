@@ -25,6 +25,8 @@ else
   lock=${TMPDIR:-/tmp}/forge-gpu.lock
 fi
 out=$root/captures/pops/$(date +%Y%m%d-%H%M%S)
+# The frames a failed run kept, about 450 MB a run: only the newest run keeps them.
+rm -f "$root"/captures/pops/*/f-*.png "$root"/captures/pops/*/f.png
 mkdir -p "$out"
 if [ -z "$bin" ]; then
   bin=$root/target/release

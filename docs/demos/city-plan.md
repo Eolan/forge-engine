@@ -747,9 +747,16 @@ anomalies down to 11 (20 → 3, 33 → 3, 24 → 5).
   across the slanting wall, its corner on the line at 75° or more. Sharp corners: 600 m 1 → 0,
   700 m 4 → 3, 800 m 6 → 2; no other anomaly moved at any size. Moving the junctions instead
   (slid along a line, or the lots' tips given to a neighbour) split or bent the lot lines into
-  pieces the walls' joints could not close, and left free wall ends. What is left at 500 and
-  700–900 m: three or four walls at one point, slivers of a few degrees, two walls with a house
-  on the point.
+  pieces the walls' joints could not close, and left free wall ends. Not where the slanting wall
+  is a street wall (it would open a nook of the street), nor where another wall meets the cut's
+  end on the line.
+- **Walls built twice (2026-10-29, #308):** the "corners" of 0° left at 800 and 900 m were one
+  wall twice, the piece of a lot line between two houses' shared back corner and the court, from
+  both lots; both flickered on one plane. Each wall is kept once now, and a wall under 1.5 m from
+  a house's wall whose other end meets no wall (or a wall's end within 0.75 m), hedge, house or
+  gate goes: that piece, alone, stood in the open. Sharp corners left: 500 m 1, 700 m 3 (two
+  walls and two hedges at one point, a Y of three walls), none elsewhere; the test holds 400,
+  600, 800 and 900 m at none.
 - **The render's relief (2026-10-29, #363):** the owner's walk found a triangle on a house's face
   unlike the rest of it (`--view=-32.16,6.74,-83.17,94.5,-12.7`): the sunlit part of the wall,
   where a noon sun grazing it raised the render's concrete grain into speckles, cut off by the

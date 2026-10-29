@@ -115,11 +115,17 @@ else
   say "verdict: FAILED (exit $status), the run: $(sed -n 's/^== clippy.*(in the background, \(.*\)\/gate.txt).*/\1/p' "$out/verify.log" | head -1)"
   grep -E "differ|NO CAPTURE|FAILED|error\[|panicked|test result: FAILED" "$out/verify.log" |
     grep -v "FLAKE #71" | head -40 | tee -a "$summary"
+  # An exit of 0 without PASSED is a failure too.
+  [ $status = 0 ] && status=1
 fi
-# The walk-in's pops (#363, tools/pop-check.sh), on the binaries the batch built.
-tools/pop-check.sh "$tree/target/release" > "$out/pops.log" 2>&1
-pop_status=$?
-say "pops: $(tail -1 "$out/pops.log")"
-[ $status = 0 ] && status=$pop_status
+# The walk-in's pops (#363, tools/pop-check.sh), on the binaries the batch built: only when it
+# passed, as a failed build would leave last night's.
+if [ $status = 0 ]; then
+  tools/pop-check.sh "$tree/target/release" > "$out/pops.log" 2>&1
+  status=$?
+  say "pops: $(tail -1 "$out/pops.log")"
+else
+  say "pops: not checked, the batch failed"
+fi
 grep -E "^left for (the owner|Tier 2)" "$out/verify.log" | tee -a "$summary"
 finish $status

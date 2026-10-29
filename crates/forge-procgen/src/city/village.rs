@@ -295,7 +295,8 @@ pub fn village(site: &Site, params: &CityParams, seed: u64) -> Village {
             .filter(|lot| !housed_lots.contains(lot))
             .cloned()
             .collect();
-        let (grown, kept) = absorb_leftovers(&outline, &housed_lots, &court, &empty);
+        let footprints: Vec<&[DVec2]> = houses.iter().map(|h| h.footprint.as_slice()).collect();
+        let (grown, kept) = absorb_leftovers(&outline, &housed_lots, &court, &empty, &footprints);
         // The corners of the lots that grew, put into the edges they end on.
         let changed: Vec<bool> = grown
             .iter()
@@ -737,6 +738,7 @@ fn absorb_leftovers(
     lots: &[Vec<DVec2>],
     court: &[DVec2],
     empty: &[Vec<DVec2>],
+    footprints: &[&[DVec2]],
 ) -> (Vec<Vec<DVec2>>, Vec<Vec<DVec2>>) {
     let mut out = lots.to_vec();
     let mut taken = lots.to_vec();
@@ -802,7 +804,7 @@ fn absorb_leftovers(
         // kept, it ended between the two lots' walls in a sliver under a metre wide, and with a
         // third wall there the walls' sharp corner could not be cut (the owner's V, #363).
         for _ in 0..grown.len() {
-            let Some((tip, j, sliver, foot)) = sliver_along(&grown, &out, k) else {
+            let Some((tip, j, sliver, foot)) = sliver_along(&grown, &out, k, footprints) else {
                 break;
             };
             let Some(other) = grown_by(&out[j], &sliver) else {
@@ -907,6 +909,7 @@ fn sliver_along(
     lot: &[DVec2],
     lots: &[Vec<DVec2>],
     k: usize,
+    footprints: &[&[DVec2]],
 ) -> Option<(usize, usize, Vec<DVec2>, DVec2)> {
     let n = lot.len();
     if n < 4 {
@@ -946,19 +949,38 @@ fn sliver_along(
                     .filter(|&j| j != k)
                     .find(|&j| along(&lots[j], b, near))
             })?;
+        // Set on the neighbour's corner at or past the foot, never back towards the tip: there
+        // the lot's new corner would be sharp, or the triangle nothing (a review of 39ab576c).
+        let past = (foot - b).dot(way);
         let foot = lots[j]
             .iter()
             .copied()
-            .filter(|&q| geom::distance_to_segment(q, b, far) < 0.05 && q.distance(foot) < 0.5)
+            .filter(|&q| {
+                geom::distance_to_segment(q, b, far) < 0.05
+                    && q.distance(foot) < 0.5
+                    && (q - b).dot(way) >= past - 1e-9
+            })
             .min_by(|x, y| x.distance(foot).total_cmp(&y.distance(foot)))
             .unwrap_or(foot);
         // Its new side (the shorter side's end to the foot) kept for its wall.
-        if near.distance(foot) < SLIVER_LEAST {
+        if near.distance(foot) < SLIVER_LEAST || foot.distance(b) < 0.05 {
             return None;
         }
         let mut sliver = vec![near, b, foot];
         if geom::signed_area(&sliver) < 0.0 {
             sliver.reverse();
+        }
+        // None on a house.
+        let middle = (near + b + foot) / 3.0;
+        let housed = footprints.iter().any(|f| {
+            sliver
+                .iter()
+                .chain([&middle])
+                .any(|&p| geom::contains(f, p))
+                || f.iter().any(|&p| geom::contains(&sliver, p))
+        });
+        if housed {
+            return None;
         }
         Some((i, j, sliver, foot))
     })
@@ -1425,13 +1447,40 @@ mod tests {
             ]
         };
         let lots = |width| vec![square.clone(), lot(width)];
-        let found = sliver_along(&lot(0.6), &lots(0.6), 1);
+        let found = sliver_along(&lot(0.6), &lots(0.6), 1, &[]);
         let (tip, j, sliver, foot) = found.expect("a sliver");
         assert_eq!((tip, j), (4, 0));
         assert!(foot.distance(DVec2::new(9.5, 10.0)) < 1e-9, "{foot}");
         assert!(geom::signed_area(&sliver) > 0.0);
         assert!((geom::signed_area(&sliver) - 0.5 * 9.5 * 0.6).abs() < 1e-9);
-        assert!(sliver_along(&lot(0.3), &lots(0.3), 1).is_none());
-        assert!(sliver_along(&lot(1.2), &lots(1.2), 1).is_none());
+        assert!(sliver_along(&lot(0.3), &lots(0.3), 1, &[]).is_none());
+        assert!(sliver_along(&lot(1.2), &lots(1.2), 1, &[]).is_none());
+        // The neighbour's corner 0.3 m past the foot takes it; one 0.2 m back towards the tip
+        // does not (there the lot's new corner would be sharp).
+        let with_corner = |x: f64| {
+            vec![
+                DVec2::new(0.0, 0.0),
+                DVec2::new(10.0, 0.0),
+                DVec2::new(10.0, 10.0),
+                DVec2::new(x, 10.0),
+                DVec2::new(0.0, 10.0),
+            ]
+        };
+        for (x, expected) in [(9.8, 9.8), (9.3, 9.5)] {
+            let lots = vec![with_corner(x), lot(0.6)];
+            let (_, _, _, foot) = sliver_along(&lot(0.6), &lots, 1, &[]).expect("a sliver");
+            assert!(
+                foot.distance(DVec2::new(expected, 10.0)) < 1e-9,
+                "{x}: {foot}"
+            );
+        }
+        // A house on the sliver: it stays.
+        let house: &[DVec2] = &[
+            DVec2::new(4.0, 10.05),
+            DVec2::new(6.0, 10.05),
+            DVec2::new(6.0, 13.0),
+            DVec2::new(4.0, 13.0),
+        ];
+        assert!(sliver_along(&lot(0.6), &lots(0.6), 1, &[house]).is_none());
     }
 }
