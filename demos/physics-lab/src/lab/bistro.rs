@@ -80,11 +80,38 @@ fn open_edges(model: &Model) -> HashMap<String, f64> {
         .collect()
 }
 
-/// The converted exterior's folder, and the archive's (the maps' paths are relative to it).
-fn folders() -> (PathBuf, PathBuf) {
-    let root =
-        forge_app::workspace_root_from(env!("CARGO_MANIFEST_DIR")).join("assets/external/bistro");
-    (root.join("converted"), root.join("Bistro_v5_2"))
+/// An authored scene of the lab (D-083): the Bistro's exterior, or the material test chart
+/// (`tools/material-chart.py`): spheres and tiles of known materials under generated skies, to
+/// compare with Falcor's render of the same file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Authored {
+    /// The Amazon Lumberyard Bistro's exterior.
+    Bistro,
+    /// The material test chart.
+    Chart,
+}
+
+impl Authored {
+    /// The converted scene's folder, and the one its maps' paths are relative to.
+    fn folders(self) -> (PathBuf, PathBuf) {
+        let external =
+            forge_app::workspace_root_from(env!("CARGO_MANIFEST_DIR")).join("assets/external");
+        match self {
+            Authored::Bistro => (
+                external.join("bistro/converted"),
+                external.join("bistro/Bistro_v5_2"),
+            ),
+            Authored::Chart => (external.join("chart"), external.join("chart")),
+        }
+    }
+
+    /// Its glTF file's stem.
+    fn stem(self) -> &'static str {
+        match self {
+            Authored::Bistro => "BistroExterior",
+            Authored::Chart => "chart",
+        }
+    }
 }
 
 /// A material's maps by role, as `BistroExterior.textures.json` names them.
@@ -127,26 +154,31 @@ pub(super) struct Bistro {
     pub camera: Option<CameraPath>,
 }
 
-/// The exterior, read once; `None` (logged) where the converted files are missing.
-pub(super) fn bistro() -> Option<&'static Bistro> {
+/// The scene, read once; `None` (logged) where its converted files are missing.
+pub(super) fn scene(which: Authored) -> Option<&'static Bistro> {
     static BISTRO: OnceLock<Option<Bistro>> = OnceLock::new();
-    BISTRO
-        .get_or_init(|| match read() {
-            Ok(b) => Some(b),
-            Err(e) => {
-                tracing::warn!(
-                    "no Bistro: {e:#} (fetch the archive into assets/external/bistro/ and run \
-                     tools/fbx-to-gltf.py, D-083)"
-                );
-                None
-            }
-        })
-        .as_ref()
+    static CHART: OnceLock<Option<Bistro>> = OnceLock::new();
+    let cell = match which {
+        Authored::Bistro => &BISTRO,
+        Authored::Chart => &CHART,
+    };
+    cell.get_or_init(|| match read(which) {
+        Ok(b) => Some(b),
+        Err(e) => {
+            tracing::warn!(
+                "no {which:?}: {e:#} (the Bistro: fetch the archive into assets/external/bistro/ \
+                 and run tools/fbx-to-gltf.py; the chart: run tools/material-chart.py; D-083)"
+            );
+            None
+        }
+    })
+    .as_ref()
 }
 
-fn read() -> Result<Bistro> {
-    let (converted, _) = folders();
-    let gltf = converted.join("BistroExterior.gltf");
+fn read(which: Authored) -> Result<Bistro> {
+    let (converted, _) = which.folders();
+    let stem = which.stem();
+    let gltf = converted.join(format!("{stem}.gltf"));
     let model = load_gltf(&gltf).with_context(|| format!("{}", gltf.display()))?;
     // The cache key: the files' sizes and times, not 130 MB of bytes hashed at every start.
     let stamp = |name: &str| -> String {
@@ -163,20 +195,24 @@ fn read() -> Result<Bistro> {
         )
     };
     let key = format!(
-        "bistro-exterior#{}#{}",
-        stamp("BistroExterior.gltf"),
-        stamp("BistroExterior.bin")
+        "{stem}#{}#{}",
+        stamp(&format!("{stem}.gltf")),
+        stamp(&format!("{stem}.bin"))
     );
-    let roles: HashMap<String, Roles> = serde_json::from_slice(
-        &std::fs::read(converted.join("BistroExterior.textures.json"))
-            .context("BistroExterior.textures.json")?,
-    )
-    .context("BistroExterior.textures.json")?;
-    let camera = std::fs::read(converted.join("BistroExterior.camera.json"))
+    // The Bistro's maps by material; the chart has factors alone.
+    let roles: HashMap<String, Roles> = match which {
+        Authored::Bistro => serde_json::from_slice(
+            &std::fs::read(converted.join("BistroExterior.textures.json"))
+                .context("BistroExterior.textures.json")?,
+        )
+        .context("BistroExterior.textures.json")?,
+        Authored::Chart => HashMap::new(),
+    };
+    let camera = std::fs::read(converted.join(format!("{stem}.camera.json")))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<CameraPath>(&bytes).ok());
     let props = (0..model.meshes.len())
-        .map(|k| &*Box::leak(format!("lab-bistro-{k}").into_boxed_str()))
+        .map(|k| &*Box::leak(format!("lab-{stem}-{k}").into_boxed_str()))
         .collect();
     tracing::info!(
         meshes = model.meshes.len(),
@@ -187,7 +223,7 @@ fn read() -> Result<Bistro> {
             .sum::<usize>(),
         materials = roles.len(),
         camera_frames = camera.as_ref().map_or(0, |c| c.frames.len()),
-        "the Bistro's exterior"
+        "an authored scene"
     );
     Ok(Bistro {
         model,
@@ -199,8 +235,8 @@ fn read() -> Result<Bistro> {
 }
 
 /// The scene's props: every mesh of the exterior, in order.
-pub(super) fn props() -> Vec<PropSpec> {
-    let Some(b) = bistro() else {
+pub(super) fn props(which: Authored) -> Vec<PropSpec> {
+    let Some(b) = scene(which) else {
         return Vec::new();
     };
     b.model
@@ -219,8 +255,8 @@ pub(super) fn props() -> Vec<PropSpec> {
 }
 
 /// What the scene draws, its props from `first`: every mesh where the file places it.
-pub(super) fn build(first: usize) -> Vec<(usize, Mat4)> {
-    bistro().map_or_else(Vec::new, |b| {
+pub(super) fn build(which: Authored, first: usize) -> Vec<(usize, Mat4)> {
+    scene(which).map_or_else(Vec::new, |b| {
         (0..b.model.meshes.len())
             .map(|k| (first + k, Mat4::IDENTITY))
             .collect()
@@ -230,12 +266,19 @@ pub(super) fn build(first: usize) -> Vec<(usize, Mat4)> {
 /// The scene's sky and sun as its authors' renders were lit (D-084): the archive's HDR
 /// photograph alone, its sun taken out of it to be the scene's (`BistroExterior.pyscene` lights
 /// by it; the FBX's directional light is for rasterisers, its readme says, and NVIDIA's
-/// path-traced renders leave it out). `None` without the photograph.
-pub(crate) fn environment() -> Option<Environment> {
-    let (_, archive) = folders();
-    let path = archive.join("san_giuseppe_bridge_4k.hdr");
+/// path-traced renders leave it out). The chart's: the sky `FORGE_CHART_SKY` names among
+/// `tools/material-chart.py`'s (`sky-side-30.hdr` without it), as its Falcor scene reads it.
+/// `None` without the file.
+pub(crate) fn environment(which: Authored) -> Option<Environment> {
+    let (_, archive) = which.folders();
+    let path = match which {
+        Authored::Bistro => archive.join("san_giuseppe_bridge_4k.hdr"),
+        Authored::Chart => archive.join(
+            std::env::var("FORGE_CHART_SKY").unwrap_or_else(|_| "sky-side-30.hdr".to_owned()),
+        ),
+    };
     if !path.exists() {
-        tracing::warn!(path = %path.display(), "no Bistro sky: lit by Forge's");
+        tracing::warn!(path = %path.display(), "no sky photograph: lit by Forge's");
         return None;
     }
     Some(Environment {
@@ -246,8 +289,8 @@ pub(crate) fn environment() -> Option<Environment> {
 
 /// Where the camera starts: the path's first frame (the street before the café), else above
 /// the scene's middle.
-pub(crate) fn camera() -> (Vec3, f32, f32) {
-    bistro()
+pub(crate) fn camera(which: Authored) -> (Vec3, f32, f32) {
+    scene(which)
         .and_then(|b| b.camera.as_ref())
         .and_then(|c| c.pose(0))
         .unwrap_or((Vec3::new(0.0, 3.0, 0.0), 0.0, 0.0))
@@ -256,12 +299,16 @@ pub(crate) fn camera() -> (Vec3, f32, f32) {
 /// The rows of every mesh's materials, their maps read from the archive and uploaded once each:
 /// the base colour and emission sRGB, the normal maps' green turned over, a material cut out
 /// where its base colour's map has any alpha.
-pub(super) fn rows(device: &Arc<forge_gpu::Device>, materials: &mut CityMaterials) -> Result<()> {
-    let Some(b) = bistro() else {
+pub(super) fn rows(
+    which: Authored,
+    device: &Arc<forge_gpu::Device>,
+    materials: &mut CityMaterials,
+) -> Result<()> {
+    let Some(b) = scene(which) else {
         return Ok(());
     };
     let started = std::time::Instant::now();
-    let (_, archive) = folders();
+    let (_, archive) = which.folders();
     // Each map once, by its path and whether it is colour.
     let mut wanted: Vec<(String, bool, bool)> = Vec::new();
     for r in b.roles.values() {
@@ -403,10 +450,10 @@ mod tests {
     #[test]
     #[ignore]
     fn bistro_open_sheets() {
-        let Some(b) = bistro() else {
+        let Some(b) = scene(Authored::Bistro) else {
             return;
         };
-        let (_, archive) = folders();
+        let (_, archive) = Authored::Bistro.folders();
         let cut_out = |path: &Option<String>| {
             path.as_ref().is_some_and(|p| {
                 std::fs::read(archive.join(p))
@@ -440,7 +487,7 @@ mod tests {
     #[test]
     #[ignore]
     fn bistro_objects() {
-        let Some(b) = bistro() else {
+        let Some(b) = scene(Authored::Bistro) else {
             return;
         };
         let words: Vec<String> = std::env::var("FORGE_OBJECTS")
@@ -674,7 +721,7 @@ mod tests {
     #[test]
     #[ignore]
     fn bistro_path_views() {
-        let (converted, _) = folders();
+        let (converted, _) = Authored::Bistro.folders();
         let Ok(bytes) = std::fs::read(converted.join("BistroExterior.camera.json")) else {
             return;
         };

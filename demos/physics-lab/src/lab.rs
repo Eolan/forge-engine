@@ -139,6 +139,21 @@ pub(crate) enum LabScene {
     /// `assets/external/bistro/` by `tools/fbx-to-gltf.py`: by day under Forge's sun, by night
     /// (`--time-of-day 1.5`) lit by its emissive surfaces alone.
     Bistro,
+    /// The material test chart (D-083 step 2), written into `assets/external/chart/` by
+    /// `tools/material-chart.py`: spheres and tiles of known materials under a generated sky
+    /// (`FORGE_CHART_SKY`), to compare with Falcor's render of the same file.
+    Chart,
+}
+
+impl LabScene {
+    /// The authored scene it shows, if it is one (D-083).
+    fn authored(self) -> Option<bistro::Authored> {
+        match self {
+            LabScene::Bistro => Some(bistro::Authored::Bistro),
+            LabScene::Chart => Some(bistro::Authored::Chart),
+            _ => None,
+        }
+    }
 }
 
 /// The floor's half side, metres.
@@ -289,8 +304,8 @@ pub(crate) fn props(scene: LabScene) -> Vec<PropSpec> {
     if scene == LabScene::Models {
         props.extend(models::props());
     }
-    if scene == LabScene::Bistro {
-        props.extend(bistro::props());
+    if let Some(which) = scene.authored() {
+        props.extend(bistro::props(which));
     }
     props
 }
@@ -697,6 +712,7 @@ impl LabWorld {
             | LabScene::Smoke
             | LabScene::Lamps
             | LabScene::Bistro
+            | LabScene::Chart
             | LabScene::Models => 0.0,
         };
         // The flight's is a field of grass, wide enough to fly over for a while.
@@ -715,6 +731,7 @@ impl LabWorld {
                 | LabScene::Room
                 | LabScene::Lamps
                 | LabScene::Bistro
+                | LabScene::Chart
         ) {
             let floor_shape = Shape::cuboid(Vec3::new(floor_half, 0.5, floor_half), 0.05, 0.0)?;
             world.add_body(&BodyDesc::fixed(&floor_shape, floor_at.as_dvec3()))?;
@@ -1223,7 +1240,8 @@ impl LabWorld {
             LabScene::Lamps => statics.extend(room::build(ROOM)),
             LabScene::Models => statics.extend(models::build(MODELS)),
             // Its props stand where the models' would: only one of the two is ever added.
-            LabScene::Bistro => statics.extend(bistro::build(MODELS)),
+            LabScene::Bistro => statics.extend(bistro::build(bistro::Authored::Bistro, MODELS)),
+            LabScene::Chart => statics.extend(bistro::build(bistro::Authored::Chart, MODELS)),
         }
         // The balls to throw, asleep out of sight until thrown, after the scene's.
         let mut thrown = Vec::new();
@@ -2834,9 +2852,9 @@ pub(crate) fn build(
             }
         }
     }
-    // The Bistro's (D-083), its maps read from the archive, in its scene only.
-    if kind == LabScene::Bistro {
-        bistro::rows(&ctx.device, &mut materials)?;
+    // An authored scene's (D-083): the Bistro's maps read from its archive, the chart's factors.
+    if let Some(which) = kind.authored() {
+        bistro::rows(which, &ctx.device, &mut materials)?;
     }
     // The gulls' (#184), their feathers baked on their UVs, in their scene only.
     if kind == LabScene::Flyer {

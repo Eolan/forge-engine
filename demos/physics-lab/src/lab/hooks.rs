@@ -259,12 +259,13 @@ impl Scenario for LabScenario {
             // Each lab scene at its own fixed exposure (its captures compared at one).
             metered: false,
             local_exposure: false,
-            // The Bistro under its authors' sky and sun (D-084), for comparisons with their renders.
-            environment: (kind == LabScene::Bistro)
-                .then(super::bistro::environment)
-                .flatten(),
-            // Its authors' renders are tone-mapped by Falcor's ToneMapper: Narkowicz's ACES (D-084).
-            tonemap: (kind == LabScene::Bistro).then_some(forge_render::Tonemap::AcesNarkowicz),
+            // An authored scene under its authors' sky and sun (D-084), the chart under its own, for
+            // comparisons with Falcor's renders.
+            environment: kind.authored().and_then(super::bistro::environment),
+            // Falcor's renders are tone-mapped by its ToneMapper: Narkowicz's ACES (D-084).
+            tonemap: kind
+                .authored()
+                .map(|_| forge_render::Tonemap::AcesNarkowicz),
         }
     }
 
@@ -375,9 +376,9 @@ impl Scenario for LabScenario {
                 speed: 2.0,
                 ..FlyCamera::default()
             }
-        } else if self.kind == LabScene::Bistro {
-            // Where the FBX's camera path starts, in the street before the café.
-            let (position, yaw, pitch) = super::bistro::camera();
+        } else if let Some(which) = self.kind.authored() {
+            // Where the FBX's camera path starts, in the street before the café; above the chart.
+            let (position, yaw, pitch) = super::bistro::camera(which);
             FlyCamera {
                 position,
                 yaw,

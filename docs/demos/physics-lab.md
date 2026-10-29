@@ -2382,6 +2382,36 @@ it: the archive's HDR photograph, `san_giuseppe_bridge_4k.hdr` (4096 × 2048, HD
   will measure the gap (D-083 step 3).
 - **NVIDIA's other views:** Exterior_2 next, then the night.
 
+## `chart`: the material test chart against Falcor (D-083 step 2)
+
+```
+blender -b --factory-startup --python tools/material-chart.py -- assets/external/chart
+FORGE_CHART_SKY=sky-side-30.hdr cargo run --release -p physics-lab -- --lab chart --view=0,6,-4.5,180,-43 --fov 45 --capture-linear chart.hdr
+```
+
+One file both renderers read, so that Forge's surfaces are measured as a whole against Falcor's
+path tracer, not one at a time as the Bistro's lamp post was (D-085).
+- **The scene** (`tools/material-chart.py`, glTF, factors only): a 40 m ground of 18 % grey; four
+  rows of seven spheres, 0.4 m, at roughness 0.05 to 1 (grey and red dielectrics, silver and gold
+  metals); a row of tiles in front (white and 18 % diffuse, a smooth dielectric, a rough metal).
+- **The skies:** a uniform sky of radiance 1 and a sun disc of 0.5° whose irradiance is 10, from
+  the side or in front, at 60°, 30° and 10°; Falcor's layout, written as Radiance files by the
+  script itself (Blender's writer cut the sun's 43,776 to 90.5). Forge takes the sun out of the
+  map as the Bistro's (9.99 of 10) and scales the map to 128,000 lux: a unit of the sky is
+  12,800 cd/m².
+- **The comparison:** Forge's `--capture-linear` over 12,800 against Falcor's EXR
+  (`chart.pyscene`, intensity 1), each sphere's and tile's mean.
+
+**First measures** (sun from the side at 30°, Forge over Falcor; Falcor at its 3 bounces):
+- **Diffuse:** the grey spheres from 0.90 (smooth) to 1.47 (roughness 1), the white tile 1.49,
+  the 18 % tile and the ground 1.81. Falcor's diffuse is Frostbite's renormalised Disney model
+  (1 / 1.51 at roughness 1), Forge's Lambert.
+- **Metals:** smooth ones far too dark (silver 0.21, gold 0.28: the sun's glint, held under
+  D-085's cap, is missing), rough ones far too bright (silver 5.7, gold 6.8: Forge's rough metal
+  is a white diffuse; Falcor's single-scatter GGX loses most of the light, which a real rough
+  metal does not). Gold comes out silver: Forge's metals do not tint their reflections.
+- **Red:** like the grey, its highlight's white weaker when smooth (green 0.151 against 0.281).
+
 ## `FORGE_DYNAMIC_SCENE`: the scene edited as it runs (issues #220, #338)
 
 The rain's scene built to take and free meshes and instances in place (`reserve_dynamic`), its
