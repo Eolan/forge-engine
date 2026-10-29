@@ -2504,6 +2504,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pop-steps"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "image",
+]
+
+[[package]]
 name = "population-bench"
 version = "0.1.0"
 dependencies = [

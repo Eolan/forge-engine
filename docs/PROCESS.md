@@ -493,6 +493,17 @@ and it stood there after #161 (4 020–4 191; the ballad 1 513–1 514). The clo
 of these numbers is what to look at. Run it for a change that touches how positions
 reach the GPU, and in Tier 2, and put its lines in the report.
 
+**Pops in motion (#363):** capture a steady approach, for example the village's walk-in from its
+start view, `city-plan --village 600 --fixed-step --dolly 8 --frames 1800 --capture OUT/f.png
+--capture-every 3`. Then run `pop-steps OUT --prefix f --region 192,0,1216,680 --from 66`
+(`tools/pop-steps`). It lists the 16-pixel tiles whose brightness steps in one capture by more
+than the steps before and after it: an LOD or a ladder switching in one frame (a tree's impostor
+to its shells scored 5–12). Near objects sweeping past score too, so keep the region off the
+screen's edges and the near ground. To name what popped, crop the frames around it, then run
+again with the step turned off (`--impostors 0`) or shown (`--show-ladder`). For a reference at
+full detail along the same path, `imgdiff a b --then a' b'` counts the pixels that change unlike
+the reference, but at street level its noise floor is high.
+
 **Debugging aids:**
 - `FORGE_TRACE_FRAMES=<file>` with `FORGE_HASH_IMAGES=1` writes per-frame hashes of the
   targets. The variable takes a path: `=1` writes a file named `1`.

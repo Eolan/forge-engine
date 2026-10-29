@@ -18,6 +18,7 @@
 "**/*.md" = []
 "tools/credits/**" = []
 "tools/sharpness/**" = []
+"tools/pop-steps/**" = []
 # What git ignores: a new SDK's directory (D-065's RTXDI sent a gate to Tier 1).
 ".gitignore" = []
 # ReSTIR DI (D-065): only `--lamp-restir` and `--street-restir` runs, which no capture makes.
