@@ -1045,8 +1045,10 @@ pub struct ImpostorInstance {
     /// The instance's id in the scene, which offsets its fade's crossing as the culls do.
     pub id: u32,
     /// The crossing its meshes' ladder makes before their fade (`set_ladder`'s size on screen
-    /// and band), if one: while it still runs, the impostor's fade runs beside it on its own band
-    /// and the two part their pixels by a second noise (`ladder_fade_noise`, #363).
+    /// and band), if one: its fade is held to that size, as its meshes' is
+    /// ([`crate::meshlet::step_after`]), and while the crossing still runs, the fade runs beside it
+    /// on its own band, the two parting their pixels by a second noise (`ladder_fade_noise`,
+    /// #363).
     pub ladder: Option<(f32, f32)>,
 }
 
@@ -1057,7 +1059,8 @@ pub struct ImpostorSet {
     /// The plants drawn as impostors where their meshes fade (none: the bakes alone).
     pub instances: Vec<ImpostorInstance>,
     /// Their meshes' fade ([`MeshletSceneBuilder::set_fade`]): the size on screen, output
-    /// pixels across, at which it is half done.
+    /// pixels across, at which it is half done; a plant's own is held to its ladder's
+    /// (`ImpostorInstance::ladder`).
     pub fade_px: f32,
     /// The fade's band.
     pub fade_band: f32,
@@ -1126,7 +1129,13 @@ struct GpuImpostor {
     id: u32,
     ladder_px: f32,
     ladder_band: f32,
-    pad: u32,
+    fade_px: f32,
+}
+
+/// The size on screen at which a plant is half faded into its impostor: its kind's `fade_px`,
+/// held to its ladder's size (`ladder`), as its meshes' fade ([`crate::meshlet::step_after`]).
+fn instance_fade(fade_px: f32, ladder: Option<(f32, f32)>) -> f32 {
+    ladder.map_or(fade_px, |(px, _)| crate::meshlet::step_after(fade_px, px))
 }
 
 /// Mirrors `Kind` in `shaders/impostor_draw.slang`.
@@ -1245,7 +1254,7 @@ impl Impostors {
                     id: i.id,
                     ladder_px: i.ladder.map_or(0.0, |l| l.0),
                     ladder_band: i.ladder.map_or(0.0, |l| l.1),
-                    pad: 0,
+                    fade_px: instance_fade(kinds[i.kind as usize].fade_px, i.ladder),
                 }
             })
             .collect();
@@ -1627,5 +1636,31 @@ mod tests {
         let frames = frames_for(frame_direction(frame));
         let own = frames.iter().find(|f| f.0 == frame).unwrap();
         assert!((own.1 - 1.0).abs() < 1e-4, "{frames:?}");
+    }
+
+    /// An impostor fades in at the very size its shells fade out (#363): the kind's, or a small
+    /// plant's ladder size.
+    #[test]
+    fn an_impostor_fades_where_its_shells_do() {
+        use crate::meshlet::MeshletSceneBuilder;
+        use forge_geom::MeshletMesh;
+        let rock = |seed| {
+            MeshletMesh::build(&forge_geom::procedural::asteroid(
+                forge_core::Seed::new(seed),
+                8,
+                1.0,
+                0.3,
+            ))
+        };
+        for ladder_px in [13.5, 29.0, 40.0, 60.0] {
+            let mut builder = MeshletSceneBuilder::new();
+            let [cards, shells] = [7, 8].map(|seed| builder.add_mesh(&rock(seed)));
+            builder.set_ladder(cards, shells, ladder_px, 0.25);
+            builder.set_fade(shells, 40.0, 0.25);
+            let fade = instance_fade(40.0, Some((ladder_px, 0.25)));
+            assert_eq!(fade, builder.ladder_px(shells), "ladder at {ladder_px} px");
+            assert_eq!(fade, ladder_px.min(40.0));
+        }
+        assert_eq!(instance_fade(40.0, None), 40.0);
     }
 }

@@ -6,7 +6,7 @@ You walked the village this morning and sent eight findings. Six are fixed and p
 |---|---|---|
 | The start stayed black | The trees' impostor bakes, paced at your screen's refresh | Loading screen over them, counted, presented uncapped (83f1fa3b) |
 | Trees lose their leaves at one distance | Small leaf cards lost most of their leaves to the cut-out test's mip | The test reads one mip finer (b1d2c640) |
-| Pops walking in at noon | Shells and impostors lighter than the cards they hand over to | The cut-out fix, then the shells' tone refitted (898ccc58) |
+| Pops walking in at noon | Shells and impostors lighter than the cards they hand over to, and every tree's impostor leaving in one frame | The cut-out fix, the shells' tone refitted (898ccc58), and the impostors' fade beside the ladder (section 9) |
 | Windows at midnight change too much | A far lit room lost its lamp's bounce past 20 m, and everything past 50 m | Far rooms take their lamps' light (c4315ac3) |
 | Lighting in three rooms | Furniture cut the room grids' probes' view into patches and tinted the walls orange | Furniture out of the probes' rays (fd497bc2) |
 | Walls' V | A spiked lot outline from the leftover-ground merge | Sharp corners counted and the simple ones cut (c1e55303); **yours needs the lots' fix: your call** |
@@ -134,6 +134,22 @@ As after each batch, a read-only review went over the eight commits. It found re
   - A few doc lines.
 
 One process slip of mine: I edited shaders while the first full check was capturing. I stopped that run and ran it again from the start, after the fixes.
+
+## 9. The pops at noon: the impostors came in all at once
+
+After the tone fixes I replayed your walk-in at noon from the start view, 8 m/s for 240 m. A new detector looked for 16-pixel tiles whose brightness steps in one frame while the frames around them move smoothly.
+
+- **What it found:** apart from near trees sliding past the camera, a few trees jumped in one frame from a soft crown to their lumpy shells. Here is one, frames 600–720 (top: before; bottom: now):
+
+![One tree on the way in, before and after](impostor-fade-before-after.png)
+
+- **Cause:** a tree goes cards → shells → impostor, each step crossing over a band of sizes. All 81 tree models in the village start crossing to their shells near the impostor's 40 px or below it (13–60 px), so the two bands overlap. The engine ran one crossing at a time: the impostor waited until the shells were complete, then came in at 19–100 % in one frame (all of it for the 23 smallest models, which reach their shells at 13–29 px).
+- **Fix, in two parts:**
+  - **The fade runs beside the crossing.** The cull works out the impostor's share once per tree. The cards and shells give that share of their pixels to the impostor by a second noise, and a tree its impostor fully covers draws no mesh at all.
+  - **A plant's impostor never starts above the size its shells come in at.** With a flat 40 px, the shrubs by the main street went to their impostors, which look softer and greyer in the shade than their cards. Now the smallest plants keep their cards about as long as before, and only cross more smoothly.
+- **Result on the walk-in:** tone steps of 3 levels or more in the middle of the view went from 24 to 5, and those of 5 or more from 5 to 0. The map check moved most in the air view (ꟻLIP 0.0085, the far trees' crossings) and the main street (0.0032).
+- **Cost,** base and fix timed in turn: +0.02 ms from the air (3.83 → 3.85 ms), +0.07 ms on the main street (4.92 → 4.98 ms). A simpler fix, each fade moved below its crossing, lengthened the meshlet pass by 0.24 ms from the air, so I dropped it.
+- **Still visible:** a shrub in deep shade, while it crosses, shows its impostor slightly greyer than its cards. That's the impostors' lighting under a canopy, a calibration of its own. Tell me if you notice it.
 
 ## The full check (Tier 1 on e681f48b)
 

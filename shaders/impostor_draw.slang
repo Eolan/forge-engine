@@ -26,7 +26,7 @@ struct Impostor
     uint id;             // its instance's id: the same offset of its crossing as the culls'
     float ladder_px;     // the crossing before its meshes' fade (their ladder's), 0 for none
     float ladder_band;
-    uint pad;
+    float fade_px;       // its fade's size on screen: its kind's, held to its ladder's
 };
 
 // Must match GpuKind in impostor.rs.
@@ -35,7 +35,8 @@ struct Kind
     uint albedo;      // sampled atlases, premultiplied by coverage, with mips: the base colour
     uint normal;      // and its coverage; the normal (× 0.5 + 0.5); its leaves' Fresnel weight
     uint fresnel;     // towards the frame's camera and the depth in radii (× 0.5 + 0.5)
-    float fade_px;    // its shells' fade (`set_fade`): the size on screen and the band
+    float fade_px;    // its shells' fade (`set_fade`): the size on screen (each instance's own is
+                      // `Impostor::fade_px`) and the band
     float fade_band;
     float radius;     // the sphere its frames were baked around
     float reflectance; // its leaves' row's sheen (`GpuMaterial::sheen`): the share reflected head on,
@@ -156,7 +157,7 @@ Varyings impostor_vertex_main(uint vertex : SV_VertexID, uint instance : SV_Inst
     // runs on its own band beside it and the pixels part by a noise of their own
     // (`ladder_fade_after` in meshlet.slang): the bands overlap without a jump (#363).
     float px = 2.0 * imp.cull_radius * f[0].lod_k / dist * (0.85 + 0.3 * hash_unit(imp.id));
-    float t = crossed(px, kind.fade_px, kind.fade_band);
+    float t = crossed(px, imp.fade_px, kind.fade_band);
     bool overlapping = imp.ladder_px > 0.0 && crossed(px, imp.ladder_px, imp.ladder_band) < 1.0;
     float3 right;
     float3 up;

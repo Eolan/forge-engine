@@ -503,6 +503,17 @@ const LADDER_VANISH: u32 = u32::MAX - 1;
 /// The most crossings a ladder is followed down (`LADDER_STEPS` in the shader, #332).
 const LADDER_STEPS: usize = 3;
 
+/// The size on screen, output pixels across, at which a mesh's own crossing (its next step on a
+/// ladder, or its fade) is half done, `size_px` asked, when a ladder crosses into the mesh at
+/// `into_px` ([`MeshletSceneBuilder::set_ladder`]): never above it, so a plant whose shells come
+/// in small keeps them, or its cards, down to that size before its impostor takes over (#363:
+/// the village's shrubs, their impostors softer than their cards at 40 px). The crossings may
+/// still overlap; the culls run the fade beside the crossing into it. The plants' impostors
+/// take the same size ([`crate::impostor`]).
+pub fn step_after(size_px: f32, into_px: f32) -> f32 {
+    size_px.max(1.0).min(into_px.max(1.0))
+}
+
 impl GpuMesh {
     /// What an instance can put in either work list: all its groups of 32 clusters, or its
     /// roots.
@@ -1822,9 +1833,9 @@ impl MeshletSceneBuilder {
     /// crossing an instance measures itself against `next`'s size and band, crossing to the mesh
     /// after it. Give the far end first (`set_ladder(stand_in, far)`, then
     /// `set_ladder(tree, stand_in)`), so each sphere holds the whole ladder below it; each
-    /// step's `size_px` smaller than the one above. A `next` that fades ([`Self::set_fade`])
-    /// fades on its own band, beside this crossing where the two bands meet (a plant's shells
-    /// into its impostor, #363).
+    /// step's `size_px` smaller than the one above, which `next`'s own crossing is held to
+    /// ([`step_after`]). A `next` that fades ([`Self::set_fade`]) fades on its own band, beside
+    /// this crossing where the two bands meet (a plant's shells into its impostor, #363).
     pub fn set_ladder(&mut self, mesh: MeshId, next: MeshId, size_px: f32, band: f32) {
         assert!(mesh != next, "a mesh is not its own next step");
         let near = self.meshes[mesh.0 as usize];
@@ -1846,6 +1857,11 @@ impl MeshletSceneBuilder {
         record.ladder_next = next.0;
         record.ladder_px = size_px.max(1.0);
         record.ladder_band = band.clamp(0.01, 0.9);
+        let into = record.ladder_px;
+        let after = &mut self.meshes[next.0 as usize];
+        if after.ladder_next != u32::MAX {
+            after.ladder_px = step_after(after.ladder_px, into);
+        }
         self.ladders = true;
     }
 
@@ -1854,15 +1870,21 @@ impl MeshletSceneBuilder {
     /// `band` of that size either side of it each pixel keeps it or not by the frame's noise, as
     /// [`Self::set_ladder`]'s crossing does, so it fades rather than pops: the furniture inside
     /// buildings seen from afar, the grass far off. The culls skip it past the band; the rays
-    /// keep meeting it (its shadows stay).
+    /// keep meeting it (its shadows stay). On a ladder's next mesh, the fade is held to the
+    /// crossing into it ([`step_after`]).
     pub fn set_fade(&mut self, mesh: MeshId, size_px: f32, band: f32) {
         assert!(
             self.meshes[mesh.0 as usize].skin == u32::MAX,
             "no skinned mesh fades"
         );
+        let size_px = self
+            .meshes
+            .iter()
+            .filter(|m| m.ladder_next == mesh.0)
+            .fold(size_px.max(1.0), |px, m| step_after(px, m.ladder_px));
         let record = &mut self.meshes[mesh.0 as usize];
         record.ladder_next = LADDER_VANISH;
-        record.ladder_px = size_px.max(1.0);
+        record.ladder_px = size_px;
         record.ladder_band = band.clamp(0.01, 0.9);
         self.ladders = true;
     }
@@ -1872,6 +1894,12 @@ impl MeshletSceneBuilder {
     /// (an impostor taking over where a ladder's last mesh fades) measures from it too.
     pub fn mesh_radius(&self, mesh: MeshId) -> f32 {
         self.meshes[mesh.0 as usize].radius
+    }
+
+    /// The size on screen at which `mesh`'s own crossing is half done (its ladder's or fade's).
+    #[cfg(test)]
+    pub(crate) fn ladder_px(&self, mesh: MeshId) -> f32 {
+        self.meshes[mesh.0 as usize].ladder_px
     }
 
     /// Number of instances so far.
@@ -7147,5 +7175,34 @@ mod tests {
         assert_eq!((record.radius, record.center), (alone.radius, alone.center));
         builder.add_instance(mesh, Mat4::IDENTITY);
         assert_eq!(builder.work_bound, u64::from(record.work_bound()));
+    }
+
+    /// A step's own crossing is held to the crossing into it (#363): a shrub's shells, crossed
+    /// into at 20 px, fade at 20 px rather than 40, whichever is given first; a tree's, crossed
+    /// into at 55 px, keep their 40.
+    #[test]
+    fn a_steps_crossing_is_held_to_the_one_into_it() {
+        let rock = |seed| {
+            MeshletMesh::build(&forge_geom::procedural::asteroid(
+                forge_core::Seed::new(seed),
+                16,
+                1.0,
+                0.3,
+            ))
+        };
+        let px = |builder: &MeshletSceneBuilder, m: MeshId| builder.meshes[m.0 as usize].ladder_px;
+        let mut builder = MeshletSceneBuilder::new();
+        let [cards, shells] = [7, 8].map(|seed| builder.add_mesh(&rock(seed)));
+        builder.set_ladder(cards, shells, 20.0, 0.25);
+        builder.set_fade(shells, 40.0, 0.25);
+        assert_eq!(px(&builder, shells), 20.0);
+        let [cards, shells] = [9, 10].map(|seed| builder.add_mesh(&rock(seed)));
+        builder.set_fade(shells, 40.0, 0.25);
+        builder.set_ladder(cards, shells, 20.0, 0.25);
+        assert_eq!(px(&builder, shells), 20.0);
+        let [cards, shells] = [11, 12].map(|seed| builder.add_mesh(&rock(seed)));
+        builder.set_ladder(cards, shells, 55.0, 0.25);
+        builder.set_fade(shells, 40.0, 0.25);
+        assert_eq!(px(&builder, shells), 40.0);
     }
 }

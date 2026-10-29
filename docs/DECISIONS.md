@@ -7274,14 +7274,17 @@ smoothly) still found a tree jumping from a soft crown to its shells in one fram
 village's 81 tree models crosses from its cards to its shells under 1.67 times the impostors' 40 px
 (13–60 px, the lumps few across), so the two bands overlapped, and the culls follow one crossing at
 a time: the impostor, held back until the shells were whole, came in 19–100 % at once where the
-cards' crossing ended, or never at all for the 23 smallest. Now the fade runs on its own band
-beside the crossing (`ladder_fade_after`): the cull measures its share once per instance and packs
-it into the instance's ladder value; the cards and shells give up that share of their pixels by a
-second noise (`ladder_fade_noise`, interleaved gradient noise), which the impostor keeps; an
-instance its impostor has taken whole draws nothing. Central steps of 3 sRGB levels or more on the
-walk in: 24 → 5, of 5 or more: 5 → 0. Cost (`docs/PROFILE.md`): +0.07 ms from the air, nothing on
-the main street. Moving each fade below its crossing instead (the shells drawn farther) cost
-+0.25 ms from the air and +0.12 ms on the street.
+cards' crossing ended (all of it for the 23 smallest, whose shells come in at 13–29 px). Now the fade runs
+on its own band beside the crossing (`ladder_fade_after`): the cull measures its share once per
+instance and packs it into the instance's ladder value; the cards and shells give up that share of
+their pixels by a second noise (`ladder_fade_noise`, interleaved gradient noise), which the
+impostor keeps; an instance its impostor has taken whole draws nothing. A step's fade is also held
+to the size of the crossing into it (`meshlet::step_after`, the impostors' per instance): at 40 px
+the shrubs by the main street went to their impostors, softer and greyer in the shade than their
+cards (the map check's main view ꟻLIP 0.0074, 0.0032 held). Central steps of 3 sRGB levels or
+more on the walk in: 24 → 5, of 5 or more: 5 → 0. Cost (`docs/PROFILE.md`): +0.02 ms from the
+air, +0.07 ms on the main street. Moving each fade below the end of its crossing instead (the
+shells drawn farther) lengthened the meshlet pass from the air by 0.24 ms.
 
 *(research: forests-and-grass.md, vegetation-materials.md, flora.md; D-013, D-016, D-029, D-036,
 D-053, D-063; issues #297, #300, #301, #302, #303)*
