@@ -5,7 +5,7 @@
 //! all four.
 
 use forge_app::Context;
-use forge_app::settings::{Settings, Spec, Var};
+use forge_app::settings::{Settings, Source, Spec, Var};
 use forge_render::CullFlags;
 use forge_render::exposure::NO_NIGHT_FLOOR;
 use forge_render::settings::{self as rs, AA_DLAA, AA_DLSS, AA_FSR, AA_OFF};
@@ -180,15 +180,24 @@ impl Gallery {
                 now,
             )
         });
+        // The scene's own curve (`Look::tonemap`) where the flag, the files and `--set` name
+        // none: set as the program's, so the console says where it came from.
+        let tonemap = s.add_from(
+            rs::tonemap(Tonemap::AgXPunchy),
+            rs::tonemap_index(Tonemap::AgXPunchy),
+            rs::tonemap_index(self.tonemap),
+        );
+        if let Some(curve) = self.look_tonemap
+            && s.source(tonemap) == Source::Default
+        {
+            s.set_by(tonemap, rs::tonemap_index(curve), Source::Code);
+            self.tonemap = curve;
+        }
         self.vars = Some(RenderVars {
             aa: s.add_from(rs::aa(aa_default), aa_default, aa_now),
             fsr_sharpen: s.add(rs::fsr_sharpen(rs::FSR_SHARPEN)),
             fsr_sharpness: s.add(rs::fsr_sharpness(rs::FSR_SHARPNESS)),
-            tonemap: s.add_from(
-                rs::tonemap(Tonemap::AgXPunchy),
-                rs::tonemap_index(Tonemap::AgXPunchy),
-                rs::tonemap_index(self.tonemap),
-            ),
+            tonemap,
             bloom: s.add_from(rs::bloom(true), true, self.bloom_on),
             bloom_strength: s.add_from_f32(rs::bloom_strength(0.04), 0.04, self.taa.bloom_strength),
             local: s.add_from(rs::local_exposure(0), 0, local_now),

@@ -863,8 +863,9 @@ struct Gallery {
     /// follows a mirror's surface, and moving sideways it dragged the water's reflections at the
     /// surface's speed (the owner, 2026-10-28).
     reflection_motion: bool,
-    /// The shadows' sun over the real one's size (D-049: softer where a denoiser smooths them,
-    /// `--sun-size`); the Moon's at night scales with it.
+    /// The shadows' sun over the real one's size (D-049: softer where a denoiser smooths them;
+    /// an environment map's photograph's, D-084; `--sun-size`); the Moon's at night scales with
+    /// it.
     sun_scale: f32,
     /// The shaded sides lit by the sky's irradiance (issue #47); else the old constant fill.
     sky_light: bool,
@@ -959,6 +960,8 @@ struct Gallery {
     local_settings: LocalExposureSettings,
     /// The scene's look meters the exposure ([`Look::metered`]).
     look_metered: bool,
+    /// The scene's own tone curve ([`Look::tonemap`]), where no flag, file or `--set` names one.
+    look_tonemap: Option<Tonemap>,
     /// Seconds the last update advanced.
     step: f32,
     tonemap: Tonemap,
@@ -2047,7 +2050,10 @@ impl Gallery {
             cell_check,
             restir,
             kept_lamps: Vec::new(),
-            tonemap: args.tonemap.or(look.tonemap).unwrap_or(Tonemap::AgXPunchy),
+            // The look's curve waits for the console's variable (`register_vars`), under which
+            // `--set` and the files win over it.
+            tonemap: args.tonemap.unwrap_or(Tonemap::AgXPunchy),
+            look_tonemap: look.tonemap,
             args,
             renderer,
             taa,

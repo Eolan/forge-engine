@@ -2331,7 +2331,7 @@ it: the archive's HDR photograph, `san_giuseppe_bridge_4k.hdr` (4096 × 2048, HD
   of Forge's default's cells (AgX punchy) are dark against the reference's 22 %, with a luma
   spread of 54 against 65; plain AgX 4 % and 48. ACES (Hill's fit) gives 20 % and 62, Khronos
   Neutral 21 % and 65. Most of the "darker shadows, warmer colours" was the curve. The Bistro's
-  look takes ACES (the owner, 2026-10-29); `--tonemap` overrides it.
+  look takes ACES (the owner, 2026-10-29); `--tonemap` and `r.tonemap` override it.
 - **The exposure:** `--ev100 11.8` under ACES (11.4 under AgX punchy) matches the picture's
   mean. Fixed exposure ignores `--exposure-compensation`.
 - **Close:** the light's direction, the sky, the overall level and contrast, the cobbles

@@ -8080,8 +8080,8 @@ use the bistro technology indeed").
   angle, weighed by their light, never under the real sun's); under ACES the two come close
   (`docs/demos/physics-lab.md`, `bistro`).
 - **The owner's choice (2026-10-29):** the Bistro takes ACES (a scene's look may now pick its
-  tone curve, `Look::tonemap`; `--tonemap` overrides it) and keeps the photograph's sun, to see
-  how close Forge comes to the authors' renders.
+  tone curve, `Look::tonemap`; `--tonemap` and `r.tonemap` override it) and keeps the
+  photograph's sun, to see how close Forge comes to the authors' renders.
 
 **Not yet:**
 - Sharp mirrors see the sky through the table (about a degree a texel).
