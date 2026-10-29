@@ -6668,13 +6668,15 @@ impl Scenario for PlanScenario {
             }
         };
         // The kit's render and stone, projected: concrete's relief, faint, under the tint (its
-        // colour map's pits read as stains on a render).
+        // colour map's pits read as stains on a render). At 0.25 a noon sun grazing a wall raised
+        // it into a speckled patch the neighbour's shadow cut off, which read as another texture
+        // (the owner's walk, #363): 0.12.
         let [_, grain_normal] = textures::concrete(23, 512);
         let grain = materials.textures.add(&grain_normal)?;
         let render = |rgb: [f32; 3]| RenderLayer {
             normal_texture: Some(grain),
             texture_scale: 2.0,
-            normal_strength: 0.25,
+            normal_strength: 0.12,
             hex_tiling: true,
             ..colour(rgb, 10.0, 0.03)
         };

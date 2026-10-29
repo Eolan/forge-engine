@@ -740,6 +740,12 @@ anomalies down to 11 (20 → 3, 33 → 3, 24 → 5).
   600 m lot 50 takes lot 52's 0.6 m sliver and the V goes (sharp corners 2 → 1); the other sizes
   are unchanged. The garden plants are laid again round it, so a shrub outside the map check's
   room window moved.
+- **The render's relief (2026-10-29, #363):** the owner's walk found a triangle on a house's face
+  unlike the rest of it (`--view=-32.16,6.74,-83.17,94.5,-12.7`): the sunlit part of the wall,
+  where a noon sun grazing it raised the render's concrete grain into speckles, cut off by the
+  neighbour's shadow. The grain's normal strength went 0.25 → 0.12 on the owner's word: the
+  speckle fades and the patch with it. The map check moved by ꟻLIP means under 0.007 (the vault
+  view's wall caps), accepted.
 
 The 600 m village changed in two places, accepted in the map check: a corner house that stopped a
 quarter metre short of its lot's corner (a walled slit) reaches it, its rooms laid again (the
