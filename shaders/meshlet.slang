@@ -3161,6 +3161,9 @@ GrassHit grass_hit(Frame* f, uint vis, uint2 pixel, float2 size)
     return h;
 }
 
+// The cut-outs' alpha test's mip bias (`cutout_kept`): one level finer than the colour's.
+static const float CUTOUT_MIP_BIAS = -1.0;
+
 // Whether a fragment of the cut-outs' raster stays (#171): a single-sided row's back faces go
 // (the cut-outs' pipeline culls no face), and a cut-out row's pixels whose base colour alpha,
 // the factor's times its map's at the pixel's UV, falls under its cutoff; and the windowed
@@ -3208,11 +3211,16 @@ bool cutout_kept(Frame* f, uint id, float2 uv, bool front, float2 ground, float2
         float noise = spatio_temporal_noise(pixel, f[0].noise_frame).y;
         return cover > lerp(0.5, noise, saturate(2.0 - duty / max(footprint, 1e-6)));
     }
+    // A mip finer than the colour's: a leaf card a few pixels across took a level whose alpha,
+    // filtered, fell under the cutoff for most of a sparse crown's leaves, whatever their
+    // coverage-preserving scale, and the young holm oaks 200 m off kept 2–5 % of their pixels
+    // in their dark cores' shade (55–63 % one level finer, as supersampled and as their shells,
+    // #363).
     float alpha = mat.alpha;
     if (mat.albedo_texture != TEXTURE_NONE)
     {
         float2 t = float2(dot(mat.uv_u, float3(uv, 1.0)), dot(mat.uv_v, float3(uv, 1.0)));
-        alpha *= g_sampled_images[NonUniformResourceIndex(mat.albedo_texture)].Sample(g_samplers[NonUniformResourceIndex(mat.sampler)], t).a;
+        alpha *= g_sampled_images[NonUniformResourceIndex(mat.albedo_texture)].SampleBias(g_samplers[NonUniformResourceIndex(mat.sampler)], t, CUTOUT_MIP_BIAS).a;
     }
     return alpha >= mat.alpha_cutoff;
 }

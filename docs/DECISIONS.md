@@ -7246,6 +7246,18 @@ the device has them (`MeshletSceneBuilder::set_opacity_micromaps`, city-blocks' 
 - **Measured** (`docs/PROFILE.md`): the sun's rays (`shadow/trace`) 10–21 % cheaper, the frame
   0.05–0.13 ms faster in five views of the village.
 
+**The cards' alpha test one mip finer (2026-10-29, #363).** The owner saw trees lose their
+leaves at one distance on the way in, fine nearer and farther. The young holm oaks of the park,
+200 m off from the air, kept 2–5 % of their pixels on their cards (their dark cores' shade
+through them), against 61–73 % as their shells and impostor; supersampled 2 × 2 or drawn at
+3200 × 1800, the same cards were full and bright. The cut-outs' alpha test (`cutout_kept`) now
+samples one level finer than the colour (`CUTOUT_MIP_BIAS`): 55–63 % (mip 0 the same), so a
+crown no longer thins as it hands over to its cards. On the walk in from the start at noon the
+far woods' cards came within 2.2 of their impostors' green (8.3 before, sRGB means, all pixels)
+and the pops the full-detail reference does not have fell 13 %; a still camera's frame-to-frame
+change grew from 956 to 1003 pixels from the air and 398 to 474 at the green (3 codes); the
+map check's foliage moved by ꟻLIP means up to 0.017 and was accepted.
+
 *(research: forests-and-grass.md, vegetation-materials.md, flora.md; D-013, D-016, D-029, D-036,
 D-053, D-063; issues #297, #300, #301, #302, #303)*
 
