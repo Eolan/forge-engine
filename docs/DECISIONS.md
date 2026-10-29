@@ -8114,3 +8114,66 @@ whatever the metal. The Bistro's lamp post, a dark rough metal (reflectance 8.5 
 **Not yet:** the light round the post looked about 1.4 times Falcor's, measured before the
 Neutral curve's black offset was undone: to measure again. The highlight is still Blinn-Phong,
 untinted, and without the light's cosine.
+
+## D-086 — Forge's surface model, measured against Falcor: a microfacet BRDF for every light 🟡 (proposed, 2026-10-30)
+
+**Why:** the owner asked how Forge knows it is accurate ("sometimes I find sun light reflection
+to be too bright, losing the details of what the light is reflecting off"). Until Falcor, by
+eye: the resolve's lighting is still Phase 0's model. The material test chart (`--lab chart`,
+D-083 step 2) now measures it, Forge's `--capture-linear` against Falcor's EXR of the same file
+under six skies (`docs/demos/physics-lab.md`, `chart`). Forge over Falcor, sun at 30° from the
+side:
+
+| | smooth (0.05) | rough (1) |
+|---|---|---|
+| grey dielectric | 0.90 | 1.47 |
+| red dielectric | 0.79 | 1.69 |
+| silver metal | 0.21 | 5.7 |
+| gold metal | 0.28 (untinted) | 6.8 (untinted) |
+
+The white tile 1.49, the 18 % tile and the ground 1.81. With Falcor's diffuse switched to
+Lambert (a local define): the white tile 1.03, the grey spheres 0.86 to 1.02, the dark tiles
+1.27. Falcor at 16 bounces instead of 3: no change on the chart.
+
+**What the numbers say:**
+1. **Diffuse:** Falcor's is Frostbite's renormalised Disney model (darker with roughness, to
+   1 / 1.51), Forge's Lambert. A choice, not an error: either can be right for the look.
+2. **A dielectric's sun highlight** weighs a fixed 0.05 with no Fresnel and no n·l: at roughness
+   1 its lobe is flat, so it adds 5 % of the sun everywhere (dark rough surfaces +27 %), and at
+   a low sun the glare towards the light is too weak.
+3. **Metals:** untinted (gold renders silver); a smooth metal's sun glint is missing (D-085's
+   cap); a rough metal behaves as a white diffuse. Falcor's single-scatter GGX loses most of a
+   rough metal's light, which a real one does not: neither is right at roughness 1.
+4. **Normal maps in BC5** (the Bistro's): read as (x, y, 1), Toksvig never widens their
+   highlights and their slopes are flattened (45° reads 35°): highlights too sharp and bright
+   where the mips average the bumps away (the owner's "sometimes").
+
+**The proposal:**
+- **One specular model for the sun, the lamps and the environment:** GGX (Trowbridge-Reitz)
+  with height-correlated Smith visibility and Schlick's Fresnel, F0 from the base colour for
+  metals (tinted) and 0.04 for dielectrics; the sun as a disc, its angular size bounding the
+  glint (no cap). Rough reflections of the sky and the probes by the split-sum's DFG table
+  (Karis 2013); mirror rays below roughness 0.42 as now.
+- **Multiple-scattering compensation** for GGX (Kulla and Conty 2017, or Fdez-Agüera 2019): a
+  small table, rough metals keeping their light. The chart then compares against Falcor with
+  the compensation off (Falcor has none) and documents the difference.
+- **Diffuse:** keep Lambert or take Frostbite's (the owner's choice, by the chart and the
+  Bistro side by side). Frostbite's matches the reference; Lambert keeps Forge's look.
+- **BC5 normals:** transcoded at load to BC7 with mips averaged from the unit normals (their
+  length kept, so Toksvig works as for RGB maps), cached on disk; no resolve change. A crate
+  for BC7 encoding (MIT) to choose.
+- **Debug views** of each shading input (base colour, roughness, metalness, normal, Toksvig
+  variance, F0), and a GPU test per normal-map format (a bumpy map's coarse mip has variance).
+
+**Cost:** the resolve's shading grows (GGX and the DFG table instead of Blinn-Phong): to be
+measured on the Bistro and the village; the #355 guard (ast240, the lab's creatures) after each
+change. One theme, several commits, each checked on the chart.
+
+**Patents:** GGX, Smith, Schlick, the split sum and Frostbite's diffuse are published without
+known patents; Kulla-Conty's and Fdez-Agüera's compensation and a BC7 encoder to be checked
+before building (the owner's rule).
+
+**Also measured, not part of this:** the light in shade, under awnings and along fronts, is 1.2
+to 1.9 times Falcor's in the Bistro once the diffuse model is matched (Lambert, 16 bounces).
+Ruled out: the probes' spacing (1 m changes nothing), the bounces, the materials (clay renders
+show it). A separate investigation of the probes' irradiance near occluders.
