@@ -140,6 +140,16 @@ impl Emission {
         outer_cos: 0.087,
     };
 
+    /// A lantern under a metal cap, glazed round its sides: all of its light below and up to 30°
+    /// above the horizon, none straight up (D-087, the Bistro's street lanterns). Its upright
+    /// panes send the cosine of the elevation: 0.87 at 30°, 0.71 at 45° (here 0.62), 0.5 at 60°
+    /// (0.18).
+    pub const LANTERN: Emission = Emission::Cone {
+        axis: Vec3::NEG_Y,
+        inner_cos: -0.5,
+        outer_cos: -1.0,
+    };
+
     /// A light flush with a ceiling or a wall facing `axis` (a dome, a diffuser): none behind its
     /// mount, its intensity falling from the axis to nothing at 90°, near a diffuser's cosine
     /// (the smooth step from 0 to 1 is 0.5 at 60°, where the cosine is too). It sends a quarter

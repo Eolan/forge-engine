@@ -456,6 +456,12 @@ pub(super) fn lamps_on() -> bool {
 
 /// Under this luminance, cd/m², a glowing piece is too dim to light anything worth a lamp.
 const LEAST_GLOW: f32 = 1.0;
+/// A closed glowing piece seen from above under this share of its area seen from round the
+/// horizon, and from below under `LANTERN_DOWN`'s, is a lantern ([`Emission::LANTERN`]): the
+/// Bistro's street lanterns, 0 and 0.32; its bulbs and globes 0.84 to 1.1.
+const LANTERN_UP: f32 = 0.25;
+/// See [`LANTERN_UP`].
+const LANTERN_DOWN: f32 = 0.6;
 /// Under this share of its area its normals' sum keeps, a glowing piece shines every way (a bulb,
 /// a lantern's panes); over it, it is flat and shines forward (a sign, a spotlight's glass).
 const FLAT_PIECE: f32 = 0.5;
@@ -473,6 +479,23 @@ struct Glow {
     low: Vec3,
     high: Vec3,
     outward: f32,
+    beams: [f32; BEAMS],
+}
+
+/// The directions a glowing piece's light is measured in (`Glow::beams`): up, down, then eight
+/// round the horizon.
+const BEAMS: usize = 10;
+
+/// The unit direction of `Glow::beams`' entry `k`.
+fn beam_direction(k: usize) -> Vec3 {
+    match k {
+        0 => Vec3::Y,
+        1 => Vec3::NEG_Y,
+        _ => {
+            let a = (k - 2) as f32 * std::f32::consts::FRAC_PI_4;
+            Vec3::new(a.cos(), 0.0, a.sin())
+        }
+    }
 }
 
 /// The scene's glowing pieces (`Glow`), every emissive material's on every mesh: its map read at
@@ -586,6 +609,9 @@ fn glows(which: Authored) -> Vec<(String, Glow)> {
                 g.low = g.low.min(p[0].min(p[1]).min(p[2]));
                 g.high = g.high.max(p[0].max(p[1]).max(p[2]));
                 g.area += area;
+                for (k, b) in g.beams.iter_mut().enumerate() {
+                    *b += 0.5 * cross.dot(beam_direction(k)).max(0.0);
+                }
                 g.middle += (p[0] + p[1] + p[2]) / 3.0 * area;
                 g.normal += 0.5 * cross;
                 g.luminance += sum / count as f32 * area;
@@ -638,11 +664,23 @@ fn glow_lamp(g: &Glow) -> Option<Lamp> {
         return None;
     }
     let pi = std::f32::consts::PI;
+    // Its glass's area seen from round the horizon, and the shares of it seen from above and
+    // below.
+    let side = g.beams[2..].iter().sum::<f32>() / 8.0;
+    let (up, down) = (g.beams[0] / side.max(1e-9), g.beams[1] / side.max(1e-9));
     let (candela, radius, emission) = if flat {
         (
             luminance * g.area,
             (g.area / pi).sqrt(),
             Emission::flush(g.normal),
+        )
+    } else if up < LANTERN_UP && down < LANTERN_DOWN {
+        // A lantern: glass round its sides under a metal cap, no light straight up
+        // (`Emission::LANTERN`); lit every way, it lit what it hangs from (D-087).
+        (
+            luminance * side,
+            (g.area / (4.0 * pi)).sqrt(),
+            Emission::LANTERN,
         )
     } else {
         (
@@ -752,8 +790,9 @@ mod tests {
             e.4 += g.luminance.dot(luma) * g.area;
             if std::env::var("FORGE_GLOW_PIECES").is_ok() {
                 let size = g.high - g.low;
+                let side = g.beams[2..].iter().sum::<f32>() / 8.0;
                 println!(
-                    "  {name} at {:.2} {:.2} {:.2}: {:.3} m², {:.2} x {:.2} x {:.2} m, closed {:.2}, outward {:.2}",
+                    "  {name} at {:.2} {:.2} {:.2}: {:.3} m², {:.2} x {:.2} x {:.2} m, closed {:.2}, outward {:.2}, up {:.2} down {:.2} of the side's",
                     g.middle.x,
                     g.middle.y,
                     g.middle.z,
@@ -762,7 +801,9 @@ mod tests {
                     size.y,
                     size.z,
                     1.0 - g.normal.length() / g.area,
-                    g.outward
+                    g.outward,
+                    g.beams[0] / side.max(1e-9),
+                    g.beams[1] / side.max(1e-9)
                 );
             }
         }

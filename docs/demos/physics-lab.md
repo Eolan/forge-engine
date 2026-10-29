@@ -2378,26 +2378,33 @@ it: the archive's HDR photograph, `san_giuseppe_bridge_4k.hdr` (4096 × 2048, HD
 
 **The night's glowing pieces as lamps** (D-087's prototype, `FORGE_BISTRO_LAMPS=1`, off by
 default): each emissive section cut into its connected pieces (corners welded within a
-millimetre): 160 pieces, 132 lamps. A closed piece (a bulb, a lantern's glass) lights every way,
-a quarter of luminance × area candelas, a sphere of its area; a flat one (a sign, a spotlight's
-glass) forward, luminance × area along its normal (`Emission::flush`). The colour is the
-emissive map's mean over the piece, read at about a point a texel, as the lamp's tint. A
-lantern's inner shell faces in and is left out: Falcor's emitters shine from their front alone.
-Their rows take `RenderLayer::lamp`, so the probes' rays leave their glow out. 139,000 lm in all,
-made in 60 ms. At the Night view (`--time-of-day 1.5 --ev100 2.22 --fixed-exposure`, linear,
-Forge over Falcor on a 16 × 9 grid):
+millimetre): 160 pieces, 132 lamps. A bulb or a globe lights every way, a quarter of luminance ×
+area candelas, a sphere of its area; a flat piece (a sign, a spotlight's glass) forward,
+luminance × area along its normal (`Emission::flush`); a street lantern, its glass round its
+sides (seen from above 0, from below 0.32 of its side's area), luminance × its side's area to
+30° above the horizon and none straight up (`Emission::LANTERN`). The colour is the emissive
+map's mean over the piece, read at about a point a texel, as the lamp's tint. A lantern's inner
+shell faces in and is left out: Falcor's emitters shine from their front alone. Their rows take
+`RenderLayer::lamp`, so the probes' rays leave their glow out. 149,000 lm in all, made in 60 ms.
+At the Night view (`--time-of-day 1.5 --ev100 2.22 --fixed-exposure`, linear, Forge over Falcor
+on a 16 × 9 grid):
 - **Light:** without them, 0.04–0.3 on the lit fronts and the street. With the 64 nearest (the
-  default choice), 0.7–1.3 in the middle, the street 0.7–0.9; the far left street stays dark,
-  its lamps past the 64. With `--all-lamps` (132), the street 0.87–0.97, the left 0.5–1.0.
-- **Still:** a still camera's frames 10 apart differ on 4,230 pixels (0.29 %), against 261,857
-  (18 %) before; the same without the probes or the mirror rays, so it is the resolve's own lamp
-  light and the thin geometry, as by day (0.37 %).
+  default choice; every lamp lighting every way), 0.7–1.3 in the middle, the street 0.7–0.9, the
+  far left street dark past the 64. With `--all-lamps` (132) and the lanterns' cone: the street
+  0.97–1.08, the upper fronts 1.0–1.4, the café's front 1.15–1.5.
+- **Still:** a still camera's frames 10 apart differ on 4,230 pixels (0.29 %) with the 64,
+  6,217 (0.43 %) with all, against 261,857 (18 %) before. The same without the probes or the
+  mirror rays: the resolve's choice of the lamps it traces, and the thin geometry (0.37 % by
+  day).
 - **Cost:** 4.1 ms of GPU at midnight without them; 8.6 ms with the 64 nearest (lamp rays 2.2,
-  lamp filter 1.1, the resolve +0.9); 11.1 ms with all (lamp rays 3.3). Each lamp has no
+  lamp filter 1.1, the resolve +0.9); 11.2 ms with all (lamp rays 3.3). Each lamp has no
   region and reaches 27 to 70 m, so every pixel takes most of them.
-- **Not yet:** a hanging lantern lights the frame over it and the flowers by it 1.5 to 3 times
-  Falcor's (a closed piece lights every way, where its cap and floor are metal); the string
-  lights' colours glow less on the fronts; the scooter's paint is less glossy.
+- **Not Forge's to match:** the beam over the flower basket and the basket's leaves, 1.5 to 3.6
+  times Falcor's: Falcor draws a material one-sided unless its name says `.DoubleSided` and
+  shades a back face black; Forge draws the awnings' beams (an "Awning" sheet) and cut-out
+  leaves from both sides. NVIDIA's own Night picture leaves the basket out of its frame.
+- **Not yet:** the string lights' colours glow less on the fronts; the scooter's paint is less
+  glossy.
 
 **Not yet:**
 - **NVIDIA's other views:** Exterior_2.
