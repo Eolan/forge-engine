@@ -447,6 +447,10 @@ pub struct ImpostorBaker {
     /// How many kinds were found in the cache, how many baked.
     found: usize,
     baked: usize,
+    /// How many kinds it was given, and what the loading screen says meanwhile
+    /// (`forge_core::activity`): the kinds handed back of those, from the first poll to the last.
+    total: usize,
+    task: Option<forge_core::activity::Task>,
 }
 
 impl ImpostorBaker {
@@ -486,8 +490,10 @@ impl ImpostorBaker {
                 let key = bake_key(&source);
                 (name, source, key)
             })
-            .collect();
+            .collect::<Vec<_>>();
         Ok(Self {
+            total: queue.len(),
+            task: None,
             tools: BakeTools {
                 renderer: MeshletRenderer::for_bake(device, shaders, extent)?,
                 render: bake_image(device, "impostor render", RENDER_TEXELS, 1, WORK_FORMATS[0])?,
@@ -569,6 +575,14 @@ impl ImpostorBaker {
                 self.baked += 1;
             }
             self.current = Some((name, ImpostorBake::new(device, &source, key, cached)?));
+        }
+        if self.is_done() {
+            self.task = None;
+        } else {
+            let left = self.queue.len() + usize::from(self.current.is_some());
+            self.task
+                .get_or_insert_with(|| forge_core::activity::begin("impostors", "baking impostors"))
+                .progress((self.total - left) as u64, self.total as u64);
         }
         Ok(finished)
     }

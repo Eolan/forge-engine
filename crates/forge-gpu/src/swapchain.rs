@@ -92,6 +92,8 @@ pub struct Swapchain {
     format: vk::Format,
     extent: vk::Extent2D,
     pacing: Pacing,
+    /// [`Pacing::Smooth`] presented uncapped for now ([`Self::set_uncapped_for_now`]).
+    uncapped_for_now: bool,
     /// The mode asked for, and the one the surface gave.
     requested: SurfaceMode,
     mode: SurfaceMode,
@@ -116,11 +118,22 @@ impl Swapchain {
             format: vk::Format::UNDEFINED,
             extent: vk::Extent2D::default(),
             pacing,
+            uncapped_for_now: false,
             requested: SurfaceMode::Sdr,
             mode: SurfaceMode::Sdr,
         };
         this.recreate(width, height)?;
         Ok(this)
+    }
+
+    /// Presents [`Pacing::Smooth`] uncapped while `on`: frames whose pace nobody watches (a
+    /// loading screen over a demo's bakes, a frame of one each app frame) need not wait for the
+    /// display's refresh. Takes effect at the next [`Self::recreate`]; returns whether it
+    /// changes the present mode, so that the caller recreates the swapchain.
+    pub fn set_uncapped_for_now(&mut self, on: bool) -> bool {
+        let changed = self.uncapped_for_now != on && self.pacing == Pacing::Smooth;
+        self.uncapped_for_now = on;
+        changed
     }
 
     /// The modes the surface offers (SDR always).
@@ -217,10 +230,14 @@ impl Swapchain {
             _ => None,
         }
         .filter(|mode| modes.contains(mode));
-        let uncapped = self.pacing == Pacing::Uncapped;
+        let pacing = match self.pacing {
+            Pacing::Smooth if self.uncapped_for_now => Pacing::Uncapped,
+            pacing => pacing,
+        };
+        let uncapped = pacing == Pacing::Uncapped;
         let present_mode = if let Some(mode) = forced {
             mode
-        } else if self.pacing == Pacing::Vsync {
+        } else if pacing == Pacing::Vsync {
             vk::PresentModeKHR::FIFO
         } else if uncapped
             && instance.through_streamline()

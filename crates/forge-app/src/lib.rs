@@ -189,7 +189,8 @@ pub struct Context {
     pub loading: bool,
     /// The demo's own preparation on the GPU once started (an impostor's bake, D-075 step 4):
     /// while the demo sets it, its frames do not count (`frames_rendered`, captures, the frame
-    /// limit, the profile), so a scripted run waits for it; they are drawn as usual.
+    /// limit, the profile), so a scripted run waits for it; they are drawn as usual, under the
+    /// loading screen in an interactive run started with [`run_loading`].
     pub preparing: bool,
     /// The console variables and commands (D-069): the shell's (`r.display_info`, `app.`), the
     /// renderer's and the demo's, registered in [`Demo::register`] and read every frame.
@@ -674,7 +675,8 @@ struct State<D: Demo> {
     last_hdr_cycle: u64,
     /// `FORGE_LOADING_CAPTURE=path`: one loading frame captured there, `FORGE_LOADING_CAPTURE_AT`
     /// seconds (2 by default) after the shell started, to check what the loading screen says;
-    /// taken once.
+    /// taken once, by a frame the demo prepares in ([`Context::preparing`]) if the loading is
+    /// over by then.
     loading_capture: Option<(PathBuf, Instant)>,
     overlay: Overlay,
     /// The preview, the content-light meter and the calibration pages.
@@ -1638,6 +1640,24 @@ impl<D: Demo> State<D> {
             self.last_hdr_cycle = self.ctx.frames_rendered;
             self.toggle_hdr()?;
         }
+        // The demo's preparation on the GPU (`Context::preparing`: its impostors' bakes, about
+        // 130 frames a kind) presented uncapped: at the display's refresh the village's 81 kinds
+        // took about 85 s behind the screen (2026-10-29). Smooth again once it is over. The
+        // same size, so the demo's targets stay, unless the window changed meanwhile.
+        if self.ctx.swapchain.set_uncapped_for_now(self.ctx.preparing) {
+            if self.needs_resize.is_some() {
+                self.stale_swapchain = true;
+            } else {
+                let before = self.ctx.swapchain.extent();
+                self.ctx.swapchain.recreate(before.width, before.height)?;
+                self.ctx
+                    .frames
+                    .resize_swapchain(self.ctx.swapchain.image_count())?;
+                if self.ctx.swapchain.extent() != before {
+                    self.demo.resized(&mut self.ctx)?;
+                }
+            }
+        }
         if let Some(size) = self.needs_resize.take() {
             if size.width == 0 || size.height == 0 {
                 self.needs_resize = Some(size);
@@ -1868,11 +1888,10 @@ impl<D: Demo> State<D> {
         let extent = self.ctx.swapchain.extent();
         let frame_number = self.ctx.frames_rendered;
         let capture_path = match &self.config.capture {
-            _ if self.ctx.loading => self
+            _ if self.ctx.loading || self.ctx.preparing => self
                 .loading_capture
                 .take_if(|(_, at)| Instant::now() >= *at)
                 .map(|(path, _)| path),
-            _ if self.ctx.preparing => None,
             Some((path, frame)) if *frame == frame_number => Some(path.clone()),
             Some((path, _))
                 if self
@@ -2103,8 +2122,10 @@ impl<D: Demo> State<D> {
             // What a bound key did, a few seconds at the bottom (D-069).
             let now = Instant::now();
             let notices = !console && !self.ctx.loading && self.console.has_notices(now);
-            // Over the loading screen: what the engine is busy with (`forge_core::activity`).
-            let loading = self.ctx.loading;
+            // Over the loading screen: what the engine is busy with (`forge_core::activity`), and
+            // over the frames the demo prepares in (`Context::preparing`: black, under the screen
+            // in an interactive run), its impostors' bakes counted.
+            let loading = self.ctx.loading || self.ctx.preparing;
             if calibrating || profiling || console || notices || loading {
                 if !calibrating && self.ctx.output.is_hdr() {
                     self.ctx.profile.counter(self.ctx.output.describe());

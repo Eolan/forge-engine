@@ -2477,7 +2477,8 @@ impl Demo for Gallery {
         // The bloom's share at the hour (the night as the last frame left it).
         let bloom_share = self.taa.bloom_strength * self.night_bloom();
         // The impostors' bakes (D-075 step 4) before the scene is drawn: a frame of each bake a
-        // frame (`Context::preparing`: they do not count), the screen black; each bake's
+        // frame (`Context::preparing`: they do not count), the screen black (an interactive
+        // run's loading screen over it, counting the kinds handed back); each bake's
         // atlases written with `--impostor-bake`, then the impostors made of them.
         if let Some(baker) = self.impostor_baker.as_mut() {
             if let Some((name, bake)) = baker.poll(&ctx.device)? {

@@ -441,9 +441,13 @@ impl<D: Demo + Send> Demo for Stage<D> {
                 shown,
                 linger,
             } => {
-                // The demo's frame, under the screen while it settles (#342).
+                // The demo's frame, under the screen while it settles (#342), and as long as it
+                // prepares on the GPU (`Context::preparing`: its impostors' bakes, black frames
+                // the screen covers, counting them with the tasks it lists).
                 demo.render(ctx, frame)?;
-                if *shown > 0 {
+                if ctx.preparing {
+                    draw_screen(ctx, frame, pipeline, *started, progress);
+                } else if *shown > 0 {
                     *shown -= 1;
                     draw_screen(ctx, frame, pipeline, *started, progress);
                 } else {

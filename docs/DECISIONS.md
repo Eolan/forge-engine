@@ -7049,7 +7049,8 @@ DIR` writes the atlases as images (`forge_render::impostor`, `shaders/impostor.s
 - **The bake, before the run's first counted frame:** one kind for each species and age class
   (the age's last seed; the village's 27), one after another, a frame of a bake each app frame.
   Meanwhile the app counts no frame (`Context::preparing`: captures, frame limits and the run's
-  clock wait, the screen black), so a capture is the same whatever the bake took: 1.4 s for the
+  clock wait, the screen black; since 2026-10-29 an interactive run's loading screen covers it,
+  saying "Baking impostors n/N"), so a capture is the same whatever the bake took: 1.4 s for the
   27. Kept in D-053's derived cache (`impostor-blocks`, every level's blocks as drawn, 12 MB on
   disk for the 27), keyed by the cooked mesh, its rows, its textures' inputs and the code that
   bakes (`crates/forge-render/build.rs`: the bake and its encoder, the resolve, the materials,
