@@ -464,7 +464,8 @@ const TIP_TAKER: f64 = 75.0;
 /// V's point goes to the garden outside it. At a T, one of the two running on through the point
 /// in line with a third wall or a hedge, only the other is cut short, the line kept whole: the
 /// point goes to the garden across the slanting wall, whose corner on the line keeps
-/// [`TIP_TAKER`].
+/// [`TIP_TAKER`]. A street wall is never cut short: where it slants, the line is, and the point
+/// goes to the garden across the line.
 fn chamfer_sharp_corners(
     walls: &mut Vec<Wall>,
     hedges: &[(DVec2, DVec2)],
@@ -545,30 +546,46 @@ fn chamfer_sharp_corners(
                             }
                         })
                 };
-                let (line, line_dir, slant, slant_at_a, slant_dir) = if continues(u) {
-                    (i, u, j, o_at_a, t)
+                let (line, line_at_a, line_dir, slant, slant_at_a, slant_dir) = if continues(u) {
+                    (i, w_at_a, u, j, o_at_a, t)
                 } else if continues(t) {
-                    (j, t, i, w_at_a, u)
+                    (j, o_at_a, t, i, w_at_a, u)
                 } else {
                     continue;
                 };
-                // A street wall slanting: cut short, it would open a nook of the street and drop
-                // its height to a party wall's (a review of 67d39d08).
-                if walls[slant].inside.is_some() {
+                // A street wall slanting stays whole: cut short, it would open a nook of the
+                // street and drop its height to a party wall's (a review of 67d39d08). The line
+                // is cut short instead and closed onto the street wall, the point going to the
+                // garden across the line, whose corner there is nearly flat (the joints had
+                // trimmed the line clear of the street wall, a V of grass between them, 900 m).
+                let street = walls[slant].inside.is_some();
+                if street && walls[line].inside.is_some() {
                     continue;
                 }
                 let theta = cos.clamp(-1.0, 1.0).acos().max(1e-3);
                 let pi = std::f64::consts::PI;
-                // The triangle cut off: its corner on the line (the taker's) and on the slant.
-                let at_line = ((pi - theta) * 0.5).max(TIP_TAKER.to_radians());
-                let at_slant = pi - theta - at_line;
-                if at_slant <= 0.0 {
+                // The triangle cut off: its corner on the wall kept (the taker's) and on the wall
+                // cut short.
+                let taker = ((pi - theta) * 0.5).max(TIP_TAKER.to_radians());
+                let (at_line, at_slant) = if street {
+                    (pi - theta - taker, taker)
+                } else {
+                    (taker, pi - theta - taker)
+                };
+                if at_line.min(at_slant) <= 0.0 {
                     continue;
                 }
                 let along_line = CHAMFER * at_slant.sin() / theta.sin();
                 let along_slant = CHAMFER * at_line.sin() / theta.sin();
-                if along_line > 0.9 * walls[line].length()
-                    || along_slant > 0.45 * walls[slant].length()
+                // The wall cut short keeps some of its length, the other the cut's end.
+                let (cut_share, kept_share) = if street { (0.9, 0.9) } else { (0.45, 0.9) };
+                let (cut, kept, cut_along, kept_along) = if street {
+                    (line, slant, along_line, along_slant)
+                } else {
+                    (slant, line, along_slant, along_line)
+                };
+                if cut_along > cut_share * walls[cut].length()
+                    || kept_along > kept_share * walls[kept].length()
                 {
                     continue;
                 }
@@ -576,23 +593,29 @@ fn chamfer_sharp_corners(
                 let housed = footprints.iter().any(|fp| {
                     (0..=8).any(|s| geom::contains(fp, p + (q - p) * (f64::from(s) / 8.0)))
                 });
-                // Nothing else at the cut's end on the line: another wall there would meet the
-                // cut in a new corner.
+                // Nothing else at the cut's end on the wall kept: another wall there would meet
+                // the cut in a new corner.
+                let on_kept = if street { q } else { p };
                 let crowded = walls.iter().enumerate().any(|(k, x)| {
                     k != line
                         && k != slant
-                        && (x.a.distance(p) < JOIN
-                            || x.b.distance(p) < JOIN
-                            || geom::distance_to_segment(p, x.a, x.b) < JOIN)
+                        && (x.a.distance(on_kept) < JOIN
+                            || x.b.distance(on_kept) < JOIN
+                            || geom::distance_to_segment(on_kept, x.a, x.b) < JOIN)
                 });
                 if housed || crowded {
                     continue;
                 }
                 let height = walls[line].height.min(walls[slant].height);
-                if slant_at_a {
-                    walls[slant].a = q;
+                let (cut_at_a, end) = if street {
+                    (line_at_a, p)
                 } else {
-                    walls[slant].b = q;
+                    (slant_at_a, q)
+                };
+                if cut_at_a {
+                    walls[cut].a = end;
+                } else {
+                    walls[cut].b = end;
                 }
                 added.push(Wall {
                     cut: true,
@@ -1337,9 +1360,37 @@ mod tests {
             chamfer_sharp_corners(&mut walls, &[], &[house]);
             assert_eq!(walls.len(), 3, "{walls:?}");
         }
-        // A street wall slanting: left as it is.
+        // A street wall slanting stays whole: the line is cut short from the point instead and
+        // closed onto the street wall, whose corner there is the taker's.
+        let street = || Wall::new(c, slant, STREET, Some(DVec2::new(5.0, 1.0)));
         let mut walls = make();
-        walls[2] = Wall::new(c, slant, STREET, Some(DVec2::new(5.0, 1.0)));
+        walls[2] = street();
+        chamfer_sharp_corners(&mut walls, &[], &[]);
+        assert_eq!(walls.len(), 4, "{walls:?}");
+        assert_eq!((walls[2].a, walls[2].b), (c, slant));
+        assert_eq!((walls[1].a, walls[1].b), (DVec2::new(-10.0, 0.0), c));
+        assert!(
+            walls[0].a.distance(c) > 1.0 && walls[0].a.y.abs() < 1e-9,
+            "{:?}",
+            walls[0]
+        );
+        let cut = &walls[3];
+        assert!(cut.cut && (cut.a.distance(cut.b) - CHAMFER).abs() < 1e-9);
+        assert!(cut.a.distance(walls[0].a) < 1e-9, "{cut:?}");
+        let on_street = degrees(c - cut.b, cut.a - cut.b);
+        assert!(
+            (TIP_TAKER - 1e-6..=105.0 + 1e-6).contains(&on_street),
+            "{on_street}"
+        );
+        // Both street walls: left as they are.
+        let mut walls = make();
+        walls[2] = street();
+        walls[0] = Wall::new(
+            c,
+            DVec2::new(10.0, 0.0),
+            STREET,
+            Some(DVec2::new(5.0, -1.0)),
+        );
         chamfer_sharp_corners(&mut walls, &[], &[]);
         assert_eq!(walls.len(), 3, "{walls:?}");
     }

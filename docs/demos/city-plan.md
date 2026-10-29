@@ -747,9 +747,11 @@ anomalies down to 11 (20 → 3, 33 → 3, 24 → 5).
   across the slanting wall, its corner on the line at 75° or more. Sharp corners: 600 m 1 → 0,
   700 m 4 → 3, 800 m 6 → 2; no other anomaly moved at any size. Moving the junctions instead
   (slid along a line, or the lots' tips given to a neighbour) split or bent the lot lines into
-  pieces the walls' joints could not close, and left free wall ends. Not where the slanting wall
-  is a street wall (it would open a nook of the street), nor where another wall meets the cut's
-  end on the line.
+  pieces the walls' joints could not close, and left free wall ends. A street wall is never cut
+  short (it would open a nook of the street and drop to a garden wall's height): where it slants,
+  the line is cut short instead and closed onto it, the point going to the garden across the
+  line (400 and 900 m; left alone, the joints trimmed the line clear of the street wall and left
+  a 9 m wedge of grass between the two). Nor where another wall meets the cut's end.
 - **Walls built twice (2026-10-29, #308):** the "corners" of 0° left at 800 and 900 m were one
   wall twice, the piece of a lot line between two houses' shared back corner and the court, from
   both lots; both flickered on one plane. Each wall is kept once now, and a wall under 1.5 m from
