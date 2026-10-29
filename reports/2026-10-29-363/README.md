@@ -105,7 +105,10 @@ Your three views and the floor towards the window, before (left) and after (righ
 - **Why it reads as a texture change:** at noon the sun grazes the wall, bringing out the stucco's relief while barely changing its brightness. In the shade the sky alone shows almost none of it.
 - **Ruled out:** a second piece, a second material, a bent normal and broken texture derivatives.
 - **Your call:**
-  - **Soften the stucco's relief:** it would show less under a grazing sun.
+  - **Soften the stucco's relief:** it would show less under a grazing sun. The render's relief would go from 0.25 to 0.12 (one line, every rendered wall of the village). Your view at noon, now (left) and softened (right):
+
+    ![The sunlit strip at relief 0.25 and 0.12](face-relief-softened.png)
+
   - **Leave it as is:** it's physically right.
 
 ## Also today
