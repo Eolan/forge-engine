@@ -177,16 +177,24 @@ impl Plan {
     /// The plan made `depth` deep where it is shallower: every storey's last band stretched to
     /// it, its rooms the larger (a house deep enough for its straight flight, [`super::houses`]);
     /// where a storey's last band is its landing, the band before it, the landing moved back. A
-    /// storey where a bedroom is still entered through another room is laid round a landing
-    /// where the new depth lets it ([`plan`]: a row deepens its houses after their plans).
+    /// storey with a landing, or where a bedroom is still entered through another room, is laid
+    /// round a landing again at the new depth where it fits ([`plan`]: a row deepens its houses
+    /// after their plans; stretched, a storey of one band before its landing got rooms 7 m deep
+    /// lit from the street alone).
     pub fn deepen(&mut self, depth: f64) {
         if depth <= self.depth {
             return;
         }
+        let end = self.width - WALL;
         for st in &mut self.storeys {
             stretch(st, self.depth, depth);
-            if bedroom_through(st)
-                && let Some((laid, _)) = with_landing(st, depth, depth)
+            let rooms: Vec<Placed> = st
+                .iter()
+                .filter(|r| r.kind != RoomKind::Landing)
+                .copied()
+                .collect();
+            if (rooms.len() < st.len() || bedroom_through(st))
+                && let Some((laid, _)) = with_landing(&rooms, end, depth, depth)
             {
                 *st = laid;
             }
@@ -231,7 +239,8 @@ fn stretch(placed: &mut [Placed], old: f64, depth: f64) {
 /// bathrooms above. A band's rooms share its width and every storey's last band stretches to
 /// the house's depth, so the bands tile each storey and the storeys stack. A room's area may
 /// grow for it, never shrink under what was asked (but a room wider than the house, which
-/// takes the whole width at the deepest a room goes).
+/// takes the whole width at the deepest a room goes, and the rooms round a landing, which keep
+/// [`ROOM_MIN`] where the storey is too shallow for what they asked: [`with_landing`]).
 pub fn plan(programme: &[Room], width: f64, max_depth: f64) -> Plan {
     // The rooms end at the far party wall's half.
     let end = width - WALL;
@@ -394,17 +403,20 @@ pub fn plan(programme: &[Room], width: f64, max_depth: f64) -> Plan {
     let mut target = storeys
         .iter()
         .filter(|st| bedroom_through(st))
-        .filter_map(|st| with_landing(st, depth, max_depth).map(|(_, d)| d))
+        .filter_map(|st| with_landing(st, end, depth, max_depth).map(|(_, d)| d))
         .fold(depth, f64::max);
     for st in &mut storeys {
         let laid = if bedroom_through(st) {
-            with_landing(st, target, target)
+            with_landing(st, end, target, target)
         } else {
             None
         };
         match laid {
             Some((laid, _)) => *st = laid,
-            None => stretch(st, depth, target),
+            // Left alone where the plan keeps its depth: snapped to it, a band's end an ulp off
+            // would move.
+            None if target > depth => stretch(st, depth, target),
+            None => {}
         }
     }
     // A storey whose rooms fit round no landing (a study, four bedrooms and two bathrooms across
@@ -424,10 +436,10 @@ pub fn plan(programme: &[Room], width: f64, max_depth: f64) -> Plan {
         if let Some(s) = storeys[k].iter().position(|r| r.kind == RoomKind::Study) {
             let mut here = storeys[k].clone();
             let study = here.remove(s);
-            if let Some(laid) = with_landing(&here, target, max_depth)
+            if let Some(laid) = with_landing(&here, end, target, max_depth)
                 && let Some(there) = (0..storeys.len())
                     .filter(|&j| j != k)
-                    .find_map(|j| beside(&storeys[j], study).map(|t| (j, t)))
+                    .find_map(|j| beside(&storeys[j], study, end).map(|t| (j, t)))
             {
                 done = Some(laid);
                 moved = Some(there);
@@ -448,7 +460,7 @@ pub fn plan(programme: &[Room], width: f64, max_depth: f64) -> Plan {
                 .find_map(|kind| open.iter().position(|r| r.kind == kind))
             {
                 open[into].area += kitchen.area;
-                done = with_landing(&open, target, max_depth);
+                done = with_landing(&open, end, target, max_depth);
             }
         }
         let Some((laid, d)) = done else {
@@ -474,14 +486,15 @@ pub fn plan(programme: &[Room], width: f64, max_depth: f64) -> Plan {
     }
 }
 
-/// The storey `placed` with `room` added to its front or back band, the band's rooms each
-/// [`NARROW`] wide and the rest of the width shared by their areas, where each keeps its area or
-/// [`ROOM_MIN`] in the band's depth; the front band tried first, never a storey with a landing.
-/// Its rooms keep their order, `room` last.
-fn beside(placed: &[Placed], room: Placed) -> Option<Vec<Placed>> {
+/// The storey `placed` with `room` added to its front or back band, from the hall to `end`, the
+/// band's rooms each [`NARROW`] wide and the rest of the width shared by their areas, where each
+/// keeps its area or [`ROOM_MIN`] in the band's depth; the front band tried first, never a storey
+/// with a landing, and only a band of day rooms (a living room, a dining room, a kitchen, a
+/// salon), which `room` is entered through: never a bedroom or a bathroom. Its rooms keep their
+/// order, `room` last.
+fn beside(placed: &[Placed], room: Placed, end: f64) -> Option<Vec<Placed>> {
     let storey = placed.first()?.storey;
-    let x0 = placed.iter().map(|r| r.x.0).fold(f64::MAX, f64::min);
-    let x1 = placed.iter().map(|r| r.x.1).fold(f64::MIN, f64::max);
+    let (x0, x1) = (HALL, end);
     if placed.iter().any(|r| r.kind == RoomKind::Landing) {
         return None;
     }
@@ -493,6 +506,15 @@ fn beside(placed: &[Placed], room: Placed) -> Option<Vec<Placed>> {
             .filter(|r| (r.y.0 - y0).abs() < 1e-9)
             .copied()
             .collect();
+        let day = |r: &Placed| {
+            matches!(
+                r.kind,
+                RoomKind::Living | RoomKind::Dining | RoomKind::Kitchen | RoomKind::Salon
+            )
+        };
+        if !band.iter().all(day) {
+            return None;
+        }
         band.sort_by(|a, b| a.x.0.total_cmp(&b.x.0));
         band.push(Placed {
             storey,
@@ -559,10 +581,16 @@ pub fn bedroom_through(placed: &[Placed]) -> bool {
 /// Every room then opens on to the landing. The first of these that fits `depth`, else the one
 /// that deepens the storey least within `max_depth`, with the depth it takes; `None` where none
 /// fits.
-fn with_landing(placed: &[Placed], depth: f64, max_depth: f64) -> Option<(Vec<Placed>, f64)> {
+fn with_landing(
+    placed: &[Placed],
+    end: f64,
+    depth: f64,
+    max_depth: f64,
+) -> Option<(Vec<Placed>, f64)> {
     let storey = placed.first()?.storey;
-    let x0 = placed.iter().map(|r| r.x.0).fold(f64::MAX, f64::min);
-    let x1 = placed.iter().map(|r| r.x.1).fold(f64::MIN, f64::max);
+    // From the hall to the far party wall's half: the rooms given may not reach them (a study
+    // gone from a band's start or end).
+    let (x0, x1) = (HALL, end);
     let lit: Vec<Placed> = placed.iter().filter(|r| !dark(r.kind)).copied().collect();
     let unlit: Vec<Placed> = placed.iter().filter(|r| dark(r.kind)).copied().collect();
     let (first, rest) = lit.split_first()?;
@@ -676,8 +704,7 @@ fn with_landing(placed: &[Placed], depth: f64, max_depth: f64) -> Option<(Vec<Pl
     };
     let deep = |(b, most): (&Bands, f64)| needs(b, most).iter().sum::<f64>();
     // The two bands' layouts that fit across: those with a room that wants a window on either
-    // side of the landing first, then the shallower (the even split first among equals); the
-    // one band's last.
+    // side of the landing first, then the shallower (the even split first among equals).
     let mut layouts: Vec<Vec<Option<Band>>> = Vec::new();
     let masks = std::iter::once(even).chain((0..1usize << rest.len()).filter(|&m| m != even));
     for mask in masks {
@@ -702,14 +729,19 @@ fn with_landing(placed: &[Placed], depth: f64, max_depth: f64) -> Option<(Vec<Pl
     });
     let mut all = lit.clone();
     all.extend(&unlit);
-    if let Some(one) = across(&all) {
-        layouts.push(vec![Some(one), None]);
-    }
-    // In order of preference, each with the room it asks: every layout keeping the areas asked,
-    // then every one keeping them at [`ROOM_MIN`] at most.
-    let options: Vec<(&Bands, f64)> = [f64::MAX, ROOM_MIN]
+    let one: Vec<Vec<Option<Band>>> = across(&all)
+        .map(|one| vec![vec![Some(one), None]])
+        .unwrap_or_default();
+    // In order of preference, each with the room it asks: the two bands keeping the areas asked,
+    // then keeping them at [`ROOM_MIN`] at most (rooms lit front and back before a storey lit
+    // from the street alone), then the one band the same.
+    let options: Vec<(&Bands, f64)> = [&layouts, &one]
         .into_iter()
-        .flat_map(|most| layouts.iter().map(move |b| (b.as_slice(), most)))
+        .flat_map(|ls| {
+            [f64::MAX, ROOM_MIN]
+                .into_iter()
+                .flat_map(move |most| ls.iter().map(move |b| (b.as_slice(), most)))
+        })
         .collect();
     let &(bands, most) = options
         .iter()
@@ -1375,11 +1407,9 @@ mod tests {
                         check(&plan, &p, max_depth);
                         // No house takes more than three storeys (`houses`): its lot stays a
                         // garden.
-                        if plan.storeys.len() > 3 {
-                            continue;
-                        }
+                        let built = plan.storeys.len() <= 3;
                         for (k, s) in plan.storeys.iter().enumerate() {
-                            if bedroom_through(s) {
+                            if built && bedroom_through(s) {
                                 through.push(format!(
                                     "{means:?} {people} on {width} × {max_depth}, storey {k}"
                                 ));

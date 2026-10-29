@@ -1113,19 +1113,32 @@ mod tests {
     }
 
     /// No bedroom of a village is entered through another room, at 400 to 900 m and over several
-    /// seeds (their households differ): each has a doorway of its own onto its hall (the owner,
-    /// 2026-10-29: "two bedroom should not be linked together except if there is another door to a
-    /// corridor for each").
+    /// seeds (their households differ): each has a doorway of its own onto its hall or a landing
+    /// (the owner, 2026-10-29: "two bedroom should not be linked together except if there is
+    /// another door to a corridor for each"); and every room is reached through doorways.
     #[test]
     fn no_bedroom_is_entered_through_another_room() {
         let mut found = Vec::new();
+        let grammar = crate::grammar::Grammar::parse(facades::MEDITERRANEAN).expect("the rules");
         for seed in 1..=4 {
             for size in [400.0, 500.0, 600.0, 700.0, 800.0, 900.0] {
                 let site = example::site(size, 10.0);
                 let v = village::village(&site, &village::params(size), seed);
-                let structures = structure::structures(&v.plan, &v.masses);
+                let mut structures = structure::structures(&v.plan, &v.masses);
+                // Its windows fitted to their modules as `city-plan` draws them: the partitions
+                // keep off them, and with them the doorways on to a landing.
+                let every: Vec<usize> = (0..v.masses.len()).collect();
+                let dressed = facades::dress(&grammar, &structures, &v.masses, &every, 0.9, 12).0;
+                let fills = facades::fills(&grammar, &structures, &dressed);
+                facades::fit_windows(&mut structures, &fills);
                 for (i, (m, s)) in v.masses.iter().zip(&structures).enumerate() {
                     if let Some(inner) = interior::house(m, s) {
+                        // Every room of every storey reached from the hall through doorways.
+                        if !interior::reachable(&inner) {
+                            found.push(format!(
+                                "seed {seed}, {size} m: house {i}: a room no doorway reaches"
+                            ));
+                        }
                         let mut mine = Vec::new();
                         rooms(i, m, s, &inner, &mut mine);
                         mine.retain(|a| a.kind == Kind::BedroomThroughRoom);

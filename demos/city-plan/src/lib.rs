@@ -4701,9 +4701,10 @@ fn interior_solids(
         // whitewashed half wall a metre high along its long side away from the walls and across
         // its end towards the flight's foot, 10 cm thick and 5 cm back from the edge; the arrival
         // end stays open. Without it a walker stepped off the landing into the stairwell (seen
-        // 2026-10-16). Where the next flight starts there, the opening and the guard begin where
-        // the climber below needs the room, and the guard across that end stands under the next
-        // flight, no higher than its underside.
+        // 2026-10-16). Where the next flight starts there, the opening begins where the climber
+        // below needs the room, the guard along it no sooner than the next flight's string leaves
+        // a gap under it, and the guard across that end stands under the next flight, up to its
+        // underside.
         let across = stair[1] - stair[0];
         let width = across.length();
         let a = across / width.max(1e-6);
@@ -4733,38 +4734,44 @@ fn interior_solids(
                 ]
             };
             let y0 = floor_level(s, k + 1);
-            // Where the next flight starts here, the opening begins under it (`stairwell`); its
-            // underside over the guard across that end: two risers and 15 cm under its nosings'
-            // line (`soffits`).
+            // Where the next flight starts here, the opening begins under it (`stairwell`). That
+            // flight's underside over this floor, `v` along it from its foot: two risers and 15 cm
+            // under its nosings' line (`soffits`); none without one.
             let next = next_flight(s, inner, k + 1);
+            let rise_up = inner
+                .risers
+                .get(k + 1)
+                .filter(|_| next)
+                .map(|&up| (s.storeys[k + 2].level - y0) / f64::from(up));
+            let under =
+                |v: f64| rise_up.map_or(f64::MAX, |rise| (v / cores::GOING - 1.0) * rise - 0.15);
             let start = if next {
                 headroom_from(s, k + 1, r)
             } else {
                 0.0
             };
+            // The guard along the opening from its start, or where the next flight's string
+            // leaves 10 cm under it over the floor's level (the codes' sphere), whichever is later:
+            // before that the string closes the side, and the flight is stepped on from the
+            // corridor beside it.
+            let along = rise_up.map_or(start, |rise| start.max(cores::GOING * (1.0 + 0.25 / rise)));
             let (side, head) = if open_far {
                 (
-                    piece(width + 0.05, width + 0.15, start - 0.05, run),
+                    piece(width + 0.05, width + 0.15, along - 0.05, run),
                     piece(0.0, width + 0.15, start - 0.15, start - 0.05),
                 )
             } else {
                 (
-                    piece(-0.15, -0.05, start - 0.05, run),
+                    piece(-0.15, -0.05, along - 0.05, run),
                     piece(-0.15, width, start - 0.15, start - 0.05),
                 )
             };
-            let head_top = match inner.risers.get(k + 1).filter(|_| next) {
-                Some(&up) => {
-                    let rise = (s.storeys[k + 2].level - y0) / f64::from(up);
-                    let under = ((start - 0.15) / cores::GOING - 1.0) * rise - 0.15;
-                    (under - 0.01).min(1.0)
-                }
-                None => 1.0,
-            };
+            // Across the opening's end, a metre high, or under the next flight up to its underside
+            // at the guard's far face (the slot between them otherwise opened on the drop); none
+            // where the string comes down to the floor there.
+            let head_top = (under(start - 0.05) - 0.01).min(1.0);
             let mut guards = vec![(side, 1.0)];
-            // Across the foot's end, but where the next flight starts here and comes down within
-            // 30 cm of the floor: its string closes the side there.
-            if head_top >= 0.3 {
+            if head_top > 0.02 {
                 guards.push((head, head_top));
             }
             for (ring, height) in guards {

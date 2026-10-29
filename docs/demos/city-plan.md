@@ -2861,17 +2861,23 @@ them tried (a room that wants a window on either side first, then the shallower)
 2.4 m wide at least (a bathroom, store or service room 1.7 m) and the rest of the width shared
 by their areas. Where the bands do not keep the areas asked, the rooms keep 9 m² (France's
 decency minimum) or their ask if smaller; on a storey too shallow for two bands, one band before
-the landing; the plan may deepen within its lot, and `Plan::deepen` tries again when a row
-deepens its houses. Where no split fits across (a study, four bedrooms and two bathrooms on
-7.3 m: three houses in the 24 villages), the study moves to another storey's front or back band
-(`rooms::beside`). The insides (`interior::house`): the hall's wall open across the landing, a
-doorway from the landing into each room but the first of its band (that one keeps its door on
-the hall), and no doorway between the rooms of such a storey. `BedroomThroughRoom`: 183 → 0
-at every size and seed; the test `no_bedroom_is_entered_through_another_room` holds it at zero
-over 400–900 m and seeds 1–4, and the planner's own over households on lots 5.8–16 m wide and
-6–12 m deep. In the first map (600 m) eight houses change inside (11, 12, 13, 15, 16, 17, 28,
-36): their footprints, heights and storeys stay, the windows of four move with their rooms; the
-four bedrooms of house 12's top floor (asked 16, 12, 12, 12 m²) take 10.3 to 10.6 m² each.
+the landing; the plan may deepen within its lot, and `Plan::deepen` lays a landing storey again
+at the depth a row gives its houses. Where no split fits across (a study, four bedrooms and two
+bathrooms on 7.3 m: three houses in the 24 villages), the study moves into another storey's
+front or back band of day rooms (`rooms::beside`), and where there is none, the kitchen opens
+into the dining or the living room, which keeps its counter (a house of one storey with three
+bedrooms on 6.9 m, on #308's new lots). The insides (`interior::house`): the landing keeps its
+own depth on the floor, 1.20 m clear between its partitions (scaled with the plan into the
+walls, it came out 0.96 m), the hall's wall open across it, a doorway from it into each room
+but the first of its band (that one keeps its door on the hall), and no doorway between the
+rooms of such a storey but into a room that got none on to the landing; a partition moved off a
+window keeps a doorway's width from its neighbours there. `BedroomThroughRoom`: 183 → 0 at
+every size and seed; the test `no_bedroom_is_entered_through_another_room` holds it at zero over
+400–900 m and seeds 1–4, with the windows fitted as drawn and every room reached, and the
+planner's own over households on lots 5.8–16 m wide and 6–12 m deep. In the first map (600 m)
+eight houses change inside (11, 12, 13, 15, 16, 17, 28, 36): their footprints, heights and
+storeys stay, the windows of four move with their rooms; the four bedrooms of house 12's top
+floor (asked 16, 12, 12, 12 m²) take 10.3 to 10.6 m² each on the plan.
 
 **Stairs.** In a house of three storeys whose flight's foot stands against the back wall (0.15 to
 0.3 m of floor before it), the flight is stepped on from the corridor beside it; on the first
@@ -2883,8 +2889,10 @@ houses at 700 to 900 m over seeds 1 and 2 (none at 400 to 600 m, the only size t
 tests looked at), the same on 2026-10-23's build, and 59 on #308's new lots. Now, where the next
 flight starts on a floor, the floor runs on under that flight's first metres (`stairwell`): the
 opening over the flight below starts a tread before the first whose top stands less than 2.1 m
-under the slab (2 m of headroom and a margin), and the guard along it starts there too, with a
-guard across that end standing under the next flight, no higher than its underside. 21 → 0, and
+under the slab (2 m of headroom and a margin); the guard along it starts there too, or later
+where the next flight's string still comes within 10 cm of the floor (a lower ground floor), and
+a guard across that end stands under the next flight up to its underside, closing the slot of
+25 to 36 cm a village house left there over the drop. 21 → 0 (and 59 → 0 on #308's lots), and
 the flights' three tests (2 m over every tread, their feet clear, a walker's capsule up each) run
 at every size over two seeds now (6 s for all four).
 

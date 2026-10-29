@@ -233,10 +233,11 @@ pub fn house(m: &Mass, s: &Structure) -> Option<Interior> {
     // A partition at `u` meeting the wall that stands about `v` on storey `k`, moved off an
     // opening it would stand in (a wall behind a window, the owner's item 26 the other way
     // round): to the nearer side of the opening, half a partition and 15 cm clear, or the other
-    // side, keeping a metre from its neighbours `lo` and `hi`.
-    let clear = |k: usize, u: f64, v: f64, lo: f64, hi: f64| -> f64 {
+    // side, keeping `room` metres from its neighbours `lo` and `hi` (a metre, or a doorway's width
+    // beside a landing).
+    let clear = |k: usize, u: f64, v: f64, lo: f64, hi: f64, room: f64| -> f64 {
         let margin = PARTITION * 0.5 + 0.15;
-        let fits = |c: f64| c > lo + 1.0 && c < hi - 1.0;
+        let fits = |c: f64| c > lo + room && c < hi - room;
         let mut u = u;
         for &(sk, a, b, wv) in &openings {
             if sk != k || (wv - v).abs() > 1.0 || u <= a - margin || u >= b + margin {
@@ -272,6 +273,37 @@ pub fn house(m: &Mass, s: &Structure) -> Option<Interior> {
         for b in &mut bands {
             b.2.sort_by(|&i, &j| storey[i].x.0.total_cmp(&storey[j].x.0));
         }
+        // The storey's landing, where it has one (`rooms::plan`): the hall open on to it, and
+        // every room beside it but the first of its band (on the hall) a doorway on to it.
+        let landing = bands
+            .iter()
+            .position(|b| b.2.iter().any(|&i| storey[i].kind == RoomKind::Landing));
+        // The plan's depths on the floor: in proportion, but a landing [`rooms::LANDING`] clear
+        // between its partitions, the bands round it sharing the rest (in proportion, the walls'
+        // thickness took a fifth off a corridor 1.2 m wide on the plan).
+        let y = |py: f64| -> f64 {
+            let Some(l) = landing else {
+                return y(py);
+            };
+            let (l0, l1) = (bands[l].0, bands[l].1);
+            let floor = vmax - vmin;
+            let keep = (super::rooms::LANDING + PARTITION).min(floor * 0.5);
+            let scale = (floor - keep) / (plan.depth - (l1 - l0)).max(1e-6);
+            if py <= l0 {
+                vmin + py * scale
+            } else if py <= l1 {
+                vmin + l0 * scale + (py - l0) / (l1 - l0).max(1e-6) * keep
+            } else {
+                vmin + l0 * scale + keep + (py - l1) * scale
+            }
+        };
+        // A partition's least distance from its neighbours where it moves off a window: a
+        // doorway's width with its jambs beside a landing, each room's own doorway on to it.
+        let room = if landing.is_some() {
+            DOORWAY + 2.0 * JAMB + 0.02
+        } else {
+            1.0
+        };
         // Each band's partitions across the front from the hall's to the far end, those on the
         // front or the back wall moved off its openings.
         let mut cuts: Vec<Vec<f64>> = Vec::with_capacity(bands.len());
@@ -286,19 +318,14 @@ pub fn house(m: &Mass, s: &Structure) -> Option<Interior> {
             for j in 1..us.len() - 1 {
                 let (lo, hi) = (us[j - 1].min(us[j + 1]), us[j - 1].max(us[j + 1]));
                 if *y0 < 1e-9 {
-                    us[j] = clear(k, us[j], 0.0, lo, hi);
+                    us[j] = clear(k, us[j], 0.0, lo, hi, room);
                 }
                 if (*y1 - plan.depth).abs() < 1e-9 {
-                    us[j] = clear(k, us[j], vmax, lo, hi);
+                    us[j] = clear(k, us[j], vmax, lo, hi, room);
                 }
             }
             cuts.push(us);
         }
-        // The storey's landing, where it has one (`rooms::plan`): the hall open on to it, and
-        // every room beside it but the first of its band (on the hall) a doorway on to it.
-        let landing = bands
-            .iter()
-            .position(|b| b.2.iter().any(|&i| storey[i].kind == RoomKind::Landing));
         // The hall's wall the whole depth, a doorway into each band's first room, open across
         // the landing between the partitions either side of it.
         let doors: Vec<(f64, f64)> = bands
@@ -322,7 +349,9 @@ pub fn house(m: &Mass, s: &Structure) -> Option<Interior> {
         });
         // Between the bands, wall to wall: from the hall's wall to the far side wall where it
         // stands at that depth; beside the landing, a doorway into each room of the other band
-        // but its first, in the middle of the room's stretch along it.
+        // but its first, in the middle of the room's stretch along it. Which rooms of each band
+        // have theirs.
+        let mut landed: Vec<Vec<bool>> = bands.iter().map(|b| vec![false; b.2.len()]).collect();
         for (b, pair) in bands.windows(2).enumerate() {
             let v = y(pair[0].1);
             let (u0, u1) = if mirrored {
@@ -335,20 +364,21 @@ pub fn house(m: &Mass, s: &Structure) -> Option<Interior> {
                 Some(l) if l == b + 1 => Some(b),
                 _ => None,
             };
-            let doors = beside.map_or_else(Vec::new, |o| {
+            let mut doors: Vec<(f64, f64)> = Vec::new();
+            if let Some(o) = beside {
                 let us = &cuts[o];
-                let mut doors: Vec<(f64, f64)> = (1..bands[o].2.len())
-                    .filter_map(|j| {
-                        // The last room reaches the far side wall.
-                        let end = if j + 2 < us.len() { us[j + 1] } else { far(v) };
-                        let (lo, hi) = (us[j].min(end) - u0, us[j].max(end) - u0);
-                        door(lo, hi, (lo + hi) * 0.5)
-                    })
-                    .collect();
+                for j in 1..bands[o].2.len() {
+                    // The last room reaches the far side wall.
+                    let end = if j + 2 < us.len() { us[j + 1] } else { far(v) };
+                    let (lo, hi) = (us[j].min(end) - u0, us[j].max(end) - u0);
+                    if let Some(d) = door(lo, hi, (lo + hi) * 0.5) {
+                        doors.push(d);
+                        landed[o][j] = true;
+                    }
+                }
                 // Along the partition from its start: a mirrored plan's rooms run the other way.
                 doors.sort_by(|p, q| p.0.total_cmp(&q.0));
-                doors
-            });
+            }
             partitions.push(Partition {
                 a: at(u0, v),
                 b: at(u1, v),
@@ -358,8 +388,8 @@ pub fn house(m: &Mass, s: &Structure) -> Option<Interior> {
             });
         }
         // Each band's rooms between their boundaries; between two rooms a doorway in the middle,
-        // but on a storey with a landing, which every room opens on to.
-        for ((y0, y1, ids), us) in bands.iter().zip(&cuts) {
+        // but into a room with its own on to the landing.
+        for (((y0, y1, ids), us), landed) in bands.iter().zip(&cuts).zip(&landed) {
             let (v0, v1) = (y(*y0), y(*y1));
             for (j, &i) in ids.iter().enumerate() {
                 // The last room reaches the far side wall where it stands at either end.
@@ -387,14 +417,14 @@ pub fn house(m: &Mass, s: &Structure) -> Option<Interior> {
                 });
             }
             let len = v1 - v0;
-            for &u in &us[1..us.len() - 1] {
+            for (j, &u) in us.iter().enumerate().take(us.len() - 1).skip(1) {
                 partitions.push(Partition {
                     a: at(u, v0),
                     b: at(u, v1),
                     thickness: PARTITION,
                     storey: k,
                     doors: door(0.0, len, len * 0.5)
-                        .filter(|_| landing.is_none())
+                        .filter(|_| !landed[j])
                         .into_iter()
                         .collect(),
                 });
