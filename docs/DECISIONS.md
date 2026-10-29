@@ -7258,6 +7258,16 @@ and the pops the full-detail reference does not have fell 13 %; a still camera's
 change grew from 956 to 1003 pixels from the air and 398 to 474 at the green (3 codes); the
 map check's foliage moved by ꟻLIP means up to 0.017 and was accepted.
 
+**The shells' tone refitted (2026-10-29, #363).** The owner, walking in at noon: "still a lot of
+popping (I believed imposters with not the same colours being replaced)". With the cards' leaves
+kept, the 2026-10-25 fit (on green-only means, which left out the dark gaps the cards show) had
+the shells 3–36 % brighter than the cards in linear light over every pixel of five patches of the
+air view (the far woods, the near woods, the river's trees; 9:00, noon and 15:00), the impostors
+0.84–1.23 of the cards. `CROWN_SHELL_TONE` 0.80, 0.74, 0.95 → 0.62, 0.58, 0.82: the shells now
+within 0–12 % at 9:00, 3–6 % at 15:00, 11–18 % at noon, where the cards' crowns keep more inner
+shade than lumps can. The map check's air view moved by ꟻLIP 0.025, the street views under 0.007,
+accepted.
+
 *(research: forests-and-grass.md, vegetation-materials.md, flora.md; D-013, D-016, D-029, D-036,
 D-053, D-063; issues #297, #300, #301, #302, #303)*
 

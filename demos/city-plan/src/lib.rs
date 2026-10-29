@@ -6227,9 +6227,13 @@ const FAR_SHADOWS: f32 = 60.0;
 /// smooth, at the leaves' own colour a far wood stood 1.75 times as bright as its cards. At 0.55
 /// throughout, once the cards kept their crowns whole (`flora::CROWN_SECTIONS`), the shells stood
 /// 8–11 % darker than the cards over their own pixels and greener (red and blue 13–14 % low: the
-/// cards' gaps show the ground and the sky); fitted over four views (2026-10-25), within 1 % at
-/// the default hour and the morning's, 9 % bright at noon.
-const CROWN_SHELL_TONE: [f32; 3] = [0.80, 0.74, 0.95];
+/// cards' gaps show the ground and the sky); fitted over four views (2026-10-25) at 0.80, 0.74, 0.95.
+/// Refitted on 2026-10-29 (#363) over every pixel of five patches of the air view, once the
+/// cards kept their small leaves (`CUTOUT_MIP_BIAS`): the shells had stood 3–36 % brighter than
+/// the cards in linear light (the green-only means left out the cards' dark gaps); now within
+/// 0–12 % at 9:00 and 3–6 % at 15:00, 11–18 % at noon, where the cards' crowns hold more inner
+/// shade.
+const CROWN_SHELL_TONE: [f32; 3] = [0.62, 0.58, 0.82];
 
 /// How strongly the leaf cards' own normals (`textures::leaf_normals`, #346) turn the crown's
 /// bent ones: enough for each leaf to catch the light its own way, the crown still lit as a
