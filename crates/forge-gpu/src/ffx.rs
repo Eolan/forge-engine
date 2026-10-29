@@ -61,21 +61,60 @@ pub struct FfxImages<'a> {
     pub output: &'a ResolvedImage,
 }
 
-/// The version [`Ffx::load`] makes its context with.
+/// The version [`Ffx::load`] makes its context with. The DLLs' own choice is the newest version
+/// offered, a driver's (`"FSR 4.1.3 *"`) only when strictly newer than theirs; an override pins a
+/// version and opts the context out of the drivers' updates (AMD's `ffx-api.md`), so it is given
+/// only when their choice is not of the major version asked for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FfxPick {
-    /// The DLLs' default for the device (the first they list, their newest).
+    /// The DLLs' own choice.
     Default,
-    /// The newest version of this major one (4: FSR 4) where offered, else the default.
+    /// Their choice when it is of this major version (4: FSR 4), else the newest of it where
+    /// offered, else their choice.
     Prefer(u32),
-    /// The newest version of this major one, or no context at all.
+    /// Their choice when it is of this major version, else the newest of it, else no context.
     Only(u32),
 }
 
-/// A version name's major number: 3 for `"3.1.6"` (the DLLs' names), 4 for `"FSR 4.0.2"`.
-pub fn major_version(name: &str) -> Option<u32> {
+/// A version name's number, the parts it lacks 0: `[3, 1, 6]` for `"3.1.6"` (the DLLs' names),
+/// `[4, 1, 3]` for `"FSR 4.1.3 *"` (a driver's).
+pub fn version_number(name: &str) -> Option<[u32; 3]> {
     let digits = name.trim_start_matches(|c: char| !c.is_ascii_digit());
-    digits.split('.').next()?.parse().ok()
+    let number = digits
+        .split(|c: char| !c.is_ascii_digit() && c != '.')
+        .next()?;
+    let mut parts = number.split('.').map(|p| p.parse::<u32>().ok());
+    let major = parts.next().flatten()?;
+    let minor = parts.next().flatten().unwrap_or(0);
+    let patch = parts.next().flatten().unwrap_or(0);
+    Some([major, minor, patch])
+}
+
+/// Which of the versions `names` [`FfxPick`] takes: `Ok(None)` for the DLLs' own choice,
+/// `Ok(Some(i))` to override with the `i`-th, `Err(())` when `Only`'s major version is not
+/// offered.
+#[cfg_attr(not(all(feature = "ffx", windows)), allow(dead_code))]
+fn pick_version(names: &[String], pick: FfxPick) -> std::result::Result<Option<usize>, ()> {
+    let numbers: Vec<Option<[u32; 3]>> = names.iter().map(|n| version_number(n)).collect();
+    // The newest of those `keep` lets through; on a tie the shipped one (no " *").
+    let newest = |keep: &dyn Fn([u32; 3]) -> bool| {
+        (0..names.len())
+            .filter_map(|i| numbers[i].filter(|&v| keep(v)).map(|v| (i, v)))
+            .max_by_key(|&(i, v)| (v, !names[i].trim_end().ends_with('*')))
+            .map(|(i, _)| i)
+    };
+    let own = newest(&|_| true);
+    let (FfxPick::Prefer(major) | FfxPick::Only(major)) = pick else {
+        return Ok(None);
+    };
+    if own.and_then(|i| numbers[i]).is_some_and(|v| v[0] == major) {
+        return Ok(None);
+    }
+    match newest(&|v| v[0] == major) {
+        Some(i) => Ok(Some(i)),
+        None if matches!(pick, FfxPick::Only(_)) => Err(()),
+        None => Ok(None),
+    }
 }
 
 /// The FFX upscaler on this device, one context for its maximum sizes.
@@ -120,7 +159,7 @@ mod imp {
     use ash::vk;
     use ash::vk::Handle;
 
-    use super::{FFX_LOADER, FfxFrame, FfxImages, FfxPick, major_version};
+    use super::{FFX_LOADER, FfxFrame, FfxImages, FfxPick, pick_version};
     use crate::Device;
     use crate::commands::Commands;
     use crate::error::{GpuError, Result};
@@ -225,6 +264,13 @@ mod imp {
     }
 
     #[repr(C)]
+    struct QueryProviderVersion {
+        header: Header,
+        version_id: u64,
+        version_name: *const c_char,
+    }
+
+    #[repr(C)]
     struct DispatchUpscale {
         header: Header,
         command_list: *mut c_void,
@@ -259,6 +305,7 @@ mod imp {
     const CREATE_BACKEND_VK: u64 = 0x0100_0003;
     const QUERY_GET_VERSIONS: u64 = 4;
     const OVERRIDE_VERSION: u64 = 5;
+    const QUERY_GET_PROVIDER_VERSION: u64 = 6;
     /// `FFX_UPSCALER_VERSION` of the SDK the types above come from: 4.1.2.
     const UPSCALER_VERSION: u32 = (4 << 22) | (1 << 12) | 2;
     /// `FfxApiCreateContextUpscaleFlags`: HDR colour, reversed and infinite depth.
@@ -448,19 +495,11 @@ mod imp {
                     }
                 })
                 .collect();
-            let chosen = match pick {
-                FfxPick::Default => None,
-                FfxPick::Prefer(major) | FfxPick::Only(major) => {
-                    names.iter().position(|n| major_version(n) == Some(major))
-                }
-            };
-            if let FfxPick::Only(major) = pick
-                && chosen.is_none()
-            {
-                return Err(GpuError::Ffx(format!(
-                    "no version {major} on this device (offered: {names:?})"
-                )));
-            }
+            let chosen = pick_version(&names, pick).map_err(|()| {
+                GpuError::Ffx(format!(
+                    "no version asked for ({pick:?}) on this device (offered: {names:?})"
+                ))
+            })?;
 
             // The chain, made from its end: the version override (when one was chosen), the
             // API's version, the Vulkan backend, the upscaler's description.
@@ -512,10 +551,23 @@ mod imp {
                     "the upscaler's context failed ({code})"
                 )));
             }
-            let running = chosen
-                .map(|i| names[i].clone())
-                .or_else(|| names.first().cloned())
-                .unwrap_or_default();
+            // The version the context runs, as the DLLs say.
+            let mut provider = QueryProviderVersion {
+                header: Header::new(QUERY_GET_PROVIDER_VERSION),
+                version_id: 0,
+                version_name: std::ptr::null(),
+            };
+            let mut context = handle;
+            // SAFETY: a query on the live context, its output fields alive for the call.
+            let code = unsafe { query(&raw mut context, &raw mut provider.header) };
+            let running = if code == RETURN_OK && !provider.version_name.is_null() {
+                // SAFETY: a NUL-terminated name the query wrote, copied at once.
+                unsafe { CStr::from_ptr(provider.version_name) }
+                    .to_string_lossy()
+                    .into_owned()
+            } else {
+                chosen.map(|i| names[i].clone()).unwrap_or_default()
+            };
             Ok(Self {
                 _library: library,
                 destroy,
@@ -639,16 +691,35 @@ mod imp {
 
 #[cfg(test)]
 mod tests {
-    use super::major_version;
+    use super::{FfxPick, pick_version, version_number};
 
-    /// The DLLs name their versions by number ("3.1.6", "2.3.4" on NVIDIA); a name with a
-    /// prefix reads the same, and one without a number reads as none.
+    /// The DLLs name their versions by number ("3.1.6", "2.3.4" on NVIDIA); a driver's name
+    /// ("FSR 4.1.3 *") reads the same, and one without a number reads as none.
     #[test]
-    fn a_versions_major_number_reads_from_its_name() {
-        assert_eq!(major_version("3.1.6"), Some(3));
-        assert_eq!(major_version("2.3.4"), Some(2));
-        assert_eq!(major_version("FSR 4.0.2"), Some(4));
-        assert_eq!(major_version("10.1"), Some(10));
-        assert_eq!(major_version("?"), None);
+    fn a_versions_number_reads_from_its_name() {
+        assert_eq!(version_number("3.1.6"), Some([3, 1, 6]));
+        assert_eq!(version_number("2.3.4"), Some([2, 3, 4]));
+        assert_eq!(version_number("FSR 4.1.3 *"), Some([4, 1, 3]));
+        assert_eq!(version_number("10.1"), Some([10, 1, 0]));
+        assert_eq!(version_number("?"), None);
+    }
+
+    /// An override only where the DLLs' own choice (the newest) is not of the major version
+    /// asked for: FSR 4 left to them, and to the drivers' updates, wherever it is their choice.
+    #[test]
+    fn a_version_is_pinned_only_where_their_choice_is_not_the_one_asked_for() {
+        let names = |n: &[&str]| n.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let nvidia = names(&["3.1.6", "2.3.4"]);
+        assert_eq!(pick_version(&nvidia, FfxPick::Default), Ok(None));
+        assert_eq!(pick_version(&nvidia, FfxPick::Prefer(4)), Ok(None));
+        assert_eq!(pick_version(&nvidia, FfxPick::Only(4)), Err(()));
+        assert_eq!(pick_version(&nvidia, FfxPick::Only(2)), Ok(Some(1)));
+        // Listed in any order, a driver's newer FSR 4 beside the shipped one: their choice.
+        let amd = names(&["3.1.6", "4.1.2", "FSR 4.1.3 *", "2.3.4"]);
+        assert_eq!(pick_version(&amd, FfxPick::Only(4)), Ok(None));
+        assert_eq!(pick_version(&amd, FfxPick::Only(3)), Ok(Some(0)));
+        // A major version offered twice: the newest of it.
+        let two = names(&["5.0.0", "4.0.1", "4.1.2"]);
+        assert_eq!(pick_version(&two, FfxPick::Prefer(4)), Ok(Some(2)));
     }
 }

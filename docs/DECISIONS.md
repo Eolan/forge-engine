@@ -7665,7 +7665,8 @@ its own (`ProbeParams::far_room_daylight`, the village's look):
 - **The share:** K × Σ over its windows of area × (the sky's irradiance on the window's outward
   normal + the sun's on it), over the room's surface × the open sky's irradiance from above. The
   windows are the room's recesses (`probes/far_rooms.rs`): the normal along the recess's short
-  axis, away from the room's middle, the area its long edge by its height. K stands for the
+  axis, away from the middle of the room's volume it opens from, the area its long edge by its
+  height; a room of several volumes sums them less the faces they share. K stands for the
   light's bounces in the room, about 1 / (1 − ρ) for walls of albedo ρ.
 - **Made each frame on the GPU** ("gi/far rooms", the async compute queue, 0.008 ms in the
   village) from the sky's SH light and the sun, into a table hashed by region that the far
@@ -7837,20 +7838,29 @@ before there is an AMD card to test it on (#67).
   functions from `amd_fidelityfx_loader_vk.dll`, loaded at run time, their descriptions chained
   by `{type, next}` headers laid out as the SDK's headers lay them (`repr(C)`). `ffxQuery` lists
   the versions the DLLs offer for the device ("3.1.6" and "2.3.4" on the 5070 Ti and on the RDNA 2
-  iGPU); the context takes one by its major number through the version override (`FfxPick`: the
-  DLLs' default, 4 where offered, or 4 or no context at all).
+  iGPU). The DLLs' own choice is the newest, a driver's ("FSR 4.1.3 *") when strictly newer;
+  an override pins a version and opts out of the drivers' updates (AMD's `ffx-api.md`), so
+  `FfxPick` gives one only where their choice is not FSR 4 and an FSR 4 is offered (the newest),
+  and `Only(4)` makes no context without one. The version running is read back from the
+  context.
 - **The pass** (`forge_render::FfxUpscaler`): "temporal/FSR (AMD)", one graph pass declaring the
   jittered colour, its depth, the motion vectors, a 1 × 1 exposure of 1 (the frame is
   pre-exposed, as for DLSS), the reactive mask where the frame has one, and the output, written
   as storage. The DLLs record their own passes and barriers inside it and leave each image in
   the layout the graph gave it, as Streamline does for DLSS. RCAS follows `r.fsr.sharpen` and
-  `r.fsr.sharpness`, as for Forge's FSR.
+  `r.fsr.sharpness`, as for Forge's FSR. A dispatch the DLLs refuse costs that frame's upscale,
+  not the frame: the demo then drops their context and hands the frames to Forge's FSR 3.1.
 - **The choice** (`--fsr-amd`, under `r.aa=fsr`): `auto`, the default, loads the DLLs on AMD's
   devices only (the cross-vendor rule) and makes a context only where they offer FSR 4; `on`
   takes them wherever they load (FSR 4 where offered, else their default: their FSR 3.1.6 on the
   5070 Ti, the path's test); `off` never. Wherever they are not taken, Forge's FSR 3.1 runs.
+  The DLLs are looked for with the first FSR, at the start or when the console first asks for
+  `r.aa fsr`.
 - **The device:** `VK_KHR_compute_shader_derivatives` (`computeDerivativeGroupLinear`) is
-  enabled where present: the DLLs' shaders declare it, and the validation layer flagged it.
+  enabled where present: the DLLs' shaders declare it, and the validation layer flagged it. So
+  are, where present, what AMD's own framework enables for FSR 4's models:
+  `storageBuffer16BitAccess`, `shaderIntegerDotProduct` (the INT8 models),
+  `VK_KHR_cooperative_matrix` and `VK_EXT_shader_float8` (the RX 9000's FP8 model).
 - **The DLLs** come from `FORGE_FFX_DIR`, else `fsr-sdk/Kits/FidelityFX/signedbin` (the SDK,
   git-ignored). A game that takes them ships the two beside its executable (`CREDITS.md`).
 
@@ -7865,9 +7875,9 @@ before there is an AMD card to test it on (#67).
   declarations: AMD's images and shaders, none of Forge's.
 
 **Open:**
-- **FSR 4 itself** waits for an RX 6000/7000/9000 card (#67), and with it whether the device
-  extensions AMD's samples enable (`VK_KHR_cooperative_matrix`, `VK_EXT_shader_float8`,
-  `VK_KHR_shader_integer_dot_product`) are needed.
+- **FSR 4 itself** waits for an RX 6000/7000/9000 card (#67): whether the features above are
+  all it needs, and whether it takes inputs left in `GENERAL` (the graph's layout for a sampled
+  image that is also a storage image), which its guide asks in `SHADER_READ_ONLY_OPTIMAL`.
 - **Patents:** the SDK is MIT, which grants no patent licence; AMD's patents on its ML upscaling
   are to be looked up before a release ships the DLLs (the patent rule).
 

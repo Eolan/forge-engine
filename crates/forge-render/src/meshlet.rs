@@ -6332,6 +6332,10 @@ impl MeshletRenderer {
         if let Some(p) = ambient.probes {
             h.add_buffer(graph, p.data, None);
             h.add_buffer(graph, p.region, None);
+            // The far rooms' shares (#356), which the resolve's light reads.
+            if let Some(far) = p.far {
+                h.add_buffer(graph, far, None);
+            }
         }
         if let Some(m) = targets.movers {
             h.add_buffer(graph, m.instances, None);

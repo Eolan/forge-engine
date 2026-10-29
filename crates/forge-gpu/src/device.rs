@@ -53,6 +53,15 @@ pub struct DeviceFeatures {
     /// `VK_KHR_compute_shader_derivatives` with `computeDerivativeGroupLinear`: derivatives in
     /// compute shaders, which the shaders of AMD's FSR DLLs declare (#361).
     pub compute_derivatives: bool,
+    /// `storageBuffer16BitAccess`, which AMD's own framework enables where present for FSR 4's
+    /// models (D-082), as the three below.
+    pub storage16: bool,
+    /// `shaderIntegerDotProduct` (FSR 4's INT8 models on the RX 6000 and 7000).
+    pub integer_dot: bool,
+    /// `VK_KHR_cooperative_matrix`.
+    pub cooperative_matrix: bool,
+    /// `VK_EXT_shader_float8` with its cooperative matrices (FSR 4's FP8 model on the RX 9000).
+    pub float8: bool,
 }
 
 /// The queues a render-graph pass can run on (issue #77).
@@ -270,6 +279,12 @@ impl Device {
         if best.features.compute_derivatives {
             extensions.push(khr::compute_shader_derivatives::NAME.as_ptr());
         }
+        if best.features.cooperative_matrix {
+            extensions.push(khr::cooperative_matrix::NAME.as_ptr());
+        }
+        if best.features.float8 && best.features.cooperative_matrix {
+            extensions.push(ext::shader_float8::NAME.as_ptr());
+        }
         let stats_filter = std::env::var("FORGE_SHADER_STATS")
             .ok()
             .filter(|v| !v.is_empty() && v != "0");
@@ -298,7 +313,9 @@ impl Device {
             // `SV_PrimitiveID` (the visibility buffer's) declares the SPIR-V `Geometry`
             // capability, which the validation layer ties to this feature.
             .geometry_shader(true);
-        let mut v11 = vk::PhysicalDeviceVulkan11Features::default().shader_draw_parameters(true);
+        let mut v11 = vk::PhysicalDeviceVulkan11Features::default()
+            .shader_draw_parameters(true)
+            .storage_buffer16_bit_access(best.features.storage16);
         let mut v12 = vk::PhysicalDeviceVulkan12Features::default()
             .timeline_semaphore(true)
             .buffer_device_address(true)
@@ -328,6 +345,7 @@ impl Device {
             .maintenance4(true)
             .shader_demote_to_helper_invocation(true)
             .subgroup_size_control(true)
+            .shader_integer_dot_product(best.features.integer_dot)
             // Required of every Vulkan 1.3 device; Streamline (DLSS) creates private data slots.
             .private_data(true);
         // Mesh shaders only: no pass has a task stage.
@@ -364,6 +382,17 @@ impl Device {
             .compute_derivative_group_linear(true);
         if best.features.compute_derivatives {
             features2 = features2.push(&mut derivatives);
+        }
+        let mut matrix =
+            vk::PhysicalDeviceCooperativeMatrixFeaturesKHR::default().cooperative_matrix(true);
+        if best.features.cooperative_matrix {
+            features2 = features2.push(&mut matrix);
+        }
+        let mut float8 = vk::PhysicalDeviceShaderFloat8FeaturesEXT::default()
+            .shader_float8(true)
+            .shader_float8_cooperative_matrix(true);
+        if best.features.float8 && best.features.cooperative_matrix {
+            features2 = features2.push(&mut float8);
         }
         let mut executable = vk::PhysicalDevicePipelineExecutablePropertiesFeaturesKHR::default()
             .pipeline_executable_info(true);
@@ -740,6 +769,16 @@ impl Device {
         if derivatives_ext {
             features2 = features2.push(&mut derivatives);
         }
+        let matrix_ext = has(khr::cooperative_matrix::NAME);
+        let mut matrix = vk::PhysicalDeviceCooperativeMatrixFeaturesKHR::default();
+        if matrix_ext {
+            features2 = features2.push(&mut matrix);
+        }
+        let float8_ext = has(ext::shader_float8::NAME);
+        let mut float8 = vk::PhysicalDeviceShaderFloat8FeaturesEXT::default();
+        if float8_ext {
+            features2 = features2.push(&mut float8);
+        }
         // SAFETY: feature query with a properly chained struct.
         unsafe { raw.get_physical_device_features2(physical, &mut features2) };
         let base = features2.features;
@@ -875,6 +914,12 @@ impl Device {
             discrete: props.device_type == vk::PhysicalDeviceType::DISCRETE_GPU,
             opacity_micromap: false,
             compute_derivatives: derivatives_ext && on(derivatives.compute_derivative_group_linear),
+            storage16: on(v11.storage_buffer16_bit_access),
+            integer_dot: on(v13.shader_integer_dot_product),
+            cooperative_matrix: matrix_ext && on(matrix.cooperative_matrix),
+            float8: float8_ext
+                && on(float8.shader_float8)
+                && on(float8.shader_float8_cooperative_matrix),
         };
         let features = DeviceFeatures {
             opacity_micromap: features.ray_query && micromap_ext && on(micromap.micromap),

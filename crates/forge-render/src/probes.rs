@@ -42,6 +42,7 @@ mod far_rooms;
 mod regions;
 mod rooms;
 
+use far_rooms::FarRoom;
 use regions::{REGION_CELL, RegionStore, TOP_CELL, ordered};
 pub use regions::{RegionCapacity, RegionSetId};
 pub use rooms::RoomGridParams;
@@ -312,6 +313,9 @@ struct GpuFarWindow {
     pad: u32,
 }
 
+/// The far rooms flattened for the GPU (#356): the rooms, their windows and the table's entries.
+type FarFlat = (Vec<GpuFarRoom>, Vec<GpuFarWindow>, Vec<[u32; 2]>);
+
 /// The far rooms' daylight's buffers (#356), per frame slot: the rooms, their windows and the
 /// table the probe lookup reads (a region and its share's bits; region 0 an empty entry).
 struct FarBuffers {
@@ -321,6 +325,11 @@ struct FarBuffers {
     /// What they hold at most: rooms, windows, and the table's entries (a power of two, at least
     /// twice the rooms, so that it stays at most half full).
     capacity: [u32; 3],
+    /// The store's far rooms flattened, kept until its sets change: the rooms, their windows and
+    /// the table's keys (each with the fixed share until the pass writes its room's).
+    flat: Option<FarFlat>,
+    /// Each slot's buffers hold `flat` (the pass rewrites the shares every frame).
+    written: [bool; FRAMES_IN_FLIGHT],
 }
 
 impl FarBuffers {
@@ -350,7 +359,52 @@ impl FarBuffers {
                 .map(|b| b.map(GraphBuffer::new))
                 .collect::<Result<_>>()?,
             capacity: [volumes, volumes, entries],
+            flat: None,
+            written: [false; FRAMES_IN_FLIGHT],
         })
+    }
+
+    /// The region store's sets changed: flattened and written again.
+    fn invalidate(&mut self) {
+        self.flat = None;
+        self.written = [false; FRAMES_IN_FLIGHT];
+    }
+
+    /// `rooms` flattened into the buffers' records, as many as they hold, with `fixed` the share
+    /// every entry starts with.
+    fn flatten<'a>(&self, rooms: impl Iterator<Item = &'a FarRoom>, fixed: f32) -> FarFlat {
+        let [room_room, window_room, entries] = self.capacity;
+        let mask = entries - 1;
+        let mut records: Vec<GpuFarRoom> = Vec::new();
+        let mut windows: Vec<GpuFarWindow> = Vec::new();
+        let mut table = vec![[0_u32; 2]; entries as usize];
+        for room in rooms {
+            if records.len() as u32 >= room_room
+                || (windows.len() + room.windows.len()) as u32 > window_room
+            {
+                break;
+            }
+            let mut at = room_hash(room.region, mask);
+            while table[at as usize][0] != 0 && table[at as usize][0] != room.region {
+                at = (at + 1) & mask;
+            }
+            if table[at as usize][0] == room.region {
+                continue;
+            }
+            table[at as usize] = [room.region, fixed.to_bits()];
+            records.push(GpuFarRoom {
+                first: windows.len() as u32,
+                count: room.windows.len() as u32,
+                surface: room.surface,
+                slot: at,
+            });
+            windows.extend(room.windows.iter().map(|w| GpuFarWindow {
+                normal: w.normal.to_array(),
+                area: w.area,
+                pad: 0,
+            }));
+        }
+        (records, windows, table)
     }
 }
 
@@ -887,12 +941,18 @@ impl Probes {
                 "region sets need room first (`Probes::reserve_regions`)".into(),
             )
         })?;
+        if let Some(far) = self.far.as_mut() {
+            far.invalidate();
+        }
         store.add(device, volumes, true)
     }
 
     /// Removes set `id` (#338) from the next frame: the probes about it are woken. Nothing for a
     /// set not in.
     pub fn remove_regions(&mut self, id: RegionSetId) -> Result<()> {
+        if let Some(far) = self.far.as_mut() {
+            far.invalidate();
+        }
         match self.regions.as_mut() {
             Some(store) => store.remove(id),
             None => Ok(()),
@@ -1046,51 +1106,28 @@ impl Probes {
             (None, _) => None,
         };
         // The far rooms' daylight (#356): their windows, and the table's keys with the fixed
-        // share in every entry until the pass writes its room's.
+        // share in every entry until the pass writes its room's; flattened when the sets change,
+        // and written once into each slot then.
         let far = match (
             p.far_room_daylight,
-            self.far.as_ref(),
+            self.far.as_mut(),
             self.regions.as_ref(),
         ) {
             (Some(daylight), Some(bufs), Some(store)) => {
-                let [room_room, window_room, entries] = bufs.capacity;
-                let mask = entries - 1;
-                let mut rooms: Vec<GpuFarRoom> = Vec::new();
-                let mut windows: Vec<GpuFarWindow> = Vec::new();
-                let mut table = vec![[0_u32; 2]; entries as usize];
-                for room in store.far_rooms() {
-                    if rooms.len() as u32 >= room_room
-                        || (windows.len() + room.windows.len()) as u32 > window_room
-                    {
-                        break;
-                    }
-                    let mut at = room_hash(room.region, mask);
-                    while table[at as usize][0] != 0 && table[at as usize][0] != room.region {
-                        at = (at + 1) & mask;
-                    }
-                    if table[at as usize][0] == room.region {
-                        continue;
-                    }
-                    table[at as usize] = [room.region, p.far_room_sky.to_bits()];
-                    rooms.push(GpuFarRoom {
-                        first: windows.len() as u32,
-                        count: room.windows.len() as u32,
-                        surface: room.surface,
-                        slot: at,
-                    });
-                    windows.extend(room.windows.iter().map(|w| GpuFarWindow {
-                        normal: w.normal.to_array(),
-                        area: w.area,
-                        pad: 0,
-                    }));
+                if bufs.flat.is_none() {
+                    bufs.flat = Some(bufs.flatten(store.far_rooms(), p.far_room_sky));
                 }
-                bufs.rooms[slot.index].write(0, &rooms);
-                bufs.windows[slot.index].write(0, &windows);
-                bufs.table[slot.index].write(0, &table);
+                let (rooms, windows, table) = bufs.flat.as_ref().expect("flattened above");
+                if !bufs.written[slot.index] {
+                    bufs.rooms[slot.index].write(0, rooms);
+                    bufs.windows[slot.index].write(0, windows);
+                    bufs.table[slot.index].write(0, table);
+                    bufs.written[slot.index] = true;
+                }
                 Some((
                     daylight,
                     rooms.len() as u32,
-                    mask,
+                    bufs.capacity[2] - 1,
                     bufs.table[slot.index].address(),
                 ))
             }

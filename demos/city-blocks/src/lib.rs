@@ -836,8 +836,11 @@ struct Gallery {
     /// (`r.aa fsr`): made at the start, or when the console first asks for it.
     fsr: Option<forge_render::FsrUpscaler>,
     fsr_on: bool,
-    /// AMD's FSR through its DLLs (`--fsr-amd`), which takes `fsr`'s place while `fsr_on`.
+    /// AMD's FSR through its DLLs (`--fsr-amd`), which takes `fsr`'s place while `fsr_on`:
+    /// looked for once, with the first FSR (at the start or from the console), and dropped for
+    /// good if the DLLs refuse a frame.
     ffx: Option<forge_render::FfxUpscaler>,
+    ffx_tried: bool,
     /// The display pass: DLAA's or FSR's image, or the frame as drawn with the anti-aliasing
     /// off, through the tone curve with bloom.
     display: forge_render::Display,
@@ -1259,49 +1262,11 @@ impl Gallery {
                 )
             })
             .transpose()?;
-        // AMD's FSR through its DLLs (#361): on AMD's cards when they offer FSR 4, anywhere with
-        // `--fsr-amd on`; loaded only then (the upscaler's DLL is 36 MB, its working set 81 MB
-        // at 1080p).
-        const AMD: u32 = 0x1002;
-        let ffx = match args.fsr_amd {
-            FsrAmd::Off => None,
-            _ if fsr.is_none() => None,
-            FsrAmd::Auto if ctx.device.vendor_id() != AMD => None,
-            asked => {
-                let dir = std::env::var_os("FORGE_FFX_DIR")
-                    .map(std::path::PathBuf::from)
-                    .unwrap_or_else(|| {
-                        forge_app::workspace_root_from(env!("CARGO_MANIFEST_DIR"))
-                            .join("fsr-sdk/Kits/FidelityFX/signedbin")
-                    });
-                match forge_render::FfxUpscaler::new(
-                    &ctx.device,
-                    &dir,
-                    forge_render::FsrMode::NativeAa,
-                    ctx.extent(),
-                    // FSR 4 or nothing on auto (no context made where the DLLs offer only FSR
-                    // 3.1: Forge's own runs there); FSR 4 where offered, else their default, on.
-                    match asked {
-                        FsrAmd::On => forge_gpu::FfxPick::Prefer(4),
-                        _ => forge_gpu::FfxPick::Only(4),
-                    },
-                ) {
-                    Ok(upscaler) => {
-                        let (versions, running) = upscaler.versions();
-                        tracing::info!(?versions, running, "AMD's FSR DLLs");
-                        Some(upscaler)
-                    }
-                    Err(error) => {
-                        if asked == FsrAmd::On {
-                            tracing::warn!(%error, "AMD's FSR DLLs: Forge's FSR 3.1 instead");
-                        } else {
-                            tracing::info!(%error, "AMD's FSR DLLs: Forge's FSR 3.1");
-                        }
-                        None
-                    }
-                }
-            }
-        };
+        // AMD's FSR through its DLLs (#361), beside the FSR made at the start.
+        let ffx_tried = fsr.is_some();
+        let ffx = fsr
+            .as_ref()
+            .and_then(|_| amd_fsr(args.fsr_amd, &ctx.device, ctx.extent()));
         let display = forge_render::Display::new(&ctx.device, &ctx.shaders, ctx.output.format)?;
         // Known before the scene, whose streamed pages it loads first (#121).
         let mut camera = start_camera(&args, scenario.as_ref().map(|s| s.camera()))?;
@@ -2047,6 +2012,7 @@ impl Gallery {
             fsr_on: fsr.is_some(),
             fsr,
             ffx,
+            ffx_tried,
             display,
             sun_shadow_on,
             sun_shadows,
@@ -2493,6 +2459,20 @@ impl Demo for Gallery {
     }
 
     fn render<'f>(&'f mut self, ctx: &mut Context, frame: &mut FrameInfo<'f>) -> Result<()> {
+        // AMD's FSR DLLs refused a frame (an AMD card the path was never tested on, #67):
+        // Forge's FSR 3.1 from now on, their context dropped once no frame uses it.
+        if self
+            .ffx
+            .as_ref()
+            .is_some_and(forge_render::FfxUpscaler::failed)
+        {
+            ctx.device.wait_idle();
+            self.ffx = None;
+            self.taa.reset_history();
+            if let Some(fsr) = self.fsr.as_mut() {
+                fsr.reset_history();
+            }
+        }
         // The bloom's share at the hour (the night as the last frame left it).
         let bloom_share = self.taa.bloom_strength * self.night_bloom();
         // The impostors' bakes (D-075 step 4) before the scene is drawn: a frame of each bake a
@@ -4203,6 +4183,55 @@ pub fn percentile(values: &mut [f64], q: f64) -> f64 {
         .get(((values.len().max(1) - 1) as f64 * q).round() as usize)
         .copied()
         .unwrap_or(0.0)
+}
+
+/// AMD's FSR through its DLLs (#361) as `--fsr-amd` asks: on AMD's cards where they offer FSR
+/// 4, anywhere with `on`; loaded only then (the upscaler's DLL is 36 MB, its working set 81 MB at
+/// 1080p). Their directory: `FORGE_FFX_DIR`, else `fsr-sdk/Kits/FidelityFX/signedbin`.
+pub(crate) fn amd_fsr(
+    asked: FsrAmd,
+    device: &Arc<forge_gpu::Device>,
+    extent: forge_gpu::vk::Extent2D,
+) -> Option<forge_render::FfxUpscaler> {
+    const AMD: u32 = 0x1002;
+    match asked {
+        FsrAmd::Off => return None,
+        FsrAmd::Auto if device.vendor_id() != AMD => return None,
+        _ => {}
+    }
+    let dir = std::env::var_os("FORGE_FFX_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            forge_app::workspace_root_from(env!("CARGO_MANIFEST_DIR"))
+                .join("fsr-sdk/Kits/FidelityFX/signedbin")
+        });
+    // FSR 4 or nothing on auto (no context where the DLLs offer only FSR 3.1: Forge's own runs
+    // there); with `on`, FSR 4 where offered, else their own choice.
+    let pick = match asked {
+        FsrAmd::On => forge_gpu::FfxPick::Prefer(4),
+        _ => forge_gpu::FfxPick::Only(4),
+    };
+    match forge_render::FfxUpscaler::new(
+        device,
+        &dir,
+        forge_render::FsrMode::NativeAa,
+        extent,
+        pick,
+    ) {
+        Ok(upscaler) => {
+            let (versions, running) = upscaler.versions();
+            tracing::info!(?versions, running, "AMD's FSR DLLs");
+            Some(upscaler)
+        }
+        Err(error) => {
+            if asked == FsrAmd::On {
+                tracing::warn!(%error, "AMD's FSR DLLs: Forge's FSR 3.1 instead");
+            } else {
+                tracing::info!(%error, "AMD's FSR DLLs: Forge's FSR 3.1");
+            }
+            None
+        }
+    }
 }
 
 /// `volumes` in groups whose footprints touch, each group in their order (#338's check of the

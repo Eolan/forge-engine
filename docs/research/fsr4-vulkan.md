@@ -71,11 +71,14 @@ it on (#67) or as a load-and-fall-back path before that.
 
 `forge_gpu::ffx` (the binding, the `ffx` feature), `forge_render::FfxUpscaler` (the graph pass
 "temporal/FSR (AMD)") and `--fsr-amd auto|on|off` under `r.aa=fsr`. What the build answered:
-- **The version names** are numbers ("3.1.6", "2.3.4"), not "FSR 3.1.6": the context picks by
-  major number.
+- **The version names** are numbers ("3.1.6", "2.3.4"; a driver's "FSR 4.1.3 *"), not
+  "FSR 3.1.6": versions are compared by number. The DLLs' own choice (the newest) is kept where
+  it is FSR 4, since an override opts the context out of the drivers' updates; one is given
+  only where an FSR 4 is offered and is not their choice.
 - **Open question 1, in part:** the DLLs' FSR 3.1.6 declares
   `SPV_KHR_compute_shader_derivatives` (`ComputeDerivativeGroupLinearKHR`), which Forge now enables
-  where present. FSR 4's needs wait for an AMD card.
+  where present, with what AMD's framework enables for FSR 4 (16-bit storage, integer dot
+  products, cooperative matrices, 8-bit floats). Whether FSR 4 needs more waits for an AMD card.
 - **Open question 2:** on the 5070 Ti and on the RDNA 2 iGPU the DLLs offer 3.1.6 and 2.3.4 only.
   Their 3.1.6 runs on both (0.288 ms and 14.2 ms, against Forge's 0.317 and 18.7 with RCAS); the
   iGPU's `auto` keeps Forge's FSR 3.1.

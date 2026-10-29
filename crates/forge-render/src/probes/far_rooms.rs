@@ -33,41 +33,53 @@ pub(super) struct FarRoom {
 }
 
 /// The rooms of a set's `volumes` with a window, in the order of their regions' first volume. A
-/// room of several volumes sums their surfaces; a recess counts for its own region's room.
+/// room of several volumes sums their surfaces, less the faces two of them share; a recess counts
+/// for its own region's room and faces away from the volume of it it opens from.
 pub(super) fn far_rooms(volumes: &[RegionVolume]) -> Vec<FarRoom> {
-    // Each room region: its surfaces and the mean of its volumes' corners.
-    let mut rooms: Vec<(u32, f32, Vec2, f32)> = Vec::new();
-    for v in volumes.iter().filter(|v| v.kind == RegionKind::Room) {
+    let room_volumes: Vec<&RegionVolume> = volumes
+        .iter()
+        .filter(|v| v.kind == RegionKind::Room)
+        .collect();
+    let mut out: Vec<FarRoom> = Vec::new();
+    for (i, v) in room_volumes.iter().enumerate() {
         let c = v.corners;
-        let edges = [c[1] - c[0], c[2] - c[1], c[3] - c[2], c[0] - c[3]];
-        let perimeter: f32 = edges.iter().map(|e| e.length()).sum();
+        let height = (v.ceiling - v.floor).max(0.0);
+        let perimeter: f32 = (0..4).map(|k| (c[(k + 1) % 4] - c[k]).length()).sum();
         let floor_area = 0.5 * ((c[2] - c[0]).perp_dot(c[3] - c[1])).abs();
-        let surface = 2.0 * floor_area + perimeter * (v.ceiling - v.floor).max(0.0);
-        let centre = (c[0] + c[1] + c[2] + c[3]) * 0.25;
-        match rooms.iter_mut().find(|r| r.0 == v.region) {
-            Some(r) => {
-                r.1 += surface;
-                r.2 += centre;
-                r.3 += 1.0;
-            }
-            None => rooms.push((v.region, surface, centre, 1.0)),
+        let mut surface = 2.0 * floor_area + perimeter * height;
+        // A face shared with the room's volumes before it was a wall in both: an opening.
+        for w in room_volumes[..i].iter().filter(|w| w.region == v.region) {
+            let shared = height.min((w.ceiling - w.floor).max(0.0));
+            surface -= 2.0 * shared_length(&v.corners, &w.corners) * shared;
+        }
+        match out.iter_mut().find(|r| r.region == v.region) {
+            Some(r) => r.surface += surface,
+            None => out.push(FarRoom {
+                region: v.region,
+                surface,
+                windows: Vec::new(),
+            }),
         }
     }
-    let mut out: Vec<FarRoom> = rooms
-        .iter()
-        .map(|&(region, surface, _, _)| FarRoom {
-            region,
-            surface,
-            windows: Vec::new(),
-        })
-        .collect();
     for v in volumes.iter().filter(|v| v.kind == RegionKind::Recess) {
-        let Some(i) = rooms.iter().position(|r| r.0 == v.region) else {
+        let Some(i) = out.iter().position(|r| r.region == v.region) else {
             continue;
         };
-        let room_centre = rooms[i].2 / rooms[i].3;
-        // A reveal is a thin box: its glass across the short side, its width the long one.
         let c = v.corners;
+        let centre = (c[0] + c[1] + c[2] + c[3]) * 0.25;
+        // The room's volume it opens from: its region's nearest.
+        let Some(room) = room_volumes
+            .iter()
+            .filter(|w| w.region == v.region)
+            .min_by(|a, b| {
+                distance_to(centre, &a.corners).total_cmp(&distance_to(centre, &b.corners))
+            })
+        else {
+            continue;
+        };
+        let r = room.corners;
+        let room_centre = (r[0] + r[1] + r[2] + r[3]) * 0.25;
+        // A reveal is a thin box: its glass across the short side, its width the long one.
         let (a, b) = (c[1] - c[0], c[3] - c[0]);
         let (along, across) = if a.length() >= b.length() {
             (a, b)
@@ -82,7 +94,6 @@ pub(super) fn far_rooms(volumes: &[RegionVolume]) -> Vec<FarRoom> {
         if area <= 0.0 {
             continue;
         }
-        let centre = (c[0] + c[1] + c[2] + c[3]) * 0.25;
         let normal = if (centre - room_centre).dot(axis) >= 0.0 {
             axis
         } else {
@@ -92,6 +103,40 @@ pub(super) fn far_rooms(volumes: &[RegionVolume]) -> Vec<FarRoom> {
     }
     out.retain(|r| !r.windows.is_empty() && r.surface > 0.0);
     out
+}
+
+/// The length along which two outlines' edges lie on one line (within a centimetre) and overlap:
+/// the face two volumes of a room share.
+fn shared_length(a: &[Vec2; 4], b: &[Vec2; 4]) -> f32 {
+    let mut total = 0.0;
+    for k in 0..4 {
+        let (p0, p1) = (a[k], a[(k + 1) % 4]);
+        let length = (p1 - p0).length();
+        let Some(d) = (p1 - p0).try_normalize() else {
+            continue;
+        };
+        for m in 0..4 {
+            let (q0, q1) = (b[m], b[(m + 1) % 4]);
+            let off = |q: Vec2| (q - p0).perp_dot(d).abs();
+            if off(q0) > 0.01 || off(q1) > 0.01 {
+                continue;
+            }
+            let (s0, s1) = ((q0 - p0).dot(d), (q1 - p0).dot(d));
+            total += (s0.max(s1).min(length) - s0.min(s1).max(0.0)).max(0.0);
+        }
+    }
+    total
+}
+
+/// How far `p` is from an outline's edges.
+fn distance_to(p: Vec2, c: &[Vec2; 4]) -> f32 {
+    (0..4)
+        .map(|k| {
+            let (a, b) = (c[k], c[(k + 1) % 4]);
+            let t = ((p - a).dot(b - a) / (b - a).length_squared().max(1e-12)).clamp(0.0, 1.0);
+            (p - (a + (b - a) * t)).length()
+        })
+        .fold(f32::MAX, f32::min)
 }
 
 #[cfg(test)]
@@ -176,10 +221,46 @@ mod tests {
         assert!((first.windows[0].area - 1.2).abs() < 1e-5);
         let third = &rooms[1];
         assert_eq!(third.region, 3);
-        assert!((third.surface - 2.0 * (2.0 * 6.0 + 10.0 * 3.0)).abs() < 1e-3);
+        // 4 × 3 m in two volumes: the face between them is no wall.
+        assert!(
+            (third.surface - (2.0 * 12.0 + 14.0 * 3.0)).abs() < 1e-3,
+            "{}",
+            third.surface
+        );
         let normals: Vec<Vec2> = third.windows.iter().map(|w| w.normal).collect();
         assert!((normals[0] - Vec2::X).length() < 1e-6, "{normals:?}");
         assert!((normals[1] + Vec2::X).length() < 1e-6, "{normals:?}");
         assert!((third.windows[1].area - 1.5).abs() < 1e-5);
+    }
+
+    /// An L-shaped room: a window in the long arm's wall facing the notch faces out of that arm,
+    /// though the mean of the two arms' middles lies beyond it (the review of 5eef68b3).
+    #[test]
+    fn a_window_faces_out_of_the_volume_it_opens_from() {
+        let room = |corners| RegionVolume {
+            corners,
+            floor: 0.0,
+            ceiling: 3.0,
+            region: 1,
+            other: 1,
+            kind: RegionKind::Room,
+        };
+        let v = vec![
+            room(outline(0.0, 0.0, 10.0, 2.0)),
+            room(outline(0.0, 2.0, 2.0, 10.0)),
+            RegionVolume {
+                corners: outline(5.0, 1.99, 6.0, 2.2),
+                floor: 1.0,
+                ceiling: 2.0,
+                region: 1,
+                other: 1,
+                kind: RegionKind::Recess,
+            },
+        ];
+        let rooms = far_rooms(&v);
+        assert_eq!(rooms.len(), 1);
+        assert!((rooms[0].windows[0].normal - Vec2::Y).length() < 1e-6);
+        // 20 + 16 m² of floor; walls round the L (10 + 2 + 8 + 8 + 2 + 10, 40 m) 3 m high.
+        assert!((rooms[0].surface - (2.0 * 36.0 + 40.0 * 3.0)).abs() < 1e-3);
     }
 }

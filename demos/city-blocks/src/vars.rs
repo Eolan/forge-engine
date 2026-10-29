@@ -284,6 +284,11 @@ impl Gallery {
                     Err(error) => tracing::error!(%error, "r.aa: no FSR, no anti-aliasing"),
                 }
             }
+            // AMD's DLLs beside it as `--fsr-amd` asks (#361), looked for once.
+            if fsr_wanted && self.fsr.is_some() && !self.ffx_tried {
+                self.ffx_tried = true;
+                self.ffx = crate::amd_fsr(self.args.fsr_amd, &ctx.device, ctx.extent());
+            }
             self.fsr_on = fsr_wanted && self.fsr.is_some();
             if let Some(fsr) = self.fsr.as_mut().filter(|_| fsr_wanted) {
                 fsr.reset_history();

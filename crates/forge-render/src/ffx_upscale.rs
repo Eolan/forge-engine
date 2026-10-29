@@ -7,6 +7,7 @@
 
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use forge_gpu::{
     Device, Ffx, FfxFrame, FfxImages, FfxPick, FrameGraph, GraphImage, ImageAccess, ImageDesc,
@@ -36,6 +37,8 @@ pub struct FfxUpscaler {
     reset: bool,
     /// RCAS after the upscale, 0 to 1, or none (`FsrUpscaler::sharpness`'s).
     pub sharpness: Option<f32>,
+    /// A dispatch the DLLs refused ([`Self::failed`]).
+    failed: AtomicBool,
 }
 
 impl FfxUpscaler {
@@ -48,7 +51,8 @@ impl FfxUpscaler {
         output_extent: vk::Extent2D,
         pick: FfxPick,
     ) -> Result<Self> {
-        let render = render_extent(mode, output_extent);
+        // The context for the largest frame any mode draws at this output.
+        let render = render_extent(FsrMode::NativeAa, output_extent);
         let ffx = Ffx::load(device, dir, render, output_extent, pick)?;
         let exposure = GraphImage::uploaded(
             device,
@@ -75,6 +79,7 @@ impl FfxUpscaler {
             exposure,
             reset: true,
             sharpness: None,
+            failed: AtomicBool::new(false),
         })
     }
 
@@ -94,8 +99,8 @@ impl FfxUpscaler {
     }
 
     /// A new mode or output size: the output image again, the context again when the output
-    /// outgrew the one it was made for (a new size waits for the device to be idle, as the
-    /// swapchain's does).
+    /// outgrew the one it was made for. The caller waits for the device to be idle first, as for
+    /// the swapchain: the old ones are dropped at once.
     pub fn configure(&mut self, mode: FsrMode, output_extent: vk::Extent2D) -> Result<()> {
         if mode == self.mode && output_extent == self.output_extent {
             return Ok(());
@@ -114,6 +119,12 @@ impl FfxUpscaler {
         self.output_extent = output_extent;
         self.reset = true;
         Ok(())
+    }
+
+    /// The DLLs refused a dispatch (an AMD card the path was never tested on, #67): the pass
+    /// left its output as it was, and the caller should hand the frames to Forge's FSR 3.1.
+    pub fn failed(&self) -> bool {
+        self.failed.load(Ordering::Relaxed)
     }
 
     /// The size the frame is to be drawn at.
@@ -165,7 +176,7 @@ impl FfxUpscaler {
             None => pass,
         };
         pass.run(move |resources, commands| {
-            this.ffx.dispatch(
+            let result = this.ffx.dispatch(
                 commands,
                 &ffx_frame,
                 &FfxImages {
@@ -176,7 +187,14 @@ impl FfxUpscaler {
                     reactive: reactive.map(|m| resources.image(m)),
                     output: resources.image(output),
                 },
-            )
+            );
+            // A refusal costs this frame's upscale, not the frame: the caller falls back.
+            if let Err(error) = result
+                && !this.failed.swap(true, Ordering::Relaxed)
+            {
+                tracing::error!(%error, "AMD's FSR DLLs refused a frame: Forge's FSR 3.1 next");
+            }
+            Ok(())
         });
         output
     }

@@ -734,6 +734,7 @@ impl Particles {
             pass = pass
                 .buffer(p.data, BufferAccess::ShaderRead(compute))
                 .buffer(p.region, BufferAccess::ShaderRead(compute))
+                .with(|b| p.declare_far(b, compute))
                 .image(p.irradiance, ImageAccess::Sampled(compute))
                 .image(p.distance, ImageAccess::Sampled(compute));
         }
