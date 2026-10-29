@@ -343,13 +343,13 @@ bloom; with the anti-aliasing off it shows the frame as drawn, without jitter.
   - **AMD's RCAS sharpens its image** (`r.fsr.sharpen`, on at 0.5). Forge's bridge runs RCAS
     in [0, 1] through AMD's reversible tone map and a square root, as RCAS expects a display
     signal.
-- **FSR 4 through AMD's DLLs** (`forge_render::FfxUpscaler` over `forge_gpu::ffx`, the `ffx`
-  feature, D-082): where the FSR SDK 2.4.0's signed DLLs offer FSR 4 for an AMD card,
-  `r.aa=fsr` takes it in place of Forge's FSR 3.1 (`--fsr-amd auto`, the default; the DLLs are
-  loaded on AMD's devices only). One graph pass, "temporal/FSR (AMD)", declares the frame's
-  images; the DLLs record their own passes and barriers inside it, as Streamline does for DLSS.
-  `--fsr-amd on` takes the DLLs wherever they load (their FSR 3.1.6 on NVIDIA: the path's
-  test), `off` never.
+- **AMD's FSR through its DLLs** (`forge_render::FfxUpscaler` over `forge_gpu::ffx`, the `ffx`
+  feature, D-082): wherever the system has the FSR SDK 2.4.0's signed DLLs (`FORGE_FFX_DIR`,
+  beside the executable, or the git-ignored `fsr-sdk/`), `r.aa=fsr` takes them in place of
+  Forge's FSR 3.1 on any GPU (`--fsr-amd auto`, the default): FSR 4 where they offer it, else
+  their FSR 3.1.6. One graph pass, "temporal/FSR (AMD)", declares the frame's images; the DLLs
+  record their own passes and barriers inside it, as Streamline does for DLSS. `--fsr-amd on`
+  warns where the system hasn't them, `off` keeps Forge's FSR 3.1 (the FSR captures pin it).
 - **Drawn smaller for either upscaler,** the resolve keeps the textures' detail at the output's
   size: `MeshletRenderer::texture_lod_bias`, log2(render / output), scales the UV derivatives.
 

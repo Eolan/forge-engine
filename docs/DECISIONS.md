@@ -7827,7 +7827,11 @@ owner's machine to try.
 **Not done:** a resolution scale apart from the upscalers' modes; presets fitted by a measured
 frame time rather than by memory; the menu's page for the sound and the keys.
 
-## D-082 — FSR 4 through AMD's signed DLLs on AMD's cards, Forge's FSR 3.1 everywhere else ✅ (the owner's go, 2026-10-29, #361)
+## D-082 — AMD's FSR DLLs wherever the system has them (FSR 4 on AMD's cards), Forge's FSR 3.1 elsewhere ✅ (the owner's go, 2026-10-29, #361)
+
+**The owner, the same morning:** "We should probably adopt the FSR dlls if available on the
+system though": under `r.aa=fsr`, `auto` takes the DLLs on any GPU wherever the system has
+them, and Forge's FSR 3.1 runs only where it hasn't (the choice below, amended).
 
 **The owner (2026-10-29):** "And FSR 4 module after", on the proposal of
 `research/fsr4-vulkan.md`: FSR 4 behind `r.aa=fsr` on AMD through the FSR SDK 2.4.0's signed
@@ -7851,12 +7855,16 @@ before there is an AMD card to test it on (#67).
   the layout the graph gave it, as Streamline does for DLSS. RCAS follows `r.fsr.sharpen` and
   `r.fsr.sharpness`, as for Forge's FSR. A dispatch the DLLs refuse costs that frame's upscale,
   not the frame: the demo then drops their context and hands the frames to Forge's FSR 3.1.
-- **The choice** (`--fsr-amd`, under `r.aa=fsr`): `auto`, the default, loads the DLLs on AMD's
-  devices only (the cross-vendor rule) and makes a context only where they offer FSR 4; `on`
-  takes them wherever they load (FSR 4 where offered, else their default: their FSR 3.1.6 on the
-  5070 Ti, the path's test); `off` never. Wherever they are not taken, Forge's FSR 3.1 runs.
-  The DLLs are looked for with the first FSR, at the start or when the console first asks for
-  `r.aa fsr`.
+- **The choice** (`--fsr-amd`, under `r.aa=fsr`): `auto`, the default, takes the DLLs on any
+  GPU wherever the system has them: FSR 4 where they offer it, else their own choice (their FSR
+  3.1.6 on the 5070 Ti and on the RDNA 2 iGPU). `on` does the same and warns where the system
+  hasn't them; `off` never takes them. Wherever they are not taken, Forge's FSR 3.1 runs; the
+  FSR captures and the validation run pin `off` to keep testing it. Until the owner's word
+  above, `auto` loaded them on AMD's devices only and only for FSR 4.
+- **Where they are looked for,** with the first FSR (at the start, or when the console first
+  asks for `r.aa fsr`): `FORGE_FFX_DIR` when set, else beside the executable (a player's
+  install), else the git-ignored `fsr-sdk/Kits/FidelityFX/signedbin` (the night's tree has it
+  through a junction, as the other SDKs).
 - **The device:** `VK_KHR_compute_shader_derivatives` (`computeDerivativeGroupLinear`) is
   enabled where present: the DLLs' shaders declare it, and the validation layer flagged it. So
   are, where present, what AMD's own framework enables for FSR 4's models:

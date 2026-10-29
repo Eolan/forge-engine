@@ -81,6 +81,7 @@ it on (#67) or as a load-and-fall-back path before that.
   products, cooperative matrices, 8-bit floats). Whether FSR 4 needs more waits for an AMD card.
 - **Open question 2:** on the 5070 Ti and on the RDNA 2 iGPU the DLLs offer 3.1.6 and 2.3.4 only.
   Their 3.1.6 runs on both (0.288 ms and 14.2 ms, against Forge's 0.317 and 18.7 with RCAS); the
-  iGPU's `auto` keeps Forge's FSR 3.1.
+  iGPU's `auto` kept Forge's FSR 3.1 until the owner's word the same morning; since then `auto`
+  takes the DLLs on any GPU wherever the system has them (FSR 4 where offered).
 - **The validation layer** warns, inside the DLLs, of 16-bit storage images written through
   32-bit format declarations (`rw_spd_mip*`, `rw_current_luma`): AMD's own resources.

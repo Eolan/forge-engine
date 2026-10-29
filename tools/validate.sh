@@ -103,8 +103,8 @@ for path in $paths; do
   validate "meshlets$tag" "$bin/meshlets$exe" --mip-check --tone-check --frames 60 $path
   validate "city$tag" "$bin/city-blocks$exe" --frames 90 $path
   validate "city-resident$tag" "$bin/city-blocks$exe" --stream-pool 0 --frames 60 $path
-  # FSR 3.1 (D-070), the path off NVIDIA.
-  validate "city-fsr$tag" "$bin/city-blocks$exe" --set r.aa=fsr --frames 60 $path
+  # Forge's FSR 3.1 (D-070), where DLSS doesn't run and AMD's DLLs (D-082) aren't on the system.
+  validate "city-fsr$tag" "$bin/city-blocks$exe" --set r.aa=fsr --fsr-amd off --frames 60 $path
   # The flight streams pages on the transfer queue after the start, and the frames after a copy
   # leave out the waits their queue already made (#104).
   validate "city-fly$tag" "$bin/city-blocks$exe" --fly --frames 600 $path

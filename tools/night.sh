@@ -69,7 +69,7 @@ if [ ! -d "$tree/.git" ] && [ ! -f "$tree/.git" ]; then
 fi
 git -C "$tree" checkout -q --detach origin/main && git -C "$tree" reset -q --hard origin/main &&
   git -C "$tree" clean -fdq || { say "verdict: not run, $tree did not check out origin/main"; finish 1; }
-for dir in streamline-sdk nrd-sdk rtxdi-sdk steam-audio-sdk fidelityfx-sdk tracy \
+for dir in streamline-sdk nrd-sdk rtxdi-sdk steam-audio-sdk fidelityfx-sdk fsr-sdk tracy \
   assets/external assets/planets assets/sounds; do
   [ -d "$main/$dir" ] || continue
   [ -d "$tree/$dir/." ] && continue

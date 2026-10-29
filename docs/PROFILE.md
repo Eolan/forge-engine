@@ -143,8 +143,8 @@ exposure (EV100, target, compensation, curve) the last.
 - RCAS after FSR (D-070, on by default): `temporal/FSR sharpen` 0.015–0.023 ms at 1600 × 900
   in the city. On the AMD iGPU (RDNA 2), the ballad: 1.31 ms, FSR 19.4 ms in all of 135 ms.
   The city there: a 305 ms frame, `gi/probe rays` 115 ms, FSR 18.8 ms.
-- AMD's FSR through its DLLs (D-082, `--fsr-amd on`: their FSR 3.1.6 where no FSR 4 is
-  offered), RCAS on in both, the city's 121 frames at 1600 × 900: `temporal/FSR (AMD)` 0.288 ms
+- AMD's FSR through its DLLs (D-082, the default under `r.aa=fsr` wherever the system has them: their FSR 3.1.6
+  where no FSR 4 is offered), RCAS on in both, the city's 121 frames at 1600 × 900: `temporal/FSR (AMD)` 0.288 ms
   against Forge's nine FSR passes' 0.317 (accumulate 0.127). On the AMD iGPU (RDNA 2), 60
   frames: 14.2 ms against Forge's 18.7 (accumulate 8.1). FSR 4 itself is unmeasured (no
   RX 6000–9000 here, #67); AMD's table gives 0.35 ms at 1080p on an RX 9070 XT.

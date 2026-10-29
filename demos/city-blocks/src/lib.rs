@@ -739,9 +739,10 @@ pub struct Args {
     #[arg(long)]
     no_taa: bool,
     /// AMD's FSR through its signed DLLs (FSR SDK 2.4.0, `docs/research/fsr4-vulkan.md`) in
-    /// place of Forge's FSR 3.1 under `r.aa fsr`: `auto` on AMD's cards where the DLLs offer FSR
-    /// 4, `on` wherever they load (their FSR 3.1 elsewhere: the path's test on NVIDIA), `off`
-    /// never. The DLLs from `FORGE_FFX_DIR`, else `fsr-sdk/Kits/FidelityFX/signedbin`.
+    /// place of Forge's FSR 3.1 under `r.aa fsr`, on any GPU: `auto` wherever the system has them
+    /// (FSR 4 where they offer it, else their own FSR 3.1), `on` the same with a warning where it
+    /// hasn't, `off` never. The DLLs from `FORGE_FFX_DIR`, else beside the executable, else
+    /// `fsr-sdk/Kits/FidelityFX/signedbin`.
     #[arg(long, value_enum, default_value_t = FsrAmd::Auto)]
     fsr_amd: FsrAmd,
     /// What the props' textures keep: full (colour and relief), flat (colour alone) or none
@@ -4185,38 +4186,31 @@ pub fn percentile(values: &mut [f64], q: f64) -> f64 {
         .unwrap_or(0.0)
 }
 
-/// AMD's FSR through its DLLs (#361) as `--fsr-amd` asks: on AMD's cards where they offer FSR
-/// 4, anywhere with `on`; loaded only then (the upscaler's DLL is 36 MB, its working set 81 MB at
-/// 1080p). Their directory: `FORGE_FFX_DIR`, else `fsr-sdk/Kits/FidelityFX/signedbin`.
+/// AMD's FSR through its DLLs (#361) as `--fsr-amd` asks: on any GPU wherever the system has
+/// them (the owner, 2026-10-29); loaded only then (the upscaler's DLL is 36 MB, its working set
+/// 81 MB at 1080p). FSR 4 where they offer it, else their own choice (their FSR 3.1.6).
 pub(crate) fn amd_fsr(
     asked: FsrAmd,
     device: &Arc<forge_gpu::Device>,
     extent: forge_gpu::vk::Extent2D,
 ) -> Option<forge_render::FfxUpscaler> {
-    const AMD: u32 = 0x1002;
-    match asked {
-        FsrAmd::Off => return None,
-        FsrAmd::Auto if device.vendor_id() != AMD => return None,
-        _ => {}
+    if asked == FsrAmd::Off {
+        return None;
     }
-    let dir = std::env::var_os("FORGE_FFX_DIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            forge_app::workspace_root_from(env!("CARGO_MANIFEST_DIR"))
-                .join("fsr-sdk/Kits/FidelityFX/signedbin")
-        });
-    // FSR 4 or nothing on auto (no context where the DLLs offer only FSR 3.1: Forge's own runs
-    // there); with `on`, FSR 4 where offered, else their own choice.
-    let pick = match asked {
-        FsrAmd::On => forge_gpu::FfxPick::Prefer(4),
-        _ => forge_gpu::FfxPick::Only(4),
+    let Some(dir) = ffx_dir() else {
+        if asked == FsrAmd::On {
+            tracing::warn!("AMD's FSR DLLs not on the system: Forge's FSR 3.1 instead");
+        } else {
+            tracing::info!("AMD's FSR DLLs not on the system: Forge's FSR 3.1");
+        }
+        return None;
     };
     match forge_render::FfxUpscaler::new(
         device,
         &dir,
         forge_render::FsrMode::NativeAa,
         extent,
-        pick,
+        forge_gpu::FfxPick::Prefer(4),
     ) {
         Ok(upscaler) => {
             let (versions, running) = upscaler.versions();
@@ -4232,6 +4226,25 @@ pub(crate) fn amd_fsr(
             None
         }
     }
+}
+
+/// Where AMD's FSR DLLs are on this system: `FORGE_FFX_DIR` when set, else the first of the
+/// executable's directory (a player's install, where the DLLs are expected: they are never
+/// published, CREDITS.md) and the SDK's `fsr-sdk/Kits/FidelityFX/signedbin` (git-ignored) that
+/// holds the loader.
+fn ffx_dir() -> Option<std::path::PathBuf> {
+    if let Some(dir) = std::env::var_os("FORGE_FFX_DIR") {
+        return Some(dir.into());
+    }
+    let beside = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf));
+    let sdk = forge_app::workspace_root_from(env!("CARGO_MANIFEST_DIR"))
+        .join("fsr-sdk/Kits/FidelityFX/signedbin");
+    beside
+        .into_iter()
+        .chain([sdk])
+        .find(|dir| dir.join(forge_gpu::FFX_LOADER).is_file())
 }
 
 /// `volumes` in groups whose footprints touch, each group in their order (#338's check of the
@@ -5796,10 +5809,10 @@ fn cook(args: &Args, scenario: Option<&dyn Scenario>) -> Cooked {
 /// `--fsr-amd`: when AMD's FSR DLLs take the frame under `r.aa fsr`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
 pub enum FsrAmd {
-    /// On AMD's cards, where the DLLs offer FSR 4.
+    /// Wherever the system has the DLLs, on any GPU.
     #[default]
     Auto,
-    /// Wherever the DLLs load.
+    /// As `Auto`, with a warning where the system hasn't them (the path's test).
     On,
     /// Never: Forge's FSR 3.1.
     Off,

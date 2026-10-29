@@ -94,7 +94,8 @@ takes the lock `%TEMP%/forge-gpu.lock`; take it by hand for any other demo run.
 - Cross-vendor (the RTX 5070 Ti and AMD's RX 9070 XT and above, issue #67): no assumption on
   the subgroup size (`WaveGetLaneCount()`, `uint4` ballots, or a required size), at most
   32 KB of groupshared memory per workgroup (AMD's Windows limit), limits read from the
-  device, and vendor SDKs optional and loaded only for their vendor (Streamline on NVIDIA).
+  device, and vendor SDKs optional and loaded only for their vendor (Streamline on NVIDIA;
+  AMD's FSR DLLs, which run on any GPU, wherever the system has them, D-082).
 - Every pass is a render-graph pass (`graph.pass("group/name")`, D-020) declaring the images
   and buffers it reads and writes; the graph derives the barriers and the profiler zone.
   Nobody outside `forge-gpu` records a barrier; if a pass needs a resource the graph cannot
@@ -119,7 +120,8 @@ this file.
   - The owner sees shimmer, LOD pops and repeating textures at once. Fix them before new
     features.
   - DLSS (DLAA) is the image, in showcases and in the captures (D-070). FSR 3.1 replaced TAA
-    (its resolve and sharpening are gone) and is the anti-aliasing wherever DLSS does not run.
+    (its resolve and sharpening are gone) and is the anti-aliasing wherever DLSS does not run:
+    AMD's DLLs where the system has them (FSR 4 where offered), else Forge's port (D-082).
   - Weather is low priority.
 - **GPUs.**
   - The RTX 5070 Ti is the target, and the RTX 3080 a bonus (#39 waits for it).

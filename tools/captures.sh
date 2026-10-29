@@ -220,8 +220,9 @@ for path in $paths; do
   # physics-lab is since the clouds are on by default (#145): they drift on the scene's clock,
   # which would otherwise run on the run's own timing.
   capture "$path-city60" 60 "$city" --fixed-step --stream-pool 0 "${flag[@]}"
-  # FSR 3.1 (D-070), the path off NVIDIA: a sentinel, so the day check sees it.
-  capture "$path-city60-fsr" 60 "$city" --fixed-step --stream-pool 0 --set r.aa=fsr "${flag[@]}"
+  # Forge's FSR 3.1 (D-070), where DLSS doesn't run and AMD's DLLs aren't on the system (D-082
+  # takes them wherever they are): a sentinel, so the day check sees it.
+  capture "$path-city60-fsr" 60 "$city" --fixed-step --stream-pool 0 --set r.aa=fsr --fsr-amd off "${flag[@]}"
   capture "$path-city60-noocc" 60 "$city" --fixed-step --stream-pool 0 --no-occlusion "${flag[@]}"
   capture "$path-city60-culled" 60 "$city" --fixed-step --stream-pool 0 --show-culled "${flag[@]}"
   capture "$path-cityorbit120" 120 "$city" --fixed-step --stream-pool 0 --orbit "${flag[@]}"
@@ -295,7 +296,7 @@ for path in $paths; do
   # 600.
   if [ -f "$lab" ]; then
     capture "$path-lab-drop90" 90 "$lab" --lab drop --fixed-step "${flag[@]}"
-    capture "$path-lab-drop90-fsr" 90 "$lab" --lab drop --fixed-step --set r.aa=fsr "${flag[@]}"
+    capture "$path-lab-drop90-fsr" 90 "$lab" --lab drop --fixed-step --set r.aa=fsr --fsr-amd off "${flag[@]}"
     capture "$path-lab-drop90-noocc" 90 "$lab" --lab drop --fixed-step --no-occlusion "${flag[@]}"
     capture "$path-lab-drop600" 600 "$lab" --lab drop --fixed-step "${flag[@]}"
     # Through a server and a client over 100 ms (#137), balls thrown from the camera and by the
