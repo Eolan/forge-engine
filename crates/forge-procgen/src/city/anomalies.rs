@@ -82,11 +82,15 @@ pub enum Kind {
     /// or another house (D-066's threshold socket: a door meets walkable ground outside). A
     /// garden wall ran half a metre before a court door, the path to it ending at the wall.
     DoorBlocked,
+    /// Two garden walls ending together at a corner sharper than [`SHARP_CORNER`] degrees: a V in a
+    /// garden, its point an angle no one can mow or walk into, where a lot's side runs aslant
+    /// (the owner, 2026-10-29: "walls issue"; the owner's rule of 2026-10-16: no diagonal lots).
+    SharpWallCorner,
 }
 
 impl Kind {
     /// Every kind, in order.
-    pub const ALL: [Kind; 19] = [
+    pub const ALL: [Kind; 20] = [
         Kind::RoomOutsideWalls,
         Kind::PartitionInOpening,
         Kind::UnlitRoom,
@@ -106,8 +110,13 @@ impl Kind {
         Kind::DoorSwing,
         Kind::OpeningMisfit,
         Kind::DoorBlocked,
+        Kind::SharpWallCorner,
     ];
 }
+
+/// The sharpest corner two garden walls may make, degrees ([`Kind::SharpWallCorner`]): a lot's
+/// corners are square, a street's bend may make them 70° or more.
+pub const SHARP_CORNER: f64 = 70.0;
 
 /// An anomaly.
 #[derive(Clone, Debug, PartialEq)]
@@ -794,7 +803,7 @@ fn garden_walls(v: &Village, out: &mut Vec<Anomaly>) {
                     }) && t.dot(d).abs() < 0.105
                 })
             });
-        if !on_line && !stub {
+        if !on_line && !stub && !w.cut {
             out.push(Anomaly {
                 kind: Kind::CrookedWall,
                 at: mid,
@@ -805,6 +814,38 @@ fn garden_walls(v: &Village, out: &mut Vec<Anomaly>) {
                     w.length()
                 ),
             });
+        }
+    }
+    // Two walls ending together (their ends within 0.3 m) at a corner sharper than
+    // SHARP_CORNER, each pair once; looked at from outside the V, along its halving line.
+    let walls = &v.plan.walls;
+    let cos_sharp = SHARP_CORNER.to_radians().cos();
+    for (i, w) in walls.iter().enumerate() {
+        for o in &walls[i + 1..] {
+            for (c, far) in [(w.a, w.b), (w.b, w.a)] {
+                let Some(other_far) = [(o.a, o.b), (o.b, o.a)]
+                    .into_iter()
+                    .find(|&(e, _)| e.distance(c) < 0.3)
+                    .map(|(_, f)| f)
+                else {
+                    continue;
+                };
+                let (u, t) = (
+                    (far - c).normalize_or_zero(),
+                    (other_far - c).normalize_or_zero(),
+                );
+                if u.dot(t) > cos_sharp {
+                    let angle = u.dot(t).clamp(-1.0, 1.0).acos().to_degrees();
+                    let outward = -(u + t).normalize_or_zero();
+                    out.push(Anomaly {
+                        kind: Kind::SharpWallCorner,
+                        at: c,
+                        height: w.height.min(o.height),
+                        from: c + outward * 6.0,
+                        note: format!("two garden walls meet at {angle:.0}°"),
+                    });
+                }
+            }
         }
     }
 }
@@ -927,7 +968,7 @@ mod tests {
             &structures,
             &facades::fills(&grammar, &structures, &dress(&structures)),
         ));
-        let bounds: [(Kind, usize); 19] = [
+        let bounds: [(Kind, usize); 20] = [
             (Kind::RoomOutsideWalls, 0),
             (Kind::PartitionInOpening, 0),
             (Kind::UnlitRoom, 0),
@@ -947,6 +988,7 @@ mod tests {
             (Kind::DoorSwing, 0),
             (Kind::OpeningMisfit, 0),
             (Kind::DoorBlocked, 0),
+            (Kind::SharpWallCorner, 2),
         ];
         // The other sizes' own, where they had more when they came in (#308: at 700 to 900 m,
         // 2026-10-22, after the stairs, the rows' corners, the backs, the walls' corners and the
@@ -960,16 +1002,20 @@ mod tests {
         // neighbours (the owner: open lawns on the street between walled gardens); two corners
         // it walled anew, one at 400 m and two at 700 m, end a wall short of its neighbour, and the
         // 700 m village keeps two small closed pockets: #308 next.
+        // The sharp wall corners counted from 2026-10-29 (#363): 3 at 600 m, 5 to 8 in the bigger
+        // villages, where lots run aslant at the streets' bends; cut where two walls alone meet
+        // (`walls::chamfer_sharp_corners`), 2 and 4 to 6 are left, a hedge or a third wall at
+        // their points; the free ends at 400, 800 and 900 m went with them.
         let since: [(f64, Kind, usize); 9] = [
-            (400.0, Kind::FreeWallEnd, 1),
             (700.0, Kind::FreeWallEnd, 3),
             (800.0, Kind::UnlitRoom, 1),
-            (800.0, Kind::FreeWallEnd, 1),
             (800.0, Kind::RidgeStep, 1),
             (900.0, Kind::Sliver, 1),
-            (900.0, Kind::FreeWallEnd, 2),
             (900.0, Kind::LonePartyWall, 1),
             (900.0, Kind::RidgeStep, 3),
+            (700.0, Kind::SharpWallCorner, 4),
+            (800.0, Kind::SharpWallCorner, 6),
+            (900.0, Kind::SharpWallCorner, 4),
         ];
         let mut over = Vec::new();
         for (kind, bound) in bounds {

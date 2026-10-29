@@ -62,6 +62,8 @@ pub struct Wall {
     /// The way its end faces run at `a` and at `b`, unit vectors to its left: square to it, or
     /// mitred where it meets a wall nearly in line with it (where a lane bends).
     pub ends: [DVec2; 2],
+    /// A sharp corner's cut ([`chamfer_sharp_corners`]): off the lots' lines by design.
+    pub cut: bool,
 }
 
 impl Wall {
@@ -75,6 +77,7 @@ impl Wall {
             height,
             inside,
             ends: [square, square],
+            cut: false,
         }
     }
 
@@ -389,8 +392,91 @@ pub fn garden_walls(
             None => push(s.a, s.b),
         }
     }
+    chamfer_sharp_corners(&mut out.walls, &out.hedges);
     joints(&mut out.walls);
     out
+}
+
+/// The sharpest corner two walls ending together keep ([`chamfer_sharp_corners`]), degrees: the
+/// anomalies' measure.
+const SHARP: f64 = super::anomalies::SHARP_CORNER;
+/// The shortest wall that cuts a sharp corner off, metres.
+const CHAMFER: f64 = 1.2;
+
+/// Each corner where two walls end together sharper than [`SHARP`] cut off by a short wall
+/// across it, [`CHAMFER`] long or more: where a lot's side ran aslant, two garden walls met in
+/// a V whose point no one could walk into (the owner, 2026-10-29: "walls issue"). Its two
+/// corners then stand at 90° plus half the V's; the V's point goes to the garden outside it.
+fn chamfer_sharp_corners(walls: &mut Vec<Wall>, hedges: &[(DVec2, DVec2)]) {
+    let cos_sharp = SHARP.to_radians().cos();
+    // Only a corner of these two alone: a third wall or a hedge ending there would be left
+    // standing free in the garden.
+    let others_at = |walls: &[Wall], c: DVec2| {
+        walls
+            .iter()
+            .flat_map(|w| [w.a, w.b])
+            .chain(hedges.iter().flat_map(|&(a, b)| [a, b]))
+            .filter(|e| e.distance(c) < 0.3)
+            .count()
+    };
+    let mut added = Vec::new();
+    for i in 0..walls.len() {
+        for j in i + 1..walls.len() {
+            let (w, o) = (&walls[i], &walls[j]);
+            let ends = [(w.a, true), (w.b, false)];
+            let Some((c, w_at_a, o_at_a)) = ends.into_iter().find_map(|(e, at_a)| {
+                if e.distance(o.a) < 0.3 {
+                    Some((e, at_a, true))
+                } else if e.distance(o.b) < 0.3 {
+                    Some((e, at_a, false))
+                } else {
+                    None
+                }
+            }) else {
+                continue;
+            };
+            let (w_far, o_far) = (
+                if w_at_a { w.b } else { w.a },
+                if o_at_a { o.b } else { o.a },
+            );
+            let (u, t) = (
+                (w_far - c).normalize_or_zero(),
+                (o_far - c).normalize_or_zero(),
+            );
+            let cos = u.dot(t);
+            if cos <= cos_sharp {
+                continue;
+            }
+            if others_at(walls, c) > 2 {
+                continue;
+            }
+            // Back from the point far enough for the cut to be CHAMFER long, but leaving each
+            // wall most of its length.
+            let half = (cos.clamp(-1.0, 1.0).acos() * 0.5).sin().max(1e-3);
+            let back = (CHAMFER / (2.0 * half))
+                .min(0.45 * w.length())
+                .min(0.45 * o.length());
+            let (p, q) = (c + u * back, c + t * back);
+            let height = w.height.min(o.height);
+            if w_at_a {
+                walls[i].a = p;
+            } else {
+                walls[i].b = p;
+            }
+            if o_at_a {
+                walls[j].a = q;
+            } else {
+                walls[j].b = q;
+            }
+            if p.distance(q) >= SHORTEST {
+                added.push(Wall {
+                    cut: true,
+                    ..Wall::new(p, q, height, None)
+                });
+            }
+        }
+    }
+    walls.extend(added);
 }
 
 /// Whether point `mid` of a stretch along `along` stands before a wall of house `fp` parallel to
