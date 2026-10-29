@@ -252,6 +252,7 @@ fn made(cli: &Cli) -> anyhow::Result<Option<Made>> {
                         a.kind,
                         city::anomalies::Kind::PartitionInOpening
                             | city::anomalies::Kind::UnlitRoom
+                            | city::anomalies::Kind::BedroomThroughRoom
                     );
                     let (y, pitch) = if inside {
                         (a.height.max(1.6), 0.0)

@@ -167,6 +167,8 @@ fn wants(kind: RoomKind, area: f64, cooks: bool) -> Vec<Piece> {
         RoomKind::Study => vec![Piece::Desk, Piece::Shelves, Piece::Shelves],
         RoomKind::Salon => vec![Piece::Sofa, Piece::Sofa, Piece::Shelves],
         RoomKind::Service | RoomKind::Store => vec![Piece::Shelves, Piece::Shelves],
+        // A corridor: nothing in a walker's way.
+        RoomKind::Landing => Vec::new(),
     }
 }
 

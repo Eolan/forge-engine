@@ -311,6 +311,10 @@ asked for the same evening ("we need a way to detect anomalies").
 24. **Luxury:** French windows to the garden (≥ 2.15 m tall), a balcony off the master bedroom, a
     roof terrace keeping two thirds of the slope and 2.5 m of tiles over the eaves, a loggia; no
     room glazed over 30 % of its floor.
+25. **Every bedroom its own door on circulation** (the owner, 2026-10-29: "two bedroom should not
+    be linked together except if there is another door to a corridor for each"): no bedroom is
+    entered only through another room; where rooms stand side by side, a landing (≥ 1.2 m) runs
+    across the house between the front and the back rooms, each opening on to it.
 
 **For the owner:** the wheelchair-first rule (no steps in homes, one walking level) and
 multi-storey row houses meet at the stair: lifts, or the walked level kept to the ground floor.

@@ -86,11 +86,16 @@ pub enum Kind {
     /// garden, its point an angle no one can mow or walk into, where a lot's side runs aslant
     /// (the owner, 2026-10-29: "walls issue"; the owner's rule of 2026-10-16: no diagonal lots).
     SharpWallCorner,
+    /// A bedroom with no doorway of its own onto the hall or a landing (`RoomKind::Landing`),
+    /// entered through another room (the owner, 2026-10-29: "two bedroom should not be linked
+    /// together except if there is another door to a corridor for each. Having to have to go
+    /// through a bedroom to reach the second one is very unusual").
+    BedroomThroughRoom,
 }
 
 impl Kind {
     /// Every kind, in order.
-    pub const ALL: [Kind; 20] = [
+    pub const ALL: [Kind; 21] = [
         Kind::RoomOutsideWalls,
         Kind::PartitionInOpening,
         Kind::UnlitRoom,
@@ -111,6 +116,7 @@ impl Kind {
         Kind::OpeningMisfit,
         Kind::DoorBlocked,
         Kind::SharpWallCorner,
+        Kind::BedroomThroughRoom,
     ];
 }
 
@@ -699,6 +705,37 @@ fn rooms(i: usize, m: &Mass, s: &Structure, inner: &Interior, out: &mut Vec<Anom
             });
         }
     }
+    // The bedrooms entered through another room than the hall or a landing, each looked at from
+    // that room's middle.
+    let storeys = inner.rooms.iter().map(|r| r.storey + 1).max().unwrap_or(0);
+    for k in 0..storeys {
+        let from = interior::entered_from(inner, k);
+        let circulation = |p: usize| p == 0 || inner.rooms[p - 1].kind == RoomKind::Landing;
+        for (b, r) in inner.rooms.iter().enumerate() {
+            if r.storey != k || r.kind != RoomKind::Bedroom || from[b + 1].is_some_and(circulation)
+            {
+                continue;
+            }
+            let middle = geom::centroid(&r.outline);
+            let (through, seen_from) = match from[b + 1] {
+                Some(p) => {
+                    let room = &inner.rooms[p - 1];
+                    (
+                        format!("its {:?}", room.kind),
+                        geom::centroid(&room.outline),
+                    )
+                }
+                None => ("no doorway".to_owned(), middle),
+            };
+            out.push(Anomaly {
+                kind: Kind::BedroomThroughRoom,
+                at: middle,
+                height: level(k) + 1.5,
+                from: seen_from,
+                note: format!("house {i}: a bedroom on storey {k} entered through {through}"),
+            });
+        }
+    }
 }
 
 /// Each block's houses two by two: facing each other less than [`GAP`] apart without touching, or
@@ -1075,6 +1112,53 @@ mod tests {
         assert!(shared.is_empty(), "{shared:?}");
     }
 
+    /// No bedroom of a village is entered through another room, at 400 to 900 m and over several
+    /// seeds (their households differ): each has a doorway of its own onto its hall (the owner,
+    /// 2026-10-29: "two bedroom should not be linked together except if there is another door to a
+    /// corridor for each").
+    #[test]
+    fn no_bedroom_is_entered_through_another_room() {
+        let mut found = Vec::new();
+        for seed in 1..=4 {
+            for size in [400.0, 500.0, 600.0, 700.0, 800.0, 900.0] {
+                let site = example::site(size, 10.0);
+                let v = village::village(&site, &village::params(size), seed);
+                let structures = structure::structures(&v.plan, &v.masses);
+                for (i, (m, s)) in v.masses.iter().zip(&structures).enumerate() {
+                    if let Some(inner) = interior::house(m, s) {
+                        let mut mine = Vec::new();
+                        rooms(i, m, s, &inner, &mut mine);
+                        mine.retain(|a| a.kind == Kind::BedroomThroughRoom);
+                        if !mine.is_empty()
+                            && let Some(plan) = &m.rooms
+                        {
+                            for (k, st) in plan.storeys.iter().enumerate() {
+                                let rooms: Vec<String> = st
+                                    .iter()
+                                    .map(|r| {
+                                        format!(
+                                            "{:?} x {:.1}-{:.1} y {:.1}-{:.1}",
+                                            r.kind, r.x.0, r.x.1, r.y.0, r.y.1
+                                        )
+                                    })
+                                    .collect();
+                                println!(
+                                    "seed {seed}, {size} m, house {i} ({:.1} × {:.1} m), storey {k}: {rooms:?}",
+                                    plan.width, plan.depth
+                                );
+                            }
+                        }
+                        found.extend(
+                            mine.iter()
+                                .map(|a| format!("seed {seed}, {size} m: {}", a.note)),
+                        );
+                    }
+                }
+            }
+        }
+        assert!(found.is_empty(), "{} {found:#?}", found.len());
+    }
+
     /// The villages' anomalies, by kind, never more than when the check came in (2026-10-16, at
     /// 600 m; the smaller villages since they have houses, the larger since 2026-10-22, #308):
     /// each fix lowers its bound.
@@ -1106,7 +1190,7 @@ mod tests {
             &structures,
             &facades::fills(&grammar, &structures, &dress(&structures)),
         ));
-        let bounds: [(Kind, usize); 20] = [
+        let bounds: [(Kind, usize); 21] = [
             (Kind::RoomOutsideWalls, 0),
             (Kind::PartitionInOpening, 0),
             (Kind::UnlitRoom, 0),
@@ -1127,6 +1211,7 @@ mod tests {
             (Kind::OpeningMisfit, 0),
             (Kind::DoorBlocked, 0),
             (Kind::SharpWallCorner, 0),
+            (Kind::BedroomThroughRoom, 0),
         ];
         // The other sizes' own, where they had more when they came in (#308: at 700 to 900 m,
         // 2026-10-22, after the stairs, the rows' corners, the backs, the walls' corners and the

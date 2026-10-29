@@ -2842,6 +2842,52 @@ stands, laid once.
 Every lot now has its house: 10, 10, 65, 102, 116 and 81 houses from 400 to 900 m (the 600 m
 village had 60).
 
+## Bedrooms on a landing; the next flight stepped on from the corridor (2026-10-29)
+
+The owner, 2026-10-29: "two bedroom should not be linked together except if there is another door
+to a corridor for each. Having to have to go through a bedroom to reach the second one is very
+unusual", and "the balustrade issue I found was on the 1 floor on some house, blocking the
+stairs". Both fixes were shown as plans and pictures first and built on the owner's go (D-083).
+
+**Bedrooms.** The hall opened on to each band's first room only, so in every house 9 m wide or
+more (two rooms side by side beside the hall) the second was entered through the first. A new
+anomaly, `BedroomThroughRoom` (a bedroom without its own doorway on to the hall or a landing,
+`interior::entered_from`), counted 183 over the villages of 400 to 900 m and seeds 1 to 4, 13
+of them in the first map: 87 through a bedroom, 53 through a study, the rest through a bathroom,
+a kitchen or a living room. Such a storey is now laid round a landing (`rooms::with_landing`):
+a corridor 1.2 m deep (wheelchair-first) runs from the hall across the house, the rooms in a
+band before it and one behind it against the front and the back walls, every way of sharing
+them tried (a room that wants a window on either side first, then the shallower), each room
+2.4 m wide at least (a bathroom, store or service room 1.7 m) and the rest of the width shared
+by their areas. Where the bands do not keep the areas asked, the rooms keep 9 m² (France's
+decency minimum) or their ask if smaller; on a storey too shallow for two bands, one band before
+the landing; the plan may deepen within its lot, and `Plan::deepen` tries again when a row
+deepens its houses. Where no split fits across (a study, four bedrooms and two bathrooms on
+7.3 m: three houses in the 24 villages), the study moves to another storey's front or back band
+(`rooms::beside`). The insides (`interior::house`): the hall's wall open across the landing, a
+doorway from the landing into each room but the first of its band (that one keeps its door on
+the hall), and no doorway between the rooms of such a storey. `BedroomThroughRoom`: 183 → 0
+at every size and seed; the test `no_bedroom_is_entered_through_another_room` holds it at zero
+over 400–900 m and seeds 1–4, and the planner's own over households on lots 5.8–16 m wide and
+6–12 m deep. In the first map (600 m) eight houses change inside (11, 12, 13, 15, 16, 17, 28,
+36): their footprints, heights and storeys stay, the windows of four move with their rooms; the
+four bedrooms of house 12's top floor (asked 16, 12, 12, 12 m²) take 10.3 to 10.6 m² each.
+
+**Stairs.** In a house of three storeys whose flight's foot stands against the back wall (0.15 to
+0.3 m of floor before it), the flight is stepped on from the corridor beside it; on the first
+floor, the guard along the stairwell's open side (the half wall a metre high, above) ran from the
+foot to the head and walled the next flight off. A new test walks every upper floor among what
+the kit draws (the guards, the flights' balustrades, the partitions, the furniture; 5 cm cells,
+a walker's half-width): `the_village_upper_floors_lead_to_their_rooms_and_flights` found 21 such
+houses at 700 to 900 m over seeds 1 and 2 (none at 400 to 600 m, the only size the flights'
+tests looked at), the same on 2026-10-23's build, and 59 on #308's new lots. Now, where the next
+flight starts on a floor, the floor runs on under that flight's first metres (`stairwell`): the
+opening over the flight below starts a tread before the first whose top stands less than 2.1 m
+under the slab (2 m of headroom and a margin), and the guard along it starts there too, with a
+guard across that end standing under the next flight, no higher than its underside. 21 → 0, and
+the flights' three tests (2 m over every tread, their feet clear, a walker's capsule up each) run
+at every size over two seeds now (6 s for all four).
+
 ## Next (#245–#247)
 
 - Squares at the radial districts' centres; the landmarks' sightlines.

@@ -4159,14 +4159,7 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
         // A house's insides from its rooms (`city::interior`): each upper floor open over the
         // treads of the flight below, its landing at the top kept.
         let inner = interior::house(m, s);
-        let hole = |k: usize| -> Option<[DVec2; 4]> {
-            let inner = inner.as_ref()?;
-            let stair = inner.stair?;
-            let r = *inner.risers.get(k.checked_sub(1)?)?;
-            let run = f64::from(r.saturating_sub(1)) * cores::GOING;
-            let up = inner.climb * run;
-            Some([stair[0], stair[1], stair[1] + up, stair[0] + up])
-        };
+        let hole = |k: usize| stairwell(s, inner.as_ref()?, k);
         for (k, st) in s.storeys.iter().enumerate() {
             if k == 0 {
                 let corners: Vec<DVec2> = ground.iter().flatten().copied().collect();
@@ -4593,6 +4586,53 @@ fn soffits(
     }
 }
 
+/// The clear height a climber keeps under an upper floor's slab over each tread, metres: the 2 m
+/// the flights' tests ask and a margin.
+const HEADROOM: f64 = 2.1;
+
+/// Whether a flight climbs from storey `k` of a house's insides `inner` (`s` its structure).
+fn next_flight(s: &Structure, inner: &interior::Interior, k: usize) -> bool {
+    k + 1 < s.storeys.len() && inner.risers.get(k).is_some_and(|&r| r >= 2)
+}
+
+/// Where the opening over the flight arriving on storey `k` (of `r` risers) must start, metres
+/// along its climb from its foot: a tread before the first whose top stands less than
+/// [`HEADROOM`] under that storey's slab.
+fn headroom_from(s: &Structure, k: usize, r: u32) -> f64 {
+    let base = floor_level(s, k - 1);
+    let st = &s.storeys[k];
+    let rise = (st.level - base) / f64::from(r.max(1));
+    let under = st.level - st.slab;
+    let first = (0..r)
+        .find(|&i| under - (base + f64::from(i + 1) * rise) < HEADROOM)
+        .unwrap_or(r);
+    f64::from(first.saturating_sub(1)) * cores::GOING
+}
+
+/// The opening in storey `k`'s floor over the flight arriving there (`None` on the ground floor
+/// or without a flight), its corners as the flight's box's: to the flight's head, from its foot,
+/// or, where the next flight starts on storey `k`, from where a climber below needs the room
+/// ([`headroom_from`]). The floor runs on under the next flight's first metres, which stands on
+/// it and is stepped on to from the corridor beside it: over a stairwell from the foot, the guard
+/// along it walled the flight off where its foot stands against the back wall (the owner,
+/// 2026-10-29: "the balustrade issue I found was on the 1 floor on some house, blocking the
+/// stairs").
+fn stairwell(s: &Structure, inner: &interior::Interior, k: usize) -> Option<[DVec2; 4]> {
+    let stair = inner.stair?;
+    let r = *inner.risers.get(k.checked_sub(1)?)?;
+    let up = inner.climb * (f64::from(r.saturating_sub(1)) * cores::GOING);
+    if !next_flight(s, inner, k) {
+        return Some([stair[0], stair[1], stair[1] + up, stair[0] + up]);
+    }
+    let from = inner.climb * headroom_from(s, k, r);
+    Some([
+        stair[0] + from,
+        stair[1] + from,
+        stair[1] + up,
+        stair[0] + up,
+    ])
+}
+
 /// A house's insides as solids (`city::interior`): its partitions floor to ceiling with a lintel
 /// over each doorway, and its flights a stone step a riser with a hand of stone under it, from
 /// the street wall into the house (the last riser climbs on to the floor above). Each a ring
@@ -4657,10 +4697,13 @@ fn interior_solids(
                 out.push((under, base, base + 1.0, false));
             }
         }
-        // A guard round each upper floor's opening over the flight: a whitewashed half wall a
-        // metre high along its long side away from the walls and across its head (over the
-        // flight's foot), 10 cm thick and 5 cm back from the edge; the arrival end stays open.
-        // Without it a walker stepped off the landing into the stairwell (seen 2026-10-16).
+        // A guard round each upper floor's opening over the flight ([`stairwell`]): a
+        // whitewashed half wall a metre high along its long side away from the walls and across
+        // its end towards the flight's foot, 10 cm thick and 5 cm back from the edge; the arrival
+        // end stays open. Without it a walker stepped off the landing into the stairwell (seen
+        // 2026-10-16). Where the next flight starts there, the opening and the guard begin where
+        // the climber below needs the room, and the guard across that end stands under the next
+        // flight, no higher than its underside.
         let across = stair[1] - stair[0];
         let width = across.length();
         let a = across / width.max(1e-6);
@@ -4690,29 +4733,48 @@ fn interior_solids(
                 ]
             };
             let y0 = floor_level(s, k + 1);
+            // Where the next flight starts here, the opening begins under it (`stairwell`); its
+            // underside over the guard across that end: two risers and 15 cm under its nosings'
+            // line (`soffits`).
+            let next = next_flight(s, inner, k + 1);
+            let start = if next {
+                headroom_from(s, k + 1, r)
+            } else {
+                0.0
+            };
             let (side, head) = if open_far {
                 (
-                    piece(width + 0.05, width + 0.15, -0.05, run),
-                    piece(0.0, width + 0.15, -0.15, -0.05),
+                    piece(width + 0.05, width + 0.15, start - 0.05, run),
+                    piece(0.0, width + 0.15, start - 0.15, start - 0.05),
                 )
             } else {
                 (
-                    piece(-0.15, -0.05, -0.05, run),
-                    piece(-0.15, width, -0.15, -0.05),
+                    piece(-0.15, -0.05, start - 0.05, run),
+                    piece(-0.15, width, start - 0.15, start - 0.05),
                 )
             };
-            // No guard across the head where the next flight starts there: the flights stack in
-            // one box, and across the foot of the one above it walled that flight off.
-            let next = k + 2 < s.storeys.len() && inner.risers.get(k + 1).is_some_and(|&r| r >= 2);
-            let guards = if next { vec![side] } else { vec![side, head] };
-            for ring in guards {
+            let head_top = match inner.risers.get(k + 1).filter(|_| next) {
+                Some(&up) => {
+                    let rise = (s.storeys[k + 2].level - y0) / f64::from(up);
+                    let under = ((start - 0.15) / cores::GOING - 1.0) * rise - 0.15;
+                    (under - 0.01).min(1.0)
+                }
+                None => 1.0,
+            };
+            let mut guards = vec![(side, 1.0)];
+            // Across the foot's end, but where the next flight starts here and comes down within
+            // 30 cm of the floor: its string closes the side there.
+            if head_top >= 0.3 {
+                guards.push((head, head_top));
+            }
+            for (ring, height) in guards {
                 // Wound anticlockwise, as the other solids.
                 let ring = if geom::signed_area(&ring) < 0.0 {
                     ring.into_iter().rev().collect()
                 } else {
                     ring
                 };
-                out.push((ring, y0, y0 + 1.0, false));
+                out.push((ring, y0, y0 + height, false));
             }
         }
     }
@@ -4731,10 +4793,7 @@ fn interior_floors(
     };
     let mut out = Vec::new();
     for (k, st) in s.storeys.iter().enumerate().skip(1) {
-        let hole = inner.stair.zip(inner.risers.get(k - 1)).map(|(stair, &r)| {
-            let up = inner.climb * (f64::from(r.saturating_sub(1)) * cores::GOING);
-            [stair[0], stair[1], stair[1] + up, stair[0] + up]
-        });
+        let hole = stairwell(s, inner, k);
         let pieces = hole.map_or_else(|| vec![ring.clone()], |h| without(&ring, &h));
         for p in pieces {
             out.push((p, st.level - st.slab, st.level));
@@ -9660,24 +9719,26 @@ mod tests {
         );
     }
 
-    /// Every flight of the village's houses keeps 2 m clear over each tread, across its width:
-    /// no solid of the insides (the flight above, a cupboard, a partition) nor an upper floor in
-    /// that height. Under the flight above, the cupboard closed under it hung across a lower
-    /// flight's head in the houses of three storeys (the owner, 2026-10-17: "is there enough space
-    /// for people to pass in this stair case?").
-    #[test]
-    fn the_village_flights_keep_two_metres_over_their_treads() {
-        let size = 600.0;
+    /// What a walker misses on the upper floors of the village `size`'s houses (households drawn
+    /// by `seed`), among what is drawn there: from 0.7 m past each flight's head, the floor round
+    /// the stairwell, its guards, the flights' balustrades, the partitions and the furniture (but
+    /// the chairs) eroded by a walker's half-width ([`walk::RADIUS`]), flooded on a 5 cm grid to
+    /// the floor before the next flight's first riser and into each room. `walk::house` floods
+    /// the storeys without the guards and the balustrades, which only this crate draws (the owner,
+    /// 2026-10-29: "the balustrade issue I found was on the 1 floor on some house, blocking the
+    /// stairs").
+    fn upper_floors_unreached(size: f64, seed: u64) -> Vec<String> {
+        use forge_procgen::city::walk;
+        const CELL: f64 = 0.05;
         let site = example::site(size, 10.0);
         let v = forge_procgen::city::village::village(
             &site,
             &forge_procgen::city::village::params(size),
-            1,
+            seed,
         );
         let structures = structure::structures(&v.plan, &v.masses);
-        let going = cores::GOING;
-        let (mut treads, mut low) = (0, Vec::new());
-        for (m, s) in v.masses.iter().zip(&structures) {
+        let mut out = Vec::new();
+        for (i, (m, s)) in v.masses.iter().zip(&structures).enumerate() {
             let Some(inner) = interior::house(m, s) else {
                 continue;
             };
@@ -9686,27 +9747,285 @@ mod tests {
             };
             let solids = interior_solids(s, &inner, m.height);
             let floors = interior_floors(m, s, &inner);
+            let furniture = walk::furnished(m, s, &inner);
             let across = stair[1] - stair[0];
+            let width = across.length();
+            let a = across / width.max(1e-6);
+            let climb = inner.climb.normalize_or_zero();
+            // The balustrades' boxes with their bottoms and tops, as `interior_pieces` makes them.
+            let mut rails: Vec<(Vec<DVec2>, f64, f64)> = Vec::new();
             for (k, &r) in inner.risers.iter().enumerate() {
-                if k + 1 >= s.storeys.len() || r == 0 {
+                if k + 1 >= s.storeys.len() || r < 3 {
                     break;
                 }
+                let Some((outer, inside, _)) = balustrade(s, stair, inner.climb, r, 0.005) else {
+                    continue;
+                };
                 let base = floor_level(s, k);
                 let rise = (s.storeys[k + 1].level - base) / f64::from(r);
-                for i in 0..r - 1 {
-                    let y = base + f64::from(i + 1) * rise;
-                    for u in [0.2, 0.5, 0.8] {
-                        let p =
-                            stair[0] + inner.climb * ((f64::from(i) + 0.5) * going) + across * u;
-                        treads += 1;
-                        let (from, to) = (y + 0.05, y + 2.0);
-                        let blocked = solids
+                let (u0, u1) = (outer.min(inside), outer.max(inside));
+                for t in rail_start(rise)..r - 1 {
+                    let (v0, v1) = (f64::from(t) * cores::GOING, f64::from(t + 1) * cores::GOING);
+                    let ring = [(v0, u0), (v0, u1), (v1, u1), (v1, u0)]
+                        .map(|(v, u)| stair[0] + inner.climb * v + a * u);
+                    let y = base + f64::from(t + 1) * rise;
+                    rails.push((ring.to_vec(), y, y + rise + RAIL_HEIGHT));
+                }
+            }
+            for k in 1..s.storeys.len() {
+                let Some(&below) = inner.risers.get(k - 1).filter(|&&r| r >= 2) else {
+                    break;
+                };
+                let y = floor_level(s, k);
+                let (lo, hi) = (y + 0.1, y + 1.7);
+                let ground: Vec<&[DVec2]> = floors
+                    .iter()
+                    .filter(|f| (f.2 - s.storeys[k].level).abs() < 1e-6)
+                    .map(|f| f.0.as_slice())
+                    .collect();
+                let chairs = furnish::Piece::Chair;
+                let things: Vec<Vec<DVec2>> = furniture
+                    .iter()
+                    .filter(|p| p.storey == k && p.piece != chairs)
+                    .map(|p| p.outline().to_vec())
+                    .collect();
+                let blocks: Vec<&[DVec2]> = solids
+                    .iter()
+                    .filter(|(_, y0, y1, _)| *y0 < hi && *y1 > lo)
+                    .map(|(r, ..)| r.as_slice())
+                    .chain(
+                        rails
                             .iter()
-                            .map(|(ring, y0, y1, _)| (ring, *y0, *y1))
-                            .chain(floors.iter().map(|(ring, y0, y1)| (ring, *y0, *y1)))
-                            .any(|(ring, y0, y1)| y0 < to && y1 > from && geom::contains(ring, p));
-                        if blocked {
-                            low.push((m.lot, k, i));
+                            .filter(|(_, y0, y1)| *y0 < hi && *y1 > lo)
+                            .map(|(r, ..)| r.as_slice()),
+                    )
+                    .chain(things.iter().map(Vec::as_slice))
+                    .collect();
+                let (mut p0, mut p1) = (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN));
+                for p in ground.iter().flat_map(|r| r.iter()) {
+                    p0 = p0.min(*p);
+                    p1 = p1.max(*p);
+                }
+                if ground.is_empty() {
+                    continue;
+                }
+                let nx = ((p1.x - p0.x) / CELL).ceil() as usize + 1;
+                let ny = ((p1.y - p0.y) / CELL).ceil() as usize + 1;
+                let at = |ix: usize, iy: usize| {
+                    p0 + DVec2::new((ix as f64 + 0.5) * CELL, (iy as f64 + 0.5) * CELL)
+                };
+                // Each ring over the cells of its box: the floor's set free, then the solids'
+                // blocked.
+                let mut free = vec![false; nx * ny];
+                let paint = |ring: &[DVec2], value: bool, free: &mut Vec<bool>| {
+                    let (r0, r1) = ring.iter().fold(
+                        (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)),
+                        |(l, h), p| (l.min(*p), h.max(*p)),
+                    );
+                    let cell = |x: f64, n: usize| ((x / CELL).floor().max(0.0) as usize).min(n - 1);
+                    for iy in cell(r0.y - p0.y, ny)..=cell(r1.y - p0.y, ny) {
+                        for ix in cell(r0.x - p0.x, nx)..=cell(r1.x - p0.x, nx) {
+                            if geom::contains(ring, at(ix, iy)) {
+                                free[iy * nx + ix] = value;
+                            }
+                        }
+                    }
+                };
+                for r in &ground {
+                    paint(r, true, &mut free);
+                }
+                for r in &blocks {
+                    paint(r, false, &mut free);
+                }
+                // The distance to the nearest blocked cell, metres: a chamfer transform.
+                let diag = CELL * std::f64::consts::SQRT_2;
+                let mut d: Vec<f64> = free.iter().map(|&f| if f { 1e9 } else { 0.0 }).collect();
+                for iy in 0..ny {
+                    for ix in 0..nx {
+                        let j = iy * nx + ix;
+                        let mut best = d[j];
+                        if ix > 0 {
+                            best = best.min(d[j - 1] + CELL);
+                        }
+                        if iy > 0 {
+                            best = best.min(d[j - nx] + CELL);
+                            if ix > 0 {
+                                best = best.min(d[j - nx - 1] + diag);
+                            }
+                            if ix + 1 < nx {
+                                best = best.min(d[j - nx + 1] + diag);
+                            }
+                        }
+                        d[j] = best;
+                    }
+                }
+                for iy in (0..ny).rev() {
+                    for ix in (0..nx).rev() {
+                        let j = iy * nx + ix;
+                        let mut best = d[j];
+                        if ix + 1 < nx {
+                            best = best.min(d[j + 1] + CELL);
+                        }
+                        if iy + 1 < ny {
+                            best = best.min(d[j + nx] + CELL);
+                            if ix + 1 < nx {
+                                best = best.min(d[j + nx + 1] + diag);
+                            }
+                            if ix > 0 {
+                                best = best.min(d[j + nx - 1] + diag);
+                            }
+                        }
+                        d[j] = best;
+                    }
+                }
+                let open = |j: usize| d[j] >= walk::RADIUS;
+                // From 0.7 m past the head of the flight below, or the nearest open cell within
+                // 0.3 m of it.
+                let middle = 0.5 * (stair[0] + stair[1]);
+                let arrive = middle + climb * (f64::from(below - 1) * cores::GOING + 0.7);
+                let start = (0..nx * ny)
+                    .filter(|&j| open(j) && at(j % nx, j / nx).distance(arrive) < 0.3)
+                    .min_by(|&x, &y| {
+                        at(x % nx, x / nx)
+                            .distance(arrive)
+                            .total_cmp(&at(y % nx, y / nx).distance(arrive))
+                    });
+                let place = format!(
+                    "{size} m seed {seed}: house {i} storey {k} of {}",
+                    s.storeys.len()
+                );
+                let Some(start) = start else {
+                    out.push(format!(
+                        "{place}: the landing past the flight's head walled"
+                    ));
+                    continue;
+                };
+                let mut seen = vec![false; nx * ny];
+                seen[start] = true;
+                let mut todo = vec![start];
+                while let Some(j) = todo.pop() {
+                    let (ix, iy) = (j % nx, j / nx);
+                    let near = [
+                        (ix > 0).then(|| j - 1),
+                        (ix + 1 < nx).then(|| j + 1),
+                        (iy > 0).then(|| j - nx),
+                        (iy + 1 < ny).then(|| j + nx),
+                    ];
+                    for n in near.into_iter().flatten() {
+                        if !seen[n] && open(n) {
+                            seen[n] = true;
+                            todo.push(n);
+                        }
+                    }
+                }
+                let reached = |f: &dyn Fn(DVec2) -> bool| {
+                    (0..nx * ny).any(|j| seen[j] && f(at(j % nx, j / nx)))
+                };
+                // The next flight's first two treads, within 0.35 m: stepped on from before its
+                // first riser, or from the corridor beside it where its foot stands against the
+                // back wall (as `walk::house` lets a walker on to a flight).
+                if next_flight(s, &inner, k) {
+                    let foot = |p: DVec2| {
+                        let (u, c) = ((p - stair[0]).dot(a), (p - stair[0]).dot(climb));
+                        let du = (-u).max(u - width).max(0.0);
+                        let dc = (-c).max(c - 2.0 * cores::GOING).max(0.0);
+                        du.hypot(dc) < 0.35
+                    };
+                    if !reached(&foot) {
+                        out.push(format!("{place}: the flight up unreached at its foot"));
+                    }
+                }
+                for r in inner.rooms.iter().filter(|r| r.storey == k) {
+                    if !reached(&|p| geom::contains(&r.outline, p)) {
+                        out.push(format!("{place}: its {:?} unreached", r.kind));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// No upper floor of a village's houses walls a walker off its next flight or a room, at 400
+    /// to 900 m over two seeds ([`upper_floors_unreached`]).
+    #[test]
+    fn the_village_upper_floors_lead_to_their_rooms_and_flights() {
+        let mut found = Vec::new();
+        for seed in 1..=2 {
+            for size in [400.0, 500.0, 600.0, 700.0, 800.0, 900.0] {
+                found.extend(upper_floors_unreached(size, seed));
+            }
+        }
+        assert!(found.is_empty(), "{} {found:#?}", found.len());
+    }
+
+    /// The villages the houses' flights are checked in, each named by its size and seed: 400 to
+    /// 900 m over two seeds (their households differ, and with them the houses' storeys). The
+    /// 600 m map's alone let the 700 m houses' walled flights pass (2026-10-29).
+    fn every_village() -> Vec<(
+        String,
+        forge_procgen::city::village::Village,
+        Vec<structure::Structure>,
+    )> {
+        let mut out = Vec::new();
+        for seed in 1..=2 {
+            for size in [400.0, 500.0, 600.0, 700.0, 800.0, 900.0] {
+                let site = example::site(size, 10.0);
+                let v = forge_procgen::city::village::village(
+                    &site,
+                    &forge_procgen::city::village::params(size),
+                    seed,
+                );
+                let structures = structure::structures(&v.plan, &v.masses);
+                out.push((format!("{size} m seed {seed}"), v, structures));
+            }
+        }
+        out
+    }
+
+    /// Every flight of the village's houses keeps 2 m clear over each tread, across its width:
+    /// no solid of the insides (the flight above, a cupboard, a partition) nor an upper floor in
+    /// that height. Under the flight above, the cupboard closed under it hung across a lower
+    /// flight's head in the houses of three storeys (the owner, 2026-10-17: "is there enough space
+    /// for people to pass in this stair case?").
+    #[test]
+    fn the_village_flights_keep_two_metres_over_their_treads() {
+        let going = cores::GOING;
+        let (mut treads, mut low) = (0, Vec::new());
+        for (name, v, structures) in every_village() {
+            for (m, s) in v.masses.iter().zip(&structures) {
+                let Some(inner) = interior::house(m, s) else {
+                    continue;
+                };
+                let Some(stair) = inner.stair else {
+                    continue;
+                };
+                let solids = interior_solids(s, &inner, m.height);
+                let floors = interior_floors(m, s, &inner);
+                let across = stair[1] - stair[0];
+                for (k, &r) in inner.risers.iter().enumerate() {
+                    if k + 1 >= s.storeys.len() || r == 0 {
+                        break;
+                    }
+                    let base = floor_level(s, k);
+                    let rise = (s.storeys[k + 1].level - base) / f64::from(r);
+                    for i in 0..r - 1 {
+                        let y = base + f64::from(i + 1) * rise;
+                        for u in [0.2, 0.5, 0.8] {
+                            let p = stair[0]
+                                + inner.climb * ((f64::from(i) + 0.5) * going)
+                                + across * u;
+                            treads += 1;
+                            let (from, to) = (y + 0.05, y + 2.0);
+                            let blocked = solids
+                                .iter()
+                                .map(|(ring, y0, y1, _)| (ring, *y0, *y1))
+                                .chain(floors.iter().map(|(ring, y0, y1)| (ring, *y0, *y1)))
+                                .any(|(ring, y0, y1)| {
+                                    y0 < to && y1 > from && geom::contains(ring, p)
+                                });
+                            if blocked {
+                                low.push((name.clone(), m.lot, k, i));
+                            }
                         }
                     }
                 }
@@ -9726,40 +10045,34 @@ mod tests {
     /// stairwell walled off the flight that starts there in the houses of three storeys.
     #[test]
     fn the_village_flights_feet_are_clear() {
-        let size = 600.0;
-        let site = example::site(size, 10.0);
-        let v = forge_procgen::city::village::village(
-            &site,
-            &forge_procgen::city::village::params(size),
-            1,
-        );
-        let structures = structure::structures(&v.plan, &v.masses);
         let (mut feet, mut blocked) = (0, Vec::new());
-        for (m, s) in v.masses.iter().zip(&structures) {
-            let Some(inner) = interior::house(m, s) else {
-                continue;
-            };
-            let Some(stair) = inner.stair else {
-                continue;
-            };
-            let solids = interior_solids(s, &inner, m.height);
-            let across = stair[1] - stair[0];
-            for (k, &r) in inner.risers.iter().enumerate() {
-                if k + 1 >= s.storeys.len() || r == 0 {
-                    break;
-                }
-                feet += 1;
-                let y = floor_level(s, k);
-                let clear = [0.1, 0.35, 0.6].iter().all(|&back| {
-                    [0.2, 0.5, 0.8].iter().all(|&u| {
-                        let p = stair[0] - inner.climb * back + across * u;
-                        !solids.iter().any(|(ring, y0, y1, _)| {
-                            *y0 < y + 2.0 && *y1 > y + 0.05 && geom::contains(ring, p)
+        for (name, v, structures) in every_village() {
+            for (m, s) in v.masses.iter().zip(&structures) {
+                let Some(inner) = interior::house(m, s) else {
+                    continue;
+                };
+                let Some(stair) = inner.stair else {
+                    continue;
+                };
+                let solids = interior_solids(s, &inner, m.height);
+                let across = stair[1] - stair[0];
+                for (k, &r) in inner.risers.iter().enumerate() {
+                    if k + 1 >= s.storeys.len() || r == 0 {
+                        break;
+                    }
+                    feet += 1;
+                    let y = floor_level(s, k);
+                    let clear = [0.1, 0.35, 0.6].iter().all(|&back| {
+                        [0.2, 0.5, 0.8].iter().all(|&u| {
+                            let p = stair[0] - inner.climb * back + across * u;
+                            !solids.iter().any(|(ring, y0, y1, _)| {
+                                *y0 < y + 2.0 && *y1 > y + 0.05 && geom::contains(ring, p)
+                            })
                         })
-                    })
-                });
-                if !clear {
-                    blocked.push((m.lot, k));
+                    });
+                    if !clear {
+                        blocked.push((name.clone(), m.lot, k));
+                    }
                 }
             }
         }
@@ -9780,65 +10093,65 @@ mod tests {
     #[test]
     fn the_village_flights_pass_a_walkers_capsule() {
         use forge_procgen::city::sweep::{self, Prism};
-        let size = 600.0;
-        let site = example::site(size, 10.0);
-        let v = forge_procgen::city::village::village(
-            &site,
-            &forge_procgen::city::village::params(size),
-            1,
-        );
-        let structures = structure::structures(&v.plan, &v.masses);
         let going = cores::GOING;
         let (mut flights, mut met) = (0, Vec::new());
-        for (m, s) in v.masses.iter().zip(&structures) {
-            let Some(inner) = interior::house(m, s) else {
-                continue;
-            };
-            let Some(stair) = inner.stair else {
-                continue;
-            };
-            let solids = interior_solids(s, &inner, m.height);
-            let floors = interior_floors(m, s, &inner);
-            let prisms: Vec<Prism<'_>> = solids
-                .iter()
-                .filter(|(_, _, _, step)| !step)
-                .map(|(ring, y0, y1, _)| Prism {
-                    ring,
-                    y0: *y0,
-                    y1: *y1,
-                })
-                .chain(floors.iter().map(|(ring, y0, y1)| Prism {
-                    ring,
-                    y0: *y0,
-                    y1: *y1,
-                }))
-                .collect();
-            let middle = 0.5 * (stair[0] + stair[1]);
-            let climb = inner.climb.normalize_or_zero();
-            for (k, &r) in inner.risers.iter().enumerate() {
-                if k + 1 >= s.storeys.len() || r == 0 {
-                    break;
-                }
-                flights += 1;
-                let base = floor_level(s, k);
-                let top = floor_level(s, k + 1);
-                let rise = (s.storeys[k + 1].level - base) / f64::from(r);
-                let run = f64::from(r - 1) * going;
-                let (before, after) = (0.6, 0.7);
-                let path = [middle - climb * before, middle + climb * (run + after)];
-                // The ground under the walker: the floor, the tread it stands on, the landing.
-                let ground = |along: f64, _: DVec2| {
-                    let v = along - before;
-                    if v < 0.0 {
-                        base
-                    } else if v >= run {
-                        top
-                    } else {
-                        base + ((v / going).floor() + 1.0) * rise
-                    }
+        for (name, v, structures) in every_village() {
+            for (m, s) in v.masses.iter().zip(&structures) {
+                let Some(inner) = interior::house(m, s) else {
+                    continue;
                 };
-                for hit in sweep::sweep(&sweep::WALKER, &path, 0.05, ground, &prisms) {
-                    met.push((m.lot, k, (hit.along * 100.0).round() / 100.0, hit.solid));
+                let Some(stair) = inner.stair else {
+                    continue;
+                };
+                let solids = interior_solids(s, &inner, m.height);
+                let floors = interior_floors(m, s, &inner);
+                let prisms: Vec<Prism<'_>> = solids
+                    .iter()
+                    .filter(|(_, _, _, step)| !step)
+                    .map(|(ring, y0, y1, _)| Prism {
+                        ring,
+                        y0: *y0,
+                        y1: *y1,
+                    })
+                    .chain(floors.iter().map(|(ring, y0, y1)| Prism {
+                        ring,
+                        y0: *y0,
+                        y1: *y1,
+                    }))
+                    .collect();
+                let middle = 0.5 * (stair[0] + stair[1]);
+                let climb = inner.climb.normalize_or_zero();
+                for (k, &r) in inner.risers.iter().enumerate() {
+                    if k + 1 >= s.storeys.len() || r == 0 {
+                        break;
+                    }
+                    flights += 1;
+                    let base = floor_level(s, k);
+                    let top = floor_level(s, k + 1);
+                    let rise = (s.storeys[k + 1].level - base) / f64::from(r);
+                    let run = f64::from(r - 1) * going;
+                    let (before, after) = (0.6, 0.7);
+                    let path = [middle - climb * before, middle + climb * (run + after)];
+                    // The ground under the walker: the floor, the tread it stands on, the landing.
+                    let ground = |along: f64, _: DVec2| {
+                        let v = along - before;
+                        if v < 0.0 {
+                            base
+                        } else if v >= run {
+                            top
+                        } else {
+                            base + ((v / going).floor() + 1.0) * rise
+                        }
+                    };
+                    for hit in sweep::sweep(&sweep::WALKER, &path, 0.05, ground, &prisms) {
+                        met.push((
+                            name.clone(),
+                            m.lot,
+                            k,
+                            (hit.along * 100.0).round() / 100.0,
+                            hit.solid,
+                        ));
+                    }
                 }
             }
         }

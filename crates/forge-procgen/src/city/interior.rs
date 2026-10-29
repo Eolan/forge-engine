@@ -4,7 +4,9 @@
 //! keeps at the start of the front ([`super::cores`] puts a house's core there): partitions
 //! between the bands and between the rooms of a band, a doorway from the hall into each band's
 //! first room and from each room into the next, so every room of a storey is reached from the
-//! hall, and the flight climbing from the back of the hall towards the street wall.
+//! hall, and the flight climbing from the back of the hall towards the street wall. A storey laid
+//! round a landing (`rooms::RoomKind::Landing`) has the hall open on to it and a doorway from it
+//! into each room off the hall, none between its rooms: no bedroom is entered through another.
 
 use glam::DVec2;
 
@@ -270,40 +272,9 @@ pub fn house(m: &Mass, s: &Structure) -> Option<Interior> {
         for b in &mut bands {
             b.2.sort_by(|&i, &j| storey[i].x.0.total_cmp(&storey[j].x.0));
         }
-        // The hall's wall the whole depth, a doorway into each band's first room.
-        let doors: Vec<(f64, f64)> = bands
-            .iter()
-            .filter_map(|(y0, y1, _)| {
-                let (v0, v1) = (y(*y0) - vmin, y(*y1) - vmin);
-                door(v0, v1, (v0 + v1) * 0.5)
-            })
-            .collect();
-        partitions.push(Partition {
-            a: at(hall_line, vmin),
-            b: at(hall_line, vmax),
-            thickness: CORE_WALL,
-            storey: k,
-            doors,
-        });
-        // Between the bands, wall to wall: from the hall's wall to the far side wall where it
-        // stands at that depth.
-        for pair in bands.windows(2) {
-            let v = y(pair[0].1);
-            let (u0, u1) = if mirrored {
-                (far(v), room1)
-            } else {
-                (room0, far(v))
-            };
-            partitions.push(Partition {
-                a: at(u0, v),
-                b: at(u1, v),
-                thickness: PARTITION,
-                storey: k,
-                doors: Vec::new(),
-            });
-        }
-        // Each band's rooms between their boundaries, those on the front or the back wall moved
-        // off its openings; between two rooms a doorway in the middle.
+        // Each band's partitions across the front from the hall's to the far end, those on the
+        // front or the back wall moved off its openings.
+        let mut cuts: Vec<Vec<f64>> = Vec::with_capacity(bands.len());
         for (y0, y1, ids) in &bands {
             let sp = span_over(y(*y0), y(*y1));
             // A wedge whose side walls close in behind the hall leaves a band no room: no insides.
@@ -321,6 +292,74 @@ pub fn house(m: &Mass, s: &Structure) -> Option<Interior> {
                     us[j] = clear(k, us[j], vmax, lo, hi);
                 }
             }
+            cuts.push(us);
+        }
+        // The storey's landing, where it has one (`rooms::plan`): the hall open on to it, and
+        // every room beside it but the first of its band (on the hall) a doorway on to it.
+        let landing = bands
+            .iter()
+            .position(|b| b.2.iter().any(|&i| storey[i].kind == RoomKind::Landing));
+        // The hall's wall the whole depth, a doorway into each band's first room, open across
+        // the landing between the partitions either side of it.
+        let doors: Vec<(f64, f64)> = bands
+            .iter()
+            .enumerate()
+            .filter_map(|(b, (y0, y1, _))| {
+                let (v0, v1) = (y(*y0) - vmin, y(*y1) - vmin);
+                if landing == Some(b) {
+                    Some((v0 + PARTITION * 0.5, v1 - PARTITION * 0.5))
+                } else {
+                    door(v0, v1, (v0 + v1) * 0.5)
+                }
+            })
+            .collect();
+        partitions.push(Partition {
+            a: at(hall_line, vmin),
+            b: at(hall_line, vmax),
+            thickness: CORE_WALL,
+            storey: k,
+            doors,
+        });
+        // Between the bands, wall to wall: from the hall's wall to the far side wall where it
+        // stands at that depth; beside the landing, a doorway into each room of the other band
+        // but its first, in the middle of the room's stretch along it.
+        for (b, pair) in bands.windows(2).enumerate() {
+            let v = y(pair[0].1);
+            let (u0, u1) = if mirrored {
+                (far(v), room1)
+            } else {
+                (room0, far(v))
+            };
+            let beside = match landing {
+                Some(l) if l == b => Some(b + 1),
+                Some(l) if l == b + 1 => Some(b),
+                _ => None,
+            };
+            let doors = beside.map_or_else(Vec::new, |o| {
+                let us = &cuts[o];
+                let mut doors: Vec<(f64, f64)> = (1..bands[o].2.len())
+                    .filter_map(|j| {
+                        // The last room reaches the far side wall.
+                        let end = if j + 2 < us.len() { us[j + 1] } else { far(v) };
+                        let (lo, hi) = (us[j].min(end) - u0, us[j].max(end) - u0);
+                        door(lo, hi, (lo + hi) * 0.5)
+                    })
+                    .collect();
+                // Along the partition from its start: a mirrored plan's rooms run the other way.
+                doors.sort_by(|p, q| p.0.total_cmp(&q.0));
+                doors
+            });
+            partitions.push(Partition {
+                a: at(u0, v),
+                b: at(u1, v),
+                thickness: PARTITION,
+                storey: k,
+                doors,
+            });
+        }
+        // Each band's rooms between their boundaries; between two rooms a doorway in the middle,
+        // but on a storey with a landing, which every room opens on to.
+        for ((y0, y1, ids), us) in bands.iter().zip(&cuts) {
             let (v0, v1) = (y(*y0), y(*y1));
             for (j, &i) in ids.iter().enumerate() {
                 // The last room reaches the far side wall where it stands at either end.
@@ -354,7 +393,10 @@ pub fn house(m: &Mass, s: &Structure) -> Option<Interior> {
                     b: at(u, v1),
                     thickness: PARTITION,
                     storey: k,
-                    doors: door(0.0, len, len * 0.5).into_iter().collect(),
+                    doors: door(0.0, len, len * 0.5)
+                        .filter(|_| landing.is_none())
+                        .into_iter()
+                        .collect(),
                 });
             }
         }
@@ -422,6 +464,69 @@ pub fn openings_hit(s: &Structure, interior: &Interior) -> Vec<(DVec2, usize)> {
     out
 }
 
+/// The doorways of storey `k` of `interior`, each as the two places it joins: 0 the hall, `1 + i`
+/// the room `interior.rooms[i]`.
+pub fn doorways(interior: &Interior, k: usize) -> Vec<(usize, usize)> {
+    // Which place a point lies in.
+    let region = |p: DVec2| {
+        if super::geom::contains(&interior.hall, p) {
+            Some(0)
+        } else {
+            interior
+                .rooms
+                .iter()
+                .position(|r| r.storey == k && super::geom::contains(&r.outline, p))
+                .map(|i| i + 1)
+        }
+    };
+    let mut links: Vec<(usize, usize)> = Vec::new();
+    for p in interior.partitions.iter().filter(|p| p.storey == k) {
+        let along = (p.b - p.a).normalize_or_zero();
+        let normal = DVec2::new(-along.y, along.x);
+        for &(d0, d1) in &p.doors {
+            let mid = p.a + along * ((d0 + d1) * 0.5);
+            let off = p.thickness * 0.5 + 0.2;
+            if let (Some(i), Some(j)) = (region(mid + normal * off), region(mid - normal * off)) {
+                links.push((i, j));
+            }
+        }
+    }
+    links
+}
+
+/// The way in to each place of storey `k` from its hall through [`doorways`]: the place it is
+/// entered from (0 the hall, `1 + i` the room `interior.rooms[i]`), by place as numbered there;
+/// `None` for the hall itself, for the rooms of other storeys and for a room no doorway reaches.
+pub fn entered_from(interior: &Interior, k: usize) -> Vec<Option<usize>> {
+    let links = doorways(interior, k);
+    let mut from: Vec<Option<usize>> = vec![None; interior.rooms.len() + 1];
+    let mut seen = vec![false; interior.rooms.len() + 1];
+    seen[0] = true;
+    // Breadth first: a room is entered from the place nearest the hall it opens onto.
+    let mut front = vec![0];
+    while !front.is_empty() {
+        let mut next = Vec::new();
+        for &at in &front {
+            for &(i, j) in &links {
+                let other = if i == at {
+                    j
+                } else if j == at {
+                    i
+                } else {
+                    continue;
+                };
+                if !seen[other] {
+                    seen[other] = true;
+                    from[other] = Some(at);
+                    next.push(other);
+                }
+            }
+        }
+        front = next;
+    }
+    from
+}
+
 /// Whether every room of each storey of `interior` is reached from its hall through doorways.
 pub fn reachable(interior: &Interior) -> bool {
     let storeys = interior
@@ -431,44 +536,11 @@ pub fn reachable(interior: &Interior) -> bool {
         .max()
         .unwrap_or(0);
     (0..storeys).all(|k| {
-        let rooms: Vec<&InRoom> = interior.rooms.iter().filter(|r| r.storey == k).collect();
-        // Which region a point lies in: the hall (0) or a room (1 + its index).
-        let region = |p: DVec2| {
-            if super::geom::contains(&interior.hall, p) {
-                Some(0)
-            } else {
-                rooms
-                    .iter()
-                    .position(|r| super::geom::contains(&r.outline, p))
-                    .map(|i| i + 1)
-            }
-        };
-        let mut links: Vec<(usize, usize)> = Vec::new();
-        for p in interior.partitions.iter().filter(|p| p.storey == k) {
-            let along = (p.b - p.a).normalize_or_zero();
-            let normal = DVec2::new(-along.y, along.x);
-            for &(d0, d1) in &p.doors {
-                let mid = p.a + along * ((d0 + d1) * 0.5);
-                let off = p.thickness * 0.5 + 0.2;
-                if let (Some(i), Some(j)) = (region(mid + normal * off), region(mid - normal * off))
-                {
-                    links.push((i, j));
-                }
-            }
-        }
-        let mut seen = vec![false; rooms.len() + 1];
-        seen[0] = true;
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for &(i, j) in &links {
-                if seen[i] != seen[j] {
-                    seen[i] = true;
-                    seen[j] = true;
-                    changed = true;
-                }
-            }
-        }
-        seen.iter().all(|&s| s)
+        let from = entered_from(interior, k);
+        interior
+            .rooms
+            .iter()
+            .enumerate()
+            .all(|(i, r)| r.storey != k || from[i + 1].is_some())
     })
 }
