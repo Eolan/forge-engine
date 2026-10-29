@@ -391,7 +391,7 @@ pub fn plan(programme: &[Room], width: f64, max_depth: f64) -> Plan {
     // The storeys where a bedroom would be entered through another room round a landing, the
     // plan made as deep as the deepest of them needs within `max_depth`, the other storeys'
     // last bands stretched to it; a storey whose rooms fit round none stays as it was.
-    let target = storeys
+    let mut target = storeys
         .iter()
         .filter(|st| bedroom_through(st))
         .filter_map(|st| with_landing(st, depth, max_depth).map(|(_, d)| d))
@@ -409,26 +409,63 @@ pub fn plan(programme: &[Room], width: f64, max_depth: f64) -> Plan {
     }
     // A storey whose rooms fit round no landing (a study, four bedrooms and two bathrooms across
     // 7.3 m) sends its study to another storey's front or back band where it fits beside the
-    // rooms there, and is laid round a landing without it.
+    // rooms there, else opens its kitchen into its dining room or its living room, which keeps
+    // the kitchen's area and counter (`furnish`; not where the dining room stands on another
+    // storey, which takes the counter: a house of one storey, a living room, a kitchen, three
+    // bedrooms and a bathroom across 6.9 m), and is laid round a landing with one room fewer,
+    // the plan deepened for it within `max_depth`.
     for k in 0..storeys.len() {
         if !bedroom_through(&storeys[k]) {
             continue;
         }
-        let Some(s) = storeys[k].iter().position(|r| r.kind == RoomKind::Study) else {
-            continue;
-        };
-        let mut here = storeys[k].clone();
-        let study = here.remove(s);
-        let Some((laid, _)) = with_landing(&here, target, target) else {
-            continue;
-        };
-        if let Some((j, there)) = (0..storeys.len())
-            .filter(|&j| j != k)
-            .find_map(|j| beside(&storeys[j], study).map(|t| (j, t)))
+        // The storey laid with the depth it takes, and the storey that took the study.
+        let mut done: Option<(Vec<Placed>, f64)> = None;
+        let mut moved: Option<(usize, Vec<Placed>)> = None;
+        if let Some(s) = storeys[k].iter().position(|r| r.kind == RoomKind::Study) {
+            let mut here = storeys[k].clone();
+            let study = here.remove(s);
+            if let Some(laid) = with_landing(&here, target, max_depth)
+                && let Some(there) = (0..storeys.len())
+                    .filter(|&j| j != k)
+                    .find_map(|j| beside(&storeys[j], study).map(|t| (j, t)))
+            {
+                done = Some(laid);
+                moved = Some(there);
+            }
+        }
+        let dining_elsewhere = storeys
+            .iter()
+            .enumerate()
+            .any(|(j, o)| j != k && o.iter().any(|r| r.kind == RoomKind::Dining));
+        if done.is_none()
+            && !dining_elsewhere
+            && let Some(at) = storeys[k].iter().position(|r| r.kind == RoomKind::Kitchen)
         {
-            storeys[k] = laid;
+            let mut open = storeys[k].clone();
+            let kitchen = open.remove(at);
+            if let Some(into) = [RoomKind::Dining, RoomKind::Living]
+                .into_iter()
+                .find_map(|kind| open.iter().position(|r| r.kind == kind))
+            {
+                open[into].area += kitchen.area;
+                done = with_landing(&open, target, max_depth);
+            }
+        }
+        let Some((laid, d)) = done else {
+            continue;
+        };
+        if let Some((j, there)) = moved {
             storeys[j] = there;
         }
+        if d > target {
+            for (j, st) in storeys.iter_mut().enumerate() {
+                if j != k {
+                    stretch(st, target, d);
+                }
+            }
+            target = d;
+        }
+        storeys[k] = laid;
     }
     Plan {
         width,
