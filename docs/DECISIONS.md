@@ -7281,9 +7281,9 @@ their pixels by a second noise (`ladder_fade_noise`, interleaved gradient noise)
 impostor keeps; an instance its impostor would take whole draws nothing (a safeguard: with equal
 bands and the hold below, a fade never ends inside the crossing into it). A step's fade is also held
 to the size of the crossing into it (`meshlet::step_after`, the impostors' per instance): at 40 px
-the shrubs by the main street went to their impostors, softer and greyer in the shade than their
-cards (the map check's main view ꟻLIP 0.0074, 0.0032 held). Central steps of 3 sRGB levels or
-more on the walk in: 24 → 5, of 5 or more: 5 → 0. Cost (`docs/PROFILE.md`): +0.02 ms from the
+the shrubs by the main street went to their impostors, softer than their cards (less leaf
+detail, the same mean colour; the map check's main view ꟻLIP 0.0074, 0.0032 held). Central steps
+of 3 sRGB levels or more on the walk in: 24 → 5, of 5 or more: 5 → 0. Cost (`docs/PROFILE.md`): +0.02 ms from the
 air, +0.07 ms on the main street. Moving each fade below the end of its crossing instead (the
 shells drawn farther) lengthened the meshlet pass from the air by 0.24 ms.
 
