@@ -8174,6 +8174,9 @@ known patents; Kulla-Conty's and Fdez-Agüera's compensation and a BC7 encoder t
 before building (the owner's rule).
 
 **Also measured, not part of this:** the light in shade, under awnings and along fronts, is 1.2
-to 1.9 times Falcor's in the Bistro once the diffuse model is matched (Lambert, 16 bounces).
-Ruled out: the probes' spacing (1 m changes nothing), the bounces, the materials (clay renders
-show it). A separate investigation of the probes' irradiance near occluders.
+to 1.9 times Falcor's in the Bistro once the diffuse model is matched (Lambert, 16 bounces); the
+bounces and the materials ruled out (clay renders show it). It is the probes' resolution at the
+fronts: the Bistro's finest cascade is 4 m; 1 m over the whole view (64 × 16 × 64 probes) brings
+the café's front to 0.9 to 1.4, at 8.6 ms and 464 MB; 1 m within 24 m, or 2 m, changes nothing;
+a 5 m occlusion radius (GTAO) takes it to 1.0 to 1.3, too dark in places. The real-time answer
+(occlusion traced at medium range, or probes placed by the geometry) is a design of its own.
