@@ -2376,11 +2376,31 @@ it: the archive's HDR photograph, `san_giuseppe_bridge_4k.hdr` (4096 × 2048, HD
   `gi/probe rays` takes 1.45–1.9 ms of it. The sky's passes take 0.03 ms. Exterior_1's view:
   3.74 ms, its panes' mirror rays 0.03 ms of it.
 
+**The night's glowing pieces as lamps** (D-087's prototype, `FORGE_BISTRO_LAMPS=1`, off by
+default): each emissive section cut into its connected pieces (corners welded within a
+millimetre): 160 pieces, 132 lamps. A closed piece (a bulb, a lantern's glass) lights every way,
+a quarter of luminance × area candelas, a sphere of its area; a flat one (a sign, a spotlight's
+glass) forward, luminance × area along its normal (`Emission::flush`). The colour is the
+emissive map's mean over the piece, read at about a point a texel, as the lamp's tint. A
+lantern's inner shell faces in and is left out: Falcor's emitters shine from their front alone.
+Their rows take `RenderLayer::lamp`, so the probes' rays leave their glow out. 139,000 lm in all,
+made in 60 ms. At the Night view (`--time-of-day 1.5 --ev100 2.22 --fixed-exposure`, linear,
+Forge over Falcor on a 16 × 9 grid):
+- **Light:** without them, 0.04–0.3 on the lit fronts and the street. With the 64 nearest (the
+  default choice), 0.7–1.3 in the middle, the street 0.7–0.9; the far left street stays dark,
+  its lamps past the 64. With `--all-lamps` (132), the street 0.87–0.97, the left 0.5–1.0.
+- **Still:** a still camera's frames 10 apart differ on 4,230 pixels (0.29 %), against 261,857
+  (18 %) before; the same without the probes or the mirror rays, so it is the resolve's own lamp
+  light and the thin geometry, as by day (0.37 %).
+- **Cost:** 4.1 ms of GPU at midnight without them; 8.6 ms with the 64 nearest (lamp rays 2.2,
+  lamp filter 1.1, the resolve +0.9); 11.1 ms with all (lamp rays 3.3). Each lamp has no
+  region and reaches 27 to 70 m, so every pixel takes most of them.
+- **Not yet:** a hanging lantern lights the frame over it and the flowers by it 1.5 to 3 times
+  Falcor's (a closed piece lights every way, where its cap and floor are metal); the string
+  lights' colours glow less on the fronts; the scooter's paint is less glossy.
+
 **Not yet:**
-- **The night's light:** the archive's night is its emissive surfaces alone. Forge adds its
-  moon, and its emissive surfaces light the street only through the probes. The night reference
-  will measure the gap (D-083 step 3).
-- **NVIDIA's other views:** Exterior_2 next, then the night.
+- **NVIDIA's other views:** Exterior_2.
 
 ## `chart`: the material test chart against Falcor (D-083 step 2)
 

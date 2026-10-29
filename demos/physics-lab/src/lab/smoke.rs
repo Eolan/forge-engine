@@ -73,6 +73,7 @@ pub(super) fn lamps(time: f32) -> Vec<forge_render::lamps::Lamp> {
         radius: 0.12,
         candela: 150.0 * (1.0 + 0.12 * flicker),
         kelvin: 1900.0,
+        tint: Vec3::ONE,
         regions: forge_render::lamps::EVERY_REGION,
         emission: forge_render::lamps::Emission::Every,
     }]

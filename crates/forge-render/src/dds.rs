@@ -294,15 +294,9 @@ pub fn alpha_plane(texture: &CompressedTexture) -> Option<Vec<u8>> {
     Some(alpha)
 }
 
-/// The one colour every texel of a BC1 or BC3 texture's first level holds, 8-bit RGB (its alpha
-/// aside), or `None` where they differ or the format is another: a map of one value, better
-/// read as its material's factor.
-pub fn uniform_color(texture: &CompressedTexture) -> Option<[u8; 3]> {
-    let (size, at) = match texture.format {
-        BlockFormat::Bc1 => (8, 0),
-        BlockFormat::Bc3 => (16, 8),
-        BlockFormat::Bc5 | BlockFormat::Bc7 => return None,
-    };
+/// The 16 colours of a BC1 or BC3 colour block (BC3's after its 8 alpha bytes), 8-bit RGB, rows
+/// of four top to bottom: BC1's three-colour mode gives black for index 3 (its cut-out texels).
+fn colour_block(format: BlockFormat, colour: &[u8]) -> [[u8; 3]; 16] {
     let expand = |c: u16| {
         let (r, g, b) = ((c >> 11) & 31, (c >> 5) & 63, c & 31);
         [
@@ -312,24 +306,61 @@ pub fn uniform_color(texture: &CompressedTexture) -> Option<[u8; 3]> {
         ]
         .map(|v| v as u8)
     };
+    let c0 = u16::from_le_bytes([colour[0], colour[1]]);
+    let c1 = u16::from_le_bytes([colour[2], colour[3]]);
+    let (e0, e1) = (expand(c0), expand(c1));
+    let mix = |a: u16, b: u16, d: u16| -> [u8; 3] {
+        std::array::from_fn(|k| ((a * u16::from(e0[k]) + b * u16::from(e1[k])) / d) as u8)
+    };
+    // BC3's colour block always has four colours; BC1's three and black where c0 <= c1.
+    let palette = if c0 > c1 || format == BlockFormat::Bc3 {
+        [e0, e1, mix(2, 1, 3), mix(1, 2, 3)]
+    } else {
+        [e0, e1, mix(1, 1, 2), [0; 3]]
+    };
+    let indices = u32::from_le_bytes([colour[4], colour[5], colour[6], colour[7]]);
+    std::array::from_fn(|t| palette[((indices >> (2 * t)) & 3) as usize])
+}
+
+/// The colour of a BC1 or BC3 texture's level 0, 8-bit RGB as stored (sRGB-encoded where the
+/// texture is), a texel each, rows top to bottom; `None` for BC5 and BC7 (not read here).
+pub fn color_plane(texture: &CompressedTexture) -> Option<Vec<[u8; 3]>> {
+    let (size, at) = match texture.format {
+        BlockFormat::Bc1 => (8, 0),
+        BlockFormat::Bc3 => (16, 8),
+        BlockFormat::Bc5 | BlockFormat::Bc7 => return None,
+    };
+    let level = texture.levels.first()?;
+    let (w, h) = (texture.width as usize, texture.height as usize);
+    let blocks_x = w.div_ceil(4).max(1);
+    let mut plane = vec![[0_u8; 3]; w * h];
+    for (i, block) in level.chunks_exact(size).enumerate() {
+        let (bx, by) = (i % blocks_x, i / blocks_x);
+        for (t, c) in colour_block(texture.format, &block[at..at + 8])
+            .into_iter()
+            .enumerate()
+        {
+            let (x, y) = (4 * bx + t % 4, 4 * by + t / 4);
+            if x < w && y < h {
+                plane[y * w + x] = c;
+            }
+        }
+    }
+    Some(plane)
+}
+
+/// The one colour every texel of a BC1 or BC3 texture's first level holds, 8-bit RGB (its alpha
+/// aside), or `None` where they differ or the format is another: a map of one value, better
+/// read as its material's factor.
+pub fn uniform_color(texture: &CompressedTexture) -> Option<[u8; 3]> {
+    let (size, at) = match texture.format {
+        BlockFormat::Bc1 => (8, 0),
+        BlockFormat::Bc3 => (16, 8),
+        BlockFormat::Bc5 | BlockFormat::Bc7 => return None,
+    };
     let mut seen = None;
     for block in texture.levels.first()?.chunks_exact(size) {
-        let colour = &block[at..at + 8];
-        let c0 = u16::from_le_bytes([colour[0], colour[1]]);
-        let c1 = u16::from_le_bytes([colour[2], colour[3]]);
-        let (e0, e1) = (expand(c0), expand(c1));
-        let mix = |a: u16, b: u16, d: u16| -> [u8; 3] {
-            std::array::from_fn(|k| ((a * u16::from(e0[k]) + b * u16::from(e1[k])) / d) as u8)
-        };
-        // BC3's colour block always has four colours; BC1's three and black where c0 <= c1.
-        let palette = if c0 > c1 || texture.format == BlockFormat::Bc3 {
-            [e0, e1, mix(2, 1, 3), mix(1, 2, 3)]
-        } else {
-            [e0, e1, mix(1, 1, 2), [0; 3]]
-        };
-        let indices = u32::from_le_bytes([colour[4], colour[5], colour[6], colour[7]]);
-        for t in 0..16 {
-            let c = palette[((indices >> (2 * t)) & 3) as usize];
+        for c in colour_block(texture.format, &block[at..at + 8]) {
             match seen {
                 None => seen = Some(c),
                 Some(s) if s != c => return None,
@@ -486,5 +517,32 @@ mod tests {
         assert_eq!(uniform_color(&t), Some([0, 0, 0]));
         t.levels[0][4] = 0b10;
         assert_eq!(uniform_color(&t), None);
+    }
+
+    #[test]
+    fn a_colour_plane_follows_the_blocks() {
+        // 8 × 4 in BC1, four-colour mode: the first block white throughout, the second red
+        // (31, 0, 0) but for its texel (1, 2) on index 1, black.
+        let white = [0xFF, 0xFF, 0, 0, 0, 0, 0, 0];
+        let red = 31_u16 << 11;
+        let mut second = [0_u8; 8];
+        second[0..2].copy_from_slice(&red.to_le_bytes());
+        // Texel 9 (x 1, y 2) on index 1.
+        second[4..8].copy_from_slice(&(1_u32 << (2 * 9)).to_le_bytes());
+        let t = CompressedTexture {
+            name: "emissive".into(),
+            width: 8,
+            height: 4,
+            format: BlockFormat::Bc1,
+            srgb: true,
+            levels: vec![[white, second].concat()],
+        };
+        let plane = color_plane(&t).expect("BC1 reads");
+        assert_eq!(plane.len(), 32);
+        assert_eq!(plane[0], [255; 3]);
+        assert_eq!(plane[3 * 8 + 3], [255; 3]);
+        assert_eq!(plane[4], [255, 0, 0]);
+        assert_eq!(plane[2 * 8 + 5], [0, 0, 0]);
+        assert_eq!(plane[3 * 8 + 7], [255, 0, 0]);
     }
 }

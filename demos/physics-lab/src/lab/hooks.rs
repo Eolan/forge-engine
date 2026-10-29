@@ -1249,11 +1249,15 @@ impl Running for LabRunning {
     }
 
     fn lamps(&mut self, time: f32) -> Vec<forge_render::lamps::Lamp> {
-        // The room at night's three lamps and the smoke yard's fire (D-065).
+        // The room at night's three lamps and the smoke yard's fire (D-065); the Bistro's glowing
+        // pieces with `FORGE_BISTRO_LAMPS=1` (D-087's prototype).
         match self.kind {
             LabScene::Lamps => super::room::lamps(),
             LabScene::Smoke => super::smoke::lamps(time),
-            _ => Vec::new(),
+            _ => self
+                .kind
+                .authored()
+                .map_or_else(Vec::new, super::bistro::lamps),
         }
     }
 

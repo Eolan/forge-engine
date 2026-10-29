@@ -18,7 +18,10 @@ use std::sync::{Arc, OnceLock};
 use anyhow::{Context, Result};
 use forge_geom::city::{Imported, PropKind, PropSpec};
 use forge_geom::model::{Model, load_gltf};
-use forge_render::dds::{BlockFormat, alpha_plane, flip_green, read_dds, uniform_color};
+use forge_render::dds::{
+    BlockFormat, alpha_plane, color_plane, flip_green, read_dds, uniform_color,
+};
+use forge_render::lamps::{EVERY_REGION, Emission, Lamp, WHITE_BALANCE};
 use forge_render::material::{ExternalMaps, external_layer, upload_compressed};
 use glam::{Mat4, Quat, Vec3};
 
@@ -420,7 +423,11 @@ pub(super) fn rows(
                     || maps.alpha_cutoff.is_some()
                     || SHEETS.iter().any(|s| m.name.contains(s))
                     || open.get(&m.name).is_some_and(|&o| o >= OPEN_SHEET);
-                (m.name.clone(), external_layer(&m, maps))
+                let mut layer = external_layer(&m, maps);
+                // D-087's prototype: a glowing piece lights as a lamp, and the probes' rays take
+                // none of its glow.
+                layer.lamp = maps.emissive.is_some() && lamps_on();
+                (m.name.clone(), layer)
             })
             .collect();
         materials.add_rows(b.props[k], rows);
@@ -437,6 +444,249 @@ pub(super) fn rows(
         "the Bistro's maps"
     );
     Ok(())
+}
+
+/// Whether the Bistro's glowing pieces light the scene as lamps (D-087's prototype,
+/// `FORGE_BISTRO_LAMPS=1`): each a Forge lamp of its own light ([`lamps`]), its glow left out of
+/// the probes' rays (`RenderLayer::lamp`). Without it the night is lit by the probes' rays
+/// meeting the glow, one ray in hundreds: dim, and flickering (D-087).
+pub(super) fn lamps_on() -> bool {
+    std::env::var("FORGE_BISTRO_LAMPS").is_ok_and(|v| v == "1")
+}
+
+/// Under this luminance, cd/m², a glowing piece is too dim to light anything worth a lamp.
+const LEAST_GLOW: f32 = 1.0;
+/// Under this share of its area its normals' sum keeps, a glowing piece shines every way (a bulb,
+/// a lantern's panes); over it, it is flat and shines forward (a sign, a spotlight's glass).
+const FLAT_PIECE: f32 = 0.5;
+
+/// One connected piece of an emissive material, its corners welded within a millimetre: its area,
+/// its middle, its normals' sum (each triangle's by its area, so a closed piece's sums to none),
+/// its luminance per channel, cd/m², its map's mean over its area, its bounds, and the share of
+/// its area that faces away from its middle less the share that faces it (1 out, -1 in).
+#[derive(Clone, Copy, Debug, Default)]
+struct Glow {
+    area: f32,
+    middle: Vec3,
+    normal: Vec3,
+    luminance: Vec3,
+    low: Vec3,
+    high: Vec3,
+    outward: f32,
+}
+
+/// The scene's glowing pieces (`Glow`), every emissive material's on every mesh: its map read at
+/// points over each triangle, about one a texel.
+fn glows(which: Authored) -> Vec<(String, Glow)> {
+    let Some(b) = scene(which) else {
+        return Vec::new();
+    };
+    let (_, archive) = which.folders();
+    let srgb: [f32; 256] = std::array::from_fn(|v| {
+        let c = v as f32 / 255.0;
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    });
+    // Each emissive map's texels, linear, once.
+    let mut planes: HashMap<String, Option<(usize, usize, Vec<Vec3>)>> = HashMap::new();
+    let mut out = Vec::new();
+    for m in &b.model.meshes {
+        if m.mesh.uvs.is_empty() {
+            continue;
+        }
+        for (section, material) in m.materials.iter().enumerate() {
+            let Some(path) = b
+                .roles
+                .get(&material.name)
+                .and_then(|r| r.emissive.as_ref())
+            else {
+                continue;
+            };
+            let plane = planes.entry(path.clone()).or_insert_with(|| {
+                let t = std::fs::read(archive.join(path))
+                    .ok()
+                    .and_then(|bytes| read_dds(path, &bytes, true).ok())?;
+                let texels = color_plane(&t)?
+                    .into_iter()
+                    .map(|c| Vec3::from(c.map(|v| srgb[usize::from(v)])))
+                    .collect();
+                Some((t.width as usize, t.height as usize, texels))
+            });
+            let Some((w, h, texels)) = plane else {
+                continue;
+            };
+            let tris: Vec<[u32; 3]> = m
+                .mesh
+                .indices
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .enumerate()
+                .filter(|&(t, _)| usize::from(m.mesh.section(t)) == section)
+                .map(|(_, tri)| *tri)
+                .collect();
+            // The pieces: triangles that share a corner, by a union-find over the welded corners.
+            let mut parent: Vec<usize> = (0..tris.len()).collect();
+            fn root(parent: &mut [usize], mut i: usize) -> usize {
+                while parent[i] != i {
+                    parent[i] = parent[parent[i]];
+                    i = parent[i];
+                }
+                i
+            }
+            let mut first: HashMap<[i32; 3], usize> = HashMap::new();
+            for (t, tri) in tris.iter().enumerate() {
+                for &v in tri {
+                    let key = (Vec3::from(m.mesh.positions[v as usize]) * 1000.0)
+                        .round()
+                        .as_ivec3()
+                        .to_array();
+                    let other = *first.entry(key).or_insert(t);
+                    let (a, c) = (root(&mut parent, t), root(&mut parent, other));
+                    parent[a] = c;
+                }
+            }
+            let mut pieces: HashMap<usize, Glow> = HashMap::new();
+            for (t, tri) in tris.iter().enumerate() {
+                let p = tri.map(|v| Vec3::from(m.mesh.positions[v as usize]));
+                let uv = tri.map(|v| glam::Vec2::from(m.mesh.uvs[v as usize]));
+                let cross = (p[1] - p[0]).cross(p[2] - p[0]);
+                let area = 0.5 * cross.length();
+                if area <= 0.0 {
+                    continue;
+                }
+                // Points at the middles of the triangle cut into n² (the upright ones): about
+                // one a texel of its footprint, 1 to 8,000.
+                let footprint =
+                    0.5 * (uv[1] - uv[0]).perp_dot(uv[2] - uv[0]).abs() * (*w as f32) * (*h as f32);
+                let n = (2.0 * footprint).sqrt().ceil().clamp(1.0, 128.0) as usize;
+                let mut sum = Vec3::ZERO;
+                let mut count = 0;
+                for i in 0..n {
+                    for j in 0..n - i {
+                        let (b1, b2) = (
+                            (i as f32 + 1.0 / 3.0) / n as f32,
+                            (j as f32 + 1.0 / 3.0) / n as f32,
+                        );
+                        let at = uv[0] + (uv[1] - uv[0]) * b1 + (uv[2] - uv[0]) * b2;
+                        let x = ((at.x.rem_euclid(1.0) * *w as f32) as usize).min(*w - 1);
+                        let y = ((at.y.rem_euclid(1.0) * *h as f32) as usize).min(*h - 1);
+                        sum += texels[y * *w + x];
+                        count += 1;
+                    }
+                }
+                let g = pieces.entry(root(&mut parent, t)).or_insert(Glow {
+                    low: Vec3::INFINITY,
+                    high: Vec3::NEG_INFINITY,
+                    ..Glow::default()
+                });
+                g.low = g.low.min(p[0].min(p[1]).min(p[2]));
+                g.high = g.high.max(p[0].max(p[1]).max(p[2]));
+                g.area += area;
+                g.middle += (p[0] + p[1] + p[2]) / 3.0 * area;
+                g.normal += 0.5 * cross;
+                g.luminance += sum / count as f32 * area;
+            }
+            // How much of each piece faces out from its middle (1) or in (-1): a lantern's inner
+            // shell faces in, and Falcor's emitters shine from their front alone.
+            let mut outward: HashMap<usize, f32> = HashMap::new();
+            for (t, tri) in tris.iter().enumerate() {
+                let r = root(&mut parent, t);
+                let Some(g) = pieces.get(&r) else {
+                    continue;
+                };
+                let middle = g.middle / g.area;
+                let p = tri.map(|v| Vec3::from(m.mesh.positions[v as usize]));
+                let cross = (p[1] - p[0]).cross(p[2] - p[0]);
+                let away = ((p[0] + p[1] + p[2]) / 3.0 - middle).dot(cross);
+                *outward.entry(r).or_default() += 0.5 * cross.length() * away.signum();
+            }
+            for (r, g) in pieces {
+                let g = Glow {
+                    outward: outward.get(&r).copied().unwrap_or(0.0) / g.area,
+                    ..g
+                };
+                out.push((
+                    material.name.clone(),
+                    Glow {
+                        middle: g.middle / g.area,
+                        luminance: g.luminance / g.area * EMISSIVE_LUMINANCE,
+                        ..g
+                    },
+                ));
+            }
+        }
+    }
+    out
+}
+
+/// The lamp a glowing piece lights the scene as (D-087): its light π × luminance × area, from its
+/// middle; every way where it is closed (a sphere of its area: a quarter of luminance × area
+/// candelas), forward where it is flat (a disc of its area, luminance × area candelas along its
+/// normal, falling off as `Emission::flush`). Its colour is its tint, balanced as the lamps'.
+fn glow_lamp(g: &Glow) -> Option<Lamp> {
+    let luminance = g.luminance.dot(Vec3::new(0.2126, 0.7152, 0.0722));
+    if luminance < LEAST_GLOW || g.area <= 0.0 {
+        return None;
+    }
+    let flat = g.normal.length() / g.area > FLAT_PIECE;
+    // A closed piece facing in (a lantern's inner shell) lights its fitting's inside alone.
+    if !flat && g.outward < -0.5 {
+        return None;
+    }
+    let pi = std::f32::consts::PI;
+    let (candela, radius, emission) = if flat {
+        (
+            luminance * g.area,
+            (g.area / pi).sqrt(),
+            Emission::flush(g.normal),
+        )
+    } else {
+        (
+            luminance * g.area / 4.0,
+            (g.area / (4.0 * pi)).sqrt(),
+            Emission::Every,
+        )
+    };
+    Some(Lamp {
+        position: g.middle,
+        radius,
+        candela,
+        kelvin: WHITE_BALANCE,
+        tint: g.luminance / luminance,
+        regions: EVERY_REGION,
+        emission,
+    })
+}
+
+/// The scene's glowing pieces as lamps (D-087's prototype), made once; none without
+/// [`lamps_on`].
+pub(crate) fn lamps(which: Authored) -> Vec<Lamp> {
+    static BISTRO: OnceLock<Vec<Lamp>> = OnceLock::new();
+    if which != Authored::Bistro || !lamps_on() {
+        return Vec::new();
+    }
+    BISTRO
+        .get_or_init(|| {
+            let started = std::time::Instant::now();
+            let glows = glows(which);
+            let lamps: Vec<Lamp> = glows.iter().filter_map(|(_, g)| glow_lamp(g)).collect();
+            tracing::info!(
+                pieces = glows.len(),
+                lamps = lamps.len(),
+                lumens = lamps
+                    .iter()
+                    .map(|l| l.lumens().dot(Vec3::new(0.2126, 0.7152, 0.0722)))
+                    .sum::<f32>() as u64,
+                ms = started.elapsed().as_millis() as u64,
+                "the Bistro's glowing pieces as lamps (D-087)"
+            );
+            lamps
+        })
+        .clone()
 }
 
 #[cfg(test)]
@@ -479,6 +729,54 @@ mod tests {
             };
             println!("{name}: {:.1} % open, {why}", 100.0 * share);
         }
+    }
+
+    /// The glowing pieces by material (D-087): how many, how many become lamps, their area, their
+    /// mean luminance and their lumens, and how many shine forward (flat) or every way.
+    /// `cargo test --release -p physics-lab bistro_glows -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bistro_glows() {
+        let luma = Vec3::new(0.2126, 0.7152, 0.0722);
+        let mut by: std::collections::BTreeMap<String, (usize, usize, usize, f32, f32, f32)> =
+            Default::default();
+        for (name, g) in glows(Authored::Bistro) {
+            let e = by.entry(name.clone()).or_default();
+            e.0 += 1;
+            if let Some(l) = glow_lamp(&g) {
+                e.1 += 1;
+                e.2 += usize::from(l.emission != Emission::Every);
+                e.5 += l.lumens().dot(luma);
+            }
+            e.3 += g.area;
+            e.4 += g.luminance.dot(luma) * g.area;
+            if std::env::var("FORGE_GLOW_PIECES").is_ok() {
+                let size = g.high - g.low;
+                println!(
+                    "  {name} at {:.2} {:.2} {:.2}: {:.3} m², {:.2} x {:.2} x {:.2} m, closed {:.2}, outward {:.2}",
+                    g.middle.x,
+                    g.middle.y,
+                    g.middle.z,
+                    g.area,
+                    size.x,
+                    size.y,
+                    size.z,
+                    1.0 - g.normal.length() / g.area,
+                    g.outward
+                );
+            }
+        }
+        let mut lamps = 0;
+        let mut lumens = 0.0;
+        for (name, (pieces, lit, flat, area, flux, lm)) in by {
+            println!(
+                "{name}: {pieces} pieces, {lit} lamps ({flat} flat), {area:.3} m², {:.0} cd/m² mean, {lm:.0} lm",
+                flux / area.max(1e-9)
+            );
+            lamps += lit;
+            lumens += lm;
+        }
+        println!("{lamps} lamps, {lumens:.0} lm");
     }
 
     /// The meshes whose names hold one of `FORGE_OBJECTS`' comma-separated words (all without

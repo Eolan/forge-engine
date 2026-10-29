@@ -8218,3 +8218,17 @@ split of the emissive sections (connected pieces by welded corners, as `open_edg
 
 **Verification:** the Night view against Falcor's (light on the café's front and the street
 within 0.8 to 1.25), the still-camera flicker under 0.2 %, the village's lamps unchanged.
+
+**The prototype (2026-10-30, `FORGE_BISTRO_LAMPS=1`, the Bistro alone, off by default):** lamps
+take a tint (`Lamp::tint`); the Bistro's 160 glowing pieces make 132 lamps (a lantern's inner
+shell, facing in, left out: Falcor's emitters shine from their front alone), their rows
+`RenderLayer::lamp`. At the Night view, Forge's light over Falcor's:
+- **Light:** from 0.04–0.3 to 0.7–1.3 with the 64 nearest (the street 0.7–0.9, the far left
+  street dark past them); with all 132, the street 0.87–0.97.
+- **Flicker:** 261,857 pixels (18 %) to 4,230 (0.29 %), unchanged without the probes or the
+  mirror rays: the resolve's lamp light and the thin geometry (0.37 % by day). Short of 0.2 %.
+- **Cost:** 4.1 ms of GPU to 8.6 (the 64) or 11.1 (all): no regions, so every pixel takes most
+  lamps (D-065's lists, its clustered lists still to come).
+- **Open:** a closed piece lights every way, so a lantern lights its own frame (1.5 to 3 times
+  Falcor's there); the street lamps by ReSTIR DI not tried (`--street-restir` needs them
+  `outside`).

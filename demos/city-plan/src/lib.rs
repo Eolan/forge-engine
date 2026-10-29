@@ -3726,6 +3726,7 @@ fn home_lamps(
                     radius: l.radius as f32,
                     candela: l.candela as f32,
                     kelvin: l.kelvin as f32,
+                    tint: Vec3::ONE,
                     regions: slots,
                     emission: forge_render::lamps::Emission::Every,
                 },

@@ -47,6 +47,9 @@ pub struct Lamp {
     pub candela: f32,
     /// Its colour temperature, kelvin (a warm bulb 2700, daylight 6500).
     pub kelvin: f32,
+    /// Its colour over its temperature's, of luminance 1 (white: [`Vec3::ONE`]): a coloured bulb
+    /// or glass, as the Bistro's string lights (D-087).
+    pub tint: Vec3,
     /// The probes' regions (D-068, [`crate::RegionVolume`]) whose surfaces it lights: its room's
     /// and those it shines into through a doorway, [`NO_REGION`] in the slots left over. A
     /// surface elsewhere takes nothing of it, without a shadow ray: the house's rooms are its
@@ -68,7 +71,7 @@ impl Lamp {
     /// Its light in lumens, per channel of its colour of luminance 1 (`lamp_rgb`): its peak
     /// candelas over the solid angle its emission fills.
     pub fn lumens(&self) -> Vec3 {
-        lamp_rgb(self.kelvin) * (self.candela.max(0.0) * self.emission.solid_angle())
+        lamp_rgb(self.kelvin) * self.tint * (self.candela.max(0.0) * self.emission.solid_angle())
     }
 
     /// The room it lights, its first region; none for a street lamp or one lighting every
@@ -318,6 +321,7 @@ pub fn street_lights(lamps: &[(Vec3, f32, f32, bool)]) -> Vec<Lamp> {
                 radius: radius * scale,
                 candela: lens * scale * scale,
                 kelvin: 2700.0,
+                tint: Vec3::ONE,
                 regions,
                 emission: Emission::STREET,
             });
@@ -451,7 +455,7 @@ fn faded<'a>(
 
 /// `l` as the GPU takes it, its light times `share`.
 pub(crate) fn gpu_lamp(l: &Lamp, share: f32) -> GpuLamp {
-    let c = lamp_rgb(l.kelvin) * (l.candela * share);
+    let c = lamp_rgb(l.kelvin) * l.tint * (l.candela * share);
     let (beam, beam_edge) = l.emission.gpu();
     GpuLamp {
         position_radius: [
@@ -474,6 +478,7 @@ pub const DARK: Lamp = Lamp {
     radius: 0.0,
     candela: 0.0,
     kelvin: WHITE_BALANCE,
+    tint: Vec3::ONE,
     regions: EVERY_REGION,
     emission: Emission::Every,
 };
@@ -808,6 +813,7 @@ mod tests {
             radius: 0.05,
             candela,
             kelvin: 2700.0,
+            tint: Vec3::ONE,
             regions: EVERY_REGION,
             emission: Emission::Every,
         };
@@ -842,6 +848,7 @@ mod tests {
                 radius: 0.05,
                 candela,
                 kelvin: 2700.0,
+                tint: Vec3::ONE,
                 regions,
                 emission: Emission::Every,
             }
@@ -880,6 +887,7 @@ mod tests {
                 radius: 0.12,
                 candela: 109.0,
                 kelvin: 2700.0,
+                tint: Vec3::ONE,
                 regions,
                 emission: Emission::STREET,
             }
@@ -931,6 +939,7 @@ mod tests {
                 radius: 0.05,
                 candela: 50.0,
                 kelvin: 2700.0,
+                tint: Vec3::ONE,
                 regions: EVERY_REGION,
                 emission: Emission::Every,
             })
