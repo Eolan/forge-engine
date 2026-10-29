@@ -4019,9 +4019,19 @@ float4 sample_triplanar(uint image, float3 w, float3 p, float3 dpdx, float3 dpdy
     return c / max(w.x * float(w.x > 0.01) + w.y * float(w.y > 0.01) + w.z * float(w.z > 0.01), 1e-4);
 }
 
-float3 unpack_normal(float4 texel, float strength)
+// A normal map's texel as a tangent-space vector. A two-channel map (BC5, the Bistro's, D-083)
+// samples no blue, which a stored three-channel normal never has: its z is rebuilt from x and y.
+float3 normal_texel(float4 texel)
 {
     float3 t = texel.xyz * 2.0 - 1.0;
+    if (texel.z == 0.0)
+        t.z = sqrt(saturate(1.0 - dot(t.xy, t.xy)));
+    return t;
+}
+
+float3 unpack_normal(float4 texel, float strength)
+{
+    float3 t = normal_texel(texel);
     return float3(t.xy * strength, t.z);
 }
 
@@ -4519,7 +4529,7 @@ LightInputs uv_mapped_light(Frame* f, Material mat, Surface s)
         float3 T = dp2perp * gx.x + dp1perp * gy.x;
         float3 B = dp2perp * gx.y + dp1perp * gy.y;
         float scale = rsqrt(max(max(dot(T, T), dot(B, B)), 1e-30));
-        float3 t = sample_image_grad(mat.normal_texture, mat.sampler, uv, gx, gy).xyz * 2.0 - 1.0;
+        float3 t = normal_texel(sample_image_grad(mat.normal_texture, mat.sampler, uv, gx, gy));
         // The mips keep the mean normal's length (#331): shorter where the normals under the
         // pixel part (a tile's grout bevels seen from a few metres), past the bytes' rounding.
         float len = length(t);

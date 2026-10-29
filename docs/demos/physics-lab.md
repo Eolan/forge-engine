@@ -2259,6 +2259,56 @@ Steps 1 and 3 of D-065 (`forge_render::lamps`, `lamps_at` and `hit_lamps` in `me
   filter, best of three: "shadow/lamp rays" 0.30 ms, "shadow/lamp filter" 0.15 ms and
   `shading/standard` 0.66 → 0.39 ms, the frame 1.84 → 2.02 ms.
 
+## `bistro`: an authored scene to measure against (D-083 step 1)
+
+```
+cargo run --release -p physics-lab -- --lab bistro
+cargo run --release -p physics-lab -- --lab bistro --time-of-day 1.5
+```
+
+The Amazon Lumberyard Bistro's exterior (ORCA, CC BY 4.0, `CREDITS.md`): 1,296 meshes,
+2.83 M triangles, 134 materials. It is the first of D-083's authored scenes, for measuring
+Forge's image, load and frame against, first against NVIDIA's renders, then against a
+path-traced reference (step 2).
+
+**Getting it.** It is never in the repository.
+1. Fetch the archive by hand into `assets/external/bistro/` (git-ignored).
+2. Convert it once: `blender -b --factory-startup --python tools/fbx-to-gltf.py -- IN.fbx
+   OUT.gltf`, which writes `converted/`:
+   - the meshes and nodes as glTF, without images or lights;
+   - each material's DDS maps by role (`BistroExterior.textures.json`);
+   - the FBX's 2,401-frame camera path (`BistroExterior.camera.json`), whose first frame is the
+     scene's start.
+3. NVIDIA's three exterior renders sit beside it, in `reference/`.
+
+**The maps** (`forge_render::dds`, `TextureSet::add_compressed`, `external_layer`):
+- **As stored:** read as their blocks with their mips, never decoded. BC1, BC3, BC5 and BC7
+  formats are read.
+- **Base colour:** sRGB. Its alpha is the opacity, cut out at a half where the map has any.
+- **"Specular":** roughness in green, metalness in blue. Its red, which the archive's readme
+  calls occlusion, is 0 throughout; read as occlusion, it blacked out every shadow, so it is
+  left out.
+- **Normal maps:** BC5, DirectX. Their green is turned over on the blocks at load. The shaders
+  rebuild z where the blue they sample is 0, which no three-channel map has
+  (`normal_texel`).
+- **Emission:** sRGB, 1,000 cd/m² at full colour for now. The night reference will set it.
+- **Factors:** each factor a map carries is 1. The exporter, which kept no images, had written
+  its own defaults (roughness 0.553 everywhere).
+
+**Numbers** (1600 × 900, DLAA, RTX 5070 Ti, the path's first frame):
+- **Load:** 10 s in all on the first run, the props cooked. The 405 maps, 925 MB of blocks,
+  read in 0.5 s and uploaded in 1.1 s.
+- **GPU memory:** 2.5 GB (textures 949 MB, geometry 628 MB).
+- **Frame:** 3.8 ms of GPU at noon and 4.0 ms at midnight. `gi/probe rays` takes 1.7–1.9 ms of
+  it.
+
+**Not yet:**
+- **The night's light:** the archive's night is its emissive surfaces alone. Forge adds its
+  moon, and its emissive surfaces light the street only through the probes. The night reference
+  will measure the gap (D-083 step 3).
+- **NVIDIA's views:** their viewpoints are to be found in the scene, to compare with them frame
+  for frame.
+
 ## `FORGE_DYNAMIC_SCENE`: the scene edited as it runs (issues #220, #338)
 
 The rain's scene built to take and free meshes and instances in place (`reserve_dynamic`), its

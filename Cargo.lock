@@ -2414,6 +2414,8 @@ dependencies = [
  "forge-task",
  "forge-world",
  "glam",
+ "serde",
+ "serde_json",
  "tracing",
  "winit",
 ]

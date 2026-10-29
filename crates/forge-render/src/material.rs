@@ -14,6 +14,7 @@ use forge_core::material::{METAL_SPECULAR, MaterialTable, RenderLayer, TextureId
 use forge_geom::model::{Model, ModelMaterial, TextureRef};
 use forge_gpu::{Device, Image, ImageDesc, Result, SampledImageId, vk};
 
+use crate::dds::CompressedTexture;
 use crate::textures::{ImageUse, TextureData, decode_image};
 
 /// No texture (`TEXTURE_NONE` in `meshlet.slang`).
@@ -336,6 +337,30 @@ impl TextureSet {
         Ok(TextureId(self.textures.len() as u32 - 1))
     }
 
+    /// Adds a block-compressed texture [`upload_compressed`] uploaded, of `bytes` over its
+    /// levels, with what the CPU knows of its alpha (the rays' opacity micromaps, #333), and
+    /// returns its id for a material row.
+    pub fn add_compressed(
+        &mut self,
+        image: Image,
+        bytes: u64,
+        texture: &CompressedTexture,
+    ) -> TextureId {
+        let id = self.add_uploaded(image, bytes);
+        if let Some(texels) = crate::dds::alpha_plane(texture) {
+            self.alpha[id.0 as usize] = if texels.iter().all(|&a| a == 255) {
+                TextureAlpha::Opaque
+            } else {
+                TextureAlpha::Plane(Arc::new(AlphaPlane {
+                    width: texture.width,
+                    height: texture.height,
+                    texels,
+                }))
+            };
+        }
+        id
+    }
+
     /// Adds a texture [`upload_textures`] uploaded, of `bytes` over its levels, and returns
     /// its id for a material row.
     pub fn add_uploaded(&mut self, image: Image, bytes: u64) -> TextureId {
@@ -462,6 +487,120 @@ pub fn upload_textures(device: &Arc<Device>, data: &[TextureData]) -> Result<Vec
         start = end;
     }
     Ok(uploaded)
+}
+
+/// Uploads every block-compressed texture of `data` with its levels as they are, as many to a
+/// submission as [`forge_gpu::STAGING_CHUNK`] holds ([`upload_textures`]'s way). Each image
+/// with its bytes, for [`TextureSet::add_compressed`].
+pub fn upload_compressed(
+    device: &Arc<Device>,
+    data: &[CompressedTexture],
+) -> Result<Vec<(Image, u64)>> {
+    let bytes = |d: &CompressedTexture| d.levels.iter().map(Vec::len).sum::<usize>();
+    let mut uploaded = Vec::with_capacity(data.len());
+    let mut start = 0;
+    while start < data.len() {
+        let mut end = start + 1;
+        let mut total = bytes(&data[start]);
+        while end < data.len() && total + bytes(&data[end]) <= forge_gpu::STAGING_CHUNK {
+            total += bytes(&data[end]);
+            end += 1;
+        }
+        let levels: Vec<Vec<&[u8]>> = data[start..end]
+            .iter()
+            .map(|d| d.levels.iter().map(Vec::as_slice).collect())
+            .collect();
+        let images: Vec<(ImageDesc<'_>, &[&[u8]])> = data[start..end]
+            .iter()
+            .zip(&levels)
+            .map(|(d, levels)| {
+                (
+                    ImageDesc {
+                        width: d.width,
+                        height: d.height,
+                        format: d.format.vk_format(d.srgb),
+                        usage: vk::ImageUsageFlags::SAMPLED,
+                        aspect: vk::ImageAspectFlags::COLOR,
+                        mip_levels: levels.len() as u32,
+                        name: &d.name,
+                    },
+                    levels.as_slice(),
+                )
+            })
+            .collect();
+        let made = device.create_images_with_mips(&images)?;
+        uploaded.extend(
+            made.into_iter()
+                .zip(&data[start..end])
+                .map(|(image, d)| (image, bytes(d) as u64)),
+        );
+        start = end;
+    }
+    Ok(uploaded)
+}
+
+/// The maps a model's material takes from outside its file (D-083: the Bistro's DDS files,
+/// named beside a glTF that holds none), as [`TextureSet`] ids.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ExternalMaps {
+    /// Base colour, sRGB, its alpha the opacity.
+    pub base_color: Option<TextureId>,
+    /// Roughness in green, metalness in blue (glTF's metallic-roughness map).
+    pub metal_rough: Option<TextureId>,
+    /// Occlusion of the indirect light in red (glTF's occlusion map; often the same image).
+    pub occlusion: Option<TextureId>,
+    /// A tangent-space normal map, +y up the image (glTF's; a DirectX map turned over first,
+    /// [`crate::dds::flip_green`]).
+    pub normal: Option<TextureId>,
+    /// Emission, sRGB colour.
+    pub emissive: Option<TextureId>,
+    /// The emission's luminance at full colour, cd/m² (with `emissive`).
+    pub emissive_luminance: f32,
+    /// Cut out where the base colour's alpha falls under this.
+    pub alpha_cutoff: Option<f32>,
+}
+
+/// The row of material `m` drawn with `maps` (on a mesh with UVs): its factors as the file
+/// gives them, but 1 for each the maps carry (glTF multiplies a map by its factor, and an
+/// exporter that kept no image wrote its own default), its UVs as they are, repeated.
+pub fn external_layer(m: &ModelMaterial, maps: ExternalMaps) -> RenderLayer {
+    let color = if maps.base_color.is_some() {
+        [1.0; 3]
+    } else {
+        [m.base_color[0], m.base_color[1], m.base_color[2]]
+    };
+    let orm = maps.metal_rough.is_some();
+    let emissive = maps
+        .emissive
+        .map_or(m.emissive, |_| [maps.emissive_luminance; 3]);
+    RenderLayer {
+        color_a: color,
+        color_b: color,
+        roughness: if orm {
+            1.0
+        } else {
+            m.roughness.clamp(0.05, 1.0)
+        },
+        // A metal's highlight weight is added per pixel by its metalness.
+        specular: 0.05,
+        emissive,
+        emissive_absolute: maps.emissive.is_some(),
+        double_sided: m.double_sided,
+        albedo_texture: maps.base_color,
+        normal_texture: maps.normal,
+        normal_strength: m.normal_scale,
+        uv: Some(UvMapping {
+            metallic: if orm { 1.0 } else { m.metallic },
+            metallic_roughness_texture: maps.metal_rough,
+            occlusion_texture: maps.occlusion,
+            occlusion_strength: 1.0,
+            emissive_texture: maps.emissive,
+            alpha_cutoff: maps.alpha_cutoff,
+            alpha: 1.0,
+            ..UvMapping::default()
+        }),
+        ..RenderLayer::default()
+    }
 }
 
 /// A model's materials as rows (#138, D-047), its images decoded into a [`TextureSet`] once

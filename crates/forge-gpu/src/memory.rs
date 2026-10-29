@@ -665,9 +665,11 @@ impl Device {
         self: &Arc<Self>,
         images: &[(ImageDesc<'_>, &[&[u8]])],
     ) -> Result<Vec<Image>> {
+        // Each level starts on 16 bytes: a block-compressed level's copy starts on a multiple of
+        // its block's bytes (8 or 16), whatever level of whatever format came before it.
         let total: usize = images
             .iter()
-            .flat_map(|(_, levels)| levels.iter().map(|l| l.len()))
+            .flat_map(|(_, levels)| levels.iter().map(|l| l.len().next_multiple_of(16)))
             .sum();
         let staging = self.create_buffer(BufferDesc {
             size: total.max(4) as u64,
@@ -705,7 +707,7 @@ impl Device {
                             depth: 1,
                         }),
                 );
-                offset += data.len() as u64;
+                offset += (data.len() as u64).next_multiple_of(16);
             }
             copies.push((desc.mip_levels, regions));
             made.push(image);

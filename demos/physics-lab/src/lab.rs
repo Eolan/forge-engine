@@ -39,6 +39,7 @@ use glam::{DVec3, Mat4, Quat, Vec2, Vec3};
 use city_blocks::scenario::PoolView;
 use city_blocks::{Args, CityMaterials, Cooked, barrel_prop, scene_origin};
 
+mod bistro;
 mod bonds;
 mod bridge;
 mod creatures;
@@ -134,6 +135,10 @@ pub(crate) enum LabScene {
     Smoke,
     /// The sharpness room at night lit by three lamps (D-065 step 1, #270): `--time-of-day 1.5`.
     Lamps,
+    /// The Amazon Lumberyard Bistro's exterior (ORCA, CC BY 4.0; D-083 step 1), converted into
+    /// `assets/external/bistro/` by `tools/fbx-to-gltf.py`: by day under Forge's sun, by night
+    /// (`--time-of-day 1.5`) lit by its emissive surfaces alone.
+    Bistro,
 }
 
 /// The floor's half side, metres.
@@ -283,6 +288,9 @@ pub(crate) fn props(scene: LabScene) -> Vec<PropSpec> {
     // Only their scene reads and cooks the external models.
     if scene == LabScene::Models {
         props.extend(models::props());
+    }
+    if scene == LabScene::Bistro {
+        props.extend(bistro::props());
     }
     props
 }
@@ -688,6 +696,7 @@ impl LabWorld {
             | LabScene::Materials
             | LabScene::Smoke
             | LabScene::Lamps
+            | LabScene::Bistro
             | LabScene::Models => 0.0,
         };
         // The flight's is a field of grass, wide enough to fly over for a while.
@@ -701,7 +710,11 @@ impl LabWorld {
         let mut statics = Vec::new();
         if !matches!(
             kind,
-            LabScene::Space | LabScene::TankBench | LabScene::Room | LabScene::Lamps
+            LabScene::Space
+                | LabScene::TankBench
+                | LabScene::Room
+                | LabScene::Lamps
+                | LabScene::Bistro
         ) {
             let floor_shape = Shape::cuboid(Vec3::new(floor_half, 0.5, floor_half), 0.05, 0.0)?;
             world.add_body(&BodyDesc::fixed(&floor_shape, floor_at.as_dvec3()))?;
@@ -1209,6 +1222,8 @@ impl LabWorld {
             LabScene::Smoke => statics.extend(smoke::build()),
             LabScene::Lamps => statics.extend(room::build(ROOM)),
             LabScene::Models => statics.extend(models::build(MODELS)),
+            // Its props stand where the models' would: only one of the two is ever added.
+            LabScene::Bistro => statics.extend(bistro::build(MODELS)),
         }
         // The balls to throw, asleep out of sight until thrown, after the scene's.
         let mut thrown = Vec::new();
@@ -2818,6 +2833,10 @@ pub(crate) fn build(
                 builder.set_ray_group(&meshes, models::ROOM_RAY_BUDGET);
             }
         }
+    }
+    // The Bistro's (D-083), its maps read from the archive, in its scene only.
+    if kind == LabScene::Bistro {
+        bistro::rows(&ctx.device, &mut materials)?;
     }
     // The gulls' (#184), their feathers baked on their UVs, in their scene only.
     if kind == LabScene::Flyer {

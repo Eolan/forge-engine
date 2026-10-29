@@ -17,6 +17,7 @@ pub mod cell_stream;
 pub mod cells;
 pub mod clouds;
 mod columns;
+pub mod dds;
 pub mod debug_hash;
 pub mod decals;
 pub mod display;
