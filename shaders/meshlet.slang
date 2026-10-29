@@ -4062,8 +4062,8 @@ float3 triplanar_normal(uint image, float strength, float3 n, float3 w, float3 p
 // shared by the normal map (colour and relief stay together), and the normals blended as
 // tangent-space vectors in the triplanar projection's convention.
 
-// How much more a metal's highlight weighs (forge_core::material::METAL_SPECULAR).
-static const float METAL_SPECULAR = 0.35;
+// The most a metal's highlight lobe is normalised by (forge_core::material::METAL_HIGHLIGHT_MAX).
+static const float METAL_HIGHLIGHT_MAX = 8.0;
 // How far a unit normal stored in bytes may come out shorter than 1 (each channel rounded to
 // 1/255 of its range): no variance below it (#331).
 static const float NORMAL_LENGTH_ROUNDING = 0.01;
@@ -4539,7 +4539,8 @@ LightInputs uv_mapped_light(Frame* f, Material mat, Surface s)
     LightInputs li;
     li.albedo = base * (1.0 - metal);
     li.reflectance = lerp(mat.reflectance, max(base.r, max(base.g, base.b)), metal);
-    li.specular = mat.specular + METAL_SPECULAR * metal;
+    // A metal's highlight by its reflectance and lobe (forge_core::material::metal_highlight).
+    li.specular = lerp(mat.specular, li.reflectance * min((power + 8.0) / 8.0, METAL_HIGHLIGHT_MAX), metal);
     li.n = n;
     li.power = power;
     li.ao = ao;

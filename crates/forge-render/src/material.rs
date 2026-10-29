@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
-use forge_core::material::{METAL_SPECULAR, MaterialTable, RenderLayer, TextureId, UvMapping};
+use forge_core::material::{MaterialTable, RenderLayer, TextureId, UvMapping, metal_highlight};
 use forge_geom::model::{Model, ModelMaterial, TextureRef};
 use forge_gpu::{Device, Image, ImageDesc, Result, SampledImageId, vk};
 
@@ -651,11 +651,14 @@ impl<'a> ModelTextures<'a> {
             color_a: color,
             color_b: color,
             roughness: m.roughness.clamp(0.05, 1.0),
-            specular: 0.05 + METAL_SPECULAR * m.metallic,
             emissive: m.emissive,
             double_sided: m.double_sided,
             ..RenderLayer::default()
         };
+        // A dielectric's highlight weighs 0.05, a metal's by its reflectance and its lobe.
+        let reflectance = color[0].max(color[1]).max(color[2]);
+        let metal = metal_highlight(reflectance, layer.specular_power());
+        layer.specular = 0.05 + (metal - 0.05) * m.metallic;
         let mapped = [
             m.base_color_texture,
             m.metallic_roughness_texture,

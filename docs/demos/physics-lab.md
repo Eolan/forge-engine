@@ -2340,12 +2340,16 @@ it: the archive's HDR photograph, `san_giuseppe_bridge_4k.hdr` (4096 × 2048, HD
 - **Close:** the light's direction, the sky, the overall level and contrast, the cobbles
   (median luma 182 against 191), the shadows under the photograph's sun, and the emissive
   lamps since their calibration.
+- **The near lamp post** (`Streetlight_Metal`, 8.5 % reflectance, roughness 0.74) shone white:
+  its sun highlight weighed 0.4 as every metal's did. Measured against Falcor's linear render
+  (`falcor/`, the post's pixels over the sunlit cobbles), it took 4.1 times Falcor's light; the
+  extra weight off, 0.0071 against Falcor's 0.0145 (EV 15). A metal's highlight now weighs its
+  reflectance times its lobe's normalisation (D-085): 0.0147, olive grey as in Falcor.
 - **Not yet:**
-  - **The near lamp post's rough metal** (8.5 % reflectance) shows about three times
-    NVIDIA's brightness. Its visible side faces a sunlit white front behind the camera.
-    Forge's rough metals reflect a wide cone (the probes' irradiance, times the reflectance),
-    while a path tracer's GGX lobe keeps nearer the mirror direction. The far post, in the
-    café's shade, matches. The path-traced reference (step 2) is to say which light is right.
+  - **The light round the near lamp post** is about 1.4 times Falcor's: a white post there,
+    in Forge's diffuse light alone, takes 0.127 where Falcor's gives 0.092 (EV 15). Its visible
+    side faces a sunlit white front behind the camera; the probes' irradiance is to be checked
+    against the reference.
   - **The cobbles' joints** are darker in NVIDIA's, and its shadows on the street a little
     deeper.
 

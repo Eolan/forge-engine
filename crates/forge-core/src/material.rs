@@ -107,7 +107,7 @@ pub struct UvMapping {
     pub wrap: [Wrap; 2],
     /// Metalness, 0 for a dielectric to 1 for a metal. A metal keeps no diffuse colour,
     /// reflects as much as its base colour's brightest channel at normal incidence, and its
-    /// highlight weighs [`METAL_SPECULAR`] more than the row's `specular`.
+    /// highlight weighs [`metal_highlight`] in place of the row's `specular`.
     pub metallic: f32,
     /// Roughness in its green channel and metalness in its blue, multiplying the row's
     /// `roughness` and `metallic`.
@@ -126,8 +126,20 @@ pub struct UvMapping {
     pub alpha: f32,
 }
 
-/// How much more a metal's highlight weighs than a dielectric's ([`UvMapping::metallic`]).
-pub const METAL_SPECULAR: f32 = 0.35;
+/// The most a metal's highlight lobe is normalised by ([`metal_highlight`]): Blinn-Phong's
+/// (n + 8) / 8 up to the power 56, so that a polished metal's sun glint stays a highlight, not a
+/// sparkle the anti-aliasing cannot hold.
+pub const METAL_HIGHLIGHT_MAX: f32 = 8.0;
+
+/// A metal's highlight weight ([`UvMapping::metallic`]): its reflectance at normal incidence (its
+/// base colour's brightest channel) times the normalisation of a Blinn-Phong lobe of `power`,
+/// (n + 8) / 8 (Akenine-Möller et al., *Real-Time Rendering*), up to [`METAL_HIGHLIGHT_MAX`].
+/// The weight it replaces, 0.35 over a dielectric's whatever the metal, gave a dark metal
+/// chrome's highlight: the Bistro's lamp posts (8.5 %) shone white where Falcor's path-traced
+/// reference has them grey (D-084).
+pub fn metal_highlight(reflectance: f32, power: f32) -> f32 {
+    reflectance * ((power + 8.0) / 8.0).min(METAL_HIGHLIGHT_MAX)
+}
 
 impl Default for UvMapping {
     fn default() -> Self {

@@ -8087,3 +8087,29 @@ use the bistro technology indeed").
 - Sharp mirrors see the sky through the table (about a degree a texel).
 - A map's rotation, if a scene needs one.
 - Light from the map's ground below the horizon reaches the scene only through the harmonics.
+
+## D-085 — A metal's highlight weighs its reflectance and its lobe ✅ (the owner's ask, 2026-10-29: "now fix the white lamp post")
+
+**Why:** a metal's sun and lamp highlight weighed 0.35 more than a dielectric's (0.4 in all),
+whatever the metal. The Bistro's lamp post, a dark rough metal (reflectance 8.5 %, roughness
+0.74), shone white beside Falcor's path-traced render of the same view (D-083 step 2):
+- **Measured:** the post's light over the sunlit cobbles' was 0.58 in Forge and 0.14 in Falcor.
+  A white diffuse post in both put 1.6 of that at the light round it, the rest in the metal.
+- **Ablated:** the 0.35 off, the post fell from 0.0489 to 0.0071 (EV 15, Khronos Neutral)
+  against Falcor's 0.0145. The sky's reflection and Fresnel at grazing angles moved nothing.
+- **Not the lobe's width:** Falcor's post at roughness 1 is darker still (0.094), not brighter.
+
+**What** (`forge_core::material::metal_highlight`, `uv_mapped_light` in `meshlet.slang`):
+- A metal's highlight weight is its reflectance at normal incidence (its base colour's brightest
+  channel, as its reflection already was) times the normalisation of a Blinn-Phong lobe of its
+  power, (n + 8) / 8 (Akenine-Möller et al., *Real-Time Rendering*), up to 8 (power 56).
+- **The cap** keeps a polished metal's sun glint a highlight rather than a sparkle the
+  anti-aliasing cannot hold; the owner may raise it.
+- Dielectrics keep their 0.05. Only metals change: the glTF and Bistro rows (UV-mapped) and the
+  flat glTF rows. The procedural kits set their own weights.
+- **Measured after:** the post 0.0147 against Falcor's 0.0145. The asteroids (#355), the lab's
+  creatures and materials: 0 px.
+
+**Not yet:** the light round the post is still about 1.4 times Falcor's (the probes'
+irradiance near a sunlit white front). The highlight is still Blinn-Phong, untinted, and
+without the light's cosine.
