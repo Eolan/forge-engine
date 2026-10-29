@@ -502,7 +502,10 @@ to its shells scored 5–12). Near objects sweeping past score too, so keep the 
 screen's edges and the near ground. To name what popped, crop the frames around it, then run
 again with the step turned off (`--impostors 0`) or shown (`--show-ladder`). For a reference at
 full detail along the same path, `imgdiff a b --then a' b'` counts the pixels that change unlike
-the reference, but at street level its noise floor is high.
+the reference, but at street level its noise floor is high. `tools/pop-check.sh` does the
+walk-in at noon for 128 m and fails past 2 pops of 5 levels or more. It found 5 on the code
+before 16c06454 and finds none since, in about a minute. The night check runs it after the batch
+(its `pops:` line in `latest.txt`).
 
 **Debugging aids:**
 - `FORGE_TRACE_FRAMES=<file>` with `FORGE_HASH_IMAGES=1` writes per-frame hashes of the

@@ -2,6 +2,7 @@
 # The night check (D-071): the full batch on what was pushed that day. By day a change to a
 # shared path gets the sentinels only (tools/verify.sh); this runs Tier 1 on origin/main, or
 # Tier 2 when a milestone is due, in a worktree of its own so nobody's work in progress is built.
+# Then the village's walk-in is checked for pops (tools/pop-check.sh, #363).
 #
 #   tools/night.sh [--dry-run]
 #
@@ -115,5 +116,10 @@ else
   grep -E "differ|NO CAPTURE|FAILED|error\[|panicked|test result: FAILED" "$out/verify.log" |
     grep -v "FLAKE #71" | head -40 | tee -a "$summary"
 fi
+# The walk-in's pops (#363, tools/pop-check.sh), on the binaries the batch built.
+tools/pop-check.sh "$tree/target/release" > "$out/pops.log" 2>&1
+pop_status=$?
+say "pops: $(tail -1 "$out/pops.log")"
+[ $status = 0 ] && status=$pop_status
 grep -E "^left for (the owner|Tier 2)" "$out/verify.log" | tee -a "$summary"
 finish $status

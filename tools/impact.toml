@@ -89,6 +89,7 @@
 "tools/load-time.sh" = []
 # The night check (D-071): a script the day tiers do not run.
 "tools/night.sh" = []
+"tools/pop-check.sh" = []
 "assets/blender/**" = []
 "crates/forge-physics/**" = ["lab"]
 "crates/forge-sim/**" = ["lab"]
