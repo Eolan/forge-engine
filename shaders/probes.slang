@@ -236,7 +236,7 @@ public struct ProbeField
     public uint room_count;       // grids this frame: 0, the cascades light every room
     public uint room_rays;        // rays a room grid's probe traces a frame (its first PROBE_FIXED_RAYS fixed), at most `rays`
     public uint far_mask;         // the far rooms' table's entries less one (#356)
-    public uint far_pad;
+    public float far_lamp_scale;  // the far rooms' lamps' light (lux in the table) to the resolve's units: 1 over the sun's illuminance (#363)
     public uint4* far_table;      // the far rooms' light (#356, #363): (region, its share's bits, its lamps' bounce as three halves), region 0 an empty entry; null: none
 };
 
@@ -1129,8 +1129,9 @@ float room_depth(ProbeField* field, float3 p)
 
 // A far room's share of the open sky (#356): its windows' daylight this frame where the far
 // rooms' pass gave its region one (`far_rooms_main`, probe_update.slang), else `far_room_sky`
-// (a room without windows, a scene without the pass); and its lamps' light round it (#363),
-// irradiance per unit of the sun's illuminance, the resolve's units, added to the share's.
+// (a room without windows, a scene without the pass); and its lamps' light round it (#363):
+// lux in the table (a night's reference illuminance, a thousandth of a lux after moonset, put a
+// lit room past a half's range), in the resolve's units here, added to the share's.
 float far_room_share(ProbeField* field, uint region, out float3 lamps)
 {
     lamps = float3(0.0);
@@ -1147,7 +1148,7 @@ float far_room_share(ProbeField* field, uint region, out float3 lamps)
             break;
         if (e.x == region)
         {
-            lamps = float3(f16tof32(e.z), f16tof32(e.z >> 16), f16tof32(e.w));
+            lamps = float3(f16tof32(e.z), f16tof32(e.z >> 16), f16tof32(e.w)) * field[0].far_lamp_scale;
             return asfloat(e.y);
         }
         at = (at + 1u) & mask;

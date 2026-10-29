@@ -392,7 +392,7 @@ pub fn garden_walls(
             None => push(s.a, s.b),
         }
     }
-    chamfer_sharp_corners(&mut out.walls, &out.hedges);
+    chamfer_sharp_corners(&mut out.walls, &out.hedges, footprints);
     joints(&mut out.walls);
     out
 }
@@ -404,20 +404,34 @@ const SHARP: f64 = super::anomalies::SHARP_CORNER;
 const CHAMFER: f64 = 1.2;
 
 /// Each corner where two walls end together sharper than [`SHARP`] cut off by a short wall
-/// across it, [`CHAMFER`] long or more: where a lot's side ran aslant, two garden walls met in
-/// a V whose point no one could walk into (the owner, 2026-10-29: "walls issue"). Its two
-/// corners then stand at 90° plus half the V's; the V's point goes to the garden outside it.
-fn chamfer_sharp_corners(walls: &mut Vec<Wall>, hedges: &[(DVec2, DVec2)]) {
+/// across it, [`CHAMFER`] long (shorter where a wall is short; none under [`SHORTEST`]): where a
+/// lot's side ran aslant, two garden walls met in a V whose point no one could walk into (the
+/// owner, 2026-10-29: "walls issue"). Its two corners then stand at 90° plus half the V's; the
+/// V's point goes to the garden outside it.
+fn chamfer_sharp_corners(
+    walls: &mut Vec<Wall>,
+    hedges: &[(DVec2, DVec2)],
+    footprints: &[Vec<DVec2>],
+) {
     let cos_sharp = SHARP.to_radians().cos();
-    // Only a corner of these two alone: a third wall or a hedge ending there would be left
-    // standing free in the garden.
+    // Only a corner of these two alone: a third wall or a hedge ending there or running through
+    // it (a T), or a house standing on it, would be left apart from the cut, the gardens joined
+    // through the gap.
     let others_at = |walls: &[Wall], c: DVec2| {
-        walls
+        let segments = walls
             .iter()
-            .flat_map(|w| [w.a, w.b])
-            .chain(hedges.iter().flat_map(|&(a, b)| [a, b]))
-            .filter(|e| e.distance(c) < 0.3)
-            .count()
+            .map(|w| (w.a, w.b))
+            .chain(hedges.iter().copied())
+            .filter(|&(a, b)| geom::distance_to_segment(c, a, b) < 0.3)
+            .count();
+        let houses = footprints
+            .iter()
+            .filter(|fp| {
+                let n = fp.len();
+                (0..n).any(|k| geom::distance_to_segment(c, fp[k], fp[(k + 1) % n]) < 0.3)
+            })
+            .count();
+        segments + houses
     };
     let mut added = Vec::new();
     for i in 0..walls.len() {
@@ -457,6 +471,10 @@ fn chamfer_sharp_corners(walls: &mut Vec<Wall>, hedges: &[(DVec2, DVec2)]) {
                 .min(0.45 * w.length())
                 .min(0.45 * o.length());
             let (p, q) = (c + u * back, c + t * back);
+            // Too short a cut for a wall: the corner kept, not opened.
+            if p.distance(q) < SHORTEST {
+                continue;
+            }
             let height = w.height.min(o.height);
             if w_at_a {
                 walls[i].a = p;
@@ -468,12 +486,10 @@ fn chamfer_sharp_corners(walls: &mut Vec<Wall>, hedges: &[(DVec2, DVec2)]) {
             } else {
                 walls[j].b = q;
             }
-            if p.distance(q) >= SHORTEST {
-                added.push(Wall {
-                    cut: true,
-                    ..Wall::new(p, q, height, None)
-                });
-            }
+            added.push(Wall {
+                cut: true,
+                ..Wall::new(p, q, height, None)
+            });
         }
     }
     walls.extend(added);

@@ -1653,6 +1653,10 @@ impl<D: Demo> State<D> {
                 self.ctx
                     .frames
                     .resize_swapchain(self.ctx.swapchain.image_count())?;
+                // A new swapchain has no HDR10 metadata until it is given again.
+                self.ctx
+                    .swapchain
+                    .set_hdr_metadata(self.ctx.output.metadata());
                 if self.ctx.swapchain.extent() != before {
                     self.demo.resized(&mut self.ctx)?;
                 }
@@ -1671,6 +1675,9 @@ impl<D: Demo> State<D> {
                 self.ctx
                     .frames
                     .resize_swapchain(self.ctx.swapchain.image_count())?;
+                self.ctx
+                    .swapchain
+                    .set_hdr_metadata(self.ctx.output.metadata());
                 tracing::info!(
                     frame = self.ctx.frames_rendered,
                     width = size.width,

@@ -729,7 +729,7 @@ anomalies down to 11 (20 → 3, 33 → 3, 24 → 5).
 - **Sharp wall corners (2026-10-29, #363):** the owner's walk found two garden walls meeting in a
   V (`--view=-86.30,19.65,-80.59,3.7,-26.2`). The check counts them now (`SharpWallCorner`, two
   walls ending together sharper than 70°): 3 at 600 m, 1 to 8 elsewhere. Where two walls alone
-  meet there, a short wall cuts the corner off (`walls::chamfer_sharp_corners`, 1.2 m or more),
+  meet there, a short wall cuts the corner off (`walls::chamfer_sharp_corners`, 1.2 m long),
   its two corners at 90° plus half the V's: 600 m 3 → 2, and the free ends at 400, 800 and 900 m
   went with them. The owner's V keeps its point: a third wall ends there, along a spike of lot 52's
   outline (a sliver under a metre wide between lots 50 and 53, from the ground merged into its

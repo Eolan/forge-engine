@@ -3220,7 +3220,13 @@ bool cutout_kept(Frame* f, uint id, float2 uv, bool front, float2 ground, float2
     if (mat.albedo_texture != TEXTURE_NONE)
     {
         float2 t = float2(dot(mat.uv_u, float3(uv, 1.0)), dot(mat.uv_v, float3(uv, 1.0)));
-        alpha *= g_sampled_images[NonUniformResourceIndex(mat.albedo_texture)].SampleBias(g_samplers[NonUniformResourceIndex(mat.sampler)], t, CUTOUT_MIP_BIAS).a;
+        // By the UV's change across the pixel the caller took where the quad was whole: this
+        // runs after the ladder's and the ground window's early returns, where a quad's pixels
+        // part ways and the implicit derivatives are undefined.
+        float scale = exp2(CUTOUT_MIP_BIAS);
+        float2 tdx = float2(dot(mat.uv_u.xy, duv_dx), dot(mat.uv_v.xy, duv_dx)) * scale;
+        float2 tdy = float2(dot(mat.uv_u.xy, duv_dy), dot(mat.uv_v.xy, duv_dy)) * scale;
+        alpha *= g_sampled_images[NonUniformResourceIndex(mat.albedo_texture)].SampleGrad(g_samplers[NonUniformResourceIndex(mat.sampler)], t, tdx, tdy).a;
     }
     return alpha >= mat.alpha_cutoff;
 }

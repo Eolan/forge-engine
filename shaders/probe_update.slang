@@ -561,8 +561,8 @@ struct FarPush
     float sun_luma;   // the sun's luminance per unit of its illuminance
     float daylight;   // `ProbeParams::far_room_daylight`: what bounces round a room
     uint count;
-    float lamps;      // `ProbeParams::far_room_lamps`: what of a room's lamps' lumens bounces round it
-    float inv_illuminance; // 1 / the sun's illuminance (lux): the resolve's units
+    float lamps;      // 1 with `ProbeParams::far_room_lamps` (the rooms' sums carry its factors), 0 without
+    uint pad;
 };
 
 [[vk::push_constant]]
@@ -595,9 +595,9 @@ void far_rooms_main(uint3 id : SV_DispatchThreadID)
         light += w.area * (sky + sun);
     }
     float share = far_push.daylight * light / (max(room.surface, 1e-3) * roof);
-    // Its lamps' light round its walls (#363): their lumens over its surfaces, times what
-    // bounces (set against the grids), in the resolve's units; halves, the table's last two.
-    float3 lamps = far_push.lamps * room.lamps / max(room.surface, 1e-3) * far_push.inv_illuminance;
+    // Its lamps' light round its walls (#363): their weighed lumens over its surfaces, lux;
+    // halves, the table's last two (the lookup scales them to the resolve's units).
+    float3 lamps = far_push.lamps * room.lamps / max(room.surface, 1e-3);
     lamps = min(lamps, 65000.0);
     far_push.field[0].far_table[room.slot].yzw = uint3(asuint(share),
         f32tof16(lamps.r) | (f32tof16(lamps.g) << 16), f32tof16(lamps.b));

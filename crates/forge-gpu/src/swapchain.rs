@@ -94,6 +94,8 @@ pub struct Swapchain {
     pacing: Pacing,
     /// [`Pacing::Smooth`] presented uncapped for now ([`Self::set_uncapped_for_now`]).
     uncapped_for_now: bool,
+    /// The present mode it was last created with.
+    present_mode: vk::PresentModeKHR,
     /// The mode asked for, and the one the surface gave.
     requested: SurfaceMode,
     mode: SurfaceMode,
@@ -119,6 +121,7 @@ impl Swapchain {
             extent: vk::Extent2D::default(),
             pacing,
             uncapped_for_now: false,
+            present_mode: vk::PresentModeKHR::FIFO,
             requested: SurfaceMode::Sdr,
             mode: SurfaceMode::Sdr,
         };
@@ -129,11 +132,58 @@ impl Swapchain {
     /// Presents [`Pacing::Smooth`] uncapped while `on`: frames whose pace nobody watches (a
     /// loading screen over a demo's bakes, a frame of one each app frame) need not wait for the
     /// display's refresh. Takes effect at the next [`Self::recreate`]; returns whether it
-    /// changes the present mode, so that the caller recreates the swapchain.
+    /// changes the present mode, so that the caller recreates the swapchain (not where Smooth and
+    /// Uncapped choose the same, MAILBOX without Streamline).
     pub fn set_uncapped_for_now(&mut self, on: bool) -> bool {
-        let changed = self.uncapped_for_now != on && self.pacing == Pacing::Smooth;
+        if self.uncapped_for_now == on || self.pacing != Pacing::Smooth {
+            self.uncapped_for_now = on;
+            return false;
+        }
         self.uncapped_for_now = on;
-        changed
+        let loader = self.device.instance().surface_loader();
+        // SAFETY: a surface query on a live surface and physical device.
+        let modes = unsafe {
+            loader.get_physical_device_surface_present_modes(
+                self.device.physical(),
+                self.surface.raw(),
+            )
+        };
+        modes.map_or(true, |m| self.present_mode_for(&m) != self.present_mode)
+    }
+
+    /// The present mode its pacing takes of the surface's `modes`.
+    fn present_mode_for(&self, modes: &[vk::PresentModeKHR]) -> vk::PresentModeKHR {
+        // `FORGE_PRESENT_MODE=immediate|mailbox|fifo` overrides the choice (debugging aid).
+        let forced = match std::env::var("FORGE_PRESENT_MODE").ok().as_deref() {
+            Some("immediate") => Some(vk::PresentModeKHR::IMMEDIATE),
+            Some("mailbox") => Some(vk::PresentModeKHR::MAILBOX),
+            Some("fifo") => Some(vk::PresentModeKHR::FIFO),
+            _ => None,
+        }
+        .filter(|mode| modes.contains(mode));
+        let pacing = match self.pacing {
+            Pacing::Smooth if self.uncapped_for_now => Pacing::Uncapped,
+            pacing => pacing,
+        };
+        let uncapped = pacing == Pacing::Uncapped;
+        if let Some(mode) = forced {
+            mode
+        } else if pacing == Pacing::Vsync {
+            vk::PresentModeKHR::FIFO
+        } else if uncapped
+            && self.device.instance().through_streamline()
+            && modes.contains(&vk::PresentModeKHR::IMMEDIATE)
+        {
+            // Through Streamline's interposer, MAILBOX presents were held to the display's
+            // refresh in most runs (the acquire waited 8 ms at 120 Hz); IMMEDIATE never was.
+            vk::PresentModeKHR::IMMEDIATE
+        } else if modes.contains(&vk::PresentModeKHR::MAILBOX) {
+            vk::PresentModeKHR::MAILBOX
+        } else if uncapped && modes.contains(&vk::PresentModeKHR::IMMEDIATE) {
+            vk::PresentModeKHR::IMMEDIATE
+        } else {
+            vk::PresentModeKHR::FIFO
+        }
     }
 
     /// The modes the surface offers (SDR always).
@@ -222,37 +272,8 @@ impl Swapchain {
         } else {
             SurfaceMode::Sdr
         };
-        // `FORGE_PRESENT_MODE=immediate|mailbox|fifo` overrides the choice (debugging aid).
-        let forced = match std::env::var("FORGE_PRESENT_MODE").ok().as_deref() {
-            Some("immediate") => Some(vk::PresentModeKHR::IMMEDIATE),
-            Some("mailbox") => Some(vk::PresentModeKHR::MAILBOX),
-            Some("fifo") => Some(vk::PresentModeKHR::FIFO),
-            _ => None,
-        }
-        .filter(|mode| modes.contains(mode));
-        let pacing = match self.pacing {
-            Pacing::Smooth if self.uncapped_for_now => Pacing::Uncapped,
-            pacing => pacing,
-        };
-        let uncapped = pacing == Pacing::Uncapped;
-        let present_mode = if let Some(mode) = forced {
-            mode
-        } else if pacing == Pacing::Vsync {
-            vk::PresentModeKHR::FIFO
-        } else if uncapped
-            && instance.through_streamline()
-            && modes.contains(&vk::PresentModeKHR::IMMEDIATE)
-        {
-            // Through Streamline's interposer, MAILBOX presents were held to the display's
-            // refresh in most runs (the acquire waited 8 ms at 120 Hz); IMMEDIATE never was.
-            vk::PresentModeKHR::IMMEDIATE
-        } else if modes.contains(&vk::PresentModeKHR::MAILBOX) {
-            vk::PresentModeKHR::MAILBOX
-        } else if uncapped && modes.contains(&vk::PresentModeKHR::IMMEDIATE) {
-            vk::PresentModeKHR::IMMEDIATE
-        } else {
-            vk::PresentModeKHR::FIFO
-        };
+        let present_mode = self.present_mode_for(&modes);
+        self.present_mode = present_mode;
         let extent = if caps.current_extent.width != u32::MAX {
             caps.current_extent
         } else {

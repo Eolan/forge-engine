@@ -30,15 +30,16 @@ else
 fi
 mkdir -p "$out"
 
-# The runs: NAME|FRAME|COMMAND, captured at FRAME.
+# The runs: NAME|FRAME|COMMAND, captured at FRAME. The lab's anti-aliasing is FSR on the iGPU (no
+# DLSS): Forge's own port (`--fsr-amd off`), not AMD's DLLs, which D-082 takes wherever found.
 runs=(
   "meshlets|120|$bin/meshlets --orbit"
   "asteroids|600|$bin/asteroids --fixed-step"
-  "yard|120|$bin/physics-lab --lab yard --fixed-step"
+  "yard|120|$bin/physics-lab --lab yard --fixed-step --fsr-amd off"
   # The particles (D-064: the sparks' rays, the baked smoke and fire) and the lamps' light lists
   # (D-065), at midnight.
-  "smoke|360|$bin/physics-lab --lab smoke --fixed-step --time-of-day 1.5"
-  "lamps|60|$bin/physics-lab --lab lamps --fixed-step --time-of-day 1.5"
+  "smoke|360|$bin/physics-lab --lab smoke --fixed-step --time-of-day 1.5 --fsr-amd off"
+  "lamps|60|$bin/physics-lab --lab lamps --fixed-step --time-of-day 1.5 --fsr-amd off"
 )
 
 for _ in $(seq 1 120); do

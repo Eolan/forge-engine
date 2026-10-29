@@ -127,7 +127,9 @@ struct GpuProbeField {
     room_count: u32,
     room_rays: u32,
     far_mask: u32,
-    far_pad: u32,
+    /// The far rooms' lamps' light, lux in the table, to the resolve's units: 1 over the sun's
+    /// illuminance (#363).
+    far_lamp_scale: f32,
     far_table: u64,
 }
 
@@ -292,8 +294,7 @@ struct FarPush {
     count: u32,
     /// 1 with [`ProbeParams::far_room_lamps`] (the rooms' sums carry its factors), 0 without (#363).
     lamps: f32,
-    /// 1 over the sun's illuminance, lux: the resolve's units.
-    inv_illuminance: f32,
+    pad: u32,
 }
 
 /// Mirrors `FarRoom` in `probe_update.slang`: a far room's windows (`count` from `first` in the
@@ -320,7 +321,7 @@ struct GpuFarWindow {
 }
 
 /// The far rooms flattened for the GPU (#356): the rooms, their windows and the table's entries.
-type FarFlat = (Vec<GpuFarRoom>, Vec<GpuFarWindow>, Vec<[u32; 4]>);
+type FarFlat = (Vec<GpuFarRoom>, Vec<GpuFarWindow>, Vec<[u32; 4]>, Vec<u32>);
 
 /// The far rooms' daylight's buffers (#356), per frame slot: the rooms, their windows and the
 /// table the probe lookup reads (a region and its share's bits; region 0 an empty entry).
@@ -336,6 +337,9 @@ struct FarBuffers {
     flat: Option<FarFlat>,
     /// Each slot's buffers hold `flat` (the pass rewrites the shares every frame).
     written: [bool; FRAMES_IN_FLIGHT],
+    /// Each slot's rooms hold `flat`'s lamps (#363): they change as the camera moves past the
+    /// frame's lamps, and only the rooms are written again then.
+    lamps_written: [bool; FRAMES_IN_FLIGHT],
 }
 
 impl FarBuffers {
@@ -368,6 +372,7 @@ impl FarBuffers {
             capacity: [volumes, volumes, entries],
             flat: None,
             written: [false; FRAMES_IN_FLIGHT],
+            lamps_written: [false; FRAMES_IN_FLIGHT],
         })
     }
 
@@ -375,6 +380,17 @@ impl FarBuffers {
     fn invalidate(&mut self) {
         self.flat = None;
         self.written = [false; FRAMES_IN_FLIGHT];
+    }
+
+    /// The rooms' lamps changed (#363): each record's taken from `lumens` (lumens per channel by
+    /// region), the rooms written again into each slot, not the windows nor the table.
+    fn set_lamps(&mut self, lumens: &std::collections::BTreeMap<u32, [f32; 3]>) {
+        if let Some((rooms, _, _, regions)) = self.flat.as_mut() {
+            for (room, region) in rooms.iter_mut().zip(regions.iter()) {
+                room.lamps = lumens.get(region).copied().unwrap_or_default();
+            }
+        }
+        self.lamps_written = [false; FRAMES_IN_FLIGHT];
     }
 
     /// `rooms` flattened into the buffers' records, as many as they hold, with `fixed` the share
@@ -390,6 +406,7 @@ impl FarBuffers {
         let mut records: Vec<GpuFarRoom> = Vec::new();
         let mut windows: Vec<GpuFarWindow> = Vec::new();
         let mut table = vec![[0_u32; 4]; entries as usize];
+        let mut regions = Vec::new();
         for room in rooms {
             if records.len() as u32 >= room_room
                 || (windows.len() + room.windows.len()) as u32 > window_room
@@ -412,13 +429,14 @@ impl FarBuffers {
                 lamps: lamps.get(&room.region).copied().unwrap_or_default(),
                 pad: 0,
             });
+            regions.push(room.region);
             windows.extend(room.windows.iter().map(|w| GpuFarWindow {
                 normal: w.normal.to_array(),
                 area: w.area,
                 pad: 0,
             }));
         }
-        (records, windows, table)
+        (records, windows, table, regions)
     }
 }
 
@@ -499,7 +517,7 @@ pub struct ProbeParams {
     /// windows takes its lamps' light round its walls: `[bounce, unlit]`, their lumens over its
     /// surfaces times `bounce` (what bounces round the room, set against the grids) and times
     /// `unlit` for the share of each the frame does not light (its direct light on the walls, past
-    /// the frame's lamps) ([`ProbeField::set_room_lamps`]). At night a lit room's grid gave it
+    /// the frame's lamps) ([`Probes::set_room_lamps`]). At night a lit room's grid gave it
     /// whole and its windows dimmed past the grids. None: no lamps' light.
     pub far_room_lamps: Option<[f32; 2]>,
 }
@@ -969,7 +987,7 @@ impl Probes {
         if lumens != self.room_lumens {
             self.room_lumens = lumens;
             if let Some(far) = self.far.as_mut() {
-                far.invalidate();
+                far.set_lamps(&self.room_lumens);
             }
         }
     }
@@ -1165,12 +1183,16 @@ impl Probes {
                     bufs.flat =
                         Some(bufs.flatten(store.far_rooms(), p.far_room_sky, &self.room_lumens));
                 }
-                let (rooms, windows, table) = bufs.flat.as_ref().expect("flattened above");
+                let (rooms, windows, table, _) = bufs.flat.as_ref().expect("flattened above");
                 if !bufs.written[slot.index] {
                     bufs.rooms[slot.index].write(0, rooms);
                     bufs.windows[slot.index].write(0, windows);
                     bufs.table[slot.index].write(0, table);
                     bufs.written[slot.index] = true;
+                    bufs.lamps_written[slot.index] = true;
+                } else if !bufs.lamps_written[slot.index] {
+                    bufs.rooms[slot.index].write(0, rooms);
+                    bufs.lamps_written[slot.index] = true;
                 }
                 Some((
                     daylight,
@@ -1227,7 +1249,7 @@ impl Probes {
                 .and_then(|r| r.rays)
                 .map_or(p.rays, |n| n.clamp(FIXED_RAYS + 32, p.rays)),
             far_mask: far.map_or(0, |f| f.2),
-            far_pad: 0,
+            far_lamp_scale: 1.0 / self.sun_illuminance.max(1e-9),
             far_table: far.map_or(0, |f| f.3),
         };
         self.fields[slot.index].write(0, &[field]);
@@ -1257,7 +1279,7 @@ impl Probes {
                     daylight,
                     count: rooms,
                     lamps: if p.far_room_lamps.is_some() { 1.0 } else { 0.0 },
-                    inv_illuminance: 1.0 / this.sun_illuminance.max(1e-9),
+                    pad: 0,
                 };
                 if rooms > 0 {
                     graph

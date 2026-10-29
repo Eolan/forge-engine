@@ -7716,9 +7716,11 @@ from 0.79 to 0.53 at the grids' edge and stood at 0.37 at 70 m, against the grid
   (`lamps::room_lumens`, each lamp's room its first region), their lumens over its surfaces times
   `bounce`, and times `unlit` more for the share of each the frame leaves unlit (its direct light,
   past the frame's lamps): `ProbeParams::far_room_lamps`, `[bounce, unlit]`. The far rooms' pass
-  writes it into the table beside the share, three halves in the resolve's units (per unit of the
-  sun's illuminance), and the probes' lookup adds it to the far room's light. The rooms' sums
-  follow the frame's lamps (`ProbeField::set_room_lamps`), written again when they change.
+  writes it into the table beside the share, three halves in lux, and the probes' lookup adds it
+  to the far room's light in the resolve's units (`far_lamp_scale`, 1 over the sun's illuminance:
+  in those units a night's reference of a thousandth of a lux, after moonset, put a lit room past a
+  half's range). The rooms' sums follow the frame's lamps (`Probes::set_room_lamps`); when they
+  change only the rooms' records are written again, not the table.
 - **Calibrated** against that reference at 20 to 90 m: bounce 14 read 0.02–0.03 dark at 20 to
   45 m, 20 as bright; the village's 18 gives 0.688 and 0.844 at 20 and 45 m (0.682, 0.847). Past
   50 m the pane's glow was not what was missing (twice `ROOM_GLOW` moved the window 0.01): unlit 14
@@ -7931,8 +7933,8 @@ before there is an AMD card to test it on (#67).
   are, where present, what AMD's own framework enables for FSR 4's models:
   `storageBuffer16BitAccess`, `shaderIntegerDotProduct` (the INT8 models),
   `VK_KHR_cooperative_matrix` and `VK_EXT_shader_float8` (the RX 9000's FP8 model).
-- **The DLLs** come from `FORGE_FFX_DIR`, else `fsr-sdk/Kits/FidelityFX/signedbin` (the SDK,
-  git-ignored). Like Streamline's, they are expected on the player's computer and never
+- **The DLLs** come from `FORGE_FFX_DIR`, else from beside the executable, else
+  `fsr-sdk/Kits/FidelityFX/signedbin` (the SDK, git-ignored). Like Streamline's, they are expected on the player's computer and never
   published: nothing of AMD's FSR SDK, its ML upscaler included, enters the repository (the
   owner, 2026-10-29; `CREDITS.md`).
 
@@ -7940,8 +7942,9 @@ before there is an AMD card to test it on (#67).
 - **The 5070 Ti** (`--fsr-amd on`, the city's frame 120 at 1600 × 900): `temporal/FSR (AMD)`
   0.288 ms against Forge's nine passes' 0.317; against Forge's image, ꟻLIP mean 0.015 (p99
   0.055).
-- **The RDNA 2 iGPU** (`FORGE_GPU=amd`): `auto` finds no FSR 4 there and keeps Forge's FSR 3.1,
-  without a validation message; `on` runs their 3.1.6 in 14.2 ms against Forge's 18.7.
+- **The RDNA 2 iGPU** (`FORGE_GPU=amd`): the DLLs offer no FSR 4 there; their 3.1.6 runs in
+  14.2 ms against Forge's 18.7, without a validation message (what `auto` takes since the
+  owner's word above; at first `auto` kept Forge's FSR 3.1 there).
 - **Validation:** no VUID on either GPU. Inside the DLLs, the layer warns that some of their own
   storage images (`rw_spd_mip*`, `rw_current_luma`, 16-bit) are written through 32-bit format
   declarations: AMD's images and shaders, none of Forge's.
