@@ -1,6 +1,6 @@
 # Your walk of 29 October (#363)
 
-You walked the village this morning and sent eight findings. Six are fixed and pushed. One I couldn't reproduce as given, but its cause turned up while fixing the pops. Two need your decision: the walls' V and the face's triangle.
+You walked the village this morning and sent eight findings. Six are fixed and pushed. One I couldn't reproduce as given, but its cause turned up while fixing the pops. Your decisions came the same evening: the V and the face are fixed too (sections 5 and 6), and the FSR 3.1 headers stay (D-082).
 
 | Finding | What it was | Done |
 |---|---|---|
@@ -9,8 +9,8 @@ You walked the village this morning and sent eight findings. Six are fixed and p
 | Pops walking in at noon | Shells and impostors lighter than the cards they hand over to, and every tree's impostor leaving in one frame | The cut-out fix, the shells' tone refitted (898ccc58), and the impostors' fade beside the ladder (section 9) |
 | Windows at midnight change too much | A far lit room lost its lamp's bounce past 20 m, and everything past 50 m | Far rooms take their lamps' light (c4315ac3) |
 | Lighting in three rooms | Furniture cut the room grids' probes' view into patches and tinted the walls orange | Furniture out of the probes' rays (fd497bc2) |
-| Walls' V | A spiked lot outline from the leftover-ground merge | Sharp corners counted and the simple ones cut (c1e55303); **yours: the lots' fix is ready, your go** |
-| A face's odd triangle | The sunlit part of the wall | Nothing changed: **your call** |
+| Walls' V | A spiked lot outline from the leftover-ground merge | Sharp corners counted and the simple ones cut (c1e55303); **yours: the slivers given to their neighbours, on your go (39ab576c)** |
+| A face's odd triangle | The sunlit part of the wall, its render's grain raised by a grazing sun | **The grain softened 0.25 → 0.12, on your word (90e9edb2)** |
 | The window issue (walls view) | Probably the lit room's floor seen steeply from above, a bright band between the window's head and sill | **What looks wrong to you?** (section 7) |
 
 ## 1. The black start (83f1fa3b)
@@ -82,42 +82,40 @@ Your three views and the floor towards the window, before (left) and after (righ
 
 ![Rooms before and after](rooms-furniture-out-of-probes.png)
 
-## 5. The walls' V (c1e55303), for your decision
+## 5. The walls' V (c1e55303, 39ab576c)
 
 ![The V](walls-v.png)
 
 - **New check:** sharp corners now count as an anomaly (`SharpWallCorner`, under 70°). There were 3 at 600 m, and 1 to 8 in the other sizes.
 - **The simple ones:** where only two walls meet, a short wall now cuts the corner off. 600 m goes from 3 to 2, and the free wall ends at 400, 800 and 900 m went with them.
 - **Yours keeps its point:** a third wall ends there, along a spike in lot 52's outline. That's a sliver under a metre wide between lots 50 and 53, from the merge of leftover ground into neighbouring lots on 24 October.
-- **The proper fix, ready for your go:** take the slivers out of merged lots. It reshapes lots 50 and 52 of your 600 m map, so it's your call. It's built and checked on a local branch, `owner-go/363-lot-slivers` (84806ed5), not pushed.
+- **The proper fix, pushed on your go (39ab576c):** take the slivers out of merged lots. It reshapes lots 50 and 52 of your 600 m map.
   - **How it works:** after a lot takes in leftover ground, a corner under 15° whose sides part by half a metre to a metre, lying along a neighbour's edge, goes to that neighbour.
   - **At 600 m:** lot 50 takes lot 52's 0.6 m sliver, the third wall goes, and so does the V (sharp wall corners 2 → 1).
   - **Other sizes:** 400, 500, 700, 800 and 900 m are unchanged.
   - **A side effect:** the garden plants are laid again around it, so a shrub outside the map check's room window moved.
-  - **Say yes and I push it.** Your view at noon, now (left) and with the fix (right):
+  - **Your view at noon,** before (left) and with the fix (right):
 
-![The V now and with the fix](walls-v-fix-ready.png)
+![The V before and with the fix](walls-v-fix.png)
 
-## 6. The face's triangle, for your decision
+## 6. The face's triangle (90e9edb2)
 
 ![Your view, and the same view without shadows](face-triangle-is-the-sunlit-part.png)
 
 - **What it is:** the sunlit part of that wall, bounded by the neighbouring building's shadow. With `--no-shadows` the whole wall shows the same relief (right).
 - **Why it reads as a texture change:** at noon the sun grazes the wall, bringing out the stucco's relief while barely changing its brightness. In the shade the sky alone shows almost none of it.
 - **Ruled out:** a second piece, a second material, a bent normal and broken texture derivatives.
-- **Your call:**
-  - **Soften the stucco's relief:** it would show less under a grazing sun. The render's relief would go from 0.25 to 0.12 (one line, every rendered wall of the village). Your view at noon, now (left) and softened (right):
+- **Softened, on your word ("follow your recommendations"):** the render's relief went from 0.25 to 0.12 on every rendered wall of the village, so a grazing sun raises it less. Your view at noon, before (left) and softened (right):
 
     ![The sunlit strip at relief 0.25 and 0.12](face-relief-softened.png)
 
-  - **Leave it as is:** it's physically right.
 
 ## Also today
 
 - **AMD's FSR:**
   - **Not published:** nothing of AMD's FSR SDK goes on GitHub, as you asked (a7a700e7).
   - **Used on any GPU:** under `r.aa=fsr`, the DLLs are used wherever the system has them (b2bfd248).
-  - **Open:** the older FSR 3.1 shader headers have been in the repository since D-070. Should I move them to a local folder too?
+  - **The FSR 3.1 headers stay** (D-082, 6abe1fa1): they are AMD's open source under MIT, which allows publishing them, and they are the anti-aliasing of every player without DLSS. Your rule covers what may not be redistributed: the SDK's DLLs and FSR 4's model.
 - **Corrected hours:** #356's hours are fixed. The runs were at 09:36, noon, 13:48, 15:00 and 16:12.
 - **Checks:**
   - **Day checks:** run with Slang 2026.20, your compiler: every sentinel at 0 px apart from #71's flake.
