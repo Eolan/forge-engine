@@ -32,6 +32,7 @@ pub mod grass;
 pub mod gtao;
 pub mod impostor;
 pub mod lamps;
+pub mod linear_capture;
 pub mod liquid;
 pub mod local_exposure;
 pub mod material;

@@ -2329,6 +2329,9 @@ it: the archive's HDR photograph, `san_giuseppe_bridge_4k.hdr` (4096 × 2048, HD
 **NVIDIA's Exterior_1** (`reference/`), the first picture matched:
 - **The view:** fitted to six scene points and their pixels (`bistro_solve_view`, an ignored
   test): 4.5 px RMS, field of view 36.22°.
+- **The numbers:** `--capture-linear PATH.hdr` writes the frame's scene light before the tone
+  curve, cd/m² per channel (Radiance HDR, `forge_render::linear_capture`); a Falcor EXR's unit
+  of radiance is 2,871 cd/m² (D-084), checked on the sky: 0.99 to 1.02.
 - **The tone curve:** Falcor's tone mapper is Narkowicz's ACES fit, ×0.6, at a fixed exposure.
   Forge's AgX curves flatten the picture. At the same mean brightness, on a 160 × 90 grid, 15 %
   of Forge's default's cells (AgX punchy) are dark against the reference's 22 %, with a luma

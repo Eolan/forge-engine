@@ -112,6 +112,10 @@ pub struct Args {
     /// `imgdiff --then`).
     #[arg(long)]
     capture_every: Option<u64>,
+    /// Also write frame `--capture-frame`'s scene light before the tone curve, cd/m² per
+    /// channel, as a Radiance HDR file: to compare with a path tracer's linear output (D-083).
+    #[arg(long)]
+    capture_linear: Option<PathBuf>,
     /// The island's stones' weight of their normals when they are cooked (#131), per metre of
     /// their size: metres of error per unit of normal change and metre (`CookOptions`; the
     /// asteroids' `--lod-normals`). 0 cooks them by their geometry alone, as before; 2 halves
@@ -993,6 +997,9 @@ struct Gallery {
     /// out of the frame times.
     captures_seen: u64,
     capture_frames: usize,
+    /// `--capture-linear`: the capture declared into a frame, saved at the next once the GPU is
+    /// done.
+    linear_capture: Option<forge_render::linear_capture::LinearCapture>,
     last_frame: Instant,
     /// When the first frame was rendered, until the streamer first settles (nothing wanted
     /// or being read).
@@ -2132,6 +2139,7 @@ impl Gallery {
             run_frame_ms: Vec::new(),
             captures_seen: 0,
             capture_frames: 0,
+            linear_capture: None,
             last_frame: Instant::now(),
             started: None,
             settled: false,
@@ -2533,6 +2541,11 @@ impl Demo for Gallery {
     }
 
     fn render<'f>(&'f mut self, ctx: &mut Context, frame: &mut FrameInfo<'f>) -> Result<()> {
+        // The last frame's linear capture, its copy finished once the device is idle.
+        if let Some(capture) = self.linear_capture.take() {
+            ctx.device.wait_idle();
+            capture.save()?;
+        }
         // AMD's FSR DLLs refused a frame (an AMD card the path was never tested on, #67):
         // Forge's FSR 3.1 from now on, their context dropped once no frame uses it.
         if self
@@ -4052,6 +4065,20 @@ impl Demo for Gallery {
                 local_middle,
             )
         });
+        // `--capture-linear`: the shown image's scene light, saved at the next frame.
+        if let Some(path) = &self.args.capture_linear
+            && ctx.frames_rendered == self.args.capture_frame
+        {
+            self.linear_capture = Some(forge_render::linear_capture::LinearCapture::new(
+                &ctx.device,
+                path.clone(),
+                ctx.extent(),
+                exposure,
+            )?);
+        }
+        if let Some(capture) = &self.linear_capture {
+            capture.declare(&mut frame.graph, shown);
+        }
         self.display.draw(
             &mut frame.graph,
             shown,
