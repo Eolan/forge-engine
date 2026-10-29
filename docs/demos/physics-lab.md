@@ -2403,8 +2403,11 @@ on a 16 × 9 grid):
   times Falcor's: Falcor draws a material one-sided unless its name says `.DoubleSided` and
   shades a back face black; Forge draws the awnings' beams (an "Awning" sheet) and cut-out
   leaves from both sides. NVIDIA's own Night picture leaves the basket out of its frame.
-- **Not yet:** the string lights' colours glow less on the fronts; the scooter's paint is less
-  glossy.
+- **Pictures:** with `--no-purkinje`. Forge's night vision (D-046) fades colours under 3 cd/m²
+  and tints them blue, and the street at this exposure is about 1 cd/m²: the cobbles came out
+  grey where Falcor's are warm. The linear captures come before it.
+- **Not yet:** the string lights' colours glow less on the fronts; the cobbles are a little less
+  red; the scooter's paint is less glossy.
 
 **Not yet:**
 - **NVIDIA's other views:** Exterior_2.
