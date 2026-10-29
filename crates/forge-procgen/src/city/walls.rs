@@ -402,12 +402,18 @@ pub fn garden_walls(
 const SHARP: f64 = super::anomalies::SHARP_CORNER;
 /// The shortest wall that cuts a sharp corner off, metres.
 const CHAMFER: f64 = 1.2;
+/// The least corner the garden that takes a T's sharp point keeps on the line, degrees: past
+/// [`SHARP`], with a margin.
+const TIP_TAKER: f64 = 75.0;
 
 /// Each corner where two walls end together sharper than [`SHARP`] cut off by a short wall
 /// across it, [`CHAMFER`] long (shorter where a wall is short; none under [`SHORTEST`]): where a
 /// lot's side ran aslant, two garden walls met in a V whose point no one could walk into (the
 /// owner, 2026-10-29: "walls issue"). Its two corners then stand at 90° plus half the V's; the
-/// V's point goes to the garden outside it.
+/// V's point goes to the garden outside it. At a T, one of the two running on through the point
+/// in line with a third wall or a hedge, only the other is cut short, the line kept whole: the
+/// point goes to the garden across the slanting wall, whose corner on the line keeps
+/// [`TIP_TAKER`].
 fn chamfer_sharp_corners(
     walls: &mut Vec<Wall>,
     hedges: &[(DVec2, DVec2)],
@@ -462,6 +468,71 @@ fn chamfer_sharp_corners(
                 continue;
             }
             if others_at(walls, c) > 2 {
+                // A T: one of the two runs on through the point in line with a third wall or a
+                // hedge, nothing else there. The other, slanting, wall is cut short and a short
+                // wall closes the V from it onto the line, which stays whole: the point goes to
+                // the garden across the slanting wall, its corner on the line no sharper than
+                // TIP_TAKER (#363: the owner, "fix the remaining sharp corners at 600 m too").
+                if others_at(walls, c) != 3 {
+                    continue;
+                }
+                let continues = |d: DVec2| {
+                    let on = |e: DVec2| (e - c).normalize_or_zero().dot(-d) > 0.9986;
+                    walls
+                        .iter()
+                        .enumerate()
+                        .filter(|&(k, _)| k != i && k != j)
+                        .map(|(_, x)| (x.a, x.b))
+                        .chain(hedges.iter().copied())
+                        .any(|(a, b)| {
+                            if a.distance(c) < 0.3 {
+                                on(b)
+                            } else if b.distance(c) < 0.3 {
+                                on(a)
+                            } else {
+                                geom::distance_to_segment(c, a, b) < 0.3 && (on(a) || on(b))
+                            }
+                        })
+                };
+                let (line, line_dir, slant, slant_at_a, slant_dir) = if continues(u) {
+                    (i, u, j, o_at_a, t)
+                } else if continues(t) {
+                    (j, t, i, w_at_a, u)
+                } else {
+                    continue;
+                };
+                let theta = cos.clamp(-1.0, 1.0).acos().max(1e-3);
+                let pi = std::f64::consts::PI;
+                // The triangle cut off: its corner on the line (the taker's) and on the slant.
+                let at_line = ((pi - theta) * 0.5).max(TIP_TAKER.to_radians());
+                let at_slant = pi - theta - at_line;
+                if at_slant <= 0.0 {
+                    continue;
+                }
+                let along_line = CHAMFER * at_slant.sin() / theta.sin();
+                let along_slant = CHAMFER * at_line.sin() / theta.sin();
+                if along_line > 0.9 * walls[line].length()
+                    || along_slant > 0.45 * walls[slant].length()
+                {
+                    continue;
+                }
+                let (p, q) = (c + line_dir * along_line, c + slant_dir * along_slant);
+                let housed = footprints.iter().any(|fp| {
+                    (0..=8).any(|s| geom::contains(fp, p + (q - p) * (f64::from(s) / 8.0)))
+                });
+                if housed {
+                    continue;
+                }
+                let height = walls[line].height.min(walls[slant].height);
+                if slant_at_a {
+                    walls[slant].a = q;
+                } else {
+                    walls[slant].b = q;
+                }
+                added.push(Wall {
+                    cut: true,
+                    ..Wall::new(p, q, height, None)
+                });
                 continue;
             }
             // Back from the point far enough for the cut to be CHAMFER long, but leaving each
@@ -1144,5 +1215,57 @@ mod tests {
             "{}",
             g.gates[0]
         );
+    }
+
+    /// A T's sharp corner (#363): a wall slanting at 48° onto a line of two walls in line has its
+    /// end cut short and a short wall closes the V onto the line, which stays whole; the corners
+    /// left are all past the anomalies' 70°. A house on the point leaves it be.
+    #[test]
+    fn a_sharp_t_is_closed_onto_its_line() {
+        let c = DVec2::new(0.0, 0.0);
+        let slant = DVec2::new(48f64.to_radians().cos(), 48f64.to_radians().sin()) * 10.0;
+        let make = || {
+            vec![
+                Wall::new(c, DVec2::new(10.0, 0.0), PARTY, None),
+                Wall::new(DVec2::new(-10.0, 0.0), c, PARTY, None),
+                Wall::new(c, slant, PARTY, None),
+            ]
+        };
+        let mut walls = make();
+        chamfer_sharp_corners(&mut walls, &[], &[]);
+        assert_eq!(walls.len(), 4, "{walls:?}");
+        // The line untouched, the slanting wall shortened from the point, the cut added.
+        assert_eq!((walls[0].a, walls[0].b), (c, DVec2::new(10.0, 0.0)));
+        assert_eq!((walls[1].a, walls[1].b), (DVec2::new(-10.0, 0.0), c));
+        assert!(
+            walls[2].a.distance(c) > 1.0 && walls[2].b == slant,
+            "{:?}",
+            walls[2]
+        );
+        let cut = &walls[3];
+        assert!(cut.cut && (cut.a.distance(cut.b) - CHAMFER).abs() < 1e-9);
+        assert!(
+            cut.a.y.abs() < 1e-9 && cut.a.x > 0.0,
+            "the cut ends on the line: {cut:?}"
+        );
+        let degrees = |u: DVec2, v: DVec2| u.normalize().angle_to(v.normalize()).abs().to_degrees();
+        // On the line: the taker's corner and the cut lot's; at the slant: the cut lot's.
+        let on_line = degrees(c - cut.a, cut.b - cut.a);
+        assert!(
+            (TIP_TAKER - 1e-6..=105.0 + 1e-6).contains(&on_line),
+            "{on_line}"
+        );
+        let at_slant = degrees(cut.a - cut.b, slant - cut.b);
+        assert!(at_slant > SHARP, "{at_slant}");
+        // A house standing on the point: nothing changes.
+        let mut walls = make();
+        let house = vec![
+            DVec2::new(-1.0, -1.0),
+            DVec2::new(1.0, -1.0),
+            DVec2::new(1.0, 0.0),
+            DVec2::new(-1.0, 0.0),
+        ];
+        chamfer_sharp_corners(&mut walls, &[], &[house]);
+        assert_eq!(walls.len(), 3);
     }
 }

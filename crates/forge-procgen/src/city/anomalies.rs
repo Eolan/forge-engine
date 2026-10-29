@@ -1008,6 +1008,9 @@ mod tests {
         // their points; the free ends at 400, 800 and 900 m went with them.
         // The leftover ground's slivers half a metre to a metre wide, run out along a neighbour's
         // edge, go to that neighbour (`village::sliver_along`): the 600 m village's V gone, 1 left.
+        // At a T (one of the two walls running on through the point in line with a third or a
+        // hedge) the slanting wall is cut short and closed onto the line (`walls::
+        // chamfer_sharp_corners`): none left at 600 m, 3 and 2 at 700 and 800 m.
         let since: [(f64, Kind, usize); 9] = [
             (700.0, Kind::FreeWallEnd, 3),
             (800.0, Kind::UnlitRoom, 1),
@@ -1015,8 +1018,8 @@ mod tests {
             (900.0, Kind::Sliver, 1),
             (900.0, Kind::LonePartyWall, 1),
             (900.0, Kind::RidgeStep, 3),
-            (700.0, Kind::SharpWallCorner, 4),
-            (800.0, Kind::SharpWallCorner, 6),
+            (700.0, Kind::SharpWallCorner, 3),
+            (800.0, Kind::SharpWallCorner, 2),
             (900.0, Kind::SharpWallCorner, 4),
         ];
         let mut over = Vec::new();

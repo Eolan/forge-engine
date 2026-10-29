@@ -740,6 +740,16 @@ anomalies down to 11 (20 → 3, 33 → 3, 24 → 5).
   600 m lot 50 takes lot 52's 0.6 m sliver and the V goes (sharp corners 2 → 1); the other sizes
   are unchanged. The garden plants are laid again round it, so a shrub outside the map check's
   room window moved.
+- **Sharp corners at a T (2026-10-29, #363):** the owner then asked for the rest at 600 m. Where
+  one of the two walls runs on through the point in line with a third wall or a hedge (three lots
+  meeting, or a lot on the court), only the slanting wall is cut short and a 1.2 m wall closes the
+  V from it onto the line, which stays whole, so no two gardens join: the point goes to the garden
+  across the slanting wall, its corner on the line at 75° or more. Sharp corners: 600 m 1 → 0,
+  700 m 4 → 3, 800 m 6 → 2; no other anomaly moved at any size. Moving the junctions instead
+  (slid along a line, or the lots' tips given to a neighbour) split or bent the lot lines into
+  pieces the walls' joints could not close, and left free wall ends. What is left at 500 and
+  700–900 m: three or four walls at one point, slivers of a few degrees, two walls with a house
+  on the point.
 - **The render's relief (2026-10-29, #363):** the owner's walk found a triangle on a house's face
   unlike the rest of it (`--view=-32.16,6.74,-83.17,94.5,-12.7`): the sunlit part of the wall,
   where a noon sun grazing it raised the render's concrete grain into speckles, cut off by the
