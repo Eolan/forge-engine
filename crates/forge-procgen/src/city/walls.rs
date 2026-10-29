@@ -46,6 +46,8 @@ const MITRE_OBTUSE: (f64, f64) = (-0.95, -0.17);
 /// nearer, the house's own wall bounds the garden. A lot line half a metre behind a row's backs
 /// stood a garden wall in a slot before their court doors, the paths to them ending at it.
 const NEAR: f64 = GATE;
+/// The longest a wall from a house's wall to nothing may be and still go, metres (#308).
+const LONE_STUB: f64 = 1.5;
 
 /// A garden wall: its line on the plan, its height and the side its thickness takes.
 #[derive(Clone, Debug, PartialEq)]
@@ -392,6 +394,49 @@ pub fn garden_walls(
             None => push(s.a, s.b),
         }
     }
+    // A wall twice (the piece of a lot line between two houses' shared corner and the line's end,
+    // from both of its sides): one kept. Both stood on one plane and flickered, and the anomalies
+    // counted them as a corner of 0° (#308, at 800 and 900 m).
+    let mut once: Vec<Wall> = Vec::with_capacity(out.walls.len());
+    for w in out.walls.drain(..) {
+        let twice = once.iter().any(|o| {
+            (o.a.distance(w.a) < 0.01 && o.b.distance(w.b) < 0.01)
+                || (o.a.distance(w.b) < 0.01 && o.b.distance(w.a) < 0.01)
+        });
+        if !twice {
+            once.push(w);
+        }
+    }
+    out.walls = once;
+    // A short wall from a house's wall whose other end meets nothing (between two houses' back
+    // corners, out to the court across yards a metre deep): a stub standing in the open, dropped.
+    let on_house = |p: DVec2| {
+        footprints
+            .iter()
+            .any(|fp| boundary_distance(fp, p) < THICKNESS * 0.5 + 0.05)
+    };
+    let lone: Vec<bool> =
+        out.walls
+            .iter()
+            .enumerate()
+            .map(|(i, w)| {
+                let meets =
+                    |p: DVec2| {
+                        on_house(p)
+                            || out.walls.iter().enumerate().any(|(j, o)| {
+                                j != i && geom::distance_to_segment(p, o.a, o.b) < JOIN
+                            })
+                            || out
+                                .hedges
+                                .iter()
+                                .any(|&(a, b)| geom::distance_to_segment(p, a, b) < JOIN)
+                    };
+                w.length() < LONE_STUB
+                    && ((on_house(w.a) && !meets(w.b)) || (on_house(w.b) && !meets(w.a)))
+            })
+            .collect();
+    let mut flags = lone.into_iter();
+    out.walls.retain(|_| !flags.next().unwrap_or(false));
     chamfer_sharp_corners(&mut out.walls, &out.hedges, footprints);
     joints(&mut out.walls);
     out

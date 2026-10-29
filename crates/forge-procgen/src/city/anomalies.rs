@@ -1011,7 +1011,10 @@ mod tests {
         // At a T (one of the two walls running on through the point in line with a third or a
         // hedge) the slanting wall is cut short and closed onto the line (`walls::
         // chamfer_sharp_corners`): none left at 600 m, 3 and 2 at 700 and 800 m.
-        let since: [(f64, Kind, usize); 9] = [
+        // The "corners" of 0° at 800 and 900 m were one wall twice (a lot line's piece between two
+        // houses' corners and the court, from both its lots): kept once, and such a stub left
+        // meeting nothing dropped. 700 m keeps 3: two walls and two hedges at one point, and a Y.
+        let since: [(f64, Kind, usize); 7] = [
             (700.0, Kind::FreeWallEnd, 3),
             (800.0, Kind::UnlitRoom, 1),
             (800.0, Kind::RidgeStep, 1),
@@ -1019,8 +1022,6 @@ mod tests {
             (900.0, Kind::LonePartyWall, 1),
             (900.0, Kind::RidgeStep, 3),
             (700.0, Kind::SharpWallCorner, 3),
-            (800.0, Kind::SharpWallCorner, 2),
-            (900.0, Kind::SharpWallCorner, 4),
         ];
         let mut over = Vec::new();
         for (kind, bound) in bounds {
