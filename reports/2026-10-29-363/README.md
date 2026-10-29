@@ -30,6 +30,7 @@ The tree you meant is very likely the park's young holm oaks. I identified the s
 - **Cause:** the cut-out test reads the leaf texture at the mip its derivatives pick. For a card a few pixels across, that level's alpha falls under the cut-off for most leaves.
 - **How it was narrowed down:** switching off AO, the probes, the shadows and the shadow denoiser in turn. The shadows' share was small; the cut-out test explained all of it.
 - **Fix:** the test now reads one mip finer. Those crowns cover 55–63 %, and a tree no longer thins as it switches from shells to cards.
+- **No added shimmer:** a finer mip can make leaf edges flicker in motion. Turning slowly at the green, against the same turn supersampled, 375,973 pixels a frame change unlike the reference, against 374,832 with the old mip (+0.3 %).
 
 Below, one young holm oak along your walk: its cards before (top), its cards now (middle), and your normal view now (bottom: impostor, then shells).
 
