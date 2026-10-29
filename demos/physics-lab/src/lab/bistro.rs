@@ -352,7 +352,7 @@ pub(super) fn rows(device: &Arc<forge_gpu::Device>, materials: &mut CityMaterial
                 rows_made += 1;
                 // Both sides drawn where its authors named it so (".DoubleSided"), where it is cut
                 // out, on the single sheets seen from below (the awnings, the banner, the
-                // curtains), and where its edges are mostly open (`OPEN_SHEET`). The exporter
+                // curtains), and where its edges are largely open (`OPEN_SHEET`). The exporter
                 // wrote every material double-sided (Blender's import default), which skipped the
                 // cone cull and the rays' back faces everywhere.
                 let mut m = m.clone();

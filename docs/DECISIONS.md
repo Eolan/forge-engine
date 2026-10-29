@@ -8075,10 +8075,10 @@ use the bistro technology indeed").
 - **The emissive maps** take the photograph's scale: Falcor lights them at 1 and the photograph
   at 10, so a full emissive texel is 0.1 of the photograph's units, 2,870 cd/m² here.
 - **Darker, crisper shadows and warmer colours in NVIDIA's** were mostly its tone curve
-  (Narkowicz's ACES fit, where Forge defaults to AgX) and Forge's widened sun (D-049). The sun
-  now keeps the photograph's size too, 0.29° in radius (√2 times its texels' RMS angle,
-  weighed by their light); under `--tonemap aces` the two come close
-  (`docs/demos/physics-lab.md`, `bistro`).
+  (Narkowicz's ACES fit, where Forge defaults to AgX punchy) and Forge's widened sun (D-049).
+  The sun now keeps the photograph's size too, 0.29° in radius (√2 times its texels' RMS
+  angle, weighed by their light, never under the real sun's); under `--tonemap aces` the two
+  come close (`docs/demos/physics-lab.md`, `bistro`).
 
 **Not yet:**
 - Sharp mirrors see the sky through the table (about a degree a texel).

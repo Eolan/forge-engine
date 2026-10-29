@@ -38,7 +38,7 @@ pub struct EnvironmentSun {
     pub irradiance: [f32; 3],
     /// Its size as the photograph holds it, radians: the radius of the even disc with its
     /// spread, √2 times the root mean square angle of its texels from its direction, weighed by
-    /// their light.
+    /// their light; never under the real sun's.
     pub angular_radius: f32,
 }
 
@@ -127,7 +127,9 @@ pub fn take_sun(texels: &mut [[f32; 3]], w: u32, h: u32) -> Option<EnvironmentSu
     Some(EnvironmentSun {
         direction: direction.map(|c| c as f32),
         irradiance: irradiance.map(|c| c as f32),
-        angular_radius: (2.0 * spread / weight.max(1e-30)).sqrt() as f32,
+        // Never under the real sun's: a sun of one texel has no spread.
+        angular_radius: ((2.0 * spread / weight.max(1e-30)).sqrt() as f32)
+            .max(crate::starfield::SUN_ANGULAR_RADIUS_1AU),
     })
 }
 

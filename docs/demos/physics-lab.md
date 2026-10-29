@@ -2301,8 +2301,8 @@ path-traced reference (step 2). The third line is NVIDIA's Exterior_1 view.
   glass transmission or index of refraction; its second UV set (lightmaps) is unused.
 - **Sides:** Blender's import marks all 132 materials double-sided, which is not the authors'
   data. Both sides are drawn where the authors named a material so (".DoubleSided"), where it
-  is cut out, on the awnings, banner and curtains, and where most of a material's edges are
-  open (30 % or more, `open_edges`): the lamps' chains, panes, signs, letters and petals, 31
+  is cut out, on the awnings, banner and curtains, and where 30 % or more of a material's
+  edges are open (`open_edges`): the lamps' chains, panes, signs, letters and petals, 31
   materials in all. Closed surfaces and the walls and kerbs (open where they meet, 10 to 26 %)
   keep one side. `bistro_open_sheets` (ignored) lists each material's share and rule.
 
@@ -2327,12 +2327,13 @@ it: the archive's HDR photograph, `san_giuseppe_bridge_4k.hdr` (4096 × 2048, HD
 - **The view:** fitted to six scene points and their pixels (`bistro_solve_view`, an ignored
   test): 4.5 px RMS, field of view 36.22°.
 - **The tone curve:** Falcor's tone mapper is Narkowicz's ACES fit, ×0.6, at a fixed exposure.
-  Forge's default, AgX, flattens the picture. At the same mean brightness, on a 160 × 90 grid,
-  4 % of AgX's cells are dark against the reference's 22 %, with a luma spread of 48 against 65.
-  ACES (Hill's fit, `--tonemap aces`) gives 20 % and 62, Khronos Neutral 21 % and 65. Most of
-  the "darker shadows, warmer colours" was the curve. Compare under `--tonemap aces`.
-- **The exposure:** `--ev100 11.8` under ACES (11.4 under AgX) matches the picture's mean.
-  Fixed exposure ignores `--exposure-compensation`.
+  Forge's AgX curves flatten the picture. At the same mean brightness, on a 160 × 90 grid, 15 %
+  of the default's cells (AgX punchy) are dark against the reference's 22 %, with a luma spread
+  of 54 against 65; plain AgX 4 % and 48. ACES (Hill's fit, `--tonemap aces`) gives 20 % and 62,
+  Khronos Neutral 21 % and 65. Most of the "darker shadows, warmer colours" was the curve.
+  Compare under `--tonemap aces`.
+- **The exposure:** `--ev100 11.8` under ACES (11.4 under the default) matches the picture's
+  mean. Fixed exposure ignores `--exposure-compensation`.
 - **Close:** the light's direction, the sky, the overall level and contrast, the cobbles
   (median luma 182 against 191), the shadows under the photograph's sun, and the emissive
   lamps since their calibration.

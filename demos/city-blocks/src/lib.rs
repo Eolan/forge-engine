@@ -1149,7 +1149,7 @@ impl Gallery {
         }
         // The shadows' sun: the real one, or softer where a denoiser smooths them (D-049).
         let real = forge_render::starfield::SUN_ANGULAR_RADIUS_1AU;
-        let sun_scale = match args.sun_size {
+        let mut sun_scale = match args.sun_size {
             Some(degrees) => degrees.to_radians() / real,
             None if sun_shadow_on.is_some() || args.shadow_reference => {
                 forge_render::DENOISED_SUN_RADIUS / real
@@ -1207,9 +1207,12 @@ impl Gallery {
                         renderer.sun_dir = Vec3::from(sun.direction).normalize();
                         renderer.sun_color = Vec3::from(sun.irradiance) / illuminance;
                         // As large as the photograph holds it, unless `--sun-size` or hard
-                        // shadows say otherwise.
-                        if args.sun_size.is_none() && renderer.sun_angular_radius > 0.0 {
-                            renderer.sun_angular_radius = sun.angular_radius;
+                        // shadows say otherwise; through the scale, which `r.sun_disc` keeps.
+                        if args.sun_size.is_none() {
+                            sun_scale = sun.angular_radius / real;
+                            if renderer.sun_angular_radius > 0.0 {
+                                renderer.sun_angular_radius = sun.angular_radius;
+                            }
                         }
                         e.scale / illuminance
                     }
