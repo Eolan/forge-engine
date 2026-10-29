@@ -26,8 +26,11 @@ use city_blocks::CityMaterials;
 use city_blocks::scenario::Environment;
 
 /// The luminance of an emissive map's full colour, cd/m² (a lit shop sign or lamp shade): the
-/// night is lit by these alone. To be set against the path-traced reference (D-083 step 2).
-const EMISSIVE_LUMINANCE: f32 = 1000.0;
+/// night is lit by these alone. As the authors' renders have it: their renderer takes the
+/// emissive maps at 1 and the sky's photograph at 10 (`BistroExterior.pyscene`), so a full
+/// emissive texel shines as a photograph texel of 0.1; Forge scales the photograph so that its
+/// sun (4.458 of its units) gives the sun's 128,000 lux (D-084): 0.1 × 128,000 / 4.458.
+const EMISSIVE_LUMINANCE: f32 = 2870.0;
 /// Cut out under this base colour alpha where the map has any (the archive's alpha is opacity,
 /// tested at a half as its own renderer does).
 const ALPHA_CUTOFF: f32 = 0.5;
@@ -355,9 +358,53 @@ mod tests {
             );
             let c = 0.5 * (lo + hi);
             println!(
-                "mesh {k} {}: centre ({:.2}, {:.2}, {:.2}) min ({:.2}, {:.2}, {:.2}) max ({:.2}, {:.2}, {:.2})",
-                m.name, c.x, c.y, c.z, lo.x, lo.y, lo.z, hi.x, hi.y, hi.z
+                "mesh {k} {}: centre ({:.2}, {:.2}, {:.2}) min ({:.2}, {:.2}, {:.2}) max ({:.2}, {:.2}, {:.2}), {} UVs",
+                m.name,
+                c.x,
+                c.y,
+                c.z,
+                lo.x,
+                lo.y,
+                lo.z,
+                hi.x,
+                hi.y,
+                hi.z,
+                m.mesh.uvs.len()
             );
+            for (s, material) in m.materials.iter().enumerate() {
+                // Per section: its triangles, and how often the vertex normals disagree with the
+                // winding's face normal and with the outward direction from the mesh's axis.
+                let (mut count, mut against_face, mut inward) = (0, 0, 0);
+                let mesh = &m.mesh;
+                for (t, tri) in mesh.indices.as_chunks::<3>().0.iter().enumerate() {
+                    if mesh.section(t) as usize != s {
+                        continue;
+                    }
+                    count += 1;
+                    let p = tri.map(|i| Vec3::from(mesh.positions[i as usize]));
+                    let face = (p[1] - p[0]).cross(p[2] - p[0]);
+                    let normal: Vec3 = tri
+                        .iter()
+                        .map(|&i| Vec3::from(mesh.normals[i as usize]))
+                        .sum();
+                    against_face += usize::from(normal.dot(face) < 0.0);
+                    let centroid = (p[0] + p[1] + p[2]) / 3.0;
+                    let out = (centroid - c) * Vec3::new(1.0, 0.0, 1.0);
+                    inward += usize::from(normal.dot(out) < 0.0);
+                }
+                println!(
+                    "  section {s}: {count} triangles, {against_face} against their winding, {inward} facing the axis"
+                );
+                let maps = b.roles.get(&material.name);
+                println!(
+                    "  {}: maps {}, base {:?}, metallic {}, roughness {}",
+                    material.name,
+                    maps.map_or("none".into(), |r| format!("{r:?}")),
+                    material.base_color,
+                    material.metallic,
+                    material.roughness
+                );
+            }
         }
     }
 

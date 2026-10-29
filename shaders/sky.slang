@@ -32,7 +32,8 @@ static const float PI = 3.14159265;
 float3 environment_luminance(Sky* s, float3 direction, float lod)
 {
     float2 uv = float2((1.0 + atan2(direction.x, -direction.z) / PI) * 0.5, acos(clamp(direction.y, -1.0, 1.0)) / PI);
-    return sample_image_level(s[0].environment, SAMPLER_LINEAR_REPEAT, uv, lod).rgb * s[0].environment_scale;
+    // Round in u, clamped in v: a pole's row never mixes with the other pole's.
+    return sample_image_level(s[0].environment, SAMPLER_ANISOTROPIC_WRAP + 1, uv, lod).rgb * s[0].environment_scale;
 }
 
 // The camera's frame on the planet: up, and the horizontal towards the sun's azimuth.

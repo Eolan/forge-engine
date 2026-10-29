@@ -1188,8 +1188,9 @@ impl Gallery {
         if look.white_sun {
             renderer.sun_color = Vec3::ONE;
         }
-        // An environment map as the sky (D-084): loaded once, its sun the scene's. It lights the
-        // day: `--time-of-day` from sunset to sunrise (1 to 2) keeps the night (D-046).
+        // An environment map as the sky (D-084): loaded once, its sun the scene's at every hour of
+        // the day (`--day` and a daytime `--time-of-day` leave it). `--time-of-day` from sunset
+        // to sunrise (1 to 2) keeps the night instead (D-046).
         let by_night = args.time_of_day.is_some_and(|t| t.rem_euclid(2.0) >= 1.0);
         let environment = look
             .environment
@@ -2162,9 +2163,13 @@ impl Gallery {
     /// midnight). It rises from 4° below the eastern horizon to 70° in the south and sets in the
     /// west, and its colour is the sunlight through the air. With the night (D-046), the key
     /// light goes to the Moon once the sun is down: its direction, colour and illuminance take
-    /// the sun's fields, which are then per unit of the frame's reference illuminance.
+    /// the sun's fields, which are then per unit of the frame's reference illuminance. An
+    /// environment map keeps the sun its photograph holds (D-084): the hour moves nothing.
     fn set_sun_of_day(&mut self, t: f32) {
         self.sun_cycle = Some(t);
+        if self.environment.is_some() {
+            return;
+        }
         let sun_illuminance = forge_render::starfield::SUN_ILLUMINANCE_1AU;
         let sky = self.celestial.at(t, sun_illuminance);
         let params = &self.atmosphere.params;

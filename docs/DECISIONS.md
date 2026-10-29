@@ -8071,8 +8071,11 @@ use the bistro technology indeed").
   readings 0.50 or less.
 - **Brightness:** at EV 11.4 (2.6 stops over the lab's 14), sunlit and shaded cobbles hold the
   same ratio as in NVIDIA's.
-- **Still differing:** NVIDIA's shadows are darker and crisper, and their colour warmer.
-  Falcor's tone mapper and path-tracer settings are to be read before more tuning.
+- **The emissive maps** take the photograph's scale: Falcor lights them at 1 and the photograph
+  at 10, so a full emissive texel is 0.1 of the photograph's units, 2,870 cd/m² here.
+- **Darker, crisper shadows and warmer colours in NVIDIA's** were mostly its tone curve
+  (Narkowicz's ACES fit, where Forge defaults to AgX) and Forge's widened sun (D-049); under
+  `--tonemap aces --sun-size 0.27` they come close (`docs/demos/physics-lab.md`, `bistro`).
 
 **Not yet:**
 - Sharp mirrors see the sky through the table (about a degree a texel).

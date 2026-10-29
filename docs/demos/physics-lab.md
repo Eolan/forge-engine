@@ -2264,7 +2264,7 @@ Steps 1 and 3 of D-065 (`forge_render::lamps`, `lamps_at` and `hit_lamps` in `me
 ```
 cargo run --release -p physics-lab -- --lab bistro
 cargo run --release -p physics-lab -- --lab bistro --time-of-day 1.5
-cargo run --release -p physics-lab -- --lab bistro --view=-23.700,6.855,-0.704,-93.13,-15.93 --fov 36.22 --ev100 11.4
+cargo run --release -p physics-lab -- --lab bistro --view=-23.700,6.855,-0.704,-93.13,-15.93 --fov 36.22 --tonemap aces --ev100 11.8 --sun-size 0.27
 ```
 
 The Amazon Lumberyard Bistro's exterior (ORCA, CC BY 4.0, `CREDITS.md`): 1,296 meshes,
@@ -2292,7 +2292,9 @@ path-traced reference (step 2). The third line is NVIDIA's Exterior_1 view.
 - **Normal maps:** BC5, DirectX. Their green is turned over on the blocks at load. They are
   sampled through a view that reads their missing blue as one, (x, y, 1) normalised. A shader
   that rebuilt z moved every asteroid capture: the resolve near its code size limit (#355).
-- **Emission:** sRGB, 1,000 cd/m² at full colour for now. The night reference will set it.
+- **Emission:** sRGB, 2,870 cd/m² at full colour, as in the authors' renders: their renderer
+  takes the emissive maps at a tenth of the photograph's scale, which Forge sets by its sun
+  (D-084).
 - **Factors:** each factor a map carries is 1. The exporter, which kept no images, had written
   its own defaults (roughness 0.553 everywhere).
 
@@ -2306,17 +2308,32 @@ it: the archive's HDR photograph, `san_giuseppe_bridge_4k.hdr` (4096 × 2048, HD
 - **The rest is the sky:** the sky-view table and its irradiance are read from the map, so the
   probes and the ambient see it; compose draws it behind the scene, without haze.
 - **Its level:** the map scaled so that its sun has Forge's sun illuminance.
-- **By night** (`--time-of-day` from 1 to 2) the map is left out and the night stays Forge's.
+- **The hour:** `--day` and a daytime `--time-of-day` keep the photograph's sun. By night
+  (`--time-of-day` from 1 to 2) the map is left out and the night stays Forge's.
 
 **NVIDIA's Exterior_1** (`reference/`), the first picture matched:
 - **The view:** fitted to six scene points and their pixels (`bistro_solve_view`, an ignored
   test): 4.5 px RMS, field of view 36.22°.
-- **The exposure:** `--ev100 11.4` matches the picture's brightness. Fixed exposure ignores
-  `--exposure-compensation`.
-- **Close:** the light's direction, the sky, the overall level.
-- **Not yet:** NVIDIA's shadows are darker and crisper; its colours warmer; its cobbles'
-  joints darker; the café front brighter against the street. Falcor's tone mapper and
-  path tracer defaults come first, then one difference at a time.
+- **The tone curve:** Falcor's tone mapper is Narkowicz's ACES fit, ×0.6, at a fixed exposure.
+  Forge's default, AgX, flattens the picture. At the same mean brightness, on a 160 × 90 grid,
+  4 % of AgX's cells are dark against the reference's 22 %, with a luma spread of 48 against 65.
+  ACES (Hill's fit, `--tonemap aces`) gives 20 % and 62, Khronos Neutral 21 % and 65. Most of
+  the "darker shadows, warmer colours" was the curve. Compare under `--tonemap aces`.
+- **The exposure:** `--ev100 11.8` under ACES (11.4 under AgX) matches the picture's mean.
+  Fixed exposure ignores `--exposure-compensation`.
+- **Close:** the light's direction, the sky, the overall level and contrast, the cobbles
+  (median luma 182 against 191), the emissive lamps since their calibration.
+- **Not yet:**
+  - **The near lamp post's rough metal** (8.5 % reflectance) shows about three times
+    NVIDIA's brightness. Its visible side faces a sunlit white front behind the camera.
+    Forge's rough metals reflect a wide cone (the probes' irradiance, times the reflectance),
+    while a path tracer's GGX lobe keeps nearer the mirror direction. The far post, in the
+    café's shade, matches. The path-traced reference (step 2) is to say which light is right.
+  - **The shadows:** Forge widens the sun to 1° for the soft shadows (D-049), against the
+    real 0.27°. Under it, the post's long shadow across the cobbles almost fades out where
+    NVIDIA's is a crisp dark band; `--sun-size 0.27` brings it back close to theirs. Whether
+    the Bistro keeps the real sun is the owner's choice.
+  - **The cobbles' joints** are darker in NVIDIA's.
 
 **Numbers** (1600 × 900, DLAA, RTX 5070 Ti, the path's first frame):
 - **Load:** 10 s in all on the first run, the props cooked. The 405 maps, 925 MB of blocks,
