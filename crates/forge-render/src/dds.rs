@@ -294,6 +294,52 @@ pub fn alpha_plane(texture: &CompressedTexture) -> Option<Vec<u8>> {
     Some(alpha)
 }
 
+/// The one colour every texel of a BC1 or BC3 texture's first level holds, 8-bit RGB (its alpha
+/// aside), or `None` where they differ or the format is another: a map of one value, better
+/// read as its material's factor.
+pub fn uniform_color(texture: &CompressedTexture) -> Option<[u8; 3]> {
+    let (size, at) = match texture.format {
+        BlockFormat::Bc1 => (8, 0),
+        BlockFormat::Bc3 => (16, 8),
+        BlockFormat::Bc5 | BlockFormat::Bc7 => return None,
+    };
+    let expand = |c: u16| {
+        let (r, g, b) = ((c >> 11) & 31, (c >> 5) & 63, c & 31);
+        [
+            (r << 3) | (r >> 2),
+            (g << 2) | (g >> 4),
+            (b << 3) | (b >> 2),
+        ]
+        .map(|v| v as u8)
+    };
+    let mut seen = None;
+    for block in texture.levels.first()?.chunks_exact(size) {
+        let colour = &block[at..at + 8];
+        let c0 = u16::from_le_bytes([colour[0], colour[1]]);
+        let c1 = u16::from_le_bytes([colour[2], colour[3]]);
+        let (e0, e1) = (expand(c0), expand(c1));
+        let mix = |a: u16, b: u16, d: u16| -> [u8; 3] {
+            std::array::from_fn(|k| ((a * u16::from(e0[k]) + b * u16::from(e1[k])) / d) as u8)
+        };
+        // BC3's colour block always has four colours; BC1's three and black where c0 <= c1.
+        let palette = if c0 > c1 || texture.format == BlockFormat::Bc3 {
+            [e0, e1, mix(2, 1, 3), mix(1, 2, 3)]
+        } else {
+            [e0, e1, mix(1, 1, 2), [0; 3]]
+        };
+        let indices = u32::from_le_bytes([colour[4], colour[5], colour[6], colour[7]]);
+        for t in 0..16 {
+            let c = palette[((indices >> (2 * t)) & 3) as usize];
+            match seen {
+                None => seen = Some(c),
+                Some(s) if s != c => return None,
+                Some(_) => {}
+            }
+        }
+    }
+    seen
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,5 +457,34 @@ mod tests {
         let plane = alpha_plane(&t).expect("BC1 has alpha");
         assert_eq!(plane[0], 0);
         assert!(plane[1..].iter().all(|&a| a == 255));
+    }
+
+    #[test]
+    fn a_map_of_one_colour_reads_as_that_colour() {
+        // Two BC3 blocks, each its colour block's endpoints both (0, 47, 31) in 5:6:5, every
+        // texel at index 0: green 47 expands to 190, blue 31 to 255.
+        let c = (47_u16 << 5) | 31;
+        let mut block = [0_u8; 16];
+        block[8..10].copy_from_slice(&c.to_le_bytes());
+        block[10..12].copy_from_slice(&c.to_le_bytes());
+        let mut t = CompressedTexture {
+            name: "specular".into(),
+            width: 8,
+            height: 4,
+            format: BlockFormat::Bc3,
+            srgb: false,
+            levels: vec![[block, block].concat()],
+        };
+        assert_eq!(uniform_color(&t), Some([0, 190, 255]));
+        // One texel of the second block on index 1, another colour: no longer one value.
+        t.levels[0][16 + 8] = 0;
+        t.levels[0][16 + 12] = 1;
+        assert_eq!(uniform_color(&t), None);
+        // BC1's three-colour mode: index 3 is black.
+        t.format = BlockFormat::Bc1;
+        t.levels = vec![vec![0, 0, 1, 0, 0xFF, 0xFF, 0xFF, 0xFF]];
+        assert_eq!(uniform_color(&t), Some([0, 0, 0]));
+        t.levels[0][4] = 0b10;
+        assert_eq!(uniform_color(&t), None);
     }
 }

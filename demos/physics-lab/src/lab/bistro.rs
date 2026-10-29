@@ -18,7 +18,7 @@ use std::sync::{Arc, OnceLock};
 use anyhow::{Context, Result};
 use forge_geom::city::{Imported, PropKind, PropSpec};
 use forge_geom::model::{Model, load_gltf};
-use forge_render::dds::{BlockFormat, alpha_plane, flip_green, read_dds};
+use forge_render::dds::{BlockFormat, alpha_plane, flip_green, read_dds, uniform_color};
 use forge_render::material::{ExternalMaps, external_layer, upload_compressed};
 use glam::{Mat4, Quat, Vec3};
 
@@ -307,6 +307,14 @@ pub(super) fn rows(device: &Arc<forge_gpu::Device>, materials: &mut CityMaterial
         }
     }
     let read_time = started.elapsed();
+    // The "Specular" maps of one value (most are 16 × 16 of one texel): their material's
+    // factors instead. A row's own roughness decides its mirror rays (D-084: the glass, at 0,
+    // reflected nothing of the street under a map's factor of 1).
+    let flat: HashMap<String, [u8; 3]> = read
+        .iter()
+        .filter(|t| !t.srgb)
+        .filter_map(|t| uniform_color(t).map(|c| (t.name.clone(), c)))
+        .collect();
     let uploaded = upload_compressed(device, &read)?;
     let mut ids = HashMap::new();
     let mut cut_out = HashMap::new();
@@ -330,10 +338,11 @@ pub(super) fn rows(device: &Arc<forge_gpu::Device>, materials: &mut CityMaterial
             .iter()
             .map(|m| {
                 let r = b.roles.get(&m.name).cloned().unwrap_or_default();
+                let factors = r.specular.as_ref().and_then(|p| flat.get(p)).copied();
                 let maps = if uvs {
                     ExternalMaps {
                         base_color: map(&r.base_color),
-                        metal_rough: map(&r.specular),
+                        metal_rough: map(&r.specular).filter(|_| factors.is_none()),
                         // Its red, "occlusion" by the archive's readme, is 0 throughout: its own
                         // renderer reads none, and taken here it blacked out every shadow.
                         occlusion: None,
@@ -356,6 +365,10 @@ pub(super) fn rows(device: &Arc<forge_gpu::Device>, materials: &mut CityMaterial
                 // wrote every material double-sided (Blender's import default), which skipped the
                 // cone cull and the rays' back faces everywhere.
                 let mut m = m.clone();
+                if let Some([_, roughness, metal]) = factors {
+                    m.roughness = f32::from(roughness) / 255.0;
+                    m.metallic = f32::from(metal) / 255.0;
+                }
                 m.double_sided = m.name.ends_with(".DoubleSided")
                     || maps.alpha_cutoff.is_some()
                     || SHEETS.iter().any(|s| m.name.contains(s))

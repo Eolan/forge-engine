@@ -2288,7 +2288,10 @@ path-traced reference (step 2). The third line is NVIDIA's Exterior_1 view.
 - **Base colour:** sRGB. Its alpha is the opacity, cut out at a half where the map has any.
 - **"Specular":** roughness in green, metalness in blue. Its red, which the archive's readme
   calls occlusion, is 0 throughout; read as occlusion, it blacked out every shadow, so it is
-  left out.
+  left out. A map whose texels all hold one value (most are 16 × 16 of one) is read as its
+  material's factors (`dds::uniform_color`): a row's own roughness decides its mirror rays,
+  and the panes (roughness 0) had reflected nothing of the street under a map's factor of 1;
+  they now show the lanterns and the street, as in Falcor's render.
 - **Normal maps:** BC5, DirectX. Their green is turned over on the blocks at load. They are
   sampled through a view that reads their missing blue as one, (x, y, 1) normalised. A shader
   that rebuilt z moved every asteroid capture: the resolve near its code size limit (#355).
@@ -2352,7 +2355,7 @@ it: the archive's HDR photograph, `san_giuseppe_bridge_4k.hdr` (4096 × 2048, HD
 - **GPU memory:** 2.5 GB (textures 989 MB with the sky's 45 MB, geometry 628 MB).
 - **Frame:** 3.2 ms of GPU by day under the photograph's sky and 4.0 ms at midnight.
   `gi/probe rays` takes 1.45–1.9 ms of it. The sky's passes take 0.03 ms. Exterior_1's view:
-  3.58 ms.
+  3.74 ms, its panes' mirror rays 0.03 ms of it.
 
 **Not yet:**
 - **The night's light:** the archive's night is its emissive surfaces alone. Forge adds its
