@@ -33,11 +33,12 @@ in. CI checks the crate list.
   RTX SDKs License (`rtxdi-sdk/LICENSE.txt`). It is never under an open-source licence, and
   modified files keep NVIDIA's notice. RTXDI never enters this repository. This is not a legal
   reading.
-- **AMD's FSR DLLs** (the `ffx` feature, `--fsr-amd`, D-082): a game that takes them ships
-  `amd_fidelityfx_loader_vk.dll` and `amd_fidelityfx_upscaler_vk.dll` beside its executable,
-  with the SDK's MIT notice (`Kits/FidelityFX/docs/license.md` lists the DLLs under it). MIT
-  grants no patent licence: AMD's patents on its ML upscaling are to be looked up before a
-  release ships them. The DLLs never enter this repository (`fsr-sdk/`, git-ignored).
+- **AMD's FSR DLLs** (the `ffx` feature, `--fsr-amd`, D-082): `amd_fidelityfx_loader_vk.dll`
+  and `amd_fidelityfx_upscaler_vk.dll` are expected on the player's computer, as Streamline's
+  are. Forge uses them locally and never publishes them (the owner, 2026-10-29): nothing of
+  AMD's FSR SDK, its ML upscaler included, enters this repository (`fsr-sdk/`, git-ignored).
+  Their notice is the SDK's MIT one (`Kits/FidelityFX/docs/license.md`), which grants no patent
+  licence: AMD's patents on its ML upscaling are to be looked up before a release relies on them.
 - **Steam Audio** (the `steam-audio` feature, #267): `phonon.dll` is Valve's (Apache-2.0) and
   carries other people's code under their terms, listed in the SDK's `THIRDPARTY.md`: Intel IPP
   (the Intel Simplified Software License: redistributed unmodified with its notice, no reverse

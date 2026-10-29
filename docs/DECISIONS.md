@@ -7659,9 +7659,10 @@ round it (the map check's insides within FLIP 0.04, the outside views unchanged)
 
 **The far rooms' daylight (2026-10-29, #356, on the owner's go).** Against the grids
 carried out to 150 m (`--probe-rooms 150`, the reference), the fixed share read the far rooms'
-windows on #354's dolly +0.08, +0.19, +0.01, −0.14 and 0.00 EV at 07:12, noon, 15:36, 18:00 and
-20:24: too bright at noon, dark under a low sun. Each far room with windows now takes a share of
-its own (`ProbeParams::far_room_daylight`, the village's look):
+windows on #354's dolly +0.08, +0.19, +0.01, −0.14 and 0.00 EV at 09:36, noon, 13:48, 15:00 and
+16:12 (`--time-of-day` 0.3 to 0.85): too bright at noon, dark in mid-afternoon. Each far
+room with windows now takes a share of its own (`ProbeParams::far_room_daylight`, the village's
+look):
 - **The share:** K × Σ over its windows of area × (the sky's irradiance on the window's outward
   normal + the sun's on it), over the room's surface × the open sky's irradiance from above. The
   windows are the room's recesses (`probes/far_rooms.rs`): the normal along the recess's short
@@ -7675,7 +7676,7 @@ its own (`ProbeParams::far_room_daylight`, the village's look):
 - **Calibrated:** K = 1 read 0.59–0.75 EV dark at every hour, 1.57 still 0.34–0.52 (about 40 % of
   those pixels' light is not the room's share: the frames, the glass, the sun through the
   window). The village's K = 2.7 reads +0.04, +0.01, −0.07, −0.15 and +0.01 EV: noon's excess
-  gone, the day's spread 0.33 → 0.18 EV; the deficit under the 18:00 sun stays as it was.
+  gone, the day's spread 0.33 → 0.18 EV; the deficit at 15:00 stays as it was.
 - **A bug on the way:** the buffers were made only for scenes giving rooms by sets
   (`reserve_regions`), not for the village's whole set (`set_regions`), so the first round
   measured the fixed share twice; a GPU test now gives rooms both ways.
@@ -7862,7 +7863,9 @@ before there is an AMD card to test it on (#67).
   `storageBuffer16BitAccess`, `shaderIntegerDotProduct` (the INT8 models),
   `VK_KHR_cooperative_matrix` and `VK_EXT_shader_float8` (the RX 9000's FP8 model).
 - **The DLLs** come from `FORGE_FFX_DIR`, else `fsr-sdk/Kits/FidelityFX/signedbin` (the SDK,
-  git-ignored). A game that takes them ships the two beside its executable (`CREDITS.md`).
+  git-ignored). Like Streamline's, they are expected on the player's computer and never
+  published: nothing of AMD's FSR SDK, its ML upscaler included, enters the repository (the
+  owner, 2026-10-29; `CREDITS.md`).
 
 **Measured (2026-10-29, RCAS on in both):**
 - **The 5070 Ti** (`--fsr-amd on`, the city's frame 120 at 1600 × 900): `temporal/FSR (AMD)`
@@ -7879,6 +7882,6 @@ before there is an AMD card to test it on (#67).
   all it needs, and whether it takes inputs left in `GENERAL` (the graph's layout for a sampled
   image that is also a storage image), which its guide asks in `SHADER_READ_ONLY_OPTIMAL`.
 - **Patents:** the SDK is MIT, which grants no patent licence; AMD's patents on its ML upscaling
-  are to be looked up before a release ships the DLLs (the patent rule).
+  are to be looked up before a release relies on the DLLs (the patent rule).
 
 *(research: fsr4-vulkan.md; D-070; issue #361)*

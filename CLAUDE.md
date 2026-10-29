@@ -129,6 +129,9 @@ this file.
   (`CREDITS.md`). No third-party splash screen before the public release. If a sold product
   leaned on a free open-source project, part of the profits goes back to it (`CREDITS.md`,
   "Giving back").
+- **AMD's FSR SDK stays local, like Streamline** (the owner, 2026-10-29): nothing of it (its DLLs,
+  FSR 4's ML upscaler) is committed or published on GitHub. The DLLs are expected on the
+  player's computer; here they load from the git-ignored `fsr-sdk/`.
 - **Patents.** Research notes flag the patents they meet on a technique: number, holder,
   jurisdiction, status and expiry, and whether there is an alternative. Decisions prefer
   unpatented or expired methods. Ask the owner before building on a live patent.

@@ -2564,7 +2564,7 @@ probes allows, and the cascades' probes in those rooms retire. The village at 18
 The village's rooms with windows past the grids' reach take their windows' daylight
 (`far_room_daylight` 2.7). #354's dolly (`--view=16.81,21.86,-14.47,11.3,-24.1 --dolly=5`, 373
 frames, one run each): `gi/far rooms [compute]` 0.008 ms; the frame 5.571 → 5.600 ms at noon and
-5.611 → 5.649 at 18:00 (the lookup of each far room's share in the resolve and the probes' hits).
+5.611 → 5.649 at 15:00 (the lookup of each far room's share in the resolve and the probes' hits).
 
 ## Not measured yet
 

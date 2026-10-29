@@ -6467,7 +6467,7 @@ impl Scenario for PlanScenario {
             probe_far_room_sky: (!self.flora.is_empty()).then_some(VILLAGE_FAR_ROOM_SKY),
             // A room with windows takes their daylight instead, following the hour (#356): on
             // #354's dolly, against the grids carried out to 150 m, its windows read +0.04,
-            // +0.01, −0.07, −0.15 and +0.01 EV at 07:12, noon, 15:36, 18:00 and 20:24, where
+            // +0.01, −0.07, −0.15 and +0.01 EV at 09:36, noon, 13:48, 15:00 and 16:12, where
             // the fixed share read +0.08, +0.19, +0.01, −0.14 and 0.00.
             probe_far_room_daylight: (!self.flora.is_empty()).then_some(VILLAGE_FAR_ROOM_DAYLIGHT),
             ..Look::default()

@@ -29,13 +29,15 @@ Each far room with windows now takes its windows' sky and sun over its surfaces,
 
 The far rooms' windows on #354's dolly, against grids carried out to 150 m:
 
-| | 07:12 | noon | 15:36 | 18:00 | 20:24 |
+| | 09:36 | noon | 13:48 | 15:00 | 16:12 |
 |---|---|---|---|---|---|
 | Fixed share 0.2 (before) | +0.08 EV | +0.19 | +0.01 | −0.14 | 0.00 |
 | **K = 2.7 (the village now)** | **+0.04** | **+0.01** | **−0.07** | **−0.15** | **+0.01** |
 
+The hours are `--time-of-day` 0.3, 0.5, 0.65, 0.75 and 0.85, which runs from 06:00 (0) to 18:00 (1). They were first written here as fractions of 24 hours (07:12 … 20:24); corrected the same morning.
+
 - **Effect:** noon's excess is gone, and the spread over the day drops from 0.33 to 0.18 EV.
-- **Still there:** the 18:00 deficit. Presumably that is the sun's patch on the floor, which the grids see and the share doesn't.
+- **Still there:** the 15:00 deficit. Presumably that is the sun's patch on the floor, which the grids see and the share doesn't.
 - **Cost:** +0.03 ms on the frame.
 - **The map check:** the far windows moved by ꟻLIP ≤ 0.0044; accepted.
 - **A bug found on the way:** the first calibration round silently measured the old path. The village hands its rooms over through `set_regions`, which didn't make the new buffers. That is fixed, with a GPU test.
@@ -93,7 +95,7 @@ A read-only review of #356 and D-082 found 8 issues. All are fixed and checked:
 
 - **FSR 4:**
   - It needs an AMD RX 6000–9000 to test (#67).
-  - AMD's ML-upscaling patents need a look before a release ships their DLLs. The SDK is MIT, which grants no patent licence.
+  - Your answer this morning: like Streamline, nothing of AMD's FSR SDK is published on GitHub; the DLLs are expected on the player's computer and used here locally. They never were in the repository (`fsr-sdk/` is git-ignored). The rule is now in CLAUDE.md, CREDITS.md and D-082.
 - **AMD's DLL warnings:** they write their own 16-bit images through 32-bit format declarations. This could be reported to AMD, but only on your go, since it means posting outside the repository.
 - **#334:** waits for your walk. The step at the grid's edge is now 0.01–0.15 EV, depending on the hour.
 - **#71's HDR-PQ flake:** about 108k px at up to 44 codes (HDR-FLIP mean 0.0045). That is inside its known signature (about 100k codes in the dark, mean ≤ 0.008), so no action.

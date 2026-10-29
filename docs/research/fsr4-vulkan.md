@@ -19,7 +19,7 @@ FSR 3.1.6 and FSR frame generation 4.0 to Vulkan.
 | Cost (AMD's table, performance mode, RCAS off) | RX 9070 XT: 0.35 ms at 1080p, 1.32 ms at 4K. RX 6600: 2.18 ms at 1080p |
 | Memory | working set 81 MB at 1080p, 318 MB at 4K |
 | Shipping | signed DLLs only: `amd_fidelityfx_loader_vk.dll` (39 KB) loads `amd_fidelityfx_upscaler_vk.dll` (36 MB) from beside itself or the executable |
-| Licence | every file of the SDK is MIT, the signed DLLs included (`Kits/FidelityFX/docs/license.md` lists them). MIT has no explicit patent grant: AMD's own patents on its ML upscaling are to be looked up before we ship it (the patent rule) |
+| Licence | every file of the SDK is MIT, the signed DLLs included (`Kits/FidelityFX/docs/license.md` lists them). MIT has no explicit patent grant: AMD's own patents on its ML upscaling are to be looked up before a release relies on it (the patent rule); the DLLs are never published, only used locally (the owner, 2026-10-29) |
 
 ## How it would fit
 
