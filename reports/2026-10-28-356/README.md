@@ -55,3 +55,8 @@ out to 150 m:
   5.649 at 0.75.
 - The deficit under the 18:00 sun is still there: presumably the sun's patch on the floor and its
   bounce, which the grids take and the share, the sun on the windows only, does not.
+- **A separate weight for the sun, tried (scratch, not kept):**
+  - With the sun's term off (K 2.7), the windows read −0.52, −0.42, −0.58, −0.73 and −0.62 EV at the five hours. The sun is most of the share.
+  - Least squares over the five hours, with the sky and the sun weighted apart (sky 2.3, sun 3.2), would take 18:00 only from −0.15 to about −0.10 EV.
+  - It would make 07:12 and 20:24 worse (+0.07 and +0.05).
+  - The two terms move together through the day, so the 18:00 deficit is not a matter of their balance.
