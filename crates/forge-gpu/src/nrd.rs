@@ -28,7 +28,7 @@
 
 use std::sync::Arc;
 
-use ash::vk::{self, TaggedStructure as _};
+use ash::vk;
 
 use crate::device::Device;
 use crate::error::{GpuError, Result};
@@ -172,6 +172,7 @@ mod imp {
 mod imp {
     use std::ffi::{CStr, c_char, c_void};
 
+    use ash::vk::TaggedStructure as _;
     use parking_lot::Mutex;
 
     use super::*;
