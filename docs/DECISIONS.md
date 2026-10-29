@@ -7824,3 +7824,51 @@ owner's machine to try.
 
 **Not done:** a resolution scale apart from the upscalers' modes; presets fitted by a measured
 frame time rather than by memory; the menu's page for the sound and the keys.
+
+## D-082 — FSR 4 through AMD's signed DLLs on AMD's cards, Forge's FSR 3.1 everywhere else ✅ (the owner's go, 2026-10-29, #361)
+
+**The owner (2026-10-29):** "And FSR 4 module after", on the proposal of
+`research/fsr4-vulkan.md`: FSR 4 behind `r.aa=fsr` on AMD through the FSR SDK 2.4.0's signed
+DLLs, the Slang FSR 3.1 port (D-070) kept everywhere else, built as a load-and-fall-back path
+before there is an AMD card to test it on (#67).
+
+**Built (2026-10-29):**
+- **The binding** (`forge_gpu::ffx`, the `ffx` feature, on in the demos): the FFX API's C
+  functions from `amd_fidelityfx_loader_vk.dll`, loaded at run time, their descriptions chained
+  by `{type, next}` headers laid out as the SDK's headers lay them (`repr(C)`). `ffxQuery` lists
+  the versions the DLLs offer for the device ("3.1.6" and "2.3.4" on the 5070 Ti and on the RDNA 2
+  iGPU); the context takes one by its major number through the version override (`FfxPick`: the
+  DLLs' default, 4 where offered, or 4 or no context at all).
+- **The pass** (`forge_render::FfxUpscaler`): "temporal/FSR (AMD)", one graph pass declaring the
+  jittered colour, its depth, the motion vectors, a 1 × 1 exposure of 1 (the frame is
+  pre-exposed, as for DLSS), the reactive mask where the frame has one, and the output, written
+  as storage. The DLLs record their own passes and barriers inside it and leave each image in
+  the layout the graph gave it, as Streamline does for DLSS. RCAS follows `r.fsr.sharpen` and
+  `r.fsr.sharpness`, as for Forge's FSR.
+- **The choice** (`--fsr-amd`, under `r.aa=fsr`): `auto`, the default, loads the DLLs on AMD's
+  devices only (the cross-vendor rule) and makes a context only where they offer FSR 4; `on`
+  takes them wherever they load (FSR 4 where offered, else their default: their FSR 3.1.6 on the
+  5070 Ti, the path's test); `off` never. Wherever they are not taken, Forge's FSR 3.1 runs.
+- **The device:** `VK_KHR_compute_shader_derivatives` (`computeDerivativeGroupLinear`) is
+  enabled where present: the DLLs' shaders declare it, and the validation layer flagged it.
+- **The DLLs** come from `FORGE_FFX_DIR`, else `fsr-sdk/Kits/FidelityFX/signedbin` (the SDK,
+  git-ignored). A game that takes them ships the two beside its executable (`CREDITS.md`).
+
+**Measured (2026-10-29, RCAS on in both):**
+- **The 5070 Ti** (`--fsr-amd on`, the city's frame 120 at 1600 × 900): `temporal/FSR (AMD)`
+  0.288 ms against Forge's nine passes' 0.317; against Forge's image, ꟻLIP mean 0.015 (p99
+  0.055).
+- **The RDNA 2 iGPU** (`FORGE_GPU=amd`): `auto` finds no FSR 4 there and keeps Forge's FSR 3.1,
+  without a validation message; `on` runs their 3.1.6 in 14.2 ms against Forge's 18.7.
+- **Validation:** no VUID on either GPU. Inside the DLLs, the layer warns that some of their own
+  storage images (`rw_spd_mip*`, `rw_current_luma`, 16-bit) are written through 32-bit format
+  declarations: AMD's images and shaders, none of Forge's.
+
+**Open:**
+- **FSR 4 itself** waits for an RX 6000/7000/9000 card (#67), and with it whether the device
+  extensions AMD's samples enable (`VK_KHR_cooperative_matrix`, `VK_EXT_shader_float8`,
+  `VK_KHR_shader_integer_dot_product`) are needed.
+- **Patents:** the SDK is MIT, which grants no patent licence; AMD's patents on its ML upscaling
+  are to be looked up before a release ships the DLLs (the patent rule).
+
+*(research: fsr4-vulkan.md; D-070; issue #361)*

@@ -17,6 +17,9 @@ dlss = ["dep:libloading"]
 # NVIDIA NRD's SIGMA shadow denoiser (issue #172, D-049), loaded at run time from `nrd-sdk/bin`
 # (git-ignored; `tools/fetch-nrd.sh` builds it). Without it the shadows keep their own ray.
 nrd = ["dep:libloading"]
+# AMD's FSR through its signed DLLs (the FFX API of the FSR SDK 2.4.0, `docs/research/fsr4-vulkan.md`),
+# loaded at run time from a directory the app names. Without it `Ffx::load` reports them missing.
+ffx = ["dep:libloading"]
 
 [dependencies]
 ash = { workspace = true }

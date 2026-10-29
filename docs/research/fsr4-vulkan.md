@@ -3,7 +3,8 @@
 *2026-10-28, #361. Follows [fsr-3-1.md](fsr-3-1.md) (D-070). Read from the SDK's own docs and
 headers (`Kits/FidelityFX/docs`, `api/include`, `upscalers/include`) at the tag `v2.4.0` of
 <https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK>, downloaded on the owner's go to
-`D:\sources\workspace-engines\fsr-sdk-2.4.0` beside the repository. Nothing built yet.*
+`D:\sources\workspace-engines\fsr-sdk-2.4.0` beside the repository. Built on the owner's go
+(2026-10-29) as D-082: "Built", at the end.*
 
 ## What changed
 
@@ -60,8 +61,23 @@ The DLL records its own work into our command buffer, the way DLSS does through 
    matters only under dynamic resolution. Its "increased precision" is not in the headers.
 4. **Patents:** AMD's patents on ML upscaling and their licence terms for the binary's users.
 
-## Proposal (not decided)
+## Proposal (decided: D-082)
 
 A D-entry when the owner asks for it: FSR 4 behind `r.aa=fsr` on AMD, through the signed DLLs,
 the Slang FSR 3.1 port kept as the fallback everywhere else, built once there is a card to test
 it on (#67) or as a load-and-fall-back path before that.
+
+## Built (2026-10-29, D-082)
+
+`forge_gpu::ffx` (the binding, the `ffx` feature), `forge_render::FfxUpscaler` (the graph pass
+"temporal/FSR (AMD)") and `--fsr-amd auto|on|off` under `r.aa=fsr`. What the build answered:
+- **The version names** are numbers ("3.1.6", "2.3.4"), not "FSR 3.1.6": the context picks by
+  major number.
+- **Open question 1, in part:** the DLLs' FSR 3.1.6 declares
+  `SPV_KHR_compute_shader_derivatives` (`ComputeDerivativeGroupLinearKHR`), which Forge now enables
+  where present. FSR 4's needs wait for an AMD card.
+- **Open question 2:** on the 5070 Ti and on the RDNA 2 iGPU the DLLs offer 3.1.6 and 2.3.4 only.
+  Their 3.1.6 runs on both (0.288 ms and 14.2 ms, against Forge's 0.317 and 18.7 with RCAS); the
+  iGPU's `auto` keeps Forge's FSR 3.1.
+- **The validation layer** warns, inside the DLLs, of 16-bit storage images written through
+  32-bit format declarations (`rw_spd_mip*`, `rw_current_luma`): AMD's own resources.

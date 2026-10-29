@@ -998,7 +998,7 @@ impl FsrImages {
 }
 
 /// The render size of `mode` for an output of `output` (AMD truncates).
-fn render_extent(mode: FsrMode, output: vk::Extent2D) -> vk::Extent2D {
+pub(crate) fn render_extent(mode: FsrMode, output: vk::Extent2D) -> vk::Extent2D {
     let ratio = mode.ratio();
     vk::Extent2D {
         width: ((output.width as f32 / ratio) as u32).max(1),

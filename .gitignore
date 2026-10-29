@@ -28,6 +28,8 @@
 # luau-lsp (MIT, JohnnyMorganz/luau-lsp), its release unpacked for tools/luau-check.sh (#319).
 /luau-lsp/
 /fidelityfx-sdk/
+# AMD's FSR SDK 2.4.0 (its signed DLLs for `--fsr-amd`), a junction to the download beside the repo.
+/fsr-sdk/
 
 # Compiled shaders are rebuilt from shaders/*.slang
 *.spv

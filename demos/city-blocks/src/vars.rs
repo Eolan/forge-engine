@@ -244,8 +244,12 @@ impl Gallery {
         });
         // FSR sharpened as registered (D-070): the first apply only runs for what forge.cfg and
         // --set changed.
+        let sharpness = rs::FSR_SHARPEN.then_some(rs::FSR_SHARPNESS as f32);
         if let Some(fsr) = self.fsr.as_mut() {
-            fsr.sharpness = rs::FSR_SHARPEN.then_some(rs::FSR_SHARPNESS as f32);
+            fsr.sharpness = sharpness;
+        }
+        if let Some(ffx) = self.ffx.as_mut() {
+            ffx.sharpness = sharpness;
         }
         // Values from forge.cfg and --set reach the gallery at the first apply.
         self.vars_seen = 0;
@@ -297,12 +301,16 @@ impl Gallery {
             || changed(v.fsr_sharpen)
             || s.changed_since(v.fsr_sharpness, seen)
         {
-            // RCAS after FSR (D-070), on whichever FSR the anti-aliasing made.
+            // RCAS after FSR (D-070), on whichever FSR the anti-aliasing made, Forge's or the
+            // DLLs' (#361).
             let sharpness = s
                 .get(v.fsr_sharpen)
                 .then_some(s.get(v.fsr_sharpness) as f32);
             if let Some(fsr) = self.fsr.as_mut() {
                 fsr.sharpness = sharpness;
+            }
+            if let Some(ffx) = self.ffx.as_mut() {
+                ffx.sharpness = sharpness;
             }
         }
         if s.changed_since(v.tonemap, seen) {

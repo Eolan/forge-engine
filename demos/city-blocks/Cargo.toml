@@ -13,11 +13,14 @@ workspace = true
 [features]
 # DLAA through NVIDIA Streamline (Windows, the SDK in `streamline-sdk/`, an RTX GPU), on by
 # default (D-045): DLAA where it runs, TAA elsewhere.
-default = ["dlss", "nrd"]
+default = ["dlss", "nrd", "ffx"]
 dlss = ["forge-app/dlss"]
 # NVIDIA NRD's SIGMA denoises the sun's soft shadows (D-049, #172), on by default: where its
 # library is in `nrd-sdk/bin` (`tools/fetch-nrd.sh`); elsewhere the shadows keep their own ray.
 nrd = ["forge-app/nrd"]
+# AMD's FSR through its signed DLLs for `--fsr-amd` (Windows, the SDK in `fsr-sdk/`), on by default:
+# taken on AMD's cards that run FSR 4.
+ffx = ["forge-app/ffx"]
 
 [dependencies]
 anyhow = { workspace = true }

@@ -29,6 +29,9 @@ pub enum GpuError {
     /// NVIDIA's NRD (the sun's shadow denoiser, issue #172) failed to load or refused a call.
     #[error("NRD: {0}")]
     Nrd(String),
+    /// AMD's FSR DLLs (the FFX API, `ffx`) failed to load or refused a call.
+    #[error("FFX: {0}")]
+    Ffx(String),
 }
 
 /// Result alias for the GPU layer.

@@ -19,6 +19,7 @@ mod display;
 pub mod dlss;
 mod error;
 mod exact_mix;
+pub mod ffx;
 mod frame;
 #[forbid(unsafe_code)]
 pub mod graph;
@@ -52,6 +53,7 @@ pub use device::{
 pub use display::DisplayCaps;
 pub use dlss::{Dlss, DlssFrame, DlssImage, DlssImages, DlssMode, DlssToken};
 pub use error::{GpuError, Result};
+pub use ffx::{FFX_LOADER, Ffx, FfxFrame, FfxImages, FfxPick};
 pub use frame::{FRAMES_IN_FLIGHT, FrameSlot, Frames};
 pub use gpu_allocator::MemoryLocation;
 pub use graph::{

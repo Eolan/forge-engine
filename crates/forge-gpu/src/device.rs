@@ -50,6 +50,9 @@ pub struct DeviceFeatures {
     /// grain than the triangle, so the rays skip their clear parts and take their solid ones
     /// without the query loop's alpha test (#333).
     pub opacity_micromap: bool,
+    /// `VK_KHR_compute_shader_derivatives` with `computeDerivativeGroupLinear`: derivatives in
+    /// compute shaders, which the shaders of AMD's FSR DLLs declare (#361).
+    pub compute_derivatives: bool,
 }
 
 /// The queues a render-graph pass can run on (issue #77).
@@ -264,6 +267,9 @@ impl Device {
         if best.features.opacity_micromap {
             extensions.push(ext::opacity_micromap::NAME.as_ptr());
         }
+        if best.features.compute_derivatives {
+            extensions.push(khr::compute_shader_derivatives::NAME.as_ptr());
+        }
         let stats_filter = std::env::var("FORGE_SHADER_STATS")
             .ok()
             .filter(|v| !v.is_empty() && v != "0");
@@ -353,6 +359,11 @@ impl Device {
         let mut micromap = vk::PhysicalDeviceOpacityMicromapFeaturesEXT::default().micromap(true);
         if best.features.opacity_micromap {
             features2 = features2.push(&mut micromap);
+        }
+        let mut derivatives = vk::PhysicalDeviceComputeShaderDerivativesFeaturesKHR::default()
+            .compute_derivative_group_linear(true);
+        if best.features.compute_derivatives {
+            features2 = features2.push(&mut derivatives);
         }
         let mut executable = vk::PhysicalDevicePipelineExecutablePropertiesFeaturesKHR::default()
             .pipeline_executable_info(true);
@@ -724,6 +735,11 @@ impl Device {
         if micromap_ext {
             features2 = features2.push(&mut micromap);
         }
+        let derivatives_ext = has(khr::compute_shader_derivatives::NAME);
+        let mut derivatives = vk::PhysicalDeviceComputeShaderDerivativesFeaturesKHR::default();
+        if derivatives_ext {
+            features2 = features2.push(&mut derivatives);
+        }
         // SAFETY: feature query with a properly chained struct.
         unsafe { raw.get_physical_device_features2(physical, &mut features2) };
         let base = features2.features;
@@ -858,6 +874,7 @@ impl Device {
             float64: on(base.shader_float64),
             discrete: props.device_type == vk::PhysicalDeviceType::DISCRETE_GPU,
             opacity_micromap: false,
+            compute_derivatives: derivatives_ext && on(derivatives.compute_derivative_group_linear),
         };
         let features = DeviceFeatures {
             opacity_micromap: features.ray_query && micromap_ext && on(micromap.micromap),

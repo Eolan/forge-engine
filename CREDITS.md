@@ -33,6 +33,11 @@ in. CI checks the crate list.
   RTX SDKs License (`rtxdi-sdk/LICENSE.txt`). It is never under an open-source licence, and
   modified files keep NVIDIA's notice. RTXDI never enters this repository. This is not a legal
   reading.
+- **AMD's FSR DLLs** (the `ffx` feature, `--fsr-amd`, D-082): a game that takes them ships
+  `amd_fidelityfx_loader_vk.dll` and `amd_fidelityfx_upscaler_vk.dll` beside its executable,
+  with the SDK's MIT notice (`Kits/FidelityFX/docs/license.md` lists the DLLs under it). MIT
+  grants no patent licence: AMD's patents on its ML upscaling are to be looked up before a
+  release ships them. The DLLs never enter this repository (`fsr-sdk/`, git-ignored).
 - **Steam Audio** (the `steam-audio` feature, #267): `phonon.dll` is Valve's (Apache-2.0) and
   carries other people's code under their terms, listed in the SDK's `THIRDPARTY.md`: Intel IPP
   (the Intel Simplified Software License: redistributed unmodified with its notice, no reverse
@@ -77,6 +82,7 @@ This is a promise of intent, not a licence term.
 | [OpenColorIO](https://github.com/AcademySoftwareFoundation/OpenColorIO) | Contributors to the OpenColorIO Project (Academy Software Foundation) | ACES 2.0's output transform, ported from its ACES2 code, v2.5.2, with its notice kept (`crates/forge-render/src/aces2.rs`, `shaders/aces2.slang`, issue #76) | BSD-3-Clause |
 | [ꟻLIP](https://github.com/NVlabs/flip) | Pontus Ebelin (formerly Andersson), Jim Nilsson, Tomas Akenine-Möller, Magnus Oskarsson, Kalle Åström and Mark D. Fairchild (NVIDIA, Lund University, RIT) | LDR-ꟻLIP in `imgdiff`, ported from `FLIP.h` v1.7 with its notice kept (issue #75), and HDR-ꟻLIP (Pontus Andersson, Jim Nilsson, Peter Shirley and Tomas Akenine-Möller, Eurographics 2021) for the HDR captures (issue #126); its magma colour map is matplotlib's, by Nathaniel J. Smith and Stéfan van der Walt (CC0) | BSD-3-Clause |
 | [FidelityFX SDK v1.1.4](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK), FSR 3.1.4's upscaler | AMD | FSR 3.1 in place of TAA on every GPU (D-070, #286): AMD's shader headers in `shaders/third-party/fidelityfx/` (the upscaler's, the single-pass downsampler's, FSR 1's RCAS and the core), compiled through Forge's bridge; one change marked in `ffx_fsr3upscaler_accumulate.h` (a min/max history box); notice in `shaders/third-party/FidelityFX-SDK-LICENSE.txt` | MIT |
+| [FidelityFX SDK 2.4.0](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK) (tag `v2.4.0`), its signed upscaler DLLs | AMD | FSR 4 on AMD's cards, and the DLLs' FSR 3.1.6 under `--fsr-amd on`, loaded at run time (D-082, #361): `amd_fidelityfx_loader_vk.dll` and `amd_fidelityfx_upscaler_vk.dll` from `fsr-sdk/` (git-ignored), the FFX API's types declared in `crates/forge-gpu/src/ffx.rs` after the SDK's C headers | MIT |
 | [FidelityFX Super Resolution 1](https://github.com/GPUOpen-Effects/FidelityFX-FSR) | AMD | its RCAS (robust contrast-adaptive sharpening), ported to `tools/sharpness --rcas` to preview a sharpening pass on a capture (issue #159), then to TAA's sharpening pass, `sharpen_main` in `shaders/taa.slang` (D-045) | MIT |
 | [xxhash-rust](https://github.com/DoumanAsh/xxhash-rust), after [xxHash](https://github.com/Cyan4973/xxHash) | Douman; the XXH3 algorithm by Yann Collet | cache keys for shaders, cooked meshes and derived products (#208), and their checksums | BSL-1.0 |
 | [lz4_flex](https://github.com/pseitz/lz4_flex), after [LZ4](https://github.com/lz4/lz4) | Pascal Seitz, Arthur Silva and ticki; the LZ4 format by Yann Collet | the caches' packing (`forge_core::pack`, #215): the derived products' frames and each cooked mesh page | MIT |

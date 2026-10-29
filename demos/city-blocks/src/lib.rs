@@ -738,6 +738,12 @@ pub struct Args {
     /// `--set r.aa=off`).
     #[arg(long)]
     no_taa: bool,
+    /// AMD's FSR through its signed DLLs (FSR SDK 2.4.0, `docs/research/fsr4-vulkan.md`) in
+    /// place of Forge's FSR 3.1 under `r.aa fsr`: `auto` on AMD's cards where the DLLs offer FSR
+    /// 4, `on` wherever they load (their FSR 3.1 elsewhere: the path's test on NVIDIA), `off`
+    /// never. The DLLs from `FORGE_FFX_DIR`, else `fsr-sdk/Kits/FidelityFX/signedbin`.
+    #[arg(long, value_enum, default_value_t = FsrAmd::Auto)]
+    fsr_amd: FsrAmd,
     /// What the props' textures keep: full (colour and relief), flat (colour alone) or none
     /// (plain colours), to compare.
     #[arg(long, value_enum, default_value_t = TextureMode::Full)]
@@ -830,6 +836,8 @@ struct Gallery {
     /// (`r.aa fsr`): made at the start, or when the console first asks for it.
     fsr: Option<forge_render::FsrUpscaler>,
     fsr_on: bool,
+    /// AMD's FSR through its DLLs (`--fsr-amd`), which takes `fsr`'s place while `fsr_on`.
+    ffx: Option<forge_render::FfxUpscaler>,
     /// The display pass: DLAA's or FSR's image, or the frame as drawn with the anti-aliasing
     /// off, through the tone curve with bloom.
     display: forge_render::Display,
@@ -1251,6 +1259,49 @@ impl Gallery {
                 )
             })
             .transpose()?;
+        // AMD's FSR through its DLLs (#361): on AMD's cards when they offer FSR 4, anywhere with
+        // `--fsr-amd on`; loaded only then (the upscaler's DLL is 36 MB, its working set 81 MB
+        // at 1080p).
+        const AMD: u32 = 0x1002;
+        let ffx = match args.fsr_amd {
+            FsrAmd::Off => None,
+            _ if fsr.is_none() => None,
+            FsrAmd::Auto if ctx.device.vendor_id() != AMD => None,
+            asked => {
+                let dir = std::env::var_os("FORGE_FFX_DIR")
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| {
+                        forge_app::workspace_root_from(env!("CARGO_MANIFEST_DIR"))
+                            .join("fsr-sdk/Kits/FidelityFX/signedbin")
+                    });
+                match forge_render::FfxUpscaler::new(
+                    &ctx.device,
+                    &dir,
+                    forge_render::FsrMode::NativeAa,
+                    ctx.extent(),
+                    // FSR 4 or nothing on auto (no context made where the DLLs offer only FSR
+                    // 3.1: Forge's own runs there); FSR 4 where offered, else their default, on.
+                    match asked {
+                        FsrAmd::On => forge_gpu::FfxPick::Prefer(4),
+                        _ => forge_gpu::FfxPick::Only(4),
+                    },
+                ) {
+                    Ok(upscaler) => {
+                        let (versions, running) = upscaler.versions();
+                        tracing::info!(?versions, running, "AMD's FSR DLLs");
+                        Some(upscaler)
+                    }
+                    Err(error) => {
+                        if asked == FsrAmd::On {
+                            tracing::warn!(%error, "AMD's FSR DLLs: Forge's FSR 3.1 instead");
+                        } else {
+                            tracing::info!(%error, "AMD's FSR DLLs: Forge's FSR 3.1");
+                        }
+                        None
+                    }
+                }
+            }
+        };
         let display = forge_render::Display::new(&ctx.device, &ctx.shaders, ctx.output.format)?;
         // Known before the scene, whose streamed pages it loads first (#121).
         let mut camera = start_camera(&args, scenario.as_ref().map(|s| s.camera()))?;
@@ -1995,6 +2046,7 @@ impl Gallery {
             dlaa,
             fsr_on: fsr.is_some(),
             fsr,
+            ffx,
             display,
             sun_shadow_on,
             sun_shadows,
@@ -2159,6 +2211,9 @@ impl Demo for Gallery {
         }
         for fsr in [&mut self.fsr, &mut self.behind_aa].into_iter().flatten() {
             fsr.configure(forge_render::FsrMode::NativeAa, ctx.extent())?;
+        }
+        if let Some(ffx) = &mut self.ffx {
+            ffx.configure(forge_render::FsrMode::NativeAa, ctx.extent())?;
         }
         Ok(())
     }
@@ -3885,6 +3940,18 @@ impl Demo for Gallery {
                 motion,
                 exposure,
             )?
+        } else if let Some(ffx) = self.ffx.as_mut().filter(|_| fsr_on) {
+            // AMD's FSR through its DLLs (`--fsr-amd`): FSR 3.1's frame, its clock the run's step.
+            ffx.upscale(
+                &mut frame.graph,
+                &taa_frame,
+                upscale_camera,
+                targets.depth,
+                motion,
+                reactive.filter(|_| !self.args.no_reactive),
+                exposure,
+                self.step,
+            )
         } else if let Some(fsr) = self.fsr.as_mut().filter(|_| fsr_on) {
             // FSR 3.1 (D-070): the same frame and the reactive mask to AMD's upscaler. Its clock
             // is the run's step, fixed in scripted runs.
@@ -5695,6 +5762,18 @@ fn cook(args: &Args, scenario: Option<&dyn Scenario>) -> Cooked {
     let pages_in_memory = args.gallery || scenario.is_some() || args.stream_pool == 0;
     let (meshes, ms) = cook_props(&props, args.recook, pages_in_memory);
     Cooked { meshes, ms }
+}
+
+/// `--fsr-amd`: when AMD's FSR DLLs take the frame under `r.aa fsr`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum FsrAmd {
+    /// On AMD's cards, where the DLLs offer FSR 4.
+    #[default]
+    Auto,
+    /// Wherever the DLLs load.
+    On,
+    /// Never: Forge's FSR 3.1.
+    Off,
 }
 
 /// `--textures`: what the props' procedural textures keep, to compare.
