@@ -186,9 +186,10 @@ pub struct Args {
     #[arg(long, hide = true)]
     local_exposure_blend: Option<f32>,
     /// Tone curve: agx, agx-punchy, aces, aces2 or neutral (G cycles them). AgX's punchy look by
-    /// default, a stop brighter: the owner's pick (2026-10-10).
-    #[arg(long, default_value = "agx-punchy")]
-    tonemap: Tonemap,
+    /// default, a stop brighter: the owner's pick (2026-10-10); a scene's look may pick its own
+    /// (the Bistro ACES, as its authors' renders, D-084).
+    #[arg(long)]
+    tonemap: Option<Tonemap>,
     /// HDR output: off, hdr10, scrgb or offscreen (the console's app.hdr switches it at run time,
     /// app.hdr.peak steps the peak, app.calibrate opens the calibration pages). HDR10 and scRGB
     /// need the OS to show the display in HDR; offscreen previews an HDR10 image on any monitor.
@@ -2046,7 +2047,7 @@ impl Gallery {
             cell_check,
             restir,
             kept_lamps: Vec::new(),
-            tonemap: args.tonemap,
+            tonemap: args.tonemap.or(look.tonemap).unwrap_or(Tonemap::AgXPunchy),
             args,
             renderer,
             taa,

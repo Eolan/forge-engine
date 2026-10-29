@@ -2264,7 +2264,7 @@ Steps 1 and 3 of D-065 (`forge_render::lamps`, `lamps_at` and `hit_lamps` in `me
 ```
 cargo run --release -p physics-lab -- --lab bistro
 cargo run --release -p physics-lab -- --lab bistro --time-of-day 1.5
-cargo run --release -p physics-lab -- --lab bistro --view=-23.700,6.855,-0.704,-93.13,-15.93 --fov 36.22 --tonemap aces --ev100 11.8
+cargo run --release -p physics-lab -- --lab bistro --view=-23.700,6.855,-0.704,-93.13,-15.93 --fov 36.22 --ev100 11.8
 ```
 
 The Amazon Lumberyard Bistro's exterior (ORCA, CC BY 4.0, `CREDITS.md`): 1,296 meshes,
@@ -2328,11 +2328,11 @@ it: the archive's HDR photograph, `san_giuseppe_bridge_4k.hdr` (4096 × 2048, HD
   test): 4.5 px RMS, field of view 36.22°.
 - **The tone curve:** Falcor's tone mapper is Narkowicz's ACES fit, ×0.6, at a fixed exposure.
   Forge's AgX curves flatten the picture. At the same mean brightness, on a 160 × 90 grid, 15 %
-  of the default's cells (AgX punchy) are dark against the reference's 22 %, with a luma spread
-  of 54 against 65; plain AgX 4 % and 48. ACES (Hill's fit, `--tonemap aces`) gives 20 % and 62,
-  Khronos Neutral 21 % and 65. Most of the "darker shadows, warmer colours" was the curve.
-  Compare under `--tonemap aces`.
-- **The exposure:** `--ev100 11.8` under ACES (11.4 under the default) matches the picture's
+  of Forge's default's cells (AgX punchy) are dark against the reference's 22 %, with a luma
+  spread of 54 against 65; plain AgX 4 % and 48. ACES (Hill's fit) gives 20 % and 62, Khronos
+  Neutral 21 % and 65. Most of the "darker shadows, warmer colours" was the curve. The Bistro's
+  look takes ACES (the owner, 2026-10-29); `--tonemap` overrides it.
+- **The exposure:** `--ev100 11.8` under ACES (11.4 under AgX punchy) matches the picture's
   mean. Fixed exposure ignores `--exposure-compensation`.
 - **Close:** the light's direction, the sky, the overall level and contrast, the cobbles
   (median luma 182 against 191), the shadows under the photograph's sun, and the emissive

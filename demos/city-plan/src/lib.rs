@@ -6482,6 +6482,7 @@ impl Scenario for PlanScenario {
             // was pitch black; lifted, it reads a bit darker, as the eye sees it.
             local_exposure: !self.flora.is_empty(),
             environment: None,
+            tonemap: None,
             // A room beyond the room grids' reach takes this share of the open sky (D-078, the
             // probes' far room rule), set against the rooms the grids light: from the owner's
             // view down to the houses, the windows' band matched them at 0.35 in the afternoon

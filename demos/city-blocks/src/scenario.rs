@@ -14,7 +14,7 @@ use forge_geom::city::PropSpec;
 use forge_procgen::Ocean;
 use forge_render::{
     LiquidLook, LiquidMode, LiquidSolver, LiquidStep, LiquidTank, MeshletScene, SplashSource,
-    WaterCascades, WaterSurface,
+    Tonemap, WaterCascades, WaterSurface,
 };
 use glam::Vec3;
 use winit::keyboard::KeyCode;
@@ -89,6 +89,9 @@ pub struct Look {
     /// An environment map as the sky (D-084), for a scene authored under one: no air, no
     /// clouds, no night; the sun's direction from `sun`.
     pub environment: Option<Environment>,
+    /// The scene's tone curve where `--tonemap` names none (AgX punchy otherwise): an authored
+    /// scene's renders made under another.
+    pub tonemap: Option<Tonemap>,
 }
 
 /// An environment map as a scene's sky and sun (D-084): the light its authors set, for
@@ -122,6 +125,7 @@ impl Default for Look {
             metered: false,
             local_exposure: false,
             environment: None,
+            tonemap: None,
         }
     }
 }

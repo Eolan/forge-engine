@@ -8077,8 +8077,11 @@ use the bistro technology indeed").
 - **Darker, crisper shadows and warmer colours in NVIDIA's** were mostly its tone curve
   (Narkowicz's ACES fit, where Forge defaults to AgX punchy) and Forge's widened sun (D-049).
   The sun now keeps the photograph's size too, 0.29° in radius (√2 times its texels' RMS
-  angle, weighed by their light, never under the real sun's); under `--tonemap aces` the two
-  come close (`docs/demos/physics-lab.md`, `bistro`).
+  angle, weighed by their light, never under the real sun's); under ACES the two come close
+  (`docs/demos/physics-lab.md`, `bistro`).
+- **The owner's choice (2026-10-29):** the Bistro takes ACES (a scene's look may now pick its
+  tone curve, `Look::tonemap`; `--tonemap` overrides it) and keeps the photograph's sun, to see
+  how close Forge comes to the authors' renders.
 
 **Not yet:**
 - Sharp mirrors see the sky through the table (about a degree a texel).
