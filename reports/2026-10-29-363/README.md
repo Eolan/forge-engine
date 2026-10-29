@@ -98,6 +98,15 @@ Your three views and the floor towards the window, before (left) and after (righ
 
 ![The V before and with the fix](walls-v-fix.png)
 
+- **The rest at 600 m (67d39d08), on your word:** the last sharp corner was a T: a wall slanting at 48° onto a straight line of a wall and a hedge.
+  - **The fix:** the slanting wall stops short and a 1.2 m wall closes the V onto the line, which stays whole, so no two gardens open onto each other. The point joins the garden across the slanting wall.
+  - **Counts:** 600 m 1 → 0, 700 m 4 → 3, 800 m 6 → 2. No other anomaly moved at any size.
+  - **Tried first:** sliding the junctions, or giving the lots' tips to a neighbour. Both split or bent lot lines into pieces the walls' joints couldn't close, and left free wall ends.
+  - **Still left at the other sizes:** points where three or four walls meet, slivers of a few degrees, and corners with a house on the point.
+  - **Before (left) and after (right),** from the corner's anomaly view:
+
+![The T corner before and after](walls-t-corner-fix.png)
+
 ## 6. The face's triangle (90e9edb2)
 
 ![Your view, and the same view without shadows](face-triangle-is-the-sunlit-part.png)
