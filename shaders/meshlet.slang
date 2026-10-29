@@ -501,7 +501,7 @@ public struct Frame
     public DecalGrid* decals;       // the decals on the static surfaces (D-074), null: none
     public FarLamps* far_lamps;     // the street lamps lit beyond the frame's set (#284), null: none
     public float* far_shares;       // their shares of their light this frame, unshadowed
-    public float* ladder;           // per instance on a ladder (D-075), this frame's crossing (`ladder_crossing`), written by the instance culls; null: no ladder
+    public float* ladder;           // per instance on a ladder (D-075), this frame's crossing (`ladder_crossing`) with the fade after it packed in (`ladder_fade_share`, #363), written by the instance culls; null: no ladder
     public float far_shadows;       // metres from the camera from which the shadow rays meet RAY_SHADOW_FAR's world (D-075 step 3, `shadow_world`); 0: never
     public uint far_shadows_pad;
     public GrassCell* grass;        // the grass map's cells (#300, D-075), rows of increasing z; null: no grass
@@ -2208,7 +2208,9 @@ void append_instance_work(Frame* f, uint64_t* status, uint ticket, uint groups, 
         else if (n > 0)
             instance_items(f, instance_index, at, true, tagged & INSTANCE_TAG_BITS);
     }
-    GroupMemoryBarrierWithGroupSync();
+    // The whole workgroup writes a heavy instance's items, reading its crossing (`Frame::ladder`)
+    // its own thread wrote: the barrier covers device memory too, not only the workgroup's.
+    AllMemoryBarrierWithGroupSync();
     for (uint h = 0; h < s_heavy_count; h++)
     {
         uint tagged = s_heavy[h].x;

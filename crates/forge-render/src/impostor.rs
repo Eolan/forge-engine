@@ -1134,6 +1134,8 @@ struct GpuImpostor {
 
 /// The size on screen at which a plant is half faded into its impostor: its kind's `fade_px`,
 /// held to its ladder's size (`ladder`), as its meshes' fade ([`crate::meshlet::step_after`]).
+/// That assumes one ladder into each faded mesh (city-plan adds the shells per model): the
+/// builder holds a mesh several ladders cross into to the smallest of them.
 fn instance_fade(fade_px: f32, ladder: Option<(f32, f32)>) -> f32 {
     ladder.map_or(fade_px, |(px, _)| crate::meshlet::step_after(fade_px, px))
 }
@@ -1227,7 +1229,7 @@ impl Impostors {
                 normal: k.atlases[1].sampled().0,
                 fresnel: k.atlases[2].sampled().0,
                 fade_px: k.fade_px,
-                fade_band: k.fade_band,
+                fade_band: k.fade_band.clamp(0.01, 0.9),
                 radius: k.radius,
                 reflectance: k.sheen.1,
                 specular: k.sheen.2,
@@ -1252,8 +1254,8 @@ impl Impostors {
                     middle: i.middle.to_array(),
                     cull_radius: i.cull_radius,
                     id: i.id,
-                    ladder_px: i.ladder.map_or(0.0, |l| l.0),
-                    ladder_band: i.ladder.map_or(0.0, |l| l.1),
+                    ladder_px: i.ladder.map_or(0.0, |l| l.0.max(1.0)),
+                    ladder_band: i.ladder.map_or(0.0, |l| l.1.clamp(0.01, 0.9)),
                     fade_px: instance_fade(kinds[i.kind as usize].fade_px, i.ladder),
                 }
             })

@@ -7278,7 +7278,8 @@ cards' crossing ended (all of it for the 23 smallest, whose shells come in at 13
 on its own band beside the crossing (`ladder_fade_after`): the cull measures its share once per
 instance and packs it into the instance's ladder value; the cards and shells give up that share of
 their pixels by a second noise (`ladder_fade_noise`, interleaved gradient noise), which the
-impostor keeps; an instance its impostor has taken whole draws nothing. A step's fade is also held
+impostor keeps; an instance its impostor would take whole draws nothing (a safeguard: with equal
+bands and the hold below, a fade never ends inside the crossing into it). A step's fade is also held
 to the size of the crossing into it (`meshlet::step_after`, the impostors' per instance): at 40 px
 the shrubs by the main street went to their impostors, softer and greyer in the shade than their
 cards (the map check's main view ꟻLIP 0.0074, 0.0032 held). Central steps of 3 sRGB levels or
