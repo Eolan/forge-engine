@@ -17,6 +17,9 @@ public static const uint TONEMAP_ACES2 = 3;
 public static const uint TONEMAP_ACES2_ANALYTIC = 4;
 // AgX with its "punchy" look: deeper blacks, more saturated colours (D-045).
 public static const uint TONEMAP_AGX_PUNCHY = 5;
+// ACES as Narkowicz fitted it, per channel after a 0.6 pre-exposure: Falcor's ToneMapper default,
+// the curve of NVIDIA's Bistro renders and of Falcor's references (D-084).
+public static const uint TONEMAP_ACES_NARKOWICZ = 6;
 
 // What the ACES 2.0 curves read (crates/forge-render/src/display.rs, `ToneTables`): the
 // baked tables' bindless indices and the transform's parameters, SDR and the HDR preset's.
@@ -164,10 +167,20 @@ float3 pbr_neutral(float3 color)
     return lerp_exact(c, float3(new_peak, new_peak, new_peak), g);
 }
 
+// Narkowicz's fit of ACES (2016, "ACES Filmic Tone Mapping Curve"), as Falcor's ToneMapper applies
+// it: the colour times 0.6, then x (2.51 x + 0.03) / (x (2.43 x + 0.59) + 0.14) per channel.
+float3 aces_narkowicz(float3 color)
+{
+    float3 c = max(color, 0.0) * 0.6;
+    return saturate((c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14));
+}
+
 public float3 tonemap(float3 color, uint curve, ToneTables tables)
 {
     if (curve == TONEMAP_ACES)
         return aces(color);
+    if (curve == TONEMAP_ACES_NARKOWICZ)
+        return aces_narkowicz(color);
     if (curve == TONEMAP_PBR_NEUTRAL)
         return pbr_neutral(color);
     if (curve == TONEMAP_ACES2)

@@ -42,16 +42,21 @@ pub enum Tonemap {
     /// The same transform evaluated per pixel: the reference the table is measured against
     /// (not in the cycle; `--tonemap aces2-analytic`).
     Aces2Analytic,
+    /// ACES as Narkowicz fitted it, per channel after a 0.6 pre-exposure: Falcor's ToneMapper
+    /// default, so a Forge frame and a Falcor reference compare under one curve (D-084). Bright
+    /// saturated colours go to yellow and white (a hot lantern).
+    AcesNarkowicz,
 }
 
 impl Tonemap {
     /// Every curve, in cycling order.
-    pub const ALL: [Tonemap; 5] = [
+    pub const ALL: [Tonemap; 6] = [
         Tonemap::AgX,
         Tonemap::AgXPunchy,
         Tonemap::Aces,
         Tonemap::PbrNeutral,
         Tonemap::Aces2,
+        Tonemap::AcesNarkowicz,
     ];
 
     /// The shader's index.
@@ -63,6 +68,7 @@ impl Tonemap {
             Tonemap::Aces2 => 3,
             Tonemap::Aces2Analytic => 4,
             Tonemap::AgXPunchy => 5,
+            Tonemap::AcesNarkowicz => 6,
         }
     }
 
@@ -75,6 +81,7 @@ impl Tonemap {
             Tonemap::PbrNeutral => "neutral",
             Tonemap::Aces2 => "aces2",
             Tonemap::Aces2Analytic => "aces2-analytic",
+            Tonemap::AcesNarkowicz => "aces-narkowicz",
         }
     }
 
@@ -87,6 +94,7 @@ impl Tonemap {
             Tonemap::PbrNeutral => "Khronos PBR Neutral",
             Tonemap::Aces2 => "ACES 2.0 (SDR, table)",
             Tonemap::Aces2Analytic => "ACES 2.0 (SDR, per pixel)",
+            Tonemap::AcesNarkowicz => "ACES (Narkowicz fit, Falcor's)",
         }
     }
 
@@ -105,6 +113,7 @@ impl Tonemap {
             Tonemap::AgXPunchy => agx(color, true),
             Tonemap::Aces => aces(color),
             Tonemap::PbrNeutral => pbr_neutral(color),
+            Tonemap::AcesNarkowicz => aces_narkowicz(color),
             Tonemap::Aces2 | Tonemap::Aces2Analytic => {
                 Vec3::from(aces2::sdr().apply(color.max(Vec3::ZERO).to_array()))
             }
@@ -123,7 +132,7 @@ impl FromStr for Tonemap {
             .find(|t| t.name().eq_ignore_ascii_case(text))
             .ok_or_else(|| {
                 format!(
-                    "unknown tone curve {text:?}: agx, agx-punchy, aces, neutral, aces2 or aces2-analytic"
+                    "unknown tone curve {text:?}: agx, agx-punchy, aces, neutral, aces2, aces-narkowicz or aces2-analytic"
                 )
             })
     }
@@ -458,6 +467,13 @@ fn agx(color: Vec3, punchy: bool) -> Vec3 {
     rows(outset, curve).max(Vec3::ZERO).powf(2.2)
 }
 
+/// Narkowicz's fit of ACES as Falcor's ToneMapper applies it (`aces_narkowicz` in
+/// `tonemap.slang`): the colour times 0.6, then a rational curve per channel.
+fn aces_narkowicz(color: Vec3) -> Vec3 {
+    let c = color.max(Vec3::ZERO) * 0.6;
+    (c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + Vec3::splat(0.14))
+}
+
 fn aces(color: Vec3) -> Vec3 {
     let input = [
         [0.59719, 0.35458, 0.04823],
@@ -712,6 +728,10 @@ mod tests {
             grey(Tonemap::Aces)
         );
         assert!((grey(Tonemap::PbrNeutral) - 0.14).abs() < 1e-4);
+        // Falcor's: 0.18 × 0.6 = 0.108 through Narkowicz's curve, 0.1401; 1 to 0.6733.
+        assert!((grey(Tonemap::AcesNarkowicz) - 0.1401).abs() < 1e-4);
+        let one = Tonemap::AcesNarkowicz.apply(Vec3::ONE).x;
+        assert!((one - 0.6733).abs() < 1e-4, "{one}");
         // Neutral is the identity (plus offset) below its compression start.
         let base = Vec3::new(0.5, 0.3, 0.2);
         let out = Tonemap::PbrNeutral.apply(base);

@@ -8079,7 +8079,8 @@ use the bistro technology indeed").
   The sun now keeps the photograph's size too, 0.29° in radius (√2 times its texels' RMS
   angle, weighed by their light, never under the real sun's); under ACES the two come close
   (`docs/demos/physics-lab.md`, `bistro`).
-- **The owner's choice (2026-10-29):** the Bistro takes ACES (a scene's look may now pick its
+- **The owner's choice (2026-10-29):** the Bistro takes ACES as Falcor's ToneMapper applies it
+  (`aces-narkowicz`, Narkowicz's fit after a 0.6 pre-exposure; a scene's look may now pick its
   tone curve, `Look::tonemap`; `--tonemap` and `r.tonemap` override it) and keeps the
   photograph's sun, to see how close Forge comes to the authors' renders.
 
@@ -8110,6 +8111,6 @@ whatever the metal. The Bistro's lamp post, a dark rough metal (reflectance 8.5 
 - **Measured after:** the post 0.0147 against Falcor's 0.0145. The asteroids (#355), the lab's
   creatures and materials: 0 px.
 
-**Not yet:** the light round the post is still about 1.4 times Falcor's (the probes'
-irradiance near a sunlit white front). The highlight is still Blinn-Phong, untinted, and
-without the light's cosine.
+**Not yet:** the light round the post looked about 1.4 times Falcor's, measured before the
+Neutral curve's black offset was undone: to measure again. The highlight is still Blinn-Phong,
+untinted, and without the light's cosine.

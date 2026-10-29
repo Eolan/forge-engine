@@ -263,8 +263,8 @@ impl Scenario for LabScenario {
             environment: (kind == LabScene::Bistro)
                 .then(super::bistro::environment)
                 .flatten(),
-            // Its authors' renders are tone-mapped by ACES (Falcor's ToneMapper, D-084).
-            tonemap: (kind == LabScene::Bistro).then_some(forge_render::Tonemap::Aces),
+            // Its authors' renders are tone-mapped by Falcor's ToneMapper: Narkowicz's ACES (D-084).
+            tonemap: (kind == LabScene::Bistro).then_some(forge_render::Tonemap::AcesNarkowicz),
         }
     }
 

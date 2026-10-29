@@ -131,6 +131,7 @@ pub const TONEMAPS: &[&str] = &[
     "aces",
     "neutral",
     "aces2",
+    "aces-narkowicz",
     "aces2-analytic",
 ];
 
@@ -140,8 +141,8 @@ pub fn tonemap(default: Tonemap) -> Spec<usize> {
         "r.tonemap",
         TONEMAPS,
         tonemap_index(default),
-        "The tone curve: agx, agx-punchy, aces, neutral, aces2 (aces2-analytic, the reference); \
-         toggle steps through them.",
+        "The tone curve: agx, agx-punchy, aces, neutral, aces2, aces-narkowicz (Falcor's) \
+         (aces2-analytic, the reference); toggle steps through them.",
     )
 }
 

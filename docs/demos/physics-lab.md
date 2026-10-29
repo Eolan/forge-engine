@@ -2264,7 +2264,7 @@ Steps 1 and 3 of D-065 (`forge_render::lamps`, `lamps_at` and `hit_lamps` in `me
 ```
 cargo run --release -p physics-lab -- --lab bistro
 cargo run --release -p physics-lab -- --lab bistro --time-of-day 1.5
-cargo run --release -p physics-lab -- --lab bistro --view=-23.700,6.855,-0.704,-93.13,-15.93 --fov 36.22 --ev100 11.8
+cargo run --release -p physics-lab -- --lab bistro --view=-23.700,6.855,-0.704,-93.13,-15.93 --fov 36.22 --ev100 11.96
 ```
 
 The Amazon Lumberyard Bistro's exterior (ORCA, CC BY 4.0, `CREDITS.md`): 1,296 meshes,
@@ -2334,9 +2334,14 @@ it: the archive's HDR photograph, `san_giuseppe_bridge_4k.hdr` (4096 × 2048, HD
   of Forge's default's cells (AgX punchy) are dark against the reference's 22 %, with a luma
   spread of 54 against 65; plain AgX 4 % and 48. ACES (Hill's fit) gives 20 % and 62, Khronos
   Neutral 21 % and 65. Most of the "darker shadows, warmer colours" was the curve. The Bistro's
-  look takes ACES (the owner, 2026-10-29); `--tonemap` and `r.tonemap` override it.
-- **The exposure:** `--ev100 11.8` under ACES (11.4 under AgX punchy) matches the picture's
-  mean. Fixed exposure ignores `--exposure-compensation`.
+  look takes ACES (the owner, 2026-10-29), as Falcor's ToneMapper applies it
+  (`aces-narkowicz`); `--tonemap` and `r.tonemap` override it. Hill's ACES kept the lanterns a
+  deep orange where Falcor's curve turns them a hot yellow-orange.
+- **The exposure:** the same frame as Falcor's at EV 11.96, from the units alone: Falcor's
+  ToneMapper scales its radiance by 0.6, a unit of it is 2,871 cd/m², and Forge's exposure is
+  1 / (1.2 × 2^EV). Fixed exposure ignores `--exposure-compensation`. Against Falcor's
+  8,192-sample render of the view: mean luma 105.5 against 102.4, spread 60.9 against 66.0,
+  RMS 15.3.
 - **Close:** the light's direction, the sky, the overall level and contrast, the cobbles
   (median luma 182 against 191), the shadows under the photograph's sun, and the emissive
   lamps since their calibration.
@@ -2345,11 +2350,17 @@ it: the archive's HDR photograph, `san_giuseppe_bridge_4k.hdr` (4096 × 2048, HD
   (`falcor/`, the post's pixels over the sunlit cobbles), it took 4.1 times Falcor's light; the
   extra weight off, 0.0071 against Falcor's 0.0145 (EV 15). A metal's highlight now weighs its
   reflectance times its lobe's normalisation (D-085): 0.0147, olive grey as in Falcor.
+- **The emissive surfaces** (their light alone: a render less the same without emission, in
+  both renderers, Forge's Neutral capture inverted to Falcor's units): the glowing glass and
+  bulbs at 0.83 of Falcor's luminance, the colours read alike (the maps' sRGB). The light they
+  throw on the street is 0.09 of Falcor's: Forge's probes, 2 m apart, carry it, and their rays
+  seldom meet a bulb. By day it is lost under the sky's (Falcor's own difference is mostly its
+  noise); by night it is the whole light, the night picture's step: the emissive meshes as
+  Forge's lamps (D-065).
 - **Not yet:**
-  - **The light round the near lamp post** is about 1.4 times Falcor's: a white post there,
-    in Forge's diffuse light alone, takes 0.127 where Falcor's gives 0.092 (EV 15). Its visible
-    side faces a sunlit white front behind the camera; the probes' irradiance is to be checked
-    against the reference.
+  - **The light round the near lamp post** looked about 1.4 times Falcor's (a white post there,
+    0.127 against 0.092 at EV 15), measured before the Neutral curve's black offset was undone:
+    to measure again. Its visible side faces a sunlit white front behind the camera.
   - **The cobbles' joints** are darker in NVIDIA's, and its shadows on the street a little
     deeper.
 

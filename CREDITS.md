@@ -190,6 +190,8 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
 - **Physical light units and pre-exposure.** Sébastien Lagarde, Charles de Rousiers, "Moving
   Frostbite to Physically Based Rendering", SIGGRAPH 2014.
 - **Automatic exposure.** Krzysztof Narkowicz, "Automatic Exposure", 2016.
+- **ACES's fitted curve** (`aces-narkowicz`, the Bistro's, D-084). Krzysztof Narkowicz, "ACES
+  Filmic Tone Mapping Curve", 2016, with the 0.6 pre-exposure Falcor's ToneMapper applies.
 - **Local exposure** (`shaders/local_exposure*.slang`, D-067, #275):
   - Frédo Durand, Julie Dorsey, "Fast Bilateral Filtering for the Display of High-Dynamic-Range
     Images", SIGGRAPH 2002: the base and detail layers, only the base's contrast reduced.
