@@ -1045,7 +1045,8 @@ pub struct ImpostorInstance {
     /// The instance's id in the scene, which offsets its fade's crossing as the culls do.
     pub id: u32,
     /// The crossing its meshes' ladder makes before their fade (`set_ladder`'s size on screen
-    /// and band), if one: its impostor waits for it to end.
+    /// and band), if one: while it still runs, the impostor's fade runs beside it on its own band
+    /// and the two part their pixels by a second noise (`ladder_fade_noise`, #363).
     pub ladder: Option<(f32, f32)>,
 }
 

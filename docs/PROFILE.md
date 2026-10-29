@@ -927,6 +927,19 @@ crosses. The village at 1600 × 900, DLAA, one run each:
 Without the ladder the far woods' cores are all drawn; with it the shells and the impostors take
 most of them, the cost the ladder was built to save.
 
+**The impostors' fade beside the ladder's crossing** (D-075, #363, 2026-10-29): the village at
+1600 × 900, DLAA, noon, still, 900 fixed steps, three runs each, the mean frame:
+
+| View | The frame | `geometry/meshlet pass 1` | `impostors/draw` |
+|---|---|---|---|
+| The default air view | 3.85 → 4.01 ms | 0.91 → 0.96 | 0.26 → 0.28 |
+| The main street (`-79.8,1.7,-272.0,-98.3,0`) | 5.08 → 5.14 ms | 0.78 → 0.77 | 0.15 → 0.20 |
+
+The two passes account for +0.07 ms from the air; the rest of the frame's difference is run to run
+(DLSS and bloom moved by 0.01–0.03 ms). The cut-outs' raster reads the fade's share from the
+instance's ladder value: measured per pixel instead, the air view's pass 1 cost 0.11 ms more. The
+alternative, each fade moved below its crossing, drew the shells farther: 4.10–4.13 and 5.20 ms.
+
 **Grass near the camera** (#300, D-075, 2026-10-22; city-blocks' `--grass`, 50 m, first
 20 m): the village at 1600 × 900, DLAA, the green's view (`12.9,1.7,-226.0,176.1,-5`)
 over the park's grass, its map 1.44 M cells and 3.95 M blades (5.58 M since the densities rose

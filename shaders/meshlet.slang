@@ -934,15 +934,36 @@ static const uint LADDER_STEPS = 3;
 
 // An instance's crossing this frame, as the instance culls write it (`Frame::ladder`): `2 k + t`,
 // crossing `t` (0 to 1) from the mesh `k` steps down its ladder to the next. Twice the step, so
-// the end of one crossing (t = 1) is not the start of the next.
+// the end of one crossing (t = 1) is not the start of the next. Where the next mesh's fade has
+// begun as well (`ladder_fade_after`, #363), its share in LADDER_FADE_STEPS-ths is added times
+// LADDER_FADE_UNIT, measured once by the cull for the pixels to read.
+static const float LADDER_FADE_UNIT = 8.0;
+static const float LADDER_FADE_STEPS = 1023.0;
+
+float ladder_rest(float value)
+{
+    return value - LADDER_FADE_UNIT * floor(value / LADDER_FADE_UNIT);
+}
+
 uint ladder_pair(float value)
 {
-    return uint(value * 0.5);
+    return uint(ladder_rest(value) * 0.5);
 }
 
 float ladder_t(float value)
 {
-    return value - 2.0 * float(ladder_pair(value));
+    float rest = ladder_rest(value);
+    return rest - 2.0 * float(uint(rest * 0.5));
+}
+
+bool ladder_fading(float value)
+{
+    return value >= LADDER_FADE_UNIT;
+}
+
+float ladder_fade_share(float value)
+{
+    return floor(value / LADDER_FADE_UNIT) / LADDER_FADE_STEPS;
 }
 
 // The mesh `steps` steps down `mesh`'s ladder.
@@ -986,11 +1007,27 @@ float hash_unit(uint n)
     return float(n >> 8) * (1.0 / 16777216.0);
 }
 
+// The projected size of `inst`'s sphere, output pixels across (the render's over
+// `texture_lod_scale`), as its ladder measures it. Each instance's size is taken up to 15 % off by
+// its id's hash, so a wood crosses tree by tree, not along a circle round the camera.
+float ladder_size(Frame* f, Instance inst)
+{
+    float dist = max(length(instance_center_relative(f, inst)), f[0].znear);
+    float k = f[0].p11 * 0.5 * f[0].viewport_height / f[0].texture_lod_scale;
+    return 2.0 * inst.radius * k / dist * (0.85 + 0.3 * hash_unit(inst.id));
+}
+
+// How far an instance `px` across has crossed from `mesh` to its next: `ladder_px` against the
+// size, linear over the band.
+float ladder_t_at(Mesh* mesh, float px)
+{
+    float band = max(mesh[0].ladder_band, 1e-3);
+    return saturate((1.0 + band - px / mesh[0].ladder_px) / (2.0 * band));
+}
+
 // How far `inst` has crossed to the next mesh on its mesh's ladder this frame: 0 its mesh alone
-// (or no ladder), 1 the next alone, between both, by the projected size of its sphere in output
-// pixels (the render's over `texture_lod_scale`) against the mesh's `ladder_px`, linear over the
-// band. Each instance's size is taken up to 15 % off by its id's hash, so a wood crosses tree by
-// tree, not along a circle round the camera.
+// (or no ladder), 1 the next alone, between both, by its size on screen (`ladder_size`) against
+// the mesh's `ladder_px`.
 //
 // The ladder is followed down (#332): past its crossing, an instance whose next mesh has a
 // ladder of its own measures it against that one's size and band, up to LADDER_STEPS crossings.
@@ -1000,14 +1037,11 @@ float ladder_crossing(Frame* f, Instance inst)
     uint m = inst.mesh;
     if (f[0].ladder == nullptr || f[0].meshes[m].ladder_next == LADDER_NONE)
         return 0.0;
-    float dist = max(length(instance_center_relative(f, inst)), f[0].znear);
-    float k = f[0].p11 * 0.5 * f[0].viewport_height / f[0].texture_lod_scale;
-    float px = 2.0 * inst.radius * k / dist * (0.85 + 0.3 * hash_unit(inst.id));
+    float px = ladder_size(f, inst);
     for (uint step = 0; step < LADDER_STEPS; step++)
     {
         Mesh* mesh = f[0].meshes + m;
-        float band = max(mesh[0].ladder_band, 1e-3);
-        float t = saturate((1.0 + band - px / mesh[0].ladder_px) / (2.0 * band));
+        float t = ladder_t_at(mesh, px);
         uint next = mesh[0].ladder_next;
         bool on = t >= 1.0 && next != LADDER_VANISH && step + 1 < LADDER_STEPS
             && f[0].meshes[next].ladder_next != LADDER_NONE;
@@ -1018,13 +1052,30 @@ float ladder_crossing(Frame* f, Instance inst)
     return 0.0;
 }
 
-// Whether the clusters of instance `instance` are crossing this frame (written by its cull).
+// While `inst` crosses (`value`, `ladder_crossing`) to a mesh that fades in turn (`set_fade`: a
+// plant's shells into its impostor, D-075 step 4), how far that fade has gone, on its own band.
+// The two bands overlap where the crossing ends under 1.67 times the fade's size (the village's
+// trees, their lumps few across): taken one after the other, the fade would jump at the
+// crossing's end to where it stood by then (#363). 0 where the next mesh does not fade.
+float ladder_fade_after(Frame* f, Instance inst, float value)
+{
+    if (f[0].ladder == nullptr)
+        return 0.0;
+    uint next = f[0].meshes[ladder_step(f, inst.mesh, ladder_pair(value))].ladder_next;
+    if (next == LADDER_NONE || next == LADDER_VANISH || f[0].meshes[next].ladder_next != LADDER_VANISH)
+        return 0.0;
+    return ladder_t_at(f[0].meshes + next, ladder_size(f, inst));
+}
+
+// Whether the clusters of instance `instance` are crossing this frame (written by its cull): its
+// ladder, or the fade after it.
 bool ladder_crossing_now(Frame* f, uint instance, Instance inst)
 {
     if (f[0].ladder == nullptr || f[0].meshes[inst.mesh].ladder_next == LADDER_NONE)
         return false;
-    float t = ladder_t(f[0].ladder[instance]);
-    return t > 0.0 && t < 1.0;
+    float value = f[0].ladder[instance];
+    float t = ladder_t(value);
+    return (t > 0.0 && t < 1.0) || ladder_fading(value);
 }
 
 // An instance's rotation and scale and its origin relative to the camera, built once where
@@ -2055,12 +2106,18 @@ void append_instance_work(Frame* f, uint64_t* status, uint ticket, uint groups, 
         Mesh* mesh = f[0].meshes + inst[0].mesh;
         float dist = length(instance_center_relative(f, inst[0]));
         float value = ladder_crossing(f, inst[0]);
+        // The fade after its crossing (#363): an instance its impostor has taken whole draws
+        // nothing.
+        float fade = ladder_fade_after(f, inst[0], value);
+        if (fade > 0.0)
+            value += LADDER_FADE_UNIT * max(round(fade * LADDER_FADE_STEPS), 1.0);
         if (mesh[0].ladder_next != LADDER_NONE && f[0].ladder != nullptr)
             f[0].ladder[instance_index] = value;
         // The pair it crosses: its own mesh and the next, or further down its ladder (#332).
         float t = ladder_t(value);
+        bool taken = fade >= 1.0;
         Mesh* first_mesh = f[0].meshes + ladder_step(f, inst[0].mesh, ladder_pair(value));
-        if (t < 1.0)
+        if (t < 1.0 && !taken)
         {
             own_roots = instance_roots(f, first_mesh, inst[0].scale, dist);
             own_count = own_roots > 0 ? 0u : instance_items(f, instance_index, 0, false, 0u);
@@ -2068,7 +2125,7 @@ void append_instance_work(Frame* f, uint64_t* status, uint ticket, uint groups, 
         count = own_count;
         roots = own_roots;
         // A ladder to nothing (LADDER_VANISH, #343): past its crossing, no work.
-        if (t > 0.0 && first_mesh[0].ladder_next != LADDER_VANISH)
+        if (t > 0.0 && !taken && first_mesh[0].ladder_next != LADDER_VANISH)
         {
             Mesh* next = f[0].meshes + first_mesh[0].ladder_next;
             uint next_roots = instance_roots(f, next, inst[0].scale, dist);
@@ -3183,10 +3240,15 @@ bool cutout_kept(Frame* f, uint id, float2 uv, bool front, float2 ground, float2
     // its own mesh's run.
     if (ladder_crossing_now(f, record.x, inst))
     {
+        float value = f[0].ladder[record.x];
         Mesh* mesh = f[0].meshes + ladder_first(f, record.x, inst);
         uint cluster = record.y & MESHLET_INDEX_MASK;
         bool next = cluster - mesh[0].meshlet_offset >= mesh[0].meshlet_count;
-        if (next != (spatio_temporal_noise(pixel, f[0].noise_frame).x < ladder_t(f[0].ladder[record.x])))
+        if (next != (spatio_temporal_noise(pixel, f[0].noise_frame).x < ladder_t(value)))
+            return false;
+        // The fade after the crossing takes its share of both by a noise of its own; the
+        // impostor keeps the complement (`impostor_draw.slang`, #363).
+        if (ladder_fading(value) && ladder_fade_noise(pixel, f[0].noise_frame) < ladder_fade_share(value))
             return false;
     }
     Material mat = f[0].materials[inst.material + triangle_section(m, id & ((1u << VISIBILITY_TRIANGLE_BITS) - 1u))];

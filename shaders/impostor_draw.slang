@@ -111,6 +111,7 @@ struct Varyings
     nointerpolation float3 centre : CENTRE; // the baked sphere's middle from the camera
     nointerpolation uint instance : INSTANCE;
     nointerpolation float crossing : CROSSING;
+    nointerpolation uint overlapping : OVERLAPPING; // 1: its ladder's crossing still runs (#363)
     nointerpolation float3 shade_up : SHADE_UP;     // the probes' sky light over the open sky's
     nointerpolation float3 shade_down : SHADE_DOWN; // for normals up and down (1: no probes)
 };
@@ -151,11 +152,12 @@ Varyings impostor_vertex_main(uint vertex : SV_VertexID, uint instance : SV_Inst
     float3 rel = measured + imp.middle;
     float3 eye = -rel / max(length(rel), 1e-6);
     // Its meshes' fade as the culls measure it (`ladder_crossing`): the impostor shows where they
-    // no longer do, once the crossing before it (the cards to the shells) is done.
+    // no longer do. While the crossing before it (the cards to the shells) still runs, the fade
+    // runs on its own band beside it and the pixels part by a noise of their own
+    // (`ladder_fade_after` in meshlet.slang): the bands overlap without a jump (#363).
     float px = 2.0 * imp.cull_radius * f[0].lod_k / dist * (0.85 + 0.3 * hash_unit(imp.id));
     float t = crossed(px, kind.fade_px, kind.fade_band);
-    if (imp.ladder_px > 0.0 && crossed(px, imp.ladder_px, imp.ladder_band) < 1.0)
-        t = 0.0;
+    bool overlapping = imp.ladder_px > 0.0 && crossed(px, imp.ladder_px, imp.ladder_band) < 1.0;
     float3 right;
     float3 up;
     frame_axes(eye, right, up);
@@ -175,6 +177,7 @@ Varyings impostor_vertex_main(uint vertex : SV_VertexID, uint instance : SV_Inst
     o.centre = rel;
     o.instance = instance;
     o.crossing = t;
+    o.overlapping = overlapping ? 1u : 0u;
     // The probes' sky light, as the resolve lights the cards and shells, for the whole tree: their
     // irradiance over the open sky's for a normal up and one down, at its sphere's front (an
     // outside point, `probe_irradiance_hit`), the same at each of its six vertices. A far crown is
@@ -331,7 +334,8 @@ Shaded shade(Varyings v)
     float3 local = rotate(float4(-imp.rotation.xyz, imp.rotation.w),
         v.ray * (dot(v.centre, e) / dot(v.ray, e)) - v.centre) / imp.scale;
     Views w = views_of(kind, v.eye, local);
-    if (noise.x >= v.crossing)
+    float parting = v.overlapping != 0 ? ladder_fade_noise(pixel, f[0].noise_frame) : noise.x;
+    if (parting >= v.crossing)
         discard;
     float coverages[3];
     float4 albedo = blended_albedo(kind, w, coverages);

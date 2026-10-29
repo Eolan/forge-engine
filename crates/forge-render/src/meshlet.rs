@@ -1822,7 +1822,9 @@ impl MeshletSceneBuilder {
     /// crossing an instance measures itself against `next`'s size and band, crossing to the mesh
     /// after it. Give the far end first (`set_ladder(stand_in, far)`, then
     /// `set_ladder(tree, stand_in)`), so each sphere holds the whole ladder below it; each
-    /// step's `size_px` smaller than the one above.
+    /// step's `size_px` smaller than the one above. A `next` that fades ([`Self::set_fade`])
+    /// fades on its own band, beside this crossing where the two bands meet (a plant's shells
+    /// into its impostor, #363).
     pub fn set_ladder(&mut self, mesh: MeshId, next: MeshId, size_px: f32, band: f32) {
         assert!(mesh != next, "a mesh is not its own next step");
         let near = self.meshes[mesh.0 as usize];

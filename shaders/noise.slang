@@ -48,3 +48,12 @@ public float interleaved_gradient_noise(uint2 pixel, uint frame, float2 offset)
     float2 p = float2(pixel) + offset + 5.588238 * float(frame % 64u);
     return frac(52.9829189 * frac(dot(p, float2(0.06711056, 0.00583715))));
 }
+
+// The noise a plant's fade into its impostor parts their pixels by while its ladder's crossing
+// still runs (#363, `ladder_fade_after` in meshlet.slang, `impostor_draw.slang`): apart from
+// `spatio_temporal_noise`'s two values, which part the crossing's meshes and the impostor's
+// thin edges.
+public float ladder_fade_noise(uint2 pixel, uint frame)
+{
+    return interleaved_gradient_noise(pixel, frame, float2(29.0, 17.0));
+}
