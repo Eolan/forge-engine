@@ -988,7 +988,7 @@ mod tests {
             (Kind::DoorSwing, 0),
             (Kind::OpeningMisfit, 0),
             (Kind::DoorBlocked, 0),
-            (Kind::SharpWallCorner, 2),
+            (Kind::SharpWallCorner, 1),
         ];
         // The other sizes' own, where they had more when they came in (#308: at 700 to 900 m,
         // 2026-10-22, after the stairs, the rows' corners, the backs, the walls' corners and the
@@ -1006,6 +1006,8 @@ mod tests {
         // villages, where lots run aslant at the streets' bends; cut where two walls alone meet
         // (`walls::chamfer_sharp_corners`), 2 and 4 to 6 are left, a hedge or a third wall at
         // their points; the free ends at 400, 800 and 900 m went with them.
+        // The leftover ground's slivers half a metre to a metre wide, run out along a neighbour's
+        // edge, go to that neighbour (`village::sliver_along`): the 600 m village's V gone, 1 left.
         let since: [(f64, Kind, usize); 9] = [
             (700.0, Kind::FreeWallEnd, 3),
             (800.0, Kind::UnlitRoom, 1),

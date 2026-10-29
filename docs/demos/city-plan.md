@@ -733,7 +733,13 @@ anomalies down to 11 (20 → 3, 33 → 3, 24 → 5).
   its two corners at 90° plus half the V's: 600 m 3 → 2, and the free ends at 400, 800 and 900 m
   went with them. The owner's V keeps its point: a third wall ends there, along a spike of lot 52's
   outline (a sliver under a metre wide between lots 50 and 53, from the ground merged into its
-  neighbours on 2026-10-24), which the lots' own fix has to take out.
+  neighbours on 2026-10-24), which the lots' own fix has to take out. That fix: a merged lot's
+  corner under 15° whose sides part by half a metre to a metre where the shorter ends, its longer
+  side along a neighbour's edge, gives that sliver to the neighbour (`village::sliver_along`;
+  thinner, its new side would lose its wall in the joints, as one of 0.39 m did at 700 m). At
+  600 m lot 50 takes lot 52's 0.6 m sliver and the V goes (sharp corners 2 → 1); the other sizes
+  are unchanged. The garden plants are laid again round it, so a shrub outside the map check's
+  room window moved.
 
 The 600 m village changed in two places, accepted in the map check: a corner house that stopped a
 quarter metre short of its lot's corner (a walled slit) reaches it, its rooms laid again (the

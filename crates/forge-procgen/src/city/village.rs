@@ -795,63 +795,28 @@ fn absorb_leftovers(
         else {
             continue;
         };
-        let lot = &out[k];
-        // The piece's corners on the lot's outline set on it exactly (the booleans round to
-        // their grid): a millimetre apart, the union kept the old edge as a slit.
-        let snapped: Vec<DVec2> = piece
-            .iter()
-            .map(|&p| {
-                let m = lot.len();
-                (0..m)
-                    .map(|i| {
-                        let (a, b) = (lot[i], lot[(i + 1) % m]);
-                        if a.distance(p) < 0.05 {
-                            a
-                        } else {
-                            a + (b - a) * geom::closest_on_segment(p, a, b)
-                        }
-                    })
-                    .filter(|q| q.distance(p) < 0.05)
-                    .min_by(|x, y| x.distance(p).total_cmp(&y.distance(p)))
-                    .unwrap_or(p)
-            })
-            .collect();
-        let Some(grown) = super::ground::union_of(lot, &snapped)
-            .into_iter()
-            .filter_map(|s| s.into_iter().next())
-            .max_by(|a, b| {
-                geom::signed_area(a)
-                    .abs()
-                    .total_cmp(&geom::signed_area(b).abs())
-            })
-        else {
+        let Some(mut grown) = grown_by(&out[k], piece) else {
             continue;
         };
-        let mut grown = despike(&grown);
-        if geom::signed_area(&grown) < 0.0 {
-            grown.reverse();
+        // A spike of the piece left on it, run out along another lot's edge, goes to that lot:
+        // kept, it ended between the two lots' walls in a sliver under a metre wide, and with a
+        // third wall there the walls' sharp corner could not be cut (the owner's V, #363).
+        for _ in 0..grown.len() {
+            let Some((tip, j, sliver, foot)) = sliver_along(&grown, &out, k) else {
+                break;
+            };
+            let Some(other) = grown_by(&out[j], &sliver) else {
+                break;
+            };
+            out[j] = other;
+            let m = grown.len();
+            let (a, c) = (grown[(tip + m - 1) % m], grown[(tip + 1) % m]);
+            if foot.distance(a) < 0.05 || foot.distance(c) < 0.05 {
+                grown.remove(tip);
+            } else {
+                grown[tip] = foot;
+            }
         }
-        // Taken in only where the union holds it: apart from the lot, the largest shape was the
-        // lot alone, and the piece, counted given, belonged to no lot (a review, 2026-10-24).
-        if geom::signed_area(&grown)
-            < geom::signed_area(lot).abs() + 0.5 * geom::signed_area(&snapped).abs()
-        {
-            continue;
-        }
-        // Its street side first: the edge along the old front holding its middle.
-        let (front, way) = (
-            (lot[0] + lot[1]) * 0.5,
-            (lot[1] - lot[0]).normalize_or_zero(),
-        );
-        let m = grown.len();
-        let Some(start) = (0..m).find(|&i| {
-            let (a, b) = (grown[i], grown[(i + 1) % m]);
-            geom::distance_to_segment(front, a, b) < 0.05
-                && (b - a).normalize_or_zero().dot(way) > 0.99
-        }) else {
-            continue;
-        };
-        grown.rotate_left(start);
         out[k] = grown;
         if let Some(i) = *lot_of {
             given[i] = true;
@@ -864,6 +829,139 @@ fn absorb_leftovers(
         .map(|(e, _)| e.clone())
         .collect();
     (out, left)
+}
+
+/// `lot` grown by `piece` (`absorb_leftovers`), without spikes, anticlockwise, its street side
+/// first; `None` where the union does not hold the piece.
+fn grown_by(lot: &[DVec2], piece: &[DVec2]) -> Option<Vec<DVec2>> {
+    // The piece's corners on the lot's outline set on it exactly (the booleans round to their
+    // grid): a millimetre apart, the union kept the old edge as a slit.
+    let snapped: Vec<DVec2> = piece
+        .iter()
+        .map(|&p| {
+            let m = lot.len();
+            (0..m)
+                .map(|i| {
+                    let (a, b) = (lot[i], lot[(i + 1) % m]);
+                    if a.distance(p) < 0.05 {
+                        a
+                    } else {
+                        a + (b - a) * geom::closest_on_segment(p, a, b)
+                    }
+                })
+                .filter(|q| q.distance(p) < 0.05)
+                .min_by(|x, y| x.distance(p).total_cmp(&y.distance(p)))
+                .unwrap_or(p)
+        })
+        .collect();
+    let grown = super::ground::union_of(lot, &snapped)
+        .into_iter()
+        .filter_map(|s| s.into_iter().next())
+        .max_by(|a, b| {
+            geom::signed_area(a)
+                .abs()
+                .total_cmp(&geom::signed_area(b).abs())
+        })?;
+    let mut grown = despike(&grown);
+    if geom::signed_area(&grown) < 0.0 {
+        grown.reverse();
+    }
+    // Taken in only where the union holds it: apart from the lot, the largest shape was the lot
+    // alone, and the piece, counted given, belonged to no lot (a review, 2026-10-24).
+    if geom::signed_area(&grown)
+        < geom::signed_area(lot).abs() + 0.5 * geom::signed_area(&snapped).abs()
+    {
+        return None;
+    }
+    // Its street side first: the edge along the old front holding its middle.
+    let (front, way) = (
+        (lot[0] + lot[1]) * 0.5,
+        (lot[1] - lot[0]).normalize_or_zero(),
+    );
+    let m = grown.len();
+    let start = (0..m).find(|&i| {
+        let (a, b) = (grown[i], grown[(i + 1) % m]);
+        geom::distance_to_segment(front, a, b) < 0.05 && (b - a).normalize_or_zero().dot(way) > 0.99
+    })?;
+    grown.rotate_left(start);
+    Some(grown)
+}
+
+/// The sharpest a corner of a lot may be before it counts as a sliver's tip, degrees.
+const SLIVER_TIP: f64 = 15.0;
+
+/// The widest a sliver may be, metres: its shorter side's far end from its longer side.
+const SLIVER_WIDTH: f64 = 1.0;
+
+/// The narrowest a sliver handed over may be, metres: its new side, under a wall's thickness
+/// ([`walls::THICKNESS`]) and a little, loses its wall in the joints at its ends, and the walls
+/// beside it end in the air (700 m: one of 0.39 m left two).
+const SLIVER_LEAST: f64 = 0.5;
+
+/// A sliver on `lot` (`lots[k]`, its zero-width spikes already gone): a corner under SLIVER_TIP
+/// whose sides part by under SLIVER_WIDTH where the shorter ends, its longer side along another
+/// lot's outline (or else its shorter). Its tip's index, that lot's index, the triangle (the
+/// shorter side's end, the tip and the foot of that end on the longer side, set on that lot's
+/// corner within half a metre, anticlockwise) and the foot, which takes the tip's place.
+fn sliver_along(
+    lot: &[DVec2],
+    lots: &[Vec<DVec2>],
+    k: usize,
+) -> Option<(usize, usize, Vec<DVec2>, DVec2)> {
+    let n = lot.len();
+    if n < 4 {
+        return None;
+    }
+    let along = |ring: &[DVec2], p: DVec2, q: DVec2| {
+        let m = ring.len();
+        (1..8)
+            .map(|s| p + (q - p) * (s as f64 / 8.0))
+            .filter(|&x| {
+                (0..m).any(|i| geom::distance_to_segment(x, ring[i], ring[(i + 1) % m]) < 0.05)
+            })
+            .count()
+            >= 6
+    };
+    (0..n).find_map(|i| {
+        let (a, b, c) = (lot[(i + n - 1) % n], lot[i], lot[(i + 1) % n]);
+        // Never the street side's ends: the lot keeps its front first.
+        if i < 2 || (a - b).angle_to(c - b).abs().to_degrees() >= SLIVER_TIP {
+            return None;
+        }
+        let (near, far) = if a.distance(b) <= c.distance(b) {
+            (a, c)
+        } else {
+            (c, a)
+        };
+        let way = (far - b).normalize_or_zero();
+        let foot = b + way * (near - b).dot(way);
+        if near.distance(foot) >= SLIVER_WIDTH {
+            return None;
+        }
+        let j = (0..lots.len())
+            .filter(|&j| j != k)
+            .find(|&j| along(&lots[j], b, foot))
+            .or_else(|| {
+                (0..lots.len())
+                    .filter(|&j| j != k)
+                    .find(|&j| along(&lots[j], b, near))
+            })?;
+        let foot = lots[j]
+            .iter()
+            .copied()
+            .filter(|&q| geom::distance_to_segment(q, b, far) < 0.05 && q.distance(foot) < 0.5)
+            .min_by(|x, y| x.distance(foot).total_cmp(&y.distance(foot)))
+            .unwrap_or(foot);
+        // Its new side (the shorter side's end to the foot) kept for its wall.
+        if near.distance(foot) < SLIVER_LEAST {
+            return None;
+        }
+        let mut sliver = vec![near, b, foot];
+        if geom::signed_area(&sliver) < 0.0 {
+            sliver.reverse();
+        }
+        Some((i, j, sliver, foot))
+    })
 }
 
 /// House `h` of block `b` as a mass on its lot, appended to the plan's lots: its storeys from
@@ -1301,5 +1399,39 @@ mod tests {
             super::super::map::write_village(&v, std::path::Path::new(&path), 0.25)
                 .expect("the drawing");
         }
+    }
+
+    /// A lot's spike run out along its neighbour's edge (#363, the owner's V at 600 m): a sliver
+    /// 0.6 m wide goes to the neighbour, its foot set on the neighbour's corner; one 0.3 m wide
+    /// would lose its new side's wall and stays, and one 1.2 m wide is no sliver.
+    #[test]
+    fn a_lots_sliver_goes_to_the_lot_it_runs_along() {
+        // The neighbour: a square whose top edge runs from (10, 10) back to (0, 10).
+        let square = vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(10.0, 0.0),
+            DVec2::new(10.0, 10.0),
+            DVec2::new(0.0, 10.0),
+        ];
+        // The lot above it, its spike's longer side on the square's top edge out to (0, 10) and
+        // its shorter side back to `near`, `width` above that edge.
+        let lot = |width: f64| {
+            vec![
+                DVec2::new(10.0, 10.0),
+                DVec2::new(10.0, 20.0),
+                DVec2::new(1.0, 20.0),
+                DVec2::new(9.5, 10.0 + width),
+                DVec2::new(0.0, 10.0),
+            ]
+        };
+        let lots = |width| vec![square.clone(), lot(width)];
+        let found = sliver_along(&lot(0.6), &lots(0.6), 1);
+        let (tip, j, sliver, foot) = found.expect("a sliver");
+        assert_eq!((tip, j), (4, 0));
+        assert!(foot.distance(DVec2::new(9.5, 10.0)) < 1e-9, "{foot}");
+        assert!(geom::signed_area(&sliver) > 0.0);
+        assert!((geom::signed_area(&sliver) - 0.5 * 9.5 * 0.6).abs() < 1e-9);
+        assert!(sliver_along(&lot(0.3), &lots(0.3), 1).is_none());
+        assert!(sliver_along(&lot(1.2), &lots(1.2), 1).is_none());
     }
 }
