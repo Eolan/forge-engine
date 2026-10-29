@@ -9,7 +9,7 @@ You walked the village this morning and sent eight findings. Six are fixed and p
 | Pops walking in at noon | Shells and impostors lighter than the cards they hand over to, and every tree's impostor leaving in one frame | The cut-out fix, the shells' tone refitted (898ccc58), and the impostors' fade beside the ladder (section 9) |
 | Windows at midnight change too much | A far lit room lost its lamp's bounce past 20 m, and everything past 50 m | Far rooms take their lamps' light (c4315ac3) |
 | Lighting in three rooms | Furniture cut the room grids' probes' view into patches and tinted the walls orange | Furniture out of the probes' rays (fd497bc2) |
-| Walls' V | A spiked lot outline from the leftover-ground merge | Sharp corners counted and the simple ones cut (c1e55303); **yours needs the lots' fix: your call** |
+| Walls' V | A spiked lot outline from the leftover-ground merge | Sharp corners counted and the simple ones cut (c1e55303); **yours: the lots' fix is ready, your go** |
 | A face's odd triangle | The sunlit part of the wall | Nothing changed: **your call** |
 | The window issue (walls view) | Probably the lit room's floor seen steeply from above, a bright band between the window's head and sill | **What looks wrong to you?** (section 7) |
 
@@ -88,7 +88,14 @@ Your three views and the floor towards the window, before (left) and after (righ
 - **New check:** sharp corners now count as an anomaly (`SharpWallCorner`, under 70°). There were 3 at 600 m, and 1 to 8 in the other sizes.
 - **The simple ones:** where only two walls meet, a short wall now cuts the corner off. 600 m goes from 3 to 2, and the free wall ends at 400, 800 and 900 m went with them.
 - **Yours keeps its point:** a third wall ends there, along a spike in lot 52's outline. That's a sliver under a metre wide between lots 50 and 53, from the merge of leftover ground into neighbouring lots on 24 October.
-- **The proper fix:** take spikes out of merged lots. That reshapes lots 50–53 on your 600 m map, so it's your call. Should I do it?
+- **The proper fix, ready for your go:** take the slivers out of merged lots. It reshapes lots 50 and 52 of your 600 m map, so it's your call. It's built and checked on a local branch, `owner-go/363-lot-slivers` (84806ed5), not pushed.
+  - **How it works:** after a lot takes in leftover ground, a corner under 15° whose sides part by half a metre to a metre, lying along a neighbour's edge, goes to that neighbour.
+  - **At 600 m:** lot 50 takes lot 52's 0.6 m sliver, the third wall goes, and so does the V (sharp wall corners 2 → 1).
+  - **Other sizes:** 400, 500, 700, 800 and 900 m are unchanged.
+  - **A side effect:** the garden plants are laid again around it, so a shrub outside the map check's room window moved.
+  - **Say yes and I push it.** Your view at noon, now (left) and with the fix (right):
+
+![The V now and with the fix](walls-v-fix-ready.png)
 
 ## 6. The face's triangle, for your decision
 
