@@ -7956,6 +7956,11 @@ before there is an AMD card to test it on (#67).
   `fsr-sdk/Kits/FidelityFX/signedbin` (the SDK, git-ignored). Like Streamline's, they are expected on the player's computer and never
   published: nothing of AMD's FSR SDK, its ML upscaler included, enters the repository (the
   owner, 2026-10-29; `CREDITS.md`).
+- **Forge's FSR 3.1 stays in the repository** (the owner, 2026-10-29: "follow your
+  recommendations"). Its 21 shader headers (`shaders/third-party/fidelityfx/`, FidelityFX SDK
+  1.1.4: FSR 3.1, FSR 1, SPD) are AMD's open source under MIT, which allows publishing and
+  redistributing them, and they are the anti-aliasing of every player without DLSS or AMD's
+  DLLs. The rule covers what may not be redistributed: the SDK's signed DLLs and FSR 4's model.
 
 **Measured (2026-10-29, RCAS on in both):**
 - **The 5070 Ti** (`--fsr-amd on`, the city's frame 120 at 1600 × 900): `temporal/FSR (AMD)`
