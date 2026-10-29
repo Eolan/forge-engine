@@ -2288,9 +2288,9 @@ path-traced reference (step 2).
 - **"Specular":** roughness in green, metalness in blue. Its red, which the archive's readme
   calls occlusion, is 0 throughout; read as occlusion, it blacked out every shadow, so it is
   left out.
-- **Normal maps:** BC5, DirectX. Their green is turned over on the blocks at load. The shaders
-  rebuild z where the blue they sample is 0, which no three-channel map has
-  (`normal_texel`).
+- **Normal maps:** BC5, DirectX. Their green is turned over on the blocks at load. They are
+  sampled through a view that reads their missing blue as one, (x, y, 1) normalised. A shader
+  that rebuilt z moved every asteroid capture: the resolve near its code size limit (#355).
 - **Emission:** sRGB, 1,000 cd/m² at full colour for now. The night reference will set it.
 - **Factors:** each factor a map carries is 1. The exporter, which kept no images, had written
   its own defaults (roughness 0.553 everywhere).

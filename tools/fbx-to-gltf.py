@@ -6,13 +6,15 @@
 # cameras; no lights, Forge lights the scene itself, and no images) and OUT.textures.json,
 # which names each material's texture files by their role (base colour, normal, specular,
 # emissive), relative to the FBX's folder: Forge reads them as they are (block-compressed DDS
-# with their mips) instead of the PNGs Blender would write. When the scene has an animated
-# camera, OUT.camera.json holds its path, one [x, y, z, qx, qy, qz, qw] a frame in glTF's frame
-# (+Y up, metres).
+# with their mips) instead of the PNGs Blender would write. OUT.lights.json holds the lights
+# the glTF leaves out (a reference matches their sun). When the scene has an animated camera,
+# OUT.camera.json holds its path, one [x, y, z, qx, qy, qz, qw] a frame in glTF's frame (+Y
+# up, metres).
 #
 # Keep OUT out of a folder named glTF under assets/external/: the external models' test loads
 # every model there (crates/forge-geom/tests/external_models.rs).
 import bpy, json, os, sys
+from mathutils import Vector
 
 argv = sys.argv[sys.argv.index("--") + 1:]
 src, out = os.path.abspath(argv[0]), os.path.abspath(argv[1])
@@ -59,6 +61,20 @@ if cams:
     camera = {"name": cam.name, "fps": scene.render.fps, "lens_mm": cam.data.lens,
               "sensor_mm": cam.data.sensor_width, "frames": frames}
 
+# The scene's lights, which the glTF leaves out: where its authors put the sun and how bright,
+# for a reference to match. Each light's type, colour, Blender energy (W/m² for a sun, W
+# otherwise), position and the direction it shines (its local −Z), in glTF's frame.
+lights = []
+for o in bpy.data.objects:
+    if o.type != "LIGHT":
+        continue
+    m = o.matrix_world
+    t = m.translation
+    d = (m.to_3x3() @ Vector((0.0, 0.0, -1.0))).normalized()
+    lights.append({"name": o.name, "type": o.data.type, "color": list(o.data.color),
+                   "energy": o.data.energy, "position": [t.x, t.z, -t.y],
+                   "direction": [d.x, d.z, -d.y]})
+
 bpy.ops.export_scene.gltf(
     filepath=out,
     export_format="GLTF_SEPARATE",
@@ -75,4 +91,6 @@ with open(stem + ".textures.json", "w") as f:
 if camera:
     with open(stem + ".camera.json", "w") as f:
         json.dump(camera, f)
-print(f"fbx-to-gltf: {len(textures)} materials, camera {'yes' if camera else 'no'} -> {out}")
+with open(stem + ".lights.json", "w") as f:
+    json.dump(lights, f, indent=1)
+print(f"fbx-to-gltf: {len(textures)} materials, {len(lights)} lights, camera {'yes' if camera else 'no'} -> {out}")

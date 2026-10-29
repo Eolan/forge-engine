@@ -227,6 +227,31 @@ impl Image {
     pub fn mip_view(&self, level: u32) -> vk::ImageView {
         self.mip_views[level as usize]
     }
+    /// The colour image with its view over every level remade to read its components through
+    /// `components`: what a sampler sees of it (a two-channel normal map's missing blue read as
+    /// one, D-083). Its one-level views keep its components as stored. Before it is registered
+    /// or used.
+    pub fn with_view_components(mut self, components: vk::ComponentMapping) -> Result<Self> {
+        let view_info = vk::ImageViewCreateInfo::default()
+            .image(self.raw)
+            .view_type(vk::ImageViewType::TYPE_2D)
+            .format(self.format)
+            .components(components)
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: self.mip_views.len() as u32,
+                base_array_layer: 0,
+                layer_count: 1,
+            });
+        // SAFETY: valid view info on a bound image; the old view is unused (nothing registered
+        // it yet, the caller's promise) and is destroyed once replaced.
+        let view = unsafe { self.device.raw().create_image_view(&view_info, None) }?;
+        // SAFETY: as above.
+        unsafe { self.device.raw().destroy_image_view(self.view, None) };
+        self.view = view;
+        Ok(self)
+    }
     /// Number of mip levels.
     pub fn mip_levels(&self) -> u32 {
         self.mip_views.len() as u32

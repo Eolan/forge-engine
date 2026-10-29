@@ -339,13 +339,26 @@ impl TextureSet {
 
     /// Adds a block-compressed texture [`upload_compressed`] uploaded, of `bytes` over its
     /// levels, with what the CPU knows of its alpha (the rays' opacity micromaps, #333), and
-    /// returns its id for a material row.
+    /// returns its id for a material row. A two-channel (BC5) normal map is sampled through a
+    /// view that reads its missing blue as one: (x, y, 1), which the shading normalises, near the
+    /// stored normal for the slopes maps hold, with no change to the shaders (the resolve stands
+    /// near the size where its ray queries against movers fail, #355).
     pub fn add_compressed(
         &mut self,
         image: Image,
         bytes: u64,
         texture: &CompressedTexture,
-    ) -> TextureId {
+    ) -> Result<TextureId> {
+        let image = if texture.format == crate::dds::BlockFormat::Bc5 {
+            image.with_view_components(vk::ComponentMapping {
+                r: vk::ComponentSwizzle::IDENTITY,
+                g: vk::ComponentSwizzle::IDENTITY,
+                b: vk::ComponentSwizzle::ONE,
+                a: vk::ComponentSwizzle::ONE,
+            })?
+        } else {
+            image
+        };
         let id = self.add_uploaded(image, bytes);
         if let Some(texels) = crate::dds::alpha_plane(texture) {
             self.alpha[id.0 as usize] = if texels.iter().all(|&a| a == 255) {
@@ -358,7 +371,7 @@ impl TextureSet {
                 }))
             };
         }
-        id
+        Ok(id)
     }
 
     /// Adds a texture [`upload_textures`] uploaded, of `bytes` over its levels, and returns

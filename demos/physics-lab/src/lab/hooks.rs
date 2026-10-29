@@ -227,6 +227,8 @@ impl Scenario for LabScenario {
                 LabScene::Space => Some(SPACE_SUN),
                 LabScene::TankBench => Some(BENCH_SUN),
                 LabScene::Room => Some(room::SUN),
+                // Its authors' sun, for comparisons with their renders (D-083).
+                LabScene::Bistro => super::bistro::sun(),
                 LabScene::Yard | LabScene::Materials => Some(yard::SUN),
                 _ => None,
             },

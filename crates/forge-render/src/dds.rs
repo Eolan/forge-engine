@@ -4,8 +4,8 @@
 //! formats are read; other formats are an error.
 //!
 //! A DirectX normal map points its green down the image: [`flip_green`] turns a BC5 map's green
-//! over on its blocks, so it reads as the glTF maps the shaders expect. A BC5 map has no blue;
-//! the shaders rebuild z where the blue they sample is 0 (`normal_texel` in `meshlet.slang`).
+//! over on its blocks, so it reads as the glTF maps the shaders expect. A BC5 map has no blue:
+//! it is sampled through a view reading blue as one (`TextureSet::add_compressed`).
 
 use std::fmt;
 
@@ -98,6 +98,10 @@ fn error(message: impl Into<String>) -> DdsError {
     DdsError(message.into())
 }
 
+/// The widest and highest a texture read may be, texels: what every Vulkan device samples
+/// (`maxImageDimension2D` is at least 16384 on the GPUs Forge runs on).
+const MAX_SIDE: u32 = 16384;
+
 /// The little-endian word at `at`.
 fn word(bytes: &[u8], at: usize) -> Result<u32, DdsError> {
     bytes
@@ -117,7 +121,13 @@ pub fn read_dds(name: &str, bytes: &[u8], srgb: bool) -> Result<CompressedTextur
     }
     let height = word(bytes, 12)?;
     let width = word(bytes, 16)?;
-    let mips = word(bytes, 28)?.max(1);
+    // The level count only where the header says it holds one (DDSD_MIPMAPCOUNT), and never more
+    // than the image has.
+    let mips = if word(bytes, 8)? & 0x2_0000 != 0 {
+        word(bytes, 28)?.max(1)
+    } else {
+        1
+    };
     let four_cc = bytes.get(84..88).ok_or_else(|| error("truncated header"))?;
     let (format, data) = match four_cc {
         b"DXT1" => (BlockFormat::Bc1, 128),
@@ -144,6 +154,12 @@ pub fn read_dds(name: &str, bytes: &[u8], srgb: bool) -> Result<CompressedTextur
     if width == 0 || height == 0 {
         return Err(error("an empty image"));
     }
+    if width > MAX_SIDE || height > MAX_SIDE {
+        return Err(error(format!(
+            "{width} × {height} is larger than {MAX_SIDE} a side"
+        )));
+    }
+    let mips = mips.min(32 - width.max(height).leading_zeros());
     let mut levels = Vec::with_capacity(mips as usize);
     let mut at = data;
     for level in 0..mips {
@@ -208,7 +224,7 @@ pub fn flip_green(texture: &mut CompressedTexture) {
         return;
     }
     for level in &mut texture.levels {
-        for block in level.chunks_exact_mut(16) {
+        for block in level.as_chunks_mut::<16>().0 {
             flip_channel(&mut block[8..16]);
         }
     }
@@ -253,12 +269,12 @@ pub fn alpha_plane(texture: &CompressedTexture) -> Option<Vec<u8>> {
     };
     match texture.format {
         BlockFormat::Bc3 => {
-            for (i, block) in level.chunks_exact(16).enumerate() {
+            for (i, block) in level.as_chunks::<16>().0.iter().enumerate() {
                 put(i % blocks_x, i / blocks_x, channel_values(&block[0..8]));
             }
         }
         BlockFormat::Bc1 => {
-            for (i, block) in level.chunks_exact(8).enumerate() {
+            for (i, block) in level.as_chunks::<8>().0.iter().enumerate() {
                 let c0 = u16::from_le_bytes([block[0], block[1]]);
                 let c1 = u16::from_le_bytes([block[2], block[3]]);
                 let indices = u32::from_le_bytes([block[4], block[5], block[6], block[7]]);
@@ -287,6 +303,8 @@ mod tests {
         let mut bytes = vec![0_u8; 128];
         bytes[0..4].copy_from_slice(b"DDS ");
         bytes[4..8].copy_from_slice(&124_u32.to_le_bytes());
+        // DDSD_MIPMAPCOUNT.
+        bytes[8..12].copy_from_slice(&0x2_0000_u32.to_le_bytes());
         bytes[12..16].copy_from_slice(&height.to_le_bytes());
         bytes[16..20].copy_from_slice(&width.to_le_bytes());
         bytes[28..32].copy_from_slice(&levels.to_le_bytes());
@@ -318,6 +336,18 @@ mod tests {
             (n.format, n.srgb, n.levels.len()),
             (BlockFormat::Bc5, false, 1)
         );
+        // Without DDSD_MIPMAPCOUNT, one level whatever the count says; a count past the
+        // image's own is cut to it.
+        let mut flagless = dds(b"DXT1", 16, 8, 5, 8);
+        flagless[8..12].fill(0);
+        assert_eq!(
+            read_dds("f", &flagless, false).expect("reads").levels.len(),
+            1
+        );
+        let mut huge = dds(b"DXT1", 16, 8, 5, 8);
+        huge[28..32].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(read_dds("h", &huge, false).expect("reads").levels.len(), 5);
+        assert!(read_dds("x", &dds(b"DXT1", 32768, 4, 1, 8), false).is_err());
         assert!(read_dds("x", &dds(b"DXT3", 8, 8, 1, 16), false).is_err());
         assert!(read_dds("x", b"PNG...", false).is_err());
     }

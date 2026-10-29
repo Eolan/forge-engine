@@ -30,6 +30,10 @@ const EMISSIVE_LUMINANCE: f32 = 1000.0;
 /// tested at a half as its own renderer does).
 const ALPHA_CUTOFF: f32 = 0.5;
 
+/// Materials made of single sheets, seen from both sides (the terrace sees the awnings from
+/// below).
+const SHEETS: [&str; 3] = ["Awning", "Banner", "Curtains"];
+
 /// The converted exterior's folder, and the archive's (the maps' paths are relative to it).
 fn folders() -> (PathBuf, PathBuf) {
     let root =
@@ -44,6 +48,13 @@ struct Roles {
     specular: Option<String>,
     normal: Option<String>,
     emissive: Option<String>,
+}
+
+/// A light the converter found (`BistroExterior.lights.json`).
+#[derive(Clone, Debug, serde::Deserialize)]
+struct Light {
+    r#type: String,
+    direction: [f32; 3],
 }
 
 /// The FBX's camera path: one `[x, y, z, qx, qy, qz, qw]` a frame, in glTF's frame (+Y up) with
@@ -75,6 +86,8 @@ pub(super) struct Bistro {
     pub props: Vec<&'static str>,
     roles: HashMap<String, Roles>,
     pub camera: Option<CameraPath>,
+    /// Towards its sun, as its authors set it (`BistroExterior.lights.json`).
+    pub sun: Option<Vec3>,
 }
 
 /// The exterior, read once; `None` (logged) where the converted files are missing.
@@ -122,6 +135,12 @@ fn read() -> Result<Bistro> {
             .context("BistroExterior.textures.json")?,
     )
     .context("BistroExterior.textures.json")?;
+    // The FBX's one sun: the direction it shines, turned round.
+    let sun = std::fs::read(converted.join("BistroExterior.lights.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Vec<Light>>(&bytes).ok())
+        .and_then(|lights| lights.into_iter().find(|l| l.r#type == "SUN"))
+        .map(|l| -Vec3::from(l.direction).normalize());
     let camera = std::fs::read(converted.join("BistroExterior.camera.json"))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<CameraPath>(&bytes).ok());
@@ -145,6 +164,7 @@ fn read() -> Result<Bistro> {
         props,
         roles,
         camera,
+        sun,
     })
 }
 
@@ -175,6 +195,12 @@ pub(super) fn build(first: usize) -> Vec<(usize, Mat4)> {
             .map(|k| (first + k, Mat4::IDENTITY))
             .collect()
     })
+}
+
+/// The scene's sun as its authors set it (towards it), where the converter found one: their
+/// renders' light, which a comparison with them matches.
+pub(crate) fn sun() -> Option<Vec3> {
+    bistro().and_then(|b| b.sun)
 }
 
 /// Where the camera starts: the path's first frame (the street before the café), else above
@@ -246,7 +272,7 @@ pub(super) fn rows(device: &Arc<forge_gpu::Device>, materials: &mut CityMaterial
     let mut bytes = 0_u64;
     for ((image, size), texture) in uploaded.into_iter().zip(&read) {
         bytes += size;
-        let id = materials.textures.add_compressed(image, size, texture);
+        let id = materials.textures.add_compressed(image, size, texture)?;
         let alpha = alpha_plane(texture).is_some_and(|a| a.iter().any(|&a| a < 255));
         cut_out.insert(texture.name.clone(), alpha);
         ids.insert(texture.name.clone(), id);
@@ -280,7 +306,15 @@ pub(super) fn rows(device: &Arc<forge_gpu::Device>, materials: &mut CityMaterial
                     ExternalMaps::default()
                 };
                 rows_made += 1;
-                (m.name.clone(), external_layer(m, maps))
+                // Both sides drawn where its authors named it so (".DoubleSided"), where it is cut
+                // out, and on the single sheets seen from below (the awnings, the banner, the
+                // curtains). The exporter wrote every material double-sided (Blender's default),
+                // which skipped the cone cull and the rays' back faces everywhere.
+                let mut m = m.clone();
+                m.double_sided = m.name.ends_with(".DoubleSided")
+                    || maps.alpha_cutoff.is_some()
+                    || SHEETS.iter().any(|s| m.name.contains(s));
+                (m.name.clone(), external_layer(&m, maps))
             })
             .collect();
         materials.add_rows(b.props[k], rows);
@@ -300,6 +334,196 @@ pub(super) fn rows(device: &Arc<forge_gpu::Device>, materials: &mut CityMaterial
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The meshes whose names hold one of `FORGE_OBJECTS`' comma-separated words (all without
+    /// it), with their bounds: the places to match a reference picture by.
+    /// `cargo test --release -p physics-lab bistro_objects -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bistro_objects() {
+        let Some(b) = bistro() else {
+            return;
+        };
+        let words: Vec<String> = std::env::var("FORGE_OBJECTS")
+            .map(|w| w.split(',').map(str::to_lowercase).collect())
+            .unwrap_or_default();
+        for (k, m) in b.model.meshes.iter().enumerate() {
+            let name = m.name.to_lowercase();
+            if !words.is_empty() && !words.iter().any(|w| name.contains(w.as_str())) {
+                continue;
+            }
+            let (lo, hi) = m.mesh.positions.iter().fold(
+                (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)),
+                |(lo, hi), p| (lo.min(Vec3::from(*p)), hi.max(Vec3::from(*p))),
+            );
+            let c = 0.5 * (lo + hi);
+            println!(
+                "mesh {k} {}: centre ({:.2}, {:.2}, {:.2}) min ({:.2}, {:.2}, {:.2}) max ({:.2}, {:.2}, {:.2})",
+                m.name, c.x, c.y, c.z, lo.x, lo.y, lo.z, hi.x, hi.y, hi.z
+            );
+        }
+    }
+
+    /// Pixel `(u, v)` of world point `p` seen from camera `c` (`[x, y, z, yaw, pitch, roll,
+    /// fov_y]`, angles in radians, the fly camera's yaw and pitch) in an image `size` wide and
+    /// high; `None` behind the camera.
+    fn project(c: &[f64; 7], p: [f64; 3], size: [f64; 2]) -> Option<[f64; 2]> {
+        let (sy, cy) = c[3].sin_cos();
+        let (sp, cp) = c[4].sin_cos();
+        let f = [-sy * cp, sp, -cy * cp];
+        let r0 = [cy, 0.0, -sy];
+        let u0 = [
+            r0[1] * f[2] - r0[2] * f[1],
+            r0[2] * f[0] - r0[0] * f[2],
+            r0[0] * f[1] - r0[1] * f[0],
+        ];
+        let (sr, cr) = c[5].sin_cos();
+        let r: [f64; 3] = std::array::from_fn(|k| cr * r0[k] + sr * u0[k]);
+        let u: [f64; 3] = std::array::from_fn(|k| cr * u0[k] - sr * r0[k]);
+        let d = [p[0] - c[0], p[1] - c[1], p[2] - c[2]];
+        let dot = |a: [f64; 3]| a[0] * d[0] + a[1] * d[1] + a[2] * d[2];
+        let z = dot(f);
+        if z <= 1e-3 {
+            return None;
+        }
+        let focal = 0.5 * size[1] / (0.5 * c[6]).tan();
+        Some([
+            0.5 * size[0] + focal * dot(r) / z,
+            0.5 * size[1] - focal * dot(u) / z,
+        ])
+    }
+
+    /// A reference picture's camera fitted to points seen in it (Gauss-Newton on the pixel
+    /// errors, from `FORGE_SOLVE_START`'s `--view` and 70°): `FORGE_SOLVE` names a file of lines
+    /// `x y z u v` (a scene point and its pixel), `FORGE_SOLVE_SIZE` the picture's `width,height`.
+    /// Prints the `--view` and `--fov` that frame it, and each point's error.
+    #[test]
+    #[ignore]
+    fn bistro_solve_view() {
+        let (Ok(file), Ok(size), Ok(start)) = (
+            std::env::var("FORGE_SOLVE"),
+            std::env::var("FORGE_SOLVE_SIZE"),
+            std::env::var("FORGE_SOLVE_START"),
+        ) else {
+            return;
+        };
+        let nums = |s: &str| -> Vec<f64> {
+            s.split([',', ' '])
+                .filter(|t| !t.is_empty())
+                .filter_map(|t| t.parse().ok())
+                .collect()
+        };
+        let size = nums(&size);
+        let size = [size[0], size[1]];
+        let points: Vec<([f64; 3], [f64; 2])> = std::fs::read_to_string(&file)
+            .expect("the points")
+            .lines()
+            .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
+            .map(|l| {
+                let v = nums(l);
+                ([v[0], v[1], v[2]], [v[3], v[4]])
+            })
+            .collect();
+        let s = nums(&start);
+        let mut c = [
+            s[0],
+            s[1],
+            s[2],
+            s[3].to_radians(),
+            s[4].to_radians(),
+            0.0,
+            s.get(5).copied().unwrap_or(70.0).to_radians(),
+        ];
+        let residuals = |c: &[f64; 7]| -> Vec<f64> {
+            points
+                .iter()
+                .flat_map(|&(p, uv)| {
+                    project(c, p, size).map_or([1e4, 1e4], |q| [q[0] - uv[0], q[1] - uv[1]])
+                })
+                .collect()
+        };
+        let cost = |r: &[f64]| r.iter().map(|x| x * x).sum::<f64>();
+        let mut lambda = 1e-2;
+        for _ in 0..200 {
+            let r = residuals(&c);
+            let base = cost(&r);
+            // The Jacobian by central differences.
+            let mut j = vec![[0.0; 7]; r.len()];
+            for k in 0..7 {
+                let h = if k < 3 { 1e-4 } else { 1e-6 };
+                let (mut a, mut b) = (c, c);
+                a[k] += h;
+                b[k] -= h;
+                let (ra, rb) = (residuals(&a), residuals(&b));
+                for i in 0..r.len() {
+                    j[i][k] = (ra[i] - rb[i]) / (2.0 * h);
+                }
+            }
+            // (JᵀJ + λ diag) δ = −Jᵀr, Levenberg–Marquardt.
+            let mut a = [[0.0; 7]; 7];
+            let mut g = [0.0; 7];
+            for i in 0..r.len() {
+                for x in 0..7 {
+                    g[x] -= j[i][x] * r[i];
+                    for y in 0..7 {
+                        a[x][y] += j[i][x] * j[i][y];
+                    }
+                }
+            }
+            for (x, row) in a.iter_mut().enumerate() {
+                row[x] *= 1.0 + lambda;
+            }
+            // Gaussian elimination.
+            let mut m = a;
+            let mut v = g;
+            for col in 0..7 {
+                let pivot = (col..7)
+                    .max_by(|&p, &q| m[p][col].abs().total_cmp(&m[q][col].abs()))
+                    .unwrap();
+                m.swap(col, pivot);
+                v.swap(col, pivot);
+                for row in col + 1..7 {
+                    let k = m[row][col] / m[col][col];
+                    let pivot_row = m[col];
+                    for (to, from) in m[row][col..].iter_mut().zip(&pivot_row[col..]) {
+                        *to -= k * from;
+                    }
+                    v[row] -= k * v[col];
+                }
+            }
+            let mut delta = [0.0; 7];
+            for row in (0..7).rev() {
+                let s: f64 = (row + 1..7).map(|x| m[row][x] * delta[x]).sum();
+                delta[row] = (v[row] - s) / m[row][row];
+            }
+            let trial: [f64; 7] = std::array::from_fn(|k| c[k] + delta[k]);
+            if cost(&residuals(&trial)) < base {
+                c = trial;
+                lambda = (lambda * 0.3).max(1e-9);
+            } else {
+                lambda *= 10.0;
+            }
+        }
+        let r = residuals(&c);
+        println!(
+            "--view={:.3},{:.3},{:.3},{:.2},{:.2} --fov {:.2} (roll {:.2}°), rms {:.1} px",
+            c[0],
+            c[1],
+            c[2],
+            c[3].to_degrees(),
+            c[4].to_degrees(),
+            c[6].to_degrees(),
+            c[5].to_degrees(),
+            (cost(&r) / r.len() as f64).sqrt()
+        );
+        for (i, (p, uv)) in points.iter().enumerate() {
+            println!(
+                "  point {i} {p:?} at {uv:?}: off by ({:.1}, {:.1}) px",
+                r[2 * i],
+                r[2 * i + 1]
+            );
+        }
+    }
 
     /// The camera path's frames as `--view` strings, one every `FORGE_PATH_STRIDE` frames (120
     /// by default): to find a place along it.

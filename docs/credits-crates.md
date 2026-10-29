@@ -94,8 +94,8 @@ Where Forge uses them:
 - `ron`: forge-mission
 - `rtrb`: forge-audio
 - `rustls`: forge-net
-- `serde`: city-blocks, forge-anim, forge-core, forge-fauna, forge-flora, forge-mission, forge-procgen, forge-render, forge-terrain
-- `serde_json`: credits, forge-geom
+- `serde`: city-blocks, forge-anim, forge-core, forge-fauna, forge-flora, forge-mission, forge-procgen, forge-render, forge-terrain, physics-lab
+- `serde_json`: credits, forge-geom, physics-lab
 - `thiserror`: forge-anim, forge-audio, forge-geom, forge-gpu, forge-mission, forge-net, forge-physics, forge-script, forge-sim
 - `tokio`: forge-net
 - `toml`: city-blocks, forge-anim, forge-fauna, forge-flora, forge-procgen, forge-render, forge-terrain
