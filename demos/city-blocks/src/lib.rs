@@ -1206,6 +1206,11 @@ impl Gallery {
                         let illuminance = sun.illuminance().max(1e-9);
                         renderer.sun_dir = Vec3::from(sun.direction).normalize();
                         renderer.sun_color = Vec3::from(sun.irradiance) / illuminance;
+                        // As large as the photograph holds it, unless `--sun-size` or hard
+                        // shadows say otherwise.
+                        if args.sun_size.is_none() && renderer.sun_angular_radius > 0.0 {
+                            renderer.sun_angular_radius = sun.angular_radius;
+                        }
                         e.scale / illuminance
                     }
                     None => e.scale,

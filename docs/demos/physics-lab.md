@@ -2264,7 +2264,7 @@ Steps 1 and 3 of D-065 (`forge_render::lamps`, `lamps_at` and `hit_lamps` in `me
 ```
 cargo run --release -p physics-lab -- --lab bistro
 cargo run --release -p physics-lab -- --lab bistro --time-of-day 1.5
-cargo run --release -p physics-lab -- --lab bistro --view=-23.700,6.855,-0.704,-93.13,-15.93 --fov 36.22 --tonemap aces --ev100 11.8 --sun-size 0.27
+cargo run --release -p physics-lab -- --lab bistro --view=-23.700,6.855,-0.704,-93.13,-15.93 --fov 36.22 --tonemap aces --ev100 11.8
 ```
 
 The Amazon Lumberyard Bistro's exterior (ORCA, CC BY 4.0, `CREDITS.md`): 1,296 meshes,
@@ -2297,6 +2297,14 @@ path-traced reference (step 2). The third line is NVIDIA's Exterior_1 view.
   (D-084).
 - **Factors:** each factor a map carries is 1. The exporter, which kept no images, had written
   its own defaults (roughness 0.553 everywhere).
+- **Nothing else in the file:** the FBX holds no vertex colours, no emission strength, no
+  glass transmission or index of refraction; its second UV set (lightmaps) is unused.
+- **Sides:** Blender's import marks all 132 materials double-sided, which is not the authors'
+  data. Both sides are drawn where the authors named a material so (".DoubleSided"), where it
+  is cut out, on the awnings, banner and curtains, and where most of a material's edges are
+  open (30 % or more, `open_edges`): the lamps' chains, panes, signs, letters and petals, 31
+  materials in all. Closed surfaces and the walls and kerbs (open where they meet, 10 to 26 %)
+  keep one side. `bistro_open_sheets` (ignored) lists each material's share and rule.
 
 **The sky** (D-084, `forge_render::environment`). By day the Bistro is lit as the authors lit
 it: the archive's HDR photograph, `san_giuseppe_bridge_4k.hdr` (4096 × 2048, HDRI Haven).
@@ -2305,6 +2313,10 @@ it: the archive's HDR photograph, `san_giuseppe_bridge_4k.hdr` (4096 × 2048, HD
   summed by solid angle, become the scene's sun (28.6° high, warm white) and leave the map. The
   FBX's sun (61°) lit the scene from the wrong side: NVIDIA's renders are path-traced under
   the map alone.
+- **Its size:** the photograph's, 0.29° in radius (√2 times its texels' RMS angle, weighed by
+  their light), close to the real 0.27°, in place of Forge's 1° for art (D-049); `--sun-size`
+  overrides it. Under the 1° sun, the post's long shadow across the cobbles almost faded out
+  where NVIDIA's is a crisp band; under the photograph's it is back.
 - **The rest is the sky:** the sky-view table and its irradiance are read from the map, so the
   probes and the ambient see it; compose draws it behind the scene, without haze.
 - **Its level:** the map scaled so that its sun has Forge's sun illuminance.
@@ -2322,25 +2334,24 @@ it: the archive's HDR photograph, `san_giuseppe_bridge_4k.hdr` (4096 × 2048, HD
 - **The exposure:** `--ev100 11.8` under ACES (11.4 under AgX) matches the picture's mean.
   Fixed exposure ignores `--exposure-compensation`.
 - **Close:** the light's direction, the sky, the overall level and contrast, the cobbles
-  (median luma 182 against 191), the emissive lamps since their calibration.
+  (median luma 182 against 191), the shadows under the photograph's sun, and the emissive
+  lamps since their calibration.
 - **Not yet:**
   - **The near lamp post's rough metal** (8.5 % reflectance) shows about three times
     NVIDIA's brightness. Its visible side faces a sunlit white front behind the camera.
     Forge's rough metals reflect a wide cone (the probes' irradiance, times the reflectance),
     while a path tracer's GGX lobe keeps nearer the mirror direction. The far post, in the
     café's shade, matches. The path-traced reference (step 2) is to say which light is right.
-  - **The shadows:** Forge widens the sun to 1° for the soft shadows (D-049), against the
-    real 0.27°. Under it, the post's long shadow across the cobbles almost fades out where
-    NVIDIA's is a crisp dark band; `--sun-size 0.27` brings it back close to theirs. Whether
-    the Bistro keeps the real sun is the owner's choice.
-  - **The cobbles' joints** are darker in NVIDIA's.
+  - **The cobbles' joints** are darker in NVIDIA's, and its shadows on the street a little
+    deeper.
 
 **Numbers** (1600 × 900, DLAA, RTX 5070 Ti, the path's first frame):
 - **Load:** 10 s in all on the first run, the props cooked. The 405 maps, 925 MB of blocks,
-  read in 0.5 s and uploaded in 1.1 s.
+  read in 0.5 s and uploaded in 1.1 s; the open edges measured in 0.47 s.
 - **GPU memory:** 2.5 GB (textures 989 MB with the sky's 45 MB, geometry 628 MB).
-- **Frame:** 3.4 ms of GPU at noon and 4.0 ms at midnight. `gi/probe rays` takes 1.45–1.9 ms
-  of it. The sky's passes take 0.03 ms. Exterior_1's view: 3.56 ms.
+- **Frame:** 3.2 ms of GPU by day under the photograph's sky and 4.0 ms at midnight.
+  `gi/probe rays` takes 1.45–1.9 ms of it. The sky's passes take 0.03 ms. Exterior_1's view:
+  3.58 ms.
 
 **Not yet:**
 - **The night's light:** the archive's night is its emissive surfaces alone. Forge adds its

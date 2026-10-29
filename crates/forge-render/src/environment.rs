@@ -36,6 +36,10 @@ pub struct EnvironmentSun {
     pub direction: [f32; 3],
     /// Its irradiance on a surface facing it, the map's units, linear RGB.
     pub irradiance: [f32; 3],
+    /// Its size as the photograph holds it, radians: the radius of the even disc with its
+    /// spread, √2 times the root mean square angle of its texels from its direction, weighed by
+    /// their light.
+    pub angular_radius: f32,
 }
 
 impl EnvironmentSun {
@@ -79,6 +83,8 @@ pub fn take_sun(texels: &mut [[f32; 3]], w: u32, h: u32) -> Option<EnvironmentSu
     }
     let reach = (w / 64).max(1) as i64;
     let (mut irradiance, mut direction) = ([0.0_f64; 3], [0.0_f64; 3]);
+    // Each texel taken: its direction and its light, for the spread.
+    let mut taken: Vec<([f32; 3], f64)> = Vec::new();
     for dy in -reach..=reach {
         let y = i64::from(py) + dy;
         if !(0..i64::from(h)).contains(&y) {
@@ -100,6 +106,7 @@ pub fn take_sun(texels: &mut [[f32; 3]], w: u32, h: u32) -> Option<EnvironmentSu
                 irradiance[k] += f64::from(texels[i][k]) * solid_angle;
                 direction[k] += f64::from(d[k]) * f64::from(l) * solid_angle;
             }
+            taken.push((d, f64::from(l) * solid_angle));
             let keep = bound / l;
             texels[i] = texels[i].map(|c| c * keep);
         }
@@ -110,9 +117,17 @@ pub fn take_sun(texels: &mut [[f32; 3]], w: u32, h: u32) -> Option<EnvironmentSu
         .sum::<f64>()
         .sqrt()
         .max(1e-12);
+    let direction = direction.map(|c| c / length);
+    let (mut spread, mut weight) = (0.0_f64, 0.0_f64);
+    for (d, light) in taken {
+        let cos = (0..3).map(|k| f64::from(d[k]) * direction[k]).sum::<f64>();
+        spread += cos.clamp(-1.0, 1.0).acos().powi(2) * light;
+        weight += light;
+    }
     Some(EnvironmentSun {
-        direction: direction.map(|c| (c / length) as f32),
+        direction: direction.map(|c| c as f32),
         irradiance: irradiance.map(|c| c as f32),
+        angular_radius: (2.0 * spread / weight.max(1e-30)).sqrt() as f32,
     })
 }
 
@@ -322,6 +337,10 @@ mod tests {
             "{:?} vs {expected}",
             sun.irradiance
         );
+        // Its size: four texels about 0.93° from its centre (1.22° by 1.41° apart), the disc
+        // √2 times that.
+        let radius = sun.angular_radius.to_degrees();
+        assert!((radius - 1.32).abs() < 0.1, "{radius}°");
         // The map keeps no sun: every texel's luminance within the bound it was taken at.
         let luminance = |t: &[f32; 3]| 0.2126 * t[0] + 0.7152 * t[1] + 0.0722 * t[2];
         assert!(

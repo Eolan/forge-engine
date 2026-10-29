@@ -39,6 +39,47 @@ const ALPHA_CUTOFF: f32 = 0.5;
 /// below).
 const SHEETS: [&str; 3] = ["Awning", "Banner", "Curtains"];
 
+/// The share of a material's edges that only one of its triangles uses from which it is drawn
+/// from both sides: an open sheet (a chain's links, a pane, a sign's letters, petals) would
+/// vanish from behind, and the sun's rays would pass its back. A closed surface has none; the
+/// archive's walls and kerbs, open where they meet other pieces, 10 to 26 %.
+const OPEN_SHEET: f64 = 0.3;
+
+/// Per material, the share of its edges that only one of its triangles uses, over every mesh,
+/// their corners welded within a millimetre.
+fn open_edges(model: &Model) -> HashMap<String, f64> {
+    // An edge by its two corners in millimetres, the lesser first.
+    type Edge = ([i32; 3], [i32; 3]);
+    let mut counts: HashMap<String, [usize; 2]> = HashMap::new();
+    for m in &model.meshes {
+        let corner = |i: u32| {
+            (Vec3::from(m.mesh.positions[i as usize]) * 1000.0)
+                .round()
+                .as_ivec3()
+                .to_array()
+        };
+        let mut uses: Vec<HashMap<Edge, u32>> = vec![HashMap::new(); m.materials.len()];
+        for (t, tri) in m.mesh.indices.as_chunks::<3>().0.iter().enumerate() {
+            let Some(edges) = uses.get_mut(usize::from(m.mesh.section(t))) else {
+                continue;
+            };
+            for e in 0..3 {
+                let (a, c) = (corner(tri[e]), corner(tri[(e + 1) % 3]));
+                *edges.entry((a.min(c), a.max(c))).or_default() += 1;
+            }
+        }
+        for (material, edges) in m.materials.iter().zip(uses) {
+            let count = counts.entry(material.name.clone()).or_default();
+            count[0] += edges.len();
+            count[1] += edges.values().filter(|&&n| n == 1).count();
+        }
+    }
+    counts
+        .into_iter()
+        .map(|(name, [edges, open])| (name, open as f64 / edges.max(1) as f64))
+        .collect()
+}
+
 /// The converted exterior's folder, and the archive's (the maps' paths are relative to it).
 fn folders() -> (PathBuf, PathBuf) {
     let root =
@@ -278,6 +319,9 @@ pub(super) fn rows(device: &Arc<forge_gpu::Device>, materials: &mut CityMaterial
         ids.insert(texture.name.clone(), id);
     }
     let map = |p: &Option<String>| p.as_ref().and_then(|p| ids.get(p).copied());
+    let measured = std::time::Instant::now();
+    let open = open_edges(&b.model);
+    let open_time = measured.elapsed();
     let mut rows_made = 0;
     for (k, mesh) in b.model.meshes.iter().enumerate() {
         let uvs = !mesh.mesh.uvs.is_empty();
@@ -307,13 +351,15 @@ pub(super) fn rows(device: &Arc<forge_gpu::Device>, materials: &mut CityMaterial
                 };
                 rows_made += 1;
                 // Both sides drawn where its authors named it so (".DoubleSided"), where it is cut
-                // out, and on the single sheets seen from below (the awnings, the banner, the
-                // curtains). The exporter wrote every material double-sided (Blender's default),
-                // which skipped the cone cull and the rays' back faces everywhere.
+                // out, on the single sheets seen from below (the awnings, the banner, the
+                // curtains), and where its edges are mostly open (`OPEN_SHEET`). The exporter
+                // wrote every material double-sided (Blender's import default), which skipped the
+                // cone cull and the rays' back faces everywhere.
                 let mut m = m.clone();
                 m.double_sided = m.name.ends_with(".DoubleSided")
                     || maps.alpha_cutoff.is_some()
-                    || SHEETS.iter().any(|s| m.name.contains(s));
+                    || SHEETS.iter().any(|s| m.name.contains(s))
+                    || open.get(&m.name).is_some_and(|&o| o >= OPEN_SHEET);
                 (m.name.clone(), external_layer(&m, maps))
             })
             .collect();
@@ -325,6 +371,8 @@ pub(super) fn rows(device: &Arc<forge_gpu::Device>, materials: &mut CityMaterial
         megabytes = bytes / (1 << 20),
         rows = rows_made,
         read_ms = read_time.as_millis() as u64,
+        open_edges_ms = open_time.as_millis() as u64,
+        sheets = open.values().filter(|&&o| o >= OPEN_SHEET).count(),
         total_ms = started.elapsed().as_millis() as u64,
         "the Bistro's maps"
     );
@@ -334,6 +382,44 @@ pub(super) fn rows(device: &Arc<forge_gpu::Device>, materials: &mut CityMaterial
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// How each material is drawn: its share of open edges (`open_edges`) and whether `rows`
+    /// draws it from both sides, and why. A closed surface has no open edge; a sheet seen from
+    /// behind would vanish if drawn from one side.
+    /// `cargo test --release -p physics-lab bistro_open_sheets -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bistro_open_sheets() {
+        let Some(b) = bistro() else {
+            return;
+        };
+        let (_, archive) = folders();
+        let cut_out = |path: &Option<String>| {
+            path.as_ref().is_some_and(|p| {
+                std::fs::read(archive.join(p))
+                    .ok()
+                    .and_then(|bytes| read_dds(p, &bytes, true).ok())
+                    .and_then(|t| alpha_plane(&t))
+                    .is_some_and(|a| a.iter().any(|&a| a < 255))
+            })
+        };
+        let mut open: Vec<_> = open_edges(&b.model).into_iter().collect();
+        open.sort_by(|a, b| b.1.total_cmp(&a.1));
+        for (name, share) in open {
+            let why = if name.ends_with(".DoubleSided") {
+                "both sides: named so"
+            } else if cut_out(&b.roles.get(&name).and_then(|r| r.base_color.clone())) {
+                "both sides: cut out"
+            } else if SHEETS.iter().any(|s| name.contains(s)) {
+                "both sides: a sheet by name"
+            } else if share >= OPEN_SHEET {
+                "both sides: open"
+            } else {
+                "one side"
+            };
+            println!("{name}: {:.1} % open, {why}", 100.0 * share);
+        }
+    }
 
     /// The meshes whose names hold one of `FORGE_OBJECTS`' comma-separated words (all without
     /// it), with their bounds: the places to match a reference picture by.
