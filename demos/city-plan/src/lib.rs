@@ -267,6 +267,10 @@ const SQUEEZE: f32 = 0.85;
 /// The share of the open sky's light a village room beyond the room grids' reach takes (D-078,
 /// `ProbeParams::far_room_sky`; the scene's look explains the number).
 const VILLAGE_FAR_ROOM_SKY: f32 = 0.2;
+/// The far rooms' daylight factor (#356, `ProbeParams::far_room_daylight`): a room with windows
+/// beyond the grids' reach takes this times its windows' daylight over its surfaces; the factor
+/// stands for the light's bounces in the room, about 1 / (1 − ρ) for its whitewashed walls.
+const VILLAGE_FAR_ROOM_DAYLIGHT: f32 = 2.7;
 /// Paved ground per crack on the paving (D-074), m².
 const CRACKS_EVERY: f64 = 150.0;
 
@@ -6459,9 +6463,13 @@ impl Scenario for PlanScenario {
             // probes' far room rule), set against the rooms the grids light: from the owner's
             // view down to the houses, the windows' band matched them at 0.35 in the afternoon
             // and 0.12 under a low sun (0.06, set before the grids, was 0.05 EV dark), and 0.2
-            // keeps both within 0.02 EV. The grids' rooms take the sun's bounce, which a share
-            // of the sky cannot follow through the day (#356).
+            // keeps both within 0.02 EV. It stays for rooms without windows.
             probe_far_room_sky: (!self.flora.is_empty()).then_some(VILLAGE_FAR_ROOM_SKY),
+            // A room with windows takes their daylight instead, following the hour (#356): on
+            // #354's dolly, against the grids carried out to 150 m, its windows read +0.04,
+            // +0.01, −0.07, −0.15 and +0.01 EV at 07:12, noon, 15:36, 18:00 and 20:24, where
+            // the fixed share read +0.08, +0.19, +0.01, −0.14 and 0.00.
+            probe_far_room_daylight: (!self.flora.is_empty()).then_some(VILLAGE_FAR_ROOM_DAYLIGHT),
             ..Look::default()
         }
     }

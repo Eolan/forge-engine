@@ -1387,6 +1387,7 @@ impl Impostors {
             pass = pass
                 .buffer(p.data, BufferAccess::ShaderRead(vertex))
                 .buffer(p.region, BufferAccess::ShaderRead(vertex))
+                .with(|b| p.declare_far(b, vertex))
                 .image(p.irradiance, ImageAccess::Sampled(vertex))
                 .image(p.distance, ImageAccess::Sampled(vertex));
         }

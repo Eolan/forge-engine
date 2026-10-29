@@ -36,3 +36,22 @@ The far tier (`far-room-grids.patch`):
 
 **For the owner:** keep 20 m, or pay 0.2–1.2 ms for the step to move to 40–60 m (exact at 60).
 `--probe-room-pool N` is kept to try them.
+
+## Built: the far rooms' daylight (2026-10-29)
+
+On the owner's go (2026-10-29) the far rooms take their windows' daylight, following the hour
+(D-078's addendum, `ProbeParams::far_room_daylight`, "gi/far rooms"): each room with windows its
+own share, K × its windows' sky and sun over its surfaces. Measured as above, against the grids
+out to 150 m:
+
+| K | 0.3 | 0.5 (noon) | 0.65 | 0.75 | 0.85 |
+|---|---|---|---|---|---|
+| fixed share 0.2 | +0.08 EV | +0.19 EV | +0.01 EV | −0.14 EV | 0.00 EV |
+| 1 | −0.59 | −0.60 | −0.68 | −0.75 | −0.60 |
+| 1.57 | −0.34 | −0.35 | −0.43 | −0.52 | −0.36 |
+| **2.7 (the village's)** | **+0.04** | **+0.01** | **−0.07** | **−0.15** | **+0.01** |
+
+- The cost: "gi/far rooms" 0.008 ms; the dolly's frame 5.571 → 5.600 ms at noon and 5.611 →
+  5.649 at 0.75.
+- The deficit under the 18:00 sun is still there: presumably the sun's patch on the floor and its
+  bounce, which the grids take and the share, the sun on the windows only, does not.

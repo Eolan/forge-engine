@@ -7657,6 +7657,28 @@ the nearer side, the stairwell's, and lit the landing's floor along the guard's 
 metre apart (the owner's sighting); one inside a solid is now inactive, its neighbours lighting
 round it (the map check's insides within FLIP 0.04, the outside views unchanged).
 
+**The far rooms' daylight (2026-10-29, #356, on the owner's go).** Against the grids
+carried out to 150 m (`--probe-rooms 150`, the reference), the fixed share read the far rooms'
+windows on #354's dolly +0.08, +0.19, +0.01, −0.14 and 0.00 EV at 07:12, noon, 15:36, 18:00 and
+20:24: too bright at noon, dark under a low sun. Each far room with windows now takes a share of
+its own (`ProbeParams::far_room_daylight`, the village's look):
+- **The share:** K × Σ over its windows of area × (the sky's irradiance on the window's outward
+  normal + the sun's on it), over the room's surface × the open sky's irradiance from above. The
+  windows are the room's recesses (`probes/far_rooms.rs`): the normal along the recess's short
+  axis, away from the room's middle, the area its long edge by its height. K stands for the
+  light's bounces in the room, about 1 / (1 − ρ) for walls of albedo ρ.
+- **Made each frame on the GPU** ("gi/far rooms", the async compute queue, 0.008 ms in the
+  village) from the sky's SH light and the sun, into a table hashed by region that the far
+  branch of the probes' lookup reads where it read the fixed share; a room without windows, or
+  one the table has no room for, keeps `far_room_sky`.
+- **Calibrated:** K = 1 read 0.59–0.75 EV dark at every hour, 1.57 still 0.34–0.52 (about 40 % of
+  those pixels' light is not the room's share: the frames, the glass, the sun through the
+  window). The village's K = 2.7 reads +0.04, +0.01, −0.07, −0.15 and +0.01 EV: noon's excess
+  gone, the day's spread 0.33 → 0.18 EV; the deficit under the 18:00 sun stays as it was.
+- **A bug on the way:** the buffers were made only for scenes giving rooms by sets
+  (`reserve_regions`), not for the village's whole set (`set_regions`), so the first round
+  measured the fixed share twice; a GPU test now gives rooms both ways.
+
 *(research: probe-levels-indoors.md; D-068; issue #353)*
 
 ## D-079 — Marks where bodies strike: a pool of run-time decals on static surfaces ✅ (proposed 2026-10-24, accepted the same day, Phase 7)

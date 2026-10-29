@@ -440,6 +440,11 @@ pub struct Args {
     /// `ProbeParams::far_room_sky`, 0.06 by default): its daylight factor.
     #[arg(long)]
     probe_far_sky: Option<f32>,
+    /// The far rooms' daylight (#356, `ProbeParams::far_room_daylight`): a room with windows
+    /// beyond the room grids takes its windows' share of the open sky, this factor times their
+    /// daylight over its surfaces, following the hour. 0: the fixed share (`--probe-far-sky`).
+    #[arg(long)]
+    probe_far_daylight: Option<f32>,
     /// Where a surface's point is looked up among the probes, off it: `N,V`, the shares of its
     /// normal and of the way to the viewer (`ProbeParams::sample_bias`, 0.2,0.8 by default; #351
     /// tests 1,0, a point that stays put as the camera moves).
@@ -1401,6 +1406,10 @@ impl Gallery {
                     .probe_far_sky
                     .or(look.probe_far_room_sky)
                     .unwrap_or(ProbeParams::default().far_room_sky),
+                far_room_daylight: args
+                    .probe_far_daylight
+                    .or(look.probe_far_room_daylight)
+                    .filter(|&k| k > 0.0),
                 sample_bias: args
                     .probe_bias
                     .as_ref()
@@ -3100,6 +3109,8 @@ impl Demo for Gallery {
                     let t = self.frame as f32 * self.step;
                     Vec3::new(v[0], 0.0, z) * v.get(2).map_or(t, |&stop| t.min(stop))
                 });
+                // The far rooms' daylight follows the sun (#356).
+                probes.set_sun(self.renderer.sun_dir, self.renderer.sun_color);
                 Some(probes.update(
                     &mut frame.graph,
                     frame.slot,

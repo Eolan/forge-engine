@@ -38,13 +38,14 @@ use glam::{IVec3, Mat3, Quat, Vec3};
 use crate::meshlet::MoversFrame;
 use crate::sky::SkyLight;
 
+mod far_rooms;
 mod regions;
 mod rooms;
 
 use regions::{REGION_CELL, RegionStore, TOP_CELL, ordered};
 pub use regions::{RegionCapacity, RegionSetId};
 pub use rooms::RoomGridParams;
-use rooms::RoomGrids;
+use rooms::{RoomGrids, room_hash};
 
 /// Most cascades (`PROBE_MAX_CASCADES` in `probes.slang`).
 pub const MAX_CASCADES: usize = 6;
@@ -124,9 +125,12 @@ struct GpuProbeField {
     room_mask: u32,
     room_count: u32,
     room_rays: u32,
+    far_mask: u32,
+    far_pad: u32,
+    far_table: u64,
 }
 
-const _: () = assert!(std::mem::size_of::<GpuProbeField>() == 568);
+const _: () = assert!(std::mem::size_of::<GpuProbeField>() == 584);
 
 /// `REGION_NONE` in `probes.slang`: a probe in a recess or a doorway, no region's.
 const REGION_NONE: u32 = u32::MAX;
@@ -273,6 +277,83 @@ struct TracePush {
     pad: u32,
 }
 
+/// Mirrors `FarPush` in `probe_update.slang` (#356).
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct FarPush {
+    field: u64,
+    rooms: u64,
+    windows: u64,
+    sky: u64,
+    sun: [f32; 3],
+    sun_luma: f32,
+    daylight: f32,
+    count: u32,
+    pad: [u32; 2],
+}
+
+/// Mirrors `FarRoom` in `probe_update.slang`: a far room's windows (`count` from `first` in the
+/// windows' buffer), its walls', floor's and ceiling's area (m²) and its entry in the table.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GpuFarRoom {
+    first: u32,
+    count: u32,
+    surface: f32,
+    slot: u32,
+}
+
+/// Mirrors `FarWindow` in `probe_update.slang`: the way it faces (x, z) and its area (m²).
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GpuFarWindow {
+    normal: [f32; 2],
+    area: f32,
+    pad: u32,
+}
+
+/// The far rooms' daylight's buffers (#356), per frame slot: the rooms, their windows and the
+/// table the probe lookup reads (a region and its share's bits; region 0 an empty entry).
+struct FarBuffers {
+    rooms: Vec<Buffer>,
+    windows: Vec<Buffer>,
+    table: Vec<GraphBuffer>,
+    /// What they hold at most: rooms, windows, and the table's entries (a power of two, at least
+    /// twice the rooms, so that it stays at most half full).
+    capacity: [u32; 3],
+}
+
+impl FarBuffers {
+    /// Room for a region store of `volumes` volumes: a room and a window are a volume each.
+    fn new(device: &Arc<Device>, volumes: u32) -> Result<Self> {
+        let volumes = volumes.max(1);
+        let entries = (2 * volumes).next_power_of_two();
+        let make = |bytes: u64, name: String| {
+            device.create_buffer(BufferDesc {
+                size: bytes,
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+                location: MemoryLocation::CpuToGpu,
+                category: MemoryCategory::Frame,
+                name: &name,
+            })
+        };
+        let records = u64::from(volumes) * 16;
+        Ok(Self {
+            rooms: (0..FRAMES_IN_FLIGHT)
+                .map(|i| make(records, format!("far rooms {i}")))
+                .collect::<Result<_>>()?,
+            windows: (0..FRAMES_IN_FLIGHT)
+                .map(|i| make(records, format!("far rooms' windows {i}")))
+                .collect::<Result<_>>()?,
+            table: (0..FRAMES_IN_FLIGHT)
+                .map(|i| make(u64::from(entries) * 8, format!("far rooms' table {i}")))
+                .map(|b| b.map(GraphBuffer::new))
+                .collect::<Result<_>>()?,
+            capacity: [volumes, volumes, entries],
+        })
+    }
+}
+
 /// Mirrors `WakePush` in `probe_update.slang` (#79).
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -340,6 +421,12 @@ pub struct ProbeParams {
     /// Rooms lit by probe grids of their own (D-078, [`RoomGridParams`]): the rooms of the
     /// scene's regions near the camera. None: the cascades light every room.
     pub rooms: Option<RoomGridParams>,
+    /// The far rooms' daylight (#356, `far_rooms`): where set, a room with windows beyond the
+    /// room grids takes its windows' share of the open sky this frame, this factor (what bounces
+    /// round a room, set against the grids) times their daylight over its surfaces, in place of
+    /// [`Self::far_room_sky`], which rooms without windows keep. None: every far room takes
+    /// `far_room_sky`.
+    pub far_room_daylight: Option<f32>,
 }
 
 impl Default for ProbeParams {
@@ -359,6 +446,7 @@ impl Default for ProbeParams {
             far_room_sky: 0.06,
             sample_bias: [0.2, 0.8],
             rooms: None,
+            far_room_daylight: None,
         }
     }
 }
@@ -425,9 +513,24 @@ pub struct ProbeLight {
     pub(crate) region: BufferHandle,
     pub(crate) irradiance: ImageHandle,
     pub(crate) distance: ImageHandle,
+    /// The far rooms' table this frame (#356), which the lookup reads where a room is far.
+    pub(crate) far: Option<BufferHandle>,
 }
 
 impl ProbeLight {
+    /// Declares the far rooms' table (#356) for a pass that looks the probes up at `stages`,
+    /// where the frame has one.
+    pub(crate) fn declare_far<'b, 'f>(
+        &self,
+        builder: forge_gpu::PassBuilder<'b, 'f>,
+        stages: vk::PipelineStageFlags2,
+    ) -> forge_gpu::PassBuilder<'b, 'f> {
+        match self.far {
+            Some(table) => builder.buffer(table, BufferAccess::ShaderRead(stages)),
+            None => builder,
+        }
+    }
+
     /// The irradiance atlas, [`DiffuseProbes::irradiance_extent`] texels (for the image
     /// hashes, #207).
     pub fn irradiance(&self) -> ImageHandle {
@@ -487,6 +590,11 @@ pub struct Probes {
     /// The settled probes woken about a region set added or removed (#338), and per frame slot
     /// the boxes they stand in.
     wake_regions: Pipeline,
+    /// The far rooms' daylight (#356), with [`ProbeParams::far_room_daylight`] and regions.
+    far_pass: Pipeline,
+    far: Option<FarBuffers>,
+    /// Towards the sun, and its light per unit of its illuminance ([`Self::set_sun`]).
+    sun: [Vec3; 2],
     wake_boxes: Vec<Buffer>,
     irradiance: GraphImage,
     distance: GraphImage,
@@ -656,6 +764,14 @@ impl Probes {
                 std::mem::size_of::<WakeRegionsPush>(),
                 "probe wake regions",
             )?,
+            far_pass: compute(
+                "probe_update.slang",
+                "far_rooms_main",
+                std::mem::size_of::<FarPush>(),
+                "far rooms",
+            )?,
+            far: None,
+            sun: [Vec3::Y, Vec3::ZERO],
             wake_boxes,
             irradiance: atlas(
                 IRRADIANCE_TILE,
@@ -697,11 +813,18 @@ impl Probes {
         }
         if volumes.is_empty() {
             self.regions = None;
+            self.far = None;
             return Ok(());
         }
-        let mut store = RegionStore::new(device, RegionStore::fitting(volumes))?;
+        let capacity = RegionStore::fitting(volumes);
+        let mut store = RegionStore::new(device, capacity)?;
         self.whole = Some(store.add(device, volumes, false)?);
         self.regions = Some(store);
+        self.far = self
+            .params
+            .far_room_daylight
+            .map(|_| FarBuffers::new(device, capacity.volumes))
+            .transpose()?;
         Ok(())
     }
 
@@ -736,7 +859,18 @@ impl Probes {
             rooms.clear();
         }
         self.regions = Some(RegionStore::new(device, capacity)?);
+        self.far = self
+            .params
+            .far_room_daylight
+            .map(|_| FarBuffers::new(device, capacity.volumes))
+            .transpose()?;
         Ok(())
+    }
+
+    /// The sun the far rooms' daylight takes (#356): `direction` towards it, `color` its light
+    /// per unit of its illuminance, as the sky's light is given. Kept until set again.
+    pub fn set_sun(&mut self, direction: Vec3, color: Vec3) {
+        self.sun = [direction.normalize_or_zero(), color];
     }
 
     /// Adds `volumes` as a set (#338: a cell's rooms, its regions' ids its own, global to the
@@ -911,6 +1045,57 @@ impl Probes {
             }
             (None, _) => None,
         };
+        // The far rooms' daylight (#356): their windows, and the table's keys with the fixed
+        // share in every entry until the pass writes its room's.
+        let far = match (
+            p.far_room_daylight,
+            self.far.as_ref(),
+            self.regions.as_ref(),
+        ) {
+            (Some(daylight), Some(bufs), Some(store)) => {
+                let [room_room, window_room, entries] = bufs.capacity;
+                let mask = entries - 1;
+                let mut rooms: Vec<GpuFarRoom> = Vec::new();
+                let mut windows: Vec<GpuFarWindow> = Vec::new();
+                let mut table = vec![[0_u32; 2]; entries as usize];
+                for room in store.far_rooms() {
+                    if rooms.len() as u32 >= room_room
+                        || (windows.len() + room.windows.len()) as u32 > window_room
+                    {
+                        break;
+                    }
+                    let mut at = room_hash(room.region, mask);
+                    while table[at as usize][0] != 0 && table[at as usize][0] != room.region {
+                        at = (at + 1) & mask;
+                    }
+                    if table[at as usize][0] == room.region {
+                        continue;
+                    }
+                    table[at as usize] = [room.region, p.far_room_sky.to_bits()];
+                    rooms.push(GpuFarRoom {
+                        first: windows.len() as u32,
+                        count: room.windows.len() as u32,
+                        surface: room.surface,
+                        slot: at,
+                    });
+                    windows.extend(room.windows.iter().map(|w| GpuFarWindow {
+                        normal: w.normal.to_array(),
+                        area: w.area,
+                        pad: 0,
+                    }));
+                }
+                bufs.rooms[slot.index].write(0, &rooms);
+                bufs.windows[slot.index].write(0, &windows);
+                bufs.table[slot.index].write(0, &table);
+                Some((
+                    daylight,
+                    rooms.len() as u32,
+                    mask,
+                    bufs.table[slot.index].address(),
+                ))
+            }
+            _ => None,
+        };
         let field = GpuProbeField {
             rotation: [row(0), row(1), row(2)],
             cascades,
@@ -956,6 +1141,9 @@ impl Probes {
                 .rooms
                 .and_then(|r| r.rays)
                 .map_or(p.rays, |n| n.clamp(FIXED_RAYS + 32, p.rays)),
+            far_mask: far.map_or(0, |f| f.2),
+            far_pad: 0,
+            far_table: far.map_or(0, |f| f.3),
         };
         self.fields[slot.index].write(0, &[field]);
 
@@ -967,6 +1155,41 @@ impl Probes {
         let region = graph.import_buffer(&this.region);
         let irradiance = graph.import(&this.irradiance);
         let distance = graph.import(&this.distance);
+        // The far rooms' daylight (#356), before anything reads the table: the probes' rays
+        // meet far rooms too.
+        let far_table = match (far, this.far.as_ref()) {
+            (Some((daylight, rooms, _, _)), Some(bufs)) => {
+                let table = graph.import_buffer(&bufs.table[slot.index]);
+                let far_pass = &this.far_pass;
+                let [sun, color] = this.sun;
+                let push = FarPush {
+                    field: address,
+                    rooms: bufs.rooms[slot.index].address(),
+                    windows: bufs.windows[slot.index].address(),
+                    sky: sky.address,
+                    sun: sun.to_array(),
+                    sun_luma: color.dot(Vec3::new(0.2126, 0.7152, 0.0722)),
+                    daylight,
+                    count: rooms,
+                    pad: [0; 2],
+                };
+                if rooms > 0 {
+                    graph
+                        .pass("gi/far rooms")
+                        .queue(QueueKind::Compute)
+                        .buffer(sky.buffer, BufferAccess::ShaderRead(compute))
+                        .buffer(table, BufferAccess::ShaderReadWrite(compute))
+                        .run(move |_, commands| {
+                            commands.bind_pipeline(far_pass);
+                            commands.push_constants(far_pass, &push);
+                            commands.dispatch(rooms.div_ceil(64), 1, 1);
+                            Ok(())
+                        });
+                }
+                Some(table)
+            }
+            _ => None,
+        };
         let count = p.probe_count();
         let spread = [count.min(MAX_GROUPS), count.div_ceil(MAX_GROUPS)];
         // The settled probes whose cells the movers entered or left settle again (#79, #69),
@@ -1052,6 +1275,10 @@ impl Probes {
                 .buffer(data, BufferAccess::ShaderRead(compute))
                 .buffer(region, BufferAccess::ShaderRead(compute))
                 .buffer(rays, BufferAccess::ShaderWrite(compute))
+                .with(|b| match far_table {
+                    Some(t) => b.buffer(t, BufferAccess::ShaderRead(compute)),
+                    None => b,
+                })
                 .with(|b| MoversFrame::declare(movers, b, compute, true))
                 .run(move |_, commands| {
                     commands.bind_pipeline(trace);
@@ -1109,6 +1336,7 @@ impl Probes {
             region,
             irradiance,
             distance,
+            far: far_table,
         }
     }
 }
@@ -1440,5 +1668,31 @@ mod tests {
         assert!((a * a.transpose() - Mat3::IDENTITY).abs_diff_eq(Mat3::ZERO, 1e-5));
         assert!(!a.abs_diff_eq(b, 1e-3));
         assert!(a.abs_diff_eq(frame_rotation(0), 0.0));
+    }
+
+    /// A GPU test (`FORGE_GPU_TESTS=1`): the far rooms' daylight (#356) has its buffers however
+    /// the scene gives its rooms, whole (`set_regions`, the village's) or by sets
+    /// (`reserve_regions`, a streamed scene's); the first once left it without, and the far rooms
+    /// kept the fixed share.
+    #[test]
+    fn the_far_rooms_daylight_follows_rooms_given_either_way() {
+        let Some(gpu) = forge_gpu::Headless::for_test(forge_gpu::headless::shaders_of(env!(
+            "CARGO_MANIFEST_DIR"
+        ))) else {
+            return;
+        };
+        let params = ProbeParams {
+            far_room_daylight: Some(1.0),
+            ..ProbeParams::default()
+        };
+        let mut probes = Probes::new(&gpu.device, &gpu.shaders, params).unwrap();
+        probes.set_regions(&gpu.device, &little_house()).unwrap();
+        assert!(probes.far.is_some(), "set_regions");
+        probes.set_regions(&gpu.device, &[]).unwrap();
+        assert!(probes.far.is_none(), "no rooms");
+        probes
+            .reserve_regions(&gpu.device, RegionStore::fitting(&little_house()))
+            .unwrap();
+        assert!(probes.far.is_some(), "reserve_regions");
     }
 }

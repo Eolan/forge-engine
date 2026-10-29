@@ -58,8 +58,12 @@ pub struct Look {
     pub probes_see_movers: bool,
     /// The open sky's share a far room without its own probes takes (#321,
     /// `ProbeParams::far_room_sky`), when the scene sets it (unless `--probe-far-sky` does): its
-    /// rooms' daylight factor (0.06 the village's; shallow rooms with wide windows about 0.27).
+    /// rooms' daylight factor (0.2 the village's; shallow rooms with wide windows about 0.27).
     pub probe_far_room_sky: Option<f32>,
+    /// The far rooms' daylight (#356, `ProbeParams::far_room_daylight`), when the scene sets it
+    /// (unless `--probe-far-daylight` does): its rooms then take their windows' share of the
+    /// open sky, following the hour, and `probe_far_room_sky` is left to rooms without windows.
+    pub probe_far_room_daylight: Option<f32>,
     /// The rooms' own probe grids (D-078, `ProbeParams::rooms`), when the scene sets them (unless
     /// `--probe-rooms` and `--probe-room-spacing` do): their reach, spacing and pool. Set, they are
     /// on even where the scene gives no rooms at the start (a map streaming its rooms in, #338).
@@ -91,6 +95,7 @@ impl Default for Look {
             probes: None,
             probes_see_movers: false,
             probe_far_room_sky: None,
+            probe_far_room_daylight: None,
             probe_room_grids: None,
             chase: false,
             metered: false,

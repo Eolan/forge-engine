@@ -26,6 +26,7 @@ use forge_gpu::{
 };
 use glam::{Vec2, Vec3};
 
+use super::far_rooms::{FarRoom, far_rooms};
 use super::rooms::RoomOutline;
 use super::{RegionKind, RegionVolume};
 use crate::meshlet::dynamic::Ranges;
@@ -119,6 +120,8 @@ struct Set {
     serial: u64,
     /// Its rooms in the scene frame, for their probe grids.
     rooms: Vec<RoomOutline>,
+    /// Its rooms with windows, for the far rooms' daylight (#356).
+    far: Vec<FarRoom>,
 }
 
 /// What a frame reads of the regions ([`RegionStore::frame`]): the addresses its field names.
@@ -495,6 +498,7 @@ impl RegionStore {
                     ceiling: v.ceiling,
                 })
                 .collect(),
+            far: far_rooms(volumes),
         };
         if wake {
             self.wake.push((set.lo, set.hi));
@@ -664,6 +668,11 @@ impl RegionStore {
             top_mask: self.top_mask,
             count: self.live_volumes,
         }
+    }
+
+    /// Every live set's rooms with windows, for the far rooms' daylight (#356).
+    pub(super) fn far_rooms(&self) -> impl Iterator<Item = &FarRoom> {
+        self.sets.iter().flatten().flat_map(|set| set.far.iter())
     }
 
     /// Every live set's rooms, each keyed by its set's serial and its place among the set's

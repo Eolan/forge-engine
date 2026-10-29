@@ -3,6 +3,7 @@
 // maps, with their borders.
 import bindless;
 import probes;
+import sh;
 
 struct Push
 {
@@ -525,4 +526,71 @@ void probe_wake_regions_main(uint3 id : SV_DispatchThreadID)
             field[0].probe_data[id.x].w = probe_state(w);
         return;
     }
+}
+
+// ------------------------------------------------------------- far rooms ---
+
+// A far room with windows (`far_rooms.rs`): its windows (`count` from `first` among the
+// windows), its walls', floor's and ceiling's area (m²) and its entry in the far rooms' table.
+struct FarRoom
+{
+    uint first;
+    uint count;
+    float surface;
+    uint slot;
+};
+
+// A far room's window: the way it faces (x, z, level and out of its room) and its area (m²).
+struct FarWindow
+{
+    float2 normal;
+    float area;
+    uint pad;
+};
+
+struct FarPush
+{
+    ProbeField* field;
+    FarRoom* rooms;
+    FarWindow* windows;
+    float4* sky;      // the sky's irradiance coefficients per unit of the sun's illuminance (sh.slang)
+    float3 sun;       // towards the sun
+    float sun_luma;   // the sun's luminance per unit of its illuminance
+    float daylight;   // `ProbeParams::far_room_daylight`: what bounces round a room
+    uint count;
+    uint pad0;
+    uint pad1;
+};
+
+[[vk::push_constant]]
+FarPush far_push;
+
+// One thread per far room with windows (#356): its share of the open sky, which
+// `far_room_share` (probes.slang) reads in place of `far_room_sky`. Its windows' daylight (each
+// window's area times what the sky and the ground send a wall facing its way and what the sun
+// sends its glass) over its surfaces, over what the sky sends a roof (the open sky's light the
+// share multiplies), times what bounces round the room. The sun at a window counts whole, the
+// buildings across the street not shading it: the factor, set against the room grids, takes
+// their mean.
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void far_rooms_main(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= far_push.count)
+        return;
+    FarRoom room = far_push.rooms[id.x];
+    float3 luma = float3(0.2126, 0.7152, 0.0722);
+    float roof = max(dot(sh_irradiance(far_push.sky, float3(0.0, 1.0, 0.0)), luma), 1e-6);
+    float up = far_push.sun.y > 0.0 ? 1.0 : 0.0;
+    float light = 0.0;
+    for (uint k = 0u; k < room.count; k++)
+    {
+        FarWindow w = far_push.windows[room.first + k];
+        float3 n = float3(w.normal.x, 0.0, w.normal.y);
+        float sky = dot(sh_irradiance(far_push.sky, n), luma);
+        float sun = up * far_push.sun_luma * max(dot(n, far_push.sun), 0.0);
+        light += w.area * (sky + sun);
+    }
+    float share = far_push.daylight * light / (max(room.surface, 1e-3) * roof);
+    far_push.field[0].far_table[room.slot].y = asuint(share);
 }
