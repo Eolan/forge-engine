@@ -26,6 +26,15 @@ Push push;
 
 static const float PI = 3.14159265;
 
+// The environment map's light towards the unit world `direction` (D-084), per unit of the
+// reference illuminance: its equirectangular texel in Falcor's layout (u from atan2(x, -z), v
+// from the zenith down), at mip `lod`.
+float3 environment_luminance(Sky* s, float3 direction, float lod)
+{
+    float2 uv = float2((1.0 + atan2(direction.x, -direction.z) / PI) * 0.5, acos(clamp(direction.y, -1.0, 1.0)) / PI);
+    return sample_image_level(s[0].environment, SAMPLER_LINEAR_REPEAT, uv, lod).rgb * s[0].environment_scale;
+}
+
 // The camera's frame on the planet: up, and the horizontal towards the sun's azimuth.
 void local_frame(Planet p, float3 sun, out float3 up, out float3 forward, out float3 right)
 {
@@ -83,7 +92,16 @@ void sky_view_main(uint3 id : SV_DispatchThreadID)
     float2 uv = (float2(id.xy) + 0.5) / float2(SKY_VIEW_WIDTH, SKY_VIEW_HEIGHT);
     float3 direction = sky_view_direction(uv, up, forward, right);
     float elevation = asin(clamp(dot(direction, up), -1.0, 1.0));
-    float3 luminance = view_luminance(s, p, direction, elevation, 32);
+    float3 luminance;
+    if (s[0].environment != 0xFFFFFFFFu)
+    {
+        // An environment map (D-084), at the mip whose texels are as wide as the table's.
+        uint w, h, levels;
+        g_sampled_images[NonUniformResourceIndex(s[0].environment)].GetDimensions(0, w, h, levels);
+        luminance = environment_luminance(s, direction, max(log2(float(w) / float(SKY_VIEW_WIDTH)), 0.0));
+    }
+    else
+        luminance = view_luminance(s, p, direction, elevation, 32);
     g_storage_images_rgba16f[NonUniformResourceIndex(s[0].sky_view_storage)][id.xy] = float4(luminance, 1.0);
 }
 
@@ -370,6 +388,17 @@ void compose_main(uint3 id : SV_DispatchThreadID)
     float depth = g_sampled_images_r[NonUniformResourceIndex(s[0].depth)].Load(int3(id.xy, 0));
     RWTexture2D<float4> color = g_storage_images_rgba16f[NonUniformResourceIndex(s[0].color)];
     float3 sun = s[0].sun.xyz;
+    // An environment map as the sky (D-084): drawn at full resolution, its own sun in it, and
+    // no air to haze what stands before it.
+    if (s[0].environment != 0xFFFFFFFFu)
+    {
+        if (depth <= 0.0)
+        {
+            float3 seen = environment_luminance(s, view_direction(s, uv), 0.0) * s[0].scale.x;
+            color[id.xy] = float4(min(seen, 32768.0), 1.0);
+        }
+        return;
+    }
     if (depth <= 0.0)
     {
         float3 direction = view_direction(s, uv);

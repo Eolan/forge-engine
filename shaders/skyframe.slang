@@ -47,8 +47,8 @@ public struct Sky
     public uint moon_albedo;         // sampled: the Moon's albedo map, or ~0: a plain disc
     public float haze;               // the air between the camera and what it hazes is this many
                                      // times as dense (1: the physical air; `thinned`)
-    public uint pad2;
-    public uint pad3;
+    public uint environment;         // sampled: an environment map as the sky (D-084), or ~0: the air's
+    public float environment_scale;  // its luminance per unit, over the reference illuminance
 };
 
 // The aerial-perspective volume: SLICES depth slices of SLICE × SLICE froxels, laid side by

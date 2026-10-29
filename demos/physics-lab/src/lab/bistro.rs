@@ -1,6 +1,7 @@
 //! `physics-lab --lab bistro` (D-083 step 1): the Amazon Lumberyard Bistro's exterior, an
-//! authored scene (ORCA, CC BY 4.0) to measure Forge's image, load and frame against, by day
-//! (Forge's sun and sky) and by night (its emissive surfaces alone, `--time-of-day 1.5`).
+//! authored scene (ORCA, CC BY 4.0) to measure Forge's image, load and frame against: by
+//! day under its authors' HDR sky and the sun taken out of it (D-084), by night lit by its
+//! emissive surfaces alone (`--time-of-day 1.5`).
 //!
 //! The archive is fetched by hand into `assets/external/bistro/` (git-ignored, never shipped)
 //! and converted once by `tools/fbx-to-gltf.py` into `converted/`: the meshes and nodes as glTF
@@ -22,6 +23,7 @@ use forge_render::material::{ExternalMaps, external_layer, upload_compressed};
 use glam::{Mat4, Quat, Vec3};
 
 use city_blocks::CityMaterials;
+use city_blocks::scenario::Environment;
 
 /// The luminance of an emissive map's full colour, cd/m² (a lit shop sign or lamp shade): the
 /// night is lit by these alone. To be set against the path-traced reference (D-083 step 2).
@@ -48,13 +50,6 @@ struct Roles {
     specular: Option<String>,
     normal: Option<String>,
     emissive: Option<String>,
-}
-
-/// A light the converter found (`BistroExterior.lights.json`).
-#[derive(Clone, Debug, serde::Deserialize)]
-struct Light {
-    r#type: String,
-    direction: [f32; 3],
 }
 
 /// The FBX's camera path: one `[x, y, z, qx, qy, qz, qw]` a frame, in glTF's frame (+Y up) with
@@ -86,8 +81,6 @@ pub(super) struct Bistro {
     pub props: Vec<&'static str>,
     roles: HashMap<String, Roles>,
     pub camera: Option<CameraPath>,
-    /// Towards its sun, as its authors set it (`BistroExterior.lights.json`).
-    pub sun: Option<Vec3>,
 }
 
 /// The exterior, read once; `None` (logged) where the converted files are missing.
@@ -135,12 +128,6 @@ fn read() -> Result<Bistro> {
             .context("BistroExterior.textures.json")?,
     )
     .context("BistroExterior.textures.json")?;
-    // The FBX's one sun: the direction it shines, turned round.
-    let sun = std::fs::read(converted.join("BistroExterior.lights.json"))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Vec<Light>>(&bytes).ok())
-        .and_then(|lights| lights.into_iter().find(|l| l.r#type == "SUN"))
-        .map(|l| -Vec3::from(l.direction).normalize());
     let camera = std::fs::read(converted.join("BistroExterior.camera.json"))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<CameraPath>(&bytes).ok());
@@ -164,7 +151,6 @@ fn read() -> Result<Bistro> {
         props,
         roles,
         camera,
-        sun,
     })
 }
 
@@ -197,10 +183,21 @@ pub(super) fn build(first: usize) -> Vec<(usize, Mat4)> {
     })
 }
 
-/// The scene's sun as its authors set it (towards it), where the converter found one: their
-/// renders' light, which a comparison with them matches.
-pub(crate) fn sun() -> Option<Vec3> {
-    bistro().and_then(|b| b.sun)
+/// The scene's sky and sun as its authors' renders were lit (D-084): the archive's HDR
+/// photograph alone, its sun taken out of it to be the scene's (`BistroExterior.pyscene` lights
+/// by it; the FBX's directional light is for rasterisers, its readme says, and NVIDIA's
+/// path-traced renders leave it out). `None` without the photograph.
+pub(crate) fn environment() -> Option<Environment> {
+    let (_, archive) = folders();
+    let path = archive.join("san_giuseppe_bridge_4k.hdr");
+    if !path.exists() {
+        tracing::warn!(path = %path.display(), "no Bistro sky: lit by Forge's");
+        return None;
+    }
+    Some(Environment {
+        path: Box::leak(path.to_string_lossy().into_owned().into_boxed_str()),
+        scale: 1.0,
+    })
 }
 
 /// Where the camera starts: the path's first frame (the street before the café), else above

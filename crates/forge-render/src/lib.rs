@@ -22,6 +22,7 @@ pub mod debug_hash;
 pub mod decals;
 pub mod display;
 pub mod dust;
+pub mod environment;
 pub mod exposure;
 pub mod ffx_shadows;
 pub mod ffx_upscale;

@@ -945,6 +945,9 @@ struct Gallery {
     /// The night (D-046, issue #164) with `--day` and `--time-of-day`: where the Moon and the
     /// stars are, the stars on the GPU, and this frame's sky and lights.
     night: Option<forge_render::night::NightSky>,
+    /// An environment map as the sky (D-084, `Look::environment`), with the luminance of a unit
+    /// of it per unit of the sun's illuminance.
+    environment: Option<(forge_render::environment::EnvironmentMap, f32)>,
     celestial: forge_render::night::Celestial,
     night_settings: forge_render::night::NightSettings,
     night_now: Option<(forge_render::night::SkyAt, forge_render::night::NightLights)>,
@@ -1185,8 +1188,40 @@ impl Gallery {
         if look.white_sun {
             renderer.sun_color = Vec3::ONE;
         }
+        // An environment map as the sky (D-084): loaded once, its sun the scene's. It lights the
+        // day: `--time-of-day` from sunset to sunrise (1 to 2) keeps the night (D-046).
+        let by_night = args.time_of_day.is_some_and(|t| t.rem_euclid(2.0) >= 1.0);
+        let environment = look
+            .environment
+            .filter(|_| !by_night)
+            .map(|e| -> Result<_> {
+                let map = forge_render::environment::EnvironmentMap::load(
+                    &ctx.device,
+                    std::path::Path::new(e.path),
+                )?;
+                // Its sun is the scene's, and the sky is scaled against it.
+                let scale = match map.sun {
+                    Some(sun) => {
+                        let illuminance = sun.illuminance().max(1e-9);
+                        renderer.sun_dir = Vec3::from(sun.direction).normalize();
+                        renderer.sun_color = Vec3::from(sun.irradiance) / illuminance;
+                        e.scale / illuminance
+                    }
+                    None => e.scale,
+                };
+                tracing::info!(
+                    path = e.path,
+                    size = ?map.size,
+                    mean_luminance = map.mean_luminance,
+                    sun = ?map.sun,
+                    scale,
+                    "an environment map as the sky"
+                );
+                Ok((map, scale))
+            })
+            .transpose()?;
         // Under the ground's sky alone: the night, the clouds.
-        let open_sky = look.backdrop == Backdrop::Sky;
+        let open_sky = look.backdrop == Backdrop::Sky && environment.is_none();
         // The night under the ground's sky (D-046) wherever the day turns: `--day`, `--time-of-day`.
         let night = ((args.day.is_some() || args.time_of_day.is_some()) && open_sky)
             .then(|| {
@@ -2052,6 +2087,7 @@ impl Gallery {
             sun_cycle: None,
             world_sound: None,
             night,
+            environment,
             celestial,
             night_settings,
             night_now: None,
@@ -3092,6 +3128,10 @@ impl Demo for Gallery {
                 march_beyond: false,
                 haze: 1.0,
                 night,
+                environment: self
+                    .environment
+                    .as_ref()
+                    .map(|(map, scale)| (map.sampled(), *scale)),
             },
             targets.depth,
             taa_frame.color,

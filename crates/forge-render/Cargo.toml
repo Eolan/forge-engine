@@ -20,5 +20,5 @@ forge-world = { workspace = true }
 glam = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "hdr"] }
 tracing = { workspace = true }

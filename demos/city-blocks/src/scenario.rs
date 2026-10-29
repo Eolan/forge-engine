@@ -86,6 +86,22 @@ pub struct Look {
     /// `--meter-band`, `--local-exposure-contrast`): a room seen from a lit hall through its door
     /// reads a bit darker, as the eye sees it, not black (the owner, 2026-10-19, #275).
     pub local_exposure: bool,
+    /// An environment map as the sky (D-084), for a scene authored under one: no air, no
+    /// clouds, no night; the sun's direction from `sun`.
+    pub environment: Option<Environment>,
+}
+
+/// An environment map as a scene's sky and sun (D-084): the light its authors set, for
+/// comparisons with their renders. The photograph's sun, taken out of the map, is the scene's
+/// sun (its direction, colour and the reference illuminance); a map without one keeps the
+/// scene's.
+#[derive(Clone, Copy, Debug)]
+pub struct Environment {
+    /// The Radiance HDR file.
+    pub path: &'static str,
+    /// The sky's light against its sun's: 1 as photographed. Without a sun in the map, the
+    /// luminance of a unit of it per unit of the scene's sun's illuminance.
+    pub scale: f32,
 }
 
 impl Default for Look {
@@ -105,6 +121,7 @@ impl Default for Look {
             chase: false,
             metered: false,
             local_exposure: false,
+            environment: None,
         }
     }
 }

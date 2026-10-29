@@ -227,8 +227,6 @@ impl Scenario for LabScenario {
                 LabScene::Space => Some(SPACE_SUN),
                 LabScene::TankBench => Some(BENCH_SUN),
                 LabScene::Room => Some(room::SUN),
-                // Its authors' sun, for comparisons with their renders (D-083).
-                LabScene::Bistro => super::bistro::sun(),
                 LabScene::Yard | LabScene::Materials => Some(yard::SUN),
                 _ => None,
             },
@@ -261,6 +259,10 @@ impl Scenario for LabScenario {
             // Each lab scene at its own fixed exposure (its captures compared at one).
             metered: false,
             local_exposure: false,
+            // The Bistro under its authors' sky and sun (D-084), for comparisons with their renders.
+            environment: (kind == LabScene::Bistro)
+                .then(super::bistro::environment)
+                .flatten(),
         }
     }
 

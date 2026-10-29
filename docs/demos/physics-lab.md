@@ -2264,12 +2264,13 @@ Steps 1 and 3 of D-065 (`forge_render::lamps`, `lamps_at` and `hit_lamps` in `me
 ```
 cargo run --release -p physics-lab -- --lab bistro
 cargo run --release -p physics-lab -- --lab bistro --time-of-day 1.5
+cargo run --release -p physics-lab -- --lab bistro --view=-23.700,6.855,-0.704,-93.13,-15.93 --fov 36.22 --ev100 11.4
 ```
 
 The Amazon Lumberyard Bistro's exterior (ORCA, CC BY 4.0, `CREDITS.md`): 1,296 meshes,
 2.83 M triangles, 134 materials. It is the first of D-083's authored scenes, for measuring
 Forge's image, load and frame against, first against NVIDIA's renders, then against a
-path-traced reference (step 2).
+path-traced reference (step 2). The third line is NVIDIA's Exterior_1 view.
 
 **Getting it.** It is never in the repository.
 1. Fetch the archive by hand into `assets/external/bistro/` (git-ignored).
@@ -2295,19 +2296,40 @@ path-traced reference (step 2).
 - **Factors:** each factor a map carries is 1. The exporter, which kept no images, had written
   its own defaults (roughness 0.553 everywhere).
 
+**The sky** (D-084, `forge_render::environment`). By day the Bistro is lit as the authors lit
+it: the archive's HDR photograph, `san_giuseppe_bridge_4k.hdr` (4096 × 2048, HDRI Haven).
+- **Stored** as RGB9E5 with its mips, in Falcor's latitude-longitude layout.
+- **Its sun taken out:** the texels over 40 times the map's mean round the brightest one,
+  summed by solid angle, become the scene's sun (28.6° high, warm white) and leave the map. The
+  FBX's sun (61°) lit the scene from the wrong side: NVIDIA's renders are path-traced under
+  the map alone.
+- **The rest is the sky:** the sky-view table and its irradiance are read from the map, so the
+  probes and the ambient see it; compose draws it behind the scene, without haze.
+- **Its level:** the map scaled so that its sun has Forge's sun illuminance.
+- **By night** (`--time-of-day` from 1 to 2) the map is left out and the night stays Forge's.
+
+**NVIDIA's Exterior_1** (`reference/`), the first picture matched:
+- **The view:** fitted to six scene points and their pixels (`bistro_solve_view`, an ignored
+  test): 4.5 px RMS, field of view 36.22°.
+- **The exposure:** `--ev100 11.4` matches the picture's brightness. Fixed exposure ignores
+  `--exposure-compensation`.
+- **Close:** the light's direction, the sky, the overall level.
+- **Not yet:** NVIDIA's shadows are darker and crisper; its colours warmer; its cobbles'
+  joints darker; the café front brighter against the street. Falcor's tone mapper and
+  path tracer defaults come first, then one difference at a time.
+
 **Numbers** (1600 × 900, DLAA, RTX 5070 Ti, the path's first frame):
 - **Load:** 10 s in all on the first run, the props cooked. The 405 maps, 925 MB of blocks,
   read in 0.5 s and uploaded in 1.1 s.
-- **GPU memory:** 2.5 GB (textures 949 MB, geometry 628 MB).
-- **Frame:** 3.8 ms of GPU at noon and 4.0 ms at midnight. `gi/probe rays` takes 1.7–1.9 ms of
-  it.
+- **GPU memory:** 2.5 GB (textures 989 MB with the sky's 45 MB, geometry 628 MB).
+- **Frame:** 3.4 ms of GPU at noon and 4.0 ms at midnight. `gi/probe rays` takes 1.45–1.9 ms
+  of it. The sky's passes take 0.03 ms. Exterior_1's view: 3.56 ms.
 
 **Not yet:**
 - **The night's light:** the archive's night is its emissive surfaces alone. Forge adds its
   moon, and its emissive surfaces light the street only through the probes. The night reference
   will measure the gap (D-083 step 3).
-- **NVIDIA's views:** their viewpoints are to be found in the scene, to compare with them frame
-  for frame.
+- **NVIDIA's other views:** Exterior_2 next, then the night.
 
 ## `FORGE_DYNAMIC_SCENE`: the scene edited as it runs (issues #220, #338)
 

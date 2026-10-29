@@ -8034,3 +8034,47 @@ steps".
 - **The review before the push,** as part of the gate.
 - **The backlog triaged** to about 25 active issues, the rest merged or moved to "Later"; a
   session's own findings go to one triage list first.
+
+## D-084 — An environment map as the sky, its sun taken out of it ✅ (the owner's go, 2026-10-29)
+
+**Why:** D-083's first comparison, the Bistro's Exterior_1 beside NVIDIA's render, could not
+match while Forge lit it with its own atmosphere. The authors lit the scene with an HDR
+photograph (HDRI Haven's San Giuseppe bridge, at Falcor's intensity 10). Their render is
+path-traced under that photograph alone; the FBX's directional light is for rasterisers, the
+archive's readme says. Engines take such skies as a matter of course, and every reference made
+under one needs it. The owner chose this over keeping Forge's sky ("our engine has to learn to
+use the bistro technology indeed").
+
+**What** (`forge_render::environment`, `sky.slang`; a scene asks with `Look::environment`):
+- **The map:** a Radiance HDR file, read in Falcor's equirectangular layout (u from atan2(x, −z),
+  v from the zenith down). Stored as RGB9E5 (four bytes a texel) with box-filtered mips: about
+  45 MB for 4096 × 2048.
+- **Its sun:**
+  - At load, the texels round the brightest one that hold over 40 times the map's mean are
+    summed by solid angle. That sum is the scene's sun: its direction, its colour, and the
+    reference illuminance.
+  - Those texels are then held to the bound, so the sky keeps no second sun.
+  - The sky is scaled against the sun, so the photograph's balance carries over. San Giuseppe:
+    its sun, 28.6° high, gives about as much light on the horizontal as the rest of the sky.
+- **The sky's passes:**
+  - The sky-view table is filled from the map at the mip its texels match. The sky's irradiance
+    (the nine harmonics), the probes' misses and the resolve's reflections follow from that
+    table, as before.
+  - The compose pass draws the map behind the scene at full resolution and hazes nothing.
+  - No clouds, no night.
+- **The resolve shader is untouched:** it stands near the size where its ray queries fail
+  (#355; a branch added there on 2026-10-29 moved every asteroid capture).
+
+**Measured on Exterior_1** (the camera solved from six points, 4.5 px):
+- **The sun's direction:** of eight candidate readings of the map's layout, rendered from that
+  camera, Falcor's correlates 0.82 with NVIDIA's frame. The FBX sun scores 0.59, and the other
+  readings 0.50 or less.
+- **Brightness:** at EV 11.4 (2.6 stops over the lab's 14), sunlit and shaded cobbles hold the
+  same ratio as in NVIDIA's.
+- **Still differing:** NVIDIA's shadows are darker and crisper, and their colour warmer.
+  Falcor's tone mapper and path-tracer settings are to be read before more tuning.
+
+**Not yet:**
+- Sharp mirrors see the sky through the table (about a degree a texel).
+- A map's rotation, if a scene needs one.
+- Light from the map's ground below the horizon reaches the scene only through the harmonics.

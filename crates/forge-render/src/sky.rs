@@ -75,7 +75,8 @@ struct GpuSky {
     star_cells: u64,
     moon_albedo: u32,
     haze: f32,
-    pad1: [u32; 2],
+    environment: u32,
+    environment_scale: f32,
 }
 
 const _: () = assert!(std::mem::size_of::<GpuSky>() == 320);
@@ -146,6 +147,11 @@ pub struct SkyParams {
     /// The night's lights and sky (D-046): `sun_dir` is then the key light's and
     /// `luminance_scale` per unit of the reference illuminance.
     pub night: Option<SkyNight>,
+    /// An environment map as the sky (D-084, [`crate::environment::EnvironmentMap`]): its
+    /// bindless index and the luminance of a unit of it per unit of the reference illuminance.
+    /// The sky-view table and the backdrop take it in place of the air, which then hazes
+    /// nothing.
+    pub environment: Option<(u32, f32)>,
 }
 
 /// The sky's irradiance for the resolve (issue #47): nine spherical-harmonic coefficients,
@@ -430,7 +436,8 @@ impl GroundSky {
                         star_cells: night.addresses.1,
                         moon_albedo: night.moon_albedo,
                         haze: params.haze,
-                        pad1: [0; 2],
+                        environment: params.environment.map_or(u32::MAX, |e| e.0),
+                        environment_scale: params.environment.map_or(0.0, |e| e.1),
                     }],
                 );
                 commands.bind_pipeline(pipeline);
