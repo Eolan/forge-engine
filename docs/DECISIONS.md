@@ -8180,3 +8180,41 @@ fronts: the Bistro's finest cascade is 4 m; 1 m over the whole view (64 × 16 ×
 the café's front to 0.9 to 1.4, at 8.6 ms and 464 MB; 1 m within 24 m, or 2 m, changes nothing;
 a 5 m occlusion radius (GTAO) takes it to 1.0 to 1.3, too dark in places. The real-time answer
 (occlusion traced at medium range, or probes placed by the geometry) is a design of its own.
+
+## D-087 — The night's light from its emissive surfaces: emitters as lamps, probes without them 🟡 (proposed, 2026-10-30; D-083 step 3)
+
+**Why:** the owner: "emitting lights are less bright in our engine" and, of a night run, "it's
+shimmering everywhere, light is not stable". NVIDIA's Night picture, its camera solved from six
+points (`--view=-16.735,5.218,2.083,-80.44,-9.63 --fov 55.99`, 2.1 px), is Falcor's path tracer
+lit by the emissive surfaces alone at +9 stops (mean luma 53.4 against NVIDIA's 50.7; EV 2.2 in
+Forge's units, a street at night). Forge at the same view and exposure (`--time-of-day 1.5`):
+- **The emitters themselves:** 0.70 of Falcor's light (0.83 by day).
+- **The light they throw:** 0.04 to 0.3 of Falcor's on the café's front, the terrace and the
+  street. Forge carries emitted light only through its probes, whose 128 rays a frame seldom
+  meet a lantern's glass or a bulb.
+- **The flicker:** a still camera changes 261,857 pixels (18 %) between frames 10 apart; 1,640
+  with the probes off. The probes' rays meet the small bright emitters by chance, and the night's
+  exposure shows it everywhere. By day: 5,361 (0.37 %), on thin geometry (baskets, chair legs,
+  wires) under DLAA, unchanged without the probes' spacing, the sun's size, mirror rays or the
+  normal maps.
+
+**The proposal:**
+- **Emitters as lamps (D-065's):** at load, each emissive section of a mesh split into its
+  connected pieces (a lantern's glass, a bulb, a sign); each a lamp at its middle, as wide as the
+  piece, its luminous intensity from its luminance and area (a closed bulb L × A / 4 every way, a
+  flat sign L × A along its normal in a hemisphere cone), its colour its map's mean. Lamps take
+  an RGB tint over their colour temperature (CPU side only: the GPU record already holds RGB
+  candelas).
+- **The probes' rays skip emission** where the emitter is a lamp: its light reaches the probes
+  as the lamps' light does, sampled, not by chance. No flicker.
+- **Choice and shadows as D-065's:** the 64 nearest by lists, the street lamps (outside) by
+  ReSTIR DI, the owner's choice of 2026-10-18 (its patents as settled then). The Bistro's string
+  lights, a few hundred bulbs, test the many-lights path.
+- **The archive's night without Forge's moon:** a look switch for comparisons (its readme: the
+  night is its emissive surfaces alone); Forge's own nights keep the moon.
+
+**Cost:** the lamps' shadow rays (the village's 325 lamps at 22:00 are the measure); the load's
+split of the emissive sections (connected pieces by welded corners, as `open_edges`).
+
+**Verification:** the Night view against Falcor's (light on the café's front and the street
+within 0.8 to 1.25), the still-camera flicker under 0.2 %, the village's lamps unchanged.
