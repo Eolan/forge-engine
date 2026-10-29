@@ -2409,10 +2409,29 @@ on a 16 × 9 grid):
 - **Not yet:** the string lights' colours glow less on the fronts; the cobbles are a little less
   red; the scooter's paint is less glossy.
 
+**Exterior_2** (the terrace under the awnings, down the street to the gallery): its camera
+solved from ten points (the two "ART GALERIE" signs, four wall lanterns, two post lanterns, two
+of the café's globes), `--view=13.378,2.280,11.709,48.33,-0.50 --fov 38.90`, 2.6 px; NVIDIA's
+picture is rolled 1.1°, which `--view` cannot give, so Forge and Falcor are compared unrolled
+(`--ev100 11.22 --fixed-exposure`, Falcor 1,024 paths a pixel). Forge's light over Falcor's:
+- **The shade under the awnings:** 1.2 to 1.5, as Exterior_1's, the probes 4 m apart carrying
+  the street's light in; the undersides that face the dark terrace (the awnings' boxes, the
+  cornice) 3 to 6, near black in Falcor.
+- **The sunlit street and fronts:** 0.9 to 1.4.
+- **A seam of sun down the café's pillar:** a line 2.8 px wide of full sun (1,860 cd/m² against
+  4 beside it), where Falcor shows a hairline (26 over one pixel). Not the shadow rays' start,
+  the rays' cut of the meshes, the level of detail, the mirror rays, the probes, the shadow
+  denoiser or back faces: the same with each off or exact. The converted glTF opens a seam of
+  about a centimetre between pieces of `Paris_Building_01` that Falcor's own reading of the FBX
+  keeps closed; `tools/fbx-to-gltf.py` changes no geometry, so Blender's FBX import is the
+  suspect (pivots or geometric offsets).
+- **Back faces:** the awnings' beams and the flowers' leaves, black in Falcor, lit in Forge (as
+  the night's).
+
 **Not yet:**
 - **The night's light by default:** without `FORGE_BISTRO_LAMPS=1` the emissive surfaces light
   the street through the probes alone (D-087 waits for the owner's decision).
-- **NVIDIA's other views:** Exterior_2.
+- **The seam down the café's pillar** (above): the converter's FBX import against assimp's.
 
 ## `chart`: the material test chart against Falcor (D-083 step 2)
 
