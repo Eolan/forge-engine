@@ -576,6 +576,8 @@ pub struct PlanScenario {
     /// under which they fade away (`--fade-furniture`, #343; none by default).
     home_kit: Vec<u32>,
     fade_furniture: Option<f32>,
+    /// The furniture met by the probes' rays (`--furniture-in-probes`, as before #363).
+    furniture_in_probes: bool,
     /// The tram lines' runs, and the service's clock at the start, seconds.
     trams: Vec<TramRun>,
     /// The river shuttles, one a crossing.
@@ -2180,6 +2182,7 @@ impl PlanScenario {
             kit_meshes,
             home_kit,
             fade_furniture: None,
+            furniture_in_probes: false,
             kit_instances,
             kit_report,
             far_lit,
@@ -2310,6 +2313,12 @@ impl PlanScenario {
     /// nothing): a few tens of metres off, the culls and the raster skip it.
     pub fn fade_furniture(mut self, px: f32) -> Self {
         self.fade_furniture = Some(px);
+        self
+    }
+
+    /// The houses' furniture met by the probes' rays, as before #363: to compare its light.
+    pub fn furniture_in_probes(mut self) -> Self {
+        self.furniture_in_probes = true;
         self
     }
 
@@ -7600,6 +7609,20 @@ impl Scenario for PlanScenario {
                 transform,
                 kit_rows[group as usize],
             );
+            // The rooms' furniture out of the probes' rays (#363): a bed or a wardrobe in a room
+            // grid's way cut its probe's view of the floor, which took its light in sharp curved
+            // patches (the visibility test), and the bed's orange went round the walls. Drawn,
+            // shadowed and mirrored as before.
+            if !self.furniture_in_probes && self.home_kit.contains(&module) {
+                let at = builder.instance_count() - 1;
+                builder.set_instance_visibility(
+                    at,
+                    forge_render::Visibility {
+                        probes: false,
+                        ..forge_render::Visibility::ALL
+                    },
+                );
+            }
         }
         if let Some(report) = &self.kit_report {
             tracing::info!("{report}");

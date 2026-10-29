@@ -7719,6 +7719,19 @@ from 0.79 to 0.53 at the grids' edge and stood at 0.37 at 70 m, against the grid
   as the grids light it; the map check (15:00) moved by ꟻLIP up to 0.009, a far room through a
   window, accepted.
 
+**The furniture out of the probes' rays (2026-10-29, #363).** The owner's walk named three
+rooms' light ("lighting issue", "quite a lot of lighting issues"). In a bedroom the floor took its
+light in sharp curved patches, cool against warm, and the walls an orange cast. The patches were
+the grids' visibility test: a bed or a wardrobe in a probe's way cut its view of the floor, and
+the floor beyond took none of that probe; a grid twice as dense shrank them, none took them out.
+The cast was the orange furniture's bounce. City-plan's furniture (the kit's home pieces) is now
+out of the probes' rays (`Visibility { probes: false, .. }`): drawn, shadowed and mirrored as
+before. The patches go (the bedroom's floor even), and in the map check's room the back wall and
+the floor read about five levels brighter and lose the orange (rgb 95, 87, 58 → 92, 95, 67), the
+grid's density no longer mattering (0.5 m within a level of 1 m). The map check's insides moved
+by ꟻLIP up to 0.134 (the room) and 0.053 (the hall), accepted; `--furniture-in-probes` keeps
+them in to compare.
+
 *(research: probe-levels-indoors.md; D-068; issue #353)*
 
 ## D-079 — Marks where bodies strike: a pool of run-time decals on static surfaces ✅ (proposed 2026-10-24, accepted the same day, Phase 7)

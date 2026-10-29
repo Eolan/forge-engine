@@ -86,6 +86,10 @@ struct Cli {
     /// to nothing; 24: about 35 m for a chair at 1600×900). Off by default.
     #[arg(long)]
     fade_furniture: Option<f32>,
+    /// The houses' furniture met by the probes' rays, as before #363 (to compare): out of them by
+    /// default, its visibility test cut the room grids' light into curved patches.
+    #[arg(long)]
+    furniture_in_probes: bool,
     /// Board the tram nearest the camera this many seconds in (C boards and gets off by hand).
     #[arg(long)]
     ride: Option<f64>,
@@ -579,6 +583,11 @@ fn main() -> anyhow::Result<()> {
         let scenario = match cli.fade_furniture {
             Some(px) => scenario.fade_furniture(px),
             None => scenario,
+        };
+        let scenario = if cli.furniture_in_probes {
+            scenario.furniture_in_probes()
+        } else {
+            scenario
         };
         let scenario = match cli.promote_test.as_deref() {
             Some(mode) => scenario.promote_test(match mode {
