@@ -2410,6 +2410,8 @@ on a 16 × 9 grid):
   red; the scooter's paint is less glossy.
 
 **Not yet:**
+- **The night's light by default:** without `FORGE_BISTRO_LAMPS=1` the emissive surfaces light
+  the street through the probes alone (D-087 waits for the owner's decision).
 - **NVIDIA's other views:** Exterior_2.
 
 ## `chart`: the material test chart against Falcor (D-083 step 2)

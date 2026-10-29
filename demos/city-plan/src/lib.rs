@@ -3620,7 +3620,7 @@ fn room_lamps(
         let (glow, lamp) = match strongest {
             Some(i) => {
                 let l = &lamps[i];
-                let c = forge_render::lamps::lamp_rgb(l.kelvin) * (l.candela * ROOM_GLOW);
+                let c = forge_render::lamps::lamp_rgb(l.kelvin) * l.tint * (l.candela * ROOM_GLOW);
                 (c.to_array(), i as u32)
             }
             None => ([0.0; 3], forge_render::NO_LAMP),

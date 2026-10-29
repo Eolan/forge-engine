@@ -48,7 +48,9 @@ pub struct Lamp {
     /// Its colour temperature, kelvin (a warm bulb 2700, daylight 6500).
     pub kelvin: f32,
     /// Its colour over its temperature's, of luminance 1 (white: [`Vec3::ONE`]): a coloured bulb
-    /// or glass, as the Bistro's string lights (D-087).
+    /// or glass, as the Bistro's string lights (D-087). Their product is not brought back to
+    /// luminance 1: give a tinted lamp [`WHITE_BALANCE`]'s temperature, whose colour is white,
+    /// or its candelas no longer measure its luminance.
     pub tint: Vec3,
     /// The probes' regions (D-068, [`crate::RegionVolume`]) whose surfaces it lights: its room's
     /// and those it shines into through a doorway, [`NO_REGION`] in the slots left over. A
@@ -68,8 +70,8 @@ impl Lamp {
         self.regions[0] == REGION_OUTSIDE
     }
 
-    /// Its light in lumens, per channel of its colour of luminance 1 (`lamp_rgb`): its peak
-    /// candelas over the solid angle its emission fills.
+    /// Its light in lumens, per channel of its colour of luminance 1 (`lamp_rgb` times its
+    /// tint): its peak candelas over the solid angle its emission fills.
     pub fn lumens(&self) -> Vec3 {
         lamp_rgb(self.kelvin) * self.tint * (self.candela.max(0.0) * self.emission.solid_angle())
     }

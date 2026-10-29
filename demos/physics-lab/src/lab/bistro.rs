@@ -572,7 +572,8 @@ fn glows(which: Authored) -> Vec<(String, Glow)> {
                     parent[a] = c;
                 }
             }
-            let mut pieces: HashMap<usize, Glow> = HashMap::new();
+            // By their roots, in order: the lamps' order the same at every run.
+            let mut pieces: std::collections::BTreeMap<usize, Glow> = Default::default();
             for (t, tri) in tris.iter().enumerate() {
                 let p = tri.map(|v| Vec3::from(m.mesh.positions[v as usize]));
                 let uv = tri.map(|v| glam::Vec2::from(m.mesh.uvs[v as usize]));
@@ -627,8 +628,10 @@ fn glows(which: Authored) -> Vec<(String, Glow)> {
                 let middle = g.middle / g.area;
                 let p = tri.map(|v| Vec3::from(m.mesh.positions[v as usize]));
                 let cross = (p[1] - p[0]).cross(p[2] - p[0]);
-                let away = ((p[0] + p[1] + p[2]) / 3.0 - middle).dot(cross);
-                *outward.entry(r).or_default() += 0.5 * cross.length() * away.signum();
+                // The cosine between its normal and the way from the piece's middle: a sheet
+                // of two faces back to back, whose normals cancel too, measures about none.
+                let away = ((p[0] + p[1] + p[2]) / 3.0 - middle).normalize_or_zero();
+                *outward.entry(r).or_default() += 0.5 * cross.dot(away);
             }
             for (r, g) in pieces {
                 let g = Glow {
@@ -659,7 +662,8 @@ fn glow_lamp(g: &Glow) -> Option<Lamp> {
         return None;
     }
     let flat = g.normal.length() / g.area > FLAT_PIECE;
-    // A closed piece facing in (a lantern's inner shell) lights its fitting's inside alone.
+    // A closed piece facing in (a lantern's inner shell) lights its fitting's inside alone, and
+    // is left out; its glow, a lamp row's, is left out of the probes too.
     if !flat && g.outward < -0.5 {
         return None;
     }
@@ -690,7 +694,13 @@ fn glow_lamp(g: &Glow) -> Option<Lamp> {
         )
     };
     Some(Lamp {
-        position: g.middle,
+        // A flat piece's in front of it by its radius: the shadow rays aim at its disc, and on
+        // the piece itself half the disc lay behind its face, which blocked them from aside.
+        position: if flat {
+            g.middle + g.normal.normalize_or_zero() * radius
+        } else {
+            g.middle
+        },
         radius,
         candela,
         kelvin: WHITE_BALANCE,
