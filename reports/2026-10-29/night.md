@@ -73,6 +73,14 @@ A read-only review of #356 and D-082 found 8 issues. All are fixed and checked:
 - **Rooms of several volumes:** window facing and shared walls are corrected. The village's rooms are single volumes, so its frames are bit-identical.
 - **Smaller ones:** the far table is no longer rebuilt every frame, and a missing graph declaration in the particles' pass is fixed.
 
+## 6. A full check of everything pushed tonight
+
+- **What ran:** a Tier 1 on `main` at 89a41ea7, in the night's own worktree, between 05:03 and 05:48. It covers #356, the FSR module and the review's fixes, which the day checks had only partly covered.
+- **Result:** PASSED in 2,650 s, with 1,106 tests.
+- **The images:** the only differences are #71's known flakes (the ballad's HDR frame 600, the lab's dominoes). 262 images were accepted.
+- **Errors:** no validation error and no Streamline error.
+- **What's left:** only Tier 2's extras (timings, origins, the serial frame and the real-time tour). Tomorrow's 01:30 night check takes them when it runs Tier 2.
+
 ## Earlier in the evening: dependencies (#361)
 
 - **The crates:** the 35 compatible updates, glam 0.34, and the latest of everything else. ash now comes from its master branch, with gpu-allocator vendored.
