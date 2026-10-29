@@ -2340,11 +2340,12 @@ it: the archive's HDR photograph, `san_giuseppe_bridge_4k.hdr` (4096 × 2048, HD
   look takes ACES (the owner, 2026-10-29), as Falcor's ToneMapper applies it
   (`aces-narkowicz`); `--tonemap` and `r.tonemap` override it. Hill's ACES kept the lanterns a
   deep orange where Falcor's curve turns them a hot yellow-orange.
-- **The exposure:** the same frame as Falcor's at EV 11.96, from the units alone: Falcor's
-  ToneMapper scales its radiance by 0.6, a unit of it is 2,871 cd/m², and Forge's exposure is
-  1 / (1.2 × 2^EV). Fixed exposure ignores `--exposure-compensation`. Against Falcor's
-  8,192-sample render of the view: mean luma 105.5 against 102.4, spread 60.9 against 66.0,
-  RMS 15.3.
+- **The exposure:** equal light gives Falcor's frame at EV 11.22: a unit of Falcor's radiance is
+  2,871 cd/m², both curves take the 0.6, and Forge's exposure is 1 / (1.2 × 2^EV). Forge's frame
+  matches Falcor's mean at EV 11.96 instead (mean luma 105.5 against 102.4, spread 60.9 against
+  66.0, RMS 15.3): its scene is about 1.6 times too bright, measured with `--capture-linear` (the
+  lit surfaces 1.2 to 1.3 times, the shade 1.5 to 5). Fixed exposure ignores
+  `--exposure-compensation`.
 - **Close:** the light's direction, the sky, the overall level and contrast, the cobbles
   (median luma 182 against 191), the shadows under the photograph's sun, and the emissive
   lamps since their calibration.
