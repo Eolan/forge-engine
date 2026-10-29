@@ -2566,6 +2566,10 @@ The village's rooms with windows past the grids' reach take their windows' dayli
 frames, one run each): `gi/far rooms [compute]` 0.008 ms; the frame 5.571 → 5.600 ms at noon and
 5.611 → 5.649 at 15:00 (the lookup of each far room's share in the resolve and the probes' hits).
 
+With their lamps (#363, `far_room_lamps` 18, 14), the same dolly at midnight: `gi/far rooms` 0.019 →
+0.018 ms, the frame 6.234 → 6.226 ms (one run each: no cost to tell); the rooms' sums on the CPU,
+written again when the frame's lamps change.
+
 ## Not measured yet
 
 - **Streaming**: residency pools, request queue depth, drive and decompression throughput.

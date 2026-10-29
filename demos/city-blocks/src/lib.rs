@@ -445,6 +445,12 @@ pub struct Args {
     /// daylight over its surfaces, following the hour. 0: the fixed share (`--probe-far-sky`).
     #[arg(long)]
     probe_far_daylight: Option<f32>,
+    /// The far rooms' lamps (#363, `ProbeParams::far_room_lamps`), `BOUNCE[,UNLIT]`: with the far
+    /// rooms' daylight, a room with windows beyond the room grids takes its lamps' light round its
+    /// walls, their lumens over its surfaces times BOUNCE, and times UNLIT (0 if left out) for the
+    /// share of each the frame does not light. 0: none.
+    #[arg(long, value_delimiter = ',')]
+    probe_far_lamps: Option<Vec<f32>>,
     /// Where a surface's point is looked up among the probes, off it: `N,V`, the shares of its
     /// normal and of the way to the viewer (`ProbeParams::sample_bias`, 0.2,0.8 by default; #351
     /// tests 1,0, a point that stays put as the camera moves).
@@ -1427,6 +1433,17 @@ impl Gallery {
                     .probe_far_daylight
                     .or(look.probe_far_room_daylight)
                     .filter(|&k| k > 0.0),
+                far_room_lamps: args
+                    .probe_far_lamps
+                    .as_ref()
+                    .map(|v| {
+                        [
+                            v.first().copied().unwrap_or(0.0),
+                            v.get(1).copied().unwrap_or(0.0),
+                        ]
+                    })
+                    .or(look.probe_far_room_lamps)
+                    .filter(|&[b, u]| b > 0.0 || u > 0.0),
                 sample_bias: args
                     .probe_bias
                     .as_ref()
@@ -2899,6 +2916,10 @@ impl Demo for Gallery {
         };
         let shares = forge_render::lamps::choose_shares(&lamps, camera_in_scene, choice);
         self.kept_lamps = self.scene.set_chosen_lamps(frame.slot, &lamps, &shares);
+        // Each far room's lamps that are on, for their light round its walls (#363).
+        if let Some(probes) = self.probes.as_mut() {
+            probes.set_room_lamps(&lamps, &shares);
+        }
         // The clear panes moved or hidden since the last frame (#325), from the world frame to
         // the scene's.
         if let (Some(glass), Some(running)) = (self.glass.as_mut(), self.running.as_mut()) {
@@ -3147,7 +3168,11 @@ impl Demo for Gallery {
                     Vec3::new(v[0], 0.0, z) * v.get(2).map_or(t, |&stop| t.min(stop))
                 });
                 // The far rooms' daylight follows the sun (#356).
-                probes.set_sun(self.renderer.sun_dir, self.renderer.sun_color);
+                probes.set_sun(
+                    self.renderer.sun_dir,
+                    self.renderer.sun_color,
+                    self.renderer.sun_illuminance,
+                );
                 Some(probes.update(
                     &mut frame.graph,
                     frame.slot,

@@ -237,7 +237,7 @@ public struct ProbeField
     public uint room_rays;        // rays a room grid's probe traces a frame (its first PROBE_FIXED_RAYS fixed), at most `rays`
     public uint far_mask;         // the far rooms' table's entries less one (#356)
     public uint far_pad;
-    public uint2* far_table;      // the far rooms' daylight (#356): (region, its share's bits), region 0 an empty entry; null: none
+    public uint4* far_table;      // the far rooms' light (#356, #363): (region, its share's bits, its lamps' bounce as three halves), region 0 an empty entry; null: none
 };
 
 // The coarse cell `key`'s first entry in a table of `mask + 1` (`top_hash` in regions.rs).
@@ -1129,10 +1129,12 @@ float room_depth(ProbeField* field, float3 p)
 
 // A far room's share of the open sky (#356): its windows' daylight this frame where the far
 // rooms' pass gave its region one (`far_rooms_main`, probe_update.slang), else `far_room_sky`
-// (a room without windows, a scene without the pass).
-float far_room_share(ProbeField* field, uint region)
+// (a room without windows, a scene without the pass); and its lamps' light round it (#363),
+// irradiance per unit of the sun's illuminance, the resolve's units, added to the share's.
+float far_room_share(ProbeField* field, uint region, out float3 lamps)
 {
-    uint2* table = field[0].far_table;
+    lamps = float3(0.0);
+    uint4* table = field[0].far_table;
     if (table == nullptr)
         return field[0].far_room_sky;
     uint mask = field[0].far_mask;
@@ -1140,11 +1142,14 @@ float far_room_share(ProbeField* field, uint region)
     // Linear probing in a table at most half full: an empty entry ends the run.
     for (uint k = 0u; k <= mask; k++)
     {
-        uint2 e = table[at];
+        uint4 e = table[at];
         if (e.x == 0u)
             break;
         if (e.x == region)
+        {
+            lamps = float3(f16tof32(e.z), f16tof32(e.z >> 16), f16tof32(e.w));
             return asfloat(e.y);
+        }
         at = (at + 1u) & mask;
     }
     return field[0].far_room_sky;
@@ -1175,12 +1180,15 @@ float3 probe_lookup_with<let MIRROR : int>(ProbeField* field, float3 p, float3 n
         // counts as outside), and the room came out black. It takes `far_room_sky` of the
         // open sky's light instead, what its windows let in, in the warm white the rooms' walls
         // give it back: the sky's own blue turned their floors blue.
-        // Its share follows the hour where its windows are known (#356).
+        // Its share follows the hour where its windows are known (#356), and its lamps' light
+        // round its walls comes with it (#363): at night a lit room's grid gave it whole, and the
+        // windows dimmed as the grid went out of reach.
         float3 tint = float3(1.10, 0.99, 0.80);
         float3 luma = float3(0.2126, 0.7152, 0.0722);
-        float share = far_room_share(field, mask.region);
-        e = float4(tint * (dot(open_sky, luma) * share), 1.0);
-        toward_d = tint * (dot(open_sky_d, luma) * share);
+        float3 lamps;
+        float share = far_room_share(field, mask.region, lamps);
+        e = float4(tint * (dot(open_sky, luma) * share) + lamps, 1.0);
+        toward_d = tint * (dot(open_sky_d, luma) * share) + lamps;
     }
     if (masked && e.w <= 0.0)
         e = cascades_lookup<MIRROR>(field, p, n, g, v, d, mask, false, rooms, toward_d);

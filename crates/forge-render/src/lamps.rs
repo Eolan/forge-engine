@@ -64,6 +64,45 @@ impl Lamp {
     pub fn outside(&self) -> bool {
         self.regions[0] == REGION_OUTSIDE
     }
+
+    /// Its light in lumens, per channel of its colour of luminance 1 (`lamp_rgb`): its peak
+    /// candelas over the solid angle its emission fills.
+    pub fn lumens(&self) -> Vec3 {
+        lamp_rgb(self.kelvin) * (self.candela.max(0.0) * self.emission.solid_angle())
+    }
+
+    /// The room it lights, its first region; none for a street lamp or one lighting every
+    /// surface.
+    pub fn room(&self) -> Option<u32> {
+        let r = self.regions[0];
+        (r != NO_REGION && r != REGION_OUTSIDE).then_some(r)
+    }
+}
+
+/// Each room's lamps that are on (#363): their lumens per channel summed by [`Lamp::room`], the
+/// far rooms' light round their walls, each weighed `bounce` plus `unlit` times the share of it
+/// the frame leaves unlit (`kept`, [`choose_shares`]'s): past the frame's lamps the far room
+/// takes their direct light on its walls too.
+pub fn room_lumens(
+    lamps: &[Lamp],
+    kept: &[(usize, f32)],
+    [bounce, unlit]: [f32; 2],
+) -> std::collections::BTreeMap<u32, [f32; 3]> {
+    let mut share = vec![0.0_f32; lamps.len()];
+    for &(i, s) in kept {
+        if let Some(v) = share.get_mut(i) {
+            *v = s;
+        }
+    }
+    let mut rooms = std::collections::BTreeMap::new();
+    for (i, l) in lamps.iter().enumerate().filter(|(_, l)| l.candela > 0.0) {
+        if let Some(room) = l.room() {
+            let sum: &mut [f32; 3] = rooms.entry(room).or_default();
+            let add = l.lumens() * (bounce + unlit * (1.0 - share[i]));
+            *sum = [sum[0] + add.x, sum[1] + add.y, sum[2] + add.z];
+        }
+    }
+    rooms
 }
 
 /// Which way a lamp's light goes (#288): the share of its peak intensity ([`Lamp::candela`])
@@ -124,6 +163,19 @@ impl Emission {
                 let t = ((out.dot(axis) - outer_cos) / (inner_cos - outer_cos)).clamp(0.0, 1.0);
                 t * t * (3.0 - 2.0 * t)
             }
+        }
+    }
+
+    /// The solid angle its light fills, steradians, as the peak's: its lumens over its candelas.
+    /// Every way 4π; a cone 2π of the cosine it spans whole and half the step's.
+    pub fn solid_angle(&self) -> f32 {
+        match *self {
+            Emission::Every => 4.0 * std::f32::consts::PI,
+            Emission::Cone {
+                inner_cos,
+                outer_cos,
+                ..
+            } => 2.0 * std::f32::consts::PI * ((1.0 - inner_cos) + 0.5 * (inner_cos - outer_cos)),
         }
     }
 
@@ -670,6 +722,61 @@ mod tests {
         one[0] = 3;
         let pairs = lists(&[lamp(two), lamp(EVERY_REGION), lamp(one)]);
         assert_eq!(pairs, vec![[3, 0], [3, 2], [7, 0], [REGION_ANY, 1]]);
+    }
+
+    #[test]
+    fn a_lamps_lumens_follow_the_solid_angle_its_light_fills() {
+        let pi = std::f32::consts::PI;
+        assert!((Emission::Every.solid_angle() - 4.0 * pi).abs() < 1e-5);
+        // A flush light sends a quarter of a bare bulb's of the same peak (`Emission::flush`).
+        assert!((Emission::flush(Vec3::NEG_Y).solid_angle() - pi).abs() < 1e-5);
+        let bulb = Lamp {
+            candela: 100.0,
+            kelvin: 6500.0,
+            ..DARK
+        };
+        let luminance = bulb.lumens().dot(Vec3::new(0.2126, 0.7152, 0.0722));
+        assert!((luminance - 400.0 * pi).abs() < 0.5, "{luminance}");
+    }
+
+    #[test]
+    fn a_rooms_lumens_weigh_the_share_the_frame_leaves_unlit() {
+        let in_room = |room: u32, candela: f32| {
+            let mut regions = EVERY_REGION;
+            regions[0] = room;
+            Lamp {
+                candela,
+                kelvin: 6500.0,
+                regions,
+                ..DARK
+            }
+        };
+        let street = Lamp {
+            candela: 50.0,
+            regions: {
+                let mut r = EVERY_REGION;
+                r[0] = REGION_OUTSIDE;
+                r
+            },
+            ..DARK
+        };
+        let lamps = [
+            in_room(5, 100.0),
+            in_room(5, 0.0),
+            in_room(9, 100.0),
+            street,
+        ];
+        let luma = |c: [f32; 3]| Vec3::from(c).dot(Vec3::new(0.2126, 0.7152, 0.0722));
+        let one = 400.0 * std::f32::consts::PI;
+        // Room 5's lamp lit whole by the frame, room 9's left unlit: bounce 2, unlit 3.
+        let rooms = room_lumens(&lamps, &[(0, 1.0)], [2.0, 3.0]);
+        assert_eq!(
+            rooms.len(),
+            2,
+            "the street lamp and the dark lamp take no room"
+        );
+        assert!((luma(rooms[&5]) - 2.0 * one).abs() < 1.0);
+        assert!((luma(rooms[&9]) - 5.0 * one).abs() < 1.0);
     }
 
     #[test]

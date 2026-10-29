@@ -290,11 +290,15 @@ struct FarPush {
     sun_luma: f32,
     daylight: f32,
     count: u32,
-    pad: [u32; 2],
+    /// 1 with [`ProbeParams::far_room_lamps`] (the rooms' sums carry its factors), 0 without (#363).
+    lamps: f32,
+    /// 1 over the sun's illuminance, lux: the resolve's units.
+    inv_illuminance: f32,
 }
 
 /// Mirrors `FarRoom` in `probe_update.slang`: a far room's windows (`count` from `first` in the
-/// windows' buffer), its walls', floor's and ceiling's area (m²) and its entry in the table.
+/// windows' buffer), its walls', floor's and ceiling's area (m²), its entry in the table and
+/// its lamps that are on, lumens per channel (#363, [`crate::lamps::room_lumens`]).
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct GpuFarRoom {
@@ -302,6 +306,8 @@ struct GpuFarRoom {
     count: u32,
     surface: f32,
     slot: u32,
+    lamps: [f32; 3],
+    pad: u32,
 }
 
 /// Mirrors `FarWindow` in `probe_update.slang`: the way it faces (x, z) and its area (m²).
@@ -314,7 +320,7 @@ struct GpuFarWindow {
 }
 
 /// The far rooms flattened for the GPU (#356): the rooms, their windows and the table's entries.
-type FarFlat = (Vec<GpuFarRoom>, Vec<GpuFarWindow>, Vec<[u32; 2]>);
+type FarFlat = (Vec<GpuFarRoom>, Vec<GpuFarWindow>, Vec<[u32; 4]>);
 
 /// The far rooms' daylight's buffers (#356), per frame slot: the rooms, their windows and the
 /// table the probe lookup reads (a region and its share's bits; region 0 an empty entry).
@@ -346,16 +352,17 @@ impl FarBuffers {
                 name: &name,
             })
         };
-        let records = u64::from(volumes) * 16;
+        let records = u64::from(volumes) * std::mem::size_of::<GpuFarRoom>() as u64;
+        let window_records = u64::from(volumes) * std::mem::size_of::<GpuFarWindow>() as u64;
         Ok(Self {
             rooms: (0..FRAMES_IN_FLIGHT)
                 .map(|i| make(records, format!("far rooms {i}")))
                 .collect::<Result<_>>()?,
             windows: (0..FRAMES_IN_FLIGHT)
-                .map(|i| make(records, format!("far rooms' windows {i}")))
+                .map(|i| make(window_records, format!("far rooms' windows {i}")))
                 .collect::<Result<_>>()?,
             table: (0..FRAMES_IN_FLIGHT)
-                .map(|i| make(u64::from(entries) * 8, format!("far rooms' table {i}")))
+                .map(|i| make(u64::from(entries) * 16, format!("far rooms' table {i}")))
                 .map(|b| b.map(GraphBuffer::new))
                 .collect::<Result<_>>()?,
             capacity: [volumes, volumes, entries],
@@ -364,20 +371,25 @@ impl FarBuffers {
         })
     }
 
-    /// The region store's sets changed: flattened and written again.
+    /// The region store's sets changed, or the rooms' lamps: flattened and written again.
     fn invalidate(&mut self) {
         self.flat = None;
         self.written = [false; FRAMES_IN_FLIGHT];
     }
 
     /// `rooms` flattened into the buffers' records, as many as they hold, with `fixed` the share
-    /// every entry starts with.
-    fn flatten<'a>(&self, rooms: impl Iterator<Item = &'a FarRoom>, fixed: f32) -> FarFlat {
+    /// every entry starts with and `lamps` each room's lamps that are on (lumens per channel).
+    fn flatten<'a>(
+        &self,
+        rooms: impl Iterator<Item = &'a FarRoom>,
+        fixed: f32,
+        lamps: &std::collections::BTreeMap<u32, [f32; 3]>,
+    ) -> FarFlat {
         let [room_room, window_room, entries] = self.capacity;
         let mask = entries - 1;
         let mut records: Vec<GpuFarRoom> = Vec::new();
         let mut windows: Vec<GpuFarWindow> = Vec::new();
-        let mut table = vec![[0_u32; 2]; entries as usize];
+        let mut table = vec![[0_u32; 4]; entries as usize];
         for room in rooms {
             if records.len() as u32 >= room_room
                 || (windows.len() + room.windows.len()) as u32 > window_room
@@ -391,12 +403,14 @@ impl FarBuffers {
             if table[at as usize][0] == room.region {
                 continue;
             }
-            table[at as usize] = [room.region, fixed.to_bits()];
+            table[at as usize] = [room.region, fixed.to_bits(), 0, 0];
             records.push(GpuFarRoom {
                 first: windows.len() as u32,
                 count: room.windows.len() as u32,
                 surface: room.surface,
                 slot: at,
+                lamps: lamps.get(&room.region).copied().unwrap_or_default(),
+                pad: 0,
             });
             windows.extend(room.windows.iter().map(|w| GpuFarWindow {
                 normal: w.normal.to_array(),
@@ -481,6 +495,13 @@ pub struct ProbeParams {
     /// [`Self::far_room_sky`], which rooms without windows keep. None: every far room takes
     /// `far_room_sky`.
     pub far_room_daylight: Option<f32>,
+    /// The far rooms' lamps (#363): where set, with [`Self::far_room_daylight`], a far room with
+    /// windows takes its lamps' light round its walls: `[bounce, unlit]`, their lumens over its
+    /// surfaces times `bounce` (what bounces round the room, set against the grids) and times
+    /// `unlit` for the share of each the frame does not light (its direct light on the walls, past
+    /// the frame's lamps) ([`ProbeField::set_room_lamps`]). At night a lit room's grid gave it
+    /// whole and its windows dimmed past the grids. None: no lamps' light.
+    pub far_room_lamps: Option<[f32; 2]>,
 }
 
 impl Default for ProbeParams {
@@ -501,6 +522,7 @@ impl Default for ProbeParams {
             sample_bias: [0.2, 0.8],
             rooms: None,
             far_room_daylight: None,
+            far_room_lamps: None,
         }
     }
 }
@@ -649,6 +671,10 @@ pub struct Probes {
     far: Option<FarBuffers>,
     /// Towards the sun, and its light per unit of its illuminance ([`Self::set_sun`]).
     sun: [Vec3; 2],
+    /// The sun's illuminance, lux ([`Self::set_sun`]): the resolve's units.
+    sun_illuminance: f32,
+    /// Each room's lamps that are on, lumens per channel ([`Self::set_room_lamps`], #363).
+    room_lumens: std::collections::BTreeMap<u32, [f32; 3]>,
     wake_boxes: Vec<Buffer>,
     irradiance: GraphImage,
     distance: GraphImage,
@@ -826,6 +852,8 @@ impl Probes {
             )?,
             far: None,
             sun: [Vec3::Y, Vec3::ZERO],
+            sun_illuminance: 1.0,
+            room_lumens: Default::default(),
             wake_boxes,
             irradiance: atlas(
                 IRRADIANCE_TILE,
@@ -922,9 +950,28 @@ impl Probes {
     }
 
     /// The sun the far rooms' daylight takes (#356): `direction` towards it, `color` its light
-    /// per unit of its illuminance, as the sky's light is given. Kept until set again.
-    pub fn set_sun(&mut self, direction: Vec3, color: Vec3) {
+    /// per unit of its illuminance, as the sky's light is given, and `illuminance` that, lux (the
+    /// resolve's unit, which the far rooms' lamps are given in, #363). Kept until set again.
+    pub fn set_sun(&mut self, direction: Vec3, color: Vec3, illuminance: f32) {
         self.sun = [direction.normalize_or_zero(), color];
+        self.sun_illuminance = illuminance;
+    }
+
+    /// The scene's lamps this frame and the shares of them it lights (#363,
+    /// [`ProbeParams::far_room_lamps`], [`crate::lamps::choose_shares`]): each room's that are on,
+    /// summed for the far rooms' light round their walls; the far rooms' records are written again
+    /// when they change.
+    pub fn set_room_lamps(&mut self, lamps: &[crate::lamps::Lamp], kept: &[(usize, f32)]) {
+        let Some(factors) = self.params.far_room_lamps else {
+            return;
+        };
+        let lumens = crate::lamps::room_lumens(lamps, kept, factors);
+        if lumens != self.room_lumens {
+            self.room_lumens = lumens;
+            if let Some(far) = self.far.as_mut() {
+                far.invalidate();
+            }
+        }
     }
 
     /// Adds `volumes` as a set (#338: a cell's rooms, its regions' ids its own, global to the
@@ -1115,7 +1162,8 @@ impl Probes {
         ) {
             (Some(daylight), Some(bufs), Some(store)) => {
                 if bufs.flat.is_none() {
-                    bufs.flat = Some(bufs.flatten(store.far_rooms(), p.far_room_sky));
+                    bufs.flat =
+                        Some(bufs.flatten(store.far_rooms(), p.far_room_sky, &self.room_lumens));
                 }
                 let (rooms, windows, table) = bufs.flat.as_ref().expect("flattened above");
                 if !bufs.written[slot.index] {
@@ -1208,7 +1256,8 @@ impl Probes {
                     sun_luma: color.dot(Vec3::new(0.2126, 0.7152, 0.0722)),
                     daylight,
                     count: rooms,
-                    pad: [0; 2],
+                    lamps: if p.far_room_lamps.is_some() { 1.0 } else { 0.0 },
+                    inv_illuminance: 1.0 / this.sun_illuminance.max(1e-9),
                 };
                 if rooms > 0 {
                     graph

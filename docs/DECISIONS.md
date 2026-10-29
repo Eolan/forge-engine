@@ -7694,6 +7694,31 @@ look):
   (`reserve_regions`), not for the village's whole set (`set_regions`), so the first round
   measured the fixed share twice; a GPU test now gives rooms both ways.
 
+**The far rooms' lamps (2026-10-29, #363).** The owner, at midnight: "when getting closer the
+windows change too much". A lit room's light round its walls came from its grid's probes alone,
+and the probes see only the frame's 64 nearest lamps: past the grids (20 m) a lit room kept its
+lamp's direct light but lost its bounce, its floor and furniture going dark under a bright ceiling,
+and past the lamps' cut (50 m) the window showed the pane's glow over a room lit by nothing. One
+window seen straight on at midnight (fixed exposure, the window's mean in the capture) stepped
+from 0.79 to 0.53 at the grids' edge and stood at 0.37 at 70 m, against the grids carried out to
+150 m with every lamp lit (0.68 to 0.97).
+- **The light round its walls:** each far room with windows also takes its lamps that are on
+  (`lamps::room_lumens`, each lamp's room its first region), their lumens over its surfaces times
+  `bounce`, and times `unlit` more for the share of each the frame leaves unlit (its direct light,
+  past the frame's lamps): `ProbeParams::far_room_lamps`, `[bounce, unlit]`. The far rooms' pass
+  writes it into the table beside the share, three halves in the resolve's units (per unit of the
+  sun's illuminance), and the probes' lookup adds it to the far room's light. The rooms' sums
+  follow the frame's lamps (`ProbeField::set_room_lamps`), written again when they change.
+- **Calibrated** against that reference at 20 to 90 m: bounce 14 read 0.02–0.03 dark at 20 to
+  45 m, 20 as bright; the village's 18 gives 0.688 and 0.844 at 20 and 45 m (0.682, 0.847). Past
+  50 m the pane's glow was not what was missing (twice `ROOM_GLOW` moved the window 0.01): unlit 14
+  gives about 0.92 and 0.96 at 70 and 90 m (0.937, 0.966). The factors are far above a room's
+  1 / (1 − ρ): the window shows the walls near it, which the lamp lights least directly, and the
+  captures' tone curve compresses the steps it is set by.
+- **Seen:** on #354's dolly at midnight the room under the lit balcony now glows through its door
+  as the grids light it; the map check (15:00) moved by ꟻLIP up to 0.009, a far room through a
+  window, accepted.
+
 *(research: probe-levels-indoors.md; D-068; issue #353)*
 
 ## D-079 — Marks where bodies strike: a pool of run-time decals on static surfaces ✅ (proposed 2026-10-24, accepted the same day, Phase 7)

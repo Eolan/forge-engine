@@ -271,6 +271,15 @@ const VILLAGE_FAR_ROOM_SKY: f32 = 0.2;
 /// beyond the grids' reach takes this times its windows' daylight over its surfaces; the factor
 /// stands for the light's bounces in the room, about 1 / (1 − ρ) for its whitewashed walls.
 const VILLAGE_FAR_ROOM_DAYLIGHT: f32 = 2.7;
+/// The far rooms' lamps (#363, `ProbeParams::far_room_lamps`), `[bounce, unlit]`: a lit room with
+/// windows beyond the grids' reach takes its lamps' lumens over its surfaces round its walls,
+/// times 18, and times 14 more for the share the frame leaves unlit (past its 64 nearest lamps,
+/// their direct light on the walls). Set against the grids carried out to 150 m with every lamp
+/// lit, at midnight, one lit window seen straight on (fixed exposure, the window's mean in the
+/// capture): at 20 and 45 m 0.688 and 0.844 against 0.682 and 0.847 (14 read 0.02–0.03 dark,
+/// 20 as bright), at 70 and 90 m about 0.92 and 0.96 against 0.937 and 0.966. Before, the window
+/// stepped from 0.79 to 0.53 at the grids' edge and stood at 0.37 at 70 m.
+const VILLAGE_FAR_ROOM_LAMPS: [f32; 2] = [18.0, 14.0];
 /// Paved ground per crack on the paving (D-074), m².
 const CRACKS_EVERY: f64 = 150.0;
 
@@ -6470,6 +6479,9 @@ impl Scenario for PlanScenario {
             // +0.01, −0.07, −0.15 and +0.01 EV at 09:36, noon, 13:48, 15:00 and 16:12, where
             // the fixed share read +0.08, +0.19, +0.01, −0.14 and 0.00.
             probe_far_room_daylight: (!self.flora.is_empty()).then_some(VILLAGE_FAR_ROOM_DAYLIGHT),
+            // And a lit room its lamps' light round its walls (#363): at night its windows stepped
+            // down by a third as its grid went out of reach.
+            probe_far_room_lamps: (!self.flora.is_empty()).then_some(VILLAGE_FAR_ROOM_LAMPS),
             ..Look::default()
         }
     }
