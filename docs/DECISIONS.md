@@ -7981,3 +7981,56 @@ before there is an AMD card to test it on (#67).
   are to be looked up before a release relies on the DLLs (the patent rule).
 
 *(research: fsr4-vulkan.md; D-070; issue #361)*
+
+## D-083 — Authored scenes and a path-traced reference before more tuning; one theme at a time ✅ (the owner's go, 2026-10-29)
+
+**The owner, 2026-10-29:** "we spend all our time solving the issues with the probes and night
+and fake windows at night. We also end up with more issues at the end of the day than at the
+start of it. Procedural stuff seems to be difficult as well. How would you improve our way of
+working and make some actual progress?", then, on the answer below: "go, we will follow your
+steps".
+
+**What the numbers said (2026-10-29):**
+- **The backlog grows:** in the weeks from 8 and 15 October, 86 and 83 issues were opened and 42
+  and 48 closed; 107 are open.
+- **Where the work goes:** of 572 commits since 15 October, 228 touch the probes, the far rooms,
+  the windows, the lamps or the night.
+- **Every batch reviewed after its push had real bugs** (the review agents, 2026-10-23 to 29).
+- **The village's walls and lots** are about 3,000 lines with 25 tuning constants, most of them
+  cases added after a sighting.
+
+**Why:**
+- **Approximations patched with approximations.** A room's light at night comes from the
+  cascades, its room grid, the far room's share and the far lamps; each fix moved the error to a
+  handoff between two of them. The village's lots and walls are free polygons fixed after the
+  fact (leftovers absorbed, slivers moved, sharp corners chamfered, T's cut), each case making
+  the next.
+- **Checks that keep what exists rather than say what is right.** The accepted sets catch a
+  change, not an error; the anomaly bounds pin counts per size, at one seed.
+- **Too much at once,** and a change counted as done when pushed.
+
+**The plan, in order:**
+1. **An authored scene: Amazon Lumberyard's Bistro** (ORCA, CC-BY 4.0, `Bistro_v5_2`, 894 MB
+   zipped): a street and a café seen through its windows, lit at night by its emissive surfaces
+   alone. Its DDS textures are read as they are, block-compressed with their mips. A scene of its
+   own in the physics lab (external models stay for the labs, the 2026-10-04 rule).
+2. **A path-traced reference:** an offline, unbiased accumulation over the same scene, materials
+   and lights, without denoising; the real-time image measured against it per view and hour.
+3. **The night lighting measured against that reference,** then redesigned around one
+   representation per distance band and one tested handoff, instead of tuned by eye.
+4. **The private reference test of a shipped open-world city game** (ROADMAP, Phase 10) comes
+   forward, after steps 1–2: one district from the owner's copy, private, never in git or
+   published, compared with the game itself, its path-traced mode included.
+5. **The village's layout, in parallel and on its own:** rebuilt so that bad shapes cannot occur
+   (lots near-rectangular per street side, corner lots from a few templates, the rest common court;
+   walls only along the streets, hedges inside; one straight line where two rows meet), its rules
+   held at zero by property tests over many seeds and sizes.
+
+**How we work from now on:**
+- **One theme at a time;** an issue is done when the owner accepts it in a walk, not when its
+  commit lands.
+- **Design before code** for anything seen: a short spec with reference pictures and a plan or
+  mock-up for the owner before the build; autonomous runs carry out agreed plans.
+- **The review before the push,** as part of the gate.
+- **The backlog triaged** to about 25 active issues, the rest merged or moved to "Later"; a
+  session's own findings go to one triage list first.

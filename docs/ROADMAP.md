@@ -723,6 +723,15 @@ The items below are the phase's original outline; the plan above orders them.
 
 ## Now — Mission maps drive the core (D-062)
 
+**Since D-083 (the owner's go, 2026-10-29), in this order:**
+1. An authored scene, Amazon Lumberyard's Bistro, by day and at night.
+2. A path-traced reference of it.
+3. The night lighting measured against that reference, then redesigned.
+4. The private city-game reference test of Phase 10, one district.
+5. In parallel, the village's layout rebuilt so that bad shapes cannot occur.
+
+One theme at a time; done when the owner accepts it.
+
 The owner's decision of 2026-10-15: small, fully generated places with a mission each drive
 the core technologies, which the city and the demos take back. The engine stays public; the
 game (scenarios, missions, licensed assets) is a private repository, as the city sandbox.
