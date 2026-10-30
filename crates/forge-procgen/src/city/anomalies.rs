@@ -1256,9 +1256,10 @@ mod tests {
         // left these, the next work on the houses: rooms without a window in a corner house (500,
         // 600 and 900 m) and a study at 800 m, a ridge step at 700 and 900 m, a door unreached at
         // 700 m, and at 800 m two houses 2.8 m apart, their party walls each without its neighbour.
-        let since: [(f64, Kind, usize); 9] = [
-            (500.0, Kind::UnlitRoom, 1),
-            (600.0, Kind::UnlitRoom, 4),
+        // The landings (2026-10-30) lay a storey's bathrooms by the hall, a corner house's street
+        // side to its bedrooms: 500 m's unlit room and one of 600 m's lit.
+        let since: [(f64, Kind, usize); 8] = [
+            (600.0, Kind::UnlitRoom, 3),
             (700.0, Kind::RidgeStep, 1),
             (700.0, Kind::UnreachedDoor, 1),
             (800.0, Kind::UnlitRoom, 1),

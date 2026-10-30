@@ -574,7 +574,7 @@ pub fn bedroom_through(placed: &[Placed]) -> bool {
 /// very unusual"): its rooms in a band before the landing and one behind it, against the front
 /// and the back walls (the first room at the front, the others shared between them every way that
 /// fits across, a room that wants a window on either side first, then the shallower), the dark
-/// ones at the far ends of the bands, each room [`NARROW`] wide ([`NARROW_DARK`] a dark one) and
+/// ones at the bands' starts by the hall, each room [`NARROW`] wide ([`NARROW_DARK`] a dark one) and
 /// the rest of the width shared by their areas, the bands as deep as their rooms need and the
 /// depth left shared by that. Where no two bands and the landing fit `depth`, the rooms ask
 /// [`ROOM_MIN`] at most; on a storey too shallow for two bands, one band before the landing.
@@ -622,12 +622,14 @@ fn with_landing(
         }
         (front, back)
     };
-    // A band's rooms across the width, the dark ones last: each [`NARROW`] wide, a dark one
-    // [`NARROW_DARK`], and the rest shared by their areas; `None` where they do not fit across.
+    // A band's rooms across the width, the dark ones first, by the hall: each [`NARROW`] wide, a
+    // dark one [`NARROW_DARK`], and the rest shared by their areas; `None` where they do not fit
+    // across. The far end is a corner house's street side, whose windows a bathroom there took
+    // from a bedroom beside it (800 m, a house whose back is a party wall).
     let least = |r: &Placed| if dark(r.kind) { NARROW_DARK } else { NARROW };
     let across = |band: &[Placed]| -> Option<Band> {
         let mut band = band.to_vec();
-        band.sort_by_key(|r| dark(r.kind));
+        band.sort_by_key(|r| !dark(r.kind));
         let total: f64 = band.iter().map(|r| r.area).sum();
         let spare = (x1 - x0) - band.iter().map(least).sum::<f64>();
         if spare < -1e-9 {
