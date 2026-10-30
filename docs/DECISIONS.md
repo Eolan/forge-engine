@@ -8767,12 +8767,24 @@ this one: "yes, record it and download them"):**
 
   | Classroom | Forge's path | probes at the hits | the cache |
   |---|---|---|---|
-  | Clay | 0.184 (×1.08) | 0.416 (×1.19) | 0.127 (×1.005) |
-  | Textured | 0.309 (×1.19) | 0.465 (×1.26) | 0.203 (×1.08) |
+  | Clay | 0.090 (×0.98) | 0.353 (×1.14) | 0.145 (×0.93) |
+  | Clay, the sun alone | 0.106 (×0.98) | | |
+  | Textured | | | 0.151 (×0.98) |
 
   Falcor's default diffuse (Frostbite's, 1/1.51 at roughness 1) made every Forge image a stop
   brighter indoors, Forge's path as well: the gap grows with each bounce. The textured row
   measures the materials too (the coated whiteboard, the metal frames).
+- **The hits' shadow rays start by their cut (2026-10-30, found in the classroom):** a ray's hit
+  (the bounce's, the path's, the cache's and the probes' rays, the mirror rays) started its sun
+  and lamp rays `SHADOW_BIAS`, 15 cm, along `n + sun`: from under a ceiling they started above
+  it. The fittings, the screen's box and the walls' tops took the sun through the ceiling at
+  every bounce, and the band under it came out 0.5 to 1 EV over Falcor's with the sun alone,
+  Forge's path as well (with the sky alone it matched, 0.067). A hit lies on the cut the rays
+  trace, so it now starts as a drawn surface does, twice its cut's error from 2 cm to 15 cm
+  (`hit_shadow_start`; terrains and leaf cards keep 15 cm). Before, the classroom's clay: the
+  path 0.184 (×1.08), the probes 0.416 (×1.19), the cache 0.127 (×1.005); textured, the cache
+  0.203 (×1.08). The cache's near match had been the leak covering its own deficit, a few per
+  cent dark, as in the Bistro (×0.96 to ×0.98).
 - **Credits:** the shaders carry Bevy's and kajiya's names, commits and licences in their header,
   and the changes Forge made.
 

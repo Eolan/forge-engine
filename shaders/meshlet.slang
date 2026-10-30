@@ -5565,6 +5565,20 @@ float shadow_bias(Frame* f, Instance inst, Meshlet m)
     return max(SHADOW_BIAS, start * inst.scale);
 }
 
+// How far a shadow ray from a traced hit on `inst` starts, the sun's and a lamp's: the hit lies
+// on the cut the rays trace, with no gap in front of it, so twice the cut's error, from 2 cm to
+// SHADOW_BIAS, as a drawn surface's (`shadow_bias`). From SHADOW_BIAS, and along `n + sun`, a
+// ray from under a ceiling started above it: in the classroom (D-083) the fittings, the screen's
+// box and the walls' tops took the sun through the ceiling at every bounce, and the band under
+// it came out 0.5 to 1 EV over Falcor's, Forge's path as well. Terrains and cut-out meshes (leaf
+// cards) keep SHADOW_BIAS, as their drawn surfaces do.
+float hit_shadow_start(RtMesh mesh, Instance inst)
+{
+    if (mesh.shadow_start > 0.0 || (mesh.shadow_start == 0.0 && mesh.masked_sections != 0u))
+        return SHADOW_BIAS;
+    return clamp(2.0 * mesh.cut_error * inst.scale, LAMP_SHADOW_START, SHADOW_BIAS);
+}
+
 // How far a lamp's shadow ray from a drawn surface of `inst` starts (#293): twice the gap the
 // traced cut may leave in front of it (the cut's error, and the drawn cluster's own where a
 // coarser level is drawn), at least LAMP_SHADOW_START and at most SHADOW_BIAS; a terrain's as its
@@ -5918,6 +5932,7 @@ struct RayHit
     float3 albedo;
     float3 emissive;
     bool back;
+    float shadow_start; // how far its shadow rays start off it, metres (`hit_shadow_start`)
 };
 
 // Whether a ray along `direction` met the back of triangle `primitive` of instance `instance`
@@ -6002,6 +6017,7 @@ RayHit ray_hit_seen(Frame* f, uint instance, uint primitive, float2 b, float3 or
     if (hit.back)
         hit.n = -hit.n; // the side the ray came from
     hit.position = origin + direction * t;
+    hit.shadow_start = hit_shadow_start(mesh, inst);
     uint row = inst.material + rs[0].sections[tri];
     Material mat = f[0].materials[row];
     if ((mat.flags & MATERIAL_FLAG_DOUBLE_SIDED) != 0)
@@ -6196,8 +6212,8 @@ float3 hit_sunlight(Frame* f, RayHit hit)
     float3 sun = normalize(f[0].sun_dir);
     float ndl = max(dot(hit.n, sun), 0.0);
     float3 shadow = float3(0.0);
-    if (ndl > 0.0 && sun_shadow(f, hit.position, hit.n, float2(0.0), SHADOW_BIAS) > 0.0)
-        shadow = jelly_transmittance(f, sun_ray(f, hit.position, hit.n, float2(0.0), SHADOW_BIAS));
+    if (ndl > 0.0 && sun_shadow(f, hit.position, hit.n, float2(0.0), hit.shadow_start) > 0.0)
+        shadow = jelly_transmittance(f, sun_ray(f, hit.position, hit.n, float2(0.0), hit.shadow_start));
     return hit.albedo * ndl * shadow * f[0].sun_color.rgb + hit.emissive;
 }
 
@@ -6271,7 +6287,7 @@ float3 hit_lamps(Frame* f, RayHit hit, uint region, uint seed, bool probe)
     // Aimed from where it starts (`lamp_ray`, #298): aimed from the hit and started SHADOW_BIAS
     // off it, the ray ran beside the line to the lamp and ended up to 15 cm from its middle, in
     // its globe or its fitting, and a room's light moved by up to an EV with the start.
-    if (ray_blocked(f, lamp_ray(lamp, hit.position, hit.n, SHADOW_BIAS, float3(0.0))))
+    if (ray_blocked(f, lamp_ray(lamp, hit.position, hit.n, hit.shadow_start, float3(0.0))))
         return float3(0.0);
     // Its colour of luminance 1 times every lamp's light: its own over its chance, w / total.
     float3 colour = lamp.colour_reach.rgb / max(dot(lamp.colour_reach.rgb, float3(0.2126, 0.7152, 0.0722)), 1e-9);
@@ -6589,7 +6605,7 @@ float3 hit_radiance_skipping(Frame* f, float4* sky, ProbeField* probes, RayHit h
     if (ndl > 0.0)
     {
         RayDesc ray;
-        ray.Origin = hit.position + (hit.n + sun) * SHADOW_BIAS;
+        ray.Origin = hit.position + (hit.n + sun) * hit.shadow_start;
         ray.Direction = sun;
         ray.TMin = 0.0;
         ray.TMax = 50000.0;

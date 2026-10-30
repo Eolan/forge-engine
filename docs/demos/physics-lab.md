@@ -2542,11 +2542,19 @@ by hand outside the repository (`CREDITS.md`):
 
 | Classroom | Forge's path | the probes | `r.gi.cache` |
 |---|---|---|---|
-| Clay | 0.184 (×1.08) | 0.416 (×1.19) | 0.127 (×1.005) |
-| Textured | 0.309 (×1.19) | 0.465 (×1.26) | 0.203 (×1.08) |
+| Clay | 0.090 (×0.98) | 0.353 (×1.14) | 0.145 (×0.93) |
+| Textured | | | 0.151 (×0.98) |
 
-**Not yet:** the clay ceiling and the walls' tops are darker in Falcor than in every Forge
-image; the textured materials (the coated whiteboard, the metal frames) differ too.
+- **The sun and the sky apart:** the classroom under its sun alone (the map's disc), the sky's
+  share as the whole less the sun's, both renderers being linear in their light. With the sky
+  alone Forge's path matched (0.067); with the sun alone the band under the ceiling was 0.5 to
+  1 EV bright: the rays' hits started their sun rays 15 cm along `n + sun`, above the ceiling
+  (D-088, "The hits' shadow rays start by their cut"). Before that fix the path was 0.184
+  (×1.08), the probes 0.416, the cache 0.127 (×1.005).
+
+**Not yet:** the cache a few per cent dark (×0.93 in clay), the probes' sky a stop bright
+(the sky alone: ×1.35); thin bright seams in the ceiling seen directly; the textured materials
+(the coated whiteboard, the metal frames).
 
 ## `FORGE_DYNAMIC_SCENE`: the scene edited as it runs (issues #220, #338)
 
