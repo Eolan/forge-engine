@@ -68,6 +68,7 @@ This is a promise of intent, not a licence term.
 | [meshoptimizer](https://github.com/zeux/meshoptimizer) | Arseny Kapoulkine | meshlets, simplification and cluster partitioning for the LOD DAG, following its `clusterlod.h` (`forge-geom`) | MIT |
 | [meshopt](https://github.com/gwihlidal/meshopt-rs) | Graham Wihlidal | meshoptimizer from Rust | MIT OR Apache-2.0 |
 | [gpu-allocator](https://github.com/Traverse-Research/gpu-allocator) | Traverse Research | GPU memory (`forge-gpu`): 0.28.0 vendored in `third_party/gpu-allocator` with its licences, two calls renamed for ash's master (#361) | MIT OR Apache-2.0 |
+| [intel_tex_2](https://github.com/Traverse-Research/intel-tex-rs-2) over Intel's [ISPC Texture Compressor](https://github.com/GameTechDev/ISPCTextureCompressor) | Traverse Research; Intel | BC7 encoding of the normal maps' rebuilt levels (`forge_render::dds::bc5_normals_to_bc7`, D-086) | MIT OR Apache-2.0 (the bindings); MIT (the compressor) |
 | [winit](https://github.com/rust-windowing/winit) | Pierre Krieger and the winit contributors | windows and input (`forge-app`) | Apache-2.0 |
 | [windows-sys](https://github.com/microsoft/windows-rs) | Microsoft | Windows' display configuration: the HDR switch and the SDR white level (`forge-gpu`, issue #94) | MIT OR Apache-2.0 |
 | [glam](https://github.com/bitshifter/glam-rs) | Cameron Hart and contributors | vector and matrix maths | MIT OR Apache-2.0 |
@@ -190,6 +191,15 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
 - **Physical light units and pre-exposure.** Sébastien Lagarde, Charles de Rousiers, "Moving
   Frostbite to Physically Based Rendering", SIGGRAPH 2014.
 - **Automatic exposure.** Krzysztof Narkowicz, "Automatic Exposure", 2016.
+- **The surface model** (D-086): GGX, Bruce Walter, Stephen Marschner, Hongsong Li, Kenneth
+  Torrance, "Microfacet Models for Refraction through Rough Surfaces", EGSR 2007 (after
+  Trowbridge and Reitz 1975); the height-correlated Smith visibility, Eric Heitz,
+  "Understanding the Masking-Shadowing Function in Microfacet-Based BRDFs", JCGT 2014;
+  Christophe Schlick's Fresnel, 1994; the split sum, Brian Karis, "Real Shading in Unreal
+  Engine 4", SIGGRAPH 2013, its DFG term by Dimitar Lazarov's analytic fit (Karis, "Physically
+  Based Shading on Mobile", 2014); multiple scattering, Carmelo J. Fdez-Agüera, "A
+  Multiple-Scattering Microfacet Model for Real-Time Image-based Lighting", JCGT 2019; Toksvig's
+  normal-length variance, Michael Toksvig, "Mipmapping Normal Maps", 2005.
 - **ACES's fitted curve** (`aces-narkowicz`, the Bistro's, D-084). Krzysztof Narkowicz, "ACES
   Filmic Tone Mapping Curve", 2016, with the 0.6 pre-exposure Falcor's ToneMapper applies.
 - **Local exposure** (`shaders/local_exposure*.slang`, D-067, #275):

@@ -228,6 +228,18 @@ pub fn ao_radius(default: f64) -> Spec<f64> {
     )
 }
 
+/// The textures' mip bias, stops (`MeshletRenderer::texture_lod_bias`): below 0 a sharper level
+/// (NVIDIA's DLSS guide: log2(render / output) − 1, so −1 under DLAA, its jitter averaging the
+/// finer texels).
+pub fn texture_lod_bias(default: f64) -> Spec<f64> {
+    Spec::float(
+        "r.textures.lod_bias",
+        default,
+        -3.0..=3.0,
+        "The textures' mip bias, stops: below 0 sharper (DLSS asks for -1 under DLAA).",
+    )
+}
+
 /// How many frames the sun's shadows' denoiser steadies over (#337, SIGMA's stabilisation).
 pub fn shadow_history(default: i64) -> Spec<i64> {
     Spec::int(

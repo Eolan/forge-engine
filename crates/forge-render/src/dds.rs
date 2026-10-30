@@ -6,10 +6,16 @@
 //! A DirectX normal map points its green down the image: [`flip_green`] turns a BC5 map's green
 //! over on its blocks, so it reads as the glTF maps the shaders expect. A BC5 map has no blue:
 //! it is sampled through a view reading blue as one (`TextureSet::add_compressed`).
+//!
+//! A BC5 normal map's levels hold unit normals, so the spread of the bumps a coarse level averages
+//! is lost; [`bc5_normals_to_bc7`] rebuilds its levels from the unit normals, unnormalised, as BC7
+//! (Intel's ISPC Texture Compressor through `intel_tex_2`), and [`write_dds`] keeps them on disk
+//! (D-086).
 
 use std::fmt;
 
 use forge_gpu::vk;
+use glam::Vec3;
 
 /// A block-compressed format.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -371,6 +377,140 @@ pub fn uniform_color(texture: &CompressedTexture) -> Option<[u8; 3]> {
     seen
 }
 
+/// The levels of a normal map from its level 0's unit normals (`width` × `height`, rows top to
+/// bottom): each smaller level the mean of the four texels above it (two, one at an odd edge),
+/// left unnormalised, so a level's normals shorten where those under them part.
+pub fn normal_levels(
+    width: usize,
+    height: usize,
+    level0: Vec<Vec3>,
+) -> Vec<(usize, usize, Vec<Vec3>)> {
+    let mut levels = vec![(width, height, level0)];
+    loop {
+        let (w, h, above) = levels.last().expect("level 0");
+        if *w == 1 && *h == 1 {
+            break;
+        }
+        let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
+        let mut level = Vec::with_capacity(nw * nh);
+        for y in 0..nh {
+            for x in 0..nw {
+                let mut sum = Vec3::ZERO;
+                let mut count = 0.0;
+                for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                    let (sx, sy) = (2 * x + dx, 2 * y + dy);
+                    if sx < *w && sy < *h {
+                        sum += above[sy * w + sx];
+                        count += 1.0;
+                    }
+                }
+                level.push(sum / count);
+            }
+        }
+        levels.push((nw, nh, level));
+    }
+    levels
+}
+
+/// A BC5 normal map (its green already turned over, [`flip_green`]) as BC7, every level (D-086):
+/// level 0's normals made whole (z rebuilt, unit length), the smaller levels their unnormalised
+/// means ([`normal_levels`]), each texel's xyz × 0.5 + 0.5 in RGB, alpha 255. The shader reads
+/// the shortening as the normals' spread (Toksvig, #331), as it does an RGB map's; a BC5 map's
+/// coarse levels said a bumpy surface was flat, its highlights too sharp and bright. `None` for
+/// another format.
+pub fn bc5_normals_to_bc7(texture: &CompressedTexture) -> Option<CompressedTexture> {
+    if texture.format != BlockFormat::Bc5 {
+        return None;
+    }
+    let (w, h) = (texture.width as usize, texture.height as usize);
+    let blocks_x = w.div_ceil(4).max(1);
+    let mut level0 = vec![Vec3::Z; w * h];
+    for (i, block) in texture.levels.first()?.chunks_exact(16).enumerate() {
+        let (bx, by) = (i % blocks_x, i / blocks_x);
+        let (red, green) = (channel_values(&block[0..8]), channel_values(&block[8..16]));
+        for t in 0..16 {
+            let (x, y) = (4 * bx + t % 4, 4 * by + t / 4);
+            if x < w && y < h {
+                let nx = f32::from(red[t]) / 255.0 * 2.0 - 1.0;
+                let ny = f32::from(green[t]) / 255.0 * 2.0 - 1.0;
+                let nz = (1.0 - nx * nx - ny * ny).max(0.0).sqrt();
+                level0[y * w + x] = Vec3::new(nx, ny, nz).normalize_or(Vec3::Z);
+            }
+        }
+    }
+    let settings = intel_tex_2::bc7::opaque_fast_settings();
+    let levels = normal_levels(w, h, level0)
+        .into_iter()
+        .map(|(lw, lh, normals)| {
+            // Padded to whole blocks with the edge's texels.
+            let (pw, ph) = (lw.div_ceil(4) * 4, lh.div_ceil(4) * 4);
+            let mut rgba = vec![0_u8; pw * ph * 4];
+            for y in 0..ph {
+                for x in 0..pw {
+                    let n = normals[y.min(lh - 1) * lw + x.min(lw - 1)];
+                    let at = (y * pw + x) * 4;
+                    for (k, v) in n.to_array().into_iter().enumerate() {
+                        rgba[at + k] = ((v * 0.5 + 0.5).clamp(0.0, 1.0) * 255.0).round() as u8;
+                    }
+                    rgba[at + 3] = 255;
+                }
+            }
+            intel_tex_2::bc7::compress_blocks(
+                &settings,
+                &intel_tex_2::RgbaSurface {
+                    data: &rgba,
+                    width: pw as u32,
+                    height: ph as u32,
+                    stride: pw as u32 * 4,
+                },
+            )
+        })
+        .collect();
+    Some(CompressedTexture {
+        name: texture.name.clone(),
+        width: texture.width,
+        height: texture.height,
+        format: BlockFormat::Bc7,
+        srgb: false,
+        levels,
+    })
+}
+
+/// `texture` as a DDS file [`read_dds`] reads back: the DX10 header's DXGI format (BC1, BC3, BC5 or
+/// BC7, sRGB where it is) and every level.
+pub fn write_dds(texture: &CompressedTexture) -> Vec<u8> {
+    let dxgi: u32 = match (texture.format, texture.srgb) {
+        (BlockFormat::Bc1, false) => 71,
+        (BlockFormat::Bc1, true) => 72,
+        (BlockFormat::Bc3, false) => 77,
+        (BlockFormat::Bc3, true) => 78,
+        (BlockFormat::Bc5, _) => 83,
+        (BlockFormat::Bc7, false) => 98,
+        (BlockFormat::Bc7, true) => 99,
+    };
+    let mut bytes = vec![0_u8; 148];
+    let mut put = |at: usize, v: u32| bytes[at..at + 4].copy_from_slice(&v.to_le_bytes());
+    put(4, 124);
+    // CAPS, HEIGHT, WIDTH, PIXELFORMAT, MIPMAPCOUNT, LINEARSIZE.
+    put(8, 0x1 | 0x2 | 0x4 | 0x1000 | 0x2_0000 | 0x8_0000);
+    put(12, texture.height);
+    put(16, texture.width);
+    put(20, texture.levels.first().map_or(0, Vec::len) as u32);
+    put(28, texture.levels.len() as u32);
+    put(76, 32);
+    put(80, 0x4); // DDPF_FOURCC
+    put(108, 0x1000 | 0x40_0000 | 0x8); // TEXTURE, MIPMAP, COMPLEX
+    put(128, dxgi);
+    put(132, 3); // a 2D texture
+    put(140, 1); // one in the array
+    bytes[0..4].copy_from_slice(b"DDS ");
+    bytes[84..88].copy_from_slice(b"DX10");
+    for level in &texture.levels {
+        bytes.extend_from_slice(level);
+    }
+    bytes
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -517,6 +657,61 @@ mod tests {
         assert_eq!(uniform_color(&t), Some([0, 0, 0]));
         t.levels[0][4] = 0b10;
         assert_eq!(uniform_color(&t), None);
+    }
+
+    #[test]
+    fn normal_levels_shorten_where_normals_part() {
+        // 2 × 2: two normals leaning 60° apart each way along x, two flat.
+        let lean = Vec3::new(0.5_f32.sqrt(), 0.0, 0.5_f32.sqrt());
+        let levels = normal_levels(
+            2,
+            2,
+            vec![lean, Vec3::new(-lean.x, 0.0, lean.z), Vec3::Z, Vec3::Z],
+        );
+        assert_eq!(levels.len(), 2);
+        let (w, h, top) = &levels[1];
+        assert_eq!((*w, *h), (1, 1));
+        // The mean: z (0.707 + 0.707 + 1 + 1) / 4, x cancelled.
+        assert!(
+            (top[0] - Vec3::new(0.0, 0.0, 0.8536)).length() < 1e-3,
+            "{}",
+            top[0]
+        );
+        // An odd edge: 3 × 1 halves to 1 × 1 from its first two.
+        let odd = normal_levels(3, 1, vec![Vec3::X, Vec3::Z, Vec3::Y]);
+        assert_eq!(
+            odd.iter().map(|l| (l.0, l.1)).collect::<Vec<_>>(),
+            [(3, 1), (1, 1)]
+        );
+        assert!((odd[1].2[0] - Vec3::new(0.5, 0.0, 0.5)).length() < 1e-6);
+    }
+
+    #[test]
+    fn a_bc5_normal_map_becomes_bc7_with_every_level() {
+        // 8 × 4 of flat normals (128, 128): every level, BC7's 16 bytes a block.
+        let flat = [128_u8, 128, 0, 0, 0, 0, 0, 0];
+        let t = CompressedTexture {
+            name: "normal".into(),
+            width: 8,
+            height: 4,
+            format: BlockFormat::Bc5,
+            srgb: false,
+            levels: vec![[flat, flat, flat, flat].concat()],
+        };
+        let bc7 = bc5_normals_to_bc7(&t).expect("BC5 transcodes");
+        assert_eq!(bc7.format, BlockFormat::Bc7);
+        assert_eq!(
+            bc7.levels.iter().map(Vec::len).collect::<Vec<_>>(),
+            [32, 16, 16, 16]
+        );
+        // Back through a DDS file.
+        let back = read_dds("normal", &write_dds(&bc7), false).expect("reads back");
+        assert_eq!(
+            (back.width, back.height, back.format),
+            (8, 4, BlockFormat::Bc7)
+        );
+        assert_eq!(back.levels, bc7.levels);
+        assert!(bc5_normals_to_bc7(&back).is_none());
     }
 
     #[test]

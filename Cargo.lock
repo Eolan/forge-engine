@@ -1157,6 +1157,7 @@ dependencies = [
  "forge-world",
  "glam",
  "image",
+ "intel_tex_2",
  "serde",
  "toml",
  "tracing",
@@ -1476,6 +1477,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a257582fdcde896fd96463bf2d40eefea0580021c0712a0e2b028b60b47a837a"
 
 [[package]]
+name = "intel_tex_2"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7980d359170e7da4bc2421aa74c49d338a3153313e006d732a3430f1af375a60"
+dependencies = [
+ "ispc_rt",
+]
+
+[[package]]
 name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1487,6 +1497,16 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "city-blocks",
+]
+
+[[package]]
+name = "ispc_rt"
+version = "2.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a396f76fd253fab9945bb4c6080f515d0c4036bc30219462d199b58886fd37b4"
+dependencies = [
+ "libc",
+ "num_cpus",
 ]
 
 [[package]]

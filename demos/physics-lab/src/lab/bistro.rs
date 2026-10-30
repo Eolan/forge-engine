@@ -357,6 +357,13 @@ pub(super) fn rows(
         }
     }
     let read_time = started.elapsed();
+    let transcoded = std::time::Instant::now();
+    let (bc7, cached) = if std::env::var("FORGE_BISTRO_BC5").is_ok_and(|v| v == "1") {
+        (0, 0)
+    } else {
+        normals_as_bc7(which, &archive, &mut read)
+    };
+    let transcode_time = transcoded.elapsed();
     // The "Specular" maps of one value (most are 16 × 16 of one texel): their material's
     // factors instead. A row's own roughness decides its mirror rays (D-084: the glass, at 0,
     // reflected nothing of the street under a map's factor of 1).
@@ -454,11 +461,85 @@ pub(super) fn rows(
         rows = rows_made,
         read_ms = read_time.as_millis() as u64,
         open_edges_ms = open_time.as_millis() as u64,
+        normals_bc7 = bc7,
+        normals_cached = cached,
+        transcode_ms = transcode_time.as_millis() as u64,
         sheets = open.values().filter(|&&o| o >= OPEN_SHEET).count(),
         total_ms = started.elapsed().as_millis() as u64,
         "the Bistro's maps"
     );
     Ok(())
+}
+
+/// The scene's BC5 normal maps among `read` as BC7 (D-086, `forge_render::dds::bc5_normals_to_bc7`):
+/// their levels rebuilt from the unit normals, so a coarse level's shortening tells the shader the
+/// bumps' spread (Toksvig) and the highlights widen where the bumps average away. Kept beside
+/// the converted scene (`bc7-normals/`, by each map's path, size and time) after the first run;
+/// several maps at once. `FORGE_BISTRO_BC5=1` keeps the BC5 maps. The maps made and those read
+/// from the cache.
+fn normals_as_bc7(
+    which: Authored,
+    archive: &std::path::Path,
+    read: &mut [forge_render::dds::CompressedTexture],
+) -> (usize, usize) {
+    let (converted, _) = which.folders();
+    let cache = converted.join("bc7-normals");
+    if let Err(e) = std::fs::create_dir_all(&cache) {
+        tracing::warn!("no cache for the BC7 normals: {e}");
+    }
+    let cache_path = |name: &str| {
+        let stamp = std::fs::metadata(archive.join(name)).map_or_else(
+            |_| "?".to_owned(),
+            |m| {
+                let time = m
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map_or(0, |d| d.as_secs());
+                format!("{}-{time}", m.len())
+            },
+        );
+        cache.join(format!("{}-{stamp}.dds", name.replace(['/', '\\'], "_")))
+    };
+    let made = std::sync::atomic::AtomicUsize::new(0);
+    let hits = std::sync::atomic::AtomicUsize::new(0);
+    let mut maps: Vec<&mut forge_render::dds::CompressedTexture> = read
+        .iter_mut()
+        .filter(|t| t.format == BlockFormat::Bc5)
+        .collect();
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
+    let per = maps.len().div_ceil(threads.max(1)).max(1);
+    std::thread::scope(|scope| {
+        for chunk in maps.chunks_mut(per) {
+            let (made, hits, cache_path) = (&made, &hits, &cache_path);
+            scope.spawn(move || {
+                for t in chunk.iter_mut() {
+                    let path = cache_path(&t.name);
+                    if let Some(kept) = std::fs::read(&path)
+                        .ok()
+                        .and_then(|bytes| read_dds(&t.name, &bytes, false).ok())
+                        .filter(|k| {
+                            k.format == BlockFormat::Bc7
+                                && k.width == t.width
+                                && k.height == t.height
+                        })
+                    {
+                        **t = kept;
+                        hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        continue;
+                    }
+                    if let Some(bc7) = forge_render::dds::bc5_normals_to_bc7(t) {
+                        if let Err(e) = std::fs::write(&path, forge_render::dds::write_dds(&bc7)) {
+                            tracing::warn!(map = t.name, "a BC7 normal map not kept: {e}");
+                        }
+                        **t = bc7;
+                        made.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+            });
+        }
+    });
+    (made.into_inner(), hits.into_inner())
 }
 
 /// Whether the Bistro's glowing pieces light the scene as lamps (D-087's prototype,

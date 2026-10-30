@@ -8172,6 +8172,17 @@ where both were matte (the owner's "flat especially during the night"); with all
 (13.6), the resolve +0.4 ms; a still camera's frames 8,162 pixels apart (6,217): the thin geometry
 under DLAA's jitter with brighter highlights (chairs, wires, trims). By day 5,032, unchanged.
 
+**Step E, the normal maps:** a BC5 normal map's levels rebuilt from its level 0's unit normals,
+unnormalised (each the mean of the four above), and encoded as BC7 (`intel_tex_2`, Intel's ISPC
+Texture Compressor, MIT; BPTC has no known IP claims in Khronos's registry): a coarse level's
+shortening reaches Toksvig, so the highlight widens where the bumps average away. The Bistro's
+132 maps in 13.3 s once, then 75 ms from `bc7-normals/` beside the converted scene (598 MB);
+`FORGE_BISTRO_BC5=1` keeps BC5. Exterior_1 against Falcor in Lambert: the fronts and the street
+0.85–1.28 (to 1.9 before); the shade under the awnings 1.1–1.7 (D-088's); a still camera 5,004
+pixels (5,032). A mip bias of −1 (NVIDIA's DLSS guidance for DLAA, `r.textures.lod_bias`, 0 by
+default) sharpens the cobbles a little for 10 % more shimmer (5,502): not taken. Falcor's
+cobbles keep more contrast (its 1,024 jittered samples of level 0).
+
 
 **Why:** the owner asked how Forge knows it is accurate ("sometimes I find sun light reflection
 to be too bright, losing the details of what the light is reflecting off"). Until Falcor, by
