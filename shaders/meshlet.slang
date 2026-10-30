@@ -3769,7 +3769,7 @@ LampPicks lamp_picks(Frame* f, LampPlace place, float3 world, float3 n, uint2 pi
 // - or 0xFFFF (`--no-lamp-filter`): with SHADOWS, the picked lamps' (`lamp_picks`) own shadow rays
 //   towards points of their spheres that move with the frame's noise, so TAA averages the
 //   penumbra as it did the sun's single ray (#54).
-void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, float3 n, float3 view, float specular_power, float specular_weight, float bias, uint2 pixel, uint code)
+void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, float3 n, float3 view, float specular_power, float specular_weight, float3 f0, float bias, uint2 pixel, uint code)
 {
     g_lamp_diffuse = float3(0.0);
     g_lamp_specular = float3(0.0);
@@ -3777,7 +3777,7 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
     if (count == 0u || f[0].lamps == nullptr)
     {
         if (f[0].far_lamps != nullptr)
-            far_lamps_at(f, lamp_place(f, probes, world, n, view), world, n, view, specular_power, specular_weight);
+            far_lamps_at(f, lamp_place(f, probes, world, n, view), world, n, view, specular_power, specular_weight, f0);
         return;
     }
     uint share = code & 0xFFFFu;
@@ -3797,7 +3797,7 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
                     if (skip_outside && lamp_outside(f[0].lamps[i]))
                         continue;
                     if (lamp_counted(f, place.runs, r, i) && lamp_weight_in(f[0].lamps[i], world, n, place.region, place.other) > 0.0)
-                        lamp_add<0>(f, f[0].lamps[i], i, 1.0, world, n, view, specular_power, specular_weight, bias, float2(0.0));
+                        lamp_add<0>(f, f[0].lamps[i], i, 1.0, world, n, view, specular_power, specular_weight, f0, bias, float2(0.0));
                 }
             }
             float3 reaching = g_sampled_images[NonUniformResourceIndex(share)].Load(int3(pixel, 0)).rgb;
@@ -3816,21 +3816,21 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
             if (picks.top[0] < count)
             {
                 float2 u_half = sun_disc_point(pixel, f[0].noise_frame + SUN_DISC_POINTS / 2u);
-                lamp_add<SHADOWS>(f, f[0].lamps[picks.top[0]], picks.top[0], 0.5, world, n, view, specular_power, specular_weight, bias, u);
-                lamp_add<SHADOWS>(f, f[0].lamps[picks.top[0]], picks.top[0], 0.5, world, n, view, specular_power, specular_weight, bias, u_half);
+                lamp_add<SHADOWS>(f, f[0].lamps[picks.top[0]], picks.top[0], 0.5, world, n, view, specular_power, specular_weight, f0, bias, u);
+                lamp_add<SHADOWS>(f, f[0].lamps[picks.top[0]], picks.top[0], 0.5, world, n, view, specular_power, specular_weight, f0, bias, u_half);
             }
             for (uint j = 1u; j < 3u; j++)
             {
                 if (picks.top[j] < count)
-                    lamp_add<SHADOWS>(f, f[0].lamps[picks.top[j]], picks.top[j], 1.0, world, n, view, specular_power, specular_weight, bias, u);
+                    lamp_add<SHADOWS>(f, f[0].lamps[picks.top[j]], picks.top[j], 1.0, world, n, view, specular_power, specular_weight, f0, bias, u);
             }
             if (picks.chosen < count)
-                lamp_add<SHADOWS>(f, f[0].lamps[picks.chosen], picks.chosen, picks.scale, world, n, view, specular_power, specular_weight, bias, u);
+                lamp_add<SHADOWS>(f, f[0].lamps[picks.chosen], picks.chosen, picks.scale, world, n, view, specular_power, specular_weight, f0, bias, u);
         }
         // The street lamps beyond the set, the rest of their light unshadowed (#284); ReSTIR's
         // street lamps are all in the set.
         if (!skip_outside)
-            far_lamps_at(f, place, world, n, view, specular_power, specular_weight);
+            far_lamps_at(f, place, world, n, view, specular_power, specular_weight, f0);
     }
     if (restir != 0xFFFFu)
     {
@@ -3839,9 +3839,15 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
         if (i != 0u && i <= count)
         {
             float3 illuminance = light.rgb / max(f[0].sun_illuminance, 1e-9);
-            float3 half_vector = normalize(normalize(f[0].lamps[i - 1u].position_radius.xyz - world) + view);
+            Lamp lamp = f[0].lamps[i - 1u];
+            float3 to_lamp = lamp.position_radius.xyz - world;
+            float dist = length(to_lamp);
+            float3 dir = to_lamp / max(dist, 1e-6);
             g_lamp_diffuse += illuminance;
-            g_lamp_specular += aa_highlight(dot(n, half_vector), specular_power) * specular_weight * illuminance;
+            // Its light at normal incidence (ReSTIR's carries n·l) through GGX (D-086).
+            float size = 0.5 * min(lamp.position_radius.w / max(dist, 1e-3), 1.0);
+            g_lamp_specular += ggx_light(n, view, dir, ggx_alpha2(specular_power, size * size), f0)
+                * highlight_share(specular_weight) * illuminance / max(dot(n, dir), 1e-3);
         }
     }
 }
@@ -3849,7 +3855,7 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
 // Adds lamp `lamp` (the frame's `i`-th) to `g_lamp_diffuse` and `g_lamp_specular`, times `scale`
 // (`lamps_at`): its illuminance on the surface, with SHADOWS one shadow ray to a point of its
 // sphere that moves with the frame's noise `u`.
-void lamp_add<let SHADOWS : int>(Frame* f, Lamp lamp, uint i, float scale, float3 world, float3 n, float3 view, float specular_power, float specular_weight, float bias, float2 u)
+void lamp_add<let SHADOWS : int>(Frame* f, Lamp lamp, uint i, float scale, float3 world, float3 n, float3 view, float specular_power, float specular_weight, float3 f0, float bias, float2 u)
 {
     float3 d = lamp.position_radius.xyz - world;
     float dist2 = dot(d, d);
@@ -3873,10 +3879,14 @@ void lamp_add<let SHADOWS : int>(Frame* f, Lamp lamp, uint i, float scale, float
     // Let go between 80 % and all of its reach, so its edge does not show.
     float window = saturate(1.0 - pow(dist / reach, 4.0));
     float to_units = 1.0 / max(f[0].sun_illuminance, 1e-9);
-    float3 illuminance = lamp.colour_reach.rgb / max(dist2, radius * radius) * (max(ndl, 0.0) * window * window * to_units * scale * lamp_beam(lamp, dir));
-    g_lamp_diffuse += illuminance;
-    float3 half_vector = normalize(dir + view);
-    g_lamp_specular += aa_highlight(dot(n, half_vector), specular_power) * specular_weight * illuminance;
+    float3 normal_light = lamp.colour_reach.rgb / max(dist2, radius * radius) * (window * window * to_units * scale * lamp_beam(lamp, dir));
+    g_lamp_diffuse += normal_light * max(ndl, 0.0);
+    // Its highlight by GGX (D-086), the lobe widened by the sphere's size as seen from the surface
+    // (half its angular radius on α, as the sun's disc): a bulb in a smooth paint is a bulb, not a
+    // point under a pixel, and a lamp's highlight takes the lobe's normalisation (Blinn-Phong's
+    // fixed weight kept it fifty times too dim on the scooter's paint).
+    float size = 0.5 * min(radius / max(dist, 1e-3), 1.0);
+    g_lamp_specular += ggx_light(n, view, dir, ggx_alpha2(specular_power, size * size), f0) * highlight_share(specular_weight) * normal_light;
 }
 
 // The street lamps lit beyond the frame's set (#284, `Frame::far_lamps`) on a surface at `world`
@@ -3884,7 +3894,7 @@ void lamp_add<let SHADOWS : int>(Frame* f, Lamp lamp, uint i, float scale, float
 // light this frame (`Frame::far_shares`: what the set does not light of it), unshadowed and
 // without the penumbra filter, added to `g_lamp_diffuse` and `g_lamp_specular`. Only the outside
 // takes them, as it takes the street lamps of the set.
-void far_lamps_at(Frame* f, LampPlace place, float3 world, float3 n, float3 view, float specular_power, float specular_weight)
+void far_lamps_at(Frame* f, LampPlace place, float3 world, float3 n, float3 view, float specular_power, float specular_weight, float3 f0)
 {
     FarLamps* g = f[0].far_lamps;
     if (g == nullptr)
@@ -3900,7 +3910,7 @@ void far_lamps_at(Frame* f, LampPlace place, float3 world, float3 n, float3 view
             continue;
         Lamp lamp = g[0].lamps[k];
         if (lamp_weight(lamp, world, n) > 0.0)
-            lamp_add<0>(f, lamp, k, share, world, n, view, specular_power, specular_weight, 0.0, float2(0.0));
+            lamp_add<0>(f, lamp, k, share, world, n, view, specular_power, specular_weight, f0, 0.0, float2(0.0));
     }
 }
 
@@ -4785,11 +4795,45 @@ float3 interior_room(float3 o, float3 d, uint id, float footprint, bool shop)
     return lerp(c, mean, smoothstep(0.06, 0.25, footprint));
 }
 
+// A standard row's light inputs (D-086): worked out before its lamps, so their highlights take
+// the pixel's own normal, lobe and reflectance; `n` the surface's normal before a pane's bend (its
+// room's daylight takes it), `uv` read by its UVs, `interior` a pane over a room.
+struct StandardInputs
+{
+    LightInputs li;
+    float3 n;
+    bool uv;
+    bool interior;
+};
+
+// The inputs of a row that shades as the default class, from its factors alone: the other
+// classes' lamps.
+StandardInputs row_inputs(Material mat, Surface s)
+{
+    StandardInputs si;
+    si.li.albedo = mat.color_a;
+    si.li.n = s.n;
+    si.li.power = mat.specular_power;
+    si.li.specular = mat.specular;
+    si.li.ao = s.ao;
+    si.li.reflectance = float3(mat.reflectance);
+    si.li.emissive = float3(0.0);
+    si.n = s.n;
+    si.uv = false;
+    si.interior = false;
+    return si;
+}
+
 float3 shade_standard(Frame* f, Material mat, Surface s)
+{
+    return standard_light(f, mat, s, standard_inputs(f, mat, s));
+}
+
+StandardInputs standard_inputs(Frame* f, Material mat, Surface s)
 {
     float3 albedo;
     float3 n = s.n;
-    // The light's inputs from the row's path, the light worked out once below (#348).
+    // The light's inputs from the row's path, the light worked out once (#348).
     LightInputs li;
     li.n = n;
     li.power = mat.specular_power;
@@ -4828,11 +4872,24 @@ float3 shade_standard(Frame* f, Material mat, Surface s)
         li.albedo = albedo;
         li.emissive = emission(f, mat);
     }
+    StandardInputs si;
+    si.li = li;
+    si.n = n;
+    si.uv = uv;
+    si.interior = interior;
+    return si;
+}
+
+// A standard row's light from its inputs (`standard_inputs`).
+float3 standard_light(Frame* f, Material mat, Surface s, StandardInputs si)
+{
+    LightInputs li = si.li;
+    float3 n = si.n;
     float ndl;
     float3 lit = sun_light(f, li.albedo, li.n, s.n, li.power, li.specular, s.shadow, s.sky, li.ao, s.view, li.reflectance, s.world, s.probes, s.traced, ndl) + li.emissive;
-    if (uv && (mat.flags & MATERIAL_FLAG_FOLIAGE) != 0)
+    if (si.uv && (mat.flags & MATERIAL_FLAG_FOLIAGE) != 0)
         lit += leaf_transmission(f, li.albedo, mat.scatter, s);
-    if (interior)
+    if (si.interior)
     {
         float3 pane = lit;
         // The room behind, seen along the view into the mesh's space.
@@ -6819,10 +6876,14 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     // Under the clouds (#145).
     if (resolve_push.cloud_shadow != 0xFFFFFFFFu)
         s.shadow *= cloud_light(surface_scene, normalize(f[0].sun_dir));
+    // A standard row's inputs before its lamps (D-086): their highlights take the pixel's own
+    // normal, lobe and reflectance, where they took the row's factors (on a mapped row roughness
+    // 1: the Bistro's scooter matte under its lamps). The other classes, their rows' factors.
+    StandardInputs si = class_index == MATERIAL_CLASS_STANDARD ? standard_inputs(f, mat, s) : row_inputs(mat, s);
     // The lamps (D-065): every one whose reach the surface is in and that lights its room, times
     // the filtered share of their light that reaches it (`lamp_filter_main`), or with a shadow ray
     // each; the classes take them where they take the sun (`sun_light`).
-    lamps_at<SHADOWS>(f, s.probes, surface_scene, s.n, s.view, mat.specular_power, mat.specular, lamp_start, pixel, resolve_push.lamp_share);
+    lamps_at<SHADOWS>(f, s.probes, surface_scene, si.li.n, s.view, si.li.power, si.li.specular, si.li.reflectance, lamp_start, pixel, resolve_push.lamp_share);
     s.transmitted = float3(0.0);
     s.cloud = 1.0;
     if (SHADOWS != 0 && class_index == MATERIAL_CLASS_ICE && f[0].tlas != 0 && (f[0].flags & FLAG_TRANSLUCENCY) != 0)
@@ -6837,7 +6898,7 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     float3 color = class_index == MATERIAL_CLASS_ICE ? shade_ice(f, mat, s)
         : class_index == MATERIAL_CLASS_LAYERED ? shade_layered(f, row, mat, s)
         : class_index == MATERIAL_CLASS_JELLY ? shade_jelly(f, mat, s, instance_index, jelly_traced && (f[0].flags & FLAG_SKY_REFLECTIONS) != 0)
-        : shade_standard(f, mat, s);
+        : standard_light(f, mat, s, si);
     if (grass)
         color *= grass_scale;
     if (culled_debug)

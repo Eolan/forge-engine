@@ -8162,6 +8162,16 @@ and 1, Falcor's lost energy; dielectrics 0.88–0.93, the tiles 0.95–1.00. Ope
 0.66–0.74. The Bistro's Exterior_1 against Falcor in Lambert: the sunlit street 1.01–1.06 (0.92–1.07
 before D-086); a still camera 5,032 pixels (5,245 before D-086); the frame 4.61 ms, unchanged.
 
+**Step D, the lamps:** their highlights by GGX, each lobe widened by its lamp's sphere as seen from
+the surface (half its angular radius on α, as the sun's disc), Fresnel from the pixel's tinted F0,
+and the standard rows' inputs (normal, lobe after Toksvig, reflectance) worked out before their
+lamps (`standard_inputs`, `row_inputs` for the other classes, one `lamps_at` still): the lamps had
+taken the row's factors, roughness 1 on every mapped row, and Blinn-Phong's fixed weight. The
+Bistro's night: the scooter's paint glossy with the lanterns' highlights and its chrome bright,
+where both were matte (the owner's "flat especially during the night"); with all 132 lamps 14.3 ms
+(13.6), the resolve +0.4 ms; a still camera's frames 8,162 pixels apart (6,217): the thin geometry
+under DLAA's jitter with brighter highlights (chairs, wires, trims). By day 5,032, unchanged.
+
 
 **Why:** the owner asked how Forge knows it is accurate ("sometimes I find sun light reflection
 to be too bright, losing the details of what the light is reflecting off"). Until Falcor, by
