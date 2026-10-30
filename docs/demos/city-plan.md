@@ -2896,6 +2896,23 @@ a guard across that end stands under the next flight up to its underside, closin
 the flights' three tests (2 m over every tread, their feet clear, a walker's capsule up each) run
 at every size over two seeds now (6 s for all four).
 
+**The flight's foot and wooden railings (2026-10-30).** Unblocked, a flight whose foot stands by
+the back wall (0.2 m of floor before its first riser) was still stepped on sideways in a gap
+under a metre (the owner: "not enough space"). Shown a landing at the foot (houses a metre deeper)
+and a quarter turn, the owner chose the turn and wooden railings. Where less than the flight's
+width (1.1 m) of floor stands before its foot (`interior::FOOT_LANDING`, `Interior::turn`: 3, 5,
+18, 12 and 3 houses at 500 to 900 m, none at 400 m; the first map's 5 all of two storeys), its
+first four steps turn a quarter towards the corridor (`winders`): fanned from the square's corner
+on the open side where the straight steps go on, the first with its riser along the corridor,
+the last across the flight; four in the 1.12 m square so the flight keeps its length, head and
+headroom. Their blocks stand solid on the floor, the strings start past them, the cupboard's side
+too, and a face closes the flight's hollow there. The plastered half walls along the flights' open
+sides and round the stairwells are oak railings now (`railing`, the doors' waxed oak): a 6 × 5 cm
+handrail at their old top, square balusters 3.5 cm at most 10.5 cm apart (the codes' 11 cm
+sphere) and a 9 cm newel post at each end; the walker still meets them as the solids they were
+(`stair_guards`, `interior_solids`), and on a turning flight the railing and the guard beside it
+start past the turn.
+
 ## Next (#245–#247)
 
 - Squares at the radial districts' centres; the landmarks' sightlines.

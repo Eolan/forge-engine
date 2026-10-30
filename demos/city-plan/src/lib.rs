@@ -4252,9 +4252,14 @@ fn insides(tiles: &mut Tiles, masses: &[Mass], structures: &[Structure], near: &
             // The flights' steps in the floors' smooth limestone: in the facades' pitted stone,
             // lit at a grazing angle through the door, their treads glittered (the owner,
             // 2026-10-17: "Stairs lighting is still strange").
-            for (ring, y0, y1, stone) in interior_solids(s, inner, top) {
+            for (ring, y0, y1, stone) in interior_parts(s, inner, top) {
                 let section = if stone { KIT_INSIDE_FLOOR } else { plaster };
                 solid(mesh, &at, &ring, y0, y1, section);
+            }
+            // The stairwells' guards as oak railings along their middle lines.
+            for (ring, y0, y1) in stair_guards(s, inner) {
+                let (p, q) = long_axis(&ring);
+                railing(mesh, &at, p, q, &|_| y0, &|_| y1);
             }
             soffits(mesh, &at, s, inner, plaster);
         }
@@ -4338,6 +4343,16 @@ fn rail_start(rise: f64) -> u32 {
     ((RAIL_FROM / rise.max(1e-3)).ceil() as u32).saturating_sub(1)
 }
 
+/// The first tread a flight of `r` risers `rise` high in the house `inner` has its railing over:
+/// [`rail_start`]'s, or past its turning steps where it turns at its foot ([`TURN_STEPS`]).
+fn rail_first(inner: &interior::Interior, r: u32, rise: f64) -> u32 {
+    if inner.turn && r > TURN_STEPS + 1 {
+        rail_start(rise).max(TURN_STEPS)
+    } else {
+        rail_start(rise)
+    }
+}
+
 /// The balustrade along a flight's open side: a plastered half wall [`RAIL`] thick and
 /// [`RAIL_HEIGHT`] over the steps' nosings, on the side away from the walls, its outer face `out`
 /// outside the steps' side (the string's plane). Open, a walker fell off the flight's side into
@@ -4368,6 +4383,198 @@ fn balustrade(
         (-out, RAIL - out, -1.0)
     };
     (to_walls(mid + a * (outer + sign * 0.3)) > 0.3).then_some((outer, inner, sign))
+}
+
+/// The steps a flight's quarter turn takes at its foot (`interior::Interior::turn`): four, in the
+/// square four goings long at the foot, so the flight keeps its length and its head (three would
+/// have taken a quarter metre more and pushed the head into the landing above).
+const TURN_STEPS: u32 = 4;
+
+/// Whether a flight's open side, the corridor's, is the one towards `stair[1]` (its run `run`
+/// along `climb`): the side whose middle stands farther from the structure's walls.
+fn open_far(s: &Structure, stair: [DVec2; 4], climb: DVec2, run: f64) -> bool {
+    let c = climb.normalize_or_zero();
+    let from_walls = |p: DVec2| {
+        s.walls
+            .iter()
+            .map(|w| geom::distance_to_segment(p, w.a, w.b))
+            .fold(f64::MAX, f64::min)
+    };
+    from_walls(stair[1] + c * run * 0.5) > from_walls(stair[0] + c * run * 0.5)
+}
+
+/// A turning flight's first [`TURN_STEPS`] treads from its foot, each a ring anticlockwise: fanned
+/// from the corner of the foot's square on the open side (`open_far`) where the straight steps go
+/// on, the first with its riser along the open side, the way on to the flight from the corridor,
+/// the last with its riser across the flight where the straight steps begin (the owner,
+/// 2026-10-30: a quarter turn at the foot, "quart tournant", where the foot stands by the back
+/// wall).
+fn winders(stair: [DVec2; 4], climb: DVec2, open_far: bool) -> Vec<Vec<DVec2>> {
+    let across = stair[1] - stair[0];
+    let width = across.length();
+    let a = across / width.max(1e-6);
+    let c = climb.normalize_or_zero();
+    let len = f64::from(TURN_STEPS) * cores::GOING;
+    // In the square's frame: `u` in from the open side, `v` along the climb from the foot.
+    let at = |u: f64, v: f64| {
+        let across = if open_far { width - u } else { u };
+        stair[0] + a * across + c * v
+    };
+    let pivot = DVec2::new(0.0, len);
+    // Where a ray from the pivot `t` of the quarter round from straight back meets the square's
+    // bottom or its far side, and how far round the square's edge from the open side's foot.
+    let hit = |t: f64| {
+        let theta = t * std::f64::consts::FRAC_PI_2;
+        let u = len * theta.tan();
+        if u <= width {
+            (DVec2::new(u, 0.0), u)
+        } else {
+            let v = len - width / theta.tan();
+            (DVec2::new(width, v), width + v)
+        }
+    };
+    let n = TURN_STEPS as usize;
+    let ends: Vec<(DVec2, f64)> = (0..=n)
+        .map(|k| match k {
+            0 => (DVec2::ZERO, 0.0),
+            k if k == n => (DVec2::new(width, len), width + len),
+            k => hit(k as f64 / n as f64),
+        })
+        .collect();
+    (0..n)
+        .map(|k| {
+            let (p, sp) = ends[k];
+            let (q, sq) = ends[k + 1];
+            let mut ring = vec![pivot, p];
+            // The square's corner on the far side at the foot, where the step turns round it.
+            if sp < width && sq > width {
+                ring.push(DVec2::new(width, 0.0));
+            }
+            ring.push(q);
+            let mut ring: Vec<DVec2> = ring.into_iter().map(|w| at(w.x, w.y)).collect();
+            if geom::signed_area(&ring) < 0.0 {
+                ring.reverse();
+            }
+            ring
+        })
+        .collect()
+}
+
+/// A thin rectangle's middle line along its longer sides (a guard's, [`stair_guards`]): from the
+/// middle of one short side to the other's.
+fn long_axis(ring: &[DVec2]) -> (DVec2, DVec2) {
+    let n = ring.len();
+    if n < 4 {
+        return (ring[0], ring[n - 1]);
+    }
+    let edge = |i: usize| ring[i].distance(ring[(i + 1) % n]);
+    // The shorter of the first two edges and the one across from it.
+    let s = if edge(0) <= edge(1) { 0 } else { 1 };
+    (
+        (ring[s] + ring[s + 1]) * 0.5,
+        (ring[s + 2] + ring[(s + 3) % n]) * 0.5,
+    )
+}
+
+/// Oak's rail sizes, metres: the handrail's width and depth, a baluster's side, a newel post's
+/// side, and the most a baluster's gap may be (a child's head, the codes' 11 cm sphere).
+const HANDRAIL: (f64, f64) = (0.06, 0.05);
+const BALUSTER: f64 = 0.035;
+const NEWEL: f64 = 0.09;
+const BALUSTER_GAP: f64 = 0.105;
+
+/// A wooden railing (`KIT_INSIDE_WOOD`, the doors' waxed oak; the owner, 2026-10-30: "consider
+/// wooden stair railings") from `p` to `q` on the plan: a newel post at each end, square balusters
+/// between them at most [`BALUSTER_GAP`] apart standing on `foot(t)`, and a handrail whose top runs
+/// along `top(t)`, `t` from 0 at `p` to 1 at `q`; the posts stand 8 cm over it.
+fn railing(
+    mesh: &mut TriMesh,
+    at: &dyn Fn(DVec2, f64) -> Vec3,
+    p: DVec2,
+    q: DVec2,
+    foot: &dyn Fn(f64) -> f64,
+    top: &dyn Fn(f64) -> f64,
+) {
+    let len = p.distance(q);
+    if len < 0.2 {
+        return;
+    }
+    let d = (q - p) / len;
+    let n = DVec2::new(-d.y, d.x);
+    // A square post `side` across about the point `t` along, from `y0` to `y1`.
+    let post = |mesh: &mut TriMesh, t: f64, side: f64, y0: f64, y1: f64| {
+        let o = p + d * (t * len);
+        let h = side * 0.5;
+        let mut ring = vec![
+            o - d * h - n * h,
+            o + d * h - n * h,
+            o + d * h + n * h,
+            o - d * h + n * h,
+        ];
+        if geom::signed_area(&ring) < 0.0 {
+            ring.reverse();
+        }
+        solid(mesh, at, &ring, y0, y1, KIT_INSIDE_WOOD);
+    };
+    let (t0, t1) = (NEWEL * 0.5 / len, 1.0 - NEWEL * 0.5 / len);
+    post(mesh, t0, NEWEL, foot(t0), top(t0) + 0.08);
+    post(mesh, t1, NEWEL, foot(t1), top(t1) + 0.08);
+    // The balusters evenly between the posts' faces.
+    let clear = len - NEWEL;
+    let count = ((clear - BALUSTER_GAP) / (BALUSTER + BALUSTER_GAP))
+        .ceil()
+        .max(0.0) as usize;
+    let step = clear / (count + 1) as f64;
+    for i in 1..=count {
+        let t = (NEWEL * 0.5 + step * i as f64) / len;
+        post(mesh, t, BALUSTER, foot(t), top(t) - HANDRAIL.1 + 0.005);
+    }
+    // The handrail between the posts: its top along `top`, a box of the rail's section.
+    let (w, h) = (HANDRAIL.0 * 0.5, HANDRAIL.1);
+    let corner = |t: f64, s: f64, y: f64| at(p + d * (t * len) + n * s, y);
+    let c = [
+        corner(t0, -w, top(t0) - h),
+        corner(t1, -w, top(t1) - h),
+        corner(t1, w, top(t1) - h),
+        corner(t0, w, top(t0) - h),
+        corner(t0, -w, top(t0)),
+        corner(t1, -w, top(t1)),
+        corner(t1, w, top(t1)),
+        corner(t0, w, top(t0)),
+    ];
+    let middle = c.iter().fold(Vec3::ZERO, |m, v| m + *v) / 8.0;
+    for f in [
+        [0, 1, 2, 3],
+        [4, 7, 6, 5],
+        [0, 4, 5, 1],
+        [1, 5, 6, 2],
+        [2, 6, 7, 3],
+        [3, 7, 4, 0],
+    ] {
+        let q = f.map(|i| c[i]);
+        let mut normal = (q[1] - q[0]).cross(q[2] - q[0]).normalize_or_zero();
+        let centre = (q[0] + q[1] + q[2] + q[3]) * 0.25;
+        let quad = if normal.dot(centre - middle) < 0.0 {
+            normal = -normal;
+            [q[0], q[3], q[2], q[1]]
+        } else {
+            q
+        };
+        triangle_uv(
+            mesh,
+            [quad[0], quad[1], quad[2]],
+            [[0.0; 2]; 3],
+            normal,
+            KIT_INSIDE_WOOD,
+        );
+        triangle_uv(
+            mesh,
+            [quad[0], quad[2], quad[3]],
+            [[0.0; 2]; 3],
+            normal,
+            KIT_INSIDE_WOOD,
+        );
+    }
 }
 
 /// Each flight's soffit and strings (`interior_solids` draws its steps), plastered as the walls:
@@ -4454,70 +4661,67 @@ fn soffits(
         if geom::signed_area(&ring) < 0.0 {
             ring.reverse();
         }
+        // A turning flight's strings start past its turning steps (`winders`): on its open side
+        // their riser is the way on to it, on the wall side their treads meet the wall.
+        let turns = inner.turn && r > TURN_STEPS + 1;
+        let turned = f64::from(TURN_STEPS) * g;
+        let ring = if turns {
+            geom::clip_half_plane(&ring, DVec2::new(turned, 0.0), DVec2::new(0.0, -1.0))
+        } else {
+            ring
+        };
         for (u, n) in [(lo, -side), (hi, side)] {
+            if ring.len() < 3 {
+                break;
+            }
             for t in geom::triangulate(&ring) {
                 let q = t.map(|i| p(ring[i].x, u, ring[i].y));
                 triangle_uv(mesh, q, [[0.0; 2]; 3], n, section);
             }
         }
-        // The balustrade on its open side (`balustrade`): its faces over the steps' profile up
-        // to its sloped top, on the string's plane outside, and its top and ends.
-        // From its first tread [`RAIL_FROM`] up (`rail_start`): below, the side is open.
-        let first = rail_start(rise);
+        // Where the strings stop, the flight's hollow between its underside and its steps closed
+        // across it, up to the first straight step's foot: seen from the corridor past the turn,
+        // it was a dark slot under the railing's post.
+        if turns {
+            let step = base + f64::from(TURN_STEPS) * rise - 0.15;
+            let low = under(turned).max(base);
+            if step > low + 0.01 {
+                quad(
+                    mesh,
+                    [
+                        p(turned, lo, low),
+                        p(turned, hi, low),
+                        p(turned, hi, step),
+                        p(turned, lo, step),
+                    ],
+                    -along,
+                );
+            }
+        }
+        // The railing on its open side (`balustrade`'s line, mid its thickness): from its first
+        // tread [`RAIL_FROM`] up (`rail_start`; below, the side is open) or past its turning
+        // steps, to its head, its handrail [`RAIL_HEIGHT`] over the steps' nosings. A plastered
+        // half wall until 2026-10-30.
+        let first = rail_first(inner, r, rise);
         if first + 1 < r
-            && let Some((outer, inner_u, sign)) = balustrade(s, stair, inner.climb, r, OUT)
+            && let Some((outer, inner_u, _)) = balustrade(s, stair, inner.climb, r, OUT)
         {
             let over = |v: f64| base + rise + v / g * rise + RAIL_HEIGHT;
             let (start, last) = (f64::from(first) * g, f64::from(r - 1) * g);
-            let mut wall: Vec<DVec2> = Vec::new();
-            for i in first..r - 1 {
-                let y = base + f64::from(i + 1) * rise;
-                wall.push(DVec2::new(f64::from(i) * g, y));
-                wall.push(DVec2::new(f64::from(i + 1) * g, y));
-            }
-            wall.push(DVec2::new(last, over(last)));
-            wall.push(DVec2::new(start, over(start)));
-            if geom::signed_area(&wall) < 0.0 {
-                wall.reverse();
-            }
-            let n = side * sign as f32;
-            for (u, face) in [(outer, n), (inner_u, -n)] {
-                for t in geom::triangulate(&wall) {
-                    let q = t.map(|i| p(wall[i].x, u, wall[i].y));
-                    triangle_uv(mesh, q, [[0.0; 2]; 3], face, section);
-                }
-            }
-            quad(
+            let u = (outer + inner_u) * 0.5;
+            let v_at = |t: f64| start + t * (last - start);
+            // The tread under the point `t` along: its top.
+            let tread = |t: f64| {
+                let i = ((v_at(t) / g).floor() as u32).clamp(first, r - 2);
+                base + f64::from(i + 1) * rise
+            };
+            railing(
                 mesh,
-                [
-                    p(start, inner_u, over(start)),
-                    p(start, outer, over(start)),
-                    p(last, outer, over(last)),
-                    p(last, inner_u, over(last)),
-                ],
-                -down,
-            );
-            let low = base + f64::from(first + 1) * rise;
-            quad(
-                mesh,
-                [
-                    p(start, inner_u, low),
-                    p(start, outer, low),
-                    p(start, outer, over(start)),
-                    p(start, inner_u, over(start)),
-                ],
-                -along,
-            );
-            let foot = base + f64::from(r - 1) * rise;
-            quad(
-                mesh,
-                [
-                    p(last, inner_u, foot),
-                    p(last, outer, foot),
-                    p(last, outer, over(last)),
-                    p(last, inner_u, over(last)),
-                ],
-                along,
+                at,
+                stair[0] + c * start + a * u,
+                stair[0] + c * last + a * u,
+                &tread,
+                &|t| over(v_at(t)),
             );
         }
         // The cupboard under the flight (the owner, 2026-10-17: "Below the stairs there can be
@@ -4545,13 +4749,27 @@ fn soffits(
         } else {
             (lo, -side, -1.0)
         };
-        triangle_uv(
-            mesh,
-            [p(v0, u, base), p(v1, u, base), p(v1, u, under(v1))],
-            [[0.0; 2]; 3],
-            n,
-            section,
-        );
+        // Past a turning flight's steps, its way on.
+        if turns && turned > v0 {
+            quad(
+                mesh,
+                [
+                    p(turned, u, base),
+                    p(v1, u, base),
+                    p(v1, u, under(v1)),
+                    p(turned, u, under(turned)),
+                ],
+                n,
+            );
+        } else {
+            triangle_uv(
+                mesh,
+                [p(v0, u, base), p(v1, u, base), p(v1, u, under(v1))],
+                [[0.0; 2]; 3],
+                n,
+                section,
+            );
+        }
         quad(
             mesh,
             [
@@ -4633,11 +4851,29 @@ fn stairwell(s: &Structure, inner: &interior::Interior, k: usize) -> Option<[DVe
     ])
 }
 
-/// A house's insides as solids (`city::interior`): its partitions floor to ceiling with a lintel
-/// over each doorway, and its flights a stone step a riser with a hand of stone under it, from
-/// the street wall into the house (the last riser climbs on to the floor above). Each a ring
+/// A house's insides as solids (`city::interior`), what a walker meets: its partitions, steps and
+/// cupboard ([`interior_parts`]) and its stairwells' guards ([`stair_guards`]). Each a ring
 /// (anticlockwise, the plan's metres), its bottom and its top, and whether it is stone.
 fn interior_solids(
+    s: &Structure,
+    inner: &interior::Interior,
+    top: f64,
+) -> Vec<(Vec<DVec2>, f64, f64, bool)> {
+    let mut out = interior_parts(s, inner, top);
+    out.extend(
+        stair_guards(s, inner)
+            .into_iter()
+            .map(|(ring, y0, y1)| (ring, y0, y1, false)),
+    );
+    out
+}
+
+/// A house's insides drawn as solids (`city::interior`): its partitions floor to ceiling with a
+/// lintel over each doorway, and its flights a stone step a riser with a hand of stone under it,
+/// from the street wall into the house (the last riser climbs on to the floor above), their first
+/// [`TURN_STEPS`] turning a quarter where the house's flights turn at their foot ([`winders`]). Each
+/// a ring (anticlockwise, the plan's metres), its bottom and its top, and whether it is stone.
+fn interior_parts(
     s: &Structure,
     inner: &interior::Interior,
     top: f64,
@@ -4677,12 +4913,29 @@ fn interior_solids(
             }
             let base = floor_level(s, k);
             let rise = (s.storeys[k + 1].level - base) / f64::from(r);
+            let run = f64::from(r - 1) * cores::GOING;
+            let turning = if inner.turn && r > TURN_STEPS + 1 {
+                winders(stair, inner.climb, open_far(s, stair, inner.climb, run))
+            } else {
+                Vec::new()
+            };
             for i in 0..r - 1 {
-                let (v0, v1) = (f64::from(i) * cores::GOING, f64::from(i + 1) * cores::GOING);
-                let (p0, p1) = (inner.climb * v0, inner.climb * v1);
-                let tread = vec![stair[0] + p0, stair[1] + p0, stair[1] + p1, stair[0] + p1];
                 let y1 = base + f64::from(i + 1) * rise;
-                out.push((tread, (y1 - rise - 0.15).max(base), y1, true));
+                // A turning step solid down to the floor: under a hand of stone, the hollow
+                // beneath the higher ones showed past the first's thin end by the pivot.
+                let (tread, y0) = match turning.get(i as usize) {
+                    Some(w) => (w.clone(), base),
+                    None => {
+                        let (v0, v1) =
+                            (f64::from(i) * cores::GOING, f64::from(i + 1) * cores::GOING);
+                        let (p0, p1) = (inner.climb * v0, inner.climb * v1);
+                        (
+                            vec![stair[0] + p0, stair[1] + p0, stair[1] + p1, stair[0] + p1],
+                            (y1 - rise - 0.15).max(base),
+                        )
+                    }
+                };
+                out.push((tread, y0, y1, true));
             }
             // The cupboard under the ground floor's flight (`soffits` closes it): a metre of it a
             // walker meets, where the slope stands over that, so no one walks in under the steps.
@@ -4697,32 +4950,33 @@ fn interior_solids(
                 out.push((under, base, base + 1.0, false));
             }
         }
-        // A guard round each upper floor's opening over the flight ([`stairwell`]): a
-        // whitewashed half wall a metre high along its long side away from the walls and across
-        // its end towards the flight's foot, 10 cm thick and 5 cm back from the edge; the arrival
-        // end stays open. Without it a walker stepped off the landing into the stairwell (seen
-        // 2026-10-16). Where the next flight starts there, the opening begins where the climber
-        // below needs the room, the guard along it no sooner than the next flight's string leaves
-        // a gap under it, and the guard across that end stands under the next flight, up to its
-        // underside.
+    }
+    out
+}
+
+/// The guards round each upper floor's opening over the flight ([`stairwell`]), each a ring
+/// (anticlockwise, the plan's metres) 10 cm thick, its bottom and its top: along the opening's
+/// long side away from the walls and across its end towards the flight's foot, 5 cm back from the
+/// edge, a metre high; the arrival end stays open. Without them a walker stepped off the landing
+/// into the stairwell (seen 2026-10-16). Where the next flight starts there, the opening begins
+/// where the climber below needs the room, the guard along it no sooner than the next flight's
+/// string leaves a gap under it nor than its turning steps end ([`TURN_STEPS`]), and the guard
+/// across that end stands under the next flight, up to its underside. Drawn as wooden railings
+/// ([`railing`]); the walker meets them as solids ([`interior_solids`]).
+fn stair_guards(s: &Structure, inner: &interior::Interior) -> Vec<(Vec<DVec2>, f64, f64)> {
+    let mut out = Vec::new();
+    if let Some(stair) = inner.stair {
         let across = stair[1] - stair[0];
         let width = across.length();
         let a = across / width.max(1e-6);
         let c = inner.climb.normalize_or_zero();
-        // The long side away from the walls: the one whose middle lies farther from their lines.
-        let from_walls = |p: DVec2| {
-            s.walls
-                .iter()
-                .map(|w| geom::distance_to_segment(p, w.a, w.b))
-                .fold(f64::MAX, f64::min)
-        };
         for (k, &r) in inner.risers.iter().enumerate() {
             if k + 1 >= s.storeys.len() || r < 2 {
                 break;
             }
             let run = f64::from(r - 1) * cores::GOING;
-            let open_far =
-                from_walls(stair[1] + c * run * 0.5) > from_walls(stair[0] + c * run * 0.5);
+            // The long side away from the walls.
+            let open_far = open_far(s, stair, inner.climb, run);
             // A box in the opening's frame: across from `a0` to `a1`, along the climb from `c0`
             // to `c1`, from `stair[0]`.
             let piece = |a0: f64, a1: f64, c0: f64, c1: f64| {
@@ -4755,6 +5009,12 @@ fn interior_solids(
             // before that the string closes the side, and the flight is stepped on from the
             // corridor beside it.
             let along = rise_up.map_or(start, |rise| start.max(cores::GOING * (1.0 + 0.25 / rise)));
+            // Past a turning next flight's steps: their riser along the open side is its way on.
+            let along = if next && inner.turn {
+                along.max(f64::from(TURN_STEPS) * cores::GOING)
+            } else {
+                along
+            };
             let (side, head) = if open_far {
                 (
                     piece(width + 0.05, width + 0.15, along - 0.05, run),
@@ -4781,7 +5041,7 @@ fn interior_solids(
                 } else {
                     ring
                 };
-                out.push((ring, y0, y0 + height, false));
+                out.push((ring, y0, y0 + height));
             }
         }
     }
@@ -4847,7 +5107,7 @@ fn interior_pieces(
                 let base = floor_level(s, k);
                 let rise = (s.storeys[k + 1].level - base) / f64::from(r);
                 let (u0, u1) = (outer.min(inside), outer.max(inside));
-                for t in rail_start(rise)..r - 1 {
+                for t in rail_first(&inner, r, rise)..r - 1 {
                     let (v0, v1) = (f64::from(t) * cores::GOING, f64::from(t + 1) * cores::GOING);
                     let ring = [(v0, u0), (v0, u1), (v1, u1), (v1, u0)]
                         .map(|(v, u)| stair[0] + inner.climb * v + across * u);
@@ -9771,7 +10031,7 @@ mod tests {
                 let base = floor_level(s, k);
                 let rise = (s.storeys[k + 1].level - base) / f64::from(r);
                 let (u0, u1) = (outer.min(inside), outer.max(inside));
-                for t in rail_start(rise)..r - 1 {
+                for t in rail_first(&inner, r, rise)..r - 1 {
                     let (v0, v1) = (f64::from(t) * cores::GOING, f64::from(t + 1) * cores::GOING);
                     let ring = [(v0, u0), (v0, u1), (v1, u1), (v1, u0)]
                         .map(|(v, u)| stair[0] + inner.climb * v + a * u);
@@ -10016,12 +10276,23 @@ mod tests {
                     let base = floor_level(s, k);
                     let rise = (s.storeys[k + 1].level - base) / f64::from(r);
                     for i in 0..r - 1 {
-                        let y = base + f64::from(i + 1) * rise;
                         for u in [0.2, 0.5, 0.8] {
                             let p = stair[0]
                                 + inner.climb * ((f64::from(i) + 0.5) * going)
                                 + across * u;
                             treads += 1;
+                            // The step under the point: its own, or where the flight turns at its
+                            // foot the turning step there, higher than the straight one was.
+                            let y = solids
+                                .iter()
+                                .filter(|(ring, _, y1, stone)| {
+                                    *stone
+                                        && *y1 > base
+                                        && *y1 <= base + f64::from(r) * rise + 1e-6
+                                        && geom::contains(ring, p)
+                                })
+                                .map(|(_, _, y1, _)| *y1)
+                                .fold(base + f64::from(i + 1) * rise, f64::max);
                             let (from, to) = (y + 0.05, y + 2.0);
                             let blocked = solids
                                 .iter()

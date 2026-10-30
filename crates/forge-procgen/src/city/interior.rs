@@ -77,6 +77,11 @@ pub struct Interior {
     pub climb: DVec2,
     /// The risers each storey's flight climbs, ground first.
     pub risers: Vec<u32>,
+    /// Whether the flights turn a quarter at their foot towards the corridor beside them, over
+    /// their first four steps, where less than [`FOOT_LANDING`] of floor stands before their first
+    /// riser (the owner, 2026-10-30: stepped on from the side, "not enough space"; a quarter turn
+    /// chosen over deeper houses).
+    pub turn: bool,
 }
 
 /// The insides of house `m` (one with its rooms' plan, [`Mass::rooms`]) whose structure is `s`:
@@ -453,8 +458,31 @@ pub fn house(m: &Mass, s: &Structure) -> Option<Interior> {
         stair: core.map(|c| [c.stair[2], c.stair[3], c.stair[0], c.stair[1]]),
         climb: -n,
         risers: core.map_or_else(Vec::new, |c| c.risers.clone()),
+        // The floor before the flights' foot, back from its middle against the climb (`n`) to the
+        // floor's edge.
+        turn: core.is_some_and(|c| {
+            let foot = (c.stair[2] + c.stair[3]) * 0.5;
+            let n_in = inside.len();
+            let room = (0..n_in)
+                .filter_map(|i| {
+                    super::geom::segment_intersection(
+                        foot,
+                        foot + n * 20.0,
+                        inside[i],
+                        inside[(i + 1) % n_in],
+                    )
+                })
+                .map(|(t, _)| t * 20.0)
+                .fold(f64::MAX, f64::min);
+            room < FOOT_LANDING
+        }),
     })
 }
+
+/// The floor a flight's foot wants before its first riser, metres: as deep as the flight is wide
+/// (a stair's landing at least its width). Where less stands there, the flight turns a quarter at
+/// its foot towards the corridor beside it ([`Interior::turn`]).
+pub const FOOT_LANDING: f64 = super::cores::FLIGHT;
 
 /// How many of the partitions' ends meet an outside wall of `s` within one of its openings: a
 /// wall behind a window or a door (one flush with a jamb, within a centimetre, is not).
