@@ -59,6 +59,7 @@ pub mod splashes;
 pub mod starfield;
 pub mod streaming;
 pub mod sun_shadow;
+pub mod surface_cache;
 pub mod taa;
 pub mod textures;
 pub mod tonecheck;
@@ -119,6 +120,7 @@ pub use streaming::{Residency, StartView, StreamingConfig, StreamingStats};
 pub use sun_shadow::{
     DENOISED_SUN_RADIUS, ShadowDenoiserKind, SunShadowCamera, SunShadowDenoiser, SunShadowFrame,
 };
+pub use surface_cache::{CacheLight, SurfaceCache};
 pub use taa::{HDR_FORMAT, Taa, TaaFrame};
 pub use upscale::{DlssUpscaler, UpscaleCamera};
 pub use view_reach::ViewReach;

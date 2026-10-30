@@ -930,13 +930,15 @@ struct DiffuseTracePush {
     frame: u64,
     sky: u64,
     probes: u64,
+    /// D-088's surface cache, or 0: the probes' light at the hits.
+    cache: u64,
     vis_image: u32,
     bounce_image: u32,
     width: u32,
     height: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<DiffuseTracePush>() == 72);
+const _: () = assert!(std::mem::size_of::<DiffuseTracePush>() == 80);
 
 /// What [`MeshletRenderer::trace_diffuse`] writes for NVIDIA's REBLUR
 /// ([`crate::DiffuseDenoiser`]).
@@ -5999,8 +6001,9 @@ impl MeshletRenderer {
     }
 
     /// Declares "gi/trace" (D-088): per pixel of the visibility buffer, one cosine-weighted ray to
-    /// the scene's end, its hit lit by the sun, the lamps and `probes` (the sky's irradiance
-    /// without), a miss by `sky` ([`AmbientLight::diffuse_bounce`]): in YCoCg, with the ray's
+    /// the scene's end, its hit lit by the sun, the lamps and D-088's surface `cache` where it
+    /// holds light there, else `probes` (the sky's irradiance without), a miss by `sky`
+    /// ([`AmbientLight::diffuse_bounce`]): in YCoCg, with the ray's
     /// normalised length, every pixel's own: for NVIDIA's REBLUR with `denoiser`
     /// ([`crate::DiffuseDenoiser`]), else read as traced. `None` on a device without ray queries.
     #[allow(clippy::too_many_arguments)]
@@ -6012,6 +6015,7 @@ impl MeshletRenderer {
         extent: vk::Extent2D,
         sky: crate::SkyLight,
         probes: Option<ProbeLight>,
+        cache: Option<crate::CacheLight>,
         denoiser: Option<DiffuseForDenoiser>,
     ) -> Option<ImageHandle> {
         let pipeline = self.pipeline_diffuse_trace.as_ref()?;
@@ -6048,6 +6052,9 @@ impl MeshletRenderer {
                 .image(p.irradiance, ImageAccess::Sampled(compute))
                 .image(p.distance, ImageAccess::Sampled(compute));
         }
+        if let Some(c) = cache {
+            builder = c.declare(builder, compute);
+        }
         builder.run(move |resources, commands| {
             commands.bind_pipeline(pipeline);
             let (view_z, hit_distance) = match denoiser {
@@ -6065,6 +6072,7 @@ impl MeshletRenderer {
                     frame,
                     sky: sky.address,
                     probes: probes.map_or(0, |p| p.address),
+                    cache: cache.map_or(0, |c| c.address),
                     vis_image: resources.sampled(targets.visibility).0,
                     bounce_image: resources.storage(bounce, 0).0,
                     width: extent.width,

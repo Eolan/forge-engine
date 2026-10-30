@@ -8696,3 +8696,71 @@ this one: "yes, record it and download them"):**
 - **Tests:** against `r.gi.reference=4` in the village's room, on its landing and in the Bistro's
   clay views; the cost; a still camera indoors, for flicker.
 
+**The surface cache's design (2026-10-30, the owner: "start building the surface cache"):**
+- **Entries:** a pool of 65,536, 80 bytes each (5.2 MB). Each holds:
+  - the surface point that made it (its rays' start) and its normal;
+  - its cell and its slot in the index;
+  - its light (Forge's irradiance units, as the probes': sky and bounces, no direct sun) and the
+    samples blended;
+  - this frame's sample;
+  - the frames it has left unread.
+
+  Free entries wait on a stack; a slot takes one by compare-and-swap, and gives it back when the
+  entry dies.
+- **The index (kajiya's):** twelve levels of 32³ cells round the camera, the finest 15 cm (Solari's
+  base cell), each level twice the last. Six slots a cell, one per facing (the normal's main axis
+  and sign), so a wall's two faces never share an entry: 12 × 32³ × 6 slots of 4 bytes, 9.4 MB.
+  - **The level:** the finest whose cells, less two at the edge, hold the point (kajiya's rule).
+  - **The cell:** the point is jittered within the cell's size in its surface's plane (Solari's),
+    then moved half a cell along its normal (kajiya's).
+  - **Scrolling:** a level's cells wrap in place as the camera moves. An entry whose cell has
+    left its level's window is freed before anything reads the index, so a slot always holds its
+    own cell's entry: no tag, no hash, no collisions.
+- **Each frame,** before the bounce, three passes over the pool:
+  1. **`gi/cache age`:** frees the entries unread for ten frames (Solari's lifetime), or out of
+     their level's window, or all of them after a reset.
+  2. **`gi/cache rays`:** one cosine-weighted ray per live entry, from 2 cm off its point, in the
+     bounce's world (the trees' cards near, their proxies far), not the probes': since #363 the
+     probes' rays pass the houses' furniture, and the cache's rays in their world let the light
+     in past it, the village's room 0.3 stop over the path. A hit is lit as the bounce's are (the sun through a shadow ray, the lamps, the glow) plus its
+     albedo times the cache's light there (the bounces after). It falls back to the probes'
+     light where the cache has no light yet, and on leaves, whose rays start inside their crowns'
+     proxies (D-075). A miss takes the sky's light along the ray.
+  3. **`gi/cache blend`:** the samples averaged, then once an entry holds 32 an exponential
+     average weighing each new one 1/32: as long to follow a change as the probes' hysteresis.
+     Solari's blend cuts the samples back where the luminance changes; with one ray an entry a
+     frame that change is the rays' noise, and it took the landing's still camera from 20 changing
+     pixels a frame pair to 319 (33 without it).
+- **Reads:** the bounce's hits (`gi/trace`) and the cache's own rays' hits look the cache up,
+  making an entry where none is. They read it unconditionally, whatever the ray's length (D-088's
+  patents above). Where it has no light yet, the probes' light stands in. The pixels never read
+  entries directly; mirror rays keep the probes for now. The cache's rays take the lamps as the
+  probes' do (no street lamps, none nearer than 25 cm, #294, #254): one ray an entry a frame
+  near a bulb is the probes' halo again.
+- **Within a pass** (the review, 2026-10-30): an entry is written before its number is
+  published, and a freed one is cleared, so a lookup that meets a number before its entry finds
+  no light and takes the probes'. The rays' pass traces only the entries alive at `gi/cache age`.
+  The blend counts the entries in use for the host (`SurfaceCache::most_used`, logged at exit).
+- **Not handled:** the probes' rooms (D-078) keep a room's light from the street's; the cache's
+  cells do not, and at a few metres from the camera a room's floor and the street outside, both
+  facing up, can share an entry. Finer levels (64³) did not change the village's room (0.305
+  against 0.298 before the rays' world was fixed).
+- **`r.gi.cache`,** off until the owner turns it on. Measured (2026-10-30), the mean |log2| of
+  16 × 9 tiles against `r.gi.reference=4`, and a still camera's changing pixels per pair of
+  frames 10 apart:
+
+  | View | probes at the hits | the cache |
+  |---|---|---|
+  | The village's landing | 0.811 (×1.53) | 0.201 (×1.06) |
+  | The village's room | 0.144 | 0.058 |
+  | The Bistro's Exterior_1, clay | 0.029 | 0.047 (×0.98) |
+  | The Bistro's Exterior_2, clay | 0.118 (×1.01) | 0.103 (×0.96) |
+  | Still: landing, room, street | 20, 683, 5,694 | 21, 692, 5,704 |
+  | Still: Exterior_1, Exterior_2 | 4,899, 2,863 | 4,852, 2,873 |
+
+  The frame costs the same: the cache's three passes 0.02–0.17 ms, `gi/trace` 0.25–0.45 ms
+  cheaper in the Bistro (its hits read one entry instead of the probes' eight). At most 25,701
+  entries in the room, 55,081 at the Bistro's textured Exterior_2, of 65,536.
+- **Credits:** the shaders carry Bevy's and kajiya's names, commits and licences in their header,
+  and the changes Forge made.
+

@@ -867,6 +867,13 @@ struct Gallery {
     diffuse_denoiser: Option<forge_render::DiffuseDenoiser>,
     diffuse_tried: bool,
     diffuse_was_on: bool,
+    /// D-088's surface cache under the bounce (`r.gi.cache`, `cache_on`), made the first time it
+    /// is asked for where the device has ray queries; `cache_was_on` whether it lit the last
+    /// frame (its entries start over when not).
+    surface_cache: Option<forge_render::SurfaceCache>,
+    cache_on: bool,
+    cache_tried: bool,
+    cache_was_on: bool,
     /// The most metres ahead along the view the finest probe cascade stands (`r.gi.probe_ahead`,
     /// D-088); 0 round the camera. `probe_focus` the distance it stands at, as far as the view
     /// reaches (`view_reach`), moved in steps of PROBE_FOCUS_STEP.
@@ -2108,6 +2115,10 @@ impl Gallery {
             diffuse_denoiser: None,
             diffuse_tried: false,
             diffuse_was_on: false,
+            surface_cache: None,
+            cache_on: false,
+            cache_tried: false,
+            cache_was_on: false,
             probe_ahead: PROBE_AHEAD,
             probe_focus: 0.0,
             view_reach: forge_render::ViewReach::new(&ctx.device, &ctx.shaders)?,
@@ -2580,6 +2591,23 @@ impl Demo for Gallery {
             && let Some(denoiser) = &mut self.diffuse_denoiser
         {
             denoiser.reset_history();
+        }
+        // D-088's surface cache, the first time `r.gi.cache` asks for it.
+        if self.renderer.gi_trace && self.cache_on && !self.cache_tried {
+            self.cache_tried = true;
+            if ctx.device.features().ray_query {
+                match forge_render::SurfaceCache::new(&ctx.device, &ctx.shaders) {
+                    Ok(cache) => self.surface_cache = Some(cache),
+                    Err(error) => {
+                        tracing::warn!(%error, "no surface cache: the probes' light at the hits")
+                    }
+                }
+            }
+        }
+        if !self.cache_was_on
+            && let Some(cache) = &mut self.surface_cache
+        {
+            cache.reset();
         }
         // The last frame's linear capture, its copy finished once the device is idle.
         if let Some(capture) = self.linear_capture.take() {
@@ -3561,6 +3589,7 @@ impl Demo for Gallery {
         // where NRD or the sun's shadow rays' guides are missing, the probes light alone.
         let mut diffuse_bounce = None;
         let mut denoised = false;
+        self.cache_was_on = false;
         if self.renderer.gi_trace && self.sky_light && !in_space && self.scene.rays().is_some() {
             let reblur = self.diffuse_denoiser.as_mut().zip(nrd_guides);
             let reblur_frame = reblur.map(|(d, (.., camera, _))| d.frame(camera));
@@ -3570,6 +3599,20 @@ impl Demo for Gallery {
                     view_z,
                     hit_distance: forge_render::diffuse_bounce::HIT_DISTANCE,
                 });
+            // D-088's surface cache: the light where the bounce's rays meet a surface.
+            let cache = match &mut self.surface_cache {
+                Some(cache) if self.cache_on && for_denoiser.is_some() => Some(cache.update(
+                    &mut frame.graph,
+                    frame.slot,
+                    self.renderer.frame_address(frame.slot),
+                    scene_light,
+                    probes,
+                    camera_in_scene,
+                    targets.movers,
+                )),
+                _ => None,
+            };
+            self.cache_was_on = cache.is_some();
             let traced = for_denoiser.and_then(|for_denoiser| {
                 self.renderer.trace_diffuse(
                     &mut frame.graph,
@@ -3578,6 +3621,7 @@ impl Demo for Gallery {
                     extent,
                     scene_light,
                     probes,
+                    cache,
                     Some(for_denoiser),
                 )
             });
@@ -4323,6 +4367,13 @@ impl Drop for Gallery {
             captured = self.capture_frames,
             "frame times (ms) over the run, the frames that saved a capture left out"
         );
+        if let Some(cache) = &self.surface_cache {
+            tracing::info!(
+                most = cache.most_used(),
+                pool = forge_render::surface_cache::POOL,
+                "the surface cache's entries in use at most over the run (D-088)"
+            );
+        }
         if let Some(splashes) = &self.splashes {
             tracing::info!(
                 peak = self.splash_peak,

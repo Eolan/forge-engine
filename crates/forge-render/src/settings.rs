@@ -360,6 +360,17 @@ pub fn gi_trace(default: bool) -> Spec<bool> {
     )
 }
 
+/// D-088's surface cache read where the bounce's rays meet a surface.
+pub fn gi_cache(default: bool) -> Spec<bool> {
+    Spec::bool(
+        "r.gi.cache",
+        default,
+        "The light where the bounce's rays meet a surface from D-088's surface cache, measured on \
+         the surfaces round the camera (their bounces after), in place of the probes', whose \
+         probes float in the air; under `r.gi.trace` only.",
+    )
+}
+
 /// D-088's references for the diffuse light round each pixel: measures, far from real time.
 pub fn gi_reference(default: i64) -> Spec<i64> {
     Spec::int(

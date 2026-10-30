@@ -58,6 +58,9 @@ authors, where they accept money (a donation, sponsorship or their foundation), 
 profits allow. The projects in this file that a release leaned on most are the first to check.
 This is a promise of intent, not a licence term.
 
+On the list since 2026-10-30: Bevy (the Bevy Foundation takes donations) and kajiya's
+authors at Embark Studios, whose caches D-088's surface cache is ported from.
+
 ## Libraries and tools
 
 | Project | People | What Forge uses it for | Licence |
@@ -79,6 +82,8 @@ This is a promise of intent, not a licence term.
 | [FidelityFX Denoiser](https://github.com/GPUOpen-Effects/FidelityFX-Denoiser), its shadow denoiser (commit d7dfecb) | Advanced Micro Devices | the sun's soft shadows denoised where NRD is absent: `shaders/ffx_shadows.slang`, ported to Slang with AMD's notice (D-049, #173) | MIT |
 | [NRD](https://github.com/NVIDIA-RTX/NRD) (Real-time Denoisers) v4.18.0 (master at d3df343, #210) | NVIDIA | SIGMA, the sun's soft shadows denoised (`nrd` feature, D-049, #172), and REBLUR, D-088's diffuse bounce denoised (`r.gi.trace`); fetched and built outside git by `tools/fetch-nrd.sh`, loaded at run time | NVIDIA RTX SDKs License |
 | [RTXDI](https://github.com/NVIDIA-RTX/RTXDI-Library) (RTXDI-Library 3.1, commit f12037f) | NVIDIA | ReSTIR DI over the lamps (D-065): the comparison with the light lists (`--lamp-restir`) and the street lamps, however far (`--street-restir`); `shaders/restir.slang` includes its headers from `rtxdi-sdk/`, kept outside git, through Forge's own bridge | NVIDIA RTX SDKs License |
+| [Bevy](https://github.com/bevyengine/bevy)'s Solari (v0.20.1, commit a0577b5) | the Bevy contributors | D-088's surface cache: its world cache (`crates/bevy_solari/src/realtime/world_cache_*.wesl`) ported to `shaders/surface_cache.slang`, `surface_cache_update.slang` and `surface_cache_trace_main` (`meshlet.slang`), the changes in their header; licence in `shaders/third-party/Bevy-LICENSE-APACHE.txt` | MIT OR Apache-2.0 (taken under Apache-2.0) |
+| [kajiya](https://github.com/EmbarkStudios/kajiya) (commit 9fdec0f, archived) | Embark Studios and contributors | D-088's surface cache: its irradiance cache's dense index of camera-centred 32³ levels (`assets/shaders/ircache/ircache_grid.hlsl`) in `shaders/surface_cache.slang`; licence in `shaders/third-party/kajiya-LICENSE-APACHE.txt` | MIT OR Apache-2.0 (taken under Apache-2.0) |
 | [ab_glyph](https://github.com/alexheretic/ab-glyph) | Alex Butler | the overlay's font rasteriser | Apache-2.0 |
 | [image](https://github.com/image-rs/image) | the image-rs developers | PNG captures and `imgdiff`; decoding the PNG and JPEG images inside glTF models (`forge_render::textures::decode_image`, D-047) | MIT OR Apache-2.0 |
 | [OpenColorIO](https://github.com/AcademySoftwareFoundation/OpenColorIO) | Contributors to the OpenColorIO Project (Academy Software Foundation) | ACES 2.0's output transform, ported from its ACES2 code, v2.5.2, with its notice kept (`crates/forge-render/src/aces2.rs`, `shaders/aces2.slang`, issue #76) | BSD-3-Clause |
@@ -260,6 +265,13 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   Representations for Independent Unit Vectors", *JCGT* 3(2), 2014, and their rays turn by
   Ken Shoemake's uniform random rotations ("Uniform Random Rotations", *Graphics Gems III*,
   1992).
+- **The surface cache** (D-088, `r.gi.cache`). Bevy Solari's world cache (the Bevy
+  contributors, Bevy 0.20.1): entries that live while they are read, one cosine ray an entry a
+  frame whose hit reads the cache again, its samples blended up to 32, and the lookup jittered in
+  the surface's plane (after Tom Clabault's ReGIR notes, 2025). Its hashed index is replaced by
+  kajiya's (Embark Studios): levels of 32³ cells round the camera, each twice the last, the cell
+  moved half a cell along the normal. Ported under Apache-2.0, the changes in
+  `shaders/surface_cache.slang`'s header.
 - **The sky's reflection dimmed by the probes.** Dimitar Lazarov, "Getting More Physical in
   Call of Duty: Black Ops II", SIGGRAPH 2013 Physically Based Shading course: reflection
   probes rescaled by the local irradiance over the probe's own, at the vertex normal. Unity

@@ -27,6 +27,7 @@ import noise;
 import probes;
 import shore;
 import brdf;
+import surface_cache;
 
 // ---------------------------------------------------------------- shared data ---
 
@@ -6277,6 +6278,31 @@ float3 hit_lamps(Frame* f, RayHit hit, uint region, uint seed, bool probe)
     return hit.albedo * colour * (total / max(f[0].sun_illuminance, 1e-9));
 }
 
+// Whether triangle `primitive` of instance `instance` is a leaf's (`MATERIAL_FLAG_FOLIAGE`).
+bool hit_foliage(Frame* f, uint instance, uint primitive)
+{
+    RtScene* rs = f[0].rt_scene;
+    Instance inst = f[0].instances[instance];
+    RtMesh mesh = rs[0].meshes[inst.mesh];
+    uint tri = mesh.first_triangle + primitive;
+    return (f[0].materials[inst.material + rs[0].sections[tri]].flags & MATERIAL_FLAG_FOLIAGE) != 0u;
+}
+
+// `hit_radiance` with D-088's surface cache for the light round the hit (sky and bounces), where
+// the cache holds some there; a lookup makes the entry it misses. The probes' light stands in
+// while an entry has none yet, and on a leaf: an entry's rays from a leaf far off start inside
+// its crown's opaque proxy (D-075). `seed` jitters the lookup (`cache_lookup`).
+float3 hit_radiance_cached(Frame* f, float4* sky, ProbeField* probes, SurfaceCacheField* cache, RayHit hit, float3 direction, bool leaf, uint seed)
+{
+    if (cache != nullptr && !leaf)
+    {
+        float4 held = cache_lookup(cache, hit.position, hit.n, cache_jitter(seed), true);
+        if (held.w > 0.0)
+            return hit_sunlight(f, hit) + hit.albedo * held.rgb;
+    }
+    return hit_radiance(f, sky, probes, hit, direction);
+}
+
 // The light `hit` sends back along the ray that met it (travelling along `direction`), in the
 // resolve's units: the sun through a shadow ray, and the sky's irradiance or, with probes,
 // what they measured there (issue #53: the light bounces again, one bounce a frame).
@@ -7550,6 +7576,7 @@ struct DiffuseTracePush
     Frame* frame;
     float4* sky;          // the sky's irradiance coefficients, as the resolve has them
     ProbeField* probes;   // the probes, or null: the sky's irradiance at the hits
+    SurfaceCacheField* cache; // D-088's surface cache, or null: the probes' light at the hits
     uint vis_image;       // sampled (u32): the visibility buffer
     uint bounce_image;    // storage (rgba16f): the bounce's light in YCoCg (rgb), its normalised ray length (a)
     uint width;           // the frame's
@@ -7641,7 +7668,14 @@ void diffuse_trace_main(uint3 id : SV_DispatchThreadID)
         RayHit hit = ray_hit(f, c.instance, c.primitive, c.barycentrics, ray.Origin, ray.Direction, c.t);
         // The pixel's own number: `hit_lamps` turns it with the frame.
         uint seed = (pixel.x * 0x8DA6B343u) ^ (pixel.y * 0xD8163841u);
-        light = hit.back ? float3(0.0) : hit_radiance(f, p.sky, p.probes, hit, ray.Direction) + hit_lamps(f, hit, REGION_NONE, seed, false);
+        // The surface cache's lookup jittered with the frame, as the lamps' pick.
+        // A branch, not `?:`: a back face's hit must not make an entry facing into its solid.
+        light = float3(0.0);
+        if (!hit.back)
+        {
+            bool leaf = p.cache != nullptr && hit_foliage(f, c.instance, c.primitive);
+            light = hit_radiance_cached(f, p.sky, p.probes, p.cache, hit, ray.Direction, leaf, seed ^ (f[0].noise_frame * 0x632BE5ABu)) + hit_lamps(f, hit, REGION_NONE, seed, false);
+        }
         back = hit.back;
     }
     // NRD's front end sanitises: no NaN, nothing under 0 or past half precision; a ray that met a
@@ -7649,6 +7683,81 @@ void diffuse_trace_main(uint3 id : SV_DispatchThreadID)
     light = any(isnan(light)) || any(isinf(light)) ? float3(0.0) : clamp(light, 0.0, 65504.0);
     float view_z = dot(p.view_z.xyz, s.relative) + p.view_z.w;
     bounce[pixel] = float4(linear_to_ycocg(light), reblur_hit_distance(back ? 0.0 : c.t, view_z, p.hit_distance.xyz));
+}
+
+// ------------------------------------------------------ the surface cache (D-088) ---
+
+struct CacheTracePush
+{
+    Frame* frame;
+    SurfaceCacheField* cache;
+    float4* sky;         // the sky's irradiance coefficients, as the resolve has them
+    ProbeField* probes;  // the probes, or null: the light at the hits the cache does not hold yet
+    uint movers;         // 1: the rays meet the movers
+    uint pad0;
+    uint pad1;
+    uint pad2;
+};
+
+[[vk::push_constant]]
+CacheTracePush cache_trace_push;
+
+// One cosine-weighted ray from each live entry of D-088's surface cache (Solari's `sample_gi`),
+// 2 cm off its point as the bounce's (DIFFUSE_START), past a house's clear glass. Its hit is lit
+// as the bounce's (the sun through a shadow ray, the glow), the lamps as the probes take them,
+// and the light round it read from the cache (`hit_radiance_cached`): the bounces after. A miss
+// takes the sky's light along the ray. The sample waits in `fresh` for
+// `surface_cache_blend_main`.
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void surface_cache_trace_main(uint3 id : SV_DispatchThreadID)
+{
+    CacheTracePush p = cache_trace_push;
+    SurfaceCacheField* cache = p.cache;
+    uint e = id.x;
+    if (e >= cache[0].pool)
+        return;
+    CacheEntry entry = cache[0].entries[e];
+    // Only the entries alive at `surface_cache_age_main`: one made in this pass may show its
+    // number with another life's point.
+    if (entry.slot == CACHE_EMPTY || entry.fresh.x < 0.0)
+        return;
+    Frame* f = p.frame;
+    if (f[0].tlas == 0)
+    {
+        cache[0].entries[e].fresh = float3(-1.0);
+        return;
+    }
+    g_trace_movers = p.movers != 0u;
+    // The bounce's world (`shadow_world`): the trees' cards near, their proxies from
+    // `Frame::far_shadows` metres off. Not the probes': it leaves the houses' furniture out (#363).
+    float far = f[0].far_shadows;
+    g_ray_mask = far > 0.0 && length(entry.position - cache[0].centre) > far ? RAY_SHADOW_FAR : RAY_SHADOW;
+    // Each entry's directions from R2's sequence, started at a number of its own.
+    uint seed = (e * 0x8DA6B343u) ^ 0x5BD1E995u;
+    float2 u = frac(cache_jitter(seed) + float(cache[0].frame % 4096u) * float2(0.7548777, 0.5698403));
+    float3 d = cosine_direction(entry.normal, u.x, u.y);
+    RayDesc ray;
+    ray.Origin = entry.position + entry.normal * DIFFUSE_START;
+    ray.Direction = d;
+    ray.TMin = 0.0;
+    ray.TMax = PATH_RANGE;
+    uint turn = seed ^ (cache[0].frame * 0x632BE5ABu);
+    ClosestHit c = trace_past_glass(f, ray, true, turn);
+    float3 light;
+    if (!c.hit)
+        light = sky_along(p.sky, d);
+    else
+    {
+        RayHit hit = ray_hit(f, c.instance, c.primitive, c.barycentrics, ray.Origin, d, c.t);
+        // The lamps as the probes' rays take them (`hit_lamp_weight`): one ray an entry a frame
+        // near a bulb or a street lamp is the probes' halo again (#294, #254).
+        light = float3(0.0);
+        if (!hit.back)
+            light = hit_radiance_cached(f, p.sky, p.probes, cache, hit, d, hit_foliage(f, c.instance, c.primitive), turn) + hit_lamps(f, hit, REGION_NONE, turn, true);
+    }
+    light = any(isnan(light)) || any(isinf(light)) ? float3(0.0) : clamp(light, 0.0, 65504.0);
+    cache[0].entries[e].fresh = light;
 }
 
 // --------------------------------------------------------- the lamps' penumbrae ---

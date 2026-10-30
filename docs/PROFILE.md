@@ -2622,6 +2622,23 @@ The village keeps its probes a metre apart. The other levers on the probes, meas
 (fewer rays, a slower cadence, a smaller finest cascade), are in D-088. The map check after
 #308's village and this: house 8.27 ms, green 7.04, main 6.84, hall 8.55, room 7.88.
 
+**The surface cache under the bounce** (`r.gi.cache`, off by default, D-088, 2026-10-30): three
+passes on the async compute queue before `gi/trace`, `gi/cache age`, `gi/cache rays` and
+`gi/cache blend`, over a pool of 65,536 entries (5.2 MB, the index 9.4 MB). The frame's GPU ms
+and the passes', one run each:
+
+| View | frame, probes at the hits | frame, the cache | `gi/trace` | age, rays, blend | entries at most |
+|---|---|---|---|---|---|
+| Bistro Exterior_1 | 6.883 | 6.884 | 2.012 → 1.566 | 0.014, 0.045, 0.059 | 53,664 |
+| Bistro Exterior_2 | 5.903 | 6.001 | 1.485 → 1.209 | 0.008, 0.101, 0.038 | 55,081 |
+| Bistro Exterior_1, clay | 6.087 | 5.990 | 1.631 → 1.254 | 0.011, 0.012, 0.067 | 45,272 |
+| Village, the room | 7.822 | 7.826 | 1.188 → 0.937 | 0.008, 0.007, 0.005 | 25,701 |
+| Village, the main street | 6.896 | 7.203 | 1.051 → 1.095 | 0.010, 0.006, 0.002 | 35,034 |
+| Village, the landing | 7.072 | 6.833 | | | |
+
+The probes still run for the pixels the bounce leaves (leaves, glass, the mirror rays) and for
+the cache's newest entries; their budget under the cache is not revisited yet.
+
 ## Not measured yet
 
 - **Streaming**: residency pools, request queue depth, drive and decompression throughput.

@@ -2479,6 +2479,11 @@ bays 2 to 3 at Exterior_2 (D-088).
   gives the probes alone.
 - **`r.gi.probe_ahead`, 20 by default:** the most metres the finest probe cascade stands ahead
   along the view, as far as the view reaches.
+- **`r.gi.cache`, off by default:** D-088's surface cache read where the bounce's rays meet a
+  surface, in place of the probes (Bevy Solari's world cache on kajiya's dense index). In clay
+  against Forge's path, Exterior_1 0.029 → 0.047 and Exterior_2 0.118 → 0.103, both a little
+  darker than the path (×0.98, ×0.96); the village's landing 0.811 → 0.201 and its room
+  0.144 → 0.058. The frame costs the same.
 
 **Not yet:**
 - **The lamps' cost:** 10.7 ms of GPU at the Night view with the nearest 64 (4.1 without),
