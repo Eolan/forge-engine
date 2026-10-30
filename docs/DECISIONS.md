@@ -8183,6 +8183,22 @@ pixels (5,032). A mip bias of −1 (NVIDIA's DLSS guidance for DLAA, `r.textures
 default) sharpens the cobbles a little for 10 % more shimmer (5,502): not taken. Falcor's
 cobbles keep more contrast (its 1,024 jittered samples of level 0).
 
+**The review's fixes (2026-10-30):** the GGX terms in `shaders/brdf.slang`, shared by the
+resolve and the impostors (still Blinn-Phong and Lagarde's Fresnel, they would have stepped in
+colour where the cards hand over to them; their sky's reflection at the leaves' mean n·v from
+their baked Schlick term); a tinted metal's traced share at one weight for the open sky it
+replaces too (a sky-coloured rest, negative in blue on gold); the lamps chosen and shadowed by
+the interpolated normal, lit by the mapped one (a mapped normal leaning towards a lamp round its
+face's corner lit it unshadowed); a pane's room's daylight no longer drops the pane's mirror
+ray; BC7's error not read as spread (0.02); the DFG fit's B gated under an F0 of 0.02 (Unreal's);
+a metal's highlight whole; the debug views without the reflection; the BC7 cache written whole,
+normal maps alone.
+
+**The look's change (to accept or tune):** the village from the air, against this branch's
+shaders before D-086: 42 % of pixels change (mean 4.3 of 255), its grass and trees darker: the
+rough surfaces' fixed 5 % of the sun is gone (the chart's dark tile 1.27 → 1.00). The tuned
+scenes' colours to look at with the owner before a push.
+
 **Step F, the debug views:** `r.show.input` shows a standard row's shading input in place of its
 light, before the tone curve: 1 the diffuse albedo, 2 the perceptual roughness after Toksvig, 3
 the metalness, 4 the shading normal, 5 the lobe's widening (Toksvig's variance red, the geometry's

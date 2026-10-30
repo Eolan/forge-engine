@@ -7,6 +7,7 @@ import noise;
 import sh;
 import probes;
 import impostor_layout;
+import brdf;
 
 static const float CELL_SIZE = 1024.0;
 // The far shadow rays' world (`RAY_SHADOW_FAR` in meshlet.slang, D-075 step 3): the plants'
@@ -399,11 +400,15 @@ Shaded shade(Varyings v)
     // cards they take over from (the owner, 2026-10-25: "a lot of color changes in the distant
     // forest"). Undimmed, as the far cards' reflection is (the screen's occlusion is weak that
     // far), as their diffuse light is.
+    // By the cards' model (D-086, brdf.slang): the sky's reflection by the split sum at the
+    // leaves' mean n·v, from their baked mean of Schlick's (1 - n·v)^5; the sun's highlight by
+    // GGX at the averaged normal.
     float roughness = sqrt(sqrt(2.0 / (kind.power + 2.0)));
-    float f0 = kind.reflectance;
-    float fresnel = f0 + (max(1.0 - roughness, f0) - f0) * saturate(schlick / coverage);
-    float reflected = fresnel;
-    float highlight = ndl > 0.0 ? pow(max(dot(n, normalize(sun + view)), 0.0), kind.power) * kind.specular : 0.0;
+    float3 f0 = float3(kind.reflectance);
+    float nv = 1.0 - pow(saturate(schlick / coverage), 0.2);
+    float3 fresnel = environment_specular(f0, roughness, nv, true);
+    float3 reflected = fresnel;
+    float3 highlight = ndl > 0.0 ? ggx_light(n, view, sun, 2.0 / (kind.power + 2.0), f0) * highlight_share(kind.specular) : float3(0.0);
     float3 l = normalize(sun + n * LEAF_DISTORTION);
     float lobe = pow(saturate(dot(view, -l)), LEAF_POWER);
     float3 sun_light = f[0].sun_color * shadow;

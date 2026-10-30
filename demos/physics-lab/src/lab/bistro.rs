@@ -362,7 +362,8 @@ pub(super) fn rows(
     let (bc7, cached) = if std::env::var("FORGE_BISTRO_BC5").is_ok_and(|v| v == "1") {
         (0, 0)
     } else {
-        normals_as_bc7(which, &archive, &mut read)
+        let normals = wanted.iter().filter(|w| w.2).map(|w| w.0.clone()).collect();
+        normals_as_bc7(which, &archive, &mut read, &normals)
     };
     let transcode_time = transcoded.elapsed();
     // The "Specular" maps of one value (most are 16 × 16 of one texel): their material's
@@ -472,7 +473,7 @@ pub(super) fn rows(
     Ok(())
 }
 
-/// The scene's BC5 normal maps among `read` as BC7 (D-086, `forge_render::dds::bc5_normals_to_bc7`):
+/// The scene's BC5 normal maps among `read` (those `normals` names) as BC7 (D-086, `forge_render::dds::bc5_normals_to_bc7`):
 /// their levels rebuilt from the unit normals, so a coarse level's shortening tells the shader the
 /// bumps' spread (Toksvig) and the highlights widen where the bumps average away. Kept beside
 /// the converted scene (`bc7-normals/`, by each map's path, size and time) after the first run;
@@ -482,6 +483,7 @@ fn normals_as_bc7(
     which: Authored,
     archive: &std::path::Path,
     read: &mut [forge_render::dds::CompressedTexture],
+    normals: &std::collections::HashSet<String>,
 ) -> (usize, usize) {
     let (converted, _) = which.folders();
     let cache = converted.join("bc7-normals");
@@ -506,7 +508,7 @@ fn normals_as_bc7(
     let hits = std::sync::atomic::AtomicUsize::new(0);
     let mut maps: Vec<&mut forge_render::dds::CompressedTexture> = read
         .iter_mut()
-        .filter(|t| t.format == BlockFormat::Bc5)
+        .filter(|t| t.format == BlockFormat::Bc5 && normals.contains(&t.name))
         .collect();
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
     let per = maps.len().div_ceil(threads.max(1)).max(1);
@@ -520,9 +522,12 @@ fn normals_as_bc7(
                         .ok()
                         .and_then(|bytes| read_dds(&t.name, &bytes, false).ok())
                         .filter(|k| {
+                            // Every level down to 1 × 1, as `bc5_normals_to_bc7` writes them.
                             k.format == BlockFormat::Bc7
                                 && k.width == t.width
                                 && k.height == t.height
+                                && k.levels.len()
+                                    == (32 - t.width.max(t.height).leading_zeros()) as usize
                         })
                     {
                         **t = kept;
@@ -530,7 +535,12 @@ fn normals_as_bc7(
                         continue;
                     }
                     if let Some(bc7) = forge_render::dds::bc5_normals_to_bc7(t) {
-                        if let Err(e) = std::fs::write(&path, forge_render::dds::write_dds(&bc7)) {
+                        // Written whole or not at all: a run stopped mid-write left a file of
+                        // fewer levels.
+                        let partial = path.with_extension("part");
+                        if let Err(e) = std::fs::write(&partial, forge_render::dds::write_dds(&bc7))
+                            .and_then(|()| std::fs::rename(&partial, &path))
+                        {
                             tracing::warn!(map = t.name, "a BC7 normal map not kept: {e}");
                         }
                         **t = bc7;

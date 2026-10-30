@@ -26,6 +26,7 @@ import skyview;
 import noise;
 import probes;
 import shore;
+import brdf;
 
 // ---------------------------------------------------------------- shared data ---
 
@@ -3590,48 +3591,12 @@ float aa_power(float power)
     return 2.0 / saturate(alpha2 + g_normal_variance) - 2.0;
 }
 
-// The highlights' model (D-086): GGX (Trowbridge-Reitz) with the height-correlated Smith visibility
-// and Schlick's Fresnel, as Falcor's and every current engine's. A row's lobe is still given as a
-// Blinn-Phong power (RenderLayer::specular_power): GGX's α² is 2 / (power + 2).
-static const float GGX_PI = 3.14159265;
-
-// The default highlight weight of a row (RenderLayer's `specular`): under GGX a row's weight only
-// dims its highlight (the paths' benches at 0.02, damp prints at 0.03); weights over it made up
-// for Blinn-Phong's unnormalised lobe, which GGX's normalisation now gives.
-static const float DEFAULT_SPECULAR = 0.05;
-
-// The share of the GGX highlight a row with highlight weight `weight` keeps.
-float highlight_share(float weight)
-{
-    return saturate(weight / DEFAULT_SPECULAR);
-}
-
-// GGX's α² for a row of Blinn-Phong power `power`, widened by the normals' spread under the
+// The highlights' model (D-086, brdf.slang): GGX's α² for a row of Blinn-Phong power `power`, widened by the normals' spread under the
 // pixel (`g_normal_variance`, as `aa_power` widens the exponent) and by `extra` (a light's
 // size: the sun's disc).
 float ggx_alpha2(float power, float extra)
 {
     return saturate(2.0 / (power + 2.0) + max(g_normal_variance, 0.0) + extra);
-}
-
-// The light a GGX surface (lobe α², reflectance at normal incidence `f0`) facing `n` sends towards
-// the unit `view` per unit of illuminance from the unit direction `light` (at normal incidence),
-// in the resolve's units: π times the BRDF times n·l.
-float3 ggx_light(float3 n, float3 view, float3 light, float a2, float3 f0)
-{
-    float nl = saturate(dot(n, light));
-    if (nl <= 0.0)
-        return float3(0.0);
-    float nv = max(dot(n, view), 1e-4);
-    float3 h = normalize(light + view);
-    float nh = saturate(dot(n, h));
-    float vh = saturate(dot(view, h));
-    a2 = max(a2, 1e-7);
-    float d = nh * nh * (a2 - 1.0) + 1.0;
-    float distribution = a2 / (GGX_PI * d * d);
-    float visibility = 0.5 / max(nl * sqrt(nv * nv * (1.0 - a2) + a2) + nv * sqrt(nl * nl * (1.0 - a2) + a2), 1e-7);
-    float3 fresnel = f0 + (1.0 - f0) * pow(1.0 - vh, 5.0);
-    return GGX_PI * distribution * visibility * fresnel * nl;
 }
 
 // A Blinn-Phong highlight with its exponent widened by `g_normal_variance`, its energy kept (the
@@ -3773,7 +3738,9 @@ LampPicks lamp_picks(Frame* f, LampPlace place, float3 world, float3 n, uint2 pi
 // - or 0xFFFF (`--no-lamp-filter`): with SHADOWS, the picked lamps' (`lamp_picks`) own shadow rays
 //   towards points of their spheres that move with the frame's noise, so TAA averages the
 //   penumbra as it did the sun's single ray (#54).
-void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, float3 n, float3 view, float specular_power, float specular_weight, float3 f0, float bias, uint2 pixel, uint code)
+// `n` the surface's interpolated normal, which chooses its lamps, its region and its rays, as
+// `lamp_rays_main` and ReSTIR do; `shading_n` its mapped one, which their light takes (D-086).
+void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, float3 n, float3 shading_n, float3 view, float specular_power, float specular_weight, float3 f0, float bias, uint2 pixel, uint code)
 {
     g_lamp_diffuse = float3(0.0);
     g_lamp_specular = float3(0.0);
@@ -3781,7 +3748,7 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
     if (count == 0u || f[0].lamps == nullptr)
     {
         if (f[0].far_lamps != nullptr)
-            far_lamps_at(f, lamp_place(f, probes, world, n, view), world, n, view, specular_power, specular_weight, f0);
+            far_lamps_at(f, lamp_place(f, probes, world, n, view), world, n, shading_n, view, specular_power, specular_weight, f0);
         return;
     }
     uint share = code & 0xFFFFu;
@@ -3801,7 +3768,7 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
                     if (skip_outside && lamp_outside(f[0].lamps[i]))
                         continue;
                     if (lamp_counted(f, place.runs, r, i) && lamp_weight_in(f[0].lamps[i], world, n, place.region, place.other) > 0.0)
-                        lamp_add<0>(f, f[0].lamps[i], i, 1.0, world, n, view, specular_power, specular_weight, f0, bias, float2(0.0));
+                        lamp_add<0>(f, f[0].lamps[i], i, 1.0, world, n, shading_n, view, specular_power, specular_weight, f0, bias, float2(0.0));
                 }
             }
             float3 reaching = g_sampled_images[NonUniformResourceIndex(share)].Load(int3(pixel, 0)).rgb;
@@ -3820,21 +3787,21 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
             if (picks.top[0] < count)
             {
                 float2 u_half = sun_disc_point(pixel, f[0].noise_frame + SUN_DISC_POINTS / 2u);
-                lamp_add<SHADOWS>(f, f[0].lamps[picks.top[0]], picks.top[0], 0.5, world, n, view, specular_power, specular_weight, f0, bias, u);
-                lamp_add<SHADOWS>(f, f[0].lamps[picks.top[0]], picks.top[0], 0.5, world, n, view, specular_power, specular_weight, f0, bias, u_half);
+                lamp_add<SHADOWS>(f, f[0].lamps[picks.top[0]], picks.top[0], 0.5, world, n, shading_n, view, specular_power, specular_weight, f0, bias, u);
+                lamp_add<SHADOWS>(f, f[0].lamps[picks.top[0]], picks.top[0], 0.5, world, n, shading_n, view, specular_power, specular_weight, f0, bias, u_half);
             }
             for (uint j = 1u; j < 3u; j++)
             {
                 if (picks.top[j] < count)
-                    lamp_add<SHADOWS>(f, f[0].lamps[picks.top[j]], picks.top[j], 1.0, world, n, view, specular_power, specular_weight, f0, bias, u);
+                    lamp_add<SHADOWS>(f, f[0].lamps[picks.top[j]], picks.top[j], 1.0, world, n, shading_n, view, specular_power, specular_weight, f0, bias, u);
             }
             if (picks.chosen < count)
-                lamp_add<SHADOWS>(f, f[0].lamps[picks.chosen], picks.chosen, picks.scale, world, n, view, specular_power, specular_weight, f0, bias, u);
+                lamp_add<SHADOWS>(f, f[0].lamps[picks.chosen], picks.chosen, picks.scale, world, n, shading_n, view, specular_power, specular_weight, f0, bias, u);
         }
         // The street lamps beyond the set, the rest of their light unshadowed (#284); ReSTIR's
         // street lamps are all in the set.
         if (!skip_outside)
-            far_lamps_at(f, place, world, n, view, specular_power, specular_weight, f0);
+            far_lamps_at(f, place, world, n, shading_n, view, specular_power, specular_weight, f0);
     }
     if (restir != 0xFFFFu)
     {
@@ -3848,9 +3815,10 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
             float dist = length(to_lamp);
             float3 dir = to_lamp / max(dist, 1e-6);
             g_lamp_diffuse += illuminance;
-            // Its light at normal incidence (ReSTIR's carries n·l) through GGX (D-086).
+            // Its light at normal incidence (ReSTIR's carries the interpolated normal's n·l)
+            // through GGX at the mapped normal (D-086).
             float size = 0.5 * min(lamp.position_radius.w / max(dist, 1e-3), 1.0);
-            g_lamp_specular += ggx_light(n, view, dir, ggx_alpha2(specular_power, size * size), f0)
+            g_lamp_specular += ggx_light(shading_n, view, dir, ggx_alpha2(specular_power, size * size), f0)
                 * highlight_share(specular_weight) * illuminance / max(dot(n, dir), 1e-3);
         }
     }
@@ -3859,7 +3827,9 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
 // Adds lamp `lamp` (the frame's `i`-th) to `g_lamp_diffuse` and `g_lamp_specular`, times `scale`
 // (`lamps_at`): its illuminance on the surface, with SHADOWS one shadow ray to a point of its
 // sphere that moves with the frame's noise `u`.
-void lamp_add<let SHADOWS : int>(Frame* f, Lamp lamp, uint i, float scale, float3 world, float3 n, float3 view, float specular_power, float specular_weight, float3 f0, float bias, float2 u)
+// `n` the surface's interpolated normal (its shadow ray's start, and none from behind it),
+// `shading_n` its mapped one, which the light takes (`lamps_at`).
+void lamp_add<let SHADOWS : int>(Frame* f, Lamp lamp, uint i, float scale, float3 world, float3 n, float3 shading_n, float3 view, float specular_power, float specular_weight, float3 f0, float bias, float2 u)
 {
     float3 d = lamp.position_radius.xyz - world;
     float dist2 = dot(d, d);
@@ -3884,13 +3854,17 @@ void lamp_add<let SHADOWS : int>(Frame* f, Lamp lamp, uint i, float scale, float
     float window = saturate(1.0 - pow(dist / reach, 4.0));
     float to_units = 1.0 / max(f[0].sun_illuminance, 1e-9);
     float3 normal_light = lamp.colour_reach.rgb / max(dist2, radius * radius) * (window * window * to_units * scale * lamp_beam(lamp, dir));
-    g_lamp_diffuse += normal_light * max(ndl, 0.0);
+    // None behind the surface itself: a mapped normal leaning towards a lamp round the corner of
+    // its face would add it unshadowed.
+    if (ndl <= 0.0)
+        return;
+    g_lamp_diffuse += normal_light * saturate(dot(shading_n, dir));
     // Its highlight by GGX (D-086), the lobe widened by the sphere's size as seen from the surface
     // (half its angular radius on α, as the sun's disc): a bulb in a smooth paint is a bulb, not a
     // point under a pixel, and a lamp's highlight takes the lobe's normalisation (Blinn-Phong's
     // fixed weight kept it fifty times too dim on the scooter's paint).
     float size = 0.5 * min(radius / max(dist, 1e-3), 1.0);
-    g_lamp_specular += ggx_light(n, view, dir, ggx_alpha2(specular_power, size * size), f0) * highlight_share(specular_weight) * normal_light;
+    g_lamp_specular += ggx_light(shading_n, view, dir, ggx_alpha2(specular_power, size * size), f0) * highlight_share(specular_weight) * normal_light;
 }
 
 // The street lamps lit beyond the frame's set (#284, `Frame::far_lamps`) on a surface at `world`
@@ -3898,7 +3872,7 @@ void lamp_add<let SHADOWS : int>(Frame* f, Lamp lamp, uint i, float scale, float
 // light this frame (`Frame::far_shares`: what the set does not light of it), unshadowed and
 // without the penumbra filter, added to `g_lamp_diffuse` and `g_lamp_specular`. Only the outside
 // takes them, as it takes the street lamps of the set.
-void far_lamps_at(Frame* f, LampPlace place, float3 world, float3 n, float3 view, float specular_power, float specular_weight, float3 f0)
+void far_lamps_at(Frame* f, LampPlace place, float3 world, float3 n, float3 shading_n, float3 view, float specular_power, float specular_weight, float3 f0)
 {
     FarLamps* g = f[0].far_lamps;
     if (g == nullptr)
@@ -3914,7 +3888,7 @@ void far_lamps_at(Frame* f, LampPlace place, float3 world, float3 n, float3 view
             continue;
         Lamp lamp = g[0].lamps[k];
         if (lamp_weight(lamp, world, n) > 0.0)
-            lamp_add<0>(f, lamp, k, share, world, n, view, specular_power, specular_weight, f0, 0.0, float2(0.0));
+            lamp_add<0>(f, lamp, k, share, world, n, shading_n, view, specular_power, specular_weight, f0, 0.0, float2(0.0));
     }
 }
 
@@ -3973,30 +3947,10 @@ float3 sky_reflection(float4* sky, float3 irradiance, float3 n, float3 view, flo
     float traced_weight = (1.0 - blend) * traced_share;
     // A metal's tint stays off its traced share: the request holds one weight (its luminance).
     g_reflection_request = float4(r, dot(fresnel, float3(0.2126, 0.7152, 0.0722)) * traced_weight);
-    return fresnel * (occlusion * (environment - traced_weight * open) + traced_weight * open);
-}
-
-// GGX's directional albedo over a sky (D-086): Karis's split sum, its DFG term by Lazarov's
-// analytic fit (Karis, "Physically Based Shading on Mobile", 2014) of `roughness` (perceptual) and
-// n·v, as F0 times A plus B; with `multiscatter`, Fdez-Agüera's compensation (JCGT 2019) of the
-// light single-scattering GGX loses between its microfacets, which grows with the roughness: a
-// rough metal keeps its light, as a real one does. The share the reflection takes, and the
-// diffuse loses. Replaced Lagarde's roughness-bounded Schlick, which kept a rough metal at its
-// F0 (as bright as white paper) and a rough dielectric's grazing rise too high.
-float3 environment_specular(float3 f0, float roughness, float nv, bool multiscatter)
-{
-    const float4 c0 = float4(-1.0, -0.0275, -0.572, 0.022);
-    const float4 c1 = float4(1.0, 0.0425, 1.04, -0.04);
-    float4 q = roughness * c0 + c1;
-    float a004 = min(q.x * q.x, exp2(-9.28 * nv)) * q.x + q.y;
-    float2 ab = float2(-1.04, 1.04) * a004 + q.zw;
-    float3 single = f0 * ab.x + ab.y;
-    if (!multiscatter)
-        return single;
-    float ess = ab.x + ab.y;
-    float3 average = f0 + (1.0 - f0) / 21.0;
-    float3 multiple = single * average / (1.0 - (1.0 - ess) * average);
-    return single + multiple * (1.0 - ess);
+    // The open sky the traced hit replaces at the request's own weight (its Fresnel's luminance):
+    // with a tinted F0 the hit's `request.w * (hit - open)` left a sky-coloured rest, negative in
+    // blue on gold over a dark wall (the review of 2026-10-30).
+    return fresnel * occlusion * (environment - traced_weight * open) + g_reflection_request.w * open;
 }
 
 // The rough end of the mirror rays (#306): roughness 0.30, Blinn-Phong about 245. Smoother rows
@@ -4161,11 +4115,9 @@ float3 triplanar_normal(uint image, float strength, float3 n, float3 w, float3 p
 // shared by the normal map (colour and relief stay together), and the normals blended as
 // tangent-space vectors in the triplanar projection's convention.
 
-// The most a metal's highlight lobe is normalised by (forge_core::material::METAL_HIGHLIGHT_MAX).
-static const float METAL_HIGHLIGHT_MAX = 8.0;
 // How far a unit normal stored in bytes may come out shorter than 1 (each channel rounded to
-// 1/255 of its range): no variance below it (#331).
-static const float NORMAL_LENGTH_ROUNDING = 0.01;
+// 1/255 of its range, and a BC7 block's error of two steps, D-086): no variance below it (#331).
+static const float NORMAL_LENGTH_ROUNDING = 0.02;
 
 // Size of the hex tiles, in the paper's (about a third of a repeat across). Three times that,
 // about a repeat across, crosses fewer seams, where the blend softens the texture: on the
@@ -4659,9 +4611,9 @@ LightInputs uv_mapped_light(Frame* f, Material mat, Surface s)
     LightInputs li;
     li.albedo = base * (1.0 - metal);
     li.reflectance = lerp(float3(mat.reflectance), base, metal);
-    // A metal's highlight by its reflectance and lobe (forge_core::material::metal_highlight): the
-    // lamps' Blinn-Phong weight still; under GGX any weight over the default keeps it whole.
-    li.specular = lerp(mat.specular, max(base.r, max(base.g, base.b)) * min((power + 8.0) / 8.0, METAL_HIGHLIGHT_MAX), metal);
+    // A metal's highlight whole (D-086): its F0, its base colour, is its strength; weighed by its
+    // reflectance again, a dark metal's was dimmed twice.
+    li.specular = lerp(mat.specular, 1.0, metal);
     li.n = n;
     li.power = power;
     li.ao = ao;
@@ -4943,7 +4895,10 @@ float3 standard_light(Frame* f, Material mat, Surface s, StandardInputs si)
         float curtain = !shop && h.x < ROOM_CURTAINS ? 0.35 + 0.5 * h.x / ROOM_CURTAINS : 0.0;
         // Lit by the daylight the window gets (a white wall's facing out), or the row's lamp.
         float ndl_white;
+        // Its own `sky_reflection` would overwrite the pane's mirror ray's request.
+        float4 request = g_reflection_request;
         float3 daylight = sun_light(f, float3(1.0, 1.0, 1.0), n, s.n, 1.0, 0.0, s.shadow, s.sky, s.ao, s.view, float3(0.0), s.world, s.probes, false, ndl_white);
+        g_reflection_request = request;
         float3 lamp = emission(f, mat) * (shop ? ROOM_SHOP_LAMP : ROOM_LAMP);
         float3 seen = lerp(room * (daylight * ROOM_DAYLIGHT + lamp), mat.color_b * (daylight + lamp), curtain);
         // Through the glass, less what it reflects (Schlick).
@@ -6979,7 +6934,7 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     // The lamps (D-065): every one whose reach the surface is in and that lights its room, times
     // the filtered share of their light that reaches it (`lamp_filter_main`), or with a shadow ray
     // each; the classes take them where they take the sun (`sun_light`).
-    lamps_at<SHADOWS>(f, s.probes, surface_scene, si.li.n, s.view, si.li.power, si.li.specular, si.li.reflectance, lamp_start, pixel, resolve_push.lamp_share);
+    lamps_at<SHADOWS>(f, s.probes, surface_scene, s.n, si.li.n, s.view, si.li.power, si.li.specular, si.li.reflectance, lamp_start, pixel, resolve_push.lamp_share);
     s.transmitted = float3(0.0);
     s.cloud = 1.0;
     if (SHADOWS != 0 && class_index == MATERIAL_CLASS_ICE && f[0].tlas != 0 && (f[0].flags & FLAG_TRANSLUCENCY) != 0)
@@ -7007,7 +6962,10 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
         color = float3(s.ao * 0.25); // the occlusion, as a light grey surface in the sun
     // A standard row's shading input (D-086), its value out of the exposure below.
     if (f[0].show_input != 0u && class_index == MATERIAL_CLASS_STANDARD)
+    {
         color = shading_input(f[0].show_input, si.li) / max(f[0].sun_illuminance * f[0].exposure / 3.14159265, 1e-9);
+        g_reflection_request = float4(0.0);
+    }
     if ((f[0].flags & FLAG_SHOW_GI) != 0 && s.sky != nullptr)
     {
         // The light the sky and the city send a white surface, without the sun's own and the
