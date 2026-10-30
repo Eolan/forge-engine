@@ -8244,8 +8244,10 @@ brackets. At the Night view, Forge's light over Falcor's:
 material 50 % grey, no maps but the normals, nothing cut out: `FORGE_BISTRO_CLAY=1` and the
 Falcor script's `BISTRO_CLAY`, Falcor's diffuse switched to Lambert as Forge's and 16 bounces),
 Forge's light over Falcor's:
-- **Exterior_1:** the sunlit street 1.1 to 1.2 (an offset of its own: the sun and the sky's
-  calibration, measured apart), the shade under the awnings and along the fronts 1.3 to 1.8.
+- **Exterior_1:** the sunlit street 1.1 to 1.2, the shade under the awnings and along the fronts
+  1.3 to 1.8. Not the sun or the sky: the photograph lights a level surface with 4.134 of its
+  units (the sun's 3° 2.173, the rest 1.961), Forge's sun and sky with 4.083 (0.99). The street's
+  excess is the light the sunlit fronts send it, which the probes carry too.
 - **Exterior_2:** the terrace's floor 0.8 to 1.0; the café's window bays 2 to 3, the probes'
   light in blotches on the panes where Falcor's are an even dark grey.
 - **With the materials:** under Exterior_2's awnings the undersides 3 to 6 with the probes 4 m
