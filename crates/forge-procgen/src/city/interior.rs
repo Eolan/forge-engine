@@ -77,11 +77,12 @@ pub struct Interior {
     pub climb: DVec2,
     /// The risers each storey's flight climbs, ground first.
     pub risers: Vec<u32>,
-    /// Whether the flights turn a quarter at their foot towards the corridor beside them, over
-    /// their first four steps, where less than [`FOOT_LANDING`] of floor stands before their first
-    /// riser (the owner, 2026-10-30: stepped on from the side, "not enough space"; a quarter turn
-    /// chosen over deeper houses).
-    pub turn: bool,
+    /// Where the flights turn a quarter at their foot towards the corridor beside them, over
+    /// their first four steps: the floor before their first riser, less than [`FOOT_LANDING`],
+    /// which the turning steps take up to the wall (the owner, 2026-10-30: stepped on from the
+    /// side, "not enough space"; a quarter turn chosen over deeper houses; "turning steps can be
+    /// stuck to the wall, generally stairs don't leave gaps").
+    pub turn: Option<f64>,
 }
 
 /// The insides of house `m` (one with its rooms' plan, [`Mass::rooms`]) whose structure is `s`:
@@ -460,7 +461,7 @@ pub fn house(m: &Mass, s: &Structure) -> Option<Interior> {
         risers: core.map_or_else(Vec::new, |c| c.risers.clone()),
         // The floor before the flights' foot, back from its middle against the climb (`n`) to the
         // floor's edge.
-        turn: core.is_some_and(|c| {
+        turn: core.and_then(|c| {
             let foot = (c.stair[2] + c.stair[3]) * 0.5;
             let n_in = inside.len();
             let room = (0..n_in)
@@ -474,7 +475,7 @@ pub fn house(m: &Mass, s: &Structure) -> Option<Interior> {
                 })
                 .map(|(t, _)| t * 20.0)
                 .fold(f64::MAX, f64::min);
-            room < FOOT_LANDING
+            (room < FOOT_LANDING).then_some(room)
         }),
     })
 }

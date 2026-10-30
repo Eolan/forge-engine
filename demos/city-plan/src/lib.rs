@@ -4346,7 +4346,7 @@ fn rail_start(rise: f64) -> u32 {
 /// The first tread a flight of `r` risers `rise` high in the house `inner` has its railing over:
 /// [`rail_start`]'s, or past its turning steps where it turns at its foot ([`TURN_STEPS`]).
 fn rail_first(inner: &interior::Interior, r: u32, rise: f64) -> u32 {
-    if inner.turn && r > TURN_STEPS + 1 {
+    if inner.turn.is_some() && r > TURN_STEPS + 1 {
         rail_start(rise).max(TURN_STEPS)
     } else {
         rail_start(rise)
@@ -4406,38 +4406,43 @@ fn open_far(s: &Structure, stair: [DVec2; 4], climb: DVec2, run: f64) -> bool {
 /// A turning flight's first [`TURN_STEPS`] treads from its foot, each a ring anticlockwise: fanned
 /// from the corner of the foot's square on the open side (`open_far`) where the straight steps go
 /// on, the first with its riser along the open side, the way on to the flight from the corridor,
-/// the last with its riser across the flight where the straight steps begin (the owner,
-/// 2026-10-30: a quarter turn at the foot, "quart tournant", where the foot stands by the back
-/// wall).
-fn winders(stair: [DVec2; 4], climb: DVec2, open_far: bool) -> Vec<Vec<DVec2>> {
+/// the last with its riser across the flight where the straight steps begin; back to the wall
+/// behind the foot, `back` metres off (`Interior::turn`), so no floor is left between them (the
+/// owner, 2026-10-30: a quarter turn at the foot, "quart tournant", where the foot stands by the
+/// back wall; "turning steps can be stuck to the wall, generally stairs don't leave gaps").
+fn winders(stair: [DVec2; 4], climb: DVec2, open_far: bool, back: f64) -> Vec<Vec<DVec2>> {
     let across = stair[1] - stair[0];
     let width = across.length();
     let a = across / width.max(1e-6);
     let c = climb.normalize_or_zero();
     let len = f64::from(TURN_STEPS) * cores::GOING;
+    // The square's far end behind the foot: at the wall (`back` is to its inner face, so a
+    // centimetre into it hides the seam), never deeper than a flight's width.
+    let behind = -(back + 0.01).clamp(0.0, interior::FOOT_LANDING);
     // In the square's frame: `u` in from the open side, `v` along the climb from the foot.
     let at = |u: f64, v: f64| {
         let across = if open_far { width - u } else { u };
         stair[0] + a * across + c * v
     };
     let pivot = DVec2::new(0.0, len);
+    let deep = len - behind;
     // Where a ray from the pivot `t` of the quarter round from straight back meets the square's
-    // bottom or its far side, and how far round the square's edge from the open side's foot.
+    // back or its far side, and how far round the square's edge from the open side's back.
     let hit = |t: f64| {
         let theta = t * std::f64::consts::FRAC_PI_2;
-        let u = len * theta.tan();
+        let u = deep * theta.tan();
         if u <= width {
-            (DVec2::new(u, 0.0), u)
+            (DVec2::new(u, behind), u)
         } else {
             let v = len - width / theta.tan();
-            (DVec2::new(width, v), width + v)
+            (DVec2::new(width, v), width + (v - behind))
         }
     };
     let n = TURN_STEPS as usize;
     let ends: Vec<(DVec2, f64)> = (0..=n)
         .map(|k| match k {
-            0 => (DVec2::ZERO, 0.0),
-            k if k == n => (DVec2::new(width, len), width + len),
+            0 => (DVec2::new(0.0, behind), 0.0),
+            k if k == n => (DVec2::new(width, len), width + deep),
             k => hit(k as f64 / n as f64),
         })
         .collect();
@@ -4446,9 +4451,9 @@ fn winders(stair: [DVec2; 4], climb: DVec2, open_far: bool) -> Vec<Vec<DVec2>> {
             let (p, sp) = ends[k];
             let (q, sq) = ends[k + 1];
             let mut ring = vec![pivot, p];
-            // The square's corner on the far side at the foot, where the step turns round it.
+            // The square's corner on the far side at the back, where the step turns round it.
             if sp < width && sq > width {
-                ring.push(DVec2::new(width, 0.0));
+                ring.push(DVec2::new(width, behind));
             }
             ring.push(q);
             let mut ring: Vec<DVec2> = ring.into_iter().map(|w| at(w.x, w.y)).collect();
@@ -4663,7 +4668,7 @@ fn soffits(
         }
         // A turning flight's strings start past its turning steps (`winders`): on its open side
         // their riser is the way on to it, on the wall side their treads meet the wall.
-        let turns = inner.turn && r > TURN_STEPS + 1;
+        let turns = inner.turn.is_some() && r > TURN_STEPS + 1;
         let turned = f64::from(TURN_STEPS) * g;
         let ring = if turns {
             geom::clip_half_plane(&ring, DVec2::new(turned, 0.0), DVec2::new(0.0, -1.0))
@@ -4914,10 +4919,14 @@ fn interior_parts(
             let base = floor_level(s, k);
             let rise = (s.storeys[k + 1].level - base) / f64::from(r);
             let run = f64::from(r - 1) * cores::GOING;
-            let turning = if inner.turn && r > TURN_STEPS + 1 {
-                winders(stair, inner.climb, open_far(s, stair, inner.climb, run))
-            } else {
-                Vec::new()
+            let turning = match inner.turn {
+                Some(back) if r > TURN_STEPS + 1 => winders(
+                    stair,
+                    inner.climb,
+                    open_far(s, stair, inner.climb, run),
+                    back,
+                ),
+                _ => Vec::new(),
             };
             for i in 0..r - 1 {
                 let y1 = base + f64::from(i + 1) * rise;
@@ -5010,7 +5019,7 @@ fn stair_guards(s: &Structure, inner: &interior::Interior) -> Vec<(Vec<DVec2>, f
             // corridor beside it.
             let along = rise_up.map_or(start, |rise| start.max(cores::GOING * (1.0 + 0.25 / rise)));
             // Past a turning next flight's steps: their riser along the open side is its way on.
-            let along = if next && inner.turn {
+            let along = if next && inner.turn.is_some() {
                 along.max(f64::from(TURN_STEPS) * cores::GOING)
             } else {
                 along
@@ -10319,8 +10328,10 @@ mod tests {
     }
 
     /// Every flight of the village's houses can be stepped on: the 0.6 m of floor before its
-    /// first riser, across its width, is clear 2 m up. The guard across an upper floor's
-    /// stairwell walled off the flight that starts there in the houses of three storeys.
+    /// first riser, across its width, is clear 2 m up; or, where it turns at its foot
+    /// (`Interior::turn`), the 0.6 m of corridor beside its turning steps' first riser, along
+    /// the open side. The guard across an upper floor's stairwell walled off the flight that starts
+    /// there in the houses of three storeys.
     #[test]
     fn the_village_flights_feet_are_clear() {
         let (mut feet, mut blocked) = (0, Vec::new());
@@ -10340,14 +10351,31 @@ mod tests {
                     }
                     feet += 1;
                     let y = floor_level(s, k);
-                    let clear = [0.1, 0.35, 0.6].iter().all(|&back| {
-                        [0.2, 0.5, 0.8].iter().all(|&u| {
-                            let p = stair[0] - inner.climb * back + across * u;
-                            !solids.iter().any(|(ring, y0, y1, _)| {
-                                *y0 < y + 2.0 && *y1 > y + 0.05 && geom::contains(ring, p)
+                    let free = |p: DVec2| {
+                        !solids.iter().any(|(ring, y0, y1, _)| {
+                            *y0 < y + 2.0 && *y1 > y + 0.05 && geom::contains(ring, p)
+                        })
+                    };
+                    let run = f64::from(r.saturating_sub(1)) * cores::GOING;
+                    let clear = if inner.turn.is_some() && r > TURN_STEPS + 1 {
+                        // Out from the open side, along the turning steps' first riser.
+                        let width = across.length();
+                        let a = across / width.max(1e-6);
+                        let far = open_far(s, stair, inner.climb, run);
+                        let len = f64::from(TURN_STEPS) * cores::GOING;
+                        [0.1, 0.35, 0.6].iter().all(|&out| {
+                            [0.2, 0.5, 0.8].iter().all(|&f| {
+                                let u = if far { width + out } else { -out };
+                                free(stair[0] + inner.climb * (len * f) + a * u)
                             })
                         })
-                    });
+                    } else {
+                        [0.1, 0.35, 0.6].iter().all(|&back| {
+                            [0.2, 0.5, 0.8]
+                                .iter()
+                                .all(|&u| free(stair[0] - inner.climb * back + across * u))
+                        })
+                    };
                     if !clear {
                         blocked.push((name.clone(), m.lot, k));
                     }
