@@ -63,6 +63,7 @@ pub mod taa;
 pub mod textures;
 pub mod tonecheck;
 pub mod upscale;
+pub mod view_reach;
 pub mod visibility;
 pub mod wakes;
 pub mod water;
@@ -120,6 +121,7 @@ pub use sun_shadow::{
 };
 pub use taa::{HDR_FORMAT, Taa, TaaFrame};
 pub use upscale::{DlssUpscaler, UpscaleCamera};
+pub use view_reach::ViewReach;
 pub use wakes::{MAX_WAKES, WakeFrame, WaterWake, WaterWakes};
 pub use water::{
     MAX_FLOATERS, MAX_POOL_SAMPLES, SeaWater, WATER_MIPS, WATER_SIZE, WaterCascadeDesc,

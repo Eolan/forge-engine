@@ -2468,9 +2468,11 @@ bays 2 to 3 at Exterior_2 (D-088).
     at both views.
   - 2 and 3: one or two bounces traced, the probes after.
   - 1: the 2 m near field first proposed.
-- **`--set r.gi.trace=1`:** the bounce as the frame traces it, one ray for half the pixels a
+- **`r.gi.trace`, on by default:** the bounce as the frame traces it, one ray for half the pixels a
   frame, denoised by NRD's REBLUR. Exterior_1 against Falcor goes from 1.0–1.75 to 0.86–1.12, at
-  about 2 ms.
+  about 2 ms; `--set r.gi.trace=0` gives the probes alone.
+- **`r.gi.probe_ahead`, 20 by default:** the most metres the finest probe cascade stands ahead
+  along the view, as far as the view reaches.
 
 **Not yet:**
 - **The lamps' cost:** 10.7 ms of GPU at the Night view with the nearest 64 (4.1 without),

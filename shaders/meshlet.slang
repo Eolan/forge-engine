@@ -6093,14 +6093,15 @@ float3 cosine_direction(float3 n, float u1, float u2)
 
 // `trace_closest` past the clear glass of a house whose rooms are drawn (two panes at most), as a
 // probe's ray passes it (`probe_trace_main`, #280): the reference's rays light a room through its
-// windows as the probes do.
-ClosestHit trace_past_glass(Frame* f, RayDesc ray)
+// windows as the probes do. With `leaves`, the crowns' leaves as the probes' rays take them
+// (`probe_leaf_kept`, a quarter of the foliage's triangles by `seed`).
+ClosestHit trace_past_glass(Frame* f, RayDesc ray, bool leaves = false, uint seed = 0u)
 {
-    ClosestHit c = trace_closest(f, ray);
+    ClosestHit c = trace_closest(f, ray, false, leaves, seed);
     for (uint pane = 0u; pane < 2u && c.hit && clear_glass(candidate_row(f, c.instance, c.primitive)); pane++)
     {
         ray.TMin = c.t + 0.002;
-        c = trace_closest(f, ray);
+        c = trace_closest(f, ray, false, leaves, seed);
     }
     return c;
 }
@@ -7007,7 +7008,7 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     g_near_on = SHADOWS != 0 && f[0].gi_reference != 0u && (s.probes != nullptr || f[0].gi_reference == GI_REFERENCE_PATH) && s.sky != nullptr && f[0].tlas != 0;
     if (g_near_on)
         g_near_irradiance = near_field_reference(f, s.sky, s.probes, surface_scene, s.n, si.li.n, f[0].gi_reference);
-    else if (bounce_image != 0xFFFFu && s.sky != nullptr && f[0].tlas != 0)
+    else if (bounce_image != 0xFFFFu && s.sky != nullptr && f[0].tlas != 0 && (mat.flags & MATERIAL_FLAG_FOLIAGE) == 0)
     {
         // In YCoCg, as REBLUR reads and writes it (`ycocg_to_linear`).
         g_near_on = true;
@@ -7372,6 +7373,7 @@ struct PixelSurface
     float3 n;
     float3 g;        // its triangle's own normal, on `n`'s side (the vertices' normal bends round a box's edges)
     float3 relative;
+    bool foliage;    // a foliage row's: a crown's leaf card
     Instance inst;
     Meshlet m;
     float3 shadow_n; // the normal its sun shadow takes (`leaf_shadow_normal`, #346)
@@ -7387,6 +7389,7 @@ PixelSurface pixel_surface(Frame* f, uint vis, uint2 pixel, uint width, uint hei
         g.n = h.n;
         g.g = h.n;
         g.relative = h.relative;
+        g.foliage = false;
         g.shadow_n = h.n;
         return g;
     }
@@ -7419,6 +7422,7 @@ PixelSurface pixel_surface(Frame* f, uint vis, uint2 pixel, uint width, uint hei
         s.n = -s.n;
     if ((mat.flags & MATERIAL_FLAG_GRATING) != 0)
         s.n = grating_normal(normalize(-s.relative));
+    s.foliage = (mat.flags & MATERIAL_FLAG_FOLIAGE) != 0;
     float3 face = cross(mul(frame, v1.position - v0.position), mul(frame, v2.position - v0.position));
     s.g = dot(face, face) > 1e-20 ? normalize(face) : s.n;
     if (dot(s.g, s.n) < 0.0)
@@ -7602,6 +7606,16 @@ void diffuse_trace_main(uint3 id : SV_DispatchThreadID)
         return;
     }
     PixelSurface s = pixel_surface(f, vis, pixel, p.width, p.height);
+    // A crown's leaf keeps the probes' light (the resolve takes no bounce there): far from the camera
+    // its ray started inside its crown's opaque proxy and met it black, and the leaves' light is
+    // the impostors' (D-075). Written here too, so that REBLUR does not blur black round a tree.
+    if (s.foliage)
+    {
+        float3 open_sky = sh_irradiance(p.sky, s.n);
+        float3 leaf = p.probes != nullptr ? probe_irradiance(p.probes, to_scene(f, s.relative), s.n, s.n, normalize(-s.relative), open_sky) : open_sky;
+        bounce[at] = float4(linear_to_ycocg(clamp(leaf, 0.0, 65504.0)), 1.0);
+        return;
+    }
     // The trees' cards near, their proxies far, as the resolve's own rays.
     g_ray_mask = shadow_world(f, s.relative, pixel);
     // The noise's point moved by R2's first step, apart from the sun's disc points of
@@ -7619,7 +7633,10 @@ void diffuse_trace_main(uint3 id : SV_DispatchThreadID)
     ray.Direction = d;
     ray.TMin = 0.0;
     ray.TMax = PATH_RANGE;
-    ClosestHit c = trace_past_glass(f, ray);
+    // The crowns as the probes see them, a quarter of their leaves, by a number fixed per pixel:
+    // every leaf card kept, a tree's outer leaves saw the crown round them as a wall and the near
+    // trees went black beside their impostors (the village from the air, 2026-10-30).
+    ClosestHit c = trace_past_glass(f, ray, true, (pixel.x * 0x8DA6B343u) ^ (pixel.y * 0xD8163841u));
     float3 light;
     bool back = false;
     if (!c.hit)

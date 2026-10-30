@@ -8480,8 +8480,8 @@ denoiser; measured before and after on the Bistro, the village and the city.
    0.85 to 1.2 in clay; a still camera no less steady than now; at most 1.5 ms at
    1600 × 900.
 
-**Built (2026-10-30): the traced bounce** (`r.gi.trace`, off by default until the owner has
-looked at it):
+**Built (2026-10-30): the traced bounce** (`r.gi.trace`, on by default since the owner's word that
+day, with the finest cascade ahead below):
 - **`gi/trace`:** one cosine-weighted ray a pixel to the scene's end, past a house's clear glass.
   Its hit takes the sun through a shadow ray, the lamps, its glow, and its albedo times the
   probes' light; a miss takes the sky's light along the ray. Rays start 2 cm off along the
@@ -8553,8 +8553,25 @@ looked at it):
     holds most of 1 m everywhere's gain at Exterior_1. At Exterior_2 the camera already stands
     among the shade. Turning at 5° a second (2 px a frame), the frames' changes against the next
     one shifted back are the same within 0.1 % (276,598 round the camera, 276,514 ahead, with the
-    bounce), with no spike. Still to look at: walking, and the owner's eye, before it becomes a
-    default.
+    bounce), with no spike.
+- **On by default (the owner, 2026-10-30: "turn on the bounce and probes ahead by default"):**
+  - **The bounce needs REBLUR.** Where NRD or the sun's shadow rays' guides are missing, the
+    probes light alone, as before; the rays are never read raw.
+  - **The cascade goes only as far ahead as the view reaches.** A fixed 20 m made the village's
+    room worse (0.230 to 0.272), the camera left outside its finest probes. `gi/view reach`
+    (0.01 ms) takes the geometric mean of the distances a 32 × 18 grid of pixels shows, read
+    back a few frames later. The cascade stands at the smaller of that and `r.gi.probe_ahead`,
+    20 m by default, moved in steps of 2 m so a still camera's cascade never flips across a
+    cell's edge. Exterior_1 0.042, Exterior_2 0.218, the room 0.230: each as good as its best
+    fixed choice.
+  - **Leaves keep the probes' light.** Far from the camera the rays meet a crown's opaque proxy
+    (D-075's shadow world), and a leaf's ray started inside its own: the near trees seen from
+    the air went black beside their impostors. The trace writes the probes' light there for
+    REBLUR. The bounce's rays keep a quarter of the crowns' leaves, as the probes' do.
+  - **The village** (the map check against the morning's run): every view changes, ꟻLIP
+    0.07–0.13. The paths under the trees are darker, the rooms closer to the path. Each frame
+    costs 1.2–1.8 ms more. A still camera in the main street changes 5,737 pixels, against
+    5,311 without the bounce. The accepted captures change everywhere: to accept with the push.
   - **The surface cache** (`research/surface-radiance-cache.md`). No design was found clearly
     free of live patents: NVIDIA's Pantaleoni family runs to 2039 and Keller's path space
     filtering to 2034, both broad. The note recommends persistent records on a dense clipmap, no

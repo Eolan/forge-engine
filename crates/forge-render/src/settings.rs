@@ -327,14 +327,14 @@ pub fn sky_reflections(default: bool) -> Spec<bool> {
     )
 }
 
-/// How far ahead along the view the finest probe cascade stands (D-088's coverage measure).
+/// The most the finest probe cascade stands ahead along the view, as far as it reaches (D-088).
 pub fn gi_probe_ahead(default: f64) -> Spec<f64> {
     Spec::float(
         "r.gi.probe_ahead",
         default,
         0.0..=64.0,
-        "Metres ahead along the view the finest probe cascade stands, rather than round the \
-         camera (D-088, a measure); 0 round the camera.",
+        "The most metres ahead along the view the finest probe cascade stands, as far as the view \
+         reaches (D-088); 0 round the camera.",
     )
 }
 
@@ -343,8 +343,9 @@ pub fn gi_trace(default: bool) -> Spec<bool> {
     Spec::bool(
         "r.gi.trace",
         default,
-        "The diffuse light from one ray a pixel to the scene's end, the probes' light at its hit \
-         (D-088), in place of the probes' and the occlusion; not yet denoised.",
+        "The diffuse light from one ray a pixel to the scene's end, the probes' light at its hit, \
+         denoised by NRD's REBLUR (D-088), in place of the probes' and the occlusion; without NRD \
+         the probes light alone.",
     )
 }
 

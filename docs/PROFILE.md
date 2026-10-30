@@ -2602,7 +2602,9 @@ run each:
 | Village, the map check's room | 6.090 | 7.484 | | |
 
 The barriers cost about 0.3 ms (6.16 → 6.48 at Exterior_1). Under the bounce, 64 probe rays give
-5.421 ms at Exterior_1 (D-088, next).
+5.421 ms at Exterior_1 (D-088, next). On by default since 2026-10-30, with `gi/view reach`
+(0.008–0.010 ms). The village's map check: house 5.97 → 7.78 ms, green 5.54 → 6.90, main
+5.31 → 6.80, hall 6.84 → 8.00.
 
 ## Not measured yet
 

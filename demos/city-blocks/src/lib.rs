@@ -867,9 +867,12 @@ struct Gallery {
     diffuse_denoiser: Option<forge_render::DiffuseDenoiser>,
     diffuse_tried: bool,
     diffuse_was_on: bool,
-    /// Metres ahead along the view the finest probe cascade stands (`r.gi.probe_ahead`, D-088's
-    /// coverage measure); 0 round the camera.
+    /// The most metres ahead along the view the finest probe cascade stands (`r.gi.probe_ahead`,
+    /// D-088); 0 round the camera. `probe_focus` the distance it stands at, as far as the view
+    /// reaches (`view_reach`), moved in steps of PROBE_FOCUS_STEP.
     probe_ahead: f32,
+    probe_focus: f32,
+    view_reach: forge_render::ViewReach,
     /// The mirror rays' history (#176, D-050): the glass's reflections settled before TAA.
     reflection_history: forge_render::ReflectionHistory,
     /// The mirrors' motion vectors moved towards their reflections (`r.reflections.motion`): DLSS
@@ -1129,6 +1132,9 @@ impl Gallery {
             renderer.sun_dir,
             64,
         ));
+        // D-088's diffuse bounce, on by default (`r.gi.trace`; the owner, 2026-10-30): where NRD
+        // is missing the probes light alone.
+        renderer.gi_trace = true;
         // The sun's soft shadows denoised (D-049): by NVIDIA's SIGMA where NRD's library is there
         // (#172), and by AMD's FidelityFX everywhere (#173), the first of them on.
         let mut sun_shadows = Vec::new();
@@ -2100,7 +2106,9 @@ impl Gallery {
             diffuse_denoiser: None,
             diffuse_tried: false,
             diffuse_was_on: false,
-            probe_ahead: 0.0,
+            probe_ahead: PROBE_AHEAD,
+            probe_focus: 0.0,
+            view_reach: forge_render::ViewReach::new(&ctx.device, &ctx.shaders)?,
             reflection_history,
             reflection_motion: true,
             sun_scale,
@@ -2560,7 +2568,7 @@ impl Demo for Gallery {
             match forge_render::DiffuseDenoiser::reblur(&ctx.device, &nrd_dir(), ctx.extent()) {
                 Ok(denoiser) => self.diffuse_denoiser = Some(denoiser),
                 Err(error) => {
-                    tracing::info!(%error, "no NRD: the diffuse bounce is read as traced")
+                    tracing::info!(%error, "no NRD: no diffuse bounce, the probes light alone")
                 }
             }
         }
@@ -3269,8 +3277,16 @@ impl Demo for Gallery {
                     let t = self.frame as f32 * self.step;
                     Vec3::new(v[0], 0.0, z) * v.get(2).map_or(t, |&stop| t.min(stop))
                 });
-                // D-088's coverage measure: the finest cascade ahead along the view.
-                probes.set_focus(self.camera.forward() * self.probe_ahead);
+                // D-088: the finest cascade ahead along the view, as far as it reaches. In a room
+                // a fixed 20 m left the camera outside it (against Forge's path 0.230 → 0.272);
+                // down the Bistro's street it gained (0.059 → 0.041). The distance moves in steps,
+                // so a still camera's cascade never flips across a cell's edge.
+                let reach = self.view_reach.read(frame.slot).unwrap_or(0.0);
+                let focus = reach.min(self.probe_ahead);
+                if (focus - self.probe_focus).abs() > PROBE_FOCUS_STEP || self.probe_ahead <= 0.0 {
+                    self.probe_focus = focus;
+                }
+                probes.set_focus(self.camera.forward() * self.probe_focus);
                 // The far rooms' daylight follows the sun (#356).
                 probes.set_sun(
                     self.renderer.sun_dir,
@@ -3516,8 +3532,19 @@ impl Demo for Gallery {
                 );
             }
         }
-        // D-088's diffuse bounce, traced before the resolve (`r.gi.trace`): denoised by REBLUR
-        // where NRD and the sun's shadow rays' guides are there, else read as traced.
+        // How far the view reaches, for the probes' finest cascade a few frames on (D-088).
+        if self.probe_ahead > 0.0 && probes.is_some() {
+            let reach: &'f forge_render::ViewReach = &self.view_reach;
+            reach.measure(
+                &mut frame.graph,
+                frame.slot,
+                targets.depth,
+                extent,
+                camera.near,
+            );
+        }
+        // D-088's diffuse bounce, traced before the resolve (`r.gi.trace`), denoised by REBLUR:
+        // where NRD or the sun's shadow rays' guides are missing, the probes light alone.
         let mut diffuse_bounce = None;
         let mut denoised = false;
         if self.renderer.gi_trace && self.sky_light && !in_space && self.scene.rays().is_some() {
@@ -3529,15 +3556,17 @@ impl Demo for Gallery {
                     view_z,
                     hit_distance: forge_render::diffuse_bounce::HIT_DISTANCE,
                 });
-            let traced = self.renderer.trace_diffuse(
-                &mut frame.graph,
-                frame.slot,
-                targets,
-                extent,
-                scene_light,
-                probes,
-                for_denoiser,
-            );
+            let traced = for_denoiser.and_then(|for_denoiser| {
+                self.renderer.trace_diffuse(
+                    &mut frame.graph,
+                    frame.slot,
+                    targets,
+                    extent,
+                    scene_light,
+                    probes,
+                    Some(for_denoiser),
+                )
+            });
             diffuse_bounce = match (
                 traced,
                 self.diffuse_denoiser.as_ref(),
@@ -3556,7 +3585,7 @@ impl Demo for Gallery {
                         &reblur_frame,
                     )?)
                 }
-                (traced, ..) => traced,
+                _ => None,
             };
         }
         // REBLUR's history starts over after a frame it did not denoise.
@@ -7930,3 +7959,10 @@ fn nrd_dir() -> std::path::PathBuf {
             forge_app::workspace_root_from(env!("CARGO_MANIFEST_DIR")).join("nrd-sdk/bin")
         })
 }
+
+/// The most metres the probes' finest cascade stands ahead along the view (`r.gi.probe_ahead`,
+/// D-088): 20 gained most at the Bistro's Exterior_1, nearly what probes a metre apart everywhere
+/// gave, at no cost.
+const PROBE_AHEAD: f32 = 20.0;
+/// The least change of the view's reach that moves the cascade's place, metres (`probe_focus`).
+const PROBE_FOCUS_STEP: f32 = 2.0;
