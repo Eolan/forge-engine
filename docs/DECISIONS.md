@@ -8399,4 +8399,11 @@ denoiser; measured before and after on the Bistro, the village and the city.
   too bright in the glass, where in clay the terrace matched (0.8–1.0). With the materials the
   terrace's light differs: the wood's grazing reflection of the warm street in Falcor, bluish in
   Forge, is the next to measure.
+- **Matte** (`FORGE_BISTRO_MATTE=1` and the Falcor script's `BISTRO_MATTE`: base colours and normal
+  maps kept, no "Specular" map, roughness 1, no metal): the near terrace and table still 0.23–0.8,
+  so it is the diffuse light, not the reflection; with GTAO off 0.46–0.96, the near table top
+  still about 0.5. In clay (every albedo 0.5) the same places matched: with the real, darker
+  albedos round it, the light under the awning falls short, part GTAO's multi-bounce darkening of
+  dark surfaces, part the probes there. Next: the probes under the awning (their placement,
+  activity and what their rays meet), before the near field's pass.
 

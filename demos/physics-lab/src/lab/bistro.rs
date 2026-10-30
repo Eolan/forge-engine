@@ -391,6 +391,7 @@ pub(super) fn rows(
     let open_time = measured.elapsed();
     let mut rows_made = 0;
     let clay = std::env::var("FORGE_BISTRO_CLAY").is_ok_and(|v| v == "1");
+    let matte = std::env::var("FORGE_BISTRO_MATTE").is_ok_and(|v| v == "1");
     for (k, mesh) in b.model.meshes.iter().enumerate() {
         let uvs = !mesh.mesh.uvs.is_empty();
         let rows = mesh
@@ -431,6 +432,18 @@ pub(super) fn rows(
                 }
                 // Clay (`FORGE_BISTRO_CLAY=1`, as the Falcor script's): a 50 % grey diffuse,
                 // its normal map alone kept, nothing cut out, no glow; the light alone compared.
+                // Matte (`FORGE_BISTRO_MATTE=1`, as the Falcor script's `BISTRO_MATTE`): a rough
+                // dielectric, its base colour and normal maps kept: the diffuse light alone.
+                let maps = if matte {
+                    m.roughness = 1.0;
+                    m.metallic = 0.0;
+                    ExternalMaps {
+                        metal_rough: None,
+                        ..maps
+                    }
+                } else {
+                    maps
+                };
                 let maps = if clay {
                     m.base_color = [0.5, 0.5, 0.5, 1.0];
                     m.roughness = 1.0;
