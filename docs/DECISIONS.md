@@ -8783,6 +8783,59 @@ this one: "yes, record it and download them"):**
   fed by SHaRC only if noise or cost calls for it; never a ReSTIR of Forge's own
   (US 11,315,310). If the port is ever wanted on again, an entry whose point no election picks
   (an average of the claims, a point the cell fixes) would stay out of US 12,394,144's claim 1.
+- **SHaRC under the bounce: the design** (2026-10-30, for the owner's review before code;
+  `docs/research/sharc-and-nrc.md`):
+  - **Three graph passes, SHaRC's own:**
+    1. `gi/sharc update` (compute, ray queries): one pixel per 5 × 5 block, moving each frame by
+       the noise frame, starts a path at its G-buffer surface. `path_from`'s loop (Lambert,
+       cosine directions, `PATH_MOST_BOUNCES`) calls `SharcUpdateHit` at each vertex and
+       `SharcUpdateMiss` with the sky on a miss. At each vertex:
+       - the sun through its shadow ray as SHaRC's separate emissive term;
+       - the lamps as its direct light (`hit_lamps`, as the probes' rays take them);
+       - the albedo as the demodulation factor and the segment's throughput.
+    2. `gi/sharc resolve` (compute, async queue): `SharcResolveEntry` for every slot; the sample's
+       32 frames of accumulation and 64 to eviction to start.
+    3. **The query, inside `gi/trace`:** at the bounce ray's hit, `SharcGetCachedRadiance` with
+       the hit's own sunlight (its shadow ray, as today) and albedo. The hit's sun shadows stay
+       exact; the voxel gives only the light after the hit.
+       - Where the segment is shorter than the voxel's diagonal (SHaRC's rule), the bounce
+         traces one more cosine segment, at most two, and reads there.
+       - Where no voxel answers, the probes stand in, as for the port.
+  - **Data:** the three buffers by device address, through a bridge header that sets SHaRC's
+    `RW_STRUCTURED_BUFFER` and `BUFFER_AT_OFFSET` before its includes; the headers stay
+    unmodified, included from `sharc-sdk/`.
+    - Size: 2²⁰ slots to start (40 MiB), raised if the village or the Bistro fills more than a
+      third.
+    - Positions: the scene's frame (`to_scene`), the camera's position in the same frame. The
+      cache is cleared on a reset, an origin shift or a scene change.
+    - `sceneScale`: chosen so the voxels near the camera are thinner than the village's walls
+      (50 and 100 tried).
+    - `radianceScale`: chosen from the sun's radiance.
+  - **Switch:** `r.gi.cache` takes a value: `sharc` (the default once it passes), `nrc`
+    (NVIDIA, the trial), `port` (the Solari/kajiya port) and `off` (the probes at the hits).
+  - **Fallbacks:**
+    - Without `sharc-sdk/` (CI, a GitHub build), the shaders compile without SHaRC (a define set
+      when its headers exist) and `sharc` falls back to the probes.
+    - Without native fp16, the same.
+    - Without 64-bit atomics, SHaRC's lock buffer.
+  - **Checks, in order:**
+    1. The A/B harness at 0 px and two runs byte-identical (SHaRC sums integers; its slots
+       follow the threads, so this is checked, not assumed).
+    2. The classroom against Falcor, sun and sky apart (the port: ×0.92 sun, ×0.98 sky).
+    3. The landing near the path tracer (×1.53 with the probes).
+    4. No light through the village's thin walls and floors.
+    5. The passes' cost on the 5070 Ti, the F1 overlay and `PROFILE.md`.
+    6. The AMD iGPU.
+  - **NRC afterwards, on the same hook** (NVIDIA only, behind `nrc`):
+    - The training paths come from the update pass's loop at NRC's training size; the query
+      records are written at the bounce's hit.
+    - `QueryAndTrain` runs as a graph pass recording NRC's commands.
+    - A small C shim of Forge's own (`tools/fetch-nrc.sh` builds it against `NRC_Vulkan.lib` into
+      `nrc-sdk/bin`) is loaded at run time from `forge-gpu`.
+    - The device enables NRC's extensions only when its DLL loads.
+    - It stays if it beats SHaRC against the path tracer at a cost worth it.
+  - **Patents:** Forge's own code around SHaRC adds no cache mechanics; the hashing, the
+    segment-length rule and the blend are SHaRC's, used as designed (the owner's SDK rule).
 - **`r.gi.cache`,** off until the owner turns it on. Measured (2026-10-30), the mean |log2| of
   16 × 9 tiles against `r.gi.reference=4`, and a still camera's changing pixels per pair of
   frames 10 apart:
