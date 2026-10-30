@@ -8480,3 +8480,52 @@ denoiser; measured before and after on the Bistro, the village and the city.
    0.85 to 1.2 in clay; a still camera no less steady than now; at most 1.5 ms at
    1600 × 900.
 
+**Built (2026-10-30): the traced bounce** (`r.gi.trace`, off by default until the owner has
+looked at it):
+- **`gi/trace`:** one cosine-weighted ray a pixel to the scene's end, past a house's clear glass.
+  Its hit takes the sun through a shadow ray, the lamps, its glow, and its albedo times the
+  probes' light; a miss takes the sky's light along the ray. Rays start 2 cm off along the
+  vertices' normal and are mirrored over their triangle's own face where that normal bends round
+  a box's edge. The light is written in YCoCg with the ray's normalised length, as REBLUR reads
+  it.
+- **Denoised by REBLUR_DIFFUSE** (NRD 4.18, the library SIGMA comes from; `forge_gpu::nrd` now
+  runs either from one instance type). Half the pixels trace each frame, in a checkerboard, and
+  REBLUR reuses the guides the sun's shadow rays write for SIGMA. Without NRD the resolve reads
+  every pixel's ray as traced, noisy under DLAA; the decision's own fallback filter is still to
+  write.
+- **Found on the way:**
+  - **A race.** The bounce's image shares memory with the lamp shadow rays' images. In the
+    village's rooms on the RTX 5070 Ti, REBLUR read texels of the latter back: a bright band at
+    the frame's foot. The serial frame and separate memory hid it. REBLUR and `gi/trace` now
+    stand behind full barriers (#349's kind), about 0.3 ms.
+  - **Black seams.** With the sun's 15 cm ray bias, a wall's rays behind a table started inside
+    its top and legs; with the lamps' few millimetres, the points of faces seen edge on still
+    did. Both gave black seams under REBLUR, which the owner saw. 2 cm along the normal, as the
+    reference, has none.
+- **Measured** (Falcor in Lambert at 16 bounces, the textured scene):
+  - **Exterior_1:** 0.86–1.12, but for the tiles every Forge picture shares (the probes alone
+    1.0–1.75). D-088's first target is met there.
+  - **Exterior_2:** the terrace 0.35–0.9 (the probes 0.24–0.8). In diffuse (no reflection on
+    either side) it lands on Forge's path, whose 0.77–0.99 there are the scenes' own differences.
+    The rest is the surfaces' reflection, D-086's side.
+  - **Diffuse Exterior_2, against Forge's path:** every region within 1.0–1.1.
+  - **The village's whitewashed room, against Forge's path:** 1.1–1.4 (the probes 1.15–1.7). This
+    is the probes' bias at the hits, for the surface cache below.
+  - **A still camera:** 5,054 and 2,705 changing pixels at Exterior_1 and _2 (5,103 and 3,187
+    before).
+  - **Cost** at 1600 × 900 on the RTX 5070 Ti: `gi/trace` 0.8–1.0 ms, REBLUR's passes 0.45, their
+    barriers about 0.3. The frame +2.0 ms at Exterior_1, +1.7 at Exterior_2, +1.4 in the village's
+    room: over the 1.5 ms target.
+- **Next:**
+  - The owner's look at the bounce in the Bistro and the village, before it is on by default.
+  - The cost under 1.5 ms:
+    - Under the bounce, 64 probe rays save 0.74 ms, the diffuse light unchanged within 2–5 %.
+      But the café's glass reflections rise by 30 %: the mirror rays' hits read the probes.
+    - GTAO is unused where the bounce is on (about 0.2 ms).
+    - The barriers can be narrowed.
+  - The fallback filter without NRD.
+  - **The surface cache** (`research/surface-radiance-cache.md`). No design was found clearly
+    free of live patents: NVIDIA's Pantaleoni family runs to 2039 and Keller's path space
+    filtering to 2034, both broad. The note recommends persistent records on a dense clipmap, no
+    hashing. It needs the owner's decision, and counsel's view, before any code.
+

@@ -2589,6 +2589,21 @@ With their lamps (#363, `far_room_lamps` 18, 14), the same dolly at midnight: `g
 0.018 ms, the frame 6.234 → 6.226 ms (one run each: no cost to tell); the rooms' sums on the CPU,
 written again when the frame's lamps change.
 
+## D-088's traced bounce (2026-10-30)
+
+`r.gi.trace`: `gi/trace` (one ray for half the pixels a frame) and REBLUR's passes (`gi/REBLUR …`,
+NRD), both behind full barriers; GTAO still runs. 1600 × 900, the RTX 5070 Ti, 300 frames, one
+run each:
+
+| View | frame, probes | frame, bounce | `gi/trace` | REBLUR |
+|---|---|---|---|---|
+| Bistro Exterior_1 | 4.494 | 6.475 | 1.014 | 0.45 |
+| Bistro Exterior_2 | 4.078 | 5.768 | 0.812 (diffuse) | 0.45 |
+| Village, the map check's room | 6.090 | 7.484 | | |
+
+The barriers cost about 0.3 ms (6.16 → 6.48 at Exterior_1). Under the bounce, 64 probe rays give
+5.421 ms at Exterior_1 (D-088, next).
+
 ## Not measured yet
 
 - **Streaming**: residency pools, request queue depth, drive and decompression throughput.

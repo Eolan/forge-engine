@@ -2454,10 +2454,23 @@ picture is rolled 1.1°, which `--view` cannot give, so Forge and Falcor are com
 normal maps kept, no "Specular" map, roughness 1, no metal: the diffuse light with the real
 albedos (D-088).
 
+**Diffuse** (`FORGE_BISTRO_MATTE=diffuse`, as the Falcor script's `BISTRO_MATTE` with
+`BISTRO_DIFFUSE`): as matte, without any reflection (an index of refraction of 1 in Falcor).
+
 **Clay** (`FORGE_BISTRO_CLAY=1`, as the Falcor script's `BISTRO_CLAY`): every material a 50 %
 grey diffuse, its normal map alone kept, nothing cut out, no glow: the light alone, compared with
 Falcor's switched to Lambert at 16 bounces. The shade 1.3 to 1.8 at Exterior_1, the café's window
 bays 2 to 3 at Exterior_2 (D-088).
+
+**The diffuse light's references and its traced bounce (D-088):**
+- **`--set r.gi.reference=N`:** 32 rays a pixel, no denoiser, slow:
+  - 4: a path without the probes, Forge's own reference. In clay it is within 1.0–1.15 of Falcor's
+    at both views.
+  - 2 and 3: one or two bounces traced, the probes after.
+  - 1: the 2 m near field first proposed.
+- **`--set r.gi.trace=1`:** the bounce as the frame traces it, one ray for half the pixels a
+  frame, denoised by NRD's REBLUR. Exterior_1 against Falcor goes from 1.0–1.75 to 0.86–1.12, at
+  about 2 ms.
 
 **Not yet:**
 - **The lamps' cost:** 10.7 ms of GPU at the Night view with the nearest 64 (4.1 without),
