@@ -8762,12 +8762,24 @@ this one: "yes, record it and download them"):**
   US 12,394,144 B2 (consistent sampling for spatial hashing, to 2041-12-08, claims 1, 2, 5, 6 and
   7; `docs/research/surface-radiance-cache.md`, "The claims read"), which the research's table
   flagged ("no elected anchors") and whose claims were read only after the push. Both were
-  reverted the same evening; the cache is off by default again and nondeterministic. Another
-  session relays the owner's word of the same day, to be written into D-088 when confirmed:
-  NVIDIA's SHaRC replaces this port; Solari and kajiya stay as the reference and the fallback.
-  An entry whose point
-  no election picks (an average of the claims, a point the cell fixes) would stay out of that
-  claim if the port is ever wanted on again.
+  reverted the same evening; the cache is off by default again and nondeterministic.
+- **Amended: SHaRC replaces this port** (the owner, 2026-10-30, confirmed in the session that
+  reverted it). NVIDIA's SHaRC (1.8.3, shader-only, the NVIDIA RTX SDKs licence; RTXGI 2.8.0
+  beside it), used unmodified from the git-ignored `sharc-sdk/` and `rtxgi-sdk/` and compiled
+  into Forge's shaders, lights the bounce's hits. Its patents (the hash map, US 10,614,613, and
+  the families above) are NVIDIA's own, used as designed, as RTXDI covers ReSTIR (an implied
+  licence, no written grant). Solari and kajiya (`surface-cache-ref/`, beside the repository)
+  stay as reading and the fallback; this port stays behind `r.gi.cache`, off. Its checks:
+  - the landing near the path tracer (×1.53 with the probes);
+  - no light through the village's thin walls and floors (its cell size near the camera);
+  - its passes' cost on the 5070 Ti;
+  - the AMD iGPU (it needs native fp16 and ray tracing).
+
+  The order, one theme at a time: RTXDI's ReSTIR DI for the lamps through NRD first, then
+  SHaRC for the bounce's hits, measured on the landing and the Bistro, then RTXDI's ReSTIR GI
+  fed by SHaRC only if noise or cost calls for it; never a ReSTIR of Forge's own
+  (US 11,315,310). If the port is ever wanted on again, an entry whose point no election picks
+  (an average of the claims, a point the cell fixes) would stay out of US 12,394,144's claim 1.
 - **`r.gi.cache`,** off until the owner turns it on. Measured (2026-10-30), the mean |log2| of
   16 × 9 tiles against `r.gi.reference=4`, and a still camera's changing pixels per pair of
   frames 10 apart:

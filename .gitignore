@@ -30,6 +30,10 @@
 /fidelityfx-sdk/
 # AMD's FSR SDK 2.4.0 (its signed DLLs for `--fsr-amd`), a junction to the download beside the repo.
 /fsr-sdk/
+# NVIDIA's SHaRC 1.8.3 and RTXGI 2.8.0 (D-088's surface cache, the NVIDIA RTX SDKs licence):
+# used unmodified, compiled into Forge's shaders, never committed.
+/sharc-sdk/
+/rtxgi-sdk/
 
 # Compiled shaders are rebuilt from shaders/*.slang
 *.spv
