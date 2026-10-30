@@ -35,6 +35,11 @@ use city_blocks::scenario::Environment;
 /// emissive texel shines as a photograph texel of 0.1; Forge scales the photograph so that its
 /// sun (4.458 of its units) gives the sun's 128,000 lux (D-084): 0.1 × 128,000 / 4.458.
 const EMISSIVE_LUMINANCE: f32 = 2870.0;
+/// The Bistro's metered exposure's compensation by day, stops (D-089). NVIDIA's two pictures fit
+/// EV 11.74 (Exterior_1, Falcor's default exposure) and 9.34 (Exterior_2, set 2.2 stops
+/// brighter); the shared meter's stop draws them at 12.70 and 9.32, and a stop and a half splits
+/// the two, each about half a stop off.
+pub(super) const EXPOSURE_COMPENSATION: f32 = 1.5;
 /// Cut out under this base colour alpha where the map has any (the archive's alpha is opacity,
 /// tested at a half as its own renderer does).
 const ALPHA_CUTOFF: f32 = 0.5;

@@ -157,9 +157,9 @@ pub struct Args {
     ev100: f32,
     /// The metered exposure's compensation in stops: positive brighter, negative darker (the
     /// sunlit parts of a view metered on its shade then clip less). A stop by default, for AgX's
-    /// punchy look, which darkens the mid-tones.
-    #[arg(long, default_value_t = 1.0, allow_hyphen_values = true)]
-    exposure_compensation: f32,
+    /// punchy look, which darkens the mid-tones; by day, the scene's look may set its own (D-089).
+    #[arg(long, allow_hyphen_values = true)]
+    exposure_compensation: Option<f32>,
     /// The fractions of the sorted pixels the exposure meters, `LOW,HIGH` (0.5,0.98 by default:
     /// the brighter half without the brightest highlights).
     #[arg(long, value_parser = parse_pair)]
@@ -1125,8 +1125,8 @@ impl Gallery {
         if let Some(blend) = args.local_exposure_blend {
             local_settings.blend = blend.clamp(0.0, 1.0);
         }
+        // Its compensation once the scene's look is known (`metered_compensation`).
         let mut auto_exposure = AutoExposure::new(args.ev100);
-        auto_exposure.compensation = args.exposure_compensation;
         if let Some(band) = args.meter_band {
             auto_exposure.band = band;
         }
@@ -1214,6 +1214,13 @@ impl Gallery {
                 auto_exposure.band = LOOK_METER_BAND;
             }
         }
+        // `--time-of-day` from sunset to sunrise (1 to 2): the night (D-046), not the look's day.
+        let by_night = args.time_of_day.is_some_and(|t| t.rem_euclid(2.0) >= 1.0);
+        auto_exposure.compensation = metered_compensation(
+            args.exposure_compensation,
+            look.exposure_compensation,
+            by_night,
+        );
         let space = (look.backdrop == Backdrop::Space)
             .then(|| SpaceSky::new(ctx, renderer.sun_illuminance))
             .transpose()?;
@@ -1226,7 +1233,6 @@ impl Gallery {
         // An environment map as the sky (D-084): loaded once, its sun the scene's at every hour of
         // the day (`--day` and a daytime `--time-of-day` leave it). `--time-of-day` from sunset
         // to sunrise (1 to 2) keeps the night instead (D-046).
-        let by_night = args.time_of_day.is_some_and(|t| t.rem_euclid(2.0) >= 1.0);
         let environment = look
             .environment
             .filter(|_| !by_night)
@@ -7053,6 +7059,18 @@ fn water_check(
     Ok(())
 }
 
+/// The metered exposure's compensation without `--exposure-compensation` or a look's (#220): a
+/// stop, as AgX's punchy look darkens the mid-tones.
+const EXPOSURE_COMPENSATION: f32 = 1.0;
+
+/// The metered exposure's compensation (D-089): `--exposure-compensation`'s, else the scene's
+/// look's by day (the Bistro keyed between its authors' two pictures), else the shared stop. A
+/// run that starts at night keeps the shared stop.
+fn metered_compensation(flag: Option<f32>, look: Option<f32>, by_night: bool) -> f32 {
+    flag.or(look.filter(|_| !by_night))
+        .unwrap_or(EXPOSURE_COMPENSATION)
+}
+
 /// The meter's band in a look with local exposure (#275): from a quarter of the metered samples
 /// up, not half, so that indoors the lit walls alone do not set the exposure.
 const LOOK_METER_BAND: (f32, f32) = (0.25, 0.95);
@@ -8104,3 +8122,24 @@ const PROBE_FOCUS_STEP: f32 = 2.0;
 /// 0.6 brought the Bistro in clay and the village's room nearest the path; 1.5 darkened Exterior_1
 /// twice, GTAO over the rays' own occlusion.
 const AO_CONTACT: f32 = 0.6;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // D-089: the command line's compensation, else the look's by day, else the shared stop.
+    #[test]
+    fn the_flag_wins_then_the_look_by_day_then_the_shared_stop() {
+        assert_eq!(
+            metered_compensation(None, None, false),
+            EXPOSURE_COMPENSATION
+        );
+        assert_eq!(metered_compensation(None, Some(1.5), false), 1.5);
+        assert_eq!(
+            metered_compensation(None, Some(1.5), true),
+            EXPOSURE_COMPENSATION
+        );
+        assert_eq!(metered_compensation(Some(1.0), Some(1.5), false), 1.0);
+        assert_eq!(metered_compensation(Some(-0.5), None, true), -0.5);
+    }
+}

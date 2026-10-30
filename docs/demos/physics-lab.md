@@ -2264,13 +2264,15 @@ Steps 1 and 3 of D-065 (`forge_render::lamps`, `lamps_at` and `hit_lamps` in `me
 ```
 cargo run --release -p physics-lab -- --lab bistro
 cargo run --release -p physics-lab -- --lab bistro --time-of-day 1.5
-cargo run --release -p physics-lab -- --lab bistro --view=-23.700,6.855,-0.704,-93.13,-15.93 --fov 36.22 --ev100 11.74
+cargo run --release -p physics-lab -- --lab bistro --view=-23.700,6.855,-0.704,-93.13,-15.93 --fov 36.22 --fixed-exposure --ev100 11.74
 ```
 
 The Amazon Lumberyard Bistro's exterior (ORCA, CC BY 4.0, `CREDITS.md`): 1,296 meshes,
 2.83 M triangles, 134 materials. It is the first of D-083's authored scenes, for measuring
 Forge's image, load and frame against, first against NVIDIA's renders, then against a
-path-traced reference (step 2). The third line is NVIDIA's Exterior_1 view.
+path-traced reference (step 2). The third line is NVIDIA's Exterior_1 view at the exposure its
+picture fits. The Bistro is metered, by day half a stop brighter than the shared meter (D-089);
+`--fixed-exposure --ev100 E` holds one exposure for a comparison.
 
 **Getting it.** It is never in the repository.
 1. Fetch the archive by hand into `assets/external/bistro/` (git-ignored).
@@ -2345,13 +2347,14 @@ it: the archive's HDR photograph, `san_giuseppe_bridge_4k.hdr` (4096 × 2048, HD
   matches Falcor's mean at EV 11.96 instead (mean luma 105.5 against 102.4, spread 60.9 against
   66.0, RMS 15.3): its scene is about 1.6 times too bright, measured with `--capture-linear` (the
   lit surfaces 1.2 to 1.3 times, the shade 1.5 to 5). Fixed exposure ignores
-  `--exposure-compensation`.
+  `--exposure-compensation`, but for local exposure's middle grey when that is on.
 - **The exposure since D-086 and D-088** (2026-10-30): NVIDIA's pictures fit EV 11.74
   (Exterior_1) and 9.34 (Exterior_2) on Forge's light, 11.26 and 9.06 on Falcor's: Exterior_1 at
-  Falcor's default exposure, Exterior_2 2.2 stops brighter. Without `--day` or `--time-of-day`
-  the lab draws the Bistro at the shared fixed EV 14, 2.3 and 4.7 stops darker. Metered
-  (`--time-of-day 0.5`) it comes to 12.70 and 9.32. D-089 (🟡) proposes metering it by day with
-  +1.5 stops of compensation.
+  Falcor's default exposure, Exterior_2 2.2 stops brighter. The lab drew the Bistro at the shared
+  fixed EV 14, 2.3 and 4.7 stops darker; the shared meter would draw it at 12.70 and 9.32. Since
+  D-089 it is metered, by day with a stop and a half of compensation: 12.20 and 8.82, each about
+  half a stop from its picture (mean luma 86 against 103, 76 against 65). A night start keeps the
+  shared stop.
 - **Close:** the light's direction, the sky, the overall level and contrast, the cobbles
   (median luma 182 against 191), the shadows under the photograph's sun, and the emissive
   lamps since their calibration.

@@ -6807,6 +6807,7 @@ impl Scenario for PlanScenario {
             // way too dark", "light below trees is too dark"); the light was there, the eye
             // adapts to it (the hall metered at EV 9.4, the wood at 11.0, a garden at 13.4).
             metered: !self.flora.is_empty(),
+            exposure_compensation: None,
             // Local exposure with it (D-067, #275): a room seen from a lit hall through its door
             // was pitch black; lifted, it reads a bit darker, as the eye sees it.
             local_exposure: !self.flora.is_empty(),

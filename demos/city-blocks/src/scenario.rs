@@ -81,6 +81,10 @@ pub struct Look {
     /// `--fixed-exposure`): a map walked into from the street, whose rooms, lit through their
     /// doors and windows, are a few stops under the street, as the eye adapts to them.
     pub metered: bool,
+    /// The metered exposure's compensation where `--exposure-compensation` gives none, by day (a
+    /// run that starts at night keeps the shared stop): an authored scene keyed as its authors'
+    /// pictures are (D-089).
+    pub exposure_compensation: Option<f32>,
     /// Local exposure (D-067) on from the start (unless `--no-local-exposure`), with the meter
     /// keyed on a lower band (0.25–0.95) and the shadows' contrast at 0.55 (unless
     /// `--meter-band`, `--local-exposure-contrast`): a room seen from a lit hall through its door
@@ -123,6 +127,7 @@ impl Default for Look {
             probe_room_grids: None,
             chase: false,
             metered: false,
+            exposure_compensation: None,
             local_exposure: false,
             environment: None,
             tonemap: None,

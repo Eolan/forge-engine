@@ -268,8 +268,13 @@ impl Scenario for LabScenario {
             probe_room_grids: None,
             // The car is followed from the start (C lets it go); the aeroplane always is.
             chase: matches!(kind, LabScene::Drive | LabScene::Flyer),
-            // Each lab scene at its own fixed exposure (its captures compared at one).
-            metered: false,
+            // Each lab scene at its own fixed exposure (its captures compared at one), but the
+            // Bistro: metered as a street walked under its café's awnings, half a stop brighter
+            // than the shared meter by day, between its authors' two pictures (D-089).
+            // `--fixed-exposure` keeps a comparison at one.
+            metered: kind == LabScene::Bistro,
+            exposure_compensation: (kind == LabScene::Bistro)
+                .then_some(super::bistro::EXPOSURE_COMPENSATION),
             local_exposure: false,
             // An authored scene under its authors' sky and sun (D-084), the chart under its own, for
             // comparisons with Falcor's renders.

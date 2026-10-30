@@ -8071,7 +8071,7 @@ pbrt-v4, RTXGI, materiel test, etc.). Then update forge demos and test them."):
   - The Bistro's lab is not metered: it draws at the shared fixed EV 14, 2.3 and 4.7 stops under
     the exposures NVIDIA's pictures fit on Forge's light (EV 11.74 at Exterior_1, 9.34 at
     Exterior_2). Its light matches Falcor's at equal exposure. Metered, Exterior_1 sits a stop
-    dark and Exterior_2 on it; the tone curve is not the cause (D-089).
+    dark and Exterior_2 on it; the tone curve is not the cause (D-089, which meters it since).
   - SHaRC reads 3 to 7 % dark against Forge's path in steady state (D-088). NVIDIA's sample's
     SHaRC is within 2 to 4 % of its own path tracer.
 
@@ -9014,7 +9014,7 @@ this one: "yes, record it and download them"):**
     size past a third, but the resolve's cost grows with it); the village's thin walls and floors;
     the AMD iGPU (`FORGE_GPU=amd`). These go into D-083's calibration table.
 
-## D-089 — The Bistro metered by day, half a stop brighter than the shared meter 🟡 (proposed 2026-10-30; D-083 step 1)
+## D-089 — The Bistro metered by day, half a stop brighter than the shared meter ✅ (proposed 2026-10-30; the owner's go the same evening; D-083 step 1)
 
 **Why:** the owner, 2026-10-30: "it's darker than the reference pictures we have in our directory
 by a lot".
@@ -9135,10 +9135,32 @@ D-022).
   main street by 0.3. A shared +1.5 brightens every view by half a stop. The shared band at +1,
   the village's before D-067, darkens them by 0.1 to 0.9.
 
-**For the owner:**
-- steps 1 and 2, or step 1 alone (Exterior_1 then a stop dark);
-- whether the classroom, an inside lit through its windows, should be metered too. The chart
-  stays a card at one exposure.
+**Decided** (the owner, 2026-10-30): "for D-089 I will follow recommendations", then "Yes, both
+steps". Steps 1 and 2 as proposed.
 
-Both steps can be seen before any change: `--time-of-day 0.5` meters the Bistro as step 1
-would, and `--exposure-compensation 1.5` adds step 2.
+**Built** (2026-10-30):
+- **Code:**
+  - `Look::exposure_compensation`.
+  - `--exposure-compensation` is now optional (`metered_compensation`: the flag, else the look's
+    by day, else the shared stop, `EXPOSURE_COMPENSATION`). A unit test covers the order.
+  - The lab's look meters the Bistro with `bistro::EXPOSURE_COMPENSATION`, 1.5.
+  - The night is the environment map's rule (`by_night`, `--time-of-day` from 1 to 2), not
+    `bistro::night_start` (past 1): at exactly 1 the map is left out and the shared stop kept
+    with it.
+  - Local exposure's middle grey follows the compensation, as before, so a Bistro run at
+    `--fixed-exposure` with local exposure turned on keys it at 1.5.
+- **In the engine:** Exterior_1 at 12.20 and Exterior_2 at 8.82 (the PNGs' fits, as the table's
+  proposed row). `--time-of-day 0.5` gives the same 12.20; `--exposure-compensation 1` gives
+  the shared meter's 12.70; `--fixed-exposure --ev100 11.74` holds its exposure (11.72 by the
+  fit).
+- **Unchanged, to the pixel (ꟻLIP 0) before and after:** the Bistro's night (`--time-of-day 1.5`)
+  at the path's first view and at Exterior_1's, the chart and the classroom.
+- **The checks:**
+  - The day check (the sentinels on both paths with validation, 1,128 tests): every capture 0 px
+    from the accepted set, but #71's flake.
+  - The map check: 12 of its 13 views the same to the pixel with D-089 and without; the walked
+    way in within ꟻLIP 0.0007, run-to-run noise. Both runs drift 0.002 to 0.004 (mean ꟻLIP) from
+    the set accepted at 17:33, so that drift comes from the commits since then, not from D-089.
+
+**Open:** whether the classroom, an inside lit through its windows, should be metered too. The
+chart stays a card at one exposure.
