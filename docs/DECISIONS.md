@@ -2943,7 +2943,10 @@ models scene, and the test models' captures beside their Khronos screenshots.
   DXC, SPIR-V only). `forge_gpu::nrd` loads it at run time through a hand-written FFI whose
   structures were checked against MSVC's layout, behind the `nrd` cargo feature (on in the
   demos). `FORGE_NRD_DIR` points elsewhere; an empty folder runs without it.
-  - **Since #210 (2026-10-09): NRD 4.18.0, `master` at d3df343**, not yet a tagged release.
+  - **Since #210 (2026-10-09): NRD 4.18.0, `master` at d3df343**, then its tag (8f12a22,
+    released 2026-10-30, nine commits on: REBLUR's temporal accumulation normalises its
+    neighbours' normals safely, where opposing ones cancelled to a NaN; the rest is the SH and
+    SG resolves and RELAX, which Forge doesn't use; the headers unchanged).
     4.17.3's `SIGMA_ClassifyTiles` raced on its groupshared tile counters (`GroupMemoryBarrier`
     without a group sync, 7 206 reports from GPU-assisted validation over 1 200 frames of the
     yard); `master` synchronises them. The settings gained `motionVectorBias`,

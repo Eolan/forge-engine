@@ -17,7 +17,7 @@
 set -euo pipefail
 
 release=v4.18.0
-commit=d3df3435c876c29346d4538500eddd4621ce451a
+commit=8f12a22fc90e6a3c7f5da4c9c3103633c842963a
 here=$(cd "$(dirname "$0")/.." && pwd)
 sdk=$here/nrd-sdk
 case ${1:-} in
@@ -41,8 +41,8 @@ if [ -d "$src/.git" ]; then
   fi
   echo "NRD $release already in nrd-sdk/src"
 else
-  # By commit: 4.18.0 is master's, not a tagged release yet (#210: SIGMA's tile classification
-  # synchronises its threads there, 4.17.3 raced).
+  # By commit: the v4.18.0 tag's (2026-10-30). Forge ran master's d3df343 from #210 (SIGMA's tile
+  # classification synchronises its threads there, 4.17.3 raced) until the release.
   echo "cloning NRD $release ($commit) from https://github.com/NVIDIA-RTX/NRD"
   git init --quiet "$src"
   git -C "$src" remote add origin https://github.com/NVIDIA-RTX/NRD.git
@@ -68,10 +68,13 @@ cmake_bin="$vs\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake"
 
 build=$sdk/build
 script=$sdk/build.bat
+# CL=/wd4834: MSVC's headers (2026-10) mark `frexp` [[nodiscard]], and MathLib v11's `ml.h`
+# discards its result, which NRD's /WX turns into an error.
 cat > "$script" <<EOF
 @echo off
 call "$vs\\VC\\Auxiliary\\Build\\vcvars64.bat" >nul || exit /b 1
 set "PATH=$cmake_bin\\CMake\\bin;$cmake_bin\\Ninja;%PATH%"
+set "CL=/wd4834"
 cmake -S "$(cygpath -w "$src")" -B "$(cygpath -w "$build")" -G Ninja -DCMAKE_BUILD_TYPE=Release ^
   -DNRD_EMBEDS_SPIRV_SHADERS=ON -DNRD_EMBEDS_DXIL_SHADERS=OFF -DNRD_EMBEDS_DXBC_SHADERS=OFF ^
   -DSHADERMAKE_FIND_DXC=OFF -DNRD_NORMAL_ENCODING=4 -DNRD_ROUGHNESS_ENCODING=1 ^

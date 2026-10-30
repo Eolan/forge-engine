@@ -34,6 +34,9 @@
 # used unmodified, compiled into Forge's shaders, never committed.
 /sharc-sdk/
 /rtxgi-sdk/
+# NVIDIA's NRC v0.16.0.0 (the neural radiance cache, NVIDIA RTX only: CUDA 13 and Tensor Cores; the
+# NVIDIA RTX SDKs licence): its binaries and headers, never committed.
+/nrc-sdk/
 
 # Compiled shaders are rebuilt from shaders/*.slang
 *.spv
