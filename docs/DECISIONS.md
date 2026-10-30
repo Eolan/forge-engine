@@ -8747,7 +8747,9 @@ this one: "yes, record it and download them"):**
   cells do not, and at a few metres from the camera a room's floor and the street outside, both
   facing up, can share an entry. Finer levels (64³) did not change the village's room (0.305
   against 0.298 before the rays' world was fixed).
-- **`r.gi.cache`,** off until the owner turns it on. Measured (2026-10-30), the mean |log2| of
+- **`r.gi.cache`,** on by default since the owner's word (2026-10-30), after the classroom's sky
+  (below: the probes at the hits leak it through thin walls, the cache does not). Measured
+  (2026-10-30), the mean |log2| of
   16 × 9 tiles against `r.gi.reference=4`, and a still camera's changing pixels per pair of
   frames 10 apart:
 

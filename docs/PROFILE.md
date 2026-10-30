@@ -2622,7 +2622,7 @@ The village keeps its probes a metre apart. The other levers on the probes, meas
 (fewer rays, a slower cadence, a smaller finest cascade), are in D-088. The map check after
 #308's village and this: house 8.27 ms, green 7.04, main 6.84, hall 8.55, room 7.88.
 
-**The surface cache under the bounce** (`r.gi.cache`, off by default, D-088, 2026-10-30): three
+**The surface cache under the bounce** (`r.gi.cache`, on by default since the owner's word, D-088, 2026-10-30): three
 passes on the async compute queue before `gi/trace`, `gi/cache age`, `gi/cache rays` and
 `gi/cache blend`, over a pool of 65,536 entries (5.2 MB, the index 9.4 MB). The frame's GPU ms
 and the passes', one run each:

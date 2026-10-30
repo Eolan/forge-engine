@@ -2479,7 +2479,7 @@ bays 2 to 3 at Exterior_2 (D-088).
   gives the probes alone.
 - **`r.gi.probe_ahead`, 20 by default:** the most metres the finest probe cascade stands ahead
   along the view, as far as the view reaches.
-- **`r.gi.cache`, off by default:** D-088's surface cache read where the bounce's rays meet a
+- **`r.gi.cache`, on by default (the owner, 2026-10-30):** D-088's surface cache read where the bounce's rays meet a
   surface, in place of the probes (Bevy Solari's world cache on kajiya's dense index). In clay
   against Forge's path, Exterior_1 0.029 → 0.047 and Exterior_2 0.118 → 0.103, both a little
   darker than the path (×0.98, ×0.96); the village's landing 0.811 → 0.201 and its room
@@ -2556,10 +2556,10 @@ by hand outside the repository (`CREDITS.md`):
 room's thin walls and over its ceiling light it (D-088, "The probes' sky leaks into the
 classroom"); 1 m apart ×1.04, 0.5 m ×1.00. The cache matches the sky (×0.98).
 
-**Not yet:** the cache a few per cent dark (×0.93 in clay, its sun's bounce ×0.91); the probes'
-leak, which waits for the owner's choice (the cache at the hits, or finer probes); thin bright
-seams in the ceiling seen directly; the textured materials (the coated whiteboard, the metal
-frames).
+**Not yet:** the cache a few per cent dark (×0.93 in clay, its sun's bounce ×0.91) and soft
+blotches on the ceiling under the sky alone; thin bright seams in the ceiling seen directly; the
+textured materials (the coated whiteboard, the metal frames). The probes' leak is left to the
+probes alone: the owner chose the cache at the hits (on by default since, 2026-10-30).
 
 ## `FORGE_DYNAMIC_SCENE`: the scene edited as it runs (issues #220, #338)
 

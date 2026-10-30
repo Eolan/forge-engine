@@ -219,7 +219,7 @@ impl Gallery {
             show_input: s.add(rs::show_input(0)),
             gi_reference: s.add(rs::gi_reference(0)),
             gi_trace: s.add(rs::gi_trace(true)),
-            gi_cache: s.add(rs::gi_cache(false)),
+            gi_cache: s.add(rs::gi_cache(true)),
             gi_probe_ahead: s.add(rs::gi_probe_ahead(f64::from(crate::PROBE_AHEAD))),
             ao_ignore_nearer: s.add(rs::ao_ignore_nearer(0.0)),
             ao_contact: s.add(rs::ao_contact(f64::from(crate::AO_CONTACT))),
