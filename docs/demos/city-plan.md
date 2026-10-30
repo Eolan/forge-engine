@@ -2903,15 +2903,20 @@ and a quarter turn, the owner chose the turn and wooden railings. Where less tha
 width (1.1 m) of floor stands before its foot (`interior::FOOT_LANDING`, `Interior::turn`: 3, 5,
 18, 12 and 3 houses at 500 to 900 m, none at 400 m; the first map's 5 all of two storeys), its
 first four steps turn a quarter towards the corridor (`winders`): fanned from the square's corner
-on the open side where the straight steps go on, the first with its riser along the corridor,
-the last across the flight; four in the 1.12 m square so the flight keeps its length, head and
-headroom. Their blocks stand solid on the floor, the strings start past them, the cupboard's side
-too, and a face closes the flight's hollow there. The plastered half walls along the flights' open
-sides and round the stairwells are oak railings now (`railing`, the doors' waxed oak): a 6 × 5 cm
-handrail at their old top, square balusters 3.5 cm at most 10.5 cm apart (the codes' 11 cm
-sphere) and a 9 cm newel post at each end; the walker still meets them as the solids they were
-(`stair_guards`, `interior_solids`), and on a turning flight the railing and the guard beside it
-start past the turn.
+on the open side where the straight steps go on, the first with its riser along the corridor, the
+last ending where the straight steps begin; four in the 1.12 m square so the flight keeps its
+length, head and headroom, and run back over the floor behind the foot to the wall (the owner:
+"turning steps can be stuck to the wall, generally stairs don't leave gaps"). Their blocks stand
+solid on the floor, and the strings and the cupboard's side start past them (built from there:
+clipped, a string kept a point twice and the triangulation left a hole under the first newel
+post). The plastered half walls along the flights' open sides and round the stairwells are oak
+railings now (`railing`, the doors' waxed oak): a 6 × 5 cm handrail at their old top, square
+balusters 3.5 cm at most 10.5 cm apart (the codes' 11 cm sphere) and a 9 cm newel post at each end;
+the short guard under a next flight stays a plastered fill of its spandrel, and none stands within
+a turning next flight's steps. The walker still meets them as the solids they were (`stair_guards`,
+`interior_solids`); on a turning flight the railing and the guard beside it start past the turn.
+On the walking line the turning steps are about 22 cm deep (2h + g ≈ 0.55 m, under Blondel's
+0.60): steep, as an old house's turn is.
 
 ## Next (#245–#247)
 
