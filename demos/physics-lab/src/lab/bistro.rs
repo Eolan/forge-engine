@@ -23,6 +23,7 @@ use forge_render::dds::{
 };
 use forge_render::lamps::{EVERY_REGION, Emission, Lamp, WHITE_BALANCE};
 use forge_render::material::{ExternalMaps, external_layer, upload_compressed};
+use forge_render::textures::{ImageUse, decode_image};
 use glam::{Mat4, Quat, Vec3};
 
 use city_blocks::CityMaterials;
@@ -83,15 +84,19 @@ fn open_edges(model: &Model) -> HashMap<String, f64> {
         .collect()
 }
 
-/// An authored scene of the lab (D-083): the Bistro's exterior, or the material test chart
-/// (`tools/material-chart.py`): spheres and tiles of known materials under generated skies, to
-/// compare with Falcor's render of the same file.
+/// An authored scene of the lab (D-083): the Bistro's exterior, the material test chart
+/// (`tools/material-chart.py`): spheres and tiles of known materials under generated skies, or
+/// Bitterli's classroom (`tools/pbrt-to-gltf.py`), to compare with Falcor's render of the same
+/// file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Authored {
     /// The Amazon Lumberyard Bistro's exterior.
     Bistro,
     /// The material test chart.
     Chart,
+    /// "Japanese Classroom" by NovaZeeke (CC BY 3.0), in Benedikt Bitterli's pbrt-v4 conversion,
+    /// lit through its windows by a sky and the sun.
+    Classroom,
 }
 
 impl Authored {
@@ -105,6 +110,7 @@ impl Authored {
                 external.join("bistro/Bistro_v5_2"),
             ),
             Authored::Chart => (external.join("chart"), external.join("chart")),
+            Authored::Classroom => (external.join("classroom"), external.join("classroom")),
         }
     }
 
@@ -113,6 +119,7 @@ impl Authored {
         match self {
             Authored::Bistro => "BistroExterior",
             Authored::Chart => "chart",
+            Authored::Classroom => "classroom",
         }
     }
 }
@@ -161,16 +168,18 @@ pub(super) struct Bistro {
 pub(super) fn scene(which: Authored) -> Option<&'static Bistro> {
     static BISTRO: OnceLock<Option<Bistro>> = OnceLock::new();
     static CHART: OnceLock<Option<Bistro>> = OnceLock::new();
+    static CLASSROOM: OnceLock<Option<Bistro>> = OnceLock::new();
     let cell = match which {
         Authored::Bistro => &BISTRO,
         Authored::Chart => &CHART,
+        Authored::Classroom => &CLASSROOM,
     };
     cell.get_or_init(|| match read(which) {
         Ok(b) => Some(b),
         Err(e) => {
             tracing::warn!(
                 "no {which:?}: {e:#} (the Bistro: fetch the archive into assets/external/bistro/ \
-                 and run tools/fbx-to-gltf.py; the chart: run tools/material-chart.py; D-083)"
+                 and run tools/fbx-to-gltf.py; the chart: run tools/material-chart.py; the                  classroom: run tools/pbrt-to-gltf.py on its pbrt-v4 file; D-083)"
             );
             None
         }
@@ -202,14 +211,14 @@ fn read(which: Authored) -> Result<Bistro> {
         stamp(&format!("{stem}.gltf")),
         stamp(&format!("{stem}.bin"))
     );
-    // The Bistro's maps by material; the chart has factors alone.
+    // The Bistro's maps by material; the chart has factors alone, the classroom its own maps.
     let roles: HashMap<String, Roles> = match which {
         Authored::Bistro => serde_json::from_slice(
             &std::fs::read(converted.join("BistroExterior.textures.json"))
                 .context("BistroExterior.textures.json")?,
         )
         .context("BistroExterior.textures.json")?,
-        Authored::Chart => HashMap::new(),
+        Authored::Chart | Authored::Classroom => HashMap::new(),
     };
     let camera = std::fs::read(converted.join(format!("{stem}.camera.json")))
         .ok()
@@ -271,7 +280,8 @@ pub(super) fn build(which: Authored, first: usize) -> Vec<(usize, Mat4)> {
 /// by it; the FBX's directional light is for rasterisers, its readme says, and NVIDIA's
 /// path-traced renders leave it out). The chart's: the sky `FORGE_CHART_SKY` names among
 /// `tools/material-chart.py`'s (`sky-side-30.hdr` without it), as its Falcor scene reads it.
-/// `None` without the file.
+/// The classroom's: its pbrt sky turned into the same layout, its distant light drawn in as the
+/// sun (`tools/pbrt-to-gltf.py`). `None` without the file.
 pub(crate) fn environment(which: Authored) -> Option<Environment> {
     let (_, archive) = which.folders();
     let path = match which {
@@ -279,6 +289,7 @@ pub(crate) fn environment(which: Authored) -> Option<Environment> {
         Authored::Chart => archive.join(
             std::env::var("FORGE_CHART_SKY").unwrap_or_else(|_| "sky-side-30.hdr".to_owned()),
         ),
+        Authored::Classroom => archive.join("classroom.sky.hdr"),
     };
     if !path.exists() {
         tracing::warn!(path = %path.display(), "no sky photograph: lit by Forge's");
@@ -386,6 +397,33 @@ pub(super) fn rows(
         ids.insert(texture.name.clone(), id);
     }
     let map = |p: &Option<String>| p.as_ref().and_then(|p| ids.get(p).copied());
+    // The base colour maps the glTF holds itself (the classroom's PNGs), each decoded and
+    // uploaded once.
+    let mut own = HashMap::new();
+    for m in b.model.meshes.iter().flat_map(|mesh| &mesh.materials) {
+        let Some(t) = m.base_color_texture else {
+            continue;
+        };
+        if own.contains_key(&t.image) {
+            continue;
+        }
+        let Some(source) = b.model.images.get(t.image) else {
+            continue;
+        };
+        match decode_image(&source.name, &source.bytes, ImageUse::Color) {
+            Ok(data) => {
+                bytes += data.levels.iter().map(|l| l.len() as u64).sum::<u64>();
+                own.insert(t.image, materials.textures.add(&data)?);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    image = source.name,
+                    "a scene's own map does not decode: {e}"
+                );
+                missing += 1;
+            }
+        }
+    }
     let measured = std::time::Instant::now();
     let open = open_edges(&b.model);
     let open_time = measured.elapsed();
@@ -404,7 +442,10 @@ pub(super) fn rows(
                 let factors = r.specular.as_ref().and_then(|p| flat.get(p)).copied();
                 let maps = if uvs {
                     ExternalMaps {
-                        base_color: map(&r.base_color),
+                        base_color: map(&r.base_color).or_else(|| {
+                            m.base_color_texture
+                                .and_then(|t| own.get(&t.image).copied())
+                        }),
                         metal_rough: map(&r.specular).filter(|_| factors.is_none()),
                         // Its red, "occlusion" by the archive's readme, is 0 throughout: its own
                         // renderer reads none, and taken here it blacked out every shadow.
@@ -458,7 +499,9 @@ pub(super) fn rows(
                 } else {
                     maps
                 };
-                m.double_sided = m.name.ends_with(".DoubleSided")
+                // The classroom's as its file has them: pbrt's surfaces reflect on both sides.
+                m.double_sided = (which == Authored::Classroom && m.double_sided)
+                    || m.name.ends_with(".DoubleSided")
                     || maps.alpha_cutoff.is_some()
                     || SHEETS.iter().any(|s| m.name.contains(s))
                     || open.get(&m.name).is_some_and(|&o| o >= OPEN_SHEET);

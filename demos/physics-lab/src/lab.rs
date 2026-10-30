@@ -143,6 +143,11 @@ pub(crate) enum LabScene {
     /// `tools/material-chart.py`: spheres and tiles of known materials under a generated sky
     /// (`FORGE_CHART_SKY`), to compare with Falcor's render of the same file.
     Chart,
+    /// "Japanese Classroom" by NovaZeeke (CC BY 3.0; D-083), Benedikt Bitterli's pbrt-v4
+    /// conversion turned into `assets/external/classroom/` by `tools/pbrt-to-gltf.py`: a room lit
+    /// through its windows by a sky and the sun, to compare with Falcor's render and the scene's
+    /// own.
+    Classroom,
 }
 
 impl LabScene {
@@ -151,6 +156,7 @@ impl LabScene {
         match self {
             LabScene::Bistro => Some(bistro::Authored::Bistro),
             LabScene::Chart => Some(bistro::Authored::Chart),
+            LabScene::Classroom => Some(bistro::Authored::Classroom),
             _ => None,
         }
     }
@@ -713,6 +719,7 @@ impl LabWorld {
             | LabScene::Lamps
             | LabScene::Bistro
             | LabScene::Chart
+            | LabScene::Classroom
             | LabScene::Models => 0.0,
         };
         // The flight's is a field of grass, wide enough to fly over for a while.
@@ -732,6 +739,7 @@ impl LabWorld {
                 | LabScene::Lamps
                 | LabScene::Bistro
                 | LabScene::Chart
+                | LabScene::Classroom
         ) {
             let floor_shape = Shape::cuboid(Vec3::new(floor_half, 0.5, floor_half), 0.05, 0.0)?;
             world.add_body(&BodyDesc::fixed(&floor_shape, floor_at.as_dvec3()))?;
@@ -1242,6 +1250,9 @@ impl LabWorld {
             // Its props stand where the models' would: only one of the two is ever added.
             LabScene::Bistro => statics.extend(bistro::build(bistro::Authored::Bistro, MODELS)),
             LabScene::Chart => statics.extend(bistro::build(bistro::Authored::Chart, MODELS)),
+            LabScene::Classroom => {
+                statics.extend(bistro::build(bistro::Authored::Classroom, MODELS));
+            }
         }
         // The balls to throw, asleep out of sight until thrown, after the scene's.
         let mut thrown = Vec::new();

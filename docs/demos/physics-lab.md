@@ -2520,6 +2520,34 @@ path tracer, not one at a time as the Bistro's lamp post was (D-085).
   metal does not). Gold comes out silver: Forge's metals do not tint their reflections.
 - **Red:** like the grey, its highlight's white weaker when smooth (green 0.151 against 0.281).
 
+## `classroom`: a room lit through its windows, against Falcor (D-083, D-088)
+
+```
+blender -b --factory-startup --python tools/pbrt-to-gltf.py -- PATH/classroom/scene-v4.pbrt assets/external/classroom
+cargo run --release -p physics-lab -- --lab classroom --view=-1.6905,1.2716,5.8865,-8.705,1.622 --fov 35.9834 --capture-linear classroom.hdr
+```
+
+"Japanese Classroom" by NovaZeeke (CC BY 3.0) in Benedikt Bitterli's pbrt-v4 conversion, fetched
+by hand outside the repository (`CREDITS.md`):
+- **The converter** (`tools/pbrt-to-gltf.py`, Blender headless): the pbrt-v4 subset Bitterli's
+  conversions use, to one glTF in world space (79 shapes, 103,832 triangles, 44 materials, 3
+  maps), its camera (`classroom.view.txt`), and its sky in Falcor's layout: the infinite light's
+  equal-area map turned into the world, the distant light drawn in as a 0.5° disc of irradiance
+  10. Forge takes that sun back out (9.97 of 10); a unit of the sky is 12,800 cd/m², as the
+  chart's. `classroom.pyscene` is Falcor's scene of the same files.
+- **The comparison:** Forge's `--capture-linear` against Falcor's EXR times 12,800, the mean
+  |log2| of 16 × 9 tiles. Falcor with Lambert's diffuse (`BSDFConfig.slangh`'s `DiffuseBrdf`),
+  16 bounces, 4,096 samples a pixel: its default Frostbite diffuse is darker at roughness 1
+  (1/1.51), a stop indoors over the bounces.
+
+| Classroom | Forge's path | the probes | `r.gi.cache` |
+|---|---|---|---|
+| Clay | 0.184 (×1.08) | 0.416 (×1.19) | 0.127 (×1.005) |
+| Textured | 0.309 (×1.19) | 0.465 (×1.26) | 0.203 (×1.08) |
+
+**Not yet:** the clay ceiling and the walls' tops are darker in Falcor than in every Forge
+image; the textured materials (the coated whiteboard, the metal frames) differ too.
+
 ## `FORGE_DYNAMIC_SCENE`: the scene edited as it runs (issues #220, #338)
 
 The rain's scene built to take and free meshes and instances in place (`reserve_dynamic`), its

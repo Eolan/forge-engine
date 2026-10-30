@@ -1,16 +1,22 @@
-//! `contact-sheet out.png a.png b.png … [--columns N] [--width W] [--gap G] [--crop X,Y,W,H]`:
-//! lays captures out left to right, top to bottom, as thumbnails `W` pixels wide (aspect kept;
-//! triangle filter when shrinking, nearest when enlarging so pixels stay visible) separated by
-//! `G` pixels of black, optionally cropped first to the same rectangle. Used for the capture
-//! sequences and zoomed details in `docs/demos`.
+//! `contact-sheet out.png a.png b.png … [--columns N] [--width W] [--gap G] [--crop X,Y,W,H]
+//! [--label A --label B …]`: lays captures out left to right, top to bottom, as thumbnails `W` pixels
+//! wide (aspect kept; triangle filter when shrinking, nearest when enlarging so pixels stay
+//! visible) separated by `G` pixels of black, optionally cropped first to the same rectangle,
+//! each with its label (where it comes from: "Forge", "Falcor") small in its lower left corner.
+//! Used for the capture sequences and zoomed details in `docs/demos`.
 
 #![forbid(unsafe_code)]
 
 use std::path::PathBuf;
 
+use ab_glyph::{Font, FontRef, PxScale, ScaleFont, point};
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use image::{Rgba, RgbaImage, imageops};
+
+/// The labels' font: the overlay's JetBrains Mono (OFL), built in.
+const FONT: &[u8] =
+    include_bytes!("../../../assets/fonts/jetbrains-mono/JetBrainsMono-Variable.ttf");
 
 #[derive(Parser, Debug)]
 #[command(about = "Lays PNG captures out on a grid of thumbnails")]
@@ -31,6 +37,10 @@ struct Args {
     /// Crop every input to this rectangle first, "x,y,width,height".
     #[arg(long, value_parser = parse_rect)]
     crop: Option<[u32; 4]>,
+    /// A label for each input in order, one `--label` each (an empty one for none): drawn small
+    /// in the thumbnail's lower left corner.
+    #[arg(long = "label")]
+    labels: Vec<String>,
 }
 
 fn main() -> Result<()> {
@@ -57,7 +67,15 @@ fn main() -> Result<()> {
         };
         let height = (u64::from(image.height()) * u64::from(args.width)
             / u64::from(image.width().max(1))) as u32;
-        thumbs.push(imageops::resize(&image, args.width, height.max(1), filter));
+        let mut thumb = imageops::resize(&image, args.width, height.max(1), filter);
+        if let Some(text) = args
+            .labels
+            .get(thumbs.len())
+            .filter(|t| !t.trim().is_empty())
+        {
+            label(&mut thumb, text.trim())?;
+        }
+        thumbs.push(thumb);
     }
     let cell_height = thumbs.iter().map(RgbaImage::height).max().unwrap_or(1);
     let rows = (thumbs.len() as u32).div_ceil(columns);
@@ -86,6 +104,56 @@ fn main() -> Result<()> {
         sheet.width(),
         sheet.height()
     );
+    Ok(())
+}
+
+/// Writes `text` in the lower left corner of `image`: light grey on a translucent dark band, its
+/// height a 40th of the image's width (11 pixels at the least).
+fn label(image: &mut RgbaImage, text: &str) -> Result<()> {
+    let font = FontRef::try_from_slice(FONT).context("the labels' font")?;
+    let px = (image.width() as f32 / 40.0).max(11.0);
+    let scaled = font.as_scaled(PxScale::from(px));
+    let pad = (px / 3.0).round() as i32;
+    let width: f32 = text
+        .chars()
+        .map(|c| scaled.h_advance(scaled.glyph_id(c)))
+        .sum();
+    let (box_w, box_h) = (
+        width.ceil() as i32 + 2 * pad,
+        scaled.height().ceil() as i32 + pad,
+    );
+    let (x0, y0) = (0, image.height() as i32 - box_h);
+    let blend = |image: &mut RgbaImage, x: i32, y: i32, value: f32, alpha: f32| {
+        if x < 0 || y < 0 || x >= image.width() as i32 || y >= image.height() as i32 {
+            return;
+        }
+        let p = image.get_pixel_mut(x as u32, y as u32);
+        for c in 0..3 {
+            p[c] = (f32::from(p[c]) * (1.0 - alpha) + value * alpha).round() as u8;
+        }
+    };
+    for y in y0..y0 + box_h {
+        for x in x0..x0 + box_w {
+            blend(image, x, y, 0.0, 0.45);
+        }
+    }
+    let mut pen = (x0 + pad) as f32;
+    let baseline = (y0 + pad / 2) as f32 + scaled.ascent();
+    for c in text.chars() {
+        let mut glyph = scaled.scaled_glyph(c);
+        glyph.position = point(pen, baseline);
+        pen += scaled.h_advance(glyph.id);
+        if let Some(outlined) = scaled.font().outline_glyph(glyph) {
+            let bounds = outlined.px_bounds();
+            outlined.draw(|x, y, coverage| {
+                let (px, py) = (
+                    bounds.min.x as i32 + x as i32,
+                    bounds.min.y as i32 + y as i32,
+                );
+                blend(image, px, py, 235.0, coverage.clamp(0.0, 1.0) * 0.9);
+            });
+        }
+    }
     Ok(())
 }
 

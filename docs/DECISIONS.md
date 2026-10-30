@@ -8761,6 +8761,18 @@ this one: "yes, record it and download them"):**
   The frame costs the same: the cache's three passes 0.02–0.17 ms, `gi/trace` 0.25–0.45 ms
   cheaper in the Bistro (its hits read one entry instead of the probes' eight). At most 25,701
   entries in the room, 55,081 at the Bistro's textured Exterior_2, of 65,536.
+  Against Falcor in the classroom (`--lab classroom`, 2026-10-30; Falcor's path tracer with
+  Lambert's diffuse, as Forge's, 16 bounces, 4,096 samples a pixel), the same measure and the
+  frame's light:
+
+  | Classroom | Forge's path | probes at the hits | the cache |
+  |---|---|---|---|
+  | Clay | 0.184 (×1.08) | 0.416 (×1.19) | 0.127 (×1.005) |
+  | Textured | 0.309 (×1.19) | 0.465 (×1.26) | 0.203 (×1.08) |
+
+  Falcor's default diffuse (Frostbite's, 1/1.51 at roughness 1) made every Forge image a stop
+  brighter indoors, Forge's path as well: the gap grows with each bounce. The textured row
+  measures the materials too (the coated whiteboard, the metal frames).
 - **Credits:** the shaders carry Bevy's and kajiya's names, commits and licences in their header,
   and the changes Forge made.
 
