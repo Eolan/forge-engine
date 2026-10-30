@@ -282,9 +282,6 @@ public static const uint FLAG_BAKE_NORMAL = 268435456;
 // GGX without its multiple-scattering compensation (D-086, `r.specular.single_scatter`): Falcor's,
 // for the material chart's comparisons.
 public static const uint FLAG_SINGLE_SCATTER = 536870912;
-// D-088's near field by brute force (`r.gi.near_reference`): the light round each pixel from
-// NEAR_FIELD_REFERENCE_RAYS rays, no denoiser; a measure of the design, not a frame's.
-public static const uint FLAG_NEAR_REFERENCE = 1073741824;
 
 static const uint PAGE_NONE = 0xFFFFFFFF;           // an absent page in `page_table`, no page in `child_page`
 static const uint MESHLET_INDEX_MASK = 0x3FFFFFFFu;
@@ -521,7 +518,7 @@ public struct Frame
     public float grass_wind_before; // the sway's time the frame before (s): the blades' motion (`grass_motion_main`)
     public uint grass_depth;        // its cells along z
     public uint show_input;         // a debug view of a standard row's shading input (D-086, `r.show.input`, `shading_input`); 0: none
-    public uint grass_pad2;
+    public uint gi_reference;       // D-088's reference for the diffuse light (`r.gi.reference`, `near_field_reference`); 0: the probes
 };
 
 // Whether this thread's rays meet the movers: every pass's but the probes' unless their scene asks
@@ -4013,8 +4010,8 @@ float3 sun_light(Frame* f, float3 albedo, float3 n, float3 geometric, float spec
             if (reflects)
                 sky_share = saturate(toward_r / max(open_r, 1e-4));
         }
-        // D-088's near field, by brute force (`shade_pixel` traced it once): its rays see the
-        // occlusion GTAO stood for.
+        // D-088's reference (`shade_pixel` traced it once): its rays see the occlusion GTAO
+        // stood for.
         if (g_near_on)
         {
             irradiance = g_near_irradiance;
@@ -6057,22 +6054,81 @@ RayHit ray_hit_seen(Frame* f, uint instance, uint primitive, float2 b, float3 or
     return hit;
 }
 
-// D-088's near field (its design measured, `FLAG_NEAR_REFERENCE`): the light round a surface at
-// `world` facing `n` (its face `geometric`) from NEAR_FIELD_REFERENCE_RAYS cosine-weighted rays
-// to NEAR_FIELD_RANGE. A ray that meets a surface takes the light it sends back (`hit_radiance`:
-// the sun through a shadow ray, its albedo times its probes' light); one that leaves the range
-// takes the probes' light at its end, facing on along it: the probes beyond the near occluders,
-// where the surface's own lookup took those round it, which see the open street past an awning
-// or a window bay. Irradiance in the resolve's units, as `probe_irradiance`'s.
+// D-088's references for the light round a surface at `world` facing `n` (its face `geometric`),
+// `r.gi.reference`: NEAR_FIELD_REFERENCE_RAYS cosine-weighted rays a pixel, no denoiser; measures,
+// far from a frame's time. By `mode`:
+// 1. the near field D-088 first proposed: rays to NEAR_FIELD_RANGE. A hit takes the light it
+//    sends back (`hit_radiance`: the sun through a shadow ray, its albedo times its probes'
+//    light); a ray that leaves the range the probes' light at its end, facing on along it.
+// 2. one bounce traced to the scene's end (`path_from`), the probes' light at its hit for the
+//    bounces after; the sky's own along a ray that meets nothing.
+// 3. two bounces traced, the probes' light at the second hit.
+// 4. a path without the probes: Forge's own diffuse reference, each hit lit by the sun and the
+//    lamps, on until its weight falls under PATH_LEAST_WEIGHT.
+// The hits reflect by their albedo, not their highlight: 3 to 6 % of the light under the
+// Bistro's awnings in matte (2026-10-30). Irradiance in the resolve's units, as
+// `probe_irradiance`'s.
+static const uint GI_REFERENCE_NEAR = 1u;
+static const uint GI_REFERENCE_PATH = 4u;
 static const uint NEAR_FIELD_REFERENCE_RAYS = 32;
 static const float NEAR_FIELD_RANGE = 2.0;
+static const float PATH_RANGE = 50000.0;
+static const uint PATH_MOST_BOUNCES = 10u;
+static const float PATH_LEAST_WEIGHT = 0.002;
 
-// The pixel's near field (`near_field_reference`), traced once in `shade_pixel` for every class's
+// The pixel's reference (`near_field_reference`), traced once in `shade_pixel` for every class's
 // `sun_light` (one copy of its rays in the shader, #348), and whether it holds one.
 static float3 g_near_irradiance = float3(0.0);
 static bool g_near_on = false;
 
-float3 near_field_reference(Frame* f, float4* sky, ProbeField* probes, float3 world, float3 geometric, float3 n)
+// A cosine-weighted direction round the unit `n` from two numbers in [0, 1).
+float3 cosine_direction(float3 n, float u1, float u2)
+{
+    float3 t = normalize(cross(abs(n.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0), n));
+    float3 b = cross(n, t);
+    float r = sqrt(u1);
+    float phi = 6.2831853 * u2;
+    return normalize(t * (r * cos(phi)) + b * (r * sin(phi)) + n * sqrt(max(1.0 - u1, 0.0)));
+}
+
+// The light a path brings back from `hit`, met along `d`, in the resolve's units: each hit's sun
+// and lamps, then on along a cosine-weighted ray from it, the sky's light where one meets
+// nothing. After `traced` hits, the probes' light at the last for the bounces after; with 0 a path
+// to its end, the probes unread.
+float3 path_from(Frame* f, float4* sky, ProbeField* probes, RayHit hit, float3 d, uint seed, uint traced)
+{
+    float3 sum = float3(0.0);
+    float3 weight = float3(1.0);
+    for (uint k = 0u; k < PATH_MOST_BOUNCES; k++)
+    {
+        if (hit.back)
+            break;
+        sum += weight * (hit_sunlight(f, hit) + hit_lamps(f, hit, REGION_NONE, seed + k, false));
+        weight *= hit.albedo;
+        if (k + 1u == traced)
+        {
+            float3 ambient = sh_irradiance(sky, hit.n);
+            if (probes != nullptr)
+                ambient = probe_irradiance_hit(probes, hit.position, hit.n, -d, ambient, false);
+            return sum + weight * ambient;
+        }
+        if (max(weight.x, max(weight.y, weight.z)) < PATH_LEAST_WEIGHT)
+            break;
+        d = cosine_direction(hit.n, hash_unit(seed + k * 2u + 101u), hash_unit(seed + k * 2u + 102u));
+        RayDesc ray;
+        ray.Origin = hit.position + hit.n * 0.01;
+        ray.Direction = d;
+        ray.TMin = 0.0;
+        ray.TMax = PATH_RANGE;
+        ClosestHit c = trace_closest(f, ray);
+        if (!c.hit)
+            return sum + weight * sky_along(sky, d);
+        hit = ray_hit(f, c.instance, c.primitive, c.barycentrics, ray.Origin, d, c.t);
+    }
+    return sum;
+}
+
+float3 near_field_reference(Frame* f, float4* sky, ProbeField* probes, float3 world, float3 geometric, float3 n, uint mode)
 {
     float3 t = normalize(cross(abs(n.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0), n));
     float3 b = cross(n, t);
@@ -6094,16 +6150,20 @@ float3 near_field_reference(Frame* f, float4* sky, ProbeField* probes, float3 wo
         ray.Origin = origin;
         ray.Direction = d;
         ray.TMin = 0.0;
-        ray.TMax = NEAR_FIELD_RANGE;
+        ray.TMax = mode == GI_REFERENCE_NEAR ? NEAR_FIELD_RANGE : PATH_RANGE;
         ClosestHit c = trace_closest(f, ray);
         if (c.hit)
         {
             RayHit hit = ray_hit(f, c.instance, c.primitive, c.barycentrics, origin, d, c.t);
-            if (!hit.back)
+            if (mode != GI_REFERENCE_NEAR)
+                sum += path_from(f, sky, probes, hit, d, seed + i * 977u, mode == GI_REFERENCE_PATH ? 0u : mode - 1u);
+            else if (!hit.back)
                 sum += hit_radiance(f, sky, probes, hit, d);
         }
-        else
+        else if (mode == GI_REFERENCE_NEAR)
             sum += probe_irradiance(probes, origin + d * NEAR_FIELD_RANGE, d, d, -d, sh_irradiance(sky, d));
+        else
+            sum += sky_along(sky, d);
     }
     return sum / float(NEAR_FIELD_REFERENCE_RAYS);
 }
@@ -6927,10 +6987,10 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     // normal, lobe and reflectance, where they took the row's factors (on a mapped row roughness
     // 1: the Bistro's scooter matte under its lamps). The other classes, their rows' factors.
     StandardInputs si = class_index == MATERIAL_CLASS_STANDARD ? standard_inputs(f, mat, s) : row_inputs(mat, s);
-    // D-088's near field by brute force, a measure of its design (`r.gi.near_reference`).
-    g_near_on = SHADOWS != 0 && (f[0].flags & FLAG_NEAR_REFERENCE) != 0 && s.probes != nullptr && s.sky != nullptr && f[0].tlas != 0;
+    // D-088's references for the diffuse light (`r.gi.reference`).
+    g_near_on = SHADOWS != 0 && f[0].gi_reference != 0u && s.probes != nullptr && s.sky != nullptr && f[0].tlas != 0;
     if (g_near_on)
-        g_near_irradiance = near_field_reference(f, s.sky, s.probes, surface_scene, s.n, si.li.n);
+        g_near_irradiance = near_field_reference(f, s.sky, s.probes, surface_scene, s.n, si.li.n, f[0].gi_reference);
     // The lamps (D-065): every one whose reach the surface is in and that lights its room, times
     // the filtered share of their light that reaches it (`lamp_filter_main`), or with a shadow ray
     // each; the classes take them where they take the sun (`sun_light`).

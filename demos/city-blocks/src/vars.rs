@@ -25,6 +25,7 @@ pub(crate) struct RenderVars {
     ao_radius: Var<f64>,
     texture_lod_bias: Var<f64>,
     show_input: Var<i64>,
+    gi_reference: Var<i64>,
     ao_ignore_nearer: Var<f64>,
     exposure_brighten: Var<f64>,
     exposure_darken: Var<f64>,
@@ -75,7 +76,6 @@ impl Gallery {
             (rs::sky_reflections(true), CullFlags::SKY_REFLECTIONS, true),
             (rs::ray_reflections(true), CullFlags::RAY_REFLECTIONS, true),
             (rs::single_scatter(false), CullFlags::SINGLE_SCATTER, false),
-            (rs::near_reference(false), CullFlags::NEAR_REFERENCE, false),
             (rs::occlusion(true), CullFlags::OCCLUSION, true),
             (rs::lod(true), CullFlags::LOD, true),
             (
@@ -213,6 +213,7 @@ impl Gallery {
                 self.renderer.texture_lod_bias,
             ),
             show_input: s.add(rs::show_input(0)),
+            gi_reference: s.add(rs::gi_reference(0)),
             ao_ignore_nearer: s.add(rs::ao_ignore_nearer(0.0)),
             exposure_brighten: s.add_from_f32(
                 rs::exposure_speed_brighten(0.8),
@@ -363,6 +364,9 @@ impl Gallery {
         }
         if s.changed_since(v.show_input, seen) {
             self.renderer.show_input = s.get(v.show_input).clamp(0, 6) as u32;
+        }
+        if s.changed_since(v.gi_reference, seen) {
+            self.renderer.gi_reference = s.get(v.gi_reference).clamp(0, 4) as u32;
         }
         if s.changed_since(v.ao_ignore_nearer, seen) {
             self.ao_ignore_nearer = s.get(v.ao_ignore_nearer) as f32;

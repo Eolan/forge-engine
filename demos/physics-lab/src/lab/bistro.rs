@@ -391,7 +391,9 @@ pub(super) fn rows(
     let open_time = measured.elapsed();
     let mut rows_made = 0;
     let clay = std::env::var("FORGE_BISTRO_CLAY").is_ok_and(|v| v == "1");
-    let matte = std::env::var("FORGE_BISTRO_MATTE").is_ok_and(|v| v == "1");
+    let matte_mode = std::env::var("FORGE_BISTRO_MATTE").unwrap_or_default();
+    let matte = matte_mode == "1" || matte_mode == "diffuse";
+    let diffuse = matte_mode == "diffuse";
     for (k, mesh) in b.model.meshes.iter().enumerate() {
         let uvs = !mesh.mesh.uvs.is_empty();
         let rows = mesh
@@ -461,6 +463,12 @@ pub(super) fn rows(
                     || SHEETS.iter().any(|s| m.name.contains(s))
                     || open.get(&m.name).is_some_and(|&o| o >= OPEN_SHEET);
                 let mut layer = external_layer(&m, maps);
+                // `FORGE_BISTRO_MATTE=diffuse` (the Falcor script's `BISTRO_DIFFUSE`): no
+                // reflection at all, the diffuse light alone.
+                if diffuse {
+                    layer.specular = 0.0;
+                    layer.reflectance = 0.0;
+                }
                 // D-087's prototype: a glowing piece lights as a lamp, and the probes' rays take
                 // none of its glow.
                 layer.lamp = maps.emissive.is_some() && lamps;
@@ -909,6 +917,77 @@ mod tests {
                 "one side"
             };
             println!("{name}: {:.1} % open, {why}", 100.0 * share);
+        }
+    }
+
+    /// Each base colour map's mean, linear, against its last level as stored, which a probe's ray
+    /// reads for the surface it meets (`ray_hit`): level 0's mean over every texel and over the
+    /// kept ones (alpha ≥ 0.5), and the last level's, as luminance.
+    /// `cargo test --release -p physics-lab bistro_albedo_means -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bistro_albedo_means() {
+        let Some(b) = scene(Authored::Bistro) else {
+            return;
+        };
+        let (_, archive) = Authored::Bistro.folders();
+        let srgb: [f32; 256] = std::array::from_fn(|v| {
+            let c = v as f32 / 255.0;
+            if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        });
+        let luma = Vec3::new(0.2126, 0.7152, 0.0722);
+        let mean = |plane: &[[u8; 3]], keep: &dyn Fn(usize) -> bool| {
+            let (sum, n) = plane
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| keep(*i))
+                .fold((Vec3::ZERO, 0), |(s, n), (_, c)| {
+                    (s + Vec3::from(c.map(|v| srgb[usize::from(v)])), n + 1)
+                });
+            sum / n.max(1) as f32
+        };
+        let mut paths: Vec<(String, String)> = b
+            .roles
+            .iter()
+            .filter_map(|(m, r)| Some((r.base_color.clone()?, m.clone())))
+            .collect();
+        paths.sort();
+        paths.dedup_by(|a, b| a.0 == b.0);
+        for (path, material) in paths {
+            let Some(t) = std::fs::read(archive.join(&path))
+                .ok()
+                .and_then(|bytes| read_dds(&path, &bytes, true).ok())
+            else {
+                continue;
+            };
+            let Some(plane) = color_plane(&t) else {
+                continue;
+            };
+            let alpha = alpha_plane(&t);
+            let all = mean(&plane, &|_| true);
+            let kept = mean(&plane, &|i| alpha.as_ref().is_none_or(|a| a[i] >= 128));
+            let n = t.levels.len() - 1;
+            let last = forge_render::dds::CompressedTexture {
+                width: (t.width >> n).max(1),
+                height: (t.height >> n).max(1),
+                levels: vec![t.levels[n].clone()],
+                ..t.clone()
+            };
+            let end = color_plane(&last).map_or(Vec3::ZERO, |p| mean(&p, &|_| true));
+            println!(
+                "{material}: {}x{} {} levels, mean {:.3} kept {:.3} last {:.3} ({:.2} of the kept)",
+                t.width,
+                t.height,
+                t.levels.len(),
+                all.dot(luma),
+                kept.dot(luma),
+                end.dot(luma),
+                end.dot(luma) / kept.dot(luma).max(1e-6)
+            );
         }
     }
 

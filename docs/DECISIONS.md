@@ -8383,7 +8383,7 @@ code, as the owner asks.
 denoiser; measured before and after on the Bistro, the village and the city.
 
 **First measurements (2026-10-30), before building the pass:**
-- **The design by brute force** (`r.gi.near_reference`: 32 rays a pixel to 2 m, no denoiser,
+- **The design by brute force** (`r.gi.reference=1`: 32 rays a pixel to 2 m, no denoiser,
   39 ms): in clay at Exterior_2 against Falcor in Lambert, the café's window bays from 2–3 to
   1.4–2.7, but other shaded tiles brighter (1.0–1.3 to 1.2–1.8). Every probe lookup near the
   awnings is too bright, at the rays' ends and at their hits alike: the probes' light itself leaks
@@ -8406,4 +8406,67 @@ denoiser; measured before and after on the Bistro, the village and the city.
   albedos round it, the light under the awning falls short, part GTAO's multi-bounce darkening of
   dark surfaces, part the probes there. Next: the probes under the awning (their placement,
   activity and what their rays meet), before the near field's pass.
+
+**Measured further (2026-10-30, the owner: "continue with D-088"), and the design amended:**
+- **Forge's own reference** (`r.gi.reference`, 32 rays a pixel, no denoiser): `4` a diffuse path
+  without the probes, each hit lit by the sun and the lamps, the sky's light where a ray meets
+  nothing; `2` one bounce traced to the scene's end and the probes' light at its hit; `3` two;
+  `1` the 2 m near field above. Against Falcor in Lambert, in clay, the path is within 1.0 to
+  1.15 at both views. A few tiles differ by 1.4 to 1.7 in every Forge picture alike, so they
+  are the scenes' own differences. The scene, the sky and the units agree, so the light's
+  system can be judged against Forge's path, the same scene, apart from what differs between
+  the scenes.
+- **The scenes' differences, apart:** with the materials (`FORGE_BISTRO_MATTE=diffuse` and the
+  Falcor script's `BISTRO_DIFFUSE`: no reflection in either), Forge's path against Falcor:
+  - under Exterior_2's awnings, the near table 0.77, the awnings' undersides 0.69, the café's
+    front 0.79;
+  - the street and the floor 0.98 to 0.99;
+  - the café's front shows thin lines of sun, the converter's seams.
+  The hits' missing highlight explains 3 to 6 %. The rest is a question of the scenes, listed
+  for its own look.
+- **The probes alone, against Forge's path (diffuse, Exterior_2):** the near table 0.60, the
+  next 0.77, the floor 0.86, the café's front 1.27, the awnings' undersides 1.99, the window
+  1.10. Three causes:
+  1. **Coverage:** cascade 0 is 24 × 12 × 24 probes a metre apart, ±11 m round the camera.
+     From Exterior_1's camera, 6.9 m up, the shaded fronts take the 4 m cascade and further
+     back the 8 and 16 m ones (a debug colour per cascade). The 1 m cascade over the whole
+     view (`--probe-finest 96,16,96`) brings Exterior_1's shade from 1.3–1.8 to 1.0–1.25 of
+     Falcor's, in clay, now that the awning's leak is gone (1.3–2.0 with it).
+  2. **The back-face floor:** DDGI's weight `facing² + 0.2` lets a probe behind the surface
+     count a fifth. The probes inside the café, behind its panes, bleed through them where
+     Chebyshev passes. Without the 0.2, the window bays go from 2–3 to 1.3–1.7 of Falcor's
+     (the path: 1.15–1.3), and Exterior_2's clay from 0.8–3.1 to 0.9–1.4.
+  3. **Irradiance, not radiance:** a probe holds a cosine-weighted mean of the light round a
+     direction, so a ray ending in mid-air takes a blur: a bright street seen through a narrow
+     opening thins out. With matte materials, the near field to 2 m lifts the near table from
+     0.47 to 0.57 of Falcor's, to 30 m 0.87.
+- **The probes' light at a ray's hit is biased bright:** the probes float in open air, see more
+  sky than a surface does, and the far hits take the coarse cascades. With one bounce traced
+  and the probes at its hit (`2`), clay comes out at 1.05–2.3 of Falcor's at Exterior_2 (the
+  path 1.0–1.15), even without the floor. With two bounces traced (`3`), 1.03–1.6. With the
+  sun alone at the hits, 0.1–0.6: in clay the bounces after the first carry most of the light
+  under the terrace. With the Bistro's real albedos (0.03 to 0.4) they carry little: one bounce
+  traced lands within 1.0–1.10 of the path everywhere measured (the near table 1.04, the
+  awnings 1.10, the café's front 1.05), against the probes' 0.60–1.99.
+- **The 2 m near field cannot work over these probes:** its rays' ends read irradiance as if it
+  were radiance (3 above), and its hits read the bias above.
+
+**The amended design** (still D-008's T2 tier's first step; the decision's other parts stand):
+1. **One bounce traced per pixel to the scene's end,** not to 2 m: at half resolution, one
+   cosine-weighted ray a pixel a frame. Its hit is lit by the sun through a shadow ray, the
+   lamps (`hit_lamps`), its emission, and its albedo times the probes' light for the bounces
+   after. A ray that meets nothing takes the sky's radiance along it. GTAO is off where the
+   bounce is on: its rays see the occlusion.
+2. **Denoised** by NRD's REBLUR as decided, with Forge's own temporal and spatial filter where
+   NRD is absent.
+3. **The probes:** the back-face floor goes (2 above). They stay the light past the traced
+   bounce, the mirror rays' hits and the far field. Their coverage (1 above) matters less
+   under the traced bounce; it is measured again once the pass is in.
+4. **Brighter scenes** (the village's white walls, clay): the bias at the hits shows there. The
+   remedy is a cache on the surfaces themselves, read at the hits. Ward's irradiance caching
+   (1988) is free; NVIDIA's spatial-hash radiance cache and path space filtering may be
+   patented. That cache is a proposal of its own after the pass, patents checked first.
+5. **Targets, against Forge's own path (`r.gi.reference=4`):** 0.9 to 1.1 with the materials,
+   0.85 to 1.2 in clay; a still camera no less steady than now; at most 1.5 ms at
+   1600 × 900.
 

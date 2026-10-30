@@ -105,8 +105,6 @@ impl CullFlags {
     /// GGX without its multiple-scattering compensation (D-086): Falcor's, for the material
     /// chart's comparisons (`FLAG_SINGLE_SCATTER` in the shader).
     pub const SINGLE_SCATTER: u32 = 1 << 29;
-    /// D-088's near field by brute force, a measure of its design (`FLAG_NEAR_REFERENCE`).
-    pub const NEAR_REFERENCE: u32 = 1 << 30;
     /// Everything on except the debug views.
     pub const DEFAULT: Self = Self(Self::CONE | Self::FRUSTUM | Self::OCCLUSION | Self::LOD);
 
@@ -722,7 +720,8 @@ struct GpuFrame {
     grass_depth: u32,
     /// A debug view of a standard row's shading input (D-086, [`MeshletRenderer::show_input`]).
     show_input: u32,
-    grass_pad2: u32,
+    /// D-088's reference for the diffuse light ([`MeshletRenderer::gi_reference`]).
+    gi_reference: u32,
 }
 
 /// Where a frame slot's light lists start in its lamps' buffer, bytes: after the lamps.
@@ -3994,6 +3993,10 @@ pub struct MeshletRenderer {
     /// diffuse albedo, 2 the roughness, 3 the metalness, 4 the normal, 5 the lobe's widening
     /// (Toksvig red, the geometry's green), 6 Fresnel's F0.
     pub show_input: u32,
+    /// D-088's references for the diffuse light round each pixel (`r.gi.reference`), 32 rays a
+    /// pixel: 0 none (the probes), 1 the near field to 2 m over the probes, 2 one bounce traced
+    /// and the probes after, 3 two bounces, 4 a path without the probes.
+    pub gi_reference: u32,
 }
 
 /// What to draw this frame.
@@ -4567,6 +4570,7 @@ impl MeshletRenderer {
             noise_frame: 0,
             texture_lod_bias: 0.0,
             show_input: 0,
+            gi_reference: 0,
         })
     }
 
@@ -5099,7 +5103,7 @@ impl MeshletRenderer {
             grass_wind_before: grass_before,
             grass_depth,
             show_input: self.show_input,
-            grass_pad2: 0,
+            gi_reference: self.gi_reference,
         }
     }
 

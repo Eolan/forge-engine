@@ -327,12 +327,15 @@ pub fn sky_reflections(default: bool) -> Spec<bool> {
     )
 }
 
-/// D-088's near field by brute force: its design measured, far from real time.
-pub fn near_reference(default: bool) -> Spec<bool> {
-    Spec::bool(
-        "r.gi.near_reference",
+/// D-088's references for the diffuse light round each pixel: measures, far from real time.
+pub fn gi_reference(default: i64) -> Spec<i64> {
+    Spec::int(
+        "r.gi.reference",
         default,
-        "The light round each pixel from 32 rays to 2 m and the probes past them (D-088's design, measured; slow).",
+        0..=4,
+        "The diffuse light from 32 rays a pixel (D-088, slow): 1 to 2 m and the probes past them, \
+         2 one bounce traced and the probes after, 3 two bounces, 4 a path without the probes; \
+         0 the probes.",
     )
 }
 
