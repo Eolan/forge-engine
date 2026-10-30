@@ -133,6 +133,18 @@ The run and its table (`light.txt`) stay in `captures/light/<time>/`. Not run by
 by hand after a lighting change, and with the map check once its patches are placed on what
 the issues name (#353, #334, #356: a far wall seen from two distances is the handoff rule).
 
+**The light against the references** (2026-10-30, D-083's calibration, D-088):
+`tools/gi-compare.sh [OUT_DIR]` runs each diffuse light technique (`r.gi.cache` off, port,
+sharc) over the Bistro (in clay and textured), the classroom and the village's landing, room and
+street.
+- **The error:** each technique against Forge's path tracer and Falcor's renders (outside the
+  repository, `FALCOR_OUT`), by the mean |log2| of 16 × 9 tiles of light.
+- **The cost:** the GPU ms of alternating runs.
+- **The output,** in `captures/gi-compare/`: a sheet per view and `summary.md`.
+- **When:** a change of technique, or of what the bounce's rays read, reruns it. The tables in
+  D-088 were made by the session scripts it replaces. About an hour for every view; `FORGE_VIEWS` and `FORGE_REUSE=1` (keep the
+  path tracer's captures) shorten it.
+
 - **The pass tests** (2026-10-25, the audit's step 4): GPU tests in `cargo test`, each a pass
   over synthetic inputs run through the render graph on a device with no window
   (`forge_gpu::Headless`), its output read back and judged in milliseconds. They run with
