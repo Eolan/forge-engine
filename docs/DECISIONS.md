@@ -8232,6 +8232,8 @@ brackets. At the Night view, Forge's light over Falcor's:
   unchanged without the probes or the mirror rays: the resolve's choice of the lamps it traces,
   and the thin geometry (0.37 % by day). Short of 0.2 %.
 - **Cost:** 4.1 ms of GPU to 8.6 (the 64) or 11.2 (all): no regions, so every pixel takes most
-  lamps (D-065's lists, its clustered lists still to come).
+  lamps (D-065's lists, its clustered lists still to come). With the probes a metre apart (the
+  authored scenes' look since), 13.6 ms with all: each probe ray's hit weighs every lamp
+  (`hit_lamps`); the light and the flicker (6,111 pixels) the same.
 - **Open:** the many-lights path's cost and its noise as lamps grow; the street lamps by ReSTIR
   DI not tried (`--street-restir` needs them `outside`).

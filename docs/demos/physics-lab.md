@@ -2398,7 +2398,8 @@ on a 16 × 9 grid):
   day).
 - **Cost:** 4.1 ms of GPU at midnight without them; 8.6 ms with the 64 nearest (lamp rays 2.2,
   lamp filter 1.1, the resolve +0.9); 11.2 ms with all (lamp rays 3.3). Each lamp has no
-  region and reaches 27 to 70 m, so every pixel takes most of them.
+  region and reaches 27 to 70 m, so every pixel takes most of them. With the probes a metre apart
+  (the look since Exterior_2), 13.6 ms with all: each probe ray's hit weighs every lamp.
 - **Not Forge's to match:** the beam over the flower basket and the basket's leaves, 1.5 to 3.6
   times Falcor's: Falcor draws a material one-sided unless its name says `.DoubleSided` and
   shades a back face black; Forge draws the awnings' beams (an "Awning" sheet) and cut-out
