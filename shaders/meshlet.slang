@@ -7627,6 +7627,19 @@ DiffuseTracePush diffuse_trace_push;
 // seams under REBLUR both ways (the owner, 2026-10-30).
 static const float DIFFUSE_START = 0.02;
 
+// How far a diffuse ray from a drawn pixel starts: DIFFUSE_START, but a terrain's as its sun's
+// rays (`shadow_bias`), past the gap between the drawn cut and the one the rays meet. The
+// island's sea floor drawn finer than its cut, up to a metre under it, started its rays under
+// the cut's triangles; they met their backs, black, in wedges with straight edges that moved
+// with the view as the drawn cut did (the owner, 2026-10-30).
+float diffuse_start(Frame* f, uint vis, PixelSurface s)
+{
+    RtScene* rs = f[0].rt_scene;
+    if (is_grass(vis) || rs == nullptr || rs[0].meshes[s.inst.mesh].shadow_start <= 0.0)
+        return DIFFUSE_START;
+    return shadow_bias(f, s.inst, s.m);
+}
+
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void diffuse_trace_main(uint3 id : SV_DispatchThreadID)
@@ -7667,7 +7680,7 @@ void diffuse_trace_main(uint3 id : SV_DispatchThreadID)
     float3 d = cosine_direction(s.n, u.x, u.y);
     if (dot(d, s.g) < 0.0)
         d -= 2.0 * dot(d, s.g) * s.g;
-    ray.Origin = to_scene(f, s.relative) + s.n * DIFFUSE_START;
+    ray.Origin = to_scene(f, s.relative) + s.n * diffuse_start(f, vis, s);
     ray.Direction = d;
     ray.TMin = 0.0;
     ray.TMax = PATH_RANGE;

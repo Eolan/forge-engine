@@ -8486,7 +8486,9 @@ day, with the finest cascade ahead below):
   Its hit takes the sun through a shadow ray, the lamps, its glow, and its albedo times the
   probes' light; a miss takes the sky's light along the ray. Rays start 2 cm off along the
   vertices' normal and are mirrored over their triangle's own face where that normal bends round
-  a box's edge. The light is written in YCoCg with the ray's normalised length, as REBLUR reads
+  a box's edge. A terrain's start as its sun's rays (`shadow_bias`), past the gap between its
+  drawn cut and the rays' (#364): from 2 cm the island's sea floor, drawn up to a metre under the
+  cut, met the cut's backs in black wedges that moved with the view. The light is written in YCoCg with the ray's normalised length, as REBLUR reads
   it.
 - **Denoised by REBLUR_DIFFUSE** (NRD 4.18, the library SIGMA comes from; `forge_gpu::nrd` now
   runs either from one instance type). Half the pixels traced each frame, in a checkerboard (every
