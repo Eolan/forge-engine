@@ -7660,6 +7660,33 @@ float diffuse_start(Frame* f, uint vis, PixelSurface s)
     return shadow_bias(f, s.inst, s.m);
 }
 
+// `trace_past_glass` from a drawn pixel, and on past the back of its own mesh's traced cut where
+// the ray meets it within the gap the cut may leave in front of the drawn surface (twice the cut's
+// error and the drawn cluster's own, as `lamp_shadow_start`'s, #367): the ray started behind the
+// traced surface, not inside a solid. The city's towers, 3 M triangles cut to 40 000, stand up to
+// 1.4 m off their drawn walls; the rays from their recessed windows and under their ledges met
+// the cut's back, black, in wedges with the cut's straight edges (the owner, 2026-10-30). Larger
+// starts (the terrain's) would skip what really stands close to the surface. Where the cut fills
+// the wedge under a ledge, the wall's rays up from under it now find the sky rather than black.
+// One call in a loop, not two: each inlines the ray queries' loops (#348).
+ClosestHit trace_from_pixel(Frame* f, uint vis, PixelSurface s, RayDesc ray, uint seed)
+{
+    RtScene* rs = f[0].rt_scene;
+    float gap = 0.0;
+    if (!is_grass(vis) && rs != nullptr)
+        gap = 2.0 * (rs[0].meshes[s.inst.mesh].cut_error + s.m.self_error) * s.inst.scale;
+    ClosestHit c = {};
+    [loop]
+    for (uint k = 0u; k < 2u; k++)
+    {
+        c = trace_past_glass(f, ray, true, seed);
+        if (k == 1u || !c.hit || c.mover || c.t >= gap || f[0].instances[c.instance].mesh != s.inst.mesh || !ray_back_face(f, c.instance, c.primitive, ray.Direction))
+            break;
+        ray.TMin = c.t + 0.002;
+    }
+    return c;
+}
+
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void diffuse_trace_main(uint3 id : SV_DispatchThreadID)
@@ -7707,7 +7734,7 @@ void diffuse_trace_main(uint3 id : SV_DispatchThreadID)
     // The crowns as the probes see them, a quarter of their leaves, by a number fixed per pixel:
     // every leaf card kept, a tree's outer leaves saw the crown round them as a wall and the near
     // trees went black beside their impostors (the village from the air, 2026-10-30).
-    ClosestHit c = trace_past_glass(f, ray, true, (pixel.x * 0x8DA6B343u) ^ (pixel.y * 0xD8163841u));
+    ClosestHit c = trace_from_pixel(f, vis, s, ray, (pixel.x * 0x8DA6B343u) ^ (pixel.y * 0xD8163841u));
     float3 light;
     bool back = false;
     if (!c.hit)

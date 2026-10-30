@@ -8078,7 +8078,8 @@ pbrt-v4, RTXGI, materiel test, etc.). Then update forge demos and test them."):
   - The Bistro's large tree trunk was black in every Forge render, the path tracer's too (the
     owner's eye, in the first run of the tool): its mesh, over the rays' 40,000-triangle budget,
     was traced at a coarser cut, and the rays from the drawn bark started inside it. The
-    authored scenes are now traced at full detail, as Falcor's; the general case is #367.
+    authored scenes are now traced at full detail, as Falcor's; the general case is #367 (the
+    bounce's rays now trace past their own cut's back, D-088).
   - Forge's clay drew cut-out cards whole, Falcor's keeps them: clay now keeps the cut-outs.
 
 ## D-084 — An environment map as the sky, its sun taken out of it ✅ (the owner's go, 2026-10-29)
@@ -8534,7 +8535,15 @@ day, with the finest cascade ahead below):
   vertices' normal and are mirrored over their triangle's own face where that normal bends round
   a box's edge. A terrain's start as its sun's rays (`shadow_bias`), past the gap between its
   drawn cut and the rays' (#364): from 2 cm the island's sea floor, drawn up to a metre under the
-  cut, met the cut's backs in black wedges that moved with the view. The light is written in YCoCg with the ray's normalised length, as REBLUR reads
+  cut, met the cut's backs in black wedges that moved with the view. Elsewhere a ray that meets
+  the back of its own mesh's cut within the gap that cut may leave (twice its error and the drawn
+  cluster's) traces on past it (#367): the city's towers, 3 M triangles cut to 40,000, stand up
+  to 1.4 m off their drawn walls, and the rays from their recessed windows and under their ledges
+  met the cut's back in black wedges (the owner, 2026-10-30); a start past such a gap would skip
+  what really stands close. In the village, whose two meshes over the budget are cut at 0.45 and
+  2.33 m, the walls along a stair's treads took their light back (the landing's view +0.3 EV
+  there, +0.03 over the frame). Where the cut fills the wedge under a ledge, the wall's rays up
+  from under it now find the sky rather than black. The light is written in YCoCg with the ray's normalised length, as REBLUR reads
   it.
 - **Denoised by REBLUR_DIFFUSE** (NRD 4.18, the library SIGMA comes from; `forge_gpu::nrd` now
   runs either from one instance type). Half the pixels traced each frame, in a checkerboard (every
