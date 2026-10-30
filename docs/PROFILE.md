@@ -2639,6 +2639,33 @@ and the passes', one run each:
 The probes still run for the pixels the bounce leaves (leaves, glass, the mirror rays) and for
 the cache's newest entries; their budget under the cache is not revisited yet.
 
+**NVIDIA's SHaRC under the bounce** (`r.gi.cache sharc`, off by default, D-088, 2026-10-30):
+- **The passes**, on the main queue before `gi/trace`:
+  - `gi/sharc clear`, only when the cache is turned on.
+  - `gi/sharc update`: a path of up to 8 bounces from one pixel in each 5 × 5 block a frame,
+    written into the hash grid of 2^20 slots (8 MB of keys, 16 MB of sums, 16 MB of resolved
+    light).
+  - `gi/sharc resolve`, four passes: the live slots, the resolve and their read-back for the
+    overlay's count.
+- **The cost:** the frame's GPU ms, the mean of three runs alternating with the probes; the
+  passes' ms as the overlay times them:
+
+| View | frame, probes at the hits | frame, SHaRC | `gi/trace` | update, resolve | slots at most |
+|---|---|---|---|---|---|
+| Bistro Exterior_1 | 7.184 | 8.475 | 2.084 → 2.737 | 0.161, 0.382 | 485,769 |
+| Bistro Exterior_2 | 6.151 | 6.953 | 1.509 → 1.996 | 0.126, 0.318 | 536,069 |
+| Village, the room | 8.165 | 8.387 | 1.274 → 1.234 | 0.110, 0.223 | 240,734 |
+| Village, the main street | 7.131 | 7.553 | 1.082 → 1.385 | 0.040, 0.148 | 119,227 |
+| Village, the landing | 7.068 | 7.121 | 1.067 → 0.895 | 0.080, 0.142 | 176,615 |
+
+- **The overlay's resolve zone holds a wait.** Nsight's GPU Trace (`FORGE_ASYNC=0`, base clocks)
+  times the dispatch at 0.04 ms and the update at 0.48–0.56 ms. NVIDIA's RTXGI 2.8.0 sample on
+  its own Bistro at 1600 × 900, in the same trace: update 0.64–0.70 ms, resolve 0.08–0.09 ms
+  over 4M slots.
+- **Most of `gi/trace`'s growth at the Bistro** is SHaRC's rule for short segments: a hit nearer
+  than its voxel's diagonal goes on along up to two more rays. The variants measured are in
+  D-088.
+
 ## Not measured yet
 
 - **Streaming**: residency pools, request queue depth, drive and decompression throughput.

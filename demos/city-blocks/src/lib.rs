@@ -867,13 +867,17 @@ struct Gallery {
     diffuse_denoiser: Option<forge_render::DiffuseDenoiser>,
     diffuse_tried: bool,
     diffuse_was_on: bool,
-    /// D-088's surface cache under the bounce (`r.gi.cache`, `cache_on`), made the first time it
-    /// is asked for where the device has ray queries; `cache_was_on` whether it lit the last
-    /// frame (its entries start over when not).
+    /// D-088's surface cache under the bounce (`r.gi.cache`, `cache_mode`): the port made the
+    /// first time it is asked for where the device has ray queries, NVIDIA's SHaRC where
+    /// [`forge_render::Sharc::available`] too; `cache_was_on` and `sharc_was_on` whether each lit
+    /// the last frame (its entries start over when not).
     surface_cache: Option<forge_render::SurfaceCache>,
-    cache_on: bool,
+    cache_mode: usize,
     cache_tried: bool,
     cache_was_on: bool,
+    sharc: Option<forge_render::Sharc>,
+    sharc_tried: bool,
+    sharc_was_on: bool,
     /// The most metres ahead along the view the finest probe cascade stands (`r.gi.probe_ahead`,
     /// D-088); 0 round the camera. `probe_focus` the distance it stands at, as far as the view
     /// reaches (`view_reach`), moved in steps of PROBE_FOCUS_STEP.
@@ -2116,9 +2120,12 @@ impl Gallery {
             diffuse_tried: false,
             diffuse_was_on: false,
             surface_cache: None,
-            cache_on: false,
+            cache_mode: forge_render::settings::GI_CACHE_OFF,
             cache_tried: false,
             cache_was_on: false,
+            sharc: None,
+            sharc_tried: false,
+            sharc_was_on: false,
             probe_ahead: PROBE_AHEAD,
             probe_focus: 0.0,
             view_reach: forge_render::ViewReach::new(&ctx.device, &ctx.shaders)?,
@@ -2593,7 +2600,10 @@ impl Demo for Gallery {
             denoiser.reset_history();
         }
         // D-088's surface cache, the first time `r.gi.cache` asks for it.
-        if self.renderer.gi_trace && self.cache_on && !self.cache_tried {
+        if self.renderer.gi_trace
+            && self.cache_mode == forge_render::settings::GI_CACHE_PORT
+            && !self.cache_tried
+        {
             self.cache_tried = true;
             if ctx.device.features().ray_query {
                 match forge_render::SurfaceCache::new(&ctx.device, &ctx.shaders) {
@@ -2608,6 +2618,30 @@ impl Demo for Gallery {
             && let Some(cache) = &mut self.surface_cache
         {
             cache.reset();
+        }
+        if self.renderer.gi_trace
+            && self.cache_mode == forge_render::settings::GI_CACHE_SHARC
+            && !self.sharc_tried
+        {
+            self.sharc_tried = true;
+            if !forge_render::Sharc::available(&ctx.device, &ctx.shaders) {
+                tracing::warn!(
+                    "no SHaRC (its headers in sharc-sdk/, 16-bit storage, 64-bit atomics): the \
+                     probes' light at the hits"
+                );
+            } else {
+                match forge_render::Sharc::new(&ctx.device, &ctx.shaders) {
+                    Ok(sharc) => self.sharc = Some(sharc),
+                    Err(error) => {
+                        tracing::warn!(%error, "no SHaRC: the probes' light at the hits")
+                    }
+                }
+            }
+        }
+        if !self.sharc_was_on
+            && let Some(sharc) = &mut self.sharc
+        {
+            sharc.reset();
         }
         // The last frame's linear capture, its copy finished once the device is idle.
         if let Some(capture) = self.linear_capture.take() {
@@ -3590,6 +3624,7 @@ impl Demo for Gallery {
         let mut diffuse_bounce = None;
         let mut denoised = false;
         self.cache_was_on = false;
+        self.sharc_was_on = false;
         if self.renderer.gi_trace && self.sky_light && !in_space && self.scene.rays().is_some() {
             let reblur = self.diffuse_denoiser.as_mut().zip(nrd_guides);
             let reblur_frame = reblur.map(|(d, (.., camera, _))| d.frame(camera));
@@ -3601,18 +3636,43 @@ impl Demo for Gallery {
                 });
             // D-088's surface cache: the light where the bounce's rays meet a surface.
             let cache = match &mut self.surface_cache {
-                Some(cache) if self.cache_on && for_denoiser.is_some() => Some(cache.update(
-                    &mut frame.graph,
-                    frame.slot,
-                    self.renderer.frame_address(frame.slot),
-                    scene_light,
-                    probes,
-                    camera_in_scene,
-                    targets.movers,
-                )),
+                Some(cache)
+                    if self.cache_mode == forge_render::settings::GI_CACHE_PORT
+                        && for_denoiser.is_some() =>
+                {
+                    Some(cache.update(
+                        &mut frame.graph,
+                        frame.slot,
+                        self.renderer.frame_address(frame.slot),
+                        scene_light,
+                        probes,
+                        camera_in_scene,
+                        targets.movers,
+                    ))
+                }
                 _ => None,
             };
             self.cache_was_on = cache.is_some();
+            // Or NVIDIA's SHaRC in its place.
+            let sharc = match &mut self.sharc {
+                Some(sharc)
+                    if self.cache_mode == forge_render::settings::GI_CACHE_SHARC
+                        && for_denoiser.is_some() =>
+                {
+                    Some(sharc.update(
+                        &mut frame.graph,
+                        frame.slot,
+                        self.renderer.frame_address(frame.slot),
+                        targets,
+                        extent,
+                        scene_light,
+                        probes,
+                        camera_in_scene,
+                    ))
+                }
+                _ => None,
+            };
+            self.sharc_was_on = sharc.is_some();
             let traced = for_denoiser.and_then(|for_denoiser| {
                 self.renderer.trace_diffuse(
                     &mut frame.graph,
@@ -3622,6 +3682,7 @@ impl Demo for Gallery {
                     scene_light,
                     probes,
                     cache,
+                    sharc,
                     Some(for_denoiser),
                 )
             });
@@ -4372,6 +4433,13 @@ impl Drop for Gallery {
                 most = cache.most_used(),
                 pool = forge_render::surface_cache::POOL,
                 "the surface cache's entries in use at most over the run (D-088)"
+            );
+        }
+        if let Some(sharc) = &self.sharc {
+            tracing::info!(
+                most = sharc.most_live(),
+                slots = forge_render::sharc::CAPACITY,
+                "SHaRC's slots in use at most over the run (D-088)"
             );
         }
         if let Some(splashes) = &self.splashes {

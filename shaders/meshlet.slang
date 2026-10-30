@@ -7574,6 +7574,25 @@ void sun_shadow_trace_main(uint3 id : SV_DispatchThreadID)
 
 // ------------------------------------------------------ the diffuse bounce (D-088) ---
 
+// D-088's surface cache through NVIDIA's SHaRC (`sharc.slang`, `crates/forge-render/src/sharc.rs`):
+// its slots and this frame's grid. The slots' buffers are SHaRC's `HashGridKey`,
+// `SharcAccumulationData` and `SharcPackedData` (8, 16 and 16 bytes a slot).
+struct SharcField
+{
+    float3 camera;          // metres in the scene frame: the voxels grow with the distance from it
+    float scene_scale;      // a voxel's size at the finest level, 1 / metres
+    float3 camera_prev;     // the last update's
+    float radiance_scale;   // the sums' fixed point: their units per unit of light
+    uint64_t* keys;         // a voxel's key per slot, 0 for an empty one
+    uint4* accumulation;    // this frame's sums, cleared by the resolve
+    uint4* resolved;        // the light blended over the frames
+    uint* live;             // the slots in use after the resolve, counted for the log
+    uint capacity;          // the slots
+    uint accumulation_frames; // the frames the light blends over
+    uint stale_frames;      // the frames a voxel no path met is kept
+    uint frame;             // the updates so far: the paths' pixels and SHaRC's resampling
+};
+
 // D-088's diffuse bounce, before the resolve: per pixel of the visibility buffer, the surface
 // rebuilt as `shade_pixel` does and one cosine-weighted ray from it to the scene's end, past a
 // house's clear glass (`trace_past_glass`). Its hit sends back the sun through a shadow ray, the
@@ -7597,6 +7616,7 @@ struct DiffuseTracePush
     uint bounce_image;    // storage (rgba16f): the bounce's light in YCoCg (rgb), its normalised ray length (a)
     uint width;           // the frame's
     uint height;
+    SharcField* sharc;    // NVIDIA's SHaRC in its place (`sharc.slang`'s entry only), or null
 };
 
 // NRD's colour space for REBLUR (`_NRD_LinearToYCoCg`, `_NRD_YCoCgToLinear`).
@@ -7700,6 +7720,12 @@ void diffuse_trace_main(uint3 id : SV_DispatchThreadID)
         // The surface cache's lookup jittered with the frame, as the lamps' pick.
         // A branch, not `?:`: a back face's hit must not make an entry facing into its solid.
         light = float3(0.0);
+#ifdef FORGE_SHARC
+        // `sharc.slang`'s build of this entry: SHaRC's voxels for the light after the hit.
+        if (!hit.back && p.sharc != nullptr)
+            light = sharc_bounce(f, p.sky, p.probes, p.sharc, hit, c, ray.Direction, seed);
+        else
+#endif
         if (!hit.back)
         {
             bool leaf = p.cache != nullptr && hit_foliage(f, c.instance, c.primitive);

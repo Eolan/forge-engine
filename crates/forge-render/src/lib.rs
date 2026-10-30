@@ -50,6 +50,7 @@ pub mod reflection_history;
 pub mod restir;
 pub mod settings;
 pub mod shallow;
+pub mod sharc;
 pub mod skin;
 pub mod sky;
 pub mod skybody;
@@ -108,6 +109,7 @@ pub use restir::{LampRestir, RestirParams, RestirSettings};
 pub use shallow::{
     ShallowColumns, ShallowGrid, ShallowLayer, ShallowParams, ShallowState, ShallowStats,
 };
+pub use sharc::{Sharc, SharcLight};
 pub use skin::{HeightField, SkinBlend, skin_vertex};
 pub use sky::{GroundSky, SkyFrame, SkyLight, SkyNight, SkyParams, sh_irradiance};
 pub use skybody::{SkyBody, SkyBodyView};

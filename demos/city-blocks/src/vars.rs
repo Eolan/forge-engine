@@ -27,7 +27,7 @@ pub(crate) struct RenderVars {
     show_input: Var<i64>,
     gi_reference: Var<i64>,
     gi_trace: Var<bool>,
-    gi_cache: Var<bool>,
+    gi_cache: Var<usize>,
     gi_probe_ahead: Var<f64>,
     ao_ignore_nearer: Var<f64>,
     ao_contact: Var<f64>,
@@ -219,7 +219,7 @@ impl Gallery {
             show_input: s.add(rs::show_input(0)),
             gi_reference: s.add(rs::gi_reference(0)),
             gi_trace: s.add(rs::gi_trace(true)),
-            gi_cache: s.add(rs::gi_cache(false)),
+            gi_cache: s.add(rs::gi_cache(rs::GI_CACHE_OFF)),
             gi_probe_ahead: s.add(rs::gi_probe_ahead(f64::from(crate::PROBE_AHEAD))),
             ao_ignore_nearer: s.add(rs::ao_ignore_nearer(0.0)),
             ao_contact: s.add(rs::ao_contact(f64::from(crate::AO_CONTACT))),
@@ -380,7 +380,7 @@ impl Gallery {
             self.renderer.gi_trace = s.get(v.gi_trace);
         }
         if s.changed_since(v.gi_cache, seen) {
-            self.cache_on = s.get(v.gi_cache);
+            self.cache_mode = s.get(v.gi_cache);
         }
         if s.changed_since(v.gi_probe_ahead, seen) {
             self.probe_ahead = s.get(v.gi_probe_ahead) as f32;

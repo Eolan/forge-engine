@@ -33,6 +33,10 @@ in. CI checks the crate list.
   RTX SDKs License (`rtxdi-sdk/LICENSE.txt`). It is never under an open-source licence, and
   modified files keep NVIDIA's notice. RTXDI never enters this repository. This is not a legal
   reading.
+- **NVIDIA SHaRC** (`r.gi.cache sharc`, D-088): the same, for `sharc.slang`'s SPIR-V. Its
+  headers ship incorporated in object code (`sharc-sdk/src/License.md`, 1c), never on their own
+  and never under an open-source licence. SHaRC never enters this repository. This is not a
+  legal reading.
 - **AMD's FSR DLLs** (the `ffx` feature, `--fsr-amd`, D-082): `amd_fidelityfx_loader_vk.dll`
   and `amd_fidelityfx_upscaler_vk.dll` are expected on the player's computer, as Streamline's
   are. Forge uses them locally and never publishes them (the owner, 2026-10-29): nothing of
@@ -82,6 +86,7 @@ authors at Embark Studios, whose caches D-088's surface cache is ported from.
 | [FidelityFX Denoiser](https://github.com/GPUOpen-Effects/FidelityFX-Denoiser), its shadow denoiser (commit d7dfecb) | Advanced Micro Devices | the sun's soft shadows denoised where NRD is absent: `shaders/ffx_shadows.slang`, ported to Slang with AMD's notice (D-049, #173) | MIT |
 | [NRD](https://github.com/NVIDIA-RTX/NRD) (Real-time Denoisers) v4.18.0 (its tag, 8f12a22; master at d3df343 from #210) | NVIDIA | SIGMA, the sun's soft shadows denoised (`nrd` feature, D-049, #172), and REBLUR, D-088's diffuse bounce denoised (`r.gi.trace`); fetched and built outside git by `tools/fetch-nrd.sh`, loaded at run time | NVIDIA RTX SDKs License |
 | [RTXDI](https://github.com/NVIDIA-RTX/RTXDI-Library) (RTXDI-Library 3.1, commit f12037f) | NVIDIA | ReSTIR DI over the lamps (D-065): the comparison with the light lists (`--lamp-restir`) and the street lamps, however far (`--street-restir`); `shaders/restir.slang` includes its headers from `rtxdi-sdk/`, kept outside git, through Forge's own bridge | NVIDIA RTX SDKs License |
+| [SHaRC](https://github.com/NVIDIAGameWorks/Spatial-Hash-Radiance-Cache) (Spatially Hashed Radiance Cache 1.8.3, commit 4e21b585), read with [RTXGI](https://github.com/NVIDIA-RTX/RTXGI) 2.8.0's guides and path tracer sample | NVIDIA | D-088's surface cache under the diffuse bounce (`r.gi.cache sharc`): `shaders/sharc.slang` includes its headers unmodified from `sharc-sdk/`, kept outside git | NVIDIA RTX SDKs License |
 | [Bevy](https://github.com/bevyengine/bevy)'s Solari (v0.20.1, commit a0577b5) | the Bevy contributors | D-088's surface cache: its world cache (`crates/bevy_solari/src/realtime/world_cache_*.wesl`) ported to `shaders/surface_cache.slang`, `surface_cache_update.slang` and `surface_cache_trace_main` (`meshlet.slang`), the changes in their header; licence in `shaders/third-party/Bevy-LICENSE-APACHE.txt` | MIT OR Apache-2.0 (taken under Apache-2.0) |
 | [kajiya](https://github.com/EmbarkStudios/kajiya) (commit 9fdec0f, archived) | Embark Studios and contributors | D-088's surface cache: its irradiance cache's dense index of camera-centred 32³ levels (`assets/shaders/ircache/ircache_grid.hlsl`) in `shaders/surface_cache.slang`; licence in `shaders/third-party/kajiya-LICENSE-APACHE.txt` | MIT OR Apache-2.0 (taken under Apache-2.0) |
 | [ab_glyph](https://github.com/alexheretic/ab-glyph) | Alex Butler | the overlay's font rasteriser | Apache-2.0 |

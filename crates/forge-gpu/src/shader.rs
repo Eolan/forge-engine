@@ -188,10 +188,14 @@ const PRECISE_ENTRIES: &[(&str, &str)] = &[
 
 /// The shader files that include a vendor SDK's headers, and the SDK's include directory beside
 /// the shader directory: such a file compiles only where the directory is
-/// ([`ShaderCompiler::sdk_present`]). NVIDIA's RTXDI (D-065) is used under the NVIDIA RTX SDKs
-/// licence and never copied in: `rtxdi-sdk/` is ignored by git. The cache key does not follow
-/// the SDK's headers, so a new RTXDI release needs the shader cache cleared.
-const SDK_INCLUDES: &[(&str, &str)] = &[("restir.slang", "rtxdi-sdk/Include")];
+/// ([`ShaderCompiler::sdk_present`]). NVIDIA's RTXDI (D-065) and SHaRC (D-088) are used under the
+/// NVIDIA RTX SDKs licence and never copied in: `rtxdi-sdk/` and `sharc-sdk/` are ignored by git.
+/// The cache key does not follow the SDK's headers, so a new release needs the shader cache
+/// cleared.
+const SDK_INCLUDES: &[(&str, &str)] = &[
+    ("restir.slang", "rtxdi-sdk/Include"),
+    ("sharc.slang", "sharc-sdk/src/include"),
+];
 
 /// Include directories inside the shader directory, besides it: third-party code that includes
 /// its own files from its root. AMD's FidelityFX headers (FSR 3.1, D-070, MIT) include
@@ -199,8 +203,10 @@ const SDK_INCLUDES: &[(&str, &str)] = &[("restir.slang", "rtxdi-sdk/Include")];
 const INCLUDE_ROOTS: &[&str] = &["third-party/fidelityfx"];
 
 /// Slang's warnings an SDK's headers raise, turned off for the files that include them: E30081,
-/// a `uint` tested as a `bool` (eleven times in RTXDI's).
-const SDK_WARNINGS: &str = "30081";
+/// a `uint` tested as a `bool` (eleven times in RTXDI's); E41018, an `out` parameter left unset
+/// where the function returns `false` (SHaRC's `SharcGetCachedRadiance`, whose callers read it
+/// only on `true`).
+const SDK_WARNINGS: &str = "30081,41018";
 
 /// Whether `file`'s `entry` compiles precise: one of [`PRECISE_ENTRIES`], or `FORGE_FP_PRECISE`
 /// (`1` every entry, or comma-separated words: the entries whose name holds one).

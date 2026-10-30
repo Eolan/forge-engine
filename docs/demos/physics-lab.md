@@ -2479,11 +2479,20 @@ bays 2 to 3 at Exterior_2 (D-088).
   gives the probes alone.
 - **`r.gi.probe_ahead`, 20 by default:** the most metres the finest probe cascade stands ahead
   along the view, as far as the view reaches.
-- **`r.gi.cache`, off by default:** D-088's surface cache read where the bounce's rays meet a
-  surface, in place of the probes (Bevy Solari's world cache on kajiya's dense index). In clay
-  against Forge's path, Exterior_1 0.029 → 0.047 and Exterior_2 0.118 → 0.103, both a little
-  darker than the path (×0.98, ×0.96); the village's landing 0.811 → 0.201 and its room
-  0.144 → 0.058. The frame costs the same.
+- **`r.gi.cache`, off by default:** a cache read where the bounce's rays meet a surface, in place
+  of the probes:
+  - `port`: D-088's surface cache, Bevy Solari's world cache on kajiya's dense index. The frame
+    costs the same.
+  - `sharc`: NVIDIA's SHaRC, from the ignored `sharc-sdk/`, on a GPU with 64-bit atomics. The
+    frame costs 0.05 to 1.3 ms more (`docs/PROFILE.md`). Two runs differ in a few levels, hence
+    off.
+  - In clay against Forge's path (frame 300, measured together on 2026-10-30), the probes, the
+    port and SHaRC:
+    - Exterior_1: 0.029, 0.043, 0.048.
+    - Exterior_2: 0.150, 0.088, 0.101.
+    - The village's landing: 0.762, 0.166, 0.089.
+    - The village's room: 0.138, 0.060, 0.068.
+  - Both caches read a few per cent darker than the path (D-088).
 
 **Not yet:**
 - **The lamps' cost:** 10.7 ms of GPU at the Night view with the nearest 64 (4.1 without),
@@ -2540,10 +2549,15 @@ by hand outside the repository (`CREDITS.md`):
   16 bounces, 4,096 samples a pixel: its default Frostbite diffuse is darker at roughness 1
   (1/1.51), a stop indoors over the bounces.
 
-| Classroom | Forge's path | the probes | `r.gi.cache` |
-|---|---|---|---|
-| Clay | 0.090 (×0.98) | 0.353 (×1.14) | 0.145 (×0.93) |
-| Textured | | | 0.151 (×0.98) |
+| Classroom | Forge's path | the probes | `r.gi.cache port` | `r.gi.cache sharc` |
+|---|---|---|---|---|
+| Clay | 0.090 (×0.98) | 0.353 (×1.14) | 0.154 (×0.92) | 0.156 (×0.92) |
+| Clay, the sun alone | | | | 0.174 (×0.91) |
+| Clay, the sky alone | | | | 0.142 (×0.96) |
+| Textured | | | 0.151 (×0.98) | 0.149 (×0.98) |
+
+The port's clay row measured 0.145 (×0.93) when it was built. 0.154 is measured again beside
+SHaRC on 2026-10-30, after D-086's changes to the surfaces.
 
 - **The sun and the sky apart:** the classroom under its sun alone (the map's disc), the sky's
   share as the whole less the sun's, both renderers being linear in their light. With the sky
@@ -2556,7 +2570,8 @@ by hand outside the repository (`CREDITS.md`):
 room's thin walls and over its ceiling light it (D-088, "The probes' sky leaks into the
 classroom"); 1 m apart ×1.04, 0.5 m ×1.00. The cache matches the sky (×0.98).
 
-**Not yet:** the cache a few per cent dark (×0.93 in clay, its sun's bounce ×0.91); the probes'
+**Not yet:** both caches a few per cent dark (×0.92 in clay, the sun's bounce ×0.91; SHaRC's
+deficit is the first item of D-083's calibration); the probes'
 leak, which waits for the owner's choice (the cache at the hits, or finer probes); thin bright
 seams in the ceiling seen directly; the textured materials (the coated whiteboard, the metal
 frames).

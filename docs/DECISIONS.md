@@ -8044,6 +8044,37 @@ steps".
 - **The backlog triaged** to about 25 active issues, the rest merged or moved to "Later"; a
   session's own findings go to one triage list first.
 
+**Amended: the engine calibrated first, then the demos** (the owner, 2026-10-30, during D-088's
+SHaRC comparison: "since we changed technology we have to retest against Falcor. we will have to
+do the same things with pbrt-v4. And if we try NRC, we will have to recheck again. Compare and see
+what's best and work real-time"; then "Calibrate the engine first with those tools (falcor,
+pbrt-v4, RTXGI, materiel test, etc.). Then update forge demos and test them."):
+- **The order:** the engine is calibrated against the reference tools first. The demos (the city
+  sandbox, the village, the first map) are updated after, on the calibrated engine, and tested.
+- **The references**, all outside the repository:
+  - Falcor's path tracer: the Bistro, the classroom, the material chart.
+  - pbrt-v4: Bitterli's bedroom, classroom and kitchen (`scenes-ref/bitterli/`, downloaded
+    2026-10-30); the renderer itself still to build.
+  - NVIDIA's RTXGI 2.8.0 sample, run unmodified and captured from outside: its path tracer,
+    SHaRC and NRC on its Bistro, LivingRoom, Bathroom, Sponza and Cornell box.
+  - The material chart (`--lab chart`).
+  - Forge's own path tracer (`r.gi.reference 4`) where none of them has the scene.
+- **One test for every technique:** the probes, the port, SHaRC and NRC (once tried) over the
+  same views and references. Each gets its error (the mean |log2| of 16 × 9 tiles, the sun and the
+  sky apart) and its GPU ms on the 5070 Ti. A change of technique reruns the whole table, and the
+  pick is the best that runs in real time. A repeatable tool replaces the sessions' scripts:
+  `tools/gi-compare.sh` (2026-10-30; `docs/PROCESS.md`). Its views are the Bistro in clay and
+  textured, the classroom, and the village's landing, room and street. Its references are
+  Forge's path and Falcor. The sun and the sky apart, pbrt-v4 and the RTXGI sample are still to
+  add.
+- **First findings (2026-10-30):**
+  - The Bistro's lab is not metered: it draws at the shared fixed EV 14, 2.3 and 4.7 stops under
+    the exposures NVIDIA's pictures fit on Forge's light (EV 11.74 at Exterior_1, 9.34 at
+    Exterior_2). Its light matches Falcor's at equal exposure. Metered, Exterior_1 sits a stop
+    dark and Exterior_2 on it; the tone curve is not the cause (the exposure's own session).
+  - SHaRC reads 3 to 7 % dark against Forge's path in steady state (D-088). NVIDIA's sample's
+    SHaRC is within 2 to 4 % of its own path tracer.
+
 ## D-084 — An environment map as the sky, its sun taken out of it ✅ (the owner's go, 2026-10-29)
 
 **Why:** D-083's first comparison, the Bistro's Exterior_1 beside NVIDIA's render, could not
@@ -8895,4 +8926,91 @@ this one: "yes, record it and download them"):**
   (×0.91).
 - **Credits:** the shaders carry Bevy's and kajiya's names, commits and licences in their header,
   and the changes Forge made.
+- **SHaRC under the bounce: built** (2026-10-30, `r.gi.cache sharc`, off by default;
+  `crates/forge-render/src/sharc.rs`, `shaders/sharc.slang`). The design above, with these
+  changes:
+  - **The lamps** go with the sun as SHaRC's separate emissive term (`hit_lamps`, as the probes'
+    rays take them), not as its direct light. A voxel holds only the light that reaches it, and a
+    hit's own sun and lamps stay exact where it is read.
+  - **`SHARC_PROPAGATION_DEPTH` 4,** not SHaRC's 2. With 2, the landing's whitewashed walls
+    (albedo near 0.9) took their many bounces from voxels that settle over hundreds of frames,
+    and frame 300 was a third of a stop under the path tracer (0.376, ×0.85). With 4: 0.089
+    (×0.99), for 0.03 ms more in the update. SHaRC's guide raises it where light needs longer
+    paths.
+  - **64-bit buffer atomics are required:** no lock-buffer fallback. Without them, without
+    16-bit storage or without `sharc-sdk/`, `sharc` keeps the probes.
+  - **Both passes on the main queue:** the update reads this frame's visibility buffer.
+  - **The path's root** (the pixel's own surface) has demodulation 1 and throughput 1.
+  - **The cache is emptied** when it is turned on again, not on a cut: its voxels are in the
+    scene's frame, and nothing shifts that frame's origin or swaps the scene at run time yet.
+  - **`nrc`** is not a value yet.
+
+  **Against Forge's path tracer** (`r.gi.reference=4`; the mean |log2| of 16 × 9 tiles at frame
+  280–300, and the frame's light):
+
+  | View | the probes (default) | the port | SHaRC |
+  |---|---|---|---|
+  | The village's landing | 0.762 (×1.50) | 0.166 (×1.01) | 0.089 (×0.99) |
+  | The village's room | 0.138 (×0.95) | 0.060 (×0.99) | 0.068 (×0.97) |
+  | The Bistro's Exterior_1, clay | 0.029 (×1.00) | 0.043 (×0.98) | 0.048 (×0.98) |
+  | The Bistro's Exterior_2, clay | 0.150 (×1.02) | 0.088 (×0.96) | 0.101 (×0.95) |
+
+  The village's street, measured after with `tools/gi-compare.sh`: the probes and SHaRC alike,
+  0.115 (×1.01). Its error is in the tree crowns, whose leaves the bounce leaves to the probes
+  under every setting.
+
+  - **Against Falcor in the classroom** (the measure above, × 12,800): clay 0.156 (×0.92), the
+    port 0.154 (×0.92); the sun alone 0.174 (×0.91); the sky alone 0.142 (×0.96); textured
+    0.149 (×0.98).
+  - **The textured Bistro against Falcor** (Lambert, 16 bounces, × 2,871): Exterior_1 0.095
+    (×1.01), the probes 0.090; Exterior_2 0.479 (×0.94), the probes 0.439. The gap is the
+    materials' (D-083).
+  - **The material chart:** the same as with the probes (0.333 against 0.331 at side-30): its
+    light is direct.
+
+  **Its cost** (the 5070 Ti, the frame's GPU ms, three runs alternating with the probes):
+
+  | View | frame, the probes | frame, SHaRC | `gi/trace` | update, resolve (overlay) | slots at most |
+  |---|---|---|---|---|---|
+  | The village's landing | 7.068 | 7.121 | 1.067 → 0.895 | 0.080, 0.142 | 176,615 |
+  | The village's room | 8.165 | 8.387 | 1.274 → 1.234 | 0.110, 0.223 | 240,734 |
+  | The village's street | 7.131 | 7.553 | 1.082 → 1.385 | 0.040, 0.148 | 119,227 |
+  | The Bistro's Exterior_1 | 7.184 | 8.475 | 2.084 → 2.737 | 0.161, 0.382 | 485,769 |
+  | The Bistro's Exterior_2 | 6.151 | 6.953 | 1.509 → 1.996 | 0.126, 0.318 | 536,069 |
+
+  - **The overlay's resolve is mostly a wait.** Nsight's GPU Trace (serial, base clocks) times
+    the resolve's dispatch at 0.04 ms; its zone also holds the wait for the update to finish.
+    The same trace of NVIDIA's RTXGI 2.8.0 sample, SHaRC on its own Bistro at 1600 × 900: update
+    0.64–0.70 ms, resolve 0.08–0.09 ms over its 4M slots. Forge's: update 0.48–0.56, resolve
+    0.04 over 1M. The passes cost what NVIDIA's do.
+  - **The extra rays cost the Bistro most of its millisecond.** A hit nearer than its voxel's
+    diagonal goes on along up to two more rays (SHaRC's rule), and the Bistro's far voxels are
+    30 cm to 1 m across against the bounce's short rays. The three ways measured (one run each
+    for the variants):
+
+    | Short segment | E1 / E2 clay | Landing | Classroom: whole / sky alone | E1 frame over the probes |
+    |---|---|---|---|---|
+    | Up to two more rays (SHaRC's rule, kept) | 0.048 / 0.101 | 0.089 | 0.110 / 0.097 | +1.29 ms |
+    | The probes stand in | 0.038 / 0.077 | 0.090 | 0.094 / 0.196 | +0.36 ms |
+    | More rays within 8 m only | 0.038 / 0.085 | 0.094 | 0.109 / 0.166 | about +0.5 ms |
+
+    The probes' version is nearer the path only because their excess (their sky through thin
+    walls, D-088 above) offsets SHaRC's deficit: the classroom's sky alone doubles its error.
+    SHaRC's rule is kept, as its guide has it, until that deficit is found.
+  - **SHaRC reads 3 to 7 % dark** against Forge's path, in steady state:
+    - not convergence: frames 880 and 1,780 measure as 280 (0.100, 0.102 against 0.101);
+    - not its fixed point: `radianceScale` 1e6 and 1e7 measure as 1e5;
+    - partly its resampling: without it (full 8-bounce paths, 8 vertices carried back), the
+      classroom 0.110 → 0.076 (×0.94 → ×0.96), Exterior_2 0.101 → 0.094. The rest is open.
+    NVIDIA's own SHaRC, against its own path tracer in its sample (its Reinhard undone, 128
+    frames, 8 bounces): its Bistro 0.022 (×1.01), its LivingRoom 0.045 (×1.02).
+  - **Not deterministic:** two identical runs differ in 25,000 to 30,000 pixels from frames 50 to
+    100 (8 levels at most, ꟻLIP's mean 0.001). SHaRC's insertion takes the first free or
+    matching slot by an atomic compare-exchange, in the threads' order, and the cache feeds on
+    itself. Its documented settings do not change it (`HASH_GRID_LIMIT_EMPTY_SLOTS` 0 tried). The
+    probes stay byte-identical, and the A/B harness (D-016) needs that, so SHaRC stays off by
+    default: the owner's choice. Vulkan's synchronisation validation: no errors.
+  - **Still to check:** the deficit's rest; the Bistro's half-full cache (the design raises the
+    size past a third, but the resolve's cost grows with it); the village's thin walls and floors;
+    the AMD iGPU (`FORGE_GPU=amd`). These go into D-083's calibration table.
 
