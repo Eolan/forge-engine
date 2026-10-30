@@ -327,6 +327,15 @@ pub fn sky_reflections(default: bool) -> Spec<bool> {
     )
 }
 
+/// D-088's near field by brute force: its design measured, far from real time.
+pub fn near_reference(default: bool) -> Spec<bool> {
+    Spec::bool(
+        "r.gi.near_reference",
+        default,
+        "The light round each pixel from 32 rays to 2 m and the probes past them (D-088's design, measured; slow).",
+    )
+}
+
 /// GGX without its multiple-scattering compensation (D-086).
 pub fn single_scatter(default: bool) -> Spec<bool> {
     Spec::bool(

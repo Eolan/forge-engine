@@ -105,6 +105,8 @@ impl CullFlags {
     /// GGX without its multiple-scattering compensation (D-086): Falcor's, for the material
     /// chart's comparisons (`FLAG_SINGLE_SCATTER` in the shader).
     pub const SINGLE_SCATTER: u32 = 1 << 29;
+    /// D-088's near field by brute force, a measure of its design (`FLAG_NEAR_REFERENCE`).
+    pub const NEAR_REFERENCE: u32 = 1 << 30;
     /// Everything on except the debug views.
     pub const DEFAULT: Self = Self(Self::CONE | Self::FRUSTUM | Self::OCCLUSION | Self::LOD);
 

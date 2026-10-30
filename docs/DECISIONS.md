@@ -8365,3 +8365,22 @@ code, as the owner asks.
 
 **Cost:** a new pass (rays and their hits' shading at half resolution) and NRD's diffuse
 denoiser; measured before and after on the Bistro, the village and the city.
+
+**First measurements (2026-10-30), before building the pass:**
+- **The design by brute force** (`r.gi.near_reference`: 32 rays a pixel to 2 m, no denoiser,
+  39 ms): in clay at Exterior_2 against Falcor in Lambert, the café's window bays from 2–3 to
+  1.4–2.7, but other shaded tiles brighter (1.0–1.3 to 1.2–1.8). Every probe lookup near the
+  awnings is too bright, at the rays' ends and at their hits alike: the probes' light itself leaks
+  there, which a near field over the probes cannot take out. The design needs the leaks found
+  first.
+- **One leak found:** a probe's ray kept a quarter of every cut-out's triangles (crowns let light
+  through), so the probes saw the sun through three quarters of the Bistro's awnings (their fabric
+  a cut-out). Now only foliage rows; the other cut-outs take their alpha test whole, as the sun's
+  rays. The probes' rays cost the same (1.84 ms at Exterior_2). The village's railings and other
+  non-foliage cut-outs change too: to look at in its walk before a push.
+- **Exterior_2 textured, against Falcor in Lambert** (rendered for it): the near terrace and table
+  0.3–0.9 before the fix, 0.24–0.74 after, the café's window reflection 2.2–3.0: too dark near,
+  too bright in the glass, where in clay the terrace matched (0.8–1.0). With the materials the
+  terrace's light differs: the wood's grazing reflection of the warm street in Falcor, bluish in
+  Forge, is the next to measure.
+

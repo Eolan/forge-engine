@@ -281,6 +281,9 @@ public static const uint FLAG_BAKE_NORMAL = 268435456;
 // GGX without its multiple-scattering compensation (D-086, `r.specular.single_scatter`): Falcor's,
 // for the material chart's comparisons.
 public static const uint FLAG_SINGLE_SCATTER = 536870912;
+// D-088's near field by brute force (`r.gi.near_reference`): the light round each pixel from
+// NEAR_FIELD_REFERENCE_RAYS rays, no denoiser; a measure of the design, not a frame's.
+public static const uint FLAG_NEAR_REFERENCE = 1073741824;
 
 static const uint PAGE_NONE = 0xFFFFFFFF;           // an absent page in `page_table`, no page in `child_page`
 static const uint MESHLET_INDEX_MASK = 0x3FFFFFFFu;
@@ -4056,6 +4059,13 @@ float3 sun_light(Frame* f, float3 albedo, float3 n, float3 geometric, float spec
             if (reflects)
                 sky_share = saturate(toward_r / max(open_r, 1e-4));
         }
+        // D-088's near field, by brute force (`shade_pixel` traced it once): its rays see the
+        // occlusion GTAO stood for.
+        if (g_near_on)
+        {
+            irradiance = g_near_irradiance;
+            ao = -1.0;
+        }
         float3 ambient = ao >= 0.0 ? irradiance * occlusion_bounce(ao, albedo) : irradiance;
         if (!reflects)
             return albedo * (diffuse * sun + ambient + g_lamp_diffuse) + specular * sun + g_lamp_specular;
@@ -5837,19 +5847,22 @@ struct ClosestHit
     bool mover;      // met in the movers' structure (#79)
 };
 
-// Whether a probe's ray keeps a cut-out it met (leaves, railings): half the time, by a hash of the
-// ray and the triangle, so a crown lets through some of the light round it as real crowns do.
-// Kept every time, a crown darkened every probe about it, and the wall beside a tree took a dark
-// blot (the owner, 2026-10-16: "strange shadows or lighting artifact on the wall"); kept never,
-// the rays crossed whole crowns and forests (0.7-0.9 ms more on the village's green). The sun's
-// shadows keep every leaf.
+// Whether a probe's ray keeps a leaf it met: a quarter of the time, by a hash of the ray and the
+// triangle, so a crown lets through some of the light round it as real crowns do. Kept every
+// time, a crown darkened every probe about it, and the wall beside a tree took a dark blot (the
+// owner, 2026-10-16: "strange shadows or lighting artifact on the wall"); kept never, the rays
+// crossed whole crowns and forests (0.7-0.9 ms more on the village's green). The sun's shadows
+// keep every leaf. Only the foliage's rows: the other cut-outs (an awning's fabric, a curtain, a
+// sign, a railing's bars) take their alpha test whole, as the sun's rays do; at a quarter the
+// probes saw the sun through three quarters of the Bistro's awnings (D-088).
 static const float PROBE_LEAF_KEPT = 0.25;
 bool probe_leaf_kept(Frame* f, uint instance, uint primitive, uint seed)
 {
     RtScene* rs = f[0].rt_scene;
     Instance inst = f[0].instances[instance];
     uint tri = rs[0].meshes[inst.mesh].first_triangle + primitive;
-    if ((f[0].materials[inst.material + rs[0].sections[tri]].flags & MATERIAL_FLAG_MASKED) == 0)
+    uint flags = f[0].materials[inst.material + rs[0].sections[tri]].flags;
+    if ((flags & MATERIAL_FLAG_MASKED) == 0 || (flags & MATERIAL_FLAG_FOLIAGE) == 0)
         return true;
     return hash_color(seed ^ instance * 0x9E3779B9u ^ primitive * 0x85EBCA6Bu).x < PROBE_LEAF_KEPT;
 }
@@ -6087,6 +6100,57 @@ RayHit ray_hit_seen(Frame* f, uint instance, uint primitive, float2 b, float3 or
     if ((mat.flags & MATERIAL_FLAG_INTERIOR) != 0)
         hit.emissive *= ((mat.flags & MATERIAL_FLAG_SHOP) != 0 ? ROOM_SHOP_LAMP : ROOM_LAMP) * 0.55;
     return hit;
+}
+
+// D-088's near field (its design measured, `FLAG_NEAR_REFERENCE`): the light round a surface at
+// `world` facing `n` (its face `geometric`) from NEAR_FIELD_REFERENCE_RAYS cosine-weighted rays
+// to NEAR_FIELD_RANGE. A ray that meets a surface takes the light it sends back (`hit_radiance`:
+// the sun through a shadow ray, its albedo times its probes' light); one that leaves the range
+// takes the probes' light at its end, facing on along it: the probes beyond the near occluders,
+// where the surface's own lookup took those round it, which see the open street past an awning
+// or a window bay. Irradiance in the resolve's units, as `probe_irradiance`'s.
+static const uint NEAR_FIELD_REFERENCE_RAYS = 32;
+static const float NEAR_FIELD_RANGE = 2.0;
+
+// The pixel's near field (`near_field_reference`), traced once in `shade_pixel` for every class's
+// `sun_light` (one copy of its rays in the shader, #348), and whether it holds one.
+static float3 g_near_irradiance = float3(0.0);
+static bool g_near_on = false;
+
+float3 near_field_reference(Frame* f, float4* sky, ProbeField* probes, float3 world, float3 geometric, float3 n)
+{
+    float3 t = normalize(cross(abs(n.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0), n));
+    float3 b = cross(n, t);
+    uint3 bits = asuint(world * 64.0);
+    uint seed = (bits.x * 0x8DA6B343u) ^ (bits.y * 0xD8163841u) ^ (bits.z * 0xCB1AB31Fu) ^ (f[0].noise_frame * 0x9E3779B9u);
+    float3 origin = world + geometric * 0.02;
+    float3 sum = float3(0.0);
+    for (uint i = 0u; i < NEAR_FIELD_REFERENCE_RAYS; i++)
+    {
+        // Stratified over the rays, each stratum jittered per pixel and frame.
+        float u1 = (float(i) + hash_unit(seed + i * 2u)) / float(NEAR_FIELD_REFERENCE_RAYS);
+        float u2 = hash_unit(seed + i * 2u + 1u);
+        float r = sqrt(u1);
+        float phi = 6.2831853 * u2;
+        float3 d = normalize(t * (r * cos(phi)) + b * (r * sin(phi)) + n * sqrt(max(1.0 - u1, 0.0)));
+        if (dot(d, geometric) <= 0.0)
+            continue;
+        RayDesc ray;
+        ray.Origin = origin;
+        ray.Direction = d;
+        ray.TMin = 0.0;
+        ray.TMax = NEAR_FIELD_RANGE;
+        ClosestHit c = trace_closest(f, ray);
+        if (c.hit)
+        {
+            RayHit hit = ray_hit(f, c.instance, c.primitive, c.barycentrics, origin, d, c.t);
+            if (!hit.back)
+                sum += hit_radiance(f, sky, probes, hit, d);
+        }
+        else
+            sum += probe_irradiance(probes, origin + d * NEAR_FIELD_RANGE, d, d, -d, sh_irradiance(sky, d));
+    }
+    return sum / float(NEAR_FIELD_REFERENCE_RAYS);
 }
 
 // The light `hit` sends back from the sun alone (and its own emission), in the resolve's units.
@@ -6908,6 +6972,10 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     // normal, lobe and reflectance, where they took the row's factors (on a mapped row roughness
     // 1: the Bistro's scooter matte under its lamps). The other classes, their rows' factors.
     StandardInputs si = class_index == MATERIAL_CLASS_STANDARD ? standard_inputs(f, mat, s) : row_inputs(mat, s);
+    // D-088's near field by brute force, a measure of its design (`r.gi.near_reference`).
+    g_near_on = SHADOWS != 0 && (f[0].flags & FLAG_NEAR_REFERENCE) != 0 && s.probes != nullptr && s.sky != nullptr && f[0].tlas != 0;
+    if (g_near_on)
+        g_near_irradiance = near_field_reference(f, s.sky, s.probes, surface_scene, s.n, si.li.n);
     // The lamps (D-065): every one whose reach the surface is in and that lights its room, times
     // the filtered share of their light that reaches it (`lamp_filter_main`), or with a shadow ray
     // each; the classes take them where they take the sun (`sun_light`).
