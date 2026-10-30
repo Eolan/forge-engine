@@ -131,9 +131,12 @@ struct GpuProbeField {
     /// illuminance (#363).
     far_lamp_scale: f32,
     far_table: u64,
+    /// Where the finest cascade stands ([`Probes::set_focus`]).
+    focus: [f32; 3],
+    focus_pad: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<GpuProbeField>() == 584);
+const _: () = assert!(std::mem::size_of::<GpuProbeField>() == 600);
 
 /// `REGION_NONE` in `probes.slang`: a probe in a recess or a doorway, no region's.
 const REGION_NONE: u32 = u32::MAX;
@@ -691,6 +694,8 @@ pub struct Probes {
     sun: [Vec3; 2],
     /// The sun's illuminance, lux ([`Self::set_sun`]): the resolve's units.
     sun_illuminance: f32,
+    /// The finest cascade's centre from the camera, metres ([`Self::set_focus`]).
+    focus: Vec3,
     /// Each room's lamps that are on, lumens per channel ([`Self::set_room_lamps`], #363).
     room_lumens: std::collections::BTreeMap<u32, [f32; 3]>,
     wake_boxes: Vec<Buffer>,
@@ -871,6 +876,7 @@ impl Probes {
             far: None,
             sun: [Vec3::Y, Vec3::ZERO],
             sun_illuminance: 1.0,
+            focus: Vec3::ZERO,
             room_lumens: Default::default(),
             wake_boxes,
             irradiance: atlas(
@@ -973,6 +979,14 @@ impl Probes {
     pub fn set_sun(&mut self, direction: Vec3, color: Vec3, illuminance: f32) {
         self.sun = [direction.normalize_or_zero(), color];
         self.sun_illuminance = illuminance;
+    }
+
+    /// Stands the finest cascade `offset` metres from the camera, where the view looks rather than
+    /// round the camera (D-088's coverage measure, `r.gi.probe_ahead`); the coarser cascades stay
+    /// round the camera. It scrolls by whole cells as the camera's does. Zero, as by default: round
+    /// the camera. Kept until set again.
+    pub fn set_focus(&mut self, offset: Vec3) {
+        self.focus = offset;
     }
 
     /// The scene's lamps this frame and the shares of them it lights (#363,
@@ -1119,7 +1133,8 @@ impl Probes {
         for (c, cascade) in cascades.iter_mut().enumerate().take(p.cascades as usize) {
             let spacing = p.spacing * (1u32 << c) as f32;
             let counts = p.cascade_counts(c as u32);
-            let origin = cascade_origin(camera, spacing, counts);
+            let centre = if c == 0 { camera + self.focus } else { camera };
+            let origin = cascade_origin(centre, spacing, counts);
             // After a reset, a previous origin two volumes away: every probe is new.
             let previous = if self.reset {
                 origin + 2 * IVec3::new(counts[0] as i32, counts[1] as i32, counts[2] as i32)
@@ -1251,6 +1266,8 @@ impl Probes {
             far_mask: far.map_or(0, |f| f.2),
             far_lamp_scale: 1.0 / self.sun_illuminance.max(1e-9),
             far_table: far.map_or(0, |f| f.3),
+            focus: (camera + self.focus).to_array(),
+            focus_pad: 0,
         };
         self.fields[slot.index].write(0, &[field]);
 

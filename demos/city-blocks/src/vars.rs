@@ -27,6 +27,7 @@ pub(crate) struct RenderVars {
     show_input: Var<i64>,
     gi_reference: Var<i64>,
     gi_trace: Var<bool>,
+    gi_probe_ahead: Var<f64>,
     ao_ignore_nearer: Var<f64>,
     exposure_brighten: Var<f64>,
     exposure_darken: Var<f64>,
@@ -216,6 +217,7 @@ impl Gallery {
             show_input: s.add(rs::show_input(0)),
             gi_reference: s.add(rs::gi_reference(0)),
             gi_trace: s.add(rs::gi_trace(false)),
+            gi_probe_ahead: s.add(rs::gi_probe_ahead(0.0)),
             ao_ignore_nearer: s.add(rs::ao_ignore_nearer(0.0)),
             exposure_brighten: s.add_from_f32(
                 rs::exposure_speed_brighten(0.8),
@@ -372,6 +374,9 @@ impl Gallery {
         }
         if s.changed_since(v.gi_trace, seen) {
             self.renderer.gi_trace = s.get(v.gi_trace);
+        }
+        if s.changed_since(v.gi_probe_ahead, seen) {
+            self.probe_ahead = s.get(v.gi_probe_ahead) as f32;
         }
         if s.changed_since(v.ao_ignore_nearer, seen) {
             self.ao_ignore_nearer = s.get(v.ao_ignore_nearer) as f32;

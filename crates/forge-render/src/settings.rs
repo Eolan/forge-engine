@@ -327,6 +327,17 @@ pub fn sky_reflections(default: bool) -> Spec<bool> {
     )
 }
 
+/// How far ahead along the view the finest probe cascade stands (D-088's coverage measure).
+pub fn gi_probe_ahead(default: f64) -> Spec<f64> {
+    Spec::float(
+        "r.gi.probe_ahead",
+        default,
+        0.0..=64.0,
+        "Metres ahead along the view the finest probe cascade stands, rather than round the \
+         camera (D-088, a measure); 0 round the camera.",
+    )
+}
+
 /// D-088's diffuse bounce traced per pixel before the resolve.
 pub fn gi_trace(default: bool) -> Spec<bool> {
     Spec::bool(

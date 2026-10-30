@@ -863,10 +863,13 @@ struct Gallery {
     sun_shadow_on: Option<usize>,
     /// D-088's diffuse bounce denoiser (NVIDIA's REBLUR), loaded the first time `r.gi.trace` asks
     /// for it; `diffuse_tried` once it was (without NRD the bounce is read as traced), and
-    /// `diffuse_was_on` whether the last frame traced it (its history starts over when it did not).
+    /// `diffuse_was_on` whether it denoised the last frame (its history starts over when not).
     diffuse_denoiser: Option<forge_render::DiffuseDenoiser>,
     diffuse_tried: bool,
     diffuse_was_on: bool,
+    /// Metres ahead along the view the finest probe cascade stands (`r.gi.probe_ahead`, D-088's
+    /// coverage measure); 0 round the camera.
+    probe_ahead: f32,
     /// The mirror rays' history (#176, D-050): the glass's reflections settled before TAA.
     reflection_history: forge_render::ReflectionHistory,
     /// The mirrors' motion vectors moved towards their reflections (`r.reflections.motion`): DLSS
@@ -2097,6 +2100,7 @@ impl Gallery {
             diffuse_denoiser: None,
             diffuse_tried: false,
             diffuse_was_on: false,
+            probe_ahead: 0.0,
             reflection_history,
             reflection_motion: true,
             sun_scale,
@@ -2566,7 +2570,6 @@ impl Demo for Gallery {
         {
             denoiser.reset_history();
         }
-        self.diffuse_was_on = self.renderer.gi_trace;
         // The last frame's linear capture, its copy finished once the device is idle.
         if let Some(capture) = self.linear_capture.take() {
             ctx.device.wait_idle();
@@ -3266,6 +3269,8 @@ impl Demo for Gallery {
                     let t = self.frame as f32 * self.step;
                     Vec3::new(v[0], 0.0, z) * v.get(2).map_or(t, |&stop| t.min(stop))
                 });
+                // D-088's coverage measure: the finest cascade ahead along the view.
+                probes.set_focus(self.camera.forward() * self.probe_ahead);
                 // The far rooms' daylight follows the sun (#356).
                 probes.set_sun(
                     self.renderer.sun_dir,
@@ -3514,7 +3519,8 @@ impl Demo for Gallery {
         // D-088's diffuse bounce, traced before the resolve (`r.gi.trace`): denoised by REBLUR
         // where NRD and the sun's shadow rays' guides are there, else read as traced.
         let mut diffuse_bounce = None;
-        if self.renderer.gi_trace && self.sky_light && !in_space {
+        let mut denoised = false;
+        if self.renderer.gi_trace && self.sky_light && !in_space && self.scene.rays().is_some() {
             let reblur = self.diffuse_denoiser.as_mut().zip(nrd_guides);
             let reblur_frame = reblur.map(|(d, (.., camera, _))| d.frame(camera));
             let for_denoiser = nrd_guides
@@ -3539,6 +3545,7 @@ impl Demo for Gallery {
                 reblur_frame,
             ) {
                 (Some(bounce), Some(denoiser), Some((rays, motion, ..)), Some(reblur_frame)) => {
+                    denoised = true;
                     let denoiser: &'f forge_render::DiffuseDenoiser = denoiser;
                     Some(denoiser.denoise(
                         &mut frame.graph,
@@ -3552,6 +3559,8 @@ impl Demo for Gallery {
                 (traced, ..) => traced,
             };
         }
+        // REBLUR's history starts over after a frame it did not denoise.
+        self.diffuse_was_on = denoised;
         self.renderer.resolve(
             &mut frame.graph,
             frame.slot,

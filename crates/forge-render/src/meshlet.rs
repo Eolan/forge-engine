@@ -949,6 +949,13 @@ pub struct DiffuseForDenoiser {
     pub hit_distance: [f32; 3],
 }
 
+impl DiffuseForDenoiser {
+    /// Nothing but the rays: every pixel's own, read by the resolve as traced.
+    fn none() -> ([f32; 4], [f32; 4]) {
+        ([0.0; 4], [1.0, 0.0, 1.0, 0.0])
+    }
+}
+
 /// Mirrors `LampShadowPush` in `meshlet.slang` (D-065): the lamps' rays and their filter.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -6049,7 +6056,7 @@ impl MeshletRenderer {
                     d.view_z.to_array(),
                     [d.hit_distance[0], d.hit_distance[1], d.hit_distance[2], 1.0],
                 ),
-                None => ([0.0; 4], [1.0, 0.0, 1.0, 0.0]),
+                None => DiffuseForDenoiser::none(),
             };
             commands.push_constants(
                 pipeline,
@@ -6253,7 +6260,7 @@ impl MeshletRenderer {
                 let index = |image: Option<ImageHandle>| {
                     image.map_or(0xFFFF, |image| {
                         let i = resources.sampled(image).0;
-                        debug_assert!(i < 0xFFFF, "a sampled index past 16 bits");
+                        assert!(i < 0xFFFF, "a sampled index past 16 bits");
                         i
                     })
                 };
@@ -6302,6 +6309,9 @@ impl MeshletRenderer {
         }
         if let Some(shadow) = ambient.sun_shadow {
             builder = builder.image(shadow, ImageAccess::Sampled(compute));
+        }
+        if let Some(bounce) = ambient.diffuse_bounce {
+            builder = builder.image(bounce, ImageAccess::Sampled(compute));
         }
         for image in ambient.lamp_shadows.images() {
             builder = builder.image(image, ImageAccess::Sampled(compute));

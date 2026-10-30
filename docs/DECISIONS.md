@@ -8493,6 +8493,19 @@ looked at it):
   REBLUR reuses the guides the sun's shadow rays write for SIGMA. Without NRD the resolve reads
   every pixel's ray as traced, noisy under DLAA; the decision's own fallback filter is still to
   write.
+- **The review's fixes** (a read-only review of the batch):
+  - The standard resolve pass now declares the bounce's image.
+  - NRD's first-frame clears leave its inputs alone: REBLUR lists the motion vectors, which a
+    clear wiped for a frame.
+  - The bounce's lamp seed no longer cancels the frame's own term.
+  - REBLUR's history starts over after a frame it did not denoise.
+  - The pass runs only with a ray scene.
+  - The light and lengths are sanitised as NRD's front end does it.
+  - The 16-bit index is checked in release builds.
+  - The path reference runs without probes.
+  - Not taken: directions turned beyond TAA's cycle. A pixel then meets more than 4 directions,
+    but a still camera's changing pixels doubled (5,054 to 10,507). The directions only move off
+    the sun's disc points.
 - **Found on the way:**
   - **A race.** The bounce's image shares memory with the lamp shadow rays' images. In the
     village's rooms on the RTX 5070 Ti, REBLUR read texels of the latter back: a bright band at
@@ -8524,6 +8537,24 @@ looked at it):
     - GTAO is unused where the bounce is on (about 0.2 ms).
     - The barriers can be narrowed.
   - The fallback filter without NRD.
+  - **The finest cascade ahead of the camera** (`r.gi.probe_ahead`, the owner's question through a
+    side session, 2026-10-30). Cascade 0 stands that many metres along the view instead of round
+    the camera, the same probes, scrolling by whole cells. Against Forge's path in clay, the mean
+    of |log2| of the 16 × 9 tiles' ratios:
+
+    | | Exterior_1, probes | Exterior_1, bounce | Exterior_2, bounce |
+    |---|---|---|---|
+    | round the camera | 0.155 | 0.059 | 0.224 |
+    | 10 m ahead | 0.150 | 0.057 | 0.216 |
+    | 20 m ahead | 0.099 | 0.041 | 0.207 |
+    | 1 m everywhere (`--probe-finest 96,16,96`) | 0.076 | 0.035 | 0.204 |
+
+    20 m ahead costs nothing: 4.0 ms with the probes alone, against 11.6 for 1 m everywhere. It
+    holds most of 1 m everywhere's gain at Exterior_1. At Exterior_2 the camera already stands
+    among the shade. Turning at 5° a second (2 px a frame), the frames' changes against the next
+    one shifted back are the same within 0.1 % (276,598 round the camera, 276,514 ahead, with the
+    bounce), with no spike. Still to look at: walking, and the owner's eye, before it becomes a
+    default.
   - **The surface cache** (`research/surface-radiance-cache.md`). No design was found clearly
     free of live patents: NVIDIA's Pantaleoni family runs to 2039 and Keller's path space
     filtering to 2034, both broad. The note recommends persistent records on a dense clipmap, no

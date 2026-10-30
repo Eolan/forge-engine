@@ -6117,7 +6117,7 @@ float3 path_from(Frame* f, float4* sky, ProbeField* probes, RayHit hit, float3 d
     {
         if (hit.back)
             break;
-        sum += weight * (hit_sunlight(f, hit) + hit_lamps(f, hit, REGION_NONE, seed + k, false));
+        sum += weight * (hit_sunlight(f, hit) + hit_lamps(f, hit, REGION_NONE, (seed + k) * 0x27D4EB2Fu, false));
         weight *= hit.albedo;
         if (k + 1u == traced)
         {
@@ -7004,10 +7004,10 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     // D-088's references for the diffuse light (`r.gi.reference`), or its bounce traced before
     // the resolve (`diffuse_trace_main`, the high half of the sun shadow's word).
     uint bounce_image = resolve_push.sun_shadow >> 16;
-    g_near_on = SHADOWS != 0 && f[0].gi_reference != 0u && s.probes != nullptr && s.sky != nullptr && f[0].tlas != 0;
+    g_near_on = SHADOWS != 0 && f[0].gi_reference != 0u && (s.probes != nullptr || f[0].gi_reference == GI_REFERENCE_PATH) && s.sky != nullptr && f[0].tlas != 0;
     if (g_near_on)
         g_near_irradiance = near_field_reference(f, s.sky, s.probes, surface_scene, s.n, si.li.n, f[0].gi_reference);
-    else if (bounce_image != 0xFFFFu && s.sky != nullptr)
+    else if (bounce_image != 0xFFFFu && s.sky != nullptr && f[0].tlas != 0)
     {
         // In YCoCg, as REBLUR reads and writes it (`ycocg_to_linear`).
         g_near_on = true;
@@ -7604,7 +7604,11 @@ void diffuse_trace_main(uint3 id : SV_DispatchThreadID)
     PixelSurface s = pixel_surface(f, vis, pixel, p.width, p.height);
     // The trees' cards near, their proxies far, as the resolve's own rays.
     g_ray_mask = shadow_world(f, s.relative, pixel);
-    float2 u = spatio_temporal_noise(pixel, f[0].noise_frame);
+    // The noise's point moved by R2's first step, apart from the sun's disc points of
+    // `sun_shadow_trace_main`. It repeats with TAA's cycle: a pixel traces 4 directions over and
+    // over (the checkerboard), and REBLUR settles on them. Turned each round, they doubled a
+    // still camera's changing pixels (5,054 to 10,507 at Exterior_1).
+    float2 u = frac(spatio_temporal_noise(pixel, f[0].noise_frame) + float2(0.7548777, 0.5698403));
     RayDesc ray;
     // Round the vertices' normal, but never under the triangle's own face, where it bends round
     // a box's edges: a ray under the face is mirrored over it.
@@ -7617,18 +7621,22 @@ void diffuse_trace_main(uint3 id : SV_DispatchThreadID)
     ray.TMax = PATH_RANGE;
     ClosestHit c = trace_past_glass(f, ray);
     float3 light;
+    bool back = false;
     if (!c.hit)
         light = sky_along(p.sky, ray.Direction);
     else
     {
         RayHit hit = ray_hit(f, c.instance, c.primitive, c.barycentrics, ray.Origin, ray.Direction, c.t);
-        uint seed = (pixel.x * 0x8DA6B343u) ^ (pixel.y * 0xD8163841u) ^ (f[0].noise_frame * 0x9E3779B9u);
+        // The pixel's own number: `hit_lamps` turns it with the frame.
+        uint seed = (pixel.x * 0x8DA6B343u) ^ (pixel.y * 0xD8163841u);
         light = hit.back ? float3(0.0) : hit_radiance(f, p.sky, p.probes, hit, ray.Direction) + hit_lamps(f, hit, REGION_NONE, seed, false);
+        back = hit.back;
     }
-    // NRD's front end sanitises: no NaN, nothing past half precision.
-    light = any(isnan(light)) || any(isinf(light)) ? float3(0.0) : min(light, 65504.0);
+    // NRD's front end sanitises: no NaN, nothing under 0 or past half precision; a ray that met a
+    // surface's back started inside it, a length of 0 as NRD asks.
+    light = any(isnan(light)) || any(isinf(light)) ? float3(0.0) : clamp(light, 0.0, 65504.0);
     float view_z = dot(p.view_z.xyz, s.relative) + p.view_z.w;
-    bounce[at] = float4(linear_to_ycocg(light), reblur_hit_distance(c.t, view_z, p.hit_distance.xyz));
+    bounce[at] = float4(linear_to_ycocg(light), reblur_hit_distance(back ? 0.0 : c.t, view_z, p.hit_distance.xyz));
 }
 
 // --------------------------------------------------------- the lamps' penumbrae ---

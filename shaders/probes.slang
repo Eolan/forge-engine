@@ -238,6 +238,8 @@ public struct ProbeField
     public uint far_mask;         // the far rooms' table's entries less one (#356)
     public float far_lamp_scale;  // the far rooms' lamps' light (lux in the table) to the resolve's units: 1 over the sun's illuminance (#363)
     public uint4* far_table;      // the far rooms' light (#356, #363): (region, its share's bits, its lamps' bounce as three halves), region 0 an empty entry; null: none
+    public float3 focus;          // world metres: where the finest cascade stands and fades round (`Probes::set_focus`), else `camera`
+    public uint focus_pad;
 };
 
 // The coarse cell `key`'s first entry in a table of `mask + 1` (`top_hash` in regions.rs).
@@ -581,7 +583,7 @@ float cascade_weight_over(ProbeField* field, uint c, float3 p, float3 band)
 {
     float s = field[0].cascades[c].spacing;
     float3 reach = (float3(field[0].cascades[c].counts) * 0.5 - 1.5) * s;
-    float3 w = saturate((reach - abs(p - field[0].camera)) / (band * s));
+    float3 w = saturate((reach - abs(p - (c == 0u ? field[0].focus : field[0].camera))) / (band * s));
     return w.x * w.y * w.z;
 }
 

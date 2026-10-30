@@ -1429,7 +1429,17 @@ mod imp {
                     };
                     bound.push((handle, r.descriptor_type == DESCRIPTOR_STORAGE_TEXTURE));
                 }
-                // NRD's clears (its first frame): the whole image cleared to zero by Vulkan.
+                // NRD's clears (its first frame): the whole image cleared to zero by Vulkan. Of
+                // its own images and outputs only: REBLUR binds the motion vectors as storage, and
+                // NRD lists them for a clear, which would wipe the frame's motion (and the image
+                // was not made to be a transfer's destination).
+                if self.clear_pipelines.contains(&dispatch.pipeline_index)
+                    && resources
+                        .iter()
+                        .any(|r| r.resource_type < OUT_DIFF_RADIANCE_HITDIST)
+                {
+                    continue;
+                }
                 if self.clear_pipelines.contains(&dispatch.pipeline_index) {
                     let [(image, true)] = bound[..] else {
                         return Err(GpuError::Nrd("a clear of other than one image".into()));
@@ -1473,7 +1483,8 @@ mod imp {
                 // full barriers (#349's kind): with the graph's own, its passes read texels of the
                 // memory the diffuse rays' image shares with another transient in the village's
                 // rooms on the RTX 5070 Ti (2026-10-30, a band at the frame's foot), where the
-                // serial frame (#207) and separate memory did not.
+                // serial frame (#207) and separate memory did not, nor declaring the image to
+                // every resolve pass.
                 let mut builder = graph.pass(self.label(dispatch.name));
                 if self.kind == Kind::ReblurDiffuse {
                     builder = builder.full_barrier();
