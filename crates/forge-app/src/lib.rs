@@ -722,6 +722,9 @@ struct State<D: Demo> {
     preset_applied: u64,
     /// `app.window`: windowed or borderless fullscreen, followed each frame.
     window_mode: Var<usize>,
+    /// The settings' change count when the window last matched `app.window`: a later change of
+    /// the setting moves the window, a window moved without one (Alt+Enter) moves the setting.
+    window_followed: u64,
     /// The user's settings file (`settings/user.cfg`): the menu's choices and the first
     /// launch's, written again whenever one changes; `None` in a scripted run. Its leading
     /// comment lines are kept.
@@ -926,18 +929,21 @@ impl<D: Demo> State<D> {
         let wanted = self.ctx.settings.get(self.window_mode) == 1;
         let is = self.ctx.window.fullscreen().is_some();
         if wanted != is {
-            // Alt+Enter changed the window, not the setting: the setting follows, for the run.
-            if self.ctx.settings.source(self.window_mode) == settings::Source::Code
-                || !self
-                    .ctx
-                    .settings
-                    .changed_since(self.window_mode, self.preset_applied)
+            // The setting changed since the window last matched it (the user's file at start, the
+            // menu, a preset, the console): the window follows. Otherwise Alt+Enter changed the
+            // window, not the setting: the setting follows, for the run. Asked whether the
+            // setting changed since the preset was applied, Alt+Enter was undone the next frame.
+            if self
+                .ctx
+                .settings
+                .changed_since(self.window_mode, self.window_followed)
             {
                 self.toggle_fullscreen();
             }
             let now = self.ctx.window.fullscreen().is_some();
             self.ctx.settings.set(self.window_mode, usize::from(now));
         }
+        self.window_followed = self.ctx.settings.changes();
     }
 
     /// `r.preset` followed ([`presets`]): a preset chosen sets its patch, as from where the
@@ -1545,6 +1551,7 @@ impl<D: Demo> State<D> {
             preset,
             preset_applied: 0,
             window_mode,
+            window_followed: 0,
             user_file,
             user_header,
             menu: menu::Menu::default(),
