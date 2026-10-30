@@ -2427,6 +2427,25 @@ picture is rolled 1.1°, which `--view` cannot give, so Forge and Falcor are com
   suspect (pivots or geometric offsets).
 - **Back faces:** the awnings' beams and the flowers' leaves, black in Falcor, lit in Forge (as
   the night's).
+- **The probes a metre apart** (the authored scenes' look since, as the village's: six cascades,
+  41,472 probes, +0.65 ms): the awnings' undersides from 3–6 to 1.5–2, the terrace's floor and
+  tables 0.6 to 1.2. Exterior_1's shade, 15 to 40 m off, is past the finest cascade and keeps
+  its 1.3 to 2.7; 1 m over the whole view takes 8.6 ms and leaves 1.3 to 2.0. GTAO at 5 m darkens
+  the open ground as much as the shade (0.3 to 0.6).
+- **The reflection in the café's right window** (the owner, 2026-10-30: "the window inside the
+  reflection ... is different than the nvidia one"):
+  - **Its detail:** a mirror ray's hit took each map's average (its last level, as the probes'
+    rays do), so the house across the street showed flat: no curtains behind its grilles, no
+    stones in its pilaster. The hit now reads its maps at its UV, at the level of the pixel's
+    cone there (`ray_hit_seen`); its albedo shows the curtains, the stones, the bricks. Lit, the
+    room behind the curtains' lace is as bright as the lace (the hit's probes, as the shade's
+    above), so the curtains still read weakly. A still camera: 5,244 pixels against 5,237 before,
+    no shimmer added.
+  - **Its place:** about 40 px to the left of Falcor's. The café's panes' corners lean 12.5° off
+    their faces on average (27° at most) in the converted glTF; set to the faces' own, the
+    reflection moves 17 px further left. Falcor's (assimp's reading of the FBX) lean more, and
+    NVIDIA's picture is Falcor's: a converter matter (Blender's FBX import against assimp's), not
+    the mirror rays'.
 
 **Not yet:**
 - **The night's light by default:** without `FORGE_BISTRO_LAMPS=1` the emissive surfaces light

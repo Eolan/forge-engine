@@ -243,11 +243,20 @@ impl Scenario for LabScenario {
             particles: kind == LabScene::Smoke,
             // The models lab's rooms, lit through a few openings and seen at an indoor
             // exposure: 256 rays, probes a metre apart (#171).
-            probes: (kind == LabScene::Models && models::room_shown()).then_some((
-                256,
-                ROOM_PROBE_SPACING,
-                forge_render::probes::ProbeParams::default().cascades,
-            )),
+            // An authored scene's as the village's, the finest a metre apart in six cascades
+            // (D-083): at 4 m the street's light reached under the Bistro's awnings, their
+            // undersides 3 to 6 times Falcor's (1.5 to 2 at 1 m, for 0.65 ms).
+            probes: if kind == LabScene::Models && models::room_shown() {
+                Some((
+                    256,
+                    ROOM_PROBE_SPACING,
+                    forge_render::probes::ProbeParams::default().cascades,
+                ))
+            } else if kind.authored().is_some() {
+                Some((forge_render::probes::ProbeParams::default().rays, 1.0, 6))
+            } else {
+                None
+            },
             // The lab's bodies are what it shows: the probes see them (#299).
             probes_see_movers: true,
             probe_far_room_sky: None,

@@ -393,6 +393,11 @@ frames, three runs each alternating with `--no-reflection-history`:
 - `shading/reflection history` (the clear of the image the rays write) 0.003 ms;
 - the frame 2.67–2.69 → 2.69 ms (one run 2.78).
 
+With the mirror rays' hits read at their footprint (D-083, 2026-10-30: the hit's maps at its UV,
+the level of the pixel's cone at the hit, where they took each map's average): the Bistro's
+Exterior_2 view at 1600 × 900, `shading/reflections` 0.169 → 0.182 ms, the frame unchanged
+within its runs (4.13–4.14 ms). The probes' rays keep the average.
+
 **The slimes' jelly in every scene (#190, 2026-10-08).** The Tier 2 check at 4589dbb timed the
 city 0.2–0.35 ms slower than the last milestone (4110732): the south view 2.63 → 2.84 ms, the
 orbit 3.03 → 3.31, the flight 2.48 → 2.83, and the island 0.04 slower. The zones put it all in
