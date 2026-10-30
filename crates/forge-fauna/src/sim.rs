@@ -1142,7 +1142,16 @@ impl<'p> Fauna<'p> {
                 between(s, 2, 0, -6.0, 6.0),
                 between(s, 3, 0, -2.0, 2.0),
             );
-            self.pos[i] = gr.goal + off;
+            // Never inside a building or a wall: drawn by its goal among the houses, a swift
+            // started inside one and climbed out through its roof (#308's new lots).
+            let mut p = gr.goal + off;
+            for _ in 0..80 {
+                if !self.plan.solid(p, 0.3) {
+                    break;
+                }
+                p.z += 0.5;
+            }
+            self.pos[i] = p;
             self.vel[i] = Vec3::X * self.species[gr.species as usize].cruise;
             self.mode[i] = Mode::Air;
         }
