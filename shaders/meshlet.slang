@@ -278,6 +278,9 @@ public static const uint FLAG_SHOW_LADDER = 67108864;
 // a branch they never took changed their code enough to show #349's unshaded tiles.
 public static const uint FLAG_BAKE_ALBEDO = 134217728;
 public static const uint FLAG_BAKE_NORMAL = 268435456;
+// GGX without its multiple-scattering compensation (D-086, `r.specular.single_scatter`): Falcor's,
+// for the material chart's comparisons.
+public static const uint FLAG_SINGLE_SCATTER = 536870912;
 
 static const uint PAGE_NONE = 0xFFFFFFFF;           // an absent page in `page_table`, no page in `child_page`
 static const uint MESHLET_INDEX_MASK = 0x3FFFFFFFu;
@@ -3934,11 +3937,11 @@ RayDesc lamp_ray(Lamp lamp, float3 world, float3 n, float bias, float3 offset)
 // surface reflects, which its diffuse part loses. `sky_share` scales the table's light in the
 // mirror direction `r`: the share of it the probes find there (issue #68), else 1. `traced`: a
 // mirror ray replaces the open sky's part of it that `traced_share` gives.
-float3 sky_reflection(float4* sky, float3 irradiance, float3 n, float3 view, float3 r, float3 sky_share, float specular_power, float ao, float3 f0, bool traced, out float3 fresnel)
+float3 sky_reflection(float4* sky, float3 irradiance, float3 n, float3 view, float3 r, float3 sky_share, float specular_power, float ao, float3 f0, bool traced, bool multiscatter, out float3 fresnel)
 {
     float roughness = sqrt(sqrt(2.0 / (specular_power + 2.0))); // RenderLayer::roughness_for_power, inverted
     float nv = saturate(dot(n, view));
-    fresnel = f0 + (max(1.0 - roughness, f0) - f0) * pow(1.0 - nv, 5.0);
+    fresnel = environment_specular(f0, roughness, nv, multiscatter);
     float4 up_table = sky[SH_COEFFICIENTS];
     float3 forward = sky[SH_COEFFICIENTS + 1].xyz;
     // Luminance per unit of sun illuminance, times π: the resolve's units. The traced share
@@ -3957,6 +3960,29 @@ float3 sky_reflection(float4* sky, float3 irradiance, float3 n, float3 view, flo
     // A metal's tint stays off its traced share: the request holds one weight (its luminance).
     g_reflection_request = float4(r, dot(fresnel, float3(0.2126, 0.7152, 0.0722)) * traced_weight);
     return fresnel * (occlusion * (environment - traced_weight * open) + traced_weight * open);
+}
+
+// GGX's directional albedo over a sky (D-086): Karis's split sum, its DFG term by Lazarov's
+// analytic fit (Karis, "Physically Based Shading on Mobile", 2014) of `roughness` (perceptual) and
+// n·v, as F0 times A plus B; with `multiscatter`, Fdez-Agüera's compensation (JCGT 2019) of the
+// light single-scattering GGX loses between its microfacets, which grows with the roughness: a
+// rough metal keeps its light, as a real one does. The share the reflection takes, and the
+// diffuse loses. Replaced Lagarde's roughness-bounded Schlick, which kept a rough metal at its
+// F0 (as bright as white paper) and a rough dielectric's grazing rise too high.
+float3 environment_specular(float3 f0, float roughness, float nv, bool multiscatter)
+{
+    const float4 c0 = float4(-1.0, -0.0275, -0.572, 0.022);
+    const float4 c1 = float4(1.0, 0.0425, 1.04, -0.04);
+    float4 q = roughness * c0 + c1;
+    float a004 = min(q.x * q.x, exp2(-9.28 * nv)) * q.x + q.y;
+    float2 ab = float2(-1.04, 1.04) * a004 + q.zw;
+    float3 single = f0 * ab.x + ab.y;
+    if (!multiscatter)
+        return single;
+    float ess = ab.x + ab.y;
+    float3 average = f0 + (1.0 - f0) / 21.0;
+    float3 multiple = single * average / (1.0 - (1.0 - ess) * average);
+    return single + multiple * (1.0 - ess);
 }
 
 // The rough end of the mirror rays (#306): roughness 0.30, Blinn-Phong about 245. Smoother rows
@@ -4023,7 +4049,7 @@ float3 sun_light(Frame* f, float3 albedo, float3 n, float3 geometric, float spec
         if (!reflects)
             return albedo * (diffuse * sun + ambient + g_lamp_diffuse) + specular * sun + g_lamp_specular;
         float3 fresnel;
-        float3 reflection = sky_reflection(sky, irradiance, n, view, r, sky_share, specular_power, ao, reflectance, traced, fresnel);
+        float3 reflection = sky_reflection(sky, irradiance, n, view, r, sky_share, specular_power, ao, reflectance, traced, (f[0].flags & FLAG_SINGLE_SCATTER) == 0, fresnel);
         return albedo * (diffuse * sun + ambient + g_lamp_diffuse) * (1.0 - fresnel) + specular * sun + g_lamp_specular + reflection;
     }
     // Space: hard sun, faint fill from the nebula side, a little wrap so shadows are not black.

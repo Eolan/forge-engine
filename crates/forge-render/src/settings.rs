@@ -304,6 +304,15 @@ pub fn sky_reflections(default: bool) -> Spec<bool> {
     )
 }
 
+/// GGX without its multiple-scattering compensation (D-086).
+pub fn single_scatter(default: bool) -> Spec<bool> {
+    Spec::bool(
+        "r.specular.single_scatter",
+        default,
+        "GGX without its multiple-scattering compensation, as Falcor's (rough metals darker).",
+    )
+}
+
 /// The mirror rays against the scene.
 pub fn ray_reflections(default: bool) -> Spec<bool> {
     Spec::bool(

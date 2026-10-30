@@ -72,6 +72,7 @@ impl Gallery {
             (rs::shadows(true), CullFlags::SHADOWS, true),
             (rs::sky_reflections(true), CullFlags::SKY_REFLECTIONS, true),
             (rs::ray_reflections(true), CullFlags::RAY_REFLECTIONS, true),
+            (rs::single_scatter(false), CullFlags::SINGLE_SCATTER, false),
             (rs::occlusion(true), CullFlags::OCCLUSION, true),
             (rs::lod(true), CullFlags::LOD, true),
             (

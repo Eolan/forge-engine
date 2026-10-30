@@ -8147,6 +8147,21 @@ the environment's, step C), the dark tile 1.27 → 1.00, the ground 1.26 → 1.0
 their BC5 normals still flattened, step E); a still camera 5,331 pixels against 5,245; the frame's
 cost unchanged (4.60 ms).
 
+**Step B, tinted metals:** F0 per channel, a metal's its base colour, through the sun's highlight
+and the sky's and probes' reflection (a traced mirror ray's share keeps one weight, its
+luminance: the request image holds one). The chart's gold at roughness 0.2: (2.26, 1.76, 0.86)
+against Falcor's (2.53, 1.92, 0.84).
+
+**Step C, the environment by the split sum:** GGX's directional albedo from Lazarov's analytic
+DFG fit (Karis 2014), and Fdez-Agüera's multiple-scattering compensation (JCGT 2019; no patent
+found in a search, used by Blender's EEVEE and VTK), switchable for the comparisons
+(`r.specular.single_scatter`). The chart: with single scattering as Falcor's, silver 0.73–1.15 and
+gold 0.65–1.17 across roughness (0.21–5.56 and 0.28–6.72 before D-086); with the compensation
+(the default) rough metals keep their light, silver 1.30–2.04 and gold 1.21–1.90 at roughness 0.8
+and 1, Falcor's lost energy; dielectrics 0.88–0.93, the tiles 0.95–1.00. Open: smooth metals at
+0.66–0.74. The Bistro's Exterior_1 against Falcor in Lambert: the sunlit street 1.01–1.06 (0.92–1.07
+before D-086); a still camera 5,032 pixels (5,245 before D-086); the frame 4.61 ms, unchanged.
+
 
 **Why:** the owner asked how Forge knows it is accurate ("sometimes I find sun light reflection
 to be too bright, losing the details of what the light is reflecting off"). Until Falcor, by

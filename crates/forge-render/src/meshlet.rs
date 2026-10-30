@@ -102,6 +102,9 @@ impl CullFlags {
     /// Their shading normal (scene frame, × 0.5 + 0.5) instead of the shading, as
     /// [`Self::BAKE_ALBEDO`] does the base colour.
     pub const BAKE_NORMAL: u32 = 1 << 28;
+    /// GGX without its multiple-scattering compensation (D-086): Falcor's, for the material
+    /// chart's comparisons (`FLAG_SINGLE_SCATTER` in the shader).
+    pub const SINGLE_SCATTER: u32 = 1 << 29;
     /// Everything on except the debug views.
     pub const DEFAULT: Self = Self(Self::CONE | Self::FRUSTUM | Self::OCCLUSION | Self::LOD);
 
