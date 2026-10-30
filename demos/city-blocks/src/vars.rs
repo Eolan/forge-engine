@@ -24,6 +24,7 @@ pub(crate) struct RenderVars {
     ao: Var<bool>,
     ao_radius: Var<f64>,
     texture_lod_bias: Var<f64>,
+    show_input: Var<i64>,
     ao_ignore_nearer: Var<f64>,
     exposure_brighten: Var<f64>,
     exposure_darken: Var<f64>,
@@ -210,6 +211,7 @@ impl Gallery {
                 0.0,
                 self.renderer.texture_lod_bias,
             ),
+            show_input: s.add(rs::show_input(0)),
             ao_ignore_nearer: s.add(rs::ao_ignore_nearer(0.0)),
             exposure_brighten: s.add_from_f32(
                 rs::exposure_speed_brighten(0.8),
@@ -357,6 +359,9 @@ impl Gallery {
         }
         if s.changed_since(v.texture_lod_bias, seen) {
             self.renderer.texture_lod_bias = s.get(v.texture_lod_bias) as f32;
+        }
+        if s.changed_since(v.show_input, seen) {
+            self.renderer.show_input = s.get(v.show_input).clamp(0, 6) as u32;
         }
         if s.changed_since(v.ao_ignore_nearer, seen) {
             self.ao_ignore_nearer = s.get(v.ao_ignore_nearer) as f32;

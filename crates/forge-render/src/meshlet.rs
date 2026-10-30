@@ -718,7 +718,9 @@ struct GpuFrame {
     grass_wind: [f32; 4],
     grass_wind_before: f32,
     grass_depth: u32,
-    grass_pad2: [u32; 2],
+    /// A debug view of a standard row's shading input (D-086, [`MeshletRenderer::show_input`]).
+    show_input: u32,
+    grass_pad2: u32,
 }
 
 /// Where a frame slot's light lists start in its lamps' buffer, bytes: after the lamps.
@@ -3986,6 +3988,10 @@ pub struct MeshletRenderer {
     /// draws smaller than it shows, so the textures keep the output's detail, as DLSS and FSR ask
     /// (D-070). 0 leaves every image as it was.
     pub texture_lod_bias: f32,
+    /// A debug view of the standard rows' shading inputs (D-086, `r.show.input`): 0 none, 1 the
+    /// diffuse albedo, 2 the roughness, 3 the metalness, 4 the normal, 5 the lobe's widening
+    /// (Toksvig red, the geometry's green), 6 Fresnel's F0.
+    pub show_input: u32,
 }
 
 /// What to draw this frame.
@@ -4558,6 +4564,7 @@ impl MeshletRenderer {
             sun_angular_radius: 0.0,
             noise_frame: 0,
             texture_lod_bias: 0.0,
+            show_input: 0,
         })
     }
 
@@ -5089,7 +5096,8 @@ impl MeshletRenderer {
             grass_wind: [way.x, way.y, wind.length(), grass_now],
             grass_wind_before: grass_before,
             grass_depth,
-            grass_pad2: [0; 2],
+            show_input: self.show_input,
+            grass_pad2: 0,
         }
     }
 

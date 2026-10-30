@@ -240,6 +240,17 @@ pub fn texture_lod_bias(default: f64) -> Spec<f64> {
     )
 }
 
+/// A debug view of the standard rows' shading inputs (D-086).
+pub fn show_input(default: i64) -> Spec<i64> {
+    Spec::int(
+        "r.show.input",
+        default,
+        0..=6,
+        "A shading input instead of the light: 1 albedo, 2 roughness, 3 metalness, 4 normal, \
+         5 the highlight's widening (Toksvig red, geometry green), 6 F0; 0 none.",
+    )
+}
+
 /// How many frames the sun's shadows' denoiser steadies over (#337, SIGMA's stabilisation).
 pub fn shadow_history(default: i64) -> Spec<i64> {
     Spec::int(

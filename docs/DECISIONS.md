@@ -8183,6 +8183,13 @@ pixels (5,032). A mip bias of −1 (NVIDIA's DLSS guidance for DLAA, `r.textures
 default) sharpens the cobbles a little for 10 % more shimmer (5,502): not taken. Falcor's
 cobbles keep more contrast (its 1,024 jittered samples of level 0).
 
+**Step F, the debug views:** `r.show.input` shows a standard row's shading input in place of its
+light, before the tone curve: 1 the diffuse albedo, 2 the perceptual roughness after Toksvig, 3
+the metalness, 4 the shading normal, 5 the lobe's widening (Toksvig's variance red, the geometry's
+under the pixel green, × 4), 6 Fresnel's F0. In the Bistro the cobbles read rough (about 1) a few
+metres off, their bumps' spread widening the lobe as step E meant. Still to come: the GPU test per
+normal-map format (the CPU test checks the levels' shortening).
+
 
 **Why:** the owner asked how Forge knows it is accurate ("sometimes I find sun light reflection
 to be too bright, losing the details of what the light is reflecting off"). Until Falcor, by

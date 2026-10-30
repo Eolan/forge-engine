@@ -516,7 +516,8 @@ public struct Frame
     public float4 grass_wind;       // xy: the wind's way on the ground (unit), z: its strength (the tips' lean in it, a share of their height), w: the sway's time (s)
     public float grass_wind_before; // the sway's time the frame before (s): the blades' motion (`grass_motion_main`)
     public uint grass_depth;        // its cells along z
-    public uint2 grass_pad2;
+    public uint show_input;         // a debug view of a standard row's shading input (D-086, `r.show.input`, `shading_input`); 0: none
+    public uint grass_pad2;
 };
 
 // Whether this thread's rays meet the movers: every pass's but the probes' unless their scene asks
@@ -4558,7 +4559,28 @@ struct LightInputs
     float ao;
     float3 reflectance; // Fresnel's F0 per channel: a metal's its base colour (D-086)
     float3 emissive;
+    float metal;        // its metalness (the debug views)
+    float variance;     // its normal map's spread under the pixel, Toksvig's (the debug views)
 };
+
+// A debug view of a standard row's shading input (D-086, `r.show.input`): 1 the diffuse albedo,
+// 2 the perceptual roughness (after Toksvig), 3 the metalness, 4 the shading normal (scene frame,
+// × 0.5 + 0.5), 5 the lobe's widening (Toksvig's variance in red, the geometry's under the pixel
+// in green, × 4), 6 Fresnel's F0. Values as they are, before the tone curve.
+float3 shading_input(uint view, LightInputs li)
+{
+    if (view == 1u)
+        return li.albedo;
+    if (view == 2u)
+        return float3(sqrt(sqrt(2.0 / (li.power + 2.0))));
+    if (view == 3u)
+        return float3(li.metal);
+    if (view == 4u)
+        return li.n * 0.5 + 0.5;
+    if (view == 5u)
+        return float3(li.variance, max(g_normal_variance, 0.0), 0.0) * 4.0;
+    return li.reflectance;
+}
 
 // A row read by UV (D-047): its maps, decals and leaves into what its light takes.
 LightInputs uv_mapped_light(Frame* f, Material mat, Surface s)
@@ -4634,6 +4656,8 @@ LightInputs uv_mapped_light(Frame* f, Material mat, Surface s)
     li.power = power;
     li.ao = ao;
     li.emissive = emissive;
+    li.metal = metal;
+    li.variance = variance;
     return li;
 }
 
@@ -4818,6 +4842,8 @@ StandardInputs row_inputs(Material mat, Surface s)
     si.li.ao = s.ao;
     si.li.reflectance = float3(mat.reflectance);
     si.li.emissive = float3(0.0);
+    si.li.metal = 0.0;
+    si.li.variance = 0.0;
     si.n = s.n;
     si.uv = false;
     si.interior = false;
@@ -4840,6 +4866,8 @@ StandardInputs standard_inputs(Frame* f, Material mat, Surface s)
     li.specular = mat.specular;
     li.ao = s.ao;
     li.reflectance = float3(mat.reflectance);
+    li.metal = 0.0;
+    li.variance = 0.0;
     bool uv = false;
     bool interior = false;
     if (!debug_albedo(f, s.meshlet_index, s.lod_level, albedo))
@@ -6909,6 +6937,9 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
         color = lerp(color, float3(0.15, 0.35, 1.0) * dot(color, float3(0.3, 0.6, 0.1)) * 2.0, 0.85);
     if ((f[0].flags & FLAG_SHOW_AO) != 0 && s.ao >= 0.0)
         color = float3(s.ao * 0.25); // the occlusion, as a light grey surface in the sun
+    // A standard row's shading input (D-086), its value out of the exposure below.
+    if (f[0].show_input != 0u && class_index == MATERIAL_CLASS_STANDARD)
+        color = shading_input(f[0].show_input, si.li) / max(f[0].sun_illuminance * f[0].exposure / 3.14159265, 1e-9);
     if ((f[0].flags & FLAG_SHOW_GI) != 0 && s.sky != nullptr)
     {
         // The light the sky and the city send a white surface, without the sun's own and the
