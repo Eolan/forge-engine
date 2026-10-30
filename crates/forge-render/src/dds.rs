@@ -425,7 +425,7 @@ pub fn bc5_normals_to_bc7(texture: &CompressedTexture) -> Option<CompressedTextu
     let (w, h) = (texture.width as usize, texture.height as usize);
     let blocks_x = w.div_ceil(4).max(1);
     let mut level0 = vec![Vec3::Z; w * h];
-    for (i, block) in texture.levels.first()?.chunks_exact(16).enumerate() {
+    for (i, block) in texture.levels.first()?.as_chunks::<16>().0.iter().enumerate() {
         let (bx, by) = (i % blocks_x, i / blocks_x);
         let (red, green) = (channel_values(&block[0..8]), channel_values(&block[8..16]));
         for t in 0..16 {
