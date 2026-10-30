@@ -8115,7 +8115,38 @@ whatever the metal. The Bistro's lamp post, a dark rough metal (reflectance 8.5 
 Neutral curve's black offset was undone: to measure again. The highlight is still Blinn-Phong,
 untinted, and without the light's cosine.
 
-## D-086 — Forge's surface model, measured against Falcor: a microfacet BRDF for every light 🟡 (proposed, 2026-10-30)
+## D-086 — Forge's surface model, measured against Falcor: a microfacet BRDF for every light ✅ (proposed and decided 2026-10-30)
+
+**Decided (the owner, 2026-10-30: "about the decisions I will follow recommendations"):**
+- **Diffuse: Lambert, kept.** Every comparison runs Falcor with its diffuse switched to Lambert
+  (the local define), so the gaps measured are Forge's specular and light. Next to NVIDIA's own
+  pictures rough surfaces stay up to ~1.5 times brighter: a choice, not an error (Frostbite's
+  renormalised Disney is a convention; a white rough tile head-on reflects ~0.66 of a real white
+  diffuser). With the specular fixes in, the chart and the Bistro both ways for the owner to
+  revisit.
+- **The BC7 encoder crate:** approved, free and royalty-free, credited, its patents checked first
+  (and Kulla-Conty's or Fdez-Agüera's compensation's).
+- **The rest as proposed**, in its order, with the lamps' size added (below).
+- **The rows' highlight weights** (RenderLayer's `specular`, tuned under Blinn-Phong from 0.02 to
+  0.8): a row's GGX highlight takes `min(specular / 0.05, 1)` of itself. Weights under the
+  default (a bench, damp prints, rubber) keep a dimmer highlight; those over it made up for the
+  unnormalised lobe, which GGX's normalisation gives.
+- **The lamps' size** (the owner's side session, 2026-10-30, on the scooter "flat especially
+  during the night"): a lamp's sphere widens its GGX lobe as the sun's disc does (its angular
+  radius from the surface), so a smooth surface's highlight of a bulb is the bulb's size, not a
+  sub-pixel point; and the lamps' highlights take the pixel's own roughness, normal and
+  reflectance (today the row's factors before its maps: roughness 1 on every mapped row).
+
+**Step A, the sun's highlight (2026-10-30):** GGX with the height-correlated Smith visibility and
+Schlick's Fresnel from the row's reflectance, its lobe α² = 2 / (power + 2) widened by the normals'
+spread under the pixel and by the sun's disc ((θ/2)²). The chart, sun at 30° from the side, against
+Falcor in Lambert at 16 bounces: the grey spheres 0.86–1.02 → 0.91–0.93, the red 0.76–1.16 →
+0.88–0.93, silver 0.21–5.56 → 0.74–2.13, gold 0.28–6.72 → 0.82–2.77 (the rough metals' rest is
+the environment's, step C), the dark tile 1.27 → 1.00, the ground 1.26 → 1.00, the white tile
+0.96. The Bistro's Exterior_1: the sunlit street 0.92–1.07 → 1.04–1.17 (its cobbles' highlight;
+their BC5 normals still flattened, step E); a still camera 5,331 pixels against 5,245; the frame's
+cost unchanged (4.60 ms).
+
 
 **Why:** the owner asked how Forge knows it is accurate ("sometimes I find sun light reflection
 to be too bright, losing the details of what the light is reflecting off"). Until Falcor, by
@@ -8181,7 +8212,7 @@ the café's front to 0.9 to 1.4, at 8.6 ms and 464 MB; 1 m within 24 m, or 2 m, 
 a 5 m occlusion radius (GTAO) takes it to 1.0 to 1.3, too dark in places. The real-time answer
 (occlusion traced at medium range, or probes placed by the geometry) is a design of its own.
 
-## D-087 — The night's light from its emissive surfaces: emitters as lamps, probes without them 🟡 (proposed, 2026-10-30; D-083 step 3)
+## D-087 — The night's light from its emissive surfaces: emitters as lamps, probes without them ✅ (proposed and decided 2026-10-30, the owner following the recommendations; D-083 step 3)
 
 **Why:** the owner: "emitting lights are less bright in our engine" and, of a night run, "it's
 shimmering everywhere, light is not stable". NVIDIA's Night picture, its camera solved from six
@@ -8238,7 +8269,7 @@ brackets. At the Night view, Forge's light over Falcor's:
 - **Open:** the many-lights path's cost and its noise as lamps grow; the street lamps by ReSTIR
   DI not tried (`--street-restir` needs them `outside`).
 
-## D-088 — The light in shade: a near field traced per pixel over the probes 🟡 (proposed, 2026-10-30; D-083)
+## D-088 — The light in shade: a near field traced per pixel over the probes ✅ (proposed and decided 2026-10-30, the owner following the recommendations; after D-086; D-083)
 
 **Why:** the largest error left in the Bistro by day, in every view. Measured in clay (every
 material 50 % grey, no maps but the normals, nothing cut out: `FORGE_BISTRO_CLAY=1` and the

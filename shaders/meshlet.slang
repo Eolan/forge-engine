@@ -3583,6 +3583,50 @@ float aa_power(float power)
     return 2.0 / saturate(alpha2 + g_normal_variance) - 2.0;
 }
 
+// The highlights' model (D-086): GGX (Trowbridge-Reitz) with the height-correlated Smith visibility
+// and Schlick's Fresnel, as Falcor's and every current engine's. A row's lobe is still given as a
+// Blinn-Phong power (RenderLayer::specular_power): GGX's α² is 2 / (power + 2).
+static const float GGX_PI = 3.14159265;
+
+// The default highlight weight of a row (RenderLayer's `specular`): under GGX a row's weight only
+// dims its highlight (the paths' benches at 0.02, damp prints at 0.03); weights over it made up
+// for Blinn-Phong's unnormalised lobe, which GGX's normalisation now gives.
+static const float DEFAULT_SPECULAR = 0.05;
+
+// The share of the GGX highlight a row with highlight weight `weight` keeps.
+float highlight_share(float weight)
+{
+    return saturate(weight / DEFAULT_SPECULAR);
+}
+
+// GGX's α² for a row of Blinn-Phong power `power`, widened by the normals' spread under the
+// pixel (`g_normal_variance`, as `aa_power` widens the exponent) and by `extra` (a light's
+// size: the sun's disc).
+float ggx_alpha2(float power, float extra)
+{
+    return saturate(2.0 / (power + 2.0) + max(g_normal_variance, 0.0) + extra);
+}
+
+// The light a GGX surface (lobe α², reflectance at normal incidence `f0`) facing `n` sends towards
+// the unit `view` per unit of illuminance from the unit direction `light` (at normal incidence),
+// in the resolve's units: π times the BRDF times n·l.
+float3 ggx_light(float3 n, float3 view, float3 light, float a2, float3 f0)
+{
+    float nl = saturate(dot(n, light));
+    if (nl <= 0.0)
+        return float3(0.0);
+    float nv = max(dot(n, view), 1e-4);
+    float3 h = normalize(light + view);
+    float nh = saturate(dot(n, h));
+    float vh = saturate(dot(view, h));
+    a2 = max(a2, 1e-7);
+    float d = nh * nh * (a2 - 1.0) + 1.0;
+    float distribution = a2 / (GGX_PI * d * d);
+    float visibility = 0.5 / max(nl * sqrt(nv * nv * (1.0 - a2) + a2) + nv * sqrt(nl * nl * (1.0 - a2) + a2), 1e-7);
+    float3 fresnel = f0 + (1.0 - f0) * pow(1.0 - vh, 5.0);
+    return GGX_PI * distribution * visibility * fresnel * nl;
+}
+
 // A Blinn-Phong highlight with its exponent widened by `g_normal_variance`, its energy kept (the
 // lobe's integral goes as 1 / (power + 2)).
 float aa_highlight(float nh, float power)
@@ -3942,9 +3986,13 @@ float3 sun_light(Frame* f, float3 albedo, float3 n, float3 geometric, float spec
     float3 light = normalize(f[0].sun_dir);
     ndl = dot(n, light);
     float3 diffuse = max(ndl, 0.0) * shadow;
-    // The highlight's half vector, from the surface towards the camera (issue #98).
-    float3 half_vector = normalize(light + view);
-    float3 specular = aa_highlight(dot(n, half_vector), specular_power) * specular_weight * (ndl > 0.0 ? shadow : float3(0.0));
+    // The sun's highlight (D-086): GGX, its lobe widened by the sun's disc (half its angular
+    // radius on α, so a smooth row's glint is the disc's own size and no brighter), Fresnel from
+    // the row's reflectance. Blinn-Phong's fixed weight added 5 % of the sun on every rough
+    // surface (a dark tile +27 %) and missed a smooth metal's glint.
+    float disc = 0.5 * f[0].sun_angular_radius;
+    float3 specular = ggx_light(n, view, light, ggx_alpha2(specular_power, disc * disc), reflectance)
+        * highlight_share(specular_weight) * (ndl > 0.0 ? shadow : float3(0.0));
     float3 sun = f[0].sun_color.rgb;
     // Under a sky: the light the sky and the ground send the normal (issue #47), scaled by
     // how much of it the surface sees (issue #48). With probes, what they measured there
