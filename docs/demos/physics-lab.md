@@ -2425,7 +2425,8 @@ picture is rolled 1.1°, which `--view` cannot give, so Forge and Falcor are com
   denoiser or back faces: the same with each off or exact. The converted glTF opens a seam of
   about a centimetre between pieces of `Paris_Building_01` that Falcor's own reading of the FBX
   keeps closed; `tools/fbx-to-gltf.py` changes no geometry, so Blender's FBX import is the
-  suspect (pivots or geometric offsets).
+  suspect. Not pivots or geometric offsets (two post-rotations in the FBX's 1,299 models); its
+  n-gons' triangulation, which Blender and assimp do each their own way, next.
 - **Back faces:** the awnings' beams and the flowers' leaves, black in Falcor, lit in Forge (as
   the night's).
 - **The probes a metre apart** (the authored scenes' look since, as the village's: six cascades,
