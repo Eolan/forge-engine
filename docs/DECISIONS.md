@@ -8237,3 +8237,55 @@ brackets. At the Night view, Forge's light over Falcor's:
   (`hit_lamps`); the light and the flicker (6,111 pixels) the same.
 - **Open:** the many-lights path's cost and its noise as lamps grow; the street lamps by ReSTIR
   DI not tried (`--street-restir` needs them `outside`).
+
+## D-088 — The light in shade: a near field traced per pixel over the probes 🟡 (proposed, 2026-10-30; D-083)
+
+**Why:** the largest error left in the Bistro by day, in every view. Measured in clay (every
+material 50 % grey, no maps but the normals, nothing cut out: `FORGE_BISTRO_CLAY=1` and the
+Falcor script's `BISTRO_CLAY`, Falcor's diffuse switched to Lambert as Forge's and 16 bounces),
+Forge's light over Falcor's:
+- **Exterior_1:** the sunlit street 1.1 to 1.2 (an offset of its own: the sun and the sky's
+  calibration, measured apart), the shade under the awnings and along the fronts 1.3 to 1.8.
+- **Exterior_2:** the terrace's floor 0.8 to 1.0; the café's window bays 2 to 3, the probes'
+  light in blotches on the panes where Falcor's are an even dark grey.
+- **With the materials:** under Exterior_2's awnings the undersides 3 to 6 with the probes 4 m
+  apart, 1.5 to 2 at 1 m (the authored scenes' look since); a mirror ray's hit in a room behind
+  curtains lit as the street (the reflection the owner pointed at, 2026-10-30).
+
+The probes' light is interpolated between points 1 to 4 m apart: a surface in a recess (a window
+bay 30 cm deep, under an awning 2 m deep) takes the light of probes that see the open street.
+Measured fixes within the probes fall short: 1 m over the whole view 8.6 ms and still 1.3 to 2.0
+(D-086's note); GTAO at 5 m darkens the open ground as much as the shade (0.3 to 0.6).
+
+**The proposal** (D-008's T2 tier's first step, the probes as its radiance cache):
+- **The near field traced per pixel:** at half resolution, one cosine-weighted ray a pixel a frame
+  to a range of twice the finest probe spacing (2 m at 1 m). A ray that leaves the range takes
+  the probes' light in its direction (the far field, as now); one that meets a surface takes that
+  surface's light: the sun through a shadow ray, the lamps (`hit_lamps`), and the probes' light
+  at the hit for its own bounce. The probes no longer light what the near field sees closed.
+- **Denoised by NRD** (D-061's, already in Forge for SIGMA): its diffuse denoiser (REBLUR, or
+  RELAX for the flicker), temporal then spatial, before DLAA.
+- **Mirror rays' hits** take the probes as now (one hit in many pixels); the near field is the
+  primary surfaces'.
+- **Rooms** (D-078) keep their grids; the near field corrects within them too.
+
+**Targets:** in clay, the shade at both views within 0.8 to 1.25 of Falcor's; the textured views
+after; a still camera's frames no less steady than now (0.37 % by day, 0.29 % at night); at most
+1.5 ms at 1600 × 900 on the RTX 5070 Ti; the village's walk (`tools/map-check.sh`) and the city's
+sentinels looked at for change.
+
+**Considered:**
+- **Probes everywhere 1 m apart:** 8.6 ms and 464 MB, the shade still 1.3 to 2.0.
+- **Screen-space GI:** cheap, but blind to what the frame does not show (the awning above the
+  frame's top), and it changes as the camera turns.
+- **ReSTIR GI** (Ouyang et al. 2021): more light per ray, heavier; NVIDIA holds applications on
+  ReSTIR's resampling (to check, as RTXDI's were): a later tier.
+- **Probes placed by the geometry:** a redesign, and detail under their spacing still leaks.
+
+**Patents:** a short-range ray gather over a radiance cache is decades old (final gathering);
+Epic's Lumen combines screen probes and its own caches in ways to check before borrowing any of
+its specifics; NRD under NVIDIA's RTX SDK licence, as SIGMA. To be listed per technique before
+code, as the owner asks.
+
+**Cost:** a new pass (rays and their hits' shading at half resolution) and NRD's diffuse
+denoiser; measured before and after on the Bistro, the village and the city.

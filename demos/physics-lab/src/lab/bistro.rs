@@ -381,6 +381,7 @@ pub(super) fn rows(
     let open = open_edges(&b.model);
     let open_time = measured.elapsed();
     let mut rows_made = 0;
+    let clay = std::env::var("FORGE_BISTRO_CLAY").is_ok_and(|v| v == "1");
     for (k, mesh) in b.model.meshes.iter().enumerate() {
         let uvs = !mesh.mesh.uvs.is_empty();
         let rows = mesh
@@ -419,6 +420,20 @@ pub(super) fn rows(
                     m.roughness = f32::from(roughness) / 255.0;
                     m.metallic = f32::from(metal) / 255.0;
                 }
+                // Clay (`FORGE_BISTRO_CLAY=1`, as the Falcor script's): a 50 % grey diffuse,
+                // its normal map alone kept, nothing cut out, no glow; the light alone compared.
+                let maps = if clay {
+                    m.base_color = [0.5, 0.5, 0.5, 1.0];
+                    m.roughness = 1.0;
+                    m.metallic = 0.0;
+                    m.emissive = [0.0; 3];
+                    ExternalMaps {
+                        normal: maps.normal,
+                        ..ExternalMaps::default()
+                    }
+                } else {
+                    maps
+                };
                 m.double_sided = m.name.ends_with(".DoubleSided")
                     || maps.alpha_cutoff.is_some()
                     || SHEETS.iter().any(|s| m.name.contains(s))

@@ -2448,6 +2448,11 @@ picture is rolled 1.1°, which `--view` cannot give, so Forge and Falcor are com
     NVIDIA's picture is Falcor's: a converter matter (Blender's FBX import against assimp's), not
     the mirror rays'.
 
+**Clay** (`FORGE_BISTRO_CLAY=1`, as the Falcor script's `BISTRO_CLAY`): every material a 50 %
+grey diffuse, its normal map alone kept, nothing cut out, no glow: the light alone, compared with
+Falcor's switched to Lambert at 16 bounces. The shade 1.3 to 1.8 at Exterior_1, the café's window
+bays 2 to 3 at Exterior_2 (D-088).
+
 **Not yet:**
 - **The night's light by default:** without `FORGE_BISTRO_LAMPS=1` the emissive surfaces light
   the street through the probes alone (D-087 waits for the owner's decision).
