@@ -709,10 +709,11 @@ fn glow_lamp(g: &Glow) -> Option<Lamp> {
         )
     };
     Some(Lamp {
-        // A flat piece's in front of it by its radius: the shadow rays aim at its disc, and on
-        // the piece itself half the disc lay behind its face, which blocked them from aside.
+        // A flat piece's half its radius in front of it: the shadow rays aim at its disc, and on
+        // the piece itself half the disc lay behind its face, which blocked them from aside; a
+        // whole radius left what stands close in front of the piece behind the cone's apex.
         position: if flat {
-            g.middle + g.normal.normalize_or_zero() * radius
+            g.middle + g.normal.normalize_or_zero() * (0.5 * radius)
         } else {
             g.middle
         },

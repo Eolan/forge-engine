@@ -3906,9 +3906,12 @@ float3 sky_reflection(float4* sky, float3 irradiance, float3 n, float3 view, flo
     float3 environment = lerp(mirror, irradiance, blend);
     float occlusion = ao >= 0.0 ? saturate(pow(nv + ao, exp2(-16.0 * roughness - 1.0)) - 1.0 + ao) : 1.0;
     // For the mirror ray of the smooth rows (issue #52): its direction, and the weight of what
-    // it meets in place of the open sky.
-    g_reflection_request = float4(r, fresnel * occlusion * (1.0 - blend) * traced_share);
-    return fresnel * occlusion * environment;
+    // it meets in place of the open sky. That share takes no occlusion: its ray meets what blocks
+    // the light, and GTAO darkened it a second time (a smooth body's reflection by about its ao
+    // at roughness 0.25; D-086, the Bistro's scooter). The rest keeps it.
+    float traced_weight = (1.0 - blend) * traced_share;
+    g_reflection_request = float4(r, fresnel * traced_weight);
+    return fresnel * (occlusion * (environment - traced_weight * open) + traced_weight * open);
 }
 
 // The rough end of the mirror rays (#306): roughness 0.30, Blinn-Phong about 245. Smoother rows
@@ -5813,10 +5816,10 @@ RayHit ray_hit(Frame* f, uint instance, uint primitive, float2 b, float3 origin,
 }
 
 // The level of `texture` whose texels are `footprint` metres across on triangle `tri` of `mesh`
-// (its face `face` as `ray_hit` scales it, the hit at barycentrics `b`): the triangle's area over
-// its texels'. `at`: the hit's UV, turned by `mat`'s transform. 16 (the average) and the middle
-// where the mesh has no UVs.
-float hit_texture_level(Frame* f, RtMesh mesh, uint tri, float2 b, Material mat, float3 face, float footprint, uint texture, out float2 at)
+// (its face `face` as `ray_hit` scales it, once by the instance's `scale`, the hit at barycentrics
+// `b`): the triangle's area over its texels'. `at`: the hit's UV, turned by `mat`'s transform. 16
+// (the average) and the middle where the mesh has no UVs.
+float hit_texture_level(Frame* f, RtMesh mesh, uint tri, float2 b, Material mat, float3 face, float scale, float footprint, uint texture, out float2 at)
 {
     at = float2(0.5, 0.5);
     RtScene* rs = f[0].rt_scene;
@@ -5835,7 +5838,7 @@ float hit_texture_level(Frame* f, RtMesh mesh, uint tri, float2 b, Material mat,
     float2 e1 = (uv[1] - uv[0]) * float2(size);
     float2 e2 = (uv[2] - uv[0]) * float2(size);
     float texels = 0.5 * abs(e1.x * e2.y - e1.y * e2.x);
-    float area = 0.5 * length(face);
+    float area = 0.5 * length(face) * scale;
     if (texels <= 0.0 || area <= 0.0)
         return 16.0;
     return max(log2(footprint / sqrt(area / texels)), 0.0);
@@ -5843,8 +5846,10 @@ float hit_texture_level(Frame* f, RtMesh mesh, uint tri, float2 b, Material mat,
 
 // `ray_hit` with its maps read where it was met (D-083: the Bistro's reflections showed its
 // walls flat, the stones of a pilaster and the curtains behind a window lost), at the level of
-// `footprint`, the ray's width there in metres; with none (0), each map's average, as the probes'
-// rays take it: read finer, the far facades' detail flickered in them.
+// `footprint`, the ray's width there in metres, widened as the ray grazes the surface (a ray
+// cone's); with none (0), each map's average, as the probes' rays take it: read finer, the far
+// facades' detail flickered in them. Only rows whose maps read the mesh's UVs (MATERIAL_FLAG_UV;
+// not a layered ground's layers, nor the rows mapped by their position).
 RayHit ray_hit_seen(Frame* f, uint instance, uint primitive, float2 b, float3 origin, float3 direction, float t, float footprint)
 {
     RtScene* rs = f[0].rt_scene;
@@ -5889,12 +5894,14 @@ RayHit ray_hit_seen(Frame* f, uint instance, uint primitive, float2 b, float3 or
         mat = f[0].materials[row + 1 + id];
     }
     hit.albedo = lerp(mat.color_a, mat.color_b, hash_color(tint).x);
+    bool mapped = footprint > 0.0 && (mat.flags & MATERIAL_FLAG_UV) != 0;
+    float wide = footprint / max(abs(dot(hit.n, direction)), 0.1);
     if (mat.albedo_texture != TEXTURE_NONE)
     {
-        if (footprint > 0.0 && mat.class_index != MATERIAL_CLASS_LAYERED)
+        if (mapped)
         {
             float2 at;
-            float level = hit_texture_level(f, mesh, tri, b, mat, face, footprint, mat.albedo_texture, at);
+            float level = hit_texture_level(f, mesh, tri, b, mat, face, inst.scale, wide, mat.albedo_texture, at);
             hit.albedo *= sample_image_level(mat.albedo_texture, mat.sampler, at, level).rgb;
         }
         else
@@ -5904,9 +5911,18 @@ RayHit ray_hit_seen(Frame* f, uint instance, uint primitive, float2 b, float3 or
     // What the hit emits as the frame shows it (#254): an emissive map's average (its last mip,
     // as the albedo), and a window's room its lamp's share over walls about half as bright as
     // white (`interior_room`). With the row's full value the lit windows' and the far facades'
-    // light flooded the probes at night.
+    // light flooded the probes at night. A mirror ray's, read where it was met as its albedo.
     if (mat.emissive_texture != TEXTURE_NONE)
-        hit.emissive *= sample_image_level(mat.emissive_texture, SAMPLER_LINEAR_REPEAT, float2(0.5, 0.5), 16.0).rgb;
+    {
+        if (mapped)
+        {
+            float2 at;
+            float level = hit_texture_level(f, mesh, tri, b, mat, face, inst.scale, wide, mat.emissive_texture, at);
+            hit.emissive *= sample_image_level(mat.emissive_texture, mat.sampler, at, level).rgb;
+        }
+        else
+            hit.emissive *= sample_image_level(mat.emissive_texture, SAMPLER_LINEAR_REPEAT, float2(0.5, 0.5), 16.0).rgb;
+    }
     if ((mat.flags & MATERIAL_FLAG_INTERIOR) != 0)
         hit.emissive *= ((mat.flags & MATERIAL_FLAG_SHOP) != 0 ? ROOM_SHOP_LAMP : ROOM_LAMP) * 0.55;
     return hit;
@@ -6018,13 +6034,14 @@ float3 hit_radiance(Frame* f, float4* sky, ProbeField* probes, RayHit hit, float
 // lamps light the hit as they light a probe's (`hit_lamps`, `seed` the pixel's number).
 float4 trace_reflection_from(Frame* f, float4* sky, ProbeField* probes, float3 origin, float3 direction, uint seed, float start, out float distance, out bool mover)
 {
-    return trace_reflection_seen(f, sky, probes, origin, direction, seed, start, 0.0, 0.0, distance, mover);
+    return trace_reflection_seen(f, sky, probes, origin, direction, seed, start, 0.0, 0.0, 0.0, distance, mover);
 }
 
 // `trace_reflection_from` whose hit reads its maps where it was met (`ray_hit_seen`): the ray a
 // pixel's cone, `spread` radians across, from the camera `travelled` metres off the surface it
-// leaves (a flat mirror's: the cone goes on as from the camera's image).
-float4 trace_reflection_seen(Frame* f, float4* sky, ProbeField* probes, float3 origin, float3 direction, uint seed, float start, float spread, float travelled, out float distance, out bool mover)
+// leaves (a flat mirror's: the cone goes on as from the camera's image), widened by the
+// reflector's lobe, `lobe` radians across from the surface on.
+float4 trace_reflection_seen(Frame* f, float4* sky, ProbeField* probes, float3 origin, float3 direction, uint seed, float start, float spread, float travelled, float lobe, out float distance, out bool mover)
 {
     RayDesc ray;
     ray.Origin = origin;
@@ -6036,7 +6053,7 @@ float4 trace_reflection_seen(Frame* f, float4* sky, ProbeField* probes, float3 o
     mover = c.mover;
     if (!c.hit)
         return float4(0.0);
-    RayHit hit = ray_hit_seen(f, c.instance, c.primitive, c.barycentrics, origin, direction, c.t, spread * (travelled + c.t));
+    RayHit hit = ray_hit_seen(f, c.instance, c.primitive, c.barycentrics, origin, direction, c.t, spread * (travelled + c.t) + lobe * c.t);
     return float4(hit_radiance(f, sky, probes, hit, direction) + hit_lamps(f, hit, REGION_NONE, seed, false), 1.0);
 }
 
@@ -6924,10 +6941,13 @@ void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
     float4* sky = resolve_push.sky;
     float distance;
     bool mover;
-    // The pixel's cone (`ladder_size`'s pixels per radian) from the camera to the surface and on.
+    // The pixel's cone (`ladder_size`'s pixels per radian) from the camera to the surface and on,
+    // and the row's lobe, its GGX width (roughness squared) each side: a glossy floor's hits read
+    // as finely as a mirror's would bring back #306's hatch of streaks.
     float spread = f[0].texture_lod_scale / (f[0].p11 * 0.5 * f[0].viewport_height);
     float travelled = length(mul(frame, object_position) + relative);
-    float4 hit = trace_reflection_seen(f, sky, resolve_push.probes, world + n * 0.05, request.xyz, uint(pixel.x) * 0x8DA6B343u ^ uint(pixel.y) * 0xD8163841u, mirror_start(f, inst, m), spread, travelled, distance, mover);
+    float rough = sqrt(sqrt(2.0 / (mat.specular_power + 2.0)));
+    float4 hit = trace_reflection_seen(f, sky, resolve_push.probes, world + n * 0.05, request.xyz, uint(pixel.x) * 0x8DA6B343u ^ uint(pixel.y) * 0xD8163841u, mirror_start(f, inst, m), spread, travelled, 2.0 * rough * rough, distance, mover);
     ReflectionHistory* history = resolve_push.reflection_history;
     // The pixel's motion vector moved towards its reflection's virtual point (`r.reflections.motion`,
     // the motion vectors' index in the ambient occlusion's slot, which this pass never reads): on
