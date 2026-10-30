@@ -135,8 +135,8 @@ the issues name (#353, #334, #356: a far wall seen from two distances is the han
 
 **The light against the references** (2026-10-30, D-083's calibration, D-088):
 `tools/gi-compare.sh [OUT_DIR]` runs each diffuse light technique (`r.gi.cache` off, port,
-sharc) over the Bistro (in clay and textured), the classroom and the village's landing, room and
-street.
+sharc) over the Bistro (in clay and textured, by day and at night), the classroom, the material
+chart and the village's landing, room and street.
 - **The error:** each technique against Forge's path tracer and Falcor's renders (outside the
   repository, `FALCOR_OUT`), by the mean |log2| of 16 × 9 tiles of light.
 - **The cost:** the GPU ms of alternating runs.

@@ -23,32 +23,37 @@
 # OUT_DIR (default captures/gi-compare) gets the captures and logs, sheets/, error.txt,
 # timings.txt and summary.md. Settings, as variables:
 # - FORGE_VIEWS: views to run, separated by spaces (default all): bistro-e1-clay bistro-e2-clay
-#   bistro-e1 bistro-e2 classroom-clay classroom village-landing village-room village-street.
+#   bistro-e1 bistro-e2 bistro-night classroom-clay classroom chart village-landing village-room
+#   village-street.
 # - FORGE_TECHNIQUES: `r.gi.cache` values (default "off port sharc").
 # - FORGE_RUNS: timing runs per technique (default 3; 0 skips the timing).
 # - FORGE_TIME_FRAMES: frames per timing run (default 1200: the demos average every frame, and the
 #   first, a cache filling from empty, weigh less over more).
 # - FORGE_REUSE=1: keep the captures already in OUT_DIR (the path tracer takes minutes a view).
+# - FALCOR_OUT: Falcor's renders, NAME.AccumulatePass.output.0.exr (default ../falcor/out beside
+#   the checkout), times 2,871 for the Bistro and 12,800 for the classroom and the chart:
+#   - the Bistro's clay-ext1-lam16, clay-ext2-lam16, ext1-lam16 and ext2-lam16 (Lambert's
+#     diffuse, 16 bounces), and night1600 (the emissive surfaces alone);
+#   - the classroom's crl-clay and crl-tex;
+#   - the chart's lam16-side-30.
+# - BLENDER: Blender's executable (else found on the PATH or in its default Windows place).
 #
 # A technique that does not start (`sharc` without `sharc-sdk/` or 64-bit atomics, the port
 # without its pool) falls back to the probes with a warning: the tool drops it from the view
 # rather than measuring the probes under its name. A failed run is left out of the means.
-# - FALCOR_OUT: Falcor's renders, NAME.AccumulatePass.output.0.exr (default ../falcor/out beside
-#   the checkout): the Bistro's clay-ext1-lam16, clay-ext2-lam16, ext1-lam16, ext2-lam16 (Lambert
-#   diffuse, 16 bounces, × 2,871) and the classroom's crl-clay, crl-tex (× 12,800).
-# - BLENDER: Blender's executable (else found on the PATH or in its default Windows place).
 #
 # Needs the release build (physics-lab, city-plan, contact-sheet) and the scenes' assets in
-# assets/external/ (the Bistro and the classroom, fetched by hand, D-083). Every run holds the
-# GPU lock (FORGE_GPU_LOCK, default %TEMP%/forge-gpu.lock), as tools/verify.sh does. The owner's
-# settings file (forge.cfg, D-069) never changes a scripted run. About an hour for every view.
+# assets/external/ (the Bistro, the classroom and the chart, made by hand, D-083). Each demo run
+# holds the GPU lock (FORGE_GPU_LOCK, default %TEMP%/forge-gpu.lock) and frees it after, so
+# other sessions' runs fit between. The owner's settings file (forge.cfg, D-069) never changes a
+# scripted run. About an hour and a half for all the views.
 export FORGE_CFG=none FORGE_SOUND=0
 export FORGE_MONITOR=${FORGE_MONITOR:-secondary}
 set -uo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 out=${1:-$root/captures/gi-compare}
-views=${FORGE_VIEWS:-bistro-e1-clay bistro-e2-clay bistro-e1 bistro-e2 classroom-clay classroom village-landing village-room village-street}
+views=${FORGE_VIEWS:-bistro-e1-clay bistro-e2-clay bistro-e1 bistro-e2 bistro-night classroom-clay classroom chart village-landing village-room village-street}
 techniques=${FORGE_TECHNIQUES:-off port sharc}
 runs=${FORGE_RUNS:-3}
 time_frames=${FORGE_TIME_FRAMES:-1200}
@@ -121,12 +126,19 @@ fell_back() { [ -f "$1" ] && grep -qE "no SHaRC|no surface cache" "$1"; }
 E1="--view=-23.700,6.855,-0.704,-93.13,-15.93 --fov 36.22"
 E2="--view=13.378,2.280,11.709,48.33,-0.50 --fov 38.90"
 CLASSROOM="--view=-1.6905,1.2716,5.8865,-8.705,1.622 --fov 35.9834"
+NIGHT="--view=-16.735,5.218,2.083,-80.44,-9.63 --fov 55.99"
 VILLAGE="--village 600 --time-of-day 0.75 --no-fauna"
-# describe VIEW: sets the view's demo, its flags, clay (1: every surface a white diffuse), its
-# fixed exposure and its Falcor reference (a file stem in FALCOR_OUT and its scale), if any.
+# describe VIEW: sets the view's demo, its flags, clay (1: every surface a grey diffuse), the
+# environment it runs with (sky), its fixed exposure and its Falcor reference (a file stem in
+# FALCOR_OUT and its scale), if any.
 describe() {
-  clay="" falcor_ref="" falcor_scale=1
+  clay="" sky="" falcor_ref="" falcor_scale=1
   case $1 in
+    # The night: NVIDIA's Night camera, the emissive surfaces alone (D-087).
+    bistro-night) demo=physics-lab flags="--lab bistro $NIGHT --time-of-day 1.5" ev=2.22 falcor_ref=night1600 falcor_scale=2871 ;;
+    # The materials: the chart's spheres and tiles, the sun from the side at 30° (D-086), against
+    # Falcor with Lambert's diffuse and 16 bounces.
+    chart) demo=physics-lab flags="--lab chart --view=0,6,-4.5,180,-43 --fov 45" sky=sky-side-30.hdr ev=14 falcor_ref=lam16-side-30 falcor_scale=12800 ;;
     bistro-e1-clay) demo=physics-lab flags="--lab bistro $E1" clay=1 ev=11.22 falcor_ref=clay-ext1-lam16 falcor_scale=2871 ;;
     bistro-e2-clay) demo=physics-lab flags="--lab bistro $E2" clay=1 ev=11.22 falcor_ref=clay-ext2-lam16 falcor_scale=2871 ;;
     bistro-e1) demo=physics-lab flags="--lab bistro $E1" ev=11.22 falcor_ref=ext1-lam16 falcor_scale=2871 ;;
@@ -140,15 +152,19 @@ describe() {
   esac
 }
 for v in $views; do describe "$v"; done
-# run VIEW LOG FRAMES [FLAGS...]: the view's demo for FRAMES frames under the GPU lock.
+# run VIEW LOG FRAMES [FLAGS...]: the view's demo for FRAMES frames under the GPU lock, taken for
+# the run alone: other sessions' runs go between the tool's (no run shares the GPU).
 run() {
-  local view=$1 log=$2 frames=$3
+  local view=$1 log=$2 frames=$3 code
   shift 3
   describe "$view"
   lock_gpu
   # shellcheck disable=SC2086 # the flags are words
-  env ${clay:+FORGE_BISTRO_CLAY=1} timeout 1800 "$bin/$demo$exe" $flags --fixed-step --frames "$frames" \
+  env ${clay:+FORGE_BISTRO_CLAY=1} ${sky:+FORGE_CHART_SKY=$sky} timeout 1800 "$bin/$demo$exe" $flags --fixed-step --frames "$frames" \
     --ev100 "$ev" --fixed-exposure --set r.bloom=0 "$@" > "$log" 2>&1
+  code=$?
+  unlock
+  return $code
 }
 # capture VIEW NAME FLAGS...: the linear capture at frame 280 of 300, unless kept. Fails when the
 # run fails, saves nothing or its technique fell back to the probes.

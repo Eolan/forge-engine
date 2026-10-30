@@ -300,6 +300,49 @@ pub fn alpha_plane(texture: &CompressedTexture) -> Option<Vec<u8>> {
     Some(alpha)
 }
 
+/// `texture` with every texel's colour `rgb565` (a BC1 or BC3 colour endpoint) at every level and
+/// its alpha kept: BC3's alpha blocks as they are, BC1's cut-out texels still cut out. A clay copy
+/// of a cut-out base colour map (D-083: Falcor's clay keeps its cut-outs). BC5 and BC7 are left
+/// as they are (`false`).
+pub fn grey_keeping_alpha(texture: &mut CompressedTexture, rgb565: u16) -> bool {
+    let grey = rgb565.to_le_bytes();
+    match texture.format {
+        BlockFormat::Bc1 => {
+            for level in &mut texture.levels {
+                for block in level.as_chunks_mut::<8>().0 {
+                    let c0 = u16::from_le_bytes([block[0], block[1]]);
+                    let c1 = u16::from_le_bytes([block[2], block[3]]);
+                    let indices = u32::from_le_bytes([block[4], block[5], block[6], block[7]]);
+                    // Both endpoints the grey make the three-colour mode: index 0 the grey, and
+                    // index 3 transparent black where the block had cut-out texels.
+                    let cut = if c0 <= c1 {
+                        (0..16)
+                            .filter(|t| (indices >> (2 * t)) & 3 == 3)
+                            .fold(0_u32, |acc, t| acc | (3 << (2 * t)))
+                    } else {
+                        0
+                    };
+                    block[0..2].copy_from_slice(&grey);
+                    block[2..4].copy_from_slice(&grey);
+                    block[4..8].copy_from_slice(&cut.to_le_bytes());
+                }
+            }
+        }
+        BlockFormat::Bc3 => {
+            // Its colour block has four colours whatever its endpoints' order.
+            for level in &mut texture.levels {
+                for block in level.as_chunks_mut::<16>().0 {
+                    block[8..10].copy_from_slice(&grey);
+                    block[10..12].copy_from_slice(&grey);
+                    block[12..16].fill(0);
+                }
+            }
+        }
+        BlockFormat::Bc5 | BlockFormat::Bc7 => return false,
+    }
+    true
+}
+
 /// The 16 colours of a BC1 or BC3 colour block (BC3's after its 8 alpha bytes), 8-bit RGB, rows
 /// of four top to bottom: BC1's three-colour mode gives black for index 3 (its cut-out texels).
 fn colour_block(format: BlockFormat, colour: &[u8]) -> [[u8; 3]; 16] {
@@ -635,6 +678,49 @@ mod tests {
         let plane = alpha_plane(&t).expect("BC1 has alpha");
         assert_eq!(plane[0], 0);
         assert!(plane[1..].iter().all(|&a| a == 255));
+    }
+
+    #[test]
+    fn a_grey_copy_keeps_the_cut_out() {
+        let grey = (23_u16 << 11) | (46 << 5) | 23;
+        // BC1: a three-colour block cut out at texel 0, then a four-colour block of index 3s.
+        let mut t = CompressedTexture {
+            name: "leaves".into(),
+            width: 8,
+            height: 4,
+            format: BlockFormat::Bc1,
+            srgb: true,
+            levels: vec![vec![
+                0, 0, 1, 0, 0b11, 0, 0, 0, 2, 0, 1, 0, 0xff, 0xff, 0xff, 0xff,
+            ]],
+        };
+        let alpha = alpha_plane(&t).expect("BC1 has alpha");
+        assert!(grey_keeping_alpha(&mut t, grey));
+        assert_eq!(alpha_plane(&t).expect("BC1 has alpha"), alpha);
+        let colour = color_plane(&t).expect("BC1 has colour");
+        for (c, a) in colour.iter().zip(&alpha) {
+            assert_eq!(*c, if *a == 0 { [0; 3] } else { [189, 186, 189] });
+        }
+        // BC3: the alpha block untouched, every colour the grey.
+        let mut t = CompressedTexture {
+            name: "flowers".into(),
+            width: 4,
+            height: 4,
+            format: BlockFormat::Bc3,
+            srgb: true,
+            levels: vec![(0..16).collect()],
+        };
+        let before = t.levels[0][0..8].to_vec();
+        assert!(grey_keeping_alpha(&mut t, grey));
+        assert_eq!(t.levels[0][0..8], before[..]);
+        assert!(
+            color_plane(&t)
+                .expect("BC3 has colour")
+                .iter()
+                .all(|c| *c == [189, 186, 189])
+        );
+        t.format = BlockFormat::Bc7;
+        assert!(!grey_keeping_alpha(&mut t, grey));
     }
 
     #[test]

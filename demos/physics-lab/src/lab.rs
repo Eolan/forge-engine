@@ -2792,6 +2792,13 @@ pub(crate) fn build(
     let props = props(kind);
     let mut builder = MeshletSceneBuilder::new();
     let ids: Vec<MeshId> = cooked.meshes.iter().map(|m| builder.add_mesh(m)).collect();
+    // An authored scene's meshes traced as drawn, every triangle (as Falcor's): the rays' 40,000
+    // cut the Bistro's large tree (its trunk and both crowns in one mesh of 45,540) coarser than
+    // the trunk drawn, whose rays then started inside the traced trunk, met its back and found
+    // no light: the trunk came out black. Seven of its meshes are over the cut's budget.
+    if kind.authored().is_some() {
+        builder.set_ray_budget(&ids, u32::MAX);
+    }
     let mut materials = CityMaterials::new(&ctx.device)?;
     // Each model's rows, one per material of its mesh in order (its sections), as the file
     // gives them: the boat, the car's body and its wheel, the aeroplane and its propeller, the

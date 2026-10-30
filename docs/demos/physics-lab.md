@@ -2470,9 +2470,20 @@ albedos (D-088).
 `BISTRO_DIFFUSE`): as matte, without any reflection (an index of refraction of 1 in Falcor).
 
 **Clay** (`FORGE_BISTRO_CLAY=1`, as the Falcor script's `BISTRO_CLAY`): every material a 50 %
-grey diffuse, its normal map alone kept, nothing cut out, no glow: the light alone, compared with
-Falcor's switched to Lambert at 16 bounces. The shade 1.3 to 1.8 at Exterior_1, the café's window
-bays 2 to 3 at Exterior_2 (D-088).
+grey diffuse, its normal map kept, no glow: the light alone, compared with Falcor's switched to
+Lambert at 16 bounces. The shade 1.3 to 1.8 at Exterior_1, the café's window bays 2 to 3 at
+Exterior_2 (D-088).
+- **Cut-outs kept** (2026-10-30), as Falcor's clay keeps them: a cut-out row's map is turned one
+  grey at load, its alpha kept (`dds::grey_keeping_alpha`), and brought to 0.5 by its factor.
+  Without them the leaf cards and the flower baskets drew whole.
+
+**Every triangle traced** (2026-10-30): an authored scene's meshes go to the rays as drawn,
+whatever their size, as Falcor traces them (elsewhere a mesh over 40,000 triangles is traced at a
+coarser cut). The large tree (its trunk and both crowns in one mesh of 45,540 triangles) was cut
+coarser than its trunk drawn: the rays from the drawn bark started inside the traced trunk, met
+its back and found no light, and the trunk came out black in every mode, the path tracer's as
+well. Seven meshes were over the budget; the frame costs the same (7.22 ms at Exterior_1, 7.18
+before).
 
 **The diffuse light's references and its traced bounce (D-088):**
 - **`--set r.gi.reference=N`:** 32 rays a pixel, no denoiser, slow:

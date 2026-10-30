@@ -19,7 +19,7 @@ use anyhow::{Context, Result};
 use forge_geom::city::{Imported, PropKind, PropSpec};
 use forge_geom::model::{Model, load_gltf};
 use forge_render::dds::{
-    BlockFormat, alpha_plane, color_plane, flip_green, read_dds, uniform_color,
+    BlockFormat, alpha_plane, color_plane, flip_green, grey_keeping_alpha, read_dds, uniform_color,
 };
 use forge_render::lamps::{EVERY_REGION, Emission, Lamp, WHITE_BALANCE};
 use forge_render::material::{ExternalMaps, external_layer, upload_compressed};
@@ -43,6 +43,31 @@ pub(super) const EXPOSURE_COMPENSATION: f32 = 1.5;
 /// Cut out under this base colour alpha where the map has any (the archive's alpha is opacity,
 /// tested at a half as its own renderer does).
 const ALPHA_CUTOFF: f32 = 0.5;
+
+/// Clay's grey in a cut-out map's colour blocks (5:6:5): the nearest to 0.5's sRGB encoding in
+/// each channel, brought back to 0.5 by [`clay_factor`].
+const CLAY_GREY_565: u16 = (23 << 11) | (46 << 5) | 23;
+
+/// The factor that takes [`CLAY_GREY_565`], as the GPU reads it (each channel widened to 8 bits,
+/// then sRGB-decoded), to a 50 % grey.
+fn clay_factor() -> [f32; 3] {
+    let channel = |v: u16, bits: u32| {
+        let wide = (v << (8 - bits)) | (v >> (2 * bits - 8));
+        let s = f32::from(wide) / 255.0;
+        let linear = if s <= 0.04045 {
+            s / 12.92
+        } else {
+            ((s + 0.055) / 1.055).powf(2.4)
+        };
+        0.5 / linear
+    };
+    let c = CLAY_GREY_565;
+    [
+        channel(c >> 11, 5),
+        channel((c >> 5) & 63, 6),
+        channel(c & 31, 5),
+    ]
+}
 
 /// Materials made of single sheets, seen from both sides (the terrace sees the awnings from
 /// below).
@@ -382,6 +407,22 @@ pub(super) fn rows(
         normals_as_bc7(which, &archive, &mut read, &normals)
     };
     let transcode_time = transcoded.elapsed();
+    // Clay (below) keeps the cut-outs, as Falcor's does: the cut-out base colour maps turned one
+    // grey, their alpha kept. Without them the trees' leaf cards closed round their trunks and
+    // left them black.
+    let clay = std::env::var("FORGE_BISTRO_CLAY").is_ok_and(|v| v == "1");
+    if clay {
+        let base: Vec<&String> = b
+            .roles
+            .values()
+            .filter_map(|r| r.base_color.as_ref())
+            .collect();
+        for t in read.iter_mut().filter(|t| base.contains(&&t.name)) {
+            if alpha_plane(t).is_some_and(|a| a.iter().any(|&a| a < 255)) {
+                grey_keeping_alpha(t, CLAY_GREY_565);
+            }
+        }
+    }
     // The "Specular" maps of one value (most are 16 × 16 of one texel): their material's
     // factors instead. A row's own roughness decides its mirror rays (D-084: the glass, at 0,
     // reflected nothing of the street under a map's factor of 1).
@@ -433,7 +474,6 @@ pub(super) fn rows(
     let open = open_edges(&b.model);
     let open_time = measured.elapsed();
     let mut rows_made = 0;
-    let clay = std::env::var("FORGE_BISTRO_CLAY").is_ok_and(|v| v == "1");
     let matte_mode = std::env::var("FORGE_BISTRO_MATTE").unwrap_or_default();
     let matte = matte_mode == "1" || matte_mode == "diffuse";
     let diffuse = matte_mode == "diffuse";
@@ -479,7 +519,8 @@ pub(super) fn rows(
                     m.metallic = f32::from(metal) / 255.0;
                 }
                 // Clay (`FORGE_BISTRO_CLAY=1`, as the Falcor script's): a 50 % grey diffuse,
-                // its normal map alone kept, nothing cut out, no glow; the light alone compared.
+                // its normal map kept, and its cut-out where it has one (its map greyed above),
+                // no glow; the light alone compared.
                 // Matte (`FORGE_BISTRO_MATTE=1`, as the Falcor script's `BISTRO_MATTE`): a rough
                 // dielectric, its base colour and normal maps kept: the diffuse light alone.
                 let maps = if matte {
@@ -499,6 +540,8 @@ pub(super) fn rows(
                     m.emissive = [0.0; 3];
                     ExternalMaps {
                         normal: maps.normal,
+                        base_color: maps.base_color.filter(|_| maps.alpha_cutoff.is_some()),
+                        alpha_cutoff: maps.alpha_cutoff,
                         ..ExternalMaps::default()
                     }
                 } else {
@@ -511,6 +554,11 @@ pub(super) fn rows(
                     || SHEETS.iter().any(|s| m.name.contains(s))
                     || open.get(&m.name).is_some_and(|&o| o >= OPEN_SHEET);
                 let mut layer = external_layer(&m, maps);
+                // Clay's greyed map brought to 0.5.
+                if clay && maps.base_color.is_some() {
+                    layer.color_a = clay_factor();
+                    layer.color_b = layer.color_a;
+                }
                 // `FORGE_BISTRO_MATTE=diffuse` (the Falcor script's `BISTRO_DIFFUSE`): no
                 // reflection at all, the diffuse light alone.
                 if diffuse {

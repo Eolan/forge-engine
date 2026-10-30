@@ -8064,9 +8064,10 @@ pbrt-v4, RTXGI, materiel test, etc.). Then update forge demos and test them."):
   sky apart) and its GPU ms on the 5070 Ti. A change of technique reruns the whole table, and the
   pick is the best that runs in real time. A repeatable tool replaces the sessions' scripts:
   `tools/gi-compare.sh` (2026-10-30; `docs/PROCESS.md`). Its views are the Bistro in clay and
-  textured, the classroom, and the village's landing, room and street. Its references are
-  Forge's path and Falcor. The sun and the sky apart, pbrt-v4 and the RTXGI sample are still to
-  add.
+  textured and at night, the classroom, the material chart, and the village's landing, room and
+  street. Its references are Forge's path and Falcor. Still to add: the sun and the sky apart,
+  Falcor's own scenes (the Cornell box, the grey and white room, the Arcade: the owner,
+  "you can use the other falcor scenes as well"), pbrt-v4 and the RTXGI sample.
 - **First findings (2026-10-30):**
   - The Bistro's lab is not metered: it draws at the shared fixed EV 14, 2.3 and 4.7 stops under
     the exposures NVIDIA's pictures fit on Forge's light (EV 11.74 at Exterior_1, 9.34 at
@@ -8074,6 +8075,11 @@ pbrt-v4, RTXGI, materiel test, etc.). Then update forge demos and test them."):
     dark and Exterior_2 on it; the tone curve is not the cause (D-089, which meters it since).
   - SHaRC reads 3 to 7 % dark against Forge's path in steady state (D-088). NVIDIA's sample's
     SHaRC is within 2 to 4 % of its own path tracer.
+  - The Bistro's large tree trunk was black in every Forge render, the path tracer's too (the
+    owner's eye, in the first run of the tool): its mesh, over the rays' 40,000-triangle budget,
+    was traced at a coarser cut, and the rays from the drawn bark started inside it. The
+    authored scenes are now traced at full detail, as Falcor's; the general case is #367.
+  - Forge's clay drew cut-out cards whole, Falcor's keeps them: clay now keeps the cut-outs.
 
 ## D-084 — An environment map as the sky, its sun taken out of it ✅ (the owner's go, 2026-10-29)
 
