@@ -8770,7 +8770,8 @@ this one: "yes, record it and download them"):**
   | Classroom | Forge's path | probes at the hits | the cache |
   |---|---|---|---|
   | Clay | 0.090 (×0.98) | 0.353 (×1.14) | 0.145 (×0.93) |
-  | Clay, the sun alone | 0.106 (×0.98) | | |
+  | Clay, the sun alone | 0.106 (×0.98) | 0.279 (×1.05) | 0.166 (×0.91) |
+  | Clay, the sky alone | 0.067 (×0.98) | 0.958 (×1.35) | 0.147 (×0.98) |
   | Textured | | | 0.151 (×0.98) |
 
   Falcor's default diffuse (Frostbite's, 1/1.51 at roughness 1) made every Forge image a stop
@@ -8787,6 +8788,22 @@ this one: "yes, record it and download them"):**
   path 0.184 (×1.08), the probes 0.416 (×1.19), the cache 0.127 (×1.005); textured, the cache
   0.203 (×1.08). The cache's near match had been the leak covering its own deficit, a few per
   cent dark, as in the Bistro (×0.96 to ×0.98).
+- **The probes' sky leaks into the classroom (2026-10-30):** with the sky alone, the probes at the
+  hits came out a stop over Falcor's in every tile (+0.96 EV on average), +1.12 with one bounce
+  traced before them (`r.gi.reference 2`) and +0.66 with two, the path matching. Not the open
+  sky's fill (renormalising in its place changed no tile). It is the probes' spacing: 2 m apart,
+  the probes outside the room's thin walls and over its ceiling, in the open sky's light, weigh
+  in the lookup inside; the room's own light is a few per cent of theirs. The authored scenes'
+  probes (2 m, chosen at the Bistro's street) against Falcor, the sky alone and the whole clay:
+
+  | Probes | Sky alone | Whole | GPU frame (probe rays + blend) |
+  |---|---|---|---|
+  | 2 m | 0.958 (×1.35) | 0.353 (×1.14) | 4.11 ms (1.33) |
+  | 1 m | 0.214 (×1.04) | 0.132 (×0.98) | 4.67 ms (1.63) |
+  | 0.5 m | 0.110 (×1.00) | 0.145 (×0.94) | 5.28 ms (2.13) |
+
+  The cache matches the sky (×0.98) for less (3.86 ms); its deficit is in the sun's bounce
+  (×0.91).
 - **Credits:** the shaders carry Bevy's and kajiya's names, commits and licences in their header,
   and the changes Forge made.
 

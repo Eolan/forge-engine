@@ -2552,9 +2552,14 @@ by hand outside the repository (`CREDITS.md`):
   (D-088, "The hits' shadow rays start by their cut"). Before that fix the path was 0.184
   (×1.08), the probes 0.416, the cache 0.127 (×1.005).
 
-**Not yet:** the cache a few per cent dark (×0.93 in clay), the probes' sky a stop bright
-(the sky alone: ×1.35); thin bright seams in the ceiling seen directly; the textured materials
-(the coated whiteboard, the metal frames).
+**The probes' sky:** a stop bright (×1.35 with the sky alone): 2 m apart, the probes outside the
+room's thin walls and over its ceiling light it (D-088, "The probes' sky leaks into the
+classroom"); 1 m apart ×1.04, 0.5 m ×1.00. The cache matches the sky (×0.98).
+
+**Not yet:** the cache a few per cent dark (×0.93 in clay, its sun's bounce ×0.91); the probes'
+leak, which waits for the owner's choice (the cache at the hits, or finer probes); thin bright
+seams in the ceiling seen directly; the textured materials (the coated whiteboard, the metal
+frames).
 
 ## `FORGE_DYNAMIC_SCENE`: the scene edited as it runs (issues #220, #338)
 
