@@ -8647,3 +8647,52 @@ probes' budget under the bounce"):**
   Exterior_1 is 2.4 ms over the probes alone a metre apart (4.49), still above the 1.5 ms
   target. The rest waits for the surface cache (`research/surface-radiance-cache.md`).
 
+**The surface cache, decided (the owner, 2026-10-30, through the Falcor session, and confirmed in
+this one: "yes, record it and download them"):**
+- **What:** Bevy Solari's world cache with kajiya's dense camera-centred clipmap index in place of
+  its hash. Both are MIT or Apache-2.0; Forge takes them under Apache-2.0 and keeps their notices
+  (neither ships a NOTICE file).
+  - **Bevy Solari:** Bevy 0.20.1, `crates/bevy_solari`.
+  - **kajiya:** Embark's, archived, `assets/shaders/ircache/`.
+- **From Solari:**
+  - **Cells live while they are read.** Unread for ten frames, a cell is freed. The live cells
+    are compacted each frame into a list.
+  - **Each live cell's update:** its direct light, one cosine ray whose hit reads the cache
+    itself (the bounces after), and the sky where the ray meets nothing.
+  - **The blend:** a sample count that is capped, and cut back where the light changes.
+  - **Cells grow with the distance from the camera,** and a query is jittered in the surface's
+    plane.
+- **From kajiya, the index:**
+  - Twelve 32³ levels round the camera, each twice the last, scrolling with it.
+  - Cells offset half a cell along the normal.
+  - A cell's slot is its coordinate in its level: no hash, no collisions.
+
+  Solari keys its cells by the normal too; kajiya's cells hold one entry each. How a dense cell
+  keeps a wall's two faces apart is the design's first question (the research note's normal and
+  plane tests).
+- **Forge's own part:**
+  - The cells' rays' hits are lit as the bounce's: the sun through a shadow ray, the lamps, the
+    glow.
+  - The bounce's hits read the cache in place of the probes.
+  - The probes stay for volumes, movers, and the frames before a cell exists.
+- **Patents** (`research/surface-radiance-cache.md`):
+  - **The risk the owner accepts, without a counsel's opinion:** NVIDIA's Pantaleoni family
+    (US 11,244,493, US 11,961,176, US 12,633,037) and Keller's path space filtering
+    (US 9,953,457).
+  - **Avoided by the design:**
+    - **US 10,614,613** (quantise, hash, resolve collisions): Solari's cache is exactly that (a
+      hashed key, a checksum, linear probing), so its index goes for kajiya's.
+    - **US 11,790,594** (a cache used by a ray's length): Solari reads its cache only past √3
+      cells (`initial_path.wesl`); Forge reads it at every hit.
+    - **US 11,315,310's kind:** kajiya's per-voxel voting and its ReSTIR update are not taken.
+- **Credits** in the commit that brings the code in:
+  - `CREDITS.md`: a row each under "Libraries and tools" and "Techniques", and an entry each in
+    "Giving back".
+  - The ported files in `shaders/third-party/` (and the Rust beside them), each with a header
+    naming its origin, the commit, the licence and Forge's changes.
+- **The sources:** bevy_solari and kajiya's irradiance cache only, at Bevy's v0.20.1 (a0577b5c)
+  and kajiya's 9fdec0f0. They sit in `surface-cache-ref/` beside the repository, as Falcor does,
+  and are never committed.
+- **Tests:** against `r.gi.reference=4` in the village's room, on its landing and in the Bistro's
+  clay views; the cost; a still camera indoors, for flicker.
+

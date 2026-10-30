@@ -137,6 +137,27 @@ stored as L1 SH irradiance; read only at secondary hits. About 0.55 ms for about
 ([gi-overview](https://github.com/EmbarkStudios/kajiya/blob/main/docs/gi-overview.md)). MIT or
 Apache-2.0, archived 2026-06-01. No patents found.
 
+### Bevy Solari's world cache (Bevy 0.17 to 0.20, 2025–26)
+
+Read after the note, on the owner's choice (2026-10-30), at Bevy 0.20.1
+(`crates/bevy_solari/src/realtime/world_cache_*.wesl`).
+- **The cells:** keyed by a hash of the quantised position and normal, with a checksum and up to
+  three steps of linear probing on a collision, 2²⁰ of them. A cell lives ten frames unread, and
+  the live ones are compacted by a prefix sum each frame.
+- **The update:** each live cell gets its direct light by RIS over pre-sampled light tiles, and
+  one cosine ray whose hit reads the cache (the bounces after) or the sky. A blend whose sample
+  count is cut back where the luminance changes.
+- **Cell size:** 15 cm, doubling with the distance from the camera, the level chosen
+  stochastically and the query jittered in the tangent plane.
+- **The reads:** at a path's hits, only when the ray is longer than √3 cells.
+
+MIT or Apache-2.0; Apache-2.0 grants its contributors' own patents (section 3), not NVIDIA's.
+- **US 10,614,613:** its index is that claim's quantise, hash and resolve.
+- **US 11,790,594:** its read by the ray's length is near claim 16.
+
+Taken with kajiya's dense index in place of the hash and an unconditional read: D-088's
+decision.
+
 ### Unity's Surface Cache GI (preview, 2026)
 
 (Position, normal) to patches, rays averaged per patch, "heavily inspired by" GIBS, kajiya and
@@ -212,6 +233,13 @@ and SHaRC's source in the public repository.
 
 **Before building:** the owner's decision on the live patents, and a counsel opinion on
 US 11,244,493, US 11,961,176, US 12,633,037, US 9,953,457 and US 11,790,594 (the agent's advice).
+
+**The owner's decision (2026-10-30, D-088):**
+- **The design:** Bevy Solari's world cache with kajiya's dense clipmap index, read at every
+  hit.
+- **The risk accepted without a counsel's opinion:** the Pantaleoni family and US 9,953,457.
+- **Designed around:** US 10,614,613 (no hash) and US 11,790,594 (no switch by a ray's length).
+- **Sources:** Bevy (MIT or Apache-2.0) and Embark's kajiya (MIT or Apache-2.0), both credited.
 
 ## Checked and left out
 
