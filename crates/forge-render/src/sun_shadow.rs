@@ -16,7 +16,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use forge_gpu::nrd::{Sigma, SigmaFrame, SigmaImages};
+use forge_gpu::nrd::{NrdCamera, Sigma, SigmaFrame, SigmaImages};
 use forge_gpu::{Device, FrameGraph, FrameSlot, ImageHandle, Result, ShaderCompiler, vk};
 use glam::{DMat4, Mat4, Vec2, Vec3, Vec4};
 
@@ -66,6 +66,14 @@ pub struct SunShadowCamera {
 pub struct SunShadowFrame {
     sigma: SigmaFrame,
     ffx: FfxFrame,
+}
+
+impl SunShadowFrame {
+    /// The camera as NRD reads it, for another of its denoisers on the same guides (D-088's
+    /// [`crate::DiffuseDenoiser`]).
+    pub fn camera(&self) -> NrdCamera {
+        self.sigma.camera
+    }
 }
 
 enum Backend {
@@ -195,18 +203,21 @@ impl SunShadowDenoiser {
         let jitter = |j: Vec2| (-j).to_array();
         SunShadowFrame {
             sigma: SigmaFrame {
-                world_to_view: camera.view.to_cols_array(),
-                world_to_view_prev: world_to_view_prev.to_cols_array(),
-                view_to_clip: camera.projection.to_cols_array(),
-                view_to_clip_prev: previous.projection.to_cols_array(),
-                jitter: jitter(camera.jitter),
-                jitter_prev: jitter(previous.jitter),
+                camera: NrdCamera {
+                    world_to_view: camera.view.to_cols_array(),
+                    world_to_view_prev: world_to_view_prev.to_cols_array(),
+                    view_to_clip: camera.projection.to_cols_array(),
+                    view_to_clip_prev: previous.projection.to_cols_array(),
+                    jitter: jitter(camera.jitter),
+                    jitter_prev: jitter(previous.jitter),
+                    frame_index,
+                    time_delta_ms,
+                    reset,
+                    // The shadow rays' reach (`sun_shadow`'s 50 km); the sky is written far
+                    // beyond.
+                    denoising_range: 50_000.0,
+                },
                 light_direction: sun_dir.normalize_or(Vec3::Y).to_array(),
-                frame_index,
-                time_delta_ms,
-                reset,
-                // The shadow rays' reach (`sun_shadow`'s 50 km); the sky is written far beyond.
-                denoising_range: 50_000.0,
                 stabilized_frames: self.history,
             },
             ffx: FfxFrame {

@@ -1698,6 +1698,7 @@ impl Demo for PlanetDemo {
                 movers: None,
                 clouds: None,
                 sun_shadow: None,
+                diffuse_bounce: None,
                 reflection_history: None,
                 lamp_shadows: forge_render::LampShadows::default(),
             },

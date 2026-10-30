@@ -5641,7 +5641,7 @@ float denoised_sun_shadow(Frame* f, float3 n, uint2 pixel)
 {
     if (dot(n, normalize(f[0].sun_dir)) <= 0.0)
         return 0.0;
-    float stored = g_sampled_images_r[NonUniformResourceIndex(resolve_push.sun_shadow)].Load(int3(pixel, 0));
+    float stored = g_sampled_images_r[NonUniformResourceIndex(resolve_push.sun_shadow & 0xFFFFu)].Load(int3(pixel, 0));
     return saturate(stored * stored);
 }
 
@@ -6982,7 +6982,7 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
         float3 shadow_n = grass ? s.n : leaf_shadow_normal(f, mat, s.n);
         // NVIDIA's SIGMA denoised the sun's shadow before the resolve (#172), or the reference
         // traces 256 rays here; else one ray a frame and TAA's average (#54).
-        if (resolve_push.sun_shadow != 0xFFFFFFFFu)
+        if ((resolve_push.sun_shadow & 0xFFFFu) != 0xFFFFu)
             s.shadow = denoised_sun_shadow(f, shadow_n, pixel);
         else if ((f[0].flags & FLAG_SHADOW_REFERENCE) != 0)
             s.shadow = sun_shadow_reference(f, surface_scene, shadow_n, pixel, sun_bias);
@@ -7001,10 +7001,18 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     // normal, lobe and reflectance, where they took the row's factors (on a mapped row roughness
     // 1: the Bistro's scooter matte under its lamps). The other classes, their rows' factors.
     StandardInputs si = class_index == MATERIAL_CLASS_STANDARD ? standard_inputs(f, mat, s) : row_inputs(mat, s);
-    // D-088's references for the diffuse light (`r.gi.reference`).
+    // D-088's references for the diffuse light (`r.gi.reference`), or its bounce traced before
+    // the resolve (`diffuse_trace_main`, the high half of the sun shadow's word).
+    uint bounce_image = resolve_push.sun_shadow >> 16;
     g_near_on = SHADOWS != 0 && f[0].gi_reference != 0u && s.probes != nullptr && s.sky != nullptr && f[0].tlas != 0;
     if (g_near_on)
         g_near_irradiance = near_field_reference(f, s.sky, s.probes, surface_scene, s.n, si.li.n, f[0].gi_reference);
+    else if (bounce_image != 0xFFFFu && s.sky != nullptr)
+    {
+        // In YCoCg, as REBLUR reads and writes it (`ycocg_to_linear`).
+        g_near_on = true;
+        g_near_irradiance = ycocg_to_linear(g_sampled_images[NonUniformResourceIndex(bounce_image)].Load(int3(pixel, 0)).rgb);
+    }
     // The lamps (D-065): every one whose reach the surface is in and that lights its room, times
     // the filtered share of their light that reaches it (`lamp_filter_main`), or with a shadow ray
     // each; the classes take them where they take the sun (`sun_light`).
@@ -7362,6 +7370,7 @@ float3 steadied_reflection(ReflectionHistory* h, Frame* f, uint2 pixel, float2 s
 struct PixelSurface
 {
     float3 n;
+    float3 g;        // its triangle's own normal, on `n`'s side (the vertices' normal bends round a box's edges)
     float3 relative;
     Instance inst;
     Meshlet m;
@@ -7376,6 +7385,7 @@ PixelSurface pixel_surface(Frame* f, uint vis, uint2 pixel, uint width, uint hei
         GrassHit h = grass_hit(f, vis, pixel, float2(float(width), float(height)));
         PixelSurface g = {};
         g.n = h.n;
+        g.g = h.n;
         g.relative = h.relative;
         g.shadow_n = h.n;
         return g;
@@ -7409,6 +7419,10 @@ PixelSurface pixel_surface(Frame* f, uint vis, uint2 pixel, uint width, uint hei
         s.n = -s.n;
     if ((mat.flags & MATERIAL_FLAG_GRATING) != 0)
         s.n = grating_normal(normalize(-s.relative));
+    float3 face = cross(mul(frame, v1.position - v0.position), mul(frame, v2.position - v0.position));
+    s.g = dot(face, face) > 1e-20 ? normalize(face) : s.n;
+    if (dot(s.g, s.n) < 0.0)
+        s.g = -s.g;
     s.shadow_n = leaf_shadow_normal(f, mat, s.n);
     return s;
 }
@@ -7503,6 +7517,118 @@ void sun_shadow_trace_main(uint3 id : SV_DispatchThreadID)
     }
     ClosestHit hit = trace_closest(f, ray, true);
     penumbra[pixel] = hit.hit ? min(0.5 * hit.t * p.tan_radius, 32768.0) : NRD_MISS;
+}
+
+// ------------------------------------------------------ the diffuse bounce (D-088) ---
+
+// D-088's diffuse bounce, before the resolve: per pixel of the visibility buffer, the surface
+// rebuilt as `shade_pixel` does and one cosine-weighted ray from it to the scene's end, past a
+// house's clear glass (`trace_past_glass`). Its hit sends back the sun through a shadow ray, the
+// lamps, its glow and its albedo times the probes' light for the bounces after (`hit_radiance`,
+// `hit_lamps`); a ray that meets nothing, the sky's light along it. The resolve takes it in place
+// of the probes' light and GTAO (`g_near_irradiance`): `r.gi.reference=2` with one ray.
+// It writes what NVIDIA's REBLUR reads (NRD's `REBLUR_FrontEnd_PackRadianceAndNormHitDist`): the
+// light in YCoCg, and the ray's length as a share of REBLUR's normalisation (`hit_distance`).
+// With `hit_distance.w` 1, half the pixels trace, those where (x ^ y ^ frame) & 1 is 1 (NRD's
+// `CheckerboardMode::WHITE`), each written at x / 2: a thread a pair of pixels. Else every pixel
+// its own, read by the resolve as traced.
+struct DiffuseTracePush
+{
+    float4 view_z;        // the view matrix's third row: camera-relative metres → view z
+    float4 hit_distance;  // REBLUR's normalisation of the rays' lengths (A, B, C); w: 1 checkerboard-packed
+    Frame* frame;
+    float4* sky;          // the sky's irradiance coefficients, as the resolve has them
+    ProbeField* probes;   // the probes, or null: the sky's irradiance at the hits
+    uint vis_image;       // sampled (u32): the visibility buffer
+    uint bounce_image;    // storage (rgba16f): the bounce's light in YCoCg (rgb), its normalised ray length (a)
+    uint width;           // the frame's
+    uint height;
+};
+
+// NRD's colour space for REBLUR (`_NRD_LinearToYCoCg`, `_NRD_YCoCgToLinear`).
+float3 linear_to_ycocg(float3 c)
+{
+    return float3(dot(c, float3(0.25, 0.5, 0.25)), dot(c, float3(0.5, 0.0, -0.5)), dot(c, float3(-0.25, 0.5, -0.25)));
+}
+
+float3 ycocg_to_linear(float3 c)
+{
+    float t = c.x - c.z;
+    return max(float3(t + c.y, c.x + c.z, t - c.y), 0.0);
+}
+
+// A ray's length as REBLUR reads it (NRD's `REBLUR_FrontEnd_GetNormHitDist` for a roughness of 1).
+float reblur_hit_distance(float length, float view_z, float3 params)
+{
+    return saturate(length / (params.x + abs(view_z) * params.y));
+}
+
+[[vk::push_constant]]
+DiffuseTracePush diffuse_trace_push;
+
+// How far off its surface a diffuse ray starts, metres, along the vertices' normal, as the
+// reference's (`near_field_reference`). From the sun's rays' SHADOW_BIAS, 15 cm, a wall's rays
+// behind a table started inside its top and legs; from the lamps' (`lamp_shadow_start`, a few
+// millimetres) the points of faces seen edge on, where they meet the wall, still did: black
+// seams under REBLUR both ways (the owner, 2026-10-30).
+static const float DIFFUSE_START = 0.02;
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void diffuse_trace_main(uint3 id : SV_DispatchThreadID)
+{
+    DiffuseTracePush p = diffuse_trace_push;
+    Frame* f = p.frame;
+    bool packed = p.hit_distance.w > 0.5;
+    // The pixel this thread traces, and where it writes.
+    uint2 at = id.xy;
+    uint2 pixel = id.xy;
+    if (packed)
+        pixel.x = 2u * id.x + (1u ^ ((id.y ^ f[0].noise_frame) & 1u));
+    if (at.x >= p.width || at.y >= p.height)
+        return;
+    RWTexture2D<float4> bounce = g_storage_images_rgba16f[NonUniformResourceIndex(p.bounce_image)];
+    // Packed, the image's right half holds no sample: cleared, as the graph's memory under it
+    // held another image's.
+    if (pixel.x >= p.width || (packed && at.x >= (p.width + 1u) / 2u))
+    {
+        bounce[at] = float4(0.0);
+        return;
+    }
+    uint vis = g_sampled_images_u32[NonUniformResourceIndex(p.vis_image)].Load(int3(pixel, 0));
+    if (vis == VISIBILITY_EMPTY || f[0].tlas == 0)
+    {
+        bounce[at] = float4(0.0);
+        return;
+    }
+    PixelSurface s = pixel_surface(f, vis, pixel, p.width, p.height);
+    // The trees' cards near, their proxies far, as the resolve's own rays.
+    g_ray_mask = shadow_world(f, s.relative, pixel);
+    float2 u = spatio_temporal_noise(pixel, f[0].noise_frame);
+    RayDesc ray;
+    // Round the vertices' normal, but never under the triangle's own face, where it bends round
+    // a box's edges: a ray under the face is mirrored over it.
+    float3 d = cosine_direction(s.n, u.x, u.y);
+    if (dot(d, s.g) < 0.0)
+        d -= 2.0 * dot(d, s.g) * s.g;
+    ray.Origin = to_scene(f, s.relative) + s.n * DIFFUSE_START;
+    ray.Direction = d;
+    ray.TMin = 0.0;
+    ray.TMax = PATH_RANGE;
+    ClosestHit c = trace_past_glass(f, ray);
+    float3 light;
+    if (!c.hit)
+        light = sky_along(p.sky, ray.Direction);
+    else
+    {
+        RayHit hit = ray_hit(f, c.instance, c.primitive, c.barycentrics, ray.Origin, ray.Direction, c.t);
+        uint seed = (pixel.x * 0x8DA6B343u) ^ (pixel.y * 0xD8163841u) ^ (f[0].noise_frame * 0x9E3779B9u);
+        light = hit.back ? float3(0.0) : hit_radiance(f, p.sky, p.probes, hit, ray.Direction) + hit_lamps(f, hit, REGION_NONE, seed, false);
+    }
+    // NRD's front end sanitises: no NaN, nothing past half precision.
+    light = any(isnan(light)) || any(isinf(light)) ? float3(0.0) : min(light, 65504.0);
+    float view_z = dot(p.view_z.xyz, s.relative) + p.view_z.w;
+    bounce[at] = float4(linear_to_ycocg(light), reblur_hit_distance(c.t, view_z, p.hit_distance.xyz));
 }
 
 // --------------------------------------------------------- the lamps' penumbrae ---

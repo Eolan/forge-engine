@@ -861,6 +861,12 @@ struct Gallery {
     /// none.
     sun_shadows: Vec<forge_render::SunShadowDenoiser>,
     sun_shadow_on: Option<usize>,
+    /// D-088's diffuse bounce denoiser (NVIDIA's REBLUR), loaded the first time `r.gi.trace` asks
+    /// for it; `diffuse_tried` once it was (without NRD the bounce is read as traced), and
+    /// `diffuse_was_on` whether the last frame traced it (its history starts over when it did not).
+    diffuse_denoiser: Option<forge_render::DiffuseDenoiser>,
+    diffuse_tried: bool,
+    diffuse_was_on: bool,
     /// The mirror rays' history (#176, D-050): the glass's reflections settled before TAA.
     reflection_history: forge_render::ReflectionHistory,
     /// The mirrors' motion vectors moved towards their reflections (`r.reflections.motion`): DLSS
@@ -1124,11 +1130,7 @@ impl Gallery {
         // (#172), and by AMD's FidelityFX everywhere (#173), the first of them on.
         let mut sun_shadows = Vec::new();
         if !args.no_shadow_denoiser && !args.shadow_reference {
-            let dir = std::env::var_os("FORGE_NRD_DIR")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| {
-                    forge_app::workspace_root_from(env!("CARGO_MANIFEST_DIR")).join("nrd-sdk/bin")
-                });
+            let dir = nrd_dir();
             match forge_render::SunShadowDenoiser::sigma(&ctx.device, &dir, ctx.extent()) {
                 Ok(denoiser) => sun_shadows.push(denoiser),
                 Err(error) => tracing::info!(%error, "no NRD: no SIGMA for the sun's shadows"),
@@ -2092,6 +2094,9 @@ impl Gallery {
             display,
             sun_shadow_on,
             sun_shadows,
+            diffuse_denoiser: None,
+            diffuse_tried: false,
+            diffuse_was_on: false,
             reflection_history,
             reflection_motion: true,
             sun_scale,
@@ -2251,6 +2256,9 @@ impl Demo for Gallery {
         self.taa.resize(ctx.extent())?;
         self.taa.reset_history();
         for denoiser in &mut self.sun_shadows {
+            denoiser.resize(ctx.extent())?;
+        }
+        if let Some(denoiser) = &mut self.diffuse_denoiser {
             denoiser.resize(ctx.extent())?;
         }
         self.reflection_history.resize(ctx.extent())?;
@@ -2541,6 +2549,24 @@ impl Demo for Gallery {
     }
 
     fn render<'f>(&'f mut self, ctx: &mut Context, frame: &mut FrameInfo<'f>) -> Result<()> {
+        // D-088's diffuse bounce denoiser, the first time `r.gi.trace` asks for it; its history
+        // starts over when the bounce turns back on.
+        if self.renderer.gi_trace && !self.diffuse_tried {
+            self.diffuse_tried = true;
+            match forge_render::DiffuseDenoiser::reblur(&ctx.device, &nrd_dir(), ctx.extent()) {
+                Ok(denoiser) => self.diffuse_denoiser = Some(denoiser),
+                Err(error) => {
+                    tracing::info!(%error, "no NRD: the diffuse bounce is read as traced")
+                }
+            }
+        }
+        if self.renderer.gi_trace
+            && !self.diffuse_was_on
+            && let Some(denoiser) = &mut self.diffuse_denoiser
+        {
+            denoiser.reset_history();
+        }
+        self.diffuse_was_on = self.renderer.gi_trace;
         // The last frame's linear capture, its copy finished once the device is idle.
         if let Some(capture) = self.linear_capture.take() {
             ctx.device.wait_idle();
@@ -3343,6 +3369,9 @@ impl Demo for Gallery {
             early_motion = Some(motion);
         }
         let mut sun_shadow = None;
+        // The shadow rays' guides, TAA's motion and NRD's camera, for the diffuse bounce's
+        // denoiser (D-088).
+        let mut nrd_guides = None;
         if let Some(index) = denoising {
             let denoiser = &mut self.sun_shadows[index];
             if taa_frame.reset {
@@ -3371,6 +3400,12 @@ impl Demo for Gallery {
                 closest,
             ) && let Some(motion) = early_motion
             {
+                nrd_guides = Some((
+                    rays,
+                    motion,
+                    shadow_frame.camera(),
+                    forge_render::SunShadowDenoiser::view_z_row(&shadow_camera),
+                ));
                 let denoiser: &'f forge_render::SunShadowDenoiser = &self.sun_shadows[index];
                 sun_shadow = Some(denoiser.denoise(
                     &mut frame.graph,
@@ -3476,6 +3511,47 @@ impl Demo for Gallery {
                 );
             }
         }
+        // D-088's diffuse bounce, traced before the resolve (`r.gi.trace`): denoised by REBLUR
+        // where NRD and the sun's shadow rays' guides are there, else read as traced.
+        let mut diffuse_bounce = None;
+        if self.renderer.gi_trace && self.sky_light && !in_space {
+            let reblur = self.diffuse_denoiser.as_mut().zip(nrd_guides);
+            let reblur_frame = reblur.map(|(d, (.., camera, _))| d.frame(camera));
+            let for_denoiser = nrd_guides
+                .filter(|_| reblur_frame.is_some())
+                .map(|(.., view_z)| forge_render::DiffuseForDenoiser {
+                    view_z,
+                    hit_distance: forge_render::diffuse_bounce::HIT_DISTANCE,
+                });
+            let traced = self.renderer.trace_diffuse(
+                &mut frame.graph,
+                frame.slot,
+                targets,
+                extent,
+                scene_light,
+                probes,
+                for_denoiser,
+            );
+            diffuse_bounce = match (
+                traced,
+                self.diffuse_denoiser.as_ref(),
+                nrd_guides,
+                reblur_frame,
+            ) {
+                (Some(bounce), Some(denoiser), Some((rays, motion, ..)), Some(reblur_frame)) => {
+                    let denoiser: &'f forge_render::DiffuseDenoiser = denoiser;
+                    Some(denoiser.denoise(
+                        &mut frame.graph,
+                        frame.slot,
+                        bounce,
+                        rays,
+                        motion,
+                        &reblur_frame,
+                    )?)
+                }
+                (traced, ..) => traced,
+            };
+        }
         self.renderer.resolve(
             &mut frame.graph,
             frame.slot,
@@ -3491,6 +3567,7 @@ impl Demo for Gallery {
                 movers: targets.movers,
                 clouds: cloud_shadow,
                 sun_shadow,
+                diffuse_bounce,
                 reflection_history,
                 lamp_shadows,
             },
@@ -3754,6 +3831,7 @@ impl Demo for Gallery {
                         movers: targets.movers,
                         clouds: None,
                         sun_shadow: None,
+                        diffuse_bounce: None,
                         reflection_history: None,
                         lamp_shadows: LampShadows::default(),
                     },
@@ -3804,6 +3882,7 @@ impl Demo for Gallery {
                         movers: targets.movers,
                         clouds: None,
                         sun_shadow: None,
+                        diffuse_bounce: None,
                         reflection_history: None,
                         lamp_shadows: LampShadows::default(),
                     },
@@ -7832,4 +7911,13 @@ fn parallel_heights(terrain: &Terrain) -> Vec<f32> {
         }
     });
     heights
+}
+
+/// NRD's library folder: `FORGE_NRD_DIR`, else the workspace's `nrd-sdk/bin` (D-049).
+fn nrd_dir() -> std::path::PathBuf {
+    std::env::var_os("FORGE_NRD_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            forge_app::workspace_root_from(env!("CARGO_MANIFEST_DIR")).join("nrd-sdk/bin")
+        })
 }

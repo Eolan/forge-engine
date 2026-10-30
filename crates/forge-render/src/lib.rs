@@ -20,6 +20,7 @@ mod columns;
 pub mod dds;
 pub mod debug_hash;
 pub mod decals;
+pub mod diffuse_bounce;
 pub mod display;
 pub mod dust;
 pub mod environment;
@@ -74,6 +75,7 @@ pub use cell_stream::{CellSource, CellStreamConfig, CellStreamStats, CellStreame
 pub use cells::{CELL_SIZE, CellPos};
 pub use clouds::{CloudParams, CloudShadow, Clouds};
 pub use decals::{Decal, DecalKind, DecalSet};
+pub use diffuse_bounce::DiffuseDenoiser;
 pub use display::{Display, HdrOutput, OutputEncoding, ToneTables, Tonemap};
 pub use dust::{DustParams, DustVolume};
 pub use exposure::{AutoExposure, LuminanceHistogram, LuminanceMeter, exposure_from_ev100};
@@ -89,10 +91,10 @@ pub use liquid::{
 };
 pub use local_exposure::{LocalExposure, LocalExposureRead, LocalExposureSettings};
 pub use meshlet::{
-    AmbientLight, CullCamera, CullFlags, DrawTargets, DynamicCapacity, FrameStats, GeometryPath,
-    InstanceOcclusion, LampShadows, MeshId, MeshRays, MeshletRenderer, MeshletScene,
-    MeshletSceneBuilder, MoverTransform, MoversFrame, PlanetView, RayRequests, SceneEdit,
-    SceneEditor, SunShadowRays, SwRaster, Visibility,
+    AmbientLight, CullCamera, CullFlags, DiffuseForDenoiser, DrawTargets, DynamicCapacity,
+    FrameStats, GeometryPath, InstanceOcclusion, LampShadows, MeshId, MeshRays, MeshletRenderer,
+    MeshletScene, MeshletSceneBuilder, MoverTransform, MoversFrame, PlanetView, RayRequests,
+    SceneEdit, SceneEditor, SunShadowRays, SwRaster, Visibility,
 };
 pub use particles::{Burst, DrawKind, Effect, Emitter, ParticleParams, ParticleStats, Particles};
 pub use probes::{

@@ -1,14 +1,17 @@
-//! NVIDIA's NRD (Real-time Denoisers), its SIGMA shadow denoiser: the sun's ray-traced soft
-//! shadows denoised by NVIDIA's own library (issue #172, D-049).
+//! NVIDIA's NRD (Real-time Denoisers): its SIGMA shadow denoiser, the sun's ray-traced soft
+//! shadows denoised by NVIDIA's own library (issue #172, D-049), and its REBLUR diffuse denoiser,
+//! the diffuse bounce traced per pixel (D-088).
 //!
 //! NRD is never in the repository (the NVIDIA RTX SDKs License, as DLSS): `tools/fetch-nrd.sh`
 //! builds the pinned release [`NRD_RELEASE`] into `nrd-sdk/bin`, git-ignored, and [`Sigma::load`]
-//! loads that library at run time. Built without the `nrd` feature, or with no library there,
-//! [`Sigma::load`] fails and the renderer keeps its own shadow ray, pixel for pixel as before.
+//! and [`ReblurDiffuse::load`] load that library at run time, each its own instance of it. Built
+//! without the `nrd` feature, or with no library there, they fail and the renderer keeps its own
+//! shadow ray and its probes' light, pixel for pixel as before.
 //!
 //! NRD makes no GPU calls: it hands back its compute shaders (SPIR-V) once, then every frame a
 //! list of dispatches, each naming its pipeline, the images it reads and writes and its
-//! constants. [`Sigma::denoise`] declares each dispatch as a render-graph pass (`shadow/…`), so
+//! constants. [`Sigma::denoise`] declares each dispatch as a render-graph pass (`shadow/…`, and
+//! [`ReblurDiffuse::denoise`] `gi/…`), so
 //! the graph derives the barriers and the profiler zones as for every other pass. The shaders
 //! bind their own descriptor sets (NRD's register spaces), not the bindless set: set 0 holds the
 //! dispatch's images, pushed with `VK_KHR_push_descriptor`; set 1 its two samplers and its
@@ -50,6 +53,10 @@ pub const NORMAL_ROUGHNESS_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 pub const VIEW_Z_FORMAT: vk::Format = vk::Format::R32_SFLOAT;
 /// The format of the denoised shadow: its square root (square it to get the visibility).
 pub const SHADOW_FORMAT: vk::Format = vk::Format::R16_SFLOAT;
+/// The format of [`ReblurImages::radiance_hit_distance`] and of REBLUR's denoised light: the
+/// radiance in YCoCg (xyz) and the hit distance normalised as REBLUR's front end does it (w), as
+/// NRD's `REBLUR_FrontEnd_PackRadianceAndNormHitDist` packs them.
+pub const RADIANCE_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 
 /// The images SIGMA reads, at the size it was loaded for. Every one needs `SAMPLED` usage.
 #[derive(Clone, Copy, Debug)]
@@ -65,11 +72,11 @@ pub struct SigmaImages {
     pub motion: ImageHandle,
 }
 
-/// The camera and the sun of one frame. Matrices are column-major (`glam`'s `to_cols_array`)
-/// and carry no jitter; "world" may be any frame that moves with the camera, as long as the
-/// previous view includes the camera's step.
+/// The camera of one frame, as every NRD denoiser reads it. Matrices are column-major (`glam`'s
+/// `to_cols_array`) and carry no jitter; "world" may be any frame that moves with the camera, as
+/// long as the previous view includes the camera's step.
 #[derive(Clone, Copy, Debug)]
-pub struct SigmaFrame {
+pub struct NrdCamera {
     /// View coordinates from world coordinates.
     pub world_to_view: [f32; 16],
     /// The previous frame's view from this frame's world coordinates.
@@ -83,10 +90,8 @@ pub struct SigmaFrame {
     pub jitter: [f32; 2],
     /// The previous frame's.
     pub jitter_prev: [f32; 2],
-    /// The direction to the sun, in world coordinates.
-    pub light_direction: [f32; 3],
-    /// NRD's frame index: it turns the blur's taps. Forge passes the jitter's phase, so the
-    /// taps repeat with TAA's cycle.
+    /// NRD's frame index: it turns the blur's taps (and with a checkerboard, which pixels hold a
+    /// sample). Forge passes the jitter's phase, so the taps repeat with TAA's cycle.
     pub frame_index: u32,
     /// The time from the previous frame, milliseconds (a fixed step in captures).
     pub time_delta_ms: f32,
@@ -94,12 +99,53 @@ pub struct SigmaFrame {
     pub reset: bool,
     /// Pixels whose view depth is beyond this, in metres, are not denoised (the sky).
     pub denoising_range: f32,
+}
+
+/// The camera and the sun of one frame, for SIGMA.
+#[derive(Clone, Copy, Debug)]
+pub struct SigmaFrame {
+    /// The camera.
+    pub camera: NrdCamera,
+    /// The direction to the sun, in world coordinates.
+    pub light_direction: [f32; 3],
     /// Frames the temporal stabilisation accumulates, at most 7 (0 turns it off).
     pub stabilized_frames: u32,
 }
 
+/// The images REBLUR's diffuse denoiser reads, at the size it was loaded for. Every one needs
+/// `SAMPLED` usage.
+#[derive(Clone, Copy, Debug)]
+pub struct ReblurImages {
+    /// [`RADIANCE_FORMAT`]: the noisy light. With [`ReblurFrame::checkerboard`], the samples of
+    /// the pixels that hold one packed into the image's left half (pixel `x` at `x / 2`).
+    pub radiance_hit_distance: ImageHandle,
+    /// [`NORMAL_ROUGHNESS_FORMAT`].
+    pub normal_roughness: ImageHandle,
+    /// [`VIEW_Z_FORMAT`].
+    pub view_z: ImageHandle,
+    /// The motion vectors, as [`SigmaImages::motion`].
+    pub motion: ImageHandle,
+}
+
+/// One frame of REBLUR's diffuse denoiser.
+#[derive(Clone, Copy, Debug)]
+pub struct ReblurFrame {
+    /// The camera.
+    pub camera: NrdCamera,
+    /// The hit distance's normalisation (REBLUR's `hitDistanceParameters`, A, B and C): the
+    /// trace pass divides its rays' lengths by the same.
+    pub hit_distance: [f32; 3],
+    /// Frames the history accumulates at most (REBLUR's `maxAccumulatedFrameNum`, at most 63).
+    pub max_accumulated_frames: u32,
+    /// Frames the responsive history accumulates (`maxFastAccumulatedFrameNum`).
+    pub max_fast_accumulated_frames: u32,
+    /// Half the pixels hold a sample each frame: those where `(x ^ y ^ frame_index) & 1` is 1
+    /// (NRD's `CheckerboardMode::WHITE`), packed into the input's left half.
+    pub checkerboard: bool,
+}
+
 /// SIGMA, loaded for one image size (see the module's documentation).
-pub struct Sigma(imp::Sigma);
+pub struct Sigma(imp::Instance);
 
 impl Sigma {
     /// Loads NRD from `dir` (the folder holding `NRD.dll`, or `libNRD.so`), checks it is
@@ -107,7 +153,7 @@ impl Sigma {
     /// `extent`. Fails without the `nrd` feature, without the library, or on a device without
     /// push descriptors and unformatted storage writes.
     pub fn load(device: &Arc<Device>, dir: &std::path::Path, extent: vk::Extent2D) -> Result<Self> {
-        imp::Sigma::load(device, dir, extent).map(Self)
+        imp::Instance::load(device, dir, extent, imp::Kind::Sigma).map(Self)
     }
 
     /// The image size it was loaded for.
@@ -129,7 +175,40 @@ impl Sigma {
         images: SigmaImages,
         frame: &SigmaFrame,
     ) -> Result<ImageHandle> {
-        self.0.denoise(graph, slot, images, frame)
+        self.0.denoise_sigma(graph, slot, images, frame)
+    }
+}
+
+/// REBLUR's diffuse denoiser, loaded for one image size (see the module's documentation).
+pub struct ReblurDiffuse(imp::Instance);
+
+impl ReblurDiffuse {
+    /// Loads NRD from `dir` as [`Sigma::load`] does, and creates REBLUR_DIFFUSE's pipelines and
+    /// images for `extent`.
+    pub fn load(device: &Arc<Device>, dir: &std::path::Path, extent: vk::Extent2D) -> Result<Self> {
+        imp::Instance::load(device, dir, extent, imp::Kind::ReblurDiffuse).map(Self)
+    }
+
+    /// The image size it was loaded for.
+    pub fn extent(&self) -> vk::Extent2D {
+        self.0.extent()
+    }
+
+    /// The library's version, as it reports it.
+    pub fn version(&self) -> String {
+        self.0.version()
+    }
+
+    /// Declares REBLUR's dispatches for this frame as graph passes (`gi/…`) and returns the
+    /// denoised light ([`RADIANCE_FORMAT`], sampled; it also serves as next frame's history).
+    pub fn denoise<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        slot: FrameSlot,
+        images: ReblurImages,
+        frame: &ReblurFrame,
+    ) -> Result<ImageHandle> {
+        self.0.denoise_reblur(graph, slot, images, frame)
     }
 }
 
@@ -137,13 +216,19 @@ impl Sigma {
 mod imp {
     use super::*;
 
-    pub(super) enum Sigma {}
+    pub(super) enum Instance {}
 
-    impl Sigma {
+    pub(super) enum Kind {
+        Sigma,
+        ReblurDiffuse,
+    }
+
+    impl Instance {
         pub(super) fn load(
             _device: &Arc<Device>,
             _dir: &std::path::Path,
             _extent: vk::Extent2D,
+            _kind: Kind,
         ) -> Result<Self> {
             Err(GpuError::Nrd("built without the `nrd` feature".into()))
         }
@@ -156,12 +241,22 @@ mod imp {
             match *self {}
         }
 
-        pub(super) fn denoise<'f>(
+        pub(super) fn denoise_sigma<'f>(
             &'f self,
             _graph: &mut FrameGraph<'f>,
             _slot: FrameSlot,
             _images: SigmaImages,
             _frame: &SigmaFrame,
+        ) -> Result<ImageHandle> {
+            match *self {}
+        }
+
+        pub(super) fn denoise_reblur<'f>(
+            &'f self,
+            _graph: &mut FrameGraph<'f>,
+            _slot: FrameSlot,
+            _images: ReblurImages,
+            _frame: &ReblurFrame,
         ) -> Result<ImageHandle> {
             match *self {}
         }
@@ -353,6 +448,42 @@ mod imp {
         checkerboard_mode: u8,
     }
 
+    #[repr(C)]
+    struct ReblurSettings {
+        /// `ReblurHitDistanceParameters`: A, B, C.
+        hit_distance_parameters: [f32; 3],
+        /// `ReblurAntilagSettings`: luminance sigma scale, luminance sensitivity.
+        antilag: [f32; 2],
+        /// `ReblurResponsiveAccumulationSettings`.
+        responsive_roughness_threshold: f32,
+        responsive_min_accumulated_frame_num: u32,
+        /// `ReblurConvergenceSettings`: s, b, p.
+        convergence: [f32; 3],
+        max_accumulated_frame_num: u32,
+        max_fast_accumulated_frame_num: u32,
+        max_stabilized_frame_num: u32,
+        history_fix_frame_num: u32,
+        history_fix_base_pixel_stride: u32,
+        history_fix_alternate_pixel_stride: u32,
+        fast_history_clamping_sigma_scale: f32,
+        diffuse_prepass_blur_radius: f32,
+        specular_prepass_blur_radius: f32,
+        min_hit_distance_weight: f32,
+        min_blur_radius: f32,
+        max_blur_radius: f32,
+        lobe_angle_fraction: f32,
+        roughness_fraction: f32,
+        plane_distance_sensitivity: f32,
+        firefly_suppressor_min_relative_scale: f32,
+        min_material_for_diffuse: f32,
+        min_material_for_specular: f32,
+        checkerboard_mode: u8,
+        hit_distance_reconstruction_mode: u8,
+        enable_anti_firefly: bool,
+        use_prepass_only_for_specular_motion_estimation: bool,
+        return_history_length_instead_of_occlusion: bool,
+    }
+
     // Sizes and the offsets where padding decides, from MSVC's layout of NRD 4.18.0's headers.
     const _: () = {
         use std::mem::{offset_of, size_of};
@@ -400,22 +531,34 @@ mod imp {
         assert!(offset_of!(CommonSettings, enable_validation) == 448);
         assert!(size_of::<SigmaSettings>() == 24);
         assert!(offset_of!(SigmaSettings, checkerboard_mode) == 20);
+        assert!(size_of::<ReblurSettings>() == 120);
+        assert!(offset_of!(ReblurSettings, antilag) == 12);
+        assert!(offset_of!(ReblurSettings, responsive_roughness_threshold) == 20);
+        assert!(offset_of!(ReblurSettings, convergence) == 28);
+        assert!(offset_of!(ReblurSettings, max_accumulated_frame_num) == 40);
+        assert!(offset_of!(ReblurSettings, fast_history_clamping_sigma_scale) == 64);
+        assert!(offset_of!(ReblurSettings, min_material_for_specular) == 108);
+        assert!(offset_of!(ReblurSettings, checkerboard_mode) == 112);
+        assert!(offset_of!(ReblurSettings, return_history_length_instead_of_occlusion) == 116);
     };
 
     /// `nrd::Result::SUCCESS`.
     const SUCCESS: u32 = 0;
-    /// `nrd::Denoiser::SIGMA_SHADOW`.
+    /// `nrd::Denoiser::SIGMA_SHADOW` and `REBLUR_DIFFUSE`.
     const DENOISER_SIGMA_SHADOW: u32 = 16;
+    const DENOISER_REBLUR_DIFFUSE: u32 = 0;
     /// The identifier Forge gives its one denoiser.
     const IDENTIFIER: u32 = 0;
     /// `nrd::DescriptorType`.
     const DESCRIPTOR_TEXTURE: u32 = 0;
     const DESCRIPTOR_STORAGE_TEXTURE: u32 = 1;
-    /// `nrd::ResourceType`, the ones SIGMA uses.
+    /// `nrd::ResourceType`, the ones SIGMA and REBLUR_DIFFUSE use.
     const IN_MV: u32 = 0;
     const IN_NORMAL_ROUGHNESS: u32 = 1;
     const IN_VIEWZ: u32 = 2;
+    const IN_DIFF_RADIANCE_HITDIST: u32 = 6;
     const IN_PENUMBRA: u32 = 15;
+    const OUT_DIFF_RADIANCE_HITDIST: u32 = 18;
     const OUT_SHADOW_TRANSLUCENCY: u32 = 27;
     const TRANSIENT_POOL: u32 = 30;
     const PERMANENT_POOL: u32 = 31;
@@ -428,8 +571,12 @@ mod imp {
     /// `nrd::AccumulationMode`.
     const ACCUMULATION_CONTINUE: u8 = 0;
     const ACCUMULATION_RESTART: u8 = 1;
-    /// `CheckerboardMode::OFF`: every pixel holds its own samples.
+    /// `CheckerboardMode::OFF`: every pixel holds its own samples; `WHITE`: those where
+    /// `(x ^ y ^ frameIndex) & 1` is 1.
     const CHECKERBOARD_OFF: u8 = 0;
+    const CHECKERBOARD_WHITE: u8 = 2;
+    /// `HitDistanceReconstructionMode::OFF`.
+    const HIT_DISTANCE_RECONSTRUCTION_OFF: u8 = 0;
     /// Dispatches a frame may hold (SIGMA has 6; its first frame adds a clear per image).
     const MAX_DISPATCHES: u64 = 64;
 
@@ -511,7 +658,47 @@ mod imp {
         Err(GpuError::Nrd(format!("{call}: {name} ({result})")))
     }
 
-    /// The library and one SIGMA instance in it.
+    /// Which of NRD's denoisers an instance runs.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub(super) enum Kind {
+        Sigma,
+        ReblurDiffuse,
+    }
+
+    impl Kind {
+        fn denoiser(self) -> u32 {
+            match self {
+                Self::Sigma => DENOISER_SIGMA_SHADOW,
+                Self::ReblurDiffuse => DENOISER_REBLUR_DIFFUSE,
+            }
+        }
+
+        fn name(self) -> &'static str {
+            match self {
+                Self::Sigma => "SIGMA",
+                Self::ReblurDiffuse => "REBLUR",
+            }
+        }
+
+        /// Its output's format and name.
+        fn output(self) -> (vk::Format, &'static str) {
+            match self {
+                Self::Sigma => (SHADOW_FORMAT, "sun shadow (SIGMA)"),
+                Self::ReblurDiffuse => (RADIANCE_FORMAT, "diffuse light (REBLUR)"),
+            }
+        }
+
+        /// The prefix of its dispatches' names, and its passes' group: "SIGMA_Shadow - Blur"
+        /// shows as "shadow/SIGMA blur".
+        fn labels(self) -> (&'static str, &'static str) {
+            match self {
+                Self::Sigma => ("SIGMA_Shadow - ", "shadow/SIGMA"),
+                Self::ReblurDiffuse => ("REBLUR_Diffuse - ", "gi/REBLUR"),
+            }
+        }
+    }
+
+    /// The library and one denoiser's instance in it.
     struct Library {
         instance: *mut c_void,
         destroy_instance: DestroyInstance,
@@ -525,7 +712,7 @@ mod imp {
         _library: libloading::Library,
     }
 
-    // SAFETY: NRD's instance has no thread affinity; Forge calls it under `Sigma::state`'s
+    // SAFETY: NRD's instance has no thread affinity; Forge calls it under `Instance::state`'s
     // mutex only.
     unsafe impl Send for Library {}
 
@@ -545,8 +732,9 @@ mod imp {
         bindings: Vec<(u32, vk::DescriptorType)>,
     }
 
-    pub(super) struct Sigma {
+    pub(super) struct Instance {
         device: Arc<Device>,
+        kind: Kind,
         extent: vk::Extent2D,
         state: Mutex<Library>,
         pipelines: Vec<NrdPipeline>,
@@ -567,11 +755,12 @@ mod imp {
         clear_pipelines: Vec<u16>,
     }
 
-    impl Sigma {
+    impl Instance {
         pub(super) fn load(
             device: &Arc<Device>,
             dir: &std::path::Path,
             extent: vk::Extent2D,
+            kind: Kind,
         ) -> Result<Self> {
             let features = device.features();
             if !features.push_descriptor
@@ -645,14 +834,14 @@ mod imp {
                     library_desc.supported_denoisers_num as usize,
                 )
             };
-            if !supported.contains(&DENOISER_SIGMA_SHADOW) {
-                return Err(GpuError::Nrd("this build has no SIGMA_SHADOW".into()));
+            if !supported.contains(&kind.denoiser()) {
+                return Err(GpuError::Nrd(format!("this build has no {}", kind.name())));
             }
             let offsets = library_desc.spirv_binding_offsets;
 
             let denoisers = [DenoiserDesc {
                 identifier: IDENTIFIER,
-                denoiser: DENOISER_SIGMA_SHADOW,
+                denoiser: kind.denoiser(),
             }];
             let creation = InstanceCreationDesc {
                 // Null: NRD's own aligned allocator.
@@ -682,11 +871,12 @@ mod imp {
             };
             // SAFETY: the description lives as long as the instance.
             let desc = unsafe { &*(state.get_instance_desc)(state.instance) };
-            Self::create(device, extent, state, desc, offsets)
+            Self::create(device, kind, extent, state, desc, offsets)
         }
 
         fn create(
             device: &Arc<Device>,
+            kind: Kind,
             extent: vk::Extent2D,
             state: Library,
             desc: &InstanceDesc,
@@ -941,30 +1131,33 @@ mod imp {
                 .enumerate()
                 .map(|(i, t)| image("transient", i, t))
                 .collect::<Result<Vec<_>>>()?;
+            let (format, name) = kind.output();
             let output = GraphImage::new(
                 device,
                 ImageDesc {
                     width: extent.width,
                     height: extent.height,
-                    format: SHADOW_FORMAT,
+                    format,
                     usage: vk::ImageUsageFlags::SAMPLED
                         | vk::ImageUsageFlags::STORAGE
                         | vk::ImageUsageFlags::TRANSFER_DST,
                     aspect: vk::ImageAspectFlags::COLOR,
                     mip_levels: 1,
-                    name: "sun shadow (SIGMA)",
+                    name,
                 },
             )?;
             tracing::info!(
                 version = %state.version,
+                denoiser = kind.name(),
                 pipelines = pipelines.len(),
                 permanent = permanent.len(),
                 transient = transient.len(),
                 ?extent,
-                "NRD SIGMA loaded"
+                "NRD loaded"
             );
             Ok(Self {
                 device: Arc::clone(device),
+                kind,
                 extent,
                 state: Mutex::new(state),
                 pipelines,
@@ -992,8 +1185,9 @@ mod imp {
 
         /// The graph's label for a dispatch NRD calls `name`.
         fn label(&self, name: *const c_char) -> &'static str {
+            let (prefix, group) = self.kind.labels();
             let name = if name.is_null() {
-                "SIGMA".to_owned()
+                self.kind.name().to_owned()
             } else {
                 // SAFETY: NRD's dispatch names are static NUL-terminated strings.
                 unsafe { CStr::from_ptr(name) }
@@ -1005,23 +1199,18 @@ mod imp {
                 return label;
             }
             // A handful of names over the program's life: leaked once each, as the graph's
-            // labels are static. "SIGMA_Shadow - Blur" shows as "shadow/SIGMA blur".
-            let short = name.strip_prefix("SIGMA_Shadow - ").unwrap_or(&name);
+            // labels are static.
+            let short = name.strip_prefix(prefix).unwrap_or(&name);
             let label: &'static str =
-                Box::leak(format!("shadow/SIGMA {}", short.to_lowercase()).into_boxed_str());
+                Box::leak(format!("{group} {}", short.to_lowercase()).into_boxed_str());
             labels.push((name, label));
             label
         }
 
-        pub(super) fn denoise<'f>(
-            &'f self,
-            graph: &mut FrameGraph<'f>,
-            slot: FrameSlot,
-            images: SigmaImages,
-            frame: &SigmaFrame,
-        ) -> Result<ImageHandle> {
+        /// NRD's common settings for `frame`'s camera.
+        fn common(&self, frame: &NrdCamera) -> CommonSettings {
             let size = [self.extent.width as u16, self.extent.height as u16];
-            let settings = CommonSettings {
+            CommonSettings {
                 view_to_clip_matrix: frame.view_to_clip,
                 view_to_clip_matrix_prev: frame.view_to_clip_prev,
                 world_to_view_matrix: frame.world_to_view,
@@ -1064,13 +1253,107 @@ mod imp {
                 is_history_confidence_available: false,
                 is_disocclusion_threshold_mix_available: false,
                 enable_validation: false,
-            };
+            }
+        }
+
+        pub(super) fn denoise_sigma<'f>(
+            &'f self,
+            graph: &mut FrameGraph<'f>,
+            slot: FrameSlot,
+            images: SigmaImages,
+            frame: &SigmaFrame,
+        ) -> Result<ImageHandle> {
             let sigma = SigmaSettings {
                 light_direction: frame.light_direction,
                 plane_distance_sensitivity: 0.02,
                 max_stabilized_frame_num: frame.stabilized_frames.min(7),
                 checkerboard_mode: CHECKERBOARD_OFF,
             };
+            self.record(
+                graph,
+                slot,
+                &self.common(&frame.camera),
+                (&raw const sigma).cast(),
+                |kind, output| match kind {
+                    IN_MV => Some(images.motion),
+                    IN_NORMAL_ROUGHNESS => Some(images.normal_roughness),
+                    IN_VIEWZ => Some(images.view_z),
+                    IN_PENUMBRA => Some(images.penumbra),
+                    OUT_SHADOW_TRANSLUCENCY => Some(output),
+                    _ => None,
+                },
+            )
+        }
+
+        pub(super) fn denoise_reblur<'f>(
+            &'f self,
+            graph: &mut FrameGraph<'f>,
+            slot: FrameSlot,
+            images: ReblurImages,
+            frame: &ReblurFrame,
+        ) -> Result<ImageHandle> {
+            // NRD's defaults (`NRDSettings.h`, 4.18.0) but for what Forge sets.
+            let reblur = ReblurSettings {
+                hit_distance_parameters: frame.hit_distance,
+                antilag: [2.0, 3.0],
+                responsive_roughness_threshold: 0.0,
+                responsive_min_accumulated_frame_num: 3,
+                convergence: [1.0, 0.2, 0.8],
+                max_accumulated_frame_num: frame.max_accumulated_frames.min(63),
+                max_fast_accumulated_frame_num: frame.max_fast_accumulated_frames,
+                max_stabilized_frame_num: 63,
+                history_fix_frame_num: 3,
+                history_fix_base_pixel_stride: 14,
+                history_fix_alternate_pixel_stride: 14,
+                fast_history_clamping_sigma_scale: 2.0,
+                diffuse_prepass_blur_radius: 30.0,
+                specular_prepass_blur_radius: 50.0,
+                min_hit_distance_weight: 0.1,
+                min_blur_radius: 1.0,
+                max_blur_radius: 30.0,
+                lobe_angle_fraction: 0.15,
+                roughness_fraction: 0.15,
+                plane_distance_sensitivity: 0.02,
+                firefly_suppressor_min_relative_scale: 2.0,
+                min_material_for_diffuse: 4.0,
+                min_material_for_specular: 4.0,
+                checkerboard_mode: if frame.checkerboard {
+                    CHECKERBOARD_WHITE
+                } else {
+                    CHECKERBOARD_OFF
+                },
+                hit_distance_reconstruction_mode: HIT_DISTANCE_RECONSTRUCTION_OFF,
+                enable_anti_firefly: true,
+                use_prepass_only_for_specular_motion_estimation: false,
+                return_history_length_instead_of_occlusion: false,
+            };
+            self.record(
+                graph,
+                slot,
+                &self.common(&frame.camera),
+                (&raw const reblur).cast(),
+                |kind, output| match kind {
+                    IN_MV => Some(images.motion),
+                    IN_NORMAL_ROUGHNESS => Some(images.normal_roughness),
+                    IN_VIEWZ => Some(images.view_z),
+                    IN_DIFF_RADIANCE_HITDIST => Some(images.radiance_hit_distance),
+                    OUT_DIFF_RADIANCE_HITDIST => Some(output),
+                    _ => None,
+                },
+            )
+        }
+
+        /// Hands NRD the frame's `settings` and this denoiser's `denoiser` settings (its own
+        /// structure), and declares its dispatches as graph passes, each image `bind` names by
+        /// NRD's resource type (given the output) or from NRD's pools.
+        fn record<'f>(
+            &'f self,
+            graph: &mut FrameGraph<'f>,
+            slot: FrameSlot,
+            settings: &CommonSettings,
+            denoiser: *const c_void,
+            bind: impl Fn(u32, ImageHandle) -> Option<ImageHandle>,
+        ) -> Result<ImageHandle> {
             let state = self.state.lock();
             let mut dispatches: *const DispatchDesc = std::ptr::null();
             let mut count = 0u32;
@@ -1079,15 +1362,11 @@ mod imp {
             unsafe {
                 check(
                     "SetCommonSettings",
-                    (state.set_common_settings)(state.instance, &settings),
+                    (state.set_common_settings)(state.instance, settings),
                 )?;
                 check(
                     "SetDenoiserSettings",
-                    (state.set_denoiser_settings)(
-                        state.instance,
-                        IDENTIFIER,
-                        (&raw const sigma).cast(),
-                    ),
+                    (state.set_denoiser_settings)(state.instance, IDENTIFIER, denoiser),
                 )?;
                 check(
                     "GetComputeDispatches",
@@ -1143,14 +1422,10 @@ mod imp {
                             })
                     };
                     let handle = match r.resource_type {
-                        IN_MV => images.motion,
-                        IN_NORMAL_ROUGHNESS => images.normal_roughness,
-                        IN_VIEWZ => images.view_z,
-                        IN_PENUMBRA => images.penumbra,
-                        OUT_SHADOW_TRANSLUCENCY => output,
                         TRANSIENT_POOL => pool(&transient)?,
                         PERMANENT_POOL => pool(&permanent)?,
-                        other => return Err(GpuError::Nrd(format!("resource type {other}"))),
+                        other => bind(other, output)
+                            .ok_or_else(|| GpuError::Nrd(format!("resource type {other}")))?,
                     };
                     bound.push((handle, r.descriptor_type == DESCRIPTOR_STORAGE_TEXTURE));
                 }
@@ -1194,8 +1469,15 @@ mod imp {
                     };
                     self.constants.write(offset, data);
                 }
-                // Each image once: read (sampled), written (storage), or both.
+                // Each image once: read (sampled), written (storage), or both. REBLUR's behind
+                // full barriers (#349's kind): with the graph's own, its passes read texels of the
+                // memory the diffuse rays' image shares with another transient in the village's
+                // rooms on the RTX 5070 Ti (2026-10-30, a band at the frame's foot), where the
+                // serial frame (#207) and separate memory did not.
                 let mut builder = graph.pass(self.label(dispatch.name));
+                if self.kind == Kind::ReblurDiffuse {
+                    builder = builder.full_barrier();
+                }
                 let mut declared: Vec<(ImageHandle, bool, bool)> = Vec::new();
                 for &(handle, storage) in &bound {
                     match declared.iter_mut().find(|(h, ..)| *h == handle) {
@@ -1288,7 +1570,7 @@ mod imp {
         }
     }
 
-    impl Drop for Sigma {
+    impl Drop for Instance {
         fn drop(&mut self) {
             let raw = self.device.raw();
             // SAFETY: the owner made sure the GPU is done with the frames that used these (the

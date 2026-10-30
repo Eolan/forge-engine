@@ -888,8 +888,9 @@ struct ResolvePush {
     cloud_frame: [f32; 4],
     /// Its sampled index (r32f: the sun's share through the clouds), or `u32::MAX`.
     cloud_shadow: u32,
-    /// Sampled index of SIGMA's denoised sun shadow (#172, [`AmbientLight::sun_shadow`]), or
-    /// `u32::MAX`: the resolve traces its own ray.
+    /// Sampled index of SIGMA's denoised sun shadow (#172, [`AmbientLight::sun_shadow`]) in the
+    /// low half, 0xFFFF: the resolve traces its own ray; that of D-088's traced diffuse bounce
+    /// ([`AmbientLight::diffuse_bounce`]) in the high half, 0xFFFF: the probes' light.
     sun_shadow: u32,
     /// The mirror rays' `ReflectionHistory` block (#176, [`AmbientLight::reflection_history`]),
     /// or 0: each frame's ray alone.
@@ -917,6 +918,36 @@ struct SunShadowPush {
 }
 
 const _: () = assert!(std::mem::size_of::<SunShadowPush>() == 64);
+
+/// Mirrors `DiffuseTracePush` in `meshlet.slang` (D-088).
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct DiffuseTracePush {
+    /// The view matrix's third row: camera-relative metres to view z.
+    view_z: [f32; 4],
+    /// REBLUR's normalisation of the rays' lengths; w: 1 checkerboard-packed for it.
+    hit_distance: [f32; 4],
+    frame: u64,
+    sky: u64,
+    probes: u64,
+    vis_image: u32,
+    bounce_image: u32,
+    width: u32,
+    height: u32,
+}
+
+const _: () = assert!(std::mem::size_of::<DiffuseTracePush>() == 72);
+
+/// How [`MeshletRenderer::trace_diffuse`] lays its rays out for NVIDIA's REBLUR
+/// ([`crate::DiffuseDenoiser`]).
+#[derive(Clone, Copy, Debug)]
+pub struct DiffuseForDenoiser {
+    /// The third row of the view matrix the denoiser is given
+    /// ([`crate::SunShadowDenoiser::view_z_row`]).
+    pub view_z: Vec4,
+    /// Its normalisation of the rays' lengths ([`crate::diffuse_bounce::HIT_DISTANCE`]).
+    pub hit_distance: [f32; 3],
+}
 
 /// Mirrors `LampShadowPush` in `meshlet.slang` (D-065): the lamps' rays and their filter.
 #[repr(C)]
@@ -1009,6 +1040,9 @@ pub struct AmbientLight {
     /// The sun's shadow NVIDIA's SIGMA denoised (#172, [`crate::SunShadowDenoiser`]), read in
     /// place of the resolve's own ray; `None`: the ray, as before.
     pub sun_shadow: Option<ImageHandle>,
+    /// D-088's diffuse bounce traced per pixel ([`MeshletRenderer::trace_diffuse`]), read in place
+    /// of the probes' light and the occlusion; `None`: the probes' light, as before.
+    pub diffuse_bounce: Option<ImageHandle>,
     /// The mirror rays' history (#176, D-050, [`crate::ReflectionHistory::frame`]): the rays'
     /// light settled over the frames; `None`: each frame's ray alone, as before.
     pub reflection_history: Option<crate::ReflectionHistoryFrame>,
@@ -3931,6 +3965,8 @@ pub struct MeshletRenderer {
     pipeline_reflections: Option<Pipeline>,
     /// The sun's shadow rays for SIGMA (#172): devices with ray queries only.
     pipeline_sun_shadow: Option<Pipeline>,
+    /// D-088's diffuse bounce rays (`diffuse_trace_main`), with ray queries.
+    pipeline_diffuse_trace: Option<Pipeline>,
     /// The lamps' shadow rays and the filter of their share (D-065): devices with ray queries
     /// only.
     pipeline_lamp_shadows: Option<[Pipeline; 2]>,
@@ -3997,6 +4033,9 @@ pub struct MeshletRenderer {
     /// pixel: 0 none (the probes), 1 the near field to 2 m over the probes, 2 one bounce traced
     /// and the probes after, 3 two bounces, 4 a path without the probes.
     pub gi_reference: u32,
+    /// D-088's diffuse bounce traced per pixel before the resolve (`r.gi.trace`,
+    /// [`MeshletRenderer::trace_diffuse`]), in place of the probes' light and GTAO.
+    pub gi_trace: bool,
 }
 
 /// What to draw this frame.
@@ -4375,6 +4414,22 @@ impl MeshletRenderer {
             device.destroy_shader_module(module);
             pipeline
         };
+        let pipeline_diffuse_trace = if rt {
+            let entry = "diffuse_trace_main";
+            let module = device.create_shader_module(
+                &shaders.compile("meshlet.slang", entry, ShaderStage::Compute)?,
+                "diffuse bounce rays",
+            )?;
+            let pipeline = device.create_compute_pipeline(&ComputePipelineDesc {
+                shader: (module, entry),
+                push_constant_bytes: std::mem::size_of::<DiffuseTracePush>() as u32,
+                name: "diffuse bounce rays",
+            });
+            device.destroy_shader_module(module);
+            Some(pipeline?)
+        } else {
+            None
+        };
         let pipeline_lamp_shadows = if rt {
             Some([
                 lamp_pipeline("lamp_rays_main", "lamp shadow rays")?,
@@ -4543,6 +4598,7 @@ impl MeshletRenderer {
             pipeline_resolve,
             pipeline_reflections,
             pipeline_sun_shadow,
+            pipeline_diffuse_trace,
             pipeline_lamp_shadows,
             pipeline_requested,
             shading_tiles: create_shading_tiles(device, extent)?,
@@ -4571,6 +4627,7 @@ impl MeshletRenderer {
             texture_lod_bias: 0.0,
             show_input: 0,
             gi_reference: 0,
+            gi_trace: false,
         })
     }
 
@@ -5934,6 +5991,86 @@ impl MeshletRenderer {
         Some(rays)
     }
 
+    /// Declares "gi/trace" (D-088): per pixel of the visibility buffer, one cosine-weighted ray to
+    /// the scene's end, its hit lit by the sun, the lamps and `probes` (the sky's irradiance
+    /// without), a miss by `sky` ([`AmbientLight::diffuse_bounce`]): in YCoCg, with the ray's
+    /// normalised length. With `denoiser`, half the pixels a frame in a checkerboard, packed into
+    /// the image's left half for NVIDIA's REBLUR ([`crate::DiffuseDenoiser`]); without, every
+    /// pixel's own. `None` on a device without ray queries.
+    #[allow(clippy::too_many_arguments)]
+    pub fn trace_diffuse<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        slot: FrameSlot,
+        targets: DrawTargets,
+        extent: vk::Extent2D,
+        sky: crate::SkyLight,
+        probes: Option<ProbeLight>,
+        denoiser: Option<DiffuseForDenoiser>,
+    ) -> Option<ImageHandle> {
+        let pipeline = self.pipeline_diffuse_trace.as_ref()?;
+        let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+        let bounce = graph.transient(TransientDesc {
+            name: "diffuse bounce",
+            width: extent.width,
+            height: extent.height,
+            format: forge_gpu::nrd::RADIANCE_FORMAT,
+            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE,
+            aspect: vk::ImageAspectFlags::COLOR,
+            mip_levels: 1,
+        });
+        let frame = self.frame_buffers[slot.index].address();
+        // Behind a full barrier (#349's): its image shares memory with the lamps' shadow rays'
+        // (`lamp_shadows`), whose texels came back over its last rows in the village's rooms with
+        // the graph's own barriers alone (2026-10-30, a band at the frame's foot under REBLUR).
+        let mut builder = graph
+            .pass("gi/trace")
+            .full_barrier()
+            .image(targets.visibility, ImageAccess::Sampled(compute))
+            .image(bounce, ImageAccess::StorageWrite(compute))
+            .buffer(targets.visible_list, BufferAccess::ShaderRead(compute))
+            .buffer(targets.pages, BufferAccess::ShaderRead(compute))
+            .buffer(targets.page_table, BufferAccess::ShaderRead(compute))
+            .with(|b| MoversFrame::declare(targets.movers, b, compute, true))
+            .buffer(sky.buffer, BufferAccess::ShaderRead(compute))
+            .image(sky.table, ImageAccess::Sampled(compute));
+        if let Some(p) = probes {
+            builder = builder
+                .buffer(p.data, BufferAccess::ShaderRead(compute))
+                .buffer(p.region, BufferAccess::ShaderRead(compute))
+                .with(|b| p.declare_far(b, compute))
+                .image(p.irradiance, ImageAccess::Sampled(compute))
+                .image(p.distance, ImageAccess::Sampled(compute));
+        }
+        builder.run(move |resources, commands| {
+            commands.bind_pipeline(pipeline);
+            let (view_z, hit_distance) = match denoiser {
+                Some(d) => (
+                    d.view_z.to_array(),
+                    [d.hit_distance[0], d.hit_distance[1], d.hit_distance[2], 1.0],
+                ),
+                None => ([0.0; 4], [1.0, 0.0, 1.0, 0.0]),
+            };
+            commands.push_constants(
+                pipeline,
+                &DiffuseTracePush {
+                    view_z,
+                    hit_distance,
+                    frame,
+                    sky: sky.address,
+                    probes: probes.map_or(0, |p| p.address),
+                    vis_image: resources.sampled(targets.visibility).0,
+                    bounce_image: resources.storage(bounce, 0).0,
+                    width: extent.width,
+                    height: extent.height,
+                },
+            );
+            commands.dispatch(extent.width.div_ceil(8), extent.height.div_ceil(8), 1);
+            Ok(())
+        });
+        Some(bounce)
+    }
+
     /// Declares the lamps' penumbra filter (D-065, `research/lamp-penumbra-denoising.md` §7), for
     /// the resolve's [`AmbientLight::lamp_shadows`] ([`LampShadows::share`]):
     /// - "shadow/lamp rays": per pixel of the visibility buffer, the shadow rays the resolve traced
@@ -6112,9 +6249,16 @@ impl MeshletRenderer {
             cloud_shadow: ambient
                 .clouds
                 .map_or(u32::MAX, |c| resources.sampled(c.image).0),
-            sun_shadow: ambient
-                .sun_shadow
-                .map_or(u32::MAX, |s| resources.sampled(s).0),
+            sun_shadow: {
+                let index = |image: Option<ImageHandle>| {
+                    image.map_or(0xFFFF, |image| {
+                        let i = resources.sampled(image).0;
+                        debug_assert!(i < 0xFFFF, "a sampled index past 16 bits");
+                        i
+                    })
+                };
+                index(ambient.sun_shadow) | index(ambient.diffuse_bounce) << 16
+            },
             reflection_history: ambient.reflection_history.map_or(0, |h| h.address),
         };
 
@@ -6225,6 +6369,9 @@ impl MeshletRenderer {
             if let Some(shadow) = ambient.sun_shadow {
                 builder = builder.image(shadow, ImageAccess::Sampled(compute));
             }
+            if let Some(bounce) = ambient.diffuse_bounce {
+                builder = builder.image(bounce, ImageAccess::Sampled(compute));
+            }
             for image in ambient.lamp_shadows.images() {
                 builder = builder.image(image, ImageAccess::Sampled(compute));
             }
@@ -6283,6 +6430,9 @@ impl MeshletRenderer {
             }
             if let Some(shadow) = ambient.sun_shadow {
                 builder = builder.image(shadow, ImageAccess::Sampled(compute));
+            }
+            if let Some(bounce) = ambient.diffuse_bounce {
+                builder = builder.image(bounce, ImageAccess::Sampled(compute));
             }
             for image in ambient.lamp_shadows.images() {
                 builder = builder.image(image, ImageAccess::Sampled(compute));

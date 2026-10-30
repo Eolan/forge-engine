@@ -327,6 +327,16 @@ pub fn sky_reflections(default: bool) -> Spec<bool> {
     )
 }
 
+/// D-088's diffuse bounce traced per pixel before the resolve.
+pub fn gi_trace(default: bool) -> Spec<bool> {
+    Spec::bool(
+        "r.gi.trace",
+        default,
+        "The diffuse light from one ray a pixel to the scene's end, the probes' light at its hit \
+         (D-088), in place of the probes' and the occlusion; not yet denoised.",
+    )
+}
+
 /// D-088's references for the diffuse light round each pixel: measures, far from real time.
 pub fn gi_reference(default: i64) -> Spec<i64> {
     Spec::int(
