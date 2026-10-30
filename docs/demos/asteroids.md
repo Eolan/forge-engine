@@ -1009,7 +1009,8 @@ AO. #52 moved it to a pass of its own: 0.082 ms, and the ballad 0.540 ms with AO
 The rocks now shade each other. The ballad builds the ray-traced sun shadows the city got in
 #45 (D-029):
 - a bottom-level structure per mesh, over the finest cut of its cluster DAG that fits 40 000
-  triangles: 267 k triangles for the seven meshes, built in 8 ms;
+  triangles: 267 k triangles for the seven meshes, built in 8 ms (since 2026-10-30, every
+  triangle of a mesh up to 250 000, D-029 amended);
 - a top-level structure over the 3000 asteroids, built in 1 ms; 16 MiB in all.
 
 The field stays still until Phase 3, so both are built once at start. The resolve traces one

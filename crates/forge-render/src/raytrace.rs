@@ -27,8 +27,14 @@ use crate::cells::CellPos;
 use crate::opacity;
 use crate::streaming::PageStore;
 
-/// Most triangles of a mesh's bottom-level structure (the terrain may take more, see
-/// [`TERRAIN_BUDGET`]).
+/// The most triangles a mesh may have to be traced as drawn, every triangle (the owner,
+/// 2026-10-30: the rays meet what is drawn). The Bistro's large tree, 45,540 triangles, was cut
+/// to [`TRIANGLE_BUDGET`] and its rays started inside the traced trunk, which came out black
+/// (#367). Above it the mesh is cut, with a warning: the city's towers (3 to 8 M triangles each)
+/// and the island's largest meshes (143 M in all) would take gigabytes traced whole.
+pub const FULL_DETAIL_UP_TO: u64 = 250_000;
+/// Most triangles of a mesh's bottom-level structure where it has more than
+/// [`FULL_DETAIL_UP_TO`] (the terrain may take more, see [`TERRAIN_BUDGET`]).
 pub const TRIANGLE_BUDGET: u32 = 40_000;
 /// Budget of a mesh whose sphere is wider than a kilometre (terrain).
 pub const TERRAIN_BUDGET: u32 = 600_000;
@@ -106,6 +112,11 @@ impl Cut {
             .collect();
         self.sections = order.iter().map(|&t| self.sections[t]).collect();
     }
+}
+
+/// Triangles of `meshlets` (one mesh's clusters) at full detail, as drawn up close.
+pub(crate) fn full_triangles(meshlets: &[GpuMeshlet]) -> u64 {
+    cut_triangles(meshlets, 0.0)
 }
 
 /// Triangles of the cut of `meshlets` (one mesh's clusters) at error `e`.

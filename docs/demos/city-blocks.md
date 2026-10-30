@@ -838,9 +838,10 @@ change. The south view goes 1.660 → 1.677 ms, the 1440p flight 2.192 → 2.200
 The sun casts ray-traced shadows (D-008's first tier, D-029): the buildings over the streets,
 the lamp posts on the sidewalks, the rocks on each other.
 - **The structures, built once at start-up:** one bottom-level structure per prop, from a cut
-  of its cluster DAG that fits 40 000 triangles (600 000 for the terrain); one top-level
-  structure over the million placed instances, its records written from the instance table
-  on the GPU. The BLASes take 58 ms, the TLAS 12 ms, 278 MiB in all.
+  of its cluster DAG that fits 40 000 triangles (600 000 for the terrain; since 2026-10-30 a
+  prop of up to 250 000 is traced whole, D-029 amended, and the city's are all larger); one
+  top-level structure over the million placed instances, its records written from the instance
+  table on the GPU. The BLASes take 58 ms, the TLAS 12 ms, 278 MiB in all.
 - **The rays:** the resolve traces one shadow ray per sun-facing pixel (a ray query, the first
   hit ends it).
 - **Options:** `--no-shadows` or `r.shadows` draws without. Devices without ray queries have none.

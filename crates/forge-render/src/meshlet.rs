@@ -2119,6 +2119,12 @@ impl MeshletSceneBuilder {
                     let budget = match self.ray_budgets.get(&(m as u32)) {
                         Some(&budget) => budget,
                         None if terrain => raytrace::TERRAIN_BUDGET,
+                        // Traced as drawn up to FULL_DETAIL_UP_TO, cut over it.
+                        None if raytrace::full_triangles(meshlets)
+                            <= raytrace::FULL_DETAIL_UP_TO =>
+                        {
+                            u32::MAX
+                        }
                         None => raytrace::TRIANGLE_BUDGET,
                     };
                     let mut cut = match grouped.get(&m) {
@@ -2141,6 +2147,52 @@ impl MeshletSceneBuilder {
                 .into_iter()
                 .map(|cut| cut.expect("every mesh is cut"))
                 .collect::<Result<Vec<_>>>()?;
+            // The meshes the rays trace coarser than they are drawn up close (#367): a warning
+            // for those cut by FULL_DETAIL_UP_TO (not the terrain, a ray group or a mesh with a
+            // budget of its own, whose rays start by their cut), the whole on one line.
+            let coarser: Vec<(usize, u64, u64, f32)> = cuts
+                .iter()
+                .zip(&self.meshes)
+                .enumerate()
+                .filter(|(_, (cut, _))| cut.error > 0.0)
+                .map(|(m, (cut, mesh))| {
+                    let full = raytrace::full_triangles(clusters(mesh));
+                    (m, full, cut.indices.len() as u64 / 3, cut.error)
+                })
+                .collect();
+            let mut over: Vec<_> = coarser
+                .iter()
+                .filter(|c| {
+                    let mesh = &self.meshes[c.0];
+                    c.1 > raytrace::FULL_DETAIL_UP_TO
+                        && !self.ray_budgets.contains_key(&(c.0 as u32))
+                        && !grouped.contains_key(&c.0)
+                        && mesh.radius <= 1000.0
+                        && !self.ray_terrain.contains(&(c.0 as u32))
+                })
+                .collect();
+            over.sort_by_key(|c| std::cmp::Reverse(c.1));
+            if !over.is_empty() {
+                let largest: Vec<String> = over
+                    .iter()
+                    .take(5)
+                    .map(|c| format!("mesh {} {} -> {} (error {:.3})", c.0, c.1, c.2, c.3))
+                    .collect();
+                tracing::warn!(
+                    meshes = over.len(),
+                    largest = %largest.join(", "),
+                    "meshes over {} triangles traced at a coarser cut: split them, or give them a \
+                     budget of their own (#367)",
+                    raytrace::FULL_DETAIL_UP_TO
+                );
+            }
+            tracing::info!(
+                meshes = cuts.len(),
+                coarser = coarser.len(),
+                full_triangles = coarser.iter().map(|c| c.1).sum::<u64>(),
+                traced_triangles = coarser.iter().map(|c| c.2).sum::<u64>(),
+                "the meshes the rays trace coarser than drawn (#367)"
+            );
             // A ground window's rays start as the terrain's (#197).
             let mut cuts = cuts;
             let terrain_start = cuts.iter().map(|c| c.shadow_start).fold(0.0, f32::max);

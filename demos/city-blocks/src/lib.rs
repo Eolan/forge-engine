@@ -1391,6 +1391,7 @@ impl Gallery {
         let mut sand = None;
         let (scene, placed) = if let Some(scenario) = scenario {
             let (scene, built) = scenario.build(ctx, &args, cooked)?;
+            log_rays(&scene);
             running = Some(built);
             (scene, Vec::new())
         } else if args.gallery {

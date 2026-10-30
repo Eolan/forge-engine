@@ -1327,6 +1327,21 @@ extension on. Every RTX card has all three.
   further (2026-09-26, #96: the island's 8.4 M triangles of relief cut to 600 000 have an error
   of 1.03 m, and from 0.15 m its slopes shadowed themselves; at once the error some still did).
   Props keep 0.15 m, since their creases hold contact shadows.
+- **Amended (2026-10-30, the owner: "we should disable the 40,000 triangles limit, just have
+  the mesh simplifier warn"):** a mesh of up to 250,000 triangles is traced as drawn, every
+  triangle (`raytrace::FULL_DETAIL_UP_TO`). Over it, the mesh is cut to 40,000 as before and the
+  scene's load warns, naming the five largest; the terrain keeps its 600,000.
+  - **Why:** the Bistro's large tree, 45,540 triangles, was cut, and the rays from its drawn
+    bark started inside the traced trunk, met its back and found no light: the trunk came out
+    black in every mode (#367).
+  - **Why not every mesh:** the city's 21 props are 33.8 M triangles drawn in full (its towers 3
+    to 8 M each) and the island's 94 are 143.5 M. Traced whole, they would take gigabytes. The
+    rays' starts by the cut make those safe instead (#367: the shadow rays' already, the
+    bounce's in progress).
+  - **Measured** (three runs each, alternating): the village 1.48 M → 1.56 M traced triangles,
+    119 → 124 MiB, its structures built in 158 → 162 ms, the frame the same (4.83 → 4.86 ms). The
+    island 2.36 M → 3.39 M, 157 → 218 MiB, built in about 0.7 → 1.3 s, the frame the same. The
+    city is unchanged: every one of its props is over the limit.
 
 **The instances.** One top-level structure over every instance. A compute pass
 (`tlas_instances_main`) writes the 64-byte records from the scene's instance table, because
