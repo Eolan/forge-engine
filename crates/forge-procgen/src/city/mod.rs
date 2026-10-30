@@ -35,6 +35,7 @@ pub mod ground;
 pub mod houses;
 pub mod interior;
 pub mod lamps;
+pub mod lots;
 pub mod map;
 pub mod mass;
 pub mod parcels;

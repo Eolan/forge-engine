@@ -817,11 +817,16 @@ fn garden_walls(v: &Village, out: &mut Vec<Anomaly>) {
         }
     }
     // Two walls ending together (their ends within 0.3 m) at a corner sharper than
-    // SHARP_CORNER, each pair once; looked at from outside the V, along its halving line.
+    // SHARP_CORNER, each pair once; looked at from outside the V, along its halving line. Two
+    // street walls are left out: where they meet, the block's own corner is that sharp (the road
+    // plan's), the V the check is for being garden walls on lot lines run aslant (#363, #308).
     let walls = &v.plan.walls;
     let cos_sharp = SHARP_CORNER.to_radians().cos();
     for (i, w) in walls.iter().enumerate() {
         for o in &walls[i + 1..] {
+            if w.inside.is_some() && o.inside.is_some() {
+                continue;
+            }
             for (c, far) in [(w.a, w.b), (w.b, w.a)] {
                 let Some(other_far) = [(o.a, o.b), (o.b, o.a)]
                     .into_iter()
@@ -874,8 +879,141 @@ fn plants(v: &Village, out: &mut Vec<Anomaly>) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{example, structure, village};
+    use super::super::{example, lots, structure, village};
     use super::*;
+
+    /// The villages' layout rules (D-083's fifth step, #308), held at zero over the street plans of
+    /// many seeds at 400 to 900 m, not counted at one: the lots and the court fill each block
+    /// without overlapping, every lot is near a rectangle, the court is nowhere narrower than
+    /// [`lots::COURT_WIDTH`], every garden wall stands on a street, every gate is open, no hedge
+    /// crosses a wall, no
+    /// hedge ends loose (on nothing: a wall, a house or another hedge), and no wall's end meets
+    /// nothing (the sockets' check).
+    #[test]
+    fn the_village_layout_rules_hold_over_many_plans() {
+        let mut broken: Vec<String> = Vec::new();
+        for seed in 1..=10u64 {
+            for size in [400.0, 500.0, 600.0, 700.0, 800.0, 900.0] {
+                broken.extend(layout_rules(size, seed));
+            }
+        }
+        assert!(
+            broken.is_empty(),
+            "{} broken:\n{}",
+            broken.len(),
+            broken.join("\n")
+        );
+    }
+
+    /// The layout rules' breaches in the village `size` across whose streets seed `seed` draws
+    /// (seed 1: the plan as `village::params` gives it).
+    fn layout_rules(size: f64, seed: u64) -> Vec<String> {
+        let site = example::site(size, 10.0);
+        let mut params = village::params(size);
+        if seed != 1 {
+            params.seed = forge_core::Seed::new(20_261_016 + seed);
+        }
+        let v = village::village(&site, &params, 1);
+        let mut out = Vec::new();
+        let at = |p: DVec2| format!("{size} m seed {seed} at ({:.1}, {:.1})", p.x, p.y);
+        for block in &v.blocks {
+            let outline = geom::simplify_closed(&v.plan.blocks[block.block].buildable, 0.6);
+            let area = geom::signed_area(&outline).abs();
+            let filled: f64 = block
+                .lots
+                .iter()
+                .chain(std::iter::once(&block.court))
+                .map(|l| geom::signed_area(l).abs())
+                .sum();
+            if (filled - area).abs() > 1.0 {
+                out.push(format!(
+                    "{}: lots and court {filled:.1} m² of the block's {area:.1}",
+                    at(geom::centroid(&outline))
+                ));
+            }
+            for lot in &block.lots {
+                if lots::squareness(lot) < lots::SQUARE {
+                    out.push(format!(
+                        "{}: a lot {:.2} of its rectangle",
+                        at(geom::centroid(lot)),
+                        lots::squareness(lot)
+                    ));
+                }
+            }
+            if block.court.len() >= 3 {
+                let thin = lots::thin_area(&block.court, lots::COURT_WIDTH);
+                let corners = lots::corners_area(&block.court, lots::COURT_WIDTH);
+                if thin > corners + 12.0 {
+                    out.push(format!(
+                        "{}: the court thinner than {} m over {:.0} m²",
+                        at(geom::centroid(&block.court)),
+                        lots::COURT_WIDTH,
+                        thin - corners
+                    ));
+                }
+            }
+            let on_street = |p: DVec2| {
+                let n = outline.len();
+                (0..n).any(|k| geom::distance_to_segment(p, outline[k], outline[(k + 1) % n]) < 0.2)
+            };
+            for w in v.plan.walls.iter().filter(|w| {
+                let mid = (w.a + w.b) * 0.5;
+                geom::contains(&outline, mid) || on_street(mid)
+            }) {
+                if !w.cut && !on_street((w.a + w.b) * 0.5) {
+                    out.push(format!("{}: a wall off the street", at((w.a + w.b) * 0.5)));
+                }
+            }
+            let footprints: Vec<&[DVec2]> = block.houses.iter().map(|h| &h.footprint[..]).collect();
+            for (i, &(p, q)) in block.hedges.iter().enumerate() {
+                for w in &v.plan.walls {
+                    if let Some((t, u)) = geom::segment_intersection(p, q, w.a, w.b)
+                        && t > 0.02
+                        && t < 0.98
+                        && u > 0.02
+                        && u < 0.98
+                    {
+                        out.push(format!("{}: a hedge crossing a wall", at(p + (q - p) * t)));
+                    }
+                }
+                for end in [p, q] {
+                    let walled = v
+                        .plan
+                        .walls
+                        .iter()
+                        .any(|w| geom::distance_to_segment(end, w.a, w.b) < 0.5);
+                    let housed = footprints.iter().any(|fp| {
+                        let n = fp.len();
+                        (0..n).any(|k| geom::distance_to_segment(end, fp[k], fp[(k + 1) % n]) < 0.5)
+                    });
+                    let hedged =
+                        block.hedges.iter().enumerate().any(|(j, &(a, b))| {
+                            j != i && geom::distance_to_segment(end, a, b) < 0.5
+                        });
+                    if !(walled || housed || hedged || on_street(end)) {
+                        out.push(format!("{}: a hedge ending loose", at(end)));
+                    }
+                }
+            }
+        }
+        // Every gate open: no wall across it.
+        for &g in v.blocks.iter().flat_map(|b| &b.gates) {
+            if v.plan
+                .walls
+                .iter()
+                .any(|w| geom::distance_to_segment(g, w.a, w.b) < walls::THICKNESS * 0.5)
+            {
+                out.push(format!("{}: a gate walled across", at(g)));
+            }
+        }
+        let structures = structure::structures(&v.plan, &v.masses);
+        let mut found = Vec::new();
+        unmatched(&v, &structures, &mut found);
+        for a in found.iter().filter(|a| a.kind == Kind::FreeWallEnd) {
+            out.push(format!("{}: {}", at(a.at), a.note));
+        }
+        out
+    }
 
     /// No two houses of a village share ground, at 400 to 900 m (#308: a house deepened to
     /// adjoin the side behind it, or swung onto a neighbour's wall, must stop at it): each pair
@@ -988,7 +1126,7 @@ mod tests {
             (Kind::DoorSwing, 0),
             (Kind::OpeningMisfit, 0),
             (Kind::DoorBlocked, 0),
-            (Kind::SharpWallCorner, 1),
+            (Kind::SharpWallCorner, 0),
         ];
         // The other sizes' own, where they had more when they came in (#308: at 700 to 900 m,
         // 2026-10-22, after the stairs, the rows' corners, the backs, the walls' corners and the
@@ -1014,20 +1152,22 @@ mod tests {
         // The "corners" of 0° at 800 and 900 m were one wall twice (a lot line's piece between two
         // houses' corners and the court, from both its lots): kept once, and such a stub left
         // meeting nothing dropped. 700 m keeps 3: two walls and two hedges at one point, and a Y.
-        let since: [(f64, Kind, usize); 11] = [
-            (700.0, Kind::FreeWallEnd, 3),
+        // On 2026-10-30 the lots were cut again per street side (D-083's fifth step, `lots::cut`)
+        // and the walls stand only along the streets: no free wall end, sharp wall corner, sliver
+        // or lone party wall left at 400 to 700 m, nor at 900 m. The houses laid on the new lots
+        // left these, the next work on the houses: rooms without a window in a corner house (500,
+        // 600 and 900 m) and a study at 800 m, a ridge step at 700 and 900 m, a door unreached at
+        // 700 m, and at 800 m two houses 2.8 m apart, their party walls each without its neighbour.
+        let since: [(f64, Kind, usize); 9] = [
+            (500.0, Kind::UnlitRoom, 1),
+            (600.0, Kind::UnlitRoom, 4),
+            (700.0, Kind::RidgeStep, 1),
+            (700.0, Kind::UnreachedDoor, 1),
             (800.0, Kind::UnlitRoom, 1),
-            (800.0, Kind::RidgeStep, 1),
-            (900.0, Kind::Sliver, 1),
-            (900.0, Kind::LonePartyWall, 1),
-            (900.0, Kind::RidgeStep, 3),
-            (700.0, Kind::SharpWallCorner, 3),
-            // None left at these: none may come back (a review of 0b78f96d: the default 1 let
-            // them).
-            (400.0, Kind::SharpWallCorner, 0),
-            (600.0, Kind::SharpWallCorner, 0),
-            (800.0, Kind::SharpWallCorner, 0),
-            (900.0, Kind::SharpWallCorner, 0),
+            (800.0, Kind::Sliver, 1),
+            (800.0, Kind::LonePartyWall, 2),
+            (900.0, Kind::UnlitRoom, 4),
+            (900.0, Kind::RidgeStep, 1),
         ];
         let mut over = Vec::new();
         for (kind, bound) in bounds {
@@ -1070,6 +1210,218 @@ mod digests {
                 format!("{:?}{:?}{:?}", b.lots, b.hedges, b.gates).hash(&mut h);
             }
             println!("digest {size}: {:016x}", h.finish());
+        }
+    }
+
+    /// Each size's garden walls, hedges and gates drawn on the plan with the lots and the houses,
+    /// to look at their layout from above (#308): FORGE_PLAN_DIR names the folder for
+    /// `plan-<size>.png`, 5 px a metre. Street walls dark red, walls between gardens orange, cuts
+    /// magenta, hedges green, gates blue, houses grey, courts sand.
+    #[test]
+    #[ignore]
+    fn village_plans() {
+        let Ok(dir) = std::env::var("FORGE_PLAN_DIR") else {
+            return;
+        };
+        let sizes: Vec<f64> = std::env::var("FORGE_PLAN_SIZES")
+            .ok()
+            .map(|s| s.split(',').filter_map(|x| x.parse().ok()).collect())
+            .unwrap_or_else(|| vec![600.0]);
+        // FORGE_PLAN_SEED=n: the streets of the layout test's plan `n` (1: the villages' own).
+        let seed: u64 = std::env::var("FORGE_PLAN_SEED")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1);
+        for size in sizes {
+            let site = crate::city::example::site(size, 10.0);
+            let mut params = crate::city::village::params(size);
+            if seed != 1 {
+                params.seed = forge_core::Seed::new(20_261_016 + seed);
+            }
+            let v = crate::city::village::village(&site, &params, 1);
+            let mut points: Vec<DVec2> = v.plan.walls.iter().flat_map(|w| [w.a, w.b]).collect();
+            for b in &v.blocks {
+                points.extend(b.lots.iter().flatten());
+            }
+            let (lo, hi) = points.iter().fold(
+                (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)),
+                |(lo, hi), &p| (lo.min(p), hi.max(p)),
+            );
+            let (lo, hi) = (lo - 5.0, hi + 5.0);
+            // FORGE_PLAN_AT=x,y,r: the square of r metres about (x, y) on the plan (as the
+            // layout test prints its places), drawn at 20 px a metre.
+            let focus: Option<Vec<f64>> = std::env::var("FORGE_PLAN_AT")
+                .ok()
+                .map(|s| s.split(',').filter_map(|x| x.parse().ok()).collect());
+            let (lo, hi, scale) = match focus.as_deref() {
+                Some(&[x, y, r]) => (DVec2::new(x - r, y - r), DVec2::new(x + r, y + r), 20.0),
+                _ => (lo, hi, 5.0),
+            };
+            #[allow(non_snake_case)]
+            let PX: f64 = scale;
+            let (w, h) = (((hi.x - lo.x) * PX) as u32, ((hi.y - lo.y) * PX) as u32);
+            let mut img = image::RgbImage::from_pixel(w, h, image::Rgb([250, 250, 245]));
+            let to = |p: DVec2| ((p.x - lo.x) * PX, (hi.y - p.y) * PX);
+            let fill = |img: &mut image::RgbImage, poly: &[DVec2], c: [u8; 3]| {
+                if poly.len() < 3 {
+                    return;
+                }
+                let (a, b) = poly.iter().fold(
+                    (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)),
+                    |(a, b), &p| (a.min(p), b.max(p)),
+                );
+                let (x0, y1) = to(a);
+                let (x1, y0) = to(b);
+                for y in (y0.max(0.0) as u32)..(y1.min(h as f64 - 1.0) as u32) {
+                    for x in (x0.max(0.0) as u32)..(x1.min(w as f64 - 1.0) as u32) {
+                        let p = DVec2::new(
+                            lo.x + (f64::from(x) + 0.5) / PX,
+                            hi.y - (f64::from(y) + 0.5) / PX,
+                        );
+                        if geom::contains(poly, p) {
+                            img.put_pixel(x, y, image::Rgb(c));
+                        }
+                    }
+                }
+            };
+            let line = |img: &mut image::RgbImage, a: DVec2, b: DVec2, width: f64, c: [u8; 3]| {
+                let (ax, ay) = to(a);
+                let (bx, by) = to(b);
+                let steps = ((bx - ax).hypot(by - ay) * 2.0).ceil().max(1.0) as u32;
+                let r = (width * 0.5).max(0.5);
+                for s in 0..=steps {
+                    let t = f64::from(s) / f64::from(steps);
+                    let (cx, cy) = (ax + (bx - ax) * t, ay + (by - ay) * t);
+                    for y in (cy - r).floor() as i64..=(cy + r).ceil() as i64 {
+                        for x in (cx - r).floor() as i64..=(cx + r).ceil() as i64 {
+                            let inside = (x as f64 + 0.5 - cx).hypot(y as f64 + 0.5 - cy) <= r;
+                            if inside && x >= 0 && y >= 0 && (x as u32) < w && (y as u32) < h {
+                                img.put_pixel(x as u32, y as u32, image::Rgb(c));
+                            }
+                        }
+                    }
+                }
+            };
+            for b in &v.blocks {
+                fill(&mut img, &b.court, [236, 226, 196]);
+                if std::env::var("FORGE_PLAN_LOT_LINES").is_ok() {
+                    for (k, lot) in b.lots.iter().enumerate() {
+                        let h = (k as u32).wrapping_mul(2_654_435_761) ^ (b.block as u32 * 97);
+                        let c = [
+                            150 + (h & 0x5f) as u8,
+                            150 + ((h >> 8) & 0x5f) as u8,
+                            150 + ((h >> 16) & 0x5f) as u8,
+                        ];
+                        fill(&mut img, lot, c);
+                    }
+                }
+                for house in &b.houses {
+                    fill(&mut img, &house.footprint, [170, 170, 170]);
+                }
+                for lot in &b.lots {
+                    for k in 0..lot.len() {
+                        line(
+                            &mut img,
+                            lot[k],
+                            lot[(k + 1) % lot.len()],
+                            1.0,
+                            [200, 200, 215],
+                        );
+                    }
+                }
+            }
+            for b in &v.blocks {
+                for &(a, c) in &b.hedges {
+                    line(&mut img, a, c, 4.0, [40, 150, 50]);
+                }
+            }
+            for wall in &v.plan.walls {
+                let c = if wall.cut {
+                    [220, 0, 200]
+                } else if wall.inside.is_some() {
+                    [140, 20, 20]
+                } else {
+                    [240, 120, 0]
+                };
+                line(
+                    &mut img,
+                    wall.a,
+                    wall.b,
+                    crate::city::walls::THICKNESS * PX,
+                    c,
+                );
+            }
+            for b in &v.blocks {
+                for &g in &b.gates {
+                    line(&mut img, g, g, 4.0, [30, 80, 230]);
+                }
+            }
+            for b in &v.blocks {
+                let lots: f64 = b.lots.iter().map(|l| geom::signed_area(l).abs()).sum();
+                let court = geom::signed_area(&b.court).abs();
+                println!(
+                    "{size} block {} depth {} lots {} ({lots:.0} m2) court {court:.0} m2 ({:.0} %) centre ({:.0}, {:.0}) on the plan, houses {}",
+                    b.block,
+                    b.ty.depth,
+                    b.lots.len(),
+                    100.0 * court / (court + lots).max(1.0),
+                    geom::centroid(&v.plan.blocks[b.block].buildable).x,
+                    geom::centroid(&v.plan.blocks[b.block].buildable).y,
+                    b.houses.len()
+                );
+            }
+            if std::env::var("FORGE_PLAN_LOTS").is_ok() {
+                for b in &v.blocks {
+                    for (k, l) in b.lots.iter().enumerate() {
+                        let housed = b.houses.iter().any(|h| h.lot == *l);
+                        let c = geom::centroid(l);
+                        println!(
+                            "  block {} lot {k} area {:.0} housed {housed} centre ({:.0},{:.0}) corners {}",
+                            b.block,
+                            geom::signed_area(l).abs(),
+                            c.x - lo.x,
+                            hi.y - c.y,
+                            l.len()
+                        );
+                    }
+                }
+            }
+            if std::env::var("FORGE_PLAN_OUTLINES").is_ok() {
+                for b in &v.blocks {
+                    let o = geom::simplify_closed(&v.plan.blocks[b.block].buildable, 0.6);
+                    let n = o.len();
+                    let turns: Vec<String> = (0..n)
+                        .map(|i| {
+                            let a = (o[i] - o[(i + n - 1) % n]).normalize_or_zero();
+                            let c = (o[(i + 1) % n] - o[i]).normalize_or_zero();
+                            format!(
+                                "({:.0},{:.0}) turn {:.0} next {:.1} m",
+                                o[i].x - lo.x,
+                                hi.y - o[i].y,
+                                a.angle_to(c).to_degrees(),
+                                o[i].distance(o[(i + 1) % n])
+                            )
+                        })
+                        .collect();
+                    println!("  outline {}: {}", b.block, turns.join("; "));
+                }
+            }
+            if std::env::var("FORGE_PLAN_LOT_LINES").is_ok() {
+                for b in &v.blocks {
+                    for lot in &b.lots {
+                        for k in 0..lot.len() {
+                            line(
+                                &mut img,
+                                lot[k],
+                                lot[(k + 1) % lot.len()],
+                                1.0,
+                                [30, 30, 220],
+                            );
+                        }
+                    }
+                }
+            }
+            img.save(format!("{dir}/plan-{size}.png")).unwrap();
         }
     }
 }

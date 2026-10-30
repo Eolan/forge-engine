@@ -2785,6 +2785,63 @@ the player and the pursuers as the people they flee, drawn as blocky placeholder
 (`forge_geom::animals`). The log names a view of each species' first group. Details and numbers
 in [fauna.md](fauna.md).
 
+## The village's lots per street side (D-083's fifth step, #308, 2026-10-30)
+
+The owner's review of the walls on 2026-10-29: "the wall placements are over complicated in a lot
+of cases", "they don't take into account the hedges very well", "on your plan hedges cross
+walls". Lots should be "close to rectangles", two rows should meet on "a single straight hedge",
+corners should be square, and there should be no long walls without a use. The strips had been cut
+edge by edge, then patched one case at a time: leftovers absorbed, slivers moved, sliver courts
+dissolved, sharp corners chamfered, T's cut. D-083 asked instead for a rebuild in which those bad
+shapes cannot occur, its rules held at zero by property tests over many plans. The owner chose
+"hedges only" between gardens and "shallower lots, bigger court", then approved the plan images
+before the build.
+
+**The lots** (`city::lots::cut`):
+- **Street sides:** the block's outline splits at its corners: a turn of 30° or more at one point,
+  or over 6 m of a rounded corner. A side shorter than 8 m, or a chamfer shorter than the depth,
+  is part of its corner and keeps no lots.
+- **Lot lines:** square to their stretch of street, at the widths the households want. A cut
+  within 3.5 m of a bend moves onto it, so a lot's front bends at its corner.
+- **One back line a side:** the street offset by the depth, so a row's backs never step.
+- **Corners:** the longer side takes the corner: its end lot runs round to the other street, and
+  the other side's lots start at its back line. The owner's sketch, with no bisector diagonals.
+- **The court** is what is left. It must be one piece, at least 15 % of the block and nowhere
+  under 8 m wide (`lots::court_is_wide`). Otherwise the block is cut shallower, and failing that,
+  two facing sides go back to back on one straight line (the spine) with no court between them.
+  A block no rule fits keeps no lots and stays open ground (5 blocks of 60 plans).
+- **Every lot is near a rectangle:** it fills 65 % of the tightest rectangle round it, or the
+  depth is refused.
+- **Lots without a house:** such a lot joins its neighbour along the street where the two stay
+  near a rectangle, else goes to the court beside it if the court stays wide.
+
+**The walls** (`city::walls::garden_walls`) stand only along the streets and lanes. They run along
+the block's outline wherever a housed lot fronts it and no house stands on it or before it, one
+wall to each edge of the outline, with ends mitred where two meet at a bend or a corner. The
+joint, settling and slot-filling passes and the sharp-corner cuts are gone with the walls between
+gardens. A wall ending before a house that stands back from the street gets a short closing wall
+to it. Every edge between two lots, or between a lot and the court, is a hedge where no house
+stands, laid once.
+
+**The checks:**
+- **The property test** (`anomalies::the_village_layout_rules_hold_over_many_plans`) covers the
+  street plans of 10 seeds at 400 to 900 m, 60 villages, and holds at zero:
+  - lots and court fill each block without overlapping;
+  - every lot is near a rectangle and no court is too narrow;
+  - every wall stands on a street (closing walls aside);
+  - no hedge crosses a wall or ends loose;
+  - no wall's end meets nothing.
+- **The plan images:** `village_plans` (ignored) draws them. `FORGE_PLAN_SEED` picks a plan,
+  `FORGE_PLAN_AT=x,y,r` zooms on a place the test prints.
+- **The anomaly bounds:** free wall ends, sharp wall corners, slivers and lone party walls are at
+  none from 400 to 900 m, except one sliver at 800 m. Two street walls meeting at an acute corner
+  of the block itself (the road plan's angle) no longer count as a sharp corner. The houses laid on
+  the new lots leave these for the house work: unlit rooms (500 m 1, 600 m 4, 800 m 1, 900 m 4), a
+  ridge step at 700 and 900 m, a door unreached at 700 m, and at 800 m two houses 2.8 m apart.
+
+Every lot now has its house: 10, 10, 65, 102, 116 and 81 houses from 400 to 900 m (the 600 m
+village had 60).
+
 ## Next (#245–#247)
 
 - Squares at the radial districts' centres; the landmarks' sightlines.
