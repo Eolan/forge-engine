@@ -217,7 +217,9 @@ void sharc_update_main(uint3 id : SV_DispatchThreadID)
     ray.TMax = PATH_RANGE;
     for (uint k = 0u; k < SHARC_MOST_BOUNCES; k++)
     {
-        ClosestHit c = trace_past_glass(f, ray, true, seed);
+        // The first ray leaves the drawn surface: past the back of its own mesh's traced cut
+        // where that stands in front of it, as the bounce's (#367).
+        ClosestHit c = k == 0u ? trace_from_pixel(f, vis, s, ray, seed) : trace_past_glass(f, ray, true, seed);
         if (!c.hit)
         {
             SharcUpdateMiss(sharc, state, sky_along(p.sky, d));
