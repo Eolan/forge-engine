@@ -7953,9 +7953,15 @@ before there is an AMD card to test it on (#67).
   `storageBuffer16BitAccess`, `shaderIntegerDotProduct` (the INT8 models),
   `VK_KHR_cooperative_matrix` and `VK_EXT_shader_float8` (the RX 9000's FP8 model).
 - **The DLLs** come from `FORGE_FFX_DIR`, else from beside the executable, else
-  `fsr-sdk/Kits/FidelityFX/signedbin` (the SDK, git-ignored). Like Streamline's, they are expected on the player's computer and never
-  published: nothing of AMD's FSR SDK, its ML upscaler included, enters the repository (the
-  owner, 2026-10-29; `CREDITS.md`).
+  `fsr-sdk/Kits/FidelityFX/signedbin` (the SDK, git-ignored). Like Streamline's, they are never
+  committed or published on GitHub: nothing of AMD's FSR SDK, its ML upscaler included, enters
+  the repository (the owner, 2026-10-29; `CREDITS.md`). A shipped game bundles them (the owner,
+  2026-10-30): the SDK's licence (2.4.0, `docs/license.md`) lets the signed DLLs go out free in
+  binary form only, with AMD's copyright and permission notice in the game's documentation and
+  no reverse engineering. The Vulkan ones are `amd_fidelityfx_loader_vk.dll`,
+  `amd_fidelityfx_upscaler_vk.dll` and `amd_fidelityfx_framegeneration_vk.dll`; the denoiser's and
+  the radiance cache's are DirectX 12 only. Streamline's
+  signed DLLs and `nvngx_dlss.dll` ship the same way, never its development DLLs.
 - **Forge's FSR 3.1 stays in the repository** (the owner, 2026-10-29: "follow your
   recommendations"). Its 21 shader headers (`shaders/third-party/fidelityfx/`, FidelityFX SDK
   1.1.4: FSR 3.1, FSR 1, SPD) are AMD's open source under MIT, which allows publishing and
