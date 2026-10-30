@@ -8263,7 +8263,7 @@ Measured fixes within the probes fall short: 1 m over the whole view 8.6 ms and 
   the probes' light in its direction (the far field, as now); one that meets a surface takes that
   surface's light: the sun through a shadow ray, the lamps (`hit_lamps`), and the probes' light
   at the hit for its own bounce. The probes no longer light what the near field sees closed.
-- **Denoised by NRD** (D-061's, already in Forge for SIGMA): its diffuse denoiser (REBLUR, or
+- **Denoised by NRD** (D-049's, already in Forge for SIGMA): its diffuse denoiser (REBLUR, or
   RELAX for the flicker), temporal then spatial, before DLAA.
 - **Mirror rays' hits** take the probes as now (one hit in many pixels); the near field is the
   primary surfaces'.
