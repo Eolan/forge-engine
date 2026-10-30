@@ -9160,7 +9160,8 @@ steps". Steps 1 and 2 as proposed.
     from the accepted set, but #71's flake.
   - The map check: 12 of its 13 views the same to the pixel with D-089 and without; the walked
     way in within ꟻLIP 0.0007, run-to-run noise. Both runs drift 0.002 to 0.004 (mean ꟻLIP) from
-    the set accepted at 17:33, so that drift comes from the commits since then, not from D-089.
+    the set accepted at 17:33: NRD's rebuild at its v4.18.0 tag (eee73e3d, 18:13), which moved the
+    sentinels alike, not D-089.
 
 **Open:** whether the classroom, an inside lit through its windows, should be metered too. The
 chart stays a card at one exposure.
