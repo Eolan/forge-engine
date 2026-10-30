@@ -6073,7 +6073,7 @@ static const uint GI_REFERENCE_PATH = 4u;
 static const uint NEAR_FIELD_REFERENCE_RAYS = 32;
 static const float NEAR_FIELD_RANGE = 2.0;
 static const float PATH_RANGE = 50000.0;
-static const uint PATH_MOST_BOUNCES = 10u;
+static const uint PATH_MOST_BOUNCES = 32u;
 static const float PATH_LEAST_WEIGHT = 0.002;
 
 // The pixel's reference (`near_field_reference`), traced once in `shade_pixel` for every class's
@@ -6089,6 +6089,20 @@ float3 cosine_direction(float3 n, float u1, float u2)
     float r = sqrt(u1);
     float phi = 6.2831853 * u2;
     return normalize(t * (r * cos(phi)) + b * (r * sin(phi)) + n * sqrt(max(1.0 - u1, 0.0)));
+}
+
+// `trace_closest` past the clear glass of a house whose rooms are drawn (two panes at most), as a
+// probe's ray passes it (`probe_trace_main`, #280): the reference's rays light a room through its
+// windows as the probes do.
+ClosestHit trace_past_glass(Frame* f, RayDesc ray)
+{
+    ClosestHit c = trace_closest(f, ray);
+    for (uint pane = 0u; pane < 2u && c.hit && clear_glass(candidate_row(f, c.instance, c.primitive)); pane++)
+    {
+        ray.TMin = c.t + 0.002;
+        c = trace_closest(f, ray);
+    }
+    return c;
 }
 
 // The light a path brings back from `hit`, met along `d`, in the resolve's units: each hit's sun
@@ -6120,7 +6134,7 @@ float3 path_from(Frame* f, float4* sky, ProbeField* probes, RayHit hit, float3 d
         ray.Direction = d;
         ray.TMin = 0.0;
         ray.TMax = PATH_RANGE;
-        ClosestHit c = trace_closest(f, ray);
+        ClosestHit c = trace_past_glass(f, ray);
         if (!c.hit)
             return sum + weight * sky_along(sky, d);
         hit = ray_hit(f, c.instance, c.primitive, c.barycentrics, ray.Origin, d, c.t);
@@ -6151,7 +6165,7 @@ float3 near_field_reference(Frame* f, float4* sky, ProbeField* probes, float3 wo
         ray.Direction = d;
         ray.TMin = 0.0;
         ray.TMax = mode == GI_REFERENCE_NEAR ? NEAR_FIELD_RANGE : PATH_RANGE;
-        ClosestHit c = trace_closest(f, ray);
+        ClosestHit c = mode == GI_REFERENCE_NEAR ? trace_closest(f, ray) : trace_past_glass(f, ray);
         if (c.hit)
         {
             RayHit hit = ray_hit(f, c.instance, c.primitive, c.barycentrics, origin, d, c.t);

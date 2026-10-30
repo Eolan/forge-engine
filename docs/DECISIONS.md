@@ -8462,10 +8462,20 @@ denoiser; measured before and after on the Bistro, the village and the city.
 3. **The probes:** the back-face floor goes (2 above). They stay the light past the traced
    bounce, the mirror rays' hits and the far field. Their coverage (1 above) matters less
    under the traced bounce; it is measured again once the pass is in.
-4. **Brighter scenes** (the village's white walls, clay): the bias at the hits shows there. The
-   remedy is a cache on the surfaces themselves, read at the hits. Ward's irradiance caching
-   (1988) is free; NVIDIA's spatial-hash radiance cache and path space filtering may be
-   patented. That cache is a proposal of its own after the pass, patents checked first.
+4. **Brighter scenes:** the bias at the hits shows there, and the village measures it. Its
+   whitewashed rooms (`city-plan --village 600`, the map check's "room" and "landing" at 0.75,
+   against `r.gi.reference=4`; the reference's rays pass the houses' clear glass as the probes'
+   do):
+   - the probes alone light the room's walls at 1.4 to 1.7 and its table's corner at 2.0, the
+     landing at 1.1 to 2.4. The room reads green with the lawn's light, where the path's is
+     warm with the sun's and the wood's;
+   - one traced bounce brings the room to 1.1 to 1.5, two to 1.1 to 1.3: with an albedo near
+     0.8, a bounce's bias compounds bounce after bounce;
+   - DDGI's back-face floor changes these rooms by 1 to 5 %.
+   The remedy is a cache on the surfaces themselves, its rays leaving the surface's own side,
+   read at the hits. Ward's irradiance caching (1988) is free; NVIDIA's spatial-hash radiance
+   cache and path space filtering may be patented. That cache is a proposal of its own, its
+   patents researched first; the traced bounce comes before it.
 5. **Targets, against Forge's own path (`r.gi.reference=4`):** 0.9 to 1.1 with the materials,
    0.85 to 1.2 in clay; a still camera no less steady than now; at most 1.5 ms at
    1600 × 900.
