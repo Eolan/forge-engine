@@ -10,11 +10,6 @@
 //! twelve levels of 32³ cells round the camera, each twice the last, a slot per cell and facing;
 //! the cells wrap as the camera moves, and an entry whose cell left its level's window is freed
 //! before the frame's lookups. An entry unread for ten frames is freed too.
-//!
-//! A lookup that finds no entry claims its slot (a 64-bit atomic least, so the device needs
-//! `shaderBufferInt64Atomics`); the next frame's first pass makes the entries from the claims.
-//! Two runs make the same entries and draw the same frames (D-016), but where the pool runs out
-//! which claims got an entry follows the threads.
 
 use std::sync::Arc;
 
@@ -45,23 +40,18 @@ const MOST_SAMPLES: f32 = 32.0;
 /// An entry's bytes (`CacheEntry`).
 const ENTRY_BYTES: u64 = 80;
 const GROUP: u32 = 64;
-/// The make pass's threads (`CACHE_MAKE_THREADS` in `surface_cache_update.slang`).
-const MAKE_THREADS: u32 = 65_536;
 
 /// `SurfaceCacheField` in `surface_cache.slang`.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct GpuField {
     origins: [[i32; 4]; LEVELS],
-    last_origins: [[i32; 4]; LEVELS],
     centre: [f32; 3],
     cell: f32,
     entries: u64,
     index: u64,
     free: u64,
     used: u64,
-    claims: u64,
-    claimed: u64,
     pool: u32,
     frame: u32,
     most_samples: f32,
@@ -111,13 +101,11 @@ pub struct CacheLight {
     pub(crate) entries: BufferHandle,
     pub(crate) index: BufferHandle,
     pub(crate) free: BufferHandle,
-    pub(crate) claims: BufferHandle,
-    pub(crate) claimed: BufferHandle,
 }
 
 impl CacheLight {
-    /// Declares the cache's buffers for a pass that looks it up (and claims the slots it finds
-    /// empty) at `stages`.
+    /// Declares the cache's buffers for a pass that looks it up (and makes the entries it misses)
+    /// at `stages`.
     pub(crate) fn declare<'b, 'f>(
         &self,
         builder: forge_gpu::PassBuilder<'b, 'f>,
@@ -127,25 +115,18 @@ impl CacheLight {
             .buffer(self.entries, BufferAccess::ShaderReadWrite(stages))
             .buffer(self.index, BufferAccess::ShaderReadWrite(stages))
             .buffer(self.free, BufferAccess::ShaderReadWrite(stages))
-            .buffer(self.claims, BufferAccess::ShaderReadWrite(stages))
-            .buffer(self.claimed, BufferAccess::ShaderReadWrite(stages))
     }
 }
 
-/// The surface cache: its entries, index, free stack and claims, and the passes that keep them.
+/// The surface cache: its entries, index and free stack, and the passes that keep them.
 pub struct SurfaceCache {
-    make: Pipeline,
     age: Pipeline,
     trace: Pipeline,
     blend: Pipeline,
     entries: GraphBuffer,
     index: GraphBuffer,
     free: GraphBuffer,
-    claims: GraphBuffer,
-    claimed: GraphBuffer,
     fields: Vec<Buffer>,
-    /// The levels' first cells in the last frame, whose lookups made the claims.
-    last_origins: [[i32; 4]; LEVELS],
     /// The entries in use after each frame slot's blend, read back (`counted`: written by the
     /// frame that last used the slot).
     used: Vec<GraphBuffer>,
@@ -157,8 +138,8 @@ pub struct SurfaceCache {
 }
 
 impl SurfaceCache {
-    /// Compiles the passes (`gi/cache rays` needs ray queries, the claims 64-bit atomics) and
-    /// creates the pool, every entry free, and the index, every slot empty and unclaimed.
+    /// Compiles the passes (`gi/cache rays` needs ray queries) and creates the pool, every entry
+    /// free, and the index, every slot empty.
     pub fn new(device: &Arc<Device>, shaders: &ShaderCompiler) -> Result<Self> {
         let compute = |file: &str, entry: &str, push: usize, name: &str| -> Result<Pipeline> {
             let module = device
@@ -195,12 +176,6 @@ impl SurfaceCache {
         // Every byte 0xFF: each index slot CACHE_EMPTY.
         let index = buffer(slots * 4, "surface cache index")?;
         device.write_buffer_staged(&index, 0, &vec![0xFF_u8; (slots * 4) as usize])?;
-        // And each claim CACHE_UNCLAIMED.
-        let claims = buffer(slots * 8, "surface cache claims")?;
-        device.write_buffer_staged(&claims, 0, &vec![0xFF_u8; (slots * 8) as usize])?;
-        // The slots claimed in a frame, each listed once: none yet.
-        let claimed = buffer((slots + 1) * 4, "surface cache claimed slots")?;
-        device.write_buffer_staged(&claimed, 0, &[0_u8; 4])?;
         let free = buffer((u64::from(POOL) + 1) * 4, "surface cache free list")?;
         let stack: Vec<u32> = std::iter::once(POOL).chain(0..POOL).collect();
         device.write_buffer_staged(&free, 0, bytemuck::cast_slice(&stack))?;
@@ -227,12 +202,6 @@ impl SurfaceCache {
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
-            make: compute(
-                "surface_cache_update.slang",
-                "surface_cache_make_main",
-                std::mem::size_of::<UpdatePush>(),
-                "surface cache make",
-            )?,
             age: compute(
                 "surface_cache_update.slang",
                 "surface_cache_age_main",
@@ -254,10 +223,7 @@ impl SurfaceCache {
             entries: GraphBuffer::new(entries),
             index: GraphBuffer::new(index),
             free: GraphBuffer::new(free),
-            claims: GraphBuffer::new(claims),
-            claimed: GraphBuffer::new(claimed),
             fields,
-            last_origins: [[0; 4]; LEVELS],
             used,
             counted: [false; FRAMES_IN_FLIGHT],
             most_used: 0,
@@ -282,12 +248,10 @@ impl SurfaceCache {
         self.entries.size()
             + self.index.size()
             + self.free.size()
-            + self.claims.size()
-            + self.claimed.size()
             + self.fields.iter().map(Buffer::size).sum::<u64>()
     }
 
-    /// Declares this frame's four passes round the camera at `camera` (metres in the scene
+    /// Declares this frame's three passes round the camera at `camera` (metres in the scene
     /// frame, as [`crate::Probes::update`]'s), with the scene of the renderer's frame block at
     /// `frame`, the sky's light and the probes' (the light at the hits the cache does not hold
     /// yet), and returns what the bounce's rays read. `movers`: the frame's movers, which the
@@ -326,15 +290,12 @@ impl SurfaceCache {
         }
         let field = GpuField {
             origins,
-            last_origins: std::mem::replace(&mut self.last_origins, origins),
             centre: camera.to_array(),
             cell: FINEST_CELL,
             entries: self.entries.address(),
             index: self.index.address(),
             free: self.free.address(),
             used: self.used[slot.index].address(),
-            claims: self.claims.address(),
-            claimed: self.claimed.address(),
             pool: POOL,
             frame: self.frame,
             most_samples: MOST_SAMPLES,
@@ -351,25 +312,9 @@ impl SurfaceCache {
             entries: graph.import_buffer(&this.entries),
             index: graph.import_buffer(&this.index),
             free: graph.import_buffer(&this.free),
-            claims: graph.import_buffer(&this.claims),
-            claimed: graph.import_buffer(&this.claimed),
         };
         let groups = POOL.div_ceil(GROUP);
         let push = UpdatePush { field: address };
-        // The entries the last frame's lookups claimed, the listed slots shared out.
-        let make = &this.make;
-        let make_groups = MAKE_THREADS / GROUP;
-        light
-            .declare(
-                graph.pass("gi/cache make").queue(QueueKind::Compute),
-                compute,
-            )
-            .run(move |_, commands| {
-                commands.bind_pipeline(make);
-                commands.push_constants(make, &push);
-                commands.dispatch(make_groups, 1, 1);
-                Ok(())
-            });
         let age = &this.age;
         light
             .declare(

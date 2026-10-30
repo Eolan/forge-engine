@@ -7747,7 +7747,8 @@ void surface_cache_trace_main(uint3 id : SV_DispatchThreadID)
     if (e >= cache[0].pool)
         return;
     CacheEntry entry = cache[0].entries[e];
-    // Only the entries alive at `surface_cache_age_main`.
+    // Only the entries alive at `surface_cache_age_main`: one made in this pass may show its
+    // number with another life's point.
     if (entry.slot == CACHE_EMPTY || entry.fresh.x < 0.0)
         return;
     Frame* f = p.frame;
@@ -7761,15 +7762,12 @@ void surface_cache_trace_main(uint3 id : SV_DispatchThreadID)
     // `Frame::far_shadows` metres off. Not the probes': it leaves the houses' furniture out (#363).
     float far = f[0].far_shadows;
     g_ray_mask = far > 0.0 && length(entry.position - cache[0].centre) > far ? RAY_SHADOW_FAR : RAY_SHADOW;
-    // Each entry's directions from R2's sequence, started at its slot's number: the pool's number
-    // an entry gets follows the threads' order (D-016).
-    uint seed = (entry.slot * 0x8DA6B343u) ^ 0x5BD1E995u;
+    // Each entry's directions from R2's sequence, started at a number of its own.
+    uint seed = (e * 0x8DA6B343u) ^ 0x5BD1E995u;
     float2 u = frac(cache_jitter(seed) + float(cache[0].frame % 4096u) * float2(0.7548777, 0.5698403));
     float3 d = cosine_direction(entry.normal, u.x, u.y);
     RayDesc ray;
-    // Off its point by the claim's rounding too (`cache_point_error`).
-    float size = cache[0].cell * float(1u << uint(entry.cell.w));
-    ray.Origin = entry.position + entry.normal * (DIFFUSE_START + cache_point_error(size));
+    ray.Origin = entry.position + entry.normal * DIFFUSE_START;
     ray.Direction = d;
     ray.TMin = 0.0;
     ray.TMax = PATH_RANGE;

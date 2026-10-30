@@ -867,9 +867,8 @@ struct Gallery {
     diffuse_denoiser: Option<forge_render::DiffuseDenoiser>,
     diffuse_tried: bool,
     diffuse_was_on: bool,
-    /// D-088's surface cache under the bounce (`r.gi.cache`, `cache_on`, on by default since the
-    /// owner's word, 2026-10-30), made the first time it is asked for where the device has ray
-    /// queries; `cache_was_on` whether it lit the last
+    /// D-088's surface cache under the bounce (`r.gi.cache`, `cache_on`), made the first time it
+    /// is asked for where the device has ray queries; `cache_was_on` whether it lit the last
     /// frame (its entries start over when not).
     surface_cache: Option<forge_render::SurfaceCache>,
     cache_on: bool,
@@ -2117,7 +2116,7 @@ impl Gallery {
             diffuse_tried: false,
             diffuse_was_on: false,
             surface_cache: None,
-            cache_on: true,
+            cache_on: false,
             cache_tried: false,
             cache_was_on: false,
             probe_ahead: PROBE_AHEAD,
@@ -2596,7 +2595,7 @@ impl Demo for Gallery {
         // D-088's surface cache, the first time `r.gi.cache` asks for it.
         if self.renderer.gi_trace && self.cache_on && !self.cache_tried {
             self.cache_tried = true;
-            if ctx.device.features().ray_query && ctx.device.features().int64_atomics {
+            if ctx.device.features().ray_query {
                 match forge_render::SurfaceCache::new(&ctx.device, &ctx.shaders) {
                     Ok(cache) => self.surface_cache = Some(cache),
                     Err(error) => {
