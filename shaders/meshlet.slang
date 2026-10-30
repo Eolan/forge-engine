@@ -3934,7 +3934,7 @@ RayDesc lamp_ray(Lamp lamp, float3 world, float3 n, float bias, float3 offset)
 // surface reflects, which its diffuse part loses. `sky_share` scales the table's light in the
 // mirror direction `r`: the share of it the probes find there (issue #68), else 1. `traced`: a
 // mirror ray replaces the open sky's part of it that `traced_share` gives.
-float3 sky_reflection(float4* sky, float3 irradiance, float3 n, float3 view, float3 r, float3 sky_share, float specular_power, float ao, float f0, bool traced, out float fresnel)
+float3 sky_reflection(float4* sky, float3 irradiance, float3 n, float3 view, float3 r, float3 sky_share, float specular_power, float ao, float3 f0, bool traced, out float3 fresnel)
 {
     float roughness = sqrt(sqrt(2.0 / (specular_power + 2.0))); // RenderLayer::roughness_for_power, inverted
     float nv = saturate(dot(n, view));
@@ -3954,7 +3954,8 @@ float3 sky_reflection(float4* sky, float3 irradiance, float3 n, float3 view, flo
     // the light, and GTAO darkened it a second time (a smooth body's reflection by about its ao
     // at roughness 0.25; D-086, the Bistro's scooter). The rest keeps it.
     float traced_weight = (1.0 - blend) * traced_share;
-    g_reflection_request = float4(r, fresnel * traced_weight);
+    // A metal's tint stays off its traced share: the request holds one weight (its luminance).
+    g_reflection_request = float4(r, dot(fresnel, float3(0.2126, 0.7152, 0.0722)) * traced_weight);
     return fresnel * (occlusion * (environment - traced_weight * open) + traced_weight * open);
 }
 
@@ -3973,7 +3974,7 @@ float mirror_ray_share(float roughness)
     return saturate((rough_end - roughness) / (rough_end - MIRROR_RAY_FULL));
 }
 
-float3 sun_light(Frame* f, float3 albedo, float3 n, float3 geometric, float specular_power, float specular_weight, float3 shadow, float4* sky, float ao, float3 view, float reflectance, float3 world, ProbeField* probes, bool traced, out float ndl)
+float3 sun_light(Frame* f, float3 albedo, float3 n, float3 geometric, float specular_power, float specular_weight, float3 shadow, float4* sky, float ao, float3 view, float3 reflectance, float3 world, ProbeField* probes, bool traced, out float ndl)
 {
 #ifdef FORGE_IMPOSTOR_BAKE
     // An impostor's bake (D-075 step 4): what the surface is, unlit.
@@ -4021,7 +4022,7 @@ float3 sun_light(Frame* f, float3 albedo, float3 n, float3 geometric, float spec
         float3 ambient = ao >= 0.0 ? irradiance * occlusion_bounce(ao, albedo) : irradiance;
         if (!reflects)
             return albedo * (diffuse * sun + ambient + g_lamp_diffuse) + specular * sun + g_lamp_specular;
-        float fresnel;
+        float3 fresnel;
         float3 reflection = sky_reflection(sky, irradiance, n, view, r, sky_share, specular_power, ao, reflectance, traced, fresnel);
         return albedo * (diffuse * sun + ambient + g_lamp_diffuse) * (1.0 - fresnel) + specular * sun + g_lamp_specular + reflection;
     }
@@ -4519,7 +4520,7 @@ struct LightInputs
     float power;
     float specular;
     float ao;
-    float reflectance;
+    float3 reflectance; // Fresnel's F0 per channel: a metal's its base colour (D-086)
     float3 emissive;
 };
 
@@ -4589,9 +4590,10 @@ LightInputs uv_mapped_light(Frame* f, Material mat, Surface s)
     power /= 1.0 + power * variance;
     LightInputs li;
     li.albedo = base * (1.0 - metal);
-    li.reflectance = lerp(mat.reflectance, max(base.r, max(base.g, base.b)), metal);
-    // A metal's highlight by its reflectance and lobe (forge_core::material::metal_highlight).
-    li.specular = lerp(mat.specular, li.reflectance * min((power + 8.0) / 8.0, METAL_HIGHLIGHT_MAX), metal);
+    li.reflectance = lerp(float3(mat.reflectance), base, metal);
+    // A metal's highlight by its reflectance and lobe (forge_core::material::metal_highlight): the
+    // lamps' Blinn-Phong weight still; under GGX any weight over the default keeps it whole.
+    li.specular = lerp(mat.specular, max(base.r, max(base.g, base.b)) * min((power + 8.0) / 8.0, METAL_HIGHLIGHT_MAX), metal);
     li.n = n;
     li.power = power;
     li.ao = ao;
@@ -4767,7 +4769,7 @@ float3 shade_standard(Frame* f, Material mat, Surface s)
     li.power = mat.specular_power;
     li.specular = mat.specular;
     li.ao = s.ao;
-    li.reflectance = mat.reflectance;
+    li.reflectance = float3(mat.reflectance);
     bool uv = false;
     bool interior = false;
     if (!debug_albedo(f, s.meshlet_index, s.lod_level, albedo))
@@ -4820,7 +4822,7 @@ float3 shade_standard(Frame* f, Material mat, Surface s)
         float curtain = !shop && h.x < ROOM_CURTAINS ? 0.35 + 0.5 * h.x / ROOM_CURTAINS : 0.0;
         // Lit by the daylight the window gets (a white wall's facing out), or the row's lamp.
         float ndl_white;
-        float3 daylight = sun_light(f, float3(1.0, 1.0, 1.0), n, s.n, 1.0, 0.0, s.shadow, s.sky, s.ao, s.view, 0.0, s.world, s.probes, false, ndl_white);
+        float3 daylight = sun_light(f, float3(1.0, 1.0, 1.0), n, s.n, 1.0, 0.0, s.shadow, s.sky, s.ao, s.view, float3(0.0), s.world, s.probes, false, ndl_white);
         float3 lamp = emission(f, mat) * (shop ? ROOM_SHOP_LAMP : ROOM_LAMP);
         float3 seen = lerp(room * (daylight * ROOM_DAYLIGHT + lamp), mat.color_b * (daylight + lamp), curtain);
         // Through the glass, less what it reflects (Schlick).
@@ -5087,7 +5089,7 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
             shadow *= shore_caustics(s.shore, s.world, max(length(s.dpdx), length(s.dpdy)));
     }
     float ndl;
-    return sun_light(f, albedo, n, s.n, specular_power, specular, shadow, s.sky, s.ao, s.view, reflectance, s.world, s.probes, s.traced, ndl) + emissive;
+    return sun_light(f, albedo, n, s.n, specular_power, specular, shadow, s.sky, s.ao, s.view, float3(reflectance), s.world, s.probes, s.traced, ndl) + emissive;
 }
 
 // A planet's layers (#220): the standard rows after its layered row are the sea, sand, grass,
@@ -5355,7 +5357,7 @@ float3 shade_ice(Frame* f, Material mat, Surface s)
         albedo = lerp(albedo, ICE_WHITE, 1.0 - exp(-mat.scattering * ICE_WHITENING_DEPTH));
     }
     float ndl;
-    float3 color = sun_light(f, albedo, s.n, s.n, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, s.world, s.probes, s.traced, ndl);
+    float3 color = sun_light(f, albedo, s.n, s.n, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, float3(mat.reflectance), s.world, s.probes, s.traced, ndl);
     if (any(s.transmitted > 0.0))
     {
         // The sunlight that crossed the ice (issues #59, #61), tinted by it: the sun glows
@@ -6463,7 +6465,7 @@ float3 shade_jelly(Frame* f, Material mat, Surface s, uint instance, bool traced
         albedo = mat.color_b * s.cloud;
     float ndl;
     g_reflection_request = float4(0.0);
-    float3 color = sun_light(f, albedo, s.n, s.n, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, mat.reflectance, s.world, s.probes, traced, ndl);
+    float3 color = sun_light(f, albedo, s.n, s.n, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, float3(mat.reflectance), s.world, s.probes, traced, ndl);
     float4 mirror = g_reflection_request;
     if (traced && mirror.w > 0.0)
     {
