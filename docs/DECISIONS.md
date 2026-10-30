@@ -8071,7 +8071,7 @@ pbrt-v4, RTXGI, materiel test, etc.). Then update forge demos and test them."):
   - The Bistro's lab is not metered: it draws at the shared fixed EV 14, 2.3 and 4.7 stops under
     the exposures NVIDIA's pictures fit on Forge's light (EV 11.74 at Exterior_1, 9.34 at
     Exterior_2). Its light matches Falcor's at equal exposure. Metered, Exterior_1 sits a stop
-    dark and Exterior_2 on it; the tone curve is not the cause (the exposure's own session).
+    dark and Exterior_2 on it; the tone curve is not the cause (D-089).
   - SHaRC reads 3 to 7 % dark against Forge's path in steady state (D-088). NVIDIA's sample's
     SHaRC is within 2 to 4 % of its own path tracer.
 
@@ -9014,3 +9014,131 @@ this one: "yes, record it and download them"):**
     size past a third, but the resolve's cost grows with it); the village's thin walls and floors;
     the AMD iGPU (`FORGE_GPU=amd`). These go into D-083's calibration table.
 
+## D-089 — The Bistro metered by day, half a stop brighter than the shared meter 🟡 (proposed 2026-10-30; D-083 step 1)
+
+**Why:** the owner, 2026-10-30: "it's darker than the reference pictures we have in our directory
+by a lot".
+
+**Measured** at NVIDIA's two views (Exterior_1's from D-084, 4.5 px; Exterior_2's fitted since,
+2.6 px, NVIDIA's 1.1° roll left out), 1920 × 1061 as the pictures, frame 280 of 300 under
+`--fixed-step`, with `--capture` and `--capture-linear`, on `main` at b4d3db16. The EV a
+picture was drawn at is fitted on 8 × 8 blocks of luma, from a linear capture through Forge's
+`aces-narkowicz`. An offline mirror of the meter on the same captures gives the engine's EVs
+within 0.05.
+- **The Bistro is not metered.** The physics lab's look draws every scene at a fixed exposure
+  (`metered: false`, for its compared captures), and the authored scenes (the Bistro, the
+  chart, the classroom) took that with the rest. Without `--day` or `--time-of-day` the frame
+  is drawn at the shared app's `--ev100` default, 14: a stop over sunny 16, chosen for AgX
+  punchy (#220). The two views' PNGs fit 14.00 and 13.98. The "automatic exposure" measured
+  earlier that day was this fixed one.
+- **NVIDIA's pictures** fit EV 11.74 (Exterior_1) and 9.34 (Exterior_2) on Forge's light: 2.3
+  and 4.7 stops brighter than the lab's frames. On Falcor's own renders (`falcor/`, a unit
+  2,871 cd/m²) they fit 11.26 and 9.06. Exterior_1 is at Falcor's default exposure (11.22 in
+  Forge's units), not one set for that view. Exterior_2 was set 2.2 stops brighter, 0.32
+  stop over what Falcor's automatic exposure (0.042 over the frame's log-average) gives there.
+  Forge's light is 0.3 to 0.5 stop over Falcor's in both views: its Lambert diffuse against
+  Falcor's renormalised Disney (D-086).
+- **Metered** (`--time-of-day 0.5`), the shared meter (the log-average of the 50th to 98th
+  percentiles, a stop of compensation) draws Exterior_1 at 12.70, a stop under NVIDIA's, and
+  Exterior_2 at 9.32, on it. On Falcor's light the mirror puts it 1.03 and 0.13 stop under.
+  So the meter already agrees with the picture whose exposure was chosen; Exterior_1's gap is
+  to Falcor's default.
+- **Not the tone curve.** At the fitted EVs, Narkowicz's curve gives both pictures' luma
+  quantiles within a few levels (Exterior_1 in the engine at 11.74, 10th, 50th and 90th
+  percentiles 18, 87, 214 against 19, 89, 221; Falcor's Exterior_2 at 9.06: 3, 30, 223 against
+  4, 31, 224): one global curve accounts for them. Narkowicz shows the metered key brighter
+  than AgX punchy, not darker: 0.171 against 0.115 linear at a stop of compensation (plain AgX
+  0.240). To match AgX punchy's grey on screen, Narkowicz would need 0.4 stop less
+  compensation, which makes Exterior_1 darker still.
+- **Not the light.** Forge's linear light is within the 0.3 to 0.5 stop above, and the
+  earlier measurement found the same darkness with the probes alone and with SHaRC.
+- **Local exposure** (D-067) lifted the views at EV 14 only because the frames lay 2.3 and
+  4.7 stops under the pictures.
+
+**The meter's band against both pictures** (the mirror on Forge's linear captures: the EV each
+band asks for at a stop of compensation, less NVIDIA's, positive darker; then the one
+compensation that splits the two views' errors):
+
+| Band (percentiles) | Exterior_1 | Exterior_2 | Splitting compensation |
+|---|---|---|---|
+| 10th–90th | −0.58 | −2.38 | −0.48, ±0.90 |
+| 25th–95th (the village's, D-067) | +0.06 | −1.45 | +0.31, ±0.76 |
+| 40th–98th | +0.64 | −0.50 | +1.07, ±0.57 |
+| **50th–98th (shared)** | **+0.96** | **+0.03** | **+1.50, ±0.47** |
+| 60th–98th | +1.30 | +0.63 | +1.97, ±0.34 |
+| 80th–95th | +2.06 | +2.10 | +3.08, ±0.02 |
+
+NVIDIA put the two views 2.2 to 2.4 stops apart. A meter averaging the frame puts them 3.3
+(the shared band) to 4.2 stops apart (the 10th–90th): Exterior_2's shaded terrace fills most
+of its frame. The spread falls steadily as the band rises, so some band was bound to fit the
+one gap between two frames: the 80th–95th's near-zero spread is a fit to two pictures, not a
+rule. The village shows what it would cost (below): the hall, the door and the room 1.6 to 1.9
+stops brighter, a band keyed on the sunlit doorway, the fault D-067 moved the village's band
+down for.
+
+**In the engine** (mean luma 0–255; |Δ| the mean absolute difference of 8 × 8 block luma
+against the picture; the last row is the floor the scene's own differences and the views' fit
+leave):
+
+| Exposure | Exterior_1: mean, \|Δ\| | Exterior_2: mean, \|Δ\| |
+|---|---|---|
+| NVIDIA's picture | 103 | 65 |
+| Today: fixed at EV 14 | 40, 64 | 15, 54 |
+| Metered, shared (+1) | 71, 36 | 66, 29 |
+| **Metered, +1.5 (proposed)** | **86, 26** | **76, 32** |
+| Metered with the village's look | 110, 26 | 111, 56 |
+| Fixed at the picture's EV (11.74, 9.34) | 101, 21 | 66, 29 |
+
+**The proposal:**
+1. **The Bistro metered by day:** its look's `metered`, with the shared band and adaptation
+   speeds. `--fixed-exposure --ev100 E` keeps comparisons with Falcor at one exposure, as now.
+   The chart (a measuring card) and the classroom stay at their fixed exposures here.
+2. **A compensation of +1.5 stops in the Bistro's look by day,** against the shared +1. With
+   two pictures it is a fit, not a calibration: it splits the meter's stop at Exterior_1 (to
+   Falcor's default exposure) against half a stop at Exterior_2 (whose chosen exposure the
+   meter already gives). In the engine: Exterior_1 at 12.20, half a stop under the picture, and
+   Exterior_2 at 8.82, half a stop over. On Falcor's light the same split is +1.58. A night
+   start (`bistro::night_start`, as for the lamps) keeps the shared value until the night is
+   measured against NVIDIA's Night picture.
+3. **What changes in code:** `Look` takes an optional compensation, and
+   `--exposure-compensation` becomes optional so that a value given on the command line still
+   wins over the look's. Both sit in the shared app (`city-blocks`), but every default stays as
+   it is: the meter, the shared compensation, the bands, the tone curves and local exposure.
+   The village (AgX punchy, the 25th–95th band, local exposure) and the city keep their images.
+   Expected, and run before the change is pushed: the map check matches its accepted set to
+   the pixel, and the day check's sentinels, which never draw the Bistro (its files are
+   git-ignored), pass unchanged. `docs/demos/physics-lab.md`'s Exterior_1 command takes
+   `--fixed-exposure`.
+
+**Cost:** none on the GPU: the histogram already runs in every frame the lab meters (0.02 ms,
+D-022).
+
+**Patents:** nothing new. D-022's meter as it is, with one constant per look.
+
+**Considered:**
+- **Metering alone, at the shared +1** (step 1 without 2): Exterior_2 exact, Exterior_1 a stop
+  dark, the view the owner compares first.
+- **The village's look** (the 25th–95th band, local exposure, shadow contrast 0.55), measured in
+  the engine: Exterior_1 at about the picture's mean but its shade lifted (10th percentile 37
+  against 19), Exterior_2 at 1.7 times the picture's mean, as far off as today's.
+- **A compensation matched to the curve's grey** (Narkowicz −0.4 against AgX punchy):
+  Exterior_1 1.4 stops dark.
+- **A fixed exposure at Exterior_1's 11.74:** right there, 2.4 stops dark at Exterior_2, and no
+  adaptation on a walk from the street to the terrace.
+- **A band in the highlights** (the table): a fit to two frames, above.
+- **Falcor's automatic exposure** on Falcor's light: 1.75 and 0.32 stop under the pictures,
+  further from them than the shared meter.
+- **A shared change fitted to the Bistro**, measured on the map check's ten views (`city-plan
+  --village 600 --time-of-day 0.75`, the mirror on their linear captures; the village meters
+  EV 9.7 on the landing to 15.1 on the green). The 80th–95th band at +3.08 would brighten the
+  hall, the door and the room by 1.6 to 1.9 stops and the rest by 0.8 to 1.4, and darken the
+  main street by 0.3. A shared +1.5 brightens every view by half a stop. The shared band at +1,
+  the village's before D-067, darkens them by 0.1 to 0.9.
+
+**For the owner:**
+- steps 1 and 2, or step 1 alone (Exterior_1 then a stop dark);
+- whether the classroom, an inside lit through its windows, should be metered too. The chart
+  stays a card at one exposure.
+
+Both steps can be seen before any change: `--time-of-day 0.5` meters the Bistro as step 1
+would, and `--exposure-compensation 1.5` adds step 2.

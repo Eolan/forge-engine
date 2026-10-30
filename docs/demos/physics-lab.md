@@ -2264,7 +2264,7 @@ Steps 1 and 3 of D-065 (`forge_render::lamps`, `lamps_at` and `hit_lamps` in `me
 ```
 cargo run --release -p physics-lab -- --lab bistro
 cargo run --release -p physics-lab -- --lab bistro --time-of-day 1.5
-cargo run --release -p physics-lab -- --lab bistro --view=-23.700,6.855,-0.704,-93.13,-15.93 --fov 36.22 --ev100 11.96
+cargo run --release -p physics-lab -- --lab bistro --view=-23.700,6.855,-0.704,-93.13,-15.93 --fov 36.22 --ev100 11.74
 ```
 
 The Amazon Lumberyard Bistro's exterior (ORCA, CC BY 4.0, `CREDITS.md`): 1,296 meshes,
@@ -2346,6 +2346,12 @@ it: the archive's HDR photograph, `san_giuseppe_bridge_4k.hdr` (4096 × 2048, HD
   66.0, RMS 15.3): its scene is about 1.6 times too bright, measured with `--capture-linear` (the
   lit surfaces 1.2 to 1.3 times, the shade 1.5 to 5). Fixed exposure ignores
   `--exposure-compensation`.
+- **The exposure since D-086 and D-088** (2026-10-30): NVIDIA's pictures fit EV 11.74
+  (Exterior_1) and 9.34 (Exterior_2) on Forge's light, 11.26 and 9.06 on Falcor's: Exterior_1 at
+  Falcor's default exposure, Exterior_2 2.2 stops brighter. Without `--day` or `--time-of-day`
+  the lab draws the Bistro at the shared fixed EV 14, 2.3 and 4.7 stops darker. Metered
+  (`--time-of-day 0.5`) it comes to 12.70 and 9.32. D-089 (🟡) proposes metering it by day with
+  +1.5 stops of compensation.
 - **Close:** the light's direction, the sky, the overall level and contrast, the cobbles
   (median luma 182 against 191), the shadows under the photograph's sun, and the emissive
   lamps since their calibration.
