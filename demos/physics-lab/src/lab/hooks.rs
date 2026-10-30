@@ -612,6 +612,7 @@ impl Scenario for LabScenario {
         Ok((
             scene,
             Box::new(LabRunning {
+                bistro_lamps: super::bistro::lamps_on(super::bistro::night_start(args.time_of_day)),
                 kind: self.kind,
                 flags: self.flags,
                 lab,
@@ -760,6 +761,8 @@ impl forge_render::CellSource for GridCells {
 
 /// A lab's scene, built: its world and the commands last sent it.
 struct LabRunning {
+    /// Whether an authored scene's glowing pieces light it as lamps (D-087, `bistro::lamps_on`).
+    bistro_lamps: bool,
     kind: LabScene,
     flags: LabArgs,
     lab: Lab,
@@ -1259,14 +1262,14 @@ impl Running for LabRunning {
 
     fn lamps(&mut self, time: f32) -> Vec<forge_render::lamps::Lamp> {
         // The room at night's three lamps and the smoke yard's fire (D-065); the Bistro's glowing
-        // pieces with `FORGE_BISTRO_LAMPS=1` (D-087's prototype).
+        // pieces at night (D-087).
         match self.kind {
             LabScene::Lamps => super::room::lamps(),
             LabScene::Smoke => super::smoke::lamps(time),
             _ => self
                 .kind
                 .authored()
-                .map_or_else(Vec::new, super::bistro::lamps),
+                .map_or_else(Vec::new, |a| super::bistro::lamps(a, self.bistro_lamps)),
         }
     }
 

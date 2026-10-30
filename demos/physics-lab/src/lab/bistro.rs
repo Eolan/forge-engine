@@ -306,6 +306,7 @@ pub(super) fn rows(
     which: Authored,
     device: &Arc<forge_gpu::Device>,
     materials: &mut CityMaterials,
+    lamps: bool,
 ) -> Result<()> {
     let Some(b) = scene(which) else {
         return Ok(());
@@ -448,7 +449,7 @@ pub(super) fn rows(
                 let mut layer = external_layer(&m, maps);
                 // D-087's prototype: a glowing piece lights as a lamp, and the probes' rays take
                 // none of its glow.
-                layer.lamp = maps.emissive.is_some() && lamps_on();
+                layer.lamp = maps.emissive.is_some() && lamps;
                 (m.name.clone(), layer)
             })
             .collect();
@@ -542,12 +543,24 @@ fn normals_as_bc7(
     (made.into_inner(), hits.into_inner())
 }
 
-/// Whether the Bistro's glowing pieces light the scene as lamps (D-087's prototype,
-/// `FORGE_BISTRO_LAMPS=1`): each a Forge lamp of its own light ([`lamps`]), its glow left out of
-/// the probes' rays (`RenderLayer::lamp`). Without it the night is lit by the probes' rays
-/// meeting the glow, one ray in hundreds: dim, and flickering (D-087).
-pub(super) fn lamps_on() -> bool {
-    std::env::var("FORGE_BISTRO_LAMPS").is_ok_and(|v| v == "1")
+/// Whether the Bistro's glowing pieces light the scene as lamps (D-087): each a Forge lamp of its
+/// own light ([`lamps`]), its glow left out of the probes' rays (`RenderLayer::lamp`). Without
+/// them the night is lit by the probes' rays meeting the glow, one ray in hundreds: dim, and
+/// flickering. At night (`night`: the run starts after sunset), as by day their light is lost
+/// under the sun's and their cost (4 ms with the nearest 64) is not; `FORGE_BISTRO_LAMPS=1` or
+/// `=0` sets it either way.
+pub(super) fn lamps_on(night: bool) -> bool {
+    match std::env::var("FORGE_BISTRO_LAMPS").as_deref() {
+        Ok("1") => true,
+        Ok("0") => false,
+        _ => night,
+    }
+}
+
+/// Whether `--time-of-day` starts the run at night: past sunset (1) and before sunrise (2, the
+/// next day's 0).
+pub(super) fn night_start(time_of_day: Option<f32>) -> bool {
+    time_of_day.is_some_and(|t| t.rem_euclid(2.0) > 1.0)
 }
 
 /// Under this luminance, cd/m², a glowing piece is too dim to light anything worth a lamp.
@@ -809,9 +822,9 @@ fn glow_lamp(g: &Glow) -> Option<Lamp> {
 
 /// The scene's glowing pieces as lamps (D-087's prototype), made once; none without
 /// [`lamps_on`].
-pub(crate) fn lamps(which: Authored) -> Vec<Lamp> {
+pub(crate) fn lamps(which: Authored, on: bool) -> Vec<Lamp> {
     static BISTRO: OnceLock<Vec<Lamp>> = OnceLock::new();
-    if which != Authored::Bistro || !lamps_on() {
+    if which != Authored::Bistro || !on {
         return Vec::new();
     }
     BISTRO

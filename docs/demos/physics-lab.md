@@ -2376,8 +2376,9 @@ it: the archive's HDR photograph, `san_giuseppe_bridge_4k.hdr` (4096 × 2048, HD
   `gi/probe rays` takes 1.45–1.9 ms of it. The sky's passes take 0.03 ms. Exterior_1's view:
   3.74 ms, its panes' mirror rays 0.03 ms of it.
 
-**The night's glowing pieces as lamps** (D-087's prototype, `FORGE_BISTRO_LAMPS=1`, off by
-default): each emissive section cut into its connected pieces (corners welded within a
+**The night's glowing pieces as lamps** (D-087; on when the run starts at night,
+`--time-of-day` past 1; `FORGE_BISTRO_LAMPS=1` or `=0` either way; by day their light is lost
+under the sun's and their 4 ms is not): each emissive section cut into its connected pieces (corners welded within a
 millimetre): 160 pieces, 132 lamps. A bulb or a globe lights every way, a quarter of luminance ×
 area candelas, a sphere of its area; a flat piece (a sign, a spotlight's glass) forward,
 luminance × area along its normal (`Emission::flush`); a street lantern, its glass round its
@@ -2455,8 +2456,8 @@ Falcor's switched to Lambert at 16 bounces. The shade 1.3 to 1.8 at Exterior_1, 
 bays 2 to 3 at Exterior_2 (D-088).
 
 **Not yet:**
-- **The night's light by default:** without `FORGE_BISTRO_LAMPS=1` the emissive surfaces light
-  the street through the probes alone (D-087 waits for the owner's decision).
+- **The lamps' cost:** 10.7 ms of GPU at the Night view with the nearest 64 (4.1 without),
+  every lamp lighting every surface in reach (D-065's clustered lists still to come).
 - **The seam down the café's pillar** (above): the converter's FBX import against assimp's.
 
 ## `chart`: the material test chart against Falcor (D-083 step 2)

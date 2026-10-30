@@ -2854,7 +2854,12 @@ pub(crate) fn build(
     }
     // An authored scene's (D-083): the Bistro's maps read from its archive, the chart's factors.
     if let Some(which) = kind.authored() {
-        bistro::rows(which, &ctx.device, &mut materials)?;
+        bistro::rows(
+            which,
+            &ctx.device,
+            &mut materials,
+            bistro::lamps_on(bistro::night_start(args.time_of_day)),
+        )?;
     }
     // The gulls' (#184), their feathers baked on their UVs, in their scene only.
     if kind == LabScene::Flyer {
