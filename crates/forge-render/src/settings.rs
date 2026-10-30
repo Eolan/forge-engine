@@ -228,6 +228,17 @@ pub fn ao_radius(default: f64) -> Spec<f64> {
     )
 }
 
+/// How far the occlusion reaches under D-088's traced bounce (`r.gi.trace`).
+pub fn ao_contact(default: f64) -> Spec<f64> {
+    Spec::float(
+        "r.ao.contact",
+        default,
+        0.05..=16.0,
+        "How far the ambient occlusion reaches where the traced bounce lights the scene, metres: \
+         the contacts its denoiser blurs, the bounce's rays seeing the rest.",
+    )
+}
+
 /// The textures' mip bias, stops (`MeshletRenderer::texture_lod_bias`): below 0 a sharper level
 /// (NVIDIA's DLSS guide: log2(render / output) − 1, so −1 under DLAA, its jitter averaging the
 /// finer texels).

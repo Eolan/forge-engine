@@ -890,6 +890,8 @@ struct Gallery {
     ao_on: bool,
     /// `r.ao.ignore_nearer`: what the occlusion leaves out near the camera, metres (#337).
     ao_ignore_nearer: f32,
+    /// `r.ao.contact`: how far the occlusion reaches under D-088's bounce, metres.
+    ao_contact: f32,
     /// Diffuse light from probes (issue #53), on while `probes_on`; `probes_live` while they
     /// were updated every frame (else they start over).
     probes: Option<Probes>,
@@ -2116,6 +2118,7 @@ impl Gallery {
             gtao,
             ao_on,
             ao_ignore_nearer: 0.0,
+            ao_contact: AO_CONTACT,
             probes,
             region_check,
             probes_on,
@@ -3308,8 +3311,23 @@ impl Demo for Gallery {
                 None
             }
         };
+        // The sun's soft shadow denoised by NVIDIA's SIGMA (#172) or AMD's FidelityFX (#173),
+        // D-049: a ray a pixel before the resolve, which then reads the result in place of its
+        // own ray.
+        let denoising = self.sun_shadow_on.filter(|_| {
+            self.flags.has(CullFlags::SHADOWS)
+                && self.renderer.sun_angular_radius > 0.0
+                && self.scene.rays().is_some()
+        });
+        // Whether D-088's bounce lights the frame (below): its rays, REBLUR, and the guides the
+        // sun's shadow rays write for it.
+        let bounce_planned = self.renderer.gi_trace
+            && self.sky_light
+            && !in_space
+            && self.diffuse_denoiser.is_some()
+            && denoising.is_some();
         // The sky's light (in space, its constant fill), occluded by what the depth shows around
-        // each pixel (issue #48).
+        // each pixel (issue #48); under D-088's bounce only the contacts its denoiser blurs.
         let occlusion = ((self.sky_light || in_space) && self.ao_on).then(|| {
             self.gtao.draw(
                 &mut frame.graph,
@@ -3318,7 +3336,11 @@ impl Demo for Gallery {
                 GtaoParams {
                     projection: taa_frame.jittered_projection,
                     frame: self.taa.frame_index() % u64::from(self.taa.jitter_phases),
-                    radius: self.args.ao_radius,
+                    radius: if bounce_planned {
+                        self.ao_contact
+                    } else {
+                        self.args.ao_radius
+                    },
                     ignore_nearer: self.ao_ignore_nearer,
                 },
             )
@@ -3341,14 +3363,6 @@ impl Demo for Gallery {
                 h.add(&mut frame.graph, ao, HashKind::Float4, extent);
             }
         }
-        // The sun's soft shadow denoised by NVIDIA's SIGMA (#172) or AMD's FidelityFX (#173),
-        // D-049: a ray a pixel before the resolve, which then reads the result in place of its
-        // own ray.
-        let denoising = self.sun_shadow_on.filter(|_| {
-            self.flags.has(CullFlags::SHADOWS)
-                && self.renderer.sun_angular_radius > 0.0
-                && self.scene.rays().is_some()
-        });
         // The mirror rays' history (#176, D-050): the glass's reflections settled before TAA.
         let steadied = !self.args.no_reflection_history
             && self.sky_light
@@ -7966,3 +7980,8 @@ fn nrd_dir() -> std::path::PathBuf {
 const PROBE_AHEAD: f32 = 20.0;
 /// The least change of the view's reach that moves the cascade's place, metres (`probe_focus`).
 const PROBE_FOCUS_STEP: f32 = 2.0;
+/// How far the occlusion reaches under D-088's bounce, metres (`r.ao.contact`): the contacts
+/// REBLUR blurs, a stair's steps, the bounce's rays seeing the rest. Of 0.3, 0.45, 0.6 and 1.5 m,
+/// 0.6 brought the Bistro in clay and the village's room nearest the path; 1.5 darkened Exterior_1
+/// twice, GTAO over the rays' own occlusion.
+const AO_CONTACT: f32 = 0.6;

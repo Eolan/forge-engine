@@ -925,7 +925,7 @@ const _: () = assert!(std::mem::size_of::<SunShadowPush>() == 64);
 struct DiffuseTracePush {
     /// The view matrix's third row: camera-relative metres to view z.
     view_z: [f32; 4],
-    /// REBLUR's normalisation of the rays' lengths; w: 1 checkerboard-packed for it.
+    /// REBLUR's normalisation of the rays' lengths; w unused.
     hit_distance: [f32; 4],
     frame: u64,
     sky: u64,
@@ -938,7 +938,7 @@ struct DiffuseTracePush {
 
 const _: () = assert!(std::mem::size_of::<DiffuseTracePush>() == 72);
 
-/// How [`MeshletRenderer::trace_diffuse`] lays its rays out for NVIDIA's REBLUR
+/// What [`MeshletRenderer::trace_diffuse`] writes for NVIDIA's REBLUR
 /// ([`crate::DiffuseDenoiser`]).
 #[derive(Clone, Copy, Debug)]
 pub struct DiffuseForDenoiser {
@@ -1048,7 +1048,7 @@ pub struct AmbientLight {
     /// place of the resolve's own ray; `None`: the ray, as before.
     pub sun_shadow: Option<ImageHandle>,
     /// D-088's diffuse bounce traced per pixel ([`MeshletRenderer::trace_diffuse`]), read in place
-    /// of the probes' light and the occlusion; `None`: the probes' light, as before.
+    /// of the probes' light, under the occlusion's contacts; `None`: the probes' light, as before.
     pub diffuse_bounce: Option<ImageHandle>,
     /// The mirror rays' history (#176, D-050, [`crate::ReflectionHistory::frame`]): the rays'
     /// light settled over the frames; `None`: each frame's ray alone, as before.
@@ -6001,9 +6001,8 @@ impl MeshletRenderer {
     /// Declares "gi/trace" (D-088): per pixel of the visibility buffer, one cosine-weighted ray to
     /// the scene's end, its hit lit by the sun, the lamps and `probes` (the sky's irradiance
     /// without), a miss by `sky` ([`AmbientLight::diffuse_bounce`]): in YCoCg, with the ray's
-    /// normalised length. With `denoiser`, half the pixels a frame in a checkerboard, packed into
-    /// the image's left half for NVIDIA's REBLUR ([`crate::DiffuseDenoiser`]); without, every
-    /// pixel's own. `None` on a device without ray queries.
+    /// normalised length, every pixel's own: for NVIDIA's REBLUR with `denoiser`
+    /// ([`crate::DiffuseDenoiser`]), else read as traced. `None` on a device without ray queries.
     #[allow(clippy::too_many_arguments)]
     pub fn trace_diffuse<'f>(
         &'f self,
@@ -6054,7 +6053,7 @@ impl MeshletRenderer {
             let (view_z, hit_distance) = match denoiser {
                 Some(d) => (
                     d.view_z.to_array(),
-                    [d.hit_distance[0], d.hit_distance[1], d.hit_distance[2], 1.0],
+                    [d.hit_distance[0], d.hit_distance[1], d.hit_distance[2], 0.0],
                 ),
                 None => DiffuseForDenoiser::none(),
             };

@@ -4011,11 +4011,15 @@ float3 sun_light(Frame* f, float3 albedo, float3 n, float3 geometric, float spec
                 sky_share = saturate(toward_r / max(open_r, 1e-4));
         }
         // D-088's reference (`shade_pixel` traced it once): its rays see the occlusion GTAO
-        // stood for.
+        // stood for. The bounce's rays do too, but REBLUR blurs its contacts, a stair's steps into
+        // one slope (the owner, 2026-10-30): GTAO stays under it, at their reach
+        // (`r.ao.contact`), with the material's occlusion map the rays cannot see, and the
+        // reflection's occlusion as under the probes.
         if (g_near_on)
         {
             irradiance = g_near_irradiance;
-            ao = -1.0;
+            if (!g_near_contacts)
+                ao = -1.0;
         }
         float3 ambient = ao >= 0.0 ? irradiance * occlusion_bounce(ao, albedo) : irradiance;
         if (!reflects)
@@ -6080,6 +6084,8 @@ static const float PATH_LEAST_WEIGHT = 0.002;
 // `sun_light` (one copy of its rays in the shader, #348), and whether it holds one.
 static float3 g_near_irradiance = float3(0.0);
 static bool g_near_on = false;
+// Whether it is D-088's bounce, under GTAO's contacts, rather than a reference.
+static bool g_near_contacts = false;
 
 // A cosine-weighted direction round the unit `n` from two numbers in [0, 1).
 float3 cosine_direction(float3 n, float u1, float u2)
@@ -7012,6 +7018,7 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     {
         // In YCoCg, as REBLUR reads and writes it (`ycocg_to_linear`).
         g_near_on = true;
+        g_near_contacts = true;
         g_near_irradiance = ycocg_to_linear(g_sampled_images[NonUniformResourceIndex(bounce_image)].Load(int3(pixel, 0)).rgb);
     }
     // The lamps (D-065): every one whose reach the surface is in and that lights its room, times
@@ -7530,16 +7537,16 @@ void sun_shadow_trace_main(uint3 id : SV_DispatchThreadID)
 // house's clear glass (`trace_past_glass`). Its hit sends back the sun through a shadow ray, the
 // lamps, its glow and its albedo times the probes' light for the bounces after (`hit_radiance`,
 // `hit_lamps`); a ray that meets nothing, the sky's light along it. The resolve takes it in place
-// of the probes' light and GTAO (`g_near_irradiance`): `r.gi.reference=2` with one ray.
-// It writes what NVIDIA's REBLUR reads (NRD's `REBLUR_FrontEnd_PackRadianceAndNormHitDist`): the
-// light in YCoCg, and the ray's length as a share of REBLUR's normalisation (`hit_distance`).
-// With `hit_distance.w` 1, half the pixels trace, those where (x ^ y ^ frame) & 1 is 1 (NRD's
-// `CheckerboardMode::WHITE`), each written at x / 2: a thread a pair of pixels. Else every pixel
-// its own, read by the resolve as traced.
+// of the probes' light, under GTAO's contacts (`g_near_irradiance`): `r.gi.reference=2` with one
+// ray. It writes what NVIDIA's REBLUR reads (NRD's `REBLUR_FrontEnd_PackRadianceAndNormHitDist`):
+// the light in YCoCg, and the ray's length as a share of REBLUR's normalisation (`hit_distance`).
+// Every pixel traces, as without REBLUR. Half of them a frame in a checkerboard (NRD's
+// `CheckerboardMode::WHITE`) cost half as much, but left REBLUR's grain on a stairwell's walls
+// lit through one opening (the village's landing, the owner, 2026-10-30).
 struct DiffuseTracePush
 {
     float4 view_z;        // the view matrix's third row: camera-relative metres → view z
-    float4 hit_distance;  // REBLUR's normalisation of the rays' lengths (A, B, C); w: 1 checkerboard-packed
+    float4 hit_distance;  // REBLUR's normalisation of the rays' lengths (A, B, C); w unused
     Frame* frame;
     float4* sky;          // the sky's irradiance coefficients, as the resolve has them
     ProbeField* probes;   // the probes, or null: the sky's irradiance at the hits
@@ -7583,26 +7590,14 @@ void diffuse_trace_main(uint3 id : SV_DispatchThreadID)
 {
     DiffuseTracePush p = diffuse_trace_push;
     Frame* f = p.frame;
-    bool packed = p.hit_distance.w > 0.5;
-    // The pixel this thread traces, and where it writes.
-    uint2 at = id.xy;
     uint2 pixel = id.xy;
-    if (packed)
-        pixel.x = 2u * id.x + (1u ^ ((id.y ^ f[0].noise_frame) & 1u));
-    if (at.x >= p.width || at.y >= p.height)
+    if (pixel.x >= p.width || pixel.y >= p.height)
         return;
     RWTexture2D<float4> bounce = g_storage_images_rgba16f[NonUniformResourceIndex(p.bounce_image)];
-    // Packed, the image's right half holds no sample: cleared, as the graph's memory under it
-    // held another image's.
-    if (pixel.x >= p.width || (packed && at.x >= (p.width + 1u) / 2u))
-    {
-        bounce[at] = float4(0.0);
-        return;
-    }
     uint vis = g_sampled_images_u32[NonUniformResourceIndex(p.vis_image)].Load(int3(pixel, 0));
     if (vis == VISIBILITY_EMPTY || f[0].tlas == 0)
     {
-        bounce[at] = float4(0.0);
+        bounce[pixel] = float4(0.0);
         return;
     }
     PixelSurface s = pixel_surface(f, vis, pixel, p.width, p.height);
@@ -7613,14 +7608,14 @@ void diffuse_trace_main(uint3 id : SV_DispatchThreadID)
     {
         float3 open_sky = sh_irradiance(p.sky, s.n);
         float3 leaf = p.probes != nullptr ? probe_irradiance(p.probes, to_scene(f, s.relative), s.n, s.n, normalize(-s.relative), open_sky) : open_sky;
-        bounce[at] = float4(linear_to_ycocg(clamp(leaf, 0.0, 65504.0)), 1.0);
+        bounce[pixel] = float4(linear_to_ycocg(clamp(leaf, 0.0, 65504.0)), 1.0);
         return;
     }
     // The trees' cards near, their proxies far, as the resolve's own rays.
     g_ray_mask = shadow_world(f, s.relative, pixel);
     // The noise's point moved by R2's first step, apart from the sun's disc points of
-    // `sun_shadow_trace_main`. It repeats with TAA's cycle: a pixel traces 4 directions over and
-    // over (the checkerboard), and REBLUR settles on them. Turned each round, they doubled a
+    // `sun_shadow_trace_main`. It repeats with TAA's cycle: a pixel traces the cycle's directions
+    // (8 under DLAA) over and over, and REBLUR settles on them. Turned each round, they doubled a
     // still camera's changing pixels (5,054 to 10,507 at Exterior_1).
     float2 u = frac(spatio_temporal_noise(pixel, f[0].noise_frame) + float2(0.7548777, 0.5698403));
     RayDesc ray;
@@ -7653,7 +7648,7 @@ void diffuse_trace_main(uint3 id : SV_DispatchThreadID)
     // surface's back started inside it, a length of 0 as NRD asks.
     light = any(isnan(light)) || any(isinf(light)) ? float3(0.0) : clamp(light, 0.0, 65504.0);
     float view_z = dot(p.view_z.xyz, s.relative) + p.view_z.w;
-    bounce[at] = float4(linear_to_ycocg(light), reblur_hit_distance(back ? 0.0 : c.t, view_z, p.hit_distance.xyz));
+    bounce[pixel] = float4(linear_to_ycocg(light), reblur_hit_distance(back ? 0.0 : c.t, view_z, p.hit_distance.xyz));
 }
 
 // --------------------------------------------------------- the lamps' penumbrae ---

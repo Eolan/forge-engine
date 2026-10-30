@@ -75,7 +75,8 @@ Options:
 - `--no-sky-light` lights the shaded sides with the ballad's constant fill instead of the sky
   (`r.sky_light`).
 - `--no-ao` leaves the sky's light unoccluded (`r.ao`), `--ao-radius M`
-  sets how far an occluder reaches (1.5 m), `--show-ao` shows the occlusion in grey (`r.show.ao`).
+  sets how far an occluder reaches (1.5 m; under D-088's traced bounce `r.ao.contact`, 0.6 m, the
+  contacts its denoiser blurs), `--show-ao` shows the occlusion in grey (`r.show.ao`).
 - `--no-probes` lights the shaded sides with the open sky's light instead of the probes'
   (`r.probes`), `--show-gi` shows that light alone on white surfaces (`r.show.gi`),
   `--probe-rays N` sets the rays per probe (128), `--probe-cascades N` the cascades (5) and

@@ -235,7 +235,11 @@ void probe_blend_main(uint3 group : SV_GroupID, uint thread : SV_GroupIndex)
     // measured surfaces whose own probes were not measured yet and lent them the open sky's
     // light, too bright indoors, and at the settled hysteresis that start took 200 frames to
     // wear off.
-    float h = reset ? 0.0 : (age > PROBE_SETTLE_UPDATES ? field[0].settled_hysteresis : min(field[0].hysteresis, YOUNG_HYSTERESIS));
+    // A room grid's probe updates every frame whatever the cadence (`probe_due`), so it keeps the
+    // frame's: at hysteresis^cadence its light and its visibility's moments wandered `cadence`
+    // times as far, and leaked (at cadence 4 a village room 0.220 from the path, 0.179 without).
+    float settled = slot.grid != ROOM_NONE ? field[0].hysteresis : field[0].settled_hysteresis;
+    float h = reset ? 0.0 : (age > PROBE_SETTLE_UPDATES ? settled : min(field[0].hysteresis, YOUNG_HYSTERESIS));
     uint rays = probe_rays(field, slot);
     uint random = rays - PROBE_FIXED_RAYS;
     uint first = probe * field[0].rays + PROBE_FIXED_RAYS;

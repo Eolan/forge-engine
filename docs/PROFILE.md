@@ -2591,9 +2591,9 @@ written again when the frame's lamps change.
 
 ## D-088's traced bounce (2026-10-30)
 
-`r.gi.trace`: `gi/trace` (one ray for half the pixels a frame) and REBLUR's passes (`gi/REBLUR …`,
-NRD), both behind full barriers; GTAO still runs. 1600 × 900, the RTX 5070 Ti, 300 frames, one
-run each:
+`r.gi.trace`: `gi/trace` and REBLUR's passes (`gi/REBLUR …`, NRD), both behind full barriers; GTAO
+still runs. As first built, one ray for half the pixels a frame, the probes a metre apart in the
+authored scenes. 1600 × 900, the RTX 5070 Ti, 300 frames, one run each:
 
 | View | frame, probes | frame, bounce | `gi/trace` | REBLUR |
 |---|---|---|---|---|
@@ -2605,6 +2605,22 @@ The barriers cost about 0.3 ms (6.16 → 6.48 at Exterior_1). Under the bounce, 
 5.421 ms at Exterior_1 (D-088, next). On by default since 2026-10-30, with `gi/view reach`
 (0.008–0.010 ms). The village's map check: house 5.97 → 7.78 ms, green 5.54 → 6.90, main
 5.31 → 6.80, hall 6.84 → 8.00.
+
+**Every pixel, GTAO's contacts under it, the authored scenes' probes 2 m apart** (2026-10-30, the
+landing's grain and the probes' budget, D-088). `gi/trace` 1.09 → 2.16 ms at Exterior_1; GTAO
+runs at 0.6 m under the bounce (`r.ao.contact`). The frame's GPU ms, one run each:
+
+| View | the bounce as it was | every pixel | probes 2 m apart | as built |
+|---|---|---|---|---|
+| Bistro Exterior_1 | 6.430 | 7.383 | 5.869 | 6.883 |
+| Bistro Exterior_2 | 5.706 | 6.503 | 5.133 | 5.903 |
+| Village, the room | 7.161 | | | 7.822 |
+| Village, the main street | 6.301 | | | 6.896 |
+| Village, the landing | 6.38 | | | 6.83 |
+
+The village keeps its probes a metre apart. The other levers on the probes, measured and left
+(fewer rays, a slower cadence, a smaller finest cascade), are in D-088. The map check after
+#308's village and this: house 8.27 ms, green 7.04, main 6.84, hall 8.55, room 7.88.
 
 ## Not measured yet
 

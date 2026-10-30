@@ -185,6 +185,7 @@ command line": `--no-ao` and `--set r.ao=0` give the same image to the pixel.
 | `r.exposure.local` | local exposure, D-067 | off, on, view | off |
 | `r.exposure.speed_brighten`, `r.exposure.speed_darken` | how fast the automatic exposure follows a darker scene (into a dark room) and a brighter one (out into the sun), per second: most of the way in about 2 / speed seconds (#336) | 0.05..20 | 0.8; 1.5 |
 | `r.ao`, `r.ao.radius` | ambient occlusion, its reach | 0, 1; 0.05..16 m | 1; 1.5 m |
+| `r.ao.contact` | the ambient occlusion's reach under D-088's traced bounce: the contacts its denoiser blurs, the bounce's rays seeing the rest | 0.05..16 m | 0.6 m |
 | `r.ao.ignore_nearer` | what the ambient occlusion leaves out near the camera: a first-person weapon or hands cast no dark halo on the wall behind them (#337) | 0..2 m | 0 |
 | `r.probes` | the probes' diffuse light | 0, 1 | 1 |
 | `r.sky_light` | the sky's light | 0, 1 | 1 |

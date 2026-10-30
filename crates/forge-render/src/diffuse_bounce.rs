@@ -1,7 +1,8 @@
 //! D-088's diffuse bounce denoised: the rays [`crate::MeshletRenderer::trace_diffuse`] traces, one
-//! for half the pixels a frame in a checkerboard, through NVIDIA's REBLUR (NRD's diffuse
-//! denoiser), before the resolve reads it in place of the probes' light and the occlusion
-//! ([`crate::AmbientLight::diffuse_bounce`]).
+//! a pixel, through NVIDIA's REBLUR (NRD's diffuse denoiser), before the resolve reads it in place
+//! of the probes' light, under the occlusion's contacts ([`crate::AmbientLight::diffuse_bounce`]).
+//! Half the pixels a frame in a checkerboard cost half as much (1.09 ms of rays at the Bistro's
+//! Exterior_1, 2.16 every pixel), but left REBLUR's grain on a stairwell's walls (2026-10-30).
 //!
 //! REBLUR reads the guides the sun's shadow rays already write for SIGMA (the normal, the view
 //! depth: [`crate::meshlet::SunShadowRays`]) and TAA's motion vectors, so it runs where the sun's
@@ -77,13 +78,13 @@ impl DiffuseDenoiser {
             hit_distance: HIT_DISTANCE,
             max_accumulated_frames: ACCUMULATED_FRAMES,
             max_fast_accumulated_frames: FAST_ACCUMULATED_FRAMES,
-            checkerboard: true,
+            checkerboard: false,
         };
         self.reset = false;
         frame
     }
 
-    /// Declares REBLUR's passes over `bounce` (this frame's rays, checkerboard-packed, from
+    /// Declares REBLUR's passes over `bounce` (this frame's rays, a pixel each, from
     /// [`crate::MeshletRenderer::trace_diffuse`]), the shadow rays' guides and TAA's `motion`, and
     /// returns the denoised light for [`crate::AmbientLight::diffuse_bounce`].
     pub fn denoise<'f>(

@@ -243,9 +243,12 @@ impl Scenario for LabScenario {
             particles: kind == LabScene::Smoke,
             // The models lab's rooms, lit through a few openings and seen at an indoor
             // exposure: 256 rays, probes a metre apart (#171).
-            // An authored scene's as the village's, the finest a metre apart in six cascades
-            // (D-083): at 4 m the street's light reached under the Bistro's awnings, their
-            // undersides 3 to 6 times Falcor's (1.5 to 2 at 1 m, for 0.65 ms).
+            // An authored scene's the finest 2 m apart in six cascades (D-083): at 4 m the
+            // street's light reached under the Bistro's awnings, their undersides 3 to 6 times
+            // Falcor's (1.5 to 2 at 1 m, for 0.65 ms). Under D-088's bounce, which lights what
+            // the camera sees, 2 m matched the path as well (an awning 1.08 either way) and
+            // nearer in Exterior_2 (0.185 against 0.219), for 0.56 ms less. Chosen at load, so
+            // the probes alone (`r.gi.trace 0`, no NRD) are 2 m apart too.
             probes: if kind == LabScene::Models && models::room_shown() {
                 Some((
                     256,
@@ -253,7 +256,7 @@ impl Scenario for LabScenario {
                     forge_render::probes::ProbeParams::default().cascades,
                 ))
             } else if kind.authored().is_some() {
-                Some((forge_render::probes::ProbeParams::default().rays, 1.0, 6))
+                Some((forge_render::probes::ProbeParams::default().rays, 2.0, 6))
             } else {
                 None
             },

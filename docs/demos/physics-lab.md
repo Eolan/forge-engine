@@ -2430,11 +2430,14 @@ picture is rolled 1.1°, which `--view` cannot give, so Forge and Falcor are com
   n-gons' triangulation, which Blender and assimp do each their own way, next.
 - **Back faces:** the awnings' beams and the flowers' leaves, black in Falcor, lit in Forge (as
   the night's).
-- **The probes a metre apart** (the authored scenes' look since, as the village's: six cascades,
+- **The probes a metre apart** (the authored scenes' look until D-088's bounce: six cascades,
   41,472 probes, +0.65 ms): the awnings' undersides from 3–6 to 1.5–2, the terrace's floor and
   tables 0.6 to 1.2. Exterior_1's shade, 15 to 40 m off, is past the finest cascade and keeps
   its 1.3 to 2.7; 1 m over the whole view takes 8.6 ms and leaves 1.3 to 2.0. GTAO at 5 m darkens
-  the open ground as much as the shade (0.3 to 0.6).
+  the open ground as much as the shade (0.3 to 0.6). Since 2026-10-30 the authored scenes' probes
+  are 2 m apart, the traced bounce lighting what the camera sees: as near Forge's path, for
+  0.56 ms less (D-088). With the bounce off (`r.gi.trace 0`, or without NRD) they stay 2 m apart,
+  not measured against Falcor.
 - **The reflection in the café's right window** (the owner, 2026-10-30: "the window inside the
   reflection ... is different than the nvidia one"):
   - **Its detail:** a mirror ray's hit took each map's average (its last level, as the probes'
@@ -2468,9 +2471,12 @@ bays 2 to 3 at Exterior_2 (D-088).
     at both views.
   - 2 and 3: one or two bounces traced, the probes after.
   - 1: the 2 m near field first proposed.
-- **`r.gi.trace`, on by default:** the bounce as the frame traces it, one ray for half the pixels a
-  frame, denoised by NRD's REBLUR. Exterior_1 against Falcor goes from 1.0–1.75 to 0.86–1.12, at
-  about 2 ms; `--set r.gi.trace=0` gives the probes alone.
+- **`r.gi.trace`, on by default:** the bounce as the frame traces it, one ray a pixel a frame,
+  denoised by NRD's REBLUR, GTAO's contacts under it (`r.ao.contact`, 0.6 m). Its first version
+  (half the pixels a frame, no GTAO, the probes a metre apart) took Exterior_1 against Falcor from
+  1.0–1.75 to 0.86–1.12; as built, Exterior_1 in clay stands 0.029 from Forge's path (0.041
+  then), for a frame of 6.88 ms (4.49 with the probes alone a metre apart). `--set r.gi.trace=0`
+  gives the probes alone.
 - **`r.gi.probe_ahead`, 20 by default:** the most metres the finest probe cascade stands ahead
   along the view, as far as the view reaches.
 

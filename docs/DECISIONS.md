@@ -8489,8 +8489,8 @@ day, with the finest cascade ahead below):
   a box's edge. The light is written in YCoCg with the ray's normalised length, as REBLUR reads
   it.
 - **Denoised by REBLUR_DIFFUSE** (NRD 4.18, the library SIGMA comes from; `forge_gpu::nrd` now
-  runs either from one instance type). Half the pixels trace each frame, in a checkerboard, and
-  REBLUR reuses the guides the sun's shadow rays write for SIGMA. Without NRD the resolve reads
+  runs either from one instance type). Half the pixels traced each frame, in a checkerboard (every
+  pixel since the landing's fix, below), and REBLUR reuses the guides the sun's shadow rays write for SIGMA. Without NRD the resolve reads
   every pixel's ray as traced, noisy under DLAA; the decision's own fallback filter is still to
   write.
 - **The review's fixes** (a read-only review of the batch):
@@ -8534,7 +8534,8 @@ day, with the finest cascade ahead below):
   - The cost under 1.5 ms:
     - Under the bounce, 64 probe rays save 0.74 ms, the diffuse light unchanged within 2–5 %.
       But the café's glass reflections rise by 30 %: the mirror rays' hits read the probes.
-    - GTAO is unused where the bounce is on (about 0.2 ms).
+    - GTAO is unused where the bounce is on (about 0.2 ms). Used again since, for the contacts
+      (the landing, below).
     - The barriers can be narrowed.
   - The fallback filter without NRD.
   - **The finest cascade ahead of the camera** (`r.gi.probe_ahead`, the owner's question through a
@@ -8576,4 +8577,73 @@ day, with the finest cascade ahead below):
     free of live patents: NVIDIA's Pantaleoni family runs to 2039 and Keller's path space
     filtering to 2034, both broad. The note recommends persistent records on a dense clipmap, no
     hashing. It needs the owner's decision, and counsel's view, before any code.
+
+**The probes' budget under the bounce, and the landing (2026-10-30, the owner: "continue with the
+probes' budget under the bounce"):**
+- **The landing.** The owner, on the bounce's village views (through the village's side session):
+  "looks better except for landing.png, the walls and stair rails are not smooth anymore". Two causes, two fixes:
+  - **Grain.** The stairwell takes its light through one opening, and half the pixels a frame
+    left REBLUR's grain on its walls and rails. A longer history, a narrower anti-lag and a wider
+    blur only thinned it. Every pixel traced takes it away: `gi/trace` 1.09 → 2.16 ms at
+    Exterior_1, the frame +0.95 ms there and +0.8 at Exterior_2. A still camera on the landing
+    changes 20 pixels per 10 frames, 34 before.
+  - **The steps' creases.** REBLUR blurs the contacts the rays see, a stair's steps into one
+    slope. GTAO stays under the bounce at a shorter reach (`r.ao.contact`, 0.6 m; `r.ao.radius`,
+    1.5 m, elsewhere), with the material's occlusion map and the reflections' occlusion as under
+    the probes. The references (`r.gi.reference`) still take none. Against Forge's path, the mean
+    |log2| of the 16 × 9 tiles:
+
+    | | Exterior_1, clay | Exterior_2, clay | the village's room |
+    |---|---|---|---|
+    | the bounce as it was | 0.041 | 0.219 | 0.157 |
+    | every pixel, GTAO at 0.3 m | 0.039 | 0.175 | 0.159 |
+    | at 0.45 m | 0.033 | 0.159 | 0.152 |
+    | at 0.6 m | 0.033 | 0.151 | 0.144 |
+    | as built: 0.6 m, the Bistro's probes 2 m apart | 0.029 | 0.118 | 0.144 |
+
+    At 1.5 m, over half the pixels, Exterior_1 went to 0.068: GTAO over the occlusion the rays
+    already see. The textured Exterior_2 against the bounce as it was: the café's window 0.997,
+    the terrace's floor 0.94, the near table 1.01.
+  - **Still too bright:** the landing's walls and steps are 1.5 to 1.6 times the path's, as
+    before. That is the probes' bias at the hits, for the surface cache.
+  - **The leaves** keep the probes' light, now under GTAO at 0.6 m rather than 1.5 (the frame has
+    one radius). The map check's crowns look unchanged.
+- **The probes' cost under the bounce.** Their rays and blend take 2.92 ms at Exterior_1, 2.44 at
+  Exterior_2, about 2.1 in the village's room. The levers, as the frame's GPU ms, one run each
+  (the bounce as it was: 6.43 / 5.71):
+
+  | Lever | Exterior_1 | Exterior_2 | The light |
+  |---|---|---|---|
+  | 64 rays a probe | 5.71 | 4.97 | the café's window +24 % |
+  | 96 rays | 6.06 | 5.39 | the window +6 % |
+  | an update every 4 frames | 5.35 | 4.66 | rooms 4 to 6 % brighter |
+  | the finest cascade 16 × 8 × 16 | 5.58 | 4.94 | further from the path: 0.059 / 0.238 |
+  | 5 cascades | no saving | | |
+  | probes 2 m apart | 5.87 | 5.13 | nearer the path in clay: 0.040 / 0.185 |
+  | 2 m and every 4 frames | 4.96 | 4.32 | |
+
+  - **Why the light shifts.** Fewer rays leave a probe's distance moments noisier, so Chebyshev's
+    test leaks more where light comes through openings. Updating every few frames brightens
+    rooms. Cadence 1 stays, the owner's choice for stillness (2026-10-16).
+  - **Taken: the authored scenes' probes 2 m apart.** The Bistro's awning is 1.08 of Falcor's
+    either way.
+  - **The village keeps 1 m.** 2 m saves only 0.17 ms there (the room 7.16 → 6.99 ms, 0.157 →
+    0.153), and 1 m is what kept the sun from coming through a 3 m room's wall by its doorway.
+    With an update every 4 frames as well, the room costs 6.43 ms but strays to 0.186.
+  - **A latent fault fixed.** A room grid's probe (D-078) updates every frame at any cadence, but
+    took the settled probes' hysteresis^cadence. At cadence 4 the village's room stood 0.220
+    from the path; with each frame's own share, 0.179. At the default cadence of 1 nothing
+    changes.
+  - **REBLUR stays at NRD 4.18's defaults.**
+  - **A still camera** is as steady with the levers: Exterior_1 changes 5,045 pixels, 5,090 with
+    2 m and every 4 frames; the village's street 5,822 and 5,996.
+- **As built, against the bounce as it was** (the frame's GPU ms, 1600 × 900, the RTX 5070 Ti):
+  - Exterior_1: 6.43 → 6.88.
+  - Exterior_2: 5.71 → 5.90.
+  - The village's room: 7.16 → 7.82.
+  - Its street: 6.30 → 6.90.
+  - The landing: 6.38 → 6.83.
+
+  Exterior_1 is 2.4 ms over the probes alone a metre apart (4.49), still above the 1.5 ms
+  target. The rest waits for the surface cache (`research/surface-radiance-cache.md`).
 
