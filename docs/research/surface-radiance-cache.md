@@ -4,7 +4,8 @@
 patent statuses and expiry dates are Google Patents' estimates, which it labels "an
 assumption, not a legal conclusion"; Google Patents rate-limited the second half of the
 session, so the claims of US 11,315,310, US 12,394,144, US 12,456,261 and the Tencent family
-were not read (abstracts and publications only).*
+were not read (abstracts and publications only). US 11,315,310's and US 12,394,144's claims were
+read on 2026-10-30 ("The claims read", below).*
 
 ## Why
 
@@ -186,12 +187,49 @@ locations.
 | US 11,610,360 B2 and siblings | NVIDIA | Active | 2041-12-03 | A neural cache trained online | No neural cache |
 | US 11,609,899 B2 family | NVIDIA (Gautron) | Active / pending | about 2040 | Chained per-entry changes, one thread commits, coarser levels | Not that update scheme |
 | US 11,925,860 B2 | NVIDIA | Active | 2042-09-08 | Points projected onto a 2D surface to key a hash | Avoid |
-| US 12,394,144 B2 | NVIDIA (Gautron, Waechter) | Active | about 2041 | One consistent representative point per hash cell | Persistent records, no elected anchors |
+| US 12,394,144 B2 (+ US 2026/0228962 A1 pending) | NVIDIA (Gautron, Waechter) | Active | 2041-12-08 | One representative location per hash-map entry, chosen independent of order, kept with its selector in one value (claims read, below) | Persistent records, no elected anchors |
 | US 2023/0298274 A1 / US 12,456,261 | NVIDIA | Granted (unverified) | about 2043 | Cells' boundaries reshaped by periodic functions | Avoid |
 | US 11,816,781 B2 | AMD | Active | 2041-06-22 | World-space reservoir reuse by spatial hashing | No world-space ReSTIR |
-| US 11,315,310 B2 (+ US 2022/0198746 A1) | NVIDIA | Active | about 2041 | ReSTIR with lookups in a GI structure | No cache-fed ReSTIR |
+| US 11,315,310 B2 (+ US 2025/0182387 A1 pending) | NVIDIA | Active | about 2041-01-19 | Reservoir resampling for GI on visible surfaces with any world-space structure (claims read, below) | No ReSTIR of Forge's own |
 | US 8,207,968 B2 / US 8,223,148 B1 | Adobe | Unknown | about 2028 | Anisotropic records; cosine-weighted sample points | Isotropic radius only |
 | CN 115830208 B (+ US, EP) | Tencent | Active | about 2043 | Probes taking light from surfels within a distance | Probes never gather from records |
+
+### The claims read (2026-10-30)
+
+From Google Patents' pages (Justia and FreePatentsOnline refused the fetch), one source each, not
+checked against the USPTO; not legal advice.
+
+- **US 11,315,310 B2** (NVIDIA; priority 2020-03-12, filed 2021-01-19, about 2041-01-19, the
+  fourth-year fee paid 2025-09-24). Claim 1, in full: "implementing reservoir importance resampling
+  to compute global illumination on visible surfaces in a scene, utilizing a world-space data
+  structure"; claims 12 (a system) and 21 (a medium) are the same. The dependents add: global
+  illumination stored throughout space in the structure (2, 22); points on reflective objects and
+  lights as candidates (3), one chosen by a shadow ray (4); RTXGI or a filtered irradiance volume
+  as the structure (5, 7, 9, 10); candidates' colour looked up in the structure (6); visible
+  surfaces as lights, emissive or lit by the structure (8); both computed asynchronously (11).
+  Family: CN113393564B granted; DE 10 2021 104 310 pending; no EP or JP; US 2025/0182387 A1
+  pending; US 2022/0198746 A1 abandoned. **Reading:** any ReSTIR of GI with a probe grid, a
+  cache or a ReGIR grid is a literal match, not a broad neighbour. A cache without reservoirs
+  (Forge's, D-088) is outside claim 1.
+- **US 12,394,144 B2,** "Consistent sampling for spatial hashing" (NVIDIA; Gautron, Waechter;
+  filed 2021-11-29, granted 2025-08-19, adjusted expiry 2041-12-08). Claim 1: locations given to
+  hash-map entries, each with a selector value and a distinct location index; for each entry, a
+  representative location, one of the entry's own, chosen independent of order, from which the
+  entry's simulations are run for the others; its selector and index stored in one combined value,
+  which later picks the location for the entry's work. Claim 8 is the same as a system; claim 16
+  (a medium) needs pixels and rays traced from the representative pixel. The dependents add: the
+  index in the low bits and the selector in the high (2, 9, 17); spatial hashing for the entries
+  (3, 10, 18); pixels and rays from the chosen pixel (4, 11); the selector the least or greatest of
+  a hash or a generator (5, 12, 20); the location the same whatever the execution's order (6, 13);
+  the location's result applied to the entry's other points (7, 14). Family: US 2026/0228962 A1
+  (continuation, pending), CN116206042A and DE 10 2022 131 123 A1 pending; their claims not read.
+  **Reading:** claims 1 and 8 need no pixels, no hash table with probing, no frames; the open
+  questions are whether a quantised point is a "location index" and whether a dense index is a
+  hash map. A cell whose entry is made at the point of its claims' least hash, kept for life and
+  traced from (Forge's 2039a0ac, D-088, taken back the same day) reads on claims 1, 2, 5, 6 and 7
+  almost word for word. Records whose point comes from no election (the first claim's, as
+  Solari's; an average of the claims; a point the cell fixes) stay out of claim 1's "one of the
+  individual locations".
 
 ## Recommendation for Forge
 

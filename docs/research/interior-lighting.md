@@ -87,7 +87,7 @@ lists hold a handful of lights a pixel: one ray a pixel, picked well, converges 
 
 | What | Found | Status |
 |---|---|---|
-| Reservoir resampling with a global-illumination structure (NVIDIA; Wyman, McGuire, Shirley, Lefohn) | US 11,315,310 B2, priority 2020-03-12; family US 2022/0198746 A1, US 2025/0182387 A1, DE and CN filings | active, to about 2041 (Google's estimate); its claims were not read (the page was cut before them) |
+| Reservoir resampling with a global-illumination structure (NVIDIA; Wyman, McGuire, Shirley, Lefohn) | US 11,315,310 B2, priority 2020-03-12; family US 2022/0198746 A1 (abandoned), US 2025/0182387 A1 (pending), DE (pending) and CN (CN113393564B, granted) | active, to about 2041-01-19 (Google's estimate; fee paid 2025-09). Claims read on 2026-10-30: claim 1 is reservoir importance resampling computing GI on visible surfaces with any world-space data structure (12 and 21 the same); the dependents name RTXGI or irradiance volumes, lights and reflective points as candidates, and hits lit by the structure (surface-radiance-cache.md, "The claims read") |
 | ReSTIR's direct-light method alone | none found in this search; NVIDIA's later filings in the same family may reach it | to check before building on it |
 | Light trees sampled stochastically (Moreau et al. 2019) | not searched | — |
 | Clustered shading (Olsson et al. 2012) | none found | — |
@@ -114,7 +114,7 @@ professional search.
 ## Verification notes
 
 - *Read on 2026-10-16:* Google Patents US 11,315,310 B2 (bibliography, abstract and description up
-  to the claims).
+  to the claims). *Read on 2026-10-30:* its claims, on the same page.
 - *Search-recorded:* Bitterli et al. 2020 (NVIDIA Research and Dartmouth pages); Moreau, Pharr,
   Clarberg 2019 (NVIDIA Research, EG diglib); Olsson, Billeter, Assarsson 2012 (Chalmers); the
   RTXDI pages and the RTX Path Tracing SDK's licence page.
