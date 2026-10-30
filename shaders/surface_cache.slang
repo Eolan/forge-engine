@@ -19,7 +19,9 @@
 // Forge's changes: rewritten in Slang on Forge's buffers. Solari's hashed key, checksum and
 // linear probing are replaced by kajiya's dense index, whose cells wrap in place as the camera
 // moves, with one slot a cell per facing. Entries come from a free list (kajiya's pool) rather
-// than the hash's slots. The cache is read at every hit, whatever the ray's length (Solari reads
+// than the hash's slots, and are made at the next frame's start from the least of the frame's
+// claims on their slot, not by the first lookup to ask, so that two runs match (D-016). The
+// cache is read at every hit, whatever the ray's length (Solari reads
 // it only past √3 cells). The hits are lit by Forge's own light (no light tiles), and no
 // kajiya voting or resampling is taken. Solari's blend cuts an entry's samples back where its
 // luminance changes; with one ray an entry a frame the change is the rays' noise, and it took
@@ -35,9 +37,10 @@ public static const uint CACHE_CELLS = 32;
 // A cell's slots: one per facing, the normal's main axis and its sign.
 public static const uint CACHE_FACINGS = 6;
 public static const uint CACHE_LEVEL_SLOTS = CACHE_CELLS * CACHE_CELLS * CACHE_CELLS * CACHE_FACINGS;
-// A slot with no entry; one being given an entry (for the moment between the two).
+// A slot with no entry.
 public static const uint CACHE_EMPTY = 0xFFFFFFFFu;
-public static const uint CACHE_TAKING = 0xFFFFFFFEu;
+// A slot no lookup claimed this frame (`cache_claim`).
+public static const uint64_t CACHE_UNCLAIMED = 0xFFFFFFFFFFFFFFFFull;
 // The frames an entry lives unread (Solari's `WORLD_CACHE_CELL_LIFETIME`).
 public static const uint CACHE_LIFE = 10u;
 // Cells kept clear at a level's edge: a point the level takes stays inside its window after the
@@ -60,12 +63,15 @@ public struct CacheEntry
 public struct SurfaceCacheField
 {
     public int4 origins[CACHE_LEVELS]; // xyz: each level's first cell this frame
+    public int4 last_origins[CACHE_LEVELS]; // the last frame's, whose lookups made the claims
     public float3 centre;              // the levels' centre, the camera: scene metres
     public float cell;                 // the finest cell, metres
     public CacheEntry* entries;
     public uint* index;                // CACHE_LEVELS × CACHE_LEVEL_SLOTS entries' numbers
     public uint* free;                 // [0]: how many entries are free; then their numbers
     public uint* used;                 // [0]: the entries in use after the blend (host-read)
+    public uint64_t* claims;           // per slot, the least claim of the frame (`cache_claim`)
+    public uint* claimed;              // [0]: the slots claimed this frame; then their numbers
     public uint pool;                  // entries
     public uint frame;                 // turns the rays and the jitter
     public float most_samples;         // Solari's `world_cache_max_temporal_samples`
@@ -98,6 +104,7 @@ public struct CacheCell
     public uint level;
     public uint slot;   // in the index
     public bool inside; // within its level's window (always, but for points past the last level)
+    public float size;  // the level's cell, metres
 };
 
 // The cell and slot of the surface point `p` facing `n` (scene metres). `u`, two numbers in
@@ -113,6 +120,7 @@ public CacheCell cache_cell(SurfaceCacheField* c, float3 p, float3 n, float2 u)
     CacheCell k;
     k.level = cache_level(c, q - c[0].centre);
     size = c[0].cell * float(1u << k.level);
+    k.size = size;
     // Half a cell along the normal (kajiya's `IRCACHE_USE_NORMAL_BASED_CELL_OFFSET`): a thin
     // wall's two faces fall in different cells more often.
     q += n * (0.5 * size);
@@ -124,25 +132,90 @@ public CacheCell cache_cell(SurfaceCacheField* c, float3 p, float3 n, float2 u)
     return k;
 }
 
-// A free entry's number, taken off the stack; CACHE_EMPTY when none is left (or the stack was
-// too busy this time: the point asks again at its next lookup).
+// A free entry's number, taken off the stack; CACHE_EMPTY when none is left. Only
+// `cache_make` takes, in a pass of its own: nothing frees one meanwhile, and a thread that
+// counts past the stack's end puts its count back.
 uint cache_take(SurfaceCacheField* c)
 {
-    uint n = c[0].free[0];
-    for (uint tries = 0u; tries < 32u && n > 0u; tries++)
+    uint was;
+    InterlockedAdd(c[0].free[0], 0xFFFFFFFFu, was);
+    if (was == 0u || was > c[0].pool)
     {
-        uint was;
-        InterlockedCompareExchange(c[0].free[0], n, n - 1u, was);
-        if (was == n)
-            return c[0].free[n];
-        n = was;
+        InterlockedAdd(c[0].free[0], 1u, was);
+        return CACHE_EMPTY;
     }
-    return CACHE_EMPTY;
+    return c[0].free[was];
+}
+
+// ------------------------------------------------------------------- the claims ---
+
+// A lookup that finds no entry in its slot claims it for its point, and the next frame's
+// `cache_make` makes the entry from the slot's least claim. Two runs then make the same entries,
+// whatever order the threads come in (D-016): the first point to ask, as Solari's and kajiya's
+// caches take, and the free entry it came by, followed the threads, and the frames of two
+// identical runs differed in 7.6 % of the classroom's pixels. Once, when the entry is made: no
+// vote moves it after (D-088).
+//
+// A claim's 64 bits: a 16-bit hash of the rest, above it, so that the least is one of the
+// frame's points picked by their own value, not the corner one; then the point, from CLAIM_LOW
+// to CLAIM_LOW + CLAIM_SPAN cells off its cell's corner along each axis in 11 bits each (the
+// jitter and the half cell along the normal keep it within that), and its normal's octahedral
+// pair in 7 bits each (1.4 degrees).
+static const float CLAIM_LOW = -1.5;
+static const float CLAIM_SPAN = 4.0;
+static const float CLAIM_STEPS = 2048.0;
+static const float CLAIM_NORMAL_STEPS = 128.0;
+
+uint claim_hash(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7FEB352Du;
+    x ^= x >> 15;
+    x *= 0x846CA68Bu;
+    x ^= x >> 16;
+    return x;
+}
+
+float2 claim_sign(float2 v)
+{
+    return float2(v.x >= 0.0 ? 1.0 : -1.0, v.y >= 0.0 ? 1.0 : -1.0);
+}
+
+// The octahedral pair of `d` in [-1, 1]² (as `oct_encode` in probes.slang).
+float2 claim_oct(float3 d)
+{
+    float2 p = d.xz / (abs(d.x) + abs(d.y) + abs(d.z));
+    return d.y >= 0.0 ? p : (1.0 - abs(p.yx)) * claim_sign(p);
+}
+
+float3 claim_unoct(float2 p)
+{
+    float h = 1.0 - abs(p.x) - abs(p.y);
+    float2 q = h >= 0.0 ? p : (1.0 - abs(p.yx)) * claim_sign(p);
+    return normalize(float3(q.x, h, q.y));
+}
+
+uint64_t cache_claim(float3 p, float3 n, CacheCell k)
+{
+    float3 at = (p / k.size - float3(k.cell) - CLAIM_LOW) / CLAIM_SPAN;
+    uint3 q = uint3(clamp(at * CLAIM_STEPS, 0.0, CLAIM_STEPS - 1.0));
+    uint2 m = uint2(clamp((claim_oct(n) * 0.5 + 0.5) * CLAIM_NORMAL_STEPS, 0.0, CLAIM_NORMAL_STEPS - 1.0));
+    uint64_t rest = (uint64_t(q.x) << 37) | (uint64_t(q.y) << 26) | (uint64_t(q.z) << 15) | (uint64_t(m.x) << 8) | (uint64_t(m.y) << 1);
+    uint h = claim_hash(uint(rest) ^ claim_hash(uint(rest >> 32)));
+    return (uint64_t(h >> 16) << 48) | rest;
+}
+
+// How far a claim's point may stand from the point that claimed it, metres, in a cell `size`
+// across: the entry's rays start that much further off it (`surface_cache_trace_main`).
+public float cache_point_error(float size)
+{
+    return 0.002 * size;
 }
 
 // The light the cache holds round the surface point `p` facing `n`: rgb, and w its samples (0:
 // none yet). Read, an entry lives CACHE_LIFE frames more; with `make`, a point whose slot has no
-// entry gets one, measured from the next frame on. `u` jitters the point (`cache_cell`).
+// entry claims it, and the entry is made at the next frame's start. `u` jitters the point
+// (`cache_cell`).
 public float4 cache_lookup(SurfaceCacheField* c, float3 p, float3 n, float2 u, bool make)
 {
     CacheCell k = cache_cell(c, p, n, u);
@@ -155,35 +228,56 @@ public float4 cache_lookup(SurfaceCacheField* c, float3 p, float3 n, float2 u, b
             c[0].entries[e].life = CACHE_LIFE;
         return c[0].entries[e].irradiance;
     }
-    if (!make || e != CACHE_EMPTY)
-        return float4(0.0);
-    uint was;
-    InterlockedCompareExchange(c[0].index[k.slot], CACHE_EMPTY, CACHE_TAKING, was);
-    if (was != CACHE_EMPTY)
-        return float4(0.0);
+    if (make)
+    {
+        // The slot's first claim of the frame lists it, once: `cache_make` walks the list.
+        uint64_t was;
+        InterlockedMin(c[0].claims[k.slot], cache_claim(p, n, k), was);
+        if (was == CACHE_UNCLAIMED)
+        {
+            uint at;
+            InterlockedAdd(c[0].claimed[0], 1u, at);
+            c[0].claimed[1u + at] = k.slot;
+        }
+    }
+    return float4(0.0);
+}
+
+// Makes the entry of slot `slot` from its least claim of the last frame, where it has none and a
+// free entry is left (else the slot is claimed again), and clears the claim
+// (`surface_cache_make_main`, before `surface_cache_age_main`). The claim's cell is the one the
+// slot stood for in the last frame's levels.
+public void cache_make(SurfaceCacheField* c, uint slot)
+{
+    uint64_t key = c[0].claims[slot];
+    if (key == CACHE_UNCLAIMED)
+        return;
+    c[0].claims[slot] = CACHE_UNCLAIMED;
+    if (c[0].index[slot] != CACHE_EMPTY || c[0].reset != 0u)
+        return;
+    uint level = slot / CACHE_LEVEL_SLOTS;
+    uint at = (slot % CACHE_LEVEL_SLOTS) / CACHE_FACINGS;
+    int3 wrapped = int3(int(at % CACHE_CELLS), int((at / CACHE_CELLS) % CACHE_CELLS), int(at / (CACHE_CELLS * CACHE_CELLS)));
+    int3 first = c[0].last_origins[level].xyz;
+    int3 cell = first + ((wrapped - first) & int(CACHE_CELLS - 1u));
     uint id = cache_take(c);
     if (id == CACHE_EMPTY)
-    {
-        c[0].index[k.slot] = CACHE_EMPTY;
-        return float4(0.0);
-    }
+        return;
+    float size = c[0].cell * float(1u << level);
+    uint3 q = uint3(uint(key >> 37) & 2047u, uint(key >> 26) & 2047u, uint(key >> 15) & 2047u);
+    float2 m = float2(float(uint(key >> 8) & 127u), float(uint(key >> 1) & 127u));
     CacheEntry entry;
-    entry.position = p;
-    entry.slot = k.slot;
-    entry.normal = n;
+    entry.position = (float3(cell) + (float3(q) + 0.5) / CLAIM_STEPS * CLAIM_SPAN + CLAIM_LOW) * size;
+    entry.slot = slot;
+    entry.normal = claim_unoct((m + 0.5) / CLAIM_NORMAL_STEPS * 2.0 - 1.0);
     entry.life = CACHE_LIFE;
-    entry.cell = int4(k.cell, int(k.level));
+    entry.cell = int4(cell, int(level));
     entry.irradiance = float4(0.0);
-    // No sample yet: made by a ray of this frame's `surface_cache_trace_main`, it is not blended.
+    // Measured from this frame's rays on (`surface_cache_age_main` takes it as alive).
     entry.fresh = float3(-1.0);
     entry.pad = 0u;
     c[0].entries[id] = entry;
-    // The entry before its number: another lookup that finds the number reads this entry, not
-    // the one the number held before. A reader that still sees the old one finds it cleared
-    // (`surface_cache_age_main`): no light, the probes'.
-    DeviceMemoryBarrier();
-    c[0].index[k.slot] = id;
-    return float4(0.0);
+    c[0].index[slot] = id;
 }
 
 // Two numbers in [0, 1) from `seed`: a lookup's jitter.

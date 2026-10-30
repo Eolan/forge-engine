@@ -2596,7 +2596,7 @@ impl Demo for Gallery {
         // D-088's surface cache, the first time `r.gi.cache` asks for it.
         if self.renderer.gi_trace && self.cache_on && !self.cache_tried {
             self.cache_tried = true;
-            if ctx.device.features().ray_query {
+            if ctx.device.features().ray_query && ctx.device.features().int64_atomics {
                 match forge_render::SurfaceCache::new(&ctx.device, &ctx.shaders) {
                     Ok(cache) => self.surface_cache = Some(cache),
                     Err(error) => {

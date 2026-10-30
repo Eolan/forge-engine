@@ -2625,7 +2625,7 @@ The village keeps its probes a metre apart. The other levers on the probes, meas
 **The surface cache under the bounce** (`r.gi.cache`, on by default since the owner's word, D-088, 2026-10-30): three
 passes on the async compute queue before `gi/trace`, `gi/cache age`, `gi/cache rays` and
 `gi/cache blend`, over a pool of 65,536 entries (5.2 MB, the index 9.4 MB). The frame's GPU ms
-and the passes', one run each:
+and the passes', one run each (before `gi/cache make`, below):
 
 | View | frame, probes at the hits | frame, the cache | `gi/trace` | age, rays, blend | entries at most |
 |---|---|---|---|---|---|
@@ -2635,6 +2635,10 @@ and the passes', one run each:
 | Village, the room | 7.822 | 7.826 | 1.188 → 0.937 | 0.008, 0.007, 0.005 | 25,701 |
 | Village, the main street | 6.896 | 7.203 | 1.051 → 1.095 | 0.010, 0.006, 0.002 | 35,034 |
 | Village, the landing | 7.072 | 6.833 | | | |
+
+A fourth pass since the claims (D-088, "Claims"), `gi/cache make`, makes the entries the last
+frame claimed: 0.08 ms in the classroom's clay, the frame 3.86 ms; the claims and their list
+add 28.3 MB.
 
 The probes still run for the pixels the bounce leaves (leaves, glass, the mirror rays) and for
 the cache's newest entries; their budget under the cache is not revisited yet.

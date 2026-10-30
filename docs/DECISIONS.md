@@ -8707,8 +8707,8 @@ this one: "yes, record it and download them"):**
   - this frame's sample;
   - the frames it has left unread.
 
-  Free entries wait on a stack; a slot takes one by compare-and-swap, and gives it back when the
-  entry dies.
+  Free entries wait on a stack; a slot takes one when its entry is made, and gives it back when
+  the entry dies.
 - **The index (kajiya's):** twelve levels of 32³ cells round the camera, the finest 15 cm (Solari's
   base cell), each level twice the last. Six slots a cell, one per facing (the normal's main axis
   and sign), so a wall's two faces never share an entry: 12 × 32³ × 6 slots of 4 bytes, 9.4 MB.
@@ -8718,7 +8718,9 @@ this one: "yes, record it and download them"):**
   - **Scrolling:** a level's cells wrap in place as the camera moves. An entry whose cell has
     left its level's window is freed before anything reads the index, so a slot always holds its
     own cell's entry: no tag, no hash, no collisions.
-- **Each frame,** before the bounce, three passes over the pool:
+- **Each frame,** before the bounce, four passes:
+  0. **`gi/cache make`:** makes the entries the last frame's lookups claimed (below, "Claims"),
+     walking the slots they listed.
   1. **`gi/cache age`:** frees the entries unread for ten frames (Solari's lifetime), or out of
      their level's window, or all of them after a reset.
   2. **`gi/cache rays`:** one cosine-weighted ray per live entry, from 2 cm off its point, in the
@@ -8734,15 +8736,28 @@ this one: "yes, record it and download them"):**
      frame that change is the rays' noise, and it took the landing's still camera from 20 changing
      pixels a frame pair to 319 (33 without it).
 - **Reads:** the bounce's hits (`gi/trace`) and the cache's own rays' hits look the cache up,
-  making an entry where none is. They read it unconditionally, whatever the ray's length (D-088's
-  patents above). Where it has no light yet, the probes' light stands in. The pixels never read
+  claiming the slot where no entry is. They read it unconditionally, whatever the ray's length
+  (D-088's patents above). Where it has no light yet, the probes' light stands in. The pixels never read
   entries directly; mirror rays keep the probes for now. The cache's rays take the lamps as the
   probes' do (no street lamps, none nearer than 25 cm, #294, #254): one ray an entry a frame
   near a bulb is the probes' halo again.
-- **Within a pass** (the review, 2026-10-30): an entry is written before its number is
-  published, and a freed one is cleared, so a lookup that meets a number before its entry finds
-  no light and takes the probes'. The rays' pass traces only the entries alive at `gi/cache age`.
-  The blend counts the entries in use for the host (`SurfaceCache::most_used`, logged at exit).
+- **Claims (2026-10-30, D-016):** made by the first lookup to ask, as Solari's and kajiya's are,
+  an entry's point and its pool number (which started its rays' directions) followed the
+  threads' order: two identical runs of the classroom differed in 7.6 % of their pixels (up to 90
+  codes), and the culling harness in up to 3,884. A lookup that finds no entry now takes the
+  least, by a 64-bit atomic, of its slot's claim and its own: a 16-bit hash of its point and
+  normal above them, the point in 11 bits an axis within its cell's span and the normal in 7 bits
+  each of its octahedral pair (1.4°). Its first claim of the frame lists the slot. The next
+  frame's `gi/cache make` makes each listed slot's entry from its least claim, at the cell the
+  slot stood for in the last frame's levels; an entry's directions start at its slot's number
+  and its rays 0.2 % of its cell further off (the point's rounding). Two runs now give the same
+  bytes. It picks a point once, when the entry is made; nothing moves it after (no voting,
+  US 11,315,310 above). Where the pool runs out, which claims got an entry still follows the
+  threads. The claims take 18.9 MB (8 bytes a slot) and the list 9.4 MB; `gi/cache make` 0.08 ms
+  in the classroom (a sweep over every slot cost 0.23). The device needs 64-bit buffer atomics.
+- **Within a pass** (the review, 2026-10-30): a freed entry is cleared, and the rays' pass
+  traces only the entries alive at `gi/cache age`. The blend counts the entries in use for the
+  host (`SurfaceCache::most_used`, logged at exit).
 - **Not handled:** the probes' rooms (D-078) keep a room's light from the street's; the cache's
   cells do not, and at a few metres from the camera a room's floor and the street outside, both
   facing up, can share an entry. Finer levels (64³) did not change the village's room (0.305
