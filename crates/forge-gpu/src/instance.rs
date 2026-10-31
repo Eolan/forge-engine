@@ -184,6 +184,12 @@ impl Instance {
         if labels {
             extensions.push(ext::debug_utils::NAME.as_ptr());
         }
+        // NVIDIA's NRC (D-088's trial, `crate::nrc`) asks for it by name
+        // (`nrc::vulkan::GetVulkanInstanceExtensions`) and fails to set up its context without it,
+        // though Vulkan 1.1 made it core: its `KHR` entry points are null unless it is enabled.
+        if cfg!(feature = "nrc") {
+            extensions.push(ash::khr::get_physical_device_properties2::NAME.as_ptr());
+        }
         let layer_names = if validation {
             vec![VALIDATION_LAYER.as_ptr()]
         } else {

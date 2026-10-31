@@ -37,6 +37,8 @@
 # NVIDIA's NRC v0.16.0.0 (the neural radiance cache, NVIDIA RTX only: CUDA 13 and Tensor Cores; the
 # NVIDIA RTX SDKs licence): its binaries and headers, never committed.
 /nrc-sdk/
+# The log NRC writes where a run starts (`r.gi.cache nrc`).
+nrc_session_log.txt
 
 # Compiled shaders are rebuilt from shaders/*.slang
 *.spv

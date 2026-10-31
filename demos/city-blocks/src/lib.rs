@@ -907,6 +907,13 @@ struct Gallery {
     sharc: Option<forge_render::Sharc>,
     sharc_tried: bool,
     sharc_was_on: bool,
+    /// NVIDIA's NRC in SHaRC's place (`r.gi.cache nrc`, D-088's trial), made the first time it is
+    /// asked for where [`forge_render::NrcCache::available`]; `nrc_was_on` as `sharc_was_on`.
+    nrc: Option<forge_render::NrcCache>,
+    nrc_tried: bool,
+    nrc_was_on: bool,
+    /// NRC refused a frame: dropped before the next, not tried again.
+    nrc_failed: bool,
     /// The most metres ahead along the view the finest probe cascade stands (`r.gi.probe_ahead`,
     /// D-088); 0 round the camera. `probe_focus` the distance it stands at, as far as the view
     /// reaches (`view_reach`), moved in steps of PROBE_FOCUS_STEP.
@@ -2213,6 +2220,10 @@ impl Gallery {
             sharc: None,
             sharc_tried: false,
             sharc_was_on: false,
+            nrc: None,
+            nrc_tried: false,
+            nrc_was_on: false,
+            nrc_failed: false,
             probe_ahead: PROBE_AHEAD,
             probe_focus: 0.0,
             view_reach: forge_render::ViewReach::new(&ctx.device, &ctx.shaders)?,
@@ -2791,6 +2802,32 @@ impl Demo for Gallery {
             && let Some(sharc) = &mut self.sharc
         {
             sharc.reset();
+        }
+        let nrc_wanted = self.cache_mode == forge_render::settings::GI_CACHE_NRC;
+        if self.renderer.gi_trace && nrc_wanted && !self.nrc_tried {
+            self.nrc_tried = true;
+            if !forge_render::NrcCache::available(&ctx.device, &ctx.shaders) {
+                tracing::warn!(
+                    "no NRC (its headers in nrc-sdk/, an NVIDIA GPU with its extensions): the \
+                     probes' light at the hits"
+                );
+            } else {
+                match forge_render::NrcCache::new(&ctx.device, &ctx.shaders, &forge_app::nrc_dir())
+                {
+                    Ok(nrc) => self.nrc = Some(nrc),
+                    Err(error) => {
+                        tracing::warn!(%error, "no NRC: the probes' light at the hits")
+                    }
+                }
+            }
+        }
+        if std::mem::take(&mut self.nrc_failed) {
+            self.nrc = None;
+        }
+        if !self.nrc_was_on
+            && let Some(nrc) = &mut self.nrc
+        {
+            nrc.reset();
         }
         // The last frame's linear capture, its copy finished once the device is idle.
         if let Some(capture) = self.linear_capture.take() {
@@ -3853,6 +3890,7 @@ impl Demo for Gallery {
         let mut denoised = false;
         self.cache_was_on = false;
         self.sharc_was_on = false;
+        self.nrc_was_on = false;
         if self.renderer.gi_trace && self.sky_light && !in_space && self.scene.rays().is_some() {
             let reblur = self.diffuse_denoiser.as_mut().zip(nrd_guides);
             let reblur_frame = reblur.map(|(d, (.., camera, _))| d.frame(camera));
@@ -3896,6 +3934,35 @@ impl Demo for Gallery {
                 _ => None,
             };
             self.sharc_was_on = sharc.is_some();
+            // Or NVIDIA's NRC (D-088's trial).
+            let nrc = match &mut self.nrc {
+                Some(nrc)
+                    if self.cache_mode == forge_render::settings::GI_CACHE_NRC
+                        && for_denoiser.is_some() =>
+                {
+                    match nrc.update(
+                        &mut frame.graph,
+                        frame.slot,
+                        self.renderer.frame_address(frame.slot),
+                        targets,
+                        extent,
+                        scene_light,
+                        probes,
+                        camera_in_scene,
+                        exposure,
+                        self.renderer.sun_illuminance,
+                    ) {
+                        Ok(light) => Some(light),
+                        Err(error) => {
+                            tracing::warn!(%error, "NRC failed: the probes' light at the hits");
+                            self.nrc_failed = true;
+                            None
+                        }
+                    }
+                }
+                _ => None,
+            };
+            self.nrc_was_on = nrc.is_some();
             let traced = for_denoiser.and_then(|for_denoiser| {
                 self.renderer.trace_diffuse(
                     &mut frame.graph,
@@ -3906,9 +3973,13 @@ impl Demo for Gallery {
                     probes,
                     cache,
                     sharc,
+                    nrc,
                     Some(for_denoiser),
                 )
             });
+            if let (Some(nrc), Some(bounce)) = (nrc, traced) {
+                nrc.train_and_resolve(&mut frame.graph, bounce, extent);
+            }
             diffuse_bounce = match (
                 traced,
                 self.diffuse_denoiser.as_ref(),

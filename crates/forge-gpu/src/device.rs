@@ -62,7 +62,22 @@ pub struct DeviceFeatures {
     pub cooperative_matrix: bool,
     /// `VK_EXT_shader_float8` with its cooperative matrices (FSR 4's FP8 model on the RX 9000).
     pub float8: bool,
+    /// What NVIDIA's NRC needs (D-088's trial, [`crate::nrc`]): `VK_NVX_binary_import` (its CUDA
+    /// kernels recorded into Vulkan's command buffers), `VK_NVX_image_view_handle`,
+    /// `VK_EXT_memory_budget` and `uniformBufferStandardLayout`. Enabled only when
+    /// [`DeviceOptions::nrc`] asks.
+    pub nrc: bool,
 }
+
+/// `VK_NVX_binary_import`, `VK_NVX_image_view_handle` and `VK_KHR_buffer_device_address`, which
+/// NRC 0.16 asks for by name (`nrc::vulkan::GetVulkanDeviceExtensions`, with
+/// `VK_EXT_memory_budget`, which Forge enables where offered): without the last, core since
+/// Vulkan 1.2, its context fails to set up, as its `KHR` entry points are null.
+const NRC_EXTENSIONS: [&CStr; 3] = [
+    c"VK_NVX_binary_import",
+    c"VK_NVX_image_view_handle",
+    c"VK_KHR_buffer_device_address",
+];
 
 /// The queues a render-graph pass can run on (issue #77).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -112,6 +127,9 @@ pub struct DeviceOptions {
     /// Leave `VK_EXT_mesh_shader` disabled even when the GPU has it, so the renderers take
     /// their fallback paths on this GPU (`--force-fallback` in the demos).
     pub no_mesh_shader: bool,
+    /// Enable what NVIDIA's NRC needs where the GPU offers it ([`DeviceFeatures::nrc`]): the app
+    /// asks only when NRC's library is there to load (D-088's trial).
+    pub nrc: bool,
 }
 
 /// Mesh-shader limits worth knowing when sizing meshlets.
@@ -240,6 +258,7 @@ impl Device {
             best.features.ray_query = false;
             best.features.opacity_micromap = false;
         }
+        best.features.nrc &= options.nrc;
         tracing::info!(device = %best.name, features = ?best.features, "selected GPU");
 
         let mut extensions: Vec<*const i8> = Vec::new();
@@ -284,6 +303,9 @@ impl Device {
         }
         if best.features.float8 && best.features.cooperative_matrix {
             extensions.push(ext::shader_float8::NAME.as_ptr());
+        }
+        if best.features.nrc {
+            extensions.extend(NRC_EXTENSIONS.iter().map(|name| name.as_ptr()));
         }
         let stats_filter = std::env::var("FORGE_SHADER_STATS")
             .ok()
@@ -338,7 +360,8 @@ impl Device {
             .shader_float16(true)
             .shader_int8(true)
             .storage_buffer8_bit_access(true)
-            .uniform_and_storage_buffer8_bit_access(true);
+            .uniform_and_storage_buffer8_bit_access(true)
+            .uniform_buffer_standard_layout(best.features.nrc);
         let mut v13 = vk::PhysicalDeviceVulkan13Features::default()
             .dynamic_rendering(true)
             .synchronization2(true)
@@ -920,6 +943,9 @@ impl Device {
             float8: float8_ext
                 && on(float8.shader_float8)
                 && on(float8.shader_float8_cooperative_matrix),
+            nrc: NRC_EXTENSIONS.iter().all(|name| has(name))
+                && has(ext::memory_budget::NAME)
+                && on(v12.uniform_buffer_standard_layout),
         };
         let features = DeviceFeatures {
             opacity_micromap: features.ray_query && micromap_ext && on(micromap.micromap),

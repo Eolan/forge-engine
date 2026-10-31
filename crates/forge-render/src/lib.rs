@@ -40,6 +40,7 @@ pub mod material;
 pub mod meshlet;
 pub mod mipcheck;
 pub mod night;
+pub mod nrc;
 mod opacity;
 pub mod particles;
 pub mod placement;
@@ -99,6 +100,7 @@ pub use meshlet::{
     MeshletScene, MeshletSceneBuilder, MoverTransform, MoversFrame, PlanetView, RayRequests,
     SceneEdit, SceneEditor, SunShadowRays, SwRaster, Visibility,
 };
+pub use nrc::{NrcCache, NrcLight};
 pub use particles::{Burst, DrawKind, Effect, Emitter, ParticleParams, ParticleStats, Particles};
 pub use probes::{
     ProbeLight, ProbeParams, Probes, RegionCapacity, RegionHit, RegionKind, RegionSetId,

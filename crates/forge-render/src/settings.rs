@@ -386,7 +386,7 @@ pub fn gi_trace(default: bool) -> Spec<bool> {
 }
 
 /// [`gi_cache`]'s choices (0 and 1 as the setting's `false` and `true` were).
-pub const GI_CACHES: &[&str] = &["off", "port", "sharc", "auto"];
+pub const GI_CACHES: &[&str] = &["off", "port", "sharc", "auto", "nrc"];
 /// [`gi_cache`]: the probes' light at the bounce's hits.
 pub const GI_CACHE_OFF: usize = 0;
 /// [`gi_cache`]: Forge's port of Solari's world cache on kajiya's index ([`crate::SurfaceCache`]).
@@ -397,6 +397,8 @@ pub const GI_CACHE_SHARC: usize = 2;
 /// SHaRC was three to five times nearer the path tracer than the probes, outdoors it cost without
 /// gaining).
 pub const GI_CACHE_AUTO: usize = 3;
+/// [`gi_cache`]: NVIDIA's NRC, D-088's trial ([`crate::NrcCache`]; NVIDIA's GPUs).
+pub const GI_CACHE_NRC: usize = 4;
 
 /// D-088's surface cache read where the bounce's rays meet a surface.
 pub fn gi_cache(default: usize) -> Spec<usize> {
@@ -408,10 +410,11 @@ pub fn gi_cache(default: usize) -> Spec<usize> {
          camera (their bounces after), in place of the probes', whose probes float in the air: \
          off (the probes), port (D-088's port of Solari's world cache), sharc (NVIDIA's SHaRC, \
          whose headers the shaders include from `sharc-sdk/`; without them, or on a GPU without \
-         16-bit storage or 64-bit atomics, the probes) or auto (SHaRC indoors, in a house's rooms \
+         16-bit storage or 64-bit atomics, the probes), auto (SHaRC indoors, in a house's rooms \
          or a scene declared indoors, the probes elsewhere: D-090; the default, but in a scripted \
          run, FORGE_CFG=none or --no-cfg, which keeps the probes for images equal from run to \
-         run). Under `r.gi.trace` only.",
+         run) or nrc (NVIDIA's NRC, a trial: its library in `nrc-sdk/bin`, `tools/fetch-nrc.sh`, \
+         on NVIDIA's GPUs; without them the probes). Under `r.gi.trace` only.",
     )
 }
 

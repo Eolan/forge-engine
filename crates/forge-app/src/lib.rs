@@ -528,6 +528,14 @@ fn ms_since(start: Instant) -> f64 {
     start.elapsed().as_secs_f64() * 1e3
 }
 
+/// NVIDIA's NRC's folder (D-088's trial): `FORGE_NRC_DIR`, else the workspace's `nrc-sdk/bin`,
+/// where `tools/fetch-nrc.sh` builds Forge's shim beside NRC's library.
+pub fn nrc_dir() -> PathBuf {
+    std::env::var_os("FORGE_NRC_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| workspace_root_from(env!("CARGO_MANIFEST_DIR")).join("nrc-sdk/bin"))
+}
+
 /// The workspace root (two levels above a crate manifest in `crates/` or `demos/`).
 pub fn workspace_root_from(manifest_dir: &str) -> PathBuf {
     let manifest = PathBuf::from(manifest_dir);
@@ -1501,6 +1509,8 @@ impl<D: Demo> State<D> {
         let root = workspace_root_from(env!("CARGO_MANIFEST_DIR"));
         let options = DeviceOptions {
             no_mesh_shader: config.force_fallback,
+            // NRC's extensions only where its shim is there to load (D-088's trial).
+            nrc: cfg!(feature = "nrc") && nrc_dir().join(forge_gpu::nrc::NRC_SHIM).exists(),
         };
         // NVIDIA Streamline's interposer becomes the Vulkan loader, so it is loaded only when the
         // GPU the device selection prefers is NVIDIA's (issue #67): a plain instance asks first.

@@ -17,6 +17,8 @@ dlss = ["city-blocks/dlss"]
 nrd = ["city-blocks/nrd"]
 # AMD's FSR through its DLLs for `--fsr-amd` (city-blocks turns it on by default).
 ffx = ["city-blocks/ffx"]
+# NVIDIA's NRC for `r.gi.cache nrc` (D-088's trial; city-blocks turns it on by default).
+nrc = ["city-blocks/nrc"]
 
 [dependencies]
 anyhow = { workspace = true }

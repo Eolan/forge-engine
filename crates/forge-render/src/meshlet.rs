@@ -949,11 +949,14 @@ struct DiffuseTracePush {
     height: u32,
     /// NVIDIA's SHaRC in the cache's place ([`crate::Sharc`]), or 0.
     sharc: u64,
+    /// NVIDIA's NRC in the cache's place ([`crate::NrcCache`]), or 0.
+    nrc: u64,
 }
 
-const _: () = assert!(std::mem::size_of::<DiffuseTracePush>() == 88);
+const _: () = assert!(std::mem::size_of::<DiffuseTracePush>() == 96);
 
-/// The bytes of `gi/trace`'s push block, for its build in `sharc.slang` ([`crate::Sharc`]).
+/// The bytes of `gi/trace`'s push block, for its builds in `sharc.slang` ([`crate::Sharc`]) and
+/// `nrc.slang` ([`crate::NrcCache`]).
 pub(crate) const DIFFUSE_TRACE_PUSH_BYTES: usize = std::mem::size_of::<DiffuseTracePush>();
 
 /// What [`MeshletRenderer::trace_diffuse`] writes for NVIDIA's REBLUR
@@ -6091,8 +6094,10 @@ impl MeshletRenderer {
 
     /// Declares "gi/trace" (D-088): per pixel of the visibility buffer, one cosine-weighted ray to
     /// the scene's end, its hit lit by the sun, the lamps and D-088's surface `cache` (or SHaRC's
-    /// voxels, `sharc`, read by its own build of the pass) where it holds light there, else
-    /// `probes` (the sky's irradiance without), a miss by `sky` ([`AmbientLight::diffuse_bounce`]):
+    /// voxels, `sharc`, read by its own build of the pass; or NRC's queries, `nrc`, made by its own
+    /// build, whose answers [`crate::NrcLight::train_and_resolve`] adds after) where it holds light
+    /// there, else `probes` (the sky's irradiance without), a miss by `sky`
+    /// ([`AmbientLight::diffuse_bounce`]):
     /// in YCoCg, with the ray's normalised length, every pixel's own: for NVIDIA's REBLUR with
     /// `denoiser` ([`crate::DiffuseDenoiser`]), else read as traced. `None` on a device without
     /// ray queries.
@@ -6107,11 +6112,13 @@ impl MeshletRenderer {
         probes: Option<ProbeLight>,
         cache: Option<crate::CacheLight>,
         sharc: Option<crate::SharcLight<'f>>,
+        nrc: Option<crate::NrcLight<'f>>,
         denoiser: Option<DiffuseForDenoiser>,
     ) -> Option<ImageHandle> {
-        let pipeline = match sharc {
-            Some(s) => s.trace,
-            None => self.pipeline_diffuse_trace.as_ref()?,
+        let pipeline = match (sharc, nrc) {
+            (_, Some(n)) => n.trace,
+            (Some(s), None) => s.trace,
+            (None, None) => self.pipeline_diffuse_trace.as_ref()?,
         };
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
         let bounce = graph.transient(TransientDesc {
@@ -6154,6 +6161,12 @@ impl MeshletRenderer {
                 .buffer(s.keys, BufferAccess::ShaderRead(compute))
                 .buffer(s.resolved, BufferAccess::ShaderRead(compute));
         }
+        if let Some(n) = nrc {
+            builder = builder
+                .buffer(n.query_path_info, BufferAccess::ShaderWrite(compute))
+                .buffer(n.query_radiance_params, BufferAccess::ShaderWrite(compute))
+                .buffer(n.counter, BufferAccess::ShaderReadWrite(compute));
+        }
         builder.run(move |resources, commands| {
             commands.bind_pipeline(pipeline);
             let (view_z, hit_distance) = match denoiser {
@@ -6177,6 +6190,7 @@ impl MeshletRenderer {
                     width: extent.width,
                     height: extent.height,
                     sharc: sharc.map_or(0, |s| s.address),
+                    nrc: nrc.map_or(0, |n| n.address),
                 },
             );
             commands.dispatch(extent.width.div_ceil(8), extent.height.div_ceil(8), 1);

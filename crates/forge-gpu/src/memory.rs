@@ -44,6 +44,8 @@ pub struct Buffer {
     size: u64,
     address: vk::DeviceAddress,
     mapped: Option<NonNull<u8>>,
+    /// Made and freed by another library ([`Buffer::foreign`]): never destroyed here.
+    foreign: bool,
 }
 
 // SAFETY: the mapped pointer is only dereferenced through methods that copy whole slices, and
@@ -54,6 +56,31 @@ unsafe impl Send for Buffer {}
 unsafe impl Sync for Buffer {}
 
 impl Buffer {
+    /// A buffer another library made in `device`'s memory and frees itself (NVIDIA's NRC allocates
+    /// its own, D-088's trial): wrapped so that the render graph tracks it as Forge's own and the
+    /// memory counters count its `size` bytes under `category`, never destroyed on drop. The
+    /// library must keep it alive while this lives.
+    pub(crate) fn foreign(
+        device: &Arc<Device>,
+        raw: vk::Buffer,
+        size: u64,
+        address: vk::DeviceAddress,
+        category: MemoryCategory,
+    ) -> Buffer {
+        device.memory_counters().allocate(category, size);
+        Buffer {
+            device: Arc::clone(device),
+            raw,
+            allocation: None,
+            _heap: None,
+            category,
+            size,
+            address,
+            mapped: None,
+            foreign: true,
+        }
+    }
+
     /// The Vulkan handle.
     pub fn raw(&self) -> vk::Buffer {
         self.raw
@@ -134,6 +161,10 @@ impl Buffer {
 
 impl Drop for Buffer {
     fn drop(&mut self) {
+        if self.foreign {
+            self.device.memory_counters().free(self.category, self.size);
+            return;
+        }
         if let Some(allocation) = self.allocation.take() {
             self.device
                 .memory_counters()
@@ -376,6 +407,7 @@ impl Device {
             size,
             address,
             mapped,
+            foreign: false,
         })
     }
 
@@ -455,6 +487,7 @@ impl Device {
             size,
             address,
             mapped: None,
+            foreign: false,
         })
     }
 

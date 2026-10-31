@@ -8103,6 +8103,22 @@ struct SharcField
     uint frame;             // the updates so far: the paths' pixels and SHaRC's resampling
 };
 
+// NVIDIA's NRC under D-088's bounce, the trial (`nrc.slang`, `crates/forge-render/src/nrc.rs`): this
+// frame's constants and NRC's buffers, which `nrc.slang` reads as NRC's own types.
+struct NrcField
+{
+    uint4 constants[6];           // NRC's `NrcConstants` for this frame (96 bytes)
+    uint2* query_path_info;       // `NrcPackedQueryPathInfo` per pixel: its query and the weight before it
+    uint2* training_path_info;    // `NrcPackedTrainingPathInfo` per training path
+    uint* training_path_vertices; // `NrcPackedPathVertex` (48 bytes) per training path's vertex
+    uint* query_radiance_params;  // `NrcRadianceParams` (56 bytes) per query
+    uint* counters;               // the queries and the training records so far, Forge's own (in VRAM)
+    float3* query_radiance;       // the network's answer per query
+    uint frame;                   // the updates so far: the training paths' pixels
+    uint pad0;
+    uint* nrc_counters;           // NRC's own, which `nrc_count_main` copies `counters` into
+};
+
 // D-088's diffuse bounce, before the resolve: per pixel of the visibility buffer, the surface
 // rebuilt as `shade_pixel` does and one cosine-weighted ray from it to the scene's end, past a
 // house's clear glass (`trace_past_glass`). Its hit sends back the sun through a shadow ray, the
@@ -8127,6 +8143,7 @@ struct DiffuseTracePush
     uint width;           // the frame's
     uint height;
     SharcField* sharc;    // NVIDIA's SHaRC in its place (`sharc.slang`'s entry only), or null
+    NrcField* nrc;        // NVIDIA's NRC in its place (`nrc.slang`'s entry only), or null
 };
 
 // NRD's colour space for REBLUR (`_NRD_LinearToYCoCg`, `_NRD_YCoCgToLinear`).
@@ -8210,6 +8227,12 @@ void diffuse_trace_main(uint3 id : SV_DispatchThreadID)
     uint vis = g_sampled_images_u32[NonUniformResourceIndex(p.vis_image)].Load(int3(pixel, 0));
     if (vis == VISIBILITY_EMPTY || f[0].tlas == 0)
     {
+#ifdef FORGE_NRC
+        // Every pixel's query record is written each frame: one left from the last frame would
+        // name another pixel's query.
+        if (p.nrc != nullptr)
+            nrc_no_query(p.nrc, pixel);
+#endif
         bounce[pixel] = float4(0.0);
         return;
     }
@@ -8219,6 +8242,10 @@ void diffuse_trace_main(uint3 id : SV_DispatchThreadID)
     // the impostors' (D-075). Written here too, so that REBLUR does not blur black round a tree.
     if (s.foliage)
     {
+#ifdef FORGE_NRC
+        if (p.nrc != nullptr)
+            nrc_no_query(p.nrc, pixel);
+#endif
         float3 open_sky = sh_irradiance(p.sky, s.n);
         float3 leaf = p.probes != nullptr ? probe_irradiance(p.probes, to_scene(f, s.relative), s.n, s.n, normalize(-s.relative), open_sky) : open_sky;
         bounce[pixel] = float4(linear_to_ycocg(clamp(leaf, 0.0, 65504.0)), 1.0);
@@ -8247,6 +8274,9 @@ void diffuse_trace_main(uint3 id : SV_DispatchThreadID)
     ClosestHit c = trace_from_pixel(f, vis, s, ray, (pixel.x * 0x8DA6B343u) ^ (pixel.y * 0xD8163841u));
     float3 light;
     bool back = false;
+#ifdef FORGE_NRC
+    bool queried = false;
+#endif
     if (!c.hit)
         light = sky_along(p.sky, ray.Direction);
     else
@@ -8257,6 +8287,16 @@ void diffuse_trace_main(uint3 id : SV_DispatchThreadID)
         // The surface cache's lookup jittered with the frame, as the lamps' pick.
         // A branch, not `?:`: a back face's hit must not make an entry facing into its solid.
         light = float3(0.0);
+#ifdef FORGE_NRC
+        // `nrc.slang`'s build of this entry: NRC's query, its answer added by `nrc_resolve_main`.
+        // A leaf keeps the probes, as under SHaRC, and so does a hit outside NRC's bounds.
+        if (!hit.back && p.nrc != nullptr && !hit_foliage(f, c.instance, c.primitive) && nrc_takes(p.nrc, hit.position))
+        {
+            light = nrc_query(f, p.nrc, hit, c.t, ray.Direction, pixel, seed);
+            queried = true;
+        }
+        else
+#endif
 #ifdef FORGE_SHARC
         // `sharc.slang`'s build of this entry: SHaRC's voxels for the light after the hit.
         if (!hit.back && p.sharc != nullptr && sharc_here(f, p.probes, hit.position, hit.n, -ray.Direction))
@@ -8270,6 +8310,10 @@ void diffuse_trace_main(uint3 id : SV_DispatchThreadID)
         }
         back = hit.back;
     }
+#ifdef FORGE_NRC
+    if (p.nrc != nullptr && !queried)
+        nrc_no_query(p.nrc, pixel);
+#endif
     // NRD's front end sanitises: no NaN, nothing under 0 or past half precision; a ray that met a
     // surface's back started inside it, a length of 0 as NRD asks.
     light = any(isnan(light)) || any(isinf(light)) ? float3(0.0) : clamp(light, 0.0, 65504.0);

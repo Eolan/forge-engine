@@ -9871,7 +9871,86 @@ run (no settings file, `FORGE_CFG=none`, which every script sets, or `--no-cfg`:
 which keeps the probes for images equal from run to run (`docs/PROCESS.md`). The captures
 unchanged (`ast240`, `city60`, `gallery60`, `lab-lamps60`, `lab-materials60`: 0 px); the kitchen
 run as the owner runs it takes SHaRC (`gi/sharc update` 0.10 ms, the frame 5.54 → 6.18 ms).
-NRC is still to measure on the same hook (its download asked for first).
+
+**NRC measured on the same hook (2026-10-31, the owner: "So go NRC").** NVIDIA's NRC 0.16 behind
+`r.gi.cache nrc` (`crates/forge-render/src/nrc.rs`, `shaders/nrc.slang`,
+`crates/forge-gpu/src/nrc.rs`; `docs/research/sharc-and-nrc.md` has the integration's findings):
+- **The hook:** the bounce's hit makes NRC's query and adds its own sun, glow and lamp exactly,
+  as under SHaRC. Training paths start from the visibility buffer's surfaces at NRC's training
+  size (197 × 111 at 1080p) with their first vertex at their first hit. A custom resolve adds
+  the answers to the bounce's light before REBLUR.
+- **The choices, measured** (classroom, Exterior_1 and Exterior_2 in clay, mean |log2| against
+  Forge's path):
+  - The hits' own light added exactly (0.066, 0.028, 0.102) beat NRC's default of holding it in
+    the cache (0.114, 0.085, 0.158): the cache blurs the sunlit patches at the bounce's hits.
+  - Training every first vertex rather than NRC's 5 % changed nothing measurable, so NRC's 5 %
+    stays.
+  - NRC's light scale follows the frame's exposure, 4 stops over the light the frame averages
+    (`nrc::expected_radiance`). Fixed at 1, a sunlit white surface's light, NRC lost the lamp-lit
+    rooms at night (about 13 stops over their average): bedroom in clay 0.693 → 0.231, Cornell
+    box 0.317 → 0.051. At 0 stops it lost the day instead (classroom 0.243).
+- **Error and cost** (`tools/gi-compare.sh`, 1600 × 900; error is mean |log2| of 16 × 9 tiles
+  against Forge's path, the frame's light over the path's; cost is the frame's GPU ms, the mean of
+  two 1,200-frame runs):
+
+  | View | probes | SHaRC | NRC | frame: probes, SHaRC, NRC |
+  |---|---|---|---|---|
+  | Bistro E1, clay | 0.027 | 0.057 | 0.028 | 6.77, 7.91, 9.16 |
+  | Bistro E2, clay | 0.132 | 0.104 | 0.097 | 5.73, 6.32, 8.16 |
+  | Bistro E1 | 0.052 | 0.065 | 0.037 | 6.76, 7.80, 9.24 |
+  | Bistro E2 | 0.091 | 0.126 | 0.122 | 6.27, 6.77, 8.35 |
+  | Bistro, night | 0.097 | 0.097 | 0.099 | 21.41, 26.88, 24.54 |
+  | Classroom, clay | 0.360 | 0.117 | 0.077 | 3.89, 4.23, 5.54 |
+  | Classroom | 0.306 | 0.100 | 0.067 | 4.14, 4.43, 5.88 |
+  | Chart | 0.033 | 0.030 | 0.018 | 3.32, 3.40, 4.37 |
+  | Cornell box | 0.226 | 0.113 | 0.051 | 2.99, 3.10, 4.25 |
+  | Bedroom, clay | 0.789 | 0.189 | 0.218 | 5.04, 5.57, 6.62 |
+  | Bedroom | 0.988 | 0.281 | 0.311 | 5.45, 5.98, 6.96 |
+  | Kitchen, clay | 0.136 | 0.083 | 0.092 | 5.19, 5.78, 6.95 |
+  | Kitchen | 0.266 | 0.132 | 0.138 | 5.59, 6.29, 7.29 |
+  | Village landing | 0.487 | 0.122 | 0.380 (×0.83) | 6.19, 6.20, 8.13 |
+  | Village room | 0.144 | 0.058 | 0.130 (×1.08) | 6.97, 7.22, 9.08 |
+  | Village street | 0.112 | 0.112 | 0.123 | 6.73, 7.11, 7.98 |
+
+  NRC is the nearest to Forge's path on 7 views, within 0.03 of SHaRC on the lamp-lit rooms,
+  and well behind it in the village's interiors. It costs 1.1 to 2.5 ms over the probes,
+  nearly all of it NRC's own inference and training (`gi/nrc train`, 1.1 to 2.3 ms; Forge's
+  passes take 0.06 ms). SHaRC costs 0.1 to 1.1 ms by day. At the Bistro's night SHaRC's extra
+  segments make `gi/trace` 9.0 ms, and NRC is 2.3 ms cheaper than SHaRC.
+- **Shimmer** (a still camera, frames 10 apart, pixels that change by more than 2 codes, DLAA):
+  - kitchen: probes 0.34 %, SHaRC 0.31 %, NRC 0.31 %;
+  - bedroom: 4.6 %, 3.7 %, 3.8 %;
+  - Cornell box: 0.002 % each.
+
+  NRC adds none once trained. In its first 100 frames, behind the Cornell box's tall block (AA
+  off), 13.8 % against the probes' 11.3 %, then 9.0 %. The bedroom's flicker is its ceiling
+  wedges under every technique, the lamps' direct light (#383).
+- **The village's interiors take seconds to settle:**
+  - **The drift:** still camera, DLAA, the frame's mean light against frame 200.
+    - NRC rises +0.35 EV in the landing and +0.16 EV in the room until about frame 800 (13 s at
+      60 fps), then holds.
+    - The probes move by −0.06 and 0.00 EV, SHaRC by +0.04 and +0.03.
+    - So for seconds after a load or a cut, the interiors' light visibly climbs.
+  - **Settled, at frame 1,180:**
+    - The landing is 0.079 from Forge's path, better than SHaRC's 0.122.
+    - The room settles 14 % bright (0.247, ×1.141); SHaRC is 0.058.
+    - Eight training batches a frame (`FORGE_NRC_ITERATIONS`, 1.2 ms more) reach the landing's
+      settled light by frame 280, but the room as bright.
+    - Smaller bounds round the camera (±128 m, ±32 m) did not take the room's excess away (0.234,
+      0.188). Its cause is open.
+- **Not for AMD:** NRC is NVIDIA's (CUDA through `VK_NVX_binary_import`), so AMD keeps SHaRC
+  or the probes.
+- **Where it stands:** NRC beats SHaRC by day, in the classroom and the Cornell box. It costs
+  about 1.5 ms more, it ties SHaRC in the lamp-lit rooms, and it trails in the village's
+  interiors (slow to settle, the room bright).
+
+  **Recommended:** keep `auto` (SHaRC indoors) as the default and NRC behind `r.gi.cache nrc` on
+  NVIDIA. Before NRC is offered as the cache on NVIDIA's cards:
+  1. find the room's excess;
+  2. settle faster after a cut (more batches for the first seconds, then NRC's 4);
+  3. measure it in a walk, where it trains as it goes.
+
+  To decide by the owner.
 
 ## D-091 — A tree's leaves as shoots at its twigs' tips, a prototype behind `--twig-leaves` ✅ (proposed and decided 2026-10-31, #379; the owner's go on the look the same day: "Yes, finish it"; D-063, D-075)
 

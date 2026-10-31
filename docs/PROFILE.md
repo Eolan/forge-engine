@@ -2680,6 +2680,41 @@ the cache's newest entries; their budget under the cache is not revisited yet.
   than its voxel's diagonal goes on along up to two more rays. The variants measured are in
   D-088.
 
+**NVIDIA's NRC under the bounce** (`r.gi.cache nrc`, a trial, NVIDIA only, D-090, 2026-10-31):
+- **The passes**, on the main queue:
+  - `gi/nrc begin`: NRC's start of the frame, 0.003 ms.
+  - `gi/nrc update`: NRC's training paths, 197 × 111 at 1600 × 900, up to 8 hits each, 0.004 ms.
+  - `gi/trace`: the bounce, built from `nrc.slang`; its hits write NRC's queries.
+  - `gi/nrc count`: the counts copied into NRC's counters.
+  - `gi/nrc train`: NRC's inference at about 1.4 M queries and its training, its CUDA kernels in
+    the frame's command buffer.
+  - `gi/nrc resolve`: the answers added to the bounce's light, 0.05 ms.
+- **The memory:** NRC's buffers take 125 MiB at 1600 × 900 and 171 MiB at 1080p. With its network
+  and workspace the device-local heap grows by 267 MiB at 1080p.
+- **The cost:** the frame's GPU ms, `tools/gi-compare.sh`, the mean of two 1,200-frame runs.
+  The probes' and SHaRC's ran the same evening:
+
+| View | probes | SHaRC | NRC | `gi/nrc train` |
+|---|---|---|---|---|
+| Chart | 3.32 | 3.40 | 4.37 | 1.14 |
+| Cornell box | 2.99 | 3.10 | 4.25 | 1.27 |
+| Classroom | 4.14 | 4.43 | 5.88 | 1.77 |
+| Bedroom | 5.45 | 5.98 | 6.96 | 1.70 |
+| Kitchen | 5.59 | 6.29 | 7.29 | 1.75 |
+| Bistro Exterior_1 | 6.76 | 7.80 | 9.24 | 2.21 |
+| Bistro Exterior_2 | 6.27 | 6.77 | 8.35 | 2.22 |
+| Bistro at night | 21.41 | 26.88 | 24.54 | 2.28 |
+| Village, the landing | 6.19 | 6.20 | 8.13 | 2.18 |
+| Village, the room | 6.97 | 7.22 | 9.08 | 2.14 |
+| Village, the main street | 6.73 | 7.11 | 7.98 | 1.15 |
+
+- **What `gi/nrc train` follows:** NRC's inference grows with the queries, the bounce's hits.
+  The chart and the street, much of their frame sky, take about 1.1 ms; full frames of hits take
+  2.1–2.3 ms.
+- **`gi/trace`** is the probes' cost, its counts kept in Forge's own buffer. Counted in NRC's,
+  which lives where the host reads it back, the queries cost 1.4 ms more at the classroom
+  (`nrc.slang`).
+
 ## A flat glowing piece's lamp as its rectangle (#369, #370, 2026-10-31)
 
 `Emission::Flat` (D-087): a planar glowing piece's lamp is its rectangle, its diffuse light

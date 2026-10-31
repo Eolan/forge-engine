@@ -22,6 +22,8 @@ shipping = ["forge-core/shipping"]
 nrd = ["forge-gpu/nrd"]
 # AMD's FSR through its signed DLLs (`forge_gpu::ffx`; Windows, the SDK's DLLs in a directory the app names).
 ffx = ["forge-gpu/ffx"]
+# NVIDIA's NRC, D-088's trial (`forge_gpu::nrc`; Windows, Forge's shim in `nrc-sdk/bin`).
+nrc = ["forge-gpu/nrc"]
 # Every heap allocation counted, the mean per frame logged at exit (`forge_app::alloc_count`,
 # the audit's §2.2).
 alloc-count = ["forge-task/alloc-count"]

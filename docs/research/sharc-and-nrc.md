@@ -76,24 +76,46 @@ The Solari/kajiya port stays behind `r.gi.cache`, off, as the reference and the 
 - **Hardware:** Tensor Cores through CUDA, so NVIDIA RTX only (20 series on, its changelog). AMD
   keeps SHaRC.
 - **Per frame:**
-  1. an update pass of training paths at a low resolution (`computeIdealTrainingDimensions`:
-     274 × 154 for 1080p, up to eight vertices);
+  1. an update pass of training paths at a low resolution (`ComputeIdealTrainingDimensions`:
+     197 × 111 for 1080p with NRC 0.16's default four training batches a frame, 279 × 157 with
+     eight; its guide's table gives 274 × 154; up to eight vertices);
   2. the query pass, full resolution, writing query records where paths stop;
   3. `QueryAndTrain` (inference and training, recorded into Forge's command buffer);
   4. a resolve (the library's, or Forge's own for a split signal);
   5. `EndFrame` on the queue.
-- **Integration:**
-  - The API is C++ classes (`nrc::vulkan::Context`), so Rust needs a small C shim of Forge's own,
-    built with MSVC against `NRC_Vulkan.lib`, like `tools/fetch-nrd.sh` builds NRD.
-  - The device must enable the extensions and features NRC lists
-    (`GetVulkanDeviceExtensions`/`InstanceExtensions`/`DeviceFeatures`: CUDA's external memory and
-    semaphores among them).
+- **Integration (as built, 2026-10-31):**
+  - The API is C++ classes (`nrc::vulkan::Context`), so Rust needs a small C shim of Forge's own:
+    `tools/forge_nrc.cpp`, built with MSVC against `NRC_Vulkan.lib` by `tools/fetch-nrc.sh` into
+    `nrc-sdk/bin/forge_nrc.dll`, loaded at run time by `crates/forge-gpu/src/nrc.rs`.
+  - No interop: NRC records its CUDA kernels into Vulkan's command buffers through
+    `VK_NVX_binary_import`. What it asks for (NRC 0.16's lists): the device extensions
+    `VK_NVX_binary_import`, `VK_NVX_image_view_handle`, `VK_EXT_memory_budget` and
+    `VK_KHR_buffer_device_address`, the instance extension
+    `VK_KHR_get_physical_device_properties2`, and `scalarBlockLayout` and
+    `uniformBufferStandardLayout`. Without the two `KHR` extensions enabled by name (both core
+    since Vulkan 1.1 and 1.2, which Forge uses without their names) its context fails with
+    "Internal error setting up device".
   - The DLL's signature is checked (`VerifySignature`).
-  - Buffers can be the application's (`enableGPUMemoryAllocation` off) and read through custom
-    accessors (`NRC_USE_CUSTOM_BUFFER_ACCESSORS`), so device addresses work. `Nrc.hlsli` was made
-    to compile with Slang (RTXGI's changelog). It expects DXC's `-fvk-use-dx-layout`.
-- **Memory:** about 192 MB at 1080p with eight vertices (its guide's table), mostly the query
-  records.
+  - NRC allocates its buffers itself: five of the nine sit on CUDA's shared heap, so Forge does
+    not make them; it wraps them as graph buffers it never frees (`Buffer::foreign`).
+  - Slang lays a pointer's target out naturally (scalar), which is DXC's `-fvk-use-dx-layout`
+    that NRC expects (`NrcRadianceParams`: 56 bytes, offsets 0, 12, 16, 24, 32, 44): its
+    structured buffers become pointers (`NRC_RW_STRUCTURED_BUFFER(T) T*`) with no custom
+    accessors, and `Nrc.hlsli` compiles under Slang 2026.20 unmodified.
+  - Its training loss cannot be read back on Vulkan (`cudaMemcpyAsync` "operation not
+    supported"): Forge passes none.
+  - Its two counters sit on its read-back heap, where the host reads them: each wave's increment
+    from Forge's bounce cost 1.4 ms at 1600 × 900 (the classroom's `gi/trace`, 0.52 ms without
+    queries, 1.96 with). Forge counts in a buffer of its own in VRAM and copies the counts into
+    NRC's before its inference (0.60 ms).
+  - The validation layer: without its debug buffers NRC 0.16 still writes their descriptor, a null
+    buffer (VUID-VkDescriptorBufferInfo-buffer-02998), so Forge turns them on (0.5 MiB); and it
+    leaves a fence and some memory alive at `vkDestroyDevice` (VUID-vkDestroyDevice-device-05137).
+    Both reproduce in a minimal C++ program that follows NVIDIA's guide, without Forge.
+  - It writes `nrc_session_log.txt` where the program starts (git-ignored).
+- **Memory:** its buffers take 171 MiB at 1080p with eight vertices (125 MiB at 1600 × 900),
+  mostly the queries' records (112 MiB of `QueryRadianceParams` at 1080p); its guide's table says
+  192 MB. With its network and workspace, the device-local heap grew by 267 MiB at 1080p.
 - **Patents:** NVIDIA's neural cache family (US 11,610,360 and siblings, to about 2041), NVIDIA's
   own library used as designed, under the same rule.
 

@@ -20,8 +20,9 @@
 #   a night without a sky, against Forge's faint night sky).
 # - **The cost:** each technique FORGE_RUNS times, alternating, so a warm or throttled GPU weighs
 #   on all alike. The frame's GPU ms; `gi/trace`; the probes' rays and blend; the port's
-#   three passes; SHaRC's update and resolve (the overlay's zones; the resolve's holds the wait
-#   for the update, D-088); SHaRC's most slots in use.
+#   three passes; the cache's update and resolve: SHaRC's (the overlay's zones; the resolve's holds
+#   the wait for the update, D-088), or NRC's start and training paths, and its inference and
+#   training with Forge's resolve of its answers (D-088's trial); SHaRC's most slots in use.
 # - **A sheet** for the owner: the images tone-mapped alike above their ratio maps against
 #   Falcor's render where the view has one, else Forge's path (red brighter, blue darker, full
 #   colour at one stop).
@@ -31,12 +32,15 @@
 # - FORGE_VIEWS: views to run, separated by spaces (default all): bistro-e1-clay bistro-e2-clay
 #   bistro-e1 bistro-e2 bistro-night classroom-clay classroom chart cornell bedroom-clay bedroom
 #   kitchen-clay kitchen village-landing village-room village-street.
-# - FORGE_TECHNIQUES: `r.gi.cache` values (default "off port sharc").
+# - FORGE_TECHNIQUES: `r.gi.cache` values (default "off port sharc"; `nrc`, NVIDIA's NRC, on an
+#   NVIDIA GPU with its library in nrc-sdk/bin, tools/fetch-nrc.sh).
 # - FORGE_RUNS: timing runs per technique (default 3; 0 skips the timing and keeps the timings
 #   already in OUT_DIR: with FORGE_REUSE=1, the captures measured again).
 # - FORGE_TIME_FRAMES: frames per timing run (default 1200: the demos average every frame, and the
 #   first, a cache filling from empty, weigh less over more).
 # - FORGE_REUSE=1: keep the captures already in OUT_DIR (the path tracer takes minutes a view).
+# - FORGE_PAUSE: seconds the GPU lock stays free at each pause (default 35, over the 30 s the other
+#   tools wait between tries).
 # - FALCOR_OUT: Falcor's renders, NAME.AccumulatePass.output.0.exr (default ../falcor/out beside
 #   the checkout), times 2,150 for the Bistro by day (its photograph's sun through Forge's
 #   atmosphere, 0.749 of 2,871) and 2,871 at night, 12,800 for the classroom and the chart, 30 for
@@ -50,14 +54,15 @@
 #     BISTRO_EMITTER_STRENGTH, no environment light).
 # - BLENDER: Blender's executable (else found on the PATH or in its default Windows place).
 #
-# A technique that does not start (`sharc` without `sharc-sdk/` or 64-bit atomics, the port
-# without its pool) falls back to the probes with a warning: the tool drops it from the view
+# A technique that does not start (`sharc` without `sharc-sdk/` or 64-bit atomics, `nrc` without its
+# library or an NVIDIA GPU, the port without its pool) falls back to the probes with a warning: the tool drops it from the view
 # rather than measuring the probes under its name. A failed run is left out of the means.
 #
 # Needs the release build (physics-lab, city-plan, contact-sheet) and the scenes' assets in
 # assets/external/ (the Bistro, the classroom, the chart and the Cornell box, made by hand,
-# D-083). Each view's runs hold the GPU lock (FORGE_GPU_LOCK, default %TEMP%/forge-gpu.lock),
-# freed for 35 s between views so that other sessions' runs fit between. The owner's settings file (forge.cfg, D-069) never changes a
+# D-083). The runs hold the GPU lock (FORGE_GPU_LOCK, default %TEMP%/forge-gpu.lock), freed for
+# FORGE_PAUSE seconds after a view's path, after its captures, after each round of its timings and
+# between views, so that other sessions' runs fit between (the owner, 2026-10-31). The owner's settings file (forge.cfg, D-069) never changes a
 # scripted run. About an hour and a half for all the views.
 export FORGE_CFG=none FORGE_SOUND=0
 export FORGE_MONITOR=${FORGE_MONITOR:-secondary}
@@ -70,6 +75,7 @@ techniques=${FORGE_TECHNIQUES:-off port sharc}
 runs=${FORGE_RUNS:-3}
 time_frames=${FORGE_TIME_FRAMES:-1200}
 reuse=${FORGE_REUSE:-0}
+pause=${FORGE_PAUSE:-35}
 falcor=${FALCOR_OUT:-$(dirname "$root")/falcor/out}
 bin=$root/target/release
 exe=""
@@ -114,6 +120,7 @@ label_of() {
     path) echo "Forge path" ;;
     off) echo "probes (off)" ;;
     sharc) echo "SHaRC" ;;
+    nrc) echo "NRC" ;;
     *) echo "$1" ;;
   esac
 }
@@ -133,7 +140,7 @@ measure() {
   echo "$said"
 }
 # fell_back LOG: true when the run's technique did not start and the probes stood in.
-fell_back() { [ -f "$1" ] && grep -qE "no SHaRC|no surface cache" "$1"; }
+fell_back() { [ -f "$1" ] && grep -qE "no SHaRC|no surface cache|no NRC|NRC failed" "$1"; }
 # antialiased LOG: whether its run went through a temporal anti-aliasing (DLAA's or FSR's pass in
 # its timings), as the captures before 38d140fc did: FORGE_REUSE does not keep those (#374).
 antialiased() { [ -f "$1" ] && sed 's/\x1b\[[0-9;]*m//g' "$1" | grep -qE "temporal/(DLSS|FSR)"; }
@@ -188,13 +195,13 @@ run() {
   env ${clay:+FORGE_BISTRO_CLAY=1} ${sky:+FORGE_CHART_SKY=$sky} ${lamps_off:+FORGE_BISTRO_LAMPS=0} timeout 1800 "$bin/$demo$exe" $flags --fixed-step --frames "$frames" \
     --ev100 "$ev" --fixed-exposure --set r.bloom=0 "$@" > "$log" 2>&1
 }
-# let_others: frees the GPU lock between views for longer than the 30 s the other tools wait
-# between tries (verify.sh's, falcor-render.sh's), so a waiting session gets it: a lock let go
-# and taken again at once starved them.
+# let_others: frees the GPU lock for FORGE_PAUSE seconds, longer than the 30 s the other tools
+# wait between tries (verify.sh's, falcor-render.sh's), so a waiting session gets it: a lock let
+# go and taken again at once starved them.
 let_others() {
   [ $locked = 1 ] || return 0
   unlock
-  sleep 35
+  sleep "$pause"
 }
 # capture VIEW NAME FLAGS...: the linear capture at frame 280 of 300, the anti-aliasing off, unless
 # kept. Fails when the run fails, saves nothing or its technique fell back to the probes.
@@ -217,8 +224,8 @@ capture() {
   echo "   $view/$name: exit $code"
   [ $code = 0 ] && [ -f "$base.hdr" ]
 }
-# zones LOG: the run's GPU ms, `frame trace probes port sharc_update sharc_resolve most` (most:
-# SHaRC's slots in use at most, 0 without it). Fails when the run printed no times.
+# zones LOG: the run's GPU ms, `frame trace probes port cache_update cache_resolve most` (the
+# cache's: SHaRC's or NRC's; most: SHaRC's slots in use at most, 0 without it). Fails when the run printed no times.
 zones() {
   local clean line most
   clean=$(sed 's/\x1b\[[0-9;]*m//g' "$1")
@@ -235,8 +242,8 @@ zones() {
       if (name == "gi/trace") trace = ms
       else if (name == "gi/probe rays" || name == "gi/probe blend") probes += ms
       else if (name ~ /^gi\/cache (age|rays|blend)$/) port += ms
-      else if (name == "gi/sharc update") upd = ms
-      else if (name == "gi/sharc resolve") res = ms
+      else if (name == "gi/sharc update" || name == "gi/nrc begin" || name == "gi/nrc update") upd += ms
+      else if (name == "gi/sharc resolve" || name == "gi/nrc train" || name == "gi/nrc resolve") res += ms
     }
     printf "%s %.3f %.3f %.3f %.3f %.3f %s\n", frame, trace, probes, port, upd, res, most
   }'
@@ -256,10 +263,12 @@ for view in $views; do
     let_others
     continue
   }
+  let_others
   tests=()
   for t in $techniques; do
     capture "$view" "$t" --set r.gi.cache="$t" && tests+=("$t")
   done
+  let_others
   # The references: Forge's path, then Falcor's render when there is one.
   refs=("Forge path=$out/$view/path.hdr*1")
   falcor_exr=$falcor/$falcor_ref.AccumulatePass.output.0.exr
@@ -325,6 +334,7 @@ for view in $views; do
         echo "   $view/$t timing run $i failed or fell back: left out ($log)"
       fi
     done
+    [ "$i" -lt "$runs" ] && let_others
   done
   let_others
 done
@@ -341,10 +351,12 @@ unlock
   sed -E 's/^([^ ]+) vs ([^:]+): +([^ ]+)\.hdr +\|log2\| ([0-9.]+) +signed ([-+0-9.]+) +frame (x[0-9.]+) +tiles ([0-9]+)/| \1 | \2 | \3 | \4 | \5 | \6 | \7 |/' "$error"
   if [ -s "$timings" ]; then
     echo
-    echo "GPU ms over $time_frames frames, the mean of the runs that succeeded (SHaRC's resolve zone"
-    echo "holds the wait for its update):"
+    echo "GPU ms over $time_frames frames, the mean of the runs that succeeded. The cache's update is"
+    echo "SHaRC's (\`gi/sharc update\`) or NRC's start and training paths (\`gi/nrc begin\`, \`gi/nrc update\`);"
+    echo "its resolve SHaRC's (holding the wait for its update) or NRC's inference and training with"
+    echo "Forge's resolve of its answers (\`gi/nrc train\`, \`gi/nrc resolve\`):"
     echo
-    echo "| View | r.gi.cache | runs | frame | gi/trace | probes | port | SHaRC update | SHaRC resolve | SHaRC's slots at most |"
+    echo "| View | r.gi.cache | runs | frame | gi/trace | probes | port | cache update | cache resolve | SHaRC's slots at most |"
     echo "|---|---|---|---|---|---|---|---|---|---|"
     awk 'NF == 9 { k = $1 " " $2; if (!(k in n)) order[++m] = k; n[k]++
       for (i = 3; i <= 8; i++) s[k, i] += $i; most[k] = $9 }

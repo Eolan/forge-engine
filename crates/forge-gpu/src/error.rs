@@ -32,6 +32,9 @@ pub enum GpuError {
     /// AMD's FSR DLLs (the FFX API, `ffx`) failed to load or refused a call.
     #[error("FFX: {0}")]
     Ffx(String),
+    /// NVIDIA's NRC (D-088's trial, `nrc`) failed to load or refused a call.
+    #[error("NRC: {0}")]
+    Nrc(String),
 }
 
 /// Result alias for the GPU layer.

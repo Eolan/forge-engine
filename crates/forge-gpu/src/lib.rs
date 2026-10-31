@@ -28,6 +28,7 @@ pub mod headless;
 mod instance;
 mod memory;
 mod memory_report;
+pub mod nrc;
 pub mod nrd;
 mod pipeline;
 mod shader;

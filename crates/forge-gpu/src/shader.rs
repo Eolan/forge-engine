@@ -189,13 +189,15 @@ const PRECISE_ENTRIES: &[(&str, &str)] = &[
 
 /// The shader files that include a vendor SDK's headers, and the SDK's include directory beside
 /// the shader directory: such a file compiles only where the directory is
-/// ([`ShaderCompiler::sdk_present`]). NVIDIA's RTXDI (D-065) and SHaRC (D-088) are used under the
-/// NVIDIA RTX SDKs licence and never copied in: `rtxdi-sdk/` and `sharc-sdk/` are ignored by git.
+/// ([`ShaderCompiler::sdk_present`]). NVIDIA's RTXDI (D-065), SHaRC (D-088) and NRC (D-088's
+/// trial) are used under the NVIDIA RTX SDKs licence and never copied in: `rtxdi-sdk/`,
+/// `sharc-sdk/` and `nrc-sdk/` are ignored by git.
 /// The cache key does not follow the SDK's headers, so a new release needs the shader cache
 /// cleared.
 const SDK_INCLUDES: &[(&str, &str)] = &[
     ("restir.slang", "rtxdi-sdk/Include"),
     ("sharc.slang", "sharc-sdk/src/include"),
+    ("nrc.slang", "nrc-sdk/src/Include"),
 ];
 
 /// Include directories inside the shader directory, besides it: third-party code that includes
