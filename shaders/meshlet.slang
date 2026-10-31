@@ -634,12 +634,13 @@ bool lamp_outside(Lamp lamp)
     return lamp.regions_a.x == REGION_OUTSIDE;
 }
 
-// Whether `lamp` is a flat piece facing its axis `beam.xyz` (`Emission::Flat`, #370): its disc
-// lies in its own plane, on its face, where its shadow rays aim and end (`lamp_axes`,
-// `lamp_ray`).
+// Whether `lamp` is a flat piece facing its axis `beam.xyz` (`Emission::Flat`, #369, #370): the
+// rectangle of half sizes `beam_edge.zw` turned by `beam_edge.y` (`lamp_rect_axes`), just in
+// front of the piece, where its shadow rays aim and end (`lamp_rect_point`, `lamp_ray`), its
+// unshadowed light exact (`lamp_rect_share`).
 bool lamp_flat(Lamp lamp)
 {
-    return lamp.beam_edge.y > 0.5;
+    return lamp.beam_edge.z > 0.0;
 }
 
 // The share of `lamp`'s light that goes towards a surface the unit direction `to_lamp` points from
@@ -676,7 +677,7 @@ float hit_lamp_weight(Lamp lamp, RayHit hit, uint region, bool probe)
 }
 
 // Mirrors `GpuLamp` in crates/forge-render/src/lamps.rs (D-065): a small sphere light, or a flat
-// piece's disc (`lamp_flat`).
+// piece's rectangle (`lamp_flat`).
 public struct Lamp
 {
     public float4 position_radius; // xyz: its middle in the scene's frame; w: its radius, metres
@@ -685,8 +686,8 @@ public struct Lamp
     public uint4 regions_b;        // all REGION_NONE: every surface (`lamp_lights`)
     public float4 beam;            // xyz: its cone's axis, the way its light goes (zero: every way); w:
                                    // the cosine within which its light is whole (`lamp_beam`, #288)
-    public float4 beam_edge;       // x: the cosine beyond which a cone's light is none; y: 1 for a
-                                   // flat piece (`lamp_flat`), else 0; zw unused
+    public float4 beam_edge;       // x: the cosine beyond which a cone's light is none; yzw: a flat
+                                   // piece's turn and half sizes (`lamp_flat`), else 0
 };
 
 // Whether `lamp` lights a surface in region `region` (or, across a doorway, `other`): a lamp
@@ -3838,7 +3839,7 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
 
 // Adds lamp `lamp` (the frame's `i`-th) to `g_lamp_diffuse` and `g_lamp_specular`, times `scale`
 // (`lamps_at`): its illuminance on the surface, with SHADOWS one shadow ray to a point of its
-// sphere that moves with the frame's noise `u`.
+// sphere (a flat piece's rectangle) that moves with the frame's noise `u`.
 // `n` the surface's interpolated normal (its shadow ray's start, and none from behind it),
 // `shading_n` its mapped one, which the light takes (`lamps_at`).
 void lamp_add<let SHADOWS : int>(Frame* f, Lamp lamp, uint i, float scale, float3 world, float3 n, float3 shading_n, float3 view, float specular_power, float specular_weight, float3 f0, float bias, float2 u)
@@ -3852,26 +3853,39 @@ void lamp_add<let SHADOWS : int>(Frame* f, Lamp lamp, uint i, float scale, float
     float radius = lamp.position_radius.w;
     if (SHADOWS != 0 && f[0].tlas != 0)
     {
-        // A point of the sphere's disc facing the surface (a flat piece's own, `lamp_axes`),
-        // uniform in area, its angle turned for each lamp so two lamps' samples do not move
-        // together.
-        float3 t;
-        float3 b;
-        lamp_axes(lamp, dir, t, b);
-        float r = radius * sqrt(u.x);
+        // A point of the sphere's disc facing the surface (a flat piece's rectangle,
+        // `lamp_rect_point`), uniform in area, its angle turned for each lamp so two lamps'
+        // samples do not move together.
         float a = 6.28318530718 * frac(u.y + 0.618034 * float(i));
-        if (ray_blocked(f, lamp_ray(lamp, world, n, bias, (t * cos(a) + b * sin(a)) * r)))
+        float3 offset;
+        bool hidden = false;
+        if (lamp_flat(lamp))
+            offset = lamp_rect_target(lamp, world, n, disc_to_square(sqrt(u.x) * float2(cos(a), sin(a))), hidden);
+        else
+        {
+            float3 t;
+            float3 b;
+            lamp_disc_axes(dir, t, b);
+            float r = radius * sqrt(u.x);
+            offset = (t * cos(a) + b * sin(a)) * r;
+        }
+        if (hidden || ray_blocked(f, lamp_ray(lamp, world, n, bias, offset)))
             return;
     }
     // Let go between 80 % and all of its reach, so its edge does not show.
     float window = saturate(1.0 - pow(dist / reach, 4.0));
     float to_units = 1.0 / max(f[0].sun_illuminance, 1e-9);
     float3 normal_light = lamp.colour_reach.rgb / max(dist2, radius * radius) * (window * window * to_units * scale * lamp_beam(lamp, dir));
+    // A flat piece's diffuse light is its rectangle's, also where its middle lies behind the
+    // surface (the Cornell box's tall block, whose plane cuts the quad of light).
+    if (lamp_flat(lamp))
+        g_lamp_diffuse += lamp.colour_reach.rgb * (lamp_rect_share(lamp, world, shading_n) * window * window * to_units * scale);
     // None behind the surface itself: a mapped normal leaning towards a lamp round the corner of
     // its face would add it unshadowed.
     if (ndl <= 0.0)
         return;
-    g_lamp_diffuse += normal_light * saturate(dot(shading_n, dir));
+    if (!lamp_flat(lamp))
+        g_lamp_diffuse += normal_light * saturate(dot(shading_n, dir));
     // Its highlight by GGX (D-086), the lobe widened by the sphere's size as seen from the surface
     // (half its angular radius on α, as the sun's disc): a bulb in a smooth paint is a bulb, not a
     // point under a pixel, and a lamp's highlight takes the lobe's normalisation (Blinn-Phong's
@@ -3913,18 +3927,144 @@ void lamp_disc_axes(float3 dir, out float3 t, out float3 b)
     b = cross(dir, t);
 }
 
-// The two axes of lamp `lamp`'s disc seen along `dir`, from a surface to it: a sphere's faces the
-// surface; a flat piece's lies in its own plane, across its axis (`lamp_flat`, #370).
-void lamp_axes(Lamp lamp, float3 dir, out float3 t, out float3 b)
+// A flat piece's two axes in its plane (`lamp_flat`, #369): those `lamp_disc_axes` makes across
+// its axis, turned by its turn (`Emission::rectangle_axes` and `Emission::Flat` on the CPU).
+void lamp_rect_axes(Lamp lamp, out float3 u, out float3 v)
 {
-    lamp_disc_axes(lamp_flat(lamp) ? lamp.beam.xyz : dir, t, b);
+    float3 t;
+    float3 b;
+    lamp_disc_axes(lamp.beam.xyz, t, b);
+    float c = cos(lamp.beam_edge.y);
+    float s = sin(lamp.beam_edge.y);
+    u = t * c + b * s;
+    v = b * c - t * s;
+}
+
+// The point `square` of [-1, 1]² on flat lamp `lamp`'s rectangle, from its middle.
+float3 lamp_rect_point(Lamp lamp, float2 square)
+{
+    float3 u;
+    float3 v;
+    lamp_rect_axes(lamp, u, v);
+    return u * (square.x * lamp.beam_edge.z) + v * (square.y * lamp.beam_edge.w);
+}
+
+// Whether the point `offset` from flat lamp `lamp`'s middle lies behind the horizon of a surface
+// at `world` facing `n`: it lights nothing there (`lamp_rect_share` leaves it out), and its ray,
+// crossing the surface's plane, met the surface itself (the Cornell box's tall block took 0.6 of
+// its light). Such a point tells nothing of the lit side's shadow: the penumbra filter's rays
+// leave it out (`lamp_look`); counted as seen, the bedroom's bed, its panels' lower part behind
+// its horizon and the rest behind the curtains, took a share of their whole light. Never for a
+// sphere or a cone.
+bool lamp_rect_hidden(Lamp lamp, float3 world, float3 n, float3 offset)
+{
+    return lamp_flat(lamp) && dot(n, lamp.position_radius.xyz + offset - world) <= 0.0;
+}
+
+// The point of flat lamp `lamp`, from its middle, that one ray from a surface at `world` facing
+// `n` aims at for the point `square` of its rectangle: that point, or where it lies behind the
+// surface's horizon (`lamp_rect_hidden`) its mirror through the middle, on the lit side when the
+// middle is. `hidden` when both lie behind: the ray has nothing lit to look at.
+float3 lamp_rect_target(Lamp lamp, float3 world, float3 n, float2 square, out bool hidden)
+{
+    float3 o = lamp_rect_point(lamp, square);
+    hidden = false;
+    if (!lamp_rect_hidden(lamp, world, n, o))
+        return o;
+    if (!lamp_rect_hidden(lamp, world, n, -o))
+        return -o;
+    hidden = true;
+    return o;
+}
+
+// The point of [-1, 1]² that Shirley and Chiu's concentric map (1997) takes to `p` of the unit
+// disc: the map undone. It keeps areas, so the disc table's strata hold on a flat lamp's
+// rectangle (`lamp_look`).
+float2 disc_to_square(float2 p)
+{
+    float r = length(p);
+    float phi = atan2(p.y, p.x);
+    if (phi < -0.785398163)
+        phi += 6.28318530718;
+    if (phi < 0.785398163)
+        return float2(r, r * phi / 0.785398163);
+    if (phi < 2.35619449)
+        return float2(-r * (phi - 1.570796327) / 0.785398163, r);
+    if (phi < 3.926990817)
+        return float2(-r, -r * (phi - 3.14159265359) / 0.785398163);
+    return float2(r * (phi - 4.71238898) / 0.785398163, -r);
+}
+
+// An edge's term of Lambert's formula for a polygon's light: the angle the edge from `a` to `b`
+// (directions from the surface) spans, times the cosine between `n` and its plane's normal.
+float lamp_edge_term(float3 a, float3 b, float3 n)
+{
+    float3 c = cross(normalize(a), normalize(b));
+    float s = length(c);
+    return s > 1e-9 ? atan2(s, dot(normalize(a), normalize(b))) * dot(c, n) / s : 0.0;
+}
+
+// The share of flat lamp `lamp`'s light a surface at `world` facing `n` takes, per candela of its
+// peak, 1/m²: its rectangle's projected solid angle over its area, by Lambert's formula for a
+// polygon (1760), the rectangle first clipped at the surface's horizon (Sutherland and Hodgman,
+// 1974). Exact for a Lambertian rectangle, where `lamp_beam`'s cosine over the distance squared
+// took the light from its middle: the window's recess beside a panel took a third of its light,
+// and a face whose plane cuts the lamp (the Cornell box's tall block) none of the part in front
+// (#369). None behind the piece.
+float lamp_rect_share(Lamp lamp, float3 world, float3 n)
+{
+    float3 c = lamp.position_radius.xyz - world;
+    if (dot(c, lamp.beam.xyz) >= 0.0)
+        return 0.0;
+    float3 u;
+    float3 v;
+    lamp_rect_axes(lamp, u, v);
+    u *= lamp.beam_edge.z;
+    v *= lamp.beam_edge.w;
+    // The corners in turn, each kept above the horizon, and where an edge crosses it: the edges'
+    // terms summed as the clipped polygon's corners come.
+    float sum = 0.0;
+    float3 first = float3(0.0);
+    float3 last = float3(0.0);
+    bool started = false;
+    [unroll]
+    for (uint k = 0u; k < 4u; k++)
+    {
+        uint k1 = (k + 1u) & 3u;
+        float3 a = c + u * ((k == 1u || k == 2u) ? 1.0 : -1.0) + v * (k >= 2u ? 1.0 : -1.0);
+        float3 b = c + u * ((k1 == 1u || k1 == 2u) ? 1.0 : -1.0) + v * (k1 >= 2u ? 1.0 : -1.0);
+        float da = dot(n, a);
+        float db = dot(n, b);
+        if (da >= 0.0)
+        {
+            if (started)
+                sum += lamp_edge_term(last, a, n);
+            else
+                first = a;
+            started = true;
+            last = a;
+        }
+        if ((da >= 0.0) != (db >= 0.0))
+        {
+            float3 x = a + (b - a) * (da / (da - db));
+            if (started)
+                sum += lamp_edge_term(last, x, n);
+            else
+                first = x;
+            started = true;
+            last = x;
+        }
+    }
+    if (started)
+        sum += lamp_edge_term(last, first, n);
+    return 0.5 * abs(sum) / max(4.0 * lamp.beam_edge.z * lamp.beam_edge.w, 1e-12);
 }
 
 // The shadow ray from a surface at `world` facing `n`, starting `bias` off it, to the point
 // `offset` from lamp `lamp`'s middle. It ends short of the bulb: a lamp's own globe or fitting is
-// not in its way. A flat piece's ends 2 cm short of the point of its disc, just in front of the
-// piece (`lamp_flat`): what covers the piece, a curtain or a window's recess, is in its way (#370;
-// ended short of its disc's radius, a panel's lamp lit the room through them).
+// not in its way. A flat piece's ends 2 cm short of the point of its rectangle, just in front of
+// the piece (`lamp_flat`): what covers the piece, a curtain or a window's recess, is in its way
+// (#370; ended short of its disc's radius, a panel's lamp lit the room through them).
 RayDesc lamp_ray(Lamp lamp, float3 world, float3 n, float bias, float3 offset)
 {
     float3 target = lamp.position_radius.xyz + offset;
@@ -6259,7 +6399,8 @@ float3 hit_sunlight(Frame* f, RayHit hit)
 
 // A lamp's unshadowed illuminance on a surface at `world` facing `n`, lux (its luminance), let go
 // at its reach as `lamps_at` lets it go; 0 beyond its reach or behind the surface. Taken from
-// no nearer than its bulb's radius, or `near` where that is further (a probe's hit, #294).
+// no nearer than its bulb's radius, or `near` where that is further (a probe's hit, #294); a
+// flat piece's exact (`lamp_rect_share`), no more than a lamp's of its intensity at `near`.
 float lamp_weight(Lamp lamp, float3 world, float3 n, float near = 0.0)
 {
     float3 d = lamp.position_radius.xyz - world;
@@ -6268,6 +6409,17 @@ float lamp_weight(Lamp lamp, float3 world, float3 n, float near = 0.0)
     if (dist2 >= reach * reach)
         return 0.0;
     float dist = sqrt(dist2);
+    // A flat piece's: its rectangle's exact light (`lamp_rect_share`, bounded by π times its
+    // luminance), held under a lamp's of its intensity at `near` for the probes' halo (#294):
+    // beside a small bright piece it reached π/2 times its luminance.
+    if (lamp_flat(lamp))
+    {
+        float w = saturate(1.0 - pow(dist / reach, 4.0));
+        float share = lamp_rect_share(lamp, world, n);
+        if (near > 0.0)
+            share = min(share, 1.0 / (near * near));
+        return dot(lamp.colour_reach.rgb, float3(0.2126, 0.7152, 0.0722)) * share * w * w;
+    }
     float ndl = dot(n, d / max(dist, 1e-6));
     if (ndl <= 0.0)
         return 0.0;
@@ -6328,21 +6480,18 @@ float3 hit_lamps(Frame* f, RayHit hit, uint region, uint seed, bool probe)
     // Aimed from where it starts (`lamp_ray`, #298): aimed from the hit and started SHADOW_BIAS
     // off it, the ray ran beside the line to the lamp and ended up to 15 cm from its middle, in
     // its globe or its fitting, and a room's light moved by up to an EV with the start. A flat
-    // piece's to a point of its disc, uniform in area, by the ray's own number: to its middle
-    // alone, a panel behind a curtain lit nothing round the curtain's edges (#370).
+    // piece's to a point of its rectangle, uniform in area, by the ray's own number (on the hit's
+    // lit side, `lamp_rect_target`): to its middle alone, a panel behind a curtain lit nothing
+    // round the curtain's edges (#370).
     float3 offset = float3(0.0);
+    bool hidden = false;
     if (lamp_flat(lamp))
     {
         uint h = n * 0x85EBCA6Bu;
         h ^= h >> 13;
-        float r = lamp.position_radius.w * sqrt(float(h & 0xFFFFu) * (1.0 / 65536.0));
-        float a = 6.28318530718 * float(h >> 16) * (1.0 / 65536.0);
-        float3 t;
-        float3 b;
-        lamp_disc_axes(lamp.beam.xyz, t, b);
-        offset = (t * cos(a) + b * sin(a)) * r;
+        offset = lamp_rect_target(lamp, hit.position, hit.n, float2(float(h & 0xFFFFu), float(h >> 16)) * (2.0 / 65536.0) - 1.0, hidden);
     }
-    if (ray_blocked(f, lamp_ray(lamp, hit.position, hit.n, hit.shadow_start, offset)))
+    if (hidden || ray_blocked(f, lamp_ray(lamp, hit.position, hit.n, hit.shadow_start, offset)))
         return float3(0.0);
     // Its colour of luminance 1 times every lamp's light: its own over its chance, w / total.
     float3 colour = lamp.colour_reach.rgb / max(dot(lamp.colour_reach.rgb, float3(0.2126, 0.7152, 0.0722)), 1e-9);
@@ -7980,15 +8129,24 @@ float2 lamp_disc_point(uint2 pixel, uint frame, uint i)
 }
 
 // Whether lamp `lamp`'s light reaches a surface at `world` facing `n` from the point `disc` of
-// its sphere's disc (a flat piece's own, `lamp_axes`; the unit disc, `lamp_disc_point`), its ray
-// starting `bias` off the surface.
-bool lamp_seen(Frame* f, Lamp lamp, float3 world, float3 n, float bias, float2 disc)
+// its sphere's disc (the unit disc, `lamp_disc_point`; a flat piece's rectangle, the point it
+// maps to, `disc_to_square`), its ray starting `bias` off the surface: (1, 1) seen, (0, 1) not,
+// (0, 0) a flat piece's point behind the surface's horizon, which tells nothing
+// (`lamp_rect_hidden`) and is left out of both the shadowed and the unshadowed light.
+float2 lamp_look(Frame* f, Lamp lamp, float3 world, float3 n, float bias, float2 disc)
 {
+    if (lamp_flat(lamp))
+    {
+        float3 offset = lamp_rect_point(lamp, disc_to_square(disc));
+        if (lamp_rect_hidden(lamp, world, n, offset))
+            return float2(0.0);
+        return float2(ray_blocked(f, lamp_ray(lamp, world, n, bias, offset)) ? 0.0 : 1.0, 1.0);
+    }
     float3 d = lamp.position_radius.xyz - world;
     float3 t;
     float3 b;
-    lamp_axes(lamp, d / max(length(d), 1e-6), t, b);
-    return !ray_blocked(f, lamp_ray(lamp, world, n, bias, (t * disc.x + b * disc.y) * lamp.position_radius.w));
+    lamp_disc_axes(d / max(length(d), 1e-6), t, b);
+    return float2(ray_blocked(f, lamp_ray(lamp, world, n, bias, (t * disc.x + b * disc.y) * lamp.position_radius.w)) ? 0.0 : 1.0, 1.0);
 }
 
 // A lamp's unshadowed illuminance on a surface at `world` facing `n`, lux per channel, let go at
@@ -8001,6 +8159,8 @@ float3 lamp_lux(Lamp lamp, float3 world, float3 n)
     float ndl = dot(n, d / max(dist, 1e-6));
     float radius = lamp.position_radius.w;
     float window = saturate(1.0 - pow(dist / lamp.colour_reach.w, 4.0));
+    if (lamp_flat(lamp))
+        return lamp.colour_reach.rgb * (lamp_rect_share(lamp, world, n) * window * window);
     return lamp.colour_reach.rgb / max(dist2, radius * radius) * (max(ndl, 0.0) * window * window) * lamp_beam(lamp, d / max(dist, 1e-6));
 }
 
@@ -8043,7 +8203,9 @@ void lamp_rays_main(uint3 id : SV_DispatchThreadID)
             continue;
         Lamp lamp = f[0].lamps[i];
         float3 e = lamp_lux(lamp, world, s.n) * (j < 3u ? 1.0 : picks.scale);
-        float seen = 1.0;
+        // The share of its rays that reached it (x) and of those that looked at its lit side (y,
+        // 1 but for a flat piece's points behind the horizon, `lamp_look`).
+        float2 seen = float2(1.0);
         if (f[0].tlas != 0)
         {
             // The strongest takes two rays, to the frame's run and its pair's (runs 2m and 2m + 1):
@@ -8051,12 +8213,12 @@ void lamp_rays_main(uint3 id : SV_DispatchThreadID)
             // Two runs half the cycle apart are not, and their estimate changed more from frame to
             // frame: a still camera's frames 10 apart changed on 6.1 % of the smoke yard's pixels
             // under TAA, 3.9 % with the pair (the hall 0.31 and 0.16 %).
-            seen = lamp_seen(f, lamp, world, s.n, bias, lamp_disc_point(pixel, f[0].noise_frame, i)) ? 1.0 : 0.0;
+            seen = lamp_look(f, lamp, world, s.n, bias, lamp_disc_point(pixel, f[0].noise_frame, i));
             if (j == 0u)
-                seen = 0.5 * seen + (lamp_seen(f, lamp, world, s.n, bias, lamp_disc_point(pixel, f[0].noise_frame ^ 1u, i)) ? 0.5 : 0.0);
+                seen = 0.5 * seen + 0.5 * lamp_look(f, lamp, world, s.n, bias, lamp_disc_point(pixel, f[0].noise_frame ^ 1u, i));
         }
-        unshadowed += e;
-        shadowed += e * seen;
+        unshadowed += e * seen.y;
+        shadowed += e * seen.x;
     }
     float y = dot(unshadowed, float3(0.2126, 0.7152, 0.0722));
     float3 share = float3(unshadowed.x > 0.0 ? shadowed.x / unshadowed.x : 1.0,

@@ -8182,6 +8182,13 @@ pbrt-v4, RTXGI, materiel test, etc.). Then update forge demos and test them."):
     large panel lose the light that escapes round the curtains (Forge's path with the lamps on
     is a stop under itself with them off). The rooms measure the techniques where the lamp holds
     (the kitchen); the bedroom waits for the rectangle (#369).
+  - **With the rectangle (#369):** the lamp holds in all three rooms (Forge's path lamps on
+    against off: 0.021, 0.073, 0.097), so they measure the techniques. **SHaRC is the nearest
+    indoors at night as by day:** the bedroom's clay 0.167 from Falcor (the probes 0.962; the
+    port unstable there, #371), the kitchen's 0.106 (the port 0.122, the probes 0.167), the
+    box 0.096 (0.092, 0.207). The bedroom's light comes out from behind its curtains after many
+    bounces in a 27 cm gap, which the probes a metre apart cannot hold: D-090's case for SHaRC
+    indoors, at night too.
 
 ## D-084 — An environment map as the sky, its sun taken out of it ✅ (the owner's go, 2026-10-29)
 
@@ -8491,7 +8498,7 @@ brackets. At the Night view, Forge's light over Falcor's:
     bedroom's 0.79 m disc stood 39 cm into the room, past the curtains, unshadowed.
     - **`Emission::Flat`:** a planar piece (its normals' sum over 0.98 of its area) is Lambert's
       emitter, its light the cosine from its axis (the same lumens as the smoothstep's). Its
-      lamp sits 1 cm in front of its middle; its disc lies in its own plane (`lamp_axes`), and
+      lamp sits 1 cm in front of its middle; its disc lies in its own plane, and
       its shadow rays end 2 cm short of the point they aim at (`lamp_ray`), so what covers it
       shades it. The rays' hits aim at a point of its disc, not its middle (`hit_lamps`).
       Pieces that bulge (0.5 to 0.98: a spotlight's glass) keep the old disc in front.
@@ -8507,6 +8514,44 @@ brackets. At the Night view, Forge's light over Falcor's:
       beside its edge (the window's recess, the curtain's back) get about a third of theirs.
       The box's tall block and the tops of its walls show the same in small. Next: a flat
       piece as its rectangle, with its exact diffuse light (#369).
+  - **A planar piece's lamp is its rectangle (#369, the same night):**
+    - **The rectangle:** the least one round the piece's corners (`least_rectangle`: a side
+      along an edge of their convex hull), where the piece fills 90 % of it; else the square of
+      its area. `Emission::Flat` carries its turn and half sizes (`GpuLamp::beam_edge.yzw`, the
+      96 bytes kept).
+    - **Its shadow rays** aim at points uniform on it (the penumbra filter's stratified disc
+      points taken back to the square by the concentric map undone, `disc_to_square`).
+    - **Its unshadowed diffuse light is exact:** Lambert's formula for a polygon, the rectangle
+      clipped at the surface's horizon first (`lamp_rect_share`), in the resolve, the penumbra
+      filter's light and the hits' (`lamp_weight`). It is bounded by π times the luminance; the
+      probes' hits still hold it under a lamp's of its intensity at their least distance
+      (#294's halo). The highlight keeps the disc's lobe from the middle.
+    - **The points behind a surface's horizon** (where its plane cuts the rectangle: the box's
+      tall block) light nothing there, and their rays met the surface itself: the block took
+      0.6 of its light. The penumbra filter's rays leave them out of both the shadowed and the
+      unshadowed light (`lamp_look`); one ray (a hit's, the unfiltered path) aims at the
+      point's mirror through the middle (`lamp_rect_target`). Counted as seen instead, the
+      bedroom's bed (the panels' lower part behind its horizon, the rest behind the curtains)
+      took a share of their whole light: the lamp model a third of a stop bright.
+    - **Measured** (the review's fixes in): Forge's path with the lamps on against itself with
+      them off (the lamp model alone) is the box's 0.044 → 0.021, the kitchen's 0.065 → 0.073
+      and **the bedroom's 0.984 → 0.097**. From Falcor (after the flat lamp → after the
+      rectangle):
+
+      | | the probes | the port | SHaRC |
+      |---|---|---|---|
+      | Cornell box | 0.243 → 0.207 | 0.125 → 0.092 | 0.132 → 0.096 |
+      | Bedroom, clay | 1.579 → 0.962 | 1.173 → 0.754 (#371) | 1.148 → 0.167 |
+      | Bedroom | 1.751 → 1.191 | 1.064 → 0.596 (#371) | 1.320 → 0.445 |
+      | Kitchen, clay | 0.146 → 0.167 | 0.102 → 0.122 | 0.114 → 0.106 |
+      | Kitchen | 0.329 → 0.354 | 0.250 → 0.191 | 0.274 → 0.232 |
+      | Bistro at night | 0.544 → 0.544 | 0.543 → 0.543 | 0.543 → 0.543 |
+
+    - **What is left is the techniques':** the bedroom's light comes out of a 27 cm gap behind
+      the curtains after many bounces. SHaRC follows it (0.177 from Forge's path in clay; the
+      same each run); the probes, a metre apart, do not (a stop dark). The port is unstable
+      there: two runs 0.16 to 0.27 apart (#371). Textured, the converter's materials add their
+      gap (Forge's own path 0.392 from Falcor).
 
 ## D-088 — The light in shade: a near field traced per pixel over the probes ✅ (proposed and decided 2026-10-30, the owner following the recommendations; after D-086; D-083)
 
@@ -9331,7 +9376,13 @@ amendment, #368, #369).
   textured Exterior_2 0.085 against 0.121), and SHaRC costs up to 1.2 ms more (the Bistro's
   Exterior_1 6.89 → 7.87 ms). In the village SHaRC costs −0.05 to +0.3 ms.
 - **At night** the lamps' direct light rules: the three alike (0.549 from Falcor in the Bistro);
-  the lamps themselves are the next fault (#369). SHaRC costs 2.6 ms more there.
+  the lamps themselves are the next fault (#369). SHaRC costs 2.6 ms more there. **The lamps'
+  fault fixed** (#369, #370: a flat piece's lamp its rectangle, D-087), the rooms lit by their
+  own lamps rank as by day: SHaRC the nearest or level (the bedroom's clay 0.167 from Falcor,
+  the kitchen's 0.106, the Cornell box 0.096), the port level where it holds (the kitchen
+  0.122, the box 0.092) and unstable in the bedroom (#371), the probes last (0.962, 0.167,
+  0.207). The bedroom's light comes from behind curtains after many bounces, which the probes
+  cannot hold.
 - **SHaRC is not deterministic:** two runs differ by a few levels (its insertion order, D-088),
   and the captures' rule of 0 pixels between runs cannot hold under it.
 
@@ -9347,6 +9398,6 @@ amendment, #368, #369).
 4. **NRC** on the same hook (the owner's "ok for the trial"): to measure with the same tool before
    choosing.
 
-**Recommended:** 2, after the lamps' fix (#369), with NRC measured beside it before it is made
+**Recommended:** 2, the lamps' fix (#369) now in, with NRC measured beside it before it is made
 the default: indoors is where the probes fail and SHaRC wins, and outdoors SHaRC costs without
 gaining. To decide by the owner.

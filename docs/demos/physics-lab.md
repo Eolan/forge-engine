@@ -2391,7 +2391,7 @@ under the sun's and their 4 ms is not): each emissive section cut into its conne
 millimetre): 160 pieces, 132 lamps. A bulb or a globe lights every way, a quarter of luminance ×
 area candelas, a sphere of its area; a flat piece (a sign, a spotlight's glass) forward,
 luminance × area along its normal (`Emission::flush`; a planar one, a panel or a quad of light,
-by Lambert's cosine, its disc on its face, `Emission::Flat`, #370); a street lantern, its glass
+by Lambert's cosine, its own rectangle, `Emission::Flat`, #369, #370); a street lantern, its glass
 round its sides (seen from above 0, from below 0.32 of its side's area), luminance × its side's area to
 30° above the horizon and none straight up (`Emission::LANTERN`). The colour is the emissive
 map's mean over the piece, read at about a point a texel, as the lamp's tint. A lantern's inner
@@ -2632,11 +2632,11 @@ renders the `.pbrt` 0.055 from Falcor (×0.987): the three renderers agree.
     Falcor's.
 - **A flat piece's lamp lay off its face** (#369, #370): it gave the back wall and the tall
   block's front half of Falcor's direct light (11.4 against 21.8 cd/m²). The quad is now
-  `Emission::Flat` (D-087): Lambert's emitter, its disc in its own plane, its shadow rays ending
-  at it. The probes 0.243 from Falcor, the port 0.125, SHaRC 0.132; the back wall matched.
-  Forge's path with the lamps on is 0.044 from itself with them off: the lamp holds.
-- **Left:** the tall block's front and the tops of the walls by the ceiling, a little dark: a
-  flat lamp's unshadowed light is taken from its middle, which lies behind the block's face.
+  `Emission::Flat` (D-087): Lambert's emitter, its own rectangle, its shadow rays ending at it,
+  its unshadowed light exact (Lambert's formula for a polygon, clipped at the surface's
+  horizon). The probes 0.207 from Falcor, the port 0.092, SHaRC 0.096 (with a disc in its plane
+  and its light from its middle, 0.243, 0.125, 0.132; before, 0.322, 0.255, 0.261). Forge's path
+  with the lamps on is 0.021 from itself with them off: the lamp holds.
 
 ## `bedroom` and `kitchen`: two rooms lit by their own lights at night (D-083)
 
@@ -2666,23 +2666,22 @@ alike); pbrt renders the fabric translucent (the curtains 0.45, the blind 0.3 to
 frame, one run each: 4.8 to 5.1 ms with the probes, 4.7 to 5.0 with the port, 5.1 to 5.4 with
 SHaRC.
 
-**With the panels' lamps on their faces** (`Emission::Flat`, D-087):
+**With the panels' lamps their own rectangles** (`Emission::Flat`, D-087, #369, #370):
 
 | From Falcor | the probes | the port | SHaRC | Forge's path |
 |---|---|---|---|---|
-| Kitchen, clay | 0.146 | 0.102 | 0.114 | 0.110 |
-| Kitchen | 0.329 | 0.250 | 0.274 | 0.206 |
-| Bedroom, clay | 1.579 (dark) | 1.173 | 1.148 | 0.098 |
-| Bedroom | 1.751 (dark) | 1.064 | 1.320 | 0.392 |
+| Kitchen, clay | 0.167 | 0.122 | 0.106 | 0.110 |
+| Kitchen | 0.354 | 0.191 | 0.232 | 0.206 |
+| Bedroom, clay | 0.962 (dark) | 0.754 (#371) | 0.167 | 0.098 |
+| Bedroom | 1.191 (dark) | 0.596 (#371) | 0.445 | 0.392 |
 
-The bedroom is dark: Forge's path with the lamps on is itself a stop under it with them off.
-Two approximations of a large rectangle lose the light that escapes round the curtains:
-
-- The lamp's disc of equal area misses the panel's top and bottom 12 cm.
-- Its unshadowed light is taken from its middle: the window's recess and the curtain's back,
-  right beside its edge, get about a third of theirs.
-
-The next step is the rectangle with its exact diffuse light (#369).
+Forge's path with the lamps on against itself with them off (the lamp model alone): the
+kitchen's clay 0.073, the bedroom's 0.097. The lamps hold, so the rooms measure the techniques.
+The bedroom's light comes out from behind its curtains after many bounces in a 27 cm gap: SHaRC
+follows it (0.177 from Forge's path in clay, the same each run), the probes a metre apart do
+not, and the port is unstable there (two runs 0.16 to 0.27 apart, #371). As a disc in the panel's plane with its
+light from its middle (the step before), the bedroom was a stop dark even in Forge's path: the
+disc missed the panel's top and bottom, and the recess beside its edge took a third of its light.
 
 ## `FORGE_DYNAMIC_SCENE`: the scene edited as it runs (issues #220, #338)
 

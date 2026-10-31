@@ -11,7 +11,7 @@
 
 use crate::columns::ColumnTables;
 use bytemuck::{Pod, Zeroable};
-use glam::Vec3;
+use glam::{Vec2, Vec3};
 use std::collections::BTreeMap;
 
 /// The most lamps a frame lights with.
@@ -39,9 +39,11 @@ pub const MAX_LIST: usize = LAMP_CAPACITY * LAMP_REGIONS;
 /// A lamp, in the frame [`crate::MeshletScene::set_lamps`] is given.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Lamp {
-    /// Its bulb's middle, metres (a flat piece's: just in front of it, [`Emission::Flat`]).
+    /// Its bulb's middle, metres (a flat piece's: its rectangle's, just in front of it,
+    /// [`Emission::Flat`]).
     pub position: Vec3,
-    /// Its bulb's radius, metres: the size of its shadows' penumbrae (a flat piece's: its disc's).
+    /// Its bulb's radius, metres: the size of its shadows' penumbrae (a flat piece's: its
+    /// highlight's, the disc of its area; its rectangle makes its penumbrae).
     pub radius: f32,
     /// Its luminous intensity, candelas, the same every way (a bare bulb: lumens / 4π).
     pub candela: f32,
@@ -131,15 +133,22 @@ pub enum Emission {
         outer_cos: f32,
     },
     /// A flat glowing piece facing `axis` (a panel, a quad of light; [`Emission::flat`]):
-    /// Lambert's emitter, its intensity the cosine from the axis, none behind. Its disc of radius
-    /// [`Lamp::radius`] lies across the axis round [`Lamp::position`], just in front of the
-    /// piece: the shadow rays aim at points of it and end 2 cm short of them, so what covers the
-    /// piece (a curtain, a window's recess) shades its light (#370). A sphere's disc faces each
-    /// surface instead. ReSTIR DI (`LampRestir`) samples every lamp as its sphere: city-blocks,
+    /// Lambert's emitter, its intensity the cosine from the axis, none behind. It is the rectangle
+    /// of half sizes `half` round [`Lamp::position`], just in front of the piece, across the axis
+    /// and turned by `turn` ([`Emission::rectangle_axes`]). The shadow rays aim at points of it
+    /// and end 2 cm short of them, so what covers the piece (a curtain, a window's recess) shades
+    /// its light (#370). Its unshadowed light is the rectangle's exact diffuse light, not its
+    /// middle's (#369). A sphere's disc faces each surface instead; [`Lamp::radius`] stays the
+    /// highlight's size. ReSTIR DI (`LampRestir`) samples every lamp as its sphere: city-blocks,
     /// its one user, has none of these.
     Flat {
         /// The way its face looks, unit.
         axis: Vec3,
+        /// The turn of its first side about the axis, radians, from the first of
+        /// [`Emission::rectangle_axes`]' basis.
+        turn: f32,
+        /// Its half sizes along its first side and its second, metres (both over 0).
+        half: Vec2,
     },
 }
 
@@ -176,11 +185,30 @@ impl Emission {
         }
     }
 
-    /// A flat piece facing `axis`, any length but not zero ([`Emission::Flat`]).
-    pub fn flat(axis: Vec3) -> Emission {
+    /// A flat piece facing `axis` (any length but not zero), its rectangle turned by `turn` and of
+    /// half sizes `half` ([`Emission::Flat`]).
+    pub fn flat(axis: Vec3, turn: f32, half: Vec2) -> Emission {
+        debug_assert!(
+            axis != Vec3::ZERO && half.min_element() > 0.0,
+            "a flat piece needs an axis and both half sizes: {axis} {half}"
+        );
         Emission::Flat {
             axis: axis.normalize(),
+            turn,
+            half,
         }
+    }
+
+    /// The basis a flat piece's turn counts from: two unit axes across the unit `axis`, as
+    /// `lamp_disc_axes` in `meshlet.slang` makes them.
+    pub fn rectangle_axes(axis: Vec3) -> (Vec3, Vec3) {
+        let up = if axis.y.abs() < 0.99 {
+            Vec3::Y
+        } else {
+            Vec3::X
+        };
+        let t = up.cross(axis).normalize();
+        (t, axis.cross(t))
     }
 
     /// The share of the peak intensity towards the unit direction `out` from the lamp (the CPU's
@@ -196,7 +224,7 @@ impl Emission {
                 let t = ((out.dot(axis) - outer_cos) / (inner_cos - outer_cos)).clamp(0.0, 1.0);
                 t * t * (3.0 - 2.0 * t)
             }
-            Emission::Flat { axis } => out.dot(axis).max(0.0),
+            Emission::Flat { axis, .. } => out.dot(axis).max(0.0),
         }
     }
 
@@ -215,7 +243,7 @@ impl Emission {
     }
 
     /// Its two vectors of [`GpuLamp`]: the axis and the full light's cosine, then the cut-off's
-    /// and whether it is flat. Every way: a zero axis.
+    /// and a flat piece's turn and half sizes. Every way: a zero axis.
     fn gpu(&self) -> ([f32; 4], [f32; 4]) {
         match *self {
             Emission::Every => ([0.0; 4], [0.0; 4]),
@@ -227,7 +255,9 @@ impl Emission {
                 [axis.x, axis.y, axis.z, inner_cos],
                 [outer_cos, 0.0, 0.0, 0.0],
             ),
-            Emission::Flat { axis } => ([axis.x, axis.y, axis.z, 1.0], [0.0, 1.0, 0.0, 0.0]),
+            Emission::Flat { axis, turn, half } => {
+                ([axis.x, axis.y, axis.z, 1.0], [0.0, turn, half.x, half.y])
+            }
         }
     }
 }
@@ -246,8 +276,8 @@ pub struct GpuLamp {
     /// [`Lamp::emission`]: xyz its cone's axis (zero: every way), w the cosine within which its
     /// light is whole.
     pub beam: [f32; 4],
-    /// x: the cosine beyond which a cone's light is none; y: 1 for a flat piece
-    /// ([`Emission::Flat`]: its light the cosine, its disc across its axis), else 0; zw unused.
+    /// x: the cosine beyond which a cone's light is none; for a flat piece ([`Emission::Flat`]):
+    /// y its turn, zw its half sizes (z over 0 marks it flat); else yzw 0.
     pub beam_edge: [f32; 4],
 }
 
@@ -1040,9 +1070,9 @@ mod tests {
                     / n as f32;
         }
         assert!((flux - std::f32::consts::PI).abs() < 0.01, "{flux}");
-        // A flat piece facing down (#370): Lambert's cosine, the same lumens as the dome's, flagged
-        // on the GPU so its disc lies in its plane.
-        let panel = Emission::Flat { axis: Vec3::NEG_Y };
+        // A flat piece facing down (#369, #370): Lambert's cosine, the same lumens as the dome's,
+        // its rectangle's turn and half sizes on the GPU (which mark it flat).
+        let panel = Emission::flat(Vec3::NEG_Y * 2.0, 0.5, Vec2::new(0.6, 0.4));
         assert_eq!(panel.share(Vec3::Y), 0.0);
         assert_eq!(panel.share(Vec3::NEG_Y), 1.0);
         assert!((panel.share(Vec3::new(0.0, -0.5, 0.75_f32.sqrt())) - 0.5).abs() < 1e-6);
@@ -1054,7 +1084,18 @@ mod tests {
             })
             .sum();
         assert!((flux - panel.solid_angle()).abs() < 0.01, "{flux}");
-        assert_eq!(panel.gpu(), ([0.0, -1.0, 0.0, 1.0], [0.0, 1.0, 0.0, 0.0]));
+        assert_eq!(panel.gpu(), ([0.0, -1.0, 0.0, 1.0], [0.0, 0.5, 0.6, 0.4]));
+        // Its basis is the shader's: across the axis, right-handed about it.
+        for axis in [
+            Vec3::NEG_Y,
+            Vec3::Y,
+            Vec3::Z,
+            Vec3::new(1.0, 2.0, -3.0).normalize(),
+        ] {
+            let (t, b) = Emission::rectangle_axes(axis);
+            assert!(t.dot(axis).abs() < 1e-6 && b.dot(axis).abs() < 1e-6 && t.dot(b).abs() < 1e-6);
+            assert!((t.cross(b) - axis).length() < 1e-5, "{axis}");
+        }
         // On the GPU: a zero axis is every way.
         assert_eq!(Emission::Every.gpu(), ([0.0; 4], [0.0; 4]));
         assert_eq!(

@@ -24,7 +24,7 @@ use forge_render::dds::{
 use forge_render::lamps::{EVERY_REGION, Emission, Lamp, WHITE_BALANCE};
 use forge_render::material::{ExternalMaps, external_layer, upload_compressed};
 use forge_render::textures::{ImageUse, decode_image};
-use glam::{Mat4, Quat, Vec3};
+use glam::{Mat4, Quat, Vec2, Vec3};
 
 use city_blocks::CityMaterials;
 use city_blocks::scenario::Environment;
@@ -776,15 +776,19 @@ const LANTERN_DOWN: f32 = 0.6;
 /// a lantern's panes); over it, it is flat and shines forward (a sign, a spotlight's glass).
 const FLAT_PIECE: f32 = 0.5;
 /// Over this share, a flat glowing piece is planar (a quad of light, a panel): a lamp on its face,
-/// its disc in its plane ([`Emission::Flat`], #370). Between [`FLAT_PIECE`] and this it bulges (a
+/// its rectangle ([`Emission::Flat`], #369, #370). Between [`FLAT_PIECE`] and this it bulges (a
 /// spotlight's glass): the plane through its middle lies behind its shell.
 const PLANAR_PIECE: f32 = 0.98;
+/// Over this share of its least rectangle's area, a planar piece is that rectangle (#369).
+const RECTANGLE_FILL: f32 = 0.9;
 
 /// One connected piece of an emissive material, its corners welded within a millimetre: its area,
 /// its middle, its normals' sum (each triangle's by its area, so a closed piece's sums to none),
 /// its luminance per channel, cd/m², its map's mean over its area, its bounds, the share of its
-/// area that faces away from its middle less the share that faces it (1 out, -1 in), and how far
-/// its corners stand in front of its middle along its normals' sum, metres (a bulge's depth).
+/// area that faces away from its middle less the share that faces it (1 out, -1 in), how far its
+/// corners stand in front of its middle along its normals' sum, metres (a bulge's depth), and the
+/// least rectangle round its corners across that axis (`least_rectangle`: its turn in
+/// `Emission::rectangle_axes`' basis, its half sizes, its middle in the plane of the piece's).
 #[derive(Clone, Copy, Debug, Default)]
 struct Glow {
     area: f32,
@@ -795,6 +799,9 @@ struct Glow {
     high: Vec3,
     outward: f32,
     front: f32,
+    turn: f32,
+    half: Vec2,
+    face: Vec3,
     beams: [f32; BEAMS],
 }
 
@@ -943,6 +950,7 @@ fn glows(which: Authored) -> Vec<(String, Glow)> {
             // shell faces in, and Falcor's emitters shine from their front alone. And how far its
             // corners stand in front of its middle: a planar piece's lamp stands past its bulge.
             let mut outward: HashMap<usize, (f32, f32)> = HashMap::new();
+            let mut corners: HashMap<usize, Vec<Vec2>> = HashMap::new();
             for (t, tri) in tris.iter().enumerate() {
                 let r = root(&mut parent, t);
                 let Some(g) = pieces.get(&r) else {
@@ -958,12 +966,29 @@ fn glows(which: Authored) -> Vec<(String, Glow)> {
                 let e = outward.entry(r).or_default();
                 e.0 += 0.5 * cross.dot(away);
                 e.1 = p.iter().fold(e.1, |f, c| f.max((*c - middle).dot(axis)));
+                if axis != Vec3::ZERO {
+                    let (u, v) = Emission::rectangle_axes(axis);
+                    let plane = corners.entry(r).or_default();
+                    plane.extend(p.map(|c| Vec2::new((c - middle).dot(u), (c - middle).dot(v))));
+                }
             }
             for (r, g) in pieces {
                 let (out_area, front) = outward.get(&r).copied().unwrap_or_default();
+                let (turn, half, centre) = least_rectangle(corners.get(&r).map_or(&[], |c| c));
+                let middle = g.middle / g.area;
+                let axis = g.normal.normalize_or_zero();
+                let face = if axis == Vec3::ZERO {
+                    middle
+                } else {
+                    let (u, v) = Emission::rectangle_axes(axis);
+                    middle + u * centre.x + v * centre.y
+                };
                 let g = Glow {
                     outward: out_area / g.area,
                     front,
+                    turn,
+                    half,
+                    face,
                     ..g
                 };
                 out.push((
@@ -980,11 +1005,67 @@ fn glows(which: Authored) -> Vec<(String, Glow)> {
     out
 }
 
+/// The rectangle of least area round `points` of a plane: the turn of its first side from the
+/// plane's first axis (radians), its half sizes and its middle. One of its sides lies along an edge
+/// of the points' convex hull (Freeman and Shapira, 1975); the hull by Andrew's monotone chain
+/// (1979). Fewer than three points apart: no rectangle (half sizes 0).
+fn least_rectangle(points: &[Vec2]) -> (f32, Vec2, Vec2) {
+    let mut p = points.to_vec();
+    p.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
+    p.dedup();
+    let middle = p.iter().copied().sum::<Vec2>() / (p.len().max(1) as f32);
+    if p.len() < 3 {
+        return (0.0, Vec2::ZERO, middle);
+    }
+    let left = |o: Vec2, a: Vec2, b: Vec2| (a - o).perp_dot(b - o);
+    let mut hull: Vec<Vec2> = Vec::with_capacity(p.len() + 1);
+    for &q in &p {
+        while hull.len() >= 2 && left(hull[hull.len() - 2], hull[hull.len() - 1], q) <= 0.0 {
+            hull.pop();
+        }
+        hull.push(q);
+    }
+    let lower = hull.len() + 1;
+    for &q in p.iter().rev().skip(1) {
+        while hull.len() >= lower && left(hull[hull.len() - 2], hull[hull.len() - 1], q) <= 0.0 {
+            hull.pop();
+        }
+        hull.push(q);
+    }
+    hull.pop();
+    let mut best = (f32::INFINITY, 0.0, Vec2::ZERO, middle);
+    for (i, &a) in hull.iter().enumerate() {
+        let edge = hull[(i + 1) % hull.len()] - a;
+        if edge.length() <= 0.0 {
+            continue;
+        }
+        let along = edge.normalize();
+        let across = along.perp();
+        let (mut low, mut high) = (Vec2::INFINITY, Vec2::NEG_INFINITY);
+        for &h in &hull {
+            let c = Vec2::new(h.dot(along), h.dot(across));
+            low = low.min(c);
+            high = high.max(c);
+        }
+        let size = high - low;
+        if size.x * size.y < best.0 {
+            let mid = (low + high) * 0.5;
+            best = (
+                size.x * size.y,
+                along.y.atan2(along.x),
+                size * 0.5,
+                along * mid.x + across * mid.y,
+            );
+        }
+    }
+    (best.1, best.2, best.3)
+}
+
 /// The lamp a glowing piece lights the scene as (D-087): its light π × luminance × area, from its
 /// middle; every way where it is closed (a sphere of its area: a quarter of luminance × area
-/// candelas), forward where it is flat (a disc of its area, luminance × area candelas along its
-/// normal, by Lambert's cosine where it is planar, `Emission::Flat`, else falling off as
-/// `Emission::flush`). Its colour is its tint, balanced as the lamps'.
+/// candelas), forward where it is flat (luminance × area candelas along its normal: where it is
+/// planar its rectangle, by Lambert's cosine, `Emission::Flat`; else a disc of its area falling
+/// off as `Emission::flush`). Its colour is its tint, balanced as the lamps'.
 fn glow_lamp(g: &Glow) -> Option<Lamp> {
     let luminance = g.luminance.dot(Vec3::new(0.2126, 0.7152, 0.0722));
     if luminance < LEAST_GLOW || g.area <= 0.0 {
@@ -1002,11 +1083,24 @@ fn glow_lamp(g: &Glow) -> Option<Lamp> {
     // below.
     let side = g.beams[2..].iter().sum::<f32>() / 8.0;
     let (up, down) = (g.beams[0] / side.max(1e-9), g.beams[1] / side.max(1e-9));
+    // A planar piece that fills its least rectangle (a panel, a quad of light) is that rectangle;
+    // another (a disc, an L) the square of its area, at its middle.
+    let filled = planar
+        && g.half.min_element() > 0.0
+        && g.area >= RECTANGLE_FILL * 4.0 * g.half.x * g.half.y;
     let (candela, radius, emission) = if planar {
         (
             luminance * g.area,
             (g.area / pi).sqrt(),
-            Emission::flat(g.normal),
+            Emission::flat(
+                g.normal,
+                g.turn,
+                if filled {
+                    g.half
+                } else {
+                    Vec2::splat(0.5 * g.area.sqrt())
+                },
+            ),
         )
     } else if flat {
         (
@@ -1031,14 +1125,15 @@ fn glow_lamp(g: &Glow) -> Option<Lamp> {
     };
     Some(Lamp {
         // A planar piece's a centimetre past its face (past its bulge, `Glow::front`, if it has
-        // one: its rays end at its disc, and a bulge in front of it would block them): its disc
-        // lies in that plane, where the shadow rays aim and end, so what covers the piece shades
-        // it (#370). Another flat piece's half
-        // its radius in front of it: the shadow rays aim at its disc facing each surface, and on
-        // the piece itself half the disc lay behind its face, which blocked them from aside; a
-        // whole radius left what stands close in front of the piece behind the cone's apex.
+        // one: its rays end at its rectangle, and a bulge in front of it would block them), at
+        // its rectangle's middle: the rectangle lies in that plane, where the shadow rays aim and
+        // end, so what covers the piece shades it (#370). Another flat piece's half its radius in
+        // front of it: the shadow rays aim at its disc facing each surface, and on the piece
+        // itself half the disc lay behind its face, which blocked them from aside; a whole radius
+        // left what stands close in front of the piece behind the cone's apex.
         position: if planar {
-            g.middle + g.normal.normalize_or_zero() * (g.front + 0.01)
+            (if filled { g.face } else { g.middle })
+                + g.normal.normalize_or_zero() * (g.front + 0.01)
         } else if flat {
             g.middle + g.normal.normalize_or_zero() * (0.5 * radius)
         } else {
@@ -1201,6 +1296,45 @@ mod tests {
                 end.dot(luma) / kept.dot(luma).max(1e-6)
             );
         }
+    }
+
+    /// A planar piece's least rectangle (#369): a turned 2 × 1 m panel cut into triangles, its
+    /// corners and points within, gives its sides, its middle and its turn (modulo a quarter turn,
+    /// its sides then swapped); a disc's fills π/4 of its rectangle, under `RECTANGLE_FILL`.
+    #[test]
+    fn a_planar_piece_finds_its_rectangle() {
+        let (turn, middle) = (0.4_f32, Vec2::new(0.3, -0.2));
+        let (along, across) = (Vec2::from_angle(turn), Vec2::from_angle(turn).perp());
+        let mut points = Vec::new();
+        for (a, b) in [
+            (-1.0, -0.5),
+            (1.0, -0.5),
+            (1.0, 0.5),
+            (-1.0, 0.5),
+            (0.2, 0.1),
+            (-0.7, 0.3),
+        ] {
+            points.push(middle + along * a + across * b);
+        }
+        let (t, half, centre) = least_rectangle(&points);
+        let quarter = std::f32::consts::FRAC_PI_2;
+        let off = (t - turn).rem_euclid(quarter);
+        assert!(off < 1e-4 || quarter - off < 1e-4, "{t}");
+        let (long, short) = (half.max_element(), half.min_element());
+        assert!(
+            (long - 1.0).abs() < 1e-4 && (short - 0.5).abs() < 1e-4,
+            "{half}"
+        );
+        assert!((centre - middle).length() < 1e-4, "{centre}");
+        // A disc of 64 sides: its rectangle a square of its diameter.
+        let disc: Vec<Vec2> = (0..64)
+            .map(|i| Vec2::from_angle(i as f32 * std::f32::consts::TAU / 64.0))
+            .collect();
+        let (_, half, _) = least_rectangle(&disc);
+        let fill = std::f32::consts::PI / (4.0 * half.x * half.y);
+        assert!(fill < RECTANGLE_FILL && fill > 0.75, "{fill}");
+        // Too few points: no rectangle.
+        assert_eq!(least_rectangle(&points[..2]).1, Vec2::ZERO);
     }
 
     /// The glowing pieces by material (D-087): how many, how many become lamps, their area, their

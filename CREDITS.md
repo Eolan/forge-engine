@@ -541,6 +541,19 @@ soft edges, their pixel-wide minimum, their reactive mask and their hash:
     *Journal of Graphics Tools* 2(3), 1997.
   - The tent (the 4 × 4 box twice over), the strongest lamp's paired runs and the filter's edge
     weights are our own.
+- **A flat glowing piece as its rectangle** (`Emission::Flat`, `lamp_rect_share`, #369):
+  - *Its exact diffuse light:* Johann Heinrich Lambert's formula for the light of a uniform
+    polygon, *Photometria*, 1760 (the projected solid angle as a sum over its edges; as James
+    Arvo gives it in "The Irradiance Jacobian for Partially Occluded Polyhedral Sources",
+    SIGGRAPH 1994).
+  - *Clipped at the surface's horizon:* Ivan E. Sutherland and Gary W. Hodgman, "Reentrant
+    Polygon Clipping", *Communications of the ACM* 17(1), 1974.
+  - *Its shadow rays' points:* the disc points above taken back to the square by Shirley and
+    Chiu's map undone.
+  - *Its rectangle:* the least one round its corners, a side along an edge of their convex hull:
+    Herbert Freeman and Ruth Shapira, "Determining the Minimum-Area Encasing Rectangle for an
+    Arbitrary Closed Curve", *Communications of the ACM* 18(7), 1975; the hull by Andrew's
+    monotone chain (below).
 
 **City plans** (`forge_procgen::city`, D-059):
 - **Streets from a tensor field.** Guoning Chen, Gregory Esch, Peter Wonka, Pascal Müller,
