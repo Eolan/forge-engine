@@ -8096,6 +8096,9 @@ pbrt-v4, RTXGI, materiel test, etc.). Then update forge demos and test them."):
     authored scenes are now traced at full detail, as Falcor's; the general case is #367 (the
     bounce's rays now trace past their own cut's back, D-088).
   - Forge's clay drew cut-out cards whole, Falcor's keeps them: clay now keeps the cut-outs.
+    (Corrected 2026-10-31: Falcor's clay clears the base colour map and its alpha with it, so
+    its leaf cards draw whole. `tools/falcor-render.py`'s `BISTRO_CLAY_CUTOUTS=1` keeps a
+    cut-out's map, in its own colours. Between the two, the Bistro's clay moves 0.03 stops.)
 - **The first baseline (2026-10-31, `tools/gi-compare.sh`, at 637abc2c):** the mean |log2| of 16
   × 9 tiles against Forge's path (`r.gi.reference=4`) and against Falcor (Lambert, 16 bounces),
   and the frame's GPU ms over 1,200 frames (three runs each). The probes are the default

@@ -2474,9 +2474,11 @@ albedos (D-088).
 grey diffuse, its normal map kept, no glow: the light alone, compared with Falcor's switched to
 Lambert at 16 bounces. The shade 1.3 to 1.8 at Exterior_1, the café's window bays 2 to 3 at
 Exterior_2 (D-088).
-- **Cut-outs kept** (2026-10-30), as Falcor's clay keeps them: a cut-out row's map is turned one
-  grey at load, its alpha kept (`dds::grey_keeping_alpha`), and brought to 0.5 by its factor.
-  Without them the leaf cards and the flower baskets drew whole.
+- **Cut-outs kept** (2026-10-30): a cut-out row's map is turned one grey at load, its alpha kept
+  (`dds::grey_keeping_alpha`), and brought to 0.5 by its factor. Without them the leaf cards and
+  the flower baskets drew whole. Falcor's clay does draw them whole: it clears the base colour map
+  and its alpha with it (`BISTRO_CLAY_CUTOUTS=1` keeps a cut-out's map, in its own colours); the
+  Bistro's clay differs by 0.03 stops between the two.
 
 **Every triangle traced** (2026-10-30): an authored scene's meshes go to the rays as drawn,
 whatever their size, as Falcor traces them (elsewhere a mesh over 40,000 triangles is traced at a

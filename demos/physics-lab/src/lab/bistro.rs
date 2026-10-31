@@ -368,11 +368,15 @@ pub(super) fn build(which: Authored, first: usize) -> Vec<(usize, Mat4)> {
 /// path-traced renders leave it out). The chart's: the sky `FORGE_CHART_SKY` names among
 /// `tools/material-chart.py`'s (`sky-side-30.hdr` without it), as its Falcor scene reads it.
 /// The classroom's: its pbrt sky turned into the same layout, its distant light drawn in as the
-/// sun (`tools/pbrt-to-gltf.py`). `None` without the file.
+/// sun (`tools/pbrt-to-gltf.py`). `None` without the file. `FORGE_BISTRO_SKY` names another map
+/// for the Bistro (D-083's calibration: its sun alone, as the Falcor script's `BISTRO_ENVMAP`).
 pub(crate) fn environment(which: Authored) -> Option<Environment> {
     let (_, archive) = which.folders();
     let path = match which {
-        Authored::Bistro => archive.join("san_giuseppe_bridge_4k.hdr"),
+        Authored::Bistro => std::env::var("FORGE_BISTRO_SKY").map_or_else(
+            |_| archive.join("san_giuseppe_bridge_4k.hdr"),
+            PathBuf::from,
+        ),
         Authored::Chart => archive.join(
             std::env::var("FORGE_CHART_SKY").unwrap_or_else(|_| "sky-side-30.hdr".to_owned()),
         ),

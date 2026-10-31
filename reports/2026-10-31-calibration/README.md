@@ -101,7 +101,10 @@ surface).
 
 ## Next, by the plan
 
-- #373: the Bistro's sun alone and sky alone in both renderers.
+- #373: split by sun and sky this morning, Forge's path is 8 to 10 % over Falcor's under each
+  alone (the sun +0.19, the sky +0.13 in Exterior_1). Ruled out: the sun's cut, the file's header,
+  Falcor's half floats, the unit, the leaves. Next: a flat plane under the sun alone against its
+  analytic light.
 - pbrt-v4's bedroom lets its panels through the curtains (its folds' shading normals): the
   kitchen and the classroom are its fair rooms.
 - After your D-090 choice: SHaRC as the default where chosen, then NRC on the same hook, then the

@@ -16,6 +16,7 @@
 #                    leaves KHR_materials_emissive_strength out): the scene's brightest light
 #   BISTRO_CLAY, BISTRO_MATTE, BISTRO_DIFFUSE, BISTRO_NOEMIT: the surfaces simplified (below)
 #   BISTRO_ALBEDO    1: the first hit's diffuse albedo (Falcor's G-buffer) in place of the light
+#   BISTRO_CLAY_CUTOUTS  1: clay keeps a cut-out's base colour map (and so its alpha)
 #   BISTRO_OUT       output folder and BISTRO_NAME base file name
 import math
 import os
@@ -106,9 +107,14 @@ if env.get("BISTRO_CLAY"):
         if mat.name.startswith("emitter-"):
             continue
         try:
-            for slot in [MaterialTextureSlot.BaseColor, MaterialTextureSlot.Specular, MaterialTextureSlot.Emissive]:
+            # BISTRO_CLAY_CUTOUTS=1: a cut-out (its alpha in its base colour map, `AlphaMode.Mask`:
+            # the leaves) keeps its map, so it stays cut out (in its own colours); cleared, the
+            # leaf cards draw whole.
+            cutout = env.get("BISTRO_CLAY_CUTOUTS") and mat.alphaMode == AlphaMode.Mask
+            for slot in [MaterialTextureSlot.Specular, MaterialTextureSlot.Emissive] + ([] if cutout else [MaterialTextureSlot.BaseColor]):
                 mat.clearTexture(slot)
-            mat.baseColor = float4(0.5, 0.5, 0.5, 1)
+            if not cutout:
+                mat.baseColor = float4(0.5, 0.5, 0.5, 1)
             mat.roughness = 1.0
             mat.metallic = 0.0
             mat.emissiveFactor = 0.0
