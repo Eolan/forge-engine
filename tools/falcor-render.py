@@ -38,9 +38,10 @@ if env.get("BISTRO_ALBEDO"):
     # BISTRO_ALBEDO: the diffuse albedo Falcor's materials give each pixel's first hit (its
     # G-buffer's `diffuseOpacity`, averaged over the jitter), NAME.AccumulatePass.output.0.exr,
     # to set beside Forge's `r.show.input=1` (D-083: the materials' gap). No light, no tone map.
+    # BISTRO_GBUFFER names another of the G-buffer's channels (`normW`: the shading normal).
     g.addPass(createPass("GBufferRT", {"samplePattern": "Stratified", "sampleCount": jitter, "useAlphaTest": True}), "GBufferRT")
     g.addPass(createPass("AccumulatePass", {"enabled": True, "precisionMode": "Single"}), "AccumulatePass")
-    g.addEdge("GBufferRT.diffuseOpacity", "AccumulatePass.input")
+    g.addEdge("GBufferRT." + env.get("BISTRO_GBUFFER", "diffuseOpacity"), "AccumulatePass.input")
     g.markOutput("AccumulatePass.output")
 else:
     g.addPass(createPass("VBufferRT", {"samplePattern": "Stratified", "sampleCount": jitter, "useAlphaTest": True}), "VBufferRT")
