@@ -5961,6 +5961,21 @@ RayHit ray_hit(Frame* f, uint instance, uint primitive, float2 b, float3 origin,
     return ray_hit_seen(f, instance, primitive, b, origin, direction, t, 0.0);
 }
 
+// A hit that `hit_lamps` lights: a lamp's glowing part (MATERIAL_FLAG_LAMP) brings none of its
+// glow, which its lamp counts, as the probes' rays have it (D-065). Met by the bounce's, the
+// port's and SHaRC's rays, it counted the light twice: the Cornell box's floor at twice Falcor's
+// (D-083). A mirror's ray keeps it (`ray_hit`): the lamp is seen there. Not in the resolve's
+// reference (`path_from`): the resolve stands near the size where its ray queries fail (#355),
+// and this moved every asteroid capture; the reference is captured with the lamps off instead
+// (`tools/gi-compare.sh`), its rays meeting the glow itself.
+RayHit ray_hit_lit(Frame* f, ClosestHit c, float3 origin, float3 direction)
+{
+    RayHit hit = ray_hit(f, c.instance, c.primitive, c.barycentrics, origin, direction, c.t);
+    if ((candidate_row(f, c.instance, c.primitive).flags & MATERIAL_FLAG_LAMP) != 0)
+        hit.emissive = float3(0.0);
+    return hit;
+}
+
 // The level of `texture` whose texels are `footprint` metres across on triangle `tri` of `mesh`
 // (its face `face` as `ray_hit` scales it, once by the instance's `scale`, the hit at barycentrics
 // `b`): the triangle's area over its texels'. `at`: the hit's UV, turned by `mat`'s transform. 16
@@ -7741,7 +7756,7 @@ void diffuse_trace_main(uint3 id : SV_DispatchThreadID)
         light = sky_along(p.sky, ray.Direction);
     else
     {
-        RayHit hit = ray_hit(f, c.instance, c.primitive, c.barycentrics, ray.Origin, ray.Direction, c.t);
+        RayHit hit = ray_hit_lit(f, c, ray.Origin, ray.Direction);
         // The pixel's own number: `hit_lamps` turns it with the frame.
         uint seed = (pixel.x * 0x8DA6B343u) ^ (pixel.y * 0xD8163841u);
         // The surface cache's lookup jittered with the frame, as the lamps' pick.
@@ -7831,7 +7846,7 @@ void surface_cache_trace_main(uint3 id : SV_DispatchThreadID)
         light = sky_along(p.sky, d);
     else
     {
-        RayHit hit = ray_hit(f, c.instance, c.primitive, c.barycentrics, ray.Origin, d, c.t);
+        RayHit hit = ray_hit_lit(f, c, ray.Origin, d);
         // The lamps as the probes' rays take them (`hit_lamp_weight`): one ray an entry a frame
         // near a bulb or a street lamp is the probes' halo again (#294, #254).
         light = float3(0.0);

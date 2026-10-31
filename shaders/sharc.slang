@@ -140,7 +140,7 @@ float3 sharc_bounce(Frame* f, float4* sky, ProbeField* probes, SharcField* field
         c = trace_past_glass(f, ray, true, seed);
         if (!c.hit)
             return sum + weight * sky_along(sky, direction);
-        hit = ray_hit(f, c.instance, c.primitive, c.barycentrics, ray.Origin, direction, c.t);
+        hit = ray_hit_lit(f, c, ray.Origin, direction);
         if (hit.back)
             return sum;
     }
@@ -225,7 +225,7 @@ void sharc_update_main(uint3 id : SV_DispatchThreadID)
             SharcUpdateMiss(sharc, state, sky_along(p.sky, d));
             return;
         }
-        RayHit hit = ray_hit(f, c.instance, c.primitive, c.barycentrics, ray.Origin, d, c.t);
+        RayHit hit = ray_hit_lit(f, c, ray.Origin, d);
         if (hit.back)
             return;
         uint turn = seed + (k + 1u) * 0x9E3779B9u;

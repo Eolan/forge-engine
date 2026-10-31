@@ -7,7 +7,9 @@
 # For each view:
 # - **The captures:** Forge's path tracer (`r.gi.reference=4`) and each technique (`r.gi.cache`
 #   off, port, sharc), in linear light at frame 280 of 300, at the view's fixed exposure and
-#   without bloom (`--capture-linear`, cd/m²).
+#   without bloom (`--capture-linear`, cd/m²). The path's with the glowing pieces' lamps off
+#   (`FORGE_BISTRO_LAMPS=0`, D-087): its rays meet their glow itself, which with the lamps on it
+#   counted twice (the resolve's reference cannot leave it out, #355).
 # - **The error** of each technique (and of Forge's path against Falcor) against each reference
 #   the view has: Forge's path, and Falcor's render where FALCOR_OUT holds it, times its scale
 #   to Forge's units. Measured by tools/gi-measure.py: the mean |log2| of the luminance in
@@ -34,7 +36,8 @@
 #   first, a cache filling from empty, weigh less over more).
 # - FORGE_REUSE=1: keep the captures already in OUT_DIR (the path tracer takes minutes a view).
 # - FALCOR_OUT: Falcor's renders, NAME.AccumulatePass.output.0.exr (default ../falcor/out beside
-#   the checkout), times 2,871 for the Bistro and 12,800 for the classroom and the chart:
+#   the checkout), times 2,871 for the Bistro, 12,800 for the classroom and the chart, 30 for
+#   the Cornell box (a room lit at night):
 #   - the Bistro's clay-ext1-lam16, clay-ext2-lam16, ext1-lam16 and ext2-lam16 (Lambert's
 #     diffuse, 16 bounces), and night1600 (the emissive surfaces alone);
 #   - the classroom's crl-clay and crl-tex;
@@ -145,7 +148,7 @@ describe() {
     # Falcor with Lambert's diffuse and 16 bounces.
     chart) demo=physics-lab flags="--lab chart --view=0,6,-4.5,180,-43 --fov 45" sky=sky-side-30.hdr ev=14 falcor_ref=lam16-side-30 falcor_scale=12800 ;;
     # Falcor's Cornell box (tools/cornell-box.py), lit by its ceiling's quad alone, at night.
-    cornell) demo=physics-lab flags="--lab cornell --view=0,2.8,12,0,0 --fov 37.8493 --time-of-day 1.5" ev=17 falcor_ref=cornell-lam16 falcor_scale=12800 ;;
+    cornell) demo=physics-lab flags="--lab cornell --view=0,2.8,12,0,0 --fov 37.8493 --time-of-day 1.5" ev=7 falcor_ref=cornell-lam16 falcor_scale=30 ;;
     bistro-e1-clay) demo=physics-lab flags="--lab bistro $E1" clay=1 ev=11.22 falcor_ref=clay-ext1-lam16 falcor_scale=2871 ;;
     bistro-e2-clay) demo=physics-lab flags="--lab bistro $E2" clay=1 ev=11.22 falcor_ref=clay-ext2-lam16 falcor_scale=2871 ;;
     bistro-e1) demo=physics-lab flags="--lab bistro $E1" ev=11.22 falcor_ref=ext1-lam16 falcor_scale=2871 ;;
@@ -167,7 +170,7 @@ run() {
   describe "$view"
   lock_gpu
   # shellcheck disable=SC2086 # the flags are words
-  env ${clay:+FORGE_BISTRO_CLAY=1} ${sky:+FORGE_CHART_SKY=$sky} timeout 1800 "$bin/$demo$exe" $flags --fixed-step --frames "$frames" \
+  env ${clay:+FORGE_BISTRO_CLAY=1} ${sky:+FORGE_CHART_SKY=$sky} ${lamps_off:+FORGE_BISTRO_LAMPS=0} timeout 1800 "$bin/$demo$exe" $flags --fixed-step --frames "$frames" \
     --ev100 "$ev" --fixed-exposure --set r.bloom=0 "$@" > "$log" 2>&1
 }
 # let_others: frees the GPU lock between views for longer than the 30 s the other tools wait
@@ -233,7 +236,7 @@ for view in $views; do
   describe "$view"
   mkdir -p "$out/$view"
   echo "== $view ($((SECONDS - start)) s)"
-  capture "$view" path --set r.gi.reference=4 || {
+  lamps_off=1 capture "$view" path --set r.gi.reference=4 || {
     echo "   no path capture: $view skipped"
     let_others
     continue

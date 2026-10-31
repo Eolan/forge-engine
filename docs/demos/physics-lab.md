@@ -2615,17 +2615,20 @@ so the image is the same at every scale). Every surface Lambert's diffuse; the l
   (`KHR_materials_emissive_strength`): set by hand. Falcor's black sky is turned off
   (`BISTRO_LIGHTS=emissive`): sampling a black map is NaN in Falcor.
 - **In Forge:** at night (`--time-of-day 1.5`), its sky map left out. An emitter of factors alone
-  (no emissive map), outside the Bistro, glows in cd/m² at Falcor's unit, 12,800 (the chart's and
-  the classroom's), and lights at night as a lamp (D-087): the quad is one flat lamp of
-  4.24 M lumens. Compared with Falcor's render times 12,800; `tools/gi-compare.sh`'s `cornell`
-  view leaves out the black void's tiles (72 of 144).
+  (no emissive map), outside the Bistro, glows in cd/m² and lights at night as a lamp (D-087): at
+  30 cd/m² a unit of Falcor's light (a room lit at night: walls about 20 cd/m², the quad 1,900),
+  the quad is one flat lamp of 9,900 lumens. Compared with Falcor's render times 30;
+  `tools/gi-compare.sh`'s `cornell` view leaves out the black void's tiles (72 of 144).
 
-**First measures (2026-10-31):** Forge's path 0.862 from Falcor (×1.39), the probes 1.100
-(×0.78), the port 1.013, SHaRC 1.178. Without its lamp (`FORGE_BISTRO_LAMPS=0`), Forge's path is
-0.222 (×0.92): with it, the path counts the light twice (the lamp, and the glow its rays meet), as
-the probes do not (D-065). The techniques are dark on what stands far from the lamp's axis: the
-lamp of a flat piece falls off by a smoothstep (`Emission::flush`), half a diffuser's cosine near
-the horizon. Both are the next fix to decide (D-083's first baseline).
+**Measured (2026-10-31):** Forge's path (captured with the lamps off) 0.025 from Falcor
+(×1.000); the probes 0.322 (×0.93), the port 0.255, SHaRC 0.261 (×0.96).
+- **On the way, two faults found** (D-083's first baseline):
+  - At Falcor's daylight unit (12,800) the box's light overflowed the probes' half floats at
+    night (0.17 lux the reference).
+  - The bounce, the port and SHaRC counted a lamp's glow on top of its lamp: the floor at twice
+    Falcor's.
+- **Left:** a flat piece's lamp gives the back wall and the tall block's front half of Falcor's
+  direct light (11.4 against 21.8 cd/m²), the floor and the side walls within 20 %.
 
 ## `FORGE_DYNAMIC_SCENE`: the scene edited as it runs (issues #220, #338)
 

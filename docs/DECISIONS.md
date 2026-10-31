@@ -8123,14 +8123,27 @@ pbrt-v4, RTXGI, materiel test, etc.). Then update forge demos and test them."):
     up to 1 ms more there.
   - **The textured Exterior_2:** Forge's path itself is 0.39 from Falcor: the materials' gap
     (D-086), not the diffuse light's.
-  - **The night and the Cornell box are not trustworthy yet.** Forge's path counts an emitter
-    twice where it is a lamp (D-087): the Cornell box's path without its lamp is 0.222 from
-    Falcor (×0.92), with it 0.862 (×1.39). The probes skip a lamp row's glow (D-065); the path,
-    the bounce and SHaRC's update do not. The techniques read 1 to 1.2 stops dark there, mostly
-    on what stands far from the lamp's axis (the walls, the ceiling): a flat glowing piece's
-    lamp falls off by a smoothstep (`Emission::flush`), which gives half a diffuser's cosine
-    near the horizon (0.10 against 0.20 at 78°). Both are proposed as the next fix (D-087, to
-    decide).
+  - **The night and the Cornell box, as first measured, were not trustworthy;** two causes found
+    the same night (2026-10-31):
+    - **The box was too bright for the night's units.** At Falcor's unit (12,800 cd/m²) its
+      lamp-lit floor stood at 160,000 of the shading's units at night (cd/m² × π over the moon's
+      0.17 lux), past the half floats the probes pack their rays in (60,000): they read it at a
+      third, and the light quad at nothing. At 30 cd/m² a unit (a room lit at night) every value
+      fits. Forge's storage at night has no headroom for such light: an issue.
+    - **An emitter that is a lamp counted twice.** The probes leave a lamp row's glow out
+      (D-065); the bounce, the port and SHaRC's update added it on top of the lamp (the box's
+      floor at twice Falcor's): they leave it out now (`ray_hit_lit`). The resolve's reference
+      (`path_from`) cannot take the same rule (it moved every asteroid capture, #355): the
+      tool captures Forge's path with the lamps off, its rays meeting the glow itself.
+  - **Measured after both (frame 280, three techniques one run each):** the Cornell box, Forge's
+    path 0.025 from Falcor (×1.000); the probes 0.322, the port 0.255, SHaRC 0.261 (×0.93 to
+    0.96). The Bistro at night, Forge's path 0.317 (signed −0.010); the three techniques 0.549,
+    alike: the lamps' direct light rules there.
+  - **Left, the lamps' direct light:** on the box's back wall and its tall block's front (facing
+    the camera) a lamp gives half of Falcor's direct light (11.4 against 21.8 cd/m²), the floor
+    and the side walls within 20 %. Not the profile alone (a flat piece's lamp falls off by a
+    smoothstep, `Emission::flush`, which near the horizon gives half a diffuser's cosine, but the
+    back wall sees the lamp at about 49°): to find, before the night is calibrated.
 
 ## D-084 — An environment map as the sky, its sun taken out of it ✅ (the owner's go, 2026-10-29)
 
@@ -8424,6 +8437,14 @@ brackets. At the Night view, Forge's light over Falcor's:
   (`hit_lamps`); the light and the flicker (6,111 pixels) the same.
 - **Open:** the many-lights path's cost and its noise as lamps grow; the street lamps by ReSTIR
   DI not tried (`--street-restir` needs them `outside`).
+- **Amended (2026-10-31, D-083's calibration):**
+  - **No glow counted twice:** the bounce's, the port's and SHaRC's rays leave a lamp row's glow
+    out, as the probes' do (`ray_hit_lit`); they added it on top of its lamp.
+  - **The Cornell box's light** (`--lab cornell`, an emitter of factors alone) is a glowing piece
+    too: its emitters outside the Bistro glow in cd/m² at the scene's unit.
+  - **Measured on the box:** Forge's path 0.025 from Falcor, the techniques 0.26 to 0.32. A flat
+    piece's lamp gives the walls facing the camera half of Falcor's direct light (D-083's
+    baseline): to find next.
 
 ## D-088 — The light in shade: a near field traced per pixel over the probes ✅ (proposed and decided 2026-10-30, the owner following the recommendations; after D-086; D-083)
 

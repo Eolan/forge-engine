@@ -133,8 +133,14 @@ pub(crate) enum Authored {
 }
 
 /// A unit of Falcor's light in cd/m² for the scenes compared at the chart's scale (the chart, the
-/// classroom, the Cornell box): their skies' sun of irradiance 10 is the sun's 128,000 lux.
+/// classroom): their skies' sun of irradiance 10 is the sun's 128,000 lux.
 const FALCOR_UNIT: f32 = 12_800.0;
+
+/// The Cornell box's unit of Falcor's light, cd/m²: a room lit at night (its walls about
+/// 20 cd/m², its light about 1,900). At FALCOR_UNIT its lamp-lit floor stood at 160,000 of the
+/// shading's units (cd/m² × π over the moon's 0.17 lux at night), past the half floats the probes
+/// pack their rays in (60,000): they read it at a third and the light itself at nothing.
+const CORNELL_UNIT: f32 = 30.0;
 
 impl Authored {
     /// The converted scene's folder, and the one its maps' paths are relative to.
@@ -167,7 +173,8 @@ impl Authored {
     fn glow_unit(self) -> f32 {
         match self {
             Authored::Bistro => EMISSIVE_LUMINANCE,
-            Authored::Chart | Authored::Classroom | Authored::Cornell => FALCOR_UNIT,
+            Authored::Chart | Authored::Classroom => FALCOR_UNIT,
+            Authored::Cornell => CORNELL_UNIT,
         }
     }
 }
