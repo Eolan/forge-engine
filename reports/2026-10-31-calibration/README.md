@@ -103,8 +103,9 @@ surface).
 
 - #373: split by sun and sky this morning, Forge's path is 8 to 10 % over Falcor's under each
   alone (the sun +0.19, the sky +0.13 in Exterior_1). Ruled out: the sun's cut, the file's header,
-  Falcor's half floats, the unit, the leaves. Next: a flat plane under the sun alone against its
-  analytic light.
+  Falcor's half floats, the unit, the leaves, the clay albedo (0.496). The material chart under the
+  Bistro's sun alone matches (0.058): it is the Bistro scene itself, its walls +10 % under the sun.
+  Next: the walls' normals and geometry as Falcor's FBX and Forge's glTF hold them.
 - pbrt-v4's bedroom lets its panels through the curtains (its folds' shading normals): the
   kitchen and the classroom are its fair rooms.
 - After your D-090 choice: SHaRC as the default where chosen, then NRC on the same hook, then the
