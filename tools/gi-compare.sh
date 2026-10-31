@@ -8,8 +8,8 @@
 # - **The captures:** Forge's path tracer (`r.gi.reference=4`) and each technique (`r.gi.cache`
 #   off, port, sharc), in linear light at frame 280 of 300, at the view's fixed exposure and
 #   without bloom (`--capture-linear`, cd/m²). The path's with the glowing pieces' lamps off
-#   (`FORGE_BISTRO_LAMPS=0`, D-087): its rays meet their glow itself, which with the lamps on it
-#   counted twice (the resolve's reference cannot leave it out, #355).
+#   (`FORGE_BISTRO_LAMPS=0`, D-087): its rays meet their glow itself, so the lamps' own faults
+#   (#369) stay out of the reference.
 # - **The error** of each technique (and of Forge's path against Falcor) against each reference
 #   the view has: Forge's path, and Falcor's render where FALCOR_OUT holds it, times its scale
 #   to Forge's units. Measured by tools/gi-measure.py: the mean |log2| of the luminance in

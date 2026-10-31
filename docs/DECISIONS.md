@@ -8122,7 +8122,12 @@ pbrt-v4, RTXGI, materiel test, etc.). Then update forge demos and test them."):
   - **Outdoors by day,** the probes are as near or nearer (the textured Bistro), and SHaRC costs
     up to 1 ms more there.
   - **The textured Exterior_2:** Forge's path itself is 0.39 from Falcor: the materials' gap
-    (D-086), not the diffuse light's.
+    (D-086), not the diffuse light's. Without any reflection on both sides
+    (`FORGE_BISTRO_MATTE=diffuse`, Falcor's `BISTRO_DIFFUSE`), 0.241 (×1.008): the base colours
+    hold about 0.24 of it (clay: 0.099), reflections and metals the rest. Forge is darker under
+    the awnings (their undersides, the façade and the deck in their shade). Falcor's awnings
+    are opaque and single-sided (no transmission): not their translucency. To find by the
+    materials' albedos, view by view (Falcor's G-buffer against `r.show.input=1`).
   - **The night and the Cornell box, as first measured, were not trustworthy;** two causes found
     the same night (2026-10-31):
     - **The box was too bright for the night's units.** At Falcor's unit (12,800 cd/m²) its
@@ -8132,9 +8137,15 @@ pbrt-v4, RTXGI, materiel test, etc.). Then update forge demos and test them."):
       fits. Forge's storage at night has no headroom for such light: an issue.
     - **An emitter that is a lamp counted twice.** The probes leave a lamp row's glow out
       (D-065); the bounce, the port and SHaRC's update added it on top of the lamp (the box's
-      floor at twice Falcor's): they leave it out now (`ray_hit_lit`). The resolve's reference
-      (`path_from`) cannot take the same rule (it moved every asteroid capture, #355): the
-      tool captures Forge's path with the lamps off, its rays meeting the glow itself.
+      floor at twice Falcor's): they leave it out now (`ray_hit_lit`), and the resolve's
+      reference (`path_from`) too. The tool captures Forge's path with the lamps off all the
+      same, its rays meeting the glow itself, so the lamps' faults (#369) stay out of it.
+    - **#355 seen again, and its oracle found:** the reference's change moved every asteroid
+      capture, while those scenes never run it. The AMD iGPU (`FORGE_GPU=amd`) draws the
+      asteroids alike with and without it; NVIDIA draws them as AMD only with it. Without it the
+      rocks lose their shadows on each other: the images accepted since 2026-10-29 were the
+      broken state, accepted again with the shadows back (the slangc output valid both ways,
+      `spirv-val --scalar-block-layout`).
   - **Measured after both (frame 280, three techniques one run each):** the Cornell box, Forge's
     path 0.025 from Falcor (×1.000); the probes 0.322, the port 0.255, SHaRC 0.261 (×0.93 to
     0.96). The Bistro at night, Forge's path 0.317 (signed −0.010); the three techniques 0.549,
@@ -8441,8 +8452,9 @@ brackets. At the Night view, Forge's light over Falcor's:
 - **Open:** the many-lights path's cost and its noise as lamps grow; the street lamps by ReSTIR
   DI not tried (`--street-restir` needs them `outside`).
 - **Amended (2026-10-31, D-083's calibration):**
-  - **No glow counted twice:** the bounce's, the port's and SHaRC's rays leave a lamp row's glow
-    out, as the probes' do (`ray_hit_lit`); they added it on top of its lamp.
+  - **No glow counted twice:** the bounce's, the port's, SHaRC's and the resolve's reference's rays
+    leave a lamp row's glow out, as the probes' do (`ray_hit_lit`); they added it on top of its
+    lamp.
   - **The Cornell box's light** (`--lab cornell`, an emitter of factors alone) is a glowing piece
     too: its emitters outside the Bistro glow in cd/m² at the scene's unit.
   - **Measured on the box:** Forge's path 0.025 from Falcor, the techniques 0.26 to 0.32. A flat

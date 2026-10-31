@@ -5964,14 +5964,15 @@ RayHit ray_hit(Frame* f, uint instance, uint primitive, float2 b, float3 origin,
 // A hit that `hit_lamps` lights: a lamp's glowing part (MATERIAL_FLAG_LAMP) brings none of its
 // glow, which its lamp counts, as the probes' rays have it (D-065). Met by the bounce's, the
 // port's and SHaRC's rays, it counted the light twice: the Cornell box's floor at twice Falcor's
-// (D-083). A mirror's ray keeps it (`ray_hit`): the lamp is seen there. Not in the resolve's
-// reference (`path_from`): the resolve stands near the size where its ray queries fail (#355),
-// and this moved every asteroid capture; the reference is captured with the lamps off instead
-// (`tools/gi-compare.sh`), its rays meeting the glow itself.
-RayHit ray_hit_lit(Frame* f, ClosestHit c, float3 origin, float3 direction)
+// (D-083). A mirror's ray keeps it (`ray_hit`): the lamp is seen there. The resolve's reference
+// (`path_from`) takes it too; with it the asteroids' rocks shadow each other again on NVIDIA, as
+// on the AMD iGPU with or without it (#355: the resolve's mover rays lost at some code sizes, the
+// images accepted since 2026-10-29 without those shadows). `lit` false: the glow kept (the
+// near-field reference, which adds no lamps).
+RayHit ray_hit_lit(Frame* f, ClosestHit c, float3 origin, float3 direction, bool lit = true)
 {
     RayHit hit = ray_hit(f, c.instance, c.primitive, c.barycentrics, origin, direction, c.t);
-    if ((candidate_row(f, c.instance, c.primitive).flags & MATERIAL_FLAG_LAMP) != 0)
+    if (lit && (candidate_row(f, c.instance, c.primitive).flags & MATERIAL_FLAG_LAMP) != 0)
         hit.emissive = float3(0.0);
     return hit;
 }
@@ -6176,7 +6177,7 @@ float3 path_from(Frame* f, float4* sky, ProbeField* probes, RayHit hit, float3 d
         ClosestHit c = trace_past_glass(f, ray);
         if (!c.hit)
             return sum + weight * sky_along(sky, d);
-        hit = ray_hit(f, c.instance, c.primitive, c.barycentrics, ray.Origin, d, c.t);
+        hit = ray_hit_lit(f, c, ray.Origin, d);
     }
     return sum;
 }
@@ -6207,7 +6208,7 @@ float3 near_field_reference(Frame* f, float4* sky, ProbeField* probes, float3 wo
         ClosestHit c = mode == GI_REFERENCE_NEAR ? trace_closest(f, ray) : trace_past_glass(f, ray);
         if (c.hit)
         {
-            RayHit hit = ray_hit(f, c.instance, c.primitive, c.barycentrics, origin, d, c.t);
+            RayHit hit = ray_hit_lit(f, c, origin, d, mode != GI_REFERENCE_NEAR);
             if (mode != GI_REFERENCE_NEAR)
                 sum += path_from(f, sky, probes, hit, d, seed + i * 977u, mode == GI_REFERENCE_PATH ? 0u : mode - 1u);
             else if (!hit.back)
