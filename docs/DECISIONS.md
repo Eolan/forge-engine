@@ -9391,7 +9391,7 @@ steps". Steps 1 and 2 as proposed.
 **Open:** whether the classroom, an inside lit through its windows, should be metered too. The
 chart stays a card at one exposure.
 
-## D-090 — Which light under the bounce, by the calibration 🟡 (proposed 2026-10-31; D-083, D-088)
+## D-090 — Which light under the bounce, by the calibration ✅ (proposed 2026-10-31; D-083, D-088; the owner's go the same day: option 2)
 
 **Why:** the owner, during D-088's SHaRC: "Compare and see what's best and work real-time". The
 first baseline (D-083, `tools/gi-compare.sh`, twelve views) measured the probes (the default),
@@ -9433,3 +9433,8 @@ amendment, #368, #369).
 **Recommended:** 2, the lamps' fix (#369) now in, with NRC measured beside it before it is made
 the default: indoors is where the probes fail and SHaRC wins, and outdoors SHaRC costs without
 gaining. To decide by the owner.
+
+**Decided** (the owner, 2026-10-31: "D-90 I will follow recommendations"): option 2, SHaRC under
+the bounce where the probes' room grids are, the probes outdoors; NRC measured on the same hook
+before either becomes the default everywhere (its download asked for first). The captures and the
+A/B harness keep `r.gi.cache off`; `tools/gi-compare.sh` measures the choice by error.

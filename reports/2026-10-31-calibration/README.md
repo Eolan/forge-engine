@@ -17,7 +17,7 @@ targeted maps only until 14:00. Every number is the mean |log2| of 16 × 9 tiles
   quad of light is now its own rectangle, with its exact diffuse light. Forge's path with the
   lamps on is within 0.1 of itself with them off (the glow traced) in all three rooms.
 - **SHaRC is the nearest indoors, by day and at night;** the probes are as good outdoors by day.
-  That is D-090's recommendation (🟡, yours to take).
+  That is D-090's recommendation, taken (the owner, 2026-10-31).
 - **Waiting for you:** D-090 (SHaRC indoors), and #372 (the Bistro at night: a many-lights
   choice).
 
