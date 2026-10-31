@@ -2401,9 +2401,11 @@ shell faces in and is left out: Falcor's emitters shine from their front alone. 
 At the Night view (`--time-of-day 1.5 --ev100 2.22 --fixed-exposure`, linear, Forge over Falcor
 on a 16 × 9 grid):
 - **Light:** without them, 0.04–0.3 on the lit fronts and the street. With the 64 nearest (the
-  default choice; every lamp lighting every way), 0.7–1.3 in the middle, the street 0.7–0.9, the
-  far left street dark past the 64. With `--all-lamps` (132) and the lanterns' cone: the street
-  0.97–1.08, the upper fronts 1.0–1.4, the café's front 1.15–1.5.
+  default choice until #372; every lamp lighting every way), 0.7–1.3 in the middle, the street
+  0.7–0.9, the far left street dark past the 64. With every lamp (132; `--all-lamps` then, the
+  default since #372) and the lanterns' cone: the street 0.97–1.08, the upper fronts 1.0–1.4,
+  the café's front 1.15–1.5. Since #372 the lanterns' glass shares (`Emission::Prism`): every
+  lamp at 0.987 of Forge's path tracer with them (tiles' mean ratio), 22.1 ms.
 - **Still:** a still camera's frames 10 apart differ on 4,230 pixels (0.29 %) with the 64,
   6,217 (0.43 %) with all, against 261,857 (18 %) before. The same without the probes or the
   mirror rays: the resolve's choice of the lamps it traces, and the thin geometry (0.37 % by

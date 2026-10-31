@@ -5661,6 +5661,14 @@ tiles' mean ratio to Forge's path with every lamp, the frame on the 5070 Ti:
   every lamp the frame's lamps reach (the 64-lamp cap raised, clustered lists to bound a pixel's
   lamps later), ReSTIR kept behind its switch while its shimmer is open. Then the lamp model's
   13 % over the traced glow and the rooms' 5 %.
+- **Decided** (the owner, 2026-10-31: "Follow recommendations"): the light lists light every
+  lamp whose light reaches within 50 m of the camera, up to the buffers' 512 (`MAX_LAMPS` =
+  `LAMP_CAPACITY`, the 64 before); ReSTIR stays behind `--lamp-restir` (and the split behind
+  `--lamp-restir-near`) while its shimmer is open. The Bistro at night by default: 0.987 of
+  Forge's path with every lamp, 6,840 px of shimmer, 22.1 ms (the 64 nearest: 0.797, 4,892 px,
+  15.2 ms); its far street and arch lit. The village at 22:00, where each room's lamps are its
+  own list: the street 7.79 → 7.80 ms, the room 7.85 → 7.90, the landing 7.38 → 7.40. Clustered
+  lists (D-065's part 1) come when a pixel's place holds more lamps than it can afford.
 
 **Step 3 built (2026-10-31): a lantern's light by its glass** (`Emission::Prism { up, down }`):
 at the elevation φ, over its side's intensity, cos φ for its upright panes and its glass's

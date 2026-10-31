@@ -3,19 +3,23 @@
 //! penumbrae as it did the sun's single ray (#54).
 //!
 //! A scene gives its lamps each frame ([`crate::MeshletScene::set_lamps`]): where each is, its
-//! radius, its luminous intensity in candelas and its colour temperature in kelvin. The
-//! [`MAX_LAMPS`] nearest the camera whose light reaches it are kept ([`nearest`]); each pixel of
-//! the resolve takes every one whose [`reach`] it is in (`lamps_at` in `meshlet.slang`). D-065's
-//! clustered lists (Olsson, Billeter and Assarsson 2012) come when a view holds more lamps than
-//! a village's few rooms; the probes lit by the lamps after.
+//! radius, its luminous intensity in candelas and its colour temperature in kelvin. Those whose
+//! light reaches within 50 m of the camera are kept, the nearest first, [`MAX_LAMPS`] at most
+//! ([`nearest`]); each pixel of the resolve takes every one whose [`reach`] it is in (`lamps_at` in
+//! `meshlet.slang`). D-065's clustered lists (Olsson, Billeter and Assarsson 2012) come when a
+//! pixel's place holds more lamps than it can afford; the probes lit by the lamps after.
 
 use crate::columns::ColumnTables;
 use bytemuck::{Pod, Zeroable};
 use glam::{Vec2, Vec3};
 use std::collections::BTreeMap;
 
-/// The most lamps a frame lights with.
-pub const MAX_LAMPS: usize = 64;
+/// The most lamps a frame lights with: all its buffers hold (#372, the owner's go of 2026-10-31).
+/// The 64 nearest before left the Bistro's far street and arch black at night, their lamps past
+/// the 64 (every lamp lit, 0.987 of Forge's path tracer with them; the 64, 0.797), for 6.6 ms of
+/// its 132 lamps lit every way (the light lists' rays, filter and resolve, `docs/PROFILE.md`);
+/// ReSTIR DI lit them for less but shimmered (D-065's amendment).
+pub const MAX_LAMPS: usize = LAMP_CAPACITY;
 /// The most lamps a frame's buffers hold: all those [`every`] keeps, for D-065's comparison of
 /// ReSTIR DI with the light lists (the village lights 325 at 22:00).
 pub const LAMP_CAPACITY: usize = 512;
@@ -667,9 +671,9 @@ pub(crate) struct GpuFarLamps {
 /// The street lamps lit beyond the frame's set (#284): each one's light, less the share of it the
 /// set lights ([`choose_shares`]), unshadowed and without the penumbra filter, found by the
 /// resolve in a grid of [`FAR_CELL`] columns built once (`far_lamps_at` in `meshlet.slang`).
-/// Only [`MAX_LAMPS`] are lit with shadow rays a frame, the nearest, and the far streets' pools
-/// went dark while their lamp heads kept glowing; a lamp leaving the set fades into this as it
-/// fades out of it, and back.
+/// Only the lamps whose light reaches within 50 m of the camera are lit with shadow rays (when
+/// this was made, the 64 nearest), and the far streets' pools went dark while their lamp heads
+/// kept glowing; a lamp leaving the set fades into this as it fades out of it, and back.
 pub struct FarLamps {
     /// The lamps as the GPU takes them, their whole light.
     pub(crate) lamps: Vec<GpuLamp>,
@@ -896,14 +900,17 @@ mod tests {
         };
         // 100 cd reaches about 45 m.
         assert!((reach(100.0) - 44.72).abs() < 0.01);
-        // A row a metre apart: those within the reach and 50 m of the camera (95 of them) count,
-        // the 64 nearest are kept.
+        // A row a metre apart: those within the reach and 50 m of the camera (95 of them) are
+        // kept, the nearest first.
         let lamps: Vec<Lamp> = (0..100)
             .map(|i| bulb(i as f32, 100.0))
             .chain([bulb(5000.0, 100.0), bulb(1.0, 0.0)])
             .collect();
         let kept = nearest(&lamps, Vec3::ZERO);
-        assert_eq!(kept.len(), MAX_LAMPS);
+        assert_eq!(kept.len(), 95);
+        // Six hundred in a 10 cm row: the nearest MAX_LAMPS.
+        let crowd: Vec<Lamp> = (0..600).map(|i| bulb(i as f32 * 0.1, 100.0)).collect();
+        assert_eq!(nearest(&crowd, Vec3::ZERO).len(), MAX_LAMPS);
         assert_eq!(kept[0].position_radius[0], 0.0);
         assert!(
             kept.windows(2)
@@ -930,12 +937,12 @@ mod tests {
                 emission: Emission::Every,
             }
         };
-        // A hundred house lamps within 10 m, thirty street lamps 60 to 89 m away (109 cd reach
-        // 47 m, so they count to 97 m).
-        let lamps: Vec<Lamp> = (0..100)
+        // Six hundred house lamps within 10 m (more than MAX_LAMPS), thirty street lamps 60 to
+        // 89 m away (109 cd reach 47 m, so they count to 97 m).
+        let lamps: Vec<Lamp> = (0..600)
             .map(|i| {
                 lamp(
-                    Vec3::new((i % 10) as f32, 2.0, (i / 10) as f32),
+                    Vec3::new((i % 25) as f32 * 0.4, 2.0, (i / 25) as f32 * 0.4),
                     20.0,
                     false,
                 )
@@ -950,7 +957,7 @@ mod tests {
         assert_eq!(kept.len(), MAX_LAMPS);
         assert_eq!(streets, STREET_SHARE);
         // Without the houses, the streets take every slot they need.
-        let alone: Vec<Lamp> = lamps[100..].to_vec();
+        let alone: Vec<Lamp> = lamps[600..].to_vec();
         assert_eq!(nearest(&alone, Vec3::ZERO).len(), 30);
     }
 
@@ -1007,12 +1014,12 @@ mod tests {
 
     #[test]
     fn no_lamp_switches_on_or_off_at_once_as_the_camera_moves() {
-        // Two hundred lamps on a 2 m grid; the camera walks 40 m across it in 1 cm steps. Each
+        // A thousand lamps on a 2 m grid; the camera walks 40 m across it in 1 cm steps. Each
         // lamp's light (its red intensity) may change little from step to step, though dozens
-        // enter and leave the 64 kept.
-        let lamps: Vec<Lamp> = (0..200)
+        // enter and leave the MAX_LAMPS kept.
+        let lamps: Vec<Lamp> = (0..1000)
             .map(|i| Lamp {
-                position: Vec3::new((i % 20) as f32 * 2.0, 2.5, (i / 20) as f32 * 2.0),
+                position: Vec3::new((i % 50) as f32 * 2.0, 2.5, (i / 50) as f32 * 2.0),
                 radius: 0.05,
                 candela: 50.0,
                 kelvin: 2700.0,

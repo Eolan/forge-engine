@@ -1809,6 +1809,10 @@ something stands out). Two things to watch:
       does), `shadow/lamp REBLUR` (NRD's diffuse and specular denoiser, its own instance)
       1.35 ms, `shading/standard` 0.8 ms. Undenoised it took 15.1 ms (the pass 1.8 ms); the
       diffuse light alone denoised, 15.9 ms.
+    - **The default since #372** (the owner's go): the light lists keep every lamp whose light
+      reaches within 50 m of the camera (512 at most), so the Bistro's night is the second row's,
+      22.1 ms; the village at 22:00 pays nothing measurable (its street 7.79 → 7.80 ms, a room
+      7.85 → 7.90, the landing 7.38 → 7.40), its rooms' lamps each their own list.
   - *2026-10-19, the grime at the walls' feet (D-074's decals):* the village at 15:00 under DLAA
     at 1600 × 900, the house and junction views of the map check, three runs each way,
     alternating with `--no-decals`: `shading/standard` 0.804 → 0.830 ms on the house front and
