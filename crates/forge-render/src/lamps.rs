@@ -149,6 +149,20 @@ pub enum Emission {
         /// Its half sizes along its first side and its second, metres (both over 0).
         half: Vec2,
     },
+    /// A lantern: glass round its upright sides, between a cap and a foot that may be glazed
+    /// (#372, the Bistro's street lanterns). Its intensity at the elevation φ over its side's (its
+    /// candela, the peak, level) is that of a prism of upright panes, cos φ, and of its glass seen
+    /// from above and below: `up` × sin φ upwards, `down` × −sin φ downwards, the shares of its
+    /// glass's area seen from straight above and below over that seen from the side
+    /// (`Glow::beams` in physics-lab). The cone before it ([`Emission::Cone`] down, whole from 30°
+    /// above the horizon) sent the side's whole intensity straight down, where the Bistro's
+    /// lanterns show 0.32 of it.
+    Prism {
+        /// Its glass's area seen from above over that seen from the side.
+        up: f32,
+        /// Its glass's area seen from below over that seen from the side.
+        down: f32,
+    },
 }
 
 impl Emission {
@@ -159,16 +173,6 @@ impl Emission {
         axis: Vec3::NEG_Y,
         inner_cos: 0.5,
         outer_cos: 0.087,
-    };
-
-    /// A lantern under a metal cap, glazed round its sides: all of its light below and up to 30°
-    /// above the horizon, none straight up (D-087, the Bistro's street lanterns). Its upright
-    /// panes send the cosine of the elevation: 0.87 at 30°, 0.71 at 45° (here 0.62), 0.5 at 60°
-    /// (0.18).
-    pub const LANTERN: Emission = Emission::Cone {
-        axis: Vec3::NEG_Y,
-        inner_cos: -0.5,
-        outer_cos: -1.0,
     };
 
     /// A light flush with a ceiling or a wall facing `axis` (a dome, a diffuser): none behind its
@@ -224,11 +228,16 @@ impl Emission {
                 t * t * (3.0 - 2.0 * t)
             }
             Emission::Flat { axis, .. } => out.dot(axis).max(0.0),
+            Emission::Prism { up, down } => {
+                let s = out.y.clamp(-1.0, 1.0);
+                (1.0 - s * s).sqrt() + up * s.max(0.0) + down * (-s).max(0.0)
+            }
         }
     }
 
     /// The solid angle its light fills, steradians, as the peak's: its lumens over its candelas.
-    /// Every way 4π; a cone 2π of the cosine it spans whole and half the step's; a flat piece π.
+    /// Every way 4π; a cone 2π of the cosine it spans whole and half the step's; a flat piece π; a
+    /// lantern π² for its sides and π for each share above and below.
     pub fn solid_angle(&self) -> f32 {
         match *self {
             Emission::Every => 4.0 * std::f32::consts::PI,
@@ -238,6 +247,10 @@ impl Emission {
                 ..
             } => 2.0 * std::f32::consts::PI * ((1.0 - inner_cos) + 0.5 * (inner_cos - outer_cos)),
             Emission::Flat { .. } => std::f32::consts::PI,
+            Emission::Prism { up, down } => {
+                let pi = std::f32::consts::PI;
+                pi * pi + pi * (up + down)
+            }
         }
     }
 
@@ -257,6 +270,7 @@ impl Emission {
             Emission::Flat { axis, turn, half } => {
                 ([axis.x, axis.y, axis.z, 1.0], [0.0, turn, half.x, half.y])
             }
+            Emission::Prism { up, down } => ([0.0, 1.0, 0.0, 0.0], [up, down, -1.0, 0.0]),
         }
     }
 }
@@ -1084,6 +1098,27 @@ mod tests {
             .sum();
         assert!((flux - panel.solid_angle()).abs() < 0.01, "{flux}");
         assert_eq!(panel.gpu(), ([0.0, -1.0, 0.0, 1.0], [0.0, 0.5, 0.6, 0.4]));
+        // A lantern (#372): its side's whole light level, its glass's shares straight up and down,
+        // its lumens the solid angle's; on the GPU its axis up and -1 marking it.
+        let lantern = Emission::Prism {
+            up: 0.0,
+            down: 0.32,
+        };
+        assert!((lantern.share(Vec3::X) - 1.0).abs() < 1e-6);
+        assert!(lantern.share(Vec3::Y).abs() < 1e-6);
+        assert!((lantern.share(Vec3::NEG_Y) - 0.32).abs() < 1e-6);
+        let flux: f32 = (0..n)
+            .map(|i| {
+                let c = -1.0 + (i as f32 + 0.5) * 2.0 / n as f32;
+                lantern.share(Vec3::new((1.0 - c * c).sqrt(), -c, 0.0)) * 4.0 * std::f32::consts::PI
+                    / n as f32
+            })
+            .sum();
+        assert!((flux - lantern.solid_angle()).abs() < 0.01, "{flux}");
+        assert_eq!(
+            lantern.gpu(),
+            ([0.0, 1.0, 0.0, 0.0], [0.0, 0.32, -1.0, 0.0])
+        );
         // Its basis is the shader's: across the axis, right-handed about it.
         for axis in [
             Vec3::NEG_Y,

@@ -2392,8 +2392,9 @@ millimetre): 160 pieces, 132 lamps. A bulb or a globe lights every way, a quarte
 area candelas, a sphere of its area; a flat piece (a sign, a spotlight's glass) forward,
 luminance × area along its normal (`Emission::flush`; a planar one, a panel or a quad of light,
 by Lambert's cosine, its own rectangle, `Emission::Flat`, #369, #370); a street lantern, its glass
-round its sides (seen from above 0, from below 0.32 of its side's area), luminance × its side's area to
-30° above the horizon and none straight up (`Emission::LANTERN`). The colour is the emissive
+round its sides (seen from above 0, from below 0.32 of its side's area), luminance × its side's area
+level, by the elevation's cosine and those shares by its sine (`Emission::Prism`, #372; a cone
+before it, whole to 30° above the horizon, its side's light straight down). The colour is the emissive
 map's mean over the piece, read at about a point a texel, as the lamp's tint. A lantern's inner
 shell faces in and is left out: Falcor's emitters shine from their front alone. Their rows take
 `RenderLayer::lamp`, so the probes' rays leave their glow out. 149,000 lm in all, made in 60 ms.

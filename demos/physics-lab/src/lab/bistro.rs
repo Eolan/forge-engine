@@ -774,7 +774,7 @@ pub(super) fn night_start(time_of_day: Option<f32>) -> bool {
 /// Under this luminance, cd/m², a glowing piece is too dim to light anything worth a lamp.
 const LEAST_GLOW: f32 = 1.0;
 /// A closed glowing piece seen from above under this share of its area seen from round the
-/// horizon, and from below under `LANTERN_DOWN`'s, is a lantern ([`Emission::LANTERN`]): the
+/// horizon, and from below under `LANTERN_DOWN`'s, is a lantern ([`Emission::Prism`]): the
 /// Bistro's street lanterns, 0 and 0.32; its bulbs and globes 0.84 to 1.1.
 const LANTERN_UP: f32 = 0.25;
 /// See [`LANTERN_UP`].
@@ -1116,12 +1116,13 @@ fn glow_lamp(g: &Glow) -> Option<Lamp> {
             Emission::flush(g.normal),
         )
     } else if up < LANTERN_UP && down < LANTERN_DOWN {
-        // A lantern: glass round its sides under a metal cap, no light straight up
-        // (`Emission::LANTERN`); lit every way, it lit what it hangs from (D-087).
+        // A lantern: glass round its sides under a metal cap, its light by its glass seen from
+        // the side, above and below (`Emission::Prism`, #372); lit every way, it lit what it
+        // hangs from (D-087); as a cone down, it sent its side's whole light straight down.
         (
             luminance * side,
             (g.area / (4.0 * pi)).sqrt(),
-            Emission::LANTERN,
+            Emission::Prism { up, down },
         )
     } else {
         (

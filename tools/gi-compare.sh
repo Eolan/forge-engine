@@ -145,18 +145,19 @@ VILLAGE="--village 600 --time-of-day 0.75 --no-fauna"
 describe() {
   clay="" sky="" falcor_ref="" falcor_scale=1
   case $1 in
-    # The night: NVIDIA's Night camera, the emissive surfaces alone (D-087).
-    bistro-night) demo=physics-lab flags="--lab bistro $NIGHT --time-of-day 1.5" ev=2.22 falcor_ref=night1600 falcor_scale=2871 ;;
+    # The night: NVIDIA's Night camera, the emissive surfaces alone (D-087). The nights run
+    # moonless, as Falcor's references are lit (#372; before 2026-10-31 the Moon's 0.17 lux too).
+    bistro-night) demo=physics-lab flags="--lab bistro $NIGHT --time-of-day 1.5 --moonless" ev=2.22 falcor_ref=night1600 falcor_scale=2871 ;;
     # The materials: the chart's spheres and tiles, the sun from the side at 30° (D-086), against
     # Falcor with Lambert's diffuse and 16 bounces.
     chart) demo=physics-lab flags="--lab chart --view=0,6,-4.5,180,-43 --fov 45" sky=sky-side-30.hdr ev=14 falcor_ref=lam16-side-30 falcor_scale=12800 ;;
     # Falcor's Cornell box (tools/cornell-box.py), lit by its ceiling's quad alone, at night.
-    cornell) demo=physics-lab flags="--lab cornell --view=0,2.8,12,0,0 --fov 37.8493 --time-of-day 1.5" ev=7 falcor_ref=cornell-lam16 falcor_scale=30 ;;
+    cornell) demo=physics-lab flags="--lab cornell --view=0,2.8,12,0,0 --fov 37.8493 --time-of-day 1.5 --moonless" ev=7 falcor_ref=cornell-lam16 falcor_scale=30 ;;
     # Bitterli's bedroom and kitchen (tools/pbrt-to-gltf.py), lit by their own lights, at night.
-    bedroom) demo=physics-lab flags="--lab bedroom $BEDROOM --time-of-day 1.5" ev=5 falcor_ref=bedroom-lam16 falcor_scale=30 ;;
-    bedroom-clay) demo=physics-lab flags="--lab bedroom $BEDROOM --time-of-day 1.5" clay=1 ev=5 falcor_ref=bedroom-clay-lam16 falcor_scale=30 ;;
-    kitchen) demo=physics-lab flags="--lab kitchen $KITCHEN --time-of-day 1.5" ev=8 falcor_ref=kitchen-lam16 falcor_scale=30 ;;
-    kitchen-clay) demo=physics-lab flags="--lab kitchen $KITCHEN --time-of-day 1.5" clay=1 ev=8 falcor_ref=kitchen-clay-lam16 falcor_scale=30 ;;
+    bedroom) demo=physics-lab flags="--lab bedroom $BEDROOM --time-of-day 1.5 --moonless" ev=5 falcor_ref=bedroom-lam16 falcor_scale=30 ;;
+    bedroom-clay) demo=physics-lab flags="--lab bedroom $BEDROOM --time-of-day 1.5 --moonless" clay=1 ev=5 falcor_ref=bedroom-clay-lam16 falcor_scale=30 ;;
+    kitchen) demo=physics-lab flags="--lab kitchen $KITCHEN --time-of-day 1.5 --moonless" ev=8 falcor_ref=kitchen-lam16 falcor_scale=30 ;;
+    kitchen-clay) demo=physics-lab flags="--lab kitchen $KITCHEN --time-of-day 1.5 --moonless" clay=1 ev=8 falcor_ref=kitchen-clay-lam16 falcor_scale=30 ;;
     bistro-e1-clay) demo=physics-lab flags="--lab bistro $E1" clay=1 ev=11.22 falcor_ref=clay-ext1-lam16 falcor_scale=2871 ;;
     bistro-e2-clay) demo=physics-lab flags="--lab bistro $E2" clay=1 ev=11.22 falcor_ref=clay-ext2-lam16 falcor_scale=2871 ;;
     bistro-e1) demo=physics-lab flags="--lab bistro $E1" ev=11.22 falcor_ref=ext1-lam16 falcor_scale=2871 ;;

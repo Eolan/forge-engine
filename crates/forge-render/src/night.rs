@@ -410,6 +410,11 @@ pub struct NightSettings {
     /// The Moon's light as a soft unshadowed fill in the sky's light (`--moon-fill`) instead
     /// of a key light with traced shadows.
     pub moon_fill: bool,
+    /// No light from the Moon (`--moonless`): neither its key light nor its scattering in the sky,
+    /// its disc nor its fill, the night's units kept (a new moon's would fall to the airglow's,
+    /// past what the half floats hold of a lamp's light, #368). For comparisons with references
+    /// lit by their own lights alone: Falcor's night, the glow alone (D-083, #372).
+    pub moonless: bool,
     /// The stars and the Milky Way brightened over their physical luminance: as an eye sees
     /// them rather than the night's capped exposure.
     pub star_gain: f32,
@@ -421,6 +426,7 @@ impl Default for NightSettings {
     fn default() -> Self {
         Self {
             moon_fill: false,
+            moonless: false,
             // As a dark-adapted eye sees them rather than a camera.
             star_gain: 16.0,
             milky_way: true,
@@ -580,7 +586,7 @@ impl NightSky {
         let phase = std::f32::consts::PI - sky.sun.dot(sky.moon).clamp(-1.0, 1.0).acos();
         let solid_angle = std::f32::consts::PI * MOON_ANGULAR_RADIUS * MOON_ANGULAR_RADIUS;
         let share = lommel_seeliger_mean(phase);
-        let moon_disc = if share > 1e-5 {
+        let moon_disc = if share > 1e-5 && !settings.moonless {
             sky.moon_illuminance / (solid_angle * share) / reference
                 * real.map_or(1.0, |r| r.albedo_gain)
         } else {
@@ -589,15 +595,23 @@ impl NightSky {
         // Stars and airglow only once the sun is down: by day they add nothing visible.
         let dark = sky.sun.y < 0.0;
         let stars = real.map_or(&self.procedural, |r| &r.stars);
+        // The Moon's weights, none without it.
+        let moon = |weight: f32, is_moon: bool| {
+            if settings.moonless && is_moon {
+                0.0
+            } else {
+                weight
+            }
+        };
         SkyNight {
-            key_weight: lights.key_weight,
+            key_weight: moon(lights.key_weight, !lights.key_is_sun),
             sun: sky.sun,
             sun_weight: lights.sun_weight,
             second: lights.second,
-            second_weight: lights.second_weight,
+            second_weight: moon(lights.second_weight, lights.key_is_sun),
             moon: sky.moon,
             moon_disc,
-            moon_fill: if settings.moon_fill && !lights.key_is_sun {
+            moon_fill: if settings.moon_fill && !settings.moonless && !lights.key_is_sun {
                 lights.moon_weight
             } else {
                 0.0

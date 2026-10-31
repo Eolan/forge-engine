@@ -699,6 +699,10 @@ pub struct Args {
     /// with traced shadows like the sun's (D-046's other answer, to compare).
     #[arg(long)]
     moon_fill: bool,
+    /// No light from the Moon, the night's units kept: for comparisons with references lit by
+    /// their own lights alone (Falcor's night, D-083, #372).
+    #[arg(long)]
+    moonless: bool,
     /// How much brighter than their physical luminance the night's stars and Milky Way are
     /// drawn (default 16: as a dark-adapted eye sees them rather than a camera).
     #[arg(long)]
@@ -1297,6 +1301,7 @@ impl Gallery {
         }
         let night_settings = forge_render::night::NightSettings {
             moon_fill: args.moon_fill,
+            moonless: args.moonless,
             star_gain: args
                 .star_gain
                 .unwrap_or(forge_render::night::NightSettings::default().star_gain),
@@ -2267,8 +2272,11 @@ impl Gallery {
         let lights = forge_render::night::NightLights::new(&sky, sun_illuminance);
         self.renderer.sun_dir = lights.key;
         self.renderer.sun_illuminance = lights.reference;
-        // `--moon-fill`: no direct moonlight (the fill is in the sky's light instead).
-        let direct = if self.night_settings.moon_fill && !lights.key_is_sun {
+        // `--moon-fill`: no direct moonlight (the fill is in the sky's light instead); `--moonless`,
+        // none at all.
+        let direct = if (self.night_settings.moon_fill || self.night_settings.moonless)
+            && !lights.key_is_sun
+        {
             0.0
         } else {
             lights.key_weight

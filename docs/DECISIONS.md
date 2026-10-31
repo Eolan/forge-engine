@@ -5580,6 +5580,23 @@ light (the low half of the lamp code) and the sample's for their highlight.
   scooter matte again, D-086); the sample's own highlight clamped (it sparkles under DLAA).
 - **Checks:** the sentinels at 0 px after the refactor; then step 2a's.
 
+**Step 3 built (2026-10-31): a lantern's light by its glass** (`Emission::Prism { up, down }`):
+at the elevation φ, over its side's intensity, cos φ for its upright panes and its glass's
+measured shares seen from above and below by the sine (the Bistro's lanterns 0 and 0.32), where
+the cone before it sent the side's whole intensity straight down. Every path reads it through
+`lamp_beam`. **The fault was smaller than #372 supposed:** Forge's path with every lamp over
+itself with the glow traced went 1.136 → 1.127 (the plain mean of the tiles' ratios; signed
+mean |log2| +0.173 → +0.161). The rest of the 13 %, brightest on the far left street's walls round
+its lanterns, is still to find: the fittings' frames and glass block the traced glow but not the
+lamps' rays, which end at their spheres; or a piece's intensity as its glass's area. The lab's
+other lamps are unchanged (`lab-lamps60`, `lab-smoke360`: 0 px on both paths).
+
+**`--moonless`** (2026-10-31, the owner asked whether the Moon lit the Bistro's night): the night
+without the Moon's light (its key light, its scattering, its disc, its fill), its units kept.
+In the Bistro's night view the Moon is 0.4 % of the light (the tiles' mean ratio 0.996, the
+median 0.999): not what darkened the far street. `tools/gi-compare.sh`'s nights run moonless from
+now, as Falcor's references are lit.
+
 ## D-066 — Pieces with sockets: one connector schema for generation, the anomaly check and player building ✅ (proposed 2026-10-16 on the owner's walk of #266; the owner's go the same evening)
 
 **The question:** the owner, walking the village: "would using some kind of snap system with the

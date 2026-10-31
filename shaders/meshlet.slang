@@ -648,7 +648,9 @@ bool lamp_flat(Lamp lamp)
 // all of it within the cosine `beam.w` of its axis, none beyond `beam_edge.x`, a smooth step
 // between; a street lamp's head is the cone down at 0.5 and 0.087, full cut-off (lit every way,
 // its bulb lit the facade over it round its housing's shadow, the owner, 2026-10-18). A flat
-// piece (`lamp_flat`): Lambert's cosine from its axis.
+// piece (`lamp_flat`): Lambert's cosine from its axis. A lantern (`lamp_prism`, #372): its upright
+// panes' cosine of the elevation, and its glass's shares seen from above and below
+// (`beam_edge.xy`) by the elevation's sine.
 float lamp_beam(Lamp lamp, float3 to_lamp)
 {
     if (all(lamp.beam.xyz == 0.0))
@@ -656,7 +658,15 @@ float lamp_beam(Lamp lamp, float3 to_lamp)
     float c = dot(-to_lamp, lamp.beam.xyz);
     if (lamp_flat(lamp))
         return saturate(c);
+    if (lamp_prism(lamp))
+        return sqrt(saturate(1.0 - c * c)) + lamp.beam_edge.x * max(c, 0.0) + lamp.beam_edge.y * max(-c, 0.0);
     return smoothstep(lamp.beam_edge.x, lamp.beam.w, c);
+}
+
+// Whether `lamp` is a lantern (`Emission::Prism`, #372): its axis up, `beam_edge.z` -1.
+bool lamp_prism(Lamp lamp)
+{
+    return lamp.beam_edge.z < 0.0;
 }
 
 // The least distance a probe ray's hit takes a lamp's light from, metres (#294). The surfaces inside
@@ -687,7 +697,8 @@ public struct Lamp
     public float4 beam;            // xyz: its cone's axis, the way its light goes (zero: every way); w:
                                    // the cosine within which its light is whole (`lamp_beam`, #288)
     public float4 beam_edge;       // x: the cosine beyond which a cone's light is none; yzw: a flat
-                                   // piece's turn and half sizes (`lamp_flat`), else 0
+                                   // piece's turn and half sizes (`lamp_flat`), else 0; a
+                                   // lantern's (`lamp_prism`): its shares up and down, -1, 0
 };
 
 // Whether `lamp` lights a surface in region `region` (or, across a doorway, `other`): a lamp
