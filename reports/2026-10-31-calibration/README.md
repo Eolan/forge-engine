@@ -220,3 +220,14 @@ and a still camera's shimmer (frames 280 and 290, pixels differing by more than 
     0.57, where Falcor has 0.77 and 0.36).
   - **Fix:** the mirror pass now gets the Fresnel colour. The balls read 0.76 and 0.35, and red
     0.93 of Falcor's (it was 0.85). This was D-086's open "smooth metals at 0.66–0.74".
+- **The neighbours seen in the smooth balls (your circles):** a mirror ray lit what it hit like
+  paint, so a metal ball seen in another came out as a flat disc of its colour.
+  - **Fix:** a metal hit now reflects. It shows the sky above its horizon, the probes' light
+    below it (the floor), and the sun's glint with its shadow. They now look like metal balls,
+    shaded down toward the floor, as in Falcor.
+  - **Still left out:** what the reflected ball's own reflection would show of the scene, and
+    the lamps' glints on it.
+- **The second review** (the SHaRC skip, gi-compare, the gold) found no correctness bug. Fixed:
+  - SHaRC was still made for a scene whose room store was reserved but empty.
+  - The doorway comment and the shader's numbers were wrong.
+  - gi-compare's reuse mode now drops captures made with DLAA.

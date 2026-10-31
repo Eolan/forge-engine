@@ -670,6 +670,11 @@ impl RegionStore {
         }
     }
 
+    /// How many volumes the live sets hold (what the frame's region count is).
+    pub(super) fn live_volumes(&self) -> u32 {
+        self.live_volumes
+    }
+
     /// Every live set's rooms with windows, for the far rooms' daylight (#356).
     pub(super) fn far_rooms(&self) -> impl Iterator<Item = &FarRoom> {
         self.sets.iter().flatten().flat_map(|set| set.far.iter())

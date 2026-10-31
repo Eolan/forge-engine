@@ -8576,7 +8576,17 @@ traced share reflected grey: gold's red at 0.85 of Falcor's, its blue at 1.35, g
 0.85 and blue over red 0.57 where Falcor's are 0.77 and 0.36. The request image now carries the
 colour in a lower half (`g_reflection_tint`, the Fresnel over its luminance), and the mirror pass
 and the resolve's sky under it take it: green over red 0.76, blue over red 0.35, red 0.93 of
-Falcor's (the two balls' lit pixels, without anti-aliasing). The Bistro's Exterior_1 against Falcor in Lambert: the sunlit street 1.01–1.06 (0.92–1.07
+Falcor's (the two balls' lit pixels, without anti-aliasing). **And a metal in a mirror (the owner,
+the same day: the neighbours in the smooth balls flat discs of their colour):** a mirror ray's hit
+was lit as paint, its base colour under the sun and the probes, so a metal ball seen in another
+read as a flat yellow or white disc. A metal hit now reflects (`hit_metal_light`): GGX's
+directional albedo of its base colour times what its mirror direction meets (above the horizon
+the sky's table dimmed as the probes see it dimmed, below it the probes' light along it: the
+floor; the map's lower half is dark), and the sun's glint, its shadow ray traced. The probes'
+lookup turns from the hit's normal to its mirror direction for a metal, one lookup either way
+(#348). What the metal's own reflection meets of the scene, and the lamps' glints on it, are
+left out. The smooth gold keeps 0.77 and 0.36; the chart's `shading/reflections` 0.048 →
+0.060 ms (one run each). The Bistro's Exterior_1 against Falcor in Lambert: the sunlit street 1.01–1.06 (0.92–1.07
 before D-086); a still camera 5,032 pixels (5,245 before D-086); the frame 4.61 ms, unchanged.
 
 **Step D, the lamps:** their highlights by GGX, each lobe widened by its lamp's sphere as seen from
@@ -9767,9 +9777,9 @@ frame's GPU ms, two runs each alternating: `off` 6.947, 6.842; `auto` 6.865, 6.8
 `gi/sharc update` (0.099 and 0.093 ms). A street of the village still pays its 0.16 ms: its
 houses' rooms are in the probes, and a hit through a door may be indoors.
 
-**The review's fixes (2026-10-31):** a doorway (a front door, a shopfront: the outside's volume on
-its `region` side, its room's on the `other`) answers by the side its point is on, by the probes'
-ramp across it, where its room side had taken the probes too (the village's room and street
+**The review's fixes (2026-10-31):** a doorway (a front door, a shopfront: a volume between the
+outside and a room) answers by the side its point is on, by the probes' ramp across it (0 at its
+stored `region`'s face, 1 at its `other`'s), where its room side had taken the probes too (the village's room and street
 under `auto`: 9 and 193 px of 1.44 M differ, their error to the path unchanged, 0.067 and 0.116);
 `--no-cfg` is a scripted run as `FORGE_CFG=none` is (the kitchen keeps the probes, 5.49 ms).
 

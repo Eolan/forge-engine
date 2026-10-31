@@ -934,11 +934,12 @@ impl Probes {
         Ok(())
     }
 
-    /// Whether the probes know the scene's rooms ([`Self::set_regions`] gave volumes, or
-    /// [`Self::reserve_regions`] made room for sets): the light lists and D-090's `auto` ask
-    /// them where a point is; without, everything is outside.
+    /// Whether the probes know any of the scene's rooms now ([`Self::set_regions`] gave volumes,
+    /// or sets [`Self::add_regions`] added are live): the light lists and D-090's `auto` ask them
+    /// where a point is; without, everything is outside. A store [`Self::reserve_regions`] made
+    /// and nothing added to yet, or whose sets were all removed, holds none.
     pub fn has_regions(&self) -> bool {
-        self.regions.is_some()
+        self.regions.as_ref().is_some_and(|r| r.live_volumes() > 0)
     }
 
     /// Shuts or opens doorway `volume` (its place in what [`Self::set_regions`] was given, #327):

@@ -3599,7 +3599,7 @@ static float4 g_reflection_request;
 // Its colour (`sky_reflection`): the Fresnel weight over its luminance, white but for a metal's
 // tint. The resolve stores it in the request image's lower half and `reflections_main` gives it to
 // the ray's light: with the luminance alone, the chart's smooth gold balls reflected grey, red
-// 0.74 of Falcor's and blue 1.24 (the owner, 2026-10-31).
+// 0.85 of Falcor's and blue 1.35 (the owner, 2026-10-31).
 static float3 g_reflection_tint = float3(1.0);
 
 // Set by `lamps_at` for the pixel being shaded (D-065): the lamps' light on it in the resolve's
@@ -6181,6 +6181,8 @@ struct RayHit
     float3 emissive;
     bool back;
     float shadow_start; // how far its shadow rays start off it, metres (`hit_shadow_start`)
+    float metal;        // its row's metalness (its map's not read): a mirror ray's metal reflects (`hit_metal_light`)
+    float roughness;    // its row's perceptual roughness
 };
 
 // Whether a ray along `direction` met the back of triangle `primitive` of instance `instance`
@@ -6318,6 +6320,8 @@ RayHit ray_hit_seen(Frame* f, uint instance, uint primitive, float2 b, float3 or
         else
             hit.albedo *= sample_image_level(mat.albedo_texture, SAMPLER_LINEAR_REPEAT, float2(0.5, 0.5), 16.0).rgb;
     }
+    hit.metal = mat.metallic;
+    hit.roughness = mat.roughness;
     hit.emissive = emission(f, mat);
     // What the hit emits as the frame shows it (#254): an emissive map's average (its last mip,
     // as the albedo), and a window's room its lamp's share over walls about half as bright as
@@ -6619,6 +6623,39 @@ float3 hit_radiance(Frame* f, float4* sky, ProbeField* probes, RayHit hit, float
     return hit_sunlight(f, hit) + hit.albedo * ambient;
 }
 
+// What a metal met by a mirror ray sends back along it (the owner, 2026-10-31: the chart's smooth
+// balls showed their neighbours as flat discs of their colour, lit as paint): no diffuse light;
+// the sky along its own mirror direction (the open sky's view table, going to the sky's light
+// along it as it roughens, as `sky_reflection` blends them) times GGX's directional albedo of its
+// base colour, and the sun's glint. What its own reflection meets is the probes' light along it
+// (`toward_r`, their irradiance facing `r`): below the horizon all of it (the floor; the sky's
+// table holds the map's dark lower half there), above it the open sky dimmed as they see it
+// dimmed (`sky_reflection`'s sky share). The lamps light no glint on it.
+float3 hit_metal_light(Frame* f, float4* sky, RayHit hit, float3 direction, float3 r, float3 toward_r)
+{
+    float3 view = -direction;
+    float nv = saturate(dot(hit.n, view));
+    float4 up_table = sky[SH_COEFFICIENTS];
+    float3 open_r = sh_irradiance(sky, r);
+    float3 open = sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, sky[SH_COEFFICIENTS + 1].xyz, r) * 3.14159265
+        * saturate(toward_r / max(open_r, 1e-4));
+    float3 sharp = lerp(toward_r, open, smoothstep(-0.05, 0.05, dot(r, up_table.xyz)));
+    float3 environment = lerp(sharp, toward_r, saturate(2.0 * hit.roughness * hit.roughness));
+    float3 light = normalize(f[0].sun_dir);
+    float3 glint = float3(0.0);
+    if (dot(hit.n, light) > 0.0 && sun_shadow(f, hit.position, hit.n, float2(0.0), hit.shadow_start) > 0.0)
+    {
+        // GGX's α² (perceptual roughness squared, squared) widened by the sun's disc, as
+        // `sun_light`'s.
+        float a = clamp(hit.roughness, 0.02, 1.0);
+        a *= a;
+        float disc = 0.5 * f[0].sun_angular_radius;
+        glint = ggx_light(hit.n, view, light, saturate(a * a + disc * disc), hit.albedo) * f[0].sun_color.rgb
+            * jelly_transmittance(f, sun_ray(f, hit.position, hit.n, float2(0.0), hit.shadow_start));
+    }
+    return environment_specular(hit.albedo, hit.roughness, nv, (f[0].flags & FLAG_SINGLE_SCATTER) == 0) * environment + glint;
+}
+
 // What the mirror ray from `origin` along `direction` meets (issue #50): the light leaving the
 // cut's triangle towards the ray, in the resolve's units, with w = 1; w = 0 on a miss. `distance`:
 // how far the ray went, metres (its TMax on a miss); `mover`: whether it met a mover (#79). The
@@ -6645,7 +6682,19 @@ float4 trace_reflection_seen(Frame* f, float4* sky, ProbeField* probes, float3 o
     if (!c.hit)
         return float4(0.0);
     RayHit hit = ray_hit_seen(f, c.instance, c.primitive, c.barycentrics, origin, direction, c.t, spread * (travelled + c.t) + lobe * c.t);
-    return float4(hit_radiance(f, sky, probes, hit, direction) + hit_lamps(f, hit, REGION_NONE, seed, false), 1.0);
+    // A metal has no diffuse light: it reflects (`hit_metal_light`), and the probes' light is
+    // looked up along its mirror direction instead of its normal (one lookup either way: every
+    // call site of it is a whole inlined copy for the driver, #348).
+    bool metal = hit.metal > 0.0 && sky != nullptr;
+    float3 r = reflect(direction, hit.n);
+    float3 facing = metal ? r : hit.n;
+    float3 ambient = sh_irradiance(sky, facing);
+    if (probes != nullptr)
+        ambient = probe_irradiance_hit(probes, hit.position, facing, -direction, ambient, false);
+    float3 light = metal
+        ? lerp(hit_sunlight(f, hit) + hit.albedo * ambient, hit_metal_light(f, sky, hit, direction, r, ambient) + hit.emissive, hit.metal)
+        : hit_sunlight(f, hit) + hit.albedo * ambient;
+    return float4(light + (1.0 - (metal ? hit.metal : 0.0)) * hit_lamps(f, hit, REGION_NONE, seed, false), 1.0);
 }
 
 // `trace_reflection_from` with REFLECTION_START: the water's and the glass's rays, which start on a
@@ -7568,8 +7617,9 @@ float3 seen_clouds(Frame* f, float4* sky, float3 direction, float2 size)
 // The mirror rays of the smooth rows (issue #52), in a pass of their own over the tiles the
 // standard pass listed, so the resolve does not carry the ray's code and registers. The
 // resolve shaded the pixel with the sky in the mirror direction and stored that direction and
-// the weight W of what a ray meets there instead. This pass traces the ray and, on a hit, adds
-// W × (hit − sky): the same sum as tracing inside the resolve.
+// the weight W of what a ray meets there instead, and W's colour T (a metal's tint) below them.
+// This pass traces the ray and, on a hit, adds W × T × (hit − sky): the same sum as tracing
+// inside the resolve.
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
@@ -7951,8 +8001,9 @@ bool sharc_here(Frame* f, ProbeField* probes, float3 position, float3 n, float3 
     if (probes == nullptr || probes[0].region_count == 0u)
         return false;
     RegionHit at = region_open(probes, position + n * 0.02, position + n * 0.15, position + toward * 0.3);
-    // A doorway (a front door, a shopfront) is the outside's on its `region` side and its room's
-    // on the `other`: the side the point is on, as the probes' ramp across it.
+    // A doorway (a front door, a shopfront) joins two regions, the outside and a room: its ramp
+    // runs from 0 at its stored `region`'s face to 1 at its `other`'s (`ordered` may have swapped
+    // them as it turned the corners), so the point is on the side the ramp says.
     uint region = at.kind == REGION_DOORWAY && at.ramp >= 0.5 ? at.other : at.region;
     return at.kind != REGION_SOLID && region != REGION_OUTSIDE && region != REGION_NONE;
 }
@@ -8481,8 +8532,8 @@ void lamp_filter_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
 // The rays a pass drawn after the resolve asks for (the sea's surface, issue #105): per pixel,
 // in two images that hold zero where it asks none. The depth it wrote places their start.
 // - A mirror ray: the pass shaded the pixel with the sky in the mirror direction and stored
-//   that direction and the weight W of what a ray meets there instead. As in
-//   `reflections_main`, a hit adds W × (hit − sky). With the reflection flags (F, Y).
+//   that direction and the weight W of what a ray meets there instead. A hit adds W × (hit −
+//   sky): `reflections_main`'s sum, its colour white. With the reflection flags (F, Y).
 // - A shadow ray: the pass stored the share of its colour the sun lights. A ray towards a
 //   point of the sun's disc that meets the scene takes that share away; the points turn with
 //   TAA's cycle (`sun_disc_point`), which averages them into a penumbra. With the shadows'

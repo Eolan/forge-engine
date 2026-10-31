@@ -133,6 +133,9 @@ measure() {
 }
 # fell_back LOG: true when the run's technique did not start and the probes stood in.
 fell_back() { [ -f "$1" ] && grep -qE "no SHaRC|no surface cache" "$1"; }
+# antialiased LOG: whether its run went through a temporal anti-aliasing (DLAA's or FSR's pass in
+# its timings), as the captures before 38d140fc did: FORGE_REUSE does not keep those (#374).
+antialiased() { [ -f "$1" ] && sed 's/\x1b\[[0-9;]*m//g' "$1" | grep -qE "temporal/(DLSS|FSR)"; }
 
 E1="--view=-23.700,6.855,-0.704,-93.13,-15.93 --fov 36.22"
 E2="--view=13.378,2.280,11.709,48.33,-0.50 --fov 38.90"
@@ -198,7 +201,7 @@ capture() {
   local view=$1 name=$2
   shift 2
   local base=$out/$view/$name
-  if [ "$reuse" = 1 ] && [ -f "$base.hdr" ] && ! fell_back "$base.log"; then
+  if [ "$reuse" = 1 ] && [ -f "$base.hdr" ] && ! fell_back "$base.log" && ! antialiased "$base.log"; then
     echo "   kept $view/$name"
     return
   fi
