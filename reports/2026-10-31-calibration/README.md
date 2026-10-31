@@ -271,3 +271,15 @@ and a still camera's shimmer (frames 280 and 290, pixels differing by more than 
 - **The Bistro's sun:** it now passes through Forge's atmosphere: 0.749 at 28.6°, 95,900 lux
   (was 128,000). The metered pictures are unchanged; gi-compare's Bistro views by day use EV 10.80
   and Falcor × 2,150.
+
+## Exterior_2 textured, narrowed (#375, 18:45)
+
+- **The split:** 0.108 in clay, 0.258 diffuse only with the real colours, 0.292 with the
+  dielectric layer, 0.399 with full materials.
+- **Where:** in diffuse only, the awnings' undersides and the upper facade are 0.57–0.9 of
+  Falcor's. In clay they read 1.0–1.09, so the textures cause it, yet the albedos the camera sees
+  match within ±1 %. So it is the light bounced onto them.
+- **Ruled out:** both renderers' noise, a hit's texture average, the path cut, back faces, and
+  colour mixing.
+- **Suspects left:** glass, which Forge's rays pass through into a dark café; and scene
+  differences (the hanging globes stand in other places; thin bright lines on the café front).
