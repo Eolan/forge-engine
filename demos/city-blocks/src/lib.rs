@@ -1423,9 +1423,13 @@ impl Gallery {
             (build_city(ctx, &args, cooked, &camera)?, Vec::new())
         };
         let mut flags = CullFlags(CullFlags::CONE | CullFlags::FRUSTUM);
-        // A scene authored as one room: SHaRC everywhere under `r.gi.cache auto` (D-090).
+        // A scene authored as one room: SHaRC everywhere under `r.gi.cache auto` (D-090), the
+        // default but in a scripted run.
         if look.indoors {
             flags.0 |= CullFlags::INDOORS;
+        }
+        if crate::vars::gi_cache_default() == forge_render::settings::GI_CACHE_AUTO {
+            flags.0 |= CullFlags::SHARC_AUTO;
         }
         // The city's views list 0.44–1.03 M clusters on their first frame, the island's 0.45 M:
         // reserved up front (16 MiB a frame slot, what growing reached anyway), no frame drops
@@ -2157,7 +2161,7 @@ impl Gallery {
             lamp_denoised: false,
             diffuse_was_on: false,
             surface_cache: None,
-            cache_mode: forge_render::settings::GI_CACHE_OFF,
+            cache_mode: crate::vars::gi_cache_default(),
             cache_tried: false,
             cache_was_on: false,
             sharc: None,

@@ -9706,3 +9706,10 @@ Indoors it is SHaRC's, outdoors the probes'; in the village's room the hits past
 windows take the probes. Outdoors it still costs 0.15–0.3 ms over the probes alone: SHaRC's
 other passes run though nothing reads them there (to skip). The default images: `ast240`,
 `city60`, `lab-lamps60`, `lab-materials60` 0 px.
+
+**The default since 2026-10-31** (the owner: "Follow recommendations"): `auto`, but in a scripted
+run (no settings file, `FORGE_CFG=none`, which every script sets: `vars::gi_cache_default`),
+which keeps the probes for images equal from run to run (`docs/PROCESS.md`). The captures
+unchanged (`ast240`, `city60`, `gallery60`, `lab-lamps60`, `lab-materials60`: 0 px); the kitchen
+run as the owner runs it takes SHaRC (`gi/sharc update` 0.10 ms, the frame 5.54 → 6.18 ms).
+NRC is still to measure on the same hook (its download asked for first).

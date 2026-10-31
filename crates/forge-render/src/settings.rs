@@ -384,7 +384,7 @@ pub fn gi_cache(default: usize) -> Spec<usize> {
          off (the probes), port (D-088's port of Solari's world cache), sharc (NVIDIA's SHaRC, \
          whose headers the shaders include from `sharc-sdk/`; without them, or on a GPU without \
          16-bit storage or 64-bit atomics, the probes) or auto (SHaRC indoors, in a house's rooms \
-         or a scene declared indoors, the probes elsewhere: D-090). Under `r.gi.trace` only.",
+         or a scene declared indoors, the probes elsewhere: D-090; the default, but in a scripted          run, FORGE_CFG=none, which keeps the probes for images equal from run to run). Under          `r.gi.trace` only.",
     )
 }
 

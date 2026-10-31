@@ -295,6 +295,12 @@ every image:
   full batch and accepts it without comparing.
 With changes in hand, re-baseline the base in a worktree, then verify the change.
 
+**The captures keep the probes under the bounce (D-090, 2026-10-31).** `r.gi.cache` is `auto` by
+default (SHaRC where the bounce's hit is indoors), but SHaRC's voxels follow its insertion order,
+so its images differ from run to run. A scripted run (no settings file: `FORGE_CFG=none`, which
+every script sets) keeps `off`, the probes, unless it sets `r.gi.cache` itself;
+`tools/gi-compare.sh` sets each technique and measures them by error.
+
 1. **Build the whole workspace first:** `cargo build --release`. Rebuilding only the demo you
    changed leaves the other demos stale. A stale binary writes an older frame block, and every
    capture then "differs" for the wrong reason.

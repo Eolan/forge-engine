@@ -219,7 +219,7 @@ impl Gallery {
             show_input: s.add(rs::show_input(0)),
             gi_reference: s.add(rs::gi_reference(0)),
             gi_trace: s.add(rs::gi_trace(true)),
-            gi_cache: s.add(rs::gi_cache(rs::GI_CACHE_OFF)),
+            gi_cache: s.add(rs::gi_cache(gi_cache_default())),
             gi_probe_ahead: s.add(rs::gi_probe_ahead(f64::from(crate::PROBE_AHEAD))),
             ao_ignore_nearer: s.add(rs::ao_ignore_nearer(0.0)),
             ao_contact: s.add(rs::ao_contact(f64::from(crate::AO_CONTACT))),
@@ -488,3 +488,15 @@ const DENOISERS: &[&str] = &["sigma", "ffx", "none"];
 const LIQUID_VIEWS: &[&str] = &["look", "speed", "landing"];
 
 use forge_render::{SwRaster, Tonemap};
+
+/// `r.gi.cache`'s default (D-090): SHaRC indoors (`auto`); in a scripted run (no settings file,
+/// `FORGE_CFG=none`) the probes, its images the same from run to run (SHaRC's voxels follow its
+/// insertion order), unless it sets `r.gi.cache` itself. The demo starts in it, as the variable
+/// is not reported changed from its default.
+pub(crate) fn gi_cache_default() -> usize {
+    if std::env::var_os("FORGE_CFG").is_some_and(|v| v.is_empty() || v == "none") {
+        rs::GI_CACHE_OFF
+    } else {
+        rs::GI_CACHE_AUTO
+    }
+}
