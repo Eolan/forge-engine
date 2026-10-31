@@ -3864,7 +3864,9 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
         float to_units = RESTIR_DENOISE_SCALE / max(f[0].sun_illuminance, 1e-9);
         g_lamp_diffuse += far.rgb * to_units;
         float luminance = dot(far.rgb, float3(0.2126, 0.7152, 0.0722));
-        float3 colour = luminance > 0.0 ? far.rgb / luminance : float3(1.0);
+        // White where the diffuse light is too dim for its colour (REBLUR's noise tinting a
+        // strong highlight).
+        float3 colour = luminance > 1e-4 ? far.rgb / luminance : float3(1.0);
         float3 albedo = restir_specular_albedo(f, f0, specular_power, shading_n, view);
         g_lamp_specular += colour * far.a * albedo * (highlight_share(specular_weight) * to_units);
     }
@@ -8209,7 +8211,7 @@ struct LampShadowPush
     uint share_image;    // storage (rgba16f): the filtered share (rgb), the resolve's `lamp_share`
     uint width;
     uint height;
-    uint skip_outside;   // 1: ReSTIR DI lights the street lamps (`lamp_outside`), so the rays leave them out
+    uint skip_outside;   // 1: ReSTIR DI runs, so the rays leave its lamps out (`lamp_by_restir`: the street lamps, or those past the nearest)
 };
 
 [[vk::push_constant]]

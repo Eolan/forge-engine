@@ -5649,6 +5649,11 @@ tiles' mean ratio to Forge's path with every lamp, the frame on the 5070 Ti:
   Its image is the lists' nearly (the far light's noise dim), but it costs more than the lists
   with every lamp: ReSTIR's pass is 4.7–5.5 ms with its visibility rays, beside the lists' rays,
   filter and resolve. The lab's lamp room and smoke yard, the materials and the city: 0 px.
+  Open (its review): a lamp crossing the N-th place is taken or dropped by the lists at once
+  while REBLUR's far light keeps or lacks it for its history, counted twice or missing for a
+  few frames as the camera moves; a band where both share it (as `faded` at the 64 nearest's
+  cut) would hand it over. Fixed: a lamp nearer last frame no longer counted as drawable by the
+  last frame's neighbours.
 - **For the owner (#372 reopened):** at the Bistro's 132 lamps the light lists with every lamp
   give the best image for its time (0.987 of the path, 6,884 px, 21.9 ms: +6.6 ms over the 64
   nearest); ReSTIR is 3 ms cheaper and shimmers 3.6 times as much; the split is for scenes of

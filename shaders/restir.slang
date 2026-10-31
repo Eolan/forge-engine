@@ -230,6 +230,8 @@ RAB_LightInfo RAB_EmptyLightInfo()
     l.colour_reach = float4(0.0);
     l.regions_a = uint4(REGION_NONE);
     l.regions_b = uint4(REGION_NONE);
+    l.beam = float4(0.0);
+    l.beam_edge = float4(0.0);
     return l;
 }
 
@@ -251,11 +253,15 @@ RAB_LightInfo RAB_LoadLightInfo(uint index, bool previous)
 {
     Frame* f = restir_push.frame;
     RestirFrame* r = restir_push.restir;
+    // A lamp the lists light (the nearer, #372) is none of ReSTIR's, this frame or the last: a
+    // reservoir of the frame before keeps one that came nearer, and a neighbour of the last frame
+    // could not have drawn one that was nearer then (counted as able, it took a lamp moving
+    // past the nearest down to a share of its light, #372's review).
+    if (previous && index < r->first_lamp)
+        return RAB_EmptyLightInfo();
     uint i = index;
     if (previous)
         i = index < MAX_RESTIR_LAMPS ? r->to_current[index] : 0xFFFFFFFFu;
-    // A lamp the lists light (the nearer, #372) is none of ReSTIR's: a reservoir of the frame
-    // before keeps one that came nearer.
     if (i >= f[0].lamp_count || i < r->first_lamp)
         return RAB_EmptyLightInfo();
     return f[0].lamps[i];
@@ -556,8 +562,8 @@ void lamp_restir_main(uint3 id : SV_DispatchThreadID)
     r->places[at] = region | (other << 16);
     // The pixel's material as the resolve lights it (#372; `pixel_shading`, `standard_inputs`, the
     // lamps' inputs in `shade_pixel`): the diffuse light by its mapped normal, the highlight by its
-    // lobe and reflectance, as the lists' lamps take them (D-086). Only where every lamp is
-    // ReSTIR's, whose light REBLUR denoises: the street lamps' (`outside_only`) is not.
+    // lobe and reflectance, as the lists' lamps take them (D-086). Only where ReSTIR's light is
+    // denoised (every lamp, or those past the nearest): the street lamps' (`outside_only`) is not.
     float3 shading_n = ps.n;
     float3 view = normalize(-ps.relative);
     float power = 1.0;

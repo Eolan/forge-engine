@@ -565,13 +565,16 @@ pub struct Args {
     /// lamps the frame lights with shadow rays, as before (the far lamps' A/B).
     #[arg(long)]
     pub no_far_lamps: bool,
-    /// Every lamp by ReSTIR DI, NVIDIA's RTXDI, in place of the light lists' filtered shadows
-    /// (D-065's comparison). Needs RTXDI's headers in `rtxdi-sdk/` and ray queries.
+    /// The lamps by ReSTIR DI, NVIDIA's RTXDI, its light denoised by REBLUR where NRD is, in place
+    /// of the light lists' filtered shadows: every lamp, or with `--lamp-restir-near` those past
+    /// the nearest (D-065, #372). Needs RTXDI's headers in `rtxdi-sdk/` and ray queries; with
+    /// `--all-lamps` it takes every lamp that is on, without it the 64 nearest.
     #[arg(long)]
     lamp_restir: bool,
     /// With `--lamp-restir`, the light lists light this many of the nearest lamps and ReSTIR DI
-    /// the rest, denoised (#372): the near light smooth, the far light's noise dim.
-    #[arg(long, requires = "lamp_restir")]
+    /// the rest, denoised (#372): the near light smooth, the far light's noise dim. With
+    /// `--all-lamps`, or ReSTIR has only the nearest 64 past them. At least 1.
+    #[arg(long, requires = "lamp_restir", value_parser = clap::value_parser!(u32).range(1..u32::MAX as i64))]
     lamp_restir_near: Option<u32>,
     /// The street lamps by ReSTIR DI, every one however far, beside the light lists' houses' lamps
     /// (D-065, the owner's option 2 of 2026-10-18). Not yet the default: without a denoiser its
@@ -3586,9 +3589,10 @@ impl Demo for Gallery {
             self.reflection_history.reset_history();
         }
         // The lamps' light before the resolve (D-065): ReSTIR DI's of the street lamps (or with
-        // `--lamp-restir` of every lamp), and for the rest their shadow rays and the share of
-        // their light that reaches each pixel, filtered over its neighbours; without
-        // (`--no-lamp-filter`), the resolve's own rays.
+        // `--lamp-restir` of every lamp, or of those past the nearest with `--lamp-restir-near`),
+        // and for the rest their shadow rays and the share of their light that reaches each
+        // pixel, filtered over its neighbours; without (`--no-lamp-filter`), the resolve's own
+        // rays.
         let restir_all = self.args.lamp_restir && self.args.lamp_restir_near.is_none();
         let split = self.args.lamp_restir && self.args.lamp_restir_near.is_some();
         if let Some(restir) = self.restir.as_mut() {

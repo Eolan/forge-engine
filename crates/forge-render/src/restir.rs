@@ -54,6 +54,8 @@ struct RestirPackPush {
     pad: [u32; 3],
 }
 
+const _: () = assert!(std::mem::size_of::<RestirPackPush>() == 32);
+
 /// RTXDI's reservoirs are laid out in square blocks of this many pixels a side
 /// (`RTXDI_RESERVOIR_BLOCK_SIZE`).
 const BLOCK: u32 = 16;
@@ -121,7 +123,7 @@ pub struct RestirParams {
     /// Nothing on screen matches the frame before (TAA's reset): no reuse.
     pub reset: bool,
     /// The street lamps alone ([`crate::lamps::Lamp::outside`]), the light lists the rest
-    /// ([`crate::LampShadows::restir`]); else every lamp.
+    /// ([`crate::LampShadows::restir`]); else every lamp from `first_lamp` on.
     pub outside_only: bool,
     /// The frame's lamps from this one on (they come nearest first), the light lists the nearer
     /// (#372, [`crate::MeshletRenderer::lamp_restir_from`]); 0: every lamp.

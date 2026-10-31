@@ -984,7 +984,8 @@ struct LampShadowPush {
     share_image: u32,
     width: u32,
     height: u32,
-    /// 1: ReSTIR DI lights the street lamps; the rays leave them out.
+    /// 1: ReSTIR DI runs; the rays leave its lamps out (the street lamps, or with the frame's
+    /// `lamp_restir_from` those past the nearest).
     skip_outside: u32,
 }
 
@@ -1078,7 +1079,9 @@ pub struct LampShadows {
     /// The lamps' light on each pixel by ReSTIR DI ([`crate::LampRestir`]): one sample's light in
     /// lux and the lamp it came from, whose highlight the resolve adds. Of the street lamps alone
     /// (the others the share's or their rays'), or with `restir_all` of every lamp (D-065's
-    /// comparison). With `restir_diffuse`, the highlight denoised in its place (#372).
+    /// comparison). With `restir_diffuse`, the highlight denoised in its place (#372); with
+    /// [`MeshletRenderer::lamp_restir_from`] past the nearest lamps, their light packed
+    /// ([`crate::LampRestir::pack`]) beside `share`.
     pub restir: Option<ImageHandle>,
     /// ReSTIR lights every lamp, not only the street lamps.
     pub restir_all: bool,
@@ -1101,7 +1104,8 @@ impl LampShadows {
     /// How the resolve's push names them (`lamps_at`): ReSTIR's sampled index in the high half
     /// (0xFFFF: none); in the low half the share's (0xFFFF: the lamps' own rays), or where ReSTIR
     /// lights every lamp (`restir_all`, the frame's `lamp_restir_from` 0) its denoised diffuse
-    /// light's (0xFFFF: the sample's own), the high half then its denoised highlight.
+    /// light's (0xFFFF: the sample's own), the high half then its denoised highlight; ReSTIR's past
+    /// the nearest lamps keeps the share in the low half, its packed light in the high.
     fn code(self, sampled: impl Fn(ImageHandle) -> u32) -> u32 {
         let index = |image| {
             let i = sampled(image);
@@ -6181,8 +6185,8 @@ impl MeshletRenderer {
     ///   neighbours on its surface, weighted by their unshadowed light.
     ///
     /// `probes`: the probes the resolve lights with (their regions are the lamps' places).
-    /// `street_restir`: ReSTIR DI lights the street lamps ([`LampShadows::restir`]), so neither
-    /// pass takes them. `None`, and nothing declared, when `scene` lights no lamp in this frame or
+    /// `street_restir`: ReSTIR DI runs ([`LampShadows::restir`]), so neither pass takes its lamps:
+    /// the street lamps, or with [`MeshletRenderer::lamp_restir_from`] those past the nearest. `None`, and nothing declared, when `scene` lights no lamp in this frame or
     /// the device has no ray queries: no other image changes.
     #[allow(clippy::too_many_arguments)]
     pub fn lamp_shadows<'f>(
