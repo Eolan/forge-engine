@@ -7,7 +7,8 @@
 #   blender -b --factory-startup --python tools/gi-measure.py -- blank OUT_PNG LIKE_PNG
 #
 # - tiles: each TEST's luminance in 16 x 9 tiles against REF's times SCALE (Falcor's units to
-#   Forge's cd/m²: the Bistro's 2,871, the chart's and the classroom's 12,800). One line each:
+#   Forge's cd/m²: the Bistro's 2,150 by day and 2,871 at night, the chart's and the classroom's
+#   12,800). One line each:
 #   `TIL NAME |log2| MEAN signed MEAN frame xRATIO tiles N`, the mean |log2| of the tiles'
 #   ratios, their signed mean and the whole frame's light over the reference's; the tiles the
 #   reference leaves under a thousandth of its mean are left out (N: how many count). A TEST

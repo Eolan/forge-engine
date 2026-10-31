@@ -4127,7 +4127,8 @@ pub struct MeshletRenderer {
     pub show_input: u32,
     /// D-088's references for the diffuse light round each pixel (`r.gi.reference`), 32 rays a
     /// pixel: 0 none (the probes), 1 the near field to 2 m over the probes, 2 one bounce traced
-    /// and the probes after, 3 two bounces, 4 a path without the probes.
+    /// and the probes after, 3 two bounces, 4 a path without the probes, 5 to 8 that path stopped
+    /// after 1 to 4 bounces with nothing after (Falcor's `BISTRO_BOUNCES`, #373).
     pub gi_reference: u32,
     /// D-088's diffuse bounce traced per pixel before the resolve (`r.gi.trace`,
     /// [`MeshletRenderer::trace_diffuse`]), in place of the probes' light and GTAO.

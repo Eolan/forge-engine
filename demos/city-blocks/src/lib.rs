@@ -1265,7 +1265,24 @@ impl Gallery {
                     Some(sun) => {
                         let illuminance = sun.illuminance().max(1e-9);
                         renderer.sun_dir = Vec3::from(sun.direction).normalize();
-                        renderer.sun_color = Vec3::from(sun.irradiance) / illuminance;
+                        // Through Forge's atmosphere at the sun's height, its luminance alone:
+                        // the photograph keeps its colour and its sky against its sun.
+                        let through = if e.through_atmosphere {
+                            let t = Vec3::from(atmosphere_params.transmittance(
+                                Vec3::new(0.0, atmosphere_params.bottom_radius + 0.05, 0.0),
+                                renderer.sun_dir,
+                                64,
+                            ));
+                            t.dot(Vec3::new(0.2126, 0.7152, 0.0722))
+                        } else {
+                            1.0
+                        };
+                        tracing::info!(
+                            through,
+                            lux = renderer.sun_illuminance * through,
+                            "the photograph's sun through the atmosphere"
+                        );
+                        renderer.sun_color = Vec3::from(sun.irradiance) / illuminance * through;
                         // As large as the photograph holds it, unless `--sun-size` or hard
                         // shadows say otherwise; through the scale, which `r.sun_disc` keeps.
                         if args.sun_size.is_none() {
@@ -1274,7 +1291,7 @@ impl Gallery {
                                 renderer.sun_angular_radius = sun.angular_radius;
                             }
                         }
-                        e.scale / illuminance
+                        e.scale / illuminance * through
                     }
                     None => e.scale,
                 };

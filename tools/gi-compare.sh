@@ -38,7 +38,8 @@
 #   first, a cache filling from empty, weigh less over more).
 # - FORGE_REUSE=1: keep the captures already in OUT_DIR (the path tracer takes minutes a view).
 # - FALCOR_OUT: Falcor's renders, NAME.AccumulatePass.output.0.exr (default ../falcor/out beside
-#   the checkout), times 2,871 for the Bistro, 12,800 for the classroom and the chart, 30 for
+#   the checkout), times 2,150 for the Bistro by day (its photograph's sun through Forge's
+#   atmosphere, 0.749 of 2,871) and 2,871 at night, 12,800 for the classroom and the chart, 30 for
 #   the rooms lit by their own lights at night (the Cornell box, the bedroom, the kitchen):
 #   - the Bistro's clay-ext1-lam16, clay-ext2-lam16, ext1-lam16 and ext2-lam16 (Lambert's
 #     diffuse, 16 bounces), and night1600 (the emissive surfaces alone);
@@ -163,10 +164,10 @@ describe() {
     bedroom-clay) demo=physics-lab flags="--lab bedroom $BEDROOM --time-of-day 1.5 --moonless" clay=1 ev=5 falcor_ref=bedroom-clay-lam16 falcor_scale=30 ;;
     kitchen) demo=physics-lab flags="--lab kitchen $KITCHEN --time-of-day 1.5 --moonless" ev=8 falcor_ref=kitchen-lam16 falcor_scale=30 ;;
     kitchen-clay) demo=physics-lab flags="--lab kitchen $KITCHEN --time-of-day 1.5 --moonless" clay=1 ev=8 falcor_ref=kitchen-clay-lam16 falcor_scale=30 ;;
-    bistro-e1-clay) demo=physics-lab flags="--lab bistro $E1" clay=1 ev=11.22 falcor_ref=clay-ext1-lam16 falcor_scale=2871 ;;
-    bistro-e2-clay) demo=physics-lab flags="--lab bistro $E2" clay=1 ev=11.22 falcor_ref=clay-ext2-lam16 falcor_scale=2871 ;;
-    bistro-e1) demo=physics-lab flags="--lab bistro $E1" ev=11.22 falcor_ref=ext1-lam16 falcor_scale=2871 ;;
-    bistro-e2) demo=physics-lab flags="--lab bistro $E2" ev=11.22 falcor_ref=ext2-lam16 falcor_scale=2871 ;;
+    bistro-e1-clay) demo=physics-lab flags="--lab bistro $E1" clay=1 ev=10.80 falcor_ref=clay-ext1-lam16 falcor_scale=2150 ;;
+    bistro-e2-clay) demo=physics-lab flags="--lab bistro $E2" clay=1 ev=10.80 falcor_ref=clay-ext2-lam16 falcor_scale=2150 ;;
+    bistro-e1) demo=physics-lab flags="--lab bistro $E1" ev=10.80 falcor_ref=ext1-lam16 falcor_scale=2150 ;;
+    bistro-e2) demo=physics-lab flags="--lab bistro $E2" ev=10.80 falcor_ref=ext2-lam16 falcor_scale=2150 ;;
     classroom-clay) demo=physics-lab flags="--lab classroom $CLASSROOM" clay=1 ev=9 falcor_ref=crl-clay falcor_scale=12800 ;;
     classroom) demo=physics-lab flags="--lab classroom $CLASSROOM" ev=9 falcor_ref=crl-tex falcor_scale=12800 ;;
     village-landing) demo=city-plan flags="$VILLAGE --view=75.2,5.2,-175.7,146.8,-25" ev=9 ;;

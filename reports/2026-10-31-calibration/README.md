@@ -253,3 +253,21 @@ and a still camera's shimmer (frames 280 and 290, pixels differing by more than 
 - **The Bistro's sun is the light above the atmosphere** (128,000 lux), about 1.5–1.8 times a
   clear day's at its 28.6°. Proposed next: scale it to what Forge's atmosphere lets through
   (D-084).
+
+## The review's fixes and the sun's level (17:30)
+
+- **The review of the metal and normal-map commits** found one serious bug. A mirror ray treated
+  almost every textured Bistro surface as metal: it read the metalness factor, which is 1 on any
+  textured surface, without the texture. A facade seen in a window would have reflected like
+  metal. Fixed, with smaller ones:
+  - weak normal maps no longer darken close up;
+  - the bumps darken the hit's ambient light and later bounces, as at pixels;
+  - a metal looks up the probes along its normal, which doesn't leak;
+  - the albedo view shows the albedo before the bumps.
+- **#373 now:** the clay Bistro against Falcor is 0.085 for Exterior_1 (×1.047, was 0.161) and
+  0.108 for Exterior_2 (×1.050, was 0.206). The probes are 0.081 and 0.223.
+- **The village:** its tiled roofs are a few levels darker along their rows from afar, at most
+  0.5 % of a view's pixels. The map check was accepted.
+- **The Bistro's sun:** it now passes through Forge's atmosphere: 0.749 at 28.6°, 95,900 lux
+  (was 128,000). The metered pictures are unchanged; gi-compare's Bistro views by day use EV 10.80
+  and Falcor × 2,150.

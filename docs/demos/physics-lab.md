@@ -2324,7 +2324,9 @@ it: the archive's HDR photograph, `san_giuseppe_bridge_4k.hdr` (4096 × 2048, HD
   where NVIDIA's is a crisp band; under the photograph's it is back.
 - **The rest is the sky:** the sky-view table and its irradiance are read from the map, so the
   probes and the ambient see it; compose draws it behind the scene, without haze.
-- **Its level:** the map scaled so that its sun has Forge's sun illuminance.
+- **Its level:** the map scaled so that its sun has Forge's sun illuminance as Forge's atmosphere
+  lets it through at its height (0.749 at 28.6°: 95,900 lux, a clear day's; D-084), its sky with
+  it.
 - **The hour:** `--day` and a daytime `--time-of-day` keep the photograph's sun. By night
   (`--time-of-day` from 1 to 2) the map is left out and the night stays Forge's.
 

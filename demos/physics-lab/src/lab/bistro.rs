@@ -32,8 +32,10 @@ use city_blocks::scenario::Environment;
 /// The luminance of an emissive map's full colour, cd/m² (a lit shop sign or lamp shade): the
 /// night is lit by these alone. As the authors' renders have it: their renderer takes the
 /// emissive maps at 1 and the sky's photograph at 10 (`BistroExterior.pyscene`), so a full
-/// emissive texel shines as a photograph texel of 0.1; Forge scales the photograph so that its
-/// sun (4.458 of its units) gives the sun's 128,000 lux (D-084): 0.1 × 128,000 / 4.458.
+/// emissive texel shines as a photograph texel of 0.1; Forge scaled the photograph so that its
+/// sun (4.458 of its units) gave the sun's 128,000 lux (D-084): 0.1 × 128,000 / 4.458. By day the
+/// photograph now takes the atmosphere's 0.749 (`Environment::through_atmosphere`); the glow
+/// keeps this, the night's calibration against Falcor.
 const EMISSIVE_LUMINANCE: f32 = 2870.0;
 /// The Bistro's metered exposure's compensation by day, stops (D-089). NVIDIA's two pictures fit
 /// EV 11.74 (Exterior_1, Falcor's default exposure) and 9.34 (Exterior_2, set 2.2 stops
@@ -402,6 +404,9 @@ pub(crate) fn environment(which: Authored) -> Option<Environment> {
     Some(Environment {
         path: Box::leak(path.to_string_lossy().into_owned().into_boxed_str()),
         scale: 1.0,
+        // The Bistro's photograph at a clear day's level (the owner, 2026-10-31); the chart and
+        // the rooms at Falcor's units, as they are compared.
+        through_atmosphere: which == Authored::Bistro,
     })
 }
 

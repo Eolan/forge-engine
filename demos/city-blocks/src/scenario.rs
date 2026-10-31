@@ -112,6 +112,11 @@ pub struct Environment {
     /// The sky's light against its sun's: 1 as photographed. Without a sun in the map, the
     /// luminance of a unit of it per unit of the scene's sun's illuminance.
     pub scale: f32,
+    /// Whether its sun (and the sky with it) is dimmed by Forge's atmosphere at the sun's height,
+    /// as Forge's own sky's sun is: a photograph's level is its camera's, and its sun given the
+    /// light above the atmosphere (128,000 lux) lit a street 1.4 to 1.8 times a clear day's. Off,
+    /// the sun is that light, for the scenes compared with Falcor at its units.
+    pub through_atmosphere: bool,
 }
 
 impl Default for Look {

@@ -8494,6 +8494,19 @@ use the bistro technology indeed").
   (`aces-narkowicz`, Narkowicz's fit after a 0.6 pre-exposure; a scene's look may now pick its
   tone curve, `Look::tonemap`; `--tonemap` and `r.tonemap` override it) and keeps the
   photograph's sun, to see how close Forge comes to the authors' renders.
+- **Its level through the atmosphere (2026-10-31, the owner: "is the sun intensity what we
+  actually receive on earth?"):** it was not. The photograph's sun was given the sun's light above
+  the atmosphere, 128,000 lux, and the sky with it: a street 1.4 to 1.8 times a clear day's. Now
+  the Bistro's (`Environment::through_atmosphere`) is dimmed as Forge's own sky dims its sun, by
+  its atmosphere's transmittance at the sun's height (its luminance: the photograph keeps its
+  colour and its sky against its sun): 0.749 at the photograph's 28.6°, 95,900 lux. The metered
+  pictures are as before; at a fixed exposure 0.42 stops darker (`tools/gi-compare.sh`'s Bistro
+  views by day at EV 10.80, Falcor's unit 2,150 cd/m² in place of 2,871; Exterior_1 against
+  Falcor as before, 0.109 in clay). The glow keeps its 2,870 cd/m² (the night's, calibrated
+  against Falcor's); the chart and the rooms stay at Falcor's units, as they are compared. Where
+  the photograph was taken (HDRI Haven's San Giuseppe bridge) and its hour are its own: the
+  street is modelled on Paris, where the noon sun stands at 28.6° about 20 February and 21
+  October.
 
 **Not yet:**
 - Sharp mirrors see the sky through the table (about a degree a texel).
@@ -8604,14 +8617,24 @@ it twice over:
   the lamps' share;
 - **at a pixel far off,** whose filtered normal was made unit and lost its bumps: the pixel's
   diffuse albedo now takes the filtered normal's length past the bytes' rounding (1 where the
-  texels show).
+  texels show), less as `normal_strength` flattens the bumps.
+
+The review the same day: the hit's share went into its albedo (the probes' light and the bounces
+after take it, as the pixel's do), its tilt only on rows read by UVs; a weak map (a strength
+under 1) had darkened even where the texels show; `r.show.input=1` shows the albedo before it.
+And the mirror rays' metals: a mapped row's metalness factor is 1, its map the rest, and the
+hits read the factor alone, so every mapped row of the textured Bistro reflected as a metal in
+its windows: the hit takes the map's mean now. A metal's probes are looked up along its normal
+(along its mirror direction the lookup leaned into the wall behind).
 
 Forge's maps took 3 % off the Bistro's light, 5.5 % now, Falcor's 8.1 %. Under the sun alone
 ×1.093 → ×1.052 after one bounce, ×1.111 → ×1.067 whole (both without maps: ×1.023, ×1.030).
-Without anti-aliasing, from Falcor (Forge's path, the probes): the clay Exterior_1 0.161 →
-0.109 (×1.097 → ×1.059), 0.158 → 0.105; Exterior_2 0.206 → 0.183 (×1.101 → ×1.072), 0.320 →
-0.298; textured Exterior_1 0.082 → 0.076 (×1.010), Exterior_2 0.378 → 0.388 (×0.958, its
-materials' gap); the chart as it was. The sentinels 0 px: none draws a UV-mapped normal map.
+Without anti-aliasing, from Falcor (Forge's path, the probes), with the review's fixes below
+(the hits' share in their albedo): the clay Exterior_1 0.161 → 0.085 (×1.097 → ×1.047), 0.158 →
+0.081; Exterior_2 0.206 → 0.108 (×1.101 → ×1.050), 0.320 → 0.223; textured Exterior_1 0.082 →
+0.079 (×1.011), Exterior_2 0.378 → 0.399 (×0.962, its materials' gap); the chart as it was. The sentinels 0 px (none draws a UV-mapped normal
+map); the village's map check: its tiled roofs a few levels darker along their rows from afar
+(at most 0.5 % of a view's pixels), accepted.
 Left: Falcor's rays leave each bump round its own normal and lose those under the surface,
 which Forge's flat bounces do not. `FORGE_BISTRO_NO_NORMALS=1` and the Falcor script's
 `BISTRO_NO_NORMALS` take the maps away, and `r.gi.reference` 5 to 8 stops Forge's path after 1
