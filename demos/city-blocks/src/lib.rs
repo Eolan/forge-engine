@@ -569,6 +569,10 @@ pub struct Args {
     /// (D-065's comparison). Needs RTXDI's headers in `rtxdi-sdk/` and ray queries.
     #[arg(long)]
     lamp_restir: bool,
+    /// With `--lamp-restir`, the light lists light this many of the nearest lamps and ReSTIR DI
+    /// the rest, denoised (#372): the near light smooth, the far light's noise dim.
+    #[arg(long, requires = "lamp_restir")]
+    lamp_restir_near: Option<u32>,
     /// The street lamps by ReSTIR DI, every one however far, beside the light lists' houses' lamps
     /// (D-065, the owner's option 2 of 2026-10-18). Not yet the default: without a denoiser its
     /// light sparkles (a still camera's frames 10 apart differ on 1 % of a lit street's pixels
@@ -2052,8 +2056,10 @@ impl Gallery {
             );
             None
         };
-        // The resolve leaves the light lists out where ReSTIR lights every lamp (#372).
-        renderer.lamp_restir_every = args.lamp_restir && restir.is_some();
+        // Where ReSTIR lights the lamps rather than the light lists (#372): every lamp, or past
+        // the nearest.
+        renderer.lamp_restir_from =
+            (args.lamp_restir && restir.is_some()).then(|| args.lamp_restir_near.unwrap_or(0));
         // #338's check of a cell's record: the house added as one before the first frame.
         if let Some(check) = cell_check.as_mut() {
             let record = forge_render::CellSystems {
@@ -3583,7 +3589,8 @@ impl Demo for Gallery {
         // `--lamp-restir` of every lamp), and for the rest their shadow rays and the share of
         // their light that reaches each pixel, filtered over its neighbours; without
         // (`--no-lamp-filter`), the resolve's own rays.
-        let restir_all = self.args.lamp_restir;
+        let restir_all = self.args.lamp_restir && self.args.lamp_restir_near.is_none();
+        let split = self.args.lamp_restir && self.args.lamp_restir_near.is_some();
         if let Some(restir) = self.restir.as_mut() {
             restir.prepare(
                 frame.slot,
@@ -3593,7 +3600,8 @@ impl Demo for Gallery {
                         * self.camera.view_rotation(),
                     previous_from_current: taa_frame.previous_from_current,
                     reset: taa_frame.reset,
-                    outside_only: !restir_all,
+                    outside_only: !self.args.lamp_restir,
+                    first_lamp: self.args.lamp_restir_near.unwrap_or(0),
                     extent,
                 },
             );
@@ -3614,7 +3622,7 @@ impl Demo for Gallery {
         // rays' view depth as the bounce's; its history starts over after a frame it did not
         // denoise.
         let denoised = match (restir, nrd_guides) {
-            (Some(restir), Some((rays, motion, camera, _))) if restir_all => {
+            (Some(restir), Some((rays, motion, camera, _))) if restir_all || split => {
                 if !self.lamp_denoiser_tried {
                     self.lamp_denoiser_tried = true;
                     match forge_render::LampDenoiser::reblur(&ctx.device, &nrd_dir(), extent) {
@@ -3646,10 +3654,24 @@ impl Demo for Gallery {
             _ => None,
         };
         self.lamp_denoised = denoised.is_some();
-        let restir_diffuse = denoised.map(|(diffuse, _)| diffuse);
-        let restir = denoised
-            .map(|(_, specular)| specular)
-            .or(restir.map(|r| r.light));
+        // Past the nearest lamps, their light packed beside the lists' share: denoised, or each
+        // pixel's sample without NRD.
+        let (restir_diffuse, restir) = match (self.restir.as_ref(), restir) {
+            (Some(pass), Some(light)) if split => {
+                let pass: &'f forge_render::LampRestir = pass;
+                let (diffuse, specular) = denoised.unwrap_or((light.diffuse, light.specular));
+                (
+                    None,
+                    Some(pass.pack(&mut frame.graph, diffuse, specular, extent)),
+                )
+            }
+            _ => (
+                denoised.map(|(diffuse, _)| diffuse),
+                denoised
+                    .map(|(_, specular)| specular)
+                    .or(restir.map(|r| r.light)),
+            ),
+        };
         let share = if (restir_all && restir.is_some()) || self.args.no_lamp_filter {
             None
         } else {

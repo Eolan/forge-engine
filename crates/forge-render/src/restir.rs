@@ -40,6 +40,19 @@ use crate::probes::ProbeLight;
 
 const SHADER: &str = "restir.slang";
 const ENTRY: &str = "lamp_restir_main";
+const PACK_ENTRY: &str = "lamp_restir_pack_main";
+
+/// Mirrors `RestirPackPush` in `restir.slang`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct RestirPackPush {
+    diffuse_image: u32,
+    specular_image: u32,
+    packed_image: u32,
+    width: u32,
+    height: u32,
+    pad: [u32; 3],
+}
 
 /// RTXDI's reservoirs are laid out in square blocks of this many pixels a side
 /// (`RTXDI_RESERVOIR_BLOCK_SIZE`).
@@ -110,6 +123,9 @@ pub struct RestirParams {
     /// The street lamps alone ([`crate::lamps::Lamp::outside`]), the light lists the rest
     /// ([`crate::LampShadows::restir`]); else every lamp.
     pub outside_only: bool,
+    /// The frame's lamps from this one on (they come nearest first), the light lists the nearer
+    /// (#372, [`crate::MeshletRenderer::lamp_restir_from`]); 0: every lamp.
+    pub first_lamp: u32,
     /// The frame's size.
     pub extent: vk::Extent2D,
 }
@@ -172,7 +188,8 @@ struct GpuRestirFrame {
     candidates: u32,
     history: u32,
     outside_only: u32,
-    pad: [u32; 2],
+    first_lamp: u32,
+    pad: u32,
 }
 
 const _: () = assert!(std::mem::size_of::<GpuRestirFrame>() == 288);
@@ -314,6 +331,7 @@ pub struct LampRestir {
     /// How the lamps are resampled.
     pub settings: RestirSettings,
     pipeline: Pipeline,
+    pack_pipeline: Pipeline,
     /// Two arrays of reservoirs in RTXDI's block layout: this frame's and the last.
     reservoirs: GraphBuffer,
     /// Per pixel of the two frames, the surface (16 bytes), then its place (4 bytes).
@@ -348,6 +366,16 @@ impl LampRestir {
             shader: (module, ENTRY),
             push_constant_bytes: std::mem::size_of::<RestirPush>() as u32,
             name: "lamp restir",
+        });
+        device.destroy_shader_module(module);
+        let module = device.create_shader_module(
+            &shaders.compile(SHADER, PACK_ENTRY, ShaderStage::Compute)?,
+            "lamp restir pack",
+        )?;
+        let pack_pipeline = device.create_compute_pipeline(&ComputePipelineDesc {
+            shader: (module, PACK_ENTRY),
+            push_constant_bytes: std::mem::size_of::<RestirPackPush>() as u32,
+            name: "lamp restir pack",
         });
         device.destroy_shader_module(module);
         let (_, array_pitch) = reservoir_pitches(size);
@@ -386,6 +414,7 @@ impl LampRestir {
         Ok(Self {
             settings: RestirSettings::default(),
             pipeline: pipeline?,
+            pack_pipeline: pack_pipeline?,
             reservoirs: GraphBuffer::new(reservoirs),
             surfaces: GraphBuffer::new(surfaces),
             offsets,
@@ -487,7 +516,8 @@ impl LampRestir {
             candidates: s.candidates.max(1),
             history: u32::from(history),
             outside_only: u32::from(params.outside_only),
-            pad: [0; 2],
+            first_lamp: params.first_lamp,
+            pad: 0,
         };
         buffer.write(0, &[gpu]);
         buffer.write(TO_PREVIOUS, &to_previous);
@@ -495,6 +525,53 @@ impl LampRestir {
         self.last_lamps = lamps;
         self.last_extent = extent;
         self.frame_index = self.frame_index.wrapping_add(1);
+    }
+
+    /// Declares "shadow/lamp restir pack" (#372): the lamps' `diffuse` light and `specular`
+    /// highlight (REBLUR's, or the pass's own without it) packed into one image for the resolve,
+    /// beside the light lists' share of the nearer lamps
+    /// ([`crate::MeshletRenderer::lamp_restir_from`]): the diffuse light (rgb) and the highlight's
+    /// luminance over the albedo (a), lux over [`DENOISE_SCALE`].
+    pub fn pack<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        diffuse: ImageHandle,
+        specular: ImageHandle,
+        extent: vk::Extent2D,
+    ) -> ImageHandle {
+        let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+        let packed = graph.transient(TransientDesc {
+            name: "lamp restir packed",
+            width: extent.width,
+            height: extent.height,
+            format: vk::Format::R16G16B16A16_SFLOAT,
+            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE,
+            aspect: vk::ImageAspectFlags::COLOR,
+            mip_levels: 1,
+        });
+        let pipeline = &self.pack_pipeline;
+        graph
+            .pass("shadow/lamp restir pack")
+            .image(diffuse, ImageAccess::Sampled(compute))
+            .image(specular, ImageAccess::Sampled(compute))
+            .image(packed, ImageAccess::StorageWrite(compute))
+            .run(move |resources, commands| {
+                commands.bind_pipeline(pipeline);
+                commands.push_constants(
+                    pipeline,
+                    &RestirPackPush {
+                        diffuse_image: resources.sampled(diffuse).0,
+                        specular_image: resources.sampled(specular).0,
+                        packed_image: resources.storage(packed, 0).0,
+                        width: extent.width,
+                        height: extent.height,
+                        pad: [0; 3],
+                    },
+                );
+                commands.dispatch(extent.width.div_ceil(8), extent.height.div_ceil(8), 1);
+                Ok(())
+            });
+        packed
     }
 
     /// Declares "shadow/lamp restir" for frame `slot` of `extent` (the resolve's), lighting the

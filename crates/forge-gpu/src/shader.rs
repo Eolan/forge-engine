@@ -165,6 +165,7 @@ const PRECISE_ENTRIES: &[(&str, &str)] = &[
     ("meshlet.slang", "lamp_rays_main"),
     ("meshlet.slang", "lamp_filter_main"),
     ("restir.slang", "lamp_restir_main"),
+    ("restir.slang", "lamp_restir_pack_main"),
     ("taa.slang", "motion_main"),
     // FSR 3.1 (D-070), whose history keeps a difference as TAA's did. Its `ffxLerp` is AMD's
     // `lerp`: an `FMix` the decoration does not reach.

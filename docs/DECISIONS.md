@@ -5633,10 +5633,29 @@ tiles' mean ratio to Forge's path with every lamp, the frame on the 5070 Ti:
   0.906 of the lists with every lamp (both with the lanterns' profile; the 9 % of step 2a was
   against a reference taken with the cone): about 1 % lost to the motion. The rooms lose 1 %
   (the Cornell box 0.990, the kitchen 0.925, the bedroom 0.924 of the lists).
-- **Still four times the lists' shimmer.** Next, in order: (1) the lists for the nearest lamps and
-  ReSTIR for the rest (the street lamps' split, `--street-restir`, generalised), the far light dim
-  enough that its noise hides; (2) the lamp model's 13 % over the traced glow (the lanterns'
-  profile took 1 % of it); (3) the rooms' 5 % between ReSTIR's estimate and the lists'.
+- **Still four times the lists' shimmer.** The highlight is about 10,000 of the 24,660 pixels,
+  the diffuse light the rest; REBLUR's fast history (6 → 16 frames) changed nothing (24,441).
+- **The split, built the same day** (`--lamp-restir --lamp-restir-near N --all-lamps`): the light
+  lists light the N nearest lamps with their filter, ReSTIR the rest (the frame's
+  `lamp_restir_from`; the lists skip ReSTIR's lamps through `lamp_by_restir`, ReSTIR's
+  candidates are drawn among the far ones), its two denoised lights packed into one image
+  (`LampRestir::pack`, "shadow/lamp restir pack" 0.02 ms) beside the lists' share:
+
+  | | shimmer | light | frame |
+  |---|---|---|---|
+  | the lists the 64 nearest, ReSTIR the rest | 7,788 px | 0.971 | 26.5 ms |
+  | the lists the 32 nearest, ReSTIR the rest | 9,519 px | 0.944 | 23.8 ms |
+
+  Its image is the lists' nearly (the far light's noise dim), but it costs more than the lists
+  with every lamp: ReSTIR's pass is 4.7–5.5 ms with its visibility rays, beside the lists' rays,
+  filter and resolve. The lab's lamp room and smoke yard, the materials and the city: 0 px.
+- **For the owner (#372 reopened):** at the Bistro's 132 lamps the light lists with every lamp
+  give the best image for its time (0.987 of the path, 6,884 px, 21.9 ms: +6.6 ms over the 64
+  nearest); ReSTIR is 3 ms cheaper and shimmers 3.6 times as much; the split is for scenes of
+  many more lamps, where the lists' cost grows with each. **Recommended now:** the lists with
+  every lamp the frame's lamps reach (the 64-lamp cap raised, clustered lists to bound a pixel's
+  lamps later), ReSTIR kept behind its switch while its shimmer is open. Then the lamp model's
+  13 % over the traced glow and the rooms' 5 %.
 
 **Step 3 built (2026-10-31): a lantern's light by its glass** (`Emission::Prism { up, down }`):
 at the elevation φ, over its side's intensity, cos φ for its upright panes and its glass's

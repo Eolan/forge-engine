@@ -51,7 +51,8 @@ struct RestirFrame
     uint candidates;                 // the initial candidates a pixel takes
     uint history;                    // 1: the last frame's arrays hold what it wrote (not the first frame, a cut or a new size)
     uint outside_only;               // 1: the street lamps alone (`lamp_outside`), the light lists the rest; 0: every lamp
-    uint pad[2];
+    uint first_lamp;                 // the frame's lamps from this one on, the lists the nearer (#372, `lamp_by_restir`); 0: every lamp
+    uint pad;
 };
 
 struct RestirPush
@@ -253,7 +254,9 @@ RAB_LightInfo RAB_LoadLightInfo(uint index, bool previous)
     uint i = index;
     if (previous)
         i = index < MAX_RESTIR_LAMPS ? r->to_current[index] : 0xFFFFFFFFu;
-    if (i >= f[0].lamp_count)
+    // A lamp the lists light (the nearer, #372) is none of ReSTIR's: a reservoir of the frame
+    // before keeps one that came nearer.
+    if (i >= f[0].lamp_count || i < r->first_lamp)
         return RAB_EmptyLightInfo();
     return f[0].lamps[i];
 }
@@ -445,6 +448,29 @@ RTXDI_DIReservoir restir_initial(Frame* f, RestirFrame* r, LampPlace place, RAB_
 {
     RTXDI_DIReservoir state = RTXDI_EmptyDIReservoir();
     chosen = RAB_EmptyLightSample();
+    // The lamps past the nearest (#372): picked uniformly among them, whatever the place (a lamp
+    // that does not light it gives none, `restir_lights`).
+    if (r->first_lamp > 0u)
+    {
+        uint first = r->first_lamp;
+        if (f[0].lamp_count <= first)
+            return state;
+        uint far = f[0].lamp_count - first;
+        for (uint c = 0u; c < r->candidates; c++)
+        {
+            uint i = first + min(uint(RTXDI_GetNextRandom(rng) * float(far)), far - 1u);
+            float2 uv = float2(RTXDI_GetNextRandom(rng), RTXDI_GetNextRandom(rng));
+            RAB_LightSample s = RAB_SamplePolymorphicLight(f[0].lamps[i], surface, uv);
+            float target = RAB_GetLightSampleTargetPdfForSurface(s, surface);
+            if (RTXDI_StreamSample(state, i, uv, RTXDI_GetNextRandom(rng), target, float(far)))
+                chosen = s;
+        }
+        RTXDI_FinalizeResampling(state, 1.0, float(r->candidates));
+        state.M = 1.0;
+        if (RTXDI_IsValidDIReservoir(state) && !RAB_GetConservativeVisibility(surface, chosen))
+            RTXDI_StoreVisibilityInDIReservoir(state, float3(0.0), true);
+        return state;
+    }
     uint total = 0u;
     for (uint k = 0u; k < 3u; k++)
         total += place.runs.run[k].y - place.runs.run[k].x;
@@ -653,4 +679,34 @@ float reblur_specular_hit_distance(float length, float view_z, float3 params, fl
 {
     float curve = (1.0 - exp2(-200.0 * roughness * roughness)) * sqrt(saturate(roughness));
     return saturate(length / ((params.x + abs(view_z) * params.y) * lerp(params.z, 1.0, curve)));
+}
+
+// The lamps past the nearest (#372, `--lamp-restir-near`): their diffuse light and highlight,
+// denoised (or not, without NRD), packed into one image the resolve reads beside the lists' share:
+// the diffuse light (rgb) and the highlight's luminance over the albedo (a), lux over
+// RESTIR_DENOISE_SCALE.
+struct RestirPackPush
+{
+    uint diffuse_image;  // sampled: the diffuse light in YCoCg (rgb)
+    uint specular_image; // sampled: the highlight over the albedo in YCoCg (rgb)
+    uint packed_image;   // storage (rgba16f)
+    uint width;
+    uint height;
+    uint pad[3];
+};
+
+[[vk::push_constant]]
+RestirPackPush restir_pack_push;
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void lamp_restir_pack_main(uint3 id : SV_DispatchThreadID)
+{
+    RestirPackPush p = restir_pack_push;
+    if (id.x >= p.width || id.y >= p.height)
+        return;
+    float3 diffuse = ycocg_to_linear(g_sampled_images[NonUniformResourceIndex(p.diffuse_image)].Load(int3(id.xy, 0)).xyz);
+    float3 specular = ycocg_to_linear(g_sampled_images[NonUniformResourceIndex(p.specular_image)].Load(int3(id.xy, 0)).xyz);
+    RWTexture2D<float4> packed = g_storage_images_rgba16f[NonUniformResourceIndex(p.packed_image)];
+    packed[id.xy] = float4(diffuse, dot(specular, float3(0.2126, 0.7152, 0.0722)));
 }

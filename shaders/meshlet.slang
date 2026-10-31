@@ -508,7 +508,7 @@ public struct Frame
     public float* far_shares;       // their shares of their light this frame, unshadowed
     public float* ladder;           // per instance on a ladder (D-075), this frame's crossing (`ladder_crossing`) with the fade after it packed in (`ladder_fade_share`, #363), written by the instance culls; null: no ladder
     public float far_shadows;       // metres from the camera from which the shadow rays meet RAY_SHADOW_FAR's world (D-075 step 3, `shadow_world`); 0: never
-    public uint lamp_restir_every;  // 1: ReSTIR DI lights every lamp (`lamps_at`, `LampShadows::code`)
+    public uint lamp_restir_from;   // the first of the frame's lamps ReSTIR DI lights where it runs (`lamp_by_restir`, #372): 0 every lamp, ~0 none (the street lamps under --street-restir)
     public GrassCell* grass;        // the grass map's cells (#300, D-075), rows of increasing z; null: no grass
     public float2 grass_origin;     // its corner (x, z), the scene frame
     public float grass_cell;        // a cell's side, metres
@@ -3679,6 +3679,17 @@ struct LampPicks
     float scale;
 };
 
+// Whether ReSTIR DI lights lamp `i` rather than the light lists, where ReSTIR runs (`restir`): from
+// the frame's `lamp_restir_from` on (#372: the lists the nearest, the frame's lamps coming nearest
+// first; 0: every lamp), or with it none the street lamps (`--street-restir`).
+bool lamp_by_restir(Frame* f, uint i, bool restir)
+{
+    if (!restir)
+        return false;
+    uint from = f[0].lamp_restir_from;
+    return from == 0xFFFFFFFFu ? lamp_outside(f[0].lamps[i]) : i >= from;
+}
+
 LampPicks lamp_picks(Frame* f, LampPlace place, float3 world, float3 n, uint2 pixel, bool skip_outside)
 {
     uint count = f[0].lamp_count;
@@ -3695,7 +3706,7 @@ LampPicks lamp_picks(Frame* f, LampPlace place, float3 world, float3 n, uint2 pi
         for (uint e = place.runs.run[r].x; e < place.runs.run[r].y; e++)
         {
             uint i = lamp_at(f, place.runs, e);
-            if (!lamp_counted(f, place.runs, r, i) || (skip_outside && lamp_outside(f[0].lamps[i])))
+            if (!lamp_counted(f, place.runs, r, i) || lamp_by_restir(f, i, skip_outside))
                 continue;
             float w = lamp_weight_in(f[0].lamps[i], world, n, place.region, place.other);
             if (w <= 0.0)
@@ -3730,7 +3741,7 @@ LampPicks lamp_picks(Frame* f, LampPlace place, float3 world, float3 n, uint2 pi
         for (uint e = place.runs.run[r].x; e < place.runs.run[r].y; e++)
         {
             uint i = lamp_at(f, place.runs, e);
-            if (i == picks.top[0] || i == picks.top[1] || i == picks.top[2] || !lamp_counted(f, place.runs, r, i) || (skip_outside && lamp_outside(f[0].lamps[i])))
+            if (i == picks.top[0] || i == picks.top[1] || i == picks.top[2] || !lamp_counted(f, place.runs, r, i) || lamp_by_restir(f, i, skip_outside))
                 continue;
             float w = lamp_weight_in(f[0].lamps[i], world, n, place.region, place.other);
             if (w <= 0.0)
@@ -3754,9 +3765,11 @@ LampPicks lamp_picks(Frame* f, LampPlace place, float3 world, float3 n, uint2 pi
 // - its high half, ReSTIR DI's light (restir.slang, 0xFFFF: none): one sample of one lamp, its
 //   shadow ray traced, in lux, its highlight towards the lamp's middle; of the street lamps,
 //   which the rest leaves out (`lamp_outside`), or of every lamp (the frame's
-//   `lamp_restir_every`, `--lamp-restir`), when the low half is its diffuse light denoised by
+//   `lamp_restir_from` 0, `--lamp-restir`), when the low half is its diffuse light denoised by
 //   REBLUR (#372; 0xFFFF: the sample's own), lux over RESTIR_DENOISE_SCALE in YCoCg, and the high
-//   half then its highlight denoised, over the surface's directional albedo, likewise;
+//   half then its highlight denoised, over the surface's directional albedo, likewise; or of the
+//   lamps past the nearest (`lamp_restir_from` over 0, `--lamp-restir-near`), the high half their
+//   light packed (`lamp_restir_pack_main`), the low half the lists' share for the nearest;
 // - else its low half, the penumbra filter's share (the sampled index of `lamp_filter_main`'s
 //   output): every lamp unshadowed, without a ray, times the share of their light that reaches
 //   the pixel, which the filter took from `lamp_rays_main`'s rays over its neighbours (Heitz et
@@ -3779,7 +3792,9 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
     }
     uint share = code & 0xFFFFu;
     uint restir = code >> 16;
-    bool every = restir != 0xFFFFu && f[0].lamp_restir_every != 0u;
+    uint from = f[0].lamp_restir_from;
+    bool every = restir != 0xFFFFu && from == 0u;
+    bool split = restir != 0xFFFFu && from != 0u && from != 0xFFFFFFFFu;
     // The rest's light first: the share scales it alone.
     if (!every)
     {
@@ -3792,7 +3807,7 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
                 for (uint e = place.runs.run[r].x; e < place.runs.run[r].y; e++)
                 {
                     uint i = lamp_at(f, place.runs, e);
-                    if (skip_outside && lamp_outside(f[0].lamps[i]))
+                    if (lamp_by_restir(f, i, skip_outside))
                         continue;
                     if (lamp_counted(f, place.runs, r, i) && lamp_weight_in(f[0].lamps[i], world, n, place.region, place.other) > 0.0)
                         lamp_add<0>(f, f[0].lamps[i], i, 1.0, world, n, shading_n, view, specular_power, specular_weight, f0, bias, float2(0.0));
@@ -3827,7 +3842,7 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
         }
         // The street lamps beyond the set, the rest of their light unshadowed (#284); ReSTIR's
         // street lamps are all in the set.
-        if (!skip_outside)
+        if (!skip_outside || split)
             far_lamps_at(f, place, world, n, shading_n, view, specular_power, specular_weight, f0);
     }
     // Every lamp's light denoised (#372): REBLUR's, over this pixel's neighbours and the frames
@@ -3839,6 +3854,19 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
         g_lamp_diffuse += ycocg_to_linear(g_sampled_images[NonUniformResourceIndex(share)].Load(int3(pixel, 0)).xyz) * to_units;
         float3 albedo = restir_specular_albedo(f, f0, specular_power, shading_n, view);
         g_lamp_specular += ycocg_to_linear(g_sampled_images[NonUniformResourceIndex(restir)].Load(int3(pixel, 0)).xyz) * albedo * (highlight_share(specular_weight) * to_units);
+    }
+    // The lamps past the nearest (#372, `--lamp-restir-near`): their light packed after REBLUR
+    // (`lamp_restir_pack_main`), the diffuse light (rgb) and the highlight's luminance over the
+    // albedo (a), its colour the diffuse light's.
+    else if (split)
+    {
+        float4 far = g_sampled_images[NonUniformResourceIndex(restir)].Load(int3(pixel, 0));
+        float to_units = RESTIR_DENOISE_SCALE / max(f[0].sun_illuminance, 1e-9);
+        g_lamp_diffuse += far.rgb * to_units;
+        float luminance = dot(far.rgb, float3(0.2126, 0.7152, 0.0722));
+        float3 colour = luminance > 0.0 ? far.rgb / luminance : float3(1.0);
+        float3 albedo = restir_specular_albedo(f, f0, specular_power, shading_n, view);
+        g_lamp_specular += colour * far.a * albedo * (highlight_share(specular_weight) * to_units);
     }
     else if (restir != 0xFFFFu)
     {
