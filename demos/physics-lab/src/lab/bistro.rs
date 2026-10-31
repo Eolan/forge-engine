@@ -115,9 +115,9 @@ fn open_edges(model: &Model) -> HashMap<String, f64> {
 }
 
 /// An authored scene of the lab (D-083): the Bistro's exterior, the material test chart
-/// (`tools/material-chart.py`): spheres and tiles of known materials under generated skies, or
-/// Bitterli's classroom (`tools/pbrt-to-gltf.py`), to compare with Falcor's render of the same
-/// file.
+/// (`tools/material-chart.py`): spheres and tiles of known materials under generated skies,
+/// Bitterli's classroom or the Cornell box (`tools/pbrt-to-gltf.py`), to compare with Falcor's
+/// render of the same file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Authored {
     /// The Amazon Lumberyard Bistro's exterior.
@@ -127,7 +127,14 @@ pub(crate) enum Authored {
     /// "Japanese Classroom" by NovaZeeke (CC BY 3.0), in Benedikt Bitterli's pbrt-v4 conversion,
     /// lit through its windows by a sky and the sun.
     Classroom,
+    /// The Cornell box as Falcor's test scene builds it (`tools/cornell-box.py`), ten times its
+    /// size: lit by the quad of light in its ceiling alone.
+    Cornell,
 }
+
+/// A unit of Falcor's light in cd/m² for the scenes compared at the chart's scale (the chart, the
+/// classroom, the Cornell box): their skies' sun of irradiance 10 is the sun's 128,000 lux.
+const FALCOR_UNIT: f32 = 12_800.0;
 
 impl Authored {
     /// The converted scene's folder, and the one its maps' paths are relative to.
@@ -141,6 +148,7 @@ impl Authored {
             ),
             Authored::Chart => (external.join("chart"), external.join("chart")),
             Authored::Classroom => (external.join("classroom"), external.join("classroom")),
+            Authored::Cornell => (external.join("cornell"), external.join("cornell")),
         }
     }
 
@@ -150,6 +158,16 @@ impl Authored {
             Authored::Bistro => "BistroExterior",
             Authored::Chart => "chart",
             Authored::Classroom => "classroom",
+            Authored::Cornell => "cornell",
+        }
+    }
+
+    /// A full emissive texel (or factor) in cd/m²: the Bistro's at its photograph's scale, the
+    /// others' at Falcor's unit.
+    fn glow_unit(self) -> f32 {
+        match self {
+            Authored::Bistro => EMISSIVE_LUMINANCE,
+            Authored::Chart | Authored::Classroom | Authored::Cornell => FALCOR_UNIT,
         }
     }
 }
@@ -199,17 +217,21 @@ pub(super) fn scene(which: Authored) -> Option<&'static Bistro> {
     static BISTRO: OnceLock<Option<Bistro>> = OnceLock::new();
     static CHART: OnceLock<Option<Bistro>> = OnceLock::new();
     static CLASSROOM: OnceLock<Option<Bistro>> = OnceLock::new();
+    static CORNELL: OnceLock<Option<Bistro>> = OnceLock::new();
     let cell = match which {
         Authored::Bistro => &BISTRO,
         Authored::Chart => &CHART,
         Authored::Classroom => &CLASSROOM,
+        Authored::Cornell => &CORNELL,
     };
     cell.get_or_init(|| match read(which) {
         Ok(b) => Some(b),
         Err(e) => {
             tracing::warn!(
                 "no {which:?}: {e:#} (the Bistro: fetch the archive into assets/external/bistro/ \
-                 and run tools/fbx-to-gltf.py; the chart: run tools/material-chart.py; the                  classroom: run tools/pbrt-to-gltf.py on its pbrt-v4 file; D-083)"
+                 and run tools/fbx-to-gltf.py; the chart: run tools/material-chart.py; the \
+                 classroom: run tools/pbrt-to-gltf.py on its pbrt-v4 file; the Cornell box: run \
+                 tools/cornell-box.py, then tools/pbrt-to-gltf.py on its file; D-083)"
             );
             None
         }
@@ -248,7 +270,7 @@ fn read(which: Authored) -> Result<Bistro> {
                 .context("BistroExterior.textures.json")?,
         )
         .context("BistroExterior.textures.json")?,
-        Authored::Chart | Authored::Classroom => HashMap::new(),
+        Authored::Chart | Authored::Classroom | Authored::Cornell => HashMap::new(),
     };
     let camera = std::fs::read(converted.join(format!("{stem}.camera.json")))
         .ok()
@@ -320,6 +342,8 @@ pub(crate) fn environment(which: Authored) -> Option<Environment> {
             std::env::var("FORGE_CHART_SKY").unwrap_or_else(|_| "sky-side-30.hdr".to_owned()),
         ),
         Authored::Classroom => archive.join("classroom.sky.hdr"),
+        // Black (no infinite light): it runs at night (`--time-of-day 1.5`), the map left out.
+        Authored::Cornell => archive.join("cornell.sky.hdr"),
     };
     if !path.exists() {
         tracing::warn!(path = %path.display(), "no sky photograph: lit by Forge's");
@@ -565,9 +589,17 @@ pub(super) fn rows(
                     layer.specular = 0.0;
                     layer.reflectance = 0.0;
                 }
+                // An emitter of factors alone outside the Bistro (whose glow is in its maps), the
+                // Cornell box's light: its factor times its strength in cd/m² at the scene's unit.
+                let factor_glow =
+                    which != Authored::Bistro && maps.emissive.is_none() && m.emissive != [0.0; 3];
+                if factor_glow {
+                    layer.emissive = m.emissive.map(|e| e * which.glow_unit());
+                    layer.emissive_absolute = true;
+                }
                 // D-087's prototype: a glowing piece lights as a lamp, and the probes' rays take
                 // none of its glow.
-                layer.lamp = maps.emissive.is_some() && lamps;
+                layer.lamp = (maps.emissive.is_some() || factor_glow) && lamps;
                 (m.name.clone(), layer)
             })
             .collect();
@@ -757,14 +789,20 @@ fn glows(which: Authored) -> Vec<(String, Glow)> {
             continue;
         }
         for (section, material) in m.materials.iter().enumerate() {
-            let Some(path) = b
-                .roles
-                .get(&material.name)
-                .and_then(|r| r.emissive.as_ref())
-            else {
-                continue;
+            // Its emissive map; outside the Bistro, an emitter of factors alone as a map of one
+            // texel, its factor times its strength (the Cornell box's light).
+            let map = b.roles.get(&material.name).and_then(|r| r.emissive.clone());
+            let key = match &map {
+                Some(path) => path.clone(),
+                None if which != Authored::Bistro && material.emissive != [0.0; 3] => {
+                    format!("factor {}", material.name)
+                }
+                None => continue,
             };
-            let plane = planes.entry(path.clone()).or_insert_with(|| {
+            let plane = planes.entry(key).or_insert_with(|| {
+                let Some(path) = &map else {
+                    return Some((1, 1, vec![Vec3::from(material.emissive)]));
+                };
                 let t = std::fs::read(archive.join(path))
                     .ok()
                     .and_then(|bytes| read_dds(path, &bytes, true).ok())?;
@@ -878,7 +916,7 @@ fn glows(which: Authored) -> Vec<(String, Glow)> {
                     material.name.clone(),
                     Glow {
                         middle: g.middle / g.area,
-                        luminance: g.luminance / g.area * EMISSIVE_LUMINANCE,
+                        luminance: g.luminance / g.area * which.glow_unit(),
                         ..g
                     },
                 ));
@@ -948,30 +986,36 @@ fn glow_lamp(g: &Glow) -> Option<Lamp> {
 }
 
 /// The scene's glowing pieces as lamps (D-087's prototype), made once; none without
-/// [`lamps_on`].
+/// [`lamps_on`]. The Bistro's and the Cornell box's: the chart and the classroom have no glow.
 pub(crate) fn lamps(which: Authored, on: bool) -> Vec<Lamp> {
     static BISTRO: OnceLock<Vec<Lamp>> = OnceLock::new();
-    if which != Authored::Bistro || !on {
+    static CORNELL: OnceLock<Vec<Lamp>> = OnceLock::new();
+    let cell = match which {
+        Authored::Bistro => &BISTRO,
+        Authored::Cornell => &CORNELL,
+        Authored::Chart | Authored::Classroom => return Vec::new(),
+    };
+    if !on {
         return Vec::new();
     }
-    BISTRO
-        .get_or_init(|| {
-            let started = std::time::Instant::now();
-            let glows = glows(which);
-            let lamps: Vec<Lamp> = glows.iter().filter_map(|(_, g)| glow_lamp(g)).collect();
-            tracing::info!(
-                pieces = glows.len(),
-                lamps = lamps.len(),
-                lumens = lamps
-                    .iter()
-                    .map(|l| l.lumens().dot(Vec3::new(0.2126, 0.7152, 0.0722)))
-                    .sum::<f32>() as u64,
-                ms = started.elapsed().as_millis() as u64,
-                "the Bistro's glowing pieces as lamps (D-087)"
-            );
-            lamps
-        })
-        .clone()
+    cell.get_or_init(|| {
+        let started = std::time::Instant::now();
+        let glows = glows(which);
+        let lamps: Vec<Lamp> = glows.iter().filter_map(|(_, g)| glow_lamp(g)).collect();
+        tracing::info!(
+            scene = ?which,
+            pieces = glows.len(),
+            lamps = lamps.len(),
+            lumens = lamps
+                .iter()
+                .map(|l| l.lumens().dot(Vec3::new(0.2126, 0.7152, 0.0722)))
+                .sum::<f32>() as u64,
+            ms = started.elapsed().as_millis() as u64,
+            "the scene's glowing pieces as lamps (D-087)"
+        );
+        lamps
+    })
+    .clone()
 }
 
 #[cfg(test)]

@@ -8096,6 +8096,41 @@ pbrt-v4, RTXGI, materiel test, etc.). Then update forge demos and test them."):
     authored scenes are now traced at full detail, as Falcor's; the general case is #367 (the
     bounce's rays now trace past their own cut's back, D-088).
   - Forge's clay drew cut-out cards whole, Falcor's keeps them: clay now keeps the cut-outs.
+- **The first baseline (2026-10-31, `tools/gi-compare.sh`, at 637abc2c):** the mean |log2| of 16
+  × 9 tiles against Forge's path (`r.gi.reference=4`) and against Falcor (Lambert, 16 bounces),
+  and the frame's GPU ms over 1,200 frames (three runs each). The probes are the default
+  (`r.gi.cache off`); the port is set aside for its patent (D-088), measured for reference.
+
+  | View | vs Forge's path: probes, port, SHaRC | vs Falcor: Forge's path, probes, port, SHaRC | ms: probes, port, SHaRC |
+  |---|---|---|---|
+  | Bistro Exterior_1, clay | 0.028, 0.046, 0.049 | 0.091, 0.099, 0.060, 0.057 | 6.72, 6.50, 7.68 |
+  | Bistro Exterior_2, clay | 0.136, 0.087, 0.101 | 0.099, 0.217, 0.105, 0.104 | 5.59, 5.46, 6.37 |
+  | Bistro Exterior_1 | 0.047, 0.059, 0.058 | 0.080, 0.089, 0.096, 0.096 | 6.89, 6.60, 7.87 |
+  | Bistro Exterior_2 | 0.085, 0.117, 0.121 | 0.387, 0.443, 0.480, 0.484 | 5.90, 5.71, 6.70 |
+  | Bistro at night | 0.508, 0.291, 0.353 | 0.983, 0.714, 0.784, 0.762 | 13.48, 13.08, 15.76 |
+  | Classroom, clay | 0.368, 0.110, 0.110 | 0.090, 0.353, 0.156, 0.156 | 3.84, 3.73, 4.10 |
+  | Classroom | 0.320, 0.096, 0.089 | 0.151, 0.405, 0.150, 0.149 | 4.08, 3.98, 4.34 |
+  | Material chart | 0.031, 0.027, 0.028 | 0.066, 0.088, 0.084, 0.085 | 3.14, 3.14, 3.15 |
+  | Cornell box (night) | 1.959, 1.871, 2.039 | 0.862, 1.100, 1.013, 1.178 | 2.96, 2.95, 3.00 |
+  | Village landing | 0.507, 0.230, 0.110 | | 6.55, 6.38, 6.49 |
+  | Village room | 0.147, 0.052, 0.052 | | 7.44, 7.38, 7.70 |
+  | Village street | 0.116, 0.115, 0.116 | | 6.64, 6.79, 6.91 |
+
+  - **Indoors** (the classroom, the landing, the room), SHaRC is three to five times nearer
+    Forge's path than the probes, and 0.15 from Falcor in the classroom, where Forge's own path is
+    0.09 to 0.15 from it.
+  - **Outdoors by day,** the probes are as near or nearer (the textured Bistro), and SHaRC costs
+    up to 1 ms more there.
+  - **The textured Exterior_2:** Forge's path itself is 0.39 from Falcor: the materials' gap
+    (D-086), not the diffuse light's.
+  - **The night and the Cornell box are not trustworthy yet.** Forge's path counts an emitter
+    twice where it is a lamp (D-087): the Cornell box's path without its lamp is 0.222 from
+    Falcor (×0.92), with it 0.862 (×1.39). The probes skip a lamp row's glow (D-065); the path,
+    the bounce and SHaRC's update do not. The techniques read 1 to 1.2 stops dark there, mostly
+    on what stands far from the lamp's axis (the walls, the ceiling): a flat glowing piece's
+    lamp falls off by a smoothstep (`Emission::flush`), which gives half a diffuser's cosine
+    near the horizon (0.10 against 0.20 at 78°). Both are proposed as the next fix (D-087, to
+    decide).
 
 ## D-084 — An environment map as the sky, its sun taken out of it ✅ (the owner's go, 2026-10-29)
 

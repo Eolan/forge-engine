@@ -141,6 +141,12 @@ chart and the village's landing, room and street.
   repository, `FALCOR_OUT`), by the mean |log2| of 16 × 9 tiles of light.
 - **The cost:** the GPU ms of alternating runs.
 - **The output,** in `captures/gi-compare/`: a sheet per view and `summary.md`.
+- **Falcor's references:** `tools/falcor-render.sh NAME VAR=VALUE...` renders one with
+  `tools/falcor-render.py` in Falcor's Mogwai (outside the repository), with Lambert's diffuse set
+  for the render and put back after it (D-086), under the GPU lock. Its header holds the Cornell
+  box's line. The Cornell box itself: `tools/cornell-box.py` writes it as a pbrt-v4 file from
+  Falcor's test scene's numbers, and `tools/pbrt-to-gltf.py` turns that into Forge's glTF and
+  Falcor's pyscene, so pbrt-v4, Falcor and Forge render the same box.
 - **When:** a change of technique, or of what the bounce's rays read, reruns it. The tables in
   D-088 were made by the session scripts it replaces. About an hour for every view; `FORGE_VIEWS` and `FORGE_REUSE=1` (keep the
   path tracer's captures) shorten it.

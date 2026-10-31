@@ -2596,6 +2596,37 @@ leak, which waits for the owner's choice (the cache at the hits, or finer probes
 seams in the ceiling seen directly; the textured materials (the coated whiteboard, the metal
 frames).
 
+## `cornell`: Falcor's Cornell box, lit by its ceiling's light alone (D-083)
+
+```
+python tools/cornell-box.py assets/external/cornell-src
+blender -b --factory-startup --python tools/pbrt-to-gltf.py -- assets/external/cornell-src/cornell.pbrt assets/external/cornell
+cargo run --release -p physics-lab -- --lab cornell --view=0,2.8,12,0,0 --fov 37.8493 --time-of-day 1.5 --capture-linear cornell.hdr
+```
+
+The Cornell box as Falcor's test scene builds it (`media/test_scenes/cornell_box.pyscene`): its
+sizes, colours and light written as a pbrt-v4 scene by `tools/cornell-box.py`, ten times its size
+(a room 5.5 m wide: Forge's probes and ray offsets are set for metres; the light's radiance stays,
+so the image is the same at every scale). Every surface Lambert's diffuse; the light a quad of
+1.3 m facing down, emitting Falcor's 5 × (17, 12, 4).
+- **Three renderers, one file:** pbrt-v4 renders the `.pbrt` itself; `tools/pbrt-to-gltf.py` turns
+  it into Forge's glTF and Falcor's pyscene (`tools/falcor-render.sh cornell-lam16 ...`, its line
+  in the script's header). Falcor's glTF import leaves the light's strength out
+  (`KHR_materials_emissive_strength`): set by hand. Falcor's black sky is turned off
+  (`BISTRO_LIGHTS=emissive`): sampling a black map is NaN in Falcor.
+- **In Forge:** at night (`--time-of-day 1.5`), its sky map left out. An emitter of factors alone
+  (no emissive map), outside the Bistro, glows in cd/m² at Falcor's unit, 12,800 (the chart's and
+  the classroom's), and lights at night as a lamp (D-087): the quad is one flat lamp of
+  4.24 M lumens. Compared with Falcor's render times 12,800; `tools/gi-compare.sh`'s `cornell`
+  view leaves out the black void's tiles (72 of 144).
+
+**First measures (2026-10-31):** Forge's path 0.862 from Falcor (×1.39), the probes 1.100
+(×0.78), the port 1.013, SHaRC 1.178. Without its lamp (`FORGE_BISTRO_LAMPS=0`), Forge's path is
+0.222 (×0.92): with it, the path counts the light twice (the lamp, and the glow its rays meet), as
+the probes do not (D-065). The techniques are dark on what stands far from the lamp's axis: the
+lamp of a flat piece falls off by a smoothstep (`Emission::flush`), half a diffuser's cosine near
+the horizon. Both are the next fix to decide (D-083's first baseline).
+
 ## `FORGE_DYNAMIC_SCENE`: the scene edited as it runs (issues #220, #338)
 
 The rain's scene built to take and free meshes and instances in place (`reserve_dynamic`), its

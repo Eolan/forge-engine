@@ -11,7 +11,9 @@
 # - **The error** of each technique (and of Forge's path against Falcor) against each reference
 #   the view has: Forge's path, and Falcor's render where FALCOR_OUT holds it, times its scale
 #   to Forge's units. Measured by tools/gi-measure.py: the mean |log2| of the luminance in
-#   16 x 9 tiles, its signed mean (negative: darker) and the frame's light over the reference's.
+#   16 x 9 tiles, its signed mean (negative: darker) and the frame's light over the reference's;
+#   the tiles the reference leaves under a thousandth of its mean are left out (a black void or
+#   a night without a sky, against Forge's faint night sky).
 # - **The cost:** each technique FORGE_RUNS times, alternating, so a warm or throttled GPU weighs
 #   on all alike. The frame's GPU ms; `gi/trace`; the probes' rays and blend; the port's
 #   three passes; SHaRC's update and resolve (the overlay's zones; the resolve's holds the wait
@@ -23,10 +25,11 @@
 # OUT_DIR (default captures/gi-compare) gets the captures and logs, sheets/, error.txt,
 # timings.txt and summary.md. Settings, as variables:
 # - FORGE_VIEWS: views to run, separated by spaces (default all): bistro-e1-clay bistro-e2-clay
-#   bistro-e1 bistro-e2 bistro-night classroom-clay classroom chart village-landing village-room
-#   village-street.
+#   bistro-e1 bistro-e2 bistro-night classroom-clay classroom chart cornell village-landing
+#   village-room village-street.
 # - FORGE_TECHNIQUES: `r.gi.cache` values (default "off port sharc").
-# - FORGE_RUNS: timing runs per technique (default 3; 0 skips the timing).
+# - FORGE_RUNS: timing runs per technique (default 3; 0 skips the timing and keeps the timings
+#   already in OUT_DIR: with FORGE_REUSE=1, the captures measured again).
 # - FORGE_TIME_FRAMES: frames per timing run (default 1200: the demos average every frame, and the
 #   first, a cache filling from empty, weigh less over more).
 # - FORGE_REUSE=1: keep the captures already in OUT_DIR (the path tracer takes minutes a view).
@@ -35,7 +38,9 @@
 #   - the Bistro's clay-ext1-lam16, clay-ext2-lam16, ext1-lam16 and ext2-lam16 (Lambert's
 #     diffuse, 16 bounces), and night1600 (the emissive surfaces alone);
 #   - the classroom's crl-clay and crl-tex;
-#   - the chart's lam16-side-30.
+#   - the chart's lam16-side-30;
+#   - the Cornell box's cornell-lam16 (the emitter's strength set by hand: Falcor's glTF import
+#     leaves KHR_materials_emissive_strength out; no environment light).
 # - BLENDER: Blender's executable (else found on the PATH or in its default Windows place).
 #
 # A technique that does not start (`sharc` without `sharc-sdk/` or 64-bit atomics, the port
@@ -43,9 +48,9 @@
 # rather than measuring the probes under its name. A failed run is left out of the means.
 #
 # Needs the release build (physics-lab, city-plan, contact-sheet) and the scenes' assets in
-# assets/external/ (the Bistro, the classroom and the chart, made by hand, D-083). Each demo run
-# holds the GPU lock (FORGE_GPU_LOCK, default %TEMP%/forge-gpu.lock) and frees it after, so
-# other sessions' runs fit between. The owner's settings file (forge.cfg, D-069) never changes a
+# assets/external/ (the Bistro, the classroom, the chart and the Cornell box, made by hand,
+# D-083). Each view's runs hold the GPU lock (FORGE_GPU_LOCK, default %TEMP%/forge-gpu.lock),
+# freed for 35 s between views so that other sessions' runs fit between. The owner's settings file (forge.cfg, D-069) never changes a
 # scripted run. About an hour and a half for all the views.
 export FORGE_CFG=none FORGE_SOUND=0
 export FORGE_MONITOR=${FORGE_MONITOR:-secondary}
@@ -53,7 +58,7 @@ set -uo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 out=${1:-$root/captures/gi-compare}
-views=${FORGE_VIEWS:-bistro-e1-clay bistro-e2-clay bistro-e1 bistro-e2 bistro-night classroom-clay classroom chart village-landing village-room village-street}
+views=${FORGE_VIEWS:-bistro-e1-clay bistro-e2-clay bistro-e1 bistro-e2 bistro-night classroom-clay classroom chart cornell village-landing village-room village-street}
 techniques=${FORGE_TECHNIQUES:-off port sharc}
 runs=${FORGE_RUNS:-3}
 time_frames=${FORGE_TIME_FRAMES:-1200}
@@ -139,6 +144,8 @@ describe() {
     # The materials: the chart's spheres and tiles, the sun from the side at 30° (D-086), against
     # Falcor with Lambert's diffuse and 16 bounces.
     chart) demo=physics-lab flags="--lab chart --view=0,6,-4.5,180,-43 --fov 45" sky=sky-side-30.hdr ev=14 falcor_ref=lam16-side-30 falcor_scale=12800 ;;
+    # Falcor's Cornell box (tools/cornell-box.py), lit by its ceiling's quad alone, at night.
+    cornell) demo=physics-lab flags="--lab cornell --view=0,2.8,12,0,0 --fov 37.8493 --time-of-day 1.5" ev=17 falcor_ref=cornell-lam16 falcor_scale=12800 ;;
     bistro-e1-clay) demo=physics-lab flags="--lab bistro $E1" clay=1 ev=11.22 falcor_ref=clay-ext1-lam16 falcor_scale=2871 ;;
     bistro-e2-clay) demo=physics-lab flags="--lab bistro $E2" clay=1 ev=11.22 falcor_ref=clay-ext2-lam16 falcor_scale=2871 ;;
     bistro-e1) demo=physics-lab flags="--lab bistro $E1" ev=11.22 falcor_ref=ext1-lam16 falcor_scale=2871 ;;
@@ -152,19 +159,24 @@ describe() {
   esac
 }
 for v in $views; do describe "$v"; done
-# run VIEW LOG FRAMES [FLAGS...]: the view's demo for FRAMES frames under the GPU lock, taken for
-# the run alone: other sessions' runs go between the tool's (no run shares the GPU).
+# run VIEW LOG FRAMES [FLAGS...]: the view's demo for FRAMES frames under the GPU lock (held
+# through the view's runs, let go between views).
 run() {
-  local view=$1 log=$2 frames=$3 code
+  local view=$1 log=$2 frames=$3
   shift 3
   describe "$view"
   lock_gpu
   # shellcheck disable=SC2086 # the flags are words
   env ${clay:+FORGE_BISTRO_CLAY=1} ${sky:+FORGE_CHART_SKY=$sky} timeout 1800 "$bin/$demo$exe" $flags --fixed-step --frames "$frames" \
     --ev100 "$ev" --fixed-exposure --set r.bloom=0 "$@" > "$log" 2>&1
-  code=$?
+}
+# let_others: frees the GPU lock between views for longer than the 30 s the other tools wait
+# between tries (verify.sh's, falcor-render.sh's), so a waiting session gets it: a lock let go
+# and taken again at once starved them.
+let_others() {
+  [ $locked = 1 ] || return 0
   unlock
-  return $code
+  sleep 35
 }
 # capture VIEW NAME FLAGS...: the linear capture at frame 280 of 300, unless kept. Fails when the
 # run fails, saves nothing or its technique fell back to the probes.
@@ -215,13 +227,17 @@ zones() {
 mkdir -p "$out/sheets"
 error=$out/error.txt timings=$out/timings.txt
 : > "$error"
-: > "$timings"
+[ "$runs" = 0 ] || : > "$timings"
 start=$SECONDS
 for view in $views; do
   describe "$view"
   mkdir -p "$out/$view"
   echo "== $view ($((SECONDS - start)) s)"
-  capture "$view" path --set r.gi.reference=4 || { echo "   no path capture: $view skipped"; continue; }
+  capture "$view" path --set r.gi.reference=4 || {
+    echo "   no path capture: $view skipped"
+    let_others
+    continue
+  }
   tests=()
   for t in $techniques; do
     capture "$view" "$t" --set r.gi.cache="$t" && tests+=("$t")
@@ -292,6 +308,7 @@ for view in $views; do
       fi
     done
   done
+  let_others
 done
 unlock
 
@@ -301,9 +318,9 @@ unlock
   echo
   echo "Mean |log2| of 16 x 9 tiles (signed mean; the frame's light over the reference's):"
   echo
-  echo "| View | reference | image | error | signed | frame |"
-  echo "|---|---|---|---|---|---|"
-  sed -E 's/^([^ ]+) vs ([^:]+): +([^ ]+)\.hdr +\|log2\| ([0-9.]+) +signed ([-+0-9.]+) +frame (x[0-9.]+)/| \1 | \2 | \3 | \4 | \5 | \6 |/' "$error"
+  echo "| View | reference | image | error | signed | frame | tiles |"
+  echo "|---|---|---|---|---|---|---|"
+  sed -E 's/^([^ ]+) vs ([^:]+): +([^ ]+)\.hdr +\|log2\| ([0-9.]+) +signed ([-+0-9.]+) +frame (x[0-9.]+) +tiles ([0-9]+)/| \1 | \2 | \3 | \4 | \5 | \6 | \7 |/' "$error"
   if [ -s "$timings" ]; then
     echo
     echo "GPU ms over $time_frames frames, the mean of the runs that succeeded (SHaRC's resolve zone"

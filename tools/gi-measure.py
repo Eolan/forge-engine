@@ -8,13 +8,15 @@
 #
 # - tiles: each TEST's luminance in 16 x 9 tiles against REF's times SCALE (Falcor's units to
 #   Forge's cd/m²: the Bistro's 2,871, the chart's and the classroom's 12,800). One line each:
-#   `TIL NAME |log2| MEAN signed MEAN frame xRATIO`, the mean |log2| of the tiles' ratios, their
-#   signed mean and the whole frame's light over the reference's. A TEST written A::B is A's
-#   tiles less B's (the sky alone as the whole less the sun alone; both renderers are linear in
-#   their light). The tiles average out a path tracer's grain.
-# - tonemap: images tone-mapped alike for a sheet. The first image's median luminance sets one
-#   exposure for all, putting it at KEY (0.18); then Narkowicz's ACES fit and the sRGB curve,
-#   written as OUT_DIR/NAME.png.
+#   `TIL NAME |log2| MEAN signed MEAN frame xRATIO tiles N`, the mean |log2| of the tiles'
+#   ratios, their signed mean and the whole frame's light over the reference's; the tiles the
+#   reference leaves under a thousandth of its mean are left out (N: how many count). A TEST
+#   written A::B is A's tiles less B's (the sky alone as the whole less the sun alone; both
+#   renderers are linear in their light). The tiles average out a path tracer's grain.
+# - tonemap: images tone-mapped alike for a sheet. The first image's median luminance over its
+#   lit pixels (over a thousandth of its mean: the Cornell box's black void is half its frame)
+#   sets one exposure for all, putting it at KEY (0.18); then Narkowicz's ACES fit and the sRGB
+#   curve, written as OUT_DIR/NAME.png.
 # - ratio: each image's luminance over REF's (times SCALE) in BLOCK x BLOCK blocks, as
 #   OUT_DIR/NAME.png: white equal, red brighter, blue darker, full colour at one stop. The image
 #   is scaled to REF's size first. Prints `RATIO NAME mean|log2| MEAN frame xRATIO`.
@@ -29,6 +31,9 @@ import bpy
 import numpy as np
 
 args = sys.argv[sys.argv.index("--") + 1:]
+
+# A reference's tiles under this share of its mean tile are left out of `tiles`' measure.
+DARK_TILE = 1e-3
 
 
 def split_scale(item):
@@ -87,12 +92,15 @@ def name_of(item):
 command = args[0]
 if command == "tiles":
     ref = tiles(args[1]) * float(args[2])
+    # The tiles the reference lights: a black one (Falcor's void round the Cornell box, its night
+    # without a sky) against Forge's faint night sky measured tens of stops of nothing.
+    lit = ref > DARK_TILE * ref.mean()
     for item in args[3:]:
         t = tiles(item)
-        r = np.log2(np.maximum(t, 1e-9) / np.maximum(ref, 1e-9))
+        r = np.log2(np.maximum(t, 1e-9) / np.maximum(ref, 1e-9))[lit]
         print(
-            "TIL %-34s |log2| %.3f  signed %+.3f  frame x%.3f"
-            % (name_of(item)[:34], np.mean(np.abs(r)), np.mean(r), t.mean() / ref.mean())
+            "TIL %-34s |log2| %.3f  signed %+.3f  frame x%.3f  tiles %d"
+            % (name_of(item)[:34], np.mean(np.abs(r)), np.mean(r), t.mean() / ref.mean(), lit.sum())
         )
 elif command == "tonemap":
     out, key = args[1], float(args[2])
@@ -102,7 +110,9 @@ elif command == "tonemap":
         path, scale = split_scale(rest)
         rgb = load(path)[0] * scale
         if exposure is None:
-            exposure = key / max(np.median(luminance(rgb)), 1e-12)
+            lum = luminance(rgb)
+            lit = lum[lum > DARK_TILE * lum.mean()]
+            exposure = key / max(np.median(lit) if lit.size else 0.0, 1e-12)
             print("EXPOSURE", exposure)
         x = rgb * exposure
         x = np.clip((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0)
