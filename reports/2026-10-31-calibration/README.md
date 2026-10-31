@@ -180,5 +180,26 @@ and a still camera's shimmer (frames 280 and 290, pixels differing by more than 
   - Each bounce's hit weighs every kept lamp twice (`hit_lamps`). That is measured at the
     Bistro's 132 lamps, not at 512.
   - The village's far-room lamp factor (14 × the unlit share) was set when the frame lit the
-    64 nearest. It wants a look at midnight.
+    64 nearest. It needs a new check. #363's view of one lit window at 20–90 m no longer frames
+    a house since the lots were re-laid out on 2026-10-30, so it needs a new window and a new
+    reference.
 
+
+## #374: the night's reference was dark, not the lamps bright (13:50)
+
+- **Cause:** the path tracer's captures went through DLAA. Its history clamps the rare bright
+  hits on the lanterns' glass, which is how the glow-traced night gets its light, so the
+  reference came out about 14 % dark.
+- **Measured against Falcor's night:** Forge's path read 0.822 of the light with DLAA, and 0.997
+  without anti-aliasing (`r.aa=off`, four frames, each 0.997).
+- **The lamp model against the glow, without DLAA:** 1.007 over the whole frame, 1.046 on the
+  tiles' mean and 1.029 on their median. With DLAA the tiles' mean was 1.127, the issue's 13 %.
+  What is left is local: the far left street's walls (1.5–1.7) and the ground at the bottom right
+  (0.75–0.8).
+- **#372's comparisons hold:** with the lamps on, DLAA leaves the surfaces alone (median 0.999).
+- **The tool now captures without anti-aliasing** (its timings keep DLAA). The night again:
+  - The default (the lists, every lamp) is 0.096 from Forge's path (×1.005) and 0.302 from
+    Falcor's (×1.002).
+  - With DLAA and the 64 nearest it was 0.317 (×0.967) and 0.544 (×0.795).
+- **Next session:** measure the other views again without DLAA (about 1.5 h). The baseline
+  tables in D-083 used it.

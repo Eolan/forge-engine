@@ -8814,6 +8814,19 @@ brackets. At the Night view, Forge's light over Falcor's:
     whose `Emission::LANTERN` sends their side's whole intensity straight down where their
     glass seen from below is 0.32 of it. The two half cancel in the default; the lanterns'
     profile waits for the count, a many-lights choice (D-065) for the owner.
+  - **The night's reference was dark, not the lamps bright (#374, 2026-10-31):** the captures
+    went through DLAA, whose history clamps a path's sparse bright hits, the glow's at night.
+    Against Falcor's night, Forge's path read 0.822 of its light with DLAA and 0.997 without
+    (`r.aa=off`, four frames 0.997 each). The lamp model (every lamp, Forge's path lit by them)
+    against the glow traced without DLAA: the frame 1.007, the tiles' mean ratio 1.046, median
+    1.029, where with DLAA it read 1.127 (#374's 13 %). What is left is local: the far left
+    street's walls 1.5 to 1.7, the ground at the bottom right 0.75 to 0.8. With the lamps on,
+    DLAA leaves the surfaces as they are (median 0.999) and dims the lanterns' glass seen
+    directly, so #372's comparisons (lamps-on path against the lists) hold. `tools/gi-compare.sh`
+    now captures without anti-aliasing (its timings keep DLAA); the night view again: the
+    default (the lists, every lamp) 0.096 from Forge's path (×1.005) and 0.302 from Falcor's
+    (×1.002), where with DLAA the 64 nearest read 0.317 (×0.967) and 0.544 (×0.795). The other
+    views' tables above were measured with DLAA and are to measure again.
 
 ## D-088 — The light in shade: a near field traced per pixel over the probes ✅ (proposed and decided 2026-10-30, the owner following the recommendations; after D-086; D-083)
 

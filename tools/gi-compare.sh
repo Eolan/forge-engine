@@ -7,9 +7,11 @@
 # For each view:
 # - **The captures:** Forge's path tracer (`r.gi.reference=4`) and each technique (`r.gi.cache`
 #   off, port, sharc), in linear light at frame 280 of 300, at the view's fixed exposure and
-#   without bloom (`--capture-linear`, cd/m²). The path's with the glowing pieces' lamps off
-#   (`FORGE_BISTRO_LAMPS=0`, D-087): its rays meet their glow itself, so the lamps' own faults
-#   (#369) stay out of the reference.
+#   without bloom (`--capture-linear`, cd/m²), the anti-aliasing off (`r.aa=off`, #374): DLAA's
+#   history clamps a path's sparse bright hits, and it read the Bistro's night 18 % dark against
+#   Falcor's (0.822 of its light, 0.997 without). The timings keep DLAA. The path's with the
+#   glowing pieces' lamps off (`FORGE_BISTRO_LAMPS=0`, D-087): its rays meet their glow itself,
+#   so the lamps' own faults (#369) stay out of the reference.
 # - **The error** of each technique (and of Forge's path against Falcor) against each reference
 #   the view has: Forge's path, and Falcor's render where FALCOR_OUT holds it, times its scale
 #   to Forge's units. Measured by tools/gi-measure.py: the mean |log2| of the luminance in
@@ -190,8 +192,8 @@ let_others() {
   unlock
   sleep 35
 }
-# capture VIEW NAME FLAGS...: the linear capture at frame 280 of 300, unless kept. Fails when the
-# run fails, saves nothing or its technique fell back to the probes.
+# capture VIEW NAME FLAGS...: the linear capture at frame 280 of 300, the anti-aliasing off, unless
+# kept. Fails when the run fails, saves nothing or its technique fell back to the probes.
 capture() {
   local view=$1 name=$2
   shift 2
@@ -202,7 +204,7 @@ capture() {
   fi
   rm -f "$base.hdr" "$base.png"
   run "$view" "$base.log" 300 --capture-frame 280 --capture "$(win "$base.png")" \
-    --capture-linear "$(win "$base.hdr")" "$@"
+    --capture-linear "$(win "$base.hdr")" --set r.aa=off "$@"
   local code=$?
   if fell_back "$base.log"; then
     echo "   $view/$name: the technique did not start (the probes stood in): left out"
