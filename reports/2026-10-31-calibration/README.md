@@ -308,8 +308,23 @@ and a still camera's shimmer (frames 280 and 290, pixels differing by more than 
   took the room's probes, because the reveal belongs to the room. Ruled out along the way: bloom,
   anti-aliasing, the lamp filter, the far-room term, the room grids, local exposure, glass, and
   the lamps at the bounce's hits.
-  - **Fix:** a hit in a reveal takes the region on the side its ray came from. The halo is gone.
+  - **Fix attempted:** a hit in a reveal takes the region on the side its ray came from.
+    **Measured later that evening, it changes nothing:** the wall ring reads 0.0474 before and
+    after, against 0.0289 with every hit taken as outside. On the village's 0.6 m stone walls the
+    rule never switches; the crop I first judged by misled me. #378 stays open.
 - **The night's exposure (D-080 step 1, your go):** a night with lamps now meters no lower than
   EV100 0 (it was −2.2, keyed on the moon). The window is two stops less over and the night
   darker. Nights without lamps keep the moon's key.
 - **The room lamps are realistic** (450–2,100 lm). The pane is 25 cd/m² at its brightest.
+
+## Corrections and a new finding (22:35)
+
+- **#378 is not fixed** (see above); the commit b72ed5c3 overclaimed. Its code is a harmless
+  no-op in the village. The next tries:
+  - rays that start in the window's opening (its own pixels, spread by REBLUR);
+  - hits taken as the room's own region (about half the halo).
+- **The garden wall in the vault view (your pointer):** thin bright outlines on the plaster at
+  night. They come from the lamps (gone with the lamps off, unchanged with the bounce off). A
+  street lamp grazes the wall, and the plaster's normal map has flat-topped blobs with steep
+  edges, so only the edges catch the light. It needs a softer relief (a rounder height profile,
+  or a lower normal strength on that plaster), to compare by day and by night.

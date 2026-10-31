@@ -5886,7 +5886,14 @@ spotlight, "a nuclear plant powered bulb"). Unchanged with the bloom, the anti-a
 filter, the far rooms' lamps, the room grids, local exposure or the bounce's rays stopped at glass;
 gone with the probes or the bounce off, and with every hit taken as outside. Now a hit in a reveal
 takes the region 30 cm back towards where its ray came from (one `region_at` in a rolled loop,
-#348): from outside the outside's, from its room the room's.
+#348): from outside the outside's, from its room the room's. **Not the fix (measured the same
+evening):** the wall round the window reads the same with it (0.0474 of white in a 12-pixel ring,
+anti-aliasing and bloom off), against 0.0289 with every hit taken as outside. On the village's
+stone walls (0.6 m, the air before the glass inside the house's body) a ray from the street meets
+the reveal deep enough that 30 cm back is still the body, and the rule never switches; treating
+that as outside made the ring brighter (0.0537): some of the light comes from rays that start in
+the opening itself, the window's own pixels, which REBLUR then spreads. Hits taken as room-kind
+(not a reveal) carry about half of it (0.0348 with those alone made outside). #378 stays open.
 
 **The question:** after the village's probes moved to 1 m (ef27049) and the lookup kept the
 probes in front of a surface (22beb20), light still leaks indoors in two ways: a soft tinted
@@ -8132,7 +8139,7 @@ right, and the moonlight may be a bit too bright. `r.exposure.night_floor` stays
 `--no-lamps`) floors its exposure at EV100 0 (`LIT_NIGHT_FLOOR`, `vars::register_vars`); a night
 without keeps the moonlit key. In the village's junction view at midnight the meter went from
 EV100 −2.17 to 0: the window's 25 cd/m² two stops less over, the moonlit facades darker, the lamp
-pools readable. The other half of that window's look was #378's halo (D-068's amendment). Steps 2
+pools readable. The other half of that window's look is #378's halo, still open (D-068's amendment). Steps 2
 (shades, shutters and curtains, fewer lamps on, lanterns) wait.
 
 *(research: home-lighting.md, night-sky.md, local-exposure.md; D-046, D-067)*
