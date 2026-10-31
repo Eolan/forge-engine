@@ -6,8 +6,8 @@
 //! ([`grown_shells`], D-075). [`grow_plant`] grows and meshes one.
 
 use forge_flora::Conditions;
-use forge_flora::graph::TreeGraph;
-use forge_flora::species::{Foliage, Habit, LeafSpray, Species};
+use forge_flora::graph::{NO_PARENT, TreeGraph};
+use forge_flora::species::{Foliage, Habit, LeafSpray, SHOOT_VARIANTS, Species};
 use glam::Vec3;
 
 use crate::procedural::TriMesh;
@@ -37,6 +37,22 @@ pub struct GrownPlant {
 /// individuals): its habit and foliage set the lumps' grid, its look the cards' spray, the
 /// conditions' pruning the lifted crown.
 pub fn grow_plant(s: &Species, conditions: &Conditions) -> GrownPlant {
+    grow_plant_with(s, conditions, Leaves::Lumps)
+}
+
+/// How a grown plant's leaves are drawn ([`grow_plant_with`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Leaves {
+    /// Leaf cards round its crown's lumps ([`grown_mesh`]).
+    #[default]
+    Lumps,
+    /// Shoots at its twig tips, hung from its twigs ([`shoot_mesh`]).
+    Shoots,
+}
+
+/// [`grow_plant`] with its leaves drawn as `leaves` asks; its proxies, shells and shadow proxy
+/// are its lumps' either way.
+pub fn grow_plant_with(s: &Species, conditions: &Conditions, leaves: Leaves) -> GrownPlant {
     let shrub = s.habit == Habit::Shrub;
     let broad = s.foliage == Foliage::Broad;
     let graph = forge_flora::grow(s, conditions);
@@ -45,7 +61,10 @@ pub fn grow_plant(s: &Species, conditions: &Conditions) -> GrownPlant {
     let lump =
         2.0 * CROWN_SHELL * lumps.iter().map(|l| l.1).sum::<f32>() / lumps.len().max(1) as f32;
     GrownPlant {
-        mesh: grown_mesh(&graph, shrub, broad, lift, s.look.spray),
+        mesh: match leaves {
+            Leaves::Lumps => grown_mesh(&graph, shrub, broad, lift, s.look.spray),
+            Leaves::Shoots => shoot_mesh(&graph, s),
+        },
         proxy: grown_proxy(&graph, shrub, broad, lift),
         shells: grown_shells(&graph, shrub, broad, lift),
         shadow: grown_shadow_proxy(&graph, shrub, broad, lift),
@@ -190,17 +209,57 @@ const LIMB_SIDES: u32 = 7;
 /// - A tip, or a bend too sharp to mitre, is closed by a short cone.
 /// - A branch starts on its parent's axis as wide as its parent there, buried in it.
 pub fn wood(mesh: &mut TriMesh, g: &TreeGraph, min_radius: f32) {
+    tubes(mesh, g, LIMB_SIDES, true, |i| wood_drawn(g, i, min_radius));
+}
+
+/// Whether [`wood`] of `min_radius` draws node `i`'s segment. The trunk (the main stem, order 0)
+/// goes down to [`TRUNK_RADIUS`]: a young tree's tapered under `min_radius` a little way up, and
+/// its crown, lifted over the passers-by, floated over a stump (the owner, 2026-10-24: "floating
+/// canopy, no trunk").
+fn wood_drawn(g: &TreeGraph, i: usize, min_radius: f32) -> bool {
+    let node = &g.nodes[i];
+    segment(g, i) && (node.radius >= min_radius || (node.order == 0 && node.radius >= TRUNK_RADIUS))
+}
+
+/// Whether node `i` ends a segment of some length (not the root).
+fn segment(g: &TreeGraph, i: usize) -> bool {
+    let node = &g.nodes[i];
+    node.parent != forge_flora::graph::NO_PARENT
+        && node.pos.distance(g.nodes[node.parent as usize].pos) > 1e-3
+}
+
+/// The sides of a twig's tube ([`twigs`]): a tree's are 2.4 to 4 cm across (its species'
+/// `tip_radius`, each graph tip standing for a bundle of shoots); at four they were square beams
+/// close up (a review).
+const TWIG_SIDES: u32 = 5;
+
+/// The thinnest of a tree's wood [`shoot_mesh`] draws round, as [`wood`], metres of radius: the
+/// thinner, its twigs, by [`twigs`].
+pub const SHOOT_WOOD: f32 = 0.02;
+
+/// The wood [`wood`] of `above` leaves out (all of it with `None`, a shrub's), down to `least`
+/// metres of radius, as closed tubes of [`TWIG_SIDES`] sides, section 0: the twigs the shoots
+/// hang from ([`shoot_mesh`]), each starting at its own radius off the wood. Closed, the cluster
+/// LOD thins them with distance.
+pub fn twigs(mesh: &mut TriMesh, g: &TreeGraph, above: Option<f32>, least: f32) {
+    tubes(mesh, g, TWIG_SIDES, false, |i| {
+        segment(g, i)
+            && g.nodes[i].radius >= least
+            && above.is_none_or(|min_radius| !wood_drawn(g, i, min_radius))
+    });
+}
+
+/// The segments `drawn` picks as tapered tubes of `sides` sides ([`wood`]); with `flare`, a tube
+/// whose parent is not drawn starts as wide as it, else at its own radius.
+fn tubes(
+    mesh: &mut TriMesh,
+    g: &TreeGraph,
+    sides: u32,
+    flare: bool,
+    drawn: impl Fn(usize) -> bool,
+) {
     let n = g.nodes.len();
     let parent = |i: usize| g.nodes[i].parent as usize;
-    // The trunk (the main stem, order 0) down to [`TRUNK_RADIUS`]: a young tree's tapered under
-    // `min_radius` a little way up, and its crown, lifted over the passers-by, floated over a
-    // stump (the owner, 2026-10-24: "floating canopy, no trunk").
-    let drawn = |i: usize| {
-        let node = &g.nodes[i];
-        node.parent != forge_flora::graph::NO_PARENT
-            && (node.radius >= min_radius || (node.order == 0 && node.radius >= TRUNK_RADIUS))
-            && node.pos.distance(g.nodes[node.parent as usize].pos) > 1e-3
-    };
     // Each drawn node's axis from its parent, and each node's way on: its drawn child that is
     // no branch (the thickest, should there be two).
     let mut axis = vec![Vec3::Y; n];
@@ -230,7 +289,7 @@ pub fn wood(mesh: &mut TriMesh, g: &TreeGraph, min_radius: f32) {
     }
     // A ring's corner `k` across axis `along`, counted from `u`: its unit direction from the axis.
     let corner = |u: Vec3, along: Vec3, k: u32| {
-        let t = k as f32 / LIMB_SIDES as f32 * std::f32::consts::TAU;
+        let t = k as f32 / sides as f32 * std::f32::consts::TAU;
         u * t.cos() + along.cross(u) * t.sin()
     };
     // Node `j`'s shared ring: each corner of its own tube's end moved along its axis onto the
@@ -240,7 +299,7 @@ pub fn wood(mesh: &mut TriMesh, g: &TreeGraph, min_radius: f32) {
         let half = (a + b).normalize();
         let turn = glam::Quat::from_rotation_arc(a, b);
         let r = g.nodes[j].radius;
-        (0..LIMB_SIDES)
+        (0..sides)
             .map(|k| {
                 let e = corner(across[j], a, k);
                 let s = -r * e.dot(half) / a.dot(half);
@@ -250,7 +309,7 @@ pub fn wood(mesh: &mut TriMesh, g: &TreeGraph, min_radius: f32) {
     };
     // A plain ring round `centre`, square to node `i`'s axis.
     let ring = |i: usize, centre: Vec3, r: f32| -> Vec<(Vec3, Vec3)> {
-        (0..LIMB_SIDES)
+        (0..sides)
             .map(|k| {
                 let e = corner(across[i], axis[i], k);
                 (centre + e * r, e)
@@ -261,17 +320,21 @@ pub fn wood(mesh: &mut TriMesh, g: &TreeGraph, min_radius: f32) {
         let p = parent(i);
         let start = if mitred(p) && next[p] == i {
             mitre(p)
-        } else {
+        } else if flare || drawn(p) {
             let r = g.nodes[p].radius.max(g.nodes[i].radius);
             ring(i, g.nodes[p].pos, r)
+        } else {
+            // A twig off wood another pass draws starts at its own radius, buried in its parent:
+            // from its parent's, a 1.5 cm twig left a 15 cm limb as a horn 8 cm across (a review).
+            ring(i, g.nodes[p].pos, g.nodes[i].radius)
         };
         let end = if mitred(i) {
             mitre(i)
         } else {
             ring(i, g.nodes[i].pos, g.nodes[i].radius)
         };
-        for k in 0..LIMB_SIDES as usize {
-            let l = (k + 1) % LIMB_SIDES as usize;
+        for k in 0..sides as usize {
+            let l = (k + 1) % sides as usize;
             let (p0, p1, q0, q1) = (start[k], start[l], end[k], end[l]);
             smooth_triangle(mesh, [p0.0, p1.0, q1.0], [p0.1, p1.1, q1.1], 0);
             smooth_triangle(mesh, [p0.0, q1.0, q0.0], [p0.1, q1.1, q0.1], 0);
@@ -279,8 +342,8 @@ pub fn wood(mesh: &mut TriMesh, g: &TreeGraph, min_radius: f32) {
         if !mitred(i) {
             // Closed by a cone half its radius long.
             let tip = g.nodes[i].pos + axis[i] * g.nodes[i].radius * 0.5;
-            for k in 0..LIMB_SIDES as usize {
-                let l = (k + 1) % LIMB_SIDES as usize;
+            for k in 0..sides as usize {
+                let l = (k + 1) % sides as usize;
                 let n0 = (end[k].1 + axis[i]).normalize();
                 let n1 = (end[l].1 + axis[i]).normalize();
                 smooth_triangle(mesh, [end[k].0, end[l].0, tip], [n0, n1, axis[i]], 0);
@@ -484,6 +547,210 @@ pub fn leaf_cards(
     }
 }
 
+/// The thinnest shrub's twig [`shoot_mesh`] draws, metres of radius: its finer twigs, under its
+/// leaves, would be sticks under a pixel by the thousand.
+pub const SHRUB_TWIG: f32 = 0.0025;
+
+/// How far each half of a shoot's card folds up from its stem towards its normal, radians, on
+/// average ([`shoots`]): no shoot is a flat sheet.
+const SHOOT_FOLD: f32 = 0.38;
+
+/// The most shoots one twig tip carries ([`shoots`]); more than that go back along its twig.
+const SHOOT_MOST: u32 = 10;
+
+/// The most shoots one twig carries, at its tip and back along it ([`shoots`]): a young tree's
+/// few tips each stand for a lot of leaves (capped at the tip alone, a young holm oak had 45 %
+/// of its leaf area).
+const SHOOT_ALL: u32 = 40;
+
+/// How much a shoot's card is larger or smaller than its leaves' length makes it, at most, a
+/// share ([`shoots`]): evenly spread, so its area is on average `1 + SHOOT_SPREAD² / 3` times.
+const SHOOT_SPREAD: f32 = 0.25;
+
+/// The leaf area one of `s`' shoots carries on average, m² ([`shoots`]): its variants' cards
+/// (`Look::leaf` over each one's share, [`LeafSpray::shoots`]), each its cover of leaves (and of
+/// its few stems), and the spread of their sizes.
+fn shoot_carries(s: &Species) -> f32 {
+    let mean = s
+        .look
+        .spray
+        .shoots()
+        .iter()
+        .map(|&(share, cover)| (s.look.leaf / share).powi(2) * cover)
+        .sum::<f32>()
+        / SHOOT_VARIANTS as f32;
+    mean * (1.0 + SHOOT_SPREAD * SHOOT_SPREAD / 3.0)
+}
+
+/// A grown plant's mesh with its leaves at its twigs' tips (#379, the owner, 2026-10-31: "a few
+/// leaves at the end of some twigs themselves attached to the trees are enough"): a tree's
+/// [`wood`] down to [`SHOOT_WOOD`] and every twig under it ([`twigs`]), a shrub's twigs of
+/// [`SHRUB_TWIG`] or more, and the [`shoots`] at the tips. No lumps and no cores: the crown is
+/// open where its branches are.
+pub fn shoot_mesh(g: &TreeGraph, s: &Species) -> TriMesh {
+    let mut mesh = TriMesh::default();
+    if s.habit == Habit::Shrub {
+        twigs(&mut mesh, g, None, SHRUB_TWIG);
+    } else {
+        wood(&mut mesh, g, SHOOT_WOOD);
+        twigs(&mut mesh, g, Some(SHOOT_WOOD), 0.0);
+    }
+    shoots(&mut mesh, g, s);
+    let missing = mesh.positions.len() - mesh.uvs.len();
+    mesh.uvs.extend(std::iter::repeat_n([0.0, 0.0], missing));
+    mesh
+}
+
+/// Shoots at a grown plant's twig tips, section 2, each a card cut from one of its spray's
+/// shoots in the shoots' atlas (`forge_render::textures::shoot_leaves`, [`SHOOT_VARIANTS`] of
+/// them, each card mirrored or not), sized so its leaves are about the species' own length
+/// (`Look::leaf` over its shoot's share, [`LeafSpray::shoots`]), its stem's foot on the tip,
+/// folded along its stem by about [`SHOOT_FOLD`]. As many as the species' leaf area asks
+/// (`Look::leaf_area` over the crown's footprint, over the leaf area a card carries on average,
+/// its shoots' cover), shared unevenly: each of the crown's branches off its limbs takes its own
+/// share, some leafy, some thin, as a crown's leaves clump; a tip takes [`SHOOT_MOST`] at most
+/// and the rest go back along its twig ([`SHOOT_ALL`] in all), some none. At a twig's end the
+/// first shoot carries on its way and the others fan out round it at about the species' branch
+/// angle, turned about its divergence; at a node a twig goes on from, all fan out. Each hangs a
+/// little and faces out of the crown and up, as a shoot turns its leaves to the light, rolled its
+/// own way about its stem. Their normals bend out from the crown's middle, so the crown is lit
+/// as one mass of leaves.
+pub fn shoots(mesh: &mut TriMesh, g: &TreeGraph, s: &Species) {
+    if g.leaves.is_empty() || s.look.leaf <= 0.0 || s.look.leaf_area <= 0.0 {
+        return;
+    }
+    let spray = s.look.spray;
+    let shots = spray.shoots();
+    let width = g.crown_width();
+    let footprint = std::f32::consts::FRAC_PI_4 * width * width;
+    let cards = s.look.leaf_area * footprint / shoot_carries(s);
+    let middle = g.leaves.iter().fold(Vec3::ZERO, |m, l| m + l.pos) / g.leaves.len() as f32;
+    let branch = (s.branch_angle as f32).to_radians();
+    let turn = (s.divergence as f32).to_radians();
+    // Each plant's own: keyed by its seed too, a tip's shoots were the same in every tree.
+    let seed = (g.seed ^ (g.seed >> 32)) as u32;
+    let hash = |a: u32, b: u32, salt: u32| {
+        let h = (a.wrapping_mul(0x9E37_79B9)
+            ^ b.wrapping_mul(0x85EB_CA6B)
+            ^ salt
+            ^ seed.wrapping_mul(0x27D4_EB2F))
+        .wrapping_mul(0xC2B2_AE35);
+        ((h ^ (h >> 15)) & 0xFFFF) as f32 / 65535.0
+    };
+    // The branch off a limb (or the limb, or the trunk) a node grows on: the first node of its
+    // highest ancestor of order 2 or less.
+    let clump = |mut i: usize| {
+        let floor = g.nodes[i].order.min(2);
+        while g.nodes[i].parent != NO_PARENT && g.nodes[g.nodes[i].parent as usize].order >= floor {
+            i = g.nodes[i].parent as usize;
+        }
+        i as u32
+    };
+    let vigour: Vec<f32> = g
+        .leaves
+        .iter()
+        .map(|l| 0.4 + 1.2 * hash(clump(l.node as usize), 0, 0x636c_756d))
+        .collect();
+    let total: f32 = vigour.iter().sum();
+    let mut goes_on = vec![false; g.nodes.len()];
+    for n in &g.nodes {
+        if n.parent != NO_PARENT {
+            goes_on[n.parent as usize] = true;
+        }
+    }
+    for (t, l) in g.leaves.iter().enumerate() {
+        let random = |k: u32, salt: u32| hash(t as u32, k, salt);
+        let per = cards * vigour[t] / total;
+        let count = (per.floor() as u32 + u32::from(random(0, 1) < per.fract())).min(SHOOT_ALL);
+        // The way back along its twig, for the shoots past the tip's own.
+        let node = &g.nodes[l.node as usize];
+        let back = if node.parent == NO_PARENT {
+            Vec3::ZERO
+        } else {
+            g.nodes[node.parent as usize].pos - node.pos
+        };
+        let twig = l.dir.normalize_or(Vec3::Y);
+        let out = ((l.pos - middle) * Vec3::new(1.0, 0.6, 1.0)).normalize_or(Vec3::Y);
+        let perp = twig.any_orthonormal_vector();
+        let spin = random(0, 2) * std::f32::consts::TAU;
+        let end = !goes_on.get(l.node as usize).copied().unwrap_or(false);
+        for j in 0..count {
+            let at = if j < SHOOT_MOST {
+                l.pos
+            } else {
+                l.pos + back * (0.15 + 0.75 * random(j, 11))
+            };
+            let tilt = if j == 0 && end {
+                (5.0 + 30.0 * random(j, 3)).to_radians()
+            } else {
+                branch * (0.6 + 0.7 * random(j, 3))
+            };
+            let around = spin + j as f32 * turn + 1.2 * (random(j, 4) - 0.5);
+            let side_way = glam::Quat::from_axis_angle(twig, around) * perp;
+            let bend = side_way.cross(twig).normalize_or(perp);
+            let axis = glam::Quat::from_axis_angle(bend, tilt) * twig;
+            // Hanging a little under its own weight.
+            let axis = (axis - Vec3::Y * 0.3 * random(j, 5)).normalize_or(twig);
+            let want = (out + Vec3::Y * 0.8).normalize();
+            let normal = (want - axis * want.dot(axis)).normalize_or(axis.any_orthonormal_vector());
+            // Rolled its own way about its stem: shoots facing the light all square to it read
+            // as one card repeated.
+            let normal = glam::Quat::from_axis_angle(axis, 1.6 * (random(j, 9) - 0.5)) * normal;
+            let across = axis.cross(normal);
+            let variant = ((random(j, 7) * SHOOT_VARIANTS as f32) as u32).min(SHOOT_VARIANTS - 1);
+            let size = 1.0 + SHOOT_SPREAD * (2.0 * random(j, 6) - 1.0);
+            let length = s.look.leaf / shots[variant as usize].0 * size;
+            let half = length * 0.5;
+            let fold = SHOOT_FOLD * (0.4 + 1.2 * random(j, 10));
+            let (fold_cos, fold_sin) = (fold.cos(), fold.sin());
+            let left = (-across * fold_cos + normal * fold_sin) * half;
+            let right = (across * fold_cos + normal * fold_sin) * half;
+            let foot = at - axis * 0.08 * length;
+            let up = axis * length;
+            let ([mut u0, v0], [mut u1, v1]) = spray.shoot_uv_box(variant);
+            if random(j, 8) < 0.5 {
+                std::mem::swap(&mut u0, &mut u1);
+            }
+            let um = (u0 + u1) * 0.5;
+            // The stem down the card's middle, its foot over the middle of the cell's `v1` edge.
+            let corners = [
+                (foot + left, [u0, v1]),
+                (foot, [um, v1]),
+                (foot + up, [um, v0]),
+                (foot + left + up, [u0, v0]),
+                (foot + right, [u1, v1]),
+                (foot + right + up, [u1, v0]),
+            ];
+            let missing = mesh.positions.len() - mesh.uvs.len();
+            mesh.uvs.extend(std::iter::repeat_n([0.0, 0.0], missing));
+            let base = mesh.positions.len() as u32;
+            for (p, uv) in corners {
+                let bent = ((p - middle).normalize_or(normal) * 2.0 + normal).normalize_or(normal);
+                mesh.positions.push(p.to_array());
+                mesh.normals.push(bent.to_array());
+                mesh.uvs.push(uv);
+            }
+            // Counter-clockwise seen from the normal's side, as [`leaf_cards`]' squares: the left
+            // half, then the right.
+            mesh.indices.extend([
+                base,
+                base + 1,
+                base + 2,
+                base,
+                base + 2,
+                base + 3,
+                base + 1,
+                base + 4,
+                base + 5,
+                base + 1,
+                base + 5,
+                base + 2,
+            ]);
+            mesh.sections.extend([2, 2, 2, 2]);
+        }
+    }
+}
+
 /// A triangle with a normal per corner, turned so it faces along their sum.
 fn smooth_triangle(mesh: &mut TriMesh, mut p: [Vec3; 3], mut n: [Vec3; 3], section: u8) {
     if (p[1] - p[0]).cross(p[2] - p[0]).dot(n[0] + n[1] + n[2]) < 0.0 {
@@ -618,6 +885,118 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A plant's shoot mesh (#379) is sound: finite places, unit normals, texture coordinates
+    /// inside the atlas, a section per triangle; its shoots carry the leaf area its species asks
+    /// over its crown's footprint (each card's area times its picture's cover, the picture read
+    /// from its texture coordinates), less what the twigs' cap leaves out; and it keeps to a
+    /// budget.
+    #[test]
+    fn the_shoot_meshes_are_sound_and_carry_their_leaf_area() {
+        let mut wrong = String::new();
+        for (sp, s) in forge_flora::species::mediterranean().iter().enumerate() {
+            let shrub = s.habit == Habit::Shrub;
+            for k in 0..forge_flora::grow::INDIVIDUALS {
+                let g = forge_flora::grow(s, &forge_flora::grow::individual(s, sp as u16, k));
+                let m = shoot_mesh(&g, s);
+                let what = format!("{} {k}", s.id);
+                assert_eq!(m.normals.len(), m.positions.len(), "{what}");
+                assert_eq!(m.uvs.len(), m.positions.len(), "{what}");
+                assert_eq!(m.sections.len() * 3, m.indices.len(), "{what}");
+                assert!(m.indices.iter().all(|&i| (i as usize) < m.positions.len()));
+                assert!(
+                    m.positions.iter().flatten().all(|c| c.is_finite()),
+                    "{what}"
+                );
+                assert!(
+                    m.normals
+                        .iter()
+                        .all(|&n| (Vec3::from(n).length() - 1.0).abs() < 1e-3),
+                    "{what}"
+                );
+                assert!(
+                    m.uvs.iter().flatten().all(|c| (0.0..=1.0).contains(c)),
+                    "{what}"
+                );
+                // Each card's four triangles in a row: its area, and its picture's column from
+                // the least `u` it reads (mirrored or not).
+                let cards: Vec<usize> = (0..m.sections.len())
+                    .filter(|&t| m.sections[t] == 2)
+                    .collect();
+                let mut area = 0.0;
+                for card in cards.as_chunks::<4>().0 {
+                    let (mut size, mut u) = (0.0, 1.0_f32);
+                    for &t in card {
+                        let v = [0, 1, 2].map(|c| m.indices[t * 3 + c] as usize);
+                        let p = v.map(|i| Vec3::from(m.positions[i]));
+                        size += 0.5 * (p[1] - p[0]).cross(p[2] - p[0]).length();
+                        u = v.iter().fold(u, |u, &i| u.min(m.uvs[i][0]));
+                    }
+                    let variant = ((u * SHOOT_VARIANTS as f32) as usize).min(3);
+                    area += size * s.look.spray.shoots()[variant].1;
+                }
+                let cards = cards.len() / 4;
+                let width = g.crown_width();
+                let share = area / (s.look.leaf_area * std::f32::consts::FRAC_PI_4 * width * width);
+                let triangles = m.triangle_count();
+                let line = format!(
+                    "{what}: {triangles} triangles, {cards} shoots, {share:.2} of the leaf area\n"
+                );
+                print!("{line}");
+                // The prototype's cost, about ten times the lumps' (a grown holm oak 232 000,
+                // its leaf cards three quarters): cutting it comes before it is the default (#379).
+                let budget = if shrub { 20_000 } else { 250_000 };
+                // Each card's picture and size drawn at random: a few dozen stray by a sixth.
+                let noise = 1.0 / (cards.max(1) as f32).sqrt();
+                if !(0.8 - noise..=1.05 + noise).contains(&share) || triangles > budget {
+                    wrong += &line;
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong}");
+    }
+
+    /// A twig off wood the shoot mesh's other pass draws starts at its own radius, inside the
+    /// wood: from its parent's, a 1 cm twig off a 15 cm limb stood out of it as a horn (a
+    /// review). Its wood's pass ([`wood`]) still flares a tube from its parent's width.
+    #[test]
+    fn a_twig_off_the_wood_starts_at_its_own_radius() {
+        let node = |pos: Vec3, parent: u32, radius: f32, order: u8| forge_flora::graph::Node {
+            pos,
+            parent,
+            radius,
+            order,
+            starts_branch: order > 0,
+        };
+        let g = TreeGraph {
+            species: "test".into(),
+            age: 1.0,
+            seed: 0,
+            nodes: vec![
+                node(Vec3::ZERO, NO_PARENT, 0.15, 0),
+                node(Vec3::Y, 0, 0.15, 0),
+                node(Vec3::new(0.3, 1.2, 0.0), 1, 0.01, 1),
+            ],
+            leaves: Vec::new(),
+        };
+        let mut mesh = TriMesh::default();
+        twigs(&mut mesh, &g, Some(SHOOT_WOOD), 0.0);
+        assert!(mesh.triangle_count() > 0);
+        // Its farthest from its axis: its radius, its closing cone's tip on the axis.
+        let (a, b) = (g.nodes[1].pos, g.nodes[2].pos);
+        let along = (b - a).normalize();
+        for &p in &mesh.positions {
+            let p = Vec3::from(p) - a;
+            let off = (p - along * p.dot(along)).length();
+            assert!(off <= 0.0101, "a twig's corner {off} m off its axis");
+        }
+        let mut flared = TriMesh::default();
+        wood(&mut flared, &g, 0.005);
+        assert!(flared.positions.iter().any(|&p| {
+            let p = Vec3::from(p) - a;
+            (p - along * p.dot(along)).length() > 0.1
+        }));
     }
 
     /// A tree cooked with its crown kept whole ([`CROWN_SECTIONS`]) holds every core and card

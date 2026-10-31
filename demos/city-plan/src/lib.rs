@@ -579,6 +579,9 @@ pub struct PlanScenario {
     fade_furniture: Option<f32>,
     /// The furniture met by the probes' rays (`--furniture-in-probes`, as before #363).
     furniture_in_probes: bool,
+    /// How the plants' leaves are drawn: cards round their crowns' lumps, or shoots at their twig
+    /// tips (`--twig-leaves`).
+    leaves: forge_geom::flora::Leaves,
     /// The tram lines' runs, and the service's clock at the start, seconds.
     trams: Vec<TramRun>,
     /// The river shuttles, one a crossing.
@@ -2184,6 +2187,7 @@ impl PlanScenario {
             home_kit,
             fade_furniture: None,
             furniture_in_probes: false,
+            leaves: forge_geom::flora::Leaves::Lumps,
             kit_instances,
             kit_report,
             far_lit,
@@ -2320,6 +2324,14 @@ impl PlanScenario {
     /// The houses' furniture met by the probes' rays, as before #363: to compare its light.
     pub fn furniture_in_probes(mut self) -> Self {
         self.furniture_in_probes = true;
+        self
+    }
+
+    /// The plants' leaves as shoots at their twig tips, hung from their drawn twigs
+    /// (`forge_geom::flora::shoot_mesh`), not cards round their crowns' lumps: the prototype the
+    /// owner asked for (2026-10-31), to compare.
+    pub fn twig_leaves(mut self) -> Self {
+        self.leaves = forge_geom::flora::Leaves::Shoots;
         self
     }
 
@@ -6549,6 +6561,10 @@ const IMPOSTOR_FADE_BAND: f32 = 0.25;
 /// the impostors' cache key, which only names the textures by index.
 const LEAF_ATLAS: (u64, u32) = (41, 1024);
 
+/// The shoots' atlas's size (`textures::shoot_leaves`, `--twig-leaves`), of [`LEAF_ATLAS`]'s
+/// seed: a shoot's cell as many texels as a spray's quarter.
+const SHOOT_ATLAS: u32 = 2048;
+
 /// With the trees' ladder, the distance from the camera from which the shadow rays meet the
 /// plants' shadow proxies in place of their cards (D-075 step 3, `--far-shadows`), metres.
 const FAR_SHADOWS: f32 = 60.0;
@@ -6654,10 +6670,17 @@ impl PlanScenario {
                 }
                 &Cook::Plant(sp, k) => {
                     let s = &species[usize::from(sp)];
-                    let plant =
-                        forge_geom::flora::grow_plant(s, &forge_flora::grow::individual(s, sp, k));
+                    let plant = forge_geom::flora::grow_plant_with(
+                        s,
+                        &forge_flora::grow::individual(s, sp, k),
+                        self.leaves,
+                    );
                     let size = [plant.height, plant.crown, plant.lump];
-                    let name = format!("plant-{}-{k}", s.id);
+                    // The twig-leaf prototype's apart, or each run with the other would cook anew.
+                    let name = match self.leaves {
+                        forge_geom::flora::Leaves::Lumps => format!("plant-{}-{k}", s.id),
+                        forge_geom::flora::Leaves::Shoots => format!("plant-{}-{k}-shoots", s.id),
+                    };
                     let options = CookOptions::default();
                     // Its crown kept whole: the far steps stand for its finest look.
                     let crown = CookOptions {
@@ -7477,6 +7500,20 @@ impl Scenario for PlanScenario {
         let species = forge_flora::species::mediterranean();
         let (leaf_atlas, leaf_normals) = if self.flora.is_empty() {
             (None, None)
+        } else if self.leaves == forge_geom::flora::Leaves::Shoots {
+            // The twigs' shoots, each card one of its spray's shoots.
+            (
+                Some(
+                    materials
+                        .textures
+                        .add(&textures::shoot_leaves(LEAF_ATLAS.0, SHOOT_ATLAS))?,
+                ),
+                Some(
+                    materials
+                        .textures
+                        .add(&textures::shoot_leaf_normals(LEAF_ATLAS.0, SHOOT_ATLAS))?,
+                ),
+            )
         } else {
             (
                 Some(
@@ -7771,11 +7808,22 @@ impl Scenario for PlanScenario {
                                     leaves: forge_core::material::MaterialId(
                                         flora_rows[usize::from(sp)].0 + 2,
                                     ),
-                                    // The leaf atlas's and its normals' seed and size.
-                                    inputs: forge_core::derived::KeyHasher::new()
-                                        .debug(&LEAF_ATLAS)
-                                        .key(0)
-                                        .digest(),
+                                    // The leaf atlas's and its normals' seed and size, and the
+                                    // shoots' atlas's in its stead under `--twig-leaves`.
+                                    inputs: match self.leaves {
+                                        forge_geom::flora::Leaves::Lumps => {
+                                            forge_core::derived::KeyHasher::new()
+                                                .debug(&LEAF_ATLAS)
+                                                .key(0)
+                                                .digest()
+                                        }
+                                        forge_geom::flora::Leaves::Shoots => {
+                                            forge_core::derived::KeyHasher::new()
+                                                .debug(&(LEAF_ATLAS.0, SHOOT_ATLAS, "shoots"))
+                                                .key(0)
+                                                .digest()
+                                        }
+                                    },
                                 },
                             ));
                         }

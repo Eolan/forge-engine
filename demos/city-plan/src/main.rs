@@ -90,6 +90,10 @@ struct Cli {
     /// default, its visibility test cut the room grids' light into curved patches.
     #[arg(long)]
     furniture_in_probes: bool,
+    /// The plants' leaves as shoots at their twig tips, hung from their drawn twigs, not cards
+    /// round their crowns' lumps (the prototype, 2026-10-31).
+    #[arg(long)]
+    twig_leaves: bool,
     /// Board the tram nearest the camera this many seconds in (C boards and gets off by hand).
     #[arg(long)]
     ride: Option<f64>,
@@ -587,6 +591,11 @@ fn main() -> anyhow::Result<()> {
         };
         let scenario = if cli.furniture_in_probes {
             scenario.furniture_in_probes()
+        } else {
+            scenario
+        };
+        let scenario = if cli.twig_leaves {
+            scenario.twig_leaves()
         } else {
             scenario
         };

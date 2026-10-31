@@ -5,6 +5,14 @@
 #
 # The fields are documented on `forge_flora::Species`. Lengths in metres, angles in degrees,
 # ages in years.
+#
+# Each look's `leaf` and `leaf_area` size the shoots at the twig tips (`--twig-leaves`, #379):
+# `leaf` is a typical grown leaf's (or needle's, or scale spray's) length from the floras;
+# `leaf_area` is the leaves' one-sided area over the crown's projection, an estimate for the
+# look: #379 quotes the measures found (an olive's about 3.5, from 1 to 7; kermes garrigue 2 to
+# 3.3; an open-grown holm oak 1.0 to 1.6). The pines 2.5; the olive, rosemary and cistus 3; the
+# planes and the village's holm oaks 4; the limes 4.5; the kermes oak's thicket 5 (above its
+# garrigue's measure, whose cover is patchy); the cypress's column 6.
 
 [[species]]
 id = "aleppo-pine"
@@ -59,6 +67,8 @@ bark = [[0.26, 0.17, 0.12], [0.40, 0.31, 0.24]]
 leaves = [[0.10, 0.18, 0.07], [0.17, 0.25, 0.09]]
 underside = 0.2
 through = 0.25
+leaf = 0.08
+leaf_area = 2.5
 
 [[species]]
 id = "holm-oak"
@@ -110,6 +120,8 @@ bark = [[0.16, 0.14, 0.12], [0.28, 0.25, 0.22]]
 leaves = [[0.05, 0.11, 0.04], [0.10, 0.16, 0.06]]
 underside = 1.0
 through = 0.4
+leaf = 0.05
+leaf_area = 4.0
 
 [[species]]
 id = "olive"
@@ -164,6 +176,8 @@ bark = [[0.26, 0.24, 0.20], [0.40, 0.37, 0.31]]
 leaves = [[0.22, 0.26, 0.18], [0.32, 0.35, 0.26]]
 underside = 1.0
 through = 0.4
+leaf = 0.06
+leaf_area = 3.0
 
 [[species]]
 id = "italian-cypress"
@@ -217,6 +231,8 @@ bark = [[0.20, 0.15, 0.11], [0.36, 0.30, 0.24]]
 leaves = [[0.04, 0.09, 0.04], [0.08, 0.13, 0.06]]
 underside = 0.1
 through = 0.15
+leaf = 0.05
+leaf_area = 6.0
 
 [[species]]
 id = "rosemary"
@@ -267,6 +283,8 @@ bark = [[0.20, 0.15, 0.11], [0.36, 0.30, 0.24]]
 leaves = [[0.16, 0.22, 0.13], [0.24, 0.29, 0.19]]
 underside = 0.7
 through = 0.25
+leaf = 0.03
+leaf_area = 3.0
 
 [[species]]
 id = "cistus"
@@ -317,6 +335,8 @@ bark = [[0.20, 0.15, 0.11], [0.36, 0.30, 0.24]]
 leaves = [[0.24, 0.28, 0.20], [0.33, 0.36, 0.27]]
 underside = 0.6
 through = 0.5
+leaf = 0.04
+leaf_area = 3.0
 
 [[species]]
 id = "kermes-oak"
@@ -373,6 +393,8 @@ bark = [[0.20, 0.15, 0.11], [0.36, 0.30, 0.24]]
 leaves = [[0.07, 0.14, 0.05], [0.13, 0.20, 0.08]]
 underside = 0.4
 through = 0.4
+leaf = 0.025
+leaf_area = 5.0
 
 [[species]]
 id = "london-plane"
@@ -426,6 +448,8 @@ bark = [[0.38, 0.36, 0.29], [0.55, 0.53, 0.44]]
 leaves = [[0.10, 0.20, 0.06], [0.18, 0.28, 0.09]]
 underside = 0.35
 through = 0.9
+leaf = 0.18
+leaf_area = 4.0
 
 [[species]]
 id = "common-lime"
@@ -480,6 +504,8 @@ bark = [[0.22, 0.19, 0.16], [0.34, 0.30, 0.25]]
 leaves = [[0.12, 0.24, 0.06], [0.20, 0.32, 0.09]]
 underside = 0.35
 through = 0.9
+leaf = 0.08
+leaf_area = 4.5
 
 [[species]]
 id = "umbrella-pine"
@@ -536,3 +562,5 @@ bark = [[0.28, 0.18, 0.12], [0.44, 0.33, 0.25]]
 leaves = [[0.09, 0.17, 0.06], [0.15, 0.24, 0.08]]
 underside = 0.2
 through = 0.25
+leaf = 0.15
+leaf_area = 2.5

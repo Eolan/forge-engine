@@ -1109,6 +1109,20 @@ pub const LEAF_TILT: f32 = 0.45;
 /// angle.
 pub const LEAF_FOLD: f32 = 0.3;
 
+/// A leaf's colour from its random `r`: each leaf its own value and hue (#346,
+/// research/leaf-detail.md §1), a third darker or lighter, some yellower, some bluer. A quarter
+/// apart in value and one hue, the crowns read as cut-outs of one colour (the owner, 2026-10-22:
+/// "the leaves have no details").
+fn leaf_colour(r: f32) -> [f32; 3] {
+    let shade = 0.64 + 0.36 * r;
+    let yellow = unit_f32(hash_cell2(u64::from(r.to_bits()), 1, 9)) - 0.5;
+    [
+        shade * (0.97 + 0.14 * yellow),
+        shade,
+        shade * (0.9 - 0.16 * yellow),
+    ]
+}
+
 /// One spray's strokes, the twigs first.
 fn spray_strokes(seed: u64, spray: LeafSpray) -> Vec<Stroke> {
     let mut strokes = Vec::new();
@@ -1162,11 +1176,6 @@ fn spray_strokes(seed: u64, spray: LeafSpray) -> Vec<Stroke> {
         });
     }
     let mut leaf = |at: [f32; 2], dir: [f32; 2], scale: f32, r: f32| {
-        // Each leaf its own value and hue (#346, research/leaf-detail.md §1): a third darker or
-        // lighter, some yellower, some bluer. A quarter apart in value and one hue, the crowns
-        // read as cut-outs of one colour (the owner, 2026-10-22: "the leaves have no details").
-        let shade = 0.64 + 0.36 * r;
-        let yellow = unit_f32(hash_cell2(u64::from(r.to_bits()), 1, 9)) - 0.5;
         strokes.push(Stroke {
             from: at,
             dir,
@@ -1174,11 +1183,7 @@ fn spray_strokes(seed: u64, spray: LeafSpray) -> Vec<Stroke> {
             width: width * scale,
             shape,
             lobes,
-            colour: [
-                shade * (0.97 + 0.14 * yellow),
-                shade,
-                shade * (0.9 - 0.16 * yellow),
-            ],
+            colour: leaf_colour(r),
         });
     };
     for &(from, dir, reach) in &twigs {
@@ -1252,6 +1257,305 @@ fn spray_strokes(seed: u64, spray: LeafSpray) -> Vec<Stroke> {
     strokes
 }
 
+/// How many shoots of each spray the shoots' atlas paints ([`shoot_leaves`]).
+pub use forge_flora::species::SHOOT_VARIANTS;
+
+/// Where a shoot's stem starts in its cell's unit square, `v` down: as far over its card's `v1`
+/// edge as the shoot's card reaches under its twig's tip (`forge_geom::flora::shoots`).
+const SHOOT_FOOT: [f32; 2] = [0.5, 0.92];
+
+/// A shoot's strokes in the shoots' atlas ([`shoot_leaves`]; the owner, 2026-10-31: the cards
+/// cut from one spray read as one pattern stamped over the crown): a small branchlet of the
+/// spray's leaves, each of the [`SHOOT_VARIANTS`] its own. A main shoot leaning and bending its
+/// own way, side shoots off it at uneven places and angles, some branching again, and leaves
+/// along each shoot's outer part as the species carries them: one at a node, each turned round
+/// the shoot by the golden angle (oaks, planes); needles in pairs, the pairs turned so (pines);
+/// or opposite pairs, each pair a quarter turn from the last (olives). Seen from the card's side,
+/// a leaf turned towards or away from the viewer is shorter and closer to its shoot, and in front
+/// of it or behind it; the youngest, at the tips, are smaller. Laid out in leaf lengths, then as
+/// large as the square holds it: the strokes, and a leaf's length as a share of the square
+/// ([`LeafSpray::shoots`] keeps it, to size the cards).
+fn shoot_strokes(seed: u64, spray: LeafSpray, variant: u32) -> (Vec<Stroke>, f32) {
+    use std::f32::consts::{FRAC_PI_2, PI};
+    let cell = spray.quarter() * SHOOT_VARIANTS + variant;
+    let mut n = 0_i32;
+    let mut random = || {
+        n += 1;
+        unit_f32(hash_cell2(
+            seed ^ 0x7368_6f6f ^ (u64::from(cell) << 40),
+            n,
+            13,
+        ))
+    };
+    let golden = 2.4;
+    // (a leaf's half width, outline and lobes, in leaf lengths; the main shoot's length; its side
+    // shoots, fewest; the chance a side shoot branches again; where along a shoot the leaves
+    // start; their spacing; their angle off the shoot; a stalk's length; leaves to a node, how
+    // far round the shoot from each other, and the turn from one node to the next; leaves at a
+    // shoot's tip)
+    let (
+        width,
+        shape,
+        lobes,
+        stem,
+        sides,
+        again,
+        start,
+        spacing,
+        angle,
+        stalk,
+        node,
+        apart,
+        turn,
+        tip,
+    ) = match spray {
+        LeafSpray::Small => (
+            0.25, 0.7, 0.0, 3.0, 5, 0.6, 0.15, 0.22, 0.85, 0.0, 1, 0.0, golden, 3,
+        ),
+        LeafSpray::Broad => (
+            0.46, 0.5, 5.0, 1.6, 3, 0.3, 0.3, 0.45, 0.95, 0.4, 1, 0.0, golden, 1,
+        ),
+        LeafSpray::Needles => (
+            0.028, 0.25, 0.0, 2.4, 4, 0.5, 0.15, 0.05, 0.75, 0.0, 2, 0.5, golden, 11,
+        ),
+        LeafSpray::Narrow => (
+            0.15, 0.85, 0.0, 2.8, 5, 0.5, 0.15, 0.3, 0.7, 0.0, 2, PI, FRAC_PI_2, 2,
+        ),
+    };
+    // A shoot: where it starts, its angle (up π/2), its length, its bend along it (its angle's
+    // change from foot to tip) and its stem's half width in the square.
+    struct Shoot {
+        from: [f32; 2],
+        angle: f32,
+        length: f32,
+        bend: f32,
+        thick: f32,
+    }
+    // Where along a shoot and which way it goes there: an arc of even bend.
+    let along = |sh: &Shoot, s: f32| -> ([f32; 2], f32) {
+        let k = sh.bend / sh.length;
+        let a = sh.angle + k * s;
+        if k.abs() < 1e-4 {
+            let (sin, cos) = sh.angle.sin_cos();
+            ([sh.from[0] + cos * s, sh.from[1] + sin * s], a)
+        } else {
+            (
+                [
+                    sh.from[0] + (a.sin() - sh.angle.sin()) / k,
+                    sh.from[1] + (sh.angle.cos() - a.cos()) / k,
+                ],
+                a,
+            )
+        }
+    };
+    // Kept within this much of straight up.
+    let upright = |a: f32| a.clamp(FRAC_PI_2 - 1.3, FRAC_PI_2 + 1.3);
+    let mut shoots = vec![Shoot {
+        from: [0.0, 0.0],
+        angle: FRAC_PI_2 + (random() - 0.5) * 0.5,
+        length: stem * (0.85 + 0.3 * random()),
+        bend: (random() - 0.5) * 0.9,
+        thick: 0.007,
+    }];
+    // Side shoots off the main one at uneven places, mostly on alternate sides, turning back up
+    // towards the light; some branch again off their own outer half.
+    let mut parents = vec![0];
+    let mut k = 0;
+    while k < parents.len() {
+        let (parent, main) = (parents[k], k == 0);
+        let count = if main {
+            sides + (random() * 2.99) as u32
+        } else {
+            u32::from(random() < again) + u32::from(random() < again * 0.4)
+        };
+        let mut side = if random() < 0.5 { 1.0 } else { -1.0 };
+        for i in 0..count {
+            let p = &shoots[parent];
+            let t = if main {
+                0.12 + 0.72 * (i as f32 + 0.2 + 0.6 * random()) / count as f32
+            } else {
+                0.35 + 0.4 * random()
+            };
+            let (from, a) = along(p, t * p.length);
+            let shoot = Shoot {
+                from,
+                angle: upright(a + side * (0.5 + 0.55 * random())),
+                length: p.length * (0.45 + 0.4 * random()) * (1.15 - 0.6 * t),
+                bend: -side * (0.1 + 0.35 * random()),
+                thick: p.thick * 0.7,
+            };
+            shoots.push(shoot);
+            if main {
+                parents.push(shoots.len() - 1);
+            }
+            if random() < 0.75 {
+                side = -side;
+            }
+        }
+        k += 1;
+    }
+    // Every stroke with how far in front of the shoots it lies, in leaf lengths, the stems at 0.
+    let mut strokes: Vec<(f32, Stroke)> = Vec::new();
+    let twig = [0.42, 0.36, 0.28];
+    let stem_stroke = |from: [f32; 2], to: [f32; 2], thick: f32, depth: f32| {
+        let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
+        let length = (dx * dx + dy * dy).sqrt().max(1e-6);
+        (
+            depth,
+            Stroke {
+                from,
+                dir: [dx / length, dy / length],
+                length,
+                width: thick,
+                shape: 0.0,
+                lobes: 0.0,
+                colour: twig,
+            },
+        )
+    };
+    let mut leaves = Vec::new();
+    for sh in &shoots {
+        for k in 0..4 {
+            let (a, _) = along(sh, sh.length * k as f32 / 4.0);
+            let (b, _) = along(sh, sh.length * (k + 1) as f32 / 4.0);
+            strokes.push(stem_stroke(a, b, sh.thick, 0.0));
+        }
+        // A leaf at `s` along the shoot, `alpha` off it and turned `psi` round it from the
+        // card's side, its size `scale`.
+        let mut leaf = |s: f32, alpha: f32, psi: f32, scale: f32, r: f32| {
+            let (at, a) = along(sh, s);
+            let (d, p) = ([a.cos(), a.sin()], [-a.sin(), a.cos()]);
+            let (across, ahead) = (alpha.sin() * psi.cos(), alpha.cos());
+            let dir = [d[0] * ahead + p[0] * across, d[1] * ahead + p[1] * across];
+            let seen = (dir[0] * dir[0] + dir[1] * dir[1]).sqrt().max(1e-3);
+            let dir = [dir[0] / seen, dir[1] / seen];
+            let depth = alpha.sin() * psi.sin();
+            let mut from = at;
+            if stalk > 0.0 {
+                let to = [
+                    at[0] + dir[0] * stalk * scale * seen,
+                    at[1] + dir[1] * stalk * scale * seen,
+                ];
+                leaves.push(stem_stroke(at, to, 0.003, depth - 1e-3));
+                from = to;
+            }
+            leaves.push((
+                depth,
+                Stroke {
+                    from,
+                    dir,
+                    length: scale * seen,
+                    width: width * scale * (0.6 + 0.4 * psi.cos().abs()),
+                    shape,
+                    lobes,
+                    colour: leaf_colour(r),
+                },
+            ));
+        };
+        let mut s = sh.length * start + spacing * random();
+        let mut psi = random() * std::f32::consts::TAU;
+        // Unevenly: closer towards the tip, where the year's leaves crowd, each step its own,
+        // and a node here and there bare (the owner, 2026-10-31: a spray's leaves at even steps
+        // along its twigs read as a pattern).
+        while s < sh.length * 0.95 {
+            let bare = random() < 0.12;
+            for j in 0..node {
+                let young = 1.0 - 0.3 * (s / sh.length).powi(2);
+                let (alpha, psi, scale, r) = (
+                    angle * (0.75 + 0.5 * random()),
+                    psi + j as f32 * apart + 0.3 * (random() - 0.5),
+                    (0.75 + 0.4 * random()) * young,
+                    random(),
+                );
+                if !bare {
+                    leaf(s, alpha, psi, scale, r);
+                }
+            }
+            psi += turn + 0.5 * (random() - 0.5);
+            s += spacing * (1.0 - 0.45 * s / sh.length) * (0.55 + 0.9 * random());
+        }
+        // The tip's leaves, younger, round it.
+        for j in 0..tip {
+            leaf(
+                sh.length,
+                angle * (0.25 + 0.4 * random()),
+                psi + j as f32 * std::f32::consts::TAU / tip as f32 + 0.5 * (random() - 0.5),
+                0.8 + 0.15 * random(),
+                random(),
+            );
+        }
+    }
+    strokes.extend(leaves);
+    // Behind first: each stroke paints over those before it.
+    strokes.sort_by(|a, b| a.0.total_cmp(&b.0));
+    // As large as the square holds it: across, up to the top and down to the bottom from the
+    // foot.
+    let (mut wide, mut high, mut low) = (1e-3_f32, 1e-3_f32, 1e-3_f32);
+    for (_, s) in &strokes {
+        let reach = if s.shape == 0.0 { 0.0 } else { s.width };
+        for p in [
+            s.from,
+            [
+                s.from[0] + s.dir[0] * s.length,
+                s.from[1] + s.dir[1] * s.length,
+            ],
+        ] {
+            wide = wide.max(p[0].abs() + reach);
+            high = high.max(p[1] + reach);
+            low = low.max(-p[1] + reach);
+        }
+    }
+    let scale = (0.47 / wide)
+        .min((SHOOT_FOOT[1] - 0.02) / high)
+        .min((0.99 - SHOOT_FOOT[1]) / low);
+    let strokes = strokes
+        .into_iter()
+        .map(|(_, mut s)| {
+            s.from = [
+                SHOOT_FOOT[0] + s.from[0] * scale,
+                SHOOT_FOOT[1] - s.from[1] * scale,
+            ];
+            s.dir = [s.dir[0], -s.dir[1]];
+            s.length *= scale;
+            if s.shape != 0.0 {
+                s.width *= scale;
+            }
+            s
+        })
+        .collect();
+    (strokes, scale)
+}
+
+/// The shoots' atlas: [`SHOOT_VARIANTS`] shoots of each spray ([`shoot_strokes`]), in a row
+/// each, the rows in the sprays' quarters' order, painted and finished as [`leaves`]. The twig
+/// tips' shoots are cut from it (`forge_geom::flora::shoots`).
+pub fn shoot_leaves(seed: u64, size: u32) -> TextureData {
+    kept("texture-shoot-leaves", &(seed, size), || {
+        let (texels, _) = paint_shoots(seed, size);
+        filled_levels(texels, size, SHOOT_VARIANTS, "shoot leaves")
+    })
+}
+
+/// The shoots' atlas's normals ([`shoot_leaves`]), as [`leaf_normals`].
+pub fn shoot_leaf_normals(seed: u64, size: u32) -> TextureData {
+    kept("texture-shoot-leaf-normals", &(seed, size), || {
+        let (_, normals) = paint_shoots(seed, size);
+        normal_levels(normals, size, "shoot leaf normals")
+    })
+}
+
+fn paint_shoots(seed: u64, size: u32) -> (Vec<[f32; 4]>, Vec<[f32; 4]>) {
+    const { assert!(SHOOT_VARIANTS as usize == LeafSpray::ALL.len()) };
+    paint_cells(seed, size, SHOOT_VARIANTS, |c| {
+        shoot_strokes(
+            seed,
+            LeafSpray::ALL[(c / SHOOT_VARIANTS) as usize],
+            c % SHOOT_VARIANTS,
+        )
+        .0
+    })
+}
+
 /// The leaf cards' atlas (D-013): a spray of leaves in each quarter ([`LeafSpray`]), drawn
 /// light grey to be tinted by its row, the alpha the share of a texel the leaves and twigs
 /// cover (their edges anti-aliased over a texel), for an alpha test at a half. The empty texels
@@ -1260,7 +1564,20 @@ fn spray_strokes(seed: u64, spray: LeafSpray) -> Vec<Stroke> {
 /// so the test keeps the share level 0 keeps (Castaño 2010).
 pub fn leaves(seed: u64, size: u32) -> TextureData {
     kept("texture-leaves", &(seed, size), || {
-        let (mut texels, _) = paint_leaves(seed, size);
+        let (texels, _) = paint_leaves(seed, size);
+        filled_levels(texels, size, 2, "leaves")
+    })
+}
+
+/// A painted leaf atlas of `cells × cells` as [`leaves`] finishes it: the empty texels the
+/// leaves' mean colour, the levels from [`cell_levels`].
+fn filled_levels(
+    mut texels: Vec<[f32; 4]>,
+    size: u32,
+    cells: u32,
+    name: &'static str,
+) -> TextureData {
+    {
         let side = size as usize;
         // The empty texels take the covered ones' mean colour.
         let (mut sum, mut weight) = ([0.0_f32; 3], 0.0_f32);
@@ -1278,8 +1595,8 @@ pub fn leaves(seed: u64, size: u32) -> TextureData {
             }
         }
         debug_assert_eq!(texels.len(), side * side);
-        leaf_levels(texels, size)
-    })
+        cell_levels(texels, size, cells, name)
+    }
 }
 
 /// The leaf cards' normal map (#346, research/leaf-detail.md §2), cut as [`leaves`]: each leaf
@@ -1290,7 +1607,14 @@ pub fn leaves(seed: u64, size: u32) -> TextureData {
 /// texel lean apart, as the shading's Toksvig factor reads them.
 pub fn leaf_normals(seed: u64, size: u32) -> TextureData {
     kept("texture-leaf-normals", &(seed, size), || {
-        let (_, mut normals) = paint_leaves(seed, size);
+        let (_, normals) = paint_leaves(seed, size);
+        normal_levels(normals, size, "leaf normals")
+    })
+}
+
+/// A painted leaf atlas's normals as [`leaf_normals`] finishes them.
+fn normal_levels(mut normals: Vec<[f32; 4]>, size: u32, name: &'static str) -> TextureData {
+    {
         // The empty texels face straight out.
         for t in &mut normals {
             let w = t[3];
@@ -1329,35 +1653,47 @@ pub fn leaf_normals(seed: u64, size: u32) -> TextureData {
             levels.push(encode(&current));
         }
         TextureData {
-            name: "leaf normals".into(),
+            name: name.into(),
             size,
             height: size,
             srgb: false,
             levels,
         }
-    })
+    }
 }
 
 /// The leaf atlas painted (D-013): a spray of leaves in each quarter ([`LeafSpray`]). Per texel,
 /// the linear colour of what covers it with the share of it covered, and the normal of what
 /// covers it in the atlas's tangent space ([`leaf_normals`]), not yet unit, with the same share.
 fn paint_leaves(seed: u64, size: u32) -> (Vec<[f32; 4]>, Vec<[f32; 4]>) {
+    paint_cells(seed, size, 2, |q| {
+        spray_strokes(seed, LeafSpray::ALL[q as usize])
+    })
+}
+
+/// A leaf atlas of `cells × cells` squares painted, cell `c` (row by row from the top left) with
+/// `strokes(c)` in its unit square ([`Stroke`]), as [`paint_leaves`] paints its quarters.
+fn paint_cells(
+    seed: u64,
+    size: u32,
+    cells: u32,
+    strokes: impl Fn(u32) -> Vec<Stroke> + Sync,
+) -> (Vec<[f32; 4]>, Vec<[f32; 4]>) {
     {
         let side = size as usize;
-        let half = size as f32 * 0.5;
-        // Each spray paints its own quarter, on a thread of its own: no stroke leaves its quarter,
-        // so the quarters come out as one thread painting them in turn would leave them.
-        let hs = side / 2;
-        let paint = |spray: LeafSpray| {
-            let q = spray.quarter();
-            let (ox, oy) = ((q % 2) as usize * hs, (q / 2) as usize * hs);
+        let half = size as f32 / cells as f32;
+        // Each cell paints on a thread of its own: no stroke leaves its cell, so the cells come
+        // out as one thread painting them in turn would leave them.
+        let hs = side / cells as usize;
+        let paint = |q: u32| {
+            let (ox, oy) = ((q % cells) as usize * hs, (q / cells) as usize * hs);
             let mut quarter = vec![[0.0_f32; 4]; hs * hs];
             let mut bent = vec![[0.0_f32, 0.0, 1.0, 0.0]; hs * hs];
-            let origin = [(q % 2) as f32 * half, (q / 2) as f32 * half];
-            // A quarter's unit square is `half` texels, inside a margin of 2 %.
+            let origin = [(q % cells) as f32 * half, (q / cells) as f32 * half];
+            // A cell's unit square is `half` texels, inside a margin of 2 %.
             let scale = half * 0.96;
             let offset = [origin[0] + half * 0.02, origin[1] + half * 0.02];
-            for (k, stroke) in spray_strokes(seed, spray).into_iter().enumerate() {
+            for (k, stroke) in strokes(q).into_iter().enumerate() {
                 // Its own lean (#346): a direction and up to LEAF_TILT, in the image's x and y
                 // (down); across it, the image's direction of `t` below.
                 let h = hash_cell2(seed ^ 0x7469_6c74, q as i32, k as i32);
@@ -1401,8 +1737,9 @@ fn paint_leaves(seed: u64, size: u32) -> (Vec<[f32; 4]>, Vec<[f32; 4]>) {
                                 continue;
                             }
                             let lobe = 1.0 + 0.14 * (stroke.lobes * std::f32::consts::PI * u).sin();
-                            let w =
-                                width * (std::f32::consts::PI * u).sin().powf(stroke.shape) * lobe;
+                            let w = width
+                                * (std::f32::consts::PI * u).sin().max(0.0).powf(stroke.shape)
+                                * lobe;
                             let across = t.abs() / width.max(1e-3);
                             // A lighter midrib, one half a shade darker (the leaf's fold).
                             let rib = if t.abs() < (width * 0.1).max(0.6) {
@@ -1481,9 +1818,9 @@ fn paint_leaves(seed: u64, size: u32) -> (Vec<[f32; 4]>, Vec<[f32; 4]>) {
             (quarter, bent)
         };
         let quarters: Vec<_> = std::thread::scope(|scope| {
-            let painting: Vec<_> = LeafSpray::ALL
-                .map(|spray| scope.spawn(move || paint(spray)))
-                .into_iter()
+            let paint = &paint;
+            let painting: Vec<_> = (0..cells * cells)
+                .map(|q| scope.spawn(move || paint(q)))
                 .collect();
             painting
                 .into_iter()
@@ -1492,9 +1829,9 @@ fn paint_leaves(seed: u64, size: u32) -> (Vec<[f32; 4]>, Vec<[f32; 4]>) {
         });
         let mut texels = vec![[0.0_f32; 4]; side * side];
         let mut normals = vec![[0.0_f32, 0.0, 1.0, 0.0]; side * side];
-        for (spray, (quarter, bent)) in LeafSpray::ALL.into_iter().zip(&quarters) {
-            let q = spray.quarter() as usize;
-            let (ox, oy) = ((q % 2) * hs, (q / 2) * hs);
+        for (q, (quarter, bent)) in quarters.iter().enumerate() {
+            let cells = cells as usize;
+            let (ox, oy) = ((q % cells) * hs, (q / cells) * hs);
             for (r, (row, bent_row)) in quarter
                 .chunks_exact(hs)
                 .zip(bent.chunks_exact(hs))
@@ -1508,9 +1845,10 @@ fn paint_leaves(seed: u64, size: u32) -> (Vec<[f32; 4]>, Vec<[f32; 4]>) {
     }
 }
 
-/// [`leaves`]' levels from its painted texels: sRGB, each mip's alpha scaled per quarter so the
-/// alpha test keeps the share of each quarter level 0 keeps (Castaño 2010).
-fn leaf_levels(texels: Vec<[f32; 4]>, size: u32) -> TextureData {
+/// A leaf atlas's levels from its painted texels ([`leaves`]'): sRGB, each mip's alpha scaled per
+/// cell of `cells × cells` (its quarters) so the alpha test keeps the share of each cell level 0
+/// keeps (Castaño 2010).
+fn cell_levels(texels: Vec<[f32; 4]>, size: u32, cells: u32, name: &'static str) -> TextureData {
     {
         let encode = |level: &[[f32; 4]]| {
             encode(level, |c| {
@@ -1522,10 +1860,10 @@ fn leaf_levels(texels: Vec<[f32; 4]>, size: u32) -> TextureData {
                 ]
             })
         };
-        // The share of quarter `q`'s texels an alpha test at a half keeps, the alpha times `scale`.
+        // The share of cell `q`'s texels an alpha test at a half keeps, the alpha times `scale`.
         let kept = |level: &[[f32; 4]], side: u32, q: u32, scale: f32| {
-            let half = side / 2;
-            let (x0, y0) = ((q % 2) * half, (q / 2) * half);
+            let half = side / cells;
+            let (x0, y0) = ((q % cells) * half, (q / cells) * half);
             let mut n = 0;
             for y in y0..y0 + half {
                 for x in x0..x0 + half {
@@ -1536,7 +1874,9 @@ fn leaf_levels(texels: Vec<[f32; 4]>, size: u32) -> TextureData {
             }
             n as f32 / (half * half) as f32
         };
-        let cover: [f32; 4] = std::array::from_fn(|q| kept(&texels, size, q as u32, 1.0));
+        let cover: Vec<f32> = (0..cells * cells)
+            .map(|q| kept(&texels, size, q, 1.0))
+            .collect();
         let mut levels = vec![encode(&texels)];
         let (mut current, mut side) = (texels, size);
         while side > 1 {
@@ -1557,8 +1897,8 @@ fn leaf_levels(texels: Vec<[f32; 4]>, size: u32) -> TextureData {
             // cut-off as the leaves blur, and the far crowns thinned to their cores. The means stay
             // unscaled for the next level.
             let mut scaled = current.clone();
-            if side >= 2 {
-                for q in 0..4 {
+            if side >= cells {
+                for q in 0..cells * cells {
                     let (mut lo, mut hi) = (0.25_f32, 16.0_f32);
                     for _ in 0..24 {
                         let mid = (lo * hi).sqrt();
@@ -1568,8 +1908,8 @@ fn leaf_levels(texels: Vec<[f32; 4]>, size: u32) -> TextureData {
                             hi = mid;
                         }
                     }
-                    let half = side / 2;
-                    let (x0, y0) = ((q % 2) * half, (q / 2) * half);
+                    let half = side / cells;
+                    let (x0, y0) = ((q % cells) * half, (q / cells) * half);
                     for y in y0..y0 + half {
                         for x in x0..x0 + half {
                             let t = &mut scaled[(y * side + x) as usize];
@@ -1581,7 +1921,7 @@ fn leaf_levels(texels: Vec<[f32; 4]>, size: u32) -> TextureData {
             levels.push(encode(&scaled));
         }
         TextureData {
-            name: "leaves".into(),
+            name: name.into(),
             size,
             height: size,
             srgb: true,
@@ -2002,6 +2342,82 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Each cell of the shoots' atlas holds a shoot, nothing on its edges, and an alpha test at a
+    /// half keeps the same share of it at every mip down to 8 × 8 texels a cell, as the leaf
+    /// atlas's quarters. Each shoot's leaf length and cover, which size the shoots' cards and
+    /// their count (`forge_geom::flora::shoots`), are its [`LeafSpray::shoots`] on the village's
+    /// atlas (seed 41, 2048 texels); else the message gives the table as measured.
+    /// `FORGE_SHOOTS_PNG=path` writes its level 0.
+    #[test]
+    fn the_shoots_atlas_s_cells_hold_their_shoots_at_their_size_and_cover() {
+        let size = 2048_u32;
+        let atlas = shoot_leaves(41, size);
+        assert_eq!(atlas.levels.len(), 12);
+        if let Ok(path) = std::env::var("FORGE_SHOOTS_PNG") {
+            image::save_buffer(&path, &atlas.levels[0], size, size, image::ColorType::Rgba8)
+                .expect("written");
+        }
+        let alpha = |level: usize, x: u32, y: u32| {
+            let side = size >> level;
+            f32::from(atlas.levels[level][((y * side + x) * 4 + 3) as usize]) / 255.0
+        };
+        let cell = size / SHOOT_VARIANTS;
+        let (mut table, mut wrong) = (String::new(), false);
+        for spray in LeafSpray::ALL {
+            table += &format!("            Self::{spray:?} => [\n");
+            for variant in 0..SHOOT_VARIANTS {
+                let (x0, y0) = (variant * cell, spray.quarter() * cell);
+                for k in 0..cell {
+                    for (x, y) in [
+                        (x0 + k, y0),
+                        (x0, y0 + k),
+                        (x0 + cell - 1, y0 + k),
+                        (x0 + k, y0 + cell - 1),
+                    ] {
+                        assert_eq!(alpha(0, x, y), 0.0, "{spray:?} {variant} at {x}, {y}");
+                    }
+                }
+                let kept = |level: usize| {
+                    let side = cell >> level;
+                    let mut n = 0;
+                    for y in 0..side {
+                        for x in 0..side {
+                            n += u32::from(
+                                alpha(level, (x0 >> level) + x, (y0 >> level) + y) >= 0.5,
+                            );
+                        }
+                    }
+                    n as f32 / (side * side) as f32
+                };
+                let base = kept(0);
+                for level in 1..=6 {
+                    let share = kept(level);
+                    assert!(
+                        (share - base).abs() <= 0.04_f32.max(1.0 / (cell >> level).pow(2) as f32),
+                        "{spray:?} {variant} at level {level}: {share:.3} kept, {base:.3} at 0"
+                    );
+                }
+                // The card's own share, inside its texture coordinates.
+                let ([u0, v0], [u1, v1]) = spray.shoot_uv_box(variant);
+                let (x0, x1) = ((u0 * size as f32) as u32, (u1 * size as f32) as u32);
+                let (y0, y1) = ((v0 * size as f32) as u32, (v1 * size as f32) as u32);
+                let mut n = 0;
+                for y in y0..y1 {
+                    for x in x0..x1 {
+                        n += u32::from(alpha(0, x, y) >= 0.5);
+                    }
+                }
+                let cover = n as f32 / ((x1 - x0) * (y1 - y0)) as f32;
+                let leaf = shoot_strokes(41, spray, variant).1;
+                let (kept_leaf, kept_cover) = spray.shoots()[variant as usize];
+                wrong |= (leaf - kept_leaf).abs() > 0.002 || (cover - kept_cover).abs() > 0.005;
+                table += &format!("                ({leaf:.3}, {cover:.3}),\n");
+            }
+            table += "            ],\n";
+        }
+        assert!(!wrong, "`LeafSpray::shoots` is now:\n{table}");
     }
 
     #[test]

@@ -199,6 +199,12 @@ pub struct Look {
     /// (#346): about 1 for a thin broad leaf, half for a leathery one, less for needles and
     /// scales.
     pub through: f32,
+    /// A leaf's length (a needle's, a scale spray's), metres: the shoots at the twig tips
+    /// (`forge_geom::flora::shoots`) draw their leaves this long.
+    pub leaf: f32,
+    /// Its leaves' one-sided area per square metre of its crown's footprint (the leaf area index
+    /// over the crown's projection, as published per tree): how many shoots its twig tips carry.
+    pub leaf_area: f32,
 }
 
 impl Default for Look {
@@ -209,9 +215,16 @@ impl Default for Look {
             leaves: [[0.08, 0.19, 0.06], [0.16, 0.27, 0.07]],
             underside: 0.3,
             through: 0.5,
+            leaf: 0.05,
+            leaf_area: 3.0,
         }
     }
 }
+
+/// How many shoots of each spray the shoots' atlas paints, each its own
+/// (`forge_render::textures::shoot_leaves`): one shoot picture repeated over a crown read as a
+/// pattern (the owner, 2026-10-31).
+pub const SHOOT_VARIANTS: u32 = 4;
 
 /// The sprays drawn in the leaf atlas's quarters (`forge_render::textures::leaves`), in the order
 /// [`LeafSpray::quarter`] counts them; a species' cards are cut from one.
@@ -249,6 +262,53 @@ impl LeafSpray {
         let q = self.quarter();
         let (u0, v0) = ((q % 2) as f32 * 0.5, (q / 2) as f32 * 0.5);
         ([u0 + 0.01, v0 + 0.01], [u0 + 0.49, v0 + 0.49])
+    }
+
+    /// The texture coordinates of its shoot `variant`'s cell in the shoots' atlas
+    /// (`forge_render::textures::shoot_leaves`), `(u0, v0)` and `(u1, v1)`: its row its
+    /// [`LeafSpray::quarter`], the variant its column, a fiftieth of the cell inside.
+    pub fn shoot_uv_box(self, variant: u32) -> ([f32; 2], [f32; 2]) {
+        let cell = 1.0 / SHOOT_VARIANTS as f32;
+        let (u0, v0) = (variant as f32 * cell, self.quarter() as f32 * cell);
+        let margin = cell * 0.02;
+        (
+            [u0 + margin, v0 + margin],
+            [u0 + cell - margin, v0 + cell - margin],
+        )
+    }
+
+    /// Its shoots in the shoots' atlas (`forge_render::textures::shoot_leaves`), by variant: a
+    /// painted leaf's (or needle's) length as a share of the card's side, so a card of side
+    /// `leaf / share` draws leaves `leaf` long, and the share of the card the alpha test at a
+    /// half keeps, its leaves' and twigs' cover. Measured on the village's atlas (seed 41):
+    /// `forge_render`'s test holds them to it.
+    pub fn shoots(self) -> [(f32, f32); SHOOT_VARIANTS as usize] {
+        match self {
+            Self::Small => [
+                (0.151, 0.192),
+                (0.161, 0.257),
+                (0.200, 0.328),
+                (0.132, 0.182),
+            ],
+            Self::Broad => [
+                (0.247, 0.185),
+                (0.193, 0.155),
+                (0.244, 0.237),
+                (0.265, 0.311),
+            ],
+            Self::Needles => [
+                (0.193, 0.163),
+                (0.231, 0.284),
+                (0.256, 0.343),
+                (0.191, 0.225),
+            ],
+            Self::Narrow => [
+                (0.179, 0.187),
+                (0.164, 0.171),
+                (0.196, 0.221),
+                (0.204, 0.254),
+            ],
+        }
     }
 }
 

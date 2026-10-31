@@ -9859,3 +9859,69 @@ which keeps the probes for images equal from run to run (`docs/PROCESS.md`). The
 unchanged (`ast240`, `city60`, `gallery60`, `lab-lamps60`, `lab-materials60`: 0 px); the kitchen
 run as the owner runs it takes SHaRC (`gi/sharc update` 0.10 ms, the frame 5.54 → 6.18 ms).
 NRC is still to measure on the same hook (its download asked for first).
+
+## D-091 — A tree's leaves as shoots at its twigs' tips, a prototype behind `--twig-leaves` ✅ (proposed and decided 2026-10-31, #379; the owner's go on the look the same day: "Yes, finish it"; D-063, D-075)
+
+**Why:** the owner, 2026-10-31: "tree foliage or crown are often very dense same for bushes and
+garden hedges [...] They often intersect and are currently kind of flat planes. Why are they so
+dense?", then "a few leaves at the end of some twigs themselves attached to the trees are enough",
+and on the first prototype: "this tree is too uniform not looking natural, we can distinguish some
+kind of pattern", "the leaves are evenly spaced". The grown plants (D-063) are sound; the mesher
+multiplies their leaves. Cards round overlapping lumps (16 to a tree's lump, sprays up to 1.2 m)
+and opaque cores give 2.6 to 6 times the published leaf area over a crown's projection (7 to 17,
+where an olive measures about 3.5, from 1 to 7, an open-grown holm oak 1.0 to 1.6, kermes garrigue
+2 to 3.3): a ray through a crown crossed 6 to 46 card planes, 2.5 to 16 of them opaque. And every
+card was the same picture, a pinnate spray with its leaves at even steps, stamped thousands of
+times over a crown, most facing the same way.
+
+**What it is** (city-plan's `--twig-leaves`; the default stays on the lumps):
+- **Wood and twigs** (`forge_geom::flora::shoot_mesh`): a tree's wood down to 2 cm as before
+  (7-sided tubes, `SHOOT_WOOD`), every finer twig as a 5-sided tube that starts at its own radius
+  inside the wood (from its parent's, a twig stood out of a limb as a horn); a shrub's twigs of
+  2.5 mm and more.
+- **Shoots at the twig tips** (`shoots`): as many cards as the species' leaf area asks over its
+  crown's footprint (`Look::leaf_area`, from the measures above, set for the look per species in
+  `mediterranean.toml`), their leaves the species' length (`Look::leaf`). Shared unevenly: each
+  branch off a limb its own leafiness (0.4 to 1.6), ten at a tip at most and the rest back along
+  its twig (forty in all: capped at the tip, a young holm oak had 45 % of its leaf area). At a
+  twig's end the first carries on its way and the others fan out at about the branch angle,
+  turned about the divergence; at a node a twig goes on from, all fan out. Each faces out of the
+  crown and up, rolled up to 46° its own way about its stem, folded 9° to 35°, sized 0.75 to 1.25,
+  mirrored half the time, keyed by the plant's seed.
+- **The shoots' atlas** (`forge_render::textures::shoot_leaves`, 2048 texels, a cell of 512 as a
+  spray's quarter): four branchlets for each spray, each its own. A main shoot leaning and bending,
+  side shoots at uneven places, some branching again, the leaves at uneven steps that crowd
+  towards the tips, a node here and there bare, set as the species carries them (one to a node
+  turned by the golden angle for the oaks and planes, pairs of needles for the pines, opposite
+  pairs a quarter turn apart for the olives), a leaf turned towards or away from the viewer drawn
+  shorter, in front of its stem or behind it. Each picture as large as its cell holds it; its
+  leaf's share of the card and its cover are kept in `LeafSpray::shoots`, which a test holds to
+  the painted atlas.
+- **What stays the lumps':** the probes' proxies, the shells and the far shadows' proxies
+  (D-075's ladder), so the far steps do not match the shoots yet.
+
+**Numbers:**
+- **Leaf area:** every plant carries 0.83 to 1.16 of what its species asks (each card's area times
+  its picture's cover; the few-dozen-card shrubs stray the most), against 2.6 to 6 times with the
+  lumps. Opaque layers per ray 0.7 to 4.4 (2.5 to 16 with the lumps), planes 2.8 to 19 (6 to 46).
+- **Triangles:** a grown holm oak 228 000 (wood 54 000), a lime up to 210 000, an olive 60 000,
+  where the lumps take 8 000 to 33 000: the test's budget for a tree is 250 000 for now.
+- **The village's GPU** (the map check's views, DLAA, the 5070 Ti): 4.9–8.2 ms with the lumps,
+  6.4–9.9 ms with the shoots. The probes' rays +0.8 to 1.4 ms, the geometry +0.6 to 1.2, the
+  bounce's trace +0.45 to 0.6: the twigs and the cards in the traced scene, which the probes and
+  the bounce meet only through their shadow rays and the cards' alpha.
+- **Off, nothing moves:** the village's thirteen views without the flag 0 px from the same tree's
+  run before the change (the atlas's painter now paints a grid of cells; the leaf atlas's bytes are
+  the same).
+
+**Patents:** the shoots are each plant's whole foliage, not a step on an LOD ladder that drops
+leaves and enlarges the rest (Pixar's US 7,973,789 B2, D-075). The growth (Pałubicki et al.
+2009) is D-063's. No other patent met.
+
+**Next** (#379), before it is the default:
+- The crown's ladder from the shoots: shells and impostors that look as the shoots do, and the far
+  mips (a cell of a texel or two keeps its cover rounded up, so cards a pixel across could read
+  solid).
+- The cost: the probes' and the bounce's rays through the twigs and cards, fewer card triangles,
+  measured per pass; the triangles to a few times the lumps'.
+- The owner's walk among the village's trees.

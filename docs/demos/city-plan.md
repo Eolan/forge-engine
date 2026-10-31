@@ -2786,6 +2786,25 @@ the player and the pursuers as the people they flee, drawn as blocky placeholder
 (`forge_geom::animals`). The log names a view of each species' first group. Details and numbers
 in [fauna.md](fauna.md).
 
+## Leaves at the twigs' tips (D-091, #379, 2026-10-31)
+
+```
+cargo run --release -p city-plan -- --village 600 --twig-leaves
+```
+
+A prototype, off by default: each grown plant's leaves as shoots at its twigs' tips instead of
+cards round its crown's lumps (the owner: the crowns were too dense, flat and patterned). Every
+twig is drawn, a tube from 2 cm down; the shoots, as many as the species' leaf area over its
+crown's footprint asks, are cut from a shoots' atlas of four branchlets per spray
+(`textures::shoot_leaves`), mirrored, rolled, sized and shared between the branches unevenly. A
+crown carries 0.83 to 1.16 of its species' leaf area where the lumps carried 2.6 to 6 times it;
+a ray through it meets 0.7 to 4.4 opaque layers (2.5 to 16). The cost is the next step: a grown
+holm oak 228 000 triangles (the lumps 8 000 to 33 000), the map check's views 6.4–9.9 ms of GPU
+where the lumps take 4.9–8.2 (the probes' rays +0.8 to 1.4 ms, the geometry +0.6 to 1.2). The
+crowns' ladder (proxies, shells, far shadows) is still the lumps'. Images:
+`reports/2026-10-31-flora/` (`green-before.png`, `green-after.png`, `shoot-atlas.png`,
+`street-tree-after.png`, `street-tree-lumps.png`).
+
 ## The village's lots per street side (D-083's fifth step, #308, 2026-10-30)
 
 The owner's review of the walls on 2026-10-29: "the wall placements are over complicated in a lot
