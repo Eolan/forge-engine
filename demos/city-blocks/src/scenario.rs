@@ -93,6 +93,9 @@ pub struct Look {
     /// `--meter-band`, `--local-exposure-contrast`): a room seen from a lit hall through its door
     /// reads a bit darker, as the eye sees it, not black (the owner, 2026-10-19, #275).
     pub local_exposure: bool,
+    /// With `metered`: by day, outdoors, how far the exposure follows a scene darker than a
+    /// sunlit street (`AutoExposure::shade_adapt`, `r.exposure.shade_adapt`); none, all the way.
+    pub shade_adapt: Option<f32>,
     /// An environment map as the sky (D-084), for a scene authored under one: no air, no
     /// clouds, no night; the sun's direction from `sun`.
     pub environment: Option<Environment>,
@@ -138,6 +141,7 @@ impl Default for Look {
             metered: false,
             exposure_compensation: None,
             local_exposure: false,
+            shade_adapt: None,
             environment: None,
             tonemap: None,
         }

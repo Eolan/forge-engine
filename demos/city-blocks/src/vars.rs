@@ -36,6 +36,7 @@ pub(crate) struct RenderVars {
     exposure_night_floor: Var<f64>,
     /// The player's brightness (#377), added to the scene's compensation.
     brightness: Var<f64>,
+    exposure_shade_adapt: Var<f64>,
     probes: Var<bool>,
     sky_light: Var<bool>,
     sun_disc: Var<bool>,
@@ -259,6 +260,12 @@ impl Gallery {
                 self.auto_exposure.night_floor,
             ),
             brightness: s.add(rs::brightness()),
+            // The scene's own (its look's, D-093) as the setting's default.
+            exposure_shade_adapt: s.add_from_f32(
+                rs::exposure_shade_adapt(f64::from(self.auto_exposure.shade_adapt)),
+                f64::from(self.auto_exposure.shade_adapt),
+                self.auto_exposure.shade_adapt,
+            ),
             probes: s.add_from(rs::probes(true), true, self.probes_on),
             sky_light: s.add_from(rs::sky_light(true), true, self.sky_light),
             sun_disc: s.add_from(
@@ -423,6 +430,9 @@ impl Gallery {
         }
         if s.changed_since(v.exposure_darken, seen) {
             self.auto_exposure.speed_darken = s.get(v.exposure_darken) as f32;
+        }
+        if s.changed_since(v.exposure_shade_adapt, seen) {
+            self.auto_exposure.shade_adapt = s.get(v.exposure_shade_adapt) as f32;
         }
         if s.changed_since(v.exposure_night_floor, seen) {
             self.auto_exposure.night_floor = s.get(v.exposure_night_floor) as f32;

@@ -296,6 +296,19 @@ pub fn ao_ignore_nearer(default: f64) -> Spec<f64> {
     )
 }
 
+/// The share of the way the automatic exposure follows the shade by day, outdoors
+/// (`AutoExposure::shade_adapt`).
+pub fn exposure_shade_adapt(default: f64) -> Spec<f64> {
+    Spec::float(
+        "r.exposure.shade_adapt",
+        default,
+        0.0..=1.0,
+        "By day, outdoors, how far the automatic exposure follows a scene darker than the open \
+         daylight (a wood, an arcade): 1 all the way, so the shade looks as bright as the open; \
+         less keeps it darker and the sky beyond it from going white. Rooms adapt fully.",
+    )
+}
+
 /// How fast the automatic exposure brightens the image when the scene darkens (#336).
 pub fn exposure_speed_brighten(default: f64) -> Spec<f64> {
     Spec::float(

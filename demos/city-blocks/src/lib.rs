@@ -928,6 +928,9 @@ struct Gallery {
     /// `FORGE_REGION_SETS=toggle` (#338's check): the first region set and its volumes, removed
     /// at frame 100 and added again at 150.
     region_check: Option<(forge_render::RegionSetId, Vec<forge_render::RegionVolume>)>,
+    /// The scene's rooms (D-068), scene frame: the camera in one, the automatic exposure adapts
+    /// fully (`AutoExposure::indoors`).
+    exposure_rooms: Vec<forge_render::RegionVolume>,
     probes_on: bool,
     probes_live: bool,
     /// The island's sea (issue #105): the GPU's cascades and the CPU's spectra they came
@@ -1339,6 +1342,10 @@ impl Gallery {
             // Film's night (D-046): a few stops under what the eye would adapt to.
             auto_exposure.night_stops = args.night_stops;
         }
+        // The shade kept darker by day, outdoors, where the look asks (D-093).
+        if let Some(adapt) = look.shade_adapt {
+            auto_exposure.shade_adapt = adapt;
+        }
         // The scene's liquid in its glass tank (#156).
         let liquid_setup = scenario.as_ref().and_then(|s| s.liquid());
         let liquid_mode = liquid_setup.as_ref().map(|l| l.mode).unwrap_or_default();
@@ -1515,6 +1522,8 @@ impl Gallery {
         );
         let mut region_check = None;
         let mut cell_rooms = None;
+        // The rooms, for the exposure's test of the camera standing indoors.
+        let mut exposure_rooms = Vec::new();
         let mut probes = if ctx.device.features().ray_query && scene.rays().is_some() {
             // The scene's rooms (D-068), from the world frame to the scene's.
             let scene_regions = running.as_ref().filter(|_| !args.no_regions);
@@ -1543,6 +1552,7 @@ impl Gallery {
                         })
                         .collect()
                 });
+            exposure_rooms.clone_from(&volumes);
             // Rooms lit by probe grids of their own (D-078) wherever the scene gives rooms, or says it
             // will (its look's `probe_room_grids`: a scene that streams its rooms in, #338, gives none
             // at the start).
@@ -2201,6 +2211,7 @@ impl Gallery {
             ao_contact: AO_CONTACT,
             probes,
             region_check,
+            exposure_rooms,
             probes_on,
             probes_live: false,
             water,
@@ -2288,14 +2299,14 @@ impl Gallery {
     }
 
     /// Local exposure's middle grey (D-067): where the automatic exposure keys the scene, the
-    /// night's darkening taken off.
+    /// night's darkening and the shade kept by day taken off (else it lifts them back).
     fn local_middle(&self) -> f32 {
-        let night = if self.metered() {
-            self.auto_exposure.night_offset
+        let darker = if self.metered() {
+            self.auto_exposure.night_offset + self.auto_exposure.shade_offset
         } else {
             0.0
         };
-        forge_render::local_exposure::middle_grey(self.auto_exposure.compensation, night)
+        forge_render::local_exposure::middle_grey(self.auto_exposure.compensation, darker)
     }
 
     /// `--day` (issue #57): the sun at `t` of the cycle (0 sunrise, 0.5 noon, 1 sunset, 1.5
@@ -2894,6 +2905,11 @@ impl Demo for Gallery {
                 sun_on_roof = %format_args!("{:.3}", luma(self.renderer.sun_color) * sun.y),
                 "sky light, per unit of sun illuminance"
             );
+            // The open daylight's key (`AutoExposure::daylight`): level ground's light from the
+            // sun and the sky, seen at [`DAYLIGHT_KEY`] of it. Read once: the hour's light.
+            let ground = luma(self.renderer.sun_color) * sun.y.max(0.0) + e(Vec3::Y);
+            self.auto_exposure.daylight =
+                Some(DAYLIGHT_KEY * self.renderer.sun_illuminance * ground / std::f32::consts::PI);
             if let Some((at, lights)) = &self.night_now {
                 // The night (D-046): which light is the key, what the sky is per unit of, the
                 // exposure it is seen at.
@@ -2984,7 +3000,19 @@ impl Demo for Gallery {
         let metered = self.metered();
         let exposure = if metered {
             let histogram = self.meter.take(frame.slot);
+            self.auto_exposure.indoors = !self.exposure_rooms.is_empty()
+                && forge_render::region_at(&self.exposure_rooms, self.camera.position).region != 0;
             self.auto_exposure.update(histogram.as_ref(), self.step);
+            if self.frame.is_multiple_of(60) {
+                tracing::debug!(
+                    ev100 = %format_args!("{:.2}", self.auto_exposure.ev100),
+                    key = %format_args!("{:.1}", self.auto_exposure.key),
+                    daylight = %format_args!("{:.1}", self.auto_exposure.daylight.unwrap_or(0.0)),
+                    shade = %format_args!("{:.2}", self.auto_exposure.shade_offset),
+                    indoors = self.auto_exposure.indoors,
+                    "exposure"
+                );
+            }
             self.auto_exposure.exposure()
         } else {
             exposure_from_ev100(self.args.ev100)
@@ -7206,6 +7234,13 @@ const LOOK_METER_BAND: (f32, f32) = (0.25, 0.95);
 
 /// Local exposure's contrast under middle grey in such a look (#275; 0.7 by default).
 const LOOK_SHADOW_CONTRAST: f32 = 0.55;
+
+/// The key an open daylit scene meters at, a share of level ground's luminance under the sun
+/// and the sky as a white ground would give it (`AutoExposure::daylight`). Measured on the
+/// village's views at noon (2026-10-31): its green in the sun 0.15, the view over its wood 0.06,
+/// its main street with the houses' shade 0.04, inside the wood 0.015 to 0.02. The street's: a
+/// street keeps its exposure, the wood's shade is kept darker.
+const DAYLIGHT_KEY: f32 = 0.04;
 
 /// `--meter-band`: two fractions in 0..1, `LOW,HIGH`, the first below the second.
 fn parse_sea_water(text: &str) -> std::result::Result<forge_render::SeaWater, String> {

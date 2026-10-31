@@ -267,6 +267,10 @@ const SQUEEZE: f32 = 0.85;
 /// The share of the open sky's light a village room beyond the room grids' reach takes (D-078,
 /// `ProbeParams::far_room_sky`; the scene's look explains the number).
 const VILLAGE_FAR_ROOM_SKY: f32 = 0.2;
+/// How far the village's exposure follows a scene darker than its sunlit streets by day,
+/// outdoors (D-093, `AutoExposure::shade_adapt`): a quarter of the way, the wood 1.2 stops darker
+/// than adapted fully (the owner's choice of 1, 0.5, 0.25 and 0, 2026-10-31).
+const VILLAGE_SHADE_ADAPT: f32 = 0.25;
 /// The far rooms' daylight factor (#356, `ProbeParams::far_room_daylight`): a room with windows
 /// beyond the grids' reach takes this times its windows' daylight over its surfaces; the factor
 /// stands for the light's bounces in the room, about 1 / (1 − ρ) for its whitewashed walls.
@@ -6835,6 +6839,10 @@ impl Scenario for PlanScenario {
             // Local exposure with it (D-067, #275): a room seen from a lit hall through its door
             // was pitch black; lifted, it reads a bit darker, as the eye sees it.
             local_exposure: !self.flora.is_empty(),
+            // The wood's shade kept darker than the streets by day (D-093): adapted fully, the
+            // wood was shown brighter than the field outside it and the sky between its leaves
+            // white (the owner, 2026-10-31, who chose a quarter of the way).
+            shade_adapt: (!self.flora.is_empty()).then_some(VILLAGE_SHADE_ADAPT),
             environment: None,
             tonemap: None,
             // A room beyond the room grids' reach takes this share of the open sky (D-078, the

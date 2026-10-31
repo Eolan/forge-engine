@@ -164,6 +164,22 @@ pub struct AutoExposure {
     /// The stops the night darkened the last metered target by: 0 by day (local exposure's
     /// middle grey follows it, D-067).
     pub night_offset: f32,
+    /// The share of the way the exposure follows a scene darker than the open daylight
+    /// ([`Self::daylight`]) by day, outdoors: 1, the default, adapts fully, as the eye does in
+    /// time; less keeps the shade of a wood darker than the open round it, as games show it (the
+    /// owner, 2026-10-31: under the trees the wood was shown brighter than the field outside and
+    /// the sky between the leaves white). Indoors ([`Self::indoors`]) it adapts fully.
+    pub shade_adapt: f32,
+    /// The key luminance an open, sunlit scene meters at by the hour's sun and sky, cd/m² (the
+    /// app's, none: no shade kept).
+    pub daylight: Option<f32>,
+    /// The camera stands in a room: the exposure adapts fully, whatever `shade_adapt`.
+    pub indoors: bool,
+    /// The stops the shade kept the last metered target darker by (local exposure's middle grey
+    /// follows it, as the night's).
+    pub shade_offset: f32,
+    /// The last metered key luminance, cd/m² (0 before any).
+    pub key: f32,
     /// Metered frames so far: the first [`START_READINGS`] snap to their target.
     readings: u32,
 }
@@ -185,6 +201,11 @@ impl AutoExposure {
             night_ev: (8.0, -2.0),
             night_floor: NO_NIGHT_FLOOR,
             night_offset: 0.0,
+            shade_adapt: 1.0,
+            daylight: None,
+            indoors: false,
+            shade_offset: 0.0,
+            key: 0.0,
             readings: 0,
         }
     }
@@ -229,8 +250,16 @@ impl AutoExposure {
             // meters lit buildings at night at EV 2. Not in `night_offset`: local exposure's
             // middle grey stays the moonlit one, so it lifts the fields the floor darkens.
             let floor = (self.night_floor - (metered + self.night_offset)).max(0.0) * night;
-            self.target_ev100 =
-                (metered + self.night_offset + floor).clamp(self.range.0, self.range.1);
+            // The shade kept by day, outdoors: the stops the key falls under the open daylight's,
+            // all but `shade_adapt` of them.
+            self.key = luminance;
+            let under = self
+                .daylight
+                .filter(|_| !self.indoors)
+                .map_or(0.0, |day| (day / luminance).log2().max(0.0));
+            self.shade_offset = (1.0 - self.shade_adapt.clamp(0.0, 1.0)) * under * (1.0 - night);
+            self.target_ev100 = (metered + self.night_offset + floor + self.shade_offset)
+                .clamp(self.range.0, self.range.1);
             if self.readings < START_READINGS {
                 self.ev100 = self.target_ev100;
             }
@@ -559,6 +588,43 @@ mod tests {
         auto.range = (0.0, 12.0);
         auto.update(Some(&bright), 1.0 / 60.0);
         assert!((auto.target_ev100 - (target - 1.0).min(12.0)).abs() < 0.05);
+    }
+
+    /// By day, outdoors, a scene darker than the open daylight is shown `1 - shade_adapt` of the
+    /// stops under it darker than a full adaptation would show it; at the daylight or brighter,
+    /// indoors, or at the default `shade_adapt` of 1, the target is the metered one.
+    #[test]
+    fn the_shade_is_kept_a_share_darker_by_day_outdoors() {
+        let target = |luminance: f32, adapt: f32, indoors: bool| {
+            let mut auto = AutoExposure::new(10.0);
+            auto.daylight = Some(800.0);
+            auto.shade_adapt = adapt;
+            auto.indoors = indoors;
+            let h = LuminanceHistogram::from_samples([(luminance, 100)], 1.0e-4);
+            auto.update(Some(&h), 1.0 / 60.0);
+            (auto.target_ev100, auto.shade_offset)
+        };
+        // Within a histogram bin (24 stops in 256).
+        let near = |a: f32, b: f32| (a - b).abs() < 0.06;
+        let full = |luminance: f32| ev100_from_luminance(luminance);
+        // A wood two stops under the daylight, kept a stop darker at a half.
+        let (t, shade) = target(200.0, 0.5, false);
+        assert!(
+            near(shade, 1.0) && near(t, full(200.0) + 1.0),
+            "{t} {shade}"
+        );
+        // All of it at 0: the wood at the daylight's exposure.
+        let (t, _) = target(200.0, 0.0, false);
+        assert!(near(t, full(800.0)), "{t}");
+        // Nothing at the default, in a room, or in the open.
+        for (luminance, adapt, indoors) in [
+            (200.0, 1.0, false),
+            (200.0, 0.5, true),
+            (3000.0, 0.5, false),
+        ] {
+            let (t, shade) = target(luminance, adapt, indoors);
+            assert!(shade == 0.0 && near(t, full(luminance)), "{t} {shade}");
+        }
     }
 
     #[test]

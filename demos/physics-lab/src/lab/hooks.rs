@@ -282,6 +282,7 @@ impl Scenario for LabScenario {
             exposure_compensation: (kind == LabScene::Bistro)
                 .then_some(super::bistro::EXPOSURE_COMPENSATION),
             local_exposure: false,
+            shade_adapt: None,
             // An authored scene under its authors' sky and sun (D-084), the chart under its own, for
             // comparisons with Falcor's renders.
             environment: kind.authored().and_then(super::bistro::environment),

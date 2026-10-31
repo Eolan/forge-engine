@@ -10059,3 +10059,43 @@ the asteroids has them, so the gallery offers off, DLAA and FSR's native AA); ke
 the menu (`bind` stays the console's); a resolution scale apart from the upscalers.
 
 *(issue #377; D-069, D-081; docs/demos/console.md, "The game's menu")*
+
+## D-093 — By day, a wood's shade kept darker than the streets: the exposure a quarter of the way ✅ (the owner, 2026-10-31: "0.25"; D-022, D-046, D-067)
+
+**Why:** the owner, walking into the village's wood: "going in the canopy/crown of the trees make
+the outside overexposed. Even walking in the forest make the forest light brighter than even
+outside of it." At a fixed exposure the wood's floor is 0.3 to 0.8 stops darker than the field at
+its edge, as it should be; the automatic exposure (D-022) brought it all the way to middle grey,
+1.1 to 1.5 stops brighter than at the edge, so the wood was shown brighter than the field and the
+sky between its leaves went white. The village had the full adaptation since 2026-10-16, when at
+the street's fixed exposure the ground under the holm oaks was black.
+
+**What games do:** the eye's full adaptation is not what they show. They clamp the exposure per
+area, adapt partly to a dark scene (Unreal's exposure compensation curve; Krawczyk et al. 2005
+lower the key of a dark scene), and keep rooms adapted (exposure volumes).
+
+**What it is** (`AutoExposure::shade_adapt`, `r.exposure.shade_adapt`):
+- **By day, outdoors,** the meter's key under an open daylight's is followed only `shade_adapt` of
+  the way: the scene is shown `(1 − shade_adapt)` times the stops it falls under it darker than
+  adapted fully. The night keeps its own darkening (D-046), the shade fading out with it.
+- **The open daylight** is a sunlit street's key: level ground's light from the sun and the sky at
+  the hour (the sky's irradiance read at frame 30) times 0.04 (`DAYLIGHT_KEY`), measured on the
+  village's views at noon (its green 0.15, the view over the wood 0.06, the main street with its
+  houses' shade 0.04, inside the wood 0.015 to 0.02). A street keeps its exposure.
+- **Indoors** (the camera inside one of the scene's rooms, `region_at` over the probes' region
+  volumes, D-068) the exposure adapts fully.
+- **Local exposure** (D-067) keys on the darkened middle grey, as for the night, or it would lift
+  the wood back.
+- **The village's look** takes 0.25 (`VILLAGE_SHADE_ADAPT`); 1, every other scene's default,
+  changes nothing.
+
+**Numbers** (the wood at noon, the walk in from the field and the view up under the
+canopy; `reports/2026-10-31-forest-light/5-shade-strengths-1-05-025-0.png`): the wood shown 0.8
+(0.5), 1.2 (0.25) or 1.5 (0) stops darker than adapted fully, 0 at the field's edge, a room's EV
+10.83 and the main street's 11.78 at every strength. The map check: its twelve views within the
+runs' noise (mean ꟻLIP 0.0005 to 0.003 against the same tree's run before), the walk into a house
+(`enter`) 0.046: entering through its shaded porch the hall starts darker and catches up within a
+second or two (the same frames 0.002 apart from frame 600); accepted.
+
+**Left as it is:** the daylight is read once a run, at frame 30 (a clock moving the sun far would
+leave it stale until the next run).
