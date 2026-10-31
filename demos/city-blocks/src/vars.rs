@@ -381,6 +381,12 @@ impl Gallery {
         }
         if s.changed_since(v.gi_cache, seen) {
             self.cache_mode = s.get(v.gi_cache);
+            // SHaRC indoors alone (D-090).
+            if self.cache_mode == rs::GI_CACHE_AUTO {
+                self.flags.0 |= CullFlags::SHARC_AUTO;
+            } else {
+                self.flags.0 &= !CullFlags::SHARC_AUTO;
+            }
         }
         if s.changed_since(v.gi_probe_ahead, seen) {
             self.probe_ahead = s.get(v.gi_probe_ahead) as f32;

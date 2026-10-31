@@ -190,8 +190,10 @@ void sharc_update_main(uint3 id : SV_DispatchThreadID)
     if (vis == VISIBILITY_EMPTY)
         return;
     PixelSurface s = pixel_surface(f, vis, pixel, p.width, p.height);
-    // A crown's leaf starts no path: its rays start inside its crown's proxy (D-075).
-    if (s.foliage)
+    // A crown's leaf starts no path: its rays start inside its crown's proxy (D-075). Under
+    // `r.gi.cache auto` an outdoor pixel starts none either: nothing reads the voxels it would
+    // fill (D-090).
+    if (s.foliage || !sharc_here(f, p.probes, to_scene(f, s.relative), s.g, normalize(-s.relative)))
         return;
     g_ray_mask = shadow_world(f, s.relative, pixel);
     SharcParameters sharc = sharc_parameters(field);

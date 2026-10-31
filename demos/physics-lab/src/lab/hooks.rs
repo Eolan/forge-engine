@@ -266,6 +266,12 @@ impl Scenario for LabScenario {
             probe_far_room_daylight: None,
             probe_far_room_lamps: None,
             probe_room_grids: None,
+            // The rooms authored as one, and the models lab's room: SHaRC everywhere under
+            // `r.gi.cache auto` (D-090).
+            indoors: kind
+                .authored()
+                .is_some_and(super::bistro::Authored::indoors)
+                || (kind == LabScene::Models && models::room_shown()),
             // The car is followed from the start (C lets it go); the aeroplane always is.
             chase: matches!(kind, LabScene::Drive | LabScene::Flyer),
             // Each lab scene at its own fixed exposure (its captures compared at one), but the

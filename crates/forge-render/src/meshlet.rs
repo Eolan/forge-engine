@@ -105,6 +105,13 @@ impl CullFlags {
     /// GGX without its multiple-scattering compensation (D-086): Falcor's, for the material
     /// chart's comparisons (`FLAG_SINGLE_SCATTER` in the shader).
     pub const SINGLE_SCATTER: u32 = 1 << 29;
+    /// The whole scene is indoors (a room authored as one: the lab's Cornell box, classroom,
+    /// bedroom, kitchen), so SHaRC lights every bounce's hit under `r.gi.cache auto` (D-090,
+    /// `FLAG_INDOORS` in the shader).
+    pub const INDOORS: u32 = 1 << 30;
+    /// `r.gi.cache auto` (D-090): SHaRC lights a bounce's hit indoors alone, the probes elsewhere
+    /// (`FLAG_SHARC_AUTO`, `sharc_here` in the shader).
+    pub const SHARC_AUTO: u32 = 1 << 31;
     /// Everything on except the debug views.
     pub const DEFAULT: Self = Self(Self::CONE | Self::FRUSTUM | Self::OCCLUSION | Self::LOD);
 

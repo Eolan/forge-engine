@@ -150,6 +150,15 @@ const FALCOR_UNIT: f32 = 12_800.0;
 const NIGHT_ROOM_UNIT: f32 = 30.0;
 
 impl Authored {
+    /// A room authored as one, lit inside (D-090: SHaRC lights every bounce's hit there under
+    /// `r.gi.cache auto`).
+    pub(crate) fn indoors(self) -> bool {
+        matches!(
+            self,
+            Authored::Classroom | Authored::Cornell | Authored::Bedroom | Authored::Kitchen
+        )
+    }
+
     /// The converted scene's folder, and the one its maps' paths are relative to.
     fn folders(self) -> (PathBuf, PathBuf) {
         let external =

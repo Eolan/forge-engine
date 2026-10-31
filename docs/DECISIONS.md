@@ -9680,3 +9680,21 @@ A/B harness keep `r.gi.cache off`; `tools/gi-compare.sh` measures the choice by 
   as under `off`; the village's landing and room; the cost by day and at night; the house doors
   (an indoor hit seen from the street, and the street from a room).
 - **NRC** on the same hook afterwards: its download (filename, source, size) asked for first.
+
+**Built (2026-10-31): `r.gi.cache auto`.** `sharc_here` (meshlet.slang) answers both for the
+bounce's hit and for SHaRC's update (`sharc.slang`): the frame's `FLAG_INDOORS`
+(`CullFlags::INDOORS`, a scene's `Look::indoors`: the lab's authored rooms and the models lab's
+room), else the probes' room at the point as the lamps find it (`region_open`). Against Forge's
+path (`tools/gi-compare.sh`, one run each, mean |log2| and the frame's GPU ms):
+
+| View | off | sharc | auto |
+|---|---|---|---|
+| the kitchen, clay (declared indoors) | 0.125, 5.42 ms | 0.073, 6.27 ms | 0.073, 5.76 ms |
+| the Bistro's Exterior_1, clay | 0.028, 6.64 ms | 0.048, 7.66 ms | 0.028, 6.95 ms |
+| the village's room (its room grids) | 0.146, 7.23 ms | 0.052, 8.09 ms | 0.067, 7.80 ms |
+| the village's street | 0.116, 6.81 ms | 0.116, 7.13 ms | 0.116, 6.97 ms |
+
+Indoors it is SHaRC's, outdoors the probes'; in the village's room the hits past its door and
+windows take the probes. Outdoors it still costs 0.15–0.3 ms over the probes alone: SHaRC's
+other passes run though nothing reads them there (to skip). The default images: `ast240`,
+`city60`, `lab-lamps60`, `lab-materials60` 0 px.

@@ -283,6 +283,11 @@ public static const uint FLAG_BAKE_NORMAL = 268435456;
 // GGX without its multiple-scattering compensation (D-086, `r.specular.single_scatter`): Falcor's,
 // for the material chart's comparisons.
 public static const uint FLAG_SINGLE_SCATTER = 536870912;
+// The whole scene is indoors (`CullFlags::INDOORS`, D-090): SHaRC lights every bounce's hit under
+// `r.gi.cache auto`.
+public static const uint FLAG_INDOORS = 1073741824;
+// `r.gi.cache auto` (`CullFlags::SHARC_AUTO`, D-090): SHaRC lights a bounce's hit indoors alone.
+public static const uint FLAG_SHARC_AUTO = 2147483648;
 
 static const uint PAGE_NONE = 0xFFFFFFFF;           // an absent page in `page_table`, no page in `child_page`
 static const uint MESHLET_INDEX_MASK = 0x3FFFFFFFu;
@@ -7915,6 +7920,22 @@ void sun_shadow_trace_main(uint3 id : SV_DispatchThreadID)
 
 // ------------------------------------------------------ the diffuse bounce (D-088) ---
 
+// Whether SHaRC lights a bounce's hit at `position` facing `n`, seen from `toward` (unit, from
+// the hit back along its ray), and its update starts paths there (D-090): always under
+// `r.gi.cache sharc`; under `auto` (FLAG_SHARC_AUTO) indoors alone: the scene declared indoors
+// (FLAG_INDOORS, the lab's rooms), or a room of the probes' room grids (D-078: a region other
+// than the outside's, not a house's body), found as the lamps find a surface's place.
+bool sharc_here(Frame* f, ProbeField* probes, float3 position, float3 n, float3 toward)
+{
+    uint flags = f[0].flags;
+    if ((flags & FLAG_SHARC_AUTO) == 0u || (flags & FLAG_INDOORS) != 0u)
+        return true;
+    if (probes == nullptr || probes[0].region_count == 0u)
+        return false;
+    RegionHit at = region_open(probes, position + n * 0.02, position + n * 0.15, position + toward * 0.3);
+    return at.kind != REGION_SOLID && at.region != REGION_OUTSIDE && at.region != REGION_NONE;
+}
+
 // D-088's surface cache through NVIDIA's SHaRC (`sharc.slang`, `crates/forge-render/src/sharc.rs`):
 // its slots and this frame's grid. The slots' buffers are SHaRC's `HashGridKey`,
 // `SharcAccumulationData` and `SharcPackedData` (8, 16 and 16 bytes a slot).
@@ -8090,7 +8111,7 @@ void diffuse_trace_main(uint3 id : SV_DispatchThreadID)
         light = float3(0.0);
 #ifdef FORGE_SHARC
         // `sharc.slang`'s build of this entry: SHaRC's voxels for the light after the hit.
-        if (!hit.back && p.sharc != nullptr)
+        if (!hit.back && p.sharc != nullptr && sharc_here(f, p.probes, hit.position, hit.n, -ray.Direction))
             light = sharc_bounce(f, p.sky, p.probes, p.sharc, hit, c, ray.Direction, seed);
         else
 #endif

@@ -1423,6 +1423,10 @@ impl Gallery {
             (build_city(ctx, &args, cooked, &camera)?, Vec::new())
         };
         let mut flags = CullFlags(CullFlags::CONE | CullFlags::FRUSTUM);
+        // A scene authored as one room: SHaRC everywhere under `r.gi.cache auto` (D-090).
+        if look.indoors {
+            flags.0 |= CullFlags::INDOORS;
+        }
         // The city's views list 0.44–1.03 M clusters on their first frame, the island's 0.45 M:
         // reserved up front (16 MiB a frame slot, what growing reached anyway), no frame drops
         // any. Grown on demand, the first two frames missed the nearest buildings and rocks
@@ -2659,7 +2663,10 @@ impl Demo for Gallery {
             cache.reset();
         }
         if self.renderer.gi_trace
-            && self.cache_mode == forge_render::settings::GI_CACHE_SHARC
+            && matches!(
+                self.cache_mode,
+                forge_render::settings::GI_CACHE_SHARC | forge_render::settings::GI_CACHE_AUTO
+            )
             && !self.sharc_tried
         {
             self.sharc_tried = true;
@@ -3753,8 +3760,11 @@ impl Demo for Gallery {
             // Or NVIDIA's SHaRC in its place.
             let sharc = match &mut self.sharc {
                 Some(sharc)
-                    if self.cache_mode == forge_render::settings::GI_CACHE_SHARC
-                        && for_denoiser.is_some() =>
+                    if matches!(
+                        self.cache_mode,
+                        forge_render::settings::GI_CACHE_SHARC
+                            | forge_render::settings::GI_CACHE_AUTO
+                    ) && for_denoiser.is_some() =>
                 {
                     Some(sharc.update(
                         &mut frame.graph,

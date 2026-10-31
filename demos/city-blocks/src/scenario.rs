@@ -75,6 +75,9 @@ pub struct Look {
     /// it updates its grid every frame (a game measured +0.41 ms at 20 m, +0.18 at 12 m on a
     /// street walk).
     pub probe_room_grids: Option<forge_render::RoomGridParams>,
+    /// The whole scene is indoors (a room authored as one), so under `r.gi.cache auto` SHaRC
+    /// lights every bounce's hit (D-090); else only in the probes' room grids' rooms.
+    pub indoors: bool,
     /// The camera follows the scene's vehicle from the start ([`Running::follow`]).
     pub chase: bool,
     /// The exposure follows the scene's metered light without `--day` or `--time-of-day` (unless
@@ -125,6 +128,7 @@ impl Default for Look {
             probe_far_room_daylight: None,
             probe_far_room_lamps: None,
             probe_room_grids: None,
+            indoors: false,
             chase: false,
             metered: false,
             exposure_compensation: None,
