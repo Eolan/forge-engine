@@ -52,7 +52,8 @@ in. CI checks the crate list.
 - **Permissive licences** (MIT, Apache-2.0, BSD, Zlib, ISC, BSL-1.0): the notices and licence
   texts go with the binaries. A tool such as `cargo-about` builds that file from the same
   metadata as the crate list.
-- **JetBrains Mono** ships with its `OFL.txt` and is never sold on its own.
+- **JetBrains Mono, Orbitron and Rajdhani** ship with their `OFL.txt` and are never sold on
+  their own. Orbitron's licence reserves its name: a modified copy would need another.
 
 ## Giving back
 
@@ -129,7 +130,9 @@ authors at Embark Studios, whose caches D-088's surface cache is ported from.
 
 | Asset | People | Where | Licence |
 |---|---|---|---|
-| [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) | the JetBrains Mono Project Authors | the profiler overlay's text | SIL OFL 1.1 (`assets/fonts/jetbrains-mono/OFL.txt`) |
+| [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) | the JetBrains Mono Project Authors | the profiler overlay's text, the game menu's values and codes | SIL OFL 1.1 (`assets/fonts/jetbrains-mono/OFL.txt`) |
+| [Orbitron](https://github.com/theleagueof/orbitron) ExtraBold, as Google Fonts serves it | the Orbitron Project Authors (Matt McInerney, The League of Moveable Type) | the game menu's titles (#377's Carbon HUD look, after the owner's streaming overlays) | SIL OFL 1.1, Reserved Font Name "Orbitron" (`assets/fonts/orbitron/OFL.txt`) |
+| [Rajdhani](https://fonts.google.com/specimen/Rajdhani) Medium and SemiBold, as Google Fonts serves them | Indian Type Foundry | the game menu's text, tabs and buttons (the same look) | SIL OFL 1.1 (`assets/fonts/rajdhani/OFL.txt`) |
 | The lab's boat (`assets/models/boat.glb`) | made for Forge by `assets/blender/boat.py` (#138) | `physics-lab --lab sea` | the project's (MIT OR Apache-2.0) |
 | The lab's spaceship (`assets/models/ship.glb`) | made for Forge by `assets/blender/ship.py` (#150, 2026-10-03) | `physics-lab --lab space` | the project's (MIT OR Apache-2.0) |
 | The lab's creatures (`assets/models/skinned-creatures.glb`: the mannequin and the dog, their armatures and clips, their wood and fur textures) | made for Forge by `assets/blender/skinned_creatures.py` (#165, #166, 2026-10-04) | `physics-lab --lab creatures` | the project's (MIT OR Apache-2.0) |

@@ -2705,13 +2705,17 @@ To halve if the authored scenes grow many flat lamps: keep the weights of the fi
 Five passes, only while the game's menu shows (`app/menu glass *`), the village paused behind
 the settings (`city-plan --village 600 --exec "app.menu graphics"`, 150 frames, the 5070 Ti):
 
-| Window | copy | down (4 × 4) | blur x | blur y | glass | total |
+| Look, window | copy | down (4 × 4) | blur x | blur y | glass | total |
 |---|---|---|---|---|---|---|
-| 1920 × 1080 | 0.019 | 0.010 | 0.006 | 0.005 | 0.011 | 0.051 ms |
-| 3840 × 2160 | 0.044 | 0.025 | 0.012 | 0.011 | 0.039 | 0.131 ms |
+| base, 1920 × 1080 | 0.019 | 0.010 | 0.006 | 0.005 | 0.011 | 0.051 ms |
+| base, 3840 × 2160 | 0.044 | 0.025 | 0.012 | 0.011 | 0.039 | 0.131 ms |
+| Carbon, 1920 × 1080 | 0.019 | 0.011 | 0.008 | 0.005 | 0.019 | 0.062 ms |
+| Carbon, 3840 × 2160 | 0.050 | 0.028 | 0.015 | 0.011 | 0.070 | 0.174 ms |
 
 The copy is a plain image copy of the frame; the blurs run at a quarter of its size in RGBA16F,
-25 taps each. The menu's own quads (`app/hud`) cost 0.014 ms at 1080p, 0.041 ms at 4K.
+25 taps each. Carbon's glass pass (the default look, `app.menu_theme`) adds its glows, vignette
+and dither per pixel. The menu's own quads (`app/hud`) cost 0.014 ms at 1080p, 0.042 ms at 4K
+in either look.
 
 ## Not measured yet
 

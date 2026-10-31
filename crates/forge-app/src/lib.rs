@@ -274,14 +274,14 @@ impl Context {
             return 0.0;
         };
         font.text(&mut self.hud, at, px, color, text);
-        font.metrics().width(px, text)
+        font.text_width(px, text)
     }
 
     /// How wide [`Context::hud_text`] draws `text` at `px` pixels.
     pub fn hud_text_width(&mut self, px: f32, text: &str) -> f32 {
         self.make_glyphs();
         match &self.glyphs {
-            Some(Some(font)) => font.metrics().width(px, text),
+            Some(Some(font)) => font.text_width(px, text),
             _ => 0.0,
         }
     }
@@ -295,11 +295,6 @@ impl Context {
                     .ok(),
             );
         }
-    }
-
-    /// The glyphs' metrics, once made.
-    fn glyph_metrics(&self) -> Option<menu::Metrics> {
-        self.glyphs.as_ref()?.as_ref().map(|f| f.metrics())
     }
 }
 
@@ -1688,6 +1683,16 @@ impl<D: Demo> State<D> {
             )
             .release(),
         );
+        settings.add(
+            Spec::choice(
+                "app.menu_theme",
+                &menu::Theme::NAMES,
+                0,
+                "The game's menu's look (#377): carbon, dark with ion blue and amber (the \
+                 default), or base, the first one, plainer.",
+            )
+            .release(),
+        );
         let hud_shown = settings.add(
             Spec::bool(
                 "app.hud",
@@ -2516,21 +2521,21 @@ impl<D: Demo> State<D> {
                     made.set_output(&self.ctx.shaders, format, self.ctx.output.ui_white)?;
                 }
                 if let Some(Some(made)) = &self.glass {
-                    made.draw(&mut frame.graph, swapchain_image, extent);
+                    let theme = menu::Theme::of(&self.ctx.settings);
+                    made.draw(&mut frame.graph, swapchain_image, extent, theme);
                     glass = true;
                 }
             }
             if menu && let Some(Some(font)) = &self.ctx.glyphs {
                 let size = [extent.width as f32, extent.height as f32];
-                let paused = self.ctx.paused;
-                self.menu.draw(
-                    font,
-                    size,
-                    &self.ctx.settings,
-                    paused,
+                let behind = menu::Behind {
+                    paused: self.ctx.paused,
                     glass,
-                    &mut self.ctx.hud,
-                );
+                    // `OUTPUT_PQ`: the HUD encodes its colours to PQ, and they blend so.
+                    pq: overlay::encoding(self.ctx.swapchain.format()) == 2,
+                };
+                self.menu
+                    .draw(font, size, &self.ctx.settings, behind, &mut self.ctx.hud);
             }
             if !self.ctx.loading && (!self.ctx.hud.is_empty() || lens.is_some()) {
                 self.hud.set_output(
@@ -2988,15 +2993,13 @@ impl<D: Demo> ApplicationHandler for App<D> {
                 if state.menu.is_open() {
                     if down
                         && matches!(button, MouseButton::Left | MouseButton::Right)
-                        && let Some(m) = state.ctx.glyph_metrics()
+                        && let Some(Some(font)) = &state.ctx.glyphs
                     {
                         let e = state.ctx.swapchain.extent();
                         let size = [e.width as f32, e.height as f32];
                         let back = button == MouseButton::Right;
-                        let action =
-                            state
-                                .menu
-                                .click(state.cursor, size, m, &mut state.ctx.settings, back);
+                        let settings = &mut state.ctx.settings;
+                        let action = state.menu.click(state.cursor, size, font, settings, back);
                         if state.menu_action(action) {
                             event_loop.exit();
                         }
@@ -3056,11 +3059,13 @@ impl<D: Demo> ApplicationHandler for App<D> {
             WindowEvent::CursorMoved { position, .. } => {
                 state.cursor = [position.x as f32, position.y as f32];
                 if state.menu.is_open()
-                    && let Some(m) = state.ctx.glyph_metrics()
+                    && let Some(Some(font)) = &state.ctx.glyphs
                 {
                     let e = state.ctx.swapchain.extent();
                     let size = [e.width as f32, e.height as f32];
-                    state.menu.hover(state.cursor, size, m, &state.ctx.settings);
+                    state
+                        .menu
+                        .hover(state.cursor, size, font, &state.ctx.settings);
                 }
             }
             // The wheel's notches (a touchpad's pixels at 40 a notch): the fly camera's speed.

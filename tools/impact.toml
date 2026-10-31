@@ -37,6 +37,13 @@
 "demos/city-plan/**" = []
 "crates/forge-sim/src/population.rs" = []
 "tools/population-bench/**" = []
+# The game's menu (#352, #377): no capture opens it, judged by its tests and its own captures
+# (`--exec "app.menu graphics"`). Its glyphs (menu.rs) draw city-blocks' HUD text too: unmapped.
+"crates/forge-app/src/menu/**" = []
+"crates/forge-app/src/glass.rs" = []
+"shaders/menu_glass.slang" = []
+"assets/fonts/orbitron/**" = []
+"assets/fonts/rajdhani/**" = []
 # The networking (#268): headless, on loopback, judged by its tests and `net-loopback`.
 "crates/forge-net/**" = []
 # The flora off the GPU (#269): a crate of its own, judged by its tests and its CPU drawings.

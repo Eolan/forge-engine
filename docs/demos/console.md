@@ -96,13 +96,16 @@ commands, set from the console; `bind` puts one on a key.
   - **Sound and controls:** the volume (`snd.volume`), the ambience (`snd.ambience`, #357), the mouse look (`app.mouse_look`) and the frame info (`r.display_info`).
   - **What the menu changes is the user's** (`Source::User`) and is written to `settings/user.cfg` (`FORGE_SETTINGS_DIR` moves it), read at the next start before `forge.cfg` and `--set`, which override it. A choice stays in the file while `forge.cfg` or `--set` overrides it, or a demo does not have it; Defaults removes it. A scripted run (a frame limit or a capture) never reads or writes the file, whatever `FORGE_CFG` says; `FORGE_CFG=none` and `--no-cfg` keep it out of any run (#377).
   - **The first launch** on a machine (no `user.cfg` yet, an interactive run) looks at the GPU's memory, whether it runs DLSS and the monitor, picks the preset (12 GB and more ultra, 8 GB high, 5 GB medium, less low) and borderless fullscreen at the monitor's own size, writes them to the file with what it saw as its first lines, and logs it.
+  - **Its look** (`app.menu_theme`, #377): **carbon**, the default, the owner's streaming overlays' (dark, ion blue and amber; Orbitron for the titles, Rajdhani for the labels, tabs and buttons, JetBrains Mono for the values; the titles, tabs, values and buttons in capitals, dotted leaders from a label to its value, a change waiting for Apply in amber; the glass tinted with their glows and vignette), or **base**, the first one (one monospaced face, grey and orange, the glass's plain tint).
   - **A solo game holds behind it:** its update sees no time pass (`Context::paused`; the demos stepping at a fixed rate of their own skip their steps), so the simulation, the particles and the scene's clocks stop, and the sound fades out over a quarter of a second, and back in on resume. A networked game (`Demo::networked`: the physics lab with `--net`) runs on behind it.
 
   ![The game's settings, graphics page](images/game-menu.png)
 
   ![The game's settings, display page](images/game-menu-display.png)
 
-  *The village paused behind the settings, on its frosted glass, at 1080p (`city-plan --village 600 --exec "app.menu graphics"`, then `display`).*
+  ![The game's settings in the base look](images/game-menu-base.png)
+
+  *The village paused behind the settings, on its frosted glass, at 1080p (`city-plan --village 600 --exec "app.menu graphics"`, then `display`, then the graphics page with `--set app.menu_theme=base`).*
 
 - **How long binds last:**
   - typed in the console, for the run, as every console change;
@@ -178,6 +181,7 @@ The shell's, in every demo:
 | `app.hdr.mode` | the output (#377; `app.hdr` switches too); HDR10 and scRGB where Windows shows the display in HDR; `FORGE_HDR` wins | off, hdr10, scrgb, offscreen | the demo's |
 | `snd.volume` | the sound's master level (#318), in runs that open the device (interactive ones only) | 0 to 1 (0 silent) | yes |
 | `snd.ambience` | the ambience's level under the master (#357): the beds and the perched birds | 0 to 1 | yes |
+| `app.menu_theme` | the game's menu's look (#377): carbon (the owner's streaming overlays') or base (the first one, plainer) | carbon, base | yes |
 | `app.hud` | the game's HUD (#328: the quads it pushes into `Context::hud`, drawn after the frame and under this overlay, pass `app/hud`); 0 for a capture without it | 0, 1 | yes |
 | `app.hdr`, `app.hdr.peak`, `app.hdr.false_colours` | commands: the HDR output on or off, the next peak, the preview's false colours | | no |
 | `app.calibrate` | command: the HDR calibration pages, in an HDR mode | | no |

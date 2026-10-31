@@ -10009,10 +10009,36 @@ screen".
   alpha in the captured PNG (the menu's column came out see-through, as #352's bar did); the
   capture now writes alpha 255, as the screen shows it.
 
+**The looks (the same day):** the owner asked what the menu would look like in the Carbon HUD of
+their streaming overlays ("with the theme of the project in the directory obs-streaming-project?
+(take background and fonts maybe?)"), without its corner brackets and the blue bar down the
+column's side, then "keep the one you did before somewhere, it fits more the base theme, but keep
+carbon as the current theme for now". `app.menu_theme` chooses:
+- **carbon**, the default (`menu::carbon`): the overlays' dark (#0A0B0E), ion blue (#4FD8FF)
+  and amber (#FFB454); Orbitron ExtraBold for the titles, Rajdhani Medium and SemiBold for the
+  labels, tabs and buttons, JetBrains Mono for the values, the sections and the hints (all OFL,
+  `assets/fonts`, `CREDITS.md`); the titles, tabs, values and buttons in capitals, dotted
+  leaders from a label to its value,
+  a change waiting for Apply in amber and Apply glowing while there is one. The glass is tinted
+  as the overlays' page: a violet glow at the top right, an ion blue one at the bottom left and
+  a vignette (their faint grid tried and left out, the owner), composed as seen in every
+  encoding (a PQ frame decoded first) and dithered so that the glows' long ramps do not
+  band in 8 bits. The page's colours are its sRGB codes, decoded as such. Its translucent ones
+  are converted for the HUD's blending in linear light (`carbon::Blend`: a light colour at the
+  alpha that looks the same, a dark veil at the one that darkens as much); in HDR10 the HUD
+  blends on PQ's codes, perceptual as the page's, and takes the page's alpha as it is. The focus
+  band is even: a fade across the row broke into steps in 8 bits, which the HUD cannot dither.
+- **base** (`menu::base`): the first look, one monospaced face, grey text and an orange accent,
+  the column's edges drawn, the glass's plain tint.
+- Both share the menu's state, keys, rows and descriptions; each lays out and draws its own
+  column. The glyphs: each face rasterised at 26 and 56 px (the titles at 96 too) into atlases of
+  16 glyphs a row (one row of the wider faces' cells would pass the 4096 px every GPU takes), set
+  from their baseline by each glyph's own advance.
+
 **Checks:**
 - **Unit tests** (forge-core, forge-app): the rows each machine and demo gets, the draft and
   Apply, Defaults, the dialog on leaving, the preset turning custom, the tabs, the keys and the
-  mouse, the layout from 900p to 4K, the user layer (kept choices, `forget_user`), the restart
+  mouse, the layout from 900p to 4K in both looks, the theme's choice, the user layer (kept choices, `forget_user`), the restart
   path, and the scripted rule (a poisoned `user.cfg` changes nothing in a scripted run, five
   settings in an interactive one).
 - **The guard on images:** city-blocks' frame 60 with a `user.cfg` setting `r.aa off`,
@@ -10021,7 +10047,8 @@ screen".
   from a clean run (max 5 of 255), as two clean runs differ (1 px, max 3), and the image keeps its
   1600 × 900. The same values on the command line change 32.8 % of the pixels.
 - **The screen** captured over the village at 1080p and 4K (`docs/demos/images/game-menu.png`).
-  The glass costs 0.05 ms at 1080p and 0.13 ms at 4K (`docs/PROFILE.md`).
+  The glass costs 0.05 ms at 1080p and 0.13 ms at 4K in the base look, 0.06 and 0.17 ms in
+  Carbon's (`docs/PROFILE.md`).
 - **A read-only review** before the push found the first launch overriding `forge.cfg` and
   `--set`, a click on a section's title acting on the focused row, values in force the menu
   could not save, the HDR row wrong at start and `--vsync` making VSync's row inert: fixed,

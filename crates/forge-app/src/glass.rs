@@ -2,8 +2,8 @@
 //! transparency effect but almost opaque still to not get in the way of visibility", "or full
 //! screen"): the frame as the demo drew it, copied, brought down to a quarter of its size, blurred
 //! by a Gaussian across and down, and drawn back over the whole window, mostly a dark tint
-//! (`shaders/menu_glass.slang`). Five small passes (`app/menu glass ...`), only while the menu
-//! shows; made the first time it opens.
+//! (`shaders/menu_glass.slang`), in Carbon's colours for that look ([`Theme`]). Five small
+//! passes (`app/menu glass ...`), only while the menu shows; made the first time it opens.
 
 use std::sync::Arc;
 
@@ -12,6 +12,8 @@ use forge_gpu::{
     Device, FrameGraph, FullscreenPipelineDesc, ImageAccess, ImageHandle, Pipeline, Result,
     ShaderCompiler, ShaderStage, TransientDesc, vk,
 };
+
+use crate::menu::Theme;
 
 /// Must match `GlassPush` in `menu_glass.slang`.
 #[repr(C)]
@@ -22,7 +24,8 @@ struct GlassPush {
     ui_white: f32,
     axis: u32,
     texel: [f32; 2],
-    pad: [f32; 2],
+    theme: u32,
+    pad: f32,
 }
 
 /// The glass's pipelines, for the window's format.
@@ -118,13 +121,14 @@ impl Glass {
         Ok(())
     }
 
-    /// Declares the glass over `target` (`extent`): the copy, the quarter, the two blurs and the
-    /// glass drawn back.
+    /// Declares the glass over `target` (`extent`) for the menu's `theme`: the copy, the quarter,
+    /// the two blurs and the glass drawn back.
     pub(crate) fn draw<'f>(
         &'f self,
         graph: &mut FrameGraph<'f>,
         target: ImageHandle,
         extent: vk::Extent2D,
+        theme: Theme,
     ) {
         let small = quarter(extent);
         let copy = graph.transient(TransientDesc {
@@ -167,7 +171,11 @@ impl Glass {
             ui_white: self.ui_white,
             axis: 0,
             texel: texel(extent),
-            pad: [0.0; 2],
+            theme: match theme {
+                Theme::Base => 0,
+                Theme::Carbon => 1,
+            },
+            pad: 0.0,
         };
         let steps = [
             ("app/menu glass down", &self.down, copy, a, small, base),

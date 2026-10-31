@@ -405,6 +405,14 @@ pub(crate) struct FontAtlas {
     pub(crate) cell_w: u32,
     pub(crate) cell_h: u32,
     pub(crate) pixels: Vec<u8>,
+    /// Each glyph's own advance, pixels (the cell's width for a monospaced font): the menu's
+    /// proportional faces (#377).
+    pub(crate) advances: Vec<f32>,
+    /// The baseline's depth below a cell's top, pixels.
+    pub(crate) ascent: f32,
+    /// The glyphs' origin from a cell's left, pixels: the ink some put left of it ('j' in the
+    /// menu's Rajdhani and Orbitron, #377); none in the overlay's monospaced fonts.
+    pub(crate) left: f32,
 }
 
 impl FontAtlas {
@@ -413,6 +421,9 @@ impl FontAtlas {
             cell_w,
             cell_h,
             pixels: vec![0; (cell_w * GLYPHS as u32 * cell_h) as usize],
+            advances: vec![cell_w as f32; GLYPHS],
+            ascent: cell_h as f32 * 0.8,
+            left: 0.0,
         }
     }
 
@@ -430,24 +441,36 @@ impl FontAtlas {
 /// so proportional fonts work too, just spaced).
 pub(crate) fn rasterize_ttf(bytes: &[u8], px: f32) -> Option<FontAtlas> {
     let font = FontRef::try_from_slice(bytes).ok()?;
-    // `px` is the em size; ab_glyph's `PxScale` is the ascent-to-descent height.
-    let units_per_em = font.units_per_em().unwrap_or(1000.0);
-    let scale = PxScale::from(px.max(6.0) * font.height_unscaled() / units_per_em);
-    let scaled = font.as_scaled(scale);
+    let scaled = font.as_scaled(em_scale(&font, px));
     let advance = (32_u8..127)
         .map(|c| scaled.h_advance(scaled.glyph_id(char::from(c))))
         .fold(0.0_f32, f32::max);
     let ascent = scaled.ascent();
-    let cell_w = advance.ceil().max(1.0) as u32;
+    let outlines: Vec<_> = (32_u8..127)
+        .map(|code| {
+            let mut glyph = scaled.scaled_glyph(char::from(code));
+            glyph.position = point(0.0, ascent);
+            scaled.font().outline_glyph(glyph)
+        })
+        .collect();
+    // The ink left of a glyph's origin stays in its cell: the origin that far in.
+    let left = outlines
+        .iter()
+        .flatten()
+        .map(|o| -o.px_bounds().min.x)
+        .fold(0.0_f32, f32::max)
+        .ceil();
+    let cell_w = (left + advance.ceil()).max(1.0) as u32;
     let cell_h = (scaled.height() + 1.0).ceil().max(1.0) as u32;
     let mut atlas = FontAtlas::new(cell_w, cell_h);
-    for (i, code) in (32_u8..127).enumerate() {
-        let mut glyph = scaled.scaled_glyph(char::from(code));
-        glyph.position = point(0.0, ascent);
-        if let Some(outlined) = scaled.font().outline_glyph(glyph) {
+    atlas.ascent = ascent;
+    atlas.left = left;
+    for (i, (code, outlined)) in (32_u8..127).zip(outlines).enumerate() {
+        atlas.advances[i] = scaled.h_advance(scaled.glyph_id(char::from(code)));
+        if let Some(outlined) = outlined {
             let bounds = outlined.px_bounds();
             outlined.draw(|x, y, coverage| {
-                let px = bounds.min.x.round() as i32 + x as i32;
+                let px = (left + bounds.min.x).round() as i32 + x as i32;
                 let py = bounds.min.y.round() as i32 + y as i32;
                 atlas.put(i, px, py, (coverage.clamp(0.0, 1.0) * 255.0) as u8);
             });
@@ -456,9 +479,17 @@ pub(crate) fn rasterize_ttf(bytes: &[u8], px: f32) -> Option<FontAtlas> {
     Some(atlas)
 }
 
+/// The scale that sets `font` at the em size `px` (ab_glyph's `PxScale` is the ascent-to-descent
+/// height).
+fn em_scale(font: &FontRef, px: f32) -> PxScale {
+    let units_per_em = font.units_per_em().unwrap_or(1000.0);
+    PxScale::from(px.max(6.0) * font.height_unscaled() / units_per_em)
+}
+
 /// The built-in 5×7 pixel font drawn at 2× into 12×16 cells.
 pub(crate) fn rasterize_builtin() -> FontAtlas {
     let mut atlas = FontAtlas::new(12, 16);
+    atlas.ascent = 15.0;
     for (i, rows) in FONT.iter().enumerate() {
         for (r, line) in rows.iter().enumerate() {
             for (k, ch) in line.bytes().take(5).enumerate() {
@@ -578,6 +609,39 @@ const FONT: [[&str; 7]; GLYPHS] = [
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The menu's faces lose no ink to their cells (#377): 'j' passes its origin on the left in
+    /// Rajdhani and Orbitron, by 3 and 9 pixels at 56.
+    #[test]
+    fn the_cells_keep_every_glyphs_ink() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/fonts");
+        for file in [
+            "jetbrains-mono/JetBrainsMono-Variable.ttf",
+            "rajdhani/Rajdhani-Medium.ttf",
+            "rajdhani/Rajdhani-SemiBold.ttf",
+            "orbitron/Orbitron-ExtraBold.ttf",
+        ] {
+            let bytes = std::fs::read(root.join(file)).unwrap();
+            let atlas = rasterize_ttf(&bytes, 56.0).unwrap();
+            let font = FontRef::try_from_slice(&bytes).unwrap();
+            let scaled = font.as_scaled(em_scale(&font, 56.0));
+            let (w, h) = (atlas.cell_w as usize, atlas.cell_h as usize);
+            for (i, code) in (32_u8..127).enumerate() {
+                let mut glyph = scaled.scaled_glyph(char::from(code));
+                glyph.position = point(0.0, scaled.ascent());
+                let mut ink = 0_u32;
+                if let Some(outlined) = font.outline_glyph(glyph) {
+                    outlined.draw(|_, _, c| ink += u32::from((c.clamp(0.0, 1.0) * 255.0) as u8));
+                }
+                let kept: u32 = (0..h)
+                    .flat_map(|y| (0..w).map(move |x| y * w * GLYPHS + i * w + x))
+                    .map(|k| u32::from(atlas.pixels[k]))
+                    .sum();
+                assert_eq!(kept, ink, "{file} '{}'", char::from(code));
+            }
+            assert_eq!(atlas.left == 0.0, file.starts_with("jetbrains"), "{file}");
+        }
+    }
 
     #[test]
     fn the_builtin_font_covers_printable_ascii() {
