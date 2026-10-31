@@ -9655,3 +9655,23 @@ gaining. To decide by the owner.
 the bounce where the probes' room grids are, the probes outdoors; NRC measured on the same hook
 before either becomes the default everywhere (its download asked for first). The captures and the
 A/B harness keep `r.gi.cache off`; `tools/gi-compare.sh` measures the choice by error.
+
+**The design** (2026-10-31, before code):
+- **Where "indoors" is:** a bounce's hit inside a probe room grid (D-078: the village's houses'
+  rooms, a region other than the outside's), or anywhere in a scene that declares itself indoors
+  (the lab's authored rooms: the Cornell box, the classroom, the bedroom, the kitchen, which have
+  no room grids). The evidence for SHaRC came from both (the village's landing and room, the
+  classroom, the rooms at night).
+- **`r.gi.cache auto`**, the new default: the bounce's trace (`diffuse_trace_main`, its SHaRC
+  build) asks SHaRC at an indoor hit and the probes elsewhere; `sharc`, `port` and `off` stay as
+  they are, for the comparisons.
+- **SHaRC's update** walks its paths from the pixels whose own surface is indoors (the same
+  test), so a street view does not pay for voxels nothing reads (Exterior_1 by day: 1.2 ms with
+  SHaRC everywhere).
+- **Determinism:** SHaRC's voxels follow its insertion order (D-088), so the captures, the A/B
+  harness, the map check and `tools/gi-compare.sh`'s probes column pin `r.gi.cache off`, and the
+  checks of `auto` measure by error.
+- **Checks:** `tools/gi-compare.sh`'s indoor views under `auto` as under `sharc`, its outdoor views
+  as under `off`; the village's landing and room; the cost by day and at night; the house doors
+  (an indoor hit seen from the street, and the street from a room).
+- **NRC** on the same hook afterwards: its download (filename, source, size) asked for first.

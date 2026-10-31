@@ -127,19 +127,26 @@ and a still camera's shimmer (frames 280 and 290, pixels differing by more than 
 | the light lists, the 64 nearest (the default) | 4,892 px | 0.797 | 15.3 ms |
 | the light lists, every lamp | 6,884 px | 0.987 | 21.9 ms |
 | ReSTIR, undenoised, as it stood in the morning | (sparkling) | 0.775 | 15.1 ms |
-| ReSTIR, both lights denoised, reuse with visibility (now) | 24,660 px | 0.905 | 19.0 ms |
+| ReSTIR, both lights denoised, reuse with visibility | 24,660 px | 0.905 | 19.0 ms |
+| the lists the 64 nearest, ReSTIR the rest (`--lamp-restir-near 64`) | 7,788 px | 0.971 | 26.5 ms |
 
 - **Commits:** 055e927f (ReSTIR's light fixed, its diffuse light denoised), 45b7ab80 (the lanterns'
   profile, `--moonless`), b2e9eaec and e8561c4e (the highlight denoised, the resolve's surface code
   made a function, a review's fixes), 0521a6f5 and d9482af2 (REBLUR's history, the reuse with
-  visibility). All behind `--lamp-restir --all-lamps`; the default is unchanged.
+  visibility), 91957b5c (the split). All behind `--lamp-restir --all-lamps`; the default is
+  unchanged.
 - **Faults found in ReSTIR's bridge:** the flat lamps not sampled as rectangles; RTXDI's permutation
   sampling (0.2 stops dark); shadow rays running into the lanterns' glass; RTXDI's pairwise reuse
   reading an off-screen reservoir (the device lost); and RTXDI's naive discount, which kept every
   pixel's history at one sample and halved the light under `Basic`.
-- **Not the default yet:** it shimmers four times the lists' (the denoised light still moves at the
+- **Not the default:** it shimmers four times the lists' (the denoised light still moves at the
   pixel on the cobbles, the basket's leaves, the wires). Turning, it keeps its light (0.906 of the
-  lists). Next: the lists for the nearest lamps and ReSTIR for the rest.
+  lists). The split (the lists the nearest, ReSTIR the rest) shimmers like the lists, but costs
+  more than the lists with every lamp: ReSTIR's pass is 5 ms with its visibility rays.
+- **Back to you (#372):** at the Bistro's 132 lamps the light lists with every lamp give the best
+  image for its time (+6.6 ms over the 64 nearest). Recommended now: the lists with every lamp
+  the frame's lamps reach (the 64 cap raised; clustered lists later to bound a pixel's lamps),
+  ReSTIR kept behind its switch for scenes of many more lamps while its shimmer is open.
 - **The lanterns' profile** (`Emission::Prism`, their glass's shares up and down) was right but
   small: the lamp model stays 13 % over the traced glow, its cause still open (not the lamps'
   intensities: each kind's lumens match its glass's).
