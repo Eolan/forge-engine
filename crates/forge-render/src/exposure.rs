@@ -39,6 +39,11 @@ const START_READINGS: u32 = 10;
 /// [`AutoExposure::night_floor`]'s default, the automatic range's floor: no floor.
 pub const NO_NIGHT_FLOOR: f32 = -6.0;
 
+/// [`AutoExposure::night_floor`] for a night with lamps (D-080, the owner's go of 2026-10-31):
+/// EV100 0, at which the village's lit windows show their rooms, the lamp-lit paving stays
+/// readable and the moonlit facades go darker (`research/home-lighting.md` §8.2).
+pub const LIT_NIGHT_FLOOR: f32 = 0.0;
+
 /// Exposure multiplier for an exposure value at ISO 100: the luminance `1.2 · 2^EV100`
 /// (cd/m²) saturates the sensor and maps to 1.
 pub fn exposure_from_ev100(ev100: f32) -> f32 {

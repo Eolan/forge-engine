@@ -5878,6 +5878,16 @@ application are to be looked into further (D-068's note; done in `research/light
 
 ## D-068 — Probe regions from the generator: a room's probes light only its own surfaces ✅ (proposed 2026-10-17, #266; the owner's go the same day)
 
+**Amended (2026-10-31, #378): a reveal met from outside is the outside's.** A ray's hit took its
+region 2 cm off it (`probe_irradiance_hit`), so the traced bounce's rays from a facade that met a
+window's reveal (the room's, by the rule below) took the room's probes: at night a lit room's light
+came back onto the wall round its window, a warm halo 1.5 times the window's size (the owner: a
+spotlight, "a nuclear plant powered bulb"). Unchanged with the bloom, the anti-aliasing, the lamp
+filter, the far rooms' lamps, the room grids, local exposure or the bounce's rays stopped at glass;
+gone with the probes or the bounce off, and with every hit taken as outside. Now a hit in a reveal
+takes the region 30 cm back towards where its ray came from (one `region_at` in a rolled loop,
+#348): from outside the outside's, from its room the room's.
+
 **The question:** after the village's probes moved to 1 m (ef27049) and the lookup kept the
 probes in front of a surface (22beb20), light still leaks indoors in two ways: a soft tinted
 blotch on a partition from the sunlit room behind it, and a small bright cap in a window head's
@@ -8081,7 +8091,7 @@ mapping of decals.
 
 *(research: impact-marks.md, decals.md; D-074, D-007)*
 
-## D-080 — A night with lamps keyed on its lamps 🅿️ (proposed 2026-10-24, #354; the owner, 2026-10-25: keep the moonlit key for now)
+## D-080 — A night with lamps keyed on its lamps ✅ (proposed 2026-10-24, #354; the owner, 2026-10-25: keep the moonlit key for now; the owner's go of 2026-10-31: step 1)
 
 **The need:** the owner, on the village at night: the lit windows read "too strong … they are
 house lights, not spotlights". The research (`research/home-lighting.md`) finds Forge's lamps and
@@ -8116,6 +8126,14 @@ another value from the A/B)?
 
 **The owner (2026-10-25):** keep the moonlit key for now (the A/B's left column); either looks
 right, and the moonlight may be a bit too bright. `r.exposure.night_floor` stays built and off.
+
+**Step 1 taken (2026-10-31, the owner: a lit window "looks like a nuclear plant powered bulb";
+"I will follow your recommendations"):** a night with lamps (the scene gives lamps, and no
+`--no-lamps`) floors its exposure at EV100 0 (`LIT_NIGHT_FLOOR`, `vars::register_vars`); a night
+without keeps the moonlit key. In the village's junction view at midnight the meter went from
+EV100 −2.17 to 0: the window's 25 cd/m² two stops less over, the moonlit facades darker, the lamp
+pools readable. The other half of that window's look was #378's halo (D-068's amendment). Steps 2
+(shades, shutters and curtains, fewer lamps on, lanterns) wait.
 
 *(research: home-lighting.md, night-sky.md, local-exposure.md; D-046, D-067)*
 

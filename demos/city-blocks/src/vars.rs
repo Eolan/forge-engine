@@ -7,7 +7,7 @@
 use forge_app::Context;
 use forge_app::settings::{Settings, Source, Spec, Var};
 use forge_render::CullFlags;
-use forge_render::exposure::NO_NIGHT_FLOOR;
+use forge_render::exposure::{LIT_NIGHT_FLOOR, NO_NIGHT_FLOOR};
 use forge_render::settings::{self as rs, AA_DLAA, AA_DLSS, AA_FSR, AA_OFF};
 
 use crate::Gallery;
@@ -59,6 +59,24 @@ pub(crate) struct RenderVars {
 impl Gallery {
     /// Registers the gallery's settings, from the state its flags gave it.
     pub(crate) fn register_vars(&mut self, s: &mut Settings) {
+        // A night with lamps keyed on its lamps (D-080, the owner's go of 2026-10-31): its exposure
+        // no lower than EV100 0, so a lit window shows its room rather than white. Keyed on the
+        // moon (about EV100 -2), a window's 25 cd/m² stood 12 stops over middle grey. A night
+        // without lamps (the island, a planet) keeps the moonlit key.
+        let time = self.sea_time as f32;
+        let lit_night = !self.args.no_lamps
+            && self
+                .running
+                .as_mut()
+                .is_some_and(|r| !r.lamps(time).is_empty());
+        let night_floor = if lit_night {
+            LIT_NIGHT_FLOOR
+        } else {
+            NO_NIGHT_FLOOR
+        };
+        if self.auto_exposure.night_floor == NO_NIGHT_FLOOR {
+            self.auto_exposure.night_floor = night_floor;
+        }
         // DLAA where it runs, else FSR (D-070).
         let aa_default = if self.dlaa.is_some() { AA_DLAA } else { AA_FSR };
         let aa_now = if self.dlaa_on {
@@ -234,8 +252,8 @@ impl Gallery {
                 self.auto_exposure.speed_darken,
             ),
             exposure_night_floor: s.add_from_f32(
-                rs::exposure_night_floor(f64::from(NO_NIGHT_FLOOR)),
-                f64::from(NO_NIGHT_FLOOR),
+                rs::exposure_night_floor(f64::from(night_floor)),
+                f64::from(night_floor),
                 self.auto_exposure.night_floor,
             ),
             probes: s.add_from(rs::probes(true), true, self.probes_on),

@@ -1235,8 +1235,23 @@ public float3 probe_irradiance_hit(ProbeField* field, float3 p, float3 n, float3
     mask.other = REGION_OUTSIDE;
     mask.ramp = 0.0;
     mask.kind = REGION_ROOM;
+    // The hit's region 2 cm off it; in a window's reveal (its room's, D-068), the region 30 cm back
+    // towards where the ray came from: a reveal met from outside is the outside's. Taken as the
+    // room's, the village's facades round a lit window took its room's light from the rays that
+    // met the reveal, a warm halo the owner likened to a spotlight (#378). One `region_at` in a
+    // rolled loop, as `region_open`'s: each inlined copy grows the shaders that bounce (#348).
     if (!outside)
-        mask = region_at(field, p + n * 0.02);
+    {
+        [loop]
+        for (uint k = 0u; k < 2u; k++)
+        {
+            RegionHit at = region_at(field, k == 0u ? p + n * 0.02 : p + v * 0.3);
+            if (k == 0u || at.kind != REGION_SOLID)
+                mask = at;
+            if (mask.kind != REGION_RECESS)
+                break;
+        }
+    }
     bool masked = field[0].region_count > 0u && mask.kind != REGION_SOLID;
     float3 unused;
     RoomShare rooms = room_share<0>(field, p, n, n, float3(0.0), n, mask, masked);

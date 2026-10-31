@@ -301,3 +301,15 @@ and a still camera's shimmer (frames 280 and 290, pixels differing by more than 
 - **The room lamps' intensity is realistic** (70–93 lm per m² of floor, 450–2,100 lm). A lit
   window measures 7 cd/m². At the fixed calibration exposure (EV 2) it clips and blooms, which
   made it look like a spotlight.
+
+## The lit window's "nuclear" look (#378, D-080; 21:00)
+
+- **The halo was probe light leaking:** a bounce ray from the wall that met the window's reveal
+  took the room's probes, because the reveal belongs to the room. Ruled out along the way: bloom,
+  anti-aliasing, the lamp filter, the far-room term, the room grids, local exposure, glass, and
+  the lamps at the bounce's hits.
+  - **Fix:** a hit in a reveal takes the region on the side its ray came from. The halo is gone.
+- **The night's exposure (D-080 step 1, your go):** a night with lamps now meters no lower than
+  EV100 0 (it was −2.2, keyed on the moon). The window is two stops less over and the night
+  darker. Nights without lamps keep the moon's key.
+- **The room lamps are realistic** (450–2,100 lm). The pane is 25 cd/m² at its brightest.
