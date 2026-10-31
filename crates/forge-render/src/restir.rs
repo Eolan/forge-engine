@@ -65,7 +65,9 @@ const BIAS_CORRECTION_PAIRWISE: u32 = 2;
 /// How the lamps are resampled.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RestirSettings {
-    /// The initial candidates a pixel takes: points of its place's lamps.
+    /// The initial candidates a pixel takes: points of its place's lamps (16, #372: with 63
+    /// frames of REBLUR's history, a still camera's shimmer at the Bistro's night 46,000 → 43,000
+    /// pixels for 0.3 ms).
     pub candidates: u32,
     /// The most frames a reservoir's history counts (RTXDI's default, 20).
     pub max_history: u32,
@@ -85,7 +87,7 @@ pub struct RestirSettings {
 impl Default for RestirSettings {
     fn default() -> Self {
         Self {
-            candidates: 8,
+            candidates: 16,
             max_history: 20,
             spatial_samples: [1, 1],
             radius: 32.0,
@@ -268,7 +270,10 @@ impl LampDenoiser {
                 ..camera
             },
             hit_distance: crate::diffuse_bounce::HIT_DISTANCE,
-            max_accumulated_frames: 30,
+            // REBLUR's most (#372): with the bounce's 30, a still camera's frames 10 apart differed
+            // on 95,000 pixels at the Bistro's night (6.6 %), with 63 on 46,000, for 2 % of the
+            // light (the lists, 4,900 and 6,900).
+            max_accumulated_frames: 63,
             max_fast_accumulated_frames: 6,
             checkerboard: false,
         };

@@ -5600,6 +5600,32 @@ light (the low half of the lamp code) and the sample's for their highlight.
 - **Turning** (`--yaw-rate 6`): 0.908 of the lists (their reference taken before the lanterns'
   profile, which takes about 1 %): still the open point before the default.
 
+**Where step 4 stands (2026-10-31): not the default yet; the shimmer.** The Bistro's night view,
+a still camera's frames 280 and 290 (pixels differing by more than 2 levels), the light as the
+tiles' mean ratio to Forge's path with every lamp, the frame on the 5070 Ti:
+
+| | shimmer | light | frame |
+|---|---|---|---|
+| the light lists, the 64 nearest (the default) | 4,892 px | 0.797 | 15.3 ms |
+| the light lists, every lamp | 6,884 px | 0.987 | 21.9 ms |
+| ReSTIR, both lights denoised (REBLUR 30 frames, 8 candidates) | 94,909 px | 0.929 | 16.6 ms |
+| the same, REBLUR 63 frames, 16 candidates (taken) | 42,929 px | 0.915 | 16.9 ms |
+
+- ReSTIR lights the whole street for 5 ms less than the lists with every lamp, but shimmers six
+  times as much: REBLUR's light still moves at the pixel on the cobbles, the basket's leaves, the
+  wires. The owner sees shimmer at once: it stays behind `--lamp-restir`.
+- **Spatial reuse** decorrelates it (three neighbours: 26,752 px) but loses 40 % of the light
+  (0.592): pairwise MIS weighs a neighbour's lamp by its light without its visibility, and in
+  the Bistro's street pixels a few apart see different lamps round the walls. The same reuse at a
+  disocclusion is what darkened the turning camera. RTXDI's answer is `RayTraced` bias correction
+  (visibility in the weights), which in Forge's bridge darkened the Cornell box's lit walls too,
+  for a reason not found yet (step 1).
+- **Next, in order:** (1) find why `Basic`/`RayTraced` darken Forge's lit walls, then spatial reuse
+  with visibility for the shimmer and the turning camera; (2) if it still shimmers, the lists for
+  the nearest lamps and ReSTIR for the rest (the street lamps' split, `--street-restir`,
+  generalised), the far light dim enough that its noise hides; (3) the lamp model's 13 % over the
+  traced glow (the lanterns' profile took 1 % of it).
+
 **Step 3 built (2026-10-31): a lantern's light by its glass** (`Emission::Prism { up, down }`):
 at the elevation φ, over its side's intensity, cos φ for its upright panes and its glass's
 measured shares seen from above and below by the sine (the Bistro's lanterns 0 and 0.32), where
