@@ -374,7 +374,7 @@ impl Gallery {
             self.renderer.show_input = s.get(v.show_input).clamp(0, 6) as u32;
         }
         if s.changed_since(v.gi_reference, seen) {
-            self.renderer.gi_reference = s.get(v.gi_reference).clamp(0, 4) as u32;
+            self.renderer.gi_reference = s.get(v.gi_reference).clamp(0, 8) as u32;
         }
         if s.changed_since(v.gi_trace, seen) {
             self.renderer.gi_trace = s.get(v.gi_trace);

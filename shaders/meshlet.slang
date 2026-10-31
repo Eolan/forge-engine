@@ -4828,6 +4828,12 @@ LightInputs uv_mapped_light(Frame* f, Material mat, Surface s)
     float3 n = s.n;
     // The normals' variance under the pixel, from the normal map's filtered length (Toksvig).
     float variance = 0.0;
+    // The share of a light the bumps under the pixel keep (#373): a Lambert surface's light from
+    // one direction is linear in its normal, so over the pixel it is the mean normal's, the
+    // filtered normal before it is made unit, its length past the bytes' rounding. Made unit, a
+    // far wall's mip lost its bumps' darkening (Falcor reads each texel: its normal maps took
+    // 8 % off the Bistro's light, Forge's 3 %); near, where the texels show, it is 1.
+    float bumps = 1.0;
     if (mat.normal_texture != TEXTURE_NONE)
     {
         // The tangent frame from the derivatives of the position and of the transformed UVs
@@ -4845,6 +4851,7 @@ LightInputs uv_mapped_light(Frame* f, Material mat, Surface s)
         float len = length(t);
         variance = max(1.0 - len - NORMAL_LENGTH_ROUNDING, 0.0) / max(len, 0.05) * mat.normal_strength;
         t.xy *= mat.normal_strength;
+        bumps = saturate(length(t) + NORMAL_LENGTH_ROUNDING);
         float3 bent = (t.x * T - t.y * B) * scale + t.z * N;
         n = normalize(mul(s.frame, bent));
     }
@@ -4857,7 +4864,7 @@ LightInputs uv_mapped_light(Frame* f, Material mat, Surface s)
     // bevel too fine for it gives a broad, steady highlight instead of a flickering line.
     power /= 1.0 + power * variance;
     LightInputs li;
-    li.albedo = base * (1.0 - metal);
+    li.albedo = base * (1.0 - metal) * bumps;
     li.reflectance = lerp(float3(mat.reflectance), base, metal);
     // A metal's highlight whole (D-086): its F0, its base colour, is its strength; weighed by its
     // reflectance again, a dark metal's was dimmed twice.
@@ -6182,6 +6189,7 @@ struct RayHit
     bool back;
     float shadow_start; // how far its shadow rays start off it, metres (`hit_shadow_start`)
     float metal;        // its row's metalness (its map's not read): a mirror ray's metal reflects (`hit_metal_light`)
+    float3 lit_n;       // its normal map's mean normal (`n` without one): the sun's cosine at it, its length the lamps' share (#373)
     float roughness;    // its row's perceptual roughness
 };
 
@@ -6322,6 +6330,46 @@ RayHit ray_hit_seen(Frame* f, uint instance, uint primitive, float2 b, float3 or
     }
     hit.metal = mat.metallic;
     hit.roughness = mat.roughness;
+    // A normal map's bumps turn part of the hit from a light (#373). A Lambert surface's light
+    // from one direction is linear in its normal, so over the bumps it is their mean normal's:
+    // the map's 1 × 1 mip (the mips keep the mean normal's length, #331), bent by
+    // `normal_strength` and turned into the world by the triangle's UVs as the shading turns its
+    // normals (T along +u, B along +v, the map's +y towards −v). Its length is how much of the
+    // light the bumps keep (the Bistro's cobbles 0.90), its tilt which way it leans (the blended
+    // pavement's leans 0.12 off its face, so the sun's share runs from 0.76 to 1.18 as it turns).
+    // Falcor's rays read the map; on the flat face, the sunlit cobbles sent the walls 9 % more
+    // light. Without UVs, the length alone; a map without z (an opt-in BC5's), flat.
+    hit.lit_n = hit.n;
+    if (mat.normal_texture != TEXTURE_NONE)
+    {
+        float3 m = sample_image_level(mat.normal_texture, SAMPLER_LINEAR_REPEAT, float2(0.5, 0.5), 16.0).xyz * 2.0 - 1.0;
+        m.xy *= mat.normal_strength;
+        if (m.z > 0.05)
+        {
+            float keep = saturate(length(m) + NORMAL_LENGTH_ROUNDING);
+            hit.lit_n = hit.n * keep;
+            if (mesh.first_uv != RT_NO_UVS && !hit.back && dot(face, direction) < 0.0)
+            {
+                float2 uv[3];
+                [unroll]
+                for (uint k = 0; k < 3; k++)
+                {
+                    float2 raw = rs[0].uvs[mesh.first_uv + rs[0].indices[tri * 3 + k]];
+                    uv[k] = float2(dot(mat.uv_u, float3(raw, 1.0)), dot(mat.uv_v, float3(raw, 1.0)));
+                }
+                float2 d1 = uv[1] - uv[0];
+                float2 d2 = uv[2] - uv[0];
+                float det = d1.x * d2.y - d1.y * d2.x;
+                if (abs(det) > 1e-12)
+                {
+                    float3 t = instance_vector(inst, ((p[1] - p[0]) * d2.y - (p[2] - p[0]) * d1.y) / det);
+                    float3 bt = instance_vector(inst, ((p[2] - p[0]) * d1.x - (p[1] - p[0]) * d2.x) / det);
+                    if (dot(t, t) > 1e-20 && dot(bt, bt) > 1e-20)
+                        hit.lit_n = (m.x * normalize(t) - m.y * normalize(bt) + m.z * hit.n) * (keep / max(length(m), 1e-4));
+                }
+            }
+        }
+    }
     hit.emissive = emission(f, mat);
     // What the hit emits as the frame shows it (#254): an emissive map's average (its last mip,
     // as the albedo), and a window's room its lamp's share over walls about half as bright as
@@ -6359,6 +6407,9 @@ RayHit ray_hit_seen(Frame* f, uint instance, uint primitive, float2 b, float3 or
 // `probe_irradiance`'s.
 static const uint GI_REFERENCE_NEAR = 1u;
 static const uint GI_REFERENCE_PATH = 4u;
+// `path_from`'s `traced` with this bit: stop after that many bounces with nothing after (the path
+// cut as Falcor's BISTRO_BOUNCES cuts its own, `r.gi.reference` 5 to 8, #373).
+static const uint PATH_NOTHING_AFTER = 0x100u;
 static const uint NEAR_FIELD_REFERENCE_RAYS = 32;
 static const float NEAR_FIELD_RANGE = 2.0;
 static const float PATH_RANGE = 50000.0;
@@ -6411,8 +6462,10 @@ float3 path_from(Frame* f, float4* sky, ProbeField* probes, RayHit hit, float3 d
             break;
         sum += weight * (hit_sunlight(f, hit) + hit_lamps(f, hit, REGION_NONE, (seed + k) * 0x27D4EB2Fu, false));
         weight *= hit.albedo;
-        if (k + 1u == traced)
+        if (k + 1u == (traced & 0xFFu))
         {
+            if ((traced & PATH_NOTHING_AFTER) != 0u)
+                return sum;
             float3 ambient = sh_irradiance(sky, hit.n);
             if (probes != nullptr)
                 ambient = probe_irradiance_hit(probes, hit.position, hit.n, -d, ambient, false);
@@ -6462,7 +6515,8 @@ float3 near_field_reference(Frame* f, float4* sky, ProbeField* probes, float3 wo
         {
             RayHit hit = ray_hit_lit(f, c, origin, d, mode != GI_REFERENCE_NEAR);
             if (mode != GI_REFERENCE_NEAR)
-                sum += path_from(f, sky, probes, hit, d, seed + i * 977u, mode == GI_REFERENCE_PATH ? 0u : mode - 1u);
+                sum += path_from(f, sky, probes, hit, d, seed + i * 977u, mode == GI_REFERENCE_PATH ? 0u
+                    : mode > GI_REFERENCE_PATH ? (mode - GI_REFERENCE_PATH) | PATH_NOTHING_AFTER : mode - 1u);
             else if (!hit.back)
                 sum += hit_radiance(f, sky, probes, hit, d);
         }
@@ -6482,7 +6536,7 @@ float3 hit_sunlight(Frame* f, RayHit hit)
     float3 shadow = float3(0.0);
     if (ndl > 0.0 && sun_shadow(f, hit.position, hit.n, float2(0.0), hit.shadow_start) > 0.0)
         shadow = jelly_transmittance(f, sun_ray(f, hit.position, hit.n, float2(0.0), hit.shadow_start));
-    return hit.albedo * ndl * shadow * f[0].sun_color.rgb + hit.emissive;
+    return hit.albedo * max(dot(hit.lit_n, sun), 0.0) * shadow * f[0].sun_color.rgb + hit.emissive;
 }
 
 // A lamp's unshadowed illuminance on a surface at `world` facing `n`, lux (its luminance), let go
@@ -6583,7 +6637,7 @@ float3 hit_lamps(Frame* f, RayHit hit, uint region, uint seed, bool probe)
         return float3(0.0);
     // Its colour of luminance 1 times every lamp's light: its own over its chance, w / total.
     float3 colour = lamp.colour_reach.rgb / max(dot(lamp.colour_reach.rgb, float3(0.2126, 0.7152, 0.0722)), 1e-9);
-    return hit.albedo * colour * (total / max(f[0].sun_illuminance, 1e-9));
+    return hit.albedo * colour * (length(hit.lit_n) * total / max(f[0].sun_illuminance, 1e-9));
 }
 
 // Whether triangle `primitive` of instance `instance` is a leaf's (`MATERIAL_FLAG_FOLIAGE`).
@@ -7459,7 +7513,7 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     // D-088's references for the diffuse light (`r.gi.reference`), or its bounce traced before
     // the resolve (`diffuse_trace_main`, the high half of the sun shadow's word).
     uint bounce_image = resolve_push.sun_shadow >> 16;
-    g_near_on = SHADOWS != 0 && f[0].gi_reference != 0u && (s.probes != nullptr || f[0].gi_reference == GI_REFERENCE_PATH) && s.sky != nullptr && f[0].tlas != 0;
+    g_near_on = SHADOWS != 0 && f[0].gi_reference != 0u && (s.probes != nullptr || f[0].gi_reference >= GI_REFERENCE_PATH) && s.sky != nullptr && f[0].tlas != 0;
     if (g_near_on)
         g_near_irradiance = near_field_reference(f, s.sky, s.probes, surface_scene, s.n, si.li.n, f[0].gi_reference);
     else if (bounce_image != 0xFFFFu && s.sky != nullptr && f[0].tlas != 0 && (mat.flags & MATERIAL_FLAG_FOLIAGE) == 0)

@@ -231,3 +231,25 @@ and a still camera's shimmer (frames 280 and 290, pixels differing by more than 
   - SHaRC was still made for a scene whose room store was reserved but empty.
   - The doorway comment and the shader's numbers were wrong.
   - gi-compare's reuse mode now drops captures made with DLAA.
+
+## #373: the normal maps (16:30)
+
+- **Cause:** a bumpy surface catches less light than a flat one.
+  - In Falcor the Bistro's normal maps take 8 % off its light. The cobblestones keep 0.92 of a
+    flat face's sun at the photograph's 28.6° (measured from the decoded map, and in Falcor).
+  - Forge took only 3 % off. Its rays lit what they hit as the flat face, and a far pixel's
+    blurred normal was made unit, which dropped the darkening.
+- **Fix, 5.5 % now:**
+  - a ray's hit takes the map's mean normal, its length and its lean;
+  - a pixel takes its filtered normal's length (1 close up).
+- **Results:**
+  - The clay Bistro against Falcor: Exterior_1 went from 0.161 to 0.109 (×1.097 → ×1.059), and
+    Exterior_2 from 0.206 to 0.183.
+  - Textured Exterior_1 went from 0.082 to 0.076. Exterior_2 moved by +0.010, which is its
+    materials' gap.
+  - The sentinels are unchanged.
+- **Still open:** with no normal maps on either side, Forge reads ×1.02–1.03. The rest of the
+  normal-map part is probably Falcor losing the light its rays send from a bump into the surface.
+- **The Bistro's sun is the light above the atmosphere** (128,000 lux), about 1.5–1.8 times a
+  clear day's at its 28.6°. Proposed next: scale it to what Forge's atmosphere lets through
+  (D-084).

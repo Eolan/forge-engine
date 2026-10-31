@@ -14,7 +14,8 @@
 #   BISTRO_MATERIAL  "name:field=value,...;...": factors set by hand
 #   BISTRO_EMITTER_STRENGTH  tools/pbrt-to-gltf.py's emitters' strength (Falcor's glTF import
 #                    leaves KHR_materials_emissive_strength out): the scene's brightest light
-#   BISTRO_CLAY, BISTRO_MATTE, BISTRO_DIFFUSE, BISTRO_NOEMIT: the surfaces simplified (below)
+#   BISTRO_CLAY, BISTRO_MATTE, BISTRO_DIFFUSE, BISTRO_NOEMIT, BISTRO_NO_NORMALS: the surfaces
+#                    simplified (below)
 #   BISTRO_ALBEDO    1: the first hit's diffuse albedo (Falcor's G-buffer) in place of the light
 #   BISTRO_CLAY_CUTOUTS  1: clay keeps a cut-out's base colour map (and so its alpha)
 #   BISTRO_OUT       output folder and BISTRO_NAME base file name
@@ -138,6 +139,14 @@ if env.get("BISTRO_DIFFUSE"):
     for mat in s.materials:
         try:
             mat.indexOfRefraction = 1.0
+        except AttributeError:
+            pass
+# BISTRO_NO_NORMALS: every material's normal map cleared (an experiment, #373: Forge's rays meet
+# their hits' flat faces).
+if env.get("BISTRO_NO_NORMALS"):
+    for mat in s.materials:
+        try:
+            mat.clearTexture(MaterialTextureSlot.Normal)
         except AttributeError:
             pass
 # BISTRO_NOEMIT: every material's emission off (to take the emissive light alone, by difference).

@@ -8389,7 +8389,7 @@ pbrt-v4, RTXGI, materiel test, etc.). Then update forge demos and test them."):
 
     The three renderers agree in the rooms within 0.05 to 0.10. The Bistro by day does not:
     Forge's path reads 0.15 to 0.19 stops over Falcor's there, which Falcor's layer had hidden
-    (#373). pbrt-v4 lets the bedroom's panels through its curtains: their folds' smooth normals
+    (#373: the normal maps' darkening, two-thirds of it taken since, D-086). pbrt-v4 lets the bedroom's panels through its curtains: their folds' smooth normals
     put a shadow ray behind the sheet on the lit side of its shading normal.
   - **The night and the Cornell box, as first measured, were not trustworthy;** two causes found
     the same night (2026-10-31):
@@ -8570,7 +8570,10 @@ found in a search, used by Blender's EEVEE and VTK), switchable for the comparis
 gold 0.65–1.17 across roughness (0.21–5.56 and 0.28–6.72 before D-086); with the compensation
 (the default) rough metals keep their light, silver 1.30–2.04 and gold 1.21–1.90 at roughness 0.8
 and 1, Falcor's lost energy; dielectrics 0.88–0.93, the tiles 0.95–1.00. Open: smooth metals at
-0.66–0.74. **Found (2026-10-31, the owner: the two smooth gold balls had lost their gold):** a
+0.66–0.74. The Bistro's Exterior_1 against Falcor in Lambert: the sunlit street 1.01–1.06 (0.92–1.07
+before D-086); a still camera 5,032 pixels (5,245 before D-086); the frame 4.61 ms, unchanged.
+
+**Found (2026-10-31, the owner: the two smooth gold balls had lost their gold):** a
 smooth row's mirror ray took its Fresnel's luminance alone (the request's one weight), so its
 traced share reflected grey: gold's red at 0.85 of Falcor's, its blue at 1.35, green over red
 0.85 and blue over red 0.57 where Falcor's are 0.77 and 0.36. The request image now carries the
@@ -8586,8 +8589,33 @@ floor; the map's lower half is dark), and the sun's glint, its shadow ray traced
 lookup turns from the hit's normal to its mirror direction for a metal, one lookup either way
 (#348). What the metal's own reflection meets of the scene, and the lamps' glints on it, are
 left out. The smooth gold keeps 0.77 and 0.36; the chart's `shading/reflections` 0.048 →
-0.060 ms (one run each). The Bistro's Exterior_1 against Falcor in Lambert: the sunlit street 1.01–1.06 (0.92–1.07
-before D-086); a still camera 5,032 pixels (5,245 before D-086); the frame 4.61 ms, unchanged.
+0.060 ms (one run each).
+
+**Normal maps darken the diffuse light (#373, 2026-10-31):** Forge's path read the clay Bistro 9 to
+10 % over Falcor's by day; under its sun alone, Falcor without normal maps against Forge, ×1.004
+after one bounce and ×1.013 whole, where with them ×1.093 and ×1.111. A Lambert surface's light
+from one direction is linear in its normal, so over bumps it is their mean normal's: the
+cobbles' map (decoded) holds a mean normal 0.900 long, and its bumps catch 0.929 of a flat
+face's sun at the photograph's 28.6°; Falcor's sunlit ground loses 8.4 % to its maps. Forge lost
+it twice over:
+- **at a ray's hit,** which took its face: now the map's mean normal (its 1 × 1 mip's, the mips
+  rebuilt from the unit normals, #331), turned into the world by the triangle's UVs (the blended
+  pavement's leans 0.12 off its face), its cosine the sun's (`RayHit::lit_n`) and its length
+  the lamps' share;
+- **at a pixel far off,** whose filtered normal was made unit and lost its bumps: the pixel's
+  diffuse albedo now takes the filtered normal's length past the bytes' rounding (1 where the
+  texels show).
+
+Forge's maps took 3 % off the Bistro's light, 5.5 % now, Falcor's 8.1 %. Under the sun alone
+×1.093 → ×1.052 after one bounce, ×1.111 → ×1.067 whole (both without maps: ×1.023, ×1.030).
+Without anti-aliasing, from Falcor (Forge's path, the probes): the clay Exterior_1 0.161 →
+0.109 (×1.097 → ×1.059), 0.158 → 0.105; Exterior_2 0.206 → 0.183 (×1.101 → ×1.072), 0.320 →
+0.298; textured Exterior_1 0.082 → 0.076 (×1.010), Exterior_2 0.378 → 0.388 (×0.958, its
+materials' gap); the chart as it was. The sentinels 0 px: none draws a UV-mapped normal map.
+Left: Falcor's rays leave each bump round its own normal and lose those under the surface,
+which Forge's flat bounces do not. `FORGE_BISTRO_NO_NORMALS=1` and the Falcor script's
+`BISTRO_NO_NORMALS` take the maps away, and `r.gi.reference` 5 to 8 stops Forge's path after 1
+to 4 bounces (Falcor's `BISTRO_BOUNCES`).
 
 **Step D, the lamps:** their highlights by GGX, each lobe widened by its lamp's sphere as seen from
 the surface (half its angular radius on α, as the sun's disc), Fresnel from the pixel's tinted F0,

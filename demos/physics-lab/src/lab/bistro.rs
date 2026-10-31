@@ -553,6 +553,9 @@ pub(super) fn rows(
     // Clay is diffuse alone, as the Falcor script's and pbrt-v4's (D-083): with its dielectric
     // reflection (the sky's by day, the lamps' highlights) it read 0.1 to 0.2 stops over them.
     let diffuse = matte_mode == "diffuse" || clay;
+    // `FORGE_BISTRO_NO_NORMALS=1`: no normal map anywhere (an experiment, #373; Falcor's
+    // `BISTRO_NO_NORMALS`).
+    let no_normals = std::env::var("FORGE_BISTRO_NO_NORMALS").is_ok_and(|v| v == "1");
     for (k, mesh) in b.model.meshes.iter().enumerate() {
         let uvs = !mesh.mesh.uvs.is_empty();
         let rows = mesh
@@ -624,6 +627,14 @@ pub(super) fn rows(
                         base_color: maps.base_color.filter(|_| maps.alpha_cutoff.is_some()),
                         alpha_cutoff: maps.alpha_cutoff,
                         ..ExternalMaps::default()
+                    }
+                } else {
+                    maps
+                };
+                let maps = if no_normals {
+                    ExternalMaps {
+                        normal: None,
+                        ..maps
                     }
                 } else {
                     maps

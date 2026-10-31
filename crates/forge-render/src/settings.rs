@@ -395,10 +395,11 @@ pub fn gi_reference(default: i64) -> Spec<i64> {
     Spec::int(
         "r.gi.reference",
         default,
-        0..=4,
+        0..=8,
         "The diffuse light from 32 rays a pixel (D-088, slow): 1 to 2 m and the probes past them, \
-         2 one bounce traced and the probes after, 3 two bounces, 4 a path without the probes; \
-         0 the probes.",
+         2 one bounce traced and the probes after, 3 two bounces, 4 a path without the probes, \
+         5 to 8 that path stopped after 1 to 4 bounces with nothing after (Falcor's \
+         BISTRO_BOUNCES, #373); 0 the probes.",
     )
 }
 
