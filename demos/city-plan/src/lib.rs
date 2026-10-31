@@ -273,8 +273,9 @@ const VILLAGE_FAR_ROOM_SKY: f32 = 0.2;
 const VILLAGE_FAR_ROOM_DAYLIGHT: f32 = 2.7;
 /// The far rooms' lamps (#363, `ProbeParams::far_room_lamps`), `[bounce, unlit]`: a lit room with
 /// windows beyond the grids' reach takes its lamps' lumens over its surfaces round its walls,
-/// times 18, and times 14 more for the share the frame leaves unlit (past its 64 nearest lamps,
-/// their direct light on the walls). Set against the grids carried out to 150 m with every lamp
+/// times 18, and times 14 more for the share the frame leaves unlit (past the lamps it lights,
+/// their direct light on the walls; set when it lit the 64 nearest, before #372's every lamp in
+/// reach). Set against the grids carried out to 150 m with every lamp
 /// lit, at midnight, one lit window seen straight on (fixed exposure, the window's mean in the
 /// capture): at 20 and 45 m 0.688 and 0.844 against 0.682 and 0.847 (14 read 0.02–0.03 dark,
 /// 20 as bright), at 70 and 90 m about 0.92 and 0.96 against 0.937 and 0.966. Before, the window

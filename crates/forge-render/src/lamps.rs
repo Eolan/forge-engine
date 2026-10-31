@@ -359,9 +359,9 @@ pub enum LampChoice {
     /// [`STREET_SHARE`] of them, the others the rest, and the slots one kind leaves go to the
     /// other (#295).
     Nearest,
-    /// As `Nearest` for every lamp but the street lamps, and every street lamp, however far:
-    /// ReSTIR DI lights those (D-065, the owner's choice of 2026-10-18), so a far street keeps
-    /// its light.
+    /// As `Nearest` for every lamp but the street lamps, [`STREETS_HOUSES`] at most, and every
+    /// street lamp, however far: ReSTIR DI lights those (D-065, the owner's choice of
+    /// 2026-10-18), so a far street keeps its light.
     Streets,
     /// Every lamp that is on, however far, [`LAMP_CAPACITY`] at most: D-065's comparison of
     /// ReSTIR DI with the light lists, which takes them all.
@@ -371,6 +371,11 @@ pub enum LampChoice {
 /// The street lamps' share of [`MAX_LAMPS`] in [`LampChoice::Nearest`] (#295): a few hundred
 /// house lamps nearer the camera crowded them out, and a lit street went dark.
 pub const STREET_SHARE: usize = 24;
+
+/// The house lamps' share in [`LampChoice::Streets`], the rest of [`LAMP_CAPACITY`] the street
+/// lamps': with [`MAX_LAMPS`] the buffers' whole (#372), a few hundred house lamps near the camera
+/// left the streets none.
+pub const STREETS_HOUSES: usize = 64;
 
 /// A street lamp's lens luminance, cd/m², in its red channel (its colour 1, 0.78, 0.55;
 /// `forge_geom::street::lamp`'s section 1): shielded LEDs at 2 700 K behind a frosted diffuser.
@@ -462,7 +467,7 @@ pub fn choose_shares(lamps: &[Lamp], camera: Vec3, choice: LampChoice) -> Vec<(u
         }
         LampChoice::Streets => {
             let houses = candidates(lamps, camera, 50.0, |l| !l.outside());
-            let h = houses.len().min(MAX_LAMPS);
+            let h = houses.len().min(STREETS_HOUSES);
             let streets = candidates(lamps, camera, f32::INFINITY, Lamp::outside);
             let s = streets.len().min(LAMP_CAPACITY - h);
             faded(lamps, &houses, h, 50.0)
@@ -769,7 +774,8 @@ impl FarLamps {
 /// The frame's light lists (D-065): for each region its `kept` lamps light, the lamps' indices, as
 /// pairs (region, lamp) sorted by region, then lamp; the lamps of [`EVERY_REGION`] under
 /// [`REGION_ANY`]. A pixel finds its region's run by a binary search (`lamp_run` in
-/// `meshlet.slang`) and loops over its few lamps, not over the frame's 64 (0.5 ms in a hall).
+/// `meshlet.slang`) and loops over its few lamps, not over the frame's every lamp (64 cost
+/// 0.5 ms in a hall).
 pub fn lists(kept: &[GpuLamp]) -> Vec<[u32; 2]> {
     let mut out = Vec::new();
     for (i, l) in kept.iter().enumerate() {
@@ -956,6 +962,14 @@ mod tests {
             .count();
         assert_eq!(kept.len(), MAX_LAMPS);
         assert_eq!(streets, STREET_SHARE);
+        // With ReSTIR DI for the streets (`--street-restir`), the houses keep their 64 and every
+        // street lamp is kept.
+        let restir = choose(&lamps, Vec3::ZERO, LampChoice::Streets);
+        let streets = restir
+            .iter()
+            .filter(|l| l.regions[0] == REGION_OUTSIDE)
+            .count();
+        assert_eq!((restir.len(), streets), (STREETS_HOUSES + 30, 30));
         // Without the houses, the streets take every slot they need.
         let alone: Vec<Lamp> = lamps[600..].to_vec();
         assert_eq!(nearest(&alone, Vec3::ZERO).len(), 30);
@@ -1031,13 +1045,9 @@ mod tests {
         let light = |camera: Vec3| {
             let mut out = vec![0.0_f32; lamps.len()];
             for l in nearest(&lamps, camera) {
-                let i = lamps
-                    .iter()
-                    .position(|x| {
-                        x.position.x == l.position_radius[0] && x.position.z == l.position_radius[2]
-                    })
-                    .unwrap();
-                out[i] = l.colour_reach[0];
+                let column = (l.position_radius[0] / 2.0).round() as usize;
+                let row = (l.position_radius[2] / 2.0).round() as usize;
+                out[column + row * 50] = l.colour_reach[0];
             }
             out
         };

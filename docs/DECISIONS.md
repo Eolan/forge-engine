@@ -9704,11 +9704,26 @@ path (`tools/gi-compare.sh`, one run each, mean |log2| and the frame's GPU ms):
 
 Indoors it is SHaRC's, outdoors the probes'; in the village's room the hits past its door and
 windows take the probes. Outdoors it still costs 0.15–0.3 ms over the probes alone: SHaRC's
-other passes run though nothing reads them there (to skip). The default images: `ast240`,
+other passes run though nothing reads them there. The default images: `ast240`,
 `city60`, `lab-lamps60`, `lab-materials60` 0 px.
 
+**Skipped where no room is (2026-10-31):** a scene neither authored as a room nor with rooms its
+probes know (`Probes::has_regions`) creates and runs no SHaRC under `auto` (`sharc_wanted` in
+city-blocks), since `sharc_here` answers no at every pixel there. The Bistro's Exterior_1, the
+frame's GPU ms, two runs each alternating: `off` 6.947, 6.842; `auto` 6.865, 6.896 (it was
+0.3 ms over). The kitchen (declared indoors) and the village's room (its rooms) still run
+`gi/sharc update` (0.099 and 0.093 ms). A street of the village still pays its 0.16 ms: its
+houses' rooms are in the probes, and a hit through a door may be indoors.
+
+**The review's fixes (2026-10-31):** a doorway (a front door, a shopfront: the outside's volume on
+its `region` side, its room's on the `other`) answers by the side its point is on, by the probes'
+ramp across it, where its room side had taken the probes too (the village's room and street
+under `auto`: 9 and 193 px of 1.44 M differ, their error to the path unchanged, 0.067 and 0.116);
+`--no-cfg` is a scripted run as `FORGE_CFG=none` is (the kitchen keeps the probes, 5.49 ms).
+
 **The default since 2026-10-31** (the owner: "Follow recommendations"): `auto`, but in a scripted
-run (no settings file, `FORGE_CFG=none`, which every script sets: `vars::gi_cache_default`),
+run (no settings file, `FORGE_CFG=none`, which every script sets, or `--no-cfg`:
+`vars::gi_cache_default`),
 which keeps the probes for images equal from run to run (`docs/PROCESS.md`). The captures
 unchanged (`ast240`, `city60`, `gallery60`, `lab-lamps60`, `lab-materials60`: 0 px); the kitchen
 run as the owner runs it takes SHaRC (`gi/sharc update` 0.10 ms, the frame 5.54 → 6.18 ms).

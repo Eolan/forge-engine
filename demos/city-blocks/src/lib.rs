@@ -568,12 +568,13 @@ pub struct Args {
     /// The lamps by ReSTIR DI, NVIDIA's RTXDI, its light denoised by REBLUR where NRD is, in place
     /// of the light lists' filtered shadows: every lamp, or with `--lamp-restir-near` those past
     /// the nearest (D-065, #372). Needs RTXDI's headers in `rtxdi-sdk/` and ray queries; with
-    /// `--all-lamps` it takes every lamp that is on, without it the 64 nearest.
+    /// `--all-lamps` it takes every lamp that is on, without it those whose light reaches within
+    /// 50 m of the camera.
     #[arg(long)]
     lamp_restir: bool,
     /// With `--lamp-restir`, the light lists light this many of the nearest lamps and ReSTIR DI
     /// the rest, denoised (#372): the near light smooth, the far light's noise dim. With
-    /// `--all-lamps`, or ReSTIR has only the nearest 64 past them. At least 1.
+    /// `--all-lamps`, or ReSTIR has only those reaching within 50 m past them. At least 1.
     #[arg(long, requires = "lamp_restir", value_parser = clap::value_parser!(u32).range(1..u32::MAX as i64))]
     lamp_restir_near: Option<u32>,
     /// The street lamps by ReSTIR DI, every one however far, beside the light lists' houses' lamps
@@ -582,8 +583,8 @@ pub struct Args {
     /// under DLAA, the light lists' on 0.003 %). Needs RTXDI's headers in `rtxdi-sdk/`.
     #[arg(long)]
     street_restir: bool,
-    /// Every lamp that is on, however far, in place of the 64 nearest (D-065's comparison:
-    /// ReSTIR DI takes them all; the light lists too, for the A/B).
+    /// Every lamp that is on, however far, in place of those whose light reaches within 50 m of
+    /// the camera (D-065's comparison: ReSTIR DI takes them all; the light lists too, for the A/B).
     #[arg(long)]
     all_lamps: bool,
     /// Draw the spray, the particles and the tank's water without their reactive mask, so FSR
@@ -1428,7 +1429,8 @@ impl Gallery {
         if look.indoors {
             flags.0 |= CullFlags::INDOORS;
         }
-        if crate::vars::gi_cache_default() == forge_render::settings::GI_CACHE_AUTO {
+        let cache_default = crate::vars::gi_cache_default(&args.settings);
+        if cache_default == forge_render::settings::GI_CACHE_AUTO {
             flags.0 |= CullFlags::SHARC_AUTO;
         }
         // The city's views list 0.44–1.03 M clusters on their first frame, the island's 0.45 M:
@@ -2161,7 +2163,7 @@ impl Gallery {
             lamp_denoised: false,
             diffuse_was_on: false,
             surface_cache: None,
-            cache_mode: crate::vars::gi_cache_default(),
+            cache_mode: cache_default,
             cache_tried: false,
             cache_was_on: false,
             sharc: None,
@@ -2228,6 +2230,21 @@ impl Gallery {
             gallery.set_sun_of_day(t.clamp(0.0, last));
         }
         Ok(gallery)
+    }
+
+    /// Whether SHaRC lights the bounce's hits (D-090): under `r.gi.cache sharc` everywhere, under
+    /// `auto` only in a scene with rooms, one authored as a room (`CullFlags::INDOORS`) or one
+    /// whose probes know its rooms. Without, `sharc_here` answers no at every pixel and nothing
+    /// would read its voxels: its passes and 40 MB are spared (0.3 ms at the Bistro's streets).
+    fn sharc_wanted(&self) -> bool {
+        match self.cache_mode {
+            forge_render::settings::GI_CACHE_SHARC => true,
+            forge_render::settings::GI_CACHE_AUTO => {
+                self.flags.has(CullFlags::INDOORS)
+                    || self.probes.as_ref().is_some_and(Probes::has_regions)
+            }
+            _ => false,
+        }
     }
 
     /// Whether the exposure follows the scene's metered light (`--day`, `--time-of-day`, a look
@@ -2666,13 +2683,8 @@ impl Demo for Gallery {
         {
             cache.reset();
         }
-        if self.renderer.gi_trace
-            && matches!(
-                self.cache_mode,
-                forge_render::settings::GI_CACHE_SHARC | forge_render::settings::GI_CACHE_AUTO
-            )
-            && !self.sharc_tried
-        {
+        let sharc_wanted = self.sharc_wanted();
+        if self.renderer.gi_trace && sharc_wanted && !self.sharc_tried {
             self.sharc_tried = true;
             if !forge_render::Sharc::available(&ctx.device, &ctx.shaders) {
                 tracing::warn!(
@@ -3763,24 +3775,16 @@ impl Demo for Gallery {
             self.cache_was_on = cache.is_some();
             // Or NVIDIA's SHaRC in its place.
             let sharc = match &mut self.sharc {
-                Some(sharc)
-                    if matches!(
-                        self.cache_mode,
-                        forge_render::settings::GI_CACHE_SHARC
-                            | forge_render::settings::GI_CACHE_AUTO
-                    ) && for_denoiser.is_some() =>
-                {
-                    Some(sharc.update(
-                        &mut frame.graph,
-                        frame.slot,
-                        self.renderer.frame_address(frame.slot),
-                        targets,
-                        extent,
-                        scene_light,
-                        probes,
-                        camera_in_scene,
-                    ))
-                }
+                Some(sharc) if sharc_wanted && for_denoiser.is_some() => Some(sharc.update(
+                    &mut frame.graph,
+                    frame.slot,
+                    self.renderer.frame_address(frame.slot),
+                    targets,
+                    extent,
+                    scene_light,
+                    probes,
+                    camera_in_scene,
+                )),
                 _ => None,
             };
             self.sharc_was_on = sharc.is_some();

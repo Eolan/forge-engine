@@ -287,7 +287,7 @@ public static const uint FLAG_SINGLE_SCATTER = 536870912;
 // `r.gi.cache auto`.
 public static const uint FLAG_INDOORS = 1073741824;
 // `r.gi.cache auto` (`CullFlags::SHARC_AUTO`, D-090): SHaRC lights a bounce's hit indoors alone.
-public static const uint FLAG_SHARC_AUTO = 2147483648;
+public static const uint FLAG_SHARC_AUTO = 2147483648u;
 
 static const uint PAGE_NONE = 0xFFFFFFFF;           // an absent page in `page_table`, no page in `child_page`
 static const uint MESHLET_INDEX_MASK = 0x3FFFFFFFu;
@@ -7933,7 +7933,10 @@ bool sharc_here(Frame* f, ProbeField* probes, float3 position, float3 n, float3 
     if (probes == nullptr || probes[0].region_count == 0u)
         return false;
     RegionHit at = region_open(probes, position + n * 0.02, position + n * 0.15, position + toward * 0.3);
-    return at.kind != REGION_SOLID && at.region != REGION_OUTSIDE && at.region != REGION_NONE;
+    // A doorway (a front door, a shopfront) is the outside's on its `region` side and its room's
+    // on the `other`: the side the point is on, as the probes' ramp across it.
+    uint region = at.kind == REGION_DOORWAY && at.ramp >= 0.5 ? at.other : at.region;
+    return at.kind != REGION_SOLID && region != REGION_OUTSIDE && region != REGION_NONE;
 }
 
 // D-088's surface cache through NVIDIA's SHaRC (`sharc.slang`, `crates/forge-render/src/sharc.rs`):

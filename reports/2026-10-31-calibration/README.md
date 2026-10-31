@@ -153,3 +153,32 @@ and a still camera's shimmer (frames 280 and 290, pixels differing by more than 
 - **The Moon** is 0.4 % of the night view's light; `--moonless` exists, and gi-compare's nights use
   it.
 
+## Your go, 12:25 ("Follow recommendations")
+
+- **#372 closed (39bc3305):** the light lists light every lamp whose light reaches within 50 m of
+  the camera, up to 512 (the 64 nearest before). The Bistro at night by default: its far street
+  and arch lit, 0.987 of Forge's path with every lamp, 6,840 px of shimmer, 22.1 ms (15.2 with the
+  64). The village at 22:00 costs the same (+0.01 to +0.05 ms). ReSTIR stays behind its switch.
+  The lamp model's 13 % over the traced glow is #374.
+- **D-090 on (d9e90511, 786b65cb):** `r.gi.cache auto` is the default: SHaRC where the bounce's
+  hit is indoors (a house's rooms, the lab's authored rooms), the probes elsewhere. The kitchen
+  0.073 from the path (the probes 0.125), the village's room 0.067 (0.146), the Bistro and the
+  street as the probes. Scripted runs (`FORGE_CFG=none`) keep the probes, so the captures stay
+  equal run to run (0 px). NRC's trial is next on the same hook; its SDK is already here
+  (`nrc-sdk/`), it needs a C++ shim and CUDA interop.
+- **`auto` costs nothing where there are no rooms:** a scene with no rooms (the Bistro, the
+  chart) creates no SHaRC. Exterior_1 under `auto` 6.87/6.90 ms, `off` 6.95/6.84 (it was 0.3 ms
+  over). The village's streets still pay 0.16 ms, since a hit through a door can be indoors.
+- **The review of the three commits** found five things, fixed before the push:
+  - `--street-restir`'s house lamps took the whole 512, which left the street lamps none in a
+    dense view. They keep their 64 again, with a test.
+  - `--no-cfg` didn't count as a scripted run.
+  - A door's room side took the probes under `auto`.
+  - One lamp test ran a billion-step search.
+  - The help text and a few comments still said "64".
+- **Still open from it:**
+  - Each bounce's hit weighs every kept lamp twice (`hit_lamps`). That is measured at the
+    Bistro's 132 lamps, not at 512.
+  - The village's far-room lamp factor (14 × the unlit share) was set when the frame lit the
+    64 nearest. It wants a look at midnight.
+

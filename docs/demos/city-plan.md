@@ -1162,8 +1162,9 @@ mesh to test navigations inside the houses"):
     behind the windows.
   - **Out of the probes:** the probes leave out the lenses' glow and the lamps' bounce, which
     had come back as sharp blocks of light on the grass under the trees, away from any lamp.
-  - **The far ones** (#284): each frame lights the 64 nearest lamps with shadow rays, and every
-    other street lamp without one (`FarLamps`, 8 m columns): a lamp fading out of the 64 fades
+  - **The far ones** (#284): each frame lights the lamps whose light reaches within 50 m of the
+    camera with shadow rays (the 64 nearest then, every one in reach since #372), and every
+    other street lamp without one (`FarLamps`, 8 m columns): a lamp fading out of the set fades
     into the unshadowed light, so the far streets keep their pools. Receding from the junction
     to 100 m, a frame differs from `--all-lamps` (every lamp shadowed) on 1 200–4 300 px against
     2 300–26 200 before, for 0.05 ms of `shading/standard`. `--no-far-lamps` turns it off.

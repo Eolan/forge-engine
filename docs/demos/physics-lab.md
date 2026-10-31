@@ -2505,8 +2505,12 @@ before).
   gives the probes alone.
 - **`r.gi.probe_ahead`, 20 by default:** the most metres the finest probe cascade stands ahead
   along the view, as far as the view reaches.
-- **`r.gi.cache`, off by default:** a cache read where the bounce's rays meet a surface, in place
-  of the probes:
+- **`r.gi.cache`, `auto` by default since 2026-10-31 (D-090), `off` in a scripted run
+  (`FORGE_CFG=none` or `--no-cfg`):** a cache read where the bounce's rays meet a surface, in place of the
+  probes:
+  - `auto`: SHaRC (below) where the hit is indoors, the probes elsewhere. The lab's authored rooms
+    (the Cornell box, the classroom, the bedroom, the kitchen) are indoors throughout; the Bistro
+    and the chart outdoors, where SHaRC is not even created (the frame costs what `off` costs).
   - `port`: D-088's surface cache, Bevy Solari's world cache on kajiya's dense index. The frame
     costs the same.
   - `sharc`: NVIDIA's SHaRC, from the ignored `sharc-sdk/`, on a GPU with 64-bit atomics. The

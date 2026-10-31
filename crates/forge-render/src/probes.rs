@@ -934,6 +934,13 @@ impl Probes {
         Ok(())
     }
 
+    /// Whether the probes know the scene's rooms ([`Self::set_regions`] gave volumes, or
+    /// [`Self::reserve_regions`] made room for sets): the light lists and D-090's `auto` ask
+    /// them where a point is; without, everything is outside.
+    pub fn has_regions(&self) -> bool {
+        self.regions.is_some()
+    }
+
     /// Shuts or opens doorway `volume` (its place in what [`Self::set_regions`] was given, #327):
     /// `Some(s)`, its door's leaf at `s` (0 to 1) of the way across from its `region` side, each
     /// side of it lit by its own probes alone; `None`, open, the doorway ramping from one side to
