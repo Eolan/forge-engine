@@ -18,8 +18,8 @@ targeted maps only until 14:00. Every number is the mean |log2| of 16 × 9 tiles
   lamps on is within 0.1 of itself with them off (the glow traced) in all three rooms.
 - **SHaRC is the nearest indoors, by day and at night;** the probes are as good outdoors by day.
   That is D-090's recommendation, taken (the owner, 2026-10-31).
-- **Waiting for you:** D-090 (SHaRC indoors), and #372 (the Bistro at night: a many-lights
-  choice).
+- **Your decisions, the same morning:** D-090, SHaRC indoors (as recommended); #372, ReSTIR DI for
+  every lamp with a denoiser. What #372 became by midday is under "#372, the same day" below.
 
 ## The table
 
@@ -115,3 +115,34 @@ surface).
 
 The sheets (each technique beside Falcor and Forge's path, with ratio maps) stay out of git:
 they are renders of the Bistro, Bitterli's rooms and Falcor's images.
+
+## #372, the same day (ReSTIR DI for every lamp, denoised)
+
+Measured on the Bistro's night view as each tile's light over Forge's path tracer with every lamp
+on (the plain mean of 144 tiles' ratios: the mean |log2| reads one sample's noise as darkness),
+and a still camera's shimmer (frames 280 and 290, pixels differing by more than 2 levels):
+
+| | shimmer | light | frame |
+|---|---|---|---|
+| the light lists, the 64 nearest (the default) | 4,892 px | 0.797 | 15.3 ms |
+| the light lists, every lamp | 6,884 px | 0.987 | 21.9 ms |
+| ReSTIR, undenoised, as it stood in the morning | (sparkling) | 0.775 | 15.1 ms |
+| ReSTIR, both lights denoised, reuse with visibility (now) | 24,660 px | 0.905 | 19.0 ms |
+
+- **Commits:** 055e927f (ReSTIR's light fixed, its diffuse light denoised), 45b7ab80 (the lanterns'
+  profile, `--moonless`), b2e9eaec and e8561c4e (the highlight denoised, the resolve's surface code
+  made a function, a review's fixes), 0521a6f5 and d9482af2 (REBLUR's history, the reuse with
+  visibility). All behind `--lamp-restir --all-lamps`; the default is unchanged.
+- **Faults found in ReSTIR's bridge:** the flat lamps not sampled as rectangles; RTXDI's permutation
+  sampling (0.2 stops dark); shadow rays running into the lanterns' glass; RTXDI's pairwise reuse
+  reading an off-screen reservoir (the device lost); and RTXDI's naive discount, which kept every
+  pixel's history at one sample and halved the light under `Basic`.
+- **Not the default yet:** it shimmers four times the lists' (the denoised light still moves at the
+  pixel on the cobbles, the basket's leaves, the wires). Turning, it keeps its light (0.906 of the
+  lists). Next: the lists for the nearest lamps and ReSTIR for the rest.
+- **The lanterns' profile** (`Emission::Prism`, their glass's shares up and down) was right but
+  small: the lamp model stays 13 % over the traced glow, its cause still open (not the lamps'
+  intensities: each kind's lumens match its glass's).
+- **The Moon** is 0.4 % of the night view's light; `--moonless` exists, and gi-compare's nights use
+  it.
+

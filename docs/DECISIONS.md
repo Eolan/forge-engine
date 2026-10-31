@@ -5498,7 +5498,7 @@ lamp model, integrated exactly). Five faults, each found by taking one part away
 
 | Scene (DLAA) | the lists | ReSTIR before | ReSTIR now |
 |---|---|---|---|
-| Bistro at night, every lamp, against Forge's path | 0.987 | 0.778 | 0.969 (median 0.977) |
+| Bistro at night, every lamp, against Forge's path | 0.987 | 0.775 | 0.969 (median 0.977) |
 | Cornell box, against the lists | 1 | 0.904 | 1.000 |
 | Kitchen (clay), against the lists | 1 | 0.941 | 0.943 (0.949 without reuse) |
 | Bedroom (clay), against the lists | 1 | 0.939 | 0.940 |
@@ -5585,7 +5585,9 @@ light (the low half of the lamp code) and the sample's for their highlight.
   `pixel_shading`, moved verbatim. The asteroids (#355: `ast240`, its A/B twin, `ast-notaa600`),
   `lab-materials60`, `lab-lamps60`, `city60`, `gallery60` and `planet-ground` on both paths:
   0 px from the accepted set, and the A/B harness and mesh against fallback 0 px. The AMD
-  iGPU's check (#355's oracle) waits for a Tier 2 night: the moved code traces no ray.
+  iGPU's check (#355's oracle, `tools/amd-check.sh`, the same day): meshlets, asteroids and the
+  lab's yard, smoke yard and lamp room each identical from run to run and the mesh path to the
+  fallback, no validation messages (the asteroids' one line is #367's notice).
 - **ReSTIR's pass** calls it and `standard_inputs` (`row_inputs` for the other classes), and
   writes the sample's diffuse light by the mapped normal, its highlight as `lamp_add`'s (GGX,
   the lobe widened by the lamp's sphere) over the surface's directional albedo
