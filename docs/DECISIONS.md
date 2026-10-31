@@ -5609,7 +5609,8 @@ tiles' mean ratio to Forge's path with every lamp, the frame on the 5070 Ti:
 | the light lists, the 64 nearest (the default) | 4,892 px | 0.797 | 15.3 ms |
 | the light lists, every lamp | 6,884 px | 0.987 | 21.9 ms |
 | ReSTIR, both lights denoised (REBLUR 30 frames, 8 candidates) | 94,909 px | 0.929 | 16.6 ms |
-| the same, REBLUR 63 frames, 16 candidates (taken) | 42,929 px | 0.915 | 16.9 ms |
+| the same, REBLUR 63 frames, 16 candidates | 42,929 px | 0.915 | 16.9 ms |
+| the same, three neighbours with visibility (taken, below) | 24,660 px | 0.905 | 19.0 ms |
 
 - ReSTIR lights the whole street for 5 ms less than the lists with every lamp, but shimmers six
   times as much: REBLUR's light still moves at the pixel on the cobbles, the basket's leaves, the
@@ -5620,11 +5621,20 @@ tiles' mean ratio to Forge's path with every lamp, the frame on the 5070 Ti:
   disocclusion is what darkened the turning camera. RTXDI's answer is `RayTraced` bias correction
   (visibility in the weights), which in Forge's bridge darkened the Cornell box's lit walls too,
   for a reason not found yet (step 1).
-- **Next, in order:** (1) find why `Basic`/`RayTraced` darken Forge's lit walls, then spatial reuse
-  with visibility for the shimmer and the turning camera; (2) if it still shimmers, the lists for
-  the nearest lamps and ReSTIR for the rest (the street lamps' split, `--street-restir`,
-  generalised), the far light dim enough that its noise hides; (3) the lamp model's 13 % over the
-  traced glow (the lanterns' profile took 1 % of it).
+- **Found the same day: RTXDI's naive discount.** Forge had `discountNaiveSamples` on: RTXDI
+  skips a neighbour of two samples or fewer, and a reservoir starts with one, so a pixel's
+  history never grew; under `Basic` the skipped neighbour still counted in the normalisation, half
+  the light (the Cornell box 0.892 of the lists, 0.995 without the discount). With it off, the
+  reuse takes visibility in its weights (`RayTraced`), keeps an occluded sample in its reservoir
+  (emptied, its count gave the neighbours nothing: 0.858 → 0.905) and three neighbours (and three
+  where it has no history): the shimmer 42,929 → 24,660 pixels for 2 ms. Turning at 6° a second,
+  0.906 of the lists with every lamp (both with the lanterns' profile; the 9 % of step 2a was
+  against a reference taken with the cone): about 1 % lost to the motion. The rooms lose 1 %
+  (the Cornell box 0.990, the kitchen 0.925, the bedroom 0.924 of the lists).
+- **Still four times the lists' shimmer.** Next, in order: (1) the lists for the nearest lamps and
+  ReSTIR for the rest (the street lamps' split, `--street-restir`, generalised), the far light dim
+  enough that its noise hides; (2) the lamp model's 13 % over the traced glow (the lanterns'
+  profile took 1 % of it); (3) the rooms' 5 % between ReSTIR's estimate and the lists'.
 
 **Step 3 built (2026-10-31): a lantern's light by its glass** (`Emission::Prism { up, down }`):
 at the elevation φ, over its side's intensity, cos φ for its upright panes and its glass's

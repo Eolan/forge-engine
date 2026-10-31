@@ -19,7 +19,8 @@
 //!   (lamps picked uniformly, or every one in turn where it has no more), one kept by its light,
 //!   its shadow ray traced;
 //! - RTXDI's spatiotemporal resampling against the last frame's reservoirs (TAA's
-//!   reprojection), its bias correction by pairwise MIS, its permutation sampling off (#372);
+//!   reprojection) and three neighbours, its bias correction with visibility (`RayTraced`), its
+//!   permutation sampling and naive discount off (#372);
 //! - the kept sample's shadow ray, and its light times the reservoir's weight.
 
 use std::collections::HashMap;
@@ -56,11 +57,12 @@ const TO_PREVIOUS: u64 = 512;
 const TO_CURRENT: u64 = TO_PREVIOUS + 4 * LAMP_CAPACITY as u64;
 const FRAME_BYTES: u64 = TO_CURRENT + 4 * LAMP_CAPACITY as u64;
 
-/// RTXDI's bias correction by pairwise MIS, without rays (`RTXDI_BIAS_CORRECTION_PAIRWISE`, #372):
-/// under `Basic` (and under `RayTraced`), a lit wall of the Cornell box under its one lamp stood
-/// 10 to 15 % under the light lists and the resampling without reuse, with a block's shadow drawn
-/// in patches; pairwise, as without correction, it matches them (1.000 of the lists' light).
-const BIAS_CORRECTION_PAIRWISE: u32 = 2;
+/// RTXDI's bias correction with visibility (`RTXDI_BIAS_CORRECTION_RAY_TRACED`, #372): a shadow
+/// ray from each neighbour to the kept sample. Without it (`Basic`, pairwise MIS) a neighbour
+/// counted the lamps round a wall from it as its own, and over three neighbours the Bistro's night
+/// lost 40 % of its light. (`Basic` and `RayTraced` first darkened the Cornell box's lit walls
+/// 10-15 %: RTXDI's naive discount, below, not the correction.)
+const BIAS_CORRECTION_RAY_TRACED: u32 = 3;
 
 /// How the lamps are resampled.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -71,11 +73,10 @@ pub struct RestirSettings {
     pub candidates: u32,
     /// The most frames a reservoir's history counts (RTXDI's default, 20).
     pub max_history: u32,
-    /// The last frame's reservoirs the reuse takes, the pixel's own (reprojected) first: 1 is that
-    /// one alone (RTXDI's default); and where the last frame shows nothing of the pixel, how many
-    /// round it (RTXDI's default 8; here 1, #372: as the camera turned, the new strip at the
-    /// screen's edge took the old edge's reservoirs, the frame 9 % under the light lists, 6 %
-    /// with one).
+    /// The last frame's reservoirs the reuse takes, the pixel's own (reprojected) first, and where
+    /// the last frame shows nothing of the pixel, how many round it. 3 and 3 (#372): at the
+    /// Bistro's night a still camera's shimmer 42,900 → 24,700 pixels (five: 23,200 for 1 ms
+    /// more); RTXDI's 8 where there is no history lost 2 % more of a turning camera's light.
     pub spatial_samples: [u32; 2],
     /// Pixels around the pixel the neighbours come from (RTXDI's default, 32).
     pub radius: f32,
@@ -89,7 +90,7 @@ impl Default for RestirSettings {
         Self {
             candidates: 16,
             max_history: 20,
-            spatial_samples: [1, 1],
+            spatial_samples: [3, 3],
             radius: 32.0,
             thresholds: [0.1, 0.5],
         }
@@ -454,7 +455,7 @@ impl LampRestir {
             spatiotemporal: GpuSpatioTemporal {
                 depth_threshold: s.thresholds[0],
                 normal_threshold: s.thresholds[1],
-                bias_correction: BIAS_CORRECTION_PAIRWISE,
+                bias_correction: BIAS_CORRECTION_RAY_TRACED,
                 max_history: s.max_history,
                 // Off (#372): reusing the last frame's reservoir of a pixel up to 3 px away
                 // (RTXDI's permutation, for a denoiser's sake) darkened the Bistro's night by
@@ -467,7 +468,11 @@ impl LampRestir {
                 disocclusion_samples: s.spatial_samples[1],
                 radius: s.radius,
                 material_test: 0,
-                discount_naive: 1,
+                // Off (#372): RTXDI skips a neighbour of two samples or fewer as naive, and a
+                // reservoir starts with one, so a pixel's history never grew past it; under `Basic`
+                // the skipped neighbour still counted in the normalisation, half the light (the
+                // Cornell box's lit walls 0.892 of the lists' light, 0.995 without it).
+                discount_naive: 0,
             },
             reservoirs: self.reservoirs.address(),
             neighbor_offsets: self.offsets.address(),

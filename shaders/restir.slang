@@ -423,7 +423,9 @@ bool RAB_GetConservativeVisibility(RAB_Surface surface, RAB_LightSample s)
     return !ray_blocked(f, ray);
 }
 
-// The reuse's bias correction is pairwise MIS (no rays): this is only asked for under `RayTraced`.
+// Whether a sample lights a neighbour of the last frame, for the reuse's `RayTraced` bias
+// correction: RTXDI passes the neighbour's surface first (the pixel's own for its reprojected
+// one), whose shadow ray starts 2 cm off it (`RAB_GetGBufferSurface` keeps no bias).
 bool RAB_GetTemporalConservativeVisibility(RAB_Surface current, RAB_Surface previous, RAB_LightSample s)
 {
     return RAB_GetConservativeVisibility(current, s);
@@ -583,7 +585,7 @@ void lamp_restir_main(uint3 id : SV_DispatchThreadID)
         RTXDI_DIReservoir initial = state;
         RAB_LightSample initial_chosen = chosen;
         state = RTXDI_DISpatioTemporalResampling(pixel, surface, state, rng, motion, 1u - r->current, r->runtime, r->reservoir_params, r->spatiotemporal, temporal_pixel, chosen);
-        // Where the pairwise reuse found no neighbour (a disocclusion, the screen's edge as the
+        // Where the pairwise reuse (once the bias correction) found no neighbour (a disocclusion, the screen's edge as the
         // camera turns), RTXDI's spatiotemporal pass leaves the pixel's own sample a weight of 0
         // (its spatial pass sets it to 1): the pixel's own reservoir then, not none, which went
         // black and darkened the frames after (#372's review).
@@ -603,7 +605,10 @@ void lamp_restir_main(uint3 id : SV_DispatchThreadID)
     {
         bool seen = RAB_GetConservativeVisibility(surface, chosen);
         lux = seen ? restir_light(chosen, surface) * RTXDI_GetDIReservoirInvPdf(state) : float3(0.0);
-        RTXDI_StoreVisibilityInDIReservoir(state, seen ? float3(1.0) : float3(0.0), true);
+        // An occluded sample stays in its reservoir (#372): emptied, the reservoir kept its count and
+        // gave its neighbours nothing for it, though its other candidates might have lit them, and
+        // the reuse over three neighbours darkened the Bistro's night 6 %.
+        RTXDI_StoreVisibilityInDIReservoir(state, seen ? float3(1.0) : float3(0.0), false);
         uint index = RTXDI_GetDIReservoirLightIndex(state);
         lamp = float(index + 1u);
         float3 dir;
