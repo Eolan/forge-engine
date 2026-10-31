@@ -1,6 +1,7 @@
 //! NVIDIA's NRD (Real-time Denoisers): its SIGMA shadow denoiser, the sun's ray-traced soft
-//! shadows denoised by NVIDIA's own library (issue #172, D-049), and its REBLUR diffuse denoiser,
-//! the diffuse bounce traced per pixel (D-088).
+//! shadows denoised by NVIDIA's own library (issue #172, D-049), its REBLUR diffuse denoiser,
+//! the diffuse bounce traced per pixel (D-088), and its REBLUR diffuse and specular denoiser, the
+//! lamps' light by ReSTIR DI (#372).
 //!
 //! NRD is never in the repository (the NVIDIA RTX SDKs License, as DLSS): `tools/fetch-nrd.sh`
 //! builds the pinned release [`NRD_RELEASE`] into `nrd-sdk/bin`, git-ignored, and [`Sigma::load`]
@@ -127,7 +128,7 @@ pub struct ReblurImages {
     pub motion: ImageHandle,
 }
 
-/// One frame of REBLUR's diffuse denoiser.
+/// One frame of REBLUR's denoisers (the diffuse, and the diffuse and specular).
 #[derive(Clone, Copy, Debug)]
 pub struct ReblurFrame {
     /// The camera.
@@ -213,7 +214,8 @@ impl ReblurDiffuseSpecular {
     }
 
     /// Declares REBLUR's dispatches for this frame as graph passes and returns the denoised
-    /// diffuse and specular light ([`RADIANCE_FORMAT`], sampled; also next frame's history).
+    /// diffuse and specular light ([`RADIANCE_FORMAT`], sampled; REBLUR keeps its history in its
+    /// own pools).
     pub fn denoise<'f>(
         &'f self,
         graph: &mut FrameGraph<'f>,
@@ -601,7 +603,7 @@ mod imp {
 
     /// `nrd::Result::SUCCESS`.
     const SUCCESS: u32 = 0;
-    /// `nrd::Denoiser::SIGMA_SHADOW` and `REBLUR_DIFFUSE`.
+    /// `nrd::Denoiser::SIGMA_SHADOW`, `REBLUR_DIFFUSE` and `REBLUR_DIFFUSE_SPECULAR`.
     const DENOISER_SIGMA_SHADOW: u32 = 16;
     const DENOISER_REBLUR_DIFFUSE: u32 = 0;
     const DENOISER_REBLUR_DIFFUSE_SPECULAR: u32 = 6;
@@ -610,7 +612,7 @@ mod imp {
     /// `nrd::DescriptorType`.
     const DESCRIPTOR_TEXTURE: u32 = 0;
     const DESCRIPTOR_STORAGE_TEXTURE: u32 = 1;
-    /// `nrd::ResourceType`, the ones SIGMA and REBLUR_DIFFUSE use.
+    /// `nrd::ResourceType`, the ones SIGMA, REBLUR_DIFFUSE and REBLUR_DIFFUSE_SPECULAR use.
     const IN_MV: u32 = 0;
     const IN_NORMAL_ROUGHNESS: u32 = 1;
     const IN_VIEWZ: u32 = 2;

@@ -1100,7 +1100,7 @@ impl LampShadows {
     /// How the resolve's push names them (`lamps_at`): ReSTIR's sampled index in the high half
     /// (0xFFFF: none); in the low half the share's (0xFFFF: the lamps' own rays), or where ReSTIR
     /// lights every lamp (`restir_all`, the frame's `lamp_restir_every`) its denoised diffuse
-    /// light's (0xFFFF: the sample's own).
+    /// light's (0xFFFF: the sample's own), the high half then its denoised highlight.
     fn code(self, sampled: impl Fn(ImageHandle) -> u32) -> u32 {
         let index = |image| {
             let i = sampled(image);

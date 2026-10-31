@@ -3837,7 +3837,7 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
     {
         float to_units = RESTIR_DENOISE_SCALE / max(f[0].sun_illuminance, 1e-9);
         g_lamp_diffuse += ycocg_to_linear(g_sampled_images[NonUniformResourceIndex(share)].Load(int3(pixel, 0)).xyz) * to_units;
-        float3 albedo = environment_specular(f0, sqrt(sqrt(2.0 / (specular_power + 2.0))), saturate(dot(shading_n, view)), (f[0].flags & FLAG_SINGLE_SCATTER) == 0u);
+        float3 albedo = restir_specular_albedo(f, f0, specular_power, shading_n, view);
         g_lamp_specular += ycocg_to_linear(g_sampled_images[NonUniformResourceIndex(restir)].Load(int3(pixel, 0)).xyz) * albedo * (highlight_share(specular_weight) * to_units);
     }
     else if (restir != 0xFFFFu)
@@ -3864,6 +3864,17 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
 // The lux in one unit of ReSTIR's denoised light (`restir.rs`'s `DENOISE_SCALE`, #372): REBLUR keeps
 // half floats, and a bulb lights a pixel by it with up to 65,000 lux.
 static const float RESTIR_DENOISE_SCALE = 256.0;
+
+// The directional albedo ReSTIR's pass divides the lamps' highlight by before REBLUR, and the
+// resolve multiplies it back by (#372): the split sum's term (`environment_specular`) for the
+// pixel's reflectance `f0`, lobe and view, never under 0.02. Where f0 falls under 0.02 the term
+// drops its grazing part and tends to nothing while GGX's Fresnel does not: divided by it, the
+// highlight rose up to a thousandfold and REBLUR spread it into the neighbours.
+float3 restir_specular_albedo(Frame* f, float3 f0, float specular_power, float3 n, float3 view)
+{
+    float roughness = sqrt(sqrt(2.0 / (specular_power + 2.0))); // RenderLayer::roughness_for_power, inverted
+    return max(environment_specular(f0, roughness, saturate(dot(n, view)), (f[0].flags & FLAG_SINGLE_SCATTER) == 0u), float3(0.02));
+}
 
 // Adds lamp `lamp` (the frame's `i`-th) to `g_lamp_diffuse` and `g_lamp_specular`, times `scale`
 // (`lamps_at`): its illuminance on the surface, with SHADOWS one shadow ray to a point of its
@@ -7092,12 +7103,6 @@ void grass_surface(Frame* f, GrassHit h, uint2 pixel, inout Surface s, out float
     scale = lerp(lerp(0.55, 1.05, h.along) * blade, 1.0, sqrt(h.far));
 }
 
-// Shades the pixel at `pixel` whose (non-empty) visibility id is `vis`, when its material is
-// of class `class_index` (a compile-time constant at every call); `SHADOWS` compiles the
-// shadow ray in (devices with ray queries). Returns the class it has. A grass blade's pixel
-// (#300) and a mesh's share everything after their surface: the shadows, the lamps, the class's
-// shading and the debug views (#348: the grass's own copy of them made every resolve entry's
-// pipeline seconds longer in the driver, each call site a whole inlined copy).
 // A pixel's surface and its material row as the resolve shades them, from the visibility buffer
 // (`vis` at `pixel` of a frame of `size`): what `shade_pixel` lights, and what ReSTIR's pass lights
 // the lamps with (#372). `other_class` where the row is not of class `class_index`
@@ -7293,6 +7298,12 @@ PixelShading pixel_shading(Frame* f, uint class_index, uint2 pixel, uint vis, fl
     return p;
 }
 
+// Shades the pixel at `pixel` whose (non-empty) visibility id is `vis`, when its material is
+// of class `class_index` (a compile-time constant at every call); `SHADOWS` compiles the
+// shadow ray in (devices with ray queries). Returns the class it has. A grass blade's pixel
+// (#300) and a mesh's share everything after their surface: the shadows, the lamps, the class's
+// shading and the debug views (#348: the grass's own copy of them made every resolve entry's
+// pipeline seconds longer in the driver, each call site a whole inlined copy).
 uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
 {
     Frame* f = resolve_push.frame;

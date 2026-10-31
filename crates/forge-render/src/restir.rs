@@ -195,9 +195,9 @@ struct RestirPush {
 
 const _: () = assert!(std::mem::size_of::<RestirPush>() == 80);
 
-/// The lux in one unit of [`RestirLight::diffuse`] (#372, `RESTIR_DENOISE_SCALE` in
-/// `meshlet.slang`): REBLUR keeps half floats, and a bulb lights a pixel by it with up to 65,000
-/// lux.
+/// The lux in one unit of [`RestirLight::diffuse`] and [`RestirLight::specular`] (#372,
+/// `RESTIR_DENOISE_SCALE` in `meshlet.slang`): REBLUR keeps half floats, and a bulb lights a pixel
+/// by it with up to 65,000 lux.
 pub const DENOISE_SCALE: f32 = 256.0;
 
 /// What [`LampRestir::draw`] lights a frame with.

@@ -871,9 +871,10 @@ struct Gallery {
     diffuse_denoiser: Option<forge_render::DiffuseDenoiser>,
     diffuse_tried: bool,
     diffuse_was_on: bool,
-    /// ReSTIR's diffuse light denoised (#372): its own REBLUR, loaded the first frame ReSTIR
-    /// lights every lamp (`--lamp-restir`); `lamp_denoiser_tried` once it was (without NRD the
-    /// resolve reads each pixel's sample), `lamp_denoised` whether it denoised the last frame.
+    /// ReSTIR's light denoised, diffuse and highlight (#372): its own REBLUR, loaded the first
+    /// frame ReSTIR lights every lamp (`--lamp-restir`); `lamp_denoiser_tried` once it was
+    /// (without NRD the resolve reads each pixel's sample), `lamp_denoised` whether it denoised
+    /// the last frame.
     lamp_denoiser: Option<forge_render::LampDenoiser>,
     lamp_denoiser_tried: bool,
     lamp_denoised: bool,
@@ -2318,6 +2319,9 @@ impl Demo for Gallery {
             denoiser.resize(ctx.extent())?;
         }
         if let Some(denoiser) = &mut self.diffuse_denoiser {
+            denoiser.resize(ctx.extent())?;
+        }
+        if let Some(denoiser) = &mut self.lamp_denoiser {
             denoiser.resize(ctx.extent())?;
         }
         self.reflection_history.resize(ctx.extent())?;

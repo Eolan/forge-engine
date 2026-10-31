@@ -528,13 +528,24 @@ void lamp_restir_main(uint3 id : SV_DispatchThreadID)
     r->places[at] = region | (other << 16);
     // The pixel's material as the resolve lights it (#372; `pixel_shading`, `standard_inputs`, the
     // lamps' inputs in `shade_pixel`): the diffuse light by its mapped normal, the highlight by its
-    // lobe and reflectance, as the lists' lamps take them (D-086).
-    PixelShading shading = pixel_shading(f, MATERIAL_CLASS_ANY, pixel, vis, float2(float(p.width), float(p.height)));
-    shading.s.ao = -1.0;
-    StandardInputs si = shading.mat.class_index == MATERIAL_CLASS_STANDARD ? standard_inputs(f, shading.mat, shading.s) : row_inputs(shading.mat, shading.s);
-    float3 shading_n = si.li.n;
-    float3 view = shading.s.view;
-    float roughness = sqrt(sqrt(2.0 / (si.li.power + 2.0))); // RenderLayer::roughness_for_power, inverted
+    // lobe and reflectance, as the lists' lamps take them (D-086). Only where every lamp is
+    // ReSTIR's, whose light REBLUR denoises: the street lamps' (`outside_only`) is not.
+    float3 shading_n = ps.n;
+    float3 view = normalize(-ps.relative);
+    float power = 1.0;
+    float3 f0 = float3(0.04);
+    float roughness = 1.0;
+    if (r->outside_only == 0u)
+    {
+        PixelShading shading = pixel_shading(f, MATERIAL_CLASS_ANY, pixel, vis, float2(float(p.width), float(p.height)));
+        shading.s.ao = -1.0;
+        StandardInputs si = shading.mat.class_index == MATERIAL_CLASS_STANDARD ? standard_inputs(f, shading.mat, shading.s) : row_inputs(shading.mat, shading.s);
+        shading_n = si.li.n;
+        view = shading.s.view;
+        power = si.li.power;
+        f0 = si.li.reflectance;
+        roughness = sqrt(sqrt(2.0 / (power + 2.0))); // RenderLayer::roughness_for_power, inverted
+    }
     guide[pixel] = float4(shading_n, roughness);
 
     // The street lamps alone: their run of the light lists (the outside's region) for every
@@ -601,13 +612,18 @@ void lamp_restir_main(uint3 id : SV_DispatchThreadID)
         if (seen && chosen.solid_angle_pdf > 0.0)
         {
             // The sample's light at normal incidence, lux, and by the shading normal its diffuse
-            // light; its highlight as `lamp_add`'s, over the surface's directional albedo (the
-            // resolve multiplies it back, `lamps_at`).
+            // light; its highlight as `lamp_add`'s, towards the lamp's middle with the lobe widened
+            // by its size (towards the sampled point as well, the size counted twice: broader and
+            // dimmer than the lists'), bounded as the light is, then over the surface's
+            // directional albedo (the resolve multiplies it back, `lamps_at`).
             float3 normal_light = chosen.radiance / chosen.solid_angle_pdf * RTXDI_GetDIReservoirInvPdf(state);
             diffuse_lux = normal_light * saturate(dot(shading_n, dir));
-            float size = 0.5 * min(f[0].lamps[index].position_radius.w / max(dist, 1e-3), 1.0);
-            float3 albedo = environment_specular(si.li.reflectance, roughness, saturate(dot(shading_n, view)), (f[0].flags & FLAG_SINGLE_SCATTER) == 0u);
-            specular_lux = ggx_light(shading_n, view, dir, ggx_alpha2(si.li.power, size * size), si.li.reflectance) * normal_light / max(albedo, float3(1e-3));
+            Lamp lamp = f[0].lamps[index];
+            float3 to_middle = lamp.position_radius.xyz - world;
+            float middle = length(to_middle);
+            float size = 0.5 * min(lamp.position_radius.w / max(middle, 1e-3), 1.0);
+            float3 highlight = ggx_light(shading_n, view, to_middle / max(middle, 1e-6), ggx_alpha2(power, size * size), f0) * normal_light;
+            specular_lux = min(highlight, float3(65000.0)) / restir_specular_albedo(f, f0, power, shading_n, view);
         }
         // The distance to the light's point, as NRD asks for direct light.
         reach = reblur_hit_distance(dist, clip.w, p.hit_distance.xyz);
@@ -622,7 +638,8 @@ void lamp_restir_main(uint3 id : SV_DispatchThreadID)
     lux = min(lux, float3(65000.0));
     light[pixel] = float4(lux, lamp);
     diffuse[pixel] = float4(linear_to_ycocg(min(diffuse_lux, float3(65000.0)) / RESTIR_DENOISE_SCALE), reach);
-    specular[pixel] = float4(linear_to_ycocg(min(specular_lux, float3(65000.0)) / RESTIR_DENOISE_SCALE), specular_reach);
+    // Half precision bounds the divided highlight too (0.02's albedo: 50 times the light's bound).
+    specular[pixel] = float4(linear_to_ycocg(min(specular_lux / RESTIR_DENOISE_SCALE, float3(65000.0))), specular_reach);
 }
 
 // A distance as REBLUR's specular reads it (NRD's `REBLUR_FrontEnd_GetNormHitDist` for a roughness):
