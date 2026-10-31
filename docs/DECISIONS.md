@@ -8143,7 +8143,10 @@ pbrt-v4, RTXGI, materiel test, etc.). Then update forge demos and test them."):
     the camera) a lamp gives half of Falcor's direct light (11.4 against 21.8 cd/m²), the floor
     and the side walls within 20 %. Not the profile alone (a flat piece's lamp falls off by a
     smoothstep, `Emission::flush`, which near the horizon gives half a diffuser's cosine, but the
-    back wall sees the lamp at about 49°): to find, before the night is calibrated.
+    back wall sees the lamp at about 49°). Found the same night (#369): the lamp's shadow rays
+    aim at a disc facing the surface, which rises into the ceiling (a 5 cm radius took the back
+    wall from 11.4 to 16.8), and the profile near the horizon does the rest. Both are in the
+    resolve (#355): to plan.
 
 ## D-084 — An environment map as the sky, its sun taken out of it ✅ (the owner's go, 2026-10-29)
 
@@ -8443,8 +8446,9 @@ brackets. At the Night view, Forge's light over Falcor's:
   - **The Cornell box's light** (`--lab cornell`, an emitter of factors alone) is a glowing piece
     too: its emitters outside the Bistro glow in cd/m² at the scene's unit.
   - **Measured on the box:** Forge's path 0.025 from Falcor, the techniques 0.26 to 0.32. A flat
-    piece's lamp gives the walls facing the camera half of Falcor's direct light (D-083's
-    baseline): to find next.
+    piece's lamp gives the walls facing the camera half of Falcor's direct light: its shadow
+    disc faces the surface and rises into the ceiling, and its smoothstep profile is half a
+    cosine near the horizon (#369, to plan with #355).
 
 ## D-088 — The light in shade: a near field traced per pixel over the probes ✅ (proposed and decided 2026-10-30, the owner following the recommendations; after D-086; D-083)
 
@@ -9251,3 +9255,40 @@ steps". Steps 1 and 2 as proposed.
 
 **Open:** whether the classroom, an inside lit through its windows, should be metered too. The
 chart stays a card at one exposure.
+
+## D-090 — Which light under the bounce, by the calibration 🟡 (proposed 2026-10-31; D-083, D-088)
+
+**Why:** the owner, during D-088's SHaRC: "Compare and see what's best and work real-time". The
+first baseline (D-083, `tools/gi-compare.sh`, twelve views) measured the probes (the default),
+SHaRC (`r.gi.cache sharc`, off by default) and the port (set aside for its patent, D-088) against
+Forge's path tracer and Falcor; the night's faults it found are fixed or filed (D-087's
+amendment, #368, #369).
+
+**What it says:**
+- **Indoors** (the classroom, the village's landing and room), SHaRC is three to five times nearer
+  Forge's path than the probes: the landing 0.110 against 0.507, the room 0.052 against 0.147,
+  the classroom 0.089 against 0.320. Against Falcor in the classroom, SHaRC 0.149 and the probes
+  0.405, where Forge's own path is 0.151.
+- **Outdoors by day** (the Bistro, the village's street), the probes are as near or nearer (the
+  textured Exterior_2 0.085 against 0.121), and SHaRC costs up to 1.2 ms more (the Bistro's
+  Exterior_1 6.89 → 7.87 ms). In the village SHaRC costs −0.05 to +0.3 ms.
+- **At night** the lamps' direct light rules: the three alike (0.549 from Falcor in the Bistro);
+  the lamps themselves are the next fault (#369). SHaRC costs 2.6 ms more there.
+- **SHaRC is not deterministic:** two runs differ by a few levels (its insertion order, D-088),
+  and the captures' rule of 0 pixels between runs cannot hold under it.
+
+**The options:**
+1. **SHaRC everywhere by default:** the best indoors, up to 1.2 ms by day and 2.6 ms at night in
+   the Bistro; the captures and the A/B harness run with `r.gi.cache off`, and
+   `tools/gi-compare.sh` measures SHaRC (by error, not by pixels).
+2. **SHaRC indoors, the probes outdoors:** the bounce's hit reads SHaRC where the probes' room
+   grids are (D-078: the village's houses), the probes elsewhere. The best of both measured, the
+   cost only indoors; one more branch in the bounce (not the resolve, #355). The captures as in 1.
+3. **The probes alone, finer indoors:** the room grids at 0.5 m (the classroom's leak, ×1.35,
+   went to ×1.00 at 0.5 m, D-088), deterministic; their cost grows with the rooms seen.
+4. **NRC** on the same hook (the owner's "ok for the trial"): to measure with the same tool before
+   choosing.
+
+**Recommended:** 2, after the lamps' fix (#369), with NRC measured beside it before it is made
+the default: indoors is where the probes fail and SHaRC wins, and outdoors SHaRC costs without
+gaining. To decide by the owner.

@@ -2621,7 +2621,9 @@ so the image is the same at every scale). Every surface Lambert's diffuse; the l
   `tools/gi-compare.sh`'s `cornell` view leaves out the black void's tiles (72 of 144).
 
 **Measured (2026-10-31):** Forge's path (captured with the lamps off) 0.025 from Falcor
-(×1.000); the probes 0.322 (×0.93), the port 0.255, SHaRC 0.261 (×0.96).
+(×1.000); the probes 0.322 (×0.93), the port 0.255, SHaRC 0.261 (×0.96). pbrt-v4 (built from
+`mmp/pbrt-v4` outside the repository, the CPU renderer, 1,024 samples a pixel in 5 minutes)
+renders the `.pbrt` 0.055 from Falcor (×0.987): the three renderers agree.
 - **On the way, two faults found** (D-083's first baseline):
   - At Falcor's daylight unit (12,800) the box's light overflowed the probes' half floats at
     night (0.17 lux the reference).
