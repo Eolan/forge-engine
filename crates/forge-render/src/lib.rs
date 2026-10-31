@@ -105,7 +105,7 @@ pub use probes::{
     RegionVolume, RoomGridParams, region_at,
 };
 pub use reflection_history::{ReflectionHistory, ReflectionHistoryFrame};
-pub use restir::{LampRestir, RestirParams, RestirSettings};
+pub use restir::{LampRestir, RestirLight, RestirParams, RestirSettings};
 pub use shallow::{
     ShallowColumns, ShallowGrid, ShallowLayer, ShallowParams, ShallowState, ShallowStats,
 };

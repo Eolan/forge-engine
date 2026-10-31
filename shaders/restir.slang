@@ -11,11 +11,13 @@
 // `rtxdi-sdk/Include` (crates/forge-gpu/src/shader.rs, `SDK_INCLUDES`). Without that directory
 // this file is never compiled and the switch is absent.
 //
-// - The candidates are the lamps of the pixel's place, its light lists (`lamp_place`): up to
-//   `RestirFrame::candidates` of them picked uniformly, or every one when there are no more.
-// - A lamp is a sphere sampled by solid angle; its sample's light is the lamp's luminance by the
-//   cosine, let go at its reach as `lamp_add` lets it go, and none where the lamp does not light
-//   the surface's place (its room, its storey band).
+// - The candidates are `RestirFrame::candidates` points of the lamps of the pixel's place, its
+//   light lists (`lamp_place`): of lamps picked uniformly, or of every one in turn when there are
+//   no more.
+// - A lamp is a sphere sampled by solid angle, or a flat piece's rectangle sampled by area
+//   (`lamp_flat`); its sample's light is the lamp's luminance by the cosine, let go at its reach
+//   as `lamp_add` lets it go, and none where the lamp does not light the surface's place (its
+//   room, its storey band).
 // - One shadow ray to the chosen candidate, one to the sample the resampling keeps: the latter's
 //   light, times its reservoir's weight, is the pixel's lamps' light.
 // - The buffers are by device address: the reservoirs, the neighbours' offsets and the surfaces
@@ -46,7 +48,7 @@ struct RestirFrame
     uint surface_width;              // pixels a row of `surfaces` holds
     uint surface_pitch;              // pixels a frame of `surfaces` holds
     uint current;                    // the array this frame writes, 0 or 1: the other is the last frame's
-    uint candidates;                 // the initial candidates a pixel takes at most
+    uint candidates;                 // the initial candidates a pixel takes
     uint history;                    // 1: the last frame's arrays hold what it wrote (not the first frame, a cut or a new size)
     uint outside_only;               // 1: the street lamps alone (`lamp_outside`), the light lists the rest; 0: every lamp
     uint pad[2];
@@ -61,12 +63,50 @@ struct RestirPush
     uint light_image;    // storage (rgba16f): the lamps' light on the pixel in lux (rgb), the lamp it came from + 1 (a, 0: none)
     uint width;
     uint height;
+    uint diffuse_image;  // storage (rgba16f): the same light for REBLUR (#372), lux over RESTIR_DENOISE_SCALE in YCoCg (rgb), the distance to the sample's point normalised as REBLUR reads it (a)
+    uint pad;
+    float4 hit_distance; // REBLUR's normalisation of that distance (A, B, C: `diffuse_bounce::HIT_DISTANCE`); w unused
 };
 
 [[vk::push_constant]]
 RestirPush restir_push;
 
-#define RTXDI_LIGHT_RESERVOIR_BUFFER (restir_push.restir->reservoirs)
+// RTXDI's reservoirs, read and written as D3D12 reads and writes a buffer: past the two arrays a
+// read gives an empty reservoir and a write is dropped. RTXDI's pairwise reuse loads the reservoir
+// of the pixel it reprojected to even where it found no surface there, which can lie off the
+// screen: by device address, Vulkan faulted and lost the device in the Bistro and the rooms
+// (#372), whose surfaces reach the screen's edges. A negative position's index wraps round and
+// can land in the arrays, on some other pixel's reservoir: harmless, as that load only feeds
+// RTXDI's test of naive samples, but not always empty.
+struct RestirReservoirs
+{
+    __subscript(uint i) -> RTXDI_PackedDIReservoir
+    {
+        get
+        {
+            RestirFrame* r = restir_push.restir;
+            if (i < 2u * r->reservoir_params.reservoirArrayPitch)
+                return r->reservoirs[i];
+            RTXDI_PackedDIReservoir none;
+            none.lightData = 0u;
+            none.uvData = 0u;
+            none.mVisibility = 0u;
+            none.distanceAge = 0u;
+            none.targetPdf = 0.0;
+            none.weight = 0.0;
+            return none;
+        }
+        set
+        {
+            RestirFrame* r = restir_push.restir;
+            if (i < 2u * r->reservoir_params.reservoirArrayPitch)
+                r->reservoirs[i] = newValue;
+        }
+    }
+};
+static RestirReservoirs g_restir_reservoirs;
+
+#define RTXDI_LIGHT_RESERVOIR_BUFFER g_restir_reservoirs
 #define RTXDI_NEIGHBOR_OFFSETS_BUFFER (restir_push.restir->neighbor_offsets)
 
 // `RestirFrame::places`' code for REGION_NONE, and for a pixel where nothing was drawn.
@@ -172,10 +212,10 @@ typedef Lamp RAB_LightInfo;
 
 struct RAB_LightSample
 {
-    float3 position;      // on the lamp's sphere, the scene's frame
-    float solid_angle_pdf; // of its direction, over the cone the sphere fills
+    float3 position;      // on the lamp's sphere (a flat piece's rectangle), the scene's frame
+    float solid_angle_pdf; // of its direction: over the cone the sphere fills, or the rectangle's
     float3 radiance;      // cd/m² per channel, let go at the lamp's reach; 0 where it does not light the surface
-    float pad;
+    float short_of;       // how far before `position` its shadow ray ends, besides the 2 cm (`RAB_GetConservativeVisibility`)
 };
 
 RAB_LightInfo RAB_EmptyLightInfo()
@@ -194,7 +234,7 @@ RAB_LightSample RAB_EmptyLightSample()
     s.position = float3(0.0);
     s.solid_angle_pdf = 0.0;
     s.radiance = float3(0.0);
-    s.pad = 0.0;
+    s.short_of = 0.0;
     return s;
 }
 
@@ -242,9 +282,43 @@ bool restir_lights(Lamp lamp, float y, uint region, uint other)
     return true;
 }
 
-// A point of `lamp`'s sphere seen from `surface`, by `uv`: uniform over the cone the sphere fills.
+// A point of flat lamp `lamp`'s rectangle (`lamp_rect_point`) by `uv`, uniform in area, seen from
+// `surface` (#372): its density over solid angle is the distance squared over the rectangle's area
+// and the cosine at the lamp, and its luminance the lamp's peak intensity over that area
+// (Lambert's emitter), none behind the piece. Its light over the density is then the lamp's
+// intensity by the two cosines over the distance squared, which over the rectangle sums to
+// `lamp_rect_share`'s exact light. Taken as a sphere round the rectangle's middle (before #372),
+// a flat lamp kept the light and shadows #369 and #370 corrected in the light lists.
+RAB_LightSample restir_flat_sample(Lamp lamp, RAB_Surface surface, float2 uv)
+{
+    RAB_LightSample s = RAB_EmptyLightSample();
+    float3 d = lamp.position_radius.xyz - surface.world;
+    float reach = lamp.colour_reach.w;
+    float dist2 = dot(d, d);
+    if (dist2 >= reach * reach)
+        return s;
+    s.position = lamp.position_radius.xyz + lamp_rect_point(lamp, uv * 2.0 - 1.0);
+    float3 to = s.position - surface.world;
+    float to2 = dot(to, to);
+    float facing = -dot(to, lamp.beam.xyz) / sqrt(max(to2, 1e-12));
+    if (facing <= 0.0)
+        return s;
+    float area = 4.0 * lamp.beam_edge.z * lamp.beam_edge.w;
+    s.solid_angle_pdf = to2 / (area * facing);
+    if (!restir_lights(lamp, surface.world.y, surface.region, surface.other))
+        return s;
+    // Let go between 80 % and all of its reach from its middle, as the light lists let it go.
+    float window = saturate(1.0 - pow(sqrt(dist2) / reach, 4.0));
+    s.radiance = lamp.colour_reach.rgb / area * (window * window);
+    return s;
+}
+
+// A point of `lamp` seen from `surface`, by `uv`: of its sphere, uniform over the cone the sphere
+// fills; of a flat piece's rectangle, uniform in area (`restir_flat_sample`).
 RAB_LightSample RAB_SamplePolymorphicLight(RAB_LightInfo lamp, RAB_Surface surface, float2 uv)
 {
+    if (lamp_flat(lamp))
+        return restir_flat_sample(lamp, surface, uv);
     RAB_LightSample s = RAB_EmptyLightSample();
     float radius = lamp.position_radius.w;
     float3 d = lamp.position_radius.xyz - surface.world;
@@ -269,6 +343,10 @@ RAB_LightSample RAB_SamplePolymorphicLight(RAB_LightInfo lamp, RAB_Surface surfa
     float along = dot(dir, d);
     float into = along - sqrt(max(radius * radius - (dist2 - along * along), 0.0));
     s.position = surface.world + dir * into;
+    // Its ray ends where the sphere is nearest, as the light lists' do (`lamp_ray`): run on to a
+    // point by the sphere's edge, it went into the fitting round the bulb (a lantern's frame and
+    // glass) and met it, and the Bistro's night stood 8 % under the lists without the reuse.
+    s.short_of = into - (dist - radius);
     s.solid_angle_pdf = 1.0 / (6.28318530718 * cap);
     if (!restir_lights(lamp, surface.world.y, surface.region, surface.other))
         return s;
@@ -324,7 +402,8 @@ bool RAB_TraceRayForLocalLight(float3 origin, float3 dir, float t_min, float t_m
 float2 RAB_GetEnvironmentMapRandXYFromDir(float3 dir) { return float2(0.0); }
 float RAB_EvaluateEnvironmentMapSamplingPdf(float3 dir) { return 0.0; }
 
-// Whether the sample's light reaches the surface: one shadow ray, ending short of the bulb.
+// Whether the sample's light reaches the surface: one shadow ray, ending short of the bulb (where
+// its sphere is nearest) or 2 cm short of a flat piece's rectangle.
 bool RAB_GetConservativeVisibility(RAB_Surface surface, RAB_LightSample s)
 {
     Frame* f = restir_push.frame;
@@ -336,11 +415,11 @@ bool RAB_GetConservativeVisibility(RAB_Surface surface, RAB_LightSample s)
     float length_to = length(to);
     ray.Direction = to / max(length_to, 1e-6);
     ray.TMin = 0.0;
-    ray.TMax = max(length_to - 0.02, 0.0);
+    ray.TMax = max(length_to - s.short_of - 0.02, 0.0);
     return !ray_blocked(f, ray);
 }
 
-// The reuse's bias correction is `Basic` (no rays): this is only asked for under `RayTraced`.
+// The reuse's bias correction is pairwise MIS (no rays): this is only asked for under `RayTraced`.
 bool RAB_GetTemporalConservativeVisibility(RAB_Surface current, RAB_Surface previous, RAB_LightSample s)
 {
     return RAB_GetConservativeVisibility(current, s);
@@ -350,9 +429,12 @@ bool RAB_GetTemporalConservativeVisibility(RAB_Surface current, RAB_Surface prev
 
 // ---------------------------------------------------------------- the pass ---
 
-// The pixel's initial reservoir: of the lamps of its place, `candidates` picked uniformly (all of
-// them when they are no more), each at a point of its sphere, one kept by its light (RIS), its
-// shadow ray traced.
+// The pixel's initial reservoir: `candidates` points of the lamps of its place, one kept by its
+// light (RIS), its shadow ray traced. Where the place has more lamps, each candidate a lamp picked
+// uniformly; where it has no more, the lamps in turn, each its share of the candidates (#372): with
+// one candidate a lamp, a room's single lamp (the Cornell box's) gave each pixel one point of it a
+// frame, the reuse held a few points over a region, and its shadows showed their edges and a
+// wall lit inside its block's shadow.
 RTXDI_DIReservoir restir_initial(Frame* f, RestirFrame* r, LampPlace place, RAB_Surface surface, inout RTXDI_RandomSamplerState rng, out RAB_LightSample chosen)
 {
     RTXDI_DIReservoir state = RTXDI_EmptyDIReservoir();
@@ -363,11 +445,13 @@ RTXDI_DIReservoir restir_initial(Frame* f, RestirFrame* r, LampPlace place, RAB_
     if (total == 0u)
         return state;
     bool every = total <= r->candidates;
-    uint count = every ? total : r->candidates;
+    uint count = r->candidates;
     for (uint c = 0u; c < count; c++)
     {
-        // Entry `e` of the place's three runs, laid end to end.
-        uint e = every ? c : min(uint(RTXDI_GetNextRandom(rng) * float(total)), total - 1u);
+        // Entry `e` of the place's three runs, laid end to end; in turn, the entries before
+        // `count % total` take one candidate more, and a candidate's density is its lamp's share.
+        uint e = every ? c % total : min(uint(RTXDI_GetNextRandom(rng) * float(total)), total - 1u);
+        float inverse_density = every ? float(count) / float(count / total + (e < count % total ? 1u : 0u)) : float(total);
         uint run = 0u;
         while (e >= place.runs.run[run].y - place.runs.run[run].x)
         {
@@ -384,7 +468,7 @@ RTXDI_DIReservoir restir_initial(Frame* f, RestirFrame* r, LampPlace place, RAB_
             s = RAB_SamplePolymorphicLight(f[0].lamps[i], surface, uv);
             target = RAB_GetLightSampleTargetPdfForSurface(s, surface);
         }
-        if (RTXDI_StreamSample(state, i, uv, RTXDI_GetNextRandom(rng), target, float(total)))
+        if (RTXDI_StreamSample(state, i, uv, RTXDI_GetNextRandom(rng), target, inverse_density))
             chosen = s;
     }
     RTXDI_FinalizeResampling(state, 1.0, float(count));
@@ -405,6 +489,7 @@ void lamp_restir_main(uint3 id : SV_DispatchThreadID)
     Frame* f = p.frame;
     RestirFrame* r = p.restir;
     RWTexture2D<float4> light = g_storage_images_rgba16f[NonUniformResourceIndex(p.light_image)];
+    RWTexture2D<float4> diffuse = g_storage_images_rgba16f[NonUniformResourceIndex(p.diffuse_image)];
     uint at = r->current * r->surface_pitch + pixel.y * r->surface_width + pixel.x;
     uint vis = g_sampled_images_u32[NonUniformResourceIndex(p.vis_image)].Load(int3(pixel, 0));
     if (vis == VISIBILITY_EMPTY || f[0].lamp_count == 0u)
@@ -412,6 +497,7 @@ void lamp_restir_main(uint3 id : SV_DispatchThreadID)
         r->places[at] = RESTIR_EMPTY;
         RTXDI_StoreDIReservoir(RTXDI_EmptyDIReservoir(), r->reservoir_params, pixel, r->current);
         light[pixel] = float4(0.0);
+        diffuse[pixel] = float4(0.0, 0.0, 0.0, 1.0);
         return;
     }
     PixelSurface ps = pixel_surface(f, vis, pixel, p.width, p.height);
@@ -441,8 +527,12 @@ void lamp_restir_main(uint3 id : SV_DispatchThreadID)
         bool reached = place.region == REGION_NONE || place.region == REGION_OUTSIDE || place.other == REGION_OUTSIDE;
         if (!reached || f[0].lamp_lists == nullptr)
         {
+            // No neighbour of the next frame's: an empty reservoir counts among the pairwise
+            // reuse's neighbours but gives it nothing, which darkens the pixels it lit (#372).
+            r->places[at] = RESTIR_EMPTY;
             RTXDI_StoreDIReservoir(RTXDI_EmptyDIReservoir(), r->reservoir_params, pixel, r->current);
             light[pixel] = float4(0.0);
+            diffuse[pixel] = float4(0.0, 0.0, 0.0, 1.0);
             return;
         }
         candidates.runs.run[0] = lamp_run(f, REGION_OUTSIDE);
@@ -460,18 +550,38 @@ void lamp_restir_main(uint3 id : SV_DispatchThreadID)
         float4 before = mul(r->previous_from_current, clip);
         float3 motion = float3(restir_pixel(before, p.width, p.height) - restir_pixel(clip, p.width, p.height), before.w - clip.w);
         int2 temporal_pixel;
+        RTXDI_DIReservoir initial = state;
+        RAB_LightSample initial_chosen = chosen;
         state = RTXDI_DISpatioTemporalResampling(pixel, surface, state, rng, motion, 1u - r->current, r->runtime, r->reservoir_params, r->spatiotemporal, temporal_pixel, chosen);
+        // Where the pairwise reuse found no neighbour (a disocclusion, the screen's edge as the
+        // camera turns), RTXDI's spatiotemporal pass leaves the pixel's own sample a weight of 0
+        // (its spatial pass sets it to 1): the pixel's own reservoir then, not none, which went
+        // black and darkened the frames after (#372's review).
+        if (!RTXDI_IsValidDIReservoir(state) && RTXDI_IsValidDIReservoir(initial))
+        {
+            state = initial;
+            chosen = initial_chosen;
+        }
     }
     float3 lux = float3(0.0);
     float lamp = 0.0;
+    float reach = 1.0;
     if (RTXDI_IsValidDIReservoir(state))
     {
         bool seen = RAB_GetConservativeVisibility(surface, chosen);
         lux = seen ? restir_light(chosen, surface) * RTXDI_GetDIReservoirInvPdf(state) : float3(0.0);
         RTXDI_StoreVisibilityInDIReservoir(state, seen ? float3(1.0) : float3(0.0), true);
         lamp = float(RTXDI_GetDIReservoirLightIndex(state) + 1u);
+        // The distance to the light's point, as NRD asks for direct light.
+        reach = reblur_hit_distance(length(chosen.position - world), clip.w, p.hit_distance.xyz);
     }
+    // A reservoir of no sample (a place without lamps) is no neighbour of the next frame's: the
+    // pairwise reuse counts it and takes nothing from it.
+    if (state.M <= 0.0)
+        r->places[at] = RESTIR_EMPTY;
     RTXDI_StoreDIReservoir(state, r->reservoir_params, pixel, r->current);
     // Half precision's largest value bounds it: a pixel by a bulb is lit by thousands of lux.
-    light[pixel] = float4(min(lux, float3(65000.0)), lamp);
+    lux = min(lux, float3(65000.0));
+    light[pixel] = float4(lux, lamp);
+    diffuse[pixel] = float4(linear_to_ycocg(lux / RESTIR_DENOISE_SCALE), reach);
 }

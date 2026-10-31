@@ -5457,6 +5457,129 @@ again (`demos/physics-lab.md`).
       Capture: `reports/2026-10-19/village-far-windows.png` (80 m out, ×3; the old glow, the
       rooms' own, every lamp lit).
 
+**Amended: every lamp by ReSTIR DI, denoised** (the owner, 2026-10-31, #372: "ok, go with ReSTIR
+DI and the denoiser"). The Bistro at night has 132 lamps, each reaching 27 to 70 m, so the 64
+nearest left its far street and arch black, and clusters would not shorten a pixel's list. Measured
+on its night view (the probes, the 5070 Ti, mean of 298 frames): the 64 nearest by the light lists
+15.1 ms a frame, their passes 5.7 ms; every lamp by the lists 22.6 ms (10.2); every lamp by ReSTIR
+15.1 ms (2.7), but grainy without a denoiser and 0.24 stops dark (it took every lamp as a sphere,
+the flat lamps of #369 and #370 never reached it). The order:
+1. ReSTIR's bridge takes the flat lamps (their rectangles, sampled by area), and its light is
+   checked against the light lists' with every lamp: the same direct light, one estimated.
+2. Its light denoised by NRD's REBLUR (already in the frame for the bounce, D-088), designed before
+   it is built.
+3. The lanterns' profile (#372's second fault).
+4. The default where RTXDI's headers are present, once Forge's path with the lamps on matches it
+   off within about 0.1 in the Bistro and the rooms, a still camera's shimmer is near the light
+   lists', and the cost holds; the light lists and their filter stay where they are absent (the
+   SDK policy: GitHub builds, CI).
+
+**Step 1 built (2026-10-31): ReSTIR's light matches the light lists'.** Measured as each tile's
+light over a reference's, the plain mean of the 144 tiles' ratios (the mean of their logarithms
+reads one sample's noise as darkness); the judge, Forge's path tracer with every lamp on (the same
+lamp model, integrated exactly). Five faults, each found by taking one part away:
+- **The flat lamps** (`restir_flat_sample`): a point of the rectangle uniform in area, its density
+  over solid angle the distance squared over the area and the lamp's cosine, its luminance the
+  intensity over the area.
+- **Permutation sampling off** (`RestirSettings`'s reuse): RTXDI's permutation hands a pixel the
+  last frame's reservoir of a pixel up to 3 px away; the Bistro's night stood 0.2 stops under the
+  lists with it, whichever bias correction, and level with the resampling without reuse without it.
+- **A sphere's shadow ray ends where the sphere is nearest**, as the lists' (`short_of`): run on to
+  a point by the sphere's edge it went into the lanterns' frames and glass, 8 % of the light.
+- **Pairwise MIS** for the bias correction (RTXDI's `PAIRWISE`, no rays): under `Basic` and
+  `RayTraced` the Cornell box's walls under its one lamp stood 10–15 % under the lists, with the
+  tall block's shadow drawn in patches; pairwise matches (1.000).
+- **RTXDI's reservoirs read as D3D12 reads a buffer** (`RestirReservoirs`): its pairwise reuse loads
+  the reservoir of a pixel it found no surface at, which can lie off the screen; by device address
+  Vulkan lost the device in every scene whose surfaces reach the screen's edges. Past the arrays a
+  read gives an empty reservoir and a write is dropped.
+- And `RestirFrame::candidates` points a pixel always (8), spread over its place's lamps when it has
+  fewer: one point of the Cornell box's one lamp a frame was too few.
+
+| Scene (DLAA) | the lists | ReSTIR before | ReSTIR now |
+|---|---|---|---|
+| Bistro at night, every lamp, against Forge's path | 0.987 | 0.778 | 0.969 (median 0.977) |
+| Cornell box, against the lists | 1 | 0.904 | 1.000 |
+| Kitchen (clay), against the lists | 1 | 0.941 | 0.943 (0.949 without reuse) |
+| Bedroom (clay), against the lists | 1 | 0.939 | 0.940 |
+
+The kitchen's and the bedroom's 5 % are between the two estimators, not in the reuse; the likely
+part is the normal: the lists light the diffuse with the mapped normal, ReSTIR with the
+interpolated one (its light reaches the resolve as illuminance), to settle with step 2, which
+changes what ReSTIR hands the resolve. The Bistro at night costs the same with every lamp by
+ReSTIR as with the 64 nearest by the lists: 15.1 ms a frame, "shadow/lamp restir" 1.9 ms. The
+light lists are untouched: ReSTIR stays behind `--lamp-restir` until step 4.
+
+**Step 2's design: the lamps' light denoised** (2026-10-31, before code).
+- **Which of NRD's denoisers.** NRD says RELAX was made for RTXDI's signal; REBLUR is the one Forge
+  already runs (the bounce, D-088), its settings mirrored and checked against MSVC's layout. First
+  REBLUR (a second instance of `ReblurDiffuse`, its own history), RELAX only if REBLUR lags or
+  smears the lamps' shadows.
+- **Not mixed into the bounce's REBLUR**, though NRD allows direct and indirect light together: the
+  bounce is in the resolve's units, light over the sun's (at night the moon's 0.17 lux), where a
+  lamp's thousands of lux overflow the half floats (#368); and the lamps need it where the bounce
+  is off. The lamps' instance takes lux over 256 (a bulb's 65,000 lux to 254).
+- **What it denoises: the diffuse light first** (2a). The ReSTIR pass writes a second image: the
+  illuminance in YCoCg and the distance to the sample's point, normalised as the bounce's
+  (`reblur_hit_distance`, `HIT_DISTANCE`), as NRD asks for direct light. REBLUR reads the guides
+  the sun's shadow rays already write (the interpolated normal, the view depth) and TAA's motion
+  vectors. The resolve takes the denoised illuminance for the lamps' diffuse light, and keeps the
+  sample's own for the highlight.
+- **The highlight next** (2b): REBLUR's diffuse-and-specular denoiser on the sample's GGX light
+  over the surface's directional albedo, so a glossy surface's highlights of many lamps settle as
+  their diffuse light does.
+- **Without NRD** (no library, a GitHub build): the resolve reads the sample's light as now.
+- **Checks:** the tile ratios against Forge's path with every lamp (the Bistro at night) and against
+  the lists (the rooms); a still camera's frames 10 apart (the lists' 4,230 pixels in the Bistro at
+  night); the camera turning (`--pan`), for REBLUR's lag; the cost.
+- **Patents:** none new; NRD's REBLUR as provided, as the bounce's and SIGMA (D-049).
+
+**Step 2a built (2026-10-31): the diffuse light denoised.** `LampRestir::draw` returns the sample's
+light and the same for REBLUR (`RestirLight`); city-blocks denoises the second by its own
+`DiffuseDenoiser` on the sun's shadow rays' guides; the resolve, told by the frame's
+`lamp_restir_every` that ReSTIR lights every lamp, takes the denoised light for the lamps' diffuse
+light (the low half of the lamp code) and the sample's for their highlight.
+- **The Bistro at night, still:** 0.955 of Forge's path with every lamp (median 0.962; 0.969
+  without the denoiser), the frame 15.9 ms (REBLUR's second instance about 0.6 ms). The walls and
+  the street are smooth; what still sparkles is the sample's highlight (gone with it left out):
+  step 2b.
+- **The rooms:** the denoiser keeps their light (the Cornell box 0.995 of the lists, the kitchen
+  and the bedroom as before it).
+- **Turning** (`--yaw-rate 6`, frame 280): 0.911 of the lists at first. RTXDI's disocclusion boost
+  (8 of the last frame's neighbours where it has no history of the pixel) gave the new strip at
+  the screen's edge the old edge's reservoirs, clamped there: with one, 0.938; without any reuse,
+  0.962. The rest is open, to settle before step 4.
+- **The review's fixes:** where the pairwise reuse streams no neighbour, RTXDI's spatiotemporal
+  pass leaves the pixel's own sample a weight of 0 (its spatial pass sets 1), the pixel black and
+  the frames after it dark: the pixel's own reservoir is kept then. A reservoir of no sample (a
+  place without lamps, a room's pixel under `--street-restir`) no longer counts as a neighbour
+  (its place marked empty).
+- **Tried, no gain:** REBLUR's firefly suppressor off for the lamps (0.913 against 0.911 turning,
+  0.955 against 0.954 still).
+
+**Step 2b's design: the highlight denoised** (2026-10-31, before code).
+- **The obstacle:** the highlight needs the pixel's material (its mapped normal, lobe and
+  reflectance, D-086), which only the resolve works out, inline, from the visibility buffer (its
+  texture coordinates and their derivatives, the tangent frame, skinning, the planets' tiles). The
+  ReSTIR pass has the geometry alone.
+- **The way:**
+  1. The resolve's surface and material inputs become one function, called by the resolve as
+     before (the asteroid sentinels and the captures unchanged to the pixel, #355) and by the
+     ReSTIR pass.
+  2. The ReSTIR pass writes the sample's diffuse light with the mapped normal (the lists' normal:
+     likely the rooms' 5 %), its highlight over the surface's directional albedo (the split sum's
+     term the resolve multiplies by, as NRD asks: demodulated), and the guide REBLUR's specular
+     needs (the mapped normal and the linear roughness).
+  3. REBLUR's diffuse-and-specular denoiser (NRD's `REBLUR_DIFFUSE_SPECULAR`, the same settings,
+     its own profiler group `shadow/lamp REBLUR`) denoises both; the wrapper takes two outputs.
+  4. The resolve reads them through the lamp code's two halves (the sample's light no longer
+     needed where both are denoised), and multiplies the highlight back by its own albedo: no new
+     push fields (the resolve's are at Vulkan's 128 bytes).
+- **Not this way:** writing the highlight from the resolve and denoising it after (three more
+  images from every resolve class, the push full); the row's factors in the ReSTIR pass (the
+  scooter matte again, D-086); the sample's own highlight clamped (it sparkles under DLAA).
+- **Checks:** the sentinels at 0 px after the refactor; then step 2a's.
+
 ## D-066 — Pieces with sockets: one connector schema for generation, the anomaly check and player building ✅ (proposed 2026-10-16 on the owner's walk of #266; the owner's go the same evening)
 
 **The question:** the owner, walking the village: "would using some kind of snap system with the

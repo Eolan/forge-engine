@@ -703,7 +703,9 @@ struct GpuFrame {
     /// The distance from which the shadow rays meet the far shadows' world (D-075 step 3,
     /// [`MeshletSceneBuilder::set_far_shadows`]), metres; 0: never.
     far_shadows: f32,
-    far_shadows_pad: u32,
+    /// 1: ReSTIR DI lights every lamp ([`MeshletRenderer::lamp_restir_every`]), and the resolve
+    /// reads the low half of its lamp code as ReSTIR's denoised light ([`LampShadows::code`]).
+    lamp_restir_every: u32,
     /// The grass map's cells (#300, [`MeshletRenderer::set_grass`]), 0 without grass; its corner
     /// (x, z) in the scene frame, a cell's side, the blades' reach, its cells along x and the
     /// blades' material row.
@@ -1079,17 +1081,26 @@ pub struct LampShadows {
     pub restir: Option<ImageHandle>,
     /// ReSTIR lights every lamp, not only the street lamps.
     pub restir_all: bool,
+    /// With `restir_all`, ReSTIR's diffuse light denoised (#372, by its own
+    /// [`crate::DiffuseDenoiser`]): the lux over [`crate::restir::DENOISE_SCALE`] in YCoCg, which
+    /// the resolve takes for the lamps' diffuse light, the sample's own (`restir`) still giving
+    /// their highlight. `None`: the sample's light alone.
+    pub restir_diffuse: Option<ImageHandle>,
 }
 
 impl LampShadows {
     /// The images the resolve samples.
     pub fn images(self) -> impl Iterator<Item = ImageHandle> {
-        self.share.into_iter().chain(self.restir)
+        self.share
+            .into_iter()
+            .chain(self.restir)
+            .chain(self.restir_diffuse)
     }
 
-    /// How the resolve's push names them (`lamps_at`): the share's sampled index in the low half
-    /// (0xFFFF: the lamps' own rays; 0xFFFE: ReSTIR lights every lamp), ReSTIR's in the high half
-    /// (0xFFFF: none).
+    /// How the resolve's push names them (`lamps_at`): ReSTIR's sampled index in the high half
+    /// (0xFFFF: none); in the low half the share's (0xFFFF: the lamps' own rays), or where ReSTIR
+    /// lights every lamp (`restir_all`, the frame's `lamp_restir_every`) its denoised diffuse
+    /// light's (0xFFFF: the sample's own).
     fn code(self, sampled: impl Fn(ImageHandle) -> u32) -> u32 {
         let index = |image| {
             let i = sampled(image);
@@ -1097,7 +1108,7 @@ impl LampShadows {
             i
         };
         let low = if self.restir_all {
-            0xFFFE
+            self.restir_diffuse.map_or(0xFFFF, index)
         } else {
             self.share.map_or(0xFFFF, index)
         };
@@ -4084,6 +4095,9 @@ pub struct MeshletRenderer {
     /// The sun disc's angular radius, radians: the shadow rays aim within it and TAA averages
     /// them into penumbrae (issue #54). 0 (the default) keeps the shadows hard.
     pub sun_angular_radius: f32,
+    /// ReSTIR DI lights every lamp (D-065, `--lamp-restir`): set with [`LampShadows::restir_all`],
+    /// so the resolve leaves the light lists out wherever this frame's ReSTIR light is there.
+    pub lamp_restir_every: bool,
     /// The frame index the noise of soft shadows uses: TAA's frame modulo its jitter's period,
     /// so the pattern repeats with the jitter (set by the demo every frame).
     pub noise_frame: u32,
@@ -4689,6 +4703,7 @@ impl MeshletRenderer {
             sun_illuminance: crate::starfield::SUN_ILLUMINANCE_1AU,
             sun_color: Vec3::new(1.0, 0.96, 0.9),
             sun_angular_radius: 0.0,
+            lamp_restir_every: false,
             noise_frame: 0,
             texture_lod_bias: 0.0,
             show_input: 0,
@@ -5215,7 +5230,7 @@ impl MeshletRenderer {
                 .map_or(0, |l| l.shares[slot.index].address()),
             ladder: 0,
             far_shadows: scene.far_shadows,
-            far_shadows_pad: 0,
+            lamp_restir_every: u32::from(self.lamp_restir_every),
             grass,
             grass_origin,
             grass_cell,

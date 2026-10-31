@@ -139,8 +139,7 @@ pub enum Emission {
     /// and end 2 cm short of them, so what covers the piece (a curtain, a window's recess) shades
     /// its light (#370). Its unshadowed light is the rectangle's exact diffuse light, not its
     /// middle's (#369). A sphere's disc faces each surface instead; [`Lamp::radius`] stays the
-    /// highlight's size. ReSTIR DI (`LampRestir`) samples every lamp as its sphere: city-blocks,
-    /// its one user, has none of these.
+    /// highlight's size. ReSTIR DI (`LampRestir`) samples the rectangle by area (#372).
     Flat {
         /// The way its face looks, unit.
         axis: Vec3,

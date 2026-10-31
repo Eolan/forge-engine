@@ -867,6 +867,12 @@ struct Gallery {
     diffuse_denoiser: Option<forge_render::DiffuseDenoiser>,
     diffuse_tried: bool,
     diffuse_was_on: bool,
+    /// ReSTIR's diffuse light denoised (#372): its own REBLUR, loaded the first frame ReSTIR
+    /// lights every lamp (`--lamp-restir`); `lamp_denoiser_tried` once it was (without NRD the
+    /// resolve reads each pixel's sample), `lamp_denoised` whether it denoised the last frame.
+    lamp_denoiser: Option<forge_render::DiffuseDenoiser>,
+    lamp_denoiser_tried: bool,
+    lamp_denoised: bool,
     /// D-088's surface cache under the bounce (`r.gi.cache`, `cache_mode`): the port made the
     /// first time it is asked for where the device has ray queries, NVIDIA's SHaRC where
     /// [`forge_render::Sharc::available`] too; `cache_was_on` and `sharc_was_on` whether each lit
@@ -2040,6 +2046,8 @@ impl Gallery {
             );
             None
         };
+        // The resolve leaves the light lists out where ReSTIR lights every lamp (#372).
+        renderer.lamp_restir_every = args.lamp_restir && restir.is_some();
         // #338's check of a cell's record: the house added as one before the first frame.
         if let Some(check) = cell_check.as_mut() {
             let record = forge_render::CellSystems {
@@ -2125,6 +2133,9 @@ impl Gallery {
             sun_shadows,
             diffuse_denoiser: None,
             diffuse_tried: false,
+            lamp_denoiser: None,
+            lamp_denoiser_tried: false,
+            lamp_denoised: false,
             diffuse_was_on: false,
             surface_cache: None,
             cache_mode: forge_render::settings::GI_CACHE_OFF,
@@ -3587,6 +3598,42 @@ impl Demo for Gallery {
                 probes,
             )
         });
+        // Every lamp's diffuse light denoised by its own REBLUR (#372), on the sun's shadow rays'
+        // guides as the bounce's; its history starts over after a frame it did not denoise.
+        let restir_diffuse = match (restir, nrd_guides) {
+            (Some(restir), Some((rays, motion, camera, _))) if restir_all => {
+                if !self.lamp_denoiser_tried {
+                    self.lamp_denoiser_tried = true;
+                    match forge_render::DiffuseDenoiser::reblur(&ctx.device, &nrd_dir(), extent) {
+                        Ok(denoiser) => self.lamp_denoiser = Some(denoiser),
+                        Err(error) => {
+                            tracing::info!(%error, "no NRD: each pixel's ReSTIR sample lights it")
+                        }
+                    }
+                }
+                match self.lamp_denoiser.as_mut() {
+                    Some(denoiser) => {
+                        if !self.lamp_denoised {
+                            denoiser.reset_history();
+                        }
+                        let reblur_frame = denoiser.frame(camera);
+                        let denoiser: &'f forge_render::DiffuseDenoiser = denoiser;
+                        Some(denoiser.denoise(
+                            &mut frame.graph,
+                            frame.slot,
+                            restir.diffuse,
+                            rays,
+                            motion,
+                            &reblur_frame,
+                        )?)
+                    }
+                    None => None,
+                }
+            }
+            _ => None,
+        };
+        self.lamp_denoised = restir_diffuse.is_some();
+        let restir = restir.map(|r| r.light);
         let share = if (restir_all && restir.is_some()) || self.args.no_lamp_filter {
             None
         } else {
@@ -3604,6 +3651,7 @@ impl Demo for Gallery {
             share,
             restir,
             restir_all: restir_all && restir.is_some(),
+            restir_diffuse,
         };
         if let Some(h) = hasher {
             for image in lamp_shadows.images() {

@@ -15,10 +15,11 @@
 //! index from the last frame to this one (the kept lamps change as the camera moves), then
 //! [`LampRestir::draw`] declares one pass, "shadow/lamp restir", before the resolve:
 //! - the pixel's surface, stored for the next frame's reuse;
-//! - its initial reservoir: of the lamps of its place, up to [`RestirSettings::candidates`]
-//!   picked uniformly, one kept by its light, its shadow ray traced;
+//! - its initial reservoir: [`RestirSettings::candidates`] points of the lamps of its place
+//!   (lamps picked uniformly, or every one in turn where it has no more), one kept by its light,
+//!   its shadow ray traced;
 //! - RTXDI's spatiotemporal resampling against the last frame's reservoirs (TAA's
-//!   reprojection), its bias correction `Basic`;
+//!   reprojection), its bias correction by pairwise MIS, its permutation sampling off (#372);
 //! - the kept sample's shadow ray, and its light times the reservoir's weight.
 
 use std::collections::HashMap;
@@ -55,18 +56,24 @@ const TO_PREVIOUS: u64 = 512;
 const TO_CURRENT: u64 = TO_PREVIOUS + 4 * LAMP_CAPACITY as u64;
 const FRAME_BYTES: u64 = TO_CURRENT + 4 * LAMP_CAPACITY as u64;
 
-/// RTXDI's bias correction without rays (`RTXDI_BIAS_CORRECTION_BASIC`).
-const BIAS_CORRECTION_BASIC: u32 = 1;
+/// RTXDI's bias correction by pairwise MIS, without rays (`RTXDI_BIAS_CORRECTION_PAIRWISE`, #372):
+/// under `Basic` (and under `RayTraced`), a lit wall of the Cornell box under its one lamp stood
+/// 10 to 15 % under the light lists and the resampling without reuse, with a block's shadow drawn
+/// in patches; pairwise, as without correction, it matches them (1.000 of the lists' light).
+const BIAS_CORRECTION_PAIRWISE: u32 = 2;
 
 /// How the lamps are resampled.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RestirSettings {
-    /// The initial candidates a pixel takes at most, of its place's lamps.
+    /// The initial candidates a pixel takes: points of its place's lamps.
     pub candidates: u32,
     /// The most frames a reservoir's history counts (RTXDI's default, 20).
     pub max_history: u32,
-    /// Neighbours the spatial reuse takes (RTXDI's default, 1), and where the last frame shows
-    /// nothing of the pixel (8).
+    /// The last frame's reservoirs the reuse takes, the pixel's own (reprojected) first: 1 is that
+    /// one alone (RTXDI's default); and where the last frame shows nothing of the pixel, how many
+    /// round it (RTXDI's default 8; here 1, #372: as the camera turned, the new strip at the
+    /// screen's edge took the old edge's reservoirs, the frame 9 % under the light lists, 6 %
+    /// with one).
     pub spatial_samples: [u32; 2],
     /// Pixels around the pixel the neighbours come from (RTXDI's default, 32).
     pub radius: f32,
@@ -80,7 +87,7 @@ impl Default for RestirSettings {
         Self {
             candidates: 8,
             max_history: 20,
-            spatial_samples: [1, 8],
+            spatial_samples: [1, 1],
             radius: 32.0,
             thresholds: [0.1, 0.5],
         }
@@ -179,6 +186,28 @@ struct RestirPush {
     light_image: u32,
     width: u32,
     height: u32,
+    diffuse_image: u32,
+    pad: u32,
+    hit_distance: [f32; 4],
+}
+
+const _: () = assert!(std::mem::size_of::<RestirPush>() == 64);
+
+/// The lux in one unit of [`RestirLight::diffuse`] (#372, `RESTIR_DENOISE_SCALE` in
+/// `meshlet.slang`): REBLUR keeps half floats, and a bulb lights a pixel by it with up to 65,000
+/// lux.
+pub const DENOISE_SCALE: f32 = 256.0;
+
+/// What [`LampRestir::draw`] lights a frame with.
+#[derive(Clone, Copy, Debug)]
+pub struct RestirLight {
+    /// Each pixel's sample: its light in lux (rgb) and the lamp it came from + 1 (a, 0: none), for
+    /// [`crate::LampShadows::restir`].
+    pub light: ImageHandle,
+    /// The same light for REBLUR ([`crate::DiffuseDenoiser`], #372): over [`DENOISE_SCALE`] in
+    /// YCoCg, and the distance to the sample's point normalised as REBLUR reads it
+    /// ([`crate::diffuse_bounce::HIT_DISTANCE`]).
+    pub diffuse: ImageHandle,
 }
 
 /// The pass, its reservoirs and the surfaces their reuse reads back.
@@ -327,9 +356,13 @@ impl LampRestir {
             spatiotemporal: GpuSpatioTemporal {
                 depth_threshold: s.thresholds[0],
                 normal_threshold: s.thresholds[1],
-                bias_correction: BIAS_CORRECTION_BASIC,
+                bias_correction: BIAS_CORRECTION_PAIRWISE,
                 max_history: s.max_history,
-                permutation_sampling: 1,
+                // Off (#372): reusing the last frame's reservoir of a pixel up to 3 px away
+                // (RTXDI's permutation, for a denoiser's sake) darkened the Bistro's night by
+                // 0.2 stops against the light lists with the same lamps, whichever bias
+                // correction; without it the reuse matches the resampling without reuse.
+                permutation_sampling: 0,
                 uniform_random: hash(self.frame_index),
                 visibility_shortcut: 0,
                 samples: s.spatial_samples[0],
@@ -363,9 +396,9 @@ impl LampRestir {
 
     /// Declares "shadow/lamp restir" for frame `slot` of `extent` (the resolve's), lighting the
     /// visibility buffer of `targets` with `scene`'s lamps; `probes` are the probes the resolve
-    /// lights with (their regions are the lamps' places). Returns the lamps' light for
-    /// [`crate::LampShadows::Restir`]: `None`, and nothing declared, when the frame lights no
-    /// lamp or is larger than the buffers.
+    /// lights with (their regions are the lamps' places). Returns the lamps' light, each pixel's
+    /// sample and the same for REBLUR ([`RestirLight`]): `None`, and nothing declared, when the
+    /// frame lights no lamp or is larger than the buffers.
     #[allow(clippy::too_many_arguments)]
     pub fn draw<'f>(
         &'f self,
@@ -376,7 +409,7 @@ impl LampRestir {
         targets: DrawTargets,
         extent: vk::Extent2D,
         probes: Option<ProbeLight>,
-    ) -> Option<ImageHandle> {
+    ) -> Option<RestirLight> {
         if !self.usable || scene.lamp_count(slot) == 0 {
             return None;
         }
@@ -390,6 +423,15 @@ impl LampRestir {
             aspect: vk::ImageAspectFlags::COLOR,
             mip_levels: 1,
         });
+        let diffuse = graph.transient(TransientDesc {
+            name: "lamp restir diffuse",
+            width: extent.width,
+            height: extent.height,
+            format: forge_gpu::nrd::RADIANCE_FORMAT,
+            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE,
+            aspect: vk::ImageAspectFlags::COLOR,
+            mip_levels: 1,
+        });
         let reservoirs = graph.import_buffer(&self.reservoirs);
         let surfaces = graph.import_buffer(&self.surfaces);
         let frame = renderer.frame_address(slot);
@@ -399,6 +441,7 @@ impl LampRestir {
             .pass("shadow/lamp restir")
             .image(targets.visibility, ImageAccess::Sampled(compute))
             .image(light, ImageAccess::StorageWrite(compute))
+            .image(diffuse, ImageAccess::StorageWrite(compute))
             .buffer(reservoirs, BufferAccess::ShaderReadWrite(compute))
             .buffer(surfaces, BufferAccess::ShaderReadWrite(compute))
             .buffer(targets.visible_list, BufferAccess::ShaderRead(compute))
@@ -422,12 +465,18 @@ impl LampRestir {
                     light_image: resources.storage(light, 0).0,
                     width: extent.width,
                     height: extent.height,
+                    diffuse_image: resources.storage(diffuse, 0).0,
+                    pad: 0,
+                    hit_distance: {
+                        let [a, b, c] = crate::diffuse_bounce::HIT_DISTANCE;
+                        [a, b, c, 0.0]
+                    },
                 },
             );
             commands.dispatch(extent.width.div_ceil(8), extent.height.div_ceil(8), 1);
             Ok(())
         });
-        Some(light)
+        Some(RestirLight { light, diffuse })
     }
 }
 

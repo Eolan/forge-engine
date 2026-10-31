@@ -508,7 +508,7 @@ public struct Frame
     public float* far_shares;       // their shares of their light this frame, unshadowed
     public float* ladder;           // per instance on a ladder (D-075), this frame's crossing (`ladder_crossing`) with the fade after it packed in (`ladder_fade_share`, #363), written by the instance culls; null: no ladder
     public float far_shadows;       // metres from the camera from which the shadow rays meet RAY_SHADOW_FAR's world (D-075 step 3, `shadow_world`); 0: never
-    public uint far_shadows_pad;
+    public uint lamp_restir_every;  // 1: ReSTIR DI lights every lamp (`lamps_at`, `LampShadows::code`)
     public GrassCell* grass;        // the grass map's cells (#300, D-075), rows of increasing z; null: no grass
     public float2 grass_origin;     // its corner (x, z), the scene frame
     public float grass_cell;        // a cell's side, metres
@@ -3742,9 +3742,10 @@ LampPicks lamp_picks(Frame* f, LampPlace place, float3 world, float3 n, uint2 pi
 // smoothly at its reach, and highlights as the sun's (`lamp_add`). `code` (`LampShadows::code`):
 // - its high half, ReSTIR DI's light (restir.slang, 0xFFFF: none): one sample of one lamp, its
 //   shadow ray traced, in lux, its highlight towards the lamp's middle; of the street lamps,
-//   which the rest leaves out (`lamp_outside`), or of every lamp (low half 0xFFFE,
-//   `--lamp-restir`);
-// - its low half, the penumbra filter's share (the sampled index of `lamp_filter_main`'s
+//   which the rest leaves out (`lamp_outside`), or of every lamp (the frame's
+//   `lamp_restir_every`, `--lamp-restir`), when the low half is its diffuse light denoised by
+//   REBLUR (#372; 0xFFFF: the sample's own), lux over RESTIR_DENOISE_SCALE in YCoCg;
+// - else its low half, the penumbra filter's share (the sampled index of `lamp_filter_main`'s
 //   output): every lamp unshadowed, without a ray, times the share of their light that reaches
 //   the pixel, which the filter took from `lamp_rays_main`'s rays over its neighbours (Heitz et
 //   al. 2018);
@@ -3766,8 +3767,9 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
     }
     uint share = code & 0xFFFFu;
     uint restir = code >> 16;
+    bool every = restir != 0xFFFFu && f[0].lamp_restir_every != 0u;
     // The rest's light first: the share scales it alone.
-    if (share != 0xFFFEu)
+    if (!every)
     {
         bool skip_outside = restir != 0xFFFFu;
         LampPlace place = lamp_place(f, probes, world, n, view);
@@ -3827,15 +3829,27 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
             float3 to_lamp = lamp.position_radius.xyz - world;
             float dist = length(to_lamp);
             float3 dir = to_lamp / max(dist, 1e-6);
-            g_lamp_diffuse += illuminance;
+            if (!every || share == 0xFFFFu)
+                g_lamp_diffuse += illuminance;
             // Its light at normal incidence (ReSTIR's carries the interpolated normal's n·l)
             // through GGX at the mapped normal (D-086).
             float size = 0.5 * min(lamp.position_radius.w / max(dist, 1e-3), 1.0);
             g_lamp_specular += ggx_light(shading_n, view, dir, ggx_alpha2(specular_power, size * size), f0)
                 * highlight_share(specular_weight) * illuminance / max(dot(n, dir), 1e-3);
         }
+        // Every lamp's diffuse light denoised (#372): REBLUR's, over this pixel's neighbours and
+        // the frames before, where its sample alone gave one lamp's light or none.
+        if (every && share != 0xFFFFu)
+        {
+            float3 denoised = ycocg_to_linear(g_sampled_images[NonUniformResourceIndex(share)].Load(int3(pixel, 0)).xyz);
+            g_lamp_diffuse += denoised * (RESTIR_DENOISE_SCALE / max(f[0].sun_illuminance, 1e-9));
+        }
     }
 }
+
+// The lux in one unit of ReSTIR's denoised light (`restir.rs`'s `DENOISE_SCALE`, #372): REBLUR keeps
+// half floats, and a bulb lights a pixel by it with up to 65,000 lux.
+static const float RESTIR_DENOISE_SCALE = 256.0;
 
 // Adds lamp `lamp` (the frame's `i`-th) to `g_lamp_diffuse` and `g_lamp_specular`, times `scale`
 // (`lamps_at`): its illuminance on the surface, with SHADOWS one shadow ray to a point of its
