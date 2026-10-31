@@ -8172,10 +8172,16 @@ pbrt-v4, RTXGI, materiel test, etc.). Then update forge demos and test them."):
     three techniques are far over it: about ×6 in the bedroom, a stop in the kitchen. Both
     rooms' main lights are large panels behind fabric (the bedroom's curtains, the kitchen's
     blind; opaque in Forge and Falcor, the converter leaving pbrt's `diffusetransmission` out),
-    and a flat piece's lamp is a disc of its area centred half its radius in front of it: 39 cm
-    and 53 cm into the rooms, past the fabric, unshadowed (#370, the root of #369's too). Until
-    then these rooms measure the lamps, not the techniques. The GPU's frame, one run: 4.8 to 5.1 ms with the
-    probes, 4.7 to 5.0 with the port, 5.1 to 5.4 with SHaRC.
+    and a flat piece's lamp was a disc of its area centred half its radius in front of it: 39 cm
+    and 53 cm into the rooms, past the fabric, unshadowed (#370, the root of #369's too). The
+    GPU's frame, one run: 4.8 to 5.1 ms with the probes, 4.7 to 5.0 with the port, 5.1 to 5.4
+    with SHaRC.
+  - **With a planar piece's lamp on its face (D-087's amendment, #370):** the kitchen's clay
+    0.10 to 0.15 from Falcor (the port 0.102, SHaRC 0.114, the probes 0.146), textured 0.25 to
+    0.33. The bedroom −1.2 to −1.6 stops: its lamp's disc and its light from the middle of a
+    large panel lose the light that escapes round the curtains (Forge's path with the lamps on
+    is a stop under itself with them off). The rooms measure the techniques where the lamp holds
+    (the kitchen); the bedroom waits for the rectangle (#369).
 
 ## D-084 — An environment map as the sky, its sun taken out of it ✅ (the owner's go, 2026-10-29)
 
@@ -8479,6 +8485,28 @@ brackets. At the Night view, Forge's light over Falcor's:
     piece's lamp gives the walls facing the camera half of Falcor's direct light: its shadow
     disc faces the surface and rises into the ceiling, and its smoothstep profile is half a
     cosine near the horizon (#369, to plan with #355).
+  - **A planar piece's lamp lies on its face (#370, the same night):** Bitterli's bedroom read
+    ×6 Falcor's light, its two panels behind curtains, because a flat piece's lamp was a disc
+    centred half its radius in front of it and its shadow rays ended its radius short: the
+    bedroom's 0.79 m disc stood 39 cm into the room, past the curtains, unshadowed.
+    - **`Emission::Flat`:** a planar piece (its normals' sum over 0.98 of its area) is Lambert's
+      emitter, its light the cosine from its axis (the same lumens as the smoothstep's). Its
+      lamp sits 1 cm in front of its middle; its disc lies in its own plane (`lamp_axes`), and
+      its shadow rays end 2 cm short of the point they aim at (`lamp_ray`), so what covers it
+      shades it. The rays' hits aim at a point of its disc, not its middle (`hit_lamps`).
+      Pieces that bulge (0.5 to 0.98: a spotlight's glass) keep the old disc in front.
+    - **Measured** (the techniques from Falcor, before → after): the Cornell box, the probes
+      0.322 → 0.243, the port 0.255 → 0.125, SHaRC 0.261 → 0.132, its back wall matched; the
+      kitchen's clay 1.14 to 1.17 → 0.10 to 0.15 (Forge's own path 0.110); the Bistro at night
+      unchanged (0.549 → 0.544: its lamps are lanterns and globes).
+    - **The bedroom** went from ×6 to −1.2 stops (SHaRC; the probes −1.6), and Forge's path with
+      the lamps on is itself a stop under it with them off (the box 0.044, the kitchen 0.065):
+      the lamp, not the caches. Two approximations of a large rectangle remain. Its disc of
+      equal area misses the panel's top and bottom 12 cm, where the light escapes over and
+      under the curtains. Its unshadowed light is taken from its middle, so the surfaces right
+      beside its edge (the window's recess, the curtain's back) get about a third of theirs.
+      The box's tall block and the tops of its walls show the same in small. Next: a flat
+      piece as its rectangle, with its exact diffuse light (#369).
 
 ## D-088 — The light in shade: a near field traced per pixel over the probes ✅ (proposed and decided 2026-10-30, the owner following the recommendations; after D-086; D-083)
 

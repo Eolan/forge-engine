@@ -775,11 +775,16 @@ const LANTERN_DOWN: f32 = 0.6;
 /// Under this share of its area its normals' sum keeps, a glowing piece shines every way (a bulb,
 /// a lantern's panes); over it, it is flat and shines forward (a sign, a spotlight's glass).
 const FLAT_PIECE: f32 = 0.5;
+/// Over this share, a flat glowing piece is planar (a quad of light, a panel): a lamp on its face,
+/// its disc in its plane ([`Emission::Flat`], #370). Between [`FLAT_PIECE`] and this it bulges (a
+/// spotlight's glass): the plane through its middle lies behind its shell.
+const PLANAR_PIECE: f32 = 0.98;
 
 /// One connected piece of an emissive material, its corners welded within a millimetre: its area,
 /// its middle, its normals' sum (each triangle's by its area, so a closed piece's sums to none),
-/// its luminance per channel, cd/m², its map's mean over its area, its bounds, and the share of
-/// its area that faces away from its middle less the share that faces it (1 out, -1 in).
+/// its luminance per channel, cd/m², its map's mean over its area, its bounds, the share of its
+/// area that faces away from its middle less the share that faces it (1 out, -1 in), and how far
+/// its corners stand in front of its middle along its normals' sum, metres (a bulge's depth).
 #[derive(Clone, Copy, Debug, Default)]
 struct Glow {
     area: f32,
@@ -789,6 +794,7 @@ struct Glow {
     low: Vec3,
     high: Vec3,
     outward: f32,
+    front: f32,
     beams: [f32; BEAMS],
 }
 
@@ -934,24 +940,30 @@ fn glows(which: Authored) -> Vec<(String, Glow)> {
                 g.luminance += sum / count as f32 * area;
             }
             // How much of each piece faces out from its middle (1) or in (-1): a lantern's inner
-            // shell faces in, and Falcor's emitters shine from their front alone.
-            let mut outward: HashMap<usize, f32> = HashMap::new();
+            // shell faces in, and Falcor's emitters shine from their front alone. And how far its
+            // corners stand in front of its middle: a planar piece's lamp stands past its bulge.
+            let mut outward: HashMap<usize, (f32, f32)> = HashMap::new();
             for (t, tri) in tris.iter().enumerate() {
                 let r = root(&mut parent, t);
                 let Some(g) = pieces.get(&r) else {
                     continue;
                 };
                 let middle = g.middle / g.area;
+                let axis = g.normal.normalize_or_zero();
                 let p = tri.map(|v| Vec3::from(m.mesh.positions[v as usize]));
                 let cross = (p[1] - p[0]).cross(p[2] - p[0]);
                 // The cosine between its normal and the way from the piece's middle: a sheet
                 // of two faces back to back, whose normals cancel too, measures about none.
                 let away = ((p[0] + p[1] + p[2]) / 3.0 - middle).normalize_or_zero();
-                *outward.entry(r).or_default() += 0.5 * cross.dot(away);
+                let e = outward.entry(r).or_default();
+                e.0 += 0.5 * cross.dot(away);
+                e.1 = p.iter().fold(e.1, |f, c| f.max((*c - middle).dot(axis)));
             }
             for (r, g) in pieces {
+                let (out_area, front) = outward.get(&r).copied().unwrap_or_default();
                 let g = Glow {
-                    outward: outward.get(&r).copied().unwrap_or(0.0) / g.area,
+                    outward: out_area / g.area,
+                    front,
                     ..g
                 };
                 out.push((
@@ -971,13 +983,15 @@ fn glows(which: Authored) -> Vec<(String, Glow)> {
 /// The lamp a glowing piece lights the scene as (D-087): its light π × luminance × area, from its
 /// middle; every way where it is closed (a sphere of its area: a quarter of luminance × area
 /// candelas), forward where it is flat (a disc of its area, luminance × area candelas along its
-/// normal, falling off as `Emission::flush`). Its colour is its tint, balanced as the lamps'.
+/// normal, by Lambert's cosine where it is planar, `Emission::Flat`, else falling off as
+/// `Emission::flush`). Its colour is its tint, balanced as the lamps'.
 fn glow_lamp(g: &Glow) -> Option<Lamp> {
     let luminance = g.luminance.dot(Vec3::new(0.2126, 0.7152, 0.0722));
     if luminance < LEAST_GLOW || g.area <= 0.0 {
         return None;
     }
     let flat = g.normal.length() / g.area > FLAT_PIECE;
+    let planar = g.normal.length() / g.area > PLANAR_PIECE;
     // A closed piece facing in (a lantern's inner shell) lights its fitting's inside alone, and
     // is left out; its glow, a lamp row's, is left out of the probes too.
     if !flat && g.outward < -0.5 {
@@ -988,7 +1002,13 @@ fn glow_lamp(g: &Glow) -> Option<Lamp> {
     // below.
     let side = g.beams[2..].iter().sum::<f32>() / 8.0;
     let (up, down) = (g.beams[0] / side.max(1e-9), g.beams[1] / side.max(1e-9));
-    let (candela, radius, emission) = if flat {
+    let (candela, radius, emission) = if planar {
+        (
+            luminance * g.area,
+            (g.area / pi).sqrt(),
+            Emission::flat(g.normal),
+        )
+    } else if flat {
         (
             luminance * g.area,
             (g.area / pi).sqrt(),
@@ -1010,10 +1030,16 @@ fn glow_lamp(g: &Glow) -> Option<Lamp> {
         )
     };
     Some(Lamp {
-        // A flat piece's half its radius in front of it: the shadow rays aim at its disc, and on
+        // A planar piece's a centimetre past its face (past its bulge, `Glow::front`, if it has
+        // one: its rays end at its disc, and a bulge in front of it would block them): its disc
+        // lies in that plane, where the shadow rays aim and end, so what covers the piece shades
+        // it (#370). Another flat piece's half
+        // its radius in front of it: the shadow rays aim at its disc facing each surface, and on
         // the piece itself half the disc lay behind its face, which blocked them from aside; a
         // whole radius left what stands close in front of the piece behind the cone's apex.
-        position: if flat {
+        position: if planar {
+            g.middle + g.normal.normalize_or_zero() * (g.front + 0.01)
+        } else if flat {
             g.middle + g.normal.normalize_or_zero() * (0.5 * radius)
         } else {
             g.middle

@@ -2390,8 +2390,9 @@ it: the archive's HDR photograph, `san_giuseppe_bridge_4k.hdr` (4096 × 2048, HD
 under the sun's and their 4 ms is not): each emissive section cut into its connected pieces (corners welded within a
 millimetre): 160 pieces, 132 lamps. A bulb or a globe lights every way, a quarter of luminance ×
 area candelas, a sphere of its area; a flat piece (a sign, a spotlight's glass) forward,
-luminance × area along its normal (`Emission::flush`); a street lantern, its glass round its
-sides (seen from above 0, from below 0.32 of its side's area), luminance × its side's area to
+luminance × area along its normal (`Emission::flush`; a planar one, a panel or a quad of light,
+by Lambert's cosine, its disc on its face, `Emission::Flat`, #370); a street lantern, its glass
+round its sides (seen from above 0, from below 0.32 of its side's area), luminance × its side's area to
 30° above the horizon and none straight up (`Emission::LANTERN`). The colour is the emissive
 map's mean over the piece, read at about a point a texel, as the lamp's tint. A lantern's inner
 shell faces in and is left out: Falcor's emitters shine from their front alone. Their rows take
@@ -2629,8 +2630,13 @@ renders the `.pbrt` 0.055 from Falcor (×0.987): the three renderers agree.
     night (0.17 lux the reference).
   - The bounce, the port and SHaRC counted a lamp's glow on top of its lamp: the floor at twice
     Falcor's.
-- **Left:** a flat piece's lamp gives the back wall and the tall block's front half of Falcor's
-  direct light (11.4 against 21.8 cd/m²), the floor and the side walls within 20 %.
+- **A flat piece's lamp lay off its face** (#369, #370): it gave the back wall and the tall
+  block's front half of Falcor's direct light (11.4 against 21.8 cd/m²). The quad is now
+  `Emission::Flat` (D-087): Lambert's emitter, its disc in its own plane, its shadow rays ending
+  at it. The probes 0.243 from Falcor, the port 0.125, SHaRC 0.132; the back wall matched.
+  Forge's path with the lamps on is 0.044 from itself with them off: the lamp holds.
+- **Left:** the tall block's front and the tops of the walls by the ceiling, a little dark: a
+  flat lamp's unshadowed light is taken from its middle, which lies behind the block's face.
 
 ## `bedroom` and `kitchen`: two rooms lit by their own lights at night (D-083)
 
@@ -2652,13 +2658,31 @@ Lit at night by their area lights alone, as the Cornell box: each emitter a lamp
 
 **Measured (2026-10-31):** Forge's path (lamps off) 0.098 from Falcor in the bedroom's clay,
 0.110 in the kitchen's; textured 0.392 and 0.206 (the converter's materials, as the classroom's).
-The probes, the port and SHaRC are about ×6 over Falcor in the bedroom and a stop over it in the
+The probes, the port and SHaRC read about ×6 over Falcor in the bedroom and a stop over it in the
 kitchen: both rooms' main lights are large panels behind fabric (the curtains, the blind), and a
-flat piece's lamp is a disc of its area centred half its radius in front of it, past the fabric
-(#370). Until then these rooms measure the lamps, not the techniques. The converter makes pbrt's
-`diffusetransmission` an opaque diffuse (Forge and Falcor alike); pbrt renders the fabric
-translucent (the curtains 0.45, the blind 0.3 to 0.2). The GPU's frame, one run each: 4.8 to
-5.1 ms with the probes, 4.7 to 5.0 with the port, 5.1 to 5.4 with SHaRC.
+flat piece's lamp was a disc of its area centred half its radius in front of it, past the fabric
+(#370). The converter makes pbrt's `diffusetransmission` an opaque diffuse (Forge and Falcor
+alike); pbrt renders the fabric translucent (the curtains 0.45, the blind 0.3 to 0.2). The GPU's
+frame, one run each: 4.8 to 5.1 ms with the probes, 4.7 to 5.0 with the port, 5.1 to 5.4 with
+SHaRC.
+
+**With the panels' lamps on their faces** (`Emission::Flat`, D-087):
+
+| From Falcor | the probes | the port | SHaRC | Forge's path |
+|---|---|---|---|---|
+| Kitchen, clay | 0.146 | 0.102 | 0.114 | 0.110 |
+| Kitchen | 0.329 | 0.250 | 0.274 | 0.206 |
+| Bedroom, clay | 1.579 (dark) | 1.173 | 1.148 | 0.098 |
+| Bedroom | 1.751 (dark) | 1.064 | 1.320 | 0.392 |
+
+The bedroom is dark: Forge's path with the lamps on is itself a stop under it with them off.
+Two approximations of a large rectangle lose the light that escapes round the curtains:
+
+- The lamp's disc of equal area misses the panel's top and bottom 12 cm.
+- Its unshadowed light is taken from its middle: the window's recess and the curtain's back,
+  right beside its edge, get about a third of theirs.
+
+The next step is the rectangle with its exact diffuse light (#369).
 
 ## `FORGE_DYNAMIC_SCENE`: the scene edited as it runs (issues #220, #338)
 

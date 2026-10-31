@@ -634,16 +634,28 @@ bool lamp_outside(Lamp lamp)
     return lamp.regions_a.x == REGION_OUTSIDE;
 }
 
+// Whether `lamp` is a flat piece facing its axis `beam.xyz` (`Emission::Flat`, #370): its disc
+// lies in its own plane, on its face, where its shadow rays aim and end (`lamp_axes`,
+// `lamp_ray`).
+bool lamp_flat(Lamp lamp)
+{
+    return lamp.beam_edge.y > 0.5;
+}
+
 // The share of `lamp`'s light that goes towards a surface the unit direction `to_lamp` points from
 // to it: its emission (#288, `Emission` in lamps.rs). Every way (a zero axis): all of it. A cone:
 // all of it within the cosine `beam.w` of its axis, none beyond `beam_edge.x`, a smooth step
 // between; a street lamp's head is the cone down at 0.5 and 0.087, full cut-off (lit every way,
-// its bulb lit the facade over it round its housing's shadow, the owner, 2026-10-18).
+// its bulb lit the facade over it round its housing's shadow, the owner, 2026-10-18). A flat
+// piece (`lamp_flat`): Lambert's cosine from its axis.
 float lamp_beam(Lamp lamp, float3 to_lamp)
 {
     if (all(lamp.beam.xyz == 0.0))
         return 1.0;
-    return smoothstep(lamp.beam_edge.x, lamp.beam.w, dot(-to_lamp, lamp.beam.xyz));
+    float c = dot(-to_lamp, lamp.beam.xyz);
+    if (lamp_flat(lamp))
+        return saturate(c);
+    return smoothstep(lamp.beam_edge.x, lamp.beam.w, c);
 }
 
 // The least distance a probe ray's hit takes a lamp's light from, metres (#294). The surfaces inside
@@ -663,7 +675,8 @@ float hit_lamp_weight(Lamp lamp, RayHit hit, uint region, bool probe)
     return lamp_weight_in(lamp, hit.position, hit.n, region, region, probe ? PROBE_LAMP_NEAR : 0.0);
 }
 
-// Mirrors `GpuLamp` in crates/forge-render/src/lamps.rs (D-065): a small sphere light.
+// Mirrors `GpuLamp` in crates/forge-render/src/lamps.rs (D-065): a small sphere light, or a flat
+// piece's disc (`lamp_flat`).
 public struct Lamp
 {
     public float4 position_radius; // xyz: its middle in the scene's frame; w: its radius, metres
@@ -672,7 +685,8 @@ public struct Lamp
     public uint4 regions_b;        // all REGION_NONE: every surface (`lamp_lights`)
     public float4 beam;            // xyz: its cone's axis, the way its light goes (zero: every way); w:
                                    // the cosine within which its light is whole (`lamp_beam`, #288)
-    public float4 beam_edge;       // x: the cosine beyond which a cone's light is none; yzw unused
+    public float4 beam_edge;       // x: the cosine beyond which a cone's light is none; y: 1 for a
+                                   // flat piece (`lamp_flat`), else 0; zw unused
 };
 
 // Whether `lamp` lights a surface in region `region` (or, across a doorway, `other`): a lamp
@@ -3838,11 +3852,12 @@ void lamp_add<let SHADOWS : int>(Frame* f, Lamp lamp, uint i, float scale, float
     float radius = lamp.position_radius.w;
     if (SHADOWS != 0 && f[0].tlas != 0)
     {
-        // A point of the sphere's disc facing the surface, uniform in area, its angle turned for
-        // each lamp so two lamps' samples do not move together.
+        // A point of the sphere's disc facing the surface (a flat piece's own, `lamp_axes`),
+        // uniform in area, its angle turned for each lamp so two lamps' samples do not move
+        // together.
         float3 t;
         float3 b;
-        lamp_disc_axes(dir, t, b);
+        lamp_axes(lamp, dir, t, b);
         float r = radius * sqrt(u.x);
         float a = 6.28318530718 * frac(u.y + 0.618034 * float(i));
         if (ray_blocked(f, lamp_ray(lamp, world, n, bias, (t * cos(a) + b * sin(a)) * r)))
@@ -3898,9 +3913,18 @@ void lamp_disc_axes(float3 dir, out float3 t, out float3 b)
     b = cross(dir, t);
 }
 
+// The two axes of lamp `lamp`'s disc seen along `dir`, from a surface to it: a sphere's faces the
+// surface; a flat piece's lies in its own plane, across its axis (`lamp_flat`, #370).
+void lamp_axes(Lamp lamp, float3 dir, out float3 t, out float3 b)
+{
+    lamp_disc_axes(lamp_flat(lamp) ? lamp.beam.xyz : dir, t, b);
+}
+
 // The shadow ray from a surface at `world` facing `n`, starting `bias` off it, to the point
 // `offset` from lamp `lamp`'s middle. It ends short of the bulb: a lamp's own globe or fitting is
-// not in its way.
+// not in its way. A flat piece's ends 2 cm short of the point of its disc, just in front of the
+// piece (`lamp_flat`): what covers the piece, a curtain or a window's recess, is in its way (#370;
+// ended short of its disc's radius, a panel's lamp lit the room through them).
 RayDesc lamp_ray(Lamp lamp, float3 world, float3 n, float bias, float3 offset)
 {
     float3 target = lamp.position_radius.xyz + offset;
@@ -3910,7 +3934,7 @@ RayDesc lamp_ray(Lamp lamp, float3 world, float3 n, float bias, float3 offset)
     float length_to = length(to);
     ray.Direction = to / max(length_to, 1e-6);
     ray.TMin = 0.0;
-    ray.TMax = max(length_to - lamp.position_radius.w - 0.02, 0.0);
+    ray.TMax = max(length_to - (lamp_flat(lamp) ? 0.0 : lamp.position_radius.w) - 0.02, 0.0);
     return ray;
 }
 
@@ -6257,7 +6281,8 @@ float lamp_weight(Lamp lamp, float3 world, float3 n, float near = 0.0)
 // The lamps' light on a ray's hit (D-065: the probes lit by the lamps, and the mirror rays' hits),
 // in the resolve's units: one lamp of those that light region `region` (`lamp_lights`;
 // REGION_NONE: all) whose reach the hit is in, picked by its unshadowed light there, and one
-// shadow ray to its middle, the light over the chance it had of being picked. A probe's
+// shadow ray to its middle (a flat piece's to a point of its disc), the light over the chance it
+// had of being picked. A probe's
 // updates average the picks as they average its rays' directions; a room's walls send its lamps'
 // light back to its probes, one bounce a frame (#53). `seed`: the ray's own number, mixed with
 // the frame's. `probe`: a probe's ray, which leaves the street lamps out (`hit_lamp_weight`).
@@ -6302,8 +6327,22 @@ float3 hit_lamps(Frame* f, RayHit hit, uint region, uint seed, bool probe)
     Lamp lamp = f[0].lamps[chosen];
     // Aimed from where it starts (`lamp_ray`, #298): aimed from the hit and started SHADOW_BIAS
     // off it, the ray ran beside the line to the lamp and ended up to 15 cm from its middle, in
-    // its globe or its fitting, and a room's light moved by up to an EV with the start.
-    if (ray_blocked(f, lamp_ray(lamp, hit.position, hit.n, hit.shadow_start, float3(0.0))))
+    // its globe or its fitting, and a room's light moved by up to an EV with the start. A flat
+    // piece's to a point of its disc, uniform in area, by the ray's own number: to its middle
+    // alone, a panel behind a curtain lit nothing round the curtain's edges (#370).
+    float3 offset = float3(0.0);
+    if (lamp_flat(lamp))
+    {
+        uint h = n * 0x85EBCA6Bu;
+        h ^= h >> 13;
+        float r = lamp.position_radius.w * sqrt(float(h & 0xFFFFu) * (1.0 / 65536.0));
+        float a = 6.28318530718 * float(h >> 16) * (1.0 / 65536.0);
+        float3 t;
+        float3 b;
+        lamp_disc_axes(lamp.beam.xyz, t, b);
+        offset = (t * cos(a) + b * sin(a)) * r;
+    }
+    if (ray_blocked(f, lamp_ray(lamp, hit.position, hit.n, hit.shadow_start, offset)))
         return float3(0.0);
     // Its colour of luminance 1 times every lamp's light: its own over its chance, w / total.
     float3 colour = lamp.colour_reach.rgb / max(dot(lamp.colour_reach.rgb, float3(0.2126, 0.7152, 0.0722)), 1e-9);
@@ -7941,13 +7980,14 @@ float2 lamp_disc_point(uint2 pixel, uint frame, uint i)
 }
 
 // Whether lamp `lamp`'s light reaches a surface at `world` facing `n` from the point `disc` of
-// its sphere's disc (the unit disc, `lamp_disc_point`), its ray starting `bias` off the surface.
+// its sphere's disc (a flat piece's own, `lamp_axes`; the unit disc, `lamp_disc_point`), its ray
+// starting `bias` off the surface.
 bool lamp_seen(Frame* f, Lamp lamp, float3 world, float3 n, float bias, float2 disc)
 {
     float3 d = lamp.position_radius.xyz - world;
     float3 t;
     float3 b;
-    lamp_disc_axes(d / max(length(d), 1e-6), t, b);
+    lamp_axes(lamp, d / max(length(d), 1e-6), t, b);
     return !ray_blocked(f, lamp_ray(lamp, world, n, bias, (t * disc.x + b * disc.y) * lamp.position_radius.w));
 }
 
