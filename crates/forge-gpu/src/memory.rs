@@ -60,6 +60,7 @@ impl Buffer {
     /// its own, D-088's trial): wrapped so that the render graph tracks it as Forge's own and the
     /// memory counters count its `size` bytes under `category`, never destroyed on drop. The
     /// library must keep it alive while this lives.
+    #[cfg_attr(not(all(feature = "nrc", windows)), allow(dead_code))]
     pub(crate) fn foreign(
         device: &Arc<Device>,
         raw: vk::Buffer,
