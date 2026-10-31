@@ -63,8 +63,12 @@ struct RestirPush
     uint light_image;    // storage (rgba16f): the lamps' light on the pixel in lux (rgb), the lamp it came from + 1 (a, 0: none)
     uint width;
     uint height;
-    uint diffuse_image;  // storage (rgba16f): the same light for REBLUR (#372), lux over RESTIR_DENOISE_SCALE in YCoCg (rgb), the distance to the sample's point normalised as REBLUR reads it (a)
-    uint pad;
+    uint diffuse_image;  // storage (rgba16f): the diffuse light for REBLUR (#372), by the shading normal, lux over RESTIR_DENOISE_SCALE in YCoCg (rgb), the distance to the sample's point normalised as REBLUR reads it (a)
+    uint specular_image; // storage (rgba16f): the highlight over the surface's directional albedo (`environment_specular`), likewise, the distance normalised for its roughness (a)
+    uint guide_image;    // storage (rgba16f): REBLUR's guide, the shading normal (xyz) and the linear roughness (w) both were lit with
+    uint pad0;
+    uint pad1;
+    uint pad2;
     float4 hit_distance; // REBLUR's normalisation of that distance (A, B, C: `diffuse_bounce::HIT_DISTANCE`); w unused
 };
 
@@ -490,6 +494,8 @@ void lamp_restir_main(uint3 id : SV_DispatchThreadID)
     RestirFrame* r = p.restir;
     RWTexture2D<float4> light = g_storage_images_rgba16f[NonUniformResourceIndex(p.light_image)];
     RWTexture2D<float4> diffuse = g_storage_images_rgba16f[NonUniformResourceIndex(p.diffuse_image)];
+    RWTexture2D<float4> specular = g_storage_images_rgba16f[NonUniformResourceIndex(p.specular_image)];
+    RWTexture2D<float4> guide = g_storage_images_rgba16f[NonUniformResourceIndex(p.guide_image)];
     uint at = r->current * r->surface_pitch + pixel.y * r->surface_width + pixel.x;
     uint vis = g_sampled_images_u32[NonUniformResourceIndex(p.vis_image)].Load(int3(pixel, 0));
     if (vis == VISIBILITY_EMPTY || f[0].lamp_count == 0u)
@@ -498,6 +504,8 @@ void lamp_restir_main(uint3 id : SV_DispatchThreadID)
         RTXDI_StoreDIReservoir(RTXDI_EmptyDIReservoir(), r->reservoir_params, pixel, r->current);
         light[pixel] = float4(0.0);
         diffuse[pixel] = float4(0.0, 0.0, 0.0, 1.0);
+        specular[pixel] = float4(0.0, 0.0, 0.0, 1.0);
+        guide[pixel] = float4(0.0, 1.0, 0.0, 1.0);
         return;
     }
     PixelSurface ps = pixel_surface(f, vis, pixel, p.width, p.height);
@@ -518,6 +526,16 @@ void lamp_restir_main(uint3 id : SV_DispatchThreadID)
     uint region = place.region == REGION_NONE ? RESTIR_NO_REGION : min(place.region, RESTIR_NO_REGION - 1u);
     uint other = place.other == REGION_NONE ? RESTIR_NO_REGION : min(place.other, RESTIR_NO_REGION - 1u);
     r->places[at] = region | (other << 16);
+    // The pixel's material as the resolve lights it (#372; `pixel_shading`, `standard_inputs`, the
+    // lamps' inputs in `shade_pixel`): the diffuse light by its mapped normal, the highlight by its
+    // lobe and reflectance, as the lists' lamps take them (D-086).
+    PixelShading shading = pixel_shading(f, MATERIAL_CLASS_ANY, pixel, vis, float2(float(p.width), float(p.height)));
+    shading.s.ao = -1.0;
+    StandardInputs si = shading.mat.class_index == MATERIAL_CLASS_STANDARD ? standard_inputs(f, shading.mat, shading.s) : row_inputs(shading.mat, shading.s);
+    float3 shading_n = si.li.n;
+    float3 view = shading.s.view;
+    float roughness = sqrt(sqrt(2.0 / (si.li.power + 2.0))); // RenderLayer::roughness_for_power, inverted
+    guide[pixel] = float4(shading_n, roughness);
 
     // The street lamps alone: their run of the light lists (the outside's region) for every
     // pixel, and none for a room's, which no street lamp lights (`lamp_lights`).
@@ -533,6 +551,7 @@ void lamp_restir_main(uint3 id : SV_DispatchThreadID)
             RTXDI_StoreDIReservoir(RTXDI_EmptyDIReservoir(), r->reservoir_params, pixel, r->current);
             light[pixel] = float4(0.0);
             diffuse[pixel] = float4(0.0, 0.0, 0.0, 1.0);
+            specular[pixel] = float4(0.0, 0.0, 0.0, 1.0);
             return;
         }
         candidates.runs.run[0] = lamp_run(f, REGION_OUTSIDE);
@@ -564,16 +583,35 @@ void lamp_restir_main(uint3 id : SV_DispatchThreadID)
         }
     }
     float3 lux = float3(0.0);
+    float3 diffuse_lux = float3(0.0);
+    float3 specular_lux = float3(0.0);
     float lamp = 0.0;
     float reach = 1.0;
+    float specular_reach = 1.0;
     if (RTXDI_IsValidDIReservoir(state))
     {
         bool seen = RAB_GetConservativeVisibility(surface, chosen);
         lux = seen ? restir_light(chosen, surface) * RTXDI_GetDIReservoirInvPdf(state) : float3(0.0);
         RTXDI_StoreVisibilityInDIReservoir(state, seen ? float3(1.0) : float3(0.0), true);
-        lamp = float(RTXDI_GetDIReservoirLightIndex(state) + 1u);
+        uint index = RTXDI_GetDIReservoirLightIndex(state);
+        lamp = float(index + 1u);
+        float3 dir;
+        float dist;
+        RAB_GetLightDirDistance(surface, chosen, dir, dist);
+        if (seen && chosen.solid_angle_pdf > 0.0)
+        {
+            // The sample's light at normal incidence, lux, and by the shading normal its diffuse
+            // light; its highlight as `lamp_add`'s, over the surface's directional albedo (the
+            // resolve multiplies it back, `lamps_at`).
+            float3 normal_light = chosen.radiance / chosen.solid_angle_pdf * RTXDI_GetDIReservoirInvPdf(state);
+            diffuse_lux = normal_light * saturate(dot(shading_n, dir));
+            float size = 0.5 * min(f[0].lamps[index].position_radius.w / max(dist, 1e-3), 1.0);
+            float3 albedo = environment_specular(si.li.reflectance, roughness, saturate(dot(shading_n, view)), (f[0].flags & FLAG_SINGLE_SCATTER) == 0u);
+            specular_lux = ggx_light(shading_n, view, dir, ggx_alpha2(si.li.power, size * size), si.li.reflectance) * normal_light / max(albedo, float3(1e-3));
+        }
         // The distance to the light's point, as NRD asks for direct light.
-        reach = reblur_hit_distance(length(chosen.position - world), clip.w, p.hit_distance.xyz);
+        reach = reblur_hit_distance(dist, clip.w, p.hit_distance.xyz);
+        specular_reach = reblur_specular_hit_distance(dist, clip.w, p.hit_distance.xyz, roughness);
     }
     // A reservoir of no sample (a place without lamps) is no neighbour of the next frame's: the
     // pairwise reuse counts it and takes nothing from it.
@@ -583,5 +621,14 @@ void lamp_restir_main(uint3 id : SV_DispatchThreadID)
     // Half precision's largest value bounds it: a pixel by a bulb is lit by thousands of lux.
     lux = min(lux, float3(65000.0));
     light[pixel] = float4(lux, lamp);
-    diffuse[pixel] = float4(linear_to_ycocg(lux / RESTIR_DENOISE_SCALE), reach);
+    diffuse[pixel] = float4(linear_to_ycocg(min(diffuse_lux, float3(65000.0)) / RESTIR_DENOISE_SCALE), reach);
+    specular[pixel] = float4(linear_to_ycocg(min(specular_lux, float3(65000.0)) / RESTIR_DENOISE_SCALE), specular_reach);
+}
+
+// A distance as REBLUR's specular reads it (NRD's `REBLUR_FrontEnd_GetNormHitDist` for a roughness):
+// over its normalisation, which grows towards `params.z` times as the lobe narrows.
+float reblur_specular_hit_distance(float length, float view_z, float3 params, float roughness)
+{
+    float curve = (1.0 - exp2(-200.0 * roughness * roughness)) * sqrt(saturate(roughness));
+    return saturate(length / ((params.x + abs(view_z) * params.y) * lerp(params.z, 1.0, curve)));
 }

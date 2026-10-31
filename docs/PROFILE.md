@@ -1799,6 +1799,16 @@ something stands out). Two things to watch:
         once).
     - The street lamps as lamps by default (in the light lists, their glow left out of the
       probes) cost nothing measurable beside the lists' other lamps.
+  - *2026-10-31, every lamp by ReSTIR DI, denoised (#372, D-065's amendment):* the Bistro's night
+    view at 1600 × 900 under DLAA, the probes, the mean of 298 frames of one run:
+    - the 64 nearest by the light lists (the default): 15.1 ms, the lamps' passes 5.7 ms
+      (`shadow/lamp rays` 2.6, `shadow/lamp filter` 0.5, `shading/standard` 2.6);
+    - every lamp by the lists (`--all-lamps`): 22.6 ms, the lamps' 10.2 ms (4.6, 0.5, 5.0);
+    - every lamp by ReSTIR (`--lamp-restir --all-lamps`), its light and highlight denoised:
+      17.5 ms. `shadow/lamp restir` 2.8 ms (it works out each pixel's material, as the resolve
+      does), `shadow/lamp REBLUR` (NRD's diffuse and specular denoiser, its own instance)
+      1.35 ms, `shading/standard` 0.8 ms. Undenoised it took 15.1 ms (the pass 1.8 ms); the
+      diffuse light alone denoised, 15.9 ms.
   - *2026-10-19, the grime at the walls' feet (D-074's decals):* the village at 15:00 under DLAA
     at 1600 × 900, the house and junction views of the map check, three runs each way,
     alternating with `--no-decals`: `shading/standard` 0.804 → 0.830 ms on the house front and

@@ -874,7 +874,7 @@ struct Gallery {
     /// ReSTIR's diffuse light denoised (#372): its own REBLUR, loaded the first frame ReSTIR
     /// lights every lamp (`--lamp-restir`); `lamp_denoiser_tried` once it was (without NRD the
     /// resolve reads each pixel's sample), `lamp_denoised` whether it denoised the last frame.
-    lamp_denoiser: Option<forge_render::DiffuseDenoiser>,
+    lamp_denoiser: Option<forge_render::LampDenoiser>,
     lamp_denoiser_tried: bool,
     lamp_denoised: bool,
     /// D-088's surface cache under the bounce (`r.gi.cache`, `cache_mode`): the port made the
@@ -3606,13 +3606,14 @@ impl Demo for Gallery {
                 probes,
             )
         });
-        // Every lamp's diffuse light denoised by its own REBLUR (#372), on the sun's shadow rays'
-        // guides as the bounce's; its history starts over after a frame it did not denoise.
-        let restir_diffuse = match (restir, nrd_guides) {
+        // Every lamp's light denoised by its own REBLUR (#372), on its guide and the sun's shadow
+        // rays' view depth as the bounce's; its history starts over after a frame it did not
+        // denoise.
+        let denoised = match (restir, nrd_guides) {
             (Some(restir), Some((rays, motion, camera, _))) if restir_all => {
                 if !self.lamp_denoiser_tried {
                     self.lamp_denoiser_tried = true;
-                    match forge_render::DiffuseDenoiser::reblur(&ctx.device, &nrd_dir(), extent) {
+                    match forge_render::LampDenoiser::reblur(&ctx.device, &nrd_dir(), extent) {
                         Ok(denoiser) => self.lamp_denoiser = Some(denoiser),
                         Err(error) => {
                             tracing::info!(%error, "no NRD: each pixel's ReSTIR sample lights it")
@@ -3625,12 +3626,12 @@ impl Demo for Gallery {
                             denoiser.reset_history();
                         }
                         let reblur_frame = denoiser.frame(camera);
-                        let denoiser: &'f forge_render::DiffuseDenoiser = denoiser;
+                        let denoiser: &'f forge_render::LampDenoiser = denoiser;
                         Some(denoiser.denoise(
                             &mut frame.graph,
                             frame.slot,
-                            restir.diffuse,
-                            rays,
+                            restir,
+                            rays.view_z,
                             motion,
                             &reblur_frame,
                         )?)
@@ -3640,8 +3641,11 @@ impl Demo for Gallery {
             }
             _ => None,
         };
-        self.lamp_denoised = restir_diffuse.is_some();
-        let restir = restir.map(|r| r.light);
+        self.lamp_denoised = denoised.is_some();
+        let restir_diffuse = denoised.map(|(diffuse, _)| diffuse);
+        let restir = denoised
+            .map(|(_, specular)| specular)
+            .or(restir.map(|r| r.light));
         let share = if (restir_all && restir.is_some()) || self.args.no_lamp_filter {
             None
         } else {

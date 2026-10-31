@@ -187,11 +187,13 @@ struct RestirPush {
     width: u32,
     height: u32,
     diffuse_image: u32,
-    pad: u32,
+    specular_image: u32,
+    guide_image: u32,
+    pad: [u32; 3],
     hit_distance: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<RestirPush>() == 64);
+const _: () = assert!(std::mem::size_of::<RestirPush>() == 80);
 
 /// The lux in one unit of [`RestirLight::diffuse`] (#372, `RESTIR_DENOISE_SCALE` in
 /// `meshlet.slang`): REBLUR keeps half floats, and a bulb lights a pixel by it with up to 65,000
@@ -204,10 +206,101 @@ pub struct RestirLight {
     /// Each pixel's sample: its light in lux (rgb) and the lamp it came from + 1 (a, 0: none), for
     /// [`crate::LampShadows::restir`].
     pub light: ImageHandle,
-    /// The same light for REBLUR ([`crate::DiffuseDenoiser`], #372): over [`DENOISE_SCALE`] in
-    /// YCoCg, and the distance to the sample's point normalised as REBLUR reads it
-    /// ([`crate::diffuse_bounce::HIT_DISTANCE`]).
+    /// Its diffuse light for REBLUR ([`LampDenoiser`], #372), by the shading normal: over
+    /// [`DENOISE_SCALE`] in YCoCg, and the distance to the sample's point normalised as REBLUR
+    /// reads it ([`crate::diffuse_bounce::HIT_DISTANCE`]).
     pub diffuse: ImageHandle,
+    /// Its highlight for REBLUR, over the surface's directional albedo, likewise (the distance
+    /// normalised for the surface's roughness).
+    pub specular: ImageHandle,
+    /// REBLUR's guide ([`forge_gpu::nrd::NORMAL_ROUGHNESS_FORMAT`]): the shading normal and the
+    /// linear roughness both were lit with.
+    pub guide: ImageHandle,
+}
+
+/// ReSTIR's light denoised (#372): NVIDIA's REBLUR (NRD's diffuse and specular denoiser), its own
+/// instance and history, on the guide ReSTIR's pass writes and the sun's shadow rays' view depth
+/// and TAA's motion vectors. Its passes are `shadow/lamp REBLUR ...`.
+pub struct LampDenoiser {
+    device: Arc<Device>,
+    reblur: forge_gpu::nrd::ReblurDiffuseSpecular,
+    dir: std::path::PathBuf,
+    reset: bool,
+}
+
+impl LampDenoiser {
+    /// Loads NRD's REBLUR from `dir` (`nrd-sdk/bin`) for frames of `extent`. Fails without the
+    /// library, or built without the `nrd` feature.
+    pub fn reblur(
+        device: &Arc<Device>,
+        dir: &std::path::Path,
+        extent: vk::Extent2D,
+    ) -> Result<Self> {
+        Ok(Self {
+            device: Arc::clone(device),
+            reblur: forge_gpu::nrd::ReblurDiffuseSpecular::load(device, dir, extent)?,
+            dir: dir.to_owned(),
+            reset: true,
+        })
+    }
+
+    /// Recreates the denoiser for a new frame size. The caller makes sure the GPU is done with the
+    /// old one's frames.
+    pub fn resize(&mut self, extent: vk::Extent2D) -> Result<()> {
+        if self.reblur.extent() != extent {
+            self.reblur =
+                forge_gpu::nrd::ReblurDiffuseSpecular::load(&self.device, &self.dir, extent)?;
+        }
+        self.reset = true;
+        Ok(())
+    }
+
+    /// Discards the history at the next frame (a cut, or a frame it did not denoise).
+    pub fn reset_history(&mut self) {
+        self.reset = true;
+    }
+
+    /// The frame's settings for `camera` (the sun's shadows', as the bounce's denoiser).
+    pub fn frame(&mut self, camera: forge_gpu::nrd::NrdCamera) -> forge_gpu::nrd::ReblurFrame {
+        let frame = forge_gpu::nrd::ReblurFrame {
+            camera: forge_gpu::nrd::NrdCamera {
+                reset: camera.reset || self.reset,
+                ..camera
+            },
+            hit_distance: crate::diffuse_bounce::HIT_DISTANCE,
+            max_accumulated_frames: 30,
+            max_fast_accumulated_frames: 6,
+            checkerboard: false,
+        };
+        self.reset = false;
+        frame
+    }
+
+    /// Declares REBLUR's passes over `light` (this frame's, [`LampRestir::draw`]), the sun's
+    /// shadow rays' `view_z` and TAA's `motion`, and returns the denoised diffuse light and
+    /// highlight for [`crate::LampShadows`].
+    pub fn denoise<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        slot: FrameSlot,
+        light: RestirLight,
+        view_z: ImageHandle,
+        motion: ImageHandle,
+        frame: &forge_gpu::nrd::ReblurFrame,
+    ) -> Result<(ImageHandle, ImageHandle)> {
+        self.reblur.denoise(
+            graph,
+            slot,
+            forge_gpu::nrd::ReblurSpecularImages {
+                diffuse: light.diffuse,
+                specular: light.specular,
+                normal_roughness: light.guide,
+                view_z,
+                motion,
+            },
+            frame,
+        )
+    }
 }
 
 /// The pass, its reservoirs and the surfaces their reuse reads back.
@@ -432,6 +525,24 @@ impl LampRestir {
             aspect: vk::ImageAspectFlags::COLOR,
             mip_levels: 1,
         });
+        let specular = graph.transient(TransientDesc {
+            name: "lamp restir specular",
+            width: extent.width,
+            height: extent.height,
+            format: forge_gpu::nrd::RADIANCE_FORMAT,
+            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE,
+            aspect: vk::ImageAspectFlags::COLOR,
+            mip_levels: 1,
+        });
+        let guide = graph.transient(TransientDesc {
+            name: "lamp restir guide",
+            width: extent.width,
+            height: extent.height,
+            format: forge_gpu::nrd::NORMAL_ROUGHNESS_FORMAT,
+            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE,
+            aspect: vk::ImageAspectFlags::COLOR,
+            mip_levels: 1,
+        });
         let reservoirs = graph.import_buffer(&self.reservoirs);
         let surfaces = graph.import_buffer(&self.surfaces);
         let frame = renderer.frame_address(slot);
@@ -442,6 +553,8 @@ impl LampRestir {
             .image(targets.visibility, ImageAccess::Sampled(compute))
             .image(light, ImageAccess::StorageWrite(compute))
             .image(diffuse, ImageAccess::StorageWrite(compute))
+            .image(specular, ImageAccess::StorageWrite(compute))
+            .image(guide, ImageAccess::StorageWrite(compute))
             .buffer(reservoirs, BufferAccess::ShaderReadWrite(compute))
             .buffer(surfaces, BufferAccess::ShaderReadWrite(compute))
             .buffer(targets.visible_list, BufferAccess::ShaderRead(compute))
@@ -466,7 +579,9 @@ impl LampRestir {
                     width: extent.width,
                     height: extent.height,
                     diffuse_image: resources.storage(diffuse, 0).0,
-                    pad: 0,
+                    specular_image: resources.storage(specular, 0).0,
+                    guide_image: resources.storage(guide, 0).0,
+                    pad: [0; 3],
                     hit_distance: {
                         let [a, b, c] = crate::diffuse_bounce::HIT_DISTANCE;
                         [a, b, c, 0.0]
@@ -476,7 +591,12 @@ impl LampRestir {
             commands.dispatch(extent.width.div_ceil(8), extent.height.div_ceil(8), 1);
             Ok(())
         });
-        Some(RestirLight { light, diffuse })
+        Some(RestirLight {
+            light,
+            diffuse,
+            specular,
+            guide,
+        })
     }
 }
 

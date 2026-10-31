@@ -1077,14 +1077,14 @@ pub struct LampShadows {
     /// The lamps' light on each pixel by ReSTIR DI ([`crate::LampRestir`]): one sample's light in
     /// lux and the lamp it came from, whose highlight the resolve adds. Of the street lamps alone
     /// (the others the share's or their rays'), or with `restir_all` of every lamp (D-065's
-    /// comparison).
+    /// comparison). With `restir_diffuse`, the highlight denoised in its place (#372).
     pub restir: Option<ImageHandle>,
     /// ReSTIR lights every lamp, not only the street lamps.
     pub restir_all: bool,
     /// With `restir_all`, ReSTIR's diffuse light denoised (#372, by its own
-    /// [`crate::DiffuseDenoiser`]): the lux over [`crate::restir::DENOISE_SCALE`] in YCoCg, which
-    /// the resolve takes for the lamps' diffuse light, the sample's own (`restir`) still giving
-    /// their highlight. `None`: the sample's light alone.
+    /// [`crate::LampDenoiser`]): the lux over [`crate::restir::DENOISE_SCALE`] in YCoCg, which
+    /// the resolve takes for the lamps' diffuse light; `restir` is then their highlight denoised,
+    /// over the surface's directional albedo. `None`: the sample's light alone.
     pub restir_diffuse: Option<ImageHandle>,
 }
 

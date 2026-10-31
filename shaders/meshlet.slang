@@ -3755,7 +3755,8 @@ LampPicks lamp_picks(Frame* f, LampPlace place, float3 world, float3 n, uint2 pi
 //   shadow ray traced, in lux, its highlight towards the lamp's middle; of the street lamps,
 //   which the rest leaves out (`lamp_outside`), or of every lamp (the frame's
 //   `lamp_restir_every`, `--lamp-restir`), when the low half is its diffuse light denoised by
-//   REBLUR (#372; 0xFFFF: the sample's own), lux over RESTIR_DENOISE_SCALE in YCoCg;
+//   REBLUR (#372; 0xFFFF: the sample's own), lux over RESTIR_DENOISE_SCALE in YCoCg, and the high
+//   half then its highlight denoised, over the surface's directional albedo, likewise;
 // - else its low half, the penumbra filter's share (the sampled index of `lamp_filter_main`'s
 //   output): every lamp unshadowed, without a ray, times the share of their light that reaches
 //   the pixel, which the filter took from `lamp_rays_main`'s rays over its neighbours (Heitz et
@@ -3829,7 +3830,17 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
         if (!skip_outside)
             far_lamps_at(f, place, world, n, shading_n, view, specular_power, specular_weight, f0);
     }
-    if (restir != 0xFFFFu)
+    // Every lamp's light denoised (#372): REBLUR's, over this pixel's neighbours and the frames
+    // before, where its sample alone gave one lamp's light or none. The highlight was denoised
+    // over the surface's directional albedo, which it takes back here.
+    if (every && share != 0xFFFFu)
+    {
+        float to_units = RESTIR_DENOISE_SCALE / max(f[0].sun_illuminance, 1e-9);
+        g_lamp_diffuse += ycocg_to_linear(g_sampled_images[NonUniformResourceIndex(share)].Load(int3(pixel, 0)).xyz) * to_units;
+        float3 albedo = environment_specular(f0, sqrt(sqrt(2.0 / (specular_power + 2.0))), saturate(dot(shading_n, view)), (f[0].flags & FLAG_SINGLE_SCATTER) == 0u);
+        g_lamp_specular += ycocg_to_linear(g_sampled_images[NonUniformResourceIndex(restir)].Load(int3(pixel, 0)).xyz) * albedo * (highlight_share(specular_weight) * to_units);
+    }
+    else if (restir != 0xFFFFu)
     {
         float4 light = g_sampled_images[NonUniformResourceIndex(restir)].Load(int3(pixel, 0));
         uint i = uint(light.a + 0.5);
@@ -3840,20 +3851,12 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
             float3 to_lamp = lamp.position_radius.xyz - world;
             float dist = length(to_lamp);
             float3 dir = to_lamp / max(dist, 1e-6);
-            if (!every || share == 0xFFFFu)
-                g_lamp_diffuse += illuminance;
+            g_lamp_diffuse += illuminance;
             // Its light at normal incidence (ReSTIR's carries the interpolated normal's n·l)
             // through GGX at the mapped normal (D-086).
             float size = 0.5 * min(lamp.position_radius.w / max(dist, 1e-3), 1.0);
             g_lamp_specular += ggx_light(shading_n, view, dir, ggx_alpha2(specular_power, size * size), f0)
                 * highlight_share(specular_weight) * illuminance / max(dot(n, dir), 1e-3);
-        }
-        // Every lamp's diffuse light denoised (#372): REBLUR's, over this pixel's neighbours and
-        // the frames before, where its sample alone gave one lamp's light or none.
-        if (every && share != 0xFFFFu)
-        {
-            float3 denoised = ycocg_to_linear(g_sampled_images[NonUniformResourceIndex(share)].Load(int3(pixel, 0)).xyz);
-            g_lamp_diffuse += denoised * (RESTIR_DENOISE_SCALE / max(f[0].sun_illuminance, 1e-9));
         }
     }
 }
@@ -7095,9 +7098,34 @@ void grass_surface(Frame* f, GrassHit h, uint2 pixel, inout Surface s, out float
 // (#300) and a mesh's share everything after their surface: the shadows, the lamps, the class's
 // shading and the debug views (#348: the grass's own copy of them made every resolve entry's
 // pipeline seconds longer in the driver, each call site a whole inlined copy).
-uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
+// A pixel's surface and its material row as the resolve shades them, from the visibility buffer
+// (`vis` at `pixel` of a frame of `size`): what `shade_pixel` lights, and what ReSTIR's pass lights
+// the lamps with (#372). `other_class` where the row is not of class `class_index`
+// (MATERIAL_CLASS_ANY: any), `mat` alone set then.
+struct PixelShading
 {
-    Frame* f = resolve_push.frame;
+    Surface s;
+    Material mat;
+    uint row;
+    float3 relative;      // the surface relative to the camera
+    float3 scene;         // in the scene frame
+    float sun_bias;       // where its sun's shadow rays start (`shadow_bias`)
+    float lamp_start;     // where its lamps' shadow rays start (`lamp_shadow_start`)
+    uint instance_index;
+    float grass_scale;
+    bool grass;
+    bool culled_debug;
+    bool software;
+    bool ladder;
+    bool other_class;
+};
+
+// `pixel_shading`'s class for any row.
+static const uint MATERIAL_CLASS_ANY = 0xFFFFFFFFu;
+
+PixelShading pixel_shading(Frame* f, uint class_index, uint2 pixel, uint vis, float2 size)
+{
+    PixelShading p = {};
     bool grass = is_grass(vis);
     Surface s;
     Material mat;
@@ -7114,11 +7142,15 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     bool ladder = false;
     if (grass)
     {
-        GrassHit h = grass_hit(f, vis, pixel, float2(float(resolve_push.width), float(resolve_push.height)));
+        GrassHit h = grass_hit(f, vis, pixel, size);
         row = f[0].grass_row + h.tint;
         mat = f[0].materials[row];
-        if (mat.class_index != class_index)
-            return mat.class_index | (wants_mirror_ray<SHADOWS>(f, mat) ? REFLECT_BIT : 0u);
+        if (class_index != MATERIAL_CLASS_ANY && mat.class_index != class_index)
+        {
+            p.mat = mat;
+            p.other_class = true;
+            return p;
+        }
         grass_surface(f, h, pixel, s, grass_scale);
         surface_relative = h.relative;
         surface_scene = h.scene;
@@ -7136,8 +7168,12 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
         // The instance names its first section's row; the others follow it (issue #41).
         row = inst.material + triangle_section(m, tri);
         mat = f[0].materials[row];
-        if (mat.class_index != class_index)
-            return mat.class_index | (wants_mirror_ray<SHADOWS>(f, mat) ? REFLECT_BIT : 0u);
+        if (class_index != MATERIAL_CLASS_ANY && mat.class_index != class_index)
+        {
+            p.mat = mat;
+            p.other_class = true;
+            return p;
+        }
         culled_debug = (record.y & CULLED_BIT) != 0;
         software = (record.y & SOFTWARE_BIT) != 0;
         instance_index = record.x;
@@ -7150,7 +7186,6 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
         float4 c0 = mul(f[0].view_proj, float4(mul(frame, v0.position) + relative, 1));
         float4 c1 = mul(f[0].view_proj, float4(mul(frame, v1.position) + relative, 1));
         float4 c2 = mul(f[0].view_proj, float4(mul(frame, v2.position) + relative, 1));
-        float2 size = float2(float(resolve_push.width), float(resolve_push.height));
         float2 ndc = float2((float(pixel.x) + 0.5) / size.x * 2.0 - 1.0, 1.0 - (float(pixel.y) + 0.5) / size.y * 2.0);
         Barycentrics b = barycentrics(c0, c1, c2, ndc, size);
         // The textures' mip bias (D-070): drawn smaller for an upscaler, a pixel's footprint is taken
@@ -7241,6 +7276,42 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
         // The next meshes on the ladders (D-075), whose clusters lie outside their instance's mesh's.
         ladder = meshlet_index - mesh.meshlet_offset >= mesh.meshlet_count;
     }
+    p.s = s;
+    p.mat = mat;
+    p.row = row;
+    p.relative = surface_relative;
+    p.scene = surface_scene;
+    p.sun_bias = sun_bias;
+    p.lamp_start = lamp_start;
+    p.instance_index = instance_index;
+    p.grass_scale = grass_scale;
+    p.grass = grass;
+    p.culled_debug = culled_debug;
+    p.software = software;
+    p.ladder = ladder;
+    p.other_class = false;
+    return p;
+}
+
+uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
+{
+    Frame* f = resolve_push.frame;
+    PixelShading p = pixel_shading(f, class_index, pixel, vis, float2(float(resolve_push.width), float(resolve_push.height)));
+    if (p.other_class)
+        return p.mat.class_index | (wants_mirror_ray<SHADOWS>(f, p.mat) ? REFLECT_BIT : 0u);
+    bool grass = p.grass;
+    Surface s = p.s;
+    Material mat = p.mat;
+    uint row = p.row;
+    float3 surface_relative = p.relative;
+    float3 surface_scene = p.scene;
+    float sun_bias = p.sun_bias;
+    float lamp_start = p.lamp_start;
+    uint instance_index = p.instance_index;
+    float grass_scale = p.grass_scale;
+    bool culled_debug = p.culled_debug;
+    bool software = p.software;
+    bool ladder = p.ladder;
     s.shadow = 1.0;
     s.sky = resolve_push.sky;
     s.ao = resolve_push.ao_image != 0xFFFFFFFFu

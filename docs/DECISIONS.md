@@ -5580,6 +5580,26 @@ light (the low half of the lamp code) and the sample's for their highlight.
   scooter matte again, D-086); the sample's own highlight clamped (it sparkles under DLAA).
 - **Checks:** the sentinels at 0 px after the refactor; then step 2a's.
 
+**Step 2b built (2026-10-31): the highlight denoised as the diffuse light.**
+- **The refactor:** the resolve's surface and material row (`shade_pixel`'s first block) are
+  `pixel_shading`, moved verbatim. The asteroids (#355: `ast240`, its A/B twin, `ast-notaa600`),
+  `lab-materials60`, `lab-lamps60`, `city60`, `gallery60` and `planet-ground` on both paths:
+  0 px from the accepted set, and the A/B harness and mesh against fallback 0 px. The AMD
+  iGPU's check (#355's oracle) waits for a Tier 2 night: the moved code traces no ray.
+- **ReSTIR's pass** calls it and `standard_inputs` (`row_inputs` for the other classes), and
+  writes the sample's diffuse light by the mapped normal, its highlight as `lamp_add`'s (GGX,
+  the lobe widened by the lamp's sphere) over the surface's directional albedo
+  (`environment_specular`), and REBLUR's guide (the mapped normal, the linear roughness).
+- **NRD's `REBLUR_DIFFUSE_SPECULAR`** denoises both (`LampDenoiser`, the wrapper's second output,
+  its passes `shadow/lamp REBLUR ...`); the resolve reads them through the lamp code's two halves
+  and multiplies the highlight back by its albedo.
+- **The Bistro at night:** the sparkle is gone; 0.930 of Forge's path with every lamp (median
+  0.932; the default's 64 nearest 0.797), 17.5 ms (`docs/PROFILE.md`).
+- **The rooms:** unchanged by it (the Cornell box 0.994 of the lists, the kitchen 0.936, the
+  bedroom 0.935): their 5 % is not the normal either.
+- **Turning** (`--yaw-rate 6`): 0.908 of the lists (their reference taken before the lanterns'
+  profile, which takes about 1 %): still the open point before the default.
+
 **Step 3 built (2026-10-31): a lantern's light by its glass** (`Emission::Prism { up, down }`):
 at the elevation φ, over its side's intensity, cos φ for its upright panes and its glass's
 measured shares seen from above and below by the sine (the Bistro's lanterns 0 and 0.32), where

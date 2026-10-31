@@ -144,6 +144,23 @@ pub struct ReblurFrame {
     pub checkerboard: bool,
 }
 
+/// The images REBLUR's diffuse and specular denoiser reads, at the size it was loaded for (the
+/// lamps' light by ReSTIR DI, #372). Every one needs `SAMPLED` usage.
+#[derive(Clone, Copy, Debug)]
+pub struct ReblurSpecularImages {
+    /// [`RADIANCE_FORMAT`]: the noisy diffuse light.
+    pub diffuse: ImageHandle,
+    /// [`RADIANCE_FORMAT`]: the noisy specular light, over the surface's directional albedo.
+    pub specular: ImageHandle,
+    /// [`NORMAL_ROUGHNESS_FORMAT`]: the shading normal and the linear roughness the specular light
+    /// was lit with.
+    pub normal_roughness: ImageHandle,
+    /// [`VIEW_Z_FORMAT`].
+    pub view_z: ImageHandle,
+    /// The motion vectors, as [`SigmaImages::motion`].
+    pub motion: ImageHandle,
+}
+
 /// SIGMA, loaded for one image size (see the module's documentation).
 pub struct Sigma(imp::Instance);
 
@@ -176,6 +193,35 @@ impl Sigma {
         frame: &SigmaFrame,
     ) -> Result<ImageHandle> {
         self.0.denoise_sigma(graph, slot, images, frame)
+    }
+}
+
+/// REBLUR's diffuse and specular denoiser, loaded for one image size (the lamps' light by ReSTIR
+/// DI, #372; its passes `shadow/lamp REBLUR ...`).
+pub struct ReblurDiffuseSpecular(imp::Instance);
+
+impl ReblurDiffuseSpecular {
+    /// Loads NRD from `dir` as [`Sigma::load`] does, and creates REBLUR_DIFFUSE_SPECULAR's
+    /// pipelines and images for `extent`.
+    pub fn load(device: &Arc<Device>, dir: &std::path::Path, extent: vk::Extent2D) -> Result<Self> {
+        imp::Instance::load(device, dir, extent, imp::Kind::ReblurDiffuseSpecular).map(Self)
+    }
+
+    /// The image size it was loaded for.
+    pub fn extent(&self) -> vk::Extent2D {
+        self.0.extent()
+    }
+
+    /// Declares REBLUR's dispatches for this frame as graph passes and returns the denoised
+    /// diffuse and specular light ([`RADIANCE_FORMAT`], sampled; also next frame's history).
+    pub fn denoise<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        slot: FrameSlot,
+        images: ReblurSpecularImages,
+        frame: &ReblurFrame,
+    ) -> Result<(ImageHandle, ImageHandle)> {
+        self.0.denoise_reblur_specular(graph, slot, images, frame)
     }
 }
 
@@ -221,6 +267,7 @@ mod imp {
     pub(super) enum Kind {
         Sigma,
         ReblurDiffuse,
+        ReblurDiffuseSpecular,
     }
 
     impl Instance {
@@ -248,6 +295,16 @@ mod imp {
             _images: SigmaImages,
             _frame: &SigmaFrame,
         ) -> Result<ImageHandle> {
+            match *self {}
+        }
+
+        pub(super) fn denoise_reblur_specular<'f>(
+            &'f self,
+            _graph: &mut FrameGraph<'f>,
+            _slot: FrameSlot,
+            _images: ReblurSpecularImages,
+            _frame: &ReblurFrame,
+        ) -> Result<(ImageHandle, ImageHandle)> {
             match *self {}
         }
 
@@ -547,6 +604,7 @@ mod imp {
     /// `nrd::Denoiser::SIGMA_SHADOW` and `REBLUR_DIFFUSE`.
     const DENOISER_SIGMA_SHADOW: u32 = 16;
     const DENOISER_REBLUR_DIFFUSE: u32 = 0;
+    const DENOISER_REBLUR_DIFFUSE_SPECULAR: u32 = 6;
     /// The identifier Forge gives its one denoiser.
     const IDENTIFIER: u32 = 0;
     /// `nrd::DescriptorType`.
@@ -557,8 +615,10 @@ mod imp {
     const IN_NORMAL_ROUGHNESS: u32 = 1;
     const IN_VIEWZ: u32 = 2;
     const IN_DIFF_RADIANCE_HITDIST: u32 = 6;
+    const IN_SPEC_RADIANCE_HITDIST: u32 = 7;
     const IN_PENUMBRA: u32 = 15;
     const OUT_DIFF_RADIANCE_HITDIST: u32 = 18;
+    const OUT_SPEC_RADIANCE_HITDIST: u32 = 19;
     const OUT_SHADOW_TRANSLUCENCY: u32 = 27;
     const TRANSIENT_POOL: u32 = 30;
     const PERMANENT_POOL: u32 = 31;
@@ -663,6 +723,7 @@ mod imp {
     pub(super) enum Kind {
         Sigma,
         ReblurDiffuse,
+        ReblurDiffuseSpecular,
     }
 
     impl Kind {
@@ -670,13 +731,14 @@ mod imp {
             match self {
                 Self::Sigma => DENOISER_SIGMA_SHADOW,
                 Self::ReblurDiffuse => DENOISER_REBLUR_DIFFUSE,
+                Self::ReblurDiffuseSpecular => DENOISER_REBLUR_DIFFUSE_SPECULAR,
             }
         }
 
         fn name(self) -> &'static str {
             match self {
                 Self::Sigma => "SIGMA",
-                Self::ReblurDiffuse => "REBLUR",
+                Self::ReblurDiffuse | Self::ReblurDiffuseSpecular => "REBLUR",
             }
         }
 
@@ -685,7 +747,21 @@ mod imp {
             match self {
                 Self::Sigma => (SHADOW_FORMAT, "sun shadow (SIGMA)"),
                 Self::ReblurDiffuse => (RADIANCE_FORMAT, "diffuse light (REBLUR)"),
+                Self::ReblurDiffuseSpecular => (RADIANCE_FORMAT, "lamps' diffuse light (REBLUR)"),
             }
+        }
+
+        /// Its second output's name (REBLUR_DIFFUSE_SPECULAR's specular light), if it has one.
+        fn second_output(self) -> Option<&'static str> {
+            match self {
+                Self::ReblurDiffuseSpecular => Some("lamps' specular light (REBLUR)"),
+                _ => None,
+            }
+        }
+
+        /// REBLUR's: its passes behind full barriers (#349's kind, see `record`).
+        fn reblur(self) -> bool {
+            matches!(self, Self::ReblurDiffuse | Self::ReblurDiffuseSpecular)
         }
 
         /// The prefix of its dispatches' names, and its passes' group: "SIGMA_Shadow - Blur"
@@ -694,6 +770,7 @@ mod imp {
             match self {
                 Self::Sigma => ("SIGMA_Shadow - ", "shadow/SIGMA"),
                 Self::ReblurDiffuse => ("REBLUR_Diffuse - ", "gi/REBLUR"),
+                Self::ReblurDiffuseSpecular => ("REBLUR_DiffuseSpecular - ", "shadow/lamp REBLUR"),
             }
         }
     }
@@ -748,6 +825,8 @@ mod imp {
         permanent: Vec<GraphImage>,
         transient: Vec<GraphImage>,
         output: GraphImage,
+        /// REBLUR_DIFFUSE_SPECULAR's specular light; none for the others.
+        second_output: Option<GraphImage>,
         /// The graph's labels of NRD's dispatches (`shadow/<name>`), made once each.
         labels: Mutex<Vec<(String, &'static str)>>,
         /// NRD's clear pipelines: their dispatches become `vkCmdClearColorImage` (see the
@@ -1146,6 +1225,25 @@ mod imp {
                     name,
                 },
             )?;
+            let second_output = kind
+                .second_output()
+                .map(|name| {
+                    GraphImage::new(
+                        device,
+                        ImageDesc {
+                            width: extent.width,
+                            height: extent.height,
+                            format,
+                            usage: vk::ImageUsageFlags::SAMPLED
+                                | vk::ImageUsageFlags::STORAGE
+                                | vk::ImageUsageFlags::TRANSFER_DST,
+                            aspect: vk::ImageAspectFlags::COLOR,
+                            mip_levels: 1,
+                            name,
+                        },
+                    )
+                })
+                .transpose()?;
             tracing::info!(
                 version = %state.version,
                 denoiser = kind.name(),
@@ -1170,6 +1268,7 @@ mod imp {
                 permanent,
                 transient,
                 output,
+                second_output,
                 labels: Mutex::new(Vec::new()),
                 clear_pipelines,
             })
@@ -1283,6 +1382,7 @@ mod imp {
                     _ => None,
                 },
             )
+            .map(|(output, _)| output)
         }
 
         pub(super) fn denoise_reblur<'f>(
@@ -1292,41 +1392,7 @@ mod imp {
             images: ReblurImages,
             frame: &ReblurFrame,
         ) -> Result<ImageHandle> {
-            // NRD's defaults (`NRDSettings.h`, 4.18.0) but for what Forge sets.
-            let reblur = ReblurSettings {
-                hit_distance_parameters: frame.hit_distance,
-                antilag: [2.0, 3.0],
-                responsive_roughness_threshold: 0.0,
-                responsive_min_accumulated_frame_num: 3,
-                convergence: [1.0, 0.2, 0.8],
-                max_accumulated_frame_num: frame.max_accumulated_frames.min(63),
-                max_fast_accumulated_frame_num: frame.max_fast_accumulated_frames,
-                max_stabilized_frame_num: 63,
-                history_fix_frame_num: 3,
-                history_fix_base_pixel_stride: 14,
-                history_fix_alternate_pixel_stride: 14,
-                fast_history_clamping_sigma_scale: 2.0,
-                diffuse_prepass_blur_radius: 30.0,
-                specular_prepass_blur_radius: 50.0,
-                min_hit_distance_weight: 0.1,
-                min_blur_radius: 1.0,
-                max_blur_radius: 30.0,
-                lobe_angle_fraction: 0.15,
-                roughness_fraction: 0.15,
-                plane_distance_sensitivity: 0.02,
-                firefly_suppressor_min_relative_scale: 2.0,
-                min_material_for_diffuse: 4.0,
-                min_material_for_specular: 4.0,
-                checkerboard_mode: if frame.checkerboard {
-                    CHECKERBOARD_WHITE
-                } else {
-                    CHECKERBOARD_OFF
-                },
-                hit_distance_reconstruction_mode: HIT_DISTANCE_RECONSTRUCTION_OFF,
-                enable_anti_firefly: true,
-                use_prepass_only_for_specular_motion_estimation: false,
-                return_history_length_instead_of_occlusion: false,
-            };
+            let reblur = reblur_settings(frame);
             self.record(
                 graph,
                 slot,
@@ -1341,11 +1407,81 @@ mod imp {
                     _ => None,
                 },
             )
+            .map(|(output, _)| output)
         }
 
+        pub(super) fn denoise_reblur_specular<'f>(
+            &'f self,
+            graph: &mut FrameGraph<'f>,
+            slot: FrameSlot,
+            images: ReblurSpecularImages,
+            frame: &ReblurFrame,
+        ) -> Result<(ImageHandle, ImageHandle)> {
+            let reblur = reblur_settings(frame);
+            let (diffuse, specular) = self.record(
+                graph,
+                slot,
+                &self.common(&frame.camera),
+                (&raw const reblur).cast(),
+                |kind, output| match kind {
+                    IN_MV => Some(images.motion),
+                    IN_NORMAL_ROUGHNESS => Some(images.normal_roughness),
+                    IN_VIEWZ => Some(images.view_z),
+                    IN_DIFF_RADIANCE_HITDIST => Some(images.diffuse),
+                    IN_SPEC_RADIANCE_HITDIST => Some(images.specular),
+                    OUT_DIFF_RADIANCE_HITDIST => Some(output),
+                    _ => None,
+                },
+            )?;
+            let specular = specular.ok_or_else(|| GpuError::Nrd("no specular output".into()))?;
+            Ok((diffuse, specular))
+        }
+    }
+
+    /// REBLUR's settings for `frame`: NRD's defaults (`NRDSettings.h`, 4.18.0) but for what Forge
+    /// sets.
+    fn reblur_settings(frame: &ReblurFrame) -> ReblurSettings {
+        ReblurSettings {
+            hit_distance_parameters: frame.hit_distance,
+            antilag: [2.0, 3.0],
+            responsive_roughness_threshold: 0.0,
+            responsive_min_accumulated_frame_num: 3,
+            convergence: [1.0, 0.2, 0.8],
+            max_accumulated_frame_num: frame.max_accumulated_frames.min(63),
+            max_fast_accumulated_frame_num: frame.max_fast_accumulated_frames,
+            max_stabilized_frame_num: 63,
+            history_fix_frame_num: 3,
+            history_fix_base_pixel_stride: 14,
+            history_fix_alternate_pixel_stride: 14,
+            fast_history_clamping_sigma_scale: 2.0,
+            diffuse_prepass_blur_radius: 30.0,
+            specular_prepass_blur_radius: 50.0,
+            min_hit_distance_weight: 0.1,
+            min_blur_radius: 1.0,
+            max_blur_radius: 30.0,
+            lobe_angle_fraction: 0.15,
+            roughness_fraction: 0.15,
+            plane_distance_sensitivity: 0.02,
+            firefly_suppressor_min_relative_scale: 2.0,
+            min_material_for_diffuse: 4.0,
+            min_material_for_specular: 4.0,
+            checkerboard_mode: if frame.checkerboard {
+                CHECKERBOARD_WHITE
+            } else {
+                CHECKERBOARD_OFF
+            },
+            hit_distance_reconstruction_mode: HIT_DISTANCE_RECONSTRUCTION_OFF,
+            enable_anti_firefly: true,
+            use_prepass_only_for_specular_motion_estimation: false,
+            return_history_length_instead_of_occlusion: false,
+        }
+    }
+
+    impl Instance {
         /// Hands NRD the frame's `settings` and this denoiser's `denoiser` settings (its own
         /// structure), and declares its dispatches as graph passes, each image `bind` names by
-        /// NRD's resource type (given the output) or from NRD's pools.
+        /// NRD's resource type (given the output) or from NRD's pools. Returns the output, and
+        /// REBLUR_DIFFUSE_SPECULAR's second (its specular light).
         fn record<'f>(
             &'f self,
             graph: &mut FrameGraph<'f>,
@@ -1353,7 +1489,7 @@ mod imp {
             settings: &CommonSettings,
             denoiser: *const c_void,
             bind: impl Fn(u32, ImageHandle) -> Option<ImageHandle>,
-        ) -> Result<ImageHandle> {
+        ) -> Result<(ImageHandle, Option<ImageHandle>)> {
             let state = self.state.lock();
             let mut dispatches: *const DispatchDesc = std::ptr::null();
             let mut count = 0u32;
@@ -1390,6 +1526,7 @@ mod imp {
             let transient: Vec<ImageHandle> =
                 self.transient.iter().map(|i| graph.import(i)).collect();
             let output = graph.import(&self.output);
+            let second_output = self.second_output.as_ref().map(|i| graph.import(i));
             let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
             for (index, dispatch) in dispatches.iter().enumerate() {
                 let pipeline = self
@@ -1424,6 +1561,9 @@ mod imp {
                     let handle = match r.resource_type {
                         TRANSIENT_POOL => pool(&transient)?,
                         PERMANENT_POOL => pool(&permanent)?,
+                        OUT_SPEC_RADIANCE_HITDIST if second_output.is_some() => {
+                            second_output.expect("checked")
+                        }
                         other => bind(other, output)
                             .ok_or_else(|| GpuError::Nrd(format!("resource type {other}")))?,
                     };
@@ -1486,7 +1626,7 @@ mod imp {
                 // serial frame (#207) and separate memory did not, nor declaring the image to
                 // every resolve pass.
                 let mut builder = graph.pass(self.label(dispatch.name));
-                if self.kind == Kind::ReblurDiffuse {
+                if self.kind.reblur() {
                     builder = builder.full_barrier();
                 }
                 let mut declared: Vec<(ImageHandle, bool, bool)> = Vec::new();
@@ -1577,7 +1717,7 @@ mod imp {
                     Ok(())
                 });
             }
-            Ok(output)
+            Ok((output, second_output))
         }
     }
 
