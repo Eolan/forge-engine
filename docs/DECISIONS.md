@@ -10054,9 +10054,47 @@ carbon as the current theme for now". `app.menu_theme` chooses:
   could not save, the HDR row wrong at start and `--vsync` making VSync's row inert: fixed,
   each but the last two with a test.
 
-**Open:** upscaling in the galleries (their DLSS and FSR modes render the scene smaller; only
-the asteroids has them, so the gallery offers off, DLAA and FSR's native AA); key rebinding in
-the menu (`bind` stays the console's); a resolution scale apart from the upscalers.
+**The galleries upscale (the same day, the owner: "do it here but careful to not change the
+configurations of other demos"):** city-blocks, the island, the physics lab and the city plan
+(their shared `Gallery`) take `r.dlss.mode` and `r.fsr.mode` as the asteroids do, so the menu's
+anti-aliasing row offers DLSS's and FSR's modes there too.
+- **The scene at the upscaler's size** (`Gallery::fit_upscaler`): the renderer, the jitter, the
+  shadows' and the light's denoisers, the reflections' history and the tank water's scene FSR
+  are sized to the upscaler's input. The bloom, the local exposure and the display pass stay at
+  the window's size, after the upscaler.
+  - The jitter's sequence lengthens with the ratio (`taa::jitter_phases`).
+  - The textures' bias adds log2 of the ratio to `r.texture.lod_bias` (D-070).
+  - The geometry's error (`r.lod.error`) counts the window's pixels, scaled by the render's
+    height over the window's as in the asteroids, so the clusters stay as detailed as on screen.
+    The trees' ladder (9 px) and impostors (40 px) count the drawn pixels: in a smaller mode they
+    cross nearer by the ratio, since what the ladder guards (cards a pixel or two wide going
+    see-through) happens in the drawn image.
+  - A mode changed at the console waits for the device to be idle, then resizes what changed. A
+    switch that fails goes back to the window's size, every image with it.
+- **The defaults are unchanged:** `r.aa` stays DLAA where DLSS runs, else FSR at the window's
+  size. The modes apply only under `r.aa dlss`, or `r.aa fsr` with a mode other than native. A
+  DLSS mode asked for where DLSS cannot run gives FSR's, as in the asteroids.
+- **The presets now reach the galleries:** they set `r.dlss.mode` and `r.fsr.mode` (D-081).
+  Where DLSS does not run, `r.aa` is fsr, so a preset below ultra draws the galleries smaller
+  (high: FSR's quality, 1.5 times smaller), as in the asteroids. Under DLAA the presets keep the
+  window's size.
+- **Verified:**
+  - The sentinels of the four galleries (`city60`, `city60-noocc`, `city60-fsr`, `gallery60`,
+    `shot-island`, `lab-materials60`) differ from the accepted set in 0 pixels, and the village
+    with the menu open in 0.
+  - Every mode switched live in the village at 1920 × 1080: exit 0, no validation errors. The
+    menu's row reads "DLSS quality".
+  - The GPU frame, 149 frames: DLAA 6.44 ms; DLSS quality 4.69, balanced 4.34, performance
+    4.03, ultra performance 3.55; FSR native 6.43, quality 4.48, performance 3.74
+    (`docs/PROFILE.md`).
+  - A read-only review found the geometry's error counted in drawn pixels, Streamline asked at
+    each resize under DLAA (which never needs it), and a failed switch leaving the images at
+    different sizes: fixed.
+
+**Open:** DLSS's ultra performance at a 1080p window draws the near leaf-card trees dark and
+speckled at 640 × 360, with the ladder off too (#382; quality to performance look right); key
+rebinding in the menu (`bind` stays the console's); a resolution scale apart from the
+upscalers.
 
 *(issue #377; D-069, D-081; docs/demos/console.md, "The game's menu")*
 

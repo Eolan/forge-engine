@@ -339,7 +339,8 @@ bloom; with the anti-aliasing off it shows the frame as drawn, without jitter.
   - **A second FSR** anti-aliases the scene behind the tank's water before the water bends it
     (#156), its passes under "liquid/scene FSR".
   - **Its upscaling modes** (`FsrMode`, `r.fsr.mode`) draw 1.5 to 3 times smaller, in the
-    ballad as DLSS's do.
+    ballad and the galleries as DLSS's do (#377: the scene at the upscaler's input size, the
+    bloom, the local exposure and the display at the window's).
   - **AMD's RCAS sharpens its image** (`r.fsr.sharpen`, on at 0.5). Forge's bridge runs RCAS
     in [0, 1] through AMD's reversible tone map and a square root, as RCAS expects a display
     signal.

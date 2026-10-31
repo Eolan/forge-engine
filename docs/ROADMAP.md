@@ -848,7 +848,8 @@ setting.
 
 **Built:** the console and its settings (D-069), the presets and the first launch's choices
 (D-081), and the settings screen of graphics, display, sound and controls, applied live (D-092,
-#377). Open: presets fitted by a measured frame time, upscaling in the galleries.
+#377), with DLSS's and FSR's modes in the galleries. Open: presets fitted by a measured frame
+time.
 
 ## Phase 10 — The games again
 

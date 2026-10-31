@@ -2717,6 +2717,29 @@ The copy is a plain image copy of the frame; the blurs run at a quarter of its s
 and dither per pixel. The menu's own quads (`app/hud`) cost 0.014 ms at 1080p, 0.042 ms at 4K
 in either look.
 
+## The galleries' upscaling modes (#377, D-092, 2026-10-31)
+
+The village (`city-plan --village 600`) at 1920 × 1080, each mode switched at the console
+(`--exec "r.aa dlss" --exec "r.dlss.mode quality"`), the GPU frame over 149 frames on the
+5070 Ti. FSR is AMD's through its DLLs (D-082).
+
+| Mode | Drawn at | GPU frame | Upscaler | `shading/standard` | meshlet pass 1 |
+|---|---|---|---|---|---|
+| DLAA | 1920 × 1080 | 6.44 ms | 0.56 | 0.84 | 1.37 |
+| DLSS quality | 1280 × 720 | 4.69 ms | 0.60 | 0.38 | 1.13 |
+| DLSS balanced | 1114 × 626 | 4.34 ms | 0.59 | 0.30 | 1.09 |
+| DLSS performance | 960 × 540 | 4.03 ms | 0.59 | 0.22 | 1.04 |
+| DLSS ultra performance | 640 × 360 | 3.55 ms | 0.54 | 0.10 | 0.94 |
+| FSR native | 1920 × 1080 | 6.43 ms | 0.39 | 0.88 | 1.36 |
+| FSR quality | 1280 × 720 | 4.48 ms | 0.33 | 0.39 | 1.14 |
+| FSR performance | 960 × 540 | 3.74 ms | 0.27 | 0.22 | 1.04 |
+
+The upscaler's own cost hardly moves with the mode; the shading follows the pixels. The geometry's
+error counts the window's pixels, so the clusters stay as detailed as on screen and the meshlet
+pass shrinks only with the raster's work (with the error in drawn pixels, ultra performance's
+took 0.78 ms). The probes' rays (`gi/probe rays`) vary 0.9 to 1.6 ms between these runs, more
+than the modes move them. The menu open over DLSS quality: 4.55 ms.
+
 ## Not measured yet
 
 - **Streaming**: residency pools, request queue depth, drive and decompression throughput.

@@ -15,6 +15,10 @@ use crate::Gallery;
 /// The handles of the gallery's settings.
 pub(crate) struct RenderVars {
     aa: Var<usize>,
+    /// The upscalers' modes (#377): how much smaller DLSS and FSR render under `r.aa dlss` and
+    /// `r.aa fsr`.
+    dlss_mode: Var<usize>,
+    fsr_mode: Var<usize>,
     fsr_sharpen: Var<bool>,
     fsr_sharpness: Var<f64>,
     tonemap: Var<usize>,
@@ -224,6 +228,8 @@ impl Gallery {
         }
         self.vars = Some(RenderVars {
             aa: s.add_from(rs::aa(aa_default), aa_default, aa_now),
+            dlss_mode: s.add(rs::dlss_mode(DlssMode::Quality)),
+            fsr_mode: s.add(rs::fsr_mode(FsrMode::NativeAa)),
             fsr_sharpen: s.add(rs::fsr_sharpen(rs::FSR_SHARPEN)),
             fsr_sharpness: s.add(rs::fsr_sharpness(rs::FSR_SHARPNESS)),
             tonemap,
@@ -232,11 +238,7 @@ impl Gallery {
             local: s.add_from(rs::local_exposure(0), 0, local_now),
             ao: s.add_from(rs::ao(true), true, self.ao_on),
             ao_radius: s.add_from_f32(rs::ao_radius(1.5), 1.5, self.args.ao_radius),
-            texture_lod_bias: s.add_from_f32(
-                rs::texture_lod_bias(0.0),
-                0.0,
-                self.renderer.texture_lod_bias,
-            ),
+            texture_lod_bias: s.add_from_f32(rs::texture_lod_bias(0.0), 0.0, self.texture_bias),
             show_input: s.add(rs::show_input(0)),
             gi_reference: s.add(rs::gi_reference(0)),
             gi_trace: s.add(rs::gi_trace(true)),
@@ -322,10 +324,27 @@ impl Gallery {
             return;
         }
         let changed = |var: Var<bool>| s.changed_since(var, seen);
-        if s.changed_since(v.aa, seen) {
+        // The anti-aliasing switched: the scene's size follows it, at the end.
+        let mut refit = false;
+        if s.changed_since(v.aa, seen)
+            || s.changed_since(v.dlss_mode, seen)
+            || s.changed_since(v.fsr_mode, seen)
+        {
             let aa = s.get(v.aa);
             let dlaa_asked = matches!(aa, AA_DLAA | AA_DLSS);
             self.dlaa_on = dlaa_asked && self.dlaa.is_some();
+            // DLAA, or DLSS rendering smaller in `r.dlss.mode` (#377); FSR in `r.fsr.mode`, or in
+            // DLSS's place in the DLSS mode's own.
+            self.dlss_mode = if aa == AA_DLSS {
+                rs::dlss_mode_of(s.get(v.dlss_mode))
+            } else {
+                DlssMode::Dlaa
+            };
+            self.fsr_mode = if aa == AA_FSR {
+                rs::fsr_mode_of(s.get(v.fsr_mode))
+            } else {
+                fsr_mode_for(self.dlss_mode)
+            };
             // FSR where it is asked for, and in DLAA's place where the device has no DLSS (D-070):
             // made the first time it is wanted.
             let fsr_wanted = aa == AA_FSR || dlaa_asked && self.dlaa.is_none();
@@ -357,6 +376,7 @@ impl Gallery {
             // The jitter only where something resolves it.
             self.taa.enabled = self.dlaa_on || self.fsr_on;
             self.taa.reset_history();
+            refit = true;
         }
         if s.changed_since(v.aa, seen)
             || changed(v.fsr_sharpen)
@@ -396,7 +416,9 @@ impl Gallery {
             self.args.ao_radius = s.get(v.ao_radius) as f32;
         }
         if s.changed_since(v.texture_lod_bias, seen) {
-            self.renderer.texture_lod_bias = s.get(v.texture_lod_bias) as f32;
+            // The setting's bias, and the upscaler's own where it renders smaller.
+            self.texture_bias = s.get(v.texture_lod_bias) as f32;
+            self.renderer.texture_lod_bias = self.texture_bias + self.upscale_bias;
         }
         if s.changed_since(v.show_input, seen) {
             self.renderer.show_input = s.get(v.show_input).clamp(0, 6) as u32;
@@ -513,6 +535,19 @@ impl Gallery {
             };
         }
         self.vars_seen = s.changes();
+        if refit {
+            // The device idle first: the images drawn at the old size go.
+            ctx.device.wait_idle();
+            if let Err(error) = self.fit_upscaler(ctx.extent(), false) {
+                // Back to the output's size, every image with it, rather than sizes that differ.
+                tracing::error!(%error, "r.aa: the mode could not switch, drawn at the window's size");
+                self.dlss_mode = DlssMode::Dlaa;
+                self.fsr_mode = FsrMode::NativeAa;
+                if let Err(error) = self.fit_upscaler(ctx.extent(), true) {
+                    tracing::error!(%error, "r.aa: the window's size failed too");
+                }
+            }
+        }
     }
 }
 
@@ -523,7 +558,19 @@ const DENOISERS: &[&str] = &["sigma", "ffx", "none"];
 /// its rays land (#156).
 const LIQUID_VIEWS: &[&str] = &["look", "speed", "landing"];
 
-use forge_render::{SwRaster, Tonemap};
+use forge_render::{DlssMode, FsrMode, SwRaster, Tonemap};
+
+/// FSR's mode in DLSS `mode`'s place, where DLSS was asked for and cannot run (as the
+/// asteroids').
+fn fsr_mode_for(mode: DlssMode) -> FsrMode {
+    match mode {
+        DlssMode::Dlaa => FsrMode::NativeAa,
+        DlssMode::Quality => FsrMode::Quality,
+        DlssMode::Balanced => FsrMode::Balanced,
+        DlssMode::Performance => FsrMode::Performance,
+        DlssMode::UltraPerformance => FsrMode::UltraPerformance,
+    }
+}
 
 /// `r.gi.cache`'s default (D-090): SHaRC indoors (`auto`); in a scripted run (no settings file,
 /// `FORGE_CFG=none` or `--no-cfg`) the probes, its images the same from run to run (SHaRC's

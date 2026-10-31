@@ -47,7 +47,8 @@ before D-069's key map, 2026-10-17): `r.lod` cluster LOD, `r.show.lod` LOD colou
 rasteriser (auto, on, off), `r.show.raster` what it drew, `r.lod.error` the LOD threshold,
 `r.aa` anti-aliasing (DLAA where it runs, else AMD's FSR 3.1 (D-070), or off:
 `--no-dlaa` for FSR where DLAA runs, `--no-taa` for none; TAA and its sharpening, `--rcas`,
-`--no-rcas` and `--taa-catmull-rom`, were removed by D-070), `r.bloom`
+`--no-rcas` and `--taa-catmull-rom`, were removed by D-070; `r.aa dlss` with `r.dlss.mode`, or
+`r.aa fsr` with `r.fsr.mode`, draws the scene smaller and upscales it, #377), `r.bloom`
 bloom (`--bloom S`, 0.04), `r.shadows` shadows, `r.sky_light` sky light, `r.ao` ambient
 occlusion, `r.show.ao` its view, `r.reflections.sky` sky reflections, `r.reflections.rays`
 mirror rays in the glass and the water, `r.sun.disc` soft or hard shadows, `r.probes` the

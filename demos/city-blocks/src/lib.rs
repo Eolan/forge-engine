@@ -853,13 +853,23 @@ struct Gallery {
     liquid_reset: bool,
     /// What the liquid's drawing shows: as it looks (1), its speed view (2), its landing view (3).
     liquid_mode: forge_render::LiquidMode,
-    /// DLAA where it runs (D-045): DLSS at the output's size, while `dlaa_on` (`r.aa`).
+    /// DLSS where it runs (D-045), while `dlaa_on`: DLAA at the output's size (`r.aa dlaa`), or
+    /// rendering smaller in `dlss_mode` (`r.aa dlss`, `r.dlss.mode`, #377).
     dlaa: Option<forge_render::DlssUpscaler>,
     dlaa_on: bool,
-    /// AMD's FSR 3.1 at the output's size (D-070) wherever DLAA does not run, while `fsr_on`
-    /// (`r.aa fsr`): made at the start, or when the console first asks for it.
+    dlss_mode: forge_render::DlssMode,
+    /// AMD's FSR 3.1 (D-070) wherever DLAA does not run, while `fsr_on` (`r.aa fsr`), in
+    /// `fsr_mode`: its anti-aliasing at the output's size, or rendering smaller
+    /// (`r.fsr.mode`, #377); made at the start, or when the console first asks for it.
     fsr: Option<forge_render::FsrUpscaler>,
     fsr_on: bool,
+    fsr_mode: forge_render::FsrMode,
+    /// The scene's size: the window's, or the upscaler's input size in its modes (#377).
+    render_extent: forge_gpu::vk::Extent2D,
+    /// The textures' bias `r.texture.lod_bias` asks for, and the upscaler's own added to it
+    /// (log2 of the render's width over the output's, 0 at the output's size).
+    texture_bias: f32,
+    upscale_bias: f32,
     /// AMD's FSR through its DLLs (`--fsr-amd`), which takes `fsr`'s place while `fsr_on`:
     /// looked for once, with the first FSR (at the start or from the console), and dropped for
     /// good if the DLLs refuse a frame.
@@ -2178,8 +2188,13 @@ impl Gallery {
             liquid_mode,
             dlaa_on: dlaa.is_some(),
             dlaa,
+            dlss_mode: forge_render::DlssMode::Dlaa,
             fsr_on: fsr.is_some(),
             fsr,
+            fsr_mode: forge_render::FsrMode::NativeAa,
+            render_extent: ctx.extent(),
+            texture_bias: 0.0,
+            upscale_bias: 0.0,
             ffx,
             ffx_tried,
             display,
@@ -2371,35 +2386,75 @@ impl Gallery {
     }
 }
 
+impl Gallery {
+    /// Draws the scene at the size the anti-aliasing wants for an `output` of that many pixels
+    /// (#377, as the asteroids do): the output's for DLAA, FSR's native AA or none, the
+    /// upscaler's input size in its modes. What is drawn at that size follows it (`all`: a new
+    /// output, so also when the size stays), with the jitter's sequence and the textures' bias
+    /// to match. The device must be idle.
+    pub(crate) fn fit_upscaler(
+        &mut self,
+        output: forge_gpu::vk::Extent2D,
+        all: bool,
+    ) -> Result<()> {
+        if let Some(dlss) = &mut self.dlaa {
+            dlss.configure(self.dlss_mode, output)?;
+        }
+        if let Some(fsr) = &mut self.fsr {
+            fsr.configure(self.fsr_mode, output)?;
+        }
+        // AMD's DLLs size the render as Forge's FSR does (`fsr::render_extent`).
+        if let Some(ffx) = &mut self.ffx {
+            ffx.configure(self.fsr_mode, output)?;
+        }
+        let render = match (&self.dlaa, &self.fsr) {
+            // DLAA draws at the output's size: Streamline is asked only in DLSS's modes.
+            (Some(dlss), _) if self.dlaa_on && self.dlss_mode != forge_render::DlssMode::Dlaa => {
+                dlss.render_extent()?
+            }
+            (Some(_), _) if self.dlaa_on => output,
+            (_, Some(fsr)) if self.fsr_on => fsr.render_extent(),
+            _ => output,
+        };
+        if all || render != self.render_extent {
+            self.renderer.resize(render)?;
+            self.taa.resize(render)?;
+            for denoiser in &mut self.sun_shadows {
+                denoiser.resize(render)?;
+            }
+            if let Some(denoiser) = &mut self.diffuse_denoiser {
+                denoiser.resize(render)?;
+            }
+            if let Some(denoiser) = &mut self.lamp_denoiser {
+                denoiser.resize(render)?;
+            }
+            self.reflection_history.resize(render)?;
+            // The tank's water's FSR anti-aliases the scene behind it at the scene's size.
+            if let Some(behind) = &mut self.behind_aa {
+                behind.configure(forge_render::FsrMode::NativeAa, render)?;
+            }
+            self.render_extent = render;
+        }
+        self.taa.jitter_phases = forge_render::taa::jitter_phases(render, output);
+        self.taa.reset_history();
+        // Drawn smaller, the textures keep the output's detail (D-070).
+        self.upscale_bias = if render.width < output.width {
+            (render.width as f32 / output.width as f32).log2()
+        } else {
+            0.0
+        };
+        self.renderer.texture_lod_bias = self.texture_bias + self.upscale_bias;
+        Ok(())
+    }
+}
+
 impl Demo for Gallery {
     fn networked(&self) -> bool {
         self.running.as_ref().is_some_and(|r| r.networked())
     }
 
     fn resized(&mut self, ctx: &mut Context) -> Result<()> {
-        self.renderer.resize(ctx.extent())?;
-        self.taa.resize(ctx.extent())?;
-        self.taa.reset_history();
-        for denoiser in &mut self.sun_shadows {
-            denoiser.resize(ctx.extent())?;
-        }
-        if let Some(denoiser) = &mut self.diffuse_denoiser {
-            denoiser.resize(ctx.extent())?;
-        }
-        if let Some(denoiser) = &mut self.lamp_denoiser {
-            denoiser.resize(ctx.extent())?;
-        }
-        self.reflection_history.resize(ctx.extent())?;
-        if let Some(dlss) = &mut self.dlaa {
-            dlss.configure(forge_render::DlssMode::Dlaa, ctx.extent())?;
-        }
-        for fsr in [&mut self.fsr, &mut self.behind_aa].into_iter().flatten() {
-            fsr.configure(forge_render::FsrMode::NativeAa, ctx.extent())?;
-        }
-        if let Some(ffx) = &mut self.ffx {
-            ffx.configure(forge_render::FsrMode::NativeAa, ctx.extent())?;
-        }
-        Ok(())
+        self.fit_upscaler(ctx.extent(), true)
     }
 
     fn key_pressed(&mut self, _ctx: &mut Context, code: KeyCode) {
@@ -2681,7 +2736,8 @@ impl Demo for Gallery {
         // starts over when the bounce turns back on.
         if self.renderer.gi_trace && !self.diffuse_tried {
             self.diffuse_tried = true;
-            match forge_render::DiffuseDenoiser::reblur(&ctx.device, &nrd_dir(), ctx.extent()) {
+            match forge_render::DiffuseDenoiser::reblur(&ctx.device, &nrd_dir(), self.render_extent)
+            {
                 Ok(denoiser) => self.diffuse_denoiser = Some(denoiser),
                 Err(error) => {
                     tracing::info!(%error, "no NRD: no diffuse bounce, the probes light alone")
@@ -2994,7 +3050,8 @@ impl Demo for Gallery {
         self.renderer.noise_frame =
             (self.taa.frame_index() % u64::from(self.taa.jitter_phases)) as u32;
         let camera = self.cull_camera(ctx.aspect());
-        let extent = ctx.extent();
+        // The scene's size (the upscaler's input), and the window's, after it (#377).
+        let (extent, output) = (self.render_extent, ctx.extent());
         // The day's light changes by orders of magnitude: meter it (the histogram of two frames
         // ago); otherwise the fixed exposure of `--ev100`.
         let metered = self.metered();
@@ -3323,7 +3380,10 @@ impl Demo for Gallery {
                 scene: &self.scene,
                 view_proj: taa_frame.jittered_projection * self.camera.view_rotation(),
                 cull: camera,
-                lod_threshold_px: self.args.lod_error,
+                // The LOD error is meant in output pixels (as the asteroids'): drawn smaller, the
+                // geometry stays as detailed as on screen (#377).
+                lod_threshold_px: self.args.lod_error
+                    * (extent.height as f32 / output.height.max(1) as f32),
                 draw_jitter: taa_frame.jitter
                     / glam::Vec2::new(extent.width as f32, extent.height as f32),
                 flags: self.flags,
@@ -4454,12 +4514,12 @@ impl Demo for Gallery {
         // lamps shimmer at night).
         let bloom = self
             .bloom_on
-            .then(|| self.bloom.draw(&mut frame.graph, shown, extent));
+            .then(|| self.bloom.draw(&mut frame.graph, shown, output));
         let local = local_settings.enabled.then(|| {
             self.local_exposure.build(
                 &mut frame.graph,
                 shown,
-                extent,
+                output,
                 local_settings,
                 local_middle,
             )
@@ -4490,12 +4550,12 @@ impl Demo for Gallery {
         if let Some(h) = hasher {
             use forge_render::debug_hash::HashKind;
             h.add(&mut frame.graph, motion, HashKind::Float4, extent);
-            h.add(&mut frame.graph, shown, HashKind::Float4, extent);
+            h.add(&mut frame.graph, shown, HashKind::Float4, output);
             // The bloom's first level, what the display pass samples (#281).
             if let Some(bloom) = bloom {
                 let half = forge_gpu::vk::Extent2D {
-                    width: (extent.width / 2).max(1),
-                    height: (extent.height / 2).max(1),
+                    width: (output.width / 2).max(1),
+                    height: (output.height / 2).max(1),
                 };
                 h.add(&mut frame.graph, bloom, HashKind::Float4, half);
             }
