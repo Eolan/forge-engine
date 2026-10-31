@@ -283,3 +283,21 @@ and a still camera's shimmer (frames 280 and 290, pixels differing by more than 
   colour mixing.
 - **Suspects left:** glass, which Forge's rays pass through into a dark café; and scene
   differences (the hanging globes stand in other places; thin bright lines on the café front).
+
+## The village's far-room lamp factor (#376, 19:15)
+
+- **The check:** #363's window no longer frames a house, so I used the map check's junction view
+  at midnight instead. I compared "now" with the reference (room probe grids out to 150 m, every
+  lamp lit).
+- **The big lit window** reads 0.925 of the reference. **A small lit window** in the same house,
+  about 40–60 m off, reads 0.126.
+- **Why:** its lamp is beyond the frame's set, so it gets only the far-room term. Even with the
+  lamp lit directly, that term gives a quarter of the light the room's own probes give. #363
+  tuned the factor on one window, and it doesn't hold for this room.
+- **Also:** the house's facade and eave lose their light from house lamps past 50 m, which no
+  term covers outside a house.
+- **Next (in #376):** measure several windows at several distances, find the failing term for
+  the small window's room, then retune.
+- **The room lamps' intensity is realistic** (70–93 lm per m² of floor, 450–2,100 lm). A lit
+  window measures 7 cd/m². At the fixed calibration exposure (EV 2) it clips and blooms, which
+  made it look like a spotlight.

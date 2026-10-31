@@ -149,6 +149,13 @@ if env.get("BISTRO_NO_NORMALS"):
             mat.clearTexture(MaterialTextureSlot.Normal)
         except AttributeError:
             pass
+# BISTRO_DOUBLE_SIDED "Awning,...": the materials whose names hold one of these made double-sided,
+# as Forge makes its sheets (an experiment, #375).
+for part in filter(None, env.get("BISTRO_DOUBLE_SIDED", "").split(",")):
+    for mat in s.materials:
+        if part in mat.name:
+            print("DOUBLE_SIDED", mat.name, "was", mat.doubleSided)
+            mat.doubleSided = True
 # BISTRO_NOEMIT: every material's emission off (to take the emissive light alone, by difference).
 if env.get("BISTRO_NOEMIT"):
     for mat in s.materials:
