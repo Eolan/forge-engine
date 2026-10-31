@@ -2578,7 +2578,9 @@ by hand outside the repository (`CREDITS.md`):
 | Textured | | | 0.151 (×0.98) | 0.149 (×0.98) |
 
 The port's clay row measured 0.145 (×0.93) when it was built. 0.154 is measured again beside
-SHaRC on 2026-10-30, after D-086's changes to the surfaces.
+SHaRC on 2026-10-30, after D-086's changes to the surfaces. With clay diffuse alone on both sides
+(D-083's correction, 2026-10-31): Forge's path 0.098 from Falcor, the probes 0.434, the port
+0.097, SHaRC 0.100; pbrt-v4 0.066 from Falcor, Forge's path 0.048 from pbrt.
 
 - **The sun and the sky apart:** the classroom under its sun alone (the map's disc), the sky's
   share as the whole less the sun's, both renderers being linear in their light. With the sky
@@ -2670,18 +2672,22 @@ SHaRC.
 
 | From Falcor | the probes | the port | SHaRC | Forge's path |
 |---|---|---|---|---|
-| Kitchen, clay | 0.167 | 0.122 | 0.106 | 0.110 |
+| Kitchen, clay | 0.128 | 0.097 | 0.092 | 0.064 |
 | Kitchen | 0.354 | 0.191 | 0.232 | 0.206 |
-| Bedroom, clay | 0.962 (dark) | 0.754 (#371) | 0.167 | 0.098 |
+| Bedroom, clay | 0.849 (dark) | 0.274 (#371) | 0.237 | 0.114 |
 | Bedroom | 1.191 (dark) | 0.596 (#371) | 0.445 | 0.392 |
+
+The clay rows are diffuse alone on both sides, the rooms' emitters black (D-083's correction of
+2026-10-31); pbrt-v4's kitchen in clay is 0.052 from Falcor's, Forge's path 0.044 from pbrt's.
 
 Forge's path with the lamps on against itself with them off (the lamp model alone): the
 kitchen's clay 0.073, the bedroom's 0.097. The lamps hold, so the rooms measure the techniques.
 The bedroom's light comes out from behind its curtains after many bounces in a 27 cm gap: SHaRC
-follows it (0.177 from Forge's path in clay, the same each run), the probes a metre apart do
-not, and the port is unstable there (two runs 0.16 to 0.27 apart, #371). As a disc in the panel's plane with its
-light from its middle (the step before), the bedroom was a stop dark even in Forge's path: the
-disc missed the panel's top and bottom, and the recess beside its edge took a third of its light.
+follows it (0.172 from Forge's path in clay, the same each run), the probes a metre apart do
+not, and the port is unstable there (two runs 0.16 to 0.27 apart, #371). As a disc in the
+panel's plane with its light from its middle (the step before), the bedroom was a stop dark even
+in Forge's path: the disc missed the panel's top and bottom, and the recess beside its edge took
+a third of its light.
 
 ## `FORGE_DYNAMIC_SCENE`: the scene edited as it runs (issues #220, #338)
 

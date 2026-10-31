@@ -537,7 +537,9 @@ pub(super) fn rows(
     let mut rows_made = 0;
     let matte_mode = std::env::var("FORGE_BISTRO_MATTE").unwrap_or_default();
     let matte = matte_mode == "1" || matte_mode == "diffuse";
-    let diffuse = matte_mode == "diffuse";
+    // Clay is diffuse alone, as the Falcor script's and pbrt-v4's (D-083): with its dielectric
+    // reflection (the sky's by day, the lamps' highlights) it read 0.1 to 0.2 stops over them.
+    let diffuse = matte_mode == "diffuse" || clay;
     for (k, mesh) in b.model.meshes.iter().enumerate() {
         let uvs = !mesh.mesh.uvs.is_empty();
         let rows = mesh
@@ -595,14 +597,15 @@ pub(super) fn rows(
                     maps
                 };
                 let maps = if clay {
-                    m.base_color = [0.5, 0.5, 0.5, 1.0];
-                    m.roughness = 1.0;
-                    m.metallic = 0.0;
-                    // A room's lights (tools/pbrt-to-gltf.py's `emitter-`) stay lit, as in
-                    // Falcor's clay; any other glow goes.
+                    // A room's lights (tools/pbrt-to-gltf.py's `emitter-`) stay as they are, lit
+                    // and black, as in Falcor's clay and pbrt's: grey, the kitchen's 3.6 m² window
+                    // of light sent the room's light back into it. Any other glow goes.
                     if !m.name.starts_with("emitter-") {
+                        m.base_color = [0.5, 0.5, 0.5, 1.0];
                         m.emissive = [0.0; 3];
                     }
+                    m.roughness = 1.0;
+                    m.metallic = 0.0;
                     ExternalMaps {
                         normal: maps.normal,
                         base_color: maps.base_color.filter(|_| maps.alpha_cutoff.is_some()),

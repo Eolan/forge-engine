@@ -2666,6 +2666,26 @@ the cache's newest entries; their budget under the cache is not revisited yet.
   than its voxel's diagonal goes on along up to two more rays. The variants measured are in
   D-088.
 
+## A flat glowing piece's lamp as its rectangle (#369, #370, 2026-10-31)
+
+`Emission::Flat` (D-087): a planar glowing piece's lamp is its rectangle, its diffuse light
+Lambert's formula for a polygon clipped at each surface's horizon (`lamp_rect_share`), in the
+resolve, the penumbra filter and every ray's hit (`lamp_weight`). Sphere and cone lamps run the
+code they ran (0 px). Bitterli's rooms at night (`tools/gi-compare.sh`'s views, 1600 × 900,
+1,200 frames, one run each), the frame's GPU ms before → after:
+
+| View | probes | port | SHaRC | `gi/trace`, SHaRC |
+|---|---|---|---|---|
+| Cornell box (1 lamp) | 2.97 → 2.90 | 2.97 → 2.99 | 3.00 → 2.96 | 0.22 → 0.29 |
+| Bedroom, clay (2 lamps) | 4.82 → 4.90 | 4.69 → 4.73 | 5.07 → 5.41 | 0.76 → 1.13 |
+| Bedroom (2 lamps) | 5.03 → 5.18 | 4.93 → 5.06 | 5.35 → 5.73 | 0.76 → 1.13 |
+| Kitchen, clay (4 lamps) | 4.89 → 5.12 | 4.73 → 4.95 | 5.14 → 5.72 | 0.80 → 1.31 |
+| Kitchen (4 lamps) | 5.07 → 5.44 | 4.99 → 5.28 | 5.38 → 6.04 | 0.81 → 1.31 |
+
+Most of it is `gi/trace`: each hit weighs every flat lamp of its place exactly, twice (the sum,
+then the pick, `hit_lamps`), 0.1 to 0.2 ms a lamp at this size, the probes' bounce as SHaRC's.
+To halve if the authored scenes grow many flat lamps: keep the weights of the first loop.
+
 ## Not measured yet
 
 - **Streaming**: residency pools, request queue depth, drive and decompression throughput.

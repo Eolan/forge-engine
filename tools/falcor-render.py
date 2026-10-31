@@ -15,6 +15,7 @@
 #   BISTRO_EMITTER_STRENGTH  tools/pbrt-to-gltf.py's emitters' strength (Falcor's glTF import
 #                    leaves KHR_materials_emissive_strength out): the scene's brightest light
 #   BISTRO_CLAY, BISTRO_MATTE, BISTRO_DIFFUSE, BISTRO_NOEMIT: the surfaces simplified (below)
+#   BISTRO_ALBEDO    1: the first hit's diffuse albedo (Falcor's G-buffer) in place of the light
 #   BISTRO_OUT       output folder and BISTRO_NAME base file name
 import math
 import os
@@ -32,20 +33,29 @@ g = RenderGraph("Reference")
 # The camera jitter: 1,024 stratified positions (Falcor's most), so fine textures average over
 # more than the default 16.
 jitter = int(env.get("BISTRO_JITTER", "1024"))
-g.addPass(createPass("VBufferRT", {"samplePattern": "Stratified", "sampleCount": jitter, "useAlphaTest": True}), "VBufferRT")
-# BISTRO_BOUNCES: the most diffuse and specular bounces (Falcor defaults to 3, which drops the
-# light of longer paths: the shade between pale walls).
-bounces = int(env.get("BISTRO_BOUNCES", "3"))
-g.addPass(createPass("PathTracer", {"samplesPerPixel": 1, "maxSurfaceBounces": bounces, "maxDiffuseBounces": bounces, "maxSpecularBounces": bounces}), "PathTracer")
-g.addPass(createPass("AccumulatePass", {"enabled": True, "precisionMode": "Single"}), "AccumulatePass")
-g.addPass(createPass("ToneMapper", {"autoExposure": False, "exposureCompensation": float(env.get("BISTRO_EXPOSURE", "0"))}), "ToneMapper")
-g.addEdge("VBufferRT.vbuffer", "PathTracer.vbuffer")
-g.addEdge("VBufferRT.viewW", "PathTracer.viewW")
-g.addEdge("VBufferRT.mvec", "PathTracer.mvec")
-g.addEdge("PathTracer.color", "AccumulatePass.input")
-g.addEdge("AccumulatePass.output", "ToneMapper.src")
-g.markOutput("ToneMapper.dst")
-g.markOutput("AccumulatePass.output")
+if env.get("BISTRO_ALBEDO"):
+    # BISTRO_ALBEDO: the diffuse albedo Falcor's materials give each pixel's first hit (its
+    # G-buffer's `diffuseOpacity`, averaged over the jitter), NAME.AccumulatePass.output.0.exr,
+    # to set beside Forge's `r.show.input=1` (D-083: the materials' gap). No light, no tone map.
+    g.addPass(createPass("GBufferRT", {"samplePattern": "Stratified", "sampleCount": jitter, "useAlphaTest": True}), "GBufferRT")
+    g.addPass(createPass("AccumulatePass", {"enabled": True, "precisionMode": "Single"}), "AccumulatePass")
+    g.addEdge("GBufferRT.diffuseOpacity", "AccumulatePass.input")
+    g.markOutput("AccumulatePass.output")
+else:
+    g.addPass(createPass("VBufferRT", {"samplePattern": "Stratified", "sampleCount": jitter, "useAlphaTest": True}), "VBufferRT")
+    # BISTRO_BOUNCES: the most diffuse and specular bounces (Falcor defaults to 3, which drops
+    # the light of longer paths: the shade between pale walls).
+    bounces = int(env.get("BISTRO_BOUNCES", "3"))
+    g.addPass(createPass("PathTracer", {"samplesPerPixel": 1, "maxSurfaceBounces": bounces, "maxDiffuseBounces": bounces, "maxSpecularBounces": bounces}), "PathTracer")
+    g.addPass(createPass("AccumulatePass", {"enabled": True, "precisionMode": "Single"}), "AccumulatePass")
+    g.addPass(createPass("ToneMapper", {"autoExposure": False, "exposureCompensation": float(env.get("BISTRO_EXPOSURE", "0"))}), "ToneMapper")
+    g.addEdge("VBufferRT.vbuffer", "PathTracer.vbuffer")
+    g.addEdge("VBufferRT.viewW", "PathTracer.viewW")
+    g.addEdge("VBufferRT.mvec", "PathTracer.mvec")
+    g.addEdge("PathTracer.color", "AccumulatePass.input")
+    g.addEdge("AccumulatePass.output", "ToneMapper.src")
+    g.markOutput("ToneMapper.dst")
+    g.markOutput("AccumulatePass.output")
 
 m.loadScene(env["BISTRO_SCENE"])
 m.addGraph(g)
@@ -85,9 +95,12 @@ if "BISTRO_EMITTER_STRENGTH" in env:
     for mat in s.materials:
         if mat.name.startswith("emitter-"):
             mat.emissiveFactor = float(env["BISTRO_EMITTER_STRENGTH"])
-            print("EMITTER", mat.name, mat.emissiveColor, mat.emissiveFactor)
-# BISTRO_CLAY: every material a 50 % grey diffuse (no maps, roughness 1, no emission), but
-# tools/pbrt-to-gltf.py's emitters (`emitter-`): a room's lights, kept.
+            print("EMITTER", mat.name, mat.emissiveColor, mat.emissiveFactor, "base", mat.baseColor)
+# BISTRO_CLAY: every material a 50 % grey diffuse (no maps but the normals, no emission, no
+# reflection: an index of refraction of 1, as BISTRO_DIFFUSE), but tools/pbrt-to-gltf.py's
+# emitters (`emitter-`): a room's lights, kept. Before 2026-10-31 clay kept Falcor's dielectric
+# layer (an index of 1.5 over the grey): 0.10 to 0.15 stops more light in the rooms at night than
+# pbrt-v4's diffuse and Forge's clay.
 if env.get("BISTRO_CLAY"):
     for mat in s.materials:
         if mat.name.startswith("emitter-"):
@@ -99,6 +112,7 @@ if env.get("BISTRO_CLAY"):
             mat.roughness = 1.0
             mat.metallic = 0.0
             mat.emissiveFactor = 0.0
+            mat.indexOfRefraction = 1.0
         except AttributeError:
             pass
 # BISTRO_MATTE: every material a rough dielectric (its "Specular" map cleared, roughness 1, no

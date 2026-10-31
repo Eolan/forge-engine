@@ -8134,7 +8134,30 @@ pbrt-v4, RTXGI, materiel test, etc.). Then update forge demos and test them."):
     hold about 0.24 of it (clay: 0.099), reflections and metals the rest. Forge is darker under
     the awnings (their undersides, the façade and the deck in their shade). Falcor's awnings
     are opaque and single-sided (no transmission): not their translucency. To find by the
-    materials' albedos, view by view (Falcor's G-buffer against `r.show.input=1`).
+    materials' albedos, view by view (Falcor's G-buffer against `r.show.input=1`). **Measured
+    (2026-10-31):** the first hit's diffuse albedo, Falcor's G-buffer (`tools/falcor-render.py`'s
+    `BISTRO_ALBEDO`) against Forge's `r.show.input=1`, is 0.031 apart (signed −0.008); only the
+    hanging globes sit a little apart. The gap is not the albedos the camera sees: the textured
+    bounce's light, and the reflections and metals.
+  - **The clay rows above were not diffuse alone (corrected 2026-10-31):** Falcor's clay kept its
+    dielectric layer (an index of refraction of 1.5 over the grey: 0.09 to 0.14 stops of light in
+    every clay view) and Forge's its dielectric reflection (the sky's by day). Both are diffuse
+    alone now (the Falcor script's clay takes an index of 1; the lab's clay `FORGE_BISTRO_MATTE
+    =diffuse`'s rule), and Forge's clay keeps a room's emitters black, as Falcor's and pbrt's.
+    Measured again, from Falcor (Forge's path, the probes, the port, SHaRC) and from pbrt-v4:
+
+    | Clay view | from Falcor | Forge's path from pbrt | pbrt from Falcor |
+    |---|---|---|---|
+    | Bistro Exterior_1 | 0.149, 0.158, 0.117, 0.104 | | |
+    | Bistro Exterior_2 | 0.192, 0.315, 0.155, 0.137 | | |
+    | Classroom | 0.098, 0.434, 0.097, 0.100 | 0.048 | 0.066 |
+    | Kitchen, night | 0.064, 0.128, 0.097, 0.092 | 0.044 | 0.052 |
+    | Bedroom, night | 0.114, 0.849, 0.274, 0.237 | (pbrt's curtains leak) | |
+
+    The three renderers agree in the rooms within 0.05 to 0.10. The Bistro by day does not:
+    Forge's path reads 0.15 to 0.19 stops over Falcor's there, which Falcor's layer had hidden
+    (#373). pbrt-v4 lets the bedroom's panels through its curtains: their folds' smooth normals
+    put a shadow ray behind the sheet on the lit side of its shading normal.
   - **The night and the Cornell box, as first measured, were not trustworthy;** two causes found
     the same night (2026-10-31):
     - **The box was too bright for the night's units.** At Falcor's unit (12,800 cd/m²) its
@@ -8184,9 +8207,9 @@ pbrt-v4, RTXGI, materiel test, etc.). Then update forge demos and test them."):
     (the kitchen); the bedroom waits for the rectangle (#369).
   - **With the rectangle (#369):** the lamp holds in all three rooms (Forge's path lamps on
     against off: 0.021, 0.073, 0.097), so they measure the techniques. **SHaRC is the nearest
-    indoors at night as by day:** the bedroom's clay 0.167 from Falcor (the probes 0.962; the
-    port unstable there, #371), the kitchen's 0.106 (the port 0.122, the probes 0.167), the
-    box 0.096 (0.092, 0.207). The bedroom's light comes out from behind its curtains after many
+    indoors at night as by day:** the bedroom's clay 0.237 from Falcor (the probes 0.849; the
+    port unstable there, #371), the kitchen's 0.092 (the port 0.097, the probes 0.128), the
+    box 0.096 (0.092, 0.207); the clay against the corrected references (below). The bedroom's light comes out from behind its curtains after many
     bounces in a 27 cm gap, which the probes a metre apart cannot hold: D-090's case for SHaRC
     indoors, at night too.
 
@@ -8552,6 +8575,12 @@ brackets. At the Night view, Forge's light over Falcor's:
       same each run); the probes, a metre apart, do not (a stop dark). The port is unstable
       there: two runs 0.16 to 0.27 apart (#371). Textured, the converter's materials add their
       gap (Forge's own path 0.392 from Falcor).
+  - **The Bistro at night, the same measure (#372):** its lamp model alone is 0.309 from the
+    glow (signed −0.21) with the 64 nearest lamps (D-065's lists), the far left street and the
+    arch black; with all 132 (`--all-lamps`) 0.203, signed +0.17: bright round the lanterns,
+    whose `Emission::LANTERN` sends their side's whole intensity straight down where their
+    glass seen from below is 0.32 of it. The two half cancel in the default; the lanterns'
+    profile waits for the count, a many-lights choice (D-065) for the owner.
 
 ## D-088 — The light in shade: a near field traced per pixel over the probes ✅ (proposed and decided 2026-10-30, the owner following the recommendations; after D-086; D-083)
 
@@ -9378,11 +9407,11 @@ amendment, #368, #369).
 - **At night** the lamps' direct light rules: the three alike (0.549 from Falcor in the Bistro);
   the lamps themselves are the next fault (#369). SHaRC costs 2.6 ms more there. **The lamps'
   fault fixed** (#369, #370: a flat piece's lamp its rectangle, D-087), the rooms lit by their
-  own lamps rank as by day: SHaRC the nearest or level (the bedroom's clay 0.167 from Falcor,
-  the kitchen's 0.106, the Cornell box 0.096), the port level where it holds (the kitchen
-  0.122, the box 0.092) and unstable in the bedroom (#371), the probes last (0.962, 0.167,
-  0.207). The bedroom's light comes from behind curtains after many bounces, which the probes
-  cannot hold.
+  own lamps rank as by day: SHaRC the nearest or level (the bedroom's clay 0.237 from Falcor,
+  the kitchen's 0.092, the Cornell box 0.096), the port level where it holds (the kitchen
+  0.097, the box 0.092) and unstable in the bedroom (#371), the probes last (0.849, 0.128,
+  0.207; the clay against D-083's corrected, diffuse references). The bedroom's light comes
+  from behind curtains after many bounces, which the probes cannot hold.
 - **SHaRC is not deterministic:** two runs differ by a few levels (its insertion order, D-088),
   and the captures' rule of 0 pixels between runs cannot hold under it.
 
